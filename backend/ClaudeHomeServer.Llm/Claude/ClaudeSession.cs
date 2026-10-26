@@ -362,6 +362,11 @@ public class ClaudeSession : ILlmSessionAdapter
         // финализацией прогона. null — процесс ходит в провайдера напрямую.
         public string? GatewayTurnId { get; init; }
         public string? GatewayToken { get; init; }
+        // Фактический ключ апстрима прогона («учётка хода», SP1): вычисляется при старте прогона
+        // (см. ComputeUpstreamProviderKey) и не меняется с ходом — same-process ход совпадает
+        // с сигнатурой, значит и с моделью. Для хода через шлюз при result приоритетен текущий
+        // маршрут токена (см. UpstreamOfRun); это — резерв для отозванного токена.
+        public string? UpstreamProvider { get; init; }
         // turnId запуска — по нему pid-файл прогона в песочнице (Kill контейнерного pgid)
         public string? LaunchTurnId { get; init; }
         // Снимок промпта, с которым прогон СТАРТОВАЛ. Ходы, доигрывающиеся в этом же процессе,
@@ -1088,6 +1093,34 @@ public class ClaudeSession : ILlmSessionAdapter
     // по заглушкам этого не видит. Процесс без шлюза — без ограничений.
     private bool GatewayTokenAlive(CliRun run) =>
         run.GatewayTurnId is null || _serverGateway?.IsAlive(run.GatewayTurnId, run.GatewayToken!) == true;
+
+    // Фактический ключ апстрима прогона («учётка хода», SP1): источник правды — модель.
+    // ResolveByModel(EffectiveModel) дал провайдера — его ключ. Модель родная (null) —
+    // Info.Provider доверяется, только если он НЕ ключ стороннего провайдера
+    // (GetByKey(Info.Provider) is null): тогда это "claude" или аккаунт пула. Stale сторонний
+    // ключ при родной модели → "claude": родной ход не приписывается стороннему (инвариант
+    // «не занижать расход Claude»). Ключ пишется как есть, суффикс "-direct" не срезается.
+    internal string ComputeUpstreamProviderKey()
+    {
+        if (_providers is not null)
+        {
+            if (_providers.ResolveByModel(EffectiveModel) is { } provider) return provider.Key;
+            if (!string.IsNullOrWhiteSpace(Info.Provider) && _providers.GetByKey(Info.Provider) is null)
+                return Info.Provider;
+        }
+        return "claude";
+    }
+
+    // Фактический апстрим хода для ResultMessage: через шлюз — текущий маршрут токена хода
+    // (в нём и ротация аккаунта посреди хода; ключ = ProviderKey ?? SubscriptionKey, модель —
+    // Route.Model: её переписал шлюз, сессия её не знает). Токен отозван (потолок жизни) —
+    // резерв: ключ, посчитанный при старте прогона. Прямой прогон — тот же ключ из CliRun.
+    private (string? Provider, string? Model) UpstreamOfRun(CliRun run)
+    {
+        if (run.GatewayTurnId is { } turnId && _serverGateway?.CurrentRoute(turnId) is { } route)
+            return (route.ProviderKey ?? route.SubscriptionKey, route.Model);
+        return (run.UpstreamProvider, null);
+    }
 
     // Спан идущего хода — чтобы дописать в него фактическую модель, когда CLI её назовёт.
     // Тег ставится в двух местах, но никогда одновременно: при старте хода (до запуска
@@ -4669,7 +4702,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
             _fileWatcher.Start();
 
-            run = new CliRun { Process = process, Signature = signature, TurnMcpPath = turnMcpPath, TurnAgentsPath = turnAgentsPath, TurnPromptPath = turnPromptPath, LaunchTurnId = _currentTurnId, PromptSuggestionsActive = promptSuggestionsActive, PromptSnapshotId = turnSnapshotId, LastTurnSeq = turnSeq, GatewayTurnId = gatewayTurnId, GatewayToken = gatewayToken };
+            run = new CliRun { Process = process, Signature = signature, TurnMcpPath = turnMcpPath, TurnAgentsPath = turnAgentsPath, TurnPromptPath = turnPromptPath, LaunchTurnId = _currentTurnId, PromptSuggestionsActive = promptSuggestionsActive, PromptSnapshotId = turnSnapshotId, LastTurnSeq = turnSeq, GatewayTurnId = gatewayTurnId, GatewayToken = gatewayToken, UpstreamProvider = ComputeUpstreamProviderKey() };
             // Смерть процесса — по событию ОС (см. HandleProcessExitedAsync): EnableRaisingEvents=true
             // выставлен в spec. Подписка обязательна: закрытие stdout ненадёжно как сигнал гибели
             // (дочерние node-процессы MCP держат pipe — P27), и без Exited обрыв хода зависает
@@ -6365,9 +6398,12 @@ public class ClaudeSession : ILlmSessionAdapter
                 // Статус Error/Active выставит SessionManager по ResultMessage
                 var ctxTokens = _lastContextTokens > 0 ? _lastContextTokens : (int?)null;
                 var promptCache = BuildPromptCacheState(usage);
-                // usage/totalCost/usageModel — дельта хода (см. выше), не накопленный итог
+                // usage/totalCost/usageModel — дельта хода (см. выше), не накопленный итог.
+                // upstreamProvider/upstreamModel — фактический апстрим хода («учётка хода», SP1):
+                // прямой прогон — ключ из стартового расчёта, шлюзовой — текущий маршрут токена
+                var (upstreamProvider, upstreamModel) = UpstreamOfRun(run);
                 await _onMessage(new ResultMessage(subtype, durationMs, numTurns, usage, totalCost, apiErr, denials, ctxTokens, usageModel, durationApiMs,
-                    promptCache));
+                    promptCache, upstreamProvider, upstreamModel));
                 // OTel: метрика длительности хода (duration_ms из самого CLI — не пересчитываем)
                 // и счётчик ошибок. Оба признака отказа сводит IsTurnFailure: без is_error
                 // отказы провайдера (429) уходили в метрику как outcome=success — счётчик

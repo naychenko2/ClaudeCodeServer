@@ -2,7 +2,8 @@
 // из FeatureRun строит карточки на шаг: порядок по старту, узлы цепочки со ссылками
 // на чаты витков, счётчик циклов, текущий узел, причину возврата.
 // Тесты: обычный цикл, возврат+доработка, два возврата, активная задача,
-// «сейчас»-строка (текущая карточка), краевые (не начат, старые данные без rounds).
+// «сейчас»-строка (текущая карточка), краевые (не начат, старые данные без rounds),
+// закрытие «принял с замечаниями» и хвостовая доработка (GC-F3), шаг плана без задачи (GC-F3).
 
 import { describe, it, expect } from 'vitest';
 import { buildProdCards } from './FeatureProdCards';
@@ -412,5 +413,113 @@ describe('state карточки (A2)', () => {
     expect(done.waitingSince).toBeNull();
     const ret = stateOf([task({ id: 's1', status: 'done', claudeStartedAt: start })], { status: 'вернул', outcome: 'returned', rounds: [round({ n: 1, verdict: 'returned' })], loops: 1 });
     expect(ret.state).toBe('wait');
+  });
+});
+
+// ── Закрытие «принял с замечаниями» и хвостовая доработка (GC-F3, правило (а)) ──────
+// Фиксатор: бэк уже закрыляет шаг по IsAcceptance(lastVerdict) && !reworkOpen
+// (FeatureStepAccounting), где IsAcceptance включает accepted_with_remarks
+// (FeatureProjector). Агрегат ниже — ровно тот, что бэк даёт для этого случая;
+// фронт верит chain.outcome, своей истины не заводит.
+
+describe('хвост после «принял с замечаниями» (GC-F3)', () => {
+  const tailRun = (): FeatureRun => run({
+    steps: [
+      task({ id: 's1', status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z', completedAt: '2026-10-20T11:00:00Z' }),
+      task({ id: 'rw1', status: 'done', role: 'rework', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T12:00:00Z', completedAt: '2026-10-20T13:00:00Z' }),
+    ],
+    stepChains: [chain({
+      stepRef: 'Ш1', taskIds: ['s1', 'rw1'], status: 'принят', outcome: 'accepted', loops: 1,
+      acceptedAt: '2026-10-20T11:30:00Z',
+      rounds: [round({ n: 1, verdict: 'accepted_with_remarks', reason: 'добавить тесты', completedAt: '2026-10-20T11:30:00Z' })],
+    })],
+  });
+
+  it('закрытая хвостовая доработка после «принял с замечаниями» не переоткрывает шаг', () => {
+    const c = buildProdCards(tailRun())[0];
+    expect(c.state).toBe('done');
+    expect(c.awaitingReview).toBe(false);
+    expect(c.acceptedAt).toBe('2026-10-20T11:30:00Z');
+    // Цепочка заканчивается закрытой доработкой: «текущего» или «переднего» узла нет.
+    expect(c.nodes.map(n => [n.kind, n.state])).toEqual([['work', 'ok'], ['return', 'ret'], ['rework', 'ok']]);
+  });
+
+  it('хвостовую доработку вернули — шаг переоткрыт (wait): граница правила', () => {
+    const c = buildProdCards(run({
+      steps: [
+        task({ id: 's1', status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z', completedAt: '2026-10-20T11:00:00Z' }),
+        task({ id: 'rw1', status: 'done', role: 'rework', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T12:00:00Z', completedAt: '2026-10-20T13:00:00Z' }),
+      ],
+      stepChains: [chain({
+        stepRef: 'Ш1', taskIds: ['s1', 'rw1'], status: 'закрыт без повторного ревью', outcome: 'returned', loops: 2,
+        rounds: [
+          round({ n: 1, verdict: 'accepted_with_remarks', reason: 'добавить тесты', completedAt: '2026-10-20T11:30:00Z' }),
+          round({ n: 2, verdict: 'returned', reason: 'тестов снова нет', completedAt: '2026-10-20T13:30:00Z' }),
+        ],
+      })],
+    }))[0];
+    expect(c.state).toBe('wait');
+    expect(c.returnReason).toBe('тестов снова нет');
+  });
+});
+
+// ── Шаг плана без задачи (GC-F3, правило (б)) ────────────────────────────────────────
+
+describe('шаг плана без задачи (GC-F3)', () => {
+  const planTask = (id: string, steps: { stepRef: string; title: string }[]): FeatureTask =>
+    task({ id, role: 'plan', planSteps: steps });
+
+  it('шаг плана без цепочки — карточка queue, planned=true, после заведённого шага', () => {
+    const r = run({
+      plan: [planTask('p1', [{ stepRef: 'Ш1', title: 'Сделать X' }, { stepRef: 'Ш2', title: 'Сделать Y' }])],
+      steps: [task({ id: 's1', status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' })],
+      stepChains: [chain({ stepRef: 'Ш1', title: 'Сделать X', taskIds: ['s1'], status: 'принят', outcome: 'accepted' })],
+    });
+    const cards = buildProdCards(r);
+    expect(cards.map(c => c.stepRef)).toEqual(['Ш1', 'Ш2']);
+    expect(cards.map(c => c.planned)).toEqual([false, true]);
+    const p = cards[1];
+    expect(p.state).toBe('queue');
+    expect(p.title).toBe('Сделать Y');
+    expect(p.order).toBe(1);
+    expect(p.startedAt).toBe(null);
+    expect(p.isCurrent).toBe(false);
+    expect(p.awaitingReview).toBe(false);
+    expect(p.nodes).toEqual([{ kind: 'work', label: 'работа', state: 'pend', chatId: null }]);
+  });
+
+  it('шаг плана уже в цепочке — не дублируется: регистр и пробелы — тот же шаг', () => {
+    // Ключ — как на бэке (StepKeyComparer): «ш1 » в плане и «Ш1» в цепочке — один шаг.
+    const r = run({
+      plan: [planTask('p1', [{ stepRef: 'ш1 ', title: 'Сделать X' }])],
+      steps: [task({ id: 's1', status: 'inProgress', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' })],
+      stepChains: [chain({ stepRef: 'Ш1', taskIds: ['s1'], status: 'идёт', outcome: 'running' })],
+    });
+    const cards = buildProdCards(r);
+    expect(cards.map(c => [c.stepRef, c.planned])).toEqual([['Ш1', false]]);
+  });
+
+  it('пустой stepRef и дубли плана — не шаг; дубль — одно вхождение, первое', () => {
+    const r = run({
+      plan: [
+        planTask('p1', [{ stepRef: '   ', title: 'пусто' }, { stepRef: 'Ш2', title: 'первый' }]),
+        planTask('p2', [{ stepRef: 'ш2', title: 'дубль' }]),
+      ],
+    });
+    const cards = buildProdCards(r);
+    expect(cards.map(c => c.stepRef)).toEqual(['Ш2']);
+    expect(cards[0].title).toBe('первый');
+  });
+
+  it('planned — после всех карточек цепочек (в т.ч. незаведённых), в порядке плана', () => {
+    // Незаведённая цепочка Ш1 + шаги плана Ш2, Ш3 без задач: порядок — цепочка, затем план.
+    const r = run({
+      plan: [planTask('p1', [{ stepRef: 'Ш2', title: 'B' }, { stepRef: 'Ш3', title: 'C' }])],
+      steps: [task({ id: 's1', status: 'todo', stepRef: 'Ш1' })],
+      stepChains: [chain({ stepRef: 'Ш1', title: 'A', taskIds: ['s1'], status: '', outcome: 'pending' })],
+    });
+    const cards = buildProdCards(r);
+    expect(cards.map(c => [c.stepRef, c.state, c.planned])).toEqual([['Ш1', 'queue', false], ['Ш2', 'queue', true], ['Ш3', 'queue', true]]);
+    expect(cards.map(c => c.order)).toEqual([0, 1, 2]);
   });
 });

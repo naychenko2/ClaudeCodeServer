@@ -7,7 +7,10 @@ After=network-online.target comfyui-h3.service
 User=root
 ExecStart=/usr/bin/python3 -I /home/an/bonsai/gpu-arbiter.py
 Environment=ARBITER_PORT=18031
-Environment=ARBITER_RETURN_QUIET_S=5
+Environment=ARBITER_MODE=exclusive
+Environment=ARBITER_RETURN_QUIET_S=10
+Environment=ARBITER_RETURN_QUIET_AFTER_COMFY_S=180
+Environment=ARBITER_VRAM_NEEDED_MB=11000
 Restart=always
 RestartSec=3
 

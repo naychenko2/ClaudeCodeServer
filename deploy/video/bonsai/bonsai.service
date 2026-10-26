@@ -1,5 +1,5 @@
 [Unit]
-Description=Bonsai 2 9B (llama-server, PrismML fork) — дежурная модель одношаговых мест CCS
+Description=Bonsai 2 27B (llama-server, PrismML fork) — дежурная модель одношаговых мест CCS
 After=network-online.target
 # Арбитр gpu-arbiter.service останавливает и запускает этот юнит; руками — только для отладки.
 
@@ -10,13 +10,15 @@ WorkingDirectory=/home/an/bonsai
 # cuda-12.8 лежит в bin/cuda128 запасной: ей нужны cudart/cublas 12 (колёса в cudalibs/*.whl).
 Environment=LD_LIBRARY_PATH=/home/an/bonsai/cudalibs/cu13:/usr/lib/wsl/lib:/home/an/bonsai/bin/cuda133
 Environment=CUDA_VISIBLE_DEVICES=0
-# Сэмплинг — режим без размышлений из карточки 9B (temp 0.7, top-p 0.8, presence 1.5, окно 64).
+# Сэмплинг — дефолты сервера; CCS шлёт temperature 0 и enable_thinking=false в каждом запросе.
+# 27B PQ2_0: 7,2 ГБ весов + KV ≈ 8,3 ГБ VRAM; рядом с кэшем ComfyUI не живёт — арбитр в режиме
+# exclusive выгружает кэш (/free) перед возвратом. 9B (2,9 ГБ) — запасной вариант, см. README.
 # -c 16384 на -np 2 слота = 8192 на место (профили Small 4096 / Text 8192 каталога CCS;
 # Large режется до NumCtx движка в конфиге CCS). KV у гибридного внимания мал.
 # --reasoning auto: клиент выключает мышление через chat_template_kwargs enable_thinking=false.
 ExecStart=/home/an/bonsai/bin/cuda133/llama-server \
-  -m /home/an/bonsai/models/Ternary-Bonsai-2-9B-PQ2_0.gguf \
-  -a bonsai-9b \
+  -m /home/an/bonsai/models/Ternary-Bonsai-2-27B-PQ2_0.gguf \
+  -a bonsai-27b \
   --host 0.0.0.0 --port 18030 \
   -ngl 99 -fa on -c 16384 -np 2 -b 2048 -ub 512 \
   --reasoning auto \

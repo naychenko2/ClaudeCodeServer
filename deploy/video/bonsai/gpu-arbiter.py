@@ -27,7 +27,15 @@ BONSAI_UNIT = os.environ.get("ARBITER_BONSAI_UNIT", "bonsai.service")
 BONSAI_HEALTH = os.environ.get("ARBITER_BONSAI_HEALTH", "http://127.0.0.1:18030/health")
 PORT = int(os.environ.get("ARBITER_PORT", "18031"))
 POLL_S = float(os.environ.get("ARBITER_POLL_S", "0.5"))
-RETURN_QUIET_S = float(os.environ.get("ARBITER_RETURN_QUIET_S", "5"))
+RETURN_QUIET_S = float(os.environ.get("ARBITER_RETURN_QUIET_S", "10"))
+# Пауза возврата после заданий ComfyUI — больше обычной: серия картинок идёт с перерывами на
+# просмотр, и возврат LLM между кадрами заставил бы ComfyUI грузить модели заново на каждом.
+RETURN_QUIET_AFTER_COMFY_S = float(os.environ.get("ARBITER_RETURN_QUIET_AFTER_COMFY_S", "180"))
+# exclusive — Bonsai не делит карту с ComfyUI: уступает любому заданию, перед возвратом выгружает
+# кэш моделей ComfyUI (/free) и ждёт VRAM_NEEDED_MB свободных. shared — уступает только тяжёлым
+# графам (маркеры ниже), кэш ComfyUI не трогает (режим для 9B рядом с кэшем).
+MODE = os.environ.get("ARBITER_MODE", "exclusive")
+VRAM_NEEDED_MB = int(os.environ.get("ARBITER_VRAM_NEEDED_MB", "11000"))
 # Подстроки в class_type или строковых входах узла, по которым граф ComfyUI считается тяжёлым.
 HEAVY_MARKERS = [s.lower() for s in os.environ.get(
     "ARBITER_HEAVY_MARKERS", "h3,minimax,video,fasth3,whisper").split(",") if s]
@@ -49,7 +57,7 @@ def _warn_once(key: str, msg: str):
 _lock = threading.Lock()
 _leases: dict[str, dict] = {}
 _state = {"bonsai": "unknown", "reasons": [], "since": time.time(), "yields": 0, "returns": 0,
-          "last_yield_s": None, "last_return_s": None}
+          "last_yield_s": None, "last_return_s": None, "mode": MODE, "quiet_left_s": None}
 
 
 def _get_json(url, timeout=2.0):
@@ -105,7 +113,7 @@ def comfy_heavy_jobs() -> list[str]:
             pid, prompt = item[1], item[2]
         except (IndexError, TypeError):
             continue
-        if isinstance(prompt, dict) and _graph_heavy(prompt):
+        if MODE == "exclusive" or (isinstance(prompt, dict) and _graph_heavy(prompt)):
             heavy.append(str(pid)[:8])
     return heavy
 
@@ -116,6 +124,31 @@ def active_leases() -> list[str]:
         for k in [k for k, v in _leases.items() if v["until"] < now]:
             del _leases[k]
         return [f'{v["reason"]}' for v in _leases.values()]
+
+
+def vram_used_total_mb():
+    try:
+        out = subprocess.run([NVSMI, "--query-gpu=memory.used,memory.total", "--format=csv,noheader,nounits"],
+                             capture_output=True, text=True, timeout=3).stdout.strip().split(",")
+        return int(out[0]), int(out[1])
+    except Exception:
+        return None, None
+
+
+def comfy_free():
+    try:
+        req = urllib.request.Request(COMFY + "/free", data=json.dumps({"unload_models": True, "free_memory": True}).encode(),
+                                     headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=10).read()
+        return True
+    except Exception as ex:
+        _warn_once("free", f"ComfyUI /free не сработал: {ex}")
+        return False
+
+
+def vram_room_for_bonsai() -> bool:
+    used, total = vram_used_total_mb()
+    return used is None or total is None or total - used >= VRAM_NEEDED_MB
 
 
 def systemctl(*args) -> bool:
@@ -136,6 +169,7 @@ def bonsai_healthy() -> bool:
 
 def loop():
     quiet_since = None
+    last_reason_comfy = False
     while True:
         reasons = [f"lease:{r}" for r in active_leases()]
         reasons += [f"gpu:{p}" for p in gpu_foreign_procs()]
@@ -143,6 +177,8 @@ def loop():
         active = bonsai_active()
         if reasons:
             quiet_since = None
+            last_reason_comfy = any(r.startswith("comfy:") for r in reasons)
+            _state["quiet_left_s"] = None
             if active:
                 t0 = time.time()
                 systemctl("stop", BONSAI_UNIT)
@@ -152,8 +188,24 @@ def loop():
             _state["bonsai"] = "yielded"
         else:
             quiet_since = quiet_since or time.time()
-            if not active and time.time() - quiet_since >= RETURN_QUIET_S:
+            need_quiet = RETURN_QUIET_AFTER_COMFY_S if last_reason_comfy else RETURN_QUIET_S
+            left = need_quiet - (time.time() - quiet_since)
+            _state["quiet_left_s"] = round(max(0.0, left), 1) if not active else None
+            if not active and left <= 0:
                 t0 = time.time()
+                # exclusive: освободить кэш моделей ComfyUI и убедиться, что место есть
+                if MODE == "exclusive" and not vram_room_for_bonsai():
+                    comfy_free()
+                    for _ in range(20):
+                        if vram_room_for_bonsai():
+                            break
+                        time.sleep(0.25)
+                if not vram_room_for_bonsai():
+                    _warn_once("vram", f"для Bonsai нет {VRAM_NEEDED_MB} МБ VRAM даже после /free — жду")
+                    _state["bonsai"] = "waiting-vram"
+                    time.sleep(POLL_S)
+                    continue
+                last_reason_comfy = False
                 systemctl("start", BONSAI_UNIT)
                 _state["returns"] += 1
                 _state["since"] = time.time()

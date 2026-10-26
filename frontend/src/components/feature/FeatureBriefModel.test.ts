@@ -149,6 +149,18 @@ describe('Подстрока «Сейчас»', () => {
     expect(briefSubText(b, NOW)).toBe('на паузе 30 мин · исполнители не запускаются');
   });
 
+  it('нулевая длительность — «0 мин» нигде не печатается: остаётся статическая часть фразы (F10 минор, та же болезнь, что «идёт 0 мин»)', () => {
+    // since == «сейчас» (0 мин) и меньше округляемой минуты (20 с) — числа нет ни в одной строке.
+    const run = brief({ kind: 'running', now: { stage: 'prod', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 14, 10) } });
+    expect(briefSubText(run, NOW)).toBe('с 14:10');
+    const wait = brief({ kind: 'waiting_you', now: { stage: '', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 14, 10) } });
+    expect(briefSubText(wait, NOW)).toBe('без вас фича стоит');
+    const hold = brief({ kind: 'paused', reason: 'manual', now: { stage: '', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 14, 10) } });
+    expect(briefSubText(hold, NOW)).toBe('исполнители не запускаются');
+    const short = brief({ kind: 'waiting_you', now: { stage: '', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 14, 9, 40) } });
+    expect(briefSubText(short, NOW)).toBe('без вас фича стоит');
+  });
+
   it('closed — «фича закрыта»', () => {
     expect(briefSubText(brief({ kind: 'closed' }), NOW)).toBe('фича закрыта');
   });

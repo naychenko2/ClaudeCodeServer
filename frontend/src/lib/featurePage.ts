@@ -107,13 +107,19 @@ export interface FeatureBrief {
   done: FeatureBriefDone;
   next: FeatureBriefNext[];
   elapsedMinutes: number | null;
-  // Время в очереди (R-F8): аддитивное поле контракта (бэк-шаг B8, ещё не реализован) —
-  // старых ответов оно не несёт. «в очереди N» выводится ТОЛЬКО по нему: elapsedMinutes —
-  // объединение work-интервалов (бэк: WorkWallMinutes), не время в очереди.
+  // Время в очереди (R-F8): аддитивное поле контракта (бэк-шаг B8) — старых ответов оно не
+  // несёт. «в очереди N» выводится ТОЛЬКО по нему: elapsedMinutes — объединение work-интервалов
+  // (бэк: WorkWallMinutes), не время в очереди.
   queueWaitMinutes?: number | null;
   estimate: FeatureBriefEstimate | null;
   queue: FeatureBriefQueue | null;
   note: FeatureBriefNote | null;
+  // Время последнего изменения состояния фичи (бэк B6, дефект f2da9354): отдельное от
+  // computedAt — момента этого ответа. Отличаются намеренно: computedAt — «насколько свеж
+  // снимок», updatedAt — «насколько old показано». Карточка полем пока не пользуется; оно в
+  // зеркале, чтобы рассинхрон имён фронт↔бэк ловился сборкой (R-F2d3). null — событий
+  // состояния нет вовсе (тестовая фикстура бэка); у живой фичи заполнено.
+  updatedAt?: string | null;
   computedAt: string;
 }
 

@@ -113,23 +113,31 @@ export function briefNowText(brief: FeatureBrief, opts: BriefTextOptions = {}): 
 // Макет: «с какого времени · сколько длится». Только данные контракта (now.since) и
 // общие форматтеры (та же арифметика, что «N назад» ниже); статические части фраз
 // макета, не утверждающие фактов вне контракта. Нет since — подстроки нет.
+// Нулевая длительность — не число: «ждёт 0 мин» / «на паузе 0 мин» та же болезнь нуля,
+// что «идёт 0 мин» / «в очереди 0 мин» (F10 минор; порог — тот же round, что у
+// briefEstimateText). Нет числа — остаётся только статическая часть фразы.
+function shownDuration(iso: string, nowMs: number): string | null {
+  const m = minutesSince(iso, nowMs); // уже round; порог совпадает с гейтом «идёт»
+  return m != null && m > 0 ? formatDuration(m) : null;
+}
+
 export function briefSubText(brief: FeatureBrief, nowMs: number): string | null {
   const since = brief.now?.since;
   switch (brief.kind) {
     case 'running': {
       if (!since) return null;
-      const dur = minutesSince(since, nowMs);
-      return dur != null ? `с ${formatClock(since)} · ${formatDuration(dur)}` : `с ${formatClock(since)}`;
+      const dur = shownDuration(since, nowMs);
+      return dur ? `с ${formatClock(since)} · ${dur}` : `с ${formatClock(since)}`;
     }
     case 'waiting_you': {
       if (!since) return null;
-      const dur = minutesSince(since, nowMs);
-      return dur != null ? `ждёт ${formatDuration(dur)} · без вас фича стоит` : 'без вас фича стоит';
+      const dur = shownDuration(since, nowMs);
+      return dur ? `ждёт ${dur} · без вас фича стоит` : 'без вас фича стоит';
     }
     case 'paused': {
       if (!since) return null;
-      const dur = minutesSince(since, nowMs);
-      return dur != null ? `на паузе ${formatDuration(dur)} · исполнители не запускаются` : 'исполнители не запускаются';
+      const dur = shownDuration(since, nowMs);
+      return dur ? `на паузе ${dur} · исполнители не запускаются` : 'исполнители не запускаются';
     }
     case 'closed':
       return 'фича закрыта';

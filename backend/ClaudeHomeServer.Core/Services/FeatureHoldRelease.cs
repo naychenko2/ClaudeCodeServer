@@ -19,6 +19,6 @@ public interface IFeatureHoldReleaser
 /// <summary>Исход единого снятия удержания фичи.</summary>
 public enum FeatureHoldReleaseOutcome { Released, Repeated, NotHeld, NotFound }
 
-/// <summary>Результат снятия удержания фичи (TaskExecutionService.ReleaseFeatureHold):
-/// исход и пробуждение очереди (id задач).</summary>
+/// <summary>Результат снятия удержания фичи (реализация шва — Main: Services/TaskExecutionService.cs,
+/// ReleaseFeatureHold): исход и пробуждение очереди (id задач).</summary>
 public sealed record FeatureHoldRelease(FeatureHoldReleaseOutcome Outcome, IReadOnlyList<string> Resumed, IReadOnlyList<string> Expired);

@@ -702,6 +702,10 @@ public class TaskExecutionServiceHoldTests : IDisposable
     // продолжает шаг (не feature_held_expired) и возвращает срок с якорем «сейчас».
     // Мутация: убрать FreezeExpiryForHold в InterruptFeatureTurnsOnHold — тик на 25 ч сносит
     // чат, первый и последующие абзацы краснеют.
+    // Трассировка «раздел ↔ код» (RV-Q3B-Q4 минор 5): поведение заморозки/возврата срока —
+    // из волны 4 (W4-HOLD-J/N: SessionManager.FreezeExpiryForHold/RestoreFrozenExpiry; тесты
+    // Hold_FreezesExecutorChatExpiry_… и TwoPauses_… в этом файле). Кода раздела Q4 нет:
+    // он закрыт только тестами — этим (значение срока, продолжение шага) и следующим (якорь).
     [Fact]
     public async Task QueueHold_25Hours_ClearingContinuesStepNotExpired()
     {
@@ -729,6 +733,61 @@ public class TaskExecutionServiceHoldTests : IDisposable
         resumed.Should().Be(1, "шаг продолжен в прежнем чате");
         _tasks.GetById(step.Id)!.ExecutorStopReason.Should().NotBe(ExecutorStopClassifier.FeatureHeldExpiredReason);
         _sessions.GetById(chat.Id)!.ExpiresAfterMinutes.Should().Be(10, "срок возвращён после снятия");
+    }
+
+    // Q6-TAIL2 (п.1, RV-Q3B-Q4 минор 2): тест выше проверяет только значение срока — этот фиксирует
+    // сам якорь отсчёта. Состояние после 25 ч удержания: активность чата — 25-часовой давности
+    // (модовая доставка продолжения реальной активности в чате не делает). Снятие удержания
+    // возвращает срок с якорем «сейчас» (TaskExecutionService.cs:1527 → SetExpiry внутри
+    // RestoreFrozenExpiry): ближайший реальный тик уборки чат не сносит — срок считается от
+    // момента снятия, а не от замороженной активности; границы срока от нового якоря: 9 мин —
+    // жив, 11 мин — снесён. Мутации: «RestoreFrozenExpiry возвращает срок без нового якоря»
+    // (SessionManager.cs: вместо SetExpiry — прямая запись ExpiresAfterMinutes) — краснеют
+    // абзац якоря и «пережил реальный тик»; «якорь = последняя активность» — краснеет абзац
+    // якоря (момент 25-часовой давности).
+    [Fact]
+    public async Task QueueHold_25Hours_RestoredExpiryAnchoredAtClearingNotOldActivity()
+    {
+        var user = _userStore.Add("hold-queue-ttl-anchor", "password123", "user");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича в очереди", Role: "feature"));
+        var step = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг в очереди", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress, ExecutionExpiresAfterMinutes: 10));
+        var chat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "exec", taskId: step.Id);
+        _tasks.MarkClaudeStarted(step.Id, chat.Id, DateTime.UtcNow);
+        _sessions.SetExpiry(chat.Id, 10);
+        SetRunningTurn(chat.Id);
+
+        _tasks.SetHold(epic.Id, FeatureHoldReasons.Queue);
+        _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
+        SetIdle(chat.Id);
+
+        var beforeClear = DateTime.UtcNow;
+        _tasks.ClearHold(epic.Id);
+        var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Queue);
+        resumed.Should().Be(1, "шаг продолжен в прежнем чате");
+        SetIdle(chat.Id);
+
+        // Состояние после суток удержания: активность чата — из допаузного времени.
+        _sessions.GetById(chat.Id)!.UpdatedAt = DateTime.UtcNow.AddHours(-25);
+
+        var restored = _sessions.GetById(chat.Id)!;
+        restored.ExpiresAfterMinutes.Should().Be(10, "значение срока — то же, что проверяет Q4");
+        restored.ExpiryAnchor.Should().NotBeNull().And.Subject.As<DateTime>()
+            .Should().BeOnOrAfter(beforeClear,
+            "якорь отсчёта — момент снятия удержания, а не замороженная активность и не её отсутствие");
+
+        // Поведение: реальный тик уборки чат не сносит — срок считается от якоря, а не от
+        // 25-часовой активности (regress «якорь 25-часовой давности» здесь краснеет).
+        await new ChatExpiryService(_sessions, NullLogger<ChatExpiryService>.Instance)
+            .TickAsync(DateTime.UtcNow);
+        _sessions.GetById(chat.Id).Should().NotBeNull(
+            "срок считается от момента снятия: чат с 25-часовой активностью пережил ближайший тик");
+        await new ChatExpiryService(_sessions, NullLogger<ChatExpiryService>.Instance)
+            .TickAsync(DateTime.UtcNow.AddMinutes(9));
+        _sessions.GetById(chat.Id).Should().NotBeNull("9 минут от якоря — срок не истёк");
+        await new ChatExpiryService(_sessions, NullLogger<ChatExpiryService>.Instance)
+            .TickAsync(DateTime.UtcNow.AddMinutes(11));
+        _sessions.GetById(chat.Id).Should().BeNull("11 минут от якоря — срок истёк, уборка сносит чат");
     }
 
     // M1 (хвост RV-Q2): признак «фича удержана» — наличие Hold, а не его Reason. Битый tasks.json

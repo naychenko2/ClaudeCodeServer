@@ -305,6 +305,38 @@ public class FeatureQueueTraceTests
             "при параллельных агентах сумма законно больше workWall");
     }
 
+    // Q6-TAIL2 (п.3, RV-K-Q3B-5 находка 3): предыдущий тест — один агент, и там net-СУММА
+    // совпадает с net-ОБЪЕДИНЕНИЕМ: он их не различает. Здесь два перекрывающихся started-периода
+    // (одинаковые 09:00…11:00, 120 мин каждый) + очередь 09:30–10:30 (60 мин):
+    // agentsSum = 2×(120−60) = 120 — агентные минуты складываются; workWall = 120−60 = 60 —
+    // время на графике считается один раз. Мутация «объединение вместо суммы»
+    // (FeatureTimeline.cs, в цикле agentsSpan «+=» заменить на «=»: объединение двух одинаковых
+    // периодов — один период) → agentsSum = 60 ≠ 120 → красный.
+    [Fact]
+    public void Build_ДваПерекрывающихсяStartedПериодаОчередь_AgentsSumСуммаНеОбъединение()
+    {
+        var journal = Full(
+            new FeatureJournalEntry { At = T0.AddHours(1), StartedAt = T0.AddHours(1), Kind = "started", TaskId = "s1" },
+            new FeatureJournalEntry { At = T0.AddHours(1), StartedAt = T0.AddHours(1), Kind = "started", TaskId = "s2" },
+            Held(T0.AddHours(1.5), FeatureHoldReasons.Queue),
+            Cleared(T0.AddHours(2.5), FeatureHoldReasons.Queue, FeatureHoldBy.Queue),
+            new FeatureJournalEntry { At = T0.AddHours(3), Kind = "status", To = "Done", TaskId = "s1" },
+            new FeatureJournalEntry { At = T0.AddHours(3), Kind = "status", To = "Done", TaskId = "s2" });
+
+        var t = FeatureTimeline.Build(EpicRun(), journal, T0.AddHours(4)).Totals;
+
+        t.ElapsedMinutes.Should().Be(240);
+        t.QueuedMinutes.Should().Be(60);
+        t.WorkWallMinutes.Should().Be(60, "net-ОБЪЕДИНЕНИЕ периодов: 120 минус очередь, время на графике один раз");
+        t.AgentsSumMinutes.Should().Be(120, "net-СУММА: 2×(120−60) — агентные минуты складываются, " +
+            "объединение дало бы 60");
+        t.AgentsSumMinutes.Should().BeGreaterThan(t.WorkWallMinutes,
+            "net-СУММА отличается от net-ОБЪЕДИНЕНИЯ ровно здесь: два агента, параллельная работа есть");
+        t.IdleMinutes.Should().Be(120);
+        (t.WorkWallMinutes + t.WaitingMinutes + t.ErrorMinutes + t.IdleMinutes + t.QueuedMinutes)
+            .Should().Be(t.ElapsedMinutes);
+    }
+
     [Fact]
     public void BuildEvents_ByQueue_ДаётСобытиеЗапущенаИзОчереди()
     {

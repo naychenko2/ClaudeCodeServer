@@ -63,9 +63,29 @@ describe('Сейчас: строки восьми kind', () => {
     expect(briefNowText(b, { nameOf })).toBe('Ждёт вашего ответа: нужен твой ответ по макету');
   });
 
-  it('error — «Исполнитель встал: <причина>» (разрез п. 4)', () => {
-    const b = brief({ kind: 'error', reason: 'сохранение журнала упало' });
-    expect(briefNowText(b, { nameOf })).toBe('Исполнитель встал: сохранение журнала упало');
+  // Дефект c79050aa: у kind 'error' причина — машинный код бэка (ExecutorStopClassifier →
+  // Attention.Reason, FeatureProjector.cs:143), а не текст: старый фикстур «сохранение
+  // журнала упало» описывал поведение, которого бэк не даёт. Перевод — общая таблица.
+  it('error с известным кодом — человеческий текст общей таблицы (defect c79050aa)', () => {
+    const b = brief({ kind: 'error', reason: 'auth_failed' });
+    expect(briefNowText(b, { nameOf })).toBe('Исполнитель встал: Не удалось авторизоваться у провайдера модели');
+  });
+
+  it('error с кодом вне таблицы — нейтральная фраза без кода (defect c79050aa)', () => {
+    // interrupted_by_user — реальный код бэка (находка QA1), которого в таблице фронта нет.
+    expect(briefNowText(brief({ kind: 'error', reason: 'interrupted_by_user' }), { nameOf })).toBe('Исполнитель остановлен');
+    expect(briefNowText(brief({ kind: 'error', reason: 'совсем_новый_код' }), { nameOf })).toBe('Исполнитель остановлен');
+  });
+
+  it('error — машинного кода (латиница с подчёркиванием) нет ни в одной строке (defect c79050aa)', () => {
+    for (const r of ['auth_failed', 'interrupted_by_user', 'subagent_truncated', 'tool_call_leaked', 'feature_held_expired', 'device_wait_expired']) {
+      const t = briefNowText(brief({ kind: 'error', reason: r }), { nameOf }) ?? '';
+      expect(t, r).not.toMatch(/[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+/);
+    }
+  });
+
+  it('error без причины — «Исполнитель встал» без двоеточия', () => {
+    expect(briefNowText(brief({ kind: 'error' }), { nameOf })).toBe('Исполнитель встал');
   });
 
   it('paused — «На паузе — поставили вы в 13:40» (макет hold)', () => {
@@ -250,6 +270,38 @@ describe('Дальше: строка из next', () => {
   it('waiting_you с причиной не «мерж» и следующим шагом — общий префикс без слова «мерж»', () => {
     const b = brief({ kind: 'waiting_you', reason: 'нужен твой ответ по макету', next: [{ stage: 'design', personaId: null }] });
     expect(briefNextText(b, nameOf)).toBe('После вашего «да» — дизайн');
+  });
+
+  // Дефект 16080f64: стадия в префиксе «После …» стояла в именительном («После производство
+  // — ревью»). Каждая именная стадия (ключи = StageKey) обязана дать родительный падеж.
+  it('defect 16080f64: префикс склоняет активную стадию — каждая именная стадия', () => {
+    const cases: Array<[string, string]> = [
+      ['cut', 'После разреза — мерж'],
+      ['design', 'После дизайна — мерж'],
+      ['plan', 'После плана — мерж'],
+      ['prod', 'После производства — мерж'],
+      ['review', 'После ревью — мерж'], // «ревью» — средний род, не склоняется
+      ['qa', 'После проверки — мерж'],
+      ['final', 'После финального ревью — мерж'],
+      ['merge', 'После мержа — мерж'],
+    ];
+    for (const [stage, expected] of cases) {
+      const b = brief({
+        kind: 'running',
+        now: { stage, taskId: 't-x', personaId: null, stepRef: null, lane: null, since: at(25, 14, 5) },
+        next: [{ stage: 'merge', personaId: null }],
+      });
+      expect(briefNextText(b, nameOf), stage).toBe(expected);
+    }
+  });
+
+  it('defect 16080f64: неизвестный ключ стадии не склоняется — ключ как есть (форму не выдумываем)', () => {
+    const b = brief({
+      kind: 'running',
+      now: { stage: 'staging', taskId: 't-x', personaId: null, stepRef: null, lane: null, since: at(25, 14, 5) },
+      next: [{ stage: 'merge', personaId: null }],
+    });
+    expect(briefNextText(b, nameOf)).toBe('После staging — мерж');
   });
 });
 

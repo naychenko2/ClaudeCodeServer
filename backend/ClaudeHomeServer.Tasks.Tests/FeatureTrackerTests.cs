@@ -12,8 +12,7 @@ namespace ClaudeHomeServer.Tasks.Tests;
 // убрать ветку «виток ещё открыт» — тест «открытое пачечное ревью покрывает шаг» красный;
 // убрать метку из исключения — тест метки красный; убрать проверку статуса эпика в orphans —
 // тест «открытый эпик» красный; заменить `> t.CompletedAt` на `!= null` в dead_verdict —
-// тест «ревью по свежей доработке» красный; убрать ветку (б) epic_open_after_merge — её тест
-// красный; опустить трим/регистр в метке — тест метки красный; убрать проверку chatBusy в
+// тест «ревью по свежей доработке» красный; убрать требование merge-задачи в epic_open_after_merge — тест «без мержа» красный; опустить трим/регистр в метке — тест метки красный; убрать проверку chatBusy в
 // reported_open — тест «чат занят» красный.
 public class FeatureTrackerTests
 {
@@ -313,14 +312,52 @@ public class FeatureTrackerTests
     }
 
     [Fact]
-    public void EpicOpenAfterMerge_ВсеДочерниеDoneЭпикОткрыт_Расхождение()
+    public void EpicOpenAfterMerge_ВсеДочерниеDoneБезМержа_Нет()
     {
+        // Без закрытой merge-задачи сигнала нет, даже если всё закрыто.
         var issues = Track(Feature(), Step("s", "Ш1", 1),
             Verdict("r", TaskRoles.Review, TaskVerdicts.Accepted, 5, "s"));
 
-        var ep = OfKind(issues, FeatureTracker.EpicOpenAfterMerge).Single();
-        ep.TaskId.Should().Be(Epic);
-        ep.Since.Should().Be(T0 + TimeSpan.FromMinutes(6), "since — закрытие последней задачи");
+        OfKind(issues, FeatureTracker.EpicOpenAfterMerge).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void EpicOpenAfterMerge_МержDoneНоЕстьОткрытаяЗадача_Нет()
+    {
+        var open = Step("o", "Ш2", 3, TaskItemStatus.InProgress);
+
+        OfKind(Track(Feature(), Merge(30), open), FeatureTracker.EpicOpenAfterMerge).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Unreviewed_ФиналБезReviewOf_ПокрываетЦепочку()
+    {
+        // Открытый финал с пустым ReviewOf — виток, покрывающий любую цепочку.
+        var issues = Track(Feature(), Step("s", "Ш1", 1), Verdict("f", TaskRoles.Final, null, 5));
+        OfKind(issues, FeatureTracker.Unreviewed).Should().BeEmpty();
+
+        // Закрытый после сдачи шага — тоже покрывает.
+        issues = Track(Feature(), Step("s", "Ш1", 1), Verdict("f", TaskRoles.Final, TaskVerdicts.Accepted, 5));
+        OfKind(issues, FeatureTracker.Unreviewed).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Unreviewed_ФиналБезReviewOfЗакрытДоСдачи_НеПокрывает()
+    {
+        // Финал закрылся на минуте 2, шаг сдан на минуте 11 — работа после финала без ревью.
+        var issues = Track(Feature(), Verdict("f", TaskRoles.Final, TaskVerdicts.Accepted, 1),
+            Step("s", "Ш1", 10));
+
+        OfKind(issues, FeatureTracker.Unreviewed).Should().ContainSingle();
+    }
+
+    [Fact]
+    public void Unreviewed_РевьюИQaБезReviewOf_НеПокрывают()
+    {
+        var issues = Track(Feature(), Step("s", "Ш1", 1),
+            Verdict("r", TaskRoles.Review, null, 5), Verdict("q", TaskRoles.Qa, null, 6));
+
+        OfKind(issues, FeatureTracker.Unreviewed).Should().ContainSingle();
     }
 
     [Fact]

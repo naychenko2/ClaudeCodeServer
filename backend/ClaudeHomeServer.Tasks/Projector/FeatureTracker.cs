@@ -14,7 +14,7 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 //   dead_verdict          — review/qa/final в Todo, все цели уже приняты или сняты;
 //   reported_open         — исполнитель отчитался (ClaudeResult != null), задача InProgress,
 //                           чат исполнителя не в работе, старше порога;
-//   epic_open_after_merge — мерж Done и эпик открыт; либо все дочерние Done, эпик открыт;
+//   epic_open_after_merge — мерж Done, все дочерние Done, эпик открыт;
 //   orphans_in_closed     — эпик Done, в нём остались не-Done задачи.
 internal static class FeatureTracker
 {
@@ -77,11 +77,15 @@ internal static class FeatureTracker
 
             // unreviewed: последняя сданная задача старше порога, и нет ни одного витка, который
             // ещё открыт или закрыт ПОСЛЕ её сдачи (открытое пачечное ревью на исходный шаг
-            // покрывает всю цепочку — она общая по stepRef). Исключение — метка «без-ревью».
+            // покрывает всю цепочку — она общая по stepRef). Финал с пустым ReviewOf — тоже виток
+            // и покрывает любую цепочку на том же временном условии; у review/qa пустой ReviewOf
+            // витком не считается. Исключение — метка «без-ревью».
             var last = facts.LastSubmitted;
             if (last is not null && !HasNoReviewLabel(last)
                 && nowUtc - last.CompletedAt!.Value > grace
-                && !rounds.Any(r => r.CompletedAt is null || r.CompletedAt > last.CompletedAt))
+                && !rounds.Any(r => r.CompletedAt is null || r.CompletedAt > last.CompletedAt)
+                && !children.Any(f => f.Role == TaskRoles.Final && (f.ReviewOf is null || f.ReviewOf.Count == 0)
+                    && (f.CompletedAt is null || f.CompletedAt > last.CompletedAt)))
             {
                 issues.Add(new FeatureTrackerIssue(Unreviewed, last.Id, chain.StepRef, last.CompletedAt));
             }
@@ -156,13 +160,11 @@ internal static class FeatureTracker
         {
             if (children.Count > 0)
             {
-                // (а) мерж Done, эпик открыт: фичу смержили, эпик не закрыли.
+                // «После мержа» буквально: закрытая merge-задача и все дочерние Done при открытом
+                // эпике. Без merge-задачи сигнала нет (признак — роль, не название).
                 var merge = children.LastOrDefault(t => t.Role == TaskRoles.Merge && t.Status == TaskItemStatus.Done);
-                if (merge is not null)
+                if (merge is not null && children.All(t => t.Status == TaskItemStatus.Done))
                     issues.Add(new FeatureTrackerIssue(EpicOpenAfterMerge, merge.Id, null, merge.CompletedAt));
-                // (б) все дочерние Done, эпик открыт: работа закончена, эпик не закрыли.
-                else if (children.All(t => t.Status == TaskItemStatus.Done))
-                    issues.Add(new FeatureTrackerIssue(EpicOpenAfterMerge, epic.Id, null, children.Max(t => t.CompletedAt)));
             }
         }
         else

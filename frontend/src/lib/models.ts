@@ -38,6 +38,10 @@ export interface ProviderCapabilities {
   tierWeak?: string | null;
   // Ценовой класс провайдера (free|cheap|expensive) — приходит с бэка
   costTier?: string | null;
+  // Признак локальности провайдера (свой движок на машине) — с бэка (/api/models,
+  // LlmCapabilities.IsLocal). Машин-специфичные локальные ключи фронту неизвестны,
+  // поэтому признак локальности берём с бэка, а не угадываем по ключу.
+  isLocal?: boolean;
 }
 
 // У Claude доступно всё — это и дефолт до загрузки списка с бэка

@@ -14,20 +14,27 @@
 //
 // Слово «локально» (локальный движок) в ценовом классе отсутствует, поэтому
 // остаётся здесь — по ключу провайдера.
+//
+// Локальность провайдера — признак С БЭКА (isLocal в /api/models): ключи
+// машин-специфичных локальных провайдеров фронту неизвестны, поэтому свой список
+// локальных ключей на фронте не заводим (LOCAL_ENGINE_KEYS в lib/localEngine —
+// это подписи движка, а не признак бесплатности).
 
 import { isFreeCostTier } from './costTiers';
 import { isLocalEngineKey } from './localEngine';
 
 // Признак «бесплатный» провайдера: класс с бэка, а при неизвестном классе —
-// откат на локальное правило по ключу (см. шапку модуля).
-export function isFreeProviderKey(key: string, costTier?: string | null): boolean {
+// признак локальности с бэка (isLocal) и затем откат на локальное правило
+// по ключу (см. шапку модуля).
+export function isFreeProviderKey(key: string, costTier?: string | null, isLocal?: boolean): boolean {
   if (costTier != null) return isFreeCostTier(costTier);
+  if (isLocal) return true;
   return isLocalEngineKey(key) || key.startsWith('freellm') || key.endsWith('-direct');
 }
 
 // Бейдж полосы «Все провайдеры»: «локально» (локальный движок), «бесплатный»
 // (признак выше) или null — бейджа нет.
-export function providerFreeBadge(key: string, costTier?: string | null): string | null {
+export function providerFreeBadge(key: string, costTier?: string | null, isLocal?: boolean): string | null {
   if (isLocalEngineKey(key)) return 'локально';
-  return isFreeProviderKey(key, costTier) ? 'бесплатный' : null;
+  return isFreeProviderKey(key, costTier, isLocal) ? 'бесплатный' : null;
 }

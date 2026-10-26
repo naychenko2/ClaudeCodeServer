@@ -37,6 +37,13 @@ describe('providerPricePills — пилюля цены карточки пров
     expect(providerPricePills('freellmapi', null)).toEqual([{ label: 'бесплатный', tone: 'free' }]);
     expect(providerPricePills('glm', null)).toEqual([]);
   });
+
+  // Признак локальности с бэка (isLocal): локальный провайдер с машин-специфичным
+  // ключом фронту по имени не узнать — свой список ключей на фронте не заводим.
+  it('неизвестный класс + isLocal с бэка — пилюля «бесплатный»', () => {
+    expect(providerPricePills('local-qwen', null, true)).toEqual([{ label: 'бесплатный', tone: 'free' }]);
+    expect(providerPricePills('local-qwen', null, false)).toEqual([]);
+  });
 });
 
 describe('признак бесплатности — одна точка правды на фронте', () => {

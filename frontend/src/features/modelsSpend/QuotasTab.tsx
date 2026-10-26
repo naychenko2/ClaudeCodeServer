@@ -284,6 +284,10 @@ interface SubCtx {
   freeAvailable: boolean;
   subs: Record<string, SubscriptionUsage>;
   usageError: boolean;
+  // Ценовой класс провайдера claude (/api/models, costTier) — карточка подписки
+  // называет цену так же, как квотная карточка провайдера. null — каталог не пришёл:
+  // пилюли класса нет, карточка не врёт.
+  costTier?: string | null;
   // Досрочный сброс пометки «модель недоступна» — эндпоинт админский, поэтому у остальных
   // строки пометок остаются, а кнопки нет
   onRecheckModel?: (key: string, model: string) => Promise<void>;
@@ -352,6 +356,11 @@ export function buildSubscriptionCard(key: string, sub: SubscriptionUsage, ctx: 
   const color = sourceColor('claude');   // оба аккаунта пула — один цвет, различаются именем
   const pollStatus = ctx.pollStatuses[key];
   const lastSnap = lastSnapshot(sub.snapshots);
+  // Ценовой класс провайдера claude (/api/models, costTier) — карточка подписки называет
+  // цену так же, как квотная карточка провайдера: класс приезжает «expensive» (дорого),
+  // и без него самый дорогой класс на карточках показать негде — у Claude нет квотной
+  // карточки. null (каталог не пришёл) — пилюли нет, карточка не врёт.
+  const costTier = ctx.costTier ?? null;
   // Пометки живут независимо от снимков: аккаунт без единого снимка тоже может не пускать
   // модель, поэтому блок нужен обеим веткам возврата
   const unavailableModels = unavailableModelRows(sub);
@@ -369,7 +378,8 @@ export function buildSubscriptionCard(key: string, sub: SubscriptionUsage, ctx: 
       // пустой карточки нет, кроме unauthorized с loginCommand. На карточке без тарифа
       // (tier: null) ограничения попадают только в expandedPills — ProviderCard
       // рендерит их в раскрытии гейтом `data.tier || data.expandedPills?.length`.
-      pills: subscriptionPills(sub),
+      pills: [...subscriptionPills(sub), ...providerPricePills('claude', costTier)],
+      costTier,
       expandedPills: subscriptionExpandedPills(sub),
       hint: unauthorized
         ? 'Опрос лимитов недоступен — в профиле нет полноценного входа'
@@ -433,7 +443,8 @@ export function buildSubscriptionCard(key: string, sub: SubscriptionUsage, ctx: 
   return {
     key, name, color, state: 'ready', isFree: false, dim: ctx.usageError, onRetry: () => {},
     windows: winViews, labelWidth: 92,
-    pills: subscriptionPills(sub),
+    pills: [...subscriptionPills(sub), ...providerPricePills('claude', costTier)],
+    costTier,
     expandedPills: subscriptionExpandedPills(sub),
     routingBadge: isTarget ? { tone: rot.tone, label: rot.label } : undefined,
     freshness: fresh.corner,
@@ -458,18 +469,20 @@ export function buildSubscriptionCard(key: string, sub: SubscriptionUsage, ctx: 
 }
 
 // Бесплатность провайдера — по классу с бэка (costTier), как и пилюля на карточке.
-// При неизвестном классе (каталог /api/models не пришёл) — откат на локальное правило
-// по ключу (lib/spendSources), чтобы карточка и бейдж полосы не противоречили друг другу.
+// При неизвестном классе (каталог /api/models не пришёл) — признак локальности с бэка
+// (isLocal) и откат на локальное правило по ключу (lib/spendSources), чтобы карточка
+// и бейдж полосы не противоречили друг другу.
 function isFreeProvider(key: string): boolean {
-  return isFreeProviderKey(key, providerCapsByKey(key).costTier);
+  const caps = providerCapsByKey(key);
+  return isFreeProviderKey(key, caps.costTier, caps.isLocal);
 }
 
 // Пилюли цены карточки провайдера — чистая функция (её дергает providerReadyCard).
-// Признак «бесплатный» — по классу с бэка; при неизвестном классе — откат на
-// локальное правило по ключу. Класс бесплатного провайдера приезжает как free —
-// тогда и пилюля одна, цену карточка называет один раз.
-export function providerPricePills(key: string, costTier: string | null): PillSpec[] {
-  return isFreeProviderKey(key, costTier)
+// Признак «бесплатный» — по классу с бэка; при неизвестном классе — признак
+// локальности с бэка и откат на локальное правило по ключу. Класс бесплатного
+// провайдера приезжает как free — тогда и пилюля одна, цену карточка называет один раз.
+export function providerPricePills(key: string, costTier: string | null, isLocal?: boolean): PillSpec[] {
+  return isFreeProviderKey(key, costTier, isLocal)
     ? [{ label: COST_TIER_PILL.free, tone: 'free' }]
     : [];
 }
@@ -491,7 +504,11 @@ function providerReadyCard(
   const hasExhausted = windows.some(w => w.exhausted);
   // Ценовой класс провайдера — с бэка (/api/models, costTier): по нему карточка называет
   // цену (бесплатно / дёшево / дорого) и по нему же определяется бесплатность.
-  const costTier = providerCapsByKey(key).costTier ?? null;
+  // Признак локальности — тоже с бэка (isLocal): машин-специфичные локальные ключи
+  // фронту неизвестны, свой список на фронте не заводим.
+  const caps = providerCapsByKey(key);
+  const costTier = caps.costTier ?? null;
+  const isLocal = caps.isLocal ?? false;
   const pills: PillSpec[] = [];
   if (bal.planLabel) pills.push({ label: bal.planLabel, tone: 'plain' });
   // Состояние пула FreeLLM по живым платформам: всё лежит — danger, частичная
@@ -506,7 +523,7 @@ function providerReadyCard(
   // классе — откат на локальное правило ключа (lib/spendSources). Правило freellm*
   // живёт в Core (SpendCostTiers), фронт его не дублирует: карточка называет цену один
   // раз («бесплатный» вместо «бесплатный» + «дёшево»).
-  pills.push(...providerPricePills(key, costTier));
+  pills.push(...providerPricePills(key, costTier, isLocal));
   if (hasExhausted) pills.push({ label: 'Предел', tone: 'danger' });
   const trend = snapshots.length
     ? snapshots
@@ -518,7 +535,7 @@ function providerReadyCard(
   const cabinetUrl = CABINET_URL[key];
   const expandable = countWindows.length > 0 || trend.length >= 2 || !!cabinetUrl;
   return {
-    key, name, color, state: 'ready', isFree: isFreeProviderKey(key, costTier), dim: false, onRetry: () => {},
+    key, name, color, state: 'ready', isFree: isFreeProviderKey(key, costTier, isLocal), dim: false, onRetry: () => {},
     costTier,
     windows: surfaceWindows, labelWidth: 64, pills,
     freshness: providerFreshness(bal.asOf),
@@ -727,6 +744,8 @@ export function QuotasTab({ balances, onClose }: { balances?: BalanceChipData[];
       freeAvailable: Object.values(subs).some(s => s.inRotation !== false),
       subs,
       usageError,
+      // Класс claude с бэка (/api/models, costTier) — карточка подписки называет цену.
+      costTier: providerCapsByKey('claude').costTier ?? null,
       onRecheckModel: isAdmin ? recheckModel : undefined,
     };
     for (const [key, sub] of Object.entries(subs)) {
@@ -795,7 +814,7 @@ export function QuotasTab({ balances, onClose }: { balances?: BalanceChipData[];
         const n = models.filter(m => m.provider === key).length;
         count = n > 0 ? plural(n, 'модель', 'модели', 'моделей') : undefined;
       }
-      return { key, name: providerLabel(key), color: sourceColor(key), off: caps.configured === false, badge: providerFreeBadge(key, caps.costTier ?? null), count };
+      return { key, name: providerLabel(key), color: sourceColor(key), off: caps.configured === false, badge: providerFreeBadge(key, caps.costTier ?? null, caps.isLocal ?? false), count };
     });
   }, [usage]);
 

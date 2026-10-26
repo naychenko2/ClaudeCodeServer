@@ -31,12 +31,27 @@ let _hydrated = false;
 const TASKS_SNAPSHOT_KEY = 'tasks:all';
 let _persistTimer: ReturnType<typeof setTimeout> | null = null;
 
+// Снапшот — structured clone ВСЕГО массива, поэтому пишем не чаще раза в окно,
+// а при уходе вкладки в фон дописываем отложенное сразу.
+const PERSIST_WINDOW_MS = 10_000;
+
+function flushPersist() {
+  if (!_persistTimer) return;
+  clearTimeout(_persistTimer);
+  _persistTimer = null;
+  idbSet(TASKS_SNAPSHOT_KEY, { data: _tasks, savedAt: Date.now() }).catch(() => {});
+}
+
 function persistTasks() {
   if (_persistTimer) return;
-  _persistTimer = setTimeout(() => {
-    _persistTimer = null;
-    idbSet(TASKS_SNAPSHOT_KEY, { data: _tasks, savedAt: Date.now() }).catch(() => {});
-  }, 300);
+  _persistTimer = setTimeout(flushPersist, PERSIST_WINDOW_MS);
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushPersist();
+  });
+  window.addEventListener('pagehide', flushPersist);
 }
 
 function emit() {

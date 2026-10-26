@@ -1797,12 +1797,17 @@ describe('FeatureTimelineTab: свёртка длинных списков эт�
 // (23) хранить window.scrollY вместо scrollTop контейнера → c4 краснеет.
 // GC-F11R3 (мажоры ревью GC-R-P5): подтверждение идемпотентно по seq (двойной эффект
 // StrictMode и remount-инстанс не закрывают окно), окно расходует стабильный кадр после
-// применения без размонтирования вкладки; c4–c7 прогоняются и под StrictMode (dev-сборка,
-// main.tsx:14). Мутации: (24) гасить lastApplied при повторном подтверждении с тем же seq
-// (старый механизм) → c4/c6 под strict=true краснеют (remount не находит окно);
-// (25) никогда не расходовать окно (нет scheduleConsume) → c7 краснеет (окно залипло);
-// (26) расходовать окно при размонтировании вкладки → c4 краснеет (remount-инстанс
-// не находит подтверждённый снимок).
+// применения; c4–c7 прогоняются и под StrictMode (dev-сборка, main.tsx:14). Мутации:
+// (24) гасить lastApplied при повторном подтверждении с тем же seq (старый механизм) →
+// c6 под strict=true краснеет (remount не находит окно); (25) никогда не расходовать окно
+// (нет scheduleConsume) → c7 краснеет (окно залипло); (26) расходовать окно при
+// размонтировании вкладки → c4 краснеет (remount-инстанс не находит подтверждённый снимок).
+// GC-F11R4 (мажор ревью GC-R-P6): размонтирование ВКЛАДКИ — не сигнал ухода (расход
+// откладывается, c9); окно гасит уход со СТРАНИЦЫ (registerFeaturePage — то, что зовёт
+// FeaturePage при монтировании; c8). Мутации: (27) «страница не гасит окно при уходе» →
+// c8 краснеет; (28) «вернуть зависимость расхода от размонтирования вкладки» (прежний
+// _unmountStamp) → «размонтирование вкладки не отменяет расход» (featureBackNav.test.ts)
+// краснеет.
 // Фикстура: все этапы pending — при монтировании не раскрыто НИЧЕГО (дефолт не маскирует
 // восстановление); шаг ST-F9 с меню (есть старт и чат цепочки).
 function returnRun(): FeatureRun {
@@ -2081,6 +2086,58 @@ describe('FeatureTimelineTab: восстановление по чипу (GC-F11
     // «старая прокрутка перенеслась в новое открытие».
     expect(h3.host.scrollTop ?? 0, 'старая прокрутка перенеслась в новое открытие').toBe(0);
     h3.unmount();
+  });
+
+  // c8 (GC-F11R4, мажор GC-R-P6): закрытие СТРАНИЦЫ между применением и следующим
+  // открытием. c7 — уход ПОСЛЕ расхода; здесь уход ДО расхода: окно гасит не таймер, а
+  // размонтирование страницы (registerFeaturePage — его зовёт FeaturePage при монтаже;
+  // здесь вызывается вручную, т.к. в тесте смонтирована вкладка, а не страница).
+  // Следующее открытие без чипа — дефолтный вид: «чужой этап, чужая карточка, чужая
+  // прокрутка» не залипают.
+  it('c8: закрытие страницы до расхода — следующее открытие без чипа даёт дефолтный вид', () => {
+    installFakeDom();
+    const run = returnRun();
+    const offPage = backNavTest.registerFeaturePage('f1'); // страница смонтирована (FeaturePage делает это сама)
+    const h1 = mountInHost(run, true);
+    leaveToTaskIn(run, h1.host);
+    let taken = false;
+    act(() => { taken = backNavTest.consumeFeatureViewReturn('f1'); });
+    expect(taken, 'снимка для забора нет').toBe(true);
+    act(() => {}); // живой инстанс применил и подтвердил (таймер расхода поставлен)
+    h1.unmount(); // размонтирование вкладки — не сигнал ухода (GC-F11R4)
+    offPage(); // закрытие страницы: отложенная проверка — это настоящий уход
+    vi.advanceTimersByTime(0);
+    expect(backNavTest.lastAppliedFeatureView('f1'), 'окно пережило закрытие страницы').toBeNull();
+    const h3 = mountInHost(returnRun(), true); // следующее открытие БЕЗ чипа (consume не было)
+    expect(findNodeByAttr(h3.host, 'data-testid', 'timeline-stage-body-prod'), 'следующее открытие без чипа применило снимок').toBeNull();
+    expect(h3.host.scrollTop ?? 0, 'старая прокрутка перенеслась в новое открытие').toBe(0);
+    h3.unmount();
+  });
+
+  // c9 (GC-F11R4): remont вкладки дольше CONSUME_MS (медленный ответ сервера) —
+  // подтверждённый снимок жив: пока вкладка не смонтирована, расход откладывается, а не
+  // отменяется. Прежний механизм отменял расход при размонтировании вкладки — при
+  // медленном ответе remount читал бы пустой канал.
+  it('c9: remount вкладки после CONSUME_MS — подтверждённый снимок восстановлен', () => {
+    installFakeDom();
+    const run = returnRun();
+    const h1 = mountInHost(run, true);
+    leaveToTaskIn(run, h1.host);
+    let taken = false;
+    act(() => { taken = backNavTest.consumeFeatureViewReturn('f1'); });
+    expect(taken, 'снимка для забора нет').toBe(true);
+    act(() => {}); // живой инстанс применил и подтвердил
+    h1.unmount(); // 'loading' — вкладка снята; ответ сервера медленный
+    vi.advanceTimersByTime(backNavTest.CONSUME_MS); // расход отложен, не отменён
+    expect(backNavTest.lastAppliedFeatureView('f1'), 'окно израсходовано, пока вкладка не смонтирована').not.toBeNull();
+    let h2: { host: Host; unmount: () => void } | null = null;
+    withFocusPatch(() => { h2 = mountInHost(returnRun(), true); }); // 'ok' — remount после CONSUME_MS
+    const body2 = findNodeByAttr(h2!.host, 'data-testid', 'timeline-stage-body-prod');
+    expect(body2, 'remount после CONSUME_MS не восстановил этап').not.toBeNull();
+    const card2 = findNodeByAttr(body2!, 'data-testid', 'prod-card-ST-F9')!;
+    expect(card2.getAttribute('aria-expanded'), 'remount после CONSUME_MS не раскрыл карточку').toBe('true');
+    expect(h2!.host.scrollTop, 'remount после CONSUME_MS не восстановил прокрутку').toBe(1234);
+    h2.unmount();
   });
 });
 

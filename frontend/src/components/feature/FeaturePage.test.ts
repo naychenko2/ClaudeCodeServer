@@ -12,7 +12,7 @@
 // featuresIndex, featureBackNav) и mock api (chats.get, tasks.getFeature).
 
 import { act, useSyncExternalStore } from 'react';
-import { createElement } from 'react';
+import { createElement, StrictMode } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeaturePage, type FeaturePageBackTarget } from './FeaturePage';
 import { pluralTasks, featureRunStatusTag } from './FeaturePageHeader';
@@ -1816,5 +1816,90 @@ describe('F3: кнопка «Возобновить» на закрытой фи
     expect(item, 'пункт «Возобновить фичу»').not.toBeNull();
     await act(async () => { (reactProps(item)!.onClick as () => void)(); });
     expect(mockUpdateTask.calls, 'клик в шторке — PUT todo').toEqual([{ id: 'f1', dto: { status: 'todo' } }]);
+  });
+});
+
+// === GC-F11R4 (мажор ревью GC-R-P6): окно возврата и страница ===
+// Страница регистрирует себя в канале окна (FeaturePage → registerFeaturePage): закрытие
+// гасит подтверждённый снимок (отложенная проверка), мнимый unmount→mount StrictMode —
+// нет. Эти тесты — про связку: без регистрации ВНУТРИ FeaturePage механизм окна к странице
+// не подключён (тесты featureBackNav.test.ts и FeatureTimelineTab.test.ts зовут её вручную).
+// Мутации: убрать регистрацию в FeaturePage → первый тест краснеет; гасить окно сразу при
+// cleanup страницы → второй тест краснеет.
+describe('GC-F11R4: окно возврата и страница', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    pageTest.reset();
+    indexTest.reset();
+    backNavTest.reset();
+    personaMap.clear();
+    setAllFlags({ 'features-overview': true });
+    mockIndex.features = [feat()];
+    mockIndex.chats = {};
+    mockChats.clear();
+    openChatCalls.length = 0;
+    mockGetFeature.pending = false;
+    mockGetFeature.result = pageData();
+    mockGetFeature.error = null;
+    mockGetFeature.calls = [];
+    mockGetFeature.perCall = [];
+    indexTest.setIndex('p1', mockIndex as FeaturesIndex);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  // Настоящая страница: регистрация окна + поставщика вкладки «Хронология» (вкладка по
+  // умолчанию). strict=true — обёртка StrictMode (dev: main.tsx:14, эффекты дважды).
+  function mountFeaturePage(strict: boolean) {
+    installFakeDom();
+    // Минимальный window/document для mount страницы (тот же приём, что в render()):
+    // Esc-хук страницы вешает window.addEventListener; здесь событий не диспатчат.
+    type KeyHandler = (e: { type: string }) => void;
+    const g = globalThis as unknown as {
+      window: { addEventListener?: (t: string, f: KeyHandler) => void; removeEventListener?: (t: string, f: KeyHandler) => void };
+      getComputedStyle?: unknown;
+    };
+    if (!g.window.addEventListener) {
+      const listeners: Record<string, Set<KeyHandler>> = {};
+      g.window.addEventListener = (t: string, f: KeyHandler) => { (listeners[t] ??= new Set()).add(f); };
+      g.window.removeEventListener = (t: string, f: KeyHandler) => { listeners[t]?.delete(f); };
+    }
+    const doc = (globalThis as unknown as { document: { querySelector?: unknown } }).document;
+    if (!doc.querySelector) doc.querySelector = () => null;
+    if (!g.getComputedStyle) g.getComputedStyle = () => ({ overflowY: 'visible' });
+    const page = createElement(FeaturePage, { featureId: 'f1', projectId: 'p1', projectOwnerId: null, isMobile: false, onBack: () => {} });
+    const { root } = mount(strict ? createElement(StrictMode, null, page) : page);
+    return root;
+  }
+
+  it('закрытие страницы гасит подтверждённое окно (отложенная проверка)', async () => {
+    const root = mountFeaturePage(false);
+    await settle();
+    // Переход с «Хронологии»: снимок даёт собственный поставщик страницы (живая вкладка).
+    backNavTest.recordFeatureReturn('f1', { kind: 'task', id: 't1' }, 'Моя фича');
+    expect(backNavTest.getBackNav()?.view, 'страница не дала снимок').not.toBeNull();
+    act(() => { expect(backNavTest.consumeFeatureViewReturn('f1'), 'снимок не забран').toBe(true); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); }); // живая вкладка применила снимок и подтвердила
+    expect(backNavTest.lastAppliedFeatureView('f1'), 'окно не поставлено применением').not.toBeNull();
+    act(() => { root.unmount(); }); // закрытие страницы
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); }); // отложенная проверка сработала
+    expect(backNavTest.lastAppliedFeatureView('f1'), 'окно пережило закрытие страницы').toBeNull();
+  });
+
+  it('StrictMode: возврат по чипу — окно переживает мнимый unmount→mount страницы', async () => {
+    const root1 = mountFeaturePage(false);
+    await settle();
+    backNavTest.recordFeatureReturn('f1', { kind: 'task', id: 't1' }, 'Моя фича'); // переход; ниже страница закрыта
+    act(() => { root1.unmount(); });
+    // Чип нажат на экране задачи: снимок в канале, страницы нет (её закрытие — отложенная проверка).
+    act(() => { expect(backNavTest.consumeFeatureViewReturn('f1'), 'снимок не забран').toBe(true); });
+    const root2 = mountFeaturePage(true); // открытие страницы чипом — под StrictMode: регистрация снимает проверку
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); }); // 'ok' → вкладка применила снимок и подтвердила
+    expect(backNavTest.lastAppliedFeatureView('f1'), 'мнимый unmount страницы погасил окно').not.toBeNull();
+    act(() => { root2.unmount(); });
   });
 });

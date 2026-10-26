@@ -105,13 +105,19 @@ describe('featureBackNav: цель перехода (chat | feature) и норм
 // GC-F11R3 (мажоры ревью GC-R-P5): подтверждение идемпотентно по seq (повторный вызов
 // с тем же seq — no-op: StrictMode дважды зовёт эффекты монтирования, прежнее
 // «закрытие окна повторным подтверждением» съедало окно до реального remount); окно
-// расходует стабильный кадр после применения без размонтирования вкладки
-// (scheduleConsume), а размонтирование (remount/StrictMode-мнимый unmount/уход)
-// отложенный расход гасит — окно достаётся следующему инстансу. Мутации:
+// расходует стабильный кадр после применения (scheduleConsume).
+// GC-F11R4 (мажор ревью GC-R-P6): размонтирование ВКЛАДКИ — не сигнал ухода: пока
+// вкладка не смонтирована, расход откладывается — окно достаётся remount-инстансу при
+// любой скорости ответа сервера. Окно гасит уход со СТРАНИЦЫ (registerFeaturePage,
+// отложенная проверка: мнимый unmount→mount StrictMode её отменяет). Мутации:
 // (5) гасить lastApplied при повторном подтверждении с тем же seq (старый механизм) →
 // «повторное подтверждение идемпотентно» краснеет; (7) никогда не расходовать окно
-// (нет scheduleConsume) → «окно расходует стабильный кадр» краснеет; (8) расходовать
-// окно при размонтировании вкладки → «размонтирование гасит отложенный расход» краснеет.
+// (нет scheduleConsume) → «окно расходует стабильный кадр» краснеет; (8) вернуть
+// зависимость расхода от размонтирования вкладки (прежний _unmountStamp) → «размонтирование
+// вкладки не отменяет расход» краснеет; (9) страница не гасит окно при уходе → «уход со
+// страницы гасит…» краснеет; (10) гасить окно сразу при cleanup страницы → «мнимый
+// unmount→mount не гасит» краснеет; (11) чужой featureId тоже гасится проверкой →
+// «чужая страница ничего не гасит» краснеет.
 describe('featureBackNav: снимок вида (GC-F11)', () => {
   it('поставщик зарегистрирован → recordFeatureReturn пишет снимок в указатель', () => {
     const off = __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: 'ST-F9', scrollTop: 1234 }));
@@ -244,22 +250,24 @@ describe('featureBackNav: подтверждение применения сни
     off();
   });
 
-  it('размонтирование вкладки гасит отложенный расход: окно достаётся remount-инстансу (GC-F11R3)', () => {
+  it('размонтирование вкладки не отменяет расход: окно достаётся remount-инстансу и расходуется его стабильным кадром (GC-F11R4)', () => {
     const off = __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: null, scrollTop: 5 }));
     recordFeatureReturn('f1', { kind: 'task', id: 't1' }, 'Фича');
     expect(__test.consumeFeatureViewReturn('f1')).toBe(true);
     __test.commitFeatureViewApplied('f1', __test.pendingFeatureView('f1')!.seq);
-    // Снятие регистрации = размонтирование вкладки ('loading'→'ok' remount, мнимый unmount
-    // StrictMode): отложенный расход гасится, окно ЖИВО — его читает следующий инстанс.
+    expect(__test.lastAppliedFeatureView('f1'), 'окно не поставлено применением').not.toBeNull();
+    // Снятие регистрации = размонтирование вкладки ('loading'→'ok' remount, медленный
+    // ответ): расход ОТКЛАДЫВАЕТСЯ, а не отменяется — окно живо, его читает следующий
+    // инстанс (прежний механизм отменял расход безвозвратно: без remount окно жило до
+    // нового перехода — мажор GC-R-P6).
     off();
     vi.advanceTimersByTime(__test.CONSUME_MS);
-    expect(__test.lastAppliedFeatureView('f1'), 'окно расходовать при размонтировании').not.toBeNull();
-    // Новый инстанс (remount) подтверждает тот же seq и ставит свой расход: после его
-    // стабильного кадра (без нового размонтирования) окно закрыт.
+    expect(__test.lastAppliedFeatureView('f1'), 'размонтирование вкладки погасило окно').not.toBeNull();
+    // Remount (без нового подтверждения): отложенный расход срабатывает на стабильном
+    // кадре — окно закрыт. В прежнем механизме таймер здесь уже мёртв: залипание навсегда.
     const off2 = __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: null, scrollTop: 5 }));
-    __test.commitFeatureViewApplied('f1', __test.lastAppliedFeatureView('f1')!.seq);
     vi.advanceTimersByTime(__test.CONSUME_MS);
-    expect(__test.lastAppliedFeatureView('f1'), 'окно не закрылось после стабильного remount').toBeNull();
+    expect(__test.lastAppliedFeatureView('f1'), 'отложенный расход не сработал после remount').toBeNull();
     off2();
   });
 
@@ -271,5 +279,70 @@ describe('featureBackNav: подтверждение применения сни
     expect(__test.lastAppliedFeatureView('f1')).not.toBeNull();
     recordFeatureReturn('f1', { kind: 'chat', id: 'c2' }, 'Фича'); // новый переход
     expect(__test.lastAppliedFeatureView('f1'), 'подтверждённый снимок пережил новый переход').toBeNull();
+  });
+});
+
+// GC-F11R4 (мажор ревью GC-R-P6): окно возврата живёт только ради того открытия фичи,
+// ради которого снято. Регистрация страницы (registerFeaturePage — зовёт FeaturePage):
+// cleanup ставит ОТЛОЖЕННУЮ проверку (setTimeout(0)) — повторная регистрация с тем же
+// featureId её отменяет (мнимый unmount→mount StrictMode, main.tsx:14), реальный уход
+// гасит pending и lastApplied этой фичи и её таймер расхода. Мутации: (9) «страница не
+// гасит окно при уходе» → первый тест краснеет; (10) «гасить окно сразу при cleanup
+// страницы» → тест StrictMode краснеет; (11) «проверка гасит и чужой featureId» →
+// последний тест краснеет.
+describe('featureBackNav: окно возврата и страница (GC-F11R4)', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); __test.reset(); });
+
+  const provider = () => ({ stageKey: 'prod', expandedKey: null, scrollTop: 5 });
+  // Живое окно: переход → забор чипом → подтверждение применением (последний шаг — опционален).
+  function liveWindow(commit: boolean) {
+    __test.registerFeatureViewProvider('f1', provider);
+    recordFeatureReturn('f1', { kind: 'task', id: 't1' }, 'Фича');
+    expect(__test.consumeFeatureViewReturn('f1'), 'снимка для забора нет').toBe(true);
+    if (commit) __test.commitFeatureViewApplied('f1', __test.pendingFeatureView('f1')!.seq);
+  }
+
+  it('уход со страницы гасит подтверждённое окно: отложенная проверка после cleanup', () => {
+    const offPage = __test.registerFeaturePage('f1');
+    liveWindow(true);
+    expect(__test.lastAppliedFeatureView('f1'), 'окно не поставлено применением').not.toBeNull();
+    offPage(); // закрытие страницы (вкладка снята вместе с ней) — это уход, не remount
+    vi.advanceTimersByTime(0); // отложенная проверка
+    expect(__test.lastAppliedFeatureView('f1'), 'окно пережило уход со страницы').toBeNull();
+  });
+
+  it('уход со страницы до подтверждения гасит pending', () => {
+    const offPage = __test.registerFeaturePage('f1');
+    liveWindow(false); // чип забрал снимок, вкладка его ещё не применила
+    offPage();
+    vi.advanceTimersByTime(0);
+    expect(__test.pendingFeatureView('f1'), 'pending пережил уход со страницы').toBeNull();
+  });
+
+  it('мнимый unmount→mount страницы (StrictMode) окно не гасит: повторная регистрация отменяет проверку', () => {
+    const offPage = __test.registerFeaturePage('f1');
+    liveWindow(true);
+    offPage(); // мнимый unmount (cleanup StrictMode)
+    const offPage2 = __test.registerFeaturePage('f1'); // мнимый mount — та же фича: проверка снята
+    vi.advanceTimersByTime(0);
+    expect(__test.lastAppliedFeatureView('f1'), 'мнимый unmount погасил окно').not.toBeNull();
+    // Реальный уход после этого — гасит (иначе окно жило бы до нового перехода).
+    offPage2();
+    vi.advanceTimersByTime(0);
+    expect(__test.lastAppliedFeatureView('f1'), 'реальный уход не погасил окно').toBeNull();
+  });
+
+  it('чужая страница ничего не гасит; закрытие своей страницы при открытой чужой — гасит', () => {
+    const offPage = __test.registerFeaturePage('f1');
+    liveWindow(true);
+    const offOther = __test.registerFeaturePage('other'); // чужая фича: её проверка касается только 'other'
+    offOther();
+    vi.advanceTimersByTime(0);
+    expect(__test.lastAppliedFeatureView('f1'), 'чужая страница погасила это окно').not.toBeNull();
+    // Реальный уход из своей фичи (открыта чужая): проверка не находит страницу 'f1' → гасит.
+    offPage();
+    vi.advanceTimersByTime(0);
+    expect(__test.lastAppliedFeatureView('f1'), 'уход при открытой чужой фиче не погасил окно').toBeNull();
   });
 });

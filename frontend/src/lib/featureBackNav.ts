@@ -74,17 +74,15 @@ let _viewProvider: { featureId: string; fn: FeatureViewProvider } | null = null;
 
 // Зарегистрировать поставщика снимка (на время монтирования вкладки). Возвращает
 // снятие: по идентичности записи — снятие старого монтирования не должно стереть
-// регистрацию нового (перемонтирование вкладки). Снятие — он же сигнал конца стояния
-// вкладки (GC-F11R3): гасит отложенный расход подтверждённого окна (см. scheduleConsume).
+// регистрацию нового (перемонтирование вкладки). Снятие — НЕ сигнал ухода (GC-F11R4,
+// мажор GC-R-P6): размонтирование вкладки (remount 'loading'→'ok', мнимый unmount
+// StrictMode) окно не гасит и его расход не отменяет — окно принадлежит открытию
+// страницы, а не инстансу вкладки (см. registerFeaturePage).
 export function registerFeatureViewProvider(featureId: string, fn: FeatureViewProvider): () => void {
   const entry = { featureId, fn };
   _viewProvider = entry;
   return () => {
     if (_viewProvider === entry) _viewProvider = null;
-    // Размонтирование вкладки (remount 'loading'→'ok', мнимый unmount StrictMode, сознательный
-    // уход) — окно подтверждённого снимка этому инстансу больше не принадлежит: его гасит
-    // не само подтверждение, а стабильный кадр без размонтирования (scheduleConsume).
-    if (_lastApplied && _lastApplied.featureId === featureId) _unmountStamp += 1;
   };
 }
 
@@ -101,11 +99,6 @@ let _pendingView: PendingFeatureView | null = null;
 // Подтверждённый применением снимок (GC-F11R2, дефект 7d399549): remount вкладки
 // читает его, когда pending уже подтверждён (см. commitFeatureViewApplied ниже).
 let _lastApplied: PendingFeatureView | null = null;
-// Штат размонтирований вкладки с живым окном (GC-F11R3): размонтирование вкладки
-// (remount 'loading'→'ok', мнимый unmount StrictMode, сознательный уход) делает
-// подтверждённое окно принадлежащим следующему инстансу и гасит его отложенный расход
-// (см. scheduleConsume ниже).
-let _unmountStamp = 0;
 let _pendingSeq = 0;
 const _listeners = new Set<() => void>();
 function emit() { _listeners.forEach(fn => fn()); }
@@ -210,7 +203,8 @@ export function usePendingFeatureView(featureId: string): PendingFeatureView | n
 // в dev дважды зовёт эффекты монтирования, и «закрытие окна повторным подтверждением»
 // (бывший механизм) закрывал окно ещё до реального remount — фикс не работал в dev-сборке.
 // Окно расходует не подтверждение, а стабильный кадр после применения (scheduleConsume);
-// новый переход гасит оба канала (recordFeatureReturn).
+// новый переход гасит оба канала (recordFeatureReturn), а уход со страницы — отложенной
+// проверкой (registerFeaturePage, GC-F11R4).
 export function commitFeatureViewApplied(featureId: string, seq: number): void {
   if (_pendingView && _pendingView.featureId === featureId && _pendingView.seq === seq) {
     _lastApplied = { featureId, seq, view: _pendingView.view };
@@ -222,27 +216,30 @@ export function commitFeatureViewApplied(featureId: string, seq: number): void {
   scheduleConsume(featureId, seq);
 }
 
-// === Расход окна (GC-F11R3) ===
-// Конец окна привязан к жизни стояния, а не к числу подтверждений: через CONSUME_MS
-// после применения, если вкладка этой фичи за это время не размонтировалась, применение
-// стабильно — снимок расходован (следующее открытие фичи без чипа его не найдёт).
-// Размонтирование вкладки (remount 'loading'→'ok', мнимый unmount StrictMode, сознательный
-// уход) поднимает _unmountStamp и гасит отложенный расход: окно достаётся новому
-// инстансу — он подтвердит тот же seq и поставит свой расход. Сознательный уход
-// за собой нового инстанса не имеет: последнее стабильное подтверждение расходует
-// окно отложенным таймером; не успел — новый переход (recordFeatureReturn).
+// === Расход окна (GC-F11R3, GC-F11R4) ===
+// Конец окна привязан к жизни открытия, а не к числу подтверждений: через CONSUME_MS
+// после применения, если вкладка этой фичи смонтирована, применение стабильно —
+// снимок расходован (следующее открытие фичи без чипа его не найдёт). Размонтирование
+// вкладки — не сигнал ухода (GC-F11R4): пока вкладка не смонтирована, расход ОТКЛАДАЕТСЯ
+// — окно достаётся remount-инстансу при любой скорости ответа сервера (прежний механизм
+// отменял расход при размонтировании и, если инстанс не возвращался, окно жило до
+// нового перехода — мажор GC-R-P6). Настоящий уход — размонтирование страницы:
+// оно гасит окно (см. registerFeaturePage).
 const CONSUME_MS = 1000;
 let _consumeTimer: ReturnType<typeof setTimeout> | null = null;
 function scheduleConsume(featureId: string, seq: number): void {
-  const stamp = _unmountStamp;
   if (_consumeTimer) clearTimeout(_consumeTimer);
   _consumeTimer = setTimeout(() => {
     _consumeTimer = null;
-    if (_unmountStamp !== stamp) return; // вкладку после применения снимали — окно для remount-инстанса
-    if (_lastApplied && _lastApplied.featureId === featureId && _lastApplied.seq === seq) {
+    if (!(_lastApplied && _lastApplied.featureId === featureId && _lastApplied.seq === seq)) return;
+    if (_viewProvider && _viewProvider.featureId === featureId) {
       _lastApplied = null;
       emit();
+      return;
     }
+    // Вкладка не смонтирована (remount 'loading'→'ok', медленный ответ): расход отложен,
+    // окно достаётся remount; настоящий уход — за размонтированием страницы (registerFeaturePage).
+    scheduleConsume(featureId, seq);
   }, CONSUME_MS);
 }
 
@@ -250,6 +247,45 @@ function scheduleConsume(featureId: string, seq: number): void {
 // remount вкладки (страницы 'loading'→'ok') берёт тот же снимок отсюда.
 export function lastAppliedFeatureView(featureId: string): PendingFeatureView | null {
   return _lastApplied && _lastApplied.featureId === featureId ? _lastApplied : null;
+}
+
+// === Регистрация страницы фичи (GC-F11R4, мажор GC-R-P6) ===
+// Окно возврата живёт только ради того открытия фичи, ради которого снято. Размонтирование
+// ВКЛАДКИ (remount 'loading'→'ok', мнимый unmount StrictMode) его не убивает; уход со
+// СТРАНИЦЫ — убивает. Гашение отложенное: cleanup страницы не гасит сразу, а ставит
+// проверку (setTimeout(0)), которую отменяет повторная регистрация страницы с тем же
+// featureId (мнимый unmount→mount под StrictMode, main.tsx:14); реальный уход (страница
+// не вернулась) гасит pending и lastApplied этой фичи и её таймер расхода. Зовёт
+// FeaturePage при монтировании — сигнал жизни страницы; само окно живёт в сторе.
+let _pageReg: { featureId: string } | null = null;
+let _pageKill: { featureId: string; timer: ReturnType<typeof setTimeout> } | null = null;
+export function registerFeaturePage(featureId: string): () => void {
+  // Mount страницы: снять отложенную проверку прошлого размонтирования (путь StrictMode).
+  if (_pageKill && _pageKill.featureId === featureId) {
+    clearTimeout(_pageKill.timer);
+    _pageKill = null;
+  }
+  const entry = { featureId };
+  _pageReg = entry;
+  return () => {
+    if (_pageReg === entry) _pageReg = null;
+    if (_pageKill) clearTimeout(_pageKill.timer);
+    _pageKill = {
+      featureId,
+      timer: setTimeout(() => {
+        _pageKill = null;
+        if (_pageReg && _pageReg.featureId === featureId) return; // страница вернулась — окно живо
+        let changed = false;
+        if (_pendingView && _pendingView.featureId === featureId) { _pendingView = null; changed = true; }
+        if (_lastApplied && _lastApplied.featureId === featureId) {
+          _lastApplied = null;
+          if (_consumeTimer) { clearTimeout(_consumeTimer); _consumeTimer = null; }
+          changed = true;
+        }
+        if (changed) emit();
+      }, 0),
+    };
+  };
 }
 
 // Сырой указатель (для эффекта «сброс при обычном открытии» в FeatureBanner).
@@ -314,10 +350,11 @@ export function useFeatureBackNavForTask(taskId: string | null): FeatureBackNavI
 export const __test = {
   reset() {
     if (_consumeTimer) { clearTimeout(_consumeTimer); _consumeTimer = null; }
+    if (_pageKill) { clearTimeout(_pageKill.timer); _pageKill = null; }
+    _pageReg = null;
     _back = null;
     _pendingView = null;
     _lastApplied = null;
-    _unmountStamp = 0;
     _pendingSeq = 0;
     _viewProvider = null;
     _listeners.clear();
@@ -331,6 +368,7 @@ export const __test = {
   featureBackNavFromTask,
   normalizeBackTarget,
   registerFeatureViewProvider,
+  registerFeaturePage,
   consumeFeatureViewReturn,
   pendingFeatureView,
   commitFeatureViewApplied,

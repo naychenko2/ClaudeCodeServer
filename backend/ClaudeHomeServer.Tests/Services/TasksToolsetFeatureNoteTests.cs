@@ -19,7 +19,11 @@ namespace ClaudeHomeServer.Tests.Services;
 // тем же текстом, что REST PUT note. Мутации:
 // • убрать гейт membership в case "tasks_update" — тесты «СессияИсполнителя»/«БезЧленства» краснеют;
 // • убрать вызов SetFeatureNote — тесты «Curator»/«Оркестратор» краснеют;
-// • убрать проверку role=feature — тест «НеЭпик» краснеет.
+// • убрать проверку role=feature — тест «НеЭпик» краснеет;
+// • заменить белый список CanWriteFeatureVoice на Kind != "executor" — строка «key» в тесте
+//   «БелыйСписок» краснеет (R-B4 минор 1);
+// • заменить чтение Now.FirstOrDefault()?.Stage в штампе TasksToolset на "" — тест
+//   «АктивнаяСтадия» краснеет (R-B4 минор 2).
 [Trait("Category", "Integration")]
 public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFactory>
 {
@@ -134,6 +138,9 @@ public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFact
             "At штампует сервер, агент его не передаёт");
         // Штампы — из той же проекции, что читает фронт (разрез п.1: «из FeatureRun»).
         stored.Note.StateAtWrite.Should().Be(Features.Project(epicId, OwnerId)!.State);
+        // Пустой случай (R-B4 минор 2): в этой фикстуре нет активной стадии (шаг Todo, Now пуст) —
+        // штамп стадии пуст. Непустой случай покрыт тестом «АктивнаяСтадия».
+        stored.Note.StageAtWrite.Should().Be("");
     }
 
     // Пустой текст снимает голос (та же семантика, что у REST PUT note).
@@ -233,5 +240,49 @@ public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFact
         isError.Should().BeTrue();
         text.Should().Contain("не найдена");
         Tasks.GetById(foreign.Id)!.Note.Should().BeNull();
+    }
+
+    // c1 (R-B4 минор 1): право голоса — белый список видов {curator, orchestrator}, а не
+    // «не executor». Kind="key" BuildDetailed ещё не производит (добавит Б2, цепочка ключевого
+    // чата) — тест моделирует связь: новый вид права не получает. Мутация: заменить тело
+    // CanWriteFeatureVoice на link.Kind != "executor" — строка «key» краснеет.
+    [Fact]
+    public void FeatureNote_Право_БелыйСписок_НовыйKindНеДаётПраво()
+    {
+        TasksToolset.CanWriteFeatureVoice(new FeatureChatMembership.Link("curator", 1, null, null, null))
+            .Should().BeTrue();
+        TasksToolset.CanWriteFeatureVoice(new FeatureChatMembership.Link("orchestrator", 2, null, null, null))
+            .Should().BeTrue();
+        TasksToolset.CanWriteFeatureVoice(new FeatureChatMembership.Link("executor", 3, null, null, null))
+            .Should().BeFalse();
+        TasksToolset.CanWriteFeatureVoice(new FeatureChatMembership.Link("key", 0, null, null, null))
+            .Should().BeFalse("ключевой чат (Б2) права не получает: только явный вход в список");
+        TasksToolset.CanWriteFeatureVoice(new FeatureChatMembership.Link("future-kind", 3, null, null, null))
+            .Should().BeFalse();
+    }
+
+    // c2 (R-B4 минор 2): у фичи ЕСТЬ активная стадия (idущий шаг) — StageAtWrite в MCP-пути
+    // равен ей. Мутация: заменить чтение Now.FirstOrDefault()?.Stage в штампе TasksToolset на
+    // "" — последний Should краснеет.
+    [Fact]
+    public async Task FeatureNote_АктивнаяСтадия_ШтампуетсяСтадия()
+    {
+        var (projectId, _) = await CreateProjectWithSessionAsync("stage");
+        var (curatorId, epicId, stepId) = await CreateFeatureFromCuratorAsync(projectId, "stage");
+        // Шаг идёт: Now непустой, активная стадия есть.
+        Tasks.Update(stepId, new UpdateTaskRequest(Status: TaskItemStatus.InProgress))
+            .Should().NotBeNull();
+
+        var (_, isError) = await CallToolAsync(curatorId, "tasks_update",
+            new { id = epicId, featureNote = "голос на активной стадии" });
+        isError.Should().BeFalse();
+
+        var run = Features.Project(epicId, OwnerId)!;
+        run.Now.Should().NotBeEmpty("фикстура: у фичи идёт задача — активная стадия есть");
+        run.Now[0].Stage.Should().Be("prod", "стадия шага (role=step) по таблице RoleToStage");
+
+        var stored = Tasks.GetById(epicId)!;
+        stored.Note!.StageAtWrite.Should().Be("prod",
+            "StageAtWrite в MCP-пути — активная стадия на момент записи (FeatureBrief.StaleOf сверяет с ней)");
     }
 }

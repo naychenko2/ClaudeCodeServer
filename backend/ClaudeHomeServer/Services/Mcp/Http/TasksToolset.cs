@@ -314,6 +314,9 @@ public sealed class TasksToolset(
                 // FeatureChatMembership: пишет curator или orchestrator фичи, executor — нет (риск 6
                 // разреза: своей копии правила не заводим). Отказ fail-closed: чат без членства в
                 // фиче тоже не пишет. Не-эпик — тот же 400-текст, что у REST PUT note.
+                // R-B4 минор 1 (ADR-031 §4): право — белый список видов связи {curator, orchestrator},
+                // а не «не executor»: новый вид, который Б2 добавит в BuildDetailed («key», цепочка
+                // ключевого чата), не должен молча получить право — только явный вход в список.
                 var featureNoteArg = arguments.ContainsKey("featureNote") ? StringArg(arguments, "featureNote") : null;
                 if (featureNoteArg is not null)
                 {
@@ -323,7 +326,7 @@ public sealed class TasksToolset(
                         tasks.GetByOwner(context.OwnerId).ToList(), FeatureChatDoor.Snapshot(sessions, context.OwnerId));
                     if (!membership.TryGetValue(session.Id, out var memberFeatures)
                         || !memberFeatures.TryGetValue(existing.Id, out var voiceLink)
-                        || voiceLink.Kind == "executor")
+                        || !CanWriteFeatureVoice(voiceLink))
                         return Deny("Голос фичи пишет оркестратор или человек");
                 }
 
@@ -877,6 +880,13 @@ public sealed class TasksToolset(
             ? null
             : $"Задача {task.Id} недоступна в этом контексте — она принадлежит другому проекту.";
     }
+
+    // B4 (R-B4 минор 1): право на голос фичи — белый список видов связи {curator, orchestrator}
+    // (ADR-031 §4), а не «не executor». «Не executor» молча дал бы право новому виду членства,
+    // который Б2 добавит в BuildDetailed («key», цепочка ключевого чата): здесь право даёт только
+    // явный вход в список, всё остальное — включая будущие виды — отказ.
+    internal static bool CanWriteFeatureVoice(FeatureChatMembership.Link link) =>
+        link.Kind is "curator" or "orchestrator";
 
     private static IEnumerable<TaskItem> ApplyFilters(IEnumerable<TaskItem> source, JsonObject arguments)
     {

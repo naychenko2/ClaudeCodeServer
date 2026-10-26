@@ -44,7 +44,11 @@ public class ProjectCapabilitiesGuardTests
         ["backend/ClaudeHomeServer.Core/Services/Mcp/Http/LoopbackProxyBypass.cs"] = (1, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/LocalEndpointProbe.cs"] = (2, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/LlmSessionContext.cs"] = (1, "LLM-провайдер"),
-        ["backend/ClaudeHomeServer.Llm/LlmProviderRegistry.cs"] = (7, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer.Llm/LlmProviderRegistry.cs"] = (9, "LLM-провайдер"),
+        // Признак локальности LLM-провайдера в /api/models (LlmCapabilities.IsLocal) и его
+        // отдача наружу (ModelsController) — про провайдера, не про локальность проекта.
+        ["backend/ClaudeHomeServer.Core/Services/Llm/LlmCapabilities.cs"] = (2, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer/Controllers/ModelsController.cs"] = (3, "LLM-провайдер"),
         // Адаптер шва IModelResolver и one-shot-раннер: IsLocal — признак локального
         // LLM-провайдера для классификации расхода (Spend), не локальность проекта.
         ["backend/ClaudeHomeServer.Llm/LlmModelResolverAdapter.cs"] = (2, "LLM-провайдер"),
@@ -79,6 +83,11 @@ public class ProjectCapabilitiesGuardTests
         ["backend/ClaudeHomeServer/Services/SpendMapping.cs"] = (2, "LLM-провайдер"),
         // Ценовой класс провайдера (/api/models): локальный LLM-провайдер → бесплатно.
         ["backend/ClaudeHomeServer/Services/ModelCatalogService.cs"] = (1, "LLM-провайдер"),
+        // Фронт: признак локальности LLM-провайдера (isLocal в capabilities провайдера)
+        // — про провайдера, не про локальность проекта.
+        ["frontend/src/lib/models.ts"] = (1, "LLM-провайдер"),
+        ["frontend/src/lib/spendSources.ts"] = (6, "LLM-провайдер"),
+        ["frontend/src/features/modelsSpend/QuotasTab.tsx"] = (10, "LLM-провайдер"),
     };
 
     private static string RepoRoot()

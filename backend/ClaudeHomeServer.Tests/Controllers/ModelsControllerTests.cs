@@ -119,6 +119,23 @@ public class ModelsControllerTests : IClassFixture<TestWebApplicationFactory>
         providers.GetProperty("claude").GetProperty("isLocal").GetBoolean().Should().BeFalse();
     }
 
+    // Контракт /api/models: ценовой класс провайдера (providers[].costTier).
+    // На нём держится пилюля «дорого» на карточке подписки (дефект 401e7e56):
+    // claude → дорого. Правило класса — в Core (SpendCostTiers).
+    [Fact]
+    public async Task Get_ЦеновойКлассПровайдера()
+    {
+        using var factory = new TestWebApplicationFactory();
+        var client = factory.CreateAuthenticatedClient();
+
+        var response = await client.GetAsync("/api/models");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        var providers = body.GetProperty("providers");
+
+        providers.GetProperty("claude").GetProperty("costTier").GetString().Should().Be("expensive");
+    }
+
     [Fact]
     public async Task Preview_ЯчейкаПерсоныБезУровня_ИдётМодельюЯчейки()
     {

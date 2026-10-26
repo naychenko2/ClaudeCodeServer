@@ -30,7 +30,20 @@
 // получают кольцо (форма .hl макета feature-gantt-7), прочие гаснут до opacity .35 (.dim);
 // prefers-reduced-motion — без перехода (флаг приходит от вызывающего). На 360 интервал
 // неинтерактивен — подсветка рисуется и там (тот же barStyle).
+//
+// Зона касания (дефект a67f8057, GC-F5aR2): полоса интервала остаётся тонкой (10 px по
+// макету), но целью указателя является зона вокруг неё: высотой SP.xl (24 px), отцентрованная
+// на полосе; по ширине — полоса плюс половина зазора до соседнего интервала (для первого и
+// последнего — половина зазора до края дорожки). Зоны соседних интервалов касаются середины
+// зазора и НЕ перекрываются. Зона — невидимая кнопка: на ней aria-label, tabIndex и
+// обработчики (родитель меряет поповер по ней и возвращает фокус на неё); видимая полоса —
+// отдельный слой `lane-band-*` с pointer-events: none, его позиция, цвет и ширина не
+// меняются. На 360 интервал неинтерактивен — зоны там нет, та же полоса, что была. Все
+// декоративные слои дорожки — пауза, линия и подпись «этапа не было», флажок «↩», зона
+// «стоит», контур «впереди» — pointer-events: none: они не интерактивны, а раньше пауза
+// перехватывала указатель поверх интервалов (31 из 39, вердикт GC-QA).
 
+import { Fragment } from 'react';
 import { C, R, FS, FONT, SP, SHADOW } from '../../lib/design';
 import { axisFrac, type LaneAxis, type LaneIntervalState, type StageLane } from './FeatureLaneModel';
 import { formatClock, formatDateTime, formatDuration } from './FeatureStatsBits';
@@ -77,6 +90,14 @@ export interface FeatureStageLaneProps {
 
 // Штриховка «без движения» (135°, та же геометрия штриховки, что у notWorking в FeatureStatsBits).
 const STALLED_HATCH = `repeating-linear-gradient(135deg, ${C.warning} 0 5px, ${C.warningBg} 5px 10px)`;
+
+// Геометрия полосы по макету (feature-gantt-6): top 2, height 10 — общая для полосы и центровки зоны.
+const BAR_TOP = 2;
+const BAR_H = 10;
+// Зона касания (дефект a67f8057): высота SP.xl (24 px) — не меньше строки дорожки; центр зоны —
+// центр полосы (2..12), поэтому top = 7 − 12 = −5.
+const ZONE_H = SP.xl;
+const ZONE_TOP = BAR_TOP + BAR_H / 2 - ZONE_H / 2;
 
 // Заливка по состоянию интервала — цветовая таблица feature-gantt-6 §«Интервалы вместо
 // одной полосы». Состояние решает модель (FeatureLaneModel), компонент только красит.
@@ -127,6 +148,14 @@ export function FeatureStageLane({
   const noStage = !lane.skipped && n === 0 && !lane.approx && axis.timeFrac >= 1;
   const showNoStage = lane.skipped || noStage;
 
+  // Видимая геометрия интервалов — один раз, по ней же считаются границы зон касания:
+  // зона дотянута до середины зазора до соседа (или до края дорожки), поэтому зоны
+  // соседних интервалов не перекрываются (дефект a67f8057).
+  const bars = lane.intervals.map((iv) => {
+    const left = pct(iv.from);
+    return { left, width: Math.max(0, pct(iv.to) - left) };
+  });
+
   return (
     <div
       data-testid={`lane-${lane.key}`}
@@ -145,13 +174,13 @@ export function FeatureStageLane({
         <>
           <div
             data-testid={`lane-no-stage-line-${lane.key}`}
-            style={{ position: 'absolute', left: 0, right: 0, top: 7, borderTop: `1px dotted ${C.dashed}` }}
+            style={{ position: 'absolute', left: 0, right: 0, top: 7, borderTop: `1px dotted ${C.dashed}`, pointerEvents: 'none' }}
           />
           <span
             data-testid={`lane-no-stage-${lane.key}`}
             style={{
               position: 'absolute', left: 0, top: 0, bottom: 0, display: 'flex', alignItems: 'center',
-              paddingLeft: SP.xs, fontFamily: FONT.mono, fontSize: FS.xxs, color: C.textMuted,
+              paddingLeft: SP.xs, fontFamily: FONT.mono, fontSize: FS.xxs, color: C.textMuted, pointerEvents: 'none',
             }}
           >
             этапа не было
@@ -165,14 +194,13 @@ export function FeatureStageLane({
           style={{
             position: 'absolute', left: `${pct(stalledZone.from)}%`,
             width: `${Math.max(0, pct(stalledZone.to) - pct(stalledZone.from))}%`,
-            top: 2, height: 10, borderRadius: R.sm, background: STALLED_HATCH,
+            top: 2, height: 10, borderRadius: R.sm, background: STALLED_HATCH, pointerEvents: 'none',
           }}
         />
       )}
 
       {lane.intervals.map((iv, i) => {
-        const left = pct(iv.from);
-        const width = Math.max(0, pct(iv.to) - left);
+        const b = bars[i]!;
         const ariaLabel = `${label}, интервал ${i + 1} из ${n}: ${formatDateTime(iv.from)} – ${formatClock(iv.to)}, ${formatDuration(spanMinutes(iv.from, iv.to))}`;
         // Подсветка шага (GC-F8R): кольцо — форма .hl макета (2 px подложки + 4px accent);
         // затемнение прочих — .dim (opacity .35), оно есть при любом режиме движения;
@@ -182,13 +210,13 @@ export function FeatureStageLane({
         const dim = highlight !== null && !hl;
         const barStyle = {
           position: 'absolute' as const,
-          left: `${left}%`,
-          width: `${width}%`,
+          left: `${b.left}%`,
+          width: `${b.width}%`,
           // Минимальная видимая ширина (макет: 3 px) — этап в минуты не превращается
           // в щель; left при этом остаётся точным.
           minWidth: 3,
-          top: 2,
-          height: 10,
+          top: BAR_TOP,
+          height: BAR_H,
           borderRadius: R.sm,
           background: stateBackground(iv.state),
           ...(dim ? { opacity: 0.35 } : {}),
@@ -200,7 +228,7 @@ export function FeatureStageLane({
           <span
             data-testid={`lane-risk-${lane.key}-${i}`}
             aria-hidden="true"
-            style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 2, background: C.danger }}
+            style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 2, background: C.danger, pointerEvents: 'none' }}
           />
         ) : null;
         // Мобильный режим: интервал — НЕ кнопка (10 px не тач-цель, критерий c4).
@@ -219,24 +247,45 @@ export function FeatureStageLane({
             </div>
           );
         }
+        // Десктоп: зона касания (дефект a67f8057) — невидимая кнопка вокруг полосы:
+        // границы — середина зазора до соседа (для первого/последнего — до края дорожки),
+        // поэтому зоны соседних интервалов не перекрываются; высота ZONE_H — центр на полосе.
+        // Интерактивность (aria, tabIndex, обработчики) — на зоне; видимая полоса — отдельный
+        // слой с pointer-events: none, указатель сквозь неё проходит к зоне.
+        const extL = Math.max(0, (b.left - (i === 0 ? 0 : bars[i - 1]!.left + bars[i - 1]!.width)) / 2);
+        const extR = Math.max(0, ((i === n - 1 ? 100 : bars[i + 1]!.left) - b.left - b.width) / 2);
         return (
-          <button
-            key={`iv-${i}`}
-            type="button"
-            data-testid={`lane-interval-${lane.key}-${i}`}
-            data-state={iv.state}
-            aria-label={ariaLabel}
-            aria-haspopup="dialog"
-            aria-expanded={expandedAt === i}
-            aria-describedby={hoverAt === i ? describedById ?? undefined : undefined}
-            tabIndex={i === tabIndexAt ? 0 : -1}
-            onClick={(e) => onSelect?.(i, e?.currentTarget ?? null)}
-            onMouseEnter={(e) => onHover?.(i, e?.currentTarget ?? null)}
-            onMouseLeave={() => onHover?.(null, null)}
-            style={{ ...barStyle, border: 'none', padding: 0, cursor: 'pointer' }}
-          >
-            {risk}
-          </button>
+          <Fragment key={`iv-${i}`}>
+            <button
+              type="button"
+              data-testid={`lane-interval-${lane.key}-${i}`}
+              data-state={iv.state}
+              aria-label={ariaLabel}
+              aria-haspopup="dialog"
+              aria-expanded={expandedAt === i}
+              aria-describedby={hoverAt === i ? describedById ?? undefined : undefined}
+              tabIndex={i === tabIndexAt ? 0 : -1}
+              onClick={(e) => onSelect?.(i, e?.currentTarget ?? null)}
+              onMouseEnter={(e) => onHover?.(i, e?.currentTarget ?? null)}
+              onMouseLeave={() => onHover?.(null, null)}
+              style={{
+                position: 'absolute',
+                left: `${b.left - extL}%`,
+                width: `${b.width + extL + extR}%`,
+                // Не уже минимальной видимой полосы (те же 3 px).
+                minWidth: 3,
+                top: ZONE_TOP,
+                height: ZONE_H,
+                background: 'transparent',
+                border: 'none',
+                padding: 0,
+                cursor: 'pointer',
+              }}
+            />
+            <div data-testid={`lane-band-${lane.key}-${i}`} aria-hidden="true" style={{ ...barStyle, pointerEvents: 'none' }}>
+              {risk}
+            </div>
+          </Fragment>
         );
       })}
 
@@ -250,7 +299,7 @@ export function FeatureStageLane({
           <div
             key={`pause-${i}`}
             data-testid={`lane-pause-${lane.key}-${i}`}
-            style={{ position: 'absolute', left: `${left}%`, width: `${width}%`, top: 7, height: 0, borderTop: `1px dashed ${C.textMuted}` }}
+            style={{ position: 'absolute', left: `${left}%`, width: `${width}%`, top: 7, height: 0, borderTop: `1px dashed ${C.textMuted}`, pointerEvents: 'none' }}
           />
         );
       })}
@@ -264,7 +313,7 @@ export function FeatureStageLane({
           aria-hidden="true"
           style={{
             position: 'absolute', left: `${pct(r.at)}%`, top: -12, transform: 'translateX(-50%)',
-            fontFamily: FONT.mono, fontSize: FS.xxs, color: C.dangerText,
+            fontFamily: FONT.mono, fontSize: FS.xxs, color: C.dangerText, pointerEvents: 'none',
           }}
         >
           ↩
@@ -278,7 +327,7 @@ export function FeatureStageLane({
             position: 'absolute', left: `${axis.timeFrac * 100}%`, right: 0, top: 0, bottom: 0,
             display: 'flex', alignItems: 'center', justifyContent: 'flex-end', paddingRight: SP.sm,
             border: `1px dashed ${C.dashed}`, borderRadius: R.sm,
-            fontFamily: FONT.mono, fontSize: FS.xxs, color: C.textMuted,
+            fontFamily: FONT.mono, fontSize: FS.xxs, color: C.textMuted, pointerEvents: 'none',
           }}
         >
           {showMore ? `ещё ${lane.plan?.ahead ?? 0}` : 'впереди'}

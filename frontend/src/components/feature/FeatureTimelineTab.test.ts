@@ -2071,6 +2071,11 @@ describe('FeatureTimelineTab: подсветка интервалов шага (
 
   const styleOf = (n: FNodeLike): Record<string, string | number> => (n as unknown as { style: Record<string, string | number> }).style;
   const interval = (c: FNodeLike, i: number): FNodeLike => findNodeByAttr(c, 'data-testid', `lane-interval-prod-${i}`)!;
+  // Визуальный стиль интервала (кольцо, затемнение) — на слое полосы lane-band-* (GC-F5aR2);
+  // сам lane-interval-* на десктопе — невидимая зона касания. На 360 отдельного слоя нет:
+  // интервал и есть полоса.
+  const visual = (c: FNodeLike, i: number): FNodeLike =>
+    findNodeByAttr(c, 'data-testid', `lane-band-prod-${i}`) ?? interval(c, i);
   // Кольцо — форма .hl макета feature-gantt-7: 2 px подложки + 4 px accent.
   const RING = `0 0 0 2px ${C.bgCard}, 0 0 0 4px ${C.accent}`;
 
@@ -2087,21 +2092,21 @@ describe('FeatureTimelineTab: подсветка интервалов шага (
   it('карточка реальной вкладки: кнопка есть; клик — кольцо на интервале с ходом шага, чужой гаснет; через 2,4 с снимается', () => {
     const c = renderTabWithStats(hlRun(), hlStats());
     // До клика на дорожке нет ни кольца, ни затемнения.
-    expect(styleOf(interval(c, 0)).boxShadow, 'кольца до клика нет').toBeUndefined();
-    expect(styleOf(interval(c, 1)).opacity, 'затемнения до клика нет').toBeUndefined();
+    expect(styleOf(visual(c, 0)).boxShadow, 'кольца до клика нет').toBeUndefined();
+    expect(styleOf(visual(c, 1)).opacity, 'затемнения до клика нет').toBeUndefined();
     clickShowIntervals(c);
     // Интервал, чей taskIds содержит задачу шага, — кольцо; чужой — opacity .35 (.dim макета)
     // с переходом по opacity (движение не запрещено). Мутация (18): подсветить все интервалы —
     // этот краснеет (у чужого оказался бы кольцо вместо затемнения).
-    expect(styleOf(interval(c, 0)).boxShadow, 'кольца на интервале с ходом шага нет').toBe(RING);
-    expect(String(styleOf(interval(c, 1)).opacity), 'чужой интервал не затемнён').toBe('0.35');
-    expect(String(styleOf(interval(c, 1)).transition), 'затемнение без перехода').toContain('opacity');
+    expect(styleOf(visual(c, 0)).boxShadow, 'кольца на интервале с ходом шага нет').toBe(RING);
+    expect(String(styleOf(visual(c, 1)).opacity), 'чужой интервал не затемнён').toBe('0.35');
+    expect(String(styleOf(visual(c, 1)).transition), 'затемнение без перехода').toContain('opacity');
     // Через 2,4 с подсветка снимается (мутация (17): не снимать → этот шаг краснеет).
     // Снятый стиль React оставляет '' (как в реальном DOM) — проверка на отсутствие значения.
     act(() => { vi.advanceTimersByTime(2400); });
-    expect(styleOf(interval(c, 0)).boxShadow, 'подсветка не снялась').toBeFalsy();
-    expect(styleOf(interval(c, 1)).opacity, 'затемнение не снялось').toBeFalsy();
-    expect(styleOf(interval(c, 1)).transition, 'перехода после снятия нет').toBeFalsy();
+    expect(styleOf(visual(c, 0)).boxShadow, 'подсветка не снялась').toBeFalsy();
+    expect(styleOf(visual(c, 1)).opacity, 'затемнение не снялось').toBeFalsy();
+    expect(styleOf(visual(c, 1)).transition, 'перехода после снятия нет').toBeFalsy();
   });
 
   // === c3: prefers-reduced-motion — без перехода; на 360 работает ===
@@ -2114,12 +2119,13 @@ describe('FeatureTimelineTab: подсветка интервалов шага (
     clickShowIntervals(container);
     // На 360 интервал — не кнопка (10 px не тач-цель), но подсветка рисуется та же.
     expect(interval(container, 0).getAttribute('role'), 'на 360 интервал не обязан быть неинтерактивным').toBe('img');
-    expect(styleOf(interval(container, 0)).boxShadow, 'кольца при reduced-motion нет').toBe(RING);
-    expect(String(styleOf(interval(container, 1)).opacity), 'чужой интервал не затемнён').toBe('0.35');
-    expect(styleOf(interval(container, 1)).transition, 'при prefers-reduced-motion перехода нет').toBeUndefined();
+    // На 360 отдельного слоя полосы нет: visual() падает на сам интервал (GC-F5aR2).
+    expect(styleOf(visual(container, 0)).boxShadow, 'кольца при reduced-motion нет').toBe(RING);
+    expect(String(styleOf(visual(container, 1)).opacity), 'чужой интервал не затемнён').toBe('0.35');
+    expect(styleOf(visual(container, 1)).transition, 'при prefers-reduced-motion перехода нет').toBeUndefined();
     // Подсветка снимается и без анимации — тем же таймером.
     act(() => { vi.advanceTimersByTime(2400); });
-    expect(styleOf(interval(container, 0)).boxShadow, 'подсветка не снялась').toBeFalsy();
-    expect(styleOf(interval(container, 1)).opacity, 'затемнение не снялось').toBeFalsy();
+    expect(styleOf(visual(container, 0)).boxShadow, 'подсветка не снялась').toBeFalsy();
+    expect(styleOf(visual(container, 1)).opacity, 'затемнение не снялось').toBeFalsy();
   });
 });

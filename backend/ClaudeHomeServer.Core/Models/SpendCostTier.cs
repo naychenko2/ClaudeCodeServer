@@ -52,12 +52,24 @@ public static class SpendCostTiers
     // реклассификации SpendStore.ReclassifyLocalAsFree), поэтому Of по такой записи тоже даёт
     // free. Синхронизировать две точки по-другому нельзя: ключи локальных провайдеров
     // машин-специфичны и в Core не перечислены.
+    //
+    // Про «:free» (модель с бесплатным суффиксом, напр. «nvidia/nemotron:free» у openrouter):
+    // в каталоге класс ПРОВАЙДЕРА, а не модели, и провайдер с такими моделями обычно отдаёт
+    // и платные тоже — объявлять его целиком бесплатным значило бы занизить класс. Поэтому
+    // правило «:free» живёт на уровне записи расхода (Of → free, столбик «Бесплатные» в
+    // аналитике), а здесь провайдер с такими моделями остаётся «дёшево»: цена его моделей
+    // известна, просто часть из них бесплатна. Это осознанное расхождение уровней, а не
+    // разнобой правил: один и тот же провайдер в каталоге и в аналитике — «дёшево».
     public static string OfProvider(string provider, bool isLocal)
     {
         if (isLocal) return Free;
         if (SpendSources.IsFree(provider, null)) return Free;
         if (IsFreeProviderKey(provider)) return Free;
         if (SpendSources.NormalizeProvider(provider) == "claude") return Expensive;
+        // Провайдер неизвестен (пустой ключ) → цена неизвестна: «дёшево» занизило бы расход.
+        // То же правило, что в Of, — иначе один и тот же неизвестный провайдер в каталоге
+        // («дёшево») и в аналитике («дорого») выглядел бы двумя разными правилами.
+        if (string.IsNullOrWhiteSpace(provider)) return Expensive;
         return Cheap;
     }
 

@@ -360,6 +360,31 @@ public class SpendAnalyticsTests : IDisposable
         Assert.Equal(SpendCostTiers.Free, SpendCostTiers.Of(SpendSources.ChatTurn, "openrouter-direct", "any"));
     }
 
+    // Неизвестный провайдер (пустой ключ) → «дорого» в ОБОИХ местах: цена неизвестна,
+    // занижать её нельзя. Правило одно на каталог (/api/models) и аналитику.
+    // Мутация «в OfProvider пустой ключ → cheap» → краснеет.
+    [Fact]
+    public void CostTier_НеизвестныйПровайдер_Дорого_ВКаталогеИВТратах()
+    {
+        Assert.Equal(SpendCostTiers.Expensive, SpendCostTiers.Of(SpendSources.ChatTurn, "", "any"));
+        Assert.Equal(SpendCostTiers.Expensive, SpendCostTiers.OfProvider("", isLocal: false));
+        Assert.Equal(SpendCostTiers.Expensive, SpendCostTiers.OfProvider("   ", isLocal: false));
+        // Локальный движок с пустым ключом остаётся бесплатным: признак важнее ключа
+        Assert.Equal(SpendCostTiers.Free, SpendCostTiers.OfProvider("", isLocal: true));
+    }
+
+    // «:free» — признак МОДЕЛИ, а не провайдера: в тратах такая модель бесплатна, а класс
+    // провайдера в каталоге остаётся «дёшево» (провайдер с такими моделями отдаёт и платные).
+    // Расхождение уровней осознанное и зафиксировано тестом.
+    // Мутация «убрать признак ':free' из SpendSources.IsFree» → краснеет (в Of ожидается free).
+    [Fact]
+    public void CostTier_МодельFree_БесплатнаВТратах_ПровайдерВКаталогеДёшевый()
+    {
+        Assert.Equal(SpendCostTiers.Free,
+            SpendCostTiers.Of(SpendSources.ChatTurn, "openrouter", "nvidia/nemotron:free"));
+        Assert.Equal(SpendCostTiers.Cheap, SpendCostTiers.OfProvider("openrouter", isLocal: false));
+    }
+
     // Провайдеры «freellm*» (в т.ч. «freellmapi» — локальный прокси на свою GPU) бесплатны.
     // Фронт считает их бесплатными же (lib/spendSources.ts) — правила обязаны совпадать, иначе
     // карточка провайдера показывает две противоречащие пилюли («бесплатный» + «дёшево»).

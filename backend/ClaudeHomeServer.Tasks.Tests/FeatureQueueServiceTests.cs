@@ -199,6 +199,39 @@ public class FeatureQueueServiceTests : IDisposable
         HoldOf(q3)!.Reason.Should().Be(FeatureHoldReasons.Queue, "третья ждёт: занято два слота из двух");
     }
 
+    // ── B3 (OOM-разведка): одна проекция на пачку событий ──────────────────────────────────
+
+    // Пачка из N закрытых задач (N > прежнего MaxPasses=64) стоит ОДНУ проекцию, а не N:
+    // первый пересчёт снимает всю очередь по одному снимку (собственные снятия считаются
+    // локально), остальные события пачки выходят по дешёвой проверке, не строя проекцию.
+    // Мутация «вернуть пересчёт в цикл» (ProjectAll на каждом шаге) — первая же задача
+    // проецирует N раз, projections != 1, тест краснеет.
+    [Fact]
+    public async Task Rebalance_ПачкаЗакрытыхЗадач_ПроецируетОдинРаз()
+    {
+        const int n = 65; // > прежнего потолка проходов MaxPasses: снятие всех N головой за один проход
+        var config = Config(_dir, limit: n);
+        var sut = new FeatureQueueService(_tasks, new FeatureProjector(_tasks), _releaser, config,
+            NullLogger<FeatureQueueService>.Instance);
+
+        var occupants = new List<TaskItem>();
+        var queued = new List<TaskItem>();
+        for (var i = 0; i < n; i++) occupants.Add(Occupant("u", "p1"));
+        for (var i = 0; i < n; i++) queued.Add(Queued("u", "p1", i));
+        var closed = occupants.Select(Close).ToList(); // пачка закрытых задач: N × TaskCompleted
+
+        var projector = new FeatureProjector(_tasks);
+        var projections = 0;
+        sut.ProjectOverride = o => { projections++; return projector.ProjectAll(o); };
+
+        foreach (var t in closed)
+            await sut.HandleTaskChangedAsync(t);
+
+        projections.Should().Be(1, "пачка событий = один пересчёт: остальные выходят по дешёвой проверке без проекции");
+        _releaser.Released.Should().HaveCount(n, "все N голов очереди сняты по одному снимку");
+        queued.All(q => HoldOf(q) is null).Should().BeTrue("вся очередь пачки выпущена");
+    }
+
     // ── Шов Q3B: автоснятие помечается by=queue (R-Q3B-1, MAJOR-1 из RV-Q3B-Q4) ─────────────
 
     // Единственное место в бою, где автоснятие помечается by=queue, — вызов IFeatureHoldReleaser

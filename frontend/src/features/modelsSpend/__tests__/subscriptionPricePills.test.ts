@@ -50,9 +50,9 @@ describe('дефект 401e7e56 — пилюля класса на карточ�
   it('на карточке подписки рисуется пилюля «дорого»', () => {
     const card = buildSubscriptionCard('claude', baseSub, ctx);
     const text = cardText(card);
-    expect(text).toContain('дорого');
+    expect(text).toContain('дорогой');
     expect(text).not.toContain('бесплатный');
-    expect(text).not.toContain('дёшево');
+    expect(text).not.toContain('дешёвый');
   });
 
   // Та же гарантия, что у квотной карточки: цена называется один раз.
@@ -60,7 +60,7 @@ describe('дефект 401e7e56 — пилюля класса на карточ�
     for (const costTier of ['free', 'cheap', 'expensive']) {
       const card = buildSubscriptionCard('claude', baseSub, { ...ctx, caps: () => ({ costTier }) });
       const text = cardText(card);
-      const classPills = ['бесплатный', 'дёшево', 'дорого'].filter(p => text.includes(p));
+      const classPills = ['бесплатный', 'дешёвый', 'дорогой'].filter(p => text.includes(p));
       expect(classPills.length).toBeLessThanOrEqual(1);
     }
   });
@@ -70,8 +70,8 @@ describe('дефект 401e7e56 — пилюля класса на карточ�
     const card = buildSubscriptionCard('claude', baseSub, { ...ctx, caps: () => ({ costTier: null }) });
     expect(card.costTier).toBeNull();
     const text = cardText(card);
-    expect(text).not.toContain('дорого');
-    expect(text).not.toContain('дёшево');
+    expect(text).not.toContain('дорогой');
+    expect(text).not.toContain('дешёвый');
     expect(text).not.toContain('бесплатный');
   });
 });
@@ -85,8 +85,8 @@ describe('пилюля класса карточки подписки — по �
     const card = buildSubscriptionCard('glm', baseSub, { ...ctx, caps });
     expect(card.costTier).toBe('cheap');
     const text = cardText(card);
-    expect(text).toContain('дёшево');
-    expect(text).not.toContain('дорого');
+    expect(text).toContain('дешёвый');
+    expect(text).not.toContain('дорогой');
   });
 
   it('пилюля «бесплатный» при неизвестном классе строится по ключу карточки', () => {

@@ -13,19 +13,19 @@ import { C } from './design';
 // корректны автоматически.
 export const COST_TIERS: Record<string, { label: string; color: string }> = {
   free: { label: 'Бесплатные', color: C.success },
-  cheap: { label: 'Дёшево', color: C.info },
-  expensive: { label: 'Дорого', color: C.warning },
+  cheap: { label: 'Дешёвые', color: C.info },
+  expensive: { label: 'Дорогие', color: C.warning },
 };
 
 // Порядок классов (стек столбика дня, легенда).
 export const COST_TIER_KEYS = ['free', 'cheap', 'expensive'] as const;
 export type CostTierKey = typeof COST_TIER_KEYS[number];
 
-// Подпись класса для пилюли (единственное число): «бесплатный» / «дёшево» / «дорого».
+// Подпись класса для пилюли (единственное число): «бесплатный» / «дешёвый» / «дорогой».
 export const COST_TIER_PILL: Record<string, string> = {
   free: 'бесплатный',
-  cheap: 'дёшево',
-  expensive: 'дорого',
+  cheap: 'дешёвый',
+  expensive: 'дорогой',
 };
 
 // Цвет класса. Неизвестный или null-класс → нейтральный цвет (не выдуманный).

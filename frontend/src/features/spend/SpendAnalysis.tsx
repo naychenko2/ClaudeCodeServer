@@ -631,7 +631,7 @@ function DaySpark({ byDay, fill }: { byDay: { date: string; aggregated: boolean;
         const sep = i === sepIdx;
         return (
           <span key={d.date} style={{ display: 'contents' }}>
-            {sep && <i style={{ borderLeft: `1px dashed ${C.warning}`, alignSelf: 'stretch', margin: '0 1px' }} />}
+            {sep && <i style={{ borderLeft: `1px dashed ${C.textMuted}`, alignSelf: 'stretch', margin: '0 1px' }} />}
             <i
               title={`${fmtDate(d.date)} · ${fmtTok(d.total)}`}
               style={{

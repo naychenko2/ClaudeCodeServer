@@ -135,7 +135,9 @@ describe('SessionList: n3 число «Закрытые» в тумблере Fi
     return out;
   }
 
-  it('2 закрытые фичи → секция «Закрытые» + тумблер в поповере; N = все закрытые (2)', async () => {
+  // Ф-2.1: секция «Закрытые» с Toggle в FilterBar удалена (ось featureKinds, чип «Закрытые»).
+  // Тест проверяет снятый UI — skip до Ф-2.2, где его заменяют тесты чипа и секции «Закрытые».
+  it.skip('2 закрытые фичи → секция «Закрытые» + тумблер в поповере; N = все закрытые (2)', async () => {
     setAllFlags({ 'features-overview': true });
     featuresIndexTest.reset();
     const idx = { features: [closedFeat('c1'), closedFeat('c2')], chats: {} };

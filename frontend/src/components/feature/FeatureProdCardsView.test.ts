@@ -429,19 +429,21 @@ describe('360', () => {
 // === Макет A2: состояние видно сразу ===
 
 describe('состояние шага (A2)', () => {
+  // Четыре состояния: done/run/wait — заведённые цепочки; queue — шаг плана без задачи
+  // (единственный источник «queue» после H1/GC-R-F3: заведённая цепочка без старта — «ждёт»,
+  // не «в очереди»).
   const five = () => run({
     steps: [
       task({ id: 's1', status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' }),
       task({ id: 's2', status: 'inProgress', stepRef: 'Ш2', claudeStartedAt: new Date(Date.now() - 40 * 60000).toISOString() }),
       task({ id: 's3', status: 'done', stepRef: 'Ш3', claudeStartedAt: '2026-10-22T10:00:00Z' }),
-      task({ id: 's4', status: 'todo', stepRef: 'Ш4' }),
     ],
+    plan: [task({ id: 'p1', role: 'plan', planSteps: [{ stepRef: 'Ш4', title: 'Г' }] })],
     stepProgress: { planState: 'cut', total: 4, accepted: 1, review: 1, work: 1, notCreated: 1, withdrawn: 0, unlinkedReworks: 0 },
     stepChains: [
       chain({ stepRef: 'Ш1', title: 'А', taskIds: ['s1'], status: 'принят', outcome: 'accepted' }),
       chain({ stepRef: 'Ш2', title: 'Б', taskIds: ['s2'], status: 'идёт', outcome: 'running' }),
       chain({ stepRef: 'Ш3', title: 'В', taskIds: ['s3'], status: 'ждёт ревью', outcome: 'pending' }),
-      chain({ stepRef: 'Ш4', title: 'Г', taskIds: ['s4'], status: '', outcome: 'pending' }),
     ],
   });
 

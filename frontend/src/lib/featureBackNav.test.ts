@@ -1,6 +1,6 @@
 // Стор «← назад» (featureBackNav): откуда пришли в ключевой чат, в памяти вкладки.
 // Чистая логика (без DOM): запись/сброс/чтение по текущему чату.
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { recordBackNav, recordFeatureReturn, clearBackNav, getBackNav, backNavFrom, normalizeBackTarget, __test } from './featureBackNav';
 
 beforeEach(() => __test.reset());
@@ -99,9 +99,19 @@ describe('featureBackNav: цель перехода (chat | feature) и норм
 // (FeaturePage.tsx:366), не window.scrollY; гашение снимка — только подтверждённое
 // применение (commitFeatureViewApplied), а не при чтении/применении. Мутации:
 // (4) чистить pending при применении, не перенося в lastApplied → «commit переносит»
-// краснеет; (5) не гасить lastApplied при повторном подтверждении → «повторное
-// подтверждение закрывает окно» краснеет; (6) не чистить lastApplied в
-// recordFeatureReturn → «новый переход гасит подтверждённый» краснеет.
+// краснеет; (6) не чистить lastApplied в recordFeatureReturn → «новый переход гасит
+// подтверждённый» краснеет.
+//
+// GC-F11R3 (мажоры ревью GC-R-P5): подтверждение идемпотентно по seq (повторный вызов
+// с тем же seq — no-op: StrictMode дважды зовёт эффекты монтирования, прежнее
+// «закрытие окна повторным подтверждением» съедало окно до реального remount); окно
+// расходует стабильный кадр после применения без размонтирования вкладки
+// (scheduleConsume), а размонтирование (remount/StrictMode-мнимый unmount/уход)
+// отложенный расход гасит — окно достаётся следующему инстансу. Мутации:
+// (5) гасить lastApplied при повторном подтверждении с тем же seq (старый механизм) →
+// «повторное подтверждение идемпотентно» краснеет; (7) никогда не расходовать окно
+// (нет scheduleConsume) → «окно расходует стабильный кадр» краснеет; (8) расходовать
+// окно при размонтировании вкладки → «размонтирование гасит отложенный расход» краснеет.
 describe('featureBackNav: снимок вида (GC-F11)', () => {
   it('поставщик зарегистрирован → recordFeatureReturn пишет снимок в указатель', () => {
     const off = __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: 'ST-F9', scrollTop: 1234 }));
@@ -177,9 +187,12 @@ describe('featureBackNav: снимок вида (GC-F11)', () => {
 
 // GC-F11R2 (дефект 7d399549): канал подтверждения применения. Вкладка применяет
 // снимок ПРИ ИНИЦИАЛИЗАЦИИ своего состояния (remount страницы 'loading'→'ok') и
-// подтверждает применение post-mount; подтверждённый снимок переживает remount, а
-// повторное подтверждение закрывает окно (сознательный монтаж снимок не перечитывает).
+// подтверждает применение post-mount; подтверждённый снимок переживает remount.
+// GC-F11R3: подтверждение идемпотентно по seq; окно расходует стабильный кадр после
+// применения (таймер CONSUME_MS без размонтирования вкладки), а не подтверждение.
 describe('featureBackNav: подтверждение применения снимка (GC-F11R2)', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); __test.reset(); });
   it('commit переносит pending в lastApplied: remount читает тот же снимок', () => {
     __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: 'ST-F9', scrollTop: 1234 }));
     recordFeatureReturn('f1', { kind: 'task', id: 't1' }, 'Фича');
@@ -204,16 +217,50 @@ describe('featureBackNav: подтверждение применения сни
     expect(__test.lastAppliedFeatureView('f1'), 'чужой commit поставил lastApplied').toBeNull();
   });
 
-  it('повторное подтверждение того же seq закрывает окно remount', () => {
+  it('повторное подтверждение того же seq идемпотентно: окно НЕ закрывается подтверждением (GC-F11R3)', () => {
     __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: null, scrollTop: 5 }));
     recordFeatureReturn('f1', { kind: 'task', id: 't1' }, 'Фича');
     expect(__test.consumeFeatureViewReturn('f1')).toBe(true);
     const seq = __test.pendingFeatureView('f1')!.seq;
-    __test.commitFeatureViewApplied('f1', seq); // первый инстанс: pending → lastApplied
+    __test.commitFeatureViewApplied('f1', seq); // первый вызов: pending → lastApplied
     expect(__test.lastAppliedFeatureView('f1'), 'первое подтверждение не поставило lastApplied').not.toBeNull();
-    __test.commitFeatureViewApplied('f1', seq); // инстанс после remount: окно закрыто
-    expect(__test.lastAppliedFeatureView('f1'), 'окно remount не закрыто').toBeNull();
-    expect(__test.pendingFeatureView('f1'), 'закрытие окна тронуло pending').toBeNull();
+    // Двойной эффект StrictMode / remount-инстанс: тот же seq — no-op. Прежнее «закрытие
+    // окна повторным подтверждением» съедало окно до реального remount (мажор GC-R-P5).
+    __test.commitFeatureViewApplied('f1', seq);
+    expect(__test.lastAppliedFeatureView('f1'), 'повторное подтверждение с тем же seq закрыло окно').not.toBeNull();
+    expect(__test.pendingFeatureView('f1'), 'повторное подтверждение тронуло pending').toBeNull();
+  });
+
+  it('окно расходует стабильный кадр после применения: после применения без remount канал пуст (GC-F11R3)', () => {
+    const off = __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: null, scrollTop: 5 }));
+    recordFeatureReturn('f1', { kind: 'task', id: 't1' }, 'Фича');
+    expect(__test.consumeFeatureViewReturn('f1')).toBe(true);
+    __test.commitFeatureViewApplied('f1', __test.pendingFeatureView('f1')!.seq);
+    expect(__test.lastAppliedFeatureView('f1'), 'окно не поставлено применением').not.toBeNull();
+    // Вкладка не размонтирована (off() не вызван): применение стабильно → окно расходует
+    // свой отложенный кадр. Без расхода снимок «залипает» до следующего открытия (мажор 2).
+    vi.advanceTimersByTime(__test.CONSUME_MS);
+    expect(__test.lastAppliedFeatureView('f1'), 'окно залипло после стабильного применения').toBeNull();
+    off();
+  });
+
+  it('размонтирование вкладки гасит отложенный расход: окно достаётся remount-инстансу (GC-F11R3)', () => {
+    const off = __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: null, scrollTop: 5 }));
+    recordFeatureReturn('f1', { kind: 'task', id: 't1' }, 'Фича');
+    expect(__test.consumeFeatureViewReturn('f1')).toBe(true);
+    __test.commitFeatureViewApplied('f1', __test.pendingFeatureView('f1')!.seq);
+    // Снятие регистрации = размонтирование вкладки ('loading'→'ok' remount, мнимый unmount
+    // StrictMode): отложенный расход гасится, окно ЖИВО — его читает следующий инстанс.
+    off();
+    vi.advanceTimersByTime(__test.CONSUME_MS);
+    expect(__test.lastAppliedFeatureView('f1'), 'окно расходовать при размонтировании').not.toBeNull();
+    // Новый инстанс (remount) подтверждает тот же seq и ставит свой расход: после его
+    // стабильного кадра (без нового размонтирования) окно закрыт.
+    const off2 = __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: null, scrollTop: 5 }));
+    __test.commitFeatureViewApplied('f1', __test.lastAppliedFeatureView('f1')!.seq);
+    vi.advanceTimersByTime(__test.CONSUME_MS);
+    expect(__test.lastAppliedFeatureView('f1'), 'окно не закрылось после стабильного remount').toBeNull();
+    off2();
   });
 
   it('новый переход гасит и подтверждённый снимок (old lastApplied не для новой страницы)', () => {

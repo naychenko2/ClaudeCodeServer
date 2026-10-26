@@ -651,8 +651,10 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false, st
   // unmount→mount, и состояние, поднятое эффектом, такого remount не переживает:
   // снимок к тому моменту уже подтверждён первым инстансом. Чтение канала не гасит:
   // гасится только подтверждённое применение (commitFeatureViewApplied, эффект
-  // монтажа ниже) — remount читает тот же снимок из lastApplied, а сознательный
-  // уход следующий монтаж уже не находит.
+  // монтажа ниже) — remount читает тот же снимок из lastApplied. Окно расходует
+  // не подтверждение, а стабильный кадр после него без размонтирования вкладки
+  // (scheduleConsume в featureBackNav, GC-F11R3): монтаж после сознательного ухода
+  // тот же снимок уже не находит.
   const [mountView] = useState<{ seq: number; view: { stageKey: string | null; expandedKey: string | null; scrollTop: number } } | null>(() => {
     const pv = pendingFeatureView(run.featureId);
     if (pv) return { seq: pv.seq, view: pv.view };
@@ -695,8 +697,10 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false, st
   // Подтверждение применения снимка, прочитанного при монтировании: этот инстанс
   // инициализировал им своё состояние, смонтирован и отрисован → remount вкладки
   // (страницы 'loading'→'ok' — тот самый cause дефекта 7d399549) обязан получить
-  // тот же вид: commit переносит pending в lastApplied (а если снимок читан из
-  // lastApplied — закрывает окно remount). Прокрутка — в реальный контейнер: DOM
+  // тот же вид: commit переносит pending в lastApplied; повторный вызов с тем же
+  // seq — идемпотентный no-op (GC-F11R3): двойной эффект StrictMode в dev и remount-
+  // инстанс НЕ закрывают окно — его закрывает стабильный кадр без размонтирования
+  // (scheduleConsume в featureBackNav). Прокрутка — в реальный контейнер: DOM
   // есть только после первого коммита. «Умного» позиционирования нет: человек был
   // вот здесь.
   useEffect(() => {

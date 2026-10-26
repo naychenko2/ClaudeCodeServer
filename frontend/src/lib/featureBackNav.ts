@@ -74,11 +74,18 @@ let _viewProvider: { featureId: string; fn: FeatureViewProvider } | null = null;
 
 // Зарегистрировать поставщика снимка (на время монтирования вкладки). Возвращает
 // снятие: по идентичности записи — снятие старого монтирования не должно стереть
-// регистрацию нового (перемонтирование вкладки).
+// регистрацию нового (перемонтирование вкладки). Снятие — он же сигнал конца стояния
+// вкладки (GC-F11R3): гасит отложенный расход подтверждённого окна (см. scheduleConsume).
 export function registerFeatureViewProvider(featureId: string, fn: FeatureViewProvider): () => void {
   const entry = { featureId, fn };
   _viewProvider = entry;
-  return () => { if (_viewProvider === entry) _viewProvider = null; };
+  return () => {
+    if (_viewProvider === entry) _viewProvider = null;
+    // Размонтирование вкладки (remount 'loading'→'ok', мнимый unmount StrictMode, сознательный
+    // уход) — окно подтверждённого снимка этому инстансу больше не принадлежит: его гасит
+    // не само подтверждение, а стабильный кадр без размонтирования (scheduleConsume).
+    if (_lastApplied && _lastApplied.featureId === featureId) _unmountStamp += 1;
+  };
 }
 
 // Старая строка в хранилище (id чата) читается как переход в чат; объект — как есть.
@@ -94,6 +101,11 @@ let _pendingView: PendingFeatureView | null = null;
 // Подтверждённый применением снимок (GC-F11R2, дефект 7d399549): remount вкладки
 // читает его, когда pending уже подтверждён (см. commitFeatureViewApplied ниже).
 let _lastApplied: PendingFeatureView | null = null;
+// Штат размонтирований вкладки с живым окном (GC-F11R3): размонтирование вкладки
+// (remount 'loading'→'ok', мнимый unmount StrictMode, сознательный уход) делает
+// подтверждённое окно принадлежащим следующему инстансу и гасит его отложенный расход
+// (см. scheduleConsume ниже).
+let _unmountStamp = 0;
 let _pendingSeq = 0;
 const _listeners = new Set<() => void>();
 function emit() { _listeners.forEach(fn => fn()); }
@@ -159,7 +171,8 @@ export function recordFeatureReturn(featureId: string, to: { kind: 'chat' | 'tas
 // жизни указателя (дефект 4c4645e2: указатель не должен стираться раньше
 // восстановления). «Хронология» читает канал и ПРИМЕНЯЕТ снимок к своему состоянию;
 // чтение само по себе ничего не гасит (GC-F11R2, дефект 7d399549): гасится только
-// подтверждённое применение — см. commitFeatureViewApplied ниже.
+// подтверждённое применение, и не самим подтверждением, а стабильным кадром после
+// него — см. commitFeatureViewApplied и scheduleConsume ниже.
 export interface PendingFeatureView { featureId: string; view: FeatureViewSnapshot; seq: number }
 
 // Забрать снимок из ЖИВОГО указателя в pending (зовёт чип — только его клик значит
@@ -185,28 +198,52 @@ export function usePendingFeatureView(featureId: string): PendingFeatureView | n
   return useSyncExternalStore(subscribe, () => pendingFeatureView(featureId), () => pendingFeatureView(featureId));
 }
 
-// === Подтверждение применения (GC-F11R2, дефект 7d399549) ===
+// === Подтверждение применения (GC-F11R2, дефект 7d399549; GC-F11R3 — идемпотентность и расход) ===
 // Старый механизм гасил снимок в момент применения (clearPendingFeatureView в эффекте
 // после монтажа) — и remount вкладки в том же кадре терял вид: после возврата по
 // чипу страница сначала рисуется из КЭША 'ok' (стор featurePage — уровень модуля,
 // unmount его не сбрасывает), затем первичный запрос сбрасывает её в 'loading'
 // (featurePage.ts:100) → вкладка unmount→mount, а снимок уже погашен. Теперь:
 // применение подтверждается — pending ПЕРЕНОСИТСЯ в lastApplied, и remount вкладки
-// читает тот же снимок из него; повторное подтверждение (инстанс, который прочитал
-// lastApplied) закрывает окно remount: сознательный уход (смена вкладки, закрытие
-// страницы, следующий монтаж) застанет канал пустым. Новый переход гасит оба канала
-// (recordFeatureReturn).
+// читает тот же снимок из него. Подтверждение идемпотентно по seq (GC-F11R3):
+// повторный вызов с тем же seq — no-op. Это обязано быть так: StrictMode (main.tsx:14)
+// в dev дважды зовёт эффекты монтирования, и «закрытие окна повторным подтверждением»
+// (бывший механизм) закрывал окно ещё до реального remount — фикс не работал в dev-сборке.
+// Окно расходует не подтверждение, а стабильный кадр после применения (scheduleConsume);
+// новый переход гасит оба канала (recordFeatureReturn).
 export function commitFeatureViewApplied(featureId: string, seq: number): void {
   if (_pendingView && _pendingView.featureId === featureId && _pendingView.seq === seq) {
     _lastApplied = { featureId, seq, view: _pendingView.view };
     _pendingView = null;
     emit();
-    return;
+  } else if (!(_lastApplied && _lastApplied.featureId === featureId && _lastApplied.seq === seq)) {
+    return; // чужой featureId/seq: ничего не гасит, ничего не откладывает
   }
-  if (_lastApplied && _lastApplied.featureId === featureId && _lastApplied.seq === seq) {
-    _lastApplied = null;
-    emit();
-  }
+  scheduleConsume(featureId, seq);
+}
+
+// === Расход окна (GC-F11R3) ===
+// Конец окна привязан к жизни стояния, а не к числу подтверждений: через CONSUME_MS
+// после применения, если вкладка этой фичи за это время не размонтировалась, применение
+// стабильно — снимок расходован (следующее открытие фичи без чипа его не найдёт).
+// Размонтирование вкладки (remount 'loading'→'ok', мнимый unmount StrictMode, сознательный
+// уход) поднимает _unmountStamp и гасит отложенный расход: окно достаётся новому
+// инстансу — он подтвердит тот же seq и поставит свой расход. Сознательный уход
+// за собой нового инстанса не имеет: последнее стабильное подтверждение расходует
+// окно отложенным таймером; не успел — новый переход (recordFeatureReturn).
+const CONSUME_MS = 1000;
+let _consumeTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleConsume(featureId: string, seq: number): void {
+  const stamp = _unmountStamp;
+  if (_consumeTimer) clearTimeout(_consumeTimer);
+  _consumeTimer = setTimeout(() => {
+    _consumeTimer = null;
+    if (_unmountStamp !== stamp) return; // вкладку после применения снимали — окно для remount-инстанса
+    if (_lastApplied && _lastApplied.featureId === featureId && _lastApplied.seq === seq) {
+      _lastApplied = null;
+      emit();
+    }
+  }, CONSUME_MS);
 }
 
 // Прочитать подтверждённый снимок без подписки (для инициализации состояния вкладки):
@@ -276,9 +313,11 @@ export function useFeatureBackNavForTask(taskId: string | null): FeatureBackNavI
 // Тестовые швы (не публичное API).
 export const __test = {
   reset() {
+    if (_consumeTimer) { clearTimeout(_consumeTimer); _consumeTimer = null; }
     _back = null;
     _pendingView = null;
     _lastApplied = null;
+    _unmountStamp = 0;
     _pendingSeq = 0;
     _viewProvider = null;
     _listeners.clear();
@@ -296,4 +335,5 @@ export const __test = {
   pendingFeatureView,
   commitFeatureViewApplied,
   lastAppliedFeatureView,
+  CONSUME_MS,
 };

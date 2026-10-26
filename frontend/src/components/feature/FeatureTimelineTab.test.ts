@@ -52,9 +52,13 @@
 // (начального состояния нет) → c4 краснеет; (22) гасить pending при чтении, без подтверждения
 // → c6 краснеет (первый инстанс прочитал и погасил — remount ничего не нашёл);
 // (23) хранить window.scrollY вместо scrollTop контейнера → c4 краснеет.
+// GC-F11R3 (мажоры ревью GC-R-P5): подтверждение идемпотентно по seq (StrictMode-двойной
+// эффект и remount не закрывают окно); окно расходует стабильный кадр после применения
+// без размонтирования вкладки — снимок не залипает между открытиями (c7). c4–c7 — и под
+// StrictMode. Мутации (24)–(26) — у описания блока GC-F11 ниже.
 
 import { act } from 'react';
-import { createElement } from 'react';
+import { createElement, StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeatureTimelineTab, laneAxisInsets, laneScaleWidth } from './FeatureTimelineTab';
@@ -1791,6 +1795,14 @@ describe('FeatureTimelineTab: свёртка длинных списков эт�
 // (22) гасить pending при чтении, без подтверждения → c6 краснеет (первый инстанс
 // прочитал и погасил — remount ничего не нашёл);
 // (23) хранить window.scrollY вместо scrollTop контейнера → c4 краснеет.
+// GC-F11R3 (мажоры ревью GC-R-P5): подтверждение идемпотентно по seq (двойной эффект
+// StrictMode и remount-инстанс не закрывают окно), окно расходует стабильный кадр после
+// применения без размонтирования вкладки; c4–c7 прогоняются и под StrictMode (dev-сборка,
+// main.tsx:14). Мутации: (24) гасить lastApplied при повторном подтверждении с тем же seq
+// (старый механизм) → c4/c6 под strict=true краснеют (remount не находит окно);
+// (25) никогда не расходовать окно (нет scheduleConsume) → c7 краснеет (окно залипло);
+// (26) расходовать окно при размонтировании вкладки → c4 краснеет (remount-инстанс
+// не находит подтверждённый снимок).
 // Фикстура: все этапы pending — при монтировании не раскрыто НИЧЕГО (дефолт не маскирует
 // восстановление); шаг ST-F9 с меню (есть старт и чат цепочки).
 function returnRun(): FeatureRun {
@@ -1902,12 +1914,15 @@ describe('FeatureTimelineTab: восстановление по чипу (GC-F11
   // Host — узел фейк-DOM (тот же тип, что принимает findNodeByAttr) + поля прокрутки,
   // которые есть у реального контейнера.
   type Host = Parameters<typeof findNodeByAttr>[0] & { style: Record<string, string>; scrollTop: number };
-  function mountInHost(run: FeatureRun): { host: Host; unmount: () => void } {
+  // strict=true — обёртка StrictMode (dev-сборка: main.tsx:14): React дважды зовёт
+  // эффекты монтирования. Механизм окна обязан работать в обеих сборках (GC-F11R3).
+  function mountInHost(run: FeatureRun, strict = false): { host: Host; unmount: () => void } {
     const doc = (globalThis as { document: { createElement(tag: string): Host } }).document;
     const host = doc.createElement('div');
     host.style.overflow = 'auto';
     const root = createRoot(host as unknown as Element);
-    act(() => { root.render(createElement(FeatureTimelineTab, { run })); });
+    const tab = createElement(FeatureTimelineTab, { run });
+    act(() => { root.render(strict ? createElement(StrictMode, null, tab) : tab); });
     return { host, unmount: () => { act(() => { root.unmount(); }); } };
   }
 
@@ -1937,14 +1952,15 @@ describe('FeatureTimelineTab: восстановление по чипу (GC-F11
     try { fn(); } finally { proto.focus = origFocus; }
   }
 
-  // c4: ТЕСТ ОБЯЗАТЕЛЕН НА ПЕРЕМОНТИРОВАНИЕ. Механизм дефекта дословно: применение
-  // случилось (живой инстанс поднял вид), вкладка перемонтирована в том же кадре
-  // (страница после возврата рисует кэш 'ok', первичный запрос сбрасывает её в
-  // 'loading' — featurePage.ts:100 — ответ вернул 'ok') — вид обязан пережить.
-  it('c4: применение на живом инстансе + remount вкладки — этап, карточка и прокрутка контейнера сохранены', () => {
+  // c4: ТЕСТ ОБЯЗАТЕЛЕН НА ПЕРЕМОНТИРОВАНИЕ — в обеих сборках (GC-F11R3): без StrictMode
+  // (прод) и под ним (dev, main.tsx:14 — двойной эффект монтирования). Механизм дефекта
+  // дословно: применение случилось (живой инстанс поднял вид), вкладка перемонтирована
+  // в том же кадре (страница после возврата рисует кэш 'ok', первичный запрос сбрасывает
+  // её в 'loading' — featurePage.ts:100 — ответ вернул 'ok') — вид обязан пережить.
+  it.each([false, true])('c4: применение на живом инстансе + remount вкладки — этап, карточка и прокрутка контейнера сохранены (strict=%s)', (strict) => {
     installFakeDom(); // тест независим по порядку: свой документ (mountInHost монтирует без mount())
     const run = returnRun();
-    const h1 = mountInHost(run);
+    const h1 = mountInHost(run, strict);
     leaveToTaskIn(run, h1.host);
     expect(backNavTest.getBackNav()?.view, 'снимок не записан при переходе')
       .toEqual({ stageKey: 'prod', expandedKey: 'ST-F9', scrollTop: 1234 });
@@ -1955,7 +1971,8 @@ describe('FeatureTimelineTab: восстановление по чипу (GC-F11
     expect(taken, 'снимка для забора нет').toBe(true);
     // Живой инстанс применил снимок и подтвердил применение — это происходит на
     // реальной странице до remount (без этого шага тест моделировал бы закрытие
-    // страницы, а не remount — как c1).
+    // страницы, а не remount — как c1). Под StrictMode — и после двойного эффекта:
+    // повторное подтверждение идемпотентно, окно живо (мажор 1 GC-R-P5).
     act(() => {});
     expect(backNavTest.pendingFeatureView('f1'), 'применение живым инстансом не подтверждено').toBeNull();
     expect(backNavTest.lastAppliedFeatureView('f1'), 'подтверждённый снимок не переживает remount').not.toBeNull();
@@ -1964,7 +1981,7 @@ describe('FeatureTimelineTab: восстановление по чипу (GC-F11
     h1.unmount();
 
     let h2: { host: Host; unmount: () => void } | null = null;
-    withFocusPatch(() => { h2 = mountInHost(returnRun()); });
+    withFocusPatch(() => { h2 = mountInHost(returnRun(), strict); });
     const body2 = findNodeByAttr(h2!.host, 'data-testid', 'timeline-stage-body-prod');
     expect(body2, 'remount не восстановил этап').not.toBeNull();
     const card2 = findNodeByAttr(body2!, 'data-testid', 'prod-card-ST-F9')!;
@@ -1972,12 +1989,14 @@ describe('FeatureTimelineTab: восстановление по чипу (GC-F11
     expect(findNodeByAttr(card2, 'data-testid', 'prod-details'), 'раскрытой части карточки нет').not.toBeNull();
     expect(h2!.host.scrollTop, 'remount не восстановил прокрутку контейнера').toBe(1234);
     expect((globalThis as { document: { activeElement: unknown } }).document.activeElement, 'фокус не встал на шапку карточки').toBe(card2);
-    // Окно remount закрыто подтверждением: следующий (сознательный) монтаж тот же
-    // снимок не перечитывает — канал пуст, вид дефолтный.
-    h2.unmount();
+    // Окно закрыто стабильным кадром после применения (GC-F11R3): remount-инстанс
+    // подтвердил тот же seq, размонтирования после его подтверждения нет → расход.
+    // Следующий (сознательный) монтаж тот же снимок не перечитывает — канал пуст.
+    vi.advanceTimersByTime(backNavTest.CONSUME_MS);
     expect(backNavTest.pendingFeatureView('f1'), 'pending пережил подтверждение').toBeNull();
-    expect(backNavTest.lastAppliedFeatureView('f1'), 'lastApplied пережил подтверждение').toBeNull();
-    const h3 = mountInHost(returnRun());
+    expect(backNavTest.lastAppliedFeatureView('f1'), 'стабильный кадр не расходовал окно').toBeNull();
+    h2.unmount();
+    const h3 = mountInHost(returnRun(), strict);
     expect(findNodeByAttr(h3.host, 'data-testid', 'timeline-stage-body-prod'), 'тот же снимок применён второй раз').toBeNull();
     h3.unmount();
   });
@@ -1985,15 +2004,15 @@ describe('FeatureTimelineTab: восстановление по чипу (GC-F11
   // c5: задача буквальна: смонтировать вкладку → записать снимок → размонтировать и
   // смонтировать заново (как делает страница) → этап и карточка раскрыты; scrollTop
   // контейнера восстановлен. Первый инстанс здесь снимок только записал (не применял).
-  it('c5: remount после записи (без применения на первом инстансе) — вид и прокрутка контейнера восстановлены', () => {
+  it.each([false, true])('c5: remount после записи (без применения на первом инстансе) — вид и прокрутка контейнера восстановлены (strict=%s)', (strict) => {
     installFakeDom(); // тест независим по порядку: свой документ
     const run = returnRun();
-    const h1 = mountInHost(run);
+    const h1 = mountInHost(run, strict);
     leaveToTaskIn(run, h1.host);
     expect(backNavTest.consumeFeatureViewReturn('f1'), 'снимка для забора нет').toBe(true);
     h1.unmount();
     let h2: { host: Host; unmount: () => void } | null = null;
-    withFocusPatch(() => { h2 = mountInHost(returnRun()); });
+    withFocusPatch(() => { h2 = mountInHost(returnRun(), strict); });
     const body2 = findNodeByAttr(h2!.host, 'data-testid', 'timeline-stage-body-prod');
     expect(body2, 'remount не восстановил этап').not.toBeNull();
     const card2 = findNodeByAttr(body2!, 'data-testid', 'prod-card-ST-F9')!;
@@ -2008,22 +2027,23 @@ describe('FeatureTimelineTab: восстановление по чипу (GC-F11
   // подтверждает применение эффектом монтажа; затем 'loading'→'ok' (тот самый remount) —
   // второй инстанс обязан получить тот же снимок из lastApplied. Гасить pending при
   // чтении (без подтверждения) здесь и ломается: первый прочитал и погасил, remount
-  // ничего не нашёл.
-  it('c6: первый инстанс после чипа прочитал снимок — remount получает подтверждённый', () => {
+  // ничего не нашёл. Под StrictMode ломалось и «закрытие окна повторным подтверждением»
+  // (бывший механизм): двойной эффект m1 закрыл бы окно до реального remount (мажор 1).
+  it.each([false, true])('c6: первый инстанс после чипа прочитал снимок — remount получает подтверждённый (strict=%s)', (strict) => {
     installFakeDom(); // тест независим по порядку: свой документ
     const run = returnRun();
-    const h1 = mountInHost(run);
+    const h1 = mountInHost(run, strict);
     leaveToTaskIn(run, h1.host);
     h1.unmount(); // переход закрыл страницу (человек на экране задачи)
     act(() => { backNavTest.consumeFeatureViewReturn('f1'); }); // чип нажат: снимок в канале, живой вкладки нет
-    const m1 = mountInHost(returnRun()); // первый рендер открытой страницы — из кэша 'ok'
+    const m1 = mountInHost(returnRun(), strict); // первый рендер открытой страницы — из кэша 'ok'
     const body1 = findNodeByAttr(m1.host, 'data-testid', 'timeline-stage-body-prod');
     expect(body1, 'первый инстанс не применил снимок при инициализации').not.toBeNull();
     const card1 = findNodeByAttr(body1!, 'data-testid', 'prod-card-ST-F9')!;
     expect(card1.getAttribute('aria-expanded'), 'первый инстанс не раскрыл карточку').toBe('true');
     m1.unmount(); // страница ушла в 'loading' (первичный запрос)
     let h2: { host: Host; unmount: () => void } | null = null;
-    withFocusPatch(() => { h2 = mountInHost(returnRun()); }); // 'ok' → remount вкладки
+    withFocusPatch(() => { h2 = mountInHost(returnRun(), strict); }); // 'ok' → remount вкладки
     const body2 = findNodeByAttr(h2!.host, 'data-testid', 'timeline-stage-body-prod');
     expect(body2, 'remount не восстановил этап').not.toBeNull();
     const card2 = findNodeByAttr(body2!, 'data-testid', 'prod-card-ST-F9')!;
@@ -2031,6 +2051,36 @@ describe('FeatureTimelineTab: восстановление по чипу (GC-F11
     expect(h2!.host.scrollTop, 'remount не восстановил прокрутку контейнера').toBe(1234);
     expect((globalThis as { document: { activeElement: unknown } }).document.activeElement, 'фокус не встал на шапку карточки').toBe(card2);
     h2.unmount();
+  });
+
+  // c7 (GC-F11R3, мажор 2 GC-R-P5): снимок НЕ залипает между открытиями. Полный цикл
+  // одного возврата (чип → применение → remount → стабильное стояние): окно расходует
+  // стабильный кадр после применения; сознательный уход + следующее открытие БЕЗ чипа
+  // — вид дефолтный (не «чужой раскрытый этап, раскрытая карточка и старая прокрутка»).
+  it('c7: после применения окно расходуют; следующее открытие фичи без чипа снимок не применяет', () => {
+    installFakeDom();
+    const run = returnRun();
+    const h1 = mountInHost(run, true);
+    leaveToTaskIn(run, h1.host);
+    let taken = false;
+    act(() => { taken = backNavTest.consumeFeatureViewReturn('f1'); });
+    expect(taken, 'снимка для забора нет').toBe(true);
+    act(() => {}); // живой инстанс применил и подтвердил
+    h1.unmount(); // 'loading' → remount
+    let h2: { host: Host; unmount: () => void } | null = null;
+    withFocusPatch(() => { h2 = mountInHost(returnRun(), true); });
+    expect(findNodeByAttr(h2!.host, 'data-testid', 'timeline-stage-body-prod'), 'remount не восстановил этап').not.toBeNull();
+    // Стабильное стояние после подтверждения (размонтирования нет) — окно расходует
+    // свой отложенный кадр: между открытиями канал пуст.
+    vi.advanceTimersByTime(backNavTest.CONSUME_MS);
+    expect(backNavTest.lastAppliedFeatureView('f1'), 'окно залипло между открытиями').toBeNull();
+    h2.unmount(); // сознательный уход со страницы
+    const h3 = mountInHost(returnRun(), true); // следующее открытие БЕЗ чипа (consume не было)
+    expect(findNodeByAttr(h3.host, 'data-testid', 'timeline-stage-body-prod'), 'следующее открытие без чипа применило снимок').toBeNull();
+    // У фейк-DOM scrollTop нет по умолчанию (undefined = не двигали); 1234 значило бы
+    // «старая прокрутка перенеслась в новое открытие».
+    expect(h3.host.scrollTop ?? 0, 'старая прокрутка перенеслась в новое открытие').toBe(0);
+    h3.unmount();
   });
 });
 

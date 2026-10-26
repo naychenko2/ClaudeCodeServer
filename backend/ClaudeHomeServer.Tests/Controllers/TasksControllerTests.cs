@@ -2923,15 +2923,15 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     // c2: At/StageAtWrite/StateAtWrite клиент не задаёт — лишние поля тела игнорируются, значения серверные.
     // R-B3B6 замечание 1: «серверные» значения сверяются с проекцией, а не «не подделка/не пусто» —
     // как в MCP-пути (TasksToolsetFeatureNoteTests.FeatureNote_АктивнаяСтадия_ШтампуетсяСтадия):
-    // фикстура с идущим шагом (Now непустой, стадия непустая), ожидаемые Stage/State берутся из проектора.
-    // Мутация: принимать at из тела — краснеет BeOnOrAfter. Мутация (замечание 1): заменить
-    // run.Now.FirstOrDefault()?.Stage, run.State в штампе TasksController.cs:1027-1028 константами —
-    // краснеют StageAtWrite/StateAtWrite.
+    // фикстура с идущим шагом, ожидаемые Stage/State берутся из проектора. B14 (возврат FIN):
+    // штамп стадии — активная стадия конвейера (FeatureBrief.ActiveStageOf, та же база, что у
+    // StaleOf), а не Now[0]. Мутация: принимать at из тела — краснеет BeOnOrAfter. Мутация
+    // (замечание 1): заменить штамп в TasksController константами — краснеют StageAtWrite/StateAtWrite.
     [Fact]
     public async Task PutNote_PolyaKlientaIgnoriruyutsya_ShtampujetServer()
     {
         var epicId = await CreateFeatureEpicAsync();
-        // Идущий шаг фичи: Now непустой, активная стадия есть (RoleToStage(step) = "prod").
+        // Идущий шаг фичи: активная стадия есть (RoleToStage(step) = "prod").
         await CreateTaskAsync(new { title = "шаг-note", featureId = epicId, role = "step", status = "inProgress" });
         var before = DateTime.UtcNow;
 
@@ -2943,18 +2943,45 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var run = _factory.Services.GetRequiredService<FeatureProjector>().Project(epicId, OwnerId)!;
-        run.Now.Should().NotBeEmpty("фикстура: шаг фичи идёт — у проекции есть активная стадия");
-        run.Now[0].Stage.Should().NotBeEmpty("сверка не с пустой стадией");
+        FeatureBrief.ActiveStageOf(run).Should().NotBeEmpty("сверка не с пустой стадией");
 
         var note = _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.Note!;
         note.Text.Should().Be("голос");
         note.At.Should().BeOnOrAfter(before);
-        note.StageAtWrite.Should().Be(run.Now[0].Stage,
-            "StageAtWrite — активная стадия проекции на момент записи, значение клиента игнорировано");
+        note.StageAtWrite.Should().Be(FeatureBrief.ActiveStageOf(run),
+            "StageAtWrite — активная стадия проекции на момент записи (FeatureBrief.ActiveStageOf), значение клиента игнорировано");
         note.StateAtWrite.Should().Be(run.State,
             "StateAtWrite — состояние проекции на момент записи");
         note.BySessionId.Should().BeNull();
         note.ByUser.Should().BeTrue();
+    }
+
+    // B14 (возврат FIN 74722f13): голос, записанный у фичи БЕЗ идущих задач (шаг в todo — Now пуст),
+    // не устаревший с момента записи: штамп и StaleOf берут одну базу — активную стадию конвейера
+    // («prod» для шага), а не Now[0]. До правки штамп был "" (Now пуст), StaleOf сверял с "prod" →
+    // brief.note.stale = true с первой секунды (воспроизведено на стенде). Мутация: вернуть в штампе
+    // TasksController run.Now.FirstOrDefault()?.Stage — StageAtWrite станет "", этот тест краснеет.
+    [Fact]
+    public async Task PutNote_BezIdushchihZadach_ShtampAktivnayaStadiya_GolosNeUstarevshi()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        // Шаг фичи в todo: идущих задач нет (Now пуст), активная стадия конвейера — «prod»
+        // (первая незаполненная стадия с задачами, FeatureProjector.cs:276-280).
+        await CreateTaskAsync(new { title = "шаг-idle", featureId = epicId, role = "step" });
+
+        var response = await _client.PutAsJsonAsync(
+            $"/api/tasks/features/{epicId}/note", new { text = "голос на ожидании" });
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var run = _factory.Services.GetRequiredService<FeatureProjector>().Project(epicId, OwnerId)!;
+        run.Now.Should().BeEmpty("фикстура: идущих задач нет");
+        FeatureBrief.ActiveStageOf(run).Should().Be("prod", "стадия todo-шага по таблице RoleToStage");
+
+        var brief = FeatureBrief.Build(run, null, null, DateTime.UtcNow);
+        brief.Note!.StageAtWrite.Should().Be("prod",
+            "штамп — активная стадия конвейера, не Now[0] (здесь пустой)");
+        brief.Note.Stale.Should().BeFalse(
+            "голос записан только что на активной стадии того же состояния — ни стадия, ни категория не менялись");
     }
 
     // c3 через HTTP: длинный текст режется до 600, пустой снимает голос.

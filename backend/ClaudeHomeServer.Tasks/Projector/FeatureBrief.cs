@@ -162,6 +162,15 @@ public static class FeatureBrief
         return minutes < 0 ? 0 : (int)minutes;
     }
 
+    // Активная стадия конвейера (B14, возврат FIN 74722f13): ЕДИНАЯ база для штампа StageAtWrite
+    // (TasksController.SetFeatureNote, TasksToolset featureNote зовут её) и для сравнения StaleOf.
+    // Now[0] для штампа не используется: на waiting/stopped/idle/paused Now пуст (в нём только
+    // InProgress-задачи), и голос, записанный там, был бы устаревшим с первой секунды. Стадию
+    // определяет проектор (FeatureProjector.cs:266-291): она есть почти всегда — фича без задач
+    // стоит на «cut», с todo-шагом — на «prod»; пусто только когда все стадии пройдены (merge done).
+    internal static string ActiveStageOf(FeatureRun run) =>
+        run.Stages.FirstOrDefault(s => s.State == "active")?.Key ?? "";
+
     // «Сейчас»: первая запись Now; иначе тревога (Attention). Стадия тревоги — активная стадия
     // конвейера (у Attention своего ключа стадии нет). Ни того ни другого — null.
     private static BriefNow? NowOf(FeatureRun run)
@@ -173,8 +182,7 @@ public static class FeatureBrief
 
         var attention = run.Attention;
         if (attention is null) return null;
-        var stage = run.Stages.FirstOrDefault(s => s.State == "active")?.Key ?? "";
-        return new BriefNow(stage, attention.TaskId, attention.PersonaId, null, null, attention.Since);
+        return new BriefNow(ActiveStageOf(run), attention.TaskId, attention.PersonaId, null, null, attention.Since);
     }
 
     // Линия — у готовой цепочки шага (FeatureStepChain.Lane); шага нет — null.
@@ -250,14 +258,12 @@ public static class FeatureBrief
             StaleOf(run, note, kind));
     }
 
-    // Признак устаревания (разрез п.2): голос устарел, если StageAtWrite ≠ текущей активной стадии
-    // ИЛИ категория состояния (brief.kind) сменилась с момента записи.
-    // «Текущая активная стадия» — активная стадия конвейера (Stages, state == "active", та же база,
-    // что у NowOf/NextOf): на paused/waiting/idle Now пуст, и сравнение с Now[0] (из которого
-    // StageAtWrite штамповал контроллер B3) считало бы любой голос устаревшим только потому, что
-    // «сейчас ничего не идёт». Оговорка: StageAtWrite штампуется из Now[0].Stage задачи — если
-    // задача шла в стадии, отличной от активной (петля), голос с момента записи считается
-    // устаревшим; честнее штамп не восстанавливается.
+    // Признак устаревания (разрез п.2, B14 возврат FIN 74722f13): голос устарел, если StageAtWrite ≠
+    // текущей активной стадии ИЛИ категория состояния (brief.kind) сменилась с момента записи.
+    // Единая база: StageAtWrite штампуется той же ActiveStageOf, что и это сравнение (её зовут
+    // REST PUT и MCP featureNote; Now[0] для штампа не используется) — голос, записанный на
+    // «ждёт вас» / паузе / idle, не устаревший с первой секунды: стадия не менялась. Стадия
+    // задачи в петле (шла не в активной) на штамп больше не влияет: штамп — стадия конвейера.
     // Категория на момент записи достраивается из StateAtWrite той же таблицей KindByState:
     // состояния нет в таблице — категория на момент записи не подтверждается, голос устарел
     // (fail-closed). Ограничение хранимого поля (B3): причина удержания на момент записи не
@@ -265,8 +271,7 @@ public static class FeatureBrief
     // (paused → queued различить нечем).
     private static bool StaleOf(FeatureRun run, FeatureNote note, string kind)
     {
-        var activeStage = run.Stages.FirstOrDefault(s => s.State == "active")?.Key ?? "";
-        if (note.StageAtWrite != activeStage) return true;
+        if (note.StageAtWrite != ActiveStageOf(run)) return true;
         if (!KindByState.TryGetValue(note.StateAtWrite, out var kindAtWrite)) return true;
         return kindAtWrite != kind;
     }

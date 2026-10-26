@@ -1002,7 +1002,9 @@ public class TasksController(
 
     // ─── B3: голос фичи (PUT /api/tasks/features/{featureId}/note) ────────────────────────────
     // Пишет человек (сервисный токен → 403, как у hold). At/StageAtWrite/StateAtWrite ставит
-    // сервер из проекции; пустой text снимает голос. Не-эпик → 400, чужой/кривой id → 404.
+    // сервер из проекции; стадия — активная стадия конвейера (FeatureBrief.ActiveStageOf, та же
+    // база, что у StaleOf — B14 возврат FIN); пустой text снимает голос. Не-эпик → 400,
+    // чужой/кривой id → 404.
 
     // Тело PUT note: только text — прочих полей FeatureNote у клиента нет.
     public record FeatureNoteRequest(string? Text);
@@ -1025,7 +1027,7 @@ public class TasksController(
         if (run is null) return NotFound(new { error = "Фича не найдена" });
 
         var epic = tasks.SetFeatureNote(featureId, req?.Text, null, true,
-            run.Now.FirstOrDefault()?.Stage ?? "", run.State);
+            FeatureBrief.ActiveStageOf(run), run.State);
         if (epic is null) return NotFound(new { error = "Фича не найдена" });
         await broadcaster.ToOwner(UserId, new TaskChangedMessage("updated", epic));
         return Ok(new { note = epic.Note is null ? null : new { text = epic.Note.Text, at = epic.Note.At } });

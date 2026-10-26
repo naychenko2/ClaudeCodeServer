@@ -24,8 +24,9 @@ namespace ClaudeHomeServer.Tests.Services;
 //   «БелыйСписок» краснеет (R-B4 минор 1);
 // • откатить гейт к voiceLink.Kind == "executor" (предикат не вызывается) — тест
 //   «ГейтЗовётПредикат» краснеет: «key»-связь через шов была бы пущена (R-DB B4);
-// • заменить чтение Now.FirstOrDefault()?.Stage в штампе TasksToolset на "" — тест
-//   «АктивнаяСтадия» краснеет (R-B4 минор 2).
+// • вернуть чтение Now.FirstOrDefault()?.Stage в штампе TasksToolset — тест
+//   «БезИдущихЗадачей» краснеет (B14 возврат FIN: штамп — FeatureBrief.ActiveStageOf,
+//   та же база, что у StaleOf; R-B4 минор 2 закрыт).
 [Trait("Category", "Integration")]
 public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFactory>
 {
@@ -140,9 +141,10 @@ public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFact
             "At штампует сервер, агент его не передаёт");
         // Штампы — из той же проекции, что читает фронт (разрез п.1: «из FeatureRun»).
         stored.Note.StateAtWrite.Should().Be(Features.Project(epicId, OwnerId)!.State);
-        // Пустой случай (R-B4 минор 2): в этой фикстуре нет активной стадии (шаг Todo, Now пуст) —
-        // штамп стадии пуст. Непустой случай покрыт тестом «АктивнаяСтадия».
-        stored.Note.StageAtWrite.Should().Be("");
+        // B14 (возврат FIN): шаг в todo — идущих задач нет (Now пуст), но активная стадия конвейера
+        // есть («prod», первая незаполненная стадия с задачами). Штамп — активная стадия, а не Now[0]:
+        // тот же «prod», что в тесте «АктивнаяСтадия» (там шаг идёт).
+        stored.Note.StageAtWrite.Should().Be("prod");
     }
 
     // Пустой текст снимает голос (та же семантика, что у REST PUT note).
@@ -317,5 +319,30 @@ public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFact
         var stored = Tasks.GetById(epicId)!;
         stored.Note!.StageAtWrite.Should().Be("prod",
             "StageAtWrite в MCP-пути — активная стадия на момент записи (FeatureBrief.StaleOf сверяет с ней)");
+    }
+
+    // B14 (возврат FIN 74722f13): голос, записанный у фичи БЕЗ идущих задач (шаг в todo — Now пуст),
+    // не устаревший с момента записи: штамп и StaleOf берут одну базу — активную стадию конвейера
+    // («prod»), а не Now[0]. До правки штамп был "" (Now пуст), StaleOf сверял с "prod" →
+    // brief.note.stale = true с первой секунды. Мутация: вернуть в штампе TasksToolset чтение
+    // Now.FirstOrDefault()?.Stage — StageAtWrite станет "", последний Should краснеет.
+    [Fact]
+    public async Task FeatureNote_БезИдущихЗадачей_ГолосНеУстаревший()
+    {
+        var (projectId, _) = await CreateProjectWithSessionAsync("idle");
+        var (curatorId, epicId, _) = await CreateFeatureFromCuratorAsync(projectId, "idle");
+
+        var (_, isError) = await CallToolAsync(curatorId, "tasks_update",
+            new { id = epicId, featureNote = "голос на ожидании" });
+        isError.Should().BeFalse();
+
+        var run = Features.Project(epicId, OwnerId)!;
+        run.Now.Should().BeEmpty("фикстура: идущих задач нет (шаг todo)");
+
+        var brief = FeatureBrief.Build(run, null, null, DateTime.UtcNow);
+        brief.Note!.StageAtWrite.Should().Be("prod",
+            "штамп — активная стадия конвейера, не Now[0] (здесь пустой)");
+        brief.Note.Stale.Should().BeFalse(
+            "голос записан только что на активной стадии того же состояния — ни стадия, ни категория не менялись");
     }
 }

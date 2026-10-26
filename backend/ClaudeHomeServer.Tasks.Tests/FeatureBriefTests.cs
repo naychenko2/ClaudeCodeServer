@@ -25,6 +25,8 @@ namespace ClaudeHomeServer.Tasks.Tests;
 //  • B8 (MAJOR-1 ревью R-F8): взять вместо Hold.Since work-интервалы (ElapsedMinutes) — тест
 //    «очередь не из work-интервалов» красный (7 вместо 25); убрать фильтр kind — тест «только queued»
 //    красный (число у paused/running); убрать clamp к 0 — тест границы красный (отрицательное время).
+//  • B14 (возврат FIN 74722f13): сверять StaleOf с Now[0] вместо ActiveStageOf — тест
+//    «голос без идущих задач» красный (Now пуст → "prod" ≠ "").
 public class FeatureBriefTests
 {
     private static readonly DateTime NOW = new(2026, 10, 25, 12, 0, 0, DateTimeKind.Utc);
@@ -576,6 +578,27 @@ public class FeatureBriefTests
         var run = RunWithVoice("prod", FeatureStates.Running, null, "prod", "фиктивное_состояние");
 
         FeatureBrief.Build(run, null, null, NOW).Note!.Stale.Should().BeTrue();
+    }
+
+    // B14 (возврат FIN 74722f13): единая база штампа и StaleOf (FeatureBrief.ActiveStageOf). Голос,
+    // записанный на состоянии без идущих задач (not_started/idle/waiting/stopped — Now пуст), не
+    // устаревший с момента записи: стадия не менялась, категория тоже. До правки такой голос
+    // штамповался "" (Now[0] пуст) и сверялся с активной стадией → stale с первой секунды.
+    // Мутация: сверять StaleOf с Now[0] вместо ActiveStageOf — тест красный ("prod" ≠ "").
+    [Theory]
+    [InlineData(FeatureStates.NotStarted)]
+    [InlineData(FeatureStates.Idle)]
+    [InlineData(FeatureStates.Waiting)]
+    [InlineData(FeatureStates.Stopped)]
+    public void Note_ГолосНаСостоянииБезИдущихЗадачейНеСразуУстаревший(string state)
+    {
+        var run = RunWithVoice("prod", state, null, "prod", state);
+
+        var brief = FeatureBrief.Build(run, null, null, NOW);
+
+        brief.Now.Should().BeNull("фикстура: ни идущих задач, ни тревоги");
+        brief.Note!.StageAtWrite.Should().Be("prod");
+        brief.Note.Stale.Should().BeFalse($"голос записан на активной стадии состояния {state}");
     }
 
     // ─── updatedAt (B6, дефект f2da9354): время последнего записанного события состояния, не момента ответа ─

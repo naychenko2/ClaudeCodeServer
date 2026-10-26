@@ -473,13 +473,14 @@ public sealed class TasksToolset(
                 }
                 // Голос пишется после основного Update: один вызов = один итоговый экземпляр,
                 // broadcast уходит уже с голосом. At/StageAtWrite/StateAtWrite штампует сервер из
-                // проекции (агент их не передаёт), как в REST PUT note; пустой текст снимает голос
-                // внутри SetFeatureNote.
+                // проекции (агент их не передаёт), как в REST PUT note: стадия — активная стадия
+                // конвейера (FeatureBrief.ActiveStageOf, та же база, что у StaleOf — B14 возврат
+                // FIN); пустой текст снимает голос внутри SetFeatureNote.
                 if (featureNoteArg is not null)
                 {
                     var run = features.Project(existing.Id, context.OwnerId);
                     updated = tasks.SetFeatureNote(existing.Id, featureNoteArg, session.Id, byUser: false,
-                        run?.Now.FirstOrDefault()?.Stage ?? "", run?.State ?? "") ?? updated;
+                        run is null ? "" : FeatureBrief.ActiveStageOf(run), run?.State ?? "") ?? updated;
                 }
                 await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("updated", updated));
 

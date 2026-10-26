@@ -461,8 +461,12 @@ Html не разбираем вовсе: прототип идёт в «Файл
 ([TaskManager.cs:1442-1456](../../backend/ClaudeHomeServer.Tasks/TaskManager.cs)):
 обрезка и усечение на сервере, пустой текст снимает голос (:1450-1452). `At` — момент
 записи, `StageAtWrite`/`StateAtWrite` штампует сервер из проекции, агент и клиент их не
-передают ([TasksController.cs:1027-1028](../../backend/ClaudeHomeServer/Controllers/TasksController.cs),
-[TasksToolset.cs:464-468](../../backend/ClaudeHomeServer/Services/Mcp/Http/TasksToolset.cs)).
+передают. Стадия — активная стадия конвейера по той же функции `FeatureBrief.ActiveStageOf`,
+с которой сверяет `StaleOf` (единая база штампа и проверки; `Now[0]` для штампа не используется:
+на «ждёт вас» / паузе / idle он пуст, и голос там был бы устаревшим с первой секунды —
+возврат FIN 74722f13) (FeatureBrief.cs:165-172,
+[TasksController.cs:1029-1030](../../backend/ClaudeHomeServer/Controllers/TasksController.cs),
+[TasksToolset.cs:482-483](../../backend/ClaudeHomeServer/Services/Mcp/Http/TasksToolset.cs)).
 
 **Кто вправе.** Человек — `PUT features/{featureId}/note`, тело только `text`; сервисный
 токен — 403 (:1010-1014), не-эпик — 400 (:1022-1023). Агент — параметр `featureNote` у

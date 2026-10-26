@@ -13,7 +13,7 @@ import { api } from './api';
 import { setAllFlags } from './featureFlags';
 import type { Task } from '../types';
 import type { FeaturePage } from '../types/featureIndex';
-import type { FeatureBrief } from './featurePage';
+import { BRIEF } from './featurePage.contract';
 
 // showToast диспатчит window-событие, в node-окружении его нет — no-op-мок на случай
 // транзитного импорта (сам стор фичи тост больше не шлёт).
@@ -274,26 +274,11 @@ describe('смена fid: устаревший запрос отменяется
 
 // ── 5. brief (волна 6, F1): поле опционально — ответ с brief и без него ───────────
 //
-// Тайп-сторож: штатный `tsc -b` тесты НЕ компилирует (tsconfig.app.json исключает
-// *.test.ts), поэтому литералы ниже — запись контракта, а не сторож пайплайна.
-// Проверено временным tsconfig, включающим этот файл: переименование поля в
-// FeatureBrief красит литерал BRIEF (TS2561), а сделать brief обязательным —
-// тип-зонд `undefined extends FeaturePage['brief']` (TS2322); с закоммиченными
-// типами оба чистые. Рантайм: стор пропускает ответ как есть — с brief и без него.
-
-// Полный brief по контракту разреза п. 6 (полем в поле).
-const BRIEF: FeatureBrief = {
-  kind: 'running',
-  now: { stage: 'review', taskId: 't-rev', personaId: 'p-gleb', stepRef: 'Ш3', lane: 'back', since: '2026-10-25T10:00:00Z' },
-  reason: null,
-  done: { stepsAccepted: 2, stepsTotal: 5, loops: 1, planState: 'cut' },
-  next: [{ stage: 'qa', personaId: 'p-vera' }, { stage: 'final', personaId: null }],
-  elapsedMinutes: 120,
-  estimate: { remainingMinutes: 90, p25: 60, p75: 140, source: 'history', sampleSize: 4 },
-  queue: { position: 2, total: 3 },
-  note: { text: 'Идём по плану', at: '2026-10-25T09:00:00Z', byPersonaId: 'p-sofya', byUser: false, stageAtWrite: 'prod', stale: false },
-  computedAt: '2026-10-25T10:05:00Z',
-};
+// Контрактный литерал BRIEF — в featurePage.contract.ts: тот файл НЕ исключён из
+// сборки (tsconfig.app.json исключает только *.test.ts), поэтому переименование поля
+// в FeatureBrief красит `tsc -b` (TS2561), а сделать brief обязательным — проверка
+// опциональности в том же файле (TS2322). Здесь остаётся рантайм: стор пропускает
+// ответ как есть — с brief и без него.
 
 describe('brief: ответ страницы с brief и без него', () => {
   let getFeatureSpy: ReturnType<typeof vi.spyOn>;

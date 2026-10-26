@@ -24,7 +24,7 @@ import {
   FeatureLanePopover, FeatureLanePreview, FeatureLaneSheet, LANE_TIP_ID,
   type LaneIntervalDetails, type LaneTaskLine,
 } from './FeatureLanePopover';
-import { buildStageLanes, axisFrac, type StageLane, type LaneAxis } from './FeatureLaneModel';
+import { buildStageLanes, axisFrac, planCounterText, type StageLane, type LaneAxis } from './FeatureLaneModel';
 import { formatDuration, formatDateTime } from './FeatureStatsBits';
 import type { FeatureStats } from '../../types/featureStats';
 import { FeatureProdCardsView } from './FeatureProdCardsView';
@@ -180,12 +180,11 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
 
   // Счётчик колонки имени: у «Производства» — план шагов «N/M» (решение m1: счётчик
   // плана только у prod); у прочих стадий плана нет — показываем факт (число задач).
+  // Текст — из planCounterText() модели, тот же, что печатает сводка «Статистики»:
+  // N = принято, M = всего; своей арифметики здесь нет (GC-F12R).
   let counter: string | null = null;
-  if (hasLane && stage.key === 'prod' && lane!.plan) {
-    const p = lane!.plan;
-    const total = p.done + p.inWork + p.ahead;
-    const made = p.done + p.inWork;
-    if (total > 0) counter = `${made}/${total}`;
+  if (hasLane && stage.key === 'prod') {
+    counter = planCounterText(lane);
   } else if (stage.executors.length > 0) {
     counter = `${stage.executors.length} задач`;
   }

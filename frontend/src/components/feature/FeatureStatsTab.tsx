@@ -12,7 +12,7 @@ import {
   buildTimelineModel, formatDuration, stageLabel,
   type TimelineModel,
 } from './FeatureStatsBits';
-import { buildStageLanes, type StageLane } from './FeatureLaneModel';
+import { buildStageLanes, planCounterText } from './FeatureLaneModel';
 import { personaGroupLabel, modelGroupLabel, roleGroupLabel, formatTokens } from './FeatureStatsFormat';
 import { plural } from '../../lib/plural';
 import { usePersonas } from '../../lib/personas';
@@ -89,8 +89,8 @@ function AccuracyBadges({ source, truncated }: { source: 'approx' | 'journal'; t
 // Счётчик плана «N/M» — ТОЛЬКО у «Производства»: там он значит «N шагов плана принято
 // из M». У прочих стадий плана нет, а `lanes[key].plan` у них — либо null, либо тот же
 // агрегат, что у prod: показывать его второй раз значило бы дублировать одну и ту же
-// цифру в двух строках сводки (решение m1 ревью GC-R-F2). Значения — из
-// `buildStageLanes()`, своей арифметики нет.
+// цифру в двух строках сводки (решение m1 ревью GC-R-F2). Текст счётчика — из
+// `planCounterText()` модели (тот же, что печатает «Хронология»), своей арифметики нет (GC-F12R).
 
 // Слово состояния этапа: готов · идёт · стоит · впереди · этапа не было.
 function stageStateWord(stage: FeatureStage): string {
@@ -107,16 +107,6 @@ function stageStateWord(stage: FeatureStage): string {
 function stageStateColor(stage: FeatureStage): string {
   if (stage.state === 'active') return stage.tone === 'stopped' ? C.dangerText : C.textHeading;
   return C.textMuted;
-}
-
-// «N/M» плана: N — принято, M — всего шагов плана (сложение трёх корзин LanePlan —
-// ровно знаменатель плана). null — считать нечего (плана нет).
-function planCounter(lane: StageLane | undefined): string | null {
-  const plan = lane?.plan;
-  if (!plan) return null;
-  const total = plan.done + plan.inWork + plan.ahead;
-  if (total <= 0) return null;
-  return `${plan.done}/${total}`;
 }
 
 // Сводка этапов: карточка со строками + ссылка на «Хронологию».
@@ -137,7 +127,7 @@ function StageSummary({ run, stats, isMobile }: { run: FeatureRun; stats: Featur
         }}
       >
         {stages.map(stage => {
-          const plan = stage.key === 'prod' ? planCounter(lanes[stage.key]) : null;
+          const plan = stage.key === 'prod' ? planCounterText(lanes[stage.key]) : null;
           return (
             <div
               key={stage.key}

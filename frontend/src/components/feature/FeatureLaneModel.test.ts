@@ -16,7 +16,7 @@
 // по стадии (stage.key === waitKey) → краснеет «wait по задаче, а не по стадии».
 
 import { describe, it, expect } from 'vitest';
-import { buildStageLanes, axisFrac, asStageKey, type StageLanesModel, type StageLane } from './FeatureLaneModel';
+import { buildStageLanes, axisFrac, asStageKey, planCounterText, type StageLanesModel, type StageLane } from './FeatureLaneModel';
 import type { StepProgress } from '../../lib/featureProgress';
 import type { FeatureRun, FeatureStage, FeatureStageExecutor, StageKey, StageState } from '../../types/featureRun';
 import type { FeatureStats, FeatureTimeline, StageInterval } from '../../types/featureStats';
@@ -480,6 +480,28 @@ describe('план: prod/review — из stepProgress; прочие — из exe
     expect(laneOf(model, 'qa').plan).toEqual({ done: 0, inWork: 3, ahead: 0 });
     // Задач этапа нет — считать нечего.
     expect(laneOf(model, 'merge').plan).toBeNull();
+  });
+});
+
+// === Текст счётчика «N/M» (GC-F12R): один на обе вкладки ===
+
+describe('planCounterText: текст счётчика «N/M» (GC-F12R)', () => {
+  const sp: StepProgress = {
+    planState: 'cut', total: 11, accepted: 8, review: 1, work: 1, notCreated: 1, withdrawn: 0, unlinkedReworks: 0,
+  };
+
+  // Мутация: вернуть made = done + inWork → «10/11» вместо «8/11», тест краснеет.
+  it('N = принято (plan.done), M = сумма корзин; «в работе» не входит в N', () => {
+    const model = buildStageLanes(mkRun({ stages: [mkStage('prod', 'active')], stepProgress: sp }), mkStats(), NOW);
+    expect(planCounterText(laneOf(model, 'prod'))).toBe('8/11');
+  });
+
+  it('нет дорожки / нет плана / пустой знаменатель — null', () => {
+    expect(planCounterText(undefined)).toBeNull();
+    expect(planCounterText(null)).toBeNull();
+    // stepProgress нет → план prod = null → текста нет.
+    const noSp = buildStageLanes(mkRun({ stages: [mkStage('prod', 'active')] }), mkStats(), NOW);
+    expect(planCounterText(laneOf(noSp, 'prod'))).toBeNull();
   });
 });
 

@@ -201,6 +201,19 @@ function planFromExecutors(executors: FeatureStageExecutor[]): LanePlan | null {
   return plan;
 }
 
+// Текст счётчика плана «N/M» — ОДИН на обе вкладки (GC-F12R): N = принято (plan.done),
+// M = всего (сумма трёх корзин). «N/M» читается как «сделано N из M»: шаг в работе ещё
+// не сделан — «в работе» отдельный признак, не часть счётчика. null — считать нечего
+// (плана нет / пустой знаменатель). Рендеры (сводка «Статистики» и строка «Хронологии»)
+// берут текст отсюда, своей арифметики не заводят.
+export function planCounterText(lane: StageLane | null | undefined): string | null {
+  const plan = lane?.plan;
+  if (!plan) return null;
+  const total = plan.done + plan.inWork + plan.ahead;
+  if (total <= 0) return null;
+  return `${plan.done}/${total}`;
+}
+
 // Модель дорожек. `now` — текущее время (мс) для верха зоны «стоит»; тесты дают
 // фиксированное, в работе — Date.now() на момент построения.
 export function buildStageLanes(run: FeatureRun, stats: FeatureStats | null, now: number): StageLanesModel {

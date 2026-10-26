@@ -18,6 +18,7 @@ import { act } from 'react';
 import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeatureStatsTab, MORE_OPEN_KEY } from './FeatureStatsTab';
+import { FeatureTimelineTab } from './FeatureTimelineTab';
 import {
   formatDuration, formatClock, formatDateTime, kindLabel, kindBackground,
   buildTimelineModel, nowFraction, nowCompressedFraction, PAUSE_BREAK_MIN,
@@ -28,7 +29,7 @@ import {
 import { clearFeatureStageFocus, setFeaturePageTab, __test } from '../../lib/featurePage';
 import { getBackNav } from '../../lib/featureBackNav';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
-import type { FeatureStats, FeatureTimeline } from '../../types/featureStats';
+import type { FeatureStats, FeatureTimeline, StageInterval } from '../../types/featureStats';
 import type { FeatureRun, FeatureStage, StageKey, StageState } from '../../types/featureRun';
 import { C, SP } from '../../lib/design';
 
@@ -592,6 +593,18 @@ function mkGanttStats(): FeatureStats {
   };
 }
 
+// Тот же stats, но с журналом интервалов (intervalsByStage): «Хронология» при нём
+// рисует дорожку и её счётчик (не approx) — нужен для сравнения двух вкладок (GC-F12R).
+function mkLanedStats(): FeatureStats {
+  const s = mkGanttStats();
+  const prodInterval: StageInterval = {
+    from: '2026-10-20T10:05:00Z', to: '2026-10-20T14:15:00Z', minutes: 250,
+    live: false, lastOutcome: null, taskIds: ['t-prod'], turns: [],
+  };
+  s.timeline = { ...s.timeline, intervalsByStage: { prod: [prodInterval] } };
+  return s;
+}
+
 describe('FeatureStatsTab: сводка этапов (GC-F12)', () => {
   beforeEach(() => {
     mockOpenTask.calls = [];
@@ -657,6 +670,38 @@ describe('FeatureStatsTab: сводка этапов (GC-F12)', () => {
     for (const key of ['cut', 'design', 'plan', 'review', 'qa', 'final', 'merge']) {
       expect(findNodeByAttr(c, 'data-testid', `stats-stage-plan-${key}`), `у ${key} счётчика нет`).toBeNull();
     }
+  });
+
+  // === 3b. GC-F12R: тот же «N/M» на обеих вкладках ===
+  // Те же run и те же stats (с журналом интервалов — чтобы «Хронология» рисовала
+  // дорожку): строка сводки и строка дорожки печатают ОДИН счётчик. Разные числа
+  // («8/11» против «10/11») — дефект возврата GC-R-F12, этот тест его не пропускает.
+  it('«N/M» совпадает на обеих вкладках на тех же данных (тот же текст)', () => {
+    const run = mkSummaryRun();
+    const stats = mkLanedStats();
+    installFakeDom();
+    const { container: cs } = mount(createElement(FeatureStatsTab, { stats, run, isMobile: false }));
+    const statsCounter = textNodes(findNodeByAttr(cs, 'data-testid', 'stats-stage-plan-prod')!).join('');
+    const { container: ct } = mount(createElement(FeatureTimelineTab, { run, stats, isMobile: false }));
+    const stage = findNodeByAttr(ct, 'data-testid', 'timeline-stage-prod')!;
+    const tlNode = findNodeByAttr(stage as never, 'data-testid', 'timeline-stage-counter');
+    const tlCounter = tlNode ? textNodes(tlNode).join('') : '';
+    expect(statsCounter, 'сводка: N = принято').toBe('8/11');
+    expect(tlCounter, 'та же строка на дорожке').toBe(statsCounter);
+  });
+
+  // === 3c. GC-F12R: источник счётчика — модель, а не stepProgress сама по себе ===
+  // prod skipped: у модели плана нет (считать нечего), но stepProgress есть. Если сводка
+  // начнёт считать «N/M» прямо из run.stepProgress в обход buildStageLanes — здесь
+  // появится «8/11» и тест краснеет: значение берут только из lanes модели.
+  it('счётчик берётся из модели: skipped prod с stepProgress — счётчика нет', () => {
+    const base = mkSummaryRun();
+    const run: FeatureRun = {
+      ...base,
+      stages: base.stages!.map(s => s.key === 'prod' ? { ...s, state: 'skipped' as const } : s),
+    };
+    const c = renderSummary(run);
+    expect(findNodeByAttr(c, 'data-testid', 'stats-stage-plan-prod'), 'счётчика у skipped prod').toBeNull();
   });
 
   // === 4. Ссылка на «Хронологию» ===

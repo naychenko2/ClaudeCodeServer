@@ -1011,7 +1011,10 @@ describe('FeatureTimelineTab: дорожки и ось (GC-F5c)', () => {
   });
 
   // === 6. Счётчик: план «N/M» только у «Производства», у прочих — факт ===
-  it('счётчик плана «N/M» — только у prod; у ревью — факт (число задач)', () => {
+  // GC-F12R: N = принято (accepted), M = всего (total). Шаг в работе ещё не сделан —
+  // «N/M» читается как «сделано N из M»; текст несёт planCounterText() модели, та же
+  // строка, что печатает сводка «Статистики». Мутация: вернуть made=done+inWork → «2/4» краснеет.
+  it('счётчик плана «N/M» — только у prod, N = принято; у ревью — факт (число задач)', () => {
     const stages = fullStages();
     stages[3]!.executors = [mkExec({ taskId: 't-rev', status: 'running' })];
     const c = renderTabWithStats(mkRun(stages, {
@@ -1023,7 +1026,8 @@ describe('FeatureTimelineTab: дорожки и ось (GC-F5c)', () => {
       const counter = findNodeByAttr(stage as never, 'data-testid', 'timeline-stage-counter');
       counters[key] = counter ? textNodes(counter).join('') : '';
     }
-    expect(counters['prod'], 'у prod — план шагов').toBe('4/4');
+    // accepted=2, work=1, review=1 → «2/4», а не «4/4»: в работе — не «сделано».
+    expect(counters['prod'], 'у prod — план шагов, N = принято').toBe('2/4');
     expect(counters['review'], 'у ревью — факт').toBe('1 задач');
   });
 });

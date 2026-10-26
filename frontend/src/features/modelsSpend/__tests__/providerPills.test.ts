@@ -15,8 +15,8 @@ describe('providerPricePills — пилюля цены карточки пров
   it('класс free — ровно одна пилюля «бесплатный», никакой «дёшево»', () => {
     const pills = providerPricePills('glm', 'free');
     expect(pills.filter(p => p.label === 'бесплатный')).toHaveLength(1);
-    expect(pills.some(p => p.label === 'дёшево')).toBe(false);
-    expect(pills.some(p => p.label === 'дорого')).toBe(false);
+    expect(pills.some(p => p.label === 'дешёвый')).toBe(false);
+    expect(pills.some(p => p.label === 'дорогой')).toBe(false);
   });
 
   // Класс с бэка решает: «cheap» у ключа freellm* означает, что провайдер платный.

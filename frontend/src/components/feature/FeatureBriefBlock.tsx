@@ -16,7 +16,7 @@
 // Дальше · Оценка» и закрытость ленты — закреплены тестом. Одно «сейчас» на ответ
 // (R-F8): относительные строки считаются от него, а не от часов в каждом рендере.
 
-import { useMemo } from 'react';
+import { useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { C, R, SP, FS, FONT } from '../../lib/design';
 import { Button } from '../ui/Button';
@@ -281,8 +281,14 @@ export function FeatureBriefBlock({
   // Одно «сейчас» на ответ (R-F8): относительные строки («ждёт N», «обновлено N назад»,
   // время голоса) считаются от одного момента, привязанного к данным, а не от часов в
   // каждом рендере: перерисовка тех же данных не сдвигает текст, новый ответ — новое «сейчас».
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const nowMs = useMemo(() => Date.now(), [brief, stats, mergedAt]);
+  // «Сейчас» — состояние, а не вызов в рендере (R-F8, react-hooks/purity): тот же
+  // проверенный в проекте паттерн, что usePromptCache/useNow — начальное значение при
+  // монтировании, сверка часов на смену данных — в effect.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  // deps — данные ответа, а не аргументы эффекта: смена данных = новое «сейчас», та же
+  // ссылка на данные = тот же момент.
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- часы живут вне React (тот же приём, что usePromptCache:22)
+  useEffect(() => { setNowMs(Date.now()); }, [brief, stats, mergedAt]);
   if (loading) return <BriefSkeleton isMobile={isMobile} />;
   // «summary и stats оба null — блока нет» (макет §3).
   if (!brief && !stats) return null;

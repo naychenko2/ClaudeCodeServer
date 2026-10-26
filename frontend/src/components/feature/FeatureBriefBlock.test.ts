@@ -210,11 +210,20 @@ describe('«Сделано» и «Оценка»', () => {
     expect(textNodes(findNodeByAttr(c, 'data-testid', 'brief-done-line')!).join('')).toBe('План готов · 0 из 4 шагов');
   });
 
-  it('queued — «Оценка» карточки: строки модели («Оценка — после старта», «в очереди 25 мин»)', () => {
-    const b = brief({ kind: 'queued', elapsedMinutes: 25 });
+  it('queued — «Оценка» карточки: строки модели («Оценка — после старта», «в очереди 25 мин») по полю queueWaitMinutes (R-F8)', () => {
+    const b = brief({ kind: 'queued', elapsedMinutes: 0, queueWaitMinutes: 25 });
     const { c } = render({ brief: b });
     expect(textNodes(findNodeByAttr(c, 'data-testid', 'brief-estimate-main')!).join('')).toBe(briefEstimateText(b).main);
     expect(textNodes(findNodeByAttr(c, 'data-testid', 'brief-estimate-fact')!).join('')).toBe(briefEstimateText(b).fact);
+  });
+
+  it('queued только с elapsedMinutes — строки «в очереди» в карточке нет: число из работы не используется (R-F8, дефект «в очереди 0 мин»)', () => {
+    const { c } = render({ brief: brief({ kind: 'queued', elapsedMinutes: 0 }) });
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'brief-estimate-main')!).join('')).toBe('Оценка — после старта');
+    expect(findNodeByAttr(c, 'data-testid', 'brief-estimate-fact'), 'строки факта нет').toBeNull();
+    // nonzero elapsed (иной источник данных) тоже не становится «числом в очереди».
+    const { c: c2 } = render({ brief: brief({ kind: 'queued', elapsedMinutes: 25 }) });
+    expect(textNodes(findNodeByAttr(c2, 'data-testid', 'brief-facts')!).join(' ')).not.toContain('в очереди 25');
   });
 
   it('«Оценка»: «≈ … осталось» + «идёт N» из elapsedMinutes (макет run)', () => {

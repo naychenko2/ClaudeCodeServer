@@ -107,6 +107,10 @@ export interface FeatureBrief {
   done: FeatureBriefDone;
   next: FeatureBriefNext[];
   elapsedMinutes: number | null;
+  // Время в очереди (R-F8): аддитивное поле контракта (бэк-шаг B8, ещё не реализован) —
+  // старых ответов оно не несёт. «в очереди N» выводится ТОЛЬКО по нему: elapsedMinutes —
+  // объединение work-интервалов (бэк: WorkWallMinutes), не время в очереди.
+  queueWaitMinutes?: number | null;
   estimate: FeatureBriefEstimate | null;
   queue: FeatureBriefQueue | null;
   note: FeatureBriefNote | null;

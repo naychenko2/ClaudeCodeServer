@@ -254,8 +254,8 @@ describe('Оценка', () => {
     }
   });
 
-  it('queued — «Оценка — после старта» (приглушённая) + «в очереди 25 мин» (макет queue, R-F2→F5)', () => {
-    const v = briefEstimateText(brief({ kind: 'queued', elapsedMinutes: 25 }));
+  it('queued — «Оценка — после старта» (приглушённая) + «в очереди 25 мин» только по полю queueWaitMinutes (макет queue, R-F8)', () => {
+    const v = briefEstimateText(brief({ kind: 'queued', queueWaitMinutes: 25 }));
     expect(v).toEqual({ header: 'Оценка', main: 'Оценка — после старта', mainMuted: true, fact: 'в очереди 25 мин' });
   });
 
@@ -268,8 +268,12 @@ describe('Оценка', () => {
     expect(v.main).not.toMatch(/≈/);
   });
 
-  it('queued без elapsed — факта «в очереди» нет', () => {
+  it('queued без queueWaitMinutes — факта «в очереди» нет, числа из elapsedMinutes никогда (R-F8, дефект «в очереди 0 мин»)', () => {
     expect(briefEstimateText(brief({ kind: 'queued' })).fact).toBeNull();
+    // work-интервалов у queued нет → WorkWallMinutes = 0: «в очереди 0 мин» быть не может.
+    expect(briefEstimateText(brief({ kind: 'queued', elapsedMinutes: 0 })).fact).toBeNull();
+    // любое другое число из elapsed (иной источник данных) в строку очереди не превращается.
+    expect(briefEstimateText(brief({ kind: 'queued', elapsedMinutes: 25 })).fact).toBeNull();
   });
 
   it('estimate с нулевым остатком — «≈ 0» не печатается', () => {

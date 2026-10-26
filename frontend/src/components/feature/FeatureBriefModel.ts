@@ -230,7 +230,9 @@ export interface BriefEstimateView {
   // «Оценка — после старта» (C.textMuted)).
   mainMuted: boolean;
   // Второстепенный факт: «идёт N» по готовому elapsedMinutes; для queued — «в очереди N»
-  // (макет). Разбивка «из них ждёт вас / пауза» — вне контракта, не показываем — решение плана.
+  // (макет) только по отдельному полю queueWaitMinutes (R-F8): у queued нет work-интервалов,
+  // число из elapsedMinutes для него всегда 0. Разбивка «из них ждёт вас / пауза» — вне
+  // контракта, не показываем — решение плана.
   fact: string | null;
 }
 
@@ -247,8 +249,12 @@ export function briefEstimateText(brief: FeatureBrief): BriefEstimateView {
   if (brief.kind === 'queued') {
     // Для очереди оценки нет не от нехватки данных, а потому что фича не началась
     // (решение Софьи, R-F2→F5): строка — обещание, не значение (макет: без «осталось»,
-    // приглушённая); факт — «в очереди N» по elapsedMinutes, а не «идёт N».
-    return { header: 'Оценка', main: 'Оценка — после старта', mainMuted: true, fact: elapsed ? `в очереди ${elapsed}` : null };
+    // приглушённая). Факт «в очереди N» — только по отдельному полю контракта
+    // queueWaitMinutes (бэк-шаг B8; R-F8): elapsedMinutes — объединение work-интервалов
+    // (бэк: timeline.Totals.WorkWallMinutes), а у queued фичи их нет — число из него
+    // всегда 0 и для очереди не используется никогда.
+    const qw = brief.queueWaitMinutes;
+    return { header: 'Оценка', main: 'Оценка — после старта', mainMuted: true, fact: qw != null ? `в очереди ${formatDuration(qw)}` : null };
   }
 
   const est = brief.estimate;

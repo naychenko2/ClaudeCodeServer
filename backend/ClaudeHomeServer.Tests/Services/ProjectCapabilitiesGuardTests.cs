@@ -53,9 +53,10 @@ public class ProjectCapabilitiesGuardTests
         // LLM-провайдера для классификации расхода (Spend), не локальность проекта.
         ["backend/ClaudeHomeServer.Llm/LlmModelResolverAdapter.cs"] = (2, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/OneShotClaudeRunner.cs"] = (2, "LLM-провайдер"),
-        // +1 (5) на ветке local-model-stats: UseServerGateway спрашивает provider.IsLocal
-        // (локальный LLM-провайдер), не локальность проекта.
-        ["backend/ClaudeHomeServer.Llm/Claude/ClaudeSession.cs"] = (5, "LLM-провайдер"),
+        // UseServerGateway спрашивает provider.IsLocal (локальный LLM-провайдер), не локальность
+        // проекта; гейт допуска ходов к локали (B1b) переехал в FallbackLlmSessionAdapter, из
+        // ClaudeSession ушли два прежних вхождения — осталось 3.
+        ["backend/ClaudeHomeServer.Llm/Claude/ClaudeSession.cs"] = (3, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/FallbackLlmSessionAdapter.cs"] = (2, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/Gateway/UpstreamSelector.cs"] = (1, "LLM-провайдер"),
         // Шлюз: наблюдатель метрик создаётся, когда маршрут — локальный LLM-провайдер

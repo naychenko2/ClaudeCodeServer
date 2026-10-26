@@ -9,6 +9,9 @@ namespace ClaudeHomeServer.Tasks.Tests;
 //
 // Мутации (проверены прогоном, см. отчёт задачи):
 //  • убрать строку из FeatureBrief.KindByState — тест таблицы краснеет;
+//  • Б-1.1: убрать расщепление по run.Closed в KindOf — «МержРасщепляется» красный (Closed=true
+//    даёт "merged" вместо "closed"); убрать merged из EstimateOf — «НетУЗакрытойФичи» красный
+//    (оценка появляется у смерженной с открытым эпиком);
 //  • считать done своим счётом (StepProgress.Accepted вместо run.StepsAccepted) — тест «done/elapsed» красный;
 //  • брать ElapsedMinutes вместо WorkWallMinutes — тот же тест красный;
 //  • убрать Take(MaxNext) — тест лимита красный; убрать фильтр pending — тест пропусков красный;
@@ -36,6 +39,7 @@ public class FeatureBriefTests
 
     // Ожидаемая таблица: ровно одна строка на каждую константу FeatureStates.
     // paused без Hold.Reason = queue даёт paused; со строкой queue — queued (отдельный тест).
+    // merged без Closed (эпик открыт) даёт merged; с Closed=true — closed (отдельный тест).
     private static readonly Dictionary<string, string> ExpectedKinds = new()
     {
         [FeatureStates.Running] = "running",
@@ -47,7 +51,7 @@ public class FeatureBriefTests
         [FeatureStates.Draft] = "draft",
         [FeatureStates.NotStarted] = "idle",
         [FeatureStates.Idle] = "idle",
-        [FeatureStates.Merged] = "closed",
+        [FeatureStates.Merged] = "merged",
         [FeatureStates.Closed] = "closed",
     };
 
@@ -74,11 +78,12 @@ public class FeatureBriefTests
     // hold — удержание для веток paused/queued (init-only поле, только через инициализатор);
     // planState — состояние плана для тестов веток «оценки нет» (по умолчанию нарезанный «cut»).
     private static FeatureRun RunWithPlan(string state, int work, int notCreated, int review,
-        FeatureHold? hold = null, string planState = "cut") => new()
+        FeatureHold? hold = null, string planState = "cut", bool closed = false) => new()
     {
         FeatureId = "ep",
         State = state,
         Hold = hold,
+        Closed = closed,
         StepProgress = new FeatureStepProgress
         {
             PlanState = planState, Total = work + notCreated + review,
@@ -141,6 +146,21 @@ public class FeatureBriefTests
         FeatureBrief.Build(RunOf(FeatureStates.Paused, queue), null, null, NOW).Kind.Should().Be("queued");
         // queue вне состояния paused (например, ошибочные данные) категорию не меняет.
         FeatureBrief.Build(RunOf(FeatureStates.Running, queue), null, null, NOW).Kind.Should().Be("running");
+    }
+
+    // merged расщепляется по закрытости эпика (run.Closed, FeatureRun.cs:95-98) — то же расщепление,
+    // что FeatureProjector.Bucket: смерженная с открытым эпиком остаётся merged (она среди открытых),
+    // смерженная с эпиком Done — closed. Мутация: убрать расщепление по run.Closed в KindOf —
+    // второй случай красный ("merged").
+    [Fact]
+    public void Kind_МержРасщепляетсяПоЗакрытостиЭпика()
+    {
+        FeatureBrief.Build(RunOf(FeatureStates.Merged), null, null, NOW).Kind.Should().Be("merged",
+            "смержена с открытым эпиком (Closed=false) — фича не закрыта");
+
+        var closedEpic = new FeatureRun { FeatureId = "ep", State = FeatureStates.Merged, Closed = true };
+        FeatureBrief.Build(closedEpic, null, null, NOW).Kind.Should().Be("closed",
+            "смержена с эпиком Done (Closed=true) — закрыта");
     }
 
     [Fact]
@@ -474,8 +494,14 @@ public class FeatureBriefTests
     {
         var typical = TypicalOf(10, 8, 12, 30, 20, 40, 5);
 
-        FeatureBrief.Build(RunWithPlan(FeatureStates.Merged, 1, 1, 1), null, typical, NOW)
-            .Estimate.Should().BeNull("closed по мержу — вместо оценки итог Summary");
+        // kind=merged (смержена с открытым эпиком) — оценки нет: фича уже смержена,
+        // вместо «осталось» — итог Summary.
+        var mergedOpen = FeatureBrief.Build(RunWithPlan(FeatureStates.Merged, 1, 1, 1), null, typical, NOW);
+        mergedOpen.Kind.Should().Be(FeatureBrief.Kinds.Merged);
+        mergedOpen.Estimate.Should().BeNull("merged с открытым эпиком — вместо оценки итог Summary");
+
+        FeatureBrief.Build(RunWithPlan(FeatureStates.Merged, 1, 1, 1, closed: true), null, typical, NOW)
+            .Estimate.Should().BeNull("merged с эпиком Done — категория closed");
         FeatureBrief.Build(RunWithPlan(FeatureStates.Closed, 1, 1, 1), null, typical, NOW)
             .Estimate.Should().BeNull("closed вручную — та же категория");
     }

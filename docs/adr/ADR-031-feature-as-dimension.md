@@ -392,8 +392,12 @@ Html не разбираем вовсе: прототип идёт в «Файл
 | `updatedAt` | «обновлено N мин назад» | `UpdatedAtOf` (:287-306) — см. §2 |
 | `computedAt` | свежесть снимка | момент этого ответа |
 
-Таблица `kind` — одна точка правды: одиннадцать `FeatureStates` → восемь категорий,
-`paused` расщепляется по причине удержания (`queue` → `queued`, иначе `paused`) (:143-145).
+Таблица `kind` — одна точка правды: одиннадцать `FeatureStates` → девять категорий,
+`paused` расщепляется по причине удержания (`queue` → `queued`, иначе `paused`) (:143-145),
+`merged` — по закрытости эпика (`run.Closed` → `closed`, иначе `merged`, :147-155): смерженная
+с открытым эпиком остаётся `merged` (среди открытых, как в `FeatureProjector.Bucket`,
+[FeatureProjector.cs:1764](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureProjector.cs)),
+смерженная с эпиком `Done` — `closed`; `kind` и `bucket` не расходятся.
 Сторож — тест-таблица: новое `FeatureStates` без строки в таблице даёт красный тест
 (перебор констант рефлексией, [FeatureBriefTests.cs:109](../../backend/ClaudeHomeServer.Tasks.Tests/FeatureBriefTests.cs)).
 Фронт состояния сам не маппит.
@@ -447,7 +451,8 @@ Html не разбираем вовсе: прототип идёт в «Файл
 отдельного слова (п. 8 разреза).
 
 `estimate = null` — честное «оценки пока нет», случаи (FeatureBrief.cs:218-223):
-состояние `queued`/`paused`/`closed`/`draft` (часы стоят или фича не идёт); план не нарезан
+состояние `queued`/`paused`/`closed`/`draft`/`merged` (часы стоят, фича не идёт или уже
+смержена — вместо «осталось» итог `Summary`); план не нарезан
 или нарезан частично (`PlanState = pending`/`partial`: при partial `NotCreated` считает
 только шаги нарезанных планов — обещать число по неполному плану хуже, чем не обещать
 ничего; сравнение только с константами `FeatureStepAccounting.Plan*`, FeatureRun.cs:404);

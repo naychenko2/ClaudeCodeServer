@@ -947,7 +947,17 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         if (req.WorktreeBranch is not null) task.WorktreeBranch = Trimmed(req.WorktreeBranch);
         if (req.ExecutorLaunchedBySessionId is not null) task.ExecutorLaunchedBySessionId = Trimmed(req.ExecutorLaunchedBySessionId);
         if (req.ExecutorLaunchedByPersonaId is not null) task.ExecutorLaunchedByPersonaId = Trimmed(req.ExecutorLaunchedByPersonaId);
-        if (req.ResultMarkdown is not null) task.ResultMarkdown = req.ResultMarkdown;
+        // Повторный доклад по уже Done-карточке (расследование 88444536, п.2): второй tasks_complete
+        // не должен молча затирать первый итог — новый текст дописывается отдельным датированным
+        // блоком (образец — AppendExecutorNote для снятой человеком задачи). Человеческий путь
+        // остаётся прямой перезаписью (что вписано в форме UI, то и сохранено); "" — намеренная
+        // очистка, как у прочих строковых полей. Путь DroppedByHumanAt исключён: его дописывание
+        // уже выполнено выше (подмена req).
+        if (req.ResultMarkdown is not null)
+            task.ResultMarkdown = wasDone && task.Status == TaskItemStatus.Done && isAgentCall
+                && task.DroppedByHumanAt is null && !string.IsNullOrWhiteSpace(req.ResultMarkdown)
+                ? AppendCompletionSupplement(task.ResultMarkdown, req.ResultMarkdown)
+                : req.ResultMarkdown;
         if (req.LinkedFiles is not null) task.LinkedFiles = req.LinkedFiles;
         if (req.Labels is not null) task.Labels = req.Labels;
         if (req.Order is not null) task.Order = req.Order.Value;
@@ -1007,7 +1017,51 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             // merged/closed → 409). Поле гасится здесь же — в той же функции перехода в Done.
             if (task.Role == TaskRoles.Feature) task.Hold = null;
         }
-        else if (task.Status != TaskItemStatus.Done) task.CompletedAt = null;
+        else if (task.Status != TaskItemStatus.Done)
+        {
+            task.CompletedAt = null;
+            // Переоткрытие (было Done → стало не-Done): доставленный доклад и результат того хода —
+            // атрибуты закрытого цикла. Без их сброса карточка «мёртвая»: ExecuteAsync отказывает
+            // перезапуск («Доклад по этой задаче уже доставлен», TaskExecutionService.cs:264), а
+            // ClassifyStall возвращает None на первой строке (TaskExecutionService.cs:1892) — карточка
+            // открыта, но ни исполняется, ни окликается (расследование 88444536). Переоткрытие для
+            // доработки штатно: не запрещаем, снимаем следы цикла (образец здесь же — CompletedAt,
+            // Verification ниже).
+            if (wasDone)
+            {
+                task.CompletionDelivered = false;
+                task.ClaudeResult = null;
+                // Отказ ревью b6c2bca9 (major 1): отметка запуска сбрасывается вместе с результатом —
+                // пара принадлежит закрытому циклу целиком. ClaudeStartedAt без ClaudeResult читается
+                // тремя независимыми потребителями как «ход идёт сейчас»: IsTurnRunning
+                // (FeatureProjector.cs:1123) и ExecutorStatus «running», IsAwaitingResult
+                // (TaskExecutionService.cs:2149), claudeRunning во фронтенде. Переоткрытая карточка
+                // оказывалась «идущей»: проектор показывал шаг running в «Сейчас», UI — «AI работает»
+                // вместо кнопки «Выполнить», пауза фичи (SetHold, :1406) вешала ложную пометку
+                // «остановлен по паузе», сторож застоя был выключен. До нового MarkClaudeStarted
+                // карточка честно «не запущена» — ни один потребитель не читает её как идущий ход.
+                task.ClaudeStartedAt = null;
+                // Та же природа — срок закрытого цикла. С сброшенным ClaudeStartedAt планировщик
+                // (ShouldAutoStart, TaskSchedulerService.cs:74: требует ClaudeStartedAt == null и
+                // срок наступил) видит обычную «Todo + Claude» карточку с живым сроком и в окне 24 ч
+                // автозапускал бы исполнителя на переоткрытой задаче без команды человека (петля
+                // доработки: закрыли → переоткрыли → само переисполнилось без указаний к доработке).
+                // Поэтому при переоткрытии снимается любой срок закрытого цикла: дата ни с чем не
+                // сверяется — «просроченность» оценивается в таймзоне пользователя, а она есть
+                // только у планировщика (TaskDueCalculator.ResolveTimeZone, TaskSchedulerService.cs:46),
+                // в TaskManager её нет. Срок нового цикла задаётся явно в том же запросе: человек
+                // ставит его заново (автозапуск по нему — его команда) или запускает исполнителя явно
+                // (tasks_run_executor и кнопка «Выполнить» срока не требуют). Напоминание
+                // (ReminderSentAt) этим блоком отдельно не сбрасывается (Н-2): его переоружение —
+                // общее правило выше (:925, при явной смене срока в запросе), а снятие здесь
+                // происходит после той проверки.
+                if (req.DueDate is null)
+                {
+                    task.DueDate = null;
+                    task.DueTime = null;
+                }
+            }
+        }
         // Вердикт и исход дефекта — устаревшая проверка после переоткрытия (образец — CompletedAt)
         if (task.Status != TaskItemStatus.Done)
         {
@@ -1693,6 +1747,29 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         if (string.IsNullOrWhiteSpace(incoming)) return existing;
         if (string.IsNullOrWhiteSpace(existing)) return incoming;
         return existing + "\n\n— Доклад исполнителя после снятия —\n" + incoming;
+    }
+
+    // Дописывание повторного доклада к итогу закрытой карточки (расследование 88444536, п.2):
+    // второй tasks_complete не затирает первый ResultMarkdown, а добавляет его к нему. Дата в
+    // заголовке обязательна — иначе теряется граница между итогами разных циклов исполнения.
+    // Дата — UTC (минор 3 ревью b6c2bca9): карточка хранится в UTC, заголовок — та же шкала,
+    // дата в тексте не зависит от часовой зоны сервера. Поведение не меняется — фиксация в комментарии.
+    // Идемпотентность (минор 2 того же ревью): ретрай того же tasks_complete (исполнитель повторил
+    // тот же доклад после сбоя доставки) не должен плодить второй такой же блок: последний блок уже
+    // равен этому тексту — текст возвращается без изменений.
+    private static string AppendCompletionSupplement(string? existing, string incoming)
+    {
+        if (string.IsNullOrWhiteSpace(existing)) return incoming;
+        const string marker = "— Дополнение (";
+        var last = existing.LastIndexOf(marker, StringComparison.Ordinal);
+        if (last >= 0)
+        {
+            var headerEnd = existing.IndexOf(") —\n", last, StringComparison.Ordinal);
+            if (headerEnd >= 0 && string.Equals(
+                existing[(headerEnd + 4)..].Trim(), incoming.Trim(), StringComparison.Ordinal))
+                return existing;
+        }
+        return existing + $"\n\n— Дополнение ({DateTime.UtcNow:yyyy-MM-dd}) —\n" + incoming;
     }
 }
 

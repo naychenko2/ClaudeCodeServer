@@ -256,11 +256,12 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
             throw new InvalidOperationException("Задача уже завершена");
         // Прод 2026-08-02 (находка Веры): дубль доклада о завершении после того, как координатор
         // перезапустил исполнение под-задачи в ответ на разблокировку карточки остановки —
-        // Status==Done выше блокирует релонч, ПОКА статус не переоткрыт в обход этого метода
-        // (например прямым PUT/tasks_update). CompletionDelivered — необратимый CAS-флаг
-        // (TaskManager.TryMarkCompletionDelivered): раз доклад уже ушёл, перезапуск той же
-        // задачи не должен порождать второй — независимая страховка поверх проверки статуса,
-        // не завязанная на то, что Status и CompletionDelivered меняются синхронно.
+        // Status==Done выше блокирует релонч, ПОКА статус не переоткрыт в обход этого метода.
+        // CompletionDelivered — CAS-флаг (TaskManager.TryMarkCompletionDelivered); штатное
+        // переоткрытие через TaskManager.Update снимает его вместе со статусом (расследование
+        // 88444536): доработка принятой карточки получает новый цикл и новый доклад. Прямая
+        // смена Status (мимо Update) флаг оставляет — перезапуск уже доложенной задачи не
+        // должен порождать второй дубль: независимая страховка поверх проверки статуса.
         if (task.CompletionDelivered)
             throw new InvalidOperationException("Доклад по этой задаче уже доставлен — перезапуск отключён");
         if (task.OwnerId is null)

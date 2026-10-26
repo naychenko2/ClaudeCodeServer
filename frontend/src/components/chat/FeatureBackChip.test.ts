@@ -165,7 +165,7 @@ describe('FeatureBackChip: один указатель (minor 5)', () => {
 describe('FeatureBackChip: забор снимка вида (GC-F11)', () => {
   it('клик переносит снимок из указателя в pending (до диспатча)', () => {
     setFeaturePageTab('timeline');
-    backNav.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: 'ST-F9', scrollY: 1234 }));
+    backNav.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: 'ST-F9', scrollTop: 1234 }));
     backNav.recordFeatureReturn('f1', { kind: 'chat', id: 'c1' }, 'Моя фича');
     expect(backNav.getBackNav()?.view, 'снимок не записан в указатель').not.toBeNull();
     const c = render('c1');
@@ -174,7 +174,7 @@ describe('FeatureBackChip: забор снимка вида (GC-F11)', () => {
     act(() => { (reactProps(btn)!.onClick as () => void)(); });
     const p = backNav.pendingFeatureView('f1');
     expect(p, 'клик чипа не забрал снимок').not.toBeNull();
-    expect(p!.view).toEqual({ stageKey: 'prod', expandedKey: 'ST-F9', scrollY: 1234 });
+    expect(p!.view).toEqual({ stageKey: 'prod', expandedKey: 'ST-F9', scrollTop: 1234 });
     // Форма события не изменилась (тесты возврата выше остаются зелёными).
     expect(log.find(d => d.type === 'cc-open-feature'), 'cc-open-feature не диспатчен').toBeDefined();
   });

@@ -94,16 +94,24 @@ describe('featureBackNav: цель перехода (chat | feature) и норм
 // Мутации (в отчёте): (1) не звать поставщика в recordFeatureReturn → «пишет снимок»
 // краснеет; (2) не чистить pending в recordFeatureReturn → «новый переход невалидирует»
 // краснеет; (3) не брать featureId в consume → «для другой фичи false» краснеет.
+//
+// GC-F11R2 (дефект 7d399549): прокрутка — scrollTop внутреннего контейнера страницы
+// (FeaturePage.tsx:366), не window.scrollY; гашение снимка — только подтверждённое
+// применение (commitFeatureViewApplied), а не при чтении/применении. Мутации:
+// (4) чистить pending при применении, не перенося в lastApplied → «commit переносит»
+// краснеет; (5) не гасить lastApplied при повторном подтверждении → «повторное
+// подтверждение закрывает окно» краснеет; (6) не чистить lastApplied в
+// recordFeatureReturn → «новый переход гасит подтверждённый» краснеет.
 describe('featureBackNav: снимок вида (GC-F11)', () => {
   it('поставщик зарегистрирован → recordFeatureReturn пишет снимок в указатель', () => {
-    const off = __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: 'ST-F9', scrollY: 1234 }));
+    const off = __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: 'ST-F9', scrollTop: 1234 }));
     recordFeatureReturn('f1', { kind: 'task', id: 't1' }, 'Фича');
-    expect(getBackNav()?.view, 'снимка в указателе нет').toEqual({ stageKey: 'prod', expandedKey: 'ST-F9', scrollY: 1234 });
+    expect(getBackNav()?.view, 'снимка в указателе нет').toEqual({ stageKey: 'prod', expandedKey: 'ST-F9', scrollTop: 1234 });
     off();
   });
 
   it('поставщика нет (или он для другой фичи) → снимка нет', () => {
-    const off = __test.registerFeatureViewProvider('other', () => ({ stageKey: 'prod', expandedKey: null, scrollY: 7 }));
+    const off = __test.registerFeatureViewProvider('other', () => ({ stageKey: 'prod', expandedKey: null, scrollTop: 7 }));
     recordFeatureReturn('f1', { kind: 'task', id: 't1' }, 'Фича');
     expect(getBackNav()?.view ?? null, 'чужой поставщик дал снимок').toBeNull();
     off();
@@ -112,26 +120,28 @@ describe('featureBackNav: снимок вида (GC-F11)', () => {
   });
 
   it('снятие старого монтирования не стирает новую регистрацию (identity-suffix)', () => {
-    const offOld = __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'old', expandedKey: null, scrollY: 0 }));
-    __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'new', expandedKey: null, scrollY: 0 }));
+    const offOld = __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'old', expandedKey: null, scrollTop: 0 }));
+    __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'new', expandedKey: null, scrollTop: 0 }));
     offOld();
     recordFeatureReturn('f1', { kind: 'task', id: 't1' }, 'Фича');
     expect(getBackNav()?.view?.stageKey, 'старое снятие стёрло новую регистрацию').toBe('new');
   });
 
-  it('consume переносит снимок в pending; clearPending гасит его', () => {
-    __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: 'ST-F9', scrollY: 1234 }));
+  it('consume переносит снимок в pending; чтение самого по себе его не гасит', () => {
+    __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: 'ST-F9', scrollTop: 1234 }));
     recordFeatureReturn('f1', { kind: 'task', id: 't1' }, 'Фича');
     expect(__test.consumeFeatureViewReturn('f1'), 'снимка не было').toBe(true);
     const p = __test.pendingFeatureView('f1');
     expect(p, 'pending не взят').not.toBeNull();
-    expect(p!.view).toEqual({ stageKey: 'prod', expandedKey: 'ST-F9', scrollY: 1234 });
-    __test.clearPendingFeatureView();
-    expect(__test.pendingFeatureView('f1'), 'pending не погашен').toBeNull();
+    expect(p!.view).toEqual({ stageKey: 'prod', expandedKey: 'ST-F9', scrollTop: 1234 });
+    // Чтение (инициализация состояния вкладки) ничего не гасит: повторное чтение —
+    // тот же снимок (remount вкладки читает его же).
+    expect(__test.pendingFeatureView('f1'), 'чтение погасило pending').not.toBeNull();
+    expect(__test.lastAppliedFeatureView('f1'), 'lastApplied поставлен без подтверждения').toBeNull();
   });
 
   it('pending переживает clearBackNav: указатель погасен, снимок цел (дефект 4c4645e2)', () => {
-    __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: 'ST-F9', scrollY: 1234 }));
+    __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: 'ST-F9', scrollTop: 1234 }));
     recordFeatureReturn('f1', { kind: 'task', id: 't1' }, 'Фича');
     __test.consumeFeatureViewReturn('f1');
     clearBackNav(); // обработчик cc-open-feature гасит указатель ПОСЛЕ consume
@@ -143,7 +153,7 @@ describe('featureBackNav: снимок вида (GC-F11)', () => {
     recordFeatureReturn('f1', { kind: 'task', id: 't1' }, 'Фича'); // поставщика нет → view нет
     expect(__test.consumeFeatureViewReturn('f1'), 'пустой consume дал true').toBe(false);
     expect(__test.pendingFeatureView('f1')).toBeNull();
-    __test.registerFeatureViewProvider('f1', () => ({ stageKey: null, expandedKey: null, scrollY: 0 }));
+    __test.registerFeatureViewProvider('f1', () => ({ stageKey: null, expandedKey: null, scrollTop: 0 }));
     recordFeatureReturn('f1', { kind: 'task', id: 't1' }, 'Фича');
     expect(__test.consumeFeatureViewReturn('other'), 'чужая фича приняла снимок').toBe(false);
     expect(__test.pendingFeatureView('other'), 'pending для чужой фичи').toBeNull();
@@ -151,7 +161,7 @@ describe('featureBackNav: снимок вида (GC-F11)', () => {
   });
 
   it('новый переход невалидирует незабранный pending', () => {
-    __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: null, scrollY: 0 }));
+    __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: null, scrollTop: 0 }));
     recordFeatureReturn('f1', { kind: 'task', id: 't1' }, 'Фича');
     expect(__test.consumeFeatureViewReturn('f1')).toBe(true);
     recordFeatureReturn('f1', { kind: 'chat', id: 'c2' }, 'Фича'); // новый переход
@@ -159,8 +169,60 @@ describe('featureBackNav: снимок вида (GC-F11)', () => {
   });
 
   it('переход без поставщика (recordBackNav) снимка не несёт', () => {
-    __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: 'ST-F9', scrollY: 1 }));
+    __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: 'ST-F9', scrollTop: 1 }));
     recordBackNav('chat-a', { kind: 'feature', id: 'f1' });
     expect(getBackNav()?.view ?? null, 'chat-переход получил снимок').toBeNull();
+  });
+});
+
+// GC-F11R2 (дефект 7d399549): канал подтверждения применения. Вкладка применяет
+// снимок ПРИ ИНИЦИАЛИЗАЦИИ своего состояния (remount страницы 'loading'→'ok') и
+// подтверждает применение post-mount; подтверждённый снимок переживает remount, а
+// повторное подтверждение закрывает окно (сознательный монтаж снимок не перечитывает).
+describe('featureBackNav: подтверждение применения снимка (GC-F11R2)', () => {
+  it('commit переносит pending в lastApplied: remount читает тот же снимок', () => {
+    __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: 'ST-F9', scrollTop: 1234 }));
+    recordFeatureReturn('f1', { kind: 'task', id: 't1' }, 'Фича');
+    expect(__test.consumeFeatureViewReturn('f1')).toBe(true);
+    const p = __test.pendingFeatureView('f1')!;
+    __test.commitFeatureViewApplied('f1', p.seq);
+    expect(__test.pendingFeatureView('f1'), 'pending не перенесён').toBeNull();
+    const la = __test.lastAppliedFeatureView('f1');
+    expect(la, 'подтверждённый снимок не переживает remount').not.toBeNull();
+    expect(la!.seq, 'seq подтверждённого снимка').toBe(p.seq);
+    expect(la!.view, 'содержимое подтверждённого снимка').toEqual({ stageKey: 'prod', expandedKey: 'ST-F9', scrollTop: 1234 });
+  });
+
+  it('чужой featureId/seq ничего не гасят (защита от чужого инстанса)', () => {
+    __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: null, scrollTop: 5 }));
+    recordFeatureReturn('f1', { kind: 'task', id: 't1' }, 'Фича');
+    expect(__test.consumeFeatureViewReturn('f1')).toBe(true);
+    const p = __test.pendingFeatureView('f1')!;
+    __test.commitFeatureViewApplied('other', p.seq);
+    __test.commitFeatureViewApplied('f1', p.seq + 1);
+    expect(__test.pendingFeatureView('f1'), 'чужой commit погасил pending').not.toBeNull();
+    expect(__test.lastAppliedFeatureView('f1'), 'чужой commit поставил lastApplied').toBeNull();
+  });
+
+  it('повторное подтверждение того же seq закрывает окно remount', () => {
+    __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: null, scrollTop: 5 }));
+    recordFeatureReturn('f1', { kind: 'task', id: 't1' }, 'Фича');
+    expect(__test.consumeFeatureViewReturn('f1')).toBe(true);
+    const seq = __test.pendingFeatureView('f1')!.seq;
+    __test.commitFeatureViewApplied('f1', seq); // первый инстанс: pending → lastApplied
+    expect(__test.lastAppliedFeatureView('f1'), 'первое подтверждение не поставило lastApplied').not.toBeNull();
+    __test.commitFeatureViewApplied('f1', seq); // инстанс после remount: окно закрыто
+    expect(__test.lastAppliedFeatureView('f1'), 'окно remount не закрыто').toBeNull();
+    expect(__test.pendingFeatureView('f1'), 'закрытие окна тронуло pending').toBeNull();
+  });
+
+  it('новый переход гасит и подтверждённый снимок (old lastApplied не для новой страницы)', () => {
+    __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: null, scrollTop: 5 }));
+    recordFeatureReturn('f1', { kind: 'task', id: 't1' }, 'Фича');
+    expect(__test.consumeFeatureViewReturn('f1')).toBe(true);
+    __test.commitFeatureViewApplied('f1', __test.pendingFeatureView('f1')!.seq);
+    expect(__test.lastAppliedFeatureView('f1')).not.toBeNull();
+    recordFeatureReturn('f1', { kind: 'chat', id: 'c2' }, 'Фича'); // новый переход
+    expect(__test.lastAppliedFeatureView('f1'), 'подтверждённый снимок пережил новый переход').toBeNull();
   });
 });

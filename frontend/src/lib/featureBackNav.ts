@@ -60,8 +60,11 @@ export interface FeatureViewSnapshot {
   stageKey: string | null;
   // Раскрытая карточка ленты «Производство» (stepRef или card-N); null — нет.
   expandedKey: string | null;
-  // window.scrollY в момент перехода.
-  scrollY: number;
+  // Прокрутка ТОГО контейнера, который реально скроллит страницу фичи: внутренней
+  // панели с overflow:auto (FeaturePage.tsx:366). Не window.scrollY: на странице он
+  // всегда 0 — прокрутка терялась (дефект 7d399549). Контейнера нет — window.scrollY
+  // (запасной вариант).
+  scrollTop: number;
 }
 export type FeatureViewProvider = () => FeatureViewSnapshot | null;
 
@@ -88,6 +91,9 @@ let _back: BackNav | null = null;
 // Однократный снимок «возврат по чипу» (GC-F11): живёт отдельно от указателя —
 // clearBackNav его не трогает (см. consumeFeatureViewReturn ниже).
 let _pendingView: PendingFeatureView | null = null;
+// Подтверждённый применением снимок (GC-F11R2, дефект 7d399549): remount вкладки
+// читает его, когда pending уже подтверждён (см. commitFeatureViewApplied ниже).
+let _lastApplied: PendingFeatureView | null = null;
 let _pendingSeq = 0;
 const _listeners = new Set<() => void>();
 function emit() { _listeners.forEach(fn => fn()); }
@@ -131,8 +137,10 @@ export function clearBackNav(): void {
 export function recordFeatureReturn(featureId: string, to: { kind: 'chat' | 'task'; id: string }, title?: string | null, tab?: FeaturePageTab, showTab?: boolean): void {
   if (!featureId || !to.id) return;
   // Новый переход невалидирует незабранный возврат (GC-F11): старый pending не должен
-  // примениться к следующей открытой странице.
+  // примениться к следующей открытой странице. То же для подтверждённого снимка
+  // (lastApplied, GC-F11R2): окно remount закрыла не новая страница, а новый переход.
   _pendingView = null;
+  _lastApplied = null;
   // Снимок вида — у поставщика этой фичи (registerFeatureViewProvider), если он есть;
   // вызывающие его не передают и не знают (GC-F11).
   const view = _viewProvider && _viewProvider.featureId === featureId ? _viewProvider.fn() : null;
@@ -145,12 +153,13 @@ export function recordFeatureReturn(featureId: string, to: { kind: 'chat' | 'tas
   emit();
 }
 
-// === Однократный канал «возврат по чипу» (GC-F11) ===
+// === Однократный канал «возврат по чипу» (GC-F11, GC-F11R2) ===
 // Клик чипа переносит снимок из указателя в этот канал ПЕРЕД тем, как обработчик
 // cc-open-feature погасит указатель (clearBackNav) — восстановление не зависит от
 // жизни указателя (дефект 4c4645e2: указатель не должен стираться раньше
-// восстановления). «Хронология» читает канал один раз и гасит его (тот же приём
-// seq, что якорь этапа в featurePage: прочитанный не перечитывается).
+// восстановления). «Хронология» читает канал и ПРИМЕНЯЕТ снимок к своему состоянию;
+// чтение само по себе ничего не гасит (GC-F11R2, дефект 7d399549): гасится только
+// подтверждённое применение — см. commitFeatureViewApplied ниже.
 export interface PendingFeatureView { featureId: string; view: FeatureViewSnapshot; seq: number }
 
 // Забрать снимок из ЖИВОГО указателя в pending (зовёт чип — только его клик значит
@@ -176,12 +185,34 @@ export function usePendingFeatureView(featureId: string): PendingFeatureView | n
   return useSyncExternalStore(subscribe, () => pendingFeatureView(featureId), () => pendingFeatureView(featureId));
 }
 
-// Погасить прочитанный pending (M4-приём якоря этапа): повторный монтаж вкладки не
-// перечитает уже применённый снимок.
-export function clearPendingFeatureView(): void {
-  if (!_pendingView) return;
-  _pendingView = null;
-  emit();
+// === Подтверждение применения (GC-F11R2, дефект 7d399549) ===
+// Старый механизм гасил снимок в момент применения (clearPendingFeatureView в эффекте
+// после монтажа) — и remount вкладки в том же кадре терял вид: после возврата по
+// чипу страница сначала рисуется из КЭША 'ok' (стор featurePage — уровень модуля,
+// unmount его не сбрасывает), затем первичный запрос сбрасывает её в 'loading'
+// (featurePage.ts:100) → вкладка unmount→mount, а снимок уже погашен. Теперь:
+// применение подтверждается — pending ПЕРЕНОСИТСЯ в lastApplied, и remount вкладки
+// читает тот же снимок из него; повторное подтверждение (инстанс, который прочитал
+// lastApplied) закрывает окно remount: сознательный уход (смена вкладки, закрытие
+// страницы, следующий монтаж) застанет канал пустым. Новый переход гасит оба канала
+// (recordFeatureReturn).
+export function commitFeatureViewApplied(featureId: string, seq: number): void {
+  if (_pendingView && _pendingView.featureId === featureId && _pendingView.seq === seq) {
+    _lastApplied = { featureId, seq, view: _pendingView.view };
+    _pendingView = null;
+    emit();
+    return;
+  }
+  if (_lastApplied && _lastApplied.featureId === featureId && _lastApplied.seq === seq) {
+    _lastApplied = null;
+    emit();
+  }
+}
+
+// Прочитать подтверждённый снимок без подписки (для инициализации состояния вкладки):
+// remount вкладки (страницы 'loading'→'ok') берёт тот же снимок отсюда.
+export function lastAppliedFeatureView(featureId: string): PendingFeatureView | null {
+  return _lastApplied && _lastApplied.featureId === featureId ? _lastApplied : null;
 }
 
 // Сырой указатель (для эффекта «сброс при обычном открытии» в FeatureBanner).
@@ -247,6 +278,7 @@ export const __test = {
   reset() {
     _back = null;
     _pendingView = null;
+    _lastApplied = null;
     _pendingSeq = 0;
     _viewProvider = null;
     _listeners.clear();
@@ -262,5 +294,6 @@ export const __test = {
   registerFeatureViewProvider,
   consumeFeatureViewReturn,
   pendingFeatureView,
-  clearPendingFeatureView,
+  commitFeatureViewApplied,
+  lastAppliedFeatureView,
 };

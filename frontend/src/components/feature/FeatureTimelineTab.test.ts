@@ -43,9 +43,19 @@
 // Мутации: (19) не передать axis/turnsByTask/now из StageRow в ленту → «карточка с блоком
 // времени и ходами шага» краснеет; (20) не передать nowMs в ExecutorRow → «карточка и строка
 // от одного тика» краснеет.
+// GC-F11R2 (дефект 7d399549): применение снимка не зависит от перемонтирования вкладки:
+// снимок читается при ИНИЦИАЛИЗАЦИИ состояния (первый рендер), применение подтверждается
+// (pending → lastApplied) — remount вкладки (страницы 'loading'→'ok' после возврата,
+// featurePage.ts:100) читает тот же снимок, а сознательный уход его не перечитывает.
+// Прокрутка — реального контейнера (внутренняя панель страницы с overflow:auto,
+// FeaturePage.tsx:366), не window. Мутации: (21) применять только эффектом после монтажа
+// (начального состояния нет) → c4 краснеет; (22) гасить pending при чтении, без подтверждения
+// → c6 краснеет (первый инстанс прочитал и погасил — remount ничего не нашёл);
+// (23) хранить window.scrollY вместо scrollTop контейнера → c4 краснеет.
 
 import { act } from 'react';
 import { createElement } from 'react';
+import { createRoot } from 'react-dom/client';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeatureTimelineTab, laneAxisInsets, laneScaleWidth } from './FeatureTimelineTab';
 import {
@@ -1760,16 +1770,27 @@ describe('FeatureTimelineTab: свёртка длинных списков эт�
   });
 });
 
-// === GC-F11: снимок вида и восстановление по чипу ===
+// === GC-F11 / GC-F11R2: снимок вида и восстановление по чипу ===
 // Трасса: раскрыть этап + карточку → меню «Карточка задачи» (recordFeatureReturn берёт
 // снимок у зарегистрированного поставщика этой вкладки) → клик чипа (consume — сам чип
 // проверяется в FeatureBackChip.test.ts) → закрыть страницу (unmount) → открыть заново:
 // этап раскрыт, карточка раскрыта с фокусом на шапке, прокрутка — записанная. Без клика
 // чипа — ничего не применяется (открытие из списка — не возврат).
+// GC-F11R2 (дефект 7d399549): c4/c5 — перемонтирование вкладки (страница после возврата
+// сначала рисует кэш 'ok', первичный запрос сбрасывает её в 'loading' — featurePage.ts:100
+// — и вкладка unmount→mount): снимок применяется при инициализации состояния и
+// подтверждается (pending → lastApplied), remount читает тот же снимок, следующий после
+// подтверждения — уже нет. Прокрутка — контейнера (c4/c5 монтируют вкладку внутри
+// панели с overflow:auto, как страница FeaturePage.tsx:366), без контейнера — window
+// (c1/c2 остаются тестом запасного варианта).
 // Мутации (в отчёте): (1) не звать поставщика в recordFeatureReturn → c1/c2 краснеют
 // (снимка нет); (2) убрать window.scrollTo в восстановлении → c2 краснеет;
 // (3) не передать initialExpandedKey в ленту → c1 краснеет (карточка не раскрыта);
-// (4) убрать setExpanded(v.stageKey) → c1 краснеет (этап не восстановлен).
+// (4) убрать setExpanded(v.stageKey) → c1 краснеет (этап не восстановлен);
+// (21) применять снимок только эффектом после монтажа → c4 краснеет;
+// (22) гасить pending при чтении, без подтверждения → c6 краснеет (первый инстанс
+// прочитал и погасил — remount ничего не нашёл);
+// (23) хранить window.scrollY вместо scrollTop контейнера → c4 краснеет.
 // Фикстура: все этапы pending — при монтировании не раскрыто НИЧЕГО (дефолт не маскирует
 // восстановление); шаг ST-F9 с меню (есть старт и чат цепочки).
 function returnRun(): FeatureRun {
@@ -1806,7 +1827,10 @@ describe('FeatureTimelineTab: восстановление по чипу (GC-F11
     act(() => { (reactProps(header)!.onClick as () => void)(); });
     const card = findNodeByAttr(container, 'data-testid', 'prod-card-ST-F9')!;
     act(() => { (reactProps(card)!.onClick as () => void)(); });
-    // Прокрутка в момент перехода (у фейк-DOM window.scrollY нет — ставим явно).
+    // Прокрутка в момент перехода. Вкладка смонтирована БЕЗ контейнера прокрутки
+    // (mount() не пристёгивает контейнер к документу) — поставщик идёт запасным
+    // путём через window; у фейк-DOM window.scrollY нет — ставим явно (GC-F11R2:
+    // с контейнером — c4/c5).
     (globalThis as { window: Record<string, unknown> }).window.scrollY = 1234;
     const code = findNodeByAttr(container, 'data-testid', 'prod-code-ST-F9')!;
     act(() => { (reactProps(code)!.onClick as () => void)(); });
@@ -1826,7 +1850,7 @@ describe('FeatureTimelineTab: восстановление по чипу (GC-F11
   it('c1: возврат по чипу — этап раскрыт, карточка раскрыта, фокус на её шапке', () => {
     const root = leaveToTask(returnRun());
     expect(backNavTest.getBackNav()?.view, 'снимок не записан при переходе')
-      .toEqual({ stageKey: 'prod', expandedKey: 'ST-F9', scrollY: 1234 });
+      .toEqual({ stageKey: 'prod', expandedKey: 'ST-F9', scrollTop: 1234 });
     // Действие чипа (компонент чипа — в FeatureBackChip.test.ts): снимок в однократный канал.
     expect(backNavTest.consumeFeatureViewReturn('f1'), 'снимка для забора нет').toBe(true);
     act(() => { root.unmount(); }); // страница фичи закрыта (открыта задача)
@@ -1868,6 +1892,145 @@ describe('FeatureTimelineTab: восстановление по чипу (GC-F11
     const c2 = reopen();
     expect(findNodeByAttr(c2, 'data-testid', 'timeline-stage-body-prod'), 'этап раскрылся без возврата').toBeNull();
     expect(calls, 'прокрутка сдвинулась без возврата').toEqual([]);
+  });
+
+  // === GC-F11R2 (дефект 7d399549): перемонтирование вкладки ===
+  // Смонтировать вкладку ВНУТРИ контейнера прокрутки: реальная страница скроллится
+  // внутренней панелью с overflow:auto (FeaturePage.tsx:366), а не окном (window.scrollY
+  // на ней 0). Контейнер ни к чему не пристёгнут — цепочка предков вкладки заканчивается
+  // на нём: поставщик снимка и восстановление находят именно его.
+  // Host — узел фейк-DOM (тот же тип, что принимает findNodeByAttr) + поля прокрутки,
+  // которые есть у реального контейнера.
+  type Host = Parameters<typeof findNodeByAttr>[0] & { style: Record<string, string>; scrollTop: number };
+  function mountInHost(run: FeatureRun): { host: Host; unmount: () => void } {
+    const doc = (globalThis as { document: { createElement(tag: string): Host } }).document;
+    const host = doc.createElement('div');
+    host.style.overflow = 'auto';
+    const root = createRoot(host as unknown as Element);
+    act(() => { root.render(createElement(FeatureTimelineTab, { run })); });
+    return { host, unmount: () => { act(() => { root.unmount(); }); } };
+  }
+
+  // Пользовательская часть внутри контейнера: раскрыть этап и карточку, «стоять» на
+  // прокрутке 1234, уйти в задачу из меню карточки (recordFeatureReturn пишет снимок
+  // через поставщика — он читает scrollTop контейнера).
+  function leaveToTaskIn(run: FeatureRun, where: Host): void {
+    const header = findNodeByAttr(where, 'data-testid', 'timeline-stage-header-prod')!;
+    act(() => { (reactProps(header)!.onClick as () => void)(); });
+    const card = findNodeByAttr(where, 'data-testid', 'prod-card-ST-F9')!;
+    act(() => { (reactProps(card)!.onClick as () => void)(); });
+    where.scrollTop = 1234;
+    const code = findNodeByAttr(where, 'data-testid', 'prod-code-ST-F9')!;
+    act(() => { (reactProps(code)!.onClick as () => void)(); });
+    const body = (globalThis as { document: { body: never } }).document.body as never;
+    const item = findNodeByAttr(body, 'data-testid', 'prod-menu-task') as { children: never[] } | null;
+    expect(item, 'пункта меню «Карточка задачи» нет').toBeTruthy();
+    act(() => { (reactProps((item as { children: never[] }).children[0] as never)!.onClick as () => void)(); });
+  }
+
+  // Патч focus() → activeElement (у фейк-DOM focus — no-op: без патча фокус не виден).
+  function withFocusPatch(fn: () => void): void {
+    const doc = (globalThis as { document: { createElement(tag: string): { focus?: () => void }; activeElement: unknown } }).document;
+    const proto = Object.getPrototypeOf(doc.createElement('div')) as { focus?: () => void };
+    const origFocus = proto.focus;
+    proto.focus = function (this: unknown) { doc.activeElement = this; };
+    try { fn(); } finally { proto.focus = origFocus; }
+  }
+
+  // c4: ТЕСТ ОБЯЗАТЕЛЕН НА ПЕРЕМОНТИРОВАНИЕ. Механизм дефекта дословно: применение
+  // случилось (живой инстанс поднял вид), вкладка перемонтирована в том же кадре
+  // (страница после возврата рисует кэш 'ok', первичный запрос сбрасывает её в
+  // 'loading' — featurePage.ts:100 — ответ вернул 'ok') — вид обязан пережить.
+  it('c4: применение на живом инстансе + remount вкладки — этап, карточка и прокрутка контейнера сохранены', () => {
+    installFakeDom(); // тест независим по порядку: свой документ (mountInHost монтирует без mount())
+    const run = returnRun();
+    const h1 = mountInHost(run);
+    leaveToTaskIn(run, h1.host);
+    expect(backNavTest.getBackNav()?.view, 'снимок не записан при переходе')
+      .toEqual({ stageKey: 'prod', expandedKey: 'ST-F9', scrollTop: 1234 });
+    // Действие чипа: снимок в однократный канал. Внутри act — как клик чипа на живой
+    // странице (обновление store запланировано из события React, а не извне).
+    let taken = false;
+    act(() => { taken = backNavTest.consumeFeatureViewReturn('f1'); });
+    expect(taken, 'снимка для забора нет').toBe(true);
+    // Живой инстанс применил снимок и подтвердил применение — это происходит на
+    // реальной странице до remount (без этого шага тест моделировал бы закрытие
+    // страницы, а не remount — как c1).
+    act(() => {});
+    expect(backNavTest.pendingFeatureView('f1'), 'применение живым инстансом не подтверждено').toBeNull();
+    expect(backNavTest.lastAppliedFeatureView('f1'), 'подтверждённый снимок не переживает remount').not.toBeNull();
+    // Страница ушла в 'loading' (первичный запрос открытой страницы) → вкладка
+    // unmount; ответ вернул 'ok' → remount.
+    h1.unmount();
+
+    let h2: { host: Host; unmount: () => void } | null = null;
+    withFocusPatch(() => { h2 = mountInHost(returnRun()); });
+    const body2 = findNodeByAttr(h2!.host, 'data-testid', 'timeline-stage-body-prod');
+    expect(body2, 'remount не восстановил этап').not.toBeNull();
+    const card2 = findNodeByAttr(body2!, 'data-testid', 'prod-card-ST-F9')!;
+    expect(card2.getAttribute('aria-expanded'), 'remount не раскрыл карточку').toBe('true');
+    expect(findNodeByAttr(card2, 'data-testid', 'prod-details'), 'раскрытой части карточки нет').not.toBeNull();
+    expect(h2!.host.scrollTop, 'remount не восстановил прокрутку контейнера').toBe(1234);
+    expect((globalThis as { document: { activeElement: unknown } }).document.activeElement, 'фокус не встал на шапку карточки').toBe(card2);
+    // Окно remount закрыто подтверждением: следующий (сознательный) монтаж тот же
+    // снимок не перечитывает — канал пуст, вид дефолтный.
+    h2.unmount();
+    expect(backNavTest.pendingFeatureView('f1'), 'pending пережил подтверждение').toBeNull();
+    expect(backNavTest.lastAppliedFeatureView('f1'), 'lastApplied пережил подтверждение').toBeNull();
+    const h3 = mountInHost(returnRun());
+    expect(findNodeByAttr(h3.host, 'data-testid', 'timeline-stage-body-prod'), 'тот же снимок применён второй раз').toBeNull();
+    h3.unmount();
+  });
+
+  // c5: задача буквальна: смонтировать вкладку → записать снимок → размонтировать и
+  // смонтировать заново (как делает страница) → этап и карточка раскрыты; scrollTop
+  // контейнера восстановлен. Первый инстанс здесь снимок только записал (не применял).
+  it('c5: remount после записи (без применения на первом инстансе) — вид и прокрутка контейнера восстановлены', () => {
+    installFakeDom(); // тест независим по порядку: свой документ
+    const run = returnRun();
+    const h1 = mountInHost(run);
+    leaveToTaskIn(run, h1.host);
+    expect(backNavTest.consumeFeatureViewReturn('f1'), 'снимка для забора нет').toBe(true);
+    h1.unmount();
+    let h2: { host: Host; unmount: () => void } | null = null;
+    withFocusPatch(() => { h2 = mountInHost(returnRun()); });
+    const body2 = findNodeByAttr(h2!.host, 'data-testid', 'timeline-stage-body-prod');
+    expect(body2, 'remount не восстановил этап').not.toBeNull();
+    const card2 = findNodeByAttr(body2!, 'data-testid', 'prod-card-ST-F9')!;
+    expect(card2.getAttribute('aria-expanded'), 'remount не раскрыл карточку').toBe('true');
+    expect(h2!.host.scrollTop, 'прокрутка контейнера не восстановлена').toBe(1234);
+    expect((globalThis as { document: { activeElement: unknown } }).document.activeElement, 'фокус не встал на шапку карточки').toBe(card2);
+    h2.unmount();
+  });
+
+  // c6: реальный порядок кадра возврата: страница закрыта переходом, чип забрал снимок,
+  // страница ОТКРЫВАЕТСЯ заново — первый её инстанс читает pending при инициализации и
+  // подтверждает применение эффектом монтажа; затем 'loading'→'ok' (тот самый remount) —
+  // второй инстанс обязан получить тот же снимок из lastApplied. Гасить pending при
+  // чтении (без подтверждения) здесь и ломается: первый прочитал и погасил, remount
+  // ничего не нашёл.
+  it('c6: первый инстанс после чипа прочитал снимок — remount получает подтверждённый', () => {
+    installFakeDom(); // тест независим по порядку: свой документ
+    const run = returnRun();
+    const h1 = mountInHost(run);
+    leaveToTaskIn(run, h1.host);
+    h1.unmount(); // переход закрыл страницу (человек на экране задачи)
+    act(() => { backNavTest.consumeFeatureViewReturn('f1'); }); // чип нажат: снимок в канале, живой вкладки нет
+    const m1 = mountInHost(returnRun()); // первый рендер открытой страницы — из кэша 'ok'
+    const body1 = findNodeByAttr(m1.host, 'data-testid', 'timeline-stage-body-prod');
+    expect(body1, 'первый инстанс не применил снимок при инициализации').not.toBeNull();
+    const card1 = findNodeByAttr(body1!, 'data-testid', 'prod-card-ST-F9')!;
+    expect(card1.getAttribute('aria-expanded'), 'первый инстанс не раскрыл карточку').toBe('true');
+    m1.unmount(); // страница ушла в 'loading' (первичный запрос)
+    let h2: { host: Host; unmount: () => void } | null = null;
+    withFocusPatch(() => { h2 = mountInHost(returnRun()); }); // 'ok' → remount вкладки
+    const body2 = findNodeByAttr(h2!.host, 'data-testid', 'timeline-stage-body-prod');
+    expect(body2, 'remount не восстановил этап').not.toBeNull();
+    const card2 = findNodeByAttr(body2!, 'data-testid', 'prod-card-ST-F9')!;
+    expect(card2.getAttribute('aria-expanded'), 'remount не раскрыл карточку').toBe('true');
+    expect(h2!.host.scrollTop, 'remount не восстановил прокрутку контейнера').toBe(1234);
+    expect((globalThis as { document: { activeElement: unknown } }).document.activeElement, 'фокус не встал на шапку карточки').toBe(card2);
+    h2.unmount();
   });
 });
 

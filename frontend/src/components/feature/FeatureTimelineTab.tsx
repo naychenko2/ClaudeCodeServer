@@ -9,7 +9,7 @@ import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { Tooltip } from '../ui/Tooltip';
 import { Button } from '../ui/Button';
 import { getPersonaById } from '../../lib/personas';
-import { recordFeatureReturn, registerFeatureViewProvider, usePendingFeatureView, clearPendingFeatureView } from '../../lib/featureBackNav';
+import { recordFeatureReturn, registerFeatureViewProvider, usePendingFeatureView, pendingFeatureView, commitFeatureViewApplied, lastAppliedFeatureView } from '../../lib/featureBackNav';
 import { openChatById } from '../../lib/openChat';
 import { openTaskInSection } from '../../lib/tasks';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
@@ -546,6 +546,35 @@ export function buildTurnsByTask(run: FeatureRun, stats: FeatureStats | null, no
   return out;
 }
 
+// Контейнер прокрутки страницы: ближайший предок, который реально скроллит. Страница
+// фичи скроллится внутренней панелью с overflow:auto (FeaturePage.tsx:366), а не
+// окном: window.scrollY на странице всегда 0 — по нему снимок терял прокрутку
+// (дефект 7d399549). Поиск по inline-overflow (контейнер страницы объявлен inline) —
+// одинаково работает в тестовом фейк-DOM и в реальном DOM. Не найден — null
+// (запасной вариант — window).
+function scrollHostOf(el: HTMLElement | null): HTMLElement | null {
+  let node = el?.parentElement ?? null;
+  while (node) {
+    const ov = node.style.overflow || node.style.overflowY;
+    if (ov === 'auto' || ov === 'scroll') return node;
+    node = node.parentElement;
+  }
+  return null;
+}
+
+// Прочитать/восстановить прокрутку реального контейнера; контейнера нет — window
+// (тот же запасной вариант, что был основным до дефекта 7d399549).
+function readScrollTop(el: HTMLElement | null): number {
+  const host = scrollHostOf(el);
+  if (host) return host.scrollTop;
+  return typeof window !== 'undefined' && typeof window.scrollY === 'number' ? window.scrollY : 0;
+}
+function writeScrollTop(el: HTMLElement | null, top: number): void {
+  const host = scrollHostOf(el);
+  if (host) { host.scrollTop = top; return; }
+  if (typeof window !== 'undefined' && typeof window.scrollTo === 'function') window.scrollTo(0, top);
+}
+
 // Вкладка «Хронология»: поясняющая строка + список 7 этапов. `now` — живое «сейчас» из
 // useNow (общий паттерн, как в «Статистике»): минуты «идёт/ждёт/стоит» и живой ход растут,
 // пока вкладка открыта; ОДНО значение на все потребители (дорожки, ось, живые ходы, поповер).
@@ -614,8 +643,33 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false, st
     return active ? active.key : null;
   }, [stages]);
 
-  // Один раскрытый этап за раз; null — все схлопнуты.
-  const [expanded, setExpanded] = useState<StageKey | null>(currentKey);
+  // === Чтение снимка при монтировании (GC-F11R2, дефект 7d399549) ===
+  // Вкладка кадра возврата обязана открыться видом снимка с ПЕРВОГО рендера, а не
+  // «эффектом после монтажа»: после возврата по чипу страница сначала рисуется из
+  // кэша 'ok' (стор featurePage — уровень модуля, unmount его не сбрасывает), затем
+  // первичный запрос сбрасывает её в 'loading' (featurePage.ts:100) → вкладка
+  // unmount→mount, и состояние, поднятое эффектом, такого remount не переживает:
+  // снимок к тому моменту уже подтверждён первым инстансом. Чтение канала не гасит:
+  // гасится только подтверждённое применение (commitFeatureViewApplied, эффект
+  // монтажа ниже) — remount читает тот же снимок из lastApplied, а сознательный
+  // уход следующий монтаж уже не находит.
+  const [mountView] = useState<{ seq: number; view: { stageKey: string | null; expandedKey: string | null; scrollTop: number } } | null>(() => {
+    const pv = pendingFeatureView(run.featureId);
+    if (pv) return { seq: pv.seq, view: pv.view };
+    const la = lastAppliedFeatureView(run.featureId);
+    return la ? { seq: la.seq, view: la.view } : null;
+  });
+
+  // Один раскрытый этап за раз; null — все схлопнуты. Начальное значение — снимок
+  // (в том числе «все схлопнуты»: stageKey null — тоже вид), дефолт — активный этап.
+  const [expanded, setExpanded] = useState<StageKey | null>(() => {
+    const v = mountView?.view;
+    if (v) return v.stageKey ? (v.stageKey as StageKey) : null;
+    return currentKey;
+  });
+  // Начальная раскрытая карточка ленты «Производства»: из снимка (лента сама раскроет
+  // её и поставит фокус на шапку).
+  const [prodInitialKey, setProdInitialKey] = useState<string | null>(() => mountView?.view.expandedKey ?? null);
   const toggle = (key: StageKey) => setExpanded(cur => (cur === key ? null : key));
 
   // === Снимок вида и восстановление по чипу (GC-F11) ===
@@ -625,35 +679,50 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false, st
   const expandedRef = useRef<StageKey | null>(null);
   expandedRef.current = expanded;
   const prodExpandedKeyRef = useRef<string | null>(null);
+  // Корень вкладки — он же якорь поиска контейнера прокрутки страницы (поставщик
+  // пишет его scrollTop, восстановление пишет в него — дефект 7d399549).
+  const rootRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     return registerFeatureViewProvider(run.featureId, () => ({
       stageKey: expandedRef.current,
       expandedKey: prodExpandedKeyRef.current,
-      // Прокрутка окна: в тестовом фейк-DOM window.scrollY нет — 0 (не выдумываем).
-      scrollY: typeof window !== 'undefined' && typeof window.scrollY === 'number' ? window.scrollY : 0,
+      // Прокрутка реального контейнера (дефект 7d399549); контейнера нет — window
+      // (в тестовом фейк-DOM window.scrollY нет — 0, не выдумываем).
+      scrollTop: readScrollTop(rootRef.current),
     }));
   }, [run.featureId]);
 
-  // Восстановление по чипу: однократный снимок, забранный кликом чипа из указателя.
-  // Приём — как якорь этапа (Ф-pl-b): seq — применённый не применяется заново; после
-  // применения канал гасится (повторный монтаж вкладки старый снимок не перечитает).
-  // Карточка: ключ уходит в ленту как initialExpandedKey (лента сама раскроет её и
-  // поставит фокус на шапку). Прокрутка — записанная, «умного» позиционирования нет:
-  // человек был вот здесь.
-  const pendingView = usePendingFeatureView(run.featureId);
-  const [prodInitialKey, setProdInitialKey] = useState<string | null>(null);
-  const pendingViewSeq = useRef(0);
+  // Подтверждение применения снимка, прочитанного при монтировании: этот инстанс
+  // инициализировал им своё состояние, смонтирован и отрисован → remount вкладки
+  // (страницы 'loading'→'ok' — тот самый cause дефекта 7d399549) обязан получить
+  // тот же вид: commit переносит pending в lastApplied (а если снимок читан из
+  // lastApplied — закрывает окно remount). Прокрутка — в реальный контейнер: DOM
+  // есть только после первого коммита. «Умного» позиционирования нет: человек был
+  // вот здесь.
   useEffect(() => {
-    if (!pendingView || pendingView.seq === pendingViewSeq.current) return;
-    pendingViewSeq.current = pendingView.seq;
+    if (!mountView) return;
+    commitFeatureViewApplied(run.featureId, mountView.seq);
+    writeScrollTop(rootRef.current, mountView.view.scrollTop);
+  }, [run.featureId, mountView]);
+
+  // Снимок пришёл к уже смонтированной вкладке (страница пережила переход): то же
+  // применение к живому инстансу + подтверждение — remount этой страницы не должен
+  // потерять вид (механизм дефекта: применение случилось, remount его потерял).
+  // Seq-guard: тот же инстанс не применяет тот же снимок второй раз; применение при
+  // инициализации уже учтено.
+  const pendingView = usePendingFeatureView(run.featureId);
+  const handledSeq = useRef<number | null>(mountView?.seq ?? null);
+  useEffect(() => {
+    if (!pendingView || pendingView.seq === handledSeq.current) return;
+    handledSeq.current = pendingView.seq;
     const v = pendingView.view;
     if (v.stageKey) setExpanded(v.stageKey as StageKey);
     // Ставим безусловно: снимок без карточки должен снять и старую начальную карточку
     // (иначе свежая лента после нового возврата раскрыла бы карточку прошлого возврата).
     setProdInitialKey(v.expandedKey ?? null);
-    clearPendingFeatureView();
-    if (typeof window !== 'undefined' && typeof window.scrollTo === 'function') window.scrollTo(0, v.scrollY);
-  }, [pendingView]);
+    commitFeatureViewApplied(run.featureId, pendingView.seq);
+    writeScrollTop(rootRef.current, v.scrollTop);
+  }, [run.featureId, pendingView]);
 
   // Roving tabindex (GC-F5c): одна точка табуляции на весь Гант — первый интервал
   // первого этапа с дорожкой.
@@ -670,8 +739,8 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false, st
   }, [laneFocus, defaultFocus, lanesModel]);
 
   // Ширина контейнера — для узкой шкалы (часовые отметки прячутся). Без ResizeObserver
-  // (тестовый фейк-DOM) ширины нет — шкала считается широкой.
-  const rootRef = useRef<HTMLDivElement | null>(null);
+  // (тестовый фейк-DOM) ширины нет — шкала считается широкой. rootRef объявлен выше
+  // (он же якорь контейнера прокрутки для снимка).
   const [containerW, setContainerW] = useState<number | null>(null);
   useEffect(() => {
     const el = rootRef.current;

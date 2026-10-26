@@ -194,11 +194,11 @@ describe('ось: узкая шкала и отступы (GC-F5c)', () => {
     expect(labelNodes(container).map(l => l.key)).toContain('t1');
   });
 
-  it('отступы шкалы под колонки сетки строки этапа', () => {
-    const { container } = mountAxisFull(LIVE_AXIS, TO, { insetLeft: 262, insetRight: 116 });
+  it('отступы шкалы под колонку дорожек (как у строки этапа: 24 + 250 + 12 | 104 + 12)', () => {
+    const { container } = mountAxisFull(LIVE_AXIS, TO, { insetLeft: 286, insetRight: 116 });
     const scale = findNodeByAttr(container, 'data-testid', 'lane-axis-scale')!;
     const st = styleOf(scale);
-    expect(st.marginLeft).toBe(262);
+    expect(st.marginLeft).toBe(286);
     expect(st.marginRight).toBe(116);
   });
 });

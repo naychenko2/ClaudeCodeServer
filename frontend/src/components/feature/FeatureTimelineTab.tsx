@@ -50,10 +50,32 @@ import type { FeatureRun, FeatureStage, FeatureStageExecutor, StageKey } from '.
 // считаются от тех же чисел).
 const COL_NAME = 250;
 const COL_META = 104;
+// Отступ строки этапа и зазор между её колонками — часть геометрии дорожки: ось
+// сдвигается на те же значения, иначе шкала встаёт левее дорожки (GC-F5cR).
+const ROW_PAD = SP.xl;
+const GRID_GAP = SP.md;
 // Ширина шкалы, ниже которой часовые отметки налезают на подпись «начало …»:
 // первая отметка стоит на 16,6 % шкалы, подпись «начало 20.10 · 03:00» — ~102 px;
-// перекрытие начинается с шкалы ~690 px.
+// перекрытие начинается с шкалы ~690 px. Порог — про ширину САМОЙ шкалы (label
+// «начало» и отметка считаются от её левого края), поэтому отступы на него не влияют.
 const MIN_SCALE_W = 690;
+
+// Отступы шкалы под колонку дорожек: ось обязана лежать ровно над дорожкой.
+// Дорожка — вторая колонка сетки строки этапа, а сама строка сдвинута на ROW_PAD:
+// отсюда колонка имени (COL_NAME) + зазор сетки (GRID_GAP). Справа — колонка
+// длительности (COL_META) + зазор. На 360 сетка одноколонная (дорожка под именем),
+// но отступ строки остаётся — шкала встаёт по нему же.
+export function laneAxisInsets(isMobile: boolean): { left: number; right: number } {
+  return isMobile
+    ? { left: ROW_PAD, right: 0 }
+    : { left: ROW_PAD + COL_NAME + GRID_GAP, right: COL_META + GRID_GAP };
+}
+
+// Ширина шкалы — та же, что у дорожки: контейнер минус отступы оси.
+export function laneScaleWidth(containerW: number, isMobile: boolean): number {
+  const { left, right } = laneAxisInsets(isMobile);
+  return containerW - left - right;
+}
 
 // Активный интервал Ганта: этап + индекс. Одна точка табуляции на весь Гант.
 interface LaneFocus { stage: StageKey; index: number }
@@ -188,7 +210,7 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
     <div
       data-testid={`timeline-stage-${stage.key}`}
       style={{
-        position: 'relative', paddingLeft: SP.xl, paddingBottom: SP.lg,
+        position: 'relative', paddingLeft: ROW_PAD, paddingBottom: SP.lg,
         // Вспышка строки после «Показать в ленте» (C.accentLight, 1,4 с).
         ...(flash ? { background: C.accentLight, transition: 'background 0.3s' } : {}),
       }}
@@ -200,7 +222,7 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
       {/* Строка этапа: сетка 250px | 1fr | 104px (на 360 — одна колонка: кнопка, дорожка под ней) */}
       <div
         data-testid={`timeline-stage-grid-${stage.key}`}
-        style={{ display: 'grid', gridTemplateColumns: gridColumns, gap: SP.md, alignItems: 'center' }}
+        style={{ display: 'grid', gridTemplateColumns: gridColumns, gap: GRID_GAP, alignItems: 'center' }}
       >
         {/* Колонка 1: имя (кнопка раскрытия) · состояние · счётчик */}
         <div style={{ gridColumn: '1', minWidth: 0 }}>
@@ -470,8 +492,10 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false, st
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  const scaleW = containerW === null ? null : containerW - COL_NAME - COL_META - SP.md * 2;
+  const scaleW = containerW === null ? null : laneScaleWidth(containerW, isMobile);
   const dense = !isMobile && scaleW !== null && scaleW < MIN_SCALE_W;
+  // Отступы шкалы — те же, что у колонки дорожек (GC-F5cR): ось лежит ровно над ней.
+  const axisInsets = useMemo(() => laneAxisInsets(isMobile), [isMobile]);
 
   // Перевод фокуса на соседний интервал: ←→ — по этапу, ↑↓ — ближайший по x интервал
   // соседнего этапа, Home/End — первый/последний интервал этапа (макет feature-gantt-6).
@@ -712,10 +736,10 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false, st
           now={nowIso}
           isMobile={isMobile}
           dense={dense}
-          // Отступы под колонки сетки — только на широкой раскладке: на 360 дорожка
-          // лежит под именем во всю ширину, отступы уводили бы шкалу за край.
-          insetLeft={isMobile ? 0 : COL_NAME + SP.md}
-          insetRight={isMobile ? 0 : COL_META + SP.md}
+          // Отступы под колонку дорожек: ось лежит ровно над дорожкой (GC-F5cR).
+          // На 360 сетка одноколонная — дорожка под именем, но отступ строки остаётся.
+          insetLeft={axisInsets.left}
+          insetRight={axisInsets.right}
         />
       )}
       {stages.map((stage, i) => (

@@ -20,7 +20,7 @@
 import { act } from 'react';
 import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { FeatureTimelineTab } from './FeatureTimelineTab';
+import { FeatureTimelineTab, laneAxisInsets, laneScaleWidth } from './FeatureTimelineTab';
 import {
   stageName, stageStatusLabel, stageBoundsLabel, stageDurationLabel,
   stageDotStyle, stageLineStyle, buildTaskMap, minutesSince, executorStatus, stageStatusBadge,
@@ -1025,5 +1025,83 @@ describe('FeatureTimelineTab: дорожки и ось (GC-F5c)', () => {
     }
     expect(counters['prod'], 'у prod — план шагов').toBe('4/4');
     expect(counters['review'], 'у ревью — факт').toBe('1 задач');
+  });
+});
+
+// === GC-F5cR: ось времени по той же колонке, что и дорожка ===
+//
+// Отступы оси выводятся ЗДЕСЬ из разметки самой строки этапа (отступ строки +
+// колонки сетки + зазор), а не из констант компонента: иначе тест повторял бы
+// реализацию и зеленел бы после любой правки. Мутация: сдвинуть шкалу на 24 px
+// (вернуть insetLeft без отступа строки) — «ось по колонке дорожек» краснеет.
+describe('FeatureTimelineTab: ось по колонке дорожек (GC-F5cR)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    personaMap.clear();
+    personaMap.set('p1', 'Денис');
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  // Отступы колонки дорожек в координатах корня вкладки: считаются по стилям
+  // самой строки этапа (отступ строки + колонки сетки + зазор).
+  function laneOffsets(c: FNodeLike): { left: number; right: number } {
+    const row = findNodeByAttr(c as never, 'data-testid', 'timeline-stage-prod')!;
+    const grid = findNodeByAttr(c as never, 'data-testid', 'timeline-stage-grid-prod')!;
+    const rowStyle = (row as unknown as { style: Record<string, string> }).style;
+    const gridStyle = (grid as unknown as { style: Record<string, string> }).style;
+    const pad = Number(String(rowStyle.paddingLeft).replace('px', ''));
+    const gap = Number(String(gridStyle.gap).replace('px', ''));
+    const cols = String(gridStyle.gridTemplateColumns).split(' ');
+    const px = (s: string) => Number(s.replace('px', ''));
+    if (cols.length === 1) {
+      // 360: одна колонка — дорожка под именем, во всю ширину строки.
+      return { left: pad, right: 0 };
+    }
+    // Десктоп: колонка имени слева, колонка длительности справа, дорожка между ними.
+    return { left: pad + px(cols[0]!) + gap, right: px(cols[2]!) + gap };
+  }
+
+  function axisInsets(c: FNodeLike): { left: number; right: number } {
+    const scale = findNodeByAttr(c as never, 'data-testid', 'lane-axis-scale')!;
+    const st = (scale as unknown as { style: Record<string, string> }).style;
+    return {
+      left: Number(String(st.marginLeft).replace('px', '')),
+      right: Number(String(st.marginRight).replace('px', '')),
+    };
+  }
+
+  it('десктоп: ось начинается там же, где дорожка, и кончается там же', () => {
+    const c = renderTabWithStats(mkRun(fullStages()), laneStats());
+    const lane = laneOffsets(c as never);
+    const axis = axisInsets(c as never);
+    expect(axis.left, 'левый край шкалы = левый край дорожки').toBe(lane.left);
+    expect(axis.right, 'правый край шкалы = правый край дорожки').toBe(lane.right);
+    // Числа — для опознания сдвига: 24 (отступ строки) + 250 (имя) + 12 (зазор).
+    expect(lane.left).toBe(286);
+    expect(lane.right).toBe(116);
+  });
+
+  it('360: ось встаёт по отступу строки, во всю ширину дорожки', () => {
+    const c = renderTabWithStats(mkRun(fullStages()), laneStats(), true);
+    const lane = laneOffsets(c as never);
+    const axis = axisInsets(c as never);
+    expect(axis.left, 'левый край шкалы = левый край дорожки').toBe(lane.left);
+    expect(axis.right, 'правый край шкалы = правый край дорожки').toBe(lane.right);
+    expect(lane.left).toBe(24);
+    expect(lane.right).toBe(0);
+  });
+
+  it('ширина шкалы = ширина дорожки (порог плотного режима меряет ту же шкалу)', () => {
+    // 1280: дорожка 878 px (286 | … | 116), шкала — та же ширина.
+    expect(laneScaleWidth(1280, false)).toBe(878);
+    expect(laneAxisInsets(false)).toEqual({ left: 286, right: 116 });
+    // 360: дорожка 336 px (24 | … | 0).
+    expect(laneScaleWidth(360, true)).toBe(336);
+    expect(laneAxisInsets(true)).toEqual({ left: 24, right: 0 });
   });
 });

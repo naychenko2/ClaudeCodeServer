@@ -6,13 +6,16 @@ using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Tasks.Journal;
 using ClaudeHomeServer.Services.Tasks.Projector;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
-namespace ClaudeHomeServer.Tests.Services;
+// Тесты живут в сборке вертикали (ADR-014, хвост RV-K-Q6-BOUND-1): FeatureQueueService — в
+// ClaudeHomeServer.Tasks, его internal-тестовые швы доступны через InternalsVisibleTo на Tasks.Tests.
+namespace ClaudeHomeServer.Tasks.Tests;
 
 // Очередь фич, шаг Q3A (волна 6, разрез Александра 25.10 §4–§7): FeatureQueueService снимает
 // голову очереди проекта, пока занято меньше лимита. Инварианты И1, И2, И6, И7, И9, И11.
@@ -46,7 +49,7 @@ public class FeatureQueueServiceTests : IDisposable
     public void Dispose()
     {
         _tasks.Dispose();
-        Helpers.TestFs.DeleteDirectoryResilient(_dir);
+        TestFs.DeleteDirectoryResilient(_dir);
     }
 
     private static IConfiguration Config(string dir, int? limit) => new ConfigurationBuilder()

@@ -1478,6 +1478,135 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         mockup.GetProperty("authorPersonaId").GetString().Should().Be("persona-dsg");
     }
 
+    // M8 (находка Глеба по ревью 8ad0b125, п.2, решение): безролевая задача (featureId есть,
+    // role null) — задача ПОЛНОГО run: она входит в AllRunTasks. Её linkedFiles доходят до
+    // каталога, а макет получает taskId/authorPersonaId от неё — тот же состав, что у ленты
+    // событий (FeatureProjector.BuildEvents) и chats[] (allFeatureTasks в GetFeature): ВСЕ
+    // задачи с featureId. До решения AllRunTasks не включал run.Unroled: макет безролевой
+    // задачи не попадал в карточку вовсе (ни через AllLinkedFiles, ни через OwnerTask) — ровно
+    // так же, как сломалась роль design в M1. Каталог настоящий, файл на диске: мутация
+    // (убрать AddRange(run.Unroled) в AllRunTasks) — linkedPaths не доходит, макета нет →
+    // тест красный.
+    [Fact]
+    public async Task GetFeature_Mockups_Unroled_ЗадачаБезРолиДаётМакет()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString()!;
+        // Безролевая задача фичи с linkedFiles на макет; PersonaId — напрямую в сторе
+        // (мимо валидации персоны в Create).
+        var unroled = await CreateTaskAsync(new
+        {
+            title = "безролевая", featureId = epicId,
+            linkedFiles = new[] { "docs/mockups/x.html" },
+        });
+        var unroledId = unroled.GetProperty("id").GetString()!;
+        _factory.Services.GetRequiredService<TaskManager>().GetById(unroledId)!.PersonaId = "persona-unr";
+        var dir = Path.Combine(_factory.TempDir, "mk_unr_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        var project = Projects.Create("mk-unr-" + Guid.NewGuid().ToString("N")[..6], dir, OwnerId, "testuser");
+        _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.ProjectId = project.Id;
+        // Та же проверка проектного фильтра, что в design-образце: задача — в проекте эпика.
+        _factory.Services.GetRequiredService<TaskManager>().GetById(unroledId)!.ProjectId = project.Id;
+        // Файл макета на диске: настоящий каталог проверяет существование по диску (запасной
+        // путь linkedFiles) — без linkedPaths задачи записи не было бы вовсе.
+        Directory.CreateDirectory(Path.Combine(dir, "docs", "mockups"));
+        File.WriteAllText(Path.Combine(dir, "docs", "mockups", "x.html"), "mockup");
+
+        var controller = BuildController(git: null,
+            catalog: _factory.Services.GetRequiredService<MockupCatalog>());
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
+
+        var json = FeatureJson(result);
+        var mockup = json.GetProperty("mockups").EnumerateArray().Single();
+        mockup.GetProperty("path").GetString().Should().Be("docs/mockups/x.html");
+        mockup.GetProperty("taskId").GetString().Should().Be(unroledId, "taskId — по безролевой задаче");
+        mockup.GetProperty("authorPersonaId").GetString().Should().Be("persona-unr");
+    }
+
+    // M8 (находка Глеба по ревью 8ad0b125, п.2): сторож полноты ролей в двух списках задач
+    // фичи — AllRunTasks (макеты: AllLinkedFiles/OwnerTask) и BuildPlans (вкладка «Планы и
+    // макеты»). Оба перечисляют списки FeatureRun вручную: новая роль из TaskRoles.All, попав
+    // в FeatureRun, молча выпадает из обоих — ровно так сломалась роль design. Сторож — таблица
+    // роль → список FeatureRun плюс проверка поведения: новая роль в TaskRoles.All без строки
+    // в таблице, новый список в FeatureRun, не покрытый таблицей, или выпавшая строка в одном
+    // из списков — тест красный. Таблица — место, где решение о новой роли записывается
+    // осознанно: какой список её несёт и документ ли она (InPlans — роль в BuildPlans).
+    private static readonly (string? Role, string List, bool InPlans)[] RoleToRunList =
+    [
+        (TaskRoles.Feature, nameof(FeatureRun.Epic), false),
+        (TaskRoles.Cut, nameof(FeatureRun.Cut), true),
+        (TaskRoles.Design, nameof(FeatureRun.Design), true),
+        (TaskRoles.Plan, nameof(FeatureRun.Plan), true),
+        (TaskRoles.Step, nameof(FeatureRun.Steps), false),
+        (TaskRoles.Rework, nameof(FeatureRun.Steps), false),
+        (TaskRoles.Review, nameof(FeatureRun.Reviews), false),
+        (TaskRoles.Qa, nameof(FeatureRun.Qa), false),
+        (TaskRoles.Final, nameof(FeatureRun.Final), false),
+        (TaskRoles.Merge, nameof(FeatureRun.Merge), false),
+        (TaskRoles.Consult, nameof(FeatureRun.Cut), true),
+        // Безролевые задачи (role = null): не роль из TaskRoles.All, но вид задачи в run —
+        // M8: входят в AllRunTasks (тот же состав, что у ленты событий и chats[]), не документы.
+        (null, nameof(FeatureRun.Unroled), false),
+    ];
+
+    [Fact]
+    public void AllRunTasks_и_BuildPlans_НесутЗадачиКаждойРоли()
+    {
+        // Полнота таблицы в обе стороны: каждая роль TaskRoles.All имеет строку (новая роль →
+        // красный тест, пока решение здесь не записано); в таблице нет ролей вне TaskRoles.All
+        // (роль убрали — чистится и таблица). Строка безролевых (Role=null) — вне этого
+        // сравнения: это не роль TaskRoles.All, а вид задачи run.
+        var mappedRoles = RoleToRunList.Where(r => r.Role is not null).Select(r => r.Role!).ToList();
+        foreach (var role in TaskRoles.All)
+            mappedRoles.Should().Contain(role,
+                "новая роль TaskRoles.All должна быть внесена в таблицу: какой список FeatureRun её несёт, документ ли она");
+        foreach (var role in mappedRoles)
+            TaskRoles.All.Should().Contain(role, "в таблице нет ролей вне TaskRoles.All — чистится и таблица");
+
+        // Каждый список/одиночное поле FeatureRun, несущее задачу, покрыт таблицей: новый
+        // список в FeatureRun (под новую роль) краснит сторож, пока его не посмотрели.
+        var covered = new HashSet<string>(RoleToRunList.Select(r => r.List));
+        foreach (var prop in typeof(FeatureRun).GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (prop.PropertyType != typeof(TaskItem) && prop.PropertyType != typeof(List<TaskItem>))
+                continue;
+            covered.Should().Contain(prop.Name,
+                $"поле FeatureRun «{prop.Name}» несёт задачи, но не покрыто таблицей ролей");
+        }
+
+        // Поведение: задача каждой строки таблицы входит в AllRunTasks (список задач фичи);
+        // документная роль — и в BuildPlans; недокументная — в BuildPlans не входит (контракт
+        // FeaturePlan: step в документы не попадает).
+        var run = new FeatureRun { FeatureId = "f" };
+        var tasks = new TaskItem[RoleToRunList.Length];
+        for (var i = 0; i < RoleToRunList.Length; i++)
+        {
+            var (role, listName, _) = RoleToRunList[i];
+            var task = new TaskItem { Id = role is null ? "t-unroled" : "t-" + role, Role = role };
+            tasks[i] = task;
+            var prop = typeof(FeatureRun).GetProperty(listName)!;
+            if (prop.PropertyType == typeof(TaskItem))
+                prop.SetValue(run, task);
+            else
+                ((List<TaskItem>)prop.GetValue(run)!).Add(task);
+        }
+
+        var all = TasksController.AllRunTasks(run);
+        var plans = FeatureProjector.BuildPlans(run);
+        for (var i = 0; i < RoleToRunList.Length; i++)
+        {
+            var (role, _, inPlans) = RoleToRunList[i];
+            var label = role ?? "без роли";
+            all.Should().Contain(tasks[i], $"AllRunTasks обязан включать задачу «{label}»");
+            if (inPlans)
+                plans.Should().Contain(p => p.TaskId == tasks[i].Id,
+                    $"BuildPlans обязан включать документ «{label}»");
+            else
+                plans.Should().NotContain(p => p.TaskId == tasks[i].Id,
+                    $"«{label}» не документ: в BuildPlans она не входит");
+        }
+    }
+
     // ─── W4-5: каталог читает проверенное worktree эпика (п.5.1) ────────────────────────────
 
     // Каталог, запоминающий корень каждого вызова Find и возвращающий маркерную запись с ОДНИМ

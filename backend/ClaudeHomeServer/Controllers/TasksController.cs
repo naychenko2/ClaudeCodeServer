@@ -1154,8 +1154,8 @@ public class TasksController(
             return ([], "device");
 
         // 3. Docs: catalog?.Find (null — каталога нет в DI → [] без флага). linkedPaths —
-        //    linkedFiles всех задач ПОЛНОГО run (эпик + шаги + ревью + qa + финал + мерж +
-        //    разрез + план), только из проекта эпика (см. AllLinkedFiles).
+        //    linkedFiles всех задач ПОЛНОГО run (состав — по AllRunTasks), только из проекта
+        //    эпика (см. AllLinkedFiles).
         var linkedPaths = AllLinkedFiles(run);
 
         // W4-5: каталог читает проверенное дерево эпика и main; слияние по относительному
@@ -1211,11 +1211,17 @@ public class TasksController(
     }
 
     // Все задачи ПОЛНОГО run в одном списке: эпик + шаги + ревью + qa + финал + мерж +
-    // разрез + дизайн + план. Единый хелпер (не две копии): новая роль в run не должна молча отстать
+    // разрез + дизайн + план + безролевые. Единый хелпер (не две копии): новая роль в run не должна молча отстать
     // в одном из мест (автор макета / linkedFiles) — обе точки берут список отсюда.
+    // Полноту состава держит сторож TasksControllerTests.AllRunTasks_и_BuildPlans_НесутЗадачиКаждойРоли:
+    // новая роль из TaskRoles.All или новый список в FeatureRun без строки здесь — красный тест.
+    // internal — тот же шов, что у других хелперов для тестов (InternalsVisibleTo).
     // M1: design входит — иначе макеты от задач дизайнера не попадают ни в AllLinkedFiles,
     // ни в OwnerTask (карточка фичи их не показывает).
-    private static List<TaskItem> AllRunTasks(FeatureRun run)
+    // M8 (находка Глеба 8ad0b125, п.2): Unroled входит — состав тот же, что у ленты событий
+    // (FeatureProjector.BuildEvents) и chats[] (allFeatureTasks в GetFeature): ВСЕ задачи с
+    // featureId. Безролевая задача с linkedFiles на макет не должна молча выпадать из карточки.
+    internal static List<TaskItem> AllRunTasks(FeatureRun run)
     {
         var all = new List<TaskItem> { run.Epic };
         all.AddRange(run.Steps);
@@ -1226,6 +1232,7 @@ public class TasksController(
         all.AddRange(run.Cut);
         all.AddRange(run.Design);
         all.AddRange(run.Plan);
+        all.AddRange(run.Unroled);
         return all;
     }
 

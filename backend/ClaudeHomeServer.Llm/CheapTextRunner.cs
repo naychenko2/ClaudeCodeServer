@@ -55,6 +55,7 @@ public sealed class CheapTextRunner(
             return true;
         }
 
+        if (route.Engine is not null) return router.EngineOf(route)?.Enabled == true;
         return LocalStepApplies(actionKey, route.Kind) && ollama.Enabled;
     }
 
@@ -65,7 +66,7 @@ public sealed class CheapTextRunner(
         var route = ResolveRoute(actionKey);
         return route.Kind switch
         {
-            RouteKind.Local => ollama.Enabled,
+            RouteKind.Local => route.Engine is null ? ollama.Enabled : router.EngineOf(route)?.Enabled == true,
             RouteKind.FacePose => false,
             _ => true,
         };
@@ -85,7 +86,7 @@ public sealed class CheapTextRunner(
                     ? $"direct:{CloudCheapClient.StripPrefix(route.Model!)}"
                     : $"model={route.Model}",
             RouteKind.Tier => $"tier={route.Tier?.ToString().ToLowerInvariant() ?? "medium"}",
-            RouteKind.Local => "local",
+            RouteKind.Local => route.Engine is null ? "local" : $"local:{route.Engine}",
             _ => string.IsNullOrWhiteSpace(fallbackModel) ? "claude" : $"claude({fallbackModel})",
         };
     }
@@ -189,7 +190,20 @@ public sealed class CheapTextRunner(
         // не отличался бы от «локаль». Для «сильных» действий (DefaultLocal=false) локаль
         // пропускаем и как страховку: слабая модель на сложной задаче даёт мусор, который ещё
         // и «сойдёт» за успех и оборвёт цепочку до качественного claude.
-        if (LocalStepReady(actionKey, route.Kind))
+        // Именованный движок (LocalEngines:*) — свой шаг со своей страховкой (direct-модель),
+        // занятость основного движка ходом к нему не относится: он на другой карте/машине.
+        if (router.EngineOf(route) is { } engine)
+        {
+            var viaEngine = await RunEngineAsync(engine, actionKey, prompt, jsonFormat, ownerId, ct);
+            if (!string.IsNullOrWhiteSpace(viaEngine)) return viaEngine;
+            // Страховка движка — облако: в режиме «без облака» (RunLocalOrChosenAsync) её нет.
+            if (allowCloudFallback && engine.Spec.FallbackRoute is { } insurance)
+            {
+                var insured = await TryDirectAsync(actionKey, insurance, prompt, ownerId, ct);
+                if (insured is not null) return insured;
+            }
+        }
+        else if (LocalStepReady(actionKey, route.Kind))
         {
             var local = await RunLocalAsync(actionKey, prompt, jsonFormat, ownerId, ct);
             if (!string.IsNullOrWhiteSpace(local)) return local;
@@ -306,18 +320,41 @@ public sealed class CheapTextRunner(
     }
 
     private Task<string?> RunLocalAsync(string actionKey, string prompt, object? jsonFormat,
-        string? ownerId, CancellationToken ct)
+        string? ownerId, CancellationToken ct) =>
+        RunOnClientAsync(ollama, actionKey, prompt, jsonFormat, ownerId, router.ProfileFor(actionKey), ct);
+
+    // Шаг именованного движка: сначала проба готовности (движок под арбитром GPU бывает
+    // выгружен штатно — отказ обязан быть мгновенным, а не таймаутом), затем вызов по профилю
+    // места с контекстом не выше окна движка (NumCtx спецификации — потолок обрезки промпта).
+    private async Task<string?> RunEngineAsync(LocalEngine engine, string actionKey, string prompt,
+        object? jsonFormat, string? ownerId, CancellationToken ct)
     {
+        if (!engine.Enabled) return null;
+        if (!await engine.IsReadyAsync(ct))
+        {
+            log.LogDebug("cheap-runner: действие {Action} — движок {Engine} не готов, иду дальше по цепочке",
+                actionKey, engine.Name);
+            return null;
+        }
         var spec = router.ProfileFor(actionKey);
-        return jsonFormat is null
-            ? ollama.GenerateTextAsync(
+        if (engine.Spec.NumCtx is { } cap && cap < spec.NumCtx) spec = spec with { NumCtx = cap };
+        var text = await RunOnClientAsync(engine.Client, actionKey, prompt, jsonFormat, ownerId, spec, ct);
+        if (string.IsNullOrWhiteSpace(text))
+            log.LogDebug("cheap-runner: действие {Action} — движок {Engine} не ответил, иду дальше по цепочке",
+                actionKey, engine.Name);
+        return text;
+    }
+
+    private static Task<string?> RunOnClientAsync(ILocalLlmClient client, string actionKey, string prompt,
+        object? jsonFormat, string? ownerId, CheapProfileSpec spec, CancellationToken ct) =>
+        jsonFormat is null
+            ? client.GenerateTextAsync(
                 prompt, model: null, timeout: TimeSpan.FromMilliseconds(spec.TimeoutMs),
                 numPredict: spec.NumPredict, numCtx: spec.NumCtx, ownerId, label: actionKey, ct)
-            : ollama.ChatJsonAsync(
+            : client.ChatJsonAsync(
                 systemPrompt: "", userPrompt: prompt, jsonFormat: jsonFormat, ct,
-                model: ollama.TextModel, timeoutMs: spec.TimeoutMs,
+                model: client.TextModel, timeoutMs: spec.TimeoutMs,
                 numPredict: spec.NumPredict, numCtx: spec.NumCtx, ownerId, label: actionKey);
-    }
 
     // Та же цепочка «выбранное → локаль → claude», но с расходом. Текст локали/адаптера
     // оборачивается в OneShotResult без usage (бесплатно — стоимости нет); у claude/провайдера
@@ -364,7 +401,18 @@ public sealed class CheapTextRunner(
         }
 
         // Шаг 2 — локальная модель (usage нет). Для «сильных» действий локаль-страховка пропускается — см. RunAsync.
-        if (LocalStepReady(actionKey, route.Kind))
+        // Именованный движок со своей direct-страховкой — как в RunChainAsync.
+        if (router.EngineOf(route) is { } engine)
+        {
+            var viaEngine = await RunEngineAsync(engine, actionKey, prompt, jsonFormat, ownerId, ct);
+            if (!string.IsNullOrWhiteSpace(viaEngine)) return new OneShotResult(viaEngine, null, 0);
+            if (engine.Spec.FallbackRoute is { } insurance)
+            {
+                var insured = await TryDirectAsync(actionKey, insurance, prompt, ownerId, ct);
+                if (insured is not null) return new OneShotResult(insured, null, 0);
+            }
+        }
+        else if (LocalStepReady(actionKey, route.Kind))
         {
             var local = await RunLocalAsync(actionKey, prompt, jsonFormat, ownerId, ct);
             if (!string.IsNullOrWhiteSpace(local)) return new OneShotResult(local, null, 0);

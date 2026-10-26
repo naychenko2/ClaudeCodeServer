@@ -1037,6 +1037,20 @@ CLI сам переждал 429/529 внутри процесса (событи�
   важнее не платить). Незнакомое значение = дефолт плюс warning. Владельцев без локали правило
   не касается: шаг локали у них и так отсечён `ollama.Enabled`, а ход на локальном провайдере
   начать некому.
+- **Именованные локальные движки** — [NamedLocalEngines.cs](../../backend/ClaudeHomeServer.Llm/NamedLocalEngines.cs):
+  второй и далее llama-server рядом с основным `LocalLlm` (тот один на инстанс и делит GPU с
+  ходами). Зачем: дежурная модель на другой машине (Bonsai 2 9B на «Video»,
+  [deploy/video/bonsai](../../deploy/video/bonsai/README.md)) живёт под арбитром GPU и в любой
+  момент бывает выгружена ради медиазадачи. Конфиг — `LocalEngines:{name}`: транспорт как у
+  `LocalLlm` (`BaseUrl`, `Model`, `TextModel`, `TimeoutMs`, `DisableThinking`), `ReadyUrl` (GET,
+  200 = готов; проба кэшируется 1 с — отказ мгновенный, а не таймаутом), `FallbackRoute`
+  (только `direct:<model>` — страховка движка перед claude), `NumCtx` (окно слота движка —
+  потолок обрезки промпта поверх профиля места), `Actions` (ключи мест каталога). Маршрут:
+  `ActionRoute.Engine` при `Kind=Local`, источник `Config`, приоритет ниже выбора админа и
+  `Ollama:Actions`, выше дефолта каталога. Цепочка места с движком: **движок (если готов) →
+  его `direct:`-страховка → claude**; в `RunLocalOrChosenAsync` страховки нет (она облачная).
+  Занятость основного движка ходом (`LocalBlockedByTurn`) к именованным не относится.
+  `DescribeRoute` показывает `local:{name}`; в UI такое место выглядит как «Локальная» из конфига.
 - **Выбор админа** — [LocalActionOverridesStore.cs](../../backend/ClaudeHomeServer/Services/Llm/LocalActionOverridesStore.cs):
   `data/local-actions.json` (путь от `DataPath`), значение — `"local"` | `"claude"` | id модели;
   снимок в неизменяемом словаре заменяется целиком при записи. Старый формат (`bool`: true=локаль,

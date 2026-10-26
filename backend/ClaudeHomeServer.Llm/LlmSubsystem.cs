@@ -185,6 +185,17 @@ public sealed class LlmSubsystem : IAppSubsystem
                 Subject: "локальным движком модели (vLLM/llama.cpp)",
                 Consequence: "Ход на локальной модели завершится сразу «локальная модель не запущена»."));
 
+        // Именованные локальные движки (LocalEngines:*) — дежурные llama-server рядом с
+        // основным LocalLlm (например, Bonsai 2 на машине «Video» под арбитром GPU). Проба
+        // готовности — тихий клиент: движок выгружен штатно, а не сломан.
+        services.AddSingleton<NamedLocalEngines>();
+        services.AddQuietHttpClient(
+            NamedLocalEngines.HttpClientName,
+            new QuietHttpClientProfile(
+                Category: "ClaudeHomeServer.Llm.LocalEngines",
+                Subject: "арбитром именованного локального движка",
+                Consequence: "Место уйдёт дальше по своей цепочке (страховка или claude)."));
+
         // Бесплатное ранжирование действий локальной Ollama для роутинга
         // через LocalActionRouter.
         services.AddSingleton<OllamaActionRankService>();

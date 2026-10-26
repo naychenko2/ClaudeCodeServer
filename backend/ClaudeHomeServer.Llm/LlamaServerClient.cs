@@ -37,14 +37,21 @@ public sealed class LlamaServerClient : ILocalLlmClient
     public bool Enabled => !string.IsNullOrWhiteSpace(BaseUrl) && !string.IsNullOrWhiteSpace(Model);
     public string ProviderKey => LocalLlmOptions.LlamaServer;
 
-    public LlamaServerClient(IHttpClientFactory http, IConfiguration config,
+    // Клиент с готовыми опциями — для именованных движков (NamedLocalEngines), у которых
+    // транспорт читается из своей секции, а не из LocalLlm:*.
+    public LlamaServerClient(IHttpClientFactory http, LocalLlmOptions options,
         ILogger<LlamaServerClient> logger, Spend.ISpendCollector? spend = null)
     {
         _http = http;
         _logger = logger;
         _spend = spend;
-        _options = LocalLlmOptions.Read(config);
+        _options = options;
+    }
 
+    public LlamaServerClient(IHttpClientFactory http, IConfiguration config,
+        ILogger<LlamaServerClient> logger, Spend.ISpendCollector? spend = null)
+        : this(http, LocalLlmOptions.Read(config), logger, spend)
+    {
         // Расхождение конфига и реальности не должно быть тихим: у llama-server контекст
         // фиксируется при старте сервера и в запросе не передаётся, поэтому NumCtx НЕ
         // расширяет окно — но и не пропадает: по нему считается бюджет обрезки промпта

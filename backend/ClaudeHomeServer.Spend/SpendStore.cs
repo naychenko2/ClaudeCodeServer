@@ -229,7 +229,23 @@ public sealed class SpendStore : ISpendCollector, ISpendDetailReader
     // в "free" — и в деталях, и в дневных агрегатах (инвариант «день либо в деталях, либо
     // в daily» не затрагивается). Идемпотентен: уже бесплатные не трогает, ничего не
     // перевернулось — никакого обращения к диску.
-    public int ReclassifyLocalAsFree(Func<string, bool> isLocalProvider)
+    public int ReclassifyLocalAsFree(Func<string, bool> isLocalProvider) =>
+        Reclassify((source, provider, model) => Reclassifiable(source, provider, model, isLocalProvider),
+            SpendSources.Free);
+
+    // Обратный проход: платный прямой адаптер («minimax-direct», «kimi-direct»), записанный
+    // free по старому правилу «любой *-direct бесплатен», переводится в one-shot (прямой адаптер
+    // зовут только фоновые one-shot). «freellm*-direct» и локальные провайдеры остаются free.
+    // Условия взаимоисключающие с ReclassifyLocalAsFree (там IsFree=true, здесь false) —
+    // пинг-понга в часовом цикле нет. Идемпотентен.
+    public int ReclassifyPaidDirectFromFree(Func<string, bool> isLocalProvider) =>
+        Reclassify((source, provider, model) =>
+                source == SpendSources.Free
+                && provider.EndsWith("-direct", StringComparison.OrdinalIgnoreCase)
+                && !SpendSources.IsFree(provider, model, isLocalProvider(provider)),
+            SpendSources.OneShot);
+
+    private int Reclassify(Func<string, string, string?, bool> match, string target)
     {
         var flipped = 0;
         lock (_ioLock)
@@ -242,8 +258,8 @@ public sealed class SpendStore : ISpendCollector, ISpendDetailReader
                 {
                     foreach (var r in list)
                     {
-                        if (!Reclassifiable(r.Source, r.Provider, r.Model, isLocalProvider)) continue;
-                        r.Source = SpendSources.Free;
+                        if (!match(r.Source, r.Provider, r.Model)) continue;
+                        r.Source = target;
                         changed = true;
                         flipped++;
                     }
@@ -264,7 +280,7 @@ public sealed class SpendStore : ISpendCollector, ISpendDetailReader
                 }
             }
 
-            flipped += ReclassifyDaily(isLocalProvider);
+            flipped += ReclassifyDaily(match, target);
         }
         return flipped;
     }
@@ -275,7 +291,7 @@ public sealed class SpendStore : ISpendCollector, ISpendDetailReader
 
     // Дневные агрегаты: после смены источника две строки могут сойтись по полному
     // составному ключу — их сливает MergeByKey (двойного счёта не должно быть).
-    private int ReclassifyDaily(Func<string, bool> isLocalProvider)
+    private int ReclassifyDaily(Func<string, string, string?, bool> match, string target)
     {
         Dictionary<string, List<DailySpendRow>>? next = null;
         var flipped = 0;
@@ -284,8 +300,8 @@ public sealed class SpendStore : ISpendCollector, ISpendDetailReader
             var changed = false;
             foreach (var r in rows)
             {
-                if (!Reclassifiable(r.Source, r.Provider, r.Model, isLocalProvider)) continue;
-                r.Source = SpendSources.Free;
+                if (!match(r.Source, r.Provider, r.Model)) continue;
+                r.Source = target;
                 changed = true;
                 flipped++;
             }

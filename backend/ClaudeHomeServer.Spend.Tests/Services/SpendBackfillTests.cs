@@ -307,4 +307,78 @@ public class SpendBackfillTests : IDisposable
         row.InputTokens.Should().Be(130);
         row.Turns.Should().Be(2);
     }
+
+    // Обратный проход (решение Андрея, 26.10): платный прямой адаптер, записанный free по
+    // старому правилу «любой *-direct бесплатен», уходит в one-shot; freellm* (с -direct и
+    // без) и локальные провайдеры остаются free. Идемпотентен в обе стороны.
+    [Fact]
+    public void Reclassify_ПлатныеПрямыеАдаптерыУходятИзБесплатных_FreellmОстаются_Идемпотентно()
+    {
+        var dir = Path.Combine(_dir, "spend_reclass_direct");
+        var store = new SpendStore(dir, detailDays: 30);
+        var now = DateTime.UtcNow;
+        store.Record(new SpendRecord { OwnerId = "u1", Provider = "minimax-direct", Model = "MiniMax-M3",
+            Source = SpendSources.Free, Label = "changelog", InputTokens = 100, Timestamp = now });
+        store.Record(new SpendRecord { OwnerId = "u1", Provider = "kimi-direct", Model = "kimi-k3",
+            Source = SpendSources.Free, Label = "action-rank", InputTokens = 40, Timestamp = now });
+        store.Record(new SpendRecord { OwnerId = "u1", Provider = "freellmapi-direct", Model = "auto:fast",
+            Source = SpendSources.Free, Label = "notes.tags", InputTokens = 50, Timestamp = now });
+        store.Record(new SpendRecord { OwnerId = "u1", Provider = "local-qwen", Model = "qwen3.8-27b",
+            Source = SpendSources.Free, InputTokens = 20, Timestamp = now });
+        // freellm без «-direct», записанный one-shot: новый IsFree приводит его в free
+        store.Record(new SpendRecord { OwnerId = "u1", Provider = "freellmapi", Model = "auto:fast",
+            Source = SpendSources.OneShot, Label = "chat-title", InputTokens = 10, Timestamp = now });
+
+        store.ReclassifyPaidDirectFromFree(_ => false).Should().Be(2);
+        store.ReclassifyLocalAsFree(_ => false).Should().Be(1);
+        store.ReclassifyPaidDirectFromFree(_ => false).Should().Be(0);
+        store.ReclassifyLocalAsFree(_ => false).Should().Be(0);
+
+        var reloaded = new SpendStore(dir, detailDays: 30);
+        var all = reloaded.DetailsBetween(DateOnly.MinValue, DateOnly.MaxValue);
+        all.Single(r => r.Provider == "minimax-direct").Source.Should().Be(SpendSources.OneShot);
+        all.Single(r => r.Provider == "kimi-direct").Source.Should().Be(SpendSources.OneShot);
+        all.Single(r => r.Provider == "freellmapi-direct").Source.Should().Be(SpendSources.Free);
+        all.Single(r => r.Provider == "freellmapi").Source.Should().Be(SpendSources.Free);
+        all.Single(r => r.Provider == "local-qwen").Source.Should().Be(SpendSources.Free);
+    }
+
+    // Условия двух проходов взаимоисключающие: в часовом цикле записи не переключаются
+    // туда-обратно — второй раунд обоих даёт 0.
+    [Fact]
+    public void Reclassify_ДваПроходаНеВозвращаютЗаписиДругДруга()
+    {
+        var store = new SpendStore(Path.Combine(_dir, "spend_reclass_pingpong"), detailDays: 30);
+        var now = DateTime.UtcNow;
+        store.Record(new SpendRecord { OwnerId = "u1", Provider = "minimax-direct", Model = "MiniMax-M3",
+            Source = SpendSources.Free, Label = "changelog", InputTokens = 100, Timestamp = now });
+        store.Record(new SpendRecord { OwnerId = "u1", Provider = "local-qwen", Model = "qwen3.8-27b",
+            InputTokens = 20, Timestamp = now });
+
+        store.ReclassifyLocalAsFree(p => p == "local-qwen").Should().Be(1);
+        store.ReclassifyPaidDirectFromFree(p => p == "local-qwen").Should().Be(1);
+        store.ReclassifyLocalAsFree(p => p == "local-qwen").Should().Be(0);
+        store.ReclassifyPaidDirectFromFree(p => p == "local-qwen").Should().Be(0);
+    }
+
+    [Fact]
+    public void Reclassify_ПлатныеПрямыеАдаптерыВСвёрнутыхДнях_СливаютсяБезДвойногоСчёта()
+    {
+        var store = new SpendStore(Path.Combine(_dir, "spend_reclass_direct_daily"), detailDays: 30);
+        var old = DateTime.UtcNow.AddDays(-40);
+        // Два вызова одной модели в один день: один записан free (старое правило), другой one-shot
+        store.Record(new SpendRecord { Id = "dir-r1", OwnerId = "u1", Provider = "minimax-direct", Model = "MiniMax-M3",
+            Source = SpendSources.Free, Label = "changelog", InputTokens = 100, Timestamp = old });
+        store.Record(new SpendRecord { Id = "dir-r2", OwnerId = "u1", Provider = "minimax-direct", Model = "MiniMax-M3",
+            Source = SpendSources.OneShot, Label = "action-rank", InputTokens = 30, Timestamp = old });
+        store.RollupOlderThan(store.WindowStart);
+
+        store.ReclassifyPaidDirectFromFree(_ => false).Should().Be(1);
+
+        var rows = store.DailyBetween(DateOnly.MinValue, DateOnly.MaxValue);
+        var row = rows.Single(r => r.Provider == "minimax-direct"); // слитая строка, не две
+        row.Source.Should().Be(SpendSources.OneShot);
+        row.InputTokens.Should().Be(130);
+        row.Turns.Should().Be(2);
+    }
 }

@@ -29,7 +29,7 @@ import { isLocalEngineKey } from './localEngine';
 export function isFreeProviderKey(key: string, costTier?: string | null, isLocal?: boolean): boolean {
   if (costTier != null) return isFreeCostTier(costTier);
   if (isLocal) return true;
-  return isLocalEngineKey(key) || key.startsWith('freellm') || key.endsWith('-direct');
+  return isLocalEngineKey(key) || key.startsWith('freellm');
 }
 
 // Бейдж полосы «Все провайдеры»: «локально» (локальный движок), «бесплатный»

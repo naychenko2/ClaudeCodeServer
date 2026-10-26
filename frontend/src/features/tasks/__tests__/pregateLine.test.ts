@@ -45,6 +45,13 @@ function localTime(iso: string): string {
   return new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
 }
 
+// Тот же момент в UTC — эталон для гарда «локальное ≠ UTC». Считается из той же
+// отметки, поэтому гард остаётся живым при любой фикстуре (смена времени/даты
+// не превращает проверку в пустую или в ложный красный).
+function utcTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' });
+}
+
 describe('PregateLine', () => {
   let originalTz: string | undefined;
   beforeAll(() => {
@@ -59,7 +66,7 @@ describe('PregateLine', () => {
   it('зелёный: «зелёный по <sha7>, <HH:MM>» — время в локальной зоне', () => {
     const local = localTime(AT_GREEN);
     // Зона должна отличаться от UTC, иначе проверка «локальное против UTC» пустая
-    expect(local).not.toBe('14:32');
+    expect(local).not.toBe(utcTime(AT_GREEN));
     const el = render({ role: 'step', pregate: green });
     expect(el.querySelectorAll('[data-testid="pregate-line"]').length).toBe(1);
     expect(el.textContent).toBe(`Предгейт: зелёный по d9ddd42, ${local}`);

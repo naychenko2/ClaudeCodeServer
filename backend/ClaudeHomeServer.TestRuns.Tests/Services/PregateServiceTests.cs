@@ -390,4 +390,23 @@ public class PregateServiceTests : IDisposable
             refusal.Should().NotContain($"потолок предгейта {configured} с",
                 "печатать сырое значение конфигурации — значит солгать о применённом потолке");
     }
+
+    // Отказ «предгейт остановлен» тоже называет ПРИМЕНЁННЫЙ потолок. Потолок потребителя
+    // (TaskPregateService) ставится ДО git-проверок дерева, поэтому истекает он раньше
+    // потолка вертикали — в боевом пути в отказ уходит именно этот текст, и без числа
+    // исполнитель не отличил бы исчерпание бюджета от ошибки проверки.
+    [Theory]
+    [InlineData(0, PregateCeiling.MaxSeconds)]
+    [InlineData(-5, PregateCeiling.MaxSeconds)]
+    [InlineData(PregateCeiling.MaxSeconds + 1, PregateCeiling.MaxSeconds)]
+    [InlineData(120, 120)]
+    public void ОтказОстановленПечатаетПрименённыйПотолок(int configured, int expected)
+    {
+        var service = new PregateService(Launcher(_ => ("", 0)), new TestRunsOptions { CeilingSeconds = configured },
+            new PregateOptions { Checks = [Check("tsc")] },
+            new PhasePipeline(new BuildConcurrencyGate(2), TimeSpan.FromSeconds(5)));
+
+        service.StoppedRefusal().Should().Contain($"потолок предгейта — {expected} с",
+            "видимый отказ обязан называть фактически применённый потолок");
+    }
 }

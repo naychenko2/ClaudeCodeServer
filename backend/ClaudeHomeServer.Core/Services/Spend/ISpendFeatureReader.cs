@@ -93,7 +93,7 @@ public sealed class FeatureSpendRecord
     public string Source { get; init; } = "";
     // Провайдер записи (ключ из реестра LlmProviders). Нужен разрезу фичи, чтобы посчитать
     // ценовой класс строки (SpendCostTiers): класс по одному провайдеру не выводится из
-    // модели. Пусто — провайдер неизвестен → класс по правилу Core (облачное, кроме claude).
+    // модели. Пусто — провайдер неизвестен → «дорого» (SpendCostTiers): цена неизвестна, занижать её нельзя.
     public string Provider { get; init; } = "";
     // Цена от CLI ненадёжна (модель в списке `Spend:UnreliableCostModels`): токены в сумму,
     // стоимость — нет. Единая точка правды (SpendCostReliability): читатель (SpendFeatureReader)

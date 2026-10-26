@@ -640,8 +640,8 @@ function MoreDetails({ totals, spend, source, isMobile }: {
   if (totals.notWorkingMinutes != null && totals.notWorkingMinutes > 0) {
     rows.push(`не работали — ${approx}${formatDuration(totals.notWorkingMinutes)}`);
   }
-  // «В очереди» (Q5H-1, R-Q3B-2): самостоятельный вид разряды (ADR-031 §«Время в очереди
-  // (queued)») — минуты отдаёт бэк (totals.queuedMinutes), фронт ничего не пересчитывает.
+  // «В очереди» (Q5H-1, R-Q3B-2): самостоятельный вид разряды (ADR-031 §«Время в очереди (queued)») —
+  // минуты отдаёт бэк (totals.queuedMinutes), фронт ничего не пересчитывает.
   // Порядок — как в составе героя (FeatureStatsPulseModel): простой → очередь → ошибки,
   // т. е. рядом с «не работали». При null/0/нет поля строки нет (прежнее поведение).
   // Слово вида — из единого словаря составных видов COMP_LABEL (Q5H-3): герой, эта строка

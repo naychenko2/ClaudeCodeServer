@@ -501,6 +501,37 @@ public class FeatureStepProgressTests
         run.StepProgress.PlanState.Should().NotBe("done");
     }
 
+    // B7 (ревью R-B5, находка 5): дефолт PlanState — константа, не литерал. Значения задают
+    // константы FeatureStepAccounting.Plan* (подняты в internal в доработке B2b); дефолт литералом
+    // разъехался бы с этим определением молча — тот же риск, который закрыл сторож по исходнику
+    // в FeatureBrief.EstimateOf. Мутация: вернуть в FeatureRun.cs `= "pending"` — тест красный.
+    [Fact]
+    public void PlanState_ДефолтКонстантой_ВИсходникеБезЛитерала()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        string? path = null;
+        while (dir is not null && path is null)
+        {
+            var candidate = Path.Combine(dir.FullName, "backend", "ClaudeHomeServer.Tasks",
+                "Projector", "FeatureRun.cs");
+            if (File.Exists(candidate)) path = candidate;
+            dir = dir.Parent;
+        }
+        path.Should().NotBeNull("FeatureRun.cs не найден от дерева сборки — сторож вне дерева не работает");
+
+        var decls = File.ReadAllLines(path!)
+            .Select(l => l.Trim())
+            .Where(l => l.Contains("PlanState") && l.Contains("get; init;"))
+            .ToList();
+        decls.Should().HaveCount(1, "дефолт PlanState объявлен в одном месте");
+        decls[0].Should().Contain("FeatureStepAccounting.PlanPending",
+            "дефолт — константа, которая задаёт значения PlanState");
+        decls[0].Should().NotContain("\"pending\"", "в объявлении PlanState нет литерала состояния плана");
+
+        // Поведение: дефолт равен константе (internal виден этой сборке через InternalsVisibleTo).
+        new FeatureStepProgress().PlanState.Should().Be(FeatureStepAccounting.PlanPending);
+    }
+
     [Fact]
     public void СтарыеШагиБезСтепРефа_ОтдельныеШаги()
     {

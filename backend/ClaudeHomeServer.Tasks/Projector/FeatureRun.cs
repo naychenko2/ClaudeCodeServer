@@ -398,8 +398,10 @@ public sealed class FeatureStepProgress
 {
     // pending — задач role=plan нет, или у всех пустой planSteps; partial — списки есть только у
     // части планов; cut — у всех; done — cut, total > 0 и все шаги приняты. Снятые (withdrawn)
-    // планы в маппинг не входят.
-    public string PlanState { get; init; } = "pending";
+    // планы в маппинг не входят. Значения задают константы FeatureStepAccounting.Plan* — дефолт
+    // литералом разъехался бы с ними молча (тот же риск, что закрывал сторож FeatureBrief.
+    // EstimateOf; возврат ревью R-B5).
+    public string PlanState { get; init; } = FeatureStepAccounting.PlanPending;
     public int Total { get; init; }
     public int Accepted { get; init; }
     public int Review { get; init; }

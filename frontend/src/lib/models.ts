@@ -36,6 +36,8 @@ export interface ProviderCapabilities {
   tierStrong?: string | null;
   tierMedium?: string | null;
   tierWeak?: string | null;
+  // Ценовой класс провайдера (free|cheap|expensive) — приходит с бэка
+  costTier?: string | null;
 }
 
 // У Claude доступно всё — это и дефолт до загрузки списка с бэка

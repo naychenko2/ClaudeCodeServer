@@ -3361,12 +3361,22 @@ export interface SpendTokens {
   total: number;
 }
 
+// Токены дня по ценовым классам моделей. Класс определяет бэк (S1): фронт
+// красит по ключу и НЕ знает, какая модель какого класса.
+export interface SpendTierCounts {
+  free: number;
+  cheap: number;
+  expensive: number;
+}
+
 // Точка дневного ряда обзора/виджета; aggregated — день свёрнут (за детальным окном)
 export interface SpendDayPoint {
   date: string;
   aggregated: boolean;
   total: number;
   bySource: Record<string, number>;
+  // Раскладка дня по ценовым классам (бэк кладёт не везде — старые ответы без поля)
+  byTier?: SpendTierCounts;
   falGenerations: number;
 }
 
@@ -3378,6 +3388,9 @@ export interface SpendCardRow {
   tokens: SpendTokens;
   turns: number;
   falGenerations: number;
+  // Ценовой класс модели строки (free|cheap|expensive). Заполнен для разрезов
+  // «модель» и «провайдер», у прочих — null: класса у них нет
+  tier?: string | null;
 }
 
 export interface SpendOverviewResponse {
@@ -3461,6 +3474,7 @@ export interface SpendTurnDto {
   model: string | null;
   source: string;            // chat-turn | one-shot | fal | free
   label: string | null;      // подпись one-shot действия или endpoint fal
+  tier?: string | null;      // ценовой класс модели хода (free|cheap|expensive)
   tokens: SpendTokens;
   generations: number;
   durationMs: number | null;

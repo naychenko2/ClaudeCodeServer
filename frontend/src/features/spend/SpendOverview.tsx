@@ -5,8 +5,8 @@ import type { ReactNode } from 'react';
 import type { SpendCardRow, SpendOverviewResponse, SpendTurnDto } from '../../types';
 import { C, FONT, R, SHADOW, SP } from 'aihome_shell/kit';
 import {
-  DIM_LABELS, SPEND_SOURCES, fmtDate, fmtRub, fmtTok, fmtTime, genUnit, genUnitLong, isGenSource,
-  nodeName, sourceColor, sourceLabel,
+  DIM_LABELS, SPEND_TIERS, TIER_KEYS, fmtDate, fmtRub, fmtTok, fmtTime, genUnit, genUnitLong,
+  isGenSource, nodeName, rowBarColor, sourceColor, sourceLabel, tierSegments,
 } from './spendModel';
 import type { SpendDim, SpendFilter } from '../../lib/spendContract';
 import { Dot, EmptyBody, GhostBtn, nodeIcon } from './spendUi';
@@ -16,8 +16,9 @@ export interface OverviewOpenCtx {
   filter?: SpendFilter; preset?: string; pivotDim?: string; day?: string; turnId?: string;
 }
 
-// Порядок серий в стеке дня (fal токенов не даёт — в стек не входит)
-const STACK_SOURCES = ['chat-turn', 'one-shot', 'free'];
+// Порядок серий в стеке дня задаётся классами (см. TIER_KEYS): разбивка по
+// источникам в столбике не показывается (решение владельца), но карточка
+// «Источники» внизу остаётся.
 
 function Card({ title, more, onMore, col, isMobile, isTablet, children }: {
   title: string; more?: string; onMore?: () => void; col: number; isMobile: boolean; isTablet?: boolean; children: ReactNode;
@@ -98,7 +99,8 @@ function topCard(opts: {
         const isFree = opts.dim === 'source' && r.key === 'free';
         const isGen = opts.dim === 'source' && isGenSource(r.key);
         const genColor = opts.dim === 'source' ? sourceColor(r.key) : C.planText;
-        const barColor = opts.dim === 'source' ? sourceColor(r.key) : C.accent;
+        // Полоса по моделям/провайдерам красится по ценовому классу строки
+        const barColor = opts.dim === 'source' ? sourceColor(r.key) : rowBarColor(opts.dim, r);
         return (
           <TopRow
             key={r.key || '·'}
@@ -180,11 +182,11 @@ export function SpendOverview({ data, showUsers, isMobile, isTablet = false, emp
       >
         {d.total === 0
           ? <i style={{ display: 'block', height: 2, background: C.track, borderRadius: 1 }} />
-          : STACK_SOURCES.filter(k => (d.bySource[k] ?? 0) > 0).map(k => (
-              <i key={k} style={{
+          : tierSegments(d).map(s => (
+              <i key={s.key} style={{
                 display: 'block', borderRadius: 1,
-                height: Math.max(2, Math.round((d.bySource[k] ?? 0) / dayMax * (chartH - 12))),
-                background: sourceColor(k),
+                height: Math.max(2, Math.round(s.value / dayMax * (chartH - 12))),
+                background: s.color,
               }} />
             ))}
       </div>,
@@ -291,9 +293,9 @@ export function SpendOverview({ data, showUsers, isMobile, isTablet = false, emp
               </div>
             )}
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 8, alignItems: 'center' }}>
-              {STACK_SOURCES.map(k => (
+              {TIER_KEYS.map(k => (
                 <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: C.textSecondary, fontFamily: FONT.sans }}>
-                  <Dot color={sourceColor(k)} />{SPEND_SOURCES[k].label}
+                  <Dot color={SPEND_TIERS[k].color} />{SPEND_TIERS[k].label}
                 </span>
               ))}
               {genRows.length > 0

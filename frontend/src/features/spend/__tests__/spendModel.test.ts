@@ -2,7 +2,10 @@
 // от fal), относится к «генерациям медиа» — рендерится счётчиком, без токенов.
 import { describe, it, expect } from 'vitest';
 import { C } from 'aihome_shell/kit';
-import { SPEND_SOURCES, GEN_SOURCES, isGenSource, sourceColor, sourceLabel, sourceTextColor } from '../spendModel';
+import {
+  GEN_SOURCES, SPEND_SOURCES, SPEND_TIERS, isGenSource, sourceColor, sourceLabel, sourceTextColor,
+  tierColor, tierLabel, tierTextColor,
+} from '../spendModel';
 
 describe('SPEND_SOURCES: серия glif', () => {
   it('glif присутствует с подписью и цветом серии', () => {
@@ -33,5 +36,36 @@ describe('isGenSource: источники без токенов', () => {
     expect(isGenSource('chat-turn')).toBe(false);
     expect(isGenSource('one-shot')).toBe(false);
     expect(isGenSource('free')).toBe(false);
+  });
+});
+
+describe('SPEND_TIERS: ценовые классы моделей', () => {
+  it('у каждого класса своя подпись и свой токен цвета', () => {
+    expect(SPEND_TIERS.free).toEqual({ label: 'Бесплатные', color: C.success });
+    expect(SPEND_TIERS.cheap).toEqual({ label: 'Дёшево', color: C.info });
+    expect(SPEND_TIERS.expensive).toEqual({ label: 'Дорого', color: C.warning });
+  });
+
+  it('хелперы: подпись и цвет по ключу', () => {
+    expect(tierLabel('free')).toBe('Бесплатные');
+    expect(tierColor('free')).toBe(C.success);
+    expect(tierLabel('cheap')).toBe('Дёшево');
+    expect(tierColor('cheap')).toBe(C.info);
+    expect(tierLabel('expensive')).toBe('Дорого');
+    expect(tierColor('expensive')).toBe(C.warning);
+  });
+
+  it('неизвестный ключ и null не роняют — нейтральная подпись и цвет палитры', () => {
+    expect(tierLabel('vip')).toBe('Прочие');
+    expect(tierColor('vip')).toBe(C.textMuted);
+    expect(tierLabel(null)).toBe('Прочие');
+    expect(tierColor(null)).toBe(C.textMuted);
+    expect(tierColor(undefined)).toBe(C.textMuted);
+  });
+
+  it('текстовый цвет класса — парный токен, у неизвестного — приглушённый', () => {
+    expect(tierTextColor('free')).toBe(C.successText);
+    expect(tierTextColor('expensive')).toBe(C.warningText);
+    expect(tierTextColor('vip')).toBe(C.textMuted);
   });
 });

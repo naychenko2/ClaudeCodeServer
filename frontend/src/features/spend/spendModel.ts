@@ -52,6 +52,60 @@ export const sourceColor = (s: string) => SPEND_SOURCES[s]?.color ?? C.textMuted
 export const sourceTextColor = (s: string) =>
   s === 'fal' ? C.planText : s === 'glif' ? C.warningText : sourceColor(s);
 
+// Ценовые классы моделей: бесплатно / дёшево / дорого. Класс приходит с бэка
+// (SpendCardRow.tier, SpendDayPoint.byTier) — словарь «какая модель какого
+// класса» на фронте НЕ дублируем, красим только по ключу.
+export const SPEND_TIERS: Record<string, { label: string; color: string }> = {
+  free: { label: 'Бесплатные', color: C.success },
+  cheap: { label: 'Дёшево', color: C.info },
+  expensive: { label: 'Дорого', color: C.warning },
+};
+
+// Порядок классов в стеке столбика и в легенде
+export const TIER_KEYS = ['free', 'cheap', 'expensive'] as const;
+export type SpendTierKey = typeof TIER_KEYS[number];
+
+// Неизвестный или null-класс → нейтральная подпись и цвет палитры (не выдуманный)
+export const tierLabel = (t?: string | null) =>
+  (t && SPEND_TIERS[t] ? SPEND_TIERS[t].label : 'Прочие');
+export const tierColor = (t?: string | null) =>
+  (t && SPEND_TIERS[t] ? SPEND_TIERS[t].color : C.textMuted);
+// Текстовый вариант цвета класса — для моноширинных значений рядом с полосой
+export const tierTextColor = (t?: string | null) => {
+  if (t === 'free') return C.successText;
+  if (t === 'cheap') return C.info;
+  if (t === 'expensive') return C.warningText;
+  return C.textMuted;
+};
+
+// Сегмент столбика дня: класс + его доля в дне
+export interface SpendTierSegment {
+  key: SpendTierKey;
+  value: number;
+  color: string;
+  share: number;   // доля сегмента в сумме классов дня
+}
+
+// Сегменты столбика дня по ценовым классам. Значения берутся ИЗ byTier
+// (разбивка по источникам в столбике не показывается — решение владельца),
+// порядок сегментов фиксирован: бесплатно → дёшево → дорого.
+export function tierSegments(day: {
+  byTier?: Partial<Record<SpendTierKey, number>> | null;
+  bySource?: Record<string, number> | null;
+}): SpendTierSegment[] {
+  const byTier = day.byTier ?? {};
+  const segs = TIER_KEYS.map(key => ({ key, value: byTier[key] ?? 0, color: tierColor(key) }));
+  const sum = segs.reduce((a, s) => a + s.value, 0);
+  return segs
+    .filter(s => s.value > 0)
+    .map(s => ({ ...s, share: sum > 0 ? s.value / sum : 0 }));
+}
+
+// Цвет полосы строки-карточки: у разрезов «модель»/«провайдер» — по классу
+// (чтобы дешёвая модель была видна сразу), у прочих — акцент.
+export const rowBarColor = (dim: string, row: { tier?: string | null }) =>
+  dim === 'model' || dim === 'provider' ? tierColor(row.tier) : C.accent;
+
 // Источники-«генерации медиа»: денежной суммы у записи нет, показываются счётчиком
 // генераций (как fal). Бэкенд считает Generations у любых source — фронт лишь
 // различает такие источники для подписей и формата значений.

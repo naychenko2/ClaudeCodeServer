@@ -17,6 +17,7 @@ import { formatClock, formatDate, formatDuration, minutesSince, stageLabel } fro
 import { laneWord } from '../../lib/roleLabel';
 import { knownStopVisual } from '../../lib/tasks';
 import type { FeatureBrief, FeatureBriefKind, FeatureBriefNote } from '../../lib/featurePage';
+import type { FeatureRailKey } from '../../types/featureIndex';
 
 // Резолвер имени персоны по personaId (данные вызывают: usePersonas/getPersonaById).
 // null — имя неизвестно: часть строки с именем опускается, строка остаётся валидной
@@ -53,9 +54,12 @@ function stageWord(key: string): string {
 // именительный («Производство»), а после «После» нужен родительный — «После производство»
 // читалось сломанным падежом. Словарь — только родительные формы (не копия stageLabel),
 // с теми же ключами: новая стадия в stageLabel требует родительной формы здесь.
-// «ревью» — средний род, не склоняется. Неизвестный ключ (более новый бэк) не склоняется:
-// формы невиданного слова не знать, остаётся ключ как есть (stageWord).
-const STAGE_GENITIVE: Record<string, string> = {
+// «ревью» — средний род, не склоняется. Типизирована Record<FeatureRailKey, string>
+// (R-F17 п.2, прецедент STAGE_NAME в chatGroups.ts): новая стадия конвейера без родительной
+// формы не соберётся. Рантаймовый фолбэк остаётся: стадия в контракте — string
+// (featurePage.ts:51), незнакомый ключ более нового бэка не склоняется — формы невиданного
+// слова не знать, остаётся ключ как есть (stageWord).
+const STAGE_GENITIVE: Record<FeatureRailKey, string> = {
   cut: 'разреза', design: 'дизайна', plan: 'плана', prod: 'производства',
   review: 'ревью', qa: 'проверки', final: 'финального ревью', merge: 'мержа',
 };
@@ -88,15 +92,14 @@ export function briefNowText(brief: FeatureBrief, opts: BriefTextOptions = {}): 
     case 'error': {
       // Причина — машинный код бэка (ExecutorStopClassifier → Attention.Reason,
       // FeatureProjector.cs:143): переводится общей таблицей knownStopVisual — как соседний
-      // блок «Остановлена» (defect c79050aa: код протекал в строку как есть —
-      // «Исполнитель встал: interrupted_by_user»). Кода нет в таблице — нейтральная фраза
-      // без кода: дефолт таблицы («Исполнение прервано») — плашка карточки задачи, с тоном
-      // и глифом, а не строка «Сейчас».
+      // блок «Остановлена» и плашка карточки (defect c79050aa: код протекал в строку как есть —
+      // «Исполнитель встал: interrupted_by_user»; R-F17 п.1: и «Стоп» человека — в той же
+      // таблице). Нет причины и неизвестный код — одна фраза без двоеточия (R-F17 п.5):
+      // одно состояние не может называться по-разному от того, знает ли фронт код.
       const r = brief.reason;
       if (!r) return 'Исполнитель встал';
       const stop = knownStopVisual(r);
-      if (!stop) return 'Исполнитель остановлен';
-      return `Исполнитель встал: ${stop.text}`;
+      return stop ? `Исполнитель встал: ${stop.text}` : 'Исполнитель встал';
     }
     case 'paused': {
       // «На паузе — поставили вы в 13:40» (макет): код Hold.Reason 'manual' + время
@@ -233,7 +236,7 @@ export function briefNextText(brief: FeatureBrief, nameOf?: PersonaNameResolver)
       // «После» в родительном падеже (defect 16080f64): «После производство» — нет.
       if (!brief.now) return null;
       const genitive = Object.prototype.hasOwnProperty.call(STAGE_GENITIVE, brief.now.stage)
-        ? STAGE_GENITIVE[brief.now.stage]
+        ? STAGE_GENITIVE[brief.now.stage as FeatureRailKey]
         : stageWord(brief.now.stage);
       prefix = `После ${genitive}`;
       break;
@@ -393,8 +396,7 @@ export const BRIEF_MODEL_WORDS: readonly string[] = [
   // «Сейчас» (briefNowText)
   'Ждёт вашего согласия на мерж в master',
   'Ждёт вашего ответа:',
-  'Исполнитель встал',
-  'Исполнитель остановлен', // неизвестный код остановки (defect c79050aa)
+  'Исполнитель встал', // нет причины и неизвестный код — одна фраза (R-F17 п.5)
   'На паузе —', // оба варианта строки паузы
   'Ждёт своей очереди',
   'В очереди:',

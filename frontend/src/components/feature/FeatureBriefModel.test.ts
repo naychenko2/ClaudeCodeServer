@@ -71,10 +71,17 @@ describe('Сейчас: строки восьми kind', () => {
     expect(briefNowText(b, { nameOf })).toBe('Исполнитель встал: Не удалось авторизоваться у провайдера модели');
   });
 
+  // R-F17 (п.1 R-F16): «Стоп» человека — в общей таблице: строка «Сейчас» называет причину
+  // теми же словами, что плашка карточки и блок «Остановлена» (обе берут тот же текст через
+  // executorStopVisual). Мутация: убрать запись interrupted_by_user из таблицы tasks.ts —
+  // тест краснеет (строка теряет причину).
+  it('error с interrupted_by_user — причина названа как на соседних поверхностях (R-F17 п.1)', () => {
+    expect(briefNowText(brief({ kind: 'error', reason: 'interrupted_by_user' }), { nameOf }))
+      .toBe('Исполнитель встал: Исполнение прервано');
+  });
+
   it('error с кодом вне таблицы — нейтральная фраза без кода (defect c79050aa)', () => {
-    // interrupted_by_user — реальный код бэка (находка QA1), которого в таблице фронта нет.
-    expect(briefNowText(brief({ kind: 'error', reason: 'interrupted_by_user' }), { nameOf })).toBe('Исполнитель остановлен');
-    expect(briefNowText(brief({ kind: 'error', reason: 'совсем_новый_код' }), { nameOf })).toBe('Исполнитель остановлен');
+    expect(briefNowText(brief({ kind: 'error', reason: 'совсем_новый_код' }), { nameOf })).toBe('Исполнитель встал');
   });
 
   it('error — машинного кода (латиница с подчёркиванием) нет ни в одной строке (defect c79050aa)', () => {
@@ -84,8 +91,12 @@ describe('Сейчас: строки восьми kind', () => {
     }
   });
 
-  it('error без причины — «Исполнитель встал» без двоеточия', () => {
+  // R-F17 (п.5): нет причины и неизвестный код — одно состояние, одна формулировка.
+  // Мутация: вернуть в модель «Исполнитель остановлен» для неизвестного кода — тест краснеет.
+  it('error без причины — та же фраза, что с неизвестным кодом, без двоеточия (R-F17 п.5)', () => {
     expect(briefNowText(brief({ kind: 'error' }), { nameOf })).toBe('Исполнитель встал');
+    expect(briefNowText(brief({ kind: 'error' }), { nameOf }))
+      .toBe(briefNowText(brief({ kind: 'error', reason: 'совсем_новый_код' }), { nameOf }));
   });
 
   it('paused — «На паузе — поставили вы в 13:40» (макет hold)', () => {

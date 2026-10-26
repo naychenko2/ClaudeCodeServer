@@ -4,6 +4,9 @@
 // неизвестная роль не роняет сетку, hasText=false → «Текста пока нет»,
 // exists=false не открывает файл, mockupsUnavailable='device', счётчик вкладки,
 // ошибка загрузки текста + «Повторить».
+// «Прочие документы» (M7): linkedFiles задач из plans[].mockupPaths показываются
+// карточками (имя + путь), не дублируются с макетами, схлопываются между планами,
+// входят в счётчик; при 'device' группы нет.
 //
 // Окружение node (без jsdom): fakeDom (mount) + mock api.tasks.get (текст документа).
 
@@ -404,6 +407,75 @@ describe('FeaturePlansTab', () => {
     expect(findNodeByAttr(container as FNode, 'data-testid', 'plans-all-empty'), 'пустой раздел не показан').not.toBeNull();
   });
 
+  // === 7b. «Прочие документы» (M7): linkedFiles задач показаны карточками (имя + путь),
+  // путь, покрытый макетом, не дублируется; клик → onOpenFile(путь).
+  // Мутация «не рисовать группу» (otherDocs не проходит в сетку) краснеет: other-doc-row нет. ===
+  it('прочие документы: linkedFiles задачи — карточки (имя + путь), путь макета не дублируется', () => {
+    const onOpenFile = vi.fn();
+    const page = pageData({
+      plans: [plan({
+        taskId: 'd1', role: 'design', title: 'Дизайн',
+        mockupPaths: ['docs/mockups/x.html', 'docs/adr/031-feature.md', 'notes/design-note.md'],
+      })],
+      mockups: [mockup({ path: 'docs/mockups/x.html', title: 'X', files: [{ path: 'docs/mockups/x.html', exists: true }] })],
+    });
+    const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false, onOpenFile }));
+    const rows = collectText(container, 'other-doc-row');
+    expect(rows.length).toBe(2);
+    expect(rows[0]).toContain('031-feature.md');
+    expect(rows[0]).toContain('docs/adr/031-feature.md');
+    expect(rows[1]).toContain('design-note.md');
+    expect(rows[1]).toContain('notes/design-note.md');
+    // Путь, покрытый макетом (его path или файл), в «прочих документах» не дублируется.
+    expect(rows.some(r => r.includes('docs/mockups/x.html'))).toBe(false);
+    // Клик по карточке → onOpenFile с путём.
+    click(container as FNode, 'other-doc-row');
+    expect(onOpenFile).toHaveBeenCalledWith('docs/adr/031-feature.md');
+  });
+
+  // === 7c. Дубли схлопнуты между планами; счётчик = число карточек (R-M3).
+  // Мутация «не дедупить по планам» краснеет: карточек 3; «не считать otherDocs в
+  // plansTabCount» краснеет: бейдж расходится с карточками. ===
+  it('прочие документы: один путь в двух планах — одна карточка; счётчик = карточки', () => {
+    const page = pageData({
+      plans: [
+        plan({ taskId: 'c1', role: 'cut', title: 'Разрез', mockupPaths: ['docs/adr/031.md'] }),
+        plan({ taskId: 'p1', role: 'plan', title: 'План', createdAt: '2026-10-20T00:00:00Z', mockupPaths: ['docs/adr/031.md', 'docs/spec-x.md'] }),
+      ],
+    });
+    const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false }));
+    const docRows = collectText(container, 'other-doc-row');
+    expect(docRows.length).toBe(2);
+    expect(docRows[0]).toContain('docs/adr/031.md');
+    expect(docRows[1]).toContain('docs/spec-x.md');
+    // Счётчик = видимые документы (2) + прочие (2); карточки ровно те же.
+    expect(plansTabCount(page)).toBe(4);
+    expect(collectText(container, 'plan-row').length + docRows.length).toBe(plansTabCount(page));
+  });
+
+  // === 7d. Материалы только из linkedFiles (план скрыт неизвестной ролью): раздел не пустой,
+  // «Документов и макетов пока нет» не врёт. Мутация «не учитывать otherDocs в hasAnything»
+  // краснеет: появляется plans-all-empty. ===
+  it('материалы только из linkedFiles: раздел не пустой, карточка документа есть', () => {
+    const page = pageData({
+      plans: [plan({ taskId: 'x1', role: 'audit' as FeaturePlan['role'], title: 'Аудит', mockupPaths: ['docs/adr/031.md'] })],
+    });
+    expect(plansTabCount(page)).toBe(1);
+    const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false }));
+    expect(findNodeByAttr(container as FNode, 'data-testid', 'plans-all-empty'), '«Документов и макетов пока нет» показано').toBeNull();
+    expect(collectText(container, 'other-doc-row').length).toBe(1);
+  });
+
+  // === 7e. 'device': «прочих документов» нет (файлы локального проекта на устройстве,
+  // страница их не откроет — та же причина, что у плашки макетов). ===
+  it("device: группы «Прочие документы» нет", () => {
+    const page = pageData({ plans: [plan({ mockupPaths: ['docs/adr/031.md'] })], mockups: [], mockupsUnavailable: 'device' });
+    // Счётчик: только карточка плана (прочие при 'device' не считаются).
+    expect(plansTabCount(page)).toBe(1);
+    const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false }));
+    expect(collectText(container, 'other-doc-row').length).toBe(0);
+  });
+
   // === 8. Markdown через ОБЩИЙ рендер (лента): GFM-таблица → <table> ===
   // Мутация: заменить MarkdownContent на свой наивный парсер → <table> не появится.
   it('markdown через общий рендер: GFM-таблица → <table>', async () => {
@@ -484,7 +556,7 @@ describe('FeaturePlansTab', () => {
   // Мутация «одинаковые колонки на мобиле» (gridColumns не читает isMobile) краснеет:
   // тест видит repeat(3, minmax(0, 1fr)) вместо 1fr.
   it('на 360 сетка в одну колонку, на десктопе — в три', () => {
-    const page = pageData({ plans: [plan()], mockups: [mockup()] });
+    const page = pageData({ plans: [plan({ mockupPaths: ['docs/adr/031.md'] })], mockups: [mockup()] });
     const colsOf = (root: FNode, testId: string): string | undefined => {
       const node = findNodeByAttr(root, 'data-testid', testId);
       expect(node, testId).not.toBeNull();
@@ -492,9 +564,11 @@ describe('FeaturePlansTab', () => {
     };
     const mobile = mount(createElement(FeaturePlansTab, { page, isMobile: true }));
     expect(colsOf(mobile.container as FNode, 'plans-grid-docs'), 'на 360 сетка документов не в одну колонку').toBe('1fr');
+    expect(colsOf(mobile.container as FNode, 'plans-grid-other-docs'), 'на 360 сетка «прочих документов» не в одну колонку').toBe('1fr');
     expect(colsOf(mobile.container as FNode, 'plans-grid-mockups'), 'на 360 сетка макетов не в одну колонку').toBe('1fr');
     const desktop = mount(createElement(FeaturePlansTab, { page, isMobile: false }));
     expect(colsOf(desktop.container as FNode, 'plans-grid-docs')).toBe('repeat(3, minmax(0, 1fr))');
+    expect(colsOf(desktop.container as FNode, 'plans-grid-other-docs')).toBe('repeat(3, minmax(0, 1fr))');
     expect(colsOf(desktop.container as FNode, 'plans-grid-mockups')).toBe('repeat(3, minmax(0, 1fr))');
   });
 

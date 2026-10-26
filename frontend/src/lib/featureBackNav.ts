@@ -43,6 +43,39 @@ export interface BackNav {
   // панели/шторки (не из вкладки страницы): чип «← к фиче», вкладки нет, но возврат
   // ведёт на последнюю использованную вкладку (fromTab). true (дефолт) — из вкладки.
   showTab?: boolean;
+  // Снимок вида страницы на момент перехода (GC-F11, fromKind='feature'): его берёт
+  // recordFeatureReturn у зарегистрированного поставщика (вкладки вида), а не у
+  // вызывающих. null — поставщика нет (ушли не с «Хронологии») или он не дал снимка.
+  view?: FeatureViewSnapshot | null;
+}
+
+// === Снимок вида «Хронологии» (GC-F11) ===
+// Возврат по чипу обязан вернуть не только на вкладку, но и на состояние вида:
+// раскрытый этап, раскрытая карточка ленты «Производство», позиция прокрутки. Снимок
+// не собирают вызывающие recordFeatureReturn (их много, вида они не знают) — его
+// даёт поставщик, зарегистрированный самим видом (FeatureTimelineTab). Нет поставщика
+// (ушли с другой вкладки) — нет и снимка.
+export interface FeatureViewSnapshot {
+  // Раскрытый этап «Хронологии» (StageKey); null — все схлопнуты.
+  stageKey: string | null;
+  // Раскрытая карточка ленты «Производство» (stepRef или card-N); null — нет.
+  expandedKey: string | null;
+  // window.scrollY в момент перехода.
+  scrollY: number;
+}
+export type FeatureViewProvider = () => FeatureViewSnapshot | null;
+
+// Поставщик снимка — один (последний зарегистрированный). Ключ — featureId:
+// recordFeatureReturn зовёт его только для той же фичи, что зарегистрировала.
+let _viewProvider: { featureId: string; fn: FeatureViewProvider } | null = null;
+
+// Зарегистрировать поставщика снимка (на время монтирования вкладки). Возвращает
+// снятие: по идентичности записи — снятие старого монтирования не должно стереть
+// регистрацию нового (перемонтирование вкладки).
+export function registerFeatureViewProvider(featureId: string, fn: FeatureViewProvider): () => void {
+  const entry = { featureId, fn };
+  _viewProvider = entry;
+  return () => { if (_viewProvider === entry) _viewProvider = null; };
 }
 
 // Старая строка в хранилище (id чата) читается как переход в чат; объект — как есть.
@@ -52,6 +85,10 @@ export function normalizeBackTarget(raw: string | BackNavTarget): BackNavTarget 
 }
 
 let _back: BackNav | null = null;
+// Однократный снимок «возврат по чипу» (GC-F11): живёт отдельно от указателя —
+// clearBackNav его не трогает (см. consumeFeatureViewReturn ниже).
+let _pendingView: PendingFeatureView | null = null;
+let _pendingSeq = 0;
 const _listeners = new Set<() => void>();
 function emit() { _listeners.forEach(fn => fn()); }
 
@@ -93,11 +130,57 @@ export function clearBackNav(): void {
 // вкладку (fromTab из стора). true (дефолт) — из вкладки: чип с названием вкладки.
 export function recordFeatureReturn(featureId: string, to: { kind: 'chat' | 'task'; id: string }, title?: string | null, tab?: FeaturePageTab, showTab?: boolean): void {
   if (!featureId || !to.id) return;
+  // Новый переход невалидирует незабранный возврат (GC-F11): старый pending не должен
+  // примениться к следующей открытой странице.
+  _pendingView = null;
+  // Снимок вида — у поставщика этой фичи (registerFeatureViewProvider), если он есть;
+  // вызывающие его не передают и не знают (GC-F11).
+  const view = _viewProvider && _viewProvider.featureId === featureId ? _viewProvider.fn() : null;
   _back = {
     from: featureId, fromKind: 'feature', to: { kind: to.kind, id: to.id },
     fromTitle: title ?? null, fromTab: tab ?? getFeaturePageTab(),
     showTab: showTab ?? true,
+    view: view ?? null,
   };
+  emit();
+}
+
+// === Однократный канал «возврат по чипу» (GC-F11) ===
+// Клик чипа переносит снимок из указателя в этот канал ПЕРЕД тем, как обработчик
+// cc-open-feature погасит указатель (clearBackNav) — восстановление не зависит от
+// жизни указателя (дефект 4c4645e2: указатель не должен стираться раньше
+// восстановления). «Хронология» читает канал один раз и гасит его (тот же приём
+// seq, что якорь этапа в featurePage: прочитанный не перечитывается).
+export interface PendingFeatureView { featureId: string; view: FeatureViewSnapshot; seq: number }
+
+// Забрать снимок из ЖИВОГО указателя в pending (зовёт чип — только его клик значит
+// «возврат»; открытие страницы из списка или из плашки чипа не вызывает).
+// Возвращает, был ли снимок. Указатель при этом не гасится — это делает обработчик
+// cc-open-feature, как и раньше.
+export function consumeFeatureViewReturn(featureId: string): boolean {
+  if (!_back || _back.fromKind !== 'feature' || _back.from !== featureId || !_back.view) return false;
+  _pendingSeq += 1;
+  _pendingView = { featureId, view: _back.view, seq: _pendingSeq };
+  emit();
+  return true;
+}
+
+// Прочитать pending без подписки (для эффектов и тестов); стабильная ссылка —
+// тот же объект, пока не поставлен новый или не погашен.
+export function pendingFeatureView(featureId: string): PendingFeatureView | null {
+  return _pendingView && _pendingView.featureId === featureId ? _pendingView : null;
+}
+
+// Хук: однократный снимок возврата для этой фичи (null, пока не забран чипом).
+export function usePendingFeatureView(featureId: string): PendingFeatureView | null {
+  return useSyncExternalStore(subscribe, () => pendingFeatureView(featureId), () => pendingFeatureView(featureId));
+}
+
+// Погасить прочитанный pending (M4-приём якоря этапа): повторный монтаж вкладки не
+// перечитает уже применённый снимок.
+export function clearPendingFeatureView(): void {
+  if (!_pendingView) return;
+  _pendingView = null;
   emit();
 }
 
@@ -161,7 +244,13 @@ export function useFeatureBackNavForTask(taskId: string | null): FeatureBackNavI
 
 // Тестовые швы (не публичное API).
 export const __test = {
-  reset() { _back = null; _listeners.clear(); },
+  reset() {
+    _back = null;
+    _pendingView = null;
+    _pendingSeq = 0;
+    _viewProvider = null;
+    _listeners.clear();
+  },
   recordBackNav,
   recordFeatureReturn,
   clearBackNav,
@@ -170,4 +259,8 @@ export const __test = {
   featureBackNavFrom,
   featureBackNavFromTask,
   normalizeBackTarget,
+  registerFeatureViewProvider,
+  consumeFeatureViewReturn,
+  pendingFeatureView,
+  clearPendingFeatureView,
 };

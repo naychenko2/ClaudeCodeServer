@@ -40,6 +40,7 @@ import {
 import type { StepProgress } from '../../lib/featureProgress';
 import { C } from '../../lib/design';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
+import { __test as backNavTest } from '../../lib/featureBackNav';
 import type { FeatureRun, FeatureStage, FeatureStageExecutor, FeatureStepChain, FeatureRound, FeatureTask } from '../../types/featureRun';
 import type { FeatureStats } from '../../types/featureStats';
 
@@ -1513,5 +1514,116 @@ describe('FeatureTimelineTab: свёртка длинных списков эт�
     const body = openReview(c);
     expect(nodesByTestid(body, 'timeline-executor').length).toBe(10);
     expect(findNodeByAttr(c, 'data-testid', 'timeline-stage-showall-review'), 'кнопки нет при полном списке').toBeNull();
+  });
+});
+
+// === GC-F11: снимок вида и восстановление по чипу ===
+// Трасса: раскрыть этап + карточку → меню «Карточка задачи» (recordFeatureReturn берёт
+// снимок у зарегистрированного поставщика этой вкладки) → клик чипа (consume — сам чип
+// проверяется в FeatureBackChip.test.ts) → закрыть страницу (unmount) → открыть заново:
+// этап раскрыт, карточка раскрыта с фокусом на шапке, прокрутка — записанная. Без клика
+// чипа — ничего не применяется (открытие из списка — не возврат).
+// Мутации (в отчёте): (1) не звать поставщика в recordFeatureReturn → c1/c2 краснеют
+// (снимка нет); (2) убрать window.scrollTo в восстановлении → c2 краснеет;
+// (3) не передать initialExpandedKey в ленту → c1 краснеет (карточка не раскрыта);
+// (4) убрать setExpanded(v.stageKey) → c1 краснеет (этап не восстановлен).
+// Фикстура: все этапы pending — при монтировании не раскрыто НИЧЕГО (дефолт не маскирует
+// восстановление); шаг ST-F9 с меню (есть старт и чат цепочки).
+function returnRun(): FeatureRun {
+  return mkRun([
+    mkStage({ key: 'cut' }), mkStage({ key: 'plan' }), mkStage({ key: 'prod' }),
+    mkStage({ key: 'review' }), mkStage({ key: 'qa' }), mkStage({ key: 'final' }), mkStage({ key: 'merge' }),
+  ], {
+    steps: [{ id: 't-s9', title: 'Возврат', status: 'done', stepRef: 'ST-F9', claudeStartedAt: '2026-10-20T10:00:00Z' }],
+    stepChains: [mkChain({ stepRef: 'ST-F9', title: 'Возврат', taskIds: ['t-s9'], chatId: 'chat-s9' })],
+  });
+}
+
+describe('FeatureTimelineTab: восстановление по чипу (GC-F11)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    personaMap.clear();
+    personaMap.set('p1', 'Денис');
+    backNavTest.reset();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  // Первая половина трассы (общая для c1–c3): раскрыть этап и карточку, «стоять» на
+  // прокрутке 1234, уйти в задачу из меню карточки. Возвращает root монтирования —
+  // закрытие страницы делает тест.
+  function leaveToTask(run: FeatureRun) {
+    installFakeDom();
+    const { root, container } = mount(createElement(FeatureTimelineTab, { run }));
+    const header = findNodeByAttr(container, 'data-testid', 'timeline-stage-header-prod')!;
+    act(() => { (reactProps(header)!.onClick as () => void)(); });
+    const card = findNodeByAttr(container, 'data-testid', 'prod-card-ST-F9')!;
+    act(() => { (reactProps(card)!.onClick as () => void)(); });
+    // Прокрутка в момент перехода (у фейк-DOM window.scrollY нет — ставим явно).
+    (globalThis as { window: Record<string, unknown> }).window.scrollY = 1234;
+    const code = findNodeByAttr(container, 'data-testid', 'prod-code-ST-F9')!;
+    act(() => { (reactProps(code)!.onClick as () => void)(); });
+    // Меню — портал в document.body; кликаем кнопку внутри обёртки пункта.
+    const body = (globalThis as { document: { body: never } }).document.body as never;
+    const item = findNodeByAttr(body, 'data-testid', 'prod-menu-task') as { children: never[] } | null;
+    expect(item, 'пункта меню «Карточка задачи» нет').toBeTruthy();
+    act(() => { (reactProps((item as { children: never[] }).children[0] as never)!.onClick as () => void)(); });
+    return root;
+  }
+
+  // Открыть страницу заново (тот же документ): восстановление применяется на монтировании.
+  function reopen() {
+    return mount(createElement(FeatureTimelineTab, { run: returnRun() })).container;
+  }
+
+  it('c1: возврат по чипу — этап раскрыт, карточка раскрыта, фокус на её шапке', () => {
+    const root = leaveToTask(returnRun());
+    expect(backNavTest.getBackNav()?.view, 'снимок не записан при переходе')
+      .toEqual({ stageKey: 'prod', expandedKey: 'ST-F9', scrollY: 1234 });
+    // Действие чипа (компонент чипа — в FeatureBackChip.test.ts): снимок в однократный канал.
+    expect(backNavTest.consumeFeatureViewReturn('f1'), 'снимка для забора нет').toBe(true);
+    act(() => { root.unmount(); }); // страница фичи закрыта (открыта задача)
+
+    const doc = (globalThis as { document: any }).document;
+    // focus() → activeElement (у фейк-DOM focus — no-op: без патча фокус не виден).
+    const proto = Object.getPrototypeOf(doc.createElement('div'));
+    const origFocus = proto.focus;
+    proto.focus = function (this: any) { doc.activeElement = this; };
+    const c2 = reopen();
+    proto.focus = origFocus;
+
+    const body2 = findNodeByAttr(c2, 'data-testid', 'timeline-stage-body-prod');
+    expect(body2, 'раскрытый этап не восстановлен').not.toBeNull();
+    const card = findNodeByAttr(body2!, 'data-testid', 'prod-card-ST-F9')!;
+    expect(card.getAttribute('aria-expanded'), 'карточка не раскрыта').toBe('true');
+    expect(findNodeByAttr(card, 'data-testid', 'prod-details'), 'раскрытой части карточки нет').not.toBeNull();
+    expect(doc.activeElement, 'фокус не встал на шапку карточки').toBe(card);
+  });
+
+  it('c2: прокрутка восстановлена ровно (window.scrollTo(0, записанное))', () => {
+    const root = leaveToTask(returnRun());
+    expect(backNavTest.consumeFeatureViewReturn('f1')).toBe(true);
+    act(() => { root.unmount(); });
+    const calls: [number, number][] = [];
+    (globalThis as { window: Record<string, unknown> }).window.scrollTo = (x: number, y: number) => { calls.push([x, y]); };
+    reopen();
+    // ±2 px допуск критерия здесь не нужен: значение проходит число в число.
+    expect(calls, 'прокрутка не восстановлена').toEqual([[0, 1234]]);
+  });
+
+  it('c3: открытие фичи БЕЗ чипа снимок не применяет', () => {
+    const root = leaveToTask(returnRun());
+    // Снимок на указателе есть (переход записан), но чип не нажат — это не «возврат».
+    expect(backNavTest.getBackNav()?.view, 'снимок не записан').not.toBeNull();
+    act(() => { root.unmount(); });
+    const calls: [number, number][] = [];
+    (globalThis as { window: Record<string, unknown> }).window.scrollTo = (x: number, y: number) => { calls.push([x, y]); };
+    const c2 = reopen();
+    expect(findNodeByAttr(c2, 'data-testid', 'timeline-stage-body-prod'), 'этап раскрылся без возврата').toBeNull();
+    expect(calls, 'прокрутка сдвинулась без возврата').toEqual([]);
   });
 });

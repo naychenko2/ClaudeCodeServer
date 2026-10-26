@@ -9,7 +9,7 @@ import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { Tooltip } from '../ui/Tooltip';
 import { Button } from '../ui/Button';
 import { getPersonaById } from '../../lib/personas';
-import { recordFeatureReturn } from '../../lib/featureBackNav';
+import { recordFeatureReturn, registerFeatureViewProvider, usePendingFeatureView, clearPendingFeatureView } from '../../lib/featureBackNav';
 import { openChatById } from '../../lib/openChat';
 import { openTaskInSection } from '../../lib/tasks';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
@@ -139,6 +139,7 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
   lane = null, axis = null, tabIndexAt = -1,
   expandedAt = null, hoverAt = null, laneSelected = false, flash = false,
   tailIds = null, turnsByTask = new Map<string, StageTurn[]>(),
+  prodInitialKey = null, prodExpandedKeyRef = null,
   onIntervalSelect, onIntervalHover, onOpenSheet }: {
   stage: FeatureStage; isLast: boolean; expanded: boolean;
   onToggle: () => void; taskMap: Map<string, import('../../types/featureRun').FeatureTask>;
@@ -168,6 +169,12 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
   // Ходы задач по id (GC-F10b): результат buildTurnsByTask — единственный источник.
   // Строка исполнителя получает только ходы своей задачи; здесь их никто не пересчитывает.
   turnsByTask?: Map<string, StageTurn[]>;
+  // Начальная раскрытая карточка ленты «Производство» (GC-F11): ключ из снимка возврата
+  // по чипу. null — восстановления нет.
+  prodInitialKey?: string | null;
+  // Канал чтения текущего expandedKey ленты для снимка (состояние живёт в ленте, ref —
+  // только чтение; на раскрытие карточки он не влияет).
+  prodExpandedKeyRef?: { current: string | null } | null;
   onIntervalSelect?: (index: number, el: HTMLElement | null) => void;
   onIntervalHover?: (index: number | null, el: HTMLElement | null) => void;
   onOpenSheet?: () => void;
@@ -388,7 +395,7 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
                нет, но у стадии есть исполнители — прежние ExecutorRow, задача не
                исчезает из вкладки. Пустое состояние остаётся только когда показывать
                действительно некого. */
-            FeatureProdCardsView({ run, featureId, featureTitle, marks, isMobile }) ?? (stage.executors.length > 0 ? (
+            FeatureProdCardsView({ run, featureId, featureTitle, marks, isMobile, initialExpandedKey: prodInitialKey, expandedKeyRef: prodExpandedKeyRef }) ?? (stage.executors.length > 0 ? (
               stage.executors.map((x, i) => (
                 <ExecutorRow
                   key={`${x.taskId}-${i}`}
@@ -592,6 +599,43 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false, st
   // Один раскрытый этап за раз; null — все схлопнуты.
   const [expanded, setExpanded] = useState<StageKey | null>(currentKey);
   const toggle = (key: StageKey) => setExpanded(cur => (cur === key ? null : key));
+
+  // === Снимок вида и восстановление по чипу (GC-F11) ===
+  // Снимок берётся recordFeatureReturn в момент перехода (регистрация ниже). Состояние
+  // вида живёт в компоненте, как жило; refs — только канал чтения текущего значения
+  // для поставщика: на поведение вкладки они не влияют.
+  const expandedRef = useRef<StageKey | null>(null);
+  expandedRef.current = expanded;
+  const prodExpandedKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    return registerFeatureViewProvider(run.featureId, () => ({
+      stageKey: expandedRef.current,
+      expandedKey: prodExpandedKeyRef.current,
+      // Прокрутка окна: в тестовом фейк-DOM window.scrollY нет — 0 (не выдумываем).
+      scrollY: typeof window !== 'undefined' && typeof window.scrollY === 'number' ? window.scrollY : 0,
+    }));
+  }, [run.featureId]);
+
+  // Восстановление по чипу: однократный снимок, забранный кликом чипа из указателя.
+  // Приём — как якорь этапа (Ф-pl-b): seq — применённый не применяется заново; после
+  // применения канал гасится (повторный монтаж вкладки старый снимок не перечитает).
+  // Карточка: ключ уходит в ленту как initialExpandedKey (лента сама раскроет её и
+  // поставит фокус на шапку). Прокрутка — записанная, «умного» позиционирования нет:
+  // человек был вот здесь.
+  const pendingView = usePendingFeatureView(run.featureId);
+  const [prodInitialKey, setProdInitialKey] = useState<string | null>(null);
+  const pendingViewSeq = useRef(0);
+  useEffect(() => {
+    if (!pendingView || pendingView.seq === pendingViewSeq.current) return;
+    pendingViewSeq.current = pendingView.seq;
+    const v = pendingView.view;
+    if (v.stageKey) setExpanded(v.stageKey as StageKey);
+    // Ставим безусловно: снимок без карточки должен снять и старую начальную карточку
+    // (иначе свежая лента после нового возврата раскрыла бы карточку прошлого возврата).
+    setProdInitialKey(v.expandedKey ?? null);
+    clearPendingFeatureView();
+    if (typeof window !== 'undefined' && typeof window.scrollTo === 'function') window.scrollTo(0, v.scrollY);
+  }, [pendingView]);
 
   // Roving tabindex (GC-F5c): одна точка табуляции на весь Гант — первый интервал
   // первого этапа с дорожкой.
@@ -904,6 +948,8 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false, st
           flash={flashStage === stage.key}
           tailIds={tailIds}
           turnsByTask={turnsByTask}
+          prodInitialKey={prodInitialKey}
+          prodExpandedKeyRef={prodExpandedKeyRef}
           onIntervalSelect={(idx, el) => onIntervalSelect(stage.key, idx, el)}
           onIntervalHover={(idx, el) => onIntervalHover(stage.key, idx, el)}
           onOpenSheet={isMobile ? () => openSheet(stage.key) : undefined}

@@ -33,7 +33,7 @@
 //   • карточка, чья цепочка содержит хвост после мержа (run.postMergeTails — тот же источник,
 //     что у строк этапа, GC-F10a), помечается «· хвост после мержа».
 
-import { Fragment, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import type { CSSProperties, FocusEvent, ReactElement } from 'react';
 import { MessageCircle, FileText, Check, Clock, Minus, ChevronDown } from 'lucide-react';
 import { C, R, FS, SP, FONT, SHADOW } from '../../lib/design';
@@ -646,6 +646,15 @@ type ProdViewProps = {
   // интервалов «Производства» с ходами шага, остальные гаснут до 35 % на 2,4 с. Состояние
   // подсветки живёт у вызывающего (FeatureTimelineTab), глобального стора нет.
   onShowIntervals?: (taskIds: string[]) => void;
+  // GC-F11: начальная раскрытая карточка «возврата по чипу» (expandedKey из снимка).
+  // Применяется при монтировании и при смене пропа (случай живой ленты): карточка
+  // раскрывается и получает фокус шапки. Это однократное восстановление, а не контроль
+  // сверху: состояние раскрытия по-прежнему живёт в ленте.
+  initialExpandedKey?: string | null;
+  // Канал чтения текущего expandedKey для снимка вызывающего (recordFeatureReturn):
+  // состояние живёт в ленте, ref только отражает его — включая сброс при unmount
+  // (схлопнутый этап не имеет раскрытой карточки).
+  expandedKeyRef?: { current: string | null } | null;
 };
 
 // Публичный вход — обычная функция БЕЗ хуков: FeatureTimelineTab зовёт её напрямую
@@ -668,6 +677,7 @@ export function FeatureProdCardsView(props: ProdViewProps): ReactElement | null 
 function ProdCardsBody({
   run, featureId, featureTitle = null, marks = EMPTY_NAV_MARKS, isMobile = false,
   axis = null, turnsByTask = null, now, tailIds, onShowIntervals, nameOf, cards,
+  initialExpandedKey = null, expandedKeyRef = null,
 }: ProdViewProps & { nameOf: (id: string) => string | null; cards: ProdCard[] }): ReactElement {
   // У шага проекта в данных нет — берём проект эпика, иначе переход уводит в личный «Календарь».
   const projectId = run.epic?.projectId ?? undefined;
@@ -676,10 +686,34 @@ function ProdCardsBody({
   const nowMs = now ?? mountNow;
   // Одна раскрытая карточка за раз (тот же порядок, что у строк этапа): свёртка обязана знать
   // раскрытую карточку — она не прячется никогда. Ключ — stepRef (без stepRef — id карточки;
-  // такая карточка свёрткой не защищена: у неё нет ключа шага).
-  const [expandedKey, setExpandedKey] = useState<string | null>(null);
+  // такая карточка свёрткой не защищена: у неё нет ключа шага). Начальное значение —
+  // из восстановления по чипу (GC-F11): свежая лента после раскрытия этапа встаёт сразу
+  // с раскрытой карточкой, без мигания.
+  const [expandedKey, setExpandedKey] = useState<string | null>(initialExpandedKey ?? null);
   // «Показать все» живёт, пока лента смонтирована (до ухода со страницы).
   const [showAll, setShowAll] = useState(false);
+  // Ref вызывающего отражает текущее раскрытие (снимок берётся в момент перехода;
+  // состояние по-прежнему живёт здесь).
+  const toggleKey = (k: string): void => {
+    setExpandedKey(cur => {
+      const next = cur === k ? null : k;
+      if (expandedKeyRef) expandedKeyRef.current = next;
+      return next;
+    });
+  };
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  // Применение начальной карточки (GC-F11): и при монтировании (свежая лента), и при
+  // смене пропа (живая лента): раскрыть + фокус на шапку карточки (её PressableArea).
+  // Ключ — stepRef или card-N — безопасные символы для атрибутного селектора.
+  useEffect(() => {
+    if (!initialExpandedKey) return;
+    setExpandedKey(initialExpandedKey);
+    if (expandedKeyRef) expandedKeyRef.current = initialExpandedKey;
+    const el = stageRef.current?.querySelector(`[data-testid="prod-card-${initialExpandedKey}"]`);
+    if (el && typeof (el as HTMLElement).focus === 'function') (el as HTMLElement).focus();
+  }, [initialExpandedKey, expandedKeyRef]);
+  // Лента ушла (этап схлопнут) — раскрытой карточки нет: снимок не должен нести старую.
+  useEffect(() => () => { if (expandedKeyRef) expandedKeyRef.current = null; }, [expandedKeyRef]);
 
   // Цепочка по коду шага — для статуса и пункта меню «задача».
   const chainByRef = new Map<string, FeatureStepChain>();
@@ -691,7 +725,7 @@ function ProdCardsBody({
   const fold = foldProd(cards, expandedKey, showAll);
 
   return (
-    <div data-testid="prod-stage" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+    <div ref={stageRef} data-testid="prod-stage" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
       <StageSummary run={run} cards={cards} />
       {/* Кнопка свёртки — над лентой (макет). Её N = visible + hiddenDone: равен тому, что
           откроется; без скрытых кнопки нет. */}
@@ -726,7 +760,7 @@ function ProdCardsBody({
                 </div>
               )}
               <ProdCardView card={card} chain={chain} executors={prodExecutors} featureId={featureId} featureTitle={featureTitle} projectId={projectId} marks={marks} isMobile={isMobile} nameOf={nameOf}
-                expanded={expandedKey === key} onToggle={() => setExpandedKey(cur => (cur === key ? null : key))}
+                expanded={expandedKey === key} onToggle={() => toggleKey(key)}
                 taskMap={taskMap} axis={axis} turnsByTask={turnsByTask} now={nowMs} isTail={isTail} onShowIntervals={onShowIntervals} />
             </Fragment>
           );

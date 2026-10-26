@@ -158,6 +158,37 @@ describe('FeatureBackChip: один указатель (minor 5)', () => {
   });
 });
 
+// GC-F11: клик чипа забирает снимок вида из указателя в однократный канал ДО диспатча
+// cc-open-feature: обработчик воркспейса гасит указатель (clearBackNav), восстановление
+// на «Хронологии» читает уже канал (дефект 4c4645e2). Мутация: убрать consumeFeatureViewReturn
+// из onClick чипа → «клик забрал снимок» краснеет (pending пуст).
+describe('FeatureBackChip: забор снимка вида (GC-F11)', () => {
+  it('клик переносит снимок из указателя в pending (до диспатча)', () => {
+    setFeaturePageTab('timeline');
+    backNav.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: 'ST-F9', scrollY: 1234 }));
+    backNav.recordFeatureReturn('f1', { kind: 'chat', id: 'c1' }, 'Моя фича');
+    expect(backNav.getBackNav()?.view, 'снимок не записан в указатель').not.toBeNull();
+    const c = render('c1');
+    const log = dispatched();
+    const btn = findNodeByAttr(c, 'role', 'button')!;
+    act(() => { (reactProps(btn)!.onClick as () => void)(); });
+    const p = backNav.pendingFeatureView('f1');
+    expect(p, 'клик чипа не забрал снимок').not.toBeNull();
+    expect(p!.view).toEqual({ stageKey: 'prod', expandedKey: 'ST-F9', scrollY: 1234 });
+    // Форма события не изменилась (тесты возврата выше остаются зелёными).
+    expect(log.find(d => d.type === 'cc-open-feature'), 'cc-open-feature не диспатчен').toBeDefined();
+  });
+
+  it('без поставщика (ушли не с «Хронологии») — клик не создаёт pending', () => {
+    setFeaturePageTab('chats');
+    backNav.recordFeatureReturn('f1', { kind: 'chat', id: 'c1' }, 'Моя фича');
+    const c = render('c1');
+    const btn = findNodeByAttr(c, 'role', 'button')!;
+    act(() => { (reactProps(btn)!.onClick as () => void)(); });
+    expect(backNav.pendingFeatureView('f1'), 'pending выдуман без снимка').toBeNull();
+  });
+});
+
 // Ф9b-д3: вне проекта (раздел «Чаты») воркспейса нет — cc-open-feature никто не принимает
 // (handled не выставлен), и клик открывает проект фичи запасным событием для App.
 describe('FeatureBackChip: вне проекта', () => {

@@ -367,4 +367,27 @@ public class PregateServiceTests : IDisposable
             "общий потолок прогона изменился: он обязан быть меньше MCP_TOOL_TIMEOUT хода (600 с) — "
             + "иначе ответ модели не успеет уйти; обнови описание инструмента и этот тест");
     }
+
+    // Отказ по потолку печатает ПРИМЕНЁННЫЙ потолок, а не сырое число из TestRunsOptions:
+    // фактический потолок задаёт Sanitize шва (потребитель ставит его в CancelAfter), и печать
+    // сырого числа разошлась бы с фактом при смене любого из них.
+    [Theory]
+    [InlineData(0, PregateCeiling.MaxSeconds)]
+    [InlineData(-5, PregateCeiling.MaxSeconds)]
+    [InlineData(PregateCeiling.MaxSeconds + 1, PregateCeiling.MaxSeconds)]
+    [InlineData(120, 120)]
+    public void ОтказПоПотолкуПечатаетПрименённоеЗначение(int configured, int expected)
+    {
+        var service = new PregateService(Launcher(_ => ("", 0)), new TestRunsOptions { CeilingSeconds = configured },
+            new PregateOptions { Checks = [Check("tsc")] },
+            new PhasePipeline(new BuildConcurrencyGate(2), TimeSpan.FromSeconds(5)));
+
+        service.CeilingSeconds.Should().Be(expected, "применённый потолок — очищенное значение шва");
+        var refusal = service.CeilingRefusal("tsc");
+        refusal.Should().Contain($"потолок предгейта {expected} с",
+            "текст отказа обязан называть фактически применённый потолок");
+        if (configured != expected)
+            refusal.Should().NotContain($"потолок предгейта {configured} с",
+                "печатать сырое значение конфигурации — значит солгать о применённом потолке");
+    }
 }

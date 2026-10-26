@@ -99,7 +99,7 @@ public sealed class TaskPregateService(TaskManager tasks, ProjectManager project
         }
         if (!verdict.IsGreen)
             text.Append(record is { RedStreak: >= PregateRules.MaxRedStreak }
-                ? "Второй красный подряд по той же причине: доложи постановщику (chats_report_up, blocker: true)."
+                ? "Второй красный подряд по той же причине: доклад постановщику уходит с сервера, самому звать не нужно."
                 : "Исправь причину, закоммить и прогони предгейт снова.");
         return text.ToString().TrimEnd();
     }

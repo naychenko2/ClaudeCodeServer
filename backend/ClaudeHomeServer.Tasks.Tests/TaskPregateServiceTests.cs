@@ -253,6 +253,22 @@ public class TaskPregateServiceTests : IDisposable
         _tasks.GetById(_task.Id)!.Pregate!.Green.Should().BeTrue();
     }
 
+    // Эскалация после второго красного — одна точка, серверная (PregateEscalated → ReportUpAsync).
+    // Текст вердикта не велит исполнителю звать chats_report_up: тогда красный предгейт
+    // эскалировался бы дважды (сервером и исполнителем).
+    [Fact]
+    public async Task ВторойКрасныйПодряд_ТекстНеВелитЭскалироватьСамому()
+    {
+        _pregate.Checks = [new PregateCheckResult("tsc", PregateStatus.Red, "error TS2322")];
+        await Run();
+
+        var outcome = await Run();
+
+        outcome.Text.Should().Contain("Второй красный подряд");
+        outcome.Text.Should().NotContain("chats_report_up",
+            "эскалация серверная: ещё и призыв исполнителю звать её — эскалация в двух точках");
+    }
+
     [Fact]
     public async Task ЧастьПроверокПропущенаАЧастьЗелёная_ЗелёныйЗаписывается()
     {

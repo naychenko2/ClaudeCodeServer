@@ -143,8 +143,12 @@ public sealed class PregateService : ITaskPregate
     }
 
     // Потолок прогона объявляем наружу: потребитель (TaskPregateService) ставит его ДО своих
-    // git-проверок дерева, чтобы бюджет хода (MCP_TOOL_TIMEOUT) считался целиком
-    public int CeilingSeconds => _testRunsOptions.CeilingSeconds;
+    // git-проверок дерева, чтобы бюджет хода (MCP_TOOL_TIMEOUT) считался целиком.
+    //
+    // Значение — очищенное (PregateCeiling.Sanitize): ровно то, что применяется и внутри
+    // прогона, и в потребителе, и в тексте отказа. Сырое число из TestRunsOptions в отказе
+    // расходилось бы с фактически применённым потолком, если одно из них сменится.
+    public int CeilingSeconds => PregateCeiling.Sanitize(_testRunsOptions.CeilingSeconds);
 
     public async Task<PregateVerdict> RunAsync(PregateRequest request, CancellationToken ct)
     {
@@ -163,7 +167,7 @@ public sealed class PregateService : ITaskPregate
         var results = new List<PregateCheckResult>();
         // Потолок — один на весь прогон (очередь сборок входит в него, как у run_tests): сумма проверок
         // обязана укладываться в MCP_TOOL_TIMEOUT хода, иначе CLI отваливается, а прогон держит замок дерева
-        using var limit = PhasePipeline.Ceiling(_testRunsOptions.CeilingSeconds, ct);
+        using var limit = PhasePipeline.Ceiling(CeilingSeconds, ct);
         foreach (var check in _options.Checks)
         {
             if (!Applies(check, request.ChangedFiles))
@@ -186,13 +190,18 @@ public sealed class PregateService : ITaskPregate
             if (result is null)
                 return PregateVerdict.Refused(ct.IsCancellationRequested
                     ? "Предгейт остановлен."
-                    : $"Проверка «{check.Name}» не уложилась в общий потолок предгейта {_testRunsOptions.CeilingSeconds} с (вместе с очередью сборок). "
-                      + Progress(results),
+                    : CeilingRefusal(check.Name) + Progress(results),
                     results);
             results.Add(result);
         }
         return new PregateVerdict(results);
     }
+
+    // Текст отказа по потолку: печатаем ПРИМЕНЁННЫЙ потолок (CeilingSeconds), а не сырое
+    // число из конфигурации. Иначе текст разошёлся бы с фактом: потолок применяется
+    // очищенным, а печатался бы мусорный (или снятый потолок шва).
+    internal string CeilingRefusal(string checkName) =>
+        $"Проверка «{checkName}» не уложилась в общий потолок предгейта {CeilingSeconds} с (вместе с очередью сборок). ";
 
     // Пропущенные проверки (не касаются изменений) не выполнялись — выполненными не называются
     private static string Progress(IReadOnlyList<PregateCheckResult> results)

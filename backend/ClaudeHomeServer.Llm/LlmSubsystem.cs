@@ -159,9 +159,15 @@ public sealed class LlmSubsystem : IAppSubsystem
             ILocalLlmClient inner = options.Provider == LocalLlmOptions.LlamaServer
                 ? sp.GetRequiredService<LlamaServerClient>()
                 : sp.GetRequiredService<OllamaClient>();
-            // Потолок конкурентности: singleton, значит гейт один на движок на процесс
-            return new GatedLocalLlmClient(inner, LocalEngineGate.Read(config, "LocalLlm", "LocalLlm"),
-                sp.GetRequiredService<ILogger<GatedLocalLlmClient>>());
+            // Слот в общем счётчике движка под ключом провайдера, с которым клиент делит движок
+            // (LocalLlm:EngineKey; не задан — свой ключ, то есть отдельный движок). Потолок —
+            // MaxConcurrentTurns этого провайдера; реестр берём лениво, из конструктора фабрики
+            // он не нужен (цикл в графе DI).
+            var key = TrackedLocalLlmClient.ReadEngineKey(config);
+            return new TrackedLocalLlmClient(inner, LocalEngineBusyTracker.Instance, key,
+                () => sp.GetService<LlmProviderRegistry>()?.GetByKey(key)?.MaxConcurrentTurns
+                      ?? TrackedLocalLlmClient.DefaultLimit,
+                sp.GetRequiredService<ILogger<TrackedLocalLlmClient>>());
         });
         // Тихие HTTP-логгеры на оба имени: каждая реализация пишет в свою категорию,
         // и одна мёртвая зависимость не глушит жалобы другой. Без них каждый вызов

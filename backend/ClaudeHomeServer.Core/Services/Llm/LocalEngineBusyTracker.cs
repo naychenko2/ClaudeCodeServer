@@ -50,14 +50,17 @@ public sealed class LocalEngineBusyTracker
     public IDisposable Enter()
     {
         lock (_lock) _active++;
-        return new Slot(this, null);
+        return new Slot(this, null, true);
     }
 
     // Допуск БЕЗ ожидания (one-shot действия): слот выдаётся, только если есть свободное место
     // и в очереди никого нет — чужую очередь обгонять нельзя. null — «занято»: вызывающий
     // действует по правилу LocalActionRouter (не лезет в движок). Слот берётся из ТОГО ЖЕ
     // счётчика, что и у ходов, — второго семафора нет.
-    public IDisposable? TryEnter(string key, int maxConcurrent)
+    // raiseBusy=false — слот прямого клиента LocalLlm: он занимает ёмкость, но признак Busy НЕ
+    // взводит. Иначе один фоновый запрос отправил бы в облако все остальные фоновые
+    // (LocalBlockedByTurn), и расход вырос бы молча.
+    public IDisposable? TryEnter(string key, int maxConcurrent, bool raiseBusy = true)
     {
         lock (_lock)
         {
@@ -65,8 +68,8 @@ public sealed class LocalEngineBusyTracker
             state.Limit = Math.Max(1, maxConcurrent);
             if (state.Active >= state.Limit || state.Queue.Count > 0) return null;
             state.Active++;
-            _active++;
-            return new Slot(this, key);
+            if (raiseBusy) _active++;
+            return new Slot(this, key, raiseBusy);
         }
     }
 
@@ -90,7 +93,7 @@ public sealed class LocalEngineBusyTracker
             {
                 state.Active++;
                 _active++;
-                return LocalTurnAdmission.Admitted(new Slot(this, key), state.Active);
+                return LocalTurnAdmission.Admitted(new Slot(this, key, true), state.Active);
             }
             if (state.Queue.Count >= Math.Max(0, maxQueued))
                 return LocalTurnAdmission.Rejected(LocalTurnRefusal.QueueFull, state.Active);
@@ -135,12 +138,12 @@ public sealed class LocalEngineBusyTracker
     }
 
     // Освобождение слота: ключевой слот сразу отдаёт освободившееся место голове очереди.
-    private void Release(string? key)
+    private void Release(string? key, bool busy)
     {
         List<(Action<int, int, int> Cb, int Pos, int Active, int Limit)>? shifted = null;
         lock (_lock)
         {
-            _active--;
+            if (busy) _active--;
             if (key is null) return;
             var state = _keys[key];
             state.Active--;
@@ -150,7 +153,7 @@ public sealed class LocalEngineBusyTracker
                 head.Value.Node = null;
                 state.Active++;
                 _active++;
-                head.Value.Tcs.TrySetResult(new Slot(this, key));
+                head.Value.Tcs.TrySetResult(new Slot(this, key, true));
             }
             // Оставшимся в очереди позиция сдвинулась — сообщаем им вне лока.
             var pos = 0;
@@ -187,14 +190,14 @@ public sealed class LocalEngineBusyTracker
 
     // Освобождение ровно один раз: повторный Dispose иначе увёл бы счётчик в минус и
     // «занято» перестало бы наступать при живом ходе.
-    private sealed class Slot(LocalEngineBusyTracker owner, string? key) : IDisposable
+    private sealed class Slot(LocalEngineBusyTracker owner, string? key, bool busy) : IDisposable
     {
         private int _released;
 
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _released, 1) == 0)
-                owner.Release(key);
+                owner.Release(key, busy);
         }
     }
 }

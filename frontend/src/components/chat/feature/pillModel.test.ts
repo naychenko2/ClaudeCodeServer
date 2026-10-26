@@ -295,6 +295,13 @@ describe('R-Q5D-F: части пилюли = структура queueLabelParts'
     expect(src, 'пилюля берёт строку подписи вместо частей').not.toMatch(/\.label\b/);
     expect(src, 'пилюля берёт строку подписи вместо частей (хелпер)').not.toMatch(/\bqueueLabel\(/);
   });
+
+  it('в исходнике пилюли нет своей копии формулировки очереди', () => {
+    const src = readFileSync(fileURLToPath(new URL('./pillModel.ts', import.meta.url)), 'utf8');
+    // Комментарии вырезаем: запрет по СОДЕРЖАНИЮ кода, а не по его написанию.
+    const code = src.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(code, 'пилюля не зашивает свою копию формулировки очереди').not.toMatch(/очеред/i);
+  });
 });
 
 // ── loading / error (run ещё нет): «фича · …» ───────────────────────────────

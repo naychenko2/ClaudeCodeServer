@@ -1,19 +1,25 @@
 import { useState } from 'react';
 import type { CSSProperties } from 'react';
+import { ChevronDown } from 'lucide-react';
 import { C, R, FS, SP, FONT } from '../../lib/design';
+import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { STAGE_NAME } from '../../lib/chatGroups';
 import { roleLabel } from '../../lib/roleLabel';
 import { getPersonaById } from '../../lib/personas';
-import { dateOnly, hhmm } from '../chat/feature/featureTime';
+import { dateOnly, dateTimeLabel, hhmm } from '../chat/feature/featureTime';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { Tooltip } from '../ui/Tooltip';
+import { PressableArea } from '../ui/PressableArea';
+import { Button } from '../ui/Button';
 import { openChatById } from '../../lib/openChat';
 import { EMPTY_NAV_MARKS, type NavMarks } from '../../lib/featureNavMarks';
 import { openTaskInSection } from '../../lib/tasks';
 import { recordFeatureReturn } from '../../lib/featureBackNav';
 import { NavTargetPair } from './NavTargetButton';
+import { FeatureStepDetails } from './FeatureStepDetails';
 import type { StepProgress } from '../../lib/featureProgress';
 import type { FeatureRun, FeatureStage, FeatureStageExecutor, FeatureStepChain, FeatureTask, StageKey } from '../../types/featureRun';
+import type { StageTurn } from '../../types/featureStats';
 
 // Подкомпоненты вкладки «Хронология» (волна 3, Ф2a, макет features-overview-3-final §5):
 // точка/линия этапа, подпись состояния, границы «dd.mm · ЧЧ:ММ – ЧЧ:ММ», длительность «≈»,
@@ -363,16 +369,29 @@ export function ExecutorAvatar({ personaId }: { personaId: string | null }) {
   );
 }
 
-// Строка исполнителя (макет §5): аватар 18 · имя 12 · роль (roleLabel) · чип модели ·
-// статус (идёт/ждёт вас/стоит/готово) · время · пара «чат · задача» (NavTargetPair).
+// Строка исполнителя (макет §5; GC-F9 — раскрываемая, макет feature-gantt-7).
+// Свёрнутая шапка (ui/PressableArea с aria-expanded, как карточка ProdCardView):
+// аватар 18 · имя 12 · роль (roleLabel) · статус · время · пара «чат · задача» · шеврон.
+// Чип модели и «оценивает →» — на десктопе в шапке; на 360 переезжают в раскрытую часть.
 // chatId == null → «чата нет» (без мёртвой ссылки); чат в архиве → «· архив».
 // Навигация (Ф9a): чат — openChatById, задача — openTaskInSection; точка возврата
 // «страница фичи → чат/задача» — recordFeatureReturn (чип возврата — Ф9b).
+// Раскрытая часть (кромка 2 px C.borderLight, отступ 30 px под аватаром): полное
+// название задачи, мета (id, даты), «оценивает →» ссылками (открывают страницу задачи),
+// FeatureStepDetails («Приёмка», «Итог») без колбэка подсветки, ходы FONT.mono
+// («ЧЧ:ММ–ЧЧ:ММ», живой — «идёт», исход в скобках, если он есть и не «success»),
+// пара «чат · задача». Клики внутри раскрытой части строку не сворачивают (она вне
+// нажимаемой шапки + stopPropagation-страховка); то же для чипа модели и пары в шапке
+// (stopPropagation).
+// Ходы приходят пропсом `turns` (вызывающий берёт их из intervalsByStage); здесь
+// показываются только ходы этой задачи — хвост не получает вторую строку.
 export function ExecutorRow({ x, task, now, featureId, featureTitle = null, marks = EMPTY_NAV_MARKS, isMobile = false,
-  taskMap = new Map<string, FeatureTask>(), execIndex = new Map<string, FeatureStageExecutor>(), progress = null }: {
+  taskMap = new Map<string, FeatureTask>(), execIndex = new Map<string, FeatureStageExecutor>(), progress = null, turns = null }: {
   x: FeatureStageExecutor; task?: FeatureTask; now: number; featureId: string; featureTitle?: string | null; marks?: NavMarks; isMobile?: boolean;
   taskMap?: Map<string, FeatureTask>; execIndex?: Map<string, FeatureStageExecutor>; progress?: StepProgress | null;
+  turns?: StageTurn[] | null;
 }) {
+  const [open, setOpen] = useState(false);
   const persona = x.personaId ? getPersonaById(x.personaId) : undefined;
   // Персона в данных, но не найдена (недоступна) — нейтральное «персона недоступна»,
   // не сырой UUID; без personaId — прочерк.
@@ -383,6 +402,9 @@ export function ExecutorRow({ x, task, now, featureId, featureTitle = null, mark
   // W4-3F: строка «оценивает →» (чипы только у review/qa; финал — по всей фиче; план/разрез —
   // «по разрезу»/«по эпику»). Связь — только из stages[].executors[], сырой reviewOf не берём.
   const ev = evaluatedLine(x, taskMap, execIndex, progress, now);
+  // Ходы этой задачи: фильтр — защита от нефильтрованного входа (GC-F10 передаёт
+  // turns из intervalsByStage); тот же ход не попадает в две строки и в счёт.
+  const myTurns = (turns ?? []).filter(t => t.taskId === x.taskId);
 
   const statusColor =
     st.tone === 'info' ? C.info :
@@ -391,6 +413,25 @@ export function ExecutorRow({ x, task, now, featureId, featureTitle = null, mark
     C.textMuted;
   const toneColor = (t: 'muted' | 'info' | 'danger' | 'success') =>
     t === 'info' ? C.info : t === 'danger' ? C.dangerText : t === 'success' ? C.successText : C.textMuted;
+
+  // Мета раскрытой части: id задачи + даты, которые есть в данных (создана/старт/закрыта).
+  const metaParts: string[] = [x.taskId];
+  const created = dateTimeLabel(task?.createdAt);
+  if (created) metaParts.push(`создана ${created}`);
+  const started = dateTimeLabel(task?.claudeStartedAt);
+  if (started) metaParts.push(`старт ${started}`);
+  const closed = dateTimeLabel(task?.completedAt);
+  if (closed) metaParts.push(`закрыта ${closed}`);
+
+  // Подпись хода: «ЧЧ:ММ–ЧЧ:ММ»; живой (конец позже «сейчас») — «идёт»; исход —
+  // в скобках, если он есть и не «success» (исхода нет — скобок нет: не выдумываем).
+  const turnLabel = (t: StageTurn): string => {
+    const a = hhmm(t.from) ?? '—';
+    const toMs = t.to ? new Date(t.to).getTime() : NaN;
+    const b = Number.isFinite(toMs) && now < toMs ? 'идёт' : hhmm(t.to) ?? '—';
+    const oc = t.outcome && t.outcome !== 'success' ? ` (${t.outcome})` : '';
+    return `${a}–${b}${oc}`;
+  };
 
   // Переход в чат исполнителя: openChatById (тот же путь, что плашка FeatureBanner)
   // + точка возврата на страницу фичи (Ф9b).
@@ -405,90 +446,195 @@ export function ExecutorRow({ x, task, now, featureId, featureTitle = null, mark
     recordFeatureReturn(featureId, { kind: 'task', id: x.taskId }, featureTitle);
     openTaskInSection({ id: x.taskId, projectId: task?.projectId ?? undefined });
   };
+  // «оценивает →» ссылкой (GC-F9): открывает страницу оцениваемой задачи — тот же путь.
+  const openEvalTask = (taskId: string) => {
+    const t = taskMap.get(taskId);
+    recordFeatureReturn(featureId, { kind: 'task', id: taskId }, featureTitle);
+    openTaskInSection({ id: taskId, projectId: t?.projectId ?? undefined });
+  };
+
+  // Пара «чат · задача»: в свёрнутой шапке или внизу раскрытой части (не в двух местах).
+  const navPair = (
+    <NavTargetPair
+      chatId={x.chatId}
+      // minor 3: ОДИН источник «в архиве» — marks.chatArchived (unified), не x.chatArchived.
+      chatArchived={marks.chatArchived(x.chatId)}
+      onOpenChat={openChat}
+      chatTitle="Открыть чат. Страница фичи скроется, вернётся по плашке."
+      showNoChat
+      taskId={x.taskId}
+      // «Закрыта» — один источник: статус ЗАДАЧИ (task.status === 'done'),
+      // не статус исполнителя (x.status) — разные поля бэка.
+      taskClosed={task?.status === 'done'}
+      onOpenTask={openTask}
+      taskTitle="Открыть задачу. Страница фичи скроется, вернётся по плашке."
+      isMobile={isMobile}
+    />
+  );
 
   return (
-    <div
-      data-testid="timeline-executor"
-      style={{
-        display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap',
-        padding: `${SP.xxs}px 0`, fontFamily: FONT.sans,
-      }}
-    >
-      <ExecutorAvatar personaId={x.personaId} />
-      <span style={{ fontSize: FS.sm, color: C.textPrimary, whiteSpace: 'nowrap' }}>{name}</span>
-      {role && (
-        <span
-          data-testid="timeline-executor-role"
+    <div data-testid="timeline-executor">
+      <PressableArea
+        data-testid="timeline-executor-head"
+        feedback
+        onPress={() => setOpen(v => !v)}
+        aria-expanded={open}
+        style={{
+          display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap',
+          padding: `${SP.xxs}px ${SP.xs}px`, fontFamily: FONT.sans, borderRadius: R.md,
+          minHeight: isMobile ? 40 : undefined,
+          background: open ? C.bgSelected : undefined,
+        }}
+      >
+        <ExecutorAvatar personaId={x.personaId} />
+        <span style={{ fontSize: FS.sm, color: C.textPrimary, whiteSpace: 'nowrap' }}>{name}</span>
+        {role && (
+          <span
+            data-testid="timeline-executor-role"
+            style={{
+              fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary,
+              background: C.bgSelected, borderRadius: R.sm, padding: `0 ${SP.xs}px`,
+              whiteSpace: 'nowrap', flexShrink: 0,
+            }}
+          >
+            {role}
+          </span>
+        )}
+        {/* Чип модели и «оценивает →» — на 360 переезжают в раскрытую часть (макет §360). */}
+        {!isMobile && x.modelLabel && (
+          <span onClick={e => e.stopPropagation()}>
+            <ModelChip label={x.modelLabel} full={x.modelFull} isMobile={isMobile} />
+          </span>
+        )}
+        {st.label && (
+          <span data-testid="timeline-executor-status" style={{ fontSize: FS.xs, fontWeight: 600, color: statusColor, whiteSpace: 'nowrap' }}>
+            {st.label}
+          </span>
+        )}
+        {time && (
+          <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>
+            {time}
+          </span>
+        )}
+        {!isMobile && ev && (
+          <span
+            data-testid="timeline-eval-line"
+            style={{ display: 'inline-flex', gap: SP.xs, alignItems: 'center', flexWrap: 'wrap' }}
+          >
+            <span style={{ fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>оценивает →</span>
+            {ev.targets.map((t) => (
+              <span
+                key={t.taskId}
+                data-testid="timeline-eval-target"
+                style={{
+                  fontSize: FS.xs, color: C.textSecondary, background: C.bgSelected,
+                  borderRadius: R.sm, padding: `0 ${SP.xs}px`, whiteSpace: 'nowrap', flexShrink: 0,
+                }}
+              >
+                {t.title}
+                {t.statusLabel && (
+                  <span style={{ color: toneColor(t.tone), fontWeight: 600 }}> · {t.statusLabel}</span>
+                )}
+              </span>
+            ))}
+            {ev.outside > 0 && (
+              <span data-testid="timeline-eval-outside" style={{ fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>
+                {outsideLinksLabel(ev.outside)}
+              </span>
+            )}
+            {ev.scopeLabel && (
+              <span data-testid="timeline-eval-scope" style={{ fontSize: FS.xs, color: C.textSecondary, whiteSpace: 'nowrap' }}>
+                {ev.scopeLabel}
+              </span>
+            )}
+          </span>
+        )}
+        <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: SP.xs, alignItems: 'center' }}>
+          {/* Пара живёт в шапке, пока строка свёрнута; раскрытая — переезжает в тело.
+              stopPropagation: клик по цели не раскрывает строку. */}
+          {!open && <span onClick={e => e.stopPropagation()}>{navPair}</span>}
+          <span
+            aria-hidden
+            style={{
+              width: isMobile ? 40 : 20, height: isMobile ? 40 : 20, flexShrink: 0,
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted,
+            }}
+          >
+            <ChevronDown size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ transform: open ? 'rotate(180deg)' : undefined }} />
+          </span>
+        </span>
+      </PressableArea>
+
+      {open && (
+        // Раскрытая часть живёт своей жизнью: она вне нажимаемой шапки (как xbody в
+        // макете), а stopPropagation — страховка при перенестинге (как prod-details).
+        // Кромка 2 px и отступ 30 px — под аватаром (макет feature-gantt-7, .xbody).
+        <div
+          data-testid="timeline-executor-body"
+          onClick={e => e.stopPropagation()}
           style={{
-            fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary,
-            background: C.bgSelected, borderRadius: R.sm, padding: `0 ${SP.xs}px`,
-            whiteSpace: 'nowrap', flexShrink: 0,
+            margin: `2px ${SP.xs}px ${SP.sm}px 30px`, padding: SP.sm, cursor: 'default',
+            borderLeft: `2px solid ${C.borderLight}`,
+            display: 'flex', flexDirection: 'column', gap: SP.sm,
           }}
         >
-          {role}
-        </span>
-      )}
-      {x.modelLabel && <ModelChip label={x.modelLabel} full={x.modelFull} isMobile={isMobile} />}
-      {st.label && (
-        <span data-testid="timeline-executor-status" style={{ fontSize: FS.xs, fontWeight: 600, color: statusColor, whiteSpace: 'nowrap' }}>
-          {st.label}
-        </span>
-      )}
-      {time && (
-        <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>
-          {time}
-        </span>
-      )}
-      {ev && (
-        <span
-          data-testid="timeline-eval-line"
-          style={{ display: 'inline-flex', gap: SP.xs, alignItems: 'center', flexWrap: 'wrap' }}
-        >
-          <span style={{ fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>оценивает →</span>
-          {ev.targets.map((t) => (
-            <span
-              key={t.taskId}
-              data-testid="timeline-eval-target"
-              style={{
-                fontSize: FS.xs, color: C.textSecondary, background: C.bgSelected,
-                borderRadius: R.sm, padding: `0 ${SP.xs}px`, whiteSpace: 'nowrap', flexShrink: 0,
-              }}
-            >
-              {t.title}
-              {t.statusLabel && (
-                <span style={{ color: toneColor(t.tone), fontWeight: 600 }}> · {t.statusLabel}</span>
+          {task?.title && (
+            <div data-testid="timeline-executor-title" style={{ fontSize: FS.sm, fontWeight: 600, color: C.textHeading, overflowWrap: 'anywhere' }}>
+              {task.title}
+            </div>
+          )}
+          <div
+            data-testid="timeline-executor-meta"
+            style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap' }}
+          >
+            <span style={{ overflowWrap: 'anywhere' }}>{metaParts.join(' · ')}</span>
+            {isMobile && x.modelLabel && <ModelChip label={x.modelLabel} full={x.modelFull} isMobile={isMobile} />}
+          </div>
+          {ev && (
+            <div data-testid="timeline-eval-line" style={{ display: 'flex', gap: SP.xs, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>оценивает →</span>
+              {ev.targets.map((t) => (
+                <Button
+                  key={t.taskId}
+                  variant="ghost"
+                  size="xs"
+                  dataTestId="timeline-eval-link"
+                  onClick={() => openEvalTask(t.taskId)}
+                  ariaLabel={`Открыть задачу ${t.title}`}
+                  style={isMobile ? { minHeight: 40 } : undefined}
+                >
+                  {t.title}
+                  {t.statusLabel && (
+                    <span style={{ color: toneColor(t.tone), fontWeight: 600 }}> · {t.statusLabel}</span>
+                  )}
+                </Button>
+              ))}
+              {ev.outside > 0 && (
+                <span data-testid="timeline-eval-outside" style={{ fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>
+                  {outsideLinksLabel(ev.outside)}
+                </span>
               )}
-            </span>
-          ))}
-          {ev.outside > 0 && (
-            <span data-testid="timeline-eval-outside" style={{ fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>
-              {outsideLinksLabel(ev.outside)}
-            </span>
+              {ev.scopeLabel && (
+                <span data-testid="timeline-eval-scope" style={{ fontSize: FS.xs, color: C.textSecondary, whiteSpace: 'nowrap' }}>
+                  {ev.scopeLabel}
+                </span>
+              )}
+            </div>
           )}
-          {ev.scopeLabel && (
-            <span data-testid="timeline-eval-scope" style={{ fontSize: FS.xs, color: C.textSecondary, whiteSpace: 'nowrap' }}>
-              {ev.scopeLabel}
-            </span>
+          <FeatureStepDetails
+            taskId={x.taskId}
+            acceptance={task?.acceptance ?? null}
+            evidence={task?.evidence ?? null}
+            isMobile={isMobile}
+          />
+          {myTurns.length > 0 && (
+            <div data-testid="timeline-executor-turns" style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, overflowWrap: 'anywhere' }}>
+              {`ходы: ${myTurns.map(turnLabel).join(' · ')}`}
+            </div>
           )}
-        </span>
+          {navPair}
+        </div>
       )}
-      <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: SP.xs }}>
-        <NavTargetPair
-          chatId={x.chatId}
-          // minor 3: ОДИН источник «в архиве» — marks.chatArchived (unified), не x.chatArchived.
-          chatArchived={marks.chatArchived(x.chatId)}
-          onOpenChat={openChat}
-          chatTitle="Открыть чат. Страница фичи скроется, вернётся по плашке."
-          showNoChat
-          taskId={x.taskId}
-          // «Закрыта» — один источник: статус ЗАДАЧИ (task.status === 'done'),
-          // не статус исполнителя (x.status) — разные поля бэка.
-          taskClosed={task?.status === 'done'}
-          onOpenTask={openTask}
-          taskTitle="Открыть задачу. Страница фичи скроется, вернётся по плашке."
-          isMobile={isMobile}
-        />
-      </span>
     </div>
   );
 }

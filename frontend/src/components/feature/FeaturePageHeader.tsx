@@ -10,7 +10,7 @@ import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { FeatureGlyph } from '../chat/feature/FeatureGlyphs';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
-import { formatDuration } from '../../lib/chatGroups';
+import { formatDuration, queueOrdinalWord } from '../../lib/chatGroups';
 import { ensurePersonasLoaded, getPersonaById, usePersonasVersion } from '../../lib/personas';
 import { openChatById } from '../../lib/openChat';
 import { executorStopVisual, openTaskInSection } from '../../lib/tasks';
@@ -488,10 +488,8 @@ async function doHoldClear(fid: string, state: FeatureState): Promise<void> {
 // «В очередь» нет у фичи, которая уже уступила слот или завершена.
 const QUEUE_DENIED: ReadonlySet<FeatureState> = new Set(['merge_pending', 'merging', 'merged', 'closed']);
 
-const ORDINAL_F = ['первая', 'вторая', 'третья', 'четвёртая', 'пятая', 'шестая', 'седьмая', 'восьмая', 'девятая', 'десятая'];
-function queueOrdinal(position: number): string {
-  return ORDINAL_F[position - 1] ?? `${position}-я`;
-}
+// Порядковое слово позиции — общий словарь очереди (chatGroups.queueOrdinalWord,
+// Q5I-1): своей копии списка здесь больше нет, у модалки и блока страницы один источник.
 async function doQueueIn(fid: string, state: FeatureState): Promise<void> {
   try {
     await api.tasks.setFeatureHold(fid, 'queue');
@@ -579,7 +577,7 @@ function QueueBypassModal({ queue, busy, onClose, onConfirm }: { queue: FeatureQ
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
         <div style={{ fontSize: FS.base, color: C.textPrimary }}>
-          {queue ? `Фича стоит в очереди ${queueOrdinal(queue.position)}. ` : 'Фича стоит в очереди. '}
+          {queue ? `Фича стоит в очереди ${queueOrdinalWord(queue.position)}. ` : 'Фича стоит в очереди. '}
           Запуск в обход очереди поднимет её сразу, <b>сверх числа одновременно идущих фич</b>, заданного для проекта.
         </div>
         <div style={{ fontSize: FS.sm, color: C.textSecondary }}>

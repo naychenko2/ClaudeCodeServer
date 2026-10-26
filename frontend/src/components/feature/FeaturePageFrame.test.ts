@@ -819,3 +819,17 @@ describe('Тег «стоит/тихо» в шапке (pt6)', () => {
     expect(String(styleOf(tag!).minHeight), 'на 360 у тега нет высоты 40').toContain('40');
   });
 });
+
+describe('featureRunStatusTag: подпись очереди (Q5A)', () => {
+  it('holdReason=queue и queue={2,3} → «в очереди · 2 из 3», тон hold', () => {
+    const tag = featureRunStatusTag('paused', 'Продукт', { holdReason: 'queue', queue: { position: 2, length: 3 } });
+    expect(tag).toEqual({ label: 'в очереди · 2 из 3', tone: 'hold' });
+  });
+  it('queue без цифр (бэк не отдал) → «в очереди» без нулей', () => {
+    expect(featureRunStatusTag('paused', null, { holdReason: 'queue' }).label).toBe('в очереди');
+  });
+  it('holdReason=manual — прежняя подпись «на паузе»', () => {
+    const tag = featureRunStatusTag('paused', null, { holdReason: 'manual', queue: { position: 2, length: 3 } });
+    expect(tag).toEqual({ label: 'на паузе', tone: 'hold' });
+  });
+});

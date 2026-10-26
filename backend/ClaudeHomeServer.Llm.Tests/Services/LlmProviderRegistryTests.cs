@@ -746,6 +746,17 @@ public class LlmProviderRegistryTests
         caps.SupportsCompact.Should().BeTrue();
     }
 
+    // Признак локальности в capabilities (/api/models → providers[].isLocal): локальный
+    // движок → true, облачный провайдер и родной claude → false. Фронт по нему узнаёт,
+    // что провайдер локальный, даже если его ключ («local-qwen») фронту неизвестен.
+    [Fact]
+    public void CapabilitiesFor_ПризнакЛокальности()
+    {
+        CreateLocal().CapabilitiesFor("qwen38-27b").IsLocal.Should().BeTrue("локальный движок → true");
+        Create().CapabilitiesFor("deepseek-v4-pro").IsLocal.Should().BeFalse("облачный провайдер → false");
+        LlmCapabilitiesCatalog.Claude.IsLocal.Should().BeFalse("у claude своего GPU нет");
+    }
+
     // Резолв дефолтной модели для spend-аналитики: SpendRecord.Model никогда не должен
     // оставаться пустым — иначе в группировке копилась «Модель по умолчанию».
     [Theory]

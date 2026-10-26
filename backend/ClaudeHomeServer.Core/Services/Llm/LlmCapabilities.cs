@@ -20,7 +20,12 @@ public sealed record LlmCapabilities(
     string? TierWeak = null,        // id модели для слота «слабая»
     // Ценовой класс провайдера (free|cheap|expensive) — правило в Core (SpendCostTiers).
     // null — класс не посчитан (провайдер вне реестра).
-    string? CostTier = null);
+    string? CostTier = null,
+    // Признак локального провайдера (свой GPU: vLLM/llama.cpp/Ollama) — из конфига
+    // (LlmProviderConfig.IsLocal). Фронт по нему узнаёт, что провайдер локальный:
+    // свои локальные ключи конфига (например «local-qwen») фронту неизвестны, а по
+    // одному costTier он может ещё не различать «бесплатно» и «цена неизвестна».
+    bool IsLocal = false);
 
 public static class LlmCapabilitiesCatalog
 {

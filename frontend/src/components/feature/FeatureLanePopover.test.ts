@@ -58,9 +58,14 @@ vi.mock('../../lib/featurePage', () => ({
   focusFeatureStage: (key: string) => { mockFocusStage.calls.push(key); },
 }));
 const mockBackNav = vi.hoisted(() => ({ calls: [] as unknown[][] }));
-vi.mock('../../lib/featureBackNav', () => ({
-  recordFeatureReturn: (...args: unknown[]) => { mockBackNav.calls.push(args); },
-}));
+// Полный мок через importOriginal (GC-F11R): реальный модуль даёт все экспорты
+// (usePendingFeatureView / registerFeatureViewProvider / clearPendingFeatureView их
+// зовёт FeatureTimelineTab), подменён только recordFeatureReturn — spy тестов.
+// Следующие новые экспорты featureBackNav этот мок не сломают.
+vi.mock('../../lib/featureBackNav', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../lib/featureBackNav')>();
+  return { ...orig, recordFeatureReturn: (...args: unknown[]) => { mockBackNav.calls.push(args); } };
+});
 
 // === Фикстуры ===
 const NOW = new Date('2026-10-20T12:00:00Z').getTime();

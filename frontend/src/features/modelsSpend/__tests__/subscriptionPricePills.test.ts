@@ -2,8 +2,9 @@
 //
 // 1) Пилюля класса на карточке подписки была недостижима: у Claude нет квотной карточки,
 //    а buildSubscriptionCard не клал цену — самый дорогой класс («дорого») показать
-//    было негде. Теперь карточка подписки получает класс claude с бэка (/api/models,
-//    costTier) и рисует пилюлю тем же механизмом, что квотная карточка.
+//    было негде. Теперь карточка подписки получает класс с бэка (/api/models,
+//    costTier) ПРОВАЙДЕРА этой карточки и рисует пилюлю тем же механизмом, что
+//    квотная карточка.
 //
 // 2) Локальный провайдер с машин-специфичным ключом терял «бесплатный»: класс неизвестен
 //    (каталог /api/models не пришёл), а фронт знал локальный движок только по двум ключам.
@@ -20,7 +21,7 @@ import { mount, installFakeDom, uninstallFakeDom, textNodes } from '../../../com
 
 const baseSub: SubscriptionUsage = { snapshots: [] };
 
-// Минимальный SubCtx (как в quotaPills.test.ts) + класс claude с бэка.
+// Минимальный SubCtx (как в quotaPills.test.ts) + класс цены с бэка (/api/models).
 const ctx = {
   rotationThreshold: 0.8,
   weeklyThreshold: 0.95,
@@ -29,7 +30,7 @@ const ctx = {
   freeAvailable: true,
   subs: {},
   usageError: false,
-  costTier: 'expensive',
+  caps: () => ({ costTier: 'expensive' as string | null }),
 } as const;
 
 function cardText(data: ProviderCardData): string {
@@ -57,7 +58,7 @@ describe('дефект 401e7e56 — пилюля класса на карточ�
   // Та же гарантия, что у квотной карточки: цена называется один раз.
   it('две пилюли класса одновременно не рисуются', () => {
     for (const costTier of ['free', 'cheap', 'expensive']) {
-      const card = buildSubscriptionCard('claude', baseSub, { ...ctx, costTier });
+      const card = buildSubscriptionCard('claude', baseSub, { ...ctx, caps: () => ({ costTier }) });
       const text = cardText(card);
       const classPills = ['бесплатный', 'дёшево', 'дорого'].filter(p => text.includes(p));
       expect(classPills.length).toBeLessThanOrEqual(1);
@@ -66,12 +67,32 @@ describe('дефект 401e7e56 — пилюля класса на карточ�
 
   // Каталог не пришёл — класс неизвестен: пилюли нет, рендер не падает.
   it('неизвестный класс — пилюли нет, карточка рендерится', () => {
-    const card = buildSubscriptionCard('claude', baseSub, { ...ctx, costTier: null });
+    const card = buildSubscriptionCard('claude', baseSub, { ...ctx, caps: () => ({ costTier: null }) });
     expect(card.costTier).toBeNull();
     const text = cardText(card);
     expect(text).not.toContain('дорого');
     expect(text).not.toContain('дёшево');
     expect(text).not.toContain('бесплатный');
+  });
+});
+
+// Минор ревью дельты 495687eb: пилюля класса карточки подписки строилась по зашитому
+// ключу 'claude' — карточка подписки любого другого провайдера называлась чужой ценой,
+// а проверка класса держалась на одном имени.
+describe('пилюля класса карточки подписки — по ключу самой карточки', () => {
+  it('карточка с ключом не claude получает класс СВОЕГО провайдера', () => {
+    const caps = (key: string) => ({ costTier: key === 'claude' ? 'expensive' : 'cheap' });
+    const card = buildSubscriptionCard('glm', baseSub, { ...ctx, caps });
+    expect(card.costTier).toBe('cheap');
+    const text = cardText(card);
+    expect(text).toContain('дёшево');
+    expect(text).not.toContain('дорого');
+  });
+
+  it('пилюля «бесплатный» при неизвестном классе строится по ключу карточки', () => {
+    const card = buildSubscriptionCard('freellmapi', baseSub, { ...ctx, caps: () => ({ costTier: null }) });
+    const text = cardText(card);
+    expect(text).toContain('бесплатный');
   });
 });
 

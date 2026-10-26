@@ -13,6 +13,7 @@ import { useIsMobile } from '../../lib/breakpoints';
 import {
   cliProviderKeys, getModels, getProviders, modelLabel, providerCapsByKey, providerLabel, useModels,
 } from '../../lib/models';
+import type { ProviderCapabilities } from '../../lib/models';
 import { modelUnavailableText, unavailableModelName } from '../../lib/providerLimit';
 import { fmtReset, latestPerWindow, seriesByWindow, snapshotFreshnessLabel, windowLabel, worstWindow } from '../../lib/rateLimit';
 import { rotationBadgeState } from '../../lib/rotation';
@@ -284,10 +285,12 @@ interface SubCtx {
   freeAvailable: boolean;
   subs: Record<string, SubscriptionUsage>;
   usageError: boolean;
-  // Ценовой класс провайдера claude (/api/models, costTier) — карточка подписки
-  // называет цену так же, как квотная карточка провайдера. null — каталог не пришёл:
-  // пилюли класса нет, карточка не врёт.
-  costTier?: string | null;
+  // Класс цены карточки подписки — из caps ПРОВАЙДЕРА этой карточки (/api/models,
+  // costTier). Ключ карточки ведёт в общий производитель пилюли, поэтому класс и
+  // пилюля берутся одного провайдера: подписка любого другого провайдера не должна
+  // называться чужой ценой. Нет класса — каталог не пришёл: пилюли класса нет,
+  // карточка не врёт.
+  caps?: (key: string) => Pick<ProviderCapabilities, 'costTier'>;
   // Досрочный сброс пометки «модель недоступна» — эндпоинт админский, поэтому у остальных
   // строки пометок остаются, а кнопки нет
   onRecheckModel?: (key: string, model: string) => Promise<void>;
@@ -356,11 +359,12 @@ export function buildSubscriptionCard(key: string, sub: SubscriptionUsage, ctx: 
   const color = sourceColor('claude');   // оба аккаунта пула — один цвет, различаются именем
   const pollStatus = ctx.pollStatuses[key];
   const lastSnap = lastSnapshot(sub.snapshots);
-  // Ценовой класс провайдера claude (/api/models, costTier) — карточка подписки называет
-  // цену так же, как квотная карточка провайдера: класс приезжает «expensive» (дорого),
-  // и без него самый дорогой класс на карточках показать негде — у Claude нет квотной
-  // карточки. null (каталог не пришёл) — пилюли нет, карточка не врёт.
-  const costTier = ctx.costTier ?? null;
+  // Ценовой класс карточки подписки — из caps ПРОВАЙДЕРА этой карточки (/api/models,
+  // costTier): ключ карточки ведёт в общий производитель пилюли, поэтому класс и пилюля
+  // берутся одного провайдера — подписка любого другого провайдера не должна называться
+  // чужой ценой. У Claude нет квотной карточки, поэтому класс виден только здесь:
+  // приезжает «expensive» (дорого). null (каталог не пришёл) — пилюли нет, карточка не врёт.
+  const costTier = ctx.caps?.(key).costTier ?? null;
   // Пометки живут независимо от снимков: аккаунт без единого снимка тоже может не пускать
   // модель, поэтому блок нужен обеим веткам возврата
   const unavailableModels = unavailableModelRows(sub);
@@ -378,7 +382,7 @@ export function buildSubscriptionCard(key: string, sub: SubscriptionUsage, ctx: 
       // пустой карточки нет, кроме unauthorized с loginCommand. На карточке без тарифа
       // (tier: null) ограничения попадают только в expandedPills — ProviderCard
       // рендерит их в раскрытии гейтом `data.tier || data.expandedPills?.length`.
-      pills: [...subscriptionPills(sub), ...providerPricePills('claude', costTier)],
+      pills: [...subscriptionPills(sub), ...providerPricePills(key, costTier)],
       costTier,
       expandedPills: subscriptionExpandedPills(sub),
       hint: unauthorized
@@ -443,7 +447,7 @@ export function buildSubscriptionCard(key: string, sub: SubscriptionUsage, ctx: 
   return {
     key, name, color, state: 'ready', isFree: false, dim: ctx.usageError, onRetry: () => {},
     windows: winViews, labelWidth: 92,
-    pills: [...subscriptionPills(sub), ...providerPricePills('claude', costTier)],
+    pills: [...subscriptionPills(sub), ...providerPricePills(key, costTier)],
     costTier,
     expandedPills: subscriptionExpandedPills(sub),
     routingBadge: isTarget ? { tone: rot.tone, label: rot.label } : undefined,
@@ -744,8 +748,15 @@ export function QuotasTab({ balances, onClose }: { balances?: BalanceChipData[];
       freeAvailable: Object.values(subs).some(s => s.inRotation !== false),
       subs,
       usageError,
-      // Класс claude с бэка (/api/models, costTier) — карточка подписки называет цену.
-      costTier: providerCapsByKey('claude').costTier ?? null,
+      // Класс цены карточки подписки — из caps ПРОВАЙДЕРА карточки (/api/models,
+      // costTier). Ключ карточки подписки — id аккаунта пула ('work'), а не ключ
+      // провайдера: своего провайдера в каталоге у такого ключа нет, поэтому класс
+      // берём у Claude — пул подписок это подписки Claude, и карточка не должна
+      // терять цену. Ключ, который в каталоге есть как провайдер, — класс его.
+      caps: (key: string) => {
+        const caps = providerCapsByKey(key);
+        return caps.provider === key ? caps : providerCapsByKey('claude');
+      },
       onRecheckModel: isAdmin ? recheckModel : undefined,
     };
     for (const [key, sub] of Object.entries(subs)) {

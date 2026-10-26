@@ -154,10 +154,14 @@ public sealed class LlmSubsystem : IAppSubsystem
         services.AddSingleton<LlamaServerClient>();
         services.AddSingleton<ILocalLlmClient>(sp =>
         {
-            var options = LocalLlmOptions.Read(sp.GetRequiredService<IConfiguration>());
-            return options.Provider == LocalLlmOptions.LlamaServer
+            var config = sp.GetRequiredService<IConfiguration>();
+            var options = LocalLlmOptions.Read(config);
+            ILocalLlmClient inner = options.Provider == LocalLlmOptions.LlamaServer
                 ? sp.GetRequiredService<LlamaServerClient>()
                 : sp.GetRequiredService<OllamaClient>();
+            // Потолок конкурентности: singleton, значит гейт один на движок на процесс
+            return new GatedLocalLlmClient(inner, LocalEngineGate.Read(config, "LocalLlm", "LocalLlm"),
+                sp.GetRequiredService<ILogger<GatedLocalLlmClient>>());
         });
         // Тихие HTTP-логгеры на оба имени: каждая реализация пишет в свою категорию,
         // и одна мёртвая зависимость не глушит жалобы другой. Без них каждый вызов

@@ -92,7 +92,11 @@ public sealed class NamedLocalEngines
             }
             var spec = new LocalEngineSpec(name, section["ReadyUrl"]?.Trim(), fallback,
                 int.TryParse(section["NumCtx"], out var numCtx) && numCtx > 0 ? numCtx : null, actions);
-            var client = new LlamaServerClient(http, options, loggers.CreateLogger<LlamaServerClient>(), spend);
+            // Свой гейт на каждый движок: счётчик не делится ни с основным LocalLlm, ни с соседями
+            var client = new GatedLocalLlmClient(
+                new LlamaServerClient(http, options, loggers.CreateLogger<LlamaServerClient>(), spend),
+                LocalEngineGate.Read(config, $"{SectionName}:{name}", name),
+                loggers.CreateLogger<GatedLocalLlmClient>());
             Func<CancellationToken, Task<bool>>? probe = null;
             if (!string.IsNullOrWhiteSpace(spec.ReadyUrl))
             {

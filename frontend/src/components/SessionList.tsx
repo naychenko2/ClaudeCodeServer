@@ -1053,7 +1053,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
                 ? featureKinds.filter(k => k !== ch.kind)
                 : [...featureKinds, ch.kind])}
               removeLabel={ch.action === 'remove'
-                ? `Убрать фильтр «${FEATURE_KIND_LABEL[ch.kind]}»`
+                ? `Убрать «${FEATURE_KIND_LABEL[ch.kind]}»`
                 : `Вернуть «${FEATURE_KIND_LABEL[ch.kind]}»`}
             >
               {FEATURE_KIND_LABEL[ch.kind]}

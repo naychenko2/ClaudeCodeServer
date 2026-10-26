@@ -230,8 +230,6 @@ describe('SessionList: M4 закрытые фичи раскрываются', (
     mockIndex = idx; // эффект useFeaturesIndex не сбрасывает индекс в EMPTY
     mockSessions = [sess('c1-chat')];
     store.clear();
-    // featureFilter:'closed' — секция «Закрытые» раскрывается сама (closedExpanded = chip==='closed'),
-    // без клика по кнопке секции: закрытая группа фичи сразу на экране
     // Ф-2.2: «Закрытые» на оси featureKinds — секция закрытых на экране без лишнего клика
     store.set('cc_chat_filters:p1', JSON.stringify({ groupBy: 'features', sortOrder: 'newest', featureKinds: ['closed'] }));
 
@@ -379,6 +377,14 @@ describe('SessionList: Ф-2.2 режим фич по оси featureKinds', () =>
     return null;
   }
 
+  // Сколько раз фича отрисована как группа: title={feature.title} ставится ровно один раз
+  // на заголовок группы (FeatureGroupHeader), поэтому счётчик по нему = состав секций
+  function countFeatureTitle(n: _FakeNode, title: string): number {
+    let c = n._attrs['title'] === title ? 1 : 0;
+    for (const ch of n.childNodes) c += countFeatureTitle(ch, title);
+    return c;
+  }
+
   // c1: смерженная с открытым эпиком (kind='merged', эпик не Done) — открытая фича:
   // при умолчании она в обычных открытых группах, секции закрытых нет вовсе.
   // Мутация: в shownOpenIds вернуть `f.bucket !== 'closed'` вместо kind — FICH_G
@@ -432,6 +438,27 @@ describe('SessionList: Ф-2.2 режим фич по оси featureKinds', () =>
     expect(hasFeatureTitle(container, 'FICH_C'), 'закрытой фичи после клика нет').toBe(true);
   });
 
+  // R-Ф2.2 m3: граница `f.kind !== 'closed'` в shownOpenIds — закрытая фича не попадает
+  // в открытые группы: при «Закрытых» на оси она рисуется ОДИН раз, только в секции закрытых
+  // (проверяем состав секций — число отрисовок группы, а не заголовки).
+  // Мутация: снять `&& f.kind !== 'closed'` из shownOpenIds → фича и в открытых группах,
+  // и в секции закрытых → 2, тест красный.
+  it('R-Ф2.2 m3: «Закрытые» на оси — закрытая фича рисуется один раз, не в открытых группах', async () => {
+    const on = await renderFeatures({ featureKinds: ['closed'] });
+    expect(countFeatureTitle(on, 'FICH_C'), 'закрытая фича отрисована не один раз').toBe(1);
+    // Единственное место, где она, — секция закрытых (её заголовок на экране)
+    expect(findTestId(on, 'closed-section-header'), 'секции закрытых нет').not.toBeNull();
+  });
+
+  // R-Ф2.2 m2: гард `!closedSelected` в calm — при уже выбранных «Закрытых» нечего
+  // предлагать добавить: плашка calm на экране, ссылки «Показать закрытые · N» нет.
+  // Мутация: снять `!closedSelected &&` из условия ссылки → ссылка появляется, тест красный.
+  it('R-Ф2.2 m2: все закрыты + «Закрытые» на оси — calm без ссылки «Показать закрытые»', async () => {
+    const container = await renderFeatures({ featureKinds: ['closed'] }, { features: [c1], sessions: [s('s4')] });
+    expect(parentOfText(container, 'Открытых фич нет.'), 'плашки calm нет').not.toBeNull();
+    expect(parentOfTextStart(container, 'Показать закрытые ·'), 'ссылка «Показать закрытые · N» при уже выбранных «Закрытых»').toBeNull();
+  });
+
   // c3: выбранный kind без совпадений (в индексе есть открытые других состояний) →
   // EmptyState «Под фильтр ничего не попало»; «Сбросить фильтр» → [] (умолчание).
   it('c3: noMatch — «Под фильтр ничего не попало», «Сбросить фильтр» возвращает умолчание', async () => {
@@ -450,7 +477,7 @@ describe('SessionList: Ф-2.2 режим фич по оси featureKinds', () =>
   // с оси, остальной выбор не трогает.
   it('«Показаны:» — крестик убирает «Ждут вас» с оси: FICH_W нет, FICH_S остаётся', async () => {
     const container = await renderFeatures({ featureKinds: ['waiting_you', 'error'] });
-    const cross = findByAriaLabel(container, 'Убрать фильтр «Ждут вас»');
+    const cross = findByAriaLabel(container, 'Убрать «Ждут вас»');
     expect(cross, 'крестика чипа «Ждут вас» в строке «Показаны» нет').not.toBeNull();
     await act(async () => { container.fireClick(cross!); });
     expect(hasFeatureTitle(container, 'FICH_W'), 'снятый kind не снял свою фичу').toBe(false);

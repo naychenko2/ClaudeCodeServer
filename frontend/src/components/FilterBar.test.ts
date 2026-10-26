@@ -100,11 +100,11 @@ import type { FeatureIndexFeature } from '../types/featureIndex';
 import type { Session, Persona } from '../types';
 
 // === фикстуры ===
-const feat = (id: string, bucket: FeatureIndexFeature['bucket'], kind: FeatureKind | null): FeatureIndexFeature => ({
+const feat = (id: string, bucket: FeatureIndexFeature['bucket'], kind: FeatureKind | null, chatCount = 1): FeatureIndexFeature => ({
   featureId: id, title: `Фича ${id}`, projectId: 'p1', bucket,
   attention: null, rail: [], chips: [],
   stepsAccepted: 0, stepsTotal: 0, loops: 0, now0: null, lastActivityAt: null, summary: null,
-  keySessionId: null, keyArchived: false, keyProjectId: null, chatCount: 1,
+  keySessionId: null, keyArchived: false, keyProjectId: null, chatCount,
   kind,
 } as FeatureIndexFeature);
 
@@ -299,6 +299,16 @@ describe('FilterBar: п.2 футер «Показать N фич» (360, реж�
     const { body } = await renderOpenBar(features, { ...baseFilters, featureKinds: ['closed'] });
     expect(findByText(body, 'Показать 1 фич'), 'футер не пересчитан по выбранной оси').not.toBeNull();
     expect(findByText(body, 'Показать 2 фич'), 'футер считает по bucket, а не по выбору оси').toBeNull();
+  });
+
+  // R-Ф2.2 m1: футер считает только «рисующиеся» фичи (chatCount > 0) — то же правило,
+  // что у «N из M» и счётчиков оси: фича без чатов в список не попадает.
+  // Мутация: убрать `f.chatCount > 0` из фильтра футера → «Показать 2 фич», тест красный.
+  it('фича без чатов в счёт футера не входит: «Показать 1 фич», не «2»', async () => {
+    const features = [feat('z0', 'running', 'running', 0), feat('f1', 'running', 'running', 1)];
+    const { body } = await renderOpenBar(features);
+    expect(findByText(body, 'Показать 1 фич'), 'футер не пересчитал по chatCount').not.toBeNull();
+    expect(findByText(body, 'Показать 2 фич'), 'фича без чатов попала в счёт').toBeNull();
   });
 
   it('дефолт (groupBy=days, 360) → футер «Готово», не «Показать N фич»', async () => {

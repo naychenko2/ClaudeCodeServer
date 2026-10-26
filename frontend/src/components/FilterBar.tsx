@@ -576,10 +576,12 @@ export function FilterBar({
   // На 360 в режиме фич — «Показать N фич» (md, 42 px, таблица §4) вместо «Готово»;
   // N — то, что реально попадёт в список при текущем выборе оси: тот же отбор
   // featureMatchesKinds, что в секции «Фичи · что показывать» и в SessionList
-  // (Ф-2.2). По bucket счёт не отражал выбор: при «только закрытые» он дал бы 0.
+  // (Ф-2.2), и то же правило «рисуется» (chatCount > 0), что у «N из M» выше и у
+  // счётчиков оси: фича без чатов в список не попадает — в футере её быть не должно (R-Ф2.2 m1).
+  // По bucket счёт не отражал выбор: при «только закрытые» он дал бы 0.
   // Подвал общий с «Чатами», поэтому переключение только по groupBy + isMobile.
   const isFeaturesMode = filters.groupBy === 'features';
-  const shownFeatureCount = isFeaturesMode && features ? features.filter(f => featureMatchesKinds(f, filters.featureKinds)).length : 0;
+  const shownFeatureCount = isFeaturesMode && features ? features.filter(f => f.chatCount > 0 && featureMatchesKinds(f, filters.featureKinds)).length : 0;
   const footerIsMobileFeatures = isMobile && isFeaturesMode;
   const footerActionLabel = footerIsMobileFeatures ? `Показать ${shownFeatureCount} фич` : 'Готово';
   const footerRow = (

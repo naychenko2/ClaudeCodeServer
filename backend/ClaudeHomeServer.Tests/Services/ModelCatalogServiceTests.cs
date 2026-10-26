@@ -1,6 +1,8 @@
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Tests.Helpers;
+using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Xunit;
 
@@ -82,5 +84,29 @@ public class ModelCatalogServiceTests
 
         Assert.All(models, m => Assert.NotEqual("freellmapi-direct", m.Provider));
         Assert.Contains(models, m => m.Provider == "openrouter-direct");
+    }
+
+    // Ценовой класс провайдера (/api/models → providers[].costTier): локальный движок →
+    // бесплатно, claude (и подписки) → дорого, прочие облачные → дёшево. Правило — в Core
+    // (SpendCostTiers), здесь только прокладка каталога.
+    [Fact]
+    public void CostTier_ПоПровайдеру_ЛокальныйДешёвыйДорогой()
+    {
+        var cfg = new Dictionary<string, string?>
+        {
+            ["LlmProviders:glm:ApiKey"] = "test-key",
+            ["LlmProviders:glm:AnthropicBaseUrl"] = "https://api.z.ai/api/anthropic",
+            ["LlmProviders:local-qwen:IsLocal"] = "true",
+            ["LlmProviders:local-qwen:AnthropicBaseUrl"] = "http://127.0.0.1:8000",
+        };
+        var config = Config(cfg);
+        var providers = new LlmProviderRegistry(config);
+        var service = new ModelCatalogService(providers, new NullHttpFactory(), config);
+
+        service.CostTierOf(providers.GetByKey("glm")!).Should().Be("cheap", "облачный сторонний → дёшево");
+        service.CostTierOf(providers.GetByKey("local-qwen")!).Should().Be("free", "локальный движок → бесплатно");
+        service.CostTierOf(new LlmProviderConfig { Key = "claude" }).Should().Be("expensive", "claude → дорого");
+        service.CostTierOf(new LlmProviderConfig { Key = "sub-plus" }).Should().Be("expensive",
+            "подписка claude (sub-*) → тот же дорогой класс");
     }
 }

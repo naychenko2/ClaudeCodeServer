@@ -77,6 +77,8 @@ public class ProjectCapabilitiesGuardTests
         ["backend/ClaudeHomeServer.Spend/SpendStore.cs"] = (1, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Spend/SpendMaintenanceService.cs"] = (3, "LLM-провайдер"),
         ["backend/ClaudeHomeServer/Services/SpendMapping.cs"] = (2, "LLM-провайдер"),
+        // Ценовой класс провайдера (/api/models): локальный LLM-провайдер → бесплатно.
+        ["backend/ClaudeHomeServer/Services/ModelCatalogService.cs"] = (1, "LLM-провайдер"),
     };
 
     private static string RepoRoot()

@@ -34,10 +34,14 @@ public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry p
     {
         var caps = new Dictionary<string, LlmCapabilities>
         {
-            [LlmCapabilitiesCatalog.Claude.Provider] = LlmCapabilitiesCatalog.Claude,
+            // Класс провайдера — правилом Core (SpendCostTiers): claude → дорого.
+            [LlmCapabilitiesCatalog.Claude.Provider] = LlmCapabilitiesCatalog.Claude with
+            {
+                CostTier = SpendCostTiers.OfProvider(LlmCapabilitiesCatalog.Claude.Provider, isLocal: false),
+            },
         };
         foreach (var p in providers.All)
-            caps[p.Key] = LlmProviderRegistry.CapabilitiesOf(p);
+            caps[p.Key] = LlmProviderRegistry.CapabilitiesOf(p) with { CostTier = catalog.CostTierOf(p) };
 
         var resolved = new Dictionary<string, string?>
         {

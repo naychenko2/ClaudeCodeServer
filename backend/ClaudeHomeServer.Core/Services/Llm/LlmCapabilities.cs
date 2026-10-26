@@ -17,7 +17,10 @@ public sealed record LlmCapabilities(
     bool Configured = true,          // настроен ли (ключ задан ≠ пустой); для плитки «Подключённые модели»
     string? TierStrong = null,     // id модели для слота «сильная» (чипсы быстрого заполнения)
     string? TierMedium = null,     // id модели для слота «средняя»
-    string? TierWeak = null);        // id модели для слота «слабая»
+    string? TierWeak = null,        // id модели для слота «слабая»
+    // Ценовой класс провайдера (free|cheap|expensive) — правило в Core (SpendCostTiers).
+    // null — класс не посчитан (провайдер вне реестра).
+    string? CostTier = null);
 
 public static class LlmCapabilitiesCatalog
 {

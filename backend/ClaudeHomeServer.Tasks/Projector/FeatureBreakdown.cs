@@ -21,7 +21,12 @@ public sealed record FeatureBreakdownGroup(
     decimal? CostUsd,
     // Id чатов группы: только из снимка сессий владельца (fail-closed: чужой/удалённый чат
     // не попадает).
-    List<string> ChatIds);
+    List<string> ChatIds,
+    // Ценовой класс группы (free|cheap|expensive) — по записям расхода группы правилом Core
+    // (SpendCostTiers: локальный/бесплатный → free, claude → expensive, прочее облачное →
+    // cheap). null — записей расхода у группы нет (класс неоткуда взять) или класс неизвестен.
+    // В группе со смешанными классами берётся «важнейший» (дороже — важнее, SpendCostTiers.Rank).
+    string? Tier = null);
 
 // «Дольше всех сейчас» (GET features/{id}, stats.longestNow): самая долгая сейчас идущая задача;
 // null — ничего не идёт. Tokens/Share = null до Б9 (учёт расхода).
@@ -176,7 +181,7 @@ public sealed record FeatureBreakdown(
             // Source != free / NaN или ∞). На неё же переходит итог расхода (SpendFeatureReader)
             // и сплиттер (SharedSpendSplitter) — своих формул «цена надёжна» больше нет,
             // иначе разрез спорил бы с итогом (deepseek cost=2.0: итог 0, разрез 2.0, ревью Глеба).
-            var spend = new Dictionary<string, (long Tokens, double Cost, bool HasUnreliable)>();
+            var spend = new Dictionary<string, (long Tokens, double Cost, bool HasUnreliable, string? Tier)>();
             if (records is not null)
             {
                 foreach (var r in records)
@@ -186,14 +191,19 @@ public sealed record FeatureBreakdown(
                     // a — локальная копия; после обновления ОБЯЗАТЕЛЬНО пишем обратно в словарь
                     // (tuple — value type: TryGetValue отдаёт копию, сам словарь не мутируется).
                     if (!spend.TryGetValue(key, out var a))
-                        a = (0, 0, false);
+                        a = (0, 0, false, null);
                     // Минор Б9b: кламп отрицательных токенов и в разрезе (как в итоге,
                     // SpendFeatureReader): сбой CLI с отрицательным числом не тянет группу в минус.
                     // Надёжная стоимость: null → 0 в сумму + HasUnreliable (консервативный null группы).
                     var cost = SpendCostReliability.ReliableCostOf(r);
+                    // Ценовой класс записи — правилом Core (SpendCostTiers): свой словарь
+                    // «claude → дорого» здесь не заводим. В группе со смешанными классами
+                    // берётся «важнейший» (дороже — важнее, SpendCostTiers.Rank).
+                    var tier = SpendCostTiers.Of(r.Source, r.Provider, r.Model);
                     a = (a.Tokens + Math.Max(0, r.InputTokens) + Math.Max(0, r.OutputTokens),
                         a.Cost + (double)(cost ?? 0),
-                        a.HasUnreliable || cost is null);
+                        a.HasUnreliable || cost is null,
+                        a.Tier is null || SpendCostTiers.Rank(tier) > SpendCostTiers.Rank(a.Tier) ? tier : a.Tier);
                     spend[key] = a;
                 }
             }
@@ -205,17 +215,20 @@ public sealed record FeatureBreakdown(
                 // токены = сумма, стоимость = null, если есть ненадёжная запись, иначе сумма цен.
                 long? tokens = null;
                 decimal? cost = null;
+                string? tier = null;
                 if (spend.TryGetValue(key, out var a))
                 {
                     tokens = a.Tokens;
                     cost = a.HasUnreliable ? null : (decimal)a.Cost;
+                    tier = a.Tier;
                 }
                 result.Add(new FeatureBreakdownGroup(
                     Key: key,
                     Minutes: FeatureTimeMath.UnionMinutes(intervals),
                     Tokens: tokens,
                     CostUsd: cost,
-                    ChatIds: chatIds.Distinct().OrderBy(c => c).ToList()));
+                    ChatIds: chatIds.Distinct().OrderBy(c => c).ToList(),
+                    Tier: tier));
             }
             // Сортировка по Minutes убыв; при равенстве — по Key (детерминизм).
             result.Sort((a, b) =>

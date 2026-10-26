@@ -381,7 +381,8 @@ public class FeatureBreakdownTests
     // unreliable — признак «цена от CLI ненадёжна» (модель в списке UnreliableCostModels):
     // его выставляет читатель (SpendFeatureReader) единой точкой правды (SpendCostReliability).
     private static FeatureSpendRecord Spend(string? personaId, string? taskId, string? model,
-        long input, long output, double? cost, string source = "chat-turn", bool unreliable = false) => new()
+        long input, long output, double? cost, string source = "chat-turn", bool unreliable = false,
+        string provider = "") => new()
     {
         PersonaId = personaId,
         TaskId = taskId,
@@ -390,6 +391,7 @@ public class FeatureBreakdownTests
         OutputTokens = output,
         CostUsd = cost,
         Source = source,
+        Provider = provider,
         UnreliableCost = unreliable,
     };
 
@@ -474,6 +476,46 @@ public class FeatureBreakdownTests
         var p1 = bd.Personas.Single(g => g.Key == "p1");
         p1.Tokens.Should().Be(150);
         p1.CostUsd.Should().Be(0m, "free → честный 0, не null");
+    }
+
+    // Ценовой класс строки разбивки по моделям — правилом Core (SpendCostTiers):
+    // claude → дорого, сторонний облачный → дёшево, локальный движок → бесплатно,
+    // неизвестный провайдер → дёшево (всё облачное, кроме claude). Мутация «класс всегда
+    // free» → claude-строка получит free ≠ expensive → краснеет.
+    [Fact]
+    public void Build_РазрезМоделей_ЦеновойКлассСтроки()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic");
+        TaskItem Step(string id, string persona, string chat) => Child(id, "epic", personaId: persona,
+            chatId: chat,
+            startedAt: new DateTime(2026, 10, 1, 10, 0, 0),
+            completedAt: new DateTime(2026, 10, 1, 12, 0, 0));
+
+        var sessions = Sessions(
+            ("c1", "s1", "claude-opus-4"),
+            ("c2", "s2", "minimax-m2"),
+            ("c3", "s3", "qwen-local"),
+            ("c4", "s4", "unknown-model"));
+
+        var records = new[]
+        {
+            Spend("p1", "s1", "claude-opus-4", 100, 50, 1.0, provider: "claude"),
+            Spend("p2", "s2", "minimax-m2", 100, 50, 0.2, provider: "minimax"),
+            Spend("p3", "s3", "qwen-local", 100, 50, 0, source: "free", provider: "local-qwen"),
+            Spend("p4", "s4", "unknown-model", 100, 50, 0.1, provider: ""),
+        };
+
+        var (bd, _) = FeatureBreakdown.Build(
+            Run(epic, Step("s1", "p1", "c1"), Step("s2", "p2", "c2"),
+                Step("s3", "p3", "c3"), Step("s4", "p4", "c4")),
+            null, sessions, null, now, records);
+
+        bd.Models.Single(g => g.Key == "claude-opus-4").Tier.Should().Be("expensive", "claude → дорого");
+        bd.Models.Single(g => g.Key == "minimax-m2").Tier.Should().Be("cheap", "облачный сторонний → дёшево");
+        bd.Models.Single(g => g.Key == "qwen-local").Tier.Should().Be("free", "локальный движок → бесплатно");
+        bd.Models.Single(g => g.Key == "unknown-model").Tier.Should().Be("cheap",
+            "провайдер неизвестен → по правилу Core: облачное, кроме claude, — дёшево");
     }
 
     // Ось «роли»: запись расхода (TaskId → Role задачи) даёт группе роли токены/стоимость.

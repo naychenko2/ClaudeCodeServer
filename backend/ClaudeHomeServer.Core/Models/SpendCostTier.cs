@@ -26,6 +26,19 @@ public static class SpendCostTiers
         return Cheap;
     }
 
+    // Класс по ОДНОМУ провайдеру (без записи расхода): локальный движок → бесплатно,
+    // claude (и подписки sub-*) → дорого, прочие облачные → дёшево. Правило то же, что у Of,
+    // поэтому живёт здесь же: словарь «claude → дорого» в коде не дублируется.
+    // Класс по провайдеру без источника (каталог провайдеров /api/models) считается тем же
+    // правилом: локальный — бесплатно, остальное — по ключу провайдера.
+    public static string OfProvider(string provider, bool isLocal)
+    {
+        if (isLocal) return Free;
+        if (SpendSources.IsFree(provider, null)) return Free;
+        if (SpendSources.NormalizeProvider(provider) == "claude") return Expensive;
+        return Cheap;
+    }
+
     // Ранг для выбора класса узла, когда в одной группе смешались классы: «дороже — важнее».
     public static int Rank(string tier) => tier switch
     {

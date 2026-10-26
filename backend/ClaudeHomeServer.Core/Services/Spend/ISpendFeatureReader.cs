@@ -91,6 +91,10 @@ public sealed class FeatureSpendRecord
     public long CacheCreationTokens { get; init; }
     public double? CostUsd { get; init; }
     public string Source { get; init; } = "";
+    // Провайдер записи (ключ из реестра LlmProviders). Нужен разрезу фичи, чтобы посчитать
+    // ценовой класс строки (SpendCostTiers): класс по одному провайдеру не выводится из
+    // модели. Пусто — провайдер неизвестен → класс по правилу Core (облачное, кроме claude).
+    public string Provider { get; init; } = "";
     // Цена от CLI ненадёжна (модель в списке `Spend:UnreliableCostModels`): токены в сумму,
     // стоимость — нет. Единая точка правды (SpendCostReliability): читатель (SpendFeatureReader)
     // выставляет флаг при сборке записи, и итог расхода с разрезом фичи (FeatureBreakdown)

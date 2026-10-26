@@ -8,6 +8,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Tasks.Projector;
 
 namespace ClaudeHomeServer.Services.Mcp.Http;
 
@@ -43,6 +44,9 @@ public sealed class TasksToolset(
     PersonaBindingsService bindings,
     SessionManager sessions,
     ISessionBroadcaster broadcaster,
+    // Голос фичи (B4): этап и состояние на момент записи штампуются из той же проекции,
+    // что в REST PUT features/{id}/note (FeatureNote.StageAtWrite/StateAtWrite).
+    FeatureProjector features,
     // Подсистема Notes отключаемая: null — обратная запись в заметку-источник тихо
     // пропускается (см. использование ниже, паритет с TasksController).
     ClaudeHomeServer.Services.Spheres.ISphereDirectory spheres,
@@ -306,6 +310,23 @@ public sealed class TasksToolset(
                             arguments.ContainsKey("role") ? StringArg(arguments, "role") : null)) is { } bound)
                     return Deny(bound);
 
+                // B4: голос фичи (волна 6, разрез п.2). Право — только по единому правилу членства
+                // FeatureChatMembership: пишет curator или orchestrator фичи, executor — нет (риск 6
+                // разреза: своей копии правила не заводим). Отказ fail-closed: чат без членства в
+                // фиче тоже не пишет. Не-эпик — тот же 400-текст, что у REST PUT note.
+                var featureNoteArg = arguments.ContainsKey("featureNote") ? StringArg(arguments, "featureNote") : null;
+                if (featureNoteArg is not null)
+                {
+                    if ((arguments.ContainsKey("role") ? StringArg(arguments, "role") : existing.Role) != TaskRoles.Feature)
+                        return Deny("Голос пишется только у фичи (role=feature)");
+                    var membership = FeatureChatMembership.BuildDetailed(
+                        tasks.GetByOwner(context.OwnerId).ToList(), FeatureChatDoor.Snapshot(sessions, context.OwnerId));
+                    if (!membership.TryGetValue(session.Id, out var memberFeatures)
+                        || !memberFeatures.TryGetValue(existing.Id, out var voiceLink)
+                        || voiceLink.Kind == "executor")
+                        return Deny("Голос фичи пишет оркестратор или человек");
+                }
+
                 // Целевой проект для валидации колонки/персоны: текущий, либо новый из projectId
                 string? targetProjectId = existing.ProjectId;
                 var newProjectId = arguments.ContainsKey("projectId") ? StringArg(arguments, "projectId") : null;
@@ -435,6 +456,16 @@ public sealed class TasksToolset(
                     // тот же текст, что в REST-контроллере; catch же ловит и наш «не найдена»
                     // с подставленным id (см. ?? throw выше)
                     return Deny(ex.Message);
+                }
+                // Голос пишется после основного Update: один вызов = один итоговый экземпляр,
+                // broadcast уходит уже с голосом. At/StageAtWrite/StateAtWrite штампует сервер из
+                // проекции (агент их не передаёт), как в REST PUT note; пустой текст снимает голос
+                // внутри SetFeatureNote.
+                if (featureNoteArg is not null)
+                {
+                    var run = features.Project(existing.Id, context.OwnerId);
+                    updated = tasks.SetFeatureNote(existing.Id, featureNoteArg, session.Id, byUser: false,
+                        run?.Now.FirstOrDefault()?.Stage ?? "", run?.State ?? "") ?? updated;
                 }
                 await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("updated", updated));
 
@@ -1341,10 +1372,16 @@ public sealed class TasksToolset(
                     ["resetPregate"] = new JsonObject
                     {
                         ["type"] = "boolean",
-                        ["description"] = "true — сбросить результат предгейта шага (серия красных начинается заново). "
-                            + "Только после исчерпанной серии (два красных подряд) — иначе отказ; это решение постановщика, исполнитель своей задачи получит отказ.",
+                        // Предел суммы описаний параметров (McpToolsetStabilityTests, минор 1): с добавлением
+                        // featureNote формулировка сжата до сути — смысл гейта (TaskManager NC-P1b) не изменился
+                        ["description"] = "true — сбросить красную серию предгейта; только после исчерпанной серии, исполнителю откажет.",
                     },
                     ["planSteps"] = PlanStepsSchema(),
+                    ["featureNote"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = "Голос фичи (только у эпика): ≤600, \"\" — снять. Исполнитель откажет.",
+                    },
                     ["verification"] = VerificationSchema(),
                     ["outcome"] = OutcomeSchema(),
                     ["projectId"] = new JsonObject

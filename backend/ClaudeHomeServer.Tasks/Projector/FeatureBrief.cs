@@ -302,7 +302,12 @@ public static class FeatureBrief
     // состояние проекции, достраивается таблицей KindByState. Пересечений нет: имя состояния,
     // совпадающее с именем категории, отображается в ту же категорию (running → running,
     // paused → paused, draft → draft, idle → idle, closed → closed); «stopped» → error,
-    // «waiting» → waiting_you. Ничего не известно — null: голос устарел (fail-closed).
+    // «waiting» → waiting_you. «merged» — то же отображение (merged → merged), но с коллизией
+    // имён: теперь это и имя состояния (FeatureStates.Merged), и категория (Kinds.Merged,
+    // «Фильтр фич по состоянию»); старые голоса со штампом «merged» читаются как категория
+    // «merged», а закрывшейся фиче дают ложную метку «устарел» (R-Б1/1, безопасное направление
+    // ошибки: голос только помечается, не прячется). Ничего не известно — null: голос устарел
+    // (fail-closed).
     private static string? KindFromStamp(string stamp) =>
         KindByState.TryGetValue(stamp, out var kind) ? kind
             : Kinds.All.Contains(stamp) ? stamp

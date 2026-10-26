@@ -584,6 +584,32 @@ Html не разбираем вовсе: прототип идёт в «Файл
   Своё у фронта только перевод ключей стадий в слова и «N ч назад» из `at`/`updatedAt`.
   Второй источник правды не заводится.
 
+### 7. Фильтр фич по состоянию (эпик `1d812b59`)
+
+Индекс фич (`features/index`, `features?sessionId=`) отдаёт в строке поле `kind` — ровно та же
+функция, что `brief.kind`: `FeatureBrief.KindOf` (та же таблица `KindByState` и те же расщепления:
+`paused` → `queued` по причине удержания, `merged` → `closed` по закрытости эпика; своего маппинга
+в индексе не заводим), [FeatureProjector.cs:1606-1609](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureProjector.cs),
+[FeatureIndex.cs:139-143](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureIndex.cs)).
+Отличие от `brief`: состояние вне таблицы — `null`, не исключение — строка индекса не роняет индекс (:141-142).
+Девять категорий (`FeatureBrief.Kinds`, [FeatureBrief.cs:29-47](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureBrief.cs)),
+включая `merged`: merge Done при незакрытом эпике остаётся среди открытых (`merged`), при закрытом
+эпике — `closed` (FeatureBrief.cs:147-150; то же расщепление, что `bucket`, FeatureProjector.cs:1764).
+Фронт состояния не пересчитывает: он матчит `kind` из индекса
+([chatGroups.ts:677-683](../../frontend/src/lib/chatGroups.ts)) и только переводит ключи в слова
+(`FEATURE_KIND_LABEL`, :651). `chips[]` и `bucket` остаются в индексе как были — для быстрого действия
+и тона, не для оси состояния (FeatureIndex.cs:70-73, :82-84).
+
+**Legacy-штамп голоса (R-Б1/1).** `merged` теперь и имя состояния (`FeatureStates.Merged`,
+[FeatureRun.cs:430](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureRun.cs)), и категория
+(`Kinds.Merged`, FeatureBrief.cs:38). `KindFromStamp` (FeatureBrief.cs:306-309) их не различает:
+по той же таблице `KindByState` старое состояние «merged» достраивается в ту же категорию
+(FeatureBrief.cs:118). Следствие: у части старых голосов на смерженных фичах допускается ложная
+метка «устарел» — если фича позже закрылась (`run.Closed` → kind `closed`), штамп «merged» больше
+не совпадает с категорией (`StaleOf`, FeatureBrief.cs:293-299). Направление ошибки безопасное:
+голос только помечается устаревшим, не прячется и не удаляется (§4: «текст устаревшего голоса
+не прячем»).
+
 **К «Последствиям» волны 1:** волна 6 добавляет одно хранимое поле — `TaskItem.Note`
 (голос эпика): nullable, старый `tasks.json` читается как `null`, `BackupSchema.Version`
 не поднят (TaskItem.cs:151-153). Новых файлов в `data/` и новых SignalR-событий нет:

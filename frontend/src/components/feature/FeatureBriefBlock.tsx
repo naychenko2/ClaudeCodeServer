@@ -178,10 +178,10 @@ function LifeSection({ stats, closed, onOpenStats, isMobile }: { stats: FeatureS
       <div style={{ ...LABEL, marginBottom: SP.xs }}>Жизнь фичи</div>
       {model.hasData && (
         <div role="img" aria-label="Полоска жизни фичи">
-          <MiniTimeline stats={stats} />
+          <MiniTimeline stats={stats} closed={closed} />
         </div>
       )}
-      <MiniTimelineAxis stats={stats} />
+      <MiniTimelineAxis stats={stats} closed={closed} />
       <FeatureBriefLegend kinds={kinds} hasBreak={hasBreak} />
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap', marginTop: SP.xs }}>
         <div style={{ flex: 1, minWidth: 0 }}>

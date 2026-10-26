@@ -13,9 +13,9 @@ import { formatDuration, formatDateTime, formatClock, buildTimelineModel, kindBa
 import { formatTokens, formatUsd } from './FeatureStatsFormat';
 import type { FeatureStats } from '../../types/featureStats';
 
-// Тонкая лента (8 px): сегменты в масштабе, без подписей.
-export function MiniTimeline({ stats }: { stats: FeatureStats }) {
-  const closed = stats.timeline.current == null;
+// Тонкая лента (8 px): сегменты в масштабе, без подписей. Closed — из общей модели
+// состояния (блок передаёт по brief.kind), не эвристика по current == null (R-F8).
+export function MiniTimeline({ stats, closed }: { stats: FeatureStats; closed: boolean }) {
   const model = buildTimelineModel(stats.timeline, stats.source, stats.truncated, closed);
   if (!model.hasData) return null;
 
@@ -58,10 +58,10 @@ export function MiniTimeline({ stats }: { stats: FeatureStats }) {
   );
 }
 
-// Ось под полоской: «создана … / сейчас …», у закрытой — «закрыта …».
-export function MiniTimelineAxis({ stats }: { stats: FeatureStats }) {
+// Ось под полоской: «создана … / сейчас …», у закрытой — «закрыта …». Closed — как в
+// ленте: из общей модели состояния, переданная блоком (R-F8), а не из сырого current.
+export function MiniTimelineAxis({ stats, closed }: { stats: FeatureStats; closed: boolean }) {
   const tl = stats.timeline;
-  const closed = tl.current == null;
   const from = formatDateTime(tl.from);
   const to = closed ? formatDateTime(tl.to) : formatClock(tl.to);
   if (!from && !to) return null;

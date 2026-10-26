@@ -111,6 +111,24 @@ describe('Сейчас: строки восьми kind', () => {
   it('running без now — строки нет (макет: поля нет — строку не рисуем)', () => {
     expect(briefNowText(brief({ kind: 'running' }), { nameOf })).toBeNull();
   });
+
+  it('running с пустым stage — строка без ведущего пробела (R-F8)', () => {
+    const b = brief({
+      kind: 'running',
+      now: { stage: '', taskId: 't-x', personaId: 'p-gleb', stepRef: '3', lane: 'back', since: at(25, 14, 5) },
+    });
+    const t = briefNowText(b, { nameOf });
+    expect(t).toBe('шага 3 (бэк) — у Глеба');
+    expect(t, 'ведущего пробела нет').not.toMatch(/^\s/);
+  });
+
+  it('running с пустым stage и без остальных частей — строки нет (null, не пустая строка)', () => {
+    const b = brief({
+      kind: 'running',
+      now: { stage: '', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 14, 5) },
+    });
+    expect(briefNowText(b, { nameOf })).toBeNull();
+  });
 });
 
 // ── 1a. Подстрока «Сейчас» (слова модели, перенесены из блока, R-F5) ────────────────
@@ -295,6 +313,24 @@ describe('Оценка', () => {
 
   it('elapsed = null — факта «идёт» нет', () => {
     expect(briefEstimateText(brief({})).fact).toBeNull();
+  });
+
+  it('elapsed = 0 — факта «идёт 0 мин» нет (R-F8, та же болезнь, что «в очереди 0 мин»)', () => {
+    const b = brief({
+      elapsedMinutes: 0,
+      estimate: { remainingMinutes: 150, p25: 120, p75: 180, source: 'history', sampleSize: 4 },
+    });
+    expect(briefEstimateText(b).fact).toBeNull();
+    // меньше округляемой минуты — тоже не число «идёт» (formatDuration дал бы «0 мин»)
+    expect(briefEstimateText(brief({ elapsedMinutes: 0.4 })).fact).toBeNull();
+    // настоящая минута — настоящее число
+    expect(briefEstimateText(brief({ elapsedMinutes: 1 })).fact).toBe('идёт 1 мин');
+  });
+
+  it('closed с elapsed = 0 — «Оценки пока нет», «шла 0 мин» нет', () => {
+    const v = briefEstimateText(brief({ kind: 'closed', elapsedMinutes: 0 }));
+    expect(v.main).toBe('Оценки пока нет');
+    expect(`${v.main} ${v.fact ?? ''}`).not.toContain('0 мин');
   });
 });
 

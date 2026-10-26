@@ -15,7 +15,8 @@
 //   относительные строки);
 // · Grep-сторож: в исходнике блока нет прямого обращения к полю состояния, полосе стадий
 //   и полям таймлайна (включая `timeline` через деструктуризацию) — фронт ничего не
-//   пересчитывает.
+//   пересчитывает; и нет слов модели — полный список BRIEF_MODEL_WORDS (R-F8), комментарии
+//   блока под него не попадают.
 //
 // Окружение node (без jsdom): fakeDom (mount), как в FeatureBriefLegend.test.ts.
 // «Сейчас» — фиксированное системное время; даты fixtures — локальные компоненты Date
@@ -27,7 +28,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FeatureBriefBlock } from './FeatureBriefBlock';
-import { briefDoneText, briefEstimateText, briefNowText, briefSubText } from './FeatureBriefModel';
+import { briefDoneText, briefEstimateText, briefNowText, briefSubText, BRIEF_MODEL_WORDS } from './FeatureBriefModel';
 import { featureRunStatusTag } from './FeatureStatusTag';
 import { stageLabel } from './FeatureStatsBits';
 import { C, FONT } from '../../lib/design';
@@ -406,6 +407,29 @@ describe('Служебные состояния', () => {
   });
 });
 
+// ── 4a. Closedность ленты и оси — из модели состояния, не из сырого поля (R-F8) ──────
+
+describe('Closedность ленты и оси (R-F8)', () => {
+  it('brief.kind = closed — ось «закрыта», даже при живом current ленты (проба: подменить closed — видимое меняется)', () => {
+    const s = stats({ timeline: { ...stats().timeline, current: { kind: 'waiting', since: at(25, 14, 0), taskId: 't-prod' } } });
+    const { c } = render({ brief: brief({ kind: 'closed' }), stats: s, mergedAt: at(24, 18, 5) });
+    const axis = textNodes(findNodeByAttr(c, 'data-testid', 'mini-timeline-axis')!).join(' ');
+    expect(axis, 'ось закрывается по модели состояния').toContain('закрыта');
+    expect(axis, 'у закрытой нет «сейчас»').not.toContain('сейчас');
+  });
+
+  it('brief.kind = running — ось «сейчас», даже при пустом current ленты (closedность — не эвристика по current)', () => {
+    const s = stats({ timeline: { ...stats().timeline, current: null } });
+    const { c } = render({
+      brief: brief({ kind: 'running', now: { stage: 'prod', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 14, 5) } }),
+      stats: s,
+    });
+    const axis = textNodes(findNodeByAttr(c, 'data-testid', 'mini-timeline-axis')!).join(' ');
+    expect(axis, 'ось открыта по модели состояния').toContain('сейчас');
+    expect(axis, 'у идущей нет «закрыта»').not.toContain('закрыта');
+  });
+});
+
 // ── 5. Кнопки «ждёт вас»: только waiting_you и только мобильная раскладка ────────────
 
 describe('Кнопки «Мерж…» и «Открыть финальное ревью»', () => {
@@ -522,9 +546,16 @@ describe('Grep-сторож (инвариант 3: фронт не пересч�
     expect(/\btimeline\./.test(src), 'блок читает сырой таймлайн').toBe(false);
   });
 
-  it('перенесённых слов в исходнике блока нет: формулировка живёт в модели (R-F5)', () => {
-    for (const w of ['шагов приняты', 'без вас фича стоит', 'исполнители не запускаются', 'фича закрыта', 'Оценки пока нет', 'Оценка — после старта', 'План готов']) {
-      expect(src.includes(w), `блок содержит «${w}»`).toBe(false);
+  it('перенесённых слов в исходнике блока нет: формулировка живёт в модели (R-F5, полный список R-F8)', () => {
+    // Список — константа рядом с моделью (BRIEF_MODEL_WORDS): все статические строки,
+    // которые модель может сказать в карточке. Проверяется код блока; комментарии — нет:
+    // блок вправе называть строки модели в документации («Сделано · Дальше · Оценка»,
+    // «обновлено …» — по computedAt). Исключения — слова, по праву принадлежащие блоку:
+    // «Дальше» (подпись секции; префикс модели для error/idle — то же слово) и
+    // «в очереди» (тег карточки; факт модели «в очереди N» — другая строка).
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
+    for (const w of BRIEF_MODEL_WORDS) {
+      expect(code.includes(w), `блок содержит «${w}»`).toBe(false);
     }
   });
 });

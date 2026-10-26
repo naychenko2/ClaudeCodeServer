@@ -57,13 +57,15 @@ export function briefNowText(brief: FeatureBrief, opts: BriefTextOptions = {}): 
       // «Ревью шага 3 (бэк) — у Глеба»: стадия + шаг + линия + исполнитель (разрез п. 4).
       const n = brief.now;
       if (!n) return null;
-      const parts = [stageLabel(n.stage)];
+      // Пустая часть не входит в строку: пустой stage давал ведущий пробел (R-F8).
+      const parts: string[] = [];
+      if (n.stage) parts.push(stageLabel(n.stage));
       if (n.stepRef) parts.push(`шага ${n.stepRef}`);
       const lane = laneWord(n.lane);
       if (lane) parts.push(`(${lane})`);
       const name = n.personaId ? opts.nameOf?.(n.personaId) : null;
       if (name) parts.push(`— у ${genitiveName(name)}`);
-      return parts.join(' ');
+      return parts.length ? parts.join(' ') : null;
     }
     case 'waiting_you': {
       // Тревога «мерж» (бэк кладёт код «мерж») — строка макета; прочая причина — как есть.
@@ -239,7 +241,10 @@ export interface BriefEstimateView {
 const NO_ESTIMATE = 'Оценки пока нет';
 
 export function briefEstimateText(brief: FeatureBrief): BriefEstimateView {
-  const elapsed = brief.elapsedMinutes != null ? formatDuration(brief.elapsedMinutes) : null;
+  // «идёт 0 мин» — не факт: ноль работы (или меньше округляемой минуты) не число (R-F8,
+  // та же болезнь, что «в очереди 0 мин»). Порог — тот же round, что у formatDuration.
+  const elapsed = brief.elapsedMinutes != null && Math.round(brief.elapsedMinutes) > 0
+    ? formatDuration(brief.elapsedMinutes) : null;
 
   if (brief.kind === 'closed') {
     // Итог: «шла 6 ч 40 мин» по elapsedMinutes; «по плану было ≈ 5 ч» — v2, не делаем.
@@ -322,3 +327,53 @@ export function voiceWhenText(note: FeatureBriefNote, kind: FeatureBriefKind, no
 export function voiceRoleText(kind: FeatureBriefKind): string {
   return kind === 'closed' ? 'вела фичу' : 'ведёт фичу';
 }
+
+// ── Сторож перенесённых слов: слова модели (R-F8) ────────────────────────────────────
+// Все статические строки, которые модель может сказать в карточке. Их не должно быть в
+// коде блока (сторож — FeatureBriefBlock.test.ts): формулировка живёт здесь, блок только
+// вызывает модель. Добавляя в модель новую строку, добавляй её в этот список.
+// Кроме списка — слова, по праву принадлежащие блоку и случайно совпадающие с моделью:
+// «Дальше» (подпись секции; префикс модели для error/idle — то же слово) и «в очереди»
+// (тег карточки; факт модели «в очереди N» — другая строка).
+export const BRIEF_MODEL_WORDS: readonly string[] = [
+  // «Сейчас» (briefNowText)
+  'Ждёт вашего согласия на мерж в master',
+  'Ждёт вашего ответа:',
+  'Исполнитель встал',
+  'На паузе —', // оба варианта строки паузы
+  'Ждёт своей очереди',
+  'В очереди:',
+  'Готовится: разрез/план',
+  'Ничего не идёт',
+  'Смержена в master',
+  'Закрыта',
+  // Подстрока «Сейчас» (briefSubText); «фича закрыта» покрывает и «Ничего — фича закрыта»
+  'без вас фича стоит',
+  'исполнители не запускаются',
+  'фича закрыта',
+  // «Сделано» (briefDoneText)
+  'шагов приняты',
+  'План готов',
+  'правок',
+  // «Дальше» (briefNextText): «После …» — любой префикс живой строки
+  'После ',
+  // «Оценка»/«Итог» (briefEstimateText): «Оценка» покрывает и «Оценка — после старта»
+  'Оценки пока нет',
+  'Оценка',
+  'Итог',
+  'Осталось — за вами',
+  'осталось', // «меньше минуты осталось», «≈ N осталось»
+  'снятия паузы', // «≈ N после снятия паузы»
+  'идёт ',
+  'шла ',
+  '— у ', // «— у {Имя}»
+  // Голос оркестратора и «N назад» (voice*, agoText/updatedText)
+  'до паузы',
+  'до смены этапа',
+  'ведёт фичу',
+  'вела фичу',
+  'только что',
+  'мин назад',
+  'ч назад',
+  'обновлено',
+];

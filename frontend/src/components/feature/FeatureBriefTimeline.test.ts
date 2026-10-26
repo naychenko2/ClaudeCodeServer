@@ -269,17 +269,33 @@ describe('Таймлайн-элементы карточки «Сводка» ч
   });
 
   // === 8. экспорты для блока сводки: полоска, ось, итоги ===
+  // Closedность — переданная из общей модели состояния (R-F8): ось и полоска слушают
+  // проп closed, а не сырой current — пробы ниже расцепляют их намеренно.
   it('экспортирует полоску, ось и итоги; ось: «сейчас» у идущей, «закрыта» у закрытой', () => {
     const run = mkStats();
-    const html = renderToStaticMarkup(createElement(MiniTimelineAxis, { stats: run }));
+    const html = renderToStaticMarkup(createElement(MiniTimelineAxis, { stats: run, closed: false }));
     expect(html).toContain('создана');
     expect(html).toContain('сейчас');
     const closed = mkStats();
     closed.timeline = { ...closed.timeline, current: null };
-    const htmlClosed = renderToStaticMarkup(createElement(MiniTimelineAxis, { stats: closed }));
+    const htmlClosed = renderToStaticMarkup(createElement(MiniTimelineAxis, { stats: closed, closed: true }));
     expect(htmlClosed).toContain('закрыта');
     expect(htmlClosed).not.toContain('сейчас');
-    expect(renderToStaticMarkup(createElement(MiniTimeline, { stats: run }))).toContain('mini-timeline');
+    expect(renderToStaticMarkup(createElement(MiniTimeline, { stats: run, closed: false }))).toContain('mini-timeline');
     expect(renderToStaticMarkup(createElement(SummaryRow, { stats: run }))).toContain('mini-summary-row');
+  });
+
+  it('ось слушает переданный closed, а не сырой current (R-F8: closed — из общей модели)', () => {
+    const run = mkStats(); // current != null
+    const open = mkStats();
+    open.timeline = { ...open.timeline, current: null };
+    // модель сказала «закрыта» при живом current — ось закрывается;
+    const htmlClosed = renderToStaticMarkup(createElement(MiniTimelineAxis, { stats: run, closed: true }));
+    expect(htmlClosed, 'закрыта по переданной closed').toContain('закрыта');
+    expect(htmlClosed).not.toContain('сейчас');
+    // модель сказала «не закрыта» при пустом current — ось остаётся открытой.
+    const htmlOpen = renderToStaticMarkup(createElement(MiniTimelineAxis, { stats: open, closed: false }));
+    expect(htmlOpen, 'сейчас по переданной closed=false').toContain('сейчас');
+    expect(htmlOpen).not.toContain('закрыта');
   });
 });

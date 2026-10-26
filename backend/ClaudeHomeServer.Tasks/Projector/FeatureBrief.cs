@@ -13,6 +13,10 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 //
 // B5: note — голос эпика из TaskItem.Note (NoteOf/StaleOf, разрез п.1–2); queue всегда null
 // (за скобками этой волны).
+//
+// B6 (дефект f2da9354): updatedAt — время ПОСЛЕДНЕГО ИЗМЕНЕНИЯ состояния фичи (UpdatedAtOf),
+// отдельное от computedAt: computedAt — момент этого ответа («насколько свеж снимок»), updatedAt —
+// время состояния («насколько old показано»). Оба поля остаются: они отвечают на разные вопросы.
 public static class FeatureBrief
 {
     // Категории сводки (brief.kind, JSON camelCase-совместимые строки как в контракте разреза п. 4).
@@ -70,6 +74,11 @@ public static class FeatureBrief
         BriefEstimate? Estimate,
         BriefQueue? Queue,
         BriefNote? Note,
+        // B6 (дефект f2da9354): время последнего изменения состояния фичи (UpdatedAtOf). Отличается от
+        // ComputedAt: он — момент этого ответа, updatedAt — момент последнего события состояния.
+        // null — событий состояния нет вовсе (run без эпика и без задач — тестовая фикстура);
+        // в реальных данных эпик есть всегда, поэтому у живой фичи поле заполнено.
+        DateTime? UpdatedAt,
         DateTime ComputedAt);
 
     // Таблица kind: FeatureStates → категория. paused расщепляется по Hold.Reason (см. KindOf).
@@ -110,6 +119,7 @@ public static class FeatureBrief
             EstimateOf(run, typical, kind),
             Queue: null,
             Note: NoteOf(run, kind),
+            UpdatedAt: UpdatedAtOf(run),
             now);
     }
 
@@ -232,4 +242,45 @@ public static class FeatureBrief
         if (!KindByState.TryGetValue(note.StateAtWrite, out var kindAtWrite)) return true;
         return kindAtWrite != kind;
     }
+
+    // B6 (дефект f2da9354): updatedAt — время последнего изменения состояния фичи: максимум событий
+    // состояния её задач — ровно тех моментов, которыми FeatureProjector меняет State/Attention:
+    // CreatedAt (задача появилась — состав задач и знаменатель плана), ClaudeStartedAt (running/merging),
+    // ExecutorStoppedAt (stopped), CompletedAt (прогресс, merge_pending, merged/closed), AwaitingHumanSince
+    // (waiting), Hold.Since эпика (paused/draft). Других событий состояния у трекера нет.
+    // НЕ TaskItem.UpdatedAt: это время касания записи, оно двигается настройками (метки, приоритет) —
+    // состояние от них не меняется. НЕ LastActivityAt: в нём только CompletedAt/ClaudeStartedAt,
+    // а случай дефекта («исполнитель встал N часов назад» / «ждёт вас») в нём не виден.
+    // null — событий нет вовсе (run без эпика и без задач — тестовая фикстура): подставлять «сейчас»
+    // значит врать; в реальных данных эпик есть всегда, и его CreatedAt — якорь (тот же, что
+    // quietAnchor в FeatureProjector.cs:507 для Quiet).
+    private static DateTime? UpdatedAtOf(FeatureRun run)
+    {
+        DateTime? updatedAt = null;
+        foreach (var t in AllTasksOf(run))
+        {
+            if (updatedAt is null || t.CreatedAt > updatedAt) updatedAt = t.CreatedAt;
+            if (t.ClaudeStartedAt is not null && (updatedAt is null || t.ClaudeStartedAt > updatedAt))
+                updatedAt = t.ClaudeStartedAt;
+            if (t.ExecutorStoppedAt is not null && (updatedAt is null || t.ExecutorStoppedAt > updatedAt))
+                updatedAt = t.ExecutorStoppedAt;
+            if (t.CompletedAt is not null && (updatedAt is null || t.CompletedAt > updatedAt))
+                updatedAt = t.CompletedAt;
+            if (t.AwaitingHumanSince is not null && (updatedAt is null || t.AwaitingHumanSince > updatedAt))
+                updatedAt = t.AwaitingHumanSince;
+        }
+        // Пауза — событие состояния фичи (paused/draft), её момент лежит на эпике (run.Hold — его копия).
+        if (run.Hold is not null && (updatedAt is null || run.Hold.Since > updatedAt))
+            updatedAt = run.Hold.Since;
+        return updatedAt;
+    }
+
+    // Все задачи рана: эпик + всё, что BuildCore разложил по ролям (Fields непересекающиеся,
+    // FeatureProjector.cs:547-581) — двойного счёта нет; отсутствующий эпик (тестовая фикстура) пропускается.
+    private static IEnumerable<TaskItem> AllTasksOf(FeatureRun run) =>
+        (run.Epic is not null ? new[] { run.Epic } : Array.Empty<TaskItem>())
+            .Concat(run.Steps).Concat(run.Reviews).Concat(run.Qa)
+            .Concat(run.Final is not null ? [run.Final] : Array.Empty<TaskItem>())
+            .Concat(run.Merge is not null ? [run.Merge] : Array.Empty<TaskItem>())
+            .Concat(run.Cut).Concat(run.Design).Concat(run.Plan).Concat(run.Unroled);
 }

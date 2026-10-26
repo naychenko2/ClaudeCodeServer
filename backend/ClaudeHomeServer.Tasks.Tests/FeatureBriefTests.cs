@@ -18,6 +18,10 @@ namespace ClaudeHomeServer.Tasks.Tests;
 //    убрать фильтр состояний — тесты веток красные;
 //  • B5: убрать проверку стадии в StaleOf — тест «смена стадии» красный; убрать проверку категории —
 //    тест «переход на паузу» красный; отдать в BriefNote поле BySessionId — тест контракта красный.
+//  • B6 (дефект f2da9354): отдать в Brief.UpdatedAt момент now — тест «равен последнему событию» красный;
+//    взять вместо событий состояния TaskItem.UpdatedAt — тест «настройки не двигают» красный; убрать
+//    ветку ExecutorStoppedAt — тот же тест красный (NOW-4 ч вместо NOW-3 ч); убрать якорь CreatedAt —
+//    тест «эпик якорь» красный; подставить «now» вместо null при отсутствии событий — тест «null а не сейчас» красный.
 public class FeatureBriefTests
 {
     private static readonly DateTime NOW = new(2026, 10, 25, 12, 0, 0, DateTimeKind.Utc);
@@ -519,6 +523,121 @@ public class FeatureBriefTests
         var run = RunWithVoice("prod", FeatureStates.Running, null, "prod", "фиктивное_состояние");
 
         FeatureBrief.Build(run, null, null, NOW).Note!.Stale.Should().BeTrue();
+    }
+
+    // ─── updatedAt (B6, дефект f2da9354): время последнего изменения состояния, не момента ответа ────
+
+    // Фикстура задачи: отметки событий состояния (все даты старше NOW) + touchedAt — UpdatedAt задачи
+    // (по умолчанию NOW: свежее любого события состояния — реализация, взявшая время касания записи,
+    // красный тест).
+    private static TaskItem TaskOf(string id, string role = TaskRoles.Step, DateTime? createdAt = null,
+        DateTime? startedAt = null, DateTime? stoppedAt = null, DateTime? completedAt = null,
+        DateTime? awaitingSince = null, DateTime? touchedAt = null) => new()
+    {
+        Id = id, Role = role,
+        CreatedAt = createdAt ?? NOW.AddHours(-6),
+        ClaudeStartedAt = startedAt, ExecutorStoppedAt = stoppedAt, CompletedAt = completedAt,
+        AwaitingHumanSince = awaitingSince, UpdatedAt = touchedAt ?? NOW,
+    };
+
+    private static FeatureRun RunWithTasks(string state, TaskItem epic, params TaskItem[] children) => new()
+    {
+        FeatureId = "ep", State = state, Epic = epic, Steps = [.. children],
+    };
+
+    // c1 и сам случай дефекта: исполнитель встал 3 часа назад — строка «обновлено N назад» должна
+    // печатать 3 часа, а не «только что»: updatedAt — момент остановки, computedAt остаётся моментом ответа.
+    [Fact]
+    public void UpdatedAt_РавенПоследнемуСобытиюСостоянияАНеМоментуОтвета()
+    {
+        var run = RunWithTasks(FeatureStates.Stopped,
+            TaskOf("ep", TaskRoles.Feature),
+            TaskOf("t1", createdAt: NOW.AddHours(-5), startedAt: NOW.AddHours(-5)),
+            TaskOf("t2", createdAt: NOW.AddHours(-4), startedAt: NOW.AddHours(-4), stoppedAt: NOW.AddHours(-3)));
+
+        var brief = FeatureBrief.Build(run, null, null, NOW);
+
+        brief.UpdatedAt.Should().Be(NOW.AddHours(-3),
+            "последнее событие состояния — остановка исполнителя (3 часа назад), не момент ответа");
+        brief.ComputedAt.Should().Be(NOW, "computedAt остаётся моментом ответа — отдельное поле");
+    }
+
+    // c2: состояние не меняется — поле не «прыгает» между прогонами: два Build с разным «now» дают
+    // один и тот же updatedAt при разных computedAt.
+    [Fact]
+    public void UpdatedAt_НеПрыгаетМеждуПрогонамиПриНеизменномСостоянии()
+    {
+        var run = RunWithTasks(FeatureStates.Stopped,
+            TaskOf("ep", TaskRoles.Feature),
+            TaskOf("t1", createdAt: NOW.AddHours(-4), startedAt: NOW.AddHours(-4), stoppedAt: NOW.AddHours(-3)));
+
+        var b1 = FeatureBrief.Build(run, null, null, NOW);
+        var b2 = FeatureBrief.Build(run, null, null, NOW.AddMinutes(30));
+
+        b2.UpdatedAt.Should().Be(b1.UpdatedAt).And.Be(NOW.AddHours(-3),
+            "события состояния не менялись — поле не следует за computedAt");
+        b2.ComputedAt.Should().Be(NOW.AddMinutes(30));
+    }
+
+    // c2: состояние меняется — поле меняется. Новая закрытая задача (CompletedAt свежее всего)
+    // переносит updatedAt на себя.
+    [Fact]
+    public void UpdatedAt_МеняетсяКогдаСостояниеМеняется()
+    {
+        var epic = TaskOf("ep", TaskRoles.Feature);
+        var firstDone = TaskOf("t1", createdAt: NOW.AddHours(-2), startedAt: NOW.AddHours(-2),
+            completedAt: NOW.AddHours(-2));
+        FeatureBrief.Build(RunWithTasks(FeatureStates.Idle, epic, firstDone), null, null, NOW)
+            .UpdatedAt.Should().Be(NOW.AddHours(-2), "до изменения — время закрытия первой задачи");
+
+        var secondDone = TaskOf("t2", createdAt: NOW.AddHours(-1), startedAt: NOW.AddHours(-1),
+            completedAt: NOW.AddMinutes(-10));
+        FeatureBrief.Build(RunWithTasks(FeatureStates.Idle, epic, firstDone, secondDone), null, null, NOW)
+            .UpdatedAt.Should().Be(NOW.AddMinutes(-10), "после изменения — время нового события");
+    }
+
+    // Поле — не TaskItem.UpdatedAt: настройки задачи (её UpdatedAt свежее любого события состояния —
+    // пометили метку) время состояния не двигают. Мутация: заменить в UpdatedAtOf события на t.UpdatedAt.
+    [Fact]
+    public void UpdatedAt_НастройкиЗадачиЕгоНеДвигают()
+    {
+        var run = RunWithTasks(FeatureStates.Idle,
+            TaskOf("ep", TaskRoles.Feature, createdAt: NOW.AddHours(-5)),
+            TaskOf("t1", createdAt: NOW.AddHours(-3), completedAt: NOW.AddHours(-3), touchedAt: NOW));
+
+        FeatureBrief.Build(run, null, null, NOW).UpdatedAt.Should().Be(NOW.AddHours(-3),
+            "запись тронули в NOW (настройка), состояние не изменилось");
+    }
+
+    // Пауза эпика — событие состояния (paused/draft): Hold.Since свежее событий задач — updatedAt он.
+    [Fact]
+    public void UpdatedAt_ПаузаЭпицаЯвляетсяСобытиемСостояния()
+    {
+        var run = new FeatureRun
+        {
+            FeatureId = "ep",
+            State = FeatureStates.Paused,
+            Epic = TaskOf("ep", TaskRoles.Feature),
+            Hold = new FeatureHold(FeatureHoldReasons.Manual, NOW.AddHours(-1), null, true),
+            Steps = [TaskOf("t1", createdAt: NOW.AddHours(-4), completedAt: NOW.AddHours(-4))],
+        };
+
+        FeatureBrief.Build(run, null, null, NOW).UpdatedAt.Should().Be(NOW.AddHours(-1),
+            "фичу поставили на паузу час назад — это последнее изменение состояния");
+    }
+
+    // Событий состояния нет вовсе (run без эпика и без задач — тестовая фикстура): честный null,
+    // а не «сейчас» — подставить now значит повторить обман дефекта. Создание фичи — её первое
+    // событие состояния: run только с эпиком — CreatedAt эпика (тот же якорь, что quietAnchor в Quiet).
+    [Fact]
+    public void UpdatedAt_БезСобытийСостоянияNull_АМоментСозданияЭпикаЯкорь()
+    {
+        FeatureBrief.Build(RunOf(FeatureStates.Idle), null, null, NOW).UpdatedAt.Should().BeNull(
+            "событий нет — поле честный null, не computedAt");
+
+        var epicOnly = TaskOf("ep", TaskRoles.Feature, createdAt: NOW.AddHours(-10));
+        FeatureBrief.Build(RunWithTasks(FeatureStates.NotStarted, epicOnly), null, null, NOW)
+            .UpdatedAt.Should().Be(NOW.AddHours(-10), "фичу создали 10 часов назад — это её состояние");
     }
 
     // ─── заглушки и время расчёта ──────────────────────────────────────────────────────────────

@@ -287,8 +287,18 @@ describe('FilterBar: п.2 футер «Показать N фич» (360, реж�
     // Футер-кнопка «Показать 2 фич» (N = открытые фичи) — на месте, «Готово» нет.
     expect(findByText(body, 'Показать 2 фич'), 'футер «Показать 2 фич» отсутствует').not.toBeNull();
     expect(findByText(body, 'Готово'), 'футер остался «Готово» (не переключился на режим фич)').toBeNull();
-    // N = открытые фичи индекса (bucket != closed) = 2 (закрытая не входит).
-    expect(features.filter(f => f.bucket !== 'closed').length).toBe(2);
+    // При умолчании оси в список попадут только открытые: закрытая в счёт не входит.
+    expect(findByText(body, 'Показать 3 фич'), 'закрытая фича попала в счёт при умолчании').toBeNull();
+  });
+
+  // Ф-2.2 (хвост Ф-2.1): счёт футера — тот же featureMatchesKinds, что у секции оси и
+  // у SessionList. По bucket он не отражал выбор: при «только закрытые» дал бы 0.
+  // Мутация: вернуть в FilterBar `f.bucket !== 'closed'` → «Показать 0 фич», тест красный.
+  it('ось «только закрытые» → футер «Показать 1 фич» (N по featureMatchesKinds, не по bucket)', async () => {
+    const features = [feat('f1', 'running', 'running'), feat('f2', 'running', 'running'), feat('c1', 'closed', 'closed')];
+    const { body } = await renderOpenBar(features, { ...baseFilters, featureKinds: ['closed'] });
+    expect(findByText(body, 'Показать 1 фич'), 'футер не пересчитан по выбранной оси').not.toBeNull();
+    expect(findByText(body, 'Показать 2 фич'), 'футер считает по bucket, а не по выбору оси').toBeNull();
   });
 
   it('дефолт (groupBy=days, 360) → футер «Готово», не «Показать N фич»', async () => {

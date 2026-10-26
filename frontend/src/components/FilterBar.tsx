@@ -574,12 +574,14 @@ export function FilterBar({
 
   // Футер: счётчик скрытых + сброс + готово (общий вид для поповера и шторки).
   // На 360 в режиме фич — «Показать N фич» (md, 42 px, таблица §4) вместо «Готово»;
-  // N = открытые фичи индекса (bucket != closed). Подвал общий с «Чатами», поэтому
-  // переключение только по groupBy + isMobile.
+  // N — то, что реально попадёт в список при текущем выборе оси: тот же отбор
+  // featureMatchesKinds, что в секции «Фичи · что показывать» и в SessionList
+  // (Ф-2.2). По bucket счёт не отражал выбор: при «только закрытые» он дал бы 0.
+  // Подвал общий с «Чатами», поэтому переключение только по groupBy + isMobile.
   const isFeaturesMode = filters.groupBy === 'features';
-  const openFeatureCount = isFeaturesMode && features ? features.filter(f => f.bucket !== 'closed').length : 0;
+  const shownFeatureCount = isFeaturesMode && features ? features.filter(f => featureMatchesKinds(f, filters.featureKinds)).length : 0;
   const footerIsMobileFeatures = isMobile && isFeaturesMode;
-  const footerActionLabel = footerIsMobileFeatures ? `Показать ${openFeatureCount} фич` : 'Готово';
+  const footerActionLabel = footerIsMobileFeatures ? `Показать ${shownFeatureCount} фич` : 'Готово';
   const footerRow = (
     <div style={{
       display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: SP.sm,

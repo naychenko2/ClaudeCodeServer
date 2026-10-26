@@ -264,9 +264,10 @@ public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFact
     }
 
     // c1 (R-DB B4, минор 1): решение принимает ГЕЙТ, а не изолированный предикат — тест идёт через
-    // боевой путь tasks_update. Карта членства подменена тестовым шовом TestVoiceMembershipOverride
-    // на фикстуру со связью вида вне белого списка и не «executor» («key», вид Б2): прежний гейт
-    // («не executor») пустил бы её, текущий — отказывает через CanWriteFeatureVoice. Мутация:
+    // боевой путь tasks_update. Связь (session, epic) подменена тестовым шовом TestVoiceLinkOverride
+    // (одна связь, не вся карта членства — сузён R-B11B12 минор 2) на фикстуру со связью вида вне
+    // белого списка и не «executor» («key», вид Б2): прежний гейт («не executor») пустил бы её,
+    // текущий — отказывает через CanWriteFeatureVoice. Мутация:
     // откатить гейт к voiceLink.Kind == "executor" (предикат не вызывается) — «key» пущена, тест краснеет.
     [Fact]
     public async Task FeatureNote_Право_ГейтЗовётПредикат_НовыйKindОтказ()
@@ -275,11 +276,10 @@ public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFact
         var epic = Tasks.Create(projectId, OwnerId, new CreateTaskRequest("Фича под ключом", Role: "feature"));
 
         var toolset = _factory.Services.GetServices<IMcpToolset>().OfType<TasksToolset>().Single();
-        toolset.TestVoiceMembershipOverride = () =>
-            new Dictionary<string, Dictionary<string, FeatureChatMembership.Link>>
-            {
-                [sessionId] = new() { [epic.Id] = new FeatureChatMembership.Link("key", 0, null, null, null) },
-            };
+        toolset.TestVoiceLinkOverride = (sid, fid) =>
+            sid == sessionId && fid == epic.Id
+                ? new FeatureChatMembership.Link("key", 0, null, null, null)
+                : null;
         try
         {
             var (text, isError) = await CallToolAsync(sessionId, "tasks_update",
@@ -290,7 +290,7 @@ public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFact
         }
         finally
         {
-            toolset.TestVoiceMembershipOverride = null;
+            toolset.TestVoiceLinkOverride = null;
         }
     }
 

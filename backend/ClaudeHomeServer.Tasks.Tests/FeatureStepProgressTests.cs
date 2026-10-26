@@ -532,6 +532,31 @@ public class FeatureStepProgressTests
         new FeatureStepProgress().PlanState.Should().Be(FeatureStepAccounting.PlanPending);
     }
 
+    // R-B11B12 минор 3: видимость констант Plan* — контракт (FeatureStepAccounting.cs:24-26):
+    // pending/partial — internal (по ним сверяет FeatureBrief.EstimateOf), cut/done вне класса
+    // не потребляются — private. Поднять их «для удобства» — значит пустить значение за единственную
+    // точку определения. Мутация: PlanCut до internal — тест красный.
+    [Fact]
+    public void ПланКонстанты_ВидимостьПоКонтракту_CutDoneНеInternal()
+    {
+        var t = typeof(FeatureStepAccounting);
+        foreach (var (name, shouldBeInternal) in new[]
+        {
+            (nameof(FeatureStepAccounting.PlanPending), true),
+            (nameof(FeatureStepAccounting.PlanPartial), true),
+            ("PlanCut", false),
+            ("PlanDone", false),
+        })
+        {
+            var field = t.GetField(name, BindingFlags.NonPublic | BindingFlags.Static);
+            field.Should().NotBeNull($"константа {name} должна существовать");
+            if (shouldBeInternal)
+                field.IsAssembly.Should().BeTrue($"{name} — internal: по ней сверяет FeatureBrief.EstimateOf");
+            else
+                field.IsPrivate.Should().BeTrue($"{name} вне класса не потребляется — private");
+        }
+    }
+
     [Fact]
     public void СтарыеШагиБезСтепРефа_ОтдельныеШаги()
     {

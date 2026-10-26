@@ -322,15 +322,22 @@ public sealed class TasksToolset(
                 {
                     if ((arguments.ContainsKey("role") ? StringArg(arguments, "role") : existing.Role) != TaskRoles.Feature)
                         return Deny("Голос пишется только у фичи (role=feature)");
-                    // Карта членства — боевая BuildDetailed; TestVoiceMembershipOverride — тестовый
-                    // шов (в проде null): через него тест ведёт связь вне белого списка, и решение
-                    // гейта зависит от предиката CanWriteFeatureVoice, а не от «не executor».
-                    var membership = TestVoiceMembershipOverride?.Invoke()
-                        ?? FeatureChatMembership.BuildDetailed(
+                    // Членство — боевая BuildDetailed; TestVoiceLinkOverride — тестовый шов (в проде
+                    // null): через него тест подменяет ОДНУ связь (session, feature) вне белого списка,
+                    // и решение гейта зависит от предиката CanWriteFeatureVoice, а не от «не executor».
+                    FeatureChatMembership.Link? voiceLink = null;
+                    if (TestVoiceLinkOverride is { } testLink)
+                    {
+                        voiceLink = testLink(session.Id, existing.Id);
+                    }
+                    else
+                    {
+                        var membership = FeatureChatMembership.BuildDetailed(
                             tasks.GetByOwner(context.OwnerId).ToList(), FeatureChatDoor.Snapshot(sessions, context.OwnerId));
-                    if (!membership.TryGetValue(session.Id, out var memberFeatures)
-                        || !memberFeatures.TryGetValue(existing.Id, out var voiceLink)
-                        || !CanWriteFeatureVoice(voiceLink))
+                        if (membership.TryGetValue(session.Id, out var memberFeatures)
+                            && memberFeatures.TryGetValue(existing.Id, out var prodLink)) voiceLink = prodLink;
+                    }
+                    if (voiceLink is null || !CanWriteFeatureVoice(voiceLink))
                         return Deny("Голос фичи пишет оркестратор или человек");
                 }
 
@@ -892,12 +899,13 @@ public sealed class TasksToolset(
     internal static bool CanWriteFeatureVoice(FeatureChatMembership.Link link) =>
         link.Kind is "curator" or "orchestrator";
 
-    // Тестовый шов (R-DB B4, минор 1): подмена карты членства для гейта голоса. В проде — null,
-    // гейт строит карту FeatureChatMembership.BuildDetailed (поведение не меняется). Тест подставляет
-    // фикстуру со связью вида вне белого списка и не «executor»: решение гейта идёт через
-    // CanWriteFeatureVoice, и тест закрепляет вызов предиката из гейта, а не предикат изолированно.
-    internal Func<IReadOnlyDictionary<string, Dictionary<string, FeatureChatMembership.Link>>>?
-        TestVoiceMembershipOverride = null;
+    // Тестовый шов (R-DB B4 минор 1; сузён R-B11B12 минор 2): подмена ОДНОЙ связи членства
+    // (session, feature) для гейта голоса — не всей карты, как было раньше, и не всей карты она
+    // касается: шов может и ВЫДАТЬ право (тот же приём, что SendOverride/OpenBlockerLookup —
+    // свойство { get; set; }, боевой путь при null). Тест подставляет связь вида вне белого списка
+    // и не «executor»: решение гейта идёт через CanWriteFeatureVoice, и тест закрепляет вызов
+    // предиката из гейта, а не предикат изолированно.
+    internal Func<string, string, FeatureChatMembership.Link?>? TestVoiceLinkOverride { get; set; }
 
     private static IEnumerable<TaskItem> ApplyFilters(IEnumerable<TaskItem> source, JsonObject arguments)
     {

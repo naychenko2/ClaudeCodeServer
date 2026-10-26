@@ -13,6 +13,7 @@ import { recordFeatureReturn, registerFeatureViewProvider, usePendingFeatureView
 import { openChatById } from '../../lib/openChat';
 import { openTaskInSection } from '../../lib/tasks';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
+import { useNow } from '../../lib/useNow';
 import {
   stageName, stageStatusLabel, stageBoundsLabel, stageDurationLabel,
   stageDotStyle, stageLineStyle, buildTaskMap, stageStatusBadge, ExecutorRow, buildExecutorIndex,
@@ -533,8 +534,9 @@ export function buildTurnsByTask(run: FeatureRun, stats: FeatureStats | null, no
   return out;
 }
 
-// Вкладка «Хронология»: поясняющая строка + список 7 этапов. `now` — фиксированный
-// момент (Date.now на рендер) для минут «идёт/ждёт/стоит»; стабильен в пределах кадра.
+// Вкладка «Хронология»: поясняющая строка + список 7 этапов. `now` — живое «сейчас» из
+// useNow (общий паттерн, как в «Статистике»): минуты «идёт/ждёт/стоит» и живой ход растут,
+// пока вкладка открыта; ОДНО значение на все потребители (дорожки, ось, живые ходы, поповер).
 // W4-2F3: «Производство» — лента карточек (FeatureProdCardsView), другие этапы — исполнители.
 export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false, stats = null }: {
   run: FeatureRun; marks?: NavMarks; isMobile?: boolean; stats?: FeatureStats | null;
@@ -549,7 +551,11 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false, st
   // Пометки «в архиве»/«задача закрыта»: страница даёт полные (с чатами), без пропа —
   // из самого агрегата (исполнители стадий + задачи).
   const marks = useMemo(() => marksProp ?? buildNavMarks(run), [marksProp, run]);
-  const now = useMemo(() => Date.now(), []);
+  // «Сейчас» — состояние из useNow (GC-F10bR): вкладка рендерится условно без ключа
+  // (FeaturePage), при обновлении данных она НЕ перемонтируется — замороженный Date.now()
+  // оставил бы живой ход стоящим на минуте открытия. Это же убирает react-hooks/purity на
+  // Date.now() в useMemo (хвост Н39).
+  const now = useNow(60_000);
   // Название фичи (epic.title) — для «← к фиче {название}» в шапке чата (Ф-pl-b).
   const featureTitle = run.epic?.title ?? null;
   // «Хвосты после мержа» (GC-F10a): id незакрытых дочерних задач после мержа — с бэка

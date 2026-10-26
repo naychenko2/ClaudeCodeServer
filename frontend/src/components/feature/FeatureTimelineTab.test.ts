@@ -27,6 +27,9 @@
 // короткий список — без кнопки. Мутации: (13) в StageRow убрать кнопку (условие
 // hiddenEarly.length > 0 → false) → «74 ревью» краснеет; (14) rows = stage.executors
 // без фильтра снятых → «снятые» краснеет.
+// GC-F10bR: «сейчас» вкладки — из useNow (живой ход растёт, пока вкладка открыта). Мутация:
+// (15) вернуть в FeatureTimelineTab const now = useMemo(() => Date.now(), []) вместо
+// useNow(60_000) → «живой ход растёт со временем» краснеет.
 
 import { act } from 'react';
 import { createElement } from 'react';
@@ -1329,6 +1332,18 @@ describe('FeatureTimelineTab: ходы и «Время шага на оси» (G
     return out;
   };
 
+  // Инлайн-стиль узла (left/width полосы): React пишет их прямо в node.style (как в DOM).
+  const styleOf = (n: FNodeLike): Record<string, string> => (n as unknown as { style: Record<string, string> }).style;
+  // Живая полоса на полосе «Время шага на оси» (data-kind='live').
+  const liveTurn = (root: FNodeLike): FNodeLike | null => {
+    const walk = (n: FNodeLike): FNodeLike | null => {
+      if (n.attributes?.['data-testid'] === 'step-turn' && n.attributes?.['data-kind'] === 'live') return n;
+      for (const ch of n.childNodes) { const r = walk(ch); if (r) return r; }
+      return null;
+    };
+    return walk(root);
+  };
+
   // === c1: строка и полоса получают ходы своей задачи ===
   it('ходы задачи из intervalsByStage: в строке — ровно её ходы; «Время шага на оси» видно', () => {
     const stages = fullStages();
@@ -1385,6 +1400,45 @@ describe('FeatureTimelineTab: ходы и «Время шага на оси» (G
       `${localTime('2026-10-20T11:30:00Z')}–идёт`);
     // На полосе живой ход — отдельный вид (live), закрытый — work (роль step).
     expect(kinds(after)).toEqual(['work', 'live']);
+  });
+
+  // === c4: живой ход живой: «сейчас» из useNow, не заморожен (GC-F10bR) ===
+  // Вкладка рендерится условно без ключа (FeaturePage): при обновлении данных она НЕ
+  // перемонтируется — замороженный Date.now() оставил бы живой ход стоящим на минуте
+  // открытия. Окно здесь длиннее текущего момента (ось бэка уходит в 14:00): «to» живого
+  // хода лежит внутри шкалы, его движение видно по ширине полосы.
+  it('живой ход растёт со временем: через 10 минут ширина живой полосы больше, левый край тот же', () => {
+    const stats = {
+      timeline: {
+        from: '2026-10-20T10:00:00Z', to: '2026-10-20T14:00:00Z',
+        stages: [], segments: [], current: null, totals: {},
+        intervalsByStage: {
+          prod: [ivT('2026-10-20T10:00:00Z', '2026-10-20T12:00:00Z', {
+            live: true,
+            taskIds: ['t-prod'],
+            turns: [{ taskId: 't-prod', from: '2026-10-20T10:00:00Z', to: '2026-10-20T11:30:00Z', outcome: 'interrupted', model: null }],
+          })],
+        },
+      },
+    } as unknown as FeatureStats;
+    const c = renderTabWithStats(mkRun(fullStages(), {
+      stepChains: [],
+      now: [{ taskId: 't-prod', stage: 'prod', title: 'Шаг', stepRef: 'Ш1', startedAt: '2026-10-20T10:00:00Z' }],
+    }), stats);
+    const after = openRowBody(c, 'prod');
+    const live1 = liveTurn(after);
+    expect(live1, 'живой полосы на оси нет').not.toBeNull();
+    expect(kinds(after)).toEqual(['work', 'live']);
+    // Живой ход: from = конец последнего закрытого хода (11:30), to = «сейчас» (12:00).
+    const w1 = parseFloat(styleOf(live1!).width!);
+    const l1 = parseFloat(styleOf(live1!).left!);
+    // Прошло 10 минут: useNow обновляет «сейчас» по интервалу (60 с), вкладка НЕ перемонтирована.
+    act(() => { vi.advanceTimersByTime(10 * 60_000); });
+    const live2 = liveTurn(after);
+    expect(live2, 'живая полоса пропала').not.toBeNull();
+    const w2 = parseFloat(styleOf(live2!).width!);
+    expect(w2, 'ширина живой полосы обязана расти вместе с «сейчас»').toBeGreaterThan(w1);
+    expect(parseFloat(styleOf(live2!).left!), 'левый край — конец закрытого хода, он не двигается').toBeCloseTo(l1, 6);
   });
 
   // === c3: approx — ходам неоткуда взяться, падения нет ===

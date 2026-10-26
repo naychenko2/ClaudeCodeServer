@@ -113,7 +113,7 @@ const baseFilters: ChatFilters = {
   statuses: ['active', 'waiting', 'error'],
   personaId: null, only: [], search: '',
   groupBy: 'features', sortOrder: 'newest', hierarchy: true, archivedOnly: false,
-  featureKinds: [], featureChips: [], showClosed: false,
+  featureKinds: [],
 };
 
 // Узел по префиксу title (триггер: «Фильтры и поиск» без фильтров, «Фильтры: …» с ними).

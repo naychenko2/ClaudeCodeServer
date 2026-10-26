@@ -1,5 +1,5 @@
 import type { ProjectSubject, ProjectTag, Session } from '../types';
-import type { FeatureChip, FeatureIndexFeature, FeatureRailKey, FeaturesIndex } from '../types/featureIndex';
+import type { FeatureIndexFeature, FeatureRailKey, FeaturesIndex } from '../types/featureIndex';
 import type { FeatureQueue } from '../types/featureRun';
 import { sortTagsByRegistry } from './tagRegistry';
 import { sortKeyOf, ALL_FEATURE_KINDS, type ChatGroupBy, type ChatSortOrder, type FeatureKind } from './chatFilters';
@@ -641,40 +641,9 @@ export function featureGroupByOptions(inProject: boolean, featuresOverview: bool
   return base;
 }
 
-// === Чипы-фильтры фич (макет features-overview.html, .chips/.fch) ===
-// Ряд чипов над списком в режиме «Фичи»: Открытые · Ждут вас · Стоят · К мержу ·
-// Смержены · Закрытые (состав и порядок ряда — ALL_FEATURE_FILTER_CHIPS в chatFilters.ts). Принадлежность фичи к чипу НЕ вычисляет фронт — бэк отдаёт готовый
-// chips[] (контракт «Контракт индекса фич — утверждён (Александр, 18.10)»); фронт
-// только считает числа по chips[] и фильтрует список по выбранному чипу.
-
-// Подписи чипов (только текст): порядок ряда задаёт ALL_FEATURE_FILTER_CHIPS, не этот объект.
-// Экспортируется: секция «Фичи · что с ними» в FilterBar и строка снимаемых чипов
-// в SessionList берут подписи отсюда, а не заводят вторую точку правды.
-export const FEATURE_CHIP_LABEL: Record<FeatureChip, string> = {
-  open: 'Открытые', waiting: 'Ждут вас', stopped: 'Стоят', merge: 'К мержу', closed: 'Закрытые',
-  running: 'Идут', merged: 'Смержены',
-};
-
-// Число фич по каждому чипу: фронт считает по chips[] бэка (не вычисляет членство сам).
-// Одна фича может входить в несколько чипов (например, «открытая» и «ждёт вас»).
-export function featureChipCounts(features: FeatureIndexFeature[]): Record<FeatureChip, number> {
-  const counts: Record<FeatureChip, number> = { open: 0, waiting: 0, stopped: 0, merge: 0, closed: 0, running: 0, merged: 0 };
-  for (const f of features) for (const c of f.chips) counts[c]++;
-  return counts;
-}
-
-// Закрытые фичи, которые РИСУЮТСЯ (имеют хотя бы один чат: chatCount > 0). ОДНО число
-// для тумблера «Показывать закрытые фичи · N» (FilterBar) и заголовка секции
-// «Закрытые · M» (SessionList) (m2): раньше тумблер считал ВСЕ закрытые (featureChipCounts),
-// а секция — только нарисованные (closedGroups), и фича без чатов давала расхождение.
-// Фича без чатов не рисуется → не считаем.
-export function drawnClosedFeatures(features: FeatureIndexFeature[]): number {
-  return features.filter(f => f.bucket === 'closed' && f.chatCount > 0).length;
-}
-
 // === Ось «Фичи · что показывать» (featureKinds) — записка feature-state-filter-1.md п. 2/4 ===
-// Старые функции раздела выше (FEATURE_CHIP_LABEL, featureChipCounts, drawnClosedFeatures)
-// читаются FilterBar/SessionList до Ф-3 и не удалены.
+// Старый раздел чипов-фильтров удалён в Ф-3: UI (FilterBar/SessionList) с Ф-2.1/Ф-2.2
+// читает только эту ось.
 
 // Подписи 9 значений оси featureKinds — тот же словарь, что у сводки на странице
 // фичи (FeatureBrief.kind; записка п. 2, «Смержены» — девятая). Второго словаря нет;
@@ -685,8 +654,8 @@ export const FEATURE_KIND_LABEL: Record<FeatureKind, string> = {
 };
 
 // Число фич по каждому kind: фронт считает по отданному бэком полю kind (членство
-// не вычисляет — сторож в тестах) и только по РИСУЕМОЙ фиче (chatCount > 0, то же
-// правило m2, что у drawnClosedFeatures): фича без чатов не рисуется → не считаем.
+// не вычисляет — сторож в тестах) и только по РИСУЕМОЙ фиче (chatCount > 0, правило m2):
+// фича без чатов не рисуется → не считаем.
 // От выбора не зависит: числа на чипах одинаковы при любом featureKinds.
 export function featureKindCounts(features: FeatureIndexFeature[]): Record<FeatureKind, number> {
   const counts = {} as Record<FeatureKind, number>;

@@ -14,9 +14,9 @@
 // Тесты независимы от пояса: время — только ISO-строки фикстуры.
 
 import { describe, it, expect } from 'vitest';
-import { groupByFeatures, featureChipCounts, featureGroupTreeRows, sharedFeatureTitles, featureRoleFor, drawnClosedFeatures, FEATURE_KIND_LABEL, featureKindCounts, featureMatchesKinds, shownFiltersModel } from '../chatGroups';
+import { groupByFeatures, featureGroupTreeRows, sharedFeatureTitles, featureRoleFor, FEATURE_KIND_LABEL, featureKindCounts, featureMatchesKinds, shownFiltersModel } from '../chatGroups';
 import { ALL_FEATURE_KINDS, type FeatureKind } from '../chatFilters';
-import type { FeatureBucket, FeatureChatLink, FeatureChip, FeatureIndexFeature, FeaturesIndex } from '../../types/featureIndex';
+import type { FeatureBucket, FeatureChatLink, FeatureIndexFeature, FeaturesIndex } from '../../types/featureIndex';
 import type { Session } from '../../types';
 
 // Минимальная строка фичи: для группировки важны featureId, title, bucket.
@@ -91,11 +91,6 @@ describe('groupByFeatures: bucket merged', () => {
     const idx = index(feats, { 'z': [link('Z')], 'm': [link('M')], 'g': [link('G')], 'a': [link('A')], 'c': [link('C')] });
     const groups = groupByFeatures([chat('a'), chat('c'), chat('g'), chat('z'), chat('m')], idx);
     expect(groups.map(g => g.feature?.featureId)).toEqual(['G', 'C', 'Z', 'A', 'M']);
-  });
-
-  it('чип merged считается по chips[]', () => {
-    const feats = [withChips('G', ['open', 'merged'])];
-    expect(featureChipCounts(feats)).toMatchObject({ open: 1, merged: 1 });
   });
 });
 
@@ -258,24 +253,6 @@ describe('groupByFeatures: мутация к порядку', () => {
     // Мутация: бэк отдаёт тот же набор, но в другом порядке — фронт следует за бэком
     const mutated = groupByFeatures([chat('a'), chat('b'), chat('c')], mk([feature('C'), feature('A'), feature('B')]));
     expect(mutated.map(g => g.feature?.featureId)).toEqual(['C', 'A', 'B']);
-  });
-});
-
-// Фича с произвольными chips[] (базовый feature() привязывает chips к bucket).
-const withChips = (id: string, chips: FeatureChip[]): FeatureIndexFeature => ({ ...feature(id), chips });
-
-describe('featureChipCounts: счётчики по chips[]', () => {
-  it('считает вхождения каждого чипа по features[].chips', () => {
-    const feats = [
-      withChips('A', ['open', 'waiting']),
-      withChips('B', ['open', 'stopped']),
-      withChips('C', ['closed']),
-    ];
-    expect(featureChipCounts(feats)).toEqual({ open: 2, waiting: 1, stopped: 1, merge: 0, closed: 1, running: 0, merged: 0 });
-  });
-
-  it('пустой список — все нули', () => {
-    expect(featureChipCounts([])).toEqual({ open: 0, waiting: 0, stopped: 0, merge: 0, closed: 0, running: 0, merged: 0 });
   });
 });
 
@@ -468,19 +445,6 @@ describe('M3: featureRoleFor (роль по id строки, пометка «о
     );
     // Полный список («Фича B, Фича C, Фича D») на 360 px выталкивал имя чата из строки
     expect(featureRoleFor('multi', null, four, 'A')).toBe('общий с Фича B · ещё 2');
-  });
-});
-
-// === m2: drawnClosedFeatures — закрытые фичи, которые РИСУЮТСЯ (≥1 чат) ===
-// Тумблер «Показывать закрытые фичи · N» и заголовок секции «Закрытые · M» должны
-// показывать ОДНО число: фича без чатов не рисуется — её не считаем (chatCount > 0).
-// Мутация (в отчёте): убрать условие chatCount > 0 → фича без чатов считается, тест краснеет.
-describe('m2: drawnClosedFeatures (закрытые, которые рисуются)', () => {
-  it('считает только закрытые с ≥1 чатом; без чатов и running — не считает', () => {
-    const withChat = { ...feature('A', 'closed'), chatCount: 3 };
-    const noChat = { ...feature('B', 'closed'), chatCount: 0 };
-    const running = { ...feature('C', 'running'), chatCount: 5 };
-    expect(drawnClosedFeatures([withChat, noChat, running])).toBe(1);
   });
 });
 

@@ -3,7 +3,7 @@ import { act, createElement } from 'react';
 import {
   loadChatFilters, persistChatFilters, isDefaultFilters, defaultChatFilters,
   defaultChatFiltersKeepingView, matchChatFilter, buildHiddenReason, sortKeyOf,
-  useChatFilters, ALL_SORT_ORDERS, ALL_FEATURE_KINDS, type ChatFilters,
+  useChatFilters, isDefaultFeatureKinds, ALL_SORT_ORDERS, ALL_FEATURE_KINDS, type ChatFilters,
 } from '../chatFilters';
 import { installFakeDom, mount, uninstallFakeDom } from '../../components/chat/__tests__/fakeDom';
 import type { Session } from '../../types';
@@ -298,66 +298,39 @@ describe('archivedOnly: ось, а не фильтр', () => {
   });
 });
 
-// featureChips[]/showClosed — оси режима фич (как archivedOnly): персистятся;
-// isDefaultFilters и «Сбросить всё» учитывают их ТОЛЬКО при groupBy='features'
-// (в других режимах спят, как archivedOnly).
-describe('featureChips/showClosed: миграция из одиночного featureFilter', () => {
-  it('дефолт — пустой набор чипов, showClosed=false', () => {
-    const f = loadChatFilters('p1');
-    expect(f.featureChips).toEqual([]);
-    expect(f.showClosed).toBe(false);
+// Старый одиночный featureFilter (записи, сохранённые до мультивыбора): цепочка
+// featureFilter → featureChips/showClosed → featureKinds живёт только внутри миграции,
+// сами поля не экспортируются (Ф-3) — тест проверяет итог цепочки.
+describe('featureFilter: миграция старого одиночного значения в featureKinds', () => {
+  const read = (raw: unknown): ChatFilters => {
+    store.set('cc_chat_filters:p1', JSON.stringify(raw));
+    return loadChatFilters('p1');
+  };
+
+  it('дефолт (нет записи) — []', () => {
+    expect(loadChatFilters('p1').featureKinds).toEqual([]);
   });
 
-  it('«open» → [] / false', () => {
-    store.set('cc_chat_filters:p1', JSON.stringify({ featureFilter: 'open' }));
-    const f = loadChatFilters('p1');
-    expect(f.featureChips).toEqual([]);
-    expect(f.showClosed).toBe(false);
+  it("'open' → [] (пустой выбор)", () => {
+    expect(read({ featureFilter: 'open' }).featureKinds).toEqual([]);
   });
 
-  it("«waiting» → ['waiting'] / false", () => {
-    store.set('cc_chat_filters:p1', JSON.stringify({ featureFilter: 'waiting' }));
-    const f = loadChatFilters('p1');
-    expect(f.featureChips).toEqual(['waiting']);
-    expect(f.showClosed).toBe(false);
+  it("'waiting' → ['waiting_you']", () => {
+    expect(read({ featureFilter: 'waiting' }).featureKinds).toEqual(['waiting_you']);
   });
 
-  it("«stopped» → ['stopped'] / false", () => {
-    store.set('cc_chat_filters:p1', JSON.stringify({ featureFilter: 'stopped' }));
-    const f = loadChatFilters('p1');
-    expect(f.featureChips).toEqual(['stopped']);
-    expect(f.showClosed).toBe(false);
+  it("'stopped' → ['error']", () => {
+    expect(read({ featureFilter: 'stopped' }).featureKinds).toEqual(['error']);
   });
 
-  it("«merge» → ['merge'] / false", () => {
-    store.set('cc_chat_filters:p1', JSON.stringify({ featureFilter: 'merge' }));
-    const f = loadChatFilters('p1');
-    expect(f.featureChips).toEqual(['merge']);
-    expect(f.showClosed).toBe(false);
+  it("'merge' → ['waiting_you'] (схлопывается, разрез п. 3)", () => {
+    expect(read({ featureFilter: 'merge' }).featureKinds).toEqual(['waiting_you']);
   });
 
-  it('«closed» → [] / true', () => {
-    store.set('cc_chat_filters:p1', JSON.stringify({ featureFilter: 'closed' }));
-    const f = loadChatFilters('p1');
-    expect(f.featureChips).toEqual([]);
-    expect(f.showClosed).toBe(true);
-  });
-
-  it('мусор → [] / false, остальные поля целы', () => {
-    store.set('cc_chat_filters:p1', JSON.stringify({ featureFilter: 'zzz', search: 'ревью' }));
-    const f = loadChatFilters('p1');
-    expect(f.featureChips).toEqual([]);
-    expect(f.showClosed).toBe(false);
+  it('мусор → [], остальные поля целы', () => {
+    const f = read({ featureFilter: 'zzz', search: 'ревью' });
+    expect(f.featureKinds).toEqual([]);
     expect(f.search).toBe('ревью');
-  });
-  it('featureChips персистится и читается обратно', () => {
-    persistChatFilters('p1', { ...defaultChatFilters(), featureChips: ['stopped', 'merge'] });
-    expect(loadChatFilters('p1').featureChips).toEqual(['stopped', 'merge']);
-  });
-
-  it('showClosed персистится и читается обратно', () => {
-    persistChatFilters('p1', { ...defaultChatFilters(), showClosed: true });
-    expect(loadChatFilters('p1').showClosed).toBe(true);
   });
 });
 
@@ -438,6 +411,17 @@ describe('featureKinds: миграция сохранённых фильтров
     expect(read({ featureKinds: ['closed', 'error', 'error'] }).featureKinds).toEqual(['error', 'closed']);
   });
 
+  it('featureKinds в записи НЕ массив (строка/объект) → умолчание [], запись не отбрасывается', () => {
+    const f = read({ featureKinds: 'error', search: 'ревью' });
+    expect(f.featureKinds).toEqual([]);
+    expect(f.search).toBe('ревью');
+    // объект — не итерируемый массив: normalize обязан пропустить его как отсутствующий,
+    // а не упасть и потерять всю запись (проверяется сохранением search)
+    const g = read({ featureKinds: { '0': 'error' }, search: 'ревью' });
+    expect(g.featureKinds).toEqual([]);
+    expect(g.search).toBe('ревью');
+  });
+
   it('featureKinds персистится и читается обратно', () => {
     persistChatFilters('p1', { ...defaultChatFilters(), featureKinds: ['error'] });
     expect(loadChatFilters('p1').featureKinds).toEqual(['error']);
@@ -454,49 +438,30 @@ describe('featureKinds: миграция сохранённых фильтров
   });
 });
 
-// Путь записи через useChatFilters (R-Ф1.2): featureKinds — пересчитываемое производное,
-// любой патч, несущий featureChips/showClosed, пересчитывает её по фактическому выбору.
-// Без пересчёта: legacy-запись → load (миграция) → снятие чипа в старом UI → в записи
-// featureChips:[] при устаревшей featureKinds: триггер горит при пустом выборе, а
-// следующий load берёт устаревшую featureKinds и legacy не читает.
-describe('useChatFilters.patch: пересчёт featureKinds при записи legacy-полей (R-Ф1.2)', () => {
+// Путь записи через useChatFilters: featureKinds — единственная ось фич, патч пишет её
+// напрямую. Пересчёт из legacy-полей (R-Ф1.2) удалён в Ф-3: согласованность держит
+// миграция при ЧТЕНИИ — первый load legacy-записи приносит выбор в featureKinds,
+// первая же запись сохраняет его в новом формате (старый UI больше ничего не пишет).
+describe('useChatFilters.patch: запись featureKinds (единственная ось фич)', () => {
   const saved = (): Record<string, unknown> => JSON.parse(store.get('cc_chat_filters:p1')!);
 
-  it('снятие чипа из legacy-записи: запись согласована (featureKinds=[]), триггер не горит', () => {
+  it('legacy-запись: мигрированный выбор не теряется при первом патче', () => {
     // Запись старого формата: featureChips:['waiting'], featureKinds нет
     store.set('cc_chat_filters:p1', JSON.stringify({ groupBy: 'features', featureChips: ['waiting'], showClosed: false }));
     const { root } = mount(createElement(Probe));
     roots.push(root);
     // Чтение: миграция применилась, выбор 'waiting_you'
     expect(latest.filters.featureKinds).toEqual(['waiting_you']);
-    // Старый UI снимает чип: patch только по legacy-полю, без featureKinds
-    act(() => latest.patch({ featureChips: [] }));
-    // Состояние и запись согласованы: featureKinds пересчитана по фактическому выбору
-    expect(latest.filters.featureKinds).toEqual([]);
-    expect(saved().featureChips).toEqual([]);
-    expect(saved().featureKinds).toEqual([]);
-    // Повторное чтение: normalize берёт новую (пустую) featureKinds — триггер не горит
-    const f = loadChatFilters('p1');
-    expect(f.featureKinds).toEqual([]);
-    expect(isDefaultFilters(f)).toBe(true);
-  });
-
-  it('выставление legacy-чипа через patch: featureKinds пересчитана по таблице', () => {
-    const { root } = mount(createElement(Probe));
-    roots.push(root);
-    act(() => latest.patch({ groupBy: 'features', featureChips: ['waiting', 'merge'] }));
-    expect(latest.filters.featureKinds).toEqual(['waiting_you']);
+    // Патч постороннего поля: мигрированный выбор записывается в новом формате
+    act(() => latest.patch({ search: 'ревью' }));
     expect(saved().featureKinds).toEqual(['waiting_you']);
+    // Повторное чтение: featureKinds читается напрямую (legacy уже не нужен) — триггер горит
+    const f = loadChatFilters('p1');
+    expect(f.featureKinds).toEqual(['waiting_you']);
+    expect(isDefaultFilters(f)).toBe(false);
   });
 
-  it('showClosed=true через patch: featureKinds пересчитана с «closed»', () => {
-    const { root } = mount(createElement(Probe));
-    roots.push(root);
-    act(() => latest.patch({ groupBy: 'features', showClosed: true }));
-    expect(saved().featureKinds).toEqual([...ALL_FEATURE_KINDS]);
-  });
-
-  it('патч без legacy-полей: featureKinds не трогается (пересчёт — только при их записи)', () => {
+  it('патч других полей: featureKinds не трогается', () => {
     persistChatFilters('p1', { ...defaultChatFilters(), groupBy: 'features', featureKinds: ['error'] });
     const { root } = mount(createElement(Probe));
     roots.push(root);
@@ -505,7 +470,7 @@ describe('useChatFilters.patch: пересчёт featureKinds при запис�
     expect(saved().featureKinds).toEqual(['error']);
   });
 
-  it('патч пишет featureKinds напрямую (новый UI): значение сохраняется, не затирается legacy', () => {
+  it('патч пишет featureKinds напрямую (новый UI): значение сохраняется', () => {
     const { root } = mount(createElement(Probe));
     roots.push(root);
     act(() => latest.patch({ groupBy: 'features', featureKinds: ['error'] }));
@@ -513,44 +478,56 @@ describe('useChatFilters.patch: пересчёт featureKinds при запис�
   });
 });
 
-describe('featureChips/showClosed: isDefaultFilters в обоих режимах', () => {
-  it('режим фич: выбранный чип / showClosed → не-дефолт (триггер красится)', () => {
-    expect(isDefaultFilters({ ...defaultChatFilters(), groupBy: 'features', featureChips: ['stopped'] })).toBe(false);
-    expect(isDefaultFilters({ ...defaultChatFilters(), groupBy: 'features', showClosed: true })).toBe(false);
+describe('featureKinds: isDefaultFilters в обоих режимах', () => {
+  it('режим фич: выбранный featureKinds → не-дефолт (триггер красится)', () => {
+    expect(isDefaultFilters({ ...defaultChatFilters(), groupBy: 'features', featureKinds: ['error'] })).toBe(false);
   });
 
-  it('режим фич: пусто/false → дефолт', () => {
+  it('режим фич: пустой выбор → дефолт', () => {
     expect(isDefaultFilters({ ...defaultChatFilters(), groupBy: 'features' })).toBe(true);
   });
 
-  it('другой режим: чипы/showClosed спят → дефолт (триггер не красится)', () => {
-    expect(isDefaultFilters({ ...defaultChatFilters(), groupBy: 'days', featureChips: ['stopped'] })).toBe(true);
-    expect(isDefaultFilters({ ...defaultChatFilters(), groupBy: 'days', showClosed: true })).toBe(true);
-  });
-
-  it('режим фич: выбранный featureKinds → не-дефолт; другой режим — спит', () => {
-    expect(isDefaultFilters({ ...defaultChatFilters(), groupBy: 'features', featureKinds: ['error'] })).toBe(false);
+  it('другой режим: featureKinds спит → дефолт (триггер не красится)', () => {
     expect(isDefaultFilters({ ...defaultChatFilters(), groupBy: 'days', featureKinds: ['error'] })).toBe(true);
   });
 });
 
-describe('featureChips/showClosed: «Сбросить всё» в обоих режимах', () => {
-  it('режим фич: сброс очищает featureKinds, чипы и showClosed, сохраняет groupBy', () => {
-    const f: ChatFilters = { ...defaultChatFilters(), groupBy: 'features', featureKinds: ['error'], featureChips: ['waiting'], showClosed: true, search: 'ревью' };
+// Р-Ф1.2 мин. 2: «равен умолчанию» определяется МНОЖЕСТВОМ с эталоном, а не СЧЁТОМ:
+// восемь элементов с дублем или мусором равными не считаются. Пустой выбор здесь false
+// (он означает умолчание сам по себе, вне этой функции).
+describe('isDefaultFeatureKinds: сравнение по множеству с эталоном', () => {
+  const eightOpen = ALL_FEATURE_KINDS.filter(k => k !== 'closed');
+
+  it('восемь открытых в любом порядке — true', () => {
+    expect(isDefaultFeatureKinds([...eightOpen])).toBe(true);
+    expect(isDefaultFeatureKinds([...eightOpen].reverse())).toBe(true);
+  });
+
+  it('восемь элементов с дублем и пропущенным kind — false (счёт не признак)', () => {
+    const dup = [...eightOpen.slice(0, 7), eightOpen[0]];
+    expect(isDefaultFeatureKinds(dup)).toBe(false);
+  });
+
+  it('с «closed» или частичный выбор — false', () => {
+    expect(isDefaultFeatureKinds([...ALL_FEATURE_KINDS])).toBe(false);
+    expect(isDefaultFeatureKinds(['error'])).toBe(false);
+    expect(isDefaultFeatureKinds([])).toBe(false);
+  });
+});
+
+describe('featureKinds: «Сбросить всё» в обоих режимах', () => {
+  it('режим фич: сброс очищает featureKinds, сохраняет groupBy', () => {
+    const f: ChatFilters = { ...defaultChatFilters(), groupBy: 'features', featureKinds: ['error'], search: 'ревью' };
     const r = defaultChatFiltersKeepingView(f);
     expect(r.featureKinds).toEqual([]);
-    expect(r.featureChips).toEqual([]);
-    expect(r.showClosed).toBe(false);
     expect(r.search).toBe('');
     expect(r.groupBy).toBe('features');
   });
 
-  it('другой режим: сброс сохраняет featureKinds, чипы и showClosed (спят)', () => {
-    const f: ChatFilters = { ...defaultChatFilters(), groupBy: 'days', featureKinds: ['error'], featureChips: ['waiting'], showClosed: true, search: 'ревью' };
+  it('другой режим: сброс сохраняет featureKinds (спит)', () => {
+    const f: ChatFilters = { ...defaultChatFilters(), groupBy: 'days', featureKinds: ['error'], search: 'ревью' };
     const r = defaultChatFiltersKeepingView(f);
     expect(r.featureKinds).toEqual(['error']);
-    expect(r.featureChips).toEqual(['waiting']);
-    expect(r.showClosed).toBe(true);
     expect(r.search).toBe('');
     expect(r.groupBy).toBe('days');
   });

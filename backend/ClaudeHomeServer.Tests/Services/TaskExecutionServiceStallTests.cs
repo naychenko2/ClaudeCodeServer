@@ -248,8 +248,17 @@ public class TaskExecutionServiceStallTests : IDisposable
         var tracked = _tasks.GetById(task.Id)!;
         tracked.CompletionDelivered.Should().BeFalse();
 
-        // Новая попытка: ход успешный, задача не закрыта, чат молчит дольше порога → обычная ветка
+        // Отказ ревью b6c2bca9 (major 1): пара запуска сбрасывается целиком — переоткрытая карточка
+        // не «ждёт результата идущего хода» (IsAwaitingResult), а честно «не запущена»
+        tracked.ClaudeStartedAt.Should().BeNull();
+        TaskExecutionService.IsAwaitingResult(tracked).Should().BeFalse();
+
+        // Новая попытка: обычный старт + успешный ход, задача не закрыта, чат молчит дольше порога
+        // → обычная ветка. До правки здесь хватало MarkClaudeResult без старта — он был живым
+        // только потому, что отметка запуска ошибочно не сбрасывалась.
+        _tasks.MarkClaudeStarted(task.Id, "sess-1", Now.AddHours(-2));
         _tasks.MarkClaudeResult(task.Id, "success");
+        tracked = _tasks.GetById(task.Id)!;
         tracked.UpdatedAt = Now.AddHours(-1);
         TaskExecutionService.ClassifyStall(tracked, null, Now, Stale)
             .Should().Be(TaskExecutionService.ExecutorStallAction.Alert);

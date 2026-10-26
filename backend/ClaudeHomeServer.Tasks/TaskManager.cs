@@ -1031,6 +1031,29 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             {
                 task.CompletionDelivered = false;
                 task.ClaudeResult = null;
+                // Отказ ревью b6c2bca9 (major 1): отметка запуска сбрасывается вместе с результатом —
+                // пара принадлежит закрытому циклу целиком. ClaudeStartedAt без ClaudeResult читается
+                // тремя независимыми потребителями как «ход идёт сейчас»: IsTurnRunning
+                // (FeatureProjector.cs:1123) и ExecutorStatus «running», IsAwaitingResult
+                // (TaskExecutionService.cs:2149), claudeRunning во фронтенде. Переоткрытая карточка
+                // оказывалась «идущей»: проектор показывал шаг running в «Сейчас», UI — «AI работает»
+                // вместо кнопки «Выполнить», пауза фичи (SetHold, :1406) вешала ложную пометку
+                // «остановлен по паузе», сторож застоя был выключен. До нового MarkClaudeStarted
+                // карточка честно «не запущена» — ни один потребитель не читает её как идущий ход.
+                task.ClaudeStartedAt = null;
+                // Та же природа — срок закрытого цикла. С сброшенным ClaudeStartedAt планировщик
+                // (ShouldAutoStart, TaskSchedulerService.cs:74) видит обычную «Todo + Claude + срок
+                // наступил» карточку и в окне 24 ч автозапускал бы исполнителя на переоткрытой задаче
+                // без команды человека (петля доработки: закрыли → переоткрыли → само переисполнилось
+                // без указаний к доработке). Просроченный срок — запись прошлого цикла, он снимается;
+                // срок нового цикла задаётся явно: человек ставит его заново (автозапуск по нему —
+                // его команда) или запускает исполнителя явно (tasks_run_executor и кнопка «Выполнить»
+                // срока не требуют). Новый срок в этом же запросе — явный, его не трогаем.
+                if (req.DueDate is null)
+                {
+                    task.DueDate = null;
+                    task.DueTime = null;
+                }
             }
         }
         // Вердикт и исход дефекта — устаревшая проверка после переоткрытия (образец — CompletedAt)
@@ -1723,9 +1746,23 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // Дописывание повторного доклада к итогу закрытой карточки (расследование 88444536, п.2):
     // второй tasks_complete не затирает первый ResultMarkdown, а добавляет его к нему. Дата в
     // заголовке обязательна — иначе теряется граница между итогами разных циклов исполнения.
+    // Дата — UTC (минор 3 ревью b6c2bca9): карточка хранится в UTC, заголовок — та же шкала,
+    // дата в тексте не зависит от часовой зоны сервера. Поведение не меняется — фиксация в комментарии.
+    // Идемпотентность (минор 2 того же ревью): ретрай того же tasks_complete (исполнитель повторил
+    // тот же доклад после сбоя доставки) не должен плодить второй такой же блок: последний блок уже
+    // равен этому тексту — текст возвращается без изменений.
     private static string AppendCompletionSupplement(string? existing, string incoming)
     {
         if (string.IsNullOrWhiteSpace(existing)) return incoming;
+        const string marker = "— Дополнение (";
+        var last = existing.LastIndexOf(marker, StringComparison.Ordinal);
+        if (last >= 0)
+        {
+            var headerEnd = existing.IndexOf(") —\n", last, StringComparison.Ordinal);
+            if (headerEnd >= 0 && string.Equals(
+                existing[(headerEnd + 4)..].Trim(), incoming.Trim(), StringComparison.Ordinal))
+                return existing;
+        }
         return existing + $"\n\n— Дополнение ({DateTime.UtcNow:yyyy-MM-dd}) —\n" + incoming;
     }
 }

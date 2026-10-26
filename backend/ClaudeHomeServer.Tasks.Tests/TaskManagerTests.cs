@@ -1,5 +1,6 @@
 ﻿using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Tasks.Projector;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -726,6 +727,28 @@ public class TaskManagerTests : IDisposable
 
         reopened.CompletionDelivered.Should().BeFalse("доклад закрытого цикла не должен блокировать перезапуск");
         reopened.ClaudeResult.Should().BeNull("результат закрытого хода не должен считаться новым циклом");
+        // Отказ ревью b6c2bca9 (major 1): пара сбрасывается целиком — отметка запуска того же цикла
+        reopened.ClaudeStartedAt.Should().BeNull("живая отметка запуска читается потребителями как «ход идёт»");
+    }
+
+    // Отказ ревью b6c2bca9 (major 1): переоткрытая в InProgress карточка с живой ClaudeStartedAt
+    // читалась IsTurnRunning как «ход идёт сейчас»: проектор показывал шаг running в «Сейчас»,
+    // UI — «AI работает» вместо кнопки «Выполнить», пауза фичи вешала ложную пометку остановки.
+    [Fact]
+    public void Update_ПереоткрытиеВInProgress_ПроекторНеЧитаетЕёКакИдущийХод()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("доработка после закрытия"));
+        _sut.MarkClaudeStarted(task.Id, "sess-1", DateTime.UtcNow);
+        _sut.MarkClaudeResult(task.Id, "success");
+        _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        _sut.TryMarkCompletionDelivered(task.Id);
+
+        var reopened = _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.InProgress))!;
+
+        reopened.ClaudeStartedAt.Should().BeNull();
+        reopened.ClaudeResult.Should().BeNull();
+        FeatureProjector.IsTurnRunning(reopened).Should().BeFalse(
+            "после переоткрытия ни один потребитель не должен читать карточку как идущий ход");
     }
 
     [Fact]
@@ -742,6 +765,7 @@ public class TaskManagerTests : IDisposable
 
         edited.CompletionDelivered.Should().BeTrue();
         edited.ClaudeResult.Should().Be("success");
+        edited.ClaudeStartedAt.Should().NotBeNull("Done→Done — не переоткрытие, пару не трогаем");
     }
 
     [Fact]
@@ -757,6 +781,7 @@ public class TaskManagerTests : IDisposable
 
         moved.CompletionDelivered.Should().BeTrue();
         moved.ClaudeResult.Should().Be("success");
+        moved.ClaudeStartedAt.Should().NotBeNull("todo→inProgress — не переоткрытие, пару не трогаем");
     }
 
     // Расследование 88444536, п.2: повторный tasks_complete по Done-карточке не обязан затирать
@@ -774,6 +799,65 @@ public class TaskManagerTests : IDisposable
         again.ResultMarkdown.Should().StartWith("первый итог");
         again.ResultMarkdown.Should().Contain("Дополнение (");
         again.ResultMarkdown.Should().Contain("второй итог");
+    }
+
+    // Минор 2 ревью b6c2bca9: ретрай того же tasks_complete (тот же текст после сбоя доставки)
+    // не должен плодить второй такой же блок «Дополнение».
+    [Fact]
+    public void Update_ПовторныйДокладТемЖеТекстом_НеДублируетДополнение()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t"));
+        _sut.Update(task.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done, ResultMarkdown: "первый итог"));
+        var supplemented = _sut.Update(task.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done, ResultMarkdown: "второй итог"), isAgentCall: true)!;
+        // Update возвращает живой экземпляр — снимок строки до ретрая, иначе сравниваем объект с самим собой
+        var supplementedText = supplemented.ResultMarkdown;
+
+        var retry = _sut.Update(task.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done, ResultMarkdown: "второй итог"), isAgentCall: true)!;
+
+        retry.ResultMarkdown.Should().Be(supplementedText,
+            "тот же текст повторно — последний блок уже он и есть, второй не дописываем");
+
+        // Другой текст дописывается как прежде (идемпотентность не подменяет собой разные доклады)
+        var another = _sut.Update(task.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done, ResultMarkdown: "третий итог"), isAgentCall: true)!;
+        another.ResultMarkdown.Should().Contain("третий итог");
+    }
+
+    // Побочка сброса пары (отказ ревью b6c2bca9): ShouldAutoStart требует ClaudeStartedAt == null —
+    // переоткрытая карточка со старым сроком ушла бы в автозапуск без команды человека.
+    // Просроченный срок закрытого цикла снимается вместе с прочими его следами.
+    [Fact]
+    public void Update_ПереоткрытиеИзDone_СнимаетСтарыйСрок()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("срочная доработка",
+            Assignee: TaskItemAssignee.Claude, DueDate: "2026-10-25", DueTime: "12:00"));
+        _sut.MarkClaudeStarted(task.Id, "sess-1", DateTime.UtcNow);
+        _sut.MarkClaudeResult(task.Id, "success");
+        _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+
+        var reopened = _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Todo))!;
+
+        reopened.DueDate.Should().BeNull("срок закрытого цикла — запись прошлого цикла, не команда автозапуска");
+        reopened.DueTime.Should().BeNull();
+    }
+
+    // Новый срок в том же запросе — явное намерение человека: его не трогаем
+    // (автозапуск по нему — его собственная команда).
+    [Fact]
+    public void Update_ПереоткрытиеИзDone_СНовымСроком_СохраняетЕго()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("доработка",
+            Assignee: TaskItemAssignee.Claude, DueDate: "2026-10-25", DueTime: "12:00"));
+        _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done, ResultMarkdown: "итог"));
+
+        var reopened = _sut.Update(task.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Todo, DueDate: "2026-12-01", DueTime: "09:00"))!;
+
+        reopened.DueDate.Should().Be("2026-12-01");
+        reopened.DueTime.Should().Be("09:00");
     }
 
     [Fact]

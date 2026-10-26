@@ -21,15 +21,22 @@ public static class SpendSources
     // в рейтингах «по токенам» им делать нечего (иначе они вечно висят внизу с нулём).
     public static bool IsTokenless(string source) => source is Fal or Glif or Tts or Higgsfield;
 
+    // Провайдеры «freellm*» (в т.ч. «freellmapi» и «freellmapi-direct» — локальный прокси на
+    // свою GPU) бесплатны. Правило в одном месте Core: его зовут и IsFree (источник расхода),
+    // и SpendCostTiers (ценовой класс), иначе источник и класс разъедутся.
+    public static bool IsFreeProviderKey(string provider) =>
+        provider.StartsWith("freellm", StringComparison.Ordinal);
+
     // Бесплатный исполнитель: локальный провайдер (флаг IsLocal в конфиге — свой движок
-    // на своей машине), локальная модель (Ollama или llama-server), прямой адаптер любого
-    // OpenAI-совместимого источника (провайдер заканчивается на "-direct") или модель
-    // ":free" через CLI. Ключи локальных провайдеров машин-specific (напр. "local-qwen"),
-    // поэтому признак берётся из конфига, а не из перечисления здесь.
+    // на своей машине), локальная модель (Ollama или llama-server), провайдер «freellm*»
+    // (с «-direct» и без) или модель ":free" через CLI. Прямой адаптер платного провайдера
+    // («minimax-direct», «kimi-direct») бесплатным НЕ считается. Ключи локальных провайдеров
+    // машин-specific (напр. "local-qwen"), поэтому признак берётся из конфига, а не из
+    // перечисления здесь.
     public static bool IsFree(string provider, string? model, bool isLocal = false) =>
         isLocal
         || provider is "ollama" or "llama-server"
-        || provider.EndsWith("-direct", StringComparison.OrdinalIgnoreCase)
+        || IsFreeProviderKey(provider)
         || (model is not null && model.EndsWith(":free", StringComparison.OrdinalIgnoreCase));
 
     // Дополнительные подписки Claude (sub-*) — тот же провайдер claude, отдельной осью не нужны

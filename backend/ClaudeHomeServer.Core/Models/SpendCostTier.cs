@@ -23,15 +23,15 @@ public static class SpendCostTiers
     public const string Expensive = "expensive";
 
     // Провайдеры «freellm*» (в т.ч. «freellmapi» — локальный прокси на свою GPU) считаются
-    // бесплатными: трата на них не стоит денег. Правило живёт ЗДЕСЬ, а не в SpendSources.IsFree:
-    // IsFree — признак ИСТОЧНИКА расхода (source=free), и его расширение изменило бы семантику
-    // аналитики и бэкфилла. Фронт это правило как источник правды не дублирует: карточка
+    // бесплатными: трата на них не стоит денег. Правило живёт в SpendSources.IsFreeProviderKey
+    // и общее с признаком источника SpendSources.IsFree — класс не должен разъехаться с источником.
+    // Фронт это правило как источник правды не дублирует: карточка
     // провайдера берёт класс отсюда (costTier в /api/models) и называет цену один раз.
     // Копия правила на фронте есть — она живёт ТОЛЬКО как откат на случай неизвестного класса
     // (frontend/src/lib/spendSources.ts): при расширении правила здесь откат надо продублировать,
     // иначе при недоступном /api/models обе фронтовые поверхности промолчат о бесплатности.
     private static bool IsFreeProviderKey(string provider) =>
-        provider.StartsWith("freellm", StringComparison.Ordinal);
+        SpendSources.IsFreeProviderKey(provider);
 
     // Прямой адаптер платного провайдера («minimax-direct») — тот же провайдер: класс считается
     // по базовому ключу без суффикса, а source=free его бесплатным не делает.

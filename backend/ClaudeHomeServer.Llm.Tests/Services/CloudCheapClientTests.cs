@@ -1,4 +1,6 @@
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Tests.Helpers;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -236,6 +238,31 @@ public class CloudCheapClientTests
         await client.GenerateDetailedAsync($"direct:{modelId}", "p", TimeSpan.FromSeconds(5), maxTokens: 128);
 
         Assert.Equal(expectedUrl, stub.Handler.LastRequestUri?.ToString());
+    }
+
+    private sealed class CapturingSpend : ISpendCollector
+    {
+        public List<SpendRecord> Records { get; } = [];
+        public void Record(SpendRecord record) => Records.Add(record);
+    }
+
+    // Источник записи выбирается IsFree, а не прошит «free» (решение Андрея, 26.10):
+    // платный прямой адаптер пишется one-shot, freellm*-direct — free.
+    [Fact]
+    public async Task Spend_ПрямыеАдаптеры_ПлатныйПишетсяOneShot_FreellmБесплатным()
+    {
+        var cfg = WithMinimax(WithFreeLlmApi(WithOpenRouter(new())));
+        var config = Config(cfg);
+        var providers = new LlmProviderRegistry(config);
+        var stub = new StubHttpFactory(OkJson);
+        var spend = new CapturingSpend();
+        var client = new CloudCheapClient(stub, config, providers, NullLogger<CloudCheapClient>.Instance, spend);
+
+        await client.GenerateDetailedAsync("direct:MiniMax-M3", "p", TimeSpan.FromSeconds(5), maxTokens: 128);
+        await client.GenerateDetailedAsync("direct:auto:fast", "p", TimeSpan.FromSeconds(5), maxTokens: 128);
+
+        Assert.Equal(SpendSources.OneShot, spend.Records.Single(r => r.Provider == "minimax-direct").Source);
+        Assert.Equal(SpendSources.Free, spend.Records.Single(r => r.Provider == "freellmapi-direct").Source);
     }
 
     private const string OkJson = """

@@ -53,6 +53,15 @@ public sealed class SpendMaintenanceService(SpendStore store, ISessionDirectory 
             }
             catch (Exception ex) { log.LogError(ex, "spend: переклассификация не удалась"); }
 
+            // Обратный проход: платные прямые адаптеры (minimax-direct…), помеченные free
+            // по старому правилу, возвращаются в one-shot. Идемпотентно.
+            try
+            {
+                var restored = store.ReclassifyPaidDirectFromFree(llm.IsLocal);
+                if (restored > 0) log.LogInformation("spend: платные прямые адаптеры возвращены из бесплатных: {Count}", restored);
+            }
+            catch (Exception ex) { log.LogError(ex, "spend: обратная переклассификация не удалась"); }
+
             await Task.Delay(TimeSpan.FromHours(1), ct);
         }
     }

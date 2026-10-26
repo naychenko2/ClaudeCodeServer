@@ -58,6 +58,12 @@ describe('признак бесплатности — одна точка пра
     expect(isFreeProviderKey('glm', null)).toBe(false);
   });
 
+  // Платный прямой адаптер не бесплатный; freellm*-direct — бесплатный (решение Андрея, 26.10).
+  it('неизвестный класс — платный *-direct не бесплатный, freellm*-direct бесплатный', () => {
+    expect(isFreeProviderKey('minimax-direct', null)).toBe(false);
+    expect(isFreeProviderKey('freellmapi-direct', null)).toBe(true);
+  });
+
   it('бейдж полосы и карточка говорят одно и то же', () => {
     // Класс известен — бейдж «бесплатный» ровно у бесплатного класса.
     expect(providerFreeBadge('freellmapi', 'free')).toBe('бесплатный');

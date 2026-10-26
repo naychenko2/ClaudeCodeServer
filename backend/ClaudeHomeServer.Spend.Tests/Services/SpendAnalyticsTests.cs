@@ -427,9 +427,9 @@ public class SpendAnalyticsTests : IDisposable
         // Каталог провайдеров (/api/models) — тот же класс по одному провайдеру
         Assert.Equal(SpendCostTiers.Free, SpendCostTiers.OfProvider("freellmapi", isLocal: false));
         Assert.Equal(SpendCostTiers.Free, SpendCostTiers.OfProvider("freellm", isLocal: false));
-        // Признак источника расхода (SpendSources.IsFree) НЕ расширен: «freellm*» — это
-        // провайдер, а не источник; его семантику (source=free) не трогаем.
-        Assert.False(SpendSources.IsFree("freellmapi", "auto:fast"));
+        // Признак источника — то же правило, что класс (Р1(а), решение Андрея 26.10):
+        // freellm* бесплатен и в источнике, и в классе — две точки не должны разъезжаться.
+        Assert.True(SpendSources.IsFree("freellmapi", "auto:fast"));
     }
 
     // Ранг классов: «дороже — важнее». Регрессия «важнейшим стал дешёвый» не должна пройти
@@ -595,8 +595,14 @@ public class SpendAnalyticsTests : IDisposable
     public void Sources_БесплатныеИПодписки()
     {
         Assert.True(SpendSources.IsFree("ollama", "qwen3:14b"));
-        Assert.True(SpendSources.IsFree("openrouter-direct", "any"));
+        // Платный провайдер через прямой адаптер не бесплатен (решение Андрея, 26.10):
+        // бесплатен «любой *-direct» было ошибкой источника
+        Assert.False(SpendSources.IsFree("openrouter-direct", "any"));
+        Assert.False(SpendSources.IsFree("minimax-direct", "MiniMax-M3"));
+        Assert.False(SpendSources.IsFree("kimi-direct", "kimi-k3"));
+        // freellm* — бесплатный и с «-direct», и без него (развилка Р1(а)): локальный прокси
         Assert.True(SpendSources.IsFree("freellmapi-direct", "auto:fast"));
+        Assert.True(SpendSources.IsFree("freellmapi", "auto:fast"));
         Assert.True(SpendSources.IsFree("openrouter", "nvidia/nemotron:free"));
         Assert.False(SpendSources.IsFree("claude", "opus"));
         // Локальный провайдер из конфига (IsLocal) — бесплатный по определению: ключ

@@ -25,7 +25,7 @@
 
 | Вкладка | Что показывает | Источник |
 |---|---|---|
-| «Хронология» (по умолчанию) | этапы, лента времени, цепочки шагов и витки | `run.stages`, `stats.timeline`, `run.stepChains` |
+| «Хронология» (по умолчанию) | дорожки этапов на общей оси, цепочки шагов и витки, «хвосты после мержа» | `run.stages`, `run.stepChains`, `stats.timeline.intervalsByStage`, `run.postMergeTails` — §«Хронология» |
 | «Планы и макеты» | разрез/план/консультации фичи, макеты из `docs/mockups` | `plans`, `mockups` |
 | «Чаты» | чаты фичи с ролями (куратор/оркестратор/исполнитель) и моделью | `chats` |
 | «Задачи» | задачи фичи, фильтр | `run` + трекер |
@@ -181,6 +181,76 @@ flowchart LR
 ([FeatureStatsTab.tsx](../../frontend/src/components/feature/FeatureStatsTab.tsx)).
 Интервалы берутся из журнала везде, где он полный: огрублять точное ради метки незачем.
 
+## «Хронология» (дорожки этапов)
+
+Основная вкладка. Дорожки строит чистая функция фронта `buildStageLanes` → `StageLanesModel`
+([FeatureLaneModel.ts](../../frontend/src/components/feature/FeatureLaneModel.ts)); рендер
+(`FeatureTimelineTab`, `FeatureStageLane`) ничего не считает — позиционирует через `axisFrac(t, axis)`.
+Ключ стадии приводит `asStageKey` (неизвестный — null). Макеты —
+[feature-gantt-7.md](../mockups/feature-gantt-7.md) (принят вариант C) и [feature-gantt-6.md](../mockups/feature-gantt-6.md).
+
+**Интервалы — с бэка.** `stats.timeline.intervalsByStage` строит `FeatureStageIntervals`
+([FeatureStageIntervals.cs](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureStageIntervals.cs))
+по журналу ходов: стадия → её интервалы работы. Ходы одной стадии с зазором ≤ `GlueGap` (2 мин)
+склеиваются в один интервал — зазор часть работы этапа, не простой. Результат — `StageInterval`
+(`From/To/Minutes/Live/LastOutcome/TaskIds/Turns`) и `StageTurn`
+([StageIntervals.cs](../../backend/ClaudeHomeServer.Tasks/Projector/StageIntervals.cs)). `Live` — живой хвост
+идущей задачи `[max(ClaudeStartedAt, конец последнего закрытого хода этой задачи), now]`: хвост не перекрывает
+уже закрытые ходы задачи. `LastOutcome` — исход последнего хода интервала, если он
+`cancelled`/`interrupted`/`error`; на дорожке это риска 2 px на конце.
+
+**Два разных «ничего».** `intervalsByStage = null` (или поля нет) — журнал неполный (тот же гейт, что
+`stats.source = journal`): фронт ставит этапу `approx`, интервалов нет и это честно. Пустой словарь `{}` —
+журнал полный, ходов не было: этап честно пуст, `approx` НЕ ставится. Этапа не было (`skipped`) — подпись
+«этапа не было»; не начатый на живой оси — «впереди».
+
+**Ось и «сейчас».** `LaneAxis { from, to, timeFrac }` — границы из `stats.timeline`; `timeFrac = 0.86` у живой
+фичи (остальное — зона «впереди», не масштаб времени), `1` у закрытой/смерженной. Часовые отметки рисуются
+только когда ширина самой шкалы ≥ 690 px (окно ~1600 px): на 1280 ось плотная, без отметок. «Сейчас» и минуты
+живого хода — из одного `useNow` вкладки: карточки «Производства», строки исполнителей и дорожки живут на одном
+моменте. Фронт обрезает концы интервалов границей окна (у смерженной фичи ось кончается моментом мержа).
+
+**Состояние интервала — не только цвет.** `LaneInterval` несёт `state: done | live | wait | stalled` —
+последние три только из сигналов бэка (`run.now`, `timeline.current`, `run.attention`; пороги фронт не
+считает). У каждого интервала `data-state` и `aria-label` «{Этап}, интервал i из n: …»; на оси состояние
+дублируется словами «впереди», «ещё N» (только «Производство»), «этапа не было» и глифом «↩» (флажки
+возвратов — только у «Производства»).
+
+**Счётчик этапа «N/M» — только у «Производства»** (решение m1 ревью GC-R-F2). Текст печатает одна функция
+`planCounterText()`: N — принято (`plan.done`), M — всего; тот же текст читают «Хронология» и сводка
+«Статистики», своей арифметики ни там ни здесь нет. Прочие этапы — без дроби: в колонке имени число задач
+(`tasksCountLabel`, склонение через `lib/plural`). План (`LanePlan`) модель считает и для других стадий
+(`prod`/`review` из `stepProgress`, прочие из задач этапа, `skipped` — null), но счётчик показывается
+только у «Производства».
+
+**Хвосты после мержа.** У смерженной/закрытой фичи — `run.postMergeTails`: любая незакрытая дочерняя задача
+кроме merge, по `CreatedAt` ([FeatureProjector.cs](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureProjector.cs)).
+Хвосты НЕ держат «ждёт вас»: в `waitTask` не входят, тревога из них не поднимается — «ждёт вас» держит только
+явный `AwaitingHumanSince`. На «Хронологии» — сводная строка «хвосты после мержа · N» после ленты этапов и
+маркер «· хвост после мержа» на строке задачи в списке этапа; отдельной строкой хвост не дублируется.
+
+**Свёртка длинных списков** ([featureListFold.ts](../../frontend/src/components/feature/featureListFold.ts)):
+«Производство» — `foldProd`: незакрытые шаги видны всегда + последние `PROD_DONE_TAIL` (3) готовых +
+раскрытый; шаг, попавший и в список стадии, и в хвосты, считается один раз (`normKey` — stepRef, trim +
+нижний регистр). «Готовым» считается только состояние карточки `done` (`DONE_STATES`), снятые в свёртку
+не входят (`WITHDRAWN_STATES`). Прочие этапы — `foldLast`: последние 10 + «Показать все N (ранних скрыто: K)»
+без схлопывания.
+
+**Подсветка «Показать интервалы на дорожке ↑».** Из карточки «Производства» к дорожке своего этапа: целевые
+интервалы получают кольцо, прочие гаснут до `opacity .35` на 2,4 с; при `prefers-reduced-motion` — без анимации.
+
+**Возврат с задачи.** `recordFeatureReturn` ([featureBackNav.ts](../../frontend/src/lib/featureBackNav.ts))
+пишет указатель (с вкладкой `fromTab`) и снимок вида (`FeatureViewSnapshot`: раскрытый этап `stageKey`,
+`expandedKey` карточки «Производства», `scrollY`); снимок берёт у поставщика вкладки `registerFeatureViewProvider`
+в момент перехода.
+Клик чипа «← к фиче» переносит снимок в однократный канал (`consumeFeatureViewReturn` /
+`usePendingFeatureView`): `clearBackNav` не стирает указатель раньше восстановления (дефект 4c4645e2).
+Якорь этапа с баннера чата — `focusFeatureStage(key)` ([featurePage.ts](../../frontend/src/lib/featurePage.ts)).
+
+**«Статистика» без дорожек.** Сводка `StageSummary` ([FeatureStatsTab.tsx](../../frontend/src/components/feature/FeatureStatsTab.tsx)):
+по строке на этап — имя, слово состояния («готов», «идёт», «стоит», «впереди», «этапа не было»), «N/M»
+(только «Производство»), длительность; ниже — ссылка на «Хронологию», где дорожки.
+
 ## Статистика и расход
 
 `stats` есть **только** в `GET /api/tasks/features/{featureId}` — в индексе и списке
@@ -274,6 +344,7 @@ flowchart LR
 | лента событий | [FeatureEvents.cs](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureEvents.cs) |
 | журнал | [Journal/FeatureJournalStore.cs](../../backend/ClaudeHomeServer.Tasks/Journal/FeatureJournalStore.cs), [Journal/FeatureTurnJournalSubscriber.cs](../../backend/ClaudeHomeServer.Tasks/Journal/FeatureTurnJournalSubscriber.cs) |
 | активность, лента времени, разрезы | [FeatureActivity.cs](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureActivity.cs), [FeatureTimeline.cs](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureTimeline.cs), [FeatureBreakdown.cs](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureBreakdown.cs), [FeatureTimeMath.cs](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureTimeMath.cs) |
+| «Хронология»: интервалы бэка, модель дорожек, свёртка | [Projector/FeatureStageIntervals.cs](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureStageIntervals.cs), [Projector/StageIntervals.cs](../../backend/ClaudeHomeServer.Tasks/Projector/StageIntervals.cs), [components/feature/FeatureLaneModel.ts](../../frontend/src/components/feature/FeatureLaneModel.ts), [components/feature/FeatureStageLane.tsx](../../frontend/src/components/feature/FeatureStageLane.tsx), [components/feature/featureListFold.ts](../../frontend/src/components/feature/featureListFold.ts) |
 | деление общего расхода | [SharedSpendSplitter.cs](../../backend/ClaudeHomeServer.Tasks/Projector/SharedSpendSplitter.cs); шов и надёжность цены — [Core/Services/Spend/ISpendFeatureReader.cs](../../backend/ClaudeHomeServer.Core/Services/Spend/ISpendFeatureReader.cs), [SpendCostReliability.cs](../../backend/ClaudeHomeServer.Core/Services/Spend/SpendCostReliability.cs); реализация — [SpendFeatureReader.cs](../../backend/ClaudeHomeServer.Spend/SpendFeatureReader.cs) |
 | ручки REST | [Controllers/TasksController.cs](../../backend/ClaudeHomeServer/Controllers/TasksController.cs) |
 | страница фичи | [components/feature/](../../frontend/src/components/feature/) (`FeatureCenter`, `FeaturePage`, `FeaturePageTabs`, `FeatureTimelineTab`, `FeatureStatsTab`, `FeaturePlansTab`, …) |

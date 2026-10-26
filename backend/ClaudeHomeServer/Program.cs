@@ -20,6 +20,7 @@ using ClaudeHomeServer.Services.Mcp;
 using ClaudeHomeServer.Services.Mcp.Http;
 using ClaudeHomeServer.Services.ProjectServices;
 using ClaudeHomeServer.Services.Terminal;
+using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.TriggerSources;
 using ClaudeHomeServer.Services.Modules;
 using ClaudeHomeServer.Services.Turn;
@@ -790,6 +791,10 @@ builder.Services.AddSingleton<ITaskNotificationDispatcher>(sp => sp.GetRequiredS
 builder.Services.AddSingleton<PushSubscriptionStore>();
 builder.Services.AddSingleton<PushService>();
 builder.Services.AddSingleton<TaskExecutionService>();
+// Шов IFeatureHoldReleaser (Core) → TaskExecutionService: и автоснятие очереди (Tasks), и ручная
+// DELETE-ручка снимают удержание одним телом. Регистрация здесь, а не в AddFeatureQueue:
+// вертикаль Tasks не видит Main; сам исполнитель регистрируется unconditional — шов с ним рядом.
+builder.Services.AddSingleton<IFeatureHoldReleaser>(sp => sp.GetRequiredService<TaskExecutionService>());
 // Очередь фич (волна 6): регистрируется только при включённой подсистеме задач.
 builder.Services.AddFeatureQueue(builder.Configuration);
 // Запуск предгейта шага (NC-P1b): шов ITaskPregate опционален — вертикаль TestRuns отключаемая

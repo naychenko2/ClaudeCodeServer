@@ -1,18 +1,9 @@
 using System.Collections.Concurrent;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Composition;
-using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Tasks.Projector;
 
-namespace ClaudeHomeServer.Services;
-
-// Снятие удержания фичи — единый путь для ручки DELETE hold и автоснятия очереди. Узкий шов, чтобы
-// сервис очереди не тащил за собой весь TaskExecutionService, а тесты подставляли записывающую
-// реализацию; в проде это сам TaskExecutionService (другой копии тела снятия быть не должно).
-public interface IFeatureHoldReleaser
-{
-    Task<FeatureHoldRelease> ReleaseFeatureHold(string featureId, string ownerId, FeatureHold? hold, string? by = null);
-}
+namespace ClaudeHomeServer.Services.Tasks;
 
 // Очередь фич (волна 6, разрез Александра 25.10 §4–§7): очередь — не сущность, а удержание
 // Hold { reason: "queue" }; сервис лишь снимает голову очереди проекта, пока занято меньше лимита.
@@ -169,7 +160,8 @@ public static class FeatureQueueRegistration
     {
         if (!SubsystemGate.IsEnabled(config, "tasks")) return services;
         services.AddSingleton<FeatureQueueService>();
-        services.AddSingleton<IFeatureHoldReleaser>(sp => sp.GetRequiredService<TaskExecutionService>());
+        // IFeatureHoldReleaser здесь не регистрируется: Tasks не видит Main, реализацию шва
+        // (TaskExecutionService) ставит Program.cs рядом с самим исполнителем.
         services.AddGatedHostedFrom(config, sp => sp.GetRequiredService<FeatureQueueService>(), "tasks");
         return services;
     }

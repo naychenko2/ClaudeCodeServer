@@ -6,15 +6,11 @@ using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Services.Tasks;
-using ClaudeHomeServer.Services.Tasks.Projector;
 
 namespace ClaudeHomeServer.Services;
 
-/// <summary>Исход единого снятия удержания фичи.</summary>
-public enum FeatureHoldReleaseOutcome { Released, Repeated, NotHeld, NotFound }
-
-/// <summary>Результат <see cref="TaskExecutionService.ReleaseFeatureHold"/>: исход и пробуждение очереди (id задач).</summary>
-public sealed record FeatureHoldRelease(FeatureHoldReleaseOutcome Outcome, IReadOnlyList<string> Resumed, IReadOnlyList<string> Expired);
+// FeatureHoldReleaseOutcome / FeatureHoldRelease / IFeatureHoldReleaser переехали в Core
+// (Core/Services/FeatureHoldRelease.cs, дефект 6c71a827): их держит и вертикаль Tasks.
 
 /// <summary>
 /// Алиасы тиров моделей владельца (opus/sonnet/haiku) для таблицы уровней в постановке.

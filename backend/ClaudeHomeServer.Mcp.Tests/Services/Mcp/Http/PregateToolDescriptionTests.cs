@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Xml.Linq;
 using ClaudeHomeServer.Services.Mcp.Http;
 using FluentAssertions;
 
@@ -63,16 +64,22 @@ public class PregateToolDescriptionTests
     }
 
     // Политика предупреждений в Directory.Build.props и обещание описания — одно и то же:
-    // description называет nullable и xUnit1031, а в props в ошибку идут именно эти коды
+    // description называет nullable и xUnit1031, а в props в ошибку идут именно эти коды.
+    // Политику ищем по XML и ВСЕ вхождения: если появится второй <WarningsAsErrors>, набор
+    // кодов в предгейте поедет, а тест (взяв первый) промолчал бы.
     [Fact]
     public void ОписаниеПредгейта_СовпадаетСПолитикойПредупреждений()
     {
-        var props = File.ReadAllText(Path.Combine(Directory.GetParent(ServerDir())!.FullName, "Directory.Build.props"));
-        var warningsAsErrors = props.Split('\n')
-            .First(l => l.Contains("<WarningsAsErrors>"))
-            .Trim();
+        var propsPath = Path.Combine(Directory.GetParent(ServerDir())!.FullName, "Directory.Build.props");
+        var document = XDocument.Load(propsPath);
+        var policies = document.Descendants("WarningsAsErrors")
+            .Select(e => e.Value.Trim())
+            .ToList();
 
-        warningsAsErrors.Should().Contain("nullable").And.Contain("xUnit1031",
+        policies.Should().HaveCount(1,
+            "политика предупреждений должна быть одна: второй <WarningsAsErrors> задал бы другой набор кодов, "
+            + "и предгейт собирал бы строже (или мягче), чем обещает описание");
+        policies[0].Should().Contain("nullable").And.Contain("xUnit1031",
             "в ошибку в предгейте должны идти nullable и xUnit1031 — иначе описание врёт");
         Description().Should().Contain("nullable").And.Contain("xUnit1031");
     }

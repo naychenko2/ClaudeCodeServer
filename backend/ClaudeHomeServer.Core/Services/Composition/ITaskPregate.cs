@@ -26,7 +26,9 @@ public interface ITaskPregate
 // MCP_TOOL_TIMEOUT нарушает инвариант «ответ модели должен успеть уйти».
 public static class PregateCeiling
 {
-    public const int MaxSeconds = 540;
+    // Значение — из RunBudget (Core): общий потолок прогона, его берёт и вертикаль
+    // TestRuns. Меняем там.
+    public const int MaxSeconds = RunBudget.MaxSeconds;
 
     // Допустимое значение — как есть; мусор (0, отрицательное, слишком большое) — безопасный
     // потолок по умолчанию, а не исключение на ручке

@@ -18,6 +18,12 @@ public sealed class PregateOptions
     public const string SectionName = "Pregate";
     public const string ChecksKey = "Checks";
 
+    // Имена свойств проверки: по ним видно, где конфигурация разъехалась по «:», а где у
+    // проверки просто есть вложенный объект (свойство объектом). Список берём из типа —
+    // новое свойство проверки попадёт сюда само.
+    private static readonly HashSet<string> OptionPropertyNames =
+        typeof(PregateCheckOptions).GetProperties().Select(p => p.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
     // Собранный набор проверок в порядке прогона
     public IReadOnlyList<PregateCheckOptions> Checks { get; init; } = [];
 
@@ -45,8 +51,17 @@ public sealed class PregateOptions
 
             // Ключ с «:» конфигурация разъехала бы по пути («lint:design» → «lint» → «design»):
             // такая проверка осталась бы без Command. Ловим это здесь, а не красным прогоном.
-            // Вложенный объект — не список: у списка ключи числовые («Args:0», «Args:1»).
-            if (child.GetChildren().Any(c => c.GetChildren().Any(g => !g.Key.All(char.IsDigit))))
+            //
+            // Признак — именно разъезд ИМЕНИ, а не «есть вложенный объект»: у разъехавшегося
+            // элемента НЕТ ни одного собственного свойства проверки, а свойства проверки
+            // (Command, Args…) лежат во вложенном объекте, который сам свойством проверки
+            // не является. Вложенный объект у настоящей проверки (свойство объектом, например
+            // «Env») живёт рядом с её собственными свойствами — такой набор собирается.
+            var ownProperties = child.GetChildren().Where(c => OptionPropertyNames.Contains(c.Key)).ToList();
+            if (ownProperties.Count == 0
+                && child.GetChildren().Any(c => c.GetChildren().Any()
+                    && !OptionPropertyNames.Contains(c.Key)
+                    && c.GetChildren().Any(g => OptionPropertyNames.Contains(g.Key))))
             {
                 problems.Add($"«{child.Key}» — вложенные ключи в {SectionName}:{ChecksKey}: имя проверки не может "
                     + "содержать «:» (например, «lint:design» → ключ «lint-design», а Name: \"lint:design\")");

@@ -160,17 +160,20 @@ public class TaskPregateServiceTests : IDisposable
         _pregate.Request.Should().NotBeNull("проверки запустились: потолок не сорвал прогон");
     }
 
-    // Правило границы целиком — тут: допустимое значение как есть, мусор — безопасный потолок
+    // Правило границы целиком — тут: допустимое значение как есть, мусор — безопасный потолок.
+    // Ожидаемый потолок берём из константы, а не вписываем числом: смена MaxSeconds не должна
+    // ронять набор красным «неявно» (без объяснения, что именно изменилось).
     [Theory]
     [InlineData(1, 1)]
-    [InlineData(540, 540)]
-    [InlineData(0, 540)]
-    [InlineData(-1, 540)]
-    [InlineData(541, 540)]
+    [InlineData(PregateCeiling.MaxSeconds, PregateCeiling.MaxSeconds)]
+    [InlineData(0, PregateCeiling.MaxSeconds)]
+    [InlineData(-1, PregateCeiling.MaxSeconds)]
+    [InlineData(PregateCeiling.MaxSeconds + 1, PregateCeiling.MaxSeconds)]
     public void ПотолокЧиститсяНаГраницеШва(int given, int expected)
     {
         PregateCeiling.Sanitize(given).Should().Be(expected);
     }
+
 
     [Fact]
     public async Task HeadСменилсяВоВремяПрогона_РезультатНеЗаписан()

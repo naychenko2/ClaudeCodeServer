@@ -355,4 +355,16 @@ public class PregateServiceTests : IDisposable
         services.Should().NotContain(s => s.ServiceType == typeof(ITaskPregate));
         services.Should().NotContain(s => s.ServiceType == typeof(PregateOptions));
     }
+
+    // Потолок прогона — одно число на продукт (Core, RunBudget.MaxSeconds): вертикаль TestRuns
+    // берёт его оттуда же. Иначе «540» жил бы в двух сборках и разошёлся бы молча.
+    [Fact]
+    public void ПотолокПрогона_СовпадаетСПотолкомШваПредгейта()
+    {
+        TestRunsOptions.DefaultCeilingSeconds.Should().Be(PregateCeiling.MaxSeconds,
+            "потолок вертикали TestRuns и потолок шва предгейта — одно число (Core, RunBudget)");
+        PregateCeiling.MaxSeconds.Should().Be(540,
+            "общий потолок прогона изменился: он обязан быть меньше MCP_TOOL_TIMEOUT хода (600 с) — "
+            + "иначе ответ модели не успеет уйти; обнови описание инструмента и этот тест");
+    }
 }

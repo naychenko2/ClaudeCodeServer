@@ -146,6 +146,26 @@ public class PregateOptionsTests
         options.Checks.Should().BeEmpty();
     }
 
+    // Списки ВНУТРИ проверки остаются массивами: .NET склеивает их между файлами по индексу,
+    // и «задать целиком» из Local нельзя. Правило записано в docs/architecture/conventions.md —
+    // этот тест доказывает, что оно правдиво, чтобы правило не разошлось с кодом молча.
+    [Fact]
+    public void СписокВнутриПроверки_СклеиваетсяПоИндексу_ИЦеликомНеПереопределяется()
+    {
+        var local = new JsonObject
+        {
+            // Переопределение существующей базовой проверки: Args короче базовых
+            ["tsc"] = new JsonObject { ["Args"] = new JsonArray("tsc") },
+        };
+
+        var options = PregateOptions.From(ConfigWithLocal(local));
+
+        var tsc = options.Checks.Single(c => c.Name == "tsc");
+        tsc.Args.Should().Equal(["tsc", "-b"],
+            "списки внутри проверки склеиваются по индексу: базовый хвост остаётся, задать список "
+            + "целиком из Local нельзя — свою проверку заводят под своим ключом");
+    }
+
     // Имя с «:» конфигурация разъехала бы по пути («lint:design» → «lint» → «design»):
     // такая проверка осталась бы без Command — ловим это при сборке набора
     [Fact]
@@ -159,5 +179,39 @@ public class PregateOptionsTests
         options.Problem.Should().NotBeNull();
         options.Problem.Should().Contain("«:");
         options.Checks.Should().BeEmpty();
+    }
+
+    // Признак ловушки — именно имя с двоеточием, а не «вложенный объект с нечисловыми
+    // ключами»: свойство проверки объектом (например «Env») собирается, а не отказывает.
+    // Без этого будущее свойство объектом убило бы весь набор с ложным диагнозом.
+    [Fact]
+    public void ВложенныйОбъектВСвойствеПроверки_НеСчитаетсяИменемСДвоеточием()
+    {
+        var options = PregateOptions.From(ConfigWithLocal(new JsonObject
+        {
+            [OwnCheckName] = new JsonObject
+            {
+                ["Command"] = "sh",
+                ["Env"] = new JsonObject { ["FOO"] = "1" },
+            },
+        }));
+
+        options.Problem.Should().BeNull(
+            "вложенный объект — это свойство проверки объектом, а не разъехавшееся по «:» имя");
+        options.Checks.Should().ContainSingle(c => c.Name == OwnCheckName);
+    }
+
+    // Даже когда у проверки нет ни одного собственного свойства, вложенный объект с чужими
+    // ключами (не свойствами проверки) — не разъезд имени
+    [Fact]
+    public void ВложенныйОбъектСЧужимиКлючами_НеСчитаетсяИменемСДвоеточием()
+    {
+        var options = PregateOptions.From(ConfigWithLocal(new JsonObject
+        {
+            [OwnCheckName] = new JsonObject { ["Env"] = new JsonObject { ["FOO"] = "1" } },
+        }));
+
+        options.Problem.Should().BeNull("признак ловушки — свойства проверки во вложенном объекте, а не любой вложенный объект");
+        options.Checks.Should().ContainSingle(c => c.Name == OwnCheckName);
     }
 }

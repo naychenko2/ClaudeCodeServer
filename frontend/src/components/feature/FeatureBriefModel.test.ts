@@ -306,6 +306,14 @@ describe('Оценка', () => {
     expect(briefEstimateText(brief({ kind: 'queued', elapsedMinutes: 25 })).fact).toBeNull();
   });
 
+  it('queueWaitMinutes = 0 — факта «в очереди 0 мин» нет (F12: бэк отдаёт 0 сознательно, та же болезнь нуля, что «идёт 0 мин»)', () => {
+    expect(briefEstimateText(brief({ kind: 'queued', queueWaitMinutes: 0 })).fact).toBeNull();
+    // меньше округляемой минуты — тоже не число (бэк режет целой частью, float не должен просачиваться)
+    expect(briefEstimateText(brief({ kind: 'queued', queueWaitMinutes: 0.4 })).fact).toBeNull();
+    // настоящая минута — настоящее число
+    expect(briefEstimateText(brief({ kind: 'queued', queueWaitMinutes: 1 })).fact).toBe('в очереди 1 мин');
+  });
+
   it('estimate с нулевым остатком — «≈ 0» не печатается', () => {
     const b = brief({ estimate: { remainingMinutes: 0, p25: 0, p75: 1, source: 'history', sampleSize: 4 } });
     const v = briefEstimateText(b);

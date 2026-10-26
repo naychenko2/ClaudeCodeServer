@@ -266,8 +266,12 @@ export function briefEstimateText(brief: FeatureBrief): BriefEstimateView {
     // queueWaitMinutes (бэк-шаг B8; R-F8): elapsedMinutes — объединение work-интервалов
     // (бэк: timeline.Totals.WorkWallMinutes), а у queued фичи их нет — число из него
     // всегда 0 и для очереди не используется никогда.
-    const qw = brief.queueWaitMinutes;
-    return { header: 'Оценка', main: 'Оценка — после старта', mainMuted: true, fact: qw != null ? `в очереди ${formatDuration(qw)}` : null };
+    // «в очереди 0 мин» — не факт: очередь короче округляемой минуты не число (F12: бэк
+    // отдаёт 0 сознательно — QueueWaitOf режет целой частью, «ровно в момент ответа — 0».
+    // Порог — тот же round, что у «идёт» выше.)
+    const qw = brief.queueWaitMinutes != null && Math.round(brief.queueWaitMinutes) > 0
+      ? `в очереди ${formatDuration(brief.queueWaitMinutes)}` : null;
+    return { header: 'Оценка', main: 'Оценка — после старта', mainMuted: true, fact: qw };
   }
 
   const est = brief.estimate;

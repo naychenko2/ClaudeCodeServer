@@ -2,24 +2,30 @@
 // компонент проверяется вместе с моделью, а не на руках нарисованных дорожках.
 //
 // Покрытие: 3 интервала → 3 button с ожидаемым aria-label и aria-haspopup; skipped →
-// «этапа не было» и 0 кнопок; left/width интервалов и пауз — ровно axisFrac; цвета по
-// состоянию (done/live/wait/stalled — по модели, не по догадке); риска C.danger только там,
-// где lastOutcome; пауза — пунктир между интервалами, не после последнего; «↩» — только у
-// prod; «ещё N» — только prod (продуктовое решение m1 GC-R-F2: у «Ревью» плана нет, факт —
-// «i из n» в aria-label); «впереди» — этап без работы, и его нет у закрытой фичи и при
-// approx; минимальная ширина 3 px не сдвигает left; shтрихованная зона «стоит» — только
+// «этапа не было», 0 кнопок и точечная линия по всей дорожке; left/width интервалов и
+// пауз — ровно axisFrac; цвета по состоянию (done/live/wait/stalled — по модели, не по
+// догадке); риска C.danger только там, где lastOutcome; пауза — пунктир между интервалами,
+// не после последнего; «↩» — только у prod; «ещё N» — только prod (продуктовое решение
+// m1 GC-R-F2: проверяется на ТРЁХ этапах — prod, review и ещё одном; у «Ревью» плана нет,
+// факт — «i из n» в aria-label); «впереди» — этап без работы, и его нет у закрытой фичи и
+// при approx; зона «впереди»/«ещё N» начинается ровно на axis.timeFrac — там, где
+// кончается живой интервал, и не наезжает на интервалы (время не показано дважды);
+// минимальная ширина 3 px не сдвигает left; shтрихованная зона «стоит» — только
 // когда на дорожке нет штрихованного интервала (не дважды); tabIndex и обработчики — пропсы.
 //
 // Мутации (в отчёте): (1) «ещё N» без условия prod → «план только у prod» красный;
 // (2) done красить accent → «цвета по состоянию» красный; (3) не рисовать паузу →
-// «пауза — пунктир» красный; (4) minWidth 0 → «минимальная ширина» красный.
+// «пауза — пунктир» красный; (4) minWidth 0 → «минимальная ширина» красный;
+// (5) «только prod» → «не review» → красный на третьем этапе (закрытие m5 GC-R-F5a);
+// (6) сдвинуть зону «впереди» левее timeFrac → «геометрия зоны» красный (m6);
+// (7) убрать точечную линию skipped → «линия skipped» красный (m7).
 
 import { act, createElement } from 'react';
 import { describe, it, expect, afterEach } from 'vitest';
 import { FeatureStageLane } from './FeatureStageLane';
-import { buildStageLanes, axisFrac, type StageLane, type StageLanesModel } from './FeatureLaneModel';
+import { buildStageLanes, axisFrac, type StageLanesModel } from './FeatureLaneModel';
 import { formatClock, formatDateTime, formatDuration } from './FeatureStatsBits';
-import type { FeatureRound, FeatureRun, FeatureStage, StageKey, StageState } from '../../types/featureRun';
+import type { FeatureRound, FeatureRun, FeatureStage, FeatureStageExecutor, StageKey, StageState } from '../../types/featureRun';
 import type { StepProgress } from '../../lib/featureProgress';
 import type { FeatureStats, FeatureTimeline, StageInterval } from '../../types/featureStats';
 import { installFakeDom, uninstallFakeDom, mount, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
@@ -100,6 +106,11 @@ function mkStats(
 
 function mkStepProgress(over: Partial<StepProgress> = {}): StepProgress {
   return { planState: 'partial', total: 8, accepted: 3, review: 1, work: 2, notCreated: 3, withdrawn: 0, unlinkedReworks: 0, ...over };
+}
+
+// Задача этапа для planFromExecutors (прочие стадии, не prod/review): status решает корзину.
+function mkExecutor(status: FeatureStageExecutor['status'], taskId: string): FeatureStageExecutor {
+  return { personaId: null, taskId, taskRole: null, stepRef: null, lane: null, status, chatId: null, chatArchived: false, modelLabel: null, modelFull: null };
 }
 
 // Основной набор: «Производство» с 3 интервалами (done, done с cancelled, live) и паузами 60/120 мин.
@@ -237,12 +248,16 @@ describe('FeatureStageLane: интервалы', () => {
 });
 
 describe('FeatureStageLane: состояния этапа', () => {
-  it('skipped → «этапа не было» и 0 кнопок', () => {
+  it('skipped → «этапа не было», 0 кнопок и точечная линия по всей дорожке (m7 GC-R-F5a)', () => {
     const model = buildStageLanes(mkRun({ stages: [mkStage('final', 'skipped')] }), mkStats({}), NOW);
     const { container } = renderLane(model, 'final', 'Финальное ревью');
     expect(textNodes(container).join(' ')).toContain('этапа не было');
     // Ни одной кнопки-интервала на skipped-дорожке.
     for (let i = 0; i < 5; i += 1) expect(findNodeByAttr(container, 'data-testid', `lane-interval-final-${i}`)).toBeNull();
+    // Точечная линия — маркер отсутствия этапа: 1 px dotted C.dashed по всей ширине дорожки.
+    const line = findNodeByAttr(container, 'data-testid', 'lane-skipped-line-final');
+    expect(line, 'точечной линии skipped нет').not.toBeNull();
+    expect(styleOf(line).borderTop, 'линия не пунктирная C.dashed').toBe(`1px dotted ${C.dashed}`);
   });
 
   it('approx (журнала нет) — пустая дорожка: ни интервалов, ни «впереди»', () => {
@@ -253,12 +268,37 @@ describe('FeatureStageLane: состояния этапа', () => {
     expect(textNodes(container).join(' ')).not.toContain('впереди');
   });
 
-  it('этап без работы (pending) — контур «впереди» словом, без числа', () => {
+  it('этап без работы (pending) — контур «впереди» словом, без числа, от axis.timeFrac', () => {
     const model = buildStageLanes(mkRun({ stages: [mkStage('merge', 'pending')] }), mkStats({}), NOW);
-    const { container } = renderLane(model, 'merge', 'Мерж');
+    const { container, axis } = renderLane(model, 'merge', 'Мерж');
     const ahead = findNodeByAttr(container, 'data-testid', 'lane-ahead-merge');
     expect(ahead, 'контура «впереди» нет').not.toBeNull();
     expect(textNodes(ahead!).join('')).toBe('впереди');
+    // Зона начинается ровно на axis.timeFrac — за живой частью оси она, а не поверх неё.
+    expect(parseFloat(styleOf(ahead!).left!), 'зона «впереди» не на axis.timeFrac').toBeCloseTo(axis.timeFrac * 100, 2);
+  });
+
+  it('зона «ещё N» начинается ровно на axis.timeFrac — на конце живого интервала, и не наезжает на интервалы (m6 GC-R-F5a)', () => {
+    // Живой интервал, дотянутый до «сейчас» (= правый край живой части оси).
+    const model = buildStageLanes(
+      mkRun({ stages: [mkStage('prod', 'active')], stepProgress: mkStepProgress() }),
+      mkStats({ prod: [mkInterval('2026-10-20T08:00:00Z', '2026-10-20T12:00:00Z', { live: true })] }),
+      NOW,
+    );
+    const { container, lane, axis } = renderLane(model, 'prod', 'Производство');
+    const zone = findNodeByAttr(container, 'data-testid', 'lane-ahead-prod');
+    expect(zone, 'зоны «ещё N» нет').not.toBeNull();
+    // Начало зоны = timeFrac = axisFrac конца живого интервала: зона стартует там, где
+    // интервал кончается. Сдвиг влево = зона поверх интервала = время дважды → красный.
+    const zoneLeft = parseFloat(styleOf(zone).left!);
+    expect(zoneLeft, 'зона не на axis.timeFrac').toBeCloseTo(axis.timeFrac * 100, 2);
+    const liveEnd = axisFrac(lane.intervals[lane.intervals.length - 1]!.to, axis) * 100;
+    expect(zoneLeft, 'зона не на конце живого интервала').toBeCloseTo(liveEnd, 2);
+    // Ни один интервал не заезжает под зону: правый край каждого — не правее начала зоны.
+    for (let i = 0; i < lane.intervals.length; i += 1) {
+      const s = styleOf(findNodeByAttr(container, 'data-testid', `lane-interval-prod-${i}`));
+      expect(parseFloat(s.left!) + parseFloat(s.width!), `интервал ${i} под зоной`).toBeLessThanOrEqual(zoneLeft + 1e-6);
+    }
   });
 
   it('у закрытой фичи зоны «впереди» нет (timeFrac = 1)', () => {
@@ -289,9 +329,16 @@ describe('FeatureStageLane: состояния этапа', () => {
 });
 
 describe('FeatureStageLane: план и возвраты', () => {
-  it('«ещё N» — только у «Производства»; у «Ревью» плана нет: ни «ещё», ни счётчика (решение m1 GC-R-F2)', () => {
+  it('«ещё N» — только у «Производства»: ни у «Ревью», ни у любого другого этапа (решение m1 GC-R-F2, m5 GC-R-F5a)', () => {
     const run = mkRun({
-      stages: [mkStage('prod', 'active'), mkStage('review', 'active')],
+      stages: [
+        mkStage('prod', 'active'),
+        mkStage('review', 'active'),
+        // Третий этап — не 'review' и не 'prod', работа уже шла (интервал есть) и у стадии
+        // есть план (pending-задача → plan.ahead > 0). Именно на нём краснеет проба
+        // «только prod → не review»: без него правило проверялось бы только против «Ревью».
+        mkStage('merge', 'active', { executors: [mkExecutor('pending', 't-m')] }),
+      ],
       stepProgress: mkStepProgress(),
     });
     const model = buildStageLanes(
@@ -299,12 +346,14 @@ describe('FeatureStageLane: план и возвраты', () => {
       mkStats({
         prod: [mkInterval('2026-10-20T01:00:00Z', '2026-10-20T03:00:00Z')],
         review: [mkInterval('2026-10-20T04:00:00Z', '2026-10-20T06:00:00Z')],
+        merge: [mkInterval('2026-10-20T07:00:00Z', '2026-10-20T07:30:00Z')],
       }),
       NOW,
     );
-    // Модель считает plan для обеих стадий — решение про показ принадлежит рендеру.
+    // Модель считает plan для всех трёх стадий — решение про показ принадлежит рендеру.
     expect(model.lanes.prod!.plan).not.toBeNull();
     expect(model.lanes.review!.plan).not.toBeNull();
+    expect(model.lanes.merge!.plan!.ahead).toBe(1);
 
     const { container } = renderLane(model, 'prod', 'Производство');
     const more = findNodeByAttr(container, 'data-testid', 'lane-ahead-prod');
@@ -318,6 +367,12 @@ describe('FeatureStageLane: план и возвраты', () => {
     expect(revTexts).not.toContain('3/8');
     // Факт у «Ревью» — в aria-label: «интервал 1 из 1».
     expect(findNodeByAttr(cRev, 'data-testid', 'lane-interval-review-0')!.getAttribute('aria-label')).toContain('интервал 1 из 1');
+
+    // Третий этап: модель план посчитала, интервал начат — и на дорожке всё равно нет
+    // планового контура: «ещё N» не едет ни на одну стадию кроме «Производства».
+    const { container: cMer } = renderLane(model, 'merge', 'Мерж');
+    expect(findNodeByAttr(cMer, 'data-testid', 'lane-ahead-merge'), 'у мержа плановый контур есть').toBeNull();
+    expect(textNodes(cMer).join(' ')).not.toContain('ещё');
   });
 
   it('«↩» возврата — над дорожкой prod в момент вердикта; на прочих этапах — нет', () => {

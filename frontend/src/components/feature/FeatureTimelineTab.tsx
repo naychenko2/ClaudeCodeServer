@@ -576,20 +576,28 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false, st
     if (!lane) return null;
     const iv = lane.intervals[index];
     if (!iv) return null;
-    // Кто ждёт — только из timeline.current (waiting): по нему и помечаем ждущую задачу.
+    // Кто ждёт — только из timeline.current (waiting). Но ждёт задача в том интервале,
+    // где она ЖИВЬЁМ ждёт: по правилу модели это интервал со state === 'wait' (живой
+    // хвост с ждущей задачей). Исторический интервал с тем же taskId — 'done', и
+    // ждущей он не был: помечать его «ждёт» — ложь (GC-F6R).
     const cur = stats?.timeline?.current ?? null;
     const waitingTaskId = cur && cur.kind === 'waiting' ? cur.taskId ?? null : null;
+    const waitingSince = cur && cur.kind === 'waiting' ? cur.since ?? null : null;
+    const isWaitInterval = iv.state === 'wait';
     const tasks: LaneTaskLine[] = (iv.taskIds ?? []).map(id => {
       const ex = execIndex.get(id);
       const task = taskMap.get(id);
       const persona = ex?.personaId ? getPersonaById(ex.personaId)?.name ?? null : null;
+      const waiting = isWaitInterval && !!waitingTaskId && id === waitingTaskId;
       return {
         taskId: id,
         title: task?.title ?? null,
         persona,
         model: ex?.modelLabel ?? ex?.modelFull ?? null,
         chatId: ex?.chatId ?? null,
-        waiting: !!waitingTaskId && id === waitingTaskId,
+        waiting,
+        // С какого момента задача ждёт (timeline.current.since) — только для ждущей.
+        waitingSince: waiting ? waitingSince : null,
       };
     });
     return {

@@ -49,8 +49,11 @@ export interface LaneTaskLine {
   persona: string | null;
   model: string | null;
   chatId: string | null;
-  // Задача ЖДАЛА ответа в этом интервале (опознана по timeline.current).
+  // Задача ЖДЁТ ответа В ЭТОМ интервале (опознана по правилу модели: state === 'wait').
+  // Исторический интервал с тем же taskId ждущей не был — там waiting = false.
   waiting: boolean;
+  // С какого момента задача ждёт (timeline.current.since) — только при waiting.
+  waitingSince: string | null;
 }
 
 export interface LaneIntervalDetails {
@@ -88,6 +91,8 @@ export function intervalTaskCountLabel(tasks: LaneTaskLine[]): string {
 
 // Состав интервала словами. Правда, а не «весь интервал ждал»: ждущая задача —
 // одна, остальные в этом же интервале работали.
+// Ждущая задача — та, что ЖИВЬЁМ ждёт в этом интервале (state === 'wait'), и про
+// неё говорим «ждёт с <время>»: без времени «ждала» читалось как вечное ожидание.
 export function intervalCompositionLines(details: LaneIntervalDetails): string[] {
   const lines: string[] = [intervalTaskCountLabel(details.tasks)];
   const hasWaiting = details.tasks.some(t => t.waiting);
@@ -95,8 +100,10 @@ export function intervalCompositionLines(details: LaneIntervalDetails): string[]
     const name = t.title ?? t.taskId;
     const who = [t.persona, t.model].filter(Boolean).join(' · ');
     const tail = who ? ` — ${who}` : '';
-    if (t.waiting) lines.push(`Ждала задача «${name}»${tail}`);
-    else if (hasWaiting) lines.push(`В этом же интервале работала задача «${name}»${tail}`);
+    if (t.waiting) {
+      const since = t.waitingSince ? formatClock(t.waitingSince) : '';
+      lines.push(`Задача «${name}» ждёт${since ? ` с ${since}` : ''}${tail}`);
+    } else if (hasWaiting) lines.push(`В этом же интервале работала задача «${name}»${tail}`);
     else lines.push(`Работала задача «${name}»${tail}`);
   }
   return lines;

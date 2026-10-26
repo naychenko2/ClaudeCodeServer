@@ -197,17 +197,18 @@ describe('FeatureLanePopover: слова и модель интервала (GC-
     expect(intervalStateWord('live', 'interrupted')).toBe('прервано');
   });
 
-  it('состав интервала — по taskIds: «ждала X, в этом же интервале работала Y», число задач явно', () => {
+  it('состав интервала — по taskIds: «X ждёт с времени, в этом же интервале работала Y», число задач явно', () => {
     const d = details({
       state: 'wait',
       tasks: [
-        { taskId: 't1', title: 'Ревью фичи', persona: 'Денис', model: 'Opus', chatId: null, waiting: true },
-        { taskId: 't2', title: 'Правки', persona: 'Кира', model: 'Qwen', chatId: null, waiting: false },
+        { taskId: 't1', title: 'Ревью фичи', persona: 'Денис', model: 'Opus', chatId: null, waiting: true, waitingSince: '2026-10-20T11:00:00Z' },
+        { taskId: 't2', title: 'Правки', persona: 'Кира', model: 'Qwen', chatId: null, waiting: false, waitingSince: null },
       ],
     });
     const lines = intervalCompositionLines(d);
     expect(lines[0]).toBe('Задач в интервале: 2');
-    expect(lines.join(' ')).toContain('Ждала задача «Ревью фичи»');
+    expect(lines.join(' ')).toContain('Задача «Ревью фичи» ждёт');
+    expect(lines.join(' '), 'время ожидания сказано').toMatch(/ждёт с \d{2}:\d{2}/);
     expect(lines.join(' ')).toContain('В этом же интервале работала задача «Правки»');
     expect(lines.join(' '), 'неправда про весь интервал').not.toContain('весь интервал ждал');
     expect(intervalTaskCountLabel(d.tasks)).toBe('Задач в интервале: 2');
@@ -218,7 +219,7 @@ describe('FeatureLanePopover: слова и модель интервала (GC-
   });
 
   it('мутация: убрать «Задач в интервале: N» → проверка чисел краснеет', () => {
-    const d = details({ tasks: [{ taskId: 't1', title: 'A', persona: null, model: null, chatId: null, waiting: false }] });
+    const d = details({ tasks: [{ taskId: 't1', title: 'A', persona: null, model: null, chatId: null, waiting: false, waitingSince: null }] });
     expect(intervalCompositionLines(d)[0]).toContain('Задач в интервале');
   });
 });
@@ -342,17 +343,50 @@ describe('FeatureLanePopover: поповер на дорожке (GC-F6)', () =>
     expect(mockBackNav.calls[0]?.[1]).toEqual({ kind: 'chat', id: 'chat-1' });
   });
 
-  it('«ждёт» — поповер говорит словами, кто ждал и кто работал в том же интервале', () => {
+  it('«ждёт» — поповер говорит словами, кто ждёт (и с какого времени) и кто работал в том же интервале', () => {
     const stats = mkStats({
       prod: [iv('2026-10-20T10:00:00Z', '2026-10-20T11:00:00Z', ['t-prod', 't-other'], true)],
-    }, { kind: 'waiting', taskId: 't-prod' });
+    }, { kind: 'waiting', taskId: 't-prod', since: '2026-10-20T10:30:00Z' });
     const c = renderTab(mkRun(), stats);
     fire(findNodeByAttr(c as never, 'data-testid', 'lane-interval-prod-0')! as never, 'onClick');
     const text = textNodes(inBody('lane-popover')! as never).join(' ');
     expect(text).toContain('ждёт');
     expect(text).toContain('Задач в интервале: 2');
-    expect(text).toContain('Ждала задача «Ревью фичи»');
+    expect(text).toContain('Задача «Ревью фичи» ждёт с');
     expect(text).toContain('В этом же интервале работала задача');
+  });
+
+  // === GC-F6R: ждущая задача в ЗАКРЫТОМ интервале — ждёт она там или нет ===
+  it('GC-F6R: закрытый интервал задачи, которая сейчас ждёт, говорит «работа завершена» + «Работала», без «ждёт»', () => {
+    const stats = mkStats({
+      prod: [
+        // Закрытый исторический интервал той же задачи (10:00–10:30) — ждала она
+        // тогда или нет, поповер этого интервала не должен врать про ожидание.
+        iv('2026-10-20T10:00:00Z', '2026-10-20T10:30:00Z', ['t-prod']),
+        // Живой хвост, где задача ждёт СЕЙЧАС.
+        iv('2026-10-20T10:30:00Z', '2026-10-20T11:00:00Z', ['t-prod'], true),
+      ],
+    }, { kind: 'waiting', taskId: 't-prod', since: '2026-10-20T10:30:00Z' });
+    const c = renderTab(mkRun(), stats);
+    fire(findNodeByAttr(c as never, 'data-testid', 'lane-interval-prod-0')! as never, 'onClick');
+    const text = textNodes(inBody('lane-popover')! as never).join(' ');
+    expect(text, 'закрытый интервал — работа завершена').toContain('работа завершена');
+    expect(text, 'задача в нём работала').toContain('Работала задача «Ревью фичи»');
+    expect(text, 'ожидания в закрытом интервале нет').not.toContain('ждёт');
+    expect(text).not.toContain('Ждала');
+  });
+
+  it('GC-F6R: живой интервал, где задача ждёт, говорит «ждёт с <время>»', () => {
+    const stats = mkStats({
+      prod: [
+        iv('2026-10-20T10:00:00Z', '2026-10-20T10:30:00Z', ['t-prod']),
+        iv('2026-10-20T10:30:00Z', '2026-10-20T11:00:00Z', ['t-prod'], true),
+      ],
+    }, { kind: 'waiting', taskId: 't-prod', since: '2026-10-20T10:30:00Z' });
+    const c = renderTab(mkRun(), stats);
+    fire(findNodeByAttr(c as never, 'data-testid', 'lane-interval-prod-1')! as never, 'onClick');
+    const text = textNodes(inBody('lane-popover')! as never).join(' ');
+    expect(text, 'живой интервал ждёт').toContain('Задача «Ревью фичи» ждёт с');
   });
 });
 

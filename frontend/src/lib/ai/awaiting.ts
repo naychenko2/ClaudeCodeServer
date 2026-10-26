@@ -10,6 +10,7 @@
 import { useSyncExternalStore } from 'react';
 import type { HomeSessionInfo } from '../../types';
 import { api } from '../api';
+import { readStoredUserId } from '../offline';
 import { onMessage, onReconnected, joinUser } from '../signalr';
 import { startVisiblePoll } from '../visiblePoll';
 
@@ -35,7 +36,7 @@ const emit = () => listeners.forEach(l => l());
 // Членство в user_{userId} — туда бэк шлёт status_changed по всем чатам владельца.
 // Повторный JoinUser для того же соединения безопасен (образец — lib/tasks.ts).
 function joinUserGroup() {
-  const uid = localStorage.getItem('cc_user_id') || sessionStorage.getItem('cc_user_id');
+  const uid = readStoredUserId();
   if (uid) joinUser(uid).catch(() => {});
 }
 

@@ -443,8 +443,6 @@ public sealed class TasksToolset(
                     // исполнителю менять критерии — в TaskManager.Update (здесь только разбор)
                     Acceptance: AcceptanceArg(arguments),
                     Evidence: EvidenceArg(arguments),
-                    // Сброс серии красных предгейта: решает постановщик, исполнителю TaskManager откажет
-                    ResetPregate: arguments["resetPregate"] is JsonValue rp && rp.TryGetValue<bool>(out var reset) && reset ? true : null,
                     PlanSteps: planSteps);
                 TaskItem updated;
                 try
@@ -1401,13 +1399,6 @@ public sealed class TasksToolset(
                     ["reviewOf"] = ReviewOfSchema(),
                     ["acceptance"] = AcceptanceSchema(),
                     ["evidence"] = EvidenceSchema(),
-                    ["resetPregate"] = new JsonObject
-                    {
-                        ["type"] = "boolean",
-                        // Предел суммы описаний параметров (McpToolsetStabilityTests, минор 1): с добавлением
-                        // featureNote формулировка сжата до сути — смысл гейта (TaskManager NC-P1b) не изменился
-                        ["description"] = "true — сбросить красную серию предгейта; только после исчерпанной серии, исполнителю откажет.",
-                    },
                     ["planSteps"] = PlanStepsSchema(),
                     ["featureNote"] = new JsonObject
                     {
@@ -1434,6 +1425,7 @@ public sealed class TasksToolset(
             "Пометить задачу выполненной (status → done) и сразу прикрепить итог: " +
             "resultMarkdown (что сделано) и linkedFiles (итоговые файлы). Для дефекта — " +
             "verification (кто проверил) или outcome (внутренний путь closedWithoutCheck). " +
+            "Шаг с деревом: перед закрытием прогони `pregate` — вердикт увидит ревьюер. " +
             "Это ТОЛЬКО смена статуса — исполнителя запускает tasks_run_executor.",
             new JsonObject
             {

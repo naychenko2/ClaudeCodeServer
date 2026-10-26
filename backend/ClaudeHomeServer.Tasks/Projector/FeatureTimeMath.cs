@@ -59,36 +59,36 @@ internal static class FeatureTimeMath
 
     // Метод наибольшего остатка (largest remainder): раздать `elapsed` целых минут по видам,
     // чтобы сумма была РОВНО `elapsed` при любом раскладе. Базис — floor(span) каждого вида;
-    // дефицит `elapsed − сумма floor` (0..4: сырые span-ы плиткой покрывают [from, to],
-    // поэтому их сумма = to − from, а elapsed = ceil(этого); дефицит = ceil(суммы дробных
-    // частей), а сумма дробных частей < 4 (четыре вида) → 0..4) раздаётся видам с наибольшей
+    // дефицит `elapsed − сумма floor` (0..n, n = число span-ов: они плиткой покрывают
+    // [from, to], поэтому их сумма = to − from, а elapsed = ceil(этого); дефицит = ceil(суммы
+    // дробных частей), а сумма дробных частей < n → 0..n) раздаётся видам с наибольшей
     // дробной частью (tie — по индексу, детерминизм). Каждый вид ≈ своему span, но сумма не
     // «уплывает» выше elapsed, как при независимых ceil (проба: ход 30 с + ожидание 20 с +
     // ошибка 10 с в окне 2 мин → независимые ceil дали 1+1+1+0 = 3 ≠ 2; здесь work=1,
     // waiting=0, error=0, idle=1 → сумма 2 = elapsed).
-    // Возвращает (work, waiting, error, idle) в порядке аргументов.
-    public static (int Work, int Waiting, int Error, int Idle) LargestRemainderMinutes(
-        int elapsed, TimeSpan work, TimeSpan waiting, TimeSpan error, TimeSpan idle)
+    // Возвращает минуты в порядке аргументов. Математика не знает, что это за виды:
+    // состав span-ов (work/waiting/…/queued) решает вызывающий.
+    public static int[] LargestRemainderMinutes(int elapsed, params TimeSpan[] spans)
     {
-        var spans = new[] { work, waiting, error, idle };
-        var floors = new int[4];
-        var fracs = new double[4];
-        for (var i = 0; i < 4; i++)
+        var n = spans.Length;
+        var floors = new int[n];
+        var fracs = new double[n];
+        for (var i = 0; i < n; i++)
         {
             floors[i] = (int)Math.Floor(spans[i].TotalMinutes);
             fracs[i] = spans[i].TotalMinutes - floors[i];
         }
-        var sumFloors = floors[0] + floors[1] + floors[2] + floors[3];
-        var deficit = elapsed - sumFloors; // 0..4 (см. комментарий выше)
+        var sumFloors = floors.Sum();
+        var deficit = elapsed - sumFloors; // 0..n (см. комментарий выше)
         // Индексы по убыванию дробной части; при равенстве — по индексу (детерминизм).
-        var order = Enumerable.Range(0, 4)
+        var order = Enumerable.Range(0, n)
             .OrderByDescending(i => fracs[i])
             .ThenBy(i => i)
             .ToList();
         var result = floors;
         for (var k = 0; k < deficit && k < order.Count; k++)
             result[order[k]]++;
-        return (result[0], result[1], result[2], result[3]);
+        return result;
     }
 
     // Объединение интервалов (обрезка к [from, to], если задано) → минуты по часам стены

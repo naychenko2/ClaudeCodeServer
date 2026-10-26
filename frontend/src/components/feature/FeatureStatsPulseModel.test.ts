@@ -3,8 +3,11 @@
 // Покрытие: четыре состояния героя (running/waiting/merged/few) и приоритет
 // (merged выше всех, waiting выше few); порог few — ровно FEW_DATA_MIN (30 мин —
 // уже не few); состав времени: порядок строк, проценты от elapsed, null-поля не
-// дают строки; плитки: 3 без spend, 4 со spend, токены — сумма всех четырёх
-// видов; потери: карточка 1 из longestWait (live при attention.kind='wait'),
+// дают строки; очередь (Q5F): с queuedMinutes — строка «в очереди» после простого,
+// без неё (null/0/нет поля) — прежнее; проценты округляются по частям — сумма может
+// дать 99 или 101; плитки: 3 без spend,
+// 4 со spend, токены — сумма всех четырёх видов; потери: карточка 1 из longestWait
+// (live при attention.kind='wait'),
 // карточка 2 — цепочка с максимальным loops (loops=0 — её нет), карточка 3 —
 // longestNow, у закрытой — этап с максимальным approxMinutes; пустая модель —
 // empty=true.
@@ -18,7 +21,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  FEW_DATA_MIN, pickHeroState, compositionRows, tilesModel, roundMarks, lossesModel,
+  FEW_DATA_MIN, pickHeroState, compositionRows, tilesModel, roundMarks, lossesModel, COMP_LABEL,
 } from './FeatureStatsPulseModel';
 import type { FeatureRun, FeatureStage, FeatureStepChain } from '../../types/featureRun';
 import type { FeatureStats, FeatureTimeline } from '../../types/featureStats';
@@ -168,6 +171,55 @@ describe('compositionRows', () => {
 
   it('elapsed 0 — пустой список', () => {
     expect(compositionRows(mkTotals({ workWallMinutes: 10 })).length).toBe(0);
+  });
+
+  // Q5F: очередь — самостоятельный пятый вид разряды (R-Q3B-2, коммит 6c659e527, ADR-031
+  // §«Время в очереди (queued)»): строка после простого; сумма видов = elapsed (контракт
+  // TimelineTotals) — минуты, не проценты.
+  it('очередь есть: строка «в очереди» после простого', () => {
+    const r = compositionRows(mkTotals({
+      elapsedMinutes: 400, workWallMinutes: 240, waitingMinutes: 60, idleMinutes: 60, errorMinutes: 20, queuedMinutes: 20,
+    }));
+    expect(r.map(x => x.kind)).toEqual(['work', 'waiting', 'idle', 'queued', 'error']);
+    // Метка очереди — из источника, не литералом: смена слова в COMP_LABEL меняет ожидание
+    // здесь и в тестах «Подробнее»/мини-сводки (они привязаны к тому же COMP_LABEL, Q5H-3).
+    expect(r.map(x => x.label)).toEqual(['работа', 'ждали вас', 'простой', COMP_LABEL.queued, 'ошибки']);
+    expect(r.map(x => x.minutes)).toEqual([240, 60, 60, 20, 20]);
+    expect(r.map(x => x.percent)).toEqual([60, 15, 15, 5, 5]);
+    expect(r.map(x => x.percentText)).toEqual(['60 %', '15 %', '15 %', '5 %', '5 %']);
+  });
+
+  // Q5H-3 (R-Q5H-1, находка 1): слово вида «очередь» — единый источник слов видов
+  // состава (в т.ч. слова очереди). Значение закреплено здесь (лексика согласована:
+  // макет docs/mockups/feature-queue-1.md, §«Подпись „в очереди · N из M“», «Состояния») —
+  // смена слова в COMP_LABEL красит этот тест, т. е. становится осознанным решением; при этом
+  // все места меняются вместе: состав героя (ниже), «Подробнее» (FeatureStatsTab.test) и
+  // мини-сводка (FeatureMiniSummary.test) сравнивают с тем же COMP_LABEL, а не с литералом.
+  it('сторож: слово очереди — единый источник, значение закреплено (Q5H-3)', () => {
+    expect(COMP_LABEL.queued).toBe('в очереди');
+    // Строка состава героя строится из него же (потребители в FeatureStatsTab/MiniSummary —
+    // в своих тестах, привязанных к той же константе).
+    const r = compositionRows(mkTotals({ elapsedMinutes: 100, queuedMinutes: 100 }));
+    expect(r.map(x => x.label)).toEqual([COMP_LABEL.queued]);
+  });
+
+  // Округление по частям — поведение старое (не регресс Q5F): сумма процентов может дать
+  // 101 % (17+17+33+17+17); ширина сегментов в StatsHero мерится минутами, не процентами.
+  it('проценты округляются по частям: сумма 101 % допустима', () => {
+    const r = compositionRows(mkTotals({
+      elapsedMinutes: 6, workWallMinutes: 1, waitingMinutes: 1, idleMinutes: 2, errorMinutes: 1, queuedMinutes: 1,
+    }));
+    expect(r.map(x => x.percent)).toEqual([17, 17, 33, 17, 17]);
+    expect(r.reduce((a, x) => a + x.percent, 0)).toBe(101);
+  });
+
+  it('очереди нет (null / 0 / поля нет): строки и проценты — прежние', () => {
+    const base = { elapsedMinutes: 400, workWallMinutes: 240, waitingMinutes: 60, idleMinutes: 60, errorMinutes: 20 };
+    for (const over of [{ queuedMinutes: null }, { queuedMinutes: 0 }, {}]) {
+      const r = compositionRows(mkTotals({ ...base, ...over }));
+      expect(r.map(x => x.kind)).toEqual(['work', 'waiting', 'idle', 'error']);
+      expect(r.map(x => x.percent)).toEqual([60, 15, 15, 5]);
+    }
   });
 });
 

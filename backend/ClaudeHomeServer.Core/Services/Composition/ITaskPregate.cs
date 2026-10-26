@@ -13,6 +13,26 @@ public interface ITaskPregate
     // проверка с фильтром WhenChanged пропускается, если ни один файл не подходит; null — фильтр
     // не применяется (идут все проверки)
     Task<PregateVerdict> RunAsync(PregateRequest request, CancellationToken ct);
+
+    // Потолок одного прогона, с. Потребитель ставит его ДО своих проверок дерева (git): бюджет
+    // хода (MCP_TOOL_TIMEOUT) должен считать и git, и проверки целиком, иначе сумма перевалит его.
+    // Потолок обязателен быть МЕНЬШЕ MCP_TOOL_TIMEOUT — ответ модели должен успеть уйти.
+    int CeilingSeconds { get; }
+}
+
+// Потолок прогона предгейта: значение, безопасное для CancelAfter и меньше MCP_TOOL_TIMEOUT
+// (600 с). Потребитель берёт потолок из шва, а шов — чужая реализация: значение вне (0; 540]
+// в CancelAfter не годится (0 — мгновенный отказ, отрицательное — исключение), а больше
+// MCP_TOOL_TIMEOUT нарушает инвариант «ответ модели должен успеть уйти».
+public static class PregateCeiling
+{
+    // Значение — из RunBudget (Core): общий потолок прогона, его берёт и вертикаль
+    // TestRuns. Меняем там.
+    public const int MaxSeconds = RunBudget.MaxSeconds;
+
+    // Допустимое значение — как есть; мусор (0, отрицательное, слишком большое) — безопасный
+    // потолок по умолчанию, а не исключение на ручке
+    public static int Sanitize(int seconds) => seconds is > 0 and <= MaxSeconds ? seconds : MaxSeconds;
 }
 
 // UiRoutes — маршруты для ui-probe из постановки задачи (строка «UI-маршруты: …»); пусто — замер невозможен

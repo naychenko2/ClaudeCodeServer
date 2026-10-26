@@ -60,6 +60,12 @@ export interface FeatureTimeline {
     errorCount: number | null;
     // Минут в ошибках; null — не считалось.
     errorMinutes: number | null;
+    // Минут «стояла в очереди фич» — самостоятельный пятый вид разряды (R-Q3B-2,
+    // ADR-031 §«Время в очереди (queued)»): бэк вычитает перекрытия очереди из
+    // work/waiting/error/idle, минуты queued у idleMinutes не отнимает; сумма видов
+    // остаётся равной elapsed. null — не считалось (approx). Опциональна: старые ответы
+    // бэка поля не несут.
+    queuedMinutes?: number | null;
   };
 }
 
@@ -73,6 +79,9 @@ export interface FeatureBreakdownGroup {
   tokens: number | null;
   // Стоимость (USD); null — не считалась.
   costUsd: number | null;
+  // Ценовой класс модели (free | cheap | expensive) — приходит с бэка; null —
+  // класс неизвестен, undefined — поле не пришло вовсе (старый ответ бэка).
+  tier?: string | null;
   // Чаты, к которым относится группа.
   chatIds: string[];
 }

@@ -17,6 +17,8 @@ public sealed record FeatureIndexSession(
 // ключевой чат помечает фронт по keySessionId (FeatureChatsTab).
 // modelLabel/modelFull — как у исполнителя (FeatureStageExecutor): «Авто»/короткая метка и
 // полное имя (для «Авто» — «Авто → {модель} (слот «{тир}»)»).
+// projectId — проект задачи этого чата (хвосты 5634609f п.26: переход «в задачу» берёт проект
+// эпика как приближение); null — у чата нет задачи фичи (curator/orchestrator) или задача личная.
 public sealed record FeatureChat(
     string Id,
     string Kind,
@@ -27,7 +29,8 @@ public sealed record FeatureChat(
     string? StepRef,
     string? Lane,
     string? ModelLabel,
-    string? ModelFull);
+    string? ModelFull,
+    string? ProjectId);
 
 // Индекс «чат → фичи» (GET /api/tasks/features/index, контракт С0 §1).
 // Б1 строит карту членства (Chats) и строки-заготовки фич (Features); Б2 дополнит строки
@@ -129,7 +132,9 @@ public sealed record FeatureIndexRow(
     DateTime? HoldSince,
     // W4-ANB (разрез §4): «тихо» — фича стоит без движения ≥ 24 часов (решение Андрея, 24.10).
     // Берётся из FeatureRun.Quiet (единая точка правды), не пересчитывается здесь.
-    bool Quiet);
+    bool Quiet,
+    // Очередь фич (волна 6): место в очереди проекта; null — фича не в очереди. Из FeatureRun.Queue.
+    FeatureQueueInfo? Queue = null);
 
 // Тревога фичи (контракт §1): kind: stopped | wait | merge; merge — только когда merge-задачи
 // нет (финал принят), reason у merge — null (на бэке, AttentionOf); sessionId — чат исполнителя

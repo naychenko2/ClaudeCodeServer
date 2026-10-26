@@ -91,6 +91,8 @@ public class TaskItem
     // (ClaudeResult) и D — Status=Done (tasks_complete/PUT). CAS TaskManager.TryMarkCompletionDelivered
     // гарантирует ровно одну доставку L0/Z-доклада вне зависимости от порядка их прихода.
     // НЕ переносится в SpawnNextOccurrence (как ClaudeResult — серия начинается заново).
+    // Сбрасывается при штатном переоткрытии (уход из Done через TaskManager.Update,
+    // расследование 88444536): переоткрытая для доработки карточка обязана исполняться снова.
     public bool CompletionDelivered { get; set; }
     // Markdown-описание итога выполнения (прикрепляет исполнитель через tasks_complete/
     // tasks_update). null — результата нет; "" — очищен. Не переносится в следующий
@@ -186,7 +188,7 @@ public class TaskItem
     public List<AcceptanceEvidence> Evidence { get => _evidence; set => _evidence = value ?? []; }
     private List<AcceptanceCriterion> _acceptance = [];
     // Последний результат предгейта шага (NC-P1b): кладёт только TaskManager.RecordPregate по вердикту
-    // ITaskPregate. Аддитивное поле: старые задачи читаются с null. Гейт закрытия шага — PregateRules
+    // ITaskPregate. Аддитивное поле: старые задачи читаются с null. Закрытие шага не блокирует — PregateRules
     public PregateRecord? Pregate { get; set; }
     private List<AcceptanceEvidence> _evidence = [];
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;

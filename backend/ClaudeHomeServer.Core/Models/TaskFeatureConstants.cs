@@ -41,6 +41,13 @@ public static class FeatureHoldReasons
     public const string Queue = "queue";
 }
 
+// Кто снял удержание фичи (поле by записи hold_cleared журнала): ручное снятие поля не пишет,
+// автоснятие очереди фич — Queue.
+public static class FeatureHoldBy
+{
+    public const string Queue = "queue";
+}
+
 // Исход витка (вердикт) ревью/проверки/финала.
 public static class TaskVerdicts
 {

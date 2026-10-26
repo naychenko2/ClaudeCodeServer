@@ -248,13 +248,13 @@ describe('JoinUser после смены аккаунта', () => {
   afterEach(() => { vi.unstubAllGlobals(); });
 
   it('реконнект зовёт JoinUser с текущим cc_user_id, а не с запомненным прежним', async () => {
-    localStorage.setItem('cc_user_id', 'admin');
+    localStorage.setItem('cc_token', 't'); localStorage.setItem('cc_user_id', 'admin');
     initWall('admin');
     await vi.advanceTimersByTimeAsync(0);
     (joinUser as ReturnType<typeof vi.fn>).mockClear();
 
     // смена аккаунта без F5: storage уже у нового пользователя, стор про это не знает
-    localStorage.setItem('cc_user_id', 'userB');
+    localStorage.setItem('cc_token', 't'); localStorage.setItem('cc_user_id', 'userB');
     const onRec = (onReconnected as ReturnType<typeof vi.fn>).mock.calls[0][0] as () => void;
     onRec();
     await vi.advanceTimersByTimeAsync(0);

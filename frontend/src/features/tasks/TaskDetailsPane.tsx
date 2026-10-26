@@ -30,6 +30,7 @@ import { FeatureBackChip } from '../../components/chat/FeatureBackChip';
 import { getBackNav, clearBackNav } from '../../lib/featureBackNav';
 import { TaskEditForm } from './TaskEditForm';
 import { AcceptanceBlock } from './AcceptanceBlock';
+import { PregateLine } from './PregateLine';
 import { TaskPersonaBadge } from './TaskPersonaBadge';
 import { ensurePersonasLoaded, getPersonaById, personaLabel } from '../../lib/personas';
 
@@ -652,6 +653,9 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
           <DefectVerificationBlock task={task} />
         </div>
       )}
+
+      {/* Строка «Предгейт»: только у шага/доработки (роль проверяет сам компонент) */}
+      <PregateLine task={task} />
 
       {/* Критерии приёмки: без acceptance секции нет */}
       {(task.acceptance?.length ?? 0) > 0 && (

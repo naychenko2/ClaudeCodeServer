@@ -16,6 +16,10 @@
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer.Tasks\ClaudeHomeServer.Tasks.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
+    <!-- TestKit (хвост RV-K-Q6-BOUND-1): перенесённые тесты очереди убирают temp-директории через
+         public-хелпер TestFs (resilient-уборка гонки с in-flight записью). По образцу Spend.Tests/
+         Llm.Tests: модульные тест-сборки ссылаются на TestKit ради его public-хелперов. -->
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit\ClaudeHomeServer.TestKit.csproj" />
     <!-- Main (шаг 2.1, оставлен): PersonaManager + namespace Controllers (Main)
          конструируются напрямую (TaskPersonaValidatorTests), хост НЕ поднимается
          (нет TestWebApplicationFactory) — прямая ссылка на Main обязательна. -->

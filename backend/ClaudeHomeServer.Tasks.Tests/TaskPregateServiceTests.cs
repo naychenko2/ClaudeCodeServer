@@ -28,7 +28,14 @@ public class TaskPregateServiceTests : IDisposable
         public Queue<string?> Heads { get; } = new();
         public bool? Clean { get; set; } = true;
         public IReadOnlyList<string>? Changed { get; set; } = ["frontend/a.tsx"];
-        public string? Head(string worktreePath) => Heads.Count > 1 ? Heads.Dequeue() : Heads.Peek();
+        // Задержка на git-проверке: имитация медленного дерева, чтобы проверить, что потолок
+        // прогона идёт ДО них (иначе сумма git + проверки перевалила бы MCP_TOOL_TIMEOUT)
+        public TimeSpan Delay { get; set; } = TimeSpan.Zero;
+        public string? Head(string worktreePath)
+        {
+            if (Delay > TimeSpan.Zero) Thread.Sleep(Delay);
+            return Heads.Count > 1 ? Heads.Dequeue() : Heads.Peek();
+        }
         public bool? IsClean(string worktreePath) => Clean;
         public IReadOnlyList<string>? ChangedFiles(string worktreePath) => Changed;
     }
@@ -37,10 +44,20 @@ public class TaskPregateServiceTests : IDisposable
     {
         public PregateRequest? Request { get; private set; }
         public IReadOnlyList<PregateCheckResult> Checks { get; set; } = [new PregateCheckResult("tsc", PregateStatus.Green)];
+        public int CeilingSeconds { get; set; } = 540;
+        // Ждать своего потолка: прогон возвращается ровно тогда, когда потребитель отменил
+        // токен (потолок истёк). Ждать по токену, а не спать фиксированное время: сон
+        // растягивал набор и ронял чужой тайминг-гейт.
+        public bool WaitCancellation { get; set; }
+        // Отказ шва (как у настоящей вертикали TestRuns при оборванном прогоне)
+        public string? Refusal { get; set; }
         public Task<PregateVerdict> RunAsync(PregateRequest request, CancellationToken ct)
         {
             Request = request;
-            return Task.FromResult(new PregateVerdict(Checks));
+            if (WaitCancellation) ct.WaitHandle.WaitOne(TimeSpan.FromSeconds(10));
+            return Task.FromResult(Refusal is { } refusal
+                ? PregateVerdict.Refused(refusal)
+                : new PregateVerdict(Checks));
         }
     }
 
@@ -68,7 +85,7 @@ public class TaskPregateServiceTests : IDisposable
         var root = Path.Combine(_dir, "proj");
         Directory.CreateDirectory(root);
         var project = _projects.Create("п", root, owner.Id, "tester");
-        _tasks = new TaskManager(config, heads: _reader);
+        _tasks = new TaskManager(config);
         var epic = _tasks.Create(project.Id, owner.Id, new CreateTaskRequest("эпик", Role: TaskRoles.Feature));
         _task = _tasks.Create(project.Id, owner.Id, new CreateTaskRequest("шаг", FeatureId: epic.Id, Role: TaskRoles.Step,
             StepRef: "B1", WorktreePath: _dir));
@@ -116,6 +133,78 @@ public class TaskPregateServiceTests : IDisposable
         _tasks.GetById(_task.Id)!.Pregate!.Sha.Should().Be(Sha1);
     }
 
+    // Потолок прогона ставится ДО git-проверок дерева: иначе сумма (git + проверки) считалась бы
+    // отдельно и могла перевалить MCP_TOOL_TIMEOUT хода. Медленное дерево съедает потолок —
+    // проверки тогда уже не запускаются.
+    [Fact]
+    public async Task ПотолокИстёкНаGitПроверках_ПроверкиНеЗапускались()
+    {
+        _pregate.CeilingSeconds = 1;
+        _reader.Delay = TimeSpan.FromSeconds(2);
+
+        var outcome = await Run();
+
+        outcome.Status.Should().Be(TaskPregateStatus.NotRun);
+        outcome.Text.Should().Contain("Потолок");
+        outcome.Text.Should().Contain("Потолок предгейта 1 с",
+            "видимый отказ по потолку обязан называть ПРИМЕНЁННЫЙ потолок: без числа исполнитель "
+            + "не отличит исчерпание бюджета от ошибки проверки");
+        _pregate.Request.Should().BeNull("проверки не запускались: потолок истёк на git-проверках");
+        _tasks.GetById(_task.Id)!.Pregate.Should().BeNull();
+    }
+
+    // Потолок потребителя истекает РАНЬШЕ потолка самой вертикали (часы идут до git-проверок
+    // дерева): в боевом пути в отказ уходит «предгейт остановлен», и без числа исполнитель
+    // не отличил бы исчерпание потолка от ошибки проверки. Отказ называет применённый потолок.
+    [Fact]
+    public async Task ПотолокИстёкВоВремяПрогона_ОтказНазываетПотолок()
+    {
+        _pregate.CeilingSeconds = 1;
+        _pregate.WaitCancellation = true;
+        _pregate.Refusal = "Предгейт остановлен (потолок предгейта — 1 с).";
+
+        var outcome = await Run();
+
+        outcome.Status.Should().Be(TaskPregateStatus.NotRun);
+        outcome.Text.Should().Contain("Потолок предгейта 1 с",
+            "видимый отказ по потолку обязан называть ПРИМЕНЁННЫЙ потолок");
+        _tasks.GetById(_task.Id)!.Pregate.Should().BeNull("потолок истёк — результат не записывается");
+    }
+
+    // Потолок из шва — чужая реализация: значение вне (0; 540] в CancelAfter не годится
+    // (0 — мгновенный отказ, отрицательное — исключение на ручке, больше MCP_TOOL_TIMEOUT —
+    // нарушение инварианта «ответ модели должен успеть уйти»). Чистится на границе шва.
+    // Задержка на git-проверке делает отказ мгновенным потолком детерминированным.
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    public async Task МусорныйПотолокИзШва_ПрогонНеПадает(int ceilingSeconds)
+    {
+        _pregate.CeilingSeconds = ceilingSeconds;
+        _reader.Delay = TimeSpan.FromMilliseconds(200);
+
+        var outcome = await Run();
+
+        outcome.Status.Should().Be(TaskPregateStatus.Recorded,
+            "потолок из шва чистится на границе: прогон идёт, а не отменяется и не роняет ручку");
+        _pregate.Request.Should().NotBeNull("проверки запустились: потолок не сорвал прогон");
+    }
+
+    // Правило границы целиком — тут: допустимое значение как есть, мусор — безопасный потолок.
+    // Ожидаемый потолок берём из константы, а не вписываем числом: смена MaxSeconds не должна
+    // ронять набор красным «неявно» (без объяснения, что именно изменилось).
+    [Theory]
+    [InlineData(1, 1)]
+    [InlineData(PregateCeiling.MaxSeconds, PregateCeiling.MaxSeconds)]
+    [InlineData(0, PregateCeiling.MaxSeconds)]
+    [InlineData(-1, PregateCeiling.MaxSeconds)]
+    [InlineData(PregateCeiling.MaxSeconds + 1, PregateCeiling.MaxSeconds)]
+    public void ПотолокЧиститсяНаГраницеШва(int given, int expected)
+    {
+        PregateCeiling.Sanitize(given).Should().Be(expected);
+    }
+
+
     [Fact]
     public async Task HeadСменилсяВоВремяПрогона_РезультатНеЗаписан()
     {
@@ -129,7 +218,7 @@ public class TaskPregateServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task ВсеПроверкиПропущены_ИзмененияВнеЗон_NotRunЗаписанЗакрытиеРазрешено()
+    public async Task ВсеПроверкиПропущены_ИзмененияВнеЗон_NotRunЗаписан()
     {
         _reader.Changed = ["docs/заметка.md"];
         _pregate.Checks =
@@ -162,7 +251,7 @@ public class TaskPregateServiceTests : IDisposable
         var outcome = await Run();
 
         outcome.Status.Should().Be(TaskPregateStatus.NotRun);
-        outcome.Text.Should().Contain("ui_probe 360/1280").And.Contain("Origin").And.Contain("закрыть шаг нельзя");
+        outcome.Text.Should().Contain("ui_probe 360/1280").And.Contain("Origin").And.Contain("результат не записан");
         _tasks.GetById(_task.Id)!.Pregate.Should().BeNull();
     }
 
@@ -177,6 +266,37 @@ public class TaskPregateServiceTests : IDisposable
 
         (await Run()).Status.Should().Be(TaskPregateStatus.Recorded);
         _tasks.GetById(_task.Id)!.Pregate!.Green.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ПослеДвухКрасныхПодряд_ПредгейтЗапускаетсяСнова()
+    {
+        _pregate.Checks = [new PregateCheckResult("tsc", PregateStatus.Red, "error TS2322")];
+        await Run();
+        await Run();
+        _tasks.GetById(_task.Id)!.Pregate!.RedStreak.Should().Be(2);
+
+        _pregate.Checks = [new PregateCheckResult("tsc", PregateStatus.Green)];
+        var outcome = await Run();
+
+        outcome.Status.Should().Be(TaskPregateStatus.Recorded, "третьего отказа «серия исчерпана» больше нет");
+        _tasks.GetById(_task.Id)!.Pregate!.Green.Should().BeTrue();
+    }
+
+    // Эскалация после второго красного — одна точка, серверная (PregateEscalated → ReportUpAsync).
+    // Текст вердикта не велит исполнителю звать chats_report_up: тогда красный предгейт
+    // эскалировался бы дважды (сервером и исполнителем).
+    [Fact]
+    public async Task ВторойКрасныйПодряд_ТекстНеВелитЭскалироватьСамому()
+    {
+        _pregate.Checks = [new PregateCheckResult("tsc", PregateStatus.Red, "error TS2322")];
+        await Run();
+
+        var outcome = await Run();
+
+        outcome.Text.Should().Contain("Второй красный подряд");
+        outcome.Text.Should().NotContain("chats_report_up",
+            "эскалация серверная: ещё и призыв исполнителю звать её — эскалация в двух точках");
     }
 
     [Fact]

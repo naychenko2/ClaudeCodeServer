@@ -9,7 +9,7 @@ import { api } from './api';
 import { joinUser, onMessage, onReconnected } from './signalr';
 import { C } from './design';
 import { getEffectiveTheme } from './themeMode';
-import { isOnline, OfflineError, subscribeOnline } from './offline';
+import { isOnline, OfflineError, readStoredUserId, subscribeOnline } from './offline';
 import { idbGet, idbSet } from './idb';
 import {
   applyUpdateLocally, buildLocalTask, configureOutbox, drainTaskOutbox,
@@ -63,7 +63,7 @@ function remove(taskId: string) {
 // task_changed шлётся в группу user_{userId} — вступаем в неё
 // (повторный JoinUser для того же соединения безопасен)
 function joinUserGroup() {
-  const uid = localStorage.getItem('cc_user_id') || sessionStorage.getItem('cc_user_id');
+  const uid = readStoredUserId();
   if (uid) joinUser(uid).catch(() => {});
 }
 

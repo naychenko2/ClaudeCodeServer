@@ -143,7 +143,10 @@ public class TasksController(
     TaskPregateService? pregate = null,
     // W4-ANB (разрез §4): авторезюме фичи по кнопке. null — подсистема Tasks выключена
     // (гейт тот же, что у features) → честный 503, не 500 (ADR-014).
-    FeatureSummaryService? summary = null) : ControllerBase
+    FeatureSummaryService? summary = null,
+    // Очередь фич (волна 6): пересчёт очереди проекта после постановки/снятия удержания.
+    // null — подсистема Tasks выключена (тот же гейт, что у features) → пересчёта нет.
+    FeatureQueueService? queue = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -673,7 +676,8 @@ public class TasksController(
         // только если в нём (fail-closed: удалённый/чужой чат → null). Лента считается по
         // ПОЛНОМУ run: reason вердикта = Verification.Notes, который Slim обнуляет для
         // списков/ответа (контракт master). run в ответе облегчён (SlimRun) — тот же контракт.
-        var all = FeatureProjector.BuildEvents(run, snapshot);
+        var journalResult = journal?.Read(UserId, featureId);
+        var all = FeatureProjector.BuildEvents(run, snapshot, journalResult?.Entries);
         var eventsTotal = all.Count;
         var events = all.Take(ResolveEventsLimit(eventsLimit)).ToList();
         // Б-pl: документы фичи (вкладка «Планы и макеты») — СПИСОК (без текста) по ПОЛНОМУ run
@@ -703,7 +707,6 @@ public class TasksController(
         // (StartsWithCreated && !Truncated) → timeline в точном режиме (work/waiting/error/idle)
         // и модели breakdown из журнала; иначе approx (по задачам). Выключенный журнал →
         // source=approx, не 500 (Read сам не бросает: fail-closed на кривой id/отсутствие файла).
-        var journalResult = journal?.Read(UserId, featureId);
         var journalComplete = journalResult is { StartsWithCreated: true, Truncated: false };
         // Б6: breakdown (разрезы по персонам/моделям/ролям) + longestNow («дольше всех сейчас») —
         // тоже по ПОЛНОМУ run, на том же снимке владельца (fail-closed) и now. Журнал полный →
@@ -926,8 +929,10 @@ public class TasksController(
     // только человек — сервисный токен (typ=svc) получает 403 на обе ручки. Эти ручки только
     // пишут поле эпика и записи журнала held/hold_cleared; прерывание идущих ходов — шаг D.
     // Fail-closed: 503 (подсистема выключена), 404 (нет/чужой/кривой id — тело как у GET),
-    // 400 (неизвестный reason), 409: merged/closed/merging; draft после первого запуска шага;
-    // manual/queue поверх существующего draft; DELETE без удержания. POST 200 — тело
+    // 400 (неизвестный reason), 409: merged/closed/merging; queue для merge_pending
+    // (FeatureQueuePolicy.QueueDenied — тот же список, что QUEUE_DENIED фронта);
+    // draft после первого запуска шага; manual/queue поверх существующего draft; DELETE без
+    // удержания. POST 200 — тело
     // { interrupted: [taskId] } (контракт :364, W4-HOLD-D2): прерванные этой паузой задачи.
 
     // Тело POST hold: reason — словарь FeatureHoldReasons (draft | manual | queue).
@@ -963,13 +968,24 @@ public class TasksController(
             && reason != FeatureHoldReasons.Queue)
             return BadRequest(new { error = "Неизвестный reason удержания: " + reason });
 
+        // Очередь (волна 6, решение 19.10 п. 5): фичу, которая уже уступила слот или завершена,
+        // в очередь не ставят — иначе merge_pending уходит в paused и тревога мержа исчезает.
+        // Единственное выражение правила — FeatureQueuePolicy.QueueDenied; тот же список, что
+        // QUEUE_DENIED на фронте (FeaturePageHeader.tsx), расхождение ловится тестом
+        // FeatureQueuePolicyTests.QueueDenied_Совпадает_СФронтовымQUEUE_DENIED. Для merged/
+        // closed/merging до этой ветки уже стоит общий отказ выше — ветка полная, чтобы
+        // правило жило в одном месте.
+        if (reason == FeatureHoldReasons.Queue && FeatureQueuePolicy.QueueDenied(run))
+            return Conflict(new { error = "Фича уже уступила слот или завершена: в очередь она не ставится" });
+
         // Draft — черновик: фичу готовят, до первого запуска шага (решение 23.10: «только до
         // первого запуска шага, иначе 409»). Тот же предикат anyStarted, что в проекторе.
         if (reason == FeatureHoldReasons.Draft && FeatureAnyStarted(featureId))
             return Conflict(new { error = "Draft только до первого запуска шага" });
-        // Manual/queue поверх draft: фича не начиналась — останавливать нечего, черновик
-        // снимают clear, а не переклейкой в паузу.
-        if (reason != FeatureHoldReasons.Draft && run.Epic.Hold?.Reason == FeatureHoldReasons.Draft)
+        // Manual поверх draft: фича не начиналась — останавливать нечего, черновик снимают clear,
+        // а не переклейкой в паузу. Queue поверх draft разрешён (волна 6): «поставить в очередь»
+        // — штатный путь черновика, фича встаёт в очередь проекта вместо немедленного запуска.
+        if (reason == FeatureHoldReasons.Manual && run.Epic.Hold?.Reason == FeatureHoldReasons.Draft)
             return Conflict(new { error = "Фича в черновике: ручное удержание поверх draft" });
 
         var epic = tasks.SetHold(featureId, reason);
@@ -997,6 +1013,9 @@ public class TasksController(
         // но набор interrupted пересчитывается: guard только на записи Hold, цикл пометки
         // живёт на каждом вызове — ходы, начатые после первой паузы, добавляются.
         var after = features.Project(featureId, UserId);
+        // Очередь проекта: черновик, ставший queue, и пауза на слоте меняют занятость — пересчёт
+        // (сбой внутри сервиса глотается: ответ ручки от него не зависит).
+        if (queue is not null) await queue.RebalanceAsync(UserId, epic.ProjectId);
         return Ok(new { interrupted = after?.Interrupted ?? [] });
     }
 
@@ -1046,80 +1065,21 @@ public class TasksController(
 
         var run = features.Project(featureId, UserId);
         if (run is null) return NotFound(new { error = "Фича не найдена" });
-        if (run.Epic.Hold is null)
+        // Тело снятия (подсчёт resumed/expired, вещание, продолжение ходов, повтор после
+        // сбоя продолжения) — один общий метод сервиса: другой копии у ручки быть не должно.
+        var release = await executor.ReleaseFeatureHold(featureId, UserId, run.Epic.Hold);
+        // Освободившийся слот (снята пауза/черновик — занятость фичи изменилась): очередь проекта
+        // пересчитывается и после неуспешного исхода — пересчёт идемпотентен.
+        if (queue is not null) await queue.RebalanceAsync(UserId, run.Epic.ProjectId);
+        return release.Outcome switch
         {
-            // W4-SEAM R1 (тупик после сбоя продолжения): если доставка продолжения упала
-            // (catch в ResumeFeatureTurnsAfterHold), шаг остаётся помеченный feature_held при
-            // уже снятом Hold: карточка «шаг ждёт снятия паузы», фича stopped, а повторный
-            // DELETE hold давал бы 409 «снимать нечего» — тупик. Если такие шаги есть,
-            // повторное снятие не 409, а повтор продолжения: метод идемпотентен по пометке.
-            // Причина снятой паузы из состояния не восстанавливается — карточка повторяется
-            // в общей формулировке (manual).
-            var stuck = tasks.GetByOwner(UserId).Any(t => t.FeatureId == featureId
-                && t.Status == TaskItemStatus.InProgress
-                && t.ExecutorStopReason == ExecutorStopClassifier.FeatureHeldReason);
-            if (!stuck) return Conflict(new { error = "Фича не удержана: снимать нечего" });
-            _ = executor.ResumeFeatureTurnsAfterHold(featureId, UserId, FeatureHoldReasons.Manual);
-            // W4-SEAM2 (хвост R-SEAM2 п.2): пустые resumed/expired здесь неотличимы от
-            // «нечего делать» — ответ повтора помечается явно: продолжение повторено,
-            // а не «паузы не было».
-            return Ok(new { resumed = new List<string>(), expired = new List<string>(), repeated = true });
-        }
-
-        // W4-HOLD-H (контракт §1, :368): ответ — пробуждение очереди, а не эпик. Состав считается
-        // ДО снятия паузы (находка R-HOLD-H): пока Hold активен, FeatureHoldRefusal не-null ровно
-        // для задач, которым запуск блокирует пауза — это и есть те, кому снятие открывает запуск.
-        // После ClearHold гейт тавтологически «разрешает» и предикат перестал бы фильтровать.
-        // expired — те, чьё ожидание устройства просрочено потолком (общий предикат
-        // ProjectCapabilities.DeviceWaitExpired, как в sweep TaskExecutionService); закрытые не
-        // пробуждаются — как в GetDeviceWaiting. Форма — как у hold: списки id. Эпик в выборку
-        // не входит (FeatureId == null): его никто не запускает.
-        var now = DateTime.UtcNow;
-        var resumed = new List<string>();
-        var expired = new List<string>();
-        foreach (var t in tasks.GetByOwner(UserId))
-        {
-            if (t.FeatureId != featureId || t.Status == TaskItemStatus.Done) continue;
-            if (ProjectCapabilities.DeviceWaitExpired(t, now))
-                expired.Add(t.Id);
-            else if (tasks.FeatureHoldRefusal(t) is not null)
-                resumed.Add(t.Id);
-        }
-
-        // Дефект bec00347: формулировка карточки зависит от причины удержания — её берут из
-        // снимка run, собранного проектором до ClearHold (:910): у живого эпика после снятия
-        // Hold уже null.
-        var holdReason = run.Epic.Hold!.Reason;
-        var epic = tasks.ClearHold(featureId);
-        if (epic is null)
-        {
-            // Дефект 06aae1bf (гонка): снимок run (:923) взят при активном Hold, а конкурент
-            // успел снять его до этого ClearHold — фича на месте, требование уже выполнено
-            // победителем. 404 «Фича не найдена» здесь вводит в заблуждение: ответ — 200 с
-            // пустыми списками (пробуждение очереди — на стороне победителя). 404 остаётся
-            // только если эпик реально исчез (удалён между снимком и снятием).
-            if (tasks.GetById(featureId) is null) return NotFound(new { error = "Фича не найдена" });
-            return Ok(new { resumed = new List<string>(), expired = new List<string>() });
-        }
-        // Дефект c41d7e02 (возврат QA): снятие паузы молчал — страница фичи оставалась «на
-        // паузе» до ручной перезагрузки: task_changed вещает только сервис продолжений по
-        // ПРОДОЛЖЕНным шагам (TaskExecutionService.cs:1343), а если прерванных не было —
-        // нечего продолжать, вещания нет вовсе. Тот же формат, что у постановки (:897):
-        // task_changed("updated") по эпику — с снятым Hold проектор считает состояние
-        // не-пауза, экран уходит с «на паузе» живьём.
-        await broadcaster.ToOwner(UserId, new TaskChangedMessage("updated", epic));
-        // W4-HOLD-D (контракт §1, :231): снятие паузы возвращает отнятое — прерванные ходы
-        // продолжаются в своих сессиях, карточка уходит оркестратору в ключевой чат при любом
-        // снятии (W4-HOLD-K): draft — «фича запущена», без продолженных — «пауза снята, запуски
-        // разрешены». Ответ не меняется: resumed/expired — пробуждение очереди (R-HOLD-H),
-        // продолженные шаги в неё не входят (они уже в работе).
-        // R-HOLD-D (п.1): продолжение — фон: ответ не ждёт чатов. Сбой локализован в сервисе:
-        // каждая ветка продолжения обёртана и логируется там (TaskExecutionService.cs:1233,
-        // :1247, :1263, DeliverKeyChatCardAsync :1374), поэтому ручка вызов не оборачивает:
-        // после W4-HOLD-J сервис на известных путях не бросает, обёртка ручки была мёртвым
-        // покрытием (R-HOLD-K2 п.1).
-        _ = executor.ResumeFeatureTurnsAfterHold(featureId, UserId, holdReason);
-        return Ok(new { resumed, expired });
+            FeatureHoldReleaseOutcome.NotHeld => Conflict(new { error = "Фича не удержана: снимать нечего" }),
+            FeatureHoldReleaseOutcome.NotFound => NotFound(new { error = "Фича не найдена" }),
+            FeatureHoldReleaseOutcome.Repeated => Ok(new { resumed = release.Resumed, expired = release.Expired, repeated = true }),
+            FeatureHoldReleaseOutcome.Released => Ok(new { resumed = release.Resumed, expired = release.Expired }),
+            // Новый исход без явной ветки не должен молча стать «успехом» с пустыми списками.
+            _ => throw new InvalidOperationException($"Неизвестный исход снятия удержания: {release.Outcome}"),
+        };
     }
 
     // Любая задача фичи хоть раз запускалась — «первый запуска шага» состоялся. Тот же состав
@@ -1580,9 +1540,10 @@ public class TasksController(
         }
     }
 
-    // Предгейт шага (NC-P1b): прогон проверок в дереве шага, зелёный результат с sha коммита пишется
-    // в задачу, без него шаг с деревом не закрыть (tasks_complete и PUT). Вызов синхронный: ответ — когда
-    // проверки кончились. 409 — прогон не применим или не состоялся, текст отказа в error
+    // Предгейт шага (NC-P1b): прогон проверок в дереве шага, результат с sha коммита пишется
+    // в задачу — его видит ревьюер; закрытие шага (tasks_complete и PUT) он не блокирует.
+    // Вызов синхронный: ответ — когда проверки кончились.
+    // 409 — прогон не применим или не состоялся, текст отказа в error
     [HttpPost("{taskId}/pregate")]
     public async Task<IActionResult> RunPregate(string taskId, CancellationToken ct)
     {

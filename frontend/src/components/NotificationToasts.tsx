@@ -12,6 +12,7 @@ import { X } from 'lucide-react';
 import { C, FONT, FS, R, SP, SHADOW, Z } from '../lib/design';
 import { ICON_STROKE } from './ui/icons';
 import { useGenSheetRaised } from '../lib/genSheet';
+import { readStoredUserId } from '../lib/offline';
 import { joinUser, onMessage, onReconnected } from '../lib/signalr';
 import { loadUnreadCount, loadUnreadSticky, markRead } from '../lib/notifications';
 import type { LocalToast, ToastAction } from '../lib/toast';
@@ -61,7 +62,7 @@ function avatarKind(t: ToastItem): string {
 let nextId = 1;
 
 function joinUserGroup() {
-  const uid = localStorage.getItem('cc_user_id') || sessionStorage.getItem('cc_user_id');
+  const uid = readStoredUserId();
   if (uid) joinUser(uid).catch(() => {});
 }
 

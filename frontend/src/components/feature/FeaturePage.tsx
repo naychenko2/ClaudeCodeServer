@@ -148,7 +148,9 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
   const glyph: GlyphKind = display ? display.kind : 'run';
   let tag: FeatureRunTag | null = null;
   if (page.status === 'ok' && page.page.run.state) {
-    tag = featureRunStatusTag(page.page.run.state, activeStageName(page.page.run));
+    tag = featureRunStatusTag(page.page.run.state, activeStageName(page.page.run), {
+      holdReason: page.page.run.hold?.reason, queue: page.page.run.queue,
+    });
   } else if (feature) {
     tag = toRunTag(featureStatusTag(feature));
   }

@@ -482,6 +482,28 @@ public class FallbackLlmSessionAdapterTests
         error.Text.Should().Contain("Попробуйте позже или выберите другую модель в настройках чата.");
     }
 
+    // Инцидент 2026-10-26: на «acc-b» × opus висела пометка пары от отказа в ЧУЖОМ чате, а
+    // «acc-a» упёрся в лимит. Без цепочки ход падал сразу, хотя acc-b тянула модель: пометка —
+    // наблюдение, и последним шансом уровня 1 живая помеченная пара всё же пробуется.
+    [Fact]
+    public async Task ЛимитПодписки_СоседняяСПометкойПары_ПробуетсяПоследнимШансом()
+    {
+        var pool = BuildPool("acc-a", "acc-b");
+        pool.MarkModelUnavailable("acc-b", "opus", FallbackErrorClass.ModelNoAccess);
+        var (sut, inner) = BuildSut(pool, model: "opus", provider: "acc-a", chain: ["opus"]);
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));
+
+        await sut.SendMessageAsync("сделай что-нибудь");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts[1].Provider.Should().Be("acc-b");
+        Downstream().OfType<ResultMessage>().Should().ContainSingle()
+            .Which.Subtype.Should().Be("success");
+        pool.IsModelUnavailable("acc-b", "opus").Should().BeFalse("успешный ход снял пометку пары");
+    }
+
     // Волна 2: потолок подмен тратится только на смену ТИПА поставщика (шаг цепочки), а
     // ротации подписок пула бесплатны. Поэтому потолок проверяется на цепочке сторонних
     // провайдеров (каждый шаг — отдельная подмена), а не на ротациях пула.

@@ -23,7 +23,7 @@ import { AiLauncher } from './components/ai/AiLauncher'
 import { OPEN_GLOBAL_SEARCH_EVENT } from './lib/ai/actions'
 import { resetAiAwaiting } from './lib/ai/awaiting'
 import { PRODUCT_HISTORY_EVENT, productHistorySeenKey } from './components/HubHeader'
-import { initConnectivity, invalidateTokenCache } from './lib/offline'
+import { initConnectivity, invalidateTokenCache, readStoredToken, readStoredUserId } from './lib/offline'
 import { installSelectionScopes } from './lib/selectionScope'
 import { LoadingScreen } from './components/ui/LoadingScreen'
 import { recordRecentProject } from './lib/pinnedProjects'
@@ -47,6 +47,7 @@ import { setAllFlags, useFeatureFlagsRefresh } from './lib/featureFlags'
 import { SUBSYSTEMS, isSubsystemEnabled, setAllSubsystems, useSubsystem } from './lib/subsystems'
 import { getSubsystem, getSubsystemTab } from './lib/subsystems/registry'
 import { setMeFromServer, clearMe, useMe } from './lib/defaultPersona'
+import { wireTabOwnerGuard } from './lib/tabOwnerGuard'
 import { IntroChatPage, ProjectIntroChatPage, OPEN_INTRO_EVENT } from './features/onboarding/OnboardingPage'
 import { getWallReturn, isWallActive, setWallActive, setWallReturn } from './lib/wallMode'
 import { useWallFocusProject, resetWallOwner } from './features/wall/wallStore'
@@ -146,13 +147,13 @@ if (initialHash?.screen === 'telemetry' && initialHash.incidentFingerprint) {
 export default function App() {
   // Авторизация — из localStorage (постоянно) или sessionStorage (saveKey=false)
   const [auth, setAuth] = useState<AuthState | null>(() => {
-    const token = localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token')
+    const token = readStoredToken()
     if (!token) return null
     const url = localStorage.getItem('cc_server_url') || window.location.origin
     const username = localStorage.getItem('cc_username') || ''
     const displayName = localStorage.getItem('cc_display_name') || undefined
-    const role = localStorage.getItem('cc_role') || sessionStorage.getItem('cc_role') || undefined
-    const id = localStorage.getItem('cc_user_id') || sessionStorage.getItem('cc_user_id') || undefined
+    const role = sessionStorage.getItem('cc_role') || localStorage.getItem('cc_role') || undefined
+    const id = readStoredUserId() ?? undefined
     return { serverUrl: url, token, username, displayName, role, id }
   })
   // Если токен восстановлен из localStorage — ждём ответа сервера перед показом контента,
@@ -161,7 +162,7 @@ export default function App() {
   const floatingVideo = useVideoStage()
 
   const [authChecking, setAuthChecking] = useState<boolean>(() => {
-    return !!(localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
+    return !!readStoredToken()
   })
   // Открытый проект — восстанавливаем из localStorage, чтобы рефреш возвращал туда, где был.
   // Состояние внутри проекта (активный чат/файл/панели) восстанавливает сама WorkspacePage.
@@ -268,7 +269,7 @@ export default function App() {
       // Ключ per-user (актуальный id на момент открытия), чтобы на одном устройстве
       // у разных аккаунтов была своя отметка.
       try {
-        const uid = localStorage.getItem('cc_user_id') || sessionStorage.getItem('cc_user_id') || undefined
+        const uid = readStoredUserId() ?? undefined
         localStorage.setItem(productHistorySeenKey(uid), new Date().toISOString())
       } catch { /* ignore */ }
     }
@@ -580,6 +581,11 @@ export default function App() {
     window.addEventListener('cc-unauthorized', onUnauthorized)
     return () => window.removeEventListener('cc-unauthorized', onUnauthorized)
   }, [])
+
+  // Вкладка принадлежит одному владельцу: смена входа в соседней вкладке — перезагрузка
+  // или выход (lib/tabOwnerGuard.ts). Пока никто не вошёл, сторожить нечего.
+  const signedIn = !!auth
+  useEffect(() => (signedIn ? wireTabOwnerGuard() : undefined), [signedIn])
 
   // Сидируем стек истории под восстановленное состояние, чтобы кнопки «назад/вперёд»
   // работали и после перезагрузки/диплинка (а не выкидывали из приложения сразу).

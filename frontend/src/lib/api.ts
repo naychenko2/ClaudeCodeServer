@@ -1,5 +1,5 @@
 import type { Me, Project, ProjectGroup, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, ModelUnavailableMark, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap, VideoFavoritesResponse, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult, SphereOverview, DeleteSphereResponse, SphereMemoryResponse, SphereMemoryEntry, SphereMemoryType } from '../types';
-import { cachedToken, invalidateTokenCache, readStoredToken, request } from './offline';
+import { cachedToken, readStoredToken, request, writeStoredToken } from './offline';
 import type { FeatureRun } from '../types/featureRun';
 import type { FeaturesIndex, FeaturePage } from '../types/featureIndex';
 import { forgetChatContextSession } from './chatContext/forget';
@@ -588,13 +588,10 @@ function gq(projectId: string, sep: '?' | '&' = '?'): string {
 }
 
 // Перезапись cc_token после смены пароля: старый токен сервер отозвал, а хранилище
-// выбирает не вызывающий — оно задано галкой «запомнить меня» на входе (localStorage
-// против sessionStorage). Пишем туда, где токен уже лежит, режим входа не меняем.
+// выбирает не вызывающий — токен пишется туда, откуда его читает readStoredToken.
 export function setStoredToken(token: string) {
   if (typeof window === 'undefined') return;
-  if (localStorage.getItem('cc_token') !== null) localStorage.setItem('cc_token', token);
-  else sessionStorage.setItem('cc_token', token);
-  invalidateTokenCache();
+  writeStoredToken(token);
 }
 
 // === Плагины владельца (ADR-031, вертикаль ClaudeHomeServer.Plugins) ===
@@ -3230,9 +3227,7 @@ export const api = {
   //   400 → текст пуст или больше потолка (256 КБ)
   plans: {
     buildMap: async (plan: string): Promise<PlanMap | null> => {
-      const token = typeof localStorage !== 'undefined'
-        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
-        : null;
+      const token = readStoredToken();
       const res = await fetch('/api/plans/map', {
         method: 'POST',
         headers: {

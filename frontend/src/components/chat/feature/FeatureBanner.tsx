@@ -4,7 +4,7 @@ import { useFeature, FLAGS } from '../../../lib/featureFlags';
 import { useFeaturesIndex, featureOf } from '../../../lib/featuresIndex';
 import { useFeatureRuns, useFeatureRunsLoading, useFeatureRunsError } from '../../../lib/featureRuns';
 import { openChatById } from '../../../lib/openChat';
-import { STAGE_NAME } from '../../../lib/chatGroups';
+import { STAGE_NAME, queueLabelParts } from '../../../lib/chatGroups';
 import { CHAT_ROLE_LABEL } from '../../../lib/featureChatRole';
 import { roleLabel } from '../../../lib/roleLabel';
 import { getPersonaById } from '../../../lib/personas';
@@ -13,6 +13,7 @@ import { FeatureBannerSheet } from './FeatureBannerSheet';
 import { statusPhrase, uniquePersonaNames } from './pillModel';
 import { stepProgressFromIndex, formatStepProgress } from '../../../lib/featureProgress';
 import type { FeatureIndexFeature, FeatureChatLink, FeatureRailKey, FeatureRailState, FeatureRailTone } from '../../../types/featureIndex';
+import type { FeatureQueue } from '../../../types/featureRun';
 
 // Плашка фичи в чате — ОДНА КОМПАКТНАЯ СТРОКА (макет feature-banner-1, вариант «А · Строка»
 // + кликабельные точки этапов из «Г · Мини-хронология»; записка Майи 20.10, решения Андрея).
@@ -71,8 +72,19 @@ function activeStageName(f: FeatureIndexFeature): string | null {
 //   running → «{этап} · {идущие}» (имена — nowPersonaIds индекса, фолбэк now0.personaId);
 //   waiting → «{этап} · ждёт вас»; stopped → «стоит · {имя}» (имя — из тревоги);
 //   merged → «смержена» (без даты, как в пилюле); merge_pending → «Мерж · ждёт согласия»;
-//   merging → «Мерж · идёт»; closed → «закрыта»; not_started/idle — своё слово.
-function whereText(f: FeatureIndexFeature): string {
+//   merging → «Мерж · идёт»; closed → «закрыта»; not_started/idle — своё слово;
+//   paused+queue → «В очереди · N из M» (волна 6): ТЕКСТ — из общего хелпера
+//   queueLabelParts (chatGroups, R-Q5C-A/R-Q5D-B/R-Q5D-E): в потребителях нет своей
+//   копии формата «N из M» и разбора строки; holdReason/queue — поля строки индекса,
+//   позицию считает бэк.
+// Возвращает { bold, post } — как модель statusPhrase: leading-слово и суффикс.
+function whereParts(f: FeatureIndexFeature): { bold: string; post: string } {
+  // Очередь (R-Q5D-E): берём ГОТОВЫЕ части из хелпера («В очереди» + « · 2 из 3» | «») —
+  // строку подписи не разбираем (формат меняется только в хелпере).
+  if (f.state === 'paused' && f.holdReason === 'queue') {
+    const p = queueLabelParts(f.queue);
+    return { bold: p.bold, post: p.post };
+  }
   const stage = activeStageName(f);
   // «Идут»: уникальные id из индекса (nowPersonaIds; фолбэк — now0.personaId).
   const nowIds = (f.nowPersonaIds && f.nowPersonaIds.length > 0)
@@ -81,11 +93,10 @@ function whereText(f: FeatureIndexFeature): string {
   // merging: имя из attention.personaId недостижимо (при state=merging тревоги нет,
   // FeatureProjector.cs:1663) — подпись остаётся «Мерж · идёт» без имени; имя потребует
   // поля merge.personaId в строке индекса (бэк-шаг).
-  const p = statusPhrase(f.state, stage, {
+  return statusPhrase(f.state, stage, {
     running: uniquePersonaNames(nowIds),
     stopped: f.attention?.personaId ? (getPersonaById(f.attention.personaId)?.name ?? '') : '',
-  });
-  return `${p.bold}${p.post}`;
+  }, { holdReason: f.holdReason, queue: f.queue });
 }
 
 // Тон текста «где мы»: тревога (wait/stop) — цветная, иначе обычный.
@@ -156,8 +167,16 @@ export interface FeatureBannerRow {
   glyph: GlyphKind;
   dots: StageDot[];
   // «Где мы»: слова из statusPhrase (общий источник с пилюлей): «{этап} · {идущие}»,
-  // «{этап} · ждёт вас», «стоит · {имя}», «смержена» и т.д.
+  // «{этап} · ждёт вас», «стоит · {имя}», «смержена», «В очереди · N из M» и т.д.
   where: string;
+  // Разбивка подписи — leading-слово и суффикс (очередь: «В очереди» + « · 2 из 3»,
+  // текст — из queueLabel; прочие состояния — из statusPhrase). РЕНДЕРИТСЯ разбивкой
+  // только в не-тревожных состояниях (whereTone run): leading — <b> цвета C.textHeading,
+  // суффикс — рядом с рядом (макет feature-queue-1.html:423, .ban .ph b). В тревожных
+  // (wait/stop) рендерится целая `where` тоном span'а (R-Q5D-C, макет баннера).
+  // `where` (bold+post) — для aria и точных текстов.
+  whereBold: string;
+  wherePost: string;
   whereTone: 'wait' | 'stop' | 'run';
   action: BannerAction;
   role: string;
@@ -166,11 +185,14 @@ export interface FeatureBannerRow {
 
 export function featureBannerRow(f: FeatureIndexFeature, link: FeatureChatLink, sessionId: string): FeatureBannerRow {
   const { role, isKey } = roleOf(f, link, sessionId);
+  const p = whereParts(f);
   return {
     tone: bannerTone(f),
     glyph: bannerGlyph(f),
     dots: stageDots(f),
-    where: whereText(f),
+    where: `${p.bold}${p.post}`,
+    whereBold: p.bold,
+    wherePost: p.post,
     whereTone: whereTone(f),
     action: mainAction(f),
     role,
@@ -194,9 +216,13 @@ function toneStyle(tone: BannerTone): React.CSSProperties {
   }
 }
 
-// Цвет активной точки по tone (макет .dots i.a.*): wait → C.info, stop → C.danger,
-// run/loop → C.textHeading. tone null у active — редкость, дефолт (textHeading).
-function activeDotColor(tone: FeatureRailTone | null): string {
+// Цвет активной точки (макет .dots i.a.*, feature-queue-1.html:193 .rail i.a.q):
+// очередь (фича в очереди) → C.textMuted — тон очереди = тон паузы, приглушение то же,
+// что у плашки группы (FeatureRail, решение постановщика по RV-K-Q5E); иначе по tone:
+// wait → C.info, stop → C.danger, run/loop → C.textHeading. tone null у active —
+// редкость, дефолт (textHeading).
+function stageDotColor(tone: FeatureRailTone | null, inQueue: boolean): string {
+  if (inQueue) return C.textMuted;
   switch (tone) {
     case 'wait': return C.info;
     case 'stopped': return C.danger;
@@ -212,26 +238,33 @@ const DOT = 6;
 const DOT_ACTIVE = 16;
 const DOT_R = 3;
 
-// Точка этапа: done — зелёная, active — вытянутая в цвет тона, pending — дорожка,
-// absent — пунктирный контур. Кликабельные (done/active) — <button>, ведут на страницу
-// фичи (вкладка «Хронология», к этому этапу); pending/absent — <i> (не кликабельны).
+// Точка этапа: done — зелёная, active — вытянутая в цвет тона (фича в очереди —
+// приглушённая C.textMuted, R-Q5D-B), pending — дорожка, absent — пунктирный контур.
+// Кликабельные (done/active) — <button>, ведут на страницу фичи (вкладка
+// «Хронология», к этому этапу); pending/absent — <i> (не кликабельны).
 // data-testid — у КАЖДОЙ точки (и <i>, и <button>): тест отличает кликабельную от
 // «впереди» по тегу элемента, а не по наличию testid.
-function StageDotView({ dot, onOpen }: { dot: StageDot; onOpen: (key: FeatureRailKey) => void }) {
+function StageDotView({ dot, onOpen, inQueue = false, queue = null }: {
+  dot: StageDot;
+  onOpen: (key: FeatureRailKey) => void;
+  inQueue?: boolean;
+  queue?: FeatureQueue | null;
+}) {
   const base: React.CSSProperties = { display: 'block', height: DOT, borderRadius: DOT_R, flexShrink: 0 };
   let style: React.CSSProperties;
   if (dot.state === 'done') style = { ...base, width: DOT, background: C.success };
-  else if (dot.state === 'active') style = { ...base, width: DOT_ACTIVE, background: activeDotColor(dot.tone) };
+  else if (dot.state === 'active') style = { ...base, width: DOT_ACTIVE, background: stageDotColor(dot.tone, inQueue) };
   else if (dot.state === 'absent') style = { ...base, width: DOT, background: 'transparent', boxShadow: `inset 0 0 0 1px ${C.dashed}` };
   else if (dot.state === 'skipped') style = { ...base, width: DOT, background: C.bgInset };
   else style = { ...base, width: DOT, background: C.progressTrack };
 
   if (!dot.clickable) return <i data-testid={`feature-dot-${dot.key}`} aria-hidden="true" style={style} />;
+  const ariaLabel = `Этап: ${STAGE_NAME[dot.key]}${dot.state === 'active' && inQueue ? queueLabelParts(queue).ariaSuffix : ''}`;
   return (
     <button
       type="button"
       data-testid={`feature-dot-${dot.key}`}
-      aria-label={`Этап: ${STAGE_NAME[dot.key]}`}
+      aria-label={ariaLabel}
       title={STAGE_NAME[dot.key]}
       onClick={() => onOpen(dot.key)}
       style={{ ...style, border: 'none', padding: 0, cursor: 'pointer', position: 'relative' }}
@@ -344,6 +377,9 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
 
   const model = featureBannerRow(feature, link, sessionId);
   const more = Math.max(0, entries.length - 1);
+  // Фича в очереди (holdReason=queue): точки приглушены, aria активной — с позицией
+  // (R-Q5D-B, feature-queue-1.html:421-422).
+  const inQueue = feature.state === 'paused' && feature.holdReason === 'queue';
 
   // «Фича →» / клик по точке: страница фичи на вкладке «Хронология» (cc-open-feature;
   // WorkspacePage слушает, fromChat — крошка «← К чату «…»»). stage — подсказка для Ф-pl-b.
@@ -397,7 +433,18 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
         cursor: 'pointer',
       }}
     >
-      {model.where}
+      {/* R-Q5D-C (главное замечание RV-K-Q5D-B): разбивка по макету .ban .ph b —
+          ТОЛЬКО в не-тревожных состояниях (whereTone run): leading-слово — <b> цвета
+          textHeading, суффикс — обычным начертанием (feature-queue-1.html:423).
+          Тревожные (wait/stop) — целая фраза одним элементом тоном span'а
+          (C.info / C.dangerText, 600): макет баннера feature-banner-1.html:526 +
+          .va .ph — тревога читается тревогой, а не обычной фразой с выделенным словом. */}
+      {model.whereTone === 'run' ? (
+        <>
+          <b style={{ color: C.textHeading }}>{model.whereBold}</b>
+          {model.wherePost}
+        </>
+      ) : model.where}
     </span>
   );
 
@@ -433,7 +480,7 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
       style={{ display: 'inline-flex', alignItems: 'center', gap: 3, flexShrink: 0 }}
     >
       {model.dots.map(dot => (
-        <StageDotView key={dot.key} dot={dot} onOpen={k => openFeaturePage(k)} />
+        <StageDotView key={dot.key} dot={dot} onOpen={k => openFeaturePage(k)} inQueue={inQueue} queue={feature.queue} />
       ))}
     </span>
   );

@@ -4,9 +4,13 @@
 // Окружение node (без jsdom): getPersonaById — мок (hoisted-карта id→имя).
 // Чистая функция: рендер компонента (TurnPlanPill) — в TurnPlanPill.test.ts.
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { FeatureNow, FeatureRun, FeatureStage, FeatureTask } from '../../../types/featureRun';
+import type { FeatureNow, FeatureQueue, FeatureRun, FeatureStage, FeatureTask } from '../../../types/featureRun';
 import { buildPillModel } from './pillModel';
+import { featureRunStatusTag } from '../../feature/FeatureStatusTag';
+import { queueLabelParts } from '../../../lib/chatGroups';
 
 // Стор персон (lib/personas) — мок: hoisted-карта id→имя.
 const { personaMap } = vi.hoisted(() => ({ personaMap: new Map<string, string>() }));
@@ -180,6 +184,123 @@ describe('buildPillModel: 9 состояний (макет S[state].pill)', () =
     expect(m.pre).toBe('фича · ');
     expect(m.bold).toBe('закрыта');
     expect(m.post).toBe('');
+  });
+});
+
+// ── Очередь фич (волна 6, feature-queue-1): «В очереди · N из M» ──────────────
+// Пауза с причиной queue — тот же тон, тревоги нет (макет feature-queue-1, таблица
+// «Подпись»). Позицию считает бэк (run.queue), фронт только показывает.
+
+describe('buildPillModel: очередь фич (holdReason=queue)', () => {
+  it('queue {2,3} → «фича · В очереди · 2 из 3», нейтральный', () => {
+    const m = buildPillModel([run({
+      state: 'paused',
+      hold: { reason: 'queue', since: '2026-10-25T10:00:00Z' },
+      queue: { position: 2, length: 3 },
+    })], false, null)!;
+    expect(m.state).toBe('paused');
+    expect(m.tone).toBe('neutral');
+    expect(m.pre).toBe('фича · ');
+    expect(m.bold).toBe('В очереди');
+    expect(m.post).toBe(' · 2 из 3');
+    expect(m.ariaExtra).toBeNull();
+  });
+
+  it('queue не пришёл (бэк ещё не отдал) → «В очереди» без цифр', () => {
+    const m = buildPillModel([run({ state: 'paused', hold: { reason: 'queue' } })], false, null)!;
+    expect(m.bold).toBe('В очереди');
+    expect(m.post).toBe('');
+  });
+
+  it('holdReason=manual → прежние значения: не очередь (даже с queue в данных)', () => {
+    const m = buildPillModel([run({
+      state: 'paused',
+      hold: { reason: 'manual', since: '2026-10-25T10:00:00Z' },
+      queue: { position: 2, length: 3 },
+    })], false, null)!;
+    // Поведение прежней паузы (запасной путь модели) — задача Q5D его не меняет;
+    // главное: подпись очереди не протекла в manual.
+    expect(m.bold).not.toContain('В очереди');
+    expect(m.post).not.toContain('из');
+    expect(m.bold).toBe('Не начата');
+    expect(m.pre).toBe('');
+  });
+});
+
+// ── R-Q5D-A: единый источник подписи очереди (пилюля = тег) ───────────────────
+// Текст формата «N из M» — из общего хелпера queueLabel (chatGroups): пилюля и тег
+// статуса для одной очереди дают побайтно один текст. Пилюля набирает leading-слово
+// с большой (макет .tpp .x b) — сравниваем текст, регистр leading-слова — вопрос
+// рендера, не источника.
+
+describe('R-Q5D-A: подпись пилюли = подпись тега (один источник — queueLabel)', () => {
+  // Текст очереди из модели пилюли: leading-слово в нижний регистр + суффикс как есть.
+  const pillLabel = (m: NonNullable<ReturnType<typeof buildPillModel>>): string =>
+    m.bold.charAt(0).toLowerCase() + m.bold.slice(1) + m.post;
+
+  it('«в очереди · 5 из 7» — пилюля и тег побайтно равны', () => {
+    const m = buildPillModel([run({
+      state: 'paused',
+      hold: { reason: 'queue', since: '2026-10-25T10:00:00Z' },
+      queue: { position: 5, length: 7 },
+    })], false, null)!;
+    const tag = featureRunStatusTag('paused', null, { holdReason: 'queue', queue: { position: 5, length: 7 } });
+    expect(pillLabel(m)).toBe(tag.label);
+    expect(pillLabel(m)).toBe('в очереди · 5 из 7');
+  });
+
+  it('queue не пришёл: «в очереди» без цифр — так же, как тег', () => {
+    const m = buildPillModel([run({ state: 'paused', hold: { reason: 'queue' } })], false, null)!;
+    const tag = featureRunStatusTag('paused', null, { holdReason: 'queue' });
+    expect(pillLabel(m)).toBe(tag.label);
+    expect(pillLabel(m)).toBe('в очереди');
+  });
+});
+
+// ── R-Q5D-F: пилюля на структурный API хелпера (RV-K-Q5D-B, минор 3) ────────────
+// statusPhrase (общий источник слов пилюли и плашки) для очереди берёт ГОТОВЫЕ части
+// queueLabelParts: жирное слово и суффикс. В пилюле нет своей константы «В очереди»,
+// своей копии формата «N из M» и разбора строки по разделителю — третий источник
+// формулировки не мог вернуться. Тот же образец, что плашка (R-Q5D-E).
+// Мутация (в отчёте): вернуть разбор строки и зашитое слово в statusPhrase →
+// сторож исходника краснеет.
+
+describe('R-Q5D-F: части пилюли = структура queueLabelParts', () => {
+  it('bold и post пилюли = queueLabelParts(queue).bold/.post побайтно', () => {
+    const q: FeatureQueue = { position: 5, length: 7 };
+    const parts = queueLabelParts(q);
+    const m = buildPillModel([run({
+      state: 'paused',
+      hold: { reason: 'queue', since: '2026-10-25T10:00:00Z' },
+      queue: q,
+    })], false, null)!;
+    expect(m.bold).toBe(parts.bold);
+    expect(m.post).toBe(parts.post);
+    expect(m.bold + m.post).toBe(`${parts.bold}${parts.post}`);
+  });
+
+  it('queue не пришёл: части без цифр — ровно как у хелпера', () => {
+    const parts = queueLabelParts(null);
+    const m = buildPillModel([run({ state: 'paused', hold: { reason: 'queue' } })], false, null)!;
+    expect(m.bold).toBe(parts.bold);
+    expect(m.post).toBe(parts.post);
+    expect(m.post).toBe('');
+  });
+
+  it('в исходнике пилюли нет разбора строки подписи и нет доступа к строке целиком', () => {
+    const src = readFileSync(fileURLToPath(new URL('./pillModel.ts', import.meta.url)), 'utf8');
+    // Запрещаем ПРАВИЛО, а не конкретное написание: иначе возврат старой реализации
+    // (слово из кусков + разбор через split) проходит мимо сторожа.
+    expect(src, 'пилюля разбирает строку подписи по разделителю').not.toMatch(/\.(split|slice|substring|substr|indexOf|lastIndexOf)\(/);
+    expect(src, 'пилюля берёт строку подписи вместо частей').not.toMatch(/\.label\b/);
+    expect(src, 'пилюля берёт строку подписи вместо частей (хелпер)').not.toMatch(/\bqueueLabel\(/);
+  });
+
+  it('в исходнике пилюли нет своей копии формулировки очереди', () => {
+    const src = readFileSync(fileURLToPath(new URL('./pillModel.ts', import.meta.url)), 'utf8');
+    // Комментарии вырезаем: запрет по СОДЕРЖАНИЮ кода, а не по его написанию.
+    const code = src.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(code, 'пилюля не зашивает свою копию формулировки очереди').not.toMatch(/очеред/i);
   });
 });
 

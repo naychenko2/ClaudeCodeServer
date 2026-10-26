@@ -417,6 +417,15 @@ function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb, handlers }: {
   );
 }
 
+// Тестовый хук (хвост п.28, карточка 790595bd): держит замыкания обработчиков записи
+// (handleSave/handleDelete/handleRevert) последнего рендера. Из UI для файла из дерева чата
+// они не вызываются — их держат гейты рендера canEdit/canDelete/canRevert, — а гард
+// `fromRoot` внутри обязан держать любой будущий вызов; тест зовёт их напрямую.
+// Паттерн — как `__test`-экспорт в hooks/useSession.ts.
+export type WriteActionHooks = { save: () => Promise<boolean>; del: () => Promise<void>; revert: () => Promise<void> };
+const writeHooks: { current: WriteActionHooks | null } = { current: null };
+export const __test = { writeHooks };
+
 export function FileViewer({ project, filePath, onClose, onToggleFullscreen, fullscreen, isMobile, onOpenSidebar, initialTab, gitStagePath, scrollToLine, onOpenFile, scrollToAnchor, onFileBack, onFileForward, canFileBack, canFileForward, onTocChange, changedBy, onOpenChat, sessionId }: Props) {
   const online = useOnline();
   // Подсистема заметок выключена: vault-рендер (NoteView), редактор заметки, граф
@@ -878,6 +887,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     e instanceof OfflineError ? 'Действие недоступно офлайн' : fallback;
 
   const handleSave = async (): Promise<boolean> => {
+    // Файл из дерева чата только для чтения: запись ушла бы в корень проекта (п.28)
+    if (!fromRoot) return false;
     try {
       await api.files.saveContent(project.id, filePath, editContent);
       setFileContent(prev => prev ? { ...prev, content: editContent } : prev);
@@ -894,6 +905,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   };
 
   const handleDelete = async () => {
+    // Файл из дерева чата только для чтения: удаление снесло бы корневой файл (п.28)
+    if (!fromRoot) return;
     try {
       await api.files.delete(project.id, filePath);
       onClose();
@@ -904,6 +917,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   };
 
   const handleRevert = async () => {
+    // Файл из дерева чата только для чтения: откатил бы корневой файл, а не показанный (п.28)
+    if (!fromRoot) return;
     try {
       await api.files.revert(project.id, filePath);
       const r = await api.files.getContent(project.id, filePath, undefined, sessionId ? { sessionId } : undefined);
@@ -918,6 +933,10 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       setActionError(mutationErrorText(e, 'Не удалось откатить файл'));
     }
   };
+
+  // Тестовый хук (п.28): держим замыкания обработчиков записи актуальными на каждый рендер —
+  // тест должен звать текущее (fromRoot в нём — значение этого рендера).
+  useEffect(() => { writeHooks.current = { save: handleSave, del: handleDelete, revert: handleRevert }; }, [handleSave, handleDelete, handleRevert]);
 
   // === Зернистый stage хунков/строк (файл открыт из git-«Изменений» как unstaged) ===
 

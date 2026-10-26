@@ -755,3 +755,96 @@ describe('display-состояние: гистерезис и тихий воз�
     expect(fn).toHaveBeenCalledTimes(3); // отписались — уведомлений нет
   });
 });
+
+describe('readStoredToken / readStoredUserId: «сначала своё»', () => {
+  it('свой токен в sessionStorage побеждает чужой в localStorage', () => {
+    vi.stubGlobal('localStorage', storageStub({ cc_token: 'чужой', cc_user_id: 'u-b' }));
+    vi.stubGlobal('sessionStorage', storageStub({ cc_token: 'свой', cc_user_id: 'u-a' }));
+
+    expect(offline.readStoredToken()).toBe('свой');
+    expect(offline.readStoredUserId()).toBe('u-a');
+  });
+
+  it('нет своего — читается общий localStorage («запомнить меня»)', () => {
+    vi.stubGlobal('localStorage', storageStub({ cc_token: 'общий', cc_user_id: 'u-b' }));
+    vi.stubGlobal('sessionStorage', storageStub());
+
+    expect(offline.readStoredToken()).toBe('общий');
+    expect(offline.readStoredUserId()).toBe('u-b');
+  });
+
+  it('мусорный id ("null") приравнивается к отсутствию', () => {
+    vi.stubGlobal('sessionStorage', storageStub({ cc_token: 'свой', cc_user_id: 'null' }));
+    vi.stubGlobal('localStorage', storageStub());
+
+    expect(offline.readStoredUserId()).toBeNull();
+  });
+
+  it('токен в sessionStorage без id там же, id в localStorage — id неизвестен, не чужой', () => {
+    vi.stubGlobal('sessionStorage', storageStub({ cc_token: 'токен-A' }));
+    vi.stubGlobal('localStorage', storageStub({ cc_token: 'токен-B', cc_user_id: 'u-b' }));
+
+    expect(offline.readStoredToken()).toBe('токен-A');
+    expect(offline.readStoredUserId()).toBeNull();
+  });
+
+  it('окружение без sessionStorage — токен читается из localStorage', () => {
+    vi.stubGlobal('localStorage', storageStub({ cc_token: 'общий' }));
+    vi.stubGlobal('sessionStorage', undefined);
+
+    expect(offline.readStoredToken()).toBe('общий');
+  });
+
+  it('окружение без localStorage — токен читается из sessionStorage', () => {
+    vi.stubGlobal('localStorage', undefined);
+    vi.stubGlobal('sessionStorage', storageStub({ cc_token: 'свой' }));
+
+    expect(offline.readStoredToken()).toBe('свой');
+  });
+
+  it('sessionStorage бросает SecurityError — localStorage всё равно читается', () => {
+    vi.stubGlobal('localStorage', storageStub({ cc_token: 'общий' }));
+    vi.stubGlobal('sessionStorage', { getItem: () => { throw new Error('SecurityError'); } });
+
+    expect(offline.readStoredToken()).toBe('общий');
+  });
+});
+
+describe('writeStoredToken: пишет туда, откуда читает readStoredToken', () => {
+  it('заняты оба хранилища — новый токен в sessionStorage, localStorage не тронут', () => {
+    const local = storageStub({ cc_token: 'чужой' });
+    const session = storageStub({ cc_token: 'старый' });
+    vi.stubGlobal('localStorage', local);
+    vi.stubGlobal('sessionStorage', session);
+
+    offline.writeStoredToken('новый');
+
+    expect(session.getItem('cc_token')).toBe('новый');
+    expect(local.getItem('cc_token')).toBe('чужой');
+    expect(offline.readStoredToken()).toBe('новый');
+  });
+
+  it('токен только в localStorage («запомнить меня») — обновляется он', () => {
+    const local = storageStub({ cc_token: 'старый' });
+    const session = storageStub();
+    vi.stubGlobal('localStorage', local);
+    vi.stubGlobal('sessionStorage', session);
+
+    offline.writeStoredToken('новый');
+
+    expect(local.getItem('cc_token')).toBe('новый');
+    expect(session.getItem('cc_token')).toBeNull();
+  });
+
+  it('токена нет нигде — пишется в sessionStorage', () => {
+    const local = storageStub();
+    const session = storageStub();
+    vi.stubGlobal('localStorage', local);
+    vi.stubGlobal('sessionStorage', session);
+
+    offline.writeStoredToken('новый');
+
+    expect(session.getItem('cc_token')).toBe('новый');
+    expect(local.getItem('cc_token')).toBeNull();
+  });
+});

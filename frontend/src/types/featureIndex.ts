@@ -9,7 +9,7 @@
 // Все поля аддитивны и nullable-терпимы: UI обязан пережить отсутствие любого
 // (старые ответы не несут новых полей).
 
-import type { FeatureRun, FeatureState } from './featureRun';
+import type { FeatureQueue, FeatureRun, FeatureState } from './featureRun';
 import type { FeatureStats } from './featureStats';
 import type { FeaturePlan, FeatureMockup } from './featurePlans';
 import type { PlanState } from '../lib/featureProgress';
@@ -138,6 +138,10 @@ export interface FeatureIndexFeature {
   taskCount?: number;
   // «Сейчас»: уникальные PersonaId идущих задач, по убыванию старта; [] — фича не идёт.
   nowPersonaIds?: string[];
+  // Очередь фич (волна 6): причина удержания и место в очереди проекта. Позицию считает бэк;
+  // queue есть только у фичи в очереди (holdReason = 'queue'), иначе null/нет.
+  holdReason?: string | null;
+  queue?: FeatureQueue | null;
 }
 
 // Роль чата в фиче (контракт: «Роль чата принята и дополнена»). Сила связи:

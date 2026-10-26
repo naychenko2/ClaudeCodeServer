@@ -6,9 +6,11 @@ using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Services.Tasks;
-using ClaudeHomeServer.Services.Tasks.Projector;
 
 namespace ClaudeHomeServer.Services;
+
+// FeatureHoldReleaseOutcome / FeatureHoldRelease / IFeatureHoldReleaser переехали в Core
+// (Core/Services/FeatureHoldRelease.cs, дефект 6c71a827): их держит и вертикаль Tasks.
 
 /// <summary>
 /// Алиасы тиров моделей владельца (opus/sonnet/haiku) для таблицы уровней в постановке.
@@ -37,7 +39,7 @@ public sealed record ExecutorLauncher(string? SessionId, string? PersonaId);
 // Claude-исполнитель задач: запускает отдельную чат-сессию по задаче (кнопкой или
 // автозапуском по сроку), следит за её ходом через SessionManager.OnSessionMessage
 // и уведомляет пользователя (тост + push) о завершении и запросах разрешений.
-public class TaskExecutionService : Execution.IDeviceOnlineHandler
+public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHoldReleaser
 {
     private readonly TaskManager _tasks;
     private readonly SessionManager _sessions;
@@ -254,11 +256,12 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             throw new InvalidOperationException("Задача уже завершена");
         // Прод 2026-08-02 (находка Веры): дубль доклада о завершении после того, как координатор
         // перезапустил исполнение под-задачи в ответ на разблокировку карточки остановки —
-        // Status==Done выше блокирует релонч, ПОКА статус не переоткрыт в обход этого метода
-        // (например прямым PUT/tasks_update). CompletionDelivered — необратимый CAS-флаг
-        // (TaskManager.TryMarkCompletionDelivered): раз доклад уже ушёл, перезапуск той же
-        // задачи не должен порождать второй — независимая страховка поверх проверки статуса,
-        // не завязанная на то, что Status и CompletionDelivered меняются синхронно.
+        // Status==Done выше блокирует релонч, ПОКА статус не переоткрыт в обход этого метода.
+        // CompletionDelivered — CAS-флаг (TaskManager.TryMarkCompletionDelivered); штатное
+        // переоткрытие через TaskManager.Update снимает его вместе со статусом (расследование
+        // 88444536): доработка принятой карточки получает новый цикл и новый доклад. Прямая
+        // смена Status (мимо Update) флаг оставляет — перезапуск уже доложенной задачи не
+        // должен порождать второй дубль: независимая страховка поверх проверки статуса.
         if (task.CompletionDelivered)
             throw new InvalidOperationException("Доклад по этой задаче уже доставлен — перезапуск отключён");
         if (task.OwnerId is null)
@@ -719,7 +722,22 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // Тот же канал эскалации, что и у персоны (см. комментарий в BuildPersonaPrompt)
         sb.AppendLine("- Застрял или выполнить невозможно — не завершай задачу: эскалируй через " +
                       "chats_report_up тому, кто её поставил (blocker: true — работа встала).");
+        AppendPregateRule(sb, task);
         return ToLf(sb.ToString());
+    }
+
+    // Правило предгейта для шага с собственным деревом: порядок «закоммить → pregate →
+    // tasks_complete». Результат предгейта пишется в карточку и его видит ревьюер; закрытие
+    // шага предгейт не блокирует. Без своего дерева правило не нужно — к такой задаче
+    // предгейт не применяется вовсе.
+    private static void AppendPregateRule(StringBuilder sb, TaskItem task)
+    {
+        if (!PregateRules.Applies(task.Role, task.WorktreePath)) return;
+        sb.AppendLine();
+        sb.AppendLine("## ПРЕДГЕЙТ");
+        sb.AppendLine("- Перед `tasks_complete` закоммить правки и прогони `pregate`: результат " +
+                      "пишется в карточку, его увидит ревьюер. Предгейт может не состояться (дерево " +
+                      "занято, нет git) — тогда так и доложи в итоге: закрытие он не блокирует.");
     }
 
     // Постановка уходит в CLI с единым концом строки LF на любой ОС. AppendLine пишет
@@ -753,6 +771,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         if (rulesTemplate is { } template && !string.IsNullOrWhiteSpace(template))
         {
             sb.AppendLine(RenderRulesTemplate(template, aliases, categoryProfilesPath));
+            AppendPregateRule(sb, task);
             AppendContextSection(sb, task);
             return sb.ToString();
         }
@@ -809,6 +828,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // ссылку не даём вовсе, чтобы исполнитель не бился в несуществующий путь.
         if (categoryProfilesPath is not null)
             sb.AppendLine($"Профили категорий (какой уровень и как формулировать) — `{categoryProfilesPath}`.");
+        AppendPregateRule(sb, task);
         AppendContextSection(sb, task);
         return sb.ToString();
     }
@@ -1297,6 +1317,88 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         return stopped;
     }
 
+    // Единое снятие удержания фичи (тело бывшей ручки DELETE hold): порядок — подсчёт
+    // resumed/expired → ClearHold → task_changed по эпику → фоновое продолжение ходов.
+    // hold — Hold эпика из снимка проектора, взятого до снятия (null — Hold уже снят). Признак
+    // «фича удержана» — само наличие Hold, а не его Reason: битый tasks.json может дать Hold с
+    // пустой причиной (STJ non-nullable не проверяет), и вывод признака из Reason оставил бы
+    // такую паузу несъёмной (409 «снимать нечего»).
+    public async Task<FeatureHoldRelease> ReleaseFeatureHold(string featureId, string ownerId, FeatureHold? hold, string? by = null)
+    {
+        if (hold is null)
+        {
+            // W4-SEAM R1 (тупик после сбоя продолжения): если доставка продолжения упала
+            // (catch в ResumeFeatureTurnsAfterHold), шаг остаётся помеченный feature_held при
+            // уже снятом Hold: карточка «шаг ждёт снятия паузы», фича stopped, а повторный
+            // DELETE hold давал бы 409 «снимать нечего» — тупик. Если такие шаги есть,
+            // повторное снятие не 409, а повтор продолжения: метод идемпотентен по пометке.
+            // Причина снятой паузы из состояния не восстанавливается — карточка повторяется
+            // в общей формулировке (manual).
+            var stuck = _tasks.GetByOwner(ownerId).Any(t => t.FeatureId == featureId
+                && t.Status == TaskItemStatus.InProgress
+                && t.ExecutorStopReason == ExecutorStopClassifier.FeatureHeldReason);
+            if (!stuck) return new FeatureHoldRelease(FeatureHoldReleaseOutcome.NotHeld, [], []);
+            _ = ResumeFeatureTurnsAfterHold(featureId, ownerId, FeatureHoldReasons.Manual);
+            // W4-SEAM2 (хвост R-SEAM2 п.2): пустые resumed/expired здесь неотличимы от
+            // «нечего делать» — исход помечается явно: продолжение повторено,
+            // а не «паузы не было».
+            return new FeatureHoldRelease(FeatureHoldReleaseOutcome.Repeated, [], []);
+        }
+
+        // W4-HOLD-H (контракт §1, :368): ответ — пробуждение очереди, а не эпик. Состав считается
+        // ДО снятия паузы (находка R-HOLD-H): пока Hold активен, FeatureHoldRefusal не-null ровно
+        // для задач, которым запуск блокирует пауза — это и есть те, кому снятие открывает запуск.
+        // После ClearHold гейт тавтологически «разрешает» и предикат перестал бы фильтровать.
+        // expired — те, чьё ожидание устройства просрочено потолком (общий предикат
+        // ProjectCapabilities.DeviceWaitExpired, как в sweep TaskExecutionService); закрытые не
+        // пробуждаются — как в GetDeviceWaiting. Форма — как у hold: списки id. Эпик в выборку
+        // не входит (FeatureId == null): его никто не запускает.
+        var now = DateTime.UtcNow;
+        var resumed = new List<string>();
+        var expired = new List<string>();
+        foreach (var t in _tasks.GetByOwner(ownerId))
+        {
+            if (t.FeatureId != featureId || t.Status == TaskItemStatus.Done) continue;
+            if (ProjectCapabilities.DeviceWaitExpired(t, now))
+                expired.Add(t.Id);
+            else if (_tasks.FeatureHoldRefusal(t) is not null)
+                resumed.Add(t.Id);
+        }
+
+        // Дефект bec00347: формулировка карточки зависит от причины удержания — её берут из
+        // снимка проектора до ClearHold: у живого эпика после снятия Hold уже null. Пустая
+        // причина битых данных трактуется как ручная пауза.
+        var holdReason = hold.Reason ?? FeatureHoldReasons.Manual;
+        var epic = _tasks.ClearHold(featureId, by);
+        if (epic is null)
+        {
+            // Дефект 06aae1bf (гонка): снимок взят при активном Hold, а конкурент успел снять
+            // его до этого ClearHold — фича на месте, требование уже выполнено победителем.
+            // 404 «Фича не найдена» здесь вводит в заблуждение: исход — пустые списки
+            // (пробуждение очереди — на стороне победителя). NotFound остаётся только если
+            // эпик реально исчез (удалён между снимком и снятием).
+            if (_tasks.GetById(featureId) is null)
+                return new FeatureHoldRelease(FeatureHoldReleaseOutcome.NotFound, [], []);
+            return new FeatureHoldRelease(FeatureHoldReleaseOutcome.Released, [], []);
+        }
+        // Дефект c41d7e02 (возврат QA): снятие паузы молчал — страница фичи оставалась «на
+        // паузе» до ручной перезагрузки: task_changed вещает только продолжение по
+        // ПРОДОЛЖЕНным шагам, а если прерванных не было — вещания нет вовсе. Тот же формат, что
+        // у постановки: task_changed("updated") по эпику — с снятым Hold проектор считает
+        // состояние не-пауза, экран уходит с «на паузе» живьём.
+        await _broadcaster.ToOwner(ownerId, new TaskChangedMessage("updated", epic));
+        // W4-HOLD-D (контракт §1, :231): снятие паузы возвращает отнятое — прерванные ходы
+        // продолжаются в своих сессиях, карточка уходит оркестратору в ключевой чат при любом
+        // снятии (W4-HOLD-K): draft — «фича запущена», без продолженных — «пауза снята, запуски
+        // разрешены». resumed/expired — пробуждение очереди (R-HOLD-H), продолженные шаги в неё
+        // не входят (они уже в работе).
+        // R-HOLD-D (п.1): продолжение — фон: ответ не ждёт чатов. Сбой локализован в
+        // ResumeFeatureTurnsAfterHold: каждая ветка продолжения обёрнута и логируется там, а
+        // после W4-HOLD-J метод на известных путях не бросает (R-HOLD-K2 п.1).
+        _ = ResumeFeatureTurnsAfterHold(featureId, ownerId, holdReason);
+        return new FeatureHoldRelease(FeatureHoldReleaseOutcome.Released, resumed, expired);
+    }
+
     // Возврат прерванных паузой ходов при её снятии (W4-HOLD-D, контракт §1 :231): продолжение
     // идёт в ТЕ ЖЕ сессию исполнителя — контекст цел, новый чат не нужен. Кандидаты: только
     // помеченные этой паузой (feature_held) и ещё в работе; остальные остановки (401, «Стоп»
@@ -1475,6 +1577,21 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
                 "Фича запущена: черновик снят, фича активна. Начни конвейер по плану; " +
                 "разбери доклады, накопленные за паузу.");
             return resumed; // у черновика прерванных ходов не бывает — 0
+        }
+        if (holdReason == FeatureHoldReasons.Queue)
+        {
+            // Очередь фич (волна 6): слот проекта освободился, голову очереди снял
+            // FeatureQueueService (или человек кнопкой) — оркестратора будят так же, как при
+            // снятии черновика: конвейер по плану стартует с него. Продолженные и истёкшие шаги
+            // названы в хвосте: очередь держит и уже начатую фичу.
+            var queueTail = resumed > 0 ? $" Продолжены прерванные ходы: {resumed} {PluralSteps(resumed)}." : "";
+            if (expired > 0)
+                queueTail += $" {expired} {PluralSteps(expired)} не продолжены — чат исполнителя исчез, " +
+                    "их нужно перезапустить штатным tasks_run_executor.";
+            await DeliverKeyChatCardAsync(key,
+                "Фича запущена из очереди: слот проекта освободился, пауза снята, запуски разрешены." +
+                queueTail + " Начни конвейер по плану; разбери доклады, накопленные за ожидание.");
+            return resumed;
         }
         if (resumed == 0) {
             if (expired > 0) {

@@ -24,6 +24,9 @@ import {
 import {
   formatTokens, formatUsd, sharePercent, roleGroupLabel, modelGroupLabel, personaGroupLabel,
 } from './FeatureStatsFormat';
+// Слово вида «очередь» — из единого источника (Q5H-3): строки «Подробнее» сравниваются
+// с COMP_LABEL, а не литералом — смена слова в источнике меняет ожидание здесь и везде.
+import { COMP_LABEL } from './FeatureStatsPulseModel';
 import { clearFeatureStageFocus, setFeaturePageTab, __test } from '../../lib/featurePage';
 import { getBackNav } from '../../lib/featureBackNav';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
@@ -906,6 +909,32 @@ describe('FeatureStatsTab: ступени Ганта (W4-4F2)', () => {
     // Тач-цель строки — 40 px (как в других мобильных контролах).
     expect(rs.minHeight).toBe('40px');
   });
+
+  // === 8. Схлопнутые полосы (прод 25.10): строка — <button> с display:grid, а кнопка
+  // по умолчанию ужимается по содержимому. Дорожка (1fr) содержит только абсолютные
+  // полосы, поэтому без width:100% колонка 1fr схлопывается в ~0, и все полосы всех
+  // этапов падают в minWidth:3 в одну точку. ===
+  it('строка этапа растянута на всю ширину (width 100%) — иначе колонка полосы схлопывается', () => {
+    for (const mobile of [false, true]) {
+      const c = renderGantt(mobile);
+      const row = findNodeByAttr(c, 'data-testid', 'gantt-row-prod')!;
+      const rs = (row as unknown as { style: Record<string, string> }).style;
+      expect(rs.width, `ширина строки (mobile=${mobile})`).toBe('100%');
+    }
+  });
+
+  it('полосы разных этапов разложены по оси: left растёт в порядке этапов, не в одной точке', () => {
+    const c = renderGantt();
+    const lefts = ['cut', 'plan', 'prod', 'qa', 'merge'].map((key) => {
+      const bar = findNodeByAttr(c, 'data-testid', `gantt-bar-${key}`)!;
+      const s = (bar as unknown as { style: Record<string, string> }).style;
+      return { key, left: parseFloat(s.left), width: parseFloat(s.width) };
+    });
+    for (let i = 1; i < lefts.length; i++) {
+      expect(lefts[i]!.left, `${lefts[i]!.key} правее ${lefts[i - 1]!.key}`).toBeGreaterThan(lefts[i - 1]!.left);
+    }
+    expect(lefts.every((l) => l.width > 0 && l.left + l.width <= 100.001), 'полосы внутри оси').toBe(true);
+  });
 });
 
 // === Строка «тихо» на Ганте (W5-F3b, спецификация features-overview-5.md §«Точка 6») ===
@@ -1243,6 +1272,63 @@ describe('FeatureStatsTab: сборка «Пульса» (ST-F14a)', () => {
     const c = renderTab(mkFullStats({ source: 'approx' }));
     const all = textNodes(findNodeByAttr(c, 'data-testid', 'stats-more')!).join('');
     expect(all).toContain('не работали — ≈ 10 ч');
+  });
+
+  // Q5H-1 (R-Q3B-2): «в очереди» — самостоятельный вид разряды, минуты отдаёт бэк
+  // (totals.queuedMinutes), фронт не пересчитывает. Порядок — как в составе героя
+  // (FeatureStatsPulseModel): «не работали» → «в очереди» → «ошибки».
+  // Мутация: убрать блок queuedMinutes в MoreDetails → эти тесты краснеют.
+  // Q5H-3: само слово — из COMP_LABEL (единый источник), сравнение с ним же: если
+  // компонент зашьёт слово сам (разъедется с источником) — эти тесты краснеют.
+  it('«Подробнее»: «в очереди» после «не работали», перед «ошибками»', () => {
+    const base = mkFullStats();
+    const c = renderTab(mkFullStats({
+      timeline: { ...base.timeline, totals: { ...base.timeline.totals, queuedMinutes: 95 } },
+    }));
+    const nodes = textNodes(findNodeByAttr(c, 'data-testid', 'stats-more')!);
+    const iNot = nodes.findIndex(t => t.includes('не работали'));
+    const iQ = nodes.findIndex(t => t.includes(COMP_LABEL.queued));
+    const iErr = nodes.findIndex(t => t.includes('ошибки:'));
+    expect(iNot, 'строка «не работали»').toBeGreaterThanOrEqual(0);
+    expect(iQ, 'строка «в очереди»').toBeGreaterThanOrEqual(0);
+    expect(iErr, 'строка «ошибки»').toBeGreaterThanOrEqual(0);
+    expect(nodes[iQ]).toBe(`${COMP_LABEL.queued} — 1 ч 35 мин`);
+    expect(iQ, '«в очереди» после «не работали»').toBeGreaterThan(iNot);
+    expect(iQ, '«в очереди» перед «ошибками»').toBeLessThan(iErr);
+  });
+
+  it('«Подробнее»: «в очереди» при null/0/нет поля — строки нет', () => {
+    const base = mkFullStats();
+    for (const q of [null, 0]) {
+      const c = renderTab(mkFullStats({
+        timeline: { ...base.timeline, totals: { ...base.timeline.totals, queuedMinutes: q } },
+      }));
+      expect(textNodes(findNodeByAttr(c, 'data-testid', 'stats-more')!).join('\n'), `queuedMinutes=${q}`).not.toContain(COMP_LABEL.queued);
+    }
+    // Поля нет вовсе (старый ответ бэка) — то же, что null.
+    const c = renderTab(mkFullStats());
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'stats-more')!).join('\n')).not.toContain(COMP_LABEL.queued);
+  });
+
+  it('approx: «в очереди» с «≈» (тот же префикс, что у «не работали»)', () => {
+    const base = mkFullStats();
+    const c = renderTab(mkFullStats({
+      source: 'approx',
+      timeline: { ...base.timeline, totals: { ...base.timeline.totals, queuedMinutes: 35 } },
+    }));
+    const all = textNodes(findNodeByAttr(c, 'data-testid', 'stats-more')!).join('');
+    expect(all).toContain(`${COMP_LABEL.queued} — ≈ 35 мин`);
+  });
+
+  it('«Подробнее»: только «в очереди» — раскрывашка есть', () => {
+    const base = mkStats();
+    const c = renderTab(mkStats({
+      source: 'journal',
+      timeline: { ...base.timeline, totals: { ...base.timeline.totals, queuedMinutes: 12 } },
+    }));
+    const more = findNodeByAttr(c, 'data-testid', 'stats-more');
+    expect(more, 'строка очереди — достаточное содержимое').not.toBeNull();
+    expect(textNodes(more!).join('')).toContain(`${COMP_LABEL.queued} — 12 мин`);
   });
 
   // Память «Подробнее»: раскрытие пишется в localStorage и читается при монтировании.

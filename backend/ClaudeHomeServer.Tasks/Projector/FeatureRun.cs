@@ -72,6 +72,10 @@ public sealed class FeatureRun
     public string State { get; init; } = FeatureStates.Idle;
     // Тревога: stopped → wait явный → merge; один элемент либо null.
     public FeatureAttention? Attention { get; init; }
+    // Место в очереди проекта (волна 6): только у фичи в очереди (пауза с причиной queue), иначе
+    // null. Вычисляется по набору фич (FeatureQueuePolicy.Positions), не хранится; setter internal —
+    // проектор проставляет после сборки run, когда виден весь набор.
+    public FeatureQueueInfo? Queue { get; internal set; }
     // Счётчик шагов: принятые ревью / знаменатель (= StepProgress.Accepted / Total). Семантика
     // изменена сознательно (честный прогресс): «принят» — не «сдан исполнителем (Done)», а
     // «последний виток ревью/проверки/финала — accepted/accepted_with_remarks и доработок не осталось»;
@@ -329,6 +333,9 @@ public sealed class FeatureStepChain
     // Чат шага (Б7: LinkedSessionId задачи-шага, fail-closed: наружу только если в снимке
     // сессий владельца; чужой/удалённый/неизвестный чат → null).
     public string? ChatId { get; init; }
+    // Проект задачи-шага (TaskItem.ProjectId головы цепочки; хвосты 5634609f п.26: переход
+    // «в задачу» берёт проект эпика как приближение); null — задача личная.
+    public string? ProjectId { get; init; }
     // Задачи цепочки (шаг + доработки) в порядке времени.
     public List<string> TaskIds { get; init; } = [];
     // Исход: accepted | withdrawn | returned | running | pending.

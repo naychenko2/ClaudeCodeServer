@@ -18,11 +18,11 @@ describe('costTierPill: пилюля класса провайдера', () => {
   });
 
   it('cheap — пилюля «дёшево»', () => {
-    expect(costTierPill('cheap')).toEqual({ label: 'дёшево', tone: 'info' });
+    expect(costTierPill('cheap')).toEqual({ label: 'дешёвый', tone: 'info' });
   });
 
   it('expensive — пилюля «дорого»', () => {
-    expect(costTierPill('expensive')).toEqual({ label: 'дорого', tone: 'expensive' });
+    expect(costTierPill('expensive')).toEqual({ label: 'дорогой', tone: 'expensive' });
   });
 
   it('неизвестный класс или его отсутствие — пилюли нет, под класс не выдумываем', () => {
@@ -89,28 +89,28 @@ describe('карточка провайдера: цену называем од�
   it('класс free — только «бесплатный»', () => {
     const text = cardText({ costTier: 'free' });
     expect(text).toContain('бесплатный');
-    expect(text).not.toContain('дёшево');
-    expect(text).not.toContain('дорого');
+    expect(text).not.toContain('дешёвый');
+    expect(text).not.toContain('дорогой');
   });
 
   it('класс cheap — только «дёшево»', () => {
     const text = cardText({ costTier: 'cheap' });
-    expect(text).toContain('дёшево');
+    expect(text).toContain('дешёвый');
     expect(text).not.toContain('бесплатный');
-    expect(text).not.toContain('дорого');
+    expect(text).not.toContain('дорогой');
   });
 
   it('класс expensive — только «дорого»', () => {
     const text = cardText({ costTier: 'expensive' });
-    expect(text).toContain('дорого');
+    expect(text).toContain('дорогой');
     expect(text).not.toContain('бесплатный');
-    expect(text).not.toContain('дёшево');
+    expect(text).not.toContain('дешёвый');
   });
 
   it('без класса пилюли нет — карточка не врёт', () => {
     const text = cardText();
-    expect(text).not.toContain('дёшево');
-    expect(text).not.toContain('дорого');
+    expect(text).not.toContain('дешёвый');
+    expect(text).not.toContain('дорогой');
     expect(text).not.toContain('бесплатный');
   });
 
@@ -119,7 +119,7 @@ describe('карточка провайдера: цену называем од�
   it('бесплатность уже названа — пилюли класса нет', () => {
     const text = cardText({ costTier: 'cheap', pills: [{ label: 'бесплатный', tone: 'free' }] });
     expect(text).toContain('бесплатный');
-    expect(text).not.toContain('дёшево');
+    expect(text).not.toContain('дешёвый');
   });
 
   // freellmapi: раньше сервер отдавал «cheap», теперь — «free».
@@ -128,8 +128,8 @@ describe('карточка провайдера: цену называем од�
     for (const costTier of ['free', 'cheap', 'expensive']) {
       const text = cardText({ key: 'freellmapi', costTier, pills: [{ label: 'бесплатный', tone: 'free' }] });
       expect(text).toContain('бесплатный');
-      expect(text).not.toContain('дёшево');
-      expect(text).not.toContain('дорого');
+      expect(text).not.toContain('дешёвый');
+      expect(text).not.toContain('дорогой');
     }
   });
 });
@@ -140,7 +140,7 @@ describe('карточка провайдера: цену называем од�
 describe('пилюля «дёшево»: контраст текста', () => {
   it('текст пилюли — основной, тон держат подложка и рамка', () => {
     const { container } = mount(createElement(ProviderCard, { data: cardData({ costTier: 'cheap' }) }));
-    const pill = findByText(container, 'дёшево');
+    const pill = findByText(container, 'дешёвый');
     expect(pill).toBeTruthy();
     expect(styleOf(pill).color).toBe(C.textPrimary);
     expect(styleOf(pill).background).toBe(C.infoBg);

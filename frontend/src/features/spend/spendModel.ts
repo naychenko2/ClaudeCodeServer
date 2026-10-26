@@ -36,9 +36,9 @@ export const SPEND_PRESETS: { key: string; label: string; admin: SpendLevel[]; u
 // Источники расхода: подпись + цвет серии (токены темы, обе темы автоматически)
 export const SPEND_SOURCES: Record<string, { label: string; color: string }> = {
   'chat-turn': { label: 'Ходы', color: C.accent },
-  'one-shot': { label: 'Фоновые', color: C.info },
+  'one-shot': { label: 'Фоновые', color: C.textSecondary },
   fal: { label: 'fal.ai', color: C.plan },
-  glif: { label: 'glif', color: C.warning },
+  glif: { label: 'glif', color: C.rose },
   free: { label: 'Бесплатные', color: C.success },
   // Озвучка ответов (Yandex SpeechKit): токенов нет, считается запросами и рублями.
   // Цвет — чернильный токен хаба: свободных семантических цветов серий не осталось,
@@ -51,7 +51,7 @@ export const sourceColor = (s: string) => SPEND_SOURCES[s]?.color ?? C.textMuted
 // Текстовый вариант цвета источника — для моноширинных значений в анализе
 // (у SPEND_SOURCES цвета серий «плотные», на подложке читается text-пара)
 export const sourceTextColor = (s: string) =>
-  s === 'fal' ? C.planText : s === 'glif' ? C.warningText : sourceColor(s);
+  s === 'fal' ? C.planText : s === 'glif' ? C.roseText : sourceColor(s);
 
 // Ценовые классы моделей: бесплатно / дёшево / дорого. Класс приходит с бэка
 // (SpendCardRow.tier, SpendDayPoint.byTier) — словарь «какая модель какого

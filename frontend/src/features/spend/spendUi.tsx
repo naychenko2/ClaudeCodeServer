@@ -30,7 +30,7 @@ export function KindTag({ meta }: { meta: string | null }) {
   return (
     <span style={{
       fontSize: 10, padding: '1px 7px', borderRadius: R.sm, flexShrink: 0, fontFamily: FONT.sans,
-      background: isTask ? C.infoBg : C.accentLight, color: isTask ? C.info : C.accent,
+      background: isTask ? C.bgSelected : C.accentLight, color: isTask ? C.textSecondary : C.accent,
     }}>
       {isTask ? 'задача' : 'чат'}
     </span>
@@ -181,7 +181,7 @@ export function WindowBadge({ days, compact }: { days: number; compact?: boolean
       title={`Детальные записи ходов хранятся последние ${days} дней; старше — только дневные агрегаты`}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, padding: '3px 10px',
-        borderRadius: R.max, background: C.infoBg, color: C.info, whiteSpace: 'nowrap',
+        borderRadius: R.max, background: C.bgInset, color: C.textSecondary, whiteSpace: 'nowrap',
         fontFamily: FONT.sans, flexShrink: 0,
       }}
     >

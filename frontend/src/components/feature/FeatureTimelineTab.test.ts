@@ -2120,6 +2120,7 @@ describe('FeatureTimelineTab: восстановление по чипу (GC-F11
   // медленном ответе remount читал бы пустой канал.
   it('c9: remount вкладки после CONSUME_MS — подтверждённый снимок восстановлен', () => {
     installFakeDom();
+    const offPage = backNavTest.registerFeaturePage('f1'); // страница смонтирована (FeaturePage делает это сама)
     const run = returnRun();
     const h1 = mountInHost(run, true);
     leaveToTaskIn(run, h1.host);
@@ -2138,6 +2139,7 @@ describe('FeatureTimelineTab: восстановление по чипу (GC-F11
     expect(card2.getAttribute('aria-expanded'), 'remount после CONSUME_MS не раскрыл карточку').toBe('true');
     expect(h2!.host.scrollTop, 'remount после CONSUME_MS не восстановил прокрутку').toBe(1234);
     h2.unmount();
+    offPage(); // страница ушла — регистрация снята
   });
 });
 

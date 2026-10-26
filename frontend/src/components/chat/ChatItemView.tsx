@@ -1,5 +1,5 @@
 import { memo, useState, useCallback, useContext, useEffect, type ReactNode } from 'react';
-import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, RefreshCw, ChevronDown, Ban, GitFork, GitBranch, MessageSquareShare, Camera, MonitorSmartphone } from 'lucide-react';
+import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, RefreshCw, ChevronDown, Ban, GitFork, GitBranch, MessageSquareShare, Camera, MonitorSmartphone, Hourglass } from 'lucide-react';
 import type { ChatItem, Persona, ProviderFallbackOption } from '../../types';
 import {
   splitFallbackOptions, formatSubscriptionMeta, providerSwitchReasonLabel, modelSwitchHeadline,
@@ -2135,6 +2135,30 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
         }}>
           <MonitorSmartphone size={13} strokeWidth={2} style={{ flexShrink: 0 }} />
           <span>{item.text}</span>
+        </div>
+      );
+    }
+
+    case 'local_turn_queue': {
+      // Ход ждёт свободный слот локальной модели (гейт допуска). Янтарная предупреждающая
+      // строка — намеренно НЕ красная карточка отказа (case 'error'): «занято» — нормальное
+      // ожидание очереди, «движок не отвечает» — поломка, и её тон остаётся за ошибкой.
+      // Снимается сама: position=0 или конец хода (редьюсер). «Стоп» — та же остановка хода,
+      // что кнопка композера (onInterrupt); после неё бэк шлёт position=0 и строка уходит.
+      return (
+        <div data-testid="local-turn-queue" style={{
+          alignSelf: 'center', maxWidth: '100%', display: 'flex', alignItems: 'center', gap: 8,
+          justifyContent: 'center', flexWrap: 'wrap', textAlign: 'center', borderRadius: 8,
+          padding: '6px 12px', fontSize: 12.5,
+          background: C.warningBg, border: `1px solid ${C.warning}`, color: C.warningText,
+        }}>
+          <Hourglass size={13} strokeWidth={2} style={{ flexShrink: 0 }} />
+          <span>Ход ждёт свободный слот локальной модели: {item.position}-й в очереди (заняты {item.active} из {item.limit})</span>
+          <button onClick={onInterrupt} style={{
+            fontSize: 12, padding: '3px 10px', borderRadius: 6,
+            border: `1px solid ${C.warning}`, background: C.bgWhite,
+            cursor: 'pointer', color: C.warningText, whiteSpace: 'nowrap', flexShrink: 0,
+          }}>Стоп</button>
         </div>
       );
     }

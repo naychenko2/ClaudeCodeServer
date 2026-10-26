@@ -10,7 +10,7 @@ import { joinUser, onMessage, onReconnected } from './signalr';
 import { C } from './design';
 import { getEffectiveTheme } from './themeMode';
 import { isOnline, OfflineError, readStoredUserId, subscribeOnline } from './offline';
-import { idbGet, idbSet } from './idb';
+import { idbDelete, idbGet, idbKeys, idbSet } from './idb';
 import {
   applyUpdateLocally, buildLocalTask, configureOutbox, drainTaskOutbox,
   enqueue, mergePending, outboxHasPending,
@@ -23,7 +23,6 @@ let _loaded = false;
 let _loading: Promise<void> | null = null;
 const _listeners = new Set<() => void>();
 let _realtimeWired = false;
-let _hydrated = false;
 
 // Локальный снапшот стора в IndexedDB (переживает перезагрузку, виден офлайн).
 // Ключ отдельный от пассивного GET-кэша /tasks: здесь состояние С наложенными
@@ -31,12 +30,27 @@ let _hydrated = false;
 const TASKS_SNAPSHOT_KEY = 'tasks:all';
 let _persistTimer: ReturnType<typeof setTimeout> | null = null;
 
+// Снапшот — structured clone ВСЕГО массива, поэтому пишем не чаще раза в окно,
+// а при уходе вкладки в фон дописываем отложенное сразу.
+const PERSIST_WINDOW_MS = 10_000;
+
+function flushPersist() {
+  if (!_persistTimer) return;
+  clearTimeout(_persistTimer);
+  _persistTimer = null;
+  idbSet(TASKS_SNAPSHOT_KEY, { data: _tasks.map(lightenTask), savedAt: Date.now() }).catch(() => {});
+}
+
 function persistTasks() {
   if (_persistTimer) return;
-  _persistTimer = setTimeout(() => {
-    _persistTimer = null;
-    idbSet(TASKS_SNAPSHOT_KEY, { data: _tasks, savedAt: Date.now() }).catch(() => {});
-  }, 300);
+  _persistTimer = setTimeout(flushPersist, PERSIST_WINDOW_MS);
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushPersist();
+  });
+  window.addEventListener('pagehide', flushPersist);
 }
 
 function emit() {
@@ -44,7 +58,74 @@ function emit() {
   persistTasks();
 }
 
-function upsert(task: Task) {
+// === Облегчение стора (инвариант И3: вкладка держит не больше K полных задач) ===
+// Полный текст (description/resultMarkdown) тяжёл: на проде список целиком 83,8 МБ против
+// 22,8 МБ облегчённого. Поэтому стор по умолчанию облегчённый, а полными остаются только
+// задачи, которые человек открывал недавно (LRU на FULL_TASKS_CAP), открытые на правку
+// (_editing) и с несинхронизированной правкой в outbox. Всё прочее, включая полные задачи
+// из realtime task_changed, на входе в стор переводится в listItem.
+
+export const FULL_TASKS_CAP = 30;
+const PREVIEW_LENGTH = 200;
+
+// Единственная проекция «полная → лёгкая» на фронте; зеркало бэкового TaskListItem.From.
+export function toListItem(task: Task): Task {
+  if (task.listItem) return task;
+  const { resultMarkdown, ...rest } = task;
+  const description = task.description ?? '';
+  let preview = description;
+  if (description.length > PREVIEW_LENGTH) {
+    let cut = PREVIEW_LENGTH;
+    const last = description.charCodeAt(cut - 1);
+    if (last >= 0xd800 && last <= 0xdbff) cut--;   // не рвём суррогатную пару
+    preview = description.slice(0, cut) + '…';
+  }
+  return {
+    ...rest,
+    description: '',
+    listItem: true,
+    hasDescription: description.length > 0,
+    hasResult: !!resultMarkdown,
+    descriptionPreview: preview,
+  };
+}
+
+// id недавно открытых задач, самая свежая — в конце
+let _openedLru: string[] = [];
+
+function keepFull(id: string): boolean {
+  return _editing.has(id) || outboxHasPending(id) || _openedLru.includes(id);
+}
+
+function lightenTask(task: Task): Task {
+  return task.listItem || keepFull(task.id) ? task : toListItem(task);
+}
+
+// Запомнить id как недавно открытый; вернуть вытесненный (если был)
+function pushOpened(id: string): string | undefined {
+  _openedLru = _openedLru.filter(x => x !== id);
+  _openedLru.push(id);
+  return _openedLru.length > FULL_TASKS_CAP ? _openedLru.shift() : undefined;
+}
+
+// Задачу открыли или правят: она остаётся полной, вытесненная из LRU — облегчается
+function touchOpened(id: string): void {
+  const evicted = pushOpened(id);
+  if (!evicted || keepFull(evicted)) return;
+  const idx = _tasks.findIndex(t => t.id === evicted);
+  if (idx < 0 || _tasks[idx].listItem) return;
+  _tasks = [..._tasks.slice(0, idx), toListItem(_tasks[idx]), ..._tasks.slice(idx + 1)];
+  emit();
+}
+
+// Полная задача, с которой работает человек (открытие, ответ мутации): держим полной
+function upsertOpened(task: Task) {
+  touchOpened(task.id);
+  upsert(task);
+}
+
+function upsert(incoming: Task) {
+  const task = lightenTask(incoming);
   const idx = _tasks.findIndex(t => t.id === task.id);
   _tasks = idx >= 0
     ? [..._tasks.slice(0, idx), task, ..._tasks.slice(idx + 1)]
@@ -95,6 +176,7 @@ const _editing = new Set<string>();
 
 export function markEditing(id: string): void {
   _editing.add(id);
+  touchOpened(id);
 }
 
 export function unmarkEditing(id: string): void {
@@ -115,7 +197,16 @@ export function keepLoadedFull(list: Task[], current: Task[]): Task[] {
 }
 
 export async function reloadTasks(): Promise<void> {
-  const list = keepLoadedFull(await api.tasks.listAll(), _tasks);
+  let fresh: Task[];
+  try {
+    fresh = await api.tasks.listAll();
+  } catch (e) {
+    // Офлайн: список запрашивается с live (в пассивный GET-кэш не пишется), единственный
+    // экземпляр на диске — снапшот tasks:all. Берём стор из него, ошибку наружу не отдаём.
+    if (e instanceof OfflineError) { await hydrateFromCache(); return; }
+    throw e;
+  }
+  const list = keepLoadedFull(fresh, _tasks);
   // Поверх серверного списка накатываем ещё не синхронизированные офлайн-правки
   // (защита от reload при непустой очереди — напр. online-эффект опередил дренаж).
   _tasks = await mergePending(list, _tasks);
@@ -132,7 +223,7 @@ export function ensureFullTask(id: string): Promise<void> {
   const cur = _tasks.find(t => t.id === id);
   // Полная версия уже в сторе — грузить нечего. Задачи в сторе нет вовсе (снимок у родителя
   // обогнал стор) — грузим всё равно: иначе панель вечно ждала бы «Загружаю…»
-  if (cur && !cur.listItem) return Promise.resolve();
+  if (cur && !cur.listItem) { touchOpened(id); return Promise.resolve(); }
   const running = _fullInflight.get(id);
   if (running) return running;
   const known = !!cur;
@@ -142,20 +233,20 @@ export function ensureFullTask(id: string): Promise<void> {
     if (now && !now.listItem) return;
     if (!now) {
       // Была в сторе и пропала — удалена, пока грузили; не было вовсе — добавляем
-      if (!known) upsert(full);
+      if (!known) upsertOpened(full);
       return;
     }
     if (outboxHasPending(id)) {
       // Есть несинхронизированная локальная правка — она новее серверной копии:
       // подмешиваем только тексты, которых локально нет, остальное оставляем как есть
-      upsert({
+      upsertOpened({
         ...now,
         description: now.description || full.description,
         resultMarkdown: now.resultMarkdown ?? full.resultMarkdown,
         listItem: undefined,
       });
     } else {
-      upsert(full);
+      upsertOpened(full);
     }
   }).finally(() => { _fullInflight.delete(id); });
   _fullInflight.set(id, p);
@@ -193,12 +284,35 @@ let _outboxConfigured = false;
 
 // Подхватить локальный снапшот стора из IndexedDB (мгновенно, до сети): офлайн-правки
 // и последний известный список видны сразу и переживают перезагрузку страницы.
-async function hydrateFromCache(): Promise<void> {
-  if (_hydrated) return;
-  _hydrated = true;
-  if (_loaded) return;   // сеть уже успела наполнить стор
-  const cached = await idbGet<Task[]>(TASKS_SNAPSHOT_KEY).catch(() => undefined);
-  if (cached?.data && !_loaded) { _tasks = cached.data; emit(); }
+// Пассивный GET-кэш (offline.ts) хранил списки задач и фич ВТОРЫМ экземпляром рядом с tasks:all:
+// сотни КБ на чат, без вытеснения. Теперь эти запросы идут с live и в кэш не пишутся, а
+// остатки прежних записей сносим. Ключи — url запроса без /api (допускаем и с ним).
+const LEGACY_LIST_KEYS = ['/tasks', '/tasks/features'].flatMap(p => [p, `/api${p}`]);
+
+export async function purgeLegacyTaskListCache(): Promise<void> {
+  const keys = await idbKeys().catch(() => [] as string[]);
+  const stale = keys.filter(k => LEGACY_LIST_KEYS.some(p => k === p || k.startsWith(`${p}?`)));
+  await Promise.all(stale.map(k => idbDelete(k).catch(() => {})));
+}
+
+// Подхватить локальный снапшот стора из IndexedDB (мгновенно, до сети): офлайн-правки
+// и последний известный список видны сразу и переживают перезагрузку страницы.
+// Промис общий: офлайн-ветка reloadTasks дожидается ту же гидрацию, что запустил ensureTasksLoaded.
+let _hydrating: Promise<void> | null = null;
+
+function hydrateFromCache(): Promise<void> {
+  if (_hydrating) return _hydrating;
+  _hydrating = (async () => {
+    void purgeLegacyTaskListCache();
+    const cached = await idbGet<Task[]>(TASKS_SNAPSHOT_KEY).catch(() => undefined);
+    if (cached?.data && !_loaded) {
+      // Прежний снапшот мог хранить полные задачи: недавно открытые (до K) остаются полными
+      for (const t of cached.data) if (!t.listItem) pushOpened(t.id);
+      _tasks = cached.data.map(lightenTask);
+      emit();
+    }
+  })();
+  return _hydrating;
 }
 
 // Первая загрузка (идемпотентно). Вызывается из компонентов задач при монтировании.
@@ -255,7 +369,7 @@ function localNextOrder(): number {
 function createTaskOffline(projectId: string | null, dto: CreateTaskDto): Task {
   const id = dto.id ?? crypto.randomUUID();
   const task = buildLocalTask(id, projectId, dto, localNextOrder());
-  upsert(task);
+  upsertOpened(task);
   void enqueue(id, 'create', dto, { projectId });
   return task;
 }
@@ -264,7 +378,7 @@ export async function createTask(projectId: string | null, dto: CreateTaskDto): 
   if (offlineEnabled() && !isOnline()) return createTaskOffline(projectId, dto);
   try {
     const task = await api.tasks.create(projectId, dto);
-    upsert(task);
+    upsertOpened(task);
     return task;
   } catch (e) {
     if (offlineEnabled() && e instanceof OfflineError) return createTaskOffline(projectId, dto);
@@ -275,7 +389,7 @@ export async function createTask(projectId: string | null, dto: CreateTaskDto): 
 function updateTaskOffline(taskId: string, dto: UpdateTaskDto): Task {
   const cur = _tasks.find(t => t.id === taskId);
   const next = cur ? applyUpdateLocally(cur, dto) : undefined;
-  if (next) upsert(next);
+  if (next) upsertOpened(next);
   void enqueue(taskId, 'update', dto, { baseUpdatedAt: cur?.updatedAt });
   return next ?? (cur as Task);
 }
@@ -284,7 +398,7 @@ export async function updateTask(taskId: string, dto: UpdateTaskDto): Promise<Ta
   if (offlineEnabled() && !isOnline()) return updateTaskOffline(taskId, dto);
   try {
     const task = await api.tasks.update(taskId, dto);
-    upsert(task);
+    upsertOpened(task);
     return task;
   } catch (e) {
     if (offlineEnabled() && e instanceof OfflineError) return updateTaskOffline(taskId, dto);

@@ -11,6 +11,7 @@ import type { ChatItem } from '../../../types';
 import { setAllFlags } from '../../../lib/featureFlags';
 import type { FeatureRun } from '../../../types/featureRun';
 import { ChatItemView, shouldHideAbortBanner } from '../ChatItemView';
+import { C } from '../../../lib/design';
 import {
   ChatProjectContext, ChatTreePathContext, ChatSessionContext, PersonaContext,
   SpeakingItemContext, AssistantNameContext,
@@ -487,5 +488,39 @@ describe('ChatItemView — причина промаха кэша в подва�
   it('isLastResult: false и промах — сегмента «кэш не помог» нет', () => {
     setAllFlags({ 'prompt-cache': true });
     expect(renderMeta(resultWithCache('modelChanged'), false), 'мета только у последнего хода').not.toContain('кэш не помог');
+  });
+});
+
+// F-b «OOM на странице»: строка «ход ждёт свободный слот локальной модели» (событие
+// local_turn_queue, бэк 4683acb29). Янтарная предупреждающая строка с «Стоп» —
+// намеренно не красная карточка отказа: «занято» и «движок не отвечает» разные состояния.
+describe('ChatItemView — строка ожидания слота локальной модели', () => {
+  afterEach(() => setAllFlags({}));
+
+  const queueItem = (): ChatItem => ({ kind: 'local_turn_queue', position: 2, active: 3, limit: 3 });
+
+  it('числа очереди и кнопка «Стоп» в строке (c1)', () => {
+    const html = renderItem(queueItem());
+    expect(html).toContain('Ход ждёт свободный слот локальной модели');
+    expect(html).toContain('2-й в очереди');
+    expect(html).toContain('заняты 3 из 3');
+    expect(html, 'кнопка остановки хода').toContain('Стоп');
+    expect(html).toContain('data-testid="local-turn-queue"');
+  });
+
+  it('строка видна БЕЗ флага local-model-stats (c3): ожидание не привязано к метрикам', () => {
+    setAllFlags({ 'local-model-stats': false });
+    const html = renderItem(queueItem());
+    expect(html).toContain('ждёт свободный слот');
+    expect(html).toContain('2-й в очереди');
+  });
+
+  it('«занято» и «движок не отвечает» — разные тона: янтарная строка vs красная карточка (c4)', () => {
+    const queueHtml = renderItem(queueItem());
+    const downHtml = renderItem({ kind: 'error', text: 'локальный движок не отвечает', canRetry: false });
+    expect(queueHtml).toContain(C.warningBg);
+    expect(queueHtml, 'ожидание — не красная карточка отказа').not.toContain(C.dangerBg);
+    expect(downHtml).toContain(C.dangerBg);
+    expect(downHtml).not.toContain(C.warningBg);
   });
 });

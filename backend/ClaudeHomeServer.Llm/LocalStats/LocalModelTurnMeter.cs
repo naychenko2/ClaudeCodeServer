@@ -43,6 +43,16 @@ public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTur
     // токен) — обычный IdleTimeout: OnTokenCount обновляет LastActivity на каждом токене.
     private static readonly TimeSpan PrefillIdleTimeout = TimeSpan.FromMinutes(20);
 
+    // B3 (OOM-разведка 26.10): окно выгрузки idle-записей. _sessions чистился только по
+    // SessionDeleted: архивированный (не удалённый) чат, хоть раз запросивший локальный движок,
+    // держал запись навсегда (+1 запись на каждый когда-либо работавший на локали чат). Запись
+    // без запроса в работе и без активности дольше этого окна удаляется целиком: панель она
+    // давно не показывает (ActiveChats требует запрос в работе), а итог последнего хода живёт,
+    // пока чат «живой», — то же наблюдаемое поведение, что после рестарта бэкенда («счётчик
+    // ходов живёт в памяти», SessionLocalModelController). Окно равно толерантности silent
+    // prefill (PrefillIdleTimeout): без активности 20 мин чат мёртв уже для панели.
+    private static readonly TimeSpan IdleUnloadWindow = TimeSpan.FromMinutes(20);
+
     // M5: окно скользящей скорости генерации. Скорость = Δтокены / Δвремя по окну.
     // ~3 с: достаточно для сглаживания джиттера, коротко для отклика на смену скорости.
     private static readonly TimeSpan SpeedWindow = TimeSpan.FromSeconds(3);
@@ -292,6 +302,13 @@ public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTur
             s.InWork.Clear();
             s.TokenWindow.Clear();
             s.SessionTotalTokens = 0;
+            // B3: конец хода — активность чата: иначе ход без завершённых запросов в конце
+            // (долгий инструмент без обращений к движку) выгрузил бы свой итог сразу, не прожив
+            // idle-окна. После этой отметки запись становится idle и выгружается по окну.
+            s.LastActivity = _time.GetUtcNow();
+            // Конец хода — момент, когда записи становятся idle: вычищаем и чужие, на занятом
+            // сервере выгрузка идёт с каждым ходом, без чтения панели.
+            SweepIdleLocked();
         }
         return Task.CompletedTask;
     }
@@ -312,6 +329,23 @@ public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTur
 
     // Сколько прогонов ждут GPU в общей очереди (0 — нет данных/движок не настроен).
     private int CurrentWaiting() => _reader?.Current.Waiting ?? 0;
+
+    // Выгрузка idle-записей (под _gate, B3): критерий — нет запроса в работе И нет активности
+    // дольше IdleUnloadWindow. Активные записи (запрос в работе) не трогаются: их InWork/
+    // TokenWindow — данные живой панели. Записи создаются только запросом к движку, поэтому
+    // выгрузка на конце хода и на точках чтения ограничивает их число: на пустом сервере оно
+    // не растёт (новых записей нет), на занятом — чистится с каждым ходом, без чтения панели.
+    private void SweepIdleLocked()
+    {
+        var now = _time.GetUtcNow();
+        List<string>? doomed = null;
+        foreach (var (sessionId, s) in _sessions)
+            if (s.InWork.Count == 0 && now - s.LastActivity > IdleUnloadWindow)
+                (doomed ??= []).Add(sessionId);
+        if (doomed is null) return;
+        foreach (var id in doomed)
+            _sessions.Remove(id);
+    }
 
     // Живое событие: не чаще 1 раза в секунду на сессию, только пока есть запрос в работе.
     private void EmitLive(string sessionId, string phase, double? genTps, int waiting)
@@ -349,6 +383,8 @@ public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTur
         var now = _time.GetUtcNow();
         lock (_gate)
         {
+            // B3: точка чтения панели — триггер выгрузки idle-записей.
+            SweepIdleLocked();
             var list = new List<TurnChatLive>(_sessions.Count);
             foreach (var (sessionId, s) in _sessions)
             {
@@ -373,11 +409,16 @@ public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTur
         }
     }
 
-    // Итог последнего завершённого хода сессии; null — ходов не было (или сессия не известна).
+    // Итог последнего завершённого хода сессии; null — ходов не было (или сессия не известна,
+    // в т.ч. выгружена по idle-окну, B3: та же семантика, что после рестарта бэкенда).
     public LocalModelTurnSummary? GetLastTurn(string sessionId)
     {
         lock (_gate)
+        {
+            // B3: тот же критерий, что у ActiveChats: idle-запись выгружается до чтения.
+            SweepIdleLocked();
             return _sessions.TryGetValue(sessionId, out var s) ? s.LastSummary : null;
+        }
     }
 
     // Текущая скорость чата: средняя по завершённым запросам хода (output/генерация).

@@ -5,8 +5,8 @@
 // exists=false не открывает файл, mockupsUnavailable='device', счётчик вкладки,
 // ошибка загрузки текста + «Повторить».
 // «Прочие документы» (M7): linkedFiles задач из plans[].mockupPaths показываются
-// карточками (имя + путь), не дублируются с макетами, схлопываются между планами,
-// входят в счётчик; при 'device' группы нет.
+// карточками (имя + путь), не дублируются с макетами (ни их path, ни файлы макета),
+// схлопываются между планами и по регистру, входят в счётчик; при 'device' группы нет.
 //
 // Окружение node (без jsdom): fakeDom (mount) + mock api.tasks.get (текст документа).
 
@@ -15,7 +15,6 @@ import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeaturePlansTab, plansTabCount } from './FeaturePlansTab';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
-import { api } from '../../lib/api';
 import { getBackNav, clearBackNav, featureBackNavFromTask } from '../../lib/featureBackNav';
 import type { FeaturePage } from '../../types/featureIndex';
 import type { FeaturePlan, FeatureMockup } from '../../types/featurePlans';
@@ -474,6 +473,38 @@ describe('FeaturePlansTab', () => {
     expect(plansTabCount(page)).toBe(1);
     const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false }));
     expect(collectText(container, 'other-doc-row').length).toBe(0);
+  });
+
+  // === 7f. Путь, покрытый ФАЙЛОМ макета (не его path): макет-записка note.md с файлом
+  // a.html, план приложил docs/mockups/a.html — «прочего документа» нет (R-M7, Minor 1).
+  // В фикстуре 7b path макета и files[0].path — одна строка, обе ветки покрытия
+  // (m.path и m.files) неразличимы; здесь они разные. Мутация «не покрывать по m.files»
+  // (убрать for (const f of m.files) covered.add(...) в FeaturePlansTab) краснеет:
+  // появляется карточка docs/mockups/a.html. ===
+  it('прочие документы: путь, покрытый файлом макета (не его path), не дублируется', () => {
+    const page = pageData({
+      plans: [plan({ taskId: 'd2', role: 'design', title: 'Дизайн', mockupPaths: ['docs/mockups/a.html'] })],
+      mockups: [mockup({ path: 'docs/mockups/note.md', title: 'Записка', files: [{ path: 'docs/mockups/a.html', exists: true }] })],
+    });
+    const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false }));
+    // Фикстура валидна: макет-записка стоит в группе «Макеты».
+    expect(findNodeByAttr(container as FNode, 'data-testid', 'mockup-row'), 'макет-записка не отрисована').not.toBeNull();
+    expect(collectText(container, 'other-doc-row').length, 'путь, покрытый файлом макета, стал «прочим документом»').toBe(0);
+  });
+
+  // === 7g. Схлопывание по регистру (R-M7, Minor 5): макет MyMockup.html, приложен
+  // mymockup.html — отличается только регистром, карточка одна (макет), «прочего
+  // документа» нет. Мутация «точное сравнение» (убрать toLowerCase в otherDocPaths)
+  // краснеет: появляется карточка docs/mockups/mymockup.html. ===
+  it('прочие документы: путь, отличающийся от макета только регистром, не дублируется', () => {
+    const page = pageData({
+      plans: [plan({ mockupPaths: ['docs/mockups/mymockup.html'] })],
+      mockups: [mockup({ path: 'docs/mockups/MyMockup.html', title: 'MyMockup', files: [{ path: 'docs/mockups/MyMockup.html', exists: true }] })],
+    });
+    const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false }));
+    // Фикстура валидна: макет стоит в группе «Макеты» — карточка одна.
+    expect(findNodeByAttr(container as FNode, 'data-testid', 'mockup-row'), 'макет MyMockup не отрисован').not.toBeNull();
+    expect(collectText(container, 'other-doc-row').length, 'путь, отличающийся только регистром, стал «прочим документом»').toBe(0);
   });
 
   // === 8. Markdown через ОБЩИЙ рендер (лента): GFM-таблица → <table> ===

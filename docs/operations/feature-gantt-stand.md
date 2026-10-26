@@ -109,6 +109,49 @@ curl -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" \
 Счётчика «30 ходов» в контракте **нет** — не искать. Числа разошлись — фикстура
 устарела: пересобрать `make-slice.py` и вернуть флаг admin.
 
+## Живой случай (GC-WT6)
+
+Чтобы приёмка видела не только закрытый вид фичы, но и живой «идёт», срез несёт живой
+случай: `make-slice.py` сам открывает эпик `8d33d18b…` (Status→1, CompletedAt→null) и
+финал `2cddab26…` (Status→1) сразу после выборки — случай переживает любую перегенерацию.
+
+- закрытое состояние лежит в резервной копии `data/tasks.json.bak-live` (рядом с `tasks.json`);
+- **вернуть закрытое:** `cp ~/Sources/ClaudeCodeServer-feature-gantt-c-data/data/tasks.json.bak-live ~/Sources/ClaudeCodeServer-feature-gantt-c-data/data/tasks.json`;
+- **включить живое без перегенерации** (если срез только что возвращён из резерва):
+
+```bash
+python3 -I - <<'EOF'
+import json
+p='/home/an/Sources/ClaudeCodeServer-feature-gantt-c-data/data/tasks.json'
+ts=json.load(open(p))
+for t in ts:
+    if t['Id']=='8d33d18b-c6f6-4311-8ddb-e5a627f38fb2': t['Status'],t['CompletedAt']=1,None
+    elif t['Id']=='2cddab26-0f6d-4789-9cd3-0462be05e5ba': t['Status']=1
+json.dump(ts,open(p,'w'),ensure_ascii=False)
+EOF
+```
+
+Что даёт живой случай в `GET /api/tasks/features/8d33d18b…` (проверено 26.10.26):
+`run.state: "running"`, `run.now` — 1 запись (финал; эпик в «сейчас» не входит),
+в `stats.timeline.intervalsByStage` — интервал с `live: true` в стадии `final`
+(`to` = now), `stats.timeline.to` = now.
+
+**`tasks.json` читается только при старте сервера** (`TaskManager.Load()` в конструкторе,
+[TaskManager.cs](../../backend/ClaudeHomeServer.Tasks/TaskManager.cs):112) — после замены
+файла стенд нужно перезапустить.
+
+**После любой перегенерации `make-slice.py` — вручную вернуть флаг `features-overview`
+в `users.json` у admin** (скрипт пишет пустой `FeatureFlags`, см. выше) — живой случай
+этого не отменяет.
+
+## Закрытый случай
+
+Если приёмке нужен именно закрытый вид (например, проверить, что «сейчас» отсутствует):
+вернуть фичу в Done одной командой резерва — `cp …tasks.json.bak-live …tasks.json`
+(эпику вернутся Status 2 и его `CompletedAt`, финалу — Status 2). После перезапуска
+стенда: `run.state: "closed"`, `run.now` пуст, интервалов с `live: true` нет.
+Эталонная таблица выше — про это состояние.
+
 ## Погасить стенд
 
 Гасить **по PID своего процесса** (`$!` при запуске или PID с порта через `ss -ltnp`):

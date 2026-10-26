@@ -16,6 +16,7 @@ import type { PlanState } from '../lib/featureProgress';
 // Чат фичи (GET features/{id}, chats[]) — из featureChats; алиас, чтобы не путать с
 // FeatureChatLink этого файла (запись индекса «чат × фича», бэк: FeatureIndexChatEntry).
 import type { FeatureChatLink as FeaturePageChatLink } from './featureChats';
+import type { FeatureBrief } from '../lib/featurePage';
 
 // Группа фичи (контракт §1): attention — требует внимания; running — идёт;
 // idle — стоит; closed — закрыта. Считается той же функцией, что и порядок.
@@ -222,4 +223,7 @@ export interface FeaturePage {
   mockups?: FeatureMockup[];
   // 'device' — макеты недоступны (нет устройства); null — доступны.
   mockupsUnavailable?: 'device';
+  // Сводка состояния фичи (волна 6, разрез п. 6). Аддитивное: старые ответы его
+  // не несут — UI обязан пережить отсутствие (блок «Сводка» тогда не показывается).
+  brief?: FeatureBrief;
 }

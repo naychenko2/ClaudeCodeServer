@@ -712,32 +712,37 @@ public sealed class FeatureProjector(TaskManager tasks)
     }
 
     // ─── Б-pl: документы фичи (волна 3 «Обзор фич», вкладка «Планы и макеты») ────────────────
-    // Чистая проекция FeatureRun → List<FeaturePlan> БЕЗ хранилища: разрез (cut), план (plan) и
-    // консультация (consult) фичи — СПИСОК документов вкладки, без текста. Text (ResultMarkdown)
-    // в ответ НЕ попадает: вкладка берёт список, текст подгружает по клику (GET /api/tasks/{id}).
-    // Считается по ПОЛНОМУ (необлегчённому) run ДО SlimRun: Slim обнуляет ResultMarkdown, а
-    // hasText/mockupPaths — из него.
+    // Чистая проекция FeatureRun → List<FeaturePlan> БЕЗ хранилища: разрез (cut), дизайн (design),
+    // план (plan) и консультация (consult) фичи — СПИСОК документов вкладки, без текста.
+    // Text (ResultMarkdown) в ответ НЕ попадает: вкладка берёт список, текст подгружает по клику
+    // (GET /api/tasks/{id}). Считается по ПОЛНОМУ (необлегчённому) run ДО SlimRun: Slim обнуляет
+    // ResultMarkdown, а hasText/mockupPaths — из него.
     //
-    // Источник: run.Cut (несёт cut И consult) + run.Plan (plan). Роль — из TaskItem.Role как есть
-    // (step в документы не попадает, догадок по заголовку нет). hasText — ResultMarkdown не пуст
-    // после Trim; mockupPaths — пути макетов (docs/mockups/….{html,md}) из ResultMarkdown: distinct,
-    // порядок появления, ≤ 20, пути с «..» отброшены.
+    // Источник: run.Cut (несёт cut И consult) + run.Design (design) + run.Plan (plan). Роль — из
+    // TaskItem.Role как есть (step в документы не попадает, догадок по заголовку нет). hasText —
+    // ResultMarkdown не пуст после Trim; mockupPaths — пути файлов документа: макеты из
+    // ResultMarkdown (docs/mockups/….{html,md}) + файлы, которые задача сама приложила через
+    // LinkedFiles (M5: ADR, спеки, записки вне docs/mockups не должны теряться в разделе):
+    // distinct, порядок появления (сначала текст, потом linkedFiles), ≤ 20, пути с «..» отброшены.
     //
-    // Порядок списка: роль (cut → plan → consult), внутри роли — по CreatedAt.
+    // Порядок списка: роль (cut → design → plan → consult), внутри роли — по CreatedAt.
     public static List<FeaturePlan> BuildPlans(FeatureRun run)
     {
         ArgumentNullException.ThrowIfNull(run);
 
-        // cut/consult — из run.Cut (там обе роли); plan — из run.Plan. Роль — из TaskItem.Role
-        // как есть (у задач run.Cut/run.Plan она всегда non-null: cut/consult/plan).
+        // cut/consult — из run.Cut (там обе роли); design — из run.Design; plan — из run.Plan.
+        // Роль — из TaskItem.Role как есть (у задач run.Cut/run.Design/run.Plan она всегда
+        // non-null: cut/consult/design/plan).
         var cut = run.Cut.Where(t => t.Role == TaskRoles.Cut).ToList();
+        var design = run.Design.Where(t => t.Role == TaskRoles.Design).ToList();
         var consult = run.Cut.Where(t => t.Role == TaskRoles.Consult).ToList();
         var plan = run.Plan.Where(t => t.Role == TaskRoles.Plan).ToList();
 
-        // Порядок: cut → plan → consult; внутри роли — по CreatedAt (OrderBy стабилен: равные
-        // CreatedAt сохраняют порядок, в котором задачи дал вызывающий).
+        // Порядок: cut → design → plan → consult; внутри роли — по CreatedAt (OrderBy стабилен:
+        // равные CreatedAt сохраняют порядок, в котором задачи дал вызывающий).
         var ordered = new List<TaskItem>();
         ordered.AddRange(cut.OrderBy(t => t.CreatedAt));
+        ordered.AddRange(design.OrderBy(t => t.CreatedAt));
         ordered.AddRange(plan.OrderBy(t => t.CreatedAt));
         ordered.AddRange(consult.OrderBy(t => t.CreatedAt));
 
@@ -757,18 +762,31 @@ public sealed class FeatureProjector(TaskManager tasks)
     // hasText: ResultMarkdown не пуст после Trim (null/""/пробелы → false).
     private static bool HasText(TaskItem t) => !string.IsNullOrWhiteSpace(t.ResultMarkdown);
 
-    // Пути макетов (docs/mockups/….{html,md}) из ResultMarkdown: distinct, порядок появления,
-    // ≤ 20, пути с «..» отброшены. null/пусто → [].
+    // Пути файлов документа (M5): макеты из ResultMarkdown (docs/mockups/….{html,md}) + файлы,
+    // которые задача приложила через LinkedFiles (ADR, спеки, записки — вне docs/mockups).
+    // Порядок: сначала пути из текста (порядок появления), затем из LinkedFiles (как приложены).
+    // distinct, общий потолок 20, пустые и пути с «..» (pathtraversal) отброшены.
+    // Пустой источник → [].
     private static List<string> MockupPaths(TaskItem t)
     {
-        var text = t.ResultMarkdown;
-        if (string.IsNullOrEmpty(text)) return [];
         var paths = new List<string>();
-        foreach (System.Text.RegularExpressions.Match m in MockupPathRegex.Matches(text))
+        var text = t.ResultMarkdown;
+        if (!string.IsNullOrEmpty(text))
         {
-            var p = m.Value;
-            // «..» — выход за docs/mockups (pathtraversal) → отбрасываем.
-            if (p.Contains("..")) continue;
+            foreach (System.Text.RegularExpressions.Match m in MockupPathRegex.Matches(text))
+            {
+                var p = m.Value;
+                // «..» — выход за docs/mockups (pathtraversal) → отбрасываем.
+                if (p.Contains("..")) continue;
+                if (!paths.Contains(p)) paths.Add(p);
+                if (paths.Count >= 20) return paths;
+            }
+        }
+        // LinkedFiles — намеренные приложения задачи (контракт: пути от корня через /): берём как
+        // есть, та же безопасность: пустые и с «..» отброшены, дубли схлопнуты, потолок общий.
+        foreach (var p in t.LinkedFiles)
+        {
+            if (string.IsNullOrWhiteSpace(p) || p.Contains("..")) continue;
             if (!paths.Contains(p)) paths.Add(p);
             if (paths.Count >= 20) break;
         }

@@ -100,15 +100,17 @@ public sealed class FeatureRun
     public FeatureSummary? Summary { get; init; }
 }
 
-// Документ фичи (волна 3 «Обзор фич», вкладка «Планы и макеты»): разрез (cut), план (plan)
-// или консультация (consult) — СПИСОК из GET features/{id}, без текста. Текст (ResultMarkdown)
-// в ответ не попадает: вкладка берёт список, а текст подгружает по клику (GET /api/tasks/{id}).
-// role — из TaskItem.Role как есть (cut/plan/consult; step сюда не попадает). hasText — есть ли
-// ResultMarkdown (после Trim); mockupPaths — пути макетов из ResultMarkdown (docs/mockups/….{html,md}).
+// Документ фичи (волна 3 «Обзор фич», вкладка «Планы и макеты»): разрез (cut), дизайн (design),
+// план (plan) или консультация (consult) — СПИСОК из GET features/{id}, без текста. Текст
+// (ResultMarkdown) в ответ не попадает: вкладка берёт список, а текст подгружает по клику
+// (GET /api/tasks/{id}). role — из TaskItem.Role как есть (cut/design/plan/consult; step сюда не
+// попадает). hasText — есть ли ResultMarkdown (после Trim); mockupPaths — пути файлов документа:
+// макеты из ResultMarkdown (docs/mockups/….{html,md}) + файлы, которые задача приложила через
+// LinkedFiles (M5: ADR, спеки, записки вне docs/mockups). Имя поля — прежний JSON-контракт.
 public sealed record FeaturePlan(
     // Id задачи-документа.
     string TaskId,
-    // Роль как есть: cut | plan | consult.
+    // Роль как есть: cut | design | plan | consult.
     string Role,
     // Название задачи.
     string Title,
@@ -120,8 +122,8 @@ public sealed record FeaturePlan(
     DateTime? CompletedAt,
     // Есть ли текст (ResultMarkdown не пуст после Trim).
     bool HasText,
-    // Пути макетов (docs/mockups/….{html,md}) из ResultMarkdown: distinct, порядок появления,
-    // ≤ 20, пути с «..» отброшены.
+    // Пути файлов документа: макеты из ResultMarkdown (docs/mockups/….{html,md}), затем файлы
+    // из LinkedFiles задачи. distinct, общий потолок 20, пустые и пути с «..» отброшены.
     List<string> MockupPaths);
 
 // «Сейчас»: одна InProgress-задача фичи (кто и что делает, сколько идёт).
@@ -404,8 +406,10 @@ public sealed class FeatureStepProgress
 {
     // pending — задач role=plan нет, или у всех пустой planSteps; partial — списки есть только у
     // части планов; cut — у всех; done — cut, total > 0 и все шаги приняты. Снятые (withdrawn)
-    // планы в маппинг не входят.
-    public string PlanState { get; init; } = "pending";
+    // планы в маппинг не входят. Значения задают константы FeatureStepAccounting.Plan* — дефолт
+    // литералом разъехался бы с ними молча (тот же риск, что закрывал сторож FeatureBrief.
+    // EstimateOf; возврат ревью R-B5).
+    public string PlanState { get; init; } = FeatureStepAccounting.PlanPending;
     public int Total { get; init; }
     public int Accepted { get; init; }
     public int Review { get; init; }

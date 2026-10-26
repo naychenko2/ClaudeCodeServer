@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Security.Claims;
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
@@ -1223,6 +1224,132 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         }
     }
 
+    // ─── B1b: brief (сводка состояния фичи) в GET features/{id} ─────────────────────────────────
+
+    // Корень репозитория от каталога сборки (тот же приём, что PromptBenchTests): для исходникового
+    // сторожа GetFeature. .git — папка или файл: в git-worktree это файл-указатель.
+    private static string RepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null
+               && !Directory.Exists(Path.Combine(dir.FullName, ".git"))
+               && !File.Exists(Path.Combine(dir.FullName, ".git")))
+            dir = dir.Parent;
+        return dir?.FullName ?? throw new InvalidOperationException("Корень репозитория не найден");
+    }
+
+    // B1b: brief — аддитивное поле: верхние ключи ответа = прежние + brief (снапшот). Значения brief
+    // взяты из тех же экземпляров run/timeline, что пошли в ответ: done — счётчики run этого же
+    // ответа, elapsed — workWallMinutes timeline этого же stats, kind — функция state этого же run
+    // (свежий эпик + pending-шаг → not_started → idle, таблица B1a). В B1b нет голоса/оценки/очереди.
+    // Мутации: «brief нет в ответе» → снапшот без ключа (краснеет); «brief по своему run/stats» →
+    // расхождение значений (краснеет); «estimate не null» → краснеет.
+    [Fact]
+    public async Task GetFeature_Brief_КлючиСнапшотИЗначенияИзТогоЖеRun()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString()!;
+        await CreateTaskAsync(new { title = "шаг", featureId = epicId, role = "step", stepRef = "Ш1" });
+
+        var body = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+
+        // Снапшот верхних ключей: прежние восемь + brief, ничего больше.
+        body.EnumerateObject().Select(p => p.Name).OrderBy(x => x, StringComparer.Ordinal)
+            .Should().Equal("brief", "chats", "events", "eventsTotal", "mockups",
+                "mockupsUnavailable", "plans", "run", "stats");
+
+        var brief = body.GetProperty("brief");
+        // Поля контракта (разрез п.6).
+        foreach (var field in new[] { "kind", "now", "reason", "done", "next",
+            "elapsedMinutes", "estimate", "queue", "note", "computedAt" })
+            brief.TryGetProperty(field, out _).Should().BeTrue("brief." + field);
+
+        // B1b: без голоса, оценки и номера очереди.
+        brief.GetProperty("estimate").ValueKind.Should().Be(JsonValueKind.Null);
+        brief.GetProperty("queue").ValueKind.Should().Be(JsonValueKind.Null);
+        brief.GetProperty("note").ValueKind.Should().Be(JsonValueKind.Null);
+
+        // Тот же экземпляр run: done — счётчики run этого же ответа, не отдельный счёт.
+        var run = body.GetProperty("run");
+        var done = brief.GetProperty("done");
+        done.GetProperty("stepsAccepted").GetInt32().Should().Be(run.GetProperty("stepsAccepted").GetInt32());
+        done.GetProperty("stepsTotal").GetInt32().Should().Be(run.GetProperty("stepsTotal").GetInt32());
+        done.GetProperty("loops").GetInt32().Should().Be(run.GetProperty("verdicts").GetProperty("loops").GetInt32());
+        done.GetProperty("planState").GetString()
+            .Should().Be(run.GetProperty("stepProgress").GetProperty("planState").GetString());
+
+        // Тот же экземпляр timeline: elapsed — workWallMinutes stats этого же ответа.
+        var work = body.GetProperty("stats").GetProperty("timeline").GetProperty("totals")
+            .GetProperty("workWallMinutes").GetInt32();
+        brief.GetProperty("elapsedMinutes").GetInt32().Should().Be(work);
+
+        // kind — функция состояния (таблица B1a): свежий эпик + pending-шаг → not_started → idle.
+        run.GetProperty("state").GetString().Should().Be("not_started");
+        brief.GetProperty("kind").GetString().Should().Be(FeatureBrief.Kinds.Idle);
+
+        // next — не больше трёх (контракт).
+        brief.GetProperty("next").GetArrayLength().Should().BeLessThanOrEqualTo(FeatureBrief.MaxNext);
+    }
+
+    // B1b: brief только на странице фичи: строка индекса и features?sessionId= brief не несут
+    // (лёгкий путь, урок MAJOR-1). Мутация «brief в индексе/списке» → краснеет.
+    [Fact]
+    public async Task GetFeature_Brief_ИндексИСписокБез()
+    {
+        var sessionId = await CreatePersonalChatAsync(OwnerId);
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature", sourceSessionId = sessionId });
+        var epicId = epic.GetProperty("id").GetString()!;
+
+        // Страница: brief на месте (страховка от «brief нигде не появляется»).
+        var page = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        page.TryGetProperty("brief", out _).Should().BeTrue("страница несёт brief");
+
+        // Индекс: строка фичи brief не несёт.
+        var index = await GetIndexAsync();
+        var row = index.GetProperty("features").EnumerateArray()
+            .Single(f => f.GetProperty("featureId").GetString() == epicId);
+        row.TryGetProperty("brief", out _).Should().BeFalse("индекс brief не несёт");
+
+        // Список: run brief не несёт.
+        var list = await (await _client.GetAsync($"/api/tasks/features?sessionId={sessionId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var listRun = list.EnumerateArray()
+            .Single(f => f.GetProperty("featureId").GetString() == epicId);
+        listRun.TryGetProperty("brief", out _).Should().BeFalse("список brief не несёт");
+    }
+
+    // B1b: в GetFeature нет второго расчёта: в теле метода базовые числа вызовов — ProjectFull
+    // (текущая фича + каждый участник общего чата), FeatureTimeline.Build / FeatureTypical.Build /
+    // FeatureBrief.Build — по одному. Мутация «ProjectFull/FeatureTimeline.Build ещё раз для brief»
+    // → краснеет. Сторож исходника: FeatureProjector sealed, рантаймового счётчика без правки
+    // вне списка файлов задачи не построить.
+    [Fact]
+    public void GetFeature_НетВторогоРасчёта_БазовыеЧислаВызовов()
+    {
+        var src = File.ReadAllText(Path.Combine(RepoRoot(),
+            "backend", "ClaudeHomeServer", "Controllers", "TasksController.cs"));
+        var start = src.IndexOf("public async Task<IActionResult> GetFeature(", StringComparison.Ordinal);
+        var end = src.IndexOf("[HttpPost(\"features/{featureId}/summary\")]", start, StringComparison.Ordinal);
+        (start >= 0 && end > start).Should().BeTrue("тело GetFeature найдено");
+        var body = src[start..end];
+
+        static int Count(string haystack, string needle)
+        {
+            var n = 0;
+            for (var i = 0; (i = haystack.IndexOf(needle, i, StringComparison.Ordinal)) >= 0; i += needle.Length)
+                n++;
+            return n;
+        }
+
+        Count(body, "ProjectFull(").Should().Be(2,
+            "текущая фича + участник общего чата: второй ProjectFull для brief запрещён (разрез п.7)");
+        Count(body, "FeatureTimeline.Build(").Should().Be(1, "один timeline: тот же экземпляр в stats и brief");
+        Count(body, "FeatureTypical.Build(").Should().Be(1);
+        Count(body, "FeatureBrief.Build(").Should().Be(1, "один расчёт сводки");
+    }
+
     // ─── Б-mk-b: макеты фичи (mockups[] + mockupsUnavailable) в GET features/{id} ───────────
 
     // Сериализация IActionResult.GetFeature в camelCase-JSON (как wire): для прямых сборок
@@ -1333,6 +1460,172 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var mockup = json.GetProperty("mockups").EnumerateArray().Single();
         mockup.GetProperty("taskId").GetString().Should().Be(stepId, "taskId — по задаче, в linkedFiles которой path");
         mockup.GetProperty("authorPersonaId").GetString().Should().Be("persona-mk");
+    }
+
+    // M1: задача role=design входит в AllRunTasks — её linkedFiles доходят до каталога, а
+    // макет получает taskId/authorPersonaId от задачи дизайнера (иначе макеты от design в
+    // карточке фичи не показываются вовсе: их нет ни в AllLinkedFiles, ни в OwnerTask).
+    [Fact]
+    public async Task GetFeature_Mockups_Design_ЗадачаDesignДаётTaskId()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString()!;
+        // Задача дизайнера с linkedFiles на макет; PersonaId — напрямую в сторе (мимо валидации).
+        var design = await CreateTaskAsync(new
+        {
+            title = "макет", featureId = epicId, role = "design",
+            linkedFiles = new[] { "docs/mockups/x.html" },
+        });
+        var designId = design.GetProperty("id").GetString()!;
+        _factory.Services.GetRequiredService<TaskManager>().GetById(designId)!.PersonaId = "persona-dsg";
+        var dir = Path.Combine(_factory.TempDir, "mk_dsg_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        var project = Projects.Create("mk-dsg-" + Guid.NewGuid().ToString("N")[..6], dir, OwnerId, "testuser");
+        _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.ProjectId = project.Id;
+        // Та же проверка проектного фильтра, что в шаговом образце: задача design — в проекте эпика.
+        _factory.Services.GetRequiredService<TaskManager>().GetById(designId)!.ProjectId = project.Id;
+
+        var catalog = new FixedMockupCatalog(new MockupEntry(
+            Path: "docs/mockups/x.html", Title: "Макет", Status: null,
+            Files: [new MockupFile("docs/mockups/x.html", true)],
+            Source: MockupSource.LinkedFiles, ModifiedAt: null));
+        var controller = BuildController(git: null, catalog: catalog);
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
+
+        var json = FeatureJson(result);
+        var mockup = json.GetProperty("mockups").EnumerateArray().Single();
+        mockup.GetProperty("path").GetString().Should().Be("docs/mockups/x.html");
+        mockup.GetProperty("taskId").GetString().Should().Be(designId, "taskId — по задаче design");
+        mockup.GetProperty("authorPersonaId").GetString().Should().Be("persona-dsg");
+    }
+
+    // M8 (находка Глеба по ревью 8ad0b125, п.2, решение): безролевая задача (featureId есть,
+    // role null) — задача ПОЛНОГО run: она входит в AllRunTasks. Её linkedFiles доходят до
+    // каталога, а макет получает taskId/authorPersonaId от неё — тот же состав, что у ленты
+    // событий (FeatureProjector.BuildEvents) и chats[] (allFeatureTasks в GetFeature): ВСЕ
+    // задачи с featureId. До решения AllRunTasks не включал run.Unroled: макет безролевой
+    // задачи не попадал в карточку вовсе (ни через AllLinkedFiles, ни через OwnerTask) — ровно
+    // так же, как сломалась роль design в M1. Каталог настоящий, файл на диске: мутация
+    // (убрать AddRange(run.Unroled) в AllRunTasks) — linkedPaths не доходит, макета нет →
+    // тест красный.
+    [Fact]
+    public async Task GetFeature_Mockups_Unroled_ЗадачаБезРолиДаётМакет()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString()!;
+        // Безролевая задача фичи с linkedFiles на макет; PersonaId — напрямую в сторе
+        // (мимо валидации персоны в Create).
+        var unroled = await CreateTaskAsync(new
+        {
+            title = "безролевая", featureId = epicId,
+            linkedFiles = new[] { "docs/mockups/x.html" },
+        });
+        var unroledId = unroled.GetProperty("id").GetString()!;
+        _factory.Services.GetRequiredService<TaskManager>().GetById(unroledId)!.PersonaId = "persona-unr";
+        var dir = Path.Combine(_factory.TempDir, "mk_unr_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        var project = Projects.Create("mk-unr-" + Guid.NewGuid().ToString("N")[..6], dir, OwnerId, "testuser");
+        _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.ProjectId = project.Id;
+        // Та же проверка проектного фильтра, что в design-образце: задача — в проекте эпика.
+        _factory.Services.GetRequiredService<TaskManager>().GetById(unroledId)!.ProjectId = project.Id;
+        // Файл макета на диске: настоящий каталог проверяет существование по диску (запасной
+        // путь linkedFiles) — без linkedPaths задачи записи не было бы вовсе.
+        Directory.CreateDirectory(Path.Combine(dir, "docs", "mockups"));
+        File.WriteAllText(Path.Combine(dir, "docs", "mockups", "x.html"), "mockup");
+
+        var controller = BuildController(git: null,
+            catalog: _factory.Services.GetRequiredService<MockupCatalog>());
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
+
+        var json = FeatureJson(result);
+        var mockup = json.GetProperty("mockups").EnumerateArray().Single();
+        mockup.GetProperty("path").GetString().Should().Be("docs/mockups/x.html");
+        mockup.GetProperty("taskId").GetString().Should().Be(unroledId, "taskId — по безролевой задаче");
+        mockup.GetProperty("authorPersonaId").GetString().Should().Be("persona-unr");
+    }
+
+    // M8 (находка Глеба по ревью 8ad0b125, п.2): сторож полноты ролей в двух списках задач
+    // фичи — AllRunTasks (макеты: AllLinkedFiles/OwnerTask) и BuildPlans (вкладка «Планы и
+    // макеты»). Оба перечисляют списки FeatureRun вручную: новая роль из TaskRoles.All, попав
+    // в FeatureRun, молча выпадает из обоих — ровно так сломалась роль design. Сторож — таблица
+    // роль → список FeatureRun плюс проверка поведения: новая роль в TaskRoles.All без строки
+    // в таблице, новый список в FeatureRun, не покрытый таблицей, или выпавшая строка в одном
+    // из списков — тест красный. Таблица — место, где решение о новой роли записывается
+    // осознанно: какой список её несёт и документ ли она (InPlans — роль в BuildPlans).
+    private static readonly (string? Role, string List, bool InPlans)[] RoleToRunList =
+    [
+        (TaskRoles.Feature, nameof(FeatureRun.Epic), false),
+        (TaskRoles.Cut, nameof(FeatureRun.Cut), true),
+        (TaskRoles.Design, nameof(FeatureRun.Design), true),
+        (TaskRoles.Plan, nameof(FeatureRun.Plan), true),
+        (TaskRoles.Step, nameof(FeatureRun.Steps), false),
+        (TaskRoles.Rework, nameof(FeatureRun.Steps), false),
+        (TaskRoles.Review, nameof(FeatureRun.Reviews), false),
+        (TaskRoles.Qa, nameof(FeatureRun.Qa), false),
+        (TaskRoles.Final, nameof(FeatureRun.Final), false),
+        (TaskRoles.Merge, nameof(FeatureRun.Merge), false),
+        (TaskRoles.Consult, nameof(FeatureRun.Cut), true),
+        // Безролевые задачи (role = null): не роль из TaskRoles.All, но вид задачи в run —
+        // M8: входят в AllRunTasks (тот же состав, что у ленты событий и chats[]), не документы.
+        (null, nameof(FeatureRun.Unroled), false),
+    ];
+
+    [Fact]
+    public void AllRunTasks_и_BuildPlans_НесутЗадачиКаждойРоли()
+    {
+        // Полнота таблицы в обе стороны: каждая роль TaskRoles.All имеет строку (новая роль →
+        // красный тест, пока решение здесь не записано); в таблице нет ролей вне TaskRoles.All
+        // (роль убрали — чистится и таблица). Строка безролевых (Role=null) — вне этого
+        // сравнения: это не роль TaskRoles.All, а вид задачи run.
+        var mappedRoles = RoleToRunList.Where(r => r.Role is not null).Select(r => r.Role!).ToList();
+        foreach (var role in TaskRoles.All)
+            mappedRoles.Should().Contain(role,
+                "новая роль TaskRoles.All должна быть внесена в таблицу: какой список FeatureRun её несёт, документ ли она");
+        foreach (var role in mappedRoles)
+            TaskRoles.All.Should().Contain(role, "в таблице нет ролей вне TaskRoles.All — чистится и таблица");
+
+        // Каждый список/одиночное поле FeatureRun, несущее задачу, покрыт таблицей: новый
+        // список в FeatureRun (под новую роль) краснит сторож, пока его не посмотрели.
+        var covered = new HashSet<string>(RoleToRunList.Select(r => r.List));
+        foreach (var prop in typeof(FeatureRun).GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (prop.PropertyType != typeof(TaskItem) && prop.PropertyType != typeof(List<TaskItem>))
+                continue;
+            covered.Should().Contain(prop.Name,
+                $"поле FeatureRun «{prop.Name}» несёт задачи, но не покрыто таблицей ролей");
+        }
+
+        // Поведение: задача каждой строки таблицы входит в AllRunTasks (список задач фичи);
+        // документная роль — и в BuildPlans; недокументная — в BuildPlans не входит (контракт
+        // FeaturePlan: step в документы не попадает).
+        var run = new FeatureRun { FeatureId = "f" };
+        var tasks = new TaskItem[RoleToRunList.Length];
+        for (var i = 0; i < RoleToRunList.Length; i++)
+        {
+            var (role, listName, _) = RoleToRunList[i];
+            var task = new TaskItem { Id = role is null ? "t-unroled" : "t-" + role, Role = role };
+            tasks[i] = task;
+            var prop = typeof(FeatureRun).GetProperty(listName)!;
+            if (prop.PropertyType == typeof(TaskItem))
+                prop.SetValue(run, task);
+            else
+                ((List<TaskItem>)prop.GetValue(run)!).Add(task);
+        }
+
+        var all = TasksController.AllRunTasks(run);
+        var plans = FeatureProjector.BuildPlans(run);
+        for (var i = 0; i < RoleToRunList.Length; i++)
+        {
+            var (role, _, inPlans) = RoleToRunList[i];
+            var label = role ?? "без роли";
+            all.Should().Contain(tasks[i], $"AllRunTasks обязан включать задачу «{label}»");
+            if (inPlans)
+                plans.Should().Contain(p => p.TaskId == tasks[i].Id,
+                    $"BuildPlans обязан включать документ «{label}»");
+            else
+                plans.Should().NotContain(p => p.TaskId == tasks[i].Id,
+                    $"«{label}» не документ: в BuildPlans она не входит");
+        }
     }
 
     // ─── W4-5: каталог читает проверенное worktree эпика (п.5.1) ────────────────────────────
@@ -2678,6 +2971,265 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
 
         var response = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    // ─── B3: голос фичи (PUT /api/tasks/features/{id}/note) ───────────────────────────────
+
+    // Сервисный токен → 403. Мутация (c4): убрать проверку IsServiceToken — ручка дойдёт до записи.
+    [Fact]
+    public async Task PutNote_ServiceToken_Returns403()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var controller = BuildController(RealGit(), serviceToken: true);
+
+        var result = await controller.SetFeatureNote(epicId, new TasksController.FeatureNoteRequest("текст"));
+
+        result.Should().BeOfType<ObjectResult>().Which.StatusCode.Should().Be(403);
+        _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.Note.Should().BeNull();
+    }
+
+    // Не-эпик → 400. Мутация: убрать проверку роли — вернётся 404 от проекции.
+    [Fact]
+    public async Task PutNote_NeEpik_400()
+    {
+        var step = await CreateTaskAsync(new { title = "обычная" });
+
+        var response = await _client.PutAsJsonAsync(
+            $"/api/tasks/features/{step.GetProperty("id").GetString()}/note", new { text = "x" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task PutNote_ChuzhayaFicha_404()
+    {
+        var created = await _stranger.PostAsJsonAsync("/api/tasks", new { title = "чужой эпик", role = "feature" });
+        var epicId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString();
+
+        var response = await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new { text = "x" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        _factory.Services.GetRequiredService<TaskManager>().GetById(epicId!)!.Note.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PutNote_KrivoyId_404()
+    {
+        var response = await _client.PutAsJsonAsync("/api/tasks/features/a..b/note", new { text = "x" });
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // c2: At/StageAtWrite/StateAtWrite клиент не задаёт — лишние поля тела игнорируются, значения серверные.
+    // R-B3B6 замечание 1: «серверные» значения сверяются с проекцией, а не «не подделка/не пусто» —
+    // как в MCP-пути (TasksToolsetFeatureNoteTests.FeatureNote_АктивнаяСтадия_ШтампуетсяСтадия):
+    // фикстура с идущим шагом, ожидаемые Stage/State берутся из проектора. B14 (возврат FIN):
+    // штамп стадии — активная стадия конвейера (FeatureBrief.ActiveStageOf, та же база, что у
+    // StaleOf), а не Now[0]. Мутация: принимать at из тела — краснеет BeOnOrAfter. Мутация
+    // (замечание 1): заменить штамп в TasksController константами — краснеют StageAtWrite/StateAtWrite.
+    [Fact]
+    public async Task PutNote_PolyaKlientaIgnoriruyutsya_ShtampujetServer()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        // Идущий шаг фичи: активная стадия есть (RoleToStage(step) = "prod").
+        await CreateTaskAsync(new { title = "шаг-note", featureId = epicId, role = "step", status = "inProgress" });
+        var before = DateTime.UtcNow;
+
+        var response = await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new
+        {
+            text = "голос", at = "2001-01-01T00:00:00Z", stageAtWrite = "подделка", stateAtWrite = "подделка",
+            byUser = false, bySessionId = "чужая",
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var run = _factory.Services.GetRequiredService<FeatureProjector>().Project(epicId, OwnerId)!;
+        FeatureBrief.ActiveStageOf(run).Should().NotBeEmpty("сверка не с пустой стадией");
+
+        var note = _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.Note!;
+        note.Text.Should().Be("голос");
+        note.At.Should().BeOnOrAfter(before);
+        note.StageAtWrite.Should().Be(FeatureBrief.ActiveStageOf(run),
+            "StageAtWrite — активная стадия проекции на момент записи (FeatureBrief.ActiveStageOf), значение клиента игнорировано");
+        note.StateAtWrite.Should().Be(FeatureBrief.KindAtWriteOf(run),
+            "StateAtWrite — категория проекции на момент записи (FeatureBrief.KindAtWriteOf, B15)");
+        note.BySessionId.Should().BeNull();
+        note.ByUser.Should().BeTrue();
+    }
+
+    // B14 (возврат FIN 74722f13): голос, записанный у фичи БЕЗ идущих задач (шаг в todo — Now пуст),
+    // не устаревший с момента записи: штамп и StaleOf берут одну базу — активную стадию конвейера
+    // («prod» для шага), а не Now[0]. До правки штамп был "" (Now пуст), StaleOf сверял с "prod" →
+    // brief.note.stale = true с первой секунды (воспроизведено на стенде). Мутация: вернуть в штампе
+    // TasksController run.Now.FirstOrDefault()?.Stage — StageAtWrite станет "", этот тест краснеет.
+    [Fact]
+    public async Task PutNote_BezIdushchihZadach_ShtampAktivnayaStadiya_GolosNeUstarevshi()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        // Шаг фичи в todo: идущих задач нет (Now пуст), активная стадия конвейера — «prod»
+        // (первая незаполненная стадия с задачами, FeatureProjector.cs:276-280).
+        await CreateTaskAsync(new { title = "шаг-idle", featureId = epicId, role = "step" });
+
+        var response = await _client.PutAsJsonAsync(
+            $"/api/tasks/features/{epicId}/note", new { text = "голос на ожидании" });
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var run = _factory.Services.GetRequiredService<FeatureProjector>().Project(epicId, OwnerId)!;
+        run.Now.Should().BeEmpty("фикстура: идущих задач нет");
+        FeatureBrief.ActiveStageOf(run).Should().Be("prod", "стадия todo-шага по таблице RoleToStage");
+
+        var brief = FeatureBrief.Build(run, null, null, DateTime.UtcNow);
+        brief.Note!.StageAtWrite.Should().Be("prod",
+            "штамп — активная стадия конвейера, не Now[0] (здесь пустой)");
+        brief.Note.Stale.Should().BeFalse(
+            "голос записан только что на активной стадии того же состояния — ни стадия, ни категория не менялись");
+    }
+
+    // B15 (дефект 415c1c80): голос, записанный у фичи В ОЧЕРЕДИ, не «устаревший» с первой секунды.
+    // Штамп голоса — КАТЕГОРИЯ (brief.kind), а не сырое состояние: у фичи в очереди состояние
+    // «paused» (причина удержания не хранится), а категория — «queued». До правки штамп был
+    // run.State («paused»), текущая категория — «queued» ⇒ stale сразу после записи.
+    // Мутация: вернуть в штампе TasksController run.State — штамп станет «paused», тесты красные.
+    [Fact]
+    public async Task PutNote_FichaVOcheredi_GolosNeUstarevshiSrazu()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        await CreateTaskAsync(new { title = "шаг-очередь", featureId = epicId, role = "step" });
+        var hold = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "queue" });
+        hold.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var response = await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new { text = "в очереди" });
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        var stored = tm.GetById(epicId)!.Note!;
+        stored.StateAtWrite.Should().Be("queued",
+            "штамп голоса — категория фичи (brief.kind), а не состояние «paused»");
+
+        var run = _factory.Services.GetRequiredService<FeatureProjector>().Project(epicId, OwnerId)!;
+        var brief = FeatureBrief.Build(run, null, null, DateTime.UtcNow);
+        brief.Kind.Should().Be("queued", "фикстура: удержание с причиной queue");
+        brief.Note!.Stale.Should().BeFalse("голос записан только что в очереди — категория не менялась");
+    }
+
+    // B15: смена категории (очередь → пауза человека: та же стадия) делает голос устаревшим.
+    [Fact]
+    public async Task PutNote_SmenaKategoriiVOcheredi_GolosUstal()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        await CreateTaskAsync(new { title = "шаг-очередь2", featureId = epicId, role = "step" });
+        (await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "queue" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        (await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new { text = "в очереди" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Другая причина удержания — новая пауза (TaskManager.SetHold): категория queued → paused.
+        (await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var run = _factory.Services.GetRequiredService<FeatureProjector>().Project(epicId, OwnerId)!;
+        var brief = FeatureBrief.Build(run, null, null, DateTime.UtcNow);
+        brief.Kind.Should().Be("paused");
+        brief.Note!.Stale.Should().BeTrue("категория сменилась: queued ≠ paused");
+    }
+
+    // c3 через HTTP: длинный текст режется до 600, пустой снимает голос.
+    [Fact]
+    public async Task PutNote_DlinnyjTekstRezhetsya_PustojSnimaet()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+
+        (await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new { text = new string('я', 700) }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        tm.GetById(epicId)!.Note!.Text.Should().HaveLength(600);
+
+        (await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new { text = "  " }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        tm.GetById(epicId)!.Note.Should().BeNull();
+    }
+
+    // c4: после записи в группу владельца уходит task_changed(updated) с эпиком и его note.
+    // Мутация: убрать вещание в SetFeatureNote — ожидание таймит, тест краснеет.
+    [Fact]
+    public async Task PutNote_BroadcastsTaskChanged()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var me = await _client.GetFromJsonAsync<JsonElement>("/api/auth/me");
+        var connection = new HubConnectionBuilder()
+            .WithUrl(new Uri(_factory.Server.BaseAddress, "hubs/session"), options =>
+            {
+                options.HttpMessageHandlerFactory = _ => _factory.Server.CreateHandler();
+                options.Transports = HttpTransportType.LongPolling;
+                options.AccessTokenProvider = () => Task.FromResult<string?>(_factory.GetToken(
+                    TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword));
+            })
+            .Build();
+        var got = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        connection.On<JsonElement>("message", msg =>
+        {
+            if (!msg.TryGetProperty("type", out var type) || type.GetString() != "task_changed") return;
+            if (msg.GetProperty("task").GetProperty("id").GetString() != epicId) return;
+            got.TrySetResult(msg);
+        });
+        try
+        {
+            await connection.StartAsync();
+            await connection.InvokeAsync("JoinUser", me.GetProperty("userId").GetString());
+
+            var response = await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new { text = "вещаем" });
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+            var winner = await Task.WhenAny(got.Task, Task.Delay(15_000));
+            winner.Should().Be(got.Task, "запись голоса обязана дойти до группы владельца");
+            var msg = await got.Task;
+            msg.GetProperty("action").GetString().Should().Be("updated");
+            msg.GetProperty("task").GetProperty("note").GetProperty("text").GetString().Should().Be("вещаем");
+            // B7 (находка 4): и в WS-событии чат автора голоса не отдаётся (конвертер registered
+            // в опциях AddJsonProtocol). Мутация: снять её — TryGetProperty здесь true («null»
+            // без фильтра доезжает ключом), тест красный.
+            msg.GetProperty("task").GetProperty("note").TryGetProperty("bySessionId", out _).Should().BeFalse(
+                "task_changed не несёт чат автора голоса");
+        }
+        finally { await connection.DisposeAsync(); }
+    }
+
+    // B7 (ревью R-B5, находка 4): чат автора голоса (BySessionId) живёт в модели и сторе, но наружу
+    // не отдаётся (разрез п.1/п.6). Фильтр — FeatureNoteJsonConverter, зарегистрированный во всех
+    // выходных опциях TaskItem (MVC, SignalR, FeatureJsonOptions, TasksToolset). Мутации (проверены):
+    // снять регистрацию в AddJsonOptions (Program.cs) — краснеют проверки списка, карточки и run.epic;
+    // снять в FeatureJsonOptions (TasksController) — краснеет проверка ответа PUT; снять в
+    // AddJsonProtocol — краснеет проверка WS-события в PutNote_BroadcastsTaskChanged.
+    [Fact]
+    public async Task Note_BySessionIdНеУходитНаружу_СписокКарточкаRun()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        tm.SetFeatureNote(epicId, "авторский голос", "chat-1", false, "review", "running");
+
+        // Модель и стор поле держат: это единственный след автора голоса (из него в будущем
+        // заполняется byPersonaId — аддитивная правка модели, не проектора).
+        tm.GetById(epicId)!.Note!.BySessionId.Should().Be("chat-1");
+
+        // Список задач (GET /api/tasks): голос виден, чат автора — нет.
+        var list = JsonNode.Parse(await _client.GetStringAsync("/api/tasks"))!.AsArray();
+        var inList = list.Single(n => n!["id"]!.GetValue<string>() == epicId);
+        inList!["note"]!["text"]!.GetValue<string>().Should().Be("авторский голос");
+        inList!["note"]!.AsObject().ContainsKey("bySessionId").Should().BeFalse("список не отдаёт чат автора голоса");
+
+        // Карточка задачи (GET /api/tasks/{id}).
+        var card = JsonNode.Parse(await _client.GetStringAsync($"/api/tasks/{epicId}"))!.AsObject();
+        card["note"]!.AsObject().ContainsKey("bySessionId").Should().BeFalse("карточка не отдаёт чат автора голоса");
+
+        // Ответ фичи: run.epic (выход SlimRun) — то же поле того же эпика.
+        var feature = JsonNode.Parse(await _client.GetStringAsync($"/api/tasks/features/{epicId}"))!.AsObject();
+        feature["run"]!["epic"]!["note"]!.AsObject().ContainsKey("bySessionId")
+            .Should().BeFalse("run.epic не отдаёт чат автора голоса");
+
+        // Ответ PUT /api/tasks/{id}: карточка пред-сериализуется FeatureJsonOptions (свои опции,
+        // не MVC) — та же регистрация конвертера и там.
+        var put = await _client.PutAsJsonAsync($"/api/tasks/{epicId}", new { title = "переименован" });
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+        var putJson = JsonNode.Parse(await put.Content.ReadAsStringAsync())!.AsObject();
+        putJson["note"]!.AsObject().ContainsKey("bySessionId").Should().BeFalse("ответ PUT не отдаёт чат автора голоса");
     }
 
     // Очередь фич (волна 6): queue поверх существующего draft разрешён — фича встаёт в очередь

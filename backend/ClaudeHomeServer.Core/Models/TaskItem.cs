@@ -150,6 +150,10 @@ public class TaskItem
     // Ставится только на эпике (role=feature) и только человеком. Аддитивное nullable-поле: старый
     // tasks.json без «hold» читается как null, BackupSchema.Version не растёт.
     public FeatureHold? Hold { get; set; }
+    // «Голос фичи» (волна 6, B3): короткий текст оркестратора/человека о состоянии фичи. Только у эпика
+    // (role=feature), пишет TaskManager.SetFeatureNote. Аддитивное nullable-поле: старый tasks.json
+    // без «note» читается как null, BackupSchema.Version не растёт.
+    public FeatureNote? Note { get; set; }
     // Глубина цепочки делегирования: 0 — создана не из чата-исполнителя (обычный чат/UI/API);
     // из чата-исполнителя родительской задачи — её DelegationDepth + 1 (TaskManager.Create).
     // Анти-рекурсия делегирования проверяется гейтом по глубине хода (DelegatedTurnGate /
@@ -200,6 +204,21 @@ public class TaskItem
 // ставил человек (оркестратор только предлагает). Позиционная запись — как AcceptanceCriterion:
 // round-trip через JSON без конвертера.
 public record FeatureHold(string Reason, DateTime Since, string? BySessionId, bool ByUser);
+
+// Голос фичи (TaskItem.Note): Text — не длиннее FeatureNote.MaxTextLength, At/StageAtWrite/StateAtWrite
+// штампует сервер в момент записи (по ним считается «устарело»), BySessionId — чат автора (null — из UI
+// без чата; наружу не отдаётся: поле живёт в сторе, с wire его снимает конвертер типа на границе
+// сериализации — Main/Services/FeatureNoteJsonConverter.cs), ByUser — писал человек. Позиционная
+// запись — как FeatureHold.
+// StageAtWrite — стадия конвейера, StateAtWrite — КАТЕГОРИЯ фичи (brief.kind: running/waiting_you/
+// error/paused/queued/draft/idle/closed) на момент записи (B15, дефект 415c1c80); имя поля и
+// JSON-контракт прежние — голоса, записанные до B15, хранят СОСТОЯНИЕ («running», «paused»…), они
+// достраиваются до категории таблицей FeatureBrief.KindByState (fail-closed для неизвестного).
+public record FeatureNote(string Text, DateTime At, string? BySessionId, bool ByUser,
+    string StageAtWrite, string StateAtWrite)
+{
+    public const int MaxTextLength = 600;
+}
 
 // Критерий приёмки задачи: Id стабилен (на него ссылается свидетельство), Text — измеримая формулировка.
 public record AcceptanceCriterion(string Id, string Text);

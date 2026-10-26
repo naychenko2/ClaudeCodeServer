@@ -331,6 +331,14 @@ export function useChatFilters(scopeKey: string) {
 
   const patch = (p: Partial<ChatFilters>) => {
     const next = { ...filters, ...p };
+    // Инвариант (R-Ф1.2): пока legacy-поля живы, featureKinds — пересчитываемое
+    // производное: любой патч, несущий featureChips или showClosed, пересчитывает её
+    // по фактическому выбору. Иначе старый UI (FilterBar/SessionList) пишет legacy-поля,
+    // а featureKinds остаётся устаревшей: триггер горит при пустом выборе, а при
+    // следующей загрузке normalize берёт устаревшую featureKinds и legacy не читает.
+    if (p.featureChips !== undefined || p.showClosed !== undefined) {
+      next.featureKinds = migrateLegacyFeatureKinds(next.featureChips, next.showClosed);
+    }
     persistChatFilters(scopeKey, next);
     setFilters(next);
   };

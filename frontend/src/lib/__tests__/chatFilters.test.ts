@@ -1,9 +1,11 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { afterAll, afterEach, describe, it, expect, beforeEach } from 'vitest';
+import { act, createElement } from 'react';
 import {
   loadChatFilters, persistChatFilters, isDefaultFilters, defaultChatFilters,
   defaultChatFiltersKeepingView, matchChatFilter, buildHiddenReason, sortKeyOf,
-  ALL_SORT_ORDERS, ALL_FEATURE_KINDS, type ChatFilters,
+  useChatFilters, ALL_SORT_ORDERS, ALL_FEATURE_KINDS, type ChatFilters,
 } from '../chatFilters';
+import { installFakeDom, mount, uninstallFakeDom } from '../../components/chat/__tests__/fakeDom';
 import type { Session } from '../../types';
 
 // Окружение node — localStorage нет; мокаем минимальную реализацию на Map
@@ -17,7 +19,19 @@ globalThis.localStorage = {
   get length() { return store.size; },
 } as Storage;
 
-beforeEach(() => store.clear());
+beforeEach(() => { store.clear(); installFakeDom(); });
+afterEach(() => { for (const r of roots.splice(0)) act(() => r.unmount()); });
+afterAll(() => { uninstallFakeDom(); });
+
+// Пробник для тестов пути записи через useChatFilters (R-Ф1.2): хук монтируется
+// через фейк-DOM (createRoot + act) — паттерн тестов плагинов; latest — результат
+// последнего рендера, через него тест зовёт patch и читает filters.
+const roots: { unmount: () => void }[] = [];
+let latest: ReturnType<typeof useChatFilters>;
+function Probe() {
+  latest = useChatFilters('p1');
+  return null;
+}
 
 describe('loadChatFilters: groupBy=subjects (темы чатов)', () => {
   it('значение переживает запись и чтение — оно в белом списке normalize', () => {
@@ -437,6 +451,65 @@ describe('featureKinds: миграция сохранённых фильтров
   it('featureKinds в записи сильнее legacy-полей (миграция не затирает новый формат)', () => {
     const f = read({ featureKinds: ['error'], featureChips: ['waiting'], showClosed: true });
     expect(f.featureKinds).toEqual(['error']);
+  });
+});
+
+// Путь записи через useChatFilters (R-Ф1.2): featureKinds — пересчитываемое производное,
+// любой патч, несущий featureChips/showClosed, пересчитывает её по фактическому выбору.
+// Без пересчёта: legacy-запись → load (миграция) → снятие чипа в старом UI → в записи
+// featureChips:[] при устаревшей featureKinds: триггер горит при пустом выборе, а
+// следующий load берёт устаревшую featureKinds и legacy не читает.
+describe('useChatFilters.patch: пересчёт featureKinds при записи legacy-полей (R-Ф1.2)', () => {
+  const saved = (): Record<string, unknown> => JSON.parse(store.get('cc_chat_filters:p1')!);
+
+  it('снятие чипа из legacy-записи: запись согласована (featureKinds=[]), триггер не горит', () => {
+    // Запись старого формата: featureChips:['waiting'], featureKinds нет
+    store.set('cc_chat_filters:p1', JSON.stringify({ groupBy: 'features', featureChips: ['waiting'], showClosed: false }));
+    const { root } = mount(createElement(Probe));
+    roots.push(root);
+    // Чтение: миграция применилась, выбор 'waiting_you'
+    expect(latest.filters.featureKinds).toEqual(['waiting_you']);
+    // Старый UI снимает чип: patch только по legacy-полю, без featureKinds
+    act(() => latest.patch({ featureChips: [] }));
+    // Состояние и запись согласованы: featureKinds пересчитана по фактическому выбору
+    expect(latest.filters.featureKinds).toEqual([]);
+    expect(saved().featureChips).toEqual([]);
+    expect(saved().featureKinds).toEqual([]);
+    // Повторное чтение: normalize берёт новую (пустую) featureKinds — триггер не горит
+    const f = loadChatFilters('p1');
+    expect(f.featureKinds).toEqual([]);
+    expect(isDefaultFilters(f)).toBe(true);
+  });
+
+  it('выставление legacy-чипа через patch: featureKinds пересчитана по таблице', () => {
+    const { root } = mount(createElement(Probe));
+    roots.push(root);
+    act(() => latest.patch({ groupBy: 'features', featureChips: ['waiting', 'merge'] }));
+    expect(latest.filters.featureKinds).toEqual(['waiting_you']);
+    expect(saved().featureKinds).toEqual(['waiting_you']);
+  });
+
+  it('showClosed=true через patch: featureKinds пересчитана с «closed»', () => {
+    const { root } = mount(createElement(Probe));
+    roots.push(root);
+    act(() => latest.patch({ groupBy: 'features', showClosed: true }));
+    expect(saved().featureKinds).toEqual([...ALL_FEATURE_KINDS]);
+  });
+
+  it('патч без legacy-полей: featureKinds не трогается (пересчёт — только при их записи)', () => {
+    persistChatFilters('p1', { ...defaultChatFilters(), groupBy: 'features', featureKinds: ['error'] });
+    const { root } = mount(createElement(Probe));
+    roots.push(root);
+    expect(latest.filters.featureKinds).toEqual(['error']);
+    act(() => latest.patch({ search: 'ревью' }));
+    expect(saved().featureKinds).toEqual(['error']);
+  });
+
+  it('патч пишет featureKinds напрямую (новый UI): значение сохраняется, не затирается legacy', () => {
+    const { root } = mount(createElement(Probe));
+    roots.push(root);
+    act(() => latest.patch({ groupBy: 'features', featureKinds: ['error'] }));
+    expect(saved().featureKinds).toEqual(['error']);
   });
 });
 

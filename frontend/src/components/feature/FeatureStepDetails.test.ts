@@ -11,18 +11,25 @@
 // Покрытие (доработка GC-F7R, ревью GC-R-F7): состояние критерия — скринридеру (у глифа
 // нет aria-hidden, рядом — скрытый текст «подтверждён/не подтверждён»); «Повторить» в отказе
 // на мобильном ≥ 40 px (на десктопе — кит xs); легенда называет живой ход и цвета токенами,
-// а не словами; «сейчас» фиксирован на монтирование (Date.now вне тела рендера).
+// а не словами.
+//
+// Покрытие (доработка GC-F7R2, вердикт GC-R-P2 MAJOR-3): «сейчас» живое — общий useNow
+// (интервал только пока ось живая и nowMs не передан): тик двигает вертикаль и подпись;
+// без тика ререндеры вертикаль не двигают (нет Date.now() в теле рендера); проп nowMs
+// приоритетнее хука — в том числе на тике.
 //
 // Мутации (в отчёте): (1) ✓/○ по индексу строки → тест приёмки красный; (2) запрос «Итога»
 // в теле компонента вместо эффекта → ленивость красная; (3) доля без axisFrac (своя арифметика)
-// → тест оси красный; (4) Date.now() обратно в аргумент JSX → тест фиксированного «сейчас»
-// красный; (5) снятый aria-hidden/скрытый текст → тест скринридера красный; (6) isMobile
+// → тест оси красный; (4) вместо useNow — useState(() => Date.now()) (замершее на монтирование)
+// → тест «живое» красное; Date.now() обратно в теле рендера → тест «без тика» красный;
+// (5) снятый aria-hidden/скрытый текст → тест скринридера красный; (6) isMobile
 // не доходит до «Повторить» → мобильный тест красный.
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeatureStepDetails, type StepDetailTurn } from './FeatureStepDetails';
 import { axisFrac, type LaneAxis } from './FeatureLaneModel';
+import { formatClock } from './FeatureStatsBits';
 import { upsertTaskLocal } from '../../lib/tasks';
 import { findNodeByAttr, installFakeDom, mount, textNodes, uninstallFakeDom } from '../chat/__tests__/fakeDom';
 import type { AcceptanceCriterion, AcceptanceEvidence, Task } from '../../types';
@@ -61,9 +68,14 @@ function fullTask(id: string, over: Partial<Task> = {}): Task {
   } as Task;
 }
 
+// Интервал useNow живёт, пока компонент смонтирован: корни треким и снимаем в afterEach
+// (тот же порядок, что у FeaturePageFrame) — иначе тики вешаются на мёртвые корни.
+const roots: ReturnType<typeof mount>['root'][] = [];
 function renderItem(props: Record<string, unknown>) {
   installFakeDom();
-  return mount(createElement(FeatureStepDetails, props));
+  const r = mount(createElement(FeatureStepDetails, props));
+  roots.push(r.root);
+  return r;
 }
 
 function styleOf(node: FNode): Record<string, string> {
@@ -85,6 +97,8 @@ beforeEach(() => {
   tasksGetMock.mockReset();
 });
 afterEach(() => {
+  for (const r of roots) act(() => { r.unmount(); });
+  roots.length = 0;
   uninstallFakeDom();
 });
 
@@ -307,7 +321,39 @@ describe('«Время шага»: доли — ровно axisFrac', () => {
     expect(txt).not.toContain('фиолетовый');
   });
 
-  it('«сейчас» фиксирован на монтирование: Date.now() не зовётся из тела рендера', () => {
+  it('«сейчас» живое: тик useNow двигает вертикаль и подпись (GC-F7R2)', () => {
+    const id = nextId();
+    upsertTaskLocal(fullTask(id));
+    const T1 = Date.parse('2026-10-20T10:00:00Z');
+    const T2 = T1 + 60_000; // тик интервала useNow (60 с)
+    vi.useFakeTimers();
+    vi.setSystemTime(T1);
+    try {
+      const { container } = renderItem({ taskId: id, axis: LIVE_AXIS, turns });
+      const m1 = findNodeByAttr(container, 'data-testid', 'step-now');
+      expect(m1, 'вертикали «сейчас» нет').not.toBeNull();
+      const left1 = parseFloat(styleOf(m1!).left!);
+      expect(left1).toBeCloseTo(axisFrac(new Date(T1).toISOString(), LIVE_AXIS) * 100, 2);
+      // join('') — метка «сейчас HH:MM» в JSX два текстовых узла («сейчас » + «HH:MM»),
+      // через join(' ') вышла бы двойная пауза.
+      expect(textNodes(findNodeByAttr(container, 'data-testid', 'step-time')!).join(''))
+        .toContain(`сейчас ${formatClock(new Date(T1).toISOString())}`);
+      // Сценарий вердикта: карточка простояла открытой — по тиках useNow «сейчас» обязано
+      // идти за временем, а не стоять на минуте открытия.
+      act(() => { vi.advanceTimersByTime(60_000); });
+      const m2 = findNodeByAttr(container, 'data-testid', 'step-now');
+      expect(m2, 'вертикали «сейчас» после тика нет').not.toBeNull();
+      const left2 = parseFloat(styleOf(m2!).left!);
+      expect(left2).toBeCloseTo(axisFrac(new Date(T2).toISOString(), LIVE_AXIS) * 100, 2);
+      expect(left2).toBeGreaterThan(left1);
+      expect(textNodes(findNodeByAttr(container, 'data-testid', 'step-time')!).join(''))
+        .toContain(`сейчас ${formatClock(new Date(T2).toISOString())}`);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('без тика ререндеры вертикаль не двигают: Date.now() не зовётся из тела рендера', () => {
     const id = nextId();
     upsertTaskLocal(fullTask(id));
     const T1 = Date.parse('2026-10-20T10:00:00Z');
@@ -319,7 +365,9 @@ describe('«Время шага»: доли — ровно axisFrac', () => {
       expect(marker1, 'вертикали «сейчас» нет').not.toBeNull();
       const left1 = parseFloat(styleOf(marker1!).left!);
       expect(left1).toBeCloseTo(axisFrac(new Date(T1).toISOString(), LIVE_AXIS) * 100, 2);
-      // Ререндер того же монтирования при другом «реальном времени» — позиция та же.
+      // Ререндер при другом «реальном времени» БЕЗ тика интервала — позиция та же:
+      // useNow обновляет значение только по тикам, рендер сам по себе его не пересчитывает
+      // (защита от Date.now() в теле рендера — дрожания вертикали на каждом ререндере).
       spy.mockReturnValue(T2);
       act(() => { root.render(createElement(FeatureStepDetails, { taskId: id, axis: LIVE_AXIS, turns })); });
       const marker2 = findNodeByAttr(container, 'data-testid', 'step-now');
@@ -327,6 +375,29 @@ describe('«Время шага»: доли — ровно axisFrac', () => {
       expect(parseFloat(styleOf(marker2!).left!)).toBeCloseTo(left1, 6);
     } finally {
       spy.mockRestore();
+    }
+  });
+
+  it('nowMs приоритетнее useNow: значение из пропса, тик его не двигает', () => {
+    const id = nextId();
+    upsertTaskLocal(fullTask(id));
+    const T1 = Date.parse('2026-10-20T10:00:00Z');
+    const FIXED = Date.parse('2026-10-20T09:00:00Z');
+    vi.useFakeTimers();
+    vi.setSystemTime(T1);
+    try {
+      const { container } = renderItem({ taskId: id, axis: LIVE_AXIS, turns, nowMs: FIXED });
+      const m1 = findNodeByAttr(container, 'data-testid', 'step-now');
+      expect(m1, 'вертикали «сейчас» нет').not.toBeNull();
+      const left1 = parseFloat(styleOf(m1!).left!);
+      // Не системное T1, а ровно значение пропса.
+      expect(left1).toBeCloseTo(axisFrac(new Date(FIXED).toISOString(), LIVE_AXIS) * 100, 2);
+      act(() => { vi.advanceTimersByTime(60_000); });
+      const m2 = findNodeByAttr(container, 'data-testid', 'step-now');
+      expect(m2, 'вертикали «сейчас» после тика нет').not.toBeNull();
+      expect(parseFloat(styleOf(m2!).left!)).toBeCloseTo(left1, 6);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

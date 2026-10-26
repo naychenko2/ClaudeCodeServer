@@ -16,12 +16,13 @@
 // пересечение закреплено тестом бэка. Полоса строится по ним как обычно, но блок помечается
 // «хвост после мержа»: это не обычная работа стадии (живой контракт GC-F7).
 
-import { useState, type CSSProperties, type ReactElement } from 'react';
+import { type CSSProperties, type ReactElement } from 'react';
 import { C, R, FS, SP, FONT } from '../../lib/design';
 import { Button } from '../ui/Button';
 import { axisFrac, type LaneAxis } from './FeatureLaneModel';
 import { formatClock, formatDateTime } from './FeatureStatsBits';
 import { useEnsureFullTask, useTasks } from '../../lib/tasks';
+import { useNow } from '../../lib/useNow';
 import type { AcceptanceCriterion, AcceptanceEvidence, Task } from '../../types';
 
 // Ход на полосе шага. Вызывающий собирает ходы из stats.timeline.intervalsByStage:
@@ -55,8 +56,8 @@ export interface FeatureStepDetailsProps {
   // работу стадии.
   isTail?: boolean;
   isMobile?: boolean;
-  // Фиксированное «сейчас» (тесты); без него — Date.now(), зафиксированный на монтирование
-  // вне тела рендера (purity, GC-R-F7).
+  // Фиксированное «сейчас» (тесты): приоритетнее useNow, и с ним интервал не ставится.
+  // Без него — живое «сейчас» из общего useNow (purity + живое значение, GC-F7R2).
   nowMs?: number;
   // «Показать интервалы на дорожке ↑» — рисуется только когда колбэк передан (в карточке
   // «Производства» он ведёт подсветку на дорожке, в строке исполнителя — нет).
@@ -206,11 +207,13 @@ export function FeatureStepDetails({
   isTail = false, isMobile = false, nowMs, onShowIntervals,
 }: FeatureStepDetailsProps): ReactElement {
   const hasAcceptance = !!acceptance && acceptance.length > 0;
-  // «Сейчас» — фиксированный момент на монтирование (purity, GC-R-F7): ленивый инициализатор
-  // useState, тот же чистый для правила приём, что у useNow.ts; прямой Date.now() в теле рендера
-  // (в т. ч. внутри useMemo) правило не допускает. Тестовое значение — пропом nowMs.
-  const [mountNow] = useState(() => Date.now());
-  const now = nowMs ?? mountNow;
+  // «Сейчас» — живое: общий useNow (тот же механизм, что у «Статистики», FeatureStatsTab;
+  // GC-F7R2): значение обновляется по интервалу, а не застывает на монтирование; Date.now()
+  // в теле рендера (purity, GC-R-F7) по-прежнему нет. Интервал живёт, только пока он нужен:
+  // закрытая ось — без «сейчас»; тестовый/родительский nowMs — своё значение (приоритетнее хука).
+  const live = !!axis && axis.timeFrac < 1;
+  const hookNow = useNow(60_000, live && nowMs === undefined);
+  const now = nowMs ?? hookNow;
   return (
     <div data-testid="step-details" style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
       {hasAcceptance && (

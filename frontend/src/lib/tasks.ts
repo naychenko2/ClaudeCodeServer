@@ -10,7 +10,7 @@ import { joinUser, onMessage, onReconnected } from './signalr';
 import { C } from './design';
 import { getEffectiveTheme } from './themeMode';
 import { isOnline, OfflineError, readStoredUserId, subscribeOnline } from './offline';
-import { idbGet, idbSet } from './idb';
+import { idbDelete, idbGet, idbKeys, idbSet } from './idb';
 import {
   applyUpdateLocally, buildLocalTask, configureOutbox, drainTaskOutbox,
   enqueue, mergePending, outboxHasPending,
@@ -23,7 +23,6 @@ let _loaded = false;
 let _loading: Promise<void> | null = null;
 const _listeners = new Set<() => void>();
 let _realtimeWired = false;
-let _hydrated = false;
 
 // Локальный снапшот стора в IndexedDB (переживает перезагрузку, виден офлайн).
 // Ключ отдельный от пассивного GET-кэша /tasks: здесь состояние С наложенными
@@ -130,7 +129,16 @@ export function keepLoadedFull(list: Task[], current: Task[]): Task[] {
 }
 
 export async function reloadTasks(): Promise<void> {
-  const list = keepLoadedFull(await api.tasks.listAll(), _tasks);
+  let fresh: Task[];
+  try {
+    fresh = await api.tasks.listAll();
+  } catch (e) {
+    // Офлайн: список запрашивается с live (в пассивный GET-кэш не пишется), единственный
+    // экземпляр на диске — снапшот tasks:all. Берём стор из него, ошибку наружу не отдаём.
+    if (e instanceof OfflineError) { await hydrateFromCache(); return; }
+    throw e;
+  }
+  const list = keepLoadedFull(fresh, _tasks);
   // Поверх серверного списка накатываем ещё не синхронизированные офлайн-правки
   // (защита от reload при непустой очереди — напр. online-эффект опередил дренаж).
   _tasks = await mergePending(list, _tasks);
@@ -208,12 +216,30 @@ let _outboxConfigured = false;
 
 // Подхватить локальный снапшот стора из IndexedDB (мгновенно, до сети): офлайн-правки
 // и последний известный список видны сразу и переживают перезагрузку страницы.
-async function hydrateFromCache(): Promise<void> {
-  if (_hydrated) return;
-  _hydrated = true;
-  if (_loaded) return;   // сеть уже успела наполнить стор
-  const cached = await idbGet<Task[]>(TASKS_SNAPSHOT_KEY).catch(() => undefined);
-  if (cached?.data && !_loaded) { _tasks = cached.data; emit(); }
+// Пассивный GET-кэш (offline.ts) хранил списки задач и фич ВТОРЫМ экземпляром рядом с tasks:all:
+// сотни КБ на чат, без вытеснения. Теперь эти запросы идут с live и в кэш не пишутся, а
+// остатки прежних записей сносим. Ключи — url запроса без /api (допускаем и с ним).
+const LEGACY_LIST_KEYS = ['/tasks', '/tasks/features'].flatMap(p => [p, `/api${p}`]);
+
+export async function purgeLegacyTaskListCache(): Promise<void> {
+  const keys = await idbKeys().catch(() => [] as string[]);
+  const stale = keys.filter(k => LEGACY_LIST_KEYS.some(p => k === p || k.startsWith(`${p}?`)));
+  await Promise.all(stale.map(k => idbDelete(k).catch(() => {})));
+}
+
+// Подхватить локальный снапшот стора из IndexedDB (мгновенно, до сети): офлайн-правки
+// и последний известный список видны сразу и переживают перезагрузку страницы.
+// Промис общий: офлайн-ветка reloadTasks дожидается ту же гидрацию, что запустил ensureTasksLoaded.
+let _hydrating: Promise<void> | null = null;
+
+function hydrateFromCache(): Promise<void> {
+  if (_hydrating) return _hydrating;
+  _hydrating = (async () => {
+    void purgeLegacyTaskListCache();
+    const cached = await idbGet<Task[]>(TASKS_SNAPSHOT_KEY).catch(() => undefined);
+    if (cached?.data && !_loaded) { _tasks = cached.data; emit(); }
+  })();
+  return _hydrating;
 }
 
 // Первая загрузка (идемпотентно). Вызывается из компонентов задач при монтировании.

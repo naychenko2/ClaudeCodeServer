@@ -265,6 +265,53 @@ public class CloudCheapClientTests
         Assert.Equal(SpendSources.Free, spend.Records.Single(r => r.Provider == "freellmapi-direct").Source);
     }
 
+    // Модель «:free» через прямой адаптер платного по ключу провайдера бесплатна (IsFree по модели).
+    [Fact]
+    public async Task Spend_ПрямойАдаптер_МодельFree_ПишетсяFree()
+    {
+        var config = Config(WithOpenRouter(new()));
+        var providers = new LlmProviderRegistry(config);
+        var spend = new CapturingSpend();
+        var client = new CloudCheapClient(new StubHttpFactory(OkJson), config, providers,
+            NullLogger<CloudCheapClient>.Instance, spend);
+
+        await client.GenerateDetailedAsync("direct:nvidia/nemotron:free", "p", TimeSpan.FromSeconds(5), maxTokens: 128);
+
+        var rec = spend.Records.Single();
+        Assert.Equal("openrouter-direct", rec.Provider);
+        Assert.Equal(SpendSources.Free, rec.Source);
+    }
+
+    // Локальность берётся из реестра по провайдеру источника, а не по ключу «…-direct»:
+    // локальный провайдер в CheapHttpSources пишется free, а не one-shot.
+    [Fact]
+    public async Task Spend_ПрямойАдаптер_ЛокальныйПровайдер_ПишетсяFree()
+    {
+        var cfg = new Dictionary<string, string?>
+        {
+            ["LlmProviders:localx:DisplayName"] = "Local X",
+            ["LlmProviders:localx:IsLocal"] = "true",
+            ["LlmProviders:localx:ApiKey"] = "test-key",
+            ["LlmProviders:localx:AnthropicBaseUrl"] = "http://127.0.0.1:18030",
+            ["LlmProviders:localx:ApiBaseUrl"] = "http://127.0.0.1:18030/v1",
+            ["CheapHttpSources:localx:Provider"] = "localx",
+            ["CheapHttpSources:localx:Models:0:Id"] = "loc-model",
+            ["CheapHttpSources:localx:Models:0:DisplayName"] = "Loc",
+            ["CheapHttpSources:localx:Models:0:ContextWindow"] = "32000",
+        };
+        var config = Config(cfg);
+        var providers = new LlmProviderRegistry(config);
+        var spend = new CapturingSpend();
+        var client = new CloudCheapClient(new StubHttpFactory(OkJson), config, providers,
+            NullLogger<CloudCheapClient>.Instance, spend);
+
+        await client.GenerateDetailedAsync("direct:loc-model", "p", TimeSpan.FromSeconds(5), maxTokens: 128);
+
+        var rec = spend.Records.Single();
+        Assert.Equal("localx-direct", rec.Provider);
+        Assert.Equal(SpendSources.Free, rec.Source);
+    }
+
     private const string OkJson = """
         {
           "choices": [{

@@ -361,6 +361,53 @@ public class SpendBackfillTests : IDisposable
         store.ReclassifyPaidDirectFromFree(p => p == "local-qwen").Should().Be(0);
     }
 
+    // Обратный проход не трогает бесплатное по модели («:free») и локальное по БАЗОВОМУ ключу
+    // («local-x-direct» → реестр спрашивается про «local-x», а не про полный ключ).
+    [Fact]
+    public void Reclassify_ПлатныйПрямойАдаптер_МодельFreeИЛокальныйБазовыйКлюч_ОстаютсяFree()
+    {
+        var store = new SpendStore(Path.Combine(_dir, "spend_reclass_direct_keep"), detailDays: 30);
+        var now = DateTime.UtcNow;
+        store.Record(new SpendRecord { OwnerId = "u1", Provider = "openrouter-direct", Model = "nvidia/nemotron:free",
+            Source = SpendSources.Free, Label = "a", InputTokens = 10, Timestamp = now });
+        store.Record(new SpendRecord { OwnerId = "u1", Provider = "local-x-direct", Model = "loc",
+            Source = SpendSources.Free, Label = "b", InputTokens = 10, Timestamp = now });
+        store.Record(new SpendRecord { OwnerId = "u1", Provider = "openrouter-direct", Model = "paid/model",
+            Source = SpendSources.Free, Label = "c", InputTokens = 10, Timestamp = now });
+
+        store.ReclassifyPaidDirectFromFree(p => p == "local-x").Should().Be(1);
+
+        var all = store.DetailsBetween(DateOnly.MinValue, DateOnly.MaxValue);
+        all.Single(r => r.Model == "nvidia/nemotron:free").Source.Should().Be(SpendSources.Free);
+        all.Single(r => r.Provider == "local-x-direct").Source.Should().Be(SpendSources.Free);
+        all.Single(r => r.Model == "paid/model").Source.Should().Be(SpendSources.OneShot);
+    }
+
+    // Проводка: часовой цикл SpendMaintenanceService реально зовёт обратный проход.
+    // Тест на сам цикл (StartAsync), а не на метод хранилища: удаление вызова его краснит.
+    [Fact]
+    public async Task Обслуживание_ЧасовойЦикл_ПереводитПлатныйПрямойАдаптерИзFreeВOneShot()
+    {
+        var store = new SpendStore(Path.Combine(_dir, "spend_maintenance_loop"), detailDays: 30);
+        store.MarkBackfillDone(); // backfill не нужен — проверяем только цикл обслуживания
+        store.Record(new SpendRecord { Id = "loop-1", OwnerId = "u1", Provider = "minimax-direct", Model = "MiniMax-M3",
+            Source = SpendSources.Free, Label = "changelog", InputTokens = 100, Timestamp = DateTime.UtcNow });
+
+        var service = NewMaintenance(store);
+        await service.StartAsync(CancellationToken.None);
+        try
+        {
+            // Цикл стартует через 5 с после запуска; ждём факт, а не фиксированную паузу
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            while (DateTime.UtcNow < deadline
+                   && store.DetailsBetween(DateOnly.MinValue, DateOnly.MaxValue).Single().Source != SpendSources.OneShot)
+                await Task.Delay(100);
+        }
+        finally { await service.StopAsync(CancellationToken.None); }
+
+        store.DetailsBetween(DateOnly.MinValue, DateOnly.MaxValue).Single().Source.Should().Be(SpendSources.OneShot);
+    }
+
     [Fact]
     public void Reclassify_ПлатныеПрямыеАдаптерыВСвёрнутыхДнях_СливаютсяБезДвойногоСчёта()
     {

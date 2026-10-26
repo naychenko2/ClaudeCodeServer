@@ -30,6 +30,7 @@ public sealed class CloudCheapClient
     private readonly IHttpClientFactory _http;
     private readonly ILogger<CloudCheapClient> _logger;
     private readonly List<Source> _sources = [];
+    private readonly LlmProviderRegistry _providers;
     // Сбор расхода бесплатных вызовов (null — в тестах: аналитика выключена)
     private readonly Spend.ISpendCollector? _spend;
     private int _spendNullWarned;
@@ -86,6 +87,7 @@ public sealed class CloudCheapClient
         _http = http;
         _logger = logger;
         _spend = spend;
+        _providers = providers;
         ProviderKey = config["OpenRouter:Provider"] is { Length: > 0 } legacyProvider ? legacyProvider : "openrouter";
 
         // Legacy openrouter-direct всегда на месте (совместимость с spend и пресетами);
@@ -310,12 +312,15 @@ public sealed class CloudCheapClient
                     outTok = c.GetInt64();
             }
             var provider = $"{sourceKey}-direct";
+            // Локальность — по провайдеру источника из реестра (не по ключу «…-direct»)
+            var isLocal = _sources.FirstOrDefault(s => s.Key == sourceKey) is { } src
+                && _providers.GetByKey(src.ProviderKey)?.IsLocal == true;
             _spend.Record(new Models.SpendRecord
             {
                 OwnerId = ownerId ?? "",
                 Provider = provider,
                 Model = model,
-                Source = Models.SpendSources.IsFree(provider, model)
+                Source = Models.SpendSources.IsFree(provider, model, isLocal)
                     ? Models.SpendSources.Free
                     : Models.SpendSources.OneShot,
                 Label = label,

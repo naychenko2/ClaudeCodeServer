@@ -237,13 +237,16 @@ public sealed class SpendStore : ISpendCollector, ISpendDetailReader
     // free по старому правилу «любой *-direct бесплатен», переводится в one-shot (прямой адаптер
     // зовут только фоновые one-shot). «freellm*-direct» и локальные провайдеры остаются free.
     // Условия взаимоисключающие с ReclassifyLocalAsFree (там IsFree=true, здесь false) —
-    // пинг-понга в часовом цикле нет. Идемпотентен.
+    // пинг-понга в часовом цикле нет. Идемпотентен. Локальность спрашивается у реестра по
+    // БАЗОВОМУ ключу провайдера (без «-direct»): записи «local-x-direct» остаются free.
     public int ReclassifyPaidDirectFromFree(Func<string, bool> isLocalProvider) =>
         Reclassify((source, provider, model) =>
                 source == SpendSources.Free
-                && provider.EndsWith("-direct", StringComparison.OrdinalIgnoreCase)
-                && !SpendSources.IsFree(provider, model, isLocalProvider(provider)),
+                && provider.EndsWith(DirectSuffix, StringComparison.OrdinalIgnoreCase)
+                && !SpendSources.IsFree(provider, model, isLocalProvider(provider[..^DirectSuffix.Length])),
             SpendSources.OneShot);
+
+    private const string DirectSuffix = "-direct";
 
     private int Reclassify(Func<string, string, string?, bool> match, string target)
     {

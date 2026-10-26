@@ -57,7 +57,8 @@ public static class SpendCostTiers
     private static string ByKey(string provider, string? model)
     {
         var key = BaseKey(provider);
-        if (key is "ollama" or "llama-server") return Free;
+        // «local» — локальная генерация картинок/видео/звука (source=local): своя GPU, денег не стоит.
+        if (key is "ollama" or "llama-server" or "local") return Free;
         if (model is not null && model.EndsWith(":free", StringComparison.OrdinalIgnoreCase)) return Free;
         if (IsFreeProviderKey(key)) return Free;
         if (IsClaudeKey(key)) return Expensive;
@@ -104,8 +105,27 @@ public static class SpendCostTiers
     // оба API (/api/spend и разбивка расхода фичи), иначе контракт разъезжается между ними.
     public static bool AxisHasTier(string axis) => axis is "provider" or "model";
 
-    // Ранг для выбора класса узла, когда в одной группе смешались классы: «дороже — важнее».
-    public static int Rank(string tier) => tier switch
+    // Класс строки, в которой смешались записи разных классов: класс с наибольшей суммой токенов;
+    // при равенстве — более дорогой (занижать расход нельзя). Один процент чужих записей
+    // не перекрашивает строку: «самый дорогой присутствующий» давал MiniMax «дорого»
+    // из-за записей с провайдером claude. Пустая группа → null.
+    public static string? Dominant(IReadOnlyDictionary<string, long> tokensByTier)
+    {
+        string? best = null;
+        long bestTokens = 0;
+        foreach (var (tier, tokens) in tokensByTier)
+        {
+            if (best is null || tokens > bestTokens || (tokens == bestTokens && Rank(tier) > Rank(best)))
+            {
+                best = tier;
+                bestTokens = tokens;
+            }
+        }
+        return best;
+    }
+
+    // Ранг только для разрешения равенства в Dominant: «дороже — важнее».
+    private static int Rank(string tier) => tier switch
     {
         Expensive => 3,
         Cheap => 2,

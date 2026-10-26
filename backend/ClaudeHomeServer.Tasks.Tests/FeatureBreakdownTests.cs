@@ -544,12 +544,11 @@ public class FeatureBreakdownTests
         bd.Roles.Single(g => g.Key == TaskRoles.Step).Tier.Should().BeNull("ось ролей — класс не определён");
     }
 
-    // Смешанная группа в разбивке фичи: класс берётся «важнейший» (дороже — важнее).
-    // Порядок записей задан явно: сначала дешёвый класс, потом дорогой — иначе проверка
-    // была бы нечувствительна к рангу. Мутация «Rank(tier) => 1» → остаётся первый
-    // попавшийся класс (cheap) ≠ expensive → краснеет.
+    // Смешанная группа в разбивке фичи: класс — по большинству токенов, а не по «самому дорогому».
+    // Живая форма: 95% записей minimax (cheap) и 5% с провайдером claude на той же модели.
+    // Мутация «вернуть Rank (дорогой класс побеждает всегда)» → expensive ≠ cheap → краснеет.
     [Fact]
-    public void Build_РазрезМоделей_СмешанныеКлассы_БерётсяВажнейший()
+    public void Build_РазрезМоделей_СмешанныеКлассы_БерётсяБольшинствоТокенов()
     {
         var now = new DateTime(2026, 10, 1, 20, 0, 0);
         var epic = Epic("epic");
@@ -560,14 +559,36 @@ public class FeatureBreakdownTests
         var sessions = Sessions(("c1", "s1", "mixed-model"));
         var records = new[]
         {
-            Spend("p1", "s1", "mixed-model", 10, 5, 0.2, provider: "minimax"),
-            Spend("p1", "s1", "mixed-model", 100, 50, 1.0, provider: "claude"),
+            Spend("p1", "s1", "mixed-model", 950, 0, 0.2, provider: "minimax"),
+            Spend("p1", "s1", "mixed-model", 50, 0, 1.0, provider: "claude"),
         };
 
         var (bd, _) = FeatureBreakdown.Build(Run(epic, s1), null, sessions, null, now, records);
 
-        bd.Models.Single(g => g.Key == "mixed-model").Tier.Should().Be("expensive",
-            "в группе есть claude-трата → класс группы дороже");
+        bd.Models.Single(g => g.Key == "mixed-model").Tier.Should().Be("cheap",
+            "95% токенов — дешёвый провайдер, 5% чужих записей строку не перекрашивают");
+    }
+
+    // Равенство токенов — побеждает более дорогой класс (занижать расход нельзя).
+    [Fact]
+    public void Build_РазрезМоделей_РавныеТокены_БерётсяБолееДорогой()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic", personaId: "p1", chatId: "c1",
+            startedAt: new DateTime(2026, 10, 1, 10, 0, 0),
+            completedAt: new DateTime(2026, 10, 1, 12, 0, 0));
+
+        var sessions = Sessions(("c1", "s1", "mixed-model"));
+        var records = new[]
+        {
+            Spend("p1", "s1", "mixed-model", 100, 0, 0.2, provider: "minimax"),
+            Spend("p1", "s1", "mixed-model", 100, 0, 1.0, provider: "claude"),
+        };
+
+        var (bd, _) = FeatureBreakdown.Build(Run(epic, s1), null, sessions, null, now, records);
+
+        bd.Models.Single(g => g.Key == "mixed-model").Tier.Should().Be("expensive");
     }
 
     // Ось «роли»: запись расхода (TaskId → Role задачи) даёт группе роли токены/стоимость.

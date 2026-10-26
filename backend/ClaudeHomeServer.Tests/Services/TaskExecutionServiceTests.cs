@@ -427,6 +427,42 @@ public class TaskExecutionServiceTests
         prompt.Should().Contain("не завершай", "эскалация не подменяет завершение задачи");
     }
 
+    // Контракт исполнителя (Ш3): шаг с собственным деревом получает правило порядка
+    // «закоммить → pregate → tasks_complete» — без него ревьюер не увидит вердикта предгейта.
+    // Задача без своего дерева правила не получает: предгейт к ней не применяется.
+    [Theory]
+    [InlineData(true)]   // с персоной — 6-секционный контракт
+    [InlineData(false)]  // без персоны — короткий формат
+    public void BuildPrompt_ШагСДеревом_ЕстьПорядокПредгейта(bool withPersona)
+    {
+        var step = new TaskItem { Title = "t", Role = TaskRoles.Step, WorktreePath = Path.Combine(Path.GetTempPath(), "tree") };
+
+        var prompt = TaskExecutionService.BuildPrompt(step, withPersona ? new Persona { Name = "Вера" } : null);
+
+        prompt.Should().Contain("pregate", "правило порядка «закоммить → pregate → tasks_complete»");
+        prompt.Should().Contain("tasks_complete");
+        prompt.Should().Contain("закоммить");
+
+        var plain = TaskExecutionService.BuildPrompt(
+            new TaskItem { Title = "t", Role = TaskRoles.Step }, withPersona ? new Persona { Name = "Вера" } : null);
+        plain.Should().NotContain("pregate", "у задачи без своего дерева предгейт не применяется");
+    }
+
+    // Рабочая ветка постановки — шаблон правил (SystemPrompts/task-executor-rules.md): серверный
+    // дефолт есть всегда, значит почти каждый шаг идёт именно туда. Правило предгейта обязано
+    // доезжать и в ней — иначе шаг не получит контракт «закоммить → pregate → tasks_complete».
+    [Fact]
+    public void BuildPrompt_СШаблономПравил_ЕстьПорядокПредгейта()
+    {
+        var step = new TaskItem { Title = "t", Role = TaskRoles.Step, WorktreePath = Path.Combine(Path.GetTempPath(), "tree") };
+
+        var prompt = TaskExecutionService.BuildPrompt(step, new Persona { Name = "Вера" },
+            rulesTemplate: "## ПРАВИЛА\n- правило проекта\n");
+
+        prompt.Should().Contain("## ПРЕДГЕЙТ", "правило предгейта обязано быть и в ветке с шаблоном правил");
+        prompt.Should().Contain("pregate").And.Contain("tasks_complete").And.Contain("закоммить");
+    }
+
     [Fact]
     public void BuildPrompt_СПерсоной_ДелегированиеБезПолныхПрофилей()
     {

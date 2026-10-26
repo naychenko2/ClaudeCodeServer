@@ -14,7 +14,9 @@
 // у персон цвет персоны). В центре — итог выбранной меры; если у меры нет данных
 // (null у всех групп) — фолбэк на время (состояние «без расхода» записки).
 // Легенды в кольце нет: подписи — в таблице ниже, смысл несёт aria-label, а не
-// цвет (цвета не единственный носитель смысла).
+// цвет (цвета не единственный носитель смысла). В разрезе МОДЕЛЕЙ дуги красятся по
+// ценовому классу модели (tier с бэка): free → success, cheap → info,
+// expensive → warning; класс неизвестен — нейтральный цвет.
 //
 // Контракт costPartial: центр показывает сумму только по группам с надёжной ценой
 // (null-цены в сумму не входят). Что цена известна лишь по части моделей, говорит
@@ -26,7 +28,8 @@ import { C, FS, SP, FONT } from '../../lib/design';
 import { formatDuration } from './FeatureStatsBits';
 import { formatTokens } from './FeatureStatsFormat';
 import {
-  totalMoney, percentText, sortGroups, measureValue, measureTotal, effectiveMeasure, type Measure,
+  totalMoney, percentText, sortGroups, measureValue, measureTotal, effectiveMeasure,
+  type Measure, type Axis,
 } from './FeatureBreakdownModel';
 import { groupColor } from './FeatureBreakdownShared';
 import type { FeatureBreakdownGroup } from '../../types/featureStats';
@@ -49,13 +52,16 @@ export interface ShareRingProps {
   // Цвет группы от вызывающего (у персон — цвет персоны, AGENT_COLORS);
   // фолбэк — палитра по порядку.
   colorOf?: (key: string) => string;
+  // Разрез, который рисуется: в разрезе моделей дуги красятся по ценовому
+  // классу модели (tier с бэка), в прочих — палитрой/цветом персоны.
+  axis?: Axis;
   // Название разреза для второй строки центра («персоны суммарно · …», макет :298).
   axisLabel?: string;
   // Цена известна только по части моделей: «бесплатно» тогда не значит «все локальные».
   costPartial?: boolean;
 }
 
-export function ShareRing({ groups, measure, size = 140, labelOf, colorOf, axisLabel, costPartial }: ShareRingProps) {
+export function ShareRing({ groups, measure, size = 140, labelOf, colorOf, axis, axisLabel, costPartial }: ShareRingProps) {
   if (groups.length < 2) return null;
 
   // Фолбэк на время — только когда у меры нет данных ни у одной группы (null у
@@ -156,7 +162,7 @@ export function ShareRing({ groups, measure, size = 140, labelOf, colorOf, axisL
             cy={size / 2}
             r={r}
             fill="none"
-            stroke={groupColor(key, groups, colorOf)}
+            stroke={groupColor(key, groups, colorOf, axis)}
             strokeWidth={i === 0 ? thick : base}
             strokeDasharray={dash}
             strokeDashoffset={off}

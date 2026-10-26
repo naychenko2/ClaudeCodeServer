@@ -13,6 +13,7 @@ import { api } from './api';
 import { setAllFlags } from './featureFlags';
 import type { Task } from '../types';
 import type { FeaturePage } from '../types/featureIndex';
+import { BRIEF } from './featurePage.contract';
 
 // showToast диспатчит window-событие, в node-окружении его нет — no-op-мок на случай
 // транзитного импорта (сам стор фичи тост больше не шлёт).
@@ -268,6 +269,52 @@ describe('смена fid: устаревший запрос отменяется
     expect(seen[0].signal, 'signal не ушёл в getFeature').toBe(c1.signal);
     // AbortError отменённого запроса не роняет состояние в error (fid сменился → _fid ≠ fid).
     expect(__test.state(), 'состояние упало в error после отмены').toEqual({ status: 'loading' });
+  });
+});
+
+// ── 5. brief (волна 6, F1): поле опционально — ответ с brief и без него ───────────
+//
+// Контрактный литерал BRIEF — в featurePage.contract.ts: тот файл НЕ исключён из
+// сборки (tsconfig.app.json исключает только *.test.ts), поэтому переименование поля
+// в FeatureBrief красит `tsc -b` (TS2561), а сделать brief обязательным — проверка
+// опциональности в том же файле (TS2322). Здесь остаётся рантайм: стор пропускает
+// ответ как есть — с brief и без него.
+
+describe('brief: ответ страницы с brief и без него', () => {
+  let getFeatureSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    __test.reset();
+    setAllFlags({ [FLAG]: true });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    __test.reset();
+    vi.useRealTimers();
+  });
+
+  it('ответ без brief разбирается без ошибки (поле опционально)', async () => {
+    // Тайп-утверждение: старая страница (без brief) — валидный FeaturePage.
+    const withoutBrief: FeaturePage = page('epic-1');
+    getFeatureSpy = vi.spyOn(api.tasks, 'getFeature').mockResolvedValue(withoutBrief);
+    __test.setFid('epic-1');
+    __test.fetchPage('epic-1', true);
+    await vi.runAllTimersAsync();
+    expect(__test.state()).toEqual({ status: 'ok', page: withoutBrief });
+  });
+
+  it('ответ с полным brief разбирается, brief проходит как есть', async () => {
+    // Тайп-утверждение: литерал с brief по контракту п. 6 — валидный FeaturePage.
+    const withBrief: FeaturePage = { ...page('epic-1'), brief: BRIEF };
+    getFeatureSpy = vi.spyOn(api.tasks, 'getFeature').mockResolvedValue(withBrief);
+    __test.setFid('epic-1');
+    __test.fetchPage('epic-1', true);
+    await vi.runAllTimersAsync();
+    const state = __test.state();
+    expect(state.status).toBe('ok');
+    // Стор не пересчитывает и не выбрасывает brief: он доходит до UI без изменений.
+    if (state.status === 'ok') expect(state.page.brief).toEqual(BRIEF);
   });
 });
 

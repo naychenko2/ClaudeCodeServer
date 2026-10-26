@@ -1942,6 +1942,13 @@ public class SubsystemBoundaryTests
         // одна точка правды вместо двух записей. По прецеденту FeatureKeyChain — в корневном
         // namespace, поимённо.
         "ClaudeHomeServer.Services.FeatureTurnGate",
+        // Шов снятия удержания фичи (дефект 6c71a827, волна 6 «Очередь фич», шаг Q6-BOUND-1):
+        // контракт зовут две стороны — автоснятие очереди (вертикаль Tasks) и корневый
+        // TaskExecutionService (реализация). Владения одной вертикалью нет, по прецеденту
+        // FeatureHoldException/ITaskExecutor — в корневном namespace, поимённо.
+        "ClaudeHomeServer.Services.IFeatureHoldReleaser",
+        "ClaudeHomeServer.Services.FeatureHoldReleaseOutcome",
+        "ClaudeHomeServer.Services.FeatureHoldRelease",
         "ClaudeHomeServer.Services.ImageAssetHelper",
         "ClaudeHomeServer.Services.InstanceSecretFiles",
         "ClaudeHomeServer.Services.SessionChangedPaths",

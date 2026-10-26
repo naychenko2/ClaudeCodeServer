@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { CSSProperties, FocusEvent, ReactNode } from 'react';
-import { ArrowRight, Check, Clock, GitBranch, ListChecks, MessageCircle, Moon, Pause, Play, RotateCcw } from 'lucide-react';
+import { ArrowRight, Check, Clock, GitBranch, ListChecks, MessageCircle, ListEnd, ListX, Moon, Pause, Play, RotateCcw, Zap } from 'lucide-react';
 import { C, R, SHADOW, FS, SP, FONT, MODAL_W } from '../../lib/design';
 import { refetchFeaturePage } from '../../lib/featurePage';
 import { stepProgressFromRun, type StepProgress } from '../../lib/featureProgress';
@@ -10,21 +10,23 @@ import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { FeatureGlyph } from '../chat/feature/FeatureGlyphs';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
-import { formatDuration } from '../../lib/chatGroups';
+import { formatDuration, queueOrdinalWord, queuePhraseParts } from '../../lib/chatGroups';
 import { ensurePersonasLoaded, getPersonaById, usePersonasVersion } from '../../lib/personas';
 import { openChatById } from '../../lib/openChat';
 import { executorStopVisual, openTaskInSection } from '../../lib/tasks';
 import { recordFeatureReturn } from '../../lib/featureBackNav';
 import { buildNavMarks, type NavMarks } from '../../lib/featureNavMarks';
 import { showToast } from '../../lib/toast';
-import type { FeatureRun, FeatureState, FeatureAttention, FeatureNow } from '../../types/featureRun';
+import type { FeatureRun, FeatureState, FeatureAttention, FeatureNow, FeatureQueue, FeatureHold } from '../../types/featureRun';
 import { api } from '../../lib/api';
 import type { FeatureIndexFeature } from '../../types/featureIndex';
 import { taskCounters } from './featurePageBody';
 import { NavTargetButton } from './NavTargetButton';
 import { StatusTag, type FeatureRunTag } from './FeatureStatusTag';
 import { analysisLineState } from './FeatureAnalysisModel';
+import { minutesSince } from './FeatureStatsBits';
 import { setFeaturePageTab } from '../../lib/featurePage';
+import { useNow } from '../../lib/useNow';
 
 // Статусный тег живёт в FeatureStatusTag.tsx (W5-F3a): шапка и строка анализа зовут
 // его оттуда — модель больше не тянет модуль шапки, цикл FeaturePageHeader ⇄
@@ -479,6 +481,115 @@ async function doHoldClear(fid: string, state: FeatureState): Promise<void> {
   }
 }
 
+// === Очередь фич (волна 6, макет feature-queue-1) ===
+//
+// Очередь — пауза с причиной queue: все три действия идут на существующие ручки hold.
+// «В очередь» — POST hold {queue}; «Вынуть» — POST hold {manual} (переход queue → manual,
+// разрез §7: место освобождается, фича стоит на паузе); «Запустить вне очереди» —
+// DELETE hold (тот же вызов, что «Снять паузу», но с обязательным подтверждением).
+// «В очередь» нет у фичи, которая уже уступила слот или завершена.
+const QUEUE_DENIED: ReadonlySet<FeatureState> = new Set(['merge_pending', 'merging', 'merged', 'closed']);
+
+// Порядковое слово позиции — общий словарь очереди (chatGroups.queueOrdinalWord,
+// Q5I-1): своей копии списка здесь больше нет, у модалки и блока страницы один источник.
+async function doQueueIn(fid: string, state: FeatureState): Promise<void> {
+  try {
+    await api.tasks.setFeatureHold(fid, 'queue');
+    showToast('Фича в очереди', 'Запустится сама, когда освободится место.');
+  } catch (e) {
+    showToast('Не получилось', holdErrorText(e, state));
+  }
+}
+
+async function doQueueOut(fid: string, state: FeatureState): Promise<void> {
+  try {
+    await api.tasks.setFeatureHold(fid, 'manual');
+    showToast('Вынута из очереди', 'Фича на паузе. Вернуть в очередь или снять паузу — на странице фичи.');
+  } catch (e) {
+    showToast('Не получилось', holdErrorText(e, state));
+  }
+}
+
+async function doRunOutOfQueue(fid: string, state: FeatureState): Promise<void> {
+  try {
+    const { resumed } = (await api.tasks.clearFeatureHold(fid)) ?? {};
+    const n = (resumed ?? []).length;
+    showToast('Фича запущена вне очереди', n > 0 ? `Продолжены ${n} ${pluralSteps(n)}, куратор в курсе.` : 'Куратор в курсе.');
+  } catch (e) {
+    showToast('Не получилось', holdErrorText(e, state));
+  }
+}
+
+function QueueInModal({ now, busy, onClose, onConfirm }: { now: FeatureNow[]; busy: boolean; onClose: () => void; onConfirm: () => void }) {
+  useEffect(() => {
+    const el = typeof document !== 'undefined' ? document.querySelector('[data-testid="feature-page-queue-cancel"]') : null;
+    (el as { focus?: () => void } | null)?.focus?.();
+  }, []);
+  return (
+    <Modal
+      width={MODAL_W.confirm}
+      title="Поставить фичу в очередь?"
+      onClose={onClose}
+      footer={
+        <span style={{ display: 'flex', gap: SP.xs }}>
+          <Button size="sm" variant="ghost" dataTestId="feature-page-queue-cancel" onClick={onClose}>Отмена</Button>
+          <Button size="sm" variant="primary" loading={busy} dataTestId="feature-page-queue-confirm" onClick={onConfirm}>
+            {busy ? 'Ставлю в очередь…' : 'В очередь'}
+          </Button>
+        </span>
+      }
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+        <div style={{ fontSize: FS.base, color: C.textPrimary }}>
+          Идущие шаги прервутся сразу: <b>{now.map(nowLine).join(' и ')}</b>
+        </div>
+        <div style={{ fontSize: FS.sm, color: C.textSecondary }}>
+          Фича встанет в конец очереди и запустится сама, когда до неё дойдёт черёд, — прерванные шаги продолжатся с того же места.
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function QueueBypassModal({ queue, busy, onClose, onConfirm }: { queue: FeatureQueue | null | undefined; busy: boolean; onClose: () => void; onConfirm: () => void }) {
+  useEffect(() => {
+    const el = typeof document !== 'undefined' ? document.querySelector('[data-testid="feature-page-bypass-cancel"]') : null;
+    (el as { focus?: () => void } | null)?.focus?.();
+  }, []);
+  return (
+    <Modal
+      width={MODAL_W.confirm}
+      title="Запустить вне очереди?"
+      onClose={onClose}
+      footer={
+        <span style={{ display: 'flex', gap: SP.xs }}>
+          <Button size="sm" variant="ghost" dataTestId="feature-page-bypass-cancel" onClick={onClose}>Отмена</Button>
+          <Button
+            size="sm"
+            variant="primary"
+            leftIcon={<Zap size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+            loading={busy}
+            dataTestId="feature-page-bypass-confirm"
+            onClick={onConfirm}
+          >
+            {busy ? 'Запускаю…' : 'Запустить вне очереди'}
+          </Button>
+        </span>
+      }
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+        <div style={{ fontSize: FS.base, color: C.textPrimary }}>
+          {queue ? `Фича стоит в очереди ${queueOrdinalWord(queue.position)}. ` : 'Фича стоит в очереди. '}
+          Запуск в обход очереди поднимет её сразу, <b>сверх числа одновременно идущих фич</b>, заданного для проекта.
+        </div>
+        <div style={{ fontSize: FS.sm, color: C.textSecondary }}>
+          Остальные фичи очереди сохранят порядок. Прерванные шаги продолжатся с того же места.
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // Модалка подтверждения паузы (макет §«Подтверждение паузы»): MODAL_W.confirm,
 // кнопки ghost «Отмена» + primary «Поставить на паузу» (не danger: действие обратимо).
 // Фокус при открытии — на «Отмена»; Esc закрывает (штатно у Modal).
@@ -660,6 +771,35 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
   const draft = state === 'draft';
   const [holdBusy, setHoldBusy] = useState(false);
   const [holdModal, setHoldModal] = useState(false);
+  // Очередь: «В очередь…» — модалка только при идущих ходах; «вне очереди» — всегда.
+  const queued = run?.hold?.reason === 'queue';
+  const canQueue = state != null && !QUEUE_DENIED.has(state) && !queued;
+  const [queueModal, setQueueModal] = useState(false);
+  const [bypassModal, setBypassModal] = useState(false);
+  const runQueueIn = () => {
+    setHoldBusy(true);
+    void doQueueIn(fid, state!).finally(() => {
+      setHoldBusy(false);
+      setQueueModal(false);
+    });
+  };
+  const queueInClick = () => {
+    if (holdBusy) return;
+    if (now.length > 0) { setQueueModal(true); return; }
+    runQueueIn();
+  };
+  const queueOutClick = () => {
+    if (holdBusy) return;
+    setHoldBusy(true);
+    void doQueueOut(fid, state!).finally(() => setHoldBusy(false));
+  };
+  const runBypass = () => {
+    setHoldBusy(true);
+    void doRunOutOfQueue(fid, state!).finally(() => {
+      setHoldBusy(false);
+      setBypassModal(false);
+    });
+  };
 
   const runPause = () => {
     setHoldBusy(true);
@@ -743,7 +883,8 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
   // «Мерж…» — только когда state === 'merge_pending'; никогда при merging/merged/closed.
   const mergePending = run?.state === 'merge_pending';
   const effectivePrimary = (primary?.kind === 'merge' && !mergePending) ? null : primary;
-  const holdAction: 'unpause' | 'start' | null = paused ? 'unpause' : draft ? 'start' : null;
+  // У фичи в очереди главной кнопки нет: «Снять паузу» там был бы запуском вне очереди без предупреждения.
+  const holdAction: 'unpause' | 'start' | null = paused && !queued ? 'unpause' : draft ? 'start' : null;
   const showPrimary = !isMobile && (holdAction != null || effectivePrimary != null || (notStarted && keyChat != null));
   const onPrimary = () => {
     if (holdAction) { clearClick(); return; }
@@ -771,9 +912,36 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
       onClick: pauseClick,
     });
   }
+  if (canQueue) {
+    items.unshift({
+      key: 'queue-in',
+      icon: <ListEnd size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
+      label: 'В очередь…',
+      sublabel: now.length > 0 ? `${runningHint(now.length)} — продолжатся при запуске из очереди` : undefined,
+      onClick: queueInClick,
+    });
+  }
+  if (queued) {
+    items.push({
+      key: 'queue-out',
+      icon: <ListX size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
+      label: 'Вынуть из очереди',
+      sublabel: 'Фича встанет на паузу, место в очереди освободится',
+      onClick: queueOutClick,
+    }, {
+      key: 'queue-bypass',
+      icon: <Zap size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
+      label: 'Запустить вне очереди…',
+      sublabel: 'В обход порядка и лимита одновременно идущих фич',
+      warning: true,
+      separator: true,
+      onClick: () => { if (!holdBusy) setBypassModal(true); },
+    });
+  }
   if (branch) {
     items.push({
       key: 'branch',
+      separator: queued,
       icon: <GitBranch size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
       label: 'Скопировать ветку',
       onClick: copyBranch,
@@ -884,6 +1052,12 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
       {holdModal && (
         <HoldConfirmModal now={now} busy={holdBusy} onClose={() => setHoldModal(false)} onConfirm={runPause} />
       )}
+      {queueModal && (
+        <QueueInModal now={now} busy={holdBusy} onClose={() => setQueueModal(false)} onConfirm={runQueueIn} />
+      )}
+      {bypassModal && (
+        <QueueBypassModal queue={run?.queue} busy={holdBusy} onClose={() => setBypassModal(false)} onConfirm={runBypass} />
+      )}
       {closeModal && (
         <CloseConfirmModal
           title={feature?.title ?? epic?.title ?? 'фичу'}
@@ -948,7 +1122,11 @@ function HoldStateBlock({ run, feature, isMobile }: { run: FeatureRun; feature: 
   const now = run.now ?? [];
   const paused = run.state === 'paused';
   const since = run.hold?.since ? new Date(run.hold.since).getTime() : NaN;
-  const dur = Number.isFinite(since) ? formatDuration(Math.max(0, Math.round((Date.now() - since) / 60000))) : null;
+  // Возраст паузы — через useNow (механизм живого времени проекта, lib/useNow): Date.now()
+  // в ренере флагует react-hooks/purity и морозит «назад» на последнем ренере
+  // (хвост RV-K-Q5I-2). Интервал живёт, только пока пауза действительно показывается.
+  const live = useNow(60_000, paused && Number.isFinite(since));
+  const dur = Number.isFinite(since) ? formatDuration(Math.max(0, Math.round((live - since) / 60000))) : null;
   const [busy, setBusy] = useState(false);
   const act = () => {
     if (busy) return;
@@ -985,7 +1163,7 @@ function HoldStateBlock({ run, feature, isMobile }: { run: FeatureRun; feature: 
             {now.map(n => <div key={n.taskId}>{nowLine(n)}</div>)}
           </div>
         )}
-        {isMobile && (
+        {isMobile && run.hold?.reason !== 'queue' && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, marginTop: SP.sm }}>
             <Button
               size="xs"
@@ -1014,7 +1192,72 @@ function HoldStateBlock({ run, feature, isMobile }: { run: FeatureRun; feature: 
   );
 }
 
+// === Блок «в очереди» (Q5I-2, макет feature-queue-1 §«Состояния») ===
+//
+// Очередь — пауза с причиной 'queue' (state остаётся paused): тон тот же, что у паузы
+// (bgInset + рамка border, тревоги нет), различаются глиф и слова. Признак ветки —
+// hold.reason, не state: state у очереди тот же paused.
+// Позиция — готовая фраза из queuePhraseParts (Q5I-1): потребитель берёт phrase целиком,
+// не собирает строку из ordinal/count/sep (урок R-Q5D-D). Нет queue (бэк не отдал) —
+// блок без позиции, нулей не показываем (тот же признак, что у queueLabelParts).
+// Длительность — тем же приёмом, что возраст паузы в шапке: minutesSince + formatDuration,
+// живое значение — через useNow (lib/useNow): у стоящей в очереди фичи событий может не быть
+// вовсе, а Date.now() в ренере морозит «назад» на последнем ренере (хвост RV-K-Q5I-2, п.1).
+// Нижнюю границу 1 мин здесь не дублируем: formatDuration отдаёт «1 мин» при minutes < 1
+// (chatGroups.ts:338) — единственный источник правила (хвост RV-K-Q5I-2, п.2).
+// Главного действия в блоке нет: «Запустить вне очереди» живёт в ⋯ (Q5B); «Снять паузу»
+// не показываем — это и есть «вне очереди», только без предупреждения (макет).
+// Хелпер чистый: «сейчас» приходит параметром, нечистость — в useNow (Date.now() в ренере
+// флагует react-hooks/purity; такие места в файле есть вне этого блока — AnalysisTag,
+// FeaturePageAlert).
+function queueHoldDuration(hold: FeatureHold | null | undefined, nowMs: number): string | null {
+  const sinceMin = minutesSince(hold?.since, nowMs);
+  return sinceMin != null ? formatDuration(sinceMin) : null;
+}
+
+function QueueStateBlock({ run }: { run: FeatureRun }) {
+  // Интервал нужен, только когда есть от чего считать (useNow: enabled).
+  const live = useNow(60_000, run.hold?.since != null);
+  const parts = queuePhraseParts(run.queue);
+  const dur = queueHoldDuration(run.hold, live);
+  return (
+    <div
+      data-testid="feature-page-alarm"
+      data-tone="queue"
+      role="status"
+      aria-live="polite"
+      style={{
+        display: 'flex', gap: SP.sm, alignItems: 'flex-start',
+        marginTop: SP.md, padding: `${SP.sm}px ${SP.md}px`, borderRadius: R.lg,
+        background: C.bgInset, border: `1px solid ${C.border}`,
+        fontSize: FS.base, fontFamily: FONT.sans, color: C.textPrimary,
+      }}
+    >
+      <span style={{ paddingTop: SP.xxs, display: 'inline-flex', flexShrink: 0 }}>
+        <FeatureGlyph kind="queue" size={14} />
+      </span>
+      <div style={{ minWidth: 0 }}>
+        <div>
+          <b>{parts ? `Фича в очереди: ${parts.phrase}.` : 'Фича в очереди.'}</b>
+          <span> {dur ? `Поставили вы ${dur} назад.` : 'Поставили вы.'} Шаги не запускаются.</span>
+        </div>
+        <div style={{ marginTop: SP.sm, fontSize: FS.sm, color: C.textSecondary }}>
+          <div>Запустится сама, когда одна из идущих фич проекта закончится или уйдёт на мерж. Прерванные шаги продолжатся с того же места.</div>
+          {run.queue?.position === 1 && (
+            <div>Если место освободилось, а фича не запустилась за минуту, запустите её вручную: ⋯ → «Запустить вне очереди».</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function FeaturePageAlert({ run, feature, isMobile, onMerge, marks: marksProp }: FeaturePageAlertProps) {
+  // Очередь — отдельный блок состояния (Q5I-2): стоит выше общей паузы, её признак —
+  // hold.reason === 'queue' (state при этом остаётся paused, ниже не досчитывается).
+  if (run?.hold?.reason === 'queue') {
+    return <QueueStateBlock run={run} />;
+  }
   // Пауза и черновик — блок состояния вместо тревоги: при paused тревога не рисуется
   // (paused стоит выше stopped и waiting в приоритете бэка, W4-HOLD-B1).
   if (run?.state === 'paused' || run?.state === 'draft') {

@@ -12,7 +12,7 @@ public enum TaskPregateStatus
     NotFound,
     // Подсистема test-runs выключена — шва нет, прогонять нечем
     Disabled,
-    // Не шаг/доработка или нет собственного дерева: гейт задачу не касается
+    // Не шаг/доработка или нет собственного дерева: предгейт задачу не касается
     NotApplicable,
     // Прогон не состоялся (дерево занято, потолок, «Стоп», нет git): результат не записан
     NotRun,
@@ -38,6 +38,16 @@ public sealed class TaskPregateService(TaskManager tasks, ProjectManager project
         var project = task.ProjectId is null ? null : projects.GetById(task.ProjectId);
         if (project is null)
             return new(TaskPregateStatus.NotRun, "Проект задачи не найден — предгейт не запущен.");
+
+        // Потолок прогона — от первого касания дерева: git-проверки (Head/IsClean/ChangedFiles)
+        // входят в тот же бюджет, что и сами проверки. Иначе сумма (git + проверки) могла бы
+        // перевалить MCP_TOOL_TIMEOUT хода, а ход обязан успеть ответить модели.
+        // Значение приходит из шва (чужая реализация): мусор в нём — 0 (мгновенный отказ),
+        // отрицательное (исключение на ручке) или слишком большое (нарушение инварианта
+        // «потолок < MCP_TOOL_TIMEOUT») — в CancelAfter не годится, поэтому чистится на границе.
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var ceilingSeconds = PregateCeiling.Sanitize(pregate.CeilingSeconds);
+        limit.CancelAfter(TimeSpan.FromSeconds(ceilingSeconds));
         var sha = heads.Head(task.WorktreePath!);
         if (sha is null)
             return new(TaskPregateStatus.NotRun, "Не удалось определить текущий коммит дерева шага — предгейт не запущен.");
@@ -52,9 +62,19 @@ public sealed class TaskPregateService(TaskManager tasks, ProjectManager project
         if (!clean.Value)
             return new(TaskPregateStatus.NotRun, "В дереве шага есть незакоммиченные или неотслеживаемые изменения: "
                 + "результат привязывается к коммиту, а проверки идут по файлам. Закоммить правки и прогони предгейт снова.");
+        // Потолок истёк на git-проверках — проверки уже не запустить: бюджет хода общий.
+        // Потолок в отказе называем: иначе исполнитель не отличит исчерпание бюджета от
+        // ошибки проверки.
+        if (limit.IsCancellationRequested)
+            return new(TaskPregateStatus.NotRun, $"Потолок предгейта {ceilingSeconds} с истёк на проверках дерева — предгейт не запущен.");
 
         var verdict = await pregate.RunAsync(new PregateRequest(project, task.WorktreePath!, sessionId,
-            heads.ChangedFiles(task.WorktreePath!), PregateRules.UiRoutes(task.Description)), ct);
+            heads.ChangedFiles(task.WorktreePath!), PregateRules.UiRoutes(task.Description)), limit.Token);
+        // Наш потолок истёк уже во время прогна: внешний CancelAfter бьёт по часам до git-проверок,
+        // поэтому в отказ уходит «предгейт остановлен» без числа. Отличаем свой потолок от отмены
+        // хода (ct): своего потолка он называет сам, с числом.
+        if (limit.IsCancellationRequested && !ct.IsCancellationRequested)
+            return new(TaskPregateStatus.NotRun, $"Потолок предгейта {ceilingSeconds} с истёк — предгейт остановлен (вместе с проверками дерева).");
         if (verdict.Refusal is { } refusal)
             return new(TaskPregateStatus.NotRun, "Предгейт не состоялся: " + refusal);
         if (!string.Equals(heads.Head(task.WorktreePath!), sha, StringComparison.OrdinalIgnoreCase))
@@ -87,7 +107,7 @@ public sealed class TaskPregateService(TaskManager tasks, ProjectManager project
         }
         if (!verdict.IsGreen)
             text.Append(record is { RedStreak: >= PregateRules.MaxRedStreak }
-                ? "Второй красный подряд по той же причине: доложи постановщику (chats_report_up, blocker: true)."
+                ? "Второй красный подряд по той же причине: доклад постановщику уходит с сервера, самому звать не нужно."
                 : "Исправь причину, закоммить и прогони предгейт снова.");
         return text.ToString().TrimEnd();
     }

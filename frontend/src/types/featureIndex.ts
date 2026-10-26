@@ -9,13 +9,14 @@
 // Все поля аддитивны и nullable-терпимы: UI обязан пережить отсутствие любого
 // (старые ответы не несут новых полей).
 
-import type { FeatureRun, FeatureState } from './featureRun';
+import type { FeatureQueue, FeatureRun, FeatureState } from './featureRun';
 import type { FeatureStats } from './featureStats';
 import type { FeaturePlan, FeatureMockup } from './featurePlans';
 import type { PlanState } from '../lib/featureProgress';
 // Чат фичи (GET features/{id}, chats[]) — из featureChats; алиас, чтобы не путать с
 // FeatureChatLink этого файла (запись индекса «чат × фича», бэк: FeatureIndexChatEntry).
 import type { FeatureChatLink as FeaturePageChatLink } from './featureChats';
+import type { FeatureBrief } from '../lib/featurePage';
 
 // Группа фичи (контракт §1): attention — требует внимания; running — идёт;
 // idle — стоит; closed — закрыта. Считается той же функцией, что и порядок.
@@ -137,6 +138,10 @@ export interface FeatureIndexFeature {
   taskCount?: number;
   // «Сейчас»: уникальные PersonaId идущих задач, по убыванию старта; [] — фича не идёт.
   nowPersonaIds?: string[];
+  // Очередь фич (волна 6): причина удержания и место в очереди проекта. Позицию считает бэк;
+  // queue есть только у фичи в очереди (holdReason = 'queue'), иначе null/нет.
+  holdReason?: string | null;
+  queue?: FeatureQueue | null;
 }
 
 // Роль чата в фиче (контракт: «Роль чата принята и дополнена»). Сила связи:
@@ -218,4 +223,7 @@ export interface FeaturePage {
   mockups?: FeatureMockup[];
   // 'device' — макеты недоступны (нет устройства); null — доступны.
   mockupsUnavailable?: 'device';
+  // Сводка состояния фичи (волна 6, разрез п. 6). Аддитивное: старые ответы его
+  // не несут — UI обязан пережить отсутствие (блок «Сводка» тогда не показывается).
+  brief?: FeatureBrief;
 }

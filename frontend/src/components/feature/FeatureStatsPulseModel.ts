@@ -37,7 +37,7 @@ export function pickHeroState(run: FeatureRun, stats: FeatureStats): HeroState {
 
 // === Состав времени ===
 
-export type CompositionKind = 'work' | 'waiting' | 'idle' | 'error';
+export type CompositionKind = 'work' | 'waiting' | 'idle' | 'error' | 'queued';
 
 export interface CompositionRow {
   kind: CompositionKind;
@@ -48,22 +48,37 @@ export interface CompositionRow {
   percentText: string; // «63 %»
 }
 
-const COMP_LABEL: Record<CompositionKind, string> = {
+// Словарь видов состава (Q5H-3): единый источник слов видов состава (в т.ч. слова
+// очереди). Слово queued читают отсюда все три места: состав героя (compositionRows
+// ниже), «Подробнее» (FeatureStatsTab) и мини-сводка (FeatureMiniSummary) — формулировка
+// очереди не плодится по компонентам (правило волны, ср. queueLabelParts в chatGroups.ts).
+// Значение закреплено тестом «сторож: слово очереди — единый источник» — смена слова
+// становится осознанным решением (лексика согласована: макет docs/mockups/feature-queue-1.md,
+// §«Подпись „в очереди · N из M“», таблица «Состояния»).
+export const COMP_LABEL: Record<CompositionKind, string> = {
   work: 'работа',
   waiting: 'ждали вас',
   idle: 'простой',
+  queued: 'в очереди',
   error: 'ошибки',
 };
 
-// Строки «из чего сложилось время» в порядке макета: работа, ожидание, простой, ошибки.
-// Поле null (не считалось) или ноль — строки нет. Процент — от elapsed.
+// Строки «из чего сложилось время» в порядке макета (работа, ожидание, простой, в очереди,
+// ошибки). «В очереди» — самостоятельный пятый вид разряды (R-Q3B-2, коммит 6c659e527,
+// ADR-031 §«Время в очереди (queued)»): бэк вычитает перекрытия очереди из
+// work/waiting/error/idle, минуты queued у idle не отнимает — строка стоит рядом с простым
+// по порядку макета, а не как вид простоя. Без queuedMinutes (null/0/нет поля) строки нет —
+// поведение прежнее. Процент — от elapsed; сумма видов равна elapsed (контракт
+// TimelineTotals), но проценты округляются по частям и в сумме могут дать 99 % или 101 % —
+// поэтому ширина сегментов мерится минутами, а не процентами (см. преамбулу StatsHero).
 export function compositionRows(totals: FeatureTimeline['totals']): CompositionRow[] {
   const elapsed = totals.elapsedMinutes;
   if (!elapsed) return [];
-  const parts: Array<[CompositionKind, number | null]> = [
+  const parts: Array<[CompositionKind, number | null | undefined]> = [
     ['work', totals.workWallMinutes],
     ['waiting', totals.waitingMinutes],
     ['idle', totals.idleMinutes],
+    ['queued', totals.queuedMinutes],
     ['error', totals.errorMinutes],
   ];
   return parts

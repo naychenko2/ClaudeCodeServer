@@ -371,7 +371,16 @@ function hasHiddenAncestor(node: any): boolean {
   return false;
 }
 
-describe('WorkspacePage: центр — страница фичи соседом, ChatPanel в DOM', () => {
+// Явный таймаут 15 с на весь блок (DEF-TZ-TIMEOUT): кейсы блока — тяжёлая интеграция
+// (реальный маунт WorkspacePage с ChatPanel/FeaturePage под fake-DOM, несколько полных
+// перерендеров на кейс: замеры 1.9–2.8 с уже при load average 40). Дефолтных 5 с на
+// параллельном полном прогоне (несколько воркеров делят CPU) не хватало — кейсы
+// «выбор ДРУГОГО чата гасит указатель возврата» и «запасной переход: снимок + канал»
+// падали с «Test timed out in 5000ms». Лишнего ожидания в тестовой обвязке нет
+// (окно ожидания в runFallbackTransition ограничено и выходит по готовности цепи;
+// window.setTimeout в WorkspacePage — только cleanup с 0 ms), поэтому поднят таймаут,
+// а не изменён код. Лёгкие юнит-кейсы (centerWinner) остаются на дефолтном таймауте.
+describe('WorkspacePage: центр — страница фичи соседом, ChatPanel в DOM', { timeout: 15_000 }, () => {
   beforeEach(() => {
     vi.useFakeTimers();
     installFakeDom();

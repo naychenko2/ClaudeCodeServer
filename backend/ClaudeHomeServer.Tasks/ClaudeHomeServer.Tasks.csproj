@@ -14,13 +14,15 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- InternalsVisibleTo на ТРИ сборки: ClaudeHomeServer.Tests (нужен существующим
-         тестам в Main до переноса в отдельную сборку), ClaudeHomeServer.Tasks.Tests
-         (новая тестовая сборка вертикали) и ClaudeHomeServer (Main): контроллер
+    <!-- InternalsVisibleTo на ТРИ сборки. ClaudeHomeServer.Tasks.Tests — тестовая сборка
+         вертикали (internal-швы FeatureQueueService). ClaudeHomeServer (Main): контроллер
          TasksController.GetFeature (волна 2 «Обзор фич») зовёт internal static
          FeatureProjector.BuildEvents — направление Main → Tasks уже существует (Project/
-         BuildIndex), новый шов не меняет его. Формат скопирован с Spend как образец
-         Этапа 5. -->
+         BuildIndex), новый шов не меняет его. ClaudeHomeServer.Tests (Main-тесты): после
+         переноса тестов очереди в Tasks.Tests (хвост RV-K-Q6-BOUND-1) держит ОДНУ связь —
+         TaskExecutionServiceDeviceWaitTests.ShouldAutoStart_ЗадачаЖдётУстройство зовёт internal
+         static TaskSchedulerService.ShouldAutoStart (тест гейта device-wait живёт с сценарием
+         TaskExecutionService в Main-сборке). Формат скопирован с Spend как образец Этапа 5. -->
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Tests</_Parameter1>
     </AssemblyAttribute>

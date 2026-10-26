@@ -10,7 +10,7 @@ public static class BackupRotation
     public record Candidate(string FileName, DateTime CreatedAt);
 
     /// <summary>
-    /// Отобрать архивы на удаление: последние 7 дневных, 4 недельных и 3 месячных остаются.
+    /// Отобрать архивы на удаление: свежий архив каждого из последних 7 дней, 4 недельных и 3 месячных остаются.
     /// На вход подаются ТОЛЬКО свои архивы (чужой instanceId и нечитаемый sidecar
     /// отфильтровываются вызывающим — в общей облачной папке лежат архивы разных инстансов).
     /// </summary>
@@ -20,7 +20,10 @@ public static class BackupRotation
         var ordered = candidates.OrderByDescending(c => c.CreatedAt).ToList();
         var keep = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var item in ordered.Take(KeepDaily)) keep.Add(item.FileName);
+        // «Дневные» — по одному (самому свежему) архиву на каждый из последних 7 дней, а не
+        // 7 последних файлов: выкатки и ручные снимки дают по 6 архивов в сутки (24.10.2026,
+        // по 8 ГБ), и счёт файлов вытеснял бы из окна всю историю глубже вчерашнего дня.
+        KeepFirstPerBucket(ordered, keep, KeepDaily, dt => dt.ToString("yyyy-MM-dd"));
 
         KeepFirstPerBucket(ordered, keep, KeepWeekly, WeekKey);
         KeepFirstPerBucket(ordered, keep, KeepMonthly, MonthKey);

@@ -178,7 +178,7 @@ export function FeatureBreakdownBlock({
           <div style={{ display: 'flex', justifyContent: 'center' }}>
             <ShareRing
               groups={visible} measure={effMeasure} size={180}
-              labelOf={labelOf} colorOf={colorOf} axisLabel={AXIS_WORD[axis]} costPartial={costPartial}
+              labelOf={labelOf} colorOf={colorOf} axis={axis} axisLabel={AXIS_WORD[axis]} costPartial={costPartial}
             />
           </div>
           <FeatureBreakdownCards
@@ -192,7 +192,7 @@ export function FeatureBreakdownBlock({
           <div data-testid="breakdown-ring-col" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, width: 140 }}>
             <ShareRing
               groups={visible} measure={effMeasure} size={140}
-              labelOf={labelOf} colorOf={colorOf} axisLabel={AXIS_WORD[axis]} costPartial={costPartial}
+              labelOf={labelOf} colorOf={colorOf} axis={axis} axisLabel={AXIS_WORD[axis]} costPartial={costPartial}
             />
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>

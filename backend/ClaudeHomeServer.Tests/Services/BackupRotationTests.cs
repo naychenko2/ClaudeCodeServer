@@ -54,4 +54,19 @@ public class BackupRotationTests
 
         BackupRotation.SelectForDeletion(candidates).Should().BeEmpty();
     }
+
+    [Fact]
+    public void НесколькоАрхивовВСутки_НеВытесняютИсториюПредыдущихДней()
+    {
+        // 6 архивов за сегодня (выкатки) и по одному за каждый из 7 предыдущих дней
+        var today = Enumerable.Range(0, 6)
+            .Select(i => new BackupRotation.Candidate($"t{i}.zip", new DateTime(2026, 7, 25, 23 - i, 0, 0)));
+        var history = Enumerable.Range(1, 6).Select(Day);
+        var all = today.Concat(history).ToList();
+
+        var deleted = BackupRotation.SelectForDeletion(all);
+
+        // за день остаётся один (самый свежий), каждый предыдущий день сохранён
+        deleted.Should().BeEquivalentTo(new[] { "t1.zip", "t2.zip", "t3.zip", "t4.zip", "t5.zip" });
+    }
 }

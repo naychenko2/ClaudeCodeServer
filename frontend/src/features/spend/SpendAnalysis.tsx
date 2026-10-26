@@ -10,7 +10,7 @@ import type {
 import { api, C, FONT, R, SHADOW, SP, Z } from 'aihome_shell/kit';
 import {
   ADMIN_ONLY_DIMS, DIM_LABELS, SPEND_PRESETS, fmtDate, fmtRub, fmtTok, fmtTime, genUnit,
-  genUnitLong, isGenSource, nodeName, sourceColor, sourceLabel, sourceTextColor,
+  genUnitLong, isGenSource, nodeName, rowBarColor, sourceColor, sourceLabel, sourceTextColor,
   type SpendLevel,
 } from './spendModel';
 import { spendQuery, type SpendDim, type SpendFilter } from '../../lib/spendContract';
@@ -476,7 +476,7 @@ export function SpendAnalysis({ st, patch, range, showUsers, isMobile, isTablet 
                 </span>
                 {share > 0.01 && (
                   <div style={{ position: 'absolute', left: 10, right: 10, bottom: 2, height: 3, borderRadius: 2, overflow: 'hidden', pointerEvents: 'none' }}>
-                    <div style={{ height: '100%', borderRadius: 2, background: C.accent, opacity: 0.45, width: `${Math.round(share * 100)}%` }} />
+                    <div style={{ height: '100%', borderRadius: 2, background: rowBarColor(dim, n), opacity: 0.45, width: `${Math.round(share * 100)}%` }} />
                   </div>
                 )}
               </div>
@@ -710,7 +710,7 @@ function OverviewBody({ ov, shareOfRoot, hasTurnLevel, onShowTurns, detailDays, 
         <Section title="Топ моделей">
           {models.map(m => (
             <HBar key={m.key || '·'} label={nodeName('model', m.key, m.name)} value={fmtTok(m.tokens.total)}
-              share={m.tokens.total / modelsMax} color={C.accent} grow={isTablet} />
+              share={m.tokens.total / modelsMax} color={rowBarColor('model', m)} grow={isTablet} />
           ))}
         </Section>
       )}

@@ -5,7 +5,8 @@
 import type { CSSProperties } from 'react';
 import { C, FS, SP, R, SHADOW } from '../../lib/design';
 import { roleGroupLabel } from './FeatureStatsFormat';
-import type { Measure, BreakdownChip } from './FeatureBreakdownModel';
+import type { Measure, BreakdownChip, Axis } from './FeatureBreakdownModel';
+import { tierColorOf } from './FeatureBreakdownModel';
 import type { FeatureBreakdownGroup } from '../../types/featureStats';
 
 // Палитра групп — токены записки (§Токены), по порядку; больше групп, чем цветов — цикл.
@@ -27,9 +28,22 @@ export const MEASURE_WORD: Record<Measure, string> = { time: 'время', token
 // Цвет группы — по месту ключа в СТАБИЛЬНОМ порядке входа (а не в сортировке по мере):
 // кольцо и таблица сортируются по-разному, цвет дуги обязан совпасть с цветом строки.
 // colorOf может вернуть undefined (персона неизвестна) — тогда палитра.
-export function groupColor(key: string, groups: FeatureBreakdownGroup[], colorOf?: (k: string) => string | undefined): string {
+// В разрезе МОДЕЛЕЙ цвет задаёт ценовой класс строки (tier с бэка): дешёвая
+// модель должна быть видна сразу. Класс неизвестен (null) — нейтральный цвет;
+// класса в ответе нет — палитра (старый бэк).
+export function groupColor(
+  key: string,
+  groups: FeatureBreakdownGroup[],
+  colorOf?: (k: string) => string | undefined,
+  axis?: Axis,
+): string {
   const own = colorOf?.(key);
   if (own) return own;
+  if (axis === 'models') {
+    const group = groups.find(g => g.key === key);
+    const tierColor = group ? tierColorOf(group) : null;
+    if (tierColor) return tierColor;
+  }
   const index = groups.findIndex(g => g.key === key);
   return ARC_COLORS[Math.max(0, index) % ARC_COLORS.length];
 }

@@ -657,6 +657,9 @@ export interface Task {
   // Критерии приёмки и свидетельства по ним (пусто/нет — задача без критериев)
   acceptance?: AcceptanceCriterion[];
   evidence?: AcceptanceEvidence[];
+  // Последний результат предгейта (бэк TaskItem.Pregate): бывает только у шага/доработки;
+  // null/нет — не прогонялся. Аддитивно: старые задачи читаются без поля.
+  pregate?: PregateRecord | null;
   // Исход дефекта: 'closedWithoutCheck' — внутренний путь закрытия без проверки
   outcome?: DefectOutcome | null;
   // Фикс-волна 4 team-blocker-honest: метки от терминального отказа хода исполнителя
@@ -767,6 +770,20 @@ export interface DefectRepro {
 // Критерий приёмки задачи и свидетельство его выполнения (связь по criterionId)
 export interface AcceptanceCriterion { id: string; text: string }
 export interface AcceptanceEvidence { criterionId: string; how: string; result: string }
+
+// Результат предгейта шага (бэк record PregateRecord): sha — коммит, по которому гнали проверки;
+// green — вердикт; summary — вывод красных проверок; at — момент (UTC);
+// redStreak — сколько красных подряд по одному redKey (зелёный обнуляет);
+// nothingApplicable — «нечего проверять» (green при этом false, «зелёным» не считается).
+export interface PregateRecord {
+  sha: string;
+  green: boolean;
+  summary: string;
+  at: string;
+  redStreak: number;
+  redKey?: string | null;
+  nothingApplicable?: boolean;
+}
 
 // Подтверждение проверки: personaId == null означает проверку человеком (UI-форма
 // владельца задачи), не-null — конкретной персоной (чаще всего — исполнившей дефект).
@@ -3344,12 +3361,22 @@ export interface SpendTokens {
   total: number;
 }
 
+// Токены дня по ценовым классам моделей. Класс определяет бэк (S1): фронт
+// красит по ключу и НЕ знает, какая модель какого класса.
+export interface SpendTierCounts {
+  free: number;
+  cheap: number;
+  expensive: number;
+}
+
 // Точка дневного ряда обзора/виджета; aggregated — день свёрнут (за детальным окном)
 export interface SpendDayPoint {
   date: string;
   aggregated: boolean;
   total: number;
   bySource: Record<string, number>;
+  // Раскладка дня по ценовым классам (бэк кладёт не везде — старые ответы без поля)
+  byTier?: SpendTierCounts;
   falGenerations: number;
 }
 
@@ -3361,6 +3388,9 @@ export interface SpendCardRow {
   tokens: SpendTokens;
   turns: number;
   falGenerations: number;
+  // Ценовой класс модели строки (free|cheap|expensive). Заполнен для разрезов
+  // «модель» и «провайдер», у прочих — null: класса у них нет
+  tier?: string | null;
 }
 
 export interface SpendOverviewResponse {
@@ -3444,6 +3474,7 @@ export interface SpendTurnDto {
   model: string | null;
   source: string;            // chat-turn | one-shot | fal | free
   label: string | null;      // подпись one-shot действия или endpoint fal
+  tier?: string | null;      // ценовой класс модели хода (free|cheap|expensive)
   tokens: SpendTokens;
   generations: number;
   durationMs: number | null;

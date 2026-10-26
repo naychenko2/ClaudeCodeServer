@@ -5,6 +5,7 @@ using System.Globalization;
 using System.Text;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Files;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Execution;
 
@@ -469,6 +470,22 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
             logger?.LogDebug(ex, "IsAncestor: git merge-base --is-ancestor {Ancestor} {Rev} не удался", ancestorSha, revOrSha);
             return true;
         }
+    }
+
+    // Строгий вариант IsAncestorAsync для решений об УДАЛЕНИИ: любой сбой (не репозиторий,
+    // плохая ревизия, таймаут) — false. Нестрогий отвечает true «на всякий случай», и для
+    // «ветка влита, можно снести worktree» это было бы ровно обратное.
+    public async Task<bool> IsAncestorStrictAsync(string? ownerId, string root, string ancestorSha, string revOrSha, CancellationToken ct = default)
+    {
+        if (!IsGitRepo(root)) return false;
+        try
+        {
+            ValidateRevision(ancestorSha);
+            ValidateRevision(revOrSha);
+            var r = await RunReadAsync(ownerId, root, ["merge-base", "--is-ancestor", ancestorSha, revOrSha], ct: ct);
+            return r.Ok;
+        }
+        catch (GitCommandException) { return false; }
     }
 
     // Сводка изменений коммита (--stat) — снапшот diff'а в паспорт. Ошибка → пустая строка:
@@ -1668,11 +1685,28 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
                 else
                     throw new GitCommandException(FirstLine(r.Stderr) ?? "Не удалось удалить worktree");
             }
+
+            // Вынесенные артефакты (CCS_BUILD_ROOT) лежат вне дерева и сами не уйдут
+            try { WorktreeBuildArtifacts.CleanExternal(worktreePath); }
+            catch (Exception) { /* уборка артефактов не должна ронять закрытие worktree */ }
         }
         finally
         {
             // См. WorktreeAddAsync: и remove, и prune меняют список — инвалидация после
             // операции снимает довоперационный снимок, который мог успеть лечь в кэш.
+            InvalidateWorktreeCache(ownerId, mainRoot);
+            sem.Release();
+        }
+    }
+
+    // Забыть записи о worktree, чьи каталоги исчезли (снесены руками или уборщиком).
+    public async Task WorktreePruneAsync(string? ownerId, string mainRoot, CancellationToken ct = default)
+    {
+        var sem = LockFor(mainRoot);
+        await sem.WaitAsync(ct);
+        try { await RunAsync(ownerId, mainRoot, ["worktree", "prune"], ct: ct); }
+        finally
+        {
             InvalidateWorktreeCache(ownerId, mainRoot);
             sem.Release();
         }

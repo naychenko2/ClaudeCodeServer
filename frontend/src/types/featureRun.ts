@@ -324,6 +324,12 @@ export interface FeatureHold {
   since?: string | null;
 }
 
+// Место фичи в очереди проекта (волна 6): считает бэк (FeatureQueuePolicy), фронт не пересчитывает.
+export interface FeatureQueue {
+  position: number;
+  length: number;
+}
+
 // Агрегат фичи — зеркало бэкового `FeatureRun`. `epic`/`steps`/`reviews`/`qa`/
 // `final`/`merge` — задачи трекера, сгруппированные проектором по роли;
 // `verdicts`/`progress`/`ready` вычисляет бэк, фронт только показывает.
@@ -339,6 +345,8 @@ export interface FeatureRun {
   state: FeatureState;
   // Удержание фичи (W4-HOLD-B1): null/undefined — удержания нет.
   hold?: FeatureHold | null;
+  // Место в очереди: только у фичи в очереди (hold.reason = 'queue').
+  queue?: FeatureQueue | null;
   // p.32: nullable-терпимо (опционально), как и остальные новые поля — UI обязан
   // пережить отсутствие epic (защита в taskCounters: run.epic ? [run.epic] : []).
   epic?: FeatureTask;

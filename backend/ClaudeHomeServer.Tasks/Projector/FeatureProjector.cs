@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Tasks.Journal;
 
 namespace ClaudeHomeServer.Services.Tasks.Projector;
 
@@ -613,7 +614,8 @@ public sealed class FeatureProjector(TaskManager tasks)
     // не заводим.
     internal static List<FeatureEvent> BuildEvents(
         FeatureRun run,
-        IReadOnlyCollection<FeatureIndexSession> sessions)
+        IReadOnlyCollection<FeatureIndexSession> sessions,
+        IReadOnlyList<FeatureJournalEntry>? journal = null)
     {
         ArgumentNullException.ThrowIfNull(run);
         ArgumentNullException.ThrowIfNull(sessions);
@@ -718,6 +720,13 @@ public sealed class FeatureProjector(TaskManager tasks)
             }
         }
 
+        // «Запущена из очереди» (волна 6): автоснятие очереди пишет hold_cleared с by=queue —
+        // в полях TaskItem следа нет, поэтому событие берётся из журнала (если он передан).
+        if (journal is not null)
+            foreach (var e in journal)
+                if (e.Kind == "hold_cleared" && e.By == FeatureHoldBy.Queue)
+                    Add(run.Epic, "started_from_queue", e.At, "Фича запущена из очереди");
+
         // Порядок: at desc, при равенстве — taskId (детерминизм).
         return events
             .OrderByDescending(e => e.At)
@@ -726,32 +735,37 @@ public sealed class FeatureProjector(TaskManager tasks)
     }
 
     // ─── Б-pl: документы фичи (волна 3 «Обзор фич», вкладка «Планы и макеты») ────────────────
-    // Чистая проекция FeatureRun → List<FeaturePlan> БЕЗ хранилища: разрез (cut), план (plan) и
-    // консультация (consult) фичи — СПИСОК документов вкладки, без текста. Text (ResultMarkdown)
-    // в ответ НЕ попадает: вкладка берёт список, текст подгружает по клику (GET /api/tasks/{id}).
-    // Считается по ПОЛНОМУ (необлегчённому) run ДО SlimRun: Slim обнуляет ResultMarkdown, а
-    // hasText/mockupPaths — из него.
+    // Чистая проекция FeatureRun → List<FeaturePlan> БЕЗ хранилища: разрез (cut), дизайн (design),
+    // план (plan) и консультация (consult) фичи — СПИСОК документов вкладки, без текста.
+    // Text (ResultMarkdown) в ответ НЕ попадает: вкладка берёт список, текст подгружает по клику
+    // (GET /api/tasks/{id}). Считается по ПОЛНОМУ (необлегчённому) run ДО SlimRun: Slim обнуляет
+    // ResultMarkdown, а hasText/mockupPaths — из него.
     //
-    // Источник: run.Cut (несёт cut И consult) + run.Plan (plan). Роль — из TaskItem.Role как есть
-    // (step в документы не попадает, догадок по заголовку нет). hasText — ResultMarkdown не пуст
-    // после Trim; mockupPaths — пути макетов (docs/mockups/….{html,md}) из ResultMarkdown: distinct,
-    // порядок появления, ≤ 20, пути с «..» отброшены.
+    // Источник: run.Cut (несёт cut И consult) + run.Design (design) + run.Plan (plan). Роль — из
+    // TaskItem.Role как есть (step в документы не попадает, догадок по заголовку нет). hasText —
+    // ResultMarkdown не пуст после Trim; mockupPaths — пути файлов документа: макеты из
+    // ResultMarkdown (docs/mockups/….{html,md}) + файлы, которые задача сама приложила через
+    // LinkedFiles (M5: ADR, спеки, записки вне docs/mockups не должны теряться в разделе):
+    // distinct, порядок появления (сначала текст, потом linkedFiles), ≤ 20, пути с «..» отброшены.
     //
-    // Порядок списка: роль (cut → plan → consult), внутри роли — по CreatedAt.
+    // Порядок списка: роль (cut → design → plan → consult), внутри роли — по CreatedAt.
     public static List<FeaturePlan> BuildPlans(FeatureRun run)
     {
         ArgumentNullException.ThrowIfNull(run);
 
-        // cut/consult — из run.Cut (там обе роли); plan — из run.Plan. Роль — из TaskItem.Role
-        // как есть (у задач run.Cut/run.Plan она всегда non-null: cut/consult/plan).
+        // cut/consult — из run.Cut (там обе роли); design — из run.Design; plan — из run.Plan.
+        // Роль — из TaskItem.Role как есть (у задач run.Cut/run.Design/run.Plan она всегда
+        // non-null: cut/consult/design/plan).
         var cut = run.Cut.Where(t => t.Role == TaskRoles.Cut).ToList();
+        var design = run.Design.Where(t => t.Role == TaskRoles.Design).ToList();
         var consult = run.Cut.Where(t => t.Role == TaskRoles.Consult).ToList();
         var plan = run.Plan.Where(t => t.Role == TaskRoles.Plan).ToList();
 
-        // Порядок: cut → plan → consult; внутри роли — по CreatedAt (OrderBy стабилен: равные
-        // CreatedAt сохраняют порядок, в котором задачи дал вызывающий).
+        // Порядок: cut → design → plan → consult; внутри роли — по CreatedAt (OrderBy стабилен:
+        // равные CreatedAt сохраняют порядок, в котором задачи дал вызывающий).
         var ordered = new List<TaskItem>();
         ordered.AddRange(cut.OrderBy(t => t.CreatedAt));
+        ordered.AddRange(design.OrderBy(t => t.CreatedAt));
         ordered.AddRange(plan.OrderBy(t => t.CreatedAt));
         ordered.AddRange(consult.OrderBy(t => t.CreatedAt));
 
@@ -771,18 +785,31 @@ public sealed class FeatureProjector(TaskManager tasks)
     // hasText: ResultMarkdown не пуст после Trim (null/""/пробелы → false).
     private static bool HasText(TaskItem t) => !string.IsNullOrWhiteSpace(t.ResultMarkdown);
 
-    // Пути макетов (docs/mockups/….{html,md}) из ResultMarkdown: distinct, порядок появления,
-    // ≤ 20, пути с «..» отброшены. null/пусто → [].
+    // Пути файлов документа (M5): макеты из ResultMarkdown (docs/mockups/….{html,md}) + файлы,
+    // которые задача приложила через LinkedFiles (ADR, спеки, записки — вне docs/mockups).
+    // Порядок: сначала пути из текста (порядок появления), затем из LinkedFiles (как приложены).
+    // distinct, общий потолок 20, пустые и пути с «..» (pathtraversal) отброшены.
+    // Пустой источник → [].
     private static List<string> MockupPaths(TaskItem t)
     {
-        var text = t.ResultMarkdown;
-        if (string.IsNullOrEmpty(text)) return [];
         var paths = new List<string>();
-        foreach (System.Text.RegularExpressions.Match m in MockupPathRegex.Matches(text))
+        var text = t.ResultMarkdown;
+        if (!string.IsNullOrEmpty(text))
         {
-            var p = m.Value;
-            // «..» — выход за docs/mockups (pathtraversal) → отбрасываем.
-            if (p.Contains("..")) continue;
+            foreach (System.Text.RegularExpressions.Match m in MockupPathRegex.Matches(text))
+            {
+                var p = m.Value;
+                // «..» — выход за docs/mockups (pathtraversal) → отбрасываем.
+                if (p.Contains("..")) continue;
+                if (!paths.Contains(p)) paths.Add(p);
+                if (paths.Count >= 20) return paths;
+            }
+        }
+        // LinkedFiles — намеренные приложения задачи (контракт: пути от корня через /): берём как
+        // есть, та же безопасность: пустые и с «..» отброшены, дубли схлопнуты, потолок общий.
+        foreach (var p in t.LinkedFiles)
+        {
+            if (string.IsNullOrWhiteSpace(p) || p.Contains("..")) continue;
             if (!paths.Contains(p)) paths.Add(p);
             if (paths.Count >= 20) break;
         }
@@ -861,6 +888,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         Interrupted = run.Interrupted,
         State = run.State,
         Attention = run.Attention,
+        Queue = run.Queue,
         StepsAccepted = run.StepsAccepted,
         StepsTotal = run.StepsTotal,
         StepProgress = run.StepProgress,
@@ -1179,7 +1207,7 @@ public sealed class FeatureProjector(TaskManager tasks)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
         var epic = owner.FirstOrDefault(t => t.Id == featureId && t.Role == TaskRoles.Feature);
-        return epic is null ? null : Build(epic, FeatureTasks(epic, owner));
+        return epic is null ? null : WithQueue(Build(epic, FeatureTasks(epic, owner)), owner);
     }
 
     // Одна фича по id эпика — ПОЛНЫЙ (необлегчённый) run: для страницы фичи (GetFeature).
@@ -1194,7 +1222,7 @@ public sealed class FeatureProjector(TaskManager tasks)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
         var epic = owner.FirstOrDefault(t => t.Id == featureId && t.Role == TaskRoles.Feature);
-        return epic is null ? null : BuildCore(epic, FeatureTasks(epic, owner), null, sessions, modelResolver);
+        return epic is null ? null : WithQueue(BuildCore(epic, FeatureTasks(epic, owner), null, sessions, modelResolver), owner);
     }
 
     // Все фичи владельца (REST без sessionId): каждый эпик → свой FeatureRun.
@@ -1206,10 +1234,12 @@ public sealed class FeatureProjector(TaskManager tasks)
         Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
-        return owner
+        var runs = owner
             .Where(t => t.Role == TaskRoles.Feature)
             .Select(epic => Build(epic, FeatureTasks(epic, owner), null, sessions, modelResolver))
             .ToList();
+        ApplyQueue(runs, owner);
+        return runs;
     }
 
     // Фичи чата (REST ?sessionId=): правило членства ЕДИНОЕ — FeatureChatMembership (W4-CHT-B,
@@ -1233,6 +1263,7 @@ public sealed class FeatureProjector(TaskManager tasks)
             .Where(t => t.Role == TaskRoles.Feature && featureIds.Contains(t.Id))
             .Select(epic => Build(epic, FeatureTasks(epic, owner), null, sessions, modelResolver))
             .ToList();
+        ApplyQueue(runs, owner);
         var ordered = OrderRuns(runs);
         // Фича, чья задача — TaskId чата, первой ВНУЗИ своего класса (открытые/закрытые),
         // не поверх класса (W4-CHT-B §2): закрытая «своя» фича не прыгает выше открытых.
@@ -1334,6 +1365,29 @@ public sealed class FeatureProjector(TaskManager tasks)
         return result;
     }
 
+    // Очередь фич (волна 6): место в очереди проекта проставляется после сборки run, когда виден
+    // весь набор. Очередь проекта может быть шире набора вызывающего (индекс чата, одна фича):
+    // недостающие фичи в очереди достраиваются из задач владельца — позиция не зависит от того,
+    // какую выборку показывают (иначе «вторая из трёх» расходилась бы с порядком, по которому
+    // очередь снимает следующую).
+    private static void ApplyQueue(IReadOnlyList<FeatureRun> runs, IReadOnlyList<TaskItem> owner)
+    {
+        if (!owner.Any(t => t.Role == TaskRoles.Feature && t.Hold?.Reason == FeatureHoldReasons.Queue)) return;
+        var known = runs.Select(r => r.FeatureId).ToHashSet(StringComparer.Ordinal);
+        var extra = owner
+            .Where(t => t.Role == TaskRoles.Feature && t.Hold?.Reason == FeatureHoldReasons.Queue && !known.Contains(t.Id))
+            .Select(epic => Build(epic, FeatureTasks(epic, owner)));
+        var positions = FeatureQueuePolicy.Positions(runs.Concat(extra));
+        foreach (var run in runs)
+            run.Queue = positions.GetValueOrDefault(run.FeatureId);
+    }
+
+    private static FeatureRun WithQueue(FeatureRun run, IReadOnlyList<TaskItem> owner)
+    {
+        ApplyQueue([run], owner);
+        return run;
+    }
+
     // Эпик + все его дочерние (FeatureId == epic.Id) из уже отобранных задач владельца.
     private static List<TaskItem> FeatureTasks(TaskItem epic, IReadOnlyList<TaskItem> owner)
     {
@@ -1421,6 +1475,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         var runs = survivingEpics
             .Select(epic => Build(epic, FeatureTasks(epic, byFeature), now, sessions))
             .ToList();
+        ApplyQueue(runs, owner);
         var rows = OrderRuns(runs)
             .Select(run => BuildRow(run, FeatureTasks(run.Epic, byFeature), sessions,
                 ChatCount(map, run.FeatureId)))
@@ -1570,7 +1625,8 @@ public sealed class FeatureProjector(TaskManager tasks)
             run.StepProgress.UnlinkedReworks,
             run.Hold?.Reason,
             run.Hold?.Since,
-            run.Quiet);
+            run.Quiet,
+            run.Queue);
     }
 
     // Ключевой чат фичи (контракт §1): первое ЖИВОЕ звено цепочки
@@ -1624,6 +1680,27 @@ public sealed class FeatureProjector(TaskManager tasks)
     // закрыты, подготовка разрешена (R-HOLD-G2 находка 2).
     public static bool IsPaused(TaskItem epic) =>
         epic.Hold is not null && epic.Hold.Reason is FeatureHoldReasons.Manual or FeatureHoldReasons.Queue;
+
+    // «Занимает ли фича слот очереди» (волна 6, разрез §1) — ЕДИНСТВЕННОЕ выражение правила. Явная
+    // ветка на каждое значение FeatureStates (тест перечисляет константы): новое состояние без
+    // решения здесь не пройдёт. Уступают слот закончившиеся фичи, мерж (merge_pending/merging —
+    // решение 19.10 п. 5), пауза и черновик; stopped/waiting держат слот (ответ человека иначе
+    // поднял бы лишнюю фичу). Неизвестное значение занимает слот (fail-closed).
+    public static bool OccupiesSlot(FeatureRun run) => run.State switch
+    {
+        FeatureStates.Merged => false,
+        FeatureStates.Closed => false,
+        FeatureStates.MergePending => false,
+        FeatureStates.Merging => false,
+        FeatureStates.Paused => false,
+        FeatureStates.Draft => false,
+        FeatureStates.Stopped => true,
+        FeatureStates.Waiting => true,
+        FeatureStates.Running => true,
+        FeatureStates.Idle => true,
+        FeatureStates.NotStarted => true,
+        _ => true,
+    };
 
     // «Черновик»: любое удержание, не пауза — включая причину вне словаря (фоллбэк). Гейт для
     // такого Hold ведёт себя идентично: пропускает только роли подготовки (HoldPrepRoles).

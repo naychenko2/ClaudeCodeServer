@@ -20,6 +20,10 @@ namespace ClaudeHomeServer.Tasks.Tests;
 // объединения — тест семантики ожидания красный; выселять весь словарь при переполнении —
 // тест выселения красный; класть в кэш выборку с длительностью от `now` — тест «now не
 // застывает» красный.
+//
+// B2a (stepMinutes/tailMinutes): мутация «хвост от первой AcceptedAt, не от последней» →
+// медианный тест красный; «порог шаговой выборки убрать» → тест порога красный; «шаг/хвост не
+// класть в кэш» или «считать их с новым чтением журнала» → тест счётчика красный.
 public class FeatureTypicalTests
 {
     private static readonly DateTime T0 = new(2026, 10, 1, 8, 0, 0);
@@ -60,6 +64,61 @@ public class FeatureTypicalTests
         Id = id, Role = TaskRoles.Feature, OwnerId = owner, ProjectId = project,
         Status = TaskItemStatus.InProgress, CreatedAt = T0, UpdatedAt = T0,
     };
+
+    // Смерженная фича С ШАГАМИ (B2a): каждый шаг — задача (ClaudeStartedAt..CompletedAt,
+    // длительность stepDurations[i]) и принятый виток ревью через reviewOf, закрывающий её через
+    // reviewGap минут; затем принятый финал и мерж ровно через tailMinutes минут после последнего
+    // принятия (финал — внутри хвоста, за 5 минут до мержа). Цепочка такого шага принята
+    // (AcceptedAt = CompletedAt витка), её DurationMinutes —
+    // ровно stepDurations[i] (FeatureStepAccounting: старт задачи → её закрытие). Финал без
+    // reviewOf в цепочки не входит. Возвращает задачи фичи.
+    private static List<TaskItem> MergedFeatureWithSteps(string id, string owner, string? project,
+        int[] stepDurations, int reviewGap, int tailMinutes)
+    {
+        var list = new List<TaskItem>
+        {
+            new TaskItem
+            {
+                Id = id, Role = TaskRoles.Feature, OwnerId = owner, ProjectId = project,
+                Status = TaskItemStatus.Done, CreatedAt = T0, UpdatedAt = T0,
+            },
+        };
+        var lastAccepted = T0;
+        for (int i = 0; i < stepDurations.Length; i++)
+        {
+            var start = lastAccepted + TimeSpan.FromMinutes(5);
+            var done = start + TimeSpan.FromMinutes(stepDurations[i]);
+            var accepted = done + TimeSpan.FromMinutes(reviewGap);
+            list.Add(new TaskItem
+            {
+                Id = $"{id}-s{i}", FeatureId = id, Role = TaskRoles.Step, StepRef = $"S{i + 1}",
+                Status = TaskItemStatus.Done, CreatedAt = T0, UpdatedAt = T0,
+                ClaudeStartedAt = start, CompletedAt = done,
+            });
+            list.Add(new TaskItem
+            {
+                Id = $"{id}-r{i}", FeatureId = id, Role = TaskRoles.Review,
+                Status = TaskItemStatus.Done, CreatedAt = T0, UpdatedAt = T0,
+                ReviewOf = [$"{id}-s{i}"], CompletedAt = accepted,
+                Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+            });
+            lastAccepted = accepted;
+        }
+        list.Add(new TaskItem
+        {
+            Id = $"{id}-fin", FeatureId = id, Role = TaskRoles.Final,
+            Status = TaskItemStatus.Done, CreatedAt = T0, UpdatedAt = T0,
+            CompletedAt = lastAccepted + TimeSpan.FromMinutes(tailMinutes - 5),
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        });
+        list.Add(new TaskItem
+        {
+            Id = "m-" + id, FeatureId = id, Role = TaskRoles.Merge,
+            Status = TaskItemStatus.Done, CreatedAt = T0, UpdatedAt = T0,
+            CompletedAt = lastAccepted + TimeSpan.FromMinutes(tailMinutes),
+        });
+        return list;
+    }
 
     // Полный журнал с одним эпизодом ожидания заданной длины.
     private static FeatureJournalReadResult JournalWithWaiting(string epicId, int minutes) => new()
@@ -460,6 +519,93 @@ public class FeatureTypicalTests
         // [100,200,300,14460] = 3840. В кэше застыло бы первое.
         first!.Duration.P75.Should().Be(3825.0);
         second!.Duration.P75.Should().Be(3840.0, "зависящая от now длительность пересчитывается, а не застывает");
+    }
+
+    // ─── B2a (разрез п.3): stepMinutes и tailMinutes в той же выборке и кэше ───────────────────
+
+    // Медианы на фикстуре из трёх смерженных фич с шагами, числа посчитаны в тесте руками:
+    // a: одна цепочка 10 мин → 10, хвост 20; b: цепочки 20 и 30 → среднее 25, хвост 30;
+    // c: одна 50 → 50, хвост 40. Шаговая выборка [10,25,50]: median 25, p25 17.5, p75 37.5;
+    // хвост [20,30,40]: median 30, p25 25, p75 35. Фича d смержена без шагов — в Count и в
+    // длительности, в шаговую выборку не входит (StepCount = 3). Мутация «хвост от ПЕРВОЙ
+    // AcceptedAt» → b даёт 70, выборка [20,70,40] → median 40 ≠ 30 → тест красный (проверено
+    // прогоном); «брать все цепочки, не только принятые» на этой фикстуре не видна (все
+    // цепочки приняты), её сторожит тест порога.
+    [Fact]
+    public void Typical_ШагиИХвостМедианыПоТойЖеВыборке()
+    {
+        FeatureTypical.ClearCache();
+        var tasks = new List<TaskItem>();
+        tasks.AddRange(MergedFeatureWithSteps("a", "t20", "pS", [10], 5, 20));
+        tasks.AddRange(MergedFeatureWithSteps("b", "t20", "pS", [20, 30], 5, 30));
+        tasks.AddRange(MergedFeatureWithSteps("c", "t20", "pS", [50], 5, 40));
+        tasks.AddRange(MergedFeature("d", "t20", "pS", 100, 0));
+
+        var stats = FeatureTypical.Build(tasks, "t20", "pS", "cur", null, NOW);
+
+        stats.Should().NotBeNull();
+        stats!.Count.Should().Be(4, "d смержена и входит в общую выборку");
+        stats.StepCount.Should().Be(3, "фича без принятых шагов — вне шаговой выборки");
+        stats.StepMinutes!.Median.Should().Be(25.0, "средние по фичам [10,25,50]");
+        stats.StepMinutes!.P25.Should().Be(17.5);
+        stats.StepMinutes!.P75.Should().Be(37.5);
+        stats.TailMinutes!.Median.Should().Be(30.0, "хвосты [20,30,40]");
+        stats.TailMinutes!.P25.Should().Be(25.0);
+        stats.TailMinutes!.P75.Should().Be(35.0);
+    }
+
+    // Порог шаговой выборки (c3): три смерженные, но с шагами только две — step/tail null,
+    // длительность считается (40/60/300 → медиана 60). Меньше трёх смерженных вообще —
+    // null вся выборка, обе величины вместе с ней.
+    [Fact]
+    public void Typical_МалоФичСоШагамиОбеМетрикиNull()
+    {
+        FeatureTypical.ClearCache();
+        var tasks = new List<TaskItem>();
+        tasks.AddRange(MergedFeatureWithSteps("a", "t21", "pT", [10], 5, 20));
+        tasks.AddRange(MergedFeatureWithSteps("b", "t21", "pT", [20], 5, 30));
+        tasks.AddRange(MergedFeature("c", "t21", "pT", 300, 0));
+
+        var stats = FeatureTypical.Build(tasks, "t21", "pT", "cur", null, NOW);
+
+        stats.Should().NotBeNull("смерженных три — шкала длительности есть");
+        stats!.StepCount.Should().Be(2);
+        stats.StepMinutes.Should().BeNull("фич с принятыми шагами меньше трёх");
+        stats.TailMinutes.Should().BeNull();
+        stats.Duration.Median.Should().Be(60.0, "длительности [40,60,300] — медиана 60");
+
+        var few = new List<TaskItem>();
+        few.AddRange(MergedFeatureWithSteps("x", "t22", "pU", [10], 5, 20));
+        few.AddRange(MergedFeatureWithSteps("y", "t22", "pU", [20], 5, 30));
+        FeatureTypical.Build(few, "t22", "pU", "cur", null, NOW).Should().BeNull(
+            "смерженных меньше трёх — null вся выборка, обе величины вместе с ней");
+    }
+
+    // c4: новых чтений журнала нет — ни в холодном, ни в тёплом запросе (по одному на фичу,
+    // как до правки); шаг и хвост живут в том же кэше по фиче. Мутация «шаг считает хвост
+    // своим чтением журнала» → счётчик 6 → красный; «не класть шаг/хвост в кэш» → тёплый
+    // перечитывает → 6 → красный.
+    [Fact]
+    public void Typical_ШагиИХвостНеДобавляютЧтенийЖурнала()
+    {
+        FeatureTypical.ClearCache();
+        var tasks = new List<TaskItem>();
+        tasks.AddRange(MergedFeatureWithSteps("a", "t23", "pR", [10], 5, 20));
+        tasks.AddRange(MergedFeatureWithSteps("b", "t23", "pR", [20, 30], 5, 30));
+        tasks.AddRange(MergedFeatureWithSteps("c", "t23", "pR", [50], 5, 40));
+
+        int reads = 0;
+        Func<string, FeatureJournalReadResult?> read = id => { reads++; return JournalWithWaiting(id, 10); };
+
+        var cold = FeatureTypical.Build(tasks, "t23", "pR", "cur", read, NOW);
+        cold!.StepMinutes!.Median.Should().Be(25.0);
+        cold!.TailMinutes!.Median.Should().Be(30.0);
+        reads.Should().Be(3, "по одному чтению на смерженную фичу — как до правки");
+
+        var warm = FeatureTypical.Build(tasks, "t23", "pR", "cur", read, NOW);
+        warm!.StepMinutes!.Median.Should().Be(25.0, "шаговые числа живут в том же кэше по фиче");
+        warm!.TailMinutes!.Median.Should().Be(30.0);
+        reads.Should().Be(3, "тёплый запрос не читает журнал снова");
     }
 
     // П.5 хвостов: цена измеряется на ФАЙЛОВЫХ журналах (как в бою), а не на выборках в

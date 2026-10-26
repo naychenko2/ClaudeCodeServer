@@ -16,7 +16,7 @@ import { createElement, StrictMode } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeaturePage, type FeaturePageBackTarget } from './FeaturePage';
 import { pluralTasks, featureRunStatusTag } from './FeaturePageHeader';
-import { __test as pageTest, setFeaturePageTab } from '../../lib/featurePage';
+import { __test as pageTest, setFeaturePageTab, type FeatureBrief } from '../../lib/featurePage';
 import { __test as indexTest } from '../../lib/featuresIndex';
 import { __test as backNavTest, recordBackNav, clearBackNav } from '../../lib/featureBackNav';
 import { setAllFlags } from '../../lib/featureFlags';
@@ -28,6 +28,7 @@ import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, rea
 import type { FeatureIndexFeature, FeaturesIndex } from '../../types/featureIndex';
 import type { FeaturePage as FeaturePageData } from '../../types/featureIndex';
 import type { FeatureState } from '../../types/featureRun';
+import type { FeatureStats } from '../../types/featureStats';
 import type { Session, Task } from '../../types';
 
 // Управляемый индекс фич (useFeaturesIndex → этот срез).
@@ -1253,6 +1254,19 @@ describe('W4-HOLD-F2: пауза и черновик в шапке и блоке
     expect((block as unknown as { style: Record<string, string> }).style.background, 'фон блока — bgInset, не dangerBg').toBe('var(--c-bg-inset)');
   });
 
+  // Хвост RV-K-Q5I-2, п.1: возраст паузы живой (useNow), а не замерший на последнем ренере.
+  // Мутация: убрать useNow из блока (замершее «сейчас») → второй тезис остаёт «1 ч» → красный.
+  it('длительность живая: возраст паузы обновляется через минуту', async () => {
+    holdPage('paused', { hold: { reason: 'manual', since: '2026-10-19T11:00:00Z' }, now: [] });
+    const c = render({});
+    await settle();
+    const block = findNodeByAttr(c, 'data-testid', 'feature-page-alarm');
+    expect(block, 'блок состояния').not.toBeNull();
+    expect(textNodes(block!).join(''), 'исходная длительность — 1 ч').toContain('Фича на паузе 1 ч.');
+    await act(async () => { vi.advanceTimersByTime(60_000); });
+    expect(textNodes(block!).join(''), 'после интервала — 1 ч 1 мин, не замерло').toContain('Фича на паузе 1 ч 1 мин.');
+  });
+
   it('клик «Пауза» с идущими ходами: модалка; подтверждение — POST hold', async () => {
     holdPage('running', { now: [{ taskId: 't1', stage: 'prod', personaId: 'p-kira', stepRef: 'W2-A', title: 'Шаг' }] });
     const c = render({});
@@ -1342,10 +1356,16 @@ describe('W4-HOLD-F2: пауза и черновик в шапке и блоке
     const trigger = findNodeByAttr(c, 'aria-label', 'Ещё');
     expect(trigger, 'триггер ⋯').not.toBeNull();
     await act(async () => { (reactProps(trigger)!.onClick as () => void)(); });
-    const item = findNodeByAttr((globalThis as any).document.body, 'role', 'menuitem');
-    expect(item, 'пункт шторки').not.toBeNull();
-    const itemText = textNodes(item!).join('');
-    expect(itemText).toContain('Поставить на паузу');
+    // Порядок шторки (макет feature-queue-1): «В очередь…», затем «Поставить на паузу…».
+    const items: string[] = [];
+    const walk = (x: any) => {
+      if (x.getAttribute?.('role') === 'menuitem') items.push(textNodes(x).join(''));
+      for (const ch of x.childNodes) walk(ch);
+    };
+    walk((globalThis as any).document.body);
+    expect(items[0], 'первый пункт — «В очередь…»').toContain('В очередь');
+    const itemText = items[1];
+    expect(itemText, 'второй пункт шторки').toContain('Поставить на паузу');
     expect(itemText).toContain('Прервёт 1 идущий шаг');
   });
 
@@ -1816,6 +1836,551 @@ describe('F3: кнопка «Возобновить» на закрытой фи
     expect(item, 'пункт «Возобновить фичу»').not.toBeNull();
     await act(async () => { (reactProps(item)!.onClick as () => void)(); });
     expect(mockUpdateTask.calls, 'клик в шторке — PUT todo').toEqual([{ id: 'f1', dto: { status: 'todo' } }]);
+  });
+});
+
+// === Q5B: очередь фич — действия в шторке ⋯ (макет feature-queue-1) ===
+// Мутации (в отчёте): (1) 'queue' → 'manual' в doQueueIn → тест «В очередь» красный;
+// (2) 'manual' → 'queue' в doQueueOut → тест «Вынуть» красный;
+// (3) clearFeatureHold → setFeatureHold в doRunOutOfQueue → тест «вне очереди» красный;
+// (4) убрать merge_pending из QUEUE_DENIED → тест недоступности красный.
+describe('Q5B: очередь фич в шапке', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    pageTest.reset();
+    indexTest.reset();
+    backNavTest.reset();
+    personaMap.clear();
+    setAllFlags({ 'features-overview': true });
+    personaMap.set('p-kira', 'Кира');
+    mockIndex.features = [feat()];
+    mockIndex.chats = {};
+    mockChats.clear();
+    openChatCalls.length = 0;
+    mockGetFeature.pending = false;
+    mockGetFeature.result = null;
+    mockGetFeature.error = null;
+    mockGetFeature.calls = [];
+    mockGetFeature.perCall = [];
+    mockMergeFeature.pending = false;
+    mockMergeFeature.result = null;
+    mockMergeFeature.error = null;
+    mockMergeFeature.calls = [];
+    mockHold.calls = [];
+    mockHold.pending = false;
+    mockHold.error = null;
+    mockHold.resumed = [];
+    mockHold.expired = [];
+    mockHold.emptyBody = false;
+    toasts.length = 0;
+    indexTest.setIndex('p1', mockIndex as FeaturesIndex);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+  const queuePage = (state: FeatureState, over: Record<string, unknown> = {}) => {
+    const pd = pageData();
+    pd.run = { ...pd.run, state, ...over } as never;
+    mockGetFeature.result = pd;
+  };
+  const menuLabels = (): string[] => {
+    const out: string[] = [];
+    const walk = (x: AnyNode) => {
+      if ((x as unknown as { getAttribute?: (a: string) => string | null }).getAttribute?.('role') === 'menuitem') out.push(textNodes(x).join(''));
+      for (const ch of x.childNodes) walk(ch);
+    };
+    walk((globalThis as any).document.body as unknown as AnyNode);
+    return out;
+  };
+  const menuItem = (label: string): AnyNode | null => {
+    let found: AnyNode | null = null;
+    const walk = (x: AnyNode) => {
+      if (!found && (x as unknown as { getAttribute?: (a: string) => string | null }).getAttribute?.('role') === 'menuitem'
+        && textNodes(x).join('').includes(label)) found = x;
+      for (const ch of x.childNodes) walk(ch);
+    };
+    walk((globalThis as any).document.body as unknown as AnyNode);
+    return found;
+  };
+  const openMenu = async (c: AnyNode) => {
+    const trigger = findNodeByAttr(c, 'aria-label', 'Ещё');
+    expect(trigger, 'триггер ⋯').not.toBeNull();
+    await act(async () => { (reactProps(trigger)!.onClick as () => void)(); });
+  };
+  const QUEUED = { hold: { reason: 'queue', since: '2026-10-19T11:00:00Z' }, queue: { position: 2, length: 3 }, now: [] };
+
+  it('«В очередь…» шлёт POST hold {queue}; идущих ходов нет — без модалки', async () => {
+    queuePage('running', { now: [] });
+    const c = render({});
+    await settle();
+    await openMenu(c);
+    const item = menuItem('В очередь');
+    expect(item, 'пункт «В очередь…»').not.toBeNull();
+    await act(async () => { (reactProps(item)!.onClick as () => void)(); });
+    expect(mockHold.calls).toEqual([{ fid: 'f1', method: 'POST', reason: 'queue' }]);
+  });
+
+  it('«В очередь…» при идущих ходах: подсказка, модалка, POST hold {queue} после подтверждения', async () => {
+    queuePage('running', { now: [{ taskId: 't1', stage: 'prod', personaId: 'p-kira', stepRef: 'W2-A', title: 'Шаг' }] });
+    const c = render({});
+    await settle();
+    await openMenu(c);
+    const item = menuItem('В очередь')!;
+    expect(textNodes(item).join('')).toContain('Прервёт 1 идущий шаг — продолжатся при запуске из очереди');
+    await act(async () => { (reactProps(item)!.onClick as () => void)(); });
+    expect(mockHold.calls, 'до подтверждения запроса нет').toEqual([]);
+    const confirm = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-queue-confirm');
+    expect(confirm, 'модалка подтверждения').not.toBeNull();
+    await act(async () => { (reactProps(confirm)!.onClick as () => void)(); });
+    expect(mockHold.calls).toEqual([{ fid: 'f1', method: 'POST', reason: 'queue' }]);
+  });
+
+  it('«Вынуть из очереди» шлёт POST hold {manual}, не DELETE', async () => {
+    queuePage('paused', QUEUED);
+    const c = render({});
+    await settle();
+    await openMenu(c);
+    expect(menuItem('В очередь…'), 'в очереди «В очередь…» нет').toBeNull();
+    const item = menuItem('Вынуть из очереди');
+    expect(item, 'пункт «Вынуть из очереди»').not.toBeNull();
+    await act(async () => { (reactProps(item)!.onClick as () => void)(); });
+    expect(mockHold.calls).toEqual([{ fid: 'f1', method: 'POST', reason: 'manual' }]);
+  });
+
+  it('«Запустить вне очереди…» — всегда подтверждение, затем DELETE hold', async () => {
+    queuePage('paused', QUEUED);
+    const c = render({});
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-unpause'), 'главной кнопки «Снять паузу» у очереди нет').toBeNull();
+    await openMenu(c);
+    const item = menuItem('Запустить вне очереди');
+    expect(item, 'пункт «Запустить вне очереди…»').not.toBeNull();
+    await act(async () => { (reactProps(item)!.onClick as () => void)(); });
+    expect(mockHold.calls, 'до подтверждения запроса нет').toEqual([]);
+    expect(textNodes((globalThis as any).document.body).join(' ')).toContain('вторая');
+    const confirm = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-bypass-confirm');
+    expect(confirm, 'модалка подтверждения').not.toBeNull();
+    await act(async () => { (reactProps(confirm)!.onClick as () => void)(); });
+    expect(mockHold.calls).toEqual([{ fid: 'f1', method: 'DELETE' }]);
+  });
+
+  it.each([
+    ['draft', { hold: { reason: 'draft', since: '2026-10-19T11:00:00Z' } }, true],
+    ['paused', { hold: { reason: 'manual', since: '2026-10-19T11:00:00Z' } }, true],
+    ['merge_pending', {}, false],
+    ['merging', {}, false],
+    ['merged', {}, false],
+    ['closed', {}, false],
+  ] as [FeatureState, Record<string, unknown>, boolean][])('«В очередь…»: состояние %s, hold %j → доступно %s', async (state, over, expected) => {
+    queuePage(state, { now: [], ...over });
+    const c = render({});
+    await settle();
+    const trigger = findNodeByAttr(c, 'aria-label', 'Ещё');
+    if (trigger) await act(async () => { (reactProps(trigger)!.onClick as () => void)(); });
+    expect(menuLabels().some(l => l.includes('В очередь'))).toBe(expected);
+  });
+});
+
+// === Q5I-2: блок «Фича в очереди» на странице фичи (макет feature-queue-1 §«Состояния») ===
+// Очередь (paused + hold.reason='queue') — отдельный блок вместо паузного: тон паузы
+// (bgInset/рамка border), глиф queue 14, позиция — готовая фраза из queuePhraseParts (Q5I-1).
+// Мутации (в отчёте): (1) убрать ветку hold.reason==='queue' в FeaturePageAlert → рендерится
+// пауза, «Фича в очереди» отсутствует → тест 1 красный; (2) собрать позицию из
+// run.queue.position/length вместо phrase хелпера → «третья из трёх» нет → тест позиции-3
+// красный; (3) нижняя граница 1 мин живёт в formatDuration (chatGroups.ts:338): снять
+// Math.max(1,…) здесь — вывод тот же, тест свежей постановки зелёный (хвост RV-K-Q5I-2, п.2);
+// живость длительности проверяет тест тикания (мутация: убрать useNow из блока — длительность
+// замирает);
+// (4) снять гейт position===1 → фраза первой позиции появляется при position 2 → тест 1
+// красный; (5) сменить глиф/размер (kind≠'queue' или size≠14) → тест глифа красный.
+describe('Q5I-2: блок «Фича в очереди» на странице фичи', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    pageTest.reset();
+    indexTest.reset();
+    backNavTest.reset();
+    personaMap.clear();
+    setAllFlags({ 'features-overview': true });
+    mockIndex.features = [feat()];
+    mockIndex.chats = {};
+    mockChats.clear();
+    openChatCalls.length = 0;
+    mockGetFeature.pending = false;
+    mockGetFeature.result = null;
+    mockGetFeature.error = null;
+    mockGetFeature.calls = [];
+    mockGetFeature.perCall = [];
+    mockHold.calls = [];
+    mockHold.pending = false;
+    mockHold.error = null;
+    toasts.length = 0;
+    indexTest.setIndex('p1', mockIndex as FeaturesIndex);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  const queuePage = (state: FeatureState, over: Record<string, unknown> = {}) => {
+    const pd = pageData();
+    pd.run = { ...pd.run, state, ...over } as never;
+    mockGetFeature.result = pd;
+  };
+  // position 2 при длине 3 → «вторая из трёх»; since 11:00 при NOW 12:00 → 60 мин → «1 ч».
+  const QUEUED = { hold: { reason: 'queue', since: '2026-10-19T11:00:00Z' }, queue: { position: 2, length: 3 }, now: [] };
+  const MAIN_SUB = 'Запустится сама, когда одна из идущих фич проекта закончится или уйдёт на мерж. Прерванные шаги продолжатся с того же места.';
+  const FIRST_POS = 'Если место освободилось, а фича не запустилась за минуту, запустите её вручную: ⋯ → «Запустить вне очереди».';
+
+  // Внутренний узел, чей текст ровно text (сам текст — в одном статичном узле).
+  function findExactText(n: AnyNode, text: string): AnyNode | null {
+    if (textNodes(n as never).join('') === text) return n;
+    for (const c of n.childNodes) { const hit = findExactText(c, text); if (hit) return hit; }
+    return null;
+  }
+  const blockOf = (c: ReturnType<typeof render>): AnyNode | null => {
+    const b = findNodeByAttr(c, 'data-testid', 'feature-page-alarm');
+    return b as unknown as AnyNode | null;
+  };
+
+  it('блок: «Фича в очереди: вторая из трёх. Поставили вы 1 ч назад. Шаги не запускается.» + sub', async () => {
+    queuePage('paused', QUEUED);
+    const c = render({});
+    await settle();
+    const block = blockOf(c);
+    expect(block, 'блок очереди').not.toBeNull();
+    const attrs = (block as unknown as { attributes: Record<string, string> }).attributes ?? {};
+    expect(attrs['data-tone'], 'тон блока — queue').toBe('queue');
+    expect(attrs['role'], 'role=status').toBe('status');
+    expect(attrs['aria-live'], 'aria-live=polite').toBe('polite');
+    const st = (block as unknown as { style: Record<string, string> }).style;
+    expect(st.background, 'фон C.bgInset').toBe('var(--c-bg-inset)');
+    expect(st.border, 'рамка 1px solid C.border').toBe('1px solid var(--c-border)');
+    expect(st.borderRadius, 'R.lg').toBe('10px');
+    const text = textNodes(block as never).join('');
+    // Главная фраза — ровно phrase хелпера целиком (не собрана потребителем).
+    expect(findExactText(block!, 'Фича в очереди: вторая из трёх.'), 'жирная фраза с позицией').not.toBeNull();
+    expect(text).toContain('Поставили вы 1 ч назад. Шаги не запускаются.');
+    // sub — FS.sm, C.textSecondary.
+    const sub = findExactText(block!, MAIN_SUB);
+    expect(sub, 'строка sub').not.toBeNull();
+    const subStyle = (sub as unknown as { style: Record<string, string> }).style;
+    expect(subStyle.fontSize, 'sub FS.sm').toBe('12px');
+    expect(subStyle.color, 'sub C.textSecondary').toBe('var(--c-text-secondary)');
+    // Это не пауза: паузных слов и кнопки нет; фразы первой позиции при position 2 нет.
+    expect(text, 'нет паузной формулировки').not.toContain('Фича на паузе');
+    expect(text, 'нет фразы первой позиции (position 2)').not.toContain('Если место освободилось');
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-unpause'), 'главной кнопки нет').toBeNull();
+  });
+
+  it('позиция — из хелпера, не константа: position 3 → «третья из трёх»', async () => {
+    queuePage('paused', { ...QUEUED, queue: { position: 3, length: 3 } });
+    const c = render({});
+    await settle();
+    const block = blockOf(c);
+    expect(block, 'блок очереди').not.toBeNull();
+    const text = textNodes(block as never).join('');
+    expect(text, 'позиция третья').toContain('Фича в очереди: третья из трёх.');
+    expect(text, 'нет фразы первой позиции').not.toContain('Если место освободилось');
+  });
+
+  it('первая позиция: к sub добавляется «Если место освободилось…»', async () => {
+    queuePage('paused', { ...QUEUED, queue: { position: 1, length: 3 } });
+    const c = render({});
+    await settle();
+    const block = blockOf(c);
+    expect(block, 'блок очереди').not.toBeNull();
+    const text = textNodes(block as never).join('');
+    expect(text).toContain('Фича в очереди: первая из трёх.');
+    expect(text, 'вторая фраза sub').toContain(FIRST_POS);
+  });
+
+  it('свежая постановка (<1 мин): «Поставили вы 1 мин назад», не «0 мин»', async () => {
+    queuePage('paused', { hold: { reason: 'queue', since: '2026-10-19T12:00:00Z' }, queue: { position: 2, length: 3 }, now: [] });
+    const c = render({});
+    await settle();
+    const block = blockOf(c);
+    expect(block, 'блок очереди').not.toBeNull();
+    const text = textNodes(block as never).join('');
+    expect(text).toContain('Поставили вы 1 мин назад');
+    expect(text, 'нуля нет').not.toContain('0 мин');
+  });
+
+  // Хвост RV-K-Q5I-2, п.1: у стоящей в очереди фичи событий может не быть вовсе — блок
+  // перерисовывает только интервал useNow. Мутация: убрать useNow из блока (замершее
+  // «сейчас») → второй тезис остаёт «1 ч» → красный.
+  it('длительность живая: «1 ч назад» → «1 ч 1 мин назад» через минуту', async () => {
+    queuePage('paused', QUEUED);
+    const c = render({});
+    await settle();
+    const block = blockOf(c);
+    expect(block, 'блок очереди').not.toBeNull();
+    expect(textNodes(block as never).join(''), 'исходная длительность — 1 ч').toContain('Поставили вы 1 ч назад');
+    await act(async () => { vi.advanceTimersByTime(60_000); });
+    expect(textNodes(block as never).join(''), 'после интервала — 1 ч 1 мин, не замерло').toContain('Поставили вы 1 ч 1 мин назад');
+  });
+
+  it('нет queue (бэк не отдал): блок без позиции, нулей и слов позиции нет', async () => {
+    queuePage('paused', { hold: { reason: 'queue', since: '2026-10-19T11:00:00Z' }, now: [] });
+    const c = render({});
+    await settle();
+    const block = blockOf(c);
+    expect(block, 'блок очереди').not.toBeNull();
+    const text = textNodes(block as never).join('');
+    expect(findExactText(block!, 'Фича в очереди.'), 'фраза без позиции').not.toBeNull();
+    expect(text, 'слов позиции нет').not.toContain('вторая');
+    expect(text, 'чисел «N из M» нет').not.toMatch(/\d+\s*из\s*\d+/);
+    expect(text, 'фразы первой позиции нет (позиция неизвестна)').not.toContain('Если место освободилось');
+  });
+
+  it('нет hold.since (бэк не отдал): длительности нет, «0 мин» и «undefined» нет', async () => {
+    queuePage('paused', { hold: { reason: 'queue' }, queue: { position: 2, length: 3 }, now: [] });
+    const c = render({});
+    await settle();
+    const block = blockOf(c);
+    expect(block, 'блок очереди').not.toBeNull();
+    const text = textNodes(block as never).join('');
+    expect(text).toContain('Поставили вы.');
+    expect(text, 'без данных нет «назад»').not.toContain('назад');
+    expect(text).not.toContain('undefined');
+  });
+
+  it('глиф блока — queue 14 (круг + три полосы), не глиф паузы', async () => {
+    queuePage('paused', QUEUED);
+    const c = render({});
+    await settle();
+    const block = blockOf(c);
+    expect(block, 'блок очереди').not.toBeNull();
+    let svg: AnyNode | null = null;
+    const walk = (x: AnyNode) => {
+      if (!svg && x.nodeName === 'SVG') svg = x;
+      for (const ch of x.childNodes) walk(ch);
+    };
+    walk(block!);
+    expect(svg, 'svg глифа в блоке').not.toBeNull();
+    const attrs = (svg as unknown as { attributes: Record<string, string> }).attributes ?? {};
+    expect(attrs['width'], 'глиф 14').toBe('14');
+    expect(attrs['height'], 'глиф 14').toBe('14');
+    let rects = 0;
+    const walkRects = (x: AnyNode) => {
+      if (x.nodeName === 'RECT') rects++;
+      for (const ch of x.childNodes) walkRects(ch);
+    };
+    walkRects(svg!);
+    // Три полосы — отличие от hold (две) и других глифов.
+    expect(rects, 'три полосы глифа очереди').toBe(3);
+  });
+});
+
+// === F6 (волна 6 «Сводка»): блок «Сводка» на вкладке «Хронология» вместо мини-сводки ===
+// Проводка блока к действиям страницы: «Статистика ›» → вкладка «Статистика»; «Повторить» →
+// перезапрос страницы (refetchFeaturePage); «Мерж…» → общая модалка мержа (та же, что в
+// шапке); «Открыть финальное ревью» → чат задачи финала с записью возврата (тот переход,
+// что у тревожного блока). Данные блока — brief/stats/mergedAt из ответа страницы; имена
+// персон — из стора персон (обёртка FeatureBriefWithNames, приём LeadChip).
+// Мутации (в отчёте): (1) вернуть рендер FeatureMiniSummary рядом → «мини-сводки нет»
+// краснеет; (2) не передавать brief → блока нет → первый тест красный; (3) не передавать
+// onRetry → «Повторить» не даёт второго GET; (4) не передавать onOpenFinal → кнопки нет;
+// (5) не передавать mergedAt → тег смерженной «закрыта без мержа»; (6) не передавать
+// nameOf → в подписи голоса имени нет.
+describe('F6: блок «Сводка» на вкладке «Хронология»', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    pageTest.reset();
+    indexTest.reset();
+    backNavTest.reset();
+    personaMap.clear();
+    setAllFlags({ 'features-overview': true });
+    personaMap.set('p-sofya', 'Софья');
+    mockIndex.features = [feat()];
+    mockIndex.chats = {};
+    mockChats.clear();
+    openChatCalls.length = 0;
+    mockGetFeature.pending = false;
+    mockGetFeature.result = null;
+    mockGetFeature.error = null;
+    mockGetFeature.calls = [];
+    mockGetFeature.perCall = [];
+    mockMergeFeature.pending = false;
+    mockMergeFeature.result = null;
+    mockMergeFeature.error = null;
+    mockMergeFeature.calls = [];
+    toasts.length = 0;
+    indexTest.setIndex('p1', mockIndex as FeaturesIndex);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  // brief той же формы, что в FeatureBriefBlock.test.ts (F5).
+  const brief = (over: Partial<FeatureBrief> = {}): FeatureBrief => ({
+    kind: 'running',
+    now: null,
+    reason: null,
+    done: { stepsAccepted: 2, stepsTotal: 5, loops: 1, planState: 'cut' },
+    next: [],
+    elapsedMinutes: null,
+    estimate: null,
+    queue: null,
+    note: null,
+    computedAt: '2026-10-19T11:50:00Z',
+    ...over,
+  });
+  // Статистика с валидным таймлайном (тот же shape, что в FeatureBriefBlock.test.ts).
+  const stats = (over: Partial<FeatureStats> = {}): FeatureStats => ({
+    source: 'journal',
+    truncated: false,
+    timeline: {
+      from: '2026-10-19T10:00:00Z',
+      to: '2026-10-19T11:50:00Z',
+      stages: [{ key: 'prod', startedAt: '2026-10-19T10:00:00Z', barEnd: null }],
+      segments: [
+        { from: '2026-10-19T10:00:00Z', to: '2026-10-19T10:30:00Z', kind: 'work', track: 'main', stage: 'prod', taskId: 't-prod' },
+      ],
+      current: { kind: 'work', since: '2026-10-19T11:40:00Z', taskId: 't-prod' },
+      totals: {
+        elapsedMinutes: 110, workWallMinutes: 30, agentsSumMinutes: 30, notWorkingMinutes: 80,
+        waitingMinutes: null, idleMinutes: null, waitingCount: null, longestWaitMinutes: null,
+        errorCount: null, errorMinutes: null,
+      },
+    },
+    breakdown: { personas: [], models: [], roles: [] },
+    longestNow: null,
+    spend: null,
+    ...over,
+  });
+  const bodyNode = () => (globalThis as { document: { body: unknown } }).document.body as unknown as AnyNode;
+
+  it('на timeline рендерится блок; мини-сводка отдельно больше не рендерится', async () => {
+    mockGetFeature.result = pageData({ brief: brief(), stats: stats() });
+    const c = render({});
+    await settle();
+    // Блок на месте: карточка с тегом состояния из brief (kind running → «идёт»).
+    const block = findNodeByAttr(c, 'data-testid', 'feature-brief-block');
+    expect(block, 'блок «Сводка»').not.toBeNull();
+    const tag = findNodeByAttr(block as never, 'data-testid', 'brief-tag');
+    expect(tag, 'тег блока').not.toBeNull();
+    expect(textNodes(tag!).join(''), 'тег — из kind ответа').toContain('идёт');
+    // Мини-сводка как отдельный блок — нет (её место занял блок; полоска живёт ВНУТРИ блока).
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-mini-summary'), 'мини-сводки отдельно нет').toBeNull();
+    // Конвейер под блоком — на месте (блок его не вытесняет).
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-body'), 'тело страницы').not.toBeNull();
+  });
+
+  it('brief null + stats есть → «Сводка не загрузилась» + «Повторить» → перезапрос страницы', async () => {
+    mockGetFeature.result = pageData({ stats: stats() });
+    const c = render({});
+    await settle();
+    const note = findNodeByAttr(c, 'data-testid', 'feature-brief-block');
+    expect(note, 'блок с состоянием ошибки').not.toBeNull();
+    expect(textNodes(note!).join('')).toContain('Сводка не загрузилась');
+    const retry = findNodeByAttr(c, 'data-testid', 'brief-retry')!;
+    await act(async () => { (reactProps(retry)!.onClick as () => void)(); });
+    await settle();
+    // «Повторить» = refetchFeaturePage: второй GET той же страницы.
+    expect(mockGetFeature.calls.length, 'повтор — перезапрос страницы').toBe(2);
+    expect(mockGetFeature.calls[1].fid, 'повтор — по той же фиче').toBe('f1');
+  });
+
+  it('«Статистика ›» в хвосте блока → вкладка «Статистика»', async () => {
+    mockGetFeature.result = pageData({ brief: brief(), stats: stats() });
+    const c = render({});
+    await settle();
+    const go = findNodeByAttr(c, 'data-testid', 'brief-go-stats')!;
+    await act(async () => { (reactProps(go)!.onClick as () => void)(); });
+    await settle();
+    expect(pageTest.tab(), 'вкладка переключена').toBe('stats');
+    expect(findNodeByAttr(c, 'data-testid', 'feature-stats-tab'), 'вкладка «Статистика» открыта').not.toBeNull();
+  });
+
+  it('waiting_you на мобиле: «Мерж…» открывает общую модалку мержа', async () => {
+    const pd = pageData({ brief: brief({ kind: 'waiting_you', reason: 'мерж' }) });
+    pd.run = { ...pd.run, final: { id: 'fin', title: 'финал', linkedSessionId: 'c-final' } } as never;
+    mockGetFeature.result = pd;
+    const c = render({ isMobile: true });
+    await settle();
+    const merge = findNodeByAttr(c, 'data-testid', 'brief-merge');
+    expect(merge, 'кнопка «Мерж…» в карточке (мобила)').not.toBeNull();
+    await act(async () => { (reactProps(merge)!.onClick as () => void)(); });
+    // Та же общая модалка, что у главного действия шапки (FeatureMergeDialog, портал в body).
+    expect(textNodes(bodyNode()).join(' '), 'модалка мержа открыта').toContain('Смержить «Моя фича» в master?');
+    // Закрыть модалку здесь же: незакрытая утекает в следующий тест (портал не анмонтирован).
+    const cancel = findButtonWithText(bodyNode(), 'Отмена');
+    expect(cancel, '«Отмена» в модалке').not.toBeNull();
+    await act(async () => { (reactProps(cancel!)!.onClick as () => void)(); });
+  });
+
+  it('waiting_you на мобиле: «Открыть финальное ревью» → чат финала + запись возврата', async () => {
+    const pd = pageData({ brief: brief({ kind: 'waiting_you', reason: 'мерж' }) });
+    pd.run = { ...pd.run, final: { id: 'fin', title: 'финал', linkedSessionId: 'c-final' } } as never;
+    mockGetFeature.result = pd;
+    const c = render({ isMobile: true });
+    await settle();
+    const btn = findNodeByAttr(c, 'data-testid', 'brief-open-final');
+    expect(btn, 'кнопка «Открыть финальное ревью»').not.toBeNull();
+    await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
+    // Тот переход, что у тревожного блока: открыть чат задачи финала + записать возврат к фиче.
+    expect(openChatCalls, 'клик ведёт в чат финала').toEqual(['c-final']);
+    const nav = backNavTest.getBackNav();
+    expect(nav?.from, 'запись возврата — из фичы f1').toBe('f1');
+    expect(nav?.to, 'цель — чат финала').toEqual({ kind: 'chat', id: 'c-final' });
+    expect(nav?.fromTitle, 'название для плашки').toBe('Моя фича');
+  });
+
+  it('финальной задачи/её чата нет: «Открыть финальное ревью» не проводится (мёртвой кнопки нет)', async () => {
+    const pd = pageData({ brief: brief({ kind: 'waiting_you', reason: 'мерж' }) });
+    pd.run = { ...pd.run, final: { id: 'fin', title: 'финал' } } as never; // чата нет
+    mockGetFeature.result = pd;
+    const c = render({ isMobile: true });
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'brief-open-final'), 'без чата финала кнопки нет').toBeNull();
+  });
+
+  it('mergedAt: closed + run.summary.mergedAt → тег «смержена» (без mergedAt — «закрыта без мержа»)', async () => {
+    // Без summary: та же kind closed, но мержа нет — тег другой (мутация «не передавать mergedAt»
+    // даёт этот же исход и здесь, и во второй части — поэтому вторая часть и краснеет).
+    const pdNoMerge = pageData({ brief: brief({ kind: 'closed' }) });
+    pdNoMerge.run = { ...pdNoMerge.run, state: 'closed' } as never;
+    mockGetFeature.result = pdNoMerge;
+    const c1 = render({});
+    await settle();
+    const t1 = findNodeByAttr(c1, 'data-testid', 'brief-tag')!;
+    expect(textNodes(t1).join(''), 'без mergedAt — «закрыта без мержа»').toContain('закрыта без мержа');
+
+    const pdMerged = pageData({ brief: brief({ kind: 'closed' }) });
+    pdMerged.run = { ...pdMerged.run, state: 'closed', summary: { mergedAt: '2026-10-19T11:00:00Z', durationMinutes: 120 } } as never;
+    mockGetFeature.result = pdMerged;
+    const c2 = render({});
+    await settle();
+    const t2 = findNodeByAttr(c2, 'data-testid', 'brief-tag')!;
+    expect(textNodes(t2).join(''), 'с mergedAt — «смержена»').toContain('смержена');
+  });
+
+  it('подпись голоса — с именем из стора персон (nameOf проводится)', async () => {
+    mockGetFeature.result = pageData({
+      brief: brief({
+        note: { text: 'Ждём вашего согласия на мерж.', at: '2026-10-19T11:30:00Z', byPersonaId: 'p-sofya', byUser: false, stageAtWrite: 'prod', stale: false },
+      }),
+    });
+    const c = render({});
+    await settle();
+    const voice = findNodeByAttr(c, 'data-testid', 'brief-voice');
+    expect(voice, 'плашка голоса').not.toBeNull();
+    const sig = findNodeByAttr(voice as never, 'data-testid', 'brief-voice-by')!;
+    expect(textNodes(sig).join(''), 'имя оркестратора из стора персон').toContain('Софья');
   });
 });
 

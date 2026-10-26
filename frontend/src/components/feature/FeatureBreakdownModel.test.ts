@@ -22,8 +22,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   sortGroups, formatMoney, groupChips, chatLabel, liveChipText, fewData, percentText,
-  normalizeModelKey,
+  normalizeModelKey, tierColorOf,
 } from './FeatureBreakdownModel';
+import { groupColor, ARC_COLORS } from './FeatureBreakdownShared';
+import { C } from '../../lib/design';
 import type { FeatureRun, FeatureStage, FeatureStageExecutor } from '../../types/featureRun';
 import type { FeatureBreakdownGroup } from '../../types/featureStats';
 
@@ -284,5 +286,39 @@ describe('percentText', () => {
     expect(thirds).toEqual(['33 %', '33 %', '33 %']);
     const rounded = [percentText(0.335), percentText(0.335), percentText(0.335)];
     expect(rounded).toEqual(['34 %', '34 %', '34 %']);
+  });
+});
+
+// Цвет строки по ценовому классу модели (класс приходит с бэка, поле tier).
+describe('tierColorOf: цвет строки по ценовому классу', () => {
+  it('три класса дают три цвета токенов темы', () => {
+    expect(tierColorOf(mkGroup({ tier: 'free' }))).toBe(C.success);
+    expect(tierColorOf(mkGroup({ tier: 'cheap' }))).toBe(C.info);
+    expect(tierColorOf(mkGroup({ tier: 'expensive' }))).toBe(C.warning);
+  });
+
+  it('класс null (бэк ответил, класса нет) — нейтральный цвет', () => {
+    expect(tierColorOf(mkGroup({ tier: null }))).toBe(C.textMuted);
+  });
+
+  it('поля tier в ответе нет (старый бэк) — цвет не задан: группа берёт палитру', () => {
+    expect(tierColorOf(mkGroup({}))).toBeNull();
+  });
+
+  it('неизвестный класс — нейтральный цвет, рендер не падает', () => {
+    expect(tierColorOf(mkGroup({ tier: 'vip' }))).toBe(C.textMuted);
+  });
+
+  // Цвет строки в разрезе моделей берётся из класса: у дешёвой модели он НЕ акцент.
+  it('в разрезе моделей цвет строки — цвет класса, а не палитра и не акцент', () => {
+    const groups = [mkGroup({ key: 'm1', tier: 'cheap' }), mkGroup({ key: 'm2', tier: 'free' })];
+    expect(groupColor('m1', groups, undefined, 'models')).toBe(C.info);
+    expect(groupColor('m2', groups, undefined, 'models')).toBe(C.success);
+    expect(groupColor('m1', groups, undefined, 'models')).not.toBe(C.accent);
+  });
+
+  it('в прочих разрезах (персоны, роли) класс не влияет на цвет', () => {
+    const groups = [mkGroup({ key: 'p1', tier: 'cheap' }), mkGroup({ key: 'p2', tier: 'cheap' })];
+    expect(groupColor('p1', groups, undefined, 'personas')).toBe(ARC_COLORS[0]);
   });
 });

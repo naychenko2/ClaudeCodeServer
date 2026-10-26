@@ -1,0 +1,44 @@
+{
+  "flag": 200,
+  "tiers": 200,
+  "project": {
+    "status": 201,
+    "id": "621b25f5-8dc0-4c2a-9f62-2276a88975e8"
+  },
+  "persona": {
+    "id": "6ba8bb7c-8b26-48a3-ba92-f05c2da4e1ec",
+    "name": "Ассистент"
+  },
+  "orchestrator_chat": "e5e86b76-1c8e-4de9-9d5f-27b16c82358e",
+  "waiting_since": "2026-10-26T12:52:17.470978Z",
+  "hold_paused": {
+    "status": 200,
+    "body": {
+      "interrupted": []
+    }
+  },
+  "hold_queued": {
+    "status": 200,
+    "body": {
+      "interrupted": []
+    }
+  },
+  "features": {
+    "main": "c6e55965-a1b2-4159-b9b4-766a45cb4bfd",
+    "main_step": "c7e8665f-2253-410c-ae3f-76d7a22faaa0",
+    "waiting": "a3929a06-d621-4536-be6b-cc7e54c4228f",
+    "waiting_step": "10901d85-c999-4146-9717-6b33c9434e72",
+    "stopped": "90b81f8c-7250-4a5b-ac0b-c361ddbd435f",
+    "stopped_step": "4eb86de6-f632-4b76-99c2-ea4437963ce7",
+    "paused": "ff27c940-688e-41cb-8710-e40d93ed4652",
+    "paused_step": "32f80f94-b840-4d0d-bf59-9941770216e0",
+    "queued": "5db371d6-fd4d-41ee-8881-229b99cbe1c0",
+    "queued_step": "fc79131f-282a-4b15-8966-7a4684acd17e",
+    "stage": "92b40d0f-7b5e-4036-90eb-c6f7403ceb76",
+    "stage_cut": "252bf958-a968-4396-ab12-093af21d4014",
+    "stage_step": "fd2c61e6-0764-4f72-ad65-d0084715a3c0",
+    "running": "1f94c055-ea4e-4abd-a446-77bb8059ebbc",
+    "running_step": "5a1b3811-b5ac-4864-b06c-220543a84fed"
+  },
+  "project_id": "621b25f5-8dc0-4c2a-9f62-2276a88975e8"
+}

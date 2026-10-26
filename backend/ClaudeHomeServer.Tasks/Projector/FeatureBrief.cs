@@ -17,6 +17,11 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 // B6 (дефект f2da9354): updatedAt — время ПОСЛЕДНЕГО ИЗМЕНЕНИЯ состояния фичи (UpdatedAtOf),
 // отдельное от computedAt: computedAt — момент этого ответа («насколько свеж снимок»), updatedAt —
 // время состояния («насколько old показано»). Оба поля остаются: они отвечают на разные вопросы.
+//
+// B8 (MAJOR-1 ревью R-F8): queueWaitMinutes — время в очереди для kind=queued (QueueWaitOf): от
+// момента постановки удержания (FeatureHold.Since) до now, НЕ из work-интервалов (у фичи в очереди
+// elapsed = WorkWallMinutes = 0, и подпись «в очереди N мин» была бы недостижима). Null — фича
+// не в очереди.
 public static class FeatureBrief
 {
     // Категории сводки (brief.kind, JSON camelCase-совместимые строки как в контракте разреза п. 4).
@@ -73,6 +78,11 @@ public static class FeatureBrief
         int? ElapsedMinutes,
         BriefEstimate? Estimate,
         BriefQueue? Queue,
+        // B8 (MAJOR-1 ревью R-F8): время в очереди (минуты) — только у kind=queued, от момента
+        // постановки удержания (FeatureHold.Since) до now. Отдельное от ElapsedMinutes: у фичи в
+        // очереди work-интервалов нет (elapsed = 0), и «в очереди N мин» отдаёт ровно это поле.
+        // null — фича не в очереди.
+        int? QueueWaitMinutes,
         BriefNote? Note,
         // B6 (дефект f2da9354): время последнего изменения состояния фичи (UpdatedAtOf). Отличается от
         // ComputedAt: он — момент этого ответа, updatedAt — момент последнего события состояния.
@@ -118,6 +128,7 @@ public static class FeatureBrief
             timeline?.Totals.WorkWallMinutes,
             EstimateOf(run, typical, kind),
             Queue: null,
+            QueueWaitMinutes: QueueWaitOf(run, kind, now),
             Note: NoteOf(run, kind),
             UpdatedAt: UpdatedAtOf(run),
             now);
@@ -132,6 +143,21 @@ public static class FeatureBrief
         return run.State == FeatureStates.Paused && run.Hold?.Reason == FeatureHoldReasons.Queue
             ? Kinds.Queued
             : kind;
+    }
+
+    // B8 (MAJOR-1 ревью R-F8): время в очереди — от момента постановки удержания до now. Момент —
+    // FeatureHold.Since: TaskManager.SetHold штампует его моментом постановки, проектор копирует
+    // поле эпика в run.Hold (FeatureRun.cs:29) — нового хранилища нет. Не work-интервалы: у фичи
+    // в очереди elapsedMinutes = WorkWallMinutes = 0. Null — фича не в очереди (kind ≠ queued —
+    // paused/черновик/остальные, и queue-удержание вне paused); 0 — граница [Since, now): удержание,
+    // поставленное в момент ответа, и будущий Since (аномалия данных: отрицательного времени не
+    // обещаем). При пере-постановке в очередь Since — момент последней постановки: честное время
+    // ТЕКУЩЕГО стояния, прошлые интервалы очереди сюда не суммируются.
+    private static int? QueueWaitOf(FeatureRun run, string kind, DateTime now)
+    {
+        if (kind != Kinds.Queued || run.Hold is null) return null;
+        var minutes = (long)(now - run.Hold.Since).TotalMinutes;
+        return minutes < 0 ? 0 : (int)minutes;
     }
 
     // «Сейчас»: первая запись Now; иначе тревога (Attention). Стадия тревоги — активная стадия

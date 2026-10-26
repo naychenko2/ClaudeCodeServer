@@ -22,6 +22,9 @@ namespace ClaudeHomeServer.Tasks.Tests;
 //    взять вместо событий состояния TaskItem.UpdatedAt — тест «настройки не двигают» красный; убрать
 //    ветку ExecutorStoppedAt — тот же тест красный (NOW-4 ч вместо NOW-3 ч); убрать якорь CreatedAt —
 //    тест «эпик якорь» красный; подставить «now» вместо null при отсутствии событий — тест «null а не сейчас» красный.
+//  • B8 (MAJOR-1 ревью R-F8): взять вместо Hold.Since work-интервалы (ElapsedMinutes) — тест
+//    «очередь не из work-интервалов» красный (7 вместо 25); убрать фильтр kind — тест «только queued»
+//    красный (число у paused/running); убрать clamp к 0 — тест границы красный (отрицательное время).
 public class FeatureBriefTests
 {
     private static readonly DateTime NOW = new(2026, 10, 25, 12, 0, 0, DateTimeKind.Utc);
@@ -270,6 +273,56 @@ public class FeatureBriefTests
         FeatureBrief.Build(RunOf(FeatureStates.Paused, manual), null, null, NOW).Reason.Should().Be("manual");
         FeatureBrief.Build(RunOf(FeatureStates.Paused, queue), null, null, NOW).Reason.Should().Be("queue");
         FeatureBrief.Build(RunOf(FeatureStates.Running), null, null, NOW).Reason.Should().BeNull();
+    }
+
+    // ─── queueWaitMinutes (B8, MAJOR-1 ревью R-F8): время в очереди, не из work-интервалов ──────
+
+    // c1/c2: queued — время от момента постановки удержания (FeatureHold.Since), а не из таймлайна.
+    // Фикстура намеренно даёт два разных числа: очередь 25 мин, workWall(7) — подмена источника
+    // (ElapsedMinutes вместо Hold.Since) даёт 7 вместо 25, тест красный. elapsed при этом остаётся
+    // work-временем: поля отдельные.
+    [Fact]
+    public void QueueWaitMinutes_QueuedБерётВремяОтМоментаУдержанияАНеИзWorkИнтервалов()
+    {
+        var run = RunOf(FeatureStates.Paused,
+            new FeatureHold(FeatureHoldReasons.Queue, NOW.AddMinutes(-25), null, true));
+
+        var brief = FeatureBrief.Build(run, TimelineOf(elapsed: 40, workWall: 7), null, NOW);
+
+        brief.QueueWaitMinutes.Should().Be(25, "25 минут от Hold.Since, не workWall(7) и не elapsed(40)");
+        brief.ElapsedMinutes.Should().Be(7, "elapsed остаётся work-временем по часам стены — отдельное поле");
+    }
+
+    // c1: поле заполнено ТОЛЬКО у kind=queued: без удержания, на паузе человека и у queue-удержания
+    // вне paused (категория running) — null. Мутация: убрать фильтр kind в QueueWaitOf — красный.
+    [Fact]
+    public void QueueWaitMinutes_ТолькоУQueued_УОстальныхNull()
+    {
+        var queue = new FeatureHold(FeatureHoldReasons.Queue, NOW.AddMinutes(-25), null, true);
+        var manual = new FeatureHold(FeatureHoldReasons.Manual, NOW.AddMinutes(-25), null, true);
+
+        FeatureBrief.Build(RunOf(FeatureStates.Paused), null, null, NOW)
+            .QueueWaitMinutes.Should().BeNull("без удержания — поля нет");
+        FeatureBrief.Build(RunOf(FeatureStates.Paused, manual), null, null, NOW)
+            .QueueWaitMinutes.Should().BeNull("пауза человека — не очередь");
+        FeatureBrief.Build(RunOf(FeatureStates.Running, queue), null, null, NOW)
+            .QueueWaitMinutes.Should().BeNull("queue-удержание вне paused — категория не queued");
+        FeatureBrief.Build(RunOf(FeatureStates.Draft, queue), null, null, NOW)
+            .QueueWaitMinutes.Should().BeNull("черновик — не очередь");
+    }
+
+    // Граница [Since, now): удержание, поставленное ровно в момент ответа, — 0 (поле есть, не null).
+    // Future Since (аномалия данных) — тоже 0: отрицательного времени не обещаем.
+    // Мутация: убрать clamp к 0 — второй случай красный (-5).
+    [Fact]
+    public void QueueWaitMinutes_ГраницаИБудущийУдержаниеДаютНоль()
+    {
+        FeatureBrief.Build(RunOf(FeatureStates.Paused,
+                new FeatureHold(FeatureHoldReasons.Queue, NOW, null, true)), null, null, NOW)
+            .QueueWaitMinutes.Should().Be(0, "ровно в момент ответа — 0, не null");
+        FeatureBrief.Build(RunOf(FeatureStates.Paused,
+                new FeatureHold(FeatureHoldReasons.Queue, NOW.AddMinutes(5), null, true)), null, null, NOW)
+            .QueueWaitMinutes.Should().Be(0, "будущий Since — аномалия данных, отрицательного времени нет");
     }
 
     // ─── estimate (B2b): формула, лента, источник ───────────────────────────────────────────────

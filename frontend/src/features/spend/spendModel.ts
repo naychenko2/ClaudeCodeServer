@@ -59,8 +59,10 @@ export const sourceTextColor = (s: string) =>
 // (подпись + цвет) — общий на всё приложение, в lib/costTiers.ts.
 export const SPEND_TIERS = COST_TIERS;
 
-// Порядок классов в стеке столбика и в легенде
-export const TIER_KEYS = COST_TIER_KEYS;
+// Порядок классов в стеке столбика СНИЗУ ВВЕРХ: дорогие внизу, дешёвые в середине,
+// бесплатные сверху (просьба владельца 26.10). Это порядок рендера (column-reverse),
+// а не общий порядок классов — он остаётся в COST_TIER_KEYS.
+export const TIER_KEYS: readonly SpendTierKey[] = [...COST_TIER_KEYS].reverse();
 export type SpendTierKey = CostTierKey;
 
 // Цвет класса: неизвестный или null-класс → нейтральный цвет палитры (не выдуманный)
@@ -75,7 +77,7 @@ export interface SpendTierSegment {
 
 // Сегменты столбика дня по ценовым классам. Значения берутся ИЗ byTier
 // (разбивка по источникам в столбике не показывается — решение владельца),
-// порядок сегментов фиксирован: бесплатно → дёшево → дорого.
+// порядок сегментов фиксирован снизу вверх: дорого → дёшево → бесплатно.
 export function tierSegments(day: {
   byTier?: Partial<Record<SpendTierKey, number>> | null;
   bySource?: Record<string, number> | null;

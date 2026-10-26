@@ -10,20 +10,20 @@ const CHART_H = 130;      // высота области графика (как 
 const PAD = 12;           // отступ столбика от краёв области
 
 describe('tierSegments: сегменты столбика дня', () => {
-  it('три класса дают три сегмента в порядке free → cheap → expensive', () => {
+  it('три класса дают три сегмента в порядке снизу вверх expensive → cheap → free', () => {
     const segs = tierSegments({ byTier: { free: 100, cheap: 200, expensive: 300 } });
-    expect(segs.map(s => s.key)).toEqual(['free', 'cheap', 'expensive']);
-    expect(segs.map(s => s.value)).toEqual([100, 200, 300]);
+    expect(segs.map(s => s.key)).toEqual(['expensive', 'cheap', 'free']);
+    expect(segs.map(s => s.value)).toEqual([300, 200, 100]);
   });
 
   it('цвет сегмента — токен класса', () => {
     const segs = tierSegments({ byTier: { free: 100, cheap: 200, expensive: 300 } });
-    expect(segs.map(s => s.color)).toEqual([C.success, C.info, C.warning]);
+    expect(segs.map(s => s.color)).toEqual([C.warning, C.info, C.success]);
   });
 
   it('пустой класс в столбик не попадает', () => {
     const segs = tierSegments({ byTier: { free: 10, cheap: 0, expensive: 5 } });
-    expect(segs.map(s => s.key)).toEqual(['free', 'expensive']);
+    expect(segs.map(s => s.key)).toEqual(['expensive', 'free']);
   });
 
   it('день без byTier (старый ответ бэка) не ломает разметку', () => {
@@ -34,10 +34,10 @@ describe('tierSegments: сегменты столбика дня', () => {
 describe('dayColumn: столбик дня', () => {
   const day = { total: 600, byTier: { free: 100, cheap: 200, expensive: 300 } };
 
-  it('классы идут в порядке free → cheap → expensive', () => {
+  it('классы идут в порядке снизу вверх expensive → cheap → free', () => {
     const col = dayColumn(day, 600, CHART_H);
-    expect(col.segments.map(s => s.key)).toEqual(['free', 'cheap', 'expensive']);
-    expect(col.segments.map(s => s.color)).toEqual([C.success, C.info, C.warning]);
+    expect(col.segments.map(s => s.key)).toEqual(['expensive', 'cheap', 'free']);
+    expect(col.segments.map(s => s.color)).toEqual([C.warning, C.info, C.success]);
     expect(col.neutral).toBe(false);
   });
 
@@ -57,7 +57,7 @@ describe('dayColumn: столбик дня', () => {
 
   it('высоты сегментов пропорциональны их значениям', () => {
     const col = dayColumn(day, 600, CHART_H);
-    const [free, cheap, expensive] = col.segments;
+    const [expensive, cheap, free] = col.segments;
     expect(cheap.height).toBeGreaterThan(free.height);
     expect(expensive.height).toBeGreaterThan(cheap.height);
     expect(free.height / col.height).toBeCloseTo(100 / 600, 1);

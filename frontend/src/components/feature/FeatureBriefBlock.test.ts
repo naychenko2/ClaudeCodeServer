@@ -12,7 +12,8 @@
 // · R-F8: порядок секций «Сделано · Дальше · Оценка»; подпись факта без значения не
 //   рисуется; числа подстроки «Сейчас» — моно; «План готов» для queued; глиф у error;
 //   minWidth: 0 у значения; одно «сейчас» на ответ (перерисовка тех же данных не сдвигает
-//   относительные строки);
+//   относительные строки; новая ссылка данных — «сейчас» пересчитан, R-F2d3); без «Дальше»
+//   «Оценка» в правой колонке грида, середина не пустует (R-F8 минор 2);
 // · Grep-сторож: в исходнике блока нет прямого обращения к полю состояния, полосе стадий
 //   и полям таймлайна (включая `timeline` через деструктуризацию) — фронт ничего не
 //   пересчитывает; и нет слов модели — полный список BRIEF_MODEL_WORDS (R-F8), комментарии
@@ -329,6 +330,36 @@ describe('Порядок секций и пустые подписи (R-F8)', ()
     act(() => { root.render(createElement(FeatureBriefBlock, { ...props })); });
     const upd2 = textNodes(findNodeByAttr(container, 'data-testid', 'brief-updated')!).join('');
     expect(upd2, 'та же data — та же строка времени, часы в рендере не участвуют').toBe(upd1);
+  });
+
+  it('новая ссылка brief → «сейчас» пересчитан: deps эффекта — данные ответа (R-F2d3, вторая половина инварианта)', () => {
+    const props: FeatureBriefBlockProps = {
+      brief: brief({ kind: 'waiting_you', reason: 'мерж', now: { stage: '', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 14, 0) } }),
+      stats: null,
+      onOpenStats: () => {},
+      onRetry: () => {},
+    };
+    const { root, container } = mount(createElement(FeatureBriefBlock, props));
+    expect(textNodes(findNodeByAttr(container, 'data-testid', 'brief-updated')!).join(''), 'computedAt 14:08 при «сейчас» 14:10').toBe('обновлено 2 мин назад');
+    // Новый ответ — новый объект тех же данных: часы обязаны свериться (поломка deps=[] это красит).
+    vi.setSystemTime(NOW + 10 * 60_000);
+    act(() => { root.render(createElement(FeatureBriefBlock, { ...props, brief: { ...props.brief! } })); });
+    expect(textNodes(findNodeByAttr(container, 'data-testid', 'brief-updated')!).join(''), 'новая ссылка данных — новое «сейчас»: 14:20 − 14:08').toBe('обновлено 12 мин назад');
+  });
+
+  it('без «Дальше» «Оценка» остаётся в правой колонке: «Сделано» занимает 1–2, середина не пустует (R-F8 минор 2)', () => {
+    const cellStyle = (cont: ReturnType<typeof render>['c'], testId: string): Record<string, unknown> => {
+      const cell = findNodeByAttr(cont, 'data-testid', testId)!.parentElement!.parentElement!;
+      return reactProps(cell)!.style as Record<string, unknown>;
+    };
+    const b = brief({ now: { stage: 'prod', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 14, 5) }, next: [] });
+    const { c } = render({ brief: b, nameOf });
+    expect(cellStyle(c, 'brief-done-line').gridColumn, '«Сделано» занимает колонки 1–2').toBe('1 / 3');
+    expect(cellStyle(c, 'brief-estimate-main').gridColumn, '«Оценка» в правой колонке').toBe(3);
+    // С заполненным «Дальше» — обычный порядок потока, расстановки нет.
+    const cf = render({ brief: full, nameOf }).c;
+    expect(cellStyle(cf, 'brief-done-line').gridColumn, 'с «Дальше» расстановки нет').toBeUndefined();
+    expect(cellStyle(cf, 'brief-estimate-main').gridColumn, 'с «Дальше» расстановки нет').toBeUndefined();
   });
 });
 

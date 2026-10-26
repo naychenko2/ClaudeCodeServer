@@ -42,10 +42,10 @@ const mockGetFeature = vi.hoisted(() => ({
 
 vi.mock('../../lib/api', () => ({
   api: {
-    chats: { get: async (id: string) => null },
+    chats: { get: async (_id: string) => null },
     tasks: {
       featuresIndex: async () => mockIndex,
-      getFeature: (fid: string) => {
+      getFeature: (_fid: string) => {
         if (mockGetFeature.pending) return new Promise<FeaturePageData>(() => {});
         if (mockGetFeature.error) return Promise.reject(mockGetFeature.error);
         return Promise.resolve(mockGetFeature.result!);
@@ -147,18 +147,30 @@ function mkStats(over: Partial<FeatureStats> = {}): FeatureStats {
   };
 }
 
+// Типизованный шим window/document: ровно те методы, что использует сам тест
+// (приём genPanelDismissed.test.ts — без any/Function).
+type Evt = { type: string };
+type Handler = (e: Evt) => void;
+
 function render() {
   installFakeDom();
-  const win = globalThis as any;
-  const doc = (globalThis as any).document;
+  const win = globalThis as unknown as {
+    window: {
+      addEventListener?: (t: string, f: Handler) => void;
+      removeEventListener?: (t: string, f: Handler) => void;
+      dispatchEvent?: (e: Evt) => boolean;
+    };
+    document: { querySelector?: (sel: string) => null };
+    __winListeners: Record<string, Set<Handler>>;
+  };
   if (!win.window.addEventListener) {
-    const listeners: Record<string, Set<Function>> = {};
-    win.window.addEventListener = (t: string, f: Function) => { (listeners[t] ??= new Set()).add(f); };
-    win.window.removeEventListener = (t: string, f: Function) => { listeners[t]?.delete(f); };
-    win.window.dispatchEvent = (e: { type: string }) => { listeners[e.type]?.forEach(f => f(e)); return true; };
+    const listeners: Record<string, Set<Handler>> = {};
+    win.window.addEventListener = (t, f) => { (listeners[t] ??= new Set()).add(f); };
+    win.window.removeEventListener = (t, f) => { listeners[t]?.delete(f); };
+    win.window.dispatchEvent = (e) => { listeners[e.type]?.forEach(f => f(e)); return true; };
     win.__winListeners = listeners;
   }
-  if (!doc.querySelector) doc.querySelector = () => null;
+  if (!win.document.querySelector) win.document.querySelector = () => null;
   const { container } = mount(createElement(FeaturePage, {
     featureId: 'f1', projectId: 'p1', isMobile: false, onBack: () => {},
   }));

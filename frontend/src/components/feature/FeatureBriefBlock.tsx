@@ -13,7 +13,8 @@
 // строки модели (R-F5): блок только вызывает модель и красит mono-части моно (числа
 // подстроки — FONT.mono, «Токены поимённо»). Подпись факта без значения не рисуется
 // (макет: «если какого-то поля нет, строку не рисуем»); порядок секций «Сделано ·
-// Дальше · Оценка» и закрытость ленты — закреплены тестом. Одно «сейчас» на ответ
+// Дальше · Оценка» и закрытость ленты — закреплены тестом; без «Дальше» «Оценка»
+// остаётся в правой колонке грида (R-F8 минор 2). Одно «сейчас» на ответ
 // (R-F8): относительные строки считаются от него, а не от часов в каждом рендере.
 
 import { useEffect, useState } from 'react';
@@ -281,13 +282,14 @@ export function FeatureBriefBlock({
   // Одно «сейчас» на ответ (R-F8): относительные строки («ждёт N», «обновлено N назад»,
   // время голоса) считаются от одного момента, привязанного к данным, а не от часов в
   // каждом рендере: перерисовка тех же данных не сдвигает текст, новый ответ — новое «сейчас».
-  // «Сейчас» — состояние, а не вызов в рендере (R-F8, react-hooks/purity): тот же
-  // проверенный в проекте паттерн, что usePromptCache/useNow — начальное значение при
-  // монтировании, сверка часов на смену данных — в effect.
+  // «Сейчас» — состояние, а не вызов в рендере (R-F8, react-hooks/purity): паттерн взят из
+  // usePromptCache.ts:19-23 — начальное значение при монтировании, сверка часов на смену
+  // данных — в effect. В отличие от useNow (живое обновление по таймеру) и циферблата
+  // usePromptCache со своим таймером: здесь таймера нет намеренно — одно «сейчас» на ответ.
   const [nowMs, setNowMs] = useState(() => Date.now());
   // deps — данные ответа, а не аргументы эффекта: смена данных = новое «сейчас», та же
   // ссылка на данные = тот же момент.
-  // eslint-disable-next-line react-hooks/set-state-in-effect -- часы живут вне React (тот же приём, что usePromptCache:22)
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- часы живут вне React (тот же приём, что usePromptCache.ts:22)
   useEffect(() => { setNowMs(Date.now()); }, [brief, stats, mergedAt]);
   if (loading) return <BriefSkeleton isMobile={isMobile} />;
   // «summary и stats оба null — блока нет» (макет §3).
@@ -338,13 +340,17 @@ export function FeatureBriefBlock({
   const mono: CSSProperties = { fontFamily: FONT.mono, fontWeight: 600, color: C.textHeading };
   const factLabel = (text: string) => <div style={LABEL}>{text}</div>;
   // Ячейка факта: «подпись | значение». minWidth: 0 у ячейки и у значения — длинное слово
-  // не раздвигает колонку грида (R-F8).
-  const factCell = (label: string, value: ReactNode) => (
-    <div style={{ minWidth: 0, ...(isMobile ? { display: 'grid', gridTemplateColumns: '72px 1fr', gap: SP.sm, alignItems: 'baseline' } : null) }}>
+  // не раздвигает колонку грида (R-F8). gridColumn — расстановка в колонках грида.
+  const factCell = (label: string, value: ReactNode, gridColumn?: string | number) => (
+    <div style={{ minWidth: 0, ...(gridColumn !== undefined ? { gridColumn } : null), ...(isMobile ? { display: 'grid', gridTemplateColumns: '72px 1fr', gap: SP.sm, alignItems: 'baseline' } : null) }}>
       {factLabel(label)}
       <div style={{ minWidth: 0 }}>{value}</div>
     </div>
   );
+  // Без «Дальше» грид не сдвигается: «Сделано» растягивается на колонки 1–2, «Оценка»
+  // остаётся в правой колонке (R-F8 минор 2: макет ждёт «Оценку» справа, третья колонка
+  // не пустует зря). На мобиле (одна колонка) расстановки нет.
+  const noNext = !isMobile && !nextText;
 
   return (
     <section data-testid="feature-brief-block" aria-label="Сводка состояния фичи" style={{
@@ -401,7 +407,7 @@ export function FeatureBriefBlock({
               ? <b key={i} style={mono}>{p.text}</b>
               : <span key={i}>{p.text}</span>))}
           </div>
-        ))}
+        ), noNext ? '1 / 3' : undefined)}
         {/* «Дальше» без строки модели не рисуется вовсе — голый заголовок не показываем (R-F8). */}
         {nextText ? factCell('Дальше', <div data-testid="brief-next-line" style={{ fontSize: FS.base, color: C.textPrimary }}>{nextText}</div>) : null}
         {factCell(est.header, (
@@ -410,7 +416,7 @@ export function FeatureBriefBlock({
             <div data-testid="brief-estimate-main" style={{ fontSize: FS.base, color: est.mainMuted ? C.textMuted : C.textPrimary }}>{est.main}</div>
             {est.fact && <div data-testid="brief-estimate-fact" style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: 2 }}>{est.fact}</div>}
           </>
-        ))}
+        ), noNext ? 3 : undefined)}
       </div>
 
       {brief.note && <VoiceBlock note={brief.note} kind={brief.kind} nameOf={nameOf} nowMs={nowMs} />}

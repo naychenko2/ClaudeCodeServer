@@ -490,23 +490,63 @@ Html не разбираем вовсе: прототип идёт в «Файл
 Материалы фичи в ответе — `plans` и `mockups`; поля «notes» в ответе нет (верхние ключи —
 ровно девять, [TasksControllerTests.cs:1236-1239](../../backend/ClaudeHomeServer.Tests/Controllers/TasksControllerTests.cs)).
 
-- **`plans` — документы:** задачи с ролью `cut`/`design`/`plan`/`consult`
-  ([FeatureRun.cs:105-122](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureRun.cs),
-  `BuildPlans` [FeatureProjector.cs:718-749](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureProjector.cs)).
-  Порядок — cut → design → plan → consult, внутри роли по `CreatedAt` (:730-736); роль
+- **`plans` — задачи-документы:** задачи с ролью `cut`/`design`/`plan`/`consult`
+  ([FeatureRun.cs:99-123](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureRun.cs),
+  `BuildPlans` [FeatureProjector.cs:720-751](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureProjector.cs)).
+  Порядок — cut → design → plan → consult, внутри роли по `CreatedAt` (:734-738); роль
   `design` пришла в список этой волной. Текст в ответ не попадает: вкладка берёт список,
-  текст подгружает по клику (`GET /api/tasks/{id}`) (:708-710). `mockupPaths` — пути
-  макетов из `ResultMarkdown` (:754-770). На фронте дедуп планов (показываем последний)
-  и счётчик вкладки считает ровно видимый список ([FeaturePlansTab.tsx](../../frontend/src/components/feature/FeaturePlansTab.tsx)).
+  текст подгружает по клику (`GET /api/tasks/{id}`) (:708-710). Полноту состава ролей
+  сторожит таблица [TasksControllerTests.cs:1553](../../backend/ClaudeHomeServer.Tests/Controllers/TasksControllerTests.cs):
+  новая роль без строки в ней — красный тест.
+- **`plans[].mockupPaths` — пути файлов документа (М5):** макеты из `ResultMarkdown`
+  (`docs/mockups/….{html,md}`, регулярка FeatureProjector.cs:788-789) **и** файлы, которые
+  задача-документ сама приложила через `LinkedFiles` (ADR, спеки, записки вне `docs/mockups`
+  не должны теряться в разделе). Порядок «тело → linkedFiles»: сначала пути из текста по
+  появлению, затем приложенные как приложены; distinct, потолок 20 общий на оба источника,
+  пустые и пути с «..» (pathtraversal) отброшены (FeatureProjector.cs:761-785; потолок
+  [FeaturePlansTests.cs:307-325](../../backend/ClaudeHomeServer.Tasks.Tests/FeaturePlansTests.cs)).
+  Имя поля — прежний JSON-контракт (FeatureRun.cs:105).
+- **Асимметрия состава — решение D1:** файлы документ-ролей → `plans[].mockupPaths`;
+  `LinkedFiles` остальных ролей (step/review/qa/final/merge) и безролевых задач (безролевые
+  вошли в состав этой волной, М8 — TasksController.cs:1221-1223) идут только в каталог
+  макетов `mockups[]` — запасным путём каталога, и там только `.html` под `docs/mockups/`
+  ([MockupCatalog.cs:62-77](../../backend/ClaudeHomeServer.Docs/MockupCatalog.cs)); состав задач —
+  `AllRunTasks` (TasksController.cs:1224-1237), с фильтром по проекту эпика (`AllLinkedFiles`
+  :1244-1251). Обычные файлы шагов в раздел не попадают — золотой тест
+  [FeaturePlansTests.cs:330-341](../../backend/ClaudeHomeServer.Tasks.Tests/FeaturePlansTests.cs)
+  (`BuildPlans_LinkedFiles_ШагаНеДокументнойРоли_НеПопадают`).
 - **`mockups` — макеты:** записка `.md` с шапкой «**Фича:** / **Статус:** / **Файлы:**»
   (формат — раздел «Макеты фичи» выше) и её файлы: запись `MockupEntry`
-  ([DocsIndex.cs:201-210](../../backend/ClaudeHomeServer.Core/Models/DocsIndex.cs)),
+  ([DocsIndex.cs:196-210](../../backend/ClaudeHomeServer.Core/Models/DocsIndex.cs)),
   `files` — прототипы с признаком `exists` по проверенному дереву эпика (:190-194),
-  источник — шапка записки или `linkedFiles` задач (:181). Макет блока сводки —
+  источник — шапка записки или `linkedFiles` задач (:178-181). Макет блока сводки —
   [feature-summary-1.md](../mockups/feature-summary-1.md).
+- **Фронт — три группы** ([FeaturePlansTab.tsx](../../frontend/src/components/feature/FeaturePlansTab.tsx)):
+  «Документы» — видимый список: дедуп планов (показываем последний по `createdAt`),
+  неизвестные роли в группу не попадают (:124-135); «Прочие документы» (М7) — пути
+  `mockupPaths`, не покрытые группой «Макеты» (по `path` макета или любому из его `files`,
+  регистронезависимо; `otherDocPaths` :146-163); «Макеты» — каталог. Счётчик вкладки =
+  число отрисованных карточек (`plansTabCount` :320-325). Тесты группы и счётчика —
+  [FeaturePlansTab.test.ts](../../frontend/src/components/feature/FeaturePlansTab.test.ts):
+  карточки :412, дедуп по планам и «счётчик = карточки» :438-453, покрытие файлом макета
+  :484, схлопывание по регистру :499.
+  При `'device'` группы «Прочие документы» нет (:219).
+- **Принятое поведение — без признака «файл существует»:** `mockupPaths` — список путей;
+  маркер существования невозможен без нового поля контракта. Клик по несуществующему пути
+  даёт честное «Не удалось открыть файл» в просмотрщике
+  ([FileViewer.tsx:2010-2018](../../frontend/src/components/FileViewer.tsx)).
+  **Известное ограничение:** фильтра по проекту у `mockupPaths` нет (в отличие от
+  `AllLinkedFiles`): линки из другого проекта в список попадают, но не открываются.
+- **Известное ограничение — подписи шире факта:** «Макеты в тексте»
+  ([FeaturePlanReader.tsx:299](../../frontend/src/components/feature/FeaturePlanReader.tsx), :356-359)
+  и «Упомянут в» ([FeatureMockups.tsx:306](../../frontend/src/components/feature/FeatureMockups.tsx), :414-417)
+  считаются по `mockupPaths`, то есть считают и макеты, приложенные через `LinkedFiles`, а не
+  только упомянутые в теле. Правка подписей — в хвостах.
 - **«Заметка» (база знаний) — не материал фичи:** связи «заметка → фича» в вертикали
-  Notes нет (поля `FeatureId` в ней нет). Единственная «note» в ответе фичи —
-  `brief.note`, голос эпика (§4): ни документ, ни заметка.
+  Notes нет (поля `FeatureId` в ней нет). М6 (поле `notes[]` в ответе фичи) **снят** —
+  решение зафиксировано: поля нет; пересмотр возможен только по слову Андрея и по новому
+  разрезу. Единственная «note» в ответе фичи — `brief.note`, голос эпика (§4): ни документ,
+  ни заметка.
 
 ### 6. Инвариант: факты из проектора, фронт не пересчитывает
 

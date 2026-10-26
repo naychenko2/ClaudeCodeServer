@@ -282,21 +282,21 @@ public class PregateServiceTests : IDisposable
 
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
-            ["Pregate:Checks:0:Name"] = "tsc",
-            ["Pregate:Checks:0:Command"] = "npx",
-            ["Pregate:Checks:0:Args:0"] = "tsc",
-            ["Pregate:Checks:0:Args:1"] = "-b",
-            ["Pregate:Checks:0:WorkingDirectory"] = "frontend",
-            ["Pregate:Checks:0:WhenChanged:0"] = "frontend/",
-            ["Pregate:Checks:1:Name"] = "ui",
-            ["Pregate:Checks:1:Kind"] = "ui-probe",
-            ["Pregate:Checks:1:Origin"] = "http://127.0.0.1:5555",
-            ["Pregate:Checks:1:Viewports:0"] = "360",
-            ["Pregate:Checks:1:Viewports:1"] = "1280",
+            // Набор проверок — объект по имени проверки: имя = ключ (не индекс!)
+            ["Pregate:Checks:tsc:Command"] = "npx",
+            ["Pregate:Checks:tsc:Args:0"] = "tsc",
+            ["Pregate:Checks:tsc:Args:1"] = "-b",
+            ["Pregate:Checks:tsc:WorkingDirectory"] = "frontend",
+            ["Pregate:Checks:tsc:WhenChanged:0"] = "frontend/",
+            ["Pregate:Checks:ui:Kind"] = "ui-probe",
+            ["Pregate:Checks:ui:Origin"] = "http://127.0.0.1:5555",
+            ["Pregate:Checks:ui:Viewports:0"] = "360",
+            ["Pregate:Checks:ui:Viewports:1"] = "1280",
         }).Build();
 
         var options = PregateOptions.From(config);
 
+        options.Problem.Should().BeNull();
         options.Checks.Should().HaveCount(2);
         options.Checks[0].Should().BeEquivalentTo(new PregateCheckOptions
         {
@@ -354,5 +354,40 @@ public class PregateServiceTests : IDisposable
 
         services.Should().NotContain(s => s.ServiceType == typeof(ITaskPregate));
         services.Should().NotContain(s => s.ServiceType == typeof(PregateOptions));
+    }
+
+    // Потолок прогона — одно число на продукт (Core, RunBudget.MaxSeconds): вертикаль TestRuns
+    // берёт его оттуда же. Иначе «540» жил бы в двух сборках и разошёлся бы молча.
+    [Fact]
+    public void ПотолокПрогона_СовпадаетСПотолкомШваПредгейта()
+    {
+        TestRunsOptions.DefaultCeilingSeconds.Should().Be(PregateCeiling.MaxSeconds,
+            "потолок вертикали TestRuns и потолок шва предгейта — одно число (Core, RunBudget)");
+        PregateCeiling.MaxSeconds.Should().Be(540,
+            "общий потолок прогона изменился: он обязан быть меньше MCP_TOOL_TIMEOUT хода (600 с) — "
+            + "иначе ответ модели не успеет уйти; обнови описание инструмента и этот тест");
+    }
+
+    // Отказ по потолку печатает ПРИМЕНЁННЫЙ потолок, а не сырое число из TestRunsOptions:
+    // фактический потолок задаёт Sanitize шва (потребитель ставит его в CancelAfter), и печать
+    // сырого числа разошлась бы с фактом при смене любого из них.
+    [Theory]
+    [InlineData(0, PregateCeiling.MaxSeconds)]
+    [InlineData(-5, PregateCeiling.MaxSeconds)]
+    [InlineData(PregateCeiling.MaxSeconds + 1, PregateCeiling.MaxSeconds)]
+    [InlineData(120, 120)]
+    public void ОтказПоПотолкуПечатаетПрименённоеЗначение(int configured, int expected)
+    {
+        var service = new PregateService(Launcher(_ => ("", 0)), new TestRunsOptions { CeilingSeconds = configured },
+            new PregateOptions { Checks = [Check("tsc")] },
+            new PhasePipeline(new BuildConcurrencyGate(2), TimeSpan.FromSeconds(5)));
+
+        service.CeilingSeconds.Should().Be(expected, "применённый потолок — очищенное значение шва");
+        var refusal = service.CeilingRefusal("tsc");
+        refusal.Should().Contain($"потолок предгейта {expected} с",
+            "текст отказа обязан называть фактически применённый потолок");
+        if (configured != expected)
+            refusal.Should().NotContain($"потолок предгейта {configured} с",
+                "печатать сырое значение конфигурации — значит солгать о применённом потолке");
     }
 }

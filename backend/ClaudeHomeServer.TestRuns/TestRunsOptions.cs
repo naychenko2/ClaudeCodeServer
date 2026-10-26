@@ -1,3 +1,5 @@
+using ClaudeHomeServer.Services.Composition;
+
 namespace ClaudeHomeServer.Services.TestRuns;
 
 // Настройки прогона (секция TestRuns). Потолок прогона обязан быть МЕНЬШЕ MCP_TOOL_TIMEOUT
@@ -5,7 +7,9 @@ namespace ClaudeHomeServer.Services.TestRuns;
 // В потолок входит и ожидание очереди сборок.
 public sealed class TestRunsOptions
 {
-    public const int DefaultCeilingSeconds = 540;
+    // Потолок прогона — тот же, что у шва предгейта: число живёт в Core (RunBudget),
+    // вертикаль берёт его оттуда, чтобы два потолка не разошлись молча.
+    public const int DefaultCeilingSeconds = RunBudget.MaxSeconds;
     public const int DefaultMaxResultBytes = 10240;
 
     public int CeilingSeconds { get; init; } = DefaultCeilingSeconds;

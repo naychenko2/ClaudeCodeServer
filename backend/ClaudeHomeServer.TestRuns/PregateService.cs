@@ -5,25 +5,100 @@ using ClaudeHomeServer.Services.Execution;
 namespace ClaudeHomeServer.Services.TestRuns;
 
 // Настройки предгейта (секция Pregate). Набор проверок задаётся ТОЛЬКО конфигом: в коде ни
-// одной зашитой команды — пустой набор значит «проверять нечего». Дефолты проекта лежат в
+// одной зашитой команды — пустой набор значит «провервать нечего». Дефолты проекта лежат в
 // appsettings.json, машинные правки — в appsettings.Local.json.
+//
+// Набор проверок — ОБЪЕКТ по имени проверки (Pregate:Checks:{"tsc": {…}, …}), а НЕ массив.
+// Массив в конфигурации .NET склеивается по индексу: запись из appsettings.Local.json затирает
+// базовую запись с тем же индексом и наследует её свойства (например WhenChanged) — базовая
+// проверка молча выпадает. Объект склеивается по ключу: базовый набор сохраняется целиком,
+// своя проверка добавляется к нему и несёт только свои свойства.
 public sealed class PregateOptions
 {
-    public List<PregateCheckOptions> Checks { get; init; } = [];
+    public const string SectionName = "Pregate";
+    public const string ChecksKey = "Checks";
 
-    public static PregateOptions From(IConfiguration config) =>
-        config.GetSection("Pregate").Get<PregateOptions>() ?? new PregateOptions();
+    // Имена свойств проверки: по ним видно, где конфигурация разъехалась по «:», а где у
+    // проверки просто есть вложенный объект (свойство объектом). Список берём из типа —
+    // новое свойство проверки попадёт сюда само.
+    private static readonly HashSet<string> OptionPropertyNames =
+        typeof(PregateCheckOptions).GetProperties().Select(p => p.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    // Собранный набор проверок в порядке прогона
+    public IReadOnlyList<PregateCheckOptions> Checks { get; init; } = [];
+
+    // Непустая строка — набор не собран (например секция задана массивом): предгейт обязан
+    // отказать с этим текстом, а не молча прогонять неполный набор
+    public string? Problem { get; init; }
+
+    public static PregateOptions From(IConfiguration config)
+    {
+        var section = config.GetSection(SectionName).GetSection(ChecksKey);
+        var checks = new List<PregateCheckOptions>();
+        var problems = new List<string>();
+
+        foreach (var child in section.GetChildren())
+        {
+            // Ключ массива — индекс («0», «1»): старая форма, в которой набор склеивается по
+            // индексу. Имя проверки индексом не бывает.
+            if (child.Key.All(char.IsDigit))
+            {
+                problems.Add($"«{child.Key}» — {SectionName}:{ChecksKey} задан МАССИВОМ, а набор проверок должен быть "
+                    + "объектом по имени проверки (массив склеивается с базовым по индексу: своя проверка "
+                    + "затирала бы базовую и наследовала её WhenChanged)");
+                continue;
+            }
+
+            // Ключ с «:» конфигурация разъехала бы по пути («lint:design» → «lint» → «design»):
+            // такая проверка осталась бы без Command. Ловим это здесь, а не красным прогоном.
+            //
+            // Признак — именно разъезд ИМЕНИ, а не «есть вложенный объект»: у разъехавшегося
+            // элемента НЕТ ни одного собственного свойства проверки, а свойства проверки
+            // (Command, Args…) лежат во вложенном объекте, который сам свойством проверки
+            // не является. Вложенный объект у настоящей проверки (свойство объектом, например
+            // «Env») живёт рядом с её собственными свойствами — такой набор собирается.
+            var ownProperties = child.GetChildren().Where(c => OptionPropertyNames.Contains(c.Key)).ToList();
+            if (ownProperties.Count == 0
+                && child.GetChildren().Any(c => c.GetChildren().Any()
+                    && !OptionPropertyNames.Contains(c.Key)
+                    && c.GetChildren().Any(g => OptionPropertyNames.Contains(g.Key))))
+            {
+                problems.Add($"«{child.Key}» — вложенные ключи в {SectionName}:{ChecksKey}: имя проверки не может "
+                    + "содержать «:» (например, «lint:design» → ключ «lint-design», а Name: \"lint:design\")");
+                continue;
+            }
+
+            var options = child.Get<PregateCheckOptions>() ?? new PregateCheckOptions();
+            // Отображаемое имя: из конфига, иначе ключ
+            checks.Add(options with { Name = string.IsNullOrWhiteSpace(options.Name) ? child.Key : options.Name });
+        }
+
+        if (problems.Count > 0)
+            return new PregateOptions { Problem = string.Join("; ", problems) };
+
+        // Порядок: заданный Order, затем имя. Без Order проверка уходит в конец — локальная
+        // добавка не задвигает базовый набор.
+        return new PregateOptions
+        {
+            Checks = [.. checks.OrderBy(c => c.Order).ThenBy(c => c.Name, StringComparer.Ordinal)],
+        };
+    }
 }
 
 // Одна проверка. Kind = "process" (по умолчанию): Command + Args в WorkingDirectory (относительно
 // корня дерева), красная при коде выхода ≠ 0. Kind = "ui-probe": замер интерфейса уже поднятого
 // стенда Origin (UiProbeService), красная при ненулевых находках.
-public sealed class PregateCheckOptions
+public sealed record PregateCheckOptions
 {
     public const string KindProcess = "process";
     public const string KindUiProbe = "ui-probe";
 
+    // Отображаемое имя проверки: в конфиге необязательно (по умолчанию — ключ секции)
     public string Name { get; init; } = "";
+
+    // Порядок прогона; без Order — в конец
+    public int Order { get; init; } = int.MaxValue;
+
     public string Kind { get; init; } = KindProcess;
 
     // Префиксы путей от корня дерева (через «/»): проверка идёт, только если изменён файл под
@@ -67,8 +142,21 @@ public sealed class PregateService : ITaskPregate
         _uiProbe = uiProbe;
     }
 
+    // Потолок прогона объявляем наружу: потребитель (TaskPregateService) ставит его ДО своих
+    // git-проверок дерева, чтобы бюджет хода (MCP_TOOL_TIMEOUT) считался целиком.
+    //
+    // Значение — очищенное (PregateCeiling.Sanitize): ровно то, что применяется и внутри
+    // прогона, и в потребителе, и в тексте отказа. Сырое число из TestRunsOptions в отказе
+    // расходилось бы с фактически применённым потолком, если одно из них сменится.
+    public int CeilingSeconds => PregateCeiling.Sanitize(_testRunsOptions.CeilingSeconds);
+
     public async Task<PregateVerdict> RunAsync(PregateRequest request, CancellationToken ct)
     {
+        // Набор не собран (секция задана массивом) — прогонять нечего: отказ с текстом, а не
+        // молчаливый зелёный вердикт по неполному набору
+        if (_options.Problem is not null)
+            return PregateVerdict.Refused("Набор проверок предгейта не собран: " + _options.Problem);
+
         if (_options.Checks.Count == 0) return new PregateVerdict([]);
 
         using var treeLock = _pipeline.TryLockTree(request.WorkingDirectory);
@@ -79,7 +167,7 @@ public sealed class PregateService : ITaskPregate
         var results = new List<PregateCheckResult>();
         // Потолок — один на весь прогон (очередь сборок входит в него, как у run_tests): сумма проверок
         // обязана укладываться в MCP_TOOL_TIMEOUT хода, иначе CLI отваливается, а прогон держит замок дерева
-        using var limit = PhasePipeline.Ceiling(_testRunsOptions.CeilingSeconds, ct);
+        using var limit = PhasePipeline.Ceiling(CeilingSeconds, ct);
         foreach (var check in _options.Checks)
         {
             if (!Applies(check, request.ChangedFiles))
@@ -102,13 +190,18 @@ public sealed class PregateService : ITaskPregate
             if (result is null)
                 return PregateVerdict.Refused(ct.IsCancellationRequested
                     ? "Предгейт остановлен."
-                    : $"Проверка «{check.Name}» не уложилась в общий потолок предгейта {_testRunsOptions.CeilingSeconds} с (вместе с очередью сборок). "
-                      + Progress(results),
+                    : CeilingRefusal(check.Name) + Progress(results),
                     results);
             results.Add(result);
         }
         return new PregateVerdict(results);
     }
+
+    // Текст отказа по потолку: печатаем ПРИМЕНЁННЫЙ потолок (CeilingSeconds), а не сырое
+    // число из конфигурации. Иначе текст разошёлся бы с фактом: потолок применяется
+    // очищенным, а печатался бы мусорный (или снятый потолок шва).
+    internal string CeilingRefusal(string checkName) =>
+        $"Проверка «{checkName}» не уложилась в общий потолок предгейта {CeilingSeconds} с (вместе с очередью сборок). ";
 
     // Пропущенные проверки (не касаются изменений) не выполнялись — выполненными не называются
     private static string Progress(IReadOnlyList<PregateCheckResult> results)

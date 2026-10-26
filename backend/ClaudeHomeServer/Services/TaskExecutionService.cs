@@ -719,7 +719,22 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // Тот же канал эскалации, что и у персоны (см. комментарий в BuildPersonaPrompt)
         sb.AppendLine("- Застрял или выполнить невозможно — не завершай задачу: эскалируй через " +
                       "chats_report_up тому, кто её поставил (blocker: true — работа встала).");
+        AppendPregateRule(sb, task);
         return ToLf(sb.ToString());
+    }
+
+    // Правило предгейта для шага с собственным деревом: порядок «закоммить → pregate →
+    // tasks_complete». Результат предгейта пишется в карточку и его видит ревьюер; закрытие
+    // шага предгейт не блокирует. Без своего дерева правило не нужно — к такой задаче
+    // предгейт не применяется вовсе.
+    private static void AppendPregateRule(StringBuilder sb, TaskItem task)
+    {
+        if (!PregateRules.Applies(task.Role, task.WorktreePath)) return;
+        sb.AppendLine();
+        sb.AppendLine("## ПРЕДГЕЙТ");
+        sb.AppendLine("- Перед `tasks_complete` закоммить правки и прогони `pregate`: результат " +
+                      "пишется в карточку, его увидит ревьюер. Предгейт может не состояться (дерево " +
+                      "занято, нет git) — тогда так и доложи в итоге: закрытие он не блокирует.");
     }
 
     // Постановка уходит в CLI с единым концом строки LF на любой ОС. AppendLine пишет
@@ -753,6 +768,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         if (rulesTemplate is { } template && !string.IsNullOrWhiteSpace(template))
         {
             sb.AppendLine(RenderRulesTemplate(template, aliases, categoryProfilesPath));
+            AppendPregateRule(sb, task);
             AppendContextSection(sb, task);
             return sb.ToString();
         }
@@ -809,6 +825,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // ссылку не даём вовсе, чтобы исполнитель не бился в несуществующий путь.
         if (categoryProfilesPath is not null)
             sb.AppendLine($"Профили категорий (какой уровень и как формулировать) — `{categoryProfilesPath}`.");
+        AppendPregateRule(sb, task);
         AppendContextSection(sb, task);
         return sb.ToString();
     }

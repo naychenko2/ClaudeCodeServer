@@ -226,6 +226,16 @@ public class ClaudeSubscriptionPool
         // временные пометки пар тут fail-open, иначе помеченная пара выбрасывала бы аккаунт
         // из последнего варианта, и Pick возвращал бы заведомо неспособный по тарифу.
         var capable = AllKeys().Where(k => SupportsModel(k, model)).ToList();
+
+        // Среди способных первым идёт аккаунт, который НЕ исчерпан и не auth-dead, а лишь
+        // несёт пометку пары: пометка — наблюдение одного хода (бывает ложным в чужом чате),
+        // исчерпание — факт до resetsAt. Без этого шага PickSoonestRecovery отсекал по тарифу
+        // раньше, чем по сроку, и отдавал исчерпанный max20 вместо живого max5 с пометкой
+        // (инцидент 2026-10-26: задача на «claude» с недельным лимитом при живой «claude-3»).
+        var alive = capable.Where(k => !IsExhausted(k) && !IsAuthDead(k)).ToList();
+        if (alive.Count > 0)
+            return PickTopTier(alive, deterministic);
+
         return PickSoonestRecovery(capable.Count > 0 ? capable : AllKeys(), deterministic);
     }
 

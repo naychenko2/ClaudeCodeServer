@@ -4,6 +4,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Tasks.Journal;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Knowledge;
@@ -26,6 +27,7 @@ namespace ClaudeHomeServer.Tests.Services;
 public class TaskExecutionServiceHoldTests : IDisposable
 {
     private readonly string _dir;
+    private readonly FeatureJournalStore _journal;
     private readonly TaskManager _tasks;
     private readonly NotificationStore _notifStore;
     private readonly TaskExecutionService _sut;
@@ -59,7 +61,10 @@ public class TaskExecutionServiceHoldTests : IDisposable
         var projectManager = new ProjectManager(config, userStore, appSettings);
         var personas = new PersonaManager(config);
         _personas = personas;
-        _tasks = new TaskManager(config, personas: personas);
+        // Журнал фич включён в фикстуру (R-Q3B-3): тест среднего звена читает настоящий
+        // hold_cleared, который прод-TaskExecutionService пишет через ClearHold в журнал.
+        _journal = new FeatureJournalStore(Path.Combine(_dir, "feature-journal"));
+        _tasks = new TaskManager(config, personas: personas, journal: _journal);
 
         var broadcaster = new TestSessionBroadcaster();
 
@@ -663,6 +668,173 @@ public class TaskExecutionServiceHoldTests : IDisposable
             It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>(),
             It.IsAny<string>()),
             Times.Once(), "в ключевой чат уходит ровно одна карточка");
+    }
+
+    // Очередь фич (волна 6): снятие queue — карточка «Фича запущена из очереди» с ходом и без
+    // подавления действий. Мутация: удалить ветку Queue — карточка уйдёт в общей ветке
+    // «Пауза снята: прерванных шагов нет», и Verify по тексту краснеет.
+    [Fact]
+    public async Task ClearHold_QueueStartsFeature_SendsQueueCardToKeyChat()
+    {
+        var user = _userStore.Add("hold-queue-wake", "password123", "user");
+        var keyChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "key");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича в очереди", Role: "feature",
+            SourceSessionId: keyChat.Id));
+        var keyAdapter = SetRunningTurn(keyChat.Id);
+
+        _tasks.SetHold(epic.Id, FeatureHoldReasons.Queue);
+        _tasks.ClearHold(epic.Id);
+
+        var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Queue);
+        resumed.Should().Be(0);
+        keyAdapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("Фича запущена из очереди") && t.Contains("разбери доклады")),
+            It.IsAny<IReadOnlyList<string>>(), 0, false, It.IsAny<string>()),
+            Times.Once(), "оркестратор будится карточкой из очереди, действия не подавлены");
+        keyAdapter.Verify(a => a.SendMessageAsync(
+            It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>(),
+            It.IsAny<string>()),
+            Times.Once(), "в ключевой чат уходит ровно одна карточка");
+    }
+
+    // Очередь фич (Q4): фича может стоять в очереди дольше суток. Срок чата прерванного шага
+    // (10 мин) на удержании queue снят, через 25 ч уборка чат не сносит, а снятие удержания
+    // продолжает шаг (не feature_held_expired) и возвращает срок с якорем «сейчас».
+    // Мутация: убрать FreezeExpiryForHold в InterruptFeatureTurnsOnHold — тик на 25 ч сносит
+    // чат, первый и последующие абзацы краснеют.
+    // Трассировка «раздел ↔ код» (RV-Q3B-Q4 минор 5): поведение заморозки/возврата срока —
+    // из волны 4 (W4-HOLD-J/N: SessionManager.FreezeExpiryForHold/RestoreFrozenExpiry; тесты
+    // Hold_FreezesExecutorChatExpiry_… и TwoPauses_… в этом файле). Кода раздела Q4 нет:
+    // он закрыт только тестами — этим (значение срока, продолжение шага) и следующим (якорь).
+    [Fact]
+    public async Task QueueHold_25Hours_ClearingContinuesStepNotExpired()
+    {
+        var user = _userStore.Add("hold-queue-ttl", "password123", "user");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича в очереди", Role: "feature"));
+        var step = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг в очереди", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress, ExecutionExpiresAfterMinutes: 10));
+        var chat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "exec", taskId: step.Id);
+        _tasks.MarkClaudeStarted(step.Id, chat.Id, DateTime.UtcNow);
+        _sessions.SetExpiry(chat.Id, 10);
+        SetRunningTurn(chat.Id);
+
+        _tasks.SetHold(epic.Id, FeatureHoldReasons.Queue);
+        _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
+        SetIdle(chat.Id);
+
+        _sessions.GetById(chat.Id)!.ExpiresAfterMinutes.Should().BeNull("на удержании queue срок снят");
+        await new ChatExpiryService(_sessions, NullLogger<ChatExpiryService>.Instance)
+            .TickAsync(DateTime.UtcNow.AddHours(25));
+        _sessions.GetById(chat.Id).Should().NotBeNull("25 ч в очереди: замороженный чат жив");
+
+        _tasks.ClearHold(epic.Id);
+        var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Queue);
+
+        resumed.Should().Be(1, "шаг продолжен в прежнем чате");
+        _tasks.GetById(step.Id)!.ExecutorStopReason.Should().NotBe(ExecutorStopClassifier.FeatureHeldExpiredReason);
+        _sessions.GetById(chat.Id)!.ExpiresAfterMinutes.Should().Be(10, "срок возвращён после снятия");
+    }
+
+    // Q6-TAIL2 (п.1, RV-Q3B-Q4 минор 2): тест выше проверяет только значение срока — этот фиксирует
+    // сам якорь отсчёта. Состояние после 25 ч удержания: к снятию чат подходит с 25-часовой
+    // активностью — подмена ДО ClearHold/Resume (находка RV-K-Q6-TAIL: при подмене после снятия
+    // модель описывала невозможное — активность старше только что поставленного якоря). Снятие
+    // удержания возвращает срок с якорем «сейчас» (TaskExecutionService.cs:1527 → SetExpiry внутри
+    // RestoreFrozenExpiry): границы срока от момента снятия — ближайший тик и 9 мин жив, 11 мин
+    // снесён. Мутация: «RestoreFrozenExpiry возвращает срок без нового якоря» (SessionManager.cs:
+    // вместо SetExpiry — прямая запись ExpiresAfterMinutes) — краснеет абзац якоря (null).
+    // Почему регрессия «якорь = последняя активность» этим тестом не ловится (замер хвоста
+    // RV-K-Q6-TAIL): доставка продолжения сама есть активность — SendDirectAsync безусловно
+    // ставит Working (SessionManager.cs:5281 → :10890), UpdatedAt поднимается на момент снятия
+    // (замер: +15 мс к beforeClear) раньше возврата срока. В этой цепочке регрессия эквивалентна
+    // правильному коду при любом месте подмены; прежний абзац этого комментария обещал её
+    // красноту — неверно.
+    [Fact]
+    public async Task QueueHold_25Hours_RestoredExpiryAnchoredAtClearingNotOldActivity()
+    {
+        var user = _userStore.Add("hold-queue-ttl-anchor", "password123", "user");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича в очереди", Role: "feature"));
+        var step = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг в очереди", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress, ExecutionExpiresAfterMinutes: 10));
+        var chat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "exec", taskId: step.Id);
+        _tasks.MarkClaudeStarted(step.Id, chat.Id, DateTime.UtcNow);
+        _sessions.SetExpiry(chat.Id, 10);
+        SetRunningTurn(chat.Id);
+
+        _tasks.SetHold(epic.Id, FeatureHoldReasons.Queue);
+        _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
+        SetIdle(chat.Id);
+
+        // Состояние после суток удержания: к снятию чат подходит с активностью 25-часовой
+        // давности — подмена ДО ClearHold/Resume (находка RV-K-Q6-TAIL). Доставка продолжения
+        // поднимет активность штатно: реальный порядок вещей после суток в очереди.
+        _sessions.GetById(chat.Id)!.UpdatedAt = DateTime.UtcNow.AddHours(-25);
+
+        var beforeClear = DateTime.UtcNow;
+        _tasks.ClearHold(epic.Id);
+        var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Queue);
+        resumed.Should().Be(1, "шаг продолжен в прежнем чате");
+        SetIdle(chat.Id);
+
+        var restored = _sessions.GetById(chat.Id)!;
+        restored.ExpiresAfterMinutes.Should().Be(10, "значение срока — то же, что проверяет Q4");
+        restored.ExpiryAnchor.Should().NotBeNull().And.Subject.As<DateTime>()
+            .Should().BeOnOrAfter(beforeClear,
+            "якорь отсчёта — момент снятия удержания, а не замороженная активность и не её отсутствие");
+
+        // Поведение: переживший сутки в очереди чат не снесён ближайшим тиком — границы
+        // срока от момента снятия, а не от замороженной активности.
+        await new ChatExpiryService(_sessions, NullLogger<ChatExpiryService>.Instance)
+            .TickAsync(DateTime.UtcNow);
+        _sessions.GetById(chat.Id).Should().NotBeNull(
+            "срок считается от момента снятия: чат с 25-часовой активностью пережил ближайший тик");
+        await new ChatExpiryService(_sessions, NullLogger<ChatExpiryService>.Instance)
+            .TickAsync(DateTime.UtcNow.AddMinutes(9));
+        _sessions.GetById(chat.Id).Should().NotBeNull("9 минут от якоря — срок не истёк");
+        await new ChatExpiryService(_sessions, NullLogger<ChatExpiryService>.Instance)
+            .TickAsync(DateTime.UtcNow.AddMinutes(11));
+        _sessions.GetById(chat.Id).Should().BeNull("11 минут от якоря — срок истёк, уборка сносит чат");
+    }
+
+    // M1 (хвост RV-Q2): признак «фича удержана» — наличие Hold, а не его Reason. Битый tasks.json
+    // даёт Hold с пустой причиной; прежний вывод признака из Reason отвечал NotHeld, и паузу
+    // нельзя было снять. Мутация: вернуть `if (hold?.Reason is null)` в ReleaseFeatureHold —
+    // исход NotHeld, Hold остаётся, тест краснеет.
+    [Fact]
+    public async Task ReleaseFeatureHold_HoldСПустойПричиной_Снимается()
+    {
+        var user = _userStore.Add("hold-null-reason", "password123", "user");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича с битым Hold", Role: "feature"));
+        epic.Hold = new FeatureHold(null!, DateTime.UtcNow, null, true);
+
+        var release = await _sut.ReleaseFeatureHold(epic.Id, user.Id, epic.Hold);
+
+        release.Outcome.Should().Be(FeatureHoldReleaseOutcome.Released);
+        _tasks.GetById(epic.Id)!.Hold.Should().BeNull("битую паузу можно снять кнопкой");
+    }
+
+    // R-Q3B-3 (хвост MAJOR-1 из RV-K-Q3B-1): среднее звено боевой цепочки
+    // FeatureQueueService.cs:156 → TaskExecutionService.cs:1358 → TaskManager.ClearHold → журнал.
+    // Тест в FeatureQueueServiceTests закрывает только первое звено: там снятие идёт через
+    // RecordingReleaser — тестовую реализацию шва, которая сама пересылает by в ClearHold.
+    // Здесь настоящий TaskExecutionService и настоящий FeatureJournalStore: вызов с by=queue
+    // обязан оставить в журнале hold_cleared с by. Мутация: TaskExecutionService.cs:1358 →
+    // _tasks.ClearHold(featureId) — последний By краснеет.
+    [Fact]
+    public async Task ReleaseFeatureHold_ByQueue_JournalWritesHoldClearedWithBy()
+    {
+        var user = _userStore.Add("hold-by-queue", "password123", "user");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича в очереди", Role: "feature"));
+        _tasks.SetHold(epic.Id, FeatureHoldReasons.Queue);
+
+        var release = await _sut.ReleaseFeatureHold(epic.Id, user.Id, _tasks.GetById(epic.Id)!.Hold,
+            FeatureHoldBy.Queue);
+
+        release.Outcome.Should().Be(FeatureHoldReleaseOutcome.Released);
+        var cleared = _journal.Read(user.Id, epic.Id).Entries.Single(e => e.Kind == "hold_cleared");
+        cleared.Reason.Should().Be(FeatureHoldReasons.Queue);
+        cleared.By.Should().Be(FeatureHoldBy.Queue,
+            "без by на среднем звене журнал теряет «запущено из очереди», totals.queued не считается");
     }
 
     // R-HOLD-D (п.3, критерий c3): согласование числительных со «шаг» — то же правило, что

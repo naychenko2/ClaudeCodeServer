@@ -71,6 +71,13 @@ public sealed record FeatureJournalEntry
     public string? Reason { get; init; }
 
     /// <summary>
+    /// Кто сделал действие (для hold_cleared: "queue" — автоснятие очереди фич; у ручного снятия
+    /// поля нет). Необязательное: старые записи без него читаются как есть, версия формата v:1.
+    /// </summary>
+    [JsonPropertyName("by")]
+    public string? By { get; init; }
+
+    /// <summary>
     /// Старое значение (для status/verdict: от чего перешли). Значения — ИМЕНА enum:
     /// status → TaskItemStatus (Todo/InProgress/Done); verdict → TaskVerdicts
     /// (accepted/accepted_with_remarks/returned/withdrawn).

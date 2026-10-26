@@ -257,7 +257,9 @@ export function statusLineFor(run: FeatureRun, now: number): StatusLine {
 // === Шапка: глиф · название mono · тег статуса ===
 function Header({ run }: { run: FeatureRun }) {
   // run.state — всегда отдаёт бэк; ?? 'not_started' — защита от старых данных (state нет).
-  const tag = featureRunStatusTag(run.state ?? 'not_started', activeStageName(run));
+  const tag = featureRunStatusTag(run.state ?? 'not_started', activeStageName(run), {
+    holdReason: run.hold?.reason, queue: run.queue,
+  });
   const title = run.epic?.title ?? '';
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>

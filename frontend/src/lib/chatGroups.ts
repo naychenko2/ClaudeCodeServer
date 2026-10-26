@@ -1,5 +1,6 @@
 import type { ProjectSubject, ProjectTag, Session } from '../types';
 import type { FeatureChip, FeatureIndexFeature, FeatureRailKey, FeaturesIndex } from '../types/featureIndex';
+import type { FeatureQueue } from '../types/featureRun';
 import { sortTagsByRegistry } from './tagRegistry';
 import { sortKeyOf, type ChatGroupBy, type ChatSortOrder } from './chatFilters';
 import { buildChatTreeRows, type ChatTreeRowData } from './chatTree';
@@ -319,7 +320,7 @@ export const STAGE_NAME: Record<FeatureRailKey, string> = {
 // Значения — подмножество глифа FeatureGlyph (wait/stopped/run/loop/closed/done):
 // поэтому st.kind передаётся в FeatureGlyph БЕЗ каста, и tsc ловит рассинхрон.
 // Смерженная фича → 'done' (галочка, макет glyph('done')), закрытая без мержа → 'closed'.
-export type FeatureDisplayKind = 'wait' | 'stopped' | 'run' | 'loop' | 'closed' | 'done';
+export type FeatureDisplayKind = 'wait' | 'stopped' | 'run' | 'loop' | 'closed' | 'done' | 'queue';
 
 export interface FeatureDisplayState {
   // Глиф (FeatureGlyph): wait — ромб, stopped — квадрат, run/loop/closed/done.
@@ -349,6 +350,116 @@ export function formatDuration(minutes: number): string {
 // чтобы не разъезжалась (ревью фронта 1, major 1).
 export const MERGE_PENDING_STATUS = 'ждёт согласия на мерж';
 
+// Единая формулировка подписи очереди (макет feature-queue-1.md, «Тег и глиф»):
+// «в очереди · 2 из 3»; без queue (бэк ещё не отдал) — просто «в очереди», нулей не показываем.
+// Позицию и длину считает бэк (FeatureQueuePolicy), фронт не пересчитывает. Зовут её тег
+// статуса (FeatureStatusTag) и статус строки индекса (featureDisplayState) — один формат
+// на все места (ревью RV-Q5C, major 1).
+//
+// R-Q5D-D (ревью RV-K-Q5D-B, миноры 2–4): подпись собирается из queueLabelParts —
+// структура (жирное слово, суффикс, aria-суффикс) отдаётся ПОЛЯМИ: потребители (пилюля,
+// плашка, рельса) берут части, а не разбирают строку по разделителю. Смена разделителя
+// в хелпере не может молча убрать цифры из подписи и aria: тест «цифры в каждой части»
+// (chatGroups.test.ts) краснеет на такую смену.
+export interface QueueLabelParts {
+  // Полная строка подписи: «в очереди · 2 из 3» | «в очереди» (строчная — для статусных
+  // текстов: тег статуса, статус строки индекса).
+  label: string;
+  // Ведущее слово «В очереди» (с большой — рендерится <b> в пилюле и плашке, макет .ph).
+  bold: string;
+  // Суффикс « · 2 из 3» ровно как дал хелпер; без цифр — пустая строка.
+  post: string;
+  // aria-суффикс рельсы и точки: « · в очереди 2 из 3» (те же слова, в aria-порядке;
+  // без цифр — « · в очереди», как делали FeatureRail/FeatureBanner до этого шага).
+  ariaSuffix: string;
+}
+
+// Слово и разделитель — единственные константы формулировки (здесь же и единственное
+// место её смены). Жирное слово выводится из строчного: один источник формулировки —
+// раньше «В очереди» было зашито константой в pillModel/FeatureBanner (третий источник,
+// RV-K-Q5D-B минор 3).
+const QUEUE_WORD = 'в очереди';
+const QUEUE_SEP = ' · ';
+
+export function queueLabelParts(queue?: FeatureQueue | null): QueueLabelParts {
+  const withNums = !!queue && queue.position > 0 && queue.length > 0;
+  const nums = withNums ? `${queue.position} из ${queue.length}` : '';
+  return {
+    label: withNums ? `${QUEUE_WORD}${QUEUE_SEP}${nums}` : QUEUE_WORD,
+    bold: QUEUE_WORD.charAt(0).toUpperCase() + QUEUE_WORD.slice(1),
+    post: withNums ? `${QUEUE_SEP}${nums}` : '',
+    ariaSuffix: withNums ? `${QUEUE_SEP}${QUEUE_WORD} ${nums}` : `${QUEUE_SEP}${QUEUE_WORD}`,
+  };
+}
+
+// Строка подписи = label структуры (тот же формат, что до R-Q5D-D: поведение тегов
+// и статусов не меняется).
+export function queueLabel(queue?: FeatureQueue | null): string {
+  return queueLabelParts(queue).label;
+}
+
+// === Словарь позиции очереди словами (Q5I-1; макет feature-queue-1.md, §«Состояния»:
+// блок на странице фичи — «Фича в очереди: вторая из трёх.») ===
+//
+// Словарь стоит рядом с queueLabelParts: тот же домен (место в очереди), здесь же и
+// его числовая половина. Словами позицию читают развёрнутый блок страницы фичи и
+// подтверждение «Запустить вне очереди» (FeaturePageHeader.QueueBypassModal); плашка,
+// пилюля и рельса остаются на цифрах (FONT.mono держит ширину при пересчёте) — этот
+// словарь их не трогает: перевод их цифр на слова был бы отдельным решением.
+//
+// Порядок — женский род: фраза согласуется с «фичей» («вторая [фича] из трёх [фич]»).
+// 1–10 — словами по макету. 11 и дальше — «{N}-я»: у порядковых 11–19 нет надёжной
+// формы (она легко портится: «одинцатая»), а слово за 20 не читается быстрее цифр —
+// «{N}-я» остаётся единственной предсказуемой формой для произвольного N. Закреплено
+// тестом (chatGroups.test.ts), не «на глаз».
+//
+// Длина — числительное в родительном падеже (жен. род): «из трёх». 1–10 — словами по
+// макету. 11 и дальше — цифрами: макет задал слова рамкой 1–10 (его строка «Длину
+// очереди пишем словами» идёт сразу за перечнем «одной…десяти»), а вся остальная
+// очередь длину уже показывает числом — «11» в блоке остаётся в одной системе с ними.
+// Закреплено тестом.
+
+const ORDINAL_WORDS = ['первая', 'вторая', 'третья', 'четвёртая', 'пятая', 'шестая', 'седьмая', 'восьмая', 'девятая', 'десятая'];
+const COUNT_WORDS = ['одной', 'двух', 'трёх', 'четырёх', 'пяти', 'шести', 'семи', 'восьми', 'девяти', 'десяти'];
+// Разделитель фразы — здесь же: у потребителей он не должен появляться своей строкой
+// (урок R-Q5D-D: разделитель вне хелпера дублировался у потребителей — «магическое
+// sep + 3 в FeatureBanner», chatGroups.test.ts:32).
+const PHRASE_SEP = ' из ';
+
+// Порядковое слово позиции: 1–10 — «первая»…«десятая», 11 и дальше — «{N}-я».
+export function queueOrdinalWord(position: number): string {
+  return ORDINAL_WORDS[position - 1] ?? `${position}-я`;
+}
+
+// Числительное длины очереди в родительном падеже: 1–10 — «одной»…«десяти»,
+// 11 и дальше — цифрами.
+export function queueCountWord(length: number): string {
+  return COUNT_WORDS[length - 1] ?? `${length}`;
+}
+
+// Фраза позиции — структура (как queueLabelParts): потребитель берёт поля, а не
+// разбирает строку.
+export interface QueuePhraseParts {
+  // Готовая фраза блока: «вторая из трёх».
+  phrase: string;
+  // Порядок словом: «вторая» — нужен и отдельно (подтверждение «Фича стоит в очереди
+  // {порядковое}», макет §«Подтверждения»).
+  ordinal: string;
+  // Длина словом или цифрой: «трёх».
+  count: string;
+  // Разделитель « из » — часть хелпера, не строка потребителя.
+  sep: string;
+}
+
+// Нет валидной очереди — null: блок «Фича в очереди» тогда не рисуется (тот же
+// признак, что у queueLabelParts: position/length > 0).
+export function queuePhraseParts(queue?: FeatureQueue | null): QueuePhraseParts | null {
+  if (!queue || queue.position <= 0 || queue.length <= 0) return null;
+  const ordinal = queueOrdinalWord(queue.position);
+  const count = queueCountWord(queue.length);
+  return { phrase: `${ordinal}${PHRASE_SEP}${count}`, ordinal, count, sep: PHRASE_SEP };
+}
+
 // enrich — необязательное «кто · сколько» (макет: «стоит · Денис · 25 мин»):
 //   personaName — имя персоны (attention.personaId / now0.personaId, резолвит вызывающий);
 //   now         — «сейчас» в мс (для стабильных тестов; не задано — Date.now()).
@@ -373,6 +484,11 @@ export function featureDisplayState(
   }
   // Смержена, но ещё не закрыта (bucket=merged): ждёт закрытия.
   if (f.bucket === 'merged') return { kind: 'done', alarm: null, status: 'смержена, ждёт закрытия' };
+  // Очередь фич: пауза с причиной queue — тон паузы, тревоги нет. Позицию считает бэк;
+  // queue не пришёл — подпись без цифр.
+  if (f.holdReason === 'queue') {
+    return { kind: 'queue', alarm: null, status: queueLabel(f.queue) };
+  }
   // Источник правды — f.state (бэк Б1a/Б1b): merge_pending → «ждёт согласия на мерж»,
   // merging → «идёт», waiting → «ждёт вас», stopped → «стоит». Без state (старые данные/кеш)
   // — запасной путь по attention (attention.kind), чтобы существующие тесты не упали.

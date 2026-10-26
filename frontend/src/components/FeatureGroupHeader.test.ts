@@ -495,3 +495,49 @@ describe('FeatureGroupHeader: Ф-pr — мёртвый фолбэк «N/M» уб
     expect(m![1]).not.toMatch(/\d+\s*\/\s*\d+/);
   });
 });
+
+describe('FeatureGroupHeader: очередь фич (глиф queue, «в очереди · N из M»)', () => {
+  const queued = (over: Partial<FeatureIndexFeature> = {}) =>
+    feat({ state: 'paused', holdReason: 'queue', queue: { position: 2, length: 3 }, ...over });
+
+  it('featureDisplayState: queue → kind queue, без тревоги, подпись с позицией', () => {
+    expect(featureDisplayState(queued())).toEqual({ kind: 'queue', alarm: null, status: 'в очереди · 2 из 3' });
+  });
+
+  it('queue не пришёл → «в очереди» без цифр', () => {
+    expect(featureDisplayState(queued({ queue: null })).status).toBe('в очереди');
+  });
+
+  it('плашка: глиф queue 14, цифры в FONT.mono, textPrimary/600, кромки слева нет', () => {
+    const html = renderHeader(queued());
+    expect(html).toContain('data-feature-state="queue"');
+    // глиф queue: круг r7 + три полосы (r 0.8)
+    expect(html).toMatch(/<svg[^>]*width="14"[^>]*>(?:(?!<\/svg>).)*rx="0\.8"/);
+    const m = html.match(/<span data-testid="feature-group-status"([^>]*)>([\s\S]*?)<\/span><span data-testid="feature-group-progress|<span data-testid="feature-group-status"([^>]*)>([\s\S]*?)<\/span>/);
+    expect(m).not.toBeNull();
+    expect(html).toMatch(/data-testid="feature-group-queue-nums" style="font-family:[^"]*JetBrains Mono[^"]*">2 из 3</);
+    expect(html).toContain('в очереди · ');
+    expect(m![0]).toContain('font-weight:600');
+    expect(m![0]).toContain('var(--c-text-primary)');
+    expect(html).not.toContain('border-left-width:3px');
+  });
+
+  it('holdReason manual → прежний вид: не очередь, кромки слева нет', () => {
+    const f = feat({ state: 'paused', holdReason: 'manual', queue: { position: 2, length: 3 } });
+    expect(featureDisplayState(f).kind).not.toBe('queue');
+    const html = renderHeader(f);
+    expect(html).not.toContain('в очереди');
+    expect(html).not.toContain('border-left-width:3px');
+  });
+
+  it('рельса в очереди: active приглушён (textMuted), подпись с позицией; вне очереди — прежняя', () => {
+    // Провязка FeatureRail (Q5E): при kind=queue рельса получает waiting + queue с бэка.
+    const html = renderHeader(queued());
+    expect(html).toContain('aria-label="Этап: Производство · в очереди 2 из 3"');
+    expect(html).toContain('width:15px;background:var(--c-text-muted)');
+    // manual (не очередь) — прежний вид: active в цвете тона, суффикса нет.
+    const m = renderHeader(feat({ state: 'paused', holdReason: 'manual' }));
+    expect(m).toContain('aria-label="Этап: Производство"');
+    expect(m).not.toContain('width:15px;background:var(--c-text-muted)');
+  });
+});

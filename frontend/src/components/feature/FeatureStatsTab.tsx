@@ -24,6 +24,7 @@ import { FeatureStatsLosses } from './FeatureStatsLosses';
 import { FeatureBreakdownBlock } from './FeatureBreakdownBlock';
 import { FeatureAnalysisLine } from './FeatureAnalysisLine';
 import { stageLabelShort } from './FeatureAnalysisModel';
+import { COMP_LABEL } from './FeatureStatsPulseModel';
 import type { FeatureStats, FeatureSpend, FeatureStatsSource, FeatureTimeline } from '../../types/featureStats';
 import type { FeatureRun } from '../../types/featureRun';
 
@@ -627,7 +628,8 @@ if (typeof document !== 'undefined' && !document.getElementById('cc-stats-more-s
 }
 
 // «Подробнее» (ST-F14a, макет feature-stats-5.md §«Правки фронта», п. 8): только то,
-// что новые блоки НЕ покрывают: «не работали» (в составе героя его нет), эпизоды
+// что новые блоки НЕ покрывают: «не работали» (в составе героя его нет), «в очереди»
+// абсолютными минутами (в составе героя — только проценты), эпизоды
 // ошибок, детали расхода (кэш, «данные с», общие чаты, модели без цены). Нечего
 // добавить — раскрывашки нет (пустой «Подробнее» не бывает).
 function MoreDetails({ totals, spend, source, isMobile }: {
@@ -640,6 +642,15 @@ function MoreDetails({ totals, spend, source, isMobile }: {
   const approx = source === 'approx' ? '≈ ' : '';
   if (totals.notWorkingMinutes != null && totals.notWorkingMinutes > 0) {
     rows.push(`не работали — ${approx}${formatDuration(totals.notWorkingMinutes)}`);
+  }
+  // «В очереди» (Q5H-1, R-Q3B-2): самостоятельный вид разряды (ADR-031 §«Время в очереди (queued)») —
+  // минуты отдаёт бэк (totals.queuedMinutes), фронт ничего не пересчитывает.
+  // Порядок — как в составе героя (FeatureStatsPulseModel): простой → очередь → ошибки,
+  // т. е. рядом с «не работали». При null/0/нет поля строки нет (прежнее поведение).
+  // Слово вида — из единого словаря составных видов COMP_LABEL (Q5H-3): герой, эта строка
+  // и мини-сводка формулируются из одного места, не разъезжаются молча.
+  if (totals.queuedMinutes != null && totals.queuedMinutes > 0) {
+    rows.push(`${COMP_LABEL.queued} — ${approx}${formatDuration(totals.queuedMinutes)}`);
   }
   if (totals.errorCount != null && totals.errorCount > 0) {
     rows.push(`ошибки: ${totals.errorCount} ${plural(totals.errorCount, 'эпизод', 'эпизода', 'эпизодов')}`);

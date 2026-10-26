@@ -19,8 +19,8 @@ import type { CSSProperties } from 'react';
 import { Pause } from 'lucide-react';
 import { C, R, SP, FS, FONT } from '../../lib/design';
 import { ICON_STROKE } from '../ui/icons';
-import { MERGE_PENDING_STATUS, type FeatureStatusTag } from '../../lib/chatGroups';
-import type { FeatureState } from '../../types/featureRun';
+import { MERGE_PENDING_STATUS, queueLabel, type FeatureStatusTag } from '../../lib/chatGroups';
+import type { FeatureQueue, FeatureState } from '../../types/featureRun';
 
 export type FeatureRunTagTone = 'notStarted' | 'run' | 'wait' | 'stop' | 'merge' | 'loop' | 'merged' | 'closed' | 'hold' | 'draft';
 export interface FeatureRunTag {
@@ -33,7 +33,13 @@ export interface FeatureRunTag {
 // Тег для состояния вне словаря (бэк опередил фронт).
 export const UNKNOWN_RUN_TAG: FeatureRunTag = { label: 'статус неизвестен', tone: 'notStarted' };
 
-export function featureRunStatusTag(state: FeatureState, stageName?: string | null): FeatureRunTag {
+// Удержание для подписи паузы: причина и место в очереди (позицию считает бэк).
+export interface FeatureHoldInfo {
+  holdReason?: string | null;
+  queue?: FeatureQueue | null;
+}
+
+export function featureRunStatusTag(state: FeatureState, stageName?: string | null, hold?: FeatureHoldInfo): FeatureRunTag {
   switch (state) {
     case 'not_started':
     case 'idle':
@@ -47,6 +53,7 @@ export function featureRunStatusTag(state: FeatureState, stageName?: string | nu
     case 'paused':
       // Тон активной стадии при паузе на бэке остаётся «run» — stageName сюда не
       // подмешиваем: при паузе нет «идёт», есть «на паузе» (вердикт ревью W4-HOLD-F2).
+      if (hold?.holdReason === 'queue') return { label: queueLabel(hold.queue), tone: 'hold' };
       return { label: 'на паузе', tone: 'hold' };
     case 'draft':
       return { label: 'черновик', tone: 'draft' };
@@ -89,10 +96,28 @@ const TAG_STYLE: Record<FeatureRunTagTone, CSSProperties> = {
   draft:    { background: 'transparent', color: C.textSecondary, border: `1px dashed ${C.textMuted}` },
 };
 
+// Подпись очереди строит хелпер chatGroups.queueLabel (единый формат, R-Q5C-A); здесь
+// она только разбирается, чтобы цифры уйти в моно-спан. Признак читаем по подписи,
+// чтобы не расширять контракт FeatureRunTag (его сверяют toEqual в соседних тестах).
+const QUEUE_LABEL = /^в очереди(?: · (\d+ из \d+))?$/;
+
+// Глиф очереди (макет feature-queue-1, «Тег и глиф»): три полосы 12×2.4, rx 1.2,
+// по y 2.5 / 6.8 / 11.1; currentColor и opacity — на самих полосах, не на обёртке.
+function QueueGlyph() {
+  return (
+    <svg data-testid="queue-glyph" aria-hidden width={10} height={10} viewBox="0 0 14 14" style={{ flexShrink: 0 }}>
+      <rect x={1} y={2.5} width={12} height={2.4} rx={1.2} fill="currentColor" />
+      <rect x={1} y={6.8} width={12} height={2.4} rx={1.2} fill="currentColor" opacity={0.55} />
+      <rect x={1} y={11.1} width={12} height={2.4} rx={1.2} fill="currentColor" opacity={0.55} />
+    </svg>
+  );
+}
+
 // Тег: 11/600, поля 1 7, R.sm, строка 16 (макет §1). Точка — у «ждёт вас»/«к мержу».
 // «На паузе» — глиф «‖» 10 px currentColor перед подписью (макет feature-hold-1);
 // «черновик» — поля 0 6: пунктирная рамка занимает место, её компенсируют полем.
 export function StatusTag({ tag, testId }: { tag: FeatureRunTag; testId?: string }) {
+  const queue = tag.tone === 'hold' ? QUEUE_LABEL.exec(tag.label) : null;
   return (
     <span
       data-testid={testId}
@@ -104,7 +129,8 @@ export function StatusTag({ tag, testId }: { tag: FeatureRunTag; testId?: string
         ...TAG_STYLE[tag.tone],
       }}
     >
-      {tag.tone === 'hold' && (
+      {queue && <QueueGlyph />}
+      {tag.tone === 'hold' && !queue && (
         <span aria-hidden style={{ display: 'inline-flex', color: 'currentColor' }}>
           <Pause size={10} strokeWidth={ICON_STROKE} />
         </span>
@@ -112,7 +138,13 @@ export function StatusTag({ tag, testId }: { tag: FeatureRunTag; testId?: string
       {tag.dot && (
         <span aria-hidden style={{ width: 6, height: 6, borderRadius: R.full, background: C.info, flexShrink: 0 }} />
       )}
-      {tag.label}
+      {queue?.[1] ? (
+        <>
+          {/* префикс подписи — из самой строки (хелпер), не копия формата */}
+          {tag.label.slice(0, -queue[1].length)}
+          <span data-testid="queue-nums" style={{ fontFamily: FONT.mono }}>{queue[1]}</span>
+        </>
+      ) : tag.label}
     </span>
   );
 }

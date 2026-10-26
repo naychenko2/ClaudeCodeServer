@@ -51,6 +51,7 @@ public class TaskSchedulerService(
                 await ProcessClaudeAutoStartAsync(task, tz, nowUtc);
                 await ProcessStalledExecutorAsync(task, nowUtc);
             }
+            await ReconcileFeatureQueuesAsync(user.Id);
             // Утренний бриф раз в день в таймзоне юзера (быстрый выход, если не время/выключено)
             await briefing.MaybeRunScheduledAsync(user, tz, nowUtc);
             // Проактивность персон (collaborator): оценка правил автоматизаций этого пользователя
@@ -128,6 +129,20 @@ public class TaskSchedulerService(
         {
             log.LogWarning(ex, "Проверка незакрытой задачи {TaskId} «{Title}» не удалась",
                 task.Id, task.Title);
+        }
+    }
+
+    // Сверка очереди фич (волна 6, И11): слот свободен, а голова очереди ждёт — события потеряны
+    // или пришли до рестарта. Решение принимает сервис очереди; сбой не рвёт тик.
+    private async Task ReconcileFeatureQueuesAsync(string ownerId)
+    {
+        try
+        {
+            await executor.ReconcileFeatureQueuesAsync(ownerId);
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Сверка очереди фич владельца {OwnerId} не удалась", ownerId);
         }
     }
 

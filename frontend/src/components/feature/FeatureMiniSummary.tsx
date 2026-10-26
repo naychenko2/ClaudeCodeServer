@@ -1,5 +1,6 @@
 // Мини-сводка времени на вкладке «Хронология» (волна 3, Ф8, макет features-overview-3-final):
 // тонкая лента (8 px, без подписей) + строка итогов (всего прошло · работа ≈ · ждёт/не работали)
+// + очередь («в очереди {dur}» / «простояла в очереди {dur}», Q5H-2, макет feature-queue-1)
 // + токены «вход+выход» и цена (при надёжных данных) + «Статистика ›» + пояснительная строка.
 //
 // Данные — ТЕ ЖЕ stats (features/{id}), что во вкладке «Статистика»; фронт не пересчитывает.
@@ -8,9 +9,11 @@
 
 import { C, R, FS, SP, FONT } from '../../lib/design';
 import { Button } from '../ui/Button';
-import { formatDuration, buildTimelineModel, kindBackground } from './FeatureStatsBits';
+import { formatDuration, buildTimelineModel, kindBackground, minutesSince } from './FeatureStatsBits';
 import { formatTokens, formatUsd } from './FeatureStatsFormat';
+import { COMP_LABEL } from './FeatureStatsPulseModel';
 import type { FeatureStats } from '../../types/featureStats';
+import type { FeatureHold } from '../../types/featureRun';
 
 // Значок точности «≈» (приблизительные данные).
 function AccuracyBadge({ kind }: { kind: 'ap' }) {
@@ -34,6 +37,10 @@ function AccuracyBadge({ kind }: { kind: 'ap' }) {
 export interface FeatureMiniSummaryProps {
   // Статистика фичи; null — бэк ещё не посчитал (строки нет).
   stats: FeatureStats | null;
+  // Удержание фичи (только для строки «в очереди»): reason='queue' — фича стоит в очереди;
+  // null/undefined — удержания нет (и старые данные). Позицию очереди здесь не показываем —
+  // она в шапке (FeaturePageHeader); здесь только длительность.
+  hold?: FeatureHold | null;
   // Клик → вкладка «Статистика».
   onOpenStats: () => void;
   isMobile?: boolean;
@@ -84,8 +91,8 @@ function MiniTimeline({ stats }: { stats: FeatureStats }) {
   );
 }
 
-// Строка итогов: «идёт N · работа ≈ N · ждёт вас N» + токены + цена.
-function SummaryRow({ stats }: { stats: FeatureStats }) {
+// Строка итогов: «идёт N · работа ≈ N · ждёт вас N» + очередь + токены + цена.
+function SummaryRow({ stats, hold }: { stats: FeatureStats; hold?: FeatureHold | null }) {
   const t = stats.timeline.totals;
   const isApprox = stats.source === 'approx';
   const closed = stats.timeline.current == null;
@@ -103,6 +110,25 @@ function SummaryRow({ stats }: { stats: FeatureStats }) {
     waitPart = 'ждёт вас';
   } else {
     waitPart = `не работали ${isApprox ? '≈ ' : ''}${formatDuration(t.notWorkingMinutes)}`;
+  }
+
+  // Очередь (Q5H-2, макет feature-queue-1 §«Состояния», разрез §8): две взаимоисключающие формы.
+  //   · фича СТОИТ в очереди (hold.reason='queue') → «в очереди {dur}», dur — с момента постановки
+  //     (hold.since — тот же источник, что возраст паузы в FeaturePageHeader; арифметика — общий
+  //     помощник minutesSince, нижняя граница 1 мин как у паузы);
+  //   · фича уже запущена (удержания нет) и стояла в очереди → «простояла в очереди {dur}»,
+  //     dur — минуты отдаёт бэк (totals.queuedMinutes, R-Q3B-2, ADR-031 §«Время в очереди (queued)»):
+  //     при null/0/нет поля строки нет, фронт не пересчитывает.
+  // Формы не показываются вместе: при активном удержании — только живая (прошлые стояния в неё
+  // не складываются), «простояла» — только когда удержания нет.
+  // Слово вида — из единого словаря составных видов COMP_LABEL (Q5H-3): та же лексика,
+  // что у состава героя и «Подробнее»; «простояла» — префикс к тому же слову.
+  let queuePart: { label: string; minutes: number } | null = null;
+  if (hold?.reason === 'queue') {
+    const sinceMin = minutesSince(hold.since, Date.now());
+    if (sinceMin != null) queuePart = { label: COMP_LABEL.queued, minutes: Math.max(1, sinceMin) };
+  } else if (t.queuedMinutes != null && t.queuedMinutes > 0) {
+    queuePart = { label: `простояла ${COMP_LABEL.queued}`, minutes: t.queuedMinutes };
   }
 
   // Токены «вход+выход» (spend).
@@ -125,6 +151,11 @@ function SummaryRow({ stats }: { stats: FeatureStats }) {
         работа <b style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textHeading }}>{isApprox ? '≈ ' : ''}{formatDuration(t.workWallMinutes)}</b>
       </span>
       <span>{waitPart}</span>
+      {queuePart && (
+        <span>
+          {queuePart.label} <b style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textHeading }}>{formatDuration(queuePart.minutes)}</b>
+        </span>
+      )}
       {tokens != null && tokens > 0 && (
         <span>
           <b style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textHeading }}>{formatTokens(tokens)}</b> токенов
@@ -141,7 +172,7 @@ function SummaryRow({ stats }: { stats: FeatureStats }) {
 
 // Мини-сводка: лента + строка итогов + «Статистика ›» + пояснение.
 // stats === null → null (строки нет, честно).
-export function FeatureMiniSummary({ stats, onOpenStats, isMobile = false }: FeatureMiniSummaryProps) {
+export function FeatureMiniSummary({ stats, hold, onOpenStats, isMobile = false }: FeatureMiniSummaryProps) {
   // Честность: stats нет → строки нет (без нулей).
   if (!stats) return null;
 
@@ -161,7 +192,7 @@ export function FeatureMiniSummary({ stats, onOpenStats, isMobile = false }: Fea
       {/* Строка итогов + «Статистика ›». */}
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <SummaryRow stats={stats} />
+          <SummaryRow stats={stats} hold={hold} />
         </div>
         {/* Кнопка-кит (не самодельный <button>): «Статистика ›» → вкладка «Статистика». */}
         <Button

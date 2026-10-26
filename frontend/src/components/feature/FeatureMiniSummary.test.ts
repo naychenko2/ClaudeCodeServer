@@ -5,7 +5,9 @@
 //   · source=approx → «≈»;
 //   · costPartial → цены нет;
 //   · клик «Статистика ›» → вкладка «Статистика»;
-//   · нет «принято N из M» / «все готово».
+//   · нет «принято N из M» / «все готово»;
+//   · очередь (Q5H-2, макет feature-queue-1): «в очереди {dur}» при hold=queue,
+//     «простояла в очереди {dur}» при totals.queuedMinutes, ничего — при их отсутствии.
 //
 // Окружение node (без jsdom): fakeDom (mount) + mock api (tasks.getFeature) + управляемые
 // сторы (featurePage, featuresIndex, featureBackNav) — тот же приём, что FeaturePage.test.ts.
@@ -14,6 +16,9 @@ import { act } from 'react';
 import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeaturePage } from './FeaturePage';
+// Слово вида «очередь» — из единого источника (Q5H-3): строки мини-сводки сравниваются
+// с COMP_LABEL, а не литералом — смена слова в источнике меняет ожидание здесь и везде.
+import { COMP_LABEL } from './FeatureStatsPulseModel';
 import { __test as pageTest, setFeaturePageTab } from '../../lib/featurePage';
 import { __test as indexTest } from '../../lib/featuresIndex';
 import { __test as backNavTest } from '../../lib/featureBackNav';
@@ -22,6 +27,7 @@ import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, rea
 import type { FeatureIndexFeature, FeaturesIndex } from '../../types/featureIndex';
 import type { FeaturePage as FeaturePageData } from '../../types/featureIndex';
 import type { FeatureStats } from '../../types/featureStats';
+import type { FeatureRun } from '../../types/featureRun';
 
 // === Управляемые ответы ===
 const mockIndex = vi.hoisted(() => ({
@@ -91,7 +97,7 @@ function feat(over: Partial<FeatureIndexFeature> = {}): FeatureIndexFeature {
   };
 }
 
-function pageData(stats: FeatureStats | null): FeaturePageData {
+function pageData(stats: FeatureStats | null, runOver: Partial<FeatureRun> = {}): FeaturePageData {
   return {
     run: {
       featureId: 'f1',
@@ -99,6 +105,7 @@ function pageData(stats: FeatureStats | null): FeaturePageData {
       steps: [], reviews: [], qa: [], final: null, merge: null,
       verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
       progress: 0, ready: false,
+      ...runOver,
     },
     events: [], eventsTotal: 0,
     stats: stats ?? undefined,
@@ -248,5 +255,54 @@ describe('FeatureMiniSummary (Ф8) через страницу фичи', () => 
     expect(all, 'есть «ждёт вас»').toContain('ждёт вас');
     // Мутация «ждёт вас 45 мин» (вычисленное число) красит: после «ждёт вас» нет цифры.
     expect(all, 'после «ждёт вас» нет вычисленного числа минут').not.toMatch(/ждёт вас\s+\d/);
+  });
+
+  // === 7. Фича стоит в очереди (hold.reason=queue) → «в очереди {dur}» с момента постановки ===
+  it('фича в очереди → «в очереди {dur}» с момента постановки (мутация «взять elapsed» красит)', async () => {
+    // NOW 12:00 − since 09:00 = 3 ч; elapsed в stats — 900 мин («15 ч»), другое значение:
+    // мутация «подменить источник на elapsed» даёт «15 ч» вместо «3 ч» и красит этот тест.
+    mockGetFeature.result = pageData(mkStats(), { hold: { reason: 'queue', since: '2026-10-19T09:00:00Z' } });
+    const c = render();
+    await settle();
+    const row = findNodeByAttr(c, 'data-testid', 'mini-summary-row')!;
+    const all = textNodes(row).join('');
+    expect(all, 'живая форма «в очереди 3 ч»').toContain(`${COMP_LABEL.queued} 3 ч`);
+    expect(all, 'живой факт не подписывается прошедшим').not.toContain('простояла');
+  });
+
+  // === 8. Запущена из очереди (удержания нет) → «простояла в очереди {dur}» из totals.queuedMinutes ===
+  it('запущена из очереди → «простояла в очереди {dur}» из totals.queuedMinutes', async () => {
+    const s = mkStats();
+    // queuedMinutes 600 → «10 ч»; elapsed 900 → «15 ч»: значения разные, источник не подменишь.
+    s.timeline.totals = { ...s.timeline.totals, queuedMinutes: 600 };
+    mockGetFeature.result = pageData(s);
+    const c = render();
+    await settle();
+    const row = findNodeByAttr(c, 'data-testid', 'mini-summary-row')!;
+    const all = textNodes(row).join('');
+    expect(all, 'прошедшая форма «простояла в очереди 10 ч»').toContain(`простояла ${COMP_LABEL.queued} 10 ч`);
+    // «идёт N» не дублируется: упоминание очереди ровно одно, и оно не равно «идёт 15 ч».
+    // Счётчик — split по константе: RegExp от значения с метасимволами (скобки, «+»)
+    // считал бы не то слово.
+    expect(all.split(COMP_LABEL.queued).length - 1, 'упоминание очереди одно').toBe(1);
+    expect(all, 'значение «простояла» не равно значению «идёт»').not.toContain(`простояла ${COMP_LABEL.queued} 15 ч`);
+  });
+
+  // === 9. Нет удержания и нет queuedMinutes (старые данные) → строки про очередь нет ===
+  it('нет очереди (hold нет, queuedMinutes нет) → строки про очередь нет', async () => {
+    mockGetFeature.result = pageData(mkStats());
+    const c = render();
+    await settle();
+    const row = findNodeByAttr(c, 'data-testid', 'mini-summary-row')!;
+    expect(textNodes(row).join(''), 'очереди нет').not.toContain(COMP_LABEL.queued);
+  });
+
+  // === 10. hold=queue без since (старые данные) → строки нет: без даты нечего показывать ===
+  it('hold=queue без since → строки «в очереди» нет (без даты нечего показывать)', async () => {
+    mockGetFeature.result = pageData(mkStats(), { hold: { reason: 'queue' } });
+    const c = render();
+    await settle();
+    const row = findNodeByAttr(c, 'data-testid', 'mini-summary-row')!;
+    expect(textNodes(row).join(''), 'без since числа нет').not.toContain(COMP_LABEL.queued);
   });
 });

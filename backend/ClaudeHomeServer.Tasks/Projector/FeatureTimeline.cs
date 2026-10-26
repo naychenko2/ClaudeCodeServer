@@ -42,6 +42,8 @@ public sealed record TimelineCurrent(
 // Самый долгий эпизод ожидания (ST-B2): минуты — то же число, что LongestWaitMinutes;
 // TaskId — задача, в которой был эпизод; From — начало эпизода (ISO). Сам объект null —
 // эпизодов ожидания нет или режим approx; внутри него From заполнен всегда.
+// Minutes — net-ожидание: сырой эпизод минус время внутри очереди фич (R-Q3B-4): пока фича
+// стояла в очереди, она ждала место, а не человека.
 public sealed record TimelineLongestWait(
     int Minutes,
     string? TaskId,
@@ -49,21 +51,24 @@ public sealed record TimelineLongestWait(
 
 // Итоги по минутам. В approx Waiting*/Idle*/Error* = null (не различаем без журнала).
 //
-// Контракт (Б5b, major): в journal-режиме инвариант
-//   WorkWall + Waiting + Error + Idle = Elapsed
+// Контракт (Б5b, major; + Queued — R-Q3B-2): в journal-режиме инвариант
+//   WorkWall + Waiting + Error + Idle + Queued = Elapsed
 // держится РОВНО (не «не больше»): целые минуты раздаются видам методом наибольшего
 // остатка (floor + дефицит по наибольшей дробной части), поэтому сумма видов = Elapsed
 // при любом раскладе, в т.ч. когда сумма ceil-ов превысила бы Elapsed (проба: ход 30 с +
 // ожидание 20 с + ошибка 10 с в окне 2 мин → 1+1+1+0 = 3 ≠ 2).
 //
 // NotWorking = Elapsed − WorkWall: в journal это ВКЛЮЧАЕТ минуты ожидания и ошибок
-// (не-work = waiting + error + idle), в approx — все промежутки (waiting/error не различаем).
+// (не-work = waiting + error + idle + queued), в approx — все промежутки (waiting/error не различаем).
 public sealed record TimelineTotals(
     // Общее время: To − From (минуты).
     int ElapsedMinutes,
-    // Работа по часам стены: ОБЪЕДИНЕНИЕ work-интервалов (параллельные не складываются).
+    // Работа по часам стены: ОБЪЕДИНЕНИЕ сегментов work МИНУС минуты очереди фич (R-Q3B-2):
+    // параллельные не складываются; минуты в очереди принадлежат очереди, а не работе.
     int WorkWallMinutes,
-    // Сумма work-интервалов (параллельные складываются) — «агентные» минуты.
+    // Сумма started-периодов (параллельные складываются) МИНУС минуты очереди фич (R-Q3B-5,
+    // симметрично WorkWall) — «агентные» минуты: очередь их не раздувает (параллельные агенты
+    // складываются по-прежнему).
     int AgentsSumMinutes,
     // Простой: Elapsed − WorkWall (в approx = все промежутки, включая ночную паузу > 2 ч).
     int NotWorkingMinutes,
@@ -71,10 +76,15 @@ public sealed record TimelineTotals(
     int? IdleMinutes,
     int? WaitingCount,
     int? LongestWaitMinutes,
-    // Самый долгий эпизод ожидания с задачей и началом (ST-B2); null — эпизодов нет или approx.
+    // Самый долгий эпизод ожидания по net-ожиданию (ST-B2; net — R-Q3B-4) с задачей и началом;
+    // null — эпизодов нет или approx.
     TimelineLongestWait? LongestWait,
     int? ErrorCount,
-    int? ErrorMinutes);
+    int? ErrorMinutes,
+    // «Простояла в очереди фич» (held(queue)..hold_cleared): интервал ЦЕЛИКОМ, а не только
+    // перекрытие с простоем; его минуты вычитаются из перекрытых видов (R-Q3B-2). Отдельно от
+    // idle и от паузы человека. Только в journal; в approx — null.
+    int? QueuedMinutes = null);
 
 // Статистика фичи (GET features/{id}, поле stats): источник (approx/journal), признак
 // обрезки, график, разрезы («кто и на чём работали»), «дольше всех сейчас», расход и
@@ -166,8 +176,11 @@ public sealed record FeatureSpendShared(
 //     (ожидание устройства — как waiting; см. комментарий в BuildJournal);
 //   • error — turn.outcome=error (startedAt..endedAt) + stopped (точка);
 //   • idle — остаток (не work/waiting/error). Sweep-line: перекрытия решаются приоритетом
-//     error > waiting > work (work исключает waiting/error; инвариант work+waiting+error+idle
-//     = elapsed, итоги из сегментов, major 2). Заполняются Waiting*/Idle*/Error* (в approx — null).
+//     error > waiting > work (work исключает waiting/error; инвариант
+//     work+waiting+error+idle+queued = elapsed, итоги из сегментов, major 2). Заполняются
+//     Waiting*/Idle*/Error* (в approx — null).
+//   • queued — очередь фич held(queue)..hold_cleared: интервал ЦЕЛИКОМ, его минуты вычитаются
+//     из перекрытых видов до раздачи целых минут (R-Q3B-2); на графике не рисуется.
 // Режим «≈» — если журнала нет, он не начинается с created, либо Truncated (фичи до журнала
 // целиком approx, гибрида нет).
 public sealed record FeatureTimeline(
@@ -282,7 +295,8 @@ public sealed record FeatureTimeline(
     // waiting/error ВЫШЕ work: период started…(stopped|done|now) перекрывает ожидание, и ход с
     // outcome=error даёт и work, и error на том же диапазоне — в пересечении выигрывает более
     // «конкретный» вид, чтобы work не включал минуты ожидания/ошибки (контракт: work исключает
-    // waiting и error; инвариант work + waiting + error + idle = elapsed).
+    // waiting и error; инвариант work + waiting + error + idle + queued = elapsed, минуты
+    // очереди вычитаются из перекрытых видов — R-Q3B-2).
     private const int PriorityError = 3;
     private const int PriorityWaiting = 2;
     private const int PriorityWork = 1;
@@ -291,11 +305,14 @@ public sealed record FeatureTimeline(
     // (work/waiting/error/idle) + итоги. Чистая функция от (run, journal, now): run даёт
     // taskId→stage (подписи сегментов), journal — события, now — «сейчас».
     //
-    // Контракт итогов (Б5b, major 1+2): work исключает waiting и error; инвариант
-    // work + waiting + error + idle = elapsed. Итоги считаются ИЗ СЕГМЕНТОВ sweep-line (до
-    // склейки по потолку): каждый отрезок [from, to] получает ровно один вид, поэтому сумма
-    // видов = elapsed по построению, а не «work-объединение, из которого вычитать error второй
-    // раз» (двойной счёт ошибки, который ломал сходимость пирога с графиком).
+    // Контракт итогов (Б5b, major 1+2; + queued — R-Q3B-2): work исключает waiting и error;
+    // инвариант work + waiting + error + idle + queued = elapsed. Итоги считаются ИЗ СЕГМЕНТОВ
+    // sweep-line (до склейки по потолку): каждый отрезок [from, to] получает ровно один вид,
+    // поэтому сумма видов = elapsed по построению, а не «work-объединение, из которого вычитать
+    // error второй раз» (двойной счёт ошибки, который ломал сходимость пирога с графиком).
+    // Интервалы очереди фич вычитаются из span-ов перекрытых видов ДО раздачи целых минут —
+    // очередь не забирает минуты у idle в одиночку и не остаётся неучтённой при перекрытии с
+    // waiting/work (MAJOR-2 ревью RV-Q3B-Q4).
     private static (List<TimelineSegment> Segments, TimelineTotals Totals) BuildJournal(
         FeatureRun run, FeatureJournalReadResult journal, DateTime from, DateTime to, DateTime now,
         int maxSegments)
@@ -320,6 +337,10 @@ public sealed record FeatureTimeline(
         string LabelOf(string? taskId) =>
             taskId is not null && stageByTask.TryGetValue(taskId, out var s) ? s : "";
 
+        // Интервалы очереди фич (R-Q3B-2) считаем ДО промежутка 1: на них опираются и
+        // net-длительность эпизодов ожидания (R-Q3B-4, ниже), и вычитание из видов (итог).
+        var queueIntervals = QueueIntervals(journal.Entries, from, to, now);
+
         // Промежуток 1: интервалы ожидания (waiting + device_wait) + счётчики. Собираем ДО work:
         // started-период режем на них, чтобы work не включал минуты ожидания (major 1).
         var waitingIntervals = new List<JournalInterval>();
@@ -327,6 +348,10 @@ public sealed record FeatureTimeline(
         var longestWait = TimeSpan.Zero;
         // ST-B2: адрес самого долгого эпизода (задача + начало). Первый эпизод фиксируется
         // всегда (даже нулевой длины), дальше — строго больший; при равенстве — первый.
+        // R-Q3B-4: «больший» — по net-ожиданию (сырой эпизод минус время внутри очереди):
+        // иначе при «3 ч в очереди поверх ожидания» статистика даёт «ожидание 0 мин» рядом с
+        // «дольше всех 3 ч» — прямое противоречие. WaitingCount при этом не меняется: очередь
+        // не отменяет сам факт ожидания человека, из времени вычитается только очередь.
         string? longestWaitTaskId = null;
         DateTime? longestWaitFrom = null;
         foreach (var e in journal.Entries)
@@ -343,10 +368,11 @@ public sealed record FeatureTimeline(
                 // тянется до now, а не до закрытия — интервалы sweep'ом режутся к [from, to],
                 // поэтому и самое длинное ожидание обрезаем тем же `to` (иначе: закрыта 08:30,
                 // waiting 08:00 без cleared, now=20:00 → Waiting=30, LongestWait=720).
-                var wSpan = (wEnd <= to ? wEnd : to) - e.At;
-                if (longestWaitFrom is null || wSpan > longestWait)
+                // Net-длительность (R-Q3B-4): минуты внутри очереди — не ожидание человека.
+                var net = NetSpan(e.At, wEnd <= to ? wEnd : to, queueIntervals);
+                if (longestWaitFrom is null || net > longestWait)
                 {
-                    longestWait = wSpan;
+                    longestWait = net;
                     longestWaitTaskId = e.TaskId;
                     longestWaitFrom = e.At;
                 }
@@ -359,10 +385,10 @@ public sealed record FeatureTimeline(
             {
                 var dEnd = FirstAfter(deviceWaitClearedByTask, e.TaskId, e.At) ?? now;
                 waitingCount++;
-                var dSpan = (dEnd <= to ? dEnd : to) - e.At;
-                if (longestWaitFrom is null || dSpan > longestWait)
+                var net = NetSpan(e.At, dEnd <= to ? dEnd : to, queueIntervals);
+                if (longestWaitFrom is null || net > longestWait)
                 {
-                    longestWait = dSpan;
+                    longestWait = net;
                     longestWaitTaskId = e.TaskId;
                     longestWaitFrom = e.At;
                 }
@@ -425,10 +451,13 @@ public sealed record FeatureTimeline(
 
         // Итоги — из сегментов sweep ДО склейки по потолку (major 1): каждый отрезок [from, to]
         // даёт ровно один вид, поэтому сырые TimeSpan-ы видов (work/waiting/error/idle) плиткой
-        // покрывают [from, to] и суммируются ровно в (to − from). Округление до минут — метод
-        // наибольшего остатка (LargestRemainderMinutes): floor + дефицит (elapsed − сумма floor)
-        // раздаётся видам с наибольшей дробной частью. Сумма видов = elapsed РОВНО (не «не
-        // больше»): прежний `idle = Math.Max(0, elapsed − workWall − waiting − error)` обрезался в
+        // покрывают [from, to] и суммируются ровно в (to − from). Интервалы очереди фич вычитаются
+        // из перекрытых видов ДО раздачи целых минут (R-Q3B-2): минуты в очереди принадлежат
+        // очереди, а не виду, которым закрашен сегмент, — queued становится полноценным пятым
+        // видом и включается в разряду. Округление до минут — метод наибольшего остатка
+        // (LargestRemainderMinutes): floor + дефицит (elapsed − сумма floor) раздаётся видам с
+        // наибольшей дробной частью. Сумма видов (с queued) = elapsed РОВНО (не «не больше»):
+        // прежний `idle = Math.Max(0, elapsed − workWall − waiting − error)` обрезался в
         // ноль, когда сумма ceil-ов превышала elapsed (проба: ход 30 с + ожидание 20 с + ошибка
         // 10 с в окне 2 мин → 1+1+1+0 = 3 ≠ 2).
         var elapsed = FeatureTimeMath.Minutes(from, to);
@@ -436,9 +465,23 @@ public sealed record FeatureTimeline(
         var waitingSpan = TimeSpan.Zero;
         var errorSpan = TimeSpan.Zero;
         var idleSpan = TimeSpan.Zero;
+        var queuedSpan = TimeSpan.Zero;
         foreach (var s in segments)
         {
             var span = s.To - s.From;
+            // Вычитание очереди из вида сегмента: пересечение с интервалом очереди уходит
+            // в queuedSpan (интервалы очереди не пересекаются друг с другом, поэтому сумма
+            // пересечений по плитке сегментов = весь интервал очереди в окне).
+            foreach (var (qs, qe) in queueIntervals)
+            {
+                var os = s.From > qs ? s.From : qs;
+                var oe = s.To < qe ? s.To : qe;
+                if (oe > os)
+                {
+                    span -= oe - os;
+                    queuedSpan += oe - os;
+                }
+            }
             switch (s.Kind)
             {
                 case "work": workSpan += span; break;
@@ -447,9 +490,11 @@ public sealed record FeatureTimeline(
                 default: idleSpan += span; break; // idle
             }
         }
-        // Целые минуты по видам: сумма = elapsed ровно (контракт TimelineTotals).
-        var (workWall, waitingMin, errorMin, idleMin) =
-            FeatureTimeMath.LargestRemainderMinutes(elapsed, workSpan, waitingSpan, errorSpan, idleSpan);
+        // Целые минуты по видам: сумма = elapsed ровно (контракт TimelineTotals). queued —
+        // отдельный вид разряды: его минуты не отнимаются у idle и не теряются при перекрытии.
+        var mins = FeatureTimeMath.LargestRemainderMinutes(
+            elapsed, workSpan, waitingSpan, errorSpan, idleSpan, queuedSpan);
+        var (workWall, waitingMin, errorMin, idleMin, queuedMin) = (mins[0], mins[1], mins[2], mins[3], mins[4]);
 
         // AgentsSum — «агентные» минуты ВНУТРИ окна фичи [from, to] (решение Александра, шов
         // 63a69b77 п.2в): сумма started-периодов (параллельные складываются), НЕ объединение (то
@@ -459,24 +504,29 @@ public sealed record FeatureTimeline(
         // задача = один период [started, done|stopped|now] (started-период), ходы ВНУТРИ него
         // не пересчитываются — иначе started-период и его ходы шли бы двойным счётом (проба:
         // started 08:00 + ход 08:00–08:10 + Done → 20 мин против 10 в approx).
+        // Очередь вычитается симметрично WorkWall (R-Q3B-5, Major-1 ревью RV-K-Q3B-2): минуты
+        // внутри очереди фич — не рабочие минуты агента, иначе плитка «работали 1 ч» получает
+        // подпись «агентов суммарно 2 ч» (проба: started 09:00…11:00 + очередь 09:00–10:00 →
+        // gross 120 против net 60).
         var agentsSpan = TimeSpan.Zero;
         foreach (var w in startedIntervals)
         {
             var s = FeatureTimeMath.Clamp(w.Start, from, to);
             var e = FeatureTimeMath.Clamp(w.End, from, to);
-            if (e > s) agentsSpan += e - s;
+            if (e > s) agentsSpan += NetSpan(s, e, queueIntervals);
         }
         var agentsSum = FeatureTimeMath.CeilMinutes(agentsSpan);
         var notWorking = Math.Max(0, elapsed - workWall);
         // Хвост ревью ST-B2: самое долгое ожидание округляется один раз каноническим
         // хелпером — LongestWaitMinutes и LongestWait.Minutes берут одно и то же число.
+        // longestWait уже net (R-Q3B-4): минуты внутри очереди из него вычтены.
         var lwMinutes = FeatureTimeMath.CeilMinutes(longestWait);
         var totals = new TimelineTotals(
             ElapsedMinutes: elapsed,
             WorkWallMinutes: workWall,
-            // AgentsSum = сумма started-периодов, обрезанных по окну [from, to] (параллельные
-            // складываются) — та же семантика, что в approx (минор 10): одна задача = один
-            // период, не объединение.
+            // AgentsSum = net started-периодов, обрезанных по окну [from, to] (параллельные
+            // складываются, очередь вычтена — R-Q3B-5) — та же семантика, что в approx (минор 10):
+            // одна задача = один период, не объединение; в approx очередь не видна (нет журнала).
             AgentsSumMinutes: agentsSum,
             NotWorkingMinutes: notWorking,
             WaitingMinutes: waitingMin,
@@ -489,7 +539,8 @@ public sealed record FeatureTimeline(
                 ? null
                 : new TimelineLongestWait(lwMinutes, longestWaitTaskId, longestWaitFrom.Value),
             ErrorCount: errorCount,
-            ErrorMinutes: errorMin);
+            ErrorMinutes: errorMin,
+            QueuedMinutes: queuedMin);
 
         // Сегменты для графика: склейка по потолку ПОСЛЕ итогов (major 1): при > maxSegments —
         // склеиваем ближайшие пары (MergeToCap), вид склеенного — доминирующий по времени.
@@ -524,6 +575,45 @@ public sealed record FeatureTimeline(
     // b ≥ next_p ⇔ b > p). Приоритет — по виду: выигрывает самый «конкретный» активный вид.
     // Track/stage: work — из taskId (стадия задачи), иначе main/""; taskId — у одиночного work.
     // internal — для теста эквивалентности (новый линейный sweep == старый O(n²) на случайных входах).
+    // Интервалы очереди фич (R-Q3B-2): held(reason=queue) открывает интервал, его закрывает
+    // ближайший hold_cleared или другой held (смена причины), иначе — now. Обрезанные к [from, to],
+    // half-open [start, end), пустые отброшены; между собой не пересекаются (каждый held
+    // закрывается следующим hold-событием).
+    private static List<(DateTime Start, DateTime End)> QueueIntervals(
+        IReadOnlyList<FeatureJournalEntry> entries, DateTime from, DateTime to, DateTime now)
+    {
+        var holds = entries.Where(e => e.Kind is "held" or "hold_cleared").OrderBy(e => e.At).ToList();
+        var result = new List<(DateTime Start, DateTime End)>();
+        for (var i = 0; i < holds.Count; i++)
+        {
+            if (holds[i].Kind != "held" || holds[i].Reason != FeatureHoldReasons.Queue) continue;
+            var start = holds[i].At;
+            var end = i + 1 < holds.Count ? holds[i + 1].At : now;
+            var qs = FeatureTimeMath.Clamp(start, from, to);
+            var qe = FeatureTimeMath.Clamp(end, from, to);
+            if (qe > qs) result.Add((qs, qe));
+        }
+        return result;
+    }
+
+    // Net-длительность интервала [start, end): сырой интервал минус пересечения с интервалами
+    // очереди — пока фича стояла в очереди, она ждала место, а не человека (R-Q3B-4, waiting) и
+    // не работала (R-Q3B-5, AgentsSum). start/end уже обрезаны к [from, to]; интервалы очереди
+    // не пересекаются между собой (построение QueueIntervals), поэтому пересечения не
+    // складываются дважды и net ≥ 0.
+    private static TimeSpan NetSpan(
+        DateTime start, DateTime end, List<(DateTime Start, DateTime End)> queueIntervals)
+    {
+        var net = end - start;
+        foreach (var (qs, qe) in queueIntervals)
+        {
+            var os = start > qs ? start : qs;
+            var oe = end < qe ? end : qe;
+            if (oe > os) net -= oe - os;
+        }
+        return net;
+    }
+
     internal static List<TimelineSegment> Sweep(List<JournalInterval> intervals, DateTime from, DateTime to)
     {
         // Границы: from, to + обрезанные start/end всех интервалов.

@@ -218,6 +218,7 @@ internal sealed class ThrowingExecutor(Dictionary<string, Exception> byTask) : I
 {
     public Task ExecuteAsync(TaskItem task, bool auto) => throw byTask[task.Id];
     public Task CheckStalledExecutorAsync(TaskItem task, DateTime nowUtc) => Task.CompletedTask;
+    public Task ReconcileFeatureQueuesAsync(string ownerId) => Task.CompletedTask;
 }
 
 // Логгер с захватом уровня/текста/трейса — утверждения о логике логирования, а не о

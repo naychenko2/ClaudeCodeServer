@@ -1,10 +1,11 @@
-// Свёртка длинных списков карточек (GC-F4 + GC-F4R): чистые функции foldProd и foldLast.
+// Свёртка длинных списков карточек (GC-F4 + GC-F4R + GC-F4R2): чистые функции foldProd и foldLast.
 // Проверяем: незакрытые видны всегда, снятый ('withdrawn') не считается незакрытым
-// и не показывается, готовым считается только 'done' (не бэковая корзина 'accepted'),
-// из готовых — только последние, раскрытая карточка не прячется никогда, showAll
-// показывает ровно то, что пришло, foldLast не схлопывает (длина входа сохраняется),
-// порядок видимых исходный, вход не мутируется, шаг, попавший и в хвост после мержа,
-// и в шаги стадии, не считается дважды (только в foldProd).
+// и не показывается ни в одной ветке, готовым считается только 'done' (не бэковая корзина
+// 'accepted'), из готовых — только последние, раскрытая карточка не прячется никогда,
+// showAll отдаёт ровно тот набор, что считает свёртка (без дублей и без снятых; GC-F4R2),
+// foldLast не схлопывает (длина входа сохраняется), порядок видимых исходный, вход не
+// мутируется, шаг, попавший и в хвост после мержа, и в шаги стадии, не считается дважды
+// (только в foldProd).
 
 import { describe, it, expect } from 'vitest';
 import { foldProd, foldLast, PROD_DONE_TAIL } from './featureListFold';
@@ -51,20 +52,37 @@ describe('foldProd: свёртка ленты шагов', () => {
     expect(r.hiddenDone.length).toBe(36);
   });
 
-  it('showAll: видно всё, hiddenDone пуст', () => {
+  it('showAll: видно всё, что считает свёртка (47), hiddenDone пуст', () => {
     const cards = mixed48();
     const r = foldProd(cards, null, true);
-    expect(r.visible.length).toBe(48);
+    expect(r.visible.length).toBe(47);
+    // Снятый шаг не показывается и в раскрытой ленте (GC-F4R2).
+    expect(r.visible.some(c => c.stepRef === 'Ш44')).toBe(false);
     expect(r.hiddenDone.length).toBe(0);
   });
 
-  it('showAll показывает ровно то, что пришло: с дублем шага (GC-R-F4)', () => {
-    // Без свёртки схлопывания нет: «Показать все 3» не может показать 2.
-    const cards = [card('Ш1', 'done'), card('Ш1', 'done'), card('Ш2', 'run')];
+  it('showAll: без дублей хвостов и без снятых — тот же набор, что считает свёртка (GC-F4R2)', () => {
+    // Шаг, попавший и в список стадии, и в «хвосты после мержа», не показывается дважды
+    // и в раскрытом виде; снятый не показывается вовсе.
+    const cards = [card('Ш1', 'done'), card('Ш1', 'done'), card('Ш2', 'run'), card('Ш3', 'withdrawn')];
     const r = foldProd(cards, null, true);
-    expect(r.visible.length).toBe(3);
-    expect(r.visible.filter(c => c.stepRef === 'Ш1').length).toBe(2);
+    expect(r.visible.map(c => c.stepRef)).toEqual(['Ш1', 'Ш2']);
     expect(r.hiddenDone).toEqual([]);
+  });
+
+  it('инвариант: раскрытая лента отдаёт ровно то, что считает свёртка (GC-F4R2)', () => {
+    // Счётчик N кнопки «Показать все N» берут из свёртки (visible+hiddenDone):
+    // открыться обязано ровно N карточек, без снятых и без дублей.
+    const cards = mixed48();
+    const folded = foldProd(cards, null, false);
+    const all = foldProd(cards, null, true);
+    expect(folded.visible.length + folded.hiddenDone.length).toBe(47);
+    expect(all.visible.length).toBe(47);
+    expect(folded.visible.length + folded.hiddenDone.length).toBe(all.visible.length);
+    expect(all.visible.some(c => c.stepRef === 'Ш44')).toBe(false);
+    // expandedKey переносит карточку из hiddenDone в visible и N не меняет.
+    const opened = foldProd(cards, 'Ш5', false);
+    expect(opened.visible.length + opened.hiddenDone.length).toBe(all.visible.length);
   });
 
   it('порядок видимых — исходный (не по датам и не по типу)', () => {

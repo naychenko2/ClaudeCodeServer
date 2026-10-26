@@ -360,6 +360,69 @@ public class SpendAnalyticsTests : IDisposable
         Assert.Equal(SpendCostTiers.Free, SpendCostTiers.Of(SpendSources.ChatTurn, "openrouter-direct", "any"));
     }
 
+    // Провайдеры «freellm*» (в т.ч. «freellmapi» — локальный прокси на свою GPU) бесплатны.
+    // Фронт считает их бесплатными же (lib/spendSources.ts) — правила обязаны совпадать, иначе
+    // карточка провайдера показывает две противоречащие пилюли («бесплатный» + «дёшево»).
+    // Мутация «удалить правило freellm*» → free ожидаем, а придёт cheap → краснеет.
+    [Fact]
+    public void CostTier_ПровайдерFreellm_Бесплатный()
+    {
+        Assert.Equal(SpendCostTiers.Free, SpendCostTiers.Of(SpendSources.ChatTurn, "freellmapi", "auto:fast"));
+        Assert.Equal(SpendCostTiers.Free, SpendCostTiers.Of(SpendSources.ChatTurn, "freellm", "any"));
+        // Каталог провайдеров (/api/models) — тот же класс по одному провайдеру
+        Assert.Equal(SpendCostTiers.Free, SpendCostTiers.OfProvider("freellmapi", isLocal: false));
+        Assert.Equal(SpendCostTiers.Free, SpendCostTiers.OfProvider("freellm", isLocal: false));
+        // Признак источника расхода (SpendSources.IsFree) НЕ расширен: «freellm*» — это
+        // провайдер, а не источник; его семантику (source=free) не трогаем.
+        Assert.False(SpendSources.IsFree("freellmapi", "auto:fast"));
+    }
+
+    // Ранг классов: «дороже — важнее». Регрессия «важнейшим стал дешёвый» не должна пройти
+    // незамеченной. Мутация «Rank(tier) => 1» ломает порядок → краснеет.
+    [Fact]
+    public void Rank_ПорядокКлассов_ДорожеВажнее()
+    {
+        Assert.True(SpendCostTiers.Rank(SpendCostTiers.Expensive) > SpendCostTiers.Rank(SpendCostTiers.Cheap));
+        Assert.True(SpendCostTiers.Rank(SpendCostTiers.Cheap) > SpendCostTiers.Rank(SpendCostTiers.Free));
+    }
+
+    // Смешанная группа: класс узла — «важнейший» присутствующий (дороже — важнее).
+    // Группируем по провайдеру: у одного провайдера claude смешались обычная трата (дорого)
+    // и трата бесплатной модели claude (free). Порядок слайсов задан явно: сначала дешёвый
+    // класс, потом дорогой — иначе проверка была бы нечувствительна к рангу.
+    // Мутация «Rank(tier) => 1» → остаётся первый попавшийся класс (free) ≠ expensive → краснеет.
+    [Fact]
+    public void Tier_УзлаPivot_СмешаннаяГруппа_БерётсяВажнейшийКласс()
+    {
+        var day = new DateOnly(2026, 7, 20);
+        var cheapFirst = new SpendSlice(day, "u1", null, null, null, null, "claude", "haiku",
+            SpendSources.Free, 1, 1, 0, 0, 0, 0, 0, 1, Detailed: true);
+        var expensiveSecond = new SpendSlice(day, "u1", null, null, null, null, "claude", "opus",
+            SpendSources.ChatTurn, 10, 5, 100, 20, 0, 0, 0, 1, Detailed: true);
+
+        var byProvider = SpendAnalyticsService.GroupRaw([cheapFirst, expensiveSecond], "provider");
+
+        Assert.Equal(SpendCostTiers.Expensive, byProvider.Single(n => n.Key == "claude").Tier);
+    }
+
+    // ByTierOf: слайс с пустым Tier (Tier по умолчанию "") даёт фолбэк на SliceTier —
+    // лишнего четвёртого ключа не появляется, сумма трёх ключей равна дневному итогу.
+    // Мутация «убрать фолбэк SliceTier в ByTierOf» → четвёртый ключ "" → краснеет.
+    [Fact]
+    public void ByTierOf_ПустойTier_ФолбэкНаSliceTier_БезЛишнегоКлюча()
+    {
+        var day = new DateOnly(2026, 7, 20);
+        var slice = new SpendSlice(day, "u1", null, null, null, null, "claude", "opus",
+            SpendSources.ChatTurn, 10, 5, 100, 20, 0, 0, 0, 1, Detailed: true);
+
+        var byTier = SpendAnalyticsService.ByTierOf([slice]);
+
+        Assert.Equal(3, byTier.Count);
+        Assert.DoesNotContain("", byTier.Keys);
+        Assert.Equal(135, byTier[SpendCostTiers.Expensive]);
+        Assert.Equal(135, byTier.Values.Sum());
+    }
+
     [Fact]
     public void ByTier_ВОбзоре_СуммыПоКлассамИСуммаКлючейРавнаИтогуДня()
     {

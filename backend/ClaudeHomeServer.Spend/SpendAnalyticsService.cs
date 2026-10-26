@@ -192,7 +192,7 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
     // Суммы токенов дня по ценовым классам. Ключи всегда полные (free/cheap/expensive):
     // нулевой класс — это ноль, а не отсутствие ключа, иначе фронт различал бы «нет трат»
     // и «траты нулевого класса» по-разному.
-    private static Dictionary<string, long> ByTierOf(IEnumerable<SpendSlice> day)
+    internal static Dictionary<string, long> ByTierOf(IEnumerable<SpendSlice> day)
     {
         var byTier = new Dictionary<string, long>
         {
@@ -201,7 +201,13 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
             [SpendCostTiers.Expensive] = 0,
         };
         foreach (var s in day)
-            byTier[s.Tier] = byTier.GetValueOrDefault(s.Tier) + TotalOf(s);
+        {
+            // Фолбэк на SliceTier обязателен: слайс с пустым Tier (Tier по умолчанию "") иначе
+            // дал бы ЧЕТВЁРТЫЙ ключ "" в ByTier — контракт «три ключа» ломался бы, а сумма ключей
+            // разошлась бы с дневным Total (фронт часть токенов потерял бы).
+            var tier = SliceTier(s);
+            byTier[tier] = byTier.GetValueOrDefault(tier) + TotalOf(s);
+        }
         return byTier;
     }
 
@@ -251,7 +257,7 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
     // узел не должен показывать «дёшево», если в нём есть дорогая трата.
     private static string? TierOfGroup(IEnumerable<SpendSlice> group, string groupBy)
     {
-        if (groupBy is not ("provider" or "model")) return null;
+        if (!SpendCostTiers.AxisHasTier(groupBy)) return null;
         string? tier = null;
         foreach (var s in group)
         {
@@ -264,8 +270,12 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
 
     // Класс слайса: поле Tier заполняется в Slices() (там есть source/provider/model),
     // а у слайсов, собранных руками в тестах, — считаем из полей среза тем же правилом.
+    // Пустое (или незнакомое) значение Tier — не класс: считаем по правилу, иначе в ByTier
+    // появился бы лишний ключ.
     private static string SliceTier(SpendSlice s) =>
-        s.Tier.Length > 0 ? s.Tier : SpendCostTiers.Of(s.Source, s.Provider, s.Model);
+        s.Tier is SpendCostTiers.Free or SpendCostTiers.Cheap or SpendCostTiers.Expensive
+            ? s.Tier
+            : SpendCostTiers.Of(s.Source, s.Provider, s.Model);
 
     private static string KeyOf(SpendSlice s, string groupBy) => groupBy switch
     {

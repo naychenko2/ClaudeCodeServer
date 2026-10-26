@@ -7,9 +7,11 @@ namespace ClaudeHomeServer.Models;
 // Правило (в этом порядке):
 //   1. источник free → бесплатно (запись о бесплатной модели, провайдер может быть любым);
 //   2. бесплатный исполнитель (SpendSources.IsFree: локальный движок, «*:free», «*-direct»)
-//      → бесплатно;
+//      или провайдер «freellm*» (локальный прокси на свою GPU) → бесплатно;
 //   3. провайдер claude (включая подписки sub-*, NormalizeProvider) → дорого;
-//   4. любой другой облачный провайдер (minimax, glm, kimi, deepseek, alibaba…) → дёшево.
+//   4. провайдер НЕИЗВЕСТЕН (пустой ключ) → дорого: цена неизвестна, и занижать её нельзя —
+//      потерянный ключ claude-траты не должен выглядеть «дёшево»;
+//   5. любой другой облачный провайдер (minimax, glm, kimi, deepseek, alibaba…) → дёшево.
 //
 // Словарь «claude → дорого» живёт ТОЛЬКО здесь: дублировать его в коде нельзя.
 public static class SpendCostTiers
@@ -18,11 +20,23 @@ public static class SpendCostTiers
     public const string Cheap = "cheap";
     public const string Expensive = "expensive";
 
+    // Провайдеры «freellm*» (в т.ч. «freellmapi» — локальный прокси на свою GPU) считаются
+    // бесплатными: трата на них не стоит денег. Правило живёт ЗДЕСЬ, а не в SpendSources.IsFree:
+    // IsFree — признак ИСТОЧНИКА расхода (source=free), и его расширение изменило бы семантику
+    // аналитики и бэкфилла. Фронт считает «freellm*» бесплатным же (lib/spendSources.ts) —
+    // правила обязаны совпадать, иначе карточка провайдера показывает две противоречащие пилюли.
+    private static bool IsFreeProviderKey(string provider) =>
+        provider.StartsWith("freellm", StringComparison.Ordinal);
+
     public static string Of(string source, string provider, string? model)
     {
         if (source == SpendSources.Free) return Free;
         if (SpendSources.IsFree(provider, model)) return Free;
+        if (IsFreeProviderKey(provider)) return Free;
         if (SpendSources.NormalizeProvider(provider) == "claude") return Expensive;
+        // Провайдер неизвестен → цена неизвестна. «Дёшево» здесь означало бы занижение
+        // расхода, поэтому неизвестный провайдер показываем как «дорого».
+        if (string.IsNullOrWhiteSpace(provider)) return Expensive;
         return Cheap;
     }
 
@@ -31,13 +45,26 @@ public static class SpendCostTiers
     // поэтому живёт здесь же: словарь «claude → дорого» в коде не дублируется.
     // Класс по провайдеру без источника (каталог провайдеров /api/models) считается тем же
     // правилом: локальный — бесплатно, остальное — по ключу провайдера.
+    //
+    // Про локальный провайдер с нестандартным ключом («local-qwen»): в каталоге его бесплатность
+    // известна по флажку isLocal, а в записи расхода — по источнику free. Расхождения на живых
+    // данных нет: локальные записи всегда помечаются source=free (запись траты и проход
+    // реклассификации SpendStore.ReclassifyLocalAsFree), поэтому Of по такой записи тоже даёт
+    // free. Синхронизировать две точки по-другому нельзя: ключи локальных провайдеров
+    // машин-специфичны и в Core не перечислены.
     public static string OfProvider(string provider, bool isLocal)
     {
         if (isLocal) return Free;
         if (SpendSources.IsFree(provider, null)) return Free;
+        if (IsFreeProviderKey(provider)) return Free;
         if (SpendSources.NormalizeProvider(provider) == "claude") return Expensive;
         return Cheap;
     }
+
+    // Класс расхода определён только для осей «провайдер» и «модель»: класс — свойство
+    // модели/провайдера, у оси «персоны»/«роли» его неоткуда взять. Одна точка правды на
+    // оба API (/api/spend и разбивка расхода фичи), иначе контракт разъезжается между ними.
+    public static bool AxisHasTier(string axis) => axis is "provider" or "model";
 
     // Ранг для выбора класса узла, когда в одной группе смешались классы: «дороже — важнее».
     public static int Rank(string tier) => tier switch

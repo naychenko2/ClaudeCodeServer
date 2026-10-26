@@ -70,7 +70,7 @@ public class ProjectCapabilitiesGuardTests
         ["backend/ClaudeHomeServer.Core/Models/SpendRecord.cs"] = (2, "LLM-провайдер"),
         ["backend/ClaudeHomeServer/Services/SpendMapping.cs"] = (2, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Spend/SpendStore.cs"] = (1, "LLM-провайдер"),
-        ["backend/ClaudeHomeServer.Spend/SpendMaintenanceService.cs"] = (3, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer.Spend/SpendMaintenanceService.cs"] = (4, "LLM-провайдер"),
         // Тестовый хелпер шлюза: IsLocal — признак локального LLM-провайдера (vLLM), не проекта.
         // Жил в ClaudeHomeServer.Tests (сторож его пропускал как .Tests); переехал в TestKit.Host (шаг 3.3).
         ["backend/ClaudeHomeServer.TestKit.Host/GatewayTestKit.cs"] = (2, "LLM-провайдер"),
@@ -79,7 +79,7 @@ public class ProjectCapabilitiesGuardTests
         ["backend/ClaudeHomeServer.Core/Services/Llm/IModelResolver.cs"] = (3, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Core/Models/SpendRecord.cs"] = (2, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Spend/SpendStore.cs"] = (1, "LLM-провайдер"),
-        ["backend/ClaudeHomeServer.Spend/SpendMaintenanceService.cs"] = (3, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer.Spend/SpendMaintenanceService.cs"] = (4, "LLM-провайдер"),
         ["backend/ClaudeHomeServer/Services/SpendMapping.cs"] = (2, "LLM-провайдер"),
         // Ценовой класс провайдера (/api/models): локальный LLM-провайдер → бесплатно.
         ["backend/ClaudeHomeServer/Services/ModelCatalogService.cs"] = (1, "LLM-провайдер"),

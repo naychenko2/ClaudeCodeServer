@@ -112,6 +112,24 @@ function GroupHeader({ label, count, isMobile }: { label: string; count: number;
   );
 }
 
+// Видимые документы — ровно тот список, что рисует сетка: порядок cut → design →
+// plan → consult; дедуп планов (решение Андрея): переписанный план — показываем
+// ПОСЛЕДНИЙ по createdAt; разрезы, дизайны и консультации — все. Неизвестная роль
+// в группы не попадает (сетку не роняет). Единый источник и для карточек, и для
+// счётчика вкладки: иначе бейдж расходится с числом карточек (хвост ревью R-M3).
+export function visiblePlans(plans: FeaturePlan[]): FeaturePlan[] {
+  const byRole = (role: FeaturePlan['role']) => plans.filter(p => p.role === role);
+  // Последний план по createdAt: сортируем по возрастанию и берём хвост.
+  const planTasks = [...byRole('plan')].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const latestPlan = planTasks.length > 0 ? planTasks[planTasks.length - 1] : null;
+  return [
+    ...byRole('cut'),
+    ...byRole('design'),
+    ...(latestPlan ? [latestPlan] : []),
+    ...byRole('consult'),
+  ];
+}
+
 export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask, onOpenKeyChat, marks: marksProp, featureId = null, projectId = null }: FeaturePlansTabProps) {
   const marks = useMemo(() => marksProp ?? buildNavMarks(page.run, page.chats), [marksProp, page]);
   // Проект эпика — область перехода в задачу; нет эпика — проект страницы.
@@ -121,22 +139,8 @@ export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask
     if (featureId) recordFeatureReturn(featureId, { kind: 'task', id: taskId }, page.run.epic?.title ?? null, 'plans');
     openTaskInSection({ id: taskId, projectId: taskProjectId ?? undefined });
   };
-  // Документы: порядок cut → design → plan → consult. Дедуп планов (решение Андрея):
-  // переписанный план — показываем ПОСЛЕДНИЙ по createdAt; разрезы, дизайны и
-  // консультации — все. Неизвестная роль в группы не попадает (сетку не роняет).
-  const plans = useMemo(() => {
-    const all = page.plans ?? [];
-    const byRole = (role: FeaturePlan['role']) => all.filter(p => p.role === role);
-    // Последний план по createdAt: сортируем по возрастанию и берём хвост.
-    const planTasks = [...byRole('plan')].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-    const latestPlan = planTasks.length > 0 ? planTasks[planTasks.length - 1] : null;
-    return [
-      ...byRole('cut'),
-      ...byRole('design'),
-      ...(latestPlan ? [latestPlan] : []),
-      ...byRole('consult'),
-    ];
-  }, [page.plans]);
+  // Документы — видимый список (тот же, что считает plansTabCount).
+  const plans = useMemo(() => visiblePlans(page.plans ?? []), [page.plans]);
   const mockups: FeatureMockup[] = page.mockups ?? [];
   const device = page.mockupsUnavailable === 'device';
 
@@ -225,9 +229,11 @@ function NoDocuments({ hasKeyChat, onOpenKeyChat, isMobile }: { hasKeyChat: bool
   );
 }
 
-// Счётчик вкладки «Планы и макеты»: документы + живые макеты (без отклонённых).
+// Счётчик вкладки «Планы и макеты»: видимые документы (ровно тот список, что
+// рисует сетка: дедуп планов и неизвестные роли не считаются — хвост ревью R-M3)
+// + живые макеты (без отклонённых).
 export function plansTabCount(page: FeaturePage): number {
-  const plans = (page.plans ?? []).length;
+  const docs = visiblePlans(page.plans ?? []).length;
   const live = splitMockups(page.mockups ?? []).live.length;
-  return plans + live;
+  return docs + live;
 }

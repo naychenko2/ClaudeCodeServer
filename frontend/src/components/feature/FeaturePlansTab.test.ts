@@ -370,18 +370,38 @@ describe('FeaturePlansTab', () => {
     expect(findNodeByAttr(container as FNode, 'data-testid', 'plan-reader'), 'после смены плана читалка осталась (6e)').toBeNull();
   });
 
-  // === 7. Счётчик вкладки: документы + живые макеты ===
-  it('plansTabCount = документы + живые макеты', () => {
+  // === 7. Счётчик вкладки = видимые карточки (хвост ревью R-M3) ===
+  // Мутация «считать все page.plans» (старый plansTabCount) краснеет: в этом ответе
+  // есть старый план (скрыт дедупом) и неизвестная роль — карточек 2, а не 4.
+  it('plansTabCount = видимые документы + живые макеты (дедуп и неизвестные роли не считаются)', () => {
     const page = pageData({
-      plans: [plan({ taskId: 'a' }), plan({ taskId: 'b' })],
+      plans: [
+        plan({ taskId: 'p-old', role: 'plan', title: 'Старый план', createdAt: '2026-10-01T00:00:00Z' }),
+        plan({ taskId: 'p-new', role: 'plan', title: 'Новый план', createdAt: '2026-10-20T00:00:00Z' }),
+        plan({ taskId: 'x1', role: 'audit' as FeaturePlan['role'], title: 'Аудит' }),
+        plan({ taskId: 'c1', role: 'cut', title: 'Разрез' }),
+      ],
       mockups: [
         mockup({ path: 'docs/mockups/foo-1.html', title: 'foo 1', status: 'approved' }),
         mockup({ path: 'docs/mockups/foo-2.html', title: 'foo 2', status: 'approved' }),
         mockup({ path: 'docs/mockups/bar.html', title: 'bar', status: 'approved' }),
       ],
     });
-    // 2 документа + 2 живых макета (foo-2 текущий, bar) = 4.
+    // Видимые документы: cut + p-new (p-old скрыт дедупом планов, audit — неизвестная роль) = 2;
+    // живые макета: foo-2 (текущий в группе) + bar = 2 → 4.
     expect(plansTabCount(page)).toBe(4);
+    // Тот же счёт, что реально рисует сетка: ровно 2 карточки документов.
+    const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false }));
+    expect(collectText(container, 'plan-row').length, 'счётчик разошёлся с числом карточек').toBe(2);
+  });
+
+  // === 7a. Ответ только из неизвестной роли: счётчик 0 и пустой раздел, не «1» (R-M3) ===
+  // Мутация «считать все page.plans» краснеет: бейдж показал бы 1 при пустом разделе.
+  it('ответ только из неизвестной роли: счётчик 0, раздел «Документов и макетов пока нет»', () => {
+    const page = pageData({ plans: [plan({ taskId: 'x1', role: 'audit' as FeaturePlan['role'], title: 'Аудит' })] });
+    expect(plansTabCount(page)).toBe(0);
+    const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false }));
+    expect(findNodeByAttr(container as FNode, 'data-testid', 'plans-all-empty'), 'пустой раздел не показан').not.toBeNull();
   });
 
   // === 8. Markdown через ОБЩИЙ рендер (лента): GFM-таблица → <table> ===

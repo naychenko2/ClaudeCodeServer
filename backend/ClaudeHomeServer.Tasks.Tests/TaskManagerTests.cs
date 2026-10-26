@@ -860,6 +860,36 @@ public class TaskManagerTests : IDisposable
         reopened.DueTime.Should().Be("09:00");
     }
 
+    // Н-1 дельта-ревью 099c6689: код (req.DueDate is null) снимает ЛЮБОЙ срок закрытого цикла,
+    // дата ни с чем не сверяется; прежний тест брал просроченную дату и проходил при обоих
+    // формулировках правила. Здесь фактическое правило зафиксировано на будущем сроке:
+    // без dueDate в запросе он снят (при «только просроченном» — остался бы и вернулся
+    // в календарь/утренний бриф на переоткрытой карточке), явный срок в запросе — сохранён.
+    [Fact]
+    public void Update_ПереоткрытиеИзDone_СнимаетЛюбойСрокЗакрытогоЦикла()
+    {
+        // Карточка с будущим сроком закрыта досрочно
+        var futureDue = _sut.Create(null, "u", new CreateTaskRequest("доработка",
+            Assignee: TaskItemAssignee.Claude, DueDate: "2027-01-15", DueTime: "09:00"));
+        _sut.Update(futureDue.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done, ResultMarkdown: "итог"));
+
+        var cleared = _sut.Update(futureDue.Id, new UpdateTaskRequest(Status: TaskItemStatus.Todo))!;
+
+        cleared.DueDate.Should().BeNull("снимается любой срок закрытого цикла — дата не сверяется");
+        cleared.DueTime.Should().BeNull();
+
+        // Явный срок в том же запросе — намерение человека, оно и сохранится
+        var explicitDue = _sut.Create(null, "u", new CreateTaskRequest("доработка",
+            Assignee: TaskItemAssignee.Claude, DueDate: "2027-01-15", DueTime: "09:00"));
+        _sut.Update(explicitDue.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done, ResultMarkdown: "итог"));
+
+        var kept = _sut.Update(explicitDue.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Todo, DueDate: "2027-02-01", DueTime: "10:00"))!;
+
+        kept.DueDate.Should().Be("2027-02-01");
+        kept.DueTime.Should().Be("10:00");
+    }
+
     [Fact]
     public void Update_ЧеловекПравитИтогНаDoneКарточке_ЗатираетКакПрежде()
     {

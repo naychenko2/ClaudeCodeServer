@@ -1592,6 +1592,42 @@ public partial class SessionManagerTests : IDisposable
         updated!.ExpiryAnchor.Should().BeNull("без срока якорю нечего держать");
     }
 
+    // --- FreezeExpiryForHold / RestoreFrozenExpiry ---
+
+    // Q6-TAIL3 (хвост RV-K-Q6-TAIL): unit-страж на самой RestoreFrozenExpiry (SessionManager.cs:2455).
+    // Сквозной QueueHold_25Hours_RestoredExpiryAnchoredAtClearingNotOldActivity ловит только
+    // «срок без нового якоря»: регрессию «якорь = последняя активность» он не ловит — доставка
+    // продолжения сама есть активность (SendDirectAsync безусловно ставит Working,
+    // SessionManager.cs:5281 → :10890) и поднимает UpdatedAt раньше возврата срока. Здесь нет
+    // ResumeFeatureTurnsAfterHold: чат со старой активностью (−25 ч) — и «якорь = UpdatedAt»
+    // отличается от правильного «якорь = момент снятия». Мутация: в RestoreFrozenExpiry вместо
+    // SetExpiry(sessionId, frozen) — прямая запись ExpiresAfterMinutes с
+    // ExpiryAnchor = entry.Info.UpdatedAt — абзац якоря краснеет (он в прошлом).
+    [Fact]
+    public async Task RestoreFrozenExpiry_ЯкорьМоментСнятияАНеСтараяАктивность()
+    {
+        var dir = MkProjectDir("ex4");
+        var project = _projectManager.Create("EX4", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        _sut.SetExpiry(session.Id, 10);
+        _sut.FreezeExpiryForHold(session.Id);
+        session.HoldFrozenExpiresAfterMinutes.Should().Be(10, "пауза сохранила срок самого чата");
+
+        // Состояние после суток удержания: к снятию чат подходит с активностью 25-часовой давности.
+        var updatedAtOld = session.UpdatedAt = DateTime.UtcNow.AddHours(-25);
+        var beforeRestore = DateTime.UtcNow;
+
+        var restored = _sut.RestoreFrozenExpiry(session.Id);
+
+        restored!.ExpiresAfterMinutes.Should().Be(10, "замороженный срок вернулся");
+        restored.HoldFrozenExpiresAfterMinutes.Should().BeNull("сохранённое значение погашено");
+        restored.UpdatedAt.Should().Be(updatedAtOld,
+            "возврат срока — настройка хранения, а не активность: старую активность не поднимаем");
+        restored.ExpiryAnchor.Should().NotBeNull().And.Subject.As<DateTime>()
+            .Should().BeOnOrAfter(beforeRestore,
+            "якорь отсчёта — момент снятия удержания, а не замороженная активность");
+    }
+
     // --- SetNotificationsMuted ---
 
     [Fact]

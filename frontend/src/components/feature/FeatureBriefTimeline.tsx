@@ -84,19 +84,28 @@ export function SummaryRow({ stats }: { stats: FeatureStats }) {
   const t = stats.timeline.totals;
   const isApprox = stats.source === 'approx';
 
+  // Порог длительностей строки — тот же, что у shownDuration (F10): ноль от бэка — не число,
+  // «ждала вас 0 мин» / «работа 0 мин» — та же болезнь нуля (дефект ef029aea, R-F12 п.3).
+  // Нулевая часть строки не выводится; если выводить нечего — строка остаётся пустой.
+  const shown = (v: number | null): string | null =>
+    v != null && Math.round(v) > 0 ? formatDuration(v) : null;
+
   // «Ждёт вас» / «не работали» — только из данных бэка (фронт не пересчитывает):
   //   journal + waitingMinutes != null → «ждала вас N» (N = totals.waitingMinutes);
   //   current.kind === 'waiting' → «ждёт вас» (длительность текущего ожидания — не поле
   //     бэка: `current` несёт только `since`, без минут — число не вычисляем, минор);
   //   иначе → «не работали ≈ N» (N = totals.notWorkingMinutes).
-  let waitPart: string;
+  let waitPart: string | null = null;
   if (stats.source === 'journal' && t.waitingMinutes != null) {
-    waitPart = `ждала вас ${formatDuration(t.waitingMinutes)}`;
+    const d = shown(t.waitingMinutes);
+    if (d) waitPart = `ждала вас ${d}`;
   } else if (stats.timeline.current?.kind === 'waiting') {
     waitPart = 'ждёт вас';
   } else {
-    waitPart = `не работали ${isApprox ? '≈ ' : ''}${formatDuration(t.notWorkingMinutes)}`;
+    const d = shown(t.notWorkingMinutes);
+    if (d) waitPart = `не работали ${isApprox ? '≈ ' : ''}${d}`;
   }
+  const workDur = shown(t.workWallMinutes);
 
   // Токены «вход+выход» (spend).
   const spend = stats.spend;
@@ -111,10 +120,12 @@ export function SummaryRow({ stats }: { stats: FeatureStats }) {
         fontSize: FS.sm, color: C.textSecondary, fontFamily: FONT.sans,
       }}
     >
-      <span>
-        работа <b style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textHeading }}>{isApprox ? '≈ ' : ''}{formatDuration(t.workWallMinutes)}</b>
-      </span>
-      <span>{waitPart}</span>
+      {workDur && (
+        <span>
+          работа <b style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textHeading }}>{isApprox ? '≈ ' : ''}{workDur}</b>
+        </span>
+      )}
+      {waitPart && <span>{waitPart}</span>}
       {tokens != null && tokens > 0 && (
         <span>
           <b style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textHeading }}>{formatTokens(tokens)}</b> токенов

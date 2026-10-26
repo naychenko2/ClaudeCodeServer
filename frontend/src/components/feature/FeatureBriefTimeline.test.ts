@@ -280,7 +280,59 @@ describe('Таймлайн-элементы карточки «Сводка» ч
     expect(all, 'работа и ждёт остались').toContain('работа');
   });
 
-  // === 8. экспорты для блока сводки: полоска, ось, итоги ===
+  // === 8. нули длительностей в строке итогов не печатаются (порог Math.round>0, тот же,
+  // что у shownDuration; дефект ef029aea, R-F12 п.3). Мутация «снять гейт» красит тест:
+  // formatDuration(0) = «0 мин» → «работа 0 мин» / «не работали 0 мин» / «ждала вас 0 мин». ===
+  it('нулевые длительности в строке итогов не печатаются (мутация «снять гейт» красит)', async () => {
+    // workWallMinutes=0 — «работы» нет, остальное остаётся.
+    const s1 = mkStats();
+    s1.timeline = { ...s1.timeline, totals: { ...s1.timeline.totals, workWallMinutes: 0 } };
+    mockGetFeature.result = pageData(s1);
+    const c1 = render();
+    await settle();
+    const all1 = textNodes(findNodeByAttr(c1, 'data-testid', 'mini-summary-row')!).join('');
+    expect(all1, 'нет «работа» при workWallMinutes=0').not.toContain('работа');
+    expect(all1, 'остальное остаётся').toContain('ждала вас');
+
+    // waitingMinutes=0 — «ждала вас» нет.
+    const s2 = mkStats();
+    s2.timeline = { ...s2.timeline, totals: { ...s2.timeline.totals, waitingMinutes: 0 } };
+    mockGetFeature.result = pageData(s2);
+    const c2 = render();
+    await settle();
+    const all2 = textNodes(findNodeByAttr(c2, 'data-testid', 'mini-summary-row')!).join('');
+    expect(all2, 'нет «ждала вас» при waitingMinutes=0').not.toContain('ждала вас');
+    expect(all2, '«работа» остаётся').toContain('работа');
+
+    // notWorkingMinutes=0 (ветка без current и без waiting-данных) — «не работали» нет.
+    const s3 = mkStats();
+    s3.timeline = { ...s3.timeline, current: null, totals: { ...s3.timeline.totals, waitingMinutes: null, notWorkingMinutes: 0 } };
+    mockGetFeature.result = pageData(s3);
+    const c3 = render();
+    await settle();
+    const all3 = textNodes(findNodeByAttr(c3, 'data-testid', 'mini-summary-row')!).join('');
+    expect(all3, 'нет «не работали» при notWorkingMinutes=0').not.toContain('не работали');
+    expect(all3, '«работа» остаётся').toContain('работа');
+  });
+
+  // Все три нуля и нет расхода — выводить нечего: строка остаётся пустой (как сейчас
+  // ведёт себя пустая строка итогов — без специальной логики скрытия).
+  it('все нули и нет расхода — строка итогов пустая (без специальной логики скрытия)', async () => {
+    const s = mkStats();
+    s.timeline = { ...s.timeline, current: null, totals: { ...s.timeline.totals, workWallMinutes: 0, notWorkingMinutes: 0, waitingMinutes: null } };
+    s.spend = null;
+    mockGetFeature.result = pageData(s);
+    const c = render();
+    await settle();
+    const row = findNodeByAttr(c, 'data-testid', 'mini-summary-row');
+    expect(row, 'строка остаётся (пустой)').not.toBeNull();
+    const all = textNodes(row!).join('');
+    expect(all, 'ничего не печатается').not.toContain('работа');
+    expect(all).not.toContain('не работали');
+    expect(all).not.toContain('токенов');
+  });
+
+  // === 9. экспорты для блока сводки: полоска, ось, итоги ===
   // Closedность — переданная из общей модели состояния (R-F8): ось и полоска слушают
   // проп closed, а не сырой current — пробы ниже расцепляют их намеренно.
   it('экспортирует полоску, ось и итоги; ось: «сейчас» у идущей, «закрыта» у закрытой', () => {

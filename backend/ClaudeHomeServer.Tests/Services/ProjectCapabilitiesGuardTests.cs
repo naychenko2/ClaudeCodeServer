@@ -57,6 +57,8 @@ public class ProjectCapabilitiesGuardTests
         // проекта; гейт допуска ходов к локали (B1b) переехал в FallbackLlmSessionAdapter, из
         // ClaudeSession ушли два прежних вхождения — осталось 3.
         ["backend/ClaudeHomeServer.Llm/Claude/ClaudeSession.cs"] = (3, "LLM-провайдер"),
+        // Классификация расхода one-shot: IsLocal источника — локальный LLM-провайдер, не проект.
+        ["backend/ClaudeHomeServer.Llm/CloudCheapClient.cs"] = (1, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/FallbackLlmSessionAdapter.cs"] = (2, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/Gateway/UpstreamSelector.cs"] = (1, "LLM-провайдер"),
         // Шлюз: наблюдатель метрик создаётся, когда маршрут — локальный LLM-провайдер

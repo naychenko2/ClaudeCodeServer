@@ -169,6 +169,8 @@ export function SpendOverview({ data, showUsers, isMobile, isTablet = false, emp
       sepDone = true;
     }
     const clickable = !d.aggregated && d.total > 0;
+    // Сегменты по ценовым классам; день без byTier (старый ответ бэка) — нейтральный столбик
+    const segs = tierSegments(d);
     bars.push(
       <div
         key={d.date}
@@ -182,13 +184,19 @@ export function SpendOverview({ data, showUsers, isMobile, isTablet = false, emp
       >
         {d.total === 0
           ? <i style={{ display: 'block', height: 2, background: C.track, borderRadius: 1 }} />
-          : tierSegments(d).map(s => (
+          : segs.length > 0
+            ? segs.map(s => (
               <i key={s.key} style={{
                 display: 'block', borderRadius: 1,
                 height: Math.max(2, Math.round(s.value / dayMax * (chartH - 12))),
                 background: s.color,
               }} />
-            ))}
+            ))
+            : <i style={{
+              display: 'block', borderRadius: 1,
+              height: Math.max(2, Math.round(d.total / dayMax * (chartH - 12))),
+              background: C.track,
+            }} />}
       </div>,
     );
   }

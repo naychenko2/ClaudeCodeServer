@@ -16,7 +16,7 @@
 // пересечение закреплено тестом бэка. Полоса строится по ним как обычно, но блок помечается
 // «хвост после мержа»: это не обычная работа стадии (живой контракт GC-F7).
 
-import type { CSSProperties, ReactElement } from 'react';
+import { useState, type CSSProperties, type ReactElement } from 'react';
 import { C, R, FS, SP, FONT } from '../../lib/design';
 import { Button } from '../ui/Button';
 import { axisFrac, type LaneAxis } from './FeatureLaneModel';
@@ -55,7 +55,8 @@ export interface FeatureStepDetailsProps {
   // работу стадии.
   isTail?: boolean;
   isMobile?: boolean;
-  // Фиксированное «сейчас» (тесты); в работе — Date.now() (тот же приём, что FeatureStatsLosses).
+  // Фиксированное «сейчас» (тесты); без него — Date.now(), зафиксированный на монтирование
+  // вне тела рендера (purity, GC-R-F7).
   nowMs?: number;
   // «Показать интервалы на дорожке ↑» — рисуется только когда колбэк передан (в карточке
   // «Производства» он ведёт подсветку на дорожке, в строке исполнителя — нет).
@@ -66,6 +67,13 @@ export interface FeatureStepDetailsProps {
 const SEC_LABEL: CSSProperties = {
   fontSize: FS.xxs, textTransform: 'uppercase', letterSpacing: 0.6,
   color: C.textMuted, fontFamily: FONT.sans,
+};
+
+// Визуально скрытый текст (sr-only): состояние читается скринридеру словом, глиф при
+// этом остаётся декоративным (GC-R-F7: «✓/○» без подписи для AT — просто список текстов).
+const SR_ONLY: CSSProperties = {
+  position: 'absolute', width: 1, height: 1, overflow: 'hidden',
+  clipPath: 'inset(50%)', whiteSpace: 'nowrap',
 };
 
 // === «Приёмка · {id}» ===
@@ -84,12 +92,13 @@ function AcceptanceBlock({ taskId, acceptance, evidence, verdictLine }: {
         return (
           <div key={c.id} data-testid={`step-crit-${c.id}`} style={{ display: 'flex', gap: SP.sm, alignItems: 'baseline', padding: '2px 0' }}>
             <span
-              aria-hidden
               data-testid="step-crit-glyph"
               style={{ width: 14, flexShrink: 0, fontSize: FS.sm, fontWeight: 700, color: ok ? C.successText : C.textMuted }}
             >
               {ok ? '✓' : '○'}
             </span>
+            {/* состояние — словом, рядом с глифом (GC-R-F7): скринридеру «подтверждён/не подтверждён» */}
+            <span data-testid="step-crit-state" style={SR_ONLY}>{ok ? 'подтверждён' : 'не подтверждён'}</span>
             <span style={{ fontSize: FS.sm, color: C.textPrimary, minWidth: 0, overflowWrap: 'anywhere' }}>{c.text}</span>
           </div>
         );
@@ -113,7 +122,7 @@ const notInStore = (id: string): Task => ({
   listItem: true,
 });
 
-function ResultBlock({ taskId }: { taskId: string }) {
+function ResultBlock({ taskId, isMobile }: { taskId: string; isMobile: boolean }) {
   const tasks = useTasks();
   const stored = tasks.find(t => t.id === taskId);
   const knownNoResult = !!stored && stored.listItem === true && stored.hasResult === false;
@@ -132,7 +141,8 @@ function ResultBlock({ taskId }: { taskId: string }) {
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.sm }}>
           {/* отказ — текстом, а не пустотой (GC-R-F7) */}
           <span data-testid="step-result-error" style={{ fontSize: FS.sm, color: C.textSecondary }}>итог не загрузился</span>
-          <Button variant="ghost" size="xs" dataTestId="step-result-retry" onClick={retry}>Повторить</Button>
+          {/* на мобильном цель не меньше 40 px (макет §360; тот же приём, что у «Показать интервалы») */}
+          <Button variant="ghost" size="xs" dataTestId="step-result-retry" onClick={retry} style={isMobile ? { minHeight: 40 } : undefined}>Повторить</Button>
         </span>
       )}
       {state === 'ready' && (
@@ -180,8 +190,9 @@ function TimeBlock({ turns, axis, isTail, isMobile, nowMs }: {
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: SP.sm, marginTop: SP.xs }}>
         <span style={{ fontFamily: FONT.mono, fontSize: FS.xxs, color: C.textMuted }}>{formatDateTime(axis.from)}</span>
-        {/* легенда цветов — только на десктопе (на 360 строка и так тесная; подписей достаточно) */}
-        {!isMobile && <span style={{ fontFamily: FONT.sans, fontSize: FS.xxs, color: C.textMuted }}>работа — зелёный · ревью — фиолетовый</span>}
+        {/* легенда цветов — только на десктопе (на 360 строка и так тесная; подписей достаточно);
+            ходы названы, цвета — токенами дизайн-системы (GC-R-F7): при смене палитры не разойдутся */}
+        {!isMobile && <span style={{ fontFamily: FONT.sans, fontSize: FS.xxs, color: C.textMuted }}>работа — C.success · ревью — C.plan · живой ход — C.accent</span>}
         {live && <span style={{ fontFamily: FONT.mono, fontSize: FS.xxs, color: C.textMuted }}>сейчас {formatClock(nowIso)}</span>}
       </div>
     </div>
@@ -195,13 +206,18 @@ export function FeatureStepDetails({
   isTail = false, isMobile = false, nowMs, onShowIntervals,
 }: FeatureStepDetailsProps): ReactElement {
   const hasAcceptance = !!acceptance && acceptance.length > 0;
+  // «Сейчас» — фиксированный момент на монтирование (purity, GC-R-F7): ленивый инициализатор
+  // useState, тот же чистый для правила приём, что у useNow.ts; прямой Date.now() в теле рендера
+  // (в т. ч. внутри useMemo) правило не допускает. Тестовое значение — пропом nowMs.
+  const [mountNow] = useState(() => Date.now());
+  const now = nowMs ?? mountNow;
   return (
     <div data-testid="step-details" style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
       {hasAcceptance && (
         <AcceptanceBlock taskId={taskId} acceptance={acceptance} evidence={evidence ?? []} verdictLine={verdictLine} />
       )}
-      <ResultBlock taskId={taskId} />
-      {axis && <TimeBlock turns={turns ?? []} axis={axis} isTail={isTail} isMobile={isMobile} nowMs={nowMs ?? Date.now()} />}
+      <ResultBlock taskId={taskId} isMobile={isMobile} />
+      {axis && <TimeBlock turns={turns ?? []} axis={axis} isTail={isTail} isMobile={isMobile} nowMs={now} />}
       {onShowIntervals && (
         <Button
           variant="ghost"

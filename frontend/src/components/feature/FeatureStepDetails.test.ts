@@ -8,9 +8,16 @@
 // ровно axisFrac (±0.01 %), цвета по виду хода; закрытая ось — без «сейчас»; ход за краем
 // окна не рисуется; «Показать интервалы» — только с колбэком; хвост — с маркером.
 //
+// Покрытие (доработка GC-F7R, ревью GC-R-F7): состояние критерия — скринридеру (у глифа
+// нет aria-hidden, рядом — скрытый текст «подтверждён/не подтверждён»); «Повторить» в отказе
+// на мобильном ≥ 40 px (на десктопе — кит xs); легенда называет живой ход и цвета токенами,
+// а не словами; «сейчас» фиксирован на монтирование (Date.now вне тела рендера).
+//
 // Мутации (в отчёте): (1) ✓/○ по индексу строки → тест приёмки красный; (2) запрос «Итога»
 // в теле компонента вместо эффекта → ленивость красная; (3) доля без axisFrac (своя арифметика)
-// → тест оси красный.
+// → тест оси красный; (4) Date.now() обратно в аргумент JSX → тест фиксированного «сейчас»
+// красный; (5) снятый aria-hidden/скрытый текст → тест скринридера красный; (6) isMobile
+// не доходит до «Повторить» → мобильный тест красный.
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -114,6 +121,27 @@ describe('«Приёмка»: ✓/○ по criterionId, а не по индек�
     expect(glyph('c4')).toBe('✓');
   });
 
+  it('состояние — скринридеру: у глифа нет aria-hidden, рядом — скрытый текст состояния', () => {
+    const id = nextId();
+    upsertTaskLocal(fullTask(id));
+    const { container } = renderItem({
+      taskId: id,
+      acceptance: [{ id: 'c1', text: 'критерий 1' }, { id: 'c2', text: 'критерий 2' }],
+      evidence: [{ criterionId: 'c1', how: 'тест', result: 'ок' }],
+    });
+    const stateOf = (critId: string): { ariaHidden: unknown; state: string } => {
+      const row = findNodeByAttr(container, 'data-testid', `step-crit-${critId}`);
+      expect(row, `строки критерия ${critId} нет`).not.toBeNull();
+      const glyph = findNodeByAttr(row!, 'data-testid', 'step-crit-glyph');
+      expect(glyph, `глифа критерия ${critId} нет`).not.toBeNull();
+      const state = findNodeByAttr(row!, 'data-testid', 'step-crit-state');
+      expect(state, `скрытого состояния критерия ${critId} нет`).not.toBeNull();
+      return { ariaHidden: glyph!.getAttribute('aria-hidden'), state: textNodes(state!).join('') };
+    };
+    expect(stateOf('c1')).toEqual({ ariaHidden: null, state: 'подтверждён' });
+    expect(stateOf('c2')).toEqual({ ariaHidden: null, state: 'не подтверждён' });
+  });
+
   it('вердикт — строкой только когда передан; без критериев блока «Приёмка» нет', () => {
     const id = nextId();
     upsertTaskLocal(fullTask(id));
@@ -184,6 +212,22 @@ describe('«Итог»: догрузка полного текста', () => {
     expect(err).not.toBeNull();
     expect(textNodes(err!).join('')).toContain('не загрузился');
   });
+
+  it('«Повторить» в отказе: на мобильном minHeight ≥ 40 (макет §360), на десктопе — кит xs', async () => {
+    const id = nextId();
+    tasksGetMock.mockRejectedValue(new Error('offline'));
+    const mobile = renderItem({ taskId: id, isMobile: true });
+    await act(async () => { await flush(); });
+    const btnM = findNodeByAttr(mobile.container, 'data-testid', 'step-result-retry');
+    expect(btnM, 'кнопки «Повторить» (мобильной) нет').not.toBeNull();
+    expect(parseFloat(styleOf(btnM!).minHeight!), 'minHeight мобильной цели').toBeGreaterThanOrEqual(40);
+
+    const desktop = renderItem({ taskId: id });
+    await act(async () => { await flush(); });
+    const btnD = findNodeByAttr(desktop.container, 'data-testid', 'step-result-retry');
+    expect(btnD, 'кнопки «Повторить» (десктоп) нет').not.toBeNull();
+    expect(styleOf(btnD!).minHeight).toBe('24px');
+  });
 });
 
 // === «Время шага на оси фичи» ===
@@ -248,6 +292,42 @@ describe('«Время шага»: доли — ровно axisFrac', () => {
     expect(textNodes(findNodeByAttr(tail.container, 'data-testid', 'step-time')!).join(' ')).toContain('хвост после мержа');
     const plain = renderItem({ taskId: id, axis: CLOSED_AXIS, turns, nowMs: NOW_MS });
     expect(textNodes(findNodeByAttr(plain.container, 'data-testid', 'step-time')!).join(' ')).not.toContain('хвост');
+  });
+
+  it('легенда называет живой ход и описывает цвета токенами, а не словами', () => {
+    const id = nextId();
+    upsertTaskLocal(fullTask(id));
+    const { container } = renderItem({ taskId: id, axis: LIVE_AXIS, turns, nowMs: NOW_MS });
+    const txt = textNodes(findNodeByAttr(container, 'data-testid', 'step-time')!).join(' ');
+    expect(txt).toContain('живой ход');
+    expect(txt).toContain('работа — C.success');
+    expect(txt).toContain('ревью — C.plan');
+    expect(txt).toContain('C.accent');
+    expect(txt).not.toContain('зелёный');
+    expect(txt).not.toContain('фиолетовый');
+  });
+
+  it('«сейчас» фиксирован на монтирование: Date.now() не зовётся из тела рендера', () => {
+    const id = nextId();
+    upsertTaskLocal(fullTask(id));
+    const T1 = Date.parse('2026-10-20T10:00:00Z');
+    const T2 = Date.parse('2026-10-20T11:00:00Z');
+    const spy = vi.spyOn(Date, 'now').mockReturnValue(T1);
+    try {
+      const { root, container } = renderItem({ taskId: id, axis: LIVE_AXIS, turns });
+      const marker1 = findNodeByAttr(container, 'data-testid', 'step-now');
+      expect(marker1, 'вертикали «сейчас» нет').not.toBeNull();
+      const left1 = parseFloat(styleOf(marker1!).left!);
+      expect(left1).toBeCloseTo(axisFrac(new Date(T1).toISOString(), LIVE_AXIS) * 100, 2);
+      // Ререндер того же монтирования при другом «реальном времени» — позиция та же.
+      spy.mockReturnValue(T2);
+      act(() => { root.render(createElement(FeatureStepDetails, { taskId: id, axis: LIVE_AXIS, turns })); });
+      const marker2 = findNodeByAttr(container, 'data-testid', 'step-now');
+      expect(marker2, 'вертикали «сейчас» после ререндера нет').not.toBeNull();
+      expect(parseFloat(styleOf(marker2!).left!)).toBeCloseTo(left1, 6);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

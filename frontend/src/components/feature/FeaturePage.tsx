@@ -307,7 +307,7 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
         <div data-testid="feature-page-body" style={{ marginTop: SP.md }}>
           {tab === 'timeline' ? (
             <>
-              <FeatureMiniSummary stats={page.page.stats ?? null} onOpenStats={() => setFeaturePageTab('stats')} isMobile={isMobile} />
+              <FeatureMiniSummary stats={page.page.stats ?? null} hold={okRun.hold} onOpenStats={() => setFeaturePageTab('stats')} isMobile={isMobile} />
               <FeatureTimelineTab run={okRun} marks={marks} isMobile={isMobile} />
             </>
           ) : tab === 'plans' ? (

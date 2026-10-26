@@ -12,13 +12,18 @@
 // кончается живой интервал, и не наезжает на интервалы (время не показано дважды);
 // минимальная ширина 3 px не сдвигает left; shтрихованная зона «стоит» — только
 // когда на дорожке нет штрихованного интервала (не дважды); tabIndex и обработчики — пропсы.
+// GC-F10c: пустая дорожка на закрытой оси — «этапа не было» (тот же вид, что у skipped),
+// а не пустая полоса «как начатая»; на живой фиче та же дорожка остаётся «впереди»;
+// на 360 (interactive=false) дорожка неинтерактивна и с подписью, и с интервалами.
 //
 // Мутации (в отчёте): (1) «ещё N» без условия prod → «план только у prod» красный;
 // (2) done красить accent → «цвета по состоянию» красный; (3) не рисовать паузу →
 // «пауза — пунктир» красный; (4) minWidth 0 → «минимальная ширина» красный;
 // (5) «только prod» → «не review» → красный на третьем этапе (закрытие m5 GC-R-F5a);
 // (6) сдвинуть зону «впереди» левее timeFrac → «геометрия зоны» красный (m6);
-// (7) убрать точечную линию skipped → «линия skipped» красный (m7).
+// (7) убрать точечную линию отсутствующего этапа → «линия отсутствия этапа» красный (m7);
+// (8) убрать ветку noStage (showNoStage = lane.skipped) → «пустая дорожка закрытой оси» красный;
+// (9) игнорировать interactive (всегда рендерить button) → «неинтерактивность на 360» красный.
 
 import { act, createElement } from 'react';
 import { describe, it, expect, afterEach } from 'vitest';
@@ -143,6 +148,17 @@ function styleOf(node: unknown): Style {
   return (node as { style: Style }).style;
 }
 
+// Все элементы дерева с тегом tag (uppercase nodeName в fakeDom) — для «ни одного <button>».
+function countTag(root: unknown, tag: string): number {
+  let n = 0;
+  const walk = (x: { nodeType: number; nodeName: string; childNodes: unknown[] }) => {
+    if (x.nodeType === 1 && x.nodeName === tag) n += 1;
+    for (const c of x.childNodes) walk(c as never);
+  };
+  walk(root as never);
+  return n;
+}
+
 afterEach(() => {
   uninstallFakeDom();
 });
@@ -255,9 +271,36 @@ describe('FeatureStageLane: состояния этапа', () => {
     // Ни одной кнопки-интервала на skipped-дорожке.
     for (let i = 0; i < 5; i += 1) expect(findNodeByAttr(container, 'data-testid', `lane-interval-final-${i}`)).toBeNull();
     // Точечная линия — маркер отсутствия этапа: 1 px dotted C.dashed по всей ширине дорожки.
-    const line = findNodeByAttr(container, 'data-testid', 'lane-skipped-line-final');
-    expect(line, 'точечной линии skipped нет').not.toBeNull();
+    const line = findNodeByAttr(container, 'data-testid', 'lane-no-stage-line-final');
+    expect(line, 'точечной линии отсутствия этапа нет').not.toBeNull();
     expect(styleOf(line).borderTop, 'линия не пунктирная C.dashed').toBe(`1px dotted ${C.dashed}`);
+  });
+
+  it('пустая дорожка на закрытой оси → «этапа не было», а не пустая полоса «как начатая» (GC-F10c)', () => {
+    // Та же форма, что на срезе: смерженная фича, этап «Мерж» без интервалов (не skipped).
+    const model = buildStageLanes(
+      mkRun({ closed: true, state: 'merged', stages: [mkStage('merge', 'pending')] }),
+      mkStats({}),
+      NOW,
+    );
+    const { container, axis } = renderLane(model, 'merge', 'Мерж');
+    expect(axis.timeFrac).toBe(1);
+    expect(textNodes(container).join(' ')).toContain('этапа не было');
+    // «впереди» на закрытой оси нет — будущего нет (тот же инвариант, что у зоны «впереди»).
+    expect(textNodes(container).join(' ')).not.toContain('впереди');
+    expect(findNodeByAttr(container, 'data-testid', 'lane-no-stage-merge'), 'подписи отсутствия этапа нет').not.toBeNull();
+    const line = findNodeByAttr(container, 'data-testid', 'lane-no-stage-line-merge');
+    expect(line, 'точечной линии нет').not.toBeNull();
+    expect(styleOf(line).borderTop).toBe(`1px dotted ${C.dashed}`);
+    // Пустая дорожка остаётся пустой: интервалов не придумано.
+    for (let i = 0; i < 5; i += 1) expect(findNodeByAttr(container, 'data-testid', `lane-interval-merge-${i}`)).toBeNull();
+  });
+
+  it('живая фича: та же пустая дорожка — по-прежнему «впереди», не «не было» (GC-F10c)', () => {
+    const model = buildStageLanes(mkRun({ stages: [mkStage('merge', 'pending')] }), mkStats({}), NOW);
+    const { container } = renderLane(model, 'merge', 'Мерж');
+    expect(textNodes(container).join(' ')).toContain('впереди');
+    expect(textNodes(container).join(' ')).not.toContain('не было');
   });
 
   it('approx (журнала нет) — пустая дорожка: ни интервалов, ни «впереди»', () => {
@@ -396,6 +439,31 @@ describe('FeatureStageLane: план и возвраты', () => {
 
     const { container: cRev } = renderLane(model, 'review', 'Ревью');
     expect(findNodeByAttr(cRev, 'data-testid', 'lane-return-review-0')).toBeNull();
+  });
+});
+
+describe('FeatureStageLane: неинтерактивность на 360 (критерий c4 GC-F6, держится и в GC-F10c)', () => {
+  it('interactive=false: интервалы — не кнопки (div role=img с aria-label), на дорожке ни одного <button>', () => {
+    const { container, lane } = renderLane(mainModel(), 'prod', 'Производство', { interactive: false });
+    expect(lane.intervals.length).toBe(3);
+    for (let i = 0; i < 3; i += 1) {
+      const el = findNodeByAttr(container, 'data-testid', `lane-interval-prod-${i}`)!;
+      expect(el.nodeName, `интервал ${i} — не div`).toBe('DIV');
+      expect(el.getAttribute('role')).toBe('img');
+      expect(el.getAttribute('aria-label'), 'aria-label интервала нет').toContain('интервал');
+    }
+    expect(countTag(container, 'BUTTON'), 'на неинтерактивной дорожке есть кнопка').toBe(0);
+  });
+
+  it('interactive=false: пустая дорожка закрытой оси — подпись «этапа не было» и ни одного контрола', () => {
+    const model = buildStageLanes(
+      mkRun({ closed: true, state: 'merged', stages: [mkStage('merge', 'pending')] }),
+      mkStats({}),
+      NOW,
+    );
+    const { container } = renderLane(model, 'merge', 'Мерж', { interactive: false });
+    expect(textNodes(container).join(' ')).toContain('этапа не было');
+    expect(countTag(container, 'BUTTON'), 'на пустой неинтерактивной дорожке есть контрол').toBe(0);
   });
 });
 

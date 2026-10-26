@@ -26,6 +26,7 @@ import {
   type LaneIntervalDetails, type LaneTaskLine,
 } from './FeatureLanePopover';
 import { buildStageLanes, axisFrac, planCounterText, type StageLane, type LaneAxis } from './FeatureLaneModel';
+import { foldLast } from './featureListFold';
 import { formatDuration, formatDateTime } from './FeatureStatsBits';
 import type { FeatureStats, StageTurn } from '../../types/featureStats';
 import { FeatureProdCardsView } from './FeatureProdCardsView';
@@ -129,7 +130,9 @@ function TimelineNote() {
 
 // Строка этапа: точка + линия + заголовок (имя · состояние · «≈») + границы + (раскрыто)
 // карточка с плашкой состояния; у «Производство» — лента карточек (W4-2F3), у других
-// этапов — исполнители. Клик по заголовку — раскрыть/схлопнуть.
+// этапов — исполнители. Клик по заголовку — раскрыть/схлопнуть. Список исполнителей
+// длинных этапов (кроме prod) свёрнут: последние 10 + «Показать все N (ранних скрыто: K)»
+// через foldLast (GC-F10c), снятые задачи в N/K/список не входят.
 function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, featureTitle = null,
   run, showProd = false, marks = EMPTY_NAV_MARKS, isMobile = false,
   execIndex = new Map<string, FeatureStageExecutor>(), progress = null,
@@ -169,6 +172,20 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
   onIntervalHover?: (index: number | null, el: HTMLElement | null) => void;
   onOpenSheet?: () => void;
 }) {
+  // Свёртка списка этапа (GC-F10c): работает только в ветке этапов КРОМЕ prod (лента prod —
+  // карточки, её свёртка не здесь). Видны последние 10 строк, ранние скрыты; выбор
+  // «показать всё» живёт, пока вкладка смонтирована. Снятые задачи исключены ДО свёртки:
+  // признак — вердикт задачи 'withdrawn', тот же, которым бэк исключает задачу из цепочки
+  // (FeatureStepAccounting.cs:145,190), — второй истины нет. Снятые не входят ни в N, ни в K;
+  // N и K берутся из результата свёртки (visible + hiddenEarly = длина входа): то, что
+  // откроется по кнопке, равно тому, что посчитано в её подписи.
+  const [showAll, setShowAll] = useState(false);
+  const rows = stage.executors.filter(x => taskMap.get(x.taskId)?.verification?.verdict !== 'withdrawn');
+  // expandedKey: у строки этапа нет состояния, поднятого к списку (раскрытая часть
+  // ExecutorRow — её собственная) — скрывать «раскрытое» нечего.
+  const fold = foldLast(rows, null, showAll);
+  const hiddenSet = new Set(fold.hiddenEarly);
+
   const status = stageStatusLabel(stage);
   const bounds = stageBoundsLabel(stage);
   const duration = stageDurationLabel(stage.approxMinutes);
@@ -400,25 +417,48 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
                 </div>
               </div>
             ))
-          ) : stage.executors.length > 0 ? (
-            stage.executors.map((x, i) => (
-              <ExecutorRow
-                key={`${x.taskId}-${i}`}
-                x={x}
-                task={x.taskId ? taskMap.get(x.taskId) : undefined}
-                now={now}
-                featureId={featureId}
-                featureTitle={featureTitle}
-                marks={marks}
-                isMobile={isMobile}
-                taskMap={taskMap}
-                execIndex={execIndex}
-                progress={progress}
-                isTail={isTail(x.taskId)}
-                turns={turnsByTask.get(x.taskId) ?? null}
-                axis={axis}
-              />
-            ))
+          ) : rows.length > 0 ? (
+            <>
+              {/* Порядок строк — исходный (тот же порядок stage.executors, что даёт бэк);
+                  скрытые ранние не рендерятся, ключи видимых строк не меняются. */}
+              {rows.map((x, i) => (hiddenSet.has(x) ? null : (
+                <ExecutorRow
+                  key={`${x.taskId}-${i}`}
+                  x={x}
+                  task={x.taskId ? taskMap.get(x.taskId) : undefined}
+                  now={now}
+                  featureId={featureId}
+                  featureTitle={featureTitle}
+                  marks={marks}
+                  isMobile={isMobile}
+                  taskMap={taskMap}
+                  execIndex={execIndex}
+                  progress={progress}
+                  isTail={isTail(x.taskId)}
+                  turns={turnsByTask.get(x.taskId) ?? null}
+                  axis={axis}
+                />
+              )))}
+              {/* Кнопка свёртки (GC-F10c): живёт, пока есть скрытые ранние; при showAll
+                  hiddenEarly пуст — кнопки нет (это нормально, список уже весь). */}
+              {fold.hiddenEarly.length > 0 && (
+                <Button
+                  variant="ghost"
+                  size="md"
+                  fullWidth
+                  dataTestId={`timeline-stage-showall-${stage.key}`}
+                  onClick={() => setShowAll(true)}
+                  style={{
+                    marginTop: SP.sm,
+                    border: `1px solid ${C.border}`, background: C.bgSelected,
+                    borderRadius: R.md, padding: `${SP.xs}px ${SP.sm}px`,
+                    fontSize: FS.sm, color: C.textHeading,
+                  }}
+                >
+                  {`Показать все ${fold.visible.length + fold.hiddenEarly.length} (ранних скрыто: ${fold.hiddenEarly.length})`}
+                </Button>
+              )}
+            </>
           ) : (
             <div data-testid="timeline-stage-no-executors" style={{ fontSize: FS.sm, color: C.textMuted }}>
               Исполнителей нет

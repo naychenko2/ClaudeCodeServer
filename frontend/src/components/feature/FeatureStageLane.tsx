@@ -16,6 +16,11 @@
 // где работа ещё не начиналась, — слово «впереди» (слово, не число); у «Ревью» никаких
 // плановых элементов нет: факт уже в aria-label каждого интервала («интервал i из n»).
 //
+// Пустая дорожка на закрытой оси (GC-F10c): у закрытой/смерженной фичи будущего нет, поэтому
+// этап без интервалов здесь — не «начатый» и не «впереди», а «этапа не было»: тот же вид,
+// что у skipped. Пустая дорожка живой фичи остаётся «впереди», approx — без слов (там
+// отсутствие интервалов не является фактом об этапе: журнала нет).
+//
 // Состояние «ждёт» (контракт из ревью GC-R-F2R): интервал красится C.info — модель ставит
 // 'wait' только интервалам, чей taskIds содержит ждущую задачу. То, что склеенный интервал
 // частично занят чужой работой той же стадии, видно в деталях (GC-F6), не на дорожке.
@@ -98,6 +103,12 @@ export function FeatureStageLane({
   const showMore = hasAheadZone && lane.key === 'prod' && n > 0 && (lane.plan?.ahead ?? 0) > 0;
   // «впереди» — этап, чья работа ещё не начиналась: ни интервалов, ни skipped, ни approx.
   const showAhead = hasAheadZone && n === 0;
+  // «Этапа не было» (GC-F10c): model-ный skipped или пустая дорожка на закрытой оси
+  // (timeFrac = 1): у закрытой фичи будущего нет, и пустая дорожка здесь — не начатый
+  // этап, а этап, которого не было. Взаимоисключено с showAhead (тот требует timeFrac < 1);
+  // approx не участвует: там отсутствие интервалов — не факт об этапе.
+  const noStage = !lane.skipped && n === 0 && !lane.approx && axis.timeFrac >= 1;
+  const showNoStage = lane.skipped || noStage;
 
   return (
     <div
@@ -113,14 +124,14 @@ export function FeatureStageLane({
         boxShadow: selected ? SHADOW.selected : undefined,
       }}
     >
-      {lane.skipped && (
+      {showNoStage && (
         <>
           <div
-            data-testid={`lane-skipped-line-${lane.key}`}
+            data-testid={`lane-no-stage-line-${lane.key}`}
             style={{ position: 'absolute', left: 0, right: 0, top: 7, borderTop: `1px dotted ${C.dashed}` }}
           />
           <span
-            data-testid={`lane-skipped-${lane.key}`}
+            data-testid={`lane-no-stage-${lane.key}`}
             style={{
               position: 'absolute', left: 0, top: 0, bottom: 0, display: 'flex', alignItems: 'center',
               paddingLeft: SP.xs, fontFamily: FONT.mono, fontSize: FS.xxs, color: C.textMuted,

@@ -22,6 +22,11 @@
 // GC-F10b: (10) в StageRow turns={turnsByTask.get(x.taskId)} → turns={null} → «ходы задачи»
 // краснеет; (11) в buildTurnsByTask убрать ветку синтеза живого хода → «живой ход» краснеет;
 // (12) в StageRow не передать axis → «Время шага на оси» краснеет.
+// GC-F10c: свёртка списков этапов кроме prod: 74 → 10 строк + «Показать все 74 (ранних
+// скрыто: 64)», клик → все; снятые (verdict 'withdrawn') — ни в N, ни в K, ни в списке;
+// короткий список — без кнопки. Мутации: (13) в StageRow убрать кнопку (условие
+// hiddenEarly.length > 0 → false) → «74 ревью» краснеет; (14) rows = stage.executors
+// без фильтра снятых → «снятые» краснеет.
 
 import { act } from 'react';
 import { createElement } from 'react';
@@ -1400,5 +1405,101 @@ describe('FeatureTimelineTab: ходы и «Время шага на оси» (G
       `ходы: ${localTime('2026-10-20T11:40:00Z')}–${localTime('2026-10-20T11:45:00Z')} · ` +
       `${localTime('2026-10-20T11:50:00Z')}–${localTime('2026-10-20T11:55:00Z')}`);
     expect(t, 'у закрытой фичи живого хода нет').not.toContain('идёт');
+  });
+});
+
+// === GC-F10c: свёртка длинных списков этапов, кроме prod ===
+//
+// Список этапа (кроме «Производства») — последние 10 строк, ранние скрыты; кнопка
+// «Показать все N (ранних скрыто: K)» берётся из результата свёртки (N = visible + hiddenEarly,
+// K = hiddenEarly): то, что откроется по кнопке, равно тому, что посчитано в её подписи.
+// Снятые задачи (verification.verdict 'withdrawn' — тот же признак, что у бэка,
+// FeatureStepAccounting.cs:145,190) исключены до свёртки: их нет ни в N, ни в K, ни в списке.
+
+// Фича с длинным «Ревью»: n закрытых исполнителей; withdrawnIds — задачи с вердиктом 'withdrawn'.
+function longReviewRun(n: number, withdrawnIds: string[] = []): FeatureRun {
+  const stages = fullStages();
+  const taskIds = Array.from({ length: n }, (_, i) => `t-r${i}`);
+  stages[3] = mkStage({
+    key: 'review', state: 'active', tone: 'run', firstStartedAt: '2026-10-20T11:20:00Z',
+    approxMinutes: 75, taskIds,
+    executors: taskIds.map(id => mkExec({ personaId: 'p1', taskId: id, taskRole: 'review', status: 'done', chatId: null })),
+  });
+  const reviews: FeatureTask[] = taskIds.map((id, i) => {
+    const t: FeatureTask = { id, title: `Ревью ${i + 1}`, status: 'done' };
+    if (withdrawnIds.includes(id)) t.verification = { verdict: 'withdrawn' };
+    return t;
+  });
+  return mkRun(stages, { reviews });
+}
+
+describe('FeatureTimelineTab: свёртка длинных списков этапов (GC-F10c)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    personaMap.clear();
+    personaMap.set('p1', 'Денис');
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  // Все узлы с точным data-testid внутри поддерева.
+  function nodesByTestid(root: FNodeLike, testid: string): FNodeLike[] {
+    const out: FNodeLike[] = [];
+    const walk = (n: FNodeLike) => {
+      if (n.attributes?.['data-testid'] === testid) out.push(n);
+      for (const ch of n.childNodes) walk(ch);
+    };
+    walk(root);
+    return out;
+  }
+
+  // Раскрыть «Ревью» (текущий по умолчанию — prod) и вернуть его тело.
+  function openReview(c: FNodeLike): FNodeLike {
+    const header = findNodeByAttr(c, 'data-testid', 'timeline-stage-header-review')!;
+    act(() => { (reactProps(header)!.onClick as () => void)(); });
+    return findNodeByAttr(c, 'data-testid', 'timeline-stage-body-review')!;
+  }
+
+  // === п.1: 74 ревью → видно 10, кнопка с точными N и K; клик → все ===
+  it('74 ревью → видно 10 строк и кнопка «Показать все 74 (ранних скрыто: 64)»; клик — все 74, кнопки нет', () => {
+    const c = renderTab(longReviewRun(74));
+    const body = openReview(c);
+    expect(nodesByTestid(body, 'timeline-executor').length, 'свёрнутый список').toBe(10);
+    const btn = findNodeByAttr(c, 'data-testid', 'timeline-stage-showall-review');
+    expect(btn, 'кнопки свёртки нет').not.toBeNull();
+    expect(textNodes(btn!).join(''), 'подпись кнопки').toBe('Показать все 74 (ранних скрыто: 64)');
+    act(() => { (reactProps(btn!)!.onClick as () => void)(); });
+    const opened = findNodeByAttr(c, 'data-testid', 'timeline-stage-body-review')!;
+    expect(nodesByTestid(opened, 'timeline-executor').length, 'раскрытый список').toBe(74);
+    expect(findNodeByAttr(c, 'data-testid', 'timeline-stage-showall-review'), 'кнопки после раскрытия нет').toBeNull();
+  });
+
+  // Мутация (в отчёте): убрать кнопку (условие hiddenEarly.length > 0 → false) → п.1 краснеет.
+
+  // === п.2: снятые не входят ни в N, ни в K ===
+  it('снятые (verdict withdrawn) не входят ни в N, ни в K и не открываются по кнопке', () => {
+    const withdrawn = ['t-r0', 't-r1', 't-r2', 't-r3'];
+    const c = renderTab(longReviewRun(74, withdrawn));
+    const body = openReview(c);
+    expect(nodesByTestid(body, 'timeline-executor').length, 'свёрнутый список без снятых').toBe(10);
+    const btn = findNodeByAttr(c, 'data-testid', 'timeline-stage-showall-review')!;
+    expect(textNodes(btn!).join(''), 'N и K без снятых').toBe('Показать все 70 (ранних скрыто: 60)');
+    act(() => { (reactProps(btn!)!.onClick as () => void)(); });
+    const opened = findNodeByAttr(c, 'data-testid', 'timeline-stage-body-review')!;
+    expect(nodesByTestid(opened, 'timeline-executor').length, 'снятые не открылись').toBe(70);
+  });
+
+  // Мутация (в отчёте): убрать фильтр снятых из StageRow (rows = stage.executors) → п.2 краснеет.
+
+  // === п.3: короткий список — свёртки нет ===
+  it('список из 10 строк и меньше — без кнопки, виден весь', () => {
+    const c = renderTab(longReviewRun(10));
+    const body = openReview(c);
+    expect(nodesByTestid(body, 'timeline-executor').length).toBe(10);
+    expect(findNodeByAttr(c, 'data-testid', 'timeline-stage-showall-review'), 'кнопки нет при полном списке').toBeNull();
   });
 });

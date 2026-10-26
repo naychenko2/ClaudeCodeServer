@@ -21,6 +21,17 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 // Квантили — линейная интерполяция (тип 7, как numpy): pos = q·(n−1), между соседними.
 // Для n = 3: p25 = (v0+v1)/2, p75 = (v1+v2)/2 — детерминировано, проверяется на фикстуре.
 //
+// B2a (волна 6 «Обзор фич», разрез п.3): та же выборка и тот же кэш расширяются двумя
+// величинами для оценки времени (FeatureBrief.estimate): stepMinutes — медиана по фичам от
+// средней длины принятых цепочек шагов одной фичи; tailMinutes — медиана хвоста тех же фич:
+// от принятия последнего шага до мержа. Длительности берутся из run.StepChains, которые
+// FeatureProjector уже посчитал для этой же фичи (FeatureRun.cs:54), — своего прохода по
+// журналам и нового хранилища нет. Считаются только принятые цепочки (AcceptedAt ненулевой
+// только у них — FeatureStepAccounting.cs:232): снятый шаг вне знаменателя (FeatureStepProgress),
+// у непринятого шага нет честной длительности «до принятия». Фича без принятых шагов в шаговую
+// выборку не входит (её длительность и возвраты — считаются); таких фич меньше трёх — обе
+// метрики null (то же правило, что у ожидания).
+//
 // Стоимость (хвосты вердиктов Глеба b684cff84 и a4d19b98f): кэш — по фиче, а не по проекту:
 // ключ (ownerId, featureId, наличие журнала) → (ревизия этой фичи, её выборка). Ревизия
 // фичи — UpdatedAt её эпика и его задач: у смерженной фичи эти таймстемпы после мержа не
@@ -50,11 +61,22 @@ public static class FeatureTypical
         // Ожидание человека (минуты); null — меньше трёх смерженных с полным журналом.
         TypicalPercentiles? Waiting,
         // Число возвратов (Loops).
-        TypicalPercentiles Loops);
+        TypicalPercentiles Loops,
+        // B2a: размер шаговой выборки — смерженных фич с принятыми шагами (текущая не считается).
+        int StepCount,
+        // Типичные минуты на шаг (B2a): медиана по фичам от средней длины их принятых цепочек;
+        // null — фич с шагами меньше трёх.
+        TypicalPercentiles? StepMinutes,
+        // Типичные минуты хвоста (B2a): от принятия последнего шага до мержа (qa + final + merge);
+        // null — фич с принятыми шагами и мержем меньше трёх.
+        TypicalPercentiles? TailMinutes);
 
     // Выборка одной смерженной фичи: id, длительность (мин), ожидание (мин, null — неизвестно),
-    // возвраты.
-    private sealed record Sample(string FeatureId, double DurationMinutes, int? WaitingMinutes, int Loops);
+    // возвраты, средняя минуты на принятый шаг и минуты хвоста (B2a; null — принятых шагов нет
+    // или мерж без даты — пара вычисляется только вместе, см. BuildSample).
+    private sealed record Sample(
+        string FeatureId, double DurationMinutes, int? WaitingMinutes, int Loops,
+        double? StepMinutes, double? TailMinutes);
 
     // Запись кэша: ревизия фичи, её выборка (null — фича не смержена), тик последнего
     // обращения (для выселения при переполнении).
@@ -140,13 +162,22 @@ public static class FeatureTypical
 
         var waits = chosen.Where(s => s.WaitingMinutes is not null)
             .Select(s => (double)s.WaitingMinutes!.Value).ToList();
+        // B2a: шаговая и хвостовая выборки — фичи, у которых эти величины посчитаны
+        // (BuildSample считает их только вместе); порог тот же, что у ожидания: <3 → null.
+        var steps = chosen.Where(s => s.StepMinutes is not null)
+            .Select(s => s.StepMinutes!.Value).ToList();
+        var tails = chosen.Where(s => s.TailMinutes is not null)
+            .Select(s => s.TailMinutes!.Value).ToList();
 
         return new TypicalFeatureStats(
             chosen.Count,
             waits.Count,
             Percentiles(chosen.Select(s => s.DurationMinutes).ToList()),
             waits.Count >= 3 ? Percentiles(waits) : null,
-            Percentiles(chosen.Select(s => (double)s.Loops).ToList()));
+            Percentiles(chosen.Select(s => (double)s.Loops).ToList()),
+            steps.Count,
+            steps.Count >= 3 ? Percentiles(steps) : null,
+            tails.Count >= 3 ? Percentiles(tails) : null);
     }
 
     // Выселение при переполнении: наименее недавно использованный ключ — не весь словарь.
@@ -186,7 +217,26 @@ public static class FeatureTypical
                 waiting = HumanWaitingMinutes(journal, epic.CreatedAt, summary.MergedAt ?? now);
         }
 
-        return (new Sample(epic.Id, summary.DurationMinutes, waiting, run.Verdicts.Loops),
+        // B2a (разрез п.3): шаг и хвост — с уже посчитанного этого же run, без нового прохода:
+        // цепочки и их длительности (FeatureStepAccounting.cs:254) посчитаны FeatureProjector'ом
+        // выше. Считаются только принятые цепочки: AcceptedAt ненулевой ровно у них
+        // (FeatureStepAccounting.cs:232) — снятый шаг вне знаменателя (FeatureStepProgress),
+        // у непринятого нет честной длительности «до принятия». Пара step/tail вычисляется только
+        // вместе и только при известном MergedAt: без мержа нет хвоста, и такая выборка в кэш
+        // не кладётся в любом случае (п.4). stepMinutes — среднее по цепочкам фичи (без
+        // округления: среднее целых длительностей), tailMinutes — от последней AcceptedAt до
+        // мержа, округление одно по TimeSpan (как DurationMinutes в FeatureStepAccounting).
+        double? stepMinutes = null, tailMinutes = null;
+        var acceptedChains = run.StepChains.Where(c => c.AcceptedAt is not null).ToList();
+        if (acceptedChains.Count > 0 && summary.MergedAt is not null)
+        {
+            stepMinutes = acceptedChains.Sum(c => c.DurationMinutes) / acceptedChains.Count;
+            var lastAccepted = acceptedChains.Max(c => c.AcceptedAt!.Value);
+            tailMinutes = Math.Max(0, Math.Round((summary.MergedAt.Value - lastAccepted).TotalMinutes));
+        }
+
+        return (new Sample(epic.Id, summary.DurationMinutes, waiting, run.Verdicts.Loops,
+                stepMinutes, tailMinutes),
             summary.MergedAt is not null);
     }
 

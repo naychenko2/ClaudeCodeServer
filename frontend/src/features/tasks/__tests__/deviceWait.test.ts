@@ -6,7 +6,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { LucideIcon } from 'lucide-react';
 import type { Task } from '../../../types';
-import { deviceWaitDuration, executorStopVisual, isDeviceWaiting, isTerminalStop } from '../../../lib/tasks';
+import { deviceWaitDuration, executorStopVisual, isDeviceWaiting, isTerminalStop, knownStopVisual } from '../../../lib/tasks';
 import { TaskCard } from '../TaskCard';
 import { TaskDetailsPane } from '../TaskDetailsPane';
 
@@ -74,6 +74,16 @@ describe('словарь ожидания устройства', () => {
       .toBe('Вызов инструмента раз за разом уходит в текст, повторить его штатно не удалось');
     expect(isTerminalStop('tool_call_leak_stuck')).toBe(true);
   });
+
+  // R-F17 (п.1 R-F16): «Стоп» человека — в таблице, а не через общий фолбэк: строка «Сейчас»
+  // сводки спрашивает knownStopVisual и вне таблицы теряет причину (карточка при этом молчала —
+  // фолбэк даёт тот же текст). Мутация: удалить запись interrupted_by_user из таблицы —
+  // первое ожидание краснеет (фолбэк дал бы тот же текст — именно поэтому нужна запись).
+  it('interrupted_by_user — известен таблице, текст и тон как у соседних остановок', () => {
+    expect(knownStopVisual('interrupted_by_user')).not.toBeNull();
+    expect(executorStopVisual('interrupted_by_user').text).toBe('Исполнение прервано');
+    expect(executorStopVisual('interrupted_by_user').tone).toBe('danger');
+  });
 });
 
 describe('карточка задачи', () => {
@@ -140,7 +150,7 @@ describe('терминальная остановка исполнителя', (
   // из одного триплета executorStopVisual. Мутация: зафиксировать что-то из трёх
   // параллельно в карточке — тест краснеет.
   it('единый источник: карточка повторяет текст, тон и глиф функции', () => {
-    for (const reason of ['feature_held', 'feature_held_expired', 'auth_failed', 'device_wait_expired']) {
+    for (const reason of ['feature_held', 'feature_held_expired', 'auth_failed', 'device_wait_expired', 'interrupted_by_user']) {
       const v = executorStopVisual(reason);
       const html = render(task({ executorStopReason: reason }));
       expect(html).toContain(v.text);

@@ -79,6 +79,9 @@ export interface FeatureBreakdownGroup {
   tokens: number | null;
   // Стоимость (USD); null — не считалась.
   costUsd: number | null;
+  // Ценовой класс модели (free | cheap | expensive) — приходит с бэка; null —
+  // класс неизвестен, undefined — поле не пришло вовсе (старый ответ бэка).
+  tier?: string | null;
   // Чаты, к которым относится группа.
   chatIds: string[];
 }
@@ -157,6 +160,14 @@ export interface TypicalFeatureStats {
   waiting: TypicalPercentiles | null;
   // Число возвратов.
   loops: TypicalPercentiles;
+  // B2a: размер шаговой выборки — смерженных фич с принятыми шагами (текущая не считается).
+  stepCount: number;
+  // Типичные минуты на шаг (B2a): медиана по фичам от средней длины их принятых цепочек;
+  // null — фич с шагами меньше трёх.
+  stepMinutes: TypicalPercentiles | null;
+  // Типичные минуты хвоста (B2a): от принятия последнего шага до мержа (qa + final + merge);
+  // null — фич с принятыми шагами и мержем меньше трёх.
+  tailMinutes: TypicalPercentiles | null;
 }
 
 // Статистика фичи (только в GET features/{id}).

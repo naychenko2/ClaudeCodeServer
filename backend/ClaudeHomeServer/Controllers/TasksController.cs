@@ -529,12 +529,12 @@ public class TasksController(
     }
 
     // Опции сериализации TaskItem, совпадающие с MVC (AddJsonOptions: camelCase +
-    // JsonStringEnumConverter(CamelCase)). Relaxed-энкодер: кириллица не уходит в \uXXXX
-    // при пред-сериализации, иначе MVC переэкранировал бы её вторично.
+    // JsonStringEnumConverter(CamelCase), FeatureNoteJsonConverter). Relaxed-энкодер: кириллица
+    // не уходит в \uXXXX при пред-сериализации, иначе MVC переэкранировал бы её вторично.
     private static readonly JsonSerializerOptions FeatureJsonOptions = new(JsonSerializerDefaults.Web)
     {
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase), new FeatureNoteJsonConverter() },
     };
 
     // Агрегат фичи (режим «Исполнение фичи», docs/research/turn-plan-feature-mode-cut-2026-10.md):
@@ -645,6 +645,8 @@ public class TasksController(
     // (features == null) → честный 503 (ADR-014, как у GetFeatures/GetFeaturesIndex). Ручка
     // от фич-флагов не зависит. ?eventsLimit=: не задан → 100; "all"/"0" → все; N (целое > 0)
     // → N; прочее → 100.
+    // B1b: ответ получает аддитивное поле brief (сводка состояния, разрез п.6) — FeatureBrief.Build
+    // над теми же run/timeline, что идут в stats; индекс и список brief не несут.
     // п.7: белый список символов id фичи (как resumeSessionId): GUID/строка id без спецсимволов.
     // Нестандартный id (слеш, «..», >128) → 404 «Фича не найдена» (тело как у «нет эпика»).
     private static readonly System.Text.RegularExpressions.Regex FeatureIdPattern =
@@ -864,19 +866,26 @@ public class TasksController(
         // стоимость — в комментарии FeatureTypical.cs.
         var typical = FeatureTypical.Build(owner, UserId, run.Epic.ProjectId, run.Epic.Id,
             fid => journal?.Read(UserId, fid), now);
+        // B1b: timeline — локальная: тот же экземпляр идёт в stats и в brief (FeatureBrief),
+        // второй FeatureTimeline.Build запрещён (разрез п.7: «те же экземпляры»).
+        var timeline = FeatureTimeline.Build(run, journalResult, now);
         var stats = new FeatureStats(
             Source: journalComplete ? "journal" : "approx",
             Truncated: journalResult?.Truncated ?? false,
-            Timeline: FeatureTimeline.Build(run, journalResult, now),
+            Timeline: timeline,
             Breakdown: breakdown,
             LongestNow: longestNow,
             Spend: featureSpend,
             Typical: typical);
+        // B1b: brief — сводка состояния фичи (разрез п.6): чистая функция над теми же run/timeline/typical,
+        // что пошли в stats: ни второго ProjectFull, ни второго FeatureTimeline.Build, ни второго
+        // FeatureTypical.Build (разрез п.7). B2b: estimate считается над этим же typical; queue/note — null.
+        var brief = FeatureBrief.Build(run, timeline, typical, now);
         // Б-mk-b: макеты фичи (вкладка «Планы и макеты»): mockups[] + mockupsUnavailable.
         // Порядок и fail-closed — в BuildMockups (ADR-031 «Макеты фичи»).
         var (mockups, mockupsUnavailable) = await BuildMockups(run, catalog);
         return Ok(new { run = FeatureProjector.SlimRun(run), events, eventsTotal, chats, plans, stats,
-            mockups, mockupsUnavailable });
+            brief, mockups, mockupsUnavailable });
     }
 
     // ─── W4-ANB: резюме фичи (POST /api/tasks/features/{featureId}/summary) ──────────────────
@@ -1010,6 +1019,40 @@ public class TasksController(
         return Ok(new { interrupted = after?.Interrupted ?? [] });
     }
 
+    // ─── B3: голос фичи (PUT /api/tasks/features/{featureId}/note) ────────────────────────────
+    // Пишет человек (сервисный токен → 403, как у hold). At/StageAtWrite/StateAtWrite ставит
+    // сервер из проекции; стадия — активная стадия конвейера (FeatureBrief.ActiveStageOf, та же
+    // база, что у StaleOf — B14 возврат FIN); категория — FeatureBrief.KindAtWriteOf, та же
+    // величина, что brief.kind (B15, дефект 415c1c80); пустой text снимает голос. Не-эпик → 400,
+    // чужой/кривой id → 404.
+
+    // Тело PUT note: только text — прочих полей FeatureNote у клиента нет.
+    public record FeatureNoteRequest(string? Text);
+
+    [HttpPut("features/{featureId}/note")]
+    public async Task<IActionResult> SetFeatureNote(string featureId, [FromBody] FeatureNoteRequest? req)
+    {
+        if (IsServiceToken)
+            return StatusCode(403, new { error = "Голос фичи пишет оркестратор или человек" });
+        if (features is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+        if (!FeatureIdPattern.IsMatch(featureId))
+            return NotFound(new { error = "Фича не найдена" });
+
+        var epic0 = tasks.GetByOwner(UserId).FirstOrDefault(t => t.Id == featureId);
+        if (epic0 is null) return NotFound(new { error = "Фича не найдена" });
+        if (epic0.Role != TaskRoles.Feature)
+            return BadRequest(new { error = "Голос пишется только у фичи (role=feature)" });
+        var run = features.Project(featureId, UserId);
+        if (run is null) return NotFound(new { error = "Фича не найдена" });
+
+        var epic = tasks.SetFeatureNote(featureId, req?.Text, null, true,
+            FeatureBrief.ActiveStageOf(run), FeatureBrief.KindAtWriteOf(run));
+        if (epic is null) return NotFound(new { error = "Фича не найдена" });
+        await broadcaster.ToOwner(UserId, new TaskChangedMessage("updated", epic));
+        return Ok(new { note = epic.Note is null ? null : new { text = epic.Note.Text, at = epic.Note.At } });
+    }
+
     [HttpDelete("features/{featureId}/hold")]
     public async Task<IActionResult> ClearFeatureHold(string featureId)
     {
@@ -1074,8 +1117,8 @@ public class TasksController(
             return ([], "device");
 
         // 3. Docs: catalog?.Find (null — каталога нет в DI → [] без флага). linkedPaths —
-        //    linkedFiles всех задач ПОЛНОГО run (эпик + шаги + ревью + qa + финал + мерж +
-        //    разрез + план), только из проекта эпика (см. AllLinkedFiles).
+        //    linkedFiles всех задач ПОЛНОГО run (состав — по AllRunTasks), только из проекта
+        //    эпика (см. AllLinkedFiles).
         var linkedPaths = AllLinkedFiles(run);
 
         // W4-5: каталог читает проверенное дерево эпика и main; слияние по относительному
@@ -1131,9 +1174,17 @@ public class TasksController(
     }
 
     // Все задачи ПОЛНОГО run в одном списке: эпик + шаги + ревью + qa + финал + мерж +
-    // разрез + план. Единый хелпер (не две копии): новая роль в run не должна молча отстать
+    // разрез + дизайн + план + безролевые. Единый хелпер (не две копии): новая роль в run не должна молча отстать
     // в одном из мест (автор макета / linkedFiles) — обе точки берут список отсюда.
-    private static List<TaskItem> AllRunTasks(FeatureRun run)
+    // Полноту состава держит сторож TasksControllerTests.AllRunTasks_и_BuildPlans_НесутЗадачиКаждойРоли:
+    // новая роль из TaskRoles.All или новый список в FeatureRun без строки здесь — красный тест.
+    // internal — тот же шов, что у других хелперов для тестов (InternalsVisibleTo).
+    // M1: design входит — иначе макеты от задач дизайнера не попадают ни в AllLinkedFiles,
+    // ни в OwnerTask (карточка фичи их не показывает).
+    // M8 (находка Глеба 8ad0b125, п.2): Unroled входит — состав тот же, что у ленты событий
+    // (FeatureProjector.BuildEvents) и chats[] (allFeatureTasks в GetFeature): ВСЕ задачи с
+    // featureId. Безролевая задача с linkedFiles на макет не должна молча выпадать из карточки.
+    internal static List<TaskItem> AllRunTasks(FeatureRun run)
     {
         var all = new List<TaskItem> { run.Epic };
         all.AddRange(run.Steps);
@@ -1142,7 +1193,9 @@ public class TasksController(
         if (run.Final is not null) all.Add(run.Final);
         if (run.Merge is not null) all.Add(run.Merge);
         all.AddRange(run.Cut);
+        all.AddRange(run.Design);
         all.AddRange(run.Plan);
+        all.AddRange(run.Unroled);
         return all;
     }
 

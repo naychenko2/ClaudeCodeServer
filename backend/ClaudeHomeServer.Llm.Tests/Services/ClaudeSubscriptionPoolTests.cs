@@ -1087,6 +1087,21 @@ public class ClaudeSubscriptionPoolTests : IDisposable
         pool.Pick().Should().BeOneOf("a", "b");
     }
 
+    // Инцидент 2026-10-26: крупный тариф исчерпан, у мелкого лишь пометка пары с моделью.
+    // Живых кандидатов нет, но fail-open обязан отдать ЖИВОЙ аккаунт, а не исчерпанный по
+    // старшинству тарифа — иначе фейловер чата видел «переключаться некуда».
+    [Fact]
+    public void Pick_КрупныйИсчерпан_МелкийСПометкойПары_ОтдаётЖивойМелкий()
+    {
+        var config = ConfigWithTiers(null, ("big", "max20"), ("small", "max5"));
+        var pool = new ClaudeSubscriptionPool(config, new UsageService(config));
+        pool.MarkExhausted("big", DateTime.UtcNow.AddHours(16));
+        pool.MarkModelUnavailable("small", "opus", FallbackErrorClass.ModelNoAccess);
+
+        for (var i = 0; i < 20; i++)
+            pool.Pick("opus").Should().Be("small");
+    }
+
     // Признак «отказ по модели, а не исчерпание окна» — только класс отказа ЭТОГО хода.
     // Волна 1 пробовала распознать его по полям rate_limit_event (rejected + пустая
     // utilization + overageDisabledReason) — признак оказался ложным: overageDisabledReason

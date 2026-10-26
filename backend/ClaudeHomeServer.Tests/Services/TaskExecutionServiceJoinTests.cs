@@ -650,6 +650,26 @@ public class TaskExecutionServiceJoinTests : IDisposable
             .WithMessage("*доклад*доставлен*");
     }
 
+    // Расследование 88444536: штатное переоткрытие через Update снимает флаг вместе со
+    // статусом — доработка принятой карточки получает новый цикл. Гард выше держит только
+    // переоткрытие «в обход» Update (прямая смена Status, тест рядом), а не штатное.
+    [Fact]
+    public async Task ExecuteAsync_ПереоткрытаяЧерезUpdateЗадача_ПерезапускРазрешён()
+    {
+        var user = _userStore.Add("reopen-owner", "password123", "user");
+        var task = _tasks.Create(null, user.Id, new CreateTaskRequest("Доработка после переоткрытия"));
+        _tasks.MarkClaudeStarted(task.Id, "sess-1", DateTime.UtcNow);
+        _tasks.MarkClaudeResult(task.Id, "success");
+        var tracked = _tasks.GetById(task.Id)!;
+        tracked.Status = TaskItemStatus.Done;
+        await _sut.TryDeliverCompletionAsync(tracked);
+        tracked.CompletionDelivered.Should().BeTrue();
+
+        _tasks.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.InProgress));
+        var act = async () => await _sut.ExecuteAsync(_tasks.GetById(task.Id)!, auto: false);
+        await act.Should().NotThrowAsync("доклад закрытого цикла снят вместе со статусом — карточка исполняется снова");
+    }
+
     [Fact]
     public async Task TryDeliverCompletionAsync_ПерезапускПослеДоставки_НеШлётВторойДоклад()
     {

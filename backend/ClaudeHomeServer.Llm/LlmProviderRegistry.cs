@@ -455,6 +455,9 @@ public class LlmProviderRegistry
         HasBalance = !string.IsNullOrWhiteSpace(p.Balance)
             && (!string.IsNullOrWhiteSpace(p.ApiBaseUrl) || !string.IsNullOrWhiteSpace(p.BalanceUrl)),
         Configured = p.Enabled,
+        // Признак локальности — из конфига: фронт по нему узнаёт, что провайдер
+        // локальный, даже если его ключ (например «local-qwen») фронту неизвестен.
+        IsLocal = p.IsLocal,
         TierStrong = p.TierStrong,
         TierMedium = p.TierMedium,
         TierWeak = p.TierWeak,

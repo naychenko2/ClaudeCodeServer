@@ -128,6 +128,50 @@ public class TaskSchedulerServiceTests
         TaskSchedulerService.ShouldAutoStart(done, Utc, Now).Should().BeFalse();
     }
 
+    // Отказ ревью b6c2bca9 (побочка сброса пары запуска): ShouldAutoStart требует ClaudeStartedAt == null,
+    // и переоткрытая карточка со старым сроком в окне 24 ч ушла бы в автозапуск без команды человека
+    // (петля доработки: закрыли → переоткрыли → само переисполнилось без указаний). Безопасное
+    // правило: переоткрытая карточка автозапуск не получает — просроченный срок снимается вместе со
+    // следами цикла (TaskManager.Update), старт нового цикла — только явной командой или новым сроком.
+    [Fact]
+    public void ShouldAutoStart_ПереоткрытаяКарточка_False_аНоваяСТемЖеСроком_True()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "sched_reopen_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var tasks = new TaskManager(new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(dir, "projects.json"),
+            })
+            .Build());
+        try
+        {
+            var task = tasks.Create(null, "u", new CreateTaskRequest("срочная",
+                Assignee: TaskItemAssignee.Claude, DueDate: "2026-07-03", DueTime: "11:00"));
+            // Контроль: свежая карточка со наступившим сроком в окне — автозапуск штатный
+            TaskSchedulerService.ShouldAutoStart(tasks.GetById(task.Id)!, Utc, Now).Should().BeTrue();
+
+            // Состоявшийся запуск, успешный ход, закрытие
+            tasks.MarkClaudeStarted(task.Id, "sess-1", new DateTime(2026, 7, 3, 11, 0, 0, DateTimeKind.Utc));
+            tasks.MarkClaudeResult(task.Id, "success");
+            tasks.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+
+            // Оркестратор переоткрывает карточку для доработки — без команды человека исполнитель
+            // не должен стартовать, хотя срок наступил и он в окне
+            tasks.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Todo));
+            TaskSchedulerService.ShouldAutoStart(tasks.GetById(task.Id)!, Utc, Now).Should().BeFalse();
+
+            // Человек сам поставил срок — автозапуск снова легален: срок — его команда
+            tasks.Update(task.Id, new UpdateTaskRequest(DueDate: "2026-07-03", DueTime: "11:30"));
+            TaskSchedulerService.ShouldAutoStart(tasks.GetById(task.Id)!, Utc, Now).Should().BeTrue();
+        }
+        finally
+        {
+            tasks.Dispose();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     // ─── Отказ автозапуска по паузе (R-HOLD-G находка 6; W4-HOLD-I) ─────────────
     // Планировщик обязан отличать отказ по паузе (тихий Info без трейса) от падения
     // автозапуска (Warning с трейсом) — по ИСТОЧНИКИ исключения, а не пересчётом гейта:

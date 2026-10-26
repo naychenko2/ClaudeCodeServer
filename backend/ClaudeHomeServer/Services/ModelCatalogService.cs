@@ -58,6 +58,12 @@ public class ModelCatalogService(LlmProviderRegistry providers, IHttpClientFacto
 
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, ProviderApiCache> _apiCaches = new();
 
+    // Ценовой класс провайдера (free|cheap|expensive) для /api/models: локальный движок →
+    // бесплатно, claude (и подписки sub-*) → дорого, прочие облачные → дёшево. Правило живёт
+    // в Core (SpendCostTiers) — здесь только прокладка, своего словаря «claude → дорого» нет.
+    public string CostTierOf(LlmProviderConfig provider)
+        => SpendCostTiers.OfProvider(provider.Key, provider.IsLocal);
+
     public async Task<IReadOnlyList<ModelInfo>> GetModelsAsync(CancellationToken ct = default)
     {
         List<ModelInfo> claude;

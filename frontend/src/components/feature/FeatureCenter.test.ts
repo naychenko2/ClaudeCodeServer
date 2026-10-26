@@ -41,6 +41,15 @@ vi.mock('../../lib/signalr', async (importOriginal) => {
   return { ...orig, onMessage: () => () => {}, onPreviewMessage: () => () => {} };
 });
 vi.mock('../../lib/toast', () => ({ showToast: () => {} }));
+vi.mock('../../lib/personas', () => ({
+  // ensurePersonasLoaded — no-op: в node-окружении тянет signalr/localStorage
+  // (блок «Сводка» на странице зовёт резолвер имён — F6).
+  ensurePersonasLoaded: () => Promise.resolve(),
+  getPersonaById: (id: string) => ({ id, name: 'Персона' }),
+  usePersonas: () => [],
+  usePersonasVersion: () => 0,
+  personaInitials: (name: string) => (name ? name.trim().charAt(0).toUpperCase() : ''),
+}));
 
 // Узел fakeDom: ищем элемент, чей style содержит borderRadius (Island = R.xxl=14px).
 type FNode = { nodeType: number; childNodes: FNode[]; getAttribute?: (a: string) => string | null; style?: Record<string, unknown> };

@@ -638,39 +638,56 @@ export function deviceWaitDuration(sinceIso: string, now: number = Date.now()): 
 // устройство и связь с ним — Unplug.
 // Часть кейсов опережает бэк (feature_held — бэковая формулировка ещё не сверена, дефект
 // 93658efc); синхронизация с ExecutorStopText на бэке — при закрытии 93658efc.
-// Неизвестная причина (пометку поставил более новый бэк) — общая формулировка, не ключ.
 export interface StopVisual {
   text: string;
   tone: 'warning' | 'danger';
   icon: LucideIcon;
 }
 
-export function executorStopVisual(reason: string | null | undefined, deviceName?: string | null): StopVisual {
-  switch (reason) {
-    case 'device_wait_expired':
-      return {
-        text: `${deviceName ? `Устройство «${deviceName}»` : 'Устройство проекта'} не вышло на связь за 24 часа — задача не запускалась`,
-        tone: 'danger',
-        icon: Unplug,
-      };
-    case 'auth_failed':
-      return { text: 'Не удалось авторизоваться у провайдера модели', tone: 'danger', icon: Unplug };
-    case 'subagent_stuck':
-      return { text: 'Сабагент раз за разом обрывается посреди работы, добить его не удалось', tone: 'danger', icon: Unplug };
-    case 'tool_call_leak_stuck':
-      return { text: 'Вызов инструмента раз за разом уходит в текст, повторить его штатно не удалось', tone: 'danger', icon: Unplug };
-    // W4-HOLD-F4 (возврат R-F4): feature_held — штатная пауза фичи (W4-HOLD-D), а не
-    // авария: без своей формулировки карточка выдавала «Исполнение прервано» и
-    // толкала человека перезапускать шаг, который гейт паузы всё равно отклонит.
-    case 'feature_held':
-      return { text: 'Фичу удержали на паузе — шаг ждёт снятия паузы', tone: 'warning', icon: Pause };
-    // W4-HOLD-F5 (п.1 R-F5): feature_held_expired — про исчезнувший чат паузы, а не про
-    // оборванную связь: свой глиф MessageSquareOff, а не Unplug.
-    case 'feature_held_expired':
-      return { text: 'Чат исполнителя исчез за время паузы — продолжения нет, шаг нужно перезапустить', tone: 'danger', icon: MessageSquareOff };
-    default:
-      return { text: 'Исполнение прервано', tone: 'danger', icon: Unplug };
+// Таблица известных кодов (бэк: ExecutorStopClassifier). Источник перевода и признака
+// «код известен» для всех кодов, кроме device_wait_expired: его текст требует имени
+// устройства, поэтому он строится в knownStopVisual выше таблицы (R-F17 п.3; прежний
+// комментарий называл таблицу «единственной» — это было неверно). knownStopVisual спрашивает
+// её сам, второго списка кодов нигде быть не может (defect c79050aa: сводка фичи переводит
+// то же поле из этой же таблицы). Записи и сам объект заморожены: потребители только
+// читают (R-F17 п.4).
+const STOP_VISUALS: Record<string, StopVisual> = Object.freeze({
+  auth_failed: Object.freeze<StopVisual>({ text: 'Не удалось авторизоваться у провайдера модели', tone: 'danger', icon: Unplug }),
+  subagent_stuck: Object.freeze<StopVisual>({ text: 'Сабагент раз за разом обрывается посреди работы, добить его не удалось', tone: 'danger', icon: Unplug }),
+  tool_call_leak_stuck: Object.freeze<StopVisual>({ text: 'Вызов инструмента раз за разом уходит в текст, повторить его штатно не удалось', tone: 'danger', icon: Unplug }),
+  // W4-HOLD-F4 (возврат R-F4): feature_held — штатная пауза фичи (W4-HOLD-D), а не
+  // авария: без своей формулировки карточка выдавала «Исполнение прервано» и
+  // толкала человека перезапускать шаг, который гейт паузы всё равно отклонит.
+  feature_held: Object.freeze<StopVisual>({ text: 'Фичу удержали на паузе — шаг ждёт снятия паузы', tone: 'warning', icon: Pause }),
+  // W4-HOLD-F5 (п.1 R-F5): feature_held_expired — про исчезнувший чат паузы, а не про
+  // оборванную связь: свой глиф MessageSquareOff, а не Unplug.
+  feature_held_expired: Object.freeze<StopVisual>({ text: 'Чат исполнителя исчез за время паузы — продолжения нет, шаг нужно перезапустить', tone: 'danger', icon: MessageSquareOff }),
+  // R-F17 (п.1 R-F16): interrupted_by_user — «Стоп» человека (бэк: ExecutorStopClassifier.
+  // InterruptedByUserReason, ExecutorStopClassifier.cs:52, ставится TaskExecutionService.cs:1244).
+  // Без записи в таблице строка «Сейчас» сводилась к «нет причины», а карточка и блок
+  // «Остановлена» называли это событие «Исполнение прервано» через общий фолбэк. Формулировка —
+  // та же, что у соседних поверхностей: их тексты не меняются, меняется только «Сейчас».
+  interrupted_by_user: Object.freeze<StopVisual>({ text: 'Исполнение прервано', tone: 'danger', icon: Unplug }),
+});
+
+// Перевод известного кода, null — неизвестного (пометку поставил более новый бэк).
+// hasOwnProperty, а не прямая индексация: имя из прототипа ('toString', 'constructor')
+// не должно читаться известным кодом.
+export function knownStopVisual(reason: string | null | undefined, deviceName?: string | null): StopVisual | null {
+  if (reason === 'device_wait_expired') {
+    return {
+      text: `${deviceName ? `Устройство «${deviceName}»` : 'Устройство проекта'} не вышло на связь за 24 часа — задача не запускалась`,
+      tone: 'danger',
+      icon: Unplug,
+    };
   }
+  if (reason != null && Object.prototype.hasOwnProperty.call(STOP_VISUALS, reason)) return STOP_VISUALS[reason];
+  return null;
+}
+
+// Неизвестная причина — общая формулировка, не ключ.
+export function executorStopVisual(reason: string | null | undefined, deviceName?: string | null): StopVisual {
+  return knownStopVisual(reason, deviceName) ?? { text: 'Исполнение прервано', tone: 'danger', icon: Unplug };
 }
 
 // Терминальная ли остановка: работа встала насовсем и ждёт человека. Зеркало

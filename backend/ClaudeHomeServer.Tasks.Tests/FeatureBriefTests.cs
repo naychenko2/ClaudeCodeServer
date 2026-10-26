@@ -693,6 +693,56 @@ public class FeatureBriefTests
             .UpdatedAt.Should().Be(NOW.AddHours(-10), "фичу создали 10 часов назад — это её состояние");
     }
 
+    // Характеризующий тест (R-B3B6 замечание 2): снятие паузы/ожидания меняет состояние, но события
+    // не создаёт — вклад отметки исчезает из максимума, updatedAt откатывается к предыдущему событию
+    // и может уменьшиться. Сценарий Глеба: финал принят в 10:00 (NOW−2ч), пауза поставлена в 12:00
+    // (NOW−1ч), снята в 12:05 (NOW) → updatedAt снова 10:00, а не 12:05. Код поведения не меняется —
+    // тест описывает то, что есть (та же логика для ClearAwaitingHuman: TaskManager.cs:1357).
+    [Fact]
+    public void UpdatedAt_СнятиеПаузыИОжиданияНеСоздаётСобытияЗначениеОткатывается()
+    {
+        var epic = TaskOf("ep", TaskRoles.Feature);
+        var finalAccepted = TaskOf("f", TaskRoles.Final, createdAt: NOW.AddHours(-8),
+            startedAt: NOW.AddHours(-8), completedAt: NOW.AddHours(-2));
+
+        // До паузы: последнее записанное событие — принятие финала.
+        var beforeHold = new FeatureRun
+        {
+            FeatureId = "ep", State = FeatureStates.MergePending, Epic = epic, Final = finalAccepted,
+        };
+        FeatureBrief.Build(beforeHold, null, null, NOW).UpdatedAt.Should().Be(NOW.AddHours(-2),
+            "последнее событие — принятие финала (10:00)");
+
+        // Пауза час назад: отметка Hold.Since свежее принятия — updatedAt идёт вперёд.
+        var withHold = new FeatureRun
+        {
+            FeatureId = "ep", State = FeatureStates.Paused, Epic = epic, Final = finalAccepted,
+            Hold = new FeatureHold(FeatureHoldReasons.Manual, NOW.AddHours(-1), null, true),
+        };
+        FeatureBrief.Build(withHold, null, null, NOW).UpdatedAt.Should().Be(NOW.AddHours(-1),
+            "последнее событие — постановка паузы (12:00)");
+
+        // Пауза снята (12:05): новой отметки нет, вклад Hold.Since исчезает из максимума —
+        // значение откатывается к принятию финала, т.е. уменьшается: «ровно моменты изменений» — не про это.
+        var holdCleared = new FeatureRun
+        {
+            FeatureId = "ep", State = FeatureStates.MergePending, Epic = epic, Final = finalAccepted,
+        };
+        FeatureBrief.Build(holdCleared, null, null, NOW).UpdatedAt.Should().Be(NOW.AddHours(-2),
+            "снятие паузы события не создаёт: значение откатывается к 10:00, а не 12:05");
+
+        // То же со снятием ожидания: AwaitingHumanSince — событие, его снятие — нет.
+        var waiting = TaskOf("t1", createdAt: NOW.AddHours(-5), startedAt: NOW.AddHours(-5),
+            stoppedAt: NOW.AddHours(-4), awaitingSince: NOW.AddHours(-3));
+        FeatureBrief.Build(RunWithTasks(FeatureStates.Waiting, epic, waiting), null, null, NOW)
+            .UpdatedAt.Should().Be(NOW.AddHours(-3), "последнее событие — ожидание человека");
+        var waitCleared = TaskOf("t1", createdAt: NOW.AddHours(-5), startedAt: NOW.AddHours(-5),
+            stoppedAt: NOW.AddHours(-4));
+        FeatureBrief.Build(RunWithTasks(FeatureStates.Stopped, epic, waitCleared), null, null, NOW)
+            .UpdatedAt.Should().Be(NOW.AddHours(-4),
+            "снятие ожидания события не создаёт: значение откатывается к остановке исполнителя");
+    }
+
     // ─── заглушки и время расчёта ──────────────────────────────────────────────────────────────
 
     [Fact]

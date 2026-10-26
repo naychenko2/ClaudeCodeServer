@@ -269,11 +269,15 @@ public static class FeatureBrief
         return kindAtWrite != kind;
     }
 
-    // B6 (дефект f2da9354): updatedAt — время последнего изменения состояния фичи: максимум событий
-    // состояния её задач — ровно тех моментов, которыми FeatureProjector меняет State/Attention:
-    // CreatedAt (задача появилась — состав задач и знаменатель плана), ClaudeStartedAt (running/merging),
-    // ExecutorStoppedAt (stopped), CompletedAt (прогресс, merge_pending, merged/closed), AwaitingHumanSince
-    // (waiting), Hold.Since эпика (paused/draft). Других событий состояния у трекера нет.
+    // B6 (дефект f2da9354): updatedAt — время последнего записанного события состояния: максимум событий
+    // состояния её задач — моментов, которыми такие события записаны: CreatedAt (задача появилась —
+    // состав задач и знаменатель плана), ClaudeStartedAt (running/merging), ExecutorStoppedAt (stopped),
+    // CompletedAt (прогресс, merge_pending, merged/closed), AwaitingHumanSince (waiting),
+    // Hold.Since эпика (paused/draft). Иных событий состояния у трекера нет. Снятие паузы (ClearHold,
+    // TaskManager.cs:1421) и снятие ожидания (ClearAwaitingHuman, :1357) состояние меняют, но события
+    // не записывают: вклад отметки исчезает из максимума, значение откатывается к предыдущему событию
+    // и может уменьшиться (финал принят 10:00, пауза 12:00, снята 12:05 → updatedAt снова 10:00).
+    // Характеризующий тест — FeatureBriefTests.UpdatedAt_СнятиеПаузыИОжиданияНеСоздаётСобытияЗначениеОткатывается.
     // НЕ TaskItem.UpdatedAt: это время касания записи, оно двигается настройками (метки, приоритет) —
     // состояние от них не меняется. НЕ LastActivityAt: в нём только CompletedAt/ClaudeStartedAt,
     // а случай дефекта («исполнитель встал N часов назад» / «ждёт вас») в нём не виден.

@@ -2921,11 +2921,18 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     }
 
     // c2: At/StageAtWrite/StateAtWrite клиент не задаёт — лишние поля тела игнорируются, значения серверные.
-    // Мутация: принимать at из тела — тест краснеет.
+    // R-B3B6 замечание 1: «серверные» значения сверяются с проекцией, а не «не подделка/не пусто» —
+    // как в MCP-пути (TasksToolsetFeatureNoteTests.FeatureNote_АктивнаяСтадия_ШтампуетсяСтадия):
+    // фикстура с идущим шагом (Now непустой, стадия непустая), ожидаемые Stage/State берутся из проектора.
+    // Мутация: принимать at из тела — краснеет BeOnOrAfter. Мутация (замечание 1): заменить
+    // run.Now.FirstOrDefault()?.Stage, run.State в штампе TasksController.cs:1027-1028 константами —
+    // краснеют StageAtWrite/StateAtWrite.
     [Fact]
     public async Task PutNote_PolyaKlientaIgnoriruyutsya_ShtampujetServer()
     {
         var epicId = await CreateFeatureEpicAsync();
+        // Идущий шаг фичи: Now непустой, активная стадия есть (RoleToStage(step) = "prod").
+        await CreateTaskAsync(new { title = "шаг-note", featureId = epicId, role = "step", status = "inProgress" });
         var before = DateTime.UtcNow;
 
         var response = await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new
@@ -2935,11 +2942,17 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var run = _factory.Services.GetRequiredService<FeatureProjector>().Project(epicId, OwnerId)!;
+        run.Now.Should().NotBeEmpty("фикстура: шаг фичи идёт — у проекции есть активная стадия");
+        run.Now[0].Stage.Should().NotBeEmpty("сверка не с пустой стадией");
+
         var note = _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.Note!;
         note.Text.Should().Be("голос");
         note.At.Should().BeOnOrAfter(before);
-        note.StageAtWrite.Should().NotBe("подделка");
-        note.StateAtWrite.Should().NotBe("подделка").And.NotBeEmpty();
+        note.StageAtWrite.Should().Be(run.Now[0].Stage,
+            "StageAtWrite — активная стадия проекции на момент записи, значение клиента игнорировано");
+        note.StateAtWrite.Should().Be(run.State,
+            "StateAtWrite — состояние проекции на момент записи");
         note.BySessionId.Should().BeNull();
         note.ByUser.Should().BeTrue();
     }

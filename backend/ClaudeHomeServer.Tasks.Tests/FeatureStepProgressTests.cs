@@ -551,9 +551,9 @@ public class FeatureStepProgressTests
             var field = t.GetField(name, BindingFlags.NonPublic | BindingFlags.Static);
             field.Should().NotBeNull($"константа {name} должна существовать");
             if (shouldBeInternal)
-                field.IsAssembly.Should().BeTrue($"{name} — internal: по ней сверяет FeatureBrief.EstimateOf");
+                field!.IsAssembly.Should().BeTrue($"{name} — internal: по ней сверяет FeatureBrief.EstimateOf");
             else
-                field.IsPrivate.Should().BeTrue($"{name} вне класса не потребляется — private");
+                field!.IsPrivate.Should().BeTrue($"{name} вне класса не потребляется — private");
         }
     }
 

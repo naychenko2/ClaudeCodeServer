@@ -3,6 +3,7 @@
 // данные — /api/spend/* (docs/architecture/spend-analytics-api.md).
 import { C } from 'aihome_shell/kit';
 import { addDaysUtc, todayUtc, type SpendDim } from '../../lib/spendContract';
+import { COST_TIERS, COST_TIER_KEYS, costTierColor, type CostTierKey } from '../../lib/costTiers';
 
 // Разрезы pivot-дерева и фильтров. 'turn' — терминальный псевдо-уровень (лист-ходы).
 export type SpendLevel = SpendDim | 'turn';
@@ -54,22 +55,18 @@ export const sourceTextColor = (s: string) =>
 
 // Ценовые классы моделей: бесплатно / дёшево / дорого. Класс приходит с бэка
 // (SpendCardRow.tier, SpendDayPoint.byTier) — словарь «какая модель какого
-// класса» на фронте НЕ дублируем, красим только по ключу.
-export const SPEND_TIERS: Record<string, { label: string; color: string }> = {
-  free: { label: 'Бесплатные', color: C.success },
-  cheap: { label: 'Дёшево', color: C.info },
-  expensive: { label: 'Дорого', color: C.warning },
-};
+// класса» на фронте НЕ дублируем, красим только по ключу. Сам словарь классов
+// (подпись + цвет) — общий на всё приложение, в lib/costTiers.ts.
+export const SPEND_TIERS = COST_TIERS;
 
 // Порядок классов в стеке столбика и в легенде
-export const TIER_KEYS = ['free', 'cheap', 'expensive'] as const;
-export type SpendTierKey = typeof TIER_KEYS[number];
+export const TIER_KEYS = COST_TIER_KEYS;
+export type SpendTierKey = CostTierKey;
 
 // Неизвестный или null-класс → нейтральная подпись и цвет палитры (не выдуманный)
 export const tierLabel = (t?: string | null) =>
   (t && SPEND_TIERS[t] ? SPEND_TIERS[t].label : 'Прочие');
-export const tierColor = (t?: string | null) =>
-  (t && SPEND_TIERS[t] ? SPEND_TIERS[t].color : C.textMuted);
+export const tierColor = costTierColor;
 // Текстовый вариант цвета класса — для моноширинных значений рядом с полосой
 export const tierTextColor = (t?: string | null) => {
   if (t === 'free') return C.successText;

@@ -494,6 +494,9 @@ function providerReadyCard(
   const expandable = countWindows.length > 0 || trend.length >= 2 || !!cabinetUrl;
   return {
     key, name, color, state: 'ready', isFree: isFreeSource(key), dim: false, onRetry: () => {},
+    // Ценовой класс провайдера — с бэка (/api/models, costTier): рядом с пилюлей
+    // «бесплатный» человек видит, дёшево это или дорого.
+    costTier: providerCapsByKey(key).costTier ?? null,
     windows: surfaceWindows, labelWidth: 64, pills,
     freshness: providerFreshness(bal.asOf),
     health: bal.health ?? null, hasExhausted,

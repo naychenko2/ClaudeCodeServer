@@ -10,9 +10,19 @@ import { C, FONT, FS, R, SP } from '../../lib/design';
 import { Button, Dot, IconButton } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { fmtReset } from '../../lib/rateLimit';
+import { COST_TIER_PILL } from '../../lib/costTiers';
 import { QuotaWindow, CountSegments, type QuotaWindowView } from './QuotaWindow';
 
-export interface PillSpec { label: string; tone: 'plain' | 'danger' | 'free' | 'warn' }
+export interface PillSpec { label: string; tone: 'plain' | 'danger' | 'free' | 'warn' | 'info' | 'expensive' }
+
+// Пилюля ценового класса провайдера: класс приходит с бэка (/api/models, costTier).
+// free НЕ рисуем — бесплатность провайдера уже выражена пилюлей «бесплатный», дубль
+// заводить нельзя. Неизвестный класс — тоже без пилюли: под класс не выдумываем.
+export function costTierPill(costTier?: string | null): { label: string; tone: PillSpec['tone'] } | null {
+  if (costTier === 'cheap') return { label: COST_TIER_PILL.cheap, tone: 'info' };
+  if (costTier === 'expensive') return { label: COST_TIER_PILL.expensive, tone: 'expensive' };
+  return null;
+}
 
 // Свежесть в углу шапки. Логику (канал данных, pollStatus, возраст) считает QuotasTab —
 // здесь только размещение: точка + подпись.
@@ -43,6 +53,9 @@ export interface ProviderCardData {
   color: string;
   state: 'loading' | 'error' | 'ready' | 'unavailable';
   isFree: boolean;
+  // Ценовой класс провайдера (free | cheap | expensive) — с бэка (/api/models,
+  // costTier). null/неизвестный — пилюли класса нет.
+  costTier?: string | null;
   dim?: boolean;            // притушение: данные устарели при ошибке сводки (как MoneyTile при stale)
   retryAt?: number | null;
   onRetry: () => void;
@@ -88,12 +101,15 @@ const cardBase: CSSProperties = {
 const nameStyle: CSSProperties = { fontSize: FS.base, fontWeight: 600, color: C.textHeading };
 
 // Пилюля шапки (planLabel, «бесплатный», «Предел», «Часть платформ недоступна») — один стиль
-function Pill({ children, tone = 'plain' }: { children: ReactNode; tone?: 'plain' | 'danger' | 'free' | 'warn' }) {
+function Pill({ children, tone = 'plain' }: { children: ReactNode; tone?: PillSpec['tone'] }) {
   const styles: Record<string, CSSProperties> = {
     plain:  { background: C.bgCard, border: `1px solid ${C.border}`, color: C.textSecondary },
     free:   { background: C.successBg, border: `1px solid ${C.success}`, color: C.successText },
     danger: { background: C.dangerBg, border: `1px solid ${C.dangerBorder}`, color: C.dangerText },
     warn:    { background: C.warningBg, border: `1px solid ${C.warning}`, color: C.warningText },
+    // Ценовой класс: дёшево — info, дорого — янтарь (как «дорого» в аналитике расхода)
+    info:    { background: C.infoBg, border: `1px solid ${C.info}`, color: C.info },
+    expensive: { background: C.warningBg, border: `1px solid ${C.warning}`, color: C.warningText },
   };
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0, whiteSpace: 'nowrap', padding: `${SP.xxs}px ${SP.sm}px`, borderRadius: R.md, fontSize: FS.xs, fontWeight: 600, ...styles[tone] }}>
@@ -267,6 +283,8 @@ export function ProviderCard({ data }: { data: ProviderCardData }) {
     onPointerCancel: () => setPressed(false),
   } : {};
   const exhausted = data.hasExhausted;
+  // Пилюля ценового класса (бесплатному провайдеру она не полагается — см. costTierPill)
+  const tierPill = costTierPill(data.costTier);
   const hasCountTrend = !data.countWindows || data.countWindows.length === 0;
 
   return (
@@ -298,6 +316,9 @@ export function ProviderCard({ data }: { data: ProviderCardData }) {
               аккаунты подписок различаются (точка у всех подписок одного цвета) */}
           <span style={{ ...nameStyle, flex: '0 1 auto', minWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
           {data.pills.map((p, i) => <Pill key={i} tone={p.tone}>{p.label}</Pill>)}
+          {/* Пилюля класса — рядом с «бесплатным»: у бесплатного провайдера класса
+              free нет (он уже назван пилюлей), у платного — виден сразу. */}
+          {tierPill && <Pill tone={tierPill.tone}>{tierPill.label}</Pill>}
           {data.routingBadge && <RoutingPill tone={data.routingBadge.tone} label={data.routingBadge.label} />}
         </div>
         {(data.freshness || clickable) && (

@@ -73,6 +73,9 @@ export interface FeatureBreakdownGroup {
   tokens: number | null;
   // Стоимость (USD); null — не считалась.
   costUsd: number | null;
+  // Ценовой класс модели (free | cheap | expensive) — приходит с бэка; null —
+  // класс неизвестен, undefined — поле не пришло вовсе (старый ответ бэка).
+  tier?: string | null;
   // Чаты, к которым относится группа.
   chatIds: string[];
 }

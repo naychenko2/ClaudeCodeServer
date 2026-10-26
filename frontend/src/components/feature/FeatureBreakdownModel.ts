@@ -11,6 +11,8 @@
 
 import type { FeatureRun, FeatureStageExecutor } from '../../types/featureRun';
 import type { FeatureBreakdownGroup } from '../../types/featureStats';
+import { C } from '../../lib/design';
+import { COST_TIERS } from '../../lib/costTiers';
 import { formatUsd, percentText, roleGroupLabel } from './FeatureStatsFormat';
 
 // Проценты живут в FeatureStatsFormat.ts (ST-F8); ре-экспорт — потребители
@@ -85,8 +87,24 @@ export function totalMoney(
   return { text: formatMoney({ key: '', minutes: 0, tokens, costUsd: total, chatIds: [] }), partial: false };
 }
 
-// === Ключ модели ===
+// === Ценовой класс ===
 
+// Цвет строки по ценовому классу модели: класс приходит с бэка (поле tier в
+// строке разбивки фичи), словарь «какая модель какого класса» на фронте НЕ
+// дублируем — красим по ключу класса.
+//
+// Три исхода:
+//   · класс известен → цвет класса (free → success, cheap → info, expensive → warning);
+//   · класс null (бэк ответил, но класса нет) → нейтральный цвет;
+//   · поля tier в ответе нет вовсе (старый бэк) → null: группа берёт обычную
+//     палитру, а не серый — иначе вид менялся бы у всех, пока бэк не обновится.
+export function tierColorOf(g: FeatureBreakdownGroup): string | null {
+  if (g.tier === undefined) return null;
+  if (!g.tier) return C.textMuted;
+  return COST_TIERS[g.tier]?.color ?? C.textMuted;
+}
+
+// === Ключ модели ===
 // Ключ модели приходит из двух пространств: ось «модели» — из журнала (полный
 // журнал — «Claude Opus 5.5», без журнала — «Авто → Claude Opus 5.5»), снимок
 // исполнителя executors[].modelFull — всегда «Авто → …» (FeatureProjector.cs:437-440).

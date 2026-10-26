@@ -1600,6 +1600,18 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             if (_pool.IsExhausted(sub.Key) || _pool.IsAuthDead(sub.Key) || !_pool.IsPairUsable(sub.Key, model)) continue;
             yield return sub.Key;
         }
+        // Последний шанс уровня 1: живой аккаунт, у которого помечена лишь ПАРА с моделью.
+        // Пометку ставит один отказ (в т.ч. чужого чата), и она не повод отдавать ход
+        // заведомому провалу: без цепочки он иначе падал на исчерпанной подписке, хотя
+        // соседняя тянула ту же модель (инцидент 2026-10-26). Настоящий no_access стоит
+        // одной быстрой попытки — attempted не пустит на ту же пару второй раз.
+        foreach (var sub in _pool.All)
+        {
+            if (sub.Key == currentKey) continue;
+            if (_pool.IsExhausted(sub.Key) || _pool.IsAuthDead(sub.Key)) continue;
+            if (!_pool.SupportsModel(sub.Key, model) || !_pool.IsModelUnavailable(sub.Key, model)) continue;
+            yield return sub.Key;
+        }
     }
 
     // Перенос транскрипта в профиль целевой пары (тот же механизм, что у ручной миграции

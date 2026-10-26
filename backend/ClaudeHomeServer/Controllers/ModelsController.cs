@@ -34,10 +34,19 @@ public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry p
     {
         var caps = new Dictionary<string, LlmCapabilities>
         {
-            [LlmCapabilitiesCatalog.Claude.Provider] = LlmCapabilitiesCatalog.Claude,
+            // Класс провайдера — правилом Core (SpendCostTiers): claude → дорого.
+            // IsLocal у claude — false (свой GPU у него нет).
+            [LlmCapabilitiesCatalog.Claude.Provider] = LlmCapabilitiesCatalog.Claude with
+            {
+                CostTier = SpendCostTiers.OfProvider(LlmCapabilitiesCatalog.Claude.Provider, isLocal: false),
+                IsLocal = false,
+            },
         };
+        // Признак локальности берётся из конфига провайдера (CapabilitiesOf → p.IsLocal):
+        // фронт по нему узнаёт, что провайдер локальный, даже если его ключ («local-qwen»)
+        // фронту неизвестен.
         foreach (var p in providers.All)
-            caps[p.Key] = LlmProviderRegistry.CapabilitiesOf(p);
+            caps[p.Key] = LlmProviderRegistry.CapabilitiesOf(p) with { CostTier = catalog.CostTierOf(p) };
 
         var resolved = new Dictionary<string, string?>
         {

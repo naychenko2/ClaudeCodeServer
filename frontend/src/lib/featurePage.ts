@@ -38,10 +38,12 @@ import type { PlanState } from './featureProgress';
 // фронт ничего не пересчитывает — только переводит ключи в слова (шаг F2/F5).
 // Здесь только форма данных, логики нет.
 
-// Категория состояния блока — словарь бэка (п. 4 разреза), восемь значений.
+// Категория состояния блока — словарь бэка (п. 4 разреза), девять значений.
+// 'merged' — эпик смержен, ран фичи ещё открыт (Б-1.1); для свода ведётся так же,
+// как 'closed' (Ф-1.1): тот же тег, та же строка, тот же итог.
 export type FeatureBriefKind =
   | 'running' | 'waiting_you' | 'error' | 'paused'
-  | 'queued' | 'draft' | 'idle' | 'closed';
+  | 'queued' | 'draft' | 'idle' | 'closed' | 'merged';
 
 // «Сейчас»: первая запись `run.Now` или `Attention`; null — фича не идёт.
 // Поля, которых бэк не имеет (record BriefNow: nullable TaskId/PersonaId/StepRef/

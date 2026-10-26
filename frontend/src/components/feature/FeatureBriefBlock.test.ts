@@ -1,5 +1,6 @@
 // Тесты карточки «Сводка» (волна 6, шаг F5, макет feature-summary-1):
-// · 8 kind: строка «Сейчас» в DOM равна выходу briefNowText (F2), подстрока «Сейчас» и
+// · 9 kind (включая 'merged' — для карточки ведётся так же, как 'closed', Ф-1.1):
+//   строка «Сейчас» в DOM равна выходу briefNowText (F2), подстрока «Сейчас» и
 //   «Сделано» — выходам briefSubText/briefDoneText (R-F5: слова перенесены в модель),
 //   тег — выходу featureRunStatusTag (единая точка правды тега); ожидаемых строк в тесте
 //   нет — они берутся из тех же моделей, что и в блоке;
@@ -155,9 +156,10 @@ const CASES: Case[] = [
   { name: 'idle', kind: 'idle', tag: featureRunStatusTag('idle').label },
   { name: 'closed (смержена)', kind: 'closed', mergedAt: at(24, 18, 5), tag: featureRunStatusTag('merged').label },
   { name: 'closed (без мержа)', kind: 'closed', tag: featureRunStatusTag('closed').label },
+  { name: 'merged (смержена, ран открыт)', kind: 'merged', mergedAt: at(24, 18, 5), tag: featureRunStatusTag('merged').label },
 ];
 
-describe('FeatureBriefBlock: восемь kind', () => {
+describe('FeatureBriefBlock: девять kind', () => {
   for (const cs of CASES) {
     it(`${cs.name}: строка «Сейчас» = выход briefNowText, тег = выход резолвера тега`, () => {
       const b = brief({ kind: cs.kind, ...cs.over });
@@ -469,7 +471,8 @@ describe('Служебные состояния', () => {
   });
 });
 
-// ── 4a. Closedность ленты и оси — из модели состояния, не из сырого поля (R-F8) ──────
+// ── 4a. Closedность ленты и оси — из модели состояния, не из сырого поля (R-F8);
+//      'merged' — та же карточка, что 'closed' (Ф-1.1) ────────────────────────────────
 
 describe('Closedность ленты и оси (R-F8)', () => {
   it('brief.kind = closed — ось «закрыта», даже при живом current ленты (проба: подменить closed — видимое меняется)', () => {
@@ -489,6 +492,21 @@ describe('Closedность ленты и оси (R-F8)', () => {
     const axis = textNodes(findNodeByAttr(c, 'data-testid', 'mini-timeline-axis')!).join(' ');
     expect(axis, 'ось открыта по модели состояния').toContain('сейчас');
     expect(axis, 'у идущей нет «закрыта»').not.toContain('закрыта');
+  });
+
+  it('brief.kind = merged с mergedAt — карточка равна closed с тем же mergedAt: тег, строка «Сейчас», сводка, ось «закрыта» (Ф-1.1)', () => {
+    const s = stats({ timeline: { ...stats().timeline, current: { kind: 'waiting', since: at(25, 14, 0), taskId: 't-prod' } } });
+    const mergedAt = at(24, 18, 5);
+    const closed = render({ brief: brief({ kind: 'closed', elapsedMinutes: 400 }), stats: s, mergedAt });
+    const merged = render({ brief: brief({ kind: 'merged', elapsedMinutes: 400 }), stats: s, mergedAt });
+    // Равенство по всем видимым частям карточки: тег, «Сейчас», сводка («Итог»/«шла …») и ось.
+    for (const id of ['brief-tag', 'brief-now-line', 'brief-facts', 'mini-timeline-axis']) {
+      const a = findNodeByAttr(closed.c, 'data-testid', id);
+      const b = findNodeByAttr(merged.c, 'data-testid', id);
+      expect(a, `элемент ${id} у closed`).not.toBeNull();
+      expect(b, `элемент ${id} у merged`).not.toBeNull();
+      expect(textNodes(b!).join(' '), `текст ${id} у merged отличается от closed`).toBe(textNodes(a!).join(' '));
+    }
   });
 });
 

@@ -92,7 +92,13 @@ public sealed class NamedLocalEngines
             }
             var spec = new LocalEngineSpec(name, section["ReadyUrl"]?.Trim(), fallback,
                 int.TryParse(section["NumCtx"], out var numCtx) && numCtx > 0 ? numCtx : null, actions);
-            var client = new LlamaServerClient(http, options, loggers.CreateLogger<LlamaServerClient>(), spend);
+            // Свой ключ слота на каждый движок: потолок не делится ни с основным LocalLlm, ни с соседями
+            var maxConcurrency = int.TryParse(section["MaxConcurrency"], out var mc) && mc > 0
+                ? mc : TrackedLocalLlmClient.DefaultLimit;
+            var client = new TrackedLocalLlmClient(
+                new LlamaServerClient(http, options, loggers.CreateLogger<LlamaServerClient>(), spend),
+                LocalEngineBusyTracker.Instance, name, () => maxConcurrency,
+                loggers.CreateLogger<TrackedLocalLlmClient>());
             Func<CancellationToken, Task<bool>>? probe = null;
             if (!string.IsNullOrWhiteSpace(spec.ReadyUrl))
             {

@@ -110,8 +110,11 @@ function Pill({ children, tone = 'plain' }: { children: ReactNode; tone?: PillSp
     free:   { background: C.successBg, border: `1px solid ${C.success}`, color: C.successText },
     danger: { background: C.dangerBg, border: `1px solid ${C.dangerBorder}`, color: C.dangerText },
     warn:    { background: C.warningBg, border: `1px solid ${C.warning}`, color: C.warningText },
-    // Ценовой класс: дёшево — info, дорого — янтарь (как «дорого» в аналитике расхода)
-    info:    { background: C.infoBg, border: `1px solid ${C.info}`, color: C.info },
+    // Ценовой класс: дёшево — info, дорого — янтарь (как «дорого» в аналитике расхода).
+    // У info нет парного текстового токена, а C.info мелким текстом на C.infoBg
+    // светлой темы не дотягивает до контраста 4.5:1 — текст основной, тон держат
+    // подложка и рамка (как в Notice)
+    info:    { background: C.infoBg, border: `1px solid ${C.info}`, color: C.textPrimary },
     expensive: { background: C.warningBg, border: `1px solid ${C.warning}`, color: C.warningText },
   };
   return (

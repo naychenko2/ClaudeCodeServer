@@ -8,6 +8,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createElement } from 'react';
+import { C } from 'aihome_shell/kit';
 import { ProviderCard, costTierPill, type ProviderCardData } from '../ProviderCard';
 import { isFreeCostTier } from '../../../lib/costTiers';
 import { mount, installFakeDom, uninstallFakeDom, textNodes } from '../../../components/chat/__tests__/fakeDom';
@@ -55,6 +56,30 @@ function cardData(over: Partial<ProviderCardData> = {}): ProviderCardData {
 function cardText(over: Partial<ProviderCardData> = {}): string {
   const { container } = mount(createElement(ProviderCard, { data: cardData(over) }));
   return textNodes(container).join('');
+}
+
+// Узел-элемент с ровно таким текстом (пилюля — span с одной подписью)
+interface StyleNode {
+  nodeType: number;
+  textContent: string;
+  childNodes: StyleNode[];
+  style: Record<string, string>;
+}
+
+function findByText(container: unknown, text: string): StyleNode | null {
+  const walk = (x: StyleNode): StyleNode | null => {
+    if (x.nodeType === 1 && x.textContent === text) return x;
+    for (const c of x.childNodes) {
+      const hit = walk(c);
+      if (hit) return hit;
+    }
+    return null;
+  };
+  return walk(container as StyleNode);
+}
+
+function styleOf(node: unknown): Record<string, string> {
+  return (node as { style: Record<string, string> }).style;
 }
 
 beforeEach(() => { installFakeDom(); });
@@ -106,5 +131,18 @@ describe('карточка провайдера: цену называем од�
       expect(text).not.toContain('дёшево');
       expect(text).not.toContain('дорого');
     }
+  });
+});
+
+// Контраст пилюли «дёшево»: у info нет парного текстового токена, а C.info мелким
+// текстом (FS.xs) на C.infoBg светлой темы не дотягивает до 4.5:1 — текст основной,
+// тон держат подложка и рамка (как в Notice).
+describe('пилюля «дёшево»: контраст текста', () => {
+  it('текст пилюли — основной, тон держат подложка и рамка', () => {
+    const { container } = mount(createElement(ProviderCard, { data: cardData({ costTier: 'cheap' }) }));
+    const pill = findByText(container, 'дёшево');
+    expect(pill).toBeTruthy();
+    expect(styleOf(pill).color).toBe(C.textPrimary);
+    expect(styleOf(pill).background).toBe(C.infoBg);
   });
 });

@@ -332,8 +332,19 @@ describe('state карточки (A2)', () => {
     buildProdCards(run({ steps: tasks, stepChains: [chain({ stepRef: 'Ш1', taskIds: tasks.map(t => t.id), ...ch })], ...over }))[0];
   const start = '2026-10-20T10:00:00Z';
 
-  it('queue: шаг не начат', () => {
-    expect(stateOf([task({ id: 's1', status: 'todo' })], { outcome: 'pending' }).state).toBe('queue');
+  it('заведённая цепочка никогда не queue: неполный агрегат оценивается по outcome (H1, GC-R-F3)', () => {
+    // Задачи цепочки нет в ленте (неполный агрегат) — единственный случай, где ветка
+    // !started давала цепочке бэковую корзину notCreated и состояние queue, чего бэк
+    // не делает никогда (notCreated — только шаги плана без задачи). Теперь, как любая
+    // цепочка, оценивается по chain.outcome: «pending» = бэковое «ждёт ревью».
+    const r = run({
+      steps: [],
+      stepChains: [chain({ stepRef: 'Ш1', taskIds: ['s1'], status: 'ждёт ревью', outcome: 'pending' })],
+    });
+    const c = buildProdCards(r)[0];
+    expect(c.state).toBe('wait');
+    expect(c.awaitingReview).toBe(true);
+    expect(c.planned).toBe(false);
   });
 
   it('run: задача шага inProgress; доработка — runKind rework и старт от неё', () => {
@@ -511,15 +522,16 @@ describe('шаг плана без задачи (GC-F3)', () => {
     expect(cards[0].title).toBe('первый');
   });
 
-  it('planned — после всех карточек цепочек (в т.ч. незаведённых), в порядке плана', () => {
-    // Незаведённая цепочка Ш1 + шаги плана Ш2, Ш3 без задач: порядок — цепочка, затем план.
+  it('planned — после всех карточек цепочек, в порядке плана', () => {
+    // Реализуемый агрегат: идущая цепочка Ш1 (бэковый outcome «running») + шаги плана Ш2, Ш3
+    // без задач. Порядок: цепочка, затем план (правило (б)). Заведённая цепочка — не queue (H1).
     const r = run({
       plan: [planTask('p1', [{ stepRef: 'Ш2', title: 'B' }, { stepRef: 'Ш3', title: 'C' }])],
-      steps: [task({ id: 's1', status: 'todo', stepRef: 'Ш1' })],
-      stepChains: [chain({ stepRef: 'Ш1', title: 'A', taskIds: ['s1'], status: '', outcome: 'pending' })],
+      steps: [task({ id: 's1', status: 'inProgress', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' })],
+      stepChains: [chain({ stepRef: 'Ш1', title: 'A', taskIds: ['s1'], status: 'идёт', outcome: 'running' })],
     });
     const cards = buildProdCards(r);
-    expect(cards.map(c => [c.stepRef, c.state, c.planned])).toEqual([['Ш1', 'queue', false], ['Ш2', 'queue', true], ['Ш3', 'queue', true]]);
+    expect(cards.map(c => [c.stepRef, c.state, c.planned])).toEqual([['Ш1', 'run', false], ['Ш2', 'queue', true], ['Ш3', 'queue', true]]);
     expect(cards.map(c => c.order)).toEqual([0, 1, 2]);
   });
 });

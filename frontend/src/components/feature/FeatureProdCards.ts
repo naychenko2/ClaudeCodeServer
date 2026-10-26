@@ -27,8 +27,9 @@ import type { FeatureRun, FeatureTask, FeatureStepChain, FeatureRound } from '..
 // ok — сделано, ret — возврат, cur — текущий (обведён акцентом), pend — впереди (пунктир).
 export type ProdNodeState = 'ok' | 'ret' | 'cur' | 'pend';
 
-// Состояние шага для ленты (макет A2): done — готово, run — идёт, wait — ждёт, queue — в очереди,
-// withdrawn — снят с выкладки. Выводится из корзины бэка (bucketOf), конфликтов приоритетов нет.
+// Состояние шага для ленты (макет A2): done — готово, run — идёт, wait — ждёт, withdrawn — снят с
+// выкладки — для цепочки из корзины бэка (bucketOf), конфликтов приоритетов нет; queue — в очереди,
+// только у шага плана без задачи (plannedCards): заведённая цепочка в queue не попадает (H1, GC-R-F3).
 export type ProdCardState = 'done' | 'run' | 'wait' | 'queue' | 'withdrawn';
 
 export interface ProdNode {
@@ -184,12 +185,15 @@ function chainNodes(
 // Корзина шага — зеркало FeatureStepAccounting на бэке (единственный источник правды, своей
 // эвристики нет): withdrawn → accepted → work → review. Идущий виток ревью (outcome «running» при
 // всех закрытых задачах цепочки) — корзина review, а не work: шаг ждёт ревью, как и в сводке.
-type ProdBucket = 'withdrawn' | 'accepted' | 'review' | 'work' | 'notCreated';
+// Бэковый notCreated — только шаги плана без задачи (FeatureStepAccounting, «Шаги плана без задачи
+// — корзина notCreated»), и он строится здесь отдельно, в plannedCards; заведённую цепочку бэк в
+// notCreated не кладёт никогда — не кладёт и фронт: цепочка без старта на неполном агрегате
+// оценивается по chain.outcome, как любая другая (H1, GC-R-F3).
+type ProdBucket = 'withdrawn' | 'accepted' | 'review' | 'work';
 
-function bucketOf(chain: FeatureStepChain, tasks: FeatureTask[], started: boolean): ProdBucket {
+function bucketOf(chain: FeatureStepChain, tasks: FeatureTask[]): ProdBucket {
   if (chain.outcome === 'withdrawn') return 'withdrawn';
   if (chain.outcome === 'accepted') return 'accepted';
-  if (!started) return 'notCreated';
   if (chain.outcome === 'pending') return 'review';
   // Неполный агрегат (задач цепочки не хватает) «все закрыты» доказать не может — остаёмся в work:
   // ложное «ждёт ревью» хуже, чем осторожное «ждёт»; полный агрегат даёт точный ответ.
@@ -198,19 +202,19 @@ function bucketOf(chain: FeatureStepChain, tasks: FeatureTask[], started: boolea
   return 'work';
 }
 
-// Состояние шага — из корзины: accepted → done, withdrawn → withdrawn, review → wait,
-// notCreated → queue; work → run, если задача идёт и её исполнитель не остановлен (остановленный —
+// Состояние шага — из корзины: accepted → done, withdrawn → withdrawn, review → wait;
+// work → run, если задача идёт и её исполнитель не остановлен (остановленный —
 // тревога stopped: wait), иначе wait: корзина work без идущей задачи — «ждёт», а слово плашки
-// («закрыт без повторного ревью», «вернулся…») у бэка (chain.status). run.now состояние не меняет.
+// («закрыт без повторного ревью», «вернулся…») у бэка (chain.status). «queue» здесь не возникает:
+// он только у planned-карточек (plannedCards). run.now состояние не меняет.
 function cardState(
-  chain: FeatureStepChain, tasks: FeatureTask[], started: boolean,
+  chain: FeatureStepChain, tasks: FeatureTask[],
 ): { state: ProdCardState; runTask: FeatureTask | null; stopped: boolean; review: boolean } {
   const out = (state: ProdCardState, runTask: FeatureTask | null = null, stopped = false, review = false) =>
     ({ state, runTask, stopped, review });
-  const bucket = bucketOf(chain, tasks, started);
+  const bucket = bucketOf(chain, tasks);
   if (bucket === 'withdrawn') return out('withdrawn');
   if (bucket === 'accepted') return out('done');
-  if (bucket === 'notCreated') return out('queue');
   if (bucket === 'review') return out('wait', null, false, true);
   const running = tasks.find(t => t.status === 'inProgress') ?? null;
   // Как на бэке (FeatureProjector): пометка актуальна, только если новее старта исполнителя.
@@ -306,9 +310,8 @@ export function buildProdCards(
     const finished = run.closed === true || run.state === 'merged' || run.state === 'closed';
     const now = finished ? [] : (run.now ?? []);
     const isCurrent = now.some(n => n.stepRef === chain.stepRef || chain.taskIds.includes(n.taskId));
-    const started = chainStart(chain, taskMap) !== null;
     const tasks = chain.taskIds.map(id => taskMap.get(id)).filter((t): t is FeatureTask => !!t);
-    const { state, runTask, stopped, review: awaiting } = cardState(chain, tasks, started);
+    const { state, runTask, stopped, review: awaiting } = cardState(chain, tasks);
     const nodes = chainNodes(run, chain, taskMap, personaName);
     const runKind = state !== 'run' ? null
       : [...nodes].reverse().find(n => n.kind === 'rework' || n.kind === 'work')?.kind === 'rework' ? 'rework' : 'work';

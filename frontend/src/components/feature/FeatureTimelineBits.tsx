@@ -397,6 +397,9 @@ export function ExecutorAvatar({ personaId }: { personaId: string | null }) {
 // питают полосу «Время шага на оси фичи» в FeatureStepDetails (GC-F10b): вид хода (work/review/
 // live) определяется здесь по роли задачи — тому же источнику, по которому бэк атрибутирует
 // интервалы стадиям (FeatureTimeMath.RoleToStage); живой — ход, чей конец не раньше «сейчас».
+// «Сейчас» строка отдаёт в FeatureStepDetails как nowMs (GC-F8R2, хвост №1 ревью GC-R-P3):
+// маркер и живой ход на полосе идут по часам вкладки; со своим useNow у FeatureStepDetails
+// строка расходилась бы с осью и карточками «Производства» до интервала тика (60 с).
 // Хвост после мержа (GC-F10a): `isTail` — метку ставит вызывающий (по run.postMergeTails);
 // строка остаётся в списке этапа, но помечается «· хвост после мержа» — это не обычная
 // работа стадии; отдельной строкой хвост в список не возвращается (тот же маркер, что
@@ -668,6 +671,7 @@ export function ExecutorRow({ x, task, now, featureId, featureTitle = null, mark
             axis={axis}
             isTail={isTail}
             isMobile={isMobile}
+            nowMs={now}
           />
           {myTurns.length > 0 && (
             <div data-testid="timeline-executor-turns" style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, overflowWrap: 'anywhere' }}>

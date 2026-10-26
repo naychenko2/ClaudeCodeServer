@@ -402,8 +402,13 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
                по старту даёт модель). Сироты «Производства» (фикс R4e): если карточек
                нет, но у стадии есть исполнители — прежние ExecutorRow, задача не
                исчезает из вкладки. Пустое состояние остаётся только когда показывать
-               действительно некого. */
-            FeatureProdCardsView({ run, featureId, featureTitle, marks, isMobile, initialExpandedKey: prodInitialKey, expandedKeyRef: prodExpandedKeyRef, onShowIntervals }) ?? (stage.executors.length > 0 ? (
+               действительно некого.
+               GC-F8R2 (хвост №2 ревью GC-R-P3): лента получает ТОТ ЖЕ axis, те же
+               turnsByTask и то же «сейчас», что строки исполнителей, — блок «Время шага
+               на оси фичи» и ходы шага обязаны быть в продукте, а не только в тестах
+               карточки с явным пропсом. Здесь ничего не пересчитывается: та же
+               buildTurnsByTask, та же rowAxis, тот же useNow вкладки. */
+            FeatureProdCardsView({ run, featureId, featureTitle, marks, isMobile, axis, turnsByTask, now, initialExpandedKey: prodInitialKey, expandedKeyRef: prodExpandedKeyRef, onShowIntervals }) ?? (stage.executors.length > 0 ? (
               stage.executors.map((x, i) => (
                 <ExecutorRow
                   key={`${x.taskId}-${i}`}

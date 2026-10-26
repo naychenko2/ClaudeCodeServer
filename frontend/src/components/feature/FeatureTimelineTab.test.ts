@@ -37,6 +37,12 @@
 // → «кнопка есть» краснеет; (17) не снять подсветку (в таймере нет setHighlight(null)) →
 // «через 2,4 с» краснеет; (18) не пересекать taskIds (подсвечивать все интервалы) →
 // «чужой затемнён, своему кольцо» краснеет.
+// GC-F8R2 (хвосты №1–2 ревью GC-R-P3): карточка «Производства» получает от вкладки те же
+// axis/turnsByTask/now, что строки исполнителей — «Время шага на оси» и ходы шага в продукте,
+// а не только в тестах карточки с явным пропсом; «сейчас» строки — nowMs из ExecutorRow.
+// Мутации: (19) не передать axis/turnsByTask/now из StageRow в ленту → «карточка с блоком
+// времени и ходами шага» краснеет; (20) не передать nowMs в ExecutorRow → «карточка и строка
+// от одного тика» краснеет.
 
 import { act } from 'react';
 import { createElement } from 'react';
@@ -1479,6 +1485,182 @@ describe('FeatureTimelineTab: ходы и «Время шага на оси» (G
       `ходы: ${localTime('2026-10-20T11:40:00Z')}–${localTime('2026-10-20T11:45:00Z')} · ` +
       `${localTime('2026-10-20T11:50:00Z')}–${localTime('2026-10-20T11:55:00Z')}`);
     expect(t, 'у закрытой фичи живого хода нет').not.toContain('идёт');
+  });
+});
+
+// === GC-F8R2: карточка «Производства» получает ось, ходы и «сейчас» вкладки ===
+//
+// Карточка — главный сценарий фичи («строки раскрываются как карточки шага: критерии,
+// итог, ходы, время шага»), и блок «Время шага» с ходами шага обязаны быть в продукте,
+// а не только в тестах карточки с явным пропсом (хвост №2). «Сейчас» строки — nowMs из
+// ExecutorRow, а не свой useNow у FeatureStepDetails: карточка и строка идут по часам
+// вкладки (хвост №1). Эталон «сейчас» вкладки — метка оси lane-axis-label-now: она
+// рисуется при любом раскрытом этапе и считается тем же useNow вкладки.
+
+describe('FeatureTimelineTab: карточка «Производства» получает ось, ходы и «сейчас» вкладки (GC-F8R2)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    personaMap.clear();
+    personaMap.set('p1', 'Денис');
+    personaMap.set('p2', 'Глеб');
+    // «Итог» при раскрытой карточке/строке догружается из сети: здесь — немедленный отказ.
+    tasksGetMock.mockReset();
+    tasksGetMock.mockImplementation(() => Promise.reject(new Error('в тесте сети нет')));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  function ivT(
+    from: string, to: string,
+    opts: { live?: boolean; taskIds?: string[]; turns?: { taskId: string; from: string; to: string; outcome: string | null; model: string | null }[] } = {},
+  ) {
+    return { from, to, minutes: 30, live: opts.live ?? false, lastOutcome: null, taskIds: opts.taskIds ?? [], turns: opts.turns ?? [] };
+  }
+
+  // Открытая фича: начатый шаг Ш1 (задача t-prod, inProgress, в run.now) + исполнитель
+  // ревью (t-rev, inProgress, в run.now). Журнал: закрытый ход + live-интервал каждой стадии.
+  function liveRun(): FeatureRun {
+    const stages = fullStages();
+    stages[3]!.executors = [mkExec({ personaId: 'p2', taskId: 't-rev', taskRole: 'review', status: 'running', chatId: 'chat-r' })];
+    return mkRun(stages, {
+      steps: [{ id: 't-prod', title: 'Модель шаблона', status: 'inProgress', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' }],
+      reviews: [{ id: 't-rev', title: 'Ревью', status: 'inProgress' } as FeatureTask],
+      stepChains: [mkChain({ taskIds: ['t-prod'], outcome: 'running', status: 'идёт' })],
+      now: [
+        { taskId: 't-prod', stage: 'prod', title: 'Модель шаблона', stepRef: 'Ш1', startedAt: '2026-10-20T10:00:00Z' },
+        { taskId: 't-rev', stage: 'review', title: 'Ревью', startedAt: '2026-10-20T11:40:00Z' },
+      ],
+    });
+  }
+
+  // Окно оси 10:00–14:00: «сейчас» (12:00) внутри шкалы — метка живой фичи видна.
+  function liveStats(): FeatureStats {
+    return {
+      timeline: {
+        from: '2026-10-20T10:00:00Z', to: '2026-10-20T14:00:00Z',
+        stages: [], segments: [], current: null, totals: {},
+        // Живой хвост — в том же интервале, что последний закрытый ход (контракт синтеза:
+        // from живого хода = конец последнего закрытого хода этого интервала).
+        intervalsByStage: {
+          prod: [
+            ivT('2026-10-20T10:00:00Z', '2026-10-20T12:00:00Z', {
+              live: true,
+              taskIds: ['t-prod'],
+              turns: [{ taskId: 't-prod', from: '2026-10-20T10:00:00Z', to: '2026-10-20T11:30:00Z', outcome: null, model: null }],
+            }),
+          ],
+          review: [
+            ivT('2026-10-20T11:40:00Z', '2026-10-20T12:00:00Z', {
+              live: true,
+              taskIds: ['t-rev'],
+              turns: [{ taskId: 't-rev', from: '2026-10-20T11:40:00Z', to: '2026-10-20T11:50:00Z', outcome: null, model: null }],
+            }),
+          ],
+        },
+      },
+    } as unknown as FeatureStats;
+  }
+
+  // Раскрыть этап «Производство» (если схлопнут) и карточку шага Ш1; вернуть её раскрытую часть.
+  function openCardDetails(c: FNodeLike): FNodeLike {
+    let body = findNodeByAttr(c, 'data-testid', 'timeline-stage-body-prod');
+    if (!body) {
+      const header = findNodeByAttr(c, 'data-testid', 'timeline-stage-header-prod')!;
+      act(() => { (reactProps(header)!.onClick as () => void)(); });
+      body = findNodeByAttr(c, 'data-testid', 'timeline-stage-body-prod')!;
+    }
+    const card = findNodeByAttr(body, 'data-testid', 'prod-card-Ш1')!;
+    act(() => { (reactProps(card)!.onClick as () => void)(); });
+    const details = findNodeByAttr(body, 'data-testid', 'prod-details');
+    expect(details, 'раскрытая часть карточки').not.toBeNull();
+    return details!;
+  }
+
+  // Раскрыть этап «Ревью» и первую строку в нём; вернуть раскрытую часть строки.
+  function openReviewRowBody(c: FNodeLike): FNodeLike {
+    let body = findNodeByAttr(c, 'data-testid', 'timeline-stage-body-review');
+    if (!body) {
+      const header = findNodeByAttr(c, 'data-testid', 'timeline-stage-header-review')!;
+      act(() => { (reactProps(header)!.onClick as () => void)(); });
+      body = findNodeByAttr(c, 'data-testid', 'timeline-stage-body-review')!;
+    }
+    const row = findNodeByAttr(body, 'data-testid', 'timeline-executor')!;
+    const head = findNodeByAttr(row, 'data-testid', 'timeline-executor-head')!;
+    act(() => { (reactProps(head)!.onClick as () => void)(); });
+    return findNodeByAttr(row, 'data-testid', 'timeline-executor-body')!;
+  }
+
+  const kindsOf = (root: FNodeLike): (string | undefined)[] => {
+    const out: (string | undefined)[] = [];
+    const walk = (n: FNodeLike) => {
+      if (n.attributes?.['data-testid'] === 'step-turn') out.push(n.attributes?.['data-kind']);
+      for (const ch of n.childNodes) walk(ch);
+    };
+    walk(root);
+    return out;
+  };
+
+  const styleOf = (n: FNodeLike): Record<string, string> => (n as unknown as { style: Record<string, string> }).style;
+
+  // Позиция маркера «сейчас» на полосе «Время шага» (left, % шкалы).
+  function nowMarkerLeft(root: FNodeLike): number {
+    const walk = (n: FNodeLike): FNodeLike | null => {
+      if (n.attributes?.['data-testid'] === 'step-now') return n;
+      for (const ch of n.childNodes) { const r = walk(ch); if (r) return r; }
+      return null;
+    };
+    const n = walk(root);
+    expect(n, 'маркера «сейчас» на полосе нет').not.toBeNull();
+    return parseFloat(styleOf(n!).left);
+  }
+
+  // Метка «сейчас» на оси — часы самой вкладки (тот же now, что у buildTurnsByTask и
+  // дорожек): внешний эталон, доступный при любом раскрытом этапе.
+  function axisNowLeft(c: FNodeLike): number {
+    const n = findNodeByAttr(c, 'data-testid', 'lane-axis-label-now');
+    expect(n, 'метки «сейчас» на оси нет').not.toBeNull();
+    return parseFloat(styleOf(n!).left);
+  }
+
+  // === c1: карточка получает ось и ходы шага через РЕАЛЬНУЮ вкладку ===
+  it('карточка шага «Производства»: блок «Время шага на оси фичи» и ходы шага — через реальную вкладку', () => {
+    const c = renderTabWithStats(liveRun(), liveStats());
+    const details = openCardDetails(c);
+    const stepTime = findNodeByAttr(details, 'data-testid', 'step-time');
+    expect(stepTime, 'блока «Время шага на оси фичи» в карточке нет').not.toBeNull();
+    expect(textNodes(stepTime!).join('')).toContain('Время шага на оси фичи');
+    // Ходы шага на полосе: закрытый ход (work) + живой (синтез live-интервала и run.now) —
+    // та же buildTurnsByTask, что у строк исполнителей, отбор — по задачам цепочки шага.
+    expect(kindsOf(details), 'ходы шага на полосе карточки').toEqual(['work', 'live']);
+  });
+
+  // === c2: один «сейчас» на всю вкладку: карточка и строка — от одного тика ===
+  it('«сейчас» карточки и строки исполнителя — от одного тика вкладки', () => {
+    const c = renderTabWithStats(liveRun(), liveStats());
+    const axisNow1 = axisNowLeft(c);
+    // Карточка: её маркер — по часам вкладки, не по своему монтированию ленты.
+    const cardDetails = openCardDetails(c);
+    expect(nowMarkerLeft(cardDetails), 'маркер карточки — не «сейчас» вкладки').toBe(axisNow1);
+    // +30 с: часы вкладки ещё не тикали (интервал 60 с), но реальное время ушло вперёд.
+    // Строка, открытая сейчас со своим useNow, опередила бы часы вкладки на 30 с.
+    act(() => { vi.advanceTimersByTime(30_000); });
+    expect(axisNowLeft(c), 'до тика ось стоит').toBe(axisNow1);
+    const rowBody = openReviewRowBody(c);
+    expect(kindsOf(rowBody), 'полоса строки: ход ревью + живой ход').toEqual(['review', 'live']);
+    expect(nowMarkerLeft(rowBody), 'маркер строки — не «сейчас» вкладки').toBe(axisNow1);
+    // Тик вкладки: ось и маркер строки сдвигаются на тот же момент.
+    act(() => { vi.advanceTimersByTime(60_000); });
+    const axisNow2 = axisNowLeft(c);
+    expect(axisNow2, 'ось следует тикам вкладки').toBeGreaterThan(axisNow1);
+    // (сравнение точное: та же функция от того же момента — та же доля шкалы)
+    expect(nowMarkerLeft(rowBody), 'маркер строки — от того же тика, что ось').toBe(axisNow2);
+    // Карточка при повторном раскрытии — тоже по часам вкладки, а не по своему монтированию.
+    const cardDetails2 = openCardDetails(c);
+    expect(nowMarkerLeft(cardDetails2), 'маркер карточки — от того же тика, что ось').toBe(axisNow2);
   });
 });
 

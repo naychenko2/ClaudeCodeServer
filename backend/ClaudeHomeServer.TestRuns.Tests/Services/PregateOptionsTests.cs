@@ -181,6 +181,23 @@ public class PregateOptionsTests
         options.Checks.Should().BeEmpty();
     }
 
+    // Два двоеточия в имени разъезжают его по трём уровням («a:b:c» → «a» → «b» → «c» →
+    // Command). Признак разъезда ищется на любой глубине: проверка одного уровня такой набор
+    // пропускала — он собирался как проверка с пустым Command, и предгейт падал красным
+    // «в конфиге Pregate не задан Command» вместо внятного отказа
+    [Fact]
+    public void ИмяСДвумяДвоеточиями_НаборНеСобираетсяИВиднаПричина()
+    {
+        var options = PregateOptions.From(ConfigWithLocal(new JsonObject
+        {
+            ["a:b:c"] = new JsonObject { ["Command"] = "npm" },
+        }));
+
+        options.Problem.Should().NotBeNull();
+        options.Problem.Should().Contain("«a:b:c»", "причина называет разъехавшееся имя целиком");
+        options.Checks.Should().BeEmpty();
+    }
+
     // Признак ловушки — именно имя с двоеточием, а не «вложенный объект с нечисловыми
     // ключами»: свойство проверки объектом (например «Env») собирается, а не отказывает.
     // Без этого будущее свойство объектом убило бы весь набор с ложным диагнозом.

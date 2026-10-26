@@ -45,10 +45,19 @@ public class TaskPregateServiceTests : IDisposable
         public PregateRequest? Request { get; private set; }
         public IReadOnlyList<PregateCheckResult> Checks { get; set; } = [new PregateCheckResult("tsc", PregateStatus.Green)];
         public int CeilingSeconds { get; set; } = 540;
+        // Ждать своего потолка: прогон возвращается ровно тогда, когда потребитель отменил
+        // токен (потолок истёк). Ждать по токену, а не спать фиксированное время: сон
+        // растягивал набор и ронял чужой тайминг-гейт.
+        public bool WaitCancellation { get; set; }
+        // Отказ шва (как у настоящей вертикали TestRuns при оборванном прогоне)
+        public string? Refusal { get; set; }
         public Task<PregateVerdict> RunAsync(PregateRequest request, CancellationToken ct)
         {
             Request = request;
-            return Task.FromResult(new PregateVerdict(Checks));
+            if (WaitCancellation) ct.WaitHandle.WaitOne(TimeSpan.FromSeconds(10));
+            return Task.FromResult(Refusal is { } refusal
+                ? PregateVerdict.Refused(refusal)
+                : new PregateVerdict(Checks));
         }
     }
 
@@ -137,8 +146,29 @@ public class TaskPregateServiceTests : IDisposable
 
         outcome.Status.Should().Be(TaskPregateStatus.NotRun);
         outcome.Text.Should().Contain("Потолок");
+        outcome.Text.Should().Contain("Потолок предгейта 1 с",
+            "видимый отказ по потолку обязан называть ПРИМЕНЁННЫЙ потолок: без числа исполнитель "
+            + "не отличит исчерпание бюджета от ошибки проверки");
         _pregate.Request.Should().BeNull("проверки не запускались: потолок истёк на git-проверках");
         _tasks.GetById(_task.Id)!.Pregate.Should().BeNull();
+    }
+
+    // Потолок потребителя истекает РАНЬШЕ потолка самой вертикали (часы идут до git-проверок
+    // дерева): в боевом пути в отказ уходит «предгейт остановлен», и без числа исполнитель
+    // не отличил бы исчерпание потолка от ошибки проверки. Отказ называет применённый потолок.
+    [Fact]
+    public async Task ПотолокИстёкВоВремяПрогона_ОтказНазываетПотолок()
+    {
+        _pregate.CeilingSeconds = 1;
+        _pregate.WaitCancellation = true;
+        _pregate.Refusal = "Предгейт остановлен (потолок предгейта — 1 с).";
+
+        var outcome = await Run();
+
+        outcome.Status.Should().Be(TaskPregateStatus.NotRun);
+        outcome.Text.Should().Contain("Потолок предгейта 1 с",
+            "видимый отказ по потолку обязан называть ПРИМЕНЁННЫЙ потолок");
+        _tasks.GetById(_task.Id)!.Pregate.Should().BeNull("потолок истёк — результат не записывается");
     }
 
     // Потолок из шва — чужая реализация: значение вне (0; 540] в CancelAfter не годится

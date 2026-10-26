@@ -57,13 +57,15 @@ public sealed class PregateOptions
             // (Command, Args…) лежат во вложенном объекте, который сам свойством проверки
             // не является. Вложенный объект у настоящей проверки (свойство объектом, например
             // «Env») живёт рядом с её собственными свойствами — такой набор собирается.
+            //
+            // Ищем разъезд на ЛЮБОЙ глубине: два «:» в имени дают три уровня («a:b:c» →
+            // «a» → «b» → «c» → Command), и проверка одного уровня такой набор пропускала —
+            // он собирался как проверка с пустым Command, и предгейт падал красным «не задан
+            // Command» вместо внятного отказа.
             var ownProperties = child.GetChildren().Where(c => OptionPropertyNames.Contains(c.Key)).ToList();
-            if (ownProperties.Count == 0
-                && child.GetChildren().Any(c => c.GetChildren().Any()
-                    && !OptionPropertyNames.Contains(c.Key)
-                    && c.GetChildren().Any(g => OptionPropertyNames.Contains(g.Key))))
+            if (ownProperties.Count == 0 && SplitNamePath(child, child.Key) is { } splitName)
             {
-                problems.Add($"«{child.Key}» — вложенные ключи в {SectionName}:{ChecksKey}: имя проверки не может "
+                problems.Add($"«{splitName}» — вложенные ключи в {SectionName}:{ChecksKey}: имя проверки не может "
                     + "содержать «:» (например, «lint:design» → ключ «lint-design», а Name: \"lint:design\")");
                 continue;
             }
@@ -82,6 +84,27 @@ public sealed class PregateOptions
         {
             Checks = [.. checks.OrderBy(c => c.Order).ThenBy(c => c.Name, StringComparer.Ordinal)],
         };
+    }
+
+    // Разъехавшееся по «:» имя: цепочка ключей, ни один из которых не свойство проверки, под
+    // которой лежит свойство проверки (Command, Args…). null — разъезда нет.
+    //
+    // Ищется рекурсией: глубина вложенности не ограничена (два «:» — три уровня), а цепочка
+    // ровно одного уровня пропускала имя с двумя двоеточиями.
+    private static string? SplitNamePath(IConfigurationSection node, string prefix)
+    {
+        foreach (var child in node.GetChildren())
+        {
+            // Свойство проверки: вниз по нему путь разъезда не идёт
+            if (OptionPropertyNames.Contains(child.Key)) continue;
+            var grand = child.GetChildren().ToList();
+            if (grand.Count == 0) continue;
+            var path = prefix + ":" + child.Key;
+            if (grand.Any(g => OptionPropertyNames.Contains(g.Key))) return path;
+            var deeper = SplitNamePath(child, path);
+            if (deeper is not null) return deeper;
+        }
+        return null;
     }
 }
 
@@ -189,13 +212,20 @@ public sealed class PregateService : ITaskPregate
             }
             if (result is null)
                 return PregateVerdict.Refused(ct.IsCancellationRequested
-                    ? "Предгейт остановлен."
+                    ? StoppedRefusal()
                     : CeilingRefusal(check.Name) + Progress(results),
                     results);
             results.Add(result);
         }
         return new PregateVerdict(results);
     }
+
+    // Отказ «предгейт остановлен»: потолок называем обязательно. Потолок потребителя
+    // (TaskPregateService) ставится ДО git-проверок дерева, поэтому истекает он раньше
+    // внутреннего — в боевом пути в отказ уходит именно эта ветка, и без числа исполнитель
+    // не отличил бы исчерпание потолка от ошибки проверки.
+    internal string StoppedRefusal() =>
+        $"Предгейт остановлен (потолок предгейта — {CeilingSeconds} с).";
 
     // Текст отказа по потолку: печатаем ПРИМЕНЁННЫЙ потолок (CeilingSeconds), а не сырое
     // число из конфигурации. Иначе текст разошёлся бы с фактом: потолок применяется

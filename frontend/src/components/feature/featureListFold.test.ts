@@ -5,7 +5,7 @@
 // showAll отдаёт ровно тот набор, что считает свёртка (без дублей и без снятых; GC-F4R2),
 // foldLast не схлопывает (длина входа сохраняется), порядок видимых исходный, вход не
 // мутируется, шаг, попавший и в хвост после мержа, и в шаги стадии, не считается дважды
-// (только в foldProd).
+// (только в foldProd), снятое вхождение не отнимает dedupe-ключ у живого (GC-F4R3).
 
 import { describe, it, expect } from 'vitest';
 import { foldProd, foldLast, PROD_DONE_TAIL } from './featureListFold';
@@ -83,6 +83,30 @@ describe('foldProd: свёртка ленты шагов', () => {
     // expandedKey переносит карточку из hiddenDone в visible и N не меняет.
     const opened = foldProd(cards, 'Ш5', false);
     expect(opened.visible.length + opened.hiddenDone.length).toBe(all.visible.length);
+  });
+
+  it('снятое вхождение не отнимает dedupe-ключ у живого: шаг в работе остаётся в ленте (GC-F4R3)', () => {
+    // Замер ревьюера (GC-R-F4R2, Н19): [Ш1 withdrawn, Ш1 run] при прежнем порядке
+    // (dedupe до фильтра) давал visible=[] — живой шаг исчезал совсем.
+    // Теперь живое вхождение видно в обеих ветках.
+    const cards = [card('Ш1', 'withdrawn'), card('Ш1', 'run')];
+    const r = foldProd(cards, null, false);
+    expect(r.visible.map((c) => c.stepRef)).toEqual(['Ш1']);
+    expect(r.visible[0]!.state).toBe('run');
+    expect(r.hiddenDone).toEqual([]);
+    const all = foldProd(cards, null, true);
+    expect(all.visible.map((c) => c.stepRef)).toEqual(['Ш1']);
+  });
+
+  it('инвариант без снятого: 48=48=48 (GC-F4R3)', () => {
+    // Тот же набор mixed48, но Ш44 живой: счётчик сходится в обеих ветках.
+    const cards = mixed48();
+    cards[43] = card('Ш44', 'run');
+    const folded = foldProd(cards, null, false);
+    const all = foldProd(cards, null, true);
+    expect(folded.visible.length + folded.hiddenDone.length).toBe(48);
+    expect(all.visible.length).toBe(48);
+    expect(folded.visible.length + folded.hiddenDone.length).toBe(all.visible.length);
   });
 
   it('порядок видимых — исходный (не по датам и не по типу)', () => {

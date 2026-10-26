@@ -709,6 +709,86 @@ public class TaskManagerTests : IDisposable
         reopened.Outcome.Should().BeNull();
     }
 
+    // Расследование 88444536: переоткрытая после закрытия карточка не должна оставаться
+    // «мёртвой» — доставленный доклад и результат закрытого хода относятся к закрытому циклу
+    // и снимаются тем же блоком, что CompletedAt/Verification. Без сброса перезапуск
+    // отказан (TaskExecutionService.ExecuteAsync), а сторож застоя выключен (ClassifyStall).
+    [Fact]
+    public void Update_ПереоткрытиеИзDone_СбрасываетCompletionDeliveredИClaudeResult()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("доработка после закрытия"));
+        _sut.MarkClaudeStarted(task.Id, "sess-1", DateTime.UtcNow);
+        _sut.MarkClaudeResult(task.Id, "success");
+        _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        _sut.TryMarkCompletionDelivered(task.Id).Should().BeTrue();
+
+        var reopened = _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Todo))!;
+
+        reopened.CompletionDelivered.Should().BeFalse("доклад закрытого цикла не должен блокировать перезапуск");
+        reopened.ClaudeResult.Should().BeNull("результат закрытого хода не должен считаться новым циклом");
+    }
+
+    [Fact]
+    public void Update_ОставаниеВDone_НеТрогаетДоставкуИРезультатХода()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t"));
+        _sut.MarkClaudeStarted(task.Id, "sess-1", DateTime.UtcNow);
+        _sut.MarkClaudeResult(task.Id, "success");
+        _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        _sut.TryMarkCompletionDelivered(task.Id);
+
+        // Правка закрытой карточки без смены статуса (переименование) — следы цикла на месте
+        var edited = _sut.Update(task.Id, new UpdateTaskRequest(Title: "переименовали"))!;
+
+        edited.CompletionDelivered.Should().BeTrue();
+        edited.ClaudeResult.Should().Be("success");
+    }
+
+    [Fact]
+    public void Update_TodoВInProgress_НеТрогаетДоставкуИРезультатХода()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t"));
+        _sut.MarkClaudeStarted(task.Id, "sess-1", DateTime.UtcNow);
+        _sut.MarkClaudeResult(task.Id, "success");
+        _sut.TryMarkCompletionDelivered(task.Id); // искусственное состояние: флаг без Done
+
+        // Сброс принадлежит уходу из Done, а не любой смене статуса: незакрытая задача — не переоткрытие
+        var moved = _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.InProgress))!;
+
+        moved.CompletionDelivered.Should().BeTrue();
+        moved.ClaudeResult.Should().Be("success");
+    }
+
+    // Расследование 88444536, п.2: повторный tasks_complete по Done-карточке не обязан затирать
+    // первый итог — новый текст дописывается датированным блоком «Дополнение».
+    [Fact]
+    public void Update_ПовторныйДокладПоDoneКарточке_ДописываетДополнениеАНеЗатирает()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t"));
+        _sut.Update(task.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done, ResultMarkdown: "первый итог"));
+
+        var again = _sut.Update(task.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done, ResultMarkdown: "второй итог"), isAgentCall: true)!;
+
+        again.ResultMarkdown.Should().StartWith("первый итог");
+        again.ResultMarkdown.Should().Contain("Дополнение (");
+        again.ResultMarkdown.Should().Contain("второй итог");
+    }
+
+    [Fact]
+    public void Update_ЧеловекПравитИтогНаDoneКарточке_ЗатираетКакПрежде()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t"));
+        _sut.Update(task.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done, ResultMarkdown: "первый итог"));
+
+        // Человеческий путь (UI-форма) — прямая запись: что вписано, то и сохранено
+        var edited = _sut.Update(task.Id, new UpdateTaskRequest(ResultMarkdown: "исправленный итог"))!;
+
+        edited.ResultMarkdown.Should().Be("исправленный итог");
+    }
+
     [Fact]
     public void Update_ПереходВReviewБезШагов_Отклонена()
     {

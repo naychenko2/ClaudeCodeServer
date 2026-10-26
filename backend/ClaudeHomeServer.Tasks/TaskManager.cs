@@ -947,7 +947,17 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         if (req.WorktreeBranch is not null) task.WorktreeBranch = Trimmed(req.WorktreeBranch);
         if (req.ExecutorLaunchedBySessionId is not null) task.ExecutorLaunchedBySessionId = Trimmed(req.ExecutorLaunchedBySessionId);
         if (req.ExecutorLaunchedByPersonaId is not null) task.ExecutorLaunchedByPersonaId = Trimmed(req.ExecutorLaunchedByPersonaId);
-        if (req.ResultMarkdown is not null) task.ResultMarkdown = req.ResultMarkdown;
+        // Повторный доклад по уже Done-карточке (расследование 88444536, п.2): второй tasks_complete
+        // не должен молча затирать первый итог — новый текст дописывается отдельным датированным
+        // блоком (образец — AppendExecutorNote для снятой человеком задачи). Человеческий путь
+        // остаётся прямой перезаписью (что вписано в форме UI, то и сохранено); "" — намеренная
+        // очистка, как у прочих строковых полей. Путь DroppedByHumanAt исключён: его дописывание
+        // уже выполнено выше (подмена req).
+        if (req.ResultMarkdown is not null)
+            task.ResultMarkdown = wasDone && task.Status == TaskItemStatus.Done && isAgentCall
+                && task.DroppedByHumanAt is null && !string.IsNullOrWhiteSpace(req.ResultMarkdown)
+                ? AppendCompletionSupplement(task.ResultMarkdown, req.ResultMarkdown)
+                : req.ResultMarkdown;
         if (req.LinkedFiles is not null) task.LinkedFiles = req.LinkedFiles;
         if (req.Labels is not null) task.Labels = req.Labels;
         if (req.Order is not null) task.Order = req.Order.Value;
@@ -1007,7 +1017,22 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             // merged/closed → 409). Поле гасится здесь же — в той же функции перехода в Done.
             if (task.Role == TaskRoles.Feature) task.Hold = null;
         }
-        else if (task.Status != TaskItemStatus.Done) task.CompletedAt = null;
+        else if (task.Status != TaskItemStatus.Done)
+        {
+            task.CompletedAt = null;
+            // Переоткрытие (было Done → стало не-Done): доставленный доклад и результат того хода —
+            // атрибуты закрытого цикла. Без их сброса карточка «мёртвая»: ExecuteAsync отказывает
+            // перезапуск («Доклад по этой задаче уже доставлен», TaskExecutionService.cs:264), а
+            // ClassifyStall возвращает None на первой строке (TaskExecutionService.cs:1892) — карточка
+            // открыта, но ни исполняется, ни окликается (расследование 88444536). Переоткрытие для
+            // доработки штатно: не запрещаем, снимаем следы цикла (образец здесь же — CompletedAt,
+            // Verification ниже).
+            if (wasDone)
+            {
+                task.CompletionDelivered = false;
+                task.ClaudeResult = null;
+            }
+        }
         // Вердикт и исход дефекта — устаревшая проверка после переоткрытия (образец — CompletedAt)
         if (task.Status != TaskItemStatus.Done)
         {
@@ -1693,6 +1718,15 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         if (string.IsNullOrWhiteSpace(incoming)) return existing;
         if (string.IsNullOrWhiteSpace(existing)) return incoming;
         return existing + "\n\n— Доклад исполнителя после снятия —\n" + incoming;
+    }
+
+    // Дописывание повторного доклада к итогу закрытой карточки (расследование 88444536, п.2):
+    // второй tasks_complete не затирает первый ResultMarkdown, а добавляет его к нему. Дата в
+    // заголовке обязательна — иначе теряется граница между итогами разных циклов исполнения.
+    private static string AppendCompletionSupplement(string? existing, string incoming)
+    {
+        if (string.IsNullOrWhiteSpace(existing)) return incoming;
+        return existing + $"\n\n— Дополнение ({DateTime.UtcNow:yyyy-MM-dd}) —\n" + incoming;
     }
 }
 

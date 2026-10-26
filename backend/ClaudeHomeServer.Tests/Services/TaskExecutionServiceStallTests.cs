@@ -228,6 +228,33 @@ public class TaskExecutionServiceStallTests : IDisposable
             .Should().Be(TaskExecutionService.ExecutorStallAction.None);
     }
 
+    // Расследование 88444536: переоткрытая через Update карточка не «мёртвая» — флаг доставки
+    // снят вместе со статусом, и после нового успешного хода к ней обычная ветка тишины.
+    // До правки первый же гард ClassifyStall возвращал None навсегда (карточка открыта,
+    // но не исполняется и не окликается).
+    [Fact]
+    public void ClassifyStall_ПереоткрытаяПослеДоставкиЗадача_СноваПодСторожем()
+    {
+        var task = _tasks.Create(null, "user-1", new CreateTaskRequest("Починить билд"));
+        _tasks.MarkClaudeStarted(task.Id, "sess-1", Now.AddHours(-2));
+        _tasks.MarkClaudeResult(task.Id, "success");
+        // Флаг занимаем ДО перехода в Done: фон-доставка от TaskCompleted не должна
+        // разыграться с тестом (CAS уже занят — второй доставки не будет).
+        _tasks.TryMarkCompletionDelivered(task.Id).Should().BeTrue();
+        _tasks.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+
+        // Оркестратор переоткрывает карточку для доработки — штатный путь через Update
+        _tasks.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.InProgress));
+        var tracked = _tasks.GetById(task.Id)!;
+        tracked.CompletionDelivered.Should().BeFalse();
+
+        // Новая попытка: ход успешный, задача не закрыта, чат молчит дольше порога → обычная ветка
+        _tasks.MarkClaudeResult(task.Id, "success");
+        tracked.UpdatedAt = Now.AddHours(-1);
+        TaskExecutionService.ClassifyStall(tracked, null, Now, Stale)
+            .Should().Be(TaskExecutionService.ExecutorStallAction.Alert);
+    }
+
     [Fact]
     public void ClassifyStall_ХодПровалился_НичегоНеДелаем()
     {

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { CSSProperties } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { C, R, FS, SP, FONT } from '../../lib/design';
+import { plural } from '../../lib/plural';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { STAGE_NAME } from '../../lib/chatGroups';
 import { roleLabel } from '../../lib/roleLabel';
@@ -259,6 +260,12 @@ export function outsideLinksLabel(n: number): string {
   return `${n} связей не найдено`;
 }
 
+// Счётчик этапа «N задача/задачи/задач» (GC-F10a): правило склонения — из lib/plural
+// (общий источник), своей арифметики здесь нет.
+export function tasksCountLabel(n: number): string {
+  return `${n} ${plural(n, 'задача', 'задачи', 'задач')}`;
+}
+
 // Строка «оценивает →» исполнителя. Ролевая граница (вариант 3А):
 // • review/qa — чипы оцениваемых задач (только эти роли оценивают конкретные задачи;
 //   у rework ReviewOf означает «откуда вернулась», а не «что оценивает» — чипов нет);
@@ -385,11 +392,16 @@ export function ExecutorAvatar({ personaId }: { personaId: string | null }) {
 // (stopPropagation).
 // Ходы приходят пропсом `turns` (вызывающий берёт их из intervalsByStage); здесь
 // показываются только ходы этой задачи — хвост не получает вторую строку.
+// Хвост после мержа (GC-F10a): `isTail` — метку ставит вызывающий (по run.postMergeTails);
+// строка остаётся в списке этапа, но помечается «· хвост после мержа» — это не обычная
+// работа стадии; отдельной строкой хвост в список не возвращается (тот же маркер, что
+// в подписи блока времени FeatureStepDetails).
 export function ExecutorRow({ x, task, now, featureId, featureTitle = null, marks = EMPTY_NAV_MARKS, isMobile = false,
-  taskMap = new Map<string, FeatureTask>(), execIndex = new Map<string, FeatureStageExecutor>(), progress = null, turns = null }: {
+  taskMap = new Map<string, FeatureTask>(), execIndex = new Map<string, FeatureStageExecutor>(), progress = null, turns = null, isTail = false }: {
   x: FeatureStageExecutor; task?: FeatureTask; now: number; featureId: string; featureTitle?: string | null; marks?: NavMarks; isMobile?: boolean;
   taskMap?: Map<string, FeatureTask>; execIndex?: Map<string, FeatureStageExecutor>; progress?: StepProgress | null;
   turns?: StageTurn[] | null;
+  isTail?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const persona = x.personaId ? getPersonaById(x.personaId) : undefined;
@@ -498,6 +510,13 @@ export function ExecutorRow({ x, task, now, featureId, featureTitle = null, mark
             }}
           >
             {role}
+          </span>
+        )}
+        {/* Хвост после мержа (GC-F10a): маркер сразу после роли — он про задачу,
+            а не про её текущий статус. */}
+        {isTail && (
+          <span data-testid="timeline-executor-tail" style={{ fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>
+            · хвост после мержа
           </span>
         )}
         {/* Чип модели и «оценивает →» — на 360 переезжают в раскрытую часть (макет §360). */}

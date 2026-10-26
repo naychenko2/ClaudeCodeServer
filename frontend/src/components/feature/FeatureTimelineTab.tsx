@@ -16,6 +16,7 @@ import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import {
   stageName, stageStatusLabel, stageBoundsLabel, stageDurationLabel,
   stageDotStyle, stageLineStyle, buildTaskMap, stageStatusBadge, ExecutorRow, buildExecutorIndex,
+  tasksCountLabel,
 } from './FeatureTimelineBits';
 import type { StepProgress } from '../../lib/featureProgress';
 import { FeatureStageLane } from './FeatureStageLane';
@@ -134,6 +135,7 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
   execIndex = new Map<string, FeatureStageExecutor>(), progress = null,
   lane = null, axis = null, tabIndexAt = -1,
   expandedAt = null, hoverAt = null, laneSelected = false, flash = false,
+  tailIds = null,
   onIntervalSelect, onIntervalHover, onOpenSheet }: {
   stage: FeatureStage; isLast: boolean; expanded: boolean;
   onToggle: () => void; taskMap: Map<string, import('../../types/featureRun').FeatureTask>;
@@ -157,6 +159,9 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
   laneSelected?: boolean;
   // Вспышка строки после «Показать в ленте».
   flash?: boolean;
+  // Id хвостов после мержа (run.postMergeTails): строки этих задач в списке этапа
+  // помечаются маркером (GC-F10a). null — хвостов нет.
+  tailIds?: Set<string> | null;
   onIntervalSelect?: (index: number, el: HTMLElement | null) => void;
   onIntervalHover?: (index: number | null, el: HTMLElement | null) => void;
   onOpenSheet?: () => void;
@@ -180,14 +185,19 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
 
   // Счётчик колонки имени: у «Производства» — план шагов «N/M» (решение m1: счётчик
   // плана только у prod); у прочих стадий плана нет — показываем факт (число задач).
-  // Текст — из planCounterText() модели, тот же, что печатает сводка «Статистики»:
-  // N = принято, M = всего; своей арифметики здесь нет (GC-F12R).
+  // Текст плана — из planCounterText() модели, тот же, что печатает сводка «Статистики»:
+  // N = принято, M = всего; своей арифметики здесь нет (GC-F12R). Текст факта —
+  // tasksCountLabel(), согласованный с числом (GC-F10a).
   let counter: string | null = null;
   if (hasLane && stage.key === 'prod') {
     counter = planCounterText(lane);
   } else if (stage.executors.length > 0) {
-    counter = `${stage.executors.length} задач`;
+    counter = tasksCountLabel(stage.executors.length);
   }
+
+  // Хвост после мержа (GC-F10a): строка этой задачи в списке этапа помечается маркером —
+  // она остаётся в списке (бэк держит её в stage.taskIds), отдельной строкой не дублируется.
+  const isTail = (taskId: string): boolean => tailIds?.has(taskId) === true;
 
   // Правая колонка: у этапа с дорожкой — факт времени и число интервалов («10 ч 59 мин · 33×»);
   // без дорожки — прежняя приблизительная длительность («≈ 6 ч»).
@@ -372,6 +382,7 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
                   taskMap={taskMap}
                   execIndex={execIndex}
                   progress={progress}
+                  isTail={isTail(x.taskId)}
                 />
               ))
             ) : (
@@ -398,6 +409,7 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
                 taskMap={taskMap}
                 execIndex={execIndex}
                 progress={progress}
+                isTail={isTail(x.taskId)}
               />
             ))
           ) : (
@@ -430,6 +442,12 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false, st
   const now = useMemo(() => Date.now(), []);
   // Название фичи (epic.title) — для «← к фиче {название}» в шапке чата (Ф-pl-b).
   const featureTitle = run.epic?.title ?? null;
+  // «Хвосты после мержа» (GC-F10a): id незакрытых дочерних задач после мержа — с бэка
+  // (run.postMergeTails; FeatureProjector.cs:86-93). Тревогу бэк от них не строит
+  // (FeatureProjector.cs:139-141) — и фронт не выдумывает «ждёт вас»: тон этапа только
+  // с бэка. Те же id остаются в списках этапов (StageRow метит их маркером), сводка —
+  // только число под лентой. Множество — чтобы метка и счёт считали один хвост один раз.
+  const tailIds = useMemo(() => new Set(run.postMergeTails ?? []), [run]);
 
   // Дорожки и ось (GC-F5c): только из модели (FeatureLaneModel) — своей арифметики нет.
   const lanesModel = useMemo(() => buildStageLanes(run, stats, now), [run, stats, now]);
@@ -773,11 +791,27 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false, st
           hoverAt={hover?.stage === stage.key ? hover.index : null}
           laneSelected={selectedStage === stage.key}
           flash={flashStage === stage.key}
+          tailIds={tailIds}
           onIntervalSelect={(idx, el) => onIntervalSelect(stage.key, idx, el)}
           onIntervalHover={(idx, el) => onIntervalHover(stage.key, idx, el)}
           onOpenSheet={isMobile ? () => openSheet(stage.key) : undefined}
         />
       ))}
+      {/* «Хвосты после мержа · N» (GC-F10a): после ленты этапов («Мерж» — последний
+          этап жизненного цикла, строка стоит за ним). Только сводка: id хвостов не
+          перечисляются — они уже в списках этапов с маркером «· хвост после мержа».
+          Строки нет, когда хвостов нет (и для старых данных без поля). */}
+      {tailIds.size > 0 && (
+        <div
+          data-testid="timeline-tails"
+          style={{
+            fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted,
+            marginTop: SP.sm, overflowWrap: 'anywhere',
+          }}
+        >
+          {`хвосты после мержа · ${tailIds.size}`}
+        </div>
+      )}
       {/* Превью по наведению (1280) — слой над лентой, в потоке его нет. */}
       {!pinned && hoverDetails && (
         <FeatureLanePreview details={hoverDetails} anchor={hoverAnchor} />

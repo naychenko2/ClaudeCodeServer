@@ -15,7 +15,10 @@
 // в FeatureProdCardsView (не дать stepChains) → «карточка Ш1» краснеет; (4) не передать
 // isMobile в ленту → «360: поле касания 40» краснеет; (5) убрать фолбэк на ExecutorRow
 // при пустой ленте → «сироты не исчезают» краснеет; (6) убрать ветку outside из рендера
-// «оценивает →» → «reviewOfOutside > 0 даёт нейтральную подпись» краснеет.
+// «оценивает →» → «reviewOfOutside > 0 даёт нейтральную подпись» краснеет;
+// GC-F10a: (7) tasksCountLabel → хардкод «${n} задач» → тест склонения краснеет;
+// (8) в StageRow isTail={isTail(x.taskId)} → isTail={false} → «помечен маркером» краснеет;
+// (9) условие строки хвостов tailIds.size > 0 → false → «хвосты после мержа · 2» краснеет.
 
 import { act } from 'react';
 import { createElement } from 'react';
@@ -24,7 +27,7 @@ import { FeatureTimelineTab, laneAxisInsets, laneScaleWidth } from './FeatureTim
 import {
   stageName, stageStatusLabel, stageBoundsLabel, stageDurationLabel,
   stageDotStyle, stageLineStyle, buildTaskMap, minutesSince, executorStatus, stageStatusBadge,
-  stepStatusView, stepModel, buildExecutorIndex, evaluatedLine, outsideLinksLabel,
+  stepStatusView, stepModel, buildExecutorIndex, evaluatedLine, outsideLinksLabel, tasksCountLabel,
 } from './FeatureTimelineBits';
 import type { StepProgress } from '../../lib/featureProgress';
 import { C } from '../../lib/design';
@@ -1028,7 +1031,8 @@ describe('FeatureTimelineTab: дорожки и ось (GC-F5c)', () => {
     }
     // accepted=2, work=1, review=1 → «2/4», а не «4/4»: в работе — не «сделано».
     expect(counters['prod'], 'у prod — план шагов, N = принято').toBe('2/4');
-    expect(counters['review'], 'у ревью — факт').toBe('1 задач');
+    // GC-F10a: факт согласован с числом — «1 задача», а не «1 задач».
+    expect(counters['review'], 'у ревью — факт').toBe('1 задача');
   });
 });
 
@@ -1107,5 +1111,130 @@ describe('FeatureTimelineTab: ось по колонке дорожек (GC-F5cR
     // 360: дорожка 336 px (24 | … | 0).
     expect(laneScaleWidth(360, true)).toBe(336);
     expect(laneAxisInsets(true)).toEqual({ left: 24, right: 0 });
+  });
+});
+
+// === GC-F10a: хвосты после мержа и согласование счётчика этапа ===
+
+describe('tasksCountLabel: согласование счётчика этапа (GC-F10a)', () => {
+  it('1 задача, 2 задачи, 5 задач, 11 задач, 12 задач, 21 задача, 22 задачи, 25 задач', () => {
+    expect(tasksCountLabel(1)).toBe('1 задача');
+    expect(tasksCountLabel(2)).toBe('2 задачи');
+    expect(tasksCountLabel(5)).toBe('5 задач');
+    expect(tasksCountLabel(11)).toBe('11 задач');
+    expect(tasksCountLabel(12)).toBe('12 задач');
+    expect(tasksCountLabel(21)).toBe('21 задача');
+    expect(tasksCountLabel(22)).toBe('22 задачи');
+    expect(tasksCountLabel(25)).toBe('25 задач');
+  });
+});
+
+// Смерженная фича с хвостами: открытый хвост держит свою стадию active (правило бэка,
+// FeaturePostMergeTailsTests), но тревоги бэк из него не строит и tone не даёт
+// (FeatureProjector.cs:139-141). Статус исполнителя-хвоста — данные бэка как есть
+// ('waiting' для задачи с AwaitingHumanSince): фронт его не выдумывает и не переносит
+// на этап.
+function mergedTailRun(tails: string[]): FeatureRun {
+  const stages = fullStages();
+  for (const s of stages) { s.state = 'done'; s.tone = null; s.overlapsActive = false; }
+  stages[4] = mkStage({
+    key: 'qa', state: 'active', firstStartedAt: '2026-10-20T11:40:00Z',
+    executors: [
+      mkExec({ personaId: 'p1', taskId: 't-tail1', taskRole: 'qa', status: 'waiting' }),
+      mkExec({ personaId: 'p1', taskId: 't-tail2', taskRole: 'qa', status: 'pending' }),
+    ],
+  });
+  return mkRun(stages, {
+    state: 'merged', closed: true, postMergeTails: tails,
+    qa: [
+      { id: 't-tail1', title: 'Хвост-проверка', status: 'inProgress', awaitingHumanSince: '2026-10-20T11:50:00Z' } as FeatureTask,
+      { id: 't-tail2', title: 'Хвост-дефект', status: 'inProgress' } as FeatureTask,
+    ],
+  });
+}
+
+describe('FeatureTimelineTab: хвосты после мержа (GC-F10a)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    personaMap.clear();
+    personaMap.set('p1', 'Денис');
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  // Порядок data-testid в DOM (порядок документа).
+  function testidOrder(c: FNodeLike): string[] {
+    const order: string[] = [];
+    const walk = (n: FNodeLike) => {
+      const at = n.attributes?.['data-testid'];
+      if (at) order.push(at);
+      for (const ch of n.childNodes) walk(ch);
+    };
+    walk(c);
+    return order;
+  }
+
+  // Все узлы с точным data-testid внутри поддерева.
+  function nodesByTestid(root: FNodeLike, testid: string): FNodeLike[] {
+    const out: FNodeLike[] = [];
+    const walk = (n: FNodeLike) => {
+      if (n.attributes?.['data-testid'] === testid) out.push(n);
+      for (const ch of n.childNodes) walk(ch);
+    };
+    walk(root);
+    return out;
+  }
+
+  it('смерженная фича с 2 хвостами → «хвосты после мержа · 2» после этапа «Мерж»', () => {
+    const c = renderTab(mergedTailRun(['t-tail1', 't-tail2']));
+    const tails = findNodeByAttr(c, 'data-testid', 'timeline-tails');
+    expect(tails, 'сводная строка').not.toBeNull();
+    expect(textNodes(tails!).join('')).toBe('хвосты после мержа · 2');
+    // Строка стоит после ленты этапов: «Мерж» — последний этап жизненного цикла.
+    const order = testidOrder(c as never);
+    expect(order.indexOf('timeline-tails'), 'строка после «Мержа»').toBeGreaterThan(order.indexOf('timeline-stage-merge'));
+  });
+
+  // Мутация (в отчёте): условие строки tailIds.size > 0 → false → «· 2» краснеет.
+
+  it('хвосты не дают «ждёт вас» ни у одного этапа (тон этапа — только с бэка)', () => {
+    // Исполнитель-хвост со статусом 'waiting' (данные бэка): плашка этапа и шапка
+    // этапа не должны повторять это как состояние этапа.
+    const c = renderTab(mergedTailRun(['t-tail1', 't-tail2']));
+    expect(findNodeByAttr(c, 'data-testid', 'timeline-stage-badge'), 'плашки этапа нет').toBeNull();
+    for (const key of STAGE_KEYS) {
+      const header = findNodeByAttr(c, 'data-testid', `timeline-stage-header-${key}`)!;
+      expect(textNodes(header).join(''), `шапка этапа «${key}» без «ждёт вас»`).not.toContain('ждёт вас');
+    }
+  });
+
+  it('хвост помечен «· хвост после мержа» в списке этапа и не дублируется отдельной строкой', () => {
+    const c = renderTab(mergedTailRun(['t-tail1', 't-tail2']));
+    const body = findNodeByAttr(c, 'data-testid', 'timeline-stage-body-qa');
+    expect(body, 'активный этап «Проверка» раскрыт').not.toBeNull();
+    // Оба хвоста — обычные строки списка этапа (их не перенесли в отдельный список).
+    expect(nodesByTestid(body as never, 'timeline-executor').length, 'строки хвостов в списке этапа').toBe(2);
+    // Каждая помечена ровно один раз; нигде в DOM второй копии маркера нет.
+    expect(nodesByTestid(body as never, 'timeline-executor-tail').length, 'каждый хвост помечен').toBe(2);
+    expect(nodesByTestid(c as never, 'timeline-executor-tail').length, 'маркер только в строках этапа').toBe(2);
+    // Сводка — только число, без id (иначе хвост показали бы дважды).
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'timeline-tails')!).join('')).toBe('хвосты после мержа · 2');
+  });
+
+  // Мутация (в отчёте): в StageRow isTail={isTail(x.taskId)} → isTail={false} →
+  // «помечен маркером» краснеет.
+
+  it('хвостов нет в данных (старые ответы) → строки нет', () => {
+    const c = renderTab(mkRun(fullStages(), { state: 'merged' }));
+    expect(findNodeByAttr(c, 'data-testid', 'timeline-tails')).toBeNull();
+  });
+
+  it('postMergeTails пуст → строки нет', () => {
+    const c = renderTab(mkRun(fullStages(), { state: 'merged', postMergeTails: [] }));
+    expect(findNodeByAttr(c, 'data-testid', 'timeline-tails')).toBeNull();
   });
 });

@@ -204,10 +204,12 @@ public class FeatureQueueServiceTests : IDisposable
     // Единственное место в бою, где автоснятие помечается by=queue, — вызов IFeatureHoldReleaser
     // в FeatureQueueService. Тест на шов: снятие идёт через сервис (как в бою, не прямым
     // ClearHold), проверяются и переданный в шов by, и запись hold_cleared в журнале.
-    // Мутация: FeatureHoldBy.Queue → null в вызове (FeatureQueueService.cs:156) — первый Which
+    // Мутация: FeatureHoldBy.Queue → null в вызове ReleaseFeatureHold
+    // (backend/ClaudeHomeServer.Tasks/FeatureQueueService.cs:147) — первый Which
     // краснеет: сервис не передал by в шов.
     // Граница покрытия (R-Q3B-3): тест закрепляет только первое звено — сервис → шов. Среднее
-    // звено, by в вызове ClearHold у прод-TaskExecutionService (TaskExecutionService.cs:1358),
+    // звено, by в вызове ClearHold у прод-TaskExecutionService
+    // (backend/ClaudeHomeServer/Services/TaskExecutionService.cs:1354),
     // здесь не проверяется: RecordingReleaser — тестовая реализация шва, а не прод-релизер,
     // и потеря by в прод-релизере этот тест не краснит. Среднее звено закрепляет
     // TaskExecutionServiceHoldTests.ReleaseFeatureHold_ByQueue_JournalWritesHoldClearedWithBy.

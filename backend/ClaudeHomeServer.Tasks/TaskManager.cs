@@ -1388,23 +1388,51 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // Снятие паузы (W4-HOLD-D): только снимает состояние Hold — пометку feature_held НЕ
     // гасит: возврат прерванных шагов в работу (продолжение в тех же сессиях) — отдельный
     // шаг D с проверкой живости чата. Без него снятие паузы оставило бы задачи «остановленными».
+
+    // Замок снятия удержания (Q7-TAIL1, минор 1 вердикта FINAL-Q6): проверка «есть Hold» и
+    // его обнуление — одна атомарная секция. Гонка «человек снимает» (DELETE hold →
+    // ReleaseFeatureHold) ↔ «очередь снимает голову» (FeatureQueueService → тот же
+    // ReleaseFeatureHold): без замка оба видят Hold != null, в журнал идут два hold_cleared,
+    // вещание эпика и возобновление ходов делаются дважды. Под замком проигравший видит уже
+    // снятый Hold и получает null — дальше работает существующая ветка вызывающего (дефект
+    // 06aae1bf): пустые списки без журнала, вещания и возобновления. Разные фичи под одним
+    // замком сериализуются на микросекунды: окно гонки микроскопическое, contention редкий.
+    private readonly Lock _holdLock = new();
+
+    // Тестовые швы (образец: FeatureQueueService): «замок занят» (вызов встал в ожидание) и
+    // точка внутри критической секции (после проверки Hold, перед снятием) — там живёт окно
+    // между «посмотрели» и «сделали». В бою null.
+    internal Action? ClearHoldContended;
+    internal Action? ClearHoldInside;
+
     public TaskItem? ClearHold(string id, string? by = null)
     {
         var task = _tasks.GetValueOrDefault(id);
-        if (task is null || task.Role != TaskRoles.Feature || task.Hold is null) return null;
-        var reason = task.Hold.Reason;
-        task.Hold = null;
-        task.UpdatedAt = DateTime.UtcNow;
-        AppendJournal(task.OwnerId ?? "", task.Id, new FeatureJournalEntry
+        if (task is null || task.Role != TaskRoles.Feature) return null;
+        if (!_holdLock.TryEnter())
         {
-            At = DateTime.UtcNow,
-            Kind = "hold_cleared",
-            TaskId = task.Id,
-            Reason = reason,
-            By = by,
-        });
-        ScheduleSave();
-        return task;
+            ClearHoldContended?.Invoke();
+            _holdLock.Enter();
+        }
+        try
+        {
+            if (task.Hold is null) return null;
+            if (ClearHoldInside is { } hook) hook();
+            var reason = task.Hold.Reason;
+            task.Hold = null;
+            task.UpdatedAt = DateTime.UtcNow;
+            AppendJournal(task.OwnerId ?? "", task.Id, new FeatureJournalEntry
+            {
+                At = DateTime.UtcNow,
+                Kind = "hold_cleared",
+                TaskId = task.Id,
+                Reason = reason,
+                By = by,
+            });
+            ScheduleSave();
+            return task;
+        }
+        finally { _holdLock.Exit(); }
     }
 
     // FeatureHoldException переехал в Core (дефект 79d0fa9a): его бросает и корневой

@@ -40,6 +40,9 @@ public class TaskExecutionServiceHoldTests : IDisposable
     private readonly PushService _push;
     private readonly NotificationService _notif;
     private readonly NotesKnowledgeService _notesKb;
+    // Страховка гонки (Q7-TAIL1): оба участника обязаны завершиться; ожидание — события,
+    // таймер только страховка от зависания, условие теста на него не опирается.
+    private static readonly TimeSpan Watchdog = TimeSpan.FromSeconds(30);
 
     public TaskExecutionServiceHoldTests()
     {
@@ -1566,5 +1569,69 @@ public class TaskExecutionServiceHoldTests : IDisposable
             "первое снятие пометку сняло: шаг снова в работе");
         _tasks.GetById(step.Id)!.HoldResumeDeliveredAt.Should().BeNull(
             "признак гасится вместе с пометкой — он живёт только при ней");
+    }
+
+    // Q7-TAIL1 (минор 1 вердикта FINAL-Q6): гонка двух участников одной фичи — «человек
+    // снимает» (DELETE hold) и «очередь снимает голову» (FeatureQueueService) — оба идут через
+    // ReleaseFeatureHold к ClearHold. Тест держит окно между «посмотрели» и «сделали»
+    // тестовыми швами TaskManager (образец: FeatureQueueServiceTests.
+    // Rebalance_ДваОдновременныхСобытия): первый вошедший в критическую секцию удержан в ней,
+    // пока второй не упрётся в занятый замок (contended) либо — без замка — не войдёт сам
+    // (secondInside). Ожидание — события, не паузы. Снимает, вещает эпик и возобновляет
+    // победитель; проигравший — существующая ветка 06aae1bf: Released с пустыми списками,
+    // без журнала, без вещания и без возобновления. Мутация «убрать замок в ClearHold»:
+    // второй проходит проверку до снятия (первый держится в шве до снятия) — краснеет:
+    // в прогоне проигравший упал на чтении уже снятого Hold (NRE в ClearHold), при другом
+    // исходе гонки были бы два hold_cleared и два непустых Resumed.
+    [Fact]
+    public async Task ReleaseFeatureHold_GonkaDvukhUchastnikov_VozobnovlenieIZhurnalPoOdnomuRaza()
+    {
+        var user = _userStore.Add("q7-tail1-race", "password123", "user");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича", Role: "feature"));
+        var step = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг на паузе", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress));
+        _tasks.SetHold(epic.Id, FeatureHoldReasons.Manual);
+
+        // Отдельный экземпляр с тестовым броадкастером: вещание по эпику читаем из его
+        // списков (образец: TaskChangedBroadcastContractTests).
+        var bc = new TestSessionBroadcaster();
+        var sut = new TaskExecutionService(_tasks, _sessions, _personas, bc, _push, _notif,
+            NullLogger<TaskExecutionService>.Instance, _config, kb: _notesKb);
+
+        var contended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondInside = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var inside = 0;
+        var maxInside = 0;
+        var entries = 0;
+        _tasks.ClearHoldContended = () => contended.TrySetResult();
+        _tasks.ClearHoldInside = () =>
+        {
+            var now = Interlocked.Increment(ref inside);
+            int seen;
+            do { seen = Volatile.Read(ref maxInside); }
+            while (now > seen && Interlocked.CompareExchange(ref maxInside, now, seen) != seen);
+            if (now == 2) secondInside.TrySetResult();
+            if (Interlocked.Increment(ref entries) == 1)
+                Task.WhenAny(contended.Task, secondInside.Task).Wait(Watchdog)
+                    .Should().BeTrue("второй участник обязан заявиться: занятый замок или вход без замка");
+            Interlocked.Decrement(ref inside);
+        };
+
+        // Снимок Hold оба участника взяли при активной паузе — как в бою: ручная ручка
+        // берёт его из снимка проектора, автоснятие читает актуальный Hold (FeatureQueueService.cs:144).
+        var snapshot = _tasks.GetById(epic.Id)!.Hold!;
+
+        var first = Task.Run(() => sut.ReleaseFeatureHold(epic.Id, user.Id, snapshot, "first"));
+        var second = Task.Run(() => sut.ReleaseFeatureHold(epic.Id, user.Id, snapshot, "second"));
+        var results = await Task.WhenAll(first, second).WaitAsync(Watchdog);
+
+        maxInside.Should().Be(1, "критическая секция «проверили Hold и сняли» — не больше одного участника");
+        results.Count(r => r.Resumed.Count > 0).Should().Be(1,
+            "пробуждение очереди — на стороне победителя; проигравший — ветка 06aae1bf с пустыми списками");
+        _journal.Read(user.Id, epic.Id).Entries.Count(e => e.Kind == "hold_cleared")
+            .Should().Be(1, "в журнал пишет только победитель: одна запись действия на одну паузу");
+        bc.Owner.Count(m => m.Message is TaskChangedMessage tc && tc.Task.Id == epic.Id)
+            .Should().Be(1,
+                "проигравший не доходит до вещания по эпику — значит, и до возобновления ходов тоже");
     }
 }

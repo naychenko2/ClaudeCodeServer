@@ -3,6 +3,9 @@ using ClaudeHomeServer.Models;
 namespace ClaudeHomeServer.Services;
 
 // Узкий шов TaskExecutionService для выноса Tasks (Этап 5, волна 1).
+// Реализует его TaskExecutorAdapter (Composition): ExecuteAsync и CheckStalledExecutorAsync
+// он форвардит в TaskExecutionService, а ReconcileFeatureQueuesAsync делает через
+// FeatureQueueService — у самого исполнителя этого метода нет.
 // TaskSchedulerService на каждом тике зовёт три метода:
 //   • ExecuteAsync — автозапуск исполнителя в момент срока;
 //   • CheckStalledExecutorAsync — страховка «ход кончился, а задачу никто не закрыл»;

@@ -1452,6 +1452,12 @@ export type ServerMessage = { sessionId: string } & (
   // Итоговые метрики завершённого хода на локальной модели: скорость генерации/префилла,
   // time-to-first-token, оценка времени в очереди, доля prefix-кэша, число выданных токенов.
   | { type: 'local_model_turn_stats'; genTps?: number | null; prefillTps?: number | null; ttftMs?: number | null; queueMsApprox?: number | null; cacheHitPerc?: number | null; outTokens?: number | null; mainRequests?: number; subagentRequests?: number; compactionRequests?: number; auxiliaryRequests?: number; agentTypes?: string[] | null; compactionKind?: 'auto' | 'manual' | 'reactive' | null; toolCallLeakTail?: number; toolCallLeakWholeCall?: number }
+  // Ход ждёт свободный слот локальной модели (гейт допуска, бэк 4683acb29). В отличие от
+  // local_model_live идёт БЕЗ флага local-model-stats: человек обязан видеть, что ход ждёт,
+  // а не «виснет молча». position — место в очереди (1-based), active/limit — «заняты N из M».
+  // position=0 — ожидание кончилось (ход допущен/отказан/остановлен): строку снять.
+  // Эфемерное: в историю не пишется, свою строку ленты снимает и на конце хода (редьюсер).
+  | { type: 'local_turn_queue'; position: number; active: number; limit: number }
 );
 
 // Снимок промпта хода (GET /api/sessions/{id}/prompt/{snapshotId})
@@ -2326,6 +2332,10 @@ export type ChatItem =
   // Строка ленты о руках локального проекта (hands_notice или остановка рук на устройстве).
   // Live-only: события эфемерные, в историю не пишутся
   | { kind: 'hands_notice'; text: string; tone: 'neutral' | 'warning' }
+  // Строка ленты: ход ждёт свободный слот локальной модели (событие local_turn_queue).
+  // position — позиция в очереди (1-based), active/limit — «заняты N из M». Live-only:
+  // событие эфемерное, в историю не пишется; снимается position=0 или концом хода (редьюсер).
+  | { kind: 'local_turn_queue'; position: number; active: number; limit: number }
   // details — сырой технический текст сбоя за человекочитаемым text (см. wire-событие error).
   // action — признак предлагаемого действия под карточкой: сейчас только "window-1m-drop"
   // (кнопка «Продолжить в стандартном окне» под карточкой отказа Window1MUnavailable).

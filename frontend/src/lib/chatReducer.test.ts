@@ -72,6 +72,7 @@ describe('возврат в чат посреди идущего хода', () =
       subtaskCount: 2, waveCount: 1, elapsedMs: 1000, route: null, failure: null,
       promptChars: 0, responseChars: 0,
     }],
+    ['local_turn_queue', { type: 'local_turn_queue', position: 2, active: 3, limit: 3 }],
   ];
 
   it.each(liveOnlyEvents)('%s в ленте не блокирует снимок', (_name, event) => {
@@ -495,6 +496,61 @@ describe('запись модуля module_record (ADR-019 §2)', () => {
     const stored = snapshot({ kind: 'module_record', module: 'imageeditor', recordType: 'image_thread', data: { threadId: 't1', stackId: 's1' }, fallback: 'Картинка', timestamp: 7 });
     expect(stored.map(i => i.kind)).toEqual(['module_record']);
     expect(serverHistoryNewer(stored, live.items)).toBe(false);
+  });
+});
+
+// F-b «OOM на странице»: ход ждёт свободный слот локальной модели (гейт допуска, бэк 4683acb29).
+// Бэкенд шлёт local_turn_queue при постановке в очередь и при каждом сдвиге позиции;
+// position=0 снимает строку. Строка live-only и принадлежит только своему ходу.
+describe('applyServerMessage: local_turn_queue — строка ожидания слота локальной модели', () => {
+  it('position=2, active=3, limit=3 → в ленте строка с этими числами (c1)', () => {
+    const s = feed(initialChatState(),
+      { type: 'user_message', text: 'спрос' },
+      { type: 'session_started', model: 'qwen', mode: 'default' },
+      { type: 'local_turn_queue', position: 2, active: 3, limit: 3 },
+    );
+    const lines = s.items.filter(i => i.kind === 'local_turn_queue');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ kind: 'local_turn_queue', position: 2, active: 3, limit: 3 });
+  });
+
+  it('сдвиг позиции обновляет стоящую строку, второй под той же очередью не плодится', () => {
+    const s = feed(initialChatState(),
+      { type: 'local_turn_queue', position: 3, active: 3, limit: 3 },
+      { type: 'local_turn_queue', position: 1, active: 2, limit: 3 },
+    );
+    const lines = s.items.filter(i => i.kind === 'local_turn_queue');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ position: 1, active: 2, limit: 3 });
+  });
+
+  it('position=0 снимает строку (c2)', () => {
+    const queued = feed(initialChatState(), { type: 'local_turn_queue', position: 2, active: 3, limit: 3 });
+    expect(queued.items.some(i => i.kind === 'local_turn_queue')).toBe(true);
+    const s = applyServerMessage(queued, { sessionId: SID, type: 'local_turn_queue', position: 0, active: 0, limit: 3 } as ServerMessage);
+    expect(s.items.some(i => i.kind === 'local_turn_queue')).toBe(false);
+  });
+
+  it('position=0 без строки состояние не трогает (та же ссылка)', () => {
+    const s = feed(initialChatState(), { type: 'text_delta', text: 'ответ' });
+    const after = applyServerMessage(s, { sessionId: SID, type: 'local_turn_queue', position: 0, active: 0, limit: 3 } as ServerMessage);
+    expect(after).toBe(s);
+  });
+
+  it('строка не переживает свой ход: result/error/exited её снимают', () => {
+    const base = feed(initialChatState(),
+      { type: 'user_message', text: 'спрос' },
+      { type: 'session_started', model: 'qwen', mode: 'default' },
+      { type: 'local_turn_queue', position: 1, active: 3, limit: 3 },
+    );
+    for (const end of [
+      { type: 'result', subtype: 'success', durationMs: 1, numTurns: 1 },
+      { type: 'error', text: 'локальный движок не отвечает' },
+      { type: 'exited' },
+    ]) {
+      const s = applyServerMessage(base, { sessionId: SID, ...end } as ServerMessage);
+      expect(s.items.some(i => i.kind === 'local_turn_queue'), `конец хода ${end.type}`).toBe(false);
+    }
   });
 });
 

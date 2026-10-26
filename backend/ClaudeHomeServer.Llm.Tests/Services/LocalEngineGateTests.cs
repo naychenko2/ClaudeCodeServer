@@ -1,5 +1,7 @@
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Tests.Helpers;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -168,5 +170,25 @@ public class LocalEngineGateTests
         Assert.Equal(7, await beta.RunAsync(() => Task.FromResult(7), CancellationToken.None));
         hold.SetResult();
         await busy;
+    }
+}
+
+// Полный хост: коллекция Inotify, как у соседних тестов с TestWebApplicationFactory
+[Collection(TestCollections.Inotify)]
+public class LocalEngineGateDiTests
+{
+    // Регистрация ILocalLlmClient в LlmSubsystem обёрнута гейтом: снятие обёртки вернуло бы
+    // движок без потолка, а остальные тесты строят гейт вручную и этого не заметили бы.
+    [Fact]
+    public void Основной_клиент_из_DI_обёрнут_единственным_гейтом()
+    {
+        using var factory = new TestWebApplicationFactory();
+
+        var client = factory.Services.GetRequiredService<ILocalLlmClient>();
+        var gated = Assert.IsType<GatedLocalLlmClient>(client);
+
+        // singleton: повторный резолв даёт тот же клиент, а значит и тот же гейт
+        Assert.Same(client, factory.Services.GetRequiredService<ILocalLlmClient>());
+        Assert.Equal("LocalLlm", gated.Gate.Engine);
     }
 }

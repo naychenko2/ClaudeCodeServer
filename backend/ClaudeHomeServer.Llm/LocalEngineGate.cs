@@ -13,9 +13,11 @@ namespace ClaudeHomeServer.Services.Llm;
 // сразу (LocalEngineOverloadedException), а не растят очередь в памяти.
 public sealed class LocalEngineGate
 {
-    // Дефолты кода — чтобы инстанс без настройки не был без предела. Прямые клиенты делят движок
-    // с ходами исполнителей через claude CLI (у vLLM на :18020 max_num_seqs=4), поэтому им —
-    // не больше половины слотов. Машинное значение — LocalLlm:MaxConcurrency в appsettings.Local.json.
+    // Дефолты кода — чтобы инстанс без настройки не был без предела. Консервативные значения для
+    // прямых клиентов: основную нагрузку на движок дают ходы исполнителей через claude CLI, а
+    // прямых вызовов мало (трафик уводит маршрутизация). Реальный лимит движка задаёт его
+    // конфигурация (на :18020 — strata, --parallel 5), а не этот дефолт. Машинное значение —
+    // LocalLlm:MaxConcurrency в appsettings.Local.json.
     public const int DefaultConcurrency = 2;
     public const int DefaultQueue = 8;
 

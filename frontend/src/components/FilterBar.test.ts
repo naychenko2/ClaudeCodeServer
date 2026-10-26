@@ -103,7 +103,7 @@ const baseFilters: ChatFilters = {
   statuses: ['active', 'waiting', 'error'],
   personaId: null, only: [], search: '',
   groupBy: 'features', sortOrder: 'newest', hierarchy: true, archivedOnly: false,
-  featureChips: [], showClosed: false,
+  featureKinds: [], featureChips: [], showClosed: false,
 };
 
 // Рендер FilterBar (мобила) + открытие шторки кликом по триггеру; возвращает body.

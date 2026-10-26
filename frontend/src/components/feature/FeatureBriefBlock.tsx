@@ -23,7 +23,7 @@ import { C, R, SP, FS, FONT } from '../../lib/design';
 import { Button } from '../ui/Button';
 import { StatusTag, featureRunStatusTag, type FeatureRunTag } from './FeatureStatusTag';
 import {
-  briefDoneText, briefEstimateText, briefNextText, briefNowText, briefSubText, updatedText, voiceRoleText, voiceStaleLabel, voiceWhenText,
+  briefDoneText, briefEstimateText, briefNextText, briefNowText, briefSubText, briefUpdatedText, voiceRoleText, voiceStaleLabel, voiceWhenText,
   type PersonaNameResolver,
 } from './FeatureBriefModel';
 import { MiniTimeline, MiniTimelineAxis, SummaryRow } from './FeatureBriefTimeline';
@@ -326,8 +326,9 @@ export function FeatureBriefBlock({
   const nextText = briefNextText(brief, nameOf);
   const est = briefEstimateText(brief);
   const isWait = brief.kind === 'waiting_you';
-  // «обновлено …» — по computedAt; у закрытой — дата закрытия (макет §Поведение).
-  const upd = updatedText(brief.kind === 'closed' ? (mergedAt ?? brief.computedAt) : brief.computedAt, nowMs);
+  // «обновлено …» — по updatedAt (время последнего события состояния, B6), а не по computedAt
+  // (дефект f2da9354); у закрытой — дата закрытия; поля нет — строки нет (решает модель).
+  const upd = briefUpdatedText(brief, mergedAt, nowMs);
 
   const tagBlock = (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: SP.xs, flexShrink: 0 }}>

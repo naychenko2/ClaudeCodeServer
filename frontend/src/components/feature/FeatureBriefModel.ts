@@ -310,9 +310,18 @@ export function agoText(iso: string | null, nowMs: number): string | null {
   return `${formatDate(iso)}, ${formatClock(iso)}`;
 }
 
-// Правый верх строки «Сейчас»: «обновлено N мин назад» по summary/brief.computedAt
-// (макет §2; у закрытой вызывающий ставит дату сам — не эту строку).
-export function updatedText(iso: string | null, nowMs: number): string | null {
+// Правый верх строки «Сейчас»: «обновлено N назад» по brief.updatedAt — времени последнего
+// события состояния (B6, UpdatedAtOf в FeatureBrief.cs:283), а не по computedAt — моменту
+// этого ответа (дефект f2da9354: computedAt всегда свежий, строка всегда читалась «только что»).
+// Нет updatedAt (null или поля нет — фича без событий состояния) — строки нет: computedAt не
+// подставляется («подставлять „сейчас“ значит врать» — FeatureBrief.cs:280). У закрытой —
+// дата закрытия (макет §Поведение): mergedAt от вызывающего, а его нет — updatedAt (у closed
+// он и есть событие закрытия: CompletedAt закрывающей задачи входит в UpdatedAtOf).
+// Порог — у agoText выше: «только что» ТОЛЬКО когда разница меньше минуты, «N мин назад» —
+// полных минут (W5-R-F3b): «обновлено 0 мин назад» не печатается — нуль не число, та же
+// болезнь, что «идёт 0 мин» / «в очереди 0 мин».
+export function briefUpdatedText(brief: FeatureBrief, mergedAt: string | null, nowMs: number): string | null {
+  const iso = brief.kind === 'closed' ? (mergedAt ?? brief.updatedAt ?? null) : (brief.updatedAt ?? null);
   const ago = agoText(iso, nowMs);
   return ago ? `обновлено ${ago}` : null;
 }

@@ -59,6 +59,9 @@ function brief(over: Partial<FeatureBrief> = {}): FeatureBrief {
     estimate: null,
     queue: null,
     note: null,
+    // updatedAt отличается от computedAt намеренно (14:00 против 14:08): строка «обновлено …»
+    // обязана считаться от него — подмена на computedAt красит тесты (F15, дефект f2da9354).
+    updatedAt: at(25, 14, 0),
     computedAt: at(25, 14, 8),
     ...over,
   };
@@ -325,7 +328,7 @@ describe('Порядок секций и пустые подписи (R-F8)', ()
     };
     const { root, container } = mount(createElement(FeatureBriefBlock, props));
     const upd1 = textNodes(findNodeByAttr(container, 'data-testid', 'brief-updated')!).join('');
-    expect(upd1, 'computedAt 14:08 при «сейчас» 14:10').toBe('обновлено 2 мин назад');
+    expect(upd1, 'updatedAt 14:00 при «сейчас» 14:10').toBe('обновлено 10 мин назад');
     vi.setSystemTime(NOW + 10 * 60_000);
     // Новый элемент и новые props: компонент обязан пройтись тело рендера ещё раз.
     act(() => { root.render(createElement(FeatureBriefBlock, { ...props })); });
@@ -341,11 +344,11 @@ describe('Порядок секций и пустые подписи (R-F8)', ()
       onRetry: () => {},
     };
     const { root, container } = mount(createElement(FeatureBriefBlock, props));
-    expect(textNodes(findNodeByAttr(container, 'data-testid', 'brief-updated')!).join(''), 'computedAt 14:08 при «сейчас» 14:10').toBe('обновлено 2 мин назад');
+    expect(textNodes(findNodeByAttr(container, 'data-testid', 'brief-updated')!).join(''), 'updatedAt 14:00 при «сейчас» 14:10').toBe('обновлено 10 мин назад');
     // Новый ответ — новый объект тех же данных: часы обязаны свериться (поломка deps=[] это красит).
     vi.setSystemTime(NOW + 10 * 60_000);
     act(() => { root.render(createElement(FeatureBriefBlock, { ...props, brief: { ...props.brief! } })); });
-    expect(textNodes(findNodeByAttr(container, 'data-testid', 'brief-updated')!).join(''), 'новая ссылка данных — новое «сейчас»: 14:20 − 14:08').toBe('обновлено 12 мин назад');
+    expect(textNodes(findNodeByAttr(container, 'data-testid', 'brief-updated')!).join(''), 'новая ссылка данных — новое «сейчас»: 14:20 − 14:00').toBe('обновлено 20 мин назад');
   });
 
   it('без «Дальше» «Оценка» остаётся в правой колонке: «Сделано» занимает 1–2, середина не пустует (R-F8 минор 2)', () => {
@@ -374,6 +377,20 @@ describe('Порядок секций и пустые подписи (R-F8)', ()
       const cell = findNodeByAttr(c, 'data-testid', id)!.parentElement!.parentElement!;
       expect((reactProps(cell)!.style as Record<string, unknown>).gridColumn, `ячейка «${id}» без gridColumn`).toBeUndefined();
     }
+  });
+});
+
+// ── 2b. «обновлено …» (F15, дефект f2da9354): по updatedAt, не по computedAt ─────────
+
+describe('«обновлено …» (F15, дефект f2da9354)', () => {
+  it('updatedAt 3 часа назад — в карточке «обновлено 3 ч назад»; по computedAt было бы «2 мин назад» (критерий c1)', () => {
+    const { c } = render({ brief: brief({ updatedAt: at(25, 11, 10) }) });
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'brief-updated')!).join('')).toBe('обновлено 3 ч назад');
+  });
+
+  it('updatedAt = null — строки «обновлено» в карточке нет, откат на computedAt не подставляется (критерий c2)', () => {
+    const { c } = render({ brief: brief({ updatedAt: null }) });
+    expect(findNodeByAttr(c, 'data-testid', 'brief-updated'), 'строки нет').toBeNull();
   });
 });
 
@@ -595,7 +612,7 @@ describe('Grep-сторож (инвариант 3: фронт не пересч�
     // Список — константа рядом с моделью (BRIEF_MODEL_WORDS): все статические строки,
     // которые модель может сказать в карточке. Проверяется код блока; комментарии — нет:
     // блок вправе называть строки модели в документации («Сделано · Дальше · Оценка»,
-    // «обновлено …» — по computedAt). Исключения — слова, по праву принадлежащие блоку:
+    // «обновлено …» — по updatedAt). Исключения — слова, по праву принадлежащие блоку:
     // «Дальше» (подпись секции блока, ровно без тире; модельный префикс error/idle
     // «Дальше — » — в списке) и «в очереди» (тег карточки: защищена метка тега, а не
     // факт модели «в очереди N» — любой вариант тега с хвостом с ним конфликтует).

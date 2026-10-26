@@ -5,8 +5,8 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  agoText, briefDoneText, briefEstimateText, briefNextText, briefNowText, briefSubText, genitiveName,
-  updatedText, voiceRoleText, voiceStaleLabel, voiceWhenText,
+  agoText, briefDoneText, briefEstimateText, briefNextText, briefNowText, briefSubText, briefUpdatedText, genitiveName,
+  voiceRoleText, voiceStaleLabel, voiceWhenText,
 } from './FeatureBriefModel';
 import type { FeatureBrief, FeatureBriefKind } from '../../lib/featurePage';
 
@@ -375,8 +375,33 @@ describe('«N мин/ч назад»', () => {
     expect(agoText(null, NOW)).toBeNull();
     expect(agoText('не дата', NOW)).toBeNull();
   });
-  it('updatedText — «обновлено 2 мин назад» (макет)', () => {
-    expect(updatedText(at(25, 14, 8), NOW)).toBe('обновлено 2 мин назад');
+});
+
+// ── 4a. «обновлено …» (F15, дефект f2da9354): по updatedAt, не по computedAt ─────────
+
+describe('«обновлено …» (F15, дефект f2da9354)', () => {
+  it('updatedAt 3 часа назад — «обновлено 3 ч назад», не по computedAt (критерий c1)', () => {
+    // computedAt фикстуры — 14:08 (2 мин назад): считай строка от него, было бы «2 мин назад».
+    const b = brief({ updatedAt: at(25, 11, 10) });
+    expect(briefUpdatedText(b, null, NOW)).toBe('обновлено 3 ч назад');
+  });
+
+  it('updatedAt нет (поля нет или null) — строки нет, computedAt не подставляется (критерий c2)', () => {
+    expect(briefUpdatedText(brief({}), null, NOW)).toBeNull();
+    expect(briefUpdatedText(brief({ updatedAt: null }), null, NOW)).toBeNull();
+  });
+
+  it('«только что» — только когда разница меньше минуты; полная минута — число (W5-R-F3b)', () => {
+    expect(briefUpdatedText(brief({ updatedAt: at(25, 14, 9, 30) }), null, NOW)).toBe('обновлено только что');
+    expect(briefUpdatedText(brief({ updatedAt: at(25, 14, 9) }), null, NOW)).toBe('обновлено 1 мин назад');
+  });
+
+  it('closed — по дате закрытия (макет §Поведение): mergedAt, а его нет — updatedAt', () => {
+    const b = brief({ kind: 'closed', updatedAt: at(25, 11, 10) });
+    // mergedAt 30 с назад (< минуты) — «только что»; ровно минута — уже «1 мин назад» (W5-R-F3b).
+    expect(briefUpdatedText(b, at(25, 14, 9, 30), NOW)).toBe('обновлено только что');
+    expect(briefUpdatedText(b, at(25, 14, 9), NOW)).toBe('обновлено 1 мин назад');
+    expect(briefUpdatedText(b, null, NOW)).toBe('обновлено 3 ч назад');
   });
 });
 

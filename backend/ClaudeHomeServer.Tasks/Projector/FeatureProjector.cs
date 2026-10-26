@@ -1602,7 +1602,11 @@ public sealed class FeatureProjector(TaskManager tasks)
             run.Hold?.Reason,
             run.Hold?.Since,
             run.Quiet,
-            run.Queue);
+            run.Queue,
+            // kind — из той же таблицы и той же функции, что brief.kind (FeatureBrief.KindOf, Б-1.1):
+            // своего маппинга здесь нет. Отличие от brief: состояние вне таблицы — null, не исключение
+            // (строка индекса не роняет индекс, Б-1.2 к.3).
+            Kind: FeatureBrief.KindByState.ContainsKey(run.State) ? FeatureBrief.KindOf(run) : null);
     }
 
     // Ключевой чат фичи (контракт §1): первое ЖИВОЕ звено цепочки

@@ -2896,16 +2896,16 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         // Список задач (GET /api/tasks): голос виден, чат автора — нет.
         var list = JsonNode.Parse(await _client.GetStringAsync("/api/tasks"))!.AsArray();
         var inList = list.Single(n => n!["id"]!.GetValue<string>() == epicId);
-        inList["note"]!["text"]!.GetValue<string>().Should().Be("авторский голос");
-        inList["note"].AsObject().ContainsKey("bySessionId").Should().BeFalse("список не отдаёт чат автора голоса");
+        inList!["note"]!["text"]!.GetValue<string>().Should().Be("авторский голос");
+        inList!["note"]!.AsObject().ContainsKey("bySessionId").Should().BeFalse("список не отдаёт чат автора голоса");
 
         // Карточка задачи (GET /api/tasks/{id}).
         var card = JsonNode.Parse(await _client.GetStringAsync($"/api/tasks/{epicId}"))!.AsObject();
-        card["note"].AsObject().ContainsKey("bySessionId").Should().BeFalse("карточка не отдаёт чат автора голоса");
+        card["note"]!.AsObject().ContainsKey("bySessionId").Should().BeFalse("карточка не отдаёт чат автора голоса");
 
         // Ответ фичи: run.epic (выход SlimRun) — то же поле того же эпика.
         var feature = JsonNode.Parse(await _client.GetStringAsync($"/api/tasks/features/{epicId}"))!.AsObject();
-        feature["run"]!["epic"]!["note"].AsObject().ContainsKey("bySessionId")
+        feature["run"]!["epic"]!["note"]!.AsObject().ContainsKey("bySessionId")
             .Should().BeFalse("run.epic не отдаёт чат автора голоса");
 
         // Ответ PUT /api/tasks/{id}: карточка пред-сериализуется FeatureJsonOptions (свои опции,
@@ -2913,7 +2913,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var put = await _client.PutAsJsonAsync($"/api/tasks/{epicId}", new { title = "переименован" });
         put.StatusCode.Should().Be(HttpStatusCode.OK);
         var putJson = JsonNode.Parse(await put.Content.ReadAsStringAsync())!.AsObject();
-        putJson["note"].AsObject().ContainsKey("bySessionId").Should().BeFalse("ответ PUT не отдаёт чат автора голоса");
+        putJson["note"]!.AsObject().ContainsKey("bySessionId").Should().BeFalse("ответ PUT не отдаёт чат автора голоса");
     }
 
     // 200 + в журнале ровно одна запись held с reason. Журнал пишет сам TaskManager (его

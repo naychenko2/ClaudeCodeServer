@@ -920,8 +920,10 @@ public class TasksController(
     // только человек — сервисный токен (typ=svc) получает 403 на обе ручки. Эти ручки только
     // пишут поле эпика и записи журнала held/hold_cleared; прерывание идущих ходов — шаг D.
     // Fail-closed: 503 (подсистема выключена), 404 (нет/чужой/кривой id — тело как у GET),
-    // 400 (неизвестный reason), 409: merged/closed/merging; draft после первого запуска шага;
-    // manual/queue поверх существующего draft; DELETE без удержания. POST 200 — тело
+    // 400 (неизвестный reason), 409: merged/closed/merging; queue для merge_pending
+    // (FeatureQueuePolicy.QueueDenied — тот же список, что QUEUE_DENIED фронта);
+    // draft после первого запуска шага; manual/queue поверх существующего draft; DELETE без
+    // удержания. POST 200 — тело
     // { interrupted: [taskId] } (контракт :364, W4-HOLD-D2): прерванные этой паузой задачи.
 
     // Тело POST hold: reason — словарь FeatureHoldReasons (draft | manual | queue).
@@ -956,6 +958,16 @@ public class TasksController(
         if (reason != FeatureHoldReasons.Draft && reason != FeatureHoldReasons.Manual
             && reason != FeatureHoldReasons.Queue)
             return BadRequest(new { error = "Неизвестный reason удержания: " + reason });
+
+        // Очередь (волна 6, решение 19.10 п. 5): фичу, которая уже уступила слот или завершена,
+        // в очередь не ставят — иначе merge_pending уходит в paused и тревога мержа исчезает.
+        // Единственное выражение правила — FeatureQueuePolicy.QueueDenied; тот же список, что
+        // QUEUE_DENIED на фронте (FeaturePageHeader.tsx), расхождение ловится тестом
+        // FeatureQueuePolicyTests.QueueDenied_Совпадает_СФронтовымQUEUE_DENIED. Для merged/
+        // closed/merging до этой ветки уже стоит общий отказ выше — ветка полная, чтобы
+        // правило жило в одном месте.
+        if (reason == FeatureHoldReasons.Queue && FeatureQueuePolicy.QueueDenied(run))
+            return Conflict(new { error = "Фича уже уступила слот или завершена: в очередь она не ставится" });
 
         // Draft — черновик: фичу готовят, до первого запуска шага (решение 23.10: «только до
         // первого запуска шага, иначе 409»). Тот же предикат anyStarted, что в проекторе.

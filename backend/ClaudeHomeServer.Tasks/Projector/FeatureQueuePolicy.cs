@@ -24,6 +24,21 @@ public static class FeatureQueuePolicy
     public static bool IsQueued(FeatureRun run) =>
         run.State == FeatureStates.Paused && run.Hold?.Reason == FeatureHoldReasons.Queue;
 
+    // «В очередь» нельзя фиче, которая уже уступила слот или завершена (решение 19.10 п. 5,
+    // ADR-031 §«Очередь фич»): merge_pending остаётся merge_pending (тревога мержа видна),
+    // а не становится paused в очереди. ЕДИНСТВЕННОЕ выражение правила на бэке; тот же
+    // список, что QUEUE_DENIED на фронте (FeaturePageHeader.tsx) — расхождение двух списков
+    // ловится FeatureQueuePolicyTests.QueueDenied_Совпадает_СФронтовымQUEUE_DENIED.
+    // Неизвестное состояние разрешено (фронт: QUEUE_DENIED — явный список отказов).
+    public static bool QueueDenied(FeatureRun run) => run.State switch
+    {
+        FeatureStates.MergePending => true,
+        FeatureStates.Merging => true,
+        FeatureStates.Merged => true,
+        FeatureStates.Closed => true,
+        _ => false,
+    };
+
     // Очередь одного набора фич (вызывающий отбирает проект): FIFO по Hold.Since, при равенстве —
     // по epic.Id (ordinal). Фичи не из очереди отбрасываются.
     public static IReadOnlyList<FeatureRun> Order(IEnumerable<FeatureRun> runs) => runs

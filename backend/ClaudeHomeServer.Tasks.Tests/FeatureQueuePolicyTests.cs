@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Tasks.Projector;
@@ -87,6 +88,52 @@ public class FeatureQueuePolicyTests
     [InlineData("")]
     public void OccupiesSlot_Занимает_ВключаяНеизвестное(string state) =>
         FeatureProjector.OccupiesSlot(RunIn(state)).Should().BeTrue("fail-closed: неизвестное занимает слот");
+
+    // ── QueueDenied: тот же список, что QUEUE_DENIED на фронте ───────────────────────────────
+
+    // Мост к фронту: FeatureQueuePolicy.QueueDenied обязан совпадать с QUEUE_DENIED
+    // (frontend/src/components/feature/FeaturePageHeader.tsx) — третьего списка правила нет,
+    // тест читает фронтовый файл напрямую (путь от корня репозитория через Path.Combine,
+    // как TeamMechanicsCatalogTests). Мутация (критерий c4): убрать ветку MergePending из
+    // QueueDenied — случай merge_pending краснеет; добавить отказ для состояния, которого
+    // нет у фронта, — краснеет обратный проход.
+    private static string? FindFeaturePageHeaderTs()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            var candidate = Path.Combine(dir.FullName,
+                "frontend", "src", "components", "feature", "FeaturePageHeader.tsx");
+            if (File.Exists(candidate)) return candidate;
+            dir = dir.Parent;
+        }
+        return null;
+    }
+
+    [Fact]
+    public void QueueDenied_Совпадает_СФронтовымQUEUE_DENIED()
+    {
+        var path = FindFeaturePageHeaderTs();
+        path.Should().NotBeNull("тест идёт внутри дерева репозитория — фронтовый файл рядом с бэком");
+
+        var source = File.ReadAllText(path!);
+        var set = Regex.Match(source, @"const QUEUE_DENIED[^=]*= new Set\(\[(?<body>[^\]]*)\]\)");
+        set.Success.Should().BeTrue("у фронта обязан быть список QUEUE_DENIED (FeaturePageHeader.tsx)");
+        var denied = Regex.Matches(set.Groups["body"].Value, "'([a-z_]+)'")
+            .Select(m => m.Groups[1].Value)
+            .ToList();
+        denied.Should().NotBeEmpty("QUEUE_DENIED должен перечислять состояния отказа");
+
+        // Прямой проход: каждое известное бэку состояние — ответ бэка == решение списка фронта.
+        var states = AllStates();
+        foreach (var state in states)
+            FeatureQueuePolicy.QueueDenied(RunIn(state)).Should().Be(denied.Contains(state), $"state={state}");
+
+        // Обратный проход: фронт не смеет отказать состоянию, которого нет у бэка (иначе
+        // QUEUE_DENIED держит то, что бэк никогда не вернёт, — два списка разошлись).
+        denied.Should().OnlyContain(s => states.Contains(s),
+            "QUEUE_DENIED фронта не смеет ссылаться на состояния вне FeatureStates");
+    }
 
     // ── Order / queue (И5) ──────────────────────────────────────────────────────────────────
 

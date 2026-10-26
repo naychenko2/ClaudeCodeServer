@@ -2428,7 +2428,8 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     // ─── W4-HOLD-B2: hold/clear (POST/DELETE /api/tasks/features/{id}/hold) ───────────────────
     // Контракт §1 (docs/research/feature-lifecycle-shared-chat-cut-2026-10.md): Hold ставит
     // только человек — сервисный токен (typ=svc) отказывается 403 на обе ручки; merged/closed/
-    // merging → 409; draft годен только до первого запуска шага; manual поверх draft → 409 (queue поверх draft — 200);
+    // merging → 409; queue для merge_pending → 409 (FeatureQueuePolicy.QueueDenied = QUEUE_DENIED фронта);
+    // draft годен только до первого запуска шага; manual поверх draft → 409 (queue поверх draft — 200);
     // DELETE без удержания → 409. tasks_update поле Hold не пишет; закрытие эпика его снимает.
 
     private async Task<string> CreateFeatureEpicAsync()
@@ -2533,6 +2534,83 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
 
         var response = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    // 409: «в очередь» фиче, которая уже уступила слот или завершена (решение 19.10 п. 5,
+    // ADR-031): merge_pending/merging/merged/closed — тот же список, что QUEUE_DENIED на фронте
+    // (FeaturePageHeader.tsx); выражение правила на бэке — FeatureQueuePolicy.QueueDenied,
+    // расхождение двух списков ловится FeatureQueuePolicyTests. Мутация (критерий c4): убрать
+    // ветку MergePending в QueueDenied — случай merge_pending ниже краснеет (200 вместо 409).
+    [Theory]
+    [InlineData("merge_pending")]
+    [InlineData("merging")]
+    [InlineData("merged")]
+    [InlineData("closed")]
+    public async Task PostHold_Queue_УступившаяСлотИлиЗавершённая_409(string state)
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        switch (state)
+        {
+            case "merge_pending":
+                await CreateTaskAsync(new
+                {
+                    title = "финал", featureId = epicId, role = "final", status = "done",
+                    verification = new { verdict = "accepted" },
+                });
+                break;
+            case "merging":
+                await CreateTaskAsync(new
+                {
+                    title = "финал", featureId = epicId, role = "final", status = "done",
+                    verification = new { verdict = "accepted" },
+                });
+                await CreateTaskAsync(new { title = "мерж", featureId = epicId, role = "merge", status = "inProgress" });
+                break;
+            case "merged":
+                await CreateTaskAsync(new
+                {
+                    title = "финал", featureId = epicId, role = "final", status = "done",
+                    verification = new { verdict = "accepted" },
+                });
+                await CreateTaskAsync(new { title = "мерж", featureId = epicId, role = "merge", status = "done" });
+                break;
+            case "closed":
+                (await _client.PutAsJsonAsync($"/api/tasks/{epicId}", new { status = "done" }))
+                    .StatusCode.Should().Be(HttpStatusCode.OK);
+                break;
+        }
+
+        // Предусловие: состояние именно то, что заявлено (иначе тест проверяет не это).
+        var before = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        before.GetProperty("run").GetProperty("state").GetString().Should().Be(state);
+
+        var response = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "queue" });
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict, $"state={state}: в очередь не ставится");
+
+        // Отказ ничего не пишет: run прежний — state, hold и queue не меняются (критерий c1).
+        var after = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        after.GetProperty("run").GetProperty("state").GetString().Should().Be(state);
+        after.GetProperty("run").GetProperty("hold").ValueKind.Should().Be(JsonValueKind.Null, "удержание не записано");
+        after.GetProperty("run").GetProperty("queue").ValueKind.Should().Be(JsonValueKind.Null, "фича не встала в очередь");
+    }
+
+    // 409 с причиной: merge_pending + queue — отказ называет причину (фронт показывает её тостом).
+    [Fact]
+    public async Task PostHold_MergePending_Queue_409_СПричиной()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        await CreateTaskAsync(new
+        {
+            title = "финал", featureId = epicId, role = "final", status = "done",
+            verification = new { verdict = "accepted" },
+        });
+
+        var response = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "queue" });
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Contain("уступила слот");
     }
 
     // 400: reason вне словаря FeatureHoldReasons.

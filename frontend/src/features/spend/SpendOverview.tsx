@@ -301,7 +301,7 @@ export function SpendOverview({ data, showUsers, isMobile, isTablet = false, emp
               </div>
             )}
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 8, alignItems: 'center' }}>
-              {TIER_KEYS.map(k => (
+              {[...TIER_KEYS].reverse().map(k => (
                 <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: C.textSecondary, fontFamily: FONT.sans }}>
                   <Dot color={SPEND_TIERS[k].color} />{SPEND_TIERS[k].label}
                 </span>

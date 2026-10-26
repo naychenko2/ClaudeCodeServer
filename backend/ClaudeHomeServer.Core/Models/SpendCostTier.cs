@@ -6,9 +6,11 @@ namespace ClaudeHomeServer.Models;
 //
 // Правило (в этом порядке):
 //   1. источник free → бесплатно (запись о бесплатной модели, провайдер может быть любым);
-//   2. бесплатный исполнитель (SpendSources.IsFree: локальный движок, «*:free», «*-direct»)
-//      или провайдер «freellm*» (локальный прокси на свою GPU) → бесплатно;
-//   3. провайдер claude (включая подписки sub-*, NormalizeProvider) → дорого;
+//      (кроме прямых адаптеров «*-direct»: у них source=free класс не определяет);
+//   2. локальный движок (ollama, llama-server), модель «*:free» или провайдер «freellm*»
+//      (локальный прокси на свою GPU) → бесплатно; «*-direct» считается по базовому ключу
+//      («minimax-direct» → minimax → дёшево, «freellmapi-direct» → freellmapi → бесплатно);
+//   3. провайдер Claude: «claude», «claude-<N>», «sub-*» → дорого;
 //   4. провайдер НЕИЗВЕСТЕН (пустой ключ) → дорого: цена неизвестна, и занижать её нельзя —
 //      потерянный ключ claude-траты не должен выглядеть «дёшево»;
 //   5. любой другой облачный провайдер (minimax, glm, kimi, deepseek, alibaba…) → дёшево.
@@ -31,16 +33,46 @@ public static class SpendCostTiers
     private static bool IsFreeProviderKey(string provider) =>
         provider.StartsWith("freellm", StringComparison.Ordinal);
 
-    public static string Of(string source, string provider, string? model)
+    // Прямой адаптер платного провайдера («minimax-direct») — тот же провайдер: класс считается
+    // по базовому ключу без суффикса, а source=free его бесплатным не делает.
+    private const string DirectSuffix = "-direct";
+
+    private static string BaseKey(string provider) =>
+        provider.EndsWith(DirectSuffix, StringComparison.OrdinalIgnoreCase)
+            ? provider[..^DirectSuffix.Length]
+            : provider;
+
+    // Провайдер Claude: «claude», нумерованные профили «claude-2», «claude-3»… и подписки «sub-*».
+    // NormalizeProvider не трогаем: он группирует ось «провайдер», у него другая семантика.
+    private static bool IsClaudeKey(string key)
     {
-        if (source == SpendSources.Free) return Free;
-        if (SpendSources.IsFree(provider, model)) return Free;
-        if (IsFreeProviderKey(provider)) return Free;
-        if (SpendSources.NormalizeProvider(provider) == "claude") return Expensive;
+        if (key == "claude" || key.StartsWith("sub-", StringComparison.Ordinal)) return true;
+        const string prefix = "claude-";
+        return key.StartsWith(prefix, StringComparison.Ordinal)
+               && key.Length > prefix.Length
+               && key.AsSpan(prefix.Length).IndexOfAnyExceptInRange('0', '9') < 0;
+    }
+
+    // Общая часть правила для записи и каталога: по базовому ключу провайдера и модели.
+    private static string ByKey(string provider, string? model)
+    {
+        var key = BaseKey(provider);
+        if (key is "ollama" or "llama-server") return Free;
+        if (model is not null && model.EndsWith(":free", StringComparison.OrdinalIgnoreCase)) return Free;
+        if (IsFreeProviderKey(key)) return Free;
+        if (IsClaudeKey(key)) return Expensive;
         // Провайдер неизвестен → цена неизвестна. «Дёшево» здесь означало бы занижение
         // расхода, поэтому неизвестный провайдер показываем как «дорого».
-        if (string.IsNullOrWhiteSpace(provider)) return Expensive;
+        if (string.IsNullOrWhiteSpace(key)) return Expensive;
         return Cheap;
+    }
+
+    public static string Of(string source, string provider, string? model)
+    {
+        // Локальность записи — по source=free, но не для прямого адаптера платного провайдера.
+        if (source == SpendSources.Free
+            && !provider.EndsWith(DirectSuffix, StringComparison.OrdinalIgnoreCase)) return Free;
+        return ByKey(provider, model);
     }
 
     // Класс по ОДНОМУ провайдеру (без записи расхода): локальный движок → бесплатно,
@@ -64,18 +96,8 @@ public static class SpendCostTiers
     // аналитике), а здесь провайдер с такими моделями остаётся «дёшево»: цена его моделей
     // известна, просто часть из них бесплатна. Это осознанное расхождение уровней, а не
     // разнобой правил: один и тот же провайдер в каталоге и в аналитике — «дёшево».
-    public static string OfProvider(string provider, bool isLocal)
-    {
-        if (isLocal) return Free;
-        if (SpendSources.IsFree(provider, null)) return Free;
-        if (IsFreeProviderKey(provider)) return Free;
-        if (SpendSources.NormalizeProvider(provider) == "claude") return Expensive;
-        // Провайдер неизвестен (пустой ключ) → цена неизвестна: «дёшево» занизило бы расход.
-        // То же правило, что в Of, — иначе один и тот же неизвестный провайдер в каталоге
-        // («дёшево») и в аналитике («дорого») выглядел бы двумя разными правилами.
-        if (string.IsNullOrWhiteSpace(provider)) return Expensive;
-        return Cheap;
-    }
+    public static string OfProvider(string provider, bool isLocal) =>
+        isLocal ? Free : ByKey(provider, null);
 
     // Класс расхода определён только для осей «провайдер» и «модель»: класс — свойство
     // модели/провайдера, у оси «персоны»/«роли» его неоткуда взять. Одна точка правды на

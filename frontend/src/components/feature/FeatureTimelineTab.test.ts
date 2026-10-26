@@ -19,6 +19,9 @@
 // GC-F10a: (7) tasksCountLabel → хардкод «${n} задач» → тест склонения краснеет;
 // (8) в StageRow isTail={isTail(x.taskId)} → isTail={false} → «помечен маркером» краснеет;
 // (9) условие строки хвостов tailIds.size > 0 → false → «хвосты после мержа · 2» краснеет.
+// GC-F10b: (10) в StageRow turns={turnsByTask.get(x.taskId)} → turns={null} → «ходы задачи»
+// краснеет; (11) в buildTurnsByTask убрать ветку синтеза живого хода → «живой ход» краснеет;
+// (12) в StageRow не передать axis → «Время шага на оси» краснеет.
 
 import { act } from 'react';
 import { createElement } from 'react';
@@ -45,10 +48,13 @@ vi.mock('../../lib/personas', () => ({
   usePersonasVersion: () => 0,
   personaInitials: (name: string) => (name ? name.trim().charAt(0).toUpperCase() : ''),
 }));
-// lib/api — только avatarUrl (PersonaAvatar); остальное не зовётся вкладкой.
-vi.mock('../../lib/api', () => ({
-  api: { personas: { avatarUrl: () => '' } },
-}));
+// lib/api — настоящий модуль + avatarUrl (PersonaAvatar) + tasks.get (отказ: ленивый «Итог»
+// FeatureStepDetails при раскрытой строке не должен висеть на сети).
+const { tasksGetMock } = vi.hoisted(() => ({ tasksGetMock: vi.fn() }));
+vi.mock('../../lib/api', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../lib/api')>();
+  return { ...orig, api: { ...orig.api, personas: { ...orig.api.personas, avatarUrl: () => '' }, tasks: { ...orig.api.tasks, get: tasksGetMock } } };
+});
 vi.mock('../../lib/signalr', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../lib/signalr')>();
   return { ...orig, onMessage: () => () => {}, onPreviewMessage: () => () => {} };
@@ -57,8 +63,13 @@ vi.mock('../../lib/toast', () => ({ showToast: (..._a: unknown[]) => {} }));
 // Навигация: журнал целей перехода (chat → openChatById, task → openTaskInSection).
 const mockOpenChat = vi.hoisted(() => ({ calls: [] as string[] }));
 vi.mock('../../lib/openChat', () => ({ openChatById: async (id: string) => { mockOpenChat.calls.push(id); return true; } }));
+// lib/tasks — настоящий (стор для FeatureStepDetails при раскрытой строке),
+// openTaskInSection — spy журнала целей.
 const mockOpenTask = vi.hoisted(() => ({ calls: [] as { id: string; projectId?: string }[] }));
-vi.mock('../../lib/tasks', () => ({ openTaskInSection: (t: { id: string; projectId?: string }) => { mockOpenTask.calls.push(t); } }));
+vi.mock('../../lib/tasks', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../lib/tasks')>();
+  return { ...orig, openTaskInSection: (t: { id: string; projectId?: string }) => { mockOpenTask.calls.push(t); } };
+});
 
 // === Фиксированное «сейчас» (стабильные минуты) ===
 const NOW = new Date('2026-10-20T12:00:00Z').getTime();
@@ -1236,5 +1247,158 @@ describe('FeatureTimelineTab: хвосты после мержа (GC-F10a)', () 
   it('postMergeTails пуст → строки нет', () => {
     const c = renderTab(mkRun(fullStages(), { state: 'merged', postMergeTails: [] }));
     expect(findNodeByAttr(c, 'data-testid', 'timeline-tails')).toBeNull();
+  });
+});
+
+// === GC-F10b: ходы и «Время шага на оси» в строке исполнителя ===
+//
+// Ходы считает buildTurnsByTask (единственный источник): закрытые — из intervalsByStage по
+// taskId хода; живой — синтезирован из live-интервала и run.now (контракт — комментарий в
+// types/featureStats.ts). Строка получает только ходы своей задачи; та же ось, что у дорожек,
+// питает полосу «Время шага на оси фичи» в FeatureStepDetails.
+
+describe('FeatureTimelineTab: ходы и «Время шага на оси» (GC-F10b)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    personaMap.clear();
+    personaMap.set('p1', 'Денис');
+    // «Итог» при раскрытой строке догружается из сети: здесь — немедленный отказ (без висения).
+    tasksGetMock.mockReset();
+    tasksGetMock.mockImplementation(() => Promise.reject(new Error('в тесте сети нет')));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  // Интервал с ходами — настоящая форма StageInterval.
+  function ivT(
+    from: string, to: string,
+    opts: { live?: boolean; taskIds?: string[]; turns?: { taskId: string; from: string; to: string; outcome: string | null; model: string | null }[] } = {},
+  ) {
+    return { from, to, minutes: 30, live: opts.live ?? false, lastOutcome: null, taskIds: opts.taskIds ?? [], turns: opts.turns ?? [] };
+  }
+
+  // Раскрыть этап (если не открыт) и первую строку исполнителя; вернуть её тело.
+  function openRowBody(c: FNodeLike, stageKey: string, index = 0): FNodeLike {
+    let body = findNodeByAttr(c, 'data-testid', `timeline-stage-body-${stageKey}`);
+    if (!body) {
+      const header = findNodeByAttr(c, 'data-testid', `timeline-stage-header-${stageKey}`)!;
+      act(() => { (reactProps(header as never)!.onClick as () => void)(); });
+      body = findNodeByAttr(c, 'data-testid', `timeline-stage-body-${stageKey}`)!;
+    }
+    const rows: FNodeLike[] = [];
+    const walk = (n: FNodeLike) => {
+      if (n.attributes?.['data-testid'] === 'timeline-executor') rows.push(n);
+      for (const ch of n.childNodes) walk(ch);
+    };
+    walk(body);
+    const row = rows[index]!;
+    const head = findNodeByAttr(row, 'data-testid', 'timeline-executor-head')!;
+    act(() => { (reactProps(head as never)!.onClick as () => void)(); });
+    return findNodeByAttr(row, 'data-testid', 'timeline-executor-body')!;
+  }
+
+  const kinds = (root: FNodeLike): (string | undefined)[] => {
+    const out: (string | undefined)[] = [];
+    const walk = (n: FNodeLike) => {
+      if (n.attributes?.['data-testid'] === 'step-turn') out.push(n.attributes?.['data-kind']);
+      for (const ch of n.childNodes) walk(ch);
+    };
+    walk(root);
+    return out;
+  };
+
+  // === c1: строка и полоса получают ходы своей задачи ===
+  it('ходы задачи из intervalsByStage: в строке — ровно её ходы; «Время шага на оси» видно', () => {
+    const stages = fullStages();
+    stages[3]!.executors = [mkExec({ personaId: 'p1', taskId: 't-rev', taskRole: 'review', status: 'done', chatId: 'chat-r' })];
+    const c = renderTabWithStats(mkRun(stages, { reviews: [{ id: 't-rev', title: 'Ревью', status: 'done' } as FeatureTask] }), mkStats({
+      review: [
+        ivT('2026-10-20T10:20:00Z', '2026-10-20T10:40:00Z', {
+          taskIds: ['t-rev', 't-other'],
+          turns: [
+            { taskId: 't-rev', from: '2026-10-20T10:20:00Z', to: '2026-10-20T10:40:00Z', outcome: 'cancelled', model: null },
+            { taskId: 't-other', from: '2026-10-20T10:25:00Z', to: '2026-10-20T10:35:00Z', outcome: null, model: null },
+          ],
+        }),
+        ivT('2026-10-20T11:30:00Z', '2026-10-20T11:50:00Z', {
+          taskIds: ['t-rev'],
+          turns: [{ taskId: 't-rev', from: '2026-10-20T11:30:00Z', to: '2026-10-20T11:50:00Z', outcome: null, model: null }],
+        }),
+      ],
+    }));
+    const after = openRowBody(c, 'review');
+    const turnsNode = findNodeByAttr(after, 'data-testid', 'timeline-executor-turns');
+    expect(turnsNode, 'строки ходов нет').not.toBeNull();
+    expect(textNodes(turnsNode!).join('')).toBe(
+      `ходы: ${localTime('2026-10-20T10:20:00Z')}–${localTime('2026-10-20T10:40:00Z')} (cancelled) · ` +
+      `${localTime('2026-10-20T11:30:00Z')}–${localTime('2026-10-20T11:50:00Z')}`);
+    // Ход чужой задачи в строку не попал (отбор по taskId хода, не по taskIds интервала).
+    expect(textNodes(turnsNode!).join('')).not.toContain(localTime('2026-10-20T10:25:00Z'));
+    // «Время шага на оси фичи»: полоса есть, на ней — только ходы этой задачи, вид — review
+    // (роль задачи — тот же источник, что атрибуция стадий у бэка).
+    const stepTime = findNodeByAttr(after, 'data-testid', 'step-time');
+    expect(stepTime, 'блока «Время шага на оси» нет').not.toBeNull();
+    expect(kinds(after), 'ходы на полосе — только этой задачи').toEqual(['review', 'review']);
+  });
+
+  // === c2: живой ход идущей задачи ===
+  it('живой ход: у идущей задачи — «…–идёт» (синтез из live-интервала и run.now)', () => {
+    const c = renderTabWithStats(mkRun(fullStages(), {
+      stepChains: [],
+      now: [{ taskId: 't-prod', stage: 'prod', title: 'Шаг', stepRef: 'Ш1', startedAt: '2026-10-20T10:00:00Z' }],
+    }), mkStats({
+      prod: [ivT('2026-10-20T10:00:00Z', '2026-10-20T12:00:00Z', {
+        live: true,
+        taskIds: ['t-prod'],
+        turns: [{ taskId: 't-prod', from: '2026-10-20T10:00:00Z', to: '2026-10-20T11:30:00Z', outcome: 'interrupted', model: null }],
+      })],
+    }));
+    // «Производство» — текущий этап (открыт по умолчанию); карточек нет (пустые цепочки) — строка исполнителя.
+    const after = openRowBody(c, 'prod');
+    const t = textNodes(findNodeByAttr(after, 'data-testid', 'timeline-executor-turns')!).join('');
+    // Живой ход начинается с конца последнего закрытого хода (11:30), а не с старта задачи (10:00):
+    // та же формула, что у живого хвоста бэка.
+    expect(t).toBe(
+      `ходы: ${localTime('2026-10-20T10:00:00Z')}–${localTime('2026-10-20T11:30:00Z')} (interrupted) · ` +
+      `${localTime('2026-10-20T11:30:00Z')}–идёт`);
+    // На полосе живой ход — отдельный вид (live), закрытый — work (роль step).
+    expect(kinds(after)).toEqual(['work', 'live']);
+  });
+
+  // === c3: approx — ходам неоткуда взяться, падения нет ===
+  it('approx (intervalsByStage null): строки ходов нет, блока времени нет, не падает', () => {
+    const c = renderTabWithStats(mkRun(fullStages(), { stepChains: [] }), mkStats(null));
+    const after = openRowBody(c, 'prod');
+    expect(findNodeByAttr(after, 'data-testid', 'timeline-executor-turns'), 'при approx ходов нет').toBeNull();
+    expect(findNodeByAttr(after, 'data-testid', 'step-time'), 'при approx блока времени нет').toBeNull();
+  });
+
+  // === п.3: хвост после мержа считается один раз, живого хода у закрытой фичи нет ===
+  it('хвост после мержа: его ходы — один раз из интервалов стадии; живого хода нет', () => {
+    // Открытая хвост-задача может быть в run.Now (бэк отдаёт InProgress-задачи, пока эпик
+    // открыт). Для merged/закрытой фичи живого хода всё равно нет: ось закрыта.
+    const tailRun = mergedTailRun(['t-tail1', 't-tail2']);
+    tailRun.now = [{ taskId: 't-tail1', stage: 'qa', title: 'Хвост-проверка', startedAt: '2026-10-20T11:40:00Z' }];
+    const c = renderTabWithStats(tailRun, mkStats({
+      qa: [ivT('2026-10-20T11:40:00Z', '2026-10-20T11:55:00Z', {
+        live: true,
+        taskIds: ['t-tail1'],
+        turns: [
+          { taskId: 't-tail1', from: '2026-10-20T11:40:00Z', to: '2026-10-20T11:45:00Z', outcome: null, model: null },
+          { taskId: 't-tail1', from: '2026-10-20T11:50:00Z', to: '2026-10-20T11:55:00Z', outcome: null, model: null },
+        ],
+      })],
+    }));
+    // Хвост — обычная строка списка этапа (GC-F10a): его ходы берутся из интервалов ровно раз.
+    const after = openRowBody(c, 'qa', 0);
+    const t = textNodes(findNodeByAttr(after, 'data-testid', 'timeline-executor-turns')!).join('');
+    expect(t).toBe(
+      `ходы: ${localTime('2026-10-20T11:40:00Z')}–${localTime('2026-10-20T11:45:00Z')} · ` +
+      `${localTime('2026-10-20T11:50:00Z')}–${localTime('2026-10-20T11:55:00Z')}`);
+    expect(t, 'у закрытой фичи живого хода нет').not.toContain('идёт');
   });
 });

@@ -27,7 +27,7 @@ import {
 } from './FeatureLanePopover';
 import { buildStageLanes, axisFrac, planCounterText, type StageLane, type LaneAxis } from './FeatureLaneModel';
 import { formatDuration, formatDateTime } from './FeatureStatsBits';
-import type { FeatureStats } from '../../types/featureStats';
+import type { FeatureStats, StageTurn } from '../../types/featureStats';
 import { FeatureProdCardsView } from './FeatureProdCardsView';
 import type { FeatureRun, FeatureStage, FeatureStageExecutor, StageKey } from '../../types/featureRun';
 
@@ -135,7 +135,7 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
   execIndex = new Map<string, FeatureStageExecutor>(), progress = null,
   lane = null, axis = null, tabIndexAt = -1,
   expandedAt = null, hoverAt = null, laneSelected = false, flash = false,
-  tailIds = null,
+  tailIds = null, turnsByTask = new Map<string, StageTurn[]>(),
   onIntervalSelect, onIntervalHover, onOpenSheet }: {
   stage: FeatureStage; isLast: boolean; expanded: boolean;
   onToggle: () => void; taskMap: Map<string, import('../../types/featureRun').FeatureTask>;
@@ -162,6 +162,9 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
   // Id хвостов после мержа (run.postMergeTails): строки этих задач в списке этапа
   // помечаются маркером (GC-F10a). null — хвостов нет.
   tailIds?: Set<string> | null;
+  // Ходы задач по id (GC-F10b): результат buildTurnsByTask — единственный источник.
+  // Строка исполнителя получает только ходы своей задачи; здесь их никто не пересчитывает.
+  turnsByTask?: Map<string, StageTurn[]>;
   onIntervalSelect?: (index: number, el: HTMLElement | null) => void;
   onIntervalHover?: (index: number | null, el: HTMLElement | null) => void;
   onOpenSheet?: () => void;
@@ -383,6 +386,8 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
                   execIndex={execIndex}
                   progress={progress}
                   isTail={isTail(x.taskId)}
+                  turns={turnsByTask.get(x.taskId) ?? null}
+                  axis={axis}
                 />
               ))
             ) : (
@@ -410,6 +415,8 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
                 execIndex={execIndex}
                 progress={progress}
                 isTail={isTail(x.taskId)}
+                turns={turnsByTask.get(x.taskId) ?? null}
+                axis={axis}
               />
             ))
           ) : (
@@ -421,6 +428,62 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
       )}
     </div>
   );
+}
+
+// === GC-F10b: ходы задач для строки исполнителя (единственный источник) ===
+
+// Ходы задач из интервалов бэка: taskId → его ходы в хронологическом порядке. Один источник
+// на всю вкладку: StageRow/ExecutorRow/FeatureStepDetails ничего не пересчитывают.
+// Отбор — по taskId ХОДА (не по taskIds интервала: живой хвост состоит в taskIds, но ходом
+// не является). Закрытые ходы — все интервалы всех стадий, где turns есть (бэк атрибутирует
+// ход стадии по роли задачи, FeatureTimeMath.RoleToStage, — поэтому ход задачи лежит в её
+// интервалах ровно один раз; хвост после мержа — тоже: его ходы входят в интервалы своей
+// стадии, отдельного счёта по run.stages[].taskIds нет).
+// Живой ход синтезируется здесь (контракт — комментарий в types/featureStats.ts): для
+// live-интервала неоконченной фичи и задачи из run.now, состоящей в его taskIds, — ход
+// [max(старт задачи, конец её последнего закрытого хода) – «сейчас»], та же формула, что у
+// живого хвоста бэка (FeatureStageIntervals.cs:79-92). У finished-фичи живых ходов нет.
+export function buildTurnsByTask(run: FeatureRun, stats: FeatureStats | null, now: number): Map<string, StageTurn[]> {
+  const out = new Map<string, StageTurn[]>();
+  const add = (taskId: string, t: StageTurn): void => {
+    const list = out.get(taskId);
+    if (list) list.push(t); else out.set(taskId, [t]);
+  };
+  // approx (журнала нет / он не полный) — ходов нет: не выдумываем и не падаем.
+  const byStage = stats?.timeline?.intervalsByStage;
+  if (!byStage) return out;
+  const finished = run.closed === true || run.state === 'merged' || run.state === 'closed';
+  const nowIso = new Date(now).toISOString();
+  // Идущие задачи: id → старт (run.now.startedAt = ClaudeStartedAt задачи).
+  const runningStart = new Map<string, string | null>();
+  for (const n of run.now ?? []) {
+    if (n.taskId) runningStart.set(n.taskId, n.startedAt ?? null);
+  }
+  for (const intervals of Object.values(byStage)) {
+    for (const iv of intervals ?? []) {
+      // Конец последнего закрытого хода задачи внутри ЭТОГО интервала — старт его живого
+      // хвоста: бэк клеит хвост к последнему закрытому ходу, значит он в том же интервале.
+      const lastEnd = new Map<string, number>();
+      for (const t of iv.turns ?? []) {
+        if (!t?.taskId) continue;
+        add(t.taskId, t);
+        const toMs = new Date(t.to).getTime();
+        if (Number.isFinite(toMs)) lastEnd.set(t.taskId, Math.max(lastEnd.get(t.taskId) ?? 0, toMs));
+      }
+      if (!iv.live || finished) continue;
+      for (const id of iv.taskIds ?? []) {
+        // Живой хвост принадлежит только идущей задаче (run.now); остальные задачи
+        // интервала — закрытые ходы, живого у них нет.
+        if (!runningStart.has(id)) continue;
+        const started = new Date(runningStart.get(id) ?? '').getTime();
+        const from = Math.max(Number.isFinite(started) ? started : 0, lastEnd.get(id) ?? 0);
+        // Нет старта или нулевая длина — живого хода нет (то же, что у бэка).
+        if (from <= 0 || from >= now) continue;
+        add(id, { taskId: id, from: new Date(from).toISOString(), to: nowIso, outcome: null, model: null });
+      }
+    }
+  }
+  return out;
 }
 
 // Вкладка «Хронология»: поясняющая строка + список 7 этапов. `now` — фиксированный
@@ -448,10 +511,18 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false, st
   // с бэка. Те же id остаются в списках этапов (StageRow метит их маркером), сводка —
   // только число под лентой. Множество — чтобы метка и счёт считали один хвост один раз.
   const tailIds = useMemo(() => new Set(run.postMergeTails ?? []), [run]);
+  // Ходы задач (GC-F10b): один источник на всю вкладку — buildTurnsByTask; строки
+  // исполнителей получают только ходы своей задачи, «Время шага на оси» — ту же ось,
+  // что у дорожек.
+  const turnsByTask = useMemo(() => buildTurnsByTask(run, stats, now), [run, stats, now]);
 
   // Дорожки и ось (GC-F5c): только из модели (FeatureLaneModel) — своей арифметики нет.
   const lanesModel = useMemo(() => buildStageLanes(run, stats, now), [run, stats, now]);
   const axis = lanesModel.axis;
+  // Ось для строки исполнителя (GC-F10b): полоса «Время шага на оси» живёт только на настоящей
+  // оси — оси журнала. При approx (журнала нет) ходов нет и сама ось над лентой не рисуется
+  // (hasLanes ложен): полоса на несуществующей оси была бы ложью.
+  const rowAxis = axis && stats?.timeline?.intervalsByStage != null ? axis : null;
   // Дорожка есть у этапа, у которого есть и ось, и данные журнала (approx — данных нет).
   const laneOf = useCallback(
     (key: StageKey): StageLane | null => {
@@ -785,13 +856,14 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false, st
           execIndex={execIndex}
           progress={progress}
           lane={laneOf(stage.key)}
-          axis={axis}
+          axis={rowAxis}
           tabIndexAt={focus?.stage === stage.key ? focus.index : -1}
           expandedAt={pinned?.stage === stage.key ? pinned.index : null}
           hoverAt={hover?.stage === stage.key ? hover.index : null}
           laneSelected={selectedStage === stage.key}
           flash={flashStage === stage.key}
           tailIds={tailIds}
+          turnsByTask={turnsByTask}
           onIntervalSelect={(idx, el) => onIntervalSelect(stage.key, idx, el)}
           onIntervalHover={(idx, el) => onIntervalHover(stage.key, idx, el)}
           onOpenSheet={isMobile ? () => openSheet(stage.key) : undefined}

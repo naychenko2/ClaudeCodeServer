@@ -17,7 +17,8 @@ import { EMPTY_NAV_MARKS, type NavMarks } from '../../lib/featureNavMarks';
 import { openTaskInSection } from '../../lib/tasks';
 import { recordFeatureReturn } from '../../lib/featureBackNav';
 import { NavTargetPair } from './NavTargetButton';
-import { FeatureStepDetails } from './FeatureStepDetails';
+import { FeatureStepDetails, type StepDetailTurn } from './FeatureStepDetails';
+import type { LaneAxis } from './FeatureLaneModel';
 import type { StepProgress } from '../../lib/featureProgress';
 import type { FeatureRun, FeatureStage, FeatureStageExecutor, FeatureStepChain, FeatureTask, StageKey } from '../../types/featureRun';
 import type { StageTurn } from '../../types/featureStats';
@@ -390,18 +391,24 @@ export function ExecutorAvatar({ personaId }: { personaId: string | null }) {
 // пара «чат · задача». Клики внутри раскрытой части строку не сворачивают (она вне
 // нажимаемой шапки + stopPropagation-страховка); то же для чипа модели и пары в шапке
 // (stopPropagation).
-// Ходы приходят пропсом `turns` (вызывающий берёт их из intervalsByStage); здесь
-// показываются только ходы этой задачи — хвост не получает вторую строку.
+// Ходы приходят пропсом `turns` (их считает вызывающий — buildTurnsByTask в FeatureTimelineTab:
+// закрытые из intervalsByStage + синтезированный живой); здесь показываются только ходы этой
+// задачи — хвост не получает вторую строку. Те же ходы + проп `axis` (та же ось, что у дорожек)
+// питают полосу «Время шага на оси фичи» в FeatureStepDetails (GC-F10b): вид хода (work/review/
+// live) определяется здесь по роли задачи — тому же источнику, по которому бэк атрибутирует
+// интервалы стадиям (FeatureTimeMath.RoleToStage); живой — ход, чей конец не раньше «сейчас».
 // Хвост после мержа (GC-F10a): `isTail` — метку ставит вызывающий (по run.postMergeTails);
 // строка остаётся в списке этапа, но помечается «· хвост после мержа» — это не обычная
 // работа стадии; отдельной строкой хвост в список не возвращается (тот же маркер, что
 // в подписи блока времени FeatureStepDetails).
 export function ExecutorRow({ x, task, now, featureId, featureTitle = null, marks = EMPTY_NAV_MARKS, isMobile = false,
-  taskMap = new Map<string, FeatureTask>(), execIndex = new Map<string, FeatureStageExecutor>(), progress = null, turns = null, isTail = false }: {
+  taskMap = new Map<string, FeatureTask>(), execIndex = new Map<string, FeatureStageExecutor>(), progress = null, turns = null, isTail = false, axis = null }: {
   x: FeatureStageExecutor; task?: FeatureTask; now: number; featureId: string; featureTitle?: string | null; marks?: NavMarks; isMobile?: boolean;
   taskMap?: Map<string, FeatureTask>; execIndex?: Map<string, FeatureStageExecutor>; progress?: StepProgress | null;
   turns?: StageTurn[] | null;
   isTail?: boolean;
+  // Ось фичи — та же, что у дорожек (buildStageLanes().axis). null (approx) — полосы времени нет.
+  axis?: LaneAxis | null;
 }) {
   const [open, setOpen] = useState(false);
   const persona = x.personaId ? getPersonaById(x.personaId) : undefined;
@@ -417,6 +424,17 @@ export function ExecutorRow({ x, task, now, featureId, featureTitle = null, mark
   // Ходы этой задачи: фильтр — защита от нефильтрованного входа (GC-F10 передаёт
   // turns из intervalsByStage); тот же ход не попадает в две строки и в счёт.
   const myTurns = (turns ?? []).filter(t => t.taskId === x.taskId);
+  // Ходы для полосы «Время шага на оси фичи» (FeatureStepDetails, GC-F10b): те же ходы,
+  // вид — по тому же источнику, по которому бэк атрибутирует ход стадии (роль задачи,
+  // FeatureTimeMath.RoleToStage): review/qa/final — 'review', прочее — 'work'. Живой — ход,
+  // чей конец не раньше «сейчас»: журнал таких не отдаёт (закрытые кончаются раньше),
+  // живой синтезирует вызывающий с to ровно равным времени рендера (types/featureStats.ts).
+  const reviewRole = x.taskRole === 'review' || x.taskRole === 'qa' || x.taskRole === 'final';
+  const stripTurns: StepDetailTurn[] = myTurns.map((t) => {
+    const toMs = new Date(t.to).getTime();
+    const live = Number.isFinite(toMs) && toMs >= now;
+    return { from: t.from, to: t.to, kind: live ? 'live' : reviewRole ? 'review' : 'work' };
+  });
 
   const statusColor =
     st.tone === 'info' ? C.info :
@@ -435,12 +453,14 @@ export function ExecutorRow({ x, task, now, featureId, featureTitle = null, mark
   const closed = dateTimeLabel(task?.completedAt);
   if (closed) metaParts.push(`закрыта ${closed}`);
 
-  // Подпись хода: «ЧЧ:ММ–ЧЧ:ММ»; живой (конец позже «сейчас») — «идёт»; исход —
-  // в скобках, если он есть и не «success» (исхода нет — скобок нет: не выдумываем).
+  // Подпись хода: «ЧЧ:ММ–ЧЧ:ММ»; живой (конец не раньше «сейчас») — «идёт»: закрытые ходы
+  // журнала кончаются раньше, живой синтезирован вызывающим с to ровно равным «сейчас»
+  // (types/featureStats.ts); исход — в скобках, если он есть и не «success» (исхода нет —
+  // скобок нет: не выдумываем).
   const turnLabel = (t: StageTurn): string => {
     const a = hhmm(t.from) ?? '—';
     const toMs = t.to ? new Date(t.to).getTime() : NaN;
-    const b = Number.isFinite(toMs) && now < toMs ? 'идёт' : hhmm(t.to) ?? '—';
+    const b = Number.isFinite(toMs) && now <= toMs ? 'идёт' : hhmm(t.to) ?? '—';
     const oc = t.outcome && t.outcome !== 'success' ? ` (${t.outcome})` : '';
     return `${a}–${b}${oc}`;
   };
@@ -644,6 +664,9 @@ export function ExecutorRow({ x, task, now, featureId, featureTitle = null, mark
             taskId={x.taskId}
             acceptance={task?.acceptance ?? null}
             evidence={task?.evidence ?? null}
+            turns={stripTurns}
+            axis={axis}
+            isTail={isTail}
             isMobile={isMobile}
           />
           {myTurns.length > 0 && (

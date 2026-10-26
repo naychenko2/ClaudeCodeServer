@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Tasks.Journal;
 using ClaudeHomeServer.Services.Tasks.Projector;
@@ -1365,7 +1366,129 @@ public class FeatureTimelineJournalTests
             "ожидание ровно в from (08:00) входит, не отбрасывается (прежнее > давало 0)");
     }
 
-    // ── Хелпер: сегменты заданного вида ───────────────────────────────────────────────────────
+    // ── 12. Интервалы этапов в stats.timeline (GC-B2) ───────────────────────────────────────
+
+    // Полный журнал → intervalsByStage: стадия → интервалы её работы. В JSON — camelCase-путь
+    // intervalsByStage.prod[0].turns[0].taskId. Мутация «не присваивать IntervalsByStage» →
+    // путь пропадает, тест красный.
+    [Fact]
+    public void Build_ПолныйЖурнал_IntervalsByStage_ВJsonЕстьХодыСтадии()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic", startedAt: new DateTime(2026, 10, 1, 9, 0, 0),
+            completedAt: new DateTime(2026, 10, 1, 10, 0, 0));
+
+        var journal = Journal(
+            Entry("created", new DateTime(2026, 10, 1, 8, 0, 0), taskId: "epic"),
+            Entry("turn", new DateTime(2026, 10, 1, 10, 0, 0), taskId: "s1",
+                startedAt: new DateTime(2026, 10, 1, 9, 0, 0),
+                endedAt: new DateTime(2026, 10, 1, 10, 0, 0), outcome: "finished"));
+
+        var tl = FeatureTimeline.Build(Run(epic, s1), journal, now);
+
+        // Интервалы стадии шага (role=step → prod): один интервал, в нём ход задачи s1.
+        tl.IntervalsByStage.Should().NotBeNull();
+        tl.IntervalsByStage!["prod"].Should().HaveCount(1);
+        tl.IntervalsByStage!["prod"][0].TaskIds.Should().Equal("s1");
+
+        // В JSON — intervalsByStage.prod[0].turns[0].taskId.
+        var json = JsonSerializer.Serialize(tl, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        using var doc = JsonDocument.Parse(json);
+        doc.RootElement.GetProperty("intervalsByStage").GetProperty("prod")[0]
+            .GetProperty("turns")[0].GetProperty("taskId").GetString().Should().Be("s1");
+    }
+
+    // Журнал без created → режим approx: интервалов нет (null), в JSON — null.
+    [Fact]
+    public void Build_ЖурналБезCreated_IntervalsByStage_Null()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic", startedAt: new DateTime(2026, 10, 1, 9, 0, 0),
+            completedAt: new DateTime(2026, 10, 1, 10, 0, 0));
+
+        // Журнал не начинается с created → режим approx.
+        var journal = new FeatureJournalReadResult
+        {
+            StartsWithCreated = false,
+            Truncated = false,
+            Entries =
+            [
+                Entry("turn", new DateTime(2026, 10, 1, 10, 0, 0), taskId: "s1",
+                    startedAt: new DateTime(2026, 10, 1, 9, 0, 0),
+                    endedAt: new DateTime(2026, 10, 1, 10, 0, 0), outcome: "finished"),
+            ],
+        };
+
+        var tl = FeatureTimeline.Build(Run(epic, s1), journal, now);
+
+        tl.IntervalsByStage.Should().BeNull("в режиме approx точных интервалов нет");
+
+        var json = JsonSerializer.Serialize(tl, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        using var doc = JsonDocument.Parse(json);
+        doc.RootElement.GetProperty("intervalsByStage").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    // Полный журнал БЕЗ ходов → интервалы посчитаны, но пусты: IntervalsByStage — ПУСТОЙ
+    // словарь, НЕ null. Это разные состояния: null = «интервалы не считались» (режим approx),
+    // пустой словарь = «считали, ходов не было». Фронт различает approx именно по null
+    // (GC-F2), поэтому различие закреплено тестом.
+    //
+    // Мутация «пустой словарь → null» (в FeatureStageIntervals.Build) краснит тест.
+    [Fact]
+    public void Build_ПолныйЖурналБезХодов_IntervalsByStage_ПустойСловарь()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic");
+
+        // Полный журнал, в котором нет ни одного хода (только created).
+        var journal = Journal(
+            Entry("created", new DateTime(2026, 10, 1, 8, 0, 0), taskId: "epic"));
+
+        var tl = FeatureTimeline.Build(Run(epic), journal, now);
+
+        tl.IntervalsByStage.Should().NotBeNull(
+            "полный журнал без ходов — пустой словарь, а не null (null = режим approx)");
+        tl.IntervalsByStage.Should().BeEmpty();
+
+        // В JSON — пустой объект (не null).
+        var json = JsonSerializer.Serialize(tl, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        using var doc = JsonDocument.Parse(json);
+        doc.RootElement.GetProperty("intervalsByStage").ValueKind.Should().Be(JsonValueKind.Object);
+    }
+
+    // Приблизительный режим (журнала нет / обрезан) → IntervalsByStage = null. Обе причины
+    // approx дают ОДНО состояние (null), в отличие от полного журнала без ходов (пустой
+    // словарь) — см. предыдущий кейс.
+    [Fact]
+    public void Build_ПриблизительныйРежим_IntervalsByStage_Null()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic", startedAt: new DateTime(2026, 10, 1, 9, 0, 0),
+            completedAt: new DateTime(2026, 10, 1, 10, 0, 0));
+
+        var turn = Entry("turn", new DateTime(2026, 10, 1, 10, 0, 0), taskId: "s1",
+            startedAt: new DateTime(2026, 10, 1, 9, 0, 0),
+            endedAt: new DateTime(2026, 10, 1, 10, 0, 0), outcome: "finished");
+
+        // Журнала нет вовсе.
+        FeatureTimeline.Build(Run(epic, s1), null, now).IntervalsByStage
+            .Should().BeNull("журнала нет — интервалы не считались");
+
+        // Журнал обрезан (Truncated) — тоже approx.
+        var truncated = new FeatureJournalReadResult
+        {
+            StartsWithCreated = true,
+            Truncated = true,
+            Entries = [turn],
+        };
+        FeatureTimeline.Build(Run(epic, s1), truncated, now).IntervalsByStage
+            .Should().BeNull("обрезанный журнал — интервалы не считались");
+    }
+
+    // Хелпер: сегменты заданного вида ───────────────────────────────────────────────────────
 
     private static List<TimelineSegment> Kinds(FeatureTimeline tl, string kind) =>
         tl.Segments.Where(s => s.Kind == kind).ToList();

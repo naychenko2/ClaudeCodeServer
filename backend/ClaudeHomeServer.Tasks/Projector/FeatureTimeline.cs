@@ -195,7 +195,16 @@ public sealed record FeatureTimeline(
     // «Сейчас» (null — фича не ждёт/не встала/не ждёт мержа).
     TimelineCurrent? Current,
     // Итоги.
-    TimelineTotals Totals)
+    TimelineTotals Totals,
+    // Интервалы этапов (GC-B2/GC-B6, «Хронология»/Гант): стадия → её интервалы работы из
+    // журнала ходов. null — ТОЛЬКО режим approx (журнала нет / он не полный). Полный журнал
+    // БЕЗ ходов — ПУСТОЙ словарь (не null): «интервалов нет» и «интервалы не считались» —
+    // разные состояния, и фронт различает их по null.
+    // В JSON — intervalsByStage (camelCase).
+    //
+    // Параметр записи, а не internal-свойство: типы StageInterval/StageTurn публичные
+    // (StageIntervals.cs), поле — часть контракта stats.timeline.
+    Dictionary<string, List<StageInterval>>? IntervalsByStage = null)
 {
     // Потолок сегментов: при превышении — склейка ближайших пар (MergeToCap).
     // Константа (не мутабельный static, минор 9): нет гонки при параллельных классах xUnit;
@@ -227,7 +236,11 @@ public sealed record FeatureTimeline(
         if (isJournal)
         {
             var (journalSegments, journalTotals) = BuildJournal(run, journal!, from, to, now, maxSegments);
-            return new FeatureTimeline(from, to, stages, journalSegments, current, journalTotals);
+            // Интервалы этапов (GC-B2) — из того же полного журнала: гейт журнала у них тот же,
+            // поэтому в этом режиме словарь не null (пустой — если ходов в журнале нет).
+            var intervals = FeatureStageIntervals.Build(run, journal, now);
+            return new FeatureTimeline(from, to, stages, journalSegments, current, journalTotals,
+                intervals);
         }
 
         // approx (Б5a): work — по задачам [ClaudeStartedAt, min(CompletedAt, ExecutorStoppedAt, now)).

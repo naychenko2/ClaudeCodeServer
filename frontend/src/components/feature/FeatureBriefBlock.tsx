@@ -10,8 +10,13 @@
 // Состояния (макет §2–3): loading — скелетон с aria-busy; brief = null при живых статах —
 // «Сводка не загрузилась» + «Повторить», полоска остаётся; brief = null и статов нет —
 // блока нет; иначе — карточка состояния. Подстрока «Сейчас» и строка «Сделано» — тоже
-// строки модели (R-F5): блок только вызывает модель и красит mono-части моно.
+// строки модели (R-F5): блок только вызывает модель и красит mono-части моно (числа
+// подстроки — FONT.mono, «Токены поимённо»). Подпись факта без значения не рисуется
+// (макет: «если какого-то поля нет, строку не рисуем»); порядок секций «Сделано ·
+// Дальше · Оценка» и закрытость ленты — закреплены тестом. Одно «сейчас» на ответ
+// (R-F8): относительные строки считаются от него, а не от часов в каждом рендере.
 
+import { useMemo } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { C, R, SP, FS, FONT } from '../../lib/design';
 import { Button } from '../ui/Button';
@@ -79,8 +84,20 @@ export function briefTag(brief: FeatureBrief, mergedAt: string | null): FeatureR
 }
 
 // ── Глифы состояний (16 px, макет §«Глифы»: цвета — токены) ──────────────────────────
-// Для kinds вне макета (error/draft/idle) глифа нет — строка сдвигается влево.
+// Для kinds вне макета (draft/idle) глифа нет — строка сдвигается влево. «Ошибка» —
+// тот же глиф, что у «Сводка не загрузилась» (R-F8): состояние ошибки карточки одно.
+
+// Глиф состояния ошибки: утопленный круг с danger-подложкой (макет §3).
+const ERROR_GLYPH = (
+  <svg width={16} height={16} viewBox="0 0 16 16" aria-hidden>
+    <circle cx={8} cy={8} r={7} fill={C.dangerBg} stroke={C.textMuted} strokeWidth={1} />
+    <rect x={5.3} y={4.6} width={1.9} height={6.8} rx={0.6} fill={C.textSecondary} />
+    <rect x={8.8} y={4.6} width={1.9} height={6.8} rx={0.6} fill={C.textSecondary} />
+  </svg>
+);
+
 const GLYPH: Partial<Record<FeatureBriefKind, ReactNode>> = {
+  error: ERROR_GLYPH,
   running: (
     <svg width={16} height={16} viewBox="0 0 16 16" aria-hidden>
       <circle cx={8} cy={8} r={6.5} fill="none" stroke={C.accent} strokeWidth={1.5} />
@@ -115,27 +132,40 @@ const GLYPH: Partial<Record<FeatureBriefKind, ReactNode>> = {
   ),
 };
 
-// Глиф состояния ошибки карточки: утопленный круг с danger-подложкой (макет §3).
-const ERROR_GLYPH = (
-  <svg width={16} height={16} viewBox="0 0 16 16" aria-hidden>
-    <circle cx={8} cy={8} r={7} fill={C.dangerBg} stroke={C.textMuted} strokeWidth={1} />
-    <rect x={5.3} y={4.6} width={1.9} height={6.8} rx={0.6} fill={C.textSecondary} />
-    <rect x={8.8} y={4.6} width={1.9} height={6.8} rx={0.6} fill={C.textSecondary} />
-  </svg>
-);
-
 // ── Общие стили (макет §«Токены поимённо») ──────────────────────────────────────────
 const LABEL: CSSProperties = {
   fontSize: FS.xxs, textTransform: 'uppercase', letterSpacing: '.05em', color: C.textMuted,
 };
 const UPD: CSSProperties = { fontSize: FS.xs, color: C.textMuted };
 
+// ── Числа подстроки «Сейчас» — моно (R-F8, макет §«Токены поимённо») ────────────────
+// Модель отдаёт подстроку строкой; блок только красит числовые токены — текст не меняет.
+// В подстроке моно меняет только гарнитуру (макет: span.mono внутри .sub), цвет и вес —
+// как у строки. Токены форматтеров модели: «13:58», «12 мин», «1 ч 10 мин».
+const SUB_NUM: CSSProperties = { fontFamily: FONT.mono };
+const NUM_TOKEN = /\d[\d.,:]*(?:\s+(?:мин|ч|сек|дней|ночи|сутки)(?:\s*\d[\d.,:]*(?:\s+(?:мин|ч|сек|дней|ночи|сутки))?)?)?/g;
+
+function monoNumbers(text: string): ReactNode[] {
+  const out: ReactNode[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  NUM_TOKEN.lastIndex = 0;
+  while ((m = NUM_TOKEN.exec(text)) !== null) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    out.push(<span key={m.index} style={SUB_NUM}>{m[0]}</span>);
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
 // ── Хвост карточки «Жизнь фичи»: полоска, ось, легенда, итоги + «Статистика ›» ───────
 // Поля статов деструктурируются и отдаются общей модели ленты как есть — блок сам ничего
-// из сырых полей не считает (Grep-сторож теста).
-function LifeSection({ stats, onOpenStats, isMobile }: { stats: FeatureStats; onOpenStats: () => void; isMobile: boolean }) {
+// из сырых полей не считает, включая поля `timeline` (Grep-сторож теста, R-F8). Признак
+// закрытости ленты — не эвристика по `current == null`, а общая модель состояния:
+// `closed` приходит из карточки (brief.kind === 'closed'); без brief — не закрыта.
+function LifeSection({ stats, closed, onOpenStats, isMobile }: { stats: FeatureStats; closed: boolean; onOpenStats: () => void; isMobile: boolean }) {
   const { timeline, source, truncated } = stats;
-  const closed = timeline.current == null;
   const model = buildTimelineModel(timeline, source, truncated, closed);
   // Виды легенды — только из MAIN-сегментов: ревью — отдельная дорожка, на полоске её нет.
   const kinds = new Set<SegmentKind>();
@@ -180,9 +210,9 @@ function LifeSection({ stats, onOpenStats, isMobile }: { stats: FeatureStats; on
 // Плашка только при note (макет §3: «голоса нет» — плашки нет вовсе). Подпись —
 // «Имя · роль · когда» (F2); имя неизвестно (byUser или нет персоны) — часть с именем
 // опускается, аватар не рисуем. Устаревший голос — метка рядом с подписью, текст не прячем.
-function VoiceBlock({ note, kind, nameOf }: { note: NonNullable<FeatureBrief['note']>; kind: FeatureBriefKind; nameOf?: PersonaNameResolver }) {
+function VoiceBlock({ note, kind, nameOf, nowMs }: { note: NonNullable<FeatureBrief['note']>; kind: FeatureBriefKind; nameOf?: PersonaNameResolver; nowMs: number }) {
   const name = note.byPersonaId ? nameOf?.(note.byPersonaId) ?? null : null;
-  const when = voiceWhenText(note, kind, Date.now());
+  const when = voiceWhenText(note, kind, nowMs);
   const sig = [name, voiceRoleText(kind), when].filter(Boolean).join(' · ');
   const stale = voiceStaleLabel(note, kind);
   return (
@@ -248,11 +278,19 @@ export function FeatureBriefBlock({
   loading = false, brief, stats, mergedAt = null, nameOf, isMobile = false,
   onOpenStats, onRetry, onMerge, onOpenFinal,
 }: FeatureBriefBlockProps) {
+  // Одно «сейчас» на ответ (R-F8): относительные строки («ждёт N», «обновлено N назад»,
+  // время голоса) считаются от одного момента, привязанного к данным, а не от часов в
+  // каждом рендере: перерисовка тех же данных не сдвигает текст, новый ответ — новое «сейчас».
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const nowMs = useMemo(() => Date.now(), [brief, stats, mergedAt]);
   if (loading) return <BriefSkeleton isMobile={isMobile} />;
-  // «summary и stats оба null — блока нет» (макет §3, как у нынешней мини-сводки).
+  // «summary и stats оба null — блока нет» (макет §3).
   if (!brief && !stats) return null;
 
-  const life = stats ? <LifeSection stats={stats} onOpenStats={onOpenStats} isMobile={isMobile} /> : null;
+  // Закрытость ленты — из общей модели состояния (brief.kind), не из эвристики по
+  // сырому текущему полю ленты (R-F8). Без brief лента не закрыта: признака нет.
+  const closed = brief?.kind === 'closed';
+  const life = stats ? <LifeSection stats={stats} closed={closed} onOpenStats={onOpenStats} isMobile={isMobile} /> : null;
 
   // «Сводка не загрузилась» (макет §3): одна строка + «Повторить»; полоска и итоги — как раньше.
   if (!brief) {
@@ -276,12 +314,12 @@ export function FeatureBriefBlock({
 
   const tag = briefTag(brief, mergedAt);
   const nowText = briefNowText(brief, { nameOf, mergedAt });
-  const subText = briefSubText(brief, Date.now());
+  const subText = briefSubText(brief, nowMs);
   const nextText = briefNextText(brief, nameOf);
   const est = briefEstimateText(brief);
   const isWait = brief.kind === 'waiting_you';
   // «обновлено …» — по computedAt; у закрытой — дата закрытия (макет §Поведение).
-  const upd = updatedText(brief.kind === 'closed' ? (mergedAt ?? brief.computedAt) : brief.computedAt, Date.now());
+  const upd = updatedText(brief.kind === 'closed' ? (mergedAt ?? brief.computedAt) : brief.computedAt, nowMs);
 
   const tagBlock = (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: SP.xs, flexShrink: 0 }}>
@@ -290,13 +328,15 @@ export function FeatureBriefBlock({
     </div>
   );
 
-  const doneParts = briefDoneText(brief.done);
+  const doneParts = briefDoneText(brief);
   const mono: CSSProperties = { fontFamily: FONT.mono, fontWeight: 600, color: C.textHeading };
   const factLabel = (text: string) => <div style={LABEL}>{text}</div>;
+  // Ячейка факта: «подпись | значение». minWidth: 0 у ячейки и у значения — длинное слово
+  // не раздвигает колонку грида (R-F8).
   const factCell = (label: string, value: ReactNode) => (
-    <div style={isMobile ? { display: 'grid', gridTemplateColumns: '72px 1fr', gap: SP.sm, alignItems: 'baseline' } : undefined}>
+    <div style={{ minWidth: 0, ...(isMobile ? { display: 'grid', gridTemplateColumns: '72px 1fr', gap: SP.sm, alignItems: 'baseline' } : null) }}>
       {factLabel(label)}
-      {value}
+      <div style={{ minWidth: 0 }}>{value}</div>
     </div>
   );
 
@@ -315,22 +355,24 @@ export function FeatureBriefBlock({
 
       {/* «Сейчас»: глиф + строка модели + подстрока; на десктопе тег и «обновлено» — справа. */}
       <div style={{ display: 'flex', gap: SP.sm, alignItems: 'flex-start' }}>
-        {GLYPH[brief.kind] && <span aria-hidden style={{ paddingTop: 3, display: 'inline-flex', flexShrink: 0 }}>{GLYPH[brief.kind]}</span>}
+        {GLYPH[brief.kind] && <span aria-hidden data-testid="brief-glyph" style={{ paddingTop: 3, display: 'inline-flex', flexShrink: 0 }}>{GLYPH[brief.kind]}</span>}
         <div style={{ flex: 1, minWidth: 0 }}>
-          {factLabel('Сейчас')}
+          {/* Подпись без значения не рисуется (макет: «поля нет — строку не рисуем», R-F8). */}
+          {nowText && factLabel('Сейчас')}
           {nowText && (
             <div data-testid="brief-now-line" aria-live="polite" style={{ fontSize: FS.lg, fontWeight: 600, color: C.textHeading, lineHeight: 1.35 }}>
               {nowText}
             </div>
           )}
-          {subText && <div data-testid="brief-now-sub" style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: 2 }}>{subText}</div>}
+          {subText && <div data-testid="brief-now-sub" style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: 2 }}>{monoNumbers(subText)}</div>}
           {/* Кнопки «ждёт вас» — только на мобиле (на десктопе «Мерж…» уже в шапке страницы).
               Каждая рисуется по своему пропу независимо (R-F5 п.6): без живого чата финала
               onOpenFinal не передан — «Мерж…» остаётся, путь к мержу в этом состоянии есть. */}
           {isWait && isMobile && (onMerge || onOpenFinal) && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm, marginTop: SP.sm }}>
               {onMerge && <Button variant="primary" size="md" dataTestId="brief-merge" onClick={onMerge}>Мерж…</Button>}
-              {onOpenFinal && <Button variant="ghost" size="md" dataTestId="brief-open-final" onClick={onOpenFinal}>Открыть финальное ревью</Button>}
+              {/* «Открыть финальное ревью» — secondary (R-F8): второе действие ряда, не ghost-ссылка. */}
+              {onOpenFinal && <Button variant="secondary" size="md" dataTestId="brief-open-final" onClick={onOpenFinal}>Открыть финальное ревью</Button>}
             </div>
           )}
         </div>
@@ -354,17 +396,18 @@ export function FeatureBriefBlock({
               : <span key={i}>{p.text}</span>))}
           </div>
         ))}
-        {factCell('Дальше', nextText && <div data-testid="brief-next-line" style={{ fontSize: FS.base, color: C.textPrimary }}>{nextText}</div>)}
+        {/* «Дальше» без строки модели не рисуется вовсе — голый заголовок не показываем (R-F8). */}
+        {nextText ? factCell('Дальше', <div data-testid="brief-next-line" style={{ fontSize: FS.base, color: C.textPrimary }}>{nextText}</div>) : null}
         {factCell(est.header, (
-          <div>
+          <>
             {/* mainMuted (queued): строка-обещание, не значение — приглушённый (макет queue). */}
             <div data-testid="brief-estimate-main" style={{ fontSize: FS.base, color: est.mainMuted ? C.textMuted : C.textPrimary }}>{est.main}</div>
             {est.fact && <div data-testid="brief-estimate-fact" style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: 2 }}>{est.fact}</div>}
-          </div>
+          </>
         ))}
       </div>
 
-      {brief.note && <VoiceBlock note={brief.note} kind={brief.kind} nameOf={nameOf} />}
+      {brief.note && <VoiceBlock note={brief.note} kind={brief.kind} nameOf={nameOf} nowMs={nowMs} />}
       {life}
     </section>
   );

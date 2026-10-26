@@ -8,7 +8,7 @@ import {
   agoText, briefDoneText, briefEstimateText, briefNextText, briefNowText, briefSubText, genitiveName,
   updatedText, voiceRoleText, voiceStaleLabel, voiceWhenText,
 } from './FeatureBriefModel';
-import type { FeatureBrief, FeatureBriefDone, FeatureBriefKind } from '../../lib/featurePage';
+import type { FeatureBrief, FeatureBriefKind } from '../../lib/featurePage';
 
 // «Сейчас» по часам макета: 25.10.2026 14:10 (локальное).
 const NOW = new Date(2026, 9, 25, 14, 10).getTime();
@@ -145,23 +145,40 @@ describe('Подстрока «Сейчас»', () => {
 // ── 1b. «Сделано» (слова модели, перенесены из блока, R-F5) ─────────────────────────
 
 describe('Сделано', () => {
-  const textOf = (d: FeatureBriefDone) => briefDoneText(d).map(p => p.text).join('');
+  const textOf = (b: FeatureBrief) => briefDoneText(b).map(p => p.text).join('');
 
   it('«2 из 5 шагов приняты · 1 виток правок»: числа — mono-части, связный текст — обычные', () => {
-    const parts = briefDoneText({ stepsAccepted: 2, stepsTotal: 5, loops: 1, planState: 'cut' });
+    const parts = briefDoneText(brief({ done: { stepsAccepted: 2, stepsTotal: 5, loops: 1, planState: 'cut' } }));
     expect(parts.map(p => p.text).join('')).toBe('2 из 5 шагов приняты · 1 виток правок');
     expect(parts.map(p => p.mono)).toEqual([true, false, true, false]);
   });
 
   it('loops = 0 — хвоста про витки нет', () => {
-    expect(textOf({ stepsAccepted: 5, stepsTotal: 5, loops: 0, planState: 'cut' })).toBe('5 из 5 шагов приняты');
+    expect(textOf(brief({ done: { stepsAccepted: 5, stepsTotal: 5, loops: 0, planState: 'cut' } }))).toBe('5 из 5 шагов приняты');
   });
 
   it('склонение разряда: 1 виток / 2 витка / 5 витков / 11 витков', () => {
-    expect(textOf({ stepsAccepted: 1, stepsTotal: 5, loops: 1, planState: 'cut' })).toContain('1 виток правок');
-    expect(textOf({ stepsAccepted: 1, stepsTotal: 5, loops: 2, planState: 'cut' })).toContain('2 витка правок');
-    expect(textOf({ stepsAccepted: 1, stepsTotal: 5, loops: 5, planState: 'cut' })).toContain('5 витков правок');
-    expect(textOf({ stepsAccepted: 1, stepsTotal: 5, loops: 11, planState: 'cut' })).toContain('11 витков правок');
+    expect(textOf(brief({ done: { stepsAccepted: 1, stepsTotal: 5, loops: 1, planState: 'cut' } }))).toContain('1 виток правок');
+    expect(textOf(brief({ done: { stepsAccepted: 1, stepsTotal: 5, loops: 2, planState: 'cut' } }))).toContain('2 витка правок');
+    expect(textOf(brief({ done: { stepsAccepted: 1, stepsTotal: 5, loops: 5, planState: 'cut' } }))).toContain('5 витков правок');
+    expect(textOf(brief({ done: { stepsAccepted: 1, stepsTotal: 5, loops: 11, planState: 'cut' } }))).toContain('11 витков правок');
+  });
+
+  it('queued с нарезанным планом — «План готов · 0 из 4 шагов» (макет queue, R-F8)', () => {
+    const b = brief({ kind: 'queued', done: { stepsAccepted: 0, stepsTotal: 4, loops: 0, planState: 'cut' } });
+    const parts = briefDoneText(b);
+    expect(parts.map(p => p.text).join('')).toBe('План готов · 0 из 4 шагов');
+    // «План готов» и связка — обычный текст; счётчик — mono (макет: <b>0 из 4</b>).
+    expect(parts.map(p => p.mono)).toEqual([false, false, true, false]);
+  });
+
+  it('queued с незавершённым планом — обычный счётчик, «План готов» не выдумывается (R-F8)', () => {
+    for (const planState of ['pending', 'partial'] as const) {
+      const b = brief({ kind: 'queued', done: { stepsAccepted: 0, stepsTotal: 4, loops: 0, planState } });
+      const t = textOf(b);
+      expect(t, planState).not.toContain('План готов');
+      expect(t, planState).toBe('0 из 4 шагов приняты');
+    }
   });
 });
 

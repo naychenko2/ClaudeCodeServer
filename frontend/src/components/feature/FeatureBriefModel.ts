@@ -15,7 +15,7 @@
 
 import { formatClock, formatDate, formatDuration, minutesSince, stageLabel } from './FeatureStatsBits';
 import { laneWord } from '../../lib/roleLabel';
-import type { FeatureBrief, FeatureBriefDone, FeatureBriefKind, FeatureBriefNote } from '../../lib/featurePage';
+import type { FeatureBrief, FeatureBriefKind, FeatureBriefNote } from '../../lib/featurePage';
 
 // Резолвер имени персоны по personaId (данные вызывают: usePersonas/getPersonaById).
 // null — имя неизвестно: часть строки с именем опускается, строка остаётся валидной
@@ -137,8 +137,10 @@ export function briefSubText(brief: FeatureBrief, nowMs: number): string | null 
 }
 
 // ── «Сделано» ───────────────────────────────────────────────────────────────────────
-// Счётчики done как есть (макет: «2 из 5 шагов приняты · 1 виток правок»). Разряда
-// «План готов» нет: формулировка состояния очереди, её здесь не выдумываем.
+// Счётчики done как есть (макет: «2 из 5 шагов приняты · 1 виток правок»). Для «в очереди»
+// с нарезанным планом (planState cut/done) — строка макета queue «План готов · 0 из 4 шагов»:
+// факт готовности плана несёт done.planState (R-F8). При незавершённом плане очереди
+// («pending»/«partial») формулировки нет — обычный счётчик, не выдумываем.
 function pluralRu(n: number, one: string, few: string, many: string): string {
   const d = n % 10, h = n % 100;
   if (d === 1 && h !== 11) return one;
@@ -153,14 +155,25 @@ export interface BriefDonePart {
   mono: boolean;
 }
 
-export function briefDoneText(done: FeatureBriefDone): BriefDonePart[] {
+export function briefDoneText(brief: FeatureBrief): BriefDonePart[] {
+  const { stepsAccepted, stepsTotal, loops, planState } = brief.done;
+  if (brief.kind === 'queued' && (planState === 'cut' || planState === 'done')) {
+    // «План готов · <mono>0 из 4</mono> шагов» (макет queue): готовность плана — факт
+    // planState, счётчик шагов — как есть, без «приняты»: фича ещё не шла.
+    return [
+      { text: 'План готов', mono: false },
+      { text: ' · ', mono: false },
+      { text: `${stepsAccepted} из ${stepsTotal}`, mono: true },
+      { text: ' шагов', mono: false },
+    ];
+  }
   const parts: BriefDonePart[] = [
-    { text: `${done.stepsAccepted} из ${done.stepsTotal}`, mono: true },
+    { text: `${stepsAccepted} из ${stepsTotal}`, mono: true },
     { text: ' шагов приняты', mono: false },
   ];
-  if (done.loops > 0) {
-    parts.push({ text: ` · ${done.loops}`, mono: true });
-    parts.push({ text: ` ${pluralRu(done.loops, 'виток', 'витка', 'витков')} правок`, mono: false });
+  if (loops > 0) {
+    parts.push({ text: ` · ${loops}`, mono: true });
+    parts.push({ text: ` ${pluralRu(loops, 'виток', 'витка', 'витков')} правок`, mono: false });
   }
   return parts;
 }

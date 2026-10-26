@@ -5,25 +5,85 @@ using ClaudeHomeServer.Services.Execution;
 namespace ClaudeHomeServer.Services.TestRuns;
 
 // Настройки предгейта (секция Pregate). Набор проверок задаётся ТОЛЬКО конфигом: в коде ни
-// одной зашитой команды — пустой набор значит «проверять нечего». Дефолты проекта лежат в
+// одной зашитой команды — пустой набор значит «провервать нечего». Дефолты проекта лежат в
 // appsettings.json, машинные правки — в appsettings.Local.json.
+//
+// Набор проверок — ОБЪЕКТ по имени проверки (Pregate:Checks:{"tsc": {…}, …}), а НЕ массив.
+// Массив в конфигурации .NET склеивается по индексу: запись из appsettings.Local.json затирает
+// базовую запись с тем же индексом и наследует её свойства (например WhenChanged) — базовая
+// проверка молча выпадает. Объект склеивается по ключу: базовый набор сохраняется целиком,
+// своя проверка добавляется к нему и несёт только свои свойства.
 public sealed class PregateOptions
 {
-    public List<PregateCheckOptions> Checks { get; init; } = [];
+    public const string SectionName = "Pregate";
+    public const string ChecksKey = "Checks";
 
-    public static PregateOptions From(IConfiguration config) =>
-        config.GetSection("Pregate").Get<PregateOptions>() ?? new PregateOptions();
+    // Собранный набор проверок в порядке прогона
+    public IReadOnlyList<PregateCheckOptions> Checks { get; init; } = [];
+
+    // Непустая строка — набор не собран (например секция задана массивом): предгейт обязан
+    // отказать с этим текстом, а не молча прогонять неполный набор
+    public string? Problem { get; init; }
+
+    public static PregateOptions From(IConfiguration config)
+    {
+        var section = config.GetSection(SectionName).GetSection(ChecksKey);
+        var checks = new List<PregateCheckOptions>();
+        var problems = new List<string>();
+
+        foreach (var child in section.GetChildren())
+        {
+            // Ключ массива — индекс («0», «1»): старая форма, в которой набор склеивается по
+            // индексу. Имя проверки индексом не бывает.
+            if (child.Key.All(char.IsDigit))
+            {
+                problems.Add($"«{child.Key}» — {SectionName}:{ChecksKey} задан МАССИВОМ, а набор проверок должен быть "
+                    + "объектом по имени проверки (массив склеивается с базовым по индексу: своя проверка "
+                    + "затирала бы базовую и наследовала её WhenChanged)");
+                continue;
+            }
+
+            // Ключ с «:» конфигурация разъехала бы по пути («lint:design» → «lint» → «design»):
+            // такая проверка осталась бы без Command. Ловим это здесь, а не красным прогоном.
+            // Вложенный объект — не список: у списка ключи числовые («Args:0», «Args:1»).
+            if (child.GetChildren().Any(c => c.GetChildren().Any(g => !g.Key.All(char.IsDigit))))
+            {
+                problems.Add($"«{child.Key}» — вложенные ключи в {SectionName}:{ChecksKey}: имя проверки не может "
+                    + "содержать «:» (например, «lint:design» → ключ «lint-design», а Name: \"lint:design\")");
+                continue;
+            }
+
+            var options = child.Get<PregateCheckOptions>() ?? new PregateCheckOptions();
+            // Отображаемое имя: из конфига, иначе ключ
+            checks.Add(options with { Name = string.IsNullOrWhiteSpace(options.Name) ? child.Key : options.Name });
+        }
+
+        if (problems.Count > 0)
+            return new PregateOptions { Problem = string.Join("; ", problems) };
+
+        // Порядок: заданный Order, затем имя. Без Order проверка уходит в конец — локальная
+        // добавка не задвигает базовый набор.
+        return new PregateOptions
+        {
+            Checks = [.. checks.OrderBy(c => c.Order).ThenBy(c => c.Name, StringComparer.Ordinal)],
+        };
+    }
 }
 
 // Одна проверка. Kind = "process" (по умолчанию): Command + Args в WorkingDirectory (относительно
 // корня дерева), красная при коде выхода ≠ 0. Kind = "ui-probe": замер интерфейса уже поднятого
 // стенда Origin (UiProbeService), красная при ненулевых находках.
-public sealed class PregateCheckOptions
+public sealed record PregateCheckOptions
 {
     public const string KindProcess = "process";
     public const string KindUiProbe = "ui-probe";
 
+    // Отображаемое имя проверки: в конфиге необязательно (по умолчанию — ключ секции)
     public string Name { get; init; } = "";
+
+    // Порядок прогона; без Order — в конец
+    public int Order { get; init; } = int.MaxValue;
+
     public string Kind { get; init; } = KindProcess;
 
     // Префиксы путей от корня дерева (через «/»): проверка идёт, только если изменён файл под
@@ -73,6 +133,11 @@ public sealed class PregateService : ITaskPregate
 
     public async Task<PregateVerdict> RunAsync(PregateRequest request, CancellationToken ct)
     {
+        // Набор не собран (секция задана массивом) — прогонять нечего: отказ с текстом, а не
+        // молчаливый зелёный вердикт по неполному набору
+        if (_options.Problem is not null)
+            return PregateVerdict.Refused("Набор проверок предгейта не собран: " + _options.Problem);
+
         if (_options.Checks.Count == 0) return new PregateVerdict([]);
 
         using var treeLock = _pipeline.TryLockTree(request.WorkingDirectory);

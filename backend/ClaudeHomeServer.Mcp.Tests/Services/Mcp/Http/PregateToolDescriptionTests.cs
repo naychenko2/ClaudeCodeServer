@@ -27,6 +27,7 @@ public class PregateToolDescriptionTests
         return tool.Description;
     }
 
+    // Набор проверок — ОБЪЕКТ по имени проверки (не массив): ключ — идентичность, Name — имя для показа
     private static JsonElement Checks()
     {
         var doc = JsonDocument.Parse(File.ReadAllText(Path.Combine(ServerDir(), "appsettings.json")));
@@ -53,9 +54,10 @@ public class PregateToolDescriptionTests
     {
         var description = Description();
 
-        foreach (var check in Checks().EnumerateArray())
+        foreach (var check in Checks().EnumerateObject())
         {
-            var name = check.GetProperty("Name").GetString()!;
+            // Отображаемое имя проверки: поле Name в конфиге, иначе ключ секции
+            var name = check.Value.TryGetProperty("Name", out var named) ? named.GetString()! : check.Name;
             description.Should().Contain(name, $"проверка «{name}» есть в секции Pregate, но не названа в описании инструмента");
         }
     }

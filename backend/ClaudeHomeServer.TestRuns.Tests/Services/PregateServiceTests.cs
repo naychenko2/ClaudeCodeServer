@@ -282,21 +282,21 @@ public class PregateServiceTests : IDisposable
 
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
-            ["Pregate:Checks:0:Name"] = "tsc",
-            ["Pregate:Checks:0:Command"] = "npx",
-            ["Pregate:Checks:0:Args:0"] = "tsc",
-            ["Pregate:Checks:0:Args:1"] = "-b",
-            ["Pregate:Checks:0:WorkingDirectory"] = "frontend",
-            ["Pregate:Checks:0:WhenChanged:0"] = "frontend/",
-            ["Pregate:Checks:1:Name"] = "ui",
-            ["Pregate:Checks:1:Kind"] = "ui-probe",
-            ["Pregate:Checks:1:Origin"] = "http://127.0.0.1:5555",
-            ["Pregate:Checks:1:Viewports:0"] = "360",
-            ["Pregate:Checks:1:Viewports:1"] = "1280",
+            // Набор проверок — объект по имени проверки: имя = ключ (не индекс!)
+            ["Pregate:Checks:tsc:Command"] = "npx",
+            ["Pregate:Checks:tsc:Args:0"] = "tsc",
+            ["Pregate:Checks:tsc:Args:1"] = "-b",
+            ["Pregate:Checks:tsc:WorkingDirectory"] = "frontend",
+            ["Pregate:Checks:tsc:WhenChanged:0"] = "frontend/",
+            ["Pregate:Checks:ui:Kind"] = "ui-probe",
+            ["Pregate:Checks:ui:Origin"] = "http://127.0.0.1:5555",
+            ["Pregate:Checks:ui:Viewports:0"] = "360",
+            ["Pregate:Checks:ui:Viewports:1"] = "1280",
         }).Build();
 
         var options = PregateOptions.From(config);
 
+        options.Problem.Should().BeNull();
         options.Checks.Should().HaveCount(2);
         options.Checks[0].Should().BeEquivalentTo(new PregateCheckOptions
         {

@@ -4291,7 +4291,13 @@ public class ClaudeSession : ILlmSessionAdapter
             customHeaders.Add($"X-CCS-Session: {Info.Id}");
         if (customHeaders.Count > 0)
             envOverrides["ANTHROPIC_CUSTOM_HEADERS"] = string.Join("\n", customHeaders);
-        if (localProvider is null && _subscriptionPool?.HasExtra == true
+        // Учётка подписки накладывается только на РОДНОЙ ход (инвариант CLAUDE.md: профили CLI
+        // изолируют OAuth-логин, «иначе CLI пошлёт чужому эндпоинту токен подписки (401)»).
+        // Если модель резолвится в стороннего провайдера (local или внешнего) — ход идёт на его
+        // env (BuildCliEnv выше), и подписочные CLAUDE_CONFIG_DIR/CLAUDE_CODE_OAUTH_TOKEN/
+        // ANTHROPIC_AUTH_TOKEN поверх него накладываться не должны: они доехали бы до чужого
+        // эндпоинта (находка задачи c47fe6da: чат с Info.Provider="claude-2", модель ушла к MiniMax).
+        if (_providers?.ResolveByModel(EffectiveModel) is null && _subscriptionPool?.HasExtra == true
             && _providers?.GetByKey(Info.Provider) is null)
         {
             // Подписка пула (включая "claude", если задана с токеном) — свой OAuth-профиль и

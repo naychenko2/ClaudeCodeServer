@@ -85,7 +85,8 @@ public class WorktreeCleanupService(
         foreach (var project in projects.GetAll())
         {
             ct.ThrowIfCancellationRequested();
-            if (project.DeviceId is not null || string.IsNullOrEmpty(project.RootPath)) continue;
+            // Worktree локального проекта лежат на его устройстве — сервер их не чистит (G10).
+            if (!ProjectCapabilities.FilesOnServer(project) || string.IsNullOrEmpty(project.RootPath)) continue;
             IReadOnlyList<GitWorktreeInfo> trees;
             try { trees = await git.WorktreeListAsync(project.OwnerId, project.RootPath, ct); }
             catch (Exception ex) { log.LogWarning(ex, "Уборка worktree: список для {Root} не получен", project.RootPath); continue; }

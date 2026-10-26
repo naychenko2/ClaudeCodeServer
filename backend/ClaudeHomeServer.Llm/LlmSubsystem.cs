@@ -164,10 +164,18 @@ public sealed class LlmSubsystem : IAppSubsystem
             // MaxConcurrentTurns этого провайдера; реестр берём лениво, из конструктора фабрики
             // он не нужен (цикл в графе DI).
             var key = TrackedLocalLlmClient.ReadEngineKey(config);
+            var logger = sp.GetRequiredService<ILogger<TrackedLocalLlmClient>>();
+            var warned = 0;
             return new TrackedLocalLlmClient(inner, LocalEngineBusyTracker.Instance, key,
-                () => sp.GetService<LlmProviderRegistry>()?.GetByKey(key)?.MaxConcurrentTurns
-                      ?? TrackedLocalLlmClient.DefaultLimit,
-                sp.GetRequiredService<ILogger<TrackedLocalLlmClient>>());
+                () =>
+                {
+                    // Реестр на старте ещё не готов — проверяем при первом использовании ключа
+                    var registry = sp.GetService<LlmProviderRegistry>();
+                    if (Interlocked.Exchange(ref warned, 1) == 0)
+                        TrackedLocalLlmClient.WarnIfEngineKeyUnknown(config, registry, logger);
+                    return registry?.GetByKey(key)?.MaxConcurrentTurns ?? TrackedLocalLlmClient.DefaultLimit;
+                },
+                logger);
         });
         // Тихие HTTP-логгеры на оба имени: каждая реализация пишет в свою категорию,
         // и одна мёртвая зависимость не глушит жалобы другой. Без них каждый вызов

@@ -835,7 +835,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                         LogWarn($"Локальный движок «{currentKey}» занят ({admission.Refusal}, идут {admission.Running}) — "
                             + "ход не запущен, цепочку не идём.");
                         turnOutcome = "local_busy";
-                        await FailLocalBusyAsync(turn, admission.Running);
+                        await FailLocalBusyAsync(turn, admission.Running, admission.Refusal);
                         return;
                     }
                     attemptSlot = admission.Slot;
@@ -1916,7 +1916,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
 
     // Финал «локальный движок занят»: гейт допуска не пустил ход. Форма как у FailLocalDownAsync,
     // но без кулдауна провайдера и без шагов цепочки — движок жив, он просто загружен.
-    private async Task FailLocalBusyAsync(FallbackTurn turn, int running)
+    private async Task FailLocalBusyAsync(FallbackTurn turn, int running, LocalTurnRefusal refusal)
     {
         List<ServerMessage> held;
         lock (turn.Sync)
@@ -1926,7 +1926,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             turn.Settled = true;
         }
 
-        await _downstream(new ErrorMessage(TurnFailureText.LocalEngineBusy(running), ExpectResultFollows: true));
+        await _downstream(new ErrorMessage(TurnFailureText.LocalEngineBusy(running, refusal), ExpectResultFollows: true));
         await _downstream(new ResultMessage("error", 0, 0, null, null));
         foreach (var m in held.Where(m => m is not ResultMessage and not ErrorMessage))
             await _downstream(m);

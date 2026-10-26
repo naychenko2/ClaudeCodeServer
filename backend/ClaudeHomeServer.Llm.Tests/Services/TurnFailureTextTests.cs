@@ -147,4 +147,17 @@ public class TurnFailureTextTests
     [Fact]
     public void ResultErrors_Нераспознанные_ПоказываютсяКакЕсть()
         => TurnFailureText.ForResultErrors(["Something else went wrong"]).Should().BeNull();
+
+    // «Занято»: причина очереди и причина таймаута — разные тексты, и оба говорят, что делать
+    [Fact]
+    public void LocalEngineBusy_ТаймаутИПереполнение_РазныеТекстыСПодсказкойЧтоДелать()
+    {
+        var full = TurnFailureText.LocalEngineBusy(2, LocalTurnRefusal.QueueFull);
+        var timeout = TurnFailureText.LocalEngineBusy(2, LocalTurnRefusal.Timeout);
+
+        full.Should().NotBe(timeout);
+        full.Should().Contain("очередь ожидания заполнена").And.Contain("повторите");
+        timeout.Should().Contain("время ожидания вышло").And.Contain("Повторите");
+        timeout.Should().NotContain("заполнена", "очередь могла быть пустой — врать о причине нельзя");
+    }
 }

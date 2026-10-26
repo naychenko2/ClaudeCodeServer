@@ -207,7 +207,7 @@ public class LocalTurnGateTests
 
         c.Inner.Attempts.Should().BeEmpty("отказанный ход CLI не запускает");
         var down = c.Downstream();
-        down.OfType<ErrorMessage>().Single().Text.Should().Be(TurnFailureText.LocalEngineBusy(1));
+        down.OfType<ErrorMessage>().Single().Text.Should().Be(TurnFailureText.LocalEngineBusy(1, LocalTurnRefusal.QueueFull));
         down.OfType<ResultMessage>().Single().Subtype.Should().Be("error");
         down.OfType<ProviderSwitchedMessage>().Should().BeEmpty();
         down.OfType<ErrorMessage>().Should().NotContain(e => e.Text == TurnFailureText.LocalModelDown);
@@ -216,7 +216,7 @@ public class LocalTurnGateTests
     }
 
     [Fact]
-    public async Task ТаймаутОчереди_ТоЖеЧтоПереполнение()
+    public async Task ТаймаутОчереди_ОтдельныйТекстОтПереполнения()
     {
         var gate = new LocalEngineBusyTracker(_clock);
         var providers = Providers(1, 4, "00:15:00");
@@ -235,7 +235,7 @@ public class LocalTurnGateTests
 
         b.Inner.Attempts.Should().BeEmpty();
         var down = b.Downstream();
-        down.OfType<ErrorMessage>().Single().Text.Should().Be(TurnFailureText.LocalEngineBusy(1));
+        down.OfType<ErrorMessage>().Single().Text.Should().Be(TurnFailureText.LocalEngineBusy(1, LocalTurnRefusal.Timeout));
         down.OfType<ResultMessage>().Single().Subtype.Should().Be("error");
         down.OfType<ProviderSwitchedMessage>().Should().BeEmpty();
         _health.IsUnavailable(Local).Should().BeFalse();

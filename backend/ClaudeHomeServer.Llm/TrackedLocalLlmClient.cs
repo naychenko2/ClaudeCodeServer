@@ -19,6 +19,21 @@ public sealed class TrackedLocalLlmClient(ILocalLlmClient inner, LocalEngineBusy
     public static string ReadEngineKey(IConfiguration config) =>
         config["LocalLlm:EngineKey"] is { } k && !string.IsNullOrWhiteSpace(k) ? k.Trim() : DefaultEngineKey;
 
+    // Опечатка в LocalLlm:EngineKey молча заводит отдельный счётчик: на одном движке окажутся два
+    // независимых потолка. Ключ задан явно, а провайдера с таким ключом нет — предупреждаем.
+    // true — предупреждение записано.
+    public static bool WarnIfEngineKeyUnknown(IConfiguration config, LlmProviderRegistry? registry, ILogger logger)
+    {
+        if (registry is null || string.IsNullOrWhiteSpace(config["LocalLlm:EngineKey"])) return false;
+        var key = ReadEngineKey(config);
+        if (registry.GetByKey(key) is not null) return false;
+        logger.LogWarning(
+            "LocalLlm:EngineKey=\"{Key}\": провайдера с таким ключом нет в реестре LlmProviders — счётчик допуска "
+            + "прямого клиента разойдётся со счётчиком ходов CLI, и на движке окажутся два независимых потолка. "
+            + "Ожидается ключ существующего провайдера (в бою — local-qwen).", key);
+        return true;
+    }
+
     // Ключ слота в счётчике: у основного клиента — LocalLlm:EngineKey (провайдер, с которым
     // он делит движок) либо «LocalLlm», у именованного движка — его имя
     public string EngineKey { get; } = engineKey;

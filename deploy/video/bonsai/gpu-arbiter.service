@@ -1,0 +1,15 @@
+[Unit]
+Description=GPU arbiter on RTX 3090 — Bonsai уступает карту медиазадачам и возвращается
+After=network-online.target comfyui-h3.service
+
+[Service]
+# root: нужен systemctl stop/start bonsai.service; сам арбитр GPU не трогает.
+User=root
+ExecStart=/usr/bin/python3 -I /home/an/bonsai/gpu-arbiter.py
+Environment=ARBITER_PORT=18031
+Environment=ARBITER_RETURN_QUIET_S=5
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

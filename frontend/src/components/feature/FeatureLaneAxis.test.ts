@@ -3,7 +3,7 @@
 // последняя подпись дата мержа, слой липкой шапки (Z.panelEdge — ниже поповера),
 // время в локальной зоне (та же, что в ленте).
 //
-// Мутации (проверяются прогоном): (1) TICK_TAIL_GAP_MIN → 0 — краснеет «31 ч → 5
+// Мутации (проверяются прогоном): (1) TICK_TAIL_GAP_MS → 0 — краснеет «31 ч → 5
 // подписей» (хвостовая отметка в 30 ч попадает на «сейчас»); (2) now → axis.to в
 // закрытой фиче — краснеет «у закрытой нет “сейчас”»; (3) C.textMuted → C.text —
 // краснеет тест токенов; (4) Z.panelEdge → Z.modal — краснеет тест слоя.
@@ -23,8 +23,20 @@ const TO = '2026-10-21T07:00:00.000Z';
 const LIVE_AXIS: LaneAxis = { from: FROM, to: TO, timeFrac: 0.86 };
 const CLOSED_AXIS: LaneAxis = { from: FROM, to: TO, timeFrac: 1 };
 
-beforeEach(() => { installFakeDom(); });
-afterEach(() => { uninstallFakeDom(); });
+// Зона МАШИНЫ не годится: на CI (TZ=UTC) подмена «локальная зона → UTC» неотличима
+// от правильного поведения. Фиксируем московскую зону явно — Node подхватывает
+// смену process.env.TZ в рантайме.
+const ORIGINAL_TZ = process.env.TZ;
+
+beforeEach(() => {
+  process.env.TZ = 'Europe/Moscow';
+  installFakeDom();
+});
+afterEach(() => {
+  uninstallFakeDom();
+  if (ORIGINAL_TZ === undefined) delete process.env.TZ;
+  else process.env.TZ = ORIGINAL_TZ;
+});
 
 // Минимальный узел фейк-DOM: нужны только атрибуты и потомки.
 type FakeNode = {

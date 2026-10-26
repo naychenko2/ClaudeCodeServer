@@ -36,6 +36,13 @@ public static class FeatureBrief
         public const string Draft = "draft";
         public const string Idle = "idle";
         public const string Closed = "closed";
+
+        // Все категории разом (B15): значение, записанное в голос, может быть САМОЙ категорией
+        // (новый штамп) или состоянием (голоса до B15 — достраиваются таблицей KindByState).
+        internal static readonly IReadOnlySet<string> All = new HashSet<string>
+        {
+            Running, WaitingYou, Error, Paused, Queued, Draft, Idle, Closed,
+        };
     }
 
     // Максимум элементов brief.next.
@@ -146,6 +153,15 @@ public static class FeatureBrief
             ? Kinds.Queued
             : kind;
     }
+
+    // B15: категория ДЛЯ ШТАМПА голоса — та же величина, что и brief.kind (тот же KindOf).
+    // Ею, а не сырым run.State, помечается голос в момент записи: у фичи в очереди run.State =
+    // «paused» (причина удержания не хранится), а категория — «queued»; сравнение штампа с текущей
+    // категорией иначе даёт «сменилась» с первой секунды (дефект 415c1c80).
+    // Состояние вне таблицы — сырым state: StaleOf его не достроит (fail-closed) и голос будет
+    // устаревшим, но штамп не уронит запись голоса исключением.
+    internal static string KindAtWriteOf(FeatureRun run) =>
+        KindByState.ContainsKey(run.State) ? KindOf(run) : run.State;
 
     // B8 (MAJOR-1 ревью R-F8): время в очереди — от момента постановки удержания до now. Момент —
     // FeatureHold.Since: TaskManager.SetHold штампует его моментом постановки, проектор копирует
@@ -258,23 +274,33 @@ public static class FeatureBrief
             StaleOf(run, note, kind));
     }
 
-    // Признак устаревания (разрез п.2, B14 возврат FIN 74722f13): голос устарел, если StageAtWrite ≠
-    // текущей активной стадии ИЛИ категория состояния (brief.kind) сменилась с момента записи.
+    // Признак устаревания (разрез п.2, B14 возврат FIN 74722f13, B15 дефект 415c1c80): голос устарел,
+    // если StageAtWrite ≠ текущей активной стадии ИЛИ категория (brief.kind) сменилась с момента записи.
     // Единая база: StageAtWrite штампуется той же ActiveStageOf, что и это сравнение (её зовут
     // REST PUT и MCP featureNote; Now[0] для штампа не используется) — голос, записанный на
     // «ждёт вас» / паузе / idle, не устаревший с первой секунды: стадия не менялась. Стадия
     // задачи в петле (шла не в активной) на штамп больше не влияет: штамп — стадия конвейера.
-    // Категория на момент записи достраивается из StateAtWrite той же таблицей KindByState:
-    // состояния нет в таблице — категория на момент записи не подтверждается, голос устарел
-    // (fail-closed). Ограничение хранимого поля (B3): причина удержания на момент записи не
-    // хранится — голос, записанный в очереди, считается устаревшим, пока фича в очереди
-    // (paused → queued различить нечем).
+    // Категория на момент записи (B15): штамп — САМА категория (FeatureBrief.KindAtWriteOf, та же
+    // величина, что brief.kind), поэтому голос, записанный в очереди, свежий до смены категории.
+    // Старые голоса (до B15) хранят СОСТОЯНИЕ — они достраиваются таблицей KindByState (fail-closed
+    // для неизвестного значения).
     private static bool StaleOf(FeatureRun run, FeatureNote note, string kind)
     {
         if (note.StageAtWrite != ActiveStageOf(run)) return true;
-        if (!KindByState.TryGetValue(note.StateAtWrite, out var kindAtWrite)) return true;
+        var kindAtWrite = KindFromStamp(note.StateAtWrite);
+        if (kindAtWrite is null) return true;
         return kindAtWrite != kind;
     }
+
+    // Категория, записанная в голос: новое значение — сама категория (brief.kind); старое (до B15) —
+    // состояние проекции, достраивается таблицей KindByState. Пересечений нет: имя состояния,
+    // совпадающее с именем категории, отображается в ту же категорию (running → running,
+    // paused → paused, draft → draft, idle → idle, closed → closed); «stopped» → error,
+    // «waiting» → waiting_you. Ничего не известно — null: голос устарел (fail-closed).
+    private static string? KindFromStamp(string stamp) =>
+        KindByState.TryGetValue(stamp, out var kind) ? kind
+            : Kinds.All.Contains(stamp) ? stamp
+            : null;
 
     // B6 (дефект f2da9354): updatedAt — время последнего записанного события состояния: максимум событий
     // состояния её задач — моментов, которыми такие события записаны: CreatedAt (задача появилась —

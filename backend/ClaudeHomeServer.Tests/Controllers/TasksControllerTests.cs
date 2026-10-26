@@ -2950,8 +2950,8 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         note.At.Should().BeOnOrAfter(before);
         note.StageAtWrite.Should().Be(FeatureBrief.ActiveStageOf(run),
             "StageAtWrite — активная стадия проекции на момент записи (FeatureBrief.ActiveStageOf), значение клиента игнорировано");
-        note.StateAtWrite.Should().Be(run.State,
-            "StateAtWrite — состояние проекции на момент записи");
+        note.StateAtWrite.Should().Be(FeatureBrief.KindAtWriteOf(run),
+            "StateAtWrite — категория проекции на момент записи (FeatureBrief.KindAtWriteOf, B15)");
         note.BySessionId.Should().BeNull();
         note.ByUser.Should().BeTrue();
     }
@@ -2982,6 +2982,54 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             "штамп — активная стадия конвейера, не Now[0] (здесь пустой)");
         brief.Note.Stale.Should().BeFalse(
             "голос записан только что на активной стадии того же состояния — ни стадия, ни категория не менялись");
+    }
+
+    // B15 (дефект 415c1c80): голос, записанный у фичи В ОЧЕРЕДИ, не «устаревший» с первой секунды.
+    // Штамп голоса — КАТЕГОРИЯ (brief.kind), а не сырое состояние: у фичи в очереди состояние
+    // «paused» (причина удержания не хранится), а категория — «queued». До правки штамп был
+    // run.State («paused»), текущая категория — «queued» ⇒ stale сразу после записи.
+    // Мутация: вернуть в штампе TasksController run.State — штамп станет «paused», тесты красные.
+    [Fact]
+    public async Task PutNote_FichaVOcheredi_GolosNeUstarevshiSrazu()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        await CreateTaskAsync(new { title = "шаг-очередь", featureId = epicId, role = "step" });
+        var hold = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "queue" });
+        hold.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var response = await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new { text = "в очереди" });
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        var stored = tm.GetById(epicId)!.Note!;
+        stored.StateAtWrite.Should().Be("queued",
+            "штамп голоса — категория фичи (brief.kind), а не состояние «paused»");
+
+        var run = _factory.Services.GetRequiredService<FeatureProjector>().Project(epicId, OwnerId)!;
+        var brief = FeatureBrief.Build(run, null, null, DateTime.UtcNow);
+        brief.Kind.Should().Be("queued", "фикстура: удержание с причиной queue");
+        brief.Note!.Stale.Should().BeFalse("голос записан только что в очереди — категория не менялась");
+    }
+
+    // B15: смена категории (очередь → пауза человека: та же стадия) делает голос устаревшим.
+    [Fact]
+    public async Task PutNote_SmenaKategoriiVOcheredi_GolosUstal()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        await CreateTaskAsync(new { title = "шаг-очередь2", featureId = epicId, role = "step" });
+        (await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "queue" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        (await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new { text = "в очереди" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Другая причина удержания — новая пауза (TaskManager.SetHold): категория queued → paused.
+        (await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var run = _factory.Services.GetRequiredService<FeatureProjector>().Project(epicId, OwnerId)!;
+        var brief = FeatureBrief.Build(run, null, null, DateTime.UtcNow);
+        brief.Kind.Should().Be("paused");
+        brief.Note!.Stale.Should().BeTrue("категория сменилась: queued ≠ paused");
     }
 
     // c3 через HTTP: длинный текст режется до 600, пустой снимает голос.

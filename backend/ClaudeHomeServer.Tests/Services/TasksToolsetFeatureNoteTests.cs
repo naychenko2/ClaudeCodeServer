@@ -140,7 +140,8 @@ public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFact
         stored.Note.At.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromMinutes(1),
             "At штампует сервер, агент его не передаёт");
         // Штампы — из той же проекции, что читает фронт (разрез п.1: «из FeatureRun»).
-        stored.Note.StateAtWrite.Should().Be(Features.Project(epicId, OwnerId)!.State);
+        // B15: StateAtWrite — КАТЕГОРИЯ фичи (brief.kind), а не сырое состояние проекции.
+        stored.Note.StateAtWrite.Should().Be(FeatureBrief.KindAtWriteOf(Features.Project(epicId, OwnerId)!));
         // B14 (возврат FIN): шаг в todo — идущих задач нет (Now пуст), но активная стадия конвейера
         // есть («prod», первая незаполненная стадия с задачами). Штамп — активная стадия, а не Now[0]:
         // тот же «prod», что в тесте «АктивнаяСтадия» (там шаг идёт).
@@ -344,5 +345,30 @@ public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFact
             "штамп — активная стадия конвейера, не Now[0] (здесь пустой)");
         brief.Note.Stale.Should().BeFalse(
             "голос записан только что на активной стадии того же состояния — ни стадия, ни категория не менялись");
+    }
+
+    // B15 (дефект 415c1c80): голос, записанный агентом у фичи В ОЧЕРЕДИ, не «устаревший» сразу.
+    // Штамп голоса — КАТЕГОРИЯ (brief.kind): у фичи в очереди состояние «paused», категория —
+    // «queued». До правки штамп был run.State («paused») ⇒ stale с первой секунды.
+    // Мутация: вернуть в штампе TasksToolset run.State — штамп станет «paused», тест красный.
+    [Fact]
+    public async Task FeatureNote_FichaVOcheredi_GolosNeUstarevshiSrazu()
+    {
+        var (projectId, _) = await CreateProjectWithSessionAsync("queue");
+        var (curatorId, epicId, _) = await CreateFeatureFromCuratorAsync(projectId, "queue");
+        Tasks.SetHold(epicId, FeatureHoldReasons.Queue);
+
+        var (_, isError) = await CallToolAsync(curatorId, "tasks_update",
+            new { id = epicId, featureNote = "в очереди" });
+        isError.Should().BeFalse();
+
+        var stored = Tasks.GetById(epicId)!;
+        stored.Note!.StateAtWrite.Should().Be("queued",
+            "штамп голоса — категория фичи (brief.kind), а не состояние «paused»");
+
+        var run = Features.Project(epicId, OwnerId)!;
+        var brief = FeatureBrief.Build(run, null, null, DateTime.UtcNow);
+        brief.Kind.Should().Be("queued", "фикстура: удержание с причиной queue");
+        brief.Note!.Stale.Should().BeFalse("голос записан только что в очереди — категория не менялась");
     }
 }

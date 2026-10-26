@@ -27,6 +27,9 @@ namespace ClaudeHomeServer.Tasks.Tests;
 //    красный (число у paused/running); убрать clamp к 0 — тест границы красный (отрицательное время).
 //  • B14 (возврат FIN 74722f13): сверять StaleOf с Now[0] вместо ActiveStageOf — тест
 //    «голос без идущих задач» красный (Now пуст → "prod" ≠ "").
+//  • B15 (дефект 415c1c80): вернуть штамп голоса к состоянию (run.State) вместо категории —
+//    тесты «голос в очереди» красные; не достраивать старый штамп-состояние через KindByState —
+//    тест «старый штамп» красный.
 public class FeatureBriefTests
 {
     private static readonly DateTime NOW = new(2026, 10, 25, 12, 0, 0, DateTimeKind.Utc);
@@ -599,6 +602,91 @@ public class FeatureBriefTests
         brief.Now.Should().BeNull("фикстура: ни идущих задач, ни тревоги");
         brief.Note!.StageAtWrite.Should().Be("prod");
         brief.Note.Stale.Should().BeFalse($"голос записан на активной стадии состояния {state}");
+    }
+
+    // ─── B15 (дефект 415c1c80): голос, записанный в очереди, не «устаревший» с первой секунды ──────────
+
+    // Штамп голоса — КАТЕГОРИЯ (brief.kind), а не сырое состояние: у фичи в очереди состояние
+    // «paused» (причина удержания не хранится), а категория — «queued». До правки штамп был
+    // «paused», текущая категория — «queued» ⇒ stale сразу после записи.
+    [Fact]
+    public void Note_ГолосЗаписанныйВОчередиСразуСвежий()
+    {
+        var queue = new FeatureHold(FeatureHoldReasons.Queue, NOW, null, true);
+        var run = RunWithVoice("prod", FeatureStates.Paused, queue, "prod", "queued");
+
+        var brief = FeatureBrief.Build(run, null, null, NOW);
+
+        brief.Kind.Should().Be("queued", "фикстура: удержание с причиной queue");
+        brief.Note!.Stale.Should().BeFalse("категория не менялась — голос свежий");
+    }
+
+    // Смена категории из очереди (queued → paused(manual)) — голос устарел: стадия та же.
+    [Fact]
+    public void Note_СменаКатегорииОчередьВПаузуДаётStale()
+    {
+        var manual = new FeatureHold(FeatureHoldReasons.Manual, NOW, null, true);
+        var run = RunWithVoice("prod", FeatureStates.Paused, manual, "prod", "queued");
+
+        FeatureBrief.Build(run, null, null, NOW).Note!.Stale.Should().BeTrue(
+            "очередь и пауза человека — разные категории (queued ≠ paused)");
+    }
+
+    // Смена категории из очереди (queued → running) — голос устарел: стадия та же.
+    [Fact]
+    public void Note_СменаКатегорииОчередьВРаботуДаётStale()
+    {
+        var queue = new FeatureHold(FeatureHoldReasons.Queue, NOW, null, true);
+        var run = RunWithVoice("prod", FeatureStates.Running, queue, "prod", "queued");
+
+        FeatureBrief.Build(run, null, null, NOW).Note!.Stale.Should().BeTrue(
+            "фича поехала — категория сменилась (queued ≠ running)");
+    }
+
+    // Характеризация старого формата: голоса, записанные ДО B15, хранят СОСТОЯНИЕ («paused»,
+    // «stopped»…) — они достраиваются до категории таблицей KindByState и ведут себя как раньше.
+    [Theory]
+    [InlineData(FeatureStates.Paused, "paused")]
+    [InlineData(FeatureStates.Stopped, "stopped")]
+    [InlineData(FeatureStates.Waiting, "waiting")]
+    public void Note_СтарыйШтампСостоянияДостраиваетсяДоКатегории(string state, string legacyStamp)
+    {
+        var manual = new FeatureHold(FeatureHoldReasons.Manual, NOW, null, true);
+        var run = RunWithVoice("prod", state, state == FeatureStates.Paused ? manual : null,
+            "prod", legacyStamp);
+
+        FeatureBrief.Build(run, null, null, NOW).Note!.Stale.Should().BeFalse(
+            $"старый штамп «{legacyStamp}» достраивается до категории текущего состояния");
+    }
+
+    // Штамп для записи голоса — та же величина, что brief.kind (FeatureBrief.KindAtWriteOf).
+    [Fact]
+    public void KindAtWriteOf_ДаётКатегориюАНеСостояние()
+    {
+        var queue = new FeatureHold(FeatureHoldReasons.Queue, NOW, null, true);
+        var manual = new FeatureHold(FeatureHoldReasons.Manual, NOW, null, true);
+
+        FeatureBrief.KindAtWriteOf(RunOf(FeatureStates.Paused, queue)).Should().Be("queued",
+            "очередь — категория, а не «paused»");
+        FeatureBrief.KindAtWriteOf(RunOf(FeatureStates.Paused, manual)).Should().Be("paused");
+        FeatureBrief.KindAtWriteOf(RunOf(FeatureStates.Running)).Should().Be("running");
+        // Состояние вне таблицы — сырым state: запись голоса не падает, а голос будет устаревшим.
+        FeatureBrief.KindAtWriteOf(RunOf("выдуманное")).Should().Be("выдуманное");
+    }
+
+    // Сторож: новая категория без строки в Kinds.All — красный тест (иначе её не узнает штамп).
+    [Fact]
+    public void Kinds_All_ПокрываетВсеКатегории()
+    {
+        var kinds = typeof(FeatureBrief.Kinds)
+            .GetFields(BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy)
+            .Where(f => f.IsLiteral && f.FieldType == typeof(string))
+            .Select(f => (string)f.GetRawConstantValue()!)
+            .ToList();
+
+        kinds.Should().NotBeEmpty();
+        FeatureBrief.Kinds.All.Should().BeEquivalentTo(kinds,
+            "в наборе категорий — ровно по строке на каждую константу FeatureBrief.Kinds");
     }
 
     // ─── updatedAt (B6, дефект f2da9354): время последнего записанного события состояния, не момента ответа ─

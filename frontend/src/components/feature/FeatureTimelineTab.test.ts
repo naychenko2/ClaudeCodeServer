@@ -30,6 +30,7 @@ import type { StepProgress } from '../../lib/featureProgress';
 import { C } from '../../lib/design';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureRun, FeatureStage, FeatureStageExecutor, FeatureStepChain, FeatureRound, FeatureTask } from '../../types/featureRun';
+import type { FeatureStats } from '../../types/featureStats';
 
 // === Мок персон (lib/personas): id → имя; аватар — инициалы (без image) ===
 const { personaMap } = vi.hoisted(() => ({ personaMap: new Map<string, string>() }));
@@ -507,12 +508,12 @@ describe('FeatureTimelineTab: рендер', () => {
     expect(textNodes(badge!).join('')).toContain('ждёт вас · 25 мин');
   });
 
-  // === 8. 360: тач-цель ≥ 40 (кнопка-заголовок этапа) ===
-  it('на 360 кнопка-заголовок этапа — minHeight 40', () => {
+  // === 8. 360: тач-цель 44 (кнопка-заголовок этапа, GC-F5c) ===
+  it('на 360 кнопка-заголовок этапа — minHeight 44', () => {
     const c = renderTab(mkRun(fullStages()), true);
     const header = findNodeByAttr(c, 'data-testid', 'timeline-stage-header-prod')!;
     const st = (header as unknown as { style: Record<string, string> }).style;
-    expect(st.minHeight).toBe('40px');
+    expect(st.minHeight).toBe('44px');
   });
 });
 
@@ -837,5 +838,192 @@ describe('FeatureTimelineTab: строка «оценивает →» (ренд�
     }));
     expect(textNodes(findNodeByAttr(openStage2(c, 'cut'), 'data-testid', 'timeline-eval-scope')!).join('')).toBe('по эпику');
     expect(textNodes(findNodeByAttr(openStage2(c, 'plan'), 'data-testid', 'timeline-eval-scope')!).join('')).toBe('по разрезу');
+  });
+});
+
+// === GC-F5c: дорожка и ось в строке этапа, roving tabindex, 360 ===
+
+// Фикстура stats: таймлайн с интервалами этапов (окно 10:00–12:00).
+function mkStats(intervalsByStage: Record<string, unknown[]> | null): FeatureStats {
+  return {
+    timeline: {
+      from: '2026-10-20T10:00:00Z',
+      to: '2026-10-20T12:00:00Z',
+      stages: [],
+      intervalsByStage,
+      segments: [],
+      current: null,
+      totals: {},
+    },
+  } as unknown as FeatureStats;
+}
+
+function iv(from: string, to: string, live = false) {
+  return { from, to, minutes: 30, live, lastOutcome: null, taskIds: ['t1'], turns: [] };
+}
+
+// Две стадии с интервалами: prod (10:00–10:30, 11:00–11:30) и review (10:20–10:40, 11:30–11:50).
+function laneStats(): FeatureStats {
+  return mkStats({
+    prod: [iv('2026-10-20T10:00:00Z', '2026-10-20T10:30:00Z'), iv('2026-10-20T11:00:00Z', '2026-10-20T11:30:00Z')],
+    review: [iv('2026-10-20T10:20:00Z', '2026-10-20T10:40:00Z'), iv('2026-10-20T11:30:00Z', '2026-10-20T11:50:00Z')],
+  });
+}
+
+// Все узлы-интервалы дорожек: [testid, tabIndex].
+function intervalNodes(c: FNodeLike): { id: string; tabIndex: number }[] {
+  const out: { id: string; tabIndex: number }[] = [];
+  const walk = (n: FNodeLike) => {
+    const at = n.attributes?.['data-testid'];
+    if (at && at.startsWith('lane-interval-')) {
+      const props = reactProps(n as never) as { tabIndex?: number } | null;
+      out.push({ id: at, tabIndex: props?.tabIndex ?? -999 });
+    }
+    for (const ch of n.childNodes) walk(ch);
+  };
+  walk(c);
+  return out;
+}
+
+// Клавиша на корне вкладки (событие всплывает от интервала к корню).
+function pressKey(c: FNodeLike, key: string) {
+  const root = findNodeByAttr(c, 'data-testid', 'feature-timeline-tab')!;
+  const props = reactProps(root as never) as { onKeyDown?: (e: unknown) => void } | null;
+  act(() => { props?.onKeyDown?.({ key, preventDefault: () => {} }); });
+}
+
+function renderTabWithStats(run: FeatureRun, stats: FeatureStats | null, isMobile = false) {
+  installFakeDom();
+  const { container } = mount(createElement(FeatureTimelineTab, { run, stats, isMobile }));
+  return container;
+}
+
+describe('FeatureTimelineTab: дорожки и ось (GC-F5c)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    personaMap.clear();
+    personaMap.set('p1', 'Денис');
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  // === 1. Сетка строки: 250px | 1fr | 104px (критерий c2) ===
+  it('строка этапа — сетка 250px 1fr 104px до раскрытия этапа и после', () => {
+    const c = renderTabWithStats(mkRun(fullStages()), laneStats());
+    const grid = findNodeByAttr(c, 'data-testid', 'timeline-stage-grid-prod')!;
+    const st = (grid as unknown as { style: Record<string, string> }).style;
+    expect(st.gridTemplateColumns).toBe('250px 1fr 104px');
+    // Раскрыли этап — сетка строки не поехала.
+    const header = findNodeByAttr(c, 'data-testid', 'timeline-stage-header-prod')!;
+    act(() => { (reactProps(header as never)!.onClick as () => void)(); });
+    const grid2 = findNodeByAttr(c, 'data-testid', 'timeline-stage-grid-prod')!;
+    expect((grid2 as unknown as { style: Record<string, string> }).style.gridTemplateColumns).toBe('250px 1fr 104px');
+  });
+
+  // === 2. Дорожка рисуется, границы и паузы под строкой ===
+  it('дорожка этапа с интервалами; под строкой — границы и паузы', () => {
+    const c = renderTabWithStats(mkRun(fullStages()), laneStats());
+    expect(findNodeByAttr(c, 'data-testid', 'lane-prod'), 'дорожка этапа').not.toBeNull();
+    const prod = findNodeByAttr(c, 'data-testid', 'timeline-stage-prod')!;
+    const bounds = findNodeByAttr(prod as never, 'data-testid', 'timeline-stage-bounds');
+    const t = textNodes(bounds!).join('');
+    expect(t).toContain('–');
+    expect(t, 'число интервалов под строкой').toContain('2 интервала');
+  });
+
+  // Мутация: убрать detail из границ → «2 интервала» краснеет.
+
+  it('ось над лентой: подписи шкалы и «сейчас» у открытой фичи', () => {
+    const c = renderTabWithStats(mkRun(fullStages()), laneStats());
+    expect(findNodeByAttr(c, 'data-testid', 'lane-axis')).not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'lane-axis-label-now')).not.toBeNull();
+  });
+
+  it('у закрытой фичи подписи «сейчас» нет (контракт вызывающего)', () => {
+    const c = renderTabWithStats(mkRun(fullStages(), { state: 'closed' }), laneStats());
+    expect(findNodeByAttr(c, 'data-testid', 'lane-axis')).not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'lane-axis-label-now')).toBeNull();
+  });
+
+  // === 3. approx: журнала нет → дорожки нет, прежние границы ===
+  it('approx (журнала нет): дорожки нет, границы прежние', () => {
+    const c = renderTabWithStats(mkRun(fullStages()), mkStats(null));
+    expect(findNodeByAttr(c, 'data-testid', 'lane-prod'), 'дорожки при approx нет').toBeNull();
+    expect(intervalNodes(c as never)).toHaveLength(0);
+    const bounds = textNodes(findNodeByAttr(c, 'data-testid', 'timeline-stage-bounds')!).join('');
+    expect(bounds, 'прежние границы этапа').toContain('·');
+  });
+
+  // === 4. Roving tabindex: одна точка табуляции (критерий c1) ===
+  it('ровно один интервал с tabIndex=0 — точка табуляции одна', () => {
+    const c = renderTabWithStats(mkRun(fullStages()), laneStats());
+    const nodes = intervalNodes(c as never);
+    expect(nodes.length).toBeGreaterThan(1);
+    expect(nodes.filter(n => n.tabIndex === 0)).toHaveLength(1);
+    expect(nodes.find(n => n.tabIndex === 0)!.id).toBe('lane-interval-prod-0');
+  });
+
+  it('ArrowRight → следующий интервал этапа; Home/End → первый и последний', () => {
+    const c = renderTabWithStats(mkRun(fullStages()), laneStats());
+    pressKey(c as never, 'ArrowRight');
+    let nodes = intervalNodes(c as never);
+    expect(nodes.filter(n => n.tabIndex === 0)).toHaveLength(1);
+    expect(nodes.find(n => n.tabIndex === 0)!.id).toBe('lane-interval-prod-1');
+    pressKey(c as never, 'Home');
+    nodes = intervalNodes(c as never);
+    expect(nodes.find(n => n.tabIndex === 0)!.id).toBe('lane-interval-prod-0');
+    pressKey(c as never, 'End');
+    nodes = intervalNodes(c as never);
+    expect(nodes.find(n => n.tabIndex === 0)!.id).toBe('lane-interval-prod-1');
+  });
+
+  it('ArrowDown → ближайший по x интервал соседнего этапа', () => {
+    const c = renderTabWithStats(mkRun(fullStages()), laneStats());
+    pressKey(c as never, 'ArrowDown');
+    const nodes = intervalNodes(c as never);
+    expect(nodes.filter(n => n.tabIndex === 0)).toHaveLength(1);
+    // Ближайший к prod-0 (центр 10:15) — review-0 (10:20–10:40), а не review-1 (11:30–11:50).
+    expect(nodes.find(n => n.tabIndex === 0)!.id).toBe('lane-interval-review-0');
+  });
+
+  it('ArrowUp → ближайший по x интервал этапа выше', () => {
+    const c = renderTabWithStats(mkRun(fullStages()), laneStats());
+    pressKey(c as never, 'ArrowDown');
+    pressKey(c as never, 'ArrowUp');
+    const nodes = intervalNodes(c as never);
+    expect(nodes.find(n => n.tabIndex === 0)!.id).toBe('lane-interval-prod-0');
+  });
+
+  // === 5. 360: строка-кнопка 44, дорожка под именем и ВНЕ кнопки ===
+  it('на 360 кнопка строки — 44 px, дорожка не внутри кнопки', () => {
+    const c = renderTabWithStats(mkRun(fullStages()), laneStats(), true);
+    const header = findNodeByAttr(c, 'data-testid', 'timeline-stage-header-prod')!;
+    expect((header as unknown as { style: Record<string, string> }).style.minHeight).toBe('44px');
+    // Внутри кнопки строки интервалов быть не может (вложенные кнопки).
+    const inside = intervalNodes(header as never);
+    expect(inside, 'в кнопке строки нет интервалов').toHaveLength(0);
+    // Дорожка есть и стоит после кнопки (под именем).
+    expect(findNodeByAttr(c, 'data-testid', 'lane-prod')).not.toBeNull();
+  });
+
+  // === 6. Счётчик: план «N/M» только у «Производства», у прочих — факт ===
+  it('счётчик плана «N/M» — только у prod; у ревью — факт (число задач)', () => {
+    const stages = fullStages();
+    stages[3]!.executors = [mkExec({ taskId: 't-rev', status: 'running' })];
+    const c = renderTabWithStats(mkRun(stages, {
+      stepProgress: { planState: 'partial', total: 4, accepted: 2, review: 1, work: 1, notCreated: 0, withdrawn: 0, unlinkedReworks: 0 },
+    }), laneStats());
+    const counters: Record<string, string> = {};
+    for (const key of ['prod', 'review']) {
+      const stage = findNodeByAttr(c, 'data-testid', `timeline-stage-${key}`)!;
+      const counter = findNodeByAttr(stage as never, 'data-testid', 'timeline-stage-counter');
+      counters[key] = counter ? textNodes(counter).join('') : '';
+    }
+    expect(counters['prod'], 'у prod — план шагов').toBe('4/4');
+    expect(counters['review'], 'у ревью — факт').toBe('1 задач');
   });
 });

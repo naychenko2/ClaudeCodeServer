@@ -306,7 +306,8 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
           {tab === 'timeline' ? (
             <>
               <FeatureMiniSummary stats={page.page.stats ?? null} onOpenStats={() => setFeaturePageTab('stats')} isMobile={isMobile} />
-              <FeatureTimelineTab run={okRun} marks={marks} isMobile={isMobile} />
+              {/* stats — таймлайн фичи: из него дорожки этапов и ось времени (GC-F5c). */}
+              <FeatureTimelineTab run={okRun} marks={marks} isMobile={isMobile} stats={page.page.stats ?? null} />
             </>
           ) : tab === 'plans' ? (
             <FeaturePlansTab page={page.page} isMobile={isMobile} onOpenFile={onOpenFile} onOpenKeyChat={onOpenKeyChat} marks={marks} featureId={featureId} projectId={projectId} />

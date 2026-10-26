@@ -37,6 +37,15 @@ export interface FeatureLaneAxisProps {
   now: string | null;
   // Узкая раскладка (360): только «начало … сейчас».
   isMobile?: boolean;
+  // Узкая ШКАЛА (не окно): 601–~1100 px — часовые отметки налезают на подпись
+  // «начало …» (первая отметка стоит на 16,6 % ширины шкалы). Тогда подписи как на
+  // мобильном: «начало» без времени, часовых отметок нет (GC-F5c, замечание ревью).
+  dense?: boolean;
+  // Отступы шкалы под колонки сетки строки этапа (px): слева — колонка этапа
+  // (250 px), справа — колонка длительности (104 px). Подписи встают ровно над
+  // дорожкой (GC-F5c: ось и дорожка — одна шкала).
+  insetLeft?: number;
+  insetRight?: number;
 }
 
 interface AxisLabel {
@@ -102,9 +111,12 @@ export function buildAxisLabels(axis: LaneAxis, now: string | null, isMobile: bo
 }
 
 // Ось времени: липкая шапка с подписями шкалы.
-export function FeatureLaneAxis({ axis, now, isMobile }: FeatureLaneAxisProps) {
+export function FeatureLaneAxis({ axis, now, isMobile, dense, insetLeft = 0, insetRight = 0 }: FeatureLaneAxisProps) {
   if (!axis) return null;
-  const labels = buildAxisLabels(axis, now, !!isMobile);
+  // Узкая шкала (мобильная раскладка ИЛИ узкая шкала на широком окне) — подписи
+  // сокращённые: часовых отметок нет, «начало» без времени.
+  const narrow = !!isMobile || !!dense;
+  const labels = buildAxisLabels(axis, now, narrow);
 
   return (
     <div
@@ -122,7 +134,11 @@ export function FeatureLaneAxis({ axis, now, isMobile }: FeatureLaneAxisProps) {
     >
       <div
         data-testid="lane-axis-scale"
-        style={{ position: 'relative', height: 16, fontFamily: FONT.mono, fontSize: FS.xxs, color: C.textMuted }}
+        style={{
+          position: 'relative', height: 16, fontFamily: FONT.mono, fontSize: FS.xxs, color: C.textMuted,
+          // Шкала живёт в колонке дорожки: отступы под колонки сетки строки этапа.
+          marginLeft: insetLeft, marginRight: insetRight,
+        }}
       >
         {labels.map(l => (
           <span

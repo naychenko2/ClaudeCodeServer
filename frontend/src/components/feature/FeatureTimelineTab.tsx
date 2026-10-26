@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { Info } from 'lucide-react';
 import { useFeatureStageFocus, clearFeatureStageFocus } from '../../lib/featurePage';
 import { EMPTY_NAV_MARKS, buildNavMarks, type NavMarks } from '../../lib/featureNavMarks';
@@ -11,6 +12,11 @@ import {
   stageDotStyle, stageLineStyle, buildTaskMap, stageStatusBadge, ExecutorRow, buildExecutorIndex,
 } from './FeatureTimelineBits';
 import type { StepProgress } from '../../lib/featureProgress';
+import { FeatureStageLane } from './FeatureStageLane';
+import { FeatureLaneAxis } from './FeatureLaneAxis';
+import { buildStageLanes, axisFrac, type StageLane, type LaneAxis } from './FeatureLaneModel';
+import { formatDuration, formatDateTime } from './FeatureStatsBits';
+import type { FeatureStats } from '../../types/featureStats';
 import { FeatureProdCardsView } from './FeatureProdCardsView';
 import type { FeatureRun, FeatureStage, FeatureStageExecutor, StageKey } from '../../types/featureRun';
 
@@ -21,6 +27,39 @@ import type { FeatureRun, FeatureStage, FeatureStageExecutor, StageKey } from '.
 // (active) открыт по умолчанию. «Производство» (W4-2F3) — лента карточек
 // FeatureProdCardsView вместо «исполнители/шаги»; остальные этапы — исполнители.
 // Сводка/график — не здесь (Ф7/Ф8).
+//
+// GC-F5c: в строку этапа встала ДОРОЖКА времени (вариант C макета feature-gantt-7):
+// сетка `250px | 1fr | 104px` — имя · состояние · счётчик | дорожка | «10 ч 59 мин · 33×».
+// Над лентой — липкая ось времени (FeatureLaneAxis) с той же шкалой. Арифметики своей
+// нет: интервалы, ось и план приходят из модели (FeatureLaneModel), красит —
+// FeatureStageLane/FeatureLaneAxis. Клавиатура: roving tabindex — одна точка табуляции
+// на весь Гант, ←→ по интервалам этапа, ↑↓ по соседним этапам (ближайший по x), Home/End.
+
+// Сетка строки этапа (макет feature-gantt-6 §«Рендер»): колонка имени, дорожка, колонка
+// длительности. Константы — потому что ось обязана встать ровно над дорожкой (её отступы
+// считаются от тех же чисел).
+const COL_NAME = 250;
+const COL_META = 104;
+// Ширина шкалы, ниже которой часовые отметки налезают на подпись «начало …»:
+// первая отметка стоит на 16,6 % шкалы, подпись «начало 20.10 · 03:00» — ~102 px;
+// перекрытие начинается с шкалы ~690 px.
+const MIN_SCALE_W = 690;
+
+// Активный интервал Ганта: этап + индекс. Одна точка табуляции на весь Гант.
+interface LaneFocus { stage: StageKey; index: number }
+
+// Клавиши навигации по интервалам (макет feature-gantt-6 §«Клавиатура»).
+const NAV_KEYS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'];
+
+// Склонение слова «интервал» под число: 1 интервал / 2 интервала / 5 интервалов.
+function pluralIntervals(n: number): string {
+  const m100 = n % 100;
+  const m10 = n % 10;
+  if (m100 >= 11 && m100 <= 14) return `${n} интервалов`;
+  if (m10 === 1) return `${n} интервал`;
+  if (m10 >= 2 && m10 <= 4) return `${n} интервала`;
+  return `${n} интервалов`;
+}
 
 // Поясняющая строка (макет §5): Info 13, 11 textSecondary, bgCard, borderLight, R.md, поля 6 10.
 function TimelineNote() {
@@ -48,7 +87,8 @@ function TimelineNote() {
 // этапов — исполнители. Клик по заголовку — раскрыть/схлопнуть.
 function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, featureTitle = null,
   run, showProd = false, marks = EMPTY_NAV_MARKS, isMobile = false,
-  execIndex = new Map<string, FeatureStageExecutor>(), progress = null }: {
+  execIndex = new Map<string, FeatureStageExecutor>(), progress = null,
+  lane = null, axis = null, tabIndexAt = -1 }: {
   stage: FeatureStage; isLast: boolean; expanded: boolean;
   onToggle: () => void; taskMap: Map<string, import('../../types/featureRun').FeatureTask>;
   now: number; featureId: string; featureTitle?: string | null;
@@ -57,6 +97,12 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
   isMobile?: boolean;
   execIndex?: Map<string, FeatureStageExecutor>;
   progress?: StepProgress | null;
+  // Дорожка этапа из модели (GC-F5c). null — дорожки нет (approx: журнала нет).
+  lane?: StageLane | null;
+  // Ось фичи — та же шкала, что у дорожек.
+  axis?: LaneAxis | null;
+  // Индекс интервала с tabIndex=0 в ЭТОМ этапе; -1 — точка табуляции не здесь.
+  tabIndexAt?: number;
 }) {
   const status = stageStatusLabel(stage);
   const bounds = stageBoundsLabel(stage);
@@ -70,55 +116,131 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
     status?.tone === 'danger' ? C.dangerText :
     C.textMuted;
 
+  // Дорожка есть только когда есть и ось, и данные журнала (approx — данных нет).
+  const hasLane = !!lane && !!axis && !lane.approx;
+  const intervals = hasLane ? lane!.intervals : [];
+  const pauseMinutes = intervals.reduce((a, iv) => a + iv.pauseAfterMinutes, 0);
+
+  // Счётчик колонки имени: у «Производства» — план шагов «N/M» (решение m1: счётчик
+  // плана только у prod); у прочих стадий плана нет — показываем факт (число задач).
+  let counter: string | null = null;
+  if (hasLane && stage.key === 'prod' && lane!.plan) {
+    const p = lane!.plan;
+    const total = p.done + p.inWork + p.ahead;
+    const made = p.done + p.inWork;
+    if (total > 0) counter = `${made}/${total}`;
+  } else if (stage.executors.length > 0) {
+    counter = `${stage.executors.length} задач`;
+  }
+
+  // Правая колонка: у этапа с дорожкой — факт времени и число интервалов («10 ч 59 мин · 33×»);
+  // без дорожки — прежняя приблизительная длительность («≈ 6 ч»).
+  const meta = hasLane && intervals.length > 0
+    ? { duration: formatDuration(lane!.totalMinutes), count: `${lane!.count}×` }
+    : { duration: duration, count: null };
+
+  // Под строкой: границы по интервалам дорожки + паузы; без дорожки — прежние границы.
+  const boundsText = hasLane && intervals.length > 0
+    ? `${formatDateTime(intervals[0]!.from)} – ${formatDateTime(intervals[intervals.length - 1]!.to)}`
+    : bounds;
+  const detail = hasLane && intervals.length > 0
+    ? ` · ${pluralIntervals(lane!.count)}${pauseMinutes > 0 ? `, паузы ${formatDuration(pauseMinutes)}` : ''}`
+    : '';
+
+  const gridColumns = isMobile ? '1fr' : `${COL_NAME}px 1fr ${COL_META}px`;
+
   return (
     <div data-testid={`timeline-stage-${stage.key}`} style={{ position: 'relative', paddingLeft: SP.xl, paddingBottom: SP.lg }}>
       {/* Точка этапа (14) */}
       <span style={{ ...stageDotStyle(stage), position: 'absolute', left: SP.xxs, top: SP.xs }} />
       {/* Линия к следующему этапу */}
       {line && <span style={line} />}
-      {/* Заголовок: имя · состояние · «≈» (кликабельный) */}
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={expanded}
-        data-testid={`timeline-stage-header-${stage.key}`}
-        style={{
-          display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap',
-          background: 'transparent', border: 'none', cursor: 'pointer',
-          padding: `${SP.xs}px 0`, minHeight: isMobile ? 40 : 26,
-          fontFamily: FONT.sans, width: '100%', textAlign: 'left',
-        }}
+      {/* Строка этапа: сетка 250px | 1fr | 104px (на 360 — одна колонка: кнопка, дорожка под ней) */}
+      <div
+        data-testid={`timeline-stage-grid-${stage.key}`}
+        style={{ display: 'grid', gridTemplateColumns: gridColumns, gap: SP.md, alignItems: 'center' }}
       >
-        <span style={{ fontSize: FS.md, fontWeight: nameMuted ? 600 : 700, color: nameMuted ? C.textMuted : C.textHeading }}>
-          {stageName(stage.key)}
-        </span>
-        {status && (
-          <span style={{ fontSize: FS.xs, fontWeight: 600, color: statusColor, whiteSpace: 'nowrap' }}>
-            {status.text}
-          </span>
-        )}
-        {duration && (
-          <Tooltip
-            content="Приблизительно: сумма работы задач этапа — от старта исполнителя до сдачи. Ожидание и простой внутри не вычитаются, параллельные задачи складываются."
+        {/* Колонка 1: имя (кнопка раскрытия) · состояние · счётчик */}
+        <div style={{ gridColumn: '1', minWidth: 0 }}>
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={expanded}
+            data-testid={`timeline-stage-header-${stage.key}`}
+            style={{
+              display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap',
+              background: 'transparent', border: 'none', cursor: 'pointer',
+              padding: `${SP.xs}px 0`, minHeight: isMobile ? 44 : 40,
+              fontFamily: FONT.sans, width: '100%', textAlign: 'left',
+            }}
           >
-            <span
-              data-testid="timeline-stage-duration"
-              style={{
-                marginLeft: 'auto', fontFamily: FONT.mono, fontSize: FS.xs,
-                color: C.textSecondary, whiteSpace: 'nowrap',
-                padding: `${SP.xxs}px ${SP.xs}px`, borderRadius: R.sm, cursor: 'help',
-                minHeight: isMobile ? 40 : undefined, display: 'inline-flex', alignItems: 'center',
-              }}
-            >
-              {duration}
+            <span style={{ fontSize: FS.md, fontWeight: nameMuted ? 600 : 700, color: nameMuted ? C.textMuted : C.textHeading }}>
+              {stageName(stage.key)}
             </span>
-          </Tooltip>
-        )}
-      </button>
-      {/* Границы: «dd.mm · ЧЧ:ММ – ЧЧ:ММ» / «с dd.mm · ЧЧ:ММ» */}
-      {bounds && (
-        <div data-testid="timeline-stage-bounds" style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, marginTop: SP.xxs }}>
-          {bounds}
+            {status && (
+              <span style={{ fontSize: FS.xs, fontWeight: 600, color: statusColor, whiteSpace: 'nowrap' }}>
+                {status.text}
+              </span>
+            )}
+          </button>
+          {counter && (
+            <div
+              data-testid="timeline-stage-counter"
+              style={{ fontFamily: FONT.mono, fontSize: FS.xxs, color: C.textMuted, paddingBottom: SP.xxs }}
+            >
+              {counter}
+            </div>
+          )}
+        </div>
+        {/* Колонка 2: дорожка. Она НЕ внутри кнопки строки — вложенных кнопок быть не может. */}
+        <div style={{ gridColumn: isMobile ? '1' : '2', minWidth: 0 }}>
+          {hasLane && (
+            <FeatureStageLane
+              lane={lane!}
+              axis={axis!}
+              label={stageName(stage.key)}
+              tabIndexAt={tabIndexAt}
+            />
+          )}
+        </div>
+        {/* Колонка 3: длительность и число интервалов */}
+        <div
+          data-testid="timeline-stage-meta"
+          style={{
+            gridColumn: isMobile ? '1' : '3',
+            display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: SP.xxs,
+            fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary, whiteSpace: 'nowrap',
+          }}
+        >
+          {meta.duration && (
+            <Tooltip
+              content="Приблизительно: сумма работы задач этапа — от старта исполнителя до сдачи. Ожидание и простой внутри не вычитаются, параллельные задачи складываются."
+            >
+              <span
+                data-testid="timeline-stage-duration"
+                style={{
+                  fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary, whiteSpace: 'nowrap',
+                  cursor: 'help', minHeight: isMobile ? 40 : undefined, display: 'inline-flex', alignItems: 'center',
+                }}
+              >
+                {meta.duration}
+              </span>
+            </Tooltip>
+          )}
+          {meta.count && <span data-testid="timeline-stage-count">{meta.count}</span>}
+        </div>
+      </div>
+      {/* Границы и паузы: «24.10 13:47 – 25.10 05:44 · 33 интервала, паузы 4 ч 58 мин» */}
+      {boundsText && (
+        <div
+          data-testid="timeline-stage-bounds"
+          style={{
+            fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, marginTop: SP.xxs,
+            // Длинная строка не должна вылезать за вкладку (360): рвём по любому символу.
+            overflowWrap: 'anywhere',
+          }}
+        >
+          {boundsText}{detail}
         </div>
       )}
       {/* Раскрыто: карточка с плашкой состояния и исполнителями */}
@@ -208,7 +330,9 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
 // Вкладка «Хронология»: поясняющая строка + список 7 этапов. `now` — фиксированный
 // момент (Date.now на рендер) для минут «идёт/ждёт/стоит»; стабильен в пределах кадра.
 // W4-2F3: «Производство» — лента карточек (FeatureProdCardsView), другие этапы — исполнители.
-export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false }: { run: FeatureRun; marks?: NavMarks; isMobile?: boolean }) {
+export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false, stats = null }: {
+  run: FeatureRun; marks?: NavMarks; isMobile?: boolean; stats?: FeatureStats | null;
+}) {
   const stages = run.stages ?? [];
   // Честный прогресс (Ф-pr): из run.stepProgress; null — старые ответы (строки нет).
   const progress = stepProgressFromRun(run);
@@ -223,6 +347,29 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false }: 
   // Название фичи (epic.title) — для «← к фиче {название}» в шапке чата (Ф-pl-b).
   const featureTitle = run.epic?.title ?? null;
 
+  // Дорожки и ось (GC-F5c): только из модели (FeatureLaneModel) — своей арифметики нет.
+  const lanesModel = useMemo(() => buildStageLanes(run, stats, now), [run, stats, now]);
+  const axis = lanesModel.axis;
+  // Дорожка есть у этапа, у которого есть и ось, и данные журнала (approx — данных нет).
+  const laneOf = useCallback(
+    (key: StageKey): StageLane | null => {
+      const l = lanesModel.lanes[key];
+      if (!l || !axis || l.approx) return null;
+      return l;
+    },
+    [lanesModel, axis],
+  );
+  // Этапы с дорожками — в порядке ленты: по ним ходят ↑↓ (соседний этап).
+  const laneStages = useMemo(
+    () => stages.map(s => s.key).filter(k => !!laneOf(k)),
+    [stages, laneOf],
+  );
+
+  // «Сейчас» на оси — только у открытой фичи (у закрытой/смерженной его нет, последняя
+  // подпись — дата закрытия). Контракт держит вызывающий (замечание ревью GC-R-F5a/б).
+  const finished = run.closed === true || run.state === 'merged' || run.state === 'closed';
+  const nowIso = finished ? null : new Date(now).toISOString();
+
   // Текущий этап: первый active (в порядке жизненного цикла); его открыто по умолчанию.
   const currentKey = useMemo<StageKey | null>(() => {
     const active = stages.find(s => s.state === 'active');
@@ -232,6 +379,92 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false }: 
   // Один раскрытый этап за раз; null — все схлопнуты.
   const [expanded, setExpanded] = useState<StageKey | null>(currentKey);
   const toggle = (key: StageKey) => setExpanded(cur => (cur === key ? null : key));
+
+  // Roving tabindex (GC-F5c): одна точка табуляции на весь Гант — первый интервал
+  // первого этапа с дорожкой.
+  const [laneFocus, setLaneFocus] = useState<LaneFocus | null>(null);
+  const defaultFocus = useMemo<LaneFocus | null>(() => {
+    const first = laneStages.find(k => (lanesModel.lanes[k]?.intervals.length ?? 0) > 0);
+    return first ? { stage: first, index: 0 } : null;
+  }, [laneStages, lanesModel]);
+  const focus = useMemo<LaneFocus | null>(() => {
+    if (!laneFocus) return defaultFocus;
+    const lane = lanesModel.lanes[laneFocus.stage];
+    if (!lane || laneFocus.index < 0 || laneFocus.index >= lane.intervals.length) return defaultFocus;
+    return laneFocus;
+  }, [laneFocus, defaultFocus, lanesModel]);
+
+  // Ширина контейнера — для узкой шкалы (часовые отметки прячутся). Без ResizeObserver
+  // (тестовый фейк-DOM) ширины нет — шкала считается широкой.
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [containerW, setContainerW] = useState<number | null>(null);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(entries => {
+      for (const e of entries) setContainerW(e.contentRect.width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const scaleW = containerW === null ? null : containerW - COL_NAME - COL_META - SP.md * 2;
+  const dense = !isMobile && scaleW !== null && scaleW < MIN_SCALE_W;
+
+  // Перевод фокуса на соседний интервал: ←→ — по этапу, ↑↓ — ближайший по x интервал
+  // соседнего этапа, Home/End — первый/последний интервал этапа (макет feature-gantt-6).
+  const moveFocus = useCallback((key: string): LaneFocus | null => {
+    if (!focus || !axis) return null;
+    const lane = lanesModel.lanes[focus.stage];
+    if (!lane) return null;
+    const n = lane.intervals.length;
+    if (key === 'ArrowRight' && focus.index + 1 < n) return { stage: focus.stage, index: focus.index + 1 };
+    if (key === 'ArrowLeft' && focus.index > 0) return { stage: focus.stage, index: focus.index - 1 };
+    if (key === 'Home') return { stage: focus.stage, index: 0 };
+    if (key === 'End') return { stage: focus.stage, index: n - 1 };
+    if (key === 'ArrowUp' || key === 'ArrowDown') {
+      const pos = laneStages.indexOf(focus.stage);
+      const dir = key === 'ArrowUp' ? -1 : 1;
+      // Центр текущего интервала на шкале — по нему ищем ближайший в соседнем этапе.
+      const cur = lane.intervals[focus.index]!;
+      const curX = (axisFrac(cur.from, axis) + axisFrac(cur.to, axis)) / 2;
+      for (let p = pos + dir; p >= 0 && p < laneStages.length; p += dir) {
+        const target = lanesModel.lanes[laneStages[p]!];
+        if (!target || target.intervals.length === 0) continue;
+        let best = 0;
+        let bestD = Infinity;
+        target.intervals.forEach((iv, i) => {
+          const x = (axisFrac(iv.from, axis) + axisFrac(iv.to, axis)) / 2;
+          const d = Math.abs(x - curX);
+          if (d < bestD) { bestD = d; best = i; }
+        });
+        return { stage: laneStages[p]!, index: best };
+      }
+    }
+    return null;
+  }, [focus, axis, lanesModel, laneStages]);
+
+  // Фокус после смены точки табуляции — на сам интервал (кнопку дорожки).
+  const focusPending = useRef(false);
+  useEffect(() => {
+    if (!focusPending.current || !focus) return;
+    focusPending.current = false;
+    // Тестовый фейк-DOM не умеет querySelector — тогда фокус просто не двигаем.
+    if (typeof document.querySelector !== 'function') return;
+    const el = document.querySelector(`[data-testid="lane-interval-${focus.stage}-${focus.index}"]`);
+    if (el && typeof (el as HTMLElement).focus === 'function') (el as HTMLElement).focus();
+  }, [focus]);
+
+  const onKeyDown = useCallback((e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (!NAV_KEYS.includes(e.key)) return;
+    const next = moveFocus(e.key);
+    if (!next) return;
+    e.preventDefault();
+    setLaneFocus(next);
+    focusPending.current = true;
+  }, [moveFocus]);
+
+  // Ось рисуется, когда есть хоть одна дорожка: у approx-фичи (журнала нет) дорожек нет.
+  const hasLanes = laneStages.length > 0;
 
   // Якорь этапа (Ф-pl-b): клик по точке на плашке чата открыл страницу на «Хронологии» —
   // раскрываем/прокручиваем на этот этап. One-shot по seq (тот же приём, что focusFeatureStep):
@@ -252,7 +485,12 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false }: 
   }, [stageFocus]);
 
   return (
-    <div data-testid="feature-timeline-tab" style={{ fontFamily: FONT.sans }}>
+    <div
+      ref={rootRef}
+      data-testid="feature-timeline-tab"
+      onKeyDown={onKeyDown}
+      style={{ fontFamily: FONT.sans }}
+    >
       <TimelineNote />
       {progress && (
         <div
@@ -261,6 +499,19 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false }: 
         >
           {formatStepProgress(progress)}
         </div>
+      )}
+      {/* Ось времени над лентой: подписи встают ровно над дорожкой (отступы под колонки сетки) */}
+      {hasLanes && axis && (
+        <FeatureLaneAxis
+          axis={axis}
+          now={nowIso}
+          isMobile={isMobile}
+          dense={dense}
+          // Отступы под колонки сетки — только на широкой раскладке: на 360 дорожка
+          // лежит под именем во всю ширину, отступы уводили бы шкалу за край.
+          insetLeft={isMobile ? 0 : COL_NAME + SP.md}
+          insetRight={isMobile ? 0 : COL_META + SP.md}
+        />
       )}
       {stages.map((stage, i) => (
         <StageRow
@@ -279,6 +530,9 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false }: 
           isMobile={isMobile}
           execIndex={execIndex}
           progress={progress}
+          lane={laneOf(stage.key)}
+          axis={axis}
+          tabIndexAt={focus?.stage === stage.key ? focus.index : -1}
         />
       ))}
     </div>

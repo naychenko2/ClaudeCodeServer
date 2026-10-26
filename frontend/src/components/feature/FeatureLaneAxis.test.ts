@@ -70,6 +70,11 @@ function mountAxis(axis: LaneAxis | null, now: string | null, isMobile?: boolean
   return mount(createElement(FeatureLaneAxis, { axis, now, isMobile }));
 }
 
+// GC-F5c: узкая шкала (dense) и отступы под колонки сетки строки этапа.
+function mountAxisFull(axis: LaneAxis | null, now: string | null, props: Record<string, unknown>) {
+  return mount(createElement(FeatureLaneAxis, { axis, now, ...props }));
+}
+
 describe('подписи оси', () => {
   it('окно в 31 ч → 5 подписей и «сейчас»', () => {
     const { container } = mountAxis(LIVE_AXIS, TO);
@@ -172,5 +177,28 @@ describe('оформление оси', () => {
     expect(scaleStyle.fontFamily).toBe(FONT.mono);
     expect(scaleStyle.fontSize).toBe(FS.xxs);
     expect(scaleStyle.color).toBe(C.textMuted);
+  });
+});
+
+// === GC-F5c: узкая шкала и отступы под колонки сетки ===
+describe('ось: узкая шкала и отступы (GC-F5c)', () => {
+  it('dense: часовых отметок нет, «начало» без времени — подписи не наезжают', () => {
+    const { container } = mountAxisFull(LIVE_AXIS, TO, { dense: true });
+    const labels = labelNodes(container);
+    expect(labels.map(l => l.key)).toEqual(['from', 'now']);
+    expect(textOf(labels[0]!.node)).toBe('начало 20.10');
+  });
+
+  it('без dense часовые отметки есть (широкая шкала)', () => {
+    const { container } = mountAxisFull(LIVE_AXIS, TO, {});
+    expect(labelNodes(container).map(l => l.key)).toContain('t1');
+  });
+
+  it('отступы шкалы под колонки сетки строки этапа', () => {
+    const { container } = mountAxisFull(LIVE_AXIS, TO, { insetLeft: 262, insetRight: 116 });
+    const scale = findNodeByAttr(container, 'data-testid', 'lane-axis-scale')!;
+    const st = styleOf(scale);
+    expect(st.marginLeft).toBe(262);
+    expect(st.marginRight).toBe(116);
   });
 });

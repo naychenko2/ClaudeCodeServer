@@ -844,7 +844,18 @@ public class ProjectManager : IProjectManager
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
         if (list is not null)
             foreach (var p in list)
+            {
+                // Старые записи (данные до ADR-009) не несут icon или несут явный null —
+                // нормализуем на чтении в «без значка»: тот же дефолтный запись initials,
+                // что получает новый проект без цвета. Без этого разыменования Icon в
+                // контроллере (ProjectIconDto, endpoints иконки), в мутациях стора и в
+                // миграции значков падают на таком проекте (дефект d77bd1bf: один старый
+                // проект ронял весь GET /api/projects с 500). Create задаёт Icon всегда,
+                // Load — единственный вход данных в память: инвариант «Icon в памяти
+                // не null» держится этой одной строкой.
+                p.Icon ??= new();
                 _projects[p.Id] = p;
+            }
 
         // Миграция: проекты без OwnerId → первый пользователь
         var firstUser = _users.GetFirst();

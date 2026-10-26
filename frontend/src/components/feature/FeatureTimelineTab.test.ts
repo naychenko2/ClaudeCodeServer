@@ -76,6 +76,18 @@ vi.mock('../../lib/tasks', async (importOriginal) => {
   return { ...orig, openTaskInSection: (t: { id: string; projectId?: string }) => { mockOpenTask.calls.push(t); } };
 });
 
+// Дефолт tasks.get: полная задача БЕЗ итога — блок «Итог» не рисуется, тесты его не видят.
+// Нужен потому, что детали (FeatureStepDetails) подняты и в карточках «Производства» (GC-F8):
+// без дефолта ленивый добор падает на vi.fn() без реализации (undefined.then).
+// В тесте «отказ» — свой mockImplementation в его beforeEach, он перекрывает этот (он идёт позже).
+beforeEach(() => {
+  tasksGetMock.mockReset();
+  tasksGetMock.mockImplementation((id: string) => Promise.resolve({
+    id, title: '', description: '', status: 'todo', priority: 'medium',
+    linkedFiles: [], subtasks: [], labels: [], order: 0, createdAt: '', updatedAt: '',
+  } as never));
+});
+
 // === Фиксированное «сейчас» (стабильные минуты) ===
 const NOW = new Date('2026-10-20T12:00:00Z').getTime();
 

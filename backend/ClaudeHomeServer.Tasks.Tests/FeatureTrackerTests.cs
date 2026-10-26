@@ -3,9 +3,9 @@ using ClaudeHomeServer.Services.Tasks.Projector;
 
 namespace ClaudeHomeServer.Tasks.Tests;
 
-// TR-B1a: «Сверка трекера» (разрез Александра 26.10) — FeatureTracker.Build: список расхождений
-// на том же проходе, что учёт шагов. Пять видов: unreviewed, returned_no_rework, dead_verdict,
-// epic_open_after_merge, orphans_in_closed (reported_open — TR-B1b). Эталон каждого теста —
+// TR-B1a+TR-B1b: «Сверка трекера» (разрез Александра 26.10) — FeatureTracker.Build: список
+// расхождений на том же проходе, что учёт шагов. Шесть видов: unreviewed, returned_no_rework,
+// dead_verdict, reported_open, epic_open_after_merge, orphans_in_closed. Эталон каждого теста —
 // условие таблицы разреза, а не вывод реализации.
 //
 // Мутации: TrackerGraceMinutes = 0 — тест порога красный (сданная 29 мин назад тоже попадает);
@@ -13,7 +13,8 @@ namespace ClaudeHomeServer.Tasks.Tests;
 // убрать метку из исключения — тест метки красный; убрать проверку статуса эпика в orphans —
 // тест «открытый эпик» красный; заменить `> t.CompletedAt` на `!= null` в dead_verdict —
 // тест «ревью по свежей доработке» красный; убрать ветку (б) epic_open_after_merge — её тест
-// красный; опустить трим/регистр в метке — тест метки красный.
+// красный; опустить трим/регистр в метке — тест метки красный; убрать проверку chatBusy в
+// reported_open — тест «чат занят» красный.
 public class FeatureTrackerTests
 {
     private const string Epic = "ep";
@@ -66,14 +67,31 @@ public class FeatureTrackerTests
     };
 
     // Тот же набор задач, что берёт FeatureProjector.BuildCore, и тот же проход учёта.
-    private static List<FeatureTracker.FeatureTrackerIssue> Track(TaskItem epic, params TaskItem[] children)
+    private static List<FeatureTracker.FeatureTrackerIssue> Track(TaskItem epic, params TaskItem[] children) =>
+        Track(epic, null, children);
+
+    private static List<FeatureTracker.FeatureTrackerIssue> Track(
+        TaskItem epic, IReadOnlyCollection<FeatureIndexSession>? sessions, params TaskItem[] children)
     {
         var steps = children.Where(t => t.Role is TaskRoles.Step or TaskRoles.Rework).ToList();
         var verdictTasks = children.Where(t => t.Role is TaskRoles.Review or TaskRoles.Qa or TaskRoles.Final).ToList();
         var plan = children.Where(t => t.Role == TaskRoles.Plan).ToList();
-        var accounting = FeatureStepAccounting.Build(steps, verdictTasks, plan, NOW, null);
-        return FeatureTracker.Build(epic, children.ToList(), accounting, NOW);
+        var accounting = FeatureStepAccounting.Build(steps, verdictTasks, plan, NOW, sessions);
+        return FeatureTracker.Build(epic, children.ToList(), accounting, NOW, sessions);
     }
+
+    // Задача с завершившимся ходом исполнителя: отчиталась (ClaudeResult != null), не закрыта.
+    // minute — момент доклада: MarkClaudeResult двигает UpdatedAt, с него и считается тишина.
+    private static TaskItem Reported(int minute) => new()
+    {
+        Id = "s", FeatureId = Epic, Role = TaskRoles.Step, StepRef = "Ш1", Status = TaskItemStatus.InProgress,
+        LinkedSessionId = "chat-1", CreatedAt = T0.AddMinutes(minute), ClaudeStartedAt = T0.AddMinutes(minute),
+        ClaudeResult = "success", UpdatedAt = T0.AddMinutes(minute + 1),
+    };
+
+    // Чат-исполнитель этой задачи в снимке владельца. busy — признак занятости (TR-B1b);
+    // null — признака нет (снимок составлен без него).
+    private static FeatureIndexSession Chat(bool? busy) => new("chat-1", "s", null, false, Busy: busy);
 
     private static List<FeatureTracker.FeatureTrackerIssue> OfKind(
         List<FeatureTracker.FeatureTrackerIssue> issues, string kind) =>
@@ -243,6 +261,42 @@ public class FeatureTrackerTests
         var issues = Track(Feature(), s, TodoVerdict("v", TaskRoles.Qa, 20, "s"));
 
         OfKind(issues, FeatureTracker.DeadVerdict).Should().HaveCount(1);
+    }
+
+    // ─── reported_open ─────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void ReportedOpen_ДокладСтаршеПорогаЧатСвободен_Расхождение()
+    {
+        // Ход завершился на T0+89 — за 31 мин до NOW (за порогом 30), чат в снимке свободен:
+        // доклад пришёл, задачу никто не разобрал.
+        var issues = Track(Feature(), new[] { Chat(false) }, Reported(88));
+
+        var ro = OfKind(issues, FeatureTracker.ReportedOpen).Single();
+        ro.TaskId.Should().Be("s");
+        ro.StepRef.Should().Be("Ш1");
+        ro.Since.Should().Be(T0 + TimeSpan.FromMinutes(89), "since — момент доклада (последняя активность задачи)");
+    }
+
+    [Fact]
+    public void ReportedOpen_ЧатЗанят_НеРасхождение()
+    {
+        // Та же задача и тот же возраст, но чат занят (ход идёт или ждёт ответа человека) —
+        // исполнитель продолжает, расхождения нет. Мутация «убрать проверку chatBusy» краснит тест.
+        var issues = Track(Feature(), new[] { Chat(true) }, Reported(88));
+
+        OfKind(issues, FeatureTracker.ReportedOpen).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ReportedOpen_НетСнимкаИлиПризнака_НеРасхождение()
+    {
+        // Пустой снимок — нет записи о чате; запись без признака (Busy == null, снимок составлен
+        // без него) — признака нет. Оба случая — молчание (fail-closed): о чате, которого не
+        // видим, не утверждаем; ложных срабатываний не будет.
+        var t = Reported(88);
+        OfKind(Track(Feature(), new FeatureIndexSession[0], t), FeatureTracker.ReportedOpen).Should().BeEmpty();
+        OfKind(Track(Feature(), new[] { Chat(null) }, t), FeatureTracker.ReportedOpen).Should().BeEmpty();
     }
 
     // ─── epic_open_after_merge / orphans_in_closed ────────────────────────────────────────────

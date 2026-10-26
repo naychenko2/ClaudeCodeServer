@@ -12,9 +12,10 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 //   unreviewed            — цепочка сдана, покрывающего витка нет, старше порога;
 //   returned_no_rework    — последний закрытый виток returned, работы после него нет;
 //   dead_verdict          — review/qa/final в Todo, все цели уже приняты или сняты;
+//   reported_open         — исполнитель отчитался (ClaudeResult != null), задача InProgress,
+//                           чат исполнителя не в работе, старше порога;
 //   epic_open_after_merge — мерж Done и эпик открыт; либо все дочерние Done, эпик открыт;
 //   orphans_in_closed     — эпик Done, в нём остались не-Done задачи.
-// (reported_open — TR-B1b.)
 internal static class FeatureTracker
 {
     // Порог (минуты): меньше него после сдачи/возврата расхождения ещё нет — оркестратор мог
@@ -29,6 +30,7 @@ internal static class FeatureTracker
     internal const string Unreviewed = "unreviewed";
     internal const string ReturnedNoRework = "returned_no_rework";
     internal const string DeadVerdict = "dead_verdict";
+    internal const string ReportedOpen = "reported_open";
     internal const string EpicOpenAfterMerge = "epic_open_after_merge";
     internal const string OrphansInClosed = "orphans_in_closed";
 
@@ -41,10 +43,13 @@ internal static class FeatureTracker
     internal sealed record FeatureTrackerIssue(string Kind, string? TaskId, string? StepRef, DateTime? Since);
 
     // epic/children — те же задачи, из которых построен run; accounting — результат учёта шагов
-    // по этим задачам (тот же проход, вызывающий передаёт его как есть). nowUtc — «сейчас»,
-    // фиксируется вызывающим, как в FeatureProjector.Build.
+    // по этим задачам (тот же проход, вызывающий передаёт его как есть). sessions — снимок сессий
+    // владельца (FeatureChatDoor.Snapshot, тот же, что у FeatureStepAccounting); null — снимка нет,
+    // reported_open тогда не выдаётся. nowUtc — «сейчас», фиксируется вызывающим, как в
+    // FeatureProjector.Build.
     internal static List<FeatureTrackerIssue> Build(
-        TaskItem epic, List<TaskItem> children, FeatureStepAccounting.Result accounting, DateTime nowUtc)
+        TaskItem epic, List<TaskItem> children, FeatureStepAccounting.Result accounting, DateTime nowUtc,
+        IReadOnlyCollection<FeatureIndexSession>? sessions)
     {
         ArgumentNullException.ThrowIfNull(epic);
         ArgumentNullException.ThrowIfNull(children);
@@ -122,6 +127,28 @@ internal static class FeatureTracker
                 && chain.Rounds.Any(r => r.ReviewTaskId != verdictTask.Id
                     && FeatureProjector.IsAcceptance(r.Verdict)
                     && r.CompletedAt is not null && r.CompletedAt > t.CompletedAt);
+        }
+
+        // ─── reported_open: исполнитель отчитался, задача открыта, чат свободен ────────────────
+        // Ход завершён (ClaudeResult != null — success или error: в обоих случаях доклад пришёл, а
+        // задача не закрыта), и с последней активности задачи прошло больше порога (UpdatedAt
+        // двигается MarkClaudeResult и любой правкой задачи — тишина считается от последней
+        // активности, как у сторожа). Чат исполнителя в снимке не занят (Busy == false). Ни записи
+        // о чате в снимке, ни признака занятости у записи — расхождения нет (fail-closed: о чате,
+        // которого не видим, не утверждаем). Сторож зависания ClassifyStall — про живого
+        // исполнителя; этот вид его не дублирует: здесь ход уже завершён.
+        var busyBySessionId = new Dictionary<string, bool>(StringComparer.Ordinal);
+        if (sessions is not null)
+            foreach (var s in sessions)
+                if (s.Busy is { } busy) busyBySessionId.TryAdd(s.Id, busy);
+
+        foreach (var t in children)
+        {
+            if (t.Status != TaskItemStatus.InProgress || t.ClaudeResult is null) continue;
+            if (nowUtc - t.UpdatedAt <= grace) continue;
+            if (t.LinkedSessionId is not { } chatId) continue;
+            if (!busyBySessionId.TryGetValue(chatId, out var chatBusy) || chatBusy) continue;
+            issues.Add(new FeatureTrackerIssue(ReportedOpen, t.Id, t.StepRef, t.UpdatedAt));
         }
 
         // ─── Виды эпика: epic_open_after_merge, orphans_in_closed ─────────────────────────────

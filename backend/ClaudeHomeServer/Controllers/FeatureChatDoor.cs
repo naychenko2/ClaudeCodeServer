@@ -13,9 +13,12 @@ public static class FeatureChatDoor
     public const string DeniedCode = "chat_feature_bound";
 
     // Узкий снимок живых сессий владельца — единственная сборка для индекса фич и для гарда.
+    // Busy — та же занятость чата, что в ClassifyStall (TaskExecutionService.cs:1806): ход идёт или
+    // ждёт ответа человека; остальные статусы (Active/Finished/Error/Orphaned) — свободен.
     public static List<FeatureIndexSession> Snapshot(SessionManager sessions, string ownerId) =>
         sessions.GetAllOwnedBy(ownerId)
-            .Select(s => new FeatureIndexSession(s.Id, s.TaskId, s.ProjectId, s.IsArchived, s.Model, s.PersonaId))
+            .Select(s => new FeatureIndexSession(s.Id, s.TaskId, s.ProjectId, s.IsArchived, s.Model, s.PersonaId,
+                s.Status is SessionStatus.Starting or SessionStatus.Working or SessionStatus.Waiting))
             .ToList();
 
     // Фича, в которую попадает задача: её FeatureId либо она сама, если это эпик.

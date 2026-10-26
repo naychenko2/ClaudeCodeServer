@@ -1,5 +1,8 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Spend;
+using Moq;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -15,6 +18,27 @@ public class SpendAnalyticsTests : IDisposable
     }
 
     private SpendStore NewStore(int detailDays = 30) => new(_dir, detailDays);
+
+    // Сервис аналитики с пустыми реестрами: для проверок контракта (класс цены) имена
+    // разрезов не важны, а подменять их живыми менеджерами смысла нет.
+    private static SpendAnalyticsService NewAnalytics(SpendStore store)
+    {
+        var sessions = new Mock<ISessionDirectory>();
+        sessions.Setup(s => s.GetById(It.IsAny<string>())).Returns((Session?)null);
+        var projects = new Mock<IProjectManager>();
+        projects.Setup(p => p.GetById(It.IsAny<string>())).Returns((Project?)null);
+        var tasks = new Mock<ITaskLookup>();
+        tasks.Setup(t => t.GetById(It.IsAny<string>())).Returns((TaskItem?)null);
+        var personas = new Mock<IPersonaLookup>();
+        personas.Setup(p => p.GetByIdInternal(It.IsAny<string>())).Returns((Persona?)null);
+        var users = new Mock<IUserStore>();
+        users.Setup(u => u.GetById(It.IsAny<string>())).Returns((User?)null);
+        var llm = new Mock<IModelResolver>();
+        llm.Setup(l => l.ResolveModelOrDefault(It.IsAny<string?>(), It.IsAny<string?>()))
+            .Returns((string? model, string? provider) => model ?? $"{provider}-default");
+        return new SpendAnalyticsService(store, sessions.Object, projects.Object, tasks.Object,
+            personas.Object, users.Object, llm.Object);
+    }
 
     private static SpendRecord Rec(DateTime ts, string owner = "u1", string? project = "p1",
         string? session = "s1", string provider = "claude", string? model = "opus",
@@ -315,6 +339,136 @@ public class SpendAnalyticsTests : IDisposable
         var def = byModel.Single(n => n.Key == "default");
         Assert.Equal(2, def.Turns);
         Assert.Equal(165, def.Tokens.Total);
+    }
+
+    // --- ценовой класс расхода (SpendCostTiers) ---
+
+    [Fact]
+    public void CostTier_ПравилоКласса_ПоИсточникуПровайдеруИМодели()
+    {
+        // Единственная точка правды правила: claude — дорого, остальное облако — дёшево
+        Assert.Equal(SpendCostTiers.Expensive, SpendCostTiers.Of(SpendSources.ChatTurn, "claude", "opus"));
+        // Подписки claude (sub-*) — тот же провайдер claude после NormalizeProvider
+        Assert.Equal(SpendCostTiers.Expensive, SpendCostTiers.Of(SpendSources.ChatTurn, "sub-work", "opus"));
+        Assert.Equal(SpendCostTiers.Cheap, SpendCostTiers.Of(SpendSources.ChatTurn, "minimax", "minimax-m1"));
+        Assert.Equal(SpendCostTiers.Cheap, SpendCostTiers.Of(SpendSources.ChatTurn, "glm", "glm-4.6"));
+        // Источник free важнее провайдера: запись о бесплатной модели claude — бесплатная
+        Assert.Equal(SpendCostTiers.Free, SpendCostTiers.Of(SpendSources.Free, "claude", "opus"));
+        // Бесплатные исполнители: локальный движок, «*:free», «*-direct»
+        Assert.Equal(SpendCostTiers.Free, SpendCostTiers.Of(SpendSources.ChatTurn, "ollama", "qwen3:14b"));
+        Assert.Equal(SpendCostTiers.Free, SpendCostTiers.Of(SpendSources.ChatTurn, "openrouter", "nvidia/nemotron:free"));
+        Assert.Equal(SpendCostTiers.Free, SpendCostTiers.Of(SpendSources.ChatTurn, "openrouter-direct", "any"));
+    }
+
+    [Fact]
+    public void ByTier_ВОбзоре_СуммыПоКлассамИСуммаКлючейРавнаИтогуДня()
+    {
+        var store = NewStore();
+        var ts = new DateTime(2026, 7, 20, 12, 0, 0, DateTimeKind.Utc);
+        // Три класса в один день: дорого (claude), дёшево (minimax), бесплатно (источник free)
+        store.Record(Rec(ts, provider: "claude", model: "opus", input: 10, output: 5, cacheRead: 100, cacheCreate: 20));
+        store.Record(Rec(ts, provider: "minimax", model: "minimax-m1", input: 1, output: 2, cacheRead: 3, cacheCreate: 4));
+        store.Record(Rec(ts, provider: "claude", model: "haiku", source: SpendSources.Free,
+            input: 7, output: 8, cacheRead: 9, cacheCreate: 10));
+
+        var analytics = NewAnalytics(store);
+        var day = new DateOnly(2026, 7, 20);
+        var overview = analytics.Overview(day, day, new SpendFilter(), allUsers: false, currentUserId: "u1");
+
+        var byDay = Assert.Single(overview.ByDay);
+        Assert.Equal(179, byDay.Total);
+        Assert.Equal(135, byDay.ByTier[SpendCostTiers.Expensive]);
+        Assert.Equal(10, byDay.ByTier[SpendCostTiers.Cheap]);
+        Assert.Equal(34, byDay.ByTier[SpendCostTiers.Free]);
+        // Ключи всегда полные, даже если класс не встречался, и их сумма равна итогу дня
+        Assert.Equal(3, byDay.ByTier.Count);
+        Assert.Equal(byDay.Total, byDay.ByTier.Values.Sum());
+    }
+
+    [Fact]
+    public void ByTier_КлючиВсегдаПолные_ДажеБезТратыЭтогоКласса()
+    {
+        var store = NewStore();
+        var ts = new DateTime(2026, 7, 20, 12, 0, 0, DateTimeKind.Utc);
+        store.Record(Rec(ts, provider: "claude", model: "opus"));
+
+        var analytics = NewAnalytics(store);
+        var day = new DateOnly(2026, 7, 20);
+        var overview = analytics.Overview(day, day, new SpendFilter(), allUsers: false, currentUserId: "u1");
+
+        var byDay = Assert.Single(overview.ByDay);
+        Assert.Equal(3, byDay.ByTier.Count);
+        Assert.Contains(SpendCostTiers.Free, byDay.ByTier.Keys);
+        Assert.Contains(SpendCostTiers.Cheap, byDay.ByTier.Keys);
+        Assert.Contains(SpendCostTiers.Expensive, byDay.ByTier.Keys);
+        Assert.Equal(0, byDay.ByTier[SpendCostTiers.Free]);
+        Assert.Equal(0, byDay.ByTier[SpendCostTiers.Cheap]);
+    }
+
+    [Fact]
+    public void Tier_Карточек_ЗаполненУМоделейИПровайдеров_УОстальныхРазрезовПусто()
+    {
+        var store = NewStore();
+        var ts = new DateTime(2026, 7, 20, 12, 0, 0, DateTimeKind.Utc);
+        store.Record(Rec(ts, provider: "claude", model: "opus"));
+        store.Record(Rec(ts, provider: "minimax", model: "minimax-m1"));
+
+        var analytics = NewAnalytics(store);
+        var day = new DateOnly(2026, 7, 20);
+        var overview = analytics.Overview(day, day, new SpendFilter(), allUsers: false, currentUserId: "u1");
+
+        var models = overview.Cards["models"];
+        Assert.Equal(SpendCostTiers.Expensive, models.Single(r => r.Key == "opus").Tier);
+        Assert.Equal(SpendCostTiers.Cheap, models.Single(r => r.Key == "minimax-m1").Tier);
+
+        var providers = overview.Cards["providers"];
+        Assert.Equal(SpendCostTiers.Expensive, providers.Single(r => r.Key == "claude").Tier);
+        Assert.Equal(SpendCostTiers.Cheap, providers.Single(r => r.Key == "minimax").Tier);
+
+        // Остальные разрезы — не «чем тратили», класс у них не заполняется
+        Assert.All(overview.Cards["sources"], r => Assert.Null(r.Tier));
+        Assert.All(overview.Cards["projects"], r => Assert.Null(r.Tier));
+        Assert.All(overview.Cards["chats"], r => Assert.Null(r.Tier));
+    }
+
+    [Fact]
+    public void Tier_УзлаPivot_ЗаполненУПровайдераИМодели_УПользователяПусто()
+    {
+        var store = NewStore();
+        var ts = new DateTime(2026, 7, 20, 12, 0, 0, DateTimeKind.Utc);
+        store.Record(Rec(ts, provider: "claude", model: "opus"));
+        store.Record(Rec(ts, provider: "minimax", model: "minimax-m1"));
+
+        var analytics = NewAnalytics(store);
+        var day = new DateOnly(2026, 7, 20);
+        var filter = new SpendFilter();
+
+        var byProvider = analytics.Pivot("provider", day, day, filter);
+        Assert.Equal(SpendCostTiers.Expensive, byProvider.Single(n => n.Key == "claude").Tier);
+        Assert.Equal(SpendCostTiers.Cheap, byProvider.Single(n => n.Key == "minimax").Tier);
+
+        var byModel = analytics.Pivot("model", day, day, filter);
+        Assert.Equal(SpendCostTiers.Expensive, byModel.Single(n => n.Key == "opus").Tier);
+        Assert.Equal(SpendCostTiers.Cheap, byModel.Single(n => n.Key == "minimax-m1").Tier);
+
+        Assert.All(analytics.Pivot("user", day, day, filter), n => Assert.Null(n.Tier));
+        Assert.All(analytics.Pivot("source", day, day, filter), n => Assert.Null(n.Tier));
+    }
+
+    [Fact]
+    public void Tier_Хода_ЗаполненВсегда()
+    {
+        var store = NewStore();
+        var ts = new DateTime(2026, 7, 20, 12, 0, 0, DateTimeKind.Utc);
+        store.Record(Rec(ts, provider: "claude", model: "opus"));
+        store.Record(Rec(ts, provider: "minimax", model: "minimax-m1"));
+
+        var analytics = NewAnalytics(store);
+        var day = new DateOnly(2026, 7, 20);
+        var overview = analytics.Overview(day, day, new SpendFilter(), allUsers: false, currentUserId: "u1");
+
+        Assert.All(overview.TopTurns, t => Assert.Contains(t.Tier,
+            new[] { SpendCostTiers.Free, SpendCostTiers.Cheap, SpendCostTiers.Expensive }));
     }
 
     // --- классификация источников ---

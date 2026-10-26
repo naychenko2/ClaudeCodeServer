@@ -12,24 +12,26 @@ public sealed record SpendSlice(
     DateOnly Date, string OwnerId, string? ProjectId, string? SessionId, string? TaskId,
     string? PersonaId, string Provider, string? Model, string Source,
     long Input, long Output, long CacheRead, long CacheCreation,
-    double Cost, double Rub, int Generations, int Turns, bool Detailed);
+    double Cost, double Rub, int Generations, int Turns, bool Detailed,
+    string Tier = "");
 
 public sealed record SpendTokensDto(long Input, long Output, long CacheRead, long CacheCreation, long Total);
 
 public sealed record SpendDayDto(string Date, bool Aggregated, long Total,
-    Dictionary<string, long> BySource, int FalGenerations);
+    Dictionary<string, long> BySource, int FalGenerations,
+    Dictionary<string, long> ByTier);
 
 public sealed record SpendCardRowDto(string Key, string? Name, string? Meta,
-    SpendTokensDto Tokens, int Turns, int FalGenerations);
+    SpendTokensDto Tokens, int Turns, int FalGenerations, string? Tier);
 
 public sealed record SpendPivotNodeDto(string Key, string? Name, string? Meta,
-    SpendTokensDto Tokens, int Turns, int FalGenerations, bool HasDetail);
+    SpendTokensDto Tokens, int Turns, int FalGenerations, bool HasDetail, string? Tier);
 
 public sealed record SpendTurnDto(string Id, DateTime Timestamp, string OwnerId, string? UserName,
     string? SessionId, string? ChatName, string? ProjectId, string? ProjectName,
     string? TaskId, string? TaskTitle, string? PersonaId, string? PersonaName,
     string Provider, string? Model, string Source, string? Label,
-    SpendTokensDto Tokens, int Generations, long DurationMs, bool Own);
+    SpendTokensDto Tokens, int Generations, long DurationMs, bool Own, string Tier);
 
 public sealed record SpendTurnsPageDto(int Total, bool WindowClamped, IReadOnlyList<SpendTurnDto> Items);
 
@@ -80,13 +82,15 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
                 result.Add(new SpendSlice(r.Date, r.OwnerId, r.ProjectId, r.SessionId, r.TaskId,
                     r.PersonaId, r.Provider, ResolveModel(r.Model, r.Provider), r.Source,
                     r.InputTokens, r.OutputTokens, r.CacheReadTokens, r.CacheCreationTokens,
-                    r.CostUsd ?? 0, r.CostRub ?? 0, r.Generations, 1, Detailed: true));
+                    r.CostUsd ?? 0, r.CostRub ?? 0, r.Generations, 1, Detailed: true,
+                    Tier: SpendCostTiers.Of(r.Source, r.Provider, r.Model)));
         foreach (var d in store.DailyBetween(from, to))
             if (Match(d, f) && DateOnly.TryParse(d.Date, out var date))
                 result.Add(new SpendSlice(date, d.OwnerId, d.ProjectId, d.SessionId, d.TaskId,
                     d.PersonaId, d.Provider, ResolveModel(d.Model, d.Provider), d.Source,
                     d.InputTokens, d.OutputTokens, d.CacheReadTokens, d.CacheCreationTokens,
-                    d.CostUsd, d.CostRub, d.Generations, d.Turns, Detailed: false));
+                    d.CostUsd, d.CostRub, d.Generations, d.Turns, Detailed: false,
+                    Tier: SpendCostTiers.Of(d.Source, d.Provider, d.Model)));
         return result;
     }
 
@@ -134,7 +138,8 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
             var bySource = day.GroupBy(s => s.Source)
                 .ToDictionary(g => g.Key, g => g.Sum(TotalOf));
             byDay.Add(new SpendDayDto(d.ToString("yyyy-MM-dd"),
-                store.IsAggregated(d), day.Sum(TotalOf), bySource, day.Sum(s => s.Generations)));
+                store.IsAggregated(d), day.Sum(TotalOf), bySource, day.Sum(s => s.Generations),
+                ByTierOf(day)));
         }
 
         var cards = new Dictionary<string, IReadOnlyList<SpendCardRowDto>>();
@@ -181,8 +186,24 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
     private IReadOnlyList<SpendCardRowDto> Card(List<SpendSlice> slices, string groupBy) =>
         GroupNodes(slices, groupBy)
             .Take(CardLimit)
-            .Select(n => new SpendCardRowDto(n.Key, n.Name, n.Meta, n.Tokens, n.Turns, n.FalGenerations))
+            .Select(n => new SpendCardRowDto(n.Key, n.Name, n.Meta, n.Tokens, n.Turns, n.FalGenerations, n.Tier))
             .ToList();
+
+    // Суммы токенов дня по ценовым классам. Ключи всегда полные (free/cheap/expensive):
+    // нулевой класс — это ноль, а не отсутствие ключа, иначе фронт различал бы «нет трат»
+    // и «траты нулевого класса» по-разному.
+    private static Dictionary<string, long> ByTierOf(IEnumerable<SpendSlice> day)
+    {
+        var byTier = new Dictionary<string, long>
+        {
+            [SpendCostTiers.Free] = 0,
+            [SpendCostTiers.Cheap] = 0,
+            [SpendCostTiers.Expensive] = 0,
+        };
+        foreach (var s in day)
+            byTier[s.Tier] = byTier.GetValueOrDefault(s.Tier) + TotalOf(s);
+        return byTier;
+    }
 
     // --- pivot ---
 
@@ -197,7 +218,7 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
             .Select(n =>
             {
                 var (name, meta) = ResolveName(groupBy, n.Key);
-                return new SpendPivotNodeDto(n.Key, name, meta, n.Tokens, n.Turns, n.FalGenerations, n.HasDetail);
+                return new SpendPivotNodeDto(n.Key, name, meta, n.Tokens, n.Turns, n.FalGenerations, n.HasDetail, n.Tier);
             })
             .ToList();
 
@@ -214,10 +235,37 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
                 acc.Add(s);
                 hasDetail |= s.Detailed;
             }
-            nodes.Add(new SpendPivotNodeDto(g.Key, null, null, acc.Tokens(), acc.Turns, acc.Generations, hasDetail));
+            nodes.Add(new SpendPivotNodeDto(g.Key, null, null, acc.Tokens(), acc.Turns, acc.Generations,
+                hasDetail, TierOfGroup(g, groupBy)));
         }
         return [.. nodes.OrderByDescending(n => n.Tokens.Total + n.FalGenerations)];
     }
+
+    // Класс узла заполняется только для разрезов «провайдер» и «модель»: у них есть
+    // источник траты, из которого класс и считается. Остальные разрезы (пользователь,
+    // проект, чат, задача, персона, источник) — это разрезы по ЧЕМУ, а не по чему тратили,
+    // поэтому класс у них не заполняется.
+    //
+    // В группе могут смешаться классы (одна модель у нескольких провайдеров, или
+    // бесплатная подписка рядом с платной): берём самый «дорогой» присутствующий класс —
+    // узел не должен показывать «дёшево», если в нём есть дорогая трата.
+    private static string? TierOfGroup(IEnumerable<SpendSlice> group, string groupBy)
+    {
+        if (groupBy is not ("provider" or "model")) return null;
+        string? tier = null;
+        foreach (var s in group)
+        {
+            var t = SliceTier(s);
+            if (tier is null || SpendCostTiers.Rank(t) > SpendCostTiers.Rank(tier))
+                tier = t;
+        }
+        return tier;
+    }
+
+    // Класс слайса: поле Tier заполняется в Slices() (там есть source/provider/model),
+    // а у слайсов, собранных руками в тестах, — считаем из полей среза тем же правилом.
+    private static string SliceTier(SpendSlice s) =>
+        s.Tier.Length > 0 ? s.Tier : SpendCostTiers.Of(s.Source, s.Provider, s.Model);
 
     private static string KeyOf(SpendSlice s, string groupBy) => groupBy switch
     {
@@ -337,7 +385,8 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
             byDay.Add(new SpendDayDto(d.ToString("yyyy-MM-dd"), store.IsAggregated(d),
                 day.Sum(TotalOf),
                 day.GroupBy(s => s.Source).ToDictionary(g => g.Key, g => g.Sum(TotalOf)),
-                day.Sum(s => s.Generations)));
+                day.Sum(s => s.Generations),
+                ByTierOf(day)));
         }
         return new SpendWidgetDto(todayAcc.Tokens(), weekAcc.Tokens(),
             todayAcc.Turns, weekAcc.Turns, weekAcc.Generations, byDay);
@@ -379,7 +428,8 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
             new SpendTokensDto(r.InputTokens, r.OutputTokens, r.CacheReadTokens,
                 r.CacheCreationTokens, r.TotalTokens),
             r.Generations, r.DurationMs,
-            Own: currentUserId is not null && r.OwnerId == currentUserId);
+            Own: currentUserId is not null && r.OwnerId == currentUserId,
+            Tier: SpendCostTiers.Of(r.Source, r.Provider, r.Model));
     }
 
     private sealed class Acc

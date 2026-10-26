@@ -354,10 +354,38 @@ public class SpendAnalyticsTests : IDisposable
         Assert.Equal(SpendCostTiers.Cheap, SpendCostTiers.Of(SpendSources.ChatTurn, "glm", "glm-4.6"));
         // Источник free важнее провайдера: запись о бесплатной модели claude — бесплатная
         Assert.Equal(SpendCostTiers.Free, SpendCostTiers.Of(SpendSources.Free, "claude", "opus"));
-        // Бесплатные исполнители: локальный движок, «*:free», «*-direct»
+        // Бесплатные исполнители: локальный движок, «*:free»
         Assert.Equal(SpendCostTiers.Free, SpendCostTiers.Of(SpendSources.ChatTurn, "ollama", "qwen3:14b"));
         Assert.Equal(SpendCostTiers.Free, SpendCostTiers.Of(SpendSources.ChatTurn, "openrouter", "nvidia/nemotron:free"));
-        Assert.Equal(SpendCostTiers.Free, SpendCostTiers.Of(SpendSources.ChatTurn, "openrouter-direct", "any"));
+        // «*-direct» считается по базовому ключу: openrouter — дёшево
+        Assert.Equal(SpendCostTiers.Cheap, SpendCostTiers.Of(SpendSources.ChatTurn, "openrouter-direct", "any"));
+    }
+
+    // Пары из живых данных расхода (26.10): правило владельца, одно на запись и каталог.
+    // Мутации «убрать ветку claude-<N>» и «убрать снятие суффикса -direct» → краснеет.
+    [Theory]
+    [InlineData("claude", "chat-turn", SpendCostTiers.Expensive)]
+    [InlineData("claude-2", "chat-turn", SpendCostTiers.Expensive)]
+    [InlineData("claude-3", "chat-turn", SpendCostTiers.Expensive)]
+    [InlineData("sub-x", "chat-turn", SpendCostTiers.Expensive)]
+    [InlineData("claude-direct", "chat-turn", SpendCostTiers.Expensive)]
+    [InlineData("ollama-direct", "chat-turn", SpendCostTiers.Free)]
+    [InlineData("minimax-direct", "free", SpendCostTiers.Cheap)]
+    [InlineData("minimax-direct", "chat-turn", SpendCostTiers.Cheap)]
+    [InlineData("minimax-m31-direct", "chat-turn", SpendCostTiers.Cheap)]
+    [InlineData("minimax", "chat-turn", SpendCostTiers.Cheap)]
+    [InlineData("ghostcli", "chat-turn", SpendCostTiers.Cheap)]
+    [InlineData("deepseek", "chat-turn", SpendCostTiers.Cheap)]
+    [InlineData("freellmapi-direct", "chat-turn", SpendCostTiers.Free)]
+    [InlineData("freellmapi-direct", "free", SpendCostTiers.Free)]
+    [InlineData("local-qwen", "free", SpendCostTiers.Free)]
+    [InlineData("llama-server", "chat-turn", SpendCostTiers.Free)]
+    public void CostTier_ПарыИзЖивыхДанных(string provider, string source, string expected)
+    {
+        Assert.Equal(expected, SpendCostTiers.Of(source, provider, null));
+        // Каталог: «local-qwen» бесплатен по флажку isLocal (в Core ключ не перечислен)
+        var catalog = SpendCostTiers.OfProvider(provider, isLocal: provider == "local-qwen");
+        Assert.Equal(expected, catalog);
     }
 
     // Неизвестный провайдер (пустой ключ) → «дорого» в ОБОИХ местах: цена неизвестна,

@@ -14,7 +14,8 @@
 // Тесты независимы от пояса: время — только ISO-строки фикстуры.
 
 import { describe, it, expect } from 'vitest';
-import { groupByFeatures, featureChipCounts, featureGroupTreeRows, sharedFeatureTitles, featureRoleFor, drawnClosedFeatures } from '../chatGroups';
+import { groupByFeatures, featureChipCounts, featureGroupTreeRows, sharedFeatureTitles, featureRoleFor, drawnClosedFeatures, FEATURE_KIND_LABEL, featureKindCounts, featureMatchesKinds, shownFiltersModel } from '../chatGroups';
+import { ALL_FEATURE_KINDS, type FeatureKind } from '../chatFilters';
 import type { FeatureBucket, FeatureChatLink, FeatureChip, FeatureIndexFeature, FeaturesIndex } from '../../types/featureIndex';
 import type { Session } from '../../types';
 
@@ -480,6 +481,141 @@ describe('m2: drawnClosedFeatures (закрытые, которые рисуют
     const noChat = { ...feature('B', 'closed'), chatCount: 0 };
     const running = { ...feature('C', 'running'), chatCount: 5 };
     expect(drawnClosedFeatures([withChat, noChat, running])).toBe(1);
+  });
+});
+
+// === Ф-1.3: ось «Фичи · что показывать» — подписи, счётчики, отбор, «Показаны» ===
+// Записка feature-state-filter-1.md п. 2 (таблица подписей) и п. 4 (строка «Показаны»).
+// Фронт принадлежность фичи к состоянию НЕ пересчитывает: читается только kind из
+// индекса (сторож в конце).
+
+// Фича с явным kind и chatCount (базовый feature() kind не задаёт).
+const withKind = (id: string, kind: FeatureKind | null, chatCount = 1): FeatureIndexFeature =>
+  ({ ...feature(id), kind, chatCount });
+
+describe('Ф-1.3: FEATURE_KIND_LABEL (подписи оси, записка п. 2)', () => {
+  it('ключи равны ALL_FEATURE_KINDS как множества, ровно 9', () => {
+    expect(ALL_FEATURE_KINDS.length).toBe(9);
+    expect(Object.keys(FEATURE_KIND_LABEL).length).toBe(9);
+    expect(new Set(Object.keys(FEATURE_KIND_LABEL))).toEqual(new Set(ALL_FEATURE_KINDS));
+  });
+
+  it('подписи — из таблицы п. 2 (мн. ч.; «Смержены» — девятая)', () => {
+    expect(FEATURE_KIND_LABEL).toEqual({
+      waiting_you: 'Ждут вас', error: 'Остановлены', running: 'Идут', queued: 'В очереди',
+      paused: 'На паузе', draft: 'Черновики', idle: 'Не начаты', merged: 'Смержены', closed: 'Закрытые',
+    });
+  });
+});
+
+describe('Ф-1.3: featureKindCounts (счётчики по kind, только рисуемые)', () => {
+  it('сумма = числу фич с chatCount>0; без чатов не считается', () => {
+    const feats = [
+      withKind('A', 'running', 1),
+      withKind('B', 'closed', 2),
+      withKind('C', 'draft', 0),
+      withKind('E', 'merged', 1),
+    ];
+    expect(featureKindCounts(feats)).toEqual({
+      waiting_you: 0, error: 0, running: 1, queued: 0, paused: 0, draft: 0, idle: 0, merged: 1, closed: 1,
+    });
+    const sum = ALL_FEATURE_KINDS.reduce((s, k) => s + featureKindCounts(feats)[k], 0);
+    expect(sum).toBe(feats.filter(f => f.chatCount > 0).length);
+  });
+
+  it('фича с kind=null (старый индекс без поля) в счётчики не попадает', () => {
+    const base = [withKind('A', 'running', 1), withKind('B', 'closed', 2)];
+    const withNull = [...base, withKind('D', null, 5)];
+    expect(featureKindCounts(withNull)).toEqual(featureKindCounts(base));
+  });
+
+  it('пустой список — все нули', () => {
+    const counts = featureKindCounts([]);
+    expect(ALL_FEATURE_KINDS.map(k => counts[k])).toEqual(ALL_FEATURE_KINDS.map(() => 0));
+  });
+});
+
+describe('Ф-1.3: featureMatchesKinds (отбор по выбранному kind, чистая)', () => {
+  it('умолчание [] — все открытые видны, closed скрыт', () => {
+    for (const k of ALL_FEATURE_KINDS.filter(x => x !== 'closed')) {
+      expect(featureMatchesKinds(withKind('F', k), [])).toBe(true);
+    }
+    expect(featureMatchesKinds(withKind('C', 'closed'), [])).toBe(false);
+  });
+
+  it('явный выбор — только свой kind; «только закрытые» — только closed', () => {
+    expect(featureMatchesKinds(withKind('A', 'waiting_you'), ['waiting_you'])).toBe(true);
+    expect(featureMatchesKinds(withKind('B', 'error'), ['waiting_you'])).toBe(false);
+    expect(featureMatchesKinds(withKind('C', 'closed'), ['closed'])).toBe(true);
+    expect(featureMatchesKinds(withKind('A', 'waiting_you'), ['closed'])).toBe(false);
+    expect(featureMatchesKinds(withKind('M', 'merged'), ['merged'])).toBe(true);
+    expect(featureMatchesKinds(withKind('M', 'merged'), ['running'])).toBe(false);
+  });
+
+  it('kind нет/null — видна при любом выборе, кроме «только закрытые»', () => {
+    expect(featureMatchesKinds(withKind('N', null), [])).toBe(true);
+    expect(featureMatchesKinds(withKind('N', null), ['running'])).toBe(true);
+    expect(featureMatchesKinds(withKind('N', null), ['running', 'closed'])).toBe(true);
+    expect(featureMatchesKinds(withKind('N', null), ['closed'])).toBe(false);
+    // Старый ответ без поля вовсе (undefined) — то же правило.
+    const noField = { ...withKind('N', null) };
+    delete (noField as { kind?: FeatureKind | null }).kind;
+    expect(featureMatchesKinds(noField, [])).toBe(true);
+    expect(featureMatchesKinds(noField, ['closed'])).toBe(false);
+  });
+});
+
+describe('Ф-1.3: shownFiltersModel (строка «Показаны», 4 строки таблицы п. 4)', () => {
+  const open = ALL_FEATURE_KINDS.filter(k => k !== 'closed');
+  const chip = (kind: FeatureKind, action: 'remove' | 'restore', andBefore = false) => ({ kind, action, andBefore });
+
+  it('умолчание ([] и все открытые без closed) — строки нет (null)', () => {
+    expect(shownFiltersModel([])).toBeNull();
+    expect(shownFiltersModel([...open])).toBeNull();
+  });
+
+  it('строка 1: on пусто, выбраны только закрытые → «Показаны:» [Закрытые ×], снимает → умолчание', () => {
+    expect(shownFiltersModel(['closed'])).toEqual({
+      prefix: 'Показаны:', chips: [chip('closed', 'remove')],
+    });
+  });
+
+  it('строка 2: off пусто, закрытые включены → «Показаны все открытые и» [Закрытые ×]', () => {
+    expect(shownFiltersModel([...ALL_FEATURE_KINDS])).toEqual({
+      prefix: 'Показаны все открытые и', chips: [chip('closed', 'remove')],
+    });
+  });
+
+  it('строка 3: on ≤ off → «Показаны:» + снятые значения (remove); + [Закрытые ×] если выбраны', () => {
+    expect(shownFiltersModel(['waiting_you', 'error', 'closed'])).toEqual({
+      prefix: 'Показаны:',
+      chips: [chip('waiting_you', 'remove'), chip('error', 'remove'), chip('closed', 'remove')],
+    });
+    // Граница сравнения: on = off = 4 — эта строка (условие ≤).
+    expect(shownFiltersModel(['waiting_you', 'error', 'running', 'queued'])).toEqual({
+      prefix: 'Показаны:',
+      chips: [chip('waiting_you', 'remove'), chip('error', 'remove'), chip('running', 'remove'), chip('queued', 'remove')],
+    });
+  });
+
+  it('строка 4: иначе → «Все открытые, кроме:» + снятые (restore); «и» [Закрытые ×] если выбраны', () => {
+    expect(shownFiltersModel([...open.filter(k => k !== 'draft')])).toEqual({
+      prefix: 'Все открытые, кроме:', chips: [chip('draft', 'restore')],
+    });
+    expect(shownFiltersModel([...open.filter(k => k !== 'draft'), 'closed'])).toEqual({
+      prefix: 'Все открытые, кроме:',
+      chips: [chip('draft', 'restore'), chip('closed', 'remove', true)],
+    });
+  });
+});
+
+// Сторож (разрез: «фронт не пересчитывает»): отбор и счётчики читают только kind из
+// индекса. Мутация (в отчёте): добавить f.bucket в featureMatchesKinds → этот тест
+// красный; откат → зелёный.
+describe('Ф-1.3: сторож — featureMatchesKinds/featureKindCounts не читают state/chips/bucket', () => {
+  it('исходник функций не содержит .state/.chips/.bucket', () => {
+    const src = `${featureMatchesKinds.toString()}\n${featureKindCounts.toString()}`;
+    expect(src).not.toMatch(/\.state|\.chips|\.bucket/);
   });
 });
 

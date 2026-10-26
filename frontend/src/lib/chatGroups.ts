@@ -2,7 +2,7 @@ import type { ProjectSubject, ProjectTag, Session } from '../types';
 import type { FeatureChip, FeatureIndexFeature, FeatureRailKey, FeaturesIndex } from '../types/featureIndex';
 import type { FeatureQueue } from '../types/featureRun';
 import { sortTagsByRegistry } from './tagRegistry';
-import { sortKeyOf, type ChatGroupBy, type ChatSortOrder } from './chatFilters';
+import { sortKeyOf, ALL_FEATURE_KINDS, type ChatGroupBy, type ChatSortOrder, type FeatureKind } from './chatFilters';
 import { buildChatTreeRows, type ChatTreeRowData } from './chatTree';
 
 export interface ChatGroup {
@@ -670,6 +670,86 @@ export function featureChipCounts(features: FeatureIndexFeature[]): Record<Featu
 // Фича без чатов не рисуется → не считаем.
 export function drawnClosedFeatures(features: FeatureIndexFeature[]): number {
   return features.filter(f => f.bucket === 'closed' && f.chatCount > 0).length;
+}
+
+// === Ось «Фичи · что показывать» (featureKinds) — записка feature-state-filter-1.md п. 2/4 ===
+// Старые функции раздела выше (FEATURE_CHIP_LABEL, featureChipCounts, drawnClosedFeatures)
+// читаются FilterBar/SessionList до Ф-3 и не удалены.
+
+// Подписи 9 значений оси featureKinds — тот же словарь, что у сводки на странице
+// фичи (FeatureBrief.kind; записка п. 2, «Смержены» — девятая). Второго словаря нет;
+// порядок ряда чипов задаёт ALL_FEATURE_KINDS (chatFilters.ts), не этот объект.
+export const FEATURE_KIND_LABEL: Record<FeatureKind, string> = {
+  waiting_you: 'Ждут вас', error: 'Остановлены', running: 'Идут', queued: 'В очереди',
+  paused: 'На паузе', draft: 'Черновики', idle: 'Не начаты', merged: 'Смержены', closed: 'Закрытые',
+};
+
+// Число фич по каждому kind: фронт считает по отданному бэком полю kind (членство
+// не вычисляет — сторож в тестах) и только по РИСУЕМОЙ фиче (chatCount > 0, то же
+// правило m2, что у drawnClosedFeatures): фича без чатов не рисуется → не считаем.
+// От выбора не зависит: числа на чипах одинаковы при любом featureKinds.
+export function featureKindCounts(features: FeatureIndexFeature[]): Record<FeatureKind, number> {
+  const counts = {} as Record<FeatureKind, number>;
+  for (const k of ALL_FEATURE_KINDS) counts[k] = 0;
+  for (const f of features) {
+    if (f.chatCount <= 0) continue;
+    const k = f.kind;
+    if (k) counts[k]++;
+  }
+  return counts;
+}
+
+// Видна ли фича при выбранном featureKinds (чистая, без побочных эффектов):
+// [] = умолчание → все открытые (kind ≠ closed); явный выбор → только свой kind;
+// kind нет/null (старый индекс без поля) → видна при любом выборе, кроме
+// «только закрытые» (записка, раздел миграции: пока поля нет, фильтр в умолчании).
+export function featureMatchesKinds(f: FeatureIndexFeature, featureKinds: readonly FeatureKind[]): boolean {
+  const k = f.kind;
+  if (k === undefined || k === null) {
+    return featureKinds.length === 0 || featureKinds.some(x => x !== 'closed');
+  }
+  if (featureKinds.length === 0) return k !== 'closed';
+  return featureKinds.includes(k);
+}
+
+// Чип строки «Показаны»: значение + действие крестика ('remove' — Убрать значение,
+// 'restore' — Вернуть его; в варианте «кроме» крестик возвращает). andBefore — перед
+// чипом союз «и» (строка 4 таблицы п. 4, только для «Закрытых»).
+export interface ShownFilterChip {
+  kind: FeatureKind;
+  action: 'remove' | 'restore';
+  andBefore: boolean;
+}
+
+// Модель строки «Показаны» (записка п. 4, макет shownRow): перечисляет более короткий
+// из двух списков. null — выбор равный умолчанию (строка не показывается).
+// on — включённые открытые значения, off — снятые открытые, closed — «Закрытые» выбраны.
+export interface ShownFiltersModel {
+  prefix: string;
+  chips: ShownFilterChip[];
+}
+
+export function shownFiltersModel(featureKinds: readonly FeatureKind[]): ShownFiltersModel | null {
+  const open = ALL_FEATURE_KINDS.filter(k => k !== 'closed');
+  // [] — умолчание: включены все открытые (записка п. 3).
+  const sel = featureKinds.length === 0 ? open : featureKinds;
+  const on = open.filter(k => sel.includes(k));
+  const off = open.filter(k => !sel.includes(k));
+  const closed = featureKinds.includes('closed');
+  // Вид равный умолчанию (все открытые, закрытые скрыты) — строки нет.
+  if (!closed && off.length === 0) return null;
+  const del = (kind: FeatureKind, andBefore = false): ShownFilterChip => ({ kind, action: 'remove', andBefore });
+  const add = (kind: FeatureKind): ShownFilterChip => ({ kind, action: 'restore', andBefore: false });
+  // Строка 1 таблицы: on пусто, выбраны только закрытые.
+  if (on.length === 0) return { prefix: 'Показаны:', chips: closed ? [del('closed')] : [] };
+  // Строка 2: off пусто, закрытые включены (иначе — выше, default).
+  if (off.length === 0) return { prefix: 'Показаны все открытые и', chips: [del('closed')] };
+  // Строка 3: on ≤ off — перечисляем показанное, крестик убирает.
+  if (on.length <= off.length) {
+    return { prefix: 'Показаны:', chips: [...on.map(k => del(k)), ...(closed ? [del('closed')] : [])] };
+  }
+  // Строка 4: иначе — перечисляем снятое, крестик возвращает; «и» перед «Закрытыми».
+  return { prefix: 'Все открытые, кроме:', chips: [...off.map(k => add(k)), ...(closed ? [del('closed', true)] : [])] };
 }
 
 // Карту фич по featureId строим ОДИН раз на объект индекса (WeakMap — живёт, пока

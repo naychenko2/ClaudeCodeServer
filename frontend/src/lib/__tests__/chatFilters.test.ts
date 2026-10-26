@@ -398,6 +398,18 @@ describe('featureKinds: миграция сохранённых фильтров
     expect(f.search).toBe('ревью');
   });
 
+  // R-Ф3 мин. 1: ключи Object.prototype ('toString'/'constructor'/'__proto__') — не собственные
+  // ключи таблицы перевода и не должны проходить как чипы (прежний белый список ALL_FEATURE_CHIPS
+  // их отсекал). Без этого ['toString'] + showClosed=true мигрировал бы в ['closed'] вместо девяти.
+  it("чипы-наследники ('toString'/'constructor'/'__proto__') не чипы: + showClosed=true → девять значений", () => {
+    expect(read({ featureChips: ['toString'], showClosed: true }).featureKinds).toEqual([
+      'waiting_you', 'error', 'running', 'queued', 'paused', 'draft', 'idle', 'merged', 'closed',
+    ]);
+    expect(read({ featureChips: ['constructor', '__proto__'], showClosed: true }).featureKinds).toEqual([
+      'waiting_you', 'error', 'running', 'queued', 'paused', 'draft', 'idle', 'merged', 'closed',
+    ]);
+  });
+
   it('идемпотентность: normalize(normalize(x)) = normalize(x)', () => {
     read({ featureChips: ['waiting', 'merge'], showClosed: true });
     const first = loadChatFilters('p1');

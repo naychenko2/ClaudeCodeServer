@@ -11,7 +11,7 @@ import { useCanHover } from '../lib/pointer';
 import { useListAutoFocus } from '../lib/listAutoFocus';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import {
-  ALL_ORIGINS, ALL_STATUS_CHIPS, ALL_FEATURE_KINDS,
+  ALL_ORIGINS, ALL_STATUS_CHIPS, DEFAULT_FEATURE_KINDS,
   chatStatusOf, isDefaultFilters, isDefaultFeatureKinds, defaultChatFiltersKeepingView,
   type ChatFilters, type ChatStatusChip, type ChatOnlyFilter, type FeatureKind,
 } from '../lib/chatFilters';
@@ -55,7 +55,7 @@ const ORIGIN_OPTIONS: { value: Session['origin']; label: string }[] = [
 // Тон и форма точки kind в чипах «Фичи · что показывать» (записка
 // feature-state-filter-1.md, п. 2): форма несёт смысл — 'fill' заливка, 'ring' обводка
 // 1.5 px, 'dash' пунктир; тона — только токены C.* по таблице. Подписи — из
-// FEATURE_KIND_LABEL (chatGroups), порядок ряда — из ALL_FEATURE_KINDS (chatFilters).
+// FEATURE_KIND_LABEL (chatGroups), порядок ряда — из DEFAULT_FEATURE_KINDS (chatFilters).
 const KIND_DOT: Record<FeatureKind, { tone: string; shape: 'fill' | 'ring' | 'dash' }> = {
   waiting_you: { tone: C.info, shape: 'fill' },
   error: { tone: C.danger, shape: 'fill' },
@@ -243,23 +243,24 @@ function FilterContent({
       {filters.groupBy === 'features' && features !== undefined && (() => {
         const counts = featureKindCounts(features);
         const kinds = filters.featureKinds;
-        const openKinds = ALL_FEATURE_KINDS.filter(k => k !== 'closed');
-        // Видимый выбор: умолчание = все открытые («вид умолчания честно показывает, что видно»)
-        const sel = kinds.length === 0 ? openKinds : kinds;
+        // Видимый выбор: умолчание = все открытые («вид умолчания честно показывает, что видно»);
+        // «восемь открытых» — общий эталон DEFAULT_FEATURE_KINDS (chatFilters), не местное выражение
+        const sel = kinds.length === 0 ? DEFAULT_FEATURE_KINDS : kinds;
         const showCounts = features.some(f => f.kind != null);
         const notDefault = kinds.length > 0;
         // «· N из M»: N — фичи, которые попадут в список при текущем выборе; M — открытые,
         // плюс закрытые, когда «Закрытые» включены (записка, раздел «Поповер / шторка»)
         const shownCount = features.filter(f => f.chatCount > 0 && featureMatchesKinds(f, kinds)).length;
         const totalDrawn = features.filter(f => f.chatCount > 0 && (kinds.includes('closed') || f.kind !== 'closed')).length;
-        const openTotal = openKinds.reduce((s, k) => s + counts[k], 0);
+        const openTotal = DEFAULT_FEATURE_KINDS.reduce((s, k) => s + counts[k], 0);
         const clickKind = (k: FeatureKind) => {
           if (showCounts && counts[k] === 0 && !sel.includes(k)) return; // нулевой и не выбран — клик игнорируется
           const next = sel.includes(k) ? sel.filter(x => x !== k) : [...sel, k];
           // R-Ф2.1 M2: выбор, равный умолчанию (восемь открытых без 'closed'), → [].
-          // То же правило, что в chatFilters при чтении (isDefaultFeatureKinds — один
-          // источник): иначе «снял и вернул Черновики» оставит явный список из восьми,
-          // isDefaultFilters=false — триггер горит, в шторке «Сбросить» и «8 из 8».
+          // То же правило и тот же эталон, что в chatFilters при чтении (isDefaultFeatureKinds
+          // и DEFAULT_FEATURE_KINDS — один источник): иначе «снял и вернул Черновики» оставит
+          // явный список из восьми, isDefaultFilters=false — триггер горит, в шторке «Сбросить»
+          // и «8 из 8».
           patch({ featureKinds: isDefaultFeatureKinds(next) ? [] : next });
         };
         const kindChip = (k: FeatureKind) => {
@@ -295,7 +296,7 @@ function FilterContent({
             </SectionTitle>
             <GroupSublabel text={showCounts ? `Открытые · ${openTotal}` : 'Открытые'} />
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>
-              {openKinds.map(kindChip)}
+              {DEFAULT_FEATURE_KINDS.map(kindChip)}
             </div>
             <GroupSublabel text="Завершённые" />
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>

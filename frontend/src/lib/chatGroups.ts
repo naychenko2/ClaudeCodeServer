@@ -2,7 +2,7 @@ import type { ProjectSubject, ProjectTag, Session } from '../types';
 import type { FeatureIndexFeature, FeatureRailKey, FeaturesIndex } from '../types/featureIndex';
 import type { FeatureQueue } from '../types/featureRun';
 import { sortTagsByRegistry } from './tagRegistry';
-import { sortKeyOf, ALL_FEATURE_KINDS, type ChatGroupBy, type ChatSortOrder, type FeatureKind } from './chatFilters';
+import { sortKeyOf, ALL_FEATURE_KINDS, DEFAULT_FEATURE_KINDS, type ChatGroupBy, type ChatSortOrder, type FeatureKind } from './chatFilters';
 import { buildChatTreeRows, type ChatTreeRowData } from './chatTree';
 
 export interface ChatGroup {
@@ -701,11 +701,11 @@ export interface ShownFiltersModel {
 }
 
 export function shownFiltersModel(featureKinds: readonly FeatureKind[]): ShownFiltersModel | null {
-  const open = ALL_FEATURE_KINDS.filter(k => k !== 'closed');
-  // [] — умолчание: включены все открытые (записка п. 3).
-  const sel = featureKinds.length === 0 ? open : featureKinds;
-  const on = open.filter(k => sel.includes(k));
-  const off = open.filter(k => !sel.includes(k));
+  // «Восемь открытых» — общий эталон DEFAULT_FEATURE_KINDS (chatFilters.ts), не местное
+  // выражение (R-Ф3 мин. 2). [] — умолчание: включены все открытые (записка п. 3).
+  const sel = featureKinds.length === 0 ? DEFAULT_FEATURE_KINDS : featureKinds;
+  const on = DEFAULT_FEATURE_KINDS.filter(k => sel.includes(k));
+  const off = DEFAULT_FEATURE_KINDS.filter(k => !sel.includes(k));
   const closed = featureKinds.includes('closed');
   // Вид равный умолчанию (все открытые, закрытые скрыты) — строки нет.
   if (!closed && off.length === 0) return null;

@@ -162,21 +162,25 @@ const LEGACY_CHIP_TO_KIND: Record<FeatureChip, FeatureKind | null> = {
   stopped: 'error', running: 'running', merged: 'merged',
 };
 
-// Значения, которые могли лежать в старом массиве featureChips: ключи таблицы перевода
-// со значением ('open'/'closed' в массив не писались — их перевод null; мусор — тоже).
-// Нужен только чтению старого массива в normalize (Ф-3): той же границей, что прежний
-// белый список ALL_FEATURE_CHIPS.
+// Значения, которые могли лежать в старом массиве featureChips: собственные ключи
+// таблицы перевода со значением ('open'/'closed' в массив не писались — их перевод null;
+// мусор — тоже). Нужен только чтению старого массива в normalize (Ф-3): граница — ровно
+// прежний белый список ALL_FEATURE_CHIPS, т.е. собственные ключи таблицы, а не ключи
+// Object.prototype ('toString'/'constructor'/'__proto__' не проходят: без hasOwn они
+// доставали бы значение из прототипа и проходили как чип — R-Ф3 мин. 1).
 const isLegacySelectableChip = (c: unknown): c is FeatureChip =>
-  typeof c === 'string' && LEGACY_CHIP_TO_KIND[c as FeatureChip] != null;
+  typeof c === 'string' && Object.hasOwn(LEGACY_CHIP_TO_KIND, c) && LEGACY_CHIP_TO_KIND[c as FeatureChip] != null;
 
 // Выбор, равный умолчанию (все восемь открытых без 'closed'), — храним как [] (разрез п. 4):
 // умолчание не дублируется явным списком, и новое значение kind у пользователей умолчания
-// появляется само. Экспорт — тот же канон применяет FilterBar перед записью (R-Ф2.1 M2):
-// равный умолчанию выбор не должен попадать в состояние явным списком ни при чтении,
-// ни при клике. Сравнение — ПО МНОЖЕСТВУ с эталоном DEFAULT_FEATURE_KINDS (R-Ф1.2 мин. 2):
-// восемь элементов с дублем или мусором равными не считаются; пустой выбор — не «явный
-// равный», он означает умолчание сам по себе (здесь false).
-const DEFAULT_FEATURE_KINDS = ALL_FEATURE_KINDS.filter(k => k !== 'closed');
+// появляется само. Экспортирован как ЕДИНСТВЕННОЕ выражение «восьми открытых» (R-Ф3 мин. 2):
+// его читают FilterBar (ряд чипов и «открытые» счётчики) и chatGroups.shownFiltersModel —
+// при появлении десятого kind правится одно место, не три. Равный умолчанию выбор не должен
+// попадать в состояние явным списком ни при чтении, ни при клике (R-Ф2.1 M2). Сравнение —
+// ПО МНОЖЕСТВУ с эталоном DEFAULT_FEATURE_KINDS (R-Ф1.2 мин. 2): восемь элементов с дублем
+// или мусором равными не считаются; пустой выбор — не «явный равный», он означает умолчание
+// сам по себе (здесь false).
+export const DEFAULT_FEATURE_KINDS = ALL_FEATURE_KINDS.filter(k => k !== 'closed');
 export function isDefaultFeatureKinds(kinds: FeatureKind[]): boolean {
   const set = new Set(kinds);
   return set.size === DEFAULT_FEATURE_KINDS.length && DEFAULT_FEATURE_KINDS.every(k => set.has(k));

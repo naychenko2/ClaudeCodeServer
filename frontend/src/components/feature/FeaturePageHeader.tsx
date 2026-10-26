@@ -26,6 +26,7 @@ import { StatusTag, type FeatureRunTag } from './FeatureStatusTag';
 import { analysisLineState } from './FeatureAnalysisModel';
 import { minutesSince } from './FeatureStatsBits';
 import { setFeaturePageTab } from '../../lib/featurePage';
+import { useNow } from '../../lib/useNow';
 
 // Статусный тег живёт в FeatureStatusTag.tsx (W5-F3a): шапка и строка анализа зовут
 // его оттуда — модель больше не тянет модуль шапки, цикл FeaturePageHeader ⇄
@@ -1121,7 +1122,11 @@ function HoldStateBlock({ run, feature, isMobile }: { run: FeatureRun; feature: 
   const now = run.now ?? [];
   const paused = run.state === 'paused';
   const since = run.hold?.since ? new Date(run.hold.since).getTime() : NaN;
-  const dur = Number.isFinite(since) ? formatDuration(Math.max(0, Math.round((Date.now() - since) / 60000))) : null;
+  // Возраст паузы — через useNow (механизм живого времени проекта, lib/useNow): Date.now()
+  // в ренере флагует react-hooks/purity и морозит «назад» на последнем ренере
+  // (хвост RV-K-Q5I-2). Интервал живёт, только пока пауза действительно показывается.
+  const live = useNow(60_000, paused && Number.isFinite(since));
+  const dur = Number.isFinite(since) ? formatDuration(Math.max(0, Math.round((live - since) / 60000))) : null;
   const [busy, setBusy] = useState(false);
   const act = () => {
     if (busy) return;
@@ -1196,20 +1201,25 @@ function HoldStateBlock({ run, feature, isMobile }: { run: FeatureRun; feature: 
 // не собирает строку из ordinal/count/sep (урок R-Q5D-D). Нет queue (бэк не отдал) —
 // блок без позиции, нулей не показываем (тот же признак, что у queueLabelParts).
 // Длительность — тем же приёмом, что возраст паузы в шапке: minutesSince + formatDuration,
-// нижняя граница 1 мин (как в FeatureMiniSummary): «0 мин назад» на свежей постановке
-// бессмысленна.
+// живое значение — через useNow (lib/useNow): у стоящей в очереди фичи событий может не быть
+// вовсе, а Date.now() в ренере морозит «назад» на последнем ренере (хвост RV-K-Q5I-2, п.1).
+// Нижнюю границу 1 мин здесь не дублируем: formatDuration отдаёт «1 мин» при minutes < 1
+// (chatGroups.ts:338) — единственный источник правила (хвост RV-K-Q5I-2, п.2).
 // Главного действия в блоке нет: «Запустить вне очереди» живёт в ⋯ (Q5B); «Снять паузу»
 // не показываем — это и есть «вне очереди», только без предупреждения (макет).
-// Вне тела компонента: Date.now() в рендере флагует react-hooks/purity — новых замечаний
-// файл не получает (существующие — HoldStateBlock/FeaturePageAlert — не множатся).
-function queueHoldDuration(hold?: FeatureHold | null): string | null {
-  const sinceMin = minutesSince(hold?.since, Date.now());
-  return sinceMin != null ? formatDuration(Math.max(1, sinceMin)) : null;
+// Хелпер чистый: «сейчас» приходит параметром, нечистость — в useNow (Date.now() в ренере
+// флагует react-hooks/purity; такие места в файле есть вне этого блока — AnalysisTag,
+// FeaturePageAlert).
+function queueHoldDuration(hold: FeatureHold | null | undefined, nowMs: number): string | null {
+  const sinceMin = minutesSince(hold?.since, nowMs);
+  return sinceMin != null ? formatDuration(sinceMin) : null;
 }
 
 function QueueStateBlock({ run }: { run: FeatureRun }) {
+  // Интервал нужен, только когда есть от чего считать (useNow: enabled).
+  const live = useNow(60_000, run.hold?.since != null);
   const parts = queuePhraseParts(run.queue);
-  const dur = queueHoldDuration(run.hold);
+  const dur = queueHoldDuration(run.hold, live);
   return (
     <div
       data-testid="feature-page-alarm"

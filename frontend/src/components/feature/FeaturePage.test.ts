@@ -1253,6 +1253,19 @@ describe('W4-HOLD-F2: пауза и черновик в шапке и блоке
     expect((block as unknown as { style: Record<string, string> }).style.background, 'фон блока — bgInset, не dangerBg').toBe('var(--c-bg-inset)');
   });
 
+  // Хвост RV-K-Q5I-2, п.1: возраст паузы живой (useNow), а не замерший на последнем ренере.
+  // Мутация: убрать useNow из блока (замершее «сейчас») → второй тезис остаёт «1 ч» → красный.
+  it('длительность живая: возраст паузы обновляется через минуту', async () => {
+    holdPage('paused', { hold: { reason: 'manual', since: '2026-10-19T11:00:00Z' }, now: [] });
+    const c = render({});
+    await settle();
+    const block = findNodeByAttr(c, 'data-testid', 'feature-page-alarm');
+    expect(block, 'блок состояния').not.toBeNull();
+    expect(textNodes(block!).join(''), 'исходная длительность — 1 ч').toContain('Фича на паузе 1 ч.');
+    await act(async () => { vi.advanceTimersByTime(60_000); });
+    expect(textNodes(block!).join(''), 'после интервала — 1 ч 1 мин, не замерло').toContain('Фича на паузе 1 ч 1 мин.');
+  });
+
   it('клик «Пауза» с идущими ходами: модалка; подтверждение — POST hold', async () => {
     holdPage('running', { now: [{ taskId: 't1', stage: 'prod', personaId: 'p-kira', stepRef: 'W2-A', title: 'Шаг' }] });
     const c = render({});
@@ -1982,7 +1995,10 @@ describe('Q5B: очередь фич в шапке', () => {
 // Мутации (в отчёте): (1) убрать ветку hold.reason==='queue' в FeaturePageAlert → рендерится
 // пауза, «Фича в очереди» отсутствует → тест 1 красный; (2) собрать позицию из
 // run.queue.position/length вместо phrase хелпера → «третья из трёх» нет → тест позиции-3
-// красный; (3) снять нижнюю границу Math.max(1,…) → «0 мин» → тест свежей постановки красный;
+// красный; (3) нижняя граница 1 мин живёт в formatDuration (chatGroups.ts:338): снять
+// Math.max(1,…) здесь — вывод тот же, тест свежей постановки зелёный (хвост RV-K-Q5I-2, п.2);
+// живость длительности проверяет тест тикания (мутация: убрать useNow из блока — длительность
+// замирает);
 // (4) снять гейт position===1 → фраза первой позиции появляется при position 2 → тест 1
 // красный; (5) сменить глиф/размер (kind≠'queue' или size≠14) → тест глифа красный.
 describe('Q5I-2: блок «Фича в очереди» на странице фичи', () => {
@@ -2097,6 +2113,20 @@ describe('Q5I-2: блок «Фича в очереди» на странице �
     const text = textNodes(block as never).join('');
     expect(text).toContain('Поставили вы 1 мин назад');
     expect(text, 'нуля нет').not.toContain('0 мин');
+  });
+
+  // Хвост RV-K-Q5I-2, п.1: у стоящей в очереди фичи событий может не быть вовсе — блок
+  // перерисовывает только интервал useNow. Мутация: убрать useNow из блока (замершее
+  // «сейчас») → второй тезис остаёт «1 ч» → красный.
+  it('длительность живая: «1 ч назад» → «1 ч 1 мин назад» через минуту', async () => {
+    queuePage('paused', QUEUED);
+    const c = render({});
+    await settle();
+    const block = blockOf(c);
+    expect(block, 'блок очереди').not.toBeNull();
+    expect(textNodes(block as never).join(''), 'исходная длительность — 1 ч').toContain('Поставили вы 1 ч назад');
+    await act(async () => { vi.advanceTimersByTime(60_000); });
+    expect(textNodes(block as never).join(''), 'после интервала — 1 ч 1 мин, не замерло').toContain('Поставили вы 1 ч 1 мин назад');
   });
 
   it('нет queue (бэк не отдал): блок без позиции, нулей и слов позиции нет', async () => {

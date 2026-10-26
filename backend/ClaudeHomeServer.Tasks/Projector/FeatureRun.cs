@@ -100,8 +100,9 @@ public sealed class FeatureRun
 // план (plan) или консультация (consult) — СПИСОК из GET features/{id}, без текста. Текст
 // (ResultMarkdown) в ответ не попадает: вкладка берёт список, а текст подгружает по клику
 // (GET /api/tasks/{id}). role — из TaskItem.Role как есть (cut/design/plan/consult; step сюда не
-// попадает). hasText — есть ли ResultMarkdown (после Trim); mockupPaths — пути макетов из
-// ResultMarkdown (docs/mockups/….{html,md}).
+// попадает). hasText — есть ли ResultMarkdown (после Trim); mockupPaths — пути файлов документа:
+// макеты из ResultMarkdown (docs/mockups/….{html,md}) + файлы, которые задача приложила через
+// LinkedFiles (M5: ADR, спеки, записки вне docs/mockups). Имя поля — прежний JSON-контракт.
 public sealed record FeaturePlan(
     // Id задачи-документа.
     string TaskId,
@@ -117,8 +118,8 @@ public sealed record FeaturePlan(
     DateTime? CompletedAt,
     // Есть ли текст (ResultMarkdown не пуст после Trim).
     bool HasText,
-    // Пути макетов (docs/mockups/….{html,md}) из ResultMarkdown: distinct, порядок появления,
-    // ≤ 20, пути с «..» отброшены.
+    // Пути файлов документа: макеты из ResultMarkdown (docs/mockups/….{html,md}), затем файлы
+    // из LinkedFiles задачи. distinct, общий потолок 20, пустые и пути с «..» отброшены.
     List<string> MockupPaths);
 
 // «Сейчас»: одна InProgress-задача фичи (кто и что делает, сколько идёт).

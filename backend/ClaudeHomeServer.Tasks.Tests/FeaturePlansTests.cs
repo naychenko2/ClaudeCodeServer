@@ -8,9 +8,12 @@ namespace ClaudeHomeServer.Tasks.Tests;
 // Покрытие: порядок (роль cut → design → plan → consult, внутри роли по CreatedAt), роль как есть
 // (step с заголовком «Разрез» не попадает), design в документах (М2: роль, hasText, mockupPaths,
 // не дедуплицируется), hasText (пустой/пробельный ResultMarkdown → false),
-// mockupPaths (путь с «..» отброшен, дубли схлопнуты, потолок 20). Мутации:
+// mockupPaths (путь с «..» отброшен, дубли схлопнуты, потолок 20). М5: mockupPaths несут и
+// LinkedFiles задачи (ADR/спеки/записки вне docs/mockups): порядок (сначала текст, потом
+// linkedFiles), дубли схлопнуты, пустые и «..» отброшены, потолок общий. Мутации:
 //   • BuildPlans(SlimRun(run)) → у всех hasText=false (Slim обнуляет ResultMarkdown) — краснеет;
-//   • убрать фильтр «..» → путь с «..» появляется — краснеет.
+//   • убрать фильтр «..» → путь с «..» появляется — краснеет;
+//   • не брать LinkedFiles (старый MockupPaths) — linkedFiles-тесты краснеют.
 public class FeaturePlansTests
 {
     // ── Хелперы сборки ──────────────────────────────────────────────────────────────────────
@@ -28,10 +31,11 @@ public class FeaturePlansTests
     };
 
     // Дочерняя задача фичи (FeatureId = epicId). role/title/resultMarkdown/personaId/createdAt —
-    // как есть; completedAt задаёт статус Done (иначе Todo).
+    // как есть; completedAt задаёт статус Done (иначе Todo); linkedFiles — приложенные файлы
+    // (M5: доезжают в mockupPaths как приложены).
     private static TaskItem Child(string id, string epicId, string role, string title,
         string? resultMarkdown = null, string? personaId = null, string? stepRef = null,
-        DateTime? createdAt = null, DateTime? completedAt = null) => new()
+        DateTime? createdAt = null, DateTime? completedAt = null, string[]? linkedFiles = null) => new()
     {
         Id = id,
         FeatureId = epicId,
@@ -43,6 +47,7 @@ public class FeaturePlansTests
         Status = completedAt is null ? TaskItemStatus.Todo : TaskItemStatus.Done,
         CreatedAt = createdAt ?? T0,
         CompletedAt = completedAt,
+        LinkedFiles = linkedFiles is null ? [] : [.. linkedFiles],
     };
 
     // FeatureRun из эпика + дочерних (чистое ядро BuildCore — ПОЛНЫЙ, необлегчённый run:
@@ -247,5 +252,91 @@ public class FeaturePlansTests
         // Фильтр «..» работает: leak.md (с «..») нет, ok.md есть.
         paths.Should().NotContain("docs/mockups/../leak.md");
         paths.Should().Contain("docs/mockups/ok.md");
+    }
+
+    // ── 8. М5: LinkedFiles задачи доезжают в mockupPaths (документы вне docs/mockups) ──────
+
+    // Задача role=plan приложила ADR и спеку через linkedFiles — раньше эти пути терялись
+    // (regex брал только docs/mockups из ResultMarkdown). Теперь — в mockupPaths как приложены.
+    [Fact]
+    public void BuildPlans_LinkedFiles_ДокументыВнеMockups_НеТеряются()
+    {
+        var epic = Epic("epic");
+        var plan = Child("p1", "epic", TaskRoles.Plan, "План",
+            linkedFiles: ["docs/adr/0042-feature-docs.md", "docs/features/plan-spec.md"]);
+
+        var plans = FeatureProjector.BuildPlans(Run(epic, plan));
+
+        plans.Single().MockupPaths.Should().Equal(
+            "docs/adr/0042-feature-docs.md",
+            "docs/features/plan-spec.md");
+    }
+
+    // Порядок: сначала пути из ResultMarkdown (порядок появления), затем из LinkedFiles;
+    // путь, присутствующий в обоих источниках, — один раз, на позиции из текста.
+    [Fact]
+    public void BuildPlans_Paths_СначалаТело_ПотомLinkedFiles_ДублиСхлопнуты()
+    {
+        var epic = Epic("epic");
+        var plan = Child("p1", "epic", TaskRoles.Plan, "План",
+            resultMarkdown: "См. docs/mockups/panel.html.",
+            linkedFiles: ["docs/adr/0042.md", "docs/mockups/panel.html"]);
+
+        var paths = FeatureProjector.BuildPlans(Run(epic, plan)).Single().MockupPaths;
+
+        // Тело первым; linkedFiles после; дубль panel.html — один раз (на позиции из текста).
+        paths.Should().Equal("docs/mockups/panel.html", "docs/adr/0042.md");
+    }
+
+    // Пустые строки и пути с «..» из LinkedFiles отброшены (та же безопасность, что у текста);
+    // валидные — остались.
+    [Fact]
+    public void BuildPlans_LinkedFiles_ПустыеИДвойнаяТочка_Отброшены()
+    {
+        var epic = Epic("epic");
+        var plan = Child("p1", "epic", TaskRoles.Plan, "План",
+            linkedFiles: ["", "   ", "docs/adr/../leak.md", "docs/adr/0042.md"]);
+
+        var paths = FeatureProjector.BuildPlans(Run(epic, plan)).Single().MockupPaths;
+
+        paths.Should().Equal("docs/adr/0042.md");
+    }
+
+    // Потолок 20 — общий на оба источника: 15 путей из текста + 10 из linkedFiles → первые 20.
+    [Fact]
+    public void BuildPlans_Paths_ОбщийПотолок20_НаДваИсточника()
+    {
+        var epic = Epic("epic");
+        var sb = new System.Text.StringBuilder();
+        for (var i = 1; i <= 15; i++)
+            sb.Append($"docs/mockups/m{i}.md ");
+        var linked = Enumerable.Range(1, 10).Select(i => $"docs/adr/a{i}.md").ToArray();
+        var plan = Child("p1", "epic", TaskRoles.Plan, "План", resultMarkdown: sb.ToString(),
+            linkedFiles: linked);
+
+        var paths = FeatureProjector.BuildPlans(Run(epic, plan)).Single().MockupPaths;
+
+        paths.Should().HaveCount(20);
+        paths[0].Should().Be("docs/mockups/m1.md");
+        paths[14].Should().Be("docs/mockups/m15.md");
+        // Осталось 5 слотов — из linkedFiles входят только первые пять.
+        paths[15].Should().Be("docs/adr/a1.md");
+        paths[^1].Should().Be("docs/adr/a5.md");
+    }
+
+    // LinkedFiles задач НЕ-документных ролей (step) в documents не появляются: роль как есть,
+    // догадок по заголовку нет (тот же принцип, что п.3). Сторонний файл шага — не документ.
+    [Fact]
+    public void BuildPlans_LinkedFiles_ШагаНеДокументнойРоли_НеПопадают()
+    {
+        var epic = Epic("epic");
+        var step = Child("s1", "epic", TaskRoles.Step, "Шаг", stepRef: "B1",
+            linkedFiles: ["docs/adr/0042.md"]);
+        var plan = Child("p1", "epic", TaskRoles.Plan, "План");
+
+        var plans = FeatureProjector.BuildPlans(Run(epic, step, plan));
+
+        plans.Select(p => p.TaskId).Should().Equal("p1");
+        plans.Single().MockupPaths.Should().BeEmpty();
     }
 }

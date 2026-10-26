@@ -46,7 +46,8 @@ function persistTasks() {
   _persistTimer = setTimeout(flushPersist, PERSIST_WINDOW_MS);
 }
 
-if (typeof document !== 'undefined') {
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function'
+  && typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') flushPersist();
   });

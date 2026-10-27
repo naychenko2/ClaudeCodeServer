@@ -431,6 +431,25 @@ export const PASSIVE_CACHE_TRIM_TO = 180;
 // Троттлинг прохода: не чаще раза в минуту либо после 100 записей с прошлого прохода.
 const EVICT_MIN_INTERVAL_MS = 60_000;
 const EVICT_AFTER_WRITES = 100;
+// --- Класс ответов заметок ---
+//
+// Ответы заметок (список, папки, граф и детали каждой заметки) живут в ОТДЕЛЬНОМ
+// классе со своим бюджетом: `offlinenotes:<ownerId>:<url>`. Причина не «ещё один
+// префикс», а ВЫТЕСНЕНИЕ: прогрев заметок пишет сотни ответов и заканчивается
+// ПОСЛЕДНИМ шагом снапшота. Пока он делил бюджет с листингами дерева, в офлайне
+// оставалось либо одно, либо другое (замер QA4: 183 заметки и 0 листингов из 33
+// проектов) — и решала это гонка записи, а не полезность. Свой класс делает
+// выбор предсказуемым: листинги держат общий потолок, ответы заметок — свой.
+const NOTES_CLASS_PREFIX = 'offlinenotes:';
+// Потолок класса ответов заметок — те же числа, что у общего класса: ответов
+// заметок в прогреве столько же, сколько листингов в снапшоте.
+export const NOTES_CLASS_MAX_RECORDS = 200;
+export const NOTES_CLASS_TRIM_RECORDS = 180;
+// Мета-ответы (список заметок, папки, граф, источники): без них офлайн не
+// покажет ни списка заметок, ни дерева папок. Они защищены от вытеснения —
+// детали заметок уходят первыми: их содержимое и так лежит в локальном слое
+// noteContent, который наполняет тот же прогрев.
+const NOTES_META_URLS = new Set(['/notes', '/notes/folders', '/notes/graph', '/notes/sources']);
 // usedAt обновляем при чтении не чаще раза в 5 минут на ключ (карта живёт в памяти вкладки
 // и правдой не является: лишнее обновление безвредно).
 const USED_AT_REFRESH_MS = 5 * 60_000;
@@ -458,6 +477,16 @@ export function isLegacyFileContentKey(k: string): boolean {
 function ownerPrefix(owner: string): string {
   // encodeURIComponent: «:» в id не должен сливать диапазоны двух владельцев
   return `${PASSIVE_PREFIX}${encodeURIComponent(owner)}:`;
+}
+
+function notesPrefix(owner: string): string {
+  return `${NOTES_CLASS_PREFIX}${encodeURIComponent(owner)}:`;
+}
+
+// URL заметок — по форме пути: '/notes', '/notes?…', '/notes/…'. Других разделов
+// API с таким префиксом нет, поэтому правило однозначно.
+function isNotesUrl(url: string): boolean {
+  return url === '/notes' || url.startsWith('/notes?') || url.startsWith('/notes/');
 }
 
 // --- По-чатовой класс кэша ---
@@ -506,11 +535,11 @@ function chatIdOfKey(key: string): string | null {
 }
 
 // Ключ записи; null — читать/писать нельзя (пассивный запрос без известного владельца)
-// chatScope — id чата: ответ уходит в по-чатовой класс, без него — в общий.
+// chatScope — id чата: ответ уходит в по-чатовой класс, без него — в класс по URL.
 function passiveKey(url: string, owner: string | null, chatScope?: string): string | null {
   if (!owner) return null;
   if (chatScope) return chatClassKey(url, owner, chatScope);
-  return ownerPrefix(owner) + url;
+  return rangeOfUrl(url).prefixOf(owner) + url;
 }
 
 // Префикс диапазона пассивного кэша текущего владельца; null — владелец неизвестен.
@@ -522,28 +551,93 @@ export function passiveCachePrefix(): string | null {
 }
 
 export function passiveCacheKey(url: string): string | null {
-  const prefix = passiveCachePrefix();
-  return prefix === null ? null : prefix + url;
+  const owner = readStoredUserId();
+  if (owner === null) return null;
+  // Ключ берётся из ТОГО ЖЕ класса, куда пишет request(): иначе потребитель,
+  // читающий кэш напрямую, искал бы запись не там, где она лежит.
+  return rangeOfUrl(url).prefixOf(owner) + url;
 }
 
-// --- Запись в общий класс мимо request() ---
+// --- Классы пассивного кэша: диапазон, бюджет, вытеснение ---
 //
-// Владелец из ключа общего класса: `offline:<owner>:<url>`. Владелец закодирован,
-// поэтому двоеточие внутри него невозможно. По-чатовой класс ('offlinechat:') и
-// класс содержимого ('offlinefile:') сюда не попадают — у них свои бюджеты.
-function ownerOfPassiveKey(key: string): string | null {
-  if (!key.startsWith(PASSIVE_PREFIX)) return null;
-  const rest = key.slice(PASSIVE_PREFIX.length);
+// Межвкладочные счётчики классов публикуются в localStorage под своими
+// префиксами: счётчик одного класса — не протухание оценки другого.
+const RANGE_EPOCH_PREFIX = 'cc-offline-range:';
+//
+// Класс — это диапазон ключей со своим потолком и своим проходом вытеснения.
+// Классов два с общим бюджетом записей: общий ('offline:') и ответов заметок
+// ('offlinenotes:'). Пока класс был один, прогрев заметок и листинги дерева
+// делили один потолок, и кто записал последним, тот и вытеснил чужое (замер
+// QA4: 183 заметки и 0 листингов из 33 проектов). Разведение по классам
+// делает выбор предсказуемым: листинги держат общий потолок, ответы заметок —
+// свой. Остальные классы (по-чатовой, содержимого файлов) — как были.
+interface PassiveRange {
+  id: string;
+  prefix: string;            // префикс диапазона класса
+  prefixOf: (owner: string) => string;
+  max: number;               // потолок записей
+  trimTo: number;            // до скольких ужимает проход
+  epochPrefix: string;       // префикс межвкладочных счётчиков класса
+  protectedUrl?: (url: string) => boolean;   // не вытесняются, пока есть другие
+}
+
+const GENERAL_RANGE: PassiveRange = {
+  id: 'general',
+  prefix: PASSIVE_PREFIX,
+  prefixOf: owner => ownerPrefix(owner),
+  max: PASSIVE_CACHE_MAX,
+  trimTo: PASSIVE_CACHE_TRIM_TO,
+  epochPrefix: RANGE_EPOCH_PREFIX,
+};
+
+const NOTES_RANGE: PassiveRange = {
+  id: 'notes',
+  prefix: NOTES_CLASS_PREFIX,
+  prefixOf: owner => notesPrefix(owner),
+  max: NOTES_CLASS_MAX_RECORDS,
+  trimTo: NOTES_CLASS_TRIM_RECORDS,
+  epochPrefix: RANGE_EPOCH_PREFIX + 'notes:',
+  // Мета-ответы (список, папки, граф, источники) — основа офлайна заметок:
+  // без них офлайн не покажет ни списка, ни дерева папок. Детали уходят первыми.
+  protectedUrl: url => NOTES_META_URLS.has(url),
+};
+
+// Класс по ключу записи: общий или ответов заметок.
+function rangeOfKey(key: string): PassiveRange | null {
+  if (key.startsWith(NOTES_CLASS_PREFIX)) return NOTES_RANGE;
+  if (key.startsWith(PASSIVE_PREFIX)) return GENERAL_RANGE;
+  return null;
+}
+
+// Класс по URL — единственная точка правды «кому принадлежит ответ GET».
+// Ответы заметок — свой класс, всё остальное — общий.
+function rangeOfUrl(url: string): PassiveRange {
+  return isNotesUrl(url) ? NOTES_RANGE : GENERAL_RANGE;
+}
+
+// Владелец из ключа класса: `offline:<owner>:<url>`. Владелец закодирован,
+// поэтому двоеточие внутри него невозможно.
+function ownerOfRangeKey(range: PassiveRange, key: string): string | null {
+  if (!key.startsWith(range.prefix)) return null;
+  const rest = key.slice(range.prefix.length);
   const i = rest.indexOf(':');
   if (i < 0) return null;
   try { return decodeURIComponent(rest.slice(0, i)); } catch { return null; }
 }
 
-// Истина по размеру диапазона владельца — стор (счёт по диапазону ключей).
+// URL из ключа класса: хвост после префикса и владельца.
+function urlOfRangeKey(range: PassiveRange, key: string): string {
+  if (!key.startsWith(range.prefix)) return '';
+  const rest = key.slice(range.prefix.length);
+  const i = rest.indexOf(':');
+  return i < 0 ? '' : rest.slice(i + 1);
+}
+
+// Истина по размеру диапазона — стор (счёт по диапазону ключей).
 // Сбой стора не должен ронять запись: оценка останется нулевой, кэш просто
 // перестанет считать (потолок проверяется на живом сторе).
-async function countOwnerRange(owner: string): Promise<number> {
-  const lo = ownerPrefix(owner);
+async function countRange(range: PassiveRange, owner: string): Promise<number> {
+  const lo = range.prefixOf(owner);
   try { return await idbCountRange(lo, lo + PASSIVE_RANGE_END); } catch { return 0; }
 }
 
@@ -560,7 +654,6 @@ async function countOwnerRange(owner: string): Promise<number> {
 // Почему localStorage, а не BroadcastChannel: доставка BroadcastChannel асинхронна,
 // между записью соседней вкладки и её уведомлением остаётся окно, в котором
 // вторая вкладка пишет по устаревшей оценке. localStorage виден сразу — окна нет.
-const RANGE_EPOCH_PREFIX = 'cc-offline-range:';
 // Срок жизни чужого счётчика: вкладка, которая молчит дольше, считается закрытой
 // (её ключ вычищается при следующей публикации). Живая вкладка публикует счётчик
 // на каждой записи, поэтому молчащей она бывает только между сессиями.
@@ -570,10 +663,9 @@ const _tabId = Math.random().toString(36).slice(2, 10);
 // Свой счётчик записей (публикуется в localStorage) и последняя виденная подпись
 // чужих счётчиков.
 let _ownEpoch = 0;
-let _foreignEpoch = '';
 
-function rangeEpochPrefix(owner: string): string {
-  return `${RANGE_EPOCH_PREFIX}${encodeURIComponent(owner)}:`;
+function rangeEpochPrefix(range: PassiveRange, owner: string): string {
+  return `${range.epochPrefix}${encodeURIComponent(owner)}:`;
 }
 
 function epochValue(): string {
@@ -581,11 +673,11 @@ function epochValue(): string {
 }
 
 // Подпись чужих счётчиков: изменилась — оценка диапазона протухла.
-function foreignRangeEpoch(owner: string): string {
+function foreignRangeEpoch(range: PassiveRange, owner: string): string {
   try {
     const ls = typeof globalThis.localStorage !== 'undefined' ? globalThis.localStorage : null;
     if (!ls) return '';
-    const prefix = rangeEpochPrefix(owner);
+    const prefix = rangeEpochPrefix(range, owner);
     const ownKey = prefix + _tabId;
     const parts: string[] = [];
     for (let i = 0; i < ls.length; i++) {
@@ -599,11 +691,11 @@ function foreignRangeEpoch(owner: string): string {
 
 // Опубликовать свой счётчик: соседние вкладки должны узнать, что диапазон изменился.
 // Заодно вычищаются ключи закрытых вкладок (иначе их счётчики копятся вечно).
-function publishRangeEpoch(owner: string): void {
+function publishRangeEpoch(range: PassiveRange, owner: string): void {
   try {
     const ls = typeof globalThis.localStorage !== 'undefined' ? globalThis.localStorage : null;
     if (!ls) return;
-    const prefix = rangeEpochPrefix(owner);
+    const prefix = rangeEpochPrefix(range, owner);
     const now = Date.now();
     for (let i = ls.length - 1; i >= 0; i--) {
       const k = ls.key(i);
@@ -615,48 +707,85 @@ function publishRangeEpoch(owner: string): void {
   } catch { /* localStorage недоступен — межвкладочной защиты не будет */ }
 }
 
-// Освободить место под запись: пока в диапазоне владельца хотя бы PASSIVE_CACHE_MAX
-// записей, вытеснение приводит его к PASSIVE_CACHE_TRIM_TO. Место освобождается
-// ДО записи — иначе на пике диапазон перешагнул бы потолок (между проходами
-// лежало в пять раз больше, чем потолок разрешает).
-async function ensureRangeBudget(owner: string): Promise<void> {
+// --- Оценка размера диапазона (в памяти вкладки) ---
+//
+// Потолок ограничивал УСТАНОВИВШЕЕСЯ состояние, а не пик: обслуживание тикало от
+// записей, прошедших через request(), а листинги дерева (снапшот) писались в IDB
+// напрямую и счётчик их не видел — на пике диапазон владельца доходил до 957
+// записей при потолке 200.
+//
+// Теперь счётчиком служит не «число записей, прошедших через request()», а
+// ОЦЕНКА ЧИСЛА ЗАПИСЕЙ В ДИАПАЗОНЕ КЛАССА: любая запись в класс — и из
+// request(), и из снапшота — попадает в неё. Вытеснение срабатывает ДО
+// превышения потолка: место под запись освобождается перед её записью.
+//
+// Оценка живёт в памяти и обновляется на каждой записи и на каждом проходе
+// вытеснения (проход считает диапазон курсором — это истина). Она может
+// ПРЕУВЕЛИЧИВАТЬ (перезапись того же ключа тоже её считает) — это безопасно:
+// преуменьшать нельзя, тогда диапазон перешагнул бы потолок.
+//
+// Состояние — на класс и владельца: у каждого класса своя оценка и свой счётчик
+// зарезервированных мест.
+interface RangeState {
+  records: number;    // оценка числа записей диапазона
+  countKnown: boolean; // оценка взята из стора (true) или ещё неизвестна (false)
+  pending: number;    // зарезервированные, но ещё не записанные места
+  noted: number;      // накопительный счётчик записанных записей
+}
+const _rangeStates = new Map<string, RangeState>();
+
+function rangeState(range: PassiveRange, owner: string): RangeState {
+  const key = `${range.id}:${owner}`;
+  let st = _rangeStates.get(key);
+  if (!st) {
+    st = { records: 0, countKnown: false, pending: 0, noted: 0 };
+    _rangeStates.set(key, st);
+  }
+  return st;
+}
+
+// Последняя виденная подпись чужих счётчиков — на класс и владельца.
+const _foreignEpochs = new Map<string, string>();
+
+// Освободить место под запись: пока в диапазоне класса хотя бы max записей,
+// вытеснение приводит его к trimTo. Место освобождается ДО записи — иначе на
+// пике диапазон перешагнул бы потолок (между проходами лежало в пять раз
+// больше, чем потолок разрешает).
+async function ensureRangeBudget(range: PassiveRange, owner: string): Promise<void> {
+  const st = rangeState(range, owner);
   // Чужие вкладки пишут в тот же диапазон: их записи в нашу оценку не попадают.
   // Сверяем их счётчики — изменились, значит оценка протухла.
-  const foreign = foreignRangeEpoch(owner);
-  if (foreign !== _foreignEpoch) {
-    _foreignEpoch = foreign;
-    _rangeCountKnown = false;
+  const foreign = foreignRangeEpoch(range, owner);
+  const fKey = `${range.id}:${owner}`;
+  if (foreign !== (_foreignEpochs.get(fKey) ?? '')) {
+    _foreignEpochs.set(fKey, foreign);
+    st.countKnown = false;
   }
-  if (!_rangeCountKnown || _rangeOwner !== owner) {
+  if (!st.countKnown) {
     // Оценки ещё нет — берём истину из стора (плюс зарезервированные места).
-    _rangeOwner = owner;
-    _rangeRecords = await countOwnerRange(owner) + _rangePending;
-    _rangeCountKnown = true;
+    st.records = await countRange(range, owner) + st.pending;
+    st.countKnown = true;
   }
-  // Пока в диапазоне хотя бы PASSIVE_CACHE_MAX записей, место освобождается:
+  // Пока в диапазоне хотя бы max записей, место освобождается:
   // иначе на пике диапазон перешагнул бы потолок.
-  for (let i = 0; i < 3 && _rangeRecords >= PASSIVE_CACHE_MAX; i++) {
-    await scheduleEvictPassive(owner, true);
+  for (let i = 0; i < 3 && st.records >= range.max; i++) {
+    await scheduleEvictRange(range, owner, true);
   }
 }
 
-// Учёт записи в диапазоне владельца. Перезапись того же ключа тоже считается —
+// Учёт записи в диапазоне класса. Перезапись того же ключа тоже считается —
 // оценка от этого только преувеличивает (безопасно), зато не требует чтения стора.
 // Место резервируется ДО записи в стор и снимается после неё.
-function noteRangeWrite(owner: string): void {
-  if (_rangeOwner !== owner) {
-    _rangeOwner = owner;
-    _rangeRecords = 0;
-    _rangeNoted = 0;
-    _rangeCountKnown = false;
-  }
-  _rangeRecords++;
-  _rangePending++;
-  _rangeNoted++;
+function noteRangeWrite(range: PassiveRange, owner: string): void {
+  const st = rangeState(range, owner);
+  st.records++;
+  st.pending++;
+  st.noted++;
 }
 
-function finishRangeWrite(): void {
-  if (_rangePending > 0) _rangePending--;
+function finishRangeWrite(range: PassiveRange, owner: string): void {
+  const st = rangeState(range, owner);
+  if (st.pending > 0) st.pending--;
 }
 
 // Запись в общий класс пассивного кэша мимо request(): листинги дерева снапшота.
@@ -665,19 +794,21 @@ function finishRangeWrite(): void {
 // владельца держится и для этих записей: они идут через тот же учёт, что и
 // записи request().
 export async function writePassiveRangeEntry(key: string, data: unknown, bytes?: number): Promise<void> {
-  const owner = ownerOfPassiveKey(key);
+  const range = rangeOfKey(key);
+  if (range === null) return;
+  const owner = ownerOfRangeKey(range, key);
   if (owner === null) return;
   // Запись прежнего владельца в диапазон нового не кладём
   if (readStoredUserId() !== owner) return;
   // Место резервируем ДО проверки бюджета: две параллельные записи не должны обе
   // пройти проверку и положиться в диапазон сверх потолка.
-  noteRangeWrite(owner);
-  await ensureRangeBudget(owner);
+  noteRangeWrite(range, owner);
+  await ensureRangeBudget(range, owner);
   const now = Date.now();
   await idbSet(key, { data, savedAt: now, usedAt: now, bytes }).catch(() => { /* кэш недоступен — не критично */ });
-  finishRangeWrite();
+  finishRangeWrite(range, owner);
   // Соседние вкладки должны узнать, что диапазон изменился (см. publishRangeEpoch).
-  publishRangeEpoch(owner);
+  publishRangeEpoch(range, owner);
 }
 
 // --- Класс содержимого файлов ---
@@ -896,45 +1027,15 @@ async function hydrateKeptPaths(owner: string): Promise<void> {
 const _usedTouched = new Map<string, number>();
 let _lastEvictAt = Date.now();
 let _writesSinceEvict = 0;
-// Проход вытеснения общего класса — один за раз: второй зов ждёт первый
-// (иначе вытеснение пошло бы поверх вытеснения, и оценка размера класса
-// обновилась бы по устаревшему снимку).
-let _evictPromise: Promise<void> | null = null;
 let _maintainedOwner: string | null = null;
 
-// --- Бюджет диапазона владельца ---
-//
-// Потолок PASSIVE_CACHE_MAX ограничивал УСТАНОВИВШЕЕСЯ состояние, а не пик:
-// обслуживание тикало от записей, прошедших через request(), а листинги дерева
-// (снапшот) писались в IDB напрямую и счётчик их не видел — на пике диапазон
-// владельца доходил до 957 записей при потолке 200.
-//
-// Теперь счётчиком служит не «число записей, прошедших через request()», а
-// ОЦЕНКА ЧИСЛА ЗАПИСЕЙ В ДИАПАЗОНЕ ВЛАДЕЛЬЦА: любая запись в общий класс —
-// и из request(), и из снапшота — попадает в неё. Вытеснение срабатывает
-// ДО превышения потолка: место под запись освобождается перед её записью.
-//
-// Оценка живёт в памяти и обновляется на каждой записи и на каждом проходе
-// вытеснения (проход считает диапазон курсором — это истина). Она может
-// ПРЕУВЕЛИЧИВАТЬ (перезапись того же ключа тоже её считает) — это безопасно:
-// преуменьшать нельзя, тогда диапазон перешагнул бы потолок.
-let _rangeRecords = 0;
-let _rangeOwner: string | null = null;
-// Оценка взята из стора (true) или ещё неизвестна (false — первый ход после
-// смены владельца: прежняя оценка была про чужой диапазон).
-let _rangeCountKnown = false;
-// Зарезервированные, но ещё не записанные места: запись резервирует место до
-// записи в стор, иначе две параллельные записи обе прошли бы проверку бюджета.
-let _rangePending = 0;
-// Накопительный счётчик записанных записей диапазона. По нему видно, какие записи
-// начались ВО ВРЕМЯ прохода вытеснения: их вклад в оценку нельзя терять, иначе
-// оценка уйдёт ниже истины и потолок перестанет держаться до следующего прохода.
-let _rangeNoted = 0;
-// Оценка числа записей диапазона владельца — наружу, чтобы инвариант
+// Оценка числа записей диапазона ОБЩЕГО класса — наружу, чтобы инвариант
 // «оценка никогда не меньше истины» можно было проверить (тест гонки) и
 // посмотреть в диагностике.
 export function rangeRecordsEstimate(): number {
-  return _rangeRecords;
+  const owner = readStoredUserId();
+  if (!owner) return 0;
+  return rangeState(GENERAL_RANGE, owner).records;
 }
 // Проход по по-чатовому классу идёт по достижении потолка: курсор берёт только
 // метки диапазона (десятки записей), а сам проход не на каждую запись.
@@ -1027,9 +1128,10 @@ async function passiveWrite(url: string, data: unknown, owner: string | null, ch
     }
     return;
   }
-  // Общий класс: запись уходит в фоновую очередь — ответ сети не ждёт ни прохода
-  // обслуживания, ни записи в стор.
-  enqueueGeneralWrite(() => writeGeneralRangeEntry(url, data, owner, bytes, now));
+  // Общий класс и класс ответов заметок: запись уходит в фоновую очередь —
+  // ответ сети не ждёт ни прохода обслуживания, ни записи в стор.
+  const range = isNotesUrl(url) ? NOTES_RANGE : GENERAL_RANGE;
+  enqueueGeneralWrite(() => writeRangeEntry(range, url, data, owner, bytes, now));
 }
 
 // Фоновая очередь записей общего класса.
@@ -1051,27 +1153,27 @@ export async function flushPassiveWrites(): Promise<void> {
   await _generalWriteQueue.catch(() => { /* кэш недоступен — не критично */ });
 }
 
-// Запись в общий класс пассивного кэша (путь request()).
-async function writeGeneralRangeEntry(url: string, data: unknown, owner: string, bytes: number | undefined, now: number): Promise<void> {
-  // Общий класс. Первый ход после старта или смены владельца: проход обслуживания
-  // сносит чужие записи и даёт истину по размеру диапазона (оценка бюджета берётся
-  // из неё). Ждём его: иначе первая же запись легла бы поверх того, что он сносит.
+// Запись в класс пассивного кэша (путь request()).
+async function writeRangeEntry(range: PassiveRange, url: string, data: unknown, owner: string, bytes: number | undefined, now: number): Promise<void> {
+  // Первый ход после старта или смены владельца: проход обслуживания сносит чужие
+  // записи и даёт истину по размеру диапазона (оценка бюджета берётся из неё).
+  // Ждём его: иначе первая же запись легла бы поверх того, что он сносит.
   if (_maintainedOwner !== owner) { await runPassiveMaintenance(); }
   if (readStoredUserId() !== owner) return;
   const key = passiveKey(url, owner);
   if (key === null) return;
   // Место под запись: потолок диапазона держится и на пике (между проходами).
   // Резерв делается ДО проверки: параллельные записи не должны обе пройти её.
-  noteRangeWrite(owner);
-  await ensureRangeBudget(owner);
+  noteRangeWrite(range, owner);
+  await ensureRangeBudget(range, owner);
   await idbSet(key, { data, savedAt: now, usedAt: now, bytes }).catch(() => { /* кэш недоступен — не критично */ });
-  finishRangeWrite();
+  finishRangeWrite(range, owner);
   // Соседние вкладки должны узнать, что диапазон изменился: иначе их оценка
   // устареет и потолок перестанет держаться на общем диапазоне.
-  publishRangeEpoch(owner);
+  publishRangeEpoch(range, owner);
   _writesSinceEvict++;
   if (_writesSinceEvict >= EVICT_AFTER_WRITES || now - _lastEvictAt >= EVICT_MIN_INTERVAL_MS) {
-    void scheduleEvictPassive(owner, false);
+    void scheduleEvictRange(range, owner, false);
   }
 }
 
@@ -1202,76 +1304,116 @@ async function evictFileClassOnce(owner: string): Promise<void> {
 }
 
 // Вытеснение по наименьшему usedAt. Источник правды — сам стор, счётчика в памяти нет.
-// force — ужимать, даже когда записей ровно PASSIVE_CACHE_MAX: вызывающий так
+// force — ужимать, даже когда записей ровно потолок класса: вызывающий так
 // освобождает место под следующую запись (потолок не превышается даже на пике).
 // Обычный проход (обслуживание, троттлинг) ужимает только при превышении.
-async function evictPassive(owner: string, force: boolean): Promise<void> {
+async function evictRange(
+  range: PassiveRange,
+  owner: string,
+  force: boolean,
+  known?: { key: string; savedAt: number; usedAt?: number; bytes?: number }[],
+): Promise<void> {
   _lastEvictAt = Date.now();
   _writesSinceEvict = 0;
   try {
-    const lo = ownerPrefix(owner);
+    const st = rangeState(range, owner);
+    const lo = range.prefixOf(owner);
     const hi = lo + PASSIVE_RANGE_END;
     // Захват зарезервированных мест на НАЧАЛЕ прохода: к концу прохода он устареет
     // (места займут записи, начатые во время ужима). Поэтому запас под ужим и
     // оценка после прохода берутся из ЖИВОГО счётчика, а не из этого захвата.
-    const pending = _rangePending;
+    const pending = st.pending;
     // Записи, начатые во время прохода: их вклад в оценку нельзя терять.
-    const notedAtStart = _rangeNoted;
-    const total = await idbCountRange(lo, hi);
-    const during = Math.max(0, _rangeNoted - notedAtStart);
+    const notedAtStart = st.noted;
+    // Истина по размеру диапазона — либо уже снятые метки (known), либо счёт по
+    // диапазону: метки дают и размер, и порядок вытеснения сразу.
+    const total = known ? known.length : await idbCountRange(lo, hi);
+    const during = Math.max(0, st.noted - notedAtStart);
     // Истина по размеру диапазона — оценка бюджета приводится к ней. Зарезервированные
     // (ещё не записанные) места тоже в счёт: они лягут в диапазон сразу после прохода.
-    _rangeOwner = owner;
-    _rangeRecords = total + during + pending;
-    _rangeCountKnown = true;
+    st.records = total + during + pending;
+    st.countKnown = true;
     const over = force
-      ? _rangeRecords >= PASSIVE_CACHE_MAX
-      : _rangeRecords > PASSIVE_CACHE_MAX;
+      ? st.records >= range.max
+      : st.records > range.max;
     if (!over) {
       // Проход ничего не сносил: оценка = истина + места, занятые во время прохода.
       // Записи, начатые в нём, могли уже лечь в стор — без этого слага оценка ушла бы
       // ниже истины, и потолок держался бы хуже, чем должен.
-      _rangeRecords = total + during + _rangePending;
+      st.records = total + during + st.pending;
       return;
     }
-    const stamps = await idbRangeStamps(lo, hi);
+    const stamps = known ?? await idbRangeStamps(lo, hi);
     // Порядок вытеснения — по времени ДОСТУПА; у старых записей без usedAt это savedAt
     const stamp = (e: { savedAt: number; usedAt?: number }) => e.usedAt ?? e.savedAt;
     stamps.sort((a, b) => stamp(a) - stamp(b));
     // Ужим с запасом на зарезервированные места: иначе они легли бы сверх потолка.
     // Запас — ЖИВОЙ: места могли занять прямо во время прохода.
-    const trimTo = Math.max(0, PASSIVE_CACHE_TRIM_TO - _rangePending);
-    const drop = stamps.slice(0, Math.max(0, stamps.length - trimTo));
+    const trimTo = Math.max(0, range.trimTo - st.pending);
+    const drop = pickEvictable(range, stamps, Math.max(0, stamps.length - trimTo));
     await Promise.all(drop.map(s => idbDelete(s.key).catch(() => {})));
     // Оценка после прохода: записи в сторе минус снесённые плюс места, занятые
     // ПРЯМО СЕЙЧАС. Захват pending в начале прохода устарел бы: запись, начатая
     // во время ужима, выпала бы из оценки, и диапазон оказался бы выше потолка
     // до следующего прохода.
-    _rangeRecords = Math.max(0, stamps.length - drop.length) + _rangePending;
+    st.records = Math.max(0, stamps.length - drop.length) + st.pending;
     await notifyEvicted(drop.map(s => s.key));
   } catch { /* кэш недоступен — не критично */ }
 }
 
-// Проход вытеснения общего класса — не чаще одного за раз: второй зов ждёт первый.
+// Какие записи снести: по порядку доступа (stamps уже отсортированы), но
+// защищённые записи класса (мета-ответы заметок: список, папки, граф) уходят
+// последними — пока есть что вытеснить обычное, они не трогаются. Иначе офлайн
+// потерял бы список заметок, а детали ушли бы первыми.
+function pickEvictable(
+  range: PassiveRange,
+  stamps: { key: string; savedAt: number; usedAt?: number; bytes?: number }[],
+  mustDrop: number,
+): typeof stamps {
+  const drop: typeof stamps = [];
+  if (mustDrop <= 0) return drop;
+  const isProtected = (s: typeof stamps[number]) =>
+    !!range.protectedUrl && range.protectedUrl(urlOfRangeKey(range, s.key));
+  for (const s of stamps) {
+    if (drop.length >= mustDrop) break;
+    if (isProtected(s)) continue;
+    drop.push(s);
+  }
+  // Защищённых не хватило — сносим и их (лучше потерять мета, чем превысить потолок).
+  if (drop.length < mustDrop) {
+    for (const s of stamps) {
+      if (drop.length >= mustDrop) break;
+      if (drop.includes(s)) continue;
+      drop.push(s);
+    }
+  }
+  return drop;
+}
+
+// Проход вытеснения класса — не чаще одного за раз: второй зов ждёт первый.
 // Принудительная просьба (освободить место под запись), пришедшая во время
 // прохода, не теряется: она встаёт в очередь и проходит следующим проходом.
-let _evictForcePending = false;
+// Мьютекс — на класс: проходы разных классов не должны ждать друг друга.
+const _evictPromises = new Map<string, Promise<void>>();
+const _evictForcePending = new Map<string, boolean>();
 
-function scheduleEvictPassive(owner: string, force: boolean): Promise<void> {
-  if (force) _evictForcePending = true;
-  if (_evictPromise) return _evictPromise;
-  _evictPromise = (async () => {
+function scheduleEvictRange(range: PassiveRange, owner: string, force: boolean): Promise<void> {
+  if (force) _evictForcePending.set(range.id, true);
+  const running = _evictPromises.get(range.id);
+  if (running) return running;
+  const p = (async () => {
     try {
-      const f = _evictForcePending;
-      _evictForcePending = false;
-      await evictPassive(owner, f);
+      const f = _evictForcePending.get(range.id) ?? false;
+      _evictForcePending.set(range.id, false);
+      await evictRange(range, owner, f);
     } finally {
-      _evictPromise = null;
+      _evictPromises.delete(range.id);
       // Принудительная просьба, пришедшая во время прохода, — следующим проходом
-      if (_evictForcePending) void scheduleEvictPassive(owner, true);
+      if (_evictForcePending.get(range.id)) void scheduleEvictRange(range, owner, true);
     }
   })();
-  return _evictPromise;
+  _evictPromises.set(range.id, p);
+  return p;
 }
 
 // Проход обслуживания: идемпотентен, на каждом старте и при смене владельца, не под флагом
@@ -1290,14 +1432,21 @@ export async function runPassiveMaintenance(): Promise<void> {
       _maintainedOwner = owner;
       const own = ownerPrefix(owner);
       const ownChat = chatClassPrefix(owner);
+      const ownNotes = notesPrefix(owner);
       const ownFile = fileClassPrefix(owner);
       // Один курсор на всё семейство пассивных ключей: и общий класс ('offline:'),
-      // и по-чатовой ('offlinechat:'). Свои — по своему префиксу, чужие (прежний
-      // аккаунт) — сносятся: иначе записи чужого владельца остались бы в сторе.
+      // и по-чатовой ('offlinechat:'), и ответов заметок ('offlinenotes:'). Свои — по
+      // своему префиксу, чужие (прежний аккаунт) — сносятся: иначе записи чужого
+      // владельца остались бы в сторе.
       const all = await idbRangeStamps(PASSIVE_FAMILY_LOW, PASSIVE_FAMILY_LOW + PASSIVE_RANGE_END);
       const foreign = all.filter(s => !s.key.startsWith(own) && !s.key.startsWith(ownChat)
-        && !s.key.startsWith(FILE_CLASS_PREFIX));
+        && !s.key.startsWith(ownNotes) && !s.key.startsWith(FILE_CLASS_PREFIX));
       await Promise.all(foreign.map(s => idbDelete(s.key).catch(() => {})));
+      // Ответы заметок переехали в свой класс ('offlinenotes:') — записи, оставшиеся
+      // в общем классе, осиротели: их больше не читают, и в общем бюджете они занимали
+      // место наравне с листингами дерева.
+      const movedNotes = all.filter(s => s.key.startsWith(own) && isNotesUrl(urlOfRangeKey(GENERAL_RANGE, s.key)));
+      await Promise.all(movedNotes.map(s => idbDelete(s.key).catch(() => {})));
       // Класс содержимого файлов — свой диапазон: чужие владельцы сносятся отдельно
       // (общий курсор их не видит — диапазон 'offlinefile:' не входит в семейство
       // пассивных ключей по владельцу).
@@ -1307,7 +1456,10 @@ export async function runPassiveMaintenance(): Promise<void> {
       // Снятое содержимое (смена владельца, осиротевшие ключи) — его mtime-записи
       // тоже сбрасываются, иначе докачка не вернёт эти файлы.
       await notifyEvicted([...legacy, ...legacyContent, ...foreign.map(s => s.key), ...foreignFiles.map(s => s.key)]);
-      await scheduleEvictPassive(owner, false);
+      await scheduleEvictRange(GENERAL_RANGE, owner, false);
+      // Класс ответов заметок: метки берём из того же курсора по семейству
+      // пассивных ключей — второй курсор здесь не нужен.
+      await evictRange(NOTES_RANGE, owner, false, all.filter(s => s.key.startsWith(ownNotes)));
       await evictFileClassOnce(owner);
       // Метки по-чатового класса берём из того же курсора — второй курсор здесь не нужен.
       await evictChatClass(owner, all.filter(s => s.key.startsWith(ownChat)));

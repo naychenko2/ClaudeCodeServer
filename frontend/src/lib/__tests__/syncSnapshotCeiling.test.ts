@@ -34,9 +34,13 @@ const fake = vi.hoisted(() => {
   const calls = { count: 0, cursor: 0 };
   const inRange = (k: string, lo: string, hi: string) => k >= lo && k <= hi;
   const ownerSize = () => [...store.keys()].filter(k => k.startsWith('offline:A:')).length;
+  const notesSize = () => [...store.keys()].filter(k => k.startsWith('offlinenotes:A:')).length;
   // Пик диапазона владельца: максимум размера по всем операциям со стором
-  const state = { peak: 0, gate: null as Promise<void> | null, gateOpen: null as (() => void) | null, countGate: null as Promise<void> | null };
-  const track = () => { state.peak = Math.max(state.peak, ownerSize()); };
+  const state = { peak: 0, notesPeak: 0, gate: null as Promise<void> | null, gateOpen: null as (() => void) | null, countGate: null as Promise<void> | null };
+  const track = () => {
+    state.peak = Math.max(state.peak, ownerSize());
+    state.notesPeak = Math.max(state.notesPeak, notesSize());
+  };
   return {
     store, calls, state,
     idbGet: async (k: string) => store.get(k),
@@ -77,6 +81,8 @@ const apiMock = vi.hoisted(() => ({
   syncList: vi.fn(async () => []),
   tree: vi.fn(async (_projectId: string) => [] as unknown[]),
   getContent: vi.fn(async () => ({ content: 'x' })),
+  notesEnabled: false,
+  notesList: vi.fn(async () => [] as unknown[]),
   offline: null as null | typeof import('../offline'),
 }));
 vi.mock('../api', () => ({
@@ -86,9 +92,29 @@ vi.mock('../api', () => ({
     sessions: { list: apiMock.sessionsList, getHistory: vi.fn(async () => []) },
     sync: { list: apiMock.syncList },
     files: { tree: apiMock.tree, getContent: apiMock.getContent },
+    // Заметки: как в бою, ответ идёт через request() — значит попадает в пассивный
+    // кэш тем же путём, что и настоящий прогрев.
+    notes: {
+      list: vi.fn(async () => {
+        await apiMock.offline?.request('/notes');
+        return apiMock.notesList();
+      }),
+      folders: vi.fn(async () => {
+        await apiMock.offline?.request('/notes/folders');
+        return [];
+      }),
+      graph: vi.fn(async () => {
+        await apiMock.offline?.request('/notes/graph');
+        return { nodes: [], edges: [] };
+      }),
+      get: vi.fn(async (id: string) => {
+        await apiMock.offline?.request(`/notes/${id}`);
+        return { id };
+      }),
+    },
   },
 }));
-vi.mock('../subsystems', () => ({ isSubsystemEnabled: () => false }));
+vi.mock('../subsystems', () => ({ isSubsystemEnabled: () => apiMock.notesEnabled }));
 vi.mock('../notesOffline', () => ({ warmNote: vi.fn(), drainNotesOutbox: vi.fn() }));
 vi.mock('../taskOutbox', () => ({ drainTaskOutbox: vi.fn() }));
 vi.mock('../tasks', () => ({}));
@@ -153,7 +179,8 @@ beforeEach(async () => {
   vi.resetModules();
   fake.store.clear();
   fake.calls.count = 0; fake.calls.cursor = 0;
-  fake.state.peak = 0; fake.state.gate = null; fake.state.gateOpen = null; fake.state.countGate = null;
+  fake.state.peak = 0; fake.state.notesPeak = 0; fake.state.gate = null; fake.state.gateOpen = null; fake.state.countGate = null;
+  apiMock.notesEnabled = false;
   apiMock.tree.mockImplementation(async () => treeFor());
   apiMock.projectsList.mockResolvedValue(PROJECTS.map(id => ({ id })));
   fetchMock = vi.fn(async () => ({
@@ -284,5 +311,95 @@ describe('ответ сети не ждёт обслуживания', () => {
     g.release();
     await offline.flushPassiveWrites();
     expect(ownKeys()).toContain('offline:A:/g/first');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F2c-f (доработка 2): прогрев заметок не вытесняет офлайн-дерево.
+//
+// Замер QA4 (живой стенд, sha 3ee3889e3): после ПЕРВОГО снапшота в офлайне
+// оставалось ЛИБО дерево, ЛИБО заметки — 183 заметки и 0 листингов из 33
+// проектов (в других прогонах наоборот: 179 листингов и 0 заметок). Решала
+// это гонка записи: прогрев заметок идёт ПОСЛЕДНИМ шагом снапшота и писал
+// сотни ответов в общий класс пассивного кэша, вытесняя листинги дерева.
+//
+// Тест повторяет бой: 33 проекта (листинги дерева), затем прогрев заметок
+// (список, папки, граф и 183 детали). Ожидание: после ПЕРВОГО снапшота в сторе
+// есть и листинги свежих проектов, и заметки — в РАЗНЫХ классах, у каждого
+// свой потолок.
+//
+// Мутация (красный целевой тест): убрать разделение классов — ответы заметок
+// писать в общий класс ('offline:'), как до доработки. Тогда прогрев снова
+// вытесняет листинги, и тест краснеет.
+// ---------------------------------------------------------------------------
+
+// Проекты боевого замера: 33.
+const PROJECTS_33 = Array.from({ length: 33 }, (_, i) => `p${i + 1}`);
+// Папок в проекте: 5 → 6 листингов на проект (корень + папки), 198 на 33 проекта.
+const DIRS_33 = 5;
+const treeSmall = () => {
+  const entries: unknown[] = [];
+  for (let i = 0; i < DIRS_33; i++) {
+    entries.push({ name: `d${i}`, path: `d${i}`, isDirectory: true, modified: 'M1', isModified: false });
+    entries.push({ name: `f${i}.txt`, path: `d${i}/f${i}.txt`, isDirectory: false, modified: 'M1', isModified: false });
+  }
+  return entries;
+};
+// Заметок в прогреве: столько же, сколько было в замере QA4.
+const NOTES_COUNT = 183;
+const noteSummaries = () => Array.from({ length: NOTES_COUNT }, (_, i) => ({
+  id: `n${i}`, title: `Заметка ${i}`, source: 'personal', sourceLabel: 'Личный',
+  path: `n${i}.md`, tags: [], createdAt: '', updatedAt: new Date(1000 + i).toISOString(),
+}));
+
+// Листинги дерева — в общем классе.
+const listingKeys = () => [...fake.store.keys()].filter(k => k.startsWith('offline:A:/projects/'));
+// Ответы заметок — в своём классе.
+const notesKeys = () => [...fake.store.keys()].filter(k => k.startsWith('offlinenotes:A:'));
+
+describe('прогрев заметок не вытесняет офлайн-дерево', () => {
+  it('после ПЕРВОГО снапшота доступны и листинги дерева, и прогретые заметки', async () => {
+    apiMock.notesEnabled = true;
+    apiMock.projectsList.mockResolvedValue(PROJECTS_33.map(id => ({ id })));
+    apiMock.tree.mockImplementation(async () => treeSmall());
+    apiMock.notesList.mockImplementation(async () => noteSummaries());
+
+    await sync.runOfflineSnapshot();
+    await offline.flushPassiveWrites();
+
+    // Листинги дерева на месте: их много (инвариант F2c-f: около 180 доступных
+    // листингов свежих проектов) и свежий проект цел.
+    expect(listingKeys().length).toBeGreaterThan(150);
+    const fresh = PROJECTS_33[PROJECTS_33.length - 1];
+    expect(fake.store.has(`offline:A:/projects/${fresh}/files?path=`)).toBe(true);
+
+    // Заметки на месте: и мета (список), и детали.
+    expect(fake.store.has('offlinenotes:A:/notes')).toBe(true);
+    expect(fake.store.has('offlinenotes:A:/notes/folders')).toBe(true);
+    expect(fake.store.has('offlinenotes:A:/notes/graph')).toBe(true);
+    expect(fake.store.has('offlinenotes:A:/notes/n0')).toBe(true);
+    expect(notesKeys().length).toBe(NOTES_COUNT + 3);
+
+    // Потолки обоих классов держатся — и на пике, и в установившемся состоянии.
+    expect(ownKeys().length).toBeLessThanOrEqual(offline.PASSIVE_CACHE_MAX);
+    expect(notesKeys().length).toBeLessThanOrEqual(offline.NOTES_CLASS_MAX_RECORDS);
+    expect(fake.state.peak).toBeLessThanOrEqual(offline.PASSIVE_CACHE_MAX);
+    expect(fake.state.notesPeak).toBeLessThanOrEqual(offline.NOTES_CLASS_MAX_RECORDS);
+  });
+
+  it('порядок записи боевой: листинги пишутся ДО прогорева заметок', async () => {
+    apiMock.notesEnabled = true;
+    apiMock.projectsList.mockResolvedValue(PROJECTS_33.map(id => ({ id })));
+    apiMock.tree.mockImplementation(async () => treeSmall());
+    apiMock.notesList.mockImplementation(async () => noteSummaries());
+
+    await sync.runOfflineSnapshot();
+    await offline.flushPassiveWrites();
+
+    // Заметки записаны ПОСЛЕ листингов — иначе прогрев не вытеснял бы их
+    // последним шагом, и проверка «дерево выжило» ничего не говорила бы.
+    const listingTimes = listingKeys().map(k => fake.store.get(k)!.savedAt);
+    const notesTimes = notesKeys().map(k => fake.store.get(k)!.savedAt);
+    expect(Math.min(...notesTimes)).toBeGreaterThanOrEqual(Math.max(...listingTimes));
   });
 });

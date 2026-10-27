@@ -473,11 +473,48 @@ export function fileContentCachePrefix(projectId: string): string | null {
   return prefix === null ? null : `${prefix}/projects/${projectId}/files/content?path=`;
 }
 
+// Разбор ключа записи содержимого файла: <владелец>:/projects/<pid>/files/content?path=<путь>[&…].
+// Формат ключа живёт здесь — обе стороны (sync.ts читает и чистит эти записи) смотрят
+// на один контракт, а не повторяют разбор по-своему.
+export function parseFileContentCacheKey(key: string): { projectId: string; path: string } | null {
+  const i = key.indexOf('/projects/');
+  if (i < 0) return null;
+  const rest = key.slice(i + '/projects/'.length);
+  const sep = '/files/content?path=';
+  const j = rest.indexOf(sep);
+  if (j < 0) return null;
+  const projectId = rest.slice(0, j);
+  if (!projectId) return null;
+  const tail = rest.slice(j + sep.length);
+  const amp = tail.indexOf('&');
+  const raw = amp >= 0 ? tail.slice(0, amp) : tail;
+  try { return { projectId, path: decodeURIComponent(raw) }; } catch { return null; }
+}
+
 const _usedTouched = new Map<string, number>();
 let _lastEvictAt = Date.now();
 let _writesSinceEvict = 0;
 let _evicting = false;
 let _maintainedOwner: string | null = null;
+
+// Слушатели вытеснения пассивного кэша. Ключи содержимого файлов снимаются вытеснением,
+// а их mtime-записи лежат вне диапазона вытеснения — потребитель (sync.ts) по снятым
+// ключам сбрасывает mtime вытесненных путей, иначе авто-докачка сочтёт их свежими
+// и содержимое пропадёт из офлайна навсегда.
+type EvictListener = (keys: string[]) => void | Promise<void>;
+const _evictListeners = new Set<EvictListener>();
+
+export function onPassiveEvict(fn: EvictListener): () => void {
+  _evictListeners.add(fn);
+  return () => { _evictListeners.delete(fn); };
+}
+
+async function notifyEvicted(keys: string[]): Promise<void> {
+  if (!keys.length) return;
+  for (const fn of [..._evictListeners]) {
+    try { await fn(keys); } catch { /* сбой слушателя не ломает вытеснение */ }
+  }
+}
 
 async function passiveRead<T>(url: string): Promise<T | undefined> {
   const key = passiveKey(url, readStoredUserId());
@@ -526,6 +563,7 @@ async function evictPassive(owner: string): Promise<void> {
     stamps.sort((a, b) => stamp(a) - stamp(b));
     const drop = stamps.slice(0, Math.max(0, stamps.length - PASSIVE_CACHE_TRIM_TO));
     await Promise.all(drop.map(s => idbDelete(s.key).catch(() => {})));
+    await notifyEvicted(drop.map(s => s.key));
   } catch { /* кэш недоступен — не критично */ } finally {
     _evicting = false;
   }
@@ -537,12 +575,17 @@ export async function runPassiveMaintenance(): Promise<void> {
   const owner = readStoredUserId();
   try {
     const keys = await idbKeys();
-    await Promise.all(keys.filter(isLegacyPassiveKey).map(k => idbDelete(k).catch(() => {})));
+    const legacy = keys.filter(isLegacyPassiveKey);
+    await Promise.all(legacy.map(k => idbDelete(k).catch(() => {})));
     if (owner) {
       _maintainedOwner = owner;
       const own = ownerPrefix(owner);
       const all = await idbRangeStamps(PASSIVE_PREFIX, PASSIVE_PREFIX + PASSIVE_RANGE_END);
-      await Promise.all(all.filter(s => !s.key.startsWith(own)).map(s => idbDelete(s.key).catch(() => {})));
+      const foreign = all.filter(s => !s.key.startsWith(own));
+      await Promise.all(foreign.map(s => idbDelete(s.key).catch(() => {})));
+      // Снятое содержимое (смена владельца, осиротевшие ключи) — его mtime-записи
+      // тоже сбрасываются, иначе докачка не вернёт эти файлы.
+      await notifyEvicted([...legacy, ...foreign.map(s => s.key)]);
       await evictPassive(owner);
     }
   } catch { /* кэш недоступен — не критично */ }

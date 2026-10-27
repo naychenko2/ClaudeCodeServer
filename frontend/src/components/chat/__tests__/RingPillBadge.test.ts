@@ -22,6 +22,8 @@ vi.mock('../../../lib/offline', () => ({
   readStoredToken: () => 'tok',
   cachedToken: () => 'tok',
   invalidateTokenCache: () => {},
+  onPassiveEvict: () => () => {},
+  parseFileContentCacheKey: () => null,
 }));
 vi.mock('../../../lib/openChat', () => ({
   __esModule: true,

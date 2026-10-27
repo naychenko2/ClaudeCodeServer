@@ -8,7 +8,7 @@
 import { useSyncExternalStore } from 'react';
 import type { FileEntry, Session, SyncMark } from '../types';
 import { api } from './api';
-import { isOnline, passiveCacheKey, fileContentCachePrefix } from './offline';
+import { isOnline, passiveCacheKey, fileContentCachePrefix, onPassiveEvict, parseFileContentCacheKey } from './offline';
 import { idbGet, idbSet, idbKeys, idbDelete } from './idb';
 import { isSubsystemEnabled } from './subsystems';
 import { warmNote, drainNotesOutbox } from './notesOffline';
@@ -157,11 +157,11 @@ async function dropSyncedContent(projectId: string, path: string): Promise<void>
   }
   // Чистим записи mtime, чтобы при повторной синхронизации файлы скачались заново
   const mtimes = await loadMtimes(projectId);
-  let changed = false;
+  const changes: Record<string, string | null> = {};
   for (const fp of Object.keys(mtimes)) {
-    if (p === '' || fp === p || fp.startsWith(p + '/')) { delete mtimes[fp]; changed = true; }
+    if (p === '' || fp === p || fp.startsWith(p + '/')) changes[fp] = null;
   }
-  if (changed) await saveMtimes(projectId, mtimes);
+  await applyMtimeChanges(projectId, changes);
   notifyMarks();
 }
 
@@ -219,6 +219,48 @@ async function loadMtimes(projectId: string): Promise<Record<string, string>> {
 async function saveMtimes(projectId: string, map: Record<string, string>): Promise<void> {
   await idbSet('synced-mtimes:' + projectId, { data: map, savedAt: Date.now() }).catch(() => {});
 }
+
+// Применить изменения mtime поверх ТЕКУЩЕГО содержимого записи (чтение → правка → запись),
+// а не сохранить карту целиком: иначе более поздний снапшот со своей (устаревшей) картой
+// вернул бы сброшенные при вытеснении записи — и авто-докачка не вернула бы файл.
+// null в changes — снять запись пути.
+async function applyMtimeChanges(projectId: string, changes: Record<string, string | null>): Promise<void> {
+  const cur = await loadMtimes(projectId);
+  let changed = false;
+  for (const [path, value] of Object.entries(changes)) {
+    if (value === null) {
+      if (path in cur) { delete cur[path]; changed = true; }
+    } else if (cur[path] !== value) {
+      cur[path] = value;
+      changed = true;
+    }
+  }
+  if (changed) await saveMtimes(projectId, cur);
+}
+
+// Вытеснение содержимого сбрасывает mtime вытесненных путей. mtime-запись лежит вне
+// диапазона вытеснения (ключ synced-mtimes:<pid>), поэтому сама вытеснение её не трогает:
+// без сброса авто-докачка считала бы файл свежим (mtime совпал) и больше его не качала —
+// содержимое пропало бы из офлайна до следующего изменения файла на диске.
+onPassiveEvict(async keys => {
+  const byProject = new Map<string, Set<string>>();
+  for (const key of keys) {
+    const parsed = parseFileContentCacheKey(key);
+    if (!parsed) continue;
+    const paths = byProject.get(parsed.projectId) ?? new Set<string>();
+    paths.add(parsed.path);
+    byProject.set(parsed.projectId, paths);
+  }
+  for (const [projectId, paths] of byProject) {
+    const changes: Record<string, string | null> = {};
+    for (const path of paths) changes[path] = null;
+    await applyMtimeChanges(projectId, changes);
+    // Содержимого больше нет — снимаем и отметку «скачано» в сторе.
+    const set = _downloaded.get(projectId);
+    if (set) for (const path of paths) set.delete(norm(path));
+  }
+  notifyMarks();
+});
 
 // --- Ревизии скачанных историй чатов ---
 // История чата — самый тяжёлый объект снапшота (у активных чатов это мегабайты), а
@@ -307,6 +349,9 @@ export async function runOfflineSnapshot(priorityProjectId?: string): Promise<vo
     // Задачи на докачку (только новые/изменённые файлы); mtime и валидные пути по проектам
     const contentTasks: { projectId: string; path: string; mtime: string }[] = [];
     const mtimeByProject = new Map<string, Record<string, string>>();
+    // Изменения mtime за этот прогон (null — снять запись): сохраняются поверх текущей
+    // карты, а не вместо неё — иначе снапшот вернул бы сброшенные при вытеснении записи.
+    const mtimeChanges = new Map<string, Record<string, string | null>>();
     const validByProject = new Map<string, Set<string>>();
 
     for (const p of ordered) {
@@ -346,6 +391,7 @@ export async function runOfflineSnapshot(priorityProjectId?: string): Promise<vo
 
       const mtimes = await loadMtimes(p.id);
       mtimeByProject.set(p.id, mtimes);
+      mtimeChanges.set(p.id, {});
       const valid = new Set<string>();
       for (const e of treeEntries) {
         if (e.isDirectory || !e.synced) continue;
@@ -359,7 +405,7 @@ export async function runOfflineSnapshot(priorityProjectId?: string): Promise<vo
     setProgress({ total: contentTasks.length, done: 0 });
     let done = 0;
     await mapLimit(contentTasks, 4, async t => {
-      try { await api.files.getContent(t.projectId, t.path); markDownloaded(t.projectId, t.path); mtimeByProject.get(t.projectId)![t.path] = t.mtime; }
+      try { await api.files.getContent(t.projectId, t.path); markDownloaded(t.projectId, t.path); mtimeByProject.get(t.projectId)![t.path] = t.mtime; mtimeChanges.get(t.projectId)![t.path] = t.mtime; }
       catch { /* сбой — оставим на следующий снапшот */ }
       setProgress({ done: ++done });
     });
@@ -374,8 +420,9 @@ export async function runOfflineSnapshot(priorityProjectId?: string): Promise<vo
         if (prefix !== null) await idbDelete(prefix + encodeURIComponent(fp)).catch(() => {});
         _downloaded.get(p.id)?.delete(fp);
         delete mtimes[fp];
+        mtimeChanges.get(p.id)![fp] = null;
       }
-      await saveMtimes(p.id, mtimes);
+      await applyMtimeChanges(p.id, mtimeChanges.get(p.id) ?? {});
     }
 
     // Прогрев заметок: список + folders/graph в GET-кэш, контент изменившихся —
@@ -452,6 +499,7 @@ async function doSyncProjectFiles(projectId: string): Promise<void> {
   await cacheTreeAsListings(projectId, tree);
 
   const mtimes = await loadMtimes(projectId);
+  const changes: Record<string, string | null> = {};
   const valid = new Set<string>();
   const tasks: { path: string; mtime: string }[] = [];
   for (const e of tree) {
@@ -463,7 +511,7 @@ async function doSyncProjectFiles(projectId: string): Promise<void> {
   if (tasks.length) setProgress({ active: true, done: 0, total: tasks.length });
   let done = 0;
   await mapLimit(tasks, 4, async t => {
-    try { await api.files.getContent(projectId, t.path); markDownloaded(projectId, t.path); mtimes[t.path] = t.mtime; }
+    try { await api.files.getContent(projectId, t.path); markDownloaded(projectId, t.path); mtimes[t.path] = t.mtime; changes[t.path] = t.mtime; }
     catch { /* сбой — на следующий раз */ }
     if (tasks.length) setProgress({ done: ++done });
   });
@@ -476,8 +524,9 @@ async function doSyncProjectFiles(projectId: string): Promise<void> {
     if (prefix !== null) await idbDelete(prefix + encodeURIComponent(fp)).catch(() => {});
     _downloaded.get(projectId)?.delete(fp);
     delete mtimes[fp];
+    changes[fp] = null;
   }
-  await saveMtimes(projectId, mtimes);
+  await applyMtimeChanges(projectId, changes);
   notifyMarks();
 }
 

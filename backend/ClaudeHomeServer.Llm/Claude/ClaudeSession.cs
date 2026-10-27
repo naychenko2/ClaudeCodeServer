@@ -4419,6 +4419,13 @@ public class ClaudeSession : ILlmSessionAdapter
             _turnContextWindow, EffectiveModel);
         _turnConfigRoot = envOverrides.TryGetValue("CLAUDE_CONFIG_DIR", out var turnConfigDir)
             && !string.IsNullOrWhiteSpace(turnConfigDir) ? turnConfigDir : _cliConfigRoot;
+        // Пред-resume копия транскрипта для класса «ключ пула + модель стороннего провайдера»
+        // (доработка ревью ccb3d43c к SP1): после правки подписочный CLAUDE_CONFIG_DIR не перетирает
+        // провайдерский, и ход ищет транскрипт в профиле провайдера — а транскрипт чатов, созданных
+        // до правки, остался в профиле подписки. --resume там не находит его и ход отказывает
+        // (TurnFailureText.ResumeTranscriptMissing). Если файла нет в корне хода, но есть в собственном
+        // корне сессии — копируем его туда, куда смотрит CLI этого хода.
+        CopyTranscriptToTurnRoot(_turnConfigRoot);
 
         // Бюджет промпта на склейке: считает ВЕРХНЮЮ оценку командной строки — cli-путь
         // плюс каждый аргумент в экранированном виде плюс пара --append-system-prompt со
@@ -5562,6 +5569,63 @@ public class ClaudeSession : ILlmSessionAdapter
             Console.Error.WriteLine($"[ClaudeSession] База дельты не засеяна (чтение транскрипта {csid}): {ex.Message}");
         }
     }
+
+    // Пред-resume копия транскрипта для класса «ключ пула + модель стороннего провайдера»
+    // (доработка ревью ccb3d43c к SP1). Источник — _cliConfigRoot, собственный корень сессии
+    // (SessionManager разрешил его по Info.Provider через ConfigRootFor, включая раскладку
+    // песочницы): до правки SP1 подписочный env перетирал провайдерский CLAUDE_CONFIG_DIR, и
+    // транскрипт таких чатов писался в профиль подписки sub-{key}. Приёмник — корень, куда
+    // реально смотрит CLI этого хода (turnRoot — CLAUDE_CONFIG_DIR собранного env). Расхождение
+    // двух корней и есть симптом класса: у штатного подписочного или провайдерного хода они
+    // равны, и копия не нужна. TryMigrate — это Copy, исходник не трогается; на следующем
+    // ходе файл уже в приёмнике, и поиск в нём заканчивается операцией (идемпотентно).
+    // Провал копии ход не отменяет: причина в логе, дальше ход ведёт себя как до правки.
+    private void CopyTranscriptToTurnRoot(string? turnRoot)
+    {
+        if (!_transcriptOnServer) return; // локальный проект: транскрипт на устройстве, копировать серверу нечего
+        if (Info.ClaudeSessionId is not { } csid) return; // без --resume разговор не ищется
+        if (turnRoot is not { Length: > 0 } || _cliConfigRoot is not { Length: > 0 } ownRoot) return;
+        if (SameDir(turnRoot, ownRoot)) return; // один профиль — не тот класс
+
+        try
+        {
+            if (TranscriptMigrator.FindTranscript(turnRoot, _rootPath, csid) is not null) return; // уже в приёмнике
+            if (TranscriptMigrator.FindTranscript(ownRoot, _rootPath, csid) is null) return; // копировать неоткуда
+
+            // У container-владельца DockerProcessRunner.RewriteProfileEnv переписывает CLAUDE_CONFIG_DIR
+            // на /sandbox-profiles/{ownerId}/{папка}; хостовая сторона того же профиля — сосед
+            // _cliConfigRoot (его родитель и есть папка песочных профилей владельца) — та же
+            // выводка, что у FallbackLlmSessionAdapter.SandboxAwareRoot.
+            var dst = turnRoot;
+            if (_launcher.IsSandboxed)
+            {
+                var parent = Path.GetDirectoryName(TrimTrailing(ownRoot));
+                var folder = Path.GetFileName(TrimTrailing(turnRoot));
+                if (string.IsNullOrEmpty(parent) || string.IsNullOrEmpty(folder)) return;
+                dst = SafePath.Join(parent, folder);
+            }
+
+            if (!TranscriptMigrator.TryMigrate(ownRoot, dst, _rootPath, csid, out var error))
+                Console.Error.WriteLine(
+                    $"[ClaudeSession] Транскрипт {csid} не скопирован в {dst}: {error} (session {Info.Id})");
+            else
+                Console.Error.WriteLine(
+                    $"[ClaudeSession] Транскрипт {csid} скопирован из профиля сессии {ownRoot} в профиль хода {dst} (session {Info.Id})");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(
+                $"[ClaudeSession] Пред-resume копия транскрипта {csid} не удалась: {ex.Message} (session {Info.Id})");
+        }
+    }
+
+    // Сравнение корней профиля «одна папка или нет»: пути приходят из разных мест (конфиг
+    // профилей, перепись раннером), хвостовые разделители различаются.
+    private static string TrimTrailing(string path) =>
+        path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+    private static bool SameDir(string a, string b) =>
+        string.Equals(TrimTrailing(a), TrimTrailing(b), StringComparison.OrdinalIgnoreCase);
 
     // Аргументы запуска для показа человеку. Системный промпт не дублируем (он и есть
     // секции), а путь temp-конфига MCP заменяем именем файла: внутри сервисный JWT владельца.

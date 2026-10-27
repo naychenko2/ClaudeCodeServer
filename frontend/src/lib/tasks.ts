@@ -9,7 +9,7 @@ import { api } from './api';
 import { joinUser, onMessage, onReconnected } from './signalr';
 import { C } from './design';
 import { getEffectiveTheme } from './themeMode';
-import { isOnline, OfflineError, readStoredUserId, subscribeOnline } from './offline';
+import { isLegacyPassiveKey, isOnline, OfflineError, readStoredUserId, subscribeOnline } from './offline';
 import { idbDelete, idbGet, idbKeys, idbSet } from './idb';
 import {
   applyUpdateLocally, buildLocalTask, configureOutbox, drainTaskOutbox,
@@ -287,15 +287,7 @@ let _outboxConfigured = false;
 // и последний известный список видны сразу и переживают перезагрузку страницы.
 // Пассивный GET-кэш (offline.ts) хранил списки задач и фич ВТОРЫМ экземпляром рядом с tasks:all:
 // сотни КБ на чат, без вытеснения. Теперь эти запросы идут с live и в кэш не пишутся, а
-// остатки прежних записей сносим. Ключи — url запроса без /api (допускаем и с ним).
-// Одиночный GET /tasks/{id} тоже оставлял полную копию (~90 КБ) на каждую открытую задачу:
-// ключ — ровно один сегмент после /tasks (с query или без), служебные /tasks/ai не трогаем.
-const LEGACY_LIST_KEYS = ['/tasks', '/tasks/features'].flatMap(p => [p, `/api${p}`]);
-const LEGACY_SINGLE_TASK_KEY = /^(?:\/api)?\/tasks\/(?!ai(?:[/?]|$))[^/?]+(?:\?.*)?$/;
-// Списки задач проекта и страница фичи (/tasks/features/{fid}?eventsLimit=…) тоже копились
-// пассивно; индекс фич /tasks/features/index остаётся пассивным кэшем — его не трогаем.
-const LEGACY_PROJECT_TASKS_KEY = /^(?:\/api)?\/projects\/[^/?]+\/tasks(?:\?.*)?$/;
-const LEGACY_FEATURE_PAGE_KEY = /^(?:\/api)?\/tasks\/features\/(?!index(?:[/?]|$))[^/?]+(?:\?.*)?$/;
+// остатки прежних записей сносим. Перечень шаблонов ключей — один, в offline.ts (isLegacyPassiveKey).
 // Чистка разовая: признак живёт в том же разделе meta, сам по себе в кэш запросов не попадает.
 // Версия поднимается, когда набор шаблонов расширяется: клиентам с прошлым признаком нужен новый прогон.
 const LEGACY_PURGE_DONE_KEY = 'tasks:legacy-cache-purged:v2';
@@ -304,9 +296,7 @@ export async function purgeLegacyTaskListCache(): Promise<void> {
   if (await idbGet(LEGACY_PURGE_DONE_KEY).catch(() => undefined)) return;
   const keys = await idbKeys().catch(() => null);
   if (!keys) return;
-  const stale = keys.filter(k =>
-    LEGACY_LIST_KEYS.some(p => k === p || k.startsWith(`${p}?`)) ||
-    LEGACY_SINGLE_TASK_KEY.test(k) || LEGACY_PROJECT_TASKS_KEY.test(k) || LEGACY_FEATURE_PAGE_KEY.test(k));
+  const stale = keys.filter(isLegacyPassiveKey);
   await Promise.all(stale.map(k => idbDelete(k).catch(() => {})));
   await idbSet(LEGACY_PURGE_DONE_KEY, { data: true, savedAt: Date.now() }).catch(() => {});
 }

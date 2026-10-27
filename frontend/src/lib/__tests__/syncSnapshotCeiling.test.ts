@@ -403,3 +403,121 @@ describe('прогрев заметок не вытесняет офлайн-д�
     expect(Math.min(...notesTimes)).toBeGreaterThanOrEqual(Math.max(...listingTimes));
   });
 });
+
+// ---------------------------------------------------------------------------
+// Доработка 3 (F2c-f): предикат класса заметок, честное пустое состояние,
+// единая точка правды маршрутизации и защита мета-ответов с параметрами.
+//
+// Ревью R-F2c-f3 (accepted_with_remarks) нашло четыре хвоста:
+//
+//  1. Предикат класса заметок не покрыт тестом: не доказано, что в
+//     'offlinenotes:' попадают ТОЛЬКО ответы заметок. Проба «расширить
+//     предикат» (посторонний URL уезжает в класс заметок) не воспроизводилась.
+//
+//  2. Цена разделения классов — «после сноса осиротевших записей общего
+//     класса офлайн-список заметок пуст до ближайшего прогорева» — не
+//     покрыта тестом.
+//
+//  3. passiveWrite считал маршрут прямым isNotesUrl, а не через
+//     rangeOfUrl(): дубль «единой точки правды».
+//
+//  4. Мета-ответы защищались по ТОЧНОМУ URL: '/notes?source=…' и '/notes?q=…'
+//     (тот же список заметок с параметрами) оставались без защиты.
+//
+// Мутации (каждая должна краснить СВОЙ целевой тест):
+//   - расширить предикат ('/notes' без проверки границы) → краснеет тест
+//     «посторонние URL не попадают в класс заметок»;
+//   - считать маршрут в passiveWrite по '/notes/' (без '/notes') → краснеет
+//     тест «запись и учёт бюджета идут в один класс»;
+//   - вернуть защиту мета-ответов по точному URL → краснеет тест
+//     «мета-ответы с параметрами защищены от вытеснения».
+// ---------------------------------------------------------------------------
+
+describe('предикат класса заметок', () => {
+  // Ключ пассивного кэша берётся из rangeOfUrl() — той же точки правды, что и
+  // запись. По префиксу ключа видно, в какой класс ушёл ответ.
+  const keyOf = (url: string) => offline.passiveCacheKey(url)!;
+
+  it('настоящие ответы заметок попадают в класс заметок', () => {
+    for (const url of ['/notes', '/notes/', '/notes?source=personal', '/notes?q=abc', '/notes/n1', '/notes/folders', '/notes/graph']) {
+      expect(keyOf(url).startsWith('offlinenotes:')).toBe(true);
+    }
+  });
+
+  it('посторонние URL не попадают в класс заметок', () => {
+    // Похожий префикс, но не заметки: '/notes-something' начинается с '/notes',
+    // поэтому предикат без проверки границы увёл бы его в класс заметок.
+    for (const url of ['/notes-something', '/projects/p1/notes', '/notesx', '/notesomething/1']) {
+      expect(keyOf(url).startsWith('offline:')).toBe(true);
+    }
+  });
+
+  it('запись и учёт бюджета идут в один класс', async () => {
+    // Ответ заметок: ключ — в классе заметок, и оценка ОБЩЕГО класса от него
+    // не растёт (учёт бюджета идёт туда же, куда легли записи).
+    await offline.request('/notes');
+    await offline.flushPassiveWrites();
+    expect(fake.store.has('offlinenotes:A:/notes')).toBe(true);
+    expect(offline.rangeRecordsEstimate()).toBe(0);
+
+    // Обычный ответ — в общий класс, оценка общего растёт.
+    await offline.request('/projects/p1/sessions');
+    await offline.flushPassiveWrites();
+    expect(fake.store.has('offline:A:/projects/p1/sessions')).toBe(true);
+    expect(offline.rangeRecordsEstimate()).toBeGreaterThan(0);
+  });
+});
+
+describe('пустой список заметок после сноса осиротевших записей', () => {
+  it('до прогорева офлайн-список честно пуст, после прогрева — появляется', async () => {
+    // Старые записи заметок в ОБЩЕМ классе (до разделения классов):
+    // их больше не читают — читатель берёт новый класс.
+    fake.store.set('offline:A:/notes', { data: [{ id: 'old' }], savedAt: 1000, usedAt: 1000 });
+    fake.store.set('offline:A:/notes/n1', { data: { id: 'old' }, savedAt: 1000, usedAt: 1000 });
+
+    // Офлайн-чтение списка заметок: данных нет — честный «нет сохранённых
+    // данных» (OfflineError), а не подставленный старый список и не падение.
+    fetchMock.mockRejectedValue(new TypeError('failed'));
+    await expect(offline.request('/notes')).rejects.toBeInstanceOf(offline.OfflineError);
+
+    // Проход обслуживания сносит осиротевшие записи общего класса.
+    await offline.runPassiveMaintenance();
+    expect(fake.store.has('offline:A:/notes')).toBe(false);
+    expect(fake.store.has('offline:A:/notes/n1')).toBe(false);
+
+    // Прогрев заметок кладёт ответ в свой класс — и офлайн-список появляется.
+    fetchMock.mockResolvedValue({
+      ok: true, status: 200, statusText: 'OK',
+      json: async () => [{ id: 'n1' }], text: async () => '[{"id":"n1"}]', headers: new Headers(),
+    });
+    await offline.request('/notes');
+    await offline.flushPassiveWrites();
+    expect(fake.store.has('offlinenotes:A:/notes')).toBe(true);
+
+    fetchMock.mockRejectedValue(new TypeError('failed'));
+    await expect(offline.request('/notes')).resolves.toEqual([{ id: 'n1' }]);
+  });
+});
+
+describe('защита мета-ответов заметок', () => {
+  it('мета-ответы с параметрами защищены от вытеснения, обычные заметки — нет', async () => {
+    const meta = ['/notes', '/notes?source=personal', '/notes?q=abc', '/notes/folders', '/notes/graph', '/notes/sources'];
+    // Мета-ответы — в классе заметок, с запросами-параметрами тоже.
+    for (const url of meta) {
+      await offline.writePassiveRangeEntry(`offlinenotes:A:${url}`, { url });
+    }
+    // Детали заметок — переполняют класс.
+    for (let i = 0; i < 210; i++) {
+      await offline.writePassiveRangeEntry(`offlinenotes:A:/notes/n${i}`, { i });
+    }
+
+    // Мета-ответы на месте — в том числе варианты с параметрами.
+    for (const url of meta) {
+      expect(fake.store.has(`offlinenotes:A:${url}`)).toBe(true);
+    }
+    // Детали ушли первыми: их стало заметно меньше, чем записали.
+    const details = [...fake.store.keys()].filter(k => /^offlinenotes:A:\/notes\/n\d+$/.test(k));
+    expect(details.length).toBeLessThan(210);
+    expect(details.length).toBeGreaterThan(0);
+  });
+});

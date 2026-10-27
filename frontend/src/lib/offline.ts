@@ -449,7 +449,27 @@ export const NOTES_CLASS_TRIM_RECORDS = 180;
 // покажет ни списка заметок, ни дерева папок. Они защищены от вытеснения —
 // детали заметок уходят первыми: их содержимое и так лежит в локальном слое
 // noteContent, который наполняет тот же прогрев.
-const NOTES_META_URLS = new Set(['/notes', '/notes/folders', '/notes/graph', '/notes/sources']);
+//
+// Защищается ФОРМА, а не точный URL: мета-ответ списка приходит с параметрами
+// ('/notes?source=…', '/notes?q=…'), граф — с флагом ('/notes/graph?annotations=true').
+// Защита по точному списку оставила бы варианты с параметрами без защиты,
+// и офлайн терял бы список заметок раньше деталей.
+//
+// Детали заметок ('/notes/<id>') под защиту НЕ попадают: их база не совпадает
+// ни с одной базой мета-ответов — они уходят первыми, как и задумано.
+const NOTES_META_URL_BASES = new Set(['/notes', '/notes/folders', '/notes/graph', '/notes/sources']);
+
+// Базовый путь URL (без query-строки).
+function urlBase(url: string): string {
+  const i = url.indexOf('?');
+  return i < 0 ? url : url.slice(0, i);
+}
+
+// Мета-ответ заметок по форме пути: '/notes', '/notes/folders', '/notes/graph',
+// '/notes/sources' — с любыми параметрами ('/notes?q=…', '/notes/graph?annotations=true').
+function isNotesMetaUrl(url: string): boolean {
+  return NOTES_META_URL_BASES.has(urlBase(url));
+}
 // usedAt обновляем при чтении не чаще раза в 5 минут на ключ (карта живёт в памяти вкладки
 // и правдой не является: лишнее обновление безвредно).
 const USED_AT_REFRESH_MS = 5 * 60_000;
@@ -599,7 +619,7 @@ const NOTES_RANGE: PassiveRange = {
   epochPrefix: RANGE_EPOCH_PREFIX + 'notes:',
   // Мета-ответы (список, папки, граф, источники) — основа офлайна заметок:
   // без них офлайн не покажет ни списка, ни дерева папок. Детали уходят первыми.
-  protectedUrl: url => NOTES_META_URLS.has(url),
+  protectedUrl: url => isNotesMetaUrl(url),
 };
 
 // Класс по ключу записи: общий или ответов заметок.
@@ -1130,7 +1150,9 @@ async function passiveWrite(url: string, data: unknown, owner: string | null, ch
   }
   // Общий класс и класс ответов заметок: запись уходит в фоновую очередь —
   // ответ сети не ждёт ни прохода обслуживания, ни записи в стор.
-  const range = isNotesUrl(url) ? NOTES_RANGE : GENERAL_RANGE;
+  // Класс берётся из rangeOfUrl() — той же точки правды, что и ключ записи:
+  // иначе запись и учёт бюджета разошлись бы по разным ответам предиката.
+  const range = rangeOfUrl(url);
   enqueueGeneralWrite(() => writeRangeEntry(range, url, data, owner, bytes, now));
 }
 

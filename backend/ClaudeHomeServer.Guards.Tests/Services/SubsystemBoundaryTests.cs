@@ -1363,6 +1363,28 @@ public class SubsystemBoundaryTests
                     .ToArray(),
                 Array.Empty<string>()),
         },
+        // Wiki — разделы и видимость LLM-wiki (ADR-036): живут ВНУТРИ вертикали Notes
+        // (папка Services/Wiki сборки ClaudeHomeServer.Notes), но в своём namespace —
+        // отдельная строка нужна, иначе SubsystemBoundaryCoverageTests оставил бы их
+        // без сторожа (полноту он проверяет по корню namespace). Самостоятельной
+        // вертикалью не являются: без IAppSubsystem и DI-регистрации.
+        // Allow-list — только спинка плюс сам namespace: разделы — чистые функции,
+        // единственные внешние типы — контракты и модели Core (IProjectManager,
+        // ISphereDirectory, Persona/PersonaZone), они покрыты IsCoreAssembly и
+        // ClaudeHomeServer.Models.
+        new object[]
+        {
+            new VerticalBoundary(
+                "Wiki",
+                "ClaudeHomeServer.Services.Wiki",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.Wiki",
+                    })
+                    .ToArray(),
+                Array.Empty<string>()),
+        },
         // Skills — вертикаль навыков (волна 4C, шаг 3): чтение скиллов и агентов из
         // глобального (~/.claude/skills, ~/.claude/workflows, ~/.claude/plugins) и
         // проектного (.claude/skills, .claude/agents) каталога; обёртка CLI «npx skills»

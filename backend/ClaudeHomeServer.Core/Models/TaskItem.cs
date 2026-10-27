@@ -211,7 +211,8 @@ public record FeatureHold(string Reason, DateTime Since, string? BySessionId, bo
 // сериализации — Main/Services/FeatureNoteJsonConverter.cs), ByUser — писал человек. Позиционная
 // запись — как FeatureHold.
 // StageAtWrite — стадия конвейера, StateAtWrite — КАТЕГОРИЯ фичи (brief.kind: running/waiting_you/
-// error/paused/queued/draft/idle/closed) на момент записи (B15, дефект 415c1c80); имя поля и
+// error/paused/queued/draft/idle/merged/closed) на момент записи (B15, дефект 415c1c80; merged —
+// девятая категория, «Фильтр фич по состоянию», R-Б1/2); имя поля и
 // JSON-контракт прежние — голоса, записанные до B15, хранят СОСТОЯНИЕ («running», «paused»…), они
 // достраиваются до категории таблицей FeatureBrief.KindByState (fail-closed для неизвестного).
 public record FeatureNote(string Text, DateTime At, string? BySessionId, bool ByUser,

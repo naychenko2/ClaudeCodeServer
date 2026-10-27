@@ -392,8 +392,12 @@ Html не разбираем вовсе: прототип идёт в «Файл
 | `updatedAt` | «обновлено N мин назад» | `UpdatedAtOf` (:287-306) — см. §2 |
 | `computedAt` | свежесть снимка | момент этого ответа |
 
-Таблица `kind` — одна точка правды: одиннадцать `FeatureStates` → восемь категорий,
-`paused` расщепляется по причине удержания (`queue` → `queued`, иначе `paused`) (:143-145).
+Таблица `kind` — одна точка правды: одиннадцать `FeatureStates` → девять категорий,
+`paused` расщепляется по причине удержания (`queue` → `queued`, иначе `paused`) (:143-145),
+`merged` — по закрытости эпика (`run.Closed` → `closed`, иначе `merged`, :147-155): смерженная
+с открытым эпиком остаётся `merged` (среди открытых, как в `FeatureProjector.Bucket`,
+[FeatureProjector.cs:1764](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureProjector.cs)),
+смерженная с эпиком `Done` — `closed`; `kind` и `bucket` не расходятся.
 Сторож — тест-таблица: новое `FeatureStates` без строки в таблице даёт красный тест
 (перебор констант рефлексией, [FeatureBriefTests.cs:109](../../backend/ClaudeHomeServer.Tasks.Tests/FeatureBriefTests.cs)).
 Фронт состояния сам не маппит.
@@ -447,7 +451,8 @@ Html не разбираем вовсе: прототип идёт в «Файл
 отдельного слова (п. 8 разреза).
 
 `estimate = null` — честное «оценки пока нет», случаи (FeatureBrief.cs:218-223):
-состояние `queued`/`paused`/`closed`/`draft` (часы стоят или фича не идёт); план не нарезан
+состояние `queued`/`paused`/`closed`/`draft`/`merged` (часы стоят, фича не идёт или уже
+смержена — вместо «осталось» итог `Summary`); план не нарезан
 или нарезан частично (`PlanState = pending`/`partial`: при partial `NotCreated` считает
 только шаги нарезанных планов — обещать число по неполному плану хуже, чем не обещать
 ничего; сравнение только с константами `FeatureStepAccounting.Plan*`, FeatureRun.cs:404);
@@ -578,6 +583,33 @@ Html не разбираем вовсе: прототип идёт в «Файл
   ([FeatureBriefBlock.test.ts:566-575](../../frontend/src/components/feature/FeatureBriefBlock.test.ts)).
   Своё у фронта только перевод ключей стадий в слова и «N ч назад» из `at`/`updatedAt`.
   Второй источник правды не заводится.
+
+### 7. Фильтр фич по состоянию (эпик `1d812b59`)
+
+Индекс фич (`features/index`, `features?sessionId=`) отдаёт в строке поле `kind` — ровно та же
+функция, что `brief.kind`: `FeatureBrief.KindOf` (та же таблица `KindByState` и те же расщепления:
+`paused` → `queued` по причине удержания, `merged` → `closed` по закрытости эпика; своего маппинга
+в индексе не заводим), [FeatureProjector.cs:1606-1609](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureProjector.cs),
+[FeatureIndex.cs:139-143](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureIndex.cs)).
+Отличие от `brief`: состояние вне таблицы — `null`, не исключение — строка индекса не роняет индекс (:141-142).
+Девять категорий (`FeatureBrief.Kinds`, [FeatureBrief.cs:29-47](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureBrief.cs)),
+включая `merged`: merge Done при незакрытом эпике остаётся среди открытых (`merged`), при закрытом
+эпике — `closed` (FeatureBrief.cs:147-150; то же расщепление, что `bucket`, FeatureProjector.cs:1764).
+Фронт состояния не пересчитывает: он матчит `kind` из индекса
+([chatGroups.ts:677-683](../../frontend/src/lib/chatGroups.ts)) и только переводит ключи в слова
+(`FEATURE_KIND_LABEL`, :651). `chips[]` и `bucket` остаются в индексе как были — для быстрого действия
+и тона, не для оси состояния (FeatureIndex.cs:70-73, :82-84).
+
+**Legacy-штамп голоса (R-Б1/1).** `merged` теперь и имя состояния (`FeatureStates.Merged`,
+[FeatureRun.cs:430](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureRun.cs)), и категория
+(`Kinds.Merged`, FeatureBrief.cs:38). `KindFromStamp` (FeatureBrief.cs:306-309) их не различает:
+по той же таблице `KindByState` старое состояние «merged» достраивается в ту же категорию
+(FeatureBrief.cs:118). Следствие: у части старых голосов на смерженных фичах допускается ложная
+метка «устарел» — если фича позже закрылась (`run.Closed` → kind `closed`), штамп «merged» больше
+не совпадает с категорией (`StaleOf`, FeatureBrief.cs:293-299). Второй вариант того же ложного
+«устарел» — штамп «closed» из окна B15…Б-1.1 на смерженной фиче с открытым эпиком. Направление ошибки безопасное:
+голос только помечается устаревшим, не прячется и не удаляется (§4: «текст устаревшего голоса
+не прячем»).
 
 **К «Последствиям» волны 1:** волна 6 добавляет одно хранимое поле — `TaskItem.Note`
 (голос эпика): nullable, старый `tasks.json` читается как `null`, `BackupSchema.Version`

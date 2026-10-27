@@ -17,6 +17,9 @@ import type { PlanState } from '../lib/featureProgress';
 // FeatureChatLink этого файла (запись индекса «чат × фича», бэк: FeatureIndexChatEntry).
 import type { FeatureChatLink as FeaturePageChatLink } from './featureChats';
 import type { FeatureBrief } from '../lib/featurePage';
+// Категория состояния для оси featureKinds (Ф-1.2/Ф-1.3): тот же алиас FeatureKind
+// (FeatureBrief['kind']) — второго union нет (разрез п. 7).
+import type { FeatureKind } from '../lib/chatFilters';
 
 // Группа фичи (контракт §1): attention — требует внимания; running — идёт;
 // idle — стоит; closed — закрыта. Считается той же функцией, что и порядок.
@@ -96,6 +99,12 @@ export interface FeatureIndexFeature {
   // Ровно 8 стадий в порядке жизненного цикла (design необязательна, без задач — skipped).
   rail: FeatureRailSegment[];
   chips: FeatureChip[];
+  // Категория состояния — результат той же FeatureBrief.KindOf, что у сводки на
+  // странице фичи (записка п. 2; бэк Б-1.2). Фронт принадлежность к состоянию НЕ
+  // пересчитывает: ось featureKinds и счётчики читают только это поле.
+  // Аддитивное: старые ответы его не несут — фильтр работает в умолчании
+  // (записка, раздел миграции).
+  kind?: FeatureKind | null;
   // Счётчики шагов: принятые (Done) / все.
   stepsAccepted: number;
   stepsTotal: number;

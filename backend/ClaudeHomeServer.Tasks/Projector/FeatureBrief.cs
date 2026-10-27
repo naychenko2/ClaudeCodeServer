@@ -5,8 +5,8 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 // ─── Волна 6: «Сводка состояния фичи» (GET features/{id} → brief), шаги B1a+B2b ────────────────
 // Чистая функция над УЖЕ посчитанными объектами страницы фичи (FeatureRun, FeatureTimeline и
 // выборкой FeatureTypical): ни чтения стора, ни журнала, ни собственного вывода состояния.
-// kind — словарь от run.State (+ Hold.Reason), now — run.Now[0] либо Attention, done — счётчики
-// run, elapsed — работа по часам стены из timeline.Totals.
+// kind — словарь от run.State (+ Hold.Reason, run.Closed), now — run.Now[0] либо Attention,
+// done — счётчики run, elapsed — работа по часам стены из timeline.Totals.
 //
 // B2b: estimate — формула разреза п.3 над чужой выборкой: вызывающий передаёт тот же typical,
 // что пошёл в stats; своего прохода по смерженным фичам здесь нет (EstimateOf).
@@ -35,13 +35,14 @@ public static class FeatureBrief
         public const string Queued = "queued";
         public const string Draft = "draft";
         public const string Idle = "idle";
+        public const string Merged = "merged";
         public const string Closed = "closed";
 
         // Все категории разом (B15): значение, записанное в голос, может быть САМОЙ категорией
         // (новый штамп) или состоянием (голоса до B15 — достраиваются таблицей KindByState).
         internal static readonly IReadOnlySet<string> All = new HashSet<string>
         {
-            Running, WaitingYou, Error, Paused, Queued, Draft, Idle, Closed,
+            Running, WaitingYou, Error, Paused, Queued, Draft, Idle, Merged, Closed,
         };
     }
 
@@ -100,9 +101,9 @@ public static class FeatureBrief
         DateTime? UpdatedAt,
         DateTime ComputedAt);
 
-    // Таблица kind: FeatureStates → категория. paused расщепляется по Hold.Reason (см. KindOf).
-    // Единая точка правды; тест перебирает константы FeatureStates рефлексией, поэтому новое
-    // состояние без строки здесь даёт красный тест (и исключение в Build).
+    // Таблица kind: FeatureStates → категория. paused расщепляется по Hold.Reason, merged — по
+    // run.Closed (см. KindOf). Единая точка правды; тест перебирает константы FeatureStates
+    // рефлексией, поэтому новое состояние без строки здесь даёт красный тест (и исключение в Build).
     internal static readonly IReadOnlyDictionary<string, string> KindByState = new Dictionary<string, string>
     {
         [FeatureStates.Running] = Kinds.Running,
@@ -114,7 +115,7 @@ public static class FeatureBrief
         [FeatureStates.Draft] = Kinds.Draft,
         [FeatureStates.NotStarted] = Kinds.Idle,
         [FeatureStates.Idle] = Kinds.Idle,
-        [FeatureStates.Merged] = Kinds.Closed,
+        [FeatureStates.Merged] = Kinds.Merged,
         [FeatureStates.Closed] = Kinds.Closed,
     };
 
@@ -144,14 +145,18 @@ public static class FeatureBrief
     }
 
     // paused + Hold.Reason = queue → queued («в очереди»), иначе paused («на паузе»).
-    private static string KindOf(FeatureRun run)
+    // merged + run.Closed → closed: смерженная с закрытым эпиком закрыта; смерженная с открытым
+    // эпиком (Closed=false, FeatureRun.cs:95-98) остаётся merged — то же расщепление, что
+    // FeatureProjector.Bucket (FeatureProjector.cs:1764), kind и bucket не расходятся.
+    // internal — для строки индекса: Б-1.2 берёт из этой же функции, своего маппинга не заводим.
+    internal static string KindOf(FeatureRun run)
     {
         if (!KindByState.TryGetValue(run.State, out var kind))
             throw new InvalidOperationException(
                 $"Состояние фичи «{run.State}» не описано в таблице brief.kind (FeatureBrief.KindByState).");
-        return run.State == FeatureStates.Paused && run.Hold?.Reason == FeatureHoldReasons.Queue
-            ? Kinds.Queued
-            : kind;
+        if (run.State == FeatureStates.Paused && run.Hold?.Reason == FeatureHoldReasons.Queue)
+            return Kinds.Queued;
+        return run.State == FeatureStates.Merged && run.Closed ? Kinds.Closed : kind;
     }
 
     // B15: категория ДЛЯ ШТАМПА голоса — та же величина, что и brief.kind (тот же KindOf).
@@ -231,8 +236,9 @@ public static class FeatureBrief
     // Review — корзины шагов run.StepProgress. Лента p25–p75 — та же формула по тем же квантилям
     // выборки: k ≥ 0 и p25 ≤ медиана ≤ p75 по каждой метрике — порядок ленты не инвертируется,
     // округление одно по концу (Math.Round, как хвостовые числа FeatureTypical).
-    // Оценки нет в случаях (разрез п.3 «Когда оценки нет»): состояние queued/paused/closed/draft
-    // (часы стоят или фича не идёт), план не нарезан или нарезан частично (PlanState = pending/partial:
+    // Оценки нет в случаях (разрез п.3 «Когда оценки нет»): состояние queued/paused/closed/draft/merged
+    // (часы стоят, фича не идёт или уже смержена — вместо «осталось» итог Summary), план не нарезан
+    // или нарезан частично (PlanState = pending/partial:
     // знаменатель шагов неизвестен или неполон — при partial NotCreated считает только шаги нарезанных
     // планов, оценка вышла бы заниженной; решение Софьи: обещать число по неполному плану хуже, чем
     // не обещать ничего), выборка не построена (n < 3 — FeatureTypical отдаёт шаговые метрики null).
@@ -241,7 +247,7 @@ public static class FeatureBrief
     private static BriefEstimate? EstimateOf(FeatureRun run,
         FeatureTypical.TypicalFeatureStats? typical, string kind)
     {
-        if (kind is Kinds.Queued or Kinds.Paused or Kinds.Closed or Kinds.Draft) return null;
+        if (kind is Kinds.Queued or Kinds.Paused or Kinds.Closed or Kinds.Draft or Kinds.Merged) return null;
         if (run.StepProgress.PlanState is FeatureStepAccounting.PlanPending or FeatureStepAccounting.PlanPartial)
             return null;
         var steps = typical?.StepMinutes;
@@ -296,7 +302,12 @@ public static class FeatureBrief
     // состояние проекции, достраивается таблицей KindByState. Пересечений нет: имя состояния,
     // совпадающее с именем категории, отображается в ту же категорию (running → running,
     // paused → paused, draft → draft, idle → idle, closed → closed); «stopped» → error,
-    // «waiting» → waiting_you. Ничего не известно — null: голос устарел (fail-closed).
+    // «waiting» → waiting_you. «merged» — то же отображение (merged → merged), но с коллизией
+    // имён: теперь это и имя состояния (FeatureStates.Merged), и категория (Kinds.Merged,
+    // «Фильтр фич по состоянию»); старые голоса со штампом «merged» читаются как категория
+    // «merged», а закрывшейся фиче дают ложную метку «устарел» (R-Б1/1, безопасное направление
+    // ошибки: голос только помечается, не прячется). Ничего не известно — null: голос устарел
+    // (fail-closed).
     private static string? KindFromStamp(string stamp) =>
         KindByState.TryGetValue(stamp, out var kind) ? kind
             : Kinds.All.Contains(stamp) ? stamp

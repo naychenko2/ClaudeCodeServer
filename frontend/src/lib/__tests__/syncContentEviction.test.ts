@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Связка «вытеснение содержимого ↔ авто-докачка» (F2c-d).
-// Вытеснение снимает запись содержимого файла из пассивного кэша, а mtime-запись лежит
-// вне его диапазона (ключ synced-mtimes:<pid>) и сама вытеснением не трогается: без сброса
+// Содержимое файлов живёт в отдельном классе ('offlinefile:') со своим бюджетом по весу;
+// вытеснение снимает запись содержимого из стора, а mtime-запись лежит вне диапазона
+// вытеснения (ключ synced-mtimes:<pid>) и сама вытеснением не трогается: без сброса
 // авто-снапшот счёл бы файл свежим (mtime совпал) и больше его не докачал — содержимое
 // пропало бы из офлайна навсегда.
 //
@@ -11,17 +12,17 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // по ключам владельца, а не по всему стору).
 
 const fake = vi.hoisted(() => {
-  const store = new Map<string, { data: unknown; savedAt: number; usedAt?: number }>();
+  const store = new Map<string, { data: unknown; savedAt: number; usedAt?: number; bytes?: number }>();
   const inRange = (k: string, lo: string, hi: string) => k >= lo && k <= hi;
   return {
     store,
     idbGet: async (k: string) => store.get(k),
-    idbSet: async (k: string, v: { data: unknown; savedAt: number; usedAt?: number }) => { store.set(k, v); return k; },
+    idbSet: async (k: string, v: { data: unknown; savedAt: number; usedAt?: number; bytes?: number }) => { store.set(k, v); return k; },
     idbDelete: async (k: string) => { store.delete(k); return undefined; },
     idbKeys: async () => [...store.keys()],
     idbCountRange: async (lo: string, hi: string) => [...store.keys()].filter(k => inRange(k, lo, hi)).length,
     idbRangeStamps: async (lo: string, hi: string) => [...store.entries()].filter(([k]) => inRange(k, lo, hi))
-      .map(([key, v]) => ({ key, savedAt: v.savedAt, usedAt: v.usedAt })),
+      .map(([key, v]) => ({ key, savedAt: v.savedAt, usedAt: v.usedAt, bytes: v.bytes })),
   };
 });
 vi.mock('../idb', () => ({
@@ -60,7 +61,10 @@ function storageStub(init: Record<string, string> = {}) {
   };
 }
 
-const CONTENT = (p: string, path: string) => `offline:A:/projects/p1/files/content?path=${encodeURIComponent(path)}`;
+// Ключ содержимого в новом классе: offlinefile:<owner>:<pid>:<k|f>:<extra>:<путь>.
+// Помеченные к синхронизации файлы лежат под 'k', непомеченные — под 'f'.
+const CONTENT = (path: string, keep = true) =>
+  `offlinefile:A:p1:${keep ? 'k' : 'f'}::${encodeURIComponent(path)}`;
 const MTIMES = 'synced-mtimes:p1';
 
 const entry = (path: string, modified: string) => ({
@@ -85,28 +89,24 @@ beforeEach(async () => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
-// Заполнить пассивный кэш так, чтобы вытеснение задело нужный файл:
-// потолок 200 записей, после прохода остаётся 180 — уходят самые давние по доступу.
-function seedFiller(n: number) {
-  for (let i = 0; i < n; i++) fake.store.set(`offline:A:/p/${i}`, { data: { i }, savedAt: 1000 + i });
-}
-
 describe('вытеснение содержимого и авто-докачка', () => {
   it('вытесненный файл авто-снапшот докачивает заново, а невытесненный — нет', async () => {
     // Проект синхронизирован: оба файла скачаны, mtime записан.
     fake.store.set(MTIMES, { data: { 'f.txt': 'M1', 'keep.txt': 'M1' }, savedAt: 1 });
-    fake.store.set(CONTENT('p1', 'f.txt'), { data: { content: 'f' }, savedAt: 10, usedAt: 1 });
-    fake.store.set(CONTENT('p1', 'keep.txt'), { data: { content: 'k' }, savedAt: 10, usedAt: 999_999 });
-    seedFiller(250);
+    fake.store.set(CONTENT('f.txt'), { data: { content: 'f' }, savedAt: 10, usedAt: 1, bytes: 100 });
+    fake.store.set(CONTENT('keep.txt'), { data: { content: 'k' }, savedAt: 10, usedAt: 999_999, bytes: 100 });
+    // Бюджет класса содержимого — на один файл: более давний (f.txt) вытесняется.
+    offline.setFileClassBudget({ maxBytes: 150, freeMaxBytes: 150, maxRecords: 100 });
 
     await offline.runPassiveMaintenance();
 
     // Содержимое вытесненного файла действительно снято (иначе тест прошёл бы вхолостую)
-    expect(fake.store.has(CONTENT('p1', 'f.txt'))).toBe(false);
-    expect(fake.store.has(CONTENT('p1', 'keep.txt'))).toBe(true);
-
+    expect(fake.store.has(CONTENT('f.txt'))).toBe(false);
+    expect(fake.store.has(CONTENT('keep.txt'))).toBe(true);
     // mtime вытесненного пути сброшен, у живого — нет (иначе лишняя перекачка)
     const mtimesAfterEvict = { ...(fake.store.get(MTIMES)!.data as Record<string, string>) };
+    expect('f.txt' in mtimesAfterEvict).toBe(false);
+    expect(mtimesAfterEvict['keep.txt']).toBe('M1');
 
     apiMock.tree.mockResolvedValue([entry('f.txt', 'M1'), entry('keep.txt', 'M1')]);
     await sync.runOfflineSnapshot();
@@ -114,14 +114,30 @@ describe('вытеснение содержимого и авто-докачка
     // Вытесненный файл докачан заново; невытесненный — не перекачивался
     expect(apiMock.getContent).toHaveBeenCalledWith('p1', 'f.txt');
     expect(apiMock.getContent).not.toHaveBeenCalledWith('p1', 'keep.txt');
+  });
 
-    expect('f.txt' in mtimesAfterEvict).toBe(false);
-    expect(mtimesAfterEvict['keep.txt']).toBe('M1');
+  it('вытеснение содержимого сбрасывает mtime — авто-снапшот докачивает файл заново', async () => {
+    fake.store.set(MTIMES, { data: { 'f.txt': 'M1' }, savedAt: 1 });
+    fake.store.set(CONTENT('f.txt'), { data: { content: 'f' }, savedAt: 10, usedAt: 1, bytes: 100 });
+    // Бюджет меньше содержимого: проход вытеснит файл из класса содержимого.
+    offline.setFileClassBudget({ maxBytes: 50, freeMaxBytes: 50, maxRecords: 100 });
+    await offline.runPassiveMaintenance();
+
+    // Содержимое снесено, mtime сброшен слушателем вытеснения
+    expect(fake.store.has(CONTENT('f.txt'))).toBe(false);
+    const mtimes = { ...(fake.store.get(MTIMES)!.data as Record<string, string>) };
+    expect('f.txt' in mtimes).toBe(false);
+
+    // Снапшот докачивает файл заново (mtime сброшен → файл считается новым)
+    apiMock.tree.mockResolvedValue([entry('f.txt', 'M1')]);
+    await sync.runOfflineSnapshot();
+    expect(apiMock.getContent).toHaveBeenCalledWith('p1', 'f.txt');
   });
 
   it('файл, изменившийся на диске, докачивается как раньше (сброс mtime не мешает)', async () => {
     fake.store.set(MTIMES, { data: { 'f.txt': 'M1' }, savedAt: 1 });
-    fake.store.set(CONTENT('p1', 'f.txt'), { data: { content: 'f' }, savedAt: 10, usedAt: 999_999 });
+    fake.store.set(CONTENT('f.txt'), { data: { content: 'f' }, savedAt: 10, usedAt: 999_999, bytes: 100 });
+    offline.setFileClassBudget({ maxBytes: 1000, freeMaxBytes: 1000, maxRecords: 100 });
 
     apiMock.tree.mockResolvedValue([entry('f.txt', 'M2')]);
     await sync.runOfflineSnapshot();
@@ -132,13 +148,12 @@ describe('вытеснение содержимого и авто-докачка
   it('вытеснение содержимого одного проекта не трогает mtime другого', async () => {
     fake.store.set(MTIMES, { data: { 'f.txt': 'M1' }, savedAt: 1 });
     fake.store.set('synced-mtimes:p2', { data: { 'g.txt': 'M1' }, savedAt: 1 });
-    fake.store.set(CONTENT('p1', 'f.txt'), { data: { content: 'f' }, savedAt: 10, usedAt: 1 });
-    seedFiller(250);
-
+    fake.store.set(CONTENT('f.txt'), { data: { content: 'f' }, savedAt: 10, usedAt: 1, bytes: 100 });
+    offline.setFileClassBudget({ maxBytes: 50, freeMaxBytes: 50, maxRecords: 100 });
     await offline.runPassiveMaintenance();
 
     // Содержимое p1 вытеснено…
-    expect(fake.store.has(CONTENT('p1', 'f.txt'))).toBe(false);
+    expect(fake.store.has(CONTENT('f.txt'))).toBe(false);
     // …а mtime чужого проекта не задет
     expect((fake.store.get('synced-mtimes:p2')!.data as Record<string, string>)['g.txt']).toBe('M1');
   });

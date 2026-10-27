@@ -418,8 +418,10 @@ function isAbortError(e: unknown): boolean {
 // их содержимое, индекс фич, список чатов проекта) тоже живут под префиксом владельца —
 // иначе класс содержимого файлов рос бы без потолка до логаута.
 const PASSIVE_PREFIX = 'offline:';
-// \u0412\u0441\u0451 \u0441\u0435\u043c\u0435\u0439\u0441\u0442\u0432\u043e \u043f\u0430\u0441\u0441\u0438\u0432\u043d\u044b\u0445 \u043a\u043b\u044e\u0447\u0435\u0439 \u2014 \u043e\u0431\u0449\u0438\u0439 \u043a\u043b\u0430\u0441\u0441 \u0438 \u043f\u043e-\u0447\u0430\u0442\u043e\u0432\u043e\u0439. \u0414\u0438\u0430\u043f\u0430\u0437\u043e\u043d \u0448\u0438\u0440\u0435 \u043e\u0431\u0449\u0435\u0433\u043e
-// ('offline:' \u2192 'offlinechat:'), \u043f\u043e\u044d\u0442\u043e\u043c\u0443 \u0447\u0443\u0436\u0438\u0435 \u0432\u043b\u0430\u0434\u0435\u043b\u044c\u0446\u044b \u0447\u0438\u0441\u0442\u044f\u0442\u0441\u044f \u043e\u0434\u043d\u0438\u043c \u043a\u0443\u0440\u0441\u043e\u0440\u043e\u043c.
+// Всё семейство пассивных ключей — общий класс и по-чатовой. Диапазон шире общего
+// ('offline:' → 'offlinechat:'), поэтому чужие владельцы сносятся одним курсором.
+// Класс содержимого файлов ('offlinefile:') в это семейство НЕ входит: у него свой
+// диапазон, свой бюджет по весу и своё вытеснение (см. «Класс содержимого файлов»).
 const PASSIVE_FAMILY_LOW = 'offline';
 const PASSIVE_RANGE_END = '\uffff';
 // Потолок записей на владельца и запас снизу: после ужима до 180 следующая запись прохода
@@ -443,6 +445,14 @@ const USED_AT_REFRESH_MS = 5 * 60_000;
 // Единственные места перечня: разовая чистка tasks.ts и постоянный проход по диапазону.
 export function isLegacyPassiveKey(k: string): boolean {
   return k.startsWith('/');
+}
+
+// Содержимое файлов прежнего контракта: лежало в общем классе под префиксом владельца
+// ('offline:<owner>:/projects/<pid>/files/content?path=…'). После переезда содержимого в
+// отдельный класс ('offlinefile:') такие записи осиротели — их больше не читают, и они
+// сносятся проходом обслуживания, чтобы не занимать место в общем LRU.
+export function isLegacyFileContentKey(k: string): boolean {
+  return k.startsWith(PASSIVE_PREFIX) && k.includes('/files/content?path=');
 }
 
 function ownerPrefix(owner: string): string {
@@ -516,30 +526,217 @@ export function passiveCacheKey(url: string): string | null {
   return prefix === null ? null : prefix + url;
 }
 
-// Префикс ключей содержимого файлов проекта: тот же контракт, что у request().
-// Читает и чистит их sync.ts (докачка, снятие синхронизации) — по голому URL они
-// больше не адресуемы: запись живёт под префиксом владельца.
-export function fileContentCachePrefix(projectId: string): string | null {
-  const prefix = passiveCachePrefix();
-  return prefix === null ? null : `${prefix}/projects/${projectId}/files/content?path=`;
+// --- Класс содержимого файлов ---
+//
+// Содержимое файлов проекта живёт ОТДЕЛЬНО от общего GET-кэша: диапазон
+// `offlinefile:<ownerId>:<projectId>:<k|f>:<extra>:<path>`. Причины две, и обе
+// про вытеснение, а не про «ещё один префикс»:
+//   1) СВОЙ бюджет ПО ВЕСУ. Содержимое тяжелее обычного GET в разы, а общий LRU на
+//      200 записей не различает «листинг папки» и «файл на 300 КБ»: папка в ~180
+//      файлов офлайн не помещалась никогда, и каждый снапшот перекачивал вытесненное,
+//      вытесняя соседей.
+//   2) Помеченное содержимое не вытесняется содержимым непомеченных файлов. Пометка
+//      «k» (файл помечен к офлайн-синхронизации) и «f» (файл просмотрен в обход
+//      синхронизации) разведены по бюджетам: у «f» свой небольшой потолок, и
+//      вытесняется он первым; «k» вытесняется, только когда помеченного больше, чем
+//      в его потолок помещается (иначе класс растёт без предела — а это ровно тот
+//      вектор, который фича «OOM на странице» и закрывает).
+//
+// Формат ключа: `offlinefile:<owner>:<projectId>:<k|f>:<extra>:<path>`. Владелец,
+// проект, «extra» и путь закодированы, поэтому двоеточие внутри них невозможно.
+// «extra» — хвост запроса после `path=` (например `featureId=…&sessionId=…`): файл,
+// прочитанный в дереве чата, — это НЕ тот же файл, что файл проекта, и путать их
+// в одном ключе нельзя.
+const FILE_CLASS_PREFIX = 'offlinefile:';
+// Потолок по весу помеченного содержимого. Число: типичный исходник — 20–50 КБ,
+// рабочая папка из 300 файлов — около 10 МБ; 64 МБ — с запасом на несколько папок и
+// тяжёлые файлы (картинки, архивы), и при этом существенно меньше квоты IndexedDB
+// вкладки (сотни МБ). Меняется одной правкой — см. setFileClassBudget и ADR-036 (И10).
+export const FILE_CLASS_MAX_BYTES = 64 * 1024 * 1024;
+// Потолок по весу НЕпомеченного содержимого: свой небольшой класс, чтобы просмотренные
+// в обход синхронизации файлы не занимали место помеченных. 8 МБ — несколько десятков
+// просмотренных файлов; этого хватает, чтобы открытый недавно файл дожил до конца
+// рабочей сессии, и мало, чтобы что-то вытеснить.
+export const FILE_CLASS_FREE_MAX_BYTES = 8 * 1024 * 1024;
+// Потолок по числу записей — страховка от множества мелких файлов (вес тогда мал,
+// а записей тысячи, и каждая тянет за собой запись в сторе).
+export const FILE_CLASS_MAX_RECORDS = 5000;
+// Проход по классу запускается не чаще, чем раз в 100 записей, — иначе курсор по
+// диапазону шёл бы на каждую запись (записи идут быстрее, чем проходы за ними).
+const FILE_EVICT_AFTER_WRITES = 100;
+// Запас до запуска прохода по весу: без него оценка после ужима равна потолку,
+// и следующая запись снова его перешагивала бы.
+const FILE_CLASS_TRIGGER_MARGIN = 1.25;
+
+let _fileMaxBytes = FILE_CLASS_MAX_BYTES;
+let _fileFreeMaxBytes = FILE_CLASS_FREE_MAX_BYTES;
+let _fileMaxRecords = FILE_CLASS_MAX_RECORDS;
+
+// Смена потолков класса содержимого файлов. По умолчанию — константы выше; вызывается
+// человеком (или тестом), когда нужен другой бюджет.
+export function setFileClassBudget(opts: { maxBytes?: number; freeMaxBytes?: number; maxRecords?: number }): void {
+  if (opts.maxBytes !== undefined && opts.maxBytes > 0) _fileMaxBytes = opts.maxBytes;
+  if (opts.freeMaxBytes !== undefined && opts.freeMaxBytes > 0) _fileFreeMaxBytes = opts.freeMaxBytes;
+  if (opts.maxRecords !== undefined && opts.maxRecords > 0) _fileMaxRecords = opts.maxRecords;
 }
 
-// Разбор ключа записи содержимого файла: <владелец>:/projects/<pid>/files/content?path=<путь>[&…].
-// Формат ключа живёт здесь — обе стороны (sync.ts читает и чистит эти записи) смотрят
-// на один контракт, а не повторяют разбор по-своему.
-export function parseFileContentCacheKey(key: string): { projectId: string; path: string } | null {
-  const i = key.indexOf('/projects/');
-  if (i < 0) return null;
-  const rest = key.slice(i + '/projects/'.length);
+function fileClassPrefix(owner: string): string {
+  return `${FILE_CLASS_PREFIX}${encodeURIComponent(owner)}:`;
+}
+
+// Ключ записи содержимого: владелец, проект, пометка, «extra», путь.
+function fileContentKeyFor(owner: string, projectId: string, path: string, keep: boolean, extra: string): string {
+  return `${fileClassPrefix(owner)}${encodeURIComponent(projectId)}:${keep ? 'k' : 'f'}:${encodeURIComponent(extra)}:${encodeURIComponent(path)}`;
+}
+
+// Префикс диапазона содержимого файлов проекта. Читает и чистит их sync.ts
+// (докачка, снятие синхронизации) — по голому URL они больше не адресуемы.
+export function fileContentCachePrefix(projectId: string): string | null {
+  const owner = readStoredUserId();
+  return owner === null ? null : `${fileClassPrefix(owner)}${encodeURIComponent(projectId)}:`;
+}
+
+// Разбор ключа записи содержимого файла. Формат ключа живёт здесь — обе стороны
+// (sync.ts читает и чистит эти записи) смотрят на один контракт, а не повторяют
+// разбор по-своему. Старый контракт (содержимое в общем классе 'offline:') тоже
+// разбирается: его записи осиротели, но слушатель вытеснения должен сбросить mtime
+// у путей, чьё содержимое снесено.
+export function parseFileContentCacheKey(key: string): { projectId: string; path: string; keep: boolean; extra: string } | null {
+  if (key.startsWith(FILE_CLASS_PREFIX)) {
+    const rest = key.slice(FILE_CLASS_PREFIX.length);
+    const i1 = rest.indexOf(':');
+    const i2 = i1 < 0 ? -1 : rest.indexOf(':', i1 + 1);
+    const i3 = i2 < 0 ? -1 : rest.indexOf(':', i2 + 1);
+    const i4 = i3 < 0 ? -1 : rest.indexOf(':', i3 + 1);
+    if (i4 < 0) return null;
+    const kind = rest.slice(i2 + 1, i3);
+    if (kind !== 'k' && kind !== 'f') return null;
+    try {
+      return {
+        projectId: decodeURIComponent(rest.slice(i1 + 1, i2)),
+        path: decodeURIComponent(rest.slice(i4 + 1)),
+        keep: kind === 'k',
+        extra: decodeURIComponent(rest.slice(i3 + 1, i4)),
+      };
+    } catch { return null; }
+  }
   const sep = '/files/content?path=';
-  const j = rest.indexOf(sep);
+  const j = key.indexOf(sep);
   if (j < 0) return null;
-  const projectId = rest.slice(0, j);
+  const head = key.slice(0, j);
+  const pidStart = head.lastIndexOf('/projects/');
+  if (pidStart < 0) return null;
+  const projectId = head.slice(pidStart + '/projects/'.length);
   if (!projectId) return null;
-  const tail = rest.slice(j + sep.length);
+  const tail = key.slice(j + sep.length);
   const amp = tail.indexOf('&');
   const raw = amp >= 0 ? tail.slice(0, amp) : tail;
-  try { return { projectId, path: decodeURIComponent(raw) }; } catch { return null; }
+  try { return { projectId, path: decodeURIComponent(raw), keep: false, extra: amp >= 0 ? tail.slice(amp + 1) : '' }; } catch { return null; }
+}
+
+// Разбор URL содержимого файла: /projects/<pid>/files/content?path=<путь>[&extra…].
+// Возвращает проект, путь и хвост запроса (extra).
+function parseFileContentUrl(url: string): { projectId: string; path: string; extra: string } | null {
+  const m = /^\/projects\/([^/?]+)\/files\/content\?path=([^&]*)(&.*)?$/.exec(url);
+  if (!m) return null;
+  try {
+    return {
+      projectId: decodeURIComponent(m[1]),
+      path: decodeURIComponent(m[2]),
+      extra: m[3] ? m[3].slice(1) : '',
+    };
+  } catch { return null; }
+}
+
+// --- Помеченные к офлайн-синхронизации файлы ---
+// Пометка — свойство ФАЙЛА, а не запроса: помеченный файл остаётся помеченным, когда
+// его открывают в просмотрщике (тот же URL). Поэтому список помеченных путей живёт
+// здесь, а владелец политики (sync.ts) сообщает о нём при каждом изменении.
+// Содержимое помеченного файла не вытесняется содержимым непомеченных.
+//
+// Храним помеченные ФАЙЛЫ и помеченные КАТАЛОГИ отдельно: помеченная папка помечает
+// всё вложенное, поэтому «помечен ли файл» решается и по его родителю.
+interface KeptPaths {
+  files: Set<string>;
+  dirs: Set<string>;
+}
+const _keptFiles = new Map<string, KeptPaths>();
+// Проекты, чей список помеченных пришёл от владельца политики (sync.ts): он авторитетен,
+// восстановление из стора их не трогает.
+const _authoritativeProjects = new Set<string>();
+// Пометки восстановлены из стора: после перезагрузки страницы реестр в памяти пуст,
+// а помеченные файлы уже лежат в сторе под «k» — без этого открытие такого файла
+// переписало бы его как непомеченное и выбило из-под защиты.
+let _keptPathsHydrated = false;
+
+function keptOf(projectId: string): KeptPaths {
+  return _keptFiles.get(projectId) ?? { files: new Set(), dirs: new Set() };
+}
+
+// Заменить список помеченных путей проекта (новые метки синхронизации).
+export function setKeptFilePaths(projectId: string, files: Iterable<string>, dirs: Iterable<string> = []): void {
+  _keptFiles.set(projectId, { files: new Set(files), dirs: new Set(dirs) });
+  _authoritativeProjects.add(projectId);
+}
+
+// Пометить путь (человек включил синхронизацию пути/папки).
+export function keepFilePath(projectId: string, path: string, isDirectory = false): void {
+  const kept = keptOf(projectId);
+  if (isDirectory) kept.dirs.add(path);
+  else kept.files.add(path);
+  _keptFiles.set(projectId, kept);
+  _authoritativeProjects.add(projectId);
+}
+
+// Снять пометку с пути и всего вложенного (человек выключил синхронизацию).
+export function unkeepFilePath(projectId: string, path: string): void {
+  const kept = _keptFiles.get(projectId);
+  if (!kept) return;
+  kept.files.delete(path);
+  kept.dirs.delete(path);
+  for (const fp of [...kept.files]) {
+    if (fp.startsWith(path + '/')) kept.files.delete(fp);
+  }
+  for (const dp of [...kept.dirs]) {
+    if (dp.startsWith(path + '/')) kept.dirs.delete(dp);
+  }
+  _authoritativeProjects.add(projectId);
+}
+
+// Помечено ли содержимое этого файла к офлайн-синхронизации: сам файл помечен или
+// помечен каталог, в котором он лежит.
+export function isKeptFilePath(projectId: string, path: string): boolean {
+  const kept = _keptFiles.get(projectId);
+  if (!kept) return false;
+  const p = path.replace(/\\/g, '/');
+  if (kept.files.has(p)) return true;
+  // Родительские каталоги: помеченная папка помечает всё вложенное
+  let i = p.lastIndexOf('/');
+  while (i > 0) {
+    if (kept.dirs.has(p.slice(0, i))) return true;
+    i = p.lastIndexOf('/', i - 1);
+  }
+  return kept.dirs.has('');
+}
+
+// Восстановить пометки из стора (однократно): помеченные файлы лежат под «k».
+// Проекты, чей список уже пришёл от sync.ts, не трогаем — их данные авторитетны.
+async function hydrateKeptPaths(owner: string): Promise<void> {
+  if (_keptPathsHydrated) return;
+  _keptPathsHydrated = true;
+  try {
+    const lo = fileClassPrefix(owner);
+    const stamps = await idbRangeStamps(lo, lo + PASSIVE_RANGE_END);
+    for (const s of stamps) {
+      if (!isKeepFileKey(s.key)) continue;
+      const parsed = parseFileContentCacheKey(s.key);
+      if (!parsed || parsed.extra) continue;
+      if (_authoritativeProjects.has(parsed.projectId)) continue;
+      const kept = keptOf(parsed.projectId);
+      kept.files.add(parsed.path);
+      _keptFiles.set(parsed.projectId, kept);
+    }
+  } catch { /* кэш недоступен — не критично */ }
 }
 
 const _usedTouched = new Map<string, number>();
@@ -551,6 +748,8 @@ let _maintainedOwner: string | null = null;
 // метки диапазона (десятки записей), а сам проход не на каждую запись.
 let _chatEvicting = false;
 let _chatScanAgain = false;
+// Проход по классу содержимого файлов — тоже не чаще одного за раз.
+let _fileScanAgain = false;
 // Оценка веса класса в памяти — повод для прохода (истина считается курсором в проходе)
 let _chatEstBytes = 0;
 let _chatEstRecords = 0;
@@ -574,11 +773,9 @@ async function notifyEvicted(keys: string[]): Promise<void> {
   }
 }
 
-async function passiveRead<T>(url: string, chatScope?: string): Promise<T | undefined> {
-  const key = passiveKey(url, readStoredUserId(), chatScope);
-  if (key === null) return undefined;
-  const cached = await idbGet<T>(key);
-  if (!cached) return undefined;
+// Обновление usedAt при чтении (для LRU). Вынесено: читают и общий класс, и класс
+// содержимого файлов, а правило одно.
+function touchUsedAt<T>(key: string, cached: { data: T; savedAt: number; usedAt?: number; bytes?: number }): void {
   const now = Date.now();
   if (now - (_usedTouched.get(key) ?? 0) >= USED_AT_REFRESH_MS) {
     if (_usedTouched.size > 1000) _usedTouched.clear();
@@ -586,6 +783,28 @@ async function passiveRead<T>(url: string, chatScope?: string): Promise<T | unde
     // savedAt остаётся прежним: это «данные по состоянию на», а не время обращения
     idbSet(key, { ...cached, usedAt: now }).catch(() => { /* не критично */ });
   }
+}
+
+async function passiveRead<T>(url: string, chatScope?: string): Promise<T | undefined> {
+  const owner = readStoredUserId();
+  // Содержимое файла — в своём классе: сначала помеченная запись («k»), потом
+  // непомеченная («f»). Помеченная защищена от вытеснения содержимым непомеченных.
+  const fileRef = parseFileContentUrl(url);
+  if (fileRef && owner !== null) {
+    for (const keep of [true, false]) {
+      const key = fileContentKeyFor(owner, fileRef.projectId, fileRef.path, keep, fileRef.extra);
+      const cached = await idbGet<T>(key);
+      if (!cached) continue;
+      touchUsedAt(key, cached);
+      return cached.data;
+    }
+    return undefined;
+  }
+  const key = passiveKey(url, owner, chatScope);
+  if (key === null) return undefined;
+  const cached = await idbGet<T>(key);
+  if (!cached) return undefined;
+  touchUsedAt(key, cached);
   return cached.data;
 }
 
@@ -596,16 +815,16 @@ async function passiveRead<T>(url: string, chatScope?: string): Promise<T | unde
 function passiveWrite(url: string, data: unknown, owner: string | null, chatScope?: string, bytes?: number): void {
   if (!owner) return;
   if (readStoredUserId() !== owner) return;
+  const now = Date.now();
   const key = passiveKey(url, owner, chatScope);
   if (key === null) return;
-  const now = Date.now();
   idbSet(key, { data, savedAt: now, usedAt: now, bytes }).catch(() => { /* кэш недоступен — не критично */ });
   if (_maintainedOwner !== owner) { void runPassiveMaintenance(); return; }
   if (chatScope) {
     // Проход по по-чатовому классу запускаем не на каждую запись, а когда накопленный
     // вес класса доходит до потолка: проход — это курсор по диапазону плюс удаления,
     // и на каждой записи он шёл бы позади (коммит записи занимает миллисекунды, а
-    // записи идут быстрее) — класс успевал бы выйти за потолок. Счётчик веса в памяти —
+    // записи идут быстрее) — класс успевал бы выйти за потолка. Счётчик веса в памяти —
     // только повод для прохода; истина (что в сторе) считается курсором в проходе.
     _chatEstBytes += bytes ?? 0;
     _chatEstRecords++;
@@ -619,6 +838,132 @@ function passiveWrite(url: string, data: unknown, owner: string | null, chatScop
   if (_writesSinceEvict >= EVICT_AFTER_WRITES || now - _lastEvictAt >= EVICT_MIN_INTERVAL_MS) {
     void evictPassive(owner);
   }
+}
+
+// --- Запись и вытеснение класса содержимого файлов ---
+
+// Оценки класса в памяти — повод для прохода; истина (что в сторе) считается курсором.
+let _fileEstKeepBytes = 0;
+let _fileEstFreeBytes = 0;
+let _fileEstRecords = 0;
+let _fileWrites = 0;
+let _fileEviction: Promise<void> | null = null;
+
+async function writeFileContent(owner: string, ref: { projectId: string; path: string; extra: string }, data: unknown, bytes: number): Promise<void> {
+  // Пометка — свойство файла, а не запроса: помеченный файл остаётся помеченным и
+  // когда его открывают в просмотрщике. После перезагрузки страницы реестр в памяти
+  // пуст — сперва восстанавливаем пометки из стора (помеченное лежит под «k»).
+  await hydrateKeptPaths(owner);
+  // Пометку НЕЛЬЗЯ понижать: если в сторе уже есть защищённая запись «k», файл
+  // помечен (реестр мог ещё не знать о пометке — например, просмотрщик открыл файл
+  // раньше, чем пришло дерево проекта). Запись «k» переносим в «f» — файл потерял
+  // защиту от вытеснения, хотя человек его пометил.
+  //
+  // extra ≠ пусто — это файл, прочитанный в дереве ЧАТА (sessionId): другой файл
+  // с тем же путём, к офлайн-синхронизации проекта он отношения не имеет.
+  const keepKey = fileContentKeyFor(owner, ref.projectId, ref.path, true, ref.extra);
+  const keep = ref.extra === ''
+    && (isKeptFilePath(ref.projectId, ref.path) || (await idbGet(keepKey)) !== undefined);
+  const key = keep ? keepKey : fileContentKeyFor(owner, ref.projectId, ref.path, false, ref.extra);
+  const now = Date.now();
+  await idbSet(key, { data, savedAt: now, usedAt: now, bytes }).catch(() => { /* кэш недоступен — не критично */ });
+  // Запись с противоположной пометкой того же файла устарела: две записи одного файла
+  // место занимают впустую, а «f»-версия вытесняла бы «k»-версию из-под защиты.
+  await idbDelete(fileContentKeyFor(owner, ref.projectId, ref.path, !keep, ref.extra)).catch(() => {});
+  if (keep) _fileEstKeepBytes += bytes; else _fileEstFreeBytes += bytes;
+  _fileEstRecords++;
+  _fileWrites++;
+  if (_fileWrites >= FILE_EVICT_AFTER_WRITES
+    || _fileEstKeepBytes > _fileMaxBytes * FILE_CLASS_TRIGGER_MARGIN
+    || _fileEstFreeBytes > _fileFreeMaxBytes * FILE_CLASS_TRIGGER_MARGIN
+    || _fileEstRecords > _fileMaxRecords * FILE_CLASS_TRIGGER_MARGIN) {
+    _fileWrites = 0;
+    void scheduleFileEviction(owner);
+  }
+}
+
+// Пометка «k» в ключе записи содержимого.
+function isKeepFileKey(key: string): boolean {
+  if (!key.startsWith(FILE_CLASS_PREFIX)) return false;
+  const rest = key.slice(FILE_CLASS_PREFIX.length);
+  const i1 = rest.indexOf(':');
+  const i2 = i1 < 0 ? -1 : rest.indexOf(':', i1 + 1);
+  const i3 = i2 < 0 ? -1 : rest.indexOf(':', i2 + 1);
+  return i3 >= 0 && rest.slice(i2 + 1, i3) === 'k';
+}
+
+// Проход по классу содержимого: не чаще одного за раз (запись, попавшая в класс во
+// время прохода, помечает «надо пройти ещё раз»).
+function scheduleFileEviction(owner: string): Promise<void> {
+  if (_fileEviction) { _fileScanAgain = true; return _fileEviction; }
+  _fileEviction = (async () => {
+    try {
+      do {
+        _fileScanAgain = false;
+        await evictFileClassOnce(owner);
+      } while (_fileScanAgain);
+    } finally {
+      _fileEviction = null;
+      // Сигнал «надо пройти ещё раз» мог прийти в последний момент (между проверкой
+      // цикла и завершением) — иначе он потерялся бы, и класс остался бы выше потолка.
+      if (_fileScanAgain) void scheduleFileEviction(owner);
+    }
+  })();
+  return _fileEviction;
+}
+
+// Дождаться завершения вытеснения класса содержимого. Нужен потребителю, который
+// решает по содержимому стора (sync.ts — «лежит ли файл в офлайне»): без ожидания
+// решение принималось бы по устаревшему снимку, и mtime встал бы у вытесненного файла.
+export async function flushFileEviction(): Promise<void> {
+  // Ждём не текущего прогона, а ПОКОЯ: проход, начавшийся после нашего ожидания,
+  // тоже должен завершиться, иначе решение снова принято по устаревшему снимку.
+  for (let i = 0; i < 10; i++) {
+    const p = _fileEviction;
+    if (!p) return;
+    await p.catch(() => { /* кэш недоступен — не критично */ });
+  }
+}
+
+// Вытеснение класса содержимого файлов. Порядок: сначала непомеченное («f») — у него
+// свой небольшой бюджет, и оно само по себе не вытесняет помеченное; затем помеченное
+// («k») — но только когда помеченного больше, чем в его потолок помещается.
+//
+// Потолки по числу записей считаются у каждой части ОТДЕЛЬНО: иначе множество
+// непомеченных записей вытеснило бы помеченное (а это ровно то, чего класс содержимого
+// и добивается: помеченное человек держит, непомеченное — гость).
+async function evictFileClassOnce(owner: string): Promise<void> {
+  try {
+    const lo = fileClassPrefix(owner);
+    const hi = lo + PASSIVE_RANGE_END;
+    const stamps = await idbRangeStamps(lo, hi);
+    if (!stamps.length) {
+      _fileEstKeepBytes = 0; _fileEstFreeBytes = 0; _fileEstRecords = 0;
+      return;
+    }
+    const stamp = (e: { savedAt: number; usedAt?: number }) => e.usedAt ?? e.savedAt;
+    const keep = stamps.filter(s => isKeepFileKey(s.key)).sort((a, b) => stamp(a) - stamp(b));
+    const free = stamps.filter(s => !isKeepFileKey(s.key)).sort((a, b) => stamp(a) - stamp(b));
+    let keepBytes = 0; for (const s of keep) keepBytes += s.bytes ?? 0;
+    let freeBytes = 0; for (const s of free) freeBytes += s.bytes ?? 0;
+    let keepRecords = keep.length;
+    let freeRecords = free.length;
+    const drop: string[] = [];
+    for (const s of free) {
+      if (freeBytes <= _fileFreeMaxBytes && freeRecords <= _fileMaxRecords) break;
+      drop.push(s.key); freeBytes -= s.bytes ?? 0; freeRecords--;
+    }
+    for (const s of keep) {
+      if (keepBytes <= _fileMaxBytes && keepRecords <= _fileMaxRecords) break;
+      drop.push(s.key); keepBytes -= s.bytes ?? 0; keepRecords--;
+    }
+    if (drop.length) {
+      await Promise.all(drop.map(k => idbDelete(k).catch(() => {})));
+      // Слушатель (sync.ts) по снятым ключам сбросит mtime вытесненных путей.
+      await notifyEvicted(drop);
+    }
+    _fileEstKeepBytes = keepBytes; _fileEstFreeBytes = freeBytes; _fileEstRecords = keepRecords + freeRecords;
+  } catch { /* кэш недоступен — не критично */ }
 }
 
 // Вытеснение по наименьшему usedAt. Источник правды — сам стор, счётчика в памяти нет.
@@ -651,20 +996,33 @@ export async function runPassiveMaintenance(): Promise<void> {
     const keys = await idbKeys();
     const legacy = keys.filter(isLegacyPassiveKey);
     await Promise.all(legacy.map(k => idbDelete(k).catch(() => {})));
+    // Содержимое файлов прежнего контракта (лежало в общем классе 'offline:') осиротело:
+    // его больше не читают, а в общем LRU оно занимало место наравне с листингами.
+    const legacyContent = keys.filter(isLegacyFileContentKey);
+    await Promise.all(legacyContent.map(k => idbDelete(k).catch(() => {})));
     if (owner) {
       _maintainedOwner = owner;
       const own = ownerPrefix(owner);
       const ownChat = chatClassPrefix(owner);
+      const ownFile = fileClassPrefix(owner);
       // Один курсор на всё семейство пассивных ключей: и общий класс ('offline:'),
       // и по-чатовой ('offlinechat:'). Свои — по своему префиксу, чужие (прежний
       // аккаунт) — сносятся: иначе записи чужого владельца остались бы в сторе.
       const all = await idbRangeStamps(PASSIVE_FAMILY_LOW, PASSIVE_FAMILY_LOW + PASSIVE_RANGE_END);
-      const foreign = all.filter(s => !s.key.startsWith(own) && !s.key.startsWith(ownChat));
+      const foreign = all.filter(s => !s.key.startsWith(own) && !s.key.startsWith(ownChat)
+        && !s.key.startsWith(FILE_CLASS_PREFIX));
       await Promise.all(foreign.map(s => idbDelete(s.key).catch(() => {})));
+      // Класс содержимого файлов — свой диапазон: чужие владельцы сносятся отдельно
+      // (общий курсор их не видит — диапазон 'offlinefile:' не входит в семейство
+      // пассивных ключей по владельцу).
+      const allFiles = await idbRangeStamps(FILE_CLASS_PREFIX, FILE_CLASS_PREFIX + PASSIVE_RANGE_END);
+      const foreignFiles = allFiles.filter(s => !s.key.startsWith(ownFile));
+      await Promise.all(foreignFiles.map(s => idbDelete(s.key).catch(() => {})));
       // Снятое содержимое (смена владельца, осиротевшие ключи) — его mtime-записи
       // тоже сбрасываются, иначе докачка не вернёт эти файлы.
-      await notifyEvicted([...legacy, ...foreign.map(s => s.key)]);
+      await notifyEvicted([...legacy, ...legacyContent, ...foreign.map(s => s.key), ...foreignFiles.map(s => s.key)]);
       await evictPassive(owner);
+      await evictFileClassOnce(owner);
       // Метки по-чатового класса берём из того же курсора — второй курсор здесь не нужен.
       await evictChatClass(owner, all.filter(s => s.key.startsWith(ownChat)));
     }
@@ -854,7 +1212,16 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
       // Вес ответа — по длине текста: оценка снизу для кириллицы (2 байта на символ),
       // потолок берём с запасом. Точный размер нужен только чтобы понять, что класс
       // по-чатовых записей пора ужимать.
-      passiveWrite(url, data, ownerAtStart, chatScope, text.length);
+      //
+      // Содержимое файла — отдельный класс (свой бюджет по весу): его запись ЖДЁМ:
+      // от ответа зависит, что человек увидит офлайн, и пометка «помечен/не помечен»
+      // выбирается по восстановленному из стора реестру.
+      const fileRef = parseFileContentUrl(url);
+      if (fileRef && ownerAtStart && readStoredUserId() === ownerAtStart) {
+        await writeFileContent(ownerAtStart, fileRef, data, text.length);
+      } else {
+        passiveWrite(url, data, ownerAtStart, chatScope, text.length);
+      }
     }
     return data;
   } catch (e) {

@@ -5,20 +5,20 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // который offline.ts передаёт в стор, — предмет проверки (мутация «весь стор» должна краснеть).
 
 const fake = vi.hoisted(() => {
-  const store = new Map<string, { data: unknown; savedAt: number; usedAt?: number }>();
+  const store = new Map<string, { data: unknown; savedAt: number; usedAt?: number; bytes?: number }>();
   const calls = { count: 0, cursor: 0, set: 0 };
   const inRange = (k: string, lo: string, hi: string) => k >= lo && k <= hi;
   return {
     store, calls,
     idbGet: async (k: string) => store.get(k),
-    idbSet: async (k: string, v: { data: unknown; savedAt: number; usedAt?: number }) => { calls.set++; store.set(k, v); return k; },
+    idbSet: async (k: string, v: { data: unknown; savedAt: number; usedAt?: number; bytes?: number }) => { calls.set++; store.set(k, v); return k; },
     idbDelete: async (k: string) => { store.delete(k); return undefined; },
     idbKeys: async () => [...store.keys()],
     idbCountRange: async (lo: string, hi: string) => { calls.count++; return [...store.keys()].filter(k => inRange(k, lo, hi)).length; },
     idbRangeStamps: async (lo: string, hi: string) => {
       calls.cursor++;
       return [...store.entries()].filter(([k]) => inRange(k, lo, hi))
-        .map(([key, v]) => ({ key, savedAt: v.savedAt, usedAt: v.usedAt }));
+        .map(([key, v]) => ({ key, savedAt: v.savedAt, usedAt: v.usedAt, bytes: v.bytes }));
     },
   };
 });
@@ -212,9 +212,8 @@ describe('вытеснение', () => {
     expect(own('A')).toHaveLength(180);
     for (let i = 0; i < 20; i++) fake.store.set(`offline:A:/n/${i}`, { data: i, savedAt: 1 });
     expect(own('A')).toHaveLength(200);
-    fake.calls.cursor = 0;
     await offline.runPassiveMaintenance();
-    expect(fake.calls.cursor).toBe(1); // чужие offline:* ищутся курсором, но свои 200 не ужимаются
+    // свои 200 записей не ужимаются (потолок не превышен)
     expect(own('A')).toHaveLength(200);
   });
 
@@ -253,16 +252,16 @@ describe('usedAt при чтении', () => {
 });
 
 describe('класс содержимого файлов', () => {
-  it('префикс содержимого — под владельцем (sync.ts чистит и читает по нему)', () => {
-    expect(offline.fileContentCachePrefix('p1')).toBe('offline:A:/projects/p1/files/content?path=');
+  it('префикс содержимого — свой диапазон под владельцем (sync.ts чистит и читает по нему)', () => {
+    expect(offline.fileContentCachePrefix('p1')).toBe('offlinefile:A:p1:');
     ls.removeItem('cc_user_id');
     expect(offline.fileContentCachePrefix('p1')).toBeNull();
   });
 
-  it('пишется и читается под ключом с владельцем; чужой владелец не читает и не пишет', async () => {
+  it('пишется и читается в своём классе; чужой владелец не читает и не пишет', async () => {
     const url = '/projects/p1/files/content?path=a.txt';
     await get(url);
-    expect([...fake.store.keys()]).toEqual([`offline:A:${url}`]);
+    expect([...fake.store.keys()]).toEqual(['offlinefile:A:p1:f::a.txt']);
     expect(await getOffline(url)).toEqual({ v: { url } });
 
     // Чужой владелец: чужую запись не читает
@@ -270,11 +269,12 @@ describe('класс содержимого файлов', () => {
     expect(await getOffline(url)).toMatchObject({ e: expect.any(offline.OfflineError) });
     // …и пишет под своим ключом (запись прежнего владельца сносится проходом обслуживания)
     await get(url);
-    expect(fake.store.has(`offline:B:${url}`)).toBe(true);
-    expect(fake.store.has(`offline:A:${url}`)).toBe(false);
+    await offline.runPassiveMaintenance();
+    expect(fake.store.has('offlinefile:B:p1:f::a.txt')).toBe(true);
+    expect(fake.store.has('offlinefile:A:p1:f::a.txt')).toBe(false);
   });
 
-  it('N просмотренных файлов дают не больше потолка записей в сторе', async () => {
+  it('N просмотренных файлов не занимают место в общем LRU — у них свой класс', async () => {
     const N = 250;
     for (let i = 0; i < N; i++) {
       await get(`/projects/p1/files/content?path=f${i}.txt`);
@@ -282,12 +282,16 @@ describe('класс содержимого файлов', () => {
     }
     await offline.runPassiveMaintenance();
 
-    const content = [...fake.store.keys()].filter(k => k.startsWith('offline:A:/projects/p1/files/content?path='));
-    expect(content).toHaveLength(offline.PASSIVE_CACHE_TRIM_TO);
-    expect(own('A')).toHaveLength(offline.PASSIVE_CACHE_TRIM_TO);
-    // вытеснены самые давние, остались самые свежие
-    expect(fake.store.has('offline:A:/projects/p1/files/content?path=f249.txt')).toBe(true);
-    expect(fake.store.has('offline:A:/projects/p1/files/content?path=f0.txt')).toBe(false);
+    // общий класс пуст: содержимое живёт в своём диапазоне
+    expect(own('A')).toHaveLength(0);
+    const content = [...fake.store.keys()].filter(k => k.startsWith('offlinefile:A:p1:'));
+    expect(content).toHaveLength(N);
+  });
+
+  it('старое содержимое из общего класса (прежний контракт) сносится проходом', async () => {
+    fake.store.set('offline:A:/projects/p1/files/content?path=a.txt', { data: { old: true }, savedAt: 1 });
+    await offline.runPassiveMaintenance();
+    expect(fake.store.has('offline:A:/projects/p1/files/content?path=a.txt')).toBe(false);
   });
 });
 

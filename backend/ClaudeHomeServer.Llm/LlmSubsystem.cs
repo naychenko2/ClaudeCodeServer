@@ -214,6 +214,10 @@ public sealed class LlmSubsystem : IAppSubsystem
                 Subject: "арбитром именованного локального движка",
                 Consequence: "Место уйдёт дальше по своей цепочке (страховка или claude)."));
 
+        // Клиент состояния арбитра GPU (/state) для движков с `StateUrl`: опрос по запросу,
+        // фонового цикла нет — его зовут дорожка статистики (статус «уступила») и блок «Дежурство».
+        services.AddSingleton<LocalEngineStateClient>();
+
         // Бесплатное ранжирование действий локальной Ollama для роутинга
         // через LocalActionRouter.
         services.AddSingleton<OllamaActionRankService>();

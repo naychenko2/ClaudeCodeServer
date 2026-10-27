@@ -69,8 +69,9 @@ public class NamedLocalEngineTests
     private static NamedLocalEngines Engines(FakeEngineClient client, bool ready, string? fallback,
         params string[] actions) =>
         new([new LocalEngine(
-            new LocalEngineSpec(Engine, ReadyUrl: "http://arbiter/ready", fallback, NumCtx: 8192,
-                new HashSet<string>(actions, StringComparer.OrdinalIgnoreCase)),
+            new LocalEngineSpec(Engine, ReadyUrl: "http://arbiter/ready", StateUrl: null,
+                FallbackRoute: fallback, NumCtx: 8192,
+                Actions: new HashSet<string>(actions, StringComparer.OrdinalIgnoreCase)),
             client, _ => Task.FromResult(ready))]);
 
     private static (CheapTextRunner Runner, LocalActionRouter Router, LocalActionOverridesStore Store, FakeOneShot Claude)

@@ -9,6 +9,8 @@ namespace ClaudeHomeServer.Services.Llm;
 // Конфиг — секция `LocalEngines:{name}`: поля транспорта как у `LocalLlm` (BaseUrl, Model,
 // TextModel, TimeoutMs, DisableThinking, ApiKey), плюс:
 //   • `ReadyUrl`      — GET, 200 = движок готов (у арбитра GPU — `/ready`); пусто — без пробы;
+//   • `StateUrl`      — полный ответ арбитра GPU (`/state`), читает LocalEngineStateClient
+//                       (статус «уступила/вернулась», причины); пусто — арбитра нет;
 //   • `FallbackRoute` — шаг после неудачи движка, перед финальным claude: `direct:<model>`
 //                       (прямой адаптер, например MiniMax) — других значений нет;
 //   • `NumCtx`        — потолок контекста движка (окно слота llama-server): профиль места
@@ -20,6 +22,7 @@ namespace ClaudeHomeServer.Services.Llm;
 public sealed record LocalEngineSpec(
     string Name,
     string? ReadyUrl,
+    string? StateUrl,
     string? FallbackRoute,
     int? NumCtx,
     IReadOnlySet<string> Actions);
@@ -90,8 +93,8 @@ public sealed class NamedLocalEngines
                     name, fallback);
                 fallback = null;
             }
-            var spec = new LocalEngineSpec(name, section["ReadyUrl"]?.Trim(), fallback,
-                int.TryParse(section["NumCtx"], out var numCtx) && numCtx > 0 ? numCtx : null, actions);
+            var spec = new LocalEngineSpec(name, section["ReadyUrl"]?.Trim(), section["StateUrl"]?.Trim(),
+                fallback, int.TryParse(section["NumCtx"], out var numCtx) && numCtx > 0 ? numCtx : null, actions);
             // Свой ключ слота на каждый движок: потолок не делится ни с основным LocalLlm, ни с соседями
             var maxConcurrency = int.TryParse(section["MaxConcurrency"], out var mc) && mc > 0
                 ? mc : TrackedLocalLlmClient.DefaultLimit;

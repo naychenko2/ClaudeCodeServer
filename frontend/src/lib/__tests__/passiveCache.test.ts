@@ -103,10 +103,15 @@ describe('ключ с владельцем', () => {
     expect(await getOffline('/things')).toMatchObject({ e: expect.any(offline.OfflineError) });
   });
 
-  it('ключи синхронизации файлов и индекс фич остаются без префикса и читаются как раньше', async () => {
+  it('sync-класс (листинги файлов, индекс фич, список чатов) живёт под ключом с владельцем и читается офлайн как раньше', async () => {
     await get('/projects/p1/files?path=a');
     await get('/tasks/features/index?projectId=p1');
-    expect([...fake.store.keys()].sort()).toEqual(['/projects/p1/files?path=a', '/tasks/features/index?projectId=p1']);
+    await get('/projects/p1/sessions');
+    expect([...fake.store.keys()].sort()).toEqual([
+      'offline:A:/projects/p1/files?path=a',
+      'offline:A:/projects/p1/sessions',
+      'offline:A:/tasks/features/index?projectId=p1',
+    ]);
     expect(await getOffline('/projects/p1/files?path=a')).toEqual({ v: { url: '/projects/p1/files?path=a' } });
   });
 
@@ -151,20 +156,25 @@ describe('ключ с владельцем', () => {
 describe('вытеснение', () => {
   const NEIGHBORS: Record<string, unknown> = {
     'tasks:all': { data: [{ id: 't1' }], savedAt: 5 },
-    'tasks:legacy-cache-purged:v2': { data: true, savedAt: 6 },
+    'tasks:legacy-cache-purged:v3': { data: true, savedAt: 6 },
     'notes:localKey-index': { data: { a: 'b' }, savedAt: 7 },
     'notes-mtimes': { data: { n: '1' }, savedAt: 8 },
     'synced-mtimes:p1': { data: { f: '1' }, savedAt: 9 },
     'synced-chats:p1': { data: { c: '1' }, savedAt: 10 },
-    '/tasks/features/index?projectId=p1': { data: [1], savedAt: 11 },
-    '/projects/p1/files?path=a': { data: [2], savedAt: 12 },
-    '/projects/p1/files/content?path=a%2Fb.txt': { data: 'text', savedAt: 13 },
-    '/projects/p1/sessions': { data: [3], savedAt: 14 },
+    'chat:continue:s1': { data: { c: '2' }, savedAt: 11 },
     'offline:B:/чужой': { data: 1, savedAt: 1 },
   };
+  // Осиротевшие голые ключи sync-класса: после смены контракта их больше не читают
+  const ORPHANED = [
+    '/tasks/features/index?projectId=p1',
+    '/projects/p1/files?path=a',
+    '/projects/p1/files/content?path=a%2Fb.txt',
+    '/projects/p1/sessions',
+  ];
 
   it('соседи в «meta» побайтно не меняются, свои записи ужимаются ровно до 180', async () => {
     for (const [k, v] of Object.entries(NEIGHBORS)) fake.store.set(k, structuredClone(v) as never);
+    for (const k of ORPHANED) fake.store.set(k, { data: 1, savedAt: 12 });
     seedOwn('A', 250, i => ({ savedAt: 1000 + i }));
     await offline.runPassiveMaintenance();
     expect(own('A')).toHaveLength(180);
@@ -175,6 +185,8 @@ describe('вытеснение', () => {
       if (k === 'offline:B:/чужой') continue; // чужой владелец сносится отдельным правилом
       expect(JSON.stringify(fake.store.get(k))).toBe(JSON.stringify(v));
     }
+    // осиротевшие голые ключи sync-класса недостижимы для чтения — сносятся
+    for (const k of ORPHANED) expect(fake.store.has(k)).toBe(false);
   });
 
   it('LRU по доступу: давно записанная, но недавно прочитанная выживает; свежая, но не читанная — уходит', async () => {
@@ -240,13 +252,58 @@ describe('usedAt при чтении', () => {
   });
 });
 
+describe('класс содержимого файлов', () => {
+  it('префикс содержимого — под владельцем (sync.ts чистит и читает по нему)', () => {
+    expect(offline.fileContentCachePrefix('p1')).toBe('offline:A:/projects/p1/files/content?path=');
+    ls.removeItem('cc_user_id');
+    expect(offline.fileContentCachePrefix('p1')).toBeNull();
+  });
+
+  it('пишется и читается под ключом с владельцем; чужой владелец не читает и не пишет', async () => {
+    const url = '/projects/p1/files/content?path=a.txt';
+    await get(url);
+    expect([...fake.store.keys()]).toEqual([`offline:A:${url}`]);
+    expect(await getOffline(url)).toEqual({ v: { url } });
+
+    // Чужой владелец: чужую запись не читает
+    login('B');
+    expect(await getOffline(url)).toMatchObject({ e: expect.any(offline.OfflineError) });
+    // …и пишет под своим ключом (запись прежнего владельца сносится проходом обслуживания)
+    await get(url);
+    expect(fake.store.has(`offline:B:${url}`)).toBe(true);
+    expect(fake.store.has(`offline:A:${url}`)).toBe(false);
+  });
+
+  it('N просмотренных файлов дают не больше потолка записей в сторе', async () => {
+    const N = 250;
+    for (let i = 0; i < N; i++) {
+      await get(`/projects/p1/files/content?path=f${i}.txt`);
+      await vi.advanceTimersByTimeAsync(1); // разные метки времени → LRU проверяем по доступу
+    }
+    await offline.runPassiveMaintenance();
+
+    const content = [...fake.store.keys()].filter(k => k.startsWith('offline:A:/projects/p1/files/content?path='));
+    expect(content).toHaveLength(offline.PASSIVE_CACHE_TRIM_TO);
+    expect(own('A')).toHaveLength(offline.PASSIVE_CACHE_TRIM_TO);
+    // вытеснены самые давние, остались самые свежие
+    expect(fake.store.has('offline:A:/projects/p1/files/content?path=f249.txt')).toBe(true);
+    expect(fake.store.has('offline:A:/projects/p1/files/content?path=f0.txt')).toBe(false);
+  });
+});
+
 describe('старые записи без префикса', () => {
   const KEEP = [
-    'tasks:all', 'tasks:legacy-cache-purged:v2', 'notes:localKey-index', 'notes-mtimes', 'synced-mtimes:p1',
-    'synced-chats:p1', '/tasks/features/index', '/tasks/features/index?projectId=p1',
-    '/projects/p1/files?path=', '/projects/p1/files/content?path=a', '/projects/p1/sessions',
+    'tasks:all', 'tasks:legacy-cache-purged:v3', 'notes:localKey-index', 'notes-mtimes', 'synced-mtimes:p1',
+    'synced-chats:p1', 'chat:continue:s1',
   ];
-  const OLD = ['/tasks', '/tasks?q=1', '/api/tasks/abc', '/tasks/features/f1?eventsLimit=50', '/projects/p1/tasks'];
+  const OLD = [
+    '/tasks', '/tasks?q=1', '/api/tasks/abc', '/tasks/features/f1?eventsLimit=50', '/projects/p1/tasks',
+    // sync-класс: осиротел после перехода под префикс владельца
+    '/projects/p1/files?path=', '/projects/p1/files/content?path=a', '/projects/p1/sessions', '/tasks/features/index',
+    // прочие потребители пассивного кэша
+    '/notifications?limit=50&offset=0', '/ai/caps', '/auth/cache-thresholds', '/tts/diag',
+    '/projects/p1/device-agent/ticket', '/sessions/s1/context',
+  ];
 
   it('сносятся на проходе; повторный проход идемпотентен; «дописанные» сносятся на следующем', async () => {
     for (const k of [...KEEP, ...OLD]) fake.store.set(k, { data: 1, savedAt: 1 });

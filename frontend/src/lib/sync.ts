@@ -8,7 +8,7 @@
 import { useSyncExternalStore } from 'react';
 import type { FileEntry, Session, SyncMark } from '../types';
 import { api } from './api';
-import { isOnline } from './offline';
+import { isOnline, passiveCacheKey, fileContentCachePrefix } from './offline';
 import { idbGet, idbSet, idbKeys, idbDelete } from './idb';
 import { isSubsystemEnabled } from './subsystems';
 import { warmNote, drainNotesOutbox } from './notesOffline';
@@ -22,6 +22,8 @@ function parentDir(path: string): string {
 
 // Раскладывает плоское дерево по per-directory кэшу под теми же URL, что использует
 // api.files.list — чтобы FileExplorer (грузит папки по одной) работал офлайн.
+// Ключ — общий с пассивным кэшем request(): offline:<owner>:<url>. Без владельца
+// (не вошли) кэша нет — писать некуда.
 async function cacheTreeAsListings(projectId: string, tree: FileEntry[]): Promise<void> {
   const groups = new Map<string, FileEntry[]>();
   // Корень и каждая папка должны иметь запись, даже пустые
@@ -35,7 +37,10 @@ async function cacheTreeAsListings(projectId: string, tree: FileEntry[]): Promis
     // Порядок как в FileService.List: сначала папки, потом файлы, по алфавиту
     entries.sort((a, b) => (a.isDirectory !== b.isDirectory ? (a.isDirectory ? -1 : 1) : a.path.localeCompare(b.path)));
     const url = `/projects/${projectId}/files?path=${encodeURIComponent(dir)}`;
-    await idbSet(url, { data: entries, savedAt: Date.now() }).catch(() => {});
+    const key = passiveCacheKey(url);
+    if (key === null) continue;
+    const now = Date.now();
+    await idbSet(key, { data: entries, savedAt: now, usedAt: now }).catch(() => {});
   }
 }
 
@@ -136,16 +141,18 @@ function markDownloaded(projectId: string, path: string) {
 // path === '' → весь проект; иначе сам путь и всё вложенное.
 async function dropSyncedContent(projectId: string, path: string): Promise<void> {
   const p = norm(path);
-  const prefix = `/projects/${projectId}/files/content?path=`;
-  const keys = await idbKeys().catch(() => [] as string[]);
+  const prefix = fileContentCachePrefix(projectId);
   const set = _downloaded.get(projectId);
-  for (const k of keys) {
-    if (!k.startsWith(prefix)) continue;
-    let fp: string;
-    try { fp = decodeURIComponent(k.slice(prefix.length)); } catch { continue; }
-    if (p === '' || fp === p || fp.startsWith(p + '/')) {
-      await idbDelete(k).catch(() => {});
-      set?.delete(fp);
+  if (prefix !== null) {
+    const keys = await idbKeys().catch(() => [] as string[]);
+    for (const k of keys) {
+      if (!k.startsWith(prefix)) continue;
+      let fp: string;
+      try { fp = decodeURIComponent(k.slice(prefix.length)); } catch { continue; }
+      if (p === '' || fp === p || fp.startsWith(p + '/')) {
+        await idbDelete(k).catch(() => {});
+        set?.delete(fp);
+      }
     }
   }
   // Чистим записи mtime, чтобы при повторной синхронизации файлы скачались заново
@@ -160,12 +167,14 @@ async function dropSyncedContent(projectId: string, path: string): Promise<void>
 
 // Заполнить набор скачанных файлов из IndexedDB (по ключам content-запросов проекта)
 export async function loadDownloadedSet(projectId: string): Promise<void> {
-  const keys = await idbKeys().catch(() => [] as string[]);
-  const prefix = `/projects/${projectId}/files/content?path=`;
+  const prefix = fileContentCachePrefix(projectId);
   const set = new Set<string>();
-  for (const k of keys) {
-    if (k.startsWith(prefix)) {
-      try { set.add(decodeURIComponent(k.slice(prefix.length))); } catch { /* битый ключ */ }
+  if (prefix !== null) {
+    const keys = await idbKeys().catch(() => [] as string[]);
+    for (const k of keys) {
+      if (k.startsWith(prefix)) {
+        try { set.add(decodeURIComponent(k.slice(prefix.length))); } catch { /* битый ключ */ }
+      }
     }
   }
   _downloaded.set(projectId, set);
@@ -359,10 +368,10 @@ export async function runOfflineSnapshot(priorityProjectId?: string): Promise<vo
     for (const p of ordered) {
       const mtimes = mtimeByProject.get(p.id) ?? {};
       const valid = validByProject.get(p.id) ?? new Set<string>();
-      const prefix = `/projects/${p.id}/files/content?path=`;
+      const prefix = fileContentCachePrefix(p.id);
       for (const fp of Object.keys(mtimes)) {
         if (valid.has(fp)) continue;
-        await idbDelete(prefix + encodeURIComponent(fp)).catch(() => {});
+        if (prefix !== null) await idbDelete(prefix + encodeURIComponent(fp)).catch(() => {});
         _downloaded.get(p.id)?.delete(fp);
         delete mtimes[fp];
       }
@@ -461,10 +470,10 @@ async function doSyncProjectFiles(projectId: string): Promise<void> {
   if (tasks.length) setProgress({ active: false });
 
   // Чистим удалённые/рассинхронизированные
-  const prefix = `/projects/${projectId}/files/content?path=`;
+  const prefix = fileContentCachePrefix(projectId);
   for (const fp of Object.keys(mtimes)) {
     if (valid.has(fp)) continue;
-    await idbDelete(prefix + encodeURIComponent(fp)).catch(() => {});
+    if (prefix !== null) await idbDelete(prefix + encodeURIComponent(fp)).catch(() => {});
     _downloaded.get(projectId)?.delete(fp);
     delete mtimes[fp];
   }

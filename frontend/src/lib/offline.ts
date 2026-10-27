@@ -414,7 +414,9 @@ function isAbortError(e: unknown): boolean {
 // вызова. Читаем строго по своему владельцу и БЕЗ отката на ключ без префикса: запись без
 // владельца могла бы отдаться другому аккаунту. Нет владельца (не вошли) — промах.
 // Всё вытеснение и чистка работают только по диапазону `offline:`: outbox, tasks:all, индекс
-// заметок, продолжения чатов и sync-ключи сюда не попадают.
+// заметок и продолжения чатов сюда не попадают. Ключи sync-класса (листинги дерева файлов и
+// их содержимое, индекс фич, список чатов проекта) тоже живут под префиксом владельца —
+// иначе класс содержимого файлов рос бы без потолка до логаута.
 const PASSIVE_PREFIX = 'offline:';
 const PASSIVE_RANGE_END = '\uffff';
 // Потолок записей на владельца и запас снизу: после ужима до 180 следующая запись прохода
@@ -428,32 +430,16 @@ const EVICT_AFTER_WRITES = 100;
 // и правдой не является: лишнее обновление безвредно).
 const USED_AT_REFRESH_MS = 5 * 60_000;
 
-// Записи, чьи ключи читают другие модули по голому URL (офлайн-дерево файлов и его скачанное
-// содержимое — sync.ts, индекс фич, список чатов проекта — SessionList): остаются без
-// префикса и вне вытеснения. Новый тип записи со своим читателем — сюда же.
-const SYNC_OWNED_URL: RegExp[] = [
-  /^\/projects\/[^/?]+\/files(?:\/content)?\?path=/,
-  /^\/tasks\/features\/index(?:[/?]|$)/,
-  /^\/projects\/[^/?]+\/sessions(?:\?.*)?$/,
-];
-
-// Старые пассивные записи (до префикса владельца): ключ — голый URL запроса, допускаем и с /api.
-// Определяем УЗКО по шаблонам: ведущий «/» сам по себе не признак пассивности (см. SYNC_OWNED_URL).
-// Единственное место перечня: разовая чистка tasks.ts и постоянный проход по диапазону.
-const LEGACY_LIST_KEYS = ['/tasks', '/tasks/features'].flatMap(p => [p, `/api${p}`]);
-// Одиночный /tasks/{id}: ровно один сегмент после /tasks, служебные /tasks/ai не трогаем
-const LEGACY_SINGLE_TASK_KEY = /^(?:\/api)?\/tasks\/(?!ai(?:[/?]|$))[^/?]+(?:\?.*)?$/;
-// Задачи проекта и страница фичи; индекс фич /tasks/features/index остаётся нетронутым
-const LEGACY_PROJECT_TASKS_KEY = /^(?:\/api)?\/projects\/[^/?]+\/tasks(?:\?.*)?$/;
-const LEGACY_FEATURE_PAGE_KEY = /^(?:\/api)?\/tasks\/features\/(?!index(?:[/?]|$))[^/?]+(?:\?.*)?$/;
-
+// Старые пассивные записи (до префикса владельца): ключ — голый URL запроса.
+// Теперь ЛЮБОЙ такой ключ осиротел: пассивный кэш живёт только под offline:<owner>:<url>,
+// а ключи, которые кто-то читал напрямую (sync.ts — листинги дерева и содержимое файлов,
+// SessionList — список чатов, индекс фич), переехали под префикс с владельцем.
+// Перечень потребителей конечным быть не может (им писал кэш каждый GET-запрос), поэтому
+// правило — по форме ключа, а не по списку: голый URL осиротел. Служебные ключи
+// (tasks:*, notes:*, synced-*, chat:continue:*) не начинаются с «/» — остаются нетронутыми.
+// Единственные места перечня: разовая чистка tasks.ts и постоянный проход по диапазону.
 export function isLegacyPassiveKey(k: string): boolean {
-  return LEGACY_LIST_KEYS.some(p => k === p || k.startsWith(`${p}?`)) ||
-    LEGACY_SINGLE_TASK_KEY.test(k) || LEGACY_PROJECT_TASKS_KEY.test(k) || LEGACY_FEATURE_PAGE_KEY.test(k);
-}
-
-function isSyncOwned(url: string): boolean {
-  return SYNC_OWNED_URL.some(re => re.test(url));
+  return k.startsWith('/');
 }
 
 function ownerPrefix(owner: string): string {
@@ -463,8 +449,28 @@ function ownerPrefix(owner: string): string {
 
 // Ключ записи; null — читать/писать нельзя (пассивный запрос без известного владельца)
 function passiveKey(url: string, owner: string | null): string | null {
-  if (isSyncOwned(url)) return url;
   return owner ? ownerPrefix(owner) + url : null;
+}
+
+// Префикс диапазона пассивного кэша текущего владельца; null — владелец неизвестен.
+// Для потребителей, которые пишут и читают кэш напрямую (sync.ts, SessionList):
+// контракт ключа у них общий с request() — тот же префикс с владельцем.
+export function passiveCachePrefix(): string | null {
+  const owner = readStoredUserId();
+  return owner ? ownerPrefix(owner) : null;
+}
+
+export function passiveCacheKey(url: string): string | null {
+  const prefix = passiveCachePrefix();
+  return prefix === null ? null : prefix + url;
+}
+
+// Префикс ключей содержимого файлов проекта: тот же контракт, что у request().
+// Читает и чистит их sync.ts (докачка, снятие синхронизации) — по голому URL они
+// больше не адресуемы: запись живёт под префиксом владельца.
+export function fileContentCachePrefix(projectId: string): string | null {
+  const prefix = passiveCachePrefix();
+  return prefix === null ? null : `${prefix}/projects/${projectId}/files/content?path=`;
 }
 
 const _usedTouched = new Map<string, number>();
@@ -479,7 +485,7 @@ async function passiveRead<T>(url: string): Promise<T | undefined> {
   const cached = await idbGet<T>(key);
   if (!cached) return undefined;
   const now = Date.now();
-  if (key !== url && now - (_usedTouched.get(key) ?? 0) >= USED_AT_REFRESH_MS) {
+  if (now - (_usedTouched.get(key) ?? 0) >= USED_AT_REFRESH_MS) {
     if (_usedTouched.size > 1000) _usedTouched.clear();
     _usedTouched.set(key, now);
     // savedAt остаётся прежним: это «данные по состоянию на», а не время обращения
@@ -491,12 +497,12 @@ async function passiveRead<T>(url: string): Promise<T | undefined> {
 // owner — владелец на момент СТАРТА запроса: если к записи вкладка вышла или сменила аккаунт,
 // ответ чужой сессии в кэш не ложится.
 function passiveWrite(url: string, data: unknown, owner: string | null): void {
+  if (!owner) return;
   if (readStoredUserId() !== owner) return;
   const key = passiveKey(url, owner);
   if (key === null) return;
   const now = Date.now();
   idbSet(key, { data, savedAt: now, usedAt: now }).catch(() => { /* кэш недоступен — не критично */ });
-  if (key === url || !owner) return;
   if (_maintainedOwner !== owner) { void runPassiveMaintenance(); return; }
   _writesSinceEvict++;
   if (_writesSinceEvict >= EVICT_AFTER_WRITES || now - _lastEvictAt >= EVICT_MIN_INTERVAL_MS) {

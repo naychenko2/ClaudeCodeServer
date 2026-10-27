@@ -61,12 +61,24 @@ describe('списки задач и фич — live-запросы', () => {
     expect(urlKeys).toEqual([]);
   });
 
-  it('featuresIndex остаётся пассивным: ответ пишется в кэш по URL', async () => {
+  it('featuresIndex остаётся пассивным: ответ пишется в кэш под ключом с владельцем', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })));
+    const mem = new Map<string, string>();
+    const storage = {
+      getItem: (k: string) => mem.get(k) ?? null,
+      setItem: (k: string, v: string) => { mem.set(k, v); },
+      removeItem: (k: string) => { mem.delete(k); },
+    };
+    vi.stubGlobal('localStorage', storage);
+    vi.stubGlobal('sessionStorage', storage);
+    mem.set('cc_token', 't');
+    mem.set('cc_user_id', 'u1');
     const { api } = await import('./api');
     await api.tasks.featuresIndex();
-    const urlKeys = mocks.idbSet.mock.calls.filter(c => String((c as unknown[])[0]).startsWith('/'));
-    expect(urlKeys.length).toBe(1);
+    const urlKeys = mocks.idbSet.mock.calls
+      .map(c => String((c as unknown[])[0]))
+      .filter(k => k.includes('/tasks/features/index'));
+    expect(urlKeys).toEqual(['offline:u1:/tasks/features/index']);
   });
 
   it('открытие N задач подряд не оставляет в IndexedDB записей /tasks/{id}', async () => {
@@ -118,11 +130,13 @@ describe('чистка старого пассивного кэша', () => {
     await m.ensureTasksLoaded();
     await vi.waitFor(() => expect(mocks.idbDelete).toHaveBeenCalled());
     await new Promise(r => setTimeout(r, 0));
-    expect([...store].filter(k => k.startsWith('/tasks/features') && k !== '/tasks/features/index')).toEqual([]);
+    expect([...store].filter(k => k.startsWith('/tasks/features'))).toEqual([]);
     expect([...store].filter(k => k === '/tasks' || k.startsWith('/tasks?') || k.startsWith('/api/tasks'))).toEqual([]);
-    // /tasks/t1 (одиночная задача) сносится — FIX-3, /projects/p/tasks — F2c-b; сам признак «чистили» не в счёт
+    // /tasks/t1 (одиночная задача) сносится — FIX-3, /projects/p/tasks — F2c-b,
+    // /tasks/features/index — F2c-d (индекс фич переехал под префикс владельца);
+    // сам признак «чистили» не в счёт
     expect([...store].filter(k => !k.startsWith('tasks:legacy')).sort())
-      .toEqual(['/tasks/features/index', 'tasks:all']);
+      .toEqual(['tasks:all']);
     vi.doUnmock('./api');
   });
 });

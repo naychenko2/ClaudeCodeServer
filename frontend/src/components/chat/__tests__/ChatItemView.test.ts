@@ -4,8 +4,8 @@
 // отсутствии id оригинала в нём — плашка деградирует в обычный текст, без
 // <a> и без onClick. Тест рендерит только эту ветку через контекст-обвязку,
 // нужную ChatItemView (его JSX-дерево использует несколько контекстов ленты).
-import { afterEach, describe, it, expect } from 'vitest';
-import { createElement, type ReactElement } from 'react';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { act, createElement, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ChatItem } from '../../../types';
 import { setAllFlags } from '../../../lib/featureFlags';
@@ -17,6 +17,7 @@ import {
   SpeakingItemContext, AssistantNameContext,
 } from '../contexts';
 import { __test } from '../../../lib/featureRuns';
+import { findNodeByAttr, installFakeDom, mount, reactProps, uninstallFakeDom } from './fakeDom';
 
 // Минимальный элемент нужного kind. Нам интересно только поведение плашки «Ветка от …»
 function branchedFrom(sourceSessionId: string, sourceName = 'Старый чат'): ChatItem {
@@ -522,5 +523,26 @@ describe('ChatItemView — строка ожидания слота локаль
     expect(queueHtml, 'ожидание — не красная карточка отказа').not.toContain(C.dangerBg);
     expect(downHtml).toContain(C.dangerBg);
     expect(downHtml).not.toContain(C.warningBg);
+  });
+  it('клик по «Стоп» гасит ход через onInterrupt, тач-цель ≥40px (M1, M4)', () => {
+    installFakeDom();
+    try {
+      const onInterrupt = vi.fn();
+      const noop = () => {};
+      const { root, container } = mount(createElement(ChatItemView, {
+        item: queueItem(), index: 0, online: true,
+        onToggleThinking: noop, onAllowPermission: noop, onDenyPermission: noop, onAllowAlways: noop,
+        onAnswerQuestion: noop, onRespondPlan: noop, onSwitchMode: noop, onRetry: noop, onInterrupt,
+      }));
+      const stop = findNodeByAttr(container, 'data-testid', 'local-turn-queue-stop');
+      expect(stop, 'кнопка «Стоп» в строке ожидания').not.toBeNull();
+      const minH = Number((stop!.style as Record<string, string>).minHeight?.toString().replace('px', ''));
+      expect(minH, 'minHeight кнопки — тач-цель на мобиле').toBeGreaterThanOrEqual(40);
+      act(() => (reactProps(stop!)!.onClick as (e: unknown) => void)({ stopPropagation: noop }));
+      expect(onInterrupt).toHaveBeenCalledTimes(1);
+      act(() => root.unmount());
+    } finally {
+      uninstallFakeDom();
+    }
   });
 });

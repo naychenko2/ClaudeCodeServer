@@ -142,8 +142,10 @@ public class LocalEngineGateTests
             new Dictionary<string, string?> { ["LocalLlm:EngineKey"] = v }).Build();
 
         Assert.Equal("local-qwen", TrackedLocalLlmClient.ReadEngineKey(Cfg("local-qwen")));
-        Assert.Equal("LocalLlm", TrackedLocalLlmClient.ReadEngineKey(Cfg(null)));
-        Assert.Equal("LocalLlm", TrackedLocalLlmClient.ReadEngineKey(Cfg("  ")));
+        Assert.Equal("localllm", TrackedLocalLlmClient.ReadEngineKey(Cfg(null)));
+        Assert.Equal("localllm", TrackedLocalLlmClient.ReadEngineKey(Cfg("  ")));
+        // дефолтный путь не расходится с ключом реестра по регистру (реестр держит ключи в нижнем)
+        Assert.Equal(TrackedLocalLlmClient.DefaultEngineKey.ToLowerInvariant(), TrackedLocalLlmClient.DefaultEngineKey);
     }
 
     [Fact]

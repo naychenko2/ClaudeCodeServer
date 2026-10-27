@@ -443,8 +443,11 @@ public class VoiceLocalTurnTests : IDisposable
 
         await _sut.SendMessageAsync(session.Id, "привет", []);
 
-        (await WaitForAsync(() => Sent<ErrorMessage>(), TimeSpan.FromSeconds(5)))
-            .Should().ContainSingle("пустой ответ — видимое сообщение об ошибке");
+        var errors = await WaitForAsync(() => Sent<ErrorMessage>(), TimeSpan.FromSeconds(5));
+        errors.Should().ContainSingle("пустой ответ — видимое сообщение об ошибке");
+        // не Busy ⇒ отказ движка, а не «занят» (обратная половина инварианта «занят ⇔ Busy»)
+        errors.Single().Text.Should().Contain("Локальная модель не ответила")
+            .And.NotContain("занят");
         (await WaitForAsync(() => Sent<ExitedMessage>(), TimeSpan.FromSeconds(5)))
             .Should().ContainSingle("ход закрыт");
         // Фолбэка на CLI нет: адаптер чата (создан при CreateChatAsync, процесса под ним

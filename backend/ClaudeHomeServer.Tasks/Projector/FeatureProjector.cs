@@ -100,6 +100,9 @@ public sealed class FeatureProjector(TaskManager tasks)
         var accounting = FeatureStepAccounting.Build(steps, verdictTasks, plan, nowUtc, sessions);
         var stepChains = accounting.Chains;
 
+        // TR-B1c: сверка трекера — один вызов на том же проходе, что и учёт шагов.
+        var tracker = FeatureTracker.Build(epic, children, accounting, nowUtc, sessions);
+
         // Возвраты по источникам (ревью/проверка/финал): число возвратов и сколько открыто.
         var returnsBySource = BuildReturnsBySource(reviews, qa, final, steps);
 
@@ -578,6 +581,7 @@ public sealed class FeatureProjector(TaskManager tasks)
             Quiet = quiet,
             Closed = closed,
             Summary = summary,
+            Tracker = tracker,
         };
     }
 
@@ -845,6 +849,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         Quiet = run.Quiet,
         Closed = run.Closed,
         Summary = run.Summary,
+        Tracker = run.Tracker,
     };
 
     // ─── Б2: хелперы и вычислители цепочек/возвратов/линий ─────────────────────────────────
@@ -1546,7 +1551,8 @@ public sealed class FeatureProjector(TaskManager tasks)
             run.StepProgress.UnlinkedReworks,
             run.Hold?.Reason,
             run.Hold?.Since,
-            run.Quiet);
+            run.Quiet,
+            run.Tracker.Count);
     }
 
     // Ключевой чат фичи (контракт §1): первое ЖИВОЕ звено цепочки

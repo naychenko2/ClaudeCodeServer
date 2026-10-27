@@ -94,7 +94,15 @@ public sealed class FeatureRun
     public bool Closed { get; init; }
     // Итог смерженной фичи: у State ∈ {merged, closed}, иначе null.
     public FeatureSummary? Summary { get; init; }
+    // TR-B1c: расхождения трекера с реальностью (сверка трекера, один вызов в проекторе).
+    // Единая точка правды: индекс берёт Count отсюда, фронт и MCP не пересчитывают. Не null.
+    public List<FeatureTrackerIssue> Tracker { get; init; } = [];
 }
+
+// Расхождение трекера: TaskId — задача-источник (для цепочки — сданная задача или вернувший виток,
+// для видов эпика — мерж/эпик/оставленная задача); StepRef — ключ цепочки (только у
+// цепочечных видов), иначе null; Since — с какого момента расхождение существует.
+public sealed record FeatureTrackerIssue(string Kind, string? TaskId, string? StepRef, DateTime? Since);
 
 // Документ фичи (волна 3 «Обзор фич», вкладка «Планы и макеты»): разрез (cut), план (plan)
 // или консультация (consult) — СПИСОК из GET features/{id}, без текста. Текст (ResultMarkdown)

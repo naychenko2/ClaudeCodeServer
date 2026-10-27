@@ -66,10 +66,10 @@ public class FeatureTrackerTests
     };
 
     // Тот же набор задач, что берёт FeatureProjector.BuildCore, и тот же проход учёта.
-    private static List<FeatureTracker.FeatureTrackerIssue> Track(TaskItem epic, params TaskItem[] children) =>
+    private static List<FeatureTrackerIssue> Track(TaskItem epic, params TaskItem[] children) =>
         Track(epic, null, children);
 
-    private static List<FeatureTracker.FeatureTrackerIssue> Track(
+    private static List<FeatureTrackerIssue> Track(
         TaskItem epic, IReadOnlyCollection<FeatureIndexSession>? sessions, params TaskItem[] children)
     {
         var steps = children.Where(t => t.Role is TaskRoles.Step or TaskRoles.Rework).ToList();
@@ -92,8 +92,8 @@ public class FeatureTrackerTests
     // null — признака нет (снимок составлен без него).
     private static FeatureIndexSession Chat(bool? busy) => new("chat-1", "s", null, false, Busy: busy);
 
-    private static List<FeatureTracker.FeatureTrackerIssue> OfKind(
-        List<FeatureTracker.FeatureTrackerIssue> issues, string kind) =>
+    private static List<FeatureTrackerIssue> OfKind(
+        List<FeatureTrackerIssue> issues, string kind) =>
         issues.Where(i => i.Kind == kind).ToList();
 
     // ─── unreviewed ───────────────────────────────────────────────────────────────────────────

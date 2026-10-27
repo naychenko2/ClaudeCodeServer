@@ -37,11 +37,6 @@ internal static class FeatureTracker
     // Значение FeatureStepChain.Outcome «снят» (FeatureRun.cs): отдельный вердикт, не TaskVerdicts.
     private const string ChainWithdrawn = "withdrawn";
 
-    // Расхождение: TaskId — задача-источник (для цепочки — сданная задача или вернувший виток,
-    // для видов эпика — мерж/эпик/оставленная задача); StepRef — ключ цепочки (только у
-    // цепочечных видов), иначе null; Since — с какого момента расхождение существует.
-    internal sealed record FeatureTrackerIssue(string Kind, string? TaskId, string? StepRef, DateTime? Since);
-
     // epic/children — те же задачи, из которых построен run; accounting — результат учёта шагов
     // по этим задачам (тот же проход, вызывающий передаёт его как есть). sessions — снимок сессий
     // владельца (FeatureChatDoor.Snapshot, тот же, что у FeatureStepAccounting); null — снимка нет,

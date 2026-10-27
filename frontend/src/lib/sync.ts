@@ -272,6 +272,10 @@ onPassiveEvict(async keys => {
 
 const chatRevision = (s: Session): string => `${s.updatedAt}|${s.messageCount}`;
 
+// Потолок прогрева историй на проект за снимок: по-чатовой класс кэша держит последние
+// чаты, гонять больше — трафик впустую.
+const CHAT_WARM_MAX = 8;
+
 async function loadChatRevisions(projectId: string): Promise<Record<string, string>> {
   const e = await idbGet<Record<string, string>>('synced-chats:' + projectId).catch(() => undefined);
   return e?.data ?? {};
@@ -366,11 +370,22 @@ export async function runOfflineSnapshot(priorityProjectId?: string): Promise<vo
       // Истории — только изменившиеся с прошлого снапшота (см. loadChatRevisions).
       // Параллельность 2, а не 4: снапшот фоновый, и живым запросам открытого чата
       // нужны свободные сокеты (HTTP/1.1 даёт ~6 на origin).
+      //
+      // Два изменения против прежнего поведения:
+      // 1) По ТОМУ ЖЕ ключу, что читает лента (?after=-1). Прежде прогревался ключ без
+      //    параметров — его никто не читал: лента при загрузке берёт ?after=-1, то есть
+      //    история чата лежала в кэше впустую (мегабайты на чат).
+      // 2) С потолком по числу чатов: по-чатовой класс кэша всё равно держит последние
+      //    чаты, а прогрев без потолка тянул истории всех чатов всех проектов — десятки
+      //    МБ трафика впустую. Слагированные чаты просто достанутся следующим снимкам.
       const knownRevs = await loadChatRevisions(p.id);
-      const staleChats = sessions.filter(s => knownRevs[s.id] !== chatRevision(s));
+      const staleChats = sessions
+        .filter(s => knownRevs[s.id] !== chatRevision(s))
+        .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+        .slice(0, CHAT_WARM_MAX);
       const freshRevs: Record<string, string> = {};
       await mapLimit(staleChats, 2, async s => {
-        await api.sessions.getHistory(p.id, s.id);
+        await api.sessions.getHistoryTail(p.id, s.id, { after: -1 });
         freshRevs[s.id] = chatRevision(s);
       });
       // Метки живых чатов + успешно скачанных; удалённые чаты уходят сами (нет в sessions)

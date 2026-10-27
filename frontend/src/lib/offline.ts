@@ -418,6 +418,9 @@ function isAbortError(e: unknown): boolean {
 // их содержимое, индекс фич, список чатов проекта) тоже живут под префиксом владельца —
 // иначе класс содержимого файлов рос бы без потолка до логаута.
 const PASSIVE_PREFIX = 'offline:';
+// \u0412\u0441\u0451 \u0441\u0435\u043c\u0435\u0439\u0441\u0442\u0432\u043e \u043f\u0430\u0441\u0441\u0438\u0432\u043d\u044b\u0445 \u043a\u043b\u044e\u0447\u0435\u0439 \u2014 \u043e\u0431\u0449\u0438\u0439 \u043a\u043b\u0430\u0441\u0441 \u0438 \u043f\u043e-\u0447\u0430\u0442\u043e\u0432\u043e\u0439. \u0414\u0438\u0430\u043f\u0430\u0437\u043e\u043d \u0448\u0438\u0440\u0435 \u043e\u0431\u0449\u0435\u0433\u043e
+// ('offline:' \u2192 'offlinechat:'), \u043f\u043e\u044d\u0442\u043e\u043c\u0443 \u0447\u0443\u0436\u0438\u0435 \u0432\u043b\u0430\u0434\u0435\u043b\u044c\u0446\u044b \u0447\u0438\u0441\u0442\u044f\u0442\u0441\u044f \u043e\u0434\u043d\u0438\u043c \u043a\u0443\u0440\u0441\u043e\u0440\u043e\u043c.
+const PASSIVE_FAMILY_LOW = 'offline';
 const PASSIVE_RANGE_END = '\uffff';
 // Потолок записей на владельца и запас снизу: после ужима до 180 следующая запись прохода
 // не вызывает (ужим до самого потолка запускал бы проход на каждой записи).
@@ -447,9 +450,57 @@ function ownerPrefix(owner: string): string {
   return `${PASSIVE_PREFIX}${encodeURIComponent(owner)}:`;
 }
 
+// --- По-чатовой класс кэша ---
+// Ответы, привязанные к конкретному чату (метаданные чата, его история, бейдж расхода,
+// статистика локальной модели, git-статус в дереве чата), живут в ОТДЕЛЬНОМ диапазоне:
+// `offlinechat:<ownerId>:<chatId>:<url>`. Причина не «ещё один префикс», а два свойства:
+//   1) СВОЙ бюджет (потолок записей и веса). По-чатовые ответы не должны вытеснять sync-класс
+//      (листинги файлов, содержимое, индекс фич, список чатов) общим правилом вытеснения —
+//      иначе по-чатовой вектор растёт вместе с числом открытых чатов и съедает чужое.
+//   2) Вытеснение ПО ЧАТУ целиком: уходит самый давно тронутый чат (все его записи), а не
+//      отдельная запись — иначе у чата остаётся половина данных, и офлайн он читается
+//      неправильно (метаданные от свежего запроса, история от старого).
+// Чат — часть структуры ключа, поэтому диапазон не смешивается с общим (`offline:`),
+// а вытеснение по-чатовых записей не трогает общий класс и наоборот.
+const CHAT_CLASS_PREFIX = 'offlinechat:';
+// Потолок по-чатового класса: сколько записей и сколько веса он держит. История чата —
+// до 2,5 МБ, поэтому одного счёта записей мало: без потолка по весу два-три тяжёлых чата
+// съедали бы весь бюджет офлайна.
+export const CHAT_CLASS_MAX_RECORDS = 60;
+export const CHAT_CLASS_TRIM_RECORDS = 48;
+export const CHAT_CLASS_MAX_BYTES = 4 * 1024 * 1024;
+// Запас до запуска прохода: без него проход шёл бы на каждую запись (оценка после
+// ужима равна потолку, значит следующая запись снова его перешагивала бы) и класс
+// успевал бы выйти за потолок — записи идут быстрее, чем проходы за ними.
+const CHAT_CLASS_TRIGGER_MARGIN = 1.25;
+
+function chatClassPrefix(owner: string): string {
+  return `${CHAT_CLASS_PREFIX}${encodeURIComponent(owner)}:`;
+}
+
+function chatClassKey(url: string, owner: string, chatId: string): string | null {
+  if (!chatId) return null;
+  return `${chatClassPrefix(owner)}${encodeURIComponent(chatId)}:${url}`;
+}
+
+// Из ключа по-чатового класса — id чата: `offlinechat:<owner>:<chatId>:<url>`.
+// Владелец и чат закодированы, поэтому двоеточие внутри них невозможно.
+function chatIdOfKey(key: string): string | null {
+  if (!key.startsWith(CHAT_CLASS_PREFIX)) return null;
+  const rest = key.slice(CHAT_CLASS_PREFIX.length);
+  const i = rest.indexOf(':');
+  if (i < 0) return null;
+  const j = rest.indexOf(':', i + 1);
+  if (j < 0) return null;
+  try { return decodeURIComponent(rest.slice(i + 1, j)); } catch { return null; }
+}
+
 // Ключ записи; null — читать/писать нельзя (пассивный запрос без известного владельца)
-function passiveKey(url: string, owner: string | null): string | null {
-  return owner ? ownerPrefix(owner) + url : null;
+// chatScope — id чата: ответ уходит в по-чатовой класс, без него — в общий.
+function passiveKey(url: string, owner: string | null, chatScope?: string): string | null {
+  if (!owner) return null;
+  if (chatScope) return chatClassKey(url, owner, chatScope);
+  return ownerPrefix(owner) + url;
 }
 
 // Префикс диапазона пассивного кэша текущего владельца; null — владелец неизвестен.
@@ -496,6 +547,13 @@ let _lastEvictAt = Date.now();
 let _writesSinceEvict = 0;
 let _evicting = false;
 let _maintainedOwner: string | null = null;
+// Проход по по-чатовому классу идёт по достижении потолка: курсор берёт только
+// метки диапазона (десятки записей), а сам проход не на каждую запись.
+let _chatEvicting = false;
+let _chatScanAgain = false;
+// Оценка веса класса в памяти — повод для прохода (истина считается курсором в проходе)
+let _chatEstBytes = 0;
+let _chatEstRecords = 0;
 
 // Слушатели вытеснения пассивного кэша. Ключи содержимого файлов снимаются вытеснением,
 // а их mtime-записи лежат вне диапазона вытеснения — потребитель (sync.ts) по снятым
@@ -516,8 +574,8 @@ async function notifyEvicted(keys: string[]): Promise<void> {
   }
 }
 
-async function passiveRead<T>(url: string): Promise<T | undefined> {
-  const key = passiveKey(url, readStoredUserId());
+async function passiveRead<T>(url: string, chatScope?: string): Promise<T | undefined> {
+  const key = passiveKey(url, readStoredUserId(), chatScope);
   if (key === null) return undefined;
   const cached = await idbGet<T>(key);
   if (!cached) return undefined;
@@ -533,14 +591,30 @@ async function passiveRead<T>(url: string): Promise<T | undefined> {
 
 // owner — владелец на момент СТАРТА запроса: если к записи вкладка вышла или сменила аккаунт,
 // ответ чужой сессии в кэш не ложится.
-function passiveWrite(url: string, data: unknown, owner: string | null): void {
+// chatScope — id чата: ответ уходит в по-чатовой класс (свой бюджет и своё вытеснение).
+// bytes — оценка веса ответа (по умолчанию неизвестна — считаем нулём).
+function passiveWrite(url: string, data: unknown, owner: string | null, chatScope?: string, bytes?: number): void {
   if (!owner) return;
   if (readStoredUserId() !== owner) return;
-  const key = passiveKey(url, owner);
+  const key = passiveKey(url, owner, chatScope);
   if (key === null) return;
   const now = Date.now();
-  idbSet(key, { data, savedAt: now, usedAt: now }).catch(() => { /* кэш недоступен — не критично */ });
+  idbSet(key, { data, savedAt: now, usedAt: now, bytes }).catch(() => { /* кэш недоступен — не критично */ });
   if (_maintainedOwner !== owner) { void runPassiveMaintenance(); return; }
+  if (chatScope) {
+    // Проход по по-чатовому классу запускаем не на каждую запись, а когда накопленный
+    // вес класса доходит до потолка: проход — это курсор по диапазону плюс удаления,
+    // и на каждой записи он шёл бы позади (коммит записи занимает миллисекунды, а
+    // записи идут быстрее) — класс успевал бы выйти за потолок. Счётчик веса в памяти —
+    // только повод для прохода; истина (что в сторе) считается курсором в проходе.
+    _chatEstBytes += bytes ?? 0;
+    _chatEstRecords++;
+    if (_chatEstBytes > CHAT_CLASS_MAX_BYTES * CHAT_CLASS_TRIGGER_MARGIN
+      || _chatEstRecords > CHAT_CLASS_MAX_RECORDS * CHAT_CLASS_TRIGGER_MARGIN) {
+      void evictChatClass(owner);
+    }
+    return;
+  }
   _writesSinceEvict++;
   if (_writesSinceEvict >= EVICT_AFTER_WRITES || now - _lastEvictAt >= EVICT_MIN_INTERVAL_MS) {
     void evictPassive(owner);
@@ -580,14 +654,95 @@ export async function runPassiveMaintenance(): Promise<void> {
     if (owner) {
       _maintainedOwner = owner;
       const own = ownerPrefix(owner);
-      const all = await idbRangeStamps(PASSIVE_PREFIX, PASSIVE_PREFIX + PASSIVE_RANGE_END);
-      const foreign = all.filter(s => !s.key.startsWith(own));
+      const ownChat = chatClassPrefix(owner);
+      // Один курсор на всё семейство пассивных ключей: и общий класс ('offline:'),
+      // и по-чатовой ('offlinechat:'). Свои — по своему префиксу, чужие (прежний
+      // аккаунт) — сносятся: иначе записи чужого владельца остались бы в сторе.
+      const all = await idbRangeStamps(PASSIVE_FAMILY_LOW, PASSIVE_FAMILY_LOW + PASSIVE_RANGE_END);
+      const foreign = all.filter(s => !s.key.startsWith(own) && !s.key.startsWith(ownChat));
       await Promise.all(foreign.map(s => idbDelete(s.key).catch(() => {})));
       // Снятое содержимое (смена владельца, осиротевшие ключи) — его mtime-записи
       // тоже сбрасываются, иначе докачка не вернёт эти файлы.
       await notifyEvicted([...legacy, ...foreign.map(s => s.key)]);
       await evictPassive(owner);
+      // Метки по-чатового класса берём из того же курсора — второй курсор здесь не нужен.
+      await evictChatClass(owner, all.filter(s => s.key.startsWith(ownChat)));
     }
+  } catch { /* кэш недоступен — не критично */ }
+}
+
+// Вытеснение по-чатового класса: уходит ЦЕЛЫМ чат — самый давно тронутый (по времени
+// доступа к его записям). Записи чата связаны между собой (метаданные, история, бейдж),
+// поэтому выкидывать их по одной нельзя: у чата осталась бы половина данных.
+// Потолки — и по числу записей, и по весу (история чата — до 2,5 МБ).
+//
+// Проход идёт не чаще одного за раз: запись, попавшая в класс во время прохода,
+// помечает «надо пройти ещё раз» — иначе последняя запись осталась бы вне потолка.
+async function evictChatClass(owner: string, known?: { key: string; savedAt: number; usedAt?: number; bytes?: number }[]): Promise<void> {
+  if (_chatEvicting) { _chatScanAgain = true; return; }
+  _chatEvicting = true;
+  try {
+    do {
+      _chatScanAgain = false;
+      await evictChatClassOnce(owner, known);
+      known = undefined; // после первого прохода метки устарели — берём свежие
+    } while (_chatScanAgain);
+  } finally {
+    _chatEvicting = false;
+  }
+}
+
+async function evictChatClassOnce(owner: string, known?: { key: string; savedAt: number; usedAt?: number; bytes?: number }[]): Promise<void> {
+  try {
+    const lo = chatClassPrefix(owner);
+    const hi = lo + PASSIVE_RANGE_END;
+    const stamps = known ?? await idbRangeStamps(lo, hi);
+    if (!stamps.length) { _chatEstBytes = 0; _chatEstRecords = 0; return; }
+    let totalBytes = 0;
+    for (const s of stamps) totalBytes += s.bytes ?? 0;
+    const overRecords = stamps.length > CHAT_CLASS_MAX_RECORDS;
+    const overBytes = totalBytes > CHAT_CLASS_MAX_BYTES;
+    if (!overRecords && !overBytes) {
+      // Потолок не превышен — оценка в памяти пересчитывается по истине (стору)
+      _chatEstBytes = totalBytes;
+      _chatEstRecords = stamps.length;
+      return;
+    }
+
+    // Группируем записи по чату; время чата — самое свежее из его записей
+    const byChat = new Map<string, { keys: string[]; bytes: number; lastUsed: number }>();
+    for (const s of stamps) {
+      const chatId = chatIdOfKey(s.key);
+      if (chatId === null) continue;
+      const used = s.usedAt ?? s.savedAt;
+      const g = byChat.get(chatId) ?? { keys: [], bytes: 0, lastUsed: used };
+      g.keys.push(s.key);
+      g.bytes += s.bytes ?? 0;
+      if (used > g.lastUsed) g.lastUsed = used;
+      byChat.set(chatId, g);
+    }
+    const chats = [...byChat.values()].sort((a, b) => a.lastUsed - b.lastUsed);
+    const drop: string[] = [];
+    let records = stamps.length;
+    for (let i = 0; i < chats.length; i++) {
+      if (records <= CHAT_CLASS_TRIM_RECORDS && totalBytes <= CHAT_CLASS_MAX_BYTES) break;
+      // Последний чат не вытесняем: только что открытый чат должен остаться офлайн
+      if (i === chats.length - 1) break;
+      const c = chats[i];
+      drop.push(...c.keys);
+      records -= c.keys.length;
+      totalBytes -= c.bytes;
+    }
+    if (!drop.length) {
+      _chatEstBytes = totalBytes;
+      _chatEstRecords = records;
+      return;
+    }
+    await Promise.all(drop.map(k => idbDelete(k).catch(() => {})));
+    await notifyEvicted(drop);
+    // Оценка в памяти — по истине после вытеснения
+    _chatEstBytes = totalBytes;
+    _chatEstRecords = records;
   } catch { /* кэш недоступен — не критично */ }
 }
 
@@ -602,9 +757,9 @@ export async function runPassiveMaintenance(): Promise<void> {
 // сам факт «сервер сейчас отвечает». Пример — статус выкатки: продукт на время публикации
 // гаснет, и подставленный из кэша прошлый ответ превращает «сервер лежит, значит выкатка идёт»
 // в «сервер отвечает, ничего не происходит». Окно выкатки на этом различии и построено.
-export async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number; parse?: 'json'; live?: boolean }): Promise<T>;
-export async function request(url: string, options: RequestInit & { timeoutMs?: number; parse: 'blob'; live?: boolean }): Promise<Blob>;
-export async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number; parse?: 'json' | 'blob'; live?: boolean }): Promise<T | Blob> {
+export async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number; parse?: 'json'; live?: boolean; chatScope?: string }): Promise<T>;
+export async function request(url: string, options: RequestInit & { timeoutMs?: number; parse: 'blob'; live?: boolean; chatScope?: string }): Promise<Blob>;
+export async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number; parse?: 'json' | 'blob'; live?: boolean; chatScope?: string }): Promise<T | Blob> {
   const method = (options?.method ?? 'GET').toUpperCase();
   const isGet = method === 'GET';
 
@@ -619,7 +774,7 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
   // AbortController для таймаута: если сеть «зависла» (пакеты идут, но ответа нет),
   // мы не ждём браузерного TCP-таймаута (может быть минуты).
   // timeoutMs — оверрайд для заведомо долгих запросов (AI-генерация и т.п.)
-  const { timeoutMs, parse, live, signal: callerSignal, ...fetchOptions } = options ?? {};
+  const { timeoutMs, parse, live, chatScope, signal: callerSignal, ...fetchOptions } = options ?? {};
   // Кэшируем и достаём из кэша только те GET, которым это на пользу (см. комментарий к live)
   const useOfflineCache = isGet && !live;
   const controller = new AbortController();
@@ -696,7 +851,10 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
     const text = res.status === 204 ? '' : await res.text();
     const data = (text ? JSON.parse(text) : undefined) as T;
     if (useOfflineCache) {
-      passiveWrite(url, data, ownerAtStart);
+      // Вес ответа — по длине текста: оценка снизу для кириллицы (2 байта на символ),
+      // потолок берём с запасом. Точный размер нужен только чтобы понять, что класс
+      // по-чатовых записей пора ужимать.
+      passiveWrite(url, data, ownerAtStart, chatScope, text.length);
     }
     return data;
   } catch (e) {
@@ -731,7 +889,7 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
       // Кроме live-запросов: там подстановка прошлого ответа выдала бы лежащий сервер за
       // работающий, а вызывающему нужен именно факт обрыва.
       if (useOfflineCache) {
-        const cached = await passiveRead<T>(url).catch(() => undefined);
+        const cached = await passiveRead<T>(url, chatScope).catch(() => undefined);
         if (cached !== undefined) return cached;
       }
       if (ourTimeout) throw new RequestTimeoutError(effectiveTimeout);

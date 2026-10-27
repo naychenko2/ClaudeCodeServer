@@ -241,7 +241,7 @@ const PROJECT_FILES_URL = /^\/projects\/([^/?]+)\/((?:files|git|services|preview
 // Замена request() для маршрутов файлов, git, сервисов и навыков: у локального проекта запрос уходит в агента,
 // у серверного — как раньше. Маршрут, которого агент не умеет, отказывает понятным текстом
 // до сети, а не падает там 404.
-export function projectRequest<T>(url: string, options?: RequestInit & { timeoutMs?: number; live?: boolean }): Promise<T> {
+export function projectRequest<T>(url: string, options?: RequestInit & { timeoutMs?: number; live?: boolean; chatScope?: string }): Promise<T> {
   const m = PROJECT_FILES_URL.exec(url);
   if (!m) return request<T>(url, options);
   const projectId = decodeURIComponent(m[1]);

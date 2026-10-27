@@ -18,9 +18,6 @@ public sealed class FeatureQueueService(
     IConfiguration config,
     ILogger<FeatureQueueService> log) : IHostedService
 {
-    // Потолок проходов одного пересчёта: страховка от зацикливания, если снятие не меняет проекцию.
-    private const int MaxPasses = 64;
-
     // Замок на пару (владелец, проект): два события подряд не снимают голову дважды. Проект без
     // id — своя группа (пустая строка в ключе).
     private readonly ConcurrentDictionary<(string Owner, string Project), SemaphoreSlim> _locks = new();
@@ -115,37 +112,65 @@ public sealed class FeatureQueueService(
         }
     }
 
+    // Одна проекция на пересчёт (B3, OOM-разведка 26.10): прежний цикл звал ProjectAll на каждом
+    // проходе до MaxPasses — пачка закрытых задач волны стоила десятки полных проекций всех фич
+    // владельца. Здесь: дешёвая проверка (в паре есть фича с hold queue — необходимое условие
+    // IsQueued, ложных отрицаний нет) отсекает пересчёт без очереди до построения проекции,
+    // дальше один снимок и проход по его очереди. Снятие очереди первым пересчётом делает
+    // остальные события пачки дешёвым выходом: пачка событий стоит один пересчёт.
     private async Task<IReadOnlyList<string>> RebalanceLockedAsync(string ownerId, string? projectId)
     {
         var released = new List<string>();
-        var limit = FeatureQueuePolicy.Limit(config);
-        for (var pass = 0; pass < MaxPasses; pass++)
+
+        if (!tasks.GetByOwner(ownerId).Any(t => t.Role == TaskRoles.Feature
+            && t.Hold?.Reason == FeatureHoldReasons.Queue && t.ProjectId == projectId))
+            return released;
+
+        IReadOnlyList<FeatureRun> runs;
+        try
         {
-            FeatureRun head;
-            try
-            {
-                var runs = (ProjectOverride?.Invoke(ownerId) ?? features.ProjectAll(ownerId)).Where(r => r.Epic.ProjectId == projectId).ToList();
-                var queue = FeatureQueuePolicy.Order(runs);
-                if (queue.Count == 0) break;
-                if (runs.Count(FeatureProjector.OccupiesSlot) >= limit) break;
-                head = queue[0];
-            }
-            catch (Exception ex)
-            {
-                // Проекция не строится — состояние неизвестно, fail-closed.
-                log.LogWarning(ex, "Очередь фич: проекция владельца {OwnerId} не построена, снятий нет", ownerId);
-                break;
-            }
+            runs = ProjectOverride?.Invoke(ownerId) ?? features.ProjectAll(ownerId);
+        }
+        catch (Exception ex)
+        {
+            // Проекция не строится — состояние неизвестно, fail-closed.
+            log.LogWarning(ex, "Очередь фич: проекция владельца {OwnerId} не построена, снятий нет", ownerId);
+            return released;
+        }
+
+        // Лимит и занятость — на проект (волна 6): фичи других проектов владельца в счёт не идут,
+        // та же область, что была в старом коде до пересчёта.
+        var projectRuns = runs.Where(r => r.Epic.ProjectId == projectId).ToList();
+        var limit = FeatureQueuePolicy.Limit(config);
+        var queue = FeatureQueuePolicy.Order(projectRuns);
+        // Занятые слоты по снимку + собственные снятия: снятое удержание делает фичу not_started
+        // (или продолжает её задачи) — она занимает слот, ровно то, что старый цикл видел на
+        // следующем проходе по новой проекции. Чужие изменения во время прохода (кто-то закрыл
+        // фичу) считаем консервативно, по снимку: их страховка — сверка тика, не перепроекция.
+        var occupied = projectRuns.Count(FeatureProjector.OccupiesSlot);
+
+        foreach (var head in queue)
+        {
+            if (occupied >= limit) break;
 
             if (InsideLock is { } hook) await hook();
 
             // Между снимком и снятием человек мог поставить manual или уже снять удержание:
             // автоснятие трогает только queue и читает актуальный Hold, а не снимок.
-            var current = tasks.GetById(head.FeatureId)?.Hold;
-            if (current is null || current.Reason != FeatureHoldReasons.Queue) continue;
+            var live = tasks.GetById(head.FeatureId);
+            if (live is null) continue; // фича удалена: слот не занимает (проекция её тоже не включила бы)
+            if (live.Hold is null)
+            {
+                // Удержание уже снято (человеком или параллельным пересчётом): фича больше не
+                // пауза — занимает слот, старый цикл увидел бы её в следующей проекции.
+                occupied++;
+                continue;
+            }
+            if (live.Hold.Reason != FeatureHoldReasons.Queue) continue;
 
-            var result = await releaser.ReleaseFeatureHold(head.FeatureId, ownerId, current, FeatureHoldBy.Queue);
+            var result = await releaser.ReleaseFeatureHold(head.FeatureId, ownerId, live.Hold, FeatureHoldBy.Queue);
             if (result.Outcome != FeatureHoldReleaseOutcome.Released) break;
+            occupied++;
             released.Add(head.FeatureId);
         }
         return released;

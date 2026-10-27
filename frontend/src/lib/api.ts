@@ -1769,7 +1769,8 @@ export const api = {
       if (from) qs.set('from', from);
       if (to) qs.set('to', to);
       const q = qs.toString();
-      return request<Task[]>(`/tasks${q ? `?${q}` : ''}`);
+      // live: список живёт одним экземпляром в сторе (tasks:all), пассивный GET-кэш его не дублирует
+      return request<Task[]>(`/tasks${q ? `?${q}` : ''}`, { live: true });
     },
     listByProject: (projectId: string) => request<Task[]>(`/projects/${projectId}/tasks`),
     // Поиск по названию/описанию/меткам на сервере (по ПОЛНОМУ описанию, которого нет
@@ -1781,7 +1782,7 @@ export const api = {
     // Агрегаты фич чата (режим «Исполнение фичи»): готовые `FeatureRun` из бэка.
     // sessionId — id сессии-чата; без него — все фичи владельца.
     getFeatures: (sessionId?: string) =>
-      request<FeatureRun[]>(`/tasks/features${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''}`),
+      request<FeatureRun[]>(`/tasks/features${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''}`, { live: true }),
     // Индекс фич (фасет «Фичи» и плашка в чате): строки фич + связи «чат × фича».
     // projectId — область ответа; без него — все проекты владельца и чаты вне проектов.
     // 503 при выключенной подсистеме Tasks (как getFeatures).
@@ -1838,7 +1839,10 @@ export const api = {
     // projectId === null → личная задача (вне проекта)
     create: (projectId: string | null, dto: CreateTaskDto) =>
       request<Task>(projectId ? `/projects/${projectId}/tasks` : '/tasks', { method: 'POST', body: JSON.stringify(dto) }),
-    get: (taskId: string) => request<Task>(`/tasks/${taskId}`),
+    // live: true — полная карточка (description + resultMarkdown, ~90 КБ) в пассивный GET-кэш не
+    // пишется: он без вытеснения. Открытые полные задачи держит стор (LRU FULL_TASKS_CAP, снимок
+    // tasks:all); офлайн ensureFullTask получает OfflineError → состояние «error» с «Повторить».
+    get: (taskId: string) => request<Task>(`/tasks/${taskId}`, { live: true }),
     update: (taskId: string, dto: UpdateTaskDto) =>
       request<Task>(`/tasks/${taskId}`, { method: 'PUT', body: JSON.stringify(dto) }),
     delete: (taskId: string) => request<void>(`/tasks/${taskId}`, { method: 'DELETE' }),

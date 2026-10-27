@@ -221,13 +221,18 @@ export function commitFeatureViewApplied(featureId: string, seq: number): void {
 // после применения, если вкладка этой фичи смонтирована, применение стабильно —
 // снимок расходован (следующее открытие фичи без чипа его не найдёт). Размонтирование
 // вкладки — не сигнал ухода (GC-F11R4): пока вкладка не смонтирована, расход ОТКЛАДАЕТСЯ
-// — окно достаётся remount-инстансу при любой скорости ответа сервера (прежний механизм
+// — окно достаётся remount-инстансу, пока хватает потолка отложений (CONSUME_MAX_DEFERS
+// отложений по CONSUME_MS каждое): при более долгом ответе сервера remount окна уже не
+// найдёт — возврат откроет «Хронологию» с дефолтным видом (прежний механизм
 // отменял расход при размонтировании и, если инстанс не возвращался, окно жило до
 // нового перехода — мажор GC-R-P6). Настоящий уход — размонтирование страницы:
 // оно гасит окно (см. registerFeaturePage).
 const CONSUME_MS = 1000;
+// Предел отложений расхода (И5): у таймера есть конец — окно ждёт remount вкладки не
+// дольше CONSUME_MAX_DEFERS секунд, потом гасится, а не перезапускается бесконечно.
+const CONSUME_MAX_DEFERS = 10;
 let _consumeTimer: ReturnType<typeof setTimeout> | null = null;
-function scheduleConsume(featureId: string, seq: number): void {
+function scheduleConsume(featureId: string, seq: number, defers = 0): void {
   if (_consumeTimer) clearTimeout(_consumeTimer);
   _consumeTimer = setTimeout(() => {
     _consumeTimer = null;
@@ -238,8 +243,14 @@ function scheduleConsume(featureId: string, seq: number): void {
       return;
     }
     // Вкладка не смонтирована (remount 'loading'→'ok', медленный ответ): расход отложен,
-    // окно достаётся remount; настоящий уход — за размонтированием страницы (registerFeaturePage).
-    scheduleConsume(featureId, seq);
+    // окно достаётся remount. Страница ушла (нет регистрации) или попытки кончились —
+    // окно возврата живёт ради одного открытия, таймер гаснет вместе с ним.
+    if (!(_pageReg && _pageReg.featureId === featureId) || defers + 1 >= CONSUME_MAX_DEFERS) {
+      _lastApplied = null;
+      emit();
+      return;
+    }
+    scheduleConsume(featureId, seq, defers + 1);
   }, CONSUME_MS);
 }
 

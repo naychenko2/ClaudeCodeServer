@@ -107,8 +107,10 @@ describe('featureBackNav: цель перехода (chat | feature) и норм
 // «закрытие окна повторным подтверждением» съедало окно до реального remount); окно
 // расходует стабильный кадр после применения (scheduleConsume).
 // GC-F11R4 (мажор ревью GC-R-P6): размонтирование ВКЛАДКИ — не сигнал ухода: пока
-// вкладка не смонтирована, расход откладывается — окно достаётся remount-инстансу при
-// любой скорости ответа сервера. Окно гасит уход со СТРАНИЦЫ (registerFeaturePage,
+// вкладка не смонтирована, расход откладывается — окно достаётся remount-инстансу,
+// пока хватает потолка отложений (CONSUME_MAX_DEFERS отложений по CONSUME_MS каждое):
+// при более долгом ответе сервера remount окна уже не найдёт — возврат откроет
+// «Хронологию» с дефолтным видом. Окно гасит уход со СТРАНИЦЫ (registerFeaturePage,
 // отложенная проверка: мнимый unmount→mount StrictMode её отменяет). Мутации:
 // (5) гасить lastApplied при повторном подтверждении с тем же seq (старый механизм) →
 // «повторное подтверждение идемпотентно» краснеет; (7) никогда не расходовать окно
@@ -251,6 +253,7 @@ describe('featureBackNav: подтверждение применения сни
   });
 
   it('размонтирование вкладки не отменяет расход: окно достаётся remount-инстансу и расходуется его стабильным кадром (GC-F11R4)', () => {
+    const offPage = __test.registerFeaturePage('f1');
     const off = __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: null, scrollTop: 5 }));
     recordFeatureReturn('f1', { kind: 'task', id: 't1' }, 'Фича');
     expect(__test.consumeFeatureViewReturn('f1')).toBe(true);
@@ -269,6 +272,30 @@ describe('featureBackNav: подтверждение применения сни
     vi.advanceTimersByTime(__test.CONSUME_MS);
     expect(__test.lastAppliedFeatureView('f1'), 'отложенный расход не сработал после remount').toBeNull();
     off2();
+    offPage();
+  });
+
+  it('у таймера расхода есть конец: страница жива, вкладка не смонтирована — через 10 с таймеров нет (И5)', () => {
+    const offPage = __test.registerFeaturePage('f1');
+    const off = __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: null, scrollTop: 5 }));
+    recordFeatureReturn('f1', { kind: 'task', id: 't1' }, 'Фича');
+    expect(__test.consumeFeatureViewReturn('f1')).toBe(true);
+    __test.commitFeatureViewApplied('f1', __test.pendingFeatureView('f1')!.seq);
+    off(); // вкладка со снимком не смонтирована
+    vi.advanceTimersByTime(10 * __test.CONSUME_MS);
+    expect(vi.getTimerCount(), 'таймер расхода перезапускается бесконечно').toBe(0);
+    expect(__test.lastAppliedFeatureView('f1'), 'окно пережило конец таймера').toBeNull();
+    offPage();
+  });
+
+  it('страница не зарегистрирована: расход не перезапускается, окно гаснет сразу', () => {
+    const off = __test.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: null, scrollTop: 5 }));
+    recordFeatureReturn('f1', { kind: 'task', id: 't1' }, 'Фича');
+    expect(__test.consumeFeatureViewReturn('f1')).toBe(true);
+    __test.commitFeatureViewApplied('f1', __test.pendingFeatureView('f1')!.seq);
+    off();
+    vi.advanceTimersByTime(__test.CONSUME_MS);
+    expect(vi.getTimerCount(), 'таймер жив без страницы').toBe(0);
   });
 
   it('новый переход гасит и подтверждённый снимок (old lastApplied не для новой страницы)', () => {

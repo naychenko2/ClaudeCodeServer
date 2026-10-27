@@ -370,3 +370,85 @@ describe('F9: openPillMenu (одноразовый сигнал, per chat)', () 
     expect(__test.pillMenuFor('B'), 'чужая сессия сигнала не получила').toBeNull();
   });
 });
+
+// ── F4: потолок per-session памяти — LRU 8 чатов, активные не вытесняются ──────
+
+describe('F4: LRU потолок 8 чатов, вытеснение из всех 7 Map разом', () => {
+  beforeEach(() => __test.reset());
+  afterEach(() => __test.reset());
+
+  const MANY = Array.from({ length: 20 }, (_, i) => `s${i}`);
+
+  // Запись во все 7 Map по одному ключу — состояние, которое оставляет просмотренный чат.
+  function touchAllMaps(sessionId: string) {
+    __test.setRuns(sessionId, [run(sessionId)]);
+    __test.setLoading(sessionId, true);
+    __test.setError(sessionId, 'boom');
+    // явный «plan» при наличии фич различим с умолчанием (при фичах умолчание — 'feature')
+    setTurnPlanMode(sessionId, 'plan');
+    setSelectedFeatureId(sessionId, `feat-${sessionId}`);
+    focusFeatureStep(sessionId, `feat-${sessionId}`, `task-${sessionId}`);
+    openPillMenu(sessionId);
+  }
+
+  function expectPresent(sessionId: string) {
+    expect(__test.snapshotFor(sessionId).length, `runs ${sessionId}`).toBe(1);
+    expect(__test.loadingFor(sessionId), `loading ${sessionId}`).toBe(true);
+    expect(__test.errorFor(sessionId), `error ${sessionId}`).toBe('boom');
+    expect(__test.modeFor(sessionId), `mode ${sessionId}`).toBe('plan');
+    expect(__test.selectedFeatureIdFor(sessionId), `selected ${sessionId}`).toBe(`feat-${sessionId}`);
+    expect(__test.focusFor(sessionId), `focus ${sessionId}`).not.toBeNull();
+    expect(__test.pillMenuFor(sessionId), `pillMenu ${sessionId}`).not.toBeNull();
+  }
+
+  // mode здесь не проверяем: после вытеснения явный «plan» неразличим с умолчанием
+  // без-фич; размер _modeBySession закрыт проверкой sizes().
+  function expectGone(sessionId: string) {
+    expect(__test.snapshotFor(sessionId).length, `runs ${sessionId}`).toBe(0);
+    expect(__test.loadingFor(sessionId), `loading ${sessionId}`).toBe(false);
+    expect(__test.errorFor(sessionId), `error ${sessionId}`).toBeNull();
+    expect(__test.selectedFeatureIdFor(sessionId), `selected ${sessionId}`).toBeUndefined();
+    expect(__test.focusFor(sessionId), `focus ${sessionId}`).toBeNull();
+    expect(__test.pillMenuFor(sessionId), `pillMenu ${sessionId}`).toBeNull();
+  }
+
+  it('c1: 20 чатов по очереди → в каждой из 7 Map ≤ 8 ключей', () => {
+    for (const s of MANY) touchAllMaps(s);
+    const sizes = __test.sizes();
+    expect(sizes.runs, 'runs').toBeLessThanOrEqual(8);
+    expect(sizes.loading, 'loading').toBeLessThanOrEqual(8);
+    expect(sizes.error, 'error').toBeLessThanOrEqual(8);
+    expect(sizes.mode, 'mode').toBeLessThanOrEqual(8);
+    expect(sizes.selected, 'selected').toBeLessThanOrEqual(8);
+    expect(sizes.focus, 'focus').toBeLessThanOrEqual(8);
+    expect(sizes.pillMenu, 'pillMenu').toBeLessThanOrEqual(8);
+    // LRU, а не «какие попало»: держатся последние 8, первые вытеснены
+    expectPresent('s19');
+    expectPresent('s12');
+    expectGone('s0');
+    expectGone('s11');
+  });
+
+  it('c2: 3 активных чата + 20 других → все 3 активных на месте', () => {
+    for (const a of ['a1', 'a2', 'a3']) {
+      __test.setActive(a);
+      touchAllMaps(a);
+    }
+    for (const s of MANY) touchAllMaps(s);
+    for (const a of ['a1', 'a2', 'a3']) expectPresent(a);
+    // потолок держится и при активных: всего ключей в Map не больше 8 (3 активных + 5 неактивных)
+    expect(__test.sizes().runs).toBeLessThanOrEqual(8);
+  });
+
+  it('вытеснение убирает ключ из всех 7 Map разом (не только runs)', () => {
+    touchAllMaps('x1'); // x1 — самый старый
+    // 8 активных заполняют потолок; вытеснять можно только x1
+    for (let i = 0; i < 8; i++) {
+      __test.setActive(`act${i}`);
+      __test.setRuns(`act${i}`, [run(`act${i}`)]);
+    }
+    expectGone('x1');
+    expect(__test.lru().includes('x1'), 'ключ убран и из LRU-порядка').toBe(false);
+    for (let i = 0; i < 8; i++) expect(__test.snapshotFor(`act${i}`).length).toBe(1);
+  });
+});

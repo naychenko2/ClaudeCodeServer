@@ -460,6 +460,17 @@ export function retryableInterruptedIndex(items: ChatItem[]): number {
   return -1;
 }
 
+// Снимает строку «ход ждёт слот локальной модели». Обычно её снимает само событие
+// (position=0 при допуске/отказе/остановке), но строка принадлежит только своему ходу:
+// оборванный WS или потерянное событие не должны оставлять её в закончившемся ходе —
+// конец хода (result/error/exited) снимает её как failsafe. Без строки возвращает
+// тот же массив (подписчиков не будит лишний раз).
+function dropLocalTurnQueue(items: ChatItem[]): ChatItem[] {
+  return items.some(it => it.kind === 'local_turn_queue')
+    ? items.filter(it => it.kind !== 'local_turn_queue')
+    : items;
+}
+
 // Применяет сообщение сервера к состоянию. Возвращает prev той же ссылкой,
 // если сообщение состояние не меняет (подписчиков можно не будить).
 // Generic: работает и с ChatState, и с расширяющим его SessionState хука.
@@ -760,7 +771,9 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       // иначе живая лента и перезагрузка расходились бы). Границей хода назад служит
       // предыдущий result; сабагентские тексты (parentToolUseId) пропускаем — они
       // могли идти другой моделью.
-      const items = prev.items.slice();
+      // Строка ожидания слота относится только к этому ходу: position=0 снимает её обычно
+      // раньше, но до конца хода она точно не переживёт (failsafe, см. dropLocalTurnQueue)
+      const items = dropLocalTurnQueue(prev.items.slice());
       if (msg.usageModel) {
         for (let i = items.length - 1; i >= 0; i--) {
           const it = items[i];
@@ -902,7 +915,9 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         // придёт подмена модели, элемент схлопнется в её маркер (appendModelSwitched).
         // action — признак предлагаемого действия под карточкой (window-1m-drop): проброс
         // без сравнения с текстом, чтобы смена формулировки на бэке не сломала UI молча
-        items: [...prev.items, { kind: 'error', text: msg.text, canRetry: true, ...(msg.details ? { details: msg.details } : {}), ...(msg.action ? { action: msg.action } : {}) }],
+        // Отказ после ожидания (в т.ч. «движок не отвечает») — финальная красная карточка;
+        // её собственный индикатор ожидания (если был) снят: красный исход его перебивает
+        items: [...dropLocalTurnQueue(prev.items), { kind: 'error', text: msg.text, canRetry: true, ...(msg.details ? { details: msg.details } : {}), ...(msg.action ? { action: msg.action } : {}) }],
       };
 
     case 'exited': {
@@ -919,7 +934,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         bgClosed = true;
         return { ...item, bgDone: true, bgAborted: true };
       });
-      const base = bgClosed ? items : prev.items;
+      const base = dropLocalTurnQueue(bgClosed ? items : prev.items);
       // Компакция, оборванная смертью процесса, результата уже не пришлёт — иначе «Сжимаю…»
       // и заблокированная кнопка висели бы до перезагрузки страницы
       return { ...prev, isWaiting: false, isCompacting: false, items: abnormal ? [...base, { kind: 'session_ended' }] : base };
@@ -1147,6 +1162,25 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       // только остановка на устройстве — она объясняет, почему ход оборвался
       const line = handsStatusFeedLine(msg);
       return line ? withItems([...prev.items, { kind: 'hands_notice', text: line, tone: 'warning' }]) : prev;
+    }
+
+    case 'local_turn_queue': {
+      // Ход ждёт свободный слот локальной модели (гейт допуска). Строка live-only и единственная
+      // на ход: сдвиг позиции обновит стоящую строку (второй под тем же смыслом не плодится),
+      // position=0 снимает её (допущен/отказан/остановлен). Вне флага local-model-stats —
+      // человек обязан видеть ожидание, а не «виснет молча».
+      if (msg.position <= 0) {
+        return prev.items.some(it => it.kind === 'local_turn_queue')
+          ? withItems(prev.items.filter(it => it.kind !== 'local_turn_queue'))
+          : prev;
+      }
+      const at = prev.items.findLastIndex(it => it.kind === 'local_turn_queue');
+      if (at >= 0) {
+        const items = prev.items.slice();
+        items[at] = { kind: 'local_turn_queue', position: msg.position, active: msg.active, limit: msg.limit };
+        return withItems(items);
+      }
+      return withItems([...prev.items, { kind: 'local_turn_queue', position: msg.position, active: msg.active, limit: msg.limit }]);
     }
 
     case 'prompt_suggestion':

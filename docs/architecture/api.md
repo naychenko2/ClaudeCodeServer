@@ -485,6 +485,15 @@ local_model_turn_stats  { sessionId, genTps?, prefillTps?, ttftMs?, queueMsAppro
                         queueMsApprox — мс, округлено вверх до целой секунды
 ```
 
+Ожидание хода в очереди допуска к локальной модели — отдельное событие, **вне флага** `local-model-stats`
+(человек обязан видеть, что ход ждёт, а не «виснет молча»); тоже эфемерное, в `history.json` не пишется:
+
+```
+local_turn_queue        { sessionId, position, active, limit }
+                        position — место в очереди (1 — следующий), «заняты active из limit»;
+                        position = 0 — ожидание кончилось (допуск, отказ или «Стоп»): строку снять
+```
+
 Карточки редакторов отдельных событий не получают: снимок очереди GPU `gpu` (`LocalGpuQueueInfo`:
 `ahead?, startInSeconds?, steps?: { step, total, stage? }, percent?, percentExact, remainingSeconds?,
 busy?: { kind, heavy, remainingSeconds? }, downSince?, running`) едет необязательным полем в уже существующих

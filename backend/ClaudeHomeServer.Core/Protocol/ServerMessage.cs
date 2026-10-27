@@ -769,6 +769,14 @@ public record LocalModelTurnStatsMessage(double? GenTps, double? PrefillTps,
     int ToolCallLeakTail = 0, int ToolCallLeakWholeCall = 0)
     : ServerMessage("local_model_turn_stats");
 
+// Ход ждёт свободный слот локальной модели (гейт допуска LocalEngineBusyTracker). В отличие от
+// LocalModelLiveMessage идёт БЕЗ флага local-model-stats: человек обязан видеть, что ход ждёт,
+// а не «виснет молча». Position — место в очереди (1 — следующий), Active/Limit — «заняты N из M».
+// Position = 0 — ожидание кончилось (ход допущен либо отказан/остановлен): строку надо снять.
+// Эфемерное, в history.json не пишется (нет case в OnMessageAsync и StoredMessage).
+public record LocalTurnQueueMessage(int Position, int Active, int Limit)
+    : ServerMessage("local_turn_queue");
+
 // Сообщения от клиента к серверу
 public record ClientMessage([property: JsonPropertyName("type")] string Type);
 

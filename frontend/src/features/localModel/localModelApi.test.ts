@@ -234,6 +234,27 @@ describe('фикстуры состояний Bonsai (макет §4)', () => {
     expect(u.downSince).toBeGreaterThan(0);
   });
 
+  // engine — ТИП движка, а не имя стенда: бэкенд кладёт 'vllm' | 'llama-server' | 'ollama'
+  // (backend/…/LocalStats/LocalModelStatsPoller.cs:11-12). Мутация «engine: 'vllm'»
+  // в localModel.fixtures.ts краснеет на этом тесте.
+  it('engine — тип движка, а не имя стенда: у Bonsai llama-server во всех состояниях', () => {
+    for (const s of ['unknown', 'ready', 'yielded', 'starting', 'waiting-vram', 'no-arbiter'] as const) {
+      expect(mockBonsaiStats(s).engine).toBe('llama-server');
+    }
+  });
+
+  // link:null — «ждёт в очереди»: вызов уже в журнале, но ещё не вошёл ни в одно звено
+  // (макет §4). Сузить тип в lib/api.ts обратно до LocalModelChainLink — краснеет tsc -b
+  // (фикстура 'ready' с link:null не компилируется).
+  it('callsNow[].link nullable: null — «ждёт в очереди», активные строки называют звено', () => {
+    const calls = mockBonsaiStats('ready').duty!.callsNow!;
+    const waiting = calls.find(c => c.link === null);
+    expect(waiting).toBeDefined();
+    expect(waiting!.place).toBeTruthy();
+    // ждущая строка не одна: активные вызовы по-прежнему называют звено цепочки
+    expect(calls.some(c => c.link === 'bonsai')).toBe(true);
+  });
+
   it('arbiter:null (нет StateUrl) — «арбитр не подключён»: duty есть, статуса уступки нет', () => {
     const m = mockBonsaiStats('no-arbiter');
     expect(m.duty).not.toBeNull();

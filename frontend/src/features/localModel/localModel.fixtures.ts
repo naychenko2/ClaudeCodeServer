@@ -253,7 +253,9 @@ export function mockBonsaiStats(state: BonsaiMockState = 'yielded'): LocalModelS
   // Карта одна на Video и общая с ComfyUI: данные о ней — с узла ComfyUI (разрез v2, §3)
   const base: LocalModelStats = {
     configured: true,
-    engine: 'bonsai',
+    // engine — ТИП движка, а не имя стенда: бэкенд кладёт 'vllm' | 'llama-server' | 'ollama'
+    // (LocalModelStatsPoller.cs:11-12). Имя стенда ('bonsai') здесь быть не должно.
+    engine: 'llama-server',
     model: 'bonsai-27b',
     status: 'working',
     running: 1,
@@ -295,9 +297,14 @@ export function mockBonsaiStats(state: BonsaiMockState = 'yielded'): LocalModelS
   const unloaded = (): LocalModelStats => ({ ...base, status: 'yielded', downSince: null, running: 0, waiting: 0 });
 
   switch (state) {
-    case 'ready':
-      // метрики отвечают, модель активна: статус обычный, дежурство молчит
-      return { ...base, duty: duty(alive('ready')) };
+    case 'ready': {
+      // метрики отвечают, модель активна: статус обычный, дежурство молчит.
+      // Вторая строка — «ждёт в очереди»: вызов уже в журнале, но звена цепочки ещё нет
+      // (link:null, макет §4 — строка с «ждёт в очереди» и 0,3 с)
+      const d = duty(alive('ready'));
+      d.callsNow = [...d.callsNow!, { place: 'Сводка хода', link: null, durationS: 0.3 }];
+      return { ...base, duty: d };
+    }
     case 'yielded': {
       // уступила по плану: причина — задание ComfyUI (вид опознан, оно с этого сервера)
       const d = duty({ ...alive('yielded'), reasons: [{ kind: 'comfy', raw: 'a1b2c3d4', jobKind: 'video', known: true }] });

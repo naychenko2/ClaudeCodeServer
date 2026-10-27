@@ -213,11 +213,13 @@ export interface LocalModelDutyAnswers {
 
 // Вызов места прямо сейчас («Кто сейчас на модели» у Bonsai). Это журнал вызовов мест,
 // а не чаты: строка не кликабельна, владельца и промпта нет (разрез v2, §4).
-// place — название места из каталога; link — текущее звено цепочки;
-// durationS — секунды с начала вызова; null — ещё не начался.
+// place — название места из каталога; link — текущее звено цепочки; null — «ждёт в
+// очереди»: вызов уже в журнале, но ещё не вошёл ни в одно звено (макет §4, строка
+// «ждёт в очереди»); durationS — секунды с начала вызова; null — ещё не начался.
 export interface LocalModelDutyCall {
   place: string;
-  link: LocalModelChainLink;
+  // null — вызов ждёт в очереди, звена ещё нет (так отдаст бэк)
+  link: LocalModelChainLink | null;
   durationS?: number | null;
 }
 

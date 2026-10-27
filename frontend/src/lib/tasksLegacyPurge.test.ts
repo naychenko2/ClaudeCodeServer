@@ -40,6 +40,32 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
+const NEW_TEMPLATES = [
+  '/tasks?q=abc', '/tasks?personaId=p1', '/api/tasks?personaId=p1', '/projects/p1/tasks',
+  '/api/projects/p1/tasks?x=1', '/tasks/features/f1', '/tasks/features/f1?eventsLimit=50',
+  '/api/tasks/features/f1?eventsLimit=50',
+];
+const KEEP = ['tasks:all', 'tasks:outbox:1', '/notes/index', 'chat:continue:s1', '/tasks/features/index?projectId=p1', '/projects/p1'];
+
+describe('purgeLegacyTaskListCache — новые шаблоны', () => {
+  it('сносит поиск, персону, задачи проекта и страницу фичи; остальное остаётся', async () => {
+    for (const k of [...NEW_TEMPLATES, ...KEEP]) mocks.store.set(k, entry);
+    const { purgeLegacyTaskListCache } = await import('./tasks');
+    await purgeLegacyTaskListCache();
+    const left = [...mocks.store.keys()].filter(k => !k.startsWith('tasks:legacy')).sort();
+    expect(left).toEqual([...KEEP].sort());
+  });
+
+  it('при уже стоящем признаке v1 чистка v2 всё равно выполняется', async () => {
+    mocks.store.set('tasks:legacy-cache-purged:v1', { data: true, savedAt: 1 });
+    for (const k of [...NEW_TEMPLATES, ...KEEP]) mocks.store.set(k, entry);
+    const { purgeLegacyTaskListCache } = await import('./tasks');
+    await purgeLegacyTaskListCache();
+    expect(NEW_TEMPLATES.some(k => mocks.store.has(k))).toBe(false);
+    expect(mocks.store.has('tasks:legacy-cache-purged:v2')).toBe(true);
+  });
+});
+
 describe('purgeLegacyTaskListCache — ключи одиночных задач', () => {
   it('сносит /tasks/{id} (с /api и query), остальные ключи остаются', async () => {
     seed();

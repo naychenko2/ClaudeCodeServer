@@ -292,15 +292,21 @@ let _outboxConfigured = false;
 // ключ — ровно один сегмент после /tasks (с query или без), служебные /tasks/ai не трогаем.
 const LEGACY_LIST_KEYS = ['/tasks', '/tasks/features'].flatMap(p => [p, `/api${p}`]);
 const LEGACY_SINGLE_TASK_KEY = /^(?:\/api)?\/tasks\/(?!ai(?:[/?]|$))[^/?]+(?:\?.*)?$/;
+// Списки задач проекта и страница фичи (/tasks/features/{fid}?eventsLimit=…) тоже копились
+// пассивно; индекс фич /tasks/features/index остаётся пассивным кэшем — его не трогаем.
+const LEGACY_PROJECT_TASKS_KEY = /^(?:\/api)?\/projects\/[^/?]+\/tasks(?:\?.*)?$/;
+const LEGACY_FEATURE_PAGE_KEY = /^(?:\/api)?\/tasks\/features\/(?!index(?:[/?]|$))[^/?]+(?:\?.*)?$/;
 // Чистка разовая: признак живёт в том же разделе meta, сам по себе в кэш запросов не попадает.
-const LEGACY_PURGE_DONE_KEY = 'tasks:legacy-cache-purged:v1';
+// Версия поднимается, когда набор шаблонов расширяется: клиентам с прошлым признаком нужен новый прогон.
+const LEGACY_PURGE_DONE_KEY = 'tasks:legacy-cache-purged:v2';
 
 export async function purgeLegacyTaskListCache(): Promise<void> {
   if (await idbGet(LEGACY_PURGE_DONE_KEY).catch(() => undefined)) return;
   const keys = await idbKeys().catch(() => null);
   if (!keys) return;
   const stale = keys.filter(k =>
-    LEGACY_LIST_KEYS.some(p => k === p || k.startsWith(`${p}?`)) || LEGACY_SINGLE_TASK_KEY.test(k));
+    LEGACY_LIST_KEYS.some(p => k === p || k.startsWith(`${p}?`)) ||
+    LEGACY_SINGLE_TASK_KEY.test(k) || LEGACY_PROJECT_TASKS_KEY.test(k) || LEGACY_FEATURE_PAGE_KEY.test(k));
   await Promise.all(stale.map(k => idbDelete(k).catch(() => {})));
   await idbSet(LEGACY_PURGE_DONE_KEY, { data: true, savedAt: Date.now() }).catch(() => {});
 }

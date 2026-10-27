@@ -49,6 +49,26 @@ describe('списки задач и фич — live-запросы', () => {
     expect(urlKeys).toEqual([]);
   });
 
+  it('search, listByPersona, listByProject и getFeature не пишут URL-ключ в IndexedDB', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('[]', { status: 200 })));
+    const { api } = await import('./api');
+    await api.tasks.search('abc');
+    await api.tasks.listByPersona('p1');
+    await api.tasks.listByProject('pr1');
+    await api.tasks.getFeature('f1', '50');
+    await api.tasks.getFeature('f1', undefined, new AbortController().signal);
+    const urlKeys = mocks.idbSet.mock.calls.filter(c => String((c as unknown[])[0]).startsWith('/'));
+    expect(urlKeys).toEqual([]);
+  });
+
+  it('featuresIndex остаётся пассивным: ответ пишется в кэш по URL', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })));
+    const { api } = await import('./api');
+    await api.tasks.featuresIndex();
+    const urlKeys = mocks.idbSet.mock.calls.filter(c => String((c as unknown[])[0]).startsWith('/'));
+    expect(urlKeys.length).toBe(1);
+  });
+
   it('открытие N задач подряд не оставляет в IndexedDB записей /tasks/{id}', async () => {
     const full = (id: string) => ({ ...task(id), description: 'x'.repeat(1000), resultMarkdown: 'y'.repeat(1000) });
     vi.stubGlobal('fetch', vi.fn(async (u: unknown) => {
@@ -100,9 +120,9 @@ describe('чистка старого пассивного кэша', () => {
     await new Promise(r => setTimeout(r, 0));
     expect([...store].filter(k => k.startsWith('/tasks/features') && k !== '/tasks/features/index')).toEqual([]);
     expect([...store].filter(k => k === '/tasks' || k.startsWith('/tasks?') || k.startsWith('/api/tasks'))).toEqual([]);
-    // /tasks/t1 (одиночная задача) тоже сносится — FIX-3; сам признак «чистили» не в счёт
+    // /tasks/t1 (одиночная задача) сносится — FIX-3, /projects/p/tasks — F2c-b; сам признак «чистили» не в счёт
     expect([...store].filter(k => !k.startsWith('tasks:legacy')).sort())
-      .toEqual(['/projects/p/tasks', '/tasks/features/index', 'tasks:all']);
+      .toEqual(['/tasks/features/index', 'tasks:all']);
     vi.doUnmock('./api');
   });
 });

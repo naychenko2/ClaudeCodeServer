@@ -205,6 +205,101 @@ public class ClaudeSessionUpstreamRouteTests
             "маршрут недоступен — резерв из стартового расчёта");
     }
 
+    // «CLI», который стартовал и сразу печатает result-строку в stdout (содержимое — из файла,
+    // чтобы не возиться с экранированием JSON в cmd/sh), затем «спит» до уборки.
+    private sealed class ResultEmittingLauncher(List<Process> processes, string resultFile)
+        : ClaudeHomeServer.Services.Execution.IProcessLauncher
+    {
+        public bool IsSandboxed => false;
+        public bool TargetIsWindows => OperatingSystem.IsWindows();
+        public ClaudeHomeServer.Services.Execution.IPathMapper Paths =>
+            ClaudeHomeServer.Services.Execution.IdentityPathMapper.Instance;
+        public string ClaudeCliCommand => "fake-claude";
+        public string HostTempDir => Path.GetTempPath();
+        public string? McpApiUrlOverride => null;
+
+        public Process Start(ClaudeHomeServer.Services.Execution.ProcessSpec spec)
+        {
+            var fake = new ClaudeHomeServer.Services.Execution.ProcessSpec
+            {
+                FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
+                Args = OperatingSystem.IsWindows()
+                    ? ["/c", $"type \"{resultFile}\" & ping -n 120 127.0.0.1 >nul"]
+                    : ["-c", $"cat '{resultFile}'; sleep 120"],
+                WorkingDirectory = spec.WorkingDirectory,
+                StdioEncoding = spec.StdioEncoding,
+                EnableRaisingEvents = spec.EnableRaisingEvents,
+                RedirectStdin = spec.RedirectStdin,
+                Track = false,
+            };
+            var process = ClaudeHomeServer.Services.Execution.LocalProcessRunner.Instance.Start(fake);
+            lock (processes) processes.Add(process);
+            return process;
+        }
+
+        public int EstimateCommandLineLength(ClaudeHomeServer.Services.Execution.ProcessSpec spec)
+        {
+            var total = (spec.FileName ?? string.Empty).Length;
+            foreach (var a in spec.Args) total += TurnPromptAssembler.ArgCost(a);
+            return total;
+        }
+
+        public void Kill(Process process, string? turnId = null)
+        {
+            try { process.Kill(entireProcessTree: true); }
+            catch { /* уже мёртв */ }
+        }
+    }
+
+    /// <summary>
+    /// Стык «расчёт ключа при старте → CliRun → ResultMessage» без подстановки в CliRun руками:
+    /// реальный SendMessageAsync, «CLI» печатает result-строку. Ключ сессии ("claude-2") и ожидаемый
+    /// ключ апстрима ("localqwen", по модели) различаются, так что совпадение не случайно.
+    /// Мутация: снять UpstreamProvider = ComputeUpstreamProviderKey() в инициализации CliRun
+    /// (ClaudeSession.cs) — в ResultMessage будет null.
+    /// </summary>
+    [Fact]
+    public async Task РеальныйСтартПрогона_КлючПосчитанПриСтартеДоезжаетДоResultMessage()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "upstream_route_run_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var resultFile = Path.Combine(tempDir, "result.jsonl");
+            await File.WriteAllTextAsync(resultFile, RealResultLine + "\n");
+            var root = Path.Combine(tempDir, "root");
+            Directory.CreateDirectory(root);
+
+            var gotResult = new TaskCompletionSource<ResultMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var launcher = new ResultEmittingLauncher(_fakeProcesses, resultFile);
+            var context = new LlmSessionContext(
+                RootPath: root,
+                OnMessage: m =>
+                {
+                    if (m is ResultMessage r) gotResult.TrySetResult(r);
+                    return Task.CompletedTask;
+                },
+                RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
+                PermissionRules: null,
+                TasksMcp: null,
+                Launcher: launcher);
+            var info = new Session { Model = "qwen3.8-27b", Provider = "claude-2" };
+            var session = new ClaudeSession(info, context, providers: BuildProviders());
+
+            await session.SendMessageAsync("тестовый ход");
+            var done = await Task.WhenAny(gotResult.Task, Task.Delay(TimeSpan.FromSeconds(30)));
+            done.Should().Be(gotResult.Task, "result-строка «CLI» обязана дойти до клиента");
+            (await gotResult.Task).UpstreamProvider.Should().Be("localqwen",
+                "ключ из стартового расчёта доезжает до записи расхода без пересчёта");
+        }
+        finally
+        {
+            foreach (var p in _fakeProcesses)
+                try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { /* уже мёртв */ }
+            try { Directory.Delete(tempDir, recursive: true); } catch { /* не критично */ }
+        }
+    }
+
     private static (ClaudeSession Session, List<ServerMessage> Sent) NewSessionWithGateway(
         GatewayTestKit kit, ServerTurnGateway gateway)
     {

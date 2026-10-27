@@ -6,7 +6,7 @@ import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { useFeaturePage, refetchFeaturePage, useFeaturePageTab, setFeaturePageTab } from '../../lib/featurePage';
 import { useMe } from '../../lib/defaultPersona';
 import { buildNavMarks } from '../../lib/featureNavMarks';
-import { getBackNav, clearBackNav } from '../../lib/featureBackNav';
+import { getBackNav, clearBackNav, registerFeaturePage, recordFeatureReturn } from '../../lib/featureBackNav';
 import { useFeaturesIndex } from '../../lib/featuresIndex';
 import { api } from '../../lib/api';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
@@ -27,7 +27,9 @@ import { FeatureChatsTab } from './FeatureChatsTab';
 import { FeatureTasksTab } from './FeatureTasksTab';
 import { FeatureEventsTab } from './FeatureEventsTab';
 import { FeatureStatsTab } from './FeatureStatsTab';
-import { FeatureMiniSummary } from './FeatureMiniSummary';
+import { FeatureBriefBlock, type FeatureBriefBlockProps } from './FeatureBriefBlock';
+import { type PersonaNameResolver } from './FeatureBriefModel';
+import { ensurePersonasLoaded, getPersonaById, usePersonasVersion } from '../../lib/personas';
 import {
   FeaturePageHeader, FeaturePageToolbar, FeaturePageAlert,
   featureRunStatusTag, toRunTag, type FeatureRunTag,
@@ -95,13 +97,23 @@ function activeStageName(run: FeatureRun): string | null {
   return stage ? STAGE_NAME[stage.key] : null;
 }
 
-// (Мини-сводка — FeatureMiniSummary, Ф8.)
+// Блок «Сводка» + имена персон (волна 6, Ф6): getPersonaById сам по себе не реактивен
+// (lib/personas.ts:75) — обёртка подписывается на версию стора и просит загрузку
+// (тот же приём, что LeadChip): после догрузки стора имена в подписи голоса и в «Дальше»
+// появляются. Подписка на обёртке, не на странице: подъём стора персон не должен
+// перерисовывать всю страницу.
+function FeatureBriefWithNames(props: Omit<FeatureBriefBlockProps, 'nameOf'>) {
+  usePersonasVersion();
+  useEffect(() => { void ensurePersonasLoaded(); }, []);
+  const nameOf: PersonaNameResolver = (id) => getPersonaById(id)?.name ?? null;
+  return <FeatureBriefBlock {...props} nameOf={nameOf} />;
+}
 
 // Страница фичи (волна 3, Ф1 — каркас). Оболочка — «как файл» (CenterViewShell):
 // Toolbar-шапка (закрытие, глиф, название, тег/действие/⋯), Esc, возврат к месту
 // открытия; тело — мета-строка (макет §1), блок тревоги по attention (макет §2),
-// липкие вкладки (макет §4) и содержимое: «Хронология» — мини-сводка (заглушка Ф8)
-// + конвейер, остальные вкладки — «Скоро».
+// липкие вкладки (макет §4) и содержимое: «Хронология» — блок «Сводка» (волна 6, Ф6:
+// заменяет мини-сводку Ф8) + конвейер, остальные вкладки — «Скоро».
 //
 // Тег статуса — единая точка правды run.state (9 состояний, макет §3); старые данные
 // (state нет) — фолбэк на тег индекса. Выбранная вкладка — в сторе страницы
@@ -136,13 +148,21 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
   const glyph: GlyphKind = display ? display.kind : 'run';
   let tag: FeatureRunTag | null = null;
   if (page.status === 'ok' && page.page.run.state) {
-    tag = featureRunStatusTag(page.page.run.state, activeStageName(page.page.run));
+    tag = featureRunStatusTag(page.page.run.state, activeStageName(page.page.run), {
+      holdReason: page.page.run.hold?.reason, queue: page.page.run.queue,
+    });
   } else if (feature) {
     tag = toRunTag(featureStatusTag(feature));
   }
 
   // Вкладка: из стора страницы (сохраняется при скрытии/возврате).
   const tab = useFeaturePageTab();
+
+  // Регистрация страницы в канале окна возврата (GC-F11R4): окно снимка живёт ради этого
+  // открытия страницы — закрытие гасит его (отложенная проверка в featureBackNav), а
+  // перерегистрация (мнимый unmount→mount StrictMode) её отменяет. Регистрация — только
+  // сигнал жизни страницы; само окно живёт в сторе.
+  useEffect(() => registerFeaturePage(featureId), [featureId]);
 
   // Закрытие: куда ведёт. Из чата — в исходный чат («К чату «…»»); из списка/диплинк —
   // в список: мобила «К списку», десктоп «Назад».
@@ -275,10 +295,21 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
     );
   } else {
     // ok: мета-строка (макет §1), тревога по attention (макет §2), липкие вкладки
-    // (макет §4) и содержимое: «Хронология» — мини-сводка (заглушка Ф8) + конвейер,
+    // (макет §4) и содержимое: «Хронология» — блок «Сводка» (волна 6, Ф6) + конвейер,
     // остальные — «Скоро».
     // ok: run есть (page.page.run) — локальная переменная без null.
     const okRun = page.page.run;
+    // «Открыть финальное ревью» (кнопка карточки «ждёт вас», только мобила): чат задачи
+    // финала — тот же переход, что у тревожного блока: запись возврата к фиче (плашка
+    // в чате) + открытие чата. Финальной задачи или её чата нет — проп не передаётся,
+    // кнопка на карточке не рисуется (FeatureBriefBlock: каждая кнопка — по своему пропу).
+    const finalChat = okRun.final?.linkedSessionId ?? null;
+    const openFinalChat = finalChat
+      ? () => {
+          recordFeatureReturn(featureId, { kind: 'chat', id: finalChat }, title);
+          void openChatById(finalChat);
+        }
+      : undefined;
     const chatsCount = (page.page.chats ?? []).filter(c => !c.archived).length;
     // Пометки «в архиве»/«задача закрыта» — из данных страницы (задачи run + чаты): одни
     // на все вкладки, шапку и тревогу.
@@ -305,8 +336,20 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
         <div data-testid="feature-page-body" style={{ marginTop: SP.md }}>
           {tab === 'timeline' ? (
             <>
-              <FeatureMiniSummary stats={page.page.stats ?? null} onOpenStats={() => setFeaturePageTab('stats')} isMobile={isMobile} />
-              <FeatureTimelineTab run={okRun} marks={marks} isMobile={isMobile} />
+              {/* Блок «Сводка» (волна 6, Ф6): brief/stats/mergedAt — из ответа страницы,
+                  фронт ничего не пересчитывает; «Повторить» — перезапрос страницы. */}
+              <FeatureBriefWithNames
+                brief={page.page.brief ?? null}
+                stats={page.page.stats ?? null}
+                mergedAt={okRun.summary?.mergedAt ?? null}
+                isMobile={isMobile}
+                onOpenStats={() => setFeaturePageTab('stats')}
+                onRetry={() => refetchFeaturePage(featureId)}
+                onMerge={openMergeDialog}
+                onOpenFinal={openFinalChat}
+              />
+              {/* stats — таймлайн фичи: из него дорожки этапов и ось времени (GC-F5c). */}
+              <FeatureTimelineTab run={okRun} marks={marks} isMobile={isMobile} stats={page.page.stats ?? null} />
             </>
           ) : tab === 'plans' ? (
             <FeaturePlansTab page={page.page} isMobile={isMobile} onOpenFile={onOpenFile} onOpenKeyChat={onOpenKeyChat} marks={marks} featureId={featureId} projectId={projectId} />

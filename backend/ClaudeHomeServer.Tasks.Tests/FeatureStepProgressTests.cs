@@ -501,6 +501,62 @@ public class FeatureStepProgressTests
         run.StepProgress.PlanState.Should().NotBe("done");
     }
 
+    // B7 (ревью R-B5, находка 5): дефолт PlanState — константа, не литерал. Значения задают
+    // константы FeatureStepAccounting.Plan* (подняты в internal в доработке B2b); дефолт литералом
+    // разъехался бы с этим определением молча — тот же риск, который закрыл сторож по исходнику
+    // в FeatureBrief.EstimateOf. Мутация: вернуть в FeatureRun.cs `= "pending"` — тест красный.
+    [Fact]
+    public void PlanState_ДефолтКонстантой_ВИсходникеБезЛитерала()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        string? path = null;
+        while (dir is not null && path is null)
+        {
+            var candidate = Path.Combine(dir.FullName, "backend", "ClaudeHomeServer.Tasks",
+                "Projector", "FeatureRun.cs");
+            if (File.Exists(candidate)) path = candidate;
+            dir = dir.Parent;
+        }
+        path.Should().NotBeNull("FeatureRun.cs не найден от дерева сборки — сторож вне дерева не работает");
+
+        var decls = File.ReadAllLines(path!)
+            .Select(l => l.Trim())
+            .Where(l => l.Contains("PlanState") && l.Contains("get; init;"))
+            .ToList();
+        decls.Should().HaveCount(1, "дефолт PlanState объявлен в одном месте");
+        decls[0].Should().Contain("FeatureStepAccounting.PlanPending",
+            "дефолт — константа, которая задаёт значения PlanState");
+        decls[0].Should().NotContain("\"pending\"", "в объявлении PlanState нет литерала состояния плана");
+
+        // Поведение: дефолт равен константе (internal виден этой сборке через InternalsVisibleTo).
+        new FeatureStepProgress().PlanState.Should().Be(FeatureStepAccounting.PlanPending);
+    }
+
+    // R-B11B12 минор 3: видимость констант Plan* — контракт (FeatureStepAccounting.cs:24-26):
+    // pending/partial — internal (по ним сверяет FeatureBrief.EstimateOf), cut/done вне класса
+    // не потребляются — private. Поднять их «для удобства» — значит пустить значение за единственную
+    // точку определения. Мутация: PlanCut до internal — тест красный.
+    [Fact]
+    public void ПланКонстанты_ВидимостьПоКонтракту_CutDoneНеInternal()
+    {
+        var t = typeof(FeatureStepAccounting);
+        foreach (var (name, shouldBeInternal) in new[]
+        {
+            (nameof(FeatureStepAccounting.PlanPending), true),
+            (nameof(FeatureStepAccounting.PlanPartial), true),
+            ("PlanCut", false),
+            ("PlanDone", false),
+        })
+        {
+            var field = t.GetField(name, BindingFlags.NonPublic | BindingFlags.Static);
+            field.Should().NotBeNull($"константа {name} должна существовать");
+            if (shouldBeInternal)
+                field!.IsAssembly.Should().BeTrue($"{name} — internal: по ней сверяет FeatureBrief.EstimateOf");
+            else
+                field!.IsPrivate.Should().BeTrue($"{name} вне класса не потребляется — private");
+        }
+    }
+
     [Fact]
     public void СтарыеШагиБезСтепРефа_ОтдельныеШаги()
     {
@@ -581,6 +637,7 @@ public class FeatureStepProgressTests
         // FeatureHold (W4-HOLD-B1) — позиционная запись без конструктора без параметров:
         // образец собирается явно, дальше тест сверяет, что SlimRun перенёс его по ссылке.
         if (t == typeof(FeatureHold)) return new FeatureHold("sentinel-" + name, new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc), "chat-s", true);
+        if (t == typeof(FeatureQueueInfo)) return new FeatureQueueInfo(2, 3);
         return Activator.CreateInstance(t)
             ?? throw new InvalidOperationException($"Не удалось собрать образец для {name}: {type}");
     }

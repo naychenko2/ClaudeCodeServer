@@ -8,6 +8,10 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { FeatureRailSegment, FeatureRailKey } from '../../../types/featureIndex';
+import type { FeatureQueue } from '../../../types/featureRun';
+import { queueLabelParts } from '../../../lib/chatGroups';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { FeatureRail } from './FeatureRail';
 
 // 8 стадий в порядке жизненного цикла (cut → design → plan → … → merge); design —
@@ -30,6 +34,11 @@ function rail(over: Partial<Record<FeatureRailKey, Partial<FeatureRailSegment>>>
 
 function render(r: FeatureRailSegment[], closed = false): string {
   return renderToStaticMarkup(createElement(FeatureRail, { rail: r, closed }));
+}
+
+// Рендер с waiting (фича в очереди) и местом в очереди с бэка.
+function renderQ(r: FeatureRailSegment[], waiting: boolean, queue?: FeatureQueue | null): string {
+  return renderToStaticMarkup(createElement(FeatureRail, { rail: r, waiting, queue }));
 }
 
 // Число сегментов: каждый <i> несёт ровно один title; span-контейнер title не имеет.
@@ -118,5 +127,88 @@ describe('FeatureRail', () => {
     // Короткий (3 сегмента): ровно 3, не падает.
     expect(() => render(rail().slice(0, 3))).not.toThrow();
     expect(segCount(render(rail().slice(0, 3)))).toBe(3);
+  });
+});
+
+// Очередь фич (макет feature-queue-1): при waiting активный сегмент — C.textMuted
+// вместо цвета тона; к aria-label добавляется «· в очереди N из M» (позицию считает
+// бэк). Без waiting поведение прежнее (регрессия тестов выше).
+describe('FeatureRail: очередь фич (waiting)', () => {
+  const Q: FeatureQueue = { position: 2, length: 3 };
+
+  it('waiting: активный сегмент — textMuted вместо цвета тона, длина 15 сохранена', () => {
+    const html = renderQ(rail(), true, Q); // prod — active, tone run
+    // active → textMuted, не textHeading (run).
+    expect(html).toContain('width:15px;background:var(--c-text-muted)');
+    expect(html).not.toContain('var(--c-text-heading)');
+    // остальные сегменты без изменений: done → success (cut/plan), pending → progressTrack (design/review/qa/final/merge).
+    expect((html.match(/background:var\(--c-success\)/g) ?? []).length).toBe(2);
+    expect((html.match(/background:var\(--c-progress-track\)/g) ?? []).length).toBe(5);
+  });
+
+  it('waiting=false/без пропа: активный — по-прежнему в цвете тона (регрессия)', () => {
+    const html = renderQ(rail(), false, Q);
+    expect(html).toContain('var(--c-text-heading)'); // run → textHeading, как раньше
+    expect(html).not.toContain('width:15px;background:var(--c-text-muted)');
+  });
+
+  it('waiting: aria-label «Этап: {этап} · в очереди N из M»', () => {
+    expect(renderQ(rail(), true, Q)).toContain('aria-label="Этап: Производство · в очереди 2 из 3"');
+  });
+
+  it('waiting без queue (бэк не отдал) или с нулями: «· в очереди» без цифр', () => {
+    // Нет queue (null/undefined) и нули — цифры не показываем (макет: «Нули не показываем»).
+    for (const q of [null, undefined, { position: 0, length: 3 }, { position: 2, length: 0 }]) {
+      expect(renderQ(rail(), true, q)).toContain('aria-label="Этап: Производство · в очереди"');
+    }
+  });
+
+  it('без waiting: прежний aria-label, суффикса нет (регрессия)', () => {
+    expect(renderQ(rail(), false, Q)).toContain('aria-label="Этап: Производство"');
+    // активного нет — «не начат» без суффикса
+    expect(renderQ(rail({ prod: { state: 'done', tone: null } }), false, Q)).toContain('aria-label="Этап: не начат"');
+  });
+
+  it('waiting и активного нет: «Этап: не начат · в очереди N из M»', () => {
+    // Фича в очереди, ещё не начатая: очередь видна в подписи, даже когда этапа нет.
+    expect(renderQ(rail({ prod: { state: 'pending', tone: null } }), true, Q)).toContain('aria-label="Этап: не начат · в очереди 2 из 3"');
+  });
+
+  it('closed важнее waiting: «Этап: закрыта», приглушение прежнее', () => {
+    // Закрытая фича в очереди быть не может (макет: «В очередь» нет у merged/closed) —
+    // closed держит и подпись, и приглушение всей рельсы.
+    const html = renderToStaticMarkup(createElement(FeatureRail, { rail: rail(), closed: true, waiting: true, queue: Q }));
+    expect(html).toContain('aria-label="Этап: закрыта"');
+    expect((html.match(/background:var\(--c-text-muted\)/g) ?? []).length).toBe(8);
+  });
+});
+
+// === R-Q5D-E: рельса берёт aria-суффикс из структурного API хелпера ===
+// Потребитель не разбирает строку подписи и не держит своей копии формата «N из M»:
+// суффикс приходит готовым полем queueLabelParts.ariaSuffix (единственный источник —
+// chatGroups). Мутация (в отчёте): вернуть в рельсу разбор строки по разделителю →
+// сторож краснеет; сдвинуть суффикс на свой текст → краснеют оба теста.
+
+describe('FeatureRail: R-Q5D-E — подпись из queueLabelParts', () => {
+  it('aria-суффикс рельсы = queueLabelParts(queue).ariaSuffix', () => {
+    const q: FeatureQueue = { position: 2, length: 3 };
+    const html = renderQ(rail(), true, q);
+    expect(html).toContain(`aria-label="Этап: Производство${queueLabelParts(q).ariaSuffix}"`);
+    // Без цифр — тоже из хелпера (null/нули).
+    const htmlNull = renderQ(rail(), true, null);
+    expect(htmlNull).toContain(`aria-label="Этап: Производство${queueLabelParts(null).ariaSuffix}"`);
+    // c3: цифры позиции закреплены ЯВНО (не только сравнением с хелпером): молча
+    // исчезнуть из aria они не могут.
+    expect(html).toContain('в очереди 2 из 3');
+  });
+
+  it('в исходнике рельсы нет разбора строки подписи и своей копии «N из M»', () => {
+    const src = readFileSync(fileURLToPath(new URL('./FeatureRail.tsx', import.meta.url)), 'utf8');
+    expect(src, 'рельса разбирает строку подписи по разделителю').not.toContain("indexOf(' · ')");
+    expect(src, 'рельса берёт строку подписи вместо частей').not.toMatch(/\bqueueLabel\(/);
+    expect(src, 'рельса собирает своё «N из M»').not.toMatch(/\$\{[^}]*position/);
+    expect(src, 'рельса собирает своё «N из M»').not.toMatch(/\$\{[^}]*length/);
+    // c2: своей реализации суффикса в потребителе нет — строка одна (в хелпере).
+    expect(src, 'у рельсы своя функция суффикса').not.toContain('queueSuffix');
   });
 });

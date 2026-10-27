@@ -32,6 +32,8 @@ export type OverflowItem = {
   dot?: boolean;        // точка-индикатор справа («живой» пункт)
   active?: boolean;     // текущий раздел — подсвечивается accent-цветом
   danger?: boolean;
+  // Предупреждающий тон (C.warningText): действие обратимо и ничего не ломает, но идёт в обход правила
+  warning?: boolean;
   disabled?: boolean;
   // Второе действие строки — кнопка-иконка справа (у пункта есть и основной клик,
   // и побочная команда: глазик видимости кнопки в ряду). Клик по ней НЕ выполняет
@@ -311,7 +313,7 @@ function ItemRow({ item, isMobile, onDone }: { item: OverflowItem; isMobile?: bo
         border: 'none', background: 'transparent', cursor: item.disabled ? 'default' : 'pointer',
         borderRadius: R.lg, padding: isMobile ? '11px 12px' : '9px 10px',
         minHeight: isMobile ? 44 : undefined, fontFamily: FONT.sans,
-        color: item.danger ? C.dangerText : item.active ? C.accent : C.textHeading,
+        color: item.danger ? C.dangerText : item.warning ? C.warningText : item.active ? C.accent : C.textHeading,
         opacity: item.disabled ? 0.5 : 1,
         // При действии-спутнике фон и скругление рисует обёртка, иначе подсветка
         // обрывалась бы ровно перед кнопкой справа
@@ -323,7 +325,7 @@ function ItemRow({ item, isMobile, onDone }: { item: OverflowItem; isMobile?: bo
       {item.icon != null && (
         <span style={{
           width: 24, display: 'grid', placeItems: 'center', flex: 'none',
-          color: item.danger ? C.dangerText : item.active ? C.accent : C.textSecondary,
+          color: item.danger ? C.dangerText : item.warning ? C.warningText : item.active ? C.accent : C.textSecondary,
         }}>
           {item.icon}
         </span>

@@ -93,6 +93,10 @@ export const C = {
   info:        'var(--c-info)',
   infoBg:      'var(--c-info-bg)',
 
+  // Серия glif в аналитике расхода — вне цветов цены (зелёный/синий/оранжевый)
+  rose:        'var(--c-rose)',
+  roseText:    'var(--c-rose-text)',  // значение glif текстом
+
   // Режим «План» (индиго-фиолет) — отдельный от accent
   plan:        'var(--c-plan)',
   planLight:   'var(--c-plan-light)',   // фон чипа/карточки плана

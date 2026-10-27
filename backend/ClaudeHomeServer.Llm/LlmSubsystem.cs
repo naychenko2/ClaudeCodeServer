@@ -154,10 +154,28 @@ public sealed class LlmSubsystem : IAppSubsystem
         services.AddSingleton<LlamaServerClient>();
         services.AddSingleton<ILocalLlmClient>(sp =>
         {
-            var options = LocalLlmOptions.Read(sp.GetRequiredService<IConfiguration>());
-            return options.Provider == LocalLlmOptions.LlamaServer
+            var config = sp.GetRequiredService<IConfiguration>();
+            var options = LocalLlmOptions.Read(config);
+            ILocalLlmClient inner = options.Provider == LocalLlmOptions.LlamaServer
                 ? sp.GetRequiredService<LlamaServerClient>()
                 : sp.GetRequiredService<OllamaClient>();
+            // Слот в общем счётчике движка под ключом провайдера, с которым клиент делит движок
+            // (LocalLlm:EngineKey; не задан — свой ключ, то есть отдельный движок). Потолок —
+            // MaxConcurrentTurns этого провайдера; реестр берём лениво, из конструктора фабрики
+            // он не нужен (цикл в графе DI).
+            var key = TrackedLocalLlmClient.ReadEngineKey(config);
+            var logger = sp.GetRequiredService<ILogger<TrackedLocalLlmClient>>();
+            var warned = 0;
+            return new TrackedLocalLlmClient(inner, LocalEngineBusyTracker.Instance, key,
+                () =>
+                {
+                    // Реестр на старте ещё не готов — проверяем при первом использовании ключа
+                    var registry = sp.GetService<LlmProviderRegistry>();
+                    if (Interlocked.Exchange(ref warned, 1) == 0)
+                        TrackedLocalLlmClient.WarnIfEngineKeyUnknown(config, registry, logger);
+                    return registry?.GetByKey(key)?.MaxConcurrentTurns ?? TrackedLocalLlmClient.DefaultLimit;
+                },
+                logger);
         });
         // Тихие HTTP-логгеры на оба имени: каждая реализация пишет в свою категорию,
         // и одна мёртвая зависимость не глушит жалобы другой. Без них каждый вызов
@@ -184,6 +202,17 @@ public sealed class LlmSubsystem : IAppSubsystem
                 Category: "ClaudeHomeServer.Llm.LocalEndpointProbe",
                 Subject: "локальным движком модели (vLLM/llama.cpp)",
                 Consequence: "Ход на локальной модели завершится сразу «локальная модель не запущена»."));
+
+        // Именованные локальные движки (LocalEngines:*) — дежурные llama-server рядом с
+        // основным LocalLlm (например, Bonsai 2 на машине «Video» под арбитром GPU). Проба
+        // готовности — тихий клиент: движок выгружен штатно, а не сломан.
+        services.AddSingleton<NamedLocalEngines>();
+        services.AddQuietHttpClient(
+            NamedLocalEngines.HttpClientName,
+            new QuietHttpClientProfile(
+                Category: "ClaudeHomeServer.Llm.LocalEngines",
+                Subject: "арбитром именованного локального движка",
+                Consequence: "Место уйдёт дальше по своей цепочке (страховка или claude)."));
 
         // Бесплатное ранжирование действий локальной Ollama для роутинга
         // через LocalActionRouter.

@@ -26,6 +26,11 @@
 //     открывает нужную фичу и шаг.
 // Все три — per-session (Map<sessionId, …>): смена чата показывает срез того чата,
 // и ни режим, ни выбор, ни фокус не текут между чатами.
+//
+// F4 (инвариант И4 «OOM на странице»): все per-session Map ограничены 8 чатами (LRU).
+// Ответ агрегатов — 400+ КБ на чат, без вытеснения Map растёт весь день вкладки.
+// Активные чаты (смонтирован ChatPanel) не вытесняются; одно вытеснение убирает
+// ключ из всех Map разом — соседние срезы живут на том же ключе.
 
 import { useEffect, useSyncExternalStore } from 'react';
 import { api } from './api';
@@ -49,14 +54,57 @@ function emit() { _listeners.forEach(fn => fn()); }
 let _loadingBySession = new Map<string, boolean>();
 let _errorBySession = new Map<string, string | null>();
 
+// F4 (инвариант И4): потолок per-session памяти — 8 чатов во всех связанных Map.
+// Граница: активные (смонтированные) панели не вытесняются, поэтому потолок держится,
+// только пока их строго меньше MAX_SESSIONS. Сегодня это максимум 5 колонок стены
+// (MAX_CHATS в features/wall/wallStore.ts) либо 1 основной чат — они на разных маршрутах.
+// Подняли MAX_CHATS до 8+ или добавили страницу с несколькими панелями — evictStale
+// упрётся в «вытеснять нечего» и Map растёт без потолка. Связь сторожит featureRuns.test.ts.
+export const MAX_SESSIONS = 8;
+
+// LRU-порядок ключей: каждая запись в любой из 7 Map переносит ключ в хвост.
+// Порядок живёт в отдельном Map: вставка в data-Map — порядок вставки, не доступа.
+const _lru = new Map<string, true>();
+
+function touch(sessionId: string) {
+  _lru.delete(sessionId);
+  _lru.set(sessionId, true);
+}
+
+// Одно вытеснение: самый старый ключ НЕ из _active удаляется из всех 7 Map разом
+// («осиротевшие» срезы по вытесненному ключу — та же утечка). Активные чаты не
+// вытесняются никогда: если все ключи активны — вытеснять нечего, потолок держит
+// только неактивные.
+function evictStale() {
+  while (_lru.size > MAX_SESSIONS) {
+    let victim: string | undefined;
+    for (const key of _lru.keys()) {
+      if (!_active.has(key)) { victim = key; break; }
+    }
+    if (victim === undefined) return;
+    _lru.delete(victim);
+    _runsBySession.delete(victim);
+    _loadingBySession.delete(victim);
+    _errorBySession.delete(victim);
+    _modeBySession.delete(victim);
+    _selectedFeatureBySession.delete(victim);
+    _focusBySession.delete(victim);
+    _pillMenuBySession.delete(victim);
+  }
+}
+
 function setLoading(sessionId: string, loading: boolean) {
   _loadingBySession = new Map(_loadingBySession);
   _loadingBySession.set(sessionId, loading);
+  touch(sessionId);
+  evictStale();
   emit();
 }
 function setError(sessionId: string, error: string | null) {
   _errorBySession = new Map(_errorBySession);
   _errorBySession.set(sessionId, error);
+  touch(sessionId);
+  evictStale();
   emit();
 }
 
@@ -91,6 +139,8 @@ let _focusSeq = 0;
 function setRuns(sessionId: string, runs: FeatureRun[]) {
   _runsBySession = new Map(_runsBySession);
   _runsBySession.set(sessionId, runs);
+  touch(sessionId);
+  evictStale();
   emit();
 }
 
@@ -135,6 +185,8 @@ export function setTurnPlanMode(sessionId: string, mode: TurnPlanMode) {
   if (!sessionId) return;
   _modeBySession = new Map(_modeBySession);
   _modeBySession.set(sessionId, mode);
+  touch(sessionId);
+  evictStale();
   emit();
 }
 
@@ -162,6 +214,8 @@ export function setSelectedFeatureId(sessionId: string, featureId: string) {
   if (!sessionId) return;
   _selectedFeatureBySession = new Map(_selectedFeatureBySession);
   _selectedFeatureBySession.set(sessionId, featureId);
+  touch(sessionId);
+  evictStale();
   emit();
 }
 
@@ -187,6 +241,8 @@ export function focusFeatureStep(sessionId: string, featureId: string, taskId: s
   _focusSeq += 1;
   _focusBySession = new Map(_focusBySession);
   _focusBySession.set(sessionId, { featureId, taskId, seq: _focusSeq });
+  touch(sessionId);
+  evictStale();
   emit();
 }
 
@@ -220,6 +276,8 @@ export function openPillMenu(sessionId: string) {
   _pillMenuSeq += 1;
   _pillMenuBySession = new Map(_pillMenuBySession);
   _pillMenuBySession.set(sessionId, { seq: _pillMenuSeq });
+  touch(sessionId);
+  evictStale();
   emit();
 }
 
@@ -374,6 +432,7 @@ export function refetchFeatureRuns(sessionId: string) {
 export const __test = {
   reset() {
     _runsBySession = new Map();
+    _lru.clear();
     _modeBySession = new Map();
     _selectedFeatureBySession = new Map();
     _focusBySession = new Map();
@@ -411,4 +470,15 @@ export const __test = {
   setError,
   loadingFor,
   errorFor,
+  // F4: размеры всех связанных Map (сторож потолка) и LRU-порядок.
+  sizes: () => ({
+    runs: _runsBySession.size,
+    loading: _loadingBySession.size,
+    error: _errorBySession.size,
+    mode: _modeBySession.size,
+    selected: _selectedFeatureBySession.size,
+    focus: _focusBySession.size,
+    pillMenu: _pillMenuBySession.size,
+  }),
+  lru: () => [..._lru.keys()],
 };

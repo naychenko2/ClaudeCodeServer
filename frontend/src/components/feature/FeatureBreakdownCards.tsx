@@ -148,7 +148,7 @@ export function FeatureBreakdownCards({
         По убыванию {MEASURE_GEN[measure]} · сортировка — в шапке
       </div>
       {sorted.map(g => {
-        const color = groupColor(g.key, visible, colorOf);
+        const color = groupColor(g.key, visible, colorOf, axis);
         const label = labelOf ? labelOf(g.key) : g.key;
         const live = axis === 'personas' ? liveChipText(run, g.key) : null;
         const chips = groupChips(axis, g.key, run);

@@ -21,7 +21,13 @@ public sealed record FeatureBreakdownGroup(
     decimal? CostUsd,
     // Id чатов группы: только из снимка сессий владельца (fail-closed: чужой/удалённый чат
     // не попадает).
-    List<string> ChatIds);
+    List<string> ChatIds,
+    // Ценовой класс группы (free|cheap|expensive) — по записям расхода группы правилом Core
+    // (SpendCostTiers: локальный/бесплатный → free, claude → expensive, прочее облачное →
+    // cheap). null — записей расхода у группы нет (класс неоткуда взять) или класс неизвестен.
+    // В группе со смешанными классами берётся класс с наибольшим весом токенов (SpendCostTiers.Dominant;
+    // вес — все токены записей, включая кэш: SpendCostTiers.WeightOf, как в /api/spend).
+    string? Tier = null);
 
 // «Дольше всех сейчас» (GET features/{id}, stats.longestNow): самая долгая сейчас идущая задача;
 // null — ничего не идёт. Tokens/Share = null до Б9 (учёт расхода).
@@ -154,8 +160,14 @@ public sealed record FeatureBreakdown(
         // Токены = вход+выход записей; стоимость = сумма надёжных цен (free → 0), null — если есть
         // запись без надёжной цены (ненадёжная) или записей расхода для группы нет вовсе (нет данных).
         List<FeatureBreakdownGroup> GroupBy(Func<TaskItem, string?> keyOf,
-            Func<FeatureSpendRecord, string?> keyOfRecord)
+            Func<FeatureSpendRecord, string?> keyOfRecord,
+            // Класс расхода заполняется ТОЛЬКО там, где ось — модель или провайдер: класс —
+            // свойство модели/провайдера, у оси «персоны»/«роли» его неоткуда взять. Правило —
+            // то же, что в /api/spend (SpendCostTiers.AxisHasTier): один контракт на оба API,
+            // иначе фронт получает класс в одном разрезе и не получает в другом.
+            string axis)
         {
+            var fillTier = SpendCostTiers.AxisHasTier(axis);
             var groups = new Dictionary<string, (List<(DateTime Start, DateTime End)> Intervals, List<string> ChatIds)>();
             foreach (var t in tasks)
             {
@@ -176,7 +188,7 @@ public sealed record FeatureBreakdown(
             // Source != free / NaN или ∞). На неё же переходит итог расхода (SpendFeatureReader)
             // и сплиттер (SharedSpendSplitter) — своих формул «цена надёжна» больше нет,
             // иначе разрез спорил бы с итогом (deepseek cost=2.0: итог 0, разрез 2.0, ревью Глеба).
-            var spend = new Dictionary<string, (long Tokens, double Cost, bool HasUnreliable)>();
+            var spend = new Dictionary<string, (long Tokens, double Cost, bool HasUnreliable, Dictionary<string, long>? TierTokens)>();
             if (records is not null)
             {
                 foreach (var r in records)
@@ -186,14 +198,33 @@ public sealed record FeatureBreakdown(
                     // a — локальная копия; после обновления ОБЯЗАТЕЛЬНО пишем обратно в словарь
                     // (tuple — value type: TryGetValue отдаёт копию, сам словарь не мутируется).
                     if (!spend.TryGetValue(key, out var a))
-                        a = (0, 0, false);
+                        a = (0, 0, false, null);
                     // Минор Б9b: кламп отрицательных токенов и в разрезе (как в итоге,
                     // SpendFeatureReader): сбой CLI с отрицательным числом не тянет группу в минус.
                     // Надёжная стоимость: null → 0 в сумму + HasUnreliable (консервативный null группы).
                     var cost = SpendCostReliability.ReliableCostOf(r);
-                    a = (a.Tokens + Math.Max(0, r.InputTokens) + Math.Max(0, r.OutputTokens),
+                    // Ценовой класс записи — правилом Core (SpendCostTiers): свой словарь
+                    // «claude → дорого» здесь не заводим. В группе со смешанными классами
+                    // берётся класс с наибольшим весом токенов (SpendCostTiers.Dominant).
+                    // В осях без класса (персоны/роли) класс не считаем вовсе — он там null.
+                    var tier = fillTier ? SpendCostTiers.Of(r.Source, r.Provider, r.Model) : null;
+                    var tokens = Math.Max(0, r.InputTokens) + Math.Max(0, r.OutputTokens);
+                    var tierTokens = a.TierTokens;
+                    if (tier is not null)
+                    {
+                        // Вес класса — общей формулой Core (SpendCostTiers.WeightOf): вход+выход+кэш,
+                        // как в /api/spend (ревью Глеба, major: без кэша одна строка выходала «дёшево»
+                        // здесь и «дорого» там). Поле «Токены» группы при этом остаёт вход+выход —
+                        // документированный контракт разбивки, вес класса от него отделён.
+                        var weight = SpendCostTiers.WeightOf(Math.Max(0, r.InputTokens), Math.Max(0, r.OutputTokens),
+                            Math.Max(0, r.CacheReadTokens), Math.Max(0, r.CacheCreationTokens));
+                        tierTokens ??= new Dictionary<string, long>();
+                        tierTokens[tier] = tierTokens.GetValueOrDefault(tier) + weight;
+                    }
+                    a = (a.Tokens + tokens,
                         a.Cost + (double)(cost ?? 0),
-                        a.HasUnreliable || cost is null);
+                        a.HasUnreliable || cost is null,
+                        tierTokens);
                     spend[key] = a;
                 }
             }
@@ -205,17 +236,20 @@ public sealed record FeatureBreakdown(
                 // токены = сумма, стоимость = null, если есть ненадёжная запись, иначе сумма цен.
                 long? tokens = null;
                 decimal? cost = null;
+                string? tier = null;
                 if (spend.TryGetValue(key, out var a))
                 {
                     tokens = a.Tokens;
                     cost = a.HasUnreliable ? null : (decimal)a.Cost;
+                    tier = a.TierTokens is null ? null : SpendCostTiers.Dominant(a.TierTokens);
                 }
                 result.Add(new FeatureBreakdownGroup(
                     Key: key,
                     Minutes: FeatureTimeMath.UnionMinutes(intervals),
                     Tokens: tokens,
                     CostUsd: cost,
-                    ChatIds: chatIds.Distinct().OrderBy(c => c).ToList()));
+                    ChatIds: chatIds.Distinct().OrderBy(c => c).ToList(),
+                    Tier: tier));
             }
             // Сортировка по Minutes убыв; при равенстве — по Key (детерминизм).
             result.Sort((a, b) =>
@@ -232,9 +266,9 @@ public sealed record FeatureBreakdown(
             r.TaskId is not null && roleByTask.TryGetValue(r.TaskId, out var role) ? role : null;
 
         var breakdown = new FeatureBreakdown(
-            Personas: GroupBy(t => t.PersonaId, r => r.PersonaId),
-            Models: GroupBy(ModelKey, r => UnifiedModelKey(r.Model)),
-            Roles: GroupBy(t => t.Role, RoleOfRecord));
+            Personas: GroupBy(t => t.PersonaId, r => r.PersonaId, axis: "persona"),
+            Models: GroupBy(ModelKey, r => UnifiedModelKey(r.Model), axis: "model"),
+            Roles: GroupBy(t => t.Role, RoleOfRecord, axis: "role"));
 
         // «Дольше всех сейчас»: самая долгая сейчас идущая задача (ClaudeStartedAt, без
         // CompletedAt). Minutes = now − ClaudeStartedAt. ChatId — fail-closed (только из снимка).

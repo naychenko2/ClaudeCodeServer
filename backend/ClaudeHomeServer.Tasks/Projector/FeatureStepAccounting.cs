@@ -34,8 +34,11 @@ internal static class FeatureStepAccounting
     private const string Work = "work";
     private const string Withdrawn = "withdrawn";
     private const string NotCreated = "notCreated";
-    private const string PlanPending = "pending";
-    private const string PlanPartial = "partial";
+    // Значения PlanState, которые сравнивает FeatureBrief.EstimateOf (pending/partial), — internal:
+    // определение одно, сравнение не разъезжается с значением молча (возврат ревью B2b).
+    // cut/done вне класса не потребляются (возврат R-DB B2b) — private.
+    internal const string PlanPending = "pending";
+    internal const string PlanPartial = "partial";
     private const string PlanCut = "cut";
     private const string PlanDone = "done";
 

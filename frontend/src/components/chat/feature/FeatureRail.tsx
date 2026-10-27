@@ -1,5 +1,7 @@
 import { C, R, SP } from '../../../lib/design';
+import { queueLabelParts } from '../../../lib/chatGroups';
 import type { FeatureRailSegment } from '../../../types/featureIndex';
+import type { FeatureQueue } from '../../../types/featureRun';
 
 // Мини-рельса фичи: конвейер, «положенный набок» (макет features-overview.html,
 // .mr; proposal §«Общее для всех вариантов: плашка фичи»). 8 сегментов по массиву
@@ -17,6 +19,11 @@ import type { FeatureRailSegment } from '../../../types/featureIndex';
 // Рельса ничего не считает сама: rail[] и closed даёт бэк (контракт индекса фич).
 // Компактная: inline-flex, gap 2px, не сжимается (flex-shrink:0) — на 360 px живёт
 // в одной строке плашки.
+//
+// Очередь фич (волна 6, макет feature-queue-1): при waiting (фича в очереди,
+// holdReason=queue) активный сегмент — C.textMuted вместо цвета тона (тон очереди
+// = тон паузы, тревоги нет), к подписи добавляется «· в очереди N из M». Позицию
+// считает бэк (queue.position/length); queue нет или нули — без цифр.
 
 // Геометрия сегмента (макет .mr i): высота 5px, скругление pill (R.max).
 // 8px — обычный сегмент, 15px — активный. Значений 8/15/5 в шкале SP нет (SP.xs=4,
@@ -64,7 +71,8 @@ function activeColor(tone: FeatureRailSegment['tone']): string {
 
 // Сегмент рельсы. Закрытая фича: заливка/контур → C.textMuted + opacity .5,
 // absent — прозрачный (только пунктирный контур, без заливки).
-function segmentStyle(seg: FeatureRailSegment, closed: boolean): React.CSSProperties {
+// waiting (фича в очереди): активный сегмент — C.textMuted вместо цвета тона.
+function segmentStyle(seg: FeatureRailSegment, closed: boolean, waiting: boolean): React.CSSProperties {
   const base: React.CSSProperties = {
     display: 'block',
     height: SEG_H,
@@ -87,7 +95,7 @@ function segmentStyle(seg: FeatureRailSegment, closed: boolean): React.CSSProper
     case 'done':
       return { ...base, width: SEG_W, background: C.success };
     case 'active':
-      return { ...base, width: SEG_ACTIVE_W, background: activeColor(seg.tone) };
+      return { ...base, width: SEG_ACTIVE_W, background: waiting ? C.textMuted : activeColor(seg.tone) };
     case 'absent':
       return { ...base, width: SEG_W, background: 'transparent', boxShadow: `inset 0 0 0 1px ${C.dashed}` };
     case 'skipped':
@@ -100,17 +108,20 @@ function segmentStyle(seg: FeatureRailSegment, closed: boolean): React.CSSProper
 
 // aria-label всей рельсы: «Этап: {активный этап}» (макет) или «Этап: закрыта».
 // Активного нет (все pending/absent) — «Этап: не начат».
-function railAriaLabel(rail: FeatureRailSegment[], closed: boolean): string {
+// waiting (фича в очереди): к подписи добавляется «· в очереди N из M».
+function railAriaLabel(rail: FeatureRailSegment[], closed: boolean, waiting: boolean, queue: FeatureQueue | null | undefined): string {
   if (closed) return 'Этап: закрыта';
+  const suffix = waiting ? queueLabelParts(queue).ariaSuffix : '';
   const active = rail.find(s => s.state === 'active');
-  if (!active) return 'Этап: не начат';
-  return `Этап: ${STAGE_NAME[active.key]}`;
+  if (!active) return `Этап: не начат${suffix}`;
+  return `Этап: ${STAGE_NAME[active.key]}${suffix}`;
 }
 
-// props: rail — 8 сегментов индекса (бэк); closed — терминальная фича (merged/closed): приглушить рельсу; label — своя подпись вместо «Этап: закрыта».
-export function FeatureRail({ rail, closed = false, label: labelOverride }: { rail: FeatureRailSegment[]; closed?: boolean; label?: string }) {
+// props: rail — 8 сегментов индекса (бэк); closed — терминальная фича (merged/closed): приглушить рельсу; label — своя подпись вместо «Этап: закрыта»;
+// waiting — фича в очереди (holdReason=queue): активный сегмент C.textMuted, к подписи «· в очереди N из M»; queue — место в очереди с бэка (позицию фронт не считает).
+export function FeatureRail({ rail, closed = false, label: labelOverride, waiting = false, queue = null }: { rail: FeatureRailSegment[]; closed?: boolean; label?: string; waiting?: boolean; queue?: FeatureQueue | null }) {
   // Рельса «глупая»: не считает, только раскладывает rail[].
-  const label = labelOverride ?? railAriaLabel(rail, closed);
+  const label = labelOverride ?? railAriaLabel(rail, closed, waiting, queue);
   return (
     <span
       role="img"
@@ -122,7 +133,7 @@ export function FeatureRail({ rail, closed = false, label: labelOverride }: { ra
         <i
           key={seg.key}
           title={`${STAGE_NAME[seg.key]} — ${stateWord(seg)}`}
-          style={segmentStyle(seg, closed)}
+          style={segmentStyle(seg, closed, waiting)}
         />
       ))}
     </span>

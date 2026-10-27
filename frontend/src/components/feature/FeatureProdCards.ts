@@ -7,6 +7,12 @@
 // Честная деградация: чего нет в агрегате (rounds, chatId, старт) — явно null или
 // отсутствие узла, ничего не выдумывается.
 //
+// Правила GC-F3 («Гант на Хронологии»): (а) последнее ревью accepted/accepted_with_remarks
+// закрывает шаг — фронт этого не выводит заново: бэк уже учёл хвостовую доработку
+// (FeatureStepAccounting: IsAcceptance(lastVerdict) && !reworkOpen), карточка верит
+// chain.outcome, второй истины нет; (б) шаг плана без задачи (бэковый notCreated) —
+// синтетическая карточка state='queue', planned:true, в конце ленты, в порядке плана.
+
 // Источники (спецификация docs/mockups/features-overview-4-spec.md, точка 2):
 //   • «работа»      → chain.chatId (чат исполнителя первой задачи цепочки);
 //   • «вернул/принят» → round.reviewChatId соответствующего витка;
@@ -21,8 +27,9 @@ import type { FeatureRun, FeatureTask, FeatureStepChain, FeatureRound } from '..
 // ok — сделано, ret — возврат, cur — текущий (обведён акцентом), pend — впереди (пунктир).
 export type ProdNodeState = 'ok' | 'ret' | 'cur' | 'pend';
 
-// Состояние шага для ленты (макет A2): done — готово, run — идёт, wait — ждёт, queue — в очереди,
-// withdrawn — снят с выкладки. Выводится из корзины бэка (bucketOf), конфликтов приоритетов нет.
+// Состояние шага для ленты (макет A2): done — готово, run — идёт, wait — ждёт, withdrawn — снят с
+// выкладки — для цепочки из корзины бэка (bucketOf), конфликтов приоритетов нет; queue — в очереди,
+// только у шага плана без задачи (plannedCards): заведённая цепочка в queue не попадает (H1, GC-R-F3).
 export type ProdCardState = 'done' | 'run' | 'wait' | 'queue' | 'withdrawn';
 
 export interface ProdNode {
@@ -56,6 +63,9 @@ export interface ProdCard {
   nodes: ProdNode[];
   // Состояние шага (иконка, тон карточки и плашка).
   state: ProdCardState;
+  // Шаг плана без задачи (бэковый notCreated): пунктирная карточка «в плане, не заведён»
+  // (GC-F3; верстка — GC-F8). false — реальный шаг цепочки.
+  planned: boolean;
   // Чем занят идущий шаг: работа / доработка; null — шаг не идёт.
   runKind: 'work' | 'rework' | null;
   // С какого момента идёт текущая задача (claudeStartedAt, иначе createdAt); null — неизвестно.
@@ -175,12 +185,15 @@ function chainNodes(
 // Корзина шага — зеркало FeatureStepAccounting на бэке (единственный источник правды, своей
 // эвристики нет): withdrawn → accepted → work → review. Идущий виток ревью (outcome «running» при
 // всех закрытых задачах цепочки) — корзина review, а не work: шаг ждёт ревью, как и в сводке.
-type ProdBucket = 'withdrawn' | 'accepted' | 'review' | 'work' | 'notCreated';
+// Бэковый notCreated — только шаги плана без задачи (FeatureStepAccounting, «Шаги плана без задачи
+// — корзина notCreated»), и он строится здесь отдельно, в plannedCards; заведённую цепочку бэк в
+// notCreated не кладёт никогда — не кладёт и фронт: цепочка без старта на неполном агрегате
+// оценивается по chain.outcome, как любая другая (H1, GC-R-F3).
+type ProdBucket = 'withdrawn' | 'accepted' | 'review' | 'work';
 
-function bucketOf(chain: FeatureStepChain, tasks: FeatureTask[], started: boolean): ProdBucket {
+function bucketOf(chain: FeatureStepChain, tasks: FeatureTask[]): ProdBucket {
   if (chain.outcome === 'withdrawn') return 'withdrawn';
   if (chain.outcome === 'accepted') return 'accepted';
-  if (!started) return 'notCreated';
   if (chain.outcome === 'pending') return 'review';
   // Неполный агрегат (задач цепочки не хватает) «все закрыты» доказать не может — остаёмся в work:
   // ложное «ждёт ревью» хуже, чем осторожное «ждёт»; полный агрегат даёт точный ответ.
@@ -189,19 +202,19 @@ function bucketOf(chain: FeatureStepChain, tasks: FeatureTask[], started: boolea
   return 'work';
 }
 
-// Состояние шага — из корзины: accepted → done, withdrawn → withdrawn, review → wait,
-// notCreated → queue; work → run, если задача идёт и её исполнитель не остановлен (остановленный —
+// Состояние шага — из корзины: accepted → done, withdrawn → withdrawn, review → wait;
+// work → run, если задача идёт и её исполнитель не остановлен (остановленный —
 // тревога stopped: wait), иначе wait: корзина work без идущей задачи — «ждёт», а слово плашки
-// («закрыт без повторного ревью», «вернулся…») у бэка (chain.status). run.now состояние не меняет.
+// («закрыт без повторного ревью», «вернулся…») у бэка (chain.status). «queue» здесь не возникает:
+// он только у planned-карточек (plannedCards). run.now состояние не меняет.
 function cardState(
-  chain: FeatureStepChain, tasks: FeatureTask[], started: boolean,
+  chain: FeatureStepChain, tasks: FeatureTask[],
 ): { state: ProdCardState; runTask: FeatureTask | null; stopped: boolean; review: boolean } {
   const out = (state: ProdCardState, runTask: FeatureTask | null = null, stopped = false, review = false) =>
     ({ state, runTask, stopped, review });
-  const bucket = bucketOf(chain, tasks, started);
+  const bucket = bucketOf(chain, tasks);
   if (bucket === 'withdrawn') return out('withdrawn');
   if (bucket === 'accepted') return out('done');
-  if (bucket === 'notCreated') return out('queue');
   if (bucket === 'review') return out('wait', null, false, true);
   const running = tasks.find(t => t.status === 'inProgress') ?? null;
   // Как на бэке (FeatureProjector): пометка актуальна, только если новее старта исполнителя.
@@ -224,15 +237,61 @@ function lastReturnReason(chain: FeatureStepChain): string | null {
   return null;
 }
 
+// Ключ плана для сверки с цепочками — тот же, что на бэке (FeatureStepAccounting.KeyOf +
+// StepKeyComparer): трим и регистронезависимо («Б1» и «б1» — один шаг, «Б1 » и «Б1» — один шаг).
+function planKey(stepRef: string): string {
+  return stepRef.trim().toLowerCase();
+}
+
+// Шаги плана без цепочки — синтетические карточки «в очереди» (зеркало бэкового notCreated:
+// FeatureStepAccounting считает ключ плана, которого нет среди заведённых шагов). Пересечения
+// с заведёнными нет: ключ совпадает с бэковым; дубль stepRef в плане — первое вхождение;
+// пустой stepRef — не шаг. Карточка без старта: после всех цепочек, в порядке плана (тот же
+// порядок, что у бэковых линий: сначала заведённые шаги, затем notCreated).
+function plannedCards(run: FeatureRun, chainKeys: Set<string>, startIndex: number): ProdCard[] {
+  const out: ProdCard[] = [];
+  const seen = new Set<string>();
+  for (const p of run.plan ?? []) {
+    if (!p) continue;
+    for (const ps of p.planSteps ?? []) {
+      if (!ps || !ps.stepRef?.trim()) continue;
+      const key = planKey(ps.stepRef);
+      if (chainKeys.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        stepRef: ps.stepRef.trim(),
+        title: ps.title,
+        personaId: null,
+        startedAt: null,
+        order: startIndex + out.length,
+        chatId: null,
+        cycles: 0,
+        isCurrent: false,
+        awaitingReview: false,
+        stopped: false,
+        // Как у не начатого шага: одна пунктирная «работа», без ссылок.
+        nodes: [{ kind: 'work', label: 'работа', state: 'pend', chatId: null }],
+        state: 'queue',
+        planned: true,
+        runKind: null,
+        runningSince: null,
+        waitingSince: null,
+        acceptedAt: null,
+        returnReason: null,
+      });
+    }
+  }
+  return out;
+}
+
 // Модель ленты «Производство»: карточки на шаг в порядке старта (без старта — в конце,
-// стабильно). stepChains нет или пусто — пустой список (рендер показывает существующее
-// пустое состояние).
+// стабильно), после них — шаги плана без задачи в порядке плана. Ни цепочек, ни плана —
+// пустой список (рендер показывает существующее пустое состояние).
 export function buildProdCards(
   run: FeatureRun,
   personaName?: (id: string) => string | null,
 ): ProdCard[] {
   const chains = run.stepChains ?? [];
-  if (chains.length === 0) return [];
 
   const taskMap = taskMapOf(run);
 
@@ -245,15 +304,14 @@ export function buildProdCards(
     return a.i - b.i;
   });
 
-  return ordered.map(({ chain }, idx) => {
-    // «Текущий» — по run.now: шаг или одна из его задач сейчас InProgress. Как в Ганте
-    // (buildGanttModel): у закрытой/смерженной фичи никакой шаг не подсвечен.
+  const cards: ProdCard[] = ordered.map(({ chain }, idx) => {
+    // «Текущий» — по run.now: шаг или одна из его задач сейчас InProgress.
+    // У закрытой/смерженной фичи никакой шаг не подсвечен.
     const finished = run.closed === true || run.state === 'merged' || run.state === 'closed';
     const now = finished ? [] : (run.now ?? []);
     const isCurrent = now.some(n => n.stepRef === chain.stepRef || chain.taskIds.includes(n.taskId));
-    const started = chainStart(chain, taskMap) !== null;
     const tasks = chain.taskIds.map(id => taskMap.get(id)).filter((t): t is FeatureTask => !!t);
-    const { state, runTask, stopped, review: awaiting } = cardState(chain, tasks, started);
+    const { state, runTask, stopped, review: awaiting } = cardState(chain, tasks);
     const nodes = chainNodes(run, chain, taskMap, personaName);
     const runKind = state !== 'run' ? null
       : [...nodes].reverse().find(n => n.kind === 'rework' || n.kind === 'work')?.kind === 'rework' ? 'rework' : 'work';
@@ -270,6 +328,7 @@ export function buildProdCards(
       stopped,
       nodes,
       state,
+      planned: false,
       runKind,
       runningSince: runTask ? (runTask.claudeStartedAt ?? runTask.createdAt ?? null) : null,
       waitingSince: chain.waitingSince ?? null,
@@ -277,4 +336,8 @@ export function buildProdCards(
       returnReason: lastReturnReason(chain),
     };
   });
+
+  // Шаги плана без цепочки — после всех карточек цепочек (GC-F3, правило (б)).
+  const chainKeys = new Set(chains.map(c => planKey(c.stepRef)));
+  return [...cards, ...plannedCards(run, chainKeys, cards.length)];
 }

@@ -72,6 +72,10 @@ public sealed class FeatureRun
     public string State { get; init; } = FeatureStates.Idle;
     // Тревога: stopped → wait явный → merge; один элемент либо null.
     public FeatureAttention? Attention { get; init; }
+    // Место в очереди проекта (волна 6): только у фичи в очереди (пауза с причиной queue), иначе
+    // null. Вычисляется по набору фич (FeatureQueuePolicy.Positions), не хранится; setter internal —
+    // проектор проставляет после сборки run, когда виден весь набор.
+    public FeatureQueueInfo? Queue { get; internal set; }
     // Счётчик шагов: принятые ревью / знаменатель (= StepProgress.Accepted / Total). Семантика
     // изменена сознательно (честный прогресс): «принят» — не «сдан исполнителем (Done)», а
     // «последний виток ревью/проверки/финала — accepted/accepted_with_remarks и доработок не осталось»;
@@ -94,6 +98,10 @@ public sealed class FeatureRun
     public bool Closed { get; init; }
     // Итог смерженной фичи: у State ∈ {merged, closed}, иначе null.
     public FeatureSummary? Summary { get; init; }
+    // GC-B4: «хвосты после мержа» — незакрытые дочерние задачи фичи (кроме merge) у
+    // смерженной/закрытой фичи, по порядку CreatedAt. Хвосты НЕ держат «ждёт вас»: из-за них
+    // тревога не поднимается, а сами хвосты фронт показывает отдельной строкой.
+    public List<string> PostMergeTails { get; init; } = [];
     // TR-B1c: расхождения трекера с реальностью (сверка трекера, один вызов в проекторе).
     // Единая точка правды: индекс берёт Count отсюда, фронт и MCP не пересчитывают. Не null.
     public List<FeatureTrackerIssue> Tracker { get; init; } = [];
@@ -104,15 +112,17 @@ public sealed class FeatureRun
 // цепочечных видов), иначе null; Since — с какого момента расхождение существует.
 public sealed record FeatureTrackerIssue(string Kind, string? TaskId, string? StepRef, DateTime? Since);
 
-// Документ фичи (волна 3 «Обзор фич», вкладка «Планы и макеты»): разрез (cut), план (plan)
-// или консультация (consult) — СПИСОК из GET features/{id}, без текста. Текст (ResultMarkdown)
-// в ответ не попадает: вкладка берёт список, а текст подгружает по клику (GET /api/tasks/{id}).
-// role — из TaskItem.Role как есть (cut/plan/consult; step сюда не попадает). hasText — есть ли
-// ResultMarkdown (после Trim); mockupPaths — пути макетов из ResultMarkdown (docs/mockups/….{html,md}).
+// Документ фичи (волна 3 «Обзор фич», вкладка «Планы и макеты»): разрез (cut), дизайн (design),
+// план (plan) или консультация (consult) — СПИСОК из GET features/{id}, без текста. Текст
+// (ResultMarkdown) в ответ не попадает: вкладка берёт список, а текст подгружает по клику
+// (GET /api/tasks/{id}). role — из TaskItem.Role как есть (cut/design/plan/consult; step сюда не
+// попадает). hasText — есть ли ResultMarkdown (после Trim); mockupPaths — пути файлов документа:
+// макеты из ResultMarkdown (docs/mockups/….{html,md}) + файлы, которые задача приложила через
+// LinkedFiles (M5: ADR, спеки, записки вне docs/mockups). Имя поля — прежний JSON-контракт.
 public sealed record FeaturePlan(
     // Id задачи-документа.
     string TaskId,
-    // Роль как есть: cut | plan | consult.
+    // Роль как есть: cut | design | plan | consult.
     string Role,
     // Название задачи.
     string Title,
@@ -124,8 +134,8 @@ public sealed record FeaturePlan(
     DateTime? CompletedAt,
     // Есть ли текст (ResultMarkdown не пуст после Trim).
     bool HasText,
-    // Пути макетов (docs/mockups/….{html,md}) из ResultMarkdown: distinct, порядок появления,
-    // ≤ 20, пути с «..» отброшены.
+    // Пути файлов документа: макеты из ResultMarkdown (docs/mockups/….{html,md}), затем файлы
+    // из LinkedFiles задачи. distinct, общий потолок 20, пустые и пути с «..» отброшены.
     List<string> MockupPaths);
 
 // «Сейчас»: одна InProgress-задача фичи (кто и что делает, сколько идёт).
@@ -408,8 +418,10 @@ public sealed class FeatureStepProgress
 {
     // pending — задач role=plan нет, или у всех пустой planSteps; partial — списки есть только у
     // части планов; cut — у всех; done — cut, total > 0 и все шаги приняты. Снятые (withdrawn)
-    // планы в маппинг не входят.
-    public string PlanState { get; init; } = "pending";
+    // планы в маппинг не входят. Значения задают константы FeatureStepAccounting.Plan* — дефолт
+    // литералом разъехался бы с ними молча (тот же риск, что закрывал сторож FeatureBrief.
+    // EstimateOf; возврат ревью R-B5).
+    public string PlanState { get; init; } = FeatureStepAccounting.PlanPending;
     public int Total { get; init; }
     public int Accepted { get; init; }
     public int Review { get; init; }

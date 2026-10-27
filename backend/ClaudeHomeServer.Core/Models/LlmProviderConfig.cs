@@ -61,6 +61,15 @@ public class LlmProviderConfig
     // скрытие блока баланса, исключение из егресс-логики) повесит на него ещё три места.
     public bool IsLocal { get; set; }
 
+    // Гейт допуска ходов к локальному движку (LocalEngineBusyTracker.AcquireAsync), только для
+    // IsLocal. Потолок строго меньше max_num_seqs движка: один ход шлёт параллельные запросы
+    // субагентами. Сверх потолка ход ждёт в очереди не дольше TurnQueueTimeout; очередь полна
+    // или время вышло — ход завершается ошибкой «движок занят». Значения машинно-специфичны —
+    // правятся в appsettings.Local.json.
+    public int MaxConcurrentTurns { get; set; } = 3;
+    public int MaxQueuedTurns { get; set; } = 8;
+    public TimeSpan TurnQueueTimeout { get; set; } = TimeSpan.FromMinutes(15);
+
     // Секция статистики локального движка (фича «Статистика локальных моделей»):
     // тип движка (vllm|llama-server|ollama) и URL /metrics. Пусто (null) — движок
     // не задаётся, источник метрик = заглушка (NullEngineMetricsSource), автоугадывания нет.

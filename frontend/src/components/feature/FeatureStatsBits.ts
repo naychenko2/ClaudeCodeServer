@@ -10,7 +10,6 @@
 
 import { C } from '../../lib/design';
 import type { FeatureTimeline } from '../../types/featureStats';
-import type { StageKey } from '../../types/featureRun';
 
 // Порог сжатия паузы (минуты): длиннее — схлопывается в «разрыв · N ч».
 export const PAUSE_BREAK_MIN = 120; // 2 ч
@@ -110,11 +109,16 @@ export function kindLabel(kind: SegmentKind): string {
 
 // Цвет вида — ТОЛЬКО токены C.* (макет: work=accent, waiting=info, idle=progress-track,
 // error=danger, notWorking=штриховка bgSelected/bgInset). Возвращает CSS-подложку.
-export function kindBackground(kind: SegmentKind): string {
+// 'queued' — не вид сегмента (их у бэка нет): доля состава «стояла в очереди» из
+// compositionRows (Q5F) — самостоятельный пятый вид разряды (R-Q3B-2, ADR-031
+// §«Время в очереди (queued)»), окрашивается дымком ожидания (C.smoke) — тот же язык,
+// что у кольца индикатора ожидания (WaitingIndicator).
+export function kindBackground(kind: SegmentKind | 'queued'): string {
   switch (kind) {
     case 'work': return C.accent;
     case 'waiting': return C.info;
     case 'idle': return C.progressTrack;
+    case 'queued': return C.smoke;
     case 'error': return C.danger;
     // notWorking — штриховка (ожидание и простой без журнала не разделить).
     case 'notWorking':
@@ -302,9 +306,4 @@ export function nowCompressedFraction(blocks: TimelineBlock[], at: string): numb
     acc += w;
   }
   return Math.min(1, Math.max(0, acc / total));
-}
-
-// Тип-помощник: ключ этапа как StageKey (для focusFeatureStage).
-export function asStageKey(key: string): StageKey {
-  return key as StageKey;
 }

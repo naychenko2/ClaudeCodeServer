@@ -53,7 +53,7 @@ beforeEach(async () => {
     addEventListener: vi.fn(),
     dispatchEvent: (e: Event) => { dispatched.push(e.type); return true; },
   });
-  vi.stubGlobal('localStorage', storageStub({ cc_token: 'tok' }));
+  vi.stubGlobal('localStorage', storageStub({ cc_token: 'tok', cc_user_id: 'u1' }));
   vi.stubGlobal('sessionStorage', storageStub());
 
   offline = await import('../offline');
@@ -74,7 +74,7 @@ describe('request: network-first', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/projects', expect.objectContaining({
       headers: expect.objectContaining({ Authorization: 'Bearer tok' }),
     }));
-    expect(idbSet).toHaveBeenCalledWith('/projects', expect.objectContaining({ data: { items: [1, 2] } }));
+    expect(idbSet).toHaveBeenCalledWith('offline:u1:/projects', expect.objectContaining({ data: { items: [1, 2] } }));
     expect(offline.isOnline()).toBe(true);
   });
 
@@ -85,7 +85,7 @@ describe('request: network-first', () => {
     const data = await offline.request('/projects');
 
     expect(data).toEqual({ cached: true });
-    expect(idbGet).toHaveBeenCalledWith('/projects');
+    expect(idbGet).toHaveBeenCalledWith('offline:u1:/projects');
     // Сеть молчит и на запросе, и на подтверждающем пинге → офлайн
     expect(offline.isOnline()).toBe(false);
   });

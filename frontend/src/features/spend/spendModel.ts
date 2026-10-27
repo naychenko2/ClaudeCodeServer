@@ -3,6 +3,7 @@
 // данные — /api/spend/* (docs/architecture/spend-analytics-api.md).
 import { C } from 'aihome_shell/kit';
 import { addDaysUtc, todayUtc, type SpendDim } from '../../lib/spendContract';
+import { COST_TIERS, COST_TIER_KEYS, costTierColor, type CostTierKey } from '../../lib/costTiers';
 
 // Разрезы pivot-дерева и фильтров. 'turn' — терминальный псевдо-уровень (лист-ходы).
 export type SpendLevel = SpendDim | 'turn';
@@ -35,9 +36,9 @@ export const SPEND_PRESETS: { key: string; label: string; admin: SpendLevel[]; u
 // Источники расхода: подпись + цвет серии (токены темы, обе темы автоматически)
 export const SPEND_SOURCES: Record<string, { label: string; color: string }> = {
   'chat-turn': { label: 'Ходы', color: C.accent },
-  'one-shot': { label: 'Фоновые', color: C.info },
+  'one-shot': { label: 'Фоновые', color: C.textSecondary },
   fal: { label: 'fal.ai', color: C.plan },
-  glif: { label: 'glif', color: C.warning },
+  glif: { label: 'glif', color: C.rose },
   free: { label: 'Бесплатные', color: C.success },
   // Озвучка ответов (Yandex SpeechKit): токенов нет, считается запросами и рублями.
   // Цвет — чернильный токен хаба: свободных семантических цветов серий не осталось,
@@ -50,7 +51,103 @@ export const sourceColor = (s: string) => SPEND_SOURCES[s]?.color ?? C.textMuted
 // Текстовый вариант цвета источника — для моноширинных значений в анализе
 // (у SPEND_SOURCES цвета серий «плотные», на подложке читается text-пара)
 export const sourceTextColor = (s: string) =>
-  s === 'fal' ? C.planText : s === 'glif' ? C.warningText : sourceColor(s);
+  s === 'fal' ? C.planText : s === 'glif' ? C.roseText : sourceColor(s);
+
+// Ценовые классы моделей: бесплатно / дёшево / дорого. Класс приходит с бэка
+// (SpendCardRow.tier, SpendDayPoint.byTier) — словарь «какая модель какого
+// класса» на фронте НЕ дублируем, красим только по ключу. Сам словарь классов
+// (подпись + цвет) — общий на всё приложение, в lib/costTiers.ts.
+export const SPEND_TIERS = COST_TIERS;
+
+// Порядок классов в стеке столбика СНИЗУ ВВЕРХ: дорогие внизу, дешёвые в середине,
+// бесплатные сверху (просьба владельца 26.10). Это порядок рендера (column-reverse),
+// а не общий порядок классов — он остаётся в COST_TIER_KEYS.
+export const TIER_KEYS: readonly SpendTierKey[] = [...COST_TIER_KEYS].reverse();
+export type SpendTierKey = CostTierKey;
+
+// Цвет класса: неизвестный или null-класс → нейтральный цвет палитры (не выдуманный)
+export const tierColor = costTierColor;
+
+// Сегмент столбика дня: класс и его значение
+export interface SpendTierSegment {
+  key: SpendTierKey;
+  value: number;
+  color: string;
+}
+
+// Сегменты столбика дня по ценовым классам. Значения берутся ИЗ byTier
+// (разбивка по источникам в столбике не показывается — решение владельца),
+// порядок сегментов фиксирован снизу вверх: дорого → дёшево → бесплатно.
+export function tierSegments(day: {
+  byTier?: Partial<Record<SpendTierKey, number>> | null;
+  bySource?: Record<string, number> | null;
+}): SpendTierSegment[] {
+  const byTier = day.byTier ?? {};
+  return TIER_KEYS
+    .map(key => ({ key, value: byTier[key] ?? 0, color: tierColor(key) }))
+    .filter(s => s.value > 0);
+}
+
+// Отступ столбика дня от краёв области графика (высота самого столбика = chartH - отступ)
+const DAY_CHART_PAD = 12;
+// Минимальная высота сегмента: иначе копеечный класс не виден вовсе
+const DAY_SEG_MIN = 1;
+
+// Столбик дня: сегменты по ценовым классам и их высоты. Правило живёт здесь,
+// а не в рендере: высота столбика — от ДНЕВНОГО ИТОГА, классы лишь делят её
+// (сумма высот сегментов == высоте столбика, ровно).
+export interface SpendDaySegment {
+  key: SpendTierKey;
+  value: number;
+  color: string;
+  height: number;
+}
+
+export interface SpendDayColumn {
+  segments: SpendDaySegment[];
+  height: number;      // высота всего столбика, px
+  neutral: boolean;    // день без разбивки по классам — столбик одним нейтральным куском
+}
+
+// Собирает столбик дня: dayMax — максимум по дням (масштаб), chartH — высота
+// области графика. День без byTier (старый ответ бэка) — нейтральный столбик.
+export function dayColumn(
+  day: { total: number; byTier?: Partial<Record<SpendTierKey, number>> | null; bySource?: Record<string, number> | null },
+  dayMax: number,
+  chartH: number,
+): SpendDayColumn {
+  const scale = (chartH - DAY_CHART_PAD) / Math.max(1, dayMax);
+  const height = Math.max(2, Math.round(day.total * scale));
+  const segs = tierSegments(day);
+  if (!segs.length) return { segments: [], height, neutral: true };
+
+  const sum = segs.reduce((a, s) => a + s.value, 0);
+  // Границы — по накопленной доле: сумма высот ровно равна высоте столбика дня
+  let acc = 0;
+  let prev = 0;
+  const segments = segs.map(s => {
+    acc += s.value;
+    const bound = Math.round((acc / sum) * height);
+    const h = bound - prev;
+    prev = bound;
+    return { key: s.key, value: s.value, color: s.color, height: h };
+  });
+  // Копеечный класс не должен исчезать: единицу высоты берём у самого высокого
+  // сегмента (сумма высот при этом не меняется)
+  for (const seg of segments) {
+    if (seg.height >= DAY_SEG_MIN) continue;
+    const donor = segments.reduce((a, b) => (b.height > a.height ? b : a), segments[0]);
+    if (donor === seg || donor.height <= DAY_SEG_MIN) break;
+    donor.height -= DAY_SEG_MIN - seg.height;
+    seg.height = DAY_SEG_MIN;
+  }
+  return { segments, height, neutral: false };
+}
+
+// Цвет полосы строки-карточки: у разрезов «модель»/«провайдер» — по классу
+// (чтобы дешёвая модель была видна сразу), у прочих — акцент.
+export const rowBarColor = (dim: string, row: { tier?: string | null }) =>
+  dim === 'model' || dim === 'provider' ? tierColor(row.tier) : C.accent;
 
 // Источники-«генерации медиа»: денежной суммы у записи нет, показываются счётчиком
 // генераций (как fal). Бэкенд считает Generations у любых source — фронт лишь

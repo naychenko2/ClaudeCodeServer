@@ -44,6 +44,9 @@ public sealed class TasksToolset(
     PersonaBindingsService bindings,
     SessionManager sessions,
     ISessionBroadcaster broadcaster,
+    // Голос фичи (B4): этап и состояние на момент записи штампуются из той же проекции,
+    // что в REST PUT features/{id}/note (FeatureNote.StageAtWrite/StateAtWrite).
+    FeatureProjector features,
     // Подсистема Notes отключаемая: null — обратная запись в заметку-источник тихо
     // пропускается (см. использование ниже, паритет с TasksController).
     ClaudeHomeServer.Services.Spheres.ISphereDirectory spheres,
@@ -67,11 +70,13 @@ public sealed class TasksToolset(
         ("done", "Готово", TaskItemStatus.Done),
     ];
 
-    // Ответы — как у stdio-ветки (JSON.stringify): camelCase, кириллица без \u-экранирования
+    // Ответы — как у stdio-ветки (JSON.stringify): camelCase, кириллица без \u-экранирования.
+    // Чат автора голоса фичи агенту не отдаётся — тем же конвертером, что у REST и SignalR
+    // (FeatureNoteJsonConverter): по контракту voice наружу не несёт bySessionId.
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web)
     {
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase), new FeatureNoteJsonConverter() },
     };
 
     public string Name => ServerName;
@@ -309,6 +314,37 @@ public sealed class TasksToolset(
                             arguments.ContainsKey("role") ? StringArg(arguments, "role") : null)) is { } bound)
                     return Deny(bound);
 
+                // B4: голос фичи (волна 6, разрез п.2). Право — только по единому правилу членства
+                // FeatureChatMembership: пишет curator или orchestrator фичи, executor — нет (риск 6
+                // разреза: своей копии правила не заводим). Отказ fail-closed: чат без членства в
+                // фиче тоже не пишет. Не-эпик — тот же 400-текст, что у REST PUT note.
+                // R-B4 минор 1 (ADR-031 §4): право — белый список видов связи {curator, orchestrator},
+                // а не «не executor»: новый вид, который Б2 добавит в BuildDetailed («key», цепочка
+                // ключевого чата), не должен молча получить право — только явный вход в список.
+                var featureNoteArg = arguments.ContainsKey("featureNote") ? StringArg(arguments, "featureNote") : null;
+                if (featureNoteArg is not null)
+                {
+                    if ((arguments.ContainsKey("role") ? StringArg(arguments, "role") : existing.Role) != TaskRoles.Feature)
+                        return Deny("Голос пишется только у фичи (role=feature)");
+                    // Членство — боевая BuildDetailed; TestVoiceLinkOverride — тестовый шов (в проде
+                    // null): через него тест подменяет ОДНУ связь (session, feature) вне белого списка,
+                    // и решение гейта зависит от предиката CanWriteFeatureVoice, а не от «не executor».
+                    FeatureChatMembership.Link? voiceLink = null;
+                    if (TestVoiceLinkOverride is { } testLink)
+                    {
+                        voiceLink = testLink(session.Id, existing.Id);
+                    }
+                    else
+                    {
+                        var membership = FeatureChatMembership.BuildDetailed(
+                            tasks.GetByOwner(context.OwnerId).ToList(), FeatureChatDoor.Snapshot(sessions, context.OwnerId));
+                        if (membership.TryGetValue(session.Id, out var memberFeatures)
+                            && memberFeatures.TryGetValue(existing.Id, out var prodLink)) voiceLink = prodLink;
+                    }
+                    if (voiceLink is null || !CanWriteFeatureVoice(voiceLink))
+                        return Deny("Голос фичи пишет оркестратор или человек");
+                }
+
                 // Целевой проект для валидации колонки/персоны: текущий, либо новый из projectId
                 string? targetProjectId = existing.ProjectId;
                 var newProjectId = arguments.ContainsKey("projectId") ? StringArg(arguments, "projectId") : null;
@@ -436,6 +472,19 @@ public sealed class TasksToolset(
                     // тот же текст, что в REST-контроллере; catch же ловит и наш «не найдена»
                     // с подставленным id (см. ?? throw выше)
                     return Deny(ex.Message);
+                }
+                // Голос пишется после основного Update: один вызов = один итоговый экземпляр,
+                // broadcast уходит уже с голосом. At/StageAtWrite/StateAtWrite штампует сервер из
+                // проекции (агент их не передаёт), как в REST PUT note: стадия — активная стадия
+                // конвейера (FeatureBrief.ActiveStageOf, та же база, что у StaleOf — B14 возврат
+                // FIN), категория — FeatureBrief.KindAtWriteOf (та же величина, что brief.kind —
+                // B15, дефект 415c1c80); пустой текст снимает голос внутри SetFeatureNote.
+                if (featureNoteArg is not null)
+                {
+                    var run = features.Project(existing.Id, context.OwnerId);
+                    updated = tasks.SetFeatureNote(existing.Id, featureNoteArg, session.Id, byUser: false,
+                        run is null ? "" : FeatureBrief.ActiveStageOf(run),
+                        run is null ? "" : FeatureBrief.KindAtWriteOf(run)) ?? updated;
                 }
                 await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("updated", updated));
 
@@ -847,6 +896,21 @@ public sealed class TasksToolset(
             ? null
             : $"Задача {task.Id} недоступна в этом контексте — она принадлежит другому проекту.";
     }
+
+    // B4 (R-B4 минор 1): право на голос фичи — белый список видов связи {curator, orchestrator}
+    // (ADR-031 §4), а не «не executor». «Не executor» молча дал бы право новому виду членства,
+    // который Б2 добавит в BuildDetailed («key», цепочка ключевого чата): здесь право даёт только
+    // явный вход в список, всё остальное — включая будущие виды — отказ.
+    internal static bool CanWriteFeatureVoice(FeatureChatMembership.Link link) =>
+        link.Kind is "curator" or "orchestrator";
+
+    // Тестовый шов (R-DB B4 минор 1; сузён R-B11B12 минор 2): подмена ОДНОЙ связи членства
+    // (session, feature) для гейта голоса — не всей карты, как было раньше, и не всей карты она
+    // касается: шов может и ВЫДАТЬ право (тот же приём, что SendOverride/OpenBlockerLookup —
+    // свойство { get; set; }, боевой путь при null). Тест подставляет связь вида вне белого списка
+    // и не «executor»: решение гейта идёт через CanWriteFeatureVoice, и тест закрепляет вызов
+    // предиката из гейта, а не предикат изолированно.
+    internal Func<string, string, FeatureChatMembership.Link?>? TestVoiceLinkOverride { get; set; }
 
     private static IEnumerable<TaskItem> ApplyFilters(IEnumerable<TaskItem> source, JsonObject arguments)
     {
@@ -1361,6 +1425,11 @@ public sealed class TasksToolset(
                     ["acceptance"] = AcceptanceSchema(),
                     ["evidence"] = EvidenceSchema(),
                     ["planSteps"] = PlanStepsSchema(),
+                    ["featureNote"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = "Голос фичи (только у эпика): ≤600, \"\" — снять. Исполнитель откажет.",
+                    },
                     ["verification"] = VerificationSchema(),
                     ["outcome"] = OutcomeSchema(),
                     ["projectId"] = new JsonObject

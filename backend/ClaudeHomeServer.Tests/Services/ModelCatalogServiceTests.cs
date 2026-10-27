@@ -1,6 +1,8 @@
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Tests.Helpers;
+using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Xunit;
 
@@ -82,5 +84,62 @@ public class ModelCatalogServiceTests
 
         Assert.All(models, m => Assert.NotEqual("freellmapi-direct", m.Provider));
         Assert.Contains(models, m => m.Provider == "openrouter-direct");
+    }
+
+    // Ценовой класс провайдера (/api/models → providers[].costTier): локальный движок →
+    // бесплатно, claude (и подписки) → дорого, прочие облачные → дёшево. Правило — в Core
+    // (SpendCostTiers), здесь только прокладка каталога.
+    [Fact]
+    public void CostTier_ПоПровайдеру_ЛокальныйДешёвыйДорогой()
+    {
+        var cfg = new Dictionary<string, string?>
+        {
+            ["LlmProviders:glm:ApiKey"] = "test-key",
+            ["LlmProviders:glm:AnthropicBaseUrl"] = "https://api.z.ai/api/anthropic",
+            ["LlmProviders:local-qwen:IsLocal"] = "true",
+            ["LlmProviders:local-qwen:AnthropicBaseUrl"] = "http://127.0.0.1:8000",
+        };
+        var config = Config(cfg);
+        var providers = new LlmProviderRegistry(config);
+        var service = new ModelCatalogService(providers, new NullHttpFactory(), config);
+
+        service.CostTierOf(providers.GetByKey("glm")!).Should().Be("cheap", "облачный сторонний → дёшево");
+        service.CostTierOf(providers.GetByKey("local-qwen")!).Should().Be("free", "локальный движок → бесплатно");
+        service.CostTierOf(new LlmProviderConfig { Key = "claude" }).Should().Be("expensive", "claude → дорого");
+        service.CostTierOf(new LlmProviderConfig { Key = "sub-plus" }).Should().Be("expensive",
+            "подписка claude (sub-*) → тот же дорогой класс");
+    }
+
+    // Провайдер с пустым ключом (цена неизвестна) в каталоге → «дорого», как и его трата
+    // в аналитике: правило «цена неизвестна — занижать нельзя» одно на оба места.
+    // Мутация «в OfProvider пустой ключ → cheap» → краснеет.
+    [Fact]
+    public void CostTier_ПустойКлючПровайдера_Дорого()
+    {
+        var config = Config(new Dictionary<string, string?>());
+        var providers = new LlmProviderRegistry(config);
+        var service = new ModelCatalogService(providers, new NullHttpFactory(), config);
+
+        service.CostTierOf(new LlmProviderConfig { Key = "" }).Should().Be("expensive",
+            "цена неизвестна → занижать нельзя, как и в аналитике");
+    }
+
+    // «:free» — признак модели, а не провайдера: класс провайдера в каталоге остаётся
+    // «дёшево» (у провайдера с такими моделями есть и платные), бесплатность такой модели
+    // видна в тратах (столбик «Бесплатные»). Расхождение уровней осознанное.
+    [Fact]
+    public void CostTier_ПровайдерСБесплатнымиМоделями_ВКаталогеДёшевый()
+    {
+        var config = Config(new Dictionary<string, string?>
+        {
+            ["LlmProviders:openrouter:ApiKey"] = "test-key",
+            ["LlmProviders:openrouter:AnthropicBaseUrl"] = "https://openrouter.ai/api/v1",
+            ["LlmProviders:openrouter:Models:0:Id"] = "nvidia/nemotron:free",
+        });
+        var providers = new LlmProviderRegistry(config);
+        var service = new ModelCatalogService(providers, new NullHttpFactory(), config);
+
+        service.CostTierOf(providers.GetByKey("openrouter")!).Should().Be("cheap",
+            "класс ПРОВАЙДЕРА: часть моделей бесплатна, но не все → дёшево");
     }
 }

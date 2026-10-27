@@ -105,6 +105,8 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
       ? `смержена ${dateOnly(feature.summary!.mergedAt)} · ${formatDuration(feature.summary!.durationMinutes)}`
       : 'закрыта')
     : st.status;
+  // Очередь: цифры «N из M» набираем FONT.mono — при пересчёте не прыгает ширина.
+  const queueNums = st.kind === 'queue' ? /^в очереди · (\d+ из \d+)$/.exec(status)?.[1] ?? null : null;
   // Тон статуса: тревога «ждёт/к мержу» → info 600, «стоит» → dangerText 600,
   // «доработка» → warningText 600, закрытая смержена → successText, иначе textSecondary 400.
   const statusColor = compact
@@ -113,8 +115,9 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
     : st.alarm === 'wait' ? C.info
     : st.alarm === 'stop' ? C.dangerText
     : st.kind === 'loop' ? C.warningText
+    : st.kind === 'queue' ? C.textPrimary
     : C.textSecondary;
-  const statusWeight = (st.alarm != null || st.kind === 'loop' || (compact && closedMerged) || feature.bucket === 'merged') ? 600 : 400;
+  const statusWeight = (st.alarm != null || st.kind === 'loop' || st.kind === 'queue' || (compact && closedMerged) || feature.bucket === 'merged') ? 600 : 400;
   // «Давность»: с тревоги (attention.since) или с последней активности (lastActivityAt).
   const age = compact ? '' : ageLabel(feature.attention?.since ?? feature.lastActivityAt, now);
   // Стопка аватаров «кто сейчас»: nowPersonaIds (волна 2) с фолбэком на now0 (волна 1).
@@ -255,7 +258,9 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
 
         {/* Строка 2: мини-рельса, стопка аватаров, статус, прогресс. lineHeight 17 (Р-1). */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 7, lineHeight: '17px', minWidth: 0 }}>
-          {!compact && <FeatureRail rail={feature.rail} closed={st.kind === 'done' || st.kind === 'closed'} label={feature.bucket === 'merged' ? 'Этап: смержена' : undefined} />}
+          {/* Очередь (feature-queue-1): при kind=queue рельса приглушена (active textMuted),
+              подпись с позицией из бэка; вне очереди — прежний вид. */}
+          {!compact && <FeatureRail rail={feature.rail} closed={st.kind === 'done' || st.kind === 'closed'} label={feature.bucket === 'merged' ? 'Этап: смержена' : undefined} waiting={st.kind === 'queue'} queue={feature.queue} />}
           {avatars.length > 0 && (
             <span style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}>
               {avatars.map((p, i) => (
@@ -285,7 +290,9 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
             }}
           >
-            {status}
+            {queueNums
+              ? <>в очереди · <span data-testid="feature-group-queue-nums" style={{ fontFamily: FONT.mono }}>{queueNums}</span></>
+              : status}
           </span>
           {!compact && (
             <span

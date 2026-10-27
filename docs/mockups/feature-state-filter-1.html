@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Home · режим «Фичи» · фильтр по состоянию</title>
+<!--
+  Макет фильтра фич по состоянию в режиме «Фичи» списка чатов: мультивыбор по brief.kind,
+  «Закрытые» — одно из значений (тумблер «Показывать закрытые» и чип «и закрытые» убраны).
+  Пояснение и спецификация для Киры — feature-state-filter-1.md. Код продукта не правится.
+  Привязка: эпик «Фильтр фич по состоянию» featureId 1d812b59-5436-4601-b41d-989ae38a9c4a,
+  задача макета 2ad1c5ab; шаги-потребители — фронтовые шаги плана Егора (lane=front).
+  Словарь значений — FeatureBrief.KindByState (9 категорий; paused расщеплён на paused/queued,
+  merged — на merged/closed по run.Closed: смерженная с открытым эпиком остаётся в открытых).
+  Данные выдуманы. Чипы в макете кликабельны: выбор живёт, строка «Показаны» и список пересчитываются.
+-->
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css, семантика — C.* из design.ts.
+   Единственное место с сырыми значениями; ниже — только var(--c-*) и var(--shadow-*). ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-dashed:#D0C6B4; --c-divider:#E8E1D4;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-danger:#B4452F; --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
+  --c-scrim:rgba(42,37,31,.32);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-dashed:#4A443B; --c-divider:#34302A;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-danger:#E8785E; --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45);
+  --c-scrim:rgba(0,0,0,.5);
+}
+* { box-sizing:border-box; }
+html,body { margin:0; }
+body { background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.45; }
+button { font:inherit; color:inherit; border:0; background:none; margin:0; padding:0; cursor:pointer; text-align:left; }
+button:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.mono { font-family:"JetBrains Mono","Courier New",monospace; }
+svg { flex-shrink:0; }
+
+/* ===== Обвязка макета (не часть продукта) ===== */
+.mk { position:sticky; top:0; z-index:100; display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center;
+  padding:10px 16px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.mk h1 { margin:0; font-size:15px; font-weight:600; color:var(--c-text-heading); }
+.mk .grp { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.mk .lbl { font-size:10px; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.05em; }
+.pills { display:inline-flex; flex-wrap:wrap; gap:2px; padding:2px; background:var(--c-bg-selected); border-radius:9px; }
+.pills button { color:var(--c-text-secondary); padding:4px 10px; border-radius:7px; font-size:12px; }
+.pills button.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-thumb); font-weight:600; }
+.wrap { max-width:1320px; margin:0 auto; padding:16px; }
+section { margin:0 0 32px; }
+section > h2 { font-family:"PT Serif",Georgia,serif; font-size:20px; color:var(--c-text-heading); margin:4px 0 6px; }
+.brief { font-size:13px; color:var(--c-text-secondary); max-width:920px; margin:0 0 12px; }
+.brief b { color:var(--c-text-heading); }
+.row { display:flex; gap:24px; align-items:flex-start; flex-wrap:wrap; }
+.cap { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); margin:0 0 4px 2px; }
+.note { font-size:12px; color:var(--c-text-secondary); margin:6px 2px 0; max-width:860px; }
+.note b { color:var(--c-text-heading); }
+
+/* Рамки: десктоп — колонка списка 300 + поповер 320 рядом; мобила — телефон 360 */
+.dk { width:680px; position:relative; }
+.mb { width:360px; position:relative; }
+.isl { background:var(--c-bg-panel); border-radius:14px; box-shadow:var(--shadow-island); overflow:hidden; position:relative; }
+.dk .isl { width:300px; min-height:560px; }
+.mb .isl { border-radius:22px; border:1px solid var(--c-border); box-shadow:none; min-height:640px; }
+
+/* ===== Компоненты продукта ===== */
+/* Шапка списка: заголовок + IconButton фильтров (32, на мобиле 40) с точкой «фильтр не по умолчанию» */
+.lh { display:flex; align-items:center; gap:6px; padding:10px 8px 8px 14px; }
+.mb .lh { padding:10px 8px 6px 14px; min-height:56px; }
+.lh .t { flex:1; font-family:"PT Serif",Georgia,serif; font-size:16px; font-weight:700; color:var(--c-text-heading); }
+.ib { width:32px; height:32px; border-radius:8px; color:var(--c-text-secondary); display:inline-flex; align-items:center; justify-content:center; position:relative; }
+.mb .ib { width:40px; height:40px; }
+.ib:hover, .ib.on { background:var(--c-bg-selected); color:var(--c-text-heading); }
+.ib .dot { position:absolute; top:6px; right:6px; width:7px; height:7px; border-radius:50%; background:var(--c-accent); box-shadow:0 0 0 2px var(--c-bg-panel); }
+.mb .ib .dot { top:9px; right:9px; }
+.seg { display:flex; gap:2px; margin:0 12px 8px; padding:2px; background:var(--c-bg-selected); border-radius:9px; }
+.seg span { flex:1; text-align:center; padding:4px 0; border-radius:7px; font-size:12px; color:var(--c-text-secondary); }
+.seg span.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-thumb); font-weight:600; }
+.mb .seg span { padding:8px 0; }
+
+/* Строка «Показаны» (снимаемые чипы, ui/Chip soft selected + крестик) */
+.shown { display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:0 12px 8px 14px; }
+.shown .k { font-size:12px; color:var(--c-text-muted); }
+.sc { display:inline-flex; align-items:center; gap:4px; height:22px; padding:0 4px 0 9px; border-radius:999px;
+  background:var(--c-accent-light); border:1px solid var(--c-accent-muted); color:var(--c-text-primary); font-size:12px; white-space:nowrap; }
+.mb .sc { height:32px; padding:0 2px 0 11px; }
+.sc .x { width:16px; height:16px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; color:var(--c-text-secondary); }
+.mb .sc .x { width:28px; height:28px; }
+.sc .x:hover { color:var(--c-text-heading); background:var(--c-bg-selected); }
+.reset { font-size:12px; font-weight:600; color:var(--c-accent); padding:0 6px; height:22px; border-radius:6px; }
+.mb .reset { height:40px; padding:0 10px; }
+.reset:hover { background:var(--c-accent-light); }
+
+/* Плашка группы фичи (FeatureGroupHeader, упрощённо) */
+.fg { display:flex; align-items:center; gap:8px; margin:0 8px 4px; padding:8px 8px; border-radius:10px; background:var(--c-bg-card); }
+.mb .fg { min-height:48px; }
+.fg .nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; color:var(--c-text-heading); }
+.fg .st { font-size:11px; color:var(--c-text-secondary); white-space:nowrap; }
+.fg.cl { background:transparent; padding:5px 8px; }
+.fg.cl .nm { font-weight:400; color:var(--c-text-secondary); }
+.sech { display:flex; align-items:baseline; gap:6px; padding:12px 14px 5px; }
+.mb .sech { min-height:40px; }
+.sech .a { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--c-text-muted); }
+.sech .b { margin-left:auto; font-size:11px; color:var(--c-text-muted); }
+.div { padding:12px 14px 5px; font-size:11px; color:var(--c-text-muted); }
+
+/* Точка тона (FeatureDot): 6 px; ring/dashed — для «тихих» значений */
+.td { width:8px; height:8px; border-radius:50%; flex-shrink:0; display:inline-block; }
+.td.ring { background:transparent !important; border:1.5px solid currentColor; }
+.td.dash { background:transparent !important; border:1.5px dashed currentColor; }
+
+/* Поповер фильтров (desktop) и шторка (mobile) */
+.pop { position:absolute; left:316px; top:8px; width:320px; background:var(--c-bg-white); border:1px solid var(--c-border);
+  border-radius:12px; box-shadow:var(--shadow-dropdown); padding:14px; }
+.scrim { position:absolute; inset:0; background:var(--c-scrim); border-radius:22px; }
+.sheet { position:absolute; left:0; right:0; bottom:0; background:var(--c-bg-white); border-radius:16px 16px 22px 22px; padding:8px 14px 18px; }
+.sheet .hdl { width:36px; height:4px; border-radius:2px; background:var(--c-border); margin:0 auto 10px; }
+.sheet .sh { display:flex; align-items:center; margin:0 0 8px; }
+.sheet .sh .t { flex:1; font-family:"PT Serif",Georgia,serif; font-size:16px; font-weight:700; color:var(--c-text-heading); }
+.srch { display:flex; align-items:center; gap:7px; height:34px; padding:0 10px; border:1px solid var(--c-border); border-radius:12px; color:var(--c-text-muted); margin:0 0 14px; font-size:13px; }
+.mb .srch { height:40px; }
+.secT { display:flex; align-items:baseline; gap:6px; margin:0 0 8px; }
+.secT .a { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--c-text-muted); }
+.secT .r { margin-left:auto; }
+.chips { display:flex; flex-wrap:wrap; gap:6px; }
+.sub { font-size:11px; color:var(--c-text-muted); margin:10px 0 6px; display:flex; align-items:center; gap:8px; }
+.sub::after { content:""; flex:1; height:1px; background:var(--c-divider); }
+.hint { font-size:11px; color:var(--c-text-muted); margin:6px 0 0; }
+/* ui/Chip variant=toggle: 12/500, поля 4 10 (large 7 13, minHeight 40), R.pill */
+.tc { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; border:1px solid var(--c-border-light);
+  font-size:12px; color:var(--c-text-secondary); white-space:nowrap; transition:background .12s,border-color .12s; }
+.mb .tc { padding:7px 13px; min-height:40px; }
+.tc:hover { background:var(--c-bg-selected); }
+.tc.on { background:var(--c-accent); border-color:var(--c-accent); color:var(--c-on-accent); }
+.tc.on .td { background:var(--c-on-accent) !important; color:var(--c-on-accent) !important; }
+.tc .n { font-family:"JetBrains Mono","Courier New",monospace; font-size:10px; opacity:.8; }
+.tc.off { opacity:.5; cursor:default; }
+.tc.off:hover { background:transparent; }
+.tc.skel .n { display:inline-block; width:10px; height:8px; border-radius:3px; background:var(--c-bg-selected); opacity:1; }
+.tc:focus-visible { box-shadow:var(--shadow-focus); }
+
+/* Пустые состояния (ui/EmptyState compact) */
+.empty { margin:8px 12px; padding:20px 16px; text-align:center; border:1px dashed var(--c-dashed); border-radius:12px; }
+.empty .ic { width:40px; height:40px; border-radius:50%; background:var(--c-bg-inset); color:var(--c-text-secondary); display:inline-flex; align-items:center; justify-content:center; margin-bottom:8px; }
+.empty .tt { font-size:14px; font-weight:600; color:var(--c-text-heading); margin:0 0 4px; }
+.empty .ss { font-size:12px; color:var(--c-text-secondary); margin:0 auto 10px; max-width:240px; }
+.btn { display:inline-flex; align-items:center; gap:6px; height:28px; padding:0 10px; border-radius:8px; font-size:12px; font-weight:600; color:var(--c-text-secondary); }
+.mb .btn { height:40px; padding:0 14px; }
+.btn:hover { background:var(--c-bg-selected); }
+.calm { display:flex; align-items:center; gap:8px; margin:0 12px 8px; padding:8px; border-radius:12px; background:var(--c-success-bg); color:var(--c-success-text); font-size:12px; flex-wrap:wrap; }
+.calm .lk { margin-left:auto; font-weight:600; color:var(--c-success-text); text-decoration:underline; text-underline-offset:2px; }
+.mb .calm .lk { min-height:40px; display:inline-flex; align-items:center; }
+.chat { display:flex; align-items:center; gap:8px; margin:0 8px 2px 30px; padding:6px 8px; border-radius:8px; font-size:12px; color:var(--c-text-primary); }
+.mb .chat { min-height:44px; }
+.chat .av { width:18px; height:18px; border-radius:50%; background:var(--c-bg-selected); }
+.skl { height:36px; margin:0 8px 6px; border-radius:10px; background:var(--c-bg-selected); opacity:.6; }
+</style>
+</head>
+<body>
+<div class="mk">
+  <h1>Фильтр фич по состоянию · макет 1</h1>
+  <div class="grp"><span class="lbl">Тема</span>
+    <div class="pills" data-ctl="theme"><button class="on" data-v="light">Светлая</button><button data-v="dark">Тёмная</button></div></div>
+  <div class="grp"><span class="lbl">Сценарий</span>
+    <div class="pills" data-ctl="sc">
+      <button class="on" data-v="default">По умолчанию</button>
+      <button data-v="narrow">Только тревоги</button>
+      <button data-v="except">Без черновиков и пауз</button>
+      <button data-v="closed">+ закрытые</button>
+      <button data-v="onlyClosed">Только закрытые</button>
+      <button data-v="nomatch">Ничего не попало</button>
+      <button data-v="calm">Открытых нет</button>
+      <button data-v="none">Фич нет</button>
+      <button data-v="loading">Загрузка</button>
+    </div></div>
+  <div class="grp"><span class="lbl">Фильтр</span>
+    <div class="pills" data-ctl="pop"><button class="on" data-v="1">Открыт</button><button data-v="0">Закрыт</button></div></div>
+</div>
+
+<div class="wrap">
+<section>
+  <h2>Что решили</h2>
+  <p class="brief"><b>Чипы, а не меню.</b> Человек приходит в фильтр ответить на вопрос «что у меня с фичами» —
+  чипы с числами отвечают ещё до клика, меню прячет ответ за раскрытием. Девять значений <b>(таблица
+  <span class="mono">FeatureBrief.KindByState</span>)</b> живут там же, где сейчас «Фичи · что с ними», — в поповере
+  фильтров (320 px) и в мобильной шторке. Открытые переносятся в четыре ряда (на 360 — по 40 px): прокрутки по горизонтали нет,
+  ничего не прячется за «ещё».</p>
+  <p class="brief"><b>Модель — «что показывать».</b> По умолчанию включены все восемь открытых значений, включая «Смержены» (эпик ещё открыт), «Закрытые» выключены.
+  Убрать черновики и паузы — два тапа, без «сначала сбрось, потом выбери». Последний снятый чип возвращает умолчание
+  (как у «Статуса»): пустого списка «по своей же вине» не бывает. Ниже чипы в макете кликабельны.</p>
+  <p class="brief"><b>Строка «Показаны» перечисляет то, что короче:</b> если включено мало — «Показаны: Ждут вас ×»;
+  если снято мало — «Все открытые, кроме: Черновики ×» (крестик здесь возвращает значение). «Закрытые» — отдельный чип
+  в конце строки. Порог — сравнение длины двух списков, без настроек.</p>
+</section>
+
+<section>
+  <h2>Десктоп · колонка списка 300 + поповер фильтров</h2>
+  <div class="row">
+    <div><div class="cap">1280 · список + поповер</div><div class="dk" id="dk"></div></div>
+  </div>
+  <p class="note">Счётчик в заголовке секции — «показано N из M» фич (M без закрытых, пока «Закрытые» выключены).
+  Чип с нулём фич приглушён и недоступен, но если он выбран — остаётся активным, чтобы его можно было снять.</p>
+</section>
+
+<section>
+  <h2>Мобила · 360</h2>
+  <div class="row">
+    <div><div class="cap">360 · список</div><div class="mb" id="mb1"></div></div>
+    <div><div class="cap">360 · шторка фильтров</div><div class="mb" id="mb2"></div></div>
+  </div>
+  <p class="note">В шторке чипы large (minHeight 40), «Сбросить» в шапке секции — тоже 40 по высоте. Крестик снимаемого чипа
+  в строке «Показаны» — зона 28 внутри чипа 32; вся строка остаётся в один-два ряда, потому что перечисляет короткий список.</p>
+</section>
+</div>
+
+<script>
+// ===== Данные: словарь brief.kind (FeatureBrief.Kinds) в порядке ряда =====
+const KINDS = [
+  { k:'waiting_you', l:'Ждут вас',   one:'ждёт вас',    tone:'--c-info' },
+  { k:'error',       l:'Остановлены', one:'остановлена', tone:'--c-danger' },
+  { k:'running',     l:'Идут',       one:'идёт',        tone:'--c-text-heading' },
+  { k:'queued',      l:'В очереди',  one:'в очереди · 1 из 2', tone:'--c-text-muted', shape:'ring' },
+  { k:'paused',      l:'На паузе',   one:'на паузе',    tone:'--c-text-muted' },
+  { k:'draft',       l:'Черновики',  one:'черновик',    tone:'--c-text-muted', shape:'dash' },
+  { k:'idle',        l:'Не начаты',  one:'не начата',   tone:'--c-dashed', shape:'ring' },
+  { k:'merged',      l:'Смержены',   one:'смержена 24.10', tone:'--c-success', shape:'ring' },
+];
+const CLOSED = { k:'closed', l:'Закрытые', one:'смержена 21.10', tone:'--c-success' };
+const OPEN_KEYS = KINDS.map(x => x.k);
+const BASE = [
+  ['Сводка состояния фичи','waiting_you'],['Очередь фич','running'],['Изолированное дерево ревью','error'],
+  ['Голосовой ввод: псевдо-стриминг','running'],['Резолвинг ссылок по worktree','queued'],['Плагины: панель','paused'],
+  ['Сферы: устав','draft'],['Статистика локальных моделей','draft'],['Видео: фильм из сцен','idle'],['Очередь фич: хвосты','merged'],
+  ['Обзор фич, волна 3','closed'],['Пауза и черновик фичи','closed'],['Формат картинок','closed'],
+];
+const ICON = {
+  filter:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 5h18M6 12h12M10 19h4"/></svg>',
+  x:'<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  fx:'<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 5h18l-7 8v6l-4 2v-8z"/><path d="M17 3l4 4M21 3l-4 4"/></svg>',
+  sp:'<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/></svg>',
+  ok:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg>',
+  search:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>',
+};
+
+// ===== Состояние макета =====
+const st = { sc:'default', pop:true, sel:new Set(OPEN_KEYS) };
+const SCEN = {
+  default:   { sel:OPEN_KEYS },
+  narrow:    { sel:['waiting_you','error'] },
+  except:    { sel:OPEN_KEYS.filter(k => k!=='draft' && k!=='paused') },
+  closed:    { sel:[...OPEN_KEYS,'closed'] },
+  onlyClosed:{ sel:['closed'] },
+  nomatch:   { sel:['error','queued'], data:BASE.filter(f => f[1]!=='error' && f[1]!=='queued') },
+  calm:      { sel:OPEN_KEYS, data:BASE.filter(f => f[1]==='closed') },
+  none:      { sel:OPEN_KEYS, data:[] },
+  loading:   { sel:OPEN_KEYS, loading:true },
+};
+const data = () => SCEN[st.sc].data ?? BASE;
+const isDefault = () => st.sel.size === OPEN_KEYS.length && OPEN_KEYS.every(k => st.sel.has(k));
+const meta = k => k === 'closed' ? CLOSED : KINDS.find(x => x.k === k);
+const counts = () => { const c = {}; [...OPEN_KEYS,'closed'].forEach(k => c[k]=0); data().forEach(f => c[f[1]]++); return c; };
+
+function dot(m) {
+  return `<span class="td ${m.shape||''}" style="background:var(${m.tone});color:var(${m.tone})"></span>`;
+}
+
+// ===== Строка «Показаны»: перечисляет более короткий из двух списков =====
+function shownRow(mobile) {
+  if (isDefault() || SCEN[st.sc].loading) return '';
+  const on = OPEN_KEYS.filter(k => st.sel.has(k));
+  const off = OPEN_KEYS.filter(k => !st.sel.has(k));
+  const closed = st.sel.has('closed');
+  const chip = (k, mode) => `<span class="sc">${meta(k).l}<button class="x" data-act="${mode}" data-k="${k}"
+     aria-label="${mode==='add' ? 'Вернуть' : 'Убрать'} «${meta(k).l}»">${ICON.x}</button></span>`;
+  let h = '';
+  if (on.length === 0) h += `<span class="k">Показаны:</span>`;
+  else if (off.length === 0) h += `<span class="k">Показаны все открытые и</span>`;
+  else if (on.length <= off.length) h += `<span class="k">Показаны:</span>` + on.map(k => chip(k,'del')).join('');
+  else h += `<span class="k">Все открытые, кроме:</span>` + off.map(k => chip(k,'add')).join('') + (closed ? `<span class="k">и</span>` : '');
+  if (closed) h += chip('closed','del');
+  h += `<button class="reset" data-act="reset">Сбросить</button>`;
+  return `<div class="shown">${h}</div>`;
+}
+
+// ===== Список фич =====
+function list(mobile) {
+  const sc = SCEN[st.sc];
+  if (sc.loading) return '<div class="skl"></div><div class="skl"></div><div class="skl"></div>';
+  const d = data();
+  if (d.length === 0) return `<div class="empty"><div class="ic">${ICON.sp}</div><p class="tt">Фич пока нет</p>
+    <p class="ss">Фича появится здесь, когда оркестратор заведёт её эпиком в трекере. Тогда её чаты соберутся в одну группу.</p></div>` + noFeat();
+  const open = d.filter(f => f[1] !== 'closed'), closed = d.filter(f => f[1] === 'closed');
+  const shownOpen = open.filter(f => st.sel.has(f[1]));
+  let h = '';
+  if (open.length === 0) {
+    h += `<div class="calm">${ICON.ok}<span>Открытых фич нет. Последняя смержена 21.10.</span>
+      ${st.sel.has('closed') ? '' : `<button class="lk" data-act="addClosed">Показать закрытые · <span class="mono">${closed.length}</span></button>`}</div>`;
+  } else if (shownOpen.length === 0 && [...st.sel].some(k => k !== 'closed')) {
+    const names = OPEN_KEYS.filter(k => st.sel.has(k)).map(k => `«${meta(k).l}»`).join(', ');
+    h += `<div class="empty"><div class="ic">${ICON.fx}</div><p class="tt">Под фильтр ничего не попало</p>
+      <p class="ss">Сейчас нет фич в состояниях ${names}. Открытых фич — <span class="mono">${open.length}</span>.</p>
+      <button class="btn" data-act="reset">Сбросить фильтр</button></div>`;
+  }
+  shownOpen.forEach((f, i) => {
+    const m = meta(f[1]);
+    h += `<div class="fg">${dot(m)}<span class="nm">${f[0]}</span><span class="st">${m.one}</span></div>`;
+    if (i === 0) h += `<div class="chat"><span class="av"></span>Ключевой чат · ревью шага</div>`;
+  });
+  if (st.sel.has('closed') && closed.length) {
+    h += `<div class="sech"><span class="a">Закрытые · <span class="mono">${closed.length}</span></span><span class="b">на втором плане</span></div>`;
+    closed.forEach(f => { h += `<div class="fg cl">${dot(CLOSED)}<span class="nm">${f[0]}</span><span class="st">${CLOSED.one}</span></div>`; });
+  }
+  return h + noFeat();
+}
+const noFeat = () => `<div class="div">Без фичи</div><div class="chat" style="margin-left:8px"><span class="av"></span>Разбор логов прода</div>`;
+
+// ===== Панель фильтров (поповер / шторка) =====
+function filterPanel(mobile) {
+  const c = counts(), sc = SCEN[st.sc], d = data();
+  const openTotal = d.filter(f => f[1] !== 'closed').length;
+  const shown = d.filter(f => st.sel.has(f[1])).length;
+  const total = openTotal + (st.sel.has('closed') ? c.closed : 0);
+  const tchip = m => {
+    const on = st.sel.has(m.k), n = c[m.k], off = !sc.loading && n === 0 && !on;
+    return `<button class="tc ${on?'on':''} ${off?'off':''} ${sc.loading?'skel':''}" data-act="toggle" data-k="${m.k}"
+      aria-pressed="${on}" ${off?'aria-disabled="true"':''}>${dot(m)}${m.l}<span class="n">${sc.loading ? '' : n}</span></button>`;
+  };
+  return `
+    <div class="srch">${ICON.search}Поиск по названию…</div>
+    <div class="secT"><span class="a">Фичи · что показывать</span>
+      <span class="a mono" style="letter-spacing:0">${sc.loading ? '' : `· ${shown} из ${total}`}</span>
+      <span class="r">${isDefault() ? '' : '<button class="reset" data-act="reset">Сбросить</button>'}</span></div>
+    <div class="sub">Открытые · <span class="mono">${sc.loading ? '—' : openTotal}</span></div>
+    <div class="chips">${KINDS.map(tchip).join('')}</div>
+    <div class="sub">Завершённые</div>
+    <div class="chips">${tchip(CLOSED)}</div>
+    <p class="hint">Закрытые встают секцией внизу списка, на втором плане.</p>
+    <div class="sub" style="margin-top:16px">Статус чатов</div>
+    <div class="chips"><span class="tc on">Активные</span><span class="tc on">Ждут</span><span class="tc on">Ошибка</span><span class="tc">Простой</span></div>`;
+}
+
+function head(mobile) {
+  return `<div class="lh"><span class="t">Чаты</span>
+    <button class="ib ${st.pop?'on':''}" data-act="pop" aria-label="Фильтры${isDefault()?'':' (изменены)'}">${ICON.filter}${isDefault()?'':'<span class="dot"></span>'}</button></div>
+    <div class="seg"><span>Даты</span><span>Теги</span><span class="on">Фичи</span></div>`;
+}
+
+function render() {
+  document.getElementById('dk').innerHTML =
+    `<div class="isl">${head(false)}${shownRow(false)}${list(false)}</div>` +
+    (st.pop ? `<div class="pop">${filterPanel(false)}</div>` : '');
+  document.getElementById('mb1').innerHTML = `<div class="isl">${head(true)}${shownRow(true)}${list(true)}</div>`;
+  document.getElementById('mb2').innerHTML = `<div class="isl">${head(true)}${shownRow(true)}${list(true)}
+    <div class="scrim"></div><div class="sheet"><div class="hdl"></div>
+    <div class="sh"><span class="t">Фильтры</span><button class="btn" style="color:var(--c-accent)">Готово</button></div>
+    ${filterPanel(true)}</div></div>`;
+}
+
+document.addEventListener('click', e => {
+  const p = e.target.closest('[data-ctl] button');
+  if (p) {
+    const ctl = p.parentElement.dataset.ctl, v = p.dataset.v;
+    p.parentElement.querySelectorAll('button').forEach(b => b.classList.toggle('on', b === p));
+    if (ctl === 'theme') document.documentElement.dataset.theme = v;
+    if (ctl === 'pop') st.pop = v === '1';
+    if (ctl === 'sc') { st.sc = v; st.sel = new Set(SCEN[v].sel); }
+    render(); return;
+  }
+  const a = e.target.closest('[data-act]');
+  if (!a) return;
+  const k = a.dataset.k;
+  switch (a.dataset.act) {
+    case 'toggle':
+      if (a.getAttribute('aria-disabled')) return;
+      st.sel.has(k) ? st.sel.delete(k) : st.sel.add(k);
+      // Последний снятый чип возвращает умолчание: пустого набора не бывает
+      if (st.sel.size === 0) st.sel = new Set(OPEN_KEYS);
+      break;
+    case 'del': st.sel.delete(k); if (st.sel.size === 0) st.sel = new Set(OPEN_KEYS); break;
+    case 'add': st.sel.add(k); break;
+    case 'addClosed': st.sel.add('closed'); break;
+    case 'reset': st.sel = new Set(OPEN_KEYS); break;
+    case 'pop': st.pop = !st.pop; break;
+  }
+  render();
+});
+render();
+</script>
+</body>
+</html>

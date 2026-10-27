@@ -189,6 +189,7 @@ public sealed class SpendFeatureReader : ISpendFeatureReader
         CacheCreationTokens = r.CacheCreationTokens,
         CostUsd = r.CostUsd,
         Source = r.Source,
+        Provider = r.Provider,
         UnreliableCost = SpendCostReliability.IsUnreliable(r.Model, r.Source, _unreliableModels),
     };
 
@@ -210,6 +211,7 @@ public sealed class SpendFeatureReader : ISpendFeatureReader
         CacheCreationTokens = d.CacheCreationTokens,
         CostUsd = d.CostUsd,
         Source = d.Source,
+        Provider = d.Provider,
         UnreliableCost = SpendCostReliability.IsUnreliable(d.Model, d.Source, _unreliableModels),
         IsDaily = true,
     };

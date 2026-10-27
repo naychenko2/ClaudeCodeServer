@@ -381,15 +381,19 @@ public class FeatureBreakdownTests
     // unreliable — признак «цена от CLI ненадёжна» (модель в списке UnreliableCostModels):
     // его выставляет читатель (SpendFeatureReader) единой точкой правды (SpendCostReliability).
     private static FeatureSpendRecord Spend(string? personaId, string? taskId, string? model,
-        long input, long output, double? cost, string source = "chat-turn", bool unreliable = false) => new()
+        long input, long output, double? cost, string source = "chat-turn", bool unreliable = false,
+        string provider = "", long cacheRead = 0, long cacheCreation = 0) => new()
     {
         PersonaId = personaId,
         TaskId = taskId,
         Model = model,
         InputTokens = input,
         OutputTokens = output,
+        CacheReadTokens = cacheRead,
+        CacheCreationTokens = cacheCreation,
         CostUsd = cost,
         Source = source,
+        Provider = provider,
         UnreliableCost = unreliable,
     };
 
@@ -474,6 +478,148 @@ public class FeatureBreakdownTests
         var p1 = bd.Personas.Single(g => g.Key == "p1");
         p1.Tokens.Should().Be(150);
         p1.CostUsd.Should().Be(0m, "free → честный 0, не null");
+    }
+
+    // Ценовой класс строки разбивки по моделям — правилом Core (SpendCostTiers):
+    // claude → дорого, сторонний облачный → дёшево, локальный движок → бесплатно,
+    // провайдер freellm* → бесплатно, неизвестный провайдер → дорого (цена неизвестна —
+    // занижать её нельзя). Мутация «класс всегда free» → claude-строка получит
+    // free ≠ expensive → краснеет.
+    [Fact]
+    public void Build_РазрезМоделей_ЦеновойКлассСтроки()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic");
+        TaskItem Step(string id, string persona, string chat) => Child(id, "epic", personaId: persona,
+            chatId: chat,
+            startedAt: new DateTime(2026, 10, 1, 10, 0, 0),
+            completedAt: new DateTime(2026, 10, 1, 12, 0, 0));
+
+        var sessions = Sessions(
+            ("c1", "s1", "claude-opus-4"),
+            ("c2", "s2", "minimax-m2"),
+            ("c3", "s3", "qwen-local"),
+            ("c4", "s4", "unknown-model"),
+            ("c5", "s5", "freellm-fast"));
+
+        var records = new[]
+        {
+            Spend("p1", "s1", "claude-opus-4", 100, 50, 1.0, provider: "claude"),
+            Spend("p2", "s2", "minimax-m2", 100, 50, 0.2, provider: "minimax"),
+            Spend("p3", "s3", "qwen-local", 100, 50, 0, source: "free", provider: "local-qwen"),
+            Spend("p4", "s4", "unknown-model", 100, 50, 0.1, provider: ""),
+            Spend("p5", "s5", "freellm-fast", 100, 50, 0, provider: "freellmapi"),
+        };
+
+        var (bd, _) = FeatureBreakdown.Build(
+            Run(epic, Step("s1", "p1", "c1"), Step("s2", "p2", "c2"),
+                Step("s3", "p3", "c3"), Step("s4", "p4", "c4"), Step("s5", "p5", "c5")),
+            null, sessions, null, now, records);
+
+        bd.Models.Single(g => g.Key == "claude-opus-4").Tier.Should().Be("expensive", "claude → дорого");
+        bd.Models.Single(g => g.Key == "minimax-m2").Tier.Should().Be("cheap", "облачный сторонний → дёшево");
+        bd.Models.Single(g => g.Key == "qwen-local").Tier.Should().Be("free", "локальный движок → бесплатно");
+        bd.Models.Single(g => g.Key == "freellm-fast").Tier.Should().Be("free", "freellm* → бесплатно");
+        bd.Models.Single(g => g.Key == "unknown-model").Tier.Should().Be("expensive",
+            "провайдер неизвестен → цена неизвестна, занижать нельзя → дорого");
+    }
+
+    // Класс заполняется ТОЛЬКО в оси моделей: в осях «персоны» и «роли» его нет — класс
+    // определён для модели/провайдера, а не для персоны. Контракт тот же, что в /api/spend.
+    // Мутация «класс во всех осях» → в персоне появится класс ≠ null → краснеет.
+    [Fact]
+    public void Build_ОсиПерсонИРоли_КлассНеЗаполняется()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic", personaId: "p1", role: TaskRoles.Step, chatId: "c1",
+            startedAt: new DateTime(2026, 10, 1, 10, 0, 0),
+            completedAt: new DateTime(2026, 10, 1, 12, 0, 0));
+
+        var sessions = Sessions(("c1", "s1", "claude-opus-4"));
+        var records = new[] { Spend("p1", "s1", "claude-opus-4", 100, 50, 1.0, provider: "claude") };
+
+        var (bd, _) = FeatureBreakdown.Build(Run(epic, s1), null, sessions, null, now, records);
+
+        bd.Models.Single(g => g.Key == "claude-opus-4").Tier.Should().Be("expensive", "ось моделей — класс есть");
+        bd.Personas.Single(g => g.Key == "p1").Tier.Should().BeNull("ось персон — класс не определён");
+        bd.Roles.Single(g => g.Key == TaskRoles.Step).Tier.Should().BeNull("ось ролей — класс не определён");
+    }
+
+    // Смешанная группа в разбивке фичи: класс — по большинству токенов, а не по «самому дорогому».
+    // Живая форма: 95% записей minimax (cheap) и 5% с провайдером claude на той же модели.
+    // Мутация «вернуть Rank (дорогой класс побеждает всегда)» → expensive ≠ cheap → краснеет.
+    [Fact]
+    public void Build_РазрезМоделей_СмешанныеКлассы_БерётсяБольшинствоТокенов()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic", personaId: "p1", chatId: "c1",
+            startedAt: new DateTime(2026, 10, 1, 10, 0, 0),
+            completedAt: new DateTime(2026, 10, 1, 12, 0, 0));
+
+        var sessions = Sessions(("c1", "s1", "mixed-model"));
+        var records = new[]
+        {
+            Spend("p1", "s1", "mixed-model", 950, 0, 0.2, provider: "minimax"),
+            Spend("p1", "s1", "mixed-model", 50, 0, 1.0, provider: "claude"),
+        };
+
+        var (bd, _) = FeatureBreakdown.Build(Run(epic, s1), null, sessions, null, now, records);
+
+        bd.Models.Single(g => g.Key == "mixed-model").Tier.Should().Be("cheap",
+            "95% токенов — дешёвый провайдер, 5% чужих записей строку не перекрашивают");
+    }
+
+    // Вес класса строки — вход+выход+кэш, общей формулой с /api/spend (SpendCostTiers.WeightOf).
+    // Живая форма (репро из карточки): строка модели claude — по вход+выход «дёшево» (22 606 против 155 297),
+    // с кэшем «дорого» (3 171 019 против 1 103 130): кэш — 96–99 % трафика Claude.
+    // Мутация «убрать кэш из веса» → вес claude-записи 10 против 1000 → cheap ≠ expensive → краснеет.
+    [Fact]
+    public void Build_РазрезМоделей_ВесКлассаСУчётомКэша()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic", personaId: "p1", chatId: "c1",
+            startedAt: new DateTime(2026, 10, 1, 10, 0, 0),
+            completedAt: new DateTime(2026, 10, 1, 12, 0, 0));
+
+        var sessions = Sessions(("c1", "s1", "mixed-model"));
+        var records = new[]
+        {
+            // Без кэша минимакс перевешивает 1000:10 → «дёшево»; с кэшем claude перевешивает 5010:1000.
+            Spend("p1", "s1", "mixed-model", 1000, 0, 0.2, provider: "minimax"),
+            Spend("p1", "s1", "mixed-model", 10, 0, 1.0, provider: "claude", cacheRead: 5000),
+        };
+
+        var (bd, _) = FeatureBreakdown.Build(Run(epic, s1), null, sessions, null, now, records);
+
+        var row = bd.Models.Single(g => g.Key == "mixed-model");
+        row.Tier.Should().Be("expensive",
+            "вес класса — вход+выход+кэш: кэш claude-записи перевешивает большинство, как в /api/spend");
+        row.Tokens.Should().Be(1010, "поле «Токены» группы — прежний контракт разбивки (вход+выход), вес класса от него отделён");
+    }
+
+    // Равенство токенов — побеждает более дорогой класс (занижать расход нельзя).
+    [Fact]
+    public void Build_РазрезМоделей_РавныеТокены_БерётсяБолееДорогой()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic", personaId: "p1", chatId: "c1",
+            startedAt: new DateTime(2026, 10, 1, 10, 0, 0),
+            completedAt: new DateTime(2026, 10, 1, 12, 0, 0));
+
+        var sessions = Sessions(("c1", "s1", "mixed-model"));
+        var records = new[]
+        {
+            Spend("p1", "s1", "mixed-model", 100, 0, 0.2, provider: "minimax"),
+            Spend("p1", "s1", "mixed-model", 100, 0, 1.0, provider: "claude"),
+        };
+
+        var (bd, _) = FeatureBreakdown.Build(Run(epic, s1), null, sessions, null, now, records);
+
+        bd.Models.Single(g => g.Key == "mixed-model").Tier.Should().Be("expensive");
     }
 
     // Ось «роли»: запись расхода (TaskId → Role задачи) даёт группе роли токены/стоимость.

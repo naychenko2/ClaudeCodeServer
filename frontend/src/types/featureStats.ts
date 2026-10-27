@@ -7,8 +7,51 @@
 // Все поля nullable-терпимы там, где бэк может не иметь данных (null — нет
 // значения); UI обязан пережить отсутствие любого (старые ответы не несут stats).
 
+import type { StageKey } from './featureRun';
+
 // Источник чисел: 'approx' — приближённо по полям задач; 'journal' — по журналу ходов.
 export type FeatureStatsSource = 'approx' | 'journal';
+
+// Ход внутри интервала стадии (бэк: `StageTurn`): закрытый ход
+// задачи. Живой хвост идущей задачи — НЕ ход, его тут нет.
+export interface StageTurn {
+  // Id задачи, чей ход.
+  taskId: string;
+  // Начало/конец хода (ISO-строки).
+  from: string;
+  to: string;
+  // Исход хода (finished/cancelled/interrupted/error…); null — не зафиксирован.
+  outcome: string | null;
+  // Модель хода; null — не известна.
+  model: string | null;
+}
+
+// Контракт живого хода (GC-F10b): `turns` — только закрытые ходы, живой хвост — не ход.
+// Фронт не ждёт живого хода от бэка и не расширяет StageTurn: синтезирует его сам — для
+// интервала с live: true неоконченной фичи и задачи из run.now, состоящей в taskIds этого
+// интервала (бэк это гарантирует: id живой хвоста попадает в taskIds вместе с хвостом,
+// FeatureStageIntervals.cs:79-92,107), ход [max(старт задачи, конец её последнего закрытого
+// хода) – «сейчас» рендера]. Признак синтезированного хода для UI — его 'to' ровно равен
+// «сейчас» рендера: он печатается «…–идёт» и рисуется на полосе как живой (kind 'live').
+// Поля StageTurn при этом не меняются: синтезированный ход — конструкция фронта, не данные бэка.
+
+// Интервал работы стадии (бэк: `StageInterval`): склейка
+// смежных ходов одной стадии. From/To — границы, Minutes — минуты стены между ними.
+export interface StageInterval {
+  // Начало/конец интервала (ISO-строки).
+  from: string;
+  to: string;
+  // Минуты (бэк: FeatureTimeMath.Minutes(From, To)).
+  minutes: number;
+  // true — интервал дотянут до «сейчас» (в нём живой хвост идущей задачи).
+  live: boolean;
+  // Исход ПОСЛЕДНЕГО хода интервала, если он cancelled/interrupted/error; иначе null.
+  lastOutcome: string | null;
+  // Id задач, чьи ходы вошли в интервал (уникальные, по первому появлению).
+  taskIds: string[];
+  // Ходы интервала в хронологическом порядке.
+  turns: StageTurn[];
+}
 
 // Таймлайн фичи: интервалы стадий, сегменты (работа/ожидание/простой/ошибка)
 // по двум трекам (main/review), текущее состояние и итоги по минутам.
@@ -20,6 +63,12 @@ export interface FeatureTimeline {
   // Границы полосы стадии: ключ + старт/край (barEnd — правый край полосы, W5-DEF;
   // null — активности не было).
   stages: { key: string; startedAt: string | null; barEnd: string | null }[];
+  // Интервалы работы по стадиям (GC-B2, «Хронология»/Гант): стадия → её интервалы из
+  // журнала ходов (бэк: `FeatureTimeline.IntervalsByStage`). null — ТОЛЬКО режим approx
+  // (журнала нет / он не полный). Полный журнал БЕЗ ходов — пустой объект (не null):
+  // «интервалов нет» и «интервалы не считались» — разные состояния, UI различает их
+  // по null. Аддитивное: старые ответы поля не несут — UI обязан пережить отсутствие.
+  intervalsByStage?: Partial<Record<StageKey, StageInterval[]>> | null;
   // Сегменты: непрерывные куски времени с видом, треком, стадией и задачей.
   segments: {
     from: string;
@@ -60,6 +109,12 @@ export interface FeatureTimeline {
     errorCount: number | null;
     // Минут в ошибках; null — не считалось.
     errorMinutes: number | null;
+    // Минут «стояла в очереди фич» — самостоятельный пятый вид разряды (R-Q3B-2,
+    // ADR-031 §«Время в очереди (queued)»): бэк вычитает перекрытия очереди из
+    // work/waiting/error/idle, минуты queued у idleMinutes не отнимает; сумма видов
+    // остаётся равной elapsed. null — не считалось (approx). Опциональна: старые ответы
+    // бэка поля не несут.
+    queuedMinutes?: number | null;
   };
 }
 
@@ -73,6 +128,9 @@ export interface FeatureBreakdownGroup {
   tokens: number | null;
   // Стоимость (USD); null — не считалась.
   costUsd: number | null;
+  // Ценовой класс модели (free | cheap | expensive) — приходит с бэка; null —
+  // класс неизвестен, undefined — поле не пришло вовсе (старый ответ бэка).
+  tier?: string | null;
   // Чаты, к которым относится группа.
   chatIds: string[];
 }
@@ -151,6 +209,14 @@ export interface TypicalFeatureStats {
   waiting: TypicalPercentiles | null;
   // Число возвратов.
   loops: TypicalPercentiles;
+  // B2a: размер шаговой выборки — смерженных фич с принятыми шагами (текущая не считается).
+  stepCount: number;
+  // Типичные минуты на шаг (B2a): медиана по фичам от средней длины их принятых цепочек;
+  // null — фич с шагами меньше трёх.
+  stepMinutes: TypicalPercentiles | null;
+  // Типичные минуты хвоста (B2a): от принятия последнего шага до мержа (qa + final + merge);
+  // null — фич с принятыми шагами и мержем меньше трёх.
+  tailMinutes: TypicalPercentiles | null;
 }
 
 // Статистика фичи (только в GET features/{id}).

@@ -1,5 +1,6 @@
 ﻿using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Tasks.Projector;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -707,6 +708,199 @@ public class TaskManagerTests : IDisposable
 
         reopened.Verification.Should().BeNull();
         reopened.Outcome.Should().BeNull();
+    }
+
+    // Расследование 88444536: переоткрытая после закрытия карточка не должна оставаться
+    // «мёртвой» — доставленный доклад и результат закрытого хода относятся к закрытому циклу
+    // и снимаются тем же блоком, что CompletedAt/Verification. Без сброса перезапуск
+    // отказан (TaskExecutionService.ExecuteAsync), а сторож застоя выключен (ClassifyStall).
+    [Fact]
+    public void Update_ПереоткрытиеИзDone_СбрасываетCompletionDeliveredИClaudeResult()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("доработка после закрытия"));
+        _sut.MarkClaudeStarted(task.Id, "sess-1", DateTime.UtcNow);
+        _sut.MarkClaudeResult(task.Id, "success");
+        _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        _sut.TryMarkCompletionDelivered(task.Id).Should().BeTrue();
+
+        var reopened = _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Todo))!;
+
+        reopened.CompletionDelivered.Should().BeFalse("доклад закрытого цикла не должен блокировать перезапуск");
+        reopened.ClaudeResult.Should().BeNull("результат закрытого хода не должен считаться новым циклом");
+        // Отказ ревью b6c2bca9 (major 1): пара сбрасывается целиком — отметка запуска того же цикла
+        reopened.ClaudeStartedAt.Should().BeNull("живая отметка запуска читается потребителями как «ход идёт»");
+    }
+
+    // Отказ ревью b6c2bca9 (major 1): переоткрытая в InProgress карточка с живой ClaudeStartedAt
+    // читалась IsTurnRunning как «ход идёт сейчас»: проектор показывал шаг running в «Сейчас»,
+    // UI — «AI работает» вместо кнопки «Выполнить», пауза фичи вешала ложную пометку остановки.
+    [Fact]
+    public void Update_ПереоткрытиеВInProgress_ПроекторНеЧитаетЕёКакИдущийХод()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("доработка после закрытия"));
+        _sut.MarkClaudeStarted(task.Id, "sess-1", DateTime.UtcNow);
+        _sut.MarkClaudeResult(task.Id, "success");
+        _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        _sut.TryMarkCompletionDelivered(task.Id);
+
+        var reopened = _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.InProgress))!;
+
+        reopened.ClaudeStartedAt.Should().BeNull();
+        reopened.ClaudeResult.Should().BeNull();
+        FeatureProjector.IsTurnRunning(reopened).Should().BeFalse(
+            "после переоткрытия ни один потребитель не должен читать карточку как идущий ход");
+    }
+
+    [Fact]
+    public void Update_ОставаниеВDone_НеТрогаетДоставкуИРезультатХода()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t"));
+        _sut.MarkClaudeStarted(task.Id, "sess-1", DateTime.UtcNow);
+        _sut.MarkClaudeResult(task.Id, "success");
+        _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        _sut.TryMarkCompletionDelivered(task.Id);
+
+        // Правка закрытой карточки без смены статуса (переименование) — следы цикла на месте
+        var edited = _sut.Update(task.Id, new UpdateTaskRequest(Title: "переименовали"))!;
+
+        edited.CompletionDelivered.Should().BeTrue();
+        edited.ClaudeResult.Should().Be("success");
+        edited.ClaudeStartedAt.Should().NotBeNull("Done→Done — не переоткрытие, пару не трогаем");
+    }
+
+    [Fact]
+    public void Update_TodoВInProgress_НеТрогаетДоставкуИРезультатХода()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t"));
+        _sut.MarkClaudeStarted(task.Id, "sess-1", DateTime.UtcNow);
+        _sut.MarkClaudeResult(task.Id, "success");
+        _sut.TryMarkCompletionDelivered(task.Id); // искусственное состояние: флаг без Done
+
+        // Сброс принадлежит уходу из Done, а не любой смене статуса: незакрытая задача — не переоткрытие
+        var moved = _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.InProgress))!;
+
+        moved.CompletionDelivered.Should().BeTrue();
+        moved.ClaudeResult.Should().Be("success");
+        moved.ClaudeStartedAt.Should().NotBeNull("todo→inProgress — не переоткрытие, пару не трогаем");
+    }
+
+    // Расследование 88444536, п.2: повторный tasks_complete по Done-карточке не обязан затирать
+    // первый итог — новый текст дописывается датированным блоком «Дополнение».
+    [Fact]
+    public void Update_ПовторныйДокладПоDoneКарточке_ДописываетДополнениеАНеЗатирает()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t"));
+        _sut.Update(task.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done, ResultMarkdown: "первый итог"));
+
+        var again = _sut.Update(task.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done, ResultMarkdown: "второй итог"), isAgentCall: true)!;
+
+        again.ResultMarkdown.Should().StartWith("первый итог");
+        again.ResultMarkdown.Should().Contain("Дополнение (");
+        again.ResultMarkdown.Should().Contain("второй итог");
+    }
+
+    // Минор 2 ревью b6c2bca9: ретрай того же tasks_complete (тот же текст после сбоя доставки)
+    // не должен плодить второй такой же блок «Дополнение».
+    [Fact]
+    public void Update_ПовторныйДокладТемЖеТекстом_НеДублируетДополнение()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t"));
+        _sut.Update(task.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done, ResultMarkdown: "первый итог"));
+        var supplemented = _sut.Update(task.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done, ResultMarkdown: "второй итог"), isAgentCall: true)!;
+        // Update возвращает живой экземпляр — снимок строки до ретрая, иначе сравниваем объект с самим собой
+        var supplementedText = supplemented.ResultMarkdown;
+
+        var retry = _sut.Update(task.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done, ResultMarkdown: "второй итог"), isAgentCall: true)!;
+
+        retry.ResultMarkdown.Should().Be(supplementedText,
+            "тот же текст повторно — последний блок уже он и есть, второй не дописываем");
+
+        // Другой текст дописывается как прежде (идемпотентность не подменяет собой разные доклады)
+        var another = _sut.Update(task.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done, ResultMarkdown: "третий итог"), isAgentCall: true)!;
+        another.ResultMarkdown.Should().Contain("третий итог");
+    }
+
+    // Побочка сброса пары (отказ ревью b6c2bca9): ShouldAutoStart требует ClaudeStartedAt == null —
+    // переоткрытая карточка со старым сроком ушла бы в автозапуск без команды человека.
+    // Просроченный срок закрытого цикла снимается вместе с прочими его следами.
+    [Fact]
+    public void Update_ПереоткрытиеИзDone_СнимаетСтарыйСрок()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("срочная доработка",
+            Assignee: TaskItemAssignee.Claude, DueDate: "2026-10-25", DueTime: "12:00"));
+        _sut.MarkClaudeStarted(task.Id, "sess-1", DateTime.UtcNow);
+        _sut.MarkClaudeResult(task.Id, "success");
+        _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+
+        var reopened = _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Todo))!;
+
+        reopened.DueDate.Should().BeNull("срок закрытого цикла — запись прошлого цикла, не команда автозапуска");
+        reopened.DueTime.Should().BeNull();
+    }
+
+    // Новый срок в том же запросе — явное намерение человека: его не трогаем
+    // (автозапуск по нему — его собственная команда).
+    [Fact]
+    public void Update_ПереоткрытиеИзDone_СНовымСроком_СохраняетЕго()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("доработка",
+            Assignee: TaskItemAssignee.Claude, DueDate: "2026-10-25", DueTime: "12:00"));
+        _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done, ResultMarkdown: "итог"));
+
+        var reopened = _sut.Update(task.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Todo, DueDate: "2026-12-01", DueTime: "09:00"))!;
+
+        reopened.DueDate.Should().Be("2026-12-01");
+        reopened.DueTime.Should().Be("09:00");
+    }
+
+    // Н-1 дельта-ревью 099c6689: код (req.DueDate is null) снимает ЛЮБОЙ срок закрытого цикла,
+    // дата ни с чем не сверяется; прежний тест брал просроченную дату и проходил при обоих
+    // формулировках правила. Здесь фактическое правило зафиксировано на будущем сроке:
+    // без dueDate в запросе он снят (при «только просроченном» — остался бы и вернулся
+    // в календарь/утренний бриф на переоткрытой карточке), явный срок в запросе — сохранён.
+    [Fact]
+    public void Update_ПереоткрытиеИзDone_СнимаетЛюбойСрокЗакрытогоЦикла()
+    {
+        // Карточка с будущим сроком закрыта досрочно
+        var futureDue = _sut.Create(null, "u", new CreateTaskRequest("доработка",
+            Assignee: TaskItemAssignee.Claude, DueDate: "2027-01-15", DueTime: "09:00"));
+        _sut.Update(futureDue.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done, ResultMarkdown: "итог"));
+
+        var cleared = _sut.Update(futureDue.Id, new UpdateTaskRequest(Status: TaskItemStatus.Todo))!;
+
+        cleared.DueDate.Should().BeNull("снимается любой срок закрытого цикла — дата не сверяется");
+        cleared.DueTime.Should().BeNull();
+
+        // Явный срок в том же запросе — намерение человека, оно и сохранится
+        var explicitDue = _sut.Create(null, "u", new CreateTaskRequest("доработка",
+            Assignee: TaskItemAssignee.Claude, DueDate: "2027-01-15", DueTime: "09:00"));
+        _sut.Update(explicitDue.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done, ResultMarkdown: "итог"));
+
+        var kept = _sut.Update(explicitDue.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Todo, DueDate: "2027-02-01", DueTime: "10:00"))!;
+
+        kept.DueDate.Should().Be("2027-02-01");
+        kept.DueTime.Should().Be("10:00");
+    }
+
+    [Fact]
+    public void Update_ЧеловекПравитИтогНаDoneКарточке_ЗатираетКакПрежде()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t"));
+        _sut.Update(task.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done, ResultMarkdown: "первый итог"));
+
+        // Человеческий путь (UI-форма) — прямая запись: что вписано, то и сохранено
+        var edited = _sut.Update(task.Id, new UpdateTaskRequest(ResultMarkdown: "исправленный итог"))!;
+
+        edited.ResultMarkdown.Should().Be("исправленный итог");
     }
 
     [Fact]
@@ -1802,6 +1996,59 @@ public class TaskManagerTests : IDisposable
     // Формула отказа запуска исполнителя по задачам фичи с активным Hold. Мутация: убрать
     // вызов FeatureHoldRefusal в TaskExecutionService.ExecuteAsync — интеграционный тест
     // Hold_RefusesExecutorLaunch_ClearingPauseAllowsStart краснеет.
+    // ─── Голос фичи (B3): SetFeatureNote ─────────────────────────────────────────────
+    // Мутация (c3): убрать обрезку по MaxTextLength — тест длинного текста краснеет.
+    [Fact]
+    public void SetFeatureNote_ДлинныйТекст_ОбрезаетсяДо600()
+    {
+        var epic = CreateEpic("u");
+
+        var res = _sut.SetFeatureNote(epic.Id, new string('я', 700), "sess", false, "review", "running");
+
+        res!.Note!.Text.Should().HaveLength(600);
+    }
+
+    // Мутация (c3): вернуть пустую запись вместо null — тест краснеет.
+    [Theory]
+    [InlineData("")]
+    [InlineData("   \n ")]
+    [InlineData(null)]
+    public void SetFeatureNote_ПустойТекст_СнимаетГолос(string? text)
+    {
+        var epic = CreateEpic("u");
+        _sut.SetFeatureNote(epic.Id, "было", null, true, "prod", "running");
+
+        var res = _sut.SetFeatureNote(epic.Id, text, null, true, "prod", "running");
+
+        res!.Note.Should().BeNull();
+    }
+
+    [Fact]
+    public void SetFeatureNote_Эпик_ШтампуетАвторАтЭтапИСостояние()
+    {
+        var epic = CreateEpic("u");
+        var before = DateTime.UtcNow;
+
+        var note = _sut.SetFeatureNote(epic.Id, "  идёт ревью  ", "sess-1", false, "review", "running")!.Note!;
+
+        note.Text.Should().Be("идёт ревью");
+        note.At.Should().BeOnOrAfter(before);
+        note.BySessionId.Should().Be("sess-1");
+        note.ByUser.Should().BeFalse();
+        note.StageAtWrite.Should().Be("review");
+        note.StateAtWrite.Should().Be("running");
+    }
+
+    [Fact]
+    public void SetFeatureNote_НеЭпикИНетТакого_Null()
+    {
+        var step = _sut.Create(null, "u", new CreateTaskRequest("шаг"));
+
+        _sut.SetFeatureNote(step.Id, "текст", null, true, "", "").Should().BeNull();
+        _sut.SetFeatureNote("нет-такого", "текст", null, true, "", "").Should().BeNull();
+        step.Note.Should().BeNull();
+    }
+
     [Fact]
     public void FeatureHoldRefusal_ManualHold_РабочаяЗадачаФичиОтказана()
     {

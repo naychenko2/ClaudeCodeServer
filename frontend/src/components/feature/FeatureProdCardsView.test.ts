@@ -1,13 +1,23 @@
-// Верстка ленты «Производство» (W4-2F2, вариант 2А2): карточка на шаг в порядке
+// Верстка ленты «Производство» (W4-2F2, вариант 2А2 + GC-F8): карточка на шаг в порядке
 // старта, цепочка узлов «работа → вернул → доработка → принят» с переходами в чаты
 // витков, счётчик циклов (2+ — тон предупреждения), обведённый акцентом текущий узел,
 // причина возврата строкой под цепочкой. Строки «старт · чат · задача» нет.
+//
+// GC-F8 (план «Гант на „Хронологии“»): в раскрытой карточке — блоки деталей
+// FeatureStepDetails («Приёмка» — критерии последней задачи цепочки и вердикт последнего
+// витка, «Итог», «Время шага на оси фичи»); planned-карточка — пунктирная кромка и текст
+// «в плане, не заведён» (по признаку planned, не по state 'queue' — N4); свёртка ленты
+// (foldProd) с кнопкой «Показать все N шагов (скрыто готовых: K)»; канал подсветки —
+// onShowIntervals с taskIds шага; хвост после мержа — метка «· хвост после мержа»
+// (run.postMergeTails); одна раскрытая карточка за раз.
 //
 // Тесты: обычный цикл; возврат + доработка (клик по узлу → чат витка); активная
 // задача («сейчас» только над текущей карточкой, «текущий» узел — акцентная рамка,
 // пунктирный «ревью» — не узел-действие); пустая фича (карточек нет); шаг без данных
 // (код — не кнопка); статус — слово из chain.status бэка; 2+ циклов — тон предупреждения;
-// поле касания 40 px на 360.
+// поле касания 40 px на 360; свёртка 48→11+кнопка→48; planned — кромка/плашка/имя;
+// details (приёмка последней задачи, вердикт, итог); подсветка — вызов с taskIds;
+// хвост — метка; ходы — только своей цепочки, живой — по «сейчас» вызывающего.
 //
 // Мутации (проверялись прогоном, см. отчёт):
 //   (1) «текущий» узел без акцентной рамки (cur → обычный тон) → краснеет
@@ -19,7 +29,14 @@
 //   (4) 40 px вернуть некликабельной обёртке (кнопка без minHeight) → краснеет
 //       «зона касания 40 px — на самой кнопке»;
 //   (5) убрать onPointerCancel из обработчиков → краснеет
-//       «pointercancel снимает pressed».
+//       «pointercancel снимает pressed»;
+//   (6) GC-F8: плашка planned игнорирует признак planned (слово по state) → краснеет
+//       «planned — кромка, плашка и имя»;
+//   (7) onShowIntervals вызвать без taskIds шага → краснеет «вызывает с taskIds шага»;
+//   (8) не передать acceptance последней задачи в FeatureStepDetails → краснеет «Приёмка
+//       — критерии последней задачи»;
+//   (9) не пометить хвост (isTail игнорируется) → краснеет «· хвост после мержа»;
+//   (10) N кнопки взять из visible (не из свёртки) → краснеет «Показать все 48 шагов».
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -27,6 +44,9 @@ import { FeatureProdCardsView } from './FeatureProdCardsView';
 import { buildNavMarks } from '../../lib/featureNavMarks';
 import { C, SHADOW } from '../../lib/design';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
+import type { LaneAxis } from './FeatureLaneModel';
+import type { StageTurn } from '../../types/featureStats';
+import type { Task } from '../../types';
 import type { FeatureRun, FeatureTask, FeatureStepChain, FeatureRound, FeatureStage } from '../../types/featureRun';
 
 // === Мок персон: id → имя; аватар — инициалы ===
@@ -37,12 +57,21 @@ vi.mock('../../lib/personas', () => ({
   usePersonasVersion: () => 0,
   personaInitials: (name: string) => (name ? name.trim().charAt(0).toUpperCase() : ''),
 }));
-vi.mock('../../lib/api', () => ({ api: { personas: { avatarUrl: () => '' } } }));
+// api: tasks.get — spy (ленивый «Итог» в FeatureStepDetails, паттерн FeatureStepDetails.test);
+// lib/tasks — настоящий (стор для useTasks/useEnsureFullTask), openTaskInSection — spy журнала.
+const { tasksGetMock } = vi.hoisted(() => ({ tasksGetMock: vi.fn() }));
+vi.mock('../../lib/api', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../lib/api')>();
+  return { ...orig, api: { ...orig.api, personas: { ...orig.api.personas, avatarUrl: () => '' }, tasks: { ...orig.api.tasks, get: tasksGetMock } } };
+});
 vi.mock('../../lib/toast', () => ({ showToast: (..._a: unknown[]) => {} }));
 const mockOpenChat = vi.hoisted(() => ({ calls: [] as string[] }));
 vi.mock('../../lib/openChat', () => ({ openChatById: async (id: string) => { mockOpenChat.calls.push(id); return true; } }));
 const mockOpenTask = vi.hoisted(() => ({ calls: [] as { id: string; projectId?: string }[] }));
-vi.mock('../../lib/tasks', () => ({ openTaskInSection: (t: { id: string; projectId?: string }) => { mockOpenTask.calls.push(t); } }));
+vi.mock('../../lib/tasks', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../lib/tasks')>();
+  return { ...orig, openTaskInSection: (t: { id: string; projectId?: string }) => { mockOpenTask.calls.push(t); } };
+});
 
 // === Фикстуры (те же, что в тесте модели) ===
 
@@ -108,12 +137,41 @@ function expand(container: unknown, stepRef: string) {
   act(() => { (reactProps(card)!.onClick as () => void)(); });
 }
 
+// Полный задачи для дефолтного мока api.tasks.get: БЕЗ итога — блок «Итог» не рисуется,
+// существующие тесты не видят нового блока. В тесте «Итог» — явный mockResolvedValue с текстом.
+function fullTaskStub(id: string, over: Partial<Task> = {}): Task {
+  return {
+    id, title: 'Задача', description: '', status: 'done', priority: 'medium',
+    linkedFiles: [], subtasks: [], labels: [], order: 1,
+    createdAt: '2026-10-20T00:00:00Z', updatedAt: '2026-10-20T00:00:00Z', ...over,
+  } as Task;
+}
+
+// Ход для turnsByTask (форма StageTurn: outcome/model в полосу не идут).
+function turn(taskId: string, from: string, to: string): StageTurn {
+  return { taskId, from, to, outcome: null, model: null };
+}
+
+// Ось и «сейчас» — те же, что в FeatureStepDetails.test / FeatureLaneModel.test.
+const AXIS_LIVE: LaneAxis = { from: '2026-10-20T00:00:00Z', to: '2026-10-20T12:00:00Z', timeFrac: 0.86 };
+const NOW_MS = Date.parse('2026-10-20T12:00:00Z');
+const flush = () => new Promise<void>(r => setTimeout(r, 0));
+
+// Стор задач — модульный синглтон, живёт между тестами файла: id новых тестов уникальны,
+// иначе полная задача из прошлого теста досталась бы следующему.
+let seq = 0;
+const nextId = () => `f8-task-${(seq += 1)}`;
+
 beforeEach(() => {
   installFakeDom();
   personaMap.set('p-kira', 'Кира');
   personaMap.set('p-gleb', 'Глеб');
   mockOpenChat.calls.length = 0;
   mockOpenTask.calls.length = 0;
+  // «Итог» в FeatureStepDetails догружается лениво через api.tasks.get: дефолт — полная
+  // задача без текста (блока нет); где нужен текст — явный mockResolvedValue в тесте.
+  tasksGetMock.mockReset();
+  tasksGetMock.mockImplementation((id: string) => Promise.resolve(fullTaskStub(id)));
 });
 afterEach(() => { uninstallFakeDom(); });
 
@@ -429,19 +487,21 @@ describe('360', () => {
 // === Макет A2: состояние видно сразу ===
 
 describe('состояние шага (A2)', () => {
+  // Четыре состояния: done/run/wait — заведённые цепочки; queue — шаг плана без задачи
+  // (единственный источник «queue» после H1/GC-R-F3: заведённая цепочка без старта — «ждёт»,
+  // не «в очереди»).
   const five = () => run({
     steps: [
       task({ id: 's1', status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' }),
       task({ id: 's2', status: 'inProgress', stepRef: 'Ш2', claudeStartedAt: new Date(Date.now() - 40 * 60000).toISOString() }),
       task({ id: 's3', status: 'done', stepRef: 'Ш3', claudeStartedAt: '2026-10-22T10:00:00Z' }),
-      task({ id: 's4', status: 'todo', stepRef: 'Ш4' }),
     ],
+    plan: [task({ id: 'p1', role: 'plan', planSteps: [{ stepRef: 'Ш4', title: 'Г' }] })],
     stepProgress: { planState: 'cut', total: 4, accepted: 1, review: 1, work: 1, notCreated: 1, withdrawn: 0, unlinkedReworks: 0 },
     stepChains: [
       chain({ stepRef: 'Ш1', title: 'А', taskIds: ['s1'], status: 'принят', outcome: 'accepted' }),
       chain({ stepRef: 'Ш2', title: 'Б', taskIds: ['s2'], status: 'идёт', outcome: 'running' }),
       chain({ stepRef: 'Ш3', title: 'В', taskIds: ['s3'], status: 'ждёт ревью', outcome: 'pending' }),
-      chain({ stepRef: 'Ш4', title: 'Г', taskIds: ['s4'], status: '', outcome: 'pending' }),
     ],
   });
 
@@ -466,14 +526,16 @@ describe('состояние шага (A2)', () => {
     expect(['Ш1', 'Ш2', 'Ш3', 'Ш4'].map(r => icon(r).getAttribute('data-state'))).toEqual(['done', 'run', 'wait', 'queue']);
     expect(icon('Ш1').getAttribute('aria-label')).toBe('Готово');
     expect(icon('Ш3').getAttribute('aria-label')).toBe('Ждёт');
-    expect(icon('Ш4').getAttribute('aria-label')).toBe('В очереди');
+    // N4 (GC-R-F3): шаг плана без задачи (planned) называет себя «в плане, не заведён»,
+    // а не «в очереди» — иначе незаведённый шаг плана и обычный шаг в очереди неразличимы.
+    expect(icon('Ш4').getAttribute('aria-label')).toBe('В плане, не заведён');
     // Идёт — дышащая точка (LiveDot с подписью состояния).
     expect(findNodeByAttr(icon('Ш2'), 'aria-label', 'Идёт')).not.toBeNull();
     // Плашка: слово + чем занят + сколько (времени приёма/ожидания в агрегате нет — только слово).
     expect(textNodes(badge('Ш1')).join('')).toBe('принят');
     expect(textNodes(badge('Ш2')).join('')).toBe('идёт · работа · 40 мин');
     expect(textNodes(badge('Ш3')).join('')).toBe('ждёт ревью');
-    expect(textNodes(badge('Ш4')).join('')).toBe('в очереди');
+    expect(textNodes(badge('Ш4')).join('')).toBe('в плане, не заведён');
     // Тон: готово/очередь без фона, очередь — пунктирная рамка, идёт — accent, ждёт — info.
     expect(card('Ш1').background).toBe('transparent');
     expect(card('Ш4').background).toBe('transparent');
@@ -514,7 +576,9 @@ describe('состояние шага (A2)', () => {
   it('сводка этапа — числа из stepProgress и полоса сегментов', () => {
     const { container } = mount(createElement(FeatureProdCardsView, { run: five(), featureId: 'F' }));
     const sum = findNodeByAttr(container, 'data-testid', 'prod-summary')!;
-    expect(textNodes(sum).join('')).toBe('1 готово · 1 идёт · 1 ждёт · 1 в очереди');
+    // Слово корзины queue — «в плане»: после H1/GC-R-F3 'queue' бывает только у planned-карточек,
+    // и сводка обязана говорить то же, что карточка.
+    expect(textNodes(sum).join('')).toBe('1 готово · 1 идёт · 1 ждёт · 1 в плане');
     expect(findAll(sum, 'data-testid', 'prod-summary-seg').length).toBe(4);
     // Без stepProgress сводки нет.
     const { container: c2 } = mount(createElement(FeatureProdCardsView, { run: { ...five(), stepProgress: undefined }, featureId: 'F' }));
@@ -543,5 +607,214 @@ describe('состояние шага (A2)', () => {
     expect(stop).toHaveBeenCalled();
     act(() => { (reactProps(card())!.onClick as () => void)(); });
     expect(card().getAttribute('aria-expanded')).toBe('false');
+  });
+});
+
+// === Свёртка ленты (c1) ===
+
+describe('свёртка ленты', () => {
+  // n принятых шагов (карточки state 'done'): без задач — старт неизвестен, порядок входа.
+  const manyRun = (n: number) => run({
+    stepChains: Array.from({ length: n }, (_, i) =>
+      chain({ stepRef: `Ш${i + 1}`, title: `Шаг ${i + 1}`, taskIds: [`m${i + 1}`], status: 'принят', outcome: 'accepted' })),
+  });
+
+  it('48 готовых: в ленте последние 3 и «Показать все 48 шагов (скрыто готовых: 45)»; клик — все 48, кнопки нет', () => {
+    const { container } = mount(createElement(FeatureProdCardsView, { run: manyRun(48), featureId: 'F' }));
+    expect(findNodeByAttr(container, 'data-testid', 'prod-lane')!.children.length).toBe(3);
+    const btn = findNodeByAttr(container, 'data-testid', 'prod-showall')!;
+    expect(btn.nodeName).toBe('BUTTON');
+    // N = visible + hiddenDone (из свёртки, GC-F4R2): равен тому, что откроется.
+    expect(textNodes(btn).join('')).toBe('Показать все 48 шагов (скрыто готовых: 45)');
+    act(() => { (reactProps(btn)!.onClick as () => void)(); });
+    // Выбор живёт, пока лента смонтирована: все 48 карточек, кнопка убрана.
+    expect(findNodeByAttr(container, 'data-testid', 'prod-lane')!.children.length).toBe(48);
+    expect(findNodeByAttr(container, 'data-testid', 'prod-showall')).toBeNull();
+  });
+
+  it('нет скрытых готовых (3 или меньше) — кнопки нет', () => {
+    const { container } = mount(createElement(FeatureProdCardsView, { run: manyRun(3), featureId: 'F' }));
+    expect(findNodeByAttr(container, 'data-testid', 'prod-lane')!.children.length).toBe(3);
+    expect(findNodeByAttr(container, 'data-testid', 'prod-showall')).toBeNull();
+  });
+
+  // Раскрытие поднято на уровень ленты: свёртка обязана знать раскрытую карточку —
+  // иначе старая готовая раскрытая пряталась бы (foldProd, expandedKey). Одна — за раз.
+  it('одна раскрытая карточка за раз: раскрытие второй сворачивает первую', () => {
+    const { container } = mount(createElement(FeatureProdCardsView, { run: manyRun(2), featureId: 'F' }));
+    const card = (ref: string) => findNodeByAttr(container, 'data-testid', `prod-card-${ref}`)!;
+    expand(container, 'Ш1');
+    expect(card('Ш1').getAttribute('aria-expanded')).toBe('true');
+    expand(container, 'Ш2');
+    expect(card('Ш1').getAttribute('aria-expanded')).toBe('false');
+    expect(card('Ш2').getAttribute('aria-expanded')).toBe('true');
+  });
+});
+
+// === Шаг плана без задачи (c2, N4) ===
+
+describe('planned: шаг плана без задачи', () => {
+  const plannedRun = () => run({
+    plan: [task({ id: 'p1', role: 'plan', planSteps: [{ stepRef: 'Ш9', title: 'Шаг из плана' }] })],
+  });
+
+  // Мутация (6): плашка игнорирует planned (слово по state) → краснеет здесь ('в очереди').
+  it('пунктирная кромка, плашка и имя — «в плане, не заведён»; блока деталей нет', () => {
+    const { container } = mount(createElement(FeatureProdCardsView, { run: plannedRun(), featureId: 'F' }));
+    const card = findNodeByAttr(container, 'data-testid', 'prod-card-Ш9')!;
+    expect(styleOf(card).border).toBe(`1px dashed ${C.dashed}`);
+    expect(textNodes(findNodeByAttr(card, 'data-testid', 'prod-status')!).join('')).toBe('в плане, не заведён');
+    expect(card.getAttribute('aria-label')).toBe('Шаг Ш9, в плане, не заведён: Шаг из плана');
+    // У шага плана задачи нет: приёмку и итог показывать не с чего — блока деталей нет.
+    expect(findNodeByAttr(card, 'data-testid', 'step-details')).toBeNull();
+  });
+});
+
+// === Детали раскрытой карточки (c3) ===
+
+describe('детали раскрытой карточки', () => {
+  // Цепочка из двух задач: приёмка и итог — ПОСЛЕДНЕЙ (макет feature-gantt-7 §«Карточка
+  // шага»); acceptance/evidence — только у неё. Виток — принят с замечаниями (Н5: узла
+  // «принят» в цепочке нет, но вердикт последней задачи человек должен видеть).
+  const detailsRun = () => run({
+    steps: [
+      task({ id: 'd1', status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' }),
+      task({
+        id: 'd2', status: 'done', role: 'rework', stepRef: 'Ш1', claudeStartedAt: '2026-10-21T10:00:00Z',
+        acceptance: [{ id: 'c1', text: 'кнопка считает 48 шагов' }, { id: 'c2', text: 'пунктир у planned' }],
+        evidence: [{ criterionId: 'c1', how: 'прогон vitest', result: 'зелёный' }],
+      }),
+    ],
+    stepChains: [chain({
+      stepRef: 'Ш1', title: 'Сделать X', personaId: 'p-kira', taskIds: ['d1', 'd2'], status: 'принят', outcome: 'accepted',
+      rounds: [round({ n: 1, verdict: 'accepted_with_remarks', personaId: 'p-gleb', reviewTaskId: 'rv-1234567890', reviewChatId: 'chat-gleb', completedAt: '2026-10-23T12:00:00Z' })],
+    })],
+  });
+
+  it('«Приёмка» — критерии последней задачи цепочки, ✓/○ по свидетельствам; вердикт последнего витка — строкой', () => {
+    const { container } = mount(createElement(FeatureProdCardsView, { run: detailsRun(), featureId: 'F' }));
+    expand(container, 'Ш1');
+    const acc = findNodeByAttr(container, 'data-testid', 'step-acceptance');
+    expect(acc).not.toBeNull();
+    // Подпись — id последней задачи (d2), не первой (d1): «последняя задача» — не первое вхождение.
+    expect(textNodes(acc!).join('')).toContain('Приёмка · d2');
+    expect(textNodes(acc!).join('')).toContain('кнопка считает 48 шагов');
+    expect(textNodes(findNodeByAttr(acc!, 'data-testid', 'step-crit-c1')!).join('')).toContain('подтверждён');
+    expect(textNodes(findNodeByAttr(acc!, 'data-testid', 'step-crit-c2')!).join('')).toContain('не подтверждён');
+    // Строка вердикта — из последнего закрытого витка: исход, имя ревьюера, дата.
+    const verdict = findNodeByAttr(container, 'data-testid', 'step-verdict')!;
+    expect(textNodes(verdict).join('')).toBe('Ревью rv-12345: принят с замечаниями · Глеб · 23.10');
+  });
+
+  // Мутация (7): onShowIntervals() без taskIds шага → краснеет здесь.
+  it('«Показать интервалы на дорожке ↑» вызывает подсветку вызывающего с taskIds шага', () => {
+    const onShow = vi.fn();
+    const { container } = mount(createElement(FeatureProdCardsView, { run: detailsRun(), featureId: 'F', onShowIntervals: onShow }));
+    expand(container, 'Ш1');
+    const btn = findNodeByAttr(container, 'data-testid', 'step-show-intervals');
+    expect(btn).not.toBeNull();
+    act(() => { (reactProps(btn!)!.onClick as () => void)(); });
+    expect(onShow).toHaveBeenCalledTimes(1);
+    expect(onShow.mock.calls[0][0]).toEqual(['d1', 'd2']);
+  });
+
+  it('без колбэка вызывающего — кнопки «Показать интервалы» нет', () => {
+    const { container } = mount(createElement(FeatureProdCardsView, { run: detailsRun(), featureId: 'F' }));
+    expand(container, 'Ш1');
+    expect(findNodeByAttr(container, 'data-testid', 'step-details')).not.toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'step-show-intervals')).toBeNull();
+  });
+
+  it('«Итог» — первая строка resultMarkdown последней задачи (лень: после раскрытия)', async () => {
+    const id = nextId(); // стор живёт между тестами — id уникален на тест
+    const r = run({
+      steps: [task({ id, status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' })],
+      stepChains: [chain({ stepRef: 'Ш1', title: 'Сделать X', taskIds: [id], status: 'принят', outcome: 'accepted' })],
+    });
+    tasksGetMock.mockResolvedValue(fullTaskStub(id, { resultMarkdown: 'сделала блок деталей\nвторая строка' }));
+    const { container } = mount(createElement(FeatureProdCardsView, { run: r, featureId: 'F' }));
+    // До раскрытия — ни одного GET: лень живая (закрытая карточка не запрашивает).
+    expect(tasksGetMock).not.toHaveBeenCalled();
+    expand(container, 'Ш1');
+    await act(async () => { await flush(); });
+    expect(textNodes(findNodeByAttr(container, 'data-testid', 'step-result-text')!).join('')).toBe('сделала блок деталей');
+  });
+
+  it('нет acceptance у последней задачи — блока «Приёмка» нет (ничего не выдумывается)', () => {
+    const r = run({
+      steps: [task({ id: 'd3', status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' })],
+      stepChains: [chain({ stepRef: 'Ш1', title: 'Сделать X', taskIds: ['d3'], status: 'принят', outcome: 'accepted' })],
+    });
+    const { container } = mount(createElement(FeatureProdCardsView, { run: r, featureId: 'F' }));
+    expand(container, 'Ш1');
+    expect(findNodeByAttr(container, 'data-testid', 'step-details')).not.toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'step-acceptance')).toBeNull();
+  });
+});
+
+// === Хвост после мержа (c5) ===
+
+describe('хвост после мержа', () => {
+  // Тот же источник, что у строк этапа: run.postMergeTails — своей арифметики здесь нет.
+  const tailRun = (tails: string[]) => run({
+    steps: [task({ id: 't1', status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' })],
+    postMergeTails: tails,
+    stepChains: [chain({ stepRef: 'Ш1', title: 'Хвост', taskIds: ['t1'], status: 'ждёт ревью', outcome: 'pending' })],
+  });
+
+  it('задача цепочки в postMergeTails — плашка и блок времени помечены «· хвост после мержа»', () => {
+    const { container } = mount(createElement(FeatureProdCardsView, { run: tailRun(['t1']), featureId: 'F', axis: AXIS_LIVE }));
+    expand(container, 'Ш1');
+    const badge = textNodes(findNodeByAttr(findNodeByAttr(container, 'data-testid', 'prod-card-Ш1')!, 'data-testid', 'prod-status')!).join('');
+    expect(badge).toBe('ждёт ревью · хвост после мержа');
+    // Блок времени — тот же маркер: это не обычная работа стадии.
+    expect(textNodes(findNodeByAttr(container, 'data-testid', 'step-time')!).join('')).toContain('Время шага на оси фичи · хвост после мержа');
+  });
+
+  it('нет хвоста в postMergeTails — маркера нет', () => {
+    const { container } = mount(createElement(FeatureProdCardsView, { run: tailRun([]), featureId: 'F' }));
+    expand(container, 'Ш1');
+    const badge = textNodes(findNodeByAttr(findNodeByAttr(container, 'data-testid', 'prod-card-Ш1')!, 'data-testid', 'prod-status')!).join('');
+    expect(badge).not.toContain('хвост');
+  });
+});
+
+// === Полоса «Время шага на оси фичи» ===
+
+describe('полоса времени шага', () => {
+  // Ходы — только своей цепочки; вид — по роли задачи (тот же источник, что у атрибуции
+  // хода стадии бэком); живой — чей конец не раньше «сейчас» вызывающего (тот же приём,
+  // что у ExecutorRow, GC-F10b).
+  const stripRun = () => run({
+    steps: [
+      task({ id: 'w1', status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T08:00:00Z' }),
+      task({ id: 'rv1', status: 'done', role: 'review', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T09:00:00Z' }),
+      task({ id: 'w2', status: 'inProgress', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T11:30:00Z' }),
+      task({ id: 'other', status: 'done', stepRef: 'Ш2', claudeStartedAt: '2026-10-20T07:00:00Z' }),
+    ],
+    stepChains: [chain({ stepRef: 'Ш1', title: 'Шаг', taskIds: ['w1', 'rv1', 'w2'], status: 'идёт', outcome: 'running' })],
+  });
+  const stripTurns = () => new Map<string, StageTurn[]>([
+    ['w1', [turn('w1', '2026-10-20T08:00:00Z', '2026-10-20T08:30:00Z')]],
+    ['rv1', [turn('rv1', '2026-10-20T09:00:00Z', '2026-10-20T09:30:00Z')]],
+    ['w2', [turn('w2', '2026-10-20T11:30:00Z', '2026-10-20T12:30:00Z')]],
+    ['other', [turn('other', '2026-10-20T07:00:00Z', '2026-10-20T07:30:00Z')]],
+  ]);
+
+  it('на полосе — только ходы цепочки, в хронологическом порядке; role review → «review», конец ≥ «сейчас» → «live»', () => {
+    const { container } = mount(createElement(FeatureProdCardsView, {
+      run: stripRun(), featureId: 'F', axis: AXIS_LIVE, turnsByTask: stripTurns(), now: NOW_MS,
+    }));
+    expand(container, 'Ш1');
+    const strip = findNodeByAttr(container, 'data-testid', 'step-strip')!;
+    const kinds = findAll(strip, 'data-testid', 'step-turn').map(n => (n as { getAttribute: (a: string) => string | null }).getAttribute('data-kind'));
+    // 'other' (не из цепочки) — не на полосе; w2 (конец 12:30 ≥ NOW_MS 12:00) — живой.
+    expect(kinds).toEqual(['work', 'review', 'live']);
+  });
+
+  it('без оси — блока «Время шага» нет: ставить его на несуществующую шкалу — ложь', () => {
+    const { container } = mount(createElement(FeatureProdCardsView, { run: stripRun(), featureId: 'F', turnsByTask: stripTurns(), now: NOW_MS }));
+    expand(container, 'Ш1');
+    expect(findNodeByAttr(container, 'data-testid', 'step-time')).toBeNull();
   });
 });

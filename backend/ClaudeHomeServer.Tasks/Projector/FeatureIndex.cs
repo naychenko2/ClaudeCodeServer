@@ -84,6 +84,7 @@ public sealed record FeatureIndexRow(
     // необязательна: без задач — skipped, W4-DES-B).
     List<FeatureIndexRailSegment> Rail,
     // Чипы-фильтры: open | waiting | stopped | merge | merged | closed (у открытой смерженной — open + merged).
+    // Фронт фильтром по состоянию их не читает: отбор идёт по Kind (Б-1.2); уборка чипов — отдельная (разрез п.2).
     List<string> Chips,
     // Счётчики шагов: принятые ревью / знаменатель (честный прогресс, см. FeatureStepProgress).
     int StepsAccepted,
@@ -137,6 +138,13 @@ public sealed record FeatureIndexRow(
     // W4-ANB (разрез §4): «тихо» — фича стоит без движения ≥ 24 часов (решение Андрея, 24.10).
     // Берётся из FeatureRun.Quiet (единая точка правды), не пересчитывается здесь.
     bool Quiet,
+    // Очередь фич (волна 6): место в очереди проекта; null — фича не в очереди. Из FeatureRun.Queue.
+    FeatureQueueInfo? Queue = null,
+    // Категория состояния фичи (Б-1.2, «Фильтр фич по состоянию»): та же величина, что brief.kind, —
+    // FeatureBrief.KindOf (та же таблица KindByState и те же расщепления: paused→queued по причине
+    // удержания, merged→closed по закрытости эпика). Null — состояние вне таблицы KindByState:
+    // BuildRow guard'ит по ContainsKey — индекс не падает (в отличие от brief, который бросает).
+    string? Kind = null,
     // TR-B1c: число расхождений трекера (FeatureRun.Tracker.Count), проектор считает, индекс только несёт.
     int TrackerIssues = 0);
 

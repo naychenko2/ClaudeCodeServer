@@ -56,6 +56,7 @@ public class ArchitectureAgentBuildTests : IDisposable
             return Task.CompletedTask;
         }
         public Task CheckStalledExecutorAsync(TaskItem task, DateTime nowUtc) => Task.CompletedTask;
+        public Task ReconcileFeatureQueuesAsync(string ownerId) => Task.CompletedTask;
     }
 
     private static readonly ArchitectureAgentBrief Brief =

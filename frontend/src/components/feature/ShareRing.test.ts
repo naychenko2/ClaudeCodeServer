@@ -63,7 +63,10 @@ function mountRing(
   groups: FeatureBreakdownGroup[],
   measure: 'time' | 'tokens' | 'cost',
   size?: number,
-  extra?: { labelOf?: (k: string) => string; colorOf?: (k: string) => string; axisLabel?: string; costPartial?: boolean },
+  extra?: {
+    labelOf?: (k: string) => string; colorOf?: (k: string) => string; axisLabel?: string;
+    costPartial?: boolean; axis?: 'personas' | 'models' | 'roles';
+  },
 ) {
   return mount(createElement(ShareRing, { groups, measure, size, ...extra }));
 }
@@ -264,6 +267,42 @@ describe('цвета (к2)', () => {
     expect(a.length).toBe(8);
     expect(a[6].stroke).toBe(C.accent); // 7-я группа — снова accent (цикл)
     expect(a[7].stroke).toBe(C.info);
+  });
+});
+
+// Ценовой класс модели в кольце (S4): дуга красится по классу строки.
+describe('ценовой класс: дуги красятся по классу модели', () => {
+  const byTier = [
+    { ...mkGroup('m-free', 60, 1000, 0), tier: 'free' },
+    { ...mkGroup('m-cheap', 30, 500, 1), tier: 'cheap' },
+    { ...mkGroup('m-exp', 10, 100, 5), tier: 'expensive' },
+  ];
+
+  it('в разрезе моделей дуга берёт цвет класса: free → success, cheap → info, expensive → warning', () => {
+    const { container } = mountRing(byTier, 'time', undefined, { axis: 'models' });
+    expect(arcs(container).map(a => a.stroke)).toEqual([C.success, C.info, C.warning]);
+  });
+
+  it('бесплатная модель (цена 0) — дуга зелёная: её класс free', () => {
+    // Мера «деньги» сортирует дуги по цене: первая — самая дорогая, бесплатная — последняя.
+    const { container } = mountRing(byTier, 'cost', undefined, { axis: 'models' });
+    const a = arcs(container);
+    expect(a[0].stroke).toBe(C.warning);
+    expect(a[2].stroke).toBe(C.success);
+  });
+
+  it('в прочих разрезах цвет остаётся палитрой: класс модели не применяется', () => {
+    const { container } = mountRing(byTier, 'time');
+    expect(arcs(container).map(a => a.stroke)).toEqual([C.accent, C.info, C.plan]);
+  });
+
+  it('класс null — дуга нейтральная, рендер не падает', () => {
+    const groups = [
+      { ...mkGroup('a', 60, 1000, 1), tier: null },
+      { ...mkGroup('b', 30, 500, 1), tier: 'cheap' },
+    ];
+    const { container } = mountRing(groups, 'time', undefined, { axis: 'models' });
+    expect(arcs(container).map(a => a.stroke)).toEqual([C.textMuted, C.info]);
   });
 });
 

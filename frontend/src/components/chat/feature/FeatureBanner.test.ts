@@ -12,6 +12,18 @@
 //      не прямой проп): SSR (подпись/действие/тон по каждому состоянию) + mount
 //      (клик по точке → cc-open-feature, «впереди» не кликабельно).
 //
+// Очередь фич (R-Q5D-B, MAJOR-1 из RV-K-Q5D): рендер подписи — РАЗБИВКОЙ: leading-слово
+// в <b> цвета textHeading, суффикс — обычным начертанием и цветом ряда; активная точка
+// фичи в очереди приглушена (C.textMuted, как в плашке группы) и её aria — «· в очереди
+// N из M» (макет feature-queue-1.html:421-423).
+//
+// R-Q5D-C (главное замечание RV-K-Q5D-B): разбивка — ТОЛЬКО в не-тревожных состояниях.
+// В тревожных (stopped — C.dangerText, waiting/merge_pending — C.info) фраза «где мы»
+// рисуется целым элементом тоном тревоги (макет баннера feature-banner-1.html:526):
+// тревога должна читаться тревогой. Ассерт текста фразы — по ВИДИМОМУ содержимому
+// span'а «где мы» (whereInner), не по всему html: aria-label всегда несёт целую фразу,
+// и toContain по html проходит даже когда leading-слово из рендера выброшено (c3).
+//
 // Окружение node (без jsdom): SSR — renderToStaticMarkup; mount — fakeDom.
 // Стор индекса и флаги заполняются напрямую (setIndex / setAllFlags) — useEffect-фетч
 // в SSR не идёт, компонент читает уже заполненный стор.
@@ -26,7 +38,10 @@ import { setAllFlags } from '../../../lib/featureFlags';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, reactProps, textNodes } from '../__tests__/fakeDom';
 import { __test as runsTest } from '../../../lib/featureRuns';
 import type { FeatureAttention, FeatureChatLink, FeatureIndexFeature, FeaturesIndex } from '../../../types/featureIndex';
-import type { FeatureRun, FeatureState } from '../../../types/featureRun';
+import type { FeatureQueue, FeatureRun, FeatureState } from '../../../types/featureRun';
+import { queueLabelParts } from '../../../lib/chatGroups';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 // m7: управляемый индекс фич — mock `api.tasks.featuresIndex` возвращает этот объект,
 // чтобы live-перезапрос (useFeaturesIndex) не затирал синхронный сид стора.
@@ -209,10 +224,90 @@ describe('featureBannerRow: «где мы», действие, тон, роль'
   });
 });
 
+// === 1б: очередь фич (волна 6) — «В очереди · N из M» в подписи «где мы» ===
+// Макет feature-queue-1, таблица «Подпись»: рельса в чате — bold «В очереди»,
+// post « · 2 из 3» (тот же statusPhrase, что у пилюли). Источник — holdReason/queue
+// строки индекса (позицию считает бэк). Нет queue (бэк не отдал) — без цифр.
+
+describe('FeatureBanner: очередь фич (подпись «В очереди · N из M»)', () => {
+  beforeEach(() => {
+    __test.reset();
+    setAllFlags({ 'turn-plan-feature-mode': true, 'features-overview': true });
+  });
+  afterEach(() => {
+    __test.reset();
+    setAllFlags({});
+  });
+
+  const queued = (over: Partial<FeatureIndexFeature> = {}) =>
+    feat('paused', { holdReason: 'queue', queue: { position: 2, length: 3 }, ...over });
+
+  it('holdReason=queue: bold «В очереди», post « · 2 из 3» (разбивка модели)', () => {
+    const m = featureBannerRow(queued(), link(), 'chat-exec');
+    expect(m.whereBold).toBe('В очереди');
+    expect(m.wherePost).toBe(' · 2 из 3');
+    expect(m.where).toBe('В очереди · 2 из 3');
+  });
+
+  it('queue не пришёл (бэк ещё не отдал) → «В очереди» без цифр', () => {
+    const m = featureBannerRow(queued({ queue: null }), link(), 'chat-exec');
+    expect(m.whereBold).toBe('В очереди');
+    expect(m.wherePost).toBe('');
+    expect(m.where).toBe('В очереди');
+  });
+
+  it('holdReason=manual → прежняя подпись «На паузе», без «В очереди» (даже с queue в данных)', () => {
+    const m = featureBannerRow(feat('paused', { holdReason: 'manual', queue: { position: 2, length: 3 } }), link(), 'chat-exec');
+    expect(m.where).toBe('На паузе');
+    expect(m.where).not.toContain('В очереди');
+  });
+
+  it('рендер (SSR): «В очереди · 2 из 3» в плашке, тон не тревожный (run)', () => {
+    const f = queued();
+    seedIndex(f, link(), 'chat-exec', 'p1');
+    const html = renderBanner('chat-exec', 'p1');
+    expect(html).toContain('В очереди · 2 из 3');
+    // Тон тот же, что у обычной паузы (не wait/stop): тревоги очередь не поднимает.
+    expect(html).toContain('data-banner-tone="run"');
+  });
+
+  // MAJOR-1 из RV-K-Q5D: рендер — РАЗБИВКОЙ, а не одним span'ом (макет .ban .ph b):
+  // leading-слово в <b> цвета textHeading, суффикс — вне <b>, обычным начертанием.
+  // Очередь — состояние НЕ-тревожное (whereTone run): при R-Q5D-C разбивка остаётся
+  // (ассерты «целой фразы» — только у тревожных wait/stop, в describe «Рендер с данными списка»).
+  // Мутация (в отчёте): выбросить <b> из run-ветки рендера → тест красный
+  // (первый assert по <b>, второй — по суффиксу вне <b>).
+  it('рендер (SSR): «В очереди» в <b> цвета textHeading, post « · 2 из 3» — вне <b> (макет .ban .ph b)', () => {
+    seedIndex(queued(), link(), 'chat-exec', 'p1');
+    const html = renderBanner('chat-exec', 'p1');
+    const m = html.match(/<span data-testid="feature-where"[^>]*>([\s\S]*?)<\/span>/);
+    expect(m, 'нет «где мы»').not.toBeNull();
+    const inner = m![1];
+    // Leading-слово — в <b> с явным цветом textHeading (макет .ban .ph b).
+    expect(inner, 'leading-слово не в <b> цвета textHeading').toContain(`<b style="color:${C.textHeading}">В очереди</b>`);
+    // Суффикс — вне <b>, обычным начертанием (в <b> его нет).
+    expect(inner.slice(inner.indexOf('</b>') + 4), 'post вне <b>').toBe(' · 2 из 3');
+    expect(inner.slice(0, inner.indexOf('</b>')), 'post не должен быть внутри <b>').not.toContain('2 из 3');
+  });
+});
+
 // === 2: рендер панели с настоящими данными списка (SSR) ===
 
 function renderBanner(sessionId: string, projectId: string | null, isMobile = false): string {
   return renderToStaticMarkup(createElement(FeatureBanner, { sessionId, projectId, isMobile }));
+}
+
+// Тег-открывашка span'а «где мы» (со style) и его ВИДИМОЕ содержимое — фраза так, как
+// её видит человек (не aria-label: тот всегда несёт целую where, R-Q5D-C/c3).
+function whereOpenTag(html: string): string {
+  const m = html.match(/<span data-testid="feature-where"[^>]*>/);
+  expect(m, 'нет «где мы»').not.toBeNull();
+  return m![0];
+}
+function whereInner(html: string): string {
+  const m = html.match(/<span data-testid="feature-where"[^>]*>([\s\S]*?)<\/span>/);
+  expect(m, 'нет «где мы»').not.toBeNull();
+  return m![1];
 }
 
 describe('FeatureBanner: рендер с данными списка (SSR)', () => {
@@ -233,31 +328,51 @@ describe('FeatureBanner: рендер с данными списка (SSR)', () 
     expect(html).toContain('Производство');
     expect(html).toContain('Открыть страницу фичи');
     expect(html).toContain('Ш2 · бэк');
+    // Не-тревожное состояние — разбивка осталась (R-Q5D-C/c2): leading-слово в <b>
+    // цвета textHeading (мутация: выбросить <b> из рендера run-ветки → краснеет).
+    expect(whereInner(html), 'leading-слово не в <b> цвета textHeading').toContain(`<b style="color:${C.textHeading}">Производство</b>`);
   });
 
-  it('ждёт вас: тон wait (C.infoBg), «Производство · ждёт вас», «Ответить»', () => {
+  // R-Q5D-C (c1/c3): фраза — ЦЕЛАЯ, по видимому содержимому span'а (не по aria-label):
+  // без <b>, тон C.info на всей фразе. Мутация (в отчёте): выбросить leading-слово из
+  // рендера тревожной ветки (: model.wherePost) → краснеет первый ассерт по видимому тексту.
+  it('ждёт вас: тон wait (C.infoBg), «Производство · ждёт вас» целой фразой в тоне C.info (R-Q5D-C), «Ответить»', () => {
     seedIndex(feat('waiting', { attention: attention('wait') }), link(), 'chat-exec', 'p1');
     const html = renderBanner('chat-exec', 'p1');
     expect(html).toContain('data-banner-tone="wait"');
     expect(html).toContain('var(--c-info-bg)');
-    expect(html).toContain('Производство · ждёт вас');
+    expect(whereInner(html), '«ждёт вас» не целая видимая фраза (или с <b>)').toBe('Производство · ждёт вас');
+    expect(whereOpenTag(html), 'тон тревожной фразы не C.info').toContain(`color:${C.info}`);
     expect(html).toContain('Ответить');
   });
 
-  it('стоит: тон stop (C.dangerBg), «стоит» (без имени, если тревога без персоны), «Чат»', () => {
+  it('стоит: тон stop (C.dangerBg), «стоит» целой фразой в тоне C.dangerText (R-Q5D-C), «Чат»', () => {
     seedIndex(feat('stopped', { attention: attention('stopped') }), link(), 'chat-exec', 'p1');
     const html = renderBanner('chat-exec', 'p1');
     expect(html).toContain('data-banner-tone="stop"');
     expect(html).toContain('var(--c-danger-bg)');
-    expect(html).toContain('>стоит<');
+    expect(whereInner(html), '«стоит» не целая видимая фраза (или с <b>)').toBe('стоит');
+    expect(whereOpenTag(html), 'тон тревожной фразы не C.dangerText').toContain(`color:${C.dangerText}`);
     expect(html).toContain('Чат');
   });
 
-  it('к мержу: тон wait, «Мерж · ждёт согласия», действие «Открыть» (НЕ «Мерж…»)', () => {
+  // Р-Q5D-C: вся тревожная фраза, включая имя, — тоном тревоги (главное замечание
+  // RV-K-Q5D-B: «стоит · Денис» не должно дробиться на тёмное «стоит» и красный суффикс).
+  it('стоит с персоной: «стоит · Денис» целой фразой в тоне C.dangerText (R-Q5D-C)', () => {
+    mockPersonas.length = 0;
+    mockPersonas.push({ id: 'p-denis', name: 'Денис' });
+    seedIndex(feat('stopped', { attention: attention('stopped', { personaId: 'p-denis' }) }), link(), 'chat-exec', 'p1');
+    const html = renderBanner('chat-exec', 'p1');
+    expect(whereInner(html), '«стоит · Денис» не целая видимая фраза (или с <b>)').toBe('стоит · Денис');
+    expect(whereOpenTag(html), 'тон тревожной фразы не C.dangerText').toContain(`color:${C.dangerText}`);
+  });
+
+  it('к мержу: тон wait, «Мерж · ждёт согласия» целой фразой в тоне C.info (R-Q5D-C), действие «Открыть» (НЕ «Мерж…»)', () => {
     seedIndex(feat('merge_pending', { attention: attention('merge') }), link(), 'chat-exec', 'p1');
     const html = renderBanner('chat-exec', 'p1');
     expect(html).toContain('data-banner-tone="wait"');
-    expect(html).toContain('Мерж · ждёт согласия');
+    expect(whereInner(html), '«Мерж · ждёт согласия» не целая видимая фраза (или с <b>)').toBe('Мерж · ждёт согласия');
+    expect(whereOpenTag(html), 'тон тревожной фразы не C.info').toContain(`color:${C.info}`);
     expect(html).toContain('Открыть');
     // «Мерж…» — только в попапе и на странице, НЕ на панели (задача, п.2).
     expect(html).not.toContain('Мерж…');
@@ -327,6 +442,30 @@ describe('FeatureBanner: рендер с данными списка (SSR)', () 
     expect(html.slice(Math.max(0, i - 20), i), 'skipped design должен быть <i>').toContain('<i');
     // Заливка — C.bgInset (var(--c-bg-inset)), не дорожка pending.
     expect(html.slice(i, i + 200), 'skipped-точка залита C.bgInset').toContain(`background:${C.bgInset}`);
+  });
+
+  // R-Q5D-B (макет feature-queue-1.html:421-422, спека feature-queue-1.md:26): у фичи в
+  // очереди активная точка приглушена (C.textMuted вместо цвета тона — одно состояние
+  // выглядит одинаково в плашке группы и в рельсе чата), её aria — «Этап: {этап} · в
+  // очереди N из M». Ручная пауза (holdReason=manual) — без приглушения и без суффикса.
+  // Мутация (в отчёте): stageDotColor без ветки inQueue (тон точки) → краснеет первый
+  // блок; убрать суффикс aria → краснеет assert с aria.
+  it('очередь: активная точка приглушена (C.textMuted) с aria «· в очереди 2 из 3»; ручная пауза — цвет тона, aria без суффикса', () => {
+    // Пауза с активной стадией tone wait (как у стоящей фичи): без очереди точка была бы C.info.
+    const railWait = rail().map(s => (s.state === 'active' ? { ...s, tone: 'wait' as const } : s));
+    seedIndex(feat('paused', { holdReason: 'queue', queue: { position: 2, length: 3 }, rail: railWait }), link(), 'chat-exec', 'p1');
+    const html = renderBanner('chat-exec', 'p1');
+    const m = html.match(/<button[^>]*data-testid="feature-dot-prod"[^>]*>/);
+    expect(m, 'нет активной точки prod').not.toBeNull();
+    expect(m![0], 'aria активной точки без позиции очереди').toContain('aria-label="Этап: Производство · в очереди 2 из 3"');
+    expect(m![0], 'активная точка очереди не приглушена (C.textMuted)').toContain(`background:${C.textMuted}`);
+    // Ручная пауза — то же состояние рельсы, что прежде: цвет тона (wait → C.info), aria без суффикса.
+    seedIndex(feat('paused', { holdReason: 'manual', rail: railWait }), link(), 'chat-exec', 'p1');
+    const htmlManual = renderBanner('chat-exec', 'p1');
+    const mManual = htmlManual.match(/<button[^>]*data-testid="feature-dot-prod"[^>]*>/);
+    expect(mManual, 'нет активной точки prod (manual)').not.toBeNull();
+    expect(mManual![0], 'manual-пауза не должна быть приглушена').toContain(`background:${C.info}`);
+    expect(mManual![0], 'aria manual-паузы не должна нести очередь').toContain('aria-label="Этап: Производство"');
   });
 
   it('«· ещё N»: чат с двумя фичами → «· ещё 1» (порядок — от бэка)', () => {
@@ -795,5 +934,55 @@ describe('FeatureBanner: клик по точке → переход (mount)', (
     // aria-label панели = заголовок ВЫБРАННОЙ фичи: f2, не f1.
     expect(panel!.getAttribute('aria-label'), 'выбрана f1 (порядок runs), а не f2 (порядок индекса)').toBe('Вторая фича');
     root.unmount();
+  });
+});
+
+// === R-Q5D-E: плашка берёт подпись из структурного API хелпера ===
+// Потребитель не разбирает строку подписи и не держит своей копии формата «N из M»:
+// жирное слово, суффикс и aria-суффикс приходят готовыми полями queueLabelParts
+// (единственный источник — chatGroups). Мутация (в отчёте): вернуть разбор строки по
+// разделителю и зашитое слово «В очереди» → сторож краснеет.
+
+describe('FeatureBanner: R-Q5D-E — подпись из queueLabelParts', () => {
+  beforeEach(() => {
+    __test.reset();
+    setAllFlags({ 'turn-plan-feature-mode': true, 'features-overview': true });
+  });
+  afterEach(() => {
+    __test.reset();
+    setAllFlags({});
+  });
+
+  const queued = (queue: FeatureQueue | null) =>
+    feat('paused', { holdReason: 'queue', queue });
+
+  it('жирное слово и суффикс модели = queueLabelParts(queue).bold/.post', () => {
+    const q: FeatureQueue = { position: 2, length: 3 };
+    const parts = queueLabelParts(q);
+    const m = featureBannerRow(queued(q), link(), 'chat-exec');
+    expect(m.whereBold).toBe(parts.bold);
+    expect(m.wherePost).toBe(parts.post);
+    expect(m.where).toBe(`${parts.bold}${parts.post}`);
+  });
+
+  it('aria активной точки заканчивается на queueLabelParts(queue).ariaSuffix', () => {
+    const q: FeatureQueue = { position: 2, length: 3 };
+    seedIndex(queued(q), link(), 'chat-exec', 'p1');
+    const html = renderBanner('chat-exec', 'p1');
+    const m = html.match(/<button[^>]*data-testid="feature-dot-prod"[^>]*>/);
+    expect(m, 'нет кнопки активной точки').not.toBeNull();
+    expect(m![0]).toContain(`aria-label="Этап: Производство${queueLabelParts(q).ariaSuffix}"`);
+    // c3: цифры позиции закреплены ЯВНО (не только сравнением с хелпером): молча
+    // исчезнуть из aria они не могут.
+    expect(m![0]).toContain('в очереди 2 из 3');
+  });
+
+  it('в исходнике плашки нет разбора строки подписи и своей копии слова «В очереди»', () => {
+    const src = readFileSync(fileURLToPath(new URL('./FeatureBanner.tsx', import.meta.url)), 'utf8');
+    expect(src, 'плашка разбирает строку подписи по разделителю').not.toContain("indexOf(' · ')");
+    expect(src, 'плашка берёт строку подписи вместо частей').not.toMatch(/\bqueueLabel\(/);
+    expect(src, 'плашка зашивает своё слово «В очереди»').not.toMatch(/bold:\s*'В очереди'/);
+    // c2: своей реализации aria-суффикса в потребителе нет — строка одна (в хелпере).
+    expect(src, 'у плашки своя функция aria-суффикса').not.toContain('queueAriaSuffix');
   });
 });

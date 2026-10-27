@@ -1,7 +1,8 @@
 import type { ProjectSubject, ProjectTag, Session } from '../types';
-import type { FeatureChip, FeatureIndexFeature, FeatureRailKey, FeaturesIndex } from '../types/featureIndex';
+import type { FeatureIndexFeature, FeatureRailKey, FeaturesIndex } from '../types/featureIndex';
+import type { FeatureQueue } from '../types/featureRun';
 import { sortTagsByRegistry } from './tagRegistry';
-import { sortKeyOf, type ChatGroupBy, type ChatSortOrder } from './chatFilters';
+import { sortKeyOf, ALL_FEATURE_KINDS, DEFAULT_FEATURE_KINDS, type ChatGroupBy, type ChatSortOrder, type FeatureKind } from './chatFilters';
 import { buildChatTreeRows, type ChatTreeRowData } from './chatTree';
 
 export interface ChatGroup {
@@ -319,7 +320,7 @@ export const STAGE_NAME: Record<FeatureRailKey, string> = {
 // Значения — подмножество глифа FeatureGlyph (wait/stopped/run/loop/closed/done):
 // поэтому st.kind передаётся в FeatureGlyph БЕЗ каста, и tsc ловит рассинхрон.
 // Смерженная фича → 'done' (галочка, макет glyph('done')), закрытая без мержа → 'closed'.
-export type FeatureDisplayKind = 'wait' | 'stopped' | 'run' | 'loop' | 'closed' | 'done';
+export type FeatureDisplayKind = 'wait' | 'stopped' | 'run' | 'loop' | 'closed' | 'done' | 'queue';
 
 export interface FeatureDisplayState {
   // Глиф (FeatureGlyph): wait — ромб, stopped — квадрат, run/loop/closed/done.
@@ -349,6 +350,116 @@ export function formatDuration(minutes: number): string {
 // чтобы не разъезжалась (ревью фронта 1, major 1).
 export const MERGE_PENDING_STATUS = 'ждёт согласия на мерж';
 
+// Единая формулировка подписи очереди (макет feature-queue-1.md, «Тег и глиф»):
+// «в очереди · 2 из 3»; без queue (бэк ещё не отдал) — просто «в очереди», нулей не показываем.
+// Позицию и длину считает бэк (FeatureQueuePolicy), фронт не пересчитывает. Зовут её тег
+// статуса (FeatureStatusTag) и статус строки индекса (featureDisplayState) — один формат
+// на все места (ревью RV-Q5C, major 1).
+//
+// R-Q5D-D (ревью RV-K-Q5D-B, миноры 2–4): подпись собирается из queueLabelParts —
+// структура (жирное слово, суффикс, aria-суффикс) отдаётся ПОЛЯМИ: потребители (пилюля,
+// плашка, рельса) берут части, а не разбирают строку по разделителю. Смена разделителя
+// в хелпере не может молча убрать цифры из подписи и aria: тест «цифры в каждой части»
+// (chatGroups.test.ts) краснеет на такую смену.
+export interface QueueLabelParts {
+  // Полная строка подписи: «в очереди · 2 из 3» | «в очереди» (строчная — для статусных
+  // текстов: тег статуса, статус строки индекса).
+  label: string;
+  // Ведущее слово «В очереди» (с большой — рендерится <b> в пилюле и плашке, макет .ph).
+  bold: string;
+  // Суффикс « · 2 из 3» ровно как дал хелпер; без цифр — пустая строка.
+  post: string;
+  // aria-суффикс рельсы и точки: « · в очереди 2 из 3» (те же слова, в aria-порядке;
+  // без цифр — « · в очереди», как делали FeatureRail/FeatureBanner до этого шага).
+  ariaSuffix: string;
+}
+
+// Слово и разделитель — единственные константы формулировки (здесь же и единственное
+// место её смены). Жирное слово выводится из строчного: один источник формулировки —
+// раньше «В очереди» было зашито константой в pillModel/FeatureBanner (третий источник,
+// RV-K-Q5D-B минор 3).
+const QUEUE_WORD = 'в очереди';
+const QUEUE_SEP = ' · ';
+
+export function queueLabelParts(queue?: FeatureQueue | null): QueueLabelParts {
+  const withNums = !!queue && queue.position > 0 && queue.length > 0;
+  const nums = withNums ? `${queue.position} из ${queue.length}` : '';
+  return {
+    label: withNums ? `${QUEUE_WORD}${QUEUE_SEP}${nums}` : QUEUE_WORD,
+    bold: QUEUE_WORD.charAt(0).toUpperCase() + QUEUE_WORD.slice(1),
+    post: withNums ? `${QUEUE_SEP}${nums}` : '',
+    ariaSuffix: withNums ? `${QUEUE_SEP}${QUEUE_WORD} ${nums}` : `${QUEUE_SEP}${QUEUE_WORD}`,
+  };
+}
+
+// Строка подписи = label структуры (тот же формат, что до R-Q5D-D: поведение тегов
+// и статусов не меняется).
+export function queueLabel(queue?: FeatureQueue | null): string {
+  return queueLabelParts(queue).label;
+}
+
+// === Словарь позиции очереди словами (Q5I-1; макет feature-queue-1.md, §«Состояния»:
+// блок на странице фичи — «Фича в очереди: вторая из трёх.») ===
+//
+// Словарь стоит рядом с queueLabelParts: тот же домен (место в очереди), здесь же и
+// его числовая половина. Словами позицию читают развёрнутый блок страницы фичи и
+// подтверждение «Запустить вне очереди» (FeaturePageHeader.QueueBypassModal); плашка,
+// пилюля и рельса остаются на цифрах (FONT.mono держит ширину при пересчёте) — этот
+// словарь их не трогает: перевод их цифр на слова был бы отдельным решением.
+//
+// Порядок — женский род: фраза согласуется с «фичей» («вторая [фича] из трёх [фич]»).
+// 1–10 — словами по макету. 11 и дальше — «{N}-я»: у порядковых 11–19 нет надёжной
+// формы (она легко портится: «одинцатая»), а слово за 20 не читается быстрее цифр —
+// «{N}-я» остаётся единственной предсказуемой формой для произвольного N. Закреплено
+// тестом (chatGroups.test.ts), не «на глаз».
+//
+// Длина — числительное в родительном падеже (жен. род): «из трёх». 1–10 — словами по
+// макету. 11 и дальше — цифрами: макет задал слова рамкой 1–10 (его строка «Длину
+// очереди пишем словами» идёт сразу за перечнем «одной…десяти»), а вся остальная
+// очередь длину уже показывает числом — «11» в блоке остаётся в одной системе с ними.
+// Закреплено тестом.
+
+const ORDINAL_WORDS = ['первая', 'вторая', 'третья', 'четвёртая', 'пятая', 'шестая', 'седьмая', 'восьмая', 'девятая', 'десятая'];
+const COUNT_WORDS = ['одной', 'двух', 'трёх', 'четырёх', 'пяти', 'шести', 'семи', 'восьми', 'девяти', 'десяти'];
+// Разделитель фразы — здесь же: у потребителей он не должен появляться своей строкой
+// (урок R-Q5D-D: разделитель вне хелпера дублировался у потребителей — «магическое
+// sep + 3 в FeatureBanner», chatGroups.test.ts:32).
+const PHRASE_SEP = ' из ';
+
+// Порядковое слово позиции: 1–10 — «первая»…«десятая», 11 и дальше — «{N}-я».
+export function queueOrdinalWord(position: number): string {
+  return ORDINAL_WORDS[position - 1] ?? `${position}-я`;
+}
+
+// Числительное длины очереди в родительном падеже: 1–10 — «одной»…«десяти»,
+// 11 и дальше — цифрами.
+export function queueCountWord(length: number): string {
+  return COUNT_WORDS[length - 1] ?? `${length}`;
+}
+
+// Фраза позиции — структура (как queueLabelParts): потребитель берёт поля, а не
+// разбирает строку.
+export interface QueuePhraseParts {
+  // Готовая фраза блока: «вторая из трёх».
+  phrase: string;
+  // Порядок словом: «вторая» — нужен и отдельно (подтверждение «Фича стоит в очереди
+  // {порядковое}», макет §«Подтверждения»).
+  ordinal: string;
+  // Длина словом или цифрой: «трёх».
+  count: string;
+  // Разделитель « из » — часть хелпера, не строка потребителя.
+  sep: string;
+}
+
+// Нет валидной очереди — null: блок «Фича в очереди» тогда не рисуется (тот же
+// признак, что у queueLabelParts: position/length > 0).
+export function queuePhraseParts(queue?: FeatureQueue | null): QueuePhraseParts | null {
+  if (!queue || queue.position <= 0 || queue.length <= 0) return null;
+  const ordinal = queueOrdinalWord(queue.position);
+  const count = queueCountWord(queue.length);
+  return { phrase: `${ordinal}${PHRASE_SEP}${count}`, ordinal, count, sep: PHRASE_SEP };
+}
+
 // enrich — необязательное «кто · сколько» (макет: «стоит · Денис · 25 мин»):
 //   personaName — имя персоны (attention.personaId / now0.personaId, резолвит вызывающий);
 //   now         — «сейчас» в мс (для стабильных тестов; не задано — Date.now()).
@@ -373,6 +484,11 @@ export function featureDisplayState(
   }
   // Смержена, но ещё не закрыта (bucket=merged): ждёт закрытия.
   if (f.bucket === 'merged') return { kind: 'done', alarm: null, status: 'смержена, ждёт закрытия' };
+  // Очередь фич: пауза с причиной queue — тон паузы, тревоги нет. Позицию считает бэк;
+  // queue не пришёл — подпись без цифр.
+  if (f.holdReason === 'queue') {
+    return { kind: 'queue', alarm: null, status: queueLabel(f.queue) };
+  }
   // Источник правды — f.state (бэк Б1a/Б1b): merge_pending → «ждёт согласия на мерж»,
   // merging → «идёт», waiting → «ждёт вас», stopped → «стоит». Без state (старые данные/кеш)
   // — запасной путь по attention (attention.kind), чтобы существующие тесты не упали.
@@ -525,35 +641,86 @@ export function featureGroupByOptions(inProject: boolean, featuresOverview: bool
   return base;
 }
 
-// === Чипы-фильтры фич (макет features-overview.html, .chips/.fch) ===
-// Ряд чипов над списком в режиме «Фичи»: Открытые · Ждут вас · Стоят · К мержу ·
-// Смержены · Закрытые (состав и порядок ряда — ALL_FEATURE_FILTER_CHIPS в chatFilters.ts). Принадлежность фичи к чипу НЕ вычисляет фронт — бэк отдаёт готовый
-// chips[] (контракт «Контракт индекса фич — утверждён (Александр, 18.10)»); фронт
-// только считает числа по chips[] и фильтрует список по выбранному чипу.
+// === Ось «Фичи · что показывать» (featureKinds) — записка feature-state-filter-1.md п. 2/4 ===
+// Старый раздел чипов-фильтров удалён в Ф-3: UI (FilterBar/SessionList) с Ф-2.1/Ф-2.2
+// читает только эту ось.
 
-// Подписи чипов (только текст): порядок ряда задаёт ALL_FEATURE_FILTER_CHIPS, не этот объект.
-// Экспортируется: секция «Фичи · что с ними» в FilterBar и строка снимаемых чипов
-// в SessionList берут подписи отсюда, а не заводят вторую точку правды.
-export const FEATURE_CHIP_LABEL: Record<FeatureChip, string> = {
-  open: 'Открытые', waiting: 'Ждут вас', stopped: 'Стоят', merge: 'К мержу', closed: 'Закрытые',
-  running: 'Идут', merged: 'Смержены',
+// Подписи 9 значений оси featureKinds — тот же словарь, что у сводки на странице
+// фичи (FeatureBrief.kind; записка п. 2, «Смержены» — девятая). Второго словаря нет;
+// порядок ряда чипов задаёт ALL_FEATURE_KINDS (chatFilters.ts), не этот объект.
+export const FEATURE_KIND_LABEL: Record<FeatureKind, string> = {
+  waiting_you: 'Ждут вас', error: 'Остановлены', running: 'Идут', queued: 'В очереди',
+  paused: 'На паузе', draft: 'Черновики', idle: 'Не начаты', merged: 'Смержены', closed: 'Закрытые',
 };
 
-// Число фич по каждому чипу: фронт считает по chips[] бэка (не вычисляет членство сам).
-// Одна фича может входить в несколько чипов (например, «открытая» и «ждёт вас»).
-export function featureChipCounts(features: FeatureIndexFeature[]): Record<FeatureChip, number> {
-  const counts: Record<FeatureChip, number> = { open: 0, waiting: 0, stopped: 0, merge: 0, closed: 0, running: 0, merged: 0 };
-  for (const f of features) for (const c of f.chips) counts[c]++;
+// Число фич по каждому kind: фронт считает по отданному бэком полю kind (членство
+// не вычисляет — сторож в тестах) и только по РИСУЕМОЙ фиче (chatCount > 0, правило m2):
+// фича без чатов не рисуется → не считаем.
+// От выбора не зависит: числа на чипах одинаковы при любом featureKinds.
+export function featureKindCounts(features: FeatureIndexFeature[]): Record<FeatureKind, number> {
+  const counts = {} as Record<FeatureKind, number>;
+  for (const k of ALL_FEATURE_KINDS) counts[k] = 0;
+  for (const f of features) {
+    if (f.chatCount <= 0) continue;
+    const k = f.kind;
+    // Неизвестный kind (бэковый словарь обновился раньше фронтального) не считается:
+    // иначе в счётчиках десятый ключ и NaN.
+    if (k && k in counts) counts[k]++;
+  }
   return counts;
 }
 
-// Закрытые фичи, которые РИСУЮТСЯ (имеют хотя бы один чат: chatCount > 0). ОДНО число
-// для тумблера «Показывать закрытые фичи · N» (FilterBar) и заголовка секции
-// «Закрытые · M» (SessionList) (m2): раньше тумблер считал ВСЕ закрытые (featureChipCounts),
-// а секция — только нарисованные (closedGroups), и фича без чатов давала расхождение.
-// Фича без чатов не рисуется → не считаем.
-export function drawnClosedFeatures(features: FeatureIndexFeature[]): number {
-  return features.filter(f => f.bucket === 'closed' && f.chatCount > 0).length;
+// Видна ли фича при выбранном featureKinds (чистая, без побочных эффектов):
+// [] = умолчание → все открытые (kind ≠ closed); явный выбор → только свой kind;
+// kind нет/null (старый индекс без поля) → видна при любом выборе, кроме
+// «только закрытые» (записка, раздел миграции: пока поля нет, фильтр в умолчании).
+export function featureMatchesKinds(f: FeatureIndexFeature, featureKinds: readonly FeatureKind[]): boolean {
+  const k = f.kind;
+  if (k === undefined || k === null) {
+    return featureKinds.length === 0 || featureKinds.some(x => x !== 'closed');
+  }
+  if (featureKinds.length === 0) return k !== 'closed';
+  return featureKinds.includes(k);
+}
+
+// Чип строки «Показаны»: значение + действие крестика ('remove' — Убрать значение,
+// 'restore' — Вернуть его; в варианте «кроме» крестик возвращает). andBefore — перед
+// чипом союз «и» (строка 4 таблицы п. 4, только для «Закрытых»).
+export interface ShownFilterChip {
+  kind: FeatureKind;
+  action: 'remove' | 'restore';
+  andBefore: boolean;
+}
+
+// Модель строки «Показаны» (записка п. 4, макет shownRow): перечисляет более короткий
+// из двух списков. null — выбор равный умолчанию (строка не показывается).
+// on — включённые открытые значения, off — снятые открытые, closed — «Закрытые» выбраны.
+export interface ShownFiltersModel {
+  prefix: string;
+  chips: ShownFilterChip[];
+}
+
+export function shownFiltersModel(featureKinds: readonly FeatureKind[]): ShownFiltersModel | null {
+  // «Восемь открытых» — общий эталон DEFAULT_FEATURE_KINDS (chatFilters.ts), не местное
+  // выражение (R-Ф3 мин. 2). [] — умолчание: включены все открытые (записка п. 3).
+  const sel = featureKinds.length === 0 ? DEFAULT_FEATURE_KINDS : featureKinds;
+  const on = DEFAULT_FEATURE_KINDS.filter(k => sel.includes(k));
+  const off = DEFAULT_FEATURE_KINDS.filter(k => !sel.includes(k));
+  const closed = featureKinds.includes('closed');
+  // Вид равный умолчанию (все открытые, закрытые скрыты) — строки нет.
+  if (!closed && off.length === 0) return null;
+  const del = (kind: FeatureKind, andBefore = false): ShownFilterChip => ({ kind, action: 'remove', andBefore });
+  const add = (kind: FeatureKind): ShownFilterChip => ({ kind, action: 'restore', andBefore: false });
+  // Строка 1 таблицы: on пусто, выбраны только закрытые.
+  if (on.length === 0) return { prefix: 'Показаны:', chips: closed ? [del('closed')] : [] };
+  // Строка 2: off пусто, закрытые включены (иначе — выше, default).
+  if (off.length === 0) return { prefix: 'Показаны все открытые и', chips: [del('closed')] };
+  // Строка 3: on ≤ off — перечисляем показанное, крестик убирает.
+  if (on.length <= off.length) {
+    return { prefix: 'Показаны:', chips: [...on.map(k => del(k)), ...(closed ? [del('closed')] : [])] };
+  }
+  // Строка 4: иначе — перечисляем снятое, крестик возвращает; «и» перед «Закрытыми».
+  return { prefix: 'Все открытые, кроме:', chips: [...off.map(k => add(k)), ...(closed ? [del('closed', true)] : [])] };
 }
 
 // Карту фич по featureId строим ОДИН раз на объект индекса (WeakMap — живёт, пока

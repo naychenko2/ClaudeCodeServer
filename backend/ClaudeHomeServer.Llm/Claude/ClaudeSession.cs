@@ -362,6 +362,11 @@ public class ClaudeSession : ILlmSessionAdapter
         // финализацией прогона. null — процесс ходит в провайдера напрямую.
         public string? GatewayTurnId { get; init; }
         public string? GatewayToken { get; init; }
+        // Фактический ключ апстрима прогона («учётка хода», SP1): вычисляется при старте прогона
+        // (см. ComputeUpstreamProviderKey) и не меняется с ходом — same-process ход совпадает
+        // с сигнатурой, значит и с моделью. Для хода через шлюз при result приоритетен текущий
+        // маршрут токена (см. UpstreamOfRun); это — резерв для отозванного токена.
+        public string? UpstreamProvider { get; init; }
         // turnId запуска — по нему pid-файл прогона в песочнице (Kill контейнерного pgid)
         public string? LaunchTurnId { get; init; }
         // Снимок промпта, с которым прогон СТАРТОВАЛ. Ходы, доигрывающиеся в этом же процессе,
@@ -964,8 +969,6 @@ public class ClaudeSession : ILlmSessionAdapter
     // Реестр CLI-провайдеров: env-оверрайды процесса (ANTHROPIC_BASE_URL и др.)
     // для сторонних моделей; null — всегда родной Claude
     private readonly LlmProviderRegistry? _providers;
-    // Признак «локальный движок занят ходом» — ставится на время хода на провайдере с IsLocal
-    private readonly LocalEngineBusyTracker _localEngineBusy;
     // Резолвер назначений моделей — нужен ради «модели по назначению места» (см. EffectiveModel);
     // null — адаптер собран без него (тесты), тогда пустая модель означает дефолт CLI, как раньше
     private readonly ModelAssignmentResolver? _assignments;
@@ -1089,6 +1092,39 @@ public class ClaudeSession : ILlmSessionAdapter
     private bool GatewayTokenAlive(CliRun run) =>
         run.GatewayTurnId is null || _serverGateway?.IsAlive(run.GatewayTurnId, run.GatewayToken!) == true;
 
+    // Фактический ключ апстрима прогона («учётка хода», SP1): источник правды — модель.
+    // ResolveByModel(EffectiveModel) дал провайдера — его ключ. Модель родная (null) —
+    // Info.Provider доверяется, только если он НЕ ключ стороннего провайдера
+    // (GetByKey(Info.Provider) is null): тогда это "claude" или аккаунт пула. Stale сторонний
+    // ключ при родной модели → "claude": родной ход не приписывается стороннему (инвариант
+    // «не занижать расход Claude»). Ключ пишется как есть, суффикс "-direct" не срезается.
+    internal string ComputeUpstreamProviderKey()
+    {
+        if (_providers is not null)
+        {
+            if (_providers.ResolveByModel(EffectiveModel) is { } provider) return provider.Key;
+            if (!string.IsNullOrWhiteSpace(Info.Provider) && _providers.GetByKey(Info.Provider) is null)
+                return Info.Provider;
+        }
+        return "claude";
+    }
+
+    // Фактический апстрим хода для ResultMessage: через шлюз — текущий маршрут токена хода
+    // (в нём и ротация аккаунта посреди хода; ключ = ProviderKey ?? SubscriptionKey). Модель —
+    // только из маршрута Provider: её переписал шлюз, сессия её не знает. У маршрута Subscription
+    // Model — подсказка `--model` клиента (UpstreamSelector.SelectRoute), шлюз её не переписывает:
+    // это не модель апстрима, и в расход она не идёт — модель родного хода берётся из modelUsage
+    // CLI (UsageModel в ResultMessage), иначе деградирует до алиаса или «default». Токен отозван
+    // (потолок жизни) — резерв: ключ, посчитанный при старте прогона. Прямой прогон — тот же ключ
+    // из CliRun.
+    private (string? Provider, string? Model) UpstreamOfRun(CliRun run)
+    {
+        if (run.GatewayTurnId is { } turnId && _serverGateway?.CurrentRoute(turnId) is { } route)
+            return (route.ProviderKey ?? route.SubscriptionKey,
+                route.Kind == Gateway.GatewayUpstreamKind.Provider ? route.Model : null);
+        return (run.UpstreamProvider, null);
+    }
+
     // Спан идущего хода — чтобы дописать в него фактическую модель, когда CLI её назовёт.
     // Тег ставится в двух местах, но никогда одновременно: при старте хода (до запуска
     // процесса, поток RunTurnAsync) и потом из ридера stdout, пока RunTurnAsync ждёт
@@ -1178,7 +1214,6 @@ public class ClaudeSession : ILlmSessionAdapter
         _browserEnabled = context.BrowserEnabled;
         _handsEnabled = context.HandsEnabled;
         _launcher = context.Launcher ?? Execution.LocalProcessRunner.Instance;
-        _localEngineBusy = context.LocalEngineBusy ?? LocalEngineBusyTracker.Instance;
         // Запреты конфига + ограничения возможностей персоны (ExtraDisallowedTools)
         _disallowedTools = context.ExtraDisallowedTools is { Count: > 0 } extra
             ? [.. (disallowedTools ?? []), .. extra]
@@ -3254,16 +3289,9 @@ public class ClaudeSession : ILlmSessionAdapter
         // прогонов без эха; при эхе он будет сброшен ещё раз на самом эхе.
         ResetTurnPromptCacheMiss();
 
-        // Ход на ЛОКАЛЬНОМ провайдере занимает KV-бюджет движка целиком — на это время
-        // фоновые one-shot действия к локали не пускаем (LocalEngineBusyTracker, правило
-        // в LocalActionRouter.LocalBlockedByTurn). using на всё тело хода: освобождение
-        // обязано случиться на ЛЮБОМ выходе, включая исключение и отмену.
-        // Признак берём в начале хода по намерению — той же проверкой, что ставит env
-        // локального провайдера ниже; фолбэк на другую модель внутри хода признак не
-        // снимает намеренно: процесс CLI уже живёт с этим движком.
-        using var localEngineSlot = _providers?.ResolveByModel(EffectiveModel) is { IsLocal: true }
-            ? _localEngineBusy.Enter()
-            : null;
+        // Признак «движок занят ходом» и допуск ходов к локали ведёт FallbackLlmSessionAdapter
+        // (слот на попытку, LocalEngineBusyTracker.AcquireAsync): здесь его больше нет, иначе
+        // ход считался бы дважды.
 
         // База дельты хода: у чатов, созданных до фикса расхода, снимка (Session.LastCostState)
         // ещё нет — первый ход после выкатки засчитал бы накопленный итог CLI целиком (повтор
@@ -4291,7 +4319,13 @@ public class ClaudeSession : ILlmSessionAdapter
             customHeaders.Add($"X-CCS-Session: {Info.Id}");
         if (customHeaders.Count > 0)
             envOverrides["ANTHROPIC_CUSTOM_HEADERS"] = string.Join("\n", customHeaders);
-        if (localProvider is null && _subscriptionPool?.HasExtra == true
+        // Учётка подписки накладывается только на РОДНОЙ ход (инвариант CLAUDE.md: профили CLI
+        // изолируют OAuth-логин, «иначе CLI пошлёт чужому эндпоинту токен подписки (401)»).
+        // Если модель резолвится в стороннего провайдера (local или внешнего) — ход идёт на его
+        // env (BuildCliEnv выше), и подписочные CLAUDE_CONFIG_DIR/CLAUDE_CODE_OAUTH_TOKEN/
+        // ANTHROPIC_AUTH_TOKEN поверх него накладываться не должны: они доехали бы до чужого
+        // эндпоинта (находка задачи c47fe6da: чат с Info.Provider="claude-2", модель ушла к MiniMax).
+        if (_providers?.ResolveByModel(EffectiveModel) is null && _subscriptionPool?.HasExtra == true
             && _providers?.GetByKey(Info.Provider) is null)
         {
             // Подписка пула (включая "claude", если задана с токеном) — свой OAuth-профиль и
@@ -4380,6 +4414,13 @@ public class ClaudeSession : ILlmSessionAdapter
             _turnContextWindow, EffectiveModel);
         _turnConfigRoot = envOverrides.TryGetValue("CLAUDE_CONFIG_DIR", out var turnConfigDir)
             && !string.IsNullOrWhiteSpace(turnConfigDir) ? turnConfigDir : _cliConfigRoot;
+        // Пред-resume копия транскрипта для класса «ключ пула + модель стороннего провайдера»
+        // (доработка ревью ccb3d43c к SP1): после правки подписочный CLAUDE_CONFIG_DIR не перетирает
+        // провайдерский, и ход ищет транскрипт в профиле провайдера — а транскрипт чатов, созданных
+        // до правки, остался в профиле подписки. --resume там не находит его и ход отказывает
+        // (TurnFailureText.ResumeTranscriptMissing). Если файла нет в корне хода, но есть в собственном
+        // корне сессии — копируем его туда, куда смотрит CLI этого хода.
+        CopyTranscriptToTurnRoot(_turnConfigRoot);
 
         // Бюджет промпта на склейке: считает ВЕРХНЮЮ оценку командной строки — cli-путь
         // плюс каждый аргумент в экранированном виде плюс пара --append-system-prompt со
@@ -4663,7 +4704,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
             _fileWatcher.Start();
 
-            run = new CliRun { Process = process, Signature = signature, TurnMcpPath = turnMcpPath, TurnAgentsPath = turnAgentsPath, TurnPromptPath = turnPromptPath, LaunchTurnId = _currentTurnId, PromptSuggestionsActive = promptSuggestionsActive, PromptSnapshotId = turnSnapshotId, LastTurnSeq = turnSeq, GatewayTurnId = gatewayTurnId, GatewayToken = gatewayToken };
+            run = new CliRun { Process = process, Signature = signature, TurnMcpPath = turnMcpPath, TurnAgentsPath = turnAgentsPath, TurnPromptPath = turnPromptPath, LaunchTurnId = _currentTurnId, PromptSuggestionsActive = promptSuggestionsActive, PromptSnapshotId = turnSnapshotId, LastTurnSeq = turnSeq, GatewayTurnId = gatewayTurnId, GatewayToken = gatewayToken, UpstreamProvider = ComputeUpstreamProviderKey() };
             // Смерть процесса — по событию ОС (см. HandleProcessExitedAsync): EnableRaisingEvents=true
             // выставлен в spec. Подписка обязательна: закрытие stdout ненадёжно как сигнал гибели
             // (дочерние node-процессы MCP держат pipe — P27), и без Exited обрыв хода зависает
@@ -5524,6 +5565,63 @@ public class ClaudeSession : ILlmSessionAdapter
         }
     }
 
+    // Пред-resume копия транскрипта для класса «ключ пула + модель стороннего провайдера»
+    // (доработка ревью ccb3d43c к SP1). Источник — _cliConfigRoot, собственный корень сессии
+    // (SessionManager разрешил его по Info.Provider через ConfigRootFor, включая раскладку
+    // песочницы): до правки SP1 подписочный env перетирал провайдерский CLAUDE_CONFIG_DIR, и
+    // транскрипт таких чатов писался в профиль подписки sub-{key}. Приёмник — корень, куда
+    // реально смотрит CLI этого хода (turnRoot — CLAUDE_CONFIG_DIR собранного env). Расхождение
+    // двух корней и есть симптом класса: у штатного подписочного или провайдерного хода они
+    // равны, и копия не нужна. TryMigrate — это Copy, исходник не трогается; на следующем
+    // ходе файл уже в приёмнике, и поиск в нём заканчивается операцией (идемпотентно).
+    // Провал копии ход не отменяет: причина в логе, дальше ход ведёт себя как до правки.
+    private void CopyTranscriptToTurnRoot(string? turnRoot)
+    {
+        if (!_transcriptOnServer) return; // локальный проект: транскрипт на устройстве, копировать серверу нечего
+        if (Info.ClaudeSessionId is not { } csid) return; // без --resume разговор не ищется
+        if (turnRoot is not { Length: > 0 } || _cliConfigRoot is not { Length: > 0 } ownRoot) return;
+        if (SameDir(turnRoot, ownRoot)) return; // один профиль — не тот класс
+
+        try
+        {
+            if (TranscriptMigrator.FindTranscript(turnRoot, _rootPath, csid) is not null) return; // уже в приёмнике
+            if (TranscriptMigrator.FindTranscript(ownRoot, _rootPath, csid) is null) return; // копировать неоткуда
+
+            // У container-владельца DockerProcessRunner.RewriteProfileEnv переписывает CLAUDE_CONFIG_DIR
+            // на /sandbox-profiles/{ownerId}/{папка}; хостовая сторона того же профиля — сосед
+            // _cliConfigRoot (его родитель и есть папка песочных профилей владельца) — та же
+            // выводка, что у FallbackLlmSessionAdapter.SandboxAwareRoot.
+            var dst = turnRoot;
+            if (_launcher.IsSandboxed)
+            {
+                var parent = Path.GetDirectoryName(TrimTrailing(ownRoot));
+                var folder = Path.GetFileName(TrimTrailing(turnRoot));
+                if (string.IsNullOrEmpty(parent) || string.IsNullOrEmpty(folder)) return;
+                dst = SafePath.Join(parent, folder);
+            }
+
+            if (!TranscriptMigrator.TryMigrate(ownRoot, dst, _rootPath, csid, out var error))
+                Console.Error.WriteLine(
+                    $"[ClaudeSession] Транскрипт {csid} не скопирован в {dst}: {error} (session {Info.Id})");
+            else
+                Console.Error.WriteLine(
+                    $"[ClaudeSession] Транскрипт {csid} скопирован из профиля сессии {ownRoot} в профиль хода {dst} (session {Info.Id})");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(
+                $"[ClaudeSession] Пред-resume копия транскрипта {csid} не удалась: {ex.Message} (session {Info.Id})");
+        }
+    }
+
+    // Сравнение корней профиля «одна папка или нет»: пути приходят из разных мест (конфиг
+    // профилей, перепись раннером), хвостовые разделители различаются.
+    private static string TrimTrailing(string path) =>
+        path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+    private static bool SameDir(string a, string b) =>
+        string.Equals(TrimTrailing(a), TrimTrailing(b), StringComparison.OrdinalIgnoreCase);
+
     // Аргументы запуска для показа человеку. Системный промпт не дублируем (он и есть
     // секции), а путь temp-конфига MCP заменяем именем файла: внутри сервисный JWT владельца.
     private static IReadOnlyList<string> MaskArgs(IReadOnlyList<string> args)
@@ -6359,9 +6457,12 @@ public class ClaudeSession : ILlmSessionAdapter
                 // Статус Error/Active выставит SessionManager по ResultMessage
                 var ctxTokens = _lastContextTokens > 0 ? _lastContextTokens : (int?)null;
                 var promptCache = BuildPromptCacheState(usage);
-                // usage/totalCost/usageModel — дельта хода (см. выше), не накопленный итог
+                // usage/totalCost/usageModel — дельта хода (см. выше), не накопленный итог.
+                // upstreamProvider/upstreamModel — фактический апстрим хода («учётка хода», SP1):
+                // прямой прогон — ключ из стартового расчёта, шлюзовой — текущий маршрут токена
+                var (upstreamProvider, upstreamModel) = UpstreamOfRun(run);
                 await _onMessage(new ResultMessage(subtype, durationMs, numTurns, usage, totalCost, apiErr, denials, ctxTokens, usageModel, durationApiMs,
-                    promptCache));
+                    promptCache, upstreamProvider, upstreamModel));
                 // OTel: метрика длительности хода (duration_ms из самого CLI — не пересчитываем)
                 // и счётчик ошибок. Оба признака отказа сводит IsTurnFailure: без is_error
                 // отказы провайдера (429) уходили в метрику как outcome=success — счётчик

@@ -26,6 +26,8 @@ public class TaskStoreWriteTests : IDisposable
         if (Directory.Exists(_dir)) Directory.Delete(_dir, recursive: true);
     }
 
+    private static readonly JsonSerializerOptions Web = new(JsonSerializerDefaults.Web);
+
     private string StorePath => Path.Combine(_dir, "tasks.json");
 
     // debounceMs: null — дефолт продукта, 0 — синхронная запись, N — окно дебаунса
@@ -39,6 +41,43 @@ public class TaskStoreWriteTests : IDisposable
         var manager = new TaskManager(new ConfigurationBuilder().AddInMemoryCollection(settings).Build());
         _created.Add(manager);
         return manager;
+    }
+
+    // ─── Голос фичи (B3): совместимость формата ──────────────────────────────
+
+    // Мутация (c1): сделать Note обязательным/переименовать — старый JSON не читается, тест краснеет.
+    [Fact]
+    public void Note_СтарыйJsonБезNote_Читается()
+    {
+        var back = JsonSerializer.Deserialize<TaskItem>("{\"title\":\"старая\"}", Web)!;
+
+        back.Title.Should().Be("старая");
+        back.Note.Should().BeNull();
+    }
+
+    [Fact]
+    public void Note_КруговаяСериализация_ДаетТотЖеОбъект()
+    {
+        var note = new FeatureNote("голос", new DateTime(2026, 10, 25, 12, 0, 0, DateTimeKind.Utc),
+            "sess", false, "review", "running");
+        var item = new TaskItem { Title = "эпик", Role = TaskRoles.Feature, Note = note };
+
+        var back = JsonSerializer.Deserialize<TaskItem>(JsonSerializer.Serialize(item, Web), Web)!;
+
+        back.Note.Should().Be(note);
+    }
+
+    // Голос переживает перезагрузку стора с диска.
+    [Fact]
+    public void Note_ПереживаетПерезагрузкуСтора()
+    {
+        var sut = NewManager();
+        var epic = sut.Create("proj-1", "user-1", new CreateTaskRequest("эпик", Role: TaskRoles.Feature));
+        sut.SetFeatureNote(epic.Id, "жив", "sess", false, "prod", "running");
+
+        var reloaded = NewManager();
+
+        reloaded.GetById(epic.Id)!.Note!.Text.Should().Be("жив");
     }
 
     // ─── Формат записи ───────────────────────────────────────────────────────

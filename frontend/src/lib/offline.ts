@@ -26,7 +26,7 @@
 //      ТОЛЬКО пока мы offline; в online не тикает. Провал зонда состояние
 //      НЕ меняет — это не «возврат эвристики».
 
-import { idbGet, idbSet } from './idb';
+import { idbCountRange, idbDelete, idbGet, idbKeys, idbRangeStamps, idbSet } from './idb';
 
 const BASE = '/api';
 
@@ -409,6 +409,139 @@ function isAbortError(e: unknown): boolean {
 }
 
 
+// --- Пассивный GET-кэш IndexedDB ---
+// Ключ записи — `offline:<ownerId>:<url>`: владелец — часть структуры ключа, а не дисциплина
+// вызова. Читаем строго по своему владельцу и БЕЗ отката на ключ без префикса: запись без
+// владельца могла бы отдаться другому аккаунту. Нет владельца (не вошли) — промах.
+// Всё вытеснение и чистка работают только по диапазону `offline:`: outbox, tasks:all, индекс
+// заметок, продолжения чатов и sync-ключи сюда не попадают.
+const PASSIVE_PREFIX = 'offline:';
+const PASSIVE_RANGE_END = '\uffff';
+// Потолок записей на владельца и запас снизу: после ужима до 180 следующая запись прохода
+// не вызывает (ужим до самого потолка запускал бы проход на каждой записи).
+export const PASSIVE_CACHE_MAX = 200;
+export const PASSIVE_CACHE_TRIM_TO = 180;
+// Троттлинг прохода: не чаще раза в минуту либо после 100 записей с прошлого прохода.
+const EVICT_MIN_INTERVAL_MS = 60_000;
+const EVICT_AFTER_WRITES = 100;
+// usedAt обновляем при чтении не чаще раза в 5 минут на ключ (карта живёт в памяти вкладки
+// и правдой не является: лишнее обновление безвредно).
+const USED_AT_REFRESH_MS = 5 * 60_000;
+
+// Записи, чьи ключи читают другие модули по голому URL (офлайн-дерево файлов и его скачанное
+// содержимое — sync.ts, индекс фич, список чатов проекта — SessionList): остаются без
+// префикса и вне вытеснения. Новый тип записи со своим читателем — сюда же.
+const SYNC_OWNED_URL: RegExp[] = [
+  /^\/projects\/[^/?]+\/files(?:\/content)?\?path=/,
+  /^\/tasks\/features\/index(?:[/?]|$)/,
+  /^\/projects\/[^/?]+\/sessions(?:\?.*)?$/,
+];
+
+// Старые пассивные записи (до префикса владельца): ключ — голый URL запроса, допускаем и с /api.
+// Определяем УЗКО по шаблонам: ведущий «/» сам по себе не признак пассивности (см. SYNC_OWNED_URL).
+// Единственное место перечня: разовая чистка tasks.ts и постоянный проход по диапазону.
+const LEGACY_LIST_KEYS = ['/tasks', '/tasks/features'].flatMap(p => [p, `/api${p}`]);
+// Одиночный /tasks/{id}: ровно один сегмент после /tasks, служебные /tasks/ai не трогаем
+const LEGACY_SINGLE_TASK_KEY = /^(?:\/api)?\/tasks\/(?!ai(?:[/?]|$))[^/?]+(?:\?.*)?$/;
+// Задачи проекта и страница фичи; индекс фич /tasks/features/index остаётся нетронутым
+const LEGACY_PROJECT_TASKS_KEY = /^(?:\/api)?\/projects\/[^/?]+\/tasks(?:\?.*)?$/;
+const LEGACY_FEATURE_PAGE_KEY = /^(?:\/api)?\/tasks\/features\/(?!index(?:[/?]|$))[^/?]+(?:\?.*)?$/;
+
+export function isLegacyPassiveKey(k: string): boolean {
+  return LEGACY_LIST_KEYS.some(p => k === p || k.startsWith(`${p}?`)) ||
+    LEGACY_SINGLE_TASK_KEY.test(k) || LEGACY_PROJECT_TASKS_KEY.test(k) || LEGACY_FEATURE_PAGE_KEY.test(k);
+}
+
+function isSyncOwned(url: string): boolean {
+  return SYNC_OWNED_URL.some(re => re.test(url));
+}
+
+function ownerPrefix(owner: string): string {
+  // encodeURIComponent: «:» в id не должен сливать диапазоны двух владельцев
+  return `${PASSIVE_PREFIX}${encodeURIComponent(owner)}:`;
+}
+
+// Ключ записи; null — читать/писать нельзя (пассивный запрос без известного владельца)
+function passiveKey(url: string, owner: string | null): string | null {
+  if (isSyncOwned(url)) return url;
+  return owner ? ownerPrefix(owner) + url : null;
+}
+
+const _usedTouched = new Map<string, number>();
+let _lastEvictAt = Date.now();
+let _writesSinceEvict = 0;
+let _evicting = false;
+let _maintainedOwner: string | null = null;
+
+async function passiveRead<T>(url: string): Promise<T | undefined> {
+  const key = passiveKey(url, readStoredUserId());
+  if (key === null) return undefined;
+  const cached = await idbGet<T>(key);
+  if (!cached) return undefined;
+  const now = Date.now();
+  if (key !== url && now - (_usedTouched.get(key) ?? 0) >= USED_AT_REFRESH_MS) {
+    if (_usedTouched.size > 1000) _usedTouched.clear();
+    _usedTouched.set(key, now);
+    // savedAt остаётся прежним: это «данные по состоянию на», а не время обращения
+    idbSet(key, { ...cached, usedAt: now }).catch(() => { /* не критично */ });
+  }
+  return cached.data;
+}
+
+// owner — владелец на момент СТАРТА запроса: если к записи вкладка вышла или сменила аккаунт,
+// ответ чужой сессии в кэш не ложится.
+function passiveWrite(url: string, data: unknown, owner: string | null): void {
+  if (readStoredUserId() !== owner) return;
+  const key = passiveKey(url, owner);
+  if (key === null) return;
+  const now = Date.now();
+  idbSet(key, { data, savedAt: now, usedAt: now }).catch(() => { /* кэш недоступен — не критично */ });
+  if (key === url || !owner) return;
+  if (_maintainedOwner !== owner) { void runPassiveMaintenance(); return; }
+  _writesSinceEvict++;
+  if (_writesSinceEvict >= EVICT_AFTER_WRITES || now - _lastEvictAt >= EVICT_MIN_INTERVAL_MS) {
+    void evictPassive(owner);
+  }
+}
+
+// Вытеснение по наименьшему usedAt. Источник правды — сам стор, счётчика в памяти нет.
+async function evictPassive(owner: string): Promise<void> {
+  if (_evicting) return;
+  _evicting = true;
+  _lastEvictAt = Date.now();
+  _writesSinceEvict = 0;
+  try {
+    const lo = ownerPrefix(owner);
+    const hi = lo + PASSIVE_RANGE_END;
+    if (await idbCountRange(lo, hi) <= PASSIVE_CACHE_MAX) return;
+    const stamps = await idbRangeStamps(lo, hi);
+    // Порядок вытеснения — по времени ДОСТУПА; у старых записей без usedAt это savedAt
+    const stamp = (e: { savedAt: number; usedAt?: number }) => e.usedAt ?? e.savedAt;
+    stamps.sort((a, b) => stamp(a) - stamp(b));
+    const drop = stamps.slice(0, Math.max(0, stamps.length - PASSIVE_CACHE_TRIM_TO));
+    await Promise.all(drop.map(s => idbDelete(s.key).catch(() => {})));
+  } catch { /* кэш недоступен — не критично */ } finally {
+    _evicting = false;
+  }
+}
+
+// Проход обслуживания: идемпотентен, на каждом старте и при смене владельца, не под флагом
+// (вкладка со старым бандлом продолжает писать ключи без префикса — их надо сносить снова).
+export async function runPassiveMaintenance(): Promise<void> {
+  const owner = readStoredUserId();
+  try {
+    const keys = await idbKeys();
+    await Promise.all(keys.filter(isLegacyPassiveKey).map(k => idbDelete(k).catch(() => {})));
+    if (owner) {
+      _maintainedOwner = owner;
+      const own = ownerPrefix(owner);
+      const all = await idbRangeStamps(PASSIVE_PREFIX, PASSIVE_PREFIX + PASSIVE_RANGE_END);
+      await Promise.all(all.filter(s => !s.key.startsWith(own)).map(s => idbDelete(s.key).catch(() => {})));
+      await evictPassive(owner);
+    }
+  } catch { /* кэш недоступен — не критично */ }
+}
+
 // --- Запрос ---
 
 // parse: 'blob' — бинарный ответ (mp3 озвучки) отдаётся как Blob, минуя JSON.parse и кэш
@@ -432,6 +565,7 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
   }
 
   const token = readStoredToken();
+  const ownerAtStart = readStoredUserId();
 
   // AbortController для таймаута: если сеть «зависла» (пакеты идут, но ответа нет),
   // мы не ждём браузерного TCP-таймаута (может быть минуты).
@@ -513,7 +647,7 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
     const text = res.status === 204 ? '' : await res.text();
     const data = (text ? JSON.parse(text) : undefined) as T;
     if (useOfflineCache) {
-      idbSet(url, { data, savedAt: Date.now() }).catch(() => { /* кэш недоступен — не критично */ });
+      passiveWrite(url, data, ownerAtStart);
     }
     return data;
   } catch (e) {
@@ -548,8 +682,8 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
       // Кроме live-запросов: там подстановка прошлого ответа выдала бы лежащий сервер за
       // работающий, а вызывающему нужен именно факт обрыва.
       if (useOfflineCache) {
-        const cached = await idbGet<T>(url).catch(() => undefined);
-        if (cached) return cached.data;
+        const cached = await passiveRead<T>(url).catch(() => undefined);
+        if (cached !== undefined) return cached;
       }
       if (ourTimeout) throw new RequestTimeoutError(effectiveTimeout);
       throw new OfflineError(isGet ? 'Нет сохранённых данных для офлайн-доступа' : undefined);
@@ -588,4 +722,5 @@ export function initConnectivity() {
   }
   // При загрузке уже офлайн (navigator.onLine === false, сервер не доступен) — запускаем зонд
   if (!_online) scheduleNextProbe();
+  void runPassiveMaintenance();
 }

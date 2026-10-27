@@ -3130,7 +3130,22 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             // другие. Исключение ToRuntime (путь вне монтирований) намеренно не глушим:
             // операция явная, пользователь должен увидеть причину отказа (400)
             var cwd = CwdForOwner(ownerId, hostCwd);
-            var srcRoot = ConfigRootFor(ownerId, currentKey);
+            // Корни поиска: профиль текущей пары (currentKey) и — когда Info.Provider является
+            // ключом пула — собственный профиль подписки сессии. Для класса «ключ пула + модель
+            // стороннего провайдера» (доработка ревью ccb3d43c) эти два корня расходятся: до SP1
+            // подписочный env перетирал провайдерский и транскрипт писался в профиль sub-{key},
+            // после — в профиль провайдера. Поиск по одному корню пропускает один из двух классов.
+            var dstRoot = ConfigRootFor(ownerId, targetKey);
+            var srcRoots = new List<string> { ConfigRootFor(ownerId, currentKey) };
+            if (entry.Info.Provider is { Length: > 0 } provKey
+                && _llmProviders.GetByKey(provKey) is null
+                && _subscriptionPool.All.Any(s => s.Key == provKey && s.Enabled))
+            {
+                var subRoot = ConfigRootFor(ownerId, provKey);
+                if (!SameDir(subRoot, srcRoots[0])) srcRoots.Add(subRoot);
+            }
+            var srcRoot = srcRoots.FirstOrDefault(r =>
+                TranscriptMigrator.FindTranscript(r, cwd, entry.Info.ClaudeSessionId) is not null);
             // Различаем «переносить нечего» и «перенос сорвался» — TryMigrate отдаёт false в
             // обоих случаях, а последствия разные. Транскрипта может не быть вовсе:
             // ClaudeSessionId выставляется на ЛЮБОМ первом ходе (включая служебный kickoff
@@ -3139,11 +3154,19 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             // меняем провайдера и пишем строку в лог. Сорвавшийся же перенос НАЙДЕННОГО файла
             // остаётся жёстким отказом: TryMigrate возвращает false и по таймауту копирования
             // живого файла (CopyFileShared, дедлайн 8 с), а это молчаливая потеря контекста.
-            if (TranscriptMigrator.FindTranscript(srcRoot, cwd, entry.Info.ClaudeSessionId) is null)
+            if (srcRoot is null)
                 Console.Error.WriteLine(
                     $"[SessionManager] Чат {sessionId}: транскрипт {entry.Info.ClaudeSessionId} "
-                    + $"не найден в {srcRoot} — переносить нечего, меняем провайдера");
-            else if (!TranscriptMigrator.TryMigrate(srcRoot, ConfigRootFor(ownerId, targetKey),
+                    + $"не найден в {string.Join(" / ", srcRoots)} — переносить нечего, меняем провайдера");
+            else if (SameDir(srcRoot, dstRoot))
+                // Транскрипт уже в приёмнике (цель совпала с профилем, где он лежит): копия файла
+                // в себя же ушла бы в ретраи CopyFileShared до дедлайна — тот же guard, что у
+                // FallbackLlmSessionAdapter.TryMigrateTranscript. Переносить нечего, разговор
+                // продолжится там же.
+                Console.Error.WriteLine(
+                    $"[SessionManager] Чат {sessionId}: транскрипт {entry.Info.ClaudeSessionId} "
+                    + $"уже в {dstRoot} — копировать нечего, меняем провайдера");
+            else if (!TranscriptMigrator.TryMigrate(srcRoot, dstRoot,
                          cwd, entry.Info.ClaudeSessionId, out var error))
                 throw new InvalidOperationException($"Не удалось перенести транскрипт: {error}");
             else
@@ -3192,6 +3215,14 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             + $"({newModel ?? "по умолчанию"}, транскрипт: {(transcriptMoved ? "перенесён" : "нечего переносить")})");
         return entry.Info;
     }
+
+    // Сравнение корней профиля «одна папка или нет»: корни собирает разный код (ConfigRootFor,
+    // песочная перепись раннера), хвостовые разделители различаются.
+    private static bool SameDir(string a, string b) =>
+        string.Equals(
+            a.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            b.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            StringComparison.OrdinalIgnoreCase);
 
     // Значения include ветвления чата (docs/research/chat-branching-2026-09.md §5, §6):
     // turn — история по конец хода (кнопка под ответом ассистента), beforePrompt — история
@@ -5610,9 +5641,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         {
             // Пустой ответ/сбой HTTP — честная ошибка без фолбэка на CLI
             // (ErrorMessage исключения уже ушёл выше — второй не дублируем).
+            // Занятость общего счётчика — не отказ движка: человеку так и говорим
             if (turn is not null)
-                await OnMessageQueuedAsync(sessionId, acc,
-                    new ErrorMessage("Локальная модель не ответила"), runId);
+                await OnMessageQueuedAsync(sessionId, acc, new ErrorMessage(turn.Busy
+                    ? "Локальный движок занят — ход не запущен, повторите чуть позже"
+                    : "Локальная модель не ответила"), runId);
         }
 
         await OnMessageQueuedAsync(sessionId, acc, new ExitedMessage(), runId);

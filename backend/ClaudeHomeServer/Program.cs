@@ -20,6 +20,7 @@ using ClaudeHomeServer.Services.Mcp;
 using ClaudeHomeServer.Services.Mcp.Http;
 using ClaudeHomeServer.Services.ProjectServices;
 using ClaudeHomeServer.Services.Terminal;
+using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.TriggerSources;
 using ClaudeHomeServer.Services.Modules;
 using ClaudeHomeServer.Services.Turn;
@@ -167,8 +168,14 @@ builder.Services.AddExceptionHandler<ClaudeHomeServer.Services.Http.UnhandledExc
 // кодом local_project, а не 500 (ADR-016 §4, G1)
 var mvcBuilder = builder.Services.AddControllers(o => o.Filters.Add(new LocalProjectExceptionFilter()))
     .AddJsonOptions(o =>
+    {
         o.JsonSerializerOptions.Converters.Add(
-            new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)));
+            new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase));
+        // Чат автора голоса фичи живёт в сторе, но наружу не отдаётся — одним конвертером типа
+        // на все точки отдачи TaskItem (см. Services/FeatureNoteJsonConverter.cs). Тот же
+        // конвертер ниже у SignalR и в выходных опциях задач (FeatureJsonOptions, TasksToolset).
+        o.JsonSerializerOptions.Converters.Add(new ClaudeHomeServer.Services.FeatureNoteJsonConverter());
+    });
 // Вычисленные «связи» сессии (parentSessionId/taskDone) дописываются на границе
 // сериализации — одним конвертером типа Session на все точки отдачи (см.
 // Services/SessionJsonConverter.cs). Только в опциях MVC: стор sessions.json пишется
@@ -296,8 +303,13 @@ builder.Services.AddSignalR(o =>
         Microsoft.AspNetCore.SignalR.HubOptionsExtensions.AddFilter(o, new ProjectCapabilityHubFilter());
     })
     .AddJsonProtocol(o =>
+    {
         o.PayloadSerializerOptions.Converters.Add(
-            new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)));
+            new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase));
+        // task_changed несёт полный TaskItem: чат автора голоса фичи фильтруется тем же
+        // конвертером, что и REST-ответы (см. Services/FeatureNoteJsonConverter.cs).
+        o.PayloadSerializerOptions.Converters.Add(new ClaudeHomeServer.Services.FeatureNoteJsonConverter());
+    });
 
 // Observability: OTel SDK (traces + metrics) с two-mode конфигурацией.
 // Конфиг через секцию Telemetry в appsettings*.json. См. docs/observability/overview.md.
@@ -790,6 +802,12 @@ builder.Services.AddSingleton<ITaskNotificationDispatcher>(sp => sp.GetRequiredS
 builder.Services.AddSingleton<PushSubscriptionStore>();
 builder.Services.AddSingleton<PushService>();
 builder.Services.AddSingleton<TaskExecutionService>();
+// Шов IFeatureHoldReleaser (Core) → TaskExecutionService: и автоснятие очереди (Tasks), и ручная
+// DELETE-ручка снимают удержание одним телом. Регистрация здесь, а не в AddFeatureQueue:
+// вертикаль Tasks не видит Main; сам исполнитель регистрируется unconditional — шов с ним рядом.
+builder.Services.AddSingleton<IFeatureHoldReleaser>(sp => sp.GetRequiredService<TaskExecutionService>());
+// Очередь фич (волна 6): регистрируется только при включённой подсистеме задач.
+builder.Services.AddFeatureQueue(builder.Configuration);
 // Запуск предгейта шага (NC-P1b): шов ITaskPregate опционален — вертикаль TestRuns отключаемая
 builder.Services.AddSingleton<TaskPregateService>();
 builder.Services.AddSingleton<ReviewTreePool>();
@@ -852,6 +870,10 @@ builder.Services.AddSingleton<IPersonaAutomationRunner>(sp => sp.GetRequiredServ
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Backup.BackupService>();
 builder.Services.AddGatedHostedFrom(builder.Configuration, sp =>
     sp.GetRequiredService<ClaudeHomeServer.Services.Backup.BackupService>());
+// Ночная уборка worktree и /tmp, тревога о нехватке места (WorktreeCleanupService)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.WorktreeCleanupService>();
+builder.Services.AddGatedHostedFrom(builder.Configuration, sp =>
+    sp.GetRequiredService<ClaudeHomeServer.Services.WorktreeCleanupService>());
 
 // === Канал устройства (ADR-016): агент локальных проектов на машине пользователя ===
 // Реестр устройств и хеши их токенов — единственный стор канала; живые соединения хаба

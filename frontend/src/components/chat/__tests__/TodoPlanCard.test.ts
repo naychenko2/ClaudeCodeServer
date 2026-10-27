@@ -148,19 +148,25 @@ describe('TodoPlanView: прошлая → строка-снимок', () => {
     expect(html).toContain('aria-expanded="false"');
   });
 
-  // R2 minor 9: время снимка «· HH:MM» (макет «· 16:12»). ts=1700000000000 → 22:13 в UTC
-  // (прогон под TZ=UTC); формат — toLocaleTimeString('ru-RU', {hour,minute}).
-  it('время снимка «· HH:MM» (22:13 в UTC)', () => {
+  // R2 minor 9: время снимка «· HH:MM» (макет «· 16:12»). Ожидание — тот же момент ts,
+  // отрендеренный в TZ хоста (тот же контракт формата, что у компонента:
+  // toLocaleTimeString('ru-RU', {hour,minute})): тест зелёный при любом TZ хоста
+  // (DEF-TZ-TIMEOUT: прежняя константа «· 22:13» была зашита под TZ=UTC и краснела под MSK).
+  it('время снимка «· HH:MM» — момент ts в TZ хоста', () => {
     runsFlag.value = [runFixture('feat-1')];
+    const ts = 1700000000000;
+    const expected = new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
     const html = renderToStaticMarkup(
       wrap(createElement(TodoPlanViewForTest, {
         todos: todos(),
         isMobile: false,
         isCurrentPlan: false,
-        ts: 1700000000000,
+        ts,
       })),
     );
-    expect(html).toContain('· 22:13');
+    expect(html, `время снимка не момент ts в TZ хоста (ожидалось «· ${expected}»)`).toContain(`· ${expected}`);
+    // Контракт формата: ровно «· HH:MM» (две цифры, 24-часовой) — ловит сломанный формат.
+    expect(html, 'формат времени не «· HH:MM»').toMatch(/· \d{2}:\d{2}/);
   });
 
   it('клик раскрывает чек-лист (aria-expanded=true, появляются пункты)', () => {

@@ -1,19 +1,23 @@
 // Вкладка «Планы и макеты» страницы фичи (волна 4, вариант 5В точки 5).
 //
-// Раскладка: сетка карточек-превью — группы «Документы» и «Макеты» (3 колонки на
-// десктопе, 1 на 360). Клик по карточке — читалка или карточка макета на всю ширину
-// с «‹ Все документы» для возврата к сетке.
+// Раскладка: сетка карточек-превью — группы «Документы», «Прочие документы» и «Макеты»
+// (3 колонки на десктопе, 1 на 360). Клик по карточке — читалка или карточка макета на
+// всю ширину с «‹ Все документы» для возврата к сетке; клик по «прочему документу» —
+// открытие файла проекта (onOpenFile).
 //
-// Документы (plans): порядок cut → plan → consult (макет); карточка — значок роли,
+// Документы (plans): порядок cut → design → plan → consult; карточка — значок роли,
 // заголовок, автор, время, «без текста». Читалка — FeaturePlanReader (markdown через
-// общий рендер). Макеты — FeatureMockups (карточки-превью с миниатюрой-заглушкой,
-// карточка, «Прошлые версии»).
+// общий рендер). Прочие документы (M7): файлы из plans[].mockupPaths, не покрытые
+// ни одним макетом (их пути бэк несёт из linkedFiles задач — ADR, спеки, записки):
+// карточка «имя файла + путь». Макеты — FeatureMockups (карточки-превью с миниатюрой-
+// заглушкой, карточка, «Прошлые версии»).
 //
 // Состояния: документов нет, макеты есть → «Планов пока нет…»; mockupsUnavailable='device'
-// → «Макеты локального проекта видны только на устройстве»; нет ничего → общее пустое.
+// → «Макеты локального проекта видны только на устройстве» (и «прочих документов» нет:
+// файлы локального проекта на устройстве); нет ничего → общее пустое.
 
 import { useMemo, useState } from 'react';
-import { ChevronLeft, MessageCircle } from 'lucide-react';
+import { ChevronLeft, FileText, MessageCircle } from 'lucide-react';
 import { C, R, FS, FONT, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { getPersonaById } from '../../lib/personas';
@@ -112,6 +116,90 @@ function GroupHeader({ label, count, isMobile }: { label: string; count: number;
   );
 }
 
+// Видимые документы — ровно тот список, что рисует сетка: порядок cut → design →
+// plan → consult; дедуп планов (решение Андрея): переписанный план — показываем
+// ПОСЛЕДНИЙ по createdAt; разрезы, дизайны и консультации — все. Неизвестная роль
+// в группы не попадает (сетку не роняет). Единый источник и для карточек, и для
+// счётчика вкладки: иначе бейдж расходится с числом карточек (хвост ревью R-M3).
+export function visiblePlans(plans: FeaturePlan[]): FeaturePlan[] {
+  const byRole = (role: FeaturePlan['role']) => plans.filter(p => p.role === role);
+  // Последний план по createdAt: сортируем по возрастанию и берём хвост.
+  const planTasks = [...byRole('plan')].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const latestPlan = planTasks.length > 0 ? planTasks[planTasks.length - 1] : null;
+  return [
+    ...byRole('cut'),
+    ...byRole('design'),
+    ...(latestPlan ? [latestPlan] : []),
+    ...byRole('consult'),
+  ];
+}
+
+// «Прочие документы» (M7): файлы из plans[].mockupPaths, не показанные в группе «Макеты».
+// Бэк (M5) несёт в mockupPaths, кроме макетов из текста, файлы, которые задача приложила
+// через LinkedFiles (ADR, спеки, записки вне docs/mockups); группа «Макеты» рисует только
+// каталог docs/mockups. Путь, не совпавший ни с одним макетом (его path или любой из его
+// files), — документ фичи. Порядок: по планам (как их дал бэк), внутри — по mockupPaths;
+// дубли схлопнуты регистронезависимо: каталог макетов нормализует регистр пути
+// (MockupCatalog.DistinctLinkedHtml), и путь, отличающийся регистром, не должен
+// дублировать карточку макета. Список — единый для карточек и для счётчика
+// plansTabCount (R-M3: бейдж не должен расходиться с числом карточек).
+function otherDocPaths(plans: FeaturePlan[], mockups: FeatureMockup[]): string[] {
+  const covered = new Set<string>();
+  for (const m of mockups) {
+    covered.add(m.path.toLowerCase());
+    for (const f of m.files) covered.add(f.path.toLowerCase());
+  }
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const p of plans) {
+    for (const path of p.mockupPaths) {
+      const key = path.toLowerCase();
+      if (covered.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      out.push(path);
+    }
+  }
+  return out;
+}
+
+// Карточка «прочего документа»: имя файла + путь (mono). Клик → onOpenFile (когда дан;
+// без него карточка не интерактивна — не обещаем то, что не можем).
+function OtherDocCard({ path, onOpen }: { path: string; onOpen?: () => void }) {
+  const [hover, setHover] = useState(false);
+  const name = path.split('/').pop() || path;
+  return (
+    <div
+      data-testid="other-doc-row"
+      role={onOpen ? 'button' : undefined}
+      tabIndex={onOpen ? 0 : undefined}
+      onClick={onOpen}
+      onKeyDown={e => { if (onOpen && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(); } }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      title={path}
+      style={{
+        background: hover ? C.bgSelected : C.bgCard,
+        border: `1px solid ${C.border}`,
+        borderRadius: R.md,
+        padding: `${SP.md}px ${SP.md}px`,
+        display: 'flex', flexDirection: 'column', gap: SP.sm,
+        cursor: onOpen ? 'pointer' : 'default',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
+        <FileText size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ color: C.textMuted, flexShrink: 0 }} />
+        {/* Имя файла — до двух строк; путь — строкой ниже (mono, muted). */}
+        <span style={{ fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600, color: C.textHeading, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0, flex: 1 }}>
+          {name}
+        </span>
+      </div>
+      <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {path}
+      </span>
+    </div>
+  );
+}
+
 export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask, onOpenKeyChat, marks: marksProp, featureId = null, projectId = null }: FeaturePlansTabProps) {
   const marks = useMemo(() => marksProp ?? buildNavMarks(page.run, page.chats), [marksProp, page]);
   // Проект эпика — область перехода в задачу; нет эпика — проект страницы.
@@ -121,22 +209,14 @@ export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask
     if (featureId) recordFeatureReturn(featureId, { kind: 'task', id: taskId }, page.run.epic?.title ?? null, 'plans');
     openTaskInSection({ id: taskId, projectId: taskProjectId ?? undefined });
   };
-  // Документы: порядок cut → plan → consult (макет). Дедуп планов (решение Андрея):
-  // переписанный план — показываем ПОСЛЕДНИЙ по createdAt; разрезы и консультации — все.
-  const plans = useMemo(() => {
-    const all = page.plans ?? [];
-    const byRole = (role: FeaturePlan['role']) => all.filter(p => p.role === role);
-    // Последний план по createdAt: сортируем по возрастанию и берём хвост.
-    const planTasks = [...byRole('plan')].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-    const latestPlan = planTasks.length > 0 ? planTasks[planTasks.length - 1] : null;
-    return [
-      ...byRole('cut'),
-      ...(latestPlan ? [latestPlan] : []),
-      ...byRole('consult'),
-    ];
-  }, [page.plans]);
+  // Документы — видимый список (тот же, что считает plansTabCount).
+  const plans = useMemo(() => visiblePlans(page.plans ?? []), [page.plans]);
   const mockups: FeatureMockup[] = page.mockups ?? [];
   const device = page.mockupsUnavailable === 'device';
+  // «Прочие документы» (M7): по ВСЕМ планам (материалы фичи не зависят от того, чья
+  // карточка показана). При 'device' группы нет: файлы локального проекта на устройстве,
+  // страница их не откроет — та же причина, что у плашки макетов «на устройстве».
+  const otherDocs = device ? [] : otherDocPaths(page.plans ?? [], mockups);
 
   // Сетка — состояние по умолчанию (5В: «сначала сетка карточек»). Если выбранный
   // документ/макет исчез из данных (дедуп, обновление) — selectedPlan/selectedMockup
@@ -147,7 +227,7 @@ export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask
   // Выбранный макет — прошлая версия (не текущая в группе) → чип «заменён» в карточке.
   const selectedMockupReplaced = selectedMockup ? !isCurrentOfGroup(selectedMockup, mockups) : false;
 
-  const hasAnything = plans.length > 0 || mockups.length > 0;
+  const hasAnything = plans.length > 0 || mockups.length > 0 || otherDocs.length > 0;
   // «Документов и макетов пока нет» — только когда пусто И макеты не «на устройстве»:
   // при mockupsUnavailable='device' макеты ЕСТЬ (на устройстве), пустота бы врала —
   // показываем честную причину (MockupDeviceNotice) независимо от наличия планов.
@@ -191,6 +271,16 @@ export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask
                 ))}
               </div>}
           </div>
+          {otherDocs.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+              <GroupHeader label="Прочие документы" count={otherDocs.length} isMobile={isMobile} />
+              <div data-testid="plans-grid-other-docs" style={{ display: 'grid', gridTemplateColumns: gridColumns(isMobile), gap: SP.md }}>
+                {otherDocs.map(p => (
+                  <OtherDocCard key={p} path={p} onOpen={onOpenFile ? () => onOpenFile(p) : undefined} />
+                ))}
+              </div>
+            </div>
+          )}
           {device
             ? <MockupDeviceNotice isMobile={isMobile} />
             : <MockupListSection mockups={mockups} onSelect={p => setSelected({ kind: 'mockup', path: p })} isMobile={isMobile} />}
@@ -223,9 +313,13 @@ function NoDocuments({ hasKeyChat, onOpenKeyChat, isMobile }: { hasKeyChat: bool
   );
 }
 
-// Счётчик вкладки «Планы и макеты»: документы + живые макеты (без отклонённых).
+// Счётчик вкладки «Планы и макеты»: видимые документы (ровно тот список, что
+// рисует сетка: дедуп планов и неизвестные роли не считаются — хвост ревью R-M3)
+// + «прочие документы» (тот же otherDocPaths, что рисует сетку; при 'device' группы
+// нет — 0) + живые макеты (без отклонённых).
 export function plansTabCount(page: FeaturePage): number {
-  const plans = (page.plans ?? []).length;
+  const docs = visiblePlans(page.plans ?? []).length;
   const live = splitMockups(page.mockups ?? []).live.length;
-  return plans + live;
+  const other = page.mockupsUnavailable === 'device' ? 0 : otherDocPaths(page.plans ?? [], page.mockups ?? []).length;
+  return docs + live + other;
 }

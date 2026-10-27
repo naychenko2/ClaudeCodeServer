@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Session } from '../types';
 import type { FeatureChip } from '../types/featureIndex';
+import type { FeatureBrief } from './featurePage';
 
 // Чип статуса жизни чата (макет варианта А): маппинг фиксированный, покрывает все
 // 7 значений Session.status + признак готовности задачи.
@@ -72,13 +73,12 @@ export interface ChatFilters {
   // красит (isDefaultFilters её не учитывает — как groupBy/sortOrder/hierarchy),
   // а «Сбросить всё» из режима архива не выкидывает.
   archivedOnly: boolean;
-  // Фасет «Фичи»: выбранные чипы-фильтры (мультивыбор) + раскрывать ли секцию «Закрытые».
-  // featureChips — набор waiting|stopped|merge|running; пусто = «открытые» (дефолт).
-  // showClosed — показывать ли секцию закрытых фич.
-  // Оба поля — ОСИ РЕЖИМА, relevant только при groupBy='features': isDefaultFilters и
-  // «Сбросить всё» учитывают их ТОЛЬКО в режиме фич (в других режимах спят, как archivedOnly).
-  featureChips: FeatureChip[];
-  showClosed: boolean;
+  // Фасет «Фичи»: ось выбора состояний. featureKinds — выбранные значения
+  // FeatureBrief.kind (тот же словарь, что у сводки на странице фичи, второго union нет);
+  // [] = умолчание: восемь открытых видны, «Закрытые» скрыты. Выбор, равный умолчанию,
+  // хранится как [] (разрез п. 4). Это ОСЬ РЕЖИМА, relevant только при groupBy='features':
+  // isDefaultFilters и «Сбросить всё» учитывают её ТОЛЬКО в режиме фич (спит, как archivedOnly).
+  featureKinds: FeatureKind[];
 }
 
 const KEY_PREFIX = 'cc_chat_filters:';
@@ -89,12 +89,23 @@ const LEGACY_VIEW_PREFIX = 'cc_chat_view:';
 
 export const ALL_ORIGINS: Session['origin'][] = ['manual', 'task', 'automation'];
 export const ALL_STATUS_CHIPS: ChatStatusChip[] = ['active', 'waiting', 'done', 'error'];
-// Белый список значений чипа-фильтра фич (фасет «Фичи»): он же порядок ряда чипов.
-// Незнакомое значение из localStorage вырождается в 'open' (нормализация ниже).
-export const ALL_FEATURE_FILTER_CHIPS: FeatureChip[] = ['open', 'waiting', 'stopped', 'merge', 'merged', 'closed'];
-// Белый список ВЫБИРАЕМЫХ чипов (мультивыбор featureChips): waiting|stopped|merge|running|merged.
-// 'open' = пустой выбор (дефолт), 'closed' = showClosed — в массив не входят.
-export const ALL_FEATURE_CHIPS: FeatureChip[] = ['waiting', 'stopped', 'merge', 'running', 'merged'];
+// Белый список значений УДАЛЁННОГО одиночного featureFilter — нужен только миграции
+// в normalize (записи, сохранённые до оси featureKinds). Не экспортируется: вне
+// миграции этих значений никто не читает.
+const ALL_FEATURE_FILTER_CHIPS: FeatureChip[] = ['open', 'waiting', 'stopped', 'merge', 'merged', 'closed'];
+
+// Категория состояния фичи — ТОТ ЖЕ тип, что у сводки на странице фичи (разрез п. 2):
+// второго union нет; 'merged' — смержена, эпик открыт (Б-1.1/Ф-1.1).
+export type FeatureKind = FeatureBrief['kind'];
+
+// Белый список значений оси featureKinds (Ф-1.2) — он же порядок чипов ряда в секции
+// «Фичи · что показывать»: по срочности (записка Майи п. 2) — сначала то, что требует
+// человека; 'merged' последним из открытых; 'closed' последним. Он же фильтр мусора
+// из localStorage и эталонный порядок хранения выбора (идемпотентность миграции).
+// Список неизменяем (as const) — как ALL_GROUP_BY/ALL_SORT_ORDERS.
+export const ALL_FEATURE_KINDS = [
+  'waiting_you', 'error', 'running', 'queued', 'paused', 'draft', 'idle', 'merged', 'closed',
+] as const;
 // Дефолт по макету А: активные срезы видны, архив (Готово) скрыт — список не зарастает
 export const DEFAULT_STATUSES: ChatStatusChip[] = ['active', 'waiting', 'error'];
 
@@ -109,8 +120,7 @@ function defaults(): ChatFilters {
     sortOrder: 'newest',
     hierarchy: true,
     archivedOnly: false,
-    featureChips: [],
-    showClosed: false,
+    featureKinds: [],
   };
 }
 
@@ -142,6 +152,67 @@ function readLegacyView(scopeKey: string): Partial<ChatFilters> {
   }
 }
 
+// Старые чипы-фильтры → значения новой оси (таблица разреза п. 5). Строки 'open'/
+// 'closed' старого словаря не переводятся: 'open' = пустой выбор, 'closed' = showClosed —
+// они и в featureChips не хранились. 'merge' схлопывается в 'waiting_you' (разрез п. 3:
+// «ждёт мержа» остаётся внутри «ждут вас»).
+const LEGACY_CHIP_TO_KIND: Record<FeatureChip, FeatureKind | null> = {
+  open: null, closed: null,
+  waiting: 'waiting_you', merge: 'waiting_you',
+  stopped: 'error', running: 'running', merged: 'merged',
+};
+
+// Значения, которые могли лежать в старом массиве featureChips: собственные ключи
+// таблицы перевода со значением ('open'/'closed' в массив не писались — их перевод null;
+// мусор — тоже). Нужен только чтению старого массива в normalize (Ф-3): граница — ровно
+// прежний белый список ALL_FEATURE_CHIPS, т.е. собственные ключи таблицы, а не ключи
+// Object.prototype ('toString'/'constructor'/'__proto__' не проходят: без hasOwn они
+// доставали бы значение из прототипа и проходили как чип — R-Ф3 мин. 1).
+const isLegacySelectableChip = (c: unknown): c is FeatureChip =>
+  typeof c === 'string' && Object.hasOwn(LEGACY_CHIP_TO_KIND, c) && LEGACY_CHIP_TO_KIND[c as FeatureChip] != null;
+
+// Выбор, равный умолчанию (все восемь открытых без 'closed'), — храним как [] (разрез п. 4):
+// умолчание не дублируется явным списком, и новое значение kind у пользователей умолчания
+// появляется само. Экспортирован как ЕДИНСТВЕННОЕ выражение «восьми открытых» (R-Ф3 мин. 2):
+// его читают FilterBar (ряд чипов и «открытые» счётчики) и chatGroups.shownFiltersModel —
+// при появлении десятого kind правится одно место, не три. Равный умолчанию выбор не должен
+// попадать в состояние явным списком ни при чтении, ни при клике (R-Ф2.1 M2). Сравнение —
+// ПО МНОЖЕСТВУ с эталоном DEFAULT_FEATURE_KINDS (R-Ф1.2 мин. 2): восемь элементов с дублем
+// или мусором равными не считаются; пустой выбор — не «явный равный», он означает умолчание
+// сам по себе (здесь false).
+export const DEFAULT_FEATURE_KINDS = ALL_FEATURE_KINDS.filter(k => k !== 'closed');
+export function isDefaultFeatureKinds(kinds: FeatureKind[]): boolean {
+  const set = new Set(kinds);
+  return set.size === DEFAULT_FEATURE_KINDS.length && DEFAULT_FEATURE_KINDS.every(k => set.has(k));
+}
+
+// Массив из записи → белый список ALL_FEATURE_KINDS: дубли схлопнуть, порядок — эталонный
+// (он же идемпотентность: повторная нормализация равного списка даёт его же);
+// равный умолчанию → [].
+function toFeatureKinds(raw: unknown[]): FeatureKind[] {
+  const picked = new Set<FeatureKind>();
+  for (const k of raw) {
+    if ((ALL_FEATURE_KINDS as readonly string[]).includes(k as string)) picked.add(k as FeatureKind);
+  }
+  const kinds = ALL_FEATURE_KINDS.filter(k => picked.has(k));
+  return isDefaultFeatureKinds(kinds) ? [] : kinds;
+}
+
+// Миграция старого фильтра фич (featureChips + showClosed) → featureKinds (таблица п. 5):
+// пусто/false → []; пусто/true → восемь открытых + 'closed' явно; непустые чипы → перевод
+// по LEGACY_CHIP_TO_KIND, при showClosed — плюс 'closed'.
+function migrateLegacyFeatureKinds(chips: FeatureChip[], showClosed: boolean): FeatureKind[] {
+  if (!chips.length) return showClosed ? [...ALL_FEATURE_KINDS] : [];
+  const picked = new Set<FeatureKind>();
+  for (const c of chips) {
+    const k = LEGACY_CHIP_TO_KIND[c];
+    if (k) picked.add(k);
+  }
+  if (showClosed) picked.add('closed');
+  const kinds = ALL_FEATURE_KINDS.filter(k => picked.has(k));
+  return isDefaultFeatureKinds(kinds) ? [] : kinds;
+}
+
 // Мирная миграция: читаем новый формат; старый объект с activeOnly (до переработки)
 // просто игнорируется — этот фильтр заменён секцией статусов. origins/personaId
 // наследуются, statuses/only/search берутся из хранилища или дефолтятся.
@@ -162,18 +233,24 @@ function normalize(p: Partial<ChatFilters>, scopeKey?: string): ChatFilters {
     (typeof p.groupBy === 'string' && (ALL_GROUP_BY as readonly string[]).includes(p.groupBy))
       ? (p.groupBy as ChatGroupBy)
       : legacyAxes.groupBy ?? 'days';
-  // Миграция одиночного featureFilter (до мультивыбора) → featureChips[] + showClosed.
-  // Старое значение: 'open'→[]/false, waiting/stopped/merge→[x]/false, 'closed'→[]/true,
-  // мусор/отсутствует→[]/false. Если запись уже несёт новые поля — они имеют приоритет.
-  // featureFilter — legacy-поле (уже не в ChatFilters), читаем через каст.
-  const legacy = p as Partial<ChatFilters> & { featureFilter?: unknown };
+  // Ось фич (Ф-1.2). Есть массив featureKinds в записи — белый список (дубли схлопнуть,
+  // порядок эталонный, равный умолчанию → []); не массив (нет поля, не строка/объект) —
+  // миграция. Миграция нужна ТОЛЬКО записям, сохранённым до появления оси (до Ф-1.2):
+  // их поля — featureFilter (одиночный), featureChips/showClosed (мультивыбор) — уже не
+  // в ChatFilters, читаются через каст и только здесь (как удалённый cc_chat_view).
+  // Цепочка: featureFilter → featureChips/showClosed → featureKinds по таблице разреза п. 5;
+  // 'open'→[]/false, waiting/stopped/merge→[x]/false, 'closed'→[]/true, мусор→[]/false.
+  const legacy = p as Partial<ChatFilters> & { featureFilter?: unknown; featureChips?: unknown; showClosed?: unknown };
   const legacyFeatureChip = (typeof legacy.featureFilter === 'string' && (ALL_FEATURE_FILTER_CHIPS as string[]).includes(legacy.featureFilter))
     ? (legacy.featureFilter as FeatureChip)
     : null;
-  const featureChips: FeatureChip[] = Array.isArray(p.featureChips)
-    ? p.featureChips.filter(c => (ALL_FEATURE_CHIPS as string[]).includes(c))
+  const legacyChips: FeatureChip[] = Array.isArray(legacy.featureChips)
+    ? (legacy.featureChips as unknown[]).filter(isLegacySelectableChip)
     : (legacyFeatureChip === 'waiting' || legacyFeatureChip === 'stopped' || legacyFeatureChip === 'merge' ? [legacyFeatureChip] : []);
-  const showClosed: boolean = typeof p.showClosed === 'boolean' ? p.showClosed : legacyFeatureChip === 'closed';
+  const legacyShowClosed: boolean = typeof legacy.showClosed === 'boolean' ? legacy.showClosed : legacyFeatureChip === 'closed';
+  const featureKinds: FeatureKind[] = Array.isArray(p.featureKinds)
+    ? toFeatureKinds(p.featureKinds)
+    : migrateLegacyFeatureKinds(legacyChips, legacyShowClosed);
   return {
     origins: origins.length ? origins : [...ALL_ORIGINS],
     // пустой набор статусов = «всё скрыто» — не имеет смысла, возвращаем дефолт
@@ -190,10 +267,8 @@ function normalize(p: Partial<ChatFilters>, scopeKey?: string): ChatFilters {
     hierarchy: true,
     // Запись старого формата (до режима архива) — начинаем с обычного списка
     archivedOnly: typeof p.archivedOnly === 'boolean' ? p.archivedOnly : false,
-    // Чипы-фильтры фич: мигрированы из одиночного featureFilter (см. выше) или
-    // прочитаны как есть (белый список ALL_FEATURE_CHIPS). Дефолт — пусто / false.
-    featureChips,
-    showClosed,
+    // Ось фич: прочитана напрямую или мигрирована из legacy-полей (см. выше)
+    featureKinds,
   };
 }
 
@@ -262,6 +337,8 @@ export function useChatFilters(scopeKey: string) {
   }, [scopeKey]);
 
   const patch = (p: Partial<ChatFilters>) => {
+    // featureKinds — единственная ось фич: патч пишет её напрямую (пересчёт из
+    // legacy-полей был нужен, пока старый UI писал featureChips/showClosed; удалён в Ф-3).
     const next = { ...filters, ...p };
     persistChatFilters(scopeKey, next);
     setFilters(next);
@@ -360,8 +437,8 @@ export function matchChatFilter(filters: ChatFilters): (s: Session) => boolean {
 // чаты, а перестраивают список — активная ось не должна красить триггер фильтров.
 // archivedOnly — тоже ось (у неё свой видимый переключатель «Архивные»), поэтому
 // режим архива не красит триггер и не считается «включённым фильтром».
-// featureChips/showClosed — оси режима фич: «не-дефолт» (красят триггер) ТОЛЬКО при
-// groupBy='features'; в других режимах спят, как archivedOnly.
+// featureKinds — ось режима фич: «не-дефолт» (красит триггер) ТОЛЬКО при groupBy='features';
+// в других режимах спит, как archivedOnly.
 export function isDefaultFilters(f: ChatFilters): boolean {
   const base = f.origins.length === ALL_ORIGINS.length && ALL_ORIGINS.every(o => f.origins.includes(o))
     && f.statuses.length === DEFAULT_STATUSES.length && DEFAULT_STATUSES.every(s => f.statuses.includes(s))
@@ -370,7 +447,7 @@ export function isDefaultFilters(f: ChatFilters): boolean {
     && f.search.trim() === ''
     && (f.tags?.length ?? 0) === 0;
   if (!base) return false;
-  if (f.groupBy === 'features') return f.featureChips.length === 0 && !f.showClosed;
+  if (f.groupBy === 'features') return f.featureKinds.length === 0;
   return true;
 }
 
@@ -382,8 +459,8 @@ export function defaultChatFilters(): ChatFilters {
 // фильтров не должен неожиданно перестраивать список (группировка/порядок/иерархия)
 // и уж тем более выкидывать из режима архива: выйти из него — дело переключателя.
 export function defaultChatFiltersKeepingView(f: ChatFilters): ChatFilters {
-  // Чипы-фильтры фич — оси режима: в режиме фич «Сбросить всё» их сбрасывает
-  // (это активные фильтры), в других режимах сохраняет (спят, как archivedOnly).
+  // Ось режима фич — featureKinds: в режиме фич «Сбросить всё» сбрасывает её (это
+  // активный фильтр), в других режимах сохраняет (спит, как archivedOnly).
   const inFeatures = f.groupBy === 'features';
   return {
     ...defaults(),
@@ -391,8 +468,7 @@ export function defaultChatFiltersKeepingView(f: ChatFilters): ChatFilters {
     sortOrder: f.sortOrder,
     hierarchy: f.hierarchy,
     archivedOnly: f.archivedOnly,
-    featureChips: inFeatures ? [] : f.featureChips,
-    showClosed: inFeatures ? false : f.showClosed,
+    featureKinds: inFeatures ? [] : f.featureKinds,
   };
 }
 

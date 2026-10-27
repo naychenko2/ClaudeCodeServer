@@ -103,8 +103,19 @@ public class LocalProcessRunnerIsolationTests
             "--slice=ccs-agents.slice",
             "--property=MemoryHigh=12G",
             "--property=MemoryMax=16G",
+            "--property=ManagedOOMPreference=avoid",
             "--",
             "dummy", "--print", "a b");
+    }
+
+    // Свойство не наследуется от slice к scope, поэтому ставится в каждый scope — независимо от
+    // того, заданы ли пределы памяти (HOST-3).
+    [Fact]
+    public void ManagedOOMPreference_СтавитсяВсегда_ДажеБезПределовПамяти()
+    {
+        var args = LocalProcessRunner.WrapperArgs(new IsolationOptions(), Unit).ToList();
+
+        args.Should().Contain("--property=ManagedOOMPreference=avoid");
     }
 
     // Сборка инструмента (dev build, run_tests) вне scope: узлы MSBuild и компилятор — только
@@ -188,7 +199,7 @@ public class LocalProcessRunnerIsolationTests
 
         var (psi, _) = Build(Spec(), On());
 
-        psi.ArgumentList.Should().NotContain(a => a.StartsWith("--property="));
+        psi.ArgumentList.Should().NotContain(a => a.StartsWith("--property=Memory"));
         psi.ArgumentList.Should().ContainInOrder("--slice=ccs-agents.slice", "--", "dummy");
     }
 

@@ -120,9 +120,9 @@ describe('чистка старого пассивного кэша', () => {
     await new Promise(r => setTimeout(r, 0));
     expect([...store].filter(k => k.startsWith('/tasks/features') && k !== '/tasks/features/index')).toEqual([]);
     expect([...store].filter(k => k === '/tasks' || k.startsWith('/tasks?') || k.startsWith('/api/tasks'))).toEqual([]);
-    // /tasks/t1 (одиночная задача) тоже сносится — FIX-3; сам признак «чистили» не в счёт
+    // /tasks/t1 (одиночная задача) сносится — FIX-3, /projects/p/tasks — F2c-b; сам признак «чистили» не в счёт
     expect([...store].filter(k => !k.startsWith('tasks:legacy')).sort())
-      .toEqual(['/projects/p/tasks', '/tasks/features/index', 'tasks:all']);
+      .toEqual(['/tasks/features/index', 'tasks:all']);
     vi.doUnmock('./api');
   });
 });

@@ -174,6 +174,34 @@ describe('makeStatsFetch: окно доходит до запроса (блок�
     expect(vi.mocked(fetchLocalModelStats)).toHaveBeenLastCalledWith('1h');
   });
 
+  it('движок: без engineRef и с main — прежний вызов (без параметра engine)', async () => {
+    vi.mocked(fetchLocalModelStats).mockReset();
+    const win = { current: '5m' as const };
+    await makeStatsFetch(win)();
+    expect(vi.mocked(fetchLocalModelStats)).toHaveBeenLastCalledWith('5m');
+    await makeStatsFetch(win, { current: 'main' })();
+    expect(vi.mocked(fetchLocalModelStats)).toHaveBeenLastCalledWith('5m');
+  });
+
+  it('смена движка в ref меняет запрос со следующего тика поллера', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(fetchLocalModelStats).mockReset();
+      vi.mocked(fetchLocalModelStats).mockResolvedValue(mockLocalModelStats());
+      const engine = { current: 'main' as 'main' | 'bonsai' };
+      const p = createStatsPoller(
+        makeStatsFetch({ current: '5m' }, engine), 2000,
+        (fn, ms) => setInterval(fn, ms), (id) => clearInterval(id as ReturnType<typeof setInterval>),
+      );
+      p.setActive(true, true); // первый тик — main
+      expect(vi.mocked(fetchLocalModelStats)).toHaveBeenLastCalledWith('5m');
+      engine.current = 'bonsai'; // выбор переключили между тиками
+      await vi.advanceTimersByTimeAsync(2000); // следующий тик
+      expect(vi.mocked(fetchLocalModelStats)).toHaveBeenLastCalledWith('5m', undefined, 'bonsai');
+      p.dispose();
+    } finally { vi.useRealTimers(); }
+  });
+
   it('5m → 5m (не 15m по умолчанию): мутация «окно не пробрасывается» краснеет', async () => {
     vi.mocked(fetchLocalModelStats).mockReset();
     const ref = { current: '5m' as const };

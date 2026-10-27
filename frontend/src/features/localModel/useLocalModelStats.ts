@@ -4,14 +4,24 @@
 // подписки, useSyncExternalStore.
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { fetchLocalModelMedia, fetchLocalModelStats, type LocalModelStats } from './api';
+import { fetchLocalModelMedia, fetchLocalModelStats, type LocalModelEngineName, type LocalModelStats } from './api';
 import { DEFAULT_WINDOW, type Window as StatsWindow } from './ThroughputChart';
 
 // Захват текущего окна для fetch: poller живёт дольше выбора окна, поэтому fetch
 // читает windowRef.current на каждый вызов, а не захваченное значение. Смена
 // окна (без пересоздания poller) меняет следующий запрос — тест ниже.
-export function makeStatsFetch(windowRef: { current: StatsWindow }): () => Promise<LocalModelStats> {
-  return () => fetchLocalModelStats(windowRef.current);
+// engineRef — выбранный движок (тот же приём): смена меняет URL со следующего тика.
+// Без engineRef или с 'main' — прежний вызов и URL без параметра engine (основной стенд).
+export function makeStatsFetch(
+  windowRef: { current: StatsWindow },
+  engineRef?: { current: LocalModelEngineName },
+): () => Promise<LocalModelStats> {
+  return () => {
+    const engine = engineRef?.current;
+    return engine && engine !== 'main'
+      ? fetchLocalModelStats(windowRef.current, undefined, engine)
+      : fetchLocalModelStats(windowRef.current);
+  };
 }
 
 // === Условие показа значка и панели ===
@@ -193,24 +203,34 @@ export function createStatsPoller(
 // «Проверить сейчас»); стабильная обёртка, чтобы панель не перерисовывалась.
 // window — выбранное окно графика (5m/15m/1h): сервер отдаёт средние
 // speed.avg* за это окно, поэтому fetch читает текущее окно через ref.
-export function useLocalModelStats(active: boolean, window: StatsWindow = DEFAULT_WINDOW): {
+// engine — выбранный стенд ('main' по умолчанию): читается через ref, как окно.
+export function useLocalModelStats(
+  active: boolean,
+  window: StatsWindow = DEFAULT_WINDOW,
+  engine: LocalModelEngineName = 'main',
+): {
   data: LocalModelStats | null;
   loading: boolean;
   refetch: () => void;
 } {
   const windowRef = useRef<StatsWindow>(window);
   windowRef.current = window;
-  const [poller] = useState(() => createStatsPoller(makeStatsFetch(windowRef), 2000));
+  const engineRef = useRef<LocalModelEngineName>(engine);
+  engineRef.current = engine;
+  const [poller] = useState(() => createStatsPoller(makeStatsFetch(windowRef, engineRef), 2000));
 
   // Смена окна — сразу новый снимок: сервер отдаёт средние за выбранное окно,
   // поэтому данные за 15m не подходят под график 1h. Первый прогон пропускаем —
   // setActive уже снял снимок, повторный fetch был бы дублем.
+  // Смена движка — то же: данные другого стенда не показываем дольше одного запроса.
   const prevWindow = useRef<StatsWindow | null>(null);
+  const prevEngine = useRef<LocalModelEngineName | null>(null);
   useEffect(() => {
-    if (prevWindow.current === window) return;
+    if (prevWindow.current === window && prevEngine.current === engine) return;
     prevWindow.current = window;
+    prevEngine.current = engine;
     poller.refetch();
-  }, [window, poller]);
+  }, [window, engine, poller]);
 
   const snap = useSyncExternalStore(
     cb => poller.subscribe(cb),

@@ -1009,11 +1009,11 @@ public sealed class TasksToolset(
     // (ProjectFull → FeatureTracker), одна точка правды (TR-B1c). Сервер их только показывает —
     // чинит оркестратор (колонка «Кто чинит» разреза 26.10), поэтому здесь нет ни правок, ни
     // напоминаний. Пустой список назван явно: молчание читалось бы как «не смотрели».
-    // features is null (подсистема Tasks выключена) или роль не feature — ответ прежний, байт в байт.
+    // Роль не feature — ответ прежний, байт в байт.
     private McpToolCallResult TaskJson(TaskItem task, string ownerId)
     {
         var json = JsonSerializer.Serialize(task, JsonOpts);
-        if (task.Role != TaskRoles.Feature || features is null) return new McpToolCallResult(json);
+        if (task.Role != TaskRoles.Feature) return new McpToolCallResult(json);
 
         var issues = features.ProjectFull(task.Id, ownerId, FeatureChatDoor.Snapshot(sessions, ownerId))
             ?.Tracker ?? [];

@@ -94,7 +94,7 @@ function topCard(opts: {
       {rows.map((r, i) => {
         const name = nodeName(opts.dim, r.key, r.name);
         // Строка только из генераций медиа (fal/glif): токенов нет — значение счётчиком,
-        // цветом серии (у fal — plan, у glif — warning), а не акцентом токенов
+        // цветом серии (у fal — plan, у glif — rose), а не акцентом токенов
         const genOnly = r.tokens.total === 0 && r.falGenerations > 0;
         const isFree = opts.dim === 'source' && r.key === 'free';
         const isGen = opts.dim === 'source' && isGenSource(r.key);
@@ -165,7 +165,7 @@ export function SpendOverview({ data, showUsers, isMobile, isTablet = false, emp
   let sepDone = false;
   for (const d of data.byDay) {
     if (!sepDone && !d.aggregated && hasAgg) {
-      bars.push(<div key="sep" style={{ width: 0, borderLeft: `2px dashed ${C.warning}`, alignSelf: 'stretch', margin: '0 2px' }} />);
+      bars.push(<div key="sep" style={{ width: 0, borderLeft: `2px dashed ${C.textMuted}`, alignSelf: 'stretch', margin: '0 2px' }} />);
       sepDone = true;
     }
     const clickable = !d.aggregated && d.total > 0;
@@ -301,7 +301,7 @@ export function SpendOverview({ data, showUsers, isMobile, isTablet = false, emp
               </div>
             )}
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 8, alignItems: 'center' }}>
-              {TIER_KEYS.map(k => (
+              {[...TIER_KEYS].reverse().map(k => (
                 <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: C.textSecondary, fontFamily: FONT.sans }}>
                   <Dot color={SPEND_TIERS[k].color} />{SPEND_TIERS[k].label}
                 </span>

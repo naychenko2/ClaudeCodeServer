@@ -74,6 +74,25 @@ public sealed class FeatureProjector(TaskManager tasks)
         // ленте событий (W4-DES-B: хронология — ВСЕ задачи с featureId).
         var unroled = children.Where(t => t.Role is null).ToList();
 
+        // GC-B4: терминальное состояние (merged/closed) считается ДО тревоги. merged/closed —
+        // первые ветви ComputeState, от тревоги они не зависят, поэтому формула та же, что
+        // в ComputeState (:1648/:1653) — одна правда в двух местах не разойдётся.
+        bool finalAccepted = IsFinalAccepted(final);
+        bool terminalState = TerminalState(epic, merge, finalAccepted) is not null;
+
+        // GC-B4: «хвосты после мержа» — ЛЮБАЯ незакрытая дочерняя задача фичи, кроме merge
+        // (решение Софьи, вопрос 1 плана GC-B4). Порядок — по CreatedAt. Хвосты не участвуют
+        // ни в waitTask, ни в stoppedTask (см. ниже) — из-за них тревога не поднимается;
+        // тревога «мерж» (kind=merge) — не хвост, её не трогаем.
+        var postMergeTails = terminalState
+            ? children
+                .Where(t => t.Status != TaskItemStatus.Done && !ReferenceEquals(t, merge))
+                .OrderBy(t => t.CreatedAt)
+                .Select(t => t.Id)
+                .ToList()
+            : new List<string>();
+        var tailIds = postMergeTails.ToHashSet();
+
         // Вердикты — только по задачам, которые их несут (ревью/проверка/финал).
         var verdictBearing = reviews.Concat(qa).Concat(final is not null ? [final] : []).ToList();
         var verdicts = new FeatureVerdicts
@@ -118,11 +137,12 @@ public sealed class FeatureProjector(TaskManager tasks)
         // для merge (attention) и для state (merge_pending/merged). Вынесены в scope метода:
         // используются и в attention, и в расчёте state. IsHeld тут не нужен:
         // AwaitingHumanSince сам делает задачу held.
+        // GC-B4: хвосты после мержа в waitTask не участвуют — они не «ждут вас», а висят
+        // отдельной строкой (postMergeTails).
         var waitTask = featureTasks
-            .Where(t => t.AwaitingHumanSince is not null)
+            .Where(t => t.AwaitingHumanSince is not null && !tailIds.Contains(t.Id))
             .OrderBy(t => t.AwaitingHumanSince)
             .FirstOrDefault();
-        bool finalAccepted = IsFinalAccepted(final);
 
         // 1. stopped: InProgress-задача с валидной пометкой остановки (HasValidStopMark) —
         //    «остановленная» половина IsHeld. Задача с обоими маркерами (ещё и ждёт человека)
@@ -130,8 +150,10 @@ public sealed class FeatureProjector(TaskManager tasks)
         //    Тот же guard «позже ClaudeStartedAt» (HasValidStopMark) — защита от stale-пометки:
         //    если исполнитель перезапустили (MarkClaudeStarted сбрасывает ExecutorStoppedAt),
         //    но пометка не успела сброситься, ClaudeStartedAt будет позже → stopped не показываем.
+        //    GC-B4: хвосты после мержа сюда не попадают — остановленный хвост не тревога.
         var stoppedTask = featureTasks
-            .Where(t => t.Status == TaskItemStatus.InProgress && HasValidStopMark(t))
+            .Where(t => t.Status == TaskItemStatus.InProgress && HasValidStopMark(t)
+                && !tailIds.Contains(t.Id))
             .OrderByDescending(t => t.ExecutorStoppedAt)
             .FirstOrDefault();
         if (stoppedTask is not null)
@@ -492,7 +514,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         // Итог (summary) и нормализация рельсы считаются для state ∈ {merged, closed}: у «смержена,
         // ждёт закрытия» mergedAt виден. Частичный мерж (merge Done, финал не принят, эпик открыт)
         // сюда не попадает (инцидент 21.10).
-        bool terminal = featureState is FeatureStates.Merged or FeatureStates.Closed;
+        bool terminal = terminalState; // merged/closed — та же формула (TerminalState), что и выше
         // Закрыта = эпик Done (state closed, либо merged с эпиком Done). Смержена с открытым
         // эпиком — «merged», но не закрыта (своя группа, Р1-A).
         bool closed = featureState == FeatureStates.Closed
@@ -579,6 +601,7 @@ public sealed class FeatureProjector(TaskManager tasks)
             Quiet = quiet,
             Closed = closed,
             Summary = summary,
+            PostMergeTails = postMergeTails,
         };
     }
 
@@ -873,6 +896,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         Quiet = run.Quiet,
         Closed = run.Closed,
         Summary = run.Summary,
+        PostMergeTails = run.PostMergeTails,
     };
 
     // ─── Б2: хелперы и вычислители цепочек/возвратов/линий ─────────────────────────────────
@@ -1708,6 +1732,20 @@ public sealed class FeatureProjector(TaskManager tasks)
     public static bool IsAcceptance(string? verdict) =>
         verdict is TaskVerdicts.Accepted or TaskVerdicts.AcceptedWithRemarks;
 
+    // Терминальное состояние фичи (merged/closed) — общая формула проектора и ComputeState
+    // (GC-B4): хвосты после мержа считаются ДО тревоги, а merged/closed — первые ветви
+    // ComputeState, от тревоги они не зависят. null — фича не терминальна.
+    internal static string? TerminalState(TaskItem epic, TaskItem? merge, bool finalAccepted)
+    {
+        // merged: merge-задача Done И (финал принят ИЛИ эпик Done) — частичный мерж
+        // (merge Done, финал не принят, эпик открыт) фичу не закрывает (инцидент 21.10).
+        if (merge is not null && merge.Status == TaskItemStatus.Done
+            && (finalAccepted || epic.Status == TaskItemStatus.Done)) return FeatureStates.Merged;
+        // closed: эпик Done и не merged (merged отфильтрован выше).
+        if (epic.Status == TaskItemStatus.Done) return FeatureStates.Closed;
+        return null;
+    }
+
     // Состояние фичи (11 значений, приоритет сверху вниз; первое совпавшее побеждает):
     // merged → closed → paused → stopped → waiting → draft → merging → merge_pending → running →
     // not_started → idle (W4-HOLD-B1, разрез §1).
@@ -1723,15 +1761,15 @@ public sealed class FeatureProjector(TaskManager tasks)
         int nowCount,
         bool anyStarted)
     {
-        // 1. merged: merge-задача Done И (финал принят ИЛИ эпик Done).
+        // 1. merged / 2. closed: формула общая с проектором (TerminalState) — хвосты после
+        //    мержа (GC-B4) считаются по той же формуле, второй раз её писать нельзя.
         //    Частичный мерж (merge Done, финал не принят, эпик открыт) фичу НЕ закрывает:
         //    инцидент 21.10 — фича с двенадцатью шагами в работе стала «смержена».
-        if (merge is not null && merge.Status == TaskItemStatus.Done
-            && (finalAccepted || epic.Status == TaskItemStatus.Done)) return FeatureStates.Merged;
-        // 2. closed: эпик Done и не merged (merged уже отфильтрован выше).
         //    Эпик Done — решение человека «фича закончена»: даже если работа ещё идёт
         //    (running/stopped/waiting) — фича закрыта (старое «и нет активной работы» убрано).
-        if (epic.Status == TaskItemStatus.Done) return FeatureStates.Closed;
+        string? terminal = TerminalState(epic, merge, finalAccepted);
+        if (terminal == FeatureStates.Merged) return FeatureStates.Merged;
+        if (terminal == FeatureStates.Closed) return FeatureStates.Closed;
         // 3. paused: явное удержание человека — формула в FeatureProjector.IsPaused (общая с
         //    гейтом): «фичу не вести», решение человека, а не тревога. Стоит ДО stopped: пауза,
         //    прервавшая исполнителей, не должна показывать «ждёт вас» (W4-HOLD-B1).

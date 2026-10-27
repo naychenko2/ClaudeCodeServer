@@ -5610,9 +5610,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         {
             // Пустой ответ/сбой HTTP — честная ошибка без фолбэка на CLI
             // (ErrorMessage исключения уже ушёл выше — второй не дублируем).
+            // Занятость общего счётчика — не отказ движка: человеку так и говорим
             if (turn is not null)
-                await OnMessageQueuedAsync(sessionId, acc,
-                    new ErrorMessage("Локальная модель не ответила"), runId);
+                await OnMessageQueuedAsync(sessionId, acc, new ErrorMessage(turn.Busy
+                    ? "Локальный движок занят — ход не запущен, повторите чуть позже"
+                    : "Локальная модель не ответила"), runId);
         }
 
         await OnMessageQueuedAsync(sessionId, acc, new ExitedMessage(), runId);

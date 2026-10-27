@@ -15,8 +15,8 @@ describe('providerPricePills — пилюля цены карточки пров
   it('класс free — ровно одна пилюля «бесплатный», никакой «дёшево»', () => {
     const pills = providerPricePills('glm', 'free');
     expect(pills.filter(p => p.label === 'бесплатный')).toHaveLength(1);
-    expect(pills.some(p => p.label === 'дёшево')).toBe(false);
-    expect(pills.some(p => p.label === 'дорого')).toBe(false);
+    expect(pills.some(p => p.label === 'дешёвый')).toBe(false);
+    expect(pills.some(p => p.label === 'дорогой')).toBe(false);
   });
 
   // Класс с бэка решает: «cheap» у ключа freellm* означает, что провайдер платный.
@@ -56,6 +56,12 @@ describe('признак бесплатности — одна точка пра
   it('неизвестный класс — откат на локальное правило', () => {
     expect(isFreeProviderKey('freellmapi', null)).toBe(true);
     expect(isFreeProviderKey('glm', null)).toBe(false);
+  });
+
+  // Платный прямой адаптер не бесплатный; freellm*-direct — бесплатный (решение Андрея, 26.10).
+  it('неизвестный класс — платный *-direct не бесплатный, freellm*-direct бесплатный', () => {
+    expect(isFreeProviderKey('minimax-direct', null)).toBe(false);
+    expect(isFreeProviderKey('freellmapi-direct', null)).toBe(true);
   });
 
   it('бейдж полосы и карточка говорят одно и то же', () => {

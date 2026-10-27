@@ -59,8 +59,12 @@ public interface ILocalLlmClient
 public sealed record ChatMsg(string Role, string Content);
 
 // Результат разговорного хода: текст ответа (null — пустой/сбойный вызов) и usage
-// для ResultMessage ленты. null usage — счётчики движок не отдал.
-public sealed record ChatTurnResult(string? Text, UsageInfo? Usage);
+// для ResultMessage ленты. null usage — счётчики движок не отдал. Busy — запрос в движок не
+// уходил: свободных слотов в общем счётчике допуска нет (не путать с отказом самого движка).
+public sealed record ChatTurnResult(string? Text, UsageInfo? Usage, bool Busy = false)
+{
+    public static ChatTurnResult EngineBusy { get; } = new(null, null, Busy: true);
+}
 
 // Транспортные настройки локального движка: общая точка чтения для обеих реализаций.
 // Приоритет: LocalLlm:{X} → Ollama:{X} → дефолт. Поля Ollama оставлены как фолбэк,

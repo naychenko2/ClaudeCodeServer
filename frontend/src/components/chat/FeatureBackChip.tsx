@@ -1,7 +1,7 @@
 import { C, FONT, FS } from '../../lib/design';
 import { ICON_SIZE } from '../ui/icons';
 import { BackButton } from '../ui';
-import { useFeatureBackNav, useFeatureBackNavForTask } from '../../lib/featureBackNav';
+import { useFeatureBackNav, useFeatureBackNavForTask, consumeFeatureViewReturn } from '../../lib/featureBackNav';
 import { setFeaturePageTab, FEATURE_TAB_LABEL } from '../../lib/featurePage';
 
 // «← к фиче «{название}» · {вкладка}» (Ф-pl-b + Ф9b): чат открыт переходом ИЗ страницы
@@ -40,6 +40,12 @@ export function FeatureBackChip({ sessionId, taskId, projectId, isCompact = fals
       title={fullLabel}
       ariaLabel={fullLabel}
       onClick={() => {
+        // GC-F11: забрать снимок вида из указателя в однократный канал ДО диспатча:
+        // обработчик cc-open-feature гасит указатель (clearBackNav), а восстановление
+        // на «Хронологии» читает уже канал (дефект 4c4645e2 — указатель не должен
+        // стираться раньше восстановления). Только клик чипа значит «возврат»:
+        // открытие страницы из списка или из плашки чата этот путь не проходит.
+        consumeFeatureViewReturn(featureBack.featureId);
         // Вернуться на ТУ ЖЕ вкладку, с которой ушли: ставим явно — вкладку могли сменить,
         // пока страница была скрыта.
         setFeaturePageTab(featureBack.tab);

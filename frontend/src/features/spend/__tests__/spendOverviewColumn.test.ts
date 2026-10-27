@@ -49,13 +49,13 @@ beforeEach(() => { installFakeDom(); });
 afterEach(() => { uninstallFakeDom(); });
 
 describe('столбик дня в обзоре', () => {
-  it('день с разбивкой по классам: три сегмента в порядке free → cheap → expensive', () => {
+  it('день с разбивкой по классам: три сегмента в порядке снизу вверх expensive → cheap → free', () => {
     const { container } = render(data());
-    const segs = ['free', 'cheap', 'expensive'].map(k => findNodeByAttr(container, 'data-tier', k));
+    const segs = ['expensive', 'cheap', 'free'].map(k => findNodeByAttr(container, 'data-tier', k));
     expect(segs.every(Boolean)).toBe(true);
-    expect(styleOf(segs[0]).background).toBe(C.success);
+    expect(styleOf(segs[0]).background).toBe(C.warning);
     expect(styleOf(segs[1]).background).toBe(C.info);
-    expect(styleOf(segs[2]).background).toBe(C.warning);
+    expect(styleOf(segs[2]).background).toBe(C.success);
   });
 
   it('цвета сегментов — классы, а не источники (у «ходов» цвет акцента)', () => {

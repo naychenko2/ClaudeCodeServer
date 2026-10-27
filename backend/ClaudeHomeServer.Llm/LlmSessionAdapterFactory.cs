@@ -211,7 +211,8 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
             egress: _egress, events: context.Events,
             localProbe: _localProbe,
             transcriptOnServer: context.TranscriptOnServer,
-            turnOwnerId: claudeSession.TurnOwnerId);
+            turnOwnerId: claudeSession.TurnOwnerId,
+            localGate: context.LocalEngineBusy ?? LocalEngineBusyTracker.Instance);
         return fallback;
     }
 

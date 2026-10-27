@@ -82,7 +82,10 @@ function tx<T>(store: StoreName, mode: IDBTransactionMode, fn: (s: IDBObjectStor
 
 export interface CacheEntry<T = unknown> {
   data: T;
+  // «Данные по состоянию на»: при чтении не меняется никогда
   savedAt: number;
+  // Последний доступ — по нему вытесняется пассивный кэш (у старых записей поля нет — берётся savedAt)
+  usedAt?: number;
 }
 
 export function idbGet<T = unknown>(key: string): Promise<CacheEntry<T> | undefined> {
@@ -95,6 +98,31 @@ export function idbSet<T = unknown>(key: string, entry: CacheEntry<T>): Promise<
 
 export function idbDelete(key: string): Promise<undefined> {
   return tx('meta', 'readwrite', s => s.delete(key) as IDBRequest<undefined>);
+}
+
+// Диапазон ключей [lower, upper] включительно; upper обычно prefix + '\uffff'.
+export function idbCountRange(lower: string, upper: string): Promise<number> {
+  return tx('meta', 'readonly', s => s.count(IDBKeyRange.bound(lower, upper)));
+}
+
+// Метки времени записей диапазона (курсором, без выгрузки значений наружу).
+export function idbRangeStamps(lower: string, upper: string): Promise<{ key: string; savedAt: number; usedAt?: number }[]> {
+  return openDb().then(db => new Promise<{ key: string; savedAt: number; usedAt?: number }[]>((resolve, reject) => {
+    const t = db.transaction('meta', 'readonly');
+    const out: { key: string; savedAt: number; usedAt?: number }[] = [];
+    t.oncomplete = () => resolve(out);
+    t.onabort = () => reject(t.error ?? new DOMException('IDB: транзакция прервана', 'AbortError'));
+    t.onerror = () => reject(t.error ?? new Error('IDB: ошибка транзакции'));
+    const req = t.objectStore('meta').openCursor(IDBKeyRange.bound(lower, upper));
+    req.onsuccess = () => {
+      const c = req.result;
+      if (!c) return;
+      const v = c.value as Partial<CacheEntry> | undefined;
+      out.push({ key: String(c.key), savedAt: v?.savedAt ?? 0, usedAt: v?.usedAt });
+      c.continue();
+    };
+    req.onerror = () => reject(req.error);
+  }));
 }
 
 export function idbKeys(): Promise<string[]> {

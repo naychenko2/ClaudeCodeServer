@@ -18,9 +18,10 @@ public enum RouteSource { Default, Config, Admin }
 public enum RouteKind { Local, Claude, Tier, Model, FacePose }
 
 // Действующий маршрут действия: чем начинаем, какой моделью (для Kind=Model),
-// каким слотом (для Kind=Tier) и откуда взято.
+// каким слотом (для Kind=Tier) и откуда взято. Engine — имя именованного локального движка
+// (`LocalEngines:{name}`) для Kind=Local; null — основной LocalLlm.
 public sealed record ActionRoute(RouteKind Kind, string? Model, RouteSource Source,
-    ModelTier? Tier = null);
+    ModelTier? Tier = null, string? Engine = null);
 
 // Решает, идёт ли конкретное фоновое действие на локальную модель (Ollama) или на
 // существующий механизм (claude one-shot). Приоритет источников: оверрайд админа из UI
@@ -44,6 +45,9 @@ public sealed class LocalActionRouter
     // Слоты тиров (UserModelTierResolver) — нужны голосовому ходу: выбор слота места
     // chat-voice разворачивается в модель единственной точкой (см. VoiceModelFor).
     private readonly UserModelTierResolver? _userTiers;
+    // Именованные движки (LocalEngines:*): место из их Actions идёт на свой движок, если
+    // админ и Ollama:Actions его не переопределили.
+    private readonly NamedLocalEngines? _engines;
 
     // Значение LocalLlm:BackgroundWhileTurn — что делать с фоновым действием, пока на
     // локальном движке идёт ход исполнителя.
@@ -53,7 +57,8 @@ public sealed class LocalActionRouter
     public LocalActionRouter(ILocalLlmClient ollama, LocalActionOverridesStore store,
         IConfiguration config, ILogger<LocalActionRouter> log,
         SpecialtySettingsStore? specialty = null, LocalEngineBusyTracker? busy = null,
-        ILocalImageMedia? localMedia = null, UserModelTierResolver? userTiers = null)
+        ILocalImageMedia? localMedia = null, UserModelTierResolver? userTiers = null,
+        NamedLocalEngines? engines = null)
     {
         _localMedia = localMedia;
         _ollama = ollama;
@@ -61,6 +66,7 @@ public sealed class LocalActionRouter
         _specialty = specialty;
         _busy = busy ?? LocalEngineBusyTracker.Instance;
         _userTiers = userTiers;
+        _engines = engines;
         _log = log;
 
         // Правило «локаль занята ходом»: fallback (по умолчанию) — фоновое действие пропускает
@@ -126,9 +132,19 @@ public sealed class LocalActionRouter
     // локальном провайдере просто некому начать, а шаг локали и так отсечён ollama.Enabled.
     public bool LocalBlockedByTurn => _skipLocalWhileTurn && _busy.Busy;
 
-    // Начинается ли действие с локальной модели. Требует настроенного Ollama; иначе — нет.
-    public bool UsesLocal(string actionKey) =>
-        _ollama.Enabled && Resolve(actionKey).Kind == RouteKind.Local;
+    // Начинается ли действие с локальной модели: основной LocalLlm (нужен настроенный) либо
+    // именованный движок маршрута (нужен настроенный он). Иначе — нет.
+    public bool UsesLocal(string actionKey)
+    {
+        var route = Resolve(actionKey);
+        if (route.Kind != RouteKind.Local) return false;
+        return route.Engine is null ? _ollama.Enabled : _engines?.Enabled(route.Engine) == true;
+    }
+
+    // Именованный движок маршрута места (Kind=Local с Engine) — null у основного LocalLlm
+    // и у прочих маршрутов.
+    public LocalEngine? EngineOf(ActionRoute route) =>
+        route.Kind == RouteKind.Local ? _engines?.Get(route.Engine) : null;
 
     // Модель голосового хода (место chat-voice) по ЯВНОМУ выбору админа: слот →
     // UserModelTierResolver.ModelFor (единственная точка разворачивания уровня), конкретная
@@ -172,6 +188,9 @@ public sealed class LocalActionRouter
         }
         if (_overrides.TryGetValue(actionKey, out var cfg))
             return new ActionRoute(cfg ? RouteKind.Local : RouteKind.Claude, null, RouteSource.Config);
+        // Именованный движок из конфига (LocalEngines:*:Actions) — источник Config, как Ollama:Actions.
+        if (_engines?.EngineFor(actionKey) is { } engine)
+            return new ActionRoute(RouteKind.Local, null, RouteSource.Config, Engine: engine);
         // Без настройки админа и конфига место идёт на свой слот тира из каталога
         // (сильная/средняя/слабая): слово «по умолчанию» означает одно и то же во всём
         // продукте. Модель действия (обычно haiku) остаётся фолбэком — её берёт

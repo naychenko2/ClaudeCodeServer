@@ -30,6 +30,7 @@ public sealed class CloudCheapClient
     private readonly IHttpClientFactory _http;
     private readonly ILogger<CloudCheapClient> _logger;
     private readonly List<Source> _sources = [];
+    private readonly LlmProviderRegistry _providers;
     // Сбор расхода бесплатных вызовов (null — в тестах: аналитика выключена)
     private readonly Spend.ISpendCollector? _spend;
     private int _spendNullWarned;
@@ -86,6 +87,7 @@ public sealed class CloudCheapClient
         _http = http;
         _logger = logger;
         _spend = spend;
+        _providers = providers;
         ProviderKey = config["OpenRouter:Provider"] is { Length: > 0 } legacyProvider ? legacyProvider : "openrouter";
 
         // Legacy openrouter-direct всегда на месте (совместимость с spend и пресетами);
@@ -288,8 +290,9 @@ public sealed class CloudCheapClient
             && string.Equals(sr.GetString(), "length", StringComparison.OrdinalIgnoreCase));
 
     // Расход прямого вызова в аналитику: токены из usage OpenAI-совместимого ответа,
-    // стоимость 0 (модели бесплатные). Источник spend провайдера — {sourceKey}-direct.
-    // Ошибка записи вызов не роняет.
+    // стоимость 0. Провайдер в spend — {sourceKey}-direct; источник — free только для
+    // бесплатных (freellm*, модель ":free"), платный прямой адаптер пишется как one-shot.
+    // Ошибка записи вызова не роняет.
     private void RecordSpend(string model, string sourceKey, JsonElement json, string? ownerId, string? label)
     {
         if (_spend is null)
@@ -308,12 +311,18 @@ public sealed class CloudCheapClient
                 if (u.TryGetProperty("completion_tokens", out var c) && c.ValueKind == JsonValueKind.Number)
                     outTok = c.GetInt64();
             }
+            var provider = $"{sourceKey}-direct";
+            // Локальность — по провайдеру источника из реестра (не по ключу «…-direct»)
+            var isLocal = _sources.FirstOrDefault(s => s.Key == sourceKey) is { } src
+                && _providers.GetByKey(src.ProviderKey)?.IsLocal == true;
             _spend.Record(new Models.SpendRecord
             {
                 OwnerId = ownerId ?? "",
-                Provider = $"{sourceKey}-direct",
+                Provider = provider,
                 Model = model,
-                Source = Models.SpendSources.Free,
+                Source = Models.SpendSources.IsFree(provider, model, isLocal)
+                    ? Models.SpendSources.Free
+                    : Models.SpendSources.OneShot,
                 Label = label,
                 InputTokens = inTok,
                 OutputTokens = outTok,

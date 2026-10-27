@@ -790,4 +790,67 @@ public sealed class LocalModelTurnMeterTests
 
         _sink.Turns.Should().BeEmpty("бесхозный запрос не привязан к сессии, итога нет");
     }
+
+    // ─── B3 (OOM-разведка): выгрузка idle-записей ────────────────────────────────────────────
+
+    // (B3-1) Idle-запись (нет запроса в работе, нет активности > окна 20 мин) выгружается на
+    //      точке чтения: GetLastTurn отдаёт null. Активная запись (запрос в работе) не
+    //      выгружается и сохраняет данные панели: InWork (по ней идёт токен-учёт) и TokenWindow
+    //      (по ней считается живая скорость). Мутация «выгружать по возрасту без проверки
+    //      InWork» → chat-B выгружен на GetLastTurn → OnTokenCount не находит запрос в InWork,
+    //      живых событий нет, ActiveChats пуст → тест краснеет. Мутация «убрать выгрузку» →
+    //      GetLastTurn("chat-A") не null → краснеет.
+    [Fact]
+    public async Task B3_IdleЗапись_ВыгружаетсяПослеОкна_АктивнаяНет()
+    {
+        // chat-A: завершённый ход — запись idle, итог сохранён.
+        var tA = Issue("chat-A");
+        var rA = ReqId();
+        _meter.OnRequestStarted(rA, tA);
+        _meter.OnRequestCompleted(rA, tA, Usage(30, ttftMs: 120));
+        await _bus.PublishAsync(new TurnCompleted(new TurnContext("chat-A", "owner", 1, 0), "success"));
+        _meter.GetLastTurn("chat-A").Should().NotBeNull("в пределах окна — итог доступен");
+
+        // chat-B: запрос в работе (generating) — активная запись.
+        var tB = Issue("chat-B");
+        var rB = ReqId();
+        _meter.OnRequestStarted(rB, tB);
+        _meter.OnFirstToken(rB, tB);
+
+        // За окно (20 мин): chat-A idle 21 мин; у chat-B запрос в работе, но долго без токенов.
+        _time.Advance(TimeSpan.FromMinutes(21));
+
+        // Точка чтения — триггер выгрузки: idle-запись chat-A выгружена целиком (и итог потерян).
+        _meter.GetLastTurn("chat-A").Should().BeNull("idle > окна — запись выгружена");
+
+        // Активная запись не выгружена: запрос всё ещё в InWork — токен-учёт и окно скорости
+        // живые (два приращения за 1 с → скорость из TokenWindow).
+        _meter.OnTokenCount(rB, tB, 5);
+        _time.Advance(TimeSpan.FromSeconds(1));
+        _meter.OnTokenCount(rB, tB, 10);
+
+        _meter.ActiveChats().Select(c => c.SessionId).Should().Equal(new[] { "chat-B" },
+            "активная запись не выгружена: чат с запросом в работе остаётся в панели");
+        var last = _sink.Live.Last(l => l.Session == "chat-B");
+        last.Tps.Should().NotBeNull("InWork/TokenWindow активной записи сохранены: живая скорость считается");
+        last.Tps!.Should().BeGreaterThan(0);
+    }
+
+    // (B3-2) SessionDeleted удаляет запись — поведение не сломано выгрузкой: после хода итог
+    //      есть, после удаления сессии — нет, даже в пределах idle-окна.
+    //      Мутация: убрать _sessions.Remove в OnSessionDeleted → GetLastTurn вернёт итог → красный.
+    [Fact]
+    public async Task B3_SessionDeleted_УдаляетЗапись_ИтогаНет()
+    {
+        var t = Issue("chat-A");
+        var r = ReqId();
+        _meter.OnRequestStarted(r, t);
+        _meter.OnRequestCompleted(r, t, Usage(10));
+        await _bus.PublishAsync(new TurnCompleted(new TurnContext("chat-A", "owner", 1, 0), "success"));
+        _meter.GetLastTurn("chat-A").Should().NotBeNull("в пределах окна — итог доступен");
+
+        await _bus.PublishAsync(new SessionDeleted(new TurnContext("chat-A", "owner", 0, 0, null)));
+
+        _meter.GetLastTurn("chat-A").Should().BeNull("после SessionDeleted записи нет — и итога нет");
+    }
 }

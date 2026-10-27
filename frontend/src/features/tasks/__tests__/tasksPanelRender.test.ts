@@ -20,6 +20,7 @@ vi.mock('../../../lib/signalr', () => ({
 }));
 vi.mock('../../../lib/idb', () => ({
   idbGet: async () => undefined, idbSet: async () => {}, idbClear: async () => {},
+  idbKeys: async () => [], idbDelete: async () => {},
   outboxAll: async () => [], outboxGet: async () => undefined,
   outboxPut: async () => {}, outboxDelete: async () => {},
 }));

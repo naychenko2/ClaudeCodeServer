@@ -4,18 +4,20 @@
 // отсутствии id оригинала в нём — плашка деградирует в обычный текст, без
 // <a> и без onClick. Тест рендерит только эту ветку через контекст-обвязку,
 // нужную ChatItemView (его JSX-дерево использует несколько контекстов ленты).
-import { afterEach, describe, it, expect } from 'vitest';
-import { createElement, type ReactElement } from 'react';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { act, createElement, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ChatItem } from '../../../types';
 import { setAllFlags } from '../../../lib/featureFlags';
 import type { FeatureRun } from '../../../types/featureRun';
 import { ChatItemView, shouldHideAbortBanner } from '../ChatItemView';
+import { C } from '../../../lib/design';
 import {
   ChatProjectContext, ChatTreePathContext, ChatSessionContext, PersonaContext,
   SpeakingItemContext, AssistantNameContext,
 } from '../contexts';
 import { __test } from '../../../lib/featureRuns';
+import { findNodeByAttr, installFakeDom, mount, reactProps, uninstallFakeDom } from './fakeDom';
 
 // Минимальный элемент нужного kind. Нам интересно только поведение плашки «Ветка от …»
 function branchedFrom(sourceSessionId: string, sourceName = 'Старый чат'): ChatItem {
@@ -487,5 +489,60 @@ describe('ChatItemView — причина промаха кэша в подва�
   it('isLastResult: false и промах — сегмента «кэш не помог» нет', () => {
     setAllFlags({ 'prompt-cache': true });
     expect(renderMeta(resultWithCache('modelChanged'), false), 'мета только у последнего хода').not.toContain('кэш не помог');
+  });
+});
+
+// F-b «OOM на странице»: строка «ход ждёт свободный слот локальной модели» (событие
+// local_turn_queue, бэк 4683acb29). Янтарная предупреждающая строка с «Стоп» —
+// намеренно не красная карточка отказа: «занято» и «движок не отвечает» разные состояния.
+describe('ChatItemView — строка ожидания слота локальной модели', () => {
+  afterEach(() => setAllFlags({}));
+
+  const queueItem = (): ChatItem => ({ kind: 'local_turn_queue', position: 2, active: 3, limit: 3 });
+
+  it('числа очереди и кнопка «Стоп» в строке (c1)', () => {
+    const html = renderItem(queueItem());
+    expect(html).toContain('Ход ждёт свободный слот локальной модели');
+    expect(html).toContain('2-й в очереди');
+    expect(html).toContain('заняты 3 из 3');
+    expect(html, 'кнопка остановки хода').toContain('Стоп');
+    expect(html).toContain('data-testid="local-turn-queue"');
+  });
+
+  it('строка видна БЕЗ флага local-model-stats (c3): ожидание не привязано к метрикам', () => {
+    setAllFlags({ 'local-model-stats': false });
+    const html = renderItem(queueItem());
+    expect(html).toContain('ждёт свободный слот');
+    expect(html).toContain('2-й в очереди');
+  });
+
+  it('«занято» и «движок не отвечает» — разные тона: янтарная строка vs красная карточка (c4)', () => {
+    const queueHtml = renderItem(queueItem());
+    const downHtml = renderItem({ kind: 'error', text: 'локальный движок не отвечает', canRetry: false });
+    expect(queueHtml).toContain(C.warningBg);
+    expect(queueHtml, 'ожидание — не красная карточка отказа').not.toContain(C.dangerBg);
+    expect(downHtml).toContain(C.dangerBg);
+    expect(downHtml).not.toContain(C.warningBg);
+  });
+  it('клик по «Стоп» гасит ход через onInterrupt, тач-цель ≥40px (M1, M4)', () => {
+    installFakeDom();
+    try {
+      const onInterrupt = vi.fn();
+      const noop = () => {};
+      const { root, container } = mount(createElement(ChatItemView, {
+        item: queueItem(), index: 0, online: true,
+        onToggleThinking: noop, onAllowPermission: noop, onDenyPermission: noop, onAllowAlways: noop,
+        onAnswerQuestion: noop, onRespondPlan: noop, onSwitchMode: noop, onRetry: noop, onInterrupt,
+      }));
+      const stop = findNodeByAttr(container, 'data-testid', 'local-turn-queue-stop');
+      expect(stop, 'кнопка «Стоп» в строке ожидания').not.toBeNull();
+      const minH = Number((stop!.style as Record<string, string>).minHeight?.toString().replace('px', ''));
+      expect(minH, 'minHeight кнопки — тач-цель на мобиле').toBeGreaterThanOrEqual(40);
+      act(() => (reactProps(stop!)!.onClick as (e: unknown) => void)({ stopPropagation: noop }));
+      expect(onInterrupt).toHaveBeenCalledTimes(1);
+      act(() => root.unmount());
+    } finally {
+      uninstallFakeDom();
+    }
   });
 });

@@ -252,20 +252,19 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
     // проект, чат, задача, персона, источник) — это разрезы по ЧЕМУ, а не по чему тратили,
     // поэтому класс у них не заполняется.
     //
-    // В группе могут смешаться классы (одна модель у нескольких провайдеров, или
-    // бесплатная подписка рядом с платной): берём самый «дорогой» присутствующий класс —
-    // узел не должен показывать «дёшево», если в нём есть дорогая трата.
+    // В группе могут смешаться классы (одна модель у нескольких провайдеров, чужие записи):
+    // класс узла — класс с наибольшей суммой токенов (SpendCostTiers.Dominant), при равенстве —
+    // более дорогой. Один процент записей другого класса строку не перекрашивает.
     private static string? TierOfGroup(IEnumerable<SpendSlice> group, string groupBy)
     {
         if (!SpendCostTiers.AxisHasTier(groupBy)) return null;
-        string? tier = null;
+        var byTier = new Dictionary<string, long>();
         foreach (var s in group)
         {
             var t = SliceTier(s);
-            if (tier is null || SpendCostTiers.Rank(t) > SpendCostTiers.Rank(tier))
-                tier = t;
+            byTier[t] = byTier.GetValueOrDefault(t) + TotalOf(s);
         }
-        return tier;
+        return SpendCostTiers.Dominant(byTier);
     }
 
     // Класс слайса: поле Tier заполняется в Slices() (там есть source/provider/model),
@@ -421,7 +420,10 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
 
     // --- общее ---
 
-    private static long TotalOf(SpendSlice s) => s.Input + s.Output + s.CacheRead + s.CacheCreation;
+    // Формула веса — общая с разбивкой фичи (SpendCostTiers.WeightOf): класс строки в обоих API
+    // считается по одной метрике токенов.
+    private static long TotalOf(SpendSlice s) =>
+        SpendCostTiers.WeightOf(s.Input, s.Output, s.CacheRead, s.CacheCreation);
 
     private SpendTurnDto ToTurnDto(SpendRecord r, string? currentUserId)
     {

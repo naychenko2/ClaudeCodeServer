@@ -354,10 +354,38 @@ public class SpendAnalyticsTests : IDisposable
         Assert.Equal(SpendCostTiers.Cheap, SpendCostTiers.Of(SpendSources.ChatTurn, "glm", "glm-4.6"));
         // Источник free важнее провайдера: запись о бесплатной модели claude — бесплатная
         Assert.Equal(SpendCostTiers.Free, SpendCostTiers.Of(SpendSources.Free, "claude", "opus"));
-        // Бесплатные исполнители: локальный движок, «*:free», «*-direct»
+        // Бесплатные исполнители: локальный движок, «*:free»
         Assert.Equal(SpendCostTiers.Free, SpendCostTiers.Of(SpendSources.ChatTurn, "ollama", "qwen3:14b"));
         Assert.Equal(SpendCostTiers.Free, SpendCostTiers.Of(SpendSources.ChatTurn, "openrouter", "nvidia/nemotron:free"));
-        Assert.Equal(SpendCostTiers.Free, SpendCostTiers.Of(SpendSources.ChatTurn, "openrouter-direct", "any"));
+        // «*-direct» считается по базовому ключу: openrouter — дёшево
+        Assert.Equal(SpendCostTiers.Cheap, SpendCostTiers.Of(SpendSources.ChatTurn, "openrouter-direct", "any"));
+    }
+
+    // Пары из живых данных расхода (26.10): правило владельца, одно на запись и каталог.
+    // Мутации «убрать ветку claude-<N>» и «убрать снятие суффикса -direct» → краснеет.
+    [Theory]
+    [InlineData("claude", "chat-turn", SpendCostTiers.Expensive)]
+    [InlineData("claude-2", "chat-turn", SpendCostTiers.Expensive)]
+    [InlineData("claude-3", "chat-turn", SpendCostTiers.Expensive)]
+    [InlineData("sub-x", "chat-turn", SpendCostTiers.Expensive)]
+    [InlineData("claude-direct", "chat-turn", SpendCostTiers.Expensive)]
+    [InlineData("ollama-direct", "chat-turn", SpendCostTiers.Free)]
+    [InlineData("minimax-direct", "free", SpendCostTiers.Cheap)]
+    [InlineData("minimax-direct", "chat-turn", SpendCostTiers.Cheap)]
+    [InlineData("minimax-m31-direct", "chat-turn", SpendCostTiers.Cheap)]
+    [InlineData("minimax", "chat-turn", SpendCostTiers.Cheap)]
+    [InlineData("ghostcli", "chat-turn", SpendCostTiers.Cheap)]
+    [InlineData("deepseek", "chat-turn", SpendCostTiers.Cheap)]
+    [InlineData("freellmapi-direct", "chat-turn", SpendCostTiers.Free)]
+    [InlineData("freellmapi-direct", "free", SpendCostTiers.Free)]
+    [InlineData("local-qwen", "free", SpendCostTiers.Free)]
+    [InlineData("llama-server", "chat-turn", SpendCostTiers.Free)]
+    public void CostTier_ПарыИзЖивыхДанных(string provider, string source, string expected)
+    {
+        Assert.Equal(expected, SpendCostTiers.Of(source, provider, null));
+        // Каталог: «local-qwen» бесплатен по флажку isLocal (в Core ключ не перечислен)
+        var catalog = SpendCostTiers.OfProvider(provider, isLocal: provider == "local-qwen");
+        Assert.Equal(expected, catalog);
     }
 
     // Неизвестный провайдер (пустой ключ) → «дорого» в ОБОИХ местах: цена неизвестна,
@@ -399,37 +427,66 @@ public class SpendAnalyticsTests : IDisposable
         // Каталог провайдеров (/api/models) — тот же класс по одному провайдеру
         Assert.Equal(SpendCostTiers.Free, SpendCostTiers.OfProvider("freellmapi", isLocal: false));
         Assert.Equal(SpendCostTiers.Free, SpendCostTiers.OfProvider("freellm", isLocal: false));
-        // Признак источника расхода (SpendSources.IsFree) НЕ расширен: «freellm*» — это
-        // провайдер, а не источник; его семантику (source=free) не трогаем.
-        Assert.False(SpendSources.IsFree("freellmapi", "auto:fast"));
+        // Признак источника — то же правило, что класс (Р1(а), решение Андрея 26.10):
+        // freellm* бесплатен и в источнике, и в классе — две точки не должны разъезжаться.
+        Assert.True(SpendSources.IsFree("freellmapi", "auto:fast"));
     }
 
-    // Ранг классов: «дороже — важнее». Регрессия «важнейшим стал дешёвый» не должна пройти
-    // незамеченной. Мутация «Rank(tier) => 1» ломает порядок → краснеет.
+    // Смешанная группа: класс узла — класс с наибольшей суммой токенов. Живая форма:
+    // 95% токенов дешёвые (minimax) и 5% с провайдером claude на той же модели → cheap.
+    // Мутация «побеждает самый дорогой присутствующий класс (Rank)» → expensive ≠ cheap → краснеет.
     [Fact]
-    public void Rank_ПорядокКлассов_ДорожеВажнее()
-    {
-        Assert.True(SpendCostTiers.Rank(SpendCostTiers.Expensive) > SpendCostTiers.Rank(SpendCostTiers.Cheap));
-        Assert.True(SpendCostTiers.Rank(SpendCostTiers.Cheap) > SpendCostTiers.Rank(SpendCostTiers.Free));
-    }
-
-    // Смешанная группа: класс узла — «важнейший» присутствующий (дороже — важнее).
-    // Группируем по провайдеру: у одного провайдера claude смешались обычная трата (дорого)
-    // и трата бесплатной модели claude (free). Порядок слайсов задан явно: сначала дешёвый
-    // класс, потом дорогой — иначе проверка была бы нечувствительна к рангу.
-    // Мутация «Rank(tier) => 1» → остаётся первый попавшийся класс (free) ≠ expensive → краснеет.
-    [Fact]
-    public void Tier_УзлаPivot_СмешаннаяГруппа_БерётсяВажнейшийКласс()
+    public void Tier_УзлаPivot_СмешаннаяГруппа_БерётсяБольшинствоТокенов()
     {
         var day = new DateOnly(2026, 7, 20);
-        var cheapFirst = new SpendSlice(day, "u1", null, null, null, null, "claude", "haiku",
-            SpendSources.Free, 1, 1, 0, 0, 0, 0, 0, 1, Detailed: true);
-        var expensiveSecond = new SpendSlice(day, "u1", null, null, null, null, "claude", "opus",
-            SpendSources.ChatTurn, 10, 5, 100, 20, 0, 0, 0, 1, Detailed: true);
+        var cheapMajor = new SpendSlice(day, "u1", null, null, null, null, "minimax", "MiniMax-M3",
+            SpendSources.ChatTurn, 950, 0, 0, 0, 0, 0, 0, 1, Detailed: true);
+        var expensiveMinor = new SpendSlice(day, "u1", null, null, null, null, "claude", "MiniMax-M3",
+            SpendSources.ChatTurn, 50, 0, 0, 0, 0, 0, 0, 1, Detailed: true);
 
-        var byProvider = SpendAnalyticsService.GroupRaw([cheapFirst, expensiveSecond], "provider");
+        var byModel = SpendAnalyticsService.GroupRaw([cheapMajor, expensiveMinor], "model");
 
-        Assert.Equal(SpendCostTiers.Expensive, byProvider.Single(n => n.Key == "claude").Tier);
+        Assert.Equal(SpendCostTiers.Cheap, byModel.Single(n => n.Key == "MiniMax-M3").Tier);
+    }
+
+    // Равенство токенов: побеждает более дорогой класс.
+    [Fact]
+    public void Tier_УзлаPivot_РавныеТокены_БерётсяБолееДорогой()
+    {
+        var day = new DateOnly(2026, 7, 20);
+        var cheap = new SpendSlice(day, "u1", null, null, null, null, "minimax", "m",
+            SpendSources.ChatTurn, 100, 0, 0, 0, 0, 0, 0, 1, Detailed: true);
+        var expensive = new SpendSlice(day, "u1", null, null, null, null, "claude", "m",
+            SpendSources.ChatTurn, 100, 0, 0, 0, 0, 0, 0, 1, Detailed: true);
+
+        Assert.Equal(SpendCostTiers.Expensive,
+            SpendAnalyticsService.GroupRaw([cheap, expensive], "model").Single().Tier);
+    }
+
+    // Вес класса строки — вход+выход+кэш (SpendCostTiers.WeightOf), одна метрика на оба API.
+    // Та же фикстура, что в разбивке фичи (FeatureBreakdownTests.Build_РазрезМоделей_ВесКлассаСУчётомКэша):
+    // по вход+выход победил бы cheap (1000:10), с кэшем строка «дорого» в обоих API (ревью Глеба, major:
+    // без кэша разбивка выдавала «дёшево» там, где /api/spend — «дорого»).
+    [Fact]
+    public void Tier_УзлаPivot_ВесКлассаСУчётомКэша()
+    {
+        var day = new DateOnly(2026, 7, 20);
+        var cheap = new SpendSlice(day, "u1", null, null, null, null, "minimax", "m",
+            SpendSources.ChatTurn, 1000, 0, 0, 0, 0, 0, 0, 1, Detailed: true);
+        var expensive = new SpendSlice(day, "u1", null, null, null, null, "claude", "m",
+            SpendSources.ChatTurn, 10, 0, 5000, 0, 0, 0, 0, 1, Detailed: true);
+
+        Assert.Equal(SpendCostTiers.Expensive,
+            SpendAnalyticsService.GroupRaw([cheap, expensive], "model").Single().Tier);
+    }
+
+    // Локальная генерация медиа (provider=local, source=local) — бесплатно, одним правилом
+    // с остальными локальными ключами. Мутация «убрать "local" из ByKey» → cheap → краснеет.
+    [Fact]
+    public void Of_ПровайдерLocal_Бесплатно()
+    {
+        Assert.Equal(SpendCostTiers.Free, SpendCostTiers.Of("local", "local", "qwen-image"));
+        Assert.Equal(SpendCostTiers.Free, SpendCostTiers.OfProvider("local", isLocal: false));
     }
 
     // ByTierOf: слайс с пустым Tier (Tier по умолчанию "") даёт фолбэк на SliceTier —
@@ -567,8 +624,14 @@ public class SpendAnalyticsTests : IDisposable
     public void Sources_БесплатныеИПодписки()
     {
         Assert.True(SpendSources.IsFree("ollama", "qwen3:14b"));
-        Assert.True(SpendSources.IsFree("openrouter-direct", "any"));
+        // Платный провайдер через прямой адаптер не бесплатен (решение Андрея, 26.10):
+        // бесплатен «любой *-direct» было ошибкой источника
+        Assert.False(SpendSources.IsFree("openrouter-direct", "any"));
+        Assert.False(SpendSources.IsFree("minimax-direct", "MiniMax-M3"));
+        Assert.False(SpendSources.IsFree("kimi-direct", "kimi-k3"));
+        // freellm* — бесплатный и с «-direct», и без него (развилка Р1(а)): локальный прокси
         Assert.True(SpendSources.IsFree("freellmapi-direct", "auto:fast"));
+        Assert.True(SpendSources.IsFree("freellmapi", "auto:fast"));
         Assert.True(SpendSources.IsFree("openrouter", "nvidia/nemotron:free"));
         Assert.False(SpendSources.IsFree("claude", "opus"));
         // Локальный провайдер из конфига (IsLocal) — бесплатный по определению: ключ

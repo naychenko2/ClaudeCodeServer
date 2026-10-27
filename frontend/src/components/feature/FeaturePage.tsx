@@ -6,7 +6,7 @@ import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { useFeaturePage, refetchFeaturePage, useFeaturePageTab, setFeaturePageTab } from '../../lib/featurePage';
 import { useMe } from '../../lib/defaultPersona';
 import { buildNavMarks } from '../../lib/featureNavMarks';
-import { getBackNav, clearBackNav, recordFeatureReturn } from '../../lib/featureBackNav';
+import { getBackNav, clearBackNav, registerFeaturePage, recordFeatureReturn } from '../../lib/featureBackNav';
 import { useFeaturesIndex } from '../../lib/featuresIndex';
 import { api } from '../../lib/api';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
@@ -157,6 +157,12 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
 
   // Вкладка: из стора страницы (сохраняется при скрытии/возврате).
   const tab = useFeaturePageTab();
+
+  // Регистрация страницы в канале окна возврата (GC-F11R4): окно снимка живёт ради этого
+  // открытия страницы — закрытие гасит его (отложенная проверка в featureBackNav), а
+  // перерегистрация (мнимый unmount→mount StrictMode) её отменяет. Регистрация — только
+  // сигнал жизни страницы; само окно живёт в сторе.
+  useEffect(() => registerFeaturePage(featureId), [featureId]);
 
   // Закрытие: куда ведёт. Из чата — в исходный чат («К чату «…»»); из списка/диплинк —
   // в список: мобила «К списку», десктоп «Назад».
@@ -342,7 +348,8 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
                 onMerge={openMergeDialog}
                 onOpenFinal={openFinalChat}
               />
-              <FeatureTimelineTab run={okRun} marks={marks} isMobile={isMobile} />
+              {/* stats — таймлайн фичи: из него дорожки этапов и ось времени (GC-F5c). */}
+              <FeatureTimelineTab run={okRun} marks={marks} isMobile={isMobile} stats={page.page.stats ?? null} />
             </>
           ) : tab === 'plans' ? (
             <FeaturePlansTab page={page.page} isMobile={isMobile} onOpenFile={onOpenFile} onOpenKeyChat={onOpenKeyChat} marks={marks} featureId={featureId} projectId={projectId} />

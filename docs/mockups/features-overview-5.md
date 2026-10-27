@@ -77,7 +77,7 @@
 |---|---|---|
 | F1 | модель строки + строка | `FeatureAnalysisModel.ts` (новый), `FeatureAnalysisModel.test.ts` (новый), `FeatureAnalysisLine.tsx` (новый), `FeatureStatsTab.tsx` |
 | F2 | резюме под строкой | `FeatureAnalysisSummary.tsx` (новый), его тест, `lib/api.ts`, `types/featureRun.ts` |
-| F3 | тег в шапке + строка «тихо» на Ганте | `FeaturePageHeader.tsx`, `FeatureGanttModel.ts`, `FeatureStatsTab.tsx` |
+| F3 | тег в шапке + строка «тихо» на Ганте | `FeaturePageHeader.tsx`, `FeatureLaneModel.ts`, `FeatureStatsTab.tsx` |
 | F4 | токены + плашка | `lib/design.ts`, `lib/theme.css`, `lib/models.ts` (короткая подпись), `ChatCard.tsx` |
 | F5 | настройка «только изменённая» | `lib/chatFilters.ts`, `ChatListToolbar.tsx`, `ChatList.tsx` (проброс в карточку) |
 

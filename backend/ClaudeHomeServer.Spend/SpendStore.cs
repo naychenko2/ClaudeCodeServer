@@ -347,9 +347,11 @@ public sealed class SpendStore : ISpendCollector, ISpendDetailReader
     // ход шёл к провайдеру, объявившему модель. Правда следует из самой записи, поэтому
     // проход меняет Provider в деталях и дневных агрегатах. Это исправление ЗАВЫШЕНИЯ:
     // «дорогой» Claude прятал реальный «дешёвый» или бесплатный ход. Обратные пары
-    // (minimax + claude-*) не трогается: источника правды в них нет, перевод был бы
-    // догадкой в сторону завышения. Идемпотентен: после rekey Provider уже не Claude-ключ,
-    // повторный проход — no-op без обращения к диску. Суффикс «-direct» не срезается:
+    // (minimax + claude-*) и новые Claude-ключи из резолва не трогается: источника правды в
+    // них нет, перевод был бы догадкой в сторону завышения. Идемпотентен: после rekey Provider
+    // уже не Claude-ключ, повторный проход — no-op без обращения к диску. Сбой записи любого
+    // turns-*.jsonl или daily.json пробрасывается наружу: маркер не ставится, следующий старт
+    // повторит проход с диска. Суффикс «-direct» не срезается:
     // прямые адаптеры пишутся one-shot-путём и в фильтр не попадают.
     //
     // Порядок проверок важен: «родной Claude» спрашивается ДО резолва — сторонний провайдер,
@@ -382,15 +384,23 @@ public sealed class SpendStore : ISpendCollector, ISpendDetailReader
                 if (!changed) continue;
                 try
                 {
-                    File.WriteAllText(TurnsPath(date),
+                    // Как PersistDaily: tmp + Move(overwrite) — убийство процесса посреди
+                    // записи не оставляет обрезанный день
+                    var path = TurnsPath(date);
+                    var tmp = path + ".tmp";
+                    File.WriteAllText(tmp,
                         string.Join(Environment.NewLine,
                             snapshot.Select(r => JsonSerializer.Serialize(r, JsonOpts)))
                         + Environment.NewLine);
+                    File.Move(tmp, path, overwrite: true);
                 }
                 catch (Exception ex)
                 {
-                    // Память уже исправлена — диск догонит при следующем проходе
+                    // Проход одноразовый и без отката: сбой записи = провал прохода.
+                    // Пробрасываем — сервис не поставит маркер, следующий старт повторит
+                    // rekey с диска (в памяти уже исправлено, но оно перечитается с диска)
                     _log?.LogError(ex, "spend: rekey прямых пар — не переписать {Date}", date);
+                    throw;
                 }
             }
 
@@ -400,12 +410,17 @@ public sealed class SpendStore : ISpendCollector, ISpendDetailReader
     }
 
     // Новый провайдер записи или null (не трогать). chat-turn + Claude-ключ (через
-    // единственный словарь SpendCostTiers) + не-родная модель + резолв модели не null.
+    // единственный словарь SpendCostTiers) + не-родная модель + резолв модели даёт ключ,
+    // который сам НЕ Claude-ключ: rekey к другому Claude-ключу — не выход из области Claude
+    // (смысл прохода), а перенумеровывание записи между профилями; такую не трогаем.
     private static string? RekeyNewProvider(string source, string provider, string? model,
-        Func<string?, bool> isNativeClaudeModel, Func<string?, string?> providerByModel) =>
-        source == SpendSources.ChatTurn && SpendCostTiers.IsClaudeKey(provider) && !isNativeClaudeModel(model)
-            ? providerByModel(model)
-            : null;
+        Func<string?, bool> isNativeClaudeModel, Func<string?, string?> providerByModel)
+    {
+        if (source != SpendSources.ChatTurn || !SpendCostTiers.IsClaudeKey(provider) || isNativeClaudeModel(model))
+            return null;
+        var key = providerByModel(model);
+        return key is not null && !SpendCostTiers.IsClaudeKey(key) ? key : null;
+    }
 
     private int RekeyDaily(
         Func<string?, bool> isNativeClaudeModel, Func<string?, string?> providerByModel)
@@ -431,7 +446,11 @@ public sealed class SpendStore : ISpendCollector, ISpendDetailReader
             next[date] = MergeByKey(rows);
         }
         if (next is null) return 0;
-        if (PersistDaily(next)) _daily = next;
+        if (!PersistDaily(next))
+            // Первопричина уже залогирована в PersistDaily; здесь только проваливаем проход:
+            // маркер не поставится, следующий старт повторит rekey с диска
+            throw new IOException("spend: rekey прямых пар — не переписать daily.json");
+        _daily = next;
         return rekeyed;
     }
 

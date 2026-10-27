@@ -566,4 +566,143 @@ public class SpendBackfillTests : IDisposable
         rec.Source.Should().Be(SpendSources.Free, "rekey идёт до ReclassifyLocalAsFree в том же запуске");
         store.ProviderRekeyDone.Should().BeTrue("маркер provider-rekey-v1.done ставится после прохода");
     }
+
+    // --- SP4-доработка (вердикт Глеба a44fd2df, миноры 1, 2, 4): безопасная запись прохода ---
+
+    // Пункт 1 (minor-1): сбой записи turns-*.jsonl в проходе пробрасывается — сервис не
+    // ставит маркер, при рестарте (новый стор с диска) проход повторяется и дописывает диск.
+    [Fact]
+    public async Task Обслуживание_Rekey_СбойЗаписиTurns_МаркерНеСтавится_ПриРестартеПроходПовторяется()
+    {
+        var dir = Path.Combine(_dir, "spend_rekey_fail");
+        var store = new SpendStore(dir, detailDays: 30);
+        store.MarkBackfillDone();
+        var now = DateTime.UtcNow;
+        store.Record(new SpendRecord { Id = "rf-1", OwnerId = "u1", Provider = "claude", Model = "MiniMax-M3",
+            InputTokens = 100, Timestamp = now });
+
+        var resolver = new Mock<IModelResolver>();
+        resolver.Setup(r => r.IsNativeClaudeModel(It.IsAny<string?>())).Returns<string?>(FakeIsNative);
+        resolver.Setup(r => r.ResolveProviderKeyByModel(It.IsAny<string?>())).Returns<string?>(FakeProviderByModel);
+        resolver.Setup(r => r.IsLocal(It.IsAny<string?>())).Returns<string?>(_ => false);
+        var newService = (SpendStore s) => new SpendMaintenanceService(s,
+            new SessionDirectoryAdapter(_sessions), new ChatHistoryLoaderAdapter(_history),
+            resolver.Object, NullLogger<SpendMaintenanceService>.Instance);
+
+        // Преграда записи: каталог вместо tmp-файла — запись дня не удаётся никогда
+        var tmpInterference = Path.Combine(dir,
+            $"turns-{DateOnly.FromDateTime(now):yyyy-MM-dd}.jsonl.tmp");
+        Directory.CreateDirectory(tmpInterference);
+
+        var service = newService(store);
+        await service.StartAsync(CancellationToken.None);
+        try
+        {
+            // Факт попытки прохода: запись переключена в памяти (на диск не вышло)
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            while (DateTime.UtcNow < deadline
+                   && store.DetailsBetween(DateOnly.MinValue, DateOnly.MaxValue).Single().Provider != "minimax")
+                await Task.Delay(100);
+        }
+        finally { await service.StopAsync(CancellationToken.None); }
+
+        store.DetailsBetween(DateOnly.MinValue, DateOnly.MaxValue).Single().Provider.Should().Be("minimax",
+            "проход был и упал на записи диска");
+        store.ProviderRekeyDone.Should().BeFalse("сбой записи — маркер provider-rekey-v1.done не ставится");
+
+        // Рестарт: преграда убрана, новый стор читает диск — там старый Provider, проход повторяется
+        Directory.Delete(tmpInterference);
+        var reloaded = new SpendStore(dir, detailDays: 30);
+        reloaded.DetailsBetween(DateOnly.MinValue, DateOnly.MaxValue).Single().Provider.Should().Be("claude",
+            "упавший проход не дописал диск");
+
+        var service2 = newService(reloaded);
+        await service2.StartAsync(CancellationToken.None);
+        try
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            while (DateTime.UtcNow < deadline && !reloaded.ProviderRekeyDone)
+                await Task.Delay(100);
+        }
+        finally { await service2.StopAsync(CancellationToken.None); }
+
+        reloaded.ProviderRekeyDone.Should().BeTrue("повторный проход завершился — маркер на месте");
+        new SpendStore(dir, detailDays: 30).DetailsBetween(DateOnly.MinValue, DateOnly.MaxValue)
+            .Single().Provider.Should().Be("minimax", "повторный проход дописал диск");
+    }
+
+    // Пункт 1 (minor-1), ветвь daily.json: сбой PersistDaily в rekey-проходе по свёрнутому
+    // дню — провал прохода (throw), агрегаты на диске остаются прежними до повторного старта.
+    [Fact]
+    public void Rekey_СбойЗаписиDailyПоСвёрнутомуДню_ПровалПроходаБезПорчиАгрегатов()
+    {
+        var dir = Path.Combine(_dir, "spend_rekey_daily_fail");
+        var store = new SpendStore(dir, detailDays: 30);
+        var old = DateTime.UtcNow.AddDays(-40);
+        store.Record(new SpendRecord { Id = "rd-f1", OwnerId = "u1", Provider = "claude", Model = "MiniMax-M3",
+            InputTokens = 100, Timestamp = old });
+        store.RollupOlderThan(store.WindowStart);
+
+        // Преграда записи: каталог вместо tmp PersistDaily → она вернёт false → проход провален
+        Directory.CreateDirectory(Path.Combine(dir, "daily.json.tmp"));
+
+        Action act = () => store.RekeyNonClaudeModelsOnClaudeKeys(FakeIsNative, FakeProviderByModel);
+        act.Should().Throw<IOException>();
+
+        // daily.json на диске не тронут: строка всё ещё со старым провайдером
+        var rows = new SpendStore(dir, detailDays: 30).DailyBetween(DateOnly.MinValue, DateOnly.MaxValue);
+        rows.Single(r => r.Model == "MiniMax-M3").Provider.Should().Be("claude");
+    }
+
+    // Пункт 2 (minor-2): перезапись дня идёт через tmp + File.Move(overwrite) — сбой посреди
+    // записи (каталог вместо tmp) не трогает исходный файл: он цел и перечитывается.
+    [Fact]
+    public void Rekey_СбойПосредиПерезаписиTurns_ИсходныйФайлЦел()
+    {
+        var dir = Path.Combine(_dir, "spend_rekey_tmp_atomic");
+        var store = new SpendStore(dir, detailDays: 30);
+        var now = DateTime.UtcNow;
+        store.Record(new SpendRecord { Id = "rt-1", OwnerId = "u1", Provider = "claude", Model = "MiniMax-M3",
+            InputTokens = 100, Timestamp = now });
+        var path = Path.Combine(dir, $"turns-{DateOnly.FromDateTime(now):yyyy-MM-dd}.jsonl");
+        var original = File.ReadAllText(path);
+        original.Should().Contain("\"provider\":\"claude\"");
+
+        Directory.CreateDirectory(path + ".tmp");
+
+        Action act = () => store.RekeyNonClaudeModelsOnClaudeKeys(FakeIsNative, FakeProviderByModel);
+        // Запись в путь-каталог на обеих платформах — UnauthorizedAccessException
+        act.Should().Throw<UnauthorizedAccessException>();
+
+        // Дневной файл не тронут записью в tmp: тот же состав, строки читаемы
+        File.ReadAllText(path).Should().Be(original);
+        new SpendStore(dir, detailDays: 30).DetailsBetween(DateOnly.MinValue, DateOnly.MaxValue)
+            .Single().Provider.Should().Be("claude");
+    }
+
+    // Пункт 3 (minor-4): резолв модели даёт Claude-ключ (IsClaudeKey) — запись не трогается:
+    // rekey к другому Claude-ключу не выход из области Claude, а перенумеровывание профиля.
+    [Fact]
+    public void Rekey_РезолвДаётДругойClaudeКлюч_ЗаписьНеТронута()
+    {
+        var dir = Path.Combine(_dir, "spend_rekey_claude_key");
+        var store = new SpendStore(dir, detailDays: 30);
+        var now = DateTime.UtcNow;
+        Func<string?, string?> providerByModel = model => model switch
+        {
+            "MiniMax-M3" => "claude-2",
+            "glm-4" => "sub-1",
+            _ => null,
+        };
+        store.Record(new SpendRecord { Id = "ck-1", OwnerId = "u1", Provider = "claude", Model = "MiniMax-M3",
+            InputTokens = 100, Timestamp = now });
+        store.Record(new SpendRecord { Id = "ck-2", OwnerId = "u1", Provider = "claude", Model = "glm-4",
+            InputTokens = 50, Timestamp = now });
+
+        store.RekeyNonClaudeModelsOnClaudeKeys(FakeIsNative, providerByModel).Should().Be(0);
+
+        var all = new SpendStore(dir, detailDays: 30).DetailsBetween(DateOnly.MinValue, DateOnly.MaxValue);
+        all.Single(r => r.Id == "ck-1").Provider.Should().Be("claude");
+        all.Single(r => r.Id == "ck-2").Provider.Should().Be("claude");
+    }
 }

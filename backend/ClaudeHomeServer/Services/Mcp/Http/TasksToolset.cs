@@ -50,11 +50,7 @@ public sealed class TasksToolset(
     // Подсистема Notes отключаемая: null — обратная запись в заметку-источник тихо
     // пропускается (см. использование ниже, паритет с TasksController).
     ClaudeHomeServer.Services.Spheres.ISphereDirectory spheres,
-    INoteTaskSync? noteSync = null,
-    // Агрегат фичи: необязательен по той же причине, что в TasksController — подсистема Tasks
-    // отключаема гейтом Subsystems:tasks:Enabled, и обязательный параметр от неё был бы дефектом
-    // (ADR-014). null — блок «Сверка трекера» в tasks_get просто не дописывается.
-    FeatureProjector? features = null) : IMcpParameterizedToolset
+    INoteTaskSync? noteSync = null) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/tasks/{sessionId}. Константа —
     // единственная точка правды для URL конфига хода (ClaudeSession); живёт в Core

@@ -48,6 +48,27 @@ describe('списки задач и фич — live-запросы', () => {
     const urlKeys = mocks.idbSet.mock.calls.filter(c => String((c as unknown[])[0]).startsWith('/'));
     expect(urlKeys).toEqual([]);
   });
+
+  it('открытие N задач подряд не оставляет в IndexedDB записей /tasks/{id}', async () => {
+    const full = (id: string) => ({ ...task(id), description: 'x'.repeat(1000), resultMarkdown: 'y'.repeat(1000) });
+    vi.stubGlobal('fetch', vi.fn(async (u: unknown) => {
+      const id = String(u).split('/').pop()!;
+      return new Response(JSON.stringify(full(id)), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    const { api } = await import('./api');
+    const N = 40;
+    for (let i = 0; i < N; i++) await api.tasks.get(`t${i}`);
+    const taskKeys = mocks.idbSet.mock.calls.filter(c => /^\/(api\/)?tasks\/[^/?]+$/.test(String((c as unknown[])[0])));
+    expect(taskKeys).toEqual([]);
+  });
+
+  it('офлайн api.tasks.get бросает OfflineError, а не отдаёт устаревшую копию', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
+    mocks.idbGet.mockResolvedValue({ data: task('t1'), savedAt: 1 });
+    const { api } = await import('./api');
+    const { OfflineError } = await import('./offline');
+    await expect(api.tasks.get('t1')).rejects.toBeInstanceOf(OfflineError);
+  });
 });
 
 describe('reloadTasks офлайн', () => {

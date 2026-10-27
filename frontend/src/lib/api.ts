@@ -1839,7 +1839,10 @@ export const api = {
     // projectId === null → личная задача (вне проекта)
     create: (projectId: string | null, dto: CreateTaskDto) =>
       request<Task>(projectId ? `/projects/${projectId}/tasks` : '/tasks', { method: 'POST', body: JSON.stringify(dto) }),
-    get: (taskId: string) => request<Task>(`/tasks/${taskId}`),
+    // live: true — полная карточка (description + resultMarkdown, ~90 КБ) в пассивный GET-кэш не
+    // пишется: он без вытеснения. Открытые полные задачи держит стор (LRU FULL_TASKS_CAP, снимок
+    // tasks:all); офлайн ensureFullTask получает OfflineError → состояние «error» с «Повторить».
+    get: (taskId: string) => request<Task>(`/tasks/${taskId}`, { live: true }),
     update: (taskId: string, dto: UpdateTaskDto) =>
       request<Task>(`/tasks/${taskId}`, { method: 'PUT', body: JSON.stringify(dto) }),
     delete: (taskId: string) => request<void>(`/tasks/${taskId}`, { method: 'DELETE' }),

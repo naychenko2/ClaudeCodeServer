@@ -13,13 +13,16 @@ import { SEG_MUTED_BORDER, type SegmentOptionState } from './Segmented';
 // disabled группы — «занято» (курсор ожидания), disabled/muted/title опции — про
 // отдельный сегмент (см. SegmentOptionState).
 // touchWidth — на телефоне сегмент не уже тач-цели (короткие подписи «1:1», «16:9»)
-export function InlineSegmented<T extends string>({ value, options, onChange, disabled, isMobile, touchWidth, size = 'md' }: {
+export function InlineSegmented<T extends string>({ value, options, onChange, disabled, isMobile, touchWidth, full, size = 'md' }: {
   value: T | null;
   options: ({ value: T; label: string; tone?: { bg: string; fg: string }; icon?: ReactNode } & SegmentOptionState)[];
   onChange: (v: T) => void;
   disabled?: boolean;
   isMobile?: boolean;
   touchWidth?: boolean;
+  // full — переключатель на всю ширину: каждый сегмент flex:1 (переключатель движка
+  // «Основная · Bonsai» в начале вкладки «LLM», макет bonsai-toolbar §2/§6)
+  full?: boolean;
   // 'md' (по умолчанию) — плотный сегмент в строках списков (min-height 32/40);
   // 'sm' — для шапки панели: итоговая высота 24, вровень с IconButton xs / IconSegmented sm / Button xs
   size?: 'md' | 'sm';
@@ -34,6 +37,7 @@ export function InlineSegmented<T extends string>({ value, options, onChange, di
       display: 'flex', gap: SP.xxs, background: TB.pillTrack,
       borderRadius: TB.pillRadius + 1, padding: SP.xxs, flexShrink: 0,
       opacity: disabled ? 0.55 : 1, cursor: disabled ? 'wait' : undefined,
+      ...(full ? { width: '100%' } : null),
     }}>
       {options.map(o => {
         const active = o.value === value;
@@ -54,6 +58,8 @@ export function InlineSegmented<T extends string>({ value, options, onChange, di
               padding: `${padY}px ${SP.sm}px`,
               minHeight: minH,
               ...(isMobile && touchWidth ? { minWidth: TB.iconHitMobile, justifyContent: 'center' } : null),
+              // full: сегменты делят ширину дорожки поровну (макет §2: «каждый сегмент — flex:1»)
+              ...(full ? { flex: 1, minWidth: 0, justifyContent: 'center' } : null),
               background: tone ? tone.bg : 'transparent',
               color: tone ? tone.fg : C.textMuted,
               transition: 'background 0.12s, color 0.12s',

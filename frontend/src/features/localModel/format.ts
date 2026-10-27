@@ -97,6 +97,77 @@ export function gpuCountLabel(n: number): string {
   return `${n} карт`;
 }
 
+// === Подписи статуса стенда (макет bonsai-toolbar §4) ===
+// Бэкенд отдаёт групповой статус; точную подпись разводит фронт по состоянию арбитра:
+// 'yielded' + причины — факт уступки («Уступила карту»), 'yielded' без причин с остатком
+// паузы — ожидание возврата, 'starting' — загрузка, 'waiting-vram' — ожидание памяти.
+// Тон первых трёх — нейтральный: уступка — штатная работа арбитра, не авария (макет §4);
+// «ждёт память» — warning: сама не рассосётся. Без арбитра бэкенд 'yielded' не ставит
+// (Б3b), поэтому fallback — групповая подпись.
+
+export type StatusTone = 'success' | 'warning' | 'danger' | 'muted';
+export interface StatusPill { label: string; tone: StatusTone }
+
+// Точное состояние дежурства из снимка: 'yielded' стенда разводится по arbiter.state и
+// причинам; всё остальное — сам статус. Общий источник для пилюли, точки и подсказки.
+type YieldPhase = 'yielding' | 'waiting-return' | 'starting' | 'waiting-vram';
+function yieldPhase(data: LocalModelStats): YieldPhase {
+  const a = data.duty?.arbiter;
+  if (a?.state === 'starting') return 'starting';
+  if (a?.state === 'waiting-vram') return 'waiting-vram';
+  if (a?.state === 'yielded' && (a.reasons?.length ?? 0) === 0 && (a.quietLeftS ?? 0) > 0) return 'waiting-return';
+  return 'yielding';
+}
+
+export function statusPill(data: LocalModelStats): StatusPill {
+  switch (data.status) {
+    case 'working': return { label: 'Работает', tone: 'success' };
+    case 'busy': return { label: 'Занята', tone: 'warning' };
+    case 'down': return { label: 'Недоступна', tone: 'danger' };
+    case 'notConnected': return { label: 'Не подключена', tone: 'muted' };
+    case 'yielded': {
+      switch (yieldPhase(data)) {
+        case 'starting': return { label: 'Загружается', tone: 'muted' };
+        case 'waiting-vram': return { label: 'Ждёт память карты', tone: 'warning' };
+        case 'waiting-return': return { label: 'Ждёт возврата', tone: 'muted' };
+        default: return { label: 'Уступила карту', tone: 'muted' };
+      }
+    }
+  }
+}
+
+// Тон точки на сегменте «Bonsai» и на значке рельса (тот же, Ф6): идущая уступка —
+// muted, то, что само не рассосётся (память, молчание стенда) — warning (макет §4:
+// «accent закреплён за „что-то идёт прямо сейчас“», жёлтый — за неотсашивающееся).
+export function standDot(data: LocalModelStats): 'muted' | 'warning' | null {
+  switch (data.status) {
+    case 'yielded':
+      return yieldPhase(data) === 'waiting-vram' ? 'warning' : 'muted';
+    case 'down':
+      return 'warning';
+    default:
+      return null;
+    }
+}
+
+// Подсказка сегмента «Bonsai» (title/aria-label) — та же строка, что подсказка рельса
+// (макет §2), без живого обратного отсчёта: «вернётся через м:сс» считается на
+// опросе рельса (Ф6) и в «Дежурстве». null — подсказки нет (стенд работает).
+export function standHint(data: LocalModelStats): string | null {
+  switch (data.status) {
+    case 'yielded': {
+      switch (yieldPhase(data)) {
+        case 'starting': return 'Bonsai загружается';
+        case 'waiting-vram': return 'Bonsai ждёт память карты';
+        case 'waiting-return': return 'Bonsai ждёт возврата';
+        default: return 'Bonsai уступила карту';
+      }
+    }
+    case 'down': return 'Bonsai недоступна';
+    default: return null;
+  }
+}
+
 // === Строки «Кто сейчас на модели» ===
 
 // Строка списка: чат со скоростью. Чужой чат — «Чат другого пользователя»

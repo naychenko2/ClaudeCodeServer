@@ -31,7 +31,18 @@ public class TrackedLocalLlmClientEngineKeyTests
 
         warned.Should().BeTrue();
         var entry = log.Should().ContainSingle(e => e.Level == LogLevel.Warning).Subject;
-        entry.Message.Should().Contain("localqwen").And.Contain("local-qwen").And.Contain("разойдётся");
+        entry.Message.Should().Contain("localqwen").And.Contain("local-qwen").And.Contain("разойдётся")
+            .And.Contain("по умолчанию (3)");
+    }
+
+    [Fact]
+    public void КлючВДругомРегистре_ПредупреждениеНазываетПриведённыйКлючИПотолокПровайдера()
+    {
+        var (warned, log) = Run("Local-Qwen");
+
+        warned.Should().BeTrue();
+        var entry = log.Should().ContainSingle(e => e.Level == LogLevel.Warning).Subject;
+        entry.Message.Should().Contain("Local-Qwen").And.Contain("«local-qwen»").And.Contain("не в нижнем регистре");
     }
 
     [Fact]

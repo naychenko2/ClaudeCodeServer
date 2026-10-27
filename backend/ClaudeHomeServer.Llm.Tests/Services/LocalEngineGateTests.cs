@@ -145,6 +145,40 @@ public class LocalEngineGateTests
         Assert.Equal("LocalLlm", TrackedLocalLlmClient.ReadEngineKey(Cfg(null)));
         Assert.Equal("LocalLlm", TrackedLocalLlmClient.ReadEngineKey(Cfg("  ")));
     }
+
+    [Fact]
+    public async Task Ключ_в_другом_регистре_попадает_в_корзину_хода_CLI()
+    {
+        // мутация c1: без ToLowerInvariant в ReadEngineKey клиент уходит в корзину «LOCAL-QWEN» и пролезает сверх потолка
+        var cfg = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?> { ["LocalLlm:EngineKey"] = " LOCAL-QWEN " }).Build();
+        var key = TrackedLocalLlmClient.ReadEngineKey(cfg);
+        Assert.Equal("local-qwen", key);
+
+        var tracker = new LocalEngineBusyTracker();
+        var stub = new StubEngine();
+        var client = Client(stub, tracker, key, limit: 1);
+        using var turn = (await Turn(tracker, "local-qwen", 1)).Slot; // ход CLI занял единственный слот
+        Assert.NotNull(turn);
+
+        Assert.Null(await Call(client).WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(0, Volatile.Read(ref stub.Entered));
+        Assert.Equal(1, tracker.ActiveFor("local-qwen"));
+    }
+
+    [Fact]
+    public async Task Занятый_счётчик_даёт_различимый_отказ_разговорного_хода()
+    {
+        var tracker = new LocalEngineBusyTracker();
+        var stub = new StubEngine();
+        var client = Client(stub, tracker, "local-qwen", limit: 1);
+        using var turn = (await Turn(tracker, "local-qwen", 1)).Slot;
+
+        var result = await client.ChatTurnAsync([], null, TimeSpan.FromSeconds(5), 16, 1024, null);
+
+        Assert.Null(result.Text);
+        Assert.True(result.Busy);
+    }
 }
 
 // Полный хост: коллекция Inotify, как у соседних тестов с TestWebApplicationFactory

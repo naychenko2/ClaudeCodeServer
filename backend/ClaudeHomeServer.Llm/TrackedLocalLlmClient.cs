@@ -6,7 +6,8 @@ namespace ClaudeHomeServer.Services.Llm;
 // каждый из них неправдой.
 //
 // Слот берётся БЕЗ ожидания (TryEnter): занято — null, контракт ILocalLlmClient «null при беде»
-// сохраняется, вызывающий идёт по своей цепочке. Признак Busy слот не взводит: фоновый запрос
+// сохраняется, вызывающий идёт по своей цепочке. Разговорный ход отдаёт ChatTurnResult.EngineBusy:
+// интерактивный путь отличает «движок занят» от «движок не ответил». Признак Busy слот не взводит: фоновый запрос
 // не должен уводить в облако остальные фоновые.
 public sealed class TrackedLocalLlmClient(ILocalLlmClient inner, LocalEngineBusyTracker tracker,
     string engineKey, Func<int> limit, ILogger<TrackedLocalLlmClient> logger) : ILocalLlmClient
@@ -15,23 +16,43 @@ public sealed class TrackedLocalLlmClient(ILocalLlmClient inner, LocalEngineBusy
     public const int DefaultLimit = 3;
     public const string DefaultEngineKey = "LocalLlm";
 
-    // LocalLlm:EngineKey — ключ провайдера, с которым клиент делит физический движок
+    // LocalLlm:EngineKey — ключ провайдера, с которым клиент делит физический движок.
+    // Нормализуется как ключ провайдера в реестре (там он всегда в нижнем регистре, поиск без учёта
+    // регистра), а счётчик допуска сравнивает ключи по Ordinal: без приведения «Local-Qwen» уводил
+    // бы слот клиента в другую корзину счётчика, то есть на движке были бы два потолка.
     public static string ReadEngineKey(IConfiguration config) =>
-        config["LocalLlm:EngineKey"] is { } k && !string.IsNullOrWhiteSpace(k) ? k.Trim() : DefaultEngineKey;
+        config["LocalLlm:EngineKey"] is { } k && !string.IsNullOrWhiteSpace(k)
+            ? k.Trim().ToLowerInvariant()
+            : DefaultEngineKey;
 
-    // Опечатка в LocalLlm:EngineKey молча заводит отдельный счётчик: на одном движке окажутся два
-    // независимых потолка. Ключ задан явно, а провайдера с таким ключом нет — предупреждаем.
+    // Заданный, но не найденный в реестре ключ — ошибка настройки: счётчик прямого клиента разойдётся
+    // со счётчиком ходов CLI, а потолок молча станет DefaultLimit вместо MaxConcurrentTurns провайдера.
+    // Ключ в другом регистре реестр находит (и ReadEngineKey приводит его к нижнему), но об этом
+    // тоже говорим. Не задан ключ — предупреждения нет (отдельный движок, dev/стенд).
     // true — предупреждение записано.
     public static bool WarnIfEngineKeyUnknown(IConfiguration config, LlmProviderRegistry? registry, ILogger logger)
     {
-        if (registry is null || string.IsNullOrWhiteSpace(config["LocalLlm:EngineKey"])) return false;
+        if (registry is null || config["LocalLlm:EngineKey"] is not { } raw || string.IsNullOrWhiteSpace(raw))
+            return false;
         var key = ReadEngineKey(config);
-        if (registry.GetByKey(key) is not null) return false;
-        logger.LogWarning(
-            "LocalLlm:EngineKey=\"{Key}\": провайдера с таким ключом нет в реестре LlmProviders — счётчик допуска "
-            + "прямого клиента разойдётся со счётчиком ходов CLI, и на движке окажутся два независимых потолка. "
-            + "Ожидается ключ существующего провайдера (в бою — local-qwen).", key);
-        return true;
+        if (registry.GetByKey(key) is null)
+        {
+            logger.LogWarning(
+                "LocalLlm:EngineKey=\"{Key}\": провайдера с таким ключом нет в реестре LlmProviders — счётчик допуска "
+                + "прямого клиента разойдётся со счётчиком ходов CLI, и на движке окажутся два независимых потолка. "
+                + "Потолок взят по умолчанию ({Limit}), а не у провайдера. "
+                + "Ожидается ключ существующего провайдера (в бою — local-qwen).", key, DefaultLimit);
+            return true;
+        }
+        if (!string.Equals(raw.Trim(), key, StringComparison.Ordinal))
+        {
+            logger.LogWarning(
+                "LocalLlm:EngineKey=\"{Raw}\" записан не в нижнем регистре: ключ приведён к «{Key}», потолок взят "
+                + "у этого провайдера ({Limit}). Поправьте значение в конфигурации.",
+                raw.Trim(), key, registry.GetByKey(key)!.MaxConcurrentTurns);
+            return true;
+        }
+        return false;
     }
 
     // Ключ слота в счётчике: у основного клиента — LocalLlm:EngineKey (провайдер, с которым
@@ -62,7 +83,7 @@ public sealed class TrackedLocalLlmClient(ILocalLlmClient inner, LocalEngineBusy
         int numPredict, int numCtx, string? ownerId,
         Func<string, Task>? onDelta = null, CancellationToken ct = default) =>
         Guard(() => inner.ChatTurnAsync(messages, model, timeout, numPredict, numCtx, ownerId,
-            onDelta, ct), new ChatTurnResult(null, null));
+            onDelta, ct), ChatTurnResult.EngineBusy);
 
     public Task WarmUpAsync(string? model, CancellationToken ct = default) =>
         Guard<object?>(async () => { await inner.WarmUpAsync(model, ct); return null; }, null);

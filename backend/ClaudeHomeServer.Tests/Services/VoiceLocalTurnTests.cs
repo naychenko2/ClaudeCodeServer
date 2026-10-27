@@ -32,6 +32,11 @@ public class VoiceLocalTurnTests : IDisposable
     private readonly SessionManager _sut;
     private readonly TestSessionBroadcaster _broadcaster = new();
     private readonly FakeOllamaHttp _ollamaHttp = new();
+    // Общий счётчик допуска движка (свой на тест) и слот прямого клиента под ним: голосовой ход
+    // идёт через ту же обёртку, что и в бою
+    private readonly LocalEngineBusyTracker _engineTracker = new();
+    private const string EngineKey = "voice-test-engine";
+    private const int EngineLimit = 8;
     // Резолвер слотов тиров + роутер, который его видит: для проверки VoiceModelFor
     // (слот места chat-voice разворачивается UserModelTierResolver.ModelFor).
     private readonly UserModelTierResolver _tierResolver;
@@ -119,7 +124,9 @@ public class VoiceLocalTurnTests : IDisposable
             bindings, subPool, NullLogger<SessionManager>.Instance,
             TestLauncherFactory.Instance, sandbox,
             _broadcaster,
-            router: router, ollama: ollama);
+            router: router,
+            ollama: new TrackedLocalLlmClient(ollama, _engineTracker, EngineKey, () => EngineLimit,
+                NullLogger<TrackedLocalLlmClient>.Instance));
     }
 
     public void Dispose()
@@ -445,6 +452,30 @@ public class VoiceLocalTurnTests : IDisposable
         await Task.Delay(300);
         _sut.GetById(session.Id)!.MessageCount.Should().Be(messageCountBefore,
             "реплика без ответа не уходит в CLI повторно");
+    }
+
+    [Fact]
+    public async Task ЗанятыйДвижок_СообщениеПроЗанятость_НеПроОтказДвижка()
+    {
+        // мутация c3: вернуть в SessionManager единый текст «Локальная модель не ответила» — тест краснеет
+        var session = await MakeVoiceChatAsync();
+        var slots = Enumerable.Range(0, EngineLimit)
+            .Select(_ => _engineTracker.TryEnter(EngineKey, EngineLimit, raiseBusy: false)).ToList();
+        try
+        {
+            slots.Should().AllSatisfy(sl => sl.Should().NotBeNull());
+
+            await _sut.SendMessageAsync(session.Id, "привет", []);
+
+            var errors = await WaitForAsync(() => Sent<ErrorMessage>(), TimeSpan.FromSeconds(5));
+            var error = errors.Should().ContainSingle().Subject;
+            error.Text.Should().Contain("занят").And.NotContain("не ответила");
+            _ollamaHttp.RequestCount.Should().Be(0, "в движок запрос не уходил");
+        }
+        finally
+        {
+            foreach (var sl in slots) sl?.Dispose();
+        }
     }
 
     // === Голосовой ход на НЕ-локальном выборе места chat-voice (слот/конкретная модель) ===

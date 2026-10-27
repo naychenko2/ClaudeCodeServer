@@ -39,8 +39,11 @@ const ROW_K: CSSProperties = { color: C.textMuted, flexShrink: 0, fontSize: FS.s
 const ROW_V: CSSProperties = { fontFamily: FONT.mono, fontWeight: 600, fontSize: FS.sm, textAlign: 'right', minWidth: 0, overflowWrap: 'anywhere' };
 // Текст вне моно (причины, «после паузы»): sans
 const ROW_V_TEXT: CSSProperties = { ...ROW_V, fontFamily: FONT.sans };
-// Подсказка под значением («если не придёт новое задание», период счётчиков)
-const HINT: CSSProperties = { fontSize: FS.xs, color: C.textMuted, textAlign: 'right' };
+// Подсказка под значением. По макету (html:166) база — влево; вправо ровно две:
+// «если не придёт новое задание» и период счётчиков «с запуска арбитра» (html:512).
+// Самостоятельные заметки («Данных пока нет.», «сервер перезапущен…», журнал) — влево.
+const HINT: CSSProperties = { fontSize: FS.xs, color: C.textMuted };
+const HINT_RIGHT: CSSProperties = { ...HINT, textAlign: 'right' };
 const SEPR: CSSProperties = { height: 1, background: C.bgInset, margin: `${SP.md}px 0` };
 
 function Row({ k, v, mono }: { k: string; v: React.ReactNode; mono?: boolean }) {
@@ -52,8 +55,8 @@ function Row({ k, v, mono }: { k: string; v: React.ReactNode; mono?: boolean }) 
   );
 }
 
-function Hint({ children }: { children: React.ReactNode }) {
-  return <div style={HINT}>{children}</div>;
+function Hint({ children, right }: { children: React.ReactNode; right?: boolean }) {
+  return <div style={right ? HINT_RIGHT : HINT}>{children}</div>;
 }
 
 // Секционный заголовок внутри карточки («Цепочка», «Ответы мест…»)
@@ -263,7 +266,11 @@ export function DutyBlock({ data, isMobile, onOpenMedia }: {
               )}
             </>
           ) : (
-            <Row k="Причина" v={state === 'yielded' ? <span style={{ fontWeight: 400, color: C.textMuted }}>задание закончилось</span> : 'не хватает памяти карты'} />
+            <>
+              <Row k="Причина" v={state === 'yielded' ? <span style={{ fontWeight: 400, color: C.textMuted }}>задание закончилось</span> : 'не хватает памяти карты'} />
+              {/* статичная подсказка макета (html:486): почему именно мало, если выгрузки уже не хватило */}
+              {state === 'waiting-vram' && <Hint>ComfyUI выгрузил кэш, но места всё равно мало. Арбитр ждёт.</Hint>}
+            </>
           )
         )}
         {returnRow && (
@@ -275,7 +282,7 @@ export function DutyBlock({ data, isMobile, onOpenMedia }: {
                 : leftS == null ? '—' : leftS <= 0 ? 'вот-вот' : `через ${formatClockLeft(leftS)}`}
               mono={!hasReasons}
             />
-            {!hasReasons && leftS != null && leftS > 0 && <Hint>если не придёт новое задание</Hint>}
+            {!hasReasons && leftS != null && leftS > 0 && <Hint right>если не придёт новое задание</Hint>}
           </>
         )}
         {notYieldedByArbiter && (
@@ -294,7 +301,7 @@ export function DutyBlock({ data, isMobile, onOpenMedia }: {
         {counters && (
           <>
             <Row k="Уступила · вернулась" v={counters.value} mono />
-            <Hint>{counters.period}</Hint>
+            <Hint right>{counters.period}</Hint>
           </>
         )}
         {switchTimes && <Row k="Уступает · возвращается" v={switchTimes} mono />}

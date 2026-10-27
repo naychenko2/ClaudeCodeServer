@@ -186,10 +186,10 @@ describe('счётчики уступок', () => {
     const c = dutyCounters(returning({ yields: 0, returns: 0, sinceAt }));
     expect(c).toEqual({ value: '0 · 0', period: 'с запуска арбитра' });
   });
-  it('ненулевые счётчики — период «с HH:MM» по sinceAt', () => {
+  it('ненулевые счётчики — тоже «с запуска арбитра», HH:MM из чужих часов не показываем', () => {
     const sinceAt = new Date(2026, 9, 13, 13, 41, 0).getTime();
     const c = dutyCounters(returning({ yields: 14, returns: 14, sinceAt }));
-    expect(c).toEqual({ value: '14 · 14', period: 'с 13:41' });
+    expect(c).toEqual({ value: '14 · 14', period: 'с запуска арбитра' });
   });
   it('ненулевые счётчики без sinceAt — «с запуска арбитра» (метки времени нет)', () => {
     const c = dutyCounters(returning({ yields: 3, returns: 2, sinceAt: null }));

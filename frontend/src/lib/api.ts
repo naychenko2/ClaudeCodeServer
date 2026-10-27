@@ -188,8 +188,8 @@ export interface LocalModelDutyArbiter {
   // секунды до возврата модели; null — есть причины или модель уже активна
   quietLeftS?: number | null;
   // unix-мс начала периода счётчиков: сервер пересчитывает по часам Video (sinceAt = now − (ts − since)),
-  // часы Video и CCS расходятся. null — снимка не было. При yields==returns==0 фронт
-  // подписывает «с запуска арбитра»
+  // часы Video и CCS расходятся. null — снимка не было. Период фронт подписывает всегда
+  // «с запуска арбитра»: HH:MM из чужих часов — ложная точность (решение Софьи, макет html:512)
   sinceAt?: number | null;
   yields?: number | null;
   returns?: number | null;

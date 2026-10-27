@@ -176,15 +176,12 @@ export function answersWindowTitle(a: LocalModelDutyAnswers, now: number): { tit
 // === Счётчики уступок ===
 
 // «Уступила · вернулась 14 · 14» + период. Периода «за час» у арбитра нет: счётчики
-// ведут с начала периода (sinceAt). При нулевых счётчиках метка времени выглядела бы
-// как поломка, поэтому — «с запуска арбитра» (контракт, lib/api.ts); при ненулевых —
-// «с HH:MM». Нет данных о счётчиках — строки нет (null).
+// ведут с начала периода (sinceAt). Метка всегда «с запуска арбитра» (решение Софьи по
+// принятому макету, html:512): часы Video и CCS расходятся (контракт, lib/api.ts),
+// «с HH:MM» из sinceAt был бы ложной точностью. Нет данных о счётчиках — строки нет (null).
 export function dutyCounters(a: LocalModelDutyArbiter | null): { value: string; period: string } | null {
   if (!a || a.yields == null || a.returns == null) return null;
-  const value = `${a.yields} · ${a.returns}`;
-  if (a.yields === 0 && a.returns === 0) return { value, period: 'с запуска арбитра' };
-  const since = formatSince(a.sinceAt);
-  return { value, period: since ? `с ${since}` : 'с запуска арбитра' };
+  return { value: `${a.yields} · ${a.returns}`, period: 'с запуска арбитра' };
 }
 
 // Десятичное по-русски с единицей: «0,2 с»; целое — без хвоста: «6 с».

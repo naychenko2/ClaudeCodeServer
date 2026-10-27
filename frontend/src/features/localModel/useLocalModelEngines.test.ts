@@ -45,6 +45,15 @@ describe('resolveEngine: сохранённый выбор против умол
   it('сохранённый, но ненастроенный движок — умолчание', () => {
     expect(resolveEngine([main(false), bonsai(true)], 'main')).toBe('bonsai');
   });
+  // Ревью Ф1 (MAJOR 3): пустой список — «ещё не загружен», а не «ничего не
+  // настроено»: сохранённый выбор остаётся, пока сервер не ответил
+  it('список не загружен (пустой) — сохранённый выбор, не умолчание', () => {
+    expect(resolveEngine([], 'bonsai')).toBe('bonsai');
+    expect(resolveEngine([], 'main')).toBe('main');
+  });
+  it('список не загружен и выбора нет — main', () => {
+    expect(resolveEngine([], null)).toBe('main');
+  });
 });
 
 describe('createEnginesStore: выбор переживает пересоздание стора', () => {
@@ -59,6 +68,16 @@ describe('createEnginesStore: выбор переживает пересозда
     const b = createEnginesStore(storage); // «перезагрузка страницы»
     b.setEngines([main(true), bonsai(true)]);
     expect(b.getSnapshot().engine).toBe('bonsai');
+  });
+
+  // Ревью Ф1 (MAJOR 3): до первого ответа сервера (список пуст) стор отдаёт
+  // сохранённый выбор, а не умолчание main — иначе панель на мгновение показала
+  // бы цифры другого стенда
+  it('стор поверх хранилища с «bonsai» до загрузки списка отдаёт сохранённый выбор', () => {
+    const store = createEnginesStore(fakeStorage({ [ENGINE_STORAGE_KEY]: 'bonsai' }));
+    expect(store.getSnapshot().engine).toBe('bonsai'); // setEngines ещё не было
+    store.setEngines([main(true), bonsai(false)]); // список пришёл: bonsai не настроен
+    expect(store.getSnapshot().engine).toBe('main'); // → умолчание
   });
 
   it('мусор в хранилище игнорируется — умолчание', () => {

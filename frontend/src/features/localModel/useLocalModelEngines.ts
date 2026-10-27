@@ -28,9 +28,12 @@ export function pickDefaultEngine(engines: LocalModelEngine[]): LocalModelEngine
 }
 
 // Итоговый движок: сохранённый выбор, если этот движок сейчас настроен, иначе умолчание.
+// Пустой список — не «ничего не настроено», а «список ещё не загружен»: его
+// настроенность неизвестна, поэтому сохранённый выбор остаётся как есть — до
+// первого ответа сервера, а не до первого ответа с сохранённым движком.
 // Устаревший выбор (движок отключили) молча заменяется умолчанием, но не стирается из хранилища.
 export function resolveEngine(engines: LocalModelEngine[], saved: LocalModelEngineName | null): LocalModelEngineName {
-  if (saved && isConfigured(engines, saved)) return saved;
+  if (saved && (engines.length === 0 || isConfigured(engines, saved))) return saved;
   return pickDefaultEngine(engines);
 }
 
@@ -88,7 +91,9 @@ export function getLocalModelEngine(): LocalModelEngineName { return store.getSn
 export function setLocalModelEngine(name: LocalModelEngineName): void { store.setEngine(name); }
 
 // Хук панели: подгружает список движков, пока панель открыта (active), и отдаёт выбор.
-// Сбой запроса не критичен: остаётся прежний список (до первого успеха — пустой, main).
+// Сбой запроса не критичен: остаётся прежний список. Пока он ни разу не пришёл,
+// выбор — сохранённый в хранилище (resolveEngine с пустым списком); 'main' —
+// только когда сохранённого выбора нет.
 export function useLocalModelEngines(active: boolean): {
   engines: LocalModelEngine[];
   engine: LocalModelEngineName;

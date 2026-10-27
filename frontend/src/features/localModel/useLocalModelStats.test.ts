@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mockLocalModelStats } from './localModel.fixtures';
+import { mockBonsaiStats, mockLocalModelStats } from './localModel.fixtures';
 import {
   configuredFetch,
   createStatsPoller,
@@ -142,6 +142,59 @@ describe('createStatsPoller: 2-с опрос', () => {
     await vi.advanceTimersByTimeAsync(0);
     const s3 = p.getSnapshot();
     expect(s3).not.toBe(s1); // после завершения fetch — пересобранный снимок
+  });
+});
+
+// Ревью Ф1 (MAJOR 1-2): поллер знает движок каждого запроса — поздний ответ
+// старого движка не затирает данные нового; смена движка сбрасывает чужой снимок.
+// Мутация «убрать проверку движка в .then» краснеет в первом тесте, «убрать
+// сброс при несовпадении движков» — во втором.
+describe('createStatsPoller: движок снимка (MAJOR 1-2)', () => {
+  const mainData = mockLocalModelStats(); // данные основной (vLLM)
+  const bonsaiData = mockBonsaiStats('ready'); // данные стенда Bonsai
+
+  const timers = (fn: () => void, ms: number) => setInterval(fn, ms);
+  const untimer = (id: unknown) => clearInterval(id as ReturnType<typeof setInterval>);
+
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('поздний ответ старого движка не затирает данные нового', async () => {
+    const engine = { current: 'main' as 'main' | 'bonsai' };
+    let resolveMain: (v: typeof mainData) => void = () => {};
+    const mainPromise = new Promise<typeof mainData>((r) => { resolveMain = r; });
+    const fetch = vi.fn<() => Promise<typeof mainData>>();
+    fetch.mockImplementationOnce(() => mainPromise); // запрос main отложен
+    fetch.mockImplementationOnce(async () => bonsaiData); // bonsai приходит первым
+    const p = createStatsPoller(fetch, 2000, timers, untimer, engine);
+    p.setActive(true, true); // первый тик — запрос main
+    engine.current = 'bonsai'; // пользователь переключился, main всё ещё в пути
+    p.refetch(); // запрос bonsai (как эффект смены движка в хуке)
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p.getSnapshot().data).toEqual(bonsaiData);
+    resolveMain(mainData); // поздний ответ main
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p.getSnapshot().data).toEqual(bonsaiData); // снимок остаётся bonsai
+    expect(p.getSnapshot().loading).toBe(false);
+    p.dispose();
+  });
+
+  it('смена движка сбрасывает снимок; отказ нового движка не оставляет чужих данных', async () => {
+    const engine = { current: 'main' as 'main' | 'bonsai' };
+    const fetch = vi.fn<() => Promise<typeof mainData>>().mockResolvedValue(mainData);
+    const p = createStatsPoller(fetch, 2000, timers, untimer, engine);
+    p.setActive(true, true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p.getSnapshot().data).toEqual(mainData); // данные main показаны
+    engine.current = 'bonsai';
+    fetch.mockImplementationOnce(async () => { throw new Error('bonsai offline'); });
+    p.refetch(); // смена движка → немедленный запрос нового
+    expect(p.getSnapshot().data).toBeNull(); // чужой снимок сброшен сразу
+    expect(p.getSnapshot().loading).toBe(true);
+    await vi.advanceTimersByTimeAsync(0); // отказ нового движка
+    expect(p.getSnapshot().data).toBeNull(); // не данных предыдущего стенда
+    expect(p.getSnapshot().loading).toBe(false);
+    p.dispose();
   });
 });
 

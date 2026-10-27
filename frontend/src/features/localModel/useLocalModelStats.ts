@@ -7,6 +7,13 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import { fetchLocalModelMedia, fetchLocalModelStats, type LocalModelEngineName, type LocalModelStats } from './api';
 import { DEFAULT_WINDOW, type Window as StatsWindow } from './ThroughputChart';
 
+// Дефолтные таймеры: в браузере — window.setInterval; в тестах инъектируются свои
+// (в node-окружении window.setInterval возвращает NodeJS.Timeout, а не number —
+// тип id поэтому unknown). Названы, чтобы вызывающий мог передать их рядом с
+// engineRef, не повторяя тело.
+const defaultSetTimer = (fn: () => void, ms: number): unknown => window.setInterval(fn, ms);
+const defaultClearTimer = (id: unknown): void => window.clearInterval(id as number);
+
 // Захват текущего окна для fetch: poller живёт дольше выбора окна, поэтому fetch
 // читает windowRef.current на каждый вызов, а не захваченное значение. Смена
 // окна (без пересоздания poller) меняет следующий запрос — тест ниже.
@@ -136,10 +143,18 @@ export function createStatsPoller(
   intervalMs: number,
   // Таймеры инъектируются: в node-окружении тестов window.setInterval возвращает
   // NodeJS.Timeout, а не number — тип id поэтому unknown
-  setTimer: (fn: () => void, ms: number) => unknown = (fn, ms) => window.setInterval(fn, ms),
-  clearTimer: (id: unknown) => void = (id) => window.clearInterval(id as number),
+  setTimer: (fn: () => void, ms: number) => unknown = defaultSetTimer,
+  clearTimer: (id: unknown) => void = defaultClearTimer,
+  // Движок, к которому относятся запросы (тот же ref, что у makeStatsFetch): без
+  // него поллер про движок не знает — поведение как раньше. С ним: ответ
+  // относится к движку, актуальному на момент запроса, поздний ответ другого
+  // движка отбрасывается, а смена движка сбрасывает чужой снимок.
+  engineRef?: { current: LocalModelEngineName },
 ): StatsPoller {
   let data: LocalModelStats | null = null;
+  // Движок, к которому относится data (тот же, что был в engineRef при запросе).
+  // Рядом с data — чтобы поздний ответ старого движка не затёр данные нового.
+  let dataEngine: LocalModelEngineName | null = null;
   let loading = false;
   let active = false;
   let timer: unknown = null;
@@ -159,16 +174,36 @@ export function createStatsPoller(
   };
 
   const doFetch = () => {
+    // Движок этого запроса — тот, что выбран сейчас; без engineRef — основной стенд.
+    const reqEngine: LocalModelEngineName = engineRef?.current ?? 'main';
+    if (dataEngine !== null && dataEngine !== reqEngine) {
+      // Сменили движок: цифры другого стенда под новым выбором быть не должно —
+      // снимок сбрасывается сразу, до ответа нового (отказ нового движка не
+      // оставляет чужих данных).
+      data = null;
+      dataEngine = null;
+      loading = true;
+    }
     inflight++;
     refresh();
     fetch().then(d => {
+      if (engineRef && reqEngine !== engineRef.current) {
+        // Поздний ответ движка, который уже не выбран: он не относится к
+        // текущему снимку — отбрасываем, данные нового остаются.
+        inflight--;
+        refresh();
+        emit();
+        return;
+      }
       data = d;
+      dataEngine = reqEngine;
       loading = false;
       inflight--;
       refresh();
       emit();
     }).catch(() => {
-      // Сбой опроса не критичен: показываем последние данные
+      // Сбой опроса не критичен: показываем последние данные; после смены движка
+      // их нет — так и остаёмся без данных, а не с чужими
       inflight--;
       loading = false;
       refresh();
@@ -217,12 +252,15 @@ export function useLocalModelStats(
   windowRef.current = window;
   const engineRef = useRef<LocalModelEngineName>(engine);
   engineRef.current = engine;
-  const [poller] = useState(() => createStatsPoller(makeStatsFetch(windowRef, engineRef), 2000));
+  const [poller] = useState(() => createStatsPoller(
+    makeStatsFetch(windowRef, engineRef), 2000, defaultSetTimer, defaultClearTimer, engineRef,
+  ));
 
   // Смена окна — сразу новый снимок: сервер отдаёт средние за выбранное окно,
   // поэтому данные за 15m не подходят под график 1h. Первый прогон пропускаем —
   // setActive уже снял снимок, повторный fetch был бы дублем.
-  // Смена движка — то же: данные другого стенда не показываем дольше одного запроса.
+  // Смена движка — то же: немедленный запрос нового; поллер видит несовпадение
+  // движков и сбрасывает чужой снимок — цифры другого стенда не показываем.
   const prevWindow = useRef<StatsWindow | null>(null);
   const prevEngine = useRef<LocalModelEngineName | null>(null);
   useEffect(() => {

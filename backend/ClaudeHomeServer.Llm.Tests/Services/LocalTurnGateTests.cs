@@ -131,13 +131,14 @@ public class LocalTurnGateTests
     private static ClaudeSubscriptionPool Pool() => new(new ConfigurationBuilder()
         .AddInMemoryCollection(new Dictionary<string, string?> { ["ClaudeSubscriptions:acc-a:OAuthToken"] = "t" }).Build());
 
-    private Turn NewTurn(LocalEngineBusyTracker gate, LlmProviderRegistry providers, string[]? chain = null)
+    private Turn NewTurn(LocalEngineBusyTracker gate, LlmProviderRegistry providers, string[]? chain = null,
+        Action<ServerMessage>? beforeRecord = null)
     {
         var session = new Session { Model = LocalModel, Provider = Local };
         var inner = new FakeInner(session);
         var outList = new List<ServerMessage>();
         var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
-            msg => { lock (outList) outList.Add(msg); return Task.CompletedTask; },
+            msg => { beforeRecord?.Invoke(msg); lock (outList) outList.Add(msg); return Task.CompletedTask; },
             Pool(), providers, Path.GetTempPath(), launcher: null, initialProfileRoot: null,
             effectiveChain: chain is null ? null : () => chain,
             health: _health, egressRetryDelay: TimeSpan.FromMilliseconds(10), localGate: gate);
@@ -368,6 +369,79 @@ public class LocalTurnGateTests
         await WaitForAsync(() => b.Downstream().OfType<LocalTurnQueueMessage>().Any(m => m.Position == 0),
             "строка снята при старте");
         b.Downstream().OfType<LocalTurnQueueMessage>().Last().Position.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ТаймаутВОчереди_СтрокаОжиданияСнята_Position0()
+    {
+        var gate = new LocalEngineBusyTracker(_clock);
+        var providers = Providers(1, 4, "00:15:00");
+        var a = NewTurn(gate, providers);
+        var b = NewTurn(gate, providers);
+
+        await a.Sut.SendMessageAsync("a");
+        await WaitForAsync(() => a.Started, "A стартовал");
+        await b.Sut.SendMessageAsync("b");
+        await WaitForAsync(() => b.Downstream().OfType<LocalTurnQueueMessage>().Any(m => m.Position > 0), "строка показана");
+
+        _clock.Advance(TimeSpan.FromMinutes(15));
+        await WaitForAsync(() => b.Downstream().OfType<ResultMessage>().Any(), "B получил терминал по таймауту");
+
+        b.Downstream().OfType<LocalTurnQueueMessage>().Last().Position.Should().Be(0, "строка снята при таймауте");
+    }
+
+    [Fact]
+    public async Task СтопВОчереди_СтрокаОжиданияСнята_Position0()
+    {
+        var gate = new LocalEngineBusyTracker(_clock);
+        var providers = Providers(1, 4, "00:15:00");
+        var a = NewTurn(gate, providers);
+        var b = NewTurn(gate, providers);
+
+        await a.Sut.SendMessageAsync("a");
+        await WaitForAsync(() => a.Started, "A стартовал");
+        await b.Sut.SendMessageAsync("b");
+        await WaitForAsync(() => b.Downstream().OfType<LocalTurnQueueMessage>().Any(m => m.Position > 0), "строка показана");
+
+        b.Sut.Interrupt();
+        await WaitForAsync(() => b.Downstream().OfType<ExitedMessage>().Any(), "B получил терминал остановки");
+
+        b.Downstream().OfType<LocalTurnQueueMessage>().Last().Position.Should().Be(0, "строка снята при «Стоп»");
+    }
+
+    [Fact]
+    public async Task ПоздниеСдвигиПозиции_ПослеСнятияСтроки_НеВоскрешаютЕё()
+    {
+        var gate = new LocalEngineBusyTracker(_clock);
+        var providers = Providers(1, 4, "00:15:00");
+        var shiftEntered = new ManualResetEventSlim();
+        var releaseShift = new ManualResetEventSlim();
+        var a = NewTurn(gate, providers);
+        var b = NewTurn(gate, providers);
+        // Сдвиг позиции C (Position = 1) блокируем внутри доставки: так «Стоп» C гарантированно
+        // вклинивается между проверкой состояния и записью события.
+        var c = NewTurn(gate, providers, beforeRecord: m =>
+        {
+            if (m is LocalTurnQueueMessage { Position: 1 }) { shiftEntered.Set(); releaseShift.Wait(TimeSpan.FromSeconds(10)); }
+        });
+
+        await a.Sut.SendMessageAsync("a");
+        await WaitForAsync(() => a.Started, "A стартовал");
+        await b.Sut.SendMessageAsync("b");
+        await WaitForAsync(() => gate.QueuedFor(Local) == 1, "B в очереди");
+        await c.Sut.SendMessageAsync("c");
+        await WaitForAsync(() => c.Downstream().OfType<LocalTurnQueueMessage>().Any(m => m.Position == 2), "C в очереди вторым");
+
+        var finishA = Task.Run(a.FinishOk);   // Release сдвигает C на позицию 1 и зависает в доставке
+        shiftEntered.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue("сдвиг дошёл до доставки");
+        c.Sut.Interrupt();
+        await Task.Delay(100);                // даём «Стопу» дойти до снятия строки
+        releaseShift.Set();
+        await finishA;
+        await WaitForAsync(() => c.Downstream().OfType<ExitedMessage>().Any(), "C получил терминал остановки");
+
+        c.Downstream().OfType<LocalTurnQueueMessage>().Last().Position
+            .Should().Be(0, "поздний сдвиг не должен поднять уже снятую строку");
     }
 
     [Fact]

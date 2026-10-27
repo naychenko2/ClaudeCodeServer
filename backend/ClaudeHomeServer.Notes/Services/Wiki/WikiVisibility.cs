@@ -89,23 +89,32 @@ public static class WikiVisibility
     }
 
     /// <summary>Ссылку [[…]] на раздел вне набора заменяем [скрыто]: заголовок страницы чужого
-    /// раздела — тоже текст (решение 2). Ссылка с неразбираемым целью — [скрыто] тоже
-    /// (fail-closed: такая страница не принадлежит ни одному разделу). Ссылка внутри набора
-    /// остаётся как есть, с алиасом и якорем.</summary>
+    /// раздела — тоже текст (решение 2). Голая цель ([[Страница]]) — внутрираздельная ссылка
+    /// (ADR-035, решение 1: внутри раздела ссылка пишется голой, между разделами — с префиксом):
+    /// страница текста показана только когда её раздел в наборе, значит голая ссылка всегда
+    /// внутри набора — остаётся как есть, с алиасом и якорем. Цель с путём, который не
+    /// разбирается, — страница ни одного раздела: [скрыто] (fail-closed).</summary>
     public static string RedactLinks(string text, IReadOnlyCollection<string> visible)
     {
         if (string.IsNullOrEmpty(text))
             return text;
         var set = new HashSet<string>(visible, StringComparer.Ordinal);
         return LinkPattern.Replace(text, match =>
-            TargetKey(match.Groups[1].Value) is { } key && set.Contains(key)
+            IsVisibleTarget(match.Groups[1].Value, set)
                 ? match.Value
                 : "[скрыто]");
     }
 
     private static readonly Regex LinkPattern = new(@"\[\[([^\[\]]*)\]\]", RegexOptions.Compiled);
 
-    // Цель wikilink: без алиаса («|…») и якоря раздела («#…»).
-    private static string? TargetKey(string rawTarget) =>
-        WikiSections.Parse(rawTarget.Split('|', '#')[0].Trim());
+    private static bool IsVisibleTarget(string rawTarget, HashSet<string> set)
+    {
+        // Цель без алиаса («|…») и якоря раздела («#…»).
+        var target = rawTarget.Split('|', '#')[0].Trim();
+        if (target.Length == 0)
+            return false; // [[]] — цели нет, что за ней — неизвестно
+        if (!target.Contains('/') && !target.Contains('\\'))
+            return true; // голая цель — внутрираздельная ссылка (ADR-035, решение 1)
+        return WikiSections.Parse(target) is { } key && set.Contains(key);
+    }
 }

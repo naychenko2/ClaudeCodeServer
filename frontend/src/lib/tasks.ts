@@ -288,12 +288,21 @@ let _outboxConfigured = false;
 // Пассивный GET-кэш (offline.ts) хранил списки задач и фич ВТОРЫМ экземпляром рядом с tasks:all:
 // сотни КБ на чат, без вытеснения. Теперь эти запросы идут с live и в кэш не пишутся, а
 // остатки прежних записей сносим. Ключи — url запроса без /api (допускаем и с ним).
+// Одиночный GET /tasks/{id} тоже оставлял полную копию (~90 КБ) на каждую открытую задачу:
+// ключ — ровно один сегмент после /tasks (с query или без), служебные /tasks/ai не трогаем.
 const LEGACY_LIST_KEYS = ['/tasks', '/tasks/features'].flatMap(p => [p, `/api${p}`]);
+const LEGACY_SINGLE_TASK_KEY = /^(?:\/api)?\/tasks\/(?!ai(?:[/?]|$))[^/?]+(?:\?.*)?$/;
+// Чистка разовая: признак живёт в том же разделе meta, сам по себе в кэш запросов не попадает.
+const LEGACY_PURGE_DONE_KEY = 'tasks:legacy-cache-purged:v1';
 
 export async function purgeLegacyTaskListCache(): Promise<void> {
-  const keys = await idbKeys().catch(() => [] as string[]);
-  const stale = keys.filter(k => LEGACY_LIST_KEYS.some(p => k === p || k.startsWith(`${p}?`)));
+  if (await idbGet(LEGACY_PURGE_DONE_KEY).catch(() => undefined)) return;
+  const keys = await idbKeys().catch(() => null);
+  if (!keys) return;
+  const stale = keys.filter(k =>
+    LEGACY_LIST_KEYS.some(p => k === p || k.startsWith(`${p}?`)) || LEGACY_SINGLE_TASK_KEY.test(k));
   await Promise.all(stale.map(k => idbDelete(k).catch(() => {})));
+  await idbSet(LEGACY_PURGE_DONE_KEY, { data: true, savedAt: Date.now() }).catch(() => {});
 }
 
 // Подхватить локальный снапшот стора из IndexedDB (мгновенно, до сети): офлайн-правки

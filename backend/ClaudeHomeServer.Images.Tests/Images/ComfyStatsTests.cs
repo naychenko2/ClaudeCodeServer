@@ -431,4 +431,82 @@ public class ComfyStatsTests
         snap.Gpus.Should().BeEmpty("gpus null — карт нет");
         snap.Unsupported.Should().BeEmpty("маршрут установлен (version 1) — пометки «не сообщает» нет");
     }
+
+    // ─── Вид задания по префиксу prompt_id (дежурство, шаг B4) ───────────────────────────────
+
+    // Соответствие видов (5 случаев): image→image, video→video, audio→audio, train→lora,
+    // other→null. «b2» — префикс, не весь id; «d4-train» — завершённый прогон: поиск достаёт
+    // и кольцо Recent. Мутация: поменять "train" => "lora" на "train" => "train" — краснеет.
+    [Fact]
+    public void ВидЗадания_СоответствиеВидов_ПятьСлучаев()
+    {
+        var h = Build();
+        h.Ledger.Register("a1-image", OriginA(), 30);
+        h.Ledger.Register("b2-video", OriginB(), 60);
+        h.Ledger.Register("c3-audio", new LocalJobOrigin(OwnerA, SessionA, "audio", "speak", false), 20);
+        h.Ledger.Register("e5-other", new LocalJobOrigin(OwnerA, SessionA, "other", "", false), null);
+        h.Ledger.Register("d4-train", new LocalJobOrigin(OwnerA, SessionA, "train", "lora_train", true), 120);
+        h.Ledger.MarkStarted("d4-train");
+        h.Ledger.Complete("d4-train", "completed", 100, null);
+
+        h.Stats.DescribePromptKind("a1-image").Should().Be("image");
+        h.Stats.DescribePromptKind("b2").Should().Be("video", "префикс, не весь id");
+        h.Stats.DescribePromptKind("c3-audio").Should().Be("audio");
+        h.Stats.DescribePromptKind("d4-train").Should().Be("lora", "train → lora; прогон из кольца завершённых");
+        h.Stats.DescribePromptKind("e5-other").Should().BeNull("other — не медийное задание");
+    }
+
+    // Два совпадения по префиксу → null (неоднозначно); точный префикс — один прогон, вид известен.
+    // Мутация: убрать «++matches > 1» — первый assert краснеет ("image" вместо null).
+    [Fact]
+    public void ВидЗадания_ДваСовпаденияПоПрефиксу_Null()
+    {
+        var h = Build();
+        h.Ledger.Register("dup-1111", OriginA(), 30);
+        h.Ledger.Register("dup-2222", OriginB(), 60);
+
+        h.Stats.DescribePromptKind("dup").Should().BeNull("два prompt_id под одним префиксом — неоднозначно");
+        h.Stats.DescribePromptKind("dup-1111").Should().Be("image", "один прогон под префиксом — вид известен");
+    }
+
+    // Пустой префикс подходит всем — неоднозначно; неизвестный — нет совпадений; Ordinal — регистр
+    // не равен («abc» не «AbC»). Мутация: StartsWith(Ordinal) → StartsWith(OrdinalIgnoreCase) —
+    // «abc» краснеет.
+    [Fact]
+    public void ВидЗадания_ПустойИНеизвестныйПрефиксИРегистр_Null()
+    {
+        var h = Build();
+        h.Ledger.Register("AbC-1", OriginA(), 30);
+
+        h.Stats.DescribePromptKind("").Should().BeNull("пустой префикс подходит всем");
+        h.Stats.DescribePromptKind("zzz").Should().BeNull("нет совпадений");
+        h.Stats.DescribePromptKind("abc").Should().BeNull("Ordinal: регистр не равен");
+        h.Stats.DescribePromptKind("AbC").Should().Be("image", "тот же регистр — совпадение");
+    }
+
+    // Выключенная Images (Enabled=false) → null даже с известным прогоном в реестре.
+    // Мутация: убрать проверку Enabled — тест краснеет.
+    [Fact]
+    public void ВидЗадания_ВыключеннаяImages_Null()
+    {
+        var h = Build(enabled: false);
+        h.Ledger.Register("job-1", OriginA(), 30);
+
+        h.Stats.DescribePromptKind("job-1").Should().BeNull("стенд выключен — вид не утверждаем");
+    }
+
+    // Реализация по умолчанию интерфейса: реализующий без вида (как существующие фейки тестов)
+    // компилируется без правки и отдаёт null.
+    private sealed class NoKindComfyStats : IComfyStats
+    {
+        public Task<ComfyMediaStatsSnapshot?> GetMediaAsync(CancellationToken ct) =>
+            Task.FromResult<ComfyMediaStatsSnapshot?>(null);
+    }
+
+    [Fact]
+    public void ВидЗадания_РеализацияПоУмолчанию_Null()
+    {
+        IComfyStats stats = new NoKindComfyStats();
+        stats.DescribePromptKind("abc").Should().BeNull();
+    }
 }

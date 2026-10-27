@@ -33,6 +33,39 @@ public sealed class ComfyStats(
         return Task.FromResult<ComfyOwnerSnapshot?>(result);
     }
 
+    // ─── Вид задания по префиксу prompt_id (дежурство, шаг B4) ──────────────────────────────
+
+    // Наружу только вид: без OwnerId/SessionId/промпта. Префикс сравнивается Ordinal с известными
+    // prompt_id (активные + кольцо завершённых); ни одного совпадения или больше одного — null
+    // (неоднозначно). Выключенная Images (Enabled=false) — null: стенд выключен, вид не утверждаем.
+    public string? DescribePromptKind(string idPrefix)
+    {
+        if (string.IsNullOrEmpty(idPrefix)) return null;
+        if (!LocalMediaOptions.Read(config).Enabled) return null;
+
+        string? kind = null;
+        var matches = 0;
+        foreach (var record in ledger.Active().Concat(ledger.Recent()))
+        {
+            if (!record.PromptId.StartsWith(idPrefix, StringComparison.Ordinal)) continue;
+            if (++matches > 1) return null;
+            kind = record.Origin is { } origin ? PublicKind(origin.Kind) : null;
+        }
+        return kind;
+    }
+
+    // Таблица видов (шаг B4, единственное место): внутренний Kind (LocalJobOrigin: image | video |
+    // audio | train | other) → наружный вид по контракту разреза. train → lora (наружное имя
+    // LoRA-обучения); other и неизвестное → null.
+    private static string? PublicKind(string kind) => kind switch
+    {
+        "image" => "image",
+        "video" => "video",
+        "audio" => "audio",
+        "train" => "lora",
+        _ => null,
+    };
+
     // ─── Сборка полного снимка ──────────────────────────────────────────────────────────────
 
     private ComfyMediaStatsSnapshot? BuildSnapshot()

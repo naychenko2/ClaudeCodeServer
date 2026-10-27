@@ -11,6 +11,7 @@ import { api } from './api';
 import {
   isOnline, passiveCacheKey, fileContentCachePrefix, flushFileEviction,
   onPassiveEvict, parseFileContentCacheKey, setKeptFilePaths, keepFilePath, unkeepFilePath,
+  writePassiveRangeEntry,
 } from './offline';
 import { idbGet, idbSet, idbKeys, idbDelete, idbRangeStamps } from './idb';
 import { isSubsystemEnabled } from './subsystems';
@@ -27,6 +28,12 @@ function parentDir(path: string): string {
 // api.files.list — чтобы FileExplorer (грузит папки по одной) работал офлайн.
 // Ключ — общий с пассивным кэшем request(): offline:<owner>:<url>. Без владельца
 // (не вошли) кэша нет — писать некуда.
+//
+// Запись идёт через writePassiveRangeEntry: листинги снапшота — это сотни записей
+// за один проход, и прямой записью в IDB они проходили мимо счётчика диапазона
+// (потолок 200 записей на владельца держал установившееся состояние, а на пике
+// после снапшота в диапазоне лежало 957 записей). Через общий учёт потолок держится
+// и на пике: место под листинг освобождается ДО его записи.
 async function cacheTreeAsListings(projectId: string, tree: FileEntry[]): Promise<void> {
   const groups = new Map<string, FileEntry[]>();
   // Корень и каждая папка должны иметь запись, даже пустые
@@ -42,8 +49,7 @@ async function cacheTreeAsListings(projectId: string, tree: FileEntry[]): Promis
     const url = `/projects/${projectId}/files?path=${encodeURIComponent(dir)}`;
     const key = passiveCacheKey(url);
     if (key === null) continue;
-    const now = Date.now();
-    await idbSet(key, { data: entries, savedAt: now, usedAt: now }).catch(() => {});
+    await writePassiveRangeEntry(key, entries);
   }
 }
 

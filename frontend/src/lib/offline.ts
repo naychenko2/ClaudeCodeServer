@@ -526,6 +526,80 @@ export function passiveCacheKey(url: string): string | null {
   return prefix === null ? null : prefix + url;
 }
 
+// --- Запись в общий класс мимо request() ---
+//
+// Владелец из ключа общего класса: `offline:<owner>:<url>`. Владелец закодирован,
+// поэтому двоеточие внутри него невозможно. По-чатовой класс ('offlinechat:') и
+// класс содержимого ('offlinefile:') сюда не попадают — у них свои бюджеты.
+function ownerOfPassiveKey(key: string): string | null {
+  if (!key.startsWith(PASSIVE_PREFIX)) return null;
+  const rest = key.slice(PASSIVE_PREFIX.length);
+  const i = rest.indexOf(':');
+  if (i < 0) return null;
+  try { return decodeURIComponent(rest.slice(0, i)); } catch { return null; }
+}
+
+// Истина по размеру диапазона владельца — стор (счёт по диапазону ключей).
+// Сбой стора не должен ронять запись: оценка останется нулевой, кэш просто
+// перестанет считать (потолок проверяется на живом сторе).
+async function countOwnerRange(owner: string): Promise<number> {
+  const lo = ownerPrefix(owner);
+  try { return await idbCountRange(lo, lo + PASSIVE_RANGE_END); } catch { return 0; }
+}
+
+// Освободить место под запись: пока в диапазоне владельца хотя бы PASSIVE_CACHE_MAX
+// записей, вытеснение приводит его к PASSIVE_CACHE_TRIM_TO. Место освобождается
+// ДО записи — иначе на пике диапазон перешагнул бы потолок (между проходами
+// лежало в пять раз больше, чем потолок разрешает).
+async function ensureRangeBudget(owner: string): Promise<void> {
+  if (!_rangeCountKnown || _rangeOwner !== owner) {
+    // Оценки ещё нет — берём истину из стора (плюс зарезервированные места).
+    _rangeOwner = owner;
+    _rangeRecords = await countOwnerRange(owner) + _rangePending;
+    _rangeCountKnown = true;
+  }
+  // Пока в диапазоне хотя бы PASSIVE_CACHE_MAX записей, место освобождается:
+  // иначе на пике диапазон перешагнул бы потолок.
+  for (let i = 0; i < 3 && _rangeRecords >= PASSIVE_CACHE_MAX; i++) {
+    await scheduleEvictPassive(owner, true);
+  }
+}
+
+// Учёт записи в диапазоне владельца. Перезапись того же ключа тоже считается —
+// оценка от этого только преувеличивает (безопасно), зато не требует чтения стора.
+// Место резервируется ДО записи в стор и снимается после неё.
+function noteRangeWrite(owner: string): void {
+  if (_rangeOwner !== owner) {
+    _rangeOwner = owner;
+    _rangeRecords = 0;
+    _rangeCountKnown = false;
+  }
+  _rangeRecords++;
+  _rangePending++;
+}
+
+function finishRangeWrite(): void {
+  if (_rangePending > 0) _rangePending--;
+}
+
+// Запись в общий класс пассивного кэша мимо request(): листинги дерева снапшота,
+// индекс фич, список чатов. Ключ берётся из passiveCacheKey() — он общий с
+// request(). Потолок диапазона владельца держится и для этих записей: они идут
+// через тот же учёт, что и записи request().
+export async function writePassiveRangeEntry(key: string, data: unknown, bytes?: number): Promise<void> {
+  const owner = ownerOfPassiveKey(key);
+  if (owner === null) return;
+  // Запись прежнего владельца в диапазон нового не кладём
+  if (readStoredUserId() !== owner) return;
+  // Место резервируем ДО проверки бюджета: две параллельные записи не должны обе
+  // пройти проверку и положиться в диапазон сверх потолка.
+  noteRangeWrite(owner);
+  await ensureRangeBudget(owner);
+  const now = Date.now();
+  await idbSet(key, { data, savedAt: now, usedAt: now, bytes }).catch(() => { /* кэш недоступен — не критично */ });
+  finishRangeWrite();
+}
+
 // --- Класс содержимого файлов ---
 //
 // Содержимое файлов проекта живёт ОТДЕЛЬНО от общего GET-кэша: диапазон
@@ -742,8 +816,36 @@ async function hydrateKeptPaths(owner: string): Promise<void> {
 const _usedTouched = new Map<string, number>();
 let _lastEvictAt = Date.now();
 let _writesSinceEvict = 0;
-let _evicting = false;
+// Проход вытеснения общего класса — один за раз: второй зов ждёт первый
+// (иначе вытеснение пошло бы поверх вытеснения, и оценка размера класса
+// обновилась бы по устаревшему снимку).
+let _evictPromise: Promise<void> | null = null;
 let _maintainedOwner: string | null = null;
+
+// --- Бюджет диапазона владельца ---
+//
+// Потолок PASSIVE_CACHE_MAX ограничивал УСТАНОВИВШЕЕСЯ состояние, а не пик:
+// обслуживание тикало от записей, прошедших через request(), а листинги дерева
+// (снапшот) писались в IDB напрямую и счётчик их не видел — на пике диапазон
+// владельца доходил до 957 записей при потолке 200.
+//
+// Теперь счётчиком служит не «число записей, прошедших через request()», а
+// ОЦЕНКА ЧИСЛА ЗАПИСЕЙ В ДИАПАЗОНЕ ВЛАДЕЛЬЦА: любая запись в общий класс —
+// и из request(), и из снапшота — попадает в неё. Вытеснение срабатывает
+// ДО превышения потолка: место под запись освобождается перед её записью.
+//
+// Оценка живёт в памяти и обновляется на каждой записи и на каждом проходе
+// вытеснения (проход считает диапазон курсором — это истина). Она может
+// ПРЕУВЕЛИЧИВАТЬ (перезапись того же ключа тоже её считает) — это безопасно:
+// преуменьшать нельзя, тогда диапазон перешагнул бы потолок.
+let _rangeRecords = 0;
+let _rangeOwner: string | null = null;
+// Оценка взята из стора (true) или ещё неизвестна (false — первый ход после
+// смены владельца: прежняя оценка была про чужой диапазон).
+let _rangeCountKnown = false;
+// Зарезервированные, но ещё не записанные места: запись резервирует место до
+// записи в стор, иначе две параллельные записи обе прошли бы проверку бюджета.
+let _rangePending = 0;
 // Проход по по-чатовому классу идёт по достижении потолка: курсор берёт только
 // метки диапазона (десятки записей), а сам проход не на каждую запись.
 let _chatEvicting = false;
@@ -812,15 +914,16 @@ async function passiveRead<T>(url: string, chatScope?: string): Promise<T | unde
 // ответ чужой сессии в кэш не ложится.
 // chatScope — id чата: ответ уходит в по-чатовой класс (свой бюджет и своё вытеснение).
 // bytes — оценка веса ответа (по умолчанию неизвестна — считаем нулём).
-function passiveWrite(url: string, data: unknown, owner: string | null, chatScope?: string, bytes?: number): void {
+async function passiveWrite(url: string, data: unknown, owner: string | null, chatScope?: string, bytes?: number): Promise<void> {
   if (!owner) return;
   if (readStoredUserId() !== owner) return;
   const now = Date.now();
   const key = passiveKey(url, owner, chatScope);
   if (key === null) return;
-  idbSet(key, { data, savedAt: now, usedAt: now, bytes }).catch(() => { /* кэш недоступен — не критично */ });
-  if (_maintainedOwner !== owner) { void runPassiveMaintenance(); return; }
   if (chatScope) {
+    // По-чатовой класс: свой бюджет и своё вытеснение (F2c-e) — путь прежний.
+    idbSet(key, { data, savedAt: now, usedAt: now, bytes }).catch(() => { /* кэш недоступен — не критично */ });
+    if (_maintainedOwner !== owner) { void runPassiveMaintenance(); return; }
     // Проход по по-чатовому классу запускаем не на каждую запись, а когда накопленный
     // вес класса доходит до потолка: проход — это курсор по диапазону плюс удаления,
     // и на каждой записи он шёл бы позади (коммит записи занимает миллисекунды, а
@@ -834,9 +937,19 @@ function passiveWrite(url: string, data: unknown, owner: string | null, chatScop
     }
     return;
   }
+  // Общий класс. Первый ход после старта или смены владельца: проход обслуживания
+  // сносит чужие записи и даёт истину по размеру диапазона (оценка бюджета берётся
+  // из неё). Ждём его: иначе первая же запись легла бы поверх того, что он сносит.
+  if (_maintainedOwner !== owner) { await runPassiveMaintenance(); }
+  // Место под запись: потолок диапазона держится и на пике (между проходами).
+  // Резерв делается ДО проверки: параллельные записи не должны обе пройти её.
+  noteRangeWrite(owner);
+  await ensureRangeBudget(owner);
+  await idbSet(key, { data, savedAt: now, usedAt: now, bytes }).catch(() => { /* кэш недоступен — не критично */ });
+  finishRangeWrite();
   _writesSinceEvict++;
   if (_writesSinceEvict >= EVICT_AFTER_WRITES || now - _lastEvictAt >= EVICT_MIN_INTERVAL_MS) {
-    void evictPassive(owner);
+    void scheduleEvictPassive(owner, false);
   }
 }
 
@@ -967,25 +1080,59 @@ async function evictFileClassOnce(owner: string): Promise<void> {
 }
 
 // Вытеснение по наименьшему usedAt. Источник правды — сам стор, счётчика в памяти нет.
-async function evictPassive(owner: string): Promise<void> {
-  if (_evicting) return;
-  _evicting = true;
+// force — ужимать, даже когда записей ровно PASSIVE_CACHE_MAX: вызывающий так
+// освобождает место под следующую запись (потолок не превышается даже на пике).
+// Обычный проход (обслуживание, троттлинг) ужимает только при превышении.
+async function evictPassive(owner: string, force: boolean): Promise<void> {
   _lastEvictAt = Date.now();
   _writesSinceEvict = 0;
   try {
     const lo = ownerPrefix(owner);
     const hi = lo + PASSIVE_RANGE_END;
-    if (await idbCountRange(lo, hi) <= PASSIVE_CACHE_MAX) return;
+    const total = await idbCountRange(lo, hi);
+    // Истина по размеру диапазона — оценка бюджета приводится к ней. Зарезервированные
+    // (ещё не записанные) места тоже в счёт: они лягут в диапазон сразу после прохода.
+    const pending = _rangePending;
+    _rangeOwner = owner;
+    _rangeRecords = total + pending;
+    _rangeCountKnown = true;
+    const over = force
+      ? _rangeRecords >= PASSIVE_CACHE_MAX
+      : _rangeRecords > PASSIVE_CACHE_MAX;
+    if (!over) return;
     const stamps = await idbRangeStamps(lo, hi);
     // Порядок вытеснения — по времени ДОСТУПА; у старых записей без usedAt это savedAt
     const stamp = (e: { savedAt: number; usedAt?: number }) => e.usedAt ?? e.savedAt;
     stamps.sort((a, b) => stamp(a) - stamp(b));
-    const drop = stamps.slice(0, Math.max(0, stamps.length - PASSIVE_CACHE_TRIM_TO));
+    // Ужим с запасом на зарезервированные места: иначе они легли бы сверх потолка
+    const trimTo = Math.max(0, PASSIVE_CACHE_TRIM_TO - pending);
+    const drop = stamps.slice(0, Math.max(0, stamps.length - trimTo));
     await Promise.all(drop.map(s => idbDelete(s.key).catch(() => {})));
+    _rangeRecords = Math.max(0, total - drop.length) + pending;
     await notifyEvicted(drop.map(s => s.key));
-  } catch { /* кэш недоступен — не критично */ } finally {
-    _evicting = false;
-  }
+  } catch { /* кэш недоступен — не критично */ }
+}
+
+// Проход вытеснения общего класса — не чаще одного за раз: второй зов ждёт первый.
+// Принудительная просьба (освободить место под запись), пришедшая во время
+// прохода, не теряется: она встаёт в очередь и проходит следующим проходом.
+let _evictForcePending = false;
+
+function scheduleEvictPassive(owner: string, force: boolean): Promise<void> {
+  if (force) _evictForcePending = true;
+  if (_evictPromise) return _evictPromise;
+  _evictPromise = (async () => {
+    try {
+      const f = _evictForcePending;
+      _evictForcePending = false;
+      await evictPassive(owner, f);
+    } finally {
+      _evictPromise = null;
+      // Принудительная просьба, пришедшая во время прохода, — следующим проходом
+      if (_evictForcePending) void scheduleEvictPassive(owner, true);
+    }
+  })();
+  return _evictPromise;
 }
 
 // Проход обслуживания: идемпотентен, на каждом старте и при смене владельца, не под флагом
@@ -1021,7 +1168,7 @@ export async function runPassiveMaintenance(): Promise<void> {
       // Снятое содержимое (смена владельца, осиротевшие ключи) — его mtime-записи
       // тоже сбрасываются, иначе докачка не вернёт эти файлы.
       await notifyEvicted([...legacy, ...legacyContent, ...foreign.map(s => s.key), ...foreignFiles.map(s => s.key)]);
-      await evictPassive(owner);
+      await scheduleEvictPassive(owner, false);
       await evictFileClassOnce(owner);
       // Метки по-чатового класса берём из того же курсора — второй курсор здесь не нужен.
       await evictChatClass(owner, all.filter(s => s.key.startsWith(ownChat)));
@@ -1220,7 +1367,7 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
       if (fileRef && ownerAtStart && readStoredUserId() === ownerAtStart) {
         await writeFileContent(ownerAtStart, fileRef, data, text.length);
       } else {
-        passiveWrite(url, data, ownerAtStart, chatScope, text.length);
+        await passiveWrite(url, data, ownerAtStart, chatScope, text.length);
       }
     }
     return data;

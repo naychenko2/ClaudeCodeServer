@@ -16,7 +16,9 @@ import {
   getSelectedFeatureId,
   focusFeatureStep,
   openPillMenu,
+  MAX_SESSIONS,
 } from './featureRuns';
+import { MAX_CHATS } from '../features/wall/wallStore';
 import { api } from './api';
 import { upsertTaskLocal } from './tasks';
 import { setAllFlags } from './featureFlags';
@@ -438,6 +440,28 @@ describe('F4: LRU потолок 8 чатов, вытеснение из все�
     for (const a of ['a1', 'a2', 'a3']) expectPresent(a);
     // потолок держится и при активных: всего ключей в Map не больше 8 (3 активных + 5 неактивных)
     expect(__test.sizes().runs).toBeLessThanOrEqual(8);
+  });
+
+  it('LRU, а не FIFO: повторная запись переносит ключ в хвост (A → B → A → вытеснен B)', () => {
+    touchAllMaps('A');
+    touchAllMaps('B');
+    touchAllMaps('A');
+    expect(__test.lru()).toEqual(['B', 'A']);
+    // добираем до потолка (A, B + 6 новых = 8), затем один лишний ключ → вытеснение
+    for (let i = 0; i < 6; i++) touchAllMaps(`c${i}`);
+    expect(__test.lru().length).toBe(MAX_SESSIONS);
+    touchAllMaps('extra');
+    expectGone('B');
+    expectPresent('A');
+    expect(__test.lru().includes('B')).toBe(false);
+  });
+
+  it('граница: панелей на странице строго меньше MAX_SESSIONS (иначе активные не вытесняются, Map растут)', () => {
+    // Стена — до MAX_CHATS колонок, плюс запас на основной чат.
+    expect(
+      MAX_CHATS + 1,
+      `MAX_CHATS=${MAX_CHATS} подошёл к MAX_SESSIONS=${MAX_SESSIONS}: потолок featureRuns перестанет держаться — поднимите MAX_SESSIONS`,
+    ).toBeLessThan(MAX_SESSIONS);
   });
 
   it('вытеснение убирает ключ из всех 7 Map разом (не только runs)', () => {

@@ -1,3 +1,4 @@
+using System.Reflection;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Tasks.Projector;
 using ClaudeHomeServer.Tasks.Tests.Fixtures;
@@ -149,6 +150,100 @@ public class FeatureIndexRowTests
         var rowN = Row(epicN, [epicN, todo]);
         rowN.State.Should().Be(FeatureStates.NotStarted, "ничего не стартовало → state=not_started");
         rowN.Bucket.Should().Be("idle", "not_started → bucket=idle");
+    }
+
+    // ── 1c. kind: категория состояния строки индекса (Б-1.2, «Фильтр фич по состоянию») ─────────
+    // Строка несёт kind — ту же величину, что brief.kind: FeatureBrief.KindOf (та же таблица
+    // KindByState и те же расщепления: paused→queued по причине удержания, merged→closed по
+    // закрытости эпика). Состояние вне таблицы — null: BuildRow guard'ит по ContainsKey, индекс не
+    // падает (в отличие от brief — тот бросает).
+    // Мутация (Б-1.2 к.4): в BuildRow своя ветка (Kind = run.State) — «РавнаBriefKind» краснеет
+    // (waiting → «waiting» вместо «waiting_you»); откат → зелёный.
+
+    private static readonly DateTime KindNow = new(2026, 10, 26, 12, 0, 0, DateTimeKind.Utc);
+
+    // Все константы FeatureStates рефлексией (тот же сторож, что в FeatureBriefTests):
+    // новое состояние без строки в таблице KindByState даёт красный тест здесь и там.
+    private static List<string> AllStates() =>
+        typeof(FeatureStates)
+            .GetFields(BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy)
+            .Where(f => f.IsLiteral && f.FieldType == typeof(string))
+            .Select(f => (string)f.GetRawConstantValue()!)
+            .ToList();
+
+    // Синтетический run для тестов kind: Epic — настоящий (BuildRow читает его поля), State/Closed/Hold
+    // заданы напрямую (как FeatureBriefTests.RunOf): здесь проверяется маппинг состояния в категорию,
+    // а не вычисление состояния (оно — на тестах Build/State выше).
+    private static FeatureRun RunOf(string state, bool closed = false, FeatureHold? hold = null)
+    {
+        var epic = Epic("epic-kind");
+        return new FeatureRun { FeatureId = "epic-kind", Epic = epic, State = state, Closed = closed, Hold = hold };
+    }
+
+    // Строка из готового run: задачи — только эпик (состояние уже задано в run), снимок пустой.
+    private static FeatureIndexRow Row(FeatureRun run) =>
+        FeatureProjector.BuildRow(run, [run.Epic], Array.Empty<FeatureIndexSession>(), 0);
+
+    [Fact]
+    public void Строка_Kind_РавнаBriefKind_ПоВсемСостояниям()
+    {
+        foreach (var state in AllStates())
+        {
+            var run = RunOf(state);
+            Row(run).Kind.Should().Be(FeatureBrief.Build(run, null, null, KindNow).Kind,
+                $"state «{state}»: kind строки индекса равен brief.kind");
+        }
+
+        // paused расщепляется по причине удержания: manual → paused, queue → queued — как brief.
+        var manual = RunOf(FeatureStates.Paused,
+            hold: new FeatureHold(FeatureHoldReasons.Manual, KindNow, null, true));
+        Row(manual).Kind.Should().Be(FeatureBrief.Build(manual, null, null, KindNow).Kind,
+            "paused с manual-удержанием — та же категория, что у brief");
+        var queue = RunOf(FeatureStates.Paused,
+            hold: new FeatureHold(FeatureHoldReasons.Queue, KindNow, null, true));
+        Row(queue).Kind.Should().Be(FeatureBrief.Build(queue, null, null, KindNow).Kind,
+            "paused с queue-удержанием → queued — то же расщепление, что у brief");
+
+        // merged расщепляется по закрытости эпика: открытый эпик → merged, эпик Done → closed — как brief.
+        var mergedOpen = RunOf(FeatureStates.Merged);
+        Row(mergedOpen).Kind.Should().Be(FeatureBrief.Build(mergedOpen, null, null, KindNow).Kind,
+            "смержена с открытым эпиком → merged");
+        var mergedClosed = RunOf(FeatureStates.Merged, closed: true);
+        Row(mergedClosed).Kind.Should().Be(FeatureBrief.Build(mergedClosed, null, null, KindNow).Kind,
+            "смержена с эпиком Done → closed");
+    }
+
+    [Fact]
+    public void Строка_KindИBucketСогласны_ПоВсемСостояниям()
+    {
+        foreach (var state in AllStates())
+            AssertKindBucketAgree(RunOf(state), $"state «{state}»");
+
+        AssertKindBucketAgree(RunOf(FeatureStates.Paused,
+            hold: new FeatureHold(FeatureHoldReasons.Manual, KindNow, null, true)), "paused · manual");
+        AssertKindBucketAgree(RunOf(FeatureStates.Paused,
+            hold: new FeatureHold(FeatureHoldReasons.Queue, KindNow, null, true)), "paused · queue");
+        AssertKindBucketAgree(RunOf(FeatureStates.Merged), "merged · открытый эпик");
+        AssertKindBucketAgree(RunOf(FeatureStates.Merged, closed: true), "merged · эпик Done");
+    }
+
+    // Согласие kind и bucket: kind «closed» — ровно когда bucket «closed» (merged с эпиком Done
+    // или state closed): ни на одном состоянии они не расходятся.
+    private static void AssertKindBucketAgree(FeatureRun run, string because)
+    {
+        var row = Row(run);
+        (row.Kind == "closed").Should().Be(row.Bucket == "closed",
+            $"{because}: kind «closed» — ровно когда bucket «closed»");
+    }
+
+    [Fact]
+    public void Строка_Kind_НеизвестноеСостояниеNull_ИндексНеПадает()
+    {
+        var run = RunOf("фиктивное_состояние");
+        var row = Row(run);
+        row.State.Should().Be("фиктивное_состояние", "строка построена, state как есть");
+        row.Kind.Should().BeNull("состояние вне таблицы KindByState — null, не исключение (в отличие от brief)");
+        row.Bucket.Should().Be("idle", "неизвестное состояние — bucket как idle (фоллбэк FeatureProjector.Bucket)");
     }
 
     // ── 2. «готова ≠ закрыта» ─────────────────────────────────────────────────────────────────

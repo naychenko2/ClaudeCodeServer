@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { FilterX, ChevronUp, ChevronDown, MessageCircle, Archive, CheckCircle2, Sparkles } from 'lucide-react';
 import type { Project, ProjectSubject, ProjectTag, Session } from '../types';
 import type { FeatureIndexFeature } from '../types/featureIndex';
@@ -34,7 +34,7 @@ import { useSubsystem } from '../lib/subsystems';
 import { ChatFilterResetActions } from './FilterBar';
 import { ChatListToolbar } from './ChatListToolbar';
 import { EmptyState } from './ui';
-import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, loadChatFilters, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, isArchivedChat, ARCHIVE_EMPTY_TITLE, ARCHIVE_EMPTY_SUBTITLE, type ChatGroupBy } from '../lib/chatFilters';
+import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, loadChatFilters, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, isArchivedChat, ARCHIVE_EMPTY_TITLE, ARCHIVE_EMPTY_SUBTITLE, isDefaultFeatureKinds, type ChatGroupBy, type FeatureKind } from '../lib/chatFilters';
 import { buildChatTreeRows, splitChatTreeByRoots, rootChatForSection, rootResolver, useTreeCollapse, withAncestors, type ChatTreeRowData } from '../lib/chatTree';
 import { useBgWorkPresence } from '../lib/agentsPresence';
 import { startVisiblePoll, throttleRefetch } from '../lib/visiblePoll';
@@ -45,7 +45,7 @@ import { ChatCard, ROW_GAP } from './ChatCard';
 import { ChatTreeBranch, nestTreeRows } from './ChatTreeRow';
 import { ChatGroupingDnd } from './ChatGroupingDnd';
 import { ListDateDivider } from './ListDateDivider';
-import { groupChats, groupByTags, groupBySubjects, groupByFeatures, sortChatsFlat, chatTagsSorted, featureGroupByOptions, featureGroupChats, featureGroupTreeRows, featureRoleFor, drawnClosedFeatures, NO_SUBJECT_KEY, FEATURE_CHIP_LABEL, type FeatureChatGroup, type SubjectChatGroup, type TagChatGroup } from '../lib/chatGroups';
+import { groupChats, groupByTags, groupBySubjects, groupByFeatures, sortChatsFlat, chatTagsSorted, featureGroupByOptions, featureGroupChats, featureGroupTreeRows, featureRoleFor, NO_SUBJECT_KEY, FEATURE_KIND_LABEL, featureMatchesKinds, shownFiltersModel, type FeatureChatGroup, type SubjectChatGroup, type TagChatGroup } from '../lib/chatGroups';
 import { tagColor } from '../lib/tagRegistry';
 import { dateOnly } from './chat/feature/featureTime';
 import { TagAssignMenu } from './TagChip';
@@ -894,7 +894,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     // по умолчанию строка «название · смержена {дата} · {длительность}» (статус считает
     // FeatureGroupHeader в режиме compact); раскрытие (M4) — по featureId через
     // expandedFeatureGroups, как у открытых групп: дерево buildGroupTree + «ключевой».
-    if (g.feature.bucket === 'closed') {
+    // Признак — тот же kind, что у отбора (Ф-2.2): группа, попавшая в секцию закрытых,
+    // обязана отрисоваться закрытой — второй точки правды (bucket) здесь быть не может.
+    if (g.feature.kind === 'closed') {
       const fid = g.feature.featureId;
       const keyId = g.feature.keySessionId;
       const expanded = expandedFeatureGroups.has(fid);
@@ -995,66 +997,79 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       </div>
     );
   };
-  // Режим «Фичи» (F8): чипы со счётчиками, открытые группы, отфильтрованные по
-  // выбранному чипу, секция «Закрытые · N · на втором плане» (свёрнута по умолчанию,
-  // сама раскрывается на чипе «Закрытые»), «Без фичи» и три пустых состояния
-  // (фич нет / все закрыты / под фильтр ничего не попало). Принадлежность фичи к чипу
-  // фронт НЕ считает — бэк отдаёт chips[] (контракт «Контракт индекса фич — утверждён
-  // (Александр, 18.10)»), фронт только фильтрует по chips[] и считает счётчики.
+  // Режим «Фичи» (F8, Ф-2.2): отбор — ТОЛЬКО по оси featureKinds: featureMatchesKinds
+  // по полю kind бэка (Ф-1.3), bucket в пути фильтра не читается. Открытые группы —
+  // подходящие под выбор и не «closed» (kind='merged' с открытым эпиком — здесь, а не
+  // в секции закрытых); секция «Закрытые · N · на втором плане» — когда «Закрытые»
+  // выбраны на оси; строка «Показаны» — модель shownFiltersModel (записка п. 4);
+  // «Без фичи» и три пустых состояния (фич нет / все закрыты / под фильтр ничего
+  // не попало). Принадлежность фичи состоянию фронт НЕ считает — бэк отдаёт kind
+  // (Б-1.2), фронт только фильтрует по нему.
   const renderFeaturesMode = () => {
     if (!featureGroups) return null;
     const allFeatures = featuresIndex.features;
-    const openFeatures = allFeatures.filter(f => f.bucket !== 'closed');
-    const closedFeatures = allFeatures.filter(f => f.bucket === 'closed');
     // Фич нет вовсе (индекс пуст): спокойный EmptyState — но БЕЗ раннего return (M1):
     // ниже остаются обычные чаты без фичи (группа «Без фичи»), иначе список пустел
     const noFeatures = allFeatures.length === 0;
 
-    // Мультивыбор чипов (OR): пусто = все открытые; иначе — открытые, чьи chips[]
-    // содержат хотя бы один выбранный чип. Принадлежность к чипу фронт НЕ считает —
-    // бэк отдаёт chips[] (контракт «Контракт индекса фич — утверждён (Александр, 18.10)»)
-    const selectedChips = filters.featureChips;
-    const shownOpenFeatures = selectedChips.length === 0
-      ? openFeatures
-      : openFeatures.filter(f => f.chips.some(c => selectedChips.includes(c)));
-    const shownOpenIds = new Set(shownOpenFeatures.map(f => f.featureId));
-    const openGroups = featureGroups.filter(g =>
-      g.feature && g.feature.bucket !== 'closed' && shownOpenIds.has(g.feature.featureId));
-    const noFeatureGroup = featureGroups.find(g => g.feature === null) ?? null;
-    // Закрытые — в конце, по порядку бэка (OrderRuns), когда включён тумблер «Показывать
-    // закрытые». Порядок — порядок featureGroups (не пересортировываем).
-    const closedGroups = featureGroups.filter(g => g.feature && g.feature.bucket === 'closed');
+    // Ось «Фичи · что показывать» (featureKinds, Ф-2.1): [] = умолчание (все открытые).
+    const featureKinds = filters.featureKinds;
+    const closedSelected = featureKinds.includes('closed');
+    // Запись выбора — тем же каноном, что в секции FilterBar (R-Ф2.1 M2): равный
+    // умолчанию (восемь открытых без «closed») хранится как [], иначе триггер горит
+    // при виде, неотличимом от умолчания.
+    const patchKinds = (next: FeatureKind[]) => patch({ featureKinds: isDefaultFeatureKinds(next) ? [] : next });
 
-    // Строка снимаемых чипов под шапкой: активные чипы + «и закрытые» + «Сбросить».
-    // Видна, когда есть любой активный фильтр фич (чип или тумблер закрытых).
+    // Мультивыбор оси (OR): пусто = все открытые; иначе — только фичи с выбранным
+    // kind. Принадлежность состоянию фронт НЕ считает — featureMatchesKinds читает
+    // только поле kind (сторож в тестах chatGroupsFeatures).
+    const shownOpenIds = new Set(
+      allFeatures.filter(f => featureMatchesKinds(f, featureKinds) && f.kind !== 'closed').map(f => f.featureId),
+    );
+    const openGroups = featureGroups.filter(g => g.feature && shownOpenIds.has(g.feature.featureId));
+    const noFeatureGroup = featureGroups.find(g => g.feature === null) ?? null;
+    // Закрытые — в конце, по порядку бэка (OrderRuns), только когда «Закрытые» выбраны
+    // на оси. Порядок — порядок featureGroups (не пересортировываем).
+    const closedGroups = closedSelected
+      ? featureGroups.filter(g => g.feature && g.feature.kind === 'closed')
+      : [];
+    // Число «Закрытые · N» (заголовок секции и ссылка в calm) — ОДНО: рисующиеся
+    // закрытые (chatCount > 0, то же правило m2, что у счётчиков оси в FilterBar).
+    const drawnClosed = allFeatures.filter(f => f.kind === 'closed' && f.chatCount > 0).length;
+
+    // Строка «Показаны» под шапкой (записка п. 4): модель строки — shownFiltersModel:
+    // перечисляет более короткий из двух списков, null = выбор равный умолчанию
+    // (строки нет). Крестик чипа: 'remove' — убирает значение с оси, 'restore' —
+    // возвращает снятое (вариант «кроме», союз «и» перед «Закрытыми» несёт andBefore).
     // ui/Chip soft selected с onRemove (крестик) — ловушки <button> внутри снимает сам
     // компонент (ChipX: border/font/color inherit); «Сбросить» — ui/Button ghost без рамки.
-    const hasFeatureFilter = selectedChips.length > 0 || filters.showClosed;
-    const removableChips = hasFeatureFilter && (
+    const shownModel = shownFiltersModel(featureKinds);
+    const removableChips = shownModel && (
       <div style={{
         display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6,
         padding: '0 12px 8px 14px',
       }}>
-        <span style={{ fontSize: FS.sm, color: C.textMuted, fontFamily: FONT.sans }}>Показаны:</span>
-        {selectedChips.map(c => (
-          <Chip key={c} variant="soft" selected touch={isMobile}
-            onRemove={() => patch({ featureChips: selectedChips.filter(x => x !== c) })}
-            removeLabel={`Убрать фильтр «${FEATURE_CHIP_LABEL[c]}»`}
-          >
-            {FEATURE_CHIP_LABEL[c]}
-          </Chip>
+        <span style={{ fontSize: FS.sm, color: C.textMuted, fontFamily: FONT.sans }}>{shownModel.prefix}</span>
+        {shownModel.chips.map(ch => (
+          <Fragment key={ch.kind}>
+            {ch.andBefore && (
+              <span style={{ fontSize: FS.sm, color: C.textMuted, fontFamily: FONT.sans }}>и</span>
+            )}
+            <Chip variant="soft" selected touch={isMobile}
+              onRemove={() => patchKinds(ch.action === 'remove'
+                ? featureKinds.filter(k => k !== ch.kind)
+                : [...featureKinds, ch.kind])}
+              removeLabel={ch.action === 'remove'
+                ? `Убрать «${FEATURE_KIND_LABEL[ch.kind]}»`
+                : `Вернуть «${FEATURE_KIND_LABEL[ch.kind]}»`}
+            >
+              {FEATURE_KIND_LABEL[ch.kind]}
+            </Chip>
+          </Fragment>
         ))}
-        {filters.showClosed && (
-          <Chip variant="soft" selected touch={isMobile}
-            onRemove={() => patch({ showClosed: false })}
-            removeLabel="Убрать «и закрытые»"
-          >
-            и закрытые
-          </Chip>
-        )}
         <Button variant="ghost" size="xs"
           style={{ color: C.accent, border: 'none', ...(isMobile ? { height: 40, minHeight: 40 } : null) }}
-          onClick={() => patch({ featureChips: [], showClosed: false })}>
+          onClick={() => patch({ featureKinds: [] })}>
           Сбросить
         </Button>
       </div>
@@ -1077,19 +1092,23 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     );
 
     // «Смержена ДД.ММ» для спокойного состояния: последняя по МОМЕНТУ мержа закрытая
-    // фича. Сортируем по времени (Date), а не строкой: выбор фичи не зависит от пояса,
-    // а дату показываем ЛОКАЛЬНО (dateOnly, как везде в режиме фичи) — в МСК 23:30Z
-    // это уже следующий день.
-    const lastMerged = closedFeatures
+    // фича (по kind, не по bucket). Сортируем по времени (Date), а не строкой: выбор
+    // фичи не зависит от пояса, а дату показываем ЛОКАЛЬНО (dateOnly, как везде в
+    // режиме фичи) — в МСК 23:30Z это уже следующий день.
+    const lastMerged = allFeatures
+      .filter(f => f.kind === 'closed')
       .map(f => f.summary?.mergedAt)
       .filter((d): d is string => !!d)
       .sort((a, b) => new Date(a).getTime() - new Date(b).getTime())
       .pop();
     const lastMergedDate = lastMerged ? dateOnly(lastMerged) : null;
 
-    // Спокойное состояние: все закрыты (фичи ЕСТЬ, открытых нет). noFeatures отдельно:
-    // там свой EmptyState «Фич пока нет», а не «Открытых фич нет»
-    const calm = !noFeatures && openFeatures.length === 0 && (
+    // Спокойное состояние: фичи ЕСТЬ, но все они закрытые (по kind — тот же источник,
+    // что у отбора). noFeatures отдельно: там свой EmptyState «Фич пока нет», а не
+    // «Открытых фич нет». Ссылка «Показать закрытые · N» добавляет «Закрытые» на ось
+    // (пока их там нет — иначе ссылаться не на что); N — тот же drawnClosed.
+    const allClosed = !noFeatures && allFeatures.every(f => f.kind === 'closed');
+    const calm = allClosed && (
       <div style={{
         display: 'flex', alignItems: 'center', gap: SP.sm,
         // Только вертикальные отступы: горизонтальный задаёт контейнер списка
@@ -1102,19 +1121,30 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
           Открытых фич нет.
           {lastMergedDate && <> Последняя смержена {lastMergedDate}.</>}
         </span>
+        {!closedSelected && drawnClosed > 0 && (
+          <Button variant="ghost" size="xs"
+            style={{ color: C.accent, border: 'none', ...(isMobile ? { height: 40, minHeight: 40 } : null) }}
+            onClick={() => patchKinds([...featureKinds, 'closed'])}>
+            Показать закрытые · {drawnClosed}
+          </Button>
+        )}
       </div>
     );
 
-    // «Под фильтр ничего не попало»: открытые фичи есть, но ни одна не под выбранные чипы
-    const noMatch = selectedChips.length > 0 && openFeatures.length > 0 && openGroups.length === 0 && (
+    // «Под фильтр ничего не попало»: выбор на оси ЕСТЬ, в индексе есть открытые фичи,
+    // но под выбор не попала ни одна открытая и ни одна закрытая (при «все закрыты» —
+    // выше calm, не здесь). «Сбросить фильтр» → [] (умолчание: все открытые).
+    const noMatch = featureKinds.length > 0
+      && allFeatures.some(f => f.kind !== 'closed')
+      && openGroups.length === 0 && closedGroups.length === 0 && (
       <EmptyState
         compact
         icon={<FilterX size={20} strokeWidth={2} />}
         title="Под фильтр ничего не попало"
         subtitle="Сейчас ни одна фича не подходит под выбранные состояния."
         action={
-          <Button variant="ghost" size="sm" onClick={() => patch({ featureChips: [], showClosed: false })}>
-            Показать открытые
+          <Button variant="ghost" size="sm" onClick={() => patch({ featureKinds: [] })}>
+            Сбросить фильтр
           </Button>
         }
       />
@@ -1127,16 +1157,16 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         {calm}
         {openGroups.map(g => renderFeatureGroup(g))}
         {noMatch}
-        {filters.showClosed && closedGroups.length > 0 && (
+        {closedSelected && closedGroups.length > 0 && (
           <>
             {/* Заголовок секции «Закрытые · N · на втором плане» (таблица §2, макет А):
-                строка БЕЗ шеврона — сворачивать больше нечего, видимость решает тумблер.
-                N = нарисованные (имеющие чаты) закрытые фичи (m2: ОДНО число с тумблером
-                «Показывать закрытые фичи · N» — drawnClosedFeatures, не raw-closedGroups);
+                строка БЕЗ шеврона — сворачивать больше нечего, видимость решает выбор
+                «Закрытых» на оси. N = нарисованные (имеющие чаты) закрытые фичи
+                (drawnClosed — ОДНО число со счётчиком чипа «Закрытые» в FilterBar);
                 подсказка справа 11/400, без капса. На 360 — minHeight 40. */}
             <div
               data-testid="closed-section-header"
-              data-closed-count={drawnClosedFeatures(featuresIndex.features)}
+              data-closed-count={drawnClosed}
               style={{
                 display: 'flex', alignItems: 'baseline', gap: 6,
                 padding: '12px 6px 5px',
@@ -1147,7 +1177,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
                 fontSize: FS.xxs, fontWeight: 700, textTransform: 'uppercase',
                 letterSpacing: '0.06em', color: C.textMuted, fontFamily: FONT.sans,
               }}>
-                Закрытые · <span style={{ fontFamily: FONT.mono, letterSpacing: 0 }}>{drawnClosedFeatures(featuresIndex.features)}</span>
+                Закрытые · <span style={{ fontFamily: FONT.mono, letterSpacing: 0 }}>{drawnClosed}</span>
               </span>
               <span style={{
                 marginLeft: 'auto', fontSize: FS.xs, fontWeight: 400,

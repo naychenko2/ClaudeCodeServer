@@ -39,7 +39,7 @@ export interface FeatureBriefBlockProps {
   brief: FeatureBrief | null;
   // Статистика фичи; null — не посчитана.
   stats: FeatureStats | null;
-  // Момент мержа (summary.mergedAt ответа страницы) — для строки и тега closed; в brief его нет.
+  // Момент мержа (summary.mergedAt ответа страницы) — для строки и тега closed/merged; в brief его нет.
   mergedAt?: string | null;
   // Резолвер имени персоны (usePersonas/getPersonaById); null — часть строки с именем опускается.
   nameOf?: PersonaNameResolver;
@@ -57,9 +57,10 @@ export interface FeatureBriefBlockProps {
 // Тег карточки — существующий тег статуса фичи (макет «Токены поимённо»). У блока нет поля
 // состояния рана — есть только brief.kind: соответствие обратное бэковой таблице
 // FeatureBrief.KindByState (B1a), чисто показное — каждая kind получает каноническое
-// состояние своей категории. Бэк сливает merged/closed в одну kind — различаем по mergedAt
-// (тот же параметр, что для строки «Сейчас»). «в очереди» — новый вариант тега (макет:
-// bgSelected/textSecondary), состояния для него в таблице нет.
+// состояние своей категории. 'merged' и 'closed' дают один и тот же тег: «смержена» при
+// дате мержа, иначе «закрыта» (тот же параметр, что для строки «Сейчас»; Ф-1.1 —
+// 'merged' для карточки ведётся ровно как 'closed'). «в очереди» — новый вариант тега
+// (макет: bgSelected/textSecondary), состояния для него в таблице нет.
 export function briefTag(brief: FeatureBrief, mergedAt: string | null): FeatureRunTag {
   switch (brief.kind) {
     case 'running':
@@ -80,6 +81,7 @@ export function briefTag(brief: FeatureBrief, mergedAt: string | null): FeatureR
     case 'idle':
       return featureRunStatusTag('idle');
     case 'closed':
+    case 'merged':
       return featureRunStatusTag(mergedAt ? 'merged' : 'closed');
   }
 }
@@ -94,6 +96,14 @@ const ERROR_GLYPH = (
     <circle cx={8} cy={8} r={7} fill={C.dangerBg} stroke={C.textMuted} strokeWidth={1} />
     <rect x={5.3} y={4.6} width={1.9} height={6.8} rx={0.6} fill={C.textSecondary} />
     <rect x={8.8} y={4.6} width={1.9} height={6.8} rx={0.6} fill={C.textSecondary} />
+  </svg>
+);
+
+// Глиф завершенности (макет closed): общая точка для 'closed' и 'merged'.
+const CLOSED_GLYPH = (
+  <svg width={16} height={16} viewBox="0 0 16 16" aria-hidden>
+    <circle cx={8} cy={8} r={7} fill={C.successBg} stroke={C.success} strokeWidth={1} />
+    <path d="m5 8.2 2 2 4-4.4" fill="none" stroke={C.success} strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" />
   </svg>
 );
 
@@ -125,12 +135,9 @@ const GLYPH: Partial<Record<FeatureBriefKind, ReactNode>> = {
       <circle cx={11.2} cy={8} r={1.3} fill={C.textMuted} />
     </svg>
   ),
-  closed: (
-    <svg width={16} height={16} viewBox="0 0 16 16" aria-hidden>
-      <circle cx={8} cy={8} r={7} fill={C.successBg} stroke={C.success} strokeWidth={1} />
-      <path d="m5 8.2 2 2 4-4.4" fill="none" stroke={C.success} strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  ),
+  // 'closed' и 'merged' — один глиф (Ф-1.1): для карточки это одно состояние завершенности.
+  closed: CLOSED_GLYPH,
+  merged: CLOSED_GLYPH,
 };
 
 // ── Общие стили (макет §«Токены поимённо») ──────────────────────────────────────────
@@ -164,7 +171,7 @@ function monoNumbers(text: string): ReactNode[] {
 // Поля статов деструктурируются и отдаются общей модели ленты как есть — блок сам ничего
 // из сырых полей не считает, включая поля `timeline` (Grep-сторож теста, R-F8). Признак
 // закрытости ленты — не эвристика по `current == null`, а общая модель состояния:
-// `closed` приходит из карточки (brief.kind === 'closed'); без brief — не закрыта.
+// закрытость приходит из карточки (brief.kind 'closed'/'merged', Ф-1.1); без brief — не закрыта.
 function LifeSection({ stats, closed, onOpenStats, isMobile }: { stats: FeatureStats; closed: boolean; onOpenStats: () => void; isMobile: boolean }) {
   const { timeline, source, truncated } = stats;
   const model = buildTimelineModel(timeline, source, truncated, closed);
@@ -297,7 +304,7 @@ export function FeatureBriefBlock({
 
   // Закрытость ленты — из общей модели состояния (brief.kind), не из эвристики по
   // сырому текущему полю ленты (R-F8). Без brief лента не закрыта: признака нет.
-  const closed = brief?.kind === 'closed';
+  const closed = brief?.kind === 'closed' || brief?.kind === 'merged';
   const life = stats ? <LifeSection stats={stats} closed={closed} onOpenStats={onOpenStats} isMobile={isMobile} /> : null;
 
   // «Сводка не загрузилась» (макет §3): одна строка + «Повторить»; полоска и итоги — как раньше.

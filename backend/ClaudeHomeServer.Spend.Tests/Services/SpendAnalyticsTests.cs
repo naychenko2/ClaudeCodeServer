@@ -432,32 +432,61 @@ public class SpendAnalyticsTests : IDisposable
         Assert.True(SpendSources.IsFree("freellmapi", "auto:fast"));
     }
 
-    // Ранг классов: «дороже — важнее». Регрессия «важнейшим стал дешёвый» не должна пройти
-    // незамеченной. Мутация «Rank(tier) => 1» ломает порядок → краснеет.
+    // Смешанная группа: класс узла — класс с наибольшей суммой токенов. Живая форма:
+    // 95% токенов дешёвые (minimax) и 5% с провайдером claude на той же модели → cheap.
+    // Мутация «побеждает самый дорогой присутствующий класс (Rank)» → expensive ≠ cheap → краснеет.
     [Fact]
-    public void Rank_ПорядокКлассов_ДорожеВажнее()
-    {
-        Assert.True(SpendCostTiers.Rank(SpendCostTiers.Expensive) > SpendCostTiers.Rank(SpendCostTiers.Cheap));
-        Assert.True(SpendCostTiers.Rank(SpendCostTiers.Cheap) > SpendCostTiers.Rank(SpendCostTiers.Free));
-    }
-
-    // Смешанная группа: класс узла — «важнейший» присутствующий (дороже — важнее).
-    // Группируем по провайдеру: у одного провайдера claude смешались обычная трата (дорого)
-    // и трата бесплатной модели claude (free). Порядок слайсов задан явно: сначала дешёвый
-    // класс, потом дорогой — иначе проверка была бы нечувствительна к рангу.
-    // Мутация «Rank(tier) => 1» → остаётся первый попавшийся класс (free) ≠ expensive → краснеет.
-    [Fact]
-    public void Tier_УзлаPivot_СмешаннаяГруппа_БерётсяВажнейшийКласс()
+    public void Tier_УзлаPivot_СмешаннаяГруппа_БерётсяБольшинствоТокенов()
     {
         var day = new DateOnly(2026, 7, 20);
-        var cheapFirst = new SpendSlice(day, "u1", null, null, null, null, "claude", "haiku",
-            SpendSources.Free, 1, 1, 0, 0, 0, 0, 0, 1, Detailed: true);
-        var expensiveSecond = new SpendSlice(day, "u1", null, null, null, null, "claude", "opus",
-            SpendSources.ChatTurn, 10, 5, 100, 20, 0, 0, 0, 1, Detailed: true);
+        var cheapMajor = new SpendSlice(day, "u1", null, null, null, null, "minimax", "MiniMax-M3",
+            SpendSources.ChatTurn, 950, 0, 0, 0, 0, 0, 0, 1, Detailed: true);
+        var expensiveMinor = new SpendSlice(day, "u1", null, null, null, null, "claude", "MiniMax-M3",
+            SpendSources.ChatTurn, 50, 0, 0, 0, 0, 0, 0, 1, Detailed: true);
 
-        var byProvider = SpendAnalyticsService.GroupRaw([cheapFirst, expensiveSecond], "provider");
+        var byModel = SpendAnalyticsService.GroupRaw([cheapMajor, expensiveMinor], "model");
 
-        Assert.Equal(SpendCostTiers.Expensive, byProvider.Single(n => n.Key == "claude").Tier);
+        Assert.Equal(SpendCostTiers.Cheap, byModel.Single(n => n.Key == "MiniMax-M3").Tier);
+    }
+
+    // Равенство токенов: побеждает более дорогой класс.
+    [Fact]
+    public void Tier_УзлаPivot_РавныеТокены_БерётсяБолееДорогой()
+    {
+        var day = new DateOnly(2026, 7, 20);
+        var cheap = new SpendSlice(day, "u1", null, null, null, null, "minimax", "m",
+            SpendSources.ChatTurn, 100, 0, 0, 0, 0, 0, 0, 1, Detailed: true);
+        var expensive = new SpendSlice(day, "u1", null, null, null, null, "claude", "m",
+            SpendSources.ChatTurn, 100, 0, 0, 0, 0, 0, 0, 1, Detailed: true);
+
+        Assert.Equal(SpendCostTiers.Expensive,
+            SpendAnalyticsService.GroupRaw([cheap, expensive], "model").Single().Tier);
+    }
+
+    // Вес класса строки — вход+выход+кэш (SpendCostTiers.WeightOf), одна метрика на оба API.
+    // Та же фикстура, что в разбивке фичи (FeatureBreakdownTests.Build_РазрезМоделей_ВесКлассаСУчётомКэша):
+    // по вход+выход победил бы cheap (1000:10), с кэшем строка «дорого» в обоих API (ревью Глеба, major:
+    // без кэша разбивка выдавала «дёшево» там, где /api/spend — «дорого»).
+    [Fact]
+    public void Tier_УзлаPivot_ВесКлассаСУчётомКэша()
+    {
+        var day = new DateOnly(2026, 7, 20);
+        var cheap = new SpendSlice(day, "u1", null, null, null, null, "minimax", "m",
+            SpendSources.ChatTurn, 1000, 0, 0, 0, 0, 0, 0, 1, Detailed: true);
+        var expensive = new SpendSlice(day, "u1", null, null, null, null, "claude", "m",
+            SpendSources.ChatTurn, 10, 0, 5000, 0, 0, 0, 0, 1, Detailed: true);
+
+        Assert.Equal(SpendCostTiers.Expensive,
+            SpendAnalyticsService.GroupRaw([cheap, expensive], "model").Single().Tier);
+    }
+
+    // Локальная генерация медиа (provider=local, source=local) — бесплатно, одним правилом
+    // с остальными локальными ключами. Мутация «убрать "local" из ByKey» → cheap → краснеет.
+    [Fact]
+    public void Of_ПровайдерLocal_Бесплатно()
+    {
+        Assert.Equal(SpendCostTiers.Free, SpendCostTiers.Of("local", "local", "qwen-image"));
+        Assert.Equal(SpendCostTiers.Free, SpendCostTiers.OfProvider("local", isLocal: false));
     }
 
     // ByTierOf: слайс с пустым Tier (Tier по умолчанию "") даёт фолбэк на SliceTier —

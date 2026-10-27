@@ -98,7 +98,7 @@
 | Элемент | Макет | Код | Размер, px |
 |---|---|---|---|
 | строка | `flex-wrap`, `gap 6`, поля `0 12 8 14`, текст 12 `textMuted` («Показаны:») | `display: flex`, `flexWrap: wrap`, `gap: 6`, `padding: '0 12px 8px 14px'`, `fontSize: FS.sm`, `color: C.textMuted` | высота 32 (1280), 40 (360) |
-| снимаемый чип | фон `accentLight`, рамка 1 `accentMuted`, текст `accent` 12 / 600, R 999, высота 24 | `ui/Chip` **soft** `selected` с `onRemove` и `removeLabel="Убрать фильтр «…»"` (Р-5) | ≈ 23 на 1280 |
+| снимаемый чип | фон `accentLight`, рамка 1 `accentMuted`, текст `accent` 12 / 600, R 999, высота 24 | `ui/Chip` **soft** `selected` с `onRemove` и `removeLabel="Убрать «…»"` (возвратный чип — «Вернуть «…»», `SessionList.tsx:1056-1057`; R-Б1) (Р-5) | ≈ 23 на 1280 |
 | снимаемый чип на 360 | высота 32, крестик 32×32 | `ui/Chip soft selected touch` | 34, крестик 32×32 |
 | «Сбросить» | ссылка 12 / 600, `accent`, R 6 | `ui/Button size="xs" variant="ghost"` с цветом `C.accent`, без рамки | 1280: 24; **360: 40** (Р-6) |
 | бейдж «скрыто N» у воронки | mono 10 / 700, фон `bgSelected`, рамка 1 `border`, `textSecondary`, R 999, 16×16, сдвиг −5/−5 | `FONT.mono`, `FS.xxs`, 700, `C.bgSelected`, `1px solid ${C.border}`, `C.textSecondary`, `R.max`; `top/right: -5` (360: `2`) | 16 |
@@ -112,6 +112,11 @@
 Секция встаёт в существующий поповер `FilterBar` по образцу `FilterBar.tsx:186–239`; размеры поповера
 не меняются (320, `C.bgWhite`, `R.xl`, `SHADOW.dropdown`, поля `SP.md`). На 360 — существующая шторка
 фильтров (`R.sheet`, `SHADOW.sheet`).
+
+> **Исторично (R-Б1).** Тумблер «Показывать закрытые» удалён эпиком «Фильтр фич по состоянию»
+> (`1d812b59`): отбор идёт по категории состояния (`kind`, ADR-031 §7), макет —
+> [feature-state-filter-1.md](feature-state-filter-1.md). Строки про тумблер и подпись «Закрытые» —
+> запись старого макета, не контракт продукта.
 
 | Элемент | Макет | Код | Размер, px |
 |---|---|---|---|

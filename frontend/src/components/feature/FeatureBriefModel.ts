@@ -25,7 +25,7 @@ import type { FeatureRailKey } from '../../types/featureIndex';
 export type PersonaNameResolver = (personaId: string) => string | null;
 
 // Дополнительные данные строки «Сейчас» вне brief:
-// mergedAt — момент мержа из run.summary.mergedAt (в brief его нет; для строки closed).
+// mergedAt — момент мержа из run.summary.mergedAt (в brief его нет; для строк closed/merged).
 export interface BriefTextOptions {
   nameOf?: PersonaNameResolver;
   mergedAt?: string | null;
@@ -124,9 +124,11 @@ export function briefNowText(brief: FeatureBrief, opts: BriefTextOptions = {}): 
     case 'idle':
       // Разрез п. 4 («тихо N ч» — поля Quiet в контракте нет, строки нет).
       return 'Ничего не идёт';
-    case 'closed': {
+    case 'closed':
+    case 'merged': {
       // «Смержена в master 24.10 в 18:05» (макет) — дата мержа от вызывающего (run.summary);
-      // без даты — «Закрыта» (разрез п. 4).
+      // без даты — «Закрыта» (разрез п. 4). 'merged' (Ф-1.1) — та же строка, что 'closed':
+      // фича смержена, эпик ещё не закрыт (Б-1.1) — для свода ведётся так же, как 'closed'.
       const at = opts.mergedAt;
       if (at) return `Смержена в master ${formatDate(at)} в ${formatClock(at)}`;
       return 'Закрыта';
@@ -165,6 +167,7 @@ export function briefSubText(brief: FeatureBrief, nowMs: number): string | null 
       return dur ? `на паузе ${dur} · исполнители не запускаются` : 'исполнители не запускаются';
     }
     case 'closed':
+    case 'merged':
       return 'фича закрыта';
     default:
       return null;
@@ -220,7 +223,7 @@ export function briefDoneText(brief: FeatureBrief): BriefDonePart[] {
 // вне макета — нейтральное «Дальше». null — идти некуда (next пуст, нет активной
 // стадии для префикса running): строку не рисуем.
 export function briefNextText(brief: FeatureBrief, nameOf?: PersonaNameResolver): string | null {
-  if (brief.kind === 'closed') return 'Ничего — фича закрыта';
+  if (brief.kind === 'closed' || brief.kind === 'merged') return 'Ничего — фича закрыта';
 
   // Строка про мерж — только когда мерж действительно ожидается: причина «мерж»
   // (бэк кладёт такой код) или следующий шаг — merge (макет wait). При другой
@@ -283,8 +286,9 @@ export function briefEstimateText(brief: FeatureBrief): BriefEstimateView {
   const elapsed = brief.elapsedMinutes != null && Math.round(brief.elapsedMinutes) > 0
     ? formatDuration(brief.elapsedMinutes) : null;
 
-  if (brief.kind === 'closed') {
+  if (brief.kind === 'closed' || brief.kind === 'merged') {
     // Итог: «шла 6 ч 40 мин» по elapsedMinutes; «по плану было ≈ 5 ч» — v2, не делаем.
+    // 'merged' (Ф-1.1) — тот же итог, что у 'closed'.
     return { header: 'Итог', main: elapsed ? `шла ${elapsed}` : NO_ESTIMATE, mainMuted: false, fact: null };
   }
 
@@ -352,7 +356,7 @@ export function agoText(iso: string | null, nowMs: number): string | null {
 // полных минут (W5-R-F3b): «обновлено 0 мин назад» не печатается — нуль не число, та же
 // болезнь, что «идёт 0 мин» / «в очереди 0 мин».
 export function briefUpdatedText(brief: FeatureBrief, mergedAt: string | null, nowMs: number): string | null {
-  const iso = brief.kind === 'closed' ? (mergedAt ?? brief.updatedAt ?? null) : (brief.updatedAt ?? null);
+  const iso = (brief.kind === 'closed' || brief.kind === 'merged') ? (mergedAt ?? brief.updatedAt ?? null) : (brief.updatedAt ?? null);
   const ago = agoText(iso, nowMs);
   return ago ? `обновлено ${ago}` : null;
 }
@@ -375,9 +379,10 @@ export function voiceWhenText(note: FeatureBriefNote, kind: FeatureBriefKind, no
   return ago ?? '';
 }
 
-// Роль в подписи голоса: «ведёт фичу» / «вела фичу» (макет closed).
+// Роль в подписи голоса: «ведёт фичу» / «вела фичу» (макет closed; 'merged' — тоже
+// прошедшее время, Ф-1.1).
 export function voiceRoleText(kind: FeatureBriefKind): string {
-  return kind === 'closed' ? 'вела фичу' : 'ведёт фичу';
+  return (kind === 'closed' || kind === 'merged') ? 'вела фичу' : 'ведёт фичу';
 }
 
 // ── Сторож перенесённых слов: слова модели (R-F8) ────────────────────────────────────

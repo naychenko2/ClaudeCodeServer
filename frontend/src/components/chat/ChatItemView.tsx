@@ -2147,18 +2147,16 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       // что кнопка композера (onInterrupt); после неё бэк шлёт position=0 и строка уходит.
       return (
         <div data-testid="local-turn-queue" style={{
-          alignSelf: 'center', maxWidth: '100%', display: 'flex', alignItems: 'center', gap: 8,
-          justifyContent: 'center', flexWrap: 'wrap', textAlign: 'center', borderRadius: 8,
-          padding: '6px 12px', fontSize: 12.5,
+          alignSelf: 'center', maxWidth: '100%', display: 'flex', alignItems: 'center', gap: SP.sm,
+          justifyContent: 'center', flexWrap: 'wrap', textAlign: 'center', borderRadius: R.md,
+          padding: `${SP.sm}px ${SP.md}px`, fontSize: FS.base,
           background: C.warningBg, border: `1px solid ${C.warning}`, color: C.warningText,
         }}>
-          <Hourglass size={13} strokeWidth={2} style={{ flexShrink: 0 }} />
+          <Hourglass size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
           <span>Ход ждёт свободный слот локальной модели: {item.position}-й в очереди (заняты {item.active} из {item.limit})</span>
-          <button onClick={onInterrupt} style={{
-            fontSize: 12, padding: '3px 10px', borderRadius: 6,
-            border: `1px solid ${C.warning}`, background: C.bgWhite,
-            cursor: 'pointer', color: C.warningText, whiteSpace: 'nowrap', flexShrink: 0,
-          }}>Стоп</button>
+          <Button variant="ghostFilled" size="md" dataTestId="local-turn-queue-stop" onClick={onInterrupt} style={{
+            border: `1px solid ${C.warning}`, color: C.warningText, whiteSpace: 'nowrap', flexShrink: 0,
+          }}>Стоп</Button>
         </div>
       );
     }

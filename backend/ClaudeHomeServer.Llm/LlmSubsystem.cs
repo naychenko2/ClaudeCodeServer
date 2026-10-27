@@ -458,6 +458,7 @@ public sealed class LlmSubsystem : IAppSubsystem
         services.AddSingleton<LocalModelStatsPoller>();
         services.AddGatedHostedFrom(config, sp => sp.GetRequiredService<LocalModelStatsPoller>());
         services.AddSingleton<ILocalModelStatsReader>(sp => sp.GetRequiredService<LocalModelStatsPoller>());
+        services.AddSingleton<ILocalEngineStatsDirectory>(sp => sp.GetRequiredService<LocalModelStatsPoller>());
         // Сэмплер видеокарт (nvidia-smi на хосте): по запросу, не в фоне. Кэш на GpuCacheTtl.
         services.AddSingleton<IGpuSampler>(sp => new GpuSampler(
             sp.GetRequiredService<TimeProvider>(),

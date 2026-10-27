@@ -1019,6 +1019,45 @@ public class LocalModelStatsPollerTests
         h.Poller.Current.CleanStepMs.Should().BeApproximately(500.0, 0.01, "старые точки вышли из кольца — база новая");
     }
 
+    // Дорожка поверх фейкового источника для тестов цикла по дорожкам.
+    private static EngineStatsTrack MakeTrack(Harness h, string name, Func<(IEngineMetricsSource, string?, string?, int?, bool)> resolve)
+        => new(name, h.Options, resolve, h.Time, NullLogger.Instance);
+
+    // Исключение в дорожке A не мешает дорожке B в том же тике.
+    // Мутация: убрать try/catch вокруг track.PollOnceAsync в PollAllAsync — тест краснеет.
+    [Fact]
+    public async Task PollAll_TrackThrows_OtherTrackStillUpdated()
+    {
+        var h = new Harness();
+        var good = new FakeSource();
+        good.Snapshots.Enqueue(new EngineSnapshot { Running = 2 });
+        h.Poller.AddTrack(MakeTrack(h, "broken", () => throw new InvalidOperationException("сбой дорожки")));
+        h.Poller.AddTrack(MakeTrack(h, "bonsai", () => (good, "llama-server", "bonsai", null, true)));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { Running = 1 });
+
+        var interval = await h.Poller.PollAllAsync();
+
+        h.Poller.CurrentOf("main")!.Running.Should().Be(1);
+        h.Poller.CurrentOf("bonsai")!.Running.Should().Be(2, "дорожка после упавшей обновилась в том же тике");
+        interval.Should().Be(h.Options.CurrentValue.ActivePollInterval, "берётся наименьший интервал дорожек");
+    }
+
+    [Fact]
+    public async Task Directory_ReportsTracks_MainFirst_AndMainIsTheReaderTrack()
+    {
+        var h = new Harness();
+        h.Poller.AddTrack(MakeTrack(h, "bonsai", () => (new FakeSource(), null, null, null, false)));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { Running = 0 });
+
+        await h.Poller.PollAllAsync();
+
+        h.Poller.Names.Should().Equal("main", "bonsai");
+        h.Poller.CurrentOf("main").Should().BeSameAs(h.Poller.Current);
+        h.Poller.HistoryOf("main", TimeSpan.FromHours(1)).Should().HaveCount(1);
+        h.Poller.CurrentOf("nope").Should().BeNull();
+        h.Poller.HistoryOf("nope", TimeSpan.FromHours(1)).Should().BeEmpty();
+    }
+
     // Фейковый источник, который бросает (мусор в /metrics, на котором парсер не выдержал).
     private sealed class ThrowingSource : IEngineMetricsSource
     {

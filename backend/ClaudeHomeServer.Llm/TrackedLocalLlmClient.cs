@@ -14,7 +14,9 @@ public sealed class TrackedLocalLlmClient(ILocalLlmClient inner, LocalEngineBusy
 {
     // Потолок, если у ключа нет провайдера с настройкой (совпадает с дефолтом MaxConcurrentTurns)
     public const int DefaultLimit = 3;
-    public const string DefaultEngineKey = "LocalLlm";
+    // В нижнем регистре, как и любой ключ после ReadEngineKey: иначе провайдер реестра с именем «LocalLlm»
+    // (ключ «localllm») и дефолт клиента разошлись бы по корзинам Ordinal-счётчика.
+    public const string DefaultEngineKey = "localllm";
 
     // LocalLlm:EngineKey — ключ провайдера, с которым клиент делит физический движок.
     // Нормализуется как ключ провайдера в реестре (там он всегда в нижнем регистре, поиск без учёта

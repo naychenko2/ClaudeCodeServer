@@ -428,4 +428,142 @@ public class SpendBackfillTests : IDisposable
         row.InputTokens.Should().Be(130);
         row.Turns.Should().Be(2);
     }
+
+    // --- SP4: разовый rekey прямых пар «Claude-ключ + не-Claude модель» ---
+
+    // Резолв модели как у реестра в проде: MiniMax → minimax, qwen → локальный ключ,
+    // ghostcli перехватывает префикс «claude-» (поэтому родную модель отсекает предикат ДО резолва)
+    private static string? FakeProviderByModel(string? model) => model switch
+    {
+        not null when model.StartsWith("MiniMax", StringComparison.OrdinalIgnoreCase) => "minimax",
+        not null when model.StartsWith("qwen", StringComparison.OrdinalIgnoreCase) => "local-qwen",
+        not null when model.StartsWith("claude-", StringComparison.OrdinalIgnoreCase) => "ghostcli",
+        _ => null,
+    };
+
+    private static bool FakeIsNative(string? model) =>
+        string.IsNullOrWhiteSpace(model) || model == "default" || model == "opus"
+        || model.StartsWith("claude-", StringComparison.OrdinalIgnoreCase);
+
+    [Fact]
+    public void Rekey_ClaudeКлючСНеClaudeМоделью_ПереключаетсяНаПровайдераМодели_ЗатемLocalСтановитсяFree()
+    {
+        var dir = Path.Combine(_dir, "spend_rekey");
+        var store = new SpendStore(dir, detailDays: 30);
+        var now = DateTime.UtcNow;
+        store.Record(new SpendRecord { Id = "rk-1", OwnerId = "u1", Provider = "claude", Model = "MiniMax-M3[1m]",
+            InputTokens = 100, Timestamp = now });
+        store.Record(new SpendRecord { Id = "rk-2", OwnerId = "u1", Provider = "claude-2", Model = "qwen3.8-27b",
+            InputTokens = 50, Timestamp = now });
+
+        store.RekeyNonClaudeModelsOnClaudeKeys(FakeIsNative, FakeProviderByModel).Should().Be(2);
+        // Порядок как в сервисе: rekey, затем часовой ReclassifyLocalAsFree
+        store.ReclassifyLocalAsFree(p => p == "local-qwen").Should().Be(1);
+
+        // Итог переживает перезагрузку с диска
+        var all = new SpendStore(dir, detailDays: 30).DetailsBetween(DateOnly.MinValue, DateOnly.MaxValue);
+        var mm = all.Single(r => r.Id == "rk-1");
+        mm.Provider.Should().Be("minimax");
+        mm.Source.Should().Be(SpendSources.ChatTurn);
+        var qwen = all.Single(r => r.Id == "rk-2");
+        qwen.Provider.Should().Be("local-qwen");
+        qwen.Source.Should().Be(SpendSources.Free);
+    }
+
+    [Fact]
+    public void Rekey_РодныеМоделиOneShotИDirect_НеТрогаются_ПовторныйЗапускНоль()
+    {
+        var dir = Path.Combine(_dir, "spend_rekey_keep");
+        var store = new SpendStore(dir, detailDays: 30);
+        var now = DateTime.UtcNow;
+        // Подписка Claude с моделью claude-* (ghostcli перехватил бы префикс — трогать нельзя)
+        store.Record(new SpendRecord { Id = "k-1", OwnerId = "u1", Provider = "claude-3", Model = "claude-opus-5-5",
+            InputTokens = 10, Timestamp = now });
+        // Алиас родного Claude и пустая модель
+        store.Record(new SpendRecord { Id = "k-2", OwnerId = "u1", Provider = "claude", Model = "opus",
+            InputTokens = 10, Timestamp = now });
+        // Прямой адаптер — не Claude-ключ, суффикс «-direct» не срезается
+        store.Record(new SpendRecord { Id = "k-3", OwnerId = "u1", Provider = "minimax-direct", Model = "MiniMax-M3",
+            Source = SpendSources.OneShot, InputTokens = 10, Timestamp = now });
+        // one-shot с Claude-ключом и не-Claude моделью — фильтр только chat-turn
+        store.Record(new SpendRecord { Id = "k-4", OwnerId = "u1", Provider = "claude", Model = "MiniMax-M3",
+            Source = SpendSources.OneShot, InputTokens = 10, Timestamp = now });
+        // Обратная пара (minimax + модель Claude) — источника правды нет
+        store.Record(new SpendRecord { Id = "k-5", OwnerId = "u1", Provider = "minimax", Model = "claude-opus-5-5",
+            InputTokens = 10, Timestamp = now });
+        // Модель не резолвится ни к какому провайдеру — не трогаем
+        store.Record(new SpendRecord { Id = "k-6", OwnerId = "u1", Provider = "claude", Model = "unknown-x",
+            InputTokens = 10, Timestamp = now });
+
+        store.RekeyNonClaudeModelsOnClaudeKeys(FakeIsNative, FakeProviderByModel).Should().Be(0);
+
+        var all = store.DetailsBetween(DateOnly.MinValue, DateOnly.MaxValue);
+        all.Single(r => r.Id == "k-1").Provider.Should().Be("claude-3");
+        all.Single(r => r.Id == "k-2").Provider.Should().Be("claude");
+        all.Single(r => r.Id == "k-3").Provider.Should().Be("minimax-direct");
+        all.Single(r => r.Id == "k-4").Provider.Should().Be("claude");
+        all.Single(r => r.Id == "k-5").Provider.Should().Be("minimax");
+        all.Single(r => r.Id == "k-6").Provider.Should().Be("claude");
+
+        // Идемпотентность на реально переключаемой записи: второй проход — ноль
+        store.Record(new SpendRecord { Id = "k-7", OwnerId = "u1", Provider = "claude", Model = "MiniMax-M3",
+            InputTokens = 10, Timestamp = now });
+        store.RekeyNonClaudeModelsOnClaudeKeys(FakeIsNative, FakeProviderByModel).Should().Be(1);
+        store.RekeyNonClaudeModelsOnClaudeKeys(FakeIsNative, FakeProviderByModel).Should().Be(0);
+    }
+
+    [Fact]
+    public void Rekey_СвёрнутыеДни_СливаютсяПоКлючуБезДвойногоСчёта()
+    {
+        var store = new SpendStore(Path.Combine(_dir, "spend_rekey_daily"), detailDays: 30);
+        var old = DateTime.UtcNow.AddDays(-40);
+        // Уже правильная запись minimax и «кривая» claude+MiniMax в одном чате и дне
+        store.Record(new SpendRecord { Id = "rd-1", OwnerId = "u1", SessionId = "s1",
+            Provider = "minimax", Model = "MiniMax-M3", InputTokens = 100, Timestamp = old });
+        store.Record(new SpendRecord { Id = "rd-2", OwnerId = "u1", SessionId = "s1",
+            Provider = "claude", Model = "MiniMax-M3", InputTokens = 30, Timestamp = old });
+        store.RollupOlderThan(store.WindowStart);
+
+        store.RekeyNonClaudeModelsOnClaudeKeys(FakeIsNative, FakeProviderByModel).Should().Be(1);
+
+        var rows = store.DailyBetween(DateOnly.MinValue, DateOnly.MaxValue);
+        rows.Should().NotContain(r => r.Provider == "claude");
+        var row = rows.Single(r => r.Provider == "minimax"); // слитая строка, не две
+        row.InputTokens.Should().Be(130);
+        row.Turns.Should().Be(2);
+    }
+
+    // Проводка: сервис обслуживания реально зовёт rekey, ставит маркер и делает это ДО часового
+    // ReclassifyLocalAsFree (локальная запись за один запуск доходит до free). Тест на сам цикл
+    // (StartAsync): удаление вызова или перестановка проходов его краснит.
+    [Fact]
+    public async Task Обслуживание_Rekey_ЗапускаетсяОдинРазСМаркером_ДоЧасовогоReclassify()
+    {
+        var store = new SpendStore(Path.Combine(_dir, "spend_rekey_loop"), detailDays: 30);
+        store.MarkBackfillDone();
+        store.Record(new SpendRecord { Id = "rl-1", OwnerId = "u1", Provider = "claude-2", Model = "qwen3.8-27b",
+            InputTokens = 100, Timestamp = DateTime.UtcNow });
+
+        var resolver = new Mock<IModelResolver>();
+        resolver.Setup(r => r.IsNativeClaudeModel(It.IsAny<string?>())).Returns<string?>(FakeIsNative);
+        resolver.Setup(r => r.ResolveProviderKeyByModel(It.IsAny<string?>())).Returns<string?>(FakeProviderByModel);
+        resolver.Setup(r => r.IsLocal(It.IsAny<string?>())).Returns<string?>(p => p == "local-qwen");
+
+        var service = new SpendMaintenanceService(store, new SessionDirectoryAdapter(_sessions),
+            new ChatHistoryLoaderAdapter(_history), resolver.Object, NullLogger<SpendMaintenanceService>.Instance);
+        await service.StartAsync(CancellationToken.None);
+        try
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            while (DateTime.UtcNow < deadline
+                   && store.DetailsBetween(DateOnly.MinValue, DateOnly.MaxValue).Single().Source != SpendSources.Free)
+                await Task.Delay(100);
+        }
+        finally { await service.StopAsync(CancellationToken.None); }
+
+        var rec = store.DetailsBetween(DateOnly.MinValue, DateOnly.MaxValue).Single();
+        rec.Provider.Should().Be("local-qwen");
+        rec.Source.Should().Be(SpendSources.Free, "rekey идёт до ReclassifyLocalAsFree в том же запуске");
+        store.ProviderRekeyDone.Should().BeTrue("маркер provider-rekey-v1.done ставится после прохода");
+    }
 }

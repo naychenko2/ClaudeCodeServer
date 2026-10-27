@@ -38,6 +38,25 @@ public sealed class SpendMaintenanceService(SpendStore store, ISessionDirectory 
             }
         }
 
+        // Разовый rekey прямых пар (Claude-ключ + не-Claude модель, разрез c47fe6da Ш3):
+        // до часового ReclassifyLocalAsFree — после смены ключа локальные записи становятся
+        // ему видны и переходятся в free. Идемпотентный маркер, как у backfill.
+        if (!store.ProviderRekeyDone)
+        {
+            try
+            {
+                var rekeyed = store.RekeyNonClaudeModelsOnClaudeKeys(
+                    llm.IsNativeClaudeModel, llm.ResolveProviderKeyByModel);
+                store.MarkProviderRekeyDone();
+                log.LogInformation("spend: rekey прямых пар завершён, переключено записей: {Count}", rekeyed);
+            }
+            catch (Exception ex)
+            {
+                // Маркер не ставим — попробуем на следующем старте
+                log.LogError(ex, "spend: rekey прямых пар не удался");
+            }
+        }
+
         while (!ct.IsCancellationRequested)
         {
             try { store.RollupOlderThan(store.WindowStart); }

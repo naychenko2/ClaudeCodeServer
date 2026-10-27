@@ -44,7 +44,9 @@ public static class SpendCostTiers
 
     // Провайдер Claude: «claude», нумерованные профили «claude-2», «claude-3»… и подписки «sub-*».
     // NormalizeProvider не трогаем: он группирует ось «провайдер», у него другая семантика.
-    private static bool IsClaudeKey(string key)
+    // Открыт наружу: rekey-проход в SpendStore фильтрует им записи с Claude-ключом
+    // (см. RekeyNonClaudeModelsOnClaudeKeys) — словарь «claude» в коде не дублируется.
+    public static bool IsClaudeKey(string key)
     {
         if (key == "claude" || key.StartsWith("sub-", StringComparison.Ordinal)) return true;
         const string prefix = "claude-";

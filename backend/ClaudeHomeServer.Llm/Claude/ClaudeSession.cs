@@ -1112,13 +1112,18 @@ public class ClaudeSession : ILlmSessionAdapter
     }
 
     // Фактический апстрим хода для ResultMessage: через шлюз — текущий маршрут токена хода
-    // (в нём и ротация аккаунта посреди хода; ключ = ProviderKey ?? SubscriptionKey, модель —
-    // Route.Model: её переписал шлюз, сессия её не знает). Токен отозван (потолок жизни) —
-    // резерв: ключ, посчитанный при старте прогона. Прямой прогон — тот же ключ из CliRun.
+    // (в нём и ротация аккаунта посреди хода; ключ = ProviderKey ?? SubscriptionKey). Модель —
+    // только из маршрута Provider: её переписал шлюз, сессия её не знает. У маршрута Subscription
+    // Model — подсказка `--model` клиента (UpstreamSelector.SelectRoute), шлюз её не переписывает:
+    // это не модель апстрима, и в расход она не идёт — модель родного хода берётся из modelUsage
+    // CLI (UsageModel в ResultMessage), иначе деградирует до алиаса или «default». Токен отозван
+    // (потолок жизни) — резерв: ключ, посчитанный при старте прогона. Прямой прогон — тот же ключ
+    // из CliRun.
     private (string? Provider, string? Model) UpstreamOfRun(CliRun run)
     {
         if (run.GatewayTurnId is { } turnId && _serverGateway?.CurrentRoute(turnId) is { } route)
-            return (route.ProviderKey ?? route.SubscriptionKey, route.Model);
+            return (route.ProviderKey ?? route.SubscriptionKey,
+                route.Kind == Gateway.GatewayUpstreamKind.Provider ? route.Model : null);
         return (run.UpstreamProvider, null);
     }
 

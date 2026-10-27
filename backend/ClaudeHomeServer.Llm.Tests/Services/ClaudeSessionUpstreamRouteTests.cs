@@ -20,8 +20,10 @@ namespace ClaudeHomeServer.Tests.Services;
 // провайдера (GetByKey is null) — т.е. "claude" или аккаунт пула; иначе "claude" (stale
 // сторонний ключ при родной модели не приписывает родной ход стороннему — инвариант
 // «не занижать расход Claude»). Ключ пишется как есть, "-direct" не срезается.
-// Для шлюзового прогона — текущий маршрут токена: ProviderKey ?? SubscriptionKey и Route.Model
-// (их знает только шлюз; ротация аккаунта посреди хода в нём же).
+// Для шлюзового прогона — текущий маршрут токена: ProviderKey ?? SubscriptionKey (его знает
+// только шлюз; ротация аккаунта посреди хода в нём же). Модель — только из маршрута Provider
+// (её переписал шлюз); у подписочного маршрута Model — подсказка `--model` клиента, не модель
+// апстрима: UpstreamModel = null, и расход берёт модель из modelUsage CLI.
 //
 // Мутация (c7): снятие ветки «stale сторонний → claude» (проверки GetByKey во второй ветке)
 // краснит строку ("sonnet", "minimax", "claude") теории ниже.
@@ -183,7 +185,9 @@ public class ClaudeSessionUpstreamRouteTests
 
         var result = SingleResult(sent);
         result.UpstreamProvider.Should().Be("claude-9", "после ротации — аккаунт, которым ход пошёл дальше");
-        result.UpstreamModel.Should().Be("opus");
+        // Мутация (безусловный route.Model в UpstreamOfRun) краснит эту строку: у подписочного
+        // маршрута Model — подсказка `--model`, не модель апстрима; её место — UsageModel CLI.
+        result.UpstreamModel.Should().BeNull("подписочный маршрут не несёт модель апстрима");
     }
 
     // Токен отозван (потолок жизни/сбой) — резерв: ключ, посчитанный при старте прогона.

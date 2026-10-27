@@ -112,4 +112,19 @@ public class SpendMappingTests
         r.Source.Should().Be(SpendSources.ChatTurn);
         SpendCostTiers.Of(r.Source, r.Provider, r.Model).Should().Be(SpendCostTiers.Expensive);
     }
+
+    // Подписка через шлюз (доработка SP2, блокер c6785c27): UpstreamOfRun отдаёт модель маршрута
+    // только у Provider; у подписочного маршрута UpstreamModel = null (его Model — подсказка
+    // `--model`). Модель записи — из modelUsage CLI (UsageModel): полная, с окном, а не алиас
+    // или «default»; класс — «дорого». Без этой пары правка UpstreamOfRun здесь бы молчала.
+    [Fact]
+    public void RecordTurnSpend_ПодпискаЧерезШлюз_МодельИзUsageModel()
+    {
+        var r = RecordTurn(Chat("claude", "opus"),
+            Result(usageModel: "claude-opus-5-5[1m]", upstreamProvider: "claude-9", upstreamModel: null));
+        r.Provider.Should().Be("claude-9");
+        r.Model.Should().Be("claude-opus-5-5[1m]");
+        r.Source.Should().Be(SpendSources.ChatTurn);
+        SpendCostTiers.Of(r.Source, r.Provider, r.Model).Should().Be(SpendCostTiers.Expensive);
+    }
 }

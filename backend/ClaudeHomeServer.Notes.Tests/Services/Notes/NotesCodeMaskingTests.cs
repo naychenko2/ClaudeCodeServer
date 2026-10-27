@@ -75,11 +75,17 @@ public class NotesCodeMaskingTests : IDisposable
     public void Wikilink_Обычный_РаботаетКакРаньше()
     {
         WriteNote("Цель", "# Цель");
-        // Живая ссылка + та же в inline-коде: считается только живая, дедупликация по цели
+        // Живая ссылка + та же в inline-коде. Различаем «ссылка в коде исключена» и
+        // «дубль схлопнут дедупом по цели» по бэклинкам цели: backlinks.Add идёт на
+        // каждую сырую ссылку (Build, :392-393), дедуплицируются только исходящие.
+        // Без маски у «Цели» было бы 2 бэклика от «Истка».
         WriteNote("Исток", "Смотри [[Цель]] и `[[Цель]]` в коде.");
 
         var links = _sut.GetDetail(User, IdOf("Исток"))!.Links;
         links.Should().ContainSingle(l => l.Resolved && l.TargetTitle == "Цель");
+
+        _sut.GetDetail(User, IdOf("Цель"))!.Backlinks
+            .Should().ContainSingle(b => b.SourceTitle == "Исток");
     }
 
     // ─── Теги в коде ────────────────────────────────────────────────────────
@@ -87,11 +93,14 @@ public class NotesCodeMaskingTests : IDisposable
     [Fact]
     public void Tag_ВInlineCode_НеСчитается()
     {
-        WriteNote("Тег", "пример `#кодовый` и живой #реальный");
+        // «#» в коде должен стоять после пробела: InlineTag требует границы слова
+        // (?<=^|\s), :27). В старом случае «`#кодовый`» тег не находился и без маски —
+        // тест ничего не проверял. Здесь тег реально находится без маски и отбивается маской.
+        WriteNote("Тег", "пример `x #тег y` и живой #реальный");
 
         var tags = _sut.GetSummaries(User, null, null).Single().Tags;
         tags.Should().Contain("реальный");
-        tags.Should().NotContain("кодовый");
+        tags.Should().NotContain("тег");
     }
 
     [Fact]
@@ -129,6 +138,46 @@ public class NotesCodeMaskingTests : IDisposable
         src.Content.Should().Contain("[[Новое]]");                 // живая ссылка переписана
         src.Content.Should().Contain("`[[Старое]]`");            // код не тронут
         src.Links.Should().ContainSingle(l => l.Resolved && l.TargetTitle == "Новое");
+    }
+
+    // ─── RemoveWikilinksTo: вычищание ссылки при удалении цели ───────────────
+
+    [Fact]
+    public void RemoveWikilinksTo_ВычищаетВОбычномТексте_НоНеВКоде()
+    {
+        const string original = "живая [[Цель]] в тексте, `[[Цель]]` в inline-коде и в заборе:\n```\n[[Цель]]\n```\n";
+        WriteNote("Цель", "# Цель");
+        WriteNote("Исток", original);
+
+        _sut.RemoveWikilinksTo(User, "Цель", IdOf("Цель"));
+
+        // Файл = исходное содержимое с ровно одной заменой — той, что вне кода
+        File.ReadAllText(Path.Combine(_vault, "Исток.md"))
+            .Should().Be(original.Replace("живая [[Цель]] в тексте", "живая Цель в тексте"));
+    }
+
+    // ─── Несвязанные упоминания и LinkMention ────────────────────────────────
+
+    [Fact]
+    public void UnlinkedMention_ВКоде_НеСчитается_и_LinkMention_НеСвязывает()
+    {
+        // Все файлы пишем до первого обращения к модели: NotesService кэширует её на 2 с,
+        // внешняя правка файла кэш не инвалидирует.
+        WriteNote("Важная Тема", "# Важная Тема");
+        const string inCode = "про пример: `там Важная Тема в коде` всё.";
+        WriteNote("ИстокВКоде", inCode);
+        WriteNote("ИстокВнеКода", "упомянута Важная Тема в обычном тексте");
+
+        // Только внутри кода: не несвязанное упоминание, и связывать нечем (FindWord, :445-459)
+        // (в UnlinkedMentions SourceId/SourceTitle — это упомянутая заметка, не исток)
+        var masked = _sut.GetDetail(User, IdOf("ИстокВКоде"))!;
+        masked.UnlinkedMentions.Should().NotContain(m => m.SourceTitle == "Важная Тема");
+        _sut.LinkMention(User, masked.Id, "Важная Тема")!.Content.Should().Be(inCode);
+
+        // Вне кода: упоминание есть, LinkMention (:784-803) оборачивает его в [[…]]
+        var plain = _sut.GetDetail(User, IdOf("ИстокВнеКода"))!;
+        plain.UnlinkedMentions.Should().Contain(m => m.SourceTitle == "Важная Тема");
+        _sut.LinkMention(User, plain.Id, "Важная Тема")!.Content.Should().Contain("[[Важная Тема]]");
     }
 
     // ─── Unit-тесты маски (без vault) ───────────────────────────────────────

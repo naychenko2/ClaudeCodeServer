@@ -42,9 +42,9 @@ internal static class SpendMapping
         catch { return null; } // не JSON / не наш формат — это не fal-результат
     }
 
-    // Запись расхода штатного хода в аналитику (Spend Analytics): все разрезы из Session,
-    // модель — фактическая из modelUsage result'а (субагенты могли считать другой моделью),
-    // фолбэк — модель сессии. Ошибка записи ход не роняет.
+    // Запись расхода штатного хода в аналитику (Spend Analytics): разрезы — из фактического
+    // маршрута прогона (UpstreamProvider/UpstreamModel в result'е, «учётка хода» SP1), фолбэк
+    // на старые result без этих полей — настройки сессии. Ошибка записи ход не роняет.
     public static void RecordTurnSpend(
         ISpendCollector? spend,
         LlmProviderRegistry llmProviders,
@@ -61,13 +61,20 @@ internal static class SpendMapping
         }
         try
         {
-            var provider = SpendSources.NormalizeProvider(s.Provider);
-            // Фактическая модель хода из modelUsage (субагенты могли считать другой), фолбэк —
-            // модель сессии; пустой результат резолвится в дефолт подписки, чтобы SpendRecord
-            // никогда не оставался без модели (иначе в аналитике копилась «Модель по умолчанию»).
-            var model = llmProviders.ResolveModelOrDefault(m.UsageModel ?? s.Model, provider);
+            // Провайдер и модель — из фактического маршрута прогона (SP1: ключ апстрима пишется
+            // в result при старте прогона и в маршруте токена шлюза), а не из настроек чата:
+            // при автофолбэке и ходе через шлюз расход приписывался провайдеру, который ход не
+            // делал. Никакого резолва провайдера по UsageModel: он префиксный и уводит настоящие
+            // подписки Claude в «дёшево». Фолбэк (result до SP1) — прежний путь: настройки сессии.
+            var provider = SpendSources.NormalizeProvider(m.UpstreamProvider ?? s.Provider);
+            // Фактическая модель: апстрим шлюза (его знает только шлюз — сессия не видит
+            // ротацию), затем modelUsage (субагенты могли считать другой), затем модель сессии;
+            // пустой результат резолвится в дефолт подписки, чтобы SpendRecord никогда не
+            // оставался без модели (иначе в аналитике копилась «Модель по умолчанию»).
+            var model = llmProviders.ResolveModelOrDefault(m.UpstreamModel ?? m.UsageModel ?? s.Model, provider);
             // Локальный провайдер (IsLocal в конфиге) — свой движок, подписки за ним нет:
-            // его ходы бесплатные независимо от ключа (напр. "local-qwen")
+            // его ходы бесплатные независимо от ключа (напр. "local-qwen"). Признак считается
+            // по тому же ключу, что пишется в запись: класс и источник расхода не разъезжаются.
             var isLocal = llmProviders.GetByKey(provider)?.IsLocal == true;
             spend.Record(new SpendRecord
             {

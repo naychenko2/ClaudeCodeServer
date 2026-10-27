@@ -340,6 +340,120 @@ public sealed class SpendStore : ISpendCollector, ISpendDetailReader
         return [.. map.Values];
     }
 
+    // --- разовый rekey прямых пар: Claude-ключ + не-Claude модель (разрез c47fe6da, Ш3) ---
+
+    // Записи, где Provider — ключ Claude, а Model — не родная модель Claude («claude» +
+    // MiniMax-M3, «claude-2» + qwen3.8-27b): подписка Claude такие модели не обслуживает,
+    // ход шёл к провайдеру, объявившему модель. Правда следует из самой записи, поэтому
+    // проход меняет Provider в деталях и дневных агрегатах. Это исправление ЗАВЫШЕНИЯ:
+    // «дорогой» Claude прятал реальный «дешёвый» или бесплатный ход. Обратные пары
+    // (minimax + claude-*) и новые Claude-ключи из резолва не трогается: источника правды в
+    // них нет, перевод был бы догадкой в сторону завышения. Идемпотентен: после rekey Provider
+    // уже не Claude-ключ, повторный проход — no-op без обращения к диску. Сбой записи любого
+    // turns-*.jsonl или daily.json пробрасывается наружу: маркер не ставится, следующий старт
+    // повторит проход с диска. Суффикс «-direct» не срезается:
+    // прямые адаптеры пишутся one-shot-путём и в фильтр не попадают.
+    //
+    // Порядок проверок важен: «родной Claude» спрашивается ДО резолва — сторонний провайдер,
+    // объявивший модель с id вида claude-* или перехвативший префикс «claude-» (ghostcli),
+    // не должен увести запись настоящей подписки к себе (тот же порядок требует
+    // LlmProviderRegistry.IsNativeClaudeModel).
+    public int RekeyNonClaudeModelsOnClaudeKeys(
+        Func<string?, bool> isNativeClaudeModel, Func<string?, string?> providerByModel)
+    {
+        var rekeyed = 0;
+        lock (_ioLock)
+        {
+            foreach (var (date, list) in _details)
+            {
+                List<SpendRecord> snapshot;
+                bool changed = false;
+                lock (list)
+                {
+                    foreach (var r in list)
+                    {
+                        if (RekeyNewProvider(r.Source, r.Provider, r.Model,
+                                isNativeClaudeModel, providerByModel) is not string key
+                            || key == r.Provider) continue;
+                        r.Provider = key;
+                        changed = true;
+                        rekeyed++;
+                    }
+                    snapshot = [.. list];
+                }
+                if (!changed) continue;
+                try
+                {
+                    // Как PersistDaily: tmp + Move(overwrite) — убийство процесса посреди
+                    // записи не оставляет обрезанный день
+                    var path = TurnsPath(date);
+                    var tmp = path + ".tmp";
+                    File.WriteAllText(tmp,
+                        string.Join(Environment.NewLine,
+                            snapshot.Select(r => JsonSerializer.Serialize(r, JsonOpts)))
+                        + Environment.NewLine);
+                    File.Move(tmp, path, overwrite: true);
+                }
+                catch (Exception ex)
+                {
+                    // Проход одноразовый и без отката: сбой записи = провал прохода.
+                    // Пробрасываем — сервис не поставит маркер, следующий старт повторит
+                    // rekey с диска (в памяти уже исправлено, но оно перечитается с диска)
+                    _log?.LogError(ex, "spend: rekey прямых пар — не переписать {Date}", date);
+                    throw;
+                }
+            }
+
+            rekeyed += RekeyDaily(isNativeClaudeModel, providerByModel);
+        }
+        return rekeyed;
+    }
+
+    // Новый провайдер записи или null (не трогать). chat-turn + Claude-ключ (через
+    // единственный словарь SpendCostTiers) + не-родная модель + резолв модели даёт ключ,
+    // который сам НЕ Claude-ключ: rekey к другому Claude-ключу — не выход из области Claude
+    // (смысл прохода), а перенумеровывание записи между профилями; такую не трогаем.
+    private static string? RekeyNewProvider(string source, string provider, string? model,
+        Func<string?, bool> isNativeClaudeModel, Func<string?, string?> providerByModel)
+    {
+        if (source != SpendSources.ChatTurn || !SpendCostTiers.IsClaudeKey(provider) || isNativeClaudeModel(model))
+            return null;
+        var key = providerByModel(model);
+        return key is not null && !SpendCostTiers.IsClaudeKey(key) ? key : null;
+    }
+
+    private int RekeyDaily(
+        Func<string?, bool> isNativeClaudeModel, Func<string?, string?> providerByModel)
+    {
+        // После смены провайдера строка может сойтись с уже существующей (тот же ключ
+        // с правильным провайдером) — их сливает MergeByKey, двойного счёта нет.
+        Dictionary<string, List<DailySpendRow>>? next = null;
+        var rekeyed = 0;
+        foreach (var (date, rows) in _daily)
+        {
+            var changed = false;
+            foreach (var r in rows)
+            {
+                if (RekeyNewProvider(r.Source, r.Provider, r.Model,
+                        isNativeClaudeModel, providerByModel) is not string key
+                    || key == r.Provider) continue;
+                r.Provider = key;
+                changed = true;
+                rekeyed++;
+            }
+            if (!changed) continue;
+            next ??= new Dictionary<string, List<DailySpendRow>>(_daily);
+            next[date] = MergeByKey(rows);
+        }
+        if (next is null) return 0;
+        if (!PersistDaily(next))
+            // Первопричина уже залогирована в PersistDaily; здесь только проваливаем проход:
+            // маркер не поставится, следующий старт повторит rekey с диска
+            throw new IOException("spend: rekey прямых пар — не переписать daily.json");
+        _daily = next;
+        return rekeyed;
+    }
+
     // --- backfill: маркер разового импорта истории ---
 
     private string BackfillMarkerPath => Path.Combine(_dir, "backfill.done");
@@ -371,6 +485,23 @@ public sealed class SpendStore : ISpendCollector, ISpendDetailReader
             File.WriteAllText(DeltaBackfillMarkerPath, DateTime.UtcNow.ToString("O"));
         }
         catch (Exception ex) { _log?.LogError(ex, "spend: не удалось записать маркер delta-backfill"); }
+    }
+
+    // --- provider-rekey-v1: маркер разового rekey прямых пар (разрез c47fe6da, Ш3).
+    // Как backfill.done — идемпотентный маркер: файл существует → проход уже делался. ---
+
+    private string ProviderRekeyMarkerPath => Path.Combine(_dir, "provider-rekey-v1.done");
+
+    public bool ProviderRekeyDone => File.Exists(ProviderRekeyMarkerPath);
+
+    public void MarkProviderRekeyDone()
+    {
+        try
+        {
+            Directory.CreateDirectory(_dir);
+            File.WriteAllText(ProviderRekeyMarkerPath, DateTime.UtcNow.ToString("O"));
+        }
+        catch (Exception ex) { _log?.LogError(ex, "spend: не удалось записать маркер rekey"); }
     }
 
     // --- диск ---

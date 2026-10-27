@@ -621,6 +621,17 @@ task-notification прошлой сессии и выдаёт на него `res
 - Диагностика: `result` с `numTurns=0`, засчитанный ходу, логируется строкой `zero-turn-result`
   (subtype, usage, denials, session_id).
 
+### Фактический маршрут прогона («учётка хода»)
+
+При старте прогона вычисляется и сохраняется в `CliRun` фактический ключ апстрима:
+`ClaudeSession.ComputeUpstreamProviderKey()` — `ResolveByModel(EffectiveModel)?.Key`; при
+родной модели — `Info.Provider`, только если он не ключ стороннего провайдера, иначе `"claude"`.
+При result через шлюз приоритетен текущий маршрут токена хода (`ProviderKey ?? SubscriptionKey`,
+`Route.Model` — его переписал шлюз); токен отозван — резерв из `CliRun`. Поля
+`ResultMessage.UpstreamProvider`/`UpstreamModel` несут маршрут в запись расхода; отчёт CLI
+(`modelUsage`) — не источник правды. Правило записи, известный остаток и инварианты —
+в [spend-price-classes.md](../features/spend-price-classes.md).
+
 ## Модели родного Claude: храним семейство, версию выбирает CLI, окно — сервер
 
 Во всех сторах (чаты, персоны, слоты, пресеты-цепочки, маршруты мест) модель родного Claude

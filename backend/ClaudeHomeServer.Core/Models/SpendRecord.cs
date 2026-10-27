@@ -64,7 +64,9 @@ public sealed class SpendRecord
     public string? SessionId { get; init; }
     public string? TaskId { get; init; }
     public string? PersonaId { get; init; }
-    public string Provider { get; init; } = "claude";
+    // set (не init): разовый rekey-проход в SpendStore меняет провайдера записей,
+    // записанных с Claude-ключом и не-Claude моделью (см. RekeyNonClaudeModelsOnClaudeKeys)
+    public string Provider { get; set; } = "claude";
     public string? Model { get; init; }
     // set (не init): проход переклассификации в SpendStore меняет источник записей,
     // записанных до учёта признака IsLocal (см. ReclassifyLocalAsFree)
@@ -109,7 +111,9 @@ public sealed class DailySpendRow
     public string? SessionId { get; init; }
     public string? TaskId { get; init; }
     public string? PersonaId { get; init; }
-    public string Provider { get; init; } = "";
+    // set (не init): rekey-проход в SpendStore меняет провайдера агрегата
+    // (см. RekeyNonClaudeModelsOnClaudeKeys)
+    public string Provider { get; set; } = "";
     public string? Model { get; init; }
     // set (не init): проход переклассификации в SpendStore меняет источник агрегата
     public string Source { get; set; } = "";

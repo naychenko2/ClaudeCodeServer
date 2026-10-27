@@ -203,6 +203,49 @@ public class SessionManagerSubscriptionMigrationTests : IDisposable
     }
 
     [Fact]
+    public async Task MigrateProvider_КлючПодпискиИСторонняяМодель_ТранскриптНайденВПрофилеПодписки()
+    {
+        // Класс чатов из находки ревью ccb3d43c: Provider — ключ пула, модель — стороннего провайдера
+        // (боевые 5adb6782, 338733c6). До SP1 подписочный env перетирал провайдерский CLAUDE_CONFIG_DIR,
+        // и транскрипт писался в профиль подписки sub-{key}. currentKey резолвит модель в провайдера,
+        // и поиск шёл только по провайдерскому корню — для таких чатов он не находил ничего, и перенос
+        // оставлял всю историю в профиле подписки. Теперь корни два: текущей пары и собственной подписки.
+        var (sut, _, llmProviders, users, projects) = BuildSut(new Dictionary<string, string?>
+        {
+            [$"{ClaudeSubscriptionPool.Section}:acc-a:OAuthToken"] = "token-a",
+            ["LlmProviders:minimax:ApiKey"] = "sk-mm",
+            ["LlmProviders:minimax:AnthropicBaseUrl"] = "https://mm.test",
+            ["LlmProviders:minimax:Models:0:Id"] = "MiniMax-M2.1",
+            ["LlmProviders:glm:ApiKey"] = "sk-glm",
+            ["LlmProviders:glm:AnthropicBaseUrl"] = "https://glm.test",
+            ["LlmProviders:glm:Models:0:Id"] = "glm-5.2",
+        });
+        var user = users.Add("u19", "password123", "user");
+        var dir = MkProjectDir("submodel");
+        var project = projects.Create("SubModel", dir, user.Id, "u19");
+        const string claudeSessionId = "submodel123456";
+        var session = await sut.CreateAsync(project.Id, ClaudeMode.Auto,
+            resumeSessionId: claudeSessionId, model: "sonnet");
+        session.Provider.Should().Be("acc-a");
+        session.Model = "MiniMax-M2.1"; // как в боевом чате: модель выбрана сторонняя, провайдер остался ключом пула
+
+        var srcDir = Path.Combine(llmProviders.GetProfileDir("sub-acc-a"), "projects",
+            TranscriptMigrator.FlattenCwd(dir));
+        Directory.CreateDirectory(srcDir);
+        await File.WriteAllTextAsync(Path.Combine(srcDir, claudeSessionId + ".jsonl"), "{}");
+
+        var updated = await sut.MigrateProviderAsync(session.Id, user.Id, "glm-5.2");
+
+        updated.Provider.Should().Be("glm");
+        var dstFile = Path.Combine(llmProviders.GetProfileDir("glm"), "projects",
+            TranscriptMigrator.FlattenCwd(dir), claudeSessionId + ".jsonl");
+        File.Exists(dstFile).Should().BeTrue(
+            "транскрипт найден в профиле подписки и скопирован в профиль целевого провайдера");
+        File.Exists(Path.Combine(srcDir, claudeSessionId + ".jsonl")).Should().BeTrue(
+            "исходник не трогается: копия, не перенос");
+    }
+
+    [Fact]
     public async Task MigrateProvider_АвтовыборАккаунтаПула_БезРазделителяВЛенте()
     {
         // Ротация подписок пула по договорённости тихая: маркер в ленте ставим только при

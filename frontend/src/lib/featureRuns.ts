@@ -55,7 +55,12 @@ let _loadingBySession = new Map<string, boolean>();
 let _errorBySession = new Map<string, string | null>();
 
 // F4 (инвариант И4): потолок per-session памяти — 8 чатов во всех связанных Map.
-const MAX_SESSIONS = 8;
+// Граница: активные (смонтированные) панели не вытесняются, поэтому потолок держится,
+// только пока их строго меньше MAX_SESSIONS. Сегодня это максимум 5 колонок стены
+// (MAX_CHATS в features/wall/wallStore.ts) либо 1 основной чат — они на разных маршрутах.
+// Подняли MAX_CHATS до 8+ или добавили страницу с несколькими панелями — evictStale
+// упрётся в «вытеснять нечего» и Map растёт без потолка. Связь сторожит featureRuns.test.ts.
+export const MAX_SESSIONS = 8;
 
 // LRU-порядок ключей: каждая запись в любой из 7 Map переносит ключ в хвост.
 // Порядок живёт в отдельном Map: вставка в data-Map — порядок вставки, не доступа.

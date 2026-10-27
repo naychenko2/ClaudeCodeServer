@@ -54,17 +54,23 @@ function NotReported({ data }: { data: LocalModelStats }) {
 // === Статус: имя модели + пилюля + подстрока ===
 // Пилюля: R.max, FS.xs 700, точка 7 px; работает — success, занята — warning,
 // недоступна — danger. Имя — FONT.mono FS.base 700, многоточие.
+// 'yielded' — уступка, не авария: тон нейтральный (bgInset/textSecondary/textMuted,
+// макет §6), не warning и не danger. Точная подпись («Ждёт возврата», «Загружается»,
+// «Ждёт память карты») разводится по состоянию арбитра — это шаг Ф2, здесь только
+// закрытое значение карты: новый статус union'а не должен оставить Record неполным.
 const STATUS_LABEL: Record<LocalModelStats['status'], string> = {
   working: 'Работает',
   busy: 'Занята',
   down: 'Недоступна',
   notConnected: 'Не подключена',
+  yielded: 'Уступила карту',
 };
 const STATUS_TONE: Record<LocalModelStats['status'], { bg: string; fg: string; dot: string }> = {
   working: { bg: C.successBg, fg: C.successText, dot: C.success },
   busy: { bg: C.warningBg, fg: C.warningText, dot: C.warning },
   down: { bg: C.dangerBg, fg: C.dangerText, dot: C.danger },
   notConnected: { bg: C.bgInset, fg: C.textMuted, dot: C.textMuted },
+  yielded: { bg: C.bgInset, fg: C.textSecondary, dot: C.textMuted },
 };
 
 function StatusRow({ data }: { data: LocalModelStats }) {

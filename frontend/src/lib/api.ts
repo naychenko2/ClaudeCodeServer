@@ -31,19 +31,22 @@ export interface GlyphCandidate {
 
 // === «Локальные модели» (фича local-model-stats) ===
 //
-// DTO двух REST-ручек: LocalModelStatsController (снимок панели, только админ —
-// настройка глобальная) и SessionLocalModelController (итог последнего хода чата,
-// его владелец). Время — unix-мс; kv — доли 0..1 (не проценты и не ГиБ);
+// DTO REST-ручек: LocalModelStatsController (снимок панели и список движков, только
+// админ — настройка глобальная) и SessionLocalModelController (итог последнего хода
+// чата, его владелец). Время — unix-мс; kv — доли 0..1 (не проценты и не ГиБ);
 // phase — строка; чужие чаты анонимны (own=false, без sessionId/projectId).
 
-// Снимок панели: GET /api/local-model/stats?window=1m|5m|15m|1h&since=<unix ms>.
+// Снимок панели: GET /api/local-model/stats?window=1m|5m|15m|1h&since=<unix ms>&engine=main|bonsai.
 // configured=false — локальный провайдер не настроен (панель и значок скрыты);
-// status: working | busy | down | notConnected.
+// status: working | busy | down | notConnected | yielded.
+// 'yielded' — только у движка с StateUrl: метрики молчат, но арбитр сказал, что модель
+// уступила карту по плану, а не упала (разрез v2, §1): DownSince при этом не ставится.
+// Без engine — основной стенд, как до фичи: ни 'yielded', ни блока duty в ответе нет.
 export interface LocalModelStats {
   configured: boolean;
   engine?: string;
   model?: string;
-  status: 'working' | 'busy' | 'down' | 'notConnected';
+  status: 'working' | 'busy' | 'down' | 'notConnected' | 'yielded';
   // unix-мс
   downSince?: number | null;
   running?: number;
@@ -114,6 +117,120 @@ export interface LocalModelStats {
   // Сводка «Железо» (только админ): для строки-ссылки «Видеокарты» и точки на вкладке.
   hardware?: import('../features/localModel/hardwareTypes').HardwareBrief;
   unsupported?: string[];
+  // Блок «Дежурство» (типы — ниже): только у движка с StateUrl (Bonsai). Нет поля
+  // или null — блока нет (основной стенд); arbiter:null — StateUrl у движка нет.
+  duty?: LocalModelDuty | null;
+}
+
+// === Стенд второй модели (Bonsai): GET /api/local-model/engines, stats?engine= (разрез v2, §5) ===
+//
+// Ключ словаря движков: 'main' — основной стенд (то, что было до фичи), 'bonsai' —
+// llama-server на Video. Ключ — только ключ: URL из него не строится никогда.
+// Обе ручки: админ (иначе 403), флаг local-model-stats на сервере (иначе 404);
+// неизвестный движок или выключенная Llm → configured:false, 200; 500 — нигде.
+
+export type LocalModelEngineName = 'main' | 'bonsai';
+
+// Ответ GET /api/local-model/engines: список для переключателя «Основная / Bonsai».
+// configured=false — движок не настроен: его сегмента нет; с одним движком переключателя нет.
+export interface LocalModelEngine {
+  name: LocalModelEngineName;
+  // подпись сегмента («Основная», «Bonsai»): имена моделей в сегмент не ставим (макет §2)
+  title: string;
+  configured: boolean;
+}
+
+// Состояние дежурства из /state арбитра (gpu-arbiter.py): пять значений, всё неизвестное
+// сервер сводит к 'unknown'. null — удачного снимка арбитра ещё не было (до первого успеха).
+export type LocalModelArbiterState = 'unknown' | 'ready' | 'yielded' | 'starting' | 'waiting-vram';
+// Режим карты: 'exclusive' — карта целиком у модели, 'shared' — рядом с ComfyUI. Всё прочее — null.
+export type LocalModelArbiterMode = 'exclusive' | 'shared';
+// Звено цепочки «модель → страховка → облако» (EngineCallLedger.Step, разрез v2, §4).
+// Третье звено — финальный облачный шаг (модель места или слота, обычно claude);
+// на фронте подписано «облако» (макет §5).
+export type LocalModelChainLink = 'bonsai' | 'insurance' | 'claude';
+// Вид задания ComfyUI по шву IComfyStats.DescribePromptKind (image|video|audio|train→lora);
+// не опознано — null. Таблица соответствия живёт на бэкенде, фронт её не повторяет (разрез §1).
+export type LocalModelJobKind = 'image' | 'video' | 'audio' | 'lora';
+
+// Причина уступки из /state арбитра. kind — вид строки арбитра: 'comfy' (задание ComfyUI,
+// по префиксу prompt_id), 'lease' (аренда из POST /lease — текст присылает кто угодно из
+// сети), 'gpu' (чужой процесс на карте). raw — текст строки без префикса вида: для lease —
+// сама причина (обрезана сервером до 64 символов), для gpu — «pid:командная строка», для
+// comfy — префикс prompt_id (8 символов). Значение вне списка — неизвестный вид:
+// показывать raw как текст, без перехода.
+export interface LocalModelDutyReason {
+  kind: string;
+  raw: string;
+  // только для kind='comfy': вид задания по шву Images; null — не опознан
+  jobKind?: LocalModelJobKind | null;
+  // только для kind='comfy': есть ли prompt_id в реестре ЭТОГО инстанса ComfyUI.
+  // false — «задание ComfyUI не с этого сервера» (ComfyUI общий у прода и дева); null — неизвестно
+  known?: boolean | null;
+}
+
+// Активная аренда карты. Идентификатор аренды наружу не отдаётся (разрез §2): только
+// причина (недоверенный текст, ≤64 символа) и остаток времени.
+export interface LocalModelDutyLease {
+  reason: string;
+  leftS?: number | null;
+}
+
+// Ответ арбитра о дежурстве. Всё из недоверенного /state: неверный тип поля обнуляет
+// только это поле; причин и аренд — не больше 32 каждой. При reachable:false — поля
+// последнего удачного снимка; до первого успеха — null.
+export interface LocalModelDutyArbiter {
+  reachable: boolean;
+  // unix-мс последнего удачного ответа арбитра; null — удачного ответа не было
+  lastSeenAt?: number | null;
+  state?: LocalModelArbiterState | null;
+  mode?: LocalModelArbiterMode | null;
+  // секунды до возврата модели; null — есть причины или модель уже активна
+  quietLeftS?: number | null;
+  // unix-мс начала периода счётчиков: сервер пересчитывает по часам Video (sinceAt = now − (ts − since)),
+  // часы Video и CCS расходятся. null — снимка не было. При yields==returns==0 фронт
+  // подписывает «с запуска арбитра»
+  sinceAt?: number | null;
+  yields?: number | null;
+  returns?: number | null;
+  // секунды последней уступки / последнего возврата; null — не было
+  lastYieldS?: number | null;
+  lastReturnS?: number | null;
+  reasons?: LocalModelDutyReason[] | null;
+  leases?: LocalModelDutyLease[] | null;
+}
+
+// Ответы мест за окно (EngineCallLedger, разрез v2, §4): корзины — звено, которое
+// ответило; missed — цепочка вернула пусто. sinceAt = max(now − 1 ч, старт процесса):
+// честный знаменатель доли. Нули — не «нет данных»: нет данных — весь блок null.
+export interface LocalModelDutyAnswers {
+  bonsai: number;
+  insurance: number;
+  claude: number;
+  missed: number;
+  sinceAt: number;
+}
+
+// Вызов места прямо сейчас («Кто сейчас на модели» у Bonsai). Это журнал вызовов мест,
+// а не чаты: строка не кликабельна, владельца и промпта нет (разрез v2, §4).
+// place — название места из каталога; link — текущее звено цепочки;
+// durationS — секунды с начала вызова; null — ещё не начался.
+export interface LocalModelDutyCall {
+  place: string;
+  link: LocalModelChainLink;
+  durationS?: number | null;
+}
+
+// Блок «Дежурство» в ответе stats?engine= (макет §5). Форма поля chain контрактом
+// не зафиксирована (Б3c ещё в работе) — здесь прочитано как звенья типичного пути;
+// цепочка ТИПИЧНЫЙ путь, а не гарантированный, текущее звено — из callsNow и состояния
+// арбитра, не отсюда. На Ф5 (интеграция на живом ответе) поле сверяется заново.
+export interface LocalModelDuty {
+  // null — у движка нет StateUrl: «Дежурство» показывает «арбитр не подключён»
+  arbiter: LocalModelDutyArbiter | null;
+  chain?: LocalModelChainLink[] | null;
+  answersLastHour?: LocalModelDutyAnswers | null;
+  callsNow?: LocalModelDutyCall[] | null;
 }
 
 // === Вкладка «Медиа» (ComfyUI): GET /api/local-model/stats/media?since=<unix ms> ===
@@ -945,10 +1062,16 @@ export const api = {
   // (настройка глобальная), итог последнего хода чата — его владелец. DTO — записи
   // LocalModelStatsController / SessionLocalModelController (типы выше).
   localModel: {
-    // GET /api/local-model/stats?window=1m|5m|15m|1h&since=<unix ms>
-    stats: (window: '1m' | '5m' | '15m' | '1h' = '15m', since?: number) => {
+    // GET /api/local-model/engines: список движков для переключателя «Основная / Bonsai»
+    // (макет §2). Один configured — переключателя нет, стенд того движка открывается сразу.
+    engines: () => request<LocalModelEngine[]>('/local-model/engines'),
+    // GET /api/local-model/stats?window=1m|5m|15m|1h&since=<unix ms>&engine=main|bonsai.
+    // Без engine — основной стенд, URL и ответ прежние (обратная совместимость, разрез v2, §5).
+    // engine — только ключ словаря ('main'|'bonsai'), не имя модели и не URL.
+    stats: (window: '1m' | '5m' | '15m' | '1h' = '15m', since?: number, engine?: LocalModelEngineName) => {
       const qs = new URLSearchParams({ window });
       if (since != null) qs.set('since', String(since));
+      if (engine != null) qs.set('engine', engine);
       return request<LocalModelStats>(`/local-model/stats?${qs.toString()}`);
     },
     // GET /api/local-model/hardware?window=1m|5m|15m|1h — вкладка «Железо» (только админ;

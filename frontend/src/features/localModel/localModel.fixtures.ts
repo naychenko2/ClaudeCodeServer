@@ -3,7 +3,7 @@
 // (docs/mockups/local-model-stats-panel.html): имена, скорости, температуры и
 // мощность — те же, чтобы скриншоты сравнивались один в один.
 
-import type { LocalModelMedia, LocalModelStats } from '../../lib/api';
+import type { LocalModelArbiterState, LocalModelDuty, LocalModelDutyArbiter, LocalModelMedia, LocalModelStats } from '../../lib/api';
 
 // 'working' — движок жив, модель загружена, сосед в очереди (дефолт);
 // 'busy' — занята: очередь, вытеснения, горячие карты (состояние макета «Занята + вытеснения»);
@@ -227,4 +227,116 @@ export function mockLocalModelMediaSelf(state: LocalModelMediaMockState = 'run')
     queue: m.queue.filter(q => q.own),
     lastHour: m.lastHour.filter(d => d.own),
   };
+}
+
+// === Стенд второй модели (Bonsai): состояния дежурства (разрез v2, §5; макет §4) ===
+//
+// Пять состояний арбитра + «арбитр не подключён» (у движка нет StateUrl). Числа и строки —
+// с макета (docs/mockups/bonsai-toolbar.html), чтобы витрина сравнивалась один в один.
+//
+// Как состояние арбитра складывается в status снимка (правило Б3b, не выдумка фикстуры):
+// метрики отвечают → 'working'/'busy' по очереди (состояние 'ready'); метрики молчат и
+// арбитр сказал 'yielded'/'starting'/'waiting-vram' → 'yielded', DownSince НЕ ставится;
+// метрики молчат и арбитр сказал 'unknown' (или его вовсе нет) → 'down', как у основной.
+export type BonsaiMockState = 'unknown' | 'ready' | 'yielded' | 'starting' | 'waiting-vram' | 'no-arbiter';
+
+// Блоки, которых llama-server не отдаёт никогда: имена полей снимка, их добавляет
+// LlamaServerMetricsSource.UnsupportedBlocks (backend/…/Llm/LocalStats/). По этому списку
+// фронт прячет «Кэш, %», «Вытеснения» и «Куда уходит время агентов» (макет §3).
+export const BONSAI_UNSUPPORTED = [
+  'KvUsagePerc', 'RamTierPerc', 'RamTierHits', 'RamTierQueries',
+  'Preemptions', 'QueueTimeSum', 'PrefillKvComputedTokens', 'DecodeTimeSum',
+];
+
+export function mockBonsaiStats(state: BonsaiMockState = 'yielded'): LocalModelStats {
+  const now = Date.now();
+  // Карта одна на Video и общая с ComfyUI: данные о ней — с узла ComfyUI (разрез v2, §3)
+  const base: LocalModelStats = {
+    configured: true,
+    engine: 'bonsai',
+    model: 'bonsai-27b',
+    status: 'working',
+    running: 1,
+    waiting: 0,
+    othersCount: 0,
+    speed: { genPerStream: 21, prefillPerStream: 640 },
+    gpus: [
+      { index: 0, name: 'RTX 3090', utilPerc: 34, memUsedMb: 8192, memTotalMb: 24576, tempC: 52, powerW: 88, powerLimitW: 350 },
+    ],
+    history: [],
+    // У Bonsai нет чатов: «кто сейчас на модели» — места сервера, их несёт duty.callsNow
+    chats: [],
+    unsupported: [...BONSAI_UNSUPPORTED],
+  };
+  // Счётчики и цепочка не зависят от состояния арбитра: они из журнала вызовов мест
+  // (EngineCallLedger). Числа — из макета («Ответы мест за час» 212/31/2/1, «14 · 14», 0,2 с / 6,1 с).
+  const duty = (arbiter: LocalModelDutyArbiter | null): LocalModelDuty => ({
+    arbiter,
+    chain: ['bonsai', 'insurance', 'claude'],
+    answersLastHour: { bonsai: 212, insurance: 31, claude: 2, missed: 1, sinceAt: now - 60 * 60_000 },
+    callsNow: [{ place: 'Заголовок чата', link: 'bonsai', durationS: 1.4 }],
+  });
+  // Арбитр жив и отвечает: режим «карта целиком», счётчики с запуска арбитра (40 мин)
+  const alive = (state: LocalModelArbiterState): LocalModelDutyArbiter => ({
+    reachable: true,
+    lastSeenAt: now,
+    state,
+    mode: 'exclusive',
+    sinceAt: now - 40 * 60_000,
+    yields: 14,
+    returns: 14,
+    lastYieldS: 0.2,
+    lastReturnS: 6.1,
+    quietLeftS: null,
+    reasons: [],
+    leases: [],
+  });
+  // Модель выгружена: очередь нулевая, последние известные скорость и карта — как у 'down'
+  const unloaded = (): LocalModelStats => ({ ...base, status: 'yielded', downSince: null, running: 0, waiting: 0 });
+
+  switch (state) {
+    case 'ready':
+      // метрики отвечают, модель активна: статус обычный, дежурство молчит
+      return { ...base, duty: duty(alive('ready')) };
+    case 'yielded': {
+      // уступила по плану: причина — задание ComfyUI (вид опознан, оно с этого сервера)
+      const d = duty({ ...alive('yielded'), reasons: [{ kind: 'comfy', raw: 'a1b2c3d4', jobKind: 'video', known: true }] });
+      d.callsNow = [{ place: 'Классификация задачи', link: 'insurance', durationS: 2.1 }];
+      return { ...unloaded(), duty: d };
+    }
+    case 'starting': {
+      // карта уже свободна, модель грузится: причин нет, «вернётся» ещё не считается
+      const d = duty(alive('starting'));
+      d.callsNow = [{ place: 'Заголовок чата', link: 'insurance', durationS: 0.8 }];
+      return { ...unloaded(), duty: d };
+    }
+    case 'waiting-vram': {
+      // хочет встать, но память держит ComfyUI: причина — его задание, «вернётся» не считается
+      const d = duty({ ...alive('waiting-vram'), reasons: [{ kind: 'comfy', raw: 'e5f6a7b8', jobKind: 'video', known: true }] });
+      d.callsNow = [{ place: 'Сводка хода', link: 'insurance', durationS: 3.9 }];
+      return { ...unloaded(), duty: d };
+    }
+    case 'unknown': {
+      // арбитр ответил, но состояние неизвестно: 'yielded' не ставится — это 'down' (Б3b)
+      return {
+        ...base,
+        status: 'down',
+        downSince: now - 12 * 60_000,
+        running: 0,
+        waiting: 0,
+        duty: duty({ reachable: true, lastSeenAt: now, state: 'unknown', mode: null, quietLeftS: null, sinceAt: null, yields: null, returns: null, lastYieldS: null, lastReturnS: null, reasons: null, leases: null }),
+      };
+    }
+    case 'no-arbiter':
+      // у движка нет StateUrl: arbiter:null, «Дежурство» — «арбитр не подключён»;
+      // без арбитра выгруженная модель выглядит как авария ('down'), как у основной
+      return {
+        ...base,
+        status: 'down',
+        downSince: now - 12 * 60_000,
+        running: 0,
+        waiting: 0,
+        duty: duty(null),
+      };
+  }
 }

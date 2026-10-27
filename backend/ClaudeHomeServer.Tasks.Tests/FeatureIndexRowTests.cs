@@ -792,4 +792,37 @@ public class FeatureIndexRowTests
         Row(epic, [epic]).OrchestratorPersonaId.Should().Be("p-created",
             "пустое звено пропускается — та же проверка, что у ключевого чата");
     }
+
+    // ── TR-B1c: счётчик расхождений трекера ──────────────────────────────────────────────────
+    // Мутация: заменить `run.Tracker.Count` в BuildRow на 0 — тест красный; убрать
+    // `Tracker = run.Tracker` в SlimRun — второй тест красный.
+    [Fact]
+    public void Строка_TrackerIssues_ЧислоРасхожденийИзRun()
+    {
+        const string epicId = "epic-tracker";
+        var epic = Epic(epicId);
+        epic.Status = TaskItemStatus.Done;
+        epic.CompletedAt = DateTime.UtcNow.AddHours(-1);
+        var orphan1 = Child("s1", epicId, status: TaskItemStatus.Todo);
+        var orphan2 = Child("s2", epicId, status: TaskItemStatus.Todo);
+
+        var run = FeatureProjector.Build(epic, [epic, orphan1, orphan2], null, Array.Empty<FeatureIndexSession>());
+        run.Tracker.Should().HaveCount(2).And.OnlyContain(i => i.Kind == FeatureTracker.OrphansInClosed);
+
+        Row(epic, [epic, orphan1, orphan2]).TrackerIssues.Should().Be(2,
+            "индекс берёт число из run, а не пересчитывает");
+        FeatureProjector.SlimRun(run).Tracker.Should().BeEquivalentTo(run.Tracker,
+            "облегчение run расхождения сохраняет");
+    }
+
+    [Fact]
+    public void Строка_TrackerIssues_БезРасхожденийНольИСписокНеNull()
+    {
+        const string epicId = "epic-tracker-clean";
+        var epic = Epic(epicId);
+        var run = FeatureProjector.Build(epic, [epic], null, Array.Empty<FeatureIndexSession>());
+
+        run.Tracker.Should().NotBeNull().And.BeEmpty();
+        Row(epic, [epic]).TrackerIssues.Should().Be(0);
+    }
 }

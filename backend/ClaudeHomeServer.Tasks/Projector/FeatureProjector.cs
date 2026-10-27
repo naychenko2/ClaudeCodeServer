@@ -120,6 +120,9 @@ public sealed class FeatureProjector(TaskManager tasks)
         var accounting = FeatureStepAccounting.Build(steps, verdictTasks, plan, nowUtc, sessions);
         var stepChains = accounting.Chains;
 
+        // TR-B1c: сверка трекера — один вызов на том же проходе, что и учёт шагов.
+        var tracker = FeatureTracker.Build(epic, children, accounting, nowUtc, sessions);
+
         // Возвраты по источникам (ревью/проверка/финал): число возвратов и сколько открыто.
         var returnsBySource = BuildReturnsBySource(reviews, qa, final, steps);
 
@@ -602,6 +605,7 @@ public sealed class FeatureProjector(TaskManager tasks)
             Closed = closed,
             Summary = summary,
             PostMergeTails = postMergeTails,
+            Tracker = tracker,
         };
     }
 
@@ -897,6 +901,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         Closed = run.Closed,
         Summary = run.Summary,
         PostMergeTails = run.PostMergeTails,
+        Tracker = run.Tracker,
     };
 
     // ─── Б2: хелперы и вычислители цепочек/возвратов/линий ─────────────────────────────────
@@ -1630,7 +1635,8 @@ public sealed class FeatureProjector(TaskManager tasks)
             // kind — из той же таблицы и той же функции, что brief.kind (FeatureBrief.KindOf, Б-1.1):
             // своего маппинга здесь нет. Отличие от brief: состояние вне таблицы — null, не исключение
             // (строка индекса не роняет индекс, Б-1.2 к.3).
-            Kind: FeatureBrief.KindByState.ContainsKey(run.State) ? FeatureBrief.KindOf(run) : null);
+            Kind: FeatureBrief.KindByState.ContainsKey(run.State) ? FeatureBrief.KindOf(run) : null,
+            TrackerIssues: run.Tracker.Count);
     }
 
     // Ключевой чат фичи (контракт §1): первое ЖИВОЕ звено цепочки

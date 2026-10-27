@@ -44,11 +44,17 @@ const NEW_TEMPLATES = [
   '/tasks?q=abc', '/tasks?personaId=p1', '/api/tasks?personaId=p1', '/projects/p1/tasks',
   '/api/projects/p1/tasks?x=1', '/tasks/features/f1', '/tasks/features/f1?eventsLimit=50',
   '/api/tasks/features/f1?eventsLimit=50',
+  // sync-класс: осиротел после перехода под префикс владельца
+  '/projects/p1/files?path=', '/projects/p1/files/content?path=a', '/projects/p1/sessions',
+  '/tasks/features/index?projectId=p1',
+  // прочие потребители пассивного кэша
+  '/notifications?limit=50&offset=0', '/ai/caps', '/auth/cache-thresholds', '/tts/diag',
+  '/projects/p1/device-agent/ticket', '/sessions/s1/context',
 ];
-const KEEP = ['tasks:all', 'tasks:outbox:1', '/notes/index', 'chat:continue:s1', '/tasks/features/index?projectId=p1', '/projects/p1'];
+const KEEP = ['tasks:all', 'tasks:outbox:1', 'chat:continue:s1'];
 
 describe('purgeLegacyTaskListCache — новые шаблоны', () => {
-  it('сносит поиск, персону, задачи проекта и страницу фичи; остальное остаётся', async () => {
+  it('сносит поиск, персону, задачи проекта, страницу фичи и осиротевшие голые ключи; остальное остаётся', async () => {
     for (const k of [...NEW_TEMPLATES, ...KEEP]) mocks.store.set(k, entry);
     const { purgeLegacyTaskListCache } = await import('./tasks');
     await purgeLegacyTaskListCache();
@@ -56,23 +62,23 @@ describe('purgeLegacyTaskListCache — новые шаблоны', () => {
     expect(left).toEqual([...KEEP].sort());
   });
 
-  it('при уже стоящем признаке v1 чистка v2 всё равно выполняется', async () => {
-    mocks.store.set('tasks:legacy-cache-purged:v1', { data: true, savedAt: 1 });
+  it('при уже стоящем признаке v2 чистка v3 всё равно выполняется', async () => {
+    mocks.store.set('tasks:legacy-cache-purged:v2', { data: true, savedAt: 1 });
     for (const k of [...NEW_TEMPLATES, ...KEEP]) mocks.store.set(k, entry);
     const { purgeLegacyTaskListCache } = await import('./tasks');
     await purgeLegacyTaskListCache();
     expect(NEW_TEMPLATES.some(k => mocks.store.has(k))).toBe(false);
-    expect(mocks.store.has('tasks:legacy-cache-purged:v2')).toBe(true);
+    expect(mocks.store.has('tasks:legacy-cache-purged:v3')).toBe(true);
   });
 });
 
 describe('purgeLegacyTaskListCache — ключи одиночных задач', () => {
-  it('сносит /tasks/{id} (с /api и query), остальные ключи остаются', async () => {
+  it('сносит /tasks/{id} (с /api и query) и прочие голые URL-ключи; служебные остаются', async () => {
     seed();
     const { purgeLegacyTaskListCache } = await import('./tasks');
     await purgeLegacyTaskListCache();
     const left = [...mocks.store.keys()].filter(k => !k.startsWith('tasks:legacy')).sort();
-    expect(left).toEqual(['/notes/n1', '/projects', '/tasks/ai/classify', 'tasks:all']);
+    expect(left).toEqual(['tasks:all']);
   });
 
   it('разовая: после первого прогона повторные гидрации ключи не разбирают', async () => {

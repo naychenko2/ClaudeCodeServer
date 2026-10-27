@@ -86,6 +86,10 @@ export interface CacheEntry<T = unknown> {
   savedAt: number;
   // Последний доступ — по нему вытесняется пассивный кэш (у старых записей поля нет — берётся savedAt)
   usedAt?: number;
+  // Оценка веса записи (символов текста ответа). Нужна по-чатовому классу, где потолок
+  // по числу записей не ограничивает тяжёлые истории чата (до 2,5 МБ на чат).
+  // У старых записей поля нет — считаем нулём.
+  bytes?: number;
 }
 
 export function idbGet<T = unknown>(key: string): Promise<CacheEntry<T> | undefined> {
@@ -106,10 +110,10 @@ export function idbCountRange(lower: string, upper: string): Promise<number> {
 }
 
 // Метки времени записей диапазона (курсором, без выгрузки значений наружу).
-export function idbRangeStamps(lower: string, upper: string): Promise<{ key: string; savedAt: number; usedAt?: number }[]> {
-  return openDb().then(db => new Promise<{ key: string; savedAt: number; usedAt?: number }[]>((resolve, reject) => {
+export function idbRangeStamps(lower: string, upper: string): Promise<{ key: string; savedAt: number; usedAt?: number; bytes?: number }[]> {
+  return openDb().then(db => new Promise<{ key: string; savedAt: number; usedAt?: number; bytes?: number }[]>((resolve, reject) => {
     const t = db.transaction('meta', 'readonly');
-    const out: { key: string; savedAt: number; usedAt?: number }[] = [];
+    const out: { key: string; savedAt: number; usedAt?: number; bytes?: number }[] = [];
     t.oncomplete = () => resolve(out);
     t.onabort = () => reject(t.error ?? new DOMException('IDB: транзакция прервана', 'AbortError'));
     t.onerror = () => reject(t.error ?? new Error('IDB: ошибка транзакции'));
@@ -118,7 +122,7 @@ export function idbRangeStamps(lower: string, upper: string): Promise<{ key: str
       const c = req.result;
       if (!c) return;
       const v = c.value as Partial<CacheEntry> | undefined;
-      out.push({ key: String(c.key), savedAt: v?.savedAt ?? 0, usedAt: v?.usedAt });
+      out.push({ key: String(c.key), savedAt: v?.savedAt ?? 0, usedAt: v?.usedAt, bytes: v?.bytes });
       c.continue();
     };
     req.onerror = () => reject(req.error);

@@ -74,6 +74,8 @@ describe('request: network-first', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/projects', expect.objectContaining({
       headers: expect.objectContaining({ Authorization: 'Bearer tok' }),
     }));
+    // Запись в кэш идёт в фоне: ответ сети её не ждёт — дожидаемся сами
+    await offline.flushPassiveWrites();
     expect(idbSet).toHaveBeenCalledWith('offline:u1:/projects', expect.objectContaining({ data: { items: [1, 2] } }));
     expect(offline.isOnline()).toBe(true);
   });

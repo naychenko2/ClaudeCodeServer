@@ -25,6 +25,9 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     private static readonly Regex WikiLink = new(@"\[\[([^\[\]]+?)\]\]", RegexOptions.Compiled);
     // Inline-тег #тег (не заголовок «# » — требуется хотя бы один символ сразу за #)
     private static readonly Regex InlineTag = new(@"(?<=^|\s)#([\p{L}\p{N}_][\p{L}\p{N}_/-]*)", RegexOptions.Compiled);
+    // Inline-код `…` (без бэктика и перевода строки внутри): как и ```-заборы, «глушит»
+    // ссылки/теги внутри — пример синтаксиса в коде не связь и не тег (Obsidian)
+    private static readonly Regex InlineCode = new(@"`[^`\n]+`", RegexOptions.Compiled);
 
     // Кэш построенной модели per-owner: сканирование всех файлов дорого, а за один
     // ход UI дёргает список/деталь/граф подряд. TTL короткий — внешние правки (Obsidian)
@@ -122,10 +125,17 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
                 if (rel.StartsWith("templates/", StringComparison.OrdinalIgnoreCase)) continue;
                 var fm = ParseFrontmatter(text, Path.GetFileNameWithoutExtension(full));
                 var tags = fm.Tags;
-                // Inline-теги #тег из тела + теги из frontmatter (без дублей)
-                foreach (var it in InlineTag.Matches(text).Select(m => m.Groups[1].Value))
+                // Inline-теги #тег из тела + теги из frontmatter (без дублей).
+                // Тег в коде (`#x` в `…`/```-блоке) и чисто числовой (#807) — не тег.
+                var mask = CodeMask(text);
+                foreach (Match m in InlineTag.Matches(text))
+                {
+                    if (InCode(mask, m.Index)) continue;
+                    var it = m.Groups[1].Value;
+                    if (it.All(char.IsDigit)) continue;
                     if (!tags.Contains(it, StringComparer.OrdinalIgnoreCase)) tags.Add(it);
-                var links = ParseLinks(text);
+                }
+                var links = ParseLinks(text, mask);
                 // Привязка к файлу проекта: у личного vault поля нет (ProjectRoot null),
                 // у проектной проверяем существование файла (аналог docMissing у комментариев).
                 // SafeJoinPublic отсекает traversal — мусорный путь считается отсутствующим.
@@ -260,11 +270,39 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         return new NoteAnnotationInfo(scope, path, st, blockId, quote, heading);
     }
 
-    private static List<(string, string)> ParseLinks(string text)
+    // Маска «вне кода»: true — позиция i внутри кода. Код = ```-забор (CommonMark,
+    // через MarkdownFence — та же ограда, что у Docs) + inline-код `…`. Ссылка/тег/
+    // упоминание в коде не считаются (Obsidian): иначе примеры синтаксиса дают «призраки»
+    // графа и ложные теги, а переименование переписывает [[…]] внутри кода.
+    internal static bool[] CodeMask(string text)
+    {
+        var mask = new bool[text.Length];
+        var fence = new MarkdownFence();
+        var offset = 0;
+        foreach (var raw in text.Split('\n'))
+        {
+            var line = raw.TrimEnd('\r');
+            if (fence.Consume(line) || fence.InFence)
+                for (var i = 0; i < raw.Length && offset + i < mask.Length; i++)
+                    mask[offset + i] = true;
+            offset += raw.Length + 1;   // +1 — на '\n', на котором резали
+        }
+        foreach (Match m in InlineCode.Matches(text))
+            for (var i = m.Index; i < m.Index + m.Length && i < mask.Length; i++)
+                mask[i] = true;
+        return mask;
+    }
+
+    // Позиция совпадения внутри кода (по маске); вне диапазона — не код.
+    internal static bool InCode(bool[] mask, int index) =>
+        index >= 0 && index < mask.Length && mask[index];
+
+    private static List<(string, string)> ParseLinks(string text, bool[] mask)
     {
         var result = new List<(string, string)>();
         foreach (Match m in WikiLink.Matches(text))
         {
+            if (InCode(mask, m.Index)) continue;
             var inner = m.Groups[1].Value;
             // Отрезаем подпись [[Target|подпись]] и якорь [[Target#heading]]
             var target = inner.Split('|')[0].Split('#')[0].Trim();
@@ -376,12 +414,13 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         {
             var linked = new HashSet<string>(outLinks[n.Id].Where(l => l.Resolved).Select(l => l.TargetId));
             var lower = n.Content.ToLowerInvariant();
+            var mask = CodeMask(lower);
             foreach (var m in notes)
             {
                 if (m.Id == n.Id || linked.Contains(m.Id)) continue;
                 var t = Norm(m.Title);
                 if (t.Length < 3) continue;
-                var at = FindWord(lower, t);
+                var at = FindWord(lower, t, mask);
                 if (at < 0) continue;
                 if (!unlinked.TryGetValue(n.Id, out var lst)) unlinked[n.Id] = lst = new();
                 lst.Add(new NoteBacklinkDto(m.Id, m.Title, m.SourceKey, m.SourceLabel, SnippetAround(n.Content, at)));
@@ -401,14 +440,16 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         };
     }
 
-    // Индекс вхождения needle как отдельного слова (границы — не буквы/цифры), иначе -1
-    private static int FindWord(string haystack, string needle)
+    // Индекс вхождения needle как отдельного слова (границы — не буквы/цифры), иначе -1.
+    // Вхождения внутри кода (по маске) не считаются упоминанием.
+    private static int FindWord(string haystack, string needle, bool[] mask)
     {
         var from = 0;
         while (true)
         {
             var i = haystack.IndexOf(needle, from, StringComparison.Ordinal);
             if (i < 0) return -1;
+            if (InCode(mask, i)) { from = i + 1; continue; }
             var before = i == 0 || !char.IsLetterOrDigit(haystack[i - 1]);
             var afterIdx = i + needle.Length;
             var after = afterIdx >= haystack.Length || !char.IsLetterOrDigit(haystack[afterIdx]);
@@ -746,7 +787,8 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         if (!model.ById.TryGetValue(id, out var note)) return null;
 
         var content = File.ReadAllText(note.FullPath, Encoding.UTF8);
-        var at = FindWord(content.ToLowerInvariant(), Norm(targetTitle));
+        var lower = content.ToLowerInvariant();
+        var at = FindWord(lower, Norm(targetTitle), CodeMask(lower));
         if (at < 0) return GetDetail(userId, id);   // упоминание уже исчезло — не ошибка
 
         var original = content.Substring(at, targetTitle.Length);
@@ -984,12 +1026,15 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     }
 
     // Заменяет [[Старый]] / [[Старый|подпись]] / [[Старый#якорь]] / [[Папка/Старый]]
-    // на [[Новый…]] с сохранением подписи и якоря; не-совпадающие ссылки не трогает.
+    // на [[Новый…]] с сохранением подписи и якоря; не-совпадающие ссылки и ссылки
+    // внутри кода (`…`/```-блока) не трогает.
     private static string RewriteLinks(string content, string oldTitle, string newTitle)
     {
         var oldNorm = Norm(oldTitle);
+        var mask = CodeMask(content);
         return WikiLink.Replace(content, m =>
         {
+            if (InCode(mask, m.Index)) return m.Value;
             var inner = m.Groups[1].Value;
             var cut = inner.Length;
             var pipe = inner.IndexOf('|'); if (pipe >= 0) cut = Math.Min(cut, pipe);
@@ -1067,12 +1112,16 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
             try
             {
                 var content = File.ReadAllText(srcNote.FullPath, Encoding.UTF8);
-                // Заменяем [[TargetTitle]] → TargetTitle, [[TargetTitle|alias]] → alias
+                var mask = CodeMask(content);
+                // Заменяем [[TargetTitle]] → TargetTitle, [[TargetTitle|alias]] → alias;
+                // ссылки в коде (`…`/```-блок) не трогаем
                 var updated = Regex.Replace(content,
                     @"\[\[" + Regex.Escape(targetTitle) + @"(\|[^\[\]]*?)?\]\]",
-                    m => m.Groups[1].Success
-                        ? m.Groups[1].Value.TrimStart('|')
-                        : targetTitle,
+                    m => InCode(mask, m.Index)
+                        ? m.Value
+                        : m.Groups[1].Success
+                            ? m.Groups[1].Value.TrimStart('|')
+                            : targetTitle,
                     RegexOptions.IgnoreCase);
                 File.WriteAllText(srcNote.FullPath, updated, new UTF8Encoding(false));
             }

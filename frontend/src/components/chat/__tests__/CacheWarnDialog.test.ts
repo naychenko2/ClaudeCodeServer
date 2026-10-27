@@ -18,6 +18,8 @@ let mockRequest: (url: string, opts?: { method?: string; body?: string }) => Pro
 vi.mock('../../../lib/offline', () => ({
   __esModule: true,
   request: (url: string, opts?: { method?: string; body?: string }) => mockRequest(url, opts),
+  onPassiveEvict: () => () => {},
+  parseFileContentCacheKey: () => null,
 }));
 
 import {

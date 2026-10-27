@@ -587,6 +587,14 @@ function gq(projectId: string, sep: '?' | '&' = '?'): string {
   return gitSessionCtx?.projectId === projectId ? `${sep}sessionId=${gitSessionCtx.sessionId}` : '';
 }
 
+// По-чатовой класс кэша для git-запросов проекта: ответ с ?sessionId= — это ответ про
+// дерево конкретного чата, без sessionId — про корень проекта (общий класс).
+// Ключ без чата в URL не должен множить по-чатовые записи (панель «Изменения»
+// открывается в дереве чата, и там ключ иначе был бы новым на каждый чат).
+function gitChatScope(projectId: string): string | undefined {
+  return gitSessionCtx?.projectId === projectId ? gitSessionCtx.sessionId : undefined;
+}
+
 // Перезапись cc_token после смены пароля: старый токен сервер отозвал, а хранилище
 // выбирает не вызывающий — токен пишется туда, откуда его читает readStoredToken.
 export function setStoredToken(token: string) {
@@ -921,7 +929,9 @@ export const api = {
     taskPrompt: (taskId: string) =>
       request<SpendTaskPromptResponse>(`/spend/tasks/${encodeURIComponent(taskId)}/prompt`),
     widget: () => request<SpendWidgetResponse>('/spend/widget'),
-    badge: (sessionId: string) => request<SpendBadgeResponse>(`/spend/sessions/${encodeURIComponent(sessionId)}/badge`),
+    // Суммарные токены за жизнь чата: значение устойчивое (не счётчик «сейчас»), поэтому
+    // в офлайне показываем последнее известное — по-чатовой класс кэша.
+    badge: (sessionId: string) => request<SpendBadgeResponse>(`/spend/sessions/${encodeURIComponent(sessionId)}/badge`, { chatScope: sessionId }),
   },
 
   // Исполнитель фоновых действий — правит только админ (настройка серверная, общая для всех).
@@ -957,8 +967,10 @@ export const api = {
     hardware: (window: '1m' | '5m' | '15m' | '1h' = '15m') =>
       request<import('../features/localModel/hardwareTypes').HardwareReport>(`/local-model/hardware?window=${window}`),
     // GET /api/sessions/{id}/local-model: lastTurn — null, если ходов не было
+    // Статистика последнего хода — по-чатовой класс: в офлайне она полезна («где шёл ход»),
+    // а весит меньше сотни байт.
     lastTurn: (sessionId: string) =>
-      request<LocalModelTurnResponse>(`/sessions/${encodeURIComponent(sessionId)}/local-model`),
+      request<LocalModelTurnResponse>(`/sessions/${encodeURIComponent(sessionId)}/local-model`, { chatScope: sessionId }),
     // GET /api/local-model/stats/media?since=<unix ms>: вкладка «Медиа» (ComfyUI).
     // since — unix-мс, фильтрует lastHour (только завершённые новее момента).
     media: (since?: number) => {
@@ -2347,14 +2359,16 @@ export const api = {
         body: JSON.stringify(entries),
       }); return api.sessions.getContext(projectId, sessionId); },
     getHistory: (projectId: string, sessionId: string) =>
-      request<unknown[]>(`/projects/${projectId}/sessions/${sessionId}/history`),
+      request<unknown[]>(`/projects/${projectId}/sessions/${sessionId}/history`, { chatScope: sessionId }),
     // Докачка хвоста истории по курсору сервера (см. lib/historyTail). after=-1 — первая
     // загрузка (полная история + якорь), её можно кэшировать офлайн; настоящий курсор — live:
-    // хвост в офлайн-кэше был бы мусором (подстановка куска вместо ленты)
+    // хвост в офлайн-кэше был бы мусором (подстановка куска вместо ленты).
+    // Полная история — по-чатовой класс кэша: она тяжёлая (до 2,5 МБ на чат), и без своего
+    // потолка по-чатовые записи съедали бы общий бюджет кэша и росли вместе с числом чатов.
     getHistoryTail: (projectId: string, sessionId: string, q: HistoryCursorQuery) =>
       request<HistoryReply>(
         `/projects/${projectId}/sessions/${sessionId}/history?${historyCursorParams(q)}`,
-        { live: q.after >= 0 }),
+        { live: q.after >= 0, chatScope: q.after < 0 ? sessionId : undefined }),
     // «Итог сессии»: конспект сессии заметкой (флаг notes-session-summary).
     // Маршрут по id сессии — работает и для проектных сессий, и для чатов
     summary: (sessionId: string) =>
@@ -2426,7 +2440,7 @@ export const api = {
     // команды Bash. Снимок нужен потому, что событие bg_agents_presence приходит только на
     // смене состояния — открывший список позже старта иначе о нём не узнает
     agentsPresence: () => request<{ agents: string[]; commands: string[] }>('/chats/agents-presence'),
-    get: (id: string) => request<Session>(`/chats/${id}`),
+    get: (id: string) => request<Session>(`/chats/${id}`, { chatScope: id }),
     create: (mode?: string, resumeSessionId?: string, name?: string, model?: string, effort?: string) =>
       request<Session>('/chats', {
         method: 'POST',
@@ -2600,10 +2614,11 @@ export const api = {
       request<Session>(`/chats/${id}/window-1m/drop`, { method: 'POST' }),
     delete: (id: string) => request<void>(`/chats/${id}`, { method: 'DELETE' })
       .then(r => { forgetChatContextSession(id); return r; }),
-    getHistory: (id: string) => request<unknown[]>(`/chats/${id}/history`),
+    getHistory: (id: string) => request<unknown[]>(`/chats/${id}/history`, { chatScope: id }),
     // То же, что api.sessions.getHistoryTail, для чата вне проекта
     getHistoryTail: (id: string, q: HistoryCursorQuery) =>
-      request<HistoryReply>(`/chats/${id}/history?${historyCursorParams(q)}`, { live: q.after >= 0 }),
+      request<HistoryReply>(`/chats/${id}/history?${historyCursorParams(q)}`,
+        { live: q.after >= 0, chatScope: q.after < 0 ? id : undefined }),
     // Вложение локального проекта ложится на машину проекта через агента: сервер на свой
     // маршрут для него отвечает отказом G1
     uploadFile: async (id: string, file: File, projectId?: string): Promise<{ path: string }> => {
@@ -2949,14 +2964,16 @@ export const api = {
     // ?sessionId= (gq): активный worktree-чат переводит запросы в своё дерево — суффикс
     // добавляется ко всем операциям, достижимым из git-бара и панели «Изменения»
     status: (projectId: string) =>
-      projectRequest<GitStatus>(`/projects/${projectId}/git/status${gq(projectId)}`),
+      projectRequest<GitStatus>(`/projects/${projectId}/git/status${gq(projectId)}`, { chatScope: gitChatScope(projectId) }),
     diff: (projectId: string, path: string, staged = false) =>
       projectRequest<{ diff: string | null }>(`/projects/${projectId}/git/diff?path=${encodeURIComponent(path)}&staged=${staged}${gq(projectId, '&')}`),
     log: (projectId: string, limit = 100, branch?: string) =>
-      projectRequest<GitLogEntry[]>(`/projects/${projectId}/git/log?limit=${limit}${branch ? `&branch=${encodeURIComponent(branch)}` : ''}${gq(projectId, '&')}`),
-    // Незапушенные коммиты (впереди upstream) — стек скоупов панели «Изменения»
+      projectRequest<GitLogEntry[]>(`/projects/${projectId}/git/log?limit=${limit}${branch ? `&branch=${encodeURIComponent(branch)}` : ''}${gq(projectId, '&')}`, { chatScope: gitChatScope(projectId) }),
+    // Незапушенные коммиты (впереди upstream) — стек скоупов панели «Изменения».
+    // live: ответ не кэшируется вовсе: это самый тяжёлый по-чатовой класс (до 29 КБ на
+    // чат, ключ с sessionId), а в офлайне он бесполезен — пушить без сети нельзя.
     unpushed: (projectId: string, limit = 100) =>
-      projectRequest<GitLogEntry[]>(`/projects/${projectId}/git/unpushed?limit=${limit}${gq(projectId, '&')}`),
+      projectRequest<GitLogEntry[]>(`/projects/${projectId}/git/unpushed?limit=${limit}${gq(projectId, '&')}`, { live: true }),
     // Настройка промпта AI-описания коммита: чтение (global/projectOverride/effective/default)
     getCommitPrompt: (projectId: string) =>
       projectRequest<GitCommitPromptInfo>(`/projects/${projectId}/git/commit-prompt`),

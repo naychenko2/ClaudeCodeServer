@@ -4,6 +4,7 @@ import type { Project, ProjectSubject, ProjectTag, Session } from '../types';
 import type { FeatureIndexFeature } from '../types/featureIndex';
 import { api } from '../lib/api';
 import { idbGet } from '../lib/idb';
+import { passiveCacheKey } from '../lib/offline';
 import { forgetChatContextOnDeleted } from '../lib/chatContext/forget';
 import { archiveApi, saveArchiveSessionAsNote } from '../api/chats';
 import { chatNeighborForArchive } from '../lib/chatUpdate';
@@ -433,7 +434,13 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     // Прошлый ответ из офлайн-кэша рисуем сразу, не дожидаясь сервера: иначе при входе в
     // проект список стоял с одним открытым чатом, пока свежий ответ ехал по сети. Свежий
     // список заменяет кэш целиком; empty-состояния и автовыбор ждут именно его (loaded)
-    idbGet<Session[]>(`/projects/${project.id}/sessions`).then(cached => {
+    // Ключ кэша — общий с пассивным кэшем request(): offline:<owner>:<url>.
+    // Без владельца кэша нет — читать нечего.
+    const cacheKey = passiveCacheKey(`/projects/${project.id}/sessions`);
+    const cachedPromise = cacheKey === null
+      ? Promise.resolve(undefined)
+      : idbGet<Session[]>(cacheKey).catch(() => undefined);
+    cachedPromise.then(cached => {
       if (cancelled || freshArrived || !Array.isArray(cached?.data)) return;
       const fromCache = cached.data;
       // Чат, подложенный до кэша (открытый, в т.ч. только что созданный), не теряем

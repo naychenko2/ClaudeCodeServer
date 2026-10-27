@@ -72,6 +72,15 @@ describe('persistTasks — снапшот не чаще раза в окно', (
     expect(snapshotWrites()).toHaveLength(1);
   });
 
+  it('pagehide при отложенной записи: ровно один idbSet сразу', () => {
+    m.upsertTaskLocal(task('a'));
+    expect(snapshotWrites()).toHaveLength(0);
+    win.dispatchEvent(new Event('pagehide'));
+    expect(snapshotWrites()).toHaveLength(1);
+    vi.advanceTimersByTime(10_000);
+    expect(snapshotWrites()).toHaveLength(1);
+  });
+
   it('pagehide без отложенной записи ничего не пишет', () => {
     win.dispatchEvent(new Event('pagehide'));
     expect(snapshotWrites()).toHaveLength(0);

@@ -12,8 +12,9 @@ namespace ClaudeHomeServer.Tasks.Tests;
 //   • гейт журнала снят → тест «гейты» красный;
 //   • склейка снова копирует накопленные ходы (O(n²), дефект 4692d4cd) → тест «Замер» красный.
 //
-// Коллекция без параллелизации: тайминг-гейт «Замер» меряет отношение времени сборки
-// 18k/4.5k ходов и на параллельной нагрузке уезжает за порог нелинейности
+// Коллекция без параллелизации: в классе есть абсолютный замер времени (страховка от
+// грубой деградации) — он не должен мериться на общей нагрузке сборки. Относительный гейт
+// линейности меряет объём работы (аллокации), а не время, поэтому от нагрузки не зависит
 // (тот же приём, что FeatureSlimRunContractTests).
 [CollectionDefinition("FeatureStageIntervalsSerial", DisableParallelization = true)]
 public class FeatureStageIntervalsSerialCollection;
@@ -302,6 +303,16 @@ public class FeatureStageIntervalsTests
         return best;
     }
 
+    // Объём работы Build — по счётчику аллокаций текущего потока: значение ДЕТЕРМИНИРОВАННОЕ
+    // (в отличие от времени, оно не зависит ни от пауз GC, ни от загрузки машины). Именно на
+    // аллокациях видна прежняя O(n²) склейка (копирование накопленного списка ходов).
+    private static long AllocBytes(FeatureRun run, FeatureJournalReadResult journal, DateTime now)
+    {
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        FeatureStageIntervals.Build(run, journal, now);
+        return GC.GetAllocatedBytesForCurrentThread() - before;
+    }
+
     [Fact]
     public void Build_Замер_18kХодов_Линейный()
     {
@@ -314,20 +325,39 @@ public class FeatureStageIntervalsTests
         // Прогревка JIT и первых аллокаций — один прогон на большом журнале без замера.
         FeatureStageIntervals.Build(run, ScaledTurnsJournal(18000), now);
 
-        var ms5k = MinBuildMs(run, ScaledTurnsJournal(4500), now, 3);
         var ms18k = MinBuildMs(run, ScaledTurnsJournal(18000), now, 3);
 
         // Sanity: все ходы реально прошли через склейку, а не были потеряны.
         var stages = FeatureStageIntervals.Build(run, ScaledTurnsJournal(18000), now)!;
         stages["prod"].Sum(iv => iv.Turns.Count).Should().Be(18000);
 
-        // Абсолютная страховка: старая O(n²) на 18k ходов давала ~18 с и в порог не влезает.
+        // Абсолютная страховка по времени: старая O(n²) на 18k ходов давала ~18 с и в порог
+        // не влезает. Запас большой: реально склейка занимает единицы мс даже под нагрузкой
+        // машины (замер: 6–13 мс, под перегрузкой CPU — до 74 мс), поэтому красный здесь —
+        // настоящая деградация, а не шум замера.
         ms18k.Should().BeLessThan(3000.0,
             $"склейка на 18k ходов должна быть в сотнях мс, а не {ms18k:F0} мс");
 
+        // Гейт линейности — по объёму работы (аллокациям), а НЕ по времени. Счётчик
+        // GC.GetAllocatedBytesForCurrentThread детерминирован, а вот отношение wall-clock на
+        // окнах в единицы миллисекунд от скорости машины зависит, причём нелинейно: длинное
+        // окно (18k) страдает от превенции планировщика и от пауз GC сильнее короткого (4.5k) —
+        // на загруженной машине отношение уезжает за порог на НЕИЗМЕНЁННОМ коде (замер:
+        // 18k — 74 мс, 4.5k — 3 мс → 26× при норме ~4×; на единичных прогонах 3,4–4,6×).
+        // Прежняя O(n²) склейка видна и по аллокациям: ~1,3 ГБ на 18k ходов против ~3,3 МБ
+        // у линейной.
+        var alloc5k = AllocBytes(run, ScaledTurnsJournal(4500), now);
+        var alloc18k = AllocBytes(run, ScaledTurnsJournal(18000), now);
+
+        // Потолок на ход: линейная склейка — ~190 Б на ход; 1 КиБ на ход — пятикратный запас,
+        // прежняя O(n²) (десятки ГБ) в него не влезает.
+        alloc18k.Should().BeLessThan(18_000L * 1024,
+            $"на 18k ходов линейная склейка — единицы МБ, а не {alloc18k} Б");
+
         // Относительный гейт линейности: линейный алгоритм даёт ~×4 (число ходов),
-        // O(n²) — ×16; порог 6× (тот же, что у FeatureTimelineJournalTests).
-        (ms18k / ms5k).Should().BeLessOrEqualTo(6.0,
-            $"нелинейный рост: 18k — {ms18k:F0} мс, 4.5k — {ms5k:F0} мс (отношение {(ms18k / ms5k):F1}×)");
+        // O(n²) — ×16; порог 6× (тот же, что был, и что у FeatureTimelineJournalTests).
+        (alloc18k / (double)alloc5k).Should().BeLessOrEqualTo(6.0,
+            $"нелинейный рост работы: 18k — {alloc18k} Б, 4.5k — {alloc5k} Б " +
+            $"(отношение {alloc18k / (double)alloc5k:F1}×)");
     }
 }

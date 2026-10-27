@@ -780,10 +780,12 @@ public class FeatureTimelineJournalTests
     // Абсолютный порог (3 с) был поднят с 1.5 с после одного падения на нагруженной машине
     // (замечание 6 ревью Глеба, Б-pr2-д2). На общей машине он хрупок: весь тест укладывается
     // в ~187 мс (запас ≈16×), а старый O(n²) (~4.5 с) превышает его лишь в 1.5× — регрессия
-    // до ×15 не была бы замечена. Поэтому рядом с порогом — относительный гейт, не
-    // зависящий от скорости машины: время на 20k записей не больше 6× времени на 5k.
-    // Линейный алгоритм даёт ×4 (число записей), O(n²) — ×16. Прогревка (JIT) перед замером,
-    // минимум нескольких прогонов — одиночный замер шумен.
+    // до ×15 не была бы замечена. Поэтому рядом с порогом — относительный гейт, который
+    // действительно не зависит от скорости машины: ОБЪЁМ РАБОТЫ на 20k записей не больше 6×
+    // объёма на 5k (счётчик аллокаций, а не время — время на окнах в единицы миллисекунд
+    // от нагрузки машины зависит: под перегрузкой CPU гейт краснел на неизменённом коде,
+    // 20k — 385 мс, 5k — 47 мс → 8,2×). Линейный алгоритм даёт ×4 (число записей), O(n²) — ×16.
+    // Прогревка (JIT) перед замером, минимум нескольких прогонов — одиночный замер шумен.
     private static FeatureJournalReadResult ScaledJournal(int turns, int waits, int startedPairs)
     {
         var entries = new List<FeatureJournalEntry>();
@@ -834,6 +836,15 @@ public class FeatureTimelineJournalTests
         return best;
     }
 
+    // Объём работы Build — по счётчику аллокаций текущего потока: значение ДЕТЕРМИНИРОВАННОЕ
+    // (в отличие от времени, оно не зависит ни от пауз GC, ни от загрузки машины).
+    private static long AllocBytes(FeatureRun run, FeatureJournalReadResult journal, DateTime now)
+    {
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        FeatureTimeline.Build(run, journal, now);
+        return GC.GetAllocatedBytesForCurrentThread() - before;
+    }
+
     [Fact]
     public void Build_Замер_20kЗаписей_Быстрый()
     {
@@ -846,7 +857,6 @@ public class FeatureTimelineJournalTests
         // Прогревка JIT и первых аллокаций — один прогон на большом журнале без замера.
         FeatureTimeline.Build(run, ScaledJournal(18000, 1000, 20), now);
 
-        var ms5k = MinBuildMs(run, ScaledJournal(4500, 250, 5), now, 3);
         var ms20k = MinBuildMs(run, ScaledJournal(18000, 1000, 20), now, 3);
 
         // Sanity: лента реально строится и итоги заполнены.
@@ -857,9 +867,23 @@ public class FeatureTimelineJournalTests
         ms20k.Should().BeLessThan(3000.0,
             $"sweep на 20k записей должен быть в сотнях мс, а не {ms20k:F0} мс");
 
+        // Гейт линейности — по объёму работы (аллокациям), а НЕ по времени: счётчик
+        // GC.GetAllocatedBytesForCurrentThread детерминирован, а отношение wall-clock на
+        // окнах в единицы миллисекунд от скорости машины зависит нелинейно (длинное окно
+        // 20k страдает от превенции и пауз GC сильнее короткого 5k) — на загруженной машине
+        // гейт краснел на неизменённом коде (20k — 385 мс, 5k — 47 мс → 8,2×).
+        var alloc5k = AllocBytes(run, ScaledJournal(4500, 250, 5), now);
+        var alloc20k = AllocBytes(run, ScaledJournal(18000, 1000, 20), now);
+
+        // Потолок на запись журнала: линейный sweep — ~810 Б на запись; 4 КиБ на запись —
+        // пятикратный запас, прежняя O(n²) (единицы ГБ) в него не влезает.
+        alloc20k.Should().BeLessThan(20_000L * 4096,
+            $"sweep на 20k записей — единицы МБ, а не {alloc20k} Б");
+
         // Относительный гейт линейности: линейный алгоритм даёт ×4, O(n²) — ×16; порог 6×.
-        (ms20k / ms5k).Should().BeLessOrEqualTo(6.0,
-            $"нелинейный рост: 20k — {ms20k:F0} мс, 5k — {ms5k:F0} мс (отношение {(ms20k / ms5k):F1}×)");
+        (alloc20k / (double)alloc5k).Should().BeLessOrEqualTo(6.0,
+            $"нелинейный рост работы: 20k — {alloc20k} Б, 5k — {alloc5k} Б " +
+            $"(отношение {alloc20k / (double)alloc5k:F1}×)");
     }
 
     // ── 11. (а) 600 ходов + ожидание 60 мин (> 500 сегментов): итоги не обнуляются (major 1) ──

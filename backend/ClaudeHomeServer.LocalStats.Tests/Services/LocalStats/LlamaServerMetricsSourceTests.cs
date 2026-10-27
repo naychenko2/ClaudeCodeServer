@@ -57,6 +57,8 @@ public class LlamaServerMetricsSourceTests
         // Доля кэша: hits = cached (0), queries = prompt + cached = 4220 + 0.
         snapshot.PrefixCacheHits.Should().Be(0L);
         snapshot.PrefixCacheQueries.Should().Be(4220L);
+        // Новые KV-токены prefill = prompt_tokens_total (токены без кэшированных).
+        snapshot.PrefillKvComputedTokens.Should().Be(4220d);
 
         // «Токенов на шаг» из llama-счётчиков нет: n_decode_total считает и батчи промпта.
         snapshot.InterTokenLatencyCount.Should().BeNull();
@@ -73,9 +75,10 @@ public class LlamaServerMetricsSourceTests
 
         snapshot!.Unsupported.Should().BeEquivalentTo(
             "KvUsagePerc", "RamTierPerc", "RamTierHits", "RamTierQueries",
-            "Preemptions", "QueueTimeSum", "PrefillKvComputedTokens", "DecodeTimeSum");
+            "Preemptions", "QueueTimeSum", "DecodeTimeSum", "InterTokenLatencyCount");
 
         // Поля, которые фикстура наполняет, в Unsupported не попадают.
+        snapshot.Unsupported.Should().NotContain("PrefillKvComputedTokens");
         snapshot.Unsupported.Should().NotContain("Running");
         snapshot.Unsupported.Should().NotContain("GenerationTokens");
     }
@@ -124,6 +127,33 @@ public class LlamaServerMetricsSourceTests
         snapshot.PrefixCacheQueries.Should().BeNull();
         snapshot.Unsupported.Should().Contain("PrefixCacheHits");
         snapshot.Unsupported.Should().Contain("PrefixCacheQueries");
+    }
+
+    // Недоверенный ответ: NaN, ±Inf и 1e400 (парсер даёт +Inf) не превращаются в мусорное
+    // целое, а дают null; соседняя нормальная метрика не страдает.
+    [Theory]
+    [InlineData("NaN")]
+    [InlineData("+Inf")]
+    [InlineData("-Inf")]
+    [InlineData("1e400")]
+    [InlineData("1e30")]
+    public async Task ReadAsync_NonFiniteOrHugeValues_GiveNull(string raw)
+    {
+        var text = $"llamacpp:requests_processing {raw}\n" +
+                   $"llamacpp:tokens_predicted_total {raw}\n" +
+                   $"llamacpp:prompt_tokens_total {raw}\n" +
+                   "llamacpp:requests_deferred 2\n";
+        var snapshot = await SourceOf(text).ReadAsync();
+        snapshot.Should().NotBeNull();
+
+        snapshot!.Running.Should().BeNull();
+        snapshot.GenerationTokens.Should().BeNull();
+        snapshot.PromptTokens.Should().BeNull();
+        // PrefillKvComputedTokens — double: конечные огромные значения (1e30) валидны,
+        // отсекаются только NaN/±Inf.
+        if (raw != "1e30")
+            snapshot.PrefillKvComputedTokens.Should().BeNull();
+        snapshot.Waiting.Should().Be(2);
     }
 
     // Стенд не отвечает (выгружен арбитром) — null, как у vLLM-адаптера: дорожка ставит down.

@@ -86,8 +86,9 @@ public sealed class LlamaServerMetricsSource : IEngineMetricsSource
         nameof(EngineSnapshot.RamTierQueries),
         nameof(EngineSnapshot.Preemptions),
         nameof(EngineSnapshot.QueueTimeSum),
-        nameof(EngineSnapshot.PrefillKvComputedTokens),
         nameof(EngineSnapshot.DecodeTimeSum),
+        // Знаменатель «токенов на шаг» из llama-счётчиков не получить (см. BuildSnapshot).
+        nameof(EngineSnapshot.InterTokenLatencyCount),
     ];
 
     private static EngineSnapshot BuildSnapshot(PrometheusSeries series)
@@ -148,6 +149,10 @@ public sealed class LlamaServerMetricsSource : IEngineMetricsSource
             // только шаги генерации, поэтому знаменатель остаётся null (разрез v2, §2).
             InterTokenLatencyCount = null,
             PrefillTimeSum = promptSeconds,
+            // Расхождение с §2 (решение Софьи): prompt_tokens_total по HELP метрики — токены
+            // без кэшированных, то есть ровно «новые KV-токены, вычисленные в prefill».
+            // Без этого маппинга чтение промпта у Bonsai было бы мёртвым.
+            PrefillKvComputedTokens = Finite(prompt),
             Unsupported = unsupported,
         };
     }
@@ -155,6 +160,14 @@ public sealed class LlamaServerMetricsSource : IEngineMetricsSource
     // Прочее из /metrics llama-server в снимок не берётся: n_tokens_max, n_decode_total,
     // spec_decode_* и gauge средних скоростей (prompt_tokens_seconds, predicted_tokens_seconds,
     // n_busy_slots_per_decode) — это средние с запуска движка, а не за окно наблюдения.
-    private static int? ToInt(double? v) => v is null ? null : (int)v!.Value;
-    private static long? ToLong(double? v) => v is null ? null : (long)v!.Value;
+    // Ответ движка недоверенный: NaN, ±Inf и значения вне диапазона целого дают null,
+    // а не мусор от неопределённого приведения double → int/long.
+    private static double? Finite(double? v) => v is { } x && double.IsFinite(x) ? x : null;
+
+    private static int? ToInt(double? v) =>
+        Finite(v) is { } x && x >= int.MinValue && x <= int.MaxValue ? (int)x : null;
+
+    // 9.2233720368547758E+18 (2^63) — первое double за пределом long, поэтому строго «<».
+    private static long? ToLong(double? v) =>
+        Finite(v) is { } x && x >= long.MinValue && x < 9.2233720368547758E+18 ? (long)x : null;
 }

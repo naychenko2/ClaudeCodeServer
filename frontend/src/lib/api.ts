@@ -1772,13 +1772,14 @@ export const api = {
       // live: список живёт одним экземпляром в сторе (tasks:all), пассивный GET-кэш его не дублирует
       return request<Task[]>(`/tasks${q ? `?${q}` : ''}`, { live: true });
     },
-    listByProject: (projectId: string) => request<Task[]>(`/projects/${projectId}/tasks`),
+    listByProject: (projectId: string) => request<Task[]>(`/projects/${projectId}/tasks`, { live: true }),
     // Поиск по названию/описанию/меткам на сервере (по ПОЛНОМУ описанию, которого нет
     // в облегчённом списке); элементы ответа — облегчённые, нужны id совпавших
-    search: (q: string) => request<Task[]>(`/tasks?q=${encodeURIComponent(q)}`),
+    // live: ключ кэша зависит от текста запроса — без live каждый ввод оставлял бы новую запись в IndexedDB
+    search: (q: string) => request<Task[]>(`/tasks?q=${encodeURIComponent(q)}`, { live: true }),
     // Задачи, порученные персоне-исполнителю (assignee=claude + personaId)
     listByPersona: (personaId: string) =>
-      request<Task[]>(`/tasks?personaId=${encodeURIComponent(personaId)}`),
+      request<Task[]>(`/tasks?personaId=${encodeURIComponent(personaId)}`, { live: true }),
     // Агрегаты фич чата (режим «Исполнение фичи»): готовые `FeatureRun` из бэка.
     // sessionId — id сессии-чата; без него — все фичи владельца.
     getFeatures: (sessionId?: string) =>
@@ -1796,7 +1797,7 @@ export const api = {
     getFeature: (fid: string, eventsLimit?: string, signal?: AbortSignal) =>
       request<FeaturePage>(
         `/tasks/features/${encodeURIComponent(fid)}${eventsLimit ? `?eventsLimit=${encodeURIComponent(eventsLimit)}` : ''}`,
-        signal ? { signal } : undefined,
+        signal ? { signal, live: true } : { live: true },
       ),
     // Резюме фичи моделью (W5-F2, «Точка 6 · резюме»): POST summary[?force=true].
     // force=false — берётся кэш бэка, если есть; force=true — новый прогон. 200 —

@@ -49,6 +49,26 @@ describe('списки задач и фич — live-запросы', () => {
     expect(urlKeys).toEqual([]);
   });
 
+  it('search, listByPersona, listByProject и getFeature не пишут URL-ключ в IndexedDB', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('[]', { status: 200 })));
+    const { api } = await import('./api');
+    await api.tasks.search('abc');
+    await api.tasks.listByPersona('p1');
+    await api.tasks.listByProject('pr1');
+    await api.tasks.getFeature('f1', '50');
+    await api.tasks.getFeature('f1', undefined, new AbortController().signal);
+    const urlKeys = mocks.idbSet.mock.calls.filter(c => String((c as unknown[])[0]).startsWith('/'));
+    expect(urlKeys).toEqual([]);
+  });
+
+  it('featuresIndex остаётся пассивным: ответ пишется в кэш по URL', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })));
+    const { api } = await import('./api');
+    await api.tasks.featuresIndex();
+    const urlKeys = mocks.idbSet.mock.calls.filter(c => String((c as unknown[])[0]).startsWith('/'));
+    expect(urlKeys.length).toBe(1);
+  });
+
   it('открытие N задач подряд не оставляет в IndexedDB записей /tasks/{id}', async () => {
     const full = (id: string) => ({ ...task(id), description: 'x'.repeat(1000), resultMarkdown: 'y'.repeat(1000) });
     vi.stubGlobal('fetch', vi.fn(async (u: unknown) => {

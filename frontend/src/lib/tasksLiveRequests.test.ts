@@ -74,7 +74,10 @@ describe('списки задач и фич — live-запросы', () => {
     mem.set('cc_token', 't');
     mem.set('cc_user_id', 'u1');
     const { api } = await import('./api');
+    // Запись в общий класс пассивного кэша идёт в фоне — дожидаемся её
+    const { flushPassiveWrites } = await import('./offline');
     await api.tasks.featuresIndex();
+    await flushPassiveWrites();
     const urlKeys = mocks.idbSet.mock.calls
       .map(c => String((c as unknown[])[0]))
       .filter(k => k.includes('/tasks/features/index'));

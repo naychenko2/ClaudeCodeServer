@@ -88,7 +88,10 @@ describe('по-чатовые потребители: что в по-чатов�
 
   it('git-статус без активного чата — общий класс, с активным чатом — по-чатовой', async () => {
     const { api, setGitSessionContext } = await import('../api');
+    // Запись в общий класс идёт в фоне (ответ сети её не ждёт) — дожидаемся
+    const { flushPassiveWrites } = await import('../offline');
     await api.git.status('p1');
+    await flushPassiveWrites();
     expect(keys()).toContain('offline:A:/projects/p1/git/status');
 
     mocks.idbSet.mockClear();

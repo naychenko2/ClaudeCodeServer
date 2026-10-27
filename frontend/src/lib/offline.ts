@@ -547,11 +547,86 @@ async function countOwnerRange(owner: string): Promise<number> {
   try { return await idbCountRange(lo, lo + PASSIVE_RANGE_END); } catch { return 0; }
 }
 
+// --- Межвкладочная синхронизация оценки ---
+//
+// Оценка числа записей диапазона живёт в памяти вкладки, а сам диапазон в сторе
+// ОБЩИЙ: записи второй вкладки в оценку первой не попадают, и потолок держался
+// бы только внутри одной вкладки (две вкладки — до 2× потолка).
+//
+// Поэтому каждая вкладка публикует СВОЙ счётчик записанных записей в localStorage
+// (хранилище общее для origin и видно СИНХРОННО), а перед записью сверяет чужие
+// счётчики: изменились — оценка протухла, и она пересчитывается по стору (истина).
+//
+// Почему localStorage, а не BroadcastChannel: доставка BroadcastChannel асинхронна,
+// между записью соседней вкладки и её уведомлением остаётся окно, в котором
+// вторая вкладка пишет по устаревшей оценке. localStorage виден сразу — окна нет.
+const RANGE_EPOCH_PREFIX = 'cc-offline-range:';
+// Срок жизни чужого счётчика: вкладка, которая молчит дольше, считается закрытой
+// (её ключ вычищается при следующей публикации). Живая вкладка публикует счётчик
+// на каждой записи, поэтому молчащей она бывает только между сессиями.
+const RANGE_EPOCH_TTL_MS = 6 * 60 * 60 * 1000;
+// Идентификатор вкладки: на каждый экземпляр модуля свой (две вкладки — два ключа).
+const _tabId = Math.random().toString(36).slice(2, 10);
+// Свой счётчик записей (публикуется в localStorage) и последняя виденная подпись
+// чужих счётчиков.
+let _ownEpoch = 0;
+let _foreignEpoch = '';
+
+function rangeEpochPrefix(owner: string): string {
+  return `${RANGE_EPOCH_PREFIX}${encodeURIComponent(owner)}:`;
+}
+
+function epochValue(): string {
+  return `${Date.now()}:${++_ownEpoch}`;
+}
+
+// Подпись чужих счётчиков: изменилась — оценка диапазона протухла.
+function foreignRangeEpoch(owner: string): string {
+  try {
+    const ls = typeof globalThis.localStorage !== 'undefined' ? globalThis.localStorage : null;
+    if (!ls) return '';
+    const prefix = rangeEpochPrefix(owner);
+    const ownKey = prefix + _tabId;
+    const parts: string[] = [];
+    for (let i = 0; i < ls.length; i++) {
+      const k = ls.key(i);
+      if (!k || !k.startsWith(prefix) || k === ownKey) continue;
+      parts.push(`${k}=${ls.getItem(k)}`);
+    }
+    return parts.sort().join('|');
+  } catch { return ''; }
+}
+
+// Опубликовать свой счётчик: соседние вкладки должны узнать, что диапазон изменился.
+// Заодно вычищаются ключи закрытых вкладок (иначе их счётчики копятся вечно).
+function publishRangeEpoch(owner: string): void {
+  try {
+    const ls = typeof globalThis.localStorage !== 'undefined' ? globalThis.localStorage : null;
+    if (!ls) return;
+    const prefix = rangeEpochPrefix(owner);
+    const now = Date.now();
+    for (let i = ls.length - 1; i >= 0; i--) {
+      const k = ls.key(i);
+      if (!k || !k.startsWith(prefix) || k === prefix + _tabId) continue;
+      const stamp = Number(String(ls.getItem(k) ?? '').split(':')[0]);
+      if (Number.isFinite(stamp) && now - stamp > RANGE_EPOCH_TTL_MS) ls.removeItem(k);
+    }
+    ls.setItem(prefix + _tabId, epochValue());
+  } catch { /* localStorage недоступен — межвкладочной защиты не будет */ }
+}
+
 // Освободить место под запись: пока в диапазоне владельца хотя бы PASSIVE_CACHE_MAX
 // записей, вытеснение приводит его к PASSIVE_CACHE_TRIM_TO. Место освобождается
 // ДО записи — иначе на пике диапазон перешагнул бы потолок (между проходами
 // лежало в пять раз больше, чем потолок разрешает).
 async function ensureRangeBudget(owner: string): Promise<void> {
+  // Чужие вкладки пишут в тот же диапазон: их записи в нашу оценку не попадают.
+  // Сверяем их счётчики — изменились, значит оценка протухла.
+  const foreign = foreignRangeEpoch(owner);
+  if (foreign !== _foreignEpoch) {
+    _foreignEpoch = foreign;
+    _rangeCountKnown = false;
+  }
   if (!_rangeCountKnown || _rangeOwner !== owner) {
     // Оценки ещё нет — берём истину из стора (плюс зарезервированные места).
     _rangeOwner = owner;
@@ -572,20 +647,23 @@ function noteRangeWrite(owner: string): void {
   if (_rangeOwner !== owner) {
     _rangeOwner = owner;
     _rangeRecords = 0;
+    _rangeNoted = 0;
     _rangeCountKnown = false;
   }
   _rangeRecords++;
   _rangePending++;
+  _rangeNoted++;
 }
 
 function finishRangeWrite(): void {
   if (_rangePending > 0) _rangePending--;
 }
 
-// Запись в общий класс пассивного кэша мимо request(): листинги дерева снапшота,
-// индекс фич, список чатов. Ключ берётся из passiveCacheKey() — он общий с
-// request(). Потолок диапазона владельца держится и для этих записей: они идут
-// через тот же учёт, что и записи request().
+// Запись в общий класс пассивного кэша мимо request(): листинги дерева снапшота.
+// Индекс фич и список чатов сюда НЕ ходят — они пишутся через request().
+// Ключ берётся из passiveCacheKey() — он общий с request(). Потолок диапазона
+// владельца держится и для этих записей: они идут через тот же учёт, что и
+// записи request().
 export async function writePassiveRangeEntry(key: string, data: unknown, bytes?: number): Promise<void> {
   const owner = ownerOfPassiveKey(key);
   if (owner === null) return;
@@ -598,6 +676,8 @@ export async function writePassiveRangeEntry(key: string, data: unknown, bytes?:
   const now = Date.now();
   await idbSet(key, { data, savedAt: now, usedAt: now, bytes }).catch(() => { /* кэш недоступен — не критично */ });
   finishRangeWrite();
+  // Соседние вкладки должны узнать, что диапазон изменился (см. publishRangeEpoch).
+  publishRangeEpoch(owner);
 }
 
 // --- Класс содержимого файлов ---
@@ -846,6 +926,16 @@ let _rangeCountKnown = false;
 // Зарезервированные, но ещё не записанные места: запись резервирует место до
 // записи в стор, иначе две параллельные записи обе прошли бы проверку бюджета.
 let _rangePending = 0;
+// Накопительный счётчик записанных записей диапазона. По нему видно, какие записи
+// начались ВО ВРЕМЯ прохода вытеснения: их вклад в оценку нельзя терять, иначе
+// оценка уйдёт ниже истины и потолок перестанет держаться до следующего прохода.
+let _rangeNoted = 0;
+// Оценка числа записей диапазона владельца — наружу, чтобы инвариант
+// «оценка никогда не меньше истины» можно было проверить (тест гонки) и
+// посмотреть в диагностике.
+export function rangeRecordsEstimate(): number {
+  return _rangeRecords;
+}
 // Проход по по-чатовому классу идёт по достижении потолка: курсор берёт только
 // метки диапазона (десятки записей), а сам проход не на каждую запись.
 let _chatEvicting = false;
@@ -937,16 +1027,48 @@ async function passiveWrite(url: string, data: unknown, owner: string | null, ch
     }
     return;
   }
+  // Общий класс: запись уходит в фоновую очередь — ответ сети не ждёт ни прохода
+  // обслуживания, ни записи в стор.
+  enqueueGeneralWrite(() => writeGeneralRangeEntry(url, data, owner, bytes, now));
+}
+
+// Фоновая очередь записей общего класса.
+//
+// Зачем очередь, а не просто «void»: записи идут одна за другой, и каждая
+// проверяет бюджет диапазона перед записью. Параллельные записи прошли бы проверку
+// одновременно (потолок превышался на пике), а очередь даёт две вещи сразу:
+// ответ сети не ждёт записи, и потолок держится на пике.
+// Порядок ответов сохраняется: более старый ответ не перезапишет более новый.
+let _generalWriteQueue: Promise<void> = Promise.resolve();
+
+function enqueueGeneralWrite(run: () => Promise<void>): void {
+  _generalWriteQueue = _generalWriteQueue.then(run, run).catch(() => { /* сбой записи не ломает очередь */ });
+}
+
+// Дождаться завершения фоновых записей общего класса. Нужен там, где решение
+// принимается по содержимому стора (тесты, синхронизация).
+export async function flushPassiveWrites(): Promise<void> {
+  await _generalWriteQueue.catch(() => { /* кэш недоступен — не критично */ });
+}
+
+// Запись в общий класс пассивного кэша (путь request()).
+async function writeGeneralRangeEntry(url: string, data: unknown, owner: string, bytes: number | undefined, now: number): Promise<void> {
   // Общий класс. Первый ход после старта или смены владельца: проход обслуживания
   // сносит чужие записи и даёт истину по размеру диапазона (оценка бюджета берётся
   // из неё). Ждём его: иначе первая же запись легла бы поверх того, что он сносит.
   if (_maintainedOwner !== owner) { await runPassiveMaintenance(); }
+  if (readStoredUserId() !== owner) return;
+  const key = passiveKey(url, owner);
+  if (key === null) return;
   // Место под запись: потолок диапазона держится и на пике (между проходами).
   // Резерв делается ДО проверки: параллельные записи не должны обе пройти её.
   noteRangeWrite(owner);
   await ensureRangeBudget(owner);
   await idbSet(key, { data, savedAt: now, usedAt: now, bytes }).catch(() => { /* кэш недоступен — не критично */ });
   finishRangeWrite();
+  // Соседние вкладки должны узнать, что диапазон изменился: иначе их оценка
+  // устареет и потолок перестанет держаться на общем диапазоне.
+  publishRangeEpoch(owner);
   _writesSinceEvict++;
   if (_writesSinceEvict >= EVICT_AFTER_WRITES || now - _lastEvictAt >= EVICT_MIN_INTERVAL_MS) {
     void scheduleEvictPassive(owner, false);
@@ -1089,26 +1211,43 @@ async function evictPassive(owner: string, force: boolean): Promise<void> {
   try {
     const lo = ownerPrefix(owner);
     const hi = lo + PASSIVE_RANGE_END;
+    // Захват зарезервированных мест на НАЧАЛЕ прохода: к концу прохода он устареет
+    // (места займут записи, начатые во время ужима). Поэтому запас под ужим и
+    // оценка после прохода берутся из ЖИВОГО счётчика, а не из этого захвата.
+    const pending = _rangePending;
+    // Записи, начатые во время прохода: их вклад в оценку нельзя терять.
+    const notedAtStart = _rangeNoted;
     const total = await idbCountRange(lo, hi);
+    const during = Math.max(0, _rangeNoted - notedAtStart);
     // Истина по размеру диапазона — оценка бюджета приводится к ней. Зарезервированные
     // (ещё не записанные) места тоже в счёт: они лягут в диапазон сразу после прохода.
-    const pending = _rangePending;
     _rangeOwner = owner;
-    _rangeRecords = total + pending;
+    _rangeRecords = total + during + pending;
     _rangeCountKnown = true;
     const over = force
       ? _rangeRecords >= PASSIVE_CACHE_MAX
       : _rangeRecords > PASSIVE_CACHE_MAX;
-    if (!over) return;
+    if (!over) {
+      // Проход ничего не сносил: оценка = истина + места, занятые во время прохода.
+      // Записи, начатые в нём, могли уже лечь в стор — без этого слага оценка ушла бы
+      // ниже истины, и потолок держался бы хуже, чем должен.
+      _rangeRecords = total + during + _rangePending;
+      return;
+    }
     const stamps = await idbRangeStamps(lo, hi);
     // Порядок вытеснения — по времени ДОСТУПА; у старых записей без usedAt это savedAt
     const stamp = (e: { savedAt: number; usedAt?: number }) => e.usedAt ?? e.savedAt;
     stamps.sort((a, b) => stamp(a) - stamp(b));
-    // Ужим с запасом на зарезервированные места: иначе они легли бы сверх потолка
-    const trimTo = Math.max(0, PASSIVE_CACHE_TRIM_TO - pending);
+    // Ужим с запасом на зарезервированные места: иначе они легли бы сверх потолка.
+    // Запас — ЖИВОЙ: места могли занять прямо во время прохода.
+    const trimTo = Math.max(0, PASSIVE_CACHE_TRIM_TO - _rangePending);
     const drop = stamps.slice(0, Math.max(0, stamps.length - trimTo));
     await Promise.all(drop.map(s => idbDelete(s.key).catch(() => {})));
-    _rangeRecords = Math.max(0, total - drop.length) + pending;
+    // Оценка после прохода: записи в сторе минус снесённые плюс места, занятые
+    // ПРЯМО СЕЙЧАС. Захват pending в начале прохода устарел бы: запись, начатая
+    // во время ужима, выпала бы из оценки, и диапазон оказался бы выше потолка
+    // до следующего прохода.
+    _rangeRecords = Math.max(0, stamps.length - drop.length) + _rangePending;
     await notifyEvicted(drop.map(s => s.key));
   } catch { /* кэш недоступен — не критично */ }
 }
@@ -1367,7 +1506,10 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
       if (fileRef && ownerAtStart && readStoredUserId() === ownerAtStart) {
         await writeFileContent(ownerAtStart, fileRef, data, text.length);
       } else {
-        await passiveWrite(url, data, ownerAtStart, chatScope, text.length);
+        // Общий класс: запись в кэш уходит в фон — ответ сети не ждёт ни прохода
+        // обслуживания, ни записи в стор. Порядок «первая запись после смены
+        // владельца не ложится поверх сносимого» держит сама очередь записи.
+        void passiveWrite(url, data, ownerAtStart, chatScope, text.length);
       }
     }
     return data;

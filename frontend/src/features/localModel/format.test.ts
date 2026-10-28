@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   clamp01, formatGpuMem, formatPerc, formatPower, formatSince, formatTps, formatUpdatedAt,
-  gpuCountLabel, gpuLabel, gpuOrdinal, menuStatus, standDot, whoRows,
+  gpuCountLabel, gpuLabel, gpuOrdinal, menuStatus, standDot, triggerDot, whoRows,
 } from './format';
 import { mockBonsaiStats } from './localModel.fixtures';
 
@@ -286,5 +286,22 @@ describe('menuStatus: короткий статус пункта «⋯» (мак
       const d = mockBonsaiStats(s);
       expect(menuStatus(d)?.tone ?? null, s).toBe(standDot(d));
     }
+  });
+});
+
+// === Точка на самой кнопке «⋯» мобильной шапки (Ф9) ===
+// Макет bonsai-toolbar, renderPhone: точка на кнопке «Ещё» несёт тот же тон, что точка
+// рельса (dotColor(d)), — сигнал виден до открытия меню. Данные кнопки — triggerDot.
+describe('triggerDot: точка на кнопке «⋯» (макет renderPhone)', () => {
+  it('тон и наличие точки совпадают с точкой рельса (standDot) на всех состояниях', () => {
+    for (const s of ['ready', 'yielded', 'returning', 'unexplained', 'starting', 'waiting-vram', 'unknown', 'no-arbiter'] as const) {
+      const d = mockBonsaiStats(s);
+      expect(triggerDot(d), s).toBe(standDot(d));
+    }
+  });
+
+  it('в норме (работает) и без снимка — точки нет', () => {
+    expect(triggerDot(mockBonsaiStats('ready'))).toBeNull();
+    expect(triggerDot(null)).toBeNull();
   });
 });

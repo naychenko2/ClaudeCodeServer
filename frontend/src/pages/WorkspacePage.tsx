@@ -38,7 +38,7 @@ import { ToolbarOverflowMenu, type OverflowItem } from '../components/ToolbarOve
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { getLocalModelBonsai, useLocalModelWatcher } from '../features/localModel/useLocalModelWatcher';
-import { menuStatus } from '../features/localModel/format';
+import { menuStatus, triggerDot } from '../features/localModel/format';
 import { PluginFrame, PluginPanelsSwitcher, useHasInstalledPlugins, useInstalledPlugins, panelDisplayName, pluginIconFor } from '../features/plugins';
 import { BackButton, Button, IconButton, Modal } from '../components/ui';
 import { PageCanvas } from '../components/ui/PageCanvas';
@@ -412,6 +412,11 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   // рельса — два индикатора не могут разойтись. У не-админа снимка нет (он не
   // опрашивает вторую дорожку) — статуса нет, как и точки.
   const localModelMenu = localModelVisible ? menuStatus(getLocalModelBonsai()) : null;
+  // Точка на самой кнопке «⋯» (Ф9, макет renderPhone): тот же снимок и тот же тон, что у
+  // точки рельса и статуса пункта (triggerDot = tone у menuStatus = standDot) — сигнал
+  // виден до открытия меню. Гейт как у точки рельса: видимый пункт (флаг+admin+configured)
+  // и снимок (его опрос живёт только у админа с флагом) — в норме и без данных точки нет.
+  const localModelTriggerDot = localModelVisible ? triggerDot(getLocalModelBonsai()) : null;
 
   // Восстанавливаем состояние окна для этого проекта (компонент перемонтируется при входе в проект)
   const [leftTab, setLeftTab] = useState<LeftTab>(() => {
@@ -2403,9 +2408,21 @@ const windowWidth = useWindowWidth();
               isMobile
               compact
             />
-            {/* Не поместившиеся вкладки + «Использование» — в «⋯» (как «⋯ Разделы» в HubHeader) */}
+            {/* Не поместившиеся вкладки + «Использование» — в «⋯» (как «⋯ Разделы» в HubHeader).
+                Точка состояния на самой кнопке (Ф9, макет renderPhone): свой ReactNode через
+                indicator — тон по состоянию дежурства (muted/warning), не accent у dotBadge;
+                обводка — фон шапки, чтобы точка читалась на ней, как на рельсе */}
             <div ref={projectTabsMoreRef} style={{ flexShrink: 0, display: 'inline-flex' }}>
-              <ToolbarOverflowMenu isMobile title="Ещё" items={projectOverflowItems} />
+              <ToolbarOverflowMenu
+                isMobile title="Ещё" items={projectOverflowItems}
+                indicator={localModelTriggerDot ? (
+                  <span style={{
+                    position: 'absolute', top: 0, right: 0, width: 8, height: 8, borderRadius: '50%',
+                    background: localModelTriggerDot === 'warning' ? C.warning : C.textMuted,
+                    border: `2px solid ${C.bgPanel}`, pointerEvents: 'none',
+                  }} />
+                ) : undefined}
+              />
             </div>
           </div>
         )}

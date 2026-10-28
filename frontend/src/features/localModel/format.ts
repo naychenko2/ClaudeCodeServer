@@ -273,6 +273,15 @@ export function menuStatus(data: LocalModelStats | null): MenuStatus | null {
   }
 }
 
+// Тон точки на САМОЙ кнопке «⋯» мобильной шапки (Ф9, макет bonsai-toolbar, renderPhone:
+// точка на кнопке «Ещё» — тот же bonsaiDot/dotColor, что у рельса). Кнопка и её пункт —
+// один сигнал одного состояния: тон и наличие берутся ровно оттуда же, откуда статус
+// пункта (menuStatus), а он — из standDot; три индикатора не могут разойтись. null —
+// точки нет: состояние в норме или не известно (снимка нет).
+export function triggerDot(data: LocalModelStats | null): MenuStatusTone | null {
+  return menuStatus(data)?.tone ?? null;
+}
+
 // === Строки «Кто сейчас на модели» ===
 
 // Строка списка: чат со скоростью. Чужой чат — «Чат другого пользователя»

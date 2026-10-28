@@ -11,7 +11,7 @@ import { api } from './api';
 import {
   isOnline, passiveCacheKey, fileContentCachePrefix, flushFileEviction,
   onPassiveEvict, parseFileContentCacheKey, setKeptFilePaths, keepFilePath, unkeepFilePath,
-  writePassiveRangeEntry,
+  writePassiveRangeEntry, CHAT_CLASS_MAX_BYTES,
 } from './offline';
 import { idbGet, idbSet, idbKeys, idbDelete, idbRangeStamps } from './idb';
 import { isSubsystemEnabled } from './subsystems';
@@ -432,6 +432,16 @@ onPassiveEvict(async keys => {
 
 const chatRevision = (s: Session): string => `${s.updatedAt}|${s.messageCount}`;
 
+// Метка 'heavy' (F3-S4c): суффикс записи ревизии. Старые записи без суффикса читаются
+// как раньше: отсутствие метки — не метка. Метка хранится вместе с ревизией — переживает
+// перезагрузку; снимается следующим прогревом с лёгким ответом.
+const CHAT_HEAVY_MARK = '#heavy';
+const isHeavyMarked = (v: string | undefined): boolean => v !== undefined && v.endsWith(CHAT_HEAVY_MARK);
+// Сама ревизия без метки: сравнение с текущим состоянием чата идёт по ней, а не по записи с меткой.
+const revOf = (v: string | undefined): string =>
+  v === undefined ? '' : isHeavyMarked(v) ? v.slice(0, -CHAT_HEAVY_MARK.length) : v;
+const byFreshness = (a: Session, b: Session): number => (a.updatedAt < b.updatedAt ? 1 : -1);
+
 // Потолок прогрева историй на ВЕСЬ прогон снапшота (а не на проект): по-чатовой класс
 // кэша держит последние чаты, гонять больше — трафик впустую. При потолке на проект
 // 33 проекта давали до 264 полных загрузок истории за прогон.
@@ -554,17 +564,26 @@ export async function runOfflineSnapshot(priorityProjectId?: string): Promise<vo
       //    чаты, а прогрев без потолка тянул истории всех чатов всех проектов — десятки
       //    МБ трафика впустую. Слагированные чаты просто достанутся следующим снимкам.
       const knownRevs = await loadChatRevisions(p.id);
-      const staleChats = sessions
-        .filter(s => knownRevs[s.id] !== chatRevision(s))
-        .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
-        .slice(0, chatWarmLeft);
+      // Тяжёлые фильтруются до slice (F3-S4c): лёгкие прогреваются первыми всегда, тяжёлые
+      // добирают только пустой остаток — тяжёлый чат не вытесняет лёгкий из 12 (его история
+      // всё равно не ляжет в кэш, см. S4b), а ставший лёгким может быть прогрет заново и
+      // снять метку: при строгом исключении метка была бы вечной.
+      const stale = sessions.filter(s => revOf(knownRevs[s.id]) !== chatRevision(s));
+      const staleChats = [
+        ...stale.filter(s => !isHeavyMarked(knownRevs[s.id])).sort(byFreshness),
+        ...stale.filter(s => isHeavyMarked(knownRevs[s.id])).sort(byFreshness),
+      ].slice(0, chatWarmLeft);
       chatWarmLeft -= staleChats.length;
       // Ревизии непрогретых чатов не записываются (см. nextRevs ниже): они останутся
       // «устаревшими» и достанутся следующему прогону.
       const freshRevs: Record<string, string> = {};
       await mapLimit(staleChats, 2, async s => {
-        await api.sessions.getHistoryTail(p.id, s.id, { after: -1 });
-        freshRevs[s.id] = chatRevision(s);
+        let bytes = 0;
+        await api.sessions.getHistoryTail(p.id, s.id, { after: -1 }, (n) => { bytes = n; });
+        // Вес — из onBytes, та же мера, что у записи кэша (S4b): ответ тяжелее потолка
+        // класса в кэш не ляжет — ему не место и в прогреве. Вес неизвестен (колбэк
+        // не позван) — не тяжёлый: отсутствия меры не хватает, чтобы метить.
+        freshRevs[s.id] = chatRevision(s) + (bytes > CHAT_CLASS_MAX_BYTES ? CHAT_HEAVY_MARK : '');
       });
       // Метки живых чатов + успешно скачанных; удалённые чаты уходят сами (нет в sessions)
       const nextRevs: Record<string, string> = {};

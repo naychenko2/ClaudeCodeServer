@@ -653,9 +653,10 @@ export function TextTab({ data, loading, isMobile, onOpenChat, onRefetch, onOpen
           ? <WhoPlacesCard data={data} isMobile={isMobile} />
           : <WhoCard data={data} isMobile={isMobile} onOpen={onOpenChat} />}
         {/* «Дежурство» — последний блок стенда Bonsai (макет §3/§5): только у выбранного
-            Bonsai и только если снимок принёс duty; без него блока нет (DutyBlock сам
-            возвращает null, но условие на месте — стенд main его не касается) */}
-        {bonsai && data.duty ? <DutyBlock data={data} isMobile={isMobile} onOpenMedia={onOpenMedia} /> : null}
+            Bonsai; без duty блока нет — DutyBlock сам возвращает null (DutyBlock.tsx:222).
+            Внешний guard по data.duty повторял это условие и маскировал в тестах условие
+            движка (R-F5) — оставлено единственное условие: движок */}
+        {bonsai ? <DutyBlock data={data} isMobile={isMobile} onOpenMedia={onOpenMedia} /> : null}
       </div>
     </>
   );

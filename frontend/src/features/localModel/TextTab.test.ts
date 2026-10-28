@@ -3,7 +3,8 @@
 // переключатель движка (виден только при двух configured), сокрытие полей из
 // `unsupported` (не заглушки, а ничего), состояние 'yielded' (нейтральный тон,
 // не нули), карточка Video и «места сервера» вместо чатов, блок «Дежурство»
-// (последний блок стенда Bonsai, только когда снимок принёс duty).
+// (только у выбранного Bonsai; без duty — пустого: блок сам возвращает null;
+// без арбитра — строка «Арбитр не подключён»).
 // Рендер — через linkedom (как tasks/acceptanceBlock.test.ts); ResizeObserver
 // стабится: ThroughputChart меряет им свою ширину.
 
@@ -303,11 +304,28 @@ describe('блок «Дежурство» в стенде (интеграция,
     expect(html).not.toContain('Дежурство');
     expect(html).not.toContain('Цепочка');
   });
-  it('Bonsai без duty — блока нет (рендер по наличию duty, а не по движку)', () => {
+  it('main с duty в снимке — «Дежурства» нет (условие движка, а не наличия duty)', () => {
+    // В реальном API main duty не приносит — пара искусственная ровно затем, чтобы
+    // проверить условие движка: без него блок появился бы на любом снимке с duty
+    const html = renderTab({
+      data: { ...mockLocalModelStats('working'), duty: mockBonsaiStats('yielded').duty },
+      engines: ENGINES_BOTH, engine: 'main', onEngineChange: () => {},
+    });
+    expect(html).not.toContain('>Дежурство</h3>');
+    expect(html).not.toContain('Цепочка');
+  });
+  it('Bonsai без duty — блока нет (контракт DutyBlock: при duty === null он null)', () => {
     const d = { ...mockBonsaiStats('ready') };
     delete d.duty;
     const html = renderTab({ data: d, engine: 'bonsai' });
     expect(html).not.toContain('Дежурство');
+  });
+  it('Bonsai без арбитра — блок с «Арбитр не подключён» (строка самого блока)', () => {
+    // Состояние 'no-arbiter' было покрыто только API-тестом (statusPill); здесь —
+    // строка самого блока: движок без StateUrl остаётся видимым, но без причин и возврата
+    const html = renderTab({ data: mockBonsaiStats('no-arbiter'), engine: 'bonsai' });
+    expect(html).toContain('>Дежурство</h3>');
+    expect(html).toContain('Арбитр не подключён: почему уступила карта и когда модель вернётся — неизвестно.');
   });
   it('Bonsai с duty — «Дежурство» есть и стоит последним блоком', () => {
     const html = renderTab({ data: mockBonsaiStats('yielded'), engine: 'bonsai' });

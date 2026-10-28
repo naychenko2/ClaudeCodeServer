@@ -261,7 +261,17 @@ public sealed class LocalEngineStateClient : IEngineArbiterStateReader
     private static string TruncateReason(string s) =>
         s.StartsWith("lease:", StringComparison.Ordinal) ? Truncate(s, MaxUntrustedLen) : Truncate(s, MaxReasonLen);
 
-    private static string Truncate(string s, int maxLen) => s.Length <= maxLen ? s : s[..maxLen];
+    // Обрезка недоверенного текста: не рвёт суррогатную пару — висячий старший суррогат
+    // при сериализации стал бы U+FFFD (приём как в TaskListItem.Preview). С потолками 64/80
+    // обрезок не пустеет (cut ≥ 63); если когда-нибудь позовут с меньшим потолком и вся строка
+    // — одна пара длиннее него, оставляем пару целиком: неделимый кодпоинт важнее пустой причины.
+    private static string Truncate(string s, int maxLen)
+    {
+        if (s.Length <= maxLen) return s;
+        var cut = maxLen;
+        if (char.IsHighSurrogate(s[cut - 1])) cut--;
+        return cut == 0 ? s[..2] : s[..cut];
+    }
 
     private static double? GetDouble(JsonElement o, string name) =>
         o.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out var d)

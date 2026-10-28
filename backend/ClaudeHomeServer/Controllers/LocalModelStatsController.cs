@@ -1020,7 +1020,8 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
 
     // Причина уступки: kind — вид строки ("comfy" | "lease" | "gpu"; без префикса — ""),
     // raw — текст без префикса вида ("gpu" — «pid:командная строка», «comfy» — префикс prompt_id,
-    // «lease» — текст причины, обрезанный до 64).
+    // «lease» — текст причины). Клиент режет строку целиком на входе: «lease:» — до 64,
+    // прочие — общим потолком 80.
     public sealed record ReasonDto
     {
         public string Kind { get; init; } = "";

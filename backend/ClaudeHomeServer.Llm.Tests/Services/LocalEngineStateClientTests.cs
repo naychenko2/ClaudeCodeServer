@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Tests.Helpers;
 using Microsoft.Extensions.Configuration;
@@ -286,6 +287,53 @@ public class LocalEngineStateClientTests
         Assert.StartsWith("comfy:", s.Reasons[2]);
         Assert.Equal(64, s.Leases![0].Reason!.Length);
         Assert.Equal(120.5, s.Leases[0].LeftS);
+    }
+
+    // B6 (MAJOR ревью): обрезка не рвёт суррогатную пару. «lease:» + 57 символа + эмодзи —
+    // старший суррогат ровно на границе потолка 64 (индекс 63); «gpu:» + 75 символа + эмодзи —
+    // на границе 80 (индекс 79). Без правки s[..maxLen] оставляет висячий старший суррогат,
+    // и он становится U+FFFD при сериализации. Мутация — вернуть s[..maxLen]: краснеют
+    // длина (63/79) и IsHighSurrogate.
+    [Fact]
+    public async Task SurrogateAtTruncateBoundary_PairNotSplit_NoReplacementCharInJson()
+    {
+        var emoji = "\U0001F600"; // вне BMP: старший суррогат D83D + младший DE00
+        var body = "{\"bonsai\":\"yielded\",\"reasons\":[\"lease:" + new string('x', 57) + emoji +
+            "\",\"gpu:" + new string('y', 75) + emoji + "\"],\"ts\":1700000000,\"since\":1699999990}";
+        using var stub = new Stub(_ => (200, body, 0));
+        var s = await ClientFor(stub).GetAsync(Engine);
+
+        Assert.NotNull(s);
+        // пара убрана целиком: «lease:»(6) + 57 = 63, «gpu:»(4) + 75 = 79 — граница пары, не потолок.
+        Assert.Equal(63, s.Reasons![0].Length);
+        Assert.Equal(79, s.Reasons[1].Length);
+        Assert.False(char.IsHighSurrogate(s.Reasons[0][^1]));
+        Assert.False(char.IsHighSurrogate(s.Reasons[1][^1]));
+        // следствие по всей цепочке: в JSON нет U+FFFD — висячий старший суррогат при
+        // сериализации становится символом замены U+FFFD (проверено отдельным скретчем:
+        // одиночный D83D даёт в JSON U+FFFD, валидная пара — свою пару D83D/DE00).
+        // Читаем обратно через JsonDocument: проверка по декодированному значению,
+        // а не по регистру escape-последовательности в тексте JSON.
+        var json = JsonSerializer.Serialize(s.Reasons);
+        using var doc = JsonDocument.Parse(json);
+        foreach (var el in doc.RootElement.EnumerateArray())
+            Assert.False(el.GetString()!.Contains((char)0xFFFD), $"в JSON причины есть U+FFFD: {json}");
+    }
+
+    // B6 (хвост ревью): причина БЕЗ префикса (на контроллере kind пустой) тоже режется —
+    // общим потолком 80. Мутация — вернуть старую выборочную обрезку (только «lease:»):
+    // строка осталась бы длиной 100, тест краснеет на Equal(80, …).
+    [Fact]
+    public async Task NoPrefixReason_TruncatedAt80()
+    {
+        var body = "{\"bonsai\":\"yielded\",\"reasons\":[\"" + new string('z', 100) +
+            "\"],\"ts\":1700000000,\"since\":1699999990}";
+        using var stub = new Stub(_ => (200, body, 0));
+        var s = await ClientFor(stub).GetAsync(Engine);
+
+        Assert.NotNull(s);
+        Assert.Equal(80, s.Reasons![0].Length);
+        Assert.StartsWith(new string('z', 20), s.Reasons[0]);
     }
 
     // Короткие причины (как их отдаёт живой арбитр: «gpu:<pid>:<cmd≤60>», «comfy:<id≤8>») не меняются —

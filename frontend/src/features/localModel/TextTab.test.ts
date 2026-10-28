@@ -127,10 +127,12 @@ describe('standDot / standHint — тон точки и подсказка (ма
     expect(standDot(mockBonsaiStats('ready'))).toBeNull();
   });
   it('подсказки — по состоянию; у работающего стенда их нет', () => {
-    expect(standHint(mockBonsaiStats('yielded'))).toBe('Bonsai уступила карту');
-    const d = mockBonsaiStats('yielded');
-    d.duty = { ...d.duty!, arbiter: { ...d.duty!.arbiter!, reasons: [], quietLeftS: 160 } };
-    expect(standHint(d)).toBe('Bonsai ждёт возврата');
+    // фикстура 'yielded' имеет reasons=[comfy video] — короткая форма «видео» (таблица KINDS макета)
+    expect(standHint(mockBonsaiStats('yielded'))).toBe('Bonsai уступила карту: видео');
+    expect(standHint(mockBonsaiStats('returning'))).toBe('Bonsai вернётся через 2:40');
+    const zero = mockBonsaiStats('returning');
+    zero.duty = { ...zero.duty!, arbiter: { ...zero.duty!.arbiter!, quietLeftS: 0 } };
+    expect(standHint(zero)).toBe('Bonsai вот-вот вернётся');
     expect(standHint(mockBonsaiStats('starting'))).toBe('Bonsai загружается');
     expect(standHint(mockBonsaiStats('waiting-vram'))).toBe('Bonsai ждёт память карты');
     expect(standHint(mockBonsaiStats('unknown'))).toBe('Bonsai недоступна');

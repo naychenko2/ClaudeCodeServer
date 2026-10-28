@@ -97,9 +97,15 @@ describe('localModel/manifest: точка индикатора на значке
     expect(panelAction().indicator?.()).toBeNull();
   });
 
-  it('уступка по плану — muted-точка и подсказка (макет §4)', () => {
+  it('уступка по плану — muted-точка и подсказка с короткой причиной (макет §4)', () => {
+    // фикстура 'yielded' имеет reasons=[comfy video] — короткая форма «видео» (KINDS макета)
     setLocalModelBonsai(mockBonsaiStats('yielded'));
-    expect(panelAction().indicator?.()).toEqual({ dot: 'muted', hint: 'Bonsai уступила карту' });
+    expect(panelAction().indicator?.()).toEqual({ dot: 'muted', hint: 'Bonsai уступила карту: видео' });
+  });
+
+  it('ожидание возврата — muted-точка и «Bonsai вернётся через 2:40» (макет §4)', () => {
+    setLocalModelBonsai(mockBonsaiStats('returning'));
+    expect(panelAction().indicator?.()).toEqual({ dot: 'muted', hint: 'Bonsai вернётся через 2:40' });
   });
 
   it('ждёт память карты — warning и «ждёт память карты»', () => {

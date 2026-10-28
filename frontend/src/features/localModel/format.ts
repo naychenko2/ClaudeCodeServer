@@ -3,7 +3,7 @@
 // раздел «Спецификация для Киры»): единицы, запятая как десятичный разделитель,
 // «—» когда движок значение не отдал.
 
-import type { LocalModelStats } from './api';
+import type { LocalModelDutyReason, LocalModelJobKind, LocalModelStats } from './api';
 
 // Текст «не сообщает»: с именем движка — «Движок {имя} это не сообщает»,
 // без имени — «Движок этого не сообщает» (иначе было бы «Движок движок»).
@@ -115,7 +115,10 @@ function yieldPhase(data: LocalModelStats): YieldPhase {
   const a = data.duty?.arbiter;
   if (a?.state === 'starting') return 'starting';
   if (a?.state === 'waiting-vram') return 'waiting-vram';
-  if (a?.state === 'yielded' && (a.reasons?.length ?? 0) === 0 && (a.quietLeftS ?? 0) > 0) return 'waiting-return';
+  // 'yielded' без причин с названным остатком паузы — ожидание возврата; 0 — конец паузы,
+  // модель вот-вот встанет (демо макета с quiet=0). Без остатка (арбитр его не назвал) —
+  // групповая подпись: «вот-вот» без названного срока была бы выдуманной точностью
+  if (a?.state === 'yielded' && (a.reasons?.length ?? 0) === 0 && a.quietLeftS != null && Number.isFinite(a.quietLeftS)) return 'waiting-return';
   return 'yielding';
 }
 
@@ -158,17 +161,57 @@ export function standDot(data: LocalModelStats): 'muted' | 'warning' | null {
     }
 }
 
+// Короткая причина для подсказки (колонка 'short' таблицы KINDS макета,
+// bonsai-toolbar.html:288): подсказка — одна строка, полные подписи — в «Дежурстве»
+// (dutyFormat.ts). Неизвестный вид — короткой формы нет: подсказка остаётся общей,
+// без выдуманного суффикса.
+const JOB_KIND_SHORT: Record<LocalModelJobKind, string> = {
+  image: 'картинка',
+  video: 'видео',
+  audio: 'звук',
+  lora: 'LoRA',
+};
+function reasonShort(r: LocalModelDutyReason | undefined): string | null {
+  switch (r?.kind) {
+    case 'comfy':
+      // задание с этого сервера и опознанного вида — короткая форма вида;
+      // иначе — «ComfyUI» (строка 'alien' макета)
+      return r.known === true && r.jobKind ? JOB_KIND_SHORT[r.jobKind] : 'ComfyUI';
+    case 'lease':
+      return 'аренда';
+    case 'gpu':
+      return 'процесс';
+    default:
+      return null;
+  }
+}
+
+// «м:сс» из остатка секунд — то же форматирование, что formatClockLeft в dutyFormat.ts:
+// подсказка рельса и строка «Вернётся» в «Дежурстве» должны называть одно время одинаково.
+// 0 → «0:00», «вот-вот» выбирает вызывающий: в подсказке нет «вернётся через 0:00».
+function clockLeft(s: number): string {
+  const whole = Math.floor(s);
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
+}
+
 // Подсказка сегмента «Bonsai» (title/aria-label) — та же строка, что подсказка рельса
-// (макет §2), без живого обратного отсчёта: «вернётся через м:сс» считается на
-// опросе рельса (Ф6) и в «Дежурстве». null — подсказки нет (стенд работает).
+// (макет §2): «вернётся через м:сс» — остаток из последнего снимка, тот же, что в
+// «Дежурстве»; живого тиканья между опросами нет — следующий опрос рельса (Ф6)
+// принесёт новое значение. null — подсказки нет (стенд работает).
 export function standHint(data: LocalModelStats): string | null {
   switch (data.status) {
     case 'yielded': {
       switch (yieldPhase(data)) {
         case 'starting': return 'Bonsai загружается';
         case 'waiting-vram': return 'Bonsai ждёт память карты';
-        case 'waiting-return': return 'Bonsai ждёт возврата';
-        default: return 'Bonsai уступила карту';
+        case 'waiting-return': {
+          const left = data.duty?.arbiter?.quietLeftS ?? 0;
+          return left > 0 ? `Bonsai вернётся через ${clockLeft(left)}` : 'Bonsai вот-вот вернётся';
+        }
+        default: {
+          const short = reasonShort(data.duty?.arbiter?.reasons?.[0]);
+          return short ? `Bonsai уступила карту: ${short}` : 'Bonsai уступила карту';
+        }
       }
     }
     case 'down': return 'Bonsai недоступна';

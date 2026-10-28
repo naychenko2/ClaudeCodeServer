@@ -231,14 +231,16 @@ export function mockLocalModelMediaSelf(state: LocalModelMediaMockState = 'run')
 
 // === Стенд второй модели (Bonsai): состояния дежурства (разрез v2, §5; макет §4) ===
 //
-// Пять состояний арбитра + «арбитр не подключён» (у движка нет StateUrl). Числа и строки —
+// Пять состояний арбитра + «ждёт возврата» (yielded без причин с остатком паузы —
+// производное состояние фронта, не состояние арбитра) + «арбитр не подключён» (у движка нет
+// StateUrl). Числа и строки —
 // с макета (docs/mockups/bonsai-toolbar.html), чтобы витрина сравнивалась один в один.
 //
 // Как состояние арбитра складывается в status снимка (правило Б3b, не выдумка фикстуры):
 // метрики отвечают → 'working'/'busy' по очереди (состояние 'ready'); метрики молчат и
 // арбитр сказал 'yielded'/'starting'/'waiting-vram' → 'yielded', DownSince НЕ ставится;
 // метрики молчат и арбитр сказал 'unknown' (или его вовсе нет) → 'down', как у основной.
-export type BonsaiMockState = 'unknown' | 'ready' | 'yielded' | 'starting' | 'waiting-vram' | 'no-arbiter';
+export type BonsaiMockState = 'unknown' | 'ready' | 'yielded' | 'returning' | 'starting' | 'waiting-vram' | 'no-arbiter';
 
 // Блоки, которых llama-server не отдаёт никогда: имена полей снимка, их добавляет
 // LlamaServerMetricsSource.UnsupportedBlocks (backend/…/Llm/LocalStats/). По этому списку
@@ -308,6 +310,13 @@ export function mockBonsaiStats(state: BonsaiMockState = 'yielded'): LocalModelS
     case 'yielded': {
       // уступила по плану: причина — задание ComfyUI (вид опознан, оно с этого сервера)
       const d = duty({ ...alive('yielded'), reasons: [{ kind: 'comfy', raw: 'a1b2c3d4', jobKind: 'video', known: true }] });
+      d.callsNow = [{ place: 'Классификация задачи', link: 'insurance', durationS: 2.1 }];
+      return { ...unloaded(), duty: d };
+    }
+    case 'returning': {
+      // уступила без причин: задание закончилось, отсчитывается тихая пауза до возврата
+      // (160 с — «вернётся через 2:40», макет §4, демо ui.quiet=160)
+      const d = duty({ ...alive('yielded'), quietLeftS: 160 });
       d.callsNow = [{ place: 'Классификация задачи', link: 'insurance', durationS: 2.1 }];
       return { ...unloaded(), duty: d };
     }

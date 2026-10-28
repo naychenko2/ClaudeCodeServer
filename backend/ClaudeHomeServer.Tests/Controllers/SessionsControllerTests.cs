@@ -10,17 +10,25 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ClaudeHomeServer.Tests.Controllers;
 
 [Trait("Category", "Host")]
-public class SessionsControllerTests : IClassFixture<TestWebApplicationFactory>
+public class SessionsControllerTests : IClassFixture<SessionsControllerTests.Host>
 {
+    // Общий хост пула (Э5): владелец — свой на класс, как раньше был свой хост на класс
+    public sealed class Host : PooledHost
+    {
+        public TestOwner Owner { get; }
+
+        public Host() => Owner = NewOwner();
+    }
+
     private readonly HttpClient _client;
     private readonly TestWebApplicationFactory _factory;
     private readonly string _tempDir;
 
-    public SessionsControllerTests(TestWebApplicationFactory factory)
+    public SessionsControllerTests(Host host)
     {
-        _factory = factory;
-        _client = factory.CreateAuthenticatedClient();
-        _tempDir = Path.Combine(factory.TempDir, "session_tests");
+        _factory = host.Factory;
+        _client = host.Owner.Client;
+        _tempDir = Path.Combine(host.TempDir, "session_tests");
         Directory.CreateDirectory(_tempDir);
     }
 

@@ -35,18 +35,32 @@ using Microsoft.Extensions.Logging;
 namespace ClaudeHomeServer.Tests.Controllers;
 
 [Trait("Category", "Host")]
-public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
+public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
 {
+    // Общий хост пула (Э5): владельцы — свои на класс, как раньше был свой хост на класс
+    public sealed class Host : PooledHost
+    {
+        public TestOwner Owner { get; }
+        public TestOwner Stranger { get; }
+
+        public Host()
+        {
+            Owner = NewOwner();
+            Stranger = NewOwner(role: "user");
+        }
+    }
+
+    private readonly Host _host;
     private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;      // основной юзер (владелец задач)
     private readonly HttpClient _stranger;    // второй юзер — для изоляции
 
-    public TasksControllerTests(TestWebApplicationFactory factory)
+    public TasksControllerTests(Host host)
     {
-        _factory = factory;
-        _client = factory.CreateAuthenticatedClient();
-        _stranger = factory.CreateAuthenticatedClient(
-            TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+        _host = host;
+        _factory = host.Factory;
+        _client = host.Owner.Client;
+        _stranger = host.Stranger.Client;
     }
 
     private async Task<JsonElement> CreateTaskAsync(object body)
@@ -73,14 +87,14 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     private UserStore Users => _factory.Services.GetRequiredService<UserStore>();
     private PersonaManager Personas => _factory.Services.GetRequiredService<PersonaManager>();
 
-    private string OwnerId => Users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
-    private string SecondOwnerId => Users.FindByUsername(TestWebApplicationFactory.SecondUsername)!.Id;
+    private string OwnerId => _host.Owner.Id;
+    private string SecondOwnerId => _host.Stranger.Id;
 
     // Проект владельца (для проектных сессий/фич).
     private string CreateProject(string tag)
     {
-        var user = Users.FindByUsername(TestWebApplicationFactory.TestUsername)!;
-        var dir = Path.Combine(_factory.TempDir, "featidx_" + tag + "_" + Guid.NewGuid().ToString("N")[..8]);
+        var user = Users.GetById(_host.Owner.Id)!;
+        var dir = Path.Combine(_host.TempDir, "featidx_" + tag + "_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         return Projects.Create("featidx-" + tag + "-" + Guid.NewGuid().ToString("N")[..6],
             dir, user.Id, user.Username).Id;
@@ -112,7 +126,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     {
         var projectId = CreateProject("merge");
         var projectRoot = Projects.GetById(projectId)!.RootPath;
-        var wt = Path.Combine(_factory.TempDir, "merge_wt_" + Guid.NewGuid().ToString("N")[..8]);
+        var wt = Path.Combine(_host.TempDir, "merge_wt_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(wt);
         var branch = "feat/merge-" + Guid.NewGuid().ToString("N")[..6];
 
@@ -305,7 +319,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var projectResponse = await _client.PostAsJsonAsync("/api/projects", new
         {
             name = "ПроектПерсоны",
-            rootPath = Path.Combine(_factory.TempDir, "persona-proj"),
+            rootPath = Path.Combine(_host.TempDir, "persona-proj"),
             createDirectory = true,
         });
         projectResponse.IsSuccessStatusCode.Should().BeTrue();
@@ -592,7 +606,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     [Fact]
     public async Task GetFeature_МодельЧата_Авто_РезолвСлота()
     {
-        var user = Users.FindByUsername(TestWebApplicationFactory.TestUsername)!;
+        var user = Users.GetById(_host.Owner.Id)!;
         Users.SetModelTiers(user.Id, strong: "test-opus", medium: null, weak: null);
 
         var epic = await CreateTaskAsync(new { title = "эпик-авто", role = "feature" });
@@ -644,7 +658,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     [Fact]
     public async Task GetFeatures_ИСтраница_ОдинаковыеМодели()
     {
-        var user = Users.FindByUsername(TestWebApplicationFactory.TestUsername)!;
+        var user = Users.GetById(_host.Owner.Id)!;
         Users.SetModelTiers(user.Id, strong: "test-opus", medium: null, weak: null);
 
         var epic = await CreateTaskAsync(new { title = "эпик-мод", role = "feature" });
@@ -686,7 +700,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     [Fact]
     public async Task GetFeature_Авто_СверкаСБоевымРезолвером()
     {
-        var user = Users.FindByUsername(TestWebApplicationFactory.TestUsername)!;
+        var user = Users.GetById(_host.Owner.Id)!;
         // Medium-слот известен и отличен от "opus": если страница возьмёт Medium (старая цепочка),
         // а не модель персоны (боевой резолвер) — тест краснеет.
         Users.SetModelTiers(user.Id, strong: "test-opus", medium: "test-sonnet", weak: null);
@@ -740,7 +754,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     [MemberData(nameof(АвтоСверкаCases))]
     public async Task GetFeature_Авто_СверкаСБоевымРезолвером_СлотЗадачиИДефолтМеста(string scenario, string? taskTier)
     {
-        var user = Users.FindByUsername(TestWebApplicationFactory.TestUsername)!;
+        var user = Users.GetById(_host.Owner.Id)!;
         Users.SetModelTiers(user.Id, strong: "test-opus", medium: "test-sonnet", weak: null);
 
         // Персона без явной модели (Model=null): боевой резолвер идёт по уровню (задачи/места).
@@ -782,7 +796,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     [Fact]
     public async Task ChatModelResolver_ЧужаяЗадача_OwnerCheck_БезЗадачи()
     {
-        var user = Users.FindByUsername(TestWebApplicationFactory.TestUsername)!;
+        var user = Users.GetById(_host.Owner.Id)!;
         Users.SetModelTiers(user.Id, strong: "test-opus", medium: null, weak: null);
 
         // Чужая задача (владелец = stranger) с modelTier=strong.
@@ -1370,7 +1384,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
         var epicId = epic.GetProperty("id").GetString()!;
         // Проект второго владельца: эпик (владелец A) ссылается на него.
-        var dir = Path.Combine(_factory.TempDir, "mk_foreign_" + Guid.NewGuid().ToString("N")[..8]);
+        var dir = Path.Combine(_host.TempDir, "mk_foreign_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         var foreign = Projects.Create("mk-foreign-" + Guid.NewGuid().ToString("N")[..6],
             dir, SecondOwnerId, "seconduser");
@@ -1391,7 +1405,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
         var epicId = epic.GetProperty("id").GetString()!;
         // Локальный проект (DeviceId задан) владельца.
-        var dir = Path.Combine(_factory.TempDir, "mk_local_" + Guid.NewGuid().ToString("N")[..8]);
+        var dir = Path.Combine(_host.TempDir, "mk_local_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         var local = Projects.CreateLocal("mk-local-" + Guid.NewGuid().ToString("N")[..6], dir, OwnerId, "device-mk");
         _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.ProjectId = local.Id;
@@ -1413,7 +1427,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
         var epicId = epic.GetProperty("id").GetString()!;
         // Серверный проект владельца (не локальный): каталога нет в DI → catalog = null.
-        var dir = Path.Combine(_factory.TempDir, "mk_docs_off_" + Guid.NewGuid().ToString("N")[..8]);
+        var dir = Path.Combine(_host.TempDir, "mk_docs_off_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         var project = Projects.Create("mk-docs-off-" + Guid.NewGuid().ToString("N")[..6], dir, OwnerId, "testuser");
         _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.ProjectId = project.Id;
@@ -1442,7 +1456,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         });
         var stepId = step.GetProperty("id").GetString()!;
         _factory.Services.GetRequiredService<TaskManager>().GetById(stepId)!.PersonaId = "persona-mk";
-        var dir = Path.Combine(_factory.TempDir, "mk_attr_" + Guid.NewGuid().ToString("N")[..8]);
+        var dir = Path.Combine(_host.TempDir, "mk_attr_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         var project = Projects.Create("mk-attr-" + Guid.NewGuid().ToString("N")[..6], dir, OwnerId, "testuser");
         _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.ProjectId = project.Id;
@@ -1479,7 +1493,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         });
         var designId = design.GetProperty("id").GetString()!;
         _factory.Services.GetRequiredService<TaskManager>().GetById(designId)!.PersonaId = "persona-dsg";
-        var dir = Path.Combine(_factory.TempDir, "mk_dsg_" + Guid.NewGuid().ToString("N")[..8]);
+        var dir = Path.Combine(_host.TempDir, "mk_dsg_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         var project = Projects.Create("mk-dsg-" + Guid.NewGuid().ToString("N")[..6], dir, OwnerId, "testuser");
         _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.ProjectId = project.Id;
@@ -1523,7 +1537,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         });
         var unroledId = unroled.GetProperty("id").GetString()!;
         _factory.Services.GetRequiredService<TaskManager>().GetById(unroledId)!.PersonaId = "persona-unr";
-        var dir = Path.Combine(_factory.TempDir, "mk_unr_" + Guid.NewGuid().ToString("N")[..8]);
+        var dir = Path.Combine(_host.TempDir, "mk_unr_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         var project = Projects.Create("mk-unr-" + Guid.NewGuid().ToString("N")[..6], dir, OwnerId, "testuser");
         _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.ProjectId = project.Id;
@@ -1687,7 +1701,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     {
         var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
         var epicId = epic.GetProperty("id").GetString()!;
-        var dir = Path.Combine(_factory.TempDir, "mk_notree_" + Guid.NewGuid().ToString("N")[..8]);
+        var dir = Path.Combine(_host.TempDir, "mk_notree_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         var project = Projects.Create("mk-notree-" + Guid.NewGuid().ToString("N")[..6], dir, OwnerId, "testuser");
         _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.ProjectId = project.Id;
@@ -1714,7 +1728,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var (epicId, _, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
         var mainRoot = Projects.GetById(projectId)!.RootPath;
         // Эпик получает путь реальной папки, которой нет в `git worktree list` проекта.
-        var alien = Path.Combine(_factory.TempDir, "mk_alien_" + Guid.NewGuid().ToString("N")[..8]);
+        var alien = Path.Combine(_host.TempDir, "mk_alien_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(alien);
         _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.WorktreePath = alien;
 
@@ -2077,7 +2091,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     public async Task MergeFeature_ЗакрытаЭпиком_409()
     {
         var projectId = CreateProject("merge");
-        var wt = Path.Combine(_factory.TempDir, "merge_closed_" + Guid.NewGuid().ToString("N")[..8]);
+        var wt = Path.Combine(_host.TempDir, "merge_closed_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(wt);
         var branch = "feat/merge-closed-" + Guid.NewGuid().ToString("N")[..6];
         // Эпик сразу закрыт (Done).
@@ -2174,7 +2188,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     public async Task MergeFeature_WorktreeНеСуществует_409()
     {
         var projectId = CreateProject("merge");
-        var missing = Path.Combine(_factory.TempDir, "merge_missing_" + Guid.NewGuid().ToString("N")[..8]);
+        var missing = Path.Combine(_host.TempDir, "merge_missing_" + Guid.NewGuid().ToString("N")[..8]);
         var branch = "feat/merge-missing-" + Guid.NewGuid().ToString("N")[..6];
         var epic = await CreateProjectTaskAsync(projectId, new
         {
@@ -2233,7 +2247,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     public async Task MergeFeature_БезВетки_409()
     {
         var projectId = CreateProject("merge");
-        var wt = Path.Combine(_factory.TempDir, "merge_nobr_" + Guid.NewGuid().ToString("N")[..8]);
+        var wt = Path.Combine(_host.TempDir, "merge_nobr_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(wt);
         // Эпик с worktree-путём, но без ветки.
         var epic = await CreateProjectTaskAsync(projectId, new
@@ -2266,7 +2280,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     {
         var projectId = CreateProject("merge");
         // Простая директория на диске, но не worktree проекта.
-        var wt = Path.Combine(_factory.TempDir, "merge_notwt_" + Guid.NewGuid().ToString("N")[..8]);
+        var wt = Path.Combine(_host.TempDir, "merge_notwt_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(wt);
         var branch = "feat/merge-notwt-" + Guid.NewGuid().ToString("N")[..6];
         var epic = await CreateProjectTaskAsync(projectId, new
@@ -2417,7 +2431,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         // Корень — реальный git-репо; worktree-путь — обычная папка, НЕ добавленная через `git worktree add`.
         var git = _factory.Services.GetRequiredService<GitService>();
         await git.InitAsync(null, projectRoot);
-        var wt = Path.Combine(_factory.TempDir, "merge_plain_" + Guid.NewGuid().ToString("N")[..8]);
+        var wt = Path.Combine(_host.TempDir, "merge_plain_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(wt);
         var branch = "feat/merge-plain-" + Guid.NewGuid().ToString("N")[..6];
         var epic = await CreateProjectTaskAsync(projectId, new
@@ -3161,7 +3175,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
                 options.HttpMessageHandlerFactory = _ => _factory.Server.CreateHandler();
                 options.Transports = HttpTransportType.LongPolling;
                 options.AccessTokenProvider = () => Task.FromResult<string?>(_factory.GetToken(
-                    TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword));
+                    _host.Owner.Username, _host.Owner.Password));
             })
             .Build();
         var got = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -3350,7 +3364,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
                 options.HttpMessageHandlerFactory = _ => _factory.Server.CreateHandler();
                 options.Transports = HttpTransportType.LongPolling;
                 options.AccessTokenProvider = () => Task.FromResult<string?>(_factory.GetToken(
-                    TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword));
+                    _host.Owner.Username, _host.Owner.Password));
             })
             .Build();
 
@@ -3466,7 +3480,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
                 options.HttpMessageHandlerFactory = _ => _factory.Server.CreateHandler();
                 options.Transports = HttpTransportType.LongPolling;
                 options.AccessTokenProvider = () => Task.FromResult<string?>(_factory.GetToken(
-                    TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword));
+                    _host.Owner.Username, _host.Owner.Password));
             })
             .Build();
 
@@ -4164,7 +4178,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     // SpendStore в изолированной папке + шов SpendFeatureReader с заданными записями.
     private (SpendStore Store, SpendFeatureReader Reader) SpendStoreWith(params SpendRecord[] records)
     {
-        var dir = Path.Combine(_factory.TempDir, "spend_" + Guid.NewGuid().ToString("N")[..8]);
+        var dir = Path.Combine(_host.TempDir, "spend_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         var store = new SpendStore(dir, 30);
         foreach (var r in records) store.Record(r);
@@ -4644,7 +4658,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         // ПРОДА (TaskId + SessionId общего чата) → путь Б9c (исключение из прямого среза +
         // деление) реально измеряется, а не только прямой срез (минор 1: раньше SessionId не
         // было → путь Б9c замером не покрывался).
-        var dir = Path.Combine(_factory.TempDir, "bench_" + Guid.NewGuid().ToString("N")[..8]);
+        var dir = Path.Combine(_host.TempDir, "bench_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         var seedStore = new SpendStore(dir, 30);
         var swWrite = Stopwatch.StartNew();
@@ -4846,7 +4860,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
 
         // Журналы (реальный FeatureJournalStore на временном каталоге): A и B — pastDay-период +
         // «now»-период; C — только «now»-период.
-        var journalDir = Path.Combine(_factory.TempDir, "journal_" + Guid.NewGuid().ToString("N")[..8]);
+        var journalDir = Path.Combine(_host.TempDir, "journal_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(journalDir);
         var journal = new FeatureJournalStore(journalDir);
         AppendJournal(journal, OwnerId, epicAId,
@@ -5094,7 +5108,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         tasks.GetById(stepHId)!.CompletedAt = t1.AddMinutes(10);
 
         // Полные журналы только у F и H; у G журнала нет.
-        var journalDir = Path.Combine(_factory.TempDir, "journal_" + Guid.NewGuid().ToString("N")[..8]);
+        var journalDir = Path.Combine(_host.TempDir, "journal_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(journalDir);
         var journal = new FeatureJournalStore(journalDir);
         AppendJournal(journal, OwnerId, epicFId,
@@ -5195,7 +5209,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         tasks.GetById(stepBId)!.CompletedAt = t1.AddMinutes(10);
 
         // Полные журналы A и B (created → started → stopped), без дневных строк.
-        var journalDir = Path.Combine(_factory.TempDir, "journal_" + Guid.NewGuid().ToString("N")[..8]);
+        var journalDir = Path.Combine(_host.TempDir, "journal_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(journalDir);
         var journal = new FeatureJournalStore(journalDir);
         AppendJournal(journal, OwnerId, epicAId,

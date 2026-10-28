@@ -58,7 +58,7 @@ public class HostCategoryGuardTests
         hosted.Single(c => c.Name.EndsWith("ByField", StringComparison.Ordinal)).HasHostLabel.Should().BeFalse();
     }
 
-    private static IEnumerable<string> TestAssemblies()
+    internal static IEnumerable<string> TestAssemblies()
     {
         // Свои bin/<Config>/<tfm>/ — те же у тестовых проектов
         var own = new DirectoryInfo(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
@@ -168,6 +168,17 @@ internal static class HostScan
         }
     }
 
+    // Члены, к которым обращается класс вместе со ВСЕМИ вложенными типами (фикстура-наследник
+    // тоже правит хост): «Тип::Имя»
+    public static HashSet<string> MembersUsedBy(string dll, string className)
+    {
+        using var asm = new Asm(dll);
+        var members = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var t in asm.Types().Where(t => t.Name == className || t.Name.StartsWith(className + "+", StringComparison.Ordinal)))
+            members.UnionWith(t.MemberNames());
+        return members;
+    }
+
     private static bool UsesHost(TypeInfoMd t, Dictionary<string, TypeInfoMd> byName, HashSet<string> host)
     {
         for (var c = t; c is not null; c = c.BaseName is { } b && byName.TryGetValue(b, out var bt) ? bt : null)
@@ -234,6 +245,18 @@ internal static class HostScan
         public IEnumerable<string> FieldTypes() => _def.GetFields().SelectMany(f =>
             Md.GetFieldDefinition(f).DecodeSignature(NamesProvider.Instance, null));
 
+        // Члены из IL тел методов самого типа: «ОбъявляющийТип::Имя»
+        public IEnumerable<string> MemberNames()
+        {
+            foreach (var mh in _def.GetMethods())
+            {
+                if (asm.Body(Md.GetMethodDefinition(mh)) is not { } body) continue;
+                var il = body.GetILReader();
+                foreach (var token in IlTokenHandles(il))
+                    if (Names.Member(Md, token) is { } name) yield return name;
+            }
+        }
+
         // Всё, что упомянуто типом и его сгенерированными вложенными (async-машины, замыкания)
         public IEnumerable<string> MentionedTypes()
         {
@@ -279,9 +302,12 @@ internal static class HostScan
             }
         }
 
-        private List<string> IlTokens(BlobReader il)
+        private List<string> IlTokens(BlobReader il) =>
+            [.. IlTokenHandles(il).SelectMany(h => Names.All(Md, h))];
+
+        private static List<EntityHandle> IlTokenHandles(BlobReader il)
         {
-            var found = new List<string>();
+            var found = new List<EntityHandle>();
             while (il.RemainingBytes > 0)
             {
                 short code = il.ReadByte();
@@ -290,7 +316,7 @@ internal static class HostScan
                 switch (operand)
                 {
                     case OperandType.InlineMethod or OperandType.InlineField or OperandType.InlineType or OperandType.InlineTok:
-                        found.AddRange(Names.All(Md, MetadataTokens.EntityHandle(il.ReadInt32())));
+                        found.Add(MetadataTokens.EntityHandle(il.ReadInt32()));
                         break;
                     case OperandType.InlineNone: break;
                     case OperandType.ShortInlineBrTarget or OperandType.ShortInlineI or OperandType.ShortInlineVar:
@@ -366,6 +392,25 @@ internal static class HostScan
                     var ms = md.GetMethodSpecification((MethodSpecificationHandle)h);
                     return [.. All(md, ms.Method), .. ms.DecodeSignature(NamesProvider.Instance, null).SelectMany(a => a)];
                 default: return [];
+            }
+        }
+
+        // «ОбъявляющийТип::Имя» члена из токена IL; не член — null
+        public static string? Member(MetadataReader md, EntityHandle h)
+        {
+            switch (h.Kind)
+            {
+                case HandleKind.MethodDefinition:
+                    var m = md.GetMethodDefinition((MethodDefinitionHandle)h);
+                    return Of(md, m.GetDeclaringType()) + "::" + md.GetString(m.Name);
+                case HandleKind.MemberReference:
+                    var r = md.GetMemberReference((MemberReferenceHandle)h);
+                    var parent = r.Parent.Kind is HandleKind.TypeDefinition or HandleKind.TypeReference
+                        or HandleKind.TypeSpecification ? Root(md, (EntityHandle)r.Parent) : null;
+                    return parent is null ? null : parent + "::" + md.GetString(r.Name);
+                case HandleKind.MethodSpecification:
+                    return Member(md, md.GetMethodSpecification((MethodSpecificationHandle)h).Method);
+                default: return null;
             }
         }
 

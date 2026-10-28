@@ -77,6 +77,11 @@ public static class LocalActionCatalog
     public const string NoteTitle = "note-title";
     public const string NoteToc = "note-toc";
     public const string NoteTranslate = "note-translate";
+    // LLM-wiki (ADR-035 §7): места Хранителя — ingest источника (два прохода: утверждения,
+    // затем план) и одиночный факт по заявке агента. wiki-nightly и wiki-triage — Ф2
+    // (решения 12, 12а), в каталоге их пока нет.
+    public const string WikiIngest = "wiki-ingest";
+    public const string WikiFact = "wiki-fact";
     public const string ChatTitle = "chat-title";
     public const string ChatRetitle = "chat-retitle";
     public const string ChatExtractTasks = "chat-extract-tasks";
@@ -204,6 +209,19 @@ public static class LocalActionCatalog
         new(NoteTitle, "Заголовок заметки", "Заметки", CheapProfile.Small, DefaultLocal: true),
         new(NoteToc, "Оглавление заметки", "Заметки", CheapProfile.Text, DefaultLocal: true),
         new(NoteTranslate, "Перевод заметки", "Заметки", CheapProfile.Large, DefaultLocal: true),
+        // LLM-wiki (ADR-035 §7): Хранитель, два прохода по выдержке источника (утверждения,
+        // затем план). Large: в промпт идут выдержка источника и каталог раздела — на Text
+        // num_ctx молча обрезал бы хвост выдержки, и модель не увидела бы того, что должна
+        // была назвать. Слот medium — явный, как задано в ADR-035 §7 (не из профиля).
+        // DefaultLocal: true — ночной и явный разбор начинается с локали (политика A),
+        // облако — только с согласия человека (решение 9).
+        new(WikiIngest, "Разбор источника в вики", "Заметки", CheapProfile.Large,
+            DefaultLocal: true, Tier: ModelTier.Medium),
+        // Факт по заявке агента (wiki_add_fact): одно утверждение с дословной цитатой.
+        // Text, а не Small: на Small num_ctx обрезал бы выдержку источника, и цитата
+        // не сверялась бы QuoteMatcher-ом в отсечённой части. Слот weak — явный (ADR-035 §7).
+        new(WikiFact, "Факт для вики", "Заметки", CheapProfile.Text,
+            DefaultLocal: true, Tier: ModelTier.Weak),
         new(ChatTitle, "Заговолок чата", "Чаты", CheapProfile.Small, DefaultLocal: true),
         new(ChatRetitle, "Обновление названия чата", "Чаты", CheapProfile.Text, DefaultLocal: true),
         new(ChatExtractTasks, "Извлечение задач из чата", "Задачи", CheapProfile.Large, DefaultLocal: true),

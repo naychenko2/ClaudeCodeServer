@@ -37,25 +37,26 @@ class TestProfileTests(unittest.TestCase):
         self.assertEqual(0.0, tp.parse_duration(None))
         self.assertEqual(0.0, tp.parse_duration("мусор"))
 
-    def test_trx_не_выполненные_считаются_отдельно(self):
+    def test_trx_не_выполненные_входят_в_результаты_и_считаются_отдельно(self):
         results, skipped = tp.read_trx(FIXTURE)
-        self.assertEqual(4, len(results))
+        self.assertEqual(5, len(results))
         self.assertEqual(1, skipped)
 
     def test_границы_срезов(self):
         idx = [tp.bucket_of(s) for s in (0.0, 0.0999, 0.1, 0.999, 1.0, 4.999, 5.0, 29.9, 30.0, 999)]
         self.assertEqual([0, 0, 1, 1, 2, 2, 3, 3, 4, 4], idx)
 
-    def test_гистограмма_по_одному_тесту_в_каждом_срезе(self):
+    def test_гистограмма_пропущенный_тест_попадает_в_первый_срез(self):
         report, _, _ = self._report()
-        for label in ("< 0,1 с", "0,1–1 с", "1–5 с", "5–30 с"):
+        expected = {"< 0,1 с": "2 тестов", "0,1–1 с": "1 тестов", "1–5 с": "1 тестов", "5–30 с": "1 тестов"}
+        for label, cnt in expected.items():
             line = next(l for l in report.splitlines() if l.strip().startswith(label))
-            self.assertIn("1 тестов", line)
+            self.assertIn(cnt, line)
 
     def test_доля_хостовых_включая_вложенный_класс(self):
         report, _, _ = self._report()
-        # HostedTests.Slow (3 с) и HostedTests+Nested.Heavy (10 с) — хостовые: 2 из 4 тестов, 13 из 13,51 с
-        self.assertIn("Хостовые (TestWebApplicationFactory в .cs класса): 2 тестов (50,0%), 13,00 с (96,2% времени)", report)
+        # HostedTests.Slow (3 с) и HostedTests+Nested.Heavy (10 с) — хостовые: 2 из 5 тестов, 13 из 13,51 с
+        self.assertIn("Хостовые (TestWebApplicationFactory в .cs класса): 2 тестов (40,0%), 13,00 с (96,2% времени)", report)
 
     def test_классы_вне_исходников_считаются_нехостовыми(self):
         os.remove(os.path.join(self.src, "Hosted.cs"))

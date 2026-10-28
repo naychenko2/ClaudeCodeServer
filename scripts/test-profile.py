@@ -41,7 +41,10 @@ def find_trx(path):
 
 
 def read_trx(path):
-    """Возвращает (результаты, число не выполненных); результат = (класс, тест, секунды)."""
+    """Возвращает (результаты, число не выполненных); результат = (класс, тест, секунды).
+
+    Не выполненные (пропущенные) тоже входят в результаты с их длительностью (≈0) и попадают
+    в срез «< 0,1 с»: так профиль сходится с общим числом тестов прогона."""
     root = ET.parse(path).getroot()
     ns = {"t": root.tag[1:root.tag.index("}")]} if root.tag.startswith("{") else {}
     q = (lambda n: "t:" + n) if ns else (lambda n: n)
@@ -54,7 +57,6 @@ def read_trx(path):
     for r in root.iter(("{%s}" % ns["t"] if ns else "") + "UnitTestResult"):
         if r.get("outcome") not in ("Passed", "Failed"):
             skipped += 1
-            continue
         cls = classes.get(r.get("testId"), "?")
         name = r.get("testName") or "?"
         if name.startswith(cls + "."):
@@ -105,7 +107,7 @@ def fmt(sec, digits=2):
 
 def build_report(results, skipped, host, known, top_tests=25, top_classes=20):
     total = sum(s for _, _, s in results)
-    out = [f"Тестов: {len(results)}, суммарное время: {fmt(total)} с, не выполнено: {skipped}", ""]
+    out = [f"Тестов: {len(results)} (из них не выполнено: {skipped}), суммарное время: {fmt(total)} с", ""]
 
     out.append("Гистограмма длительностей:")
     counts, sums = [0] * len(BUCKETS), [0.0] * len(BUCKETS)
@@ -148,8 +150,9 @@ def main(argv=None):
     here = os.path.dirname(os.path.abspath(__file__))
     ap = argparse.ArgumentParser(description="Профиль тестов по TRX (только чтение)")
     ap.add_argument("path", help="папка артефакта run_tests или путь к .trx")
-    ap.add_argument("--src", default=os.path.join(os.path.dirname(here), "backend"),
-                    help="где искать .cs для определения хостовых классов (по умолчанию backend/)")
+    ap.add_argument("--src", default=os.path.join(os.path.dirname(here), "backend", "ClaudeHomeServer.Tests"),
+                    help="где искать .cs для определения хостовых классов (по умолчанию монолит "
+                         "backend/ClaudeHomeServer.Tests; для прогона нескольких проектов — backend/)")
     ap.add_argument("--top-tests", type=int, default=25)
     ap.add_argument("--top-classes", type=int, default=20)
     args = ap.parse_args(argv)

@@ -35,23 +35,44 @@ public static class WikiManifest
     /// «common» и «personal» — без изменений.</summary>
     public static string SafeFileName(string sectionKey) => sectionKey.Replace("/", "__");
 
-    /// <summary>Манифест раздела: страница → sha256 (hex в нижнем регистре).
-    /// Манифеста нет — пустая карта: хранилище до первого применения. Невалидный
-    /// файл — исключение: сверка с испорченным манифестом не должна проходить молча.</summary>
-    public static Dictionary<string, string> Read(string root, string sectionKey)
+    /// <summary>Прочитать манифест раздела: страница → sha256 (hex в нижнем регистре).
+    /// Различает три состояния файла на диске (см. WikiManifestState): файла нет —
+    /// норма до первого применения; валиден — карта; пустой или битый — сигнал
+    /// «Invalid», не исключение: фоновый читатель не должен падать, а испорченный
+    /// манифест не должен притворяться «не применено ничего» (ревью S2b-1, M1;
+    /// ADR-035:325). Вызывающий на Invalid: ничего не применяет, строка в _health.md.</summary>
+    public static WikiManifestReadResult TryRead(string root, string sectionKey)
     {
         var text = WikiFileWriter.Read(root, ManifestRelPath(sectionKey));
+        if (text is null)
+            return new WikiManifestReadResult(WikiManifestState.Missing, new Dictionary<string, string>());
         if (string.IsNullOrWhiteSpace(text))
-            return new Dictionary<string, string>();
-        return JsonSerializer.Deserialize<Dictionary<string, string>>(text) ?? new Dictionary<string, string>();
+            return new WikiManifestReadResult(WikiManifestState.Invalid, new Dictionary<string, string>());
+        try
+        {
+            var map = JsonSerializer.Deserialize<Dictionary<string, string>>(text);
+            if (map is not null)
+                return new WikiManifestReadResult(WikiManifestState.Valid, map);
+        }
+        catch (JsonException)
+        {
+            // Битый JSON — сигнал «не применять», а не исключение наружу: необработанное
+            // исключение фонового читателя останавливает хост (ADR-035:325).
+        }
+        return new WikiManifestReadResult(WikiManifestState.Invalid, new Dictionary<string, string>());
     }
 
     /// <summary>Записать хэши применённых страниц в манифест раздела: чтение → правка
     /// карты → атомарная запись. Ключи существующих страниц перезаписываются новыми
-    /// хэшами, чужие записи манифеста не трогаются; другие разделы — другие файлы.</summary>
+    /// хэшами, чужие записи манифеста не трогаются; другие разделы — другие файлы.
+    /// На невалидном манифесте — отказ: слить новую карту с нечитаемой и перезаписать
+    /// битый файл означало бы молча стереть его записи (тот же fail-closed).</summary>
     public static void RecordApplied(string root, string sectionKey, IReadOnlyDictionary<string, string> pageHashes)
     {
-        var manifest = Read(root, sectionKey);
+        var existing = TryRead(root, sectionKey);
+        if (existing.State == WikiManifestState.Invalid)
+            throw new InvalidOperationException($"Манифест раздела «{sectionKey}» невалиден — запись в него невозможна");
+        var manifest = new Dictionary<string, string>(existing.Manifest);
         foreach (var (page, hash) in pageHashes)
             manifest[page] = hash;
         // Порядок ключей фиксированный: манифест — данные на диске и в бэкапе, его diff
@@ -82,3 +103,23 @@ public static class WikiManifest
     private static string ManifestRelPath(string sectionKey) =>
         $"{ManifestDir}/{SafeFileName(sectionKey)}.json";
 }
+
+/// <summary>Состояние файла манифеста на диске (ревью S2b-1, M1): три состояния
+/// нельзя схлопнуть в два — пустой файл, притворившийся «не применено ничего»,
+/// возвращал бы удалённые вручную страницы; битый бросал бы исключение в фоновую службу.</summary>
+public enum WikiManifestState
+{
+    /// <summary>Манифеста нет: хранилище до первого применения — норма.</summary>
+    Missing,
+    /// <summary>Манифест валиден: карта страница → хэш читаема.</summary>
+    Valid,
+    /// <summary>Манифест невалиден: пустой (0 байт, одни пробелы) или битый JSON.
+    /// Ничего не применяется; вызывающий пишет строку в _health.md (ADR-035:325).</summary>
+    Invalid,
+}
+
+/// <summary>Результат чтения манифеста: состояние + карта. Карта значима только при Valid;
+/// при Missing/Invalid она пуста — вызывающий решает по State, а не по содержимому карты.</summary>
+public readonly record struct WikiManifestReadResult(
+    WikiManifestState State,
+    IReadOnlyDictionary<string, string> Manifest);

@@ -126,14 +126,72 @@ public class WikiManifestTests : IDisposable
         var manifestFile = Path.Combine(root, "keeper", "manifest", "projects__p1.json");
         File.Exists(manifestFile).Should().BeTrue();
 
-        var manifest = WikiManifest.Read(root, key);
-        manifest.Should().HaveCount(2); // ровно две записи
-        manifest["Проекты/p1/Знание.md"].Should().Be(Sha(File.ReadAllText(Path.Combine(root, rel1))));
-        manifest["Проекты/p1/Другое.md"].Should().Be(Sha(File.ReadAllText(Path.Combine(root, rel2))));
+        var manifest = WikiManifest.TryRead(root, key);
+        manifest.State.Should().Be(WikiManifestState.Valid);
+        manifest.Manifest.Should().HaveCount(2); // ровно две записи
+        manifest.Manifest["Проекты/p1/Знание.md"].Should().Be(Sha(File.ReadAllText(Path.Combine(root, rel1))));
+        manifest.Manifest["Проекты/p1/Другое.md"].Should().Be(Sha(File.ReadAllText(Path.Combine(root, rel2))));
 
-        // Другой раздел — другой файл: common не создан и читается пустым.
+        // Другой раздел — другой файл: common не создан и читается «файла нет».
         File.Exists(Path.Combine(root, "keeper", "manifest", "common.json")).Should().BeFalse();
-        WikiManifest.Read(root, "common").Should().BeEmpty();
+        var absent = WikiManifest.TryRead(root, "common");
+        absent.State.Should().Be(WikiManifestState.Missing);
+        absent.Manifest.Should().BeEmpty();
+        AssertNoTempFiles();
+    }
+
+    // ─── Чтение манифеста: три состояния (ревью S2b-1, M1) ────────────────────
+
+    [Fact]
+    public void TryRead_ФайлаНет_Missing_БезИсключения()
+    {
+        var root = Path.Combine(_dir, "w9");
+
+        var result = WikiManifest.TryRead(root, "common");
+
+        result.State.Should().Be(WikiManifestState.Missing); // норма до первого применения
+        result.Manifest.Should().BeEmpty();
+        AssertNoTempFiles();
+    }
+
+    [Theory]
+    [InlineData("")] // манифест 0 байт
+    [InlineData("   ")] // только пробелы
+    [InlineData("{ мусор")] // битый JSON
+    [InlineData("[1,2]")] // валидный JSON, не та форма
+    [InlineData("null")] // десериализуется в null
+    public void TryRead_НевалидныйМанифест_Invalid_БезИсключения_СтраницыНеТронуты(string body)
+    {
+        var root = Path.Combine(_dir, "w10");
+        var pageRel = "pages/Общее/X.md";
+        WikiFileWriter.Write(root, pageRel, "ручная правка пользователя");
+        var manifestFile = Path.Combine(root, "keeper", "manifest", "common.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(manifestFile)!);
+        File.WriteAllText(manifestFile, body); // файл «пришёл с диска» испорченным
+
+        var result = WikiManifest.TryRead(root, "common");
+
+        result.State.Should().Be(WikiManifestState.Invalid);
+        result.Manifest.Should().BeEmpty();
+        // fail-closed: страница, сверяемая с испорченным манифестом, не тронута —
+        // «не применять» не должно превратиться в «применить всё заново»
+        File.ReadAllText(Path.Combine(root, pageRel)).Should().Be("ручная правка пользователя");
+        AssertNoTempFiles();
+    }
+
+    [Fact]
+    public void RecordApplied_НаНевалидномМанифесте_Отказ_БитыйФайлНеПерезаписан()
+    {
+        var root = Path.Combine(_dir, "w11");
+        var manifestFile = Path.Combine(root, "keeper", "manifest", "common.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(manifestFile)!);
+        File.WriteAllText(manifestFile, "{ мусор");
+
+        Record.Exception(() => WikiManifest.RecordApplied(root, "common",
+            new Dictionary<string, string> { ["Общее/X.md"] = Sha("x") })).Should().NotBeNull();
+
+        // отказ не перезаписал битый файл: его нечитаемые записи не стёрты молча
+        File.ReadAllText(manifestFile).Should().Be("{ мусор");
         AssertNoTempFiles();
     }
 

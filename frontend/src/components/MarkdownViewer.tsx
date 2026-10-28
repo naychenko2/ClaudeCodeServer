@@ -99,7 +99,9 @@ class FenceState {
 // Маска «внутри кода»: true — позиция i внутри ```/~~~забора или inline-`…`-кода.
 // Те же границы, что у бэкенда (NotesService.CodeMask): ссылка/тег в коде — не ссылка и
 // не тег (Obsidian): пример синтаксиса давал бы «призраков» графа и ложные теги.
-function codeMask(md: string): boolean[] {
+// Экспортирована: редактор меток (features/notes/NoteEditor) считает «код» этой же
+// функцией — второй копии этой маски во фронт быть не должно.
+export function codeMask(md: string): boolean[] {
   const mask = new Array<boolean>(md.length).fill(false);
   const fence = new FenceState();
   let offset = 0;

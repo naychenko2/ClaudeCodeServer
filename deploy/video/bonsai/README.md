@@ -62,4 +62,16 @@ sudo systemctl daemon-reload && sudo systemctl enable --now bonsai gpu-arbiter
 ## CCS
 
 Секция `LocalEngines:bonsai` в `appsettings.Local.json` (см. `docs/architecture/llm-providers.md`,
-раздел «Именованные локальные движки»).
+раздел «Именованные локальные движки»). **Адреса машин — только в `appsettings.Local.json`**,
+в отслеживаемых конфигах их не бывает; образец всей секции —
+`backend/ClaudeHomeServer/appsettings.Local.example.json`.
+
+- `BaseUrl` — llama-server (`http://192.168.7.107:18030`), `Model`, `Actions` (какие места идут
+  на этот движок), `FallbackRoute` — страховка после неудачи движка (`direct:minimax`), `NumCtx`;
+- `MetricsUrl` — `http://192.168.7.107:18030/metrics`: с ним поллер статистики заводит дорожку
+  «Bonsai» в панели «Локальные модели» (в `bonsai.service` должен быть флаг `--metrics`);
+  без него движок в панели не показывается;
+- `ReadyUrl` — `http://192.168.7.107:18031/ready`: проба готовности арбитра перед вызовом;
+- `StateUrl` — `http://192.168.7.107:18031/state`: статус «уступила карту / ждёт возврата»
+  и блок «Дежурство» в панели; без него дорожка не различает уступку и аварию — молчание
+  `/metrics` для неё обычный «down».

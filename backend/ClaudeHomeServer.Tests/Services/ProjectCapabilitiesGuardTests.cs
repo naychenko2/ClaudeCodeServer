@@ -66,6 +66,8 @@ public class ProjectCapabilitiesGuardTests
         ["backend/ClaudeHomeServer.Llm/Gateway/LlmGatewayEndpoints.cs"] = (2, "LLM-провайдер"),
         // Поллер: источник метрик выбирается по провайдеру, помеченному IsLocal (LLM-провайдер).
         ["backend/ClaudeHomeServer.Llm/LocalStats/LocalModelStatsPoller.cs"] = (2, "LLM-провайдер"),
+        // Подписи основного стенда панели «Локальные модели»: берутся из Stats первого провайдера с IsLocal (LLM-провайдер).
+        ["backend/ClaudeHomeServer/Controllers/LocalModelStatsController.cs"] = (1, "LLM-провайдер"),
         // Расход: локальные LLM-провайдеры считаются бесплатными (1444df06e) — IsLocal везде про провайдера, не проект.
         ["backend/ClaudeHomeServer.Llm/LlmModelResolverAdapter.cs"] = (2, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/OneShotClaudeRunner.cs"] = (3, "LLM-провайдер"),

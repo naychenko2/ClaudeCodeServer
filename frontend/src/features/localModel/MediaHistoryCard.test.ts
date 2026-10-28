@@ -16,7 +16,7 @@
 import { act, createElement } from 'react';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  installFakeDom, mount, textNodes, uninstallFakeDom,
+  findNodeByAttr, installFakeDom, mount, reactProps, textNodes, uninstallFakeDom,
 } from '../../components/chat/__tests__/fakeDom';
 import { MediaHistoryCard } from './MediaHistoryCard';
 import type { MediaHistoryRecord } from '../../lib/api';
@@ -189,6 +189,67 @@ describe('карточка истории: гонка «закрытие/лис�
     await tick();
     expect(imgSrc()).toBe(created[0]);  // новая запись досчиталась как обычно
     act(() => { card.root.unmount(); });
+  });
+
+  // Не-id зависимости эффекта [record.id, variant, record.status] (R-F3-b): потеряй любую из них —
+  // карточка не перезапросит файл / не отзовёт прежний blob-URL, а эти тесты краснеют.
+  const pickVariant = (n: number): void => {
+    const btn = findNodeByAttr(bodyRoot(), 'aria-label', `Вариант ${n}`);
+    expect(btn, `кнопка «Вариант ${n}» не отрисована`).not.toBeNull();
+    act(() => { (reactProps(btn!) as { onClick: () => void }).onClick(); });
+  };
+  const withCount = (id: string, count: number): MediaHistoryRecord => ({ ...rec(id), params: { count } });
+
+  it('клик по «Вариант 2» после загрузки: прежний blob-URL отозван, новый файл запрошен', async () => {
+    const card = openCard(withCount('a', 2));
+    const ga = lastGate();
+    respond(ga).blobDone();
+    await tick();
+    expect(created.length).toBe(1);
+    pickVariant(2);                       // та же запись, другая не-id зависимость — variant
+    expect(revoked).toEqual([created[0]]); // cleanup эффекта отозвал blob варианта 1
+    expect(urls.length).toBe(2);
+    expect(urls[1]).toContain('/api/local-model/history/a/file');
+    expect(urls[1]).toContain('n=1');      // запрошен именно второй вариант
+    expect(ga.signal?.aborted).toBe(true); // прежний запрос погашен
+    respond(lastGate()).blobDone();
+    await tick();
+    expect(created.length).toBe(2);
+    expect(imgSrc()).toBe(created[1]);     // на экране вариант 2, а не залипший вариант 1
+    act(() => { card.root.unmount(); });
+    await tick();
+    expect(live()).toEqual([]);
+  });
+
+  it('клик по «Вариант 2» во время загрузки: прежний запрос погашен, его тело blob-URL не создаёт', async () => {
+    const card = openCard(withCount('a', 2));
+    const ga = lastGate();
+    const a = respond(ga);
+    await tick();                          // стоим на await res.blob() варианта 1
+    pickVariant(2);
+    expect(ga.signal?.aborted).toBe(true);
+    expect(urls[1]).toContain('n=1');
+    const b = respond(lastGate());
+    a.blobDone();                          // тело варианта 1 доехало после клика
+    b.blobDone();
+    await tick();
+    expect(created.length).toBe(1);        // только вариант 2
+    act(() => { card.root.unmount(); });
+    await tick();
+    expect(live()).toEqual([]);
+  });
+
+  it('статус ушёл из completed: прежний blob-URL отозван, файл больше не запрашивается', async () => {
+    const card = openCard(rec('a'));
+    respond(lastGate()).blobDone();
+    await tick();
+    expect(created.length).toBe(1);
+    act(() => { card.root.render(createElement(MediaHistoryCard, cardProps({ ...rec('a'), status: 'running' }))); });
+    expect(revoked).toEqual(created);      // cleanup по смене record.status
+    expect(urls.length).toBe(1);           // новый запрос не ушёл
+    act(() => { card.root.unmount(); });
+    await tick();
+    expect(live()).toEqual([]);
   });
 
   it('сетевой сбой — по-прежнему показывается: отмена от него отличается', async () => {

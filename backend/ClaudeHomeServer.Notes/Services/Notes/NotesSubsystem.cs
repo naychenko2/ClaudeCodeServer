@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Notes.Wiki;
 using ClaudeHomeServer.Services.Plugins;
 using ClaudeHomeServer.Services.Turn;
 
@@ -81,6 +82,10 @@ public sealed class NotesSubsystem : IAppSubsystem
         // Форвардер на уже зарегистрированный синглтон, а не `AddSingleton<INoteTaskSync,
         // NoteTaskSyncService>()` — иначе второй экземпляр.
         services.AddSingleton<INoteTaskSync>(sp => sp.GetRequiredService<NoteTaskSyncService>());
+        // Хранитель — единственный писатель data/wiki/{ownerId}/pages/ (ADR-035, реш. 2):
+        // зовётся применением пакетов (S2c) и REST (S2f); наружу его контракт не выходит —
+        // vertical-внутренний тип, как остальные Services/Wiki.
+        services.AddSingleton<WikiKeeper>();
         services.AddGatedHostedService<NoteExpiryService>(config);
         // Этап 5, шаг 6 (инверсия контрибьюторов промпта): контрибьютор секции
         // «recall-notes» зарегистрирован в своей вертикали, Turn собирает

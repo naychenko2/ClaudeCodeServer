@@ -62,7 +62,9 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         return model;
     }
 
-    private void Invalidate(string userId) => _cache.TryRemove(userId, out _);
+    // internal (не private): нужен Хранителю (та же сборка) — после записи страницы граф
+    // обязан видеть её сразу, а не по истечении TTL (ADR-035, решение 4, шаг 6).
+    internal void Invalidate(string userId) => _cache.TryRemove(userId, out _);
 
     // Построение модели МИМО кэша (ADR-035, решение 4, шаг 1 применения): Хранитель проверяет
     // пакет по фактическому состоянию диска, а не по кэшу с TTL 2 с — файл, записанный им

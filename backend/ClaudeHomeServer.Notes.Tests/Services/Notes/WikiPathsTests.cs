@@ -146,12 +146,15 @@ public class WikiPathsTests : IDisposable
     }
 
     [Fact]
-    public void IsWikiPath_СимвольнаяСсылкаСТочками_Истинен()
+    public void IsWikiPath_СсылкаСТочкамиВПути_POSIXЭталонFailClosed()
     {
         if (OperatingSystem.IsWindows()) return; // см. предыдущий тест
-        // POSIX: link/.. — родитель ЦЕЛИ ссылки. Запись по data/notes/link/../Хроника.md
-        // физически попадает в data/wiki/{owner}/pages/Хроника.md — предикат обязан сказать «вики»
-        // (ревью S1a, MAJOR 2: GetFullPath сворачивал «..» до разыменования).
+        // Эталон модели (не поведение .NET-писателей, ревью S1a, минор 1): ядро для сырого
+        // пути «link/../Хроника.md» применит «..» к разыменованной ссылке и запишет в вику —
+        // предикат обязан сказать «вики». Но .NET-писатель (SafePath/GetFullPath) сворачивает
+        // «..» в строке до syscall и такого пути к ФС не несёт: отказ лишний, не дыра.
+        // Настоящий вектор .NET — «..» внутри ЦЕЛИ ссылки — покрыт физическим тестом
+        // IsWikiPath_ЦельСсылкиСТочками_РазыменовываетсяФизически ниже.
         var deep = Path.Combine(WikiPaths.Pages(_dir, Owner), "deep");
         Directory.CreateDirectory(deep);
         Directory.CreateDirectory(Path.Combine(_dir, "notes"));
@@ -159,6 +162,87 @@ public class WikiPathsTests : IDisposable
 
         var full = Path.Combine(_dir, "notes", "link", "..", "Хроника.md");
         WikiPaths.IsWikiPath(full, _dir).Should().BeTrue();
+    }
+
+    [Fact]
+    public void IsWikiPath_ЦельСсылкиСТочками_РазыменовываетсяФизически()
+    {
+        if (OperatingSystem.IsWindows()) return; // см. предыдущий тест
+        // Проба A2 (ревью S1a, MAJOR 1): sub → pages вики, link → «sub/../evil» — «..» в
+        // ЦЕЛИ ссылки. Ядро применяет «..» к физически разыменованному sub (родитель цели),
+        // а не к строке цели: GetFullPath давал data/notes/evil (гейт false), а запись
+        // шла в data/wiki/{owner}/evil/. Инвариант: каноническая форма гейта == реальный путь ФС.
+        var pages = WikiPaths.Pages(_dir, Owner);
+        Directory.CreateDirectory(pages);
+        Directory.CreateDirectory(Path.Combine(_dir, "wiki", Owner, "evil")); // место реальной записи
+        Directory.CreateDirectory(Path.Combine(_dir, "notes"));
+        Directory.CreateSymbolicLink(Path.Combine(_dir, "notes", "sub"), pages);
+        Directory.CreateSymbolicLink(Path.Combine(_dir, "notes", "link"), "sub/../evil"); // относительная цель
+
+        var full = Path.Combine(_dir, "notes", "link", "x.md");
+        WikiPaths.IsWikiPath(full, _dir).Should().BeTrue();
+
+        // и физическая запись того же пути идёт в вику, а не в «data/notes/evil»
+        File.WriteAllText(full, "запись", new UTF8Encoding(false));
+        File.Exists(Path.Combine(_dir, "wiki", Owner, "evil", "x.md")).Should().BeTrue();
+        File.Exists(Path.Combine(_dir, "notes", "evil", "x.md")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void IsWikiPath_СсылкаНаWikiСозданаПослеПервогоВызова_УчитываетсяСразу()
+    {
+        if (OperatingSystem.IsWindows()) return; // см. предыдущий тест
+        // Проба D (ревью S1a, MAJOR 2): кэш корня на 60 с давал окно fail-open — первый
+        // вызов при ещё несуществующем data/wiki, затем data/wiki становится ссылкой на
+        // настоящую вику, и следующие 60 с гейт молчал. Кэшируется только канонический
+        // dataDir; «является ли data/wiki ссылкой» перепроверяется на каждый вызов.
+        var full = Path.Combine(_dir, "wiki", Owner, "pages", "Хроника.md");
+        WikiPaths.IsWikiPath(full, _dir).Should().BeTrue(); // до ссылки — путь под data/wiki
+
+        var target = Path.Combine(_dir, "real-wiki");
+        Directory.CreateDirectory(target);
+        Directory.CreateSymbolicLink(Path.Combine(_dir, "wiki"), target);
+
+        // сразу после создания ссылки — без окна: обе стороны в одном пространстве имён
+        WikiPaths.IsWikiPath(full, _dir).Should().BeTrue();
+        WikiPaths.IsWikiPath(Path.Combine(target, Owner, "pages", "Хроника.md"), _dir).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task IsWikiPath_ЦиклСсылок_ОтвечаетБыстроIFailClosed()
+    {
+        if (OperatingSystem.IsWindows()) return; // см. предыдущий тест
+        // Минор ревью S1a (мутация M4): без границы MaxLinkHops цикл a→b→a гонял бесконечно.
+        // С границей разбор обрывается, и ответ — fail-closed: путь считается принадлежащим
+        // вики независимо от места цикла. Решение по задаче S1a: записать такой путь ФС всё
+        // равно не даст (ELOOP), поэтому отказ (true) безопаснее «false по несуществующему
+        // месту» — ни один вызывающий при true не пишет.
+        Directory.CreateDirectory(Path.Combine(_dir, "notes"));
+        Directory.CreateSymbolicLink(Path.Combine(_dir, "notes", "a"), "b");
+        Directory.CreateSymbolicLink(Path.Combine(_dir, "notes", "b"), "a");
+
+        var call = Task.Run(() => WikiPaths.IsWikiPath(Path.Combine(_dir, "notes", "a", "x.md"), _dir));
+        (await Task.WhenAny(call, Task.Delay(5000))).Should().Be(call, "предикат на цикле ссылок не должен зависать");
+        (await call).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData(40, false)] // цепочка ровно в бюджет: разобралась — ответ по её цели (вне вики)
+    [InlineData(41, true)]  // за бюджетом: разбор не удался — fail-closed
+    public void IsWikiPath_ЦепочкаСсылок_ГраницаMaxLinkHops(int links, bool expected)
+    {
+        if (OperatingSystem.IsWindows()) return; // см. предыдущий тест
+        // Граница глубины (минор ревью S1a): MaxLinkHops=40 — цепочка из 40 ссылок ещё
+        // разбирается (цель вне вики → false); 41-я — за пределами общего бюджета разбора:
+        // цель не разыменована, ответ fail-closed (true), а не зависший или молчащий.
+        var outside = Path.Combine(_dir, "outside");
+        Directory.CreateDirectory(outside);
+        var chain = Path.Combine(_dir, "chain");
+        Directory.CreateDirectory(chain);
+        for (var i = 0; i < links; i++)
+            Directory.CreateSymbolicLink(Path.Combine(chain, $"l{i}"), i == links - 1 ? outside : $"l{i + 1}");
+
+        WikiPaths.IsWikiPath(Path.Combine(chain, "l0", "x.md"), _dir).Should().Be(expected);
     }
 
     [Fact]

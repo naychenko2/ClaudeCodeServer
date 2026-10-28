@@ -14,7 +14,11 @@ namespace ClaudeHomeServer.Services.Notes;
 // NFC, без учёта регистра. Путь через ссылку, ведущую в вики, — путь в вики; ссылка,
 // ведущая наружу, — нет. Корень вики канонизируется этим же кодом: data/wiki как ссылка
 // (в том числе висячая) задаёт корень своей целью — обе стороны в одном пространстве имён.
-// Как SafePath, предикат чистый и не бросает: отказ формирует вызывающий.
+// Инвариант: каноническая форма гейта == реальный путь ФС — «..» в ЦЕЛИ ссылки тоже
+// применяется к физически разыменованному каталогу, а не к строке цели (ревью S1a, MAJOR 1).
+// Разобрать не удалось (цикл ссылок, превышение глубины) — IsWikiPath отвечает fail-closed:
+// путь считается принадлежащим вики, а не молчит: отказ лишнего места безопаснее записи
+// в вику мимо гейта. Как SafePath, предикат чистый и не бросает: отказ формирует вызывающий.
 public static class WikiPaths
 {
     // Имя папки под data/ — одно на всех владельцев (ADR-035, решение 1).
@@ -47,29 +51,36 @@ public static class WikiPaths
     {
         var full = Canonical(path);
         var wikiRoot = WikiRootOf(dataDir);
+        // Разобрать не удалось (цикл ссылок, превышение глубины) — fail-closed: считаем путь
+        // в вики. Ни один вызывающий не пишет при true; отказ лишнего места безопаснее, чем
+        // запись в вику мимо гейта (ревью S1a, MAJOR 1).
+        if (full is null || wikiRoot is null) return true;
         return full.Equals(wikiRoot, StringComparison.OrdinalIgnoreCase)
             || full.StartsWith(wikiRoot + "/", StringComparison.OrdinalIgnoreCase);
     }
 
-    // Корень вики канонизируется тем же Canonical, что и путь: «data/wiki» как символьная
+    // Корень вики канонизируется тем же обходом, что и путь: «data/wiki» как символьная
     // ссылка (в том числе висячая) задаёт корень своей целью — иначе файл через ссылку
     // канонизируется в одно пространство имён, а корень — в другое, и гейт молчит (ревью S1a).
-    // Предикат зовётся в циклах побочных писателей на каждый файл — корень кэшируется на
-    // dataDir: разыменяется не чаще раза в RootRecheckMs (смена symlink за время жизни
-    // процесса не ожидается; период — только чтобы не держать устаревшее навсегда).
-    private static string WikiRootOf(string dataDir)
+    // Предикат зовётся в циклах побочных писателей на каждый файл, но ответ обязан зависеть
+    // только от состояния ФС: кэшируется только дорогая стабильная часть — канонический
+    // dataDir (конфиг процесса, символьных ссылок в нём не ожидается), — а «data/wiki»
+    // переразбирается на КАЖДЫЙ вызов (ревью S1a, MAJOR 2: кэш корня на 60 с давал окно
+    // fail-open, когда data/wiki становился ссылкой уже после первого вызова).
+    private static string? WikiRootOf(string dataDir)
     {
         var key = Normalize(dataDir);
-        var now = Environment.TickCount64;
-        if (_rootCache.TryGetValue(key, out var hit) && now - hit.stamp < RootRecheckMs)
-            return hit.root;
-        var root = Canonical(Path.Combine(dataDir, DirName));
-        _rootCache[key] = (root, now);
-        return root;
+        if (!_dataDirCache.TryGetValue(key, out var dataRoot))
+        {
+            dataRoot = Canonical(dataDir);
+            if (dataRoot is not null) _dataDirCache[key] = dataRoot; // неудачный не держим
+        }
+        if (dataRoot is null) return null; // сам dataDir неразрешим — fail-closed у вызывающего
+        var hops = 0; // отдельный бюджет на разбор корня: путь проверяется своим
+        return ResolveLinkChain(Path.Combine(dataRoot, DirName), ref hops);
     }
 
-    private static readonly ConcurrentDictionary<string, (string root, long stamp)> _rootCache = new();
-    private const long RootRecheckMs = 60_000;
+    private static readonly ConcurrentDictionary<string, string> _dataDirCache = new();
 
     // Вики заведена: есть pages/_schema.md. Признак на диске, а не фич-флаг (ADR-035, решение 1).
     public static bool IsInitialized(string dataDir, string ownerId) =>
@@ -85,13 +96,15 @@ public static class WikiPaths
     }
 
     // Каноническая форма для сравнения: абсолютный путь без сворачивания «..» → обход
-    // сегментов сверху вниз: на каждом шаге разыменование символьных ссылок (цель — вся
-    // цепочка), «..» применяется к уже разыменованному каталогу, «.» пропускается.
-    // GetFullPath сворачивал «..» ДО разыменования — «link/../x» давал путь наружу вики,
-    // хотя запись шла в вику (ревью S1a, MAJOR 2); теперь — как realpath -m.
-    // Только для сравнения, не для открытия файла: несуществующий путь остаётся путём
-    // в той же форме. Хвост: разделители «/» → NFC.
-    internal static string Canonical(string path)
+    // сегментов сверху вниз: на каждом шаге разыменование символьных ссылок (цель — тоже
+    // путь, обходится этим же обходом), «..» применяется к уже разыменованному каталогу,
+    // «.» пропускается. GetFullPath сворачивал «..» ДО разыменования — «link/../x» давал
+    // путь наружу вики, хотя запись шла в вику (ревью S1a); теперь — как realpath -m,
+    // в том числе внутри цели ссылки: «sub/../evil», где sub ведёт в вику, даёт вику
+    // (ревью S1a, MAJOR 1). null — разбор не удался (превышен бюджет ссылок): вызывающий
+    // трактает fail-closed. Только для сравнения, не для открытия файла: несуществующий
+    // путь остаётся путём в той же форме. Хвост: разделители «/» → NFC.
+    internal static string? Canonical(string path)
     {
         // GetFullPath здесь только за корень; его свёрнутые «..» ниже не используются
         var root = Path.GetPathRoot(Path.GetFullPath(path));
@@ -101,10 +114,23 @@ public static class WikiPaths
         if (!full.StartsWith(root, StringComparison.Ordinal))
             full = Path.GetFullPath(full); // drive-relative («C:x») — редкая форма, сворачивание допустимо
 
-        var cur = root;
-        foreach (var seg in full[root.Length..]
-                     .Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
-                            StringSplitOptions.RemoveEmptyEntries))
+        var hops = 0; // общий бюджет разыменования на весь разбор этого пути (ревью S1a)
+        var cur = WalkSegments(root, full[root.Length..], ref hops);
+        return cur is null ? null : Normalize(cur);
+    }
+
+    // Глубина цепочки ссылок: цикл a→b→a не должен гнать бесконечно.
+    private const int MaxLinkHops = 40;
+
+    private static readonly char[] Separators = [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar];
+
+    // Обход сегментов от уже разыменованного каталога cur: «.» пропускается, «..» — к текущему
+    // (физически разыменованному) каталогу, каждый сегмент — цепочка ссылок. hops — общий
+    // бюджет на весь разбор, вложенные цели ссылок тратят его же (не отдельный на каждую
+    // цель). null — бюджет исчерпан: вызывающий трактает fail-closed.
+    private static string? WalkSegments(string cur, string rel, ref int hops)
+    {
+        foreach (var seg in rel.Split(Separators, StringSplitOptions.RemoveEmptyEntries))
         {
             if (seg == ".") continue;
             if (seg == "..")
@@ -113,31 +139,43 @@ public static class WikiPaths
                 if (parent is not null) cur = parent;
                 continue;
             }
-            var candidate = Path.Combine(cur, seg);
-            cur = ResolveLinkChain(candidate) ?? candidate;
+            var resolved = ResolveLinkChain(Path.Combine(cur, seg), ref hops);
+            if (resolved is null) return null;
+            cur = resolved;
         }
-        return Normalize(cur);
+        return cur;
     }
-
-    // Глубина цепочки ссылок: цикл a→b→a не должен гнать бесконечно.
-    private const int MaxLinkHops = 40;
 
     // Символьная ссылка каталога или файла — вся цепочка целей. Висячая ссылка (цель ещё
     // не существует) — тоже ссылка: её цель и есть путь (fail-closed: первая запись в такую
-    // вику не должна уводиться за её пределы). Цель не абсолютная — считается от каталога
-    // со ссылкой (POSIX). Не ссылка или нет на диске — null. Цикл — стоп на MaxLinkHops
-    // (такой путь всё равно не запишется: ELOOP).
-    private static string? ResolveLinkChain(string candidate)
+    // вику не должна уводиться за её пределы). Цель — путь: абсолютная считается от своего
+    // корня, относительная — от каталога со ссылкой (POSIX), и обходится тем же сегментным
+    // обходом: «..» в цели применяется к физически разыменованному каталогу, как ядро ФС
+    // (ревью S1a, MAJOR 1: Path.GetFullPath схлопывал «..» в строке цели — гейт расходился
+    // с тем, куда реально пойдёт запись). Не ссылка или нет на диске — сам candidate.
+    // Бюджет hops общий на весь разбор; исчерпан (цикл) — null: такой путь всё равно
+    // не запишется (ELOOP), но ответ обязан быть fail-closed, а не зависшим или молчащим.
+    private static string? ResolveLinkChain(string candidate, ref int hops)
     {
         var current = candidate;
-        for (var hop = 0; hop < MaxLinkHops; hop++)
+        while (true)
         {
             var raw = LinkTargetOf(current);
-            if (raw is null) return hop == 0 ? null : current;
-            var target = Path.IsPathRooted(raw) ? raw : Path.Combine(Path.GetDirectoryName(current)!, raw);
-            current = Path.GetFullPath(target); // сворачиваем «.»/«..» в строке цели
+            if (raw is null) return current; // не ссылка или нет на диске — остаётся путём
+            if (++hops > MaxLinkHops) return null;
+            var resolved = Path.IsPathRooted(raw)
+                ? ResolveRooted(raw, ref hops)
+                : WalkSegments(Path.GetDirectoryName(current)!, raw, ref hops);
+            if (resolved is null) return null;
+            current = resolved; // цель уже разыменована целиком; своя ссылка продолжит цикл выше
         }
-        return current;
+    }
+
+    private static string? ResolveRooted(string rooted, ref int hops)
+    {
+        var root = Path.GetPathRoot(rooted);
+        if (string.IsNullOrEmpty(root)) return null; // абсолютной без корня не бывает — не молчим
+        return WalkSegments(root, rooted[root.Length..], ref hops);
     }
 
     // Свойство LinkTarget работает по lstat самого элемента: висячая ссылка даёт цель,

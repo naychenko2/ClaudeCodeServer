@@ -6,8 +6,13 @@
 Только читает: TRX и исходники не меняются, ничего не пишется на диск.
 
 Запуск:  python3 -I scripts/test-profile.py <папка артефакта run_tests | файл.trx> [--src КОРЕНЬ]
+         ... --json              — длительность каждого класса в JSON (вход для scripts/test-shards.py)
+         ... --check [--threshold 2] — сторож длительности: exit 1, если есть тест дольше порога.
+             Гонять ТОЛЬКО на TRX набора Fast (фильтр исключает Host/Slow/Integration/Node/Bench):
+             там каждый тест дольше порога — нехостовый тест без метки Slow.
 """
 import argparse
+import json
 import os
 import re
 import sys
@@ -28,6 +33,11 @@ def parse_duration(text):
         return int(h) * 3600 + int(m) * 60 + float(s)
     except (AttributeError, ValueError):
         return 0.0
+
+
+# Фильтр набора Fast: исключение категорий, а не перечень меток. Единственная копия в скриптах.
+FAST_FILTER = "Category!=Host&Category!=Slow&Category!=Integration&Category!=Node&Category!=Bench"
+CHECK_THRESHOLD = 2.0
 
 
 def find_trx(path):
@@ -107,7 +117,8 @@ def fmt(sec, digits=2):
 
 def build_report(results, skipped, host, known, top_tests=25, top_classes=20):
     total = sum(s for _, _, s in results)
-    out = [f"Тестов: {len(results)} (из них не выполнено: {skipped}), суммарное время: {fmt(total)} с", ""]
+    out = [f"Тестов: {len(results)} (из них не выполнено: {skipped}), "
+           f"сумма длительностей тестов (не wall-clock): {fmt(total)} с", ""]
 
     out.append("Гистограмма длительностей:")
     counts, sums = [0] * len(BUCKETS), [0.0] * len(BUCKETS)
@@ -142,8 +153,25 @@ def build_report(results, skipped, host, known, top_tests=25, top_classes=20):
     out += ["", f"Хостовые (TestWebApplicationFactory в .cs класса): {h_n} тестов ({fmt(pct(h_n, len(results)), 1)}%), "
             f"{fmt(h_t)} с ({fmt(pct(h_t, total), 1)}% времени)"]
     if unknown:
-        out.append(f"Классы не найдены в исходниках (считаются нехостовыми): {unknown} тестов")
+        # Доля хостовых зависит от --src: неизвестные классы считаются нехостовыми, поэтому
+        # их долю видно рядом, а не только числом.
+        out.append(f"Классы не найдены в исходниках (считаются нехостовыми): {unknown} тестов "
+                   f"({fmt(pct(unknown, len(results)), 1)}%) — для прогона нескольких проектов задай --src backend")
     return "\n".join(out)
+
+
+def class_durations(results):
+    """{класс: {"tests": n, "seconds": t}} — вход для раскладки шардов."""
+    per_class = {}
+    for cls, _, s in results:
+        n, t = per_class.get(cls, (0, 0.0))
+        per_class[cls] = (n + 1, t + s)
+    return {c: {"tests": n, "seconds": round(t, 3)} for c, (n, t) in sorted(per_class.items())}
+
+
+def slow_offenders(results, threshold):
+    """Тесты дольше порога, по убыванию: на TRX набора Fast это нехостовые тесты без Slow."""
+    return sorted((r for r in results if r[2] > threshold), key=lambda r: -r[2])
 
 
 def main(argv=None):
@@ -155,17 +183,46 @@ def main(argv=None):
                          "backend/ClaudeHomeServer.Tests; для прогона нескольких проектов — backend/)")
     ap.add_argument("--top-tests", type=int, default=25)
     ap.add_argument("--top-classes", type=int, default=20)
+    ap.add_argument("--json", action="store_true", help="длительность каждого класса в JSON (stdout)")
+    ap.add_argument("--check", action="store_true",
+                    help="сторож длительности на TRX набора Fast: exit 1, если есть тест дольше --threshold")
+    ap.add_argument("--threshold", type=float, default=CHECK_THRESHOLD, help="порог --check, секунды (по умолчанию 2)")
     args = ap.parse_args(argv)
 
     files = find_trx(args.path)
     if not files:
         print(f"TRX не найден: {args.path}", file=sys.stderr)
         return 2
-    results, skipped = [], 0
+    results, skipped, broken = [], 0, 0
     for f in files:
-        r, s = read_trx(f)
+        try:
+            r, s = read_trx(f)
+        except ET.ParseError as e:
+            # Битый или посторонний .trx не роняет профиль по остальным файлам.
+            print(f"предупреждение: пропущен нечитаемый TRX {f}: {e}", file=sys.stderr)
+            broken += 1
+            continue
         results += r
         skipped += s
+    if broken == len(files):
+        print(f"Ни одного читаемого TRX: {args.path}", file=sys.stderr)
+        return 2
+    if args.json:
+        json.dump({"tests": len(results), "skipped": skipped, "seconds": round(sum(r[2] for r in results), 3),
+                   "classes": class_durations(results)}, sys.stdout, ensure_ascii=False, indent=1)
+        print()
+        return 0
+    if args.check:
+        bad = slow_offenders(results, args.threshold)
+        for cls, name, s in bad:
+            print(f"  {fmt(s):>8} с  {cls}.{name}")
+        if bad:
+            print(f"Сторож длительности: {len(bad)} тестов дольше {fmt(args.threshold, 1)} с без метки Slow "
+                  f"(TRX набора Fast). Переведи ожидание на событие или поставь [Trait(\"Category\", \"Slow\")] "
+                  f"на метод.", file=sys.stderr)
+            return 1
+        print(f"Сторож длительности: OK, {len(results)} тестов, все не дольше {fmt(args.threshold, 1)} с")
+        return 0
     host, known = host_classes(args.src)
     print(build_report(results, skipped, host, known, args.top_tests, args.top_classes))
     return 0

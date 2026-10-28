@@ -1,5 +1,9 @@
 # coding: utf-8
+import contextlib
+import hashlib
 import importlib.util
+import io
+import json
 import os
 import tempfile
 import unittest
@@ -88,10 +92,84 @@ class TestProfileTests(unittest.TestCase):
     def test_main_без_trx_возвращает_2(self):
         self.assertEqual(2, tp.main([self.tmp.name, "--src", self.src]))
 
+    def _digests(self):
+        files = [os.path.join(self.src, n) for n in sorted(os.listdir(self.src))] + [FIXTURE]
+        out = {}
+        for f in files:
+            with open(f, "rb") as fh:
+                out[f] = hashlib.md5(fh.read()).hexdigest()
+        return out
+
+    def _main(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = tp.main(list(argv))
+        return code, out.getvalue(), err.getvalue()
+
     def test_скрипт_только_читает(self):
-        before = sorted(os.listdir(self.src))
-        self.assertEqual(0, tp.main([FIXTURE, "--src", self.src]))
-        self.assertEqual(before, sorted(os.listdir(self.src)))
+        # Сравнивается содержимое, а не только состав файлов: дописывание в .cs тоже ловится.
+        before = self._digests()
+        for mode in ([], ["--json"], ["--check"]):
+            self._main(FIXTURE, "--src", self.src, *mode)
+        self.assertEqual(before, self._digests())
+
+    def test_шапка_подписывает_сумму_как_не_wall_clock(self):
+        report, _, _ = self._report()
+        self.assertIn("сумма длительностей тестов (не wall-clock): 13,51 с", report)
+
+    def test_доля_неизвестных_классов_в_процентах(self):
+        os.remove(os.path.join(self.src, "Hosted.cs"))
+        report, _, _ = self._report()
+        self.assertIn("2 тестов (40,0%)", report.splitlines()[-1])
+
+    def test_json_длительность_каждого_класса(self):
+        code, out, _ = self._main(FIXTURE, "--json")
+        self.assertEqual(0, code)
+        data = json.loads(out)
+        self.assertEqual(5, data["tests"])
+        self.assertEqual({"tests": 3, "seconds": 0.51}, data["classes"]["Mini.Plain.PlainTests"])
+        self.assertEqual({"tests": 1, "seconds": 3.0}, data["classes"]["Mini.Host.HostedTests"])
+        self.assertEqual({"tests": 1, "seconds": 10.0}, data["classes"]["Mini.Host.HostedTests+Nested"])
+
+    def test_check_тест_дольше_порога_даёт_exit_1(self):
+        code, out, err = self._main(FIXTURE, "--check")
+        self.assertEqual(1, code)
+        self.assertIn("Mini.Host.HostedTests+Nested.Heavy", out)
+        self.assertIn("Mini.Host.HostedTests.Slow", out)
+        self.assertNotIn("PlainTests.Mid", out)
+        self.assertIn("2 тестов дольше 2,0 с", err)
+
+    def test_check_граница_порога_не_нарушение(self):
+        self.assertEqual(0, self._main(FIXTURE, "--check", "--threshold", "10")[0])
+        self.assertEqual(1, self._main(FIXTURE, "--check", "--threshold", "9.99")[0])
+
+    def test_битый_trx_пропускается_с_предупреждением(self):
+        art = os.path.join(self.tmp.name, "art")
+        os.makedirs(art)
+        with open(FIXTURE, encoding="utf-8") as f, open(os.path.join(art, "a.trx"), "w", encoding="utf-8") as g:
+            g.write(f.read())
+        with open(os.path.join(art, "b.trx"), "w", encoding="utf-8") as g:
+            g.write("not xml")
+        code, out, err = self._main(art, "--json")
+        self.assertEqual(0, code)
+        self.assertEqual(5, json.loads(out)["tests"])
+        self.assertIn("пропущен нечитаемый TRX", err)
+
+    def test_все_trx_битые_exit_2(self):
+        bad = os.path.join(self.tmp.name, "b.trx")
+        with open(bad, "w", encoding="utf-8") as g:
+            g.write("not xml")
+        self.assertEqual(2, self._main(bad)[0])
+
+    def test_несколько_trx_в_папке_суммируются(self):
+        art = os.path.join(self.tmp.name, "art2")
+        os.makedirs(art)
+        for n in ("a.trx", "b.trx"):
+            with open(FIXTURE, encoding="utf-8") as f, open(os.path.join(art, n), "w", encoding="utf-8") as g:
+                g.write(f.read())
+        data = json.loads(self._main(art, "--json")[1])
+        self.assertEqual(10, data["tests"])
+        self.assertEqual(6, data["classes"]["Mini.Plain.PlainTests"]["tests"])
 
 
 if __name__ == "__main__":

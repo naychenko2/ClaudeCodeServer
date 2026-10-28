@@ -1018,7 +1018,7 @@ describe('useSession: реконнект и повторная загрузка 
 });
 
 describe('useSession: потолок памяти (OOM fix)', () => {
-  const { MAX_CACHED_SESSIONS, _store, _cursors, _lastSeen } = __test;
+  const { MAX_CACHED_SESSIONS, COLD_BUDGET_BYTES, _store, _cursors, _lastSeen } = __test;
 
   // Модульный стор переживает тесты: чистим перед каждым, чтобы предыдущие
   // describe-блоки не нафláсили холодные сессии в кэши
@@ -1168,5 +1168,114 @@ describe('useSession: потолок памяти (OOM fix)', () => {
     expect(w2).toBeGreaterThan(w1);
 
     chat.unmount();
+  });
+
+  // --- Весовой бюджет холодных лент (F3-S2b) ---
+
+  const MB = 1024 * 1024;
+
+  // Сервер с управляемым весом ответа: onBytes(N) — как настоящая api мерит тело
+  // ответа (F3-S1a); тест задаёт вес напрямую, не раздувая JSON
+  const mockWeightedTail = (weight: () => number) =>
+    m.getHistoryTail.mockImplementation(async (_s: string, q: { after: number; fp?: string }, onBytes?: (n: number) => void) => {
+      const reply = q.after < 0
+        ? { reset: true, messages: serverHistory, anchorIndex: 2, anchorFp: 'fp' }
+        : { reset: false, messages: [], anchorIndex: 2, anchorFp: 'fp' };
+      onBytes?.(weight());
+      return reply;
+    });
+
+  it('весовой бюджет: сумма холодных лент больше бюджета → старейшая выселена, младшие остались', async () => {
+    mockWeightedTail(() => 10 * MB);
+    const sids: string[] = [];
+    let prev: { unmount: () => void } | null = null;
+
+    // Четыре чата по 10 МБ: при закрытии третьего холодные {1,2,3} = 30 МБ > 24 МБ
+    // при штучном порядке (3 ≤ 8) — выселение происходит только по весу
+    for (let i = 0; i < 4; i++) {
+      sids.push(nextSid());
+      const chat = openChat(sids[i]);
+      await flush();
+      prev?.unmount();
+      prev = chat;
+    }
+
+    // Старейшая выселена: ни ленты, ни курсора; младшие остались (их сумма в бюджете)
+    expect(_store.has(sids[0])).toBe(false);
+    expect(_cursors.has(sids[0])).toBe(false);
+    expect(_store.has(sids[1])).toBe(true);
+    expect(_store.has(sids[2])).toBe(true);
+
+    prev!.unmount();
+  });
+
+  it('последняя покинутая: не выселяется весом, даже когда тяжелее бюджета', async () => {
+    let weight = 10 * MB;
+    mockWeightedTail(() => weight);
+    const sids: string[] = [];
+    let prev: { unmount: () => void } | null = null;
+
+    // Четыре чата по 10 МБ, затем пятый — 30 МБ (тяжелее всего бюджета) и его закрытие:
+    // холодные {3,4,5} = 50 МБ — вычистка старейшими доходит до последней покинутой
+    for (let i = 0; i < 5; i++) {
+      if (i === 4) weight = 30 * MB;
+      sids.push(nextSid());
+      const chat = openChat(sids[i]);
+      await flush();
+      prev?.unmount();
+      prev = chat;
+    }
+    prev!.unmount(); // закрываем тяжёлый: он — самая свежая холодная («последняя покинутая»)
+
+    // Всё, что старше последней покинутой, выселено; она осталась, хотя одна больше бюджета:
+    // возврат «назад» в только что закрытый чат остаётся мгновенным
+    expect(_store.has(sids[0])).toBe(false);
+    expect(_store.has(sids[1])).toBe(false);
+    expect(_store.has(sids[2])).toBe(false);
+    expect(_store.has(sids[3])).toBe(false);
+    expect(_store.has(sids[4])).toBe(true);
+    expect(_store.get(sids[4])!.historyBytes).toBeGreaterThan(COLD_BUDGET_BYTES);
+  });
+
+  it('isWaiting и isJoined: не выселяются весом, их вес в бюджет не входит', async () => {
+    mockWeightedTail(() => 10 * MB);
+
+    // Самая старая лента — с идущим ходом (isWaiting): весовое выселение её пропускает
+    const waiting = nextSid();
+    let chat = openChat(waiting);
+    await flush();
+    emitStatus(waiting, 'working');
+    chat.unmount();
+
+    // Следующая по старшинству — в SignalR-группе (isJoined): тоже пропускается.
+    // Состояние ставится напрямую: штатный unmount всегда снимает isJoined,
+    // а ветка «isJoined без зрителей» в evictColdSessions — защитная
+    const joined = nextSid();
+    chat = openChat(joined);
+    await flush();
+    chat.unmount();
+    _store.get(joined)!.isJoined = true;
+
+    // Три обычных холодных по 10 МБ: при закрытии третьего их сумма 30 МБ > 24 МБ —
+    // выселение по весу идёт по ним, старейшие из обычных — первые
+    const sids: string[] = [];
+    let prev: { unmount: () => void } | null = null;
+    for (let i = 0; i < 4; i++) {
+      sids.push(nextSid());
+      chat = openChat(sids[i]);
+      await flush();
+      prev?.unmount();
+      prev = chat;
+    }
+
+    // Старейшая обычная выселена, несмотря на двух «старше её» в сторе: их вес в бюджет
+    // не входил и выселять их нельзя. Занятая и в-группы остались с лентами
+    expect(_store.has(sids[0])).toBe(false);
+    expect(_store.has(sids[1])).toBe(true);
+    expect(_store.has(waiting)).toBe(true);
+    expect(_store.get(waiting)!.isWaiting).toBe(true);
+    expect(_store.has(joined)).toBe(true);
+
+    prev!.unmount();
   });
 });

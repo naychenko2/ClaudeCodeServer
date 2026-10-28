@@ -36,6 +36,13 @@ const _lastSeen = new Map<string, number>(); // LRU: sid → ts последне
 // Потолок LRU-кэша холодных сессий (см. evictColdSessions). Открытые/активные не считаются.
 const MAX_CACHED_SESSIONS = 8;
 
+// Бюджет веса холодных лент, байты: сумма historyBytes холодных сессий в сторе (см.
+// evictColdSessions). historyBytes — ВЕРХНЯЯ ОЦЕНКА сырой истории сервера (байты
+// отброшенного при склейке хвоста остаются в счётчике), поэтому бюджет считает ту же
+// оценку, а не точный вес лент: фактическая память холодных не больше оценённой, а переход
+// бюджета возможен только весом «последней покинутой». Число меняется одной строкой.
+const COLD_BUDGET_BYTES = 24 * 1024 * 1024;
+
 // Курсоры докачки истории (перф-2 B5): sid → сырая история прошлой загрузки + якорь сервера.
 // Со вторым открытием чата просим у сервера только хвост после якоря, а не всю историю
 // целиком (до 2,5 МБ). Склейка и сброс — lib/historyTail.
@@ -159,32 +166,46 @@ function setState(sid: string, updater: (prev: SessionState) => SessionState) {
   _listeners.get(sid)?.forEach(fn => fn());
 }
 
-// LRU-потолок: держим не более MAX_CACHED_SESSIONS холодных сессий. Холодная =
-// никто не смотрит (нет подписчиков), ход не идёт (isWaiting) и мы вышли из её
-// SignalR-группы (isJoined). Открытые/активные не считаем и не выселяем. Ленты
+// LRU-потолок: держим холодные сессии в двух пределах — не более MAX_CACHED_SESSIONS
+// штук и суммой не более COLD_BUDGET_BYTES по весу. Холодная = никто не смотрит (нет
+// подписчиков), ход не идёт (isWaiting) и мы вышли из её SignalR-группы (isJoined).
+// Открытые/активные не считаем и не выселяем (их вес в бюджет не входит). Ленты
 // выселенных освобождаются; история восстановится через loadHistory при повторном
 // открытии. Зовётся из cleanup при закрытии последнего зрителя сессии.
 function evictColdSessions() {
-  const cold: Array<[string, number]> = [];
+  // Вес берём из стора (s.historyBytes): его пишет loadHistory через touch БЕЗ
+  // уведомления подписчиков (R-F3-S2a, п.4) — из рендера хука он не виден.
+  const cold: Array<[string, number, number]> = []; // sid, _lastSeen, вес ленты
+  let coldBytes = 0;
   for (const [sid, s] of _store) {
     const watched = (_listeners.get(sid)?.size ?? 0) > 0;
     if (watched || s.isWaiting || s.isJoined) continue;
-    cold.push([sid, _lastSeen.get(sid) ?? 0]);
+    cold.push([sid, _lastSeen.get(sid) ?? 0, s.historyBytes]);
+    coldBytes += s.historyBytes;
   }
   if (cold.length === 0) return;
   cold.sort((a, b) => a[1] - b[1]); // старые первыми
 
-  // Выселение сессий: держим не более MAX_CACHED_SESSIONS холодных лент в сторе.
+  // Выселение: старейшие первыми, пока хоть один предел переходён (штучный —
+  // MAX_CACHED_SESSIONS, весовой — сумма coldBytes > COLD_BUDGET_BYTES).
+  // «Последняя покинутая» (самая свежая по _lastSeen, последняя в сортировке) не
+  // выселяется ни одним пределом, даже если одна тяжелее бюджета: возврат «назад»
+  // в только что закрытый чат остаётся мгновенным.
   // Курсор снимается вместе с лентой (инвариант «курсор ⇔ лента», см. _cursors):
   // осиротевших курсоров после выселения не остаётся.
-  if (cold.length > MAX_CACHED_SESSIONS) {
-    for (const [sid] of cold.slice(0, cold.length - MAX_CACHED_SESSIONS)) {
-      _store.delete(sid);
-      _lastSeen.delete(sid);
-      _cursors.delete(sid); // сырая история курсора — второй экземпляр ленты, держать её без ленты незачем
-      // Выселенную сессию разрешаем греть заново: её ленты в сторе больше нет
-      _warmed.delete(sid);
-    }
+  // Защита «последней покинутой» — по позиции последней в сортировке (она не меняется
+  // при выселении), а не по последней из оставшихся: иначе вычистка веса доедала бы
+  // ленту перед ней и берегла бы её вместо самой свежей.
+  let keep = cold.length;
+  for (let i = 0; i < cold.length - 1 && (keep > MAX_CACHED_SESSIONS || coldBytes > COLD_BUDGET_BYTES); i++) {
+    const [sid, , bytes] = cold[i];
+    _store.delete(sid);
+    _lastSeen.delete(sid);
+    _cursors.delete(sid); // сырая история курсора — второй экземпляр ленты, держать её без ленты незачем
+    // Выселенную сессию разрешаем греть заново: её ленты в сторе больше нет
+    _warmed.delete(sid);
+    coldBytes -= bytes;
+    keep--;
   }
 }
 
@@ -898,4 +919,4 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
 }
 
 // Экспорт для тестов: доступ к модульному стору и константам
-export const __test = { _store, _cursors, _lastSeen, MAX_CACHED_SESSIONS };
+export const __test = { _store, _cursors, _lastSeen, MAX_CACHED_SESSIONS, COLD_BUDGET_BYTES };

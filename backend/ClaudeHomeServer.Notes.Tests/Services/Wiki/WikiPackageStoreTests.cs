@@ -290,6 +290,152 @@ public class WikiPackageStoreTests : IDisposable
             .Should().Be(WikiPackageStore.CodeNotDecidable);
     }
 
+    // ─── 7. Гонка записи: чтение → пересчёт → перезапись атомарны (MAJOR 1, ревью S4a) ───
+
+    [Fact]
+    public async Task ДваПараллельныхРешенияНаОдномПакете_ОбаНаМесте_СтатусОдин()
+    {
+        // Без блокировки оба вызова читают одно базовое состояние и каждый пишет свой вариант
+        // файла: решение человека молча теряется. Оба стартаются от одного барьера (без
+        // Task.Delay); пакет большой — чтение и перезапись занимают миллисекунды, и два
+        // вызова пересекаются не случайно.
+        var ops = new List<WikiPackage.Operation>
+        {
+            AppendOp(decision: WikiPackage.DecisionInbox),
+            AppendOp("Общее/Z.md", WikiPackage.DecisionInbox),
+        };
+        for (var i = 0; i < 600; i++) ops.Add(AppendOp($"Общее/A{i:D3}.md"));
+        var id = At(WikiPackage.StatusProposed, ops.ToArray());
+
+        var barrier = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first = Task.Run(async () => { await barrier.Task; return WikiPackageStore.DecideOperation(_root, id, 0, true); });
+        var second = Task.Run(async () => { await barrier.Task; return WikiPackageStore.DecideOperation(_root, id, 1, false, "это уточнение, а не противоречие"); });
+        barrier.SetResult();
+
+        var r1 = await first.WaitAsync(TimeSpan.FromSeconds(30));
+        var r2 = await second.WaitAsync(TimeSpan.FromSeconds(30));
+        r1.Ok.Should().BeTrue(r1.Reason);
+        r2.Ok.Should().BeTrue(r2.Reason);
+
+        // Оба решения на диске и статус один: второе принято по первому, а не по тому же
+        // базовому чтению.
+        var disk = WikiPackageStore.TryRead(_root, id);
+        disk.State.Should().Be(WikiPackageFileState.Valid);
+        disk.Package!.Operations[0].HumanDecision.Should().Be(WikiPackage.HumanAccepted, "первое решение не затёрто вторым");
+        disk.Package.Operations[1].HumanDecision.Should().Be(WikiPackage.HumanRejected);
+        disk.Package.Operations[1].HumanReason.Should().Be("это уточнение, а не противоречие");
+        disk.Package.Status.Should().Be(WikiPackage.StatusPartiallyAccepted);
+    }
+
+    [Fact]
+    public async Task ДваПараллельныхСозданияПри19Открытых_РовноОдноУспешно_ОткрытыхРовно20()
+    {
+        // TOCTOU без блокировки: обе постановки считают 19 открытых до записи друг друга и
+        // обе создают — 21, лимит 20 на всю вики пробит. Счёт и запись — в одной критической
+        // секции: второй Create видит уже 20 и отказывает.
+        for (var i = 0; i < WikiPackage.MaxOpenPackages - 1; i++)
+            WikiPackageStore.Create(_root, Pkg(AppendOp())).Ok.Should().BeTrue($"пакет {i}");
+
+        var a = Pkg(AppendOp());
+        var b = Pkg(AppendOp());
+        var barrier = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first = Task.Run(async () => { await barrier.Task; return WikiPackageStore.Create(_root, a); });
+        var second = Task.Run(async () => { await barrier.Task; return WikiPackageStore.Create(_root, b); });
+        barrier.SetResult();
+
+        var r1 = await first.WaitAsync(TimeSpan.FromSeconds(30));
+        var r2 = await second.WaitAsync(TimeSpan.FromSeconds(30));
+        new[] { r1.Ok, r2.Ok }.Count(x => x).Should().Be(1, "ровно одна из двух параллельных постановок умещается в лимит");
+
+        var loserId = r1.Ok ? b.Id : a.Id;
+        (r1.Ok ? r2 : r1).Code.Should().Be(WikiPackageStore.CodeLimit);
+        File.Exists(PackageFile(loserId)).Should().BeFalse("отказанный лимитом пакет не оставляется на диске");
+        WikiPackageStore.CountOpen(_root).Should().Be(WikiPackage.MaxOpenPackages);
+    }
+
+    // ─── 8. Null-поля валидного JSON: «невалиден», не исключение (MAJOR 2, ревью S4a) ───
+
+    [Fact]
+    public void NullПолеВВалидномJson_СостояниеНевалиден_СписокЖивой_ИПоказываетНечитаемые()
+    {
+        // Файл из пробы ревью (стек: NullReferenceException в WikiSections.IsWritable) и ещё
+        // три null-варианта: бэкап или ручная правка не должны ронять «Входящие» целиком —
+        // это нечитаемый файл, тот же класс, что битый JSON.
+        var good = Pkg(AppendOp());
+        WikiPackageStore.Create(_root, good).Ok.Should().BeTrue("каталог пакетов создаётся записью");
+
+        var nullSection = WikiPackageStore.NewId();
+        WriteRawFile(nullSection, "{\"v\":1,\"id\":\"" + nullSection + "\",\"section\":null,\"status\":\"checking\",\"sources\":[],\"operations\":[]}");
+        var nullSources = WikiPackageStore.NewId();
+        WriteRawFile(nullSources, "{\"v\":1,\"id\":\"" + nullSources + "\",\"section\":\"common\",\"status\":\"checking\",\"sources\":null,\"operations\":[]}");
+        var nullOperations = WikiPackageStore.NewId();
+        WriteRawFile(nullOperations, "{\"v\":1,\"id\":\"" + nullOperations + "\",\"section\":\"common\",\"status\":\"checking\",\"sources\":[{\"origin\":\"session\",\"ref\":\"chat-1\"}],\"operations\":null}");
+        var nullBaseHashes = WikiPackageStore.NewId();
+        WriteRawFile(nullBaseHashes, "{\"v\":1,\"id\":\"" + nullBaseHashes + "\",\"section\":\"common\",\"status\":\"checking\",\"sources\":[{\"origin\":\"session\",\"ref\":\"chat-1\"}],\"operations\":[{\"op\":\"append\",\"page\":\"Общее/X.md\",\"text\":\"утверждение\",\"class\":\"session×append\",\"decision\":\"auto\",\"baseHashes\":null}]}");
+
+        foreach (var bad in new[] { nullSection, nullSources, nullOperations, nullBaseHashes })
+        {
+            var read = WikiPackageStore.TryRead(_root, bad);
+            read.State.Should().Be(WikiPackageFileState.Invalid, $"файл с null-полем нечитаем, а не пакет: {bad}");
+            read.Package.Should().BeNull();
+        }
+
+        var list = WikiPackageStore.List(_root);
+        list.Packages.Should().ContainSingle(p => p.Id == good.Id);
+        list.InvalidFiles.Should().Contain(new[]
+        {
+            nullSection + ".json", nullSources + ".json", nullOperations + ".json", nullBaseHashes + ".json",
+        });
+
+        // Операция над таким файлом — отказ кодом, а не исключение (Get у контроллера: 409).
+        WikiPackageStore.Transition(_root, nullSection, WikiPackage.StatusProposed).Code
+            .Should().Be(WikiPackageStore.CodeInvalid);
+    }
+
+    // ─── 9. Повторное решение и дата создания (миноры 1 и 6, ревью S4a) ───
+
+    [Fact]
+    public void РешениеПоУжеРешённойОперации_Отказ_РешениеИПричинаНеМеняются()
+    {
+        // Решение не меняется и HumanReason не стирается; повтор того же решения — тоже
+        // отказ: двойного эффекта нет. Отказан только уже решённый индекс, остальные решаются.
+        var id = At(WikiPackage.StatusProposed,
+            AppendOp(decision: WikiPackage.DecisionInbox), AppendOp("Общее/Z.md", WikiPackage.DecisionInbox));
+
+        var first = WikiPackageStore.DecideOperation(_root, id, 0, false, "противоречит действующему");
+        first.Ok.Should().BeTrue(first.Reason);
+        first.Package!.Status.Should().Be(WikiPackage.StatusProposed, "вторая спорная ещё не решена");
+
+        var repeat = WikiPackageStore.DecideOperation(_root, id, 0, true);
+        repeat.Ok.Should().BeFalse();
+        repeat.Code.Should().Be(WikiPackageStore.CodeAlreadyDecided);
+
+        var disk = WikiPackageStore.TryRead(_root, id).Package!;
+        disk.Operations[0].HumanDecision.Should().Be(WikiPackage.HumanRejected);
+        disk.Operations[0].HumanReason.Should().Be("противоречит действующему");
+
+        var second = WikiPackageStore.DecideOperation(_root, id, 1, true);
+        second.Ok.Should().BeTrue(second.Reason);
+        ReadStatus(id).Should().Be(WikiPackage.StatusPartiallyAccepted);
+    }
+
+    [Fact]
+    public void ДатаСозданияСтавитСервер_ЗначениеИзВходаИгнорируется()
+    {
+        // Пакет не может быть создан с датой вызывающего: дата из будущего вечно сортировала
+        // бы его первым в списке «Входящих».
+        var future = new DateTimeOffset(2099, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var start = DateTimeOffset.UtcNow;
+        var res = WikiPackageStore.Create(_root, Pkg(AppendOp()) with { CreatedAt = future });
+        res.Ok.Should().BeTrue(res.Reason);
+
+        res.Package!.CreatedAt.Should().NotBe(future);
+        res.Package.CreatedAt.Should().BeOnOrAfter(start).And.BeBefore(DateTimeOffset.UtcNow);
+
+        var disk = WikiPackageStore.TryRead(_root, res.Package.Id).Package!;
+        disk.CreatedAt.Should().NotBe(future).And.BeOnOrAfter(start);
+    }
+
     // ─── Помощники ─────────────────────────────────────────────────────────
 
     private static WikiPackage Pkg(params WikiPackage.Operation[] ops) => new()
@@ -320,6 +466,10 @@ public class WikiPackageStoreTests : IDisposable
         };
 
     private string PackageFile(string id) => Path.Combine(_root, "keeper", "packages", id + ".json");
+
+    // Файл пакета пишется дословно: тест проверяет чтение того, что мог оставить бэкап или
+    // ручная правка, а не то, что умеет писать стора.
+    private void WriteRawFile(string id, string json) => File.WriteAllText(PackageFile(id), json);
 
     // Довести пакет до статуса разрешёнными переходами: тест проверяет таблицу на живом
     // файле, а не на воображаемом состоянии.

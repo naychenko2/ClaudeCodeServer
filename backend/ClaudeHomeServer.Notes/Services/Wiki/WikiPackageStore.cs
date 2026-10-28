@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using ClaudeHomeServer.Services;
 
@@ -16,6 +17,11 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 //
 // Порядок перехода статусов держит WikiPackage.Transitions; здесь — только отказ
 // недопустимого перехода и лимит 20 открытых на всю вики.
+//
+// Цикл «чтение → пересчёт → перезапись всего файла» сериализован блокировками (ревью S4a,
+// MAJOR 1), в стиле WikiKeeper._locks: без них два параллельных решения теряют одно
+// (второе пишет своё прочтение), решение человека затирает статус «applying», а две
+// параллельные постановки при 19 открытых пробивают лимит 20 (TOCTOU).
 public static class WikiPackageStore
 {
     private const string PackagesDir = "keeper/packages";
@@ -31,6 +37,7 @@ public static class WikiPackageStore
     public const string CodeNotDecidable = "wiki_pkg_not_decidable";
     public const string CodeAuto = "wiki_pkg_auto";
     public const string CodeOpIndex = "wiki_pkg_op_index";
+    public const string CodeAlreadyDecided = "wiki_pkg_already_decided";
     public const string CodeReasonRequired = "wiki_pkg_reason_required";
     public const string CodeNothingToDecide = "wiki_pkg_nothing_to_decide";
 
@@ -41,6 +48,31 @@ public static class WikiPackageStore
         // и в журнале: × и а в файле делают их нечитаемыми.
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
+
+    // Блокировки записи пакета (ревью S4a, MAJOR 1), стиль WikiKeeper._locks: ConcurrentDictionary +
+    // SemaphoreSlim. Ключ решений и переходов — корень вики + id пакета: разные вики и разные
+    // пакеты друг друга не держат. Для Create — отдельная блокировка на корень: лимит считается
+    // на всю вики, и CountOpen с записью обязаны быть в одной критической секции, иначе счёт
+    // видит состояние до записи первого (TOCTOU). Вложения блоков нет: Create не берёт блок
+    // пакета, Decide/Transition/AcceptAll не берут блок корня — взаимной блокировки нет.
+    private static readonly ConcurrentDictionary<(string Root, string Id), SemaphoreSlim> _packageLocks = new();
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> _createLocks = new();
+
+    private static T WithPackageLock<T>(string root, string id, Func<T> body)
+    {
+        var sem = _packageLocks.GetOrAdd((root, id), _ => new SemaphoreSlim(1));
+        sem.Wait();
+        try { return body(); }
+        finally { sem.Release(); }
+    }
+
+    private static T WithCreateLock<T>(string root, Func<T> body)
+    {
+        var sem = _createLocks.GetOrAdd(root, _ => new SemaphoreSlim(1));
+        sem.Wait();
+        try { return body(); }
+        finally { sem.Release(); }
+    }
 
     /// <summary>Новый id пакета — безопасный GUID (форма «N»: без дефисов, одна строка).</summary>
     public static string NewId() => Guid.NewGuid().ToString("N");
@@ -58,24 +90,33 @@ public static class WikiPackageStore
         var errors = WikiPackage.ShapeErrors(package);
         if (errors.Count > 0)
             return Fail(CodeShape, errors[0]);
-        if (System.IO.File.Exists(PathOf(root, package.Id)))
-            return Fail(CodeExists, "пакет с таким id уже есть");
-        // Лимит открытых на всю вики: 21-й не создаётся — разбор останавливается, а не копит
-        // очередь (ADR-035, решение 4). Считается после проверки формы: битый по форме пакет
-        // не должен занимать место в лимите.
-        if (CountOpen(root) >= WikiPackage.MaxOpenPackages)
-            return Fail(CodeLimit, $"открытых пакетов уже {WikiPackage.MaxOpenPackages}: лимит на всю вики");
-
-        var now = DateTimeOffset.UtcNow;
-        var created = package with
+        // Существование, лимит и запись — под блокировкой корня вики (ревью S4a, MAJOR 1):
+        // CountOpen и запись в одной критической секции, иначе две параллельные постановки
+        // при 19 открытых видят 19 обе и дают 21. Проверка формы — вне блока: она не трогает
+        // диск, и битый по форме пакет не должен держать корень.
+        return WithCreateLock<WikiPackageOpResult>(root, () =>
         {
-            Status = WikiPackage.StatusChecking,
-            StatusReason = null,
-            CreatedAt = package.CreatedAt == default ? now : package.CreatedAt,
-            UpdatedAt = now,
-        };
-        Write(root, created);
-        return Ok(created);
+            if (System.IO.File.Exists(PathOf(root, package.Id)))
+                return Fail(CodeExists, "пакет с таким id уже есть");
+            // Лимит открытых на всю вики: 21-й не создаётся — разбор останавливается, а не копит
+            // очередь (ADR-035, решение 4). Считается после проверки формы: битый по форме пакет
+            // не должен занимать место в лимите.
+            if (CountOpen(root) >= WikiPackage.MaxOpenPackages)
+                return Fail(CodeLimit, $"открытых пакетов уже {WikiPackage.MaxOpenPackages}: лимит на всю вики");
+
+            var now = DateTimeOffset.UtcNow;
+            var created = package with
+            {
+                Status = WikiPackage.StatusChecking,
+                StatusReason = null,
+                // Дату ставит сервер (ревью S4a, минор 6): значение из входа игнорируется —
+                // пакет с датой из будущего вечно сортировался бы первым в списке.
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            Write(root, created);
+            return Ok(created);
+        });
     }
 
     /// <summary>Прочитать пакет. Missing — файла нет (нормально для чужого id);
@@ -104,6 +145,12 @@ public static class WikiPackageStore
         catch (JsonException)
         {
             // Битый JSON — состояние «невалиден», не исключение: его ловит и фоновый читатель.
+        }
+        catch (Exception)
+        {
+            // Прочее, чем бьётся валидный JSON с испорченными полями (null, чужой тип):
+            // TryRead не пропускает исключений наружу (ревью S4a, MAJOR 2) — «Входящие»
+            // живы и показывают такой файл числом, а не падают 500 на одном испорченном.
         }
         return new WikiPackageReadResult(WikiPackageFileState.Invalid, null);
     }
@@ -153,40 +200,58 @@ public static class WikiPackageStore
     /// reason — текст для человека (причина отказа проверок, отказа применения, устаревания).</summary>
     public static WikiPackageOpResult Transition(string root, string id, string to, string? reason = null)
     {
-        var (pkg, fail) = RequireValid(root, id);
-        if (fail is not null) return fail.Value;
-        if (!WikiPackage.CanTransition(pkg!.Status, to))
-            return Fail(CodeTransition, $"переход «{pkg.Status}» → «{to}» недопустим");
-        return WriteAndOk(root, pkg with { Status = to, StatusReason = reason, UpdatedAt = DateTimeOffset.UtcNow });
+        // Весь цикл — прочесть, проверить переход, записать — под блоком пакета: параллельное
+        // решение не затрёт статус, поставленный здесь (ревью S4a, MAJOR 1, сценарий 2), и
+        // само будет принято по уже изменённому статусу, а не по устаревшему чтению.
+        return WithPackageLock(root, id, () =>
+        {
+            var (pkg, fail) = RequireValid(root, id);
+            if (fail is not null) return fail.Value;
+            if (!WikiPackage.CanTransition(pkg!.Status, to))
+                return Fail(CodeTransition, $"переход «{pkg.Status}» → «{to}» недопустим");
+            return WriteAndOk(root, pkg with { Status = to, StatusReason = reason, UpdatedAt = DateTimeOffset.UtcNow });
+        });
     }
 
     /// <summary>Решение человека по спорной операции (REST S4a). Только пакет в `proposed`
     /// и только операция с решением `inbox`: неспорное решает политика, а не человек (409).
-    /// Отклонить можно только с причиной. Статус пакета меняется, когда решены ВСЕ спорные
-    /// операции: все приняты → accepted, все отклонены → rejected, смешано →
-    /// partially_accepted; пока хоть одна не решена — пакет остаётся proposed.</summary>
+    /// Отклонить можно только с причиной. Решение по уже решённой операции — отказ
+    /// (CodeAlreadyDecided): решение не меняется молча, HumanReason не стирается. Статус
+    /// пакета меняется, когда решены ВСЕ спорные операции: все приняты → accepted, все
+    /// отклонены → rejected, смешано → partially_accepted; пока хоть одна не решена — пакет
+    /// остаётся proposed.</summary>
     public static WikiPackageOpResult DecideOperation(string root, string id, int index, bool accept, string? reason = null)
     {
-        var (pkg, fail) = RequireValid(root, id);
-        if (fail is not null) return fail.Value;
-        if (pkg!.Status != WikiPackage.StatusProposed)
-            return Fail(CodeNotDecidable, $"решают по операциям пакета в «{WikiPackage.StatusProposed}», сейчас «{pkg.Status}»");
-        if (index < 0 || index >= pkg.Operations.Count)
-            return Fail(CodeOpIndex, $"операции {index} в пакете нет");
-        var op = pkg.Operations[index];
-        if (op.Decision != WikiPackage.DecisionInbox)
-            return Fail(CodeAuto, $"операция «{op.Op}» решена политикой как «{op.Decision}» — человек её не решает");
-        if (!accept && string.IsNullOrWhiteSpace(reason))
-            return Fail(CodeReasonRequired, "отклонить спорную операцию можно только с причиной");
-
-        var decided = op with
+        // Чтение, проверка и запись — под блоком пакета: два параллельных решения по разным
+        // операциям одного пакета не теряют одно из них (ревью S4a, MAJOR 1, сценарий 1).
+        return WithPackageLock(root, id, () =>
         {
-            HumanDecision = accept ? WikiPackage.HumanAccepted : WikiPackage.HumanRejected,
-            HumanReason = accept ? null : reason,
-        };
-        var operations = pkg.Operations.ToArray();
-        operations[index] = decided;
-        return WriteAndOk(root, pkg with { Operations = operations, Status = StatusAfterDecisions(pkg, operations), UpdatedAt = DateTimeOffset.UtcNow });
+            var (pkg, fail) = RequireValid(root, id);
+            if (fail is not null) return fail.Value;
+            if (pkg!.Status != WikiPackage.StatusProposed)
+                return Fail(CodeNotDecidable, $"решают по операциям пакета в «{WikiPackage.StatusProposed}», сейчас «{pkg.Status}»");
+            if (index < 0 || index >= pkg.Operations.Count)
+                return Fail(CodeOpIndex, $"операции {index} в пакете нет");
+            var op = pkg.Operations[index];
+            if (op.Decision != WikiPackage.DecisionInbox)
+                return Fail(CodeAuto, $"операция «{op.Op}» решена политикой как «{op.Decision}» — человек её не решает");
+            // Решение по уже решённой операции — отказ (ревью S4a, минор 1): решение не
+            // переворачивается молча и HumanReason не стирается; повтор того же решения —
+            // тоже отказ, двойного эффекта нет.
+            if (op.HumanDecision is not null)
+                return Fail(CodeAlreadyDecided, $"операция {index} уже решена как «{op.HumanDecision}»: решение не меняется");
+            if (!accept && string.IsNullOrWhiteSpace(reason))
+                return Fail(CodeReasonRequired, "отклонить спорную операцию можно только с причиной");
+
+            var decided = op with
+            {
+                HumanDecision = accept ? WikiPackage.HumanAccepted : WikiPackage.HumanRejected,
+                HumanReason = accept ? null : reason,
+            };
+            var operations = pkg.Operations.ToArray();
+            operations[index] = decided;
+            return WriteAndOk(root, pkg with { Operations = operations, Status = StatusAfterDecisions(pkg, operations), UpdatedAt = DateTimeOffset.UtcNow });
+        });
     }
 
     /// <summary>«Принять всё спорное пакета» (кнопка «Входящих»): все нерешённые `inbox`
@@ -194,19 +259,25 @@ public static class WikiPackageStore
     /// решать нечего (отказ), неспорные применяет политика.</summary>
     public static WikiPackageOpResult AcceptAllContested(string root, string id)
     {
-        var (pkg, fail) = RequireValid(root, id);
-        if (fail is not null) return fail.Value;
-        if (pkg!.Status != WikiPackage.StatusProposed)
-            return Fail(CodeNotDecidable, $"решают по операциям пакета в «{WikiPackage.StatusProposed}», сейчас «{pkg.Status}»");
-        if (!pkg.Operations.Any(o => o.Decision == WikiPackage.DecisionInbox))
-            return Fail(CodeNothingToDecide, "в пакете нет спорных операций: решать нечего");
+        // Тот же цикл «чтение → пересчёт → перезапись», что у DecideOperation: кнопка
+        // «принять всё» гонится с одиночным решением по тому же пакету — блок общий.
+        // Уже решённые операции блок сохраняет: accept-all их не переворачивает.
+        return WithPackageLock(root, id, () =>
+        {
+            var (pkg, fail) = RequireValid(root, id);
+            if (fail is not null) return fail.Value;
+            if (pkg!.Status != WikiPackage.StatusProposed)
+                return Fail(CodeNotDecidable, $"решают по операциям пакета в «{WikiPackage.StatusProposed}», сейчас «{pkg.Status}»");
+            if (!pkg.Operations.Any(o => o.Decision == WikiPackage.DecisionInbox))
+                return Fail(CodeNothingToDecide, "в пакете нет спорных операций: решать нечего");
 
-        var operations = pkg.Operations
-            .Select(o => o.Decision == WikiPackage.DecisionInbox && o.HumanDecision is null
-                ? o with { HumanDecision = WikiPackage.HumanAccepted, HumanReason = null }
-                : o)
-            .ToArray();
-        return WriteAndOk(root, pkg with { Operations = operations, Status = StatusAfterDecisions(pkg, operations), UpdatedAt = DateTimeOffset.UtcNow });
+            var operations = pkg.Operations
+                .Select(o => o.Decision == WikiPackage.DecisionInbox && o.HumanDecision is null
+                    ? o with { HumanDecision = WikiPackage.HumanAccepted, HumanReason = null }
+                    : o)
+                .ToArray();
+            return WriteAndOk(root, pkg with { Operations = operations, Status = StatusAfterDecisions(pkg, operations), UpdatedAt = DateTimeOffset.UtcNow });
+        });
     }
 
     // Вердикт по всем спорным операциям: пока хоть одна не решена — proposed (решение

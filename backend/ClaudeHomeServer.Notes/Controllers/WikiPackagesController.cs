@@ -79,7 +79,8 @@ public class WikiPackagesController : ControllerBase
 
     /// <summary>POST /api/wiki/packages/{id}/decide — {index, accept, reason?}: принять или
     /// отклонить с причиной одну спорную операцию. 409: операция не спорная (auto), пакет не
-    /// в proposed, index вне списка, отказ без причины, файл пакета нечитаем.</summary>
+    /// в proposed, index вне списка, отказ без причины, файл пакета нечитаем, операция уже
+    /// решена (решение не меняется).</summary>
     [HttpPost("{id}/decide")]
     public IActionResult Decide(string id, [FromBody] WikiDecideRequest? req)
     {

@@ -155,60 +155,101 @@ public sealed record WikiPackage
             errors.Add($"версия пакета {p.V}, ожидаемая {ModelVersion}");
         if (!IsSafeId(p.Id))
             errors.Add("id пакета не GUID");
-        var write = WikiSections.IsWritable(p.Section);
-        if (!write.Writable)
-            errors.Add($"раздел «{p.Section}»: {write.Reason}");
-        if (p.Sources.Count == 0)
-            errors.Add("пакет без источника");
-        foreach (var s in p.Sources)
+        // Null в поле валидного JSON (восстановленный бэкап, ручная правка, частично
+        // уехавший файл) — ошибка формы, а не NRE: проверка до разбора (ревью S4a, MAJOR 2),
+        // иначе один такой файл роняет «Входящие» целиком.
+        if (p.Section is null)
+            errors.Add("раздел пакета null");
+        else
         {
-            if (!WikiGate.OriginValues.Contains(s.Origin))
-                errors.Add($"origin «{s.Origin}» не из перечня");
-            if (string.IsNullOrWhiteSpace(s.Ref))
-                errors.Add("источник без карточки");
+            var write = WikiSections.IsWritable(p.Section);
+            if (!write.Writable)
+                errors.Add($"раздел «{p.Section}»: {write.Reason}");
+        }
+        if (p.Sources is null)
+        {
+            errors.Add("источники пакета null");
+        }
+        else
+        {
+            if (p.Sources.Count == 0)
+                errors.Add("пакет без источника");
+            foreach (var s in p.Sources)
+            {
+                if (s is null)
+                {
+                    errors.Add("null в списке источников");
+                    continue;
+                }
+                if (!WikiGate.OriginValues.Contains(s.Origin))
+                    errors.Add($"origin «{s.Origin}» не из перечня");
+                if (string.IsNullOrWhiteSpace(s.Ref))
+                    errors.Add("источник без карточки");
+            }
         }
         // Пустой пакет — не пакет: он ничего не намеревается и занимает место в лимите.
-        if (p.Operations.Count == 0)
-            errors.Add("пакет без операций");
-        foreach (var op in p.Operations)
+        if (p.Operations is null)
         {
-            if (!OpValues.Contains(op.Op))
-                errors.Add($"операция «{op.Op}» не из перечня");
-            // Пакет — в пределах одного раздела: страница обязана принадлежать его разделу.
-            if (WikiSections.Parse(op.Page) != p.Section)
-                errors.Add($"страница «{op.Page}» не раздела «{p.Section}»");
-            if (!DecisionValues.Contains(op.Decision))
-                errors.Add($"решение политики «{op.Decision}» не из перечня");
-            if (op.Decision == DecisionInbox && string.IsNullOrWhiteSpace(op.Reason))
-                errors.Add($"операция «{op.Op}» во «Входящих» без причины");
-            // Класс ставится из источника пакета и op: своя строка класса невозможна.
-            // Для нераспознанной op про класс молчим — про неё уже сказано выше.
-            if (!OpValues.Contains(op.Op))
-                continue;
-            if (!p.Sources.Any(s => op.Class == ClassKey(s.Origin, op.Op)))
-                errors.Add($"класс «{op.Class}» не из источников пакета и не по op «{op.Op}»");
-            switch (op.Op)
+            errors.Add("операции пакета null");
+        }
+        else
+        {
+            if (p.Operations.Count == 0)
+                errors.Add("пакет без операций");
+            foreach (var op in p.Operations)
             {
-                case OpCreate or OpAppend or OpSupersede when string.IsNullOrWhiteSpace(op.Text):
-                    errors.Add($"операция «{op.Op}» без содержания");
-                    break;
-                case OpSupersede or OpConflict or OpLink when string.IsNullOrWhiteSpace(op.Target):
-                    errors.Add($"операция «{op.Op}» без цели (замещаемого утверждения или ссылки)");
-                    break;
+                if (op is null)
+                {
+                    errors.Add("null в списке операций");
+                    continue;
+                }
+                if (!OpValues.Contains(op.Op))
+                    errors.Add($"операция «{op.Op}» не из перечня");
+                // Пакет — в пределах одного раздела: страница обязана принадлежать его разделу.
+                if (op.Page is null)
+                    errors.Add("операция без страницы");
+                else if (WikiSections.Parse(op.Page) != p.Section)
+                    errors.Add($"страница «{op.Page}» не раздела «{p.Section}»");
+                if (!DecisionValues.Contains(op.Decision))
+                    errors.Add($"решение политики «{op.Decision}» не из перечня");
+                if (op.Decision == DecisionInbox && string.IsNullOrWhiteSpace(op.Reason))
+                    errors.Add($"операция «{op.Op}» во «Входящих» без причины");
+                // Класс ставится из источника пакета и op: своя строка класса невозможна.
+                // Для нераспознанной op про класс молчим — про неё уже сказано выше.
+                if (!OpValues.Contains(op.Op))
+                    continue;
+                if (p.Sources is not null && !p.Sources.Any(s => s is not null && op.Class == ClassKey(s.Origin, op.Op)))
+                    errors.Add($"класс «{op.Class}» не из источников пакета и не по op «{op.Op}»");
+                switch (op.Op)
+                {
+                    case OpCreate or OpAppend or OpSupersede when string.IsNullOrWhiteSpace(op.Text):
+                        errors.Add($"операция «{op.Op}» без содержания");
+                        break;
+                    case OpSupersede or OpConflict or OpLink when string.IsNullOrWhiteSpace(op.Target):
+                        errors.Add($"операция «{op.Op}» без цели (замещаемого утверждения или ссылки)");
+                        break;
+                }
+                if (op.BaseHashes is null)
+                {
+                    errors.Add("baseHashes операции null");
+                }
+                else
+                {
+                    foreach (var (page, hash) in op.BaseHashes)
+                    {
+                        if (WikiSections.Parse(page) != p.Section)
+                            errors.Add($"база «{page}» не раздела «{p.Section}»");
+                        if (hash is null || !IsSha256Hex(hash))
+                            errors.Add($"база «{page}»: хэш не sha256 hex");
+                    }
+                }
+                if (op.InputTokens < 0 || op.OutputTokens < 0)
+                    errors.Add("отрицательный счёт токенов");
+                if (op.HumanDecision is not null && op.HumanDecision is not (HumanAccepted or HumanRejected))
+                    errors.Add($"решение человека «{op.HumanDecision}» не из перечня");
+                if (op.HumanDecision == HumanRejected && string.IsNullOrWhiteSpace(op.HumanReason))
+                    errors.Add("отказ человека без причины");
             }
-            foreach (var (page, hash) in op.BaseHashes)
-            {
-                if (WikiSections.Parse(page) != p.Section)
-                    errors.Add($"база «{page}» не раздела «{p.Section}»");
-                if (!IsSha256Hex(hash))
-                    errors.Add($"база «{page}»: хэш не sha256 hex");
-            }
-            if (op.InputTokens < 0 || op.OutputTokens < 0)
-                errors.Add("отрицательный счёт токенов");
-            if (op.HumanDecision is not null && op.HumanDecision is not (HumanAccepted or HumanRejected))
-                errors.Add($"решение человека «{op.HumanDecision}» не из перечня");
-            if (op.HumanDecision == HumanRejected && string.IsNullOrWhiteSpace(op.HumanReason))
-                errors.Add("отказ человека без причины");
         }
         if (!StatusValues.Contains(p.Status))
             errors.Add($"статус «{p.Status}» не из перечня");

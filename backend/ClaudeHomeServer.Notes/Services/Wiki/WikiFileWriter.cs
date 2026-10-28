@@ -10,18 +10,18 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // своей защиты путей здесь нет.
 public static class WikiFileWriter
 {
-    // Суффикс temp-файла постоянен: остаток от упавшего процесса виден как мусор (*.tmp)
-    // и перезаписывается следующим вызовом. Разные записи одного файла идут под
-    // блокировкой раздела (решение 10), коллизия temp-имён вне неё невозможна.
-    private const string TempSuffix = ".tmp";
-
     /// <summary>Записать содержимое атомарно. Отдаёт то же исключение, что отдала ФС;
     /// цель нетронутой и отсутствие *.tmp гарантированы в любом исходе.</summary>
     public static void Write(string root, string relPath, string content)
     {
         var full = SafePath.Join(root, relPath);
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
-        var temp = full + TempSuffix;
+        // Имя temp уникально на каждый вызов (ревью S2b-2, MAJOR): постоянное имя сталкивает
+        // одновременных писателей одного файла — второй Move падает, а его уборка сносит temp
+        // победителя. Уникальное имя снимает весь класс коллизий: и между операциями вне
+        // блокировки раздела, и между процессами. Остаток от упавшего процесса по-прежнему
+        // виден как мусор *.tmp и удаляется по маске.
+        var temp = full + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
             File.WriteAllText(temp, content);

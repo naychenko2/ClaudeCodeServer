@@ -69,16 +69,26 @@ public class WikiManifestTests : IDisposable
         var root = Path.Combine(_dir, "w3");
         var rel = "keeper/manifest/common.json";
         var target = Path.Combine(root, rel);
-        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        var dir = Path.GetDirectoryName(target)!;
+        Directory.CreateDirectory(dir);
         var bytes = new byte[] { 0xEF, 0xBB, 0xBF, 0x00, 0x01, 0xFE }; // BOM и управляющие байты
         File.WriteAllBytes(target, bytes);
-        // Имя temp занято каталогом: запись temp бросает, Move до цели не доходит.
-        Directory.CreateDirectory(target + ".tmp");
+        // Имя temp уникально на каждый вызов — загнать его каталогом больше нельзя.
+        // Отказ записи temp вызывается причиной, не зависящей от имени: каталог цели
+        // read-only — создание в нём нового файла отказано на обеих платформах.
+        File.SetAttributes(dir, FileAttributes.ReadOnly);
+        try
+        {
+            Record.Exception(() => WikiFileWriter.Write(root, rel, "новое")).Should().NotBeNull();
 
-        Record.Exception(() => WikiFileWriter.Write(root, rel, "новое")).Should().NotBeNull();
-
-        File.ReadAllBytes(target).Should().Equal(bytes); // прежнее содержимое побайтно
-        AssertNoTempFiles();
+            File.ReadAllBytes(target).Should().Equal(bytes); // прежнее содержимое побайтно
+            AssertNoTempFiles();
+        }
+        finally
+        {
+            // Атрибут возвращается: иначе Dispose не сможет убрать дерево.
+            File.SetAttributes(dir, FileAttributes.Normal);
+        }
     }
 
     [Fact]

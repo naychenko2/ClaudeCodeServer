@@ -66,9 +66,9 @@ public class WikiKeeperTests : IDisposable
     // ─── 1. «Завести вики» ───────────────────────────────────────────────────
 
     [Fact]
-    public void ЗавестиВики_СоздаётСхемуИКаталогиKeeper_ПовторныйВызовПравленнуюСхемуНеМеняет()
+    public async Task ЗавестиВики_СоздаётСхемуИКаталогиKeeper_ПовторныйВызовПравленнуюСхемуНеМеняет()
     {
-        _sut.EnsureInitialized(User);
+        await _sut.EnsureInitializedAsync(User);
 
         var schema = PageFull(WikiPaths.SchemaFileName);
         File.ReadAllText(schema).Should().StartWith("# Схема вики");
@@ -80,11 +80,40 @@ public class WikiKeeperTests : IDisposable
         File.WriteAllText(schema, "# Схема вики\n\nправка человека.", new UTF8Encoding(false));
         var afterHumanEdit = Sha(File.ReadAllBytes(schema));
 
-        _sut.EnsureInitialized(User);
+        await _sut.EnsureInitializedAsync(User);
 
         Sha(File.ReadAllBytes(schema)).Should().Be(afterHumanEdit);
         // Разделы при этом не заведены: их заводит первая применённая операция (решение 1).
         Directory.Exists(Path.Combine(WikiPaths.Pages(_dir, User), "Проекты")).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ДваПараллельныхЗавестиВики_ОбаБезИсключения_СхемаЦела_ПовторНеМеняетЕё()
+    {
+        // Проба MAJOR ревью S2b-2: без уникального temp и без блокировки инициализации
+        // вторая «Завести» толкается с первой в одном temp-имени — её Move падает, а уборка
+        // сносит temp победителя. Оба вызова стартаются от одного барьера (без Task.Delay):
+        // с фиксом второй ждёт блокировку и проходит по «файл уже есть» — всегда зелено;
+        // с мутацией (постоянное имя temp + снятая блокировка) хотя бы один бросает — красный.
+        var barrier = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first = Task.Run(async () => { await barrier.Task; await _sut.EnsureInitializedAsync(User); });
+        var second = Task.Run(async () => { await barrier.Task; await _sut.EnsureInitializedAsync(User); });
+        barrier.SetResult();
+
+        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(10)); // ни один не бросил
+
+        var schema = PageFull(WikiPaths.SchemaFileName);
+        File.Exists(schema).Should().BeTrue("гонка не должна оставить вики незаведённой");
+        File.ReadAllText(schema).Should().StartWith("# Схема вики");
+        var schemaHash = Sha(File.ReadAllBytes(schema));
+
+        // Ровно одна запись шаблона: повторный вызов не меняет байт.
+        await _sut.EnsureInitializedAsync(User);
+        Sha(File.ReadAllBytes(schema)).Should().Be(schemaHash);
+
+        // Ни temp-мусора вокруг цели — в любом исходе (тот же инвариант записи).
+        Directory.EnumerateFiles(Path.GetDirectoryName(schema)!).Where(f => f.EndsWith(".tmp"))
+            .Should().BeEmpty("атомарная запись не оставляет *.tmp");
     }
 
     // ─── 2. Запись: манифест и граф ──────────────────────────────────────────
@@ -92,7 +121,7 @@ public class WikiKeeperTests : IDisposable
     [Fact]
     public async Task Запись_МанифестРавенХэшуБайтФайлаНаДиске_ИГрафВидитСтраницуСразу()
     {
-        _sut.EnsureInitialized(User);
+        await _sut.EnsureInitializedAsync(User);
         const string key = "Проекты/p1/Знание.md";
         const string content = "# Знание\n\nПервая версия.";
 
@@ -116,7 +145,7 @@ public class WikiKeeperTests : IDisposable
     [Fact]
     public async Task ПравкаМимоХранителя_Дрифт_ФайлЦел_ЗатемAdoptСнимаетДрифт_ССтрокойAdoptВЖурнале()
     {
-        _sut.EnsureInitialized(User);
+        await _sut.EnsureInitializedAsync(User);
         const string key = "Проекты/p1/Знание.md";
         var full = PageFull(key);
 
@@ -153,7 +182,7 @@ public class WikiKeeperTests : IDisposable
     [Fact]
     public async Task ТаЖеСтрокаДругимиБайтами_Дрифт_СверяютсяБайтыФайлаАНеСтрока()
     {
-        _sut.EnsureInitialized(User);
+        await _sut.EnsureInitializedAsync(User);
         const string key = "Общее/X.md";
         const string content = "# X\n\nТот же текст.";
         var full = PageFull(key);
@@ -173,7 +202,7 @@ public class WikiKeeperTests : IDisposable
     [Fact]
     public async Task УдалённыйВнешнеФайл_Дрифт_АНеМолчаливоеСозданиеЗаново()
     {
-        _sut.EnsureInitialized(User);
+        await _sut.EnsureInitializedAsync(User);
         const string key = "Общее/X.md";
         (await _sut.WritePageAsync(User, "common", key, "# X\n\nПервое.")).Status
             .Should().Be(WikiOpStatus.Applied);
@@ -191,7 +220,7 @@ public class WikiKeeperTests : IDisposable
     [Fact]
     public async Task МанифестInvalid_ЗаписьОтказана_ФайлИМанифестНеТронуты()
     {
-        _sut.EnsureInitialized(User);
+        await _sut.EnsureInitializedAsync(User);
         const string key = "Общее/X.md";
         (await _sut.WritePageAsync(User, "common", key, "# X\n\nПервое.")).Status
             .Should().Be(WikiOpStatus.Applied);
@@ -213,7 +242,7 @@ public class WikiKeeperTests : IDisposable
     [Fact]
     public async Task СтраницаЧужогоРаздела_Отказ_ФайлНеЗаписан()
     {
-        _sut.EnsureInitialized(User);
+        await _sut.EnsureInitializedAsync(User);
 
         var res = await _sut.WritePageAsync(User, "projects/p1", "Общее/X.md", "# X\n\nтекст.");
 
@@ -227,7 +256,7 @@ public class WikiKeeperTests : IDisposable
     [Fact]
     public async Task ОперацияНаРазделеB_Завершается_ПокаБлокировкаРазделаAУдерживается()
     {
-        _sut.EnsureInitialized(User);
+        await _sut.EnsureInitializedAsync(User);
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -252,7 +281,7 @@ public class WikiKeeperTests : IDisposable
     [Fact]
     public async Task ВстречныеОперацииНаПаруРазделов_БерутБлокировкиПоКлючу_АНеПоАргументам()
     {
-        _sut.EnsureInitialized(User);
+        await _sut.EnsureInitializedAsync(User);
         var gateA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var startedA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -280,12 +309,56 @@ public class WikiKeeperTests : IDisposable
         res.Status.Should().Be(WikiOpStatus.Applied);
     }
 
+    [Fact]
+    public async Task AdoptЖдётБлокировкуРаздела_ПокаЕёДержитЗапись_МанифестДоЖданияНеТронут()
+    {
+        // MAJOR-тест ревью S2b-2: adopt берёт ту же блокировку раздела, что и запись (решение 10).
+        // Пока блок держится (здесь — внешним удержанием, тем же механизмом, что у записи),
+        // adopt не выполняется и манифест не переписывает. Мутация «снять блокировку adopt»
+        // (AdoptAsync без WithSectionsLockedAsync): adopt проходит сразу, IsCompleted истинно
+        // и манифест обновлён под держимым блоком — тест красный.
+        await _sut.EnsureInitializedAsync(User);
+        const string key = "Проекты/p1/Знание.md";
+        var full = PageFull(key);
+        (await _sut.WritePageAsync(User, "projects/p1", key, "# Знание\n\nХранитель.")).Status
+            .Should().Be(WikiOpStatus.Applied);
+
+        // Дрейф, который призван закрыть adopt: внешняя правка, манифест от неё отличается.
+        File.WriteAllText(full, "# Знание\n\nРучная правка.", new UTF8Encoding(false));
+        var diskHash = Sha(File.ReadAllBytes(full));
+        var manifestBefore = Manifest("projects/p1").Manifest[key];
+        diskHash.Should().NotBe(manifestBefore);
+
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holding = _sut.WithSectionsLockedAsync(User, ["projects/p1"], async () =>
+        {
+            started.SetResult();
+            await gate.Task;
+            return true;
+        });
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5)); // блокировка раздела реально удержана
+
+        var adopting = _sut.AdoptAsync(User, "projects/p1", key);
+        adopting.IsCompleted.Should().BeFalse("adopt обязан ждать блокировку раздела, как запись");
+        Manifest("projects/p1").Manifest[key].Should().Be(manifestBefore,
+            "пока блок держится, adopt не переписывает манифест");
+
+        gate.SetResult();
+        var res = await adopting.WaitAsync(TimeSpan.FromSeconds(5));
+        await holding;
+
+        res.Status.Should().Be(WikiOpStatus.Applied);
+        Manifest("projects/p1").Manifest[key].Should().Be(diskHash,
+            "после ожидания adopt закрывает дрейф, как и без конкурентности");
+    }
+
     // ─── 7. Событие журнала: честный автор, только раздел проекта ────────────
 
     [Fact]
     public async Task СобытиеWikiChanged_ЧестныйАвтор_ТолькоДляРазделаПроекта()
     {
-        _sut.EnsureInitialized(User);
+        await _sut.EnsureInitializedAsync(User);
         const string key = "Проекты/p1/Знание.md";
 
         (await _sut.WritePageAsync(User, "projects/p1", key, "# Знание\n\nтекст.")).Status

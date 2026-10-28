@@ -27,6 +27,9 @@ public sealed class WikiKeeper
     private readonly IProjectEventLogService? _events;
 
     private readonly ConcurrentDictionary<(string Owner, string Section), SemaphoreSlim> _locks = new();
+    // Блокировка инициализации — на владельца, вне раздела: «Завести» трогает только
+    // pages/_schema.md и служебные каталоги, ни один раздел не держит.
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _initLocks = new();
 
     // Шаблон pages/_schema.md — признака заведённости (решение 1): правила страниц по
     // решению 3. Правит файл только человек через Хранителя (операция schema, решение 6),
@@ -70,19 +73,32 @@ public sealed class WikiKeeper
     /// <summary>«Завести вики»: pages/_schema.md из шаблона и каталоги keeper/.
     /// Повторный вызов ничего не меняет: существующий _schema.md не перезаписывается
     /// (его мог править человек), каталоги уже есть. Разделы при этом НЕ заводятся:
-    /// раздел появляется первой применённой операцией в нём (решение 1).</summary>
-    public void EnsureInitialized(string ownerId)
+    /// раздел появляется первой применённой операцией в нём (решение 1).
+    /// Инициализация — под блокировкой владельца (ревью S2b-2, MAJOR): две одновременные
+    /// «Завести» иначе проверяют существование схемы до записи друг друга и вторая
+    /// перезаписывает шаблон (или правку человека, если она успела между проверкой и
+    /// записью). Блокировка и повторная проверка под ней дают: ровно одна запись шаблона.</summary>
+    public async Task EnsureInitializedAsync(string ownerId)
     {
-        var root = WikiPaths.Root(_dataDir, ownerId);
-        // Служебные каталоги — те, что по ADR являются каталогами (manifest/, packages/,
-        // preimages/); файлы журнала и метрик появятся при первой записи в них.
-        foreach (var dir in new[] { "keeper/manifest", "keeper/packages", "keeper/preimages" })
-            Directory.CreateDirectory(SafePath.JoinBelowRoot(root, dir));
+        var initLock = _initLocks.GetOrAdd(ownerId, _ => new SemaphoreSlim(1));
+        await initLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            var root = WikiPaths.Root(_dataDir, ownerId);
+            // Служебные каталоги — те, что по ADR являются каталогами (manifest/, packages/,
+            // preimages/); файлы журнала и метрик появятся при первой записи в них.
+            foreach (var dir in new[] { "keeper/manifest", "keeper/packages", "keeper/preimages" })
+                Directory.CreateDirectory(SafePath.JoinBelowRoot(root, dir));
 
-        const string schemaRel = "pages/" + WikiPaths.SchemaFileName;
-        var schema = SafePath.JoinBelowRoot(root, schemaRel);
-        if (!File.Exists(schema))
-            WikiFileWriter.Write(root, schemaRel, SchemaTemplate);
+            const string schemaRel = "pages/" + WikiPaths.SchemaFileName;
+            var schema = SafePath.JoinBelowRoot(root, schemaRel);
+            if (!File.Exists(schema))
+                WikiFileWriter.Write(root, schemaRel, SchemaTemplate);
+        }
+        finally
+        {
+            initLock.Release();
+        }
     }
 
     /// <summary>Записать страницу (pageKey — путь относительно pages/, тот же ключ, что в

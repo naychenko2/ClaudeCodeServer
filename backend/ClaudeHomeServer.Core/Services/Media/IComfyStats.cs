@@ -8,6 +8,13 @@ namespace ClaudeHomeServer.Services.Media;
 public interface IComfyStats
 {
     Task<ComfyMediaStatsSnapshot?> GetMediaAsync(CancellationToken ct);
+
+    // Вид задания ComfyUI по префиксу prompt_id (дежурство второй модели, шаг B4): вызывающий
+    // (Main) получает только вид — image | video | audio | lora; null — совпадений нет или их
+    // больше одного (неоднозначно), происхождение неизвестно или стенд выключен. Наружу ничего,
+    // кроме вида: без OwnerId/SessionId/промпта. Реализация по умолчанию — null: реализующие,
+    // которым вид неизвестен (фейки тестов), компилируются без правок.
+    string? DescribePromptKind(string idPrefix) => null;
 }
 
 // Снимок состояния медиа-стенда ComfyUI. Status — working | busy | down | disabled.

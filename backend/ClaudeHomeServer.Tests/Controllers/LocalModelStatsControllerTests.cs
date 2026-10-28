@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using ClaudeHomeServer.Controllers;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Media;
 using ClaudeHomeServer.Tests.Helpers;
@@ -915,6 +916,404 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         body.GetProperty("scope").GetString().Should().Be("all");
     }
 
+    // ─── Второй стенд (Б3c): регрессия основного ответа ─────────────────────────────────
+
+    // Снапшот снят на коде ДО Б3c (временным StatsSnapshotCapture, та же фикстура): ответ
+    // без engine не должен меняться ни байтом, когда появляются параметр engine и блок duty.
+    // Мутация: снять [JsonIgnore(WhenWritingNull)] с Duty в DTO — в JSON появится "duty":null,
+    // тест краснеет.
+    [Fact]
+    public async Task StatsБезEngine_СнапшотJSON()
+    {
+        var t0 = new DateTimeOffset(2026, 10, 28, 11, 0, 0, TimeSpan.Zero);
+        var reader = new FakeReader
+        {
+            Current = new LocalModelStatsCurrent
+            {
+                Configured = true, Engine = "vllm", Model = "qwen35-9b", Status = "busy",
+                DownSince = t0, Running = 2, Waiting = 1, SpeculativeSpeedup = 3.3, CleanStepMs = 58.0,
+                Kv = new LocalModelStatsKv
+                {
+                    UsagePerc = 0.61, RamTierPerc = 0.39, PrefixHitPerc = 0.87, RamTierHitPerc = 0.52,
+                    Preemptions = 7, GenPerStream = 38.0, PrefillPerStream = 640.0,
+                },
+                Unsupported = ["vllm:request_queue_time_seconds_sum"],
+                TensorParallel = 2,
+            },
+            Points =
+            [
+                new LocalModelStatsPoint
+                {
+                    Timestamp = t0, GenThroughput = 42.0, Running = 2, Waiting = 1, KvUsage = 0.61,
+                    PrefixHits = 1234, PrefixQueries = 5000, RamHits = 77, RamQueries = 900, Preemptions = 3,
+                    GenTokens = 600, ItlSeconds = 10.5, ItlCount = 120, PrefillSeconds = 2.5, QueueSeconds = 1.5, PromptTokens = 900,
+                },
+            ],
+        };
+        var factory = BuildFactoryWithFakes(reader, gpuSampler: new FakeGpuSampler
+        {
+            Samples = [new GpuSample { Index = 0, Uuid = "GPU-1", Name = "NVIDIA GeForce RTX 3090", Utilization = 99, MemoryUsed = 24000, MemoryTotal = 24576, Temperature = 71, PowerDraw = 338, PowerLimit = 350 }],
+        });
+        using var admin = factory.CreateAuthenticatedClient();
+        var since = (long)t0.AddSeconds(-60).ToUnixTimeMilliseconds();
+        var body = await (await admin.GetAsync($"/api/local-model/stats?since={since}")).Content.ReadAsStringAsync();
+
+        body.Should().Be("""{"configured":true,"engine":"vllm","model":"qwen35-9b","tensorParallel":2,"status":"busy","downSince":1793185200000,"running":2,"waiting":1,"othersCount":3,"speed":{"genPerStream":38,"prefillPerStream":640,"speculativeSpeedup":3.3},"cleanStepMs":58,"kv":{"usagePerc":0.61,"ramTierPerc":0.39,"prefixHitPerc":0.87,"ramTierHitPerc":0.52,"preemptions15m":7},"gpus":[{"index":0,"name":"NVIDIA GeForce RTX 3090","utilPerc":99,"memUsedMb":24000,"memTotalMb":24576,"tempC":71,"powerW":338,"powerLimitW":350}],"history":[{"t":1793185200000,"genThroughput":42,"waiting":1,"running":2,"kvUsage":0.61,"prefixHits":1234,"prefixQueries":5000,"ramHits":77,"ramQueries":900,"preemptions":3,"genTokens":600,"itlSeconds":10.5,"itlCount":120,"cleanStepMs":58,"prefillSeconds":2.5,"queueSeconds":1.5,"promptTokens":900}],"chats":[],"unsupported":["vllm:request_queue_time_seconds_sum"],"hardware":{"level":"ok","gpus":[]}}""");
+    }
+
+    // ─── Второй стенд (Б3c): GET /api/local-model/engines ───────────────────────────────
+
+    // Роль на действии: не-админ → 403. Мутация: снять [Authorize(Roles="admin")] — 200, краснеет.
+    [Fact]
+    public async Task Engines_НеАдмин_403()
+    {
+        var factory = BonsaiFactory(new FakeDirectory());
+        using var user = factory.CreateAuthenticatedClient(
+            TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+        (await user.GetAsync("/api/local-model/engines")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    // Серверный флаг local-model-stats: без него 404 (образец — hardware), даже админу.
+    // Мутация: убрать проверку флага — 200, тест краснеет.
+    [Fact]
+    public async Task Engines_БезФлага_404()
+    {
+        var factory = BonsaiFactory(new FakeDirectory(), flag: false);
+        using var admin = factory.CreateAuthenticatedClient();
+        (await admin.GetAsync("/api/local-model/engines")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // Список для переключателя: main — всегда первым; известный движок с дорожкой — configured.
+    // «Bonsai без vLLM тоже configured» (Ф6): main не настроен, bonsai — настроен.
+    // Мутация: не отдавать title/main — первые assert'ы краснеют.
+    [Fact]
+    public async Task Engines_СписокДвижков_MainИBonsai()
+    {
+        var dir = new FakeDirectory();
+        dir.Currents["main"] = new LocalModelStatsCurrent { Configured = false, Status = "notConnected" };
+        dir.Currents["bonsai"] = new LocalModelStatsCurrent { Configured = true, Engine = "llama-server", Status = "working" };
+        var factory = BonsaiFactory(dir, mainConfigured: false);
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var body = await (await admin.GetAsync("/api/local-model/engines")).Content.ReadFromJsonAsync<JsonElement>();
+        var list = body.EnumerateArray().ToList();
+        list.Count.Should().Be(2, "main + известный bonsai");
+
+        list[0].GetProperty("name").GetString().Should().Be("main");
+        list[0].GetProperty("title").GetString().Should().Be("Основная");
+        list[0].GetProperty("configured").GetBoolean().Should().BeFalse("vLLM не настроен");
+        list[1].GetProperty("name").GetString().Should().Be("bonsai");
+        list[1].GetProperty("title").GetString().Should().Be("Bonsai", "подпись сегмента — ключ с заглавной");
+        list[1].GetProperty("configured").GetBoolean().Should().BeTrue("Bonsai без vLLM тоже configured");
+    }
+
+    // Условие ревью 1 (R-F1, «Хвосты»): известный, но не настроенный движок — запись с
+    // configured:false, а не отсутствие в списке. Фронт трактует пустой список как «ещё не
+    // загружен» и держит сохранённый выбор вечно. Мутация: не включать бездорожный движок
+    // в список — list.Count 1, тест краснеет.
+    [Fact]
+    public async Task Engines_ИзвестныйБезДорожки_ConfiguredFalse()
+    {
+        var dir = new FakeDirectory();
+        dir.Currents["main"] = new LocalModelStatsCurrent { Configured = true, Status = "working" };
+        var factory = BonsaiFactory(dir, mainConfigured: true, metricsUrl: false);
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var body = await (await admin.GetAsync("/api/local-model/engines")).Content.ReadFromJsonAsync<JsonElement>();
+        var list = body.EnumerateArray().ToList();
+        list.Count.Should().Be(2);
+        list[1].GetProperty("name").GetString().Should().Be("bonsai");
+        list[1].GetProperty("configured").GetBoolean().Should().BeFalse("нет дорожки статистики — не настроен");
+    }
+
+    // «Ничего не настроено» — НЕ пустой список: {main, configured:false} (R-F1: пустой список
+    // фронт держит как «не загружен» навсегда). Мутация: отдавать [] при пустом словаре — краснеет.
+    [Fact]
+    public async Task Engines_НичегоНеНастроено_НеПустойСписок()
+    {
+        var factory = BonsaiFactory(new FakeDirectory(), engineInConfig: false);
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var body = await (await admin.GetAsync("/api/local-model/engines")).Content.ReadFromJsonAsync<JsonElement>();
+        var list = body.EnumerateArray().ToList();
+        list.Count.Should().Be(1, "main присутствует всегда");
+        list[0].GetProperty("name").GetString().Should().Be("main");
+        list[0].GetProperty("configured").GetBoolean().Should().BeFalse();
+    }
+
+    // Выключенная вертикаль Llm: engines отвечает без Llm-зависимостей — {main:false}, 200 (не 500).
+    [Fact]
+    public async Task Engines_LlmВыключена_НеПустойСписок()
+    {
+        var factory = new TestWebApplicationFactory();
+        factory.ExtraConfig["Subsystems:llm:Enabled"] = "false";
+        SetFlag(factory, true);
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var resp = await admin.GetAsync("/api/local-model/engines");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, "выключенная Llm — 200, не 500");
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        var list = body.EnumerateArray().ToList();
+        list.Count.Should().Be(1);
+        list[0].GetProperty("name").GetString().Should().Be("main");
+        list[0].GetProperty("configured").GetBoolean().Should().BeFalse();
+    }
+
+    // ─── Второй стенд (Б3c): GET /api/local-model/stats?engine= ──────────────────────────
+
+    // Роль на действии, как у /stats без engine: не-админ → 403.
+    [Fact]
+    public async Task StatsEngine_НеАдмин_403()
+    {
+        var dir = new FakeDirectory();
+        dir.Currents["bonsai"] = new LocalModelStatsCurrent { Configured = true, Engine = "llama-server", Status = "working" };
+        var factory = BonsaiFactory(dir);
+        using var user = factory.CreateAuthenticatedClient(
+            TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+        (await user.GetAsync("/api/local-model/stats?engine=bonsai")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    // Флаг для новой формы ручки: без него 404. Без engine флаг не проверялся и не проверяется
+    // (регрессионная guard: Админ_200 выше работает без флага).
+    [Fact]
+    public async Task StatsEngine_БезФлага_404()
+    {
+        var factory = BonsaiFactory(new FakeDirectory(), flag: false);
+        using var admin = factory.CreateAuthenticatedClient();
+        (await admin.GetAsync("/api/local-model/stats?engine=bonsai")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // Неизвестный движок — 200 {configured:false, status:notConnected}, не 404/500; блока duty нет.
+    [Fact]
+    public async Task StatsEngine_НеизвестныйДвижок_ConfiguredFalse()
+    {
+        var factory = BonsaiFactory(new FakeDirectory());
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var resp = await admin.GetAsync("/api/local-model/stats?engine=nope");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, "неизвестный движок — configured:false, не 500");
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("configured").GetBoolean().Should().BeFalse();
+        body.GetProperty("status").GetString().Should().Be("notConnected");
+        body.TryGetProperty("duty", out _).Should().BeFalse("нет дорожки — нет блока «Дежурство»");
+    }
+
+    // Выключенная Llm: тот же ответ, что для неизвестного движка (200, не 500).
+    [Fact]
+    public async Task StatsEngine_LlmВыключена_ConfiguredFalse()
+    {
+        var factory = new TestWebApplicationFactory();
+        factory.ExtraConfig["Subsystems:llm:Enabled"] = "false";
+        SetFlag(factory, true);
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var resp = await admin.GetAsync("/api/local-model/stats?engine=bonsai");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, "выключенная Llm — 200, не 500");
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("configured").GetBoolean().Should().BeFalse();
+        body.GetProperty("status").GetString().Should().Be("notConnected");
+    }
+
+    // Стенд именованного движка целиком: снимок дорожки (engine — тип движка, не имя стенда),
+    // карта Video из узла ComfyUI, чатов и hardware нет, unsupported — единый словарь (имена
+    // полей снимка) проходит как есть, блок «Дежурство» — цепочка с insurance (у движка есть
+    // FallbackRoute), арбитр из клиента, причины разбиты на kind/raw, «comfy» — вид по шву
+    // Images с known=true, ответы часа — из реального журнала вызовов мест.
+    [Fact]
+    public async Task StatsEngine_Bonsai_СтенСБлокомДежурство()
+    {
+        var t0 = new DateTimeOffset(2026, 10, 28, 11, 0, 0, TimeSpan.Zero);
+        var dir = new FakeDirectory();
+        dir.Currents["bonsai"] = new LocalModelStatsCurrent
+        {
+            Configured = true, Engine = "llama-server", Model = "bonsai2-27b", Status = "busy",
+            Running = 1, Waiting = 0,
+            Kv = new LocalModelStatsKv { GenPerStream = 21.0, PrefillPerStream = 640.0 },
+            Unsupported = ["KvUsagePerc", "Preemptions"],
+        };
+        dir.BonsaiPoints.Add(new LocalModelStatsPoint { Timestamp = t0, GenThroughput = 21.0, Running = 1, Waiting = 0 });
+
+        var arbiter = new FakeArbiterReader();
+        arbiter.Snapshots["bonsai"] = new EngineArbiterSnapshot(
+            Reachable: true, Bonsai: "yielded",
+            Reasons: ["comfy:a1b2c3d4", "lease:съёмка хода", "gpu:4217:llama-server --metrics"],
+            SinceAt: t0, Yields: 14, Returns: 13, LastYieldS: 0.2, LastReturnS: 6.1,
+            Mode: "shared", QuietLeftS: null,
+            Leases: [new EngineArbiterLease("съёмка хода", 37.5)],
+            SeenAt: t0);
+
+        var factory = BonsaiFactory(dir, arbiter, new KindComfyStats());
+        var ledger = factory.Services.GetRequiredService<EngineCallLedger>();
+        var done = ledger.Begin("bonsai", "chat-retitle")!;
+        done.Step(EngineCallLink.Insurance);
+        done.End(EngineCallOutcome.Insurance); // закрыт: ушёл из «сейчас» в корзину часа
+
+        using var admin = factory.CreateAuthenticatedClient();
+        var resp = await admin.GetAsync($"/api/local-model/stats?engine=bonsai&since={(long)t0.AddSeconds(-60).ToUnixTimeMilliseconds()}");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+
+        body.GetProperty("configured").GetBoolean().Should().BeTrue();
+        body.GetProperty("engine").GetString().Should().Be("llama-server", "engine — тип движка, не имя стенда");
+        body.GetProperty("model").GetString().Should().Be("bonsai2-27b");
+        body.GetProperty("status").GetString().Should().Be("busy");
+        body.GetProperty("running").GetInt32().Should().Be(1);
+        // Счётчик хода не видит вызовов мест (они мимо шлюза): «прочие» — всё, что сообщает движок.
+        body.GetProperty("othersCount").GetInt32().Should().Be(1);
+        body.GetProperty("chats").GetArrayLength().Should().Be(0, "у именованного движка нет чатов");
+        body.TryGetProperty("hardware", out _).Should().BeFalse("сводка «Видеокарты» хоста не относится к стенду Video");
+        body.GetProperty("unsupported").EnumerateArray().Select(s => s.GetString()!)
+            .Should().Equal(new[] { "KvUsagePerc", "Preemptions" }, "единый словарь сокрытия — имена полей снимка");
+
+        var gpu = body.GetProperty("gpus")[0];
+        gpu.GetProperty("index").GetInt32().Should().Be(0);
+        gpu.GetProperty("name").GetString().Should().Be("NVIDIA GeForce RTX 3090");
+        gpu.GetProperty("utilPerc").GetInt32().Should().Be(34);
+        gpu.GetProperty("memUsedMb").GetInt64().Should().Be(8192);
+
+        var duty = body.GetProperty("duty");
+        duty.GetProperty("chain").EnumerateArray().Select(s => s.GetString()!)
+            .Should().Equal(new[] { "bonsai", "insurance", "claude" }, "цепочка типичная: own → страховка (есть FallbackRoute) → облако");
+
+        var ar = duty.GetProperty("arbiter");
+        ar.GetProperty("reachable").GetBoolean().Should().BeTrue();
+        ar.GetProperty("state").GetString().Should().Be("yielded");
+        ar.GetProperty("mode").GetString().Should().Be("shared");
+        ar.GetProperty("yields").GetInt32().Should().Be(14);
+        ar.GetProperty("returns").GetInt32().Should().Be(13);
+        ar.GetProperty("lastYieldS").GetDouble().Should().Be(0.2);
+        ar.GetProperty("lastReturnS").GetDouble().Should().Be(6.1);
+        ar.GetProperty("sinceAt").GetInt64().Should().Be(t0.ToUnixTimeMilliseconds());
+        ar.GetProperty("lastSeenAt").GetInt64().Should().Be(t0.ToUnixTimeMilliseconds());
+
+        var reasons = ar.GetProperty("reasons").EnumerateArray().ToList();
+        reasons.Count.Should().Be(3);
+        reasons[0].GetProperty("kind").GetString().Should().Be("comfy");
+        reasons[0].GetProperty("raw").GetString().Should().Be("a1b2c3d4");
+        reasons[0].GetProperty("jobKind").GetString().Should().Be("video", "вид по шву IComfyStats, таблица на бэкенде");
+        reasons[0].GetProperty("known").GetBoolean().Should().BeTrue("prompt_id в реестре этого инстанса");
+        reasons[1].GetProperty("kind").GetString().Should().Be("lease");
+        reasons[1].GetProperty("raw").GetString().Should().Be("съёмка хода");
+        reasons[1].TryGetProperty("jobKind", out _).Should().BeFalse("вид — только у comfy");
+        reasons[2].GetProperty("kind").GetString().Should().Be("gpu");
+        reasons[2].GetProperty("raw").GetString().Should().Be("4217:llama-server --metrics", "raw — текст без префикса вида");
+
+        var lease = ar.GetProperty("leases")[0];
+        lease.GetProperty("reason").GetString().Should().Be("съёмка хода");
+        lease.GetProperty("leftS").GetDouble().Should().Be(37.5);
+
+        var answers = duty.GetProperty("answersLastHour");
+        answers.GetProperty("insurance").GetInt32().Should().Be(1);
+        answers.GetProperty("bonsai").GetInt32().Should().Be(0);
+        answers.GetProperty("missed").GetInt32().Should().Be(0);
+        answers.GetProperty("sinceAt").GetInt64().Should().BeGreaterThan(0, "знаменатель доли — max(now−1ч, старт процесса)");
+    }
+
+    // Условие ревью 2 (контракт зафиксирован фронтом в ревью Ф0): callsNow[].link — явно null
+    // для вызова, не вошедшего в цепочку («ждёт в очереди»): поле present и равно null, не
+    // отсутствие поля и не строка. Б5 заводит записи без звена до первого Step.
+    // Мутация: отдать вместо null "queued" — второй assert краснеет.
+    [Fact]
+    public async Task StatsEngine_Bonsai_CallsNow_LinkNullЖдётВОчереди()
+    {
+        var dir = new FakeDirectory();
+        dir.Currents["bonsai"] = new LocalModelStatsCurrent { Configured = true, Engine = "llama-server", Status = "working" };
+        var factory = BonsaiFactory(dir, new FakeArbiterReader());
+
+        var ledger = factory.Services.GetRequiredService<EngineCallLedger>();
+        ledger.Begin("bonsai", "chat-retitle"); // без Step: ждёт пробы готовности/слота
+        var onLink = ledger.Begin("bonsai", "note-toc")!;
+        onLink.Step(EngineCallLink.Bonsai);
+
+        using var admin = factory.CreateAuthenticatedClient();
+        var body = await (await admin.GetAsync("/api/local-model/stats?engine=bonsai")).Content.ReadFromJsonAsync<JsonElement>();
+
+        var calls = body.GetProperty("duty").GetProperty("callsNow").EnumerateArray().ToList();
+        calls.Count.Should().Be(2, "открытые вызовы — оба");
+        var waiting = calls.Single(c => c.GetProperty("link").ValueKind == JsonValueKind.Null);
+        waiting.GetProperty("place").GetString().Should().Be("Обновление названия чата", "название места из каталога");
+        waiting.TryGetProperty("link", out var link).Should().BeTrue("link обязан присутствовать — явно null");
+        link.ValueKind.Should().Be(JsonValueKind.Null, "null = «ждёт в очереди» (контракт фронта)");
+        waiting.GetProperty("durationS").GetDouble().Should().BeGreaterThanOrEqualTo(0);
+        calls.Should().Contain(c => c.GetProperty("link").GetString() == "bonsai", "войдящий в цепочку — со звеном");
+    }
+
+    // c3: в сериализованном JSON нет ни id аренд (их создал аноним, их снимает клиент), ни
+    // маркера вида "gpu:" (разбит на kind/raw). Аренда — ровно reason/leftS.
+    // Мутация: отдать в LeaseDto id — EnumerateObject краснеет; не разбивать префикс — NotContain краснеет.
+    [Fact]
+    public async Task StatsEngine_Bonsai_НетIdАрендИПрефиксаGpu()
+    {
+        var t0 = new DateTimeOffset(2026, 10, 28, 11, 0, 0, TimeSpan.Zero);
+        var dir = new FakeDirectory();
+        dir.Currents["bonsai"] = new LocalModelStatsCurrent { Configured = true, Engine = "llama-server", Status = "working" };
+        var arbiter = new FakeArbiterReader();
+        arbiter.Snapshots["bonsai"] = new EngineArbiterSnapshot(
+            Reachable: true, Bonsai: "ready",
+            Reasons: ["gpu:4217:llama-server --metrics"],
+            SinceAt: t0, Yields: 0, Returns: 0, LastYieldS: null, LastReturnS: null,
+            Mode: null, QuietLeftS: null,
+            Leases: [new EngineArbiterLease("съёмка хода", 37.5)],
+            SeenAt: t0);
+        var factory = BonsaiFactory(dir, arbiter);
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var raw = await (await admin.GetAsync("/api/local-model/stats?engine=bonsai")).Content.ReadAsStringAsync();
+        raw.Should().NotContain("gpu:", "префикс вида наружу не отдаётся");
+        raw.Should().NotContain("lease:", "префикс вида наружу не отдаётся");
+
+        var body = JsonDocument.Parse(raw).RootElement;
+        var lease = body.GetProperty("duty").GetProperty("arbiter").GetProperty("leases")[0];
+        lease.EnumerateObject().Select(p => p.Name).Should().BeEquivalentTo(new[] { "reason", "leftS" }, "id аренды наружу не уходит");
+    }
+
+    // c1: выключенная Images → у именованного стенда нет Gpus и jobKind (шва нет — вид не
+    // утверждаем; known остаётся null). Мутация: звать IComfyStats без null-проверки — 500, краснеет.
+    [Fact]
+    public async Task StatsEngine_Bonsai_ImagesВыключена_GpusNull_JobKindNull()
+    {
+        var t0 = new DateTimeOffset(2026, 10, 28, 11, 0, 0, TimeSpan.Zero);
+        var dir = new FakeDirectory();
+        dir.Currents["bonsai"] = new LocalModelStatsCurrent { Configured = true, Engine = "llama-server", Status = "working" };
+        var arbiter = new FakeArbiterReader();
+        arbiter.Snapshots["bonsai"] = new EngineArbiterSnapshot(
+            Reachable: true, Bonsai: "waiting-vram", Reasons: ["comfy:a1b2c3d4"],
+            SinceAt: t0, Yields: 1, Returns: 0, LastYieldS: 0.2, LastReturnS: null,
+            Mode: "shared", QuietLeftS: null, Leases: null, SeenAt: t0);
+        var factory = BonsaiFactory(dir, arbiter);
+        factory.ExtraConfig["Subsystems:images:Enabled"] = "false";
+
+        using var admin = factory.CreateAuthenticatedClient();
+        var resp = await admin.GetAsync("/api/local-model/stats?engine=bonsai");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, "выключенная Images — 200, не 500");
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+
+        body.GetProperty("gpus").ValueKind.Should().Be(JsonValueKind.Null, "нет узла ComfyUI — нет данных о карте");
+        var reason = body.GetProperty("duty").GetProperty("arbiter").GetProperty("reasons")[0];
+        reason.GetProperty("kind").GetString().Should().Be("comfy");
+        reason.TryGetProperty("jobKind", out _).Should().BeFalse("шва Images нет — вид не утверждаем");
+        reason.TryGetProperty("known", out _).Should().BeFalse("unknown остаётся unknown");
+    }
+
+    // Статус "yielded" (Б3b) проходит как есть: выгруженная под арбитром модель — не авария,
+    // downSince null. Мутация: подменить "yielded" на "down" в контроллере — тест краснеет.
+    [Fact]
+    public async Task StatsEngine_Bonsai_StatusYieldedБезDownSince()
+    {
+        var dir = new FakeDirectory();
+        dir.Currents["bonsai"] = new LocalModelStatsCurrent
+        {
+            Configured = true, Engine = "llama-server", Status = "yielded", DownSince = null,
+            Running = 0, Waiting = 0,
+        };
+        var factory = BonsaiFactory(dir, new FakeArbiterReader());
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var body = await (await admin.GetAsync("/api/local-model/stats?engine=bonsai")).Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("status").GetString().Should().Be("yielded");
+        body.GetProperty("downSince").ValueKind.Should().Be(JsonValueKind.Null, "уступка — не сбой");
+    }
+
     // ─── Хелперы ─────────────────────────────────────────────────────────────────
 
     // Фейковый ILocalModelStatsReader: тест задаёт Current и Points;
@@ -995,5 +1394,91 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         var factory = new TestWebApplicationFactory();
         factory.ExtraServices = services => services.AddSingleton<IComfyStats>(comfy);
         return factory;
+    }
+
+    // Фейковый справочник дорожек (Б3c): тест задаёт снимки дорожек по именам; HistoryOf —
+    // фиксированные точки для "bonsai", пусто для остальных.
+    private sealed class FakeDirectory : ILocalEngineStatsDirectory
+    {
+        public Dictionary<string, LocalModelStatsCurrent> Currents { get; } = new(StringComparer.Ordinal);
+        public List<LocalModelStatsPoint> BonsaiPoints { get; } = [];
+
+        public IReadOnlyList<string> Names => [.. Currents.Keys];
+
+        public LocalModelStatsCurrent? CurrentOf(string name) =>
+            Currents.TryGetValue(name, out var c) ? c : null;
+
+        public IReadOnlyList<LocalModelStatsPoint> HistoryOf(string name, TimeSpan window, long? sinceUnixMs = null) =>
+            name == "bonsai" ? BonsaiPoints : [];
+    }
+
+    // Фейковый читатель состояния арбитра: подготовленный снимок по имени движка;
+    // null — у движка нет StateUrl (или движок неизвестен) — как настоящий клиент.
+    private sealed class FakeArbiterReader : IEngineArbiterStateReader
+    {
+        public Dictionary<string, EngineArbiterSnapshot?> Snapshots { get; } = new(StringComparer.Ordinal);
+
+        public Task<EngineArbiterSnapshot?> GetAsync(string engineName, CancellationToken ct = default) =>
+            Task.FromResult(Snapshots.TryGetValue(engineName, out var s) ? s : null);
+    }
+
+    // IComfyStats с реализованным швом вида задания (B4): "a1b2c3d4" → video; снимок — одна
+    // карта Video (общая с ComfyUI). Остальные методы — как FakeComfyStats.
+    private sealed class KindComfyStats : IComfyStats
+    {
+        public Task<ComfyMediaStatsSnapshot?> GetMediaAsync(CancellationToken ct) =>
+            Task.FromResult<ComfyMediaStatsSnapshot?>(new ComfyMediaStatsSnapshot(
+                Configured: true, Status: "working", DownSince: null, Version: "1.0",
+                Gpus: [new ComfyGpuInfo(0, "", "NVIDIA GeForce RTX 3090", 34, 8192, 24576, 52, 88, 350)],
+                LoadedModels: [], SlotsUsed: 0, SlotsLimit: 4, Running: [], Queue: [], LastHour: [], Unsupported: []));
+
+        public string? DescribePromptKind(string idPrefix) => idPrefix == "a1b2c3d4" ? "video" : null;
+    }
+
+    // Фабрика тестов второго стенда: настоящий NamedLocalEngines из конфига ("bonsai":
+    // BaseUrl/Model/StateUrl/FallbackRoute, MetricsUrl — по просьбе), фейковые директор и
+    // читатель арбитра вместо Llm-форвардеров (поллер при этом не строится), настоящий
+    // EngineCallLedger из DI (тест пишет в него до запроса). Флаг — по просьбе (по умолчанию
+    // выключен, как у свежего пользователя — образец HardwareEndpointTests).
+    private static TestWebApplicationFactory BonsaiFactory(
+        FakeDirectory dir, FakeArbiterReader? arbiter = null, IComfyStats? comfy = null,
+        bool mainConfigured = false, bool flag = true, bool engineInConfig = true, bool metricsUrl = true)
+    {
+        var factory = new TestWebApplicationFactory();
+        if (engineInConfig)
+        {
+            factory.ExtraConfig["LocalEngines:bonsai:BaseUrl"] = "http://127.0.0.1:18030";
+            factory.ExtraConfig["LocalEngines:bonsai:Model"] = "bonsai2-27b";
+            factory.ExtraConfig["LocalEngines:bonsai:StateUrl"] = "http://127.0.0.1:8090/state";
+            factory.ExtraConfig["LocalEngines:bonsai:FallbackRoute"] = "direct:minimax";
+            if (metricsUrl)
+                factory.ExtraConfig["LocalEngines:bonsai:MetricsUrl"] = "http://127.0.0.1:18030/metrics";
+        }
+        factory.ExtraServices = services =>
+        {
+            services.AddSingleton<ILocalModelStatsReader>(new FakeReader
+            {
+                Current = new LocalModelStatsCurrent
+                {
+                    Configured = mainConfigured,
+                    Status = mainConfigured ? "working" : "notConnected",
+                },
+            });
+            services.AddSingleton<ILocalEngineStatsDirectory>(dir);
+            if (arbiter is not null)
+                services.AddSingleton<IEngineArbiterStateReader>(arbiter);
+            if (comfy is not null)
+                services.AddSingleton<IComfyStats>(comfy);
+        };
+        if (flag)
+            SetFlag(factory, true);
+        return factory;
+    }
+
+    // Флаг per-user, как в HardwareEndpointTests: admin TestUsername.
+    private static void SetFlag(TestWebApplicationFactory factory, bool on)
+    {
+        var users = factory.Services.GetRequiredService<UserStore>();
+        users.SetFeatureFlag(users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id, "local-model-stats", on);
     }
 }

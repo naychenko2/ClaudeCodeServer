@@ -245,6 +245,12 @@ export function ToolbarOverflowMenu({
         </ToolbarIconButton>
         {typeof indicator === 'number' && indicator > 0 && <span style={countBadge}>{indicator}</span>}
         {indicator === true && <span style={dotBadge} />}
+        {/* ReactNode — как есть (контракт пропа это обещал, иконочный триггер не рисовал):
+            вызывающий даёт свой тон и форму — accent у dotBadge закреплён за «что-то идёт
+            прямо сейчас», чужие состояния (напр. дежурство стенда) несут свой цвет.
+            Позиционируется внутри этого же relative-спана. Числа/булевы уже разобраны
+            выше; undefined/null/false в JSX и так ничего не рисуют */}
+        {typeof indicator !== 'number' && typeof indicator !== 'boolean' && indicator}
       </span>
     );
   }

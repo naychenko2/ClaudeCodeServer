@@ -34,10 +34,11 @@ import { openChatById } from '../../lib/openChat';
 import {
   isLocalModelPanelVisible,
   useLocalModelAdmin,
-  useLocalModelConfigured,
   useLocalModelStats,
 } from './useLocalModelStats';
+import { isLocalModelConfiguredAny } from './useLocalModelWatcher';
 import { useLocalModelMedia } from './useLocalModelMedia';
+import { useLocalModelEngines } from './useLocalModelEngines';
 import { useLocalModelHardware, DEFAULT_HARDWARE_WINDOW, type HardwareWindow } from './useLocalModelHardware';
 import { TextTab } from './TextTab';
 import { MediaTab } from './MediaTab';
@@ -99,11 +100,13 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   const flag = useFeature(FLAGS.localModelStats);
   // Роль и опрос configured — в useLocalModelWatcher (смонтирован на странице всегда)
   const isAdmin = useLocalModelAdmin();
-  const configured = useLocalModelConfigured();
 
   // Тяжёлый 2-с опрос: только когда панель видна (открыта + флаг + admin +
-  // configured); не видна — опрос стоит, таймера нет
-  const visible = isLocalModelPanelVisible({ flag, isAdmin, configured });
+  // configured); не видна — опрос стоит, таймера нет. «Настроен ли» — одно выражение
+  // со значком рельса (isLocalModelConfiguredAny: основной/медиа ИЛИ последний
+  // снимок второй дорожки): с другой формулой был бы значок без панели (пустая
+  // карточка). Ререндер при смене — подписка сторожа на странице.
+  const visible = isLocalModelPanelVisible({ flag, isAdmin, configured: isLocalModelConfiguredAny() });
 
   // Не-админ: вкладка всегда «Медиа» — переключателя нет, /stats (LLM) не опрашивается.
   // Если в localStorage 'hardware' (оставлено админом) и пользователь не админ —
@@ -123,9 +126,15 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   // Окно графика «Температуры» вкладки «Железо»: своё, не общее с LLM; дефолт 15m.
   const [hwWindow, setHwWindow] = useState<HardwareWindow>(DEFAULT_HARDWARE_WINDOW);
 
+  // Движок: список с сервера и выбор человека — стор Ф1 (useLocalModelEngines,
+  // localStorage). Активен, только когда видна вкладка «LLM» (переключатель и стенд
+  // живут там). Тот же engine читает тяжёлый опрос (URL stats?engine=) и TextTab:
+  // опрос, стенд и переключатель видят один и тот же выбор.
+  const { engines, engine, setEngine } = useLocalModelEngines(visible && tab === 'text');
+
   // Тяжёлый 2-с опрос — только АКТИВНОЙ вкладки (неактивная на паузе):
   // «LLM» — stats, «Медиа» — media, «Железо» — hardware; переключение — немедленный снимок.
-  const { data: textData, loading: textLoading, refetch: textRefetch } = useLocalModelStats(visible && tab === 'text', window);
+  const { data: textData, loading: textLoading, error: textError, refetch: textRefetch } = useLocalModelStats(visible && tab === 'text', window, engine);
   const { data: mediaData, loading: mediaLoading, refetch: mediaRefetch } = useLocalModelMedia(visible && tab === 'media');
   const { data: hwData, loading: hwLoading } = useLocalModelHardware(visible && tab === 'hardware', hwWindow);
 
@@ -153,7 +162,7 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   const body = (
     <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: SP.md, padding: SP.md }}>
       {tab === 'text'
-        ? <TextTab data={textData} loading={textLoading} isMobile={ctx.isMobile} onOpenChat={onOpenChat} onRefetch={textRefetch} onOpenHardware={() => changeTab('hardware')} window={window} onWindowChange={setWindow} />
+        ? <TextTab data={textData} loading={textLoading} error={textError} isMobile={ctx.isMobile} onOpenChat={onOpenChat} onRefetch={textRefetch} onOpenHardware={() => changeTab('hardware')} onOpenMedia={() => changeTab('media')} window={window} onWindowChange={setWindow} engines={engines} engine={engine} onEngineChange={setEngine} />
         : tab === 'hardware'
           ? <HardwareTab data={hwData} loading={hwLoading} isMobile={ctx.isMobile} window={hwWindow} onWindowChange={setHwWindow} />
           : <MediaTab data={mediaData} loading={mediaLoading} isMobile={ctx.isMobile} onOpenChat={onOpenChat} onRefetch={mediaRefetch} onOpenHardware={() => changeTab('hardware')} />}

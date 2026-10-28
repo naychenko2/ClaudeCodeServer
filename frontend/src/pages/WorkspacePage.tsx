@@ -37,7 +37,8 @@ import { PillSwitch } from '../components/Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from '../components/ToolbarOverflowMenu';
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
-import { useLocalModelWatcher } from '../features/localModel/useLocalModelWatcher';
+import { getLocalModelBonsai, useLocalModelWatcher } from '../features/localModel/useLocalModelWatcher';
+import { menuStatus, triggerDot, triggerTitleFor } from '../features/localModel/format';
 import { PluginFrame, PluginPanelsSwitcher, useHasInstalledPlugins, useInstalledPlugins, panelDisplayName, pluginIconFor } from '../features/plugins';
 import { BackButton, Button, IconButton, Modal } from '../components/ui';
 import { PageCanvas } from '../components/ui/PageCanvas';
@@ -399,6 +400,27 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   const localModelAction = localModelDef?.action;
   const localModelRender = localModelDef?.render;
   const localModelVisible = !!localModelAction?.isAvailable?.(project.id);
+  // Точка состояния на значке «Локальных моделей» (Ф6): тон и подсказка из геттера
+  // фичи, состояние — из лёгкого опроса useLocalModelWatcher (смонтирован выше).
+  // Смена состояния будит подписку сторожа → страница перерисовывается → рельса
+  // перечитывает геттер. В railBadges значение подмешивается в месте передачи
+  // (ниже), а не в useMemo: базовые счётчики не должны пересобираться на каждый
+  // 15-с тик опроса.
+  const localModelBadge = localModelVisible ? localModelAction?.indicator?.() ?? null : null;
+  // Короткий статус того же состояния в мобильном меню «⋯» (макет §4, колонка
+  // «меню «⋯»»): тот же снимок лёгкого опроса и тот же standDot-тон, что у точки
+  // рельса — два индикатора не могут разойтись. У не-админа снимка нет (он не
+  // опрашивает вторую дорожку) — статуса нет, как и точки.
+  const localModelMenu = localModelVisible ? menuStatus(getLocalModelBonsai()) : null;
+  // Точка на самой кнопке «⋯» (Ф9, макет renderPhone): тот же снимок и тот же тон, что у
+  // точки рельса и статуса пункта (triggerDot = tone у menuStatus = standDot) — сигнал
+  // виден до открытия меню. Гейт как у точки рельса: видимый пункт (флаг+admin+configured)
+  // и снимок (его опрос живёт только у админа с флагом) — в норме и без данных точки нет.
+  const localModelTriggerDot = localModelVisible ? triggerDot(getLocalModelBonsai()) : null;
+  // Имя кнопки (title/aria) называет то же состояние, что точка (Ф9, доработка по
+  // ревью): на мобиле панель — только в этом меню, состояние читалось бы одним
+  // цветом 8-px точки. В норме и без снимка — прежнее «Ещё».
+  const localModelTriggerTitle = localModelVisible ? triggerTitleFor(getLocalModelBonsai()) : 'Ещё';
 
   // Восстанавливаем состояние окна для этого проекта (компонент перемонтируется при входе в проект)
   const [leftTab, setLeftTab] = useState<LeftTab>(() => {
@@ -1262,10 +1284,22 @@ const windowWidth = useWindowWidth();
       onClick: () => ensureArchOpen(),
     }] : []),
     // «Локальные модели» — панель подсистемы: пункт есть, только когда гейт (флаг +
-    // admin + configured) открыт; клик открывает её шторкой, а не вкладкой
+    // admin + configured) открыт; клик открывает её шторкой, а не вкладкой.
+    // Справа — короткий статус и точка по макету §4 (тот же тон, что у точки рельса).
+    // Свой ReactNode, а не OverflowItem.dot: её точка всегда accent, а accent на
+    // рельсе занят «что-то идёт прямо сейчас» (макет §4). В норме — ни текста, ни точки.
     ...(localModelVisible && localModelAction ? [{
       key: 'localModel', label: localModelAction.title,
       icon: localModelAction.icon,
+      value: localModelMenu ? (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: C.textMuted }}>
+          {localModelMenu.text}
+          <span style={{
+            width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+            background: localModelMenu.tone === 'warning' ? C.warning : C.textMuted,
+          }} />
+        </span>
+      ) : undefined,
       onClick: () => setLocalModelOpen(true),
     }] : []),
     ...overflowTabItems.slice(splitAt),
@@ -2378,9 +2412,22 @@ const windowWidth = useWindowWidth();
               isMobile
               compact
             />
-            {/* Не поместившиеся вкладки + «Использование» — в «⋯» (как «⋯ Разделы» в HubHeader) */}
+            {/* Не поместившиеся вкладки + «Использование» — в «⋯» (как «⋯ Разделы» в HubHeader).
+                Точка состояния на самой кнопке (Ф9, макет renderPhone): свой ReactNode через
+                indicator — тон по состоянию дежурства (muted/warning), не accent у dotBadge;
+                обводка — фон шапки, чтобы точка читалась на ней, как на рельсе */}
             <div ref={projectTabsMoreRef} style={{ flexShrink: 0, display: 'inline-flex' }}>
-              <ToolbarOverflowMenu isMobile title="Ещё" items={projectOverflowItems} />
+              <ToolbarOverflowMenu
+                isMobile title="Ещё" items={projectOverflowItems}
+                triggerTitle={localModelTriggerTitle}
+                indicator={localModelTriggerDot ? (
+                  <span style={{
+                    position: 'absolute', top: 0, right: 0, width: 8, height: 8, borderRadius: '50%',
+                    background: localModelTriggerDot === 'warning' ? C.warning : C.textMuted,
+                    border: `2px solid ${C.bgPanel}`, pointerEvents: 'none',
+                  }} />
+                ) : undefined}
+              />
             </div>
           </div>
         )}
@@ -2565,7 +2612,7 @@ const windowWidth = useWindowWidth();
           project={project}
           projectForEdit={projectForEdit}
           onOpenWall={() => onSwitchHub('wall')}
-          railBadges={railBadges}
+          railBadges={localModelBadge ? { ...railBadges, localModel: localModelBadge } : railBadges}
           onOpenProjectSettings={() => setEditProjectOpen(true)}
           activeSession={activeSession}
           onSelectSession={handleSelectSession}

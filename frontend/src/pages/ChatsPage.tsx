@@ -29,7 +29,7 @@ import { IslandSplitter } from '../components/ui/IslandSplitter';
 import { useSessionPanels } from './workspace/useSessionPanels';
 import { chatPanels, openKeysOf } from './workspace/panelStackState';
 import { followHost } from '../lib/genPanelFollow';
-import { CHAT_KEYS, CHAT_RIGHT_KEYS, keyAllowed, type PanelKey } from './workspace/panelCatalog';
+import { CHAT_KEYS, CHAT_RIGHT_KEYS, chatPanelDefAllowed, keyAllowed, type PanelKey } from './workspace/panelCatalog';
 import { ContextPanelHost } from '../components/generation/ContextPanelHost';
 import { REVEAL_PANEL_EVENT, SLOT_WORKSPACE_PANEL_DEF, useSlot } from '../lib/subsystems/registry';
 import type { RevealPanelDetail, WorkspacePanelDefApi, WorkspacePanelDefCtx } from '../lib/subsystems/registryCore';
@@ -336,9 +336,16 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   chatOpenKeys.current = openKeysOf(chatZones);
   // Панели подсистем в правой зоне личного чата (слот workspace-panel-def): проекта
   // здесь нет, поэтому projectId = null — проектные вклады («Персонажи») отказываются
-  // сами. Без вкладов контента нет, и рельса кнопок не показывает
+  // сами. «Локальные модели» — сервер, а не проект: ключ живёт в chatRight, но в
+  // личном чате панель показываем только админу (chatPanelDefAllowed) — у не-админа
+  // нового значка в своей рельсе нет. Без вкладов контента нет, и рельса кнопок
+  // не показывает
   const panelDefs = useSlot<WorkspacePanelDefCtx, WorkspacePanelDefApi>(SLOT_WORKSPACE_PANEL_DEF);
   const chatRight = CHAT_RIGHT_KEYS;
+  // Точка состояния на значке «Локальных моделей» (Ф6): тот же геттер фичи, что в
+  // воркспейсе (состояние — из лёгкого опроса useLocalModelWatcher, вызван в начале
+  // компонента; его подписка перерисовывает страницу при смене состояния)
+  const localModelBadge = panelDefs.find(d => d.name === 'localModel')?.action?.indicator?.() ?? null;
   // Канал выбрали в КАТАЛОГЕ — эфир идёт в боковой панели, а та могла быть закрыта
   // или лежать в ящике рельсы. Раскладка — епархия страницы, поэтому являет панель
   // она, а стор только просит об этом событием.
@@ -633,23 +640,31 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
           // сообщения (есть что показать в артефактах). Для нового пустого чата
           // рельса не нужна — это держит центральную область симметричной:
           // IslandScaffold видит right=undefined и применяет авто-компенсацию.
-          // Правой зоне доступны ТОЛЬКО панели сессии и генерации: список чатов рисует левая
-          // (контент есть лишь у неё), и уехавшая сюда панель «Чаты» пропадала бы
-          // с экрана целиком. Набор ключей это запрещает — и заодно чинит
-          // раскладку, сохранённую до появления правила.
+          // Правой зоне доступны панели сессии, генерации и «Локальных моделей»
+          // (это сервер, а не проект): список чатов рисует левая (контент есть лишь у
+          // неё), и уехавшая сюда панель «Чаты» пропадала бы с экрана целиком. Набор
+          // ключей это запрещает — и заодно чинит раскладку, сохранённую до правила.
+          // Вклад подсистемы проходит ещё и через chatPanelDefAllowed: «Локальные
+          // модели» в личном чате — только админу (их значок здесь — новый для
+          // не-админа, и он ему не нужен).
           right={activeChat && (activeChat.messageCount > 0 || genZoneFor === activeChat.id) ? (
             <PanelZone
               side="right" allowedKeys={chatRight} hideWhenEmpty panelStack={chatPanels}
               onUserClose={k => markGenPanelDismissed(activeChat.id, k)}
               panels={{
                 ...Object.fromEntries(panelDefs.flatMap(d => (
-                  d.name && keyAllowed(d.name as PanelKey, chatRight) && d.render && d.name !== 'chatContext' && (d.action?.isAvailable?.(null) ?? true)
+                  d.name && keyAllowed(d.name as PanelKey, chatRight) && d.render && d.name !== 'chatContext'
+                    && (d.action?.isAvailable?.(null) ?? true) && chatPanelDefAllowed(d.name as PanelKey, auth.role === 'admin')
                     ? [[d.name, d.render({ projectId: null, sessionId: activeChat.id, isMobile: false, onClose: () => { markGenPanelDismissed(activeChat.id, d.name!); closePanelKey(d.name as PanelKey); } })]]
                     : []
                 ))),
                 chatContext: <ContextPanelHost session={activeChat} project={null}
                   onClose={() => { markGenPanelDismissed(activeChat.id, 'chatContext'); closePanelKey('chatContext'); }} />,
               }}
+              // Точка «Локальных моделей» — та же, что в рельсе проекта (Ф6): у
+              // не-админа геттер молчит (он не спрашивает состояние второй дорожки),
+              // и значка с точкой здесь нет вовсе
+              railBadges={localModelBadge ? { localModel: localModelBadge } : undefined}
               sessionPanels={sessionPanels} compact={isTablet}
             />
           ) : undefined}

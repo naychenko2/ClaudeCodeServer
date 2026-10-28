@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   clamp01, formatGpuMem, formatPerc, formatPower, formatSince, formatTps, formatUpdatedAt,
-  gpuCountLabel, gpuLabel, gpuOrdinal, whoRows,
+  gpuCountLabel, gpuLabel, gpuOrdinal, menuStatus, standDot, triggerDot, triggerTitleFor, whoRows,
 } from './format';
+import { mockBonsaiStats } from './localModel.fixtures';
 
 describe('formatTps: ток/с', () => {
   it('целое значение — «38 ток/с»', () => {
@@ -210,5 +211,109 @@ describe('whoRows: строки «Кто сейчас на модели»', () =
   it('пустой список и othersCount 0 — строк нет', () => {
     expect(whoRows(undefined, undefined)).toEqual([]);
     expect(whoRows([], 0)).toEqual([]);
+  });
+});
+
+// === Короткий статус пункта «Локальные модели» в мобильном меню «⋯» (Ф6, доработка 2) ===
+// Колонка «Подсказка рельса / меню «⋯»» таблицы §4 макета bonsai-toolbar: в меню —
+// одно слово или «через м:сс»; тон — тот же, что у точки рельса (standDot).
+describe('menuStatus: короткий статус пункта «⋯» (макет §4)', () => {
+  it('уступила карту — «уступила», muted', () => {
+    expect(menuStatus(mockBonsaiStats('yielded'))).toEqual({ text: 'уступила', tone: 'muted' });
+  });
+
+  it('ждёт возврата — «через 2:40» (160 с, демо макета), muted', () => {
+    expect(menuStatus(mockBonsaiStats('returning'))).toEqual({ text: 'через 2:40', tone: 'muted' });
+  });
+
+  it('остаток паузы 0 — «вот-вот», а не «через 0:00»', () => {
+    const d = mockBonsaiStats('returning');
+    const zero = { ...d, duty: { ...d.duty!, arbiter: { ...d.duty!.arbiter!, quietLeftS: 0 } } };
+    expect(menuStatus(zero)).toEqual({ text: 'вот-вот', tone: 'muted' });
+  });
+
+  it('загружается — «загружается», muted', () => {
+    expect(menuStatus(mockBonsaiStats('starting'))).toEqual({ text: 'загружается', tone: 'muted' });
+  });
+
+  it('ждёт память карты — «нет памяти», warning', () => {
+    expect(menuStatus(mockBonsaiStats('waiting-vram'))).toEqual({ text: 'нет памяти', tone: 'warning' });
+  });
+
+  it('арбитр молчит, метрики отвечают — «нет арбитра», warning', () => {
+    const d = mockBonsaiStats('ready');
+    const silent = { ...d, duty: { ...d.duty!, arbiter: { ...d.duty!.arbiter!, reachable: false } } };
+    expect(menuStatus(silent)).toEqual({ text: 'нет арбитра', tone: 'warning' });
+  });
+
+  it('арбитра нет вовсе (down) — «недоступна», а не «нет арбитра»', () => {
+    expect(menuStatus(mockBonsaiStats('no-arbiter'))).toEqual({ text: 'недоступна', tone: 'warning' });
+  });
+
+  it('авария — «недоступна», warning', () => {
+    expect(menuStatus(mockBonsaiStats('unknown'))).toEqual({ text: 'недоступна', tone: 'warning' });
+  });
+
+  it('в норме (работает) и без снимка — статуса нет', () => {
+    expect(menuStatus(mockBonsaiStats('ready'))).toBeNull();
+    expect(menuStatus(null)).toBeNull();
+  });
+
+  // Свой пункт в меню несёт свой ReactNode (точка OverflowItem всегда accent), но
+  // тон и наличие берутся отсюда же, откуда точка рельса: два индикатора одного
+  // состояния не могут разойтись.
+  it('тон и наличие статуса совпадают с точкой рельса (standDot) на всех состояниях', () => {
+    for (const s of ['ready', 'yielded', 'returning', 'starting', 'waiting-vram', 'unknown', 'no-arbiter'] as const) {
+      const d = mockBonsaiStats(s);
+      expect(menuStatus(d)?.tone ?? null, s).toBe(standDot(d));
+    }
+  });
+});
+
+// === Точка на самой кнопке «⋯» мобильной шапки (Ф9) ===
+// Макет bonsai-toolbar, renderPhone: точка на кнопке «Ещё» несёт тот же тон, что точка
+// рельса (dotColor(d)), — сигнал виден до открытия меню. Данные кнопки — triggerDot.
+describe('triggerDot: точка на кнопке «⋯» (макет renderPhone)', () => {
+  it('тон и наличие точки совпадают с точкой рельса (standDot) на всех состояниях', () => {
+    for (const s of ['ready', 'yielded', 'returning', 'starting', 'waiting-vram', 'unknown', 'no-arbiter'] as const) {
+      const d = mockBonsaiStats(s);
+      expect(triggerDot(d), s).toBe(standDot(d));
+    }
+  });
+
+  it('в норме (работает) и без снимка — точки нет', () => {
+    expect(triggerDot(mockBonsaiStats('ready'))).toBeNull();
+    expect(triggerDot(null)).toBeNull();
+  });
+});
+
+// === Подсказка/aria-имя кнопки «⋯» (Ф9, доработка по ревью) ===
+// Точка на кнопке несёт состояние только цветом; на мобиле панель «Локальные модели»
+// живёт только в этом меню — имя кнопки называет то же состояние теми же словами
+// таблицы §4, что подсказка рельса (standHint), а в норме остаётся «Ещё».
+describe('triggerTitleFor: имя кнопки «⋯» называет состояние', () => {
+  it('каждое состояние с точкой названо словами той же таблицы, что у standHint', () => {
+    expect(triggerTitleFor(mockBonsaiStats('yielded'))).toBe('Ещё · Bonsai уступила карту: видео');
+    expect(triggerTitleFor(mockBonsaiStats('returning'))).toBe('Ещё · Bonsai вернётся через 2:40');
+    expect(triggerTitleFor(mockBonsaiStats('starting'))).toBe('Ещё · Bonsai загружается');
+    expect(triggerTitleFor(mockBonsaiStats('waiting-vram'))).toBe('Ещё · Bonsai ждёт память карты');
+    expect(triggerTitleFor(mockBonsaiStats('unknown'))).toBe('Ещё · Bonsai недоступна');
+    const d = mockBonsaiStats('ready');
+    const silent = { ...d, duty: { ...d.duty!, arbiter: { ...d.duty!.arbiter!, reachable: false } } };
+    expect(triggerTitleFor(silent)).toBe('Ещё · Bonsai: арбитр не отвечает');
+  });
+
+  it('в норме (работает) и без снимка — «Ещё»', () => {
+    expect(triggerTitleFor(mockBonsaiStats('ready'))).toBe('Ещё');
+    expect(triggerTitleFor(null)).toBe('Ещё');
+  });
+
+  // Имя и точка — один сигнал одного состояния: расходятся только если хелпер или
+  // triggerDot отстанет; тест держит их вместе на всех состояниях фикстур.
+  it('имя отличается от «Ещё» ровно когда на кнопке есть точка (triggerDot)', () => {
+    for (const s of ['ready', 'yielded', 'returning', 'starting', 'waiting-vram', 'unknown', 'no-arbiter'] as const) {
+      const d = mockBonsaiStats(s);
+      expect(triggerTitleFor(d) !== 'Ещё', s).toBe(triggerDot(d) !== null);
+    }
   });
 });

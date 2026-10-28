@@ -3,7 +3,7 @@
 // раздел «Спецификация для Киры»): единицы, запятая как десятичный разделитель,
 // «—» когда движок значение не отдал.
 
-import type { LocalModelStats } from './api';
+import type { LocalModelDutyReason, LocalModelJobKind, LocalModelStats } from './api';
 
 // Текст «не сообщает»: с именем движка — «Движок {имя} это не сообщает»,
 // без имени — «Движок этого не сообщает» (иначе было бы «Движок движок»).
@@ -95,6 +95,182 @@ export function gpuCountLabel(n: number): string {
   if (last === 1) return `${n} карта`;
   if (last >= 2 && last <= 4) return `${n} карты`;
   return `${n} карт`;
+}
+
+// === Подписи статуса стенда (макет bonsai-toolbar §4) ===
+// Бэкенд отдаёт групповой статус; точную подпись разводит фронт по состоянию арбитра:
+// 'yielded' + причины — факт уступки («Уступила карту»), 'yielded' без причин с остатком
+// паузы — ожидание возврата, 'starting' — загрузка, 'waiting-vram' — ожидание памяти.
+// Тон первых трёх — нейтральный: уступка — штатная работа арбитра, не авария (макет §4);
+// «ждёт память» — warning: сама не рассосётся. Без арбитра бэкенд 'yielded' не ставит
+// (Б3b), поэтому fallback — групповая подпись.
+
+export type StatusTone = 'success' | 'warning' | 'danger' | 'muted';
+export interface StatusPill { label: string; tone: StatusTone }
+
+// Точное состояние дежурства из снимка: 'yielded' стенда разводится по arbiter.state и
+// причинам; всё остальное — сам статус. Общий источник для пилюли, точки и подсказки.
+type YieldPhase = 'yielding' | 'waiting-return' | 'starting' | 'waiting-vram';
+function yieldPhase(data: LocalModelStats): YieldPhase {
+  const a = data.duty?.arbiter;
+  if (a?.state === 'starting') return 'starting';
+  if (a?.state === 'waiting-vram') return 'waiting-vram';
+  // 'yielded' без причин с названным остатком паузы — ожидание возврата; 0 — конец паузы,
+  // модель вот-вот встанет (демо макета с quiet=0). Без остатка (арбитр его не назвал) —
+  // групповая подпись: «вот-вот» без названного срока была бы выдуманной точностью
+  if (a?.state === 'yielded' && (a.reasons?.length ?? 0) === 0 && a.quietLeftS != null && Number.isFinite(a.quietLeftS)) return 'waiting-return';
+  return 'yielding';
+}
+
+export function statusPill(data: LocalModelStats): StatusPill {
+  switch (data.status) {
+    case 'working': return { label: 'Работает', tone: 'success' };
+    case 'busy': return { label: 'Занята', tone: 'warning' };
+    case 'down': return { label: 'Недоступна', tone: 'danger' };
+    case 'notConnected': return { label: 'Не подключена', tone: 'muted' };
+    case 'yielded': {
+      switch (yieldPhase(data)) {
+        case 'starting': return { label: 'Загружается', tone: 'muted' };
+        case 'waiting-vram': return { label: 'Ждёт память карты', tone: 'warning' };
+        case 'waiting-return': return { label: 'Ждёт возврата', tone: 'muted' };
+        default: return { label: 'Уступила карту', tone: 'muted' };
+      }
+    }
+  }
+}
+
+// «Арбитр недоступен» (макет §4, хвост ревью Ф2 4): метрики отвечают (статус обычный),
+// но /state молчит — состояние не рассосётся само, и развести уступку и аварию сейчас
+// нечем. Общий признак точки и подсказки: 'notConnected' (стенд не настроен) под него не
+// попадает — предупреждать о ненастроенном нечем.
+function arbiterUnreachable(data: LocalModelStats): boolean {
+  return (data.status === 'working' || data.status === 'busy') && data.duty?.arbiter?.reachable === false;
+}
+
+// Тон точки на сегменте «Bonsai» и на значке рельса (тот же, Ф6): идущая уступка —
+// muted, то, что само не рассосётся (память, молчание стенда или арбитра) — warning (макет §4:
+// «accent закреплён за „что-то идёт прямо сейчас“», жёлтый — за неотсашивающееся).
+export function standDot(data: LocalModelStats): 'muted' | 'warning' | null {
+  switch (data.status) {
+    case 'yielded':
+      return yieldPhase(data) === 'waiting-vram' ? 'warning' : 'muted';
+    case 'down':
+      return 'warning';
+    default:
+      return arbiterUnreachable(data) ? 'warning' : null;
+    }
+}
+
+// Короткая причина для подсказки (колонка 'short' таблицы KINDS макета,
+// bonsai-toolbar.html:288): подсказка — одна строка, полные подписи — в «Дежурстве»
+// (dutyFormat.ts). Неизвестный вид — короткой формы нет: подсказка остаётся общей,
+// без выдуманного суффикса.
+const JOB_KIND_SHORT: Record<LocalModelJobKind, string> = {
+  image: 'картинка',
+  video: 'видео',
+  audio: 'звук',
+  lora: 'LoRA',
+};
+function reasonShort(r: LocalModelDutyReason | undefined): string | null {
+  switch (r?.kind) {
+    case 'comfy':
+      // задание с этого сервера и опознанного вида — короткая форма вида;
+      // иначе — «ComfyUI» (строка 'alien' макета)
+      return r.known === true && r.jobKind ? JOB_KIND_SHORT[r.jobKind] : 'ComfyUI';
+    case 'lease':
+      return 'аренда';
+    case 'gpu':
+      return 'процесс';
+    default:
+      return null;
+  }
+}
+
+// «м:сс» из остатка секунд — то же форматирование, что formatClockLeft в dutyFormat.ts:
+// подсказка рельса и строка «Вернётся» в «Дежурстве» должны называть одно время одинаково.
+// 0 → «0:00», «вот-вот» выбирает вызывающий: в подсказке нет «вернётся через 0:00».
+function clockLeft(s: number): string {
+  const whole = Math.floor(s);
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
+}
+
+// Подсказка сегмента «Bonsai» (title/aria-label) — та же строка, что подсказка рельса
+// (макет §2): «вернётся через м:сс» — остаток из последнего снимка, тот же, что в
+// «Дежурстве»; живого тиканья между опросами нет — следующий опрос рельса (Ф6)
+// принесёт новое значение. null — подсказки нет (стенд работает).
+export function standHint(data: LocalModelStats): string | null {
+  switch (data.status) {
+    case 'yielded': {
+      switch (yieldPhase(data)) {
+        case 'starting': return 'Bonsai загружается';
+        case 'waiting-vram': return 'Bonsai ждёт память карты';
+        case 'waiting-return': {
+          const left = data.duty?.arbiter?.quietLeftS ?? 0;
+          return left > 0 ? `Bonsai вернётся через ${clockLeft(left)}` : 'Bonsai вот-вот вернётся';
+        }
+        default: {
+          const short = reasonShort(data.duty?.arbiter?.reasons?.[0]);
+          return short ? `Bonsai уступила карту: ${short}` : 'Bonsai уступила карту';
+        }
+      }
+    }
+    case 'down': return 'Bonsai недоступна';
+    default:
+      // Та же таблица макета §4, что у standDot: подсказка «арбитр не отвечает»
+      return arbiterUnreachable(data) ? 'Bonsai: арбитр не отвечает' : null;
+  }
+}
+
+// Короткий статус пункта «Локальные модели» в мобильном меню «⋯» (колонка
+// «Подсказка рельса / меню «⋯»» таблицы §4): одно слово или «через м:сс» — строка
+// меню короткая, полные формулировки живут в подсказке рельса (standHint) и в
+// «Дежурстве». Тон и наличие статуса — ровно те же, что у точки (standDot):
+// 'muted' — штатный курс арбитра, 'warning' — то, что само не рассосётся. null —
+// статуса нет: фича в норме или её состояния не знают (опрос второй дорожки живёт
+// только у админа с флагом).
+export type MenuStatusTone = 'muted' | 'warning';
+export interface MenuStatus { text: string; tone: MenuStatusTone }
+
+export function menuStatus(data: LocalModelStats | null): MenuStatus | null {
+  if (!data) return null;
+  switch (data.status) {
+    case 'yielded': {
+      switch (yieldPhase(data)) {
+        case 'starting': return { text: 'загружается', tone: 'muted' };
+        case 'waiting-vram': return { text: 'нет памяти', tone: 'warning' };
+        case 'waiting-return': {
+          // «через м:сс» из остатка паузы; на нуле — «вот-вот», а не «через 0:00»
+          const left = data.duty?.arbiter?.quietLeftS ?? 0;
+          return { text: left > 0 ? `через ${clockLeft(left)}` : 'вот-вот', tone: 'muted' };
+        }
+        default: return { text: 'уступила', tone: 'muted' };
+      }
+    }
+    case 'down': return { text: 'недоступна', tone: 'warning' };
+    default:
+      return arbiterUnreachable(data) ? { text: 'нет арбитра', tone: 'warning' } : null;
+  }
+}
+
+// Тон точки на САМОЙ кнопке «⋯» мобильной шапки (Ф9, макет bonsai-toolbar, renderPhone:
+// точка на кнопке «Ещё» — тот же bonsaiDot/dotColor, что у рельса). Кнопка и её пункт —
+// один сигнал одного состояния: тон и наличие берутся ровно оттуда же, откуда статус
+// пункта (menuStatus), а он — из standDot; три индикатора не могут разойтись. null —
+// точки нет: состояние в норме или не известно (снимка нет).
+export function triggerDot(data: LocalModelStats | null): MenuStatusTone | null {
+  return menuStatus(data)?.tone ?? null;
+}
+
+// Подсказка/aria-имя самой кнопки «⋯» (Ф9, доработка по ревью): точка на кнопке несёт
+// состояние только цветом, а на мобиле панель «Локальные модели» живёт только в этом
+// меню — кнопка единственная точка входа, и её имя должно называть то же состояние,
+// что точка. Формулировки — ровно standHint (тот же текст, что у подсказки рельса),
+// префикс «Ещё · » — как у динамического triggerTitle композера (Composer.tsx).
+// Тон null (норма или снимка нет) — «Ещё» без состояния: выдуманного не добавляем.
+export function triggerTitleFor(data: LocalModelStats | null): string {
+  if (!data || !triggerDot(data)) return 'Ещё';
+  const hint = standHint(data);
+  return hint ? `Ещё · ${hint}` : 'Ещё';
 }
 
 // === Строки «Кто сейчас на модели» ===

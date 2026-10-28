@@ -906,10 +906,17 @@ function NotReported({ engine }: { engine?: string }) {
 // grid — диапазон СЕТОК интервалов (от первого tStart до последнего tEnd): все
 // x-координаты считаются от него, а не от [now − window, now] — иначе сетка
 // (кратная шагу) и поле (окно) расходились бы до шага вправо/влево.
-function CardBody({ samples, intervals, window, width, engine, grid }: {
+function CardBody({ samples, intervals, window, width, engine, grid, unsupported }: {
   samples: ThroughputSample[]; intervals: Interval[]; window: Window; width: number; engine?: string;
   grid: { from: number; to: number };
+  // Имена полей снимка, которые движок не отдаёт НИКОГДА (LocalModelStats.unsupported,
+  // LlamaServerMetricsSource.UnsupportedBlocks): поле скрыто целиком, не «Движок это
+  // не сообщает» — три заглушки подряд были бы шумом (макет bonsai-toolbar §3).
+  // Отличается от NotReported: там поля нет в ЭТОМ ответе (возможно, появится),
+  // здесь его не будет никогда.
+  unsupported?: string[];
 }) {
+  const hiddenField = (name: string) => (unsupported ?? []).includes(name);
   const tMin = grid.from;
   const tMax = grid.to;
   // Верх ОБЩЕЙ оси — по максимуму ОБЕИХ серий (обе на интервалах): ни одна не
@@ -1235,7 +1242,8 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
             </>
           )}
 
-        {/* === Поле 2: кэш, % (или NotReported) === */}
+        {/* === Поле 2: кэш, % (или NotReported); скрыто целиком, если KvUsagePerc в unsupported === */}
+        {!hiddenField('KvUsagePerc') && (
         <div style={{ marginTop: SP.sm }}>
           {cacheNotReported
             ? <NotReported engine={engine} />
@@ -1310,11 +1318,14 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
               </>
             )}
         </div>
+        )}
 
-        {/* === Поле 3: «Куда уходит время агентов» — составная полоса долей (ADR-029, v2.3) === */}
+        {/* === Поле 3: «Куда уходит время агентов» — составная полоса долей (ADR-029, v2.3).
+            Скрыта, если знаменателей полосы нет среди unsupported (QueueTimeSum/
+            DecodeTimeSum — их llama-server не отдаёт никогда) === */}
         {/* Полоса 100 %: 4 сегмента (генерирует/читает промпт/ждёт соседа/в очереди).
             Ориентир уровня — нижняя базовая линия (как сетка у линейных графиков). */}
-        {!tsNotReported && (
+        {!tsNotReported && !hiddenField('QueueTimeSum') && (
           <div style={{ marginTop: SP.sm }}>
             <FieldLabel>Куда уходит время агентов</FieldLabel>
             <svg viewBox={`0 0 ${width} ${GEOM_TS.height}`} width={width} height={GEOM_TS.height} style={{ display: 'block' }}
@@ -1359,8 +1370,9 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
           </div>
         )}
 
-        {/* === Поле 5: вытеснения (нет строки, если движок не отдаёт счётчик) === */}
-        {!evNotReported && (
+        {/* === Поле 5: вытеснения (нет строки, если движок не отдаёт счётчик);
+            скрыто целиком, если Preemptions в unsupported === */}
+        {!evNotReported && !hiddenField('Preemptions') && (
           <div style={{ marginTop: SP.sm }}>
             <FieldLabel right={
               <span aria-live="polite" style={{ fontFamily: FONT.mono, fontWeight: 700, color: C.textHeading, fontSize: FS.xs }}>
@@ -1426,11 +1438,14 @@ export function chartNow(history: LocalModelStats['history'], fallback: number):
 // Тело карточки «Нагрузка и кэш»: график (или пустая заглушка). Окно — извне
 // (состояние держит LocalModelPanel, его же читает серверный опрос).
 // Ширина поля — ResizeObserver: SVG рисуется в реальных px, без preserveAspectRatio.
-export function ThroughputChart({ history, window, engine, cleanStepMs }: {
+export function ThroughputChart({ history, window, engine, cleanStepMs, unsupported }: {
   history: LocalModelStats['history']; window: Window; engine?: string;
   // База шага (мс) из ответа бэкенда: одна на весь стенд, не зависит от окна.
   // null/нет поля — «ждёт соседа» не выделяется (доля «—», не ноль).
   cleanStepMs?: number | null;
+  // Поля снимка, которых движок не отдаёт никогда (см. CardBody): соответствующие
+  // поля графика скрыты целиком.
+  unsupported?: string[];
 }) {
   // now живёт: пересчитывается на каждом опросе (history меняется), окно
   // плывёт вправо; сетка при этом стоит на абсолютных кратных шагу (intervalGrid).
@@ -1471,7 +1486,7 @@ export function ThroughputChart({ history, window, engine, cleanStepMs }: {
     <div ref={wrapRef} style={{ minWidth: 0 }}>
       {samples.length === 0
         ? <EmptyChart />
-        : <CardBody samples={samples} intervals={intervals} window={window} width={width} engine={engine} grid={grid} />}
+        : <CardBody samples={samples} intervals={intervals} window={window} width={width} engine={engine} grid={grid} unsupported={unsupported} />}
     </div>
   );
 }

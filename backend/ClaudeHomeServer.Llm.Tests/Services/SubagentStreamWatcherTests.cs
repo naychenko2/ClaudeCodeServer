@@ -26,6 +26,12 @@ public class SubagentStreamWatcherTests : IDisposable
     // (тот же сценарий, что раньше через runSink).
     private readonly TurnEventBus _events = new();
     private int _messageCount;
+    // Первый паспорт, опубликованный через шину: тест ждёт его, а не опрашивает счётчик
+    private readonly TaskCompletionSource _passportSeen = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
+    // Пауза поллинга в тестах: дефолт продукта 1,5 с, тест ждёт событие ScanCompleted
+    private static readonly TimeSpan TestPoll = TimeSpan.FromMilliseconds(20);
 
     public SubagentStreamWatcherTests()
     {
@@ -36,6 +42,7 @@ public class SubagentStreamWatcherTests : IDisposable
         _events.OnNotification<SubagentRunCompleted>(e =>
         {
             lock (_passports) _passports.Add(e.Passport);
+            _passportSeen.TrySetResult();
             return Task.CompletedTask;
         });
     }
@@ -70,15 +77,17 @@ public class SubagentStreamWatcherTests : IDisposable
 
     private static string Json(string withSingleQuotes) => withSingleQuotes.Replace('\'', '"');
 
-    private static void WaitUntil(Func<bool> condition, int timeoutMs = 5000)
+    // Ждать СОБЫТИЕ, а не паузу: count полных сканов цикла поллинга после подписки. Два скана
+    // после записи на диск гарантируют, что хотя бы один начался уже после неё
+    private static Task ScansAsync(SubagentStreamWatcher watcher, int count = 2)
     {
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        while (sw.ElapsedMilliseconds < timeoutMs)
-        {
-            if (condition()) return;
-            Thread.Sleep(100);
-        }
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var left = count;
+        watcher.ScanCompleted += () => { if (Interlocked.Decrement(ref left) == 0) done.TrySetResult(); };
+        return done.Task.WaitAsync(Wait);
     }
+
+    private Task PassportAsync() => _passportSeen.Task.WaitAsync(Wait);
 
     private static string Prompt(string ts, string text)
     {
@@ -105,8 +114,7 @@ public class SubagentStreamWatcherTests : IDisposable
     }
 
     [Fact]
-    [Trait("Category", "Slow")]
-    public void ProfilesRoot_ВатчерНаходитПапкуИПарсит()
+    public async Task ProfilesRoot_ВатчерНаходитПапкуИПарсит()
     {
         // Устанавливаем ProfilesRoot перед созданием ватчера
         var originalProfilesRoot = TranscriptRoots.ProfilesRoot;
@@ -120,6 +128,7 @@ public class SubagentStreamWatcherTests : IDisposable
             var watcher = new SubagentStreamWatcher(cwd, _sessionId,
                 msg => { _messageCount++; return Task.CompletedTask; },
                 events: _events, profilesRoot: _profilesRoot);
+            watcher.PollInterval = TestPoll;
             watcher.Start();
 
             // Создаём структуру под ProfilesRoot ПОСЛЕ старта ватчера
@@ -128,8 +137,8 @@ public class SubagentStreamWatcherTests : IDisposable
                 ToolCall("2026-08-22T10:00:10.000Z", "Read"),
                 Report("2026-08-22T10:00:20.000Z"));
 
-            // Ждём, пока ватчер прочитает транскрипт
-            WaitUntil(() => _passports.Count > 0);
+            // Ждём, пока ватчер прочитает транскрипт; паспорт отдаёт Dispose
+            await ScansAsync(watcher);
 
             watcher.Dispose();
 
@@ -150,8 +159,7 @@ public class SubagentStreamWatcherTests : IDisposable
     }
 
     [Fact]
-    [Trait("Category", "Slow")]
-    public void СтарыйФайл_БезНовыхСтрок_ПаспортНеПишется()
+    public async Task СтарыйФайл_БезНовыхСтрок_ПаспортНеПишется()
     {
         // Arrange: создаём БОГАТЫЙ файл агента ДО старта ватчера (Prompt + ToolCall + Report)
         var (cwd, _) = SetupProfileSubagent("sub-test", _sessionId, "agent-old",
@@ -166,8 +174,9 @@ public class SubagentStreamWatcherTests : IDisposable
             var watcher = new SubagentStreamWatcher(cwd, _sessionId,
                 msg => Task.CompletedTask,
                 events: _events, profilesRoot: _profilesRoot);
+            watcher.PollInterval = TestPoll;
             watcher.Start();
-            Thread.Sleep(2000); // пара тиков поллинга, новых строк нет
+            await ScansAsync(watcher); // пара тиков поллинга, новых строк нет
             watcher.Dispose();
 
             // Assert: паспорт не должен быть записан — файл был старым без новой активности
@@ -180,8 +189,7 @@ public class SubagentStreamWatcherTests : IDisposable
     }
 
     [Fact]
-    [Trait("Category", "Slow")]
-    public void СтарыйФайл_СНовымиСтроками_ПаспортПишется()
+    public async Task СтарыйФайл_СНовымиСтроками_ПаспортПишется()
     {
         // Arrange: создаём БОГАТЫЙ файл с базовым содержимым ДО старта ватчера
         var (cwd, agentFile) = SetupProfileSubagent("sub-test", _sessionId, "agent-new",
@@ -196,14 +204,14 @@ public class SubagentStreamWatcherTests : IDisposable
             var watcher = new SubagentStreamWatcher(cwd, _sessionId,
                 msg => { _messageCount++; return Task.CompletedTask; },
                 events: _events, profilesRoot: _profilesRoot);
+            watcher.PollInterval = TestPoll;
             watcher.Start();
-            Thread.Sleep(200);
 
-            // Дописываем строки после старта
+            // Дописываем строки после старта: офсеты старых Start выставил синхронно
             File.AppendAllText(agentFile, ToolCall("2026-08-22T10:00:30.000Z", "Read") + "\n");
 
             // Ждём, пока ватчер прочитает новые строки
-            WaitUntil(() => _messageCount > 0);
+            await ScansAsync(watcher);
 
             watcher.Dispose();
 
@@ -239,10 +247,13 @@ public class SubagentStreamWatcherTests : IDisposable
         try
         {
             var cwd = Path.Combine(Path.GetTempPath(), "Ccs W test " + Guid.NewGuid().ToString("N"));
+            // Перепроверка ждёт не паузу, а сигнал теста «финал дописан» — как в проде, где
+            // дозапись укладывается в окно перепроверки
+            var appended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var watcher = new SubagentStreamWatcher(cwd, _sessionId, _ => Task.CompletedTask,
                 events: _events, profilesRoot: _profilesRoot)
             {
-                BgDoneRecheckDelay = TimeSpan.FromSeconds(1.5),
+                RecheckDelay = (_, ct) => appended.Task.WaitAsync(ct),
             };
             // Start не зовём: FinalizeAsync дренирует сам, без цикла поллинга тест детерминирован
             var (_, agentFile) = SetupProfileSubagent("sub-test", _sessionId, "agent-late", cwd,
@@ -255,9 +266,10 @@ public class SubagentStreamWatcherTests : IDisposable
 
             // Финальный отчёт доезжает до транскрипта после сигнала — как в проде
             File.AppendAllText(agentFile, Report("2026-08-22T10:00:20.000Z") + "\n");
+            appended.TrySetResult();
 
-            // Перепроверка публикует паспорт через шину — ждём по факту наличия паспорта
-            WaitUntil(() => _passports.Count > 0, timeoutMs: 15000);
+            // Перепроверка публикует паспорт через шину — ждём событие паспорта
+            await PassportAsync();
             _passports.Should().HaveCount(1);
             _passports[0].Truncated.Should().BeFalse("end_turn доехал — обрыв опровергнут");
             _passports[0].LastStopReason.Should().Be("end_turn");
@@ -289,7 +301,7 @@ public class SubagentStreamWatcherTests : IDisposable
             await watcher.FinalizeAsync([ToolUseIdOf(agentFile)], "bg_done");
             _passports.Should().BeEmpty();
 
-            WaitUntil(() => _passports.Count > 0, timeoutMs: 15000);
+            await PassportAsync();
             _passports.Should().HaveCount(1, "паспорт с bg_done и обрывом эмитится один раз");
             _passports[0].Truncated.Should().BeTrue("end_turn не появился — обрыв настоящий");
             _passports[0].FinishedBy.Should().Be("bg_done");
@@ -317,7 +329,7 @@ public class SubagentStreamWatcherTests : IDisposable
                 ToolCall("2026-08-22T10:00:10.000Z", "Bash"));
 
             await watcher.FinalizeAsync([ToolUseIdOf(agentFile)], "bg_done");
-            WaitUntil(() => _passports.Count > 0, timeoutMs: 15000);
+            await PassportAsync();
             _passports.Should().ContainSingle().Which.Truncated.Should().BeTrue();
 
             // Хвост дозаписи длиннее окна перепроверки: финал доехал уже после оборванного
@@ -371,7 +383,6 @@ public class SubagentStreamWatcherTests : IDisposable
     // она "run_end". Ветка bg_done этим полем не управляется.
 
     [Fact]
-    [Trait("Category", "Slow")]
     public async Task ОбычныйКонец_RunEndПоУмолчанию()
     {
         // Без FinalizeAsync и без MarkRunInterrupted: путь Dispose идёт через дефолт
@@ -387,11 +398,12 @@ public class SubagentStreamWatcherTests : IDisposable
             var watcher = new SubagentStreamWatcher(cwd, _sessionId,
                 _ => { seen++; return Task.CompletedTask; },
                 events: _events, profilesRoot: _profilesRoot);
+            watcher.PollInterval = TestPoll;
             watcher.Start();
             SetupProfileSubagent("sub-test", _sessionId, "agent-end", cwd,
                 Prompt("2026-08-22T10:00:00.000Z", "Задача"),
                 ToolCall("2026-08-22T10:00:10.000Z", "Bash"));
-            WaitUntil(() => seen >= 1, timeoutMs: 5000);
+            await ScansAsync(watcher);
             watcher.Dispose();
 
             _passports.Should().HaveCount(1);
@@ -402,7 +414,6 @@ public class SubagentStreamWatcherTests : IDisposable
     }
 
     [Fact]
-    [Trait("Category", "Slow")]
     public async Task ПрерванныйХод_ПаспортInterrutpted()
     {
         // ClaudeSession перед Dispose ватчера ставит MarkRunInterrupted — паспорт
@@ -416,11 +427,12 @@ public class SubagentStreamWatcherTests : IDisposable
             var watcher = new SubagentStreamWatcher(cwd, _sessionId,
                 _ => { seen++; return Task.CompletedTask; },
                 events: _events, profilesRoot: _profilesRoot);
+            watcher.PollInterval = TestPoll;
             watcher.Start();
             SetupProfileSubagent("sub-test", _sessionId, "agent-killed", cwd,
                 Prompt("2026-08-22T10:00:00.000Z", "Задача"),
                 ToolCall("2026-08-22T10:00:10.000Z", "Bash"));
-            WaitUntil(() => seen >= 1, timeoutMs: 5000);
+            await ScansAsync(watcher);
             // ClaudeSession ст.3358/3837/4881: перед Dispose ватчера выставляется
             // RunEndReason = "interrupted", если ход убит пользовательским прерыванием
             watcher.MarkRunInterrupted();
@@ -460,7 +472,7 @@ public class SubagentStreamWatcherTests : IDisposable
             // Симулируем: пока шла перепроверка, координатор был убит — MarkRunInterrupted
             // дёргается ДО Dispose, но bg_done перебивает его в эмиссии
             watcher.MarkRunInterrupted();
-            WaitUntil(() => _passports.Count > 0, timeoutMs: 15000);
+            await PassportAsync();
             watcher.Dispose();
 
             _passports.Should().HaveCount(1);
@@ -494,6 +506,7 @@ public class SubagentStreamWatcherTests : IDisposable
 
             var watcher = new SubagentStreamWatcher(cwd, _sessionId, _ => Task.CompletedTask,
                 events: _events, profilesRoot: _profilesRoot, preferredConfigRoot: ownRoot);
+            watcher.PollInterval = TestPoll;
             watcher.Start();
 
             // Агент текущего прогона пишет в свой профиль
@@ -528,6 +541,7 @@ public class SubagentStreamWatcherTests : IDisposable
 
             var watcher = new SubagentStreamWatcher(cwd, _sessionId, _ => Task.CompletedTask,
                 events: _events, profilesRoot: _profilesRoot, preferredConfigRoot: emptyProfile);
+            watcher.PollInterval = TestPoll;
             watcher.Start();
 
             var (_, agentFile) = SetupProfileSubagent("sub-test", _sessionId, "agent-swept", cwd,
@@ -558,7 +572,7 @@ public class SubagentStreamWatcherTests : IDisposable
     }
 
     [Fact]
-    public void МножествоАгентов_ПрофильИДопКорень_НаходятсяВсе()
+    public async Task МножествоАгентов_ПрофильИДопКорень_НаходятсяВсе()
     {
         TranscriptRoots.ProfilesRoot = _profilesRoot;
 
@@ -597,6 +611,7 @@ public class SubagentStreamWatcherTests : IDisposable
                 _ => { seen2++; return Task.CompletedTask; },
                 events: extraEvents, profilesRoot: _profilesRoot);
 
+            watcher1.PollInterval = watcher2.PollInterval = TestPoll;
             watcher1.Start();
             watcher2.Start();
 
@@ -619,7 +634,7 @@ public class SubagentStreamWatcherTests : IDisposable
 
             // Ждём, пока оба ватчера реально прочитают своих агентов (текст реплики
             // эмитится в ленту) — потом Dispose эмитит паспорта
-            WaitUntil(() => seen1 >= 1 && seen2 >= 1);
+            await Task.WhenAll(ScansAsync(watcher1), ScansAsync(watcher2));
             watcher1.Dispose();
             watcher2.Dispose();
 
@@ -633,5 +648,14 @@ public class SubagentStreamWatcherTests : IDisposable
             if (Directory.Exists(extraRoot))
                 Directory.Delete(extraRoot, recursive: true);
         }
+    }
+
+    // Тесты сокращают интервалы — продуктовые значения при этом не меняются
+    [Fact]
+    public void Дефолты_ИнтервалыПродуктаНеТронуты()
+    {
+        using var watcher = new SubagentStreamWatcher("/tmp/x", _sessionId, _ => Task.CompletedTask);
+        watcher.PollInterval.Should().Be(TimeSpan.FromMilliseconds(1500));
+        watcher.BgDoneRecheckDelay.Should().Be(TimeSpan.FromSeconds(10));
     }
 }

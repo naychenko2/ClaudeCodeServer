@@ -21,6 +21,25 @@ ThreadPool там голодает: коллбэк `Timer`/фоновая зад
 `Task.WhenAny(tcs.Task, Task.Delay(таймаут))` со щедрым потолком (образец —
 `WorkflowWatcherTests`, `SessionManagerTests`).
 
+**Паттерн «интервал — опция, ожидание — событие»** (фича «Ускорение тестов», Э4). Тест,
+который ждёт тик продукта, платит этим тиком на каждом прогоне. Порядок перевода:
+
+1. Интервал продукта — `internal`-поле или опция с ПРЕЖНИМ дефолтом (`PollInterval`,
+   `BgDoneRecheckDelay` у `SubagentStreamWatcher`); продуктовое значение не меняется, его держит
+   отдельный тест на дефолт.
+2. Если тесту нужен порядок «сигнал → запись → реакция», пауза подменяется ожиданием сигнала
+   теста (`RecheckDelay = (_, ct) => appended.Task.WaitAsync(ct)`), а не сокращается до «авось
+   успеет».
+3. Ожидание в тесте — `TaskCompletionSource`/событие продукта (`ScanCompleted`) с
+   `WaitAsync(потолок)`: таймаут — **красный** (`TimeoutException`). `Task.WhenAny(tcs, Delay)` без
+   проверки результата и опрос `WaitUntil` молча проглатывают таймаут — так «ожидание» паспорта,
+   который приходит только из `Dispose`, стоило 5 с на тест.
+4. Фейковый процесс — `exec sleep` или гашение дерева (`Kill(entireProcessTree: true)`): осиротевший
+   потомок держит stdout, и `ClaudeSession` закрывает ход только по `ReaderEofGrace` (5 с).
+
+Мутация для проверки: убрать сигнал (`TrySetResult`) — тест обязан покраснеть по таймауту.
+Образцы — `SubagentStreamWatcherTests`, `ClaudeSessionServerGatewayTests`.
+
 Сомневаешься — прогони набор в контейнере:
 
 ```powershell
@@ -52,6 +71,14 @@ cd backend; dotnet test --filter "Category!=Dns"   # чистый прогон �
 Помечены классы `ReaderEmbedCheckTests`, `ReaderServiceTests` и точечно — сетевые тесты
 `ReaderControllerTests` и `SsrfGuardTests`. Смысл метки не в отключении, а в том, чтобы
 предсказуемо красные тесты не маскировали настоящую регрессию в остальных пяти тысячах.
+
+**Набор Fast — исключение категорий** `Category!=Host&Category!=Slow&Category!=Integration&Category!=Node&Category!=Bench`
+(предгейт «быстрые тесты», CI-проход Fast). Отсюда две обязанности автора теста:
+`[Trait("Category", "Host")]` на классе, который поднимает `TestWebApplicationFactory`
+(сторож `HostCategoryGuardTests` в Guards.Tests, скан собранных сборок — после правки собери
+решение), и `[Trait("Category", "Slow")]` на МЕТОДЕ без хоста дольше 2 с (сторож
+`scripts/test-profile.py --check` на TRX набора Fast). Slow на методе — временная мера до
+перевода ожидания на событие (паттерн выше).
 
 На итеративную правку гоняй только релевантный набор:
 `dotnet test --filter "FullyQualifiedName~SessionManagerTests"`. Медленные категории запускай

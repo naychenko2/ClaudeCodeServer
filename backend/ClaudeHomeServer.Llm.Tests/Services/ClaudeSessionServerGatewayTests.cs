@@ -25,6 +25,7 @@ namespace ClaudeHomeServer.Tests.Services;
 public sealed class ClaudeSessionServerGatewayTests : IDisposable
 {
     private const string GatewayApi = "http://ccs-gw-host:5000";
+    private static readonly TimeSpan Ceiling = TimeSpan.FromSeconds(30);
     private readonly List<Process> _processes = [];
     private readonly GatewayTestKit _kit = new();
     private readonly TurnTokenService _tokens = new(new TurnEventBus());
@@ -57,7 +58,9 @@ public sealed class ClaudeSessionServerGatewayTests : IDisposable
             var process = LocalProcessRunner.Instance.Start(new ProcessSpec
             {
                 FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
-                Args = OperatingSystem.IsWindows() ? ["/c", "ping -n 120 127.0.0.1 >nul"] : ["-c", "sleep 120"],
+                // exec: «CLI» — сам sleep, без дочернего процесса. Осиротевший потомок держал бы
+                // stdout, и ClaudeSession финализировал бы ход только по ReaderEofGrace (5 с)
+                Args = OperatingSystem.IsWindows() ? ["/c", "ping -n 120 127.0.0.1 >nul"] : ["-c", "exec sleep 120"],
                 WorkingDirectory = spec.WorkingDirectory,
                 StdioEncoding = spec.StdioEncoding,
                 EnableRaisingEvents = spec.EnableRaisingEvents,
@@ -130,9 +133,8 @@ public sealed class ClaudeSessionServerGatewayTests : IDisposable
 
         try { await session.SendMessageAsync("тестовый ход"); }
         catch (InvalidOperationException) when (failStart) { }
-        if (!failStart)
-            (await Task.WhenAny(launcher.Started.Task, Task.Delay(TimeSpan.FromSeconds(15))))
-                .Should().Be(launcher.Started.Task, "процесс хода обязан стартовать");
+        // Событие старта; потолок — только страховка от зависания (TimeoutException = красный)
+        if (!failStart) await launcher.Started.Task.WaitAsync(Ceiling);
         return new TurnResult(launcher.CapturedEnv, session, exited);
     }
 
@@ -140,8 +142,10 @@ public sealed class ClaudeSessionServerGatewayTests : IDisposable
     {
         Process cli;
         lock (_processes) cli = _processes[^1];
-        cli.Kill();
-        await Task.WhenAny(turn.Exited.Task, Task.Delay(TimeSpan.FromSeconds(30)));
+        // Дерево целиком: на Windows «CLI» — cmd с дочерним ping
+        cli.Kill(entireProcessTree: true);
+        // Ждём событие ExitedMessage, а не таймаут: прежний WhenAny молча проглатывал 30 с
+        await turn.Exited.Task.WaitAsync(Ceiling);
     }
 
     private static (string TurnId, string Token) GatewayOf(Dictionary<string, string> env)
@@ -155,7 +159,6 @@ public sealed class ClaudeSessionServerGatewayTests : IDisposable
     }
 
     [Fact]
-    [Trait("Category", "Slow")]
     public async Task ПровайдерСФлагом_EnvНаШлюз_КлючаВEnvНет_ТокенЖивОтозванПоВыходу()
     {
         var turn = await RunTurnAsync("mmx-m3");
@@ -178,7 +181,6 @@ public sealed class ClaudeSessionServerGatewayTests : IDisposable
     }
 
     [Fact]
-    [Trait("Category", "Slow")]
     public async Task ДваХода_СигнатураСтабильна_ТокеныРазные()
     {
         var first = await RunTurnAsync("mmx-m3");
@@ -219,7 +221,6 @@ public sealed class ClaudeSessionServerGatewayTests : IDisposable
     [InlineData("deepseek-v4-pro", GatewayApi, true)] // провайдер без флага
     [InlineData("mmx-m3", GatewayApi, false)] // шлюз выключен — ход напрямую
     [InlineData("mmx-m3", null, true)] // чат проекта на устройстве: шлюз ставит раннер устройства
-    [Trait("Category", "Slow")]
     public async Task БезСерверногоРежима_ХодНапрямую(string model, string? gatewayApiUrl, bool gatewayEnabled)
     {
         var turn = await RunTurnAsync(model, gatewayApiUrl, gatewayEnabled);
@@ -238,7 +239,6 @@ public sealed class ClaudeSessionServerGatewayTests : IDisposable
     [InlineData("qwen3.8-27b", true, false, false)] // локаль + статистика, шлюз выключен — напрямую
     [InlineData("qwen3.8-27b", false, true, false)] // локаль, статистика выключена — напрямую
     [InlineData("deepseek-v4-pro", true, true, false)] // не локаль, статистика включена — напрямую
-    [Trait("Category", "Slow")]
     public async Task ЛокальнаяМодель_ШлюзТолькоСоВключённойСтатистикой(
         string model, bool statsEnabled, bool gatewayEnabled, bool expectGateway)
     {
@@ -275,7 +275,6 @@ public sealed class ClaudeSessionServerGatewayTests : IDisposable
     [InlineData("qwen3.8-27b", false, true, "owner-1", true)] // статистика выключена — напрямую, заголовки есть
     [InlineData("qwen3.8-27b", true, true, "owner-1", true)] // через шлюз — как и раньше
     [InlineData("deepseek-v4-pro", true, true, "owner-1", false)] // не локаль — заголовков нет
-    [Trait("Category", "Slow")]
     public async Task ЛокальнаяМодель_ПодсказочныеЗаголовкиИНаПрямомПути(
         string model, bool statsEnabled, bool gatewayEnabled, string? ownerId, bool expectHint)
     {

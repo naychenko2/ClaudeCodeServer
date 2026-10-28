@@ -69,17 +69,67 @@ const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
 // Сегмент карты офсетов «препроцессированный → сырой» (для blockPos сквозь препроцессинг)
 interface MapSegment { pre: number; raw: number; preLen: number; literal: boolean }
 
+// Ограда ```/~~~забора по CommonMark — те же правила, что у бэкенда (Core/MarkdownFence):
+// забор помнит СИМВОЛ и ДЛИНУ открывающего маркера и закрывается только им же, длиной не
+// меньше и без хвоста; info-string бэктикового забора не может содержать бэктик. Иначе
+// вложенный пример (внешний забор из четырёх бэктиков, внутри обычный ```) закрывался бы
+// внутренним, а незакрытый забор от опечатки глушил бы весь остаток файла.
+class FenceState {
+  private marker = '';
+  private len = 0;
+  inFence(): boolean { return this.len > 0; }
+  // true — строка сама маркер забора (её содержимое — код)
+  consume(line: string): boolean {
+    const m = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (!m) return false;
+    const run = m[1];
+    const tail = line.slice(m[0].length);
+    if (!this.inFence()) {
+      if (run[0] === '`' && tail.includes('`')) return false;
+      this.marker = run[0];
+      this.len = run.length;
+      return true;
+    }
+    if (run[0] !== this.marker || run.length < this.len || tail.trim().length > 0) return false;
+    this.len = 0;
+    return true;
+  }
+}
+
+// Маска «внутри кода»: true — позиция i внутри ```/~~~забора или inline-`…`-кода.
+// Те же границы, что у бэкенда (NotesService.CodeMask): ссылка/тег в коде — не ссылка и
+// не тег (Obsidian): пример синтаксиса давал бы «призраков» графа и ложные теги.
+function codeMask(md: string): boolean[] {
+  const mask = new Array<boolean>(md.length).fill(false);
+  const fence = new FenceState();
+  let offset = 0;
+  for (const raw of md.split('\n')) {
+    const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
+    if (fence.consume(line) || fence.inFence())
+      for (let i = 0; i < raw.length && offset + i < mask.length; i++) mask[offset + i] = true;
+    offset += raw.length + 1;   // +1 на '\n', на котором резали
+  }
+  for (const m of md.matchAll(/`[^`\n]+`/g))
+    for (let i = m.index; i < m.index + m[0].length && i < mask.length; i++) mask[i] = true;
+  return mask;
+}
+
 // Единый проход по [[Заметка]] / [[Заметка|подпись]] / ![[…]]: embeds и wikilinks
 // переписываются в markdown-ссылки со схемами wikilink:/noteembed:/noteatt:
 // (urlTransform ниже пропускает эти схемы, иначе санитайзер react-markdown их вырежет).
 // Параллельно строится карта офсетов — blockPos переводит позиции блоков в сырой текст.
-function preprocessNotes(md: string, depth: number): { text: string; map: MapSegment[] } {
+export function preprocessNotes(md: string, depth: number): { text: string; map: MapSegment[] } {
   const re = /(!?)\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
+  // [[…]] внутри кода — не ссылка: переписанная, она стала бы URL-мусором в блоке кода
+  // (и мусором в графе: бэкенд такие связи не считает). Пропущенное совпадение остаётся
+  // литеральным сегментом карты офсетов — сдвиги blockPos от этого не меняются.
+  const code = codeMask(md);
   let out = '';
   const map: MapSegment[] = [];
   let last = 0;
   let m: RegExpExecArray | null;
   while ((m = re.exec(md)) !== null) {
+    if (code[m.index]) continue;
     if (m.index > last) {
       map.push({ pre: out.length, raw: last, preLen: m.index - last, literal: true });
       out += md.slice(last, m.index);

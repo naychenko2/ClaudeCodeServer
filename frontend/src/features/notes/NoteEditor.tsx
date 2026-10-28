@@ -86,6 +86,38 @@ function selectionTouches(state: EditorState, from: number, to: number): boolean
   return false;
 }
 
+// Живые метки видимого текста: вики-ссылки и теги ВНЕ кода — тот же контракт, что у
+// бэкенда (NotesService.CodeMask + «числовой тег — не тег»). Диапазоны кода (```/~~~заборы
+// и inline-`…`) берутся из синтакс-дерева markdown: своей реализации заборов здесь нет.
+export interface WikiMark { from: number; to: number; openLen: number; target: string }
+export interface TagMark { from: number; to: number }
+
+export function findNoteMarks(state: EditorState, from: number, to: number): { wikis: WikiMark[]; tags: TagMark[] } {
+  const code: [number, number][] = [];
+  syntaxTree(state).iterate({
+    from, to,
+    enter: node => { if (node.name === 'FencedCode' || node.name === 'InlineCode') code.push([node.from, node.to]); },
+  });
+  const inCode = (pos: number) => code.some(([a, b]) => pos >= a && pos < b);
+
+  const text = state.sliceDoc(from, to);
+  const wikis: WikiMark[] = [];
+  for (const m of text.matchAll(WIKI_RE)) {
+    const start = from + m.index!;
+    if (inCode(start)) continue;
+    // openLen — «![[» или «[[»: скобки прячутся только вне активной строки (см. buildLivePreview)
+    wikis.push({ from: start, to: start + m[0].length, openLen: m[1] ? 3 : 2, target: m[2] });
+  }
+  const tags: TagMark[] = [];
+  for (const m of text.matchAll(TAG_RE)) {
+    const start = from + m.index!;
+    if (inCode(start)) continue;
+    if (/^[\p{N}]+$/u.test(m[1])) continue;   // #807 — номер, а не тег (как на бэкенде)
+    tags.push({ from: start, to: start + m[0].length });
+  }
+  return { wikis, tags };
+}
+
 function buildLivePreview(view: EditorView): DecorationSet {
   const { state } = view;
   const decos: { from: number; to: number; deco: Decoration }[] = [];
@@ -110,26 +142,22 @@ function buildLivePreview(view: EditorView): DecorationSet {
       },
     });
 
-    // 2) Wikilinks и теги — regex по видимому тексту (lezer их не знает)
-    const text = state.sliceDoc(from, to);
-    for (const m of text.matchAll(WIKI_RE)) {
-      const start = from + m.index!;
-      const end = start + m[0].length;
-      const active = selectionTouches(state, start, end);
-      const openLen = m[1] ? 3 : 2;   // "![[" или "[["
+    // 2) Wikilinks и теги — regex по видимому тексту (lezer их не знает), но только вне кода
+    const { wikis, tags } = findNoteMarks(state, from, to);
+    for (const w of wikis) {
+      const active = selectionTouches(state, w.from, w.to);
       if (!active) {
-        decos.push({ from: start, to: start + openLen, deco: Decoration.replace({}) });
-        decos.push({ from: end - 2, to: end, deco: Decoration.replace({}) });
+        decos.push({ from: w.from, to: w.from + w.openLen, deco: Decoration.replace({}) });
+        decos.push({ from: w.to - 2, to: w.to, deco: Decoration.replace({}) });
       }
       decos.push({
-        from: start + (active ? 0 : openLen),
-        to: active ? end : end - 2,
-        deco: Decoration.mark({ class: 'cm-wikilink', attributes: { 'data-target': m[2] } }),
+        from: w.from + (active ? 0 : w.openLen),
+        to: active ? w.to : w.to - 2,
+        deco: Decoration.mark({ class: 'cm-wikilink', attributes: { 'data-target': w.target } }),
       });
     }
-    for (const m of text.matchAll(TAG_RE)) {
-      const start = from + m.index!;
-      decos.push({ from: start, to: start + m[0].length, deco: Decoration.mark({ class: 'cm-notetag' }) });
+    for (const t of tags) {
+      decos.push({ from: t.from, to: t.to, deco: Decoration.mark({ class: 'cm-notetag' }) });
     }
   }
 

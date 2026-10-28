@@ -1,0 +1,62 @@
+# Allow-list сторожа S0-G (OwnerIdInlineGuardTests): инлайн-сравнения владельца с
+# идентификатором вызывающего в точках доступа. Формат строки: «путь/от/корня|число» —
+# по ФАЙЛУ со счётчиком совпадений (решение А1: по номеру строки снимок рассыпается при
+# каждой правке). Снимок построен по коду этого дерева на шаге S0-G: состав — таблица 2
+# карты docs/research/shared-projects-s0-map-2026-10.md, расширенная по вердикту А1
+# (двухшаговые сравнения, ResolveOwnerId, *Toolset.cs вне /Mcp/). Всего 118 совпадений
+# в 50 файлах.
+#
+# Снимок может только сокращаться по мере перевода точек доступа на IProjectAccess/RequestScope
+# (шаги S0-4a/S0-4b/S0-5/S0-6/S0-7, S2a-3). Новая строка — только осознанно, с вердиктом
+# в дифе (личное/админское/«до S4»).
+
+backend/ClaudeHomeServer.Architecture/Controllers/ArchitectureController.cs|1
+backend/ClaudeHomeServer.Architecture/Services/Architecture/ArchitectureToolset.cs|1
+backend/ClaudeHomeServer.AudioEditor/Controllers/AudioEditScopeGate.cs|2
+backend/ClaudeHomeServer.AudioEditor/Mcp/AudioEditorToolset.cs|1
+backend/ClaudeHomeServer/Controllers/ChatsController.cs|2
+backend/ClaudeHomeServer/Controllers/ChatSubjectsController.cs|1
+backend/ClaudeHomeServer/Controllers/CodeGraphController.cs|3
+backend/ClaudeHomeServer/Controllers/DeployController.cs|1
+backend/ClaudeHomeServer/Controllers/DeviceAgentTicketController.cs|1
+backend/ClaudeHomeServer/Controllers/DocsController.cs|1
+backend/ClaudeHomeServer/Controllers/DossiersController.cs|4
+backend/ClaudeHomeServer/Controllers/FeatureChatDoor.cs|1
+backend/ClaudeHomeServer/Controllers/FilesController.cs|2
+backend/ClaudeHomeServer/Controllers/GitController.cs|1
+backend/ClaudeHomeServer/Controllers/KnowledgeController.cs|1
+backend/ClaudeHomeServer/Controllers/LocalModelStatsController.cs|8
+backend/ClaudeHomeServer/Controllers/MediaHistoryController.cs|1
+backend/ClaudeHomeServer/Controllers/ModelsController.cs|4
+backend/ClaudeHomeServer/Controllers/OnboardingController.cs|1
+backend/ClaudeHomeServer/Controllers/PersonasController.cs|2
+backend/ClaudeHomeServer/Controllers/PreviewController.cs|1
+backend/ClaudeHomeServer/Controllers/ProjectBackgroundsController.cs|1
+backend/ClaudeHomeServer/Controllers/ProjectGroupsController.cs|2
+backend/ClaudeHomeServer/Controllers/ProjectMapController.cs|3
+backend/ClaudeHomeServer/Controllers/ProjectPresetsController.cs|1
+backend/ClaudeHomeServer/Controllers/ProjectRelayController.cs|1
+backend/ClaudeHomeServer/Controllers/ProjectsController.cs|21
+backend/ClaudeHomeServer/Controllers/SessionHandsController.cs|1
+backend/ClaudeHomeServer/Controllers/SessionLocalModelController.cs|1
+backend/ClaudeHomeServer/Controllers/SessionsController.cs|1
+backend/ClaudeHomeServer/Controllers/SkillsController.cs|1
+backend/ClaudeHomeServer/Controllers/TasksController.cs|11
+backend/ClaudeHomeServer/Controllers/TelemetryController.cs|2
+backend/ClaudeHomeServer/Controllers/TtsController.cs|1
+backend/ClaudeHomeServer/Hubs/SessionHub.cs|2
+backend/ClaudeHomeServer/Hubs/TerminalHub.cs|1
+backend/ClaudeHomeServer.ImageEditor/Controllers/ImageEditScopeGate.cs|2
+backend/ClaudeHomeServer.ImageEditor/Mcp/ImageEditorToolset.cs|1
+backend/ClaudeHomeServer.Plugins/Controllers/PluginBridgeController.cs|1
+backend/ClaudeHomeServer/Services/Mcp/Http/CodeGraphToolset.cs|1
+backend/ClaudeHomeServer/Services/Mcp/Http/DifyToolset.cs|1
+backend/ClaudeHomeServer/Services/Mcp/Http/LocalMediaToolset.cs|1
+backend/ClaudeHomeServer/Services/Mcp/Http/MemoryToolset.cs|1
+backend/ClaudeHomeServer/Services/Mcp/Http/ProjectRunCaller.cs|1
+backend/ClaudeHomeServer/Services/Mcp/Http/TasksToolset.cs|8
+backend/ClaudeHomeServer/Services/Mcp/Http/WorkspaceToolset.cs|4
+backend/ClaudeHomeServer/Services/Mcp/LocalMediaProjectAccess.cs|2
+backend/ClaudeHomeServer.Spend/Controllers/SpendController.cs|2
+backend/ClaudeHomeServer.VideoEditor/Controllers/VideoEditScopeGate.cs|2
+backend/ClaudeHomeServer.VideoEditor/Mcp/VideoEditorToolset.cs|1

@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Notes.Wiki;
 
 namespace ClaudeHomeServer.Services.Notes;
 
@@ -115,8 +116,8 @@ public sealed partial class NotesService
                 // [[вики|подписи]]) в DOM не видна. Третья ступень — канонизация «как
                 // рендер» с картой офсетов, единственное вхождение; selText заменяется
                 // РЕАЛЬНЫМ срезом документа. Провал → честный 409.
-                var (norm, map) = NormalizeForMatch(doc);
-                var q = NormalizeForMatch(selText).Norm;
+                var (norm, map) = QuoteMatcher.NormalizeForMatch(doc);
+                var q = QuoteMatcher.NormalizeForMatch(selText).Norm;
                 var idx = q.Length >= 3 ? norm.IndexOf(q, StringComparison.Ordinal) : -1;
                 if (idx >= 0 && norm.IndexOf(q, idx + 1, StringComparison.Ordinal) < 0)
                 {
@@ -218,11 +219,6 @@ public sealed partial class NotesService
 
     // Кавычки внутри значений frontmatter ломают наш простой парсер — заменяем
     private static string Escape(string s) => s.Replace('"', '\'').Replace("\n", " ");
-
-    // Сохранённая цитата прошла через Escape, документ — нет. Сверять их надо в
-    // одной нормализации, иначе выделение с двойными кавычками не находится
-    // никогда. Замена посимвольная — карта офсетов документа не съезжает.
-    private static string FoldQuotes(string s) => s.Replace('"', '\'');
 
     // Derived-поля комментариев при построении модели (не персистятся):
     // IsReply — annotates указывает на другую заметку-комментарий (тред);
@@ -411,8 +407,8 @@ public sealed partial class NotesService
         if (!string.IsNullOrEmpty(a.AnchorQuote) && a.AnchorQuote!.Length >= MinQuoteAnchor)
         {
             var (rawNorm, map) = NormalizeWithMap(doc);
-            var norm = FoldQuotes(rawNorm);
-            var q = FoldQuotes(NormalizeWs(a.AnchorQuote!));
+            var norm = QuoteMatcher.FoldQuotes(rawNorm);
+            var q = QuoteMatcher.FoldQuotes(NormalizeWs(a.AnchorQuote!));
             var first = norm.IndexOf(q, StringComparison.OrdinalIgnoreCase);
             if (first >= 0 && norm.IndexOf(q, first + 1, StringComparison.OrdinalIgnoreCase) < 0)
             {
@@ -564,111 +560,6 @@ public sealed partial class NotesService
 
     private static readonly Regex Ws = new(@"\s+", RegexOptions.Compiled);
     internal static string NormalizeWs(string s) => Ws.Replace(s, " ").Trim();
-
-    // Канонизация текста «как рендер» — для сверки DOM-выделения с источником:
-    // markdown-ссылки и вики-ссылки заменяются видимым текстом, маркеры эмфазиса/кода
-    // выбрасываются, whitespace схлопывается. Карта — норм-индекс → исходный офсет.
-    private static readonly Regex RenderLinks = new(
-        @"\[\[(?<t>[^\]|]+)(?:\|(?<l>[^\]]+))?\]\]|!?\[(?<x>[^\]]*)\]\((?<u>[^)\s]*)\)",
-        RegexOptions.Compiled);
-    private static readonly char[] MarkupChars = ['*', '`', '_', '~', '\\'];
-
-    internal static (string Norm, List<int> Map) NormalizeForMatch(string doc)
-    {
-        // Шаг 1: ссылки → видимый текст (позиции символов подписи — исходные)
-        var buf = new StringBuilder(doc.Length);
-        var map1 = new List<int>(doc.Length);
-        var last = 0;
-        foreach (Match m in RenderLinks.Matches(doc))
-        {
-            for (var i = last; i < m.Index; i++) { buf.Append(doc[i]); map1.Add(i); }
-            var g = m.Groups["l"].Success ? m.Groups["l"] : m.Groups["t"].Success ? m.Groups["t"] : m.Groups["x"];
-            for (var i = 0; i < g.Length; i++) { buf.Append(doc[g.Index + i]); map1.Add(g.Index + i); }
-            last = m.Index + m.Length;
-        }
-        for (var i = last; i < doc.Length; i++) { buf.Append(doc[i]); map1.Add(i); }
-
-        // Шаг 2: whitespace collapse + дроп маркеров эмфазиса/кода (симметрично для
-        // обеих сторон сверки — подчёркивания в идентификаторах матчу не мешают) +
-        // вычищение построчных структурных маркеров (заголовки #, маркеры списков
-        // -/+/1., цитаты >): в рендере их не видно, DOM-выделение их не содержит, а
-        // без этого любое выделение, пересекающее такую границу, отбивалось ложным 409.
-        var sb = new StringBuilder(buf.Length);
-        var map = new List<int>(buf.Length);
-        var pendingSpace = false;
-        var atLineStart = true;
-        for (var i = 0; i < buf.Length; i++)
-        {
-            var ch = buf[i];
-            if (char.IsWhiteSpace(ch))
-            {
-                if (ch == '\n') atLineStart = true;   // индент-пробелы начало строки не сбрасывают
-                pendingSpace = sb.Length > 0;
-                continue;
-            }
-            if (atLineStart)
-            {
-                // Съедаем ведущие маркеры строки (в т.ч. вложенные: «> - пункт»)
-                int after;
-                while ((after = SkipLineMarkers(buf, i)) > i) i = after;
-                atLineStart = false;
-                if (i >= buf.Length) break;
-                ch = buf[i];
-            }
-            if (Array.IndexOf(MarkupChars, ch) >= 0) continue;
-            if (pendingSpace) { sb.Append(' '); map.Add(map1[i]); pendingSpace = false; }
-            sb.Append(ch); map.Add(map1[i]);
-        }
-        return (sb.ToString(), map);
-    }
-
-    // Ведущий структурный маркер строки, начиная с непробельной позиции i (первый
-    // контентный символ строки). Возвращает индекс за маркером и его хвостовыми
-    // пробелами, либо i, если маркера нет. «Как рендер»: заголовки/списки/цитаты
-    // теряют свой синтаксис, но не текст.
-    private static int SkipLineMarkers(StringBuilder s, int i)
-    {
-        var n = s.Length;
-        // ATX-заголовок: 1..6 '#' + пробел (без пробела — это #тег, не заголовок)
-        if (s[i] == '#')
-        {
-            var j = i; var cnt = 0;
-            while (j < n && s[j] == '#' && cnt < 6) { j++; cnt++; }
-            if (j < n && (s[j] == ' ' || s[j] == '\t'))
-            {
-                while (j < n && (s[j] == ' ' || s[j] == '\t')) j++;
-                return j;
-            }
-            return i;
-        }
-        // Цитата: один+ '>' с необязательными пробелами
-        if (s[i] == '>')
-        {
-            var j = i;
-            while (j < n && (s[j] == '>' || s[j] == ' ' || s[j] == '\t')) j++;
-            return j;
-        }
-        // Маркированный список: -/+ + пробел ('*' и так дропается как эмфазис)
-        if ((s[i] == '-' || s[i] == '+') && i + 1 < n && (s[i + 1] == ' ' || s[i + 1] == '\t'))
-        {
-            var j = i + 1;
-            while (j < n && (s[j] == ' ' || s[j] == '\t')) j++;
-            return j;
-        }
-        // Нумерованный список: цифры + ('.'|')') + пробел
-        if (char.IsDigit(s[i]))
-        {
-            var j = i;
-            while (j < n && char.IsDigit(s[j])) j++;
-            if (j + 1 < n && (s[j] == '.' || s[j] == ')') && (s[j + 1] == ' ' || s[j + 1] == '\t'))
-            {
-                j++;
-                while (j < n && (s[j] == ' ' || s[j] == '\t')) j++;
-                return j;
-            }
-        }
-        return i;
-    }
 
     // Нормализация whitespace с картой «нормализованный индекс → сырой индекс»
     internal static (string Norm, List<int> Map) NormalizeWithMap(string doc)

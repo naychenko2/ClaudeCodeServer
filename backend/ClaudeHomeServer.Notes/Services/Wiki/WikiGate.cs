@@ -8,7 +8,9 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // раздела и разделов выше по цепочке (их даёт вызывающий: WikiSections.UpChain);
 // гейт сам их разбирает и проверяет правила. Нарушение — строка с причиной для
 // человека и для Хранителя: «на ремонт модели даётся одна попытка с перечнем нарушений».
-// Дословность цитаты против источника здесь не проверяется — это QuoteMatcher, шаг S6a.
+// Дословность цитаты проверяется, когда вызывающий дал тексты источников (sourceTexts,
+// захват — S6h/S6j): каждая сноска сверяется с текстом своей карточки через QuoteMatcher
+// (ADR-035, §12г мера 1). Без текстов правило молчит — оно не может быть пройдено молча.
 public static class WikiGate
 {
     // Закрытый перечень origin карточки источника (ADR-035, решение 3).
@@ -35,11 +37,16 @@ public static class WikiGate
     /// путь, не принадлежащий вики, и страница вне этих разделов — нарушение (fail-closed).
     /// upChain — цепочка «вверх» от раздела (WikiSections.UpChain): по ней резолвятся
     /// ссылки и проверяется уникальность owns; гейт сам сверяет её с ADR-036, решение 4:
-    /// допустимы только spheres/* и common, без повторов. Пустой список — нарушений нет.</summary>
+    /// допустимы только spheres/* и common, без повторов. Пустой список — нарушений нет.
+    /// sourceTexts — тексты источников по пути карточки (ключ — Draft.Path карточки):
+    /// правило дословности (ADR-035, §12г мера 1). null — правило не проверяется (захват
+    /// источников — S6h/S6j); задан — каждая сноска разрешённой карточки требует её текста,
+    /// цитата без дословного вхождения в тексте — нарушение.</summary>
     public static IReadOnlyList<string> Check(
         IReadOnlyList<Draft> state,
         string sectionKey,
-        IReadOnlyList<string> rawUpChain)
+        IReadOnlyList<string> rawUpChain,
+        IReadOnlyDictionary<string, string>? sourceTexts = null)
     {
         var violations = new List<string>();
         var upChain = ValidateUpChain(rawUpChain, violations);
@@ -53,7 +60,8 @@ public static class WikiGate
 
         var target = new List<(Draft Draft, WikiPage Page)>();
         var context = new List<(string Section, WikiPage Page)>();
-        var allSections = new List<(string Section, WikiPage Page)>();
+        // Путь карточки нужен правилу дословности: по нему вызывающий дал текст источника.
+        var allSections = new List<(string Section, WikiPage Page, string Path)>();
         foreach (var draft in state)
         {
             var section = WikiSections.Parse(draft.Path);
@@ -80,7 +88,7 @@ public static class WikiGate
                     continue;
                 }
                 target.Add((draft, parsed.Model));
-                allSections.Add((section, parsed.Model));
+                allSections.Add((section, parsed.Model, draft.Path));
             }
             else
             {
@@ -89,7 +97,7 @@ public static class WikiGate
                 // мешает: в нарушениях оно не участвует.
                 if (parsed.Model is null)
                     continue;
-                allSections.Add((section, parsed.Model));
+                allSections.Add((section, parsed.Model, draft.Path));
                 if (allowed.Contains(section))
                     context.Add((section, parsed.Model));
             }
@@ -97,7 +105,7 @@ public static class WikiGate
                 violations.Add($"{draft.Path}: страница раздела '{section}' вне раздела '{sectionKey}' и его цепочки вверх");
         }
 
-        CheckPageForm(target, sectionKey, upChain, allSections, violations);
+        CheckPageForm(target, sectionKey, upChain, allSections, sourceTexts, violations);
         CheckUniqueness(target, context, violations);
         CheckLinks(target, sectionKey, upChain, allSections, violations);
         return violations;
@@ -126,7 +134,8 @@ public static class WikiGate
         List<(Draft Draft, WikiPage Page)> target,
         string sectionKey,
         IReadOnlyList<string> upChain,
-        List<(string Section, WikiPage Page)> allSections,
+        List<(string Section, WikiPage Page, string Path)> allSections,
+        IReadOnlyDictionary<string, string>? sourceTexts,
         List<string> violations)
     {
         var reach = new List<string> { sectionKey };
@@ -164,8 +173,9 @@ public static class WikiGate
                 }
             }
 
-            foreach (var footnote in page.Footnotes)
+            for (var fi = 0; fi < page.Footnotes.Count; fi++)
             {
+                var footnote = page.Footnotes[fi];
                 if (footnote.Quote.Length < WikiPage.MinQuoteLength || footnote.Quote.Length > WikiPage.MaxQuoteLength)
                     violations.Add($"{draft.Path}: цитата {footnote.Quote.Length} символов, контракт {WikiPage.MinQuoteLength}–{WikiPage.MaxQuoteLength}");
                 var card = FindPage(footnote.Target.Text, reach, allSections);
@@ -173,6 +183,17 @@ public static class WikiGate
                     violations.Add($"{draft.Path}: сноска на неизвестную карточку '[[{footnote.Target.Text}]]'");
                 else if (card.Value.Page.Frontmatter.Type != WikiFrontmatter.TypeSource)
                     violations.Add($"{draft.Path}: сноска на '[[{footnote.Target.Text}]]' — не карточка источника (type: source)");
+                else if (sourceTexts is not null)
+                {
+                    // Дословность (ADR-035, §12г мера 1): цитата обязана быть в тексте
+                    // источника с точностью до пробелов, кавычек и разметки (QuoteMatcher).
+                    // Два вхождения в источнике допустимы — важно наличие, не единственность.
+                    // Нет текста карточки → не подтвердить → нарушение (fail-closed).
+                    if (!sourceTexts.TryGetValue(card.Value.Path, out var sourceText))
+                        violations.Add($"{draft.Path}: сноска s{fi + 1} на '[[{footnote.Target.Text}]]': нет текста источника карточки — дословность не подтвердить");
+                    else if (!QuoteMatcher.ContainsVerbatim(sourceText, footnote.Quote))
+                        violations.Add($"{draft.Path}: цитата сноски s{fi + 1} '[[{footnote.Target.Text}]]' отсутствует в тексте источника дословно");
+                }
             }
         }
     }
@@ -227,7 +248,7 @@ public static class WikiGate
         List<(Draft Draft, WikiPage Page)> target,
         string sectionKey,
         IReadOnlyList<string> upChain,
-        List<(string Section, WikiPage Page)> allSections,
+        List<(string Section, WikiPage Page, string Path)> allSections,
         List<string> violations)
     {
         var allowed = new HashSet<string>(StringComparer.Ordinal) { sectionKey };
@@ -265,10 +286,10 @@ public static class WikiGate
         }
     }
 
-    private static (string Section, WikiPage Page)? FindPage(
+    private static (string Section, WikiPage Page, string Path)? FindPage(
         string title,
         IEnumerable<string> sections,
-        List<(string Section, WikiPage Page)> allSections)
+        List<(string Section, WikiPage Page, string Path)> allSections)
     {
         var wanted = new HashSet<string>(sections, StringComparer.Ordinal);
         var norm = Norm(title);

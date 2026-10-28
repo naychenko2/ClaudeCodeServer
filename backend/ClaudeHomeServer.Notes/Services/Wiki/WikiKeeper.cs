@@ -17,8 +17,8 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // разделами берёт обе блокировки в каноническом порядке ключей (WithSectionsLockedAsync):
 // встречные операции на одной паре иначе встают в взаимной блокировке.
 //
-// Здесь — контракт записи и её последствия (манифест, инвалидация кэша графа, событие
-// журнала). Пакеты, прообразы, проекции раздела и _health.md — следующий шаг (S2c):
+// Здесь — контракт записи и её последствия (манифест, проекции раздела, инвалидация кэша
+// графа, событие журнала). Пакеты, прообразы и _health.md — следующий шаг (S2c):
 // он же приведёт сюда op/actor применения и строки дрейфа в health.
 public sealed class WikiKeeper
 {
@@ -189,6 +189,11 @@ public sealed class WikiKeeper
         WikiManifest.RecordApplied(root, sectionKey,
             new Dictionary<string, string> { [pageKey] = Sha256OfBytes(File.ReadAllBytes(full)) });
 
+        // Проекции раздела — шаг 6 той же транзакции (решение 4): после записи страницы, под
+        // этой же блокировкой раздела (вторая блокировка того же ключа — зависание). В манифест
+        // они не кладутся и дрейфом не считаются: сверяется страница, а не её каталог.
+        WikiProjections.RegenerateSection(root, sectionKey);
+
         // Граф обязан видеть запись сразу: его кэш — модель per-owner с TTL 2 с (шаг 6
         // транзакции применения). Событие — только раздела проекта: у «Общего» и «Личного»
         // нет проекта-адресата (тот же порядок, что у личных заметок в NotesService).
@@ -212,6 +217,8 @@ public sealed class WikiKeeper
         WikiManifest.RecordApplied(root, sectionKey,
             new Dictionary<string, string> { [pageKey] = Sha256OfBytes(File.ReadAllBytes(full)) });
         WikiManifest.AppendLog(root, "adopt", sectionKey, [pageKey], null, "user");
+        // Журнал изменился → _log.md раздела перегенерируется (тот же блок, что у adopt).
+        WikiProjections.RegenerateSection(root, sectionKey);
         // Кэш графа не трогается: содержимое файлов не изменилось, модель та же.
         AppendEvent(ownerId, sectionKey, pageKey, "user", $"Принята как есть страница вики «{pageKey}»");
         return new WikiOpResult(WikiOpStatus.Applied, null);

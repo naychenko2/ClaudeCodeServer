@@ -152,6 +152,23 @@ async function wikiHttp<T>(url: string, init?: RequestInit): Promise<T> {
 
 // ─── Состояние стора ───
 
+// Порядок ответов (ревью S5a M1): на каждый слот — счётчик поколения, ответ кладётся
+// в стор, только если его поколение — последнее запрошенное для этого слота; устаревший
+// ответ (запрос начался раньше, пришёл позже) отбрасывается. Инвариант: последний
+// запрос побеждает. Слот — дерево, каждый ключ каталога и страница (одна «последняя
+// прочитанная» — значит, один счётчик: клик по B после A не может быть затёрт ответом A).
+// Образец — featureFlags.ts (createFlagsRefresher: generation / mine === generation).
+let _treeGen = 0;
+const _catalogGen = new Map<string, number>();
+let _pageGen = 0;
+
+// Привязка к владельцу (ревью S5a M2): данные стора — вики того, кто вошёл. Стор держит
+// владельца последней записанной загрузки; при смене readStoredUserId в этой же вкладке
+// снимок прежнего владельца очищается и перечитывается. Ответ запроса помнит владельца
+// момента запроса и в чужой снимок не пишется (образец owner-capture — offline.ts,
+// ownerAtStart в writeFileContent).
+let _ownerId: string | null = null;
+
 let _tree: WikiTreeDto | null = null;
 // Каталоги, которые кто-то открыл: их перечитываем на realtime и после своих мутаций.
 // Не-сирота и сирота держатся одинаково — экран показывает всю вики владельца.
@@ -183,26 +200,42 @@ const pageCacheKey = (sectionKey: string, pageKey: string) => `${sectionKey}\n${
 // ─── Чтение ───
 
 export async function loadWikiTree(): Promise<WikiTreeDto> {
+  const gen = ++_treeGen;
+  const owner = readStoredUserId();
   const tree = await wikiHttp<WikiTreeDto>('/api/wiki/tree');
-  _tree = tree;
-  _loaded = true;
-  emit();
+  // Устаревший ответ или ответ чужого владельца в снимок не пишется (M1/M2);
+  // вызывающий свой ответ получает как есть.
+  if (gen === _treeGen && owner === readStoredUserId()) {
+    _tree = tree;
+    _ownerId = owner;
+    _loaded = true;
+    emit();
+  }
   return tree;
 }
 
 export async function loadWikiCatalog(sectionKey: string): Promise<WikiCatalogDto> {
+  const gen = (_catalogGen.get(sectionKey) ?? 0) + 1;
+  _catalogGen.set(sectionKey, gen);
+  const owner = readStoredUserId();
   const catalog = await wikiHttp<WikiCatalogDto>(`/api/wiki/section?${sectionQuery(sectionKey)}`);
-  _catalogs.set(sectionKey, catalog);
-  emit();
+  if (gen === _catalogGen.get(sectionKey) && owner === readStoredUserId()) {
+    _catalogs.set(sectionKey, catalog);
+    emit();
+  }
   return catalog;
 }
 
 export async function loadWikiPage(sectionKey: string, pageKey: string): Promise<WikiPageDto> {
+  const gen = ++_pageGen;
+  const owner = readStoredUserId();
   const page = await wikiHttp<WikiPageDto>(
     `/api/wiki/page?${sectionQuery(sectionKey)}&page=${encodeURIComponent(pageKey)}`,
   );
-  _page = { cacheKey: pageCacheKey(sectionKey, pageKey), value: page };
-  emit();
+  if (gen === _pageGen && owner === readStoredUserId()) {
+    _page = { cacheKey: pageCacheKey(sectionKey, pageKey), value: page };
+    emit();
+  }
   return page;
 }
 
@@ -227,6 +260,20 @@ function wireRealtime() {
 export async function ensureWikiLoaded(): Promise<void> {
   wireRealtime();
   joinUserGroup();
+  const uid = readStoredUserId();
+  // Смена аккаунта в той же вкладке: вики прежнего владельца не остаётся — снимок
+  // очищается и перечитывается для текущего (M2). Идущие запросы прежнего владельца
+  // их же сверкой владельца на записи отбрасываются.
+  if (_loaded && _ownerId !== uid) {
+    _tree = null;
+    _catalogs.clear();
+    _page = null;
+    _loaded = false;
+    _ownerId = null;
+    // Идущую загрузку прежнего владельца не подхватываем: она отбрасывается своей
+    // сверкой владельца на записе — начинаем свою.
+    _treeLoading = null;
+  }
   if (_loaded) return;
   if (!_treeLoading) _treeLoading = loadWikiTree().finally(() => { _treeLoading = null; });
   await _treeLoading;
@@ -262,6 +309,8 @@ export async function deleteWikiSection(sectionKey: string): Promise<WikiDeleteR
   const res = await wikiHttp<WikiDeleteResult>(`/api/wiki/section?${sectionQuery(sectionKey)}`, {
     method: 'DELETE',
   });
+  // Поднимаем поколение ключа: идущий ответ каталога удалённого раздела его не вернёт (M1)
+  _catalogGen.set(sectionKey, (_catalogGen.get(sectionKey) ?? 0) + 1);
   _catalogs.delete(sectionKey);
   if (_page && _page.cacheKey.startsWith(`${sectionKey}\n`)) _page = null;
   await refreshWiki();
@@ -304,12 +353,19 @@ export function useWikiLoaded(): boolean {
 }
 
 // Тестовый шов: сброс модульного состояния (каждый тест начинает с чистого стора,
-// realtime подписывается заново)
-export function resetWikiStore(): void {
-  _tree = null;
-  _catalogs.clear();
-  _page = null;
-  _loaded = false;
-  _treeLoading = null;
-  _realtimeWired = false;
-}
+// realtime подписывается заново). Швы такого рода в проекте — объектом __test
+// (образец — featureFlags.ts).
+export const __test = {
+  reset() {
+    _tree = null;
+    _catalogs.clear();
+    _page = null;
+    _loaded = false;
+    _treeLoading = null;
+    _realtimeWired = false;
+    _ownerId = null;
+    _treeGen = 0;
+    _pageGen = 0;
+    _catalogGen.clear();
+  },
+};

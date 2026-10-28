@@ -1,7 +1,9 @@
 // Тесты стора вики (S5a): дерево разделов раскладывается по четырём видам и сирота
 // остаётся помеченной; notes_changed перечитывает дерево и открытый каталог; отказы
 // контракта различаются по статусу (401/404 без кода) и по коду (409 {code,message});
-// мутации идут по адресам контракта и перечитывают открытое.
+// мутации идут по адресам контракта и перечитывают открытое; последний запрос побеждает
+// на всех трёх слотах (доработка M1); смена владельца очищает снимок и не принимает
+// ответ прежнего (доработка M2).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../signalr', () => ({
@@ -17,13 +19,15 @@ vi.mock('../offline', () => ({
 
 import type { ServerMessage } from '../../types';
 import { onMessage } from '../signalr';
-import { request } from '../offline';
+import { readStoredUserId, request } from '../offline';
 import {
   WikiError,
+  __test,
   adoptWikiPage,
   deleteWikiSection,
   ensureWikiLoaded,
   getWikiCatalogSnapshot,
+  getWikiPageSnapshot,
   getWikiTreeSnapshot,
   groupSectionsByKind,
   initializeWiki,
@@ -31,11 +35,19 @@ import {
   loadWikiPage,
   loadWikiTree,
   parseSectionKey,
-  resetWikiStore,
 } from '../wiki';
 
 type MockFn = ReturnType<typeof vi.fn>;
 const req = request as unknown as MockFn;
+const userId = vi.mocked(readStoredUserId);
+
+// Отложенный ответ: тест сам решает, когда резолвится запрос (пробы перекрывающихся
+// запросов: первый намеренно резолвится позже второго)
+function deferred<T = unknown>(): { promise: Promise<T>; resolve: (v: T) => void } {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>(r => { resolve = r; });
+  return { promise, resolve };
+}
 
 const PROJECT_ID = '11121314-1516-1718-191a-1b1c1d1e1f10';
 const ORPHAN_ID = '21222324-2526-2728-292a-2b2c2d2e2f20';
@@ -67,6 +79,13 @@ const CATALOG_COMMON = {
 };
 
 const CATALOG_ORPHAN = { key: ORPHAN_KEY, name: null, orphan: true, pages: [] };
+
+// Для проб порядка ответов и смены владельца — отличимые от прежних снимки:
+// «свежее» дерево (initialized, без разделов), пустой каталог того же ключа, страницы A/B.
+const TREE_FRESH = { initialized: true, sections: [] };
+const CATALOG_EMPTY = { key: 'common', name: null, orphan: false, pages: [] };
+const PAGE_A = { pageKey: 'A.md', content: 'страница A' };
+const PAGE_B = { pageKey: 'B.md', content: 'страница B' };
 
 // Ответы по «метод + URL» (у DELETE и GET раздела один адрес): значение-Error бросается,
 // остальное отдаётся как ответ; неоговорённый запрос — падение теста, а не тихая пустота.
@@ -105,9 +124,11 @@ const urlsFrom = (from: number): string[] => req.mock.calls.slice(from).map((c: 
 
 beforeEach(() => {
   vi.useFakeTimers();
-  resetWikiStore();
+  __test.reset();
   vi.mocked(onMessage).mockClear();
   req.mockReset();
+  // Каждый тест начинает с одного владельца; смену делает тот тест, который её проверяет
+  userId.mockReturnValue('u1');
 });
 
 afterEach(() => {
@@ -183,6 +204,89 @@ describe('стор вики: realtime', () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(urlsFrom(before)).toEqual([]);
+  });
+});
+
+describe('стор вики: порядок ответов (последний запрос побеждает)', () => {
+  it('дерево: устаревший ответ, пришедший позже свежего, не затирает снимок', async () => {
+    const stale = deferred();
+    serve({ 'GET /api/wiki/tree': stale.promise });
+    const p1 = loadWikiTree(); // первый запрос — резолвится позже второго
+    serve({ 'GET /api/wiki/tree': TREE_FRESH });
+    await loadWikiTree(); // второй запрос — резолвится первым
+    expect(getWikiTreeSnapshot()).toEqual(TREE_FRESH);
+
+    stale.resolve(TREE);
+    await p1;
+    expect(getWikiTreeSnapshot()).toEqual(TREE_FRESH);
+  });
+
+  it('каталог раздела: устаревший ответ, пришедший позже свежего, не затирает снимок', async () => {
+    const stale = deferred();
+    serve({ 'GET /api/wiki/section?section=common': stale.promise });
+    const p1 = loadWikiCatalog('common');
+    serve({ 'GET /api/wiki/section?section=common': CATALOG_EMPTY });
+    await loadWikiCatalog('common');
+    expect(getWikiCatalogSnapshot('common')).toEqual(CATALOG_EMPTY);
+
+    stale.resolve(CATALOG_COMMON);
+    await p1;
+    expect(getWikiCatalogSnapshot('common')).toEqual(CATALOG_EMPTY);
+  });
+
+  it('страница: ответ ранее кликнутой страницы, пришедший позже, не вытесняет последнюю', async () => {
+    // сценарий ревью: клик A, сразу клик B; ответ B приходит раньше — экран обязан остаться на B
+    const stale = deferred();
+    serve({ 'GET /api/wiki/page?section=common&page=A.md': stale.promise });
+    const p1 = loadWikiPage('common', 'A.md');
+    serve({ 'GET /api/wiki/page?section=common&page=B.md': PAGE_B });
+    await loadWikiPage('common', 'B.md');
+    expect(getWikiPageSnapshot('common', 'B.md')).toEqual(PAGE_B);
+
+    stale.resolve(PAGE_A);
+    await p1;
+    expect(getWikiPageSnapshot('common', 'B.md')).toEqual(PAGE_B);
+  });
+});
+
+describe('стор вики: привязка к владельцу', () => {
+  it('смена владельца: снимок прежнего очищается и перечитывается; его ответ не оседает', async () => {
+    serve({
+      'GET /api/wiki/tree': TREE,
+      'GET /api/wiki/section?section=common': CATALOG_COMMON,
+      'GET /api/wiki/page?section=common&page=A.md': PAGE_A,
+    });
+    await ensureWikiLoaded();
+    await loadWikiCatalog('common');
+    await loadWikiPage('common', 'A.md');
+    expect(getWikiTreeSnapshot()).toEqual(TREE);
+
+    const stale = deferred();
+    serve({ 'GET /api/wiki/tree': stale.promise });
+    const p1 = loadWikiTree(); // запрос прежнего владельца — резолвится после смены
+
+    userId.mockReturnValue('u2'); // выход A, вход B в той же вкладке
+    serve({ 'GET /api/wiki/tree': TREE_FRESH });
+    await ensureWikiLoaded();
+    // на экране — вики того, кто вошёл; catalogs/page прежнего не переживают смену
+    expect(getWikiTreeSnapshot()).toEqual(TREE_FRESH);
+    expect(getWikiCatalogSnapshot('common')).toBeUndefined();
+    expect(getWikiPageSnapshot('common', 'A.md')).toBeNull();
+
+    stale.resolve(TREE);
+    await p1;
+    expect(getWikiTreeSnapshot()).toEqual(TREE_FRESH);
+  });
+
+  it('ответ запроса прежнего владельца без новой загрузки в чужой снимок не пишется', async () => {
+    const stale = deferred();
+    serve({ 'GET /api/wiki/tree': stale.promise });
+    const p1 = loadWikiTree(); // запрос u1
+
+    userId.mockReturnValue('u2'); // сменился владелец, новой загрузки этого слота нет
+    stale.resolve(TREE);
+    await p1;
+    expect(getWikiTreeSnapshot()).toBeNull();
   });
 });
 

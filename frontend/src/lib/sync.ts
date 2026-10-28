@@ -525,6 +525,8 @@ export async function runOfflineSnapshot(priorityProjectId?: string): Promise<vo
     // карты, а не вместо неё — иначе снапшот вернул бы сброшенные при вытеснении записи.
     const mtimeChanges = new Map<string, Record<string, string | null>>();
     const validByProject = new Map<string, Set<string>>();
+    // Дерево приоритетного проекта — для повторной записи листингов в конце цикла
+    let priorityTree: FileEntry[] | null = null;
 
     for (const p of ordered) {
       const [sessions, treeEntries] = await Promise.all([
@@ -571,6 +573,7 @@ export async function runOfflineSnapshot(priorityProjectId?: string): Promise<vo
 
       // Обновляем дерево в кэше — новые файлы появляются, удалённые исчезают из листингов
       await cacheTreeAsListings(p.id, treeEntries);
+      if (p.id === priorityProjectId) priorityTree = treeEntries;
       // Состояние синхронизации по дереву: помеченные файлы известны ДО докачки —
       // их содержимое попадает в защищённую часть класса содержимого.
       rememberSyncedFiles(p.id, treeEntries);
@@ -587,6 +590,12 @@ export async function runOfflineSnapshot(priorityProjectId?: string): Promise<vo
       }
       validByProject.set(p.id, valid);
     }
+
+    // Приоритетный проект обходится первым, а значит его листинги записаны раньше всех
+    // и под потолком записей вытеснялись бы первыми (LRU по usedAt). Перезаписываем их
+    // последними: вытеснение остаётся LRU, но офлайн-дерево текущего проекта не зависит
+    // от порядка проектов в списке.
+    if (priorityTree) await cacheTreeAsListings(priorityProjectId!, priorityTree);
 
     setProgress({ total: contentTasks.length, done: 0 });
     let done = 0;

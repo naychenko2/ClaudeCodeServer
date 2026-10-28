@@ -1,0 +1,255 @@
+using System.Text.RegularExpressions;
+
+namespace ClaudeHomeServer.Services.Notes.Wiki;
+
+// Гейт страницы вики (ADR-035, решение 3; ADR-036, решение 4): чистая функция
+// (состояние после изменения, раздел) → нарушения. Состояние — тексты страниц
+// раздела и разделов выше по цепочке (их даёт вызывающий: WikiSections.UpChain);
+// гейт сам их разбирает и проверяет правила. Нарушение — строка с причиной для
+// человека и для Хранителя: «на ремонт модели даётся одна попытка с перечнем нарушений».
+// Дословность цитаты против источника здесь не проверяется — это QuoteMatcher, шаг S6a.
+public static class WikiGate
+{
+    // Закрытый перечень origin карточки источника (ADR-035, решение 3).
+    public const string OriginNote = "note";
+    public const string OriginFile = "file";
+    public const string OriginSession = "session";
+    public const string OriginUrl = "url";
+    public const string OriginTask = "task";
+    public const string OriginDossier = "dossier";
+    public const string OriginMemory = "memory";
+
+    public static readonly IReadOnlyList<string> OriginValues =
+        [OriginNote, OriginFile, OriginSession, OriginUrl, OriginTask, OriginDossier, OriginMemory];
+
+    internal static bool IsRefSyntax(string text) =>
+        OriginValues.Any(o => text.StartsWith(o + ":", StringComparison.Ordinal));
+
+    // Задача-чекбокс на странице вики запрещена формой страницы (ADR-035, решение 2).
+    private static readonly Regex CheckboxRx = new(@"^\s*[-*] \[[ xX]\]", RegexOptions.CultureInvariant);
+    private static readonly Regex FootnoteRefRx = new(@"\[\^([^]\r\n]+)\]", RegexOptions.CultureInvariant);
+
+    /// <summary>Страница состояния: путь относительно pages/ и текст файла.</summary>
+    public readonly record struct Draft(string Path, string Content);
+
+    /// <summary>Проверяет состояние после изменения перед записью в раздел sectionKey.
+    /// upChain — цепочка «вверх» от раздела (WikiSections.UpChain): по ней резолвятся
+    /// ссылки и проверяется уникальность owns. Пустой список — нарушений нет.</summary>
+    public static IReadOnlyList<string> Check(
+        IReadOnlyList<Draft> state,
+        string sectionKey,
+        IReadOnlyList<string> upChain)
+    {
+        var violations = new List<string>();
+        var allowed = new HashSet<string>(StringComparer.Ordinal) { sectionKey };
+        allowed.UnionWith(upChain);
+
+        // Запись в раздел, где IsWritable=false (сферы — следующая фича, ADR-036, решение 7).
+        var writable = WikiSections.IsWritable(sectionKey);
+        if (!writable.Writable)
+            violations.Add($"нельзя писать в раздел '{sectionKey}': {writable.Reason}");
+
+        var target = new List<(Draft Draft, WikiPage Page)>();
+        var context = new List<(string Section, WikiPage Page)>();
+        var allSections = new List<(string Section, WikiPage Page)>();
+        foreach (var draft in state)
+        {
+            var section = WikiSections.Parse(draft.Path);
+            if (section is null)
+                continue; // неразобранный путь — не раздел вики, здесь не проверяется
+            var parsed = WikiPage.Parse(draft.Content);
+            if (section == sectionKey)
+            {
+                if (parsed.Model is null)
+                {
+                    // Форма шапки и секций: неразобранная страница — нарушение по каждой причине.
+                    foreach (var error in parsed.Errors)
+                        violations.Add($"{draft.Path}: {error}");
+                    continue;
+                }
+                var fileName = draft.Path.Split('/')[^1];
+                if (fileName.StartsWith('_'))
+                {
+                    // _index/_log/_health — проекции, их генерирует код; страница туда не пишется.
+                    violations.Add($"{draft.Path}: в '_*' пишёт код, страница туда не пишется");
+                    continue;
+                }
+                target.Add((draft, parsed.Model));
+                allSections.Add((section, parsed.Model));
+            }
+            else
+            {
+                // Чужой раздел нужен резолву: голая ссылка на имя, живущее только там,
+                // — нарушение «вбок/вниз», а не тихая подмена. Неразобранное здесь только
+                // мешает: в нарушениях оно не участвует.
+                if (parsed.Model is null)
+                    continue;
+                allSections.Add((section, parsed.Model));
+                if (allowed.Contains(section))
+                    context.Add((section, parsed.Model));
+            }
+        }
+
+        CheckPageForm(target, sectionKey, upChain, allSections, violations);
+        CheckUniqueness(target, context, violations);
+        CheckLinks(target, sectionKey, upChain, allSections, violations);
+        return violations;
+    }
+
+    // Форма страницы: чекбоксы, утверждение без сноски, сноска не на карточку,
+    // длина цитаты, закрытый перечень origin.
+    private static void CheckPageForm(
+        List<(Draft Draft, WikiPage Page)> target,
+        string sectionKey,
+        IReadOnlyList<string> upChain,
+        List<(string Section, WikiPage Page)> allSections,
+        List<string> violations)
+    {
+        var reach = new List<string> { sectionKey };
+        reach.AddRange(upChain);
+        foreach (var (draft, page) in target)
+        {
+            foreach (var section in page.Sections)
+                foreach (var line in section.Lines)
+                    if (CheckboxRx.IsMatch(line))
+                        violations.Add($"{draft.Path}: страница вики не несёт задач '- [ ]'");
+
+            if (page.Frontmatter.Type == WikiFrontmatter.TypeSource)
+            {
+                if (page.Frontmatter.Origin is not { } origin || !OriginValues.Contains(origin))
+                    violations.Add($"{draft.Path}: origin '{page.Frontmatter.Origin}' вне закрытого перечня {string.Join(", ", OriginValues)}");
+                continue; // карточка — данные: утверждений и цитат у неё нет
+            }
+
+            foreach (var section in page.Sections)
+            {
+                if (!WikiPage.AssertionSectionNames.Contains(section.Name))
+                    continue;
+                foreach (var line in section.Lines)
+                {
+                    var matches = FootnoteRefRx.Matches(line);
+                    var last = matches.Count > 0 ? matches[matches.Count - 1] : null;
+                    var endsWithFootnote = last is not null &&
+                        last.Index + last.Length == line.TrimEnd().Length;
+                    if (!endsWithFootnote)
+                        violations.Add($"{draft.Path}: утверждение в '{section.Name}' без сноски: {line}");
+                }
+            }
+
+            foreach (var footnote in page.Footnotes)
+            {
+                if (footnote.Quote.Length < WikiPage.MinQuoteLength || footnote.Quote.Length > WikiPage.MaxQuoteLength)
+                    violations.Add($"{draft.Path}: цитата {footnote.Quote.Length} символов, контракт {WikiPage.MinQuoteLength}–{WikiPage.MaxQuoteLength}");
+                if (!footnote.Target.IsLink)
+                    continue; // прямая ссылка источника (session:… и прочие) — это карточка в своём поле ref
+                var card = FindPage(footnote.Target.Text, reach, allSections);
+                if (card is null)
+                    violations.Add($"{draft.Path}: сноска на неизвестную карточку '[[{footnote.Target.Text}]]'");
+                else if (card.Value.Page.Frontmatter.Type != WikiFrontmatter.TypeSource)
+                    violations.Add($"{draft.Path}: сноска на '[[{footnote.Target.Text}]]' — не карточка источника (type: source)");
+            }
+        }
+    }
+
+    // Дубль заголовка/алиаса — в пределах раздела; дубль owns — в разделе и цепочке вверх
+    // (ADR-035, решение 3; ADR-036, решение 4).
+    private static void CheckUniqueness(
+        List<(Draft Draft, WikiPage Page)> target,
+        List<(string Section, WikiPage Page)> context,
+        List<string> violations)
+    {
+        var titles = new Dictionary<string, string>(StringComparer.Ordinal);
+        var aliases = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (draft, page) in target)
+        {
+            AddUnique(titles, Norm(page.Title), draft.Path, "заголовок", violations);
+            foreach (var alias in page.Frontmatter.Aliases)
+                AddUnique(aliases, Norm(alias), draft.Path, "алиас", violations);
+        }
+
+        var owns = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (section, page) in context)
+            foreach (var own in page.Frontmatter.Owns)
+                owns.TryAdd(Norm(own), $"страница раздела '{section}' выше по цепочке");
+        foreach (var (draft, page) in target)
+            foreach (var own in page.Frontmatter.Owns)
+                AddUnique(owns, Norm(own), draft.Path, "owns", violations);
+    }
+
+    private static void AddUnique(
+        Dictionary<string, string> taken,
+        string key,
+        string path,
+        string what,
+        List<string> violations)
+    {
+        if (key.Length == 0)
+            return;
+        if (taken.TryGetValue(key, out var first))
+            violations.Add($"{path}: дубль {what} '{key}' — уже у {first}");
+        else
+            taken[key] = path;
+    }
+
+    // Ссылки — только внутри раздела и вверх по цепочке (ADR-036, решение 4).
+    // Голая ссылка резолвится ТОЛЬКО в текущем разделе и вверх: глобального поиска по
+    // имени нет, и имя, живущее в чужом разделе, — нарушение «вбок/вниз», а не тихая подмена.
+    private static void CheckLinks(
+        List<(Draft Draft, WikiPage Page)> target,
+        string sectionKey,
+        IReadOnlyList<string> upChain,
+        List<(string Section, WikiPage Page)> allSections,
+        List<string> violations)
+    {
+        var allowed = new HashSet<string>(StringComparer.Ordinal) { sectionKey };
+        allowed.UnionWith(upChain);
+        foreach (var (draft, page) in target)
+        {
+            foreach (var link in page.OutboundLinks())
+            {
+                if (link.Text.Contains('/'))
+                {
+                    // Ссылка с префиксом раздела — путь под pages/: префикс должен быть
+                    // разделом и лежать в «вверх».
+                    var section = WikiSections.Parse(link.Text);
+                    var title = link.Text.Split('/')[^1];
+                    if (section is null)
+                        violations.Add($"{draft.Path}: ссылка '[[{link.Text}]]' с неразобранным префиксом раздела");
+                    else if (!allowed.Contains(section))
+                        violations.Add($"{draft.Path}: ссылка '[[{link.Text}]]' в раздел '{section}' — вбок или вниз, допустимы только {string.Join(", ", allowed)}");
+                    else if (FindPage(title, [section], allSections) is null)
+                        violations.Add($"{draft.Path}: ссылка '[[{link.Text}]]' на неизвестную страницу");
+                    continue;
+                }
+                // Голая ссылка: свой раздел, потом вверх по цепочке; нигде больше.
+                if (FindPage(link.Text, [sectionKey], allSections) is not null)
+                    continue;
+                if (FindPage(link.Text, upChain, allSections) is not null)
+                    continue;
+                var elsewhere = FindPage(link.Text,
+                    allSections.Select(s => s.Section).Distinct().Where(s => !allowed.Contains(s)), allSections);
+                if (elsewhere is not null)
+                    violations.Add($"{draft.Path}: ссылка '[[{link.Text}]]' резолвится только в чужом разделе '{elsewhere.Value.Section}' — вбок или вниз");
+                else
+                    violations.Add($"{draft.Path}: ссылка '[[{link.Text}]]' не найдена в разделе и вверх по цепочке");
+            }
+        }
+    }
+
+    private static (string Section, WikiPage Page)? FindPage(
+        string title,
+        IEnumerable<string> sections,
+        List<(string Section, WikiPage Page)> allSections)
+    {
+        var wanted = new HashSet<string>(sections, StringComparer.Ordinal);
+        var norm = Norm(title);
+        foreach (var entry in allSections)
+            if (wanted.Contains(entry.Section) && Norm(entry.Page.Title) == norm)
+                return entry;
+        return null;
+    }
+
+    // Нормализация для сравнения заголовков/алиасов/owns (ADR-036, решение 5:
+    // «заголовок или aliases после нормализации»): регистр и обрамляющие пробелы.
+    private static string Norm(string text) => text.Trim().ToLowerInvariant();
+}

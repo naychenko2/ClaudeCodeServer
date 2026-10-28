@@ -1,0 +1,438 @@
+using ClaudeHomeServer.Services.Notes.Wiki;
+
+namespace ClaudeHomeServer.Tests.Services;
+
+// Строгая шапка, секции и сноски страницы + гейт правил раздела (S2a, ADR-035 §3, ADR-036 §4).
+// Чистые функции — юнит без окружения. На каждое правило гейта пара «проходит / отбит».
+public class WikiGateTests
+{
+    private const string P1 = "projects/p1";
+    private const string P1Dir = "Проекты/p1/";
+    private const string Quote = "точная цитата из источника";
+    private const string Foot = "[^s1]: [[Карточка]] — «" + Quote + "»";
+    private const string Good = "- Бюджет на GPU — до 15 тыс. ₽ в месяц.[^s1]";
+
+    // Карточка источника той же страницы: сноска обязана указывать на type: source.
+    private static string Card(string title, string origin = "note", string dir = P1Dir) =>
+        Fm("source", $"origin: {origin}\nref: note:1\nhash: h1\ncaptured: 2026-10-28\n") + $"\n\n# {title}\n";
+
+    private static string Fm(string type, string extra = "") =>
+        "---\ntype: " + type + "\nsummary: тестовая страница\n" + extra + "status: active\n---";
+
+    // Обычная страница: четыре фиксированных секции; содержание — в «Сводке», сноски — в конце.
+    private static string Page(
+        string title = "Тет",
+        string swodka = "",
+        string footnotes = "",
+        string fmExtra = "",
+        string dir = P1Dir,
+        string type = "entity")
+    {
+        var body = $"\n\n# {title}\n\n## Сводка\n{swodka}\n\n## Хронология\n\n## Противоречия\n\n## История\n";
+        if (footnotes.Length > 0)
+            body += "\n" + footnotes + "\n";
+        return Fm(type, fmExtra) + body;
+    }
+
+    private static readonly WikiGate.Draft CardDraft = new(P1Dir + "Источники/Карточка.md", Card("Карточка"));
+
+    private static WikiGate.Draft D(string path, string content) => new(path, content);
+
+    private static IReadOnlyList<string> Check(
+        IEnumerable<WikiGate.Draft> state,
+        string section = P1,
+        IReadOnlyList<string>? chain = null) =>
+        WikiGate.Check(state.ToList(), section, chain ?? []);
+
+    private static void NoViolations(
+        IEnumerable<WikiGate.Draft> state,
+        string section = P1,
+        IReadOnlyList<string>? chain = null) =>
+        Check(state, section, chain).Should().BeEmpty("нарушений быть не должно");
+
+    // —— Круговой тест: разбор → рендер → разбор даёт равные модели ——
+
+    [Fact]
+    public void Шапка_круговойРазборДаётРавнуюМодель()
+    {
+        var text = Page(fmExtra: "kind: person\naliases: [Вера, @vera]\nowns: [сущность-1]\nsources: [карточка-1]\nupdated: 2026-10-28\n");
+        var first = WikiFrontmatter.Parse(text);
+        first.Errors.Should().BeEmpty();
+        var second = WikiFrontmatter.Parse(first.Model!.Render());
+        second.Errors.Should().BeEmpty();
+        second.Model.Should().Be(first.Model);
+    }
+
+    [Fact]
+    public void Страница_круговойРазборДаётРавнуюМодель()
+    {
+        var text = Page(swodka: Good, footnotes: Foot, fmExtra: "aliases: [дубль]\nowns: [сущность-1]\n");
+        var first = WikiPage.Parse(text);
+        first.Errors.Should().BeEmpty();
+        var second = WikiPage.Parse(first.Model!.Render());
+        second.Errors.Should().BeEmpty();
+        second.Model.Should().Be(first.Model);
+    }
+
+    [Fact]
+    public void Хроника_круговойРазборДаётРавнуюМодель()
+    {
+        var text = """
+            ---
+            type: chronicle
+            summary: хроника чата
+            status: active
+            ---
+
+            # Чат от 28.10
+
+            ## О чём
+            Обсуждали бюджет GPU.
+
+            ## Что решили
+            - Бюджет на GPU — до 15 тыс. ₽ в месяц.[^s1]
+
+            ## Что выяснили
+            - Локальная модель быстрее облака.[^s1]
+
+            ## Открытые вопросы
+            - Когда поднимать лимит?
+
+            [^s1]: session:abc123#m3-7 — «Бюджет на GPU — до 15 тыс. ₽ в месяц»
+            """;
+        var first = WikiPage.Parse(text);
+        first.Errors.Should().BeEmpty();
+        first.Model!.Sections.Select(s => s.Name).Should().Equal("О чём", "Что решили", "Что выяснили", "Открытые вопросы");
+        var second = WikiPage.Parse(first.Model.Render());
+        second.Errors.Should().BeEmpty();
+        second.Model.Should().Be(first.Model);
+    }
+
+    // —— Строгий парсер шапки ——
+
+    [Theory]
+    [InlineData("annotates: 5")]
+    [InlineData("expires: 2026-12-01")]
+    [InlineData("file: путь.md")]
+    public void Шапка_запрещённыеПоля_отбит(string field)
+    {
+        var r = WikiFrontmatter.Parse(Fm("entity", field + "\n"));
+        r.Model.Should().BeNull();
+        r.Errors.Should().Contain(e => e.Contains(field.Split(':')[0]));
+    }
+
+    [Fact]
+    public void Шапка_неизвестноеПоле_отбита()
+    {
+        var r = WikiFrontmatter.Parse(Fm("entity", "xyz: 1\n"));
+        r.Model.Should().BeNull();
+        r.Errors.Should().Contain(e => e.Contains("неизвестное поле 'xyz'"));
+    }
+
+    [Fact]
+    public void Шапка_типВнеСеми_отбита()
+    {
+        var r = WikiFrontmatter.Parse(Fm("notion"));
+        r.Model.Should().BeNull();
+        r.Errors.Should().Contain(e => e.Contains("не из семи разрешённых"));
+    }
+
+    [Fact]
+    public void Шапка_статусВнеЧетырёх_отбита()
+    {
+        var r = WikiFrontmatter.Parse(Fm("entity").Replace("status: active", "status: archived"));
+        r.Model.Should().BeNull();
+        r.Errors.Should().Contain(e => e.Contains("status 'archived' не из четырёх"));
+    }
+
+    [Fact]
+    public void Шапка_дубльКлюча_отбита()
+    {
+        var r = WikiFrontmatter.Parse(Fm("entity", "kind: person\nkind: org\n"));
+        r.Model.Should().BeNull();
+        r.Errors.Should().Contain(e => e.Contains("'kind' дублируется"));
+    }
+
+    [Fact]
+    public void Шапка_вложенноеЗначение_отбита()
+    {
+        var r = WikiFrontmatter.Parse(Fm("entity", " kind: person\n"));
+        r.Model.Should().BeNull();
+        r.Errors.Should().Contain(e => e.Contains("вложенные значения"));
+    }
+
+    [Fact]
+    public void Шапка_карточныеПоляУНеКарточки_отбиты()
+    {
+        var r = WikiFrontmatter.Parse(Fm("entity", "origin: note\nref: note:1\nhash: h\ncaptured: 2026-10-28\n"));
+        r.Model.Should().BeNull();
+        r.Errors.Should().Contain(e => e.Contains("есть только у карточки источника"));
+    }
+
+    // —— Гейт: форма шапки и секций ——
+
+    [Fact]
+    public void Гейт_формаСтраницы_проходит() =>
+        NoViolations([D(P1Dir + "Тет.md", Page())]);
+
+    [Fact]
+    public void Гейт_секцииНеВФиксированномПорядке_отбиты()
+    {
+        var bad = Fm("entity") + "\n\n# Тет\n\n## Хронология\n\n## Сводка\n\n## Противоречия\n\n## История\n";
+        Check([D(P1Dir + "Тет.md", bad)]).Should().Contain(e => e.Contains("не в фиксированном порядке"));
+    }
+
+    [Fact]
+    public void Гейт_отсутствующаяСекция_отбита()
+    {
+        var bad = Fm("entity") + "\n\n# Тет\n\n## Сводка\n\n## Хронология\n\n## Противоречия\n";
+        Check([D(P1Dir + "Тет.md", bad)]).Should().Contain(e => e.Contains("нет секции 'История'"));
+    }
+
+    // —— Гейт: утверждение без сноски ——
+
+    [Fact]
+    public void Гейт_утверждениеБезСноски_отбито()
+    {
+        Check([D(P1Dir + "Тет.md", Page(swodka: "- Просто утверждение."))])
+            .Should().Contain(e => e.Contains("без сноски"));
+    }
+
+    [Fact]
+    public void Гейт_утверждениеСносной_проходит() =>
+        NoViolations([D(P1Dir + "Тет.md", Page(swodka: Good, footnotes: Foot)), CardDraft]);
+
+    // —— Гейт: сноска не на type: source ——
+
+    [Fact]
+    public void Гейт_сноскаНеНаКарточку_отбита()
+    {
+        var page = Page(swodka: Good, footnotes: "[^s1]: [[ДругаяСтраница]] — «" + Quote + "»");
+        var other = Page(title: "ДругаяСтраница");
+        Check([D(P1Dir + "Тет.md", page), D(P1Dir + "ДругаяСтраница.md", other)])
+            .Should().Contain(e => e.Contains("не карточка источника"));
+    }
+
+    [Fact]
+    public void Гейт_сноскаНаНеизвестнуюКарточку_отбита()
+    {
+        Check([D(P1Dir + "Тет.md", Page(swodka: Good, footnotes: "[^s1]: [[НетТакой]] — «" + Quote + "»"))])
+            .Should().Contain(e => e.Contains("на неизвестную карточку"));
+    }
+
+    // —— Гейт: длина цитаты ——
+
+    [Theory]
+    [InlineData("коротко")]
+    [InlineData("")]
+    public void Гейт_короткаяЦитата_отбита(string quote)
+    {
+        var foot = "[^s1]: [[Карточка]] — «" + quote + "»";
+        Check([D(P1Dir + "Тет.md", Page(swodka: Good, footnotes: foot)), CardDraft])
+            .Should().Contain(e => e.Contains("контракт 8–300"));
+    }
+
+    [Fact]
+    public void Гейт_цитатаСверхЛимита_отбита()
+    {
+        var foot = "[^s1]: [[Карточка]] — «" + new string('с', 301) + "»";
+        Check([D(P1Dir + "Тет.md", Page(swodka: Good, footnotes: foot)), CardDraft])
+            .Should().Contain(e => e.Contains("контракт 8–300"));
+    }
+
+    // —— Гейт: дубль заголовка и алиаса в разделе ——
+
+    [Fact]
+    public void Гейт_дубльЗаголовкаВРазделе_отбит()
+    {
+        Check([D(P1Dir + "Тет.md", Page()), D(P1Dir + "Копия.md", Page())])
+            .Should().Contain(e => e.Contains("дубль заголовок"));
+    }
+
+    [Fact]
+    public void Гейт_дубльАлиасаВРазделе_отбит()
+    {
+        var a = Page(fmExtra: "aliases: [дубль]\n");
+        var b = Page(title: "Другая", fmExtra: "aliases: [Дубль]\n");
+        Check([D(P1Dir + "Тет.md", a), D(P1Dir + "Другая.md", b)])
+            .Should().Contain(e => e.Contains("дубль алиас"));
+    }
+
+    // —— Гейт: дубль owns в разделе и цепочке вверх ——
+
+    [Fact]
+    public void Гейт_дубльOwnsПоЦепочкеВверх_отбит()
+    {
+        var page = Page(fmExtra: "owns: [сущность-1]\n");
+        var common = Page(title: "Знание", dir: "Общее/", fmExtra: "owns: [сущность-1]\n");
+        Check([D(P1Dir + "Тет.md", page), D("Общее/Знание.md", common)], P1, ["common"])
+            .Should().Contain(e => e.Contains("дубль owns"));
+    }
+
+    [Fact]
+    public void Гейт_ownsВСвоёмРазделе_проходит() =>
+        NoViolations([D(P1Dir + "Тет.md", Page(fmExtra: "owns: [сущность-1]\n"))], P1, ["common"]);
+
+    // —— Гейт: ссылки только внутри раздела и вверх (ADR-036, решение 4) ——
+
+    [Fact]
+    public void Гейт_ссылкаВбок_отбита()
+    {
+        var page = Page(swodka: "- См. [[Проекты/p2/Сосед]].[^s1]", footnotes: Foot);
+        var neighbor = Page(title: "Сосед", dir: "Проекты/p2/");
+        Check([D(P1Dir + "Тет.md", page), D("Проекты/p2/Сосед.md", neighbor), CardDraft])
+            .Should().Contain(e => e.Contains("вбок или вниз"));
+    }
+
+    [Fact]
+    public void Гейт_ссылкаВнизИзСферы_отбита()
+    {
+        var page = Page(dir: "Сферы/s1/", swodka: "- См. [[Проекты/p1/Тет]].[^s1]", footnotes: Foot);
+        var target = Page();
+        Check([D("Сферы/s1/Обзор.md", page), D(P1Dir + "Тет.md", target)], "spheres/s1", ["common"])
+            .Should().Contain(e => e.Contains("вбок или вниз"));
+    }
+
+    [Fact]
+    public void Гейт_ссылкаВверхСПрефиксом_проходит()
+    {
+        var page = Page(swodka: "- См. [[Общее/Знание]].[^s1]", footnotes: Foot);
+        var common = Page(title: "Знание", dir: "Общее/");
+        NoViolations([D(P1Dir + "Тет.md", page), D("Общее/Знание.md", common), CardDraft], P1, ["common"]);
+    }
+
+    [Fact]
+    public void Гейт_голаяСсылкаВверх_проходит()
+    {
+        var page = Page(swodka: "- См. [[Знание]].[^s1]", footnotes: Foot);
+        var common = Page(title: "Знание", dir: "Общее/");
+        NoViolations([D(P1Dir + "Тет.md", page), D("Общее/Знание.md", common), CardDraft], P1, ["common"]);
+    }
+
+    [Fact]
+    public void Гейт_голаяСсылкаВнутриРаздела_проходит()
+    {
+        var page = Page(swodka: "- См. [[Другая]].[^s1]", footnotes: Foot);
+        var other = Page(title: "Другая");
+        NoViolations([D(P1Dir + "Тет.md", page), D(P1Dir + "Другая.md", other), CardDraft]);
+    }
+
+    // Уточнение по ревью S2d: голая ссылка резолвится ТОЛЬКО в своём разделе и вверх;
+    // имя, живущее в чужом разделе, — нарушение «вбок/вниз», а не тихая подмена.
+    [Fact]
+    public void Гейт_голаяСсылкаНаИмяИзЧужогоРаздела_отбита()
+    {
+        var page = Page(swodka: "- См. [[Чужое]].[^s1]", footnotes: Foot);
+        var foreign = Page(title: "Чужое", dir: "Проекты/p2/");
+        Check([D(P1Dir + "Тет.md", page), D("Проекты/p2/Чужое.md", foreign), CardDraft], P1)
+            .Should().Contain(e => e.Contains("резолвится только в чужом разделе"));
+    }
+
+    [Fact]
+    public void Гейт_ссылкаВКодеНеСсылка()
+    {
+        var page = Page(swodka: "- Пример `[[Проекты/p2/Сосед]]` в коде — не ссылка.[^s1]", footnotes: Foot);
+        var neighbor = Page(title: "Сосед", dir: "Проекты/p2/");
+        NoViolations([D(P1Dir + "Тет.md", page), D("Проекты/p2/Сосед.md", neighbor), CardDraft]);
+    }
+
+    // —— Гейт: запись в '_*', запись в неписемый раздел ——
+
+    [Fact]
+    public void Гейт_записьВПроекции_отбита() =>
+        Check([D(P1Dir + "_index.md", Page(title: "Индекс"))])
+            .Should().Contain(e => e.Contains("'_*'"));
+
+    [Fact]
+    public void Гейт_записьВРазделСферы_отбита() =>
+        Check([D("Сферы/s1/Тет.md", Page(dir: "Сферы/s1/"))], "spheres/s1", ["common"])
+            .Should().Contain(e => e.Contains("раздел сферы"));
+
+    [Fact]
+    public void Гейт_записьВПроектныйРаздел_проходит() =>
+        NoViolations([D(P1Dir + "Тет.md", Page())], P1, ["spheres/s1", "common"]);
+
+    // —— Гейт: '- [ ]' на странице ——
+
+    [Fact]
+    public void Гейт_чекбоксНаСтранице_отбит() =>
+        Check([D(P1Dir + "Тет.md", Page(swodka: "- [ ] сделать потом"))])
+            .Should().Contain(e => e.Contains("не несёт задач"));
+
+    // —— Гейт: закрытый перечень origin (карточка) ——
+
+    [Fact]
+    public void Гейт_originВнеПеречня_отбит() =>
+        Check([D(P1Dir + "Источники/Карточка.md", Card("Карточка", origin: "telegram"))])
+            .Should().Contain(e => e.Contains("вне закрытого перечня"));
+
+    [Fact]
+    public void Гейт_originИзПеречня_проходит() =>
+        NoViolations([D(P1Dir + "Источники/Карточка.md", Card("Карточка", origin: "memory"))]);
+
+    // —— Сноска на чат: session:{id}#m{a}-{b} ——
+
+    [Fact]
+    public void СноскаНаЧат_разбираетсяVKортеж()
+    {
+        WikiPage.TryParseSessionRef("session:abc123#m3-7", out var id, out var from, out var to).Should().BeTrue();
+        id.Should().Be("abc123");
+        from.Should().Be(3);
+        to.Should().Be(7);
+        WikiPage.TryParseSessionRef("session:abc#m-x", out _, out _, out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public void СноскаНаЧат_разбираетсяВМоделиСтраницы()
+    {
+        var text = Page(swodka: Good, footnotes: "[^s1]: session:abc123#m3-7 — «" + Quote + "»");
+        var r = WikiPage.Parse(text);
+        r.Errors.Should().BeEmpty();
+        var target = r.Model!.Footnotes[0].Target;
+        target.IsLink.Should().BeFalse();
+        WikiPage.TryParseSessionRef(target.Text, out var id, out var from, out var to).Should().BeTrue();
+        id.Should().Be("abc123");
+        from.Should().Be(3);
+        to.Should().Be(7);
+    }
+
+    // —— Номера сносок перенумеровывает код ——
+
+    [Fact]
+    public void НомераСносок_ПеренумеровываетКод()
+    {
+        var text = Page(
+            swodka: "- Утв1.[^zz1] Утв2.[^aa1]",
+            footnotes: "[^zz1]: [[Карточка]] — «первая достаточная цитата»\n[^aa1]: [[Карточка]] — «вторая достаточная цитата»");
+        var r = WikiPage.Parse(text);
+        r.Errors.Should().BeEmpty();
+        r.Model!.Sections[0].Lines[0].Should().Be("- Утв1.[^s1] Утв2.[^s2]");
+        r.Model.Footnotes.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public void СсылкаНаНесуществующуюСноску_отбита()
+    {
+        var r = WikiPage.Parse(Page(swodka: "- Утв.[^s9]"));
+        r.Model.Should().BeNull();
+        r.Errors.Should().Contain(e => e.Contains("несуществующую сноску"));
+    }
+
+    // —— Карточка источника: данные, не рассказ ——
+
+    [Fact]
+    public void КарточкаИсточника_безСекцийРазбирается()
+    {
+        var r = WikiPage.Parse(Card("Карточка"));
+        r.Errors.Should().BeEmpty();
+        r.Model!.Frontmatter.Type.Should().Be("source");
+    }
+
+    [Fact]
+    public void КарточкаИсточника_сСекциями_отбита()
+    {
+        var r = WikiPage.Parse(Card("Карточка") + "\n## Сводка\n");
+        r.Model.Should().BeNull();
+        r.Errors.Should().Contain(e => e.Contains("не может быть секций"));
+    }
+}

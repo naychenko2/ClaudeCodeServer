@@ -194,8 +194,8 @@ public class WikiPathsTests : IDisposable
         if (OperatingSystem.IsWindows()) return; // см. предыдущий тест
         // Проба D (ревью S1a, MAJOR 2): кэш корня на 60 с давал окно fail-open — первый
         // вызов при ещё несуществующем data/wiki, затем data/wiki становится ссылкой на
-        // настоящую вику, и следующие 60 с гейт молчал. Кэшируется только канонический
-        // dataDir; «является ли data/wiki ссылкой» перепроверяется на каждый вызов.
+        // настоящую вику, и следующие 60 с гейт молчал. Между вызовами не кэшируется
+        // ничего: корень и путь считаются одним свежим обходом (MAJOR 3).
         var full = Path.Combine(_dir, "wiki", Owner, "pages", "Хроника.md");
         WikiPaths.IsWikiPath(full, _dir).Should().BeTrue(); // до ссылки — путь под data/wiki
 
@@ -206,6 +206,36 @@ public class WikiPathsTests : IDisposable
         // сразу после создания ссылки — без окна: обе стороны в одном пространстве имён
         WikiPaths.IsWikiPath(full, _dir).Should().BeTrue();
         WikiPaths.IsWikiPath(Path.Combine(target, Owner, "pages", "Хроника.md"), _dir).Should().BeTrue();
+    }
+
+    [Fact]
+    public void IsWikiPath_DataDirСталСсылкойПослеПервогоВызова_УчитываетсяСразу()
+    {
+        if (OperatingSystem.IsWindows()) return; // см. предыдущий тест
+        // Проба ревью S1a, MAJOR 3: бессрочный кэш канонического dataDir — тот же класс,
+        // что MAJOR 2, на уровень выше: корень считался из закешированного Canonical(dataDir),
+        // а путь канонизировался заново. После переезда dataDir (каталог стал ссылкой на
+        // своё же содержимое) стороны описывали разные деревья, и гейт отвечал false на путь,
+        // который физически лежит в вики. Инвариант: ответ гейта зависит только от состояния
+        // ФС, не от истории вызовов.
+        var data = Path.Combine(_dir, "dd-swap");
+        var pages = Path.Combine(data, "wiki", Owner, "pages");
+        Directory.CreateDirectory(pages);
+
+        var full = Path.Combine(pages, "x.md");
+        WikiPaths.IsWikiPath(full, data).Should().BeTrue(); // первый вызов — тот, что заполнил бы кэш
+
+        // вики переезжает на «другой диск»: dataDir становится ссылкой на прежнее содержимое
+        var moved = Path.Combine(_dir, "dd-swap-disk2");
+        Directory.Move(data, moved);
+        Directory.CreateSymbolicLink(data, moved);
+
+        // сразу после переезда — тот же путь остаётся в вики
+        WikiPaths.IsWikiPath(full, data).Should().BeTrue();
+
+        // и физическая запись того же пути идёт в переехавшую вику (ср. с пробой A2)
+        File.WriteAllText(full, "запись", new UTF8Encoding(false));
+        File.Exists(Path.Combine(moved, "wiki", Owner, "pages", "x.md")).Should().BeTrue();
     }
 
     [Fact]

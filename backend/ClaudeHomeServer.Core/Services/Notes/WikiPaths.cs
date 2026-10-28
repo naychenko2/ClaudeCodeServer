@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Text;
 
 namespace ClaudeHomeServer.Services.Notes;
@@ -63,24 +62,15 @@ public static class WikiPaths
     // ссылка (в том числе висячая) задаёт корень своей целью — иначе файл через ссылку
     // канонизируется в одно пространство имён, а корень — в другое, и гейт молчит (ревью S1a).
     // Предикат зовётся в циклах побочных писателей на каждый файл, но ответ обязан зависеть
-    // только от состояния ФС: кэшируется только дорогая стабильная часть — канонический
-    // dataDir (конфиг процесса, символьных ссылок в нём не ожидается), — а «data/wiki»
-    // переразбирается на КАЖДЫЙ вызов (ревью S1a, MAJOR 2: кэш корня на 60 с давал окно
-    // fail-open, когда data/wiki становился ссылкой уже после первого вызова).
-    private static string? WikiRootOf(string dataDir)
-    {
-        var key = Normalize(dataDir);
-        if (!_dataDirCache.TryGetValue(key, out var dataRoot))
-        {
-            dataRoot = Canonical(dataDir);
-            if (dataRoot is not null) _dataDirCache[key] = dataRoot; // неудачный не держим
-        }
-        if (dataRoot is null) return null; // сам dataDir неразрешим — fail-closed у вызывающего
-        var hops = 0; // отдельный бюджет на разбор корня: путь проверяется своим
-        return ResolveLinkChain(Path.Combine(dataRoot, DirName), ref hops);
-    }
-
-    private static readonly ConcurrentDictionary<string, string> _dataDirCache = new();
+    // только от состояния ФС, не от истории вызовов: корень считается тем же свежим
+    // сегментным обходом, что и путь (тот же Canonical: разыменует и префикс dataDir, и
+    // «wiki»), — без кэша между вызовами (ревью S1a, MAJOR 2: кэш корня на 60 с давал окно
+    // fail-open, когда data/wiki становился ссылкой после первого вызова; MAJOR 3: бессрочный
+    // кэш канонического dataDir — тот же класс на уровень выше: когда dataDir сам становился
+    // ссылкой, закешированный корень и свежий путь описывали разные деревья). Замер ревью
+    // S1a: 1000 вызовов = 42 мс — кэш не нужен; допустим только кэш на время одного прохода,
+    // переданный вызывающим явно (такого вызывающего нет).
+    private static string? WikiRootOf(string dataDir) => Canonical(Path.Combine(dataDir, DirName));
 
     // Вики заведена: есть pages/_schema.md. Признак на диске, а не фич-флаг (ADR-035, решение 1).
     public static bool IsInitialized(string dataDir, string ownerId) =>
@@ -187,7 +177,10 @@ public static class WikiPaths
             var target = new DirectoryInfo(path).LinkTarget;
             return target ?? new FileInfo(path).LinkTarget;
         }
-        catch (IOException) { return null; } // недоступный элемент — не ссылка
+        // недоступный элемент — не ссылка; шапка обещает «предикат не бросает», поэтому
+        // и отказ доступа, и неподдерживаемая форма (хвост ревью S1a, минор 1) — тоже null:
+        // путь остаётся как есть, дальше решает вызывающий (для пути под data/wiki — fail-closed)
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or NotSupportedException) { return null; }
     }
 
     private static string Normalize(string path) =>

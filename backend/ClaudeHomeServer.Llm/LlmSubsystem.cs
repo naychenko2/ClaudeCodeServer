@@ -249,6 +249,11 @@ public sealed class LlmSubsystem : IAppSubsystem
 
         // Роутинг фоновых действий локаль(Ollama)/claude + единый «дешёвый»
         // текстовый раннер с фолбэком.
+        // Журнал вызовов мест к именованным движкам: «кто сейчас на модели» и ответы за час
+        // (блок «Дежурство», разрез v2 §4, шаг Б5). Синглтон в DI, живёт с контейнером;
+        // на диск ничего не пишется. Писатель один — CheapTextRunner, и только цепочек,
+        // где маршрут дал движок.
+        services.AddSingleton<EngineCallLedger>();
         services.AddSingleton<LocalActionOverridesStore>();
         services.AddSingleton<LocalActionRouter>();
         services.AddSingleton<ICheapTextRunner, CheapTextRunner>();

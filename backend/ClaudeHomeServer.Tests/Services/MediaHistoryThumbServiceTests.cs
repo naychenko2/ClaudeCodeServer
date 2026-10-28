@@ -12,7 +12,10 @@ namespace ClaudeHomeServer.Tests.Services;
 // - отмена: закрытая вкладка (отменённый CancellationToken) не роняет 500, а возвращает null
 //   (фронт рисует плитку). Мутация «убрать catch OperationCanceledException» — краснеет;
 // - дефект 8fccc75f: генерация настоящим ffmpeg (временный файл — с расширением, понятным
-//   ffmpeg: «.webp.tmp» он не знает, exit 234) и single-flight на одну запись.
+//   ffmpeg: «.webp.tmp» он не знает, exit 234) и single-flight на одну запись;
+// - R-F3-a: падение лидера single-flight исключением — ждущие получают ответ (страховка
+//   finally), запись уходит из _inFlight. Падение моделируется швом GenerateOverride:
+//   у настоящей генерации путь с исключением наружу не достижим (все отказы перехвачены).
 public class MediaHistoryThumbServiceTests : IDisposable
 {
     private readonly string _tempDir = Path.Combine(Path.GetTempPath(), "thumb_" + Guid.NewGuid().ToString("N"));
@@ -99,6 +102,36 @@ public class MediaHistoryThumbServiceTests : IDisposable
         }
     }
 
+    // Шов подмены генерации (R-F3-a): тест держит лидера внутри генерации и роняет его
+    // исключением — только так проверяется страховка finally в сервисе (у настоящей генерации
+    // путь с исключением наружу не достижим). Первый вызов: (по HoldFirstCall — стоит до
+    // Release) → падает. Второй: пишет миниатюру (стаб файла, не настоящий ffmpeg) и успешен.
+    // Считает, сколько раз генерацию звали: это признак того, что вызывающий лидировал.
+    private sealed class CrashingGeneration
+    {
+        private int _calls;
+        public int Calls => _calls;
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        // true: первый вызов стоит до Release — нужно, чтобы присоединить ждущего до падения
+        public bool HoldFirstCall { get; set; }
+
+        public async Task<bool> Invoke(string source, string thumb, CancellationToken ct)
+        {
+            if (Interlocked.Increment(ref _calls) == 1)
+            {
+                if (HoldFirstCall)
+                {
+                    Started.SetResult(); // лидер внутри генерации: запись уже в _inFlight
+                    await Release.Task;
+                }
+                throw new InvalidOperationException("имитация падения лидера: генерация бросает наружу");
+            }
+            await File.WriteAllTextAsync(thumb, "RIFF"); // стаб миниатюры: важен путь, не содержимое
+            return true;
+        }
+    }
+
     // Отмена (закрытая вкладка) — null, не 500
     [Fact]
     public async Task Отмена_Null()
@@ -154,5 +187,61 @@ public class MediaHistoryThumbServiceTests : IDisposable
         results.Should().AllBeEquivalentTo((string?)null, "исходника нет — миниатюры нет ни у кого");
         log.FfmpegFailures.Should().Be(1,
             "одна запись — один ffmpeg: второй запрос ждёт итог первого, а не запускает свой");
+    }
+
+    // R-F3-a (c1): лидер single-flight падает исключением — ждущий, присоединившийся заранее,
+    // завершается null (не 500 и не виснет). Порядок жёсткий, без пауз: тело GetThumbAsync лидера
+    // доходит до первого await (подменённой генерации) синхронно, поэтому к сигналу Started
+    // запись уже в _inFlight; тело GetThumbAsync ждущего доходит до await pending.Task синхронно
+    // — он присоединён к итогу лидера до его падения. Отмена запроса ждущего — только страховка
+    // от вечного зависания: по правильному коду она не срабатывает.
+    // Мутация «убрать tcs.TrySetResult(false) в finally (:102)»: ждущий виснет до страховочной
+    // отмены → IsCancellationRequested=true → тест краснеет.
+    [Fact]
+    public async Task ЛидерПадаетИсключением_ЖдущийЗавершаетсяNull()
+    {
+        var gen = new CrashingGeneration { HoldFirstCall = true };
+        var svc = NewService();
+        svc.GenerateOverride = gen.Invoke;
+        var missing = Path.Combine(_tempDir, "no-such-source.png");
+
+        var leader = svc.GetThumbAsync("rec-3", 0, missing, "image/png", CancellationToken.None);
+        await gen.Started.Task;
+
+        using var waitGuard = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var waiter = svc.GetThumbAsync("rec-3", 0, missing, "image/png", waitGuard.Token);
+
+        gen.Release.SetResult(); // лидер идёт дальше и падает
+
+        var res = await waiter;
+        waitGuard.IsCancellationRequested.Should().BeFalse(
+            "ответ даёт страховка finally в сервисе, а не отмена запроса: ждущий не виснет");
+        res.Should().BeNull("лидер упал — ждущий получает отказ (плитку), не 500");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => leader);
+    }
+
+    // R-F3-a (c2): после падения лидера запись ушла из _inFlight — следующий запрос той же
+    // записи снова лидирует: генерация звалась заново и дошла до результата.
+    // Мутация «убрать _inFlight.TryRemove в finally (:101)»: следующий запрос присоединяется к
+    // мёртвому tcs (его итог false) → null и ни одного нового вызова генерации → тест краснеет.
+    [Fact]
+    public async Task ПослеПаденияЛидера_СледующийЗапросТойЖеЗаписиСноваЛидер()
+    {
+        var gen = new CrashingGeneration();
+        var svc = NewService();
+        svc.GenerateOverride = gen.Invoke;
+        var missing = Path.Combine(_tempDir, "no-such-source.png");
+        var thumb = Path.Combine(ThumbsDir, "rec-4-0.webp");
+
+        var crashed = svc.GetThumbAsync("rec-4", 0, missing, "image/png", CancellationToken.None);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => crashed);
+        gen.Calls.Should().Be(1);
+
+        var res = await svc.GetThumbAsync("rec-4", 0, missing, "image/png", CancellationToken.None);
+
+        res.Should().Be(thumb, "запись снова лидировала: её генерация дошла до результата");
+        File.Exists(thumb).Should().BeTrue("результат — реальный файл миниатюры");
+        gen.Calls.Should().Be(2, "следующий запрос той же записи запустил генерацию сам, а не ждал чужой итог");
     }
 }

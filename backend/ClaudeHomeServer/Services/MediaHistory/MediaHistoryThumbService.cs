@@ -37,6 +37,12 @@ public sealed class MediaHistoryThumbService
         _time = time ?? TimeProvider.System;
     }
 
+    // Тестовый шов (R-F3-a): подмена генерации миниатюры. Нужен, чтобы смоделировать падение
+    // лидера single-flight исключением: у настоящей генерации такого пути нет (каждый отказ
+    // перехвачен и возвращает false), а без падения лидера страховка finally ниже непроверяема.
+    // В проде не выставляется (null) — путь тот же, что был.
+    internal Func<string, string, CancellationToken, Task<bool>>? GenerateOverride { get; set; }
+
     // Путь к миниатюре или null (звук, ffmpeg не готов, отказ). Кэшированную отдаёт сразу
     public async Task<string?> GetThumbAsync(string recordId, int variant, string sourcePath, string contentType, CancellationToken ct)
     {
@@ -84,9 +90,11 @@ public sealed class MediaHistoryThumbService
                     tcs.TrySetResult(true); // соседний запрос успел
                     return thumb;
                 }
-                var ok = contentType.StartsWith("video/", StringComparison.Ordinal)
-                    ? await GenerateVideoThumbAsync(sourcePath, thumb, ct)
-                    : await GenerateImageThumbAsync(sourcePath, thumb, ct);
+                var ok = GenerateOverride is { } gen
+                    ? await gen(sourcePath, thumb, ct)
+                    : contentType.StartsWith("video/", StringComparison.Ordinal)
+                        ? await GenerateVideoThumbAsync(sourcePath, thumb, ct)
+                        : await GenerateImageThumbAsync(sourcePath, thumb, ct);
                 tcs.TrySetResult(ok);
                 return ok ? thumb : null;
             }

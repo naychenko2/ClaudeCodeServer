@@ -221,6 +221,37 @@ export function standHint(data: LocalModelStats): string | null {
   }
 }
 
+// Короткий статус пункта «Локальные модели» в мобильном меню «⋯» (колонка
+// «Подсказка рельса / меню «⋯»» таблицы §4): одно слово или «через м:сс» — строка
+// меню короткая, полные формулировки живут в подсказке рельса (standHint) и в
+// «Дежурстве». Тон и наличие статуса — ровно те же, что у точки (standDot):
+// 'muted' — штатный курс арбитра, 'warning' — то, что само не рассосётся. null —
+// статуса нет: фича в норме или её состояния не знают (опрос второй дорожки живёт
+// только у админа с флагом).
+export type MenuStatusTone = 'muted' | 'warning';
+export interface MenuStatus { text: string; tone: MenuStatusTone }
+
+export function menuStatus(data: LocalModelStats | null): MenuStatus | null {
+  if (!data) return null;
+  switch (data.status) {
+    case 'yielded': {
+      switch (yieldPhase(data)) {
+        case 'starting': return { text: 'загружается', tone: 'muted' };
+        case 'waiting-vram': return { text: 'нет памяти', tone: 'warning' };
+        case 'waiting-return': {
+          // «через м:сс» из остатка паузы; на нуле — «вот-вот», а не «через 0:00»
+          const left = data.duty?.arbiter?.quietLeftS ?? 0;
+          return { text: left > 0 ? `через ${clockLeft(left)}` : 'вот-вот', tone: 'muted' };
+        }
+        default: return { text: 'уступила', tone: 'muted' };
+      }
+    }
+    case 'down': return { text: 'недоступна', tone: 'warning' };
+    default:
+      return arbiterUnreachable(data) ? { text: 'нет арбитра', tone: 'warning' } : null;
+  }
+}
+
 // === Строки «Кто сейчас на модели» ===
 
 // Строка списка: чат со скоростью. Чужой чат — «Чат другого пользователя»

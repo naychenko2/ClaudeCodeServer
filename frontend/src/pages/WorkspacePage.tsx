@@ -37,7 +37,8 @@ import { PillSwitch } from '../components/Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from '../components/ToolbarOverflowMenu';
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
-import { useLocalModelWatcher } from '../features/localModel/useLocalModelWatcher';
+import { getLocalModelBonsai, useLocalModelWatcher } from '../features/localModel/useLocalModelWatcher';
+import { menuStatus } from '../features/localModel/format';
 import { PluginFrame, PluginPanelsSwitcher, useHasInstalledPlugins, useInstalledPlugins, panelDisplayName, pluginIconFor } from '../features/plugins';
 import { BackButton, Button, IconButton, Modal } from '../components/ui';
 import { PageCanvas } from '../components/ui/PageCanvas';
@@ -406,6 +407,11 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   // (ниже), а не в useMemo: базовые счётчики не должны пересобираться на каждый
   // 15-с тик опроса.
   const localModelBadge = localModelVisible ? localModelAction?.indicator?.() ?? null : null;
+  // Короткий статус того же состояния в мобильном меню «⋯» (макет §4, колонка
+  // «меню «⋯»»): тот же снимок лёгкого опроса и тот же standDot-тон, что у точки
+  // рельса — два индикатора не могут разойтись. У не-админа снимка нет (он не
+  // опрашивает вторую дорожку) — статуса нет, как и точки.
+  const localModelMenu = localModelVisible ? menuStatus(getLocalModelBonsai()) : null;
 
   // Восстанавливаем состояние окна для этого проекта (компонент перемонтируется при входе в проект)
   const [leftTab, setLeftTab] = useState<LeftTab>(() => {
@@ -1269,10 +1275,22 @@ const windowWidth = useWindowWidth();
       onClick: () => ensureArchOpen(),
     }] : []),
     // «Локальные модели» — панель подсистемы: пункт есть, только когда гейт (флаг +
-    // admin + configured) открыт; клик открывает её шторкой, а не вкладкой
+    // admin + configured) открыт; клик открывает её шторкой, а не вкладкой.
+    // Справа — короткий статус и точка по макету §4 (тот же тон, что у точки рельса).
+    // Свой ReactNode, а не OverflowItem.dot: её точка всегда accent, а accent на
+    // рельсе занят «что-то идёт прямо сейчас» (макет §4). В норме — ни текста, ни точки.
     ...(localModelVisible && localModelAction ? [{
       key: 'localModel', label: localModelAction.title,
       icon: localModelAction.icon,
+      value: localModelMenu ? (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: C.textMuted }}>
+          {localModelMenu.text}
+          <span style={{
+            width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+            background: localModelMenu.tone === 'warning' ? C.warning : C.textMuted,
+          }} />
+        </span>
+      ) : undefined,
       onClick: () => setLocalModelOpen(true),
     }] : []),
     ...overflowTabItems.slice(splitAt),

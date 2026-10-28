@@ -237,10 +237,19 @@ export const PROJECTS_KEYS: readonly PanelKey[] = ['projectGroups'];
 export const SESSION_KEYS: readonly PanelKey[] = ['plan', 'agents', 'context'];
 
 // Правая зона раздела «Чаты»: панели сессии плюс «Контекст» личного чата.
-// «Локальные модели» (Ф6): это сервер, а не проект — панель доступна и в личном чате
-// (её видимость решает свой isAvailable фичи, и она же решает значок в воркспейсе);
-// точка состояния на значке горит в обоих рельсах.
+// «Локальные модели» (Ф6): это сервер, а не проект — ключ живёт здесь. Но в личном
+// чате панель показываем только админу (chatPanelDefAllowed): у не-админа своего
+// значка в рельсе чата быть не должно (решение Софьи по ревью Ф6; в проекте он
+// видит панель по-прежнему). Точка состояния на значке — там, где виден сам значок:
+// её даёт indicator фичи, и она молчит у не-админа (тот не спрашивает состояние).
 export const CHAT_RIGHT_KEYS: readonly PanelKey[] = [...SESSION_KEYS, 'chatContext', 'localModel'];
+
+// Панель подсистемы в правом рельсе личного чата: «Локальные модели» — только
+// админу (см. выше); остальное решает сама фича (isAvailable, которым ChatsPage
+// проверяет свой вклад в слоте).
+export function chatPanelDefAllowed(name: PanelKey, isAdmin: boolean): boolean {
+  return name !== 'localModel' || isAdmin;
+}
 
 // Панели генерации: в планшетной зоне они держат поток до GEN_PANEL_INLINE_MIN (genPanelPlacement).
 // Источник один — lib/genPanelKeys.ts, вторая копия в lib/genPanelDismissed.ts отдаёт тот же список

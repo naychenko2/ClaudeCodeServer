@@ -134,7 +134,7 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
 
   // Тяжёлый 2-с опрос — только АКТИВНОЙ вкладки (неактивная на паузе):
   // «LLM» — stats, «Медиа» — media, «Железо» — hardware; переключение — немедленный снимок.
-  const { data: textData, loading: textLoading, refetch: textRefetch } = useLocalModelStats(visible && tab === 'text', window, engine);
+  const { data: textData, loading: textLoading, error: textError, refetch: textRefetch } = useLocalModelStats(visible && tab === 'text', window, engine);
   const { data: mediaData, loading: mediaLoading, refetch: mediaRefetch } = useLocalModelMedia(visible && tab === 'media');
   const { data: hwData, loading: hwLoading } = useLocalModelHardware(visible && tab === 'hardware', hwWindow);
 
@@ -162,7 +162,7 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   const body = (
     <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: SP.md, padding: SP.md }}>
       {tab === 'text'
-        ? <TextTab data={textData} loading={textLoading} isMobile={ctx.isMobile} onOpenChat={onOpenChat} onRefetch={textRefetch} onOpenHardware={() => changeTab('hardware')} onOpenMedia={() => changeTab('media')} window={window} onWindowChange={setWindow} engines={engines} engine={engine} onEngineChange={setEngine} />
+        ? <TextTab data={textData} loading={textLoading} error={textError} isMobile={ctx.isMobile} onOpenChat={onOpenChat} onRefetch={textRefetch} onOpenHardware={() => changeTab('hardware')} onOpenMedia={() => changeTab('media')} window={window} onWindowChange={setWindow} engines={engines} engine={engine} onEngineChange={setEngine} />
         : tab === 'hardware'
           ? <HardwareTab data={hwData} loading={hwLoading} isMobile={ctx.isMobile} window={hwWindow} onWindowChange={setHwWindow} />
           : <MediaTab data={mediaData} loading={mediaLoading} isMobile={ctx.isMobile} onOpenChat={onOpenChat} onRefetch={mediaRefetch} onOpenHardware={() => changeTab('hardware')} />}

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { OfflineError } from '../../lib/offline';
 import { mockBonsaiStats, mockLocalModelStats } from './localModel.fixtures';
 import {
   configuredFetch,
@@ -194,6 +195,63 @@ describe('createStatsPoller: движок снимка (MAJOR 1-2)', () => {
     await vi.advanceTimersByTimeAsync(0); // отказ нового движка
     expect(p.getSnapshot().data).toBeNull(); // не данных предыдущего стенда
     expect(p.getSnapshot().loading).toBe(false);
+    p.dispose();
+  });
+});
+
+// Ф10: признак сбоя в снимке — вкладка без данных объясняет причину, а не молчит.
+// Мутация «не ставить error в catch» краснит первый тест; «не гасить error при
+// успехе» — его вторую половину; «не различать OfflineError» — второй тест.
+describe('createStatsPoller: error в снимке (Ф10)', () => {
+  const mock = mockLocalModelStats();
+  const timers = (fn: () => void, ms: number) => setInterval(fn, ms);
+  const untimer = (id: unknown) => clearInterval(id as ReturnType<typeof setInterval>);
+
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('OfflineError — error: offline без данных; следующий успех гасит его', async () => {
+    const fetch = vi.fn<() => Promise<typeof mock>>();
+    fetch.mockRejectedValueOnce(new OfflineError());
+    fetch.mockResolvedValue(mock);
+    const p = createStatsPoller(fetch, 2000, timers, untimer);
+    p.setActive(true, true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p.getSnapshot().data).toBeNull(); // данных ещё никогда не было
+    expect(p.getSnapshot().error).toBe('offline');
+    expect(p.getSnapshot().loading).toBe(false);
+    await vi.advanceTimersByTimeAsync(2000); // следующий тик успешен
+    expect(p.getSnapshot().data).toEqual(mock);
+    expect(p.getSnapshot().error).toBeNull();
+    p.dispose();
+  });
+
+  it('прочий сбой — error: failed (не offline)', async () => {
+    const fetch = vi.fn<() => Promise<typeof mock>>().mockRejectedValue(new Error('500'));
+    const p = createStatsPoller(fetch, 2000, timers, untimer);
+    p.setActive(true, true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p.getSnapshot().error).toBe('failed');
+    p.dispose();
+  });
+
+  it('смена движка гасит error вместе со снимком: он относился к старому стенду', async () => {
+    const engine = { current: 'main' as 'main' | 'bonsai' };
+    const fetch = vi.fn<() => Promise<typeof mock>>();
+    fetch.mockResolvedValueOnce(mock); // main ответил
+    fetch.mockRejectedValueOnce(new OfflineError()); // main офлайн (данные остаются)
+    fetch.mockImplementationOnce(() => new Promise<typeof mock>(() => {})); // запрос bonsai «в пути»
+    const p = createStatsPoller(fetch, 2000, timers, untimer, engine);
+    p.setActive(true, true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p.getSnapshot().data).toEqual(mock);
+    await vi.advanceTimersByTimeAsync(2000); // следующий тик — отказ main
+    expect(p.getSnapshot().data).toEqual(mock); // прежние данные показаны
+    expect(p.getSnapshot().error).toBe('offline');
+    engine.current = 'bonsai';
+    p.refetch(); // смена движка → немедленный запрос нового
+    expect(p.getSnapshot().data).toBeNull();
+    expect(p.getSnapshot().error).toBeNull(); // чужая причина под новым выбором не показывается
     p.dispose();
   });
 });

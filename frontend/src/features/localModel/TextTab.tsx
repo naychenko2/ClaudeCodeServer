@@ -5,7 +5,9 @@
 // Состояния: notConnected — пустое состояние с кнопкой в «Поставщики моделей»;
 // down — баннер «не отвечает с HH:MM» + последние данные приглушённые (opacity .55,
 // pointer-events: none); загрузка — скелетоны; поле в `unsupported` — строка
-// «Движок {имя} это не сообщает» вместо блока (нули не рисуем).
+// «Движок {имя} это не сообщает» вместо блока (нули не рисуем);
+// нет данных из-за сбоя поллера (error из снимка) — карточка «Нет связи с
+// сервером» / «Не удалось получить данные» (Ф10): пустое тело всегда объяснён.
 //
 // Стенд второй модели (Bonsai, макет docs/mockups/bonsai-toolbar.md): тот же порядок
 // блоков, движок — параметр `engine`. Отличия по макету §3–§4:
@@ -23,12 +25,13 @@
 //   если снимок принёс duty (макет §3/§5); переход «→ Медиа» — через onOpenMedia от панели.
 
 import { type CSSProperties } from 'react';
-import { AlertTriangle, CirclePause, Plug, FolderOpen } from 'lucide-react';
+import { AlertTriangle, CirclePause, Plug, FolderOpen, Unplug } from 'lucide-react';
 import { C, FONT, FS, R, SP, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import { Button, EmptyState, InlineSegmented } from '../../components/ui';
 import { requestOpenModelsSpend } from '../../lib/modelProvidersNav';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import type { LocalModelEngine, LocalModelEngineName, LocalModelStats } from './api';
+import type { StatsPollError } from './useLocalModelStats';
 import {
   formatGpuMem, formatPower, formatSince, formatTps, formatUpdatedAt, gpuCountLabel, notReportedText, whoRows,
   standDot, standHint, statusPill, yieldPhase, type StatusTone, type WhoRow,
@@ -591,6 +594,28 @@ function NotConnected() {
   );
 }
 
+// === «Нет связи» / сбой опроса (Ф10) ===
+// Связь оборвалась до первого ответа stats (или сразу после смены движка — поллер
+// сбрасывает снимок): вместо пустого тела — спокойная карточка, объясняющая
+// причину. Чисел «как текущих» здесь нет по построению: данных нет — показывать
+// нечего. Тон — не авария: опрос продолжается сам, карточка гаснет с первым
+// успешным ответом. Формулировка — по признаку из снимка поллера: 'offline' —
+// нет связи с сервером, 'failed' — прочий сбой запроса.
+function NoConnection({ error }: { error: StatsPollError }) {
+  const offline = error === 'offline';
+  return (
+    <EmptyState
+      icon={offline
+        ? <Unplug size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />
+        : <AlertTriangle size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />}
+      title={offline ? 'Нет связи с сервером' : 'Не удалось получить данные'}
+      subtitle={offline
+        ? 'Данные появятся, как только связь вернётся.'
+        : 'Повторим автоматически.'}
+    />
+  );
+}
+
 // === Загрузка: скелетоны блоков (C.bgInset, пульс; reduced-motion — статично) ===
 function TextTabSkeleton() {
   const reduced = usePrefersReducedMotion();
@@ -617,9 +642,12 @@ function TextTabSkeleton() {
 // engines — список движков для переключателя (пустой/один — переключателя нет);
 // onEngineChange — выбор человека (панель пишет его в стор Ф1, тот в localStorage);
 // onOpenMedia — переход на вкладку «Медиа» по ссылке «→ Медиа» в «Дежурстве».
-export function TextTab({ data, loading, isMobile, onOpenChat, onRefetch, onOpenHardware, onOpenMedia, window, onWindowChange, engines, engine = 'main', onEngineChange }: {
+export function TextTab({ data, loading, error, isMobile, onOpenChat, onRefetch, onOpenHardware, onOpenMedia, window, onWindowChange, engines, engine = 'main', onEngineChange }: {
   data: LocalModelStats | null;
   loading: boolean;
+  // Причина последнего сбоя поллера (из снимка, Ф10): без данных определяет,
+  // объяснять ли пустоту. Не передан или null — прежнее поведение.
+  error?: StatsPollError | null;
   isMobile: boolean;
   onOpenChat: (sessionId: string) => void;
   onRefetch: () => void;
@@ -631,7 +659,11 @@ export function TextTab({ data, loading, isMobile, onOpenChat, onRefetch, onOpen
   engine?: LocalModelEngineName;
   onEngineChange?: (e: LocalModelEngineName) => void;
 }) {
-  // Первое открытие до первого ответа — скелетоны
+  // Порядок состояний (Ф10): известная причина важнее скелетона — при сбое и
+  // идущем параллельно повторном опросе (loading) карточка остаётся спокойной и
+  // не мигает скелетоном каждые 2 с. Скелетон — только когда причины ещё нет:
+  // первое открытие до первого ответа.
+  if (!data && error) return <NoConnection error={error} />;
   if (loading && !data) return <TextTabSkeleton />;
   if (!data) return null;
   if (data.status === 'notConnected') return <NotConnected />;

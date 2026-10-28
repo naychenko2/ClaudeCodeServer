@@ -382,3 +382,36 @@ describe('блок «Дежурство» в стенде (интеграция,
     expect(html.lastIndexOf('>Дежурство</h3>')).toBeGreaterThan(html.lastIndexOf('>Кто сейчас на модели</h3>'));
   });
 });
+
+// Ф10: нет данных из-за сбоя поллера — пустое тело объяснён карточкой. Мутация
+// «убрать ветку NoConnection» краснит первый тест; «не различать offline/failed»
+// — второй; «переставить скелетон раньше карточки» — третий.
+describe('нет данных при сбое — объяснение вместо пустого тела (Ф10)', () => {
+  it('offline — «Нет связи с сервером», без чисел как текущих', () => {
+    const html = renderTab({ data: null, loading: false, error: 'offline' });
+    expect(html).toContain('Нет связи с сервером');
+    expect(html).toContain('Данные появятся, как только связь вернётся');
+    // ни одного блока стенда: карточка одна (подстрока статуса — «обновлено …»)
+    expect(html).not.toContain('Кто сейчас');
+    expect(html).not.toContain('обновлено');
+  });
+  it('failed — «Не удалось получить данные. Повторим автоматически.», не «Нет связи»', () => {
+    const html = renderTab({ data: null, loading: false, error: 'failed' });
+    expect(html).toContain('Не удалось получить данные');
+    expect(html).toContain('Повторим автоматически');
+    expect(html).not.toContain('Нет связи с сервером');
+  });
+  it('сбой и параллельный повторный опрос (loading) — карточка, не мигающий скелетон', () => {
+    const html = renderTab({ data: null, loading: true, error: 'offline' });
+    expect(html).toContain('Нет связи с сервером');
+    // скелетон — это пульс «ccs-lm-skeleton»; у карточки его нет (aria-hidden
+    // не маркер: lucide-иконки несут его сами)
+    expect(html).not.toContain('ccs-lm-skeleton');
+  });
+  it('первое открытие без причины — прежний скелетон; без данных и без error — пусто', () => {
+    const skel = renderTab({ data: null, loading: true });
+    expect(skel).not.toContain('Нет связи с сервером');
+    expect(skel).toContain('aria-hidden'); // скелетон — прежнее поведение
+    expect(renderTab({ data: null, loading: false })).not.toContain('Нет связи с сервером');
+  });
+});

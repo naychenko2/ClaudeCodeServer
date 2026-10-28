@@ -4,6 +4,7 @@
 // подписки, useSyncExternalStore.
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { OfflineError } from '../../lib/offline';
 import { fetchLocalModelMedia, fetchLocalModelStats, type LocalModelEngineName, type LocalModelStats } from './api';
 import { DEFAULT_WINDOW, type Window as StatsWindow } from './ThroughputChart';
 
@@ -129,9 +130,15 @@ export function useLocalModelConfiguredPolling(source: ConfiguredSource | null, 
 // === Тяжёлый опрос (2 с) — только пока панель открыта и вкладка видима ===
 // Чистый контроллер: тест проверяет его без React. open — панель смонтирована,
 // visible — document.visibilityState === 'visible'; опрос идёт, только когда оба.
+
+// Причина последнего сбоя опроса (Ф10): 'offline' — нет связи с сервером
+// (OfflineError из lib/offline), 'failed' — прочие сбои. null — последний опрос
+// успешен. Нужен вкладке: без данных она объясняет причину, а не остаётся пустой.
+export type StatsPollError = 'offline' | 'failed';
+
 export interface StatsPoller {
   setActive(open: boolean, visible: boolean): void;
-  getSnapshot(): { data: LocalModelStats | null; loading: boolean };
+  getSnapshot(): { data: LocalModelStats | null; loading: boolean; error: StatsPollError | null };
   subscribe(fn: () => void): () => void;
   // Внеочередной опрос (кнопка «Проверить сейчас»): работает, пока панель активна
   refetch(): void;
@@ -156,6 +163,10 @@ export function createStatsPoller(
   // Рядом с data — чтобы поздний ответ старого движка не затёр данные нового.
   let dataEngine: LocalModelEngineName | null = null;
   let loading = false;
+  // Причина последнего сбоя (Ф10): ставится в catch, гасится успехом опроса.
+  // С данными она не видна (показываем последние данные), без данных вкладка
+  // по ней объясняет пустоту вместо молчания.
+  let error: StatsPollError | null = null;
   let active = false;
   let timer: unknown = null;
   let inflight = 0;
@@ -164,12 +175,13 @@ export function createStatsPoller(
 
   // Снимок кэшируем: useSyncExternalStore сравнивает по Object.is, а новый
   // объект на каждый вызов getSnapshot — бесконечный ререндер (React #185).
-  // Пересобираем только при реальном изменении data/loading/inflight.
-  let snapshot: { data: LocalModelStats | null; loading: boolean } = { data: null, loading: false };
+  // Пересобираем только при реальном изменении data/loading/error/inflight.
+  let snapshot: { data: LocalModelStats | null; loading: boolean; error: StatsPollError | null } =
+    { data: null, loading: false, error: null };
   const refresh = () => {
     const nextLoading = loading || inflight > 0;
-    if (snapshot.data !== data || snapshot.loading !== nextLoading) {
-      snapshot = { data, loading: nextLoading };
+    if (snapshot.data !== data || snapshot.loading !== nextLoading || snapshot.error !== error) {
+      snapshot = { data, loading: nextLoading, error };
     }
   };
 
@@ -179,9 +191,11 @@ export function createStatsPoller(
     if (dataEngine !== null && dataEngine !== reqEngine) {
       // Сменили движок: цифры другого стенда под новым выбором быть не должно —
       // снимок сбрасывается сразу, до ответа нового (отказ нового движка не
-      // оставляет чужих данных).
+      // оставляет чужих данных). error — часть снимка: она относилась к старому
+      // стенду, под новым выбором её показывает следующий опрос.
       data = null;
       dataEngine = null;
+      error = null;
       loading = true;
     }
     inflight++;
@@ -198,12 +212,15 @@ export function createStatsPoller(
       data = d;
       dataEngine = reqEngine;
       loading = false;
+      error = null; // успех гасит причину: вкладка снова показывает данные
       inflight--;
       refresh();
       emit();
-    }).catch(() => {
+    }).catch((err: unknown) => {
       // Сбой опроса не критичен: показываем последние данные; после смены движка
-      // их нет — так и остаёмся без данных, а не с чужими
+      // их нет — так и остаёмся без данных, а не с чужими. Без данных вкладка
+      // объясняет причину по error (Ф10), а не молчит.
+      error = err instanceof OfflineError ? 'offline' : 'failed';
       inflight--;
       loading = false;
       refresh();
@@ -246,6 +263,7 @@ export function useLocalModelStats(
 ): {
   data: LocalModelStats | null;
   loading: boolean;
+  error: StatsPollError | null;
   refetch: () => void;
 } {
   const windowRef = useRef<StatsWindow>(window);

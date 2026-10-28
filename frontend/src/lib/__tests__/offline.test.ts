@@ -1,11 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-// Мокаем IndexedDB-обёртку целиком: offline.ts работает с ней только через idbGet/idbSet
-const { idbGet, idbSet } = vi.hoisted(() => ({
+// Мокаем IndexedDB-обёртку целиком: офлайн-пути этого файла работают с ней через
+// idbGet/idbSet/idbDelete
+const { idbGet, idbSet, idbDelete } = vi.hoisted(() => ({
   idbGet: vi.fn(),
   idbSet: vi.fn(),
+  idbDelete: vi.fn(),
 }));
-vi.mock('../idb', () => ({ idbGet, idbSet }));
+vi.mock('../idb', () => ({ idbGet, idbSet, idbDelete }));
 
 // Простая замена Web Storage
 function storageStub(init: Record<string, string> = {}) {
@@ -44,6 +46,8 @@ beforeEach(async () => {
   idbGet.mockReset();
   idbSet.mockReset();
   idbSet.mockResolvedValue('key');
+  idbDelete.mockReset();
+  idbDelete.mockResolvedValue(undefined);
 
   fetchMock = vi.fn();
   dispatched = [];
@@ -183,6 +187,36 @@ describe('request: потолок веса по-чатовой записи (F3-
     expect(idbSet).not.toHaveBeenCalled();
 
     // Офлайн-чтение той же истории — miss: в кэше её нет
+    fetchMock.mockRejectedValue(new TypeError('failed to fetch'));
+    await expect(offline.request(chatUrl, { chatScope: 'c1' })).rejects.toThrowError(offline.OfflineError);
+  });
+
+  it('ответ тяжелее потолка удаляет прежнюю запись под тем же ключом; офлайн-чтение — miss', async () => {
+    // Чат вырос за потолок: новый ответ в кэш не пишется, но и прежняя запись (раньше
+    // влезала в стор) больше не отвечает текущему запросу — её удаляем, иначе офлайн
+    // отдавал бы старую ленту вместо miss. Стор — фейковое хранилище: мок idbGet
+    // отражает прежнюю запись, иначе дефект не ловится.
+    const store = new Map<string, { data: unknown; savedAt: number; bytes?: number }>();
+    store.set(chatKey, { data: { d: 'old' }, savedAt: 1, bytes: 2_500_000 });
+    idbGet.mockImplementation((k: string) => Promise.resolve(store.get(k)));
+    idbSet.mockImplementation((k: string, v: unknown) => { store.set(k, v as { data: unknown; savedAt: number; bytes?: number }); return Promise.resolve(k); });
+    idbDelete.mockImplementation((k: string) => { store.delete(k); return Promise.resolve(undefined); });
+
+    const body = { blob: 'x'.repeat(offline.CHAT_CLASS_MAX_BYTES) };
+    expect(JSON.stringify(body).length).toBeGreaterThan(offline.CHAT_CLASS_MAX_BYTES);
+    fetchMock.mockResolvedValue(jsonResponse(body));
+
+    const data = await offline.request<typeof body>(chatUrl, { chatScope: 'c1' });
+
+    // Сетевой ответ отдаётся как обычно; новая запись не пишется…
+    expect(data).toEqual(body);
+    const written = idbSet.mock.calls.find(c => c[0] === chatKey);
+    expect(written).toBeUndefined();
+    // …а прежняя — удалена из стора
+    expect(idbDelete).toHaveBeenCalledWith(chatKey);
+    expect(store.has(chatKey)).toBe(false);
+
+    // Офлайн-чтение той же истории — miss, а не старая лента
     fetchMock.mockRejectedValue(new TypeError('failed to fetch'));
     await expect(offline.request(chatUrl, { chatScope: 'c1' })).rejects.toThrowError(offline.OfflineError);
   });

@@ -335,18 +335,22 @@ public static class ClaudeRuntimeSettings
     public static IEnumerable<string> HooksOffArgs(IProcessLauncher launcher, bool browserEnabled = true, string? wikiDenyDataDir = null) =>
         launcher.IsSandboxed ? [] : ["--settings", EnsureFile(launcher.HostTempDir, browserEnabled, wikiDenyDataDir)];
 
-    // deny-правила вики для settings CLI: Edit/Write/NotebookEdit по всему поддереву
-    // {dataDir}/wiki/. «//» — абсолютный путь в синтаксисе правил CLI (одинарная «/» резолвится
-    // относительно файла настроек — другая семантика), «/**» — всё поддерево. Путь пишется
-    // слэшами: боевой сервер на Linux; формат правила для Windows-хоста не проверялся.
+    // deny-правило вики для settings CLI: Edit по всему поддереву {dataDir}/wiki/ — ОДНО, а не
+    // три (ревью S1c, Н1): CLI 2.1.310 матчит файловые проверки только по Edit(path), правила
+    // Write/NotebookEdit инертны и дают в снимке настроек securityNotice «never matches».
+    // Все три инструмента по-прежнему закрывает серверный backstop
+    // (ClaudeSession.DecidePermissionAsync) — он ниже по коду и в тестах.
+    // Форма — «//» + абсолютный корень без своего ведущего слеша, ровно «Edit(//<корень>/wiki/**)»:
+    // «//» — абсолютный путь в синтаксисе правил CLI (одинарная «/» резолвится относительно
+    // файла настроек — другая семантика), «/**» — всё поддерево; лишний слеш на стыке давал бы
+    // «///…». Путь пишется слэшами: боевой сервер на Linux; формат правила для Windows-хоста не
+    // проверялся (TrimStart('/') на «C:/…» не действует — Windows-корень остаётся как был).
     // Имя папки — та же константа WikiPaths.DirName, что у предиката: две копии «wiki»
     // разошлись бы молчанием CLI при переименовании.
     internal static IReadOnlyList<string> WikiDenyRules(string dataDir)
     {
-        var root = dataDir.Replace('\\', '/').TrimEnd('/');
-        return new[] { "Edit", "Write", "NotebookEdit" }
-            .Select(t => $"{t}(//{root}/{WikiPaths.DirName}/**)")
-            .ToList();
+        var root = dataDir.Replace('\\', '/').TrimEnd('/').TrimStart('/');
+        return [$"Edit(//{root}/{WikiPaths.DirName}/**)"];
     }
 
     // Ленивая запись файла настроек; путь кэшируется по режиму. Файл эфемерный

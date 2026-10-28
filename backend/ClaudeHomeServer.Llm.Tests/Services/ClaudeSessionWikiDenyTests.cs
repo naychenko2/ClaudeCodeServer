@@ -13,7 +13,8 @@ namespace ClaudeHomeServer.Tests.Services;
 // (единственный писатель вики — Хранитель). Проверяется решение DecidePermissionAsync,
 // не живой CLI: в acceptEdits правку до сервера не доносит (её отсекает статический
 // deny настроек запуска — см. ClaudeRuntimeSettingsTests), сюда приходят обычный режим,
-// «всегда разрешать», исполнитель задачи и пути через «..».
+// «всегда разрешать», исполнитель задачи, acceptEdits-персона (её автономный allow) и пути
+// через «..».
 // Каждый отказ-кейс отвечает и на сломанном коде: если правка всё же ушла на карточку,
 // тест отвечает на неё и краснеет на признаке «карточки быть не должно» — не висит
 // до 60-минутного таймаута ожидания.
@@ -31,11 +32,16 @@ public class ClaudeSessionWikiDenyTests
     }
 
     private static (ClaudeSession Session, List<ServerMessage> Sent, string Root) NewSession(
-        string? dataDir, string? root = null, bool taskExecution = false, List<string>? autoAllow = null)
+        string? dataDir, string? root = null, bool taskExecution = false, List<string>? autoAllow = null,
+        string? personaId = null, ClaudeMode? mode = null)
     {
         root ??= NewDir("root");
         var sent = new List<ServerMessage>();
         var info = new Session { TaskExecution = taskExecution, AutoAllowTools = autoAllow ?? [] };
+        // Mode по умолчанию — AcceptEdits (Session.cs); без явной персоны эта ветка не
+        // срабатывает (она требует PersonaId), поэтому прежние кейсы остаются на карточке.
+        if (personaId is not null) info.PersonaId = personaId;
+        if (mode is not null) info.Mode = mode.Value;
         var context = new LlmSessionContext(
             RootPath: root,
             OnMessage: msg => { lock (sent) sent.Add(msg); return Task.CompletedTask; },
@@ -96,6 +102,26 @@ public class ClaudeSessionWikiDenyTests
 
         (await pending.WaitAsync(TimeSpan.FromSeconds(10))).Should().Be("deny");
         lock (sent) sent.Should().BeEmpty("встроенный deny не порождает карточку разрешения");
+    }
+
+    // Чат с персоной в AcceptEdits — автономный: правку файла он на карточку не выносит
+    // вовсе (решение 22.10), и без wiki-deny Edit ушёл бы «автономно» — allow мимо отказа.
+    // Ветка вики стоит ПЕРЕД этой веткой (ревью S1c, Н4): отказ остаётся и здесь, без карточки.
+    [Fact]
+    public async Task ПерсонаВАcceptEdits_ЗаписьВФайлВики_ОтказБезКарточки()
+    {
+        var data = NewDir("data");
+        var (session, sent, _) = NewSession(data, personaId: "p1", mode: ClaudeMode.AcceptEdits);
+        await using var _ = session;
+
+        var target = Path.Combine(data, "wiki", "owner-1", "pages", "Хроника.md");
+        var pending = DecideAsync(session, "req-1", "Edit", "file_path", target);
+        await ResolveIfCardAppeared(session, sent, "req-1");
+
+        // На перенесённом ниже deny авто-allow вернёт "allow" немедленно, карточки не будет
+        // вовсе — краснеет ровно этот первый признак, а не ожидание карточки.
+        (await pending.WaitAsync(TimeSpan.FromSeconds(10))).Should().Be("deny");
+        lock (sent) sent.Should().BeEmpty("автономный allow acceptEdits-персоны не обходит отказ");
     }
 
     // Сам корень вики и путь через «..» — тоже вики (тот же канонический предикат, что в Notes).

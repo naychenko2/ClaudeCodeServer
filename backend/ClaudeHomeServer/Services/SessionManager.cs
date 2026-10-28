@@ -974,8 +974,11 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // Llm.ChatTopicMigration.Apply.
         _teamNotifier = this;
 
+        // Корень берётся через GetFullPath (тот же приём, что у Program.cs и NotesService):
+        // относительный DataPath отдал бы в deny-правило CLI относительный корень, а «//…» в
+        // синтаксисе правил — абсолютный путь (ревью S1c, Н5).
         var dataDir = Path.GetDirectoryName(
-            config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
+            Path.GetFullPath(config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json")))
             ?? Path.Combine(AppContext.BaseDirectory, "data");
         _sessionsFilePath = Path.Combine(dataDir, "sessions.json");
         _dataDir = dataDir;

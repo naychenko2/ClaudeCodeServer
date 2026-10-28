@@ -158,6 +158,9 @@ public sealed partial class NotesService
             ?? throw new InvalidOperationException("Заметка не является комментарием к документу");
         if (ann.IsReply)
             throw new InvalidOperationException("Перепривязывается корневой комментарий, а не ответ");
+        // Файл комментария под data/wiki/ — не наш: отказ до любого чтения/записи, чтобы
+        // документ не получил ^id в половину операции (ревью S1a, MAJOR 3).
+        EnsureNotWiki(note.FullPath);
 
         var (docFull, canWriteId) = ResolveDoc(userId, ann.DocScope, ann.DocPath);
         if (!File.Exists(docFull)) throw new KeyNotFoundException("Документ не найден");
@@ -322,6 +325,10 @@ public sealed partial class NotesService
             else if (prefix && a.DocPath.StartsWith(oldRel + "/", StringComparison.OrdinalIgnoreCase))
                 updatedPath = newRel + a.DocPath[oldRel.Length..];
             if (updatedPath is null) continue;
+            // Писатель побочный: файл комментария под data/wiki/ пропускаем пофайлово,
+            // как в RewriteLinks/RemoveWikilinksTo, — до try, чтобы не было полузаписи;
+            // обычный комментарий переписывается (ревью S1a, MAJOR 3).
+            if (WikiPaths.IsWikiPath(n.FullPath, _dataDir)) continue;
 
             var annotates = $"{newScope}/{updatedPath}" + (a.BlockId is not null ? $"#^{a.BlockId}" : "");
             try
@@ -453,6 +460,9 @@ public sealed partial class NotesService
         var rootDir = ResolveRoot(userId, sourceKey);
         var full = SafePath.Join(rootDir, relPath);
         if (!File.Exists(full)) return null;
+        // Файл комментария под data/wiki/ — не наш: тот же жёсткий отказ, что у Create/Update/Delete
+        // (ревью S1a, MAJOR 3: «комментарий создаётся только через Create» защитой не является).
+        EnsureNotWiki(full);
 
         var content = File.ReadAllText(full, Encoding.UTF8);
         if (ParseFrontmatter(content, "").Annotation is null)

@@ -55,10 +55,13 @@ public class NotesWikiGateTests : IDisposable
 
     // Охраняемые: вызов с путём под data/wiki/ → wiki_readonly. Список — ровно
     // мутирующие методы NotesService по ADR-035, решение 2; Move проверяет обе стороны.
+    // Писатели frontmatter комментариев (Repin/SetStatus) — тоже охраняемые: файл
+    // комментария мог попасть под data/wiki/ помимо Create (ревью S1a, MAJOR 3).
     private static readonly string[] GuardedMethods =
     [
         "Create", "Update", "Delete", "Move", "MoveFolder",
         "CreateFolder", "DeleteFolder", "LinkMention",
+        "RepinAnnotation", "SetAnnotationStatus",
     ];
 
     // Всё остальное публичное — чтение (не пишет) или не способно записать под data/wiki/:
@@ -80,10 +83,8 @@ public class NotesWikiGateTests : IDisposable
         ["GetOrCreateDaily"] = "пишет только Journal/ личного vault: ResolveRoot(PersonalKey) = data/notes/{u} — не зайдёт под data/wiki/",
         ["RemoveWikilinksTo"] = "побочный писатель: пропускает файлы под data/wiki/ (тест RemoveWikilinksTo_ПропускаетФайлыПодDataWiki)",
         ["Annotate"] = "побочный писатель: не пишет ^id в файл под data/wiki/ (ResolveDoc); сам комментарий создаётся через Create (охраняем)",
-        ["RepinAnnotation"] = "побочный писатель: то же ядро, что у Annotate (ResolveSelectionAnchor ← ResolveDoc), ^id в вику не пишет",
         ["Reply"] = "создаёт заметку через Create (охраняем)",
-        ["RewriteAnnotationTargets"] = "пишет frontmatter только комментариев; комментарий создаётся только через Create (охраняем)",
-        ["SetAnnotationStatus"] = "пишет frontmatter только комментариев; та же причина",
+        ["RewriteAnnotationTargets"] = "побочный писатель: пропускает файлы под data/wiki/ пофайлово (тест RewriteAnnotationTargets_ПропускаетФайлПодDataWiki)",
     };
 
     [Fact]
@@ -150,6 +151,14 @@ public class NotesWikiGateTests : IDisposable
         WriteFile(Path.Combine(_vault, "Цель.md"), "# Цель");
         WriteWikiNote("Упоминание", "# Упоминание\n\nЗдесь есть Цель без связи.");
         yield return ("LinkMention", () => _sut.LinkMention(User, IdOf("Упоминание"), "Цель"));
+
+        // Писатели frontmatter комментариев (ревью S1a, MAJOR 3): файл комментария под
+        // data/wiki/ — отказ, до любого чтения/записи.
+        WriteWikiComment("Коммент-статус");
+        yield return ("SetAnnotationStatus", () => _sut.SetAnnotationStatus(User, IdOf("Коммент-статус"), "resolved"));
+        WriteWikiComment("Коммент-репин");
+        yield return ("RepinAnnotation", () => _sut.RepinAnnotation(User, IdOf("Коммент-репин"),
+            new AnnotateSelection(0, 10, "не важно — отказ раньше")));
     }
 
     // ─── Побочные писатели: файлы под вики не трогает никто, кроме Хранителя ──
@@ -204,6 +213,57 @@ public class NotesWikiGateTests : IDisposable
         Sha256(doc).Should().Be(before);
     }
 
+    // ─── Писатели frontmatter комментариев (ревью S1a, MAJOR 3) ──────────────
+    // Файл комментария мог попасть под data/wiki/ помимо Create: остаться от прежней
+    // версии вики, переехать с проектом-источником, быть создан мимо сервера.
+
+    [Fact]
+    public void SetAnnotationStatus_ОтказываетПоФайлуПодDataWiki()
+    {
+        var file = WriteWikiComment("Коммент-статус");
+        var before = Sha256(file);
+
+        var ex = Record.Exception(() => _sut.SetAnnotationStatus(User, IdOf("Коммент-статус"), "resolved"));
+
+        ex.Should().BeOfType<WikiReadOnlyException>();
+        Sha256(file).Should().Be(before); // статус не переписан
+    }
+
+    [Fact]
+    public void RepinAnnotation_ОтказываетПоФайлуПодDataWiki()
+    {
+        // Документ — обычная заметка личного vault: без отказа она получила бы новый ^id,
+        // а комментарий под вики остался бы с прежним annotates — полузапись. Отказ стоит
+        // до ResolveDoc: ни файл, ни документ не тронуты.
+        WriteFile(Path.Combine(_vault, "Документ.md"), "# Документ\n\nТекст абзаца для цитаты.\n");
+        var file = WriteWikiComment("Коммент-репин", docPath: "personal/Документ.md");
+        var before = Sha256(file);
+        var docBefore = Sha256(Path.Combine(_vault, "Документ.md"));
+
+        var ex = Record.Exception(() => _sut.RepinAnnotation(User, IdOf("Коммент-репин"),
+            new AnnotateSelection(11, 34, "Текст абзаца для цитаты.")));
+
+        ex.Should().BeOfType<WikiReadOnlyException>();
+        Sha256(file).Should().Be(before);
+        Sha256(Path.Combine(_vault, "Документ.md")).Should().Be(docBefore);
+    }
+
+    [Fact]
+    public void RewriteAnnotationTargets_ПропускаетФайлПодDataWiki()
+    {
+        // Тот же пропуск пофайлово, что у RewriteLinks/RemoveWikilinksTo: обычный
+        // комментарий переписывается, файл под вики — нет; пропуск до try, полузаписи нет.
+        var normal = WriteCommentIn(_vault, "Коммент-обычный");
+        var wiki = WriteWikiComment("Коммент-вики");
+        var wikiBefore = Sha256(wiki);
+
+        var changed = _sut.RewriteAnnotationTargets(User, "personal", "Документ.md", "personal", "Документ-новая.md");
+
+        changed.Should().Be(1); // только обычный
+        File.ReadAllText(normal).Should().Contain("annotates: \"personal/Документ-новая.md\"");
+        Sha256(wiki).Should().Be(wikiBefore); // файл под вики — нет
+    }
+
     // ─── Помощники ───────────────────────────────────────────────────────────
 
     // Заголовок заметки = имя файла: иначе IdOf по заголовку не найдёт заметку
@@ -211,6 +271,26 @@ public class NotesWikiGateTests : IDisposable
     {
         var full = Path.Combine(_wikiNotes, title + ".md");
         File.WriteAllText(full, content ?? $"# {title}", new UTF8Encoding(false));
+        return full;
+    }
+
+    // Файл-комментарий: обычная .md-заметка с frontmatter annotates (тот же формат, что
+    // пишет Annotate). Под data/wiki/ — «унаследованный» комментарий: создан мимо сервера.
+    private string WriteWikiComment(string title, string docPath = "personal/Документ.md") =>
+        WriteCommentIn(_wikiNotes, title, docPath);
+
+    private static string WriteCommentIn(string dir, string title, string docPath = "personal/Документ.md")
+    {
+        var full = Path.Combine(dir, "Комментарии", title + ".md");
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        File.WriteAllText(full,
+            "---\n" +
+            $"title: {title}\n" +
+            $"annotates: \"{docPath}\"\n" +
+            "anchor_quote: \"Текст абзаца для цитаты.\"\n" +
+            "status: open\n" +
+            "---\n\n> Текст абзаца для цитаты.\n",
+            new UTF8Encoding(false));
         return full;
     }
 

@@ -14,7 +14,20 @@ internal static class FeatureStepAccounting
     internal sealed record Result(
         List<FeatureStepChain> Chains,
         FeatureStepProgress Progress,
-        List<FeatureLane> Lanes);
+        List<FeatureLane> Lanes,
+        // Вспомогательные факты цепочки для сверки трекера (TR-B1a, разрез Александра 26.10):
+        // ключ — канонический stepRef (тот же сравнитель, что KeyOf). Оба поля считаются здесь же,
+        // второй точки правды и нового прохода нет.
+        Dictionary<string, ChainFacts> Facts);
+
+    // Факты цепочки для трекера: последняя сданная задача и витки — оба уже посчитаны в этом проходе.
+    internal sealed record ChainFacts(
+        // Последняя сданная задача цепочки (Status=Done с CompletedAt, по моменту закрытия). null —
+        // измеримых сданных задач нет: закрытая без даты — грязные данные, её возраст не сравнить
+        // с порогом (тот же подход, что у waitingSince: null, а не «сейчас»).
+        TaskItem? LastSubmitted,
+        // Витки цепочки — тот же список, что FeatureStepChain.Rounds.
+        List<FeatureRound> Rounds);
 
     private const string Accepted = "accepted";
     private const string Review = "review";
@@ -136,6 +149,7 @@ internal static class FeatureStepAccounting
 
         // ─── Цепочки и корзины ───────────────────────────────────────────────────────────────
         var chains = new List<FeatureStepChain>(groups.Count);
+        var facts = new Dictionary<string, ChainFacts>(StepKeyComparer);
         var bucketByKey = new Dictionary<string, string>(StepKeyComparer);
         var laneByKey = new Dictionary<string, string>(StepKeyComparer);
         var returnedKeys = new HashSet<string>(StepKeyComparer);
@@ -180,6 +194,13 @@ internal static class FeatureStepAccounting
                 Reason = t.Verification?.Notes,
             }).ToList();
             int loops = featureRounds.Count(r => FeatureProjector.IsReturn(r.Verdict));
+
+            // Факты цепочки для трекера (TR-B1a): последняя сданная задача — самая свежая Done
+            // с датой закрытия; витки — тот же список, что у цепочки ниже. Ничего не пересчитывается.
+            var lastSubmitted = ordered
+                .Where(t => t.Status == TaskItemStatus.Done && t.CompletedAt is not null)
+                .MaxBy(t => t.CompletedAt!.Value);
+            facts[key] = new ChainFacts(lastSubmitted, featureRounds);
 
             // Источник возврата: последний виток-возврат в порядке по завершению; связи нет — null.
             var returnTasks = rounds.Where(t => FeatureProjector.IsReturn(FeatureProjector.RoundVerdict(t))).ToList();
@@ -320,6 +341,6 @@ internal static class FeatureStepAccounting
             });
         }
 
-        return new Result(chains, progress, lanes);
+        return new Result(chains, progress, lanes, facts);
     }
 }

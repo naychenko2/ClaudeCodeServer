@@ -290,7 +290,10 @@ let _outboxConfigured = false;
 // остатки прежних записей сносим. Перечень шаблонов ключей — один, в offline.ts (isLegacyPassiveKey).
 // Чистка разовая: признак живёт в том же разделе meta, сам по себе в кэш запросов не попадает.
 // Версия поднимается, когда набор шаблонов расширяется: клиентам с прошлым признаком нужен новый прогон.
-const LEGACY_PURGE_DONE_KEY = 'tasks:legacy-cache-purged:v2';
+// v3 — правило расширено до любого голого URL-ключа: осиротевшие ключи sync-класса
+// (листинги дерева и содержимое файлов, индекс фич, список чатов) и прочих потребителей
+// пассивного кэша (notifications, ai/caps, deviceAgent, chatContext и прочие GET-запросы).
+const LEGACY_PURGE_DONE_KEY = 'tasks:legacy-cache-purged:v3';
 
 export async function purgeLegacyTaskListCache(): Promise<void> {
   if (await idbGet(LEGACY_PURGE_DONE_KEY).catch(() => undefined)) return;

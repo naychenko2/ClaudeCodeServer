@@ -163,7 +163,7 @@ public sealed class TasksToolset(
             {
                 var id = StringArg(arguments, "id");
                 var (task, candidates) = GetForRead(context.OwnerId, projectId, allowed, id);
-                if (task is not null) return Json(task);
+                if (task is not null) return TaskJson(task, context.OwnerId);
                 // Неоднозначный префикс: краткий список кандидатов (id + title, до 5), чтобы модель выбрала
                 if (candidates is { Count: > 0 })
                     return Deny($"Несколько задач начинаются с «{id}» — уточните id: " +
@@ -1003,6 +1003,27 @@ public sealed class TasksToolset(
 
     private static McpToolCallResult Json<T>(T value) =>
         new(JsonSerializer.Serialize(value, JsonOpts));
+
+    // Ответ tasks_get: JSON задачи и — только у эпика фичи — дописанный блок «Сверка трекера».
+    // Расхождения не пересчитываем: тот же проектор и та же функция, что у REST-страницы фичи
+    // (ProjectFull → FeatureTracker), одна точка правды (TR-B1c). Сервер их только показывает —
+    // чинит оркестратор (колонка «Кто чинит» разреза 26.10), поэтому здесь нет ни правок, ни
+    // напоминаний. Пустой список назван явно: молчание читалось бы как «не смотрели».
+    // Роль не feature — ответ прежний, байт в байт.
+    private McpToolCallResult TaskJson(TaskItem task, string ownerId)
+    {
+        var json = JsonSerializer.Serialize(task, JsonOpts);
+        if (task.Role != TaskRoles.Feature) return new McpToolCallResult(json);
+
+        var issues = features.ProjectFull(task.Id, ownerId, FeatureChatDoor.Snapshot(sessions, ownerId))
+            ?.Tracker ?? [];
+        var body = issues.Count == 0
+            ? "Сверка трекера: расхождений нет"
+            : "Сверка трекера:\n" + string.Join("\n", issues.Select(i =>
+                $"{i.Kind} · {i.TaskId ?? "—"} · {i.StepRef ?? "—"} · " +
+                (i.Since is { } since ? since.ToString("yyyy-MM-dd HH:mm") + " UTC" : "—")));
+        return new McpToolCallResult(json + "\n\n" + body);
+    }
 
     // Закрытие/возобновление эпика фичи — только человеком: сам предикат в спинке
     // (FeatureTurnGate, Core), здесь только параметры MCP-двери: всегда сервисный токен,

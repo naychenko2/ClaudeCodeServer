@@ -8,8 +8,12 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 // чата как сохранена в Session.Model (null/пусто — «Авто», слот; Б4). PersonaId — персона
 // чата (Session.PersonaId, W4-1B): оркестратор фичи берётся только от сессий этого снимка
 // (чужой/удалённый ключевой чат в него не попадает → запасная цепочка по полям эпика).
+// Busy — чат занят: ход исполнителя идёт (Starting/Working) или ждёт ответа человека (Waiting) —
+// то же условие, что у сторожа зависания ClassifyStall (TR-B1b). null — у составившего снимок
+// признака нет: reported_open при отсутствии признака не выдаётся (fail-closed).
 public sealed record FeatureIndexSession(
-    string Id, string? TaskId, string? ProjectId, bool Archived, string? Model = null, string? PersonaId = null);
+    string Id, string? TaskId, string? ProjectId, bool Archived, string? Model = null, string? PersonaId = null,
+    bool? Busy = null);
 
 // Чат фичи (GET /api/tasks/features/{id}, chats[]; Б4 + W4-CHT-B): один чат из снимка
 // владельца, состоящий в фиче по ЕДИНОМУ правилу FeatureChatMembership. kind: curator |
@@ -140,7 +144,9 @@ public sealed record FeatureIndexRow(
     // FeatureBrief.KindOf (та же таблица KindByState и те же расщепления: paused→queued по причине
     // удержания, merged→closed по закрытости эпика). Null — состояние вне таблицы KindByState:
     // BuildRow guard'ит по ContainsKey — индекс не падает (в отличие от brief, который бросает).
-    string? Kind = null);
+    string? Kind = null,
+    // TR-B1c: число расхождений трекера (FeatureRun.Tracker.Count), проектор считает, индекс только несёт.
+    int TrackerIssues = 0);
 
 // Тревога фичи (контракт §1): kind: stopped | wait | merge; merge — только когда merge-задачи
 // нет (финал принят), reason у merge — null (на бэке, AttentionOf); sessionId — чат исполнителя

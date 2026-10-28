@@ -151,6 +151,8 @@ export interface FeatureIndexFeature {
   // queue есть только у фичи в очереди (holdReason = 'queue'), иначе null/нет.
   holdReason?: string | null;
   queue?: FeatureQueue | null;
+  // Сверка трекера (TR): число расхождений трекера с работой; нет/0 — всё сходится.
+  trackerIssues?: number;
 }
 
 // Роль чата в фиче (контракт: «Роль чата принята и дополнена»). Сила связи:

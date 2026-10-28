@@ -7,6 +7,7 @@ import { FeatureGlyph } from './chat/feature/FeatureGlyphs';
 import { FeatureRail } from './chat/feature/FeatureRail';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import { Button } from './ui/Button';
+import { Badge } from './ui/Badge';
 import { featureDisplayState, featureQuickAction, featureAvatarPersonaIds, formatDuration } from '../lib/chatGroups';
 import { stepProgressFromIndex, formatStepProgress } from '../lib/featureProgress';
 import { dateOnly } from './chat/feature/featureTime';
@@ -304,6 +305,13 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
               }}
             >
               {progress ? formatStepProgress(progress) : null}
+            </span>
+          )}
+          {!compact && (feature.trackerIssues ?? 0) > 0 && (
+            <span data-testid="feature-group-tracker-issues" style={{ display: 'inline-flex', flexShrink: 0 }}>
+              <Badge tone="warning" size="xs" title="Трекер расходится с работой — оркестратор поправит">
+                {`расхождений: ${feature.trackerIssues}`}
+              </Badge>
             </span>
           )}
         </div>

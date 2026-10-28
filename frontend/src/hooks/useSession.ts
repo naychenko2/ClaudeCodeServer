@@ -31,7 +31,11 @@ interface SessionState extends ChatState {
 const _store = new Map<string, SessionState>();
 const _listeners = new Map<string, Set<() => void>>();
 const _joining = new Map<string, Promise<void>>();
-const _lastSeen = new Map<string, number>(); // LRU: sid → ts последней мутации состояния
+// LRU: sid → порядковый номер последнего действия зрителя (не wall-clock, см. markSeen)
+const _lastSeen = new Map<string, number>();
+// Монотонный счётчик меток LRU: две действия в одну миллисекунду получают разные метки,
+// а порядок выселения задаётся фактическим порядком действий, а не порядком вставки в _store
+let _lruSeq = 0;
 
 // Потолок LRU-кэша холодных сессий (см. evictColdSessions). Открытые/активные не считаются.
 const MAX_CACHED_SESSIONS = 8;
@@ -151,12 +155,22 @@ function getState(sid: string): SessionState {
   return _store.get(sid)!;
 }
 
-// Единственная точка мутации _store: любая запись освежает LRU-метку. getState
-// при lazy-init метку НЕ ставит намеренно — LRU считаем по мутациям, не по чтениям
-// (иначе фоновый onMessage от project-групп держал бы чужие сессии вечно горячими).
+// Метка LRU: монотонный порядковый номер действия (см. _lruSeq), не wall-clock:
+// метки уникальны, порядок выселения при «одновременных» закрытиях детерминирован
+function markSeen(sid: string) {
+  _lastSeen.set(sid, ++_lruSeq);
+}
+
+// Единственная точка мутации _store. LRU-метку двигает только действие в ленте СО ЗРИТЕЛЕМ
+// (isWatched): фоновое событие у ленты, которую никто не смотрит (сброс isWaiting при
+// реконнекте, status_changed, дельты от project-групп), обновляет состояние, но не метку —
+// иначе «последняя покинутая» доставалась бы ленте, получившей событие, а не той,
+// которую зритель реально оставил последней. Уход зрителя метку ставит явно (markSeen
+// в cleanup): к тому моменту подписчиков уже нет. getState при lazy-init метку НЕ ставит
+// намеренно — LRU считаем по действиям зрителя, не по чтениям и не по фоновым мутациям.
 function touch(sid: string, next: SessionState) {
   _store.set(sid, next);
-  _lastSeen.set(sid, Date.now());
+  if (isWatched(sid)) markSeen(sid);
   // Poll реконсиляции живёт ровно пока есть занятый открытый чат (см. syncWaitPoll)
   syncWaitPoll();
 }
@@ -571,6 +585,9 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     _listeners.set(sessionId, listeners);
     const notify = () => setTick(n => n + 1);
     listeners.add(notify);
+    // Открытие/подписка — действие зрителя: лента становится свежайшей в LRU.
+    // Дальнейшие мутации этой ленты двигают метку через touch (зритель здесь есть)
+    markSeen(sessionId);
 
     // Признак группового чата — до загрузки истории (влияет на normalizeHistory).
     // Только от потребителя, который его знает: useSessionArtifacts зовёт хук без
@@ -607,6 +624,9 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
       // этом выводит СЕРВЕР и только если ход не идёт (SessionHub.LeaveSession): события
       // незавершённого хода продолжают капать сюда в фоне, иначе лента останется с обрывком.
       if ((_listeners.get(sessionId)?.size ?? 0) === 0) {
+        // Уход зрителя — действие зрителя: метка этой ленты должна быть свежайшей
+        // среди холодных — защита «последней покинутой» в evictColdSessions считает от неё
+        markSeen(sessionId);
         leaveSession(sessionId);
         setState(sessionId, prev => ({ ...prev, isJoined: false }));
         evictColdSessions();

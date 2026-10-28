@@ -1237,6 +1237,83 @@ describe('useSession: потолок памяти (OOM fix)', () => {
     expect(_store.get(sids[4])!.historyBytes).toBeGreaterThan(COLD_BUDGET_BYTES);
   });
 
+  // --- Метка LRU двигается только действиями зрителя (F3-S3a) ---
+
+  it('фоновое событие у ленты без зрителя не двигает LRU-метку', async () => {
+    mockWeightedTail(() => 10 * MB);
+
+    // A: ушёл посреди хода — isWaiting залипший, лента не холодная (защищена isWaiting),
+    // метка — момент ухода
+    const a = nextSid();
+    const chatA = openChat(a);
+    await flush();
+    await chatA.first.send('иди');
+    chatA.unmount();
+    expect(_store.get(a)!.isWaiting).toBe(true);
+
+    // B и C: обычные холодные, свежее A; их сумма в бюджете — выселения нет
+    const b = nextSid();
+    const chatB = openChat(b);
+    await flush();
+    chatB.unmount();
+    const c = nextSid();
+    const chatC = openChat(c);
+    await flush();
+    chatC.unmount();
+    expect(_store.has(b)).toBe(true);
+    expect(_store.has(c)).toBe(true);
+
+    // Реконнект: сброс isWaiting у A без зрителя — состояние обновляется (лента стала
+    // холодной), метка — нет: A не «последняя покинутая», она ушла раньше всех
+    await Promise.all(m.reconnectHandlers.map(h => h()));
+    expect(_store.get(a)!.isWaiting).toBe(false);
+
+    // D: его закрытие переводит весовой бюджет (40 > 24 МБ) — выселение по фактическому
+    // порядку уходов
+    const d = nextSid();
+    const chatD = openChat(d);
+    await flush();
+    chatD.unmount();
+
+    // Выселены A и B (ушли раньше всех); C и D остались, D — защищён как последний.
+    // Без этой правки реконнект сделал бы метку A свежайшей, и выселились бы B и C
+    expect(_store.has(a)).toBe(false);
+    expect(_store.has(b)).toBe(false);
+    expect(_store.has(c)).toBe(true);
+    expect(_store.has(d)).toBe(true);
+  });
+
+  it('два закрытия в одну миллисекунду: защищается закрытая последней, а не позже вставленная', async () => {
+    // Замороженные часы: все действия попадают в одну миллисекунду — wall-clock не различает
+    // их. Порядок обязан давать счётчик действий, а не порядок вставки в _store
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(7000);
+    try {
+      mockWeightedTail(() => 10 * MB);
+      const a = nextSid();
+      const b = nextSid();
+      const chatA = openChat(a);
+      await flush();
+      const chatB = openChat(b);
+      await flush();
+      // Закрываем в обратном порядке вставки: B первой, A последней
+      chatB.unmount();
+      chatA.unmount();
+      // C: его закрытие переводит весовой бюджет (30 > 24 МБ)
+      const c = nextSid();
+      const chatC = openChat(c);
+      await flush();
+      chatC.unmount();
+
+      // B выселена: она покинула первой. A осталась: она покинула последней —
+      // хотя в _store она вставлена позже B, и по порядку вставки выселилась бы A
+      expect(_store.has(b)).toBe(false);
+      expect(_store.has(a)).toBe(true);
+      expect(_store.has(c)).toBe(true);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('isWaiting и isJoined: не выселяются весом, их вес в бюджет не входит', async () => {
     mockWeightedTail(() => 10 * MB);
 

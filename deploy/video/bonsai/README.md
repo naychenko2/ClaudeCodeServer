@@ -64,9 +64,9 @@ sudo systemctl daemon-reload && sudo systemctl enable --now bonsai gpu-arbiter
 Секция `LocalEngines:bonsai` в машинном `appsettings.Local.json` (см. `docs/architecture/llm-providers.md`,
 раздел «Именованные локальные движки»). **Рабочие адреса стенда — только в `appsettings.Local.json`**
 (он в `.gitignore`, на каждой машине свой); в репозитории лежит образец всей секции —
-`backend/ClaudeHomeServer/appsettings.Local.example.json`, и в нём адреса этой раскладки:
-`192.168.7.107`, llama-server `:18030`, арбитр `:18031` — те же, что в `bonsai.service` и
-`gpu-arbiter.service`.
+`backend/ClaudeHomeServer/appsettings.Local.example.json`, и в нём плейсхолдеры хоста `<video-host>`
+и фактические стендовые порты (llama-server `:18030`, арбитр `:18031` — те же, что в `bonsai.service` и
+`gpu-arbiter.service`); реальные адреса этой машины — в пунктах ниже.
 
 - `BaseUrl` — llama-server (`http://192.168.7.107:18030`), `Model`, `Actions` (какие места идут
   на этот движок), `FallbackRoute` — страховка после неудачи движка (`direct:minimax`), `NumCtx`;

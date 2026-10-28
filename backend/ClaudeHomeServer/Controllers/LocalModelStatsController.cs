@@ -12,7 +12,8 @@ using Microsoft.Extensions.Options;
 namespace ClaudeHomeServer.Controllers;
 
 // REST-панель «Локальные модели»: вкладка «Текст» (снимок состояния локального движка vLLM +
-// история + видеокарты) и вкладка «Медиа» (ComfyUI).
+// история + видеокарты), вкладка «Медиа» (ComfyUI) и второй стенд (B3c): GET engines +
+// GET stats?engine=<имя> — стенд именованного движка с блоком «Дежурство».
 // Права (ADR-030, изменение правила приватности 2026-10-18): «Текст» — только admin (настройка
 // глобальная, влияет на всех, образец — LocalActionsAdminController); «Медиа» — любой
 // аутентифицированный, но не-админ видит только свои строки (scope "self", gpus null, счётчик
@@ -35,6 +36,14 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
     private readonly IHardwareReportService? _hardware = services.GetService<IHardwareReportService>();
     // Счётчик хода: живые чаты на движке (chats) и прогоны, которые он не видит (othersCount).
     private readonly ILocalModelTurnMeter? _meter = services.GetService<ILocalModelTurnMeter>();
+    // Стенд второй модели (Б3c): справочник дорожек статистики, словарь известных движков
+    // (список engines и цепочка duty), клиент состояния арбитра и журнал вызовов мест («кто сейчас
+    // на модели»). Всё необязательно: подсистема Llm отключаема (GetService → null) — тогда
+    // engines отдаёт {main, configured:false}, а stats?engine= — {configured:false} (200, не 500).
+    private readonly ILocalEngineStatsDirectory? _tracks = services.GetService<ILocalEngineStatsDirectory>();
+    private readonly NamedLocalEngines? _namedEngines = services.GetService<NamedLocalEngines>();
+    private readonly IEngineArbiterStateReader? _arbiter = services.GetService<IEngineArbiterStateReader>();
+    private readonly EngineCallLedger? _callLedger = services.GetService<EngineCallLedger>();
     // Рубильник «медиа для обычных пользователей» (ADR-030, 2026-10-18): единственная точка
     // чтения секции LocalModelStats (связывание в Program.cs).
     private readonly IOptions<LocalModelStatsMediaOptions> _mediaOptions = mediaOptions;
@@ -44,19 +53,33 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
     // Роль admin: «Текст» — только админ, «Медиа» — любой аутентифицированный.
     private bool IsAdmin => User.IsInRole("admin");
 
-    // GET /api/local-model/stats?window=1m|5m|15m|1h&since=<unix ms>
+    // GET /api/local-model/stats?window=1m|5m|15m|1h&since=<unix ms>&engine=<ключ>
     // window: по умолчанию 15m; белый список 1m/5m/15m/1h, иное → 400.
     // since: unix-мс, фильтр «только хвост новее этого момента» (без since — всё окно).
     // Вкладка «Текст» — только admin (настройка глобальная, влияет на всех).
+    // engine — только ключ словаря движков (URL из него не строится никогда): без engine или с
+    // "main" — основной стенд, поведение ручки и ответ побайтно прежние (флаг здесь не проверялся
+    // и не появляется — регрессионная guard Б3c); с другим engine — стенд именованного движка
+    // (NamedStatsAsync ниже), и для него флаг local-model-stats проверяется на сервере, как у
+    // hardware (без него 404).
     [Authorize(Roles = "admin")]
     [HttpGet("stats")]
     public async Task<IActionResult> Stats(
         [FromQuery] string? window,
         [FromQuery] long? since,
-        CancellationToken ct)
+        [FromQuery] string? engine,
+        CancellationToken ct,
+        [FromServices] FeatureFlagService flags)
     {
+        // Флаг — только для новой формы ручки (с engine): без engine ответ и коды остаются прежними.
+        if (!string.IsNullOrEmpty(engine) && (UserId is not { } uid || !flags.IsEnabled(uid, FeatureFlagKeys.LocalModelStats)))
+            return NotFound();
+
         if (!TryParseWindow(window, out var windowSpan))
             return BadRequest(new { error = $"Неизвестное окно «{window}» (допустимо 1m, 5m, 15m, 1h)" });
+
+        if (!string.IsNullOrEmpty(engine) && !string.Equals(engine, LocalModelStatsPoller.MainTrackName, StringComparison.Ordinal))
+            return await NamedStatsAsync(engine, windowSpan, since, ct);
 
         var current = _reader?.Current;
 
@@ -86,28 +109,7 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
 
         // history — из GetHistory(window, since); при since — только хвост новее момента.
         var points = _reader!.GetHistory(windowSpan, since);
-        var history = points.Select(p => new HistoryPointDto
-        {
-            T = p.Timestamp.ToUnixTimeMilliseconds(),
-            GenThroughput = p.GenThroughput,
-            Waiting = p.Waiting,
-            Running = p.Running,
-            KvUsage = p.KvUsage,
-            PrefixHits = p.PrefixHits,
-            PrefixQueries = p.PrefixQueries,
-            RamHits = p.RamHits,
-            RamQueries = p.RamQueries,
-            Preemptions = p.Preemptions,
-            GenTokens = p.GenTokens,
-            ItlSeconds = p.ItlSeconds,
-            ItlCount = p.ItlCount,
-            // База шага декода (мс) для этой точки: по числу потоков в ней (батч-движок:
-            // шаг растёт с числом строк, 22.10), иначе общая база стенда (ADR-029, v2.5).
-            CleanStepMs = CleanStepFor(current, p.Running),
-            PrefillSeconds = p.PrefillSeconds,
-            QueueSeconds = p.QueueSeconds,
-            PromptTokens = p.PromptTokens,
-        }).ToArray();
+        var history = points.Select(p => MapHistoryPoint(current, p)).ToArray();
 
         // Чаты на стенде: живые чаты счётчика хода (ILocalModelTurnMeter.ActiveChats).
         // Анонимизация: свой чат (OwnerId == текущий пользователь) — название/id/проект
@@ -169,6 +171,218 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
             Hardware = _hardware?.Brief(),
         });
     }
+
+    // GET /api/local-model/engines — список движков для переключателя «Основная / Bonsai»
+    // (макет §2). ТОЛЬКО admin (роль на действии, как у /stats) плюс серверный флаг
+    // local-model-stats (без него 404, как у hardware).
+    // Список НИКОГДА не пуст: "main" присутствует всегда, известные из конфига движки добавляются
+    // к нему; без дорожки статистики — с configured:false. Пустой список фронт читает как «ещё не
+    // загружен» и держит сохранённый выбор вечно (R-F1, задача e4103736), поэтому «ничего не
+    // настроено» обязано отдавать {main, configured:false}, а не [].
+    // Title: "main" — «Основная»; именованный движок — его ключ с заглавной первой буквой
+    // (подпись сегмента по макету; имена моделей в сегмент не ставим).
+    [Authorize(Roles = "admin")]
+    [HttpGet("engines")]
+    public IActionResult Engines([FromServices] FeatureFlagService flags)
+    {
+        if (UserId is not { } id || !flags.IsEnabled(id, FeatureFlagKeys.LocalModelStats))
+            return NotFound();
+
+        var list = new List<EngineEntryDto>
+        {
+            new() { Name = LocalModelStatsPoller.MainTrackName, Title = "Основная", Configured = _reader?.Current.Configured == true },
+        };
+        if (_namedEngines is { } known)
+            foreach (var e in known.Engines)
+            {
+                // main однозначен: движок LocalEngines с именем основной дорожки не получает
+                // дорожку (правило поллера) и не дублируется в списке.
+                if (string.Equals(e.Name, LocalModelStatsPoller.MainTrackName, StringComparison.Ordinal)) continue;
+                list.Add(new()
+                {
+                    Name = e.Name,
+                    Title = TitleOf(e.Name),
+                    // configured — есть дорожка статистики (её снимок настроен); без MetricsUrl
+                    // движок известен, но не настроен: сегмента переключателя у него нет.
+                    Configured = _tracks?.CurrentOf(e.Name)?.Configured == true,
+                });
+            }
+        return Ok(list);
+    }
+
+    // Подпись сегмента из ключа словаря: заглавная первая буква ("bonsai" → "Bonsai").
+    private static string TitleOf(string name) =>
+        name.Length == 0 ? name : char.ToUpperInvariant(name[0]) + name[1..];
+
+    // GET /api/local-model/stats?engine=<имя> — стенд именованного движка (B3c): тот же
+    // LocalModelStatsResponse плюс блок «Дежурство» (duty). Без engine или с engine=main —
+    // основной стенд выше, его ответ побайтно не меняется.
+    // Нет дорожки (неизвестный движок, движок без MetricsUrl или выключенная Llm) →
+    // {configured:false, status:notConnected} (200, не 500), без блока duty.
+    // Отличия от основного стенда: gpus — карта Video, общая с ComfyUI, из Core-шва IComfyStats
+    // (узел /ccs/stats), а не сэмплера хоста (разрез v2 §3); Llm ↛ Images — склейка здесь;
+    // chats — пусты (именованный движок обслуживает места, не ходы чатов; «кто сейчас на модели»
+    // — duty.callsNow); hardware нет (сводка «Видеокарты» относится к хосту, не к машине Video).
+    private async Task<IActionResult> NamedStatsAsync(string name, TimeSpan windowSpan, long? since, CancellationToken ct)
+    {
+        var current = _tracks?.CurrentOf(name);
+        if (current is null)
+            return Ok(new LocalModelStatsResponse
+            {
+                Configured = false,
+                Status = "notConnected",
+                Speed = new SpeedDto(),
+                Kv = new KvDto(),
+                Gpus = null,
+                History = [],
+                Chats = [],
+                Unsupported = [],
+            });
+
+        // Карта Video — общая с ComfyUI: только из снимка узла IComfyStats. Images выключена
+        // (GetService → null) или узел молчит (пустой список) → null («нет данных о карте»).
+        var comfy = HttpContext.RequestServices.GetService<IComfyStats>();
+        var media = comfy is null ? null : await comfy.GetMediaAsync(ct);
+        GpuDto[]? gpus = null;
+        if (media is not null && media.Gpus.Count > 0)
+            gpus = [.. media.Gpus.Select(MapComfyGpu)];
+
+        var history = _tracks!.HistoryOf(name, windowSpan, since).Select(p => MapHistoryPoint(current, p)).ToArray();
+
+        return Ok(new LocalModelStatsResponse
+        {
+            Configured = current.Configured,
+            Engine = current.Engine,
+            Model = current.Model,
+            TensorParallel = current.TensorParallel,
+            // Статус дорожки, включая "yielded" (Б3b): выгруженная под арбитром модель — не авария,
+            // DownSince при этом не ставится (снимок дорожки уже несёт null).
+            Status = current.Status,
+            DownSince = current.DownSince?.ToUnixTimeMilliseconds(),
+            Running = current.Running,
+            Waiting = current.Waiting,
+            // Счётчик хода не видит вызовов именованного движка (они идут мимо шлюз'а):
+            // «прочие» — всё, что сообщает движок.
+            OthersCount = Math.Max(0, (current.Running ?? 0) + (current.Waiting ?? 0)),
+            CleanStepMs = current.CleanStepMs,
+            Speed = new SpeedDto
+            {
+                GenPerStream = current.Kv?.GenPerStream,
+                PrefillPerStream = current.Kv?.PrefillPerStream,
+                SpeculativeSpeedup = current.SpeculativeSpeedup,
+            },
+            Kv = new KvDto
+            {
+                UsagePerc = current.Kv?.UsagePerc,
+                RamTierPerc = current.Kv?.RamTierPerc,
+                PrefixHitPerc = current.Kv?.PrefixHitPerc,
+                RamTierHitPerc = current.Kv?.RamTierHitPerc,
+                Preemptions15m = current.Kv?.Preemptions,
+            },
+            Gpus = gpus,
+            History = history,
+            Chats = [],
+            Unsupported = current.Unsupported,
+            Hardware = null,
+            Duty = await BuildDutyAsync(name, comfy, ct),
+        });
+    }
+
+    // Блок «Дежурство» (разрез v2 §5): клиент арбитра (состояние, причины, аренды) + журнал
+    // вызовов мест (ответы за час, «кто сейчас») + типичная цепочка движка. Все источники
+    // null-безопасны: без клиента или без StateUrl — arbiter:null («арбитр не подключён»).
+    private async Task<DutyDto> BuildDutyAsync(string name, IComfyStats? comfy, CancellationToken ct)
+    {
+        var snap = _arbiter is null ? null : await _arbiter.GetAsync(name, ct);
+        return new DutyDto
+        {
+            Arbiter = MapArbiter(snap, comfy),
+            Chain = [.. ChainFor(name)],
+            AnswersLastHour = _callLedger is null ? null : MapAnswers(_callLedger.AnswersLastHour(name)),
+            CallsNow = _callLedger is null ? null : [.. _callLedger.CallsNow(name).Select(MapCallNow)],
+        };
+    }
+
+    // Типичная цепочка движка (не гарантированный путь, разрез v1 §2): собственное звено →
+    // страховка (если у движка задан FallbackRoute) → облако. Имя "bonsai" общее для всех
+    // LocalEngines:* — фронт не знает имени движка (контракт LocalModelChainLink).
+    private List<string> ChainFor(string name)
+    {
+        var chain = new List<string> { "bonsai" };
+        if (!string.IsNullOrWhiteSpace(_namedEngines?.Get(name)?.Spec.FallbackRoute))
+            chain.Add("insurance");
+        chain.Add("claude");
+        return chain;
+    }
+
+    // Снимок арбитра → DTO. Часы уже пересчитаны клиентом на нашу ось (B3a); id аренд наружу
+    // не отдаются (их создал аноним): только текст и остаток.
+    private static ArbiterDto? MapArbiter(EngineArbiterSnapshot? s, IComfyStats? comfy) => s is null
+        ? null
+        : new ArbiterDto
+        {
+            Reachable = s.Reachable,
+            LastSeenAt = s.SeenAt?.ToUnixTimeMilliseconds(),
+            State = s.Bonsai,
+            Mode = s.Mode,
+            QuietLeftS = s.QuietLeftS,
+            SinceAt = s.SinceAt?.ToUnixTimeMilliseconds(),
+            Yields = s.Yields,
+            Returns = s.Returns,
+            LastYieldS = s.LastYieldS,
+            LastReturnS = s.LastReturnS,
+            Reasons = s.Reasons is null ? null : [.. s.Reasons.Select(r => MapReason(r, comfy))],
+            Leases = s.Leases is null ? null : [.. s.Leases.Select(l => new LeaseDto { Reason = l.Reason ?? "", LeftS = l.LeftS })],
+        };
+
+    // Строка причины «вид:<текст>» → kind + raw без префикса вида: «comfy» — префикс prompt_id,
+    // «lease» — текст анонима (обрезан клиентом до 64), «gpu» — «pid:командная строка»; строка
+    // без префикса — неизвестный вид: kind пустой, raw целиком (фронт показывает её как текст).
+    // Вид задания «comfy» — по шву IComfyStats (таблица соответствия одна, на бэкенде);
+    // known=true только когда prompt_id найден в реестре ЭТОГО инстанса; шов не различает
+    // «нет в реестре» и «неоднозначно» — неизвестное остаётся null.
+    private static ReasonDto MapReason(string s, IComfyStats? comfy)
+    {
+        var i = s.IndexOf(':');
+        var kind = i < 0 ? "" : s[..i];
+        var raw = i < 0 ? s : s[(i + 1)..];
+        string? jobKind = null;
+        bool? known = null;
+        if (kind == "comfy")
+        {
+            jobKind = comfy?.DescribePromptKind(raw);
+            // true — найден в реестре этого инстанса; null — неизвестно (шва нет, нет в реестре
+            // или неоднозначно — шов их не различает). false здесь не ставим: «нет в реестре»
+            // не равно «не с этого сервера».
+            known = jobKind is not null ? true : null;
+        }
+        return new ReasonDto { Kind = kind, Raw = raw, JobKind = jobKind, Known = known };
+    }
+
+    private static AnswersDto MapAnswers(EngineAnswerCounts a) => new()
+    {
+        Bonsai = a.Bonsai,
+        Insurance = a.Insurance,
+        Claude = a.Claude,
+        Missed = a.Missed,
+        SinceAt = a.SinceAt.ToUnixTimeMilliseconds(),
+    };
+
+    // Открытый вызов места → строка «кто сейчас»: название места, текущее звено (null — «ждёт
+    // в очереди»: вызов уже в журнале, но в цепочку ещё не вошёл — контракт фронта Ф0, Б5 заводит
+    // записи без звена до первого Step), длительность с начала вызова. Ни OwnerId, ни промпта.
+    private static CallNowDto MapCallNow(EngineCallNow c) => new()
+    {
+        Place = c.Place,
+        Link = c.Link switch
+        {
+            EngineCallLink.Bonsai => "bonsai",
+            EngineCallLink.Insurance => "insurance",
+            EngineCallLink.Claude => "claude",
+            _ => null,
+        },
+        DurationS = c.Duration.TotalSeconds,
+    };
 
     // GET /api/local-model/hardware?window=1m|5m|15m|1h
     // Вкладка «Железо»: температуры карт (в т.ч. памяти GDDR6X), процессора, платы, дисков + ряды
@@ -326,6 +540,31 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
     internal static double? CleanStepFor(LocalModelStatsCurrent current, int? running) =>
         running is { } r && current.CleanStepMsByRunning is { } by && by.TryGetValue(r, out var v) ? v : current.CleanStepMs;
 
+    // Точка кольца → DTO — общая для обоих стендов (main и именованный): t — unix-мс (long),
+    // серии кэша и скорости — приращения с прошлой точки (фронт сводит их в интервалы).
+    private static HistoryPointDto MapHistoryPoint(LocalModelStatsCurrent current, LocalModelStatsPoint p) => new()
+    {
+        T = p.Timestamp.ToUnixTimeMilliseconds(),
+        GenThroughput = p.GenThroughput,
+        Waiting = p.Waiting,
+        Running = p.Running,
+        KvUsage = p.KvUsage,
+        PrefixHits = p.PrefixHits,
+        PrefixQueries = p.PrefixQueries,
+        RamHits = p.RamHits,
+        RamQueries = p.RamQueries,
+        Preemptions = p.Preemptions,
+        GenTokens = p.GenTokens,
+        ItlSeconds = p.ItlSeconds,
+        ItlCount = p.ItlCount,
+        // База шага декода (мс) для этой точки: по числу потоков в ней (батч-движок:
+        // шаг растёт с числом строк, 22.10), иначе общая база стенда (ADR-029, v2.5).
+        CleanStepMs = CleanStepFor(current, p.Running),
+        PrefillSeconds = p.PrefillSeconds,
+        QueueSeconds = p.QueueSeconds,
+        PromptTokens = p.PromptTokens,
+    };
+
     private static MediaRunningDto MapRunning(ComfyJobRow r, string? myId)
     {
         var own = r.OwnerId == myId;
@@ -391,6 +630,20 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
         TempC = s.Temperature,
         PowerW = s.PowerDraw,
         PowerLimitW = s.PowerLimit,
+    };
+
+    // Карта узла ComfyUI → GpuDto (та же форма, что у карт хоста): карта Video общая с ComfyUI
+    // (разрез v2 §3); подпись «общая с ComfyUI» делает фронт.
+    private static GpuDto MapComfyGpu(ComfyGpuInfo g) => new()
+    {
+        Index = g.Index,
+        Name = g.Name,
+        UtilPerc = g.UtilPerc,
+        MemUsedMb = (long?)g.MemUsedMb,
+        MemTotalMb = (long?)g.MemTotalMb,
+        TempC = g.TempC,
+        PowerW = g.PowerW,
+        PowerLimitW = g.PowerLimitW,
     };
 
     // window: null/пусто → 15m (дефолт); белый список 1m/5m/15m/1h (ровно как в сообщении 400);
@@ -470,12 +723,23 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
         // Чаты на стенде; пока пусто (шаг 19).
         public ChatDto[] Chats { get; init; } = [];
 
-        // Метрики, которых движок не сообщил (отсутствуют в /metrics).
+        // Метрики, которых движок не сообщил (отсутствуют в /metrics). Единый словарь сокрытия
+        // блоков — ИМЕНА ПОЛЕЙ снимка EngineSnapshot (KvUsagePerc, RamTierPerc, Preemptions,
+        // QueueTimeSum, …): по ним фронт прячет блоки «Кэш», «Вытеснения», «Куда уходит время
+        // агентов» целиком. Для именованных движков (llama-server) источник отдаёт ровно эти
+        // имена (LlamaServerMetricsSource.UnsupportedBlocks). Основной стенд (vLLM) сохраняет
+        // имена метрик движка: существующее поведение, его ответ побайтно не менялся (regression
+        // guard Б3c); по этим именам фронт ничего не скрывает (хвост, зафиксированный ревью Б2a).
         public IReadOnlyList<string> Unsupported { get; init; } = [];
 
         // Сводка «Железо» для строки-ссылки и точки на вкладке; только админ (у не-админа поля нет).
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public HardwareBrief? Hardware { get; init; }
+
+        // Блок «Дежурство» — только у стенда именованного движка (B3c). У основного стенда поля
+        // нет вовсе (ответ побайтно прежний): WhenWritingNull, как у Hardware.
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public DutyDto? Duty { get; init; }
     }
 
     // Скорость на поток: ток/с, Δсчётчика/Δсуммы времени. GenPerStream/PrefillPerStream —
@@ -687,5 +951,126 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
         public int? EtaSeconds { get; init; }
         // unix-мс (long) момента завершения.
         public long FinishedAt { get; init; }
+    }
+
+    // ─── DTO второго стенда (B3c): GET /api/local-model/engines и блок duty ───────────
+
+    // Одна строка списка движков для переключателя «Основная / Bonsai» (макет §2).
+    public sealed record EngineEntryDto
+    {
+        // Ключ словаря: "main" или имя движка LocalEngines. URL из него не строится никогда.
+        public string Name { get; init; } = "";
+
+        // Подпись сегмента переключателя («Основная», «Bonsai»); имена моделей не ставятся.
+        public string Title { get; init; } = "";
+
+        // false — движок известен, но не настроен (нет дорожки статистики): сегмента у него нет.
+        public bool Configured { get; init; }
+    }
+
+    // Блок «Дежурство» (только у стенда именованного движка). Контракт фронта — LocalModelDuty.
+    public sealed record DutyDto
+    {
+        // null — у движка нет StateUrl: «Дежурство» показывает «арбитр не подключён».
+        public ArbiterDto? Arbiter { get; init; }
+
+        // Типичная цепочка: "bonsai" → "insurance" (если у движка FallbackRoute) → "claude".
+        public string[] Chain { get; init; } = [];
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public AnswersDto? AnswersLastHour { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public CallNowDto[]? CallsNow { get; init; }
+    }
+
+    // Ответ арбитра о дежурстве — из недоверенного /state, разобранный клиентом (B3a: потолки,
+    // неизвестное → unknown/null, часы пересчитаны на нашу ось). При reachable:false — поля
+    // последнего удачного снимка; до первого успеха — null.
+    public sealed record ArbiterDto
+    {
+        public bool Reachable { get; init; }
+
+        // unix-мс последнего удачного ответа арбитра; null — удачного не было.
+        public long? LastSeenAt { get; init; }
+
+        // ready | yielded | starting | waiting-vram | unknown (всё неизвестное — unknown).
+        public string? State { get; init; }
+
+        // exclusive | shared; всё прочее — null.
+        public string? Mode { get; init; }
+
+        // Секунды до возврата модели; null — пока есть причины или модель уже активна.
+        public double? QuietLeftS { get; init; }
+
+        // unix-мс начала периода счётчиков на нашей оси (perесчёт по ts арбитра — B3a).
+        public long? SinceAt { get; init; }
+
+        public int? Yields { get; init; }
+        public int? Returns { get; init; }
+        public double? LastYieldS { get; init; }
+        public double? LastReturnS { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public ReasonDto[]? Reasons { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public LeaseDto[]? Leases { get; init; }
+    }
+
+    // Причина уступки: kind — вид строки ("comfy" | "lease" | "gpu"; без префикса — ""),
+    // raw — текст без префикса вида ("gpu" — «pid:командная строка», «comfy» — префикс prompt_id,
+    // «lease» — текст причины, обрезанный до 64).
+    public sealed record ReasonDto
+    {
+        public string Kind { get; init; } = "";
+        public string Raw { get; init; } = "";
+
+        // Только для "comfy": вид задания image|video|audio|lora (таблица соответствия одна,
+        // на бэкенде, разрез v1 §1); null — не опознан.
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? JobKind { get; init; }
+
+        // Только для "comfy": true — prompt_id в реестре ЭТОГО инстанса ComfyUI (ComfyUI общий
+        // у прода и дева). null — неизвестно (шов не различает «нет» и «неоднозначно»).
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public bool? Known { get; init; }
+    }
+
+    // Активная аренда карты: id наружу не отдаётся (его создал анонимный POST /lease).
+    public sealed record LeaseDto
+    {
+        public string Reason { get; init; } = "";
+        public double? LeftS { get; init; }
+    }
+
+    // Ответы мест за последний час (журнал EngineCallLedger, разрез v2 §4): корзины — звено,
+    // которое ответило; missed — цепочка вернула пусто. Нули — не «нет данных»: нет данных —
+    // весь блок отсутствует.
+    public sealed record AnswersDto
+    {
+        public int Bonsai { get; init; }
+        public int Insurance { get; init; }
+        public int Claude { get; init; }
+        public int Missed { get; init; }
+
+        // unix-мс начала окна = max(now − 1 ч, старт процесса): честный знаменатель доли.
+        public long SinceAt { get; init; }
+    }
+
+    // Вызов места прямо сейчас («кто сейчас на модели» у именованного движка): место —
+    // системное действие, без владельца и промпта (строка не кликабельна).
+    public sealed record CallNowDto
+    {
+        // Название места из каталога.
+        public string Place { get; init; } = "";
+
+        // Текущее звено: bonsai | insurance | claude. null — «ждёт в очереди»: вызов уже в
+        // журнале, но в цепочку ещё не вошёл (проба готовности или слот допуска). Контракт
+        // зафиксирован фронтом (Ф0): именно null, не отсутствие поля и не строка.
+        public string? Link { get; init; }
+
+        // Секунды с начала вызова.
+        public double? DurationS { get; init; }
     }
 }

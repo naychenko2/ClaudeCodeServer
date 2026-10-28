@@ -41,7 +41,13 @@ public sealed partial class NotesService
             throw new ArgumentException("Комментировать можно только markdown-документы");
 
         if (scope == PersonalKey)
-            return (SafePath.Join(Path.Combine(_dataDir, "notes", userId), rel), true);
+        {
+            // Тот же гейт, что для project scope ниже (ревью S1a): ^id — никогда в файл
+            // под data/wiki/. Личный vault, сведённый символьной ссылкой в вику, делает
+            // любой путь под ним путём в вики — якорь в такую вику ставит только Хранитель.
+            var personalFull = SafePath.Join(Path.Combine(_dataDir, "notes", userId), rel);
+            return (personalFull, !WikiPaths.IsWikiPath(personalFull, _dataDir));
+        }
 
         var project = _projects.GetById(scope)
             ?? throw new KeyNotFoundException($"Проект {scope} не найден");

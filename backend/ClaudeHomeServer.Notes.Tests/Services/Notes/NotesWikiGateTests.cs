@@ -213,6 +213,31 @@ public class NotesWikiGateTests : IDisposable
         Sha256(doc).Should().Be(before);
     }
 
+    [Fact]
+    public void Annotate_ЛичныйДокументСсылкаВВики_НеПишетЯкорь()
+    {
+        if (OperatingSystem.IsWindows()) return; // символьная ссылка на файл
+        // Минор ревью S1a: ResolveDoc для личного scope отдавал canWrite=true без проверки
+        // вики (для project scope она есть). Личный документ — символьная ссылка в файл
+        // вики: путь под data/notes/, по факту — в вики. ^id в него не пишется; сам
+        // комментарий создаётся в обычном личном vault — его Create под гейт не попадает.
+        var text = "Текст абзаца для цитаты.";
+        var target = Path.Combine(_wikiNotes, "Документ-через-ссылку.md");
+        File.WriteAllText(target, "# Документ\n\n" + text + "\n", new UTF8Encoding(false));
+        var doc = Path.Combine(_vault, "Документ-через-ссылку.md");
+        File.CreateSymbolicLink(doc, target);
+        var at = File.ReadAllText(doc).IndexOf(text, StringComparison.Ordinal);
+        var before = Sha256(target);
+
+        var note = _sut.Annotate(User, new AnnotateRequest(
+            new AnnotateDocRef("personal", "Документ-через-ссылку.md"),
+            new AnnotateSelection(at, at + text.Length, text),
+            Comment: "проверка якоря через ссылку"));
+
+        note.Should().NotBeNull();          // аннотация создана: путь под data/notes/ сам по себе не отказ
+        Sha256(target).Should().Be(before); // но ^id в файл вики не вписан (canWrite=false)
+    }
+
     // ─── Писатели frontmatter комментариев (ревью S1a, MAJOR 3) ──────────────
     // Файл комментария мог попасть под data/wiki/ помимо Create: остаться от прежней
     // версии вики, переехать с проектом-источником, быть создан мимо сервера.

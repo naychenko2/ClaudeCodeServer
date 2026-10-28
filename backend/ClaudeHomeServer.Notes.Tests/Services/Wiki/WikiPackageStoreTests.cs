@@ -332,9 +332,18 @@ public class WikiPackageStoreTests : IDisposable
     {
         // TOCTOU без блокировки: обе постановки считают 19 открытых до записи друг друга и
         // обе создают — 21, лимит 20 на всю вики пробит. Счёт и запись — в одной критической
-        // секции: второй Create видит уже 20 и отказывает.
+        // секции: второй Create видит уже 20 и отказывает. Окно гонки — время CountOpen по
+        // 19 открытым, поэтому каждый заполнен 600 операциями (как в тесте параллельных
+        // решений): их чтение и пересчёт занимают десятки миллисекунд, и два Create,
+        // стартовавшие от барьера, пересекаются не случайно (с маленькими пакетами окно —
+        // микросекунды, и тест оставался зелёным даже без create-блокировки).
         for (var i = 0; i < WikiPackage.MaxOpenPackages - 1; i++)
-            WikiPackageStore.Create(_root, Pkg(AppendOp())).Ok.Should().BeTrue($"пакет {i}");
+        {
+            var ops = new List<WikiPackage.Operation>(600);
+            for (var k = 0; k < 600; k++) ops.Add(AppendOp($"Общее/A{k:D3}.md"));
+            var open = Pkg(ops.ToArray());
+            WikiPackageStore.Create(_root, open).Ok.Should().BeTrue($"пакет {i}");
+        }
 
         var a = Pkg(AppendOp());
         var b = Pkg(AppendOp());

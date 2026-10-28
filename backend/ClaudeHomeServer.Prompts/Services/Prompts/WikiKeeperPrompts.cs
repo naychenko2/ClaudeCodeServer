@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace ClaudeHomeServer.Services.Prompts;
 
 /// <summary>
@@ -14,6 +16,11 @@ namespace ClaudeHomeServer.Services.Prompts;
 /// даёт вызывающий — тогда модель не может закрыть маркер дословной цитатой из самого
 /// источника), и в промпте прямо сказано, что между маркерами — данные, а не инструкции
 /// (защита от промпт-инъекций, ADR-035 §7).
+///
+/// Контракт nonce: значение даётся заново на каждый вызов (NewNonce) и не выводится из
+/// содержимого источника; переданный nonce проходит проверку (непустой, только [A-Za-z0-9-],
+/// без переводов строк) — иначе маркер разъезжается на строки и граница области данных
+/// исчезает. Проверка выполняется на построении маркера, нарушение — ArgumentException.
 /// </summary>
 public static class WikiKeeperPrompts
 {
@@ -23,12 +30,34 @@ public static class WikiKeeperPrompts
     /// </summary>
     public const string NothingToAdd = "nothing to add";
 
-    /// <summary>Открывающий маркер источника. Nonce внутри маркера — вызывающий генерирует
-    /// его заново на каждый вызов.</summary>
-    public static string SourceOpen(string nonce) => $"<<<WIKI-SRC-{nonce}>>>";
+    /// <summary>Новый nonce маркеров: случайное значение (Guid формата «N»). Даётся заново на
+    /// каждый вызов и не выводится из содержимого источника — иначе источник мог бы закрыть
+    /// маркер дословной цитатой из себя.</summary>
+    public static string NewNonce() => Guid.NewGuid().ToString("N");
 
-    /// <summary>Закрывающий маркер источника (тот же nonce).</summary>
-    public static string SourceClose(string nonce) => $"<<<END-WIKI-SRC-{nonce}>>>";
+    /// <summary>Открывающий маркер источника. Nonce внутри маркера — вызывающий даёт его
+    /// заново на каждый вызов (NewNonce) и обязан пройти ValidateNonce.</summary>
+    public static string SourceOpen(string nonce) => $"<<<WIKI-SRC-{ValidateNonce(nonce)}>>>";
+
+    /// <summary>Закрывающий маркер источника (тот же nonce, та же проверка).</summary>
+    public static string SourceClose(string nonce) => $"<<<END-WIKI-SRC-{ValidateNonce(nonce)}>>>";
+
+    // Значение с переводом строки или спецсимволом разъезжает по строкам: «закрывающий»
+    // перестаёт быть границей. \A…\z — вся строка целиком: ни $, ни \Z не годятся, они
+    // пропускают хвостовой перевод строки.
+    private static readonly Regex NonceRx = new(@"\A[A-Za-z0-9-]+\z", RegexOptions.CultureInvariant);
+
+    /// <summary>Проверка переданного nonce: непустой, только [A-Za-z0-9-], без переводов
+    /// строк. Иначе маркер перестаёт быть границей области данных — ArgumentException до
+    /// построения промпта.</summary>
+    private static string ValidateNonce(string nonce)
+    {
+        if (string.IsNullOrEmpty(nonce) || !NonceRx.IsMatch(nonce))
+            throw new ArgumentException(
+                "nonce маркера источника обязан быть непустым и состоять из A-Z a-z 0-9 - "
+                + "(без переводов строк и спецсимволов)", nameof(nonce));
+        return nonce;
+    }
 
     /// <summary>
     /// Проход A: утверждения с дословными цитатами из выдержки источника (ADR-035 §12б, п. 6).
@@ -103,9 +132,13 @@ public static class WikiKeeperPrompts
             before anything is written.
 
             THE PLAN HAS TWO PARTS
-            1. "chronicle" — the record of this conversation: "about" (one line — what the
-               conversation was about), "decided", "learned", "open_questions". Write these in
-               the language of the source. Only what the source actually contains.
+            1. "chronicle" — the record of this conversation, built from the indices of the
+               claims of the first pass: "about" (the index of the claim this entry is about),
+               "decided" (the indices of the claims this conversation decided), "learned" (the
+               indices of the claims established here), "open_questions" (the indices of the
+               claims left open). A claim is named by its index only — never restate it: the
+               text of a claim and its quotes are kept by the code, not by you. Only what the
+               source actually contains.
             2. "operations" on knowledge pages of the target section. "op" is one of:
                - "create" — a new knowledge page; the title belongs to the target section only;
                - "append" — add a claim to an existing page named in the catalog;
@@ -114,10 +147,14 @@ public static class WikiKeeperPrompts
                - "conflict" — mark a real contradiction with a statement on an existing page.
                  A clarification is not a contradiction: if in doubt, do not use "conflict";
                - "link" — connect two pages (within the section or upward only).
+             Every operation carries the index of the claim it is based on. Three of them also
+             carry "target" — what the operation acts upon:
+               - "supersede" and "conflict" — the statement of the page that is replaced or
+                 contradicted, copied exactly as it is worded on the page shown below;
+               - "link" — the name of the other page, exactly as the catalog names it;
+               - "create" and "append" carry no target.
              Name an existing page exactly as the catalog names it; never invent a path.
-             Every entry of the chronicle and every operation carries the index of the claim
-             it is based on. The quotes and the source references are kept by the code, not by
-             you.
+             An operation without its target is not a change: the code rejects it.
 
             WHAT YOU MUST SKIP
             - statuses, deadlines, and "what I am doing now";
@@ -145,10 +182,12 @@ public static class WikiKeeperPrompts
             {"outcome":"{{NothingToAdd}}","reason":"<one short sentence>"}
 
             OUTPUT — JSON ONLY, THIS SCHEMA:
-            {"chronicle":{"about":"<one line>","decided":[0],"learned":[],"open_questions":[]},
-            "operations":[{"op":"append","page":"<title exactly as the catalog names it>","claim":0}]}
+            {"chronicle":{"about":0,"decided":[0],"learned":[],"open_questions":[]},
+            "operations":[{"op":"append","page":"<title exactly as the catalog names it>","claim":0},
+            {"op":"supersede","page":"<title>","claim":0,"target":"<the statement of the page, copied exactly>"},
+            {"op":"link","page":"<title>","claim":0,"target":"<the other page, as the catalog names it>"}]}
 
-            CLAIMS OF THE FIRST PASS (data — reference them by index):
+            CLAIMS OF THE FIRST PASS (data — reference a claim by its index, an integer):
             {{claimsJson}}
 
             SECTION CATALOG (data — the pages you may align to):

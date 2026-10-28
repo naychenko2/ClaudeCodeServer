@@ -432,9 +432,10 @@ onPassiveEvict(async keys => {
 
 const chatRevision = (s: Session): string => `${s.updatedAt}|${s.messageCount}`;
 
-// Потолок прогрева историй на проект за снимок: по-чатовой класс кэша держит последние
-// чаты, гонять больше — трафик впустую.
-const CHAT_WARM_MAX = 8;
+// Потолок прогрева историй на ВЕСЬ прогон снапшота (а не на проект): по-чатовой класс
+// кэша держит последние чаты, гонять больше — трафик впустую. При потолке на проект
+// 33 проекта давали до 264 полных загрузок истории за прогон.
+const CHAT_WARM_MAX = 12;
 
 async function loadChatRevisions(projectId: string): Promise<Record<string, string>> {
   const e = await idbGet<Record<string, string>>('synced-chats:' + projectId).catch(() => undefined);
@@ -527,6 +528,10 @@ export async function runOfflineSnapshot(priorityProjectId?: string): Promise<vo
     const validByProject = new Map<string, Set<string>>();
     // Дерево приоритетного проекта — для повторной записи листингов в конце цикла
     let priorityTree: FileEntry[] | null = null;
+    // Общий остаток прогрева историй на прогон: проекты обходятся в порядке `ordered`
+    // (приоритетный первым), внутри проекта — самые свежие чаты. Глобальной сортировки
+    // по всем проектам нет намеренно.
+    let chatWarmLeft = CHAT_WARM_MAX;
 
     for (const p of ordered) {
       const [sessions, treeEntries] = await Promise.all([
@@ -552,7 +557,10 @@ export async function runOfflineSnapshot(priorityProjectId?: string): Promise<vo
       const staleChats = sessions
         .filter(s => knownRevs[s.id] !== chatRevision(s))
         .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
-        .slice(0, CHAT_WARM_MAX);
+        .slice(0, chatWarmLeft);
+      chatWarmLeft -= staleChats.length;
+      // Ревизии непрогретых чатов не записываются (см. nextRevs ниже): они останутся
+      // «устаревшими» и достанутся следующему прогону.
       const freshRevs: Record<string, string> = {};
       await mapLimit(staleChats, 2, async s => {
         await api.sessions.getHistoryTail(p.id, s.id, { after: -1 });

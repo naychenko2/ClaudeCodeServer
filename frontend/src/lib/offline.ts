@@ -1098,7 +1098,10 @@ function touchUsedAt<T>(key: string, cached: { data: T; savedAt: number; usedAt?
   }
 }
 
-async function passiveRead<T>(url: string, chatScope?: string): Promise<T | undefined> {
+// Чтение из пассивного кэша. Отдаёт и вес записи (bytes) вместе с данными —
+// офлайн-ветка request() сообщает его колбэку onBytes: мера та же, что при записи.
+// У записей, написанных до появления поля bytes, веса нет (undefined).
+async function passiveRead<T>(url: string, chatScope?: string): Promise<{ data: T; bytes?: number } | undefined> {
   const owner = readStoredUserId();
   // Содержимое файла — в своём классе: сначала помеченная запись («k»), потом
   // непомеченная («f»). Помеченная защищена от вытеснения содержимым непомеченных.
@@ -1109,7 +1112,7 @@ async function passiveRead<T>(url: string, chatScope?: string): Promise<T | unde
       const cached = await idbGet<T>(key);
       if (!cached) continue;
       touchUsedAt(key, cached);
-      return cached.data;
+      return { data: cached.data, bytes: cached.bytes };
     }
     return undefined;
   }
@@ -1118,7 +1121,7 @@ async function passiveRead<T>(url: string, chatScope?: string): Promise<T | unde
   const cached = await idbGet<T>(key);
   if (!cached) return undefined;
   touchUsedAt(key, cached);
-  return cached.data;
+  return { data: cached.data, bytes: cached.bytes };
 }
 
 // owner — владелец на момент СТАРТА запроса: если к записи вкладка вышла или сменила аккаунт,
@@ -1575,9 +1578,15 @@ async function evictChatClassOnce(owner: string, known?: { key: string; savedAt:
 // сам факт «сервер сейчас отвечает». Пример — статус выкатки: продукт на время публикации
 // гаснет, и подставленный из кэша прошлый ответ превращает «сервер лежит, значит выкатка идёт»
 // в «сервер отвечает, ничего не происходит». Окно выкатки на этом различии и построено.
-export async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number; parse?: 'json'; live?: boolean; chatScope?: string }): Promise<T>;
-export async function request(url: string, options: RequestInit & { timeoutMs?: number; parse: 'blob'; live?: boolean; chatScope?: string }): Promise<Blob>;
-export async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number; parse?: 'json' | 'blob'; live?: boolean; chatScope?: string }): Promise<T | Blob> {
+//
+// onBytes — необязательный колбэк веса ответа. Мера одна на обеих ветках: онлайн —
+// длина текста ответа (то же число, что пишется в bytes пассивной записи), офлайн-фолбэк —
+// bytes сохранённой записи (запись без этого поля — без веса, колбэк не зовётся).
+// Второй меры не заводим: оценка вызывающего и учёт кэша обязаны сходиться.
+// Для бинарного ответа ('blob') колбэк не зовётся: меры текста у него нет.
+export async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number; parse?: 'json'; live?: boolean; chatScope?: string; onBytes?: (n: number) => void }): Promise<T>;
+export async function request(url: string, options: RequestInit & { timeoutMs?: number; parse: 'blob'; live?: boolean; chatScope?: string; onBytes?: (n: number) => void }): Promise<Blob>;
+export async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number; parse?: 'json' | 'blob'; live?: boolean; chatScope?: string; onBytes?: (n: number) => void }): Promise<T | Blob> {
   const method = (options?.method ?? 'GET').toUpperCase();
   const isGet = method === 'GET';
 
@@ -1592,7 +1601,7 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
   // AbortController для таймаута: если сеть «зависла» (пакеты идут, но ответа нет),
   // мы не ждём браузерного TCP-таймаута (может быть минуты).
   // timeoutMs — оверрайд для заведомо долгих запросов (AI-генерация и т.п.)
-  const { timeoutMs, parse, live, chatScope, signal: callerSignal, ...fetchOptions } = options ?? {};
+  const { timeoutMs, parse, live, chatScope, onBytes, signal: callerSignal, ...fetchOptions } = options ?? {};
   // Кэшируем и достаём из кэша только те GET, которым это на пользу (см. комментарий к live)
   const useOfflineCache = isGet && !live;
   const controller = new AbortController();
@@ -1668,6 +1677,9 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
     // Тело может быть пустым (Ok() без контента у мутаций) — не парсим пустую строку как JSON
     const text = res.status === 204 ? '' : await res.text();
     const data = (text ? JSON.parse(text) : undefined) as T;
+    // Вес ответа наружу — той же мерой, что идёт в кэш (text.length): второй меры нет,
+    // иначе оценка вызывающего разошлась бы с учётом кэша.
+    if (onBytes) onBytes(text.length);
     if (useOfflineCache) {
       // Вес ответа — по длине текста: оценка снизу для кириллицы (2 байта на символ),
       // потолок берём с запасом. Точный размер нужен только чтобы понять, что класс
@@ -1719,8 +1731,13 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
       // Кроме live-запросов: там подстановка прошлого ответа выдала бы лежащий сервер за
       // работающий, а вызывающему нужен именно факт обрыва.
       if (useOfflineCache) {
-        const cached = await passiveRead<T>(url, chatScope).catch(() => undefined);
-        if (cached !== undefined) return cached;
+        const hit = await passiveRead<T>(url, chatScope).catch(() => undefined);
+        if (hit !== undefined) {
+          // Вес из кэша — тот же text.length, что был записан в запись; у записи
+          // без bytes (написанной до этого поля) веса нет, колбэк не зовётся.
+          if (hit.bytes !== undefined) onBytes?.(hit.bytes);
+          return hit.data;
+        }
       }
       if (ourTimeout) throw new RequestTimeoutError(effectiveTimeout);
       throw new OfflineError(isGet ? 'Нет сохранённых данных для офлайн-доступа' : undefined);

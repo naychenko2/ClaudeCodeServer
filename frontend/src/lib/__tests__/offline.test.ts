@@ -106,6 +106,36 @@ describe('request: network-first', () => {
   });
 });
 
+describe('request: onBytes', () => {
+  it('онлайн GET с onBytes — колбэк получает ровно длину тела ответа', async () => {
+    const body = { items: [1, 2] };
+    const text = JSON.stringify(body);
+    fetchMock.mockResolvedValue(jsonResponse(body));
+    const onBytes = vi.fn();
+
+    const data = await offline.request<{ items: number[] }>('/projects', { onBytes });
+
+    expect(data).toEqual(body);
+    expect(onBytes).toHaveBeenCalledTimes(1);
+    // Мера та же, что идёт в кэш: длина текста ответа, второй меры нет
+    expect(onBytes).toHaveBeenCalledWith(text.length);
+    // …и то же число лежит в bytes записи кэша — оценка вызывающего и учёт кэша сходятся
+    await offline.flushPassiveWrites();
+    expect(idbSet).toHaveBeenCalledWith('offline:u1:/projects', expect.objectContaining({ bytes: text.length }));
+  });
+
+  it('сетевой обрыв + запись кэша с bytes — данные из кэша, колбэк получает вес записи', async () => {
+    fetchMock.mockRejectedValue(new TypeError('failed to fetch'));
+    idbGet.mockResolvedValue({ data: { cached: true }, savedAt: 1, bytes: 1234 });
+    const onBytes = vi.fn();
+
+    const data = await offline.request<{ cached: boolean }>('/projects', { onBytes });
+
+    expect(data).toEqual({ cached: true });
+    expect(onBytes).toHaveBeenCalledWith(1234);
+  });
+});
+
 describe('request: мутации офлайн', () => {
   it('мутация в офлайне отклоняется OfflineError без похода в сеть', async () => {
     offline.setOnline(false);

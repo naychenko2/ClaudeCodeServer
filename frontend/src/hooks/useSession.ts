@@ -24,8 +24,15 @@ interface SessionState extends ChatState {
   // Верхняя оценка веса ленты чата в сторе, байты: накопленный receivedBytes курсора
   // последней загрузки (lib/historyTail). Это НЕ точный вес items: байты отброшенного
   // при склейке хвоста остаются в счётчике. Живёт ровно вместе с лентой: пишется в
-  // loadHistory, уходит с состоянием при выселении (инвариант «вес ⇔ лента»).
+  // loadHistory, уходит с состоянием при выселении (инвариант «вес ⇔ лента»). У «оболочки»
+  // (isShell ниже) — 0: ленты нет, считать нечего.
   historyBytes: number;
+  // «Оболочка» ленты, оставленной без зрителя посреди идущего хода (F3-S3b, см. evictColdSessions):
+  // запись в сторе остаётся (группа SignalR живёт, ход продолжается), но items, курсор,
+  // отметка прогрева и вес сняты; СТАТУСНЫЕ поля (isWaiting, isJoined, статус хода) живые.
+  // Пока зрителя нет, items по live-событиям не растут — дельты не копятся и не теряются:
+  // сервер — источник истины, полная лента придёт при возврате (курсора нет → after=-1).
+  isShell?: boolean;
 }
 
 const _store = new Map<string, SessionState>();
@@ -82,7 +89,12 @@ async function loadHistory(sid: string, projectId?: string): Promise<unknown[]> 
   // при склейке хвоста в нём остаются). Живёт вместе с состоянием: при выселении сессии
   // уходит с ним — инвариант «вес ⇔ лента» держится той же точкой, что и «курсор ⇔ лента».
   // Писание без уведомления подписчиков: поле служебное (учёт OOM), лента при этом та же.
-  const st = getState(sid);
+  // Дозагрузка, летевшая ДО сброса до «оболочки» (F3-S3b) и вернувшаяся после него:
+  // снимок в руках и вызывающий выпишет из него ленту — оболочка снимается, запись живёт
+  // полной. Оставить оболочку с курсором и весом нельзя: «курсор ⇔ лента» и «вес оболочки
+  // = 0» (п.2) тогда разъехались бы; следующая вычистка возьмёт её по новому кругу.
+  let st = getState(sid);
+  if (st.isShell) { st = { ...st, isShell: false }; touch(sid, st); }
   if (st.historyBytes !== applied.receivedBytes) touch(sid, { ...st, historyBytes: applied.receivedBytes });
   return applied.raw;
 }
@@ -180,46 +192,67 @@ function setState(sid: string, updater: (prev: SessionState) => SessionState) {
   _listeners.get(sid)?.forEach(fn => fn());
 }
 
-// LRU-потолок: держим холодные сессии в двух пределах — не более MAX_CACHED_SESSIONS
-// штук и суммой не более COLD_BUDGET_BYTES по весу. Холодная = никто не смотрит (нет
-// подписчиков), ход не идёт (isWaiting) и мы вышли из её SignalR-группы (isJoined).
-// Открытые/активные не считаем и не выселяем (их вес в бюджет не входит). Ленты
-// выселенных освобождаются; история восстановится через loadHistory при повторном
+// LRU-потолок: держим холодные ленты в двух пределах — не более MAX_CACHED_SESSIONS
+// штук с лентой и суммой не более COLD_BUDGET_BYTES по весу. Холодная = никто не смотрит
+// (нет подписчиков). Открытые/активные (есть зрители) не считаем и не трогаем (их вес в
+// бюджет не входит). Лента с идущим ходом (isWaiting/isJoined) без зрителя НЕ исключается
+// из рассмотрения (F3-S3b): сервер держит её группу, пока ход идёт, лента по live-событиям
+// растёт сколько угодно — такая запись сбрасывается до «оболочки» (isShell): items, курсор,
+// отметка прогрева и вес сняты, статусные поля живые, группа не покидается, ход продолжается.
+// Мёртвая оболочка (ход кончился) — пустая холодная запись: выметается на общих основаниях.
+// Ленты выселенных освобождаются; история восстановится через loadHistory при повторном
 // открытии. Зовётся из cleanup при закрытии последнего зрителя сессии.
 function evictColdSessions() {
   // Вес берём из стора (s.historyBytes): его пишет loadHistory через touch БЕЗ
   // уведомления подписчиков (R-F3-S2a, п.4) — из рендера хука он не виден.
   const cold: Array<[string, number, number]> = []; // sid, _lastSeen, вес ленты
   let coldBytes = 0;
+  let coldTapes = 0; // штучный предел считает записи с лентой: оболочка — не лента
   for (const [sid, s] of _store) {
     const watched = (_listeners.get(sid)?.size ?? 0) > 0;
-    if (watched || s.isWaiting || s.isJoined) continue;
+    if (watched) continue;
     cold.push([sid, _lastSeen.get(sid) ?? 0, s.historyBytes]);
-    coldBytes += s.historyBytes;
+    coldBytes += s.historyBytes; // оболочка весит 0: в сумму она не входит
+    if (!s.isShell) coldTapes++;
   }
   if (cold.length === 0) return;
   cold.sort((a, b) => a[1] - b[1]); // старые первыми
 
-  // Выселение: старейшие первыми, пока хоть один предел переходён (штучный —
-  // MAX_CACHED_SESSIONS, весовой — сумма coldBytes > COLD_BUDGET_BYTES).
+  // Обработка: старейшие первыми, пока хоть один предел переходён (штучный —
+  // MAX_CACHED_SESSIONS лент, весовой — сумма coldBytes > COLD_BUDGET_BYTES).
   // «Последняя покинутая» (самая свежая по _lastSeen, последняя в сортировке) не
-  // выселяется ни одним пределом, даже если одна тяжелее бюджета: возврат «назад»
+  // трогается ни одним пределом, даже если одна тяжелее бюджета: возврат «назад»
   // в только что закрытый чат остаётся мгновенным.
   // Курсор снимается вместе с лентой (инвариант «курсор ⇔ лента», см. _cursors):
-  // осиротевших курсоров после выселения не остаётся.
+  // осиротевших курсоров после обработки не остаётся.
   // Защита «последней покинутой» — по позиции последней в сортировке (она не меняется
-  // при выселении), а не по последней из оставшихся: иначе вычистка веса доедала бы
+  // при обработке), а не по последней из оставшихся: иначе вычистка веса доедала бы
   // ленту перед ней и берегла бы её вместо самой свежей.
-  let keep = cold.length;
+  let keep = coldTapes;
   for (let i = 0; i < cold.length - 1 && (keep > MAX_CACHED_SESSIONS || coldBytes > COLD_BUDGET_BYTES); i++) {
     const [sid, , bytes] = cold[i];
+    const s = _store.get(sid)!;
+    const live = s.isWaiting || s.isJoined;
+    if (live && s.isShell) continue; // живая оболочка брать нечего: вес уже 0, лента уже снята
+    if (live) {
+      // Сброс до «оболочки» (F3-S3b): запись остаётся в сторе и в группе SignalR — ход
+      // продолжает идти и капать в фоне; сняты только лента и всё, что с ней живёт
+      // (items, курсор, вес, отметка прогрева). Статусные поля (isWaiting, isJoined,
+      // статус хода, название) не трогаем.
+      touch(sid, { ...s, items: [], isShell: true, historyBytes: 0 });
+      _cursors.delete(sid); // сырая история курсора — второй экземпляр ленты, без ленты он осиротел
+      _warmed.delete(sid); // греть оболочку нечем: при возврате лента придёт полной, after=-1
+      coldBytes -= bytes; // вес оболочки 0 — из суммы она выпадает
+      keep--;
+      continue;
+    }
     _store.delete(sid);
     _lastSeen.delete(sid);
     _cursors.delete(sid); // сырая история курсора — второй экземпляр ленты, держать её без ленты незачем
     // Выселенную сессию разрешаем греть заново: её ленты в сторе больше нет
     _warmed.delete(sid);
     coldBytes -= bytes;
-    keep--;
+    if (!s.isShell) keep--; // мёртвая оболочка в штучный предел не входила — и не снимает его
   }
 }
 
@@ -414,7 +447,9 @@ function ensureHandler() {
     // покажется как «Прервано» — обмануть мягко лучше, чем пугать регулярной ложной аварией.
     if (msg.type === 'exited' && (_sending.has(sid) || _preempted.has(sid))) {
       const s = getState(sid);
-      if (s.isWaiting && !turnAlreadyEnded(s.items))
+      // Оболочку не размечаем: её items пустые по построению, а сервер пишет маркер
+      // 'interrupted' в историю — при возврате он придёт с лентой
+      if (s.isWaiting && !s.isShell && !turnAlreadyEnded(s.items))
         touch(sid, { ...s, items: [...s.items, { kind: 'interrupted', ts: Date.now() }] });
     }
     // Ход, который прерывали, закончился — флаг отработал. Гасим и на result: если перебой
@@ -427,7 +462,12 @@ function ensureHandler() {
     const prev = getState(sid);
     const next = applyServerMessage(prev, msg);
     if (next !== prev) {
-      touch(sid, next);
+      // «Оболочка» (F3-S3b): по live-событиям items не растут — лента снята специально,
+      // дельты не копятся и не теряются: полная придёт с сервера при возврате (after=-1).
+      // Статусные поля (isWaiting, статус хода, rateLimits, очередь) применяются обычно:
+      // запись обязана знать, что её ход кончился, — иначе живая оболочка никогда бы
+      // не стала мёртвой и не выметалась
+      touch(sid, prev.isShell ? { ...next, items: prev.items } : next);
       _listeners.get(sid)?.forEach(fn => fn());
     }
 
@@ -588,6 +628,11 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     // Открытие/подписка — действие зрителя: лента становится свежайшей в LRU.
     // Дальнейшие мутации этой ленты двигают метку через touch (зритель здесь есть)
     markSeen(sessionId);
+
+    // Возврат зрителя снимает «оболочку» (F3-S3b): с этого момента items снова живут
+    // (join-replay карточек разрешения, стрим идущего хода), а полную ленту принесёт
+    // ensureJoined → joinAndLoadHistory: курсора нет → after=-1, сервер — источник истины.
+    if (getState(sessionId).isShell) setState(sessionId, prev => ({ ...prev, isShell: false }));
 
     // Признак группового чата — до загрузки истории (влияет на normalizeHistory).
     // Только от потребителя, который его знает: useSessionArtifacts зовёт хук без
@@ -939,4 +984,4 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
 }
 
 // Экспорт для тестов: доступ к модульному стору и константам
-export const __test = { _store, _cursors, _lastSeen, MAX_CACHED_SESSIONS, COLD_BUDGET_BYTES };
+export const __test = { _store, _cursors, _lastSeen, _warmed, MAX_CACHED_SESSIONS, COLD_BUDGET_BYTES };

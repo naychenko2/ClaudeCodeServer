@@ -590,15 +590,20 @@ function NotConnected() {
 function NoConnection({ error }: { error: StatsPollError }) {
   const offline = error === 'offline';
   return (
-    <EmptyState
-      icon={offline
-        ? <Unplug size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />
-        : <AlertTriangle size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />}
-      title={offline ? 'Нет связи с сервером' : 'Не удалось получить данные'}
-      subtitle={offline
-        ? 'Данные появятся, как только связь вернётся.'
-        : 'Повторим автоматически.'}
-    />
+    // Живое состояние вкладки: карточка появляется и гаснет без участия человека
+    // (Ф10) — role="status" + aria-live="polite" доносят её смену скринридеру.
+    // Общий EmptyState не трогаем: в других местах он не обязан announce'иться.
+    <div role="status" aria-live="polite">
+      <EmptyState
+        icon={offline
+          ? <Unplug size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />
+          : <AlertTriangle size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />}
+        title={offline ? 'Нет связи с сервером' : 'Не удалось получить данные'}
+        subtitle={offline
+          ? 'Данные появятся, как только связь вернётся.'
+          : 'Повторим автоматически.'}
+      />
+    </div>
   );
 }
 

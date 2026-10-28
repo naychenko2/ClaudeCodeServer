@@ -254,6 +254,53 @@ describe('createStatsPoller: error в снимке (Ф10)', () => {
     expect(p.getSnapshot().error).toBeNull(); // чужая причина под новым выбором не показывается
     p.dispose();
   });
+
+  // Ревью Ф10 (Глеб): тот же guard движка, что у .then, обязан быть и в catch —
+  // поздний отказ чужого движка не трогает снимок текущего. Мутация «убрать
+  // guard в catch» краснит первый тест; «сброс только при данных (не помнить
+  // движок отказа)» — второй.
+  it('поздний отказ чужого движка не трогает снимок текущего', async () => {
+    const engine = { current: 'main' as 'main' | 'bonsai' };
+    let rejectMain: (e: unknown) => void = () => {};
+    const mainPromise = new Promise<typeof mock>((_, rej) => { rejectMain = rej; });
+    let resolveBonsai: (v: typeof mock) => void = () => {};
+    const bonsaiPromise = new Promise<typeof mock>((r) => { resolveBonsai = r; });
+    const fetch = vi.fn<() => Promise<typeof mock>>();
+    fetch.mockImplementationOnce(() => mainPromise); // запрос main в пути
+    fetch.mockImplementationOnce(() => bonsaiPromise); // запрос bonsai тоже в пути
+    const p = createStatsPoller(fetch, 2000, timers, untimer, engine);
+    p.setActive(true, true); // первый тик — запрос main
+    engine.current = 'bonsai'; // пользователь переключился, main всё ещё в пути
+    p.refetch(); // запрос bonsai (как эффект смены движка в хуке)
+    rejectMain(new OfflineError()); // отказ старого движка пришёл позже
+    await vi.advanceTimersByTimeAsync(0);
+    const mid = p.getSnapshot();
+    expect(mid.error).toBeNull(); // чужой отказ не выставил error текущему
+    expect(mid.loading).toBe(true); // ждём ответ нового движка
+    expect(mid.data).toBeNull();
+    resolveBonsai(mock); // ответ нового движка
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p.getSnapshot().data).toEqual(mock);
+    expect(p.getSnapshot().error).toBeNull();
+    expect(p.getSnapshot().loading).toBe(false);
+    p.dispose();
+  });
+
+  it('отказ без данных не остаётся при программной смене движка', async () => {
+    const engine = { current: 'main' as 'main' | 'bonsai' };
+    const fetch = vi.fn<() => Promise<typeof mock>>();
+    fetch.mockRejectedValueOnce(new OfflineError()); // main офлайн, данных никогда не было
+    fetch.mockImplementationOnce(() => new Promise<typeof mock>(() => {})); // запрос bonsai «в пути»
+    const p = createStatsPoller(fetch, 2000, timers, untimer, engine);
+    p.setActive(true, true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p.getSnapshot().error).toBe('offline'); // причина текущего выбора показана
+    engine.current = 'bonsai';
+    p.refetch(); // смена движка без данных — прежний сброс (при данных) не сработал бы
+    expect(p.getSnapshot().error).toBeNull(); // чужая причина гасится при любой смене
+    expect(p.getSnapshot().loading).toBe(true);
+    p.dispose();
+  });
 });
 
 describe('стор configured: лёгкий опрос для значка', () => {

@@ -154,14 +154,16 @@ export function createStatsPoller(
   clearTimer: (id: unknown) => void = defaultClearTimer,
   // Движок, к которому относятся запросы (тот же ref, что у makeStatsFetch): без
   // него поллер про движок не знает — поведение как раньше. С ним: ответ
-  // относится к движку, актуальному на момент запроса, поздний ответ другого
-  // движка отбрасывается, а смена движка сбрасывает чужой снимок.
+  // относится к движку, актуальному на момент запроса, поздний ответ или отказ
+  // другого движка отбрасывается, а смена движка сбрасывает чужой снимок.
   engineRef?: { current: LocalModelEngineName },
 ): StatsPoller {
   let data: LocalModelStats | null = null;
-  // Движок, к которому относится data (тот же, что был в engineRef при запросе).
-  // Рядом с data — чтобы поздний ответ старого движка не затёр данные нового.
-  let dataEngine: LocalModelEngineName | null = null;
+  // Движок, к которому относится текущий снимок — данные или причина сбоя (тот,
+  // что был в engineRef на момент последнего принятого ответа). Ставится и при
+  // успехе, и при отказе текущего движка: смена движка сбрасывает чужой снимок
+  // целиком — ни данных, ни причины старого стенда под новым выбором не остаётся.
+  let snapshotEngine: LocalModelEngineName | null = null;
   let loading = false;
   // Причина последнего сбоя (Ф10): ставится в catch, гасится успехом опроса.
   // С данными она не видна (показываем последние данные), без данных вкладка
@@ -188,13 +190,13 @@ export function createStatsPoller(
   const doFetch = () => {
     // Движок этого запроса — тот, что выбран сейчас; без engineRef — основной стенд.
     const reqEngine: LocalModelEngineName = engineRef?.current ?? 'main';
-    if (dataEngine !== null && dataEngine !== reqEngine) {
+    if (snapshotEngine !== null && snapshotEngine !== reqEngine) {
       // Сменили движок: цифры другого стенда под новым выбором быть не должно —
       // снимок сбрасывается сразу, до ответа нового (отказ нового движка не
       // оставляет чужих данных). error — часть снимка: она относилась к старому
       // стенду, под новым выбором её показывает следующий опрос.
       data = null;
-      dataEngine = null;
+      snapshotEngine = null;
       error = null;
       loading = true;
     }
@@ -210,17 +212,28 @@ export function createStatsPoller(
         return;
       }
       data = d;
-      dataEngine = reqEngine;
+      snapshotEngine = reqEngine;
       loading = false;
       error = null; // успех гасит причину: вкладка снова показывает данные
       inflight--;
       refresh();
       emit();
     }).catch((err: unknown) => {
+      if (engineRef && reqEngine !== engineRef.current) {
+        // Поздний отказ движка, который уже не выбран: он не относится к
+        // текущему снимку — ни error, ни loading, ни data (тот же инвариант,
+        // что у позднего ответа в .then).
+        inflight--;
+        refresh();
+        emit();
+        return;
+      }
       // Сбой опроса не критичен: показываем последние данные; после смены движка
       // их нет — так и остаёмся без данных, а не с чужими. Без данных вкладка
-      // объясняет причину по error (Ф10), а не молчит.
+      // объясняет причину по error (Ф10), а не молчит. Причина относится к
+      // движку запроса: смена движка гасит её вместе со снимком.
       error = err instanceof OfflineError ? 'offline' : 'failed';
+      snapshotEngine = reqEngine;
       inflight--;
       loading = false;
       refresh();

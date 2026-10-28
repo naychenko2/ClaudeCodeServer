@@ -371,6 +371,13 @@ describe('нет данных при сбое — объяснение вмес�
     // не маркер: lucide-иконки несут его сами)
     expect(html).not.toContain('ccs-lm-skeleton');
   });
+  // Ревью Ф10 (Глеб): карточка — живое состояние вкладки, её смена должна
+  // доходить до скринридера. Мутация «убрать обёртку role=status» краснит.
+  it('карточка сбоя — в обёртке role="status" aria-live="polite"', () => {
+    const html = renderTab({ data: null, loading: false, error: 'offline' });
+    expect(html).toContain('role="status"');
+    expect(html).toContain('aria-live="polite"');
+  });
   it('первое открытие без причины — прежний скелетон; без данных и без error — пусто', () => {
     const skel = renderTab({ data: null, loading: true });
     expect(skel).not.toContain('Нет связи с сервером');

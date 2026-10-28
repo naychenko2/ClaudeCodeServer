@@ -24,6 +24,9 @@ jobs:
           # что на образе раннера случайно оказался предустановленный SDK 10.x — при
           # обновлении образа это молча сломалось бы.
           dotnet-version: 10.0.x
+          # Кэш NuGet общий со сборкой шардов: им нужен restore (см. backend-test)
+          cache: true
+          cache-dependency-path: backend/**/*.csproj
       # Предупреждения компилятора — ошибка сборки, но только здесь, а не в
       # Directory.Build.props: локально они не должны мешать отладке (временно
       # неиспользуемая переменная — норма в процессе работы, а не повод глушить
@@ -98,10 +101,16 @@ jobs:
         env:
           DOTNET_CLI_UI_LANGUAGE: en
         run: dotnet test backend/ClaudeHomeServer.Tests --no-build --list-tests > monolith-tests.txt
+      # В артефакт — только bin (obj шард восстанавливает restore) и только нативные рантаймы
+      # linux-x64: остальные платформы (SkiaSharp и пр. с pdb) раздували архив до 4,6 ГБ
       - name: Pack build output
         run: |
-          find backend -type d \( -name bin -o -name obj \) -prune -print0 \
-            | tar --null --exclude='backend/*/bin/Release' --exclude='backend/*/obj/Release' -cf - -T - monolith-tests.txt | zstd -T0 -3 -q -o "$RUNNER_TEMP/backend-build.tar.zst"
+          find backend -type d -name bin -prune -print0 \
+            | tar --null --exclude='backend/*/bin/Release' \
+                --exclude='*/runtimes/win*' --exclude='*/runtimes/osx*' --exclude='*/runtimes/linux-musl*' \
+                --exclude='*/runtimes/linux-arm*' --exclude='*/runtimes/browser*' --exclude='*/runtimes/maccatalyst*' \
+                --exclude='*/runtimes/ios*' --exclude='*/runtimes/android*' --exclude='*/runtimes/freebsd*' \
+                -cf - -T - monolith-tests.txt | zstd -T0 -3 -q -o "$RUNNER_TEMP/backend-build.tar.zst"
           ls -lh "$RUNNER_TEMP/backend-build.tar.zst"
       - uses: actions/upload-artifact@v4
         with:
@@ -142,6 +151,12 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: backend/**/*.csproj
+      # Без restore свежий раннер не видит пакетов Test SDK, и `dotnet test --no-build` молча
+      # ничего не запускает (код 0, ни одного TRX) — так прошёл первый прогон матрицы
+      - name: Restore
+        run: dotnet restore backend/ClaudeHomeServer.slnx
       - uses: actions/download-artifact@v4
         with:
           name: backend-build

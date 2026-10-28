@@ -147,15 +147,15 @@ describe('applyHistoryReply: счётчик полученного receivedBytes
     expect(a2.cursor).toBeUndefined();
   });
 
-  it('вызов без веса (как в useSession.ts:62): счётчик 0, старый вызов компилируется', () => {
+  it('вес обязателен: явный нуль — тоже значение, счётчик 0 (дефолта replyBytes=0 больше нет)', () => {
     const full1 = turn1();
     const q1 = { after: -1 };
     const r1 = serverTail(full1, q1);
-    const a1 = applyHistoryReply(undefined, q1, r1); // 4-го аргумента нет — по умолчанию 0
+    const a1 = applyHistoryReply(undefined, q1, r1, 0);
     expect(a1.receivedBytes).toBe(0);
     expect(a1.cursor?.receivedBytes).toBe(0);
 
-    const a2 = applyHistoryReply(a1.cursor, cursorQuery(a1.cursor), [...full1]); // плоский, без веса
+    const a2 = applyHistoryReply(a1.cursor, cursorQuery(a1.cursor), [...full1], 0); // плоский, вес 0
     expect(a2.receivedBytes).toBe(0);
     expect(a2.cursor).toBeUndefined();
   });

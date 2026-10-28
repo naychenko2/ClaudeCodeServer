@@ -46,8 +46,9 @@ vi.mock('react', () => ({
 const m = vi.hoisted(() => ({
   getHistory: vi.fn<(sid: string) => Promise<unknown[]>>(async () => []),
   // Докачка по курсору (B5). По умолчанию сервер «старый»: отвечает плоским массивом из
-  // getHistory — прежние тесты идут как раньше; тесты курсора переопределяют ответ конвертом
-  getHistoryTail: vi.fn<(sid: string, q: { after: number; fp?: string }) => Promise<unknown>>(async () => []),
+  // getHistory — прежние тесты идут как раньше; тесты курсора переопределяют ответ конвертом.
+  // onBytes — колбэк веса ответа (как в настоящей api): тест, проверяющий вес, сам его зовёт
+  getHistoryTail: vi.fn<(sid: string, q: { after: number; fp?: string }, onBytes?: (n: number) => void) => Promise<unknown>>(async () => []),
   joinSession: vi.fn<(sid: string) => Promise<void>>(async () => { }),
   leaveSession: vi.fn<(sid: string) => Promise<void>>(async () => { }),
   sendMessage: vi.fn<() => Promise<'started' | 'queued' | 'queued-preempted'>>(async () => 'started'),
@@ -72,11 +73,11 @@ vi.mock('../../lib/api', () => ({
   api: {
     chats: {
       getHistory: (sid: string) => m.getHistory(sid),
-      getHistoryTail: (sid: string, q: { after: number; fp?: string }) => m.getHistoryTail(sid, q),
+      getHistoryTail: (sid: string, q: { after: number; fp?: string }, onBytes?: (n: number) => void) => m.getHistoryTail(sid, q, onBytes),
     },
     sessions: {
       getHistory: (_projectId: string, sid: string) => m.getHistory(sid),
-      getHistoryTail: (_projectId: string, sid: string, q: { after: number; fp?: string }) => m.getHistoryTail(sid, q),
+      getHistoryTail: (_projectId: string, sid: string, q: { after: number; fp?: string }, onBytes?: (n: number) => void) => m.getHistoryTail(sid, q, onBytes),
       cancelPending: vi.fn(async () => { }),
       preemptForPending: (sid: string) => m.preemptForPending(sid),
     },
@@ -1017,7 +1018,7 @@ describe('useSession: реконнект и повторная загрузка 
 });
 
 describe('useSession: потолок памяти (OOM fix)', () => {
-  const { MAX_CACHED_SESSIONS, MAX_TAIL_CURSORS, _store, _cursors, _lastSeen } = __test;
+  const { MAX_CACHED_SESSIONS, _store, _cursors, _lastSeen } = __test;
 
   // Модульный стор переживает тесты: чистим перед каждым, чтобы предыдущие
   // describe-блоки не нафláсили холодные сессии в кэши
@@ -1035,7 +1036,16 @@ describe('useSession: потолок памяти (OOM fix)', () => {
       return { reset: false, messages: [], anchorIndex: 2, anchorFp: 'fp' };
     });
 
-  it('30 чатов подряд → курсоры и ленты ограничены', async () => {
+  // Открыть чат, дождаться загрузки, вернуться с новым серверным состоянием:
+  // та же цепочка, что reopen в describe курсора (здесь она локальна)
+  async function reopenLocal(prev: { unmount: () => void } | null, sid: string) {
+    prev?.unmount();
+    const chat = openChat(sid);
+    await flush();
+    return chat;
+  }
+
+  it('30 чатов подряд → лента ограничена, осиротевших курсоров нет', async () => {
     mockTail();
     let prev: { unmount: () => void } | null = null;
 
@@ -1049,20 +1059,21 @@ describe('useSession: потолок памяти (OOM fix)', () => {
 
     // Ленты в сторе: не более MAX_CACHED_SESSIONS холодных + 1 открытая
     expect(_store.size).toBeLessThanOrEqual(MAX_CACHED_SESSIONS + 1);
-    // Курсоры: не более MAX_TAIL_CURSORS холодных + 1 открытая
-    expect(_cursors.size).toBeLessThanOrEqual(MAX_TAIL_CURSORS + 1);
+    // Инвариант «курсор ⇔ лента» (F3-S2a): штучного потолка курсоров больше нет —
+    // вместо него осиротевших курсоров: у каждого курсора лента в сторе есть
+    for (const sid of _cursors.keys()) expect(_store.has(sid)).toBe(true);
 
     prev!.unmount();
   });
 
-  it('возврат в чат с выброшенным курсором → after=-1', async () => {
+  it('выселение снимает курсор вместе с лентой → возврат after=-1', async () => {
     mockTail();
-    // Открываем MAX_TAIL_CURSORS + 2 чата: первый потеряет курсор
+    // Открываем MAX_CACHED_SESSIONS + 2 чата: первый выселяется из стора целиком
     const firstSid = nextSid();
     const sids: string[] = [firstSid];
     let prev: { unmount: () => void } | null = null;
 
-    for (let i = 0; i <= MAX_TAIL_CURSORS + 1; i++) {
+    for (let i = 0; i <= MAX_CACHED_SESSIONS + 1; i++) {
       if (i > 0) sids.push(nextSid());
       const chat = openChat(sids[i]);
       await flush();
@@ -1070,7 +1081,8 @@ describe('useSession: потолок памяти (OOM fix)', () => {
       prev = chat;
     }
 
-    // Курсор первого чата выброшен (он самый старый)
+    // Первый чат выселен (он самый старый): ни ленты, ни курсора — курсор не переживает свою ленту
+    expect(_store.has(firstSid)).toBe(false);
     expect(_cursors.has(firstSid)).toBe(false);
 
     // Возвращаемся: запрос должен быть after=-1 (полная загрузка)
@@ -1090,13 +1102,14 @@ describe('useSession: потолок памяти (OOM fix)', () => {
     back.unmount();
   });
 
-  it('возврат в один из последних MAX_TAIL_CURSORS → докачка хвоста', async () => {
+  it('курсор живёт ровно пока лента в сторе: возврат в оставшийся чат → докачка хвоста', async () => {
     mockTail();
-    // Открываем MAX_TAIL_CURSORS + 1 чат; последний (свежий) сохраняет курсор
+    // Открываем MAX_CACHED_SESSIONS + 1 чат: выселения нет (холодных ровно по потолку),
+    // ленты и курсоры всех чатов остаются в сторе
     const sids: string[] = [];
     let prev: { unmount: () => void } | null = null;
 
-    for (let i = 0; i <= MAX_TAIL_CURSORS; i++) {
+    for (let i = 0; i <= MAX_CACHED_SESSIONS; i++) {
       sids.push(nextSid());
       const chat = openChat(sids[i]);
       await flush();
@@ -1104,9 +1117,10 @@ describe('useSession: потолок памяти (OOM fix)', () => {
       prev = chat;
     }
 
-    // Последний открытый чат — его курсор сохранён
-    const recentSid = sids[MAX_TAIL_CURSORS];
-    expect(_cursors.has(recentSid)).toBe(true);
+    // Самый старый из оставшихся: лента в сторе — курсор тоже (штучного потолка нет)
+    const oldestSid = sids[0];
+    expect(_store.has(oldestSid)).toBe(true);
+    expect(_cursors.has(oldestSid)).toBe(true);
 
     // Возвращаемся: запрос хвоста (after >= 0)
     const queries: Array<{ after: number; fp?: string }> = [];
@@ -1116,12 +1130,43 @@ describe('useSession: потолок памяти (OOM fix)', () => {
       return { reset: false, messages: [], anchorIndex: 2, anchorFp: 'fp' };
     });
 
-    prev!.unmount();
-    const back = openChat(recentSid);
+    const back = openChat(oldestSid);
     await flush();
 
     expect(queries.at(-1)!.after).toBeGreaterThanOrEqual(0);
     expect(back.render().items).toHaveLength(3);
     back.unmount();
+    prev!.unmount();
+  });
+
+  it('вес ленты в сторе: сумма весов ответов, растёт при дозагрузке хвоста', async () => {
+    const sid = nextSid();
+    // Тот же конверт-сервер, что mockTail, но вес ответа сообщается через onBytes —
+    // как его мерит настоящая api (длина тела ответа, F3-S1a)
+    let server: unknown[] = [...DONE_TURN];
+    const replyOf = (q: { after: number; fp?: string }) => (q.after < 0
+      ? { reset: true, messages: server, anchorIndex: 2, anchorFp: 'fp' }
+      : { reset: false, messages: server.slice(q.after + 1), anchorIndex: 2, anchorFp: 'fp' });
+    const weightOf = (q: { after: number; fp?: string }) => JSON.stringify(replyOf(q)).length;
+    m.getHistoryTail.mockImplementation(async (_s: string, q: { after: number; fp?: string }, onBytes?: (n: number) => void) => {
+      const reply = replyOf(q);
+      onBytes?.(JSON.stringify(reply).length);
+      return reply;
+    });
+
+    // Полная загрузка: вес ленты = вес ответа
+    let chat = await reopenLocal(null, sid);
+    const w1 = _store.get(sid)!.historyBytes;
+    expect(w1).toBe(weightOf({ after: -1 }));
+
+    // Сервер дописал завершённый ход → следующая загрузка идёт хвостом:
+    // вес = прошлый + вес этого ответа (сумма весов ответов, а не вес склеенной ленты)
+    server = [...DONE_TURN, user('второй'), text('ответ 2'), result()];
+    chat = await reopenLocal(chat, sid);
+    const w2 = _store.get(sid)!.historyBytes;
+    expect(w2).toBe(w1 + weightOf({ after: 2, fp: 'fp' }));
+    expect(w2).toBeGreaterThan(w1);
+
+    chat.unmount();
   });
 });

@@ -21,6 +21,11 @@ interface SessionState extends ChatState {
   // Групповой чат (participants > 1): в normalizeHistory включается derive
   // разделителей «Теперь отвечает…» по смене personaId между репликами
   isGroup?: boolean;
+  // Верхняя оценка веса ленты чата в сторе, байты: накопленный receivedBytes курсора
+  // последней загрузки (lib/historyTail). Это НЕ точный вес items: байты отброшенного
+  // при склейке хвоста остаются в счётчике. Живёт ровно вместе с лентой: пишется в
+  // loadHistory, уходит с состоянием при выселении (инвариант «вес ⇔ лента»).
+  historyBytes: number;
 }
 
 const _store = new Map<string, SessionState>();
@@ -31,16 +36,12 @@ const _lastSeen = new Map<string, number>(); // LRU: sid → ts последне
 // Потолок LRU-кэша холодных сессий (см. evictColdSessions). Открытые/активные не считаются.
 const MAX_CACHED_SESSIONS = 8;
 
-// Потолок курсоров докачки (B5) для холодных чатов: сырая история (raw) — вторая копия
-// ленты, поэтому держать её стоит только для открытых/видимых + не более MAX_TAIL_CURSORS
-// самых свежих по LRU. У остальных курсор выбрасывается — при возврате чат грузится
-// полностью (after=-1), как до B5.
-const MAX_TAIL_CURSORS = 5;
-
 // Курсоры докачки истории (перф-2 B5): sid → сырая история прошлой загрузки + якорь сервера.
 // Со вторым открытием чата просим у сервера только хвост после якоря, а не всю историю
-// целиком (до 2,5 МБ). Склейка и сброс — lib/historyTail. Живёт ровно столько же, сколько
-// лента чата в сторе: выселили сессию (evictColdSessions) — курсор уходит вместе с ней.
+// целиком (до 2,5 МБ). Склейка и сброс — lib/historyTail.
+// Инвариант «курсор ⇔ лента»: курсор существует ровно пока в сторе есть лента этого чата —
+// отдельного штучного потолка у курсоров нет. Выселили сессию (evictColdSessions) — курсор
+// уходит вместе с ней; осиротевших курсоров (без ленты) быть не может.
 const _cursors = new Map<string, HistoryCursor>();
 
 // История чата: у проектной сессии — через /projects/{id}/sessions, у чата вне проекта — через /chats.
@@ -56,12 +57,22 @@ async function loadHistory(sid: string, projectId?: string): Promise<unknown[]> 
 
   const prev = _cursors.get(sid);
   const q = cursorQuery(prev);
+  // Вес ответа мерит api по телу ответа (та же мера, что у офлайн-кэша, F3-S1a) —
+  // обязательный аргумент applyHistoryReply с F3-S2a
+  let replyBytes = 0;
+  const onBytes = (n: number) => { replyBytes = n; };
   const reply = await (projectId
-    ? api.sessions.getHistoryTail(projectId, sid, q)
-    : api.chats.getHistoryTail(sid, q));
-  const applied = applyHistoryReply(prev, q, reply);
+    ? api.sessions.getHistoryTail(projectId, sid, q, onBytes)
+    : api.chats.getHistoryTail(sid, q, onBytes));
+  const applied = applyHistoryReply(prev, q, reply, replyBytes);
   if (applied.cursor) _cursors.set(sid, applied.cursor);
   else _cursors.delete(sid);
+  // Вес ленты в сторе: счётчик полученного из курсора (верхняя оценка — байты отброшенного
+  // при склейке хвоста в нём остаются). Живёт вместе с состоянием: при выселении сессии
+  // уходит с ним — инвариант «вес ⇔ лента» держится той же точкой, что и «курсор ⇔ лента».
+  // Писание без уведомления подписчиков: поле служебное (учёт OOM), лента при этом та же.
+  const st = getState(sid);
+  if (st.historyBytes !== applied.receivedBytes) touch(sid, { ...st, historyBytes: applied.receivedBytes });
   return applied.raw;
 }
 
@@ -129,7 +140,7 @@ async function refreshTeamImplement(sid: string) {
 }
 
 function getState(sid: string): SessionState {
-  if (!_store.has(sid)) _store.set(sid, { ...initialChatState(), isJoined: false, isHistoryLoading: true });
+  if (!_store.has(sid)) _store.set(sid, { ...initialChatState(), isJoined: false, isHistoryLoading: true, historyBytes: 0 });
   return _store.get(sid)!;
 }
 
@@ -163,7 +174,9 @@ function evictColdSessions() {
   if (cold.length === 0) return;
   cold.sort((a, b) => a[1] - b[1]); // старые первыми
 
-  // 1. Выселение сессий: держим не более MAX_CACHED_SESSIONS холодных лент в сторе
+  // Выселение сессий: держим не более MAX_CACHED_SESSIONS холодных лент в сторе.
+  // Курсор снимается вместе с лентой (инвариант «курсор ⇔ лента», см. _cursors):
+  // осиротевших курсоров после выселения не остаётся.
   if (cold.length > MAX_CACHED_SESSIONS) {
     for (const [sid] of cold.slice(0, cold.length - MAX_CACHED_SESSIONS)) {
       _store.delete(sid);
@@ -171,15 +184,6 @@ function evictColdSessions() {
       _cursors.delete(sid); // сырая история курсора — второй экземпляр ленты, держать её без ленты незачем
       // Выселенную сессию разрешаем греть заново: её ленты в сторе больше нет
       _warmed.delete(sid);
-    }
-  }
-
-  // 2. Выселение курсоров: даже если сессия осталась в сторе, сырая история (raw)
-  //    — дорогая вторая копия. Держим курсоры только для MAX_TAIL_CURSORS самых свежих
-  //    холодных чатов; у остальных — при возврате полная загрузка (after=-1).
-  if (cold.length > MAX_TAIL_CURSORS) {
-    for (const [sid] of cold.slice(0, cold.length - MAX_TAIL_CURSORS)) {
-      _cursors.delete(sid);
     }
   }
 }
@@ -589,7 +593,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     };
   }, [sessionId, projectId, isGroup]);
 
-  const state = sessionId ? getState(sessionId) : { items: [] as ChatItem[], isWaiting: false, isJoined: false, isHistoryLoading: false, rateLimits: {} as Record<string, RateLimitInfo>, isCompacting: false, compactNote: undefined as string | undefined, workLoop: undefined as WorkLoopState | undefined, teamImplement: undefined as TeamImplementState | undefined, teamPlanning: undefined as { startedAt: number; personaId?: string | null } | null | undefined, teamWavePulse: undefined as TeamWavePulse | undefined, promptSuggestion: null as string | null, pending: [] as PendingChatMessage[], composerRestore: null as ComposerRestore | null };
+  const state = sessionId ? getState(sessionId) : { items: [] as ChatItem[], isWaiting: false, isJoined: false, isHistoryLoading: false, rateLimits: {} as Record<string, RateLimitInfo>, isCompacting: false, compactNote: undefined as string | undefined, workLoop: undefined as WorkLoopState | undefined, teamImplement: undefined as TeamImplementState | undefined, teamPlanning: undefined as { startedAt: number; personaId?: string | null } | null | undefined, teamWavePulse: undefined as TeamWavePulse | undefined, promptSuggestion: null as string | null, pending: [] as PendingChatMessage[], composerRestore: null as ComposerRestore | null, historyBytes: 0 };
 
   // Снять сообщение из очереди (крестик на карточке-призраке). Ответ сервера придёт
   // событием pending_messages — локально состояние не правим, чтобы не разъехалось.
@@ -894,4 +898,4 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
 }
 
 // Экспорт для тестов: доступ к модульному стору и константам
-export const __test = { _store, _cursors, _lastSeen, MAX_CACHED_SESSIONS, MAX_TAIL_CURSORS };
+export const __test = { _store, _cursors, _lastSeen, MAX_CACHED_SESSIONS };

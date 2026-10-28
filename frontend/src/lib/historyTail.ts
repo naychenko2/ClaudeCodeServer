@@ -51,14 +51,15 @@ export function cursorQuery(cursor: HistoryCursor | undefined): HistoryCursorQue
 const isEnvelope = (reply: HistoryReply): reply is HistoryTailEnvelope => !Array.isArray(reply);
 
 // Применяет ответ к тому, что было: возвращает полную сырую историю, новый курсор и его
-// счётчик полученного. replyBytes — вес этого ответа (длина JSON сообщений, мерит вызывающий);
+// счётчик полученного. replyBytes — вес этого ответа (мера тела ответа, как её мерит api через
+// onBytes; обязательный — вызывающий обязан передать реальное значение, нуль — тоже значение);
 // в курсоре и результате — накопленный receivedBytes (≥ веса raw). cursor=undefined — сервер
 // курсора не дал (плоский массив): следующая загрузка снова полная.
 export function applyHistoryReply(
   prev: HistoryCursor | undefined,
   sent: HistoryCursorQuery,
   reply: HistoryReply,
-  replyBytes = 0,
+  replyBytes: number,
 ): { raw: unknown[]; cursor: HistoryCursor | undefined; receivedBytes: number } {
   if (!isEnvelope(reply)) return { raw: reply, cursor: undefined, receivedBytes: replyBytes };
 

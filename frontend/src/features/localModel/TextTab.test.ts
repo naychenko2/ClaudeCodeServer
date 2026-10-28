@@ -2,7 +2,8 @@
 // (statusPill/standDot/standHint — макет bonsai-toolbar §4) и рендер TextTab:
 // переключатель движка (виден только при двух configured), сокрытие полей из
 // `unsupported` (не заглушки, а ничего), состояние 'yielded' (нейтральный тон,
-// не нули), карточка Video и «места сервера» вместо чатов.
+// не нули), карточка Video и «места сервера» вместо чатов, блок «Дежурство»
+// (последний блок стенда Bonsai, только когда снимок принёс duty).
 // Рендер — через linkedom (как tasks/acceptanceBlock.test.ts); ResizeObserver
 // стабится: ThroughputChart меряет им свою ширину.
 
@@ -47,7 +48,7 @@ function renderTab(props: Record<string, unknown>): string {
   const root = createRoot(host);
   act(() => {
     root.render(createElement(TextTab, {
-      isMobile: false, onOpenChat: () => {}, onRefetch: () => {}, onOpenHardware: () => {},
+      isMobile: false, onOpenChat: () => {}, onRefetch: () => {}, onOpenHardware: () => {}, onOpenMedia: () => {},
       window: '5m', onWindowChange: () => {}, ...props,
     }));
   });
@@ -291,5 +292,36 @@ describe('подпись «Скорость» (макет §3)', () => {
     const html = renderTab({ data: mockBonsaiStats('ready'), engine: 'bonsai' });
     expect(html).toContain('чтение промпта, ток/с');
     expect(html).not.toContain('с ожиданием');
+  });
+});
+
+describe('блок «Дежурство» в стенде (интеграция, Ф5)', () => {
+  it('main — «Дежурства» нет, даже когда оба движка настроены', () => {
+    const html = renderTab({
+      data: mockLocalModelStats('working'), engines: ENGINES_BOTH, engine: 'main', onEngineChange: () => {},
+    });
+    expect(html).not.toContain('Дежурство');
+    expect(html).not.toContain('Цепочка');
+  });
+  it('Bonsai без duty — блока нет (рендер по наличию duty, а не по движку)', () => {
+    const d = { ...mockBonsaiStats('ready') };
+    delete d.duty;
+    const html = renderTab({ data: d, engine: 'bonsai' });
+    expect(html).not.toContain('Дежурство');
+  });
+  it('Bonsai с duty — «Дежурство» есть и стоит последним блоком', () => {
+    const html = renderTab({ data: mockBonsaiStats('yielded'), engine: 'bonsai' });
+    // заголовок именно карточки (h3): слово «Дежурство» есть и в тексте баннера
+    // уступки выше — по одному ему наличие блока не проверить
+    expect(html).toContain('>Дежурство</h3>');
+    expect(html).toContain('видео H3'); // причина — задание ComfyUI с этого сервера
+    expect(html).toContain('→ Медиа'); // known:true + onOpenMedia от панели — переход есть
+    expect(html).toContain('Цепочка');
+    expect(html).toContain('Ответы мест за час');
+    expect(html).toContain('Уступила · вернулась');
+    expect(html).toContain('14 · 14');
+    expect(html).toContain('карта целиком'); // чип режима exclusive
+    // последним блоком — после заголовка «Кто сейчас на модели» (макет §3)
+    expect(html.lastIndexOf('>Дежурство</h3>')).toBeGreaterThan(html.lastIndexOf('>Кто сейчас на модели</h3>'));
   });
 });

@@ -9,7 +9,7 @@
 // Приглушение: «арбитр недоступен» (reachable:false) — приглушено ТОЛЬКО тело блока
 // (макет §6): статус модели наверху — по её собственным метрикам, он не приглушается.
 
-import { Fragment, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { Fragment, useEffect, useState, type CSSProperties } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { C, FONT, FS, ICON_SIZE, ICON_STROKE, R, SHADOW, SP } from 'aihome_shell/kit';
 import type { LocalModelDuty, LocalModelDutyAnswers, LocalModelStats } from './api';
@@ -185,17 +185,23 @@ function initialLeft(duty: LocalModelDuty | null | undefined): number | null {
 // === «Дежурство» ===
 export function DutyBlock({ data, isMobile, onOpenMedia }: {
   data: LocalModelStats;
-  isMobile?: boolean;
+  // мобильная раскладка (цепочка в столбик, тач-цели 44) — обязана приходить от
+  // вызывающего: сам компонент ширины не знает
+  isMobile: boolean;
   // переход «→ Медиа» для заданий ComfyUI с этого сервера; без обработчика ссылки нет
   onOpenMedia?: () => void;
 }) {
   const duty = data.duty ?? null;
 
-  // Момент получения снимка: новый опрос даёт новый объект data.duty, якорь
-  // переставляется на нём. Окно «ответов за час» считается от него, а не от
-  // плавающего «сейчас» (часы клиента с ним и так же расходятся, как с Video).
-  // eslint-disable-next-line react-hooks/exhaustive-deps, react-hooks/purity -- data.duty — триггер якоря: новый снимок = новый объект
-  const snapAt = useMemo(() => Date.now(), [data.duty]);
+  // Момент получения снимка: новый опрос даёт новый объект data.duty — якорь
+  // переставляется эффектом по нему. Окно «ответов за час» и его подпись
+  // относятся к этому моменту, а не к плавающему «сейчас» (часы клиента с ним
+  // и так же расходятся, как с Video). Состояние, а не ref: общий линт проекта
+  // (react-hooks/refs) запрещает читать ref в рендере. Первый снимок: начальный
+  // якорь — момент первого рендера, титул не стартует с нуля.
+  const [snapAt, setSnapAt] = useState<number>(() => Date.now());
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- якорь снимка: внешний час; чистое место для Date.now() — только эффект по смене data.duty (ref в рендере читать нельзя)
+  useEffect(() => { setSnapAt(Date.now()); }, [data.duty]);
 
   // «Вернётся через»: на новом ответе сервера берём его значение, между опросами
   // отсчитываем сами раз в 1 с (макет §5). Сброс на новом снимке — setState в рендере
@@ -293,7 +299,7 @@ export function DutyBlock({ data, isMobile, onOpenMedia }: {
         )}
         {hasTopRows && <div style={SEPR} />}
         <Cap>Цепочка</Cap>
-        <ChainBlock status={data.status} isMobile={isMobile === true} />
+        <ChainBlock status={data.status} isMobile={isMobile} />
         <div style={SEPR} />
         <Cap>{answersTitle.title}</Cap>
         <AnswersBlock answers={duty.answersLastHour ?? null} nowMs={snapAt} />
@@ -313,7 +319,7 @@ export function DutyBlock({ data, isMobile, onOpenMedia }: {
 // === «Кто сейчас на модели» для Bonsai: строки из duty.callsNow ===
 // Это журнал вызовов мест, а не чаты: строка — div, не кнопка (36/44), клика и перехода
 // нет (макет §3, §6). Для основного движка остаётся WhoCard из TextTab.
-export function DutyCallsCard({ data, isMobile }: { data: LocalModelStats; isMobile?: boolean }) {
+export function DutyCallsCard({ data, isMobile }: { data: LocalModelStats; isMobile: boolean }) {
   const rows = dutyWhoRows(data.duty?.callsNow);
   return (
     <Card title="Кто сейчас на модели" right={rows.length > 0 ? <span>{rows.length}</span> : undefined}>
@@ -322,7 +328,7 @@ export function DutyCallsCard({ data, isMobile }: { data: LocalModelStats; isMob
       ) : (
         <>
           <div style={{ display: 'flex', flexDirection: 'column', margin: `0 ${-SP.sm}px` }}>
-            {rows.map(r => <CallRow key={r.key} row={r} isMobile={isMobile === true} />)}
+            {rows.map(r => <CallRow key={r.key} row={r} isMobile={isMobile} />)}
           </div>
           <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.xs }}>
             Здесь места сервера, а не чаты: строки не кликабельны, владельца и промпта нет.

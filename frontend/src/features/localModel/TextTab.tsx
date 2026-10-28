@@ -17,7 +17,9 @@
 // — поля из `unsupported` (Кэш, Вытеснения, время агентов) скрыты целиком;
 // — видеокарта — своя карточка «Видеокарта · Video» с чипом «общая с ComfyUI»
 //   (данные с узла ComfyUI на Video; «Железо» — хост CCS, ссылки туда нет);
-// — «Кто сейчас на модели» — места сервера из duty.callsNow, не чаты.
+// — «Кто сейчас на модели» — места сервера из duty.callsNow, не чаты;
+// — «Дежурство» (DutyBlock) — последним блоком, только у выбранного Bonsai и только
+//   если снимок принёс duty (макет §3/§5); переход «→ Медиа» — через onOpenMedia от панели.
 
 import { type CSSProperties } from 'react';
 import { AlertTriangle, CirclePause, Plug, FolderOpen } from 'lucide-react';
@@ -31,6 +33,7 @@ import {
   standDot, standHint, statusPill, type StatusTone, type WhoRow,
 } from './format';
 import { dutyWhoRows } from './dutyFormat';
+import { DutyBlock } from './DutyBlock';
 import { useAllProjects } from '../projects/useAllProjects';
 import { HwLinkRow } from './HwLinkRow';
 import { ThroughputChart, WindowToggle, type Window } from './ThroughputChart';
@@ -598,14 +601,16 @@ function TextTabSkeleton() {
 // === Вкладка ===
 // engine — какой стенд рисуем ('main' по умолчанию — прежнее поведение без правок);
 // engines — список движков для переключателя (пустой/один — переключателя нет);
-// onEngineChange — выбор человека (панель пишет его в стор Ф1, тот в localStorage).
-export function TextTab({ data, loading, isMobile, onOpenChat, onRefetch, onOpenHardware, window, onWindowChange, engines, engine = 'main', onEngineChange }: {
+// onEngineChange — выбор человека (панель пишет его в стор Ф1, тот в localStorage);
+// onOpenMedia — переход на вкладку «Медиа» по ссылке «→ Медиа» в «Дежурстве».
+export function TextTab({ data, loading, isMobile, onOpenChat, onRefetch, onOpenHardware, onOpenMedia, window, onWindowChange, engines, engine = 'main', onEngineChange }: {
   data: LocalModelStats | null;
   loading: boolean;
   isMobile: boolean;
   onOpenChat: (sessionId: string) => void;
   onRefetch: () => void;
   onOpenHardware: () => void;
+  onOpenMedia: () => void;
   window: Window;
   onWindowChange: (w: Window) => void;
   engines?: LocalModelEngine[];
@@ -647,6 +652,10 @@ export function TextTab({ data, loading, isMobile, onOpenChat, onRefetch, onOpen
         {bonsai
           ? <WhoPlacesCard data={data} isMobile={isMobile} />
           : <WhoCard data={data} isMobile={isMobile} onOpen={onOpenChat} />}
+        {/* «Дежурство» — последний блок стенда Bonsai (макет §3/§5): только у выбранного
+            Bonsai и только если снимок принёс duty; без него блока нет (DutyBlock сам
+            возвращает null, но условие на месте — стенд main его не касается) */}
+        {bonsai && data.duty ? <DutyBlock data={data} isMobile={isMobile} onOpenMedia={onOpenMedia} /> : null}
       </div>
     </>
   );

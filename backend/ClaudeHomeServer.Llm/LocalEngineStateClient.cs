@@ -45,7 +45,7 @@ public sealed record EngineArbiterSnapshot(
 // Одна аренда из `leases`: id наружу не отдаётся (его создал аноним), только текст и остаток.
 public sealed record EngineArbiterLease(string? Reason, double? LeftS);
 
-public sealed class LocalEngineStateClient
+public sealed class LocalEngineStateClient : IEngineArbiterStateReader
 {
     private const int CacheMs = 1000;
     private const int RequestTimeoutMs = 800;

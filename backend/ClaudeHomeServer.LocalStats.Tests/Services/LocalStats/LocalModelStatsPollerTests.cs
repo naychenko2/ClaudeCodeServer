@@ -1,3 +1,4 @@
+using System.Net;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
@@ -45,11 +46,19 @@ public class LocalModelStatsPollerTests
         }
     }
 
-    // Заглушка IHttpClientFactory: в тестах источник подменяется, HttpClient не создаётся.
+    // Заглушка IHttpClientFactory: HttpClient с ответом 503 — «движок не отвечает».
+    // Тесты Б3b гоняют реальный LlamaServerMetricsSource через этот обработчик:
+    // отказ /metrics без обращения к живой сети.
     private sealed class FakeHttpClientFactory : IHttpClientFactory
     {
-        public HttpClient CreateClient(string name) => new();
-        public HttpClient CreateClient(Type type, string name) => new();
+        public HttpClient CreateClient(string name) => new(new RefusingHandler());
+        public HttpClient CreateClient(Type type, string name) => CreateClient(name);
+
+        private sealed class RefusingHandler : HttpMessageHandler
+        {
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+                => Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+        }
     }
 
     // Управляемое ожидание: каждая итерация цикла блокируется, пока тест не вызовет Release().
@@ -90,14 +99,37 @@ public class LocalModelStatsPollerTests
         }
     }
 
+    // Фейковый читатель состояния арбитра (Б3b): тест задаёт очередь ответов и видит счётчик
+    // обращений (c2: дорожка main никогда не зовёт клиент — CalledFor пустой).
+    private sealed class FakeArbiter : IEngineArbiterStateReader
+    {
+        public Queue<EngineArbiterSnapshot?> Results { get; } = new();
+        public List<string> CalledFor { get; } = [];
+        public int Calls => CalledFor.Count;
+
+        public Task<EngineArbiterSnapshot?> GetAsync(string engineName, CancellationToken ct = default)
+        {
+            CalledFor.Add(engineName);
+            return Task.FromResult(Results.Count > 0 ? Results.Dequeue() : null);
+        }
+    }
+
+    // Снимок арбитра для тестов Б3b: значимы Reachable и Bonsai, остальное не нужно дорожке.
+    private static EngineArbiterSnapshot ArbiterState(string state, bool reachable = true) =>
+        new(reachable, state, null, null, null, null, null, null, null, null, null, null);
+
     private sealed class Harness
     {
         public ManualTime Time { get; } = new();
         public FakeOptionsMonitor<LocalModelStatsOptions> Options { get; }
         public FakeSource Source { get; } = new();
+        public FakeArbiter Arbiter { get; } = new();
         public LocalModelStatsPoller Poller { get; }
 
-        public Harness(bool enabled = true, NamedLocalEngines? engines = null, ILogger<LocalModelStatsPoller>? log = null)
+        public Harness(
+            bool enabled = true,
+            NamedLocalEngines? engines = null,
+            ILogger<LocalModelStatsPoller>? log = null)
         {
             Options = new FakeOptionsMonitor<LocalModelStatsOptions>(
                 new LocalModelStatsOptions { Enabled = enabled });
@@ -114,7 +146,8 @@ public class LocalModelStatsPollerTests
             Poller = new LocalModelStatsPoller(
                 Options, registry,
                 engines ?? new NamedLocalEngines([]), // без именованных движков: их заводят отдельные тесты Б2b
-                new FakeHttpClientFactory(), // не используется: SourceFactoryOverride подменяет источник
+                Arbiter, // Б3b: поллер получает клиент арбитра; он достается только дорожкам с StateUrl
+                new FakeHttpClientFactory(), // main-источник подменяется Override; именованные дорожки идут через 503
                 Time,
                 log ?? NullLogger<LocalModelStatsPoller>.Instance);
             // Фейковый источник: подменяем фабрику, чтобы не ходить в реальную сеть.
@@ -1072,18 +1105,20 @@ public class LocalModelStatsPollerTests
 
     // ─── Б2b: дорожка именованного движка + хвосты ревью Б1 (H1–H3) ────────────────────────
 
-    // Именованные движки из конфига: BaseUrl+Model заданы, MetricsUrl — по параметру.
+    // Именованные движки из конфига: BaseUrl+Model заданы, MetricsUrl и StateUrl — по параметру.
     // Реальный конструктор NamedLocalEngines (тот же путь, что на бою); HTTP при построении
-    // не делается — сеть трогает только опрос дорожки, а эти тесты её не гоняют.
-    private static NamedLocalEngines EnginesFromConfig(params (string Name, string? MetricsUrl)[] engines)
+    // не делается — сеть трогает только опрос дорожки.
+    private static NamedLocalEngines EnginesFromConfig(params (string Name, string? MetricsUrl, string? StateUrl)[] engines)
     {
         var dict = new Dictionary<string, string?>();
-        foreach (var (name, metricsUrl) in engines)
+        foreach (var (name, metricsUrl, stateUrl) in engines)
         {
             dict[$"LocalEngines:{name}:BaseUrl"] = "http://127.0.0.1:18030";
             dict[$"LocalEngines:{name}:Model"] = "bonsai2-27b";
             if (metricsUrl is not null)
                 dict[$"LocalEngines:{name}:MetricsUrl"] = metricsUrl;
+            if (stateUrl is not null)
+                dict[$"LocalEngines:{name}:StateUrl"] = stateUrl;
         }
         return new NamedLocalEngines(
             new FakeHttpClientFactory(), new ConfigurationBuilder().AddInMemoryCollection(dict).Build(),
@@ -1098,8 +1133,8 @@ public class LocalModelStatsPollerTests
     public void EngineWithMetricsUrl_GetsTrack_WithoutMetricsUrl_DoesNot()
     {
         var engines = EnginesFromConfig(
-            ("bonsai", "http://127.0.0.1:18030/metrics"),
-            ("no-metrics", null));
+            ("bonsai", "http://127.0.0.1:18030/metrics", null),
+            ("no-metrics", null, null));
         var h = new Harness(engines: engines);
 
         // main — первой, затем движок с MetricsUrl; без MetricsUrl — дорожки нет.
@@ -1115,8 +1150,8 @@ public class LocalModelStatsPollerTests
     {
         var log = new CapturingLogger<LocalModelStatsPoller>();
         var engines = EnginesFromConfig(
-            ("main", "http://127.0.0.1:18030/metrics"),
-            ("bonsai", "http://127.0.0.1:18031/metrics"));
+            ("main", "http://127.0.0.1:18030/metrics", null),
+            ("bonsai", "http://127.0.0.1:18031/metrics", null));
         var h = new Harness(engines: engines, log: log);
 
         h.Poller.Names.Should().Equal(["main", "bonsai"], "движок с именем main пропущен — дорожка main одна");
@@ -1307,6 +1342,119 @@ public class LocalModelStatsPollerTests
 
         h.Poller.Names.Should().Contain("main");
         h.Poller.Names.Should().HaveCount(n + 1, "все одновременные добавления сохранены (main + n)");
+    }
+
+    // ─── Б3b: статус yielded — клиент состояния арбитра в дорожке ────────────────────────────
+
+    // (46) c1: /metrics отказ + арбитр yielded/starting/waiting-vram → статус yielded,
+    // DownSince == null. Полная связка: движок из конфига (MetricsUrl+StateUrl) → дорожка,
+    // созданная конструктором поллера, получает клиент арбитра; реальный LlamaServerMetricsSource
+    // через фейковый обработчик получает 503 → null; фейковый арбитр отвечает состояние.
+    // Мутация: передать в BuildEngineTrack null вместо клиента — статус «down», тест краснеет.
+    [Theory]
+    [InlineData(EngineArbiterSnapshot.StateYielded)]
+    [InlineData(EngineArbiterSnapshot.StateStarting)]
+    [InlineData(EngineArbiterSnapshot.StateWaitingVram)]
+    public async Task EngineTrack_MetricsDownArbiterHolds_StatusYieldedNoDownSince(string state)
+    {
+        var h = new Harness(engines: EnginesFromConfig(
+            ("bonsai", "http://127.0.0.1:18030/metrics", "http://127.0.0.1:19000/state")));
+        h.Arbiter.Results.Enqueue(ArbiterState(state));
+        var track = h.Poller.Find("bonsai");
+        track.Should().NotBeNull("движок с MetricsUrl получил дорожку из конструктора поллера");
+
+        var interval = await h.Poller.PollTrackAsync(track!);
+
+        var cur = h.Poller.CurrentOf("bonsai")!;
+        cur.Status.Should().Be("yielded");
+        cur.DownSince.Should().BeNull("движок не мёртв: он под арбитром");
+        cur.Configured.Should().BeTrue();
+        cur.Engine.Should().Be("llama-server");
+        cur.Model.Should().Be("bonsai2-27b");
+        h.Arbiter.CalledFor.Should().HaveCount(1, "один отказ /metrics — один запрос к арбитру");
+        h.Arbiter.CalledFor[0].Should().Be("bonsai", "дорожка спросила арбитра под именем своего движка");
+        interval.Should().Be(h.Options.CurrentValue.DownPollInterval,
+            "молчащий /metrics опрашивается с интервалом down");
+    }
+
+    // (47) c2: без StateUrl — клиента у дорожки нет: молчащий /metrics — обычный down, как у main,
+    // DownSince ставится, к арбитру никто не ходил.
+    // Мутация: убрать проверку StateUrl в BuildEngineTrack (клиент всем) — Calls = 1, тест краснеет.
+    [Fact]
+    public async Task EngineTrack_NoStateUrl_MetricsFailureIsDownLikeMain()
+    {
+        var h = new Harness(engines: EnginesFromConfig(("no-state", "http://127.0.0.1:18030/metrics", null)));
+        var track = h.Poller.Find("no-state")!;
+
+        await h.Poller.PollTrackAsync(track);
+
+        var cur = h.Poller.CurrentOf("no-state")!;
+        cur.Status.Should().Be("down");
+        cur.DownSince.Should().Be(h.Time.GetUtcNow(), "без арбитра — первый сбой фиксируется как у main");
+        h.Arbiter.Calls.Should().Be(0, "нет StateUrl — у дорожки нет клиента арбитра");
+    }
+
+    // (48) c2: дорожка main никогда не зовёт клиент арбитра — даже когда в реестре есть движок
+    // с именем «main» и StateUrl (поллер пропускает его дорожку по m1, но имя живёт в реестре:
+    // если бы клиент передали main, GetAsync("main") дошёл бы до фейка).
+    // Мутация: передать клиент дорожке main — Calls = 1, тест краснеет.
+    [Fact]
+    public async Task MainTrack_NeverCallsArbiterClient()
+    {
+        var h = new Harness(engines: EnginesFromConfig(
+            ("main", "http://127.0.0.1:18030/metrics", "http://127.0.0.1:19000/state"),
+            ("bonsai", "http://127.0.0.1:18031/metrics", "http://127.0.0.1:19001/state")));
+        // main-метрики отказывают: SourceFactoryOverride → пустая очередь → null.
+
+        await h.Poller.PollOnceAsync();
+
+        h.Poller.Current.Status.Should().Be("down", "у main нет арбитра: отказ — обычный down");
+        h.Arbiter.Calls.Should().Be(0, "основная модель не стоит ни под чьим управлением: main не зовёт клиент");
+    }
+
+    // (49) Ответ арбитра — не подтверждение: unreachable (даже с последним удачным yielded —
+    // текущего ответа нет), ready (движок должен отвечать, а /metrics молчит — настоящий сбой),
+    // unknown. Статус down, DownSince ставится.
+    [Theory]
+    [InlineData(false, EngineArbiterSnapshot.StateYielded)]
+    [InlineData(true, EngineArbiterSnapshot.StateReady)]
+    [InlineData(true, EngineArbiterSnapshot.StateUnknown)]
+    public async Task EngineTrack_ArbiterNotConfirming_StatusDownWithDownSince(bool reachable, string state)
+    {
+        var h = new Harness(engines: EnginesFromConfig(
+            ("bonsai", "http://127.0.0.1:18030/metrics", "http://127.0.0.1:19000/state")));
+        h.Arbiter.Results.Enqueue(ArbiterState(state, reachable));
+        var track = h.Poller.Find("bonsai")!;
+
+        await h.Poller.PollTrackAsync(track);
+
+        var cur = h.Poller.CurrentOf("bonsai")!;
+        cur.Status.Should().Be("down");
+        cur.DownSince.Should().Be(h.Time.GetUtcNow());
+    }
+
+    // (50) down → yielded: первые опросы арбитр не подтвердил (движок считался мёртвым),
+    // потом ответил уступку — движок не мёртв: статус yielded, DownSince снимается
+    // (ложная тревога не остаётся в снимке).
+    // Мутация: не обнулять _downSince в yielded-ветке — DownSince остаётся, тест краснеет.
+    [Fact]
+    public async Task EngineTrack_DownThenArbiterHolds_ClearsDownSince()
+    {
+        var h = new Harness(engines: EnginesFromConfig(
+            ("bonsai", "http://127.0.0.1:18030/metrics", "http://127.0.0.1:19000/state")));
+        var track = h.Poller.Find("bonsai")!;
+
+        h.Arbiter.Results.Enqueue(null); // в этот раз арбитр не ответил
+        await h.Poller.PollTrackAsync(track);
+        h.Poller.CurrentOf("bonsai")!.Status.Should().Be("down");
+        h.Poller.CurrentOf("bonsai")!.DownSince.Should().NotBeNull();
+
+        h.Time.Advance(TimeSpan.FromSeconds(15));
+        h.Arbiter.Results.Enqueue(ArbiterState(EngineArbiterSnapshot.StateYielded));
+        await h.Poller.PollTrackAsync(track);
+
+        h.Poller.CurrentOf("bonsai")!.Status.Should().Be("yielded");
+        h.Poller.CurrentOf("bonsai")!.DownSince.Should().BeNull("движок не мёртв — «момент сбоя» из снимка уходит");
     }
 
     // Источник, который висит в сети, пока тест не разрешит (медленный движок).

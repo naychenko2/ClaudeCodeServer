@@ -7,6 +7,10 @@ namespace ClaudeHomeServer.Services.Llm;
 // буфер счётчиков, Current, DownSince, база шага декода). Поллер держит по дорожке на движок
 // и гоняет их одним циклом; источник метрик дорожке отдаёт resolveSource.
 // resolveSource: (source, engine, model, tensorParallel, configured), configured=false — notConnected.
+// arbiter (Б3b): читатель состояния GPU-арбитра для движка под его управлением (дежурная модель).
+// При молчащем /metrics дорожка спрашивает арбитра: yielded/starting/waiting-vram — движок
+// выгружен, а не мёртв: статус yielded без DownSince. Без клиента (main) или без подтверждения —
+// обычный down.
 public sealed class EngineStatsTrack
 {
     // Окно для расчёта hit-долей и «скорости на поток»: ~60 с, как чувствует чат.
@@ -20,6 +24,9 @@ public sealed class EngineStatsTrack
     private readonly TimeProvider _time;
     private readonly ILogger _log;
 
+    // Читатель состояния арбитра (Б3b): null — дорожка не под арбитром (main, движок без StateUrl).
+    private readonly Func<CancellationToken, Task<EngineArbiterSnapshot?>>? _arbiter;
+
     public string Name { get; }
 
     public EngineStatsTrack(
@@ -27,13 +34,15 @@ public sealed class EngineStatsTrack
         IOptionsMonitor<LocalModelStatsOptions> options,
         Func<(IEngineMetricsSource, string?, string?, int?, bool)> resolveSource,
         TimeProvider time,
-        ILogger log)
+        ILogger log,
+        Func<CancellationToken, Task<EngineArbiterSnapshot?>>? arbiter = null)
     {
         Name = name;
         _options = options;
         _resolveSource = resolveSource;
         _time = time;
         _log = log;
+        _arbiter = arbiter;
     }
 
     // Кольцо истории, буфер счётчиков и текущий снимок: мутации только под _gate
@@ -138,6 +147,26 @@ public sealed class EngineStatsTrack
 
         if (snapshot is null)
         {
+            // /metrics молчит. Для дорожки под арбитром (с клиентом) сначала проверяем причину:
+            // yielded/starting/waiting-vram — движок выгружен арбитром, а не мёртв: статус
+            // yielded, DownSince не ставится и прежний «момент сбоя» снимается (ложная тревога
+            // не должна остаться в панели). Без клиента или без подтверждения — обычный down.
+            if (_arbiter is not null && await ArbiterHeldByArbiterAsync(ct))
+            {
+                if (_current.Status != "yielded")
+                    _log.LogInformation("Локальный стенд: движок уступил карту арбитру (не отвечает в /metrics, опрос как у down)");
+                _downSince = null;
+                SetState(new LocalModelStatsCurrent
+                {
+                    Status = "yielded",
+                    Engine = engine,
+                    Model = model,
+                    TensorParallel = tensorParallel,
+                    Configured = true,
+                });
+                return opts.DownPollInterval;
+            }
+
             // HTTP-сбой/таймаут: down. DownSince фиксируем на ПЕРВОМ сбое.
             if (_downSince is null)
             {
@@ -168,6 +197,31 @@ public sealed class EngineStatsTrack
 
         var busy = (snapshot.Running ?? 0) > 0 || (snapshot.Waiting ?? 0) > 0;
         return busy ? opts.ActivePollInterval : opts.PollInterval;
+    }
+
+    // Держит ли движок арбитр: yielded/starting/waiting-vram — движок жив, он выгружен и
+    // готовится вернуться (Б3b). Без подтверждения — false: клиент не позван (нет StateUrl
+    // или нет клиента — вызывающий проверяет), арбитр unreachable (и с последним удачным
+    // yielded: текущего ответа нет — выдумывать нечего), ready (движок должен отвечать,
+    // а /metrics молчит — это настоящий сбой), unknown, сбой клиента (кроме отмены
+    // вызывающего — она выходит как есть, её ловит цикл дорожки).
+    private async Task<bool> ArbiterHeldByArbiterAsync(CancellationToken ct)
+    {
+        EngineArbiterSnapshot? s;
+        try
+        {
+            s = await _arbiter!(ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Клиент не должен бросать наружу (LocalEngineStateClient гасит), но на всякий случай.
+            _log.LogDebug(ex, "Поллер метрик локального стенда: сбой состояния арбитра");
+            return false;
+        }
+        return s is { Reachable: true } && s.Bonsai
+            is EngineArbiterSnapshot.StateYielded
+            or EngineArbiterSnapshot.StateStarting
+            or EngineArbiterSnapshot.StateWaitingVram;
     }
 
     // Точка кольца: скорость = Δgeneration_tokens/Δвремя; отрицательная дельта (рестарт) → null.

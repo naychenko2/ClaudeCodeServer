@@ -226,6 +226,9 @@ public sealed class LlmSubsystem : IAppSubsystem
         // Клиент состояния арбитра GPU (/state) для движков с `StateUrl`: опрос по запросу,
         // фонового цикла нет — его зовут дорожка статистики (статус «уступила») и блок «Дежурство».
         services.AddSingleton<LocalEngineStateClient>();
+        // Читатель состояния для поллера дорожек (Б3b): ТОТ ЖЕ инстанс клиента —
+        // по образцу ILocalModelStatsReader → LocalModelStatsPoller.
+        services.AddSingleton<IEngineArbiterStateReader>(sp => sp.GetRequiredService<LocalEngineStateClient>());
 
         // Бесплатное ранжирование действий локальной Ollama для роутинга
         // через LocalActionRouter.

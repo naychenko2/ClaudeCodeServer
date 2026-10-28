@@ -18,8 +18,12 @@ namespace ClaudeHomeServer.Services.Llm;
 // Автоугадывания движка нет: он задаётся явно.
 //
 // Состояния: working (нет запросов) | busy (running>0 или waiting>0) | down (HTTP-сбой,
-// DownSince — момент ПЕРВОГО сбоя) | notConnected. Интервалы: PollInterval (5 с) в покое,
-// ActivePollInterval (1 с) пока есть запросы, DownPollInterval (15 с) когда движок мёртв.
+// DownSince — момент ПЕРВОГО сбоя) | yielded (дежурная модель под арбитром: /metrics молчит,
+// арбитр отвечает yielded/starting/waiting-vram — DownSince не ставится, Б3b) | notConnected.
+// Интервалы: PollInterval (5 с) в покое, ActivePollInterval (1 с) пока есть запросы,
+// DownPollInterval (15 с) когда движок мёртв или выгружен. Клиент состояния арбитра
+// (IEngineArbiterStateReader) достается только дорожкам движков с StateUrl; дорожка main
+// его не получает вовсе — основная модель не стоит ни под чьим управлением.
 public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsReader, ILocalEngineStatsDirectory
 {
     // Имя дорожки основной модели.
@@ -45,6 +49,7 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
 
     private readonly IOptionsMonitor<LocalModelStatsOptions> _options;
     private readonly LlmProviderRegistry _providers;
+    private readonly IEngineArbiterStateReader _arbiter;
     private readonly IHttpClientFactory _httpFactory;
     private readonly TimeProvider _time;
     private readonly ILogger<LocalModelStatsPoller> _log;
@@ -69,15 +74,19 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
         IOptionsMonitor<LocalModelStatsOptions> options,
         LlmProviderRegistry providers,
         NamedLocalEngines engines,
+        IEngineArbiterStateReader arbiter,
         IHttpClientFactory httpFactory,
         TimeProvider time,
         ILogger<LocalModelStatsPoller> log)
     {
         _options = options;
         _providers = providers;
+        _arbiter = arbiter;
         _httpFactory = httpFactory;
         _time = time;
         _log = log;
+        // main — без клиента арбитра: основная модель не стоит ни под чьим управлением,
+        // её молчание — обычный down (Б3b).
         _main = new EngineStatsTrack(MainTrackName, options, ResolveSource, time, log);
         _tracks = [_main];
         // Дорожка на каждый именованный движок с MetricsUrl (Б2b); без MetricsUrl — дорожки нет.
@@ -98,13 +107,19 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
 
     // Дорожка именованного движка: источник — LlamaServerMetricsSource (единственный транспорт
     // LocalEngines), имя дорожки = имя движка, тип в снимке — llama-server.
+    // Клиент состояния арбитра достается только движкам с StateUrl (Б3b): без StateUrl арбитра
+    // нет — молчание /metrics для такой дорожки — обычный down, как у main.
     private EngineStatsTrack BuildEngineTrack(LocalEngine engine)
     {
         var metricsUrl = engine.Spec.MetricsUrl!;
         var model = engine.Spec.Model;
+        Func<CancellationToken, Task<EngineArbiterSnapshot?>>? arbiter =
+            string.IsNullOrWhiteSpace(engine.Spec.StateUrl)
+                ? null
+                : ct => _arbiter.GetAsync(engine.Name, ct);
         return new EngineStatsTrack(engine.Name, _options, () => (
             new LlamaServerMetricsSource(_httpFactory.CreateClient(EngineMetricsHttpClientName), metricsUrl),
-            EngineKindLlamaServer, model, null, true), _time, _log);
+            EngineKindLlamaServer, model, null, true), _time, _log, arbiter);
     }
 
     public LocalModelStatsCurrent Current => _main.Current;
@@ -122,7 +137,9 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
     public IReadOnlyList<LocalModelStatsPoint> HistoryOf(string name, TimeSpan window, long? sinceUnixMs = null) =>
         Find(name)?.GetHistory(window, sinceUnixMs) ?? [];
 
-    private EngineStatsTrack? Find(string name) =>
+    // internal — тесты Б3b берут дорожку, созданную конструктором поллера (полная связка
+    // «движок из конфига → дорожка с клиентом арбитра»), а не собранную MakeTrack.
+    internal EngineStatsTrack? Find(string name) =>
         TracksSnapshot().FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.Ordinal));
 
     // Добавляет дорожку; вызывать до старта цикла. Список не мутируется на ходу:

@@ -6,20 +6,17 @@ on:
   pull_request:
 
 jobs:
-  backend:
-    name: Backend (build + test)
+  # Backend разнесён на сборку и прогон (фича «Ускорение тестов», Э2): сборка идёт ОДИН раз,
+  # её bin/obj едут артефактом в матрицу прогонов — три шарда монолита ClaudeHomeServer.Tests
+  # по классам (scripts/test-shards.py, раскладка по профилю прошлого прогона) плюс шард «rest»
+  # (все остальные тестовые проекты slnx). Состав не сокращается: объединение шардов скрипт
+  # сверяет с `dotnet test --list-tests` и падает при расхождении.
+  backend-build:
+    name: Backend (build)
     runs-on: ubuntu-latest
-    # История: тесты на Linux-раннере зависали насмерть (прогоны умирали на дефолтном
-    # 6-часовом таймауте). Потолок джобы — страховка от сгоревших часов; виновника
-    # зависания ищет blame-режим шага Test ниже.
-    timeout-minutes: 40
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      # ffmpeg для тестов монтажа без ИИ модуля «Звук» (ADR-021, этап 5).
-      # В ubuntu-latest он есть в репозитории universe, но ставится явно — без
-      # зависимости от состава предустановленного софта в будущих образах.
-      - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - uses: actions/setup-dotnet@v4
         with:
           # Проекты на net10.0. Раньше тут стояло 9.0.x, и сборка проходила лишь потому,
@@ -90,47 +87,150 @@ jobs:
           print(f'OK: {sum(1 for r,_,fs in os.walk(\"backend\") for f in fs if f.endswith(\".cs\"))} файлов .cs — валидный UTF-8')
           "
         shell: bash
+      # Тесты скриптов профиля и шардов: линейка всей фичи не должна врать молча
+      - name: Test scripts (profile, shards)
+        run: |
+          python3 -I scripts/test_test_profile.py
+          python3 -I scripts/test_test_shards.py
+      # Список тестов монолита снимается один раз — по нему каждый шард строит свой фильтр
+      - name: List monolith tests
+        env:
+          DOTNET_CLI_UI_LANGUAGE: en
+        run: dotnet test backend/ClaudeHomeServer.Tests --no-build --list-tests > monolith-tests.txt
+      - name: Pack build output
+        run: |
+          find backend -type d \( -name bin -o -name obj \) -prune -print0 \
+            | tar --null --exclude='backend/*/bin/Release' --exclude='backend/*/obj/Release' -cf - -T - monolith-tests.txt | zstd -T0 -3 -q -o "$RUNNER_TEMP/backend-build.tar.zst"
+          ls -lh "$RUNNER_TEMP/backend-build.tar.zst"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backend-build
+          path: ${{ runner.temp }}/backend-build.tar.zst
+          compression-level: 0
+          retention-days: 1
+
+  backend-test:
+    name: Backend (test ${{ matrix.name }})
+    needs: backend-build
+    runs-on: ubuntu-latest
+    # История: тесты на Linux-раннере зависали насмерть (прогоны умирали на дефолтном
+    # 6-часовом таймауте). Потолок джобы — страховка от сгоревших часов; виновника
+    # зависания ищет blame-режим прогона ниже.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: "monolith 1/3", key: m1, shard: "1/3" }
+          - { name: "monolith 2/3", key: m2, shard: "2/3" }
+          - { name: "monolith 3/3", key: m3, shard: "3/3" }
+          - { name: "rest", key: rest, shard: "" }
+    env:
+      DOTNET_CLI_UI_LANGUAGE: en
+      # Fast — исключение категорий, а не перечень меток (Э3). Единственная копия фильтра в CI;
+      # в скриптах — FAST_FILTER в scripts/test-profile.py, в предгейте — Pregate:Checks.
+      FAST: "Category!=Host&Category!=Slow&Category!=Integration&Category!=Node&Category!=Bench"
+      NOT_FAST: "(Category=Host|Category=Slow|Category=Integration|Category=Bench)&Category!=Node"
+    steps:
+      - uses: actions/checkout@v4
+      # ffmpeg для тестов монтажа без ИИ модуля «Звук» (ADR-021, этап 5).
+      # В ubuntu-latest он есть в репозитории universe, но ставится явно — без
+      # зависимости от состава предустановленного софта в будущих образах.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/download-artifact@v4
+        with:
+          name: backend-build
+          path: ${{ runner.temp }}
+      - name: Unpack build output
+        run: zstd -d -q -c "$RUNNER_TEMP/backend-build.tar.zst" | tar -xf -
+      # Профиль прошлого прогона (job backend-profile) — веса раскладки; нет его — раскладка
+      # по стабильному хешу имени класса, покрытие от этого не зависит
+      - uses: actions/cache/restore@v4
+        with:
+          path: test-profile.json
+          key: test-profile-${{ github.run_id }}
+          restore-keys: test-profile-
+      # Цель и фильтр шарда. Категория "Node" — за бортом: нужен Node + frontend/node_modules,
+      # не ставим. Категория "Dns" на ubuntu-latest НЕ исключается: внешний DNS-резолв в CI
+      # работает штатно (исторический прогон 02.09: 1317 passed), а выкинуть её — потерять
+      # рабочие тесты, в т.ч. SSRF-страховку Reader. Шард «rest» гоняет slnx без монолита:
+      # вынесенные тестовые проекты должны идти в том же гейте master.
+      - name: Shard filter
+        run: |
+          if [ -n "${{ matrix.shard }}" ]; then
+            SHARD=$(python3 -I scripts/test-shards.py --list monolith-tests.txt --shard "${{ matrix.shard }}" --timings test-profile.json)
+            echo "TARGET=backend/ClaudeHomeServer.Tests" >> "$GITHUB_ENV"
+            echo "SHARD=($SHARD)&" >> "$GITHUB_ENV"
+          else
+            grep -v 'ClaudeHomeServer.Tests/ClaudeHomeServer.Tests.csproj' backend/ClaudeHomeServer.slnx > backend/ClaudeHomeServer.Rest.slnx
+            echo "TARGET=backend/ClaudeHomeServer.Rest.slnx" >> "$GITHUB_ENV"
+            echo "SHARD=" >> "$GITHUB_ENV"
+          fi
+      # Два прохода на шард: набор Fast отдельно — его TRX проверяет сторож длительности,
+      # остальное (Host/Slow/Integration/Bench) — вторым проходом; вместе это весь шард.
       # Blame-режим: молчание тестового процесса дольше 5 минут — VSTest снимает дамп,
       # пишет в лог ИМЕНА тестов, выполнявшихся в этот момент, и валит шаг. По mini-дампу
       # дедлок не разобрать (dumpasync требует метаданных, которых в mini нет) — берём full.
-      # Порог 5 минут: обычный тест живёт <1 с, пять минут тишины — гарантированный труп,
-      # а итерация диагностики втрое быстрее, чем с 15 минутами.
       # Флаги vstest-консоли (--diagnostic и пр.) сюда нельзя: dotnet test в MSBuild-режиме
       # передаёт их MSBuild как неизвестные свитчи (MSB1001).
-      - name: Test
-# Категория "Node" — за бортом: нужен Node + frontend/node_modules, не ставим.
-      # Категория "Dns" на ubuntu-latest НЕ исключается: внешний DNS-резолв в CI
-      # работает штатно (исторический прогон 02.09: 1317 passed), а выкинуть её —
-      # потерять рабочие тесты, в т.ч. SSRF-страховку Reader (проверки приватных
-      # адресов/схем через редирект — `ReaderService_*`, `SsrfGuardTests.*DnsFailed`).
-      # На локальной Windows-машине с Proxifier Dns-категория падает средой, и там
-      # прогоняют с дополнительным `--filter "Category!=Dns"` (рекомендация в CLAUDE.md,
-      # раздел «Соглашения»); в CI этого фильтра быть НЕ должно.
-      # Общий прогон по `.slnx`, а не по одному `.Tests.csproj`: вынесенные тестовые
-      # проекты (`.Video.Tests`/`.Yandex.Tests`/`.Reader.Tests`, после Этапа 3) собираются
-      # шагом Build выше и должны гоняться в том же гейте master — иначе их падения
-      # пройдут мимо CI, ровно до первого прод-бага в перенесённом коде.
-      # Blame-режим: молчание тестового процесса дольше 5 минут — VSTest снимает дамп,
-      # пишет в лог ИМЕНА тестов, выполнявшихся в этот момент, и валит шаг. По mini-дампу
-      # дедлок не разобрать (dumpasync требует метаданных, которых в mini нет) — берём full.
-      # Порог 5 минут: обычный тест живёт <1 с, пять минут тишины — гарантированный труп,
-      # а итерация диагностики втрое быстрее, чем с 15 минутами.
-      # Флаги vstest-консоли (--diagnostic и пр.) сюда нельзя: dotnet test в MSBuild-режиме
-      # передаёт их MSBuild как неизвестные свитчи (MSB1001).
+      - name: Test (Fast)
         run: >
-          dotnet test backend/ClaudeHomeServer.slnx --no-build
-          --filter "Category!=Node"
+          dotnet test "$TARGET" --no-build
+          --filter "${SHARD}${FAST}"
+          --logger "trx;LogFilePrefix=fast" --results-directory "$RUNNER_TEMP/trx/fast"
           --blame-hang-timeout 5m --blame-hang-dump-type full
+      - name: Test (Host, Slow, Integration, Bench)
+        if: success() || failure()
+        run: >
+          dotnet test "$TARGET" --no-build
+          --filter "${SHARD}(${NOT_FAST})"
+          --logger "trx;LogFilePrefix=rest" --results-directory "$RUNNER_TEMP/trx/rest"
+          --blame-hang-timeout 5m --blame-hang-dump-type full
+      # Сторож Э3: тест набора Fast дольше 2 с — это нехостовый тест без метки Slow
+      - name: Duration guard (Fast)
+        run: python3 -I scripts/test-profile.py "$RUNNER_TEMP/trx/fast" --check
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trx-${{ matrix.key }}
+          path: ${{ runner.temp }}/trx/**/*.trx
+          retention-days: 7
       # Дампы и Sequence.xml blame складывает в TestResults — при падении выгружаем,
-      # иначе они умирают вместе с раннером. После Этапа 3 артефакты тестов идут
-      # из корня slnx (а не из папки конкретного `.Tests.csproj`) — общий глоб
-      # `backend/**/TestResults/**` ловит выгрузки всех проектов.
+      # иначе они умирают вместе с раннером.
       - name: Upload hang dumps
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: test-hang-artifacts
-          path: backend/**/TestResults/**
+          name: test-hang-artifacts-${{ matrix.key }}
+          path: |
+            ${{ runner.temp }}/trx/**
+            backend/**/TestResults/**
+
+  # Профиль всего прогона в лог и в кэш: следующий прогон раскладывает шарды по нему
+  backend-profile:
+    name: Backend (profile)
+    needs: backend-test
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: trx-m*
+          path: trx
+      - name: Profile
+        run: |
+          python3 -I scripts/test-profile.py trx
+          python3 -I scripts/test-profile.py trx --json > test-profile.json
+      - uses: actions/cache/save@v4
+        with:
+          path: test-profile.json
+          key: test-profile-${{ github.run_id }}
 
   # ADR-016 2.5. Агент устройства (`backend/ClaudeHomeServer.DeviceAgent`) работает на
   # Linux и Windows, но основная задача `backend` гоняет только ubuntu-latest — платформенные

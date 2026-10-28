@@ -94,4 +94,6 @@ public sealed class PhaseTimings
     public TimeSpan? List { get; set; }
     public string? ListSkipped { get; set; }
     public TimeSpan Test { get; set; }
+    // Сколько процессов шло фазой прогона: >1 — монолит шардами (TestShards)
+    public int Shards { get; set; } = 1;
 }

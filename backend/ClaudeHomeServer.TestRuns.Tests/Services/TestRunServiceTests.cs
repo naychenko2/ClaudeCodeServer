@@ -75,9 +75,13 @@ public class TestRunServiceTests : IDisposable
         public IProcessLauncher ForOwner(string? ownerId) => this;
         public IProcessLauncher ForProject(Project project) => this;
 
+        // Снимок на старте процесса (например, свободные слоты гейта во время фазы)
+        public Action<ProcessSpec>? OnStart { get; init; }
+
         public Process Start(ProcessSpec spec)
         {
             Specs.Enqueue(spec);
+            OnStart?.Invoke(spec);
             var phase = PhaseOf(spec);
             var script = plan(phase);
             if (script.Throw) throw new InvalidOperationException("dotnet не найден");
@@ -996,5 +1000,93 @@ public class TestRunServiceTests : IDisposable
         var text = service.FormatResult(await Run(service, Request()));
 
         text.Split('\n')[1].Should().MatchRegex(@"^сборка \S+ с · подсчёт \S+ с · тесты \S+ с$");
+    }
+
+    // --- Шарды монолита (TestShards) ---
+
+    private TestRunRequest MonolithRequest(string? filter = null) =>
+        new(NewProject(), _root, "sess-1", Target: TestRunsOptions.DefaultMonolithTarget, Filter: filter);
+
+    private FakeLauncher ShardRun(BuildConcurrencyGate gate, ConcurrentQueue<int> freeDuringTest) => new(_processes,
+        phase => phase switch
+        {
+            TestRunPhase.Build => Ok(),
+            TestRunPhase.List => Ok("list-tests.txt"),
+            _ => new Script("console-normal.txt", 0),
+        })
+    {
+        OnStart = spec => { if (PhaseOf(spec) == TestRunPhase.Test) freeDuringTest.Enqueue(gate.Available); },
+    };
+
+    [Fact]
+    public async Task Монолит_БезФильтра_ИдётШардамиПодОднимСлотом_СписокОдинРаз()
+    {
+        var gate = new BuildConcurrencyGate(2);
+        var free = new ConcurrentQueue<int>();
+        var launcher = ShardRun(gate, free);
+        var service = Service(launcher, gate);
+
+        var result = await service.RunDotnetAsync(MonolithRequest(), null, CancellationToken.None).WaitAsync(Wait);
+
+        var phases = launcher.Specs.Select(PhaseOf).ToList();
+        phases.Count(p => p == TestRunPhase.List).Should().Be(1, "классы шардов берутся из того же подсчёта");
+        var tests = launcher.Specs.Where(s => PhaseOf(s) == TestRunPhase.Test).ToList();
+        tests.Should().HaveCount(2, "в фикстуре два класса — два непустых шарда из трёх");
+        free.Should().AllSatisfy(f => f.Should().Be(1, "весь прогон держит ровно один слот из двух"));
+        tests.Should().AllSatisfy(s => s.Heavy.Should().BeTrue());
+        tests.Select(s => s.TurnId).Should().OnlyHaveUniqueItems();
+        var filters = tests.Select(s => s.Args[s.Args.ToList().IndexOf("--filter") + 1]).ToList();
+        filters.Should().BeEquivalentTo("FullyQualifiedName~A.Tests.CalcTests.", "FullyQualifiedName~B.Tests.OtherTests.");
+        tests.Select(s => s.Args.Single(a => a.StartsWith("trx;", StringComparison.Ordinal)))
+            .Should().BeEquivalentTo("trx;LogFilePrefix=results-shard1", "trx;LogFilePrefix=results-shard2");
+        gate.Available.Should().Be(2, "слот освобождается по концу конвейера");
+        result.Timings!.Shards.Should().Be(2);
+        result.Total.Should().Be(7);
+        service.FormatResult(result).Should().Contain("шардов параллельно: 2");
+    }
+
+    [Fact]
+    public async Task Монолит_СФильтром_ОднимПроцессом()
+    {
+        var gate = new BuildConcurrencyGate(2);
+        var launcher = ShardRun(gate, new ConcurrentQueue<int>());
+
+        var result = await Service(launcher, gate).RunDotnetAsync(MonolithRequest("FullyQualifiedName~X"), null,
+            CancellationToken.None).WaitAsync(Wait);
+
+        launcher.Specs.Count(s => PhaseOf(s) == TestRunPhase.Test).Should().Be(1);
+        result.Timings!.Shards.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Монолит_ШардыВыключены_ОднимПроцессом()
+    {
+        var gate = new BuildConcurrencyGate(2);
+        var launcher = ShardRun(gate, new ConcurrentQueue<int>());
+        var service = new TestRunService(launcher, new TestRunsOptions { MonolithShards = 1 }, gate,
+            exitGrace: TimeSpan.FromSeconds(5), TimeSpan.Zero);
+
+        await service.RunDotnetAsync(MonolithRequest(), null, CancellationToken.None).WaitAsync(Wait);
+
+        launcher.Specs.Count(s => PhaseOf(s) == TestRunPhase.Test).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task НеМонолит_БезФильтра_ОднимПроцессом()
+    {
+        var gate = new BuildConcurrencyGate(2);
+        var launcher = ShardRun(gate, new ConcurrentQueue<int>());
+
+        await Service(launcher, gate).RunDotnetAsync(Request(), null, CancellationToken.None).WaitAsync(Wait);
+
+        launcher.Specs.Count(s => PhaseOf(s) == TestRunPhase.Test).Should().Be(1);
+    }
+
+    [Fact]
+    public void ИтогШардов_ПервыйНенулевойКод_ОбрывЛюбого()
+    {
+        TestRunService.CombineShards([new(0, false), new(1, false), new(2, false)]).Should().Be(new PhaseOutcome(1, false));
+        TestRunService.CombineShards([new(0, false), new(0, false)]).Should().Be(new PhaseOutcome(0, false));
+        TestRunService.CombineShards([new(0, false), new(null, true)]).Should().Be(new PhaseOutcome(null, true));
     }
 }

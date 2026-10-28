@@ -71,10 +71,7 @@ public class LocalEngineStateClientTests
                             }
                             ctx.Response.Close();
                         }
-                        catch
-                        {
-                            ClientLeftEarly = true; // клиент ушёл: хвост тела не дописан.
-                        }
+                        catch { ClientLeftEarly = true; } // клиент ушёл: хвост тела не дописан.
                     });
                 }
             });
@@ -297,20 +294,31 @@ public class LocalEngineStateClientTests
         Assert.Null(s.Bonsai);
     }
 
-    // MAJOR-1 (c1): тело 10 МБ — клиент читает до потолка и уходит, хвост не читается:
-    // заглушка не дописала тело. Снимок отвергнут без исключения.
-    // Мутация — вернуть ResponseContentRead: клиент буферизует всё целиком, дописывает
-    // хвост и тест краснеет на ClientLeftEarly.
+    // MAJOR-1 (c1): тело 64 МБ — заведомо больше всех буферов этой машины (tcp_rmem max
+    // 32 МБ + tcp_wmem max 4 МБ, проверено по /proc). Клиент читает до потолка 64 КБ и уходит,
+    // заглушка физически не может дописать хвост — сигнал детерминичен, без TCP-таймингов.
+    // Снимок отвергнут без исключения. 10 МБ для этого не годятся: целиком умещаются в буферы,
+    // заглушка успевает дописать тело до ухода клиента (на 10 МБ тест flake'ил: зелёный/красный
+    // по везению). Мутация — вернуть ResponseContentRead: клиент буферизует всё тело сам,
+    // заглушка дописывает его до конца, тест краснеет на ClientLeftEarly.
     [Fact]
-    public async Task Body10Mb_TailNotRead_SnapshotRejected()
+    public async Task Body64Mb_TailNotRead_SnapshotRejected()
     {
-        var body = "{\"bonsai\":\"ready\",\"junk\":\"" + new string('a', 10_000_000) + "\"}";
+        var body = "{\"bonsai\":\"ready\",\"junk\":\"" + new string('a', 64_000_000) + "\"}";
         using var stub = new Stub(_ => (200, body, 0));
         var s = await ClientFor(stub).GetAsync(Engine);
 
         Assert.NotNull(s);
         Assert.False(s.Reachable);
-        Assert.True(stub.ClientLeftEarly, "клиент прочитал тело целиком: хвост 10 МБ дописан заглушкой");
+
+        // Заглушка блокируется на хвосте и замечает уход клиента сразу после его закрытия;
+        // ждём флаг с потолком, чтобы не прочитать его раньше, чем он родился.
+        var until = DateTime.UtcNow.AddSeconds(2);
+        while (!stub.ClientLeftEarly && DateTime.UtcNow < until)
+        {
+            await Task.Delay(50);
+        }
+        Assert.True(stub.ClientLeftEarly, "клиент дочитал 64 МБ до конца: хвост не остался в соединении");
     }
 
     // MAJOR-1 (c1): медленный арбитр отдаёт валидное тело по байту — общий бюджет 800 мс

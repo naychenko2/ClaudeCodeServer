@@ -251,6 +251,87 @@ public class ClaudeRuntimeSettingsTests
         }
     }
 
+    // ADR-035 §2 (S1c): статический deny {data}/wiki/** для Edit/Write/NotebookEdit.
+    // deny-правила CLI вычисляет раньше allow и раньше режимов прав: в acceptEdits правку
+    // файла он не выносит на карточку вовсе — без этого deny отказ до агента не дошёл бы.
+    private static JsonElement SettingsWithWikiDeny(string temp, string dataDir)
+    {
+        var args = ClaudeRuntimeSettings.HooksOffArgs(new TempLauncher(temp), true, dataDir).ToList();
+        return JsonDocument.Parse(File.ReadAllText(args[1])).RootElement;
+    }
+
+    private static string[] ExpectedDenyRules(string dataDir)
+    {
+        var root = dataDir.Replace('\\', '/');
+        return [$"Edit(//{root}/wiki/**)", $"Write(//{root}/wiki/**)", $"NotebookEdit(//{root}/wiki/**)"];
+    }
+
+    [Fact]
+    public void DenyВики_ТриИнструментаПоАбсолютномуПутиDataWiki()
+    {
+        var temp = Path.Combine(Path.GetTempPath(), "ccs-settings-" + Guid.NewGuid().ToString("N"));
+        var data = Path.Combine(Path.GetTempPath(), "ccs-wiki-data-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var deny = SettingsWithWikiDeny(temp, data).GetProperty("permissions").GetProperty("deny");
+            deny.EnumerateArray().Select(e => e.GetString()).Should().Equal(ExpectedDenyRules(data));
+        }
+        finally { try { Directory.Delete(temp, true); } catch { } }
+    }
+
+    [Fact]
+    public void DenyВики_СоставНеЗависитОтХода_СтрокаНастроекПобайтноРавна()
+    {
+        // Два вызова — «два хода одной сессии»: путь --settings входит в сигнатуру прогона,
+        // любое расхождение состава между ходами перезапускало бы живой CLI со всеми MCP.
+        var temp = Path.Combine(Path.GetTempPath(), "ccs-settings-" + Guid.NewGuid().ToString("N"));
+        var data = Path.Combine(Path.GetTempPath(), "ccs-wiki-data-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var p1 = ClaudeRuntimeSettings.WriteSettings(temp, true, false, "kill-v1", null, data);
+            var text1 = File.ReadAllText(p1);
+            var p2 = ClaudeRuntimeSettings.WriteSettings(temp, true, false, "kill-v1", null, data);
+            var text2 = File.ReadAllText(p2);
+
+            p2.Should().Be(p1, "тот же состав — тот же файл, иначе сигнатура прогона мерцает");
+            text2.Should().Be(text1, "содержимое побайтно то же");
+            JsonDocument.Parse(text2).RootElement.GetProperty("permissions").GetProperty("deny")
+                .EnumerateArray().Select(e => e.GetString()).Should().Equal(ExpectedDenyRules(data));
+        }
+        finally { try { Directory.Delete(temp, true); } catch { } }
+    }
+
+    [Fact]
+    public void DenyВики_ИнстансыСРазнымиDataDir_НеПерезаписываютФайлДругДруга()
+    {
+        if (OperatingSystem.IsWindows()) return; // тот же оговор, что у теста состава хуков: файл пишется на POSIX-манере
+        var temp = Path.Combine(Path.GetTempPath(), "ccs-settings-" + Guid.NewGuid().ToString("N"));
+        var dataA = Path.Combine(Path.GetTempPath(), "ccs-wiki-data-A-" + Guid.NewGuid().ToString("N"));
+        var dataB = Path.Combine(Path.GetTempPath(), "ccs-wiki-data-B-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var pathA = ClaudeRuntimeSettings.WriteSettings(temp, true, false, "kill-v1", null, dataA);
+            var textA = File.ReadAllText(pathA);
+            var pathB = ClaudeRuntimeSettings.WriteSettings(temp, true, false, "kill-v1", null, dataB);
+            // повторная запись инстансом A (его перезапуск) не должна затронуть файл B
+            ClaudeRuntimeSettings.WriteSettings(temp, true, false, "kill-v1", null, dataA);
+
+            pathB.Should().NotBe(pathA, "разный data-корень — разные deny-правила, значит разный отпечаток");
+            File.ReadAllText(pathA).Should().Be(textA);
+            JsonDocument.Parse(File.ReadAllText(pathB)).RootElement.GetProperty("permissions").GetProperty("deny")
+                .EnumerateArray().Select(e => e.GetString()!).Should().AllSatisfy(r => r.Should().Contain(dataB.Replace('\\', '/')));
+        }
+        finally { try { Directory.Delete(temp, true); } catch { } }
+    }
+
+    [Fact]
+    public void БезDataDir_КлючPermissionsНеПоявляется()
+    {
+        // One-shot прогоны и пробы (без правок вики) остаются на прежнем составе файла
+        foreach (var browser in new[] { true, false })
+            Settings(browser).Json.TryGetProperty("permissions", out _).Should().BeFalse();
+    }
+
     // Хук режет убийство процессов по имени: прод и дев-стенд — один бинарь, а в командной
     // строке CLI-агентов лежит весь системный промпт (инциденты 28.09, 12.10, 16.10, 17.10)
     private static (int Exit, string Err) RunKillHook(string command)

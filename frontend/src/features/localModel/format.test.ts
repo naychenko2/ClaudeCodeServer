@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   clamp01, formatGpuMem, formatPerc, formatPower, formatSince, formatTps, formatUpdatedAt,
-  gpuCountLabel, gpuLabel, gpuOrdinal, menuStatus, standDot, triggerDot, whoRows,
+  gpuCountLabel, gpuLabel, gpuOrdinal, menuStatus, standDot, triggerDot, triggerTitleFor, whoRows,
 } from './format';
 import { mockBonsaiStats } from './localModel.fixtures';
 
@@ -284,5 +284,36 @@ describe('triggerDot: точка на кнопке «⋯» (макет renderPho
   it('в норме (работает) и без снимка — точки нет', () => {
     expect(triggerDot(mockBonsaiStats('ready'))).toBeNull();
     expect(triggerDot(null)).toBeNull();
+  });
+});
+
+// === Подсказка/aria-имя кнопки «⋯» (Ф9, доработка по ревью) ===
+// Точка на кнопке несёт состояние только цветом; на мобиле панель «Локальные модели»
+// живёт только в этом меню — имя кнопки называет то же состояние теми же словами
+// таблицы §4, что подсказка рельса (standHint), а в норме остаётся «Ещё».
+describe('triggerTitleFor: имя кнопки «⋯» называет состояние', () => {
+  it('каждое состояние с точкой названо словами той же таблицы, что у standHint', () => {
+    expect(triggerTitleFor(mockBonsaiStats('yielded'))).toBe('Ещё · Bonsai уступила карту: видео');
+    expect(triggerTitleFor(mockBonsaiStats('returning'))).toBe('Ещё · Bonsai вернётся через 2:40');
+    expect(triggerTitleFor(mockBonsaiStats('starting'))).toBe('Ещё · Bonsai загружается');
+    expect(triggerTitleFor(mockBonsaiStats('waiting-vram'))).toBe('Ещё · Bonsai ждёт память карты');
+    expect(triggerTitleFor(mockBonsaiStats('unknown'))).toBe('Ещё · Bonsai недоступна');
+    const d = mockBonsaiStats('ready');
+    const silent = { ...d, duty: { ...d.duty!, arbiter: { ...d.duty!.arbiter!, reachable: false } } };
+    expect(triggerTitleFor(silent)).toBe('Ещё · Bonsai: арбитр не отвечает');
+  });
+
+  it('в норме (работает) и без снимка — «Ещё»', () => {
+    expect(triggerTitleFor(mockBonsaiStats('ready'))).toBe('Ещё');
+    expect(triggerTitleFor(null)).toBe('Ещё');
+  });
+
+  // Имя и точка — один сигнал одного состояния: расходятся только если хелпер или
+  // triggerDot отстанет; тест держит их вместе на всех состояниях фикстур.
+  it('имя отличается от «Ещё» ровно когда на кнопке есть точка (triggerDot)', () => {
+    for (const s of ['ready', 'yielded', 'returning', 'starting', 'waiting-vram', 'unknown', 'no-arbiter'] as const) {
+      const d = mockBonsaiStats(s);
+      expect(triggerTitleFor(d) !== 'Ещё', s).toBe(triggerDot(d) !== null);
+    }
   });
 });

@@ -261,6 +261,18 @@ export function triggerDot(data: LocalModelStats | null): MenuStatusTone | null 
   return menuStatus(data)?.tone ?? null;
 }
 
+// Подсказка/aria-имя самой кнопки «⋯» (Ф9, доработка по ревью): точка на кнопке несёт
+// состояние только цветом, а на мобиле панель «Локальные модели» живёт только в этом
+// меню — кнопка единственная точка входа, и её имя должно называть то же состояние,
+// что точка. Формулировки — ровно standHint (тот же текст, что у подсказки рельса),
+// префикс «Ещё · » — как у динамического triggerTitle композера (Composer.tsx).
+// Тон null (норма или снимка нет) — «Ещё» без состояния: выдуманного не добавляем.
+export function triggerTitleFor(data: LocalModelStats | null): string {
+  if (!data || !triggerDot(data)) return 'Ещё';
+  const hint = standHint(data);
+  return hint ? `Ещё · ${hint}` : 'Ещё';
+}
+
 // === Строки «Кто сейчас на модели» ===
 
 // Строка списка: чат со скоростью. Чужой чат — «Чат другого пользователя»

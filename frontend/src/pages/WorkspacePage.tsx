@@ -38,7 +38,7 @@ import { ToolbarOverflowMenu, type OverflowItem } from '../components/ToolbarOve
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { getLocalModelBonsai, useLocalModelWatcher } from '../features/localModel/useLocalModelWatcher';
-import { menuStatus, triggerDot } from '../features/localModel/format';
+import { menuStatus, triggerDot, triggerTitleFor } from '../features/localModel/format';
 import { PluginFrame, PluginPanelsSwitcher, useHasInstalledPlugins, useInstalledPlugins, panelDisplayName, pluginIconFor } from '../features/plugins';
 import { BackButton, Button, IconButton, Modal } from '../components/ui';
 import { PageCanvas } from '../components/ui/PageCanvas';
@@ -417,6 +417,10 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   // виден до открытия меню. Гейт как у точки рельса: видимый пункт (флаг+admin+configured)
   // и снимок (его опрос живёт только у админа с флагом) — в норме и без данных точки нет.
   const localModelTriggerDot = localModelVisible ? triggerDot(getLocalModelBonsai()) : null;
+  // Имя кнопки (title/aria) называет то же состояние, что точка (Ф9, доработка по
+  // ревью): на мобиле панель — только в этом меню, состояние читалось бы одним
+  // цветом 8-px точки. В норме и без снимка — прежнее «Ещё».
+  const localModelTriggerTitle = localModelVisible ? triggerTitleFor(getLocalModelBonsai()) : 'Ещё';
 
   // Восстанавливаем состояние окна для этого проекта (компонент перемонтируется при входе в проект)
   const [leftTab, setLeftTab] = useState<LeftTab>(() => {
@@ -2415,6 +2419,7 @@ const windowWidth = useWindowWidth();
             <div ref={projectTabsMoreRef} style={{ flexShrink: 0, display: 'inline-flex' }}>
               <ToolbarOverflowMenu
                 isMobile title="Ещё" items={projectOverflowItems}
+                triggerTitle={localModelTriggerTitle}
                 indicator={localModelTriggerDot ? (
                   <span style={{
                     position: 'absolute', top: 0, right: 0, width: 8, height: 8, borderRadius: '50%',

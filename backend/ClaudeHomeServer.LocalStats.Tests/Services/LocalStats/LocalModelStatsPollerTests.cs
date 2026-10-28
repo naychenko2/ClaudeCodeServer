@@ -1192,6 +1192,8 @@ public class LocalModelStatsPollerTests
     // опрашивает main и ждёт СВОЙ интервал (ActivePollInterval), пока чужая дорожка «в сети».
     // Настоящий цикл (StartAsync) на управляемом ожидании и фейковых часах; таймаут ожидания —
     // реальный (5 с), только чтобы тест не висел вечно при регрессии.
+    // Инвариант теста: темп main не зависит от чужой дорожки и не зависит от порядка потоков:
+    // фон может опередить Release теста или отстать от него — утверждения только об интервалах.
     // Мутация: вернуть старый цикл (PollAllAsync + общий Wait) — main не доходит до своего Wait,
     // пока висит чужая дорожка: gate не создан, Release() не завершается — TimeoutException.
     [Fact]
@@ -1201,8 +1203,11 @@ public class LocalModelStatsPollerTests
         var slow = new BlockingSource();
         h.Poller.AddTrack(MakeTrack(h, "slow", () => (slow, "llama-server", "m", null, true)));
         // main «занят» (Running>0): его интервал — ActivePollInterval (1 с).
-        h.Source.Snapshots.Enqueue(new EngineSnapshot { Running = 1 });
-        h.Source.Snapshots.Enqueue(new EngineSnapshot { Running = 1 });
+        // Снапшоты с запасом (5): к моменту утверждений цикл мог сделать и два опроса, и три —
+        // это зависит от порядка потоков, а не от поведения цикла. Лишний опрос обязан остаться
+        // на своём интервале, а не упереться в пустую очередь (down → DownPollInterval).
+        for (var i = 0; i < 5; i++)
+            h.Source.Snapshots.Enqueue(new EngineSnapshot { Running = 1 });
 
         var delays = new List<TimeSpan>();
         var gate = new GateWait();
@@ -1210,11 +1215,13 @@ public class LocalModelStatsPollerTests
 
         var cts = new CancellationTokenSource();
         var run = h.Poller.StartAsync(cts.Token);
-        // Первый опрос main цикл делает на своём потоке сразу после StartAsync и встаёт на своём Wait.
+        // Цикл живёт на своём потоке: первый опрос main и первый Wait могут случиться и до
+        // первого Release (фон опередил), и после него (тест опередил) — порядок не зафиксирован.
 
-        // Первый Release только «впускает» первый опрос (он мог ещё не дойти до Wait); второй —
-        // разрешает ожидание после первого опроса и ждёт, пока цикл сделает второй опрос и
-        // снова встанет на Wait. Таймаут — страховка от вечного ожидания при регрессии.
+        // Каждый Release разрешает текущий Wait и ждёт создания следующего. К моменту
+        // утверждений цикл сделал 2 или 3 опроса — в зависимости от порядка потоков; точное
+        // число не утверждаем (оно от планирования потоков), утверждаем только интервалы.
+        // Таймаут — страховка от вечного ожидания при регрессии.
         await gate.Release().WaitAsync(TimeSpan.FromSeconds(5));
         await gate.Release().WaitAsync(TimeSpan.FromSeconds(5));
 

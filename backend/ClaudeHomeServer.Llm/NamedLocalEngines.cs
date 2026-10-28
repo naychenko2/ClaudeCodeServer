@@ -11,6 +11,9 @@ namespace ClaudeHomeServer.Services.Llm;
 //   • `ReadyUrl`      — GET, 200 = движок готов (у арбитра GPU — `/ready`); пусто — без пробы;
 //   • `StateUrl`      — полный ответ арбитра GPU (`/state`), читает LocalEngineStateClient
 //                       (статус «уступила/вернулась», причины); пусто — арбитра нет;
+//   • `MetricsUrl`    — GET /metrics движка (флаг --metrics у llama-server): с ним поллер
+//                       LocalModelStatsPoller заводит дорожку статистики на этот движок (Б2b);
+//                       пусто — движок в панели «Локальные модели» не показывается;
 //   • `FallbackRoute` — шаг после неудачи движка, перед финальным claude: `direct:<model>`
 //                       (прямой адаптер, например MiniMax) — других значений нет;
 //   • `NumCtx`        — потолок контекста движка (окно слота llama-server): профиль места
@@ -19,13 +22,23 @@ namespace ClaudeHomeServer.Services.Llm;
 //                       переопределил место в UI (приоритет: выбор админа → `Ollama:Actions` →
 //                       `LocalEngines:*:Actions` → дефолт каталога).
 // Движок без BaseUrl/Model или без мест — не регистрируется (warning), остальные работают.
+// MetricsUrl и Model — init-свойства, не позиционные параметры: у spec positional-конструкторы
+// живут в чужих тестах (графли Б3a: новый позиционный аргумент занял чужую позицию), а эти поля
+// нужны только дорожке статистики (Б2b) и не меняют существующие вызовы.
 public sealed record LocalEngineSpec(
     string Name,
     string? ReadyUrl,
     string? StateUrl,
     string? FallbackRoute,
     int? NumCtx,
-    IReadOnlySet<string> Actions);
+    IReadOnlySet<string> Actions)
+{
+    // GET /metrics движка (--metrics у llama-server): пусто — дорожки статистики нет.
+    public string? MetricsUrl { get; init; }
+
+    // Имя модели для снимка дорожки (Model из конфига движка); на отображение, не для запроса.
+    public string? Model { get; init; }
+}
 
 public sealed class LocalEngine(LocalEngineSpec spec, ILocalLlmClient client,
     Func<CancellationToken, Task<bool>>? readyProbe)
@@ -94,7 +107,8 @@ public sealed class NamedLocalEngines
                 fallback = null;
             }
             var spec = new LocalEngineSpec(name, section["ReadyUrl"]?.Trim(), section["StateUrl"]?.Trim(),
-                fallback, int.TryParse(section["NumCtx"], out var numCtx) && numCtx > 0 ? numCtx : null, actions);
+                fallback, int.TryParse(section["NumCtx"], out var numCtx) && numCtx > 0 ? numCtx : null, actions)
+            { MetricsUrl = section["MetricsUrl"]?.Trim() };
             // Свой ключ слота на каждый движок: потолок не делится ни с основным LocalLlm, ни с соседями
             var maxConcurrency = int.TryParse(section["MaxConcurrency"], out var mc) && mc > 0
                 ? mc : TrackedLocalLlmClient.DefaultLimit;
@@ -121,6 +135,7 @@ public sealed class NamedLocalEngines
                     }
                 };
             }
+            spec = spec with { Model = options.TextModel };
             Add(new LocalEngine(spec, client, probe));
             log.LogInformation("LocalEngines:{Name} — {Url}, модель {Model}, мест {Count}, страховка {Fallback}",
                 name, options.BaseUrl, options.TextModel, actions.Count, fallback ?? "нет");
@@ -156,6 +171,9 @@ public sealed class NamedLocalEngines
     }
 
     public bool Any => _engines.Count > 0;
+
+    // Движки в порядке регистрации (для поллера статистики: дорожка на каждый с MetricsUrl).
+    public IReadOnlyCollection<LocalEngine> Engines => _engines.Values;
 
     // Имя движка, назначенного месту конфигом; null — место на движки не назначено.
     public string? EngineFor(string actionKey) =>

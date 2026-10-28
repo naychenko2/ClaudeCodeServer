@@ -97,7 +97,7 @@ public class LocalModelStatsPollerTests
         public FakeSource Source { get; } = new();
         public LocalModelStatsPoller Poller { get; }
 
-        public Harness(bool enabled = true)
+        public Harness(bool enabled = true, NamedLocalEngines? engines = null, ILogger<LocalModelStatsPoller>? log = null)
         {
             Options = new FakeOptionsMonitor<LocalModelStatsOptions>(
                 new LocalModelStatsOptions { Enabled = enabled });
@@ -113,9 +113,10 @@ public class LocalModelStatsPollerTests
                 }).Build());
             Poller = new LocalModelStatsPoller(
                 Options, registry,
+                engines ?? new NamedLocalEngines([]), // без именованных движков: их заводят отдельные тесты Б2b
                 new FakeHttpClientFactory(), // не используется: SourceFactoryOverride подменяет источник
                 Time,
-                NullLogger<LocalModelStatsPoller>.Instance);
+                log ?? NullLogger<LocalModelStatsPoller>.Instance);
             // Фейковый источник: подменяем фабрику, чтобы не ходить в реальную сеть.
             Poller.SourceFactoryOverride = () => (Source, "vllm", "qwen3.8-27b", null, true);
         }
@@ -1063,5 +1064,204 @@ public class LocalModelStatsPollerTests
     {
         public Task<EngineSnapshot?> ReadAsync(CancellationToken ct = default)
             => throw new FormatException("мусор в /metrics");
+    }
+
+    // ─── Б2b: дорожка именованного движка + хвосты ревью Б1 (H1–H3) ────────────────────────
+
+    // Именованные движки из конфига: BaseUrl+Model заданы, MetricsUrl — по параметру.
+    // Реальный конструктор NamedLocalEngines (тот же путь, что на бою); HTTP при построении
+    // не делается — сеть трогает только опрос дорожки, а эти тесты её не гоняют.
+    private static NamedLocalEngines EnginesFromConfig(params (string Name, string? MetricsUrl)[] engines)
+    {
+        var dict = new Dictionary<string, string?>();
+        foreach (var (name, metricsUrl) in engines)
+        {
+            dict[$"LocalEngines:{name}:BaseUrl"] = "http://127.0.0.1:18030";
+            dict[$"LocalEngines:{name}:Model"] = "bonsai2-27b";
+            if (metricsUrl is not null)
+                dict[$"LocalEngines:{name}:MetricsUrl"] = metricsUrl;
+        }
+        return new NamedLocalEngines(
+            new FakeHttpClientFactory(), new ConfigurationBuilder().AddInMemoryCollection(dict).Build(),
+            NullLoggerFactory.Instance);
+    }
+
+    // (40) c1: движок с MetricsUrl получает дорожку (имя = имя движка); без MetricsUrl — не получает.
+    // Мутация: убрать проверку MetricsUrl в конструкторе поллера — тест краснеет ("no-metrics" в Names).
+    [Fact]
+    public void EngineWithMetricsUrl_GetsTrack_WithoutMetricsUrl_DoesNot()
+    {
+        var engines = EnginesFromConfig(
+            ("bonsai", "http://127.0.0.1:18030/metrics"),
+            ("no-metrics", null));
+        var h = new Harness(engines: engines);
+
+        // main — первой, затем движок с MetricsUrl; без MetricsUrl — дорожки нет.
+        h.Poller.Names.Should().Equal("main", "bonsai");
+        h.Poller.Names.Should().NotContain("no-metrics");
+    }
+
+    // (41) c2: рестарт движка в дорожке (счётчики упали, PromptTokens убывает) — окно рвётся,
+    // отрицательной скорости нет: приращения null, оконная скорость после разрыва null.
+    // Мутация: убрать детект разрыва в UpdateCounters/CounterDelta — краснеет на null-ожиданиях.
+    [Fact]
+    public async Task EngineTrack_RestartBreaksWindow_NoNegativeSpeed()
+    {
+        var h = new Harness();
+        var bonsai = new FakeSource();
+        h.Poller.AddTrack(MakeTrack(h, "bonsai", () => (bonsai, "llama-server", "bonsai2-27b", null, true)));
+
+        // t=0: живой движок.
+        bonsai.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 1000, PromptTokens = 5000, InterTokenLatencySum = 10, Running = 1 });
+        await h.Poller.PollAllAsync();
+        h.Time.Advance(TimeSpan.FromSeconds(5));
+        // t=5: обычный интервал: +500 токенов.
+        bonsai.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 1500, PromptTokens = 6000, InterTokenLatencySum = 15, Running = 1 });
+        await h.Poller.PollAllAsync();
+        h.Time.Advance(TimeSpan.FromSeconds(5));
+        // t=10: рестарт Bonsai — счётчики упали (GenerationTokens 1500→100, PromptTokens 6000→200).
+        bonsai.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 100, PromptTokens = 200, InterTokenLatencySum = 1, Running = 0 });
+        await h.Poller.PollAllAsync();
+
+        var history = h.Poller.HistoryOf("bonsai", TimeSpan.FromHours(1));
+        history.Should().HaveCount(3);
+        history[1].GenThroughput.Should().Be(100.0, "(1500 − 1000)/5 = 100 ток/с");
+        history[2].GenThroughput.Should().BeNull("рестарт (счётчик упал) → разрыв окна, а не отрицательная скорость");
+        history[2].PromptTokens.Should().BeNull("PromptTokens убывает (рестарт) → приращения нет, не −5800");
+        history.Should().NotContain(p => p.GenThroughput < 0, "отрицательных скоростей в кольце не бывает");
+
+        // После разрыва буфера окно не продолжается: базовой точки нет → оконная скорость null.
+        h.Poller.CurrentOf("bonsai")!.Kv!.GenPerStream.Should().BeNull("разрыв обрывает буфер — окна нет");
+    }
+
+    // (42) H1: медленная дорожка не задерживает соседнюю — опрос параллельный (Task.WhenAll).
+    // Мутация: заменить WhenAll на последовательный await по дорожкам — тест краснеет
+    // (bonsai не опрашивается, пока slow висит в сети).
+    [Fact]
+    public async Task PollAll_SlowTrackDoesNotDelayNeighbour()
+    {
+        var h = new Harness();
+        var good = new FakeSource();
+        good.Snapshots.Enqueue(new EngineSnapshot { Running = 2 });
+        var slow = new BlockingSource();
+        h.Poller.AddTrack(MakeTrack(h, "slow", () => (slow, "llama-server", "m", null, true)));
+        h.Poller.AddTrack(MakeTrack(h, "bonsai", () => (good, "llama-server", "bonsai", null, true)));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { Running = 1 });
+
+        var tick = h.Poller.PollAllAsync(); // не ждём: медленная дорожка ещё «в сети»
+        h.Poller.CurrentOf("bonsai")!.Running.Should().Be(2, "соседняя дорожка опросилась, пока медленная в сети");
+        h.Poller.CurrentOf("slow")!.Status.Should().Be("notConnected", "медленная ещё не ответила");
+
+        slow.Release();
+        await tick;
+        h.Poller.CurrentOf("slow")!.Running.Should().Be(7, "после ответа медленной тик завершился");
+    }
+
+    // (43) H2: посторонний OperationCanceledException от источника — не отмена stoppingToken:
+    // тик ловит его как сбой дорожки и не выбрасывает наружу; цикл жив — каждый следующий
+    // PollAllAsync снова опрашивает main (рост ReadCalls). Тест зовёт тики напрямую: фоновый
+    // цикл привязывать к gate нельзя — первый тик ExecuteAsync выполняется синхронно внутри
+    // StartAsync, до входа в управляемый Wait, и счётчик по релизам не сходится.
+    // Мутация: убрать OCE-ветку в PollTrackAsync (вернуть `when (ex is not OCE)`) — OCE выходит
+    // из тика, первый же await бросает — тест краснеет.
+    [Fact]
+    public async Task PollAll_ForeignCancellationDoesNotKillLoop()
+    {
+        var h = new Harness();
+        h.Poller.AddTrack(MakeTrack(h, "cancelling", () => (new CancellingSource(), "llama-server", "m", null, true)));
+        for (var i = 0; i < 3; i++)
+            h.Source.Snapshots.Enqueue(new EngineSnapshot { Running = 1 });
+
+        await h.Poller.PollAllAsync();
+        var afterFirst = h.Source.ReadCalls;
+        afterFirst.Should().BeGreaterThan(0, "первый тик опросил main");
+
+        await h.Poller.PollAllAsync();
+        await h.Poller.PollAllAsync();
+        h.Source.ReadCalls.Should().BeGreaterThan(afterFirst, "цикл жив: каждый следующий тик снова опрашивает main");
+        h.Poller.CurrentOf("main")!.Status.Should().Be("busy");
+    }
+
+    // (44) H2: Warning об падающей дорожке ограничен по частоте: первая неудача — Warning,
+    // повторные в пределах cooldown — Debug; после cooldown — снова Warning.
+    // Мутация: писать Warning без cooldown — тест краснеет (Warning = 3).
+    [Fact]
+    public async Task PollAll_RepeatedTrackFailure_WarnsOncePerCooldown()
+    {
+        var log = new CapturingLogger<LocalModelStatsPoller>();
+        var h = new Harness(log: log);
+        h.Poller.AddTrack(MakeTrack(h, "broken", () => throw new InvalidOperationException("сбой дорожки")));
+        for (var i = 0; i < 3; i++)
+            h.Source.Snapshots.Enqueue(new EngineSnapshot { Running = 0 });
+
+        await h.Poller.PollAllAsync();
+        await h.Poller.PollAllAsync();
+
+        log.Entries.Count(e => e.Level == LogLevel.Warning).Should().Be(1, "первый сбой — Warning");
+        log.Entries.Count(e => e.Level == LogLevel.Debug).Should().Be(1, "повторный сбой в пределах cooldown — Debug");
+
+        h.Time.Advance(TimeSpan.FromMinutes(6));
+        await h.Poller.PollAllAsync();
+        log.Entries.Count(e => e.Level == LogLevel.Warning).Should().Be(2, "после cooldown сбой виден снова");
+    }
+
+    // (45) H3: одновременные AddTrack не теряют дорожек: список иммутабельный, замена ссылки
+    // под _tracksGate. Мутация: снять lock в AddTrack (`_tracks = [.. _tracks, track]` без замка) —
+    // гонка read-copy-write теряет добавления, счётчик меньше n+1 — тест краснеет.
+    [Fact]
+    public async Task AddTrack_ConcurrentAdds_LosesNoTracks()
+    {
+        var h = new Harness();
+        const int n = 50;
+        var start = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var adds = new Task[n];
+        for (var i = 0; i < n; i++)
+        {
+            var idx = i;
+            adds[i] = Task.Run(async () =>
+            {
+                await start.Task.WaitAsync(CancellationToken.None); // все стартуют одним барьером — гонка на _tracks обеспечена
+                h.Poller.AddTrack(MakeTrack(h, $"t{idx}", () => (new FakeSource(), null, null, null, false)));
+            });
+        }
+        start.SetResult(true);
+        await Task.WhenAll(adds);
+
+        h.Poller.Names.Should().Contain("main");
+        h.Poller.Names.Should().HaveCount(n + 1, "все одновременные добавления сохранены (main + n)");
+    }
+
+    // Источник, который висит в сети, пока тест не разрешит (медленный движок).
+    private sealed class BlockingSource : IEngineMetricsSource
+    {
+        private readonly TaskCompletionSource<bool> _gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void Release() => _gate.TrySetResult(true);
+
+        public async Task<EngineSnapshot?> ReadAsync(CancellationToken ct = default)
+        {
+            await _gate.Task.WaitAsync(ct);
+            return new EngineSnapshot { Running = 7 };
+        }
+    }
+
+    // Источник, который бросает посторонний OperationCanceledException (не отмена stoppingToken).
+    private sealed class CancellingSource : IEngineMetricsSource
+    {
+        public Task<EngineSnapshot?> ReadAsync(CancellationToken ct = default)
+            => Task.FromException<EngineSnapshot?>(new OperationCanceledException("посторонняя отмена"));
+    }
+
+    // Логгер, пишущий записи в список: для проверки частоты Warning.
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => Entries.Add((logLevel, formatter(state, exception)));
     }
 }

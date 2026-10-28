@@ -213,6 +213,15 @@ public sealed class LlmSubsystem : IAppSubsystem
                 Category: "ClaudeHomeServer.Llm.LocalEngines",
                 Subject: "арбитром именованного локального движка",
                 Consequence: "Место уйдёт дальше по своей цепочке (страховка или claude)."));
+        // /metrics именованных движков (дорожка статистики LocalModelStatsPoller, Б2b): тихий
+        // клиент со своей категорией — выгруженный арбитром стенд не должен spamить Error-ами
+        // каждый тик, и его тишина не глушит жалобы на основной стенд (и наоборот).
+        services.AddQuietHttpClient(
+            LocalModelStatsPoller.EngineMetricsHttpClientName,
+            new QuietHttpClientProfile(
+                Category: "ClaudeHomeServer.Llm.LocalEngineMetrics",
+                Subject: "метриками именованного локального движка (llama-server)",
+                Consequence: "Панель «Локальные модели» не обновит снимок движка до следующего опроса."));
 
         // Клиент состояния арбитра GPU (/state) для движков с `StateUrl`: опрос по запросу,
         // фонового цикла нет — его зовут дорожка статистики (статус «уступила») и блок «Дежурство».

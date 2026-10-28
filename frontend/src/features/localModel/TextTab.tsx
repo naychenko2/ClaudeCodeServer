@@ -509,25 +509,30 @@ function WhoPlacesCard({ data, isMobile }: { data: LocalModelStats; isMobile: bo
 }
 
 // === Переключатель «Основная · Bonsai» (макет §2) ===
-// Первая строка вкладки, над стендом. Виден ТОЛЬКО когда настроены оба движка:
+// Первая строка вкладки, над её содержимым — над стендом, над карточкой сбоя и над
+// скелетоном (дефект b129c182): список движков живёт своим опросом
+// (useLocalModelEngines) и не зависит от снимка статистики, поэтому уйти на другой
+// стенд можно и когда данных нет. Виден ТОЛЬКО когда настроены оба движка:
 // с одним движком стенд открывается сразу, переключателя нет. Подписи — titles из
 // /engines («Основная», «Bonsai»): имена моделей в сегмент не ставим (на 320 не
 // помещаются, имя и так стоит первой строкой стенда). Точка 6 px и подсказка на
 // сегменте «Bonsai» — только когда выбран сам «Bonsai» и по ЕГО снимку: data —
 // снимок текущего движка, состояние Bonsai с основного стенда неизвестно (при
 // падении основного старая логика зажигала на сегменте «Bonsai недоступна» —
-// неправда). Состояние Bonsai на основном стенде придёт в Ф6 из лёгкого опроса
-// useLocalModelWatcher. title/aria-label сегмента — та же подсказка, что у рельса.
+// неправда). Снимка нет (data === null) — нет и точки с подсказкой: выдумывать
+// состояние по чужому снимку нечем. Состояние Bonsai на основном стенде придёт в
+// Ф6 из лёгкого опроса useLocalModelWatcher. title/aria-label сегмента — та же
+// подсказка, что у рельса.
 function EngineSwitch({ data, engines, engine, onChange, isMobile }: {
-  data: LocalModelStats; engines: LocalModelEngine[]; engine: LocalModelEngineName;
+  data: LocalModelStats | null; engines: LocalModelEngine[]; engine: LocalModelEngineName;
   onChange: (e: LocalModelEngineName) => void; isMobile: boolean;
 }) {
   const configured = engines.filter(e => e.configured);
   if (configured.length < 2) return null;
   // Точка и подсказка — только по снимку выбранного движка (составитель — format.ts)
   const bonsaiSelected = engine === 'bonsai';
-  const dot = bonsaiSelected ? standDot(data) : null;
-  const hint = bonsaiSelected ? standHint(data) : null;
+  const dot = data && bonsaiSelected ? standDot(data) : null;
+  const hint = data && bonsaiSelected ? standHint(data) : null;
   return (
     <InlineSegmented<LocalModelEngineName>
       value={engine}
@@ -650,12 +655,21 @@ export function TextTab({ data, loading, error, isMobile, onOpenChat, onRefetch,
   engine?: LocalModelEngineName;
   onEngineChange?: (e: LocalModelEngineName) => void;
 }) {
+  // Переключатель — над ЛЮБЫМ состоянием вкладки, а не только над стендом
+  // (дефект b129c182): упал один стенд — уйти на другой надо из интерфейса, а не
+  // через F5. Условие видимости то же, что раньше (список + обработчик; сам
+  // EngineSwitch молчит при одном configured), порядок и отступы со стендом —
+  // прежние: переключатель остаётся первым элементом потока.
+  const engineSwitch = engines && onEngineChange ? (
+    <EngineSwitch data={data} engines={engines} engine={engine} onChange={onEngineChange} isMobile={isMobile} />
+  ) : null;
+
   // Порядок состояний (Ф10): известная причина важнее скелетона — при сбое и
   // идущем параллельно повторном опросе (loading) карточка остаётся спокойной и
   // не мигает скелетоном каждые 2 с. Скелетон — только когда причины ещё нет:
   // первое открытие до первого ответа.
-  if (!data && error) return <NoConnection error={error} />;
-  if (loading && !data) return <TextTabSkeleton />;
+  if (!data && error) return <>{engineSwitch}<NoConnection error={error} /></>;
+  if (loading && !data) return <>{engineSwitch}<TextTabSkeleton /></>;
   if (!data) return null;
   if (data.status === 'notConnected') return <NotConnected />;
 
@@ -670,9 +684,7 @@ export function TextTab({ data, loading, error, isMobile, onOpenChat, onRefetch,
 
   return (
     <>
-      {engines && onEngineChange && (
-        <EngineSwitch data={data} engines={engines} engine={engine} onChange={onEngineChange} isMobile={isMobile} />
-      )}
+      {engineSwitch}
       {down && <DownBanner data={data} onCheck={onRefetch} bonsai={bonsai} />}
       {yielded && <YieldBanner data={data} />}
       <StatusRow data={data} />

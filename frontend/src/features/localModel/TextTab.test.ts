@@ -1,10 +1,11 @@
 // Вкладка «LLM»: текстовые helper'ы (notReportedText), точные подписи статуса
 // (statusPill/standDot/standHint — макет bonsai-toolbar §4) и рендер TextTab:
-// переключатель движка (виден только при двух configured), сокрытие полей из
-// `unsupported` (не заглушки, а ничего), состояние 'yielded' (нейтральный тон,
-// не нули), карточка Video и «места сервера» вместо чатов, блок «Дежурство»
-// (только у выбранного Bonsai; без duty — пустого: блок сам возвращает null;
-// без арбитра — строка «Арбитр не подключён»).
+// переключатель движка (виден только при двух configured и над любым состоянием
+// вкладки — со стендом, с карточкой сбоя и со скелетоном, дефект b129c182),
+// сокрытие полей из `unsupported` (не заглушки, а ничего), состояние 'yielded'
+// (нейтральный тон, не нули), карточка Video и «места сервера» вместо чатов, блок
+// «Дежурство» (только у выбранного Bonsai; без duty — пустого: блок сам
+// возвращает null; без арбитра — строка «Арбитр не подключён»).
 // Рендер — через linkedom (как tasks/acceptanceBlock.test.ts); ResizeObserver
 // стабится: ThroughputChart меряет им свою ширину.
 
@@ -43,20 +44,37 @@ const ENGINES_BOTH = [
   { name: 'bonsai' as const, title: 'Bonsai', configured: true },
 ];
 
-function renderTab(props: Record<string, unknown>): string {
+const TAB_DEFAULTS = {
+  isMobile: false, onOpenChat: () => {}, onRefetch: () => {}, onOpenHardware: () => {}, onOpenMedia: () => {},
+  window: '5m', onWindowChange: () => {},
+};
+
+// Монтирует вкладку и оставляет дерево живым (для клика по сегменту).
+function mountTab(props: Record<string, unknown>) {
   const host = doc.createElement('div');
   doc.body.appendChild(host);
   const root = createRoot(host);
   act(() => {
-    root.render(createElement(TextTab, {
-      isMobile: false, onOpenChat: () => {}, onRefetch: () => {}, onOpenHardware: () => {}, onOpenMedia: () => {},
-      window: '5m', onWindowChange: () => {}, ...props,
-    }));
+    root.render(createElement(TextTab, { ...TAB_DEFAULTS, ...props }));
   });
+  return { host, root };
+}
+
+function renderTab(props: Record<string, unknown>): string {
+  const { host, root } = mountTab(props);
   const html = host.innerHTML;
   act(() => { root.unmount(); });
   host.remove();
   return html;
+}
+
+// Клик по сегменту переключателя: linkedom'овский click() — настоящий Event с
+// bubbles (linkedom/esm/html/element.js:76), React 18 слушает «click» на корне
+// createRoot — всплытие доходит до его делегата.
+function clickSegment(host: ReturnType<typeof mountTab>['host'], label: string): void {
+  const btn = Array.from(host.querySelectorAll('button')).find(b => (b.textContent ?? '').trim() === label);
+  if (!btn) throw new Error(`сегмент «${label}» не найден в разметке`);
+  act(() => { btn.click(); });
 }
 
 // История с кэш-содержанием и вытеснениями: на ней видно и разницу main/bonsai —
@@ -383,5 +401,64 @@ describe('нет данных при сбое — объяснение вмес�
     expect(skel).not.toContain('Нет связи с сервером');
     expect(skel).toContain('aria-hidden'); // скелетон — прежнее поведение
     expect(renderTab({ data: null, loading: false })).not.toContain('Нет связи с сервером');
+  });
+});
+
+// Дефект b129c182 (повторная проверка Веры): карточка сбоя занимала всю вкладку, и
+// вместе с ней исчезал переключатель «Основная · Bonsai» — при упавшем одном стенде
+// уйти на другой можно было только через F5. Список движков живёт своим опросом
+// (useLocalModelEngines) и не зависит от снимка статистики, поэтому переключатель
+// рисётся НАД карточкой сбоя и НАД скелетоном.
+// Мутация «вернуть engineSwitch за ранние return» краснит первый тест.
+describe('переключатель над состоянием без данных (дефект b129c182)', () => {
+  it('сбой и два движка — переключатель над карточкой и работает: клик по «Bonsai» зовёт onEngineChange', () => {
+    const chosen: string[] = [];
+    const { host, root } = mountTab({
+      data: null, loading: false, error: 'offline',
+      engines: ENGINES_BOTH, engine: 'main', onEngineChange: (e: string) => { chosen.push(e); },
+    });
+    const html = host.innerHTML;
+    expect(html).toContain('Нет связи с сервером');
+    expect(html).toContain('Основная');
+    expect(html).toContain('Bonsai');
+    expect(html).toContain('aria-pressed="true"'); // выбранный сегмент помечен
+    // порядок: переключатель — первой строкой вкладки, карточка под ним
+    expect(html.indexOf('Основная')).toBeLessThan(html.indexOf('Нет связи с сервером'));
+    clickSegment(host, 'Bonsai');
+    expect(chosen).toEqual(['bonsai']);
+    act(() => { root.unmount(); });
+    host.remove();
+  });
+  it('скелетон (данных нет, опрос идёт) и два движка — переключатель над ним, карточки сбоя нет', () => {
+    const html = renderTab({
+      data: null, loading: true, engines: ENGINES_BOTH, engine: 'main', onEngineChange: () => {},
+    });
+    expect(html).toContain('Основная');
+    expect(html).toContain('Bonsai');
+    expect(html).toContain('ccs-lm-skeleton'); // скелетон на месте
+    expect(html).not.toContain('Нет связи с сервером');
+    expect(html.indexOf('Основная')).toBeLessThan(html.indexOf('ccs-lm-skeleton'));
+  });
+  it('один движок — переключателя нет ни в сбое, ни в скелетоне, ни со стендом', () => {
+    const states = [
+      { data: null, loading: false, error: 'offline' },
+      { data: null, loading: true },
+      { data: mockLocalModelStats('working') },
+    ];
+    for (const s of states) {
+      const html = renderTab({ ...s, engines: [ENGINES_BOTH[0]], engine: 'main', onEngineChange: () => {} });
+      expect(html).not.toContain('Основная');
+      expect(html).not.toContain('Bonsai');
+    }
+  });
+  // Точки и подсказки на сегментах без снимка нет: состояние другого стенда по
+  // чужому снимку не знать (тот же инвариант Ф6), выдумывать его нечем.
+  it('без данных — на сегментах нет точки и подсказки', () => {
+    const html = renderTab({
+      data: null, loading: false, error: 'failed', engines: ENGINES_BOTH, engine: 'bonsai', onEngineChange: () => {},
+    });
+    expect(html).toContain('Bonsai'); // сам переключатель есть
+    expect(html).not.toContain('width:6px');
+    expect(html).not.toContain('Bonsai —');
   });
 });

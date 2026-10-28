@@ -1565,4 +1565,58 @@ describe('useSession: потолок памяти (OOM fix)', () => {
     expect(_store.has(d)).toBe(true);
     expect(_store.has(e)).toBe(true);
   });
+
+  // --- Поздний loadHistory (R-F3-S3b): ответ, вернувшийся ПОСЛЕ сброса в оболочку ---
+
+  it('поздний loadHistory: ответ хвоста после сброса — оболочка снята вместе с применённой лентой', async () => {
+    const a = nextSid();
+    let server: unknown[] = [...DONE_TURN];
+    // Хвостовой запрос A «в полёте»: ответ отдаёт тест — уже после вычистки.
+    // onBytes помним и зовём его в момент ответа, как настоящая api
+    const tail = deferred<{ reset: boolean; messages: unknown[]; anchorIndex: number; anchorFp: string | null }>();
+    let tailOnBytes: ((n: number) => void) | undefined;
+    m.getHistoryTail.mockImplementation(async (s: string, q: { after: number; fp?: string }, onBytes?: (n: number) => void) => {
+      if (s === a && q.after >= 0) { tailOnBytes = onBytes; return tail.promise; }
+      const isFull = q.after < 0;
+      const reply = isFull
+        ? { reset: true, messages: server, anchorIndex: 2, anchorFp: 'fp' }
+        : { reset: false, messages: server.slice(q.after + 1), anchorIndex: 2, anchorFp: 'fp' };
+      onBytes?.(isFull ? 10 * MB : 1 * MB);
+      return reply;
+    });
+
+    // Прогрев и открытие A: полный запрос (10 МБ) пришёл, хвостовой ушёл и висит
+    warmSession(a);
+    await flush();
+    expect(_cursors.has(a)).toBe(true); // курсор есть — запрос при открытии идёт хвостом
+    const chat = openChat(a);
+    await flush();
+    expect(callsFor(a)).toBe(2); // полный + хвостовой; хвостовой ещё не вернулся
+    await chat.first.send('иди');
+    chat.unmount(); // ушли посреди хода: A — холодная запись с живым статусом и лентой
+
+    // Ещё два холодных по 10 МБ: сумма 30 > 24 → старейшая (A, ход идёт) сбрасывается
+    // до оболочки: сняты лента и всё, что живёт с ней (курсор, вес), статус живой
+    await openCloseCold();
+    await openCloseCold();
+    expect(_store.get(a)!.isShell).toBe(true);
+    expect(_store.get(a)!.items).toHaveLength(0);
+    expect(_store.get(a)!.historyBytes).toBe(0);
+    expect(_cursors.has(a)).toBe(false);
+
+    // Сервер дописал и завершил ход; ответ на летевший ДО сброса запрос приходит только теперь
+    server = [...DONE_TURN, user('иди'), text('ответ 2'), result()];
+    tailOnBytes?.(1 * MB);
+    tail.resolve({ reset: false, messages: [user('иди'), text('ответ 2'), result()], anchorIndex: 5, anchorFp: 'fp2' });
+    await flush();
+
+    // Инвариант «оболочка снимается только вместе с применённой лентой»: запись стала
+    // полной — лента ровно серверный ответ, включая ход, доросший за время оболочки
+    expect(_store.get(a)!.isShell).toBeFalsy();
+    expect(_store.get(a)!.items).toEqual(normalizeHistory(server));
+    // «вес ⇔ лента»: счётчик полученного (10 + 1 МБ), а не нуль оболочки
+    expect(_store.get(a)!.historyBytes).toBe(11 * MB);
+    // «курсор ⇔ лента»: курсор восстановлен вместе с лентой, его счётчик равен весу стора
+    expect(_cursors.get(a)!.receivedBytes).toBe(11 * MB);
+  });
 });

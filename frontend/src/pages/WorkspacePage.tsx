@@ -399,6 +399,13 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   const localModelAction = localModelDef?.action;
   const localModelRender = localModelDef?.render;
   const localModelVisible = !!localModelAction?.isAvailable?.(project.id);
+  // Точка состояния на значке «Локальных моделей» (Ф6): тон и подсказка из геттера
+  // фичи, состояние — из лёгкого опроса useLocalModelWatcher (смонтирован выше).
+  // Смена состояния будит подписку сторожа → страница перерисовывается → рельса
+  // перечитывает геттер. В railBadges значение подмешивается в месте передачи
+  // (ниже), а не в useMemo: базовые счётчики не должны пересобираться на каждый
+  // 15-с тик опроса.
+  const localModelBadge = localModelVisible ? localModelAction?.indicator?.() ?? null : null;
 
   // Восстанавливаем состояние окна для этого проекта (компонент перемонтируется при входе в проект)
   const [leftTab, setLeftTab] = useState<LeftTab>(() => {
@@ -2565,7 +2572,7 @@ const windowWidth = useWindowWidth();
           project={project}
           projectForEdit={projectForEdit}
           onOpenWall={() => onSwitchHub('wall')}
-          railBadges={railBadges}
+          railBadges={localModelBadge ? { ...railBadges, localModel: localModelBadge } : railBadges}
           onOpenProjectSettings={() => setEditProjectOpen(true)}
           activeSession={activeSession}
           onSelectSession={handleSelectSession}

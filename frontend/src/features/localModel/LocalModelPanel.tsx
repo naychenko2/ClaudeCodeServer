@@ -34,9 +34,9 @@ import { openChatById } from '../../lib/openChat';
 import {
   isLocalModelPanelVisible,
   useLocalModelAdmin,
-  useLocalModelConfigured,
   useLocalModelStats,
 } from './useLocalModelStats';
+import { isLocalModelConfiguredAny } from './useLocalModelWatcher';
 import { useLocalModelMedia } from './useLocalModelMedia';
 import { useLocalModelEngines } from './useLocalModelEngines';
 import { useLocalModelHardware, DEFAULT_HARDWARE_WINDOW, type HardwareWindow } from './useLocalModelHardware';
@@ -100,11 +100,13 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   const flag = useFeature(FLAGS.localModelStats);
   // Роль и опрос configured — в useLocalModelWatcher (смонтирован на странице всегда)
   const isAdmin = useLocalModelAdmin();
-  const configured = useLocalModelConfigured();
 
   // Тяжёлый 2-с опрос: только когда панель видна (открыта + флаг + admin +
-  // configured); не видна — опрос стоит, таймера нет
-  const visible = isLocalModelPanelVisible({ flag, isAdmin, configured });
+  // configured); не видна — опрос стоит, таймера нет. «Настроен ли» — одно выражение
+  // со значком рельса (isLocalModelConfiguredAny: основной/медиа ИЛИ последний
+  // снимок второй дорожки): с другой формулой был бы значок без панели (пустая
+  // карточка). Ререндер при смене — подписка сторожа на странице.
+  const visible = isLocalModelPanelVisible({ flag, isAdmin, configured: isLocalModelConfiguredAny() });
 
   // Не-админ: вкладка всегда «Медиа» — переключателя нет, /stats (LLM) не опрашивается.
   // Если в localStorage 'hardware' (оставлено админом) и пользователь не админ —

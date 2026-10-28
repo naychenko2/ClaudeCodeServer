@@ -136,8 +136,16 @@ export function statusPill(data: LocalModelStats): StatusPill {
   }
 }
 
+// «Арбитр недоступен» (макет §4, хвост ревью Ф2 4): метрики отвечают (статус обычный),
+// но /state молчит — состояние не рассосётся само, и развести уступку и аварию сейчас
+// нечем. Общий признак точки и подсказки: 'notConnected' (стенд не настроен) под него не
+// попадает — предупреждать о ненастроенном нечем.
+function arbiterUnreachable(data: LocalModelStats): boolean {
+  return (data.status === 'working' || data.status === 'busy') && data.duty?.arbiter?.reachable === false;
+}
+
 // Тон точки на сегменте «Bonsai» и на значке рельса (тот же, Ф6): идущая уступка —
-// muted, то, что само не рассосётся (память, молчание стенда) — warning (макет §4:
+// muted, то, что само не рассосётся (память, молчание стенда или арбитра) — warning (макет §4:
 // «accent закреплён за „что-то идёт прямо сейчас“», жёлтый — за неотсашивающееся).
 export function standDot(data: LocalModelStats): 'muted' | 'warning' | null {
   switch (data.status) {
@@ -146,7 +154,7 @@ export function standDot(data: LocalModelStats): 'muted' | 'warning' | null {
     case 'down':
       return 'warning';
     default:
-      return null;
+      return arbiterUnreachable(data) ? 'warning' : null;
     }
 }
 
@@ -164,7 +172,9 @@ export function standHint(data: LocalModelStats): string | null {
       }
     }
     case 'down': return 'Bonsai недоступна';
-    default: return null;
+    default:
+      // Та же таблица макета §4, что у standDot: подсказка «арбитр не отвечает»
+      return arbiterUnreachable(data) ? 'Bonsai: арбитр не отвечает' : null;
   }
 }
 

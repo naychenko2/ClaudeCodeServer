@@ -32,6 +32,7 @@ public class NotesWikiSourceTests : IDisposable
     private readonly NotesKnowledgeService _kb;
     private readonly NotesAiService _ai;
     private readonly NoteTaskSyncService _noteTasks;
+    private readonly RecordingLog _noteTasksLog = new();
 
     public NotesWikiSourceTests()
     {
@@ -51,7 +52,7 @@ public class NotesWikiSourceTests : IDisposable
             NullLogger<NotesKnowledgeService>.Instance);
         _ai = new NotesAiService(_sut, config, new NoopCheapRunner());
         _noteTasks = new NoteTaskSyncService(_sut, new NoopNoteTaskBridge(), projects, _kb,
-            new RecordingNotesNotifier(), NullLogger<NoteTaskSyncService>.Instance);
+            new RecordingNotesNotifier(), _noteTasksLog);
     }
 
     public void Dispose()
@@ -194,6 +195,14 @@ public class NotesWikiSourceTests : IDisposable
         Sha256(wikiFile).Should().Be(before,
             "галочку в страницу вики ставит только Хранитель (ADR-035, решение 2)");
 
+        // Одного файла мало: без пропуска вики запись упёрлась бы в EnsureNotWiki, а общий
+        // catch в NoteTaskSyncService оставил бы файл нетронутым — различие только в
+        // предупреждении «Не удалось синхронизировать галочку…». Доказательство пропуска —
+        // сама отсутствовавшая попытка: ни одного предупреждения в журнале (ревью S2e, п. 1).
+        _noteTasksLog.Warnings.Should().BeEmpty(
+            "пропуск обязан исключить саму попытку записи в вики: без неё Update бросает "
+            + "wiki_readonly, и catch пишет о несинхронизированной галочке — файл при этом тот же");
+
         // Тот же вызов на обычной заметке файл меняет: иначе тест проходил бы «на ничего»
         await _noteTasks.SyncTaskToNoteAsync(User, TaskOf(normalId, line: 2, done: true));
         File.ReadAllText(normal).Should().Contain("- [x] Пункт");
@@ -286,6 +295,21 @@ public class NotesWikiSourceTests : IDisposable
         Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
 
     // ─── Фейки швов ────────────────────────────────────────────────────────
+
+    // Recording-логгер NoteTaskSyncService: тест проверяет отсутствие предупреждения —
+    // оно появляется только если запись в вики реально пробовалась и упала в общий catch
+    // (ревью S2e, п. 1). Warn+ — чтобы информационные строки (промоут) не шумели.
+    private sealed class RecordingLog : ILogger<NoteTaskSyncService>
+    {
+        public List<string> Warnings { get; } = [];
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel >= LogLevel.Warning) Warnings.Add(formatter(state, exception));
+        }
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+    }
 
     private sealed class RecordingNotesNotifier : INotesHubNotifier
     {

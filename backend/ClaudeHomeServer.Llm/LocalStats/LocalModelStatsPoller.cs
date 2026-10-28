@@ -4,11 +4,13 @@ using Microsoft.Extensions.Options;
 namespace ClaudeHomeServer.Services.Llm;
 
 // Фоновый поллер метрик локального стенда (vLLM) + кольцо истории на 1 час в памяти.
-// Один цикл гоняет дорожки EngineStatsTrack (состояние и расчёты — в них); дорожки опрашиваются
-// параллельно, сбой или медленность одной не задерживает соседние. Дорожка `main` — основная
-// модель, её отдаёт ILocalModelStatsReader. Дополнительно — дорожка на каждый именованный
-// движок LocalEngines:{name} с MetricsUrl (имя дорожки = имя движка): источник —
-// LlamaServerMetricsSource через тихий клиент EngineMetricsHttpClientName.
+// На каждую дорожку EngineStatsTrack (состояние и расчёты — в ней) — свой цикл: дорожка ждёт
+// свой интервал и не блокирует соседние — период main не зависит от наличия и живости
+// других дорожек (M1 ревью Б2b). Дорожка `main` — основная модель, её отдаёт
+// ILocalModelStatsReader. Дополнительно — дорожка на каждый именованный движок
+// LocalEngines:{name} с MetricsUrl (имя дорожки = имя движка; движок с именем «main»
+// пропускается — main однозначен, хвост m1 ревью Б2b): источник — LlamaServerMetricsSource
+// через тихий клиент EngineMetricsHttpClientName.
 // Источник метрик main выбирается по провайдеру, помеченному IsLocal, и его секции Stats:
 //   • нет локального провайдера / нет Stats → notConnected (configured=false), сеть не трогаем;
 //   • Stats.Engine = "vllm" + MetricsUrl → VllmMetricsSource (именованный HttpClient);
@@ -49,13 +51,13 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
     private readonly EngineStatsTrack _main;
 
     // Дорожки в порядке регистрации; main — первая. Список иммутабельный: AddTrack под
-    // _tracksGate заменяет ссылку новым массивом, цикл и читатели берут снимок под тем же
-    // замком — конкурентной мутации списка нет (H3 ревью Б1).
+    // _tracksGate заменяет ссылку новым массивом, старт циклов и читатели берут снимок под тем
+    // же замком — конкурентной мутации списка нет (H3 ревью Б1).
     private readonly object _tracksGate = new();
     private EngineStatsTrack[] _tracks;
 
     // Момент последнего Warning по имени дорожки (для частоты Warning) + её замок:
-    // обработчики сбойов живут в продолжениях параллельного опроса, на разных потоках.
+    // обработчики сбойов живут в продолжениях циклов разных дорожек, на разных потоках.
     private readonly object _warningGate = new();
     private readonly Dictionary<string, DateTimeOffset> _lastWarningAt = new();
 
@@ -79,10 +81,17 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
         _main = new EngineStatsTrack(MainTrackName, options, ResolveSource, time, log);
         _tracks = [_main];
         // Дорожка на каждый именованный движок с MetricsUrl (Б2b); без MetricsUrl — дорожки нет.
-        // Добавляем здесь, до старта цикла: ExecuteAsync к этому моменту ещё не запущен.
+        // Добавляем здесь, до старта циклов: ExecuteAsync к этому моменту ещё не запущен.
         foreach (var engine in engines.Engines)
         {
             if (string.IsNullOrWhiteSpace(engine.Spec.MetricsUrl)) continue;
+            // Имя дорожки должно быть однозначным: движок LocalEngines с именем «main» дал бы
+            // вторую main — Find и каталог перестали быть однозначными (хвост m1 ревью Б2b).
+            if (string.Equals(engine.Name, MainTrackName, StringComparison.Ordinal))
+            {
+                _log.LogDebug("Поллер метрик локального стенда: движок LocalEngines:{Name} совпадает с именем основной дорожки — пропущен", engine.Name);
+                continue;
+            }
             AddTrack(BuildEngineTrack(engine));
         }
     }
@@ -132,23 +141,34 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // Свой цикл на каждую дорожку (M1 ревью Б2b): дорожка ждёт свой интервал и не блокирует
+        // соседние — период main не зависит от наличия и живости других дорожек. Снимок берётся
+        // один раз: AddTrack вызывается до старта циклов.
+        await Task.WhenAll(TracksSnapshot().Select(t => RunTrackAsync(t, stoppingToken)));
+    }
+
+    // Цикл одной дорожки: опрос → ожидание интервала, который вернула сама дорожка, → снова опрос.
+    // Настоящая остановка хоста — нормальное завершение цикла; всё остальное, включая посторонний
+    // OperationCanceledException от источника, гасится в PollTrackAsync как сбой дорожки —
+    // цикл жив (H2 ревью Б1).
+    private async Task RunTrackAsync(EngineStatsTrack track, CancellationToken ct)
+    {
         try
         {
-            while (!stoppingToken.IsCancellationRequested)
+            while (!ct.IsCancellationRequested)
             {
-                var opts = _options.CurrentValue;
-                if (!opts.Enabled)
+                if (!_options.CurrentValue.Enabled)
                 {
                     // Не ходим в сеть: ждём и перечитываем настройку.
-                    await WaitAsync(DisabledPollInterval, stoppingToken);
+                    await WaitAsync(DisabledPollInterval, ct);
                     continue;
                 }
 
-                var interval = await PollAllAsync(stoppingToken);
-                await WaitAsync(interval, stoppingToken);
+                var interval = await PollTrackAsync(track, ct);
+                await WaitAsync(interval, ct);
             }
         }
-        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             // Нормальная остановка хоста.
         }
@@ -157,25 +177,11 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
     // Опрос основной дорожки: тесты гоняют опросы напрямую, двигая фейковые часы.
     internal Task<TimeSpan> PollOnceAsync(CancellationToken ct = default) => _main.PollOnceAsync(ct);
 
-    // Один тик цикла: опрашивает все дорожки параллельно (Task.WhenAll) — медленная или
-    // падающая дорожка не задерживает соседние (H1 ревью Б1). Возвращает наименьший из
-    // интервалов дорожек; у упавшей дорожки — PollInterval.
-    internal async Task<TimeSpan> PollAllAsync(CancellationToken ct = default)
-    {
-        var tasks = new List<Task<TimeSpan>>();
-        foreach (var track in TracksSnapshot())
-            tasks.Add(PollTrackAsync(track, ct));
-
-        TimeSpan? min = null;
-        foreach (var interval in await Task.WhenAll(tasks))
-            min = min is { } m && m <= interval ? m : interval;
-        return min ?? _options.CurrentValue.PollInterval;
-    }
-
-    // Опрос одной дорожки. Настоящая остановка хоста (отмена stoppingToken) выходит как есть —
-    // её ловит ExecuteAsync как нормальное завершение. Всё остальное, включая посторонний
+    // Опрос одной дорожки. Настоящая остановка хоста (отмена ct) выходит как есть — её ловит
+    // RunTrackAsync как нормальное завершение. Всё остальное, включая посторонний
     // OperationCanceledException от источника, — сбой дорожки: цикл продолжается (H2 ревью Б1).
-    private async Task<TimeSpan> PollTrackAsync(EngineStatsTrack track, CancellationToken ct)
+    // internal — тесты гоняют опрос конкретной дорожки напрямую, на фейковых часах.
+    internal async Task<TimeSpan> PollTrackAsync(EngineStatsTrack track, CancellationToken ct = default)
     {
         try
         {

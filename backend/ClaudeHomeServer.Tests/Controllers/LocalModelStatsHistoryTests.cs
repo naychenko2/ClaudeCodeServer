@@ -61,12 +61,16 @@ public class LocalModelStatsHistoryTests
         public string NonAdminId { get; }
 
         public Harness(string source, Func<MediaHistoryRef, int, MediaHistoryResolution?>? resolve,
-            TimeProvider? time = null, DateTimeOffset? processStart = null, bool? mediaForUsers = null)
+            TimeProvider? time = null, DateTimeOffset? processStart = null, bool? mediaForUsers = null,
+            string? ffmpegPath = null)
         {
             Fake = new FakeHistorySource { Source = source, Resolve = resolve };
             Factory = new TestWebApplicationFactory();
             if (mediaForUsers is { } mfu)
                 Factory.ExtraConfig["LocalModelStats:MediaForUsers"] = mfu ? "true" : "false";
+            // несуществующий ffmpeg: генерация миниатюры гарантированно не удаётся
+            if (ffmpegPath is not null)
+                Factory.ExtraConfig["AudioDsp:FfmpegPath"] = ffmpegPath;
             Factory.ExtraServices = s =>
             {
                 s.AddSingleton<IMediaHistoryResultSource>(Fake);
@@ -403,6 +407,29 @@ public class LocalModelStatsHistoryTests
         h.WriteRecord("p1", "test-source");
         var resp = await h.Admin.GetAsync("/api/local-model/history/p1/file?n=5");
         resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // Дефект 8fccc75f: size=thumb при неудачной генерации — 404, а не оригинал.
+    // Файл-оригинал настоящий (TempFile), ffmpeg намеренно битый (несуществующий FfmpegPath —
+    // Process.Start кидает Win32Exception, сервис возвращает null). Контроль: size=full
+    // отдаёт оригинал как раньше. Мутация «вернуть откат на оригинал» (старый код):
+    // size=thumb даёт 200 с полным файлом — тест краснеет
+    [Fact]
+    public async Task ThumbНеСделалась_404_АНеОригинал()
+    {
+        using var file = new TempFile();
+        using var h = new Harness("test-source",
+            (r, n) => new MediaHistoryResolution(1, file.FilePath, "image/png", null),
+            ffmpegPath: Path.Combine(Path.GetTempPath(), "no-such-ffmpeg-" + Guid.NewGuid().ToString("N")));
+        h.WriteRecord("p1", "test-source");
+
+        var resp = await h.Admin.GetAsync("/api/local-model/history/p1/file?size=thumb");
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound, "миниатюры нет и сделать её не удалось — 404, не оригинал");
+
+        // контроль: full — оригинал отдаётся как раньше
+        var full = await h.Admin.GetAsync("/api/local-model/history/p1/file?size=full");
+        full.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await full.Content.ReadAsByteArrayAsync()).Should().Equal(File.ReadAllBytes(file.FilePath));
     }
 
     // 410 missing: источник говорит, что файла нет. Мутация: перепутать причину — краснеет

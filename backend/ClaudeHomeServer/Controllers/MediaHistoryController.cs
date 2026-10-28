@@ -144,12 +144,15 @@ public class MediaHistoryController(
         if (resolution.HostPath is not { } path || resolution.ContentType is not { } contentType)
             return Gone("missing");
 
-        // size=thumb: миниатюра (лениво); отказ — отдаём оригинал, фронт рисует плитку
+        // size=thumb: миниатюра (лениво); не удалось — 404, а не оригинал (дефект 8fccc75f:
+        // откат на оригинал тянул 2–4 МБ на строку списка, фронт не отличает миниатюру от
+        // оригинала и молча грузит полный файл). На 404 фронт сейчас рисует битую иконку img
+        // (MediaHistory.tsx:86-92, onError нет; вёрстку не ломает — блок 40×40 фиксирован) —
+        // замена битой иконки на плитку вида отдельным шагом фронта здесь не делается
         if (size == "thumb")
         {
             var thumb = await thumbs.GetThumbAsync(recordId, n, path, contentType, ct);
-            if (thumb is not null)
-                return ServeFile(thumb, "image/webp");
+            return thumb is not null ? ServeFile(thumb, "image/webp") : NotFound();
         }
 
         return ServeFile(path, contentType);

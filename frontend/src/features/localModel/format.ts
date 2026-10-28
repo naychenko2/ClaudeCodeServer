@@ -104,21 +104,33 @@ export function gpuCountLabel(n: number): string {
 // Тон первых трёх — нейтральный: уступка — штатная работа арбитра, не авария (макет §4);
 // «ждёт память» — warning: сама не рассосётся. Без арбитра бэкенд 'yielded' не ставит
 // (Б3b), поэтому fallback — групповая подпись.
+// 'yielded' БЕЗ причины и БЕЗ отсчёта возврата — 'unexplained': арбитр ставит yielded и
+// когда юнит мёртв (gpu-arbiter.py:217: не активен и не здоров), — вероятно, упал сам
+// bonsai.service. Это не рассосётся само — warning (решение Андрея по ревью Б3b).
 
 export type StatusTone = 'success' | 'warning' | 'danger' | 'muted';
 export interface StatusPill { label: string; tone: StatusTone }
 
 // Точное состояние дежурства из снимка: 'yielded' стенда разводится по arbiter.state и
-// причинам; всё остальное — сам статус. Общий источник для пилюли, точки и подсказки.
-type YieldPhase = 'yielding' | 'waiting-return' | 'starting' | 'waiting-vram';
-function yieldPhase(data: LocalModelStats): YieldPhase {
+// причинам; всё остальное — сам статус. Общий источник для пилюли, точки, подсказки и
+// баннера TextTab: все они говорят об одном состоянии и не могут разойтись.
+export type YieldPhase = 'yielding' | 'waiting-return' | 'starting' | 'waiting-vram' | 'unexplained';
+export function yieldPhase(data: LocalModelStats): YieldPhase {
   const a = data.duty?.arbiter;
   if (a?.state === 'starting') return 'starting';
   if (a?.state === 'waiting-vram') return 'waiting-vram';
-  // 'yielded' без причин с названным остатком паузы — ожидание возврата; 0 — конец паузы,
-  // модель вот-вот встанет (демо макета с quiet=0). Без остатка (арбитр его не назвал) —
-  // групповая подпись: «вот-вот» без названного срока была бы выдуманной точностью
-  if (a?.state === 'yielded' && (a.reasons?.length ?? 0) === 0 && a.quietLeftS != null && Number.isFinite(a.quietLeftS)) return 'waiting-return';
+  if (a?.state === 'yielded') {
+    // Причина названа — плановая уступка (B3b: арбитр уступает ComfyUI, аренде, процессу)
+    if ((a.reasons?.length ?? 0) > 0) return 'yielding';
+    // Без причин, но с названным остатком тихой паузы — ожидание возврата; 0 — конец паузы,
+    // модель вот-вот встанет (демо макета с quiet=0)
+    if (a.quietLeftS != null && Number.isFinite(a.quietLeftS)) return 'waiting-return';
+    // Ни причины, ни отсчёта возврата: арбитр выгрузил юнит не по плану — он мёртв
+    // (gpu-arbiter.py:217: не активен и не здоров), и вероятно упал сам bonsai.service.
+    // Эвристика строго по данным уже в ответе; фронт не выдумывает причину.
+    return 'unexplained';
+  }
+  // Без арбитра (arbiter:null) или с неизвестным состоянием — групповая подпись
   return 'yielding';
 }
 
@@ -148,12 +160,15 @@ function arbiterUnreachable(data: LocalModelStats): boolean {
 }
 
 // Тон точки на сегменте «Bonsai» и на значке рельса (тот же, Ф6): идущая уступка —
-// muted, то, что само не рассосётся (память, молчание стенда или арбитра) — warning (макет §4:
-// «accent закреплён за „что-то идёт прямо сейчас“», жёлтый — за неотсашивающееся).
+// muted, то, что само не рассосётся (память, выгрузка без причины, молчание стенда или
+// арбитра) — warning (макет §4: «accent закреплён за „что-то идёт прямо сейчас“»,
+// жёлтый — за неотсашивающееся).
 export function standDot(data: LocalModelStats): 'muted' | 'warning' | null {
   switch (data.status) {
-    case 'yielded':
-      return yieldPhase(data) === 'waiting-vram' ? 'warning' : 'muted';
+    case 'yielded': {
+      const phase = yieldPhase(data);
+      return phase === 'waiting-vram' || phase === 'unexplained' ? 'warning' : 'muted';
+    }
     case 'down':
       return 'warning';
     default:
@@ -208,6 +223,10 @@ export function standHint(data: LocalModelStats): string | null {
           const left = data.duty?.arbiter?.quietLeftS ?? 0;
           return left > 0 ? `Bonsai вернётся через ${clockLeft(left)}` : 'Bonsai вот-вот вернётся';
         }
+        case 'unexplained':
+          // Ф8: ни причины, ни обещанного возврата — вероятная гибель сервиса,
+          // а не плановая уступка
+          return 'Bonsai выгружена без причины: возможно, сервис упал';
         default: {
           const short = reasonShort(data.duty?.arbiter?.reasons?.[0]);
           return short ? `Bonsai уступила карту: ${short}` : 'Bonsai уступила карту';
@@ -243,6 +262,8 @@ export function menuStatus(data: LocalModelStats | null): MenuStatus | null {
           const left = data.duty?.arbiter?.quietLeftS ?? 0;
           return { text: left > 0 ? `через ${clockLeft(left)}` : 'вот-вот', tone: 'muted' };
         }
+        // Ф8: выгрузка без причины и без обещанного возврата — «нет причины», warning
+        case 'unexplained': return { text: 'нет причины', tone: 'warning' };
         default: return { text: 'уступила', tone: 'muted' };
       }
     }

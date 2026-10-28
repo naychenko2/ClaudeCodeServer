@@ -232,15 +232,16 @@ export function mockLocalModelMediaSelf(state: LocalModelMediaMockState = 'run')
 // === Стенд второй модели (Bonsai): состояния дежурства (разрез v2, §5; макет §4) ===
 //
 // Пять состояний арбитра + «ждёт возврата» (yielded без причин с остатком паузы —
-// производное состояние фронта, не состояние арбитра) + «арбитр не подключён» (у движка нет
-// StateUrl). Числа и строки —
+// производное состояние фронта, не состояние арбитра) + «выгружена без причины»
+// (yielded без причин и без отсчёта — Ф8: эвристика фронта по вероятной гибели
+// bonsai.service) + «арбитр не подключён» (у движка нет StateUrl). Числа и строки —
 // с макета (docs/mockups/bonsai-toolbar.html), чтобы витрина сравнивалась один в один.
 //
 // Как состояние арбитра складывается в status снимка (правило Б3b, не выдумка фикстуры):
 // метрики отвечают → 'working'/'busy' по очереди (состояние 'ready'); метрики молчат и
 // арбитр сказал 'yielded'/'starting'/'waiting-vram' → 'yielded', DownSince НЕ ставится;
 // метрики молчат и арбитр сказал 'unknown' (или его вовсе нет) → 'down', как у основной.
-export type BonsaiMockState = 'unknown' | 'ready' | 'yielded' | 'returning' | 'starting' | 'waiting-vram' | 'no-arbiter';
+export type BonsaiMockState = 'unknown' | 'ready' | 'yielded' | 'returning' | 'unexplained' | 'starting' | 'waiting-vram' | 'no-arbiter';
 
 // Блоки, которых llama-server не отдаёт никогда: имена полей снимка, их добавляет
 // LlamaServerMetricsSource.UnsupportedBlocks (backend/…/Llm/LocalStats/). По этому списку
@@ -317,6 +318,14 @@ export function mockBonsaiStats(state: BonsaiMockState = 'yielded'): LocalModelS
       // уступила без причин: задание закончилось, отсчитывается тихая пауза до возврата
       // (160 с — «вернётся через 2:40», макет §4, демо ui.quiet=160)
       const d = duty({ ...alive('yielded'), quietLeftS: 160 });
+      d.callsNow = [{ place: 'Классификация задачи', link: 'insurance', durationS: 2.1 }];
+      return { ...unloaded(), duty: d };
+    }
+    case 'unexplained': {
+      // арбитр сказал 'yielded' без причин и без отсчёта возврата: юнит мёртв
+      // (gpu-arbiter.py:217: не активен и не здоров), вероятно упал bonsai.service.
+      // Фронт различает это с плановой уступкой именно по отсутствию обоих (Ф8)
+      const d = duty(alive('yielded'));
       d.callsNow = [{ place: 'Классификация задачи', link: 'insurance', durationS: 2.1 }];
       return { ...unloaded(), duty: d };
     }

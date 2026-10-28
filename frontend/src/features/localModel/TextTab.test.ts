@@ -133,10 +133,26 @@ describe('standDot / standHint — тон точки и подсказка (ма
     const zero = mockBonsaiStats('returning');
     zero.duty = { ...zero.duty!, arbiter: { ...zero.duty!.arbiter!, quietLeftS: 0 } };
     expect(standHint(zero)).toBe('Bonsai вот-вот вернётся');
+    expect(standHint(mockBonsaiStats('unexplained'))).toBe('Bonsai выгружена без причины: возможно, сервис упал');
     expect(standHint(mockBonsaiStats('starting'))).toBe('Bonsai загружается');
     expect(standHint(mockBonsaiStats('waiting-vram'))).toBe('Bonsai ждёт память карты');
     expect(standHint(mockBonsaiStats('unknown'))).toBe('Bonsai недоступна');
     expect(standHint(mockBonsaiStats('ready'))).toBeNull();
+  });
+  // Ф8: разводит ЭВРИСТИКА по данным (причина / отсчёт / ни того ни другого), а не одно
+  // слово состояния: каждая ветка даёт свой тон и свою подсказку
+  it('yielded: причина → muted; отсчёт → muted; ни того ни другого → warning (Ф8)', () => {
+    // причина есть, отсчёта нет — плановая уступка (фикстура 'yielded')
+    expect(standDot(mockBonsaiStats('yielded'))).toBe('muted');
+    // отсчёт есть, причины нет — ожидание возврата (фикстура 'returning')
+    expect(standDot(mockBonsaiStats('returning'))).toBe('muted');
+    // ни причины, ни отсчёта — вероятная гибель сервиса: warning
+    expect(standDot(mockBonsaiStats('unexplained'))).toBe('warning');
+    // вариант «причина есть + отсчёт есть»: названная причина важнее — плановая уступка
+    const both = mockBonsaiStats('unexplained');
+    both.duty = { ...both.duty!, arbiter: { ...both.duty!.arbiter!, reasons: [{ kind: 'lease', raw: 'l1' }], quietLeftS: 160 } };
+    expect(standDot(both)).toBe('muted');
+    expect(standHint(both)).toBe('Bonsai уступила карту: аренда');
   });
 });
 
@@ -252,6 +268,27 @@ describe('состояние «уступила карту» (макет §4)', 
     const html = renderTab({ data: mockBonsaiStats('waiting-vram'), engine: 'bonsai' });
     expect(html).toContain('Ждёт память карты');
     expect(html).toContain('Bonsai ждёт память карты.');
+  });
+  // Ф8: выгрузка без причины и без отсчёта — НЕ нейтральный баннер: warning-тон
+  // (warningBg/warning) и текст ровно о том, что говорят данные
+  it('выгрузка без причины — warning-баннер, не «по плану» (Ф8)', () => {
+    const html = renderTab({ data: mockBonsaiStats('unexplained'), engine: 'bonsai' });
+    expect(html).toContain('Bonsai выгружена, но арбитр не называет причину и не обещает возврата.');
+    expect(html).toContain('Возможно, упал bonsai.service на Video — проверьте журнал.');
+    expect(html).toContain('var(--c-warning-bg)');
+    // плановой уступкой это называть нельзя
+    expect(html).not.toContain('это по плану');
+    // и аварией тоже: приглушения данных нет (это не 'down')
+    expect(html).not.toContain('grayscale');
+  });
+  it('плановая уступка с причиной остаётся нейтральной и на фикстуре без отсчёта (Ф8)', () => {
+    // та же 'unexplained' фикстура, но с названной причиной: разводит наличие причины,
+    // баннер прежний, warning-тона нет
+    const d = mockBonsaiStats('unexplained');
+    d.duty = { ...d.duty!, arbiter: { ...d.duty!.arbiter!, reasons: [{ kind: 'lease', raw: 'аренда теста' }] } };
+    const html = renderTab({ data: d, engine: 'bonsai' });
+    expect(html).toContain('Bonsai уступила карту — это по плану.');
+    expect(html).not.toContain('Bonsai выгружена, но арбитр не называет причину');
   });
   it('авария без выгрузки (unknown → down) — текст про аварию, не про уступку', () => {
     const html = renderTab({ data: mockBonsaiStats('unknown'), engine: 'bonsai' });

@@ -195,6 +195,39 @@ public class KnowledgeIndexReconcilerTests
     }
 
     [Fact]
+    public async Task Цель_Без_Бюджета_Не_Обходится_Вхолостую_И_Лечится_Следующим_Тиком()
+    {
+        // Регрессия 28.10.2026: цели идут в фиксированном порядке (память персон раньше
+        // досье), и передние выбирали весь бюджет тика. Задняя цель обходилась вхолостую —
+        // срок сдвигался на период, период удваивался — и не лечилась никогда.
+        var hog = new Dictionary<string, string>();
+        var hogDocs = new List<string>();
+        for (var i = 1; i <= 3; i++)
+        {
+            hog[$"p-{i}"] = $"persona-entry-{i}";
+            hogDocs.Add(Doc($"p-{i}", error: "Connection refused"));
+        }
+        _participant.AddTarget("ds-persona", "persona:p1", hog);
+        _participant.AddTarget("ds-dossiers", "dossiers:o:p", new() { ["d-1"] = "dossier-1" });
+        _dify.DocumentsJson["ds-persona"] = $"[{string.Join(',', hogDocs)}]";
+        _dify.DocumentsJson["ds-dossiers"] = $"[{Doc("d-1", error: "Connection refused")}]";
+        var sut = Create("heal", maxPerCycle: 3);
+
+        // Тик 1: бюджет целиком ушёл персоне, досье не тронуто
+        await sut.TickAsync();
+        _participant.Invalidations.Should().ContainSingle().Which.Label.Should().Be("persona:p1");
+
+        // Тик 2 через штатный интервал сервиса (5 мин): персоне рано (15 мин),
+        // досье осталось «к сроку» и получает бюджет
+        _time.Advance(TimeSpan.FromMinutes(5));
+        await sut.TickAsync();
+        _participant.Invalidations.Should().HaveCount(2);
+        _participant.Invalidations[1].Label.Should().Be("dossiers:o:p");
+        _participant.Invalidations[1].Keys.Should().BeEquivalentTo(["dossier-1"]);
+        _participant.Kicks.Should().BeEquivalentTo(["persona:p1", "dossiers:o:p"]);
+    }
+
+    [Fact]
     public async Task Сирота_Не_Трогается_Учитывается_Отдельно_И_Не_Растит_Backoff()
     {
         _participant.AddTarget("ds-1", "t1", new());   // стор пуст — все error-доки сироты
@@ -446,6 +479,11 @@ public class KnowledgeIndexReconcilerTests
         KnowledgeIndexReconciler.IsTransientError("Connection refused: host").Should().BeTrue();
         KnowledgeIndexReconciler.IsTransientError("Read timed out").Should().BeTrue();
         KnowledgeIndexReconciler.IsTransientError("service unavailable").Should().BeTrue();
+        // Текст Dify при недоступном провайдере эмбеддингов (прод 28.10.2026)
+        KnowledgeIndexReconciler.IsTransientError(
+            "HTTPConnectionPool(host='host.docker.internal', port=11434): Max retries exceeded with url: /api/embed")
+            .Should().BeTrue();
+        KnowledgeIndexReconciler.IsTransientError("Error code: 503").Should().BeTrue();
         KnowledgeIndexReconciler.IsTransientError("invalid document format").Should().BeFalse();
         KnowledgeIndexReconciler.IsTransientError("").Should().BeFalse();
     }

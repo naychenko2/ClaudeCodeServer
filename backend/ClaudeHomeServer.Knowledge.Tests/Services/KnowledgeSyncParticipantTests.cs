@@ -26,11 +26,17 @@ namespace ClaudeHomeServer.Tests.Services;
 // новый, неизвестный DocId (сирота) даёт пустой список.
 public class KnowledgeSyncParticipantTests : IDisposable
 {
-    // Фейковый Dify: create dataset → ds-1, create_by_text → doc-N, DELETE → 204
+    // Фейковый Dify: create dataset → ds-N, create_by_text → doc-N (или ForceDocId),
+    // DELETE → 204 и документ уходит из ErrorDocs; листинг с ?status=error отдаёт ErrorDocs
     private sealed class FakeDifyHandler : HttpMessageHandler
     {
         public readonly List<(string Method, string Path)> Calls = new();
+        // datasetId → id документов в статусе error
+        public readonly Dictionary<string, List<string>> ErrorDocs = new();
+        // Отдавать на create один и тот же id — так на проде два ключа получили общий DocId
+        public string? ForceDocId;
         private int _docSeq;
+        private int _dsSeq;
 
         public List<(string Method, string Path)> CallsOf(string method, string pathPart) =>
             Calls.Where(c => c.Method == method && c.Path.Contains(pathPart)).ToList();
@@ -42,16 +48,29 @@ public class KnowledgeSyncParticipantTests : IDisposable
             Calls.Add((request.Method.Method, path));
 
             if (request.Method == HttpMethod.Post && path == "/v1/datasets")
-                return Json("{\"id\":\"ds-1\"}");
+                return Json($"{{\"id\":\"ds-{++_dsSeq}\"}}");
             if (request.Method == HttpMethod.Post && path.Contains("/document/create_by_text"))
             {
                 var name = JsonDocument.Parse(body).RootElement.GetProperty("name").GetString();
-                return Json($"{{\"document\":{{\"id\":\"doc-{++_docSeq}\",\"name\":{JsonSerializer.Serialize(name)},\"indexing_status\":\"completed\"}}}}");
+                var id = ForceDocId ?? $"doc-{++_docSeq}";
+                return Json($"{{\"document\":{{\"id\":\"{id}\",\"name\":{JsonSerializer.Serialize(name)},\"indexing_status\":\"completed\"}}}}");
             }
             if (request.Method == HttpMethod.Get && path.Contains("/documents"))
-                return Json("{\"data\":[],\"has_more\":false,\"total\":0}");
+            {
+                // /v1/datasets/{id}/documents
+                var datasetId = path.Split('/', StringSplitOptions.RemoveEmptyEntries)[2];
+                var errors = request.RequestUri!.Query.Contains("status=error")
+                    ? ErrorDocs.GetValueOrDefault(datasetId, [])
+                    : [];
+                var data = string.Join(',', errors.Select(d =>
+                    JsonSerializer.Serialize(new { id = d, name = d, indexing_status = "error", error = "Max retries exceeded" })));
+                return Json($"{{\"data\":[{data}],\"has_more\":false,\"total\":{errors.Count}}}");
+            }
             if (request.Method == HttpMethod.Delete)
+            {
+                foreach (var list in ErrorDocs.Values) list.Remove(path.Split('/')[^1]);
                 return new HttpResponseMessage(HttpStatusCode.NoContent);
+            }
             return Json("{}");
         }
 
@@ -243,5 +262,125 @@ public class KnowledgeSyncParticipantTests : IDisposable
         target.OwnerUserIds.Should().BeEquivalentTo([_ownerId]);
 
         await AssertContractAsync(target, "doc-1", "a.md", () => svc.SyncAsync(projectDir));
+    }
+
+    private ChangeDossier NewDossier(string sha) => new()
+    {
+        OwnerId = _ownerId,
+        ProjectId = "proj-1",
+        CommitSha = sha,
+        CommitSubject = "fix: тест",
+        Why = "проверка " + sha,
+    };
+
+    // Регрессия 28.10.2026: на проде у двух паспортов досье ClaudeCodeServer оказался общий
+    // DocId — ToDictionary в ResolveAsync падал, и цель не лечилась ни на одном тике.
+    [Fact]
+    public async Task DossierStore_Общий_DocId_У_Двух_Записей_Не_Роняет_Resolve()
+    {
+        var svc = new DossierStore(_config, null, _knowledge, null, _users);
+        var first = svc.Add(NewDossier("aaa1111"));
+        var second = svc.Add(NewDossier("bbb2222"));
+        _dify.ForceDocId = "doc-shared";
+        await svc.SyncAsync(_ownerId, "proj-1");
+        _dify.ForceDocId = null;
+
+        var target = ((IKnowledgeSyncParticipant)svc).ListTargets().Should().ContainSingle().Subject;
+        var resolved = await target.ResolveAsync(["doc-shared"]);
+        resolved.Should().BeEquivalentTo(new[] { ("doc-shared", first.Id), ("doc-shared", second.Id) });
+
+        // Обе записи пересоздаются своими документами
+        await target.InvalidateAsync([first.Id, second.Id]);
+        (await svc.SyncAsync(_ownerId, "proj-1")).Should().Be(2);
+        (await target.ResolveAsync(["doc-shared"])).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task TeamMemoryService_Общий_DocId_У_Двух_Записей_Не_Роняет_Resolve()
+    {
+        var svc = new TeamMemoryService(_config, null, _knowledge, null, _users);
+        var first = svc.Add(_ownerId, "proj-1", "договорённость один");
+        var second = svc.Add(_ownerId, "proj-1", "совсем другой факт два");
+        _dify.ForceDocId = "doc-shared";
+        await svc.SyncAsync(_ownerId, "proj-1");
+
+        var target = ((IKnowledgeSyncParticipant)svc).ListTargets().Should().ContainSingle().Subject;
+        (await target.ResolveAsync(["doc-shared"])).Select(r => r.EntryKey)
+            .Should().BeEquivalentTo([first.Id, second.Id]);
+    }
+
+    // Участник, чьи записи не лечатся никогда (как оставшиеся 84 записи памяти sergey):
+    // стоит в списке ПЕРЕД командной памятью и досье и каждым своим обходом выбирает бюджет
+    private sealed class HogParticipant : IKnowledgeSyncParticipant
+    {
+        public IReadOnlyList<KnowledgeSyncTarget> ListTargets() =>
+        [
+            new KnowledgeSyncTarget("ds-hog", ["owner"], "persona:hog",
+                docIds => Task.FromResult<IReadOnlyList<(string, string)>>(
+                    docIds.Select(d => (d, "entry-" + d)).ToList()),
+                _ => Task.CompletedTask, () => { }),
+        ];
+        public Task DeleteAllAsync(string userId) => Task.CompletedTask;
+    }
+
+    private sealed class FakeTime(DateTimeOffset now) : TimeProvider
+    {
+        public DateTimeOffset Now = now;
+        public override DateTimeOffset GetUtcNow() => Now;
+    }
+
+    // Сквозная регрессия инцидента 28.10.2026: error-документы командной памяти и досье
+    // пересоздаются реконсайлером, даже когда весь бюджет тика выбрала память персон,
+    // идущая в списке участников первой
+    [Fact]
+    public async Task Реконсайлер_Пересоздаёт_Досье_И_Командную_Память_За_Прожорливой_Персоной()
+    {
+        var team = new TeamMemoryService(_config, null, _knowledge, null, _users);
+        team.Add(_ownerId, "proj-1", "общая договорённость");
+        await team.SyncAsync(_ownerId, "proj-1");                    // ds-1, doc-1
+        var dossiers = new DossierStore(_config, null, _knowledge, null, _users);
+        dossiers.Add(NewDossier("abc1234"));
+        await dossiers.SyncAsync(_ownerId, "proj-1");                // ds-2, doc-2
+
+        // Документы упали на эмбеддингах; у «персоны» вечные ошибки на весь бюджет
+        _dify.ErrorDocs["ds-1"] = ["doc-1"];
+        _dify.ErrorDocs["ds-2"] = ["doc-2"];
+        _dify.ErrorDocs["ds-hog"] = ["h-1", "h-2"];
+
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Dify:Reconcile:Mode"] = "heal",
+                ["Dify:Reconcile:MaxPerCycle"] = "2",
+            })
+            .Build();
+        var time = new FakeTime(DateTimeOffset.Parse("2026-10-28T01:23:00Z"));
+        var sut = new KnowledgeIndexReconciler(_knowledge,
+            new IKnowledgeSyncParticipant[] { new HogParticipant(), team, dossiers }, config,
+            NullLogger<KnowledgeIndexReconciler>.Instance, time);
+
+        await sut.TickAsync();                                       // бюджет ушёл «персоне»
+        time.Now += TimeSpan.FromMinutes(5);
+        await sut.TickAsync();                                       // очередь команды и досье
+
+        // Штатный синк (KickSync — дебаунс, в тесте зовём напрямую) удаляет error-документ
+        // и пересоздаёт запись новым документом
+        var createsBefore = _dify.CallsOf("POST", "/document/create_by_text").Count;
+        (await team.SyncAsync(_ownerId, "proj-1")).Should().Be(1);
+        (await dossiers.SyncAsync(_ownerId, "proj-1")).Should().Be(1);
+        _dify.CallsOf("DELETE", "/documents/doc-1").Should().ContainSingle();
+        _dify.CallsOf("DELETE", "/documents/doc-2").Should().ContainSingle();
+        _dify.CallsOf("POST", "/document/create_by_text").Should().HaveCount(createsBefore + 2);
+
+        // Следующий обход видит, что ошибки ушли: обе записи — recovered. Через 16 минут
+        // бюджет снова у «персоны» (её срок раньше) — команда и досье ждут тик, а не
+        // сдвигаются на период
+        time.Now += TimeSpan.FromMinutes(16);
+        await sut.TickAsync();
+        time.Now += TimeSpan.FromMinutes(5);
+        await sut.TickAsync();
+        sut.RecoveredTotal.Should().Be(2);
+        sut.LastCounts.Should().Contain(new ReconcileTargetStatus($"team:{_ownerId}:proj-1", 0, 0));
+        sut.LastCounts.Should().Contain(new ReconcileTargetStatus($"dossiers:{_ownerId}:proj-1", 0, 0));
     }
 }

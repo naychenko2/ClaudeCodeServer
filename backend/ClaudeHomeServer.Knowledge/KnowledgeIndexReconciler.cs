@@ -151,7 +151,12 @@ public sealed class KnowledgeIndexReconciler : BackgroundService
         || error.Contains("timeout", StringComparison.OrdinalIgnoreCase)
         || error.Contains("timed out", StringComparison.OrdinalIgnoreCase)
         || error.Contains("connection reset", StringComparison.OrdinalIgnoreCase)
-        || error.Contains("unavailable", StringComparison.OrdinalIgnoreCase);
+        || error.Contains("unavailable", StringComparison.OrdinalIgnoreCase)
+        // Текст urllib3 у Dify, когда провайдер эмбеддингов не резолвится или не отвечает
+        // (1534 из 1569 error-документов 28.10.2026) — это лежащий провайдер, не контент
+        || error.Contains("max retries exceeded", StringComparison.OrdinalIgnoreCase)
+        || error.Contains("name resolution", StringComparison.OrdinalIgnoreCase)
+        || error.Contains("503", StringComparison.Ordinal);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -218,6 +223,14 @@ public sealed class KnowledgeIndexReconciler : BackgroundService
             if (!_targets.TryGetValue(target.Label, out st!))
                 _targets[target.Label] = st = new TargetState { CurrentInterval = opts.TargetInterval };
             if (now < st.NextDueAt) return budget;
+            // Бюджет тика выбран целями раньше по списку — цель не обходим вовсе и её
+            // состояние не трогаем: она остаётся «к сроку» и встаёт первой на следующем
+            // тике. Раньше её обходили вхолостую: срок сдвигался, а healable «не
+            // уменьшилось» удваивало период до MaxBackoff. Участники идут в фиксированном
+            // порядке (память персон → команды → досье → ...), и цели с хвоста списка
+            // навсегда вставали за персонами — досье и поздние команды не лечились вовсе
+            // (инцидент 28.10.2026).
+            if (opts.Mode == "heal" && budget <= 0) return budget;
         }
 
         // Судьба документов — из самого Dify; фильтр по статусу страхуем клиентской

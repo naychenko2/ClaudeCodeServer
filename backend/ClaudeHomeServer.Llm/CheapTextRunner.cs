@@ -220,7 +220,6 @@ public sealed class CheapTextRunner(
                         return insured;
                     }
                 }
-                call?.Step(EngineCallLink.Claude);
             }
             else if (LocalStepReady(actionKey, route.Kind))
             {
@@ -238,6 +237,11 @@ public sealed class CheapTextRunner(
             // маршрут места локальный — сбой/пусто локали не уводит данные в облако молча.
             // Пустой ответ финального шага — тоже «без ответа» (корзина missed).
             if (!allowCloudFallback && route.Kind == RouteKind.Local) return null;
+            // Звено Claude — только у цепочек, которые реально дошли до облачного шага:
+            // в режиме «без облака» цепочка с движком закончится без ответа, и «кто сейчас
+            // на модели» не должна показывать Claude у места, которое в облако не уходит
+            // (ревью Б5, п.4: раньше Step стоял до раннего выхода).
+            call?.Step(EngineCallLink.Claude);
             var effFallback = EffectiveFallback(route, fallbackModel, ownerId);
             var cloudTimeout = CloudTimeoutFor(actionKey);
             var model = claude.NormalizeModel(effFallback);

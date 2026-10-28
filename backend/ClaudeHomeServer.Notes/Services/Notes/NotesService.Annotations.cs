@@ -49,8 +49,12 @@ public sealed partial class NotesService
             throw new UnauthorizedAccessException("Проект не принадлежит пользователю");
         if (string.IsNullOrWhiteSpace(project.RootPath))
             throw new InvalidOperationException("У проекта нет корневой папки");
-        var canWrite = rel.StartsWith("notes/", StringComparison.OrdinalIgnoreCase);
-        return (SafePath.Join(Composition.ProjectCapabilityGuard.ServerRoot(project), rel), canWrite);
+        // ^id пишем только туда, где живут заметки, — и никогда в файл под data/wiki/:
+        // якорь в вики ставит только Хранитель (ADR-035, решение 2: побочные писатели пропускают вики).
+        var docFull = SafePath.Join(Composition.ProjectCapabilityGuard.ServerRoot(project), rel);
+        var canWrite = rel.StartsWith("notes/", StringComparison.OrdinalIgnoreCase)
+            && !WikiPaths.IsWikiPath(docFull, _dataDir);
+        return (docFull, canWrite);
     }
 
     // --- Создание комментария ---

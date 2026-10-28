@@ -695,6 +695,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         var prefix = folder.Length > 0 ? folder + "/" : "";
         var relPath = prefix + baseName + ".md";
         var full = SafePath.Join(rootDir, relPath);
+        EnsureNotWiki(full); // корень источника может лежать под data/wiki/ — там же все варианты коллизии
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         // Разрешаем коллизию имени файла суффиксом
         var n = 2;
@@ -785,6 +786,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     {
         var model = GetModel(userId);
         if (!model.ById.TryGetValue(id, out var note)) return null;
+        EnsureNotWiki(note.FullPath);
 
         var content = File.ReadAllText(note.FullPath, Encoding.UTF8);
         var lower = content.ToLowerInvariant();
@@ -811,6 +813,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         var rootDir = ResolveRoot(userId, sourceKey);
         var full = SafePath.Join(rootDir, relPath);
         if (!File.Exists(full)) return null;
+        EnsureNotWiki(full); // сторона источника
 
         // Целевой источник: пусто = текущий; владение проверяет ResolveRoot
         var newSource = string.IsNullOrWhiteSpace(targetSource) ? sourceKey : targetSource!;
@@ -823,6 +826,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
             return GetDetail(userId, id);   // уже там
 
         var newFull = SafePath.Join(newRootDir, newRel);
+        EnsureNotWiki(newFull); // сторона цели
         if (File.Exists(newFull))
             throw new InvalidOperationException($"В папке «{(target.Length > 0 ? target : "корень")}» уже есть «{fileName}»");
         Directory.CreateDirectory(Path.GetDirectoryName(newFull)!);
@@ -858,6 +862,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
 
         var oldFull = SafePath.Join(rootDir, oldFolder);
         var newFull = SafePath.Join(rootDir, newFolder);
+        EnsureNotWiki(oldFull); EnsureNotWiki(newFull); // обе стороны переноса
         if (!Directory.Exists(oldFull)) throw new KeyNotFoundException("Папка не найдена");
         if (Directory.Exists(newFull) || File.Exists(newFull))
             throw new InvalidOperationException($"«{newFolder}» уже существует");
@@ -917,6 +922,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         var folder = SanitizeFolder(path);
         if (folder.Length == 0) throw new ArgumentException("Не задана папка");
         var full = SafePath.Join(rootDir, folder);
+        EnsureNotWiki(full);
         if (File.Exists(full))
             throw new InvalidOperationException($"«{folder}» — уже файл, не папка");
         Directory.CreateDirectory(full);
@@ -932,6 +938,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         var folder = SanitizeFolder(path);
         if (folder.Length == 0) throw new ArgumentException("Не задана папка");
         var full = SafePath.Join(rootDir, folder);
+        EnsureNotWiki(full);
         if (!Directory.Exists(full)) throw new KeyNotFoundException("Папка не найдена");
         int mdCount;
         try { mdCount = Directory.EnumerateFiles(full, "*.md", SearchOption.AllDirectories).Count(); }
@@ -947,6 +954,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         var rootDir = ResolveRoot(userId, sourceKey);
         var full = SafePath.Join(rootDir, relPath);
         if (!File.Exists(full)) return null;
+        EnsureNotWiki(full); // и с переименованием, и без: цель та же — файл под data/wiki/
 
         // Заголовок, по которому на заметку ссылаются сейчас (для авто-обновления ссылок)
         var model = GetModel(userId);
@@ -1009,6 +1017,8 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
             foreach (var srcId in sources)
             {
                 if (srcId == id || !model.ById.TryGetValue(srcId, out var srcNote)) continue;
+                // Писатель побочный: файл под data/wiki/ не трогаем — его правит только Хранитель
+                if (WikiPaths.IsWikiPath(srcNote.FullPath, _dataDir)) continue;
                 try
                 {
                     var updated = RewriteLinks(File.ReadAllText(srcNote.FullPath, Encoding.UTF8), oldTitle, req.Title!);
@@ -1052,6 +1062,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         var rootDir = ResolveRoot(userId, sourceKey);
         var full = SafePath.Join(rootDir, relPath);
         if (!File.Exists(full)) return false;
+        EnsureNotWiki(full);
         File.Delete(full);
         Invalidate(userId);
         if (sourceKey != PersonalKey)
@@ -1109,6 +1120,8 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         foreach (var srcId in sources)
         {
             if (!model.ById.TryGetValue(srcId, out var srcNote)) continue;
+            // Писатель побочный: файл под data/wiki/ не трогаем — его правит только Хранитель
+            if (WikiPaths.IsWikiPath(srcNote.FullPath, _dataDir)) continue;
             try
             {
                 var content = File.ReadAllText(srcNote.FullPath, Encoding.UTF8);
@@ -1202,6 +1215,17 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
 
     // --- Разрешение источника и валидация владения ---
 
+    // Единственная точка отказа записи в вики (ADR-035, решение 2): файлы под data/wiki/
+    // принадлежат Хранителю. Проверка — по каноническому пути: корень проекта может оказаться
+    // предком data/, а сам data/ — зацепленным ссылкой. Побочные писатели (RewriteLinks,
+    // RemoveWikilinksTo, ^id в ResolveDoc) вызывают не это, а пропускают файл: их системная
+    // замена — relink (S2c).
+    private void EnsureNotWiki(string absPath)
+    {
+        if (WikiPaths.IsWikiPath(absPath, _dataDir))
+            throw new WikiReadOnlyException();
+    }
+
     private string ResolveRoot(string userId, string sourceKey)
     {
         if (sourceKey == PersonalKey)
@@ -1254,4 +1278,18 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     {
         try { return f().ToString("o"); } catch { return DateTime.UtcNow.ToString("o"); }
     }
+}
+
+// Отказ записи в вики (ADR-035, решение 2): Code — контракт для MCP и REST (wiki_readonly),
+// текст подсказывает, какую операцию звать вместо прямой правки. Наследует
+// InvalidOperationException: NotesToolset уже отдаёт его текст агенту; контроллер сделает
+// из типа 409 (S2e).
+public sealed class WikiReadOnlyException : InvalidOperationException
+{
+    public const string ErrorCode = "wiki_readonly";
+    public const string ErrorText = "В вики пишет только Хранитель: факт — wiki_add_fact, источник — wiki_ingest";
+
+    public WikiReadOnlyException() : base(ErrorText) { }
+
+    public string Code => ErrorCode;
 }

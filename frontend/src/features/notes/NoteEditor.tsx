@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { EditorView, keymap, drawSelection, dropCursor, placeholder as cmPlaceholder,
   Decoration, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from '@codemirror/view';
-import { EditorState, RangeSetBuilder } from '@codemirror/state';
+import { EditorState, RangeSetBuilder, type Text } from '@codemirror/state';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { syntaxHighlighting, HighlightStyle, syntaxTree, indentOnInput } from '@codemirror/language';
 import { autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap,
@@ -9,6 +9,7 @@ import { autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap,
 import { markdown } from '@codemirror/lang-markdown';
 import { tags as t } from '@lezer/highlight';
 import { C, FONT, getEffectiveTheme, subscribeThemeMode, useNotes } from 'aihome_shell/kit';
+import { codeMask } from '../../components/MarkdownViewer';
 
 // Редактор заметок на CodeMirror 6 с Obsidian-подобным Live Preview:
 // - маркеры **жирного**/*курсива*/`кода`/# заголовков скрываются, когда каретка
@@ -86,6 +87,53 @@ function selectionTouches(state: EditorState, from: number, to: number): boolean
   return false;
 }
 
+// Живые метки видимого текста: вики-ссылки и теги ВНЕ кода — тот же контракт, что у
+// бэкенда (NotesService.CodeMask + «числовой тег — не тег»). Диапазоны кода (```/~~~заборы
+// и inline-`…`) берёт ТОТ ЖЕ разбор, что у вьюера: codeMask из MarkdownViewer — построчная
+// копия бэкендовых правил. Дерево lezer для этого НЕ годится: оно открывает inline-код
+// только равными бэктиками и признаёт забор внутри цитаты забором, а бэкенд — нет, и две
+// поверхности фронта (редактор и вьюер) на одном тексте давали бы разный ответ.
+export interface WikiMark { from: number; to: number; openLen: number; target: string }
+export interface TagMark { from: number; to: number }
+
+// Маска «внутри кода» всего документа — с кэшем по версии текста: Text в CodeMirror
+// неизменяем, любое изменение документа даёт новый объект (пересчёт маски), а прокрутка
+// и выделение остаются на прежнем тексте (маска из кэша, метки — по-прежнему только
+// по видимым диапазонам, см. buildLivePreview).
+const codeMaskCache = new WeakMap<Text, boolean[]>();
+
+function docCodeMask(state: EditorState): boolean[] {
+  let mask = codeMaskCache.get(state.doc);
+  if (!mask) {
+    mask = codeMask(state.doc.toString());
+    codeMaskCache.set(state.doc, mask);
+  }
+  return mask;
+}
+
+export function findNoteMarks(state: EditorState, from: number, to: number): { wikis: WikiMark[]; tags: TagMark[] } {
+  const mask = docCodeMask(state);
+
+  const text = state.sliceDoc(from, to);
+  const wikis: WikiMark[] = [];
+  for (const m of text.matchAll(WIKI_RE)) {
+    const start = from + m.index!;
+    if (mask[start]) continue;
+    // openLen — «![[» или «[[»: скобки прячутся только вне активной строки (см. buildLivePreview)
+    wikis.push({ from: start, to: start + m[0].length, openLen: m[1] ? 3 : 2, target: m[2] });
+  }
+  const tags: TagMark[] = [];
+  for (const m of text.matchAll(TAG_RE)) {
+    const start = from + m.index!;
+    if (mask[start]) continue;
+    // «числовой тег — не тег» по правилу бэкенда (char.IsDigit — только десятичные, \p{Nd}):
+    // #807 — число, а не тег; #² (No) — тег, как на бэкенде
+    if (/^[\p{Nd}]+$/u.test(m[1])) continue;
+    tags.push({ from: start, to: start + m[0].length });
+  }
+  return { wikis, tags };
+}
+
 function buildLivePreview(view: EditorView): DecorationSet {
   const { state } = view;
   const decos: { from: number; to: number; deco: Decoration }[] = [];
@@ -110,26 +158,22 @@ function buildLivePreview(view: EditorView): DecorationSet {
       },
     });
 
-    // 2) Wikilinks и теги — regex по видимому тексту (lezer их не знает)
-    const text = state.sliceDoc(from, to);
-    for (const m of text.matchAll(WIKI_RE)) {
-      const start = from + m.index!;
-      const end = start + m[0].length;
-      const active = selectionTouches(state, start, end);
-      const openLen = m[1] ? 3 : 2;   // "![[" или "[["
+    // 2) Wikilinks и теги — regex по видимому тексту (lezer их не знает), но только вне кода
+    const { wikis, tags } = findNoteMarks(state, from, to);
+    for (const w of wikis) {
+      const active = selectionTouches(state, w.from, w.to);
       if (!active) {
-        decos.push({ from: start, to: start + openLen, deco: Decoration.replace({}) });
-        decos.push({ from: end - 2, to: end, deco: Decoration.replace({}) });
+        decos.push({ from: w.from, to: w.from + w.openLen, deco: Decoration.replace({}) });
+        decos.push({ from: w.to - 2, to: w.to, deco: Decoration.replace({}) });
       }
       decos.push({
-        from: start + (active ? 0 : openLen),
-        to: active ? end : end - 2,
-        deco: Decoration.mark({ class: 'cm-wikilink', attributes: { 'data-target': m[2] } }),
+        from: w.from + (active ? 0 : w.openLen),
+        to: active ? w.to : w.to - 2,
+        deco: Decoration.mark({ class: 'cm-wikilink', attributes: { 'data-target': w.target } }),
       });
     }
-    for (const m of text.matchAll(TAG_RE)) {
-      const start = from + m.index!;
-      decos.push({ from: start, to: start + m[0].length, deco: Decoration.mark({ class: 'cm-notetag' }) });
+    for (const t of tags) {
+      decos.push({ from: t.from, to: t.to, deco: Decoration.mark({ class: 'cm-notetag' }) });
     }
   }
 

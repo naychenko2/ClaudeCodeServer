@@ -268,6 +268,10 @@ public class SubsystemBoundaryCoverageTests
             // ADR-030: индекс 7 дней истории медиа-генераций и кэш миниатюр — спина Main
             // (без IAppSubsystem), шов IMediaHistoryResultSource живёт в Core
             "ClaudeHomeServer.Services.MediaHistory",
+            // «Общие проекты», S0-1 (разрез §6.1): точка доступа (ProjectAccess/SessionAccess) —
+            // спина Core без вертикали-владельца, её типы покрыты CoreAllowedNamespaces
+            // соседнего сторожа; вертикали зовут её напрямую, как SafePath.Join (IsCoreAssembly).
+            "ClaudeHomeServer.Services.Access",
         };
 
         // Все namespace, покрытые через SubsystemBoundaryTests.Boundaries (по полю

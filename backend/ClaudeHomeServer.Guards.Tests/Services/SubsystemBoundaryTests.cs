@@ -1879,6 +1879,12 @@ public class SubsystemBoundaryTests
         // `ClaudeHomeServer.Services.Plugins` теперь разделяет Core (швы) и Plugins.dll
         // (вертикаль) — осознанно, как у Skills (Core-швы + вертикаль).
         "ClaudeHomeServer.Services.Plugins",
+        // «Общие проекты», S0-1 (разрез §6.1): точка доступа к проекту и чату
+        // (ProjectAccess/SessionAccess) — чистые функции над моделями в спине, «не новая
+        // вертикаль и не строка в Boundaries»: зовут напрямую, как SafePath.Join.
+        // Прецедент SessionTaskLinks/FeatureTurnGate (примитив без владения вертикалью),
+        // но под своим namespace — под ним соберётся вся точка доступа (S0-2, S2a-2, S2d-1).
+        "ClaudeHomeServer.Services.Access",
     ];
 
     /// <summary>

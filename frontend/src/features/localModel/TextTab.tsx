@@ -109,12 +109,14 @@ function StatusRow({ data }: { data: LocalModelStats }) {
 }
 
 // Подстрока под статусом: main — движок · N карт, TP=N · обновлено HH:MM:SS / данные на HH:MM.
+// Подписи из Stats (engineLabel, topology) заменяют движок и «TP=N», если заданы.
 // Стенд Bonsai (макет §3, .html:414): движок · Video · … — карта на Video одна и общая с
 // ComfyUI, её данные — с узла ComfyUI: число карт и TP там не о чём, по макету стоит
 // положение стенда «Video» (тот же факт, что в заголовке VideoCard).
 function StatusSubline({ data, bonsai }: { data: LocalModelStats; bonsai?: boolean }) {
   const parts: string[] = [];
-  if (data.engine) parts.push(data.engine);
+  const engine = data.engineLabel || data.engine;
+  if (engine) parts.push(engine);
   if (bonsai) {
     parts.push('Video');
   } else {
@@ -122,7 +124,7 @@ function StatusSubline({ data, bonsai }: { data: LocalModelStats; bonsai?: boole
     if (n > 0) {
       // TP: из необязательного поля tensorParallel, иначе = число карт
       const tp = data.tensorParallel ?? n;
-      parts.push(`${gpuCountLabel(n)}, TP=${tp}`);
+      parts.push(`${gpuCountLabel(n)}, ${data.topology || `TP=${tp}`}`);
     }
   }
   if (data.status === 'down') {

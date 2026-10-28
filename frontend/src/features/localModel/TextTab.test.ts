@@ -216,6 +216,19 @@ describe('подстрока под статусом (макет §3, .html:414)
     expect(html).toContain('vLLM · 2 карты, TP=2');
     expect(html).not.toContain('Video');
   });
+  it('main с подписями из Stats — движок и раскладка вместо engine и «TP=N», модель — из model', () => {
+    const html = renderTab({
+      data: {
+        ...mockLocalModelStats('working'),
+        engine: 'vllm', engineLabel: 'Strata 0.2.7', topology: 'разрез слоёв 26/22',
+        model: 'Qwen3.8-Flash-Next IQ3_XXS',
+      },
+    });
+    expect(html).toContain('Strata 0.2.7 · 2 карты, разрез слоёв 26/22');
+    expect(html).toContain('Qwen3.8-Flash-Next IQ3_XXS');
+    expect(html).not.toContain('TP=');
+    expect(html).not.toContain('vllm ·');
+  });
 });
 
 describe('поля из unsupported не рендерятся (c2)', () => {

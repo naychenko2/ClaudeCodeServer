@@ -465,6 +465,54 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         body.GetProperty("tensorParallel").ValueKind.Should().Be(JsonValueKind.Null, "не задано → null, фронт покажет число карт");
     }
 
+    // ─── Подписи основного стенда из Stats: Model/EngineLabel/Topology ──────────────────
+
+    // Подписи заданы → model из Stats:Model поверх идентификатора провайдера, engineLabel и
+    // topology в ответе, engine — прежний тип формата метрик (по нему выбран парсер).
+    // Мутация: не подставлять Stats:Model → в ответе останется "qwen3.8-27b", тест краснеет.
+    [Fact]
+    public async Task Labels_FromStats_OverrideModelAndAddEngineLabelAndTopology()
+    {
+        var reader = new FakeReader
+        {
+            Current = new LocalModelStatsCurrent { Configured = true, Status = "working", Engine = "vllm", Model = "qwen3.8-27b" },
+        };
+        var factory = BuildFactoryWithFakes(reader);
+        factory.ExtraConfig["LlmProviders:local-qwen:Stats:Model"] = "Qwen3.8-Flash-Next IQ3_XXS";
+        factory.ExtraConfig["LlmProviders:local-qwen:Stats:EngineLabel"] = " Strata 0.2.7 ";
+        factory.ExtraConfig["LlmProviders:local-qwen:Stats:Topology"] = "разрез слоёв 26/22";
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var resp = await admin.GetAsync("/api/local-model/stats");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("model").GetString().Should().Be("Qwen3.8-Flash-Next IQ3_XXS");
+        body.GetProperty("engine").GetString().Should().Be("vllm", "тип формата метрик не подменяется");
+        body.GetProperty("engineLabel").GetString().Should().Be("Strata 0.2.7", "пробелы по краям срезаются");
+        body.GetProperty("topology").GetString().Should().Be("разрез слоёв 26/22");
+    }
+
+    // Подписи не заданы (пустая строка — как не задана) → model из снимка, полей engineLabel и
+    // topology в ответе нет вовсе (ответ побайтно прежний).
+    [Fact]
+    public async Task Labels_NotSet_ModelFromSnapshot_NoLabelFields()
+    {
+        var reader = new FakeReader
+        {
+            Current = new LocalModelStatsCurrent { Configured = true, Status = "working", Engine = "vllm", Model = "qwen3.8-27b" },
+        };
+        var factory = BuildFactoryWithFakes(reader);
+        factory.ExtraConfig["LlmProviders:local-qwen:Stats:Model"] = "  ";
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var resp = await admin.GetAsync("/api/local-model/stats");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("model").GetString().Should().Be("qwen3.8-27b");
+        body.TryGetProperty("engineLabel", out _).Should().BeFalse();
+        body.TryGetProperty("topology", out _).Should().BeFalse();
+    }
+
     // ─── Выключенная вертикаль Llm → configured:false, status:notConnected, 200 ───
 
     // Subsystems:llm:Enabled=false — ILocalModelStatsReader/IGpuSampler не в контейнере;

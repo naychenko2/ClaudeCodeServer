@@ -269,4 +269,14 @@ public class LlmProviderStatsConfig
     // Число карт тензор-параллелизма (vLLM --tensor-parallel-size). null — не задано:
     // панель «Текст» покажет число карт хоста (gpus.length), а не это значение.
     public int? TensorParallel { get; set; }
+
+    // Подписи основного стенда на панели — только показ, на выбор парсера не влияют. Нужны,
+    // когда Engine — формат метрик, а не сам движок: Strata за адаптером :18025 отдаёт метрики
+    // с именами vLLM, поэтому Engine = "vllm", а настоящие движок и раскладку пишут сюда.
+    // Model — название модели (иначе Id первой модели провайдера, а он бывает псевдонимом);
+    // EngineLabel — движок в подстроке статуса (иначе Engine); Topology — раскладка по картам
+    // вместо «TP=N» (например «разрез слоёв 26/22»).
+    public string? Model { get; set; }
+    public string? EngineLabel { get; set; }
+    public string? Topology { get; set; }
 }

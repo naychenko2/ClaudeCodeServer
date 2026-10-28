@@ -94,7 +94,7 @@ public class HostCategoryGuardTests
 
         private sealed class Holder
         {
-            public ProbeFactory? Factory;
+            public ProbeFactory? Factory = null;
         }
 
         public interface IFixture<T>;

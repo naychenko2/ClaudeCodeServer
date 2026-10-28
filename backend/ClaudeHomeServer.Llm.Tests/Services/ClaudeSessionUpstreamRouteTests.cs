@@ -27,7 +27,7 @@ namespace ClaudeHomeServer.Tests.Services;
 //
 // Мутация (c7): снятие ветки «stale сторонний → claude» (проверки GetByKey во второй ветке)
 // краснит строку ("sonnet", "minimax", "claude") теории ниже.
-public class ClaudeSessionUpstreamRouteTests
+public class ClaudeSessionUpstreamRouteTests : IDisposable
 {
     private static readonly Type CliRunType =
         typeof(ClaudeSession).GetNestedType("CliRun", BindingFlags.NonPublic)!;

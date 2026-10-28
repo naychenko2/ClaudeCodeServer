@@ -21,4 +21,21 @@ public sealed record KnowledgeSyncTarget(
     string Label,
     Func<IReadOnlyCollection<string>, Task<IReadOnlyList<(string DocId, string EntryKey)>>> ResolveAsync,
     Func<IReadOnlyCollection<string>, Task> InvalidateAsync,
-    Action KickSync);
+    Action KickSync)
+{
+    // Общее ядро ResolveAsync участников: какие ключи карты «ключ записи → документ»
+    // ссылаются на переданные DocId. Не ToDictionary по DocId: два ключа с одним DocId
+    // встречаются на проде (досье ClaudeCodeServer, 2026-10), и словарь падал
+    // ArgumentException на каждом тике — реконсайлер глотал его как сбой цели, и цель не
+    // лечилась никогда. Отдаём ВСЕ ключи документа: сброс хеша пересоздаст каждую запись.
+    public static IReadOnlyList<(string DocId, string EntryKey)> MatchDocIds<TDoc>(
+        IEnumerable<KeyValuePair<string, TDoc>> docs, Func<TDoc, string> docIdOf,
+        IReadOnlyCollection<string> docIds)
+    {
+        var wanted = docIds.ToHashSet(StringComparer.Ordinal);
+        return docs
+            .Select(kv => (DocId: docIdOf(kv.Value), EntryKey: kv.Key))
+            .Where(p => wanted.Contains(p.DocId))
+            .ToList();
+    }
+}

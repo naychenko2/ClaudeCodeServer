@@ -53,6 +53,12 @@ public sealed class OcrGatewayEndpointTests : IAsyncLifetime
         public string? ResolveOwnerId(Session s) => s.OwnerId;
         public Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId) =>
             Task.FromResult<IReadOnlyList<StoredMessage>>([]);
+        public bool SetWikiMark(string sessionId, string? mark)
+        {
+            if (Session is null || sessionId != Session.Id) return false;
+            Session.WikiMark = mark;
+            return true;
+        }
     }
 
     private sealed class MutableProjectManager : IProjectManager

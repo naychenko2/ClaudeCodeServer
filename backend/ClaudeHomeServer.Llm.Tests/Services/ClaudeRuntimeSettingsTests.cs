@@ -1,14 +1,22 @@
 using System.Diagnostics;
+using System.Reflection;
 using System.Text.Json;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Llm.Claude;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Services;
 
 // Файл --settings хода: выключение хуков и гейт плагина браузера. Проверяем содержимое
 // файла, а не запуск CLI: неверный ключ настроек CLI молча проглотит, и плагин поедет
 // в контекст всем персонам подряд (ровно то, ради чего гейт и делался).
+// Коллекция Inotify: тест относительного DataPath поднимает полный хост (он открывает
+// inotify-экземпляры перечитывания конфигурации), а InotifyLeakRegressionTests меряет их
+// число в процессе — тот же оговор, что у LlmSubsystemDiCycleTests.
+[Collection(TestCollections.Inotify)]
 public class ClaudeRuntimeSettingsTests
 {
     private static (string Path, JsonElement Json) Settings(bool browserEnabled)
@@ -249,6 +257,120 @@ public class ClaudeRuntimeSettingsTests
             json.GetProperty("syncClaudeAiSkills").GetBoolean().Should().BeFalse();
             json.GetProperty("syncClaudeAiPlugins").GetBoolean().Should().BeFalse();
         }
+    }
+
+    // ADR-035 §2 (S1c): статический deny {data}/wiki/** в настройках запуска CLI — ОДНО
+    // правило Edit (ревью S1c, Н1): CLI 2.1.310 матчит файловые проверки только по Edit(path),
+    // правила Write/NotebookEdit инертны и дают securityNotice «never matches». Все три
+    // инструмента по-прежнему держит серверный backstop — см. ClaudeSessionWikiDenyTests.
+    // deny-правила CLI вычисляет раньше allow и раньше режимов прав: в acceptEdits правку
+    // файла он не выносит на карточку вовсе — без этого deny отказ до агента не дошёл бы.
+    private static JsonElement SettingsWithWikiDeny(string temp, string dataDir)
+    {
+        var args = ClaudeRuntimeSettings.HooksOffArgs(new TempLauncher(temp), true, dataDir).ToList();
+        return JsonDocument.Parse(File.ReadAllText(args[1])).RootElement;
+    }
+
+    // Ожидание — ЛИТЕРАЛ документированной формы, а не пересчёт формулы прода: пересчёт той
+    // же склейкой прошёл бы и на лишнем слеше («///…»), и на лишнем правиле (ревью S1c, Н3).
+    // Синтетический корень: dataDir ничьих файлов не трогает — он входит в отпечаток и в текст
+    // правила.
+    private const string DataRoot = "/srv/ccs/data";
+    private const string ExpectedDenyRule = "Edit(//srv/ccs/data/wiki/**)";
+
+    [Fact]
+    public void DenyВики_ОдноПравилоEdit_ЛитералАбсолютнойФормы()
+    {
+        var temp = Path.Combine(Path.GetTempPath(), "ccs-settings-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var deny = SettingsWithWikiDeny(temp, DataRoot).GetProperty("permissions").GetProperty("deny");
+            deny.GetArrayLength().Should().Be(1, "одно Edit-правило: Write/NotebookEdit в CLI инертны");
+            deny.EnumerateArray().Select(e => e.GetString()).Should().Equal(ExpectedDenyRule);
+        }
+        finally { try { Directory.Delete(temp, true); } catch { } }
+    }
+
+    [Fact]
+    public void DenyВики_СоставНеЗависитОтХода_СтрокаНастроекПобайтноРавна()
+    {
+        // Два вызова — «два хода одной сессии»: путь --settings входит в сигнатуру прогона,
+        // любое расхождение состава между ходами перезапускало бы живой CLI со всеми MCP.
+        var temp = Path.Combine(Path.GetTempPath(), "ccs-settings-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var p1 = ClaudeRuntimeSettings.WriteSettings(temp, true, false, "kill-v1", null, DataRoot);
+            var text1 = File.ReadAllText(p1);
+            var p2 = ClaudeRuntimeSettings.WriteSettings(temp, true, false, "kill-v1", null, DataRoot);
+            var text2 = File.ReadAllText(p2);
+
+            p2.Should().Be(p1, "тот же состав — тот же файл, иначе сигнатура прогона мерцает");
+            text2.Should().Be(text1, "содержимое побайтно то же");
+            JsonDocument.Parse(text2).RootElement.GetProperty("permissions").GetProperty("deny")
+                .EnumerateArray().Select(e => e.GetString()).Should().Equal(ExpectedDenyRule);
+        }
+        finally { try { Directory.Delete(temp, true); } catch { } }
+    }
+
+    [Fact]
+    public void DenyВики_ИнстансыСРазнымиDataDir_НеПерезаписываютФайлДругДруга()
+    {
+        if (OperatingSystem.IsWindows()) return; // тот же оговор, что у теста состава хуков: файл пишется на POSIX-манере
+        var temp = Path.Combine(Path.GetTempPath(), "ccs-settings-" + Guid.NewGuid().ToString("N"));
+        const string dataA = "/srv/ccs/data-A", dataB = "/srv/ccs/data-B";
+        try
+        {
+            var pathA = ClaudeRuntimeSettings.WriteSettings(temp, true, false, "kill-v1", null, dataA);
+            var textA = File.ReadAllText(pathA);
+            var pathB = ClaudeRuntimeSettings.WriteSettings(temp, true, false, "kill-v1", null, dataB);
+            // повторная запись инстансом A (его перезапуск) не должна затронуть файл B
+            ClaudeRuntimeSettings.WriteSettings(temp, true, false, "kill-v1", null, dataA);
+
+            pathB.Should().NotBe(pathA, "разный data-корень — разные deny-правила, значит разный отпечаток");
+            File.ReadAllText(pathA).Should().Be(textA);
+            JsonDocument.Parse(File.ReadAllText(pathB)).RootElement.GetProperty("permissions").GetProperty("deny")
+                .EnumerateArray().Select(e => e.GetString()).Should().Equal("Edit(//srv/ccs/data-B/wiki/**)");
+        }
+        finally { try { Directory.Delete(temp, true); } catch { } }
+    }
+
+    // Н5: data-корень SessionManager берёт резолвным GetFullPath (тот же приём, что Program.cs
+    // и NotesService) — иначе относительный DataPath отдал бы в правило относительный корень,
+    // а «//…» в синтаксисе правил CLI значит абсолютный путь. Идём через реальный DI-граф
+    // (тот же приём, что LlmSubsystemDiCycleTests): тестовый каталог создаётся ПОД cwd
+    // процесса, поэтому относительный путь резолвится именно в него и весь хост (users.json,
+    // projects.json) остаётся в нём, а не в чужой папке.
+    [Fact]
+    public void ОтносительныйDataPath_ДаётАбсолютныйКореньВDenyПравиле()
+    {
+        var relDir = Path.Combine("ccs-relative-data-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(relDir);
+        try
+        {
+            using var factory = new TestWebApplicationFactory
+            {
+                ExtraConfig = { ["DataPath"] = Path.Combine(relDir, "projects.json") },
+            };
+            var sessions = factory.Services.GetRequiredService<SessionManager>();
+
+            var dataDir = (string)typeof(SessionManager)
+                .GetField("_dataDir", BindingFlags.NonPublic | BindingFlags.Instance)!
+                .GetValue(sessions)!;
+            Path.IsPathRooted(dataDir).Should().BeTrue(
+                "корень deny-правила резолвится из относительного DataPath: GetFullPath");
+
+            var abs = Path.GetFullPath(relDir).Replace('\\', '/');
+            ClaudeRuntimeSettings.WikiDenyRules(dataDir).Should().Equal($"Edit(//{abs.TrimStart('/')}/wiki/**)");
+        }
+        finally { try { Directory.Delete(relDir, true); } catch { } }
+    }
+
+    [Fact]
+    public void БезDataDir_КлючPermissionsНеПоявляется()
+    {
+        // One-shot прогоны и пробы (без правок вики) остаются на прежнем составе файла
+        foreach (var browser in new[] { true, false })
+            Settings(browser).Json.TryGetProperty("permissions", out _).Should().BeFalse();
     }
 
     // Хук режет убийство процессов по имени: прод и дев-стенд — один бинарь, а в командной

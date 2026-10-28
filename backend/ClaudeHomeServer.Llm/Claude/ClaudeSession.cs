@@ -15,6 +15,9 @@ using Microsoft.Extensions.Options;
 using ICommandExpansion = ClaudeHomeServer.Services.Skills.ICommandExpansion;
 using ISkillSnapshotSource = ClaudeHomeServer.Services.Skills.ISkillSnapshotSource;
 using ClaudeHomeServer.Core.Telemetry;
+// Шов к Core-предикату путей вики (ADR-035 §2): алиасом, не using — тот же namespace
+// ClaudeHomeServer.Services.Notes живёт ещё и в вертикали Notes, граница держится на типе.
+using WikiPaths = ClaudeHomeServer.Services.Notes.WikiPaths;
 
 namespace ClaudeHomeServer.Services.Llm.Claude;
 
@@ -129,6 +132,12 @@ public class ClaudeSession : ILlmSessionAdapter
     // бэкенда, а не в каждом проекте пользователя. null — тесты без DI / старый контракт:
     // в этом случае SystemPromptFile ожидается абсолютным путём.
     private readonly string? _serverContentRoot;
+    // Корень data/ из конфигурации сервера (прокинут через LlmSessionContext.DataDir) —
+    // абсолютный корень встроенного deny {data}/wiki/** (ADR-035 §2): предиката в
+    // DecidePermissionAsync и статических deny-правил в настройках запуска CLI. null —
+    // тесты/старый контракт: deny нет. Свойство инстанса, не хода: состав deny-правил
+    // от хода не зависит (иначе путь --settings мерцал бы в сигнатуре прогона).
+    private readonly string? _dataDir;
     // Фактическое состояние BareMode в последнем BuildArgs: true если BareMode реально
     // применён (карта найдена, CLAUDE_CODE_DISABLE_CLAUDE_MDS поставлен). Снимок промпта
     // читает этот признак, а не повторно ResolveByModel
@@ -1170,6 +1179,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _serverContent = context.ServerContent;
         _transcriptOnServer = context.TranscriptOnServer;
         _serverContentRoot = context.ContentRootPath;
+        _dataDir = context.DataDir;
         _onMessage = context.OnMessage;
         _mcpConfigPath = mcpConfigPath;
         _systemPromptViaFile = context.SystemPromptViaFile;
@@ -2893,6 +2903,15 @@ public class ClaudeSession : ILlmSessionAdapter
             && CoordinatorWriteGuard.LooksLikeFileWrite(cmdEl.GetString()))
             return "deny";
 
+        // Жёсткий отказ CLI-агенту по абсолютному {data}/wiki/** (ADR-035 §2, S1c): сильнее
+        // project-правил, «всегда разрешать» и авто-allow исполнителя задачи — единственный
+        // писатель вики это Хранитель. Тот же отказ статически записан в настройках
+        // запуска CLI (ClaudeRuntimeSettings.WikiDenyRules): там CLI отказывает сам, не спрашивая
+        // нас (в acceptEdits правку файла он не выносит на карточку вовсе); эта ветка —
+        // серверный backstop: обычный режим, пути вне корня сессии и исполнитель. Bash не
+        // запрещаем — дрейф вики ловит манифест S2b. Детали — в IsWikiWriteDenied.
+        if (IsWikiWriteDenied(toolName, inputEl)) return "deny";
+
         // Правила проекта: deny приоритетнее; allow — авто-разрешить; null — спросить пользователя
         var ruleDecision = PermissionRuleEvaluator.Evaluate(_permissionRules?.Invoke(), toolName, inputEl);
         if (ruleDecision == "deny") return "deny";
@@ -2984,6 +3003,33 @@ public class ClaudeSession : ILlmSessionAdapter
         // «Всегда разрешать» для CLI — обычный allow; сам инструмент в Session.AutoAllowTools
         // положил SessionManager.RespondPermission (он же сохранил стор).
         return behavior == "allow_always" ? "allow" : behavior;
+    }
+
+    // Встроенный deny записи в вику (ADR-035 §2): Edit/Write/NotebookEdit по пути под
+    // {data}/wiki/ этого инстанса. Отказ по абсолютному пути, не по маске «/Вики/» —
+    // предикат WikiPaths канонический (символьные ссылки, «..», регистр), тот же, что в
+    // NotesService и FileService. file_path относительным присылает сам CLI (он резолвит его
+    // к своему cwd — корню сессии, не cwd серверного процесса), поэтому относительный путь
+    // предваряем _rootPath, иначе IsWikiPath резолвил бы его к текущему каталогу сервера.
+    // _dataDir null (тесты/старый контракт) — отказа нет: data-корень нечем проверить.
+    private bool IsWikiWriteDenied(string toolName, JsonElement inputEl)
+    {
+        if (_dataDir is null) return false;
+        var pathKey = toolName switch
+        {
+            "Edit" or "Write" => "file_path",
+            "NotebookEdit" => "notebook_path",
+            _ => null,
+        };
+        if (pathKey is null
+            || inputEl.ValueKind != JsonValueKind.Object
+            || !inputEl.TryGetProperty(pathKey, out var pathEl)
+            || pathEl.ValueKind != JsonValueKind.String)
+            return false;
+        var path = pathEl.GetString();
+        if (string.IsNullOrWhiteSpace(path)) return false;
+        if (!Path.IsPathFullyQualified(path)) path = Path.Combine(_rootPath, path);
+        return WikiPaths.IsWikiPath(path, _dataDir);
     }
 
     private void SendControlResponse(string requestId, object responsePayload, Process? target = null)
@@ -3315,9 +3361,11 @@ public class ClaudeSession : ILlmSessionAdapter
         };
 
         // Отключаем хуки плагинов на хосте (окна консоли на каждый ход); скиллы остаются.
-        // Тем же файлом гасится плагин браузера, если он персоне не положен по роли —
-        // путь файла входит в сигнатуру прогона, но решение постоянно в рамках сессии.
-        args.AddRange(ClaudeRuntimeSettings.HooksOffArgs(_launcher, _browserEnabled));
+        // Тем же файлом гасится плагин браузера, если он персоне не положен по роли, и тем же
+        // файлом ставится статический deny {data}/wiki/** (ADR-035 §2) — путь файла входит в
+        // сигнатуру прогона, но решение постоянно в рамках инстанса: ни браузер, ни data-корень
+        // от хода не зависят.
+        args.AddRange(ClaudeRuntimeSettings.HooksOffArgs(_launcher, _browserEnabled, _dataDir));
 
         if (Info.ClaudeSessionId is not null)
             args.AddRange(["--resume", Info.ClaudeSessionId]);

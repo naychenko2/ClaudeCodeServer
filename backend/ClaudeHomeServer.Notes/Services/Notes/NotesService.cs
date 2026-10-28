@@ -18,6 +18,10 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     private readonly IProjectManager _projects;
     private readonly ILogger<NotesService> _logger;
     private readonly IProjectEventLogService? _events;
+    // Гейт фич-флагов (Core-шов Composition): нужен одной проверке в SourcesFor — источник
+    // wiki отдаётся агенту только при включённом llm-wiki (хвост ревью S2e). null — флаг
+    // считается выключенным (fail-closed): без источника безопаснее, чем без флагов.
+    private readonly Composition.IFeatureFlagGate? _flags;
     private readonly string _dataDir;
 
     private const string PersonalKey = "personal";
@@ -44,11 +48,12 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(2);
 
     public NotesService(IProjectManager projects, IConfiguration config, ILogger<NotesService> logger,
-        IProjectEventLogService? events = null)
+        IProjectEventLogService? events = null, Composition.IFeatureFlagGate? flags = null)
     {
         _projects = projects;
         _logger = logger;
         _events = events;
+        _flags = flags;
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
     }
@@ -98,9 +103,13 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         // Вики владельца — отдельный источник графа рядом с личным vault и notes/ проектов
         // (ADR-035, решение 1). Признак — признак на диске (pages/_schema.md), а не
         // фич-флаг: не заведена — источника нет, заведённая — работает всегда (fail-closed).
+        // Флаг llm-wiki гейтит отдачу источника агенту (хвост ревью S2e): до включения —
+        // «флаг прячет UI и инструменты», источника в графе нет. Одна проверка, в одной
+        // точке. Гейт записи от флага НЕ зависит: EnsureNotWiki бьёт по каноническому пути,
+        // и заведённая вика закрыта чужим писателям даже с выключенным флагом.
         // Ссылки [[…]] между заметками человека и страницами вики резолвятся обычным
         // образом: тот же ByName, без отдельного резолвера (резолв префикса раздела — S2c).
-        if (WikiPaths.IsInitialized(_dataDir, userId))
+        if (WikiPaths.IsInitialized(_dataDir, userId) && _flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) == true)
             list.Add(new(WikiKey, WikiLabel, WikiPaths.Pages(_dataDir, userId), ReadOnly: true));
         return list;
     }

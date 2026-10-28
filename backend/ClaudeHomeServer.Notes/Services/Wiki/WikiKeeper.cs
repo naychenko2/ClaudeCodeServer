@@ -127,6 +127,31 @@ public sealed class WikiKeeper
         return WithSectionsLockedAsync(ownerId, [sectionKey], () => AdoptUnderLockAsync(ownerId, sectionKey, pageKey));
     }
 
+    /// <summary>Удаление раздела-сироты (ADR-036, решение 1): только по кнопке человека,
+    /// сиротство проверяет вызывающий (у Хранителя нет справочника проектов/сфер). Сносит
+    /// папку раздела под pages/ (проекции — в ней) и манифест раздела; журнал и прообразы
+    /// остаются: история вики не удаляется. Кэш графа инвалидируется: удалённая страница
+    /// не должна остаться в графе. Автоочистки сирот нет — это решение человека.</summary>
+    public async Task<WikiOpResult> DeleteSectionAsync(string ownerId, string sectionKey)
+    {
+        var folder = WikiSections.Folder(sectionKey);
+        if (folder is null)
+            return Refused($"«{sectionKey}» — не ключ раздела");
+        return await WithSectionsLockedAsync(ownerId, [sectionKey], async () =>
+        {
+            var root = WikiPaths.Root(_dataDir, ownerId);
+            var dir = SafePath.JoinBelowRoot(root, "pages/" + folder);
+            if (!Directory.Exists(dir))
+                return Refused($"папки раздела «{sectionKey}» на диске нет — удалять нечего");
+            Directory.Delete(dir, recursive: true);
+            var manifest = Path.Combine(WikiPaths.Keeper(_dataDir, ownerId), "manifest",
+                WikiManifest.SafeFileName(sectionKey) + ".json");
+            if (File.Exists(manifest)) File.Delete(manifest);
+            _notes.Invalidate(ownerId);
+            return new WikiOpResult(WikiOpStatus.Applied, null);
+        });
+    }
+
     /// <summary>Блокировки разделов владельца в каноническом порядке ключей (решение 10):
     /// порядок — по строке ключа (Ordinal), НЕ по порядку аргументов вызова: две встречные
     /// операции на одной паре разделов иначе держат A→B и B→A и встают в взаимной
@@ -157,9 +182,14 @@ public sealed class WikiKeeper
 
     /// <summary>Контракт пары (раздел, страница): ключ раздела обязан совпасть с разбором
     /// пути страницы. Иначе запись шла бы под блокировкой одного раздела, а файл относился
-    /// к другому — два писателя одних файлов (тот риск, который решение 10 и снимает).</summary>
+    /// к другому — два писателя одних файлов (тот риск, который решение 10 и снимает).
+    /// Служебные файлы раздела (последний сегмент на «_»: _schema/_index/_log/_health) —
+    /// не страницы: их заводит признак заведённости и проекции, запись по пути страницы
+    /// молча перезаписала бы их (хвост ревью S2b-3, Н2).</summary>
     private static string? CheckPage(string sectionKey, string pageKey)
     {
+        if (WikiPaths.IsProjection(pageKey))
+            return $"«{pageKey}» — служебный файл раздела, не страница";
         if (WikiSections.Parse(pageKey) != sectionKey)
             return $"страница «{pageKey}» не принадлежит разделу «{sectionKey}»";
         return null;

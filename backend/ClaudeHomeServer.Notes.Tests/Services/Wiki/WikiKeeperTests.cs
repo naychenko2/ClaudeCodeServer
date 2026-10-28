@@ -36,7 +36,10 @@ public class WikiKeeperTests : IDisposable
             .Build();
         var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         var projects = new ProjectManager(config, users, new AppSettingsService(config));
-        _notes = new NotesService(projects, config, NullLogger<NotesService>.Instance, _events);
+        // Флаг llm-wiki включён: «граф видит страницу сразу» (решение 4, шаг 6) — свойство
+        // графа с включённым флагом; без него источник wiki не отдаётся вовсе (хвост ревью S2e,
+        // проверка — в NotesWikiSourceTests).
+        _notes = new NotesService(projects, config, NullLogger<NotesService>.Instance, _events, new WikiFlagOn());
         _sut = new WikiKeeper(_notes, config, _events);
     }
 
@@ -251,6 +254,31 @@ public class WikiKeeperTests : IDisposable
             "иначе запись шла бы под блокировкой одного раздела, а файл относился к другому");
     }
 
+    [Fact]
+    public async Task ПутьСлужебногоФайла_ЗаписьОтказана_ФайлИМанифестНеТронуты()
+    {
+        // Хвост ревью S2b-3, Н2: последний сегмент на «_» (_index/_log/_health/_schema) —
+        // служебный файл раздела, не страница. Без отказа запись по такому пути молча
+        // перезаписала бы проекцию (её регенерирует сам Хранитель) или признак заведённости.
+        await _sut.EnsureInitializedAsync(User);
+        var projection = "Проекты/p1/_index.md";
+        Directory.CreateDirectory(Path.GetDirectoryName(PageFull(projection))!);
+        File.WriteAllText(PageFull(projection), "# индекс человека\n", new UTF8Encoding(false));
+
+        var res = await _sut.WritePageAsync(User, "projects/p1", projection, "# подменённый индекс");
+
+        res.Status.Should().Be(WikiOpStatus.Refused, "служебный файл раздела не страница");
+        File.ReadAllText(PageFull(projection)).Should().Be("# индекс человека\n",
+            "отказ не трогает файл");
+        Manifest("projects/p1").Manifest.ContainsKey(projection).Should().BeFalse(
+            "проекции не входят в манифест и после отказа");
+        // Тот же отказ для adopt: принимать служебный файл в манифест нечего
+        (await _sut.AdoptAsync(User, "projects/p1", projection)).Status.Should().Be(WikiOpStatus.Refused);
+        // Обычная страница того же раздела проходит — отказ не всеобщий
+        (await _sut.WritePageAsync(User, "projects/p1", "Проекты/p1/X.md", "# X\n\nтекст."))
+            .Status.Should().Be(WikiOpStatus.Applied);
+    }
+
     // ─── 6. Блокировки: разделы независимы, две — по каноническому порядку ───
 
     [Fact]
@@ -388,5 +416,12 @@ public class WikiKeeperTests : IDisposable
             Appended.Add(e);
             return e;
         }
+    }
+
+    // llm-wiki включён: тесты этого файла — о заведённой вике, чьи страницы обязаны быть
+    // в графе сразу после записи Хранителя.
+    private sealed class WikiFlagOn : ClaudeHomeServer.Services.Composition.IFeatureFlagGate
+    {
+        public bool IsEnabled(string userId, string key) => key == FeatureFlagKeys.LlmWiki;
     }
 }

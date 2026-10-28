@@ -70,6 +70,11 @@ public static class FeatureFlagKeys
     // в result хода — шаг B-1. Регистрация флага, сама фича обвязывается следующими шагами.
     // Dark launch, выключено по умолчанию.
     public const string PromptCache = "prompt-cache";
+
+    // LLM-wiki (ADR-035/036): база знаний, которую ведёт Хранитель. Флаг прячет UI (вкладку
+    // «Вики») и источник wiki от агентов; гейт записи в заведённую вику от него не зависит.
+    // Dark launch, выключено по умолчанию.
+    public const string LlmWiki = "llm-wiki";
 }
 
 /// <summary>
@@ -186,6 +191,16 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.PromptCache,
             Title: "Индикатор prompt cache",
             Description: "В шапке чата: сколько ещё держится тёплый prompt cache, почему он остыл, и подсказка перенести контекст в новый чат.",
+            Default: false,
+            Stage: "dev"),
+
+        // LLM-wiki (ADR-035/036): страница с цитатами, которую ведёт Хранитель. Флаг прячет
+        // вкладку «Вики» и источник wiki от агентов; в заведённую вику пишет только Хранитель
+        // независимо от флага (fail-closed). Dark launch, выключено по умолчанию.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.LlmWiki,
+            Title: "LLM-wiki: база знаний",
+            Description: "ИИ ведёт вашу базу знаний: раскладывает новое по страницам с цитатами, замещает устаревшее, отмечает противоречия и проверяет здоровье базы. До включения вкладка «Вики» и страницы вики в работе агентов не участвуют.",
             Default: false,
             Stage: "dev"),
     ];

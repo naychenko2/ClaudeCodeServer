@@ -31,6 +31,13 @@ public sealed record ProjectExecCapability(bool Available, string? Reason);
 /// </summary>
 public sealed record ProjectPluginsCapability(bool Available, string? Reason);
 
+/// <summary>
+/// Можно ли вести раздел вики для проекта (ADR-035, решение 9а, Ф0–Ф1): у серверного — да;
+/// у локального — нет, до фичи «Вики локальных проектов» (вариант А: раздел на сервере,
+/// условия включения — там). Причина — текст для человека.
+/// </summary>
+public sealed record ProjectWikiSectionCapability(bool Available, string? Reason);
+
 /// <summary>Вердикт для фоновой работы по проекту (ADR-016, план §5).</summary>
 public enum ProjectBackgroundVerdict
 {
@@ -150,6 +157,8 @@ public sealed record ProjectCapabilities(
     public const string HandsProjectOffReason = "Руки выключены в настройках проекта";
     public const string PluginsLocalOffReason =
         "У локального проекта плагины выключены: каталог пакетов и секреты на устройство не едут (MVP)";
+    public const string WikiSectionLocalOffReason =
+        "У локального проекта вики пока не ведётся: его раздел появится на сервере после пилота (Ф0–Ф1 — отказ)";
 
     /// <summary>Проект привязан к устройству. Единственная проверка локальности во всём коде.</summary>
     public static bool IsDeviceBound(Project project) => project.DeviceId is not null;
@@ -168,6 +177,17 @@ public sealed record ProjectCapabilities(
         project is null || !IsDeviceBound(project)
             ? new ProjectPluginsCapability(true, null)
             : new ProjectPluginsCapability(false, PluginsLocalOffReason);
+
+    /// <summary>
+    /// Можно ли вести раздел вики для проекта (ADR-035, решение 9а, Ф0–Ф1) — ЕДИНАЯ точка для
+    /// REST вики (S2f) и её тестов: серверный проект — да; локальный — нет, до фичи
+    /// «Вики локальных проектов» (вариант А — раздел на сервере). Инлайновых проверок
+    /// локальности в вызывающих не заводим (сторож G10).
+    /// </summary>
+    public static ProjectWikiSectionCapability WikiSectionFor(Project? project) =>
+        project is null || !IsDeviceBound(project)
+            ? new ProjectWikiSectionCapability(true, null)
+            : new ProjectWikiSectionCapability(false, WikiSectionLocalOffReason);
 
     /// <summary>Работает ли у проекта группа «нужен контент на сервере» (Dify, CodeGraph, досье, Docs, уборка карты).</summary>
     public static bool ServerContentEnabled(Project project) => !IsDeviceBound(project);

@@ -28,6 +28,10 @@ public class NotesWikiSourceTests : IDisposable
     private readonly string _dir;     // dataDir
     private readonly string _vault;   // {dir}/notes/{User} — личный vault
     private readonly string _pages;   // {dir}/wiki/{User}/pages — корень источника wiki
+    // Гейт фич-флагов (Core-шов): источник wiki отдаётся только при включённом llm-wiki
+    // (хвост ревью S2e). Тесты этого файла — про заведённую вику с включённым флагом;
+    // выключенный флаг проверяется отдельно, в разделе 6.
+    private readonly WikiFlagGate _flags = new();
     private readonly NotesService _sut;
     private readonly NotesKnowledgeService _kb;
     private readonly NotesAiService _ai;
@@ -47,7 +51,7 @@ public class NotesWikiSourceTests : IDisposable
             .Build();
         var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         var projects = new ProjectManager(config, users, new AppSettingsService(config));
-        _sut = new NotesService(projects, config, NullLogger<NotesService>.Instance);
+        _sut = new NotesService(projects, config, NullLogger<NotesService>.Instance, flags: _flags);
         _kb = new NotesKnowledgeService(new NoopKnowledgeIndex(), _sut, users, config,
             NullLogger<NotesKnowledgeService>.Instance);
         _ai = new NotesAiService(_sut, config, new NoopCheapRunner());
@@ -208,6 +212,35 @@ public class NotesWikiSourceTests : IDisposable
         File.ReadAllText(normal).Should().Contain("- [x] Пункт");
     }
 
+    // ─── 6. Флаг llm-wiki: источник отдаётся только при включённом (хвост ревью S2e) ──
+
+    [Fact]
+    public void ФлагВыключен_ИсточникаWiki_Нет_ЗаписьВВикиВсёРавноОтказана()
+    {
+        // «Флаг прячет UI и инструменты»: до включения llm-wiki источник wiki не входит
+        // в граф — ни в списке, ни в резолве. Гейт записи от флага НЕ зависит: EnsureNotWiki
+        // бьёт по каноническому пути, и заведённая вика закрыта чужим писателям всегда.
+        InitWiki();
+        WriteWikiPage("Личное", "Страница вики", "# Страница вики");
+        _flags.On = false;
+
+        _sut.GetSummaries(User, null, null).Select(n => n.Title).Should().NotContain("Страница вики",
+            "при выключенном флаге источник wiki не отдаётся ни человеку в списке, ни агенту");
+        _sut.ResolveByName(User, "Страница вики", null).HasValue.Should().BeFalse();
+
+        var ex = Assert.Throws<WikiReadOnlyException>(() =>
+            _sut.Create(User, new CreateNoteRequest("Новая страница", "тело", "wiki")));
+        ex.Message.Should().Be(WikiReadOnlyException.ErrorText,
+            "отказ записи не зависит от флага: он держится признаком заведённости и путём");
+
+        // Включённый флаг — источник есть (тот же диск, тот же сервис, другой флаг).
+        // Модель кэшируется на 2 с: без явной инвалидации последний вызов читал бы её
+        // с выключенным флагом и прошёл бы «на ничего».
+        _flags.On = true;
+        _sut.Invalidate(User);
+        _sut.GetSummaries(User, null, null).Select(n => n.Title).Should().Contain("Страница вики");
+    }
+
     // ─── Помощники ─────────────────────────────────────────────────────────
 
     private void InitWiki()
@@ -315,6 +348,15 @@ public class NotesWikiSourceTests : IDisposable
     {
         public Task BroadcastNotesChangedAsync(string userId, string action, string noteId) => Task.CompletedTask;
         public Task BroadcastTaskChangedAsync(string userId, string action, string taskId) => Task.CompletedTask;
+    }
+
+    // Гейт llm-wiki с управляемым состоянием: семантика — ровно SourcesFor-проверка
+    // (один ключ, один владелец). Прочие флаги — всегда false, как у FeatureFlagService
+    // без override.
+    private sealed class WikiFlagGate : ClaudeHomeServer.Services.Composition.IFeatureFlagGate
+    {
+        public bool On { get; set; } = true;
+        public bool IsEnabled(string userId, string key) => On && key == FeatureFlagKeys.LlmWiki;
     }
 
     private sealed class NoopKnowledgeIndex : IKnowledgeIndex

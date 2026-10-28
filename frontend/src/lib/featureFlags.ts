@@ -33,6 +33,10 @@ export const FLAGS = {
   // «Индикатор prompt cache и перенос в новый чат»: регистрация (шаг B-1), фича обвязывается
   // следующими шагами. Dark launch, выключено по умолчанию.
   promptCache: 'prompt-cache',
+  // LLM-wiki (ADR-035/036): база знаний, которую ведёт Хранитель. Флаг прячет UI (вкладку
+  // «Вики») и источник wiki от агентов; гейт записи в заведённую вику от него не зависит.
+  // Dark launch, выключено по умолчанию. Ключ дублирует бэковый FeatureFlagCatalog.
+  llmWiki: 'llm-wiki',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

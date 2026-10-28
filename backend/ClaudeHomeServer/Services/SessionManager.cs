@@ -2534,6 +2534,23 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         return entry.Info;
     }
 
+    // Пометка человека для отбора чатов в вики (ADR-035 §12а): WikiMarks.Important —
+    // разбирается всегда, WikiMarks.Skip — не разбирается никогда (ставится и откатом по
+    // источнику, §12г мера 5: иначе следующая ночь вернёт откатанное). null — снять пометку.
+    // UpdatedAt не трогаем по той же причине, что в SetExpiry: пометка — настройка чата,
+    // а не активность (по UpdatedAt идут сортировка и непрочитанность).
+    // Реализация шва ISessionDirectory (по нему зовёт вертикаль Notes — в SessionManager
+    // напрямую ей нельзя, ADR-014). false — неизвестная пометка (валидация на входе) или
+    // сессии нет; отказовый вызов стор не переписывает.
+    public bool SetWikiMark(string sessionId, string? mark)
+    {
+        if (mark is not null && mark != WikiMarks.Important && mark != WikiMarks.Skip) return false;
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return false;
+        entry.Info.WikiMark = mark;
+        SaveSessions();
+        return true;
+    }
+
     // Сменить состав контекста чата (фича chat-context): идемпотентная замена списка
     // материалов целиком — «добавить материал» это PUT со старым составом + новая запись.
     // Валидацию записей делает контроллер ДО этого вызова; сюда приезжают уже чистые

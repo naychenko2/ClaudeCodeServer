@@ -9,7 +9,7 @@ namespace ClaudeHomeServer.Tests.Services;
 
 // Клиент /state арбитра GPU (LocalEngineStateClient): кэш 1 с и single-flight, отказ —
 // последний удачный снимок с reachable:false, часы арбитра пересчитываются на нашу ось,
-// тело/причины/аренды — недоверенные (потолки, обрезка lease, обнуление поля неверного типа).
+// тело/причины/аренды — недоверенные (потолки, обрезка всех причин на входе, обнуление поля неверного типа).
 // Заглушка арбитра — HttpListener, как в ConsumersHookTests.
 public class LocalEngineStateClientTests
 {
@@ -260,14 +260,18 @@ public class LocalEngineStateClientTests
         Assert.Equal(0.4, s.LastYieldS);
     }
 
-    // c3: текст `lease:` (и в причинах, и в арендах) — недоверенный, обрезается до 64 символов;
-    // `gpu:`-причина арбитром уже ограничена и остаётся как есть.
+    // B6 (замечание 2 финала): ВСЕ причины режутся на входе единым правилом: «lease:» (и текст
+    // аренды) — по-прежнему 64; «gpu:» (pid + командная строка) и «comfy:» (id) — общим потолком 80,
+    // командная строка из «gpu:» не уходит в UI админа целиком. Мутация — вернуть старую выборочную
+    // обрезку (только «lease:»): Reasons[1] останется целой строкой, тест краснеет на Equal(80, …).
     [Fact]
-    public async Task LeaseText_TruncatedTo64_OtherReasonsKept()
+    public async Task LongReasons_AllTruncatedAtEntry_Lease64_GpuComfy80()
     {
         var longLease = new string('x', 500);
         var gpuReason = "gpu:1234:/usr/bin/python some --long cmd " + new string('y', 100);
-        var body = "{\"bonsai\":\"yielded\",\"reasons\":[\"lease:" + longLease + "\",\"" + gpuReason + "\"]," +
+        var comfyReason = "comfy:" + new string('c', 200);
+        var body = "{\"bonsai\":\"yielded\",\"reasons\":[\"lease:" + longLease + "\",\"" + gpuReason +
+            "\",\"" + comfyReason + "\"]," +
             "\"leases\":{\"a\":{\"reason\":\"" + new string('r', 500) + "\",\"left_s\":120.5}}," +
             "\"ts\":1700000000,\"since\":1699999990}";
         using var stub = new Stub(_ => (200, body, 0));
@@ -276,9 +280,28 @@ public class LocalEngineStateClientTests
         Assert.NotNull(s);
         Assert.Equal(64, s.Reasons![0].Length);
         Assert.StartsWith("lease:", s.Reasons[0]);
-        Assert.Equal(gpuReason, s.Reasons[1]);
+        Assert.Equal(80, s.Reasons[1].Length);
+        Assert.StartsWith("gpu:1234:/usr/bin/python", s.Reasons[1]);
+        Assert.Equal(80, s.Reasons[2].Length);
+        Assert.StartsWith("comfy:", s.Reasons[2]);
         Assert.Equal(64, s.Leases![0].Reason!.Length);
         Assert.Equal(120.5, s.Leases[0].LeftS);
+    }
+
+    // Короткие причины (как их отдаёт живой арбитр: «gpu:<pid>:<cmd≤60>», «comfy:<id≤8>») не меняются —
+    // потолок не трогает то, что и так в пределах.
+    [Fact]
+    public async Task ShortReasons_UnderCaps_Unchanged()
+    {
+        var body = "{\"bonsai\":\"yielded\",\"reasons\":[\"gpu:4321:/usr/bin/python serve.py --port 8080\"," +
+            "\"comfy:1a2b3c4d\",\"lease:ok\"],\"ts\":1700000000,\"since\":1699999990}";
+        using var stub = new Stub(_ => (200, body, 0));
+        var s = await ClientFor(stub).GetAsync(Engine);
+
+        Assert.NotNull(s);
+        Assert.Equal(
+            ["gpu:4321:/usr/bin/python serve.py --port 8080", "comfy:1a2b3c4d", "lease:ok"],
+            s.Reasons);
     }
 
     // Тело 100 КБ — отказ без исключения; до первого успеха — reachable:false с null-полями.

@@ -9,8 +9,9 @@ namespace ClaudeHomeServer.Services.Llm;
 //
 // Ответ арбитра — недоверенный (разрез c4b4c1cc §2, ADR-029):
 //   • тело больше 64 КБ — отказ без исключения, хвост не читается (тело — поток);
-//   • не больше 32 причин и 32 аренд; текст `lease:` — произвольная строка из POST /lease
-//     от любого в сети, обрезается до 64 символов;
+//   • не больше 32 причин и 32 аренд; каждая причина — недоверенный текст на входе и
+//     обрезается: `lease:` (произвольная строка из POST /lease от любого в сети) — до 64 символов,
+//     `gpu:` (pid + командная строка процесса) и `comfy:` (id задачи) — общим потолком 80;
 //   • неверный тип поля обнуляет только это поле (элемент неверного типа в массиве пропускается);
 //   • неизвестное значение `bonsai` → `unknown`; `mode` вне exclusive/shared → null;
 //   • часы Video и CCS расходятся: возраст состояния меряется часами арбитра (ts − since) и
@@ -51,7 +52,8 @@ public sealed class LocalEngineStateClient : IEngineArbiterStateReader
     private const int RequestTimeoutMs = 800;
     private const int MaxBodyBytes = 64 * 1024;
     private const int MaxItems = 32;
-    private const int MaxUntrustedLen = 64;
+    private const int MaxUntrustedLen = 64;  // текст «lease:» — произвольная строка из сети
+    private const int MaxReasonLen = 80;     // прочие причины: «gpu:» pid+командная строка, «comfy:» id
 
     private static readonly string[] BonsaiStates =
         [EngineArbiterSnapshot.StateReady, EngineArbiterSnapshot.StateYielded,
@@ -231,9 +233,9 @@ public sealed class LocalEngineStateClient : IEngineArbiterStateReader
         {
             if (list.Count >= MaxItems) break;
             if (item.ValueKind != JsonValueKind.String) continue;
-            var s = item.GetString()!;
-            // «lease:<текст>» — текст прислал аноним из сети: строка целиком в потолок 64.
-            list.Add(s.StartsWith("lease:", StringComparison.Ordinal) ? Truncate(s) : s);
+            // Все причины — недоверенный текст на входе: «lease:» (строка из сети) — в потолок 64,
+            // «gpu:»/«comfy:» и всё без префикса — общим потолком 80 (командная строка не пойдёт в UI).
+            list.Add(TruncateReason(item.GetString()!));
         }
         return list;
     }
@@ -246,15 +248,20 @@ public sealed class LocalEngineStateClient : IEngineArbiterStateReader
         {
             if (list.Count >= MaxItems) break;
             if (prop.Value.ValueKind != JsonValueKind.Object) continue;
+            // Текст аренды — та же произвольная строка из сети: потолок 64, как у «lease:».
             var reason = prop.Value.TryGetProperty("reason", out var r) && r.ValueKind == JsonValueKind.String
-                ? Truncate(r.GetString()!)
+                ? Truncate(r.GetString()!, MaxUntrustedLen)
                 : null;
             list.Add(new EngineArbiterLease(reason, GetDouble(prop.Value, "left_s")));
         }
         return list;
     }
 
-    private static string Truncate(string s) => s.Length <= MaxUntrustedLen ? s : s[..MaxUntrustedLen];
+    // Единое правило на входе: «lease:» — в более строгий потолок 64, всё остальное — общий потолок 80.
+    private static string TruncateReason(string s) =>
+        s.StartsWith("lease:", StringComparison.Ordinal) ? Truncate(s, MaxUntrustedLen) : Truncate(s, MaxReasonLen);
+
+    private static string Truncate(string s, int maxLen) => s.Length <= maxLen ? s : s[..maxLen];
 
     private static double? GetDouble(JsonElement o, string name) =>
         o.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out var d)

@@ -63,10 +63,27 @@ public static class WikiKeeperPrompts
     /// Проход A: утверждения с дословными цитатами из выдержки источника (ADR-035 §12б, п. 6).
     /// sectionIndex — каталог _index раздела назначения (модель видит только его и разделы
     /// выше по цепочке, ADR-036 §3); existingPages — текущий текст целевых страниц, чтобы
-    /// модель не повторяла то, что уже лежит на странице.
+    /// модель не повторяла то, что уже лежит на странице. minQuoteLength/maxQuoteLength —
+    /// контракт длины цитаты в символах (вызывающий передаёт WikiPage.MinQuoteLength/
+    /// MaxQuoteLength: вертикаль Prompts зависит только от Core и константы не видит);
+    /// значения должны быть положительными, min не больше max — иначе ArgumentException.
     /// </summary>
     public static string Claims(
-        string sourceText, string sectionIndex, string nonce, string? existingPages = null)
+        string sourceText, string sectionIndex, string nonce,
+        int minQuoteLength, int maxQuoteLength, string? existingPages = null)
+    {
+        if (minQuoteLength <= 0)
+            throw new ArgumentOutOfRangeException(nameof(minQuoteLength), "длина цитаты должна быть положительной");
+        if (maxQuoteLength <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxQuoteLength), "длина цитаты должна быть положительной");
+        if (minQuoteLength > maxQuoteLength)
+            throw new ArgumentException("minQuoteLength больше maxQuoteLength", nameof(minQuoteLength));
+        return ClaimsText(sourceText, sectionIndex, nonce, minQuoteLength, maxQuoteLength, existingPages);
+    }
+
+    private static string ClaimsText(
+        string sourceText, string sectionIndex, string nonce,
+        int minQuoteLength, int maxQuoteLength, string? existingPages)
         // $$ — raw-строка с литеральными скобками JSON: интерполяция здесь {{expr}},
         // одиночные { } — текст (схемы ответов в промпте именно такие).
         => $$"""
@@ -78,7 +95,8 @@ public static class WikiKeeperPrompts
             A claim is durable knowledge produced in this conversation: a decision made, a fact
             established, a term defined, a conclusion reached. Every claim must carry a verbatim
             quote from the source fragment that proves it — copy the quote exactly as written,
-            never paraphrase inside a quote.
+            never paraphrase inside a quote. The length of a quote is between {{minQuoteLength}}
+            and {{maxQuoteLength}} characters: a shorter or a longer quote is rejected by the code.
 
             WHAT YOU MUST SKIP
             - statuses, deadlines, and "what I am doing now";

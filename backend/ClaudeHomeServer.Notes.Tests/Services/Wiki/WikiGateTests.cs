@@ -98,7 +98,7 @@ public class WikiGateTests
             ## Открытые вопросы
             - Когда поднимать лимит?
 
-            [^s1]: session:abc123#m3-7 — «Бюджет на GPU — до 15 тыс. ₽ в месяц»
+            [^s1]: [[Карточка]] — «Бюджет на GPU — до 15 тыс. ₽ в месяц»
             """;
         var first = WikiPage.Parse(text);
         first.Errors.Should().BeEmpty();
@@ -332,8 +332,7 @@ public class WikiGateTests
     public void Гейт_ссылкаВКодеНеСсылка()
     {
         var page = Page(swodka: "- Пример `[[Проекты/p2/Сосед]]` в коде — не ссылка.[^s1]", footnotes: Foot);
-        var neighbor = Page(title: "Сосед", dir: "Проекты/p2/");
-        NoViolations([D(P1Dir + "Тет.md", page), D("Проекты/p2/Сосед.md", neighbor), CardDraft]);
+        NoViolations([D(P1Dir + "Тет.md", page), CardDraft]);
     }
 
     // —— Гейт: запись в '_*', запись в неписемый раздел ——
@@ -370,10 +369,10 @@ public class WikiGateTests
     public void Гейт_originИзПеречня_проходит() =>
         NoViolations([D(P1Dir + "Источники/Карточка.md", Card("Карточка", origin: "memory"))]);
 
-    // —— Сноска на чат: session:{id}#m{a}-{b} ——
+    // —— Ссылка на чат: session:{id}#m{a}-{b} живёт в ref карточки ——
 
     [Fact]
-    public void СноскаНаЧат_разбираетсяVKортеж()
+    public void СсылкаНаЧат_разбираетсяВКортеж()
     {
         WikiPage.TryParseSessionRef("session:abc123#m3-7", out var id, out var from, out var to).Should().BeTrue();
         id.Should().Be("abc123");
@@ -382,18 +381,115 @@ public class WikiGateTests
         WikiPage.TryParseSessionRef("session:abc#m-x", out _, out _, out _).Should().BeFalse();
     }
 
+    [Theory]
+    [InlineData("session:abc#m99999999999999999999-1")]
+    [InlineData("session:abc#m1-99999999999999999999")]
+    [InlineData("session:abc#m0-5")]
+    [InlineData("session:abc#m7-3")]
+    [InlineData("session:abc#3-7")]
+    [InlineData("session:../../x#m3-7")]
+    [InlineData("session:a b#m3-7")]
+    [InlineData("session:abc#m3-7\n")]
+    public void СсылкаНаЧат_строгийРазбор_неБросаетИОтбивает(string text) =>
+        WikiPage.TryParseSessionRef(text, out _, out _, out _).Should().BeFalse();
+
     [Fact]
-    public void СноскаНаЧат_разбираетсяВМоделиСтраницы()
+    public void СсылкаНаЧат_границаОдинаковыхНомеров_проходит() =>
+        WikiPage.TryParseSessionRef("session:abc#m5-5", out _, out _, out _).Should().BeTrue();
+
+    [Fact]
+    public void Гейт_сноскаПрямоНаИсточник_отбита()
     {
         var text = Page(swodka: Good, footnotes: "[^s1]: session:abc123#m3-7 — «" + Quote + "»");
-        var r = WikiPage.Parse(text);
-        r.Errors.Should().BeEmpty();
-        var target = r.Model!.Footnotes[0].Target;
-        target.IsLink.Should().BeFalse();
-        WikiPage.TryParseSessionRef(target.Text, out var id, out var from, out var to).Should().BeTrue();
-        id.Should().Be("abc123");
-        from.Should().Be(3);
-        to.Should().Be(7);
+        Check([D(P1Dir + "Тет.md", text)]).Should().Contain(e => e.Contains("не '[[Карточка]]'"));
+    }
+
+    [Fact]
+    public void Гейт_идентификаторИсточникаСПутями_отбит()
+    {
+        var text = Page(swodka: Good, footnotes: "[^s1]: session:../../../data/sessions/x/history.json — «" + Quote + "»");
+        Check([D(P1Dir + "Тет.md", text)]).Should().NotBeEmpty();
+    }
+
+    [Fact]
+    public void Гейт_refКарточкиSessionВКорректномФормате_проходит() =>
+        NoViolations([D(P1Dir + "Источники/Карточка.md", SessionCard("session:abc123#m3-7"))]);
+
+    [Theory]
+    [InlineData("session:abc#m99999999999999999999-1")]
+    [InlineData("session:abc#m7-3")]
+    [InlineData("session:../../x#m3-7")]
+    public void Гейт_refКарточкиSessionВБитомФормате_отбит(string reference) =>
+        Check([D(P1Dir + "Источники/Карточка.md", SessionCard(reference))])
+            .Should().Contain(e => e.Contains("origin: session"));
+
+    private static string SessionCard(string reference) =>
+        Fm("source", $"origin: session\nref: {reference}\nhash: h1\ncaptured: 2026-10-28\n") + "\n\n# Карточка\n";
+
+    // —— Дубли: заголовок и алиасы — одно пространство имён ——
+
+    [Fact]
+    public void Гейт_алиасСовпадаетСЗаголовкомДругойСтраницы_отбит() =>
+        Check([D(P1Dir + "Отчёт.md", Page(title: "Отчёт за квартал")),
+               D(P1Dir + "Другая.md", Page(title: "Другая", fmExtra: "aliases: [Отчёт за квартал]\n"))])
+            .Should().Contain(e => e.Contains("дубль"));
+
+    [Fact]
+    public void Гейт_алиасСовпадаетСАлиасомДругойСтраницы_отбит() =>
+        Check([D(P1Dir + "А.md", Page(title: "А", fmExtra: "aliases: [Общее имя]\n")),
+               D(P1Dir + "Б.md", Page(title: "Б", fmExtra: "aliases: [общее имя]\n"))])
+            .Should().Contain(e => e.Contains("дубль"));
+
+    [Fact]
+    public void Гейт_дубльЗаголовкаВНормализацииNfcNfd_отбит() =>
+        Check([D(P1Dir + "А.md", Page(title: "Café")),
+               D(P1Dir + "Б.md", Page(title: "Cafe\u0301"))])
+            .Should().Contain(e => e.Contains("дубль"));
+
+    // —— Цепочка вверх: только spheres/* и common ——
+
+    [Theory]
+    [InlineData("projects/p2")]
+    [InlineData("personal")]
+    public void Гейт_upChainШиреПоложенного_отбит(string bad)
+    {
+        var page = Page(swodka: "- См. [[Проекты/p2/Сосед]].[^s1]", footnotes: Foot);
+        var neighbor = Page(title: "Сосед", dir: "Проекты/p2/");
+        Check([D(P1Dir + "Тет.md", page), D("Проекты/p2/Сосед.md", neighbor), CardDraft], P1, [bad])
+            .Should().Contain(e => e.Contains("цепочка вверх"));
+    }
+
+    [Fact]
+    public void Гейт_upChainПовторРаздела_отбит() =>
+        Check([D(P1Dir + "Тет.md", Page())], P1, ["common", "common"])
+            .Should().Contain(e => e.Contains("повторён"));
+
+    [Fact]
+    public void Гейт_upChainСферыИОбщее_проходит() =>
+        NoViolations([D(P1Dir + "Тет.md", Page())], P1, ["spheres/s1", "common"]);
+
+    // —— Fail-closed: путь вне раздела и страница вне контракта state ——
+
+    [Fact]
+    public void Гейт_путьВнеРазделов_отбит() =>
+        Check([D("Общее/../Личное/Грязь.md", Page(swodka: "- [ ] задача"))])
+            .Should().Contain(e => e.Contains("не принадлежит ни одному разделу"));
+
+    [Fact]
+    public void Гейт_страницаЧужогоРазделаВнеЦепочки_отбита() =>
+        Check([D(P1Dir + "Тет.md", Page()), D("Проекты/p2/Сосед.md", Page(title: "Сосед"))])
+            .Should().Contain(e => e.Contains("вне раздела"));
+
+    // —— Сноска обязательна в «Хронологии» и «Истории» ——
+
+    [Theory]
+    [InlineData("Хронология")]
+    [InlineData("История")]
+    public void Гейт_утверждениеБезСноскиВХронологииИИстории_отбито(string section)
+    {
+        var text = Page(swodka: Good, footnotes: Foot).Replace($"## {section}\n", $"## {section}\n- Бюджет GPU вырос до 20 тыс. ₽.\n");
+        Check([D(P1Dir + "Тет.md", text), CardDraft])
+            .Should().Contain(e => e.Contains($"утверждение в '{section}' без сноски"));
     }
 
     // —— Номера сносок перенумеровывает код ——

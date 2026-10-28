@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -7,7 +8,7 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // Секции обычной страницы: Сводка → Хронология → Противоречия → История; у chronicle:
 // «О чём», «Что решили», «Что выяснили», «Открытые вопросы» (ADR-035, решение 12б).
 // Карточка источника (type: source) — данные, не рассказ: секций не имеет.
-// Сноска: [^sN]: [[Карточка]] — «цитата» или [^sN]: session:{id}#m{a}-{b} — «цитата».
+// Сноска: [^sN]: [[Карточка источника]] — «цитата»; диапазон session:{id}#m{a}-{b} — в ref карточки.
 // Номера сносок перенумеровывает код: при разоре определения получают s1…sN по порядку
 // в файле, ссылки в тексте переписываются к ним; рендер выдаёт канонические номера.
 // Пустые строки не несут смысла и в модель не попадают. Чистые функции без I/O.
@@ -20,10 +21,11 @@ public sealed class WikiPage
 
     // Секции, чьё утверждение обязано заканчиваться сноской (ADR-035, решение 3:
     // утверждение — абзац или пункт «Сводки» и «Противоречий»; у хроники — решения и
-    // находки, решение 12б). «О чём» — строка-описание, «Открытые вопросы» — вопросы,
-    // «История» несёт перенесённые дословно утверждения с их прежними сносками.
+    // находки, решение 12б). «Хронология» принимает утверждения по append (решение 12г),
+    // «История» несёт перенесённые утверждения — сноска обязательна и там. «О чём» —
+    // строка-описание, «Открытые вопросы» — вопросы.
     public static readonly IReadOnlyList<string> AssertionSectionNames =
-        ["Сводка", "Противоречия", "Что решили", "Что выяснили"];
+        ["Сводка", "Хронология", "Противоречия", "История", "Что решили", "Что выяснили"];
 
     // Контракт цитаты: 8–300 символов (ADR-035, решение 3). Длину проверяет WikiGate.
     public const int MinQuoteLength = 8;
@@ -31,12 +33,11 @@ public sealed class WikiPage
 
     private static readonly Regex TitleRx = new(@"^# (.+)$", RegexOptions.CultureInvariant);
     private static readonly Regex SectionRx = new(@"^## (.+)$", RegexOptions.CultureInvariant);
-    // Определение сноски: [^id]: <цель> — «цитата». Цель — [[ссылка]] или ссылка
-    // закрытого формата (session:…, url:… и прочие, WikiGate.OriginValues).
+    // Определение сноски: [^id]: <цель> — «цитата». Цель — только [[Карточка]].
     private static readonly Regex FootnoteDefRx = new(@"^\[\^([^]\r\n]+)\]: (.+?) — «(.*)»$", RegexOptions.CultureInvariant);
     private static readonly Regex FootnoteRefRx = new(@"\[\^([^]\r\n]+)\]", RegexOptions.CultureInvariant);
     private static readonly Regex LinkRx = new(@"\[\[([^]\r\n]+)\]\]", RegexOptions.CultureInvariant);
-    private static readonly Regex SessionRefRx = new(@"^session:([A-Za-z0-9_-]+)#m(\d+)-(\d+)$", RegexOptions.CultureInvariant);
+    private static readonly Regex SessionRefRx = new(@"^session:([A-Za-z0-9_-]+)#m([0-9]+)-([0-9]+)\z", RegexOptions.CultureInvariant);
 
     public required string Title { get; init; }
     public required WikiFrontmatter Frontmatter { get; init; }
@@ -103,7 +104,7 @@ public sealed class WikiPage
                 var target = ParseTarget(def.Groups[2].Value);
                 if (target is null)
                 {
-                    errors.Add($"сноска '[^{id}]': цель не '[[Карточка]]' и не ссылка источника");
+                    errors.Add($"сноска '[^{id}]': цель не '[[Карточка]]' (прямая ссылка источника — только в ref карточки)");
                     continue;
                 }
                 definitions.Add((id, target.Value, def.Groups[3].Value));
@@ -252,9 +253,13 @@ public sealed class WikiPage
         var m = SessionRefRx.Match(text);
         if (!m.Success)
             return false;
+        if (!int.TryParse(m.Groups[2].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var a) ||
+            !int.TryParse(m.Groups[3].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var b) ||
+            a < 1 || a > b)
+            return false;
         sessionId = m.Groups[1].Value;
-        from = int.Parse(m.Groups[2].Value);
-        to = int.Parse(m.Groups[3].Value);
+        from = a;
+        to = b;
         return true;
     }
 
@@ -265,8 +270,7 @@ public sealed class WikiPage
             var inner = text[2..^2];
             return inner.Length > 0 ? new Target(true, inner) : null;
         }
-        if (WikiGate.IsRefSyntax(text))
-            return new Target(false, text);
+        // Прямая ссылка на источник — не цель сноски: она живёт в ref карточки.
         return null;
     }
 

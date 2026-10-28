@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace ClaudeHomeServer.Services.Notes.Wiki;
@@ -22,9 +23,6 @@ public static class WikiGate
     public static readonly IReadOnlyList<string> OriginValues =
         [OriginNote, OriginFile, OriginSession, OriginUrl, OriginTask, OriginDossier, OriginMemory];
 
-    internal static bool IsRefSyntax(string text) =>
-        OriginValues.Any(o => text.StartsWith(o + ":", StringComparison.Ordinal));
-
     // Задача-чекбокс на странице вики запрещена формой страницы (ADR-035, решение 2).
     private static readonly Regex CheckboxRx = new(@"^\s*[-*] \[[ xX]\]", RegexOptions.CultureInvariant);
     private static readonly Regex FootnoteRefRx = new(@"\[\^([^]\r\n]+)\]", RegexOptions.CultureInvariant);
@@ -33,14 +31,18 @@ public static class WikiGate
     public readonly record struct Draft(string Path, string Content);
 
     /// <summary>Проверяет состояние после изменения перед записью в раздел sectionKey.
+    /// Контракт state: страницы раздела sectionKey плюс страницы разделов цепочки upChain;
+    /// путь, не принадлежащий вики, и страница вне этих разделов — нарушение (fail-closed).
     /// upChain — цепочка «вверх» от раздела (WikiSections.UpChain): по ней резолвятся
-    /// ссылки и проверяется уникальность owns. Пустой список — нарушений нет.</summary>
+    /// ссылки и проверяется уникальность owns; гейт сам сверяет её с ADR-036, решение 4:
+    /// допустимы только spheres/* и common, без повторов. Пустой список — нарушений нет.</summary>
     public static IReadOnlyList<string> Check(
         IReadOnlyList<Draft> state,
         string sectionKey,
-        IReadOnlyList<string> upChain)
+        IReadOnlyList<string> rawUpChain)
     {
         var violations = new List<string>();
+        var upChain = ValidateUpChain(rawUpChain, violations);
         var allowed = new HashSet<string>(StringComparer.Ordinal) { sectionKey };
         allowed.UnionWith(upChain);
 
@@ -56,7 +58,10 @@ public static class WikiGate
         {
             var section = WikiSections.Parse(draft.Path);
             if (section is null)
-                continue; // неразобранный путь — не раздел вики, здесь не проверяется
+            {
+                violations.Add($"{draft.Path}: путь не принадлежит ни одному разделу вики");
+                continue;
+            }
             var parsed = WikiPage.Parse(draft.Content);
             if (section == sectionKey)
             {
@@ -88,12 +93,31 @@ public static class WikiGate
                 if (allowed.Contains(section))
                     context.Add((section, parsed.Model));
             }
+            if (section != sectionKey && !allowed.Contains(section))
+                violations.Add($"{draft.Path}: страница раздела '{section}' вне раздела '{sectionKey}' и его цепочки вверх");
         }
 
         CheckPageForm(target, sectionKey, upChain, allSections, violations);
         CheckUniqueness(target, context, violations);
         CheckLinks(target, sectionKey, upChain, allSections, violations);
         return violations;
+    }
+
+    // «Вверх» — только сферы и общее, без повторов (ADR-036, решение 4): набор видимых
+    // разделов или проект в цепочке — ошибка вызывающего, а не право на ссылку вбок.
+    private static List<string> ValidateUpChain(IReadOnlyList<string> raw, List<string> violations)
+    {
+        var chain = new List<string>();
+        foreach (var key in raw)
+        {
+            if (key != WikiSections.Common && !WikiSections.TrySphereId(key, out _))
+                violations.Add($"цепочка вверх: '{key}' недопустим, вверх идут только spheres/* и {WikiSections.Common}");
+            else if (chain.Contains(key))
+                violations.Add($"цепочка вверх: '{key}' повторён");
+            else
+                chain.Add(key);
+        }
+        return chain;
     }
 
     // Форма страницы: чекбоксы, утверждение без сноски, сноска не на карточку,
@@ -118,6 +142,10 @@ public static class WikiGate
             {
                 if (page.Frontmatter.Origin is not { } origin || !OriginValues.Contains(origin))
                     violations.Add($"{draft.Path}: origin '{page.Frontmatter.Origin}' вне закрытого перечня {string.Join(", ", OriginValues)}");
+                if (page.Frontmatter.Origin == OriginSession &&
+                    (page.Frontmatter.Ref is not { } sessionRef ||
+                     !WikiPage.TryParseSessionRef(sessionRef, out _, out _, out _)))
+                    violations.Add($"{draft.Path}: ref карточки origin: session — не 'session:{{id}}#m{{a}}-{{b}}': '{page.Frontmatter.Ref}'");
                 continue; // карточка — данные: утверждений и цитат у неё нет
             }
 
@@ -140,8 +168,6 @@ public static class WikiGate
             {
                 if (footnote.Quote.Length < WikiPage.MinQuoteLength || footnote.Quote.Length > WikiPage.MaxQuoteLength)
                     violations.Add($"{draft.Path}: цитата {footnote.Quote.Length} символов, контракт {WikiPage.MinQuoteLength}–{WikiPage.MaxQuoteLength}");
-                if (!footnote.Target.IsLink)
-                    continue; // прямая ссылка источника (session:… и прочие) — это карточка в своём поле ref
                 var card = FindPage(footnote.Target.Text, reach, allSections);
                 if (card is null)
                     violations.Add($"{draft.Path}: сноска на неизвестную карточку '[[{footnote.Target.Text}]]'");
@@ -158,13 +184,13 @@ public static class WikiGate
         List<(string Section, WikiPage Page)> context,
         List<string> violations)
     {
-        var titles = new Dictionary<string, string>(StringComparer.Ordinal);
-        var aliases = new Dictionary<string, string>(StringComparer.Ordinal);
+        // Заголовки и алиасы — одно пространство имён: по нему резолвится ссылка.
+        var names = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var (draft, page) in target)
         {
-            AddUnique(titles, Norm(page.Title), draft.Path, "заголовок", violations);
+            AddUnique(names, Norm(page.Title), draft.Path, "заголовок", violations);
             foreach (var alias in page.Frontmatter.Aliases)
-                AddUnique(aliases, Norm(alias), draft.Path, "алиас", violations);
+                AddUnique(names, Norm(alias), draft.Path, "алиас", violations);
         }
 
         var owns = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -186,7 +212,10 @@ public static class WikiGate
         if (key.Length == 0)
             return;
         if (taken.TryGetValue(key, out var first))
-            violations.Add($"{path}: дубль {what} '{key}' — уже у {first}");
+        {
+            if (first != path)
+                violations.Add($"{path}: дубль {what} '{key}' — уже у {first}");
+        }
         else
             taken[key] = path;
     }
@@ -251,5 +280,5 @@ public static class WikiGate
 
     // Нормализация для сравнения заголовков/алиасов/owns (ADR-036, решение 5:
     // «заголовок или aliases после нормализации»): регистр и обрамляющие пробелы.
-    private static string Norm(string text) => text.Trim().ToLowerInvariant();
+    private static string Norm(string text) => text.Trim().Normalize(NormalizationForm.FormC).ToLowerInvariant();
 }

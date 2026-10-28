@@ -340,6 +340,39 @@ export function resolveCardsFromHistory(serverItems: ChatItem[], prevItems: Chat
   return changed ? next : null;
 }
 
+// Завершён ли ход: последний содержательный элемент серверной истории — result или error.
+// fal_cost дописывается асинхронно уже после конца хода, на признак не влияет. Пока ход
+// идёт, хвостом истории всегда что-то из хода (user_message пишется в аккумулятор сразу
+// при отправке) — ложного «завершён» это не даёт. Перенесено из useSession.ts: на этом
+// признаке держится и подмена ленты (adoptServerHistory ниже) — точка правды одна.
+export function historyTurnFinished(items: ChatItem[]): boolean {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const kind = items[i].kind;
+    if (kind === 'fal_cost') continue;
+    return kind === 'result' || kind === 'error';
+  }
+  return false;
+}
+
+// Подмена ленты серверной историей: сохранить в новой ленте нерешённые карточки
+// permission_request из прежней, для которых в истории нет пары по requestId.
+// Хаб реплеит их при JoinSession (SessionHub), но в history.json не пишет (их нет в
+// PERSISTED_KINDS) — без переноса первая же подмена уносит карточку с кнопками, а CLI
+// ждёт ответа до таймаута (дефект «карточка разрешения пропадает после F5»).
+// Перенос только пока ход в истории не кончен: после result/error выжившая карточка —
+// зомби, отвечать ею уже нечем. Решённые не переносим: вердикт живёт только в живой
+// ленте, пары в истории нет — «решённая» карточка без ответа показала бы ложное «отвечено».
+// Остаточный риск прежний: середина хода, ответ пришёл с другого устройства,
+// interaction_resolved прошёл мимо — карточка висит до конца хода.
+export function adoptServerHistory(serverItems: ChatItem[], prevItems: ChatItem[]): ChatItem[] {
+  if (historyTurnFinished(serverItems)) return serverItems;
+  const known = new Set<string>();
+  for (const it of serverItems) if (it.kind === 'permission_request') known.add(it.requestId);
+  const carry = prevItems.filter(it =>
+    it.kind === 'permission_request' && !it.resolved && !known.has(it.requestId));
+  return carry.length ? [...serverItems, ...carry] : serverItems;
+}
+
 // Модель последнего session_started этого чата — точка сравнения для пометки «Ответила …»
 // (провалившаяся попытка перед фолбэк-подменой всегда успевает прислать свой session_started)
 function lastKnownModel(items: ChatItem[]): string | null {

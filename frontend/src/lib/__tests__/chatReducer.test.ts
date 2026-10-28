@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { ChatItem, ServerMessage, TeamEscalationKind, SessionTeamImplement } from '../../types';
-import { applyServerMessage, normalizeHistory, serverHistoryNewer, initialChatState, consumeComposerRestore, teamImplementSnapshot, retryableInterruptedIndex, type ChatState } from '../chatReducer';
+import { applyServerMessage, normalizeHistory, serverHistoryNewer, adoptServerHistory, historyTurnFinished, initialChatState, consumeComposerRestore, teamImplementSnapshot, retryableInterruptedIndex, type ChatState } from '../chatReducer';
 
 // --- Хелперы ---
 
@@ -1415,6 +1415,84 @@ describe('serverHistoryNewer', () => {
     const prev: ChatItem[] = [u('в'), { kind: 'interrupted' }, t('час')];
     const server: ChatItem[] = [u('в'), t('частичный ответ'), { kind: 'result', subtype: 'success', durationMs: 1, numTurns: 1 }];
     expect(serverHistoryNewer(server, prev)).toBe(true);
+  });
+});
+
+// --- adoptServerHistory: карточки разрешения переживают подмену ленты (F3-S3c) ---
+// permission_request хаб реплеит при JoinSession, но в history.json не пишет — без
+// переноса первая же подмена уносит карточку с кнопками (дефект «карточка разрешения
+// пропадает после F5»), CLI ждёт ответа до таймаута.
+
+describe('historyTurnFinished: конец хода в серверной истории', () => {
+  const u = (text: string): ChatItem => ({ kind: 'user_message', text });
+  const t = (text: string): ChatItem => ({ kind: 'text', text });
+  const res = (): ChatItem => ({ kind: 'result', subtype: 'success', durationMs: 1, numTurns: 1 });
+  const fal = (): ChatItem => ({ kind: 'fal_cost', requestId: 'r1', costUsd: 0.01 });
+
+  it('идущий ход (хвост — текст) → false', () => {
+    expect(historyTurnFinished([u('делай'), t('работаю…')])).toBe(false);
+  });
+
+  it('result в хвосте → true; fal_cost после него — не мешает', () => {
+    expect(historyTurnFinished([u('делай'), t('готово'), res()])).toBe(true);
+    expect(historyTurnFinished([u('делай'), t('готово'), res(), fal()])).toBe(true);
+  });
+
+  it('error в хвосте → true; fal_cost посреди хвоста хода — не «конец»', () => {
+    expect(historyTurnFinished([u('делай'), { kind: 'error', text: 'сорвалось' }])).toBe(true);
+    expect(historyTurnFinished([u('делай'), t('работаю…'), fal()])).toBe(false);
+  });
+
+  it('пустая история → false', () => {
+    expect(historyTurnFinished([])).toBe(false);
+  });
+});
+
+describe('adoptServerHistory: перенос нерешённых карточек разрешения', () => {
+  const u = (text: string): ChatItem => ({ kind: 'user_message', text });
+  const t = (text: string): ChatItem => ({ kind: 'text', text });
+  const res = (): ChatItem => ({ kind: 'result', subtype: 'success', durationMs: 1, numTurns: 1 });
+  const perm = (requestId: string, resolved = false): ChatItem =>
+    ({ kind: 'permission_request', requestId, toolName: 'Bash', toolInput: { command: 'ls' }, resolved });
+
+  it('нерешённая карточка из prev, которой нет в server, дописана в конец результата', () => {
+    const server: ChatItem[] = [u('делай'), t('работаю…')];
+    const out = adoptServerHistory(server, [u('делай'), perm('r1')]);
+    expect(out.slice(0, 2)).toEqual(server);
+    expect(out.at(-1)).toMatchObject({ kind: 'permission_request', requestId: 'r1', resolved: false });
+  });
+
+  it('несколько карточек — переноссятся в порядке prev, чужие requestId не сливаются', () => {
+    const server: ChatItem[] = [u('делай'), t('работаю…')];
+    const prev: ChatItem[] = [u('делай'), perm('r1'), t('ещё'), perm('r2')];
+    const out = adoptServerHistory(server, prev);
+    expect(out.slice(2).map(i => (i as Extract<ChatItem, { kind: 'permission_request' }>).requestId))
+      .toEqual(['r1', 'r2']);
+  });
+
+  it('решённая карточка не переносится', () => {
+    const server: ChatItem[] = [u('делай'), t('работаю…')];
+    expect(adoptServerHistory(server, [u('делай'), perm('r1', true)])).toEqual(server);
+  });
+
+  it('ход в истории кончен (result в хвосте) — карточку не переносим: она зомби', () => {
+    const server: ChatItem[] = [u('делай'), t('готово'), res()];
+    expect(adoptServerHistory(server, [u('делай'), perm('r1')])).toEqual(server);
+  });
+
+  it('error в хвосте — тоже кончен, не переносим', () => {
+    const server: ChatItem[] = [u('делай'), { kind: 'error', text: 'сорвалось' }];
+    expect(adoptServerHistory(server, [u('делай'), perm('r1')])).toEqual(server);
+  });
+
+  it('карточка с тем же requestId уже в истории — второй не плодим', () => {
+    const server: ChatItem[] = [u('делай'), perm('r1')];
+    expect(adoptServerHistory(server, [u('делай'), perm('r1')])).toBe(server);
+  });
+
+  it('карточек в prev нет — возвращаем serverItems как есть (той же ссылкой)', () => {
+    const server: ChatItem[] = [u('делай'), t('работаю…')];
+    expect(adoptServerHistory(server, [u('делай')])).toBe(server);
   });
 });
 

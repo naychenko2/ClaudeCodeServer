@@ -5,7 +5,7 @@ import { setRecallManifest } from '../lib/recallManifest';
 import { requestWakeLock, releaseWakeLock } from '../lib/wakeLock';
 import { api } from '../lib/api';
 import { applyHistoryReply, cursorQuery, type HistoryCursor } from '../lib/historyTail';
-import { applyServerMessage, normalizeHistory, serverHistoryNewer, resolveCardsFromHistory, initialChatState, consumeComposerRestore, teamImplementSnapshot, turnAlreadyEnded, type ChatState, type PendingChatMessage, type ComposerRestore } from '../lib/chatReducer';
+import { applyServerMessage, normalizeHistory, serverHistoryNewer, resolveCardsFromHistory, adoptServerHistory, historyTurnFinished, initialChatState, consumeComposerRestore, teamImplementSnapshot, turnAlreadyEnded, type ChatState, type PendingChatMessage, type ComposerRestore } from '../lib/chatReducer';
 
 // --- Модульный персистентный стор ---
 // Состояние живёт на уровне модуля и переживает переключение между сессиями.
@@ -90,19 +90,6 @@ function loadHistoryOnce(sid: string, projectId?: string, fresh = false): Promis
 const normalizeFor = (sid: string, raw: unknown[]) =>
   normalizeHistory(raw, { deriveSpeakers: getState(sid).isGroup });
 
-// Ход завершён, если последний содержательный элемент истории — result или error.
-// fal_cost дописывается асинхронно уже после конца хода, на признак не влияет.
-// Пока ход идёт, хвостом истории всегда что-то из хода (user_message пишется в
-// аккумулятор сразу при отправке) — ложного «завершён» это не даёт.
-function historyTurnFinished(items: ChatItem[]): boolean {
-  for (let i = items.length - 1; i >= 0; i--) {
-    const kind = items[i].kind;
-    if (kind === 'fal_cost') continue;
-    return kind === 'result' || kind === 'error';
-  }
-  return false;
-}
-
 // Перезагрузка истории с сервера с применением, если она новее живой ленты
 // (сервер — источник истины, сверка — serverHistoryNewer). Заодно лечит залипший
 // isWaiting: у завершённого хвоста ход точно кончился, даже если событие result
@@ -113,7 +100,8 @@ async function reloadHistory(sid: string, projectId?: string, fresh = false) {
     const items = normalizeFor(sid, raw);
     setState(sid, prev => {
       if (serverHistoryNewer(items, prev.items))
-        return { ...prev, items, isWaiting: historyTurnFinished(items) ? false : prev.isWaiting };
+        // Карточки разрешения, реплеянные хабом, в истории нет — переносим (adoptServerHistory)
+        return { ...prev, items: adoptServerHistory(items, prev.items), isWaiting: historyTurnFinished(items) ? false : prev.isWaiting };
       // Ленту сервер не обгоняет, но в его истории может быть карточка, погашенная
       // ответом с другого устройства: событие interaction_resolved могло пройти мимо
       // (разрыв WS в момент ответа), а сверка длин такой ответ не видит — он элемента
@@ -354,7 +342,8 @@ function ensureHandler() {
                 // Разрыв — ровно тот случай, когда ответ с другого устройства прошёл мимо:
                 // историей не обгоняет (ответ элемента не добавляет), поэтому гасим точечно
                 items: serverHistoryNewer(items, prev.items)
-                  ? items
+                  // Карточки разрешения, реплеянные при повторном join, в истории нет — переносим
+                  ? adoptServerHistory(items, prev.items)
                   : (resolveCardsFromHistory(items, prev.items) ?? prev.items),
               }));
             }
@@ -468,7 +457,9 @@ async function joinAndLoadHistory(sid: string, projectId?: string) {
       // живые сообщения от стриминга (race condition при активном ходе).
       if (!serverHistoryNewer(items, prev.items)) return { ...prev, isHistoryLoading: false };
       return {
-        ...prev, items, isHistoryLoading: false,
+        // Реплей permission_request из JoinSession пришёл ДО истории — без переноса
+        // подмена унесла бы карточку (дефект «карточка разрешения пропадает после F5»)
+        ...prev, items: adoptServerHistory(items, prev.items), isHistoryLoading: false,
         isWaiting: historyTurnFinished(items) ? false : prev.isWaiting,
       };
     });
@@ -513,7 +504,8 @@ export function warmSession(sid: string, projectId?: string, isGroup?: boolean) 
       const items = normalizeFor(sid, raw);
       setState(sid, prev => {
         if (!serverHistoryNewer(items, prev.items)) return { ...prev, isHistoryLoading: false };
-        return { ...prev, items, isHistoryLoading: false };
+        // Та же подмена, что и в остальных ветках: нерешённые карточки разрешения переносим
+        return { ...prev, items: adoptServerHistory(items, prev.items), isHistoryLoading: false };
       });
       _warmed.add(sid);
       // Прогрев кладёт сессию в стор: если холодных стало больше потолка, выселяем

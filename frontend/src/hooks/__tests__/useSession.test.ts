@@ -102,6 +102,7 @@ vi.mock('../../lib/signalr', () => ({
 
 const { useSession, waitDiag, __test } = await import('../useSession');
 const { toolLiveness } = await import('../../lib/toolTiming');
+const { normalizeHistory } = await import('../../lib/chatReducer');
 
 // Сервер шлёт статус в сессию (в т.ч. replay в ответ на JoinSession)
 const emitStatus = (sid: string, status: string) =>
@@ -379,6 +380,39 @@ describe('useSession: снапшот после входа в группу', () 
     const st = back.render();
     expect(st.items).toHaveLength(6);
     expect(st.items.at(-1)!.kind).toBe('result');
+  });
+});
+
+describe('useSession: карточка разрешения и подмена истории (F5)', () => {
+  // Дефект «карточка разрешения пропадает после F5»: хаб реплеит permission_request
+  // внутри JoinSession (SessionHub), карточка успевает лечь в ленту ДО снимка истории,
+  // а в history.json её нет (не персистится) — подмена уносила её, и CLI ждал ответа
+  // до таймаута. Ф5 (пустой стор → join → история новее) — тот же путь на master.
+  it('реплеянная при join карточка переживает подмену серверной историей', async () => {
+    const sid = nextSid();
+    // Мок хаба реплеит карточку синхронно внутри JoinSession — ровно как SessionHub
+    m.joinSession.mockImplementationOnce(async () => {
+      m.messageHandlers.forEach(h => h({
+        type: 'permission_request', sessionId: sid, requestId: 'perm-1', toolName: 'Bash', toolInput: { command: 'ls' },
+      }));
+    });
+    // История: незаконченный ход (result нет) — сервер новее живой ленты, подмена происходит
+    const raw = [user('делай'), text('работаю…')];
+    m.getHistory.mockResolvedValue(raw);
+
+    const chat = openChat(sid);
+    await flush();
+
+    const st = chat.render();
+    // Итог — серверная история плюс перенесённая карточка с кнопками (resolved:false)
+    expect(st.items).toHaveLength(raw.length + 1);
+    expect(st.items.slice(0, raw.length)).toEqual(normalizeHistory(raw));
+    const card = st.items.at(-1) as Extract<ChatItem, { kind: 'permission_request' }>;
+    expect(card.kind).toBe('permission_request');
+    expect(card.requestId).toBe('perm-1');
+    expect(card.resolved).toBe(false);
+
+    chat.unmount();
   });
 });
 

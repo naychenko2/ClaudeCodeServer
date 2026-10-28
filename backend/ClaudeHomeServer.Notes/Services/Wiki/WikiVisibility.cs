@@ -2,7 +2,7 @@ using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Spheres;
 
-namespace ClaudeHomeServer.Services.Wiki;
+namespace ClaudeHomeServer.Services.Notes.Wiki;
 
 // Единая точка правды видимости разделов (ADR-036, решение 2): ни recall, ни инструменты,
 // ни Dify набор не собирают — берут его только отсюда. Чистые функции без I/O.
@@ -20,6 +20,8 @@ public static class WikiVisibility
     /// Видимые разделы — строго таблица ADR-036 §2. Порядок выдачи: свой проект,
     /// соседние по сфере (по id), раздел сферы, common; для чата вне проекта — personal, common.
     /// Всё неопределённое — fail-closed: набор сужается, а не расширяется; сироты не входят никогда.
+    /// Исключение из ISphereDirectory/IProjectManager пролетает наружу: для вызывающего
+    /// это отказ показывать набор, не «показать всё» (ревью S2d, минор 2).
     /// </summary>
     public static IReadOnlyList<string> SectionsFor(
         string ownerId,

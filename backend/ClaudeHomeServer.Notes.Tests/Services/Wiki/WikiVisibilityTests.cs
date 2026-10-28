@@ -1,7 +1,7 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Notes.Wiki;
 using ClaudeHomeServer.Services.Spheres;
-using ClaudeHomeServer.Services.Wiki;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -186,6 +186,31 @@ public class WikiVisibilityTests
         dir.Spheres["s1"] = ["p1", "p2", "p5"];
         WikiVisibility.SectionsFor(Owner, InProject("p1"), dir, projects)
             .Should().Equal("projects/p1", "projects/p2", "spheres/s1", "common");
+    }
+
+    [Fact]
+    public void SectionsFor_чатВПроектеЧужогоВладельца_толькоCommon()
+    {
+        // Ревью S2d (минор 3): ветка ownProject.OwnerId != ownerId не была покрыта.
+        // Чат сессии проекта чужого владельца — для Owner это чужой раздел: ни своего
+        // проекта, ни соседей по сфере, ни раздела сферы (p6 лежит в s1 вместе с p1).
+        var (dir, projects) = Working();
+        projects.Items["p6"] = new Project { Id = "p6", OwnerId = "u2", GroupId = "s1" };
+        dir.Spheres["s1"] = ["p1", "p2", "p6"];
+        WikiVisibility.SectionsFor(Owner, InProject("p6"), dir, projects).Should().Equal("common");
+    }
+
+    [Fact]
+    public void SectionsFor_проектПереехалВДругуюСферу_НаборПоТекущемуЧленству()
+    {
+        // Ревью S2d (минор 3): набор считается по живому членству справочника dir,
+        // а не по старому GroupId проекта. p1 переехал из s1 в s2 (GroupId у Project
+        // остался s1 — справочник прав); набор — s2 и её соседи, старого s1 нет.
+        var (dir, projects) = Working();
+        dir.Spheres.Remove("s1");
+        dir.Spheres["s2"] = ["p1", "p3"];
+        WikiVisibility.SectionsFor(Owner, InProject("p1"), dir, projects)
+            .Should().Equal("projects/p1", "projects/p3", "spheres/s2", "common");
     }
 
     // —— Пост-фильтр хитов (решение 6: гарантия кода поверх Dify) ——

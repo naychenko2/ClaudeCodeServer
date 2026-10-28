@@ -1350,6 +1350,10 @@ public class SubsystemBoundaryTests
         // и с ними, но был ШИРЕ реальной поверхности зависимостей — то есть пропустил бы
         // повторную прямую связь Notes с `TaskManager`/`FileService`/`Hubs` в обход
         // интерфейсов. Ровно та декоративность, ради проверки которой волна и делалась.
+        // Под корнем `ClaudeHomeServer.Services.Notes.` живёт и namespace `…Notes.Wiki`
+        // (разделы и видимость LLM-wiki, папка Services/Wiki этой сборки): его типы
+        // проверяет этот сторож по префиксу, отдельной строки в таблице нет (ревью S2d,
+        // минор 4: своя строка «Services.Wiki» создавала бы мину на связи Notes → Wiki).
         new object[]
         {
             new VerticalBoundary(
@@ -1359,28 +1363,6 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.Notes",
-                    })
-                    .ToArray(),
-                Array.Empty<string>()),
-        },
-        // Wiki — разделы и видимость LLM-wiki (ADR-036): живут ВНУТРИ вертикали Notes
-        // (папка Services/Wiki сборки ClaudeHomeServer.Notes), но в своём namespace —
-        // отдельная строка нужна, иначе SubsystemBoundaryCoverageTests оставил бы их
-        // без сторожа (полноту он проверяет по корню namespace). Самостоятельной
-        // вертикалью не являются: без IAppSubsystem и DI-регистрации.
-        // Allow-list — только спинка плюс сам namespace: разделы — чистые функции,
-        // единственные внешние типы — контракты и модели Core (IProjectManager,
-        // ISphereDirectory, Persona/PersonaZone), они покрыты IsCoreAssembly и
-        // ClaudeHomeServer.Models.
-        new object[]
-        {
-            new VerticalBoundary(
-                "Wiki",
-                "ClaudeHomeServer.Services.Wiki",
-                SharedAllowedPrefixes
-                    .Concat(new[]
-                    {
-                        "ClaudeHomeServer.Services.Wiki",
                     })
                     .ToArray(),
                 Array.Empty<string>()),

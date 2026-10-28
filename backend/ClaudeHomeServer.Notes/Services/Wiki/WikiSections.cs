@@ -1,6 +1,6 @@
 using ClaudeHomeServer.Services.Spheres;
 
-namespace ClaudeHomeServer.Services.Wiki;
+namespace ClaudeHomeServer.Services.Notes.Wiki;
 
 // Разделы единой вики владельца (ADR-036, решение 1): раздел — папка по id плюс правило дома.
 // Ключ раздела — строка "projects/{id}" | "spheres/{id}" | "common" | "personal".
@@ -27,17 +27,28 @@ public static class WikiSections
     public const string SphereWriteRefusal = "раздел сферы — следующая фича";
 
     /// <summary>Ключ раздела по пути относительно pages/. null — путь не принадлежит
-    /// ни одному разделу: неразобранный файл не видим нигде (ADR-036 §2, fail-closed).</summary>
+    /// ни одному разделу: неразобранный файл не видим нигде (ADR-036 §2, fail-closed).
+    /// Контракт пути строгий (ревью S2d, major 1): сегменты «.» и «..», пустые сегменты,
+    /// абсолютный префикс («/», «\», диск «C:»), обратные слеши и управляющие символы —
+    /// не путь раздела: null до разбора. «Общее/../Личное/X» не должен давать ключ
+    /// «common»: ключ каждого раздела есть в каждом наборе видимости, и пропущенная
+    /// «..» открывает личный раздел и чужой проект в выдачу модели.</summary>
     public static string? Parse(string relPathUnderPages)
     {
         if (string.IsNullOrWhiteSpace(relPathUnderPages))
             return null;
-        var parts = relPathUnderPages
-            .Replace('\\', '/')
-            .Split('/', StringSplitOptions.RemoveEmptyEntries)
-            .Where(p => p != ".")
-            .ToArray();
-        if (parts.Length == 0)
+        // Нормализации нет: любой синтаксис кроме чистого «a/b/c» — отказ разбора.
+        if (relPathUnderPages.Contains('\\'))
+            return null;
+        if (relPathUnderPages.Any(c => c < ' '))
+            return null;
+        if (relPathUnderPages.StartsWith('/') || (relPathUnderPages.Length > 1 && relPathUnderPages[1] == ':'))
+            return null;
+        // Папка раздела с хвостовым «/» — префикс раздела, обратная к Folder(): срезается
+        // ровно один хвостовой слэш. Пустые сегменты внутри пути — по-прежнему отказ.
+        var path = relPathUnderPages.EndsWith('/') ? relPathUnderPages[..^1] : relPathUnderPages;
+        var parts = path.Split('/');
+        if (parts.Any(p => p.Length == 0 || p == "." || p == ".."))
             return null;
         return parts[0] switch
         {

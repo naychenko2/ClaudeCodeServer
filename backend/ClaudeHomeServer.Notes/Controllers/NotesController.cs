@@ -55,6 +55,16 @@ public class NotesController : ControllerBase
         return _hubNotifier.BroadcastNotesChangedAsync(UserId, action, noteId ?? string.Empty);
     }
 
+    // Единый ответ отказа «в вики пишет только Хранитель» (ADR-035, решение 2): 409 с кодом
+    // wiki_readonly и текстом-подсказкой из исключения (он без абсолютных путей и ownerId).
+    // Одно место на все мутирующие действия; в каждом из них catch (WikiReadOnlyException)
+    // обязан стоять ПЕРЕД catch (InvalidOperationException) — WikiReadOnlyException наследует
+    // её, и общий catch съедал бы код (ревью S1a).
+    // ObjectResult (не IActionResult): действия объявлены ActionResult<…>, и к интерфейсу
+    // неявного приведения нет — к производному от ActionResult типу есть.
+    private ObjectResult WikiReadOnly(WikiReadOnlyException ex) =>
+        new(new { code = WikiReadOnlyException.ErrorCode, message = ex.Message }) { StatusCode = 409 };
+
     // Список заметок владельца (все источники). source — фильтр по источнику, q — поиск.
     [HttpGet]
     public ActionResult<IReadOnlyList<NoteSummary>> List(
@@ -119,6 +129,7 @@ public class NotesController : ControllerBase
             await Broadcast("created", note.Id);
             return Ok(note);
         }
+        catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
         catch (AnnotationConflictException ex) { return Conflict(new { error = ex.Message }); }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -149,6 +160,7 @@ public class NotesController : ControllerBase
             await Broadcast("updated", id);
             return Ok(note);
         }
+        catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
         catch (AnnotationConflictException ex) { return Conflict(new { error = ex.Message }); }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
@@ -166,6 +178,7 @@ public class NotesController : ControllerBase
             await Broadcast("created", note.Id);
             return Ok(note);
         }
+        catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -192,6 +205,7 @@ public class NotesController : ControllerBase
             await Broadcast("updated", id);
             return Ok(note);
         }
+        catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
         catch (UnauthorizedAccessException) { return Forbid(); }
@@ -274,6 +288,7 @@ public class NotesController : ControllerBase
             await Broadcast("updated", note.Id);
             return Ok(note);
         }
+        catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
     }
@@ -288,6 +303,7 @@ public class NotesController : ControllerBase
             await Broadcast("updated", note.Id);
             return Ok(note);
         }
+        catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
     }
@@ -330,6 +346,7 @@ public class NotesController : ControllerBase
     public async Task<ActionResult<NoteDetail>> ToggleTask(string id, [FromBody] ToggleTaskRequest req)
     {
         try { return Ok(await _noteTasks.ToggleAsync(UserId, id, req.Line, req.Done)); }
+        catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return Forbid(); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
@@ -343,6 +360,7 @@ public class NotesController : ControllerBase
         if (due is not null && !DateOnly.TryParseExact(due, "yyyy-MM-dd", out _))
             return BadRequest(new { error = "Некорректная дата (нужен формат YYYY-MM-DD)" });
         try { return Ok(await _noteTasks.SetDueAsync(UserId, id, req.Line, due)); }
+        catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return Forbid(); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
@@ -358,6 +376,7 @@ public class NotesController : ControllerBase
             await Broadcast("updated");
             return Ok(new { notes = moved });
         }
+        catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
         catch (UnauthorizedAccessException) { return Forbid(); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (ArgumentException ex) { return BadRequest(ex.Message); }
@@ -379,6 +398,7 @@ public class NotesController : ControllerBase
             await Broadcast("folder_created");
             return Ok(folder);
         }
+        catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
         catch (UnauthorizedAccessException) { return Forbid(); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (ArgumentException ex) { return BadRequest(ex.Message); }
@@ -395,6 +415,7 @@ public class NotesController : ControllerBase
             await Broadcast("folder_deleted");
             return Ok(new { removed });
         }
+        catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
         catch (UnauthorizedAccessException) { return Forbid(); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (ArgumentException ex) { return BadRequest(ex.Message); }
@@ -411,6 +432,7 @@ public class NotesController : ControllerBase
             await Broadcast("updated", note.Id);
             return Ok(note);
         }
+        catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
         catch (UnauthorizedAccessException) { return Forbid(); }
         catch (ArgumentException) { return BadRequest("Некорректный id заметки"); }
         catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
@@ -429,6 +451,7 @@ public class NotesController : ControllerBase
             await Broadcast("updated", note.Id);
             return Ok(note);
         }
+        catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
         catch (UnauthorizedAccessException) { return Forbid(); }
         catch (ArgumentException) { return BadRequest("Некорректный id заметки"); }
     }
@@ -455,6 +478,7 @@ public class NotesController : ControllerBase
             await Broadcast("created", note.Id);
             return Ok(note);
         }
+        catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
         catch (UnauthorizedAccessException) { return Forbid(); }
         catch (KeyNotFoundException) { return NotFound(); }
     }
@@ -469,6 +493,7 @@ public class NotesController : ControllerBase
             await Broadcast("updated", note.Id);
             return Ok(note);
         }
+        catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
         catch (UnauthorizedAccessException) { return Forbid(); }
         catch (ArgumentException) { return BadRequest("Некорректный id заметки"); }
     }
@@ -482,6 +507,7 @@ public class NotesController : ControllerBase
             await Broadcast("deleted", id);
             return NoContent();
         }
+        catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
         catch (UnauthorizedAccessException) { return Forbid(); }
         catch (ArgumentException) { return BadRequest("Некорректный id заметки"); }
     }

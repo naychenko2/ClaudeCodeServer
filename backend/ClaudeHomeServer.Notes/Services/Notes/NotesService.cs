@@ -8,6 +8,8 @@ namespace ClaudeHomeServer.Services.Notes;
 // Obsidian-совместимая база заметок. Источник правды — .md файлы на диске:
 //   • личный vault пользователя:  {dataDir}/notes/{userId}/
 //   • notes/ внутри каждого проекта, которым владеет пользователь
+//   • вики владельца:             {dataDir}/wiki/{userId}/pages/ — только чтение,
+//     появляется только когда заведена (есть pages/_schema.md), ADR-035, решение 1
 // Единый per-owner граф агрегирует все источники владельца (Модель 3 из плана).
 // Класс не хранит состояние заметок — сканирует файлы на каждый запрос
 // (заметок немного; кэш-инвалидация — возможная оптимизация позже).
@@ -20,6 +22,12 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
 
     private const string PersonalKey = "personal";
     private const string PersonalLabel = "Личный";
+
+    // Отдельный источник вики (ADR-035, решение 1): корень data/wiki/{ownerId}/pages/,
+    // только чтение — пишет в него один Хранитель. Ключ internal: той же константой
+    // сравнивает источник побочный писатель NoteTaskSyncService (пропуск страниц вики).
+    internal const string WikiKey = "wiki";
+    private const string WikiLabel = "Вики";
 
     // [[Target]] | [[Target|подпись]] | [[Target#заголовок]] | [[Папка/Target]]
     private static readonly Regex WikiLink = new(@"\[\[([^\[\]]+?)\]\]", RegexOptions.Compiled);
@@ -56,11 +64,22 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
 
     private void Invalidate(string userId) => _cache.TryRemove(userId, out _);
 
+    // Построение модели МИМО кэша (ADR-035, решение 4, шаг 1 применения): Хранитель проверяет
+    // пакет по фактическому состоянию диска, а не по кэшу с TTL 2 с — файл, записанный им
+    // только что, обязан быть виден. Кэш этот вызов не трогает: обычный читательский путь
+    // (GetModel) остаётся, свежая модель отдаётся вызывающему. internal: нужен Хранителю
+    // (та же сборка) и его тестам; публичного контракта здесь нет — модель внутренняя.
+    internal Model BuildFresh(string ownerId) => Build(ownerId);
+
     // --- Источники владельца ---
 
     // ProjectRoot — корень проекта-источника (null у личного vault): по нему
-    // резолвится привязка заметки к файлу (frontmatter file:, путь от корня проекта)
-    private sealed record Source(string Key, string Label, string RootDir, string? ProjectRoot = null);
+    // резолвится привязка заметки к файлу (frontmatter file:, путь от корня проекта).
+    // ReadOnly — источник только чтения: его страницы видны в графе, поиске и резолве
+    // [[…]] как у любого другого источника, но в «куда создать» он не предлагается,
+    // а прямая запись в него режется EnsureNotWiki (ADR-035, решение 2).
+    private sealed record Source(string Key, string Label, string RootDir, string? ProjectRoot = null,
+        bool ReadOnly = false);
 
     private IReadOnlyList<Source> SourcesFor(string userId)
     {
@@ -74,16 +93,26 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
             if (!string.IsNullOrWhiteSpace(p.RootPath)
                 && Composition.ProjectCapabilityGuard.Allows(p, Composition.ProjectCapabilityArea.FileBound))
                 list.Add(new(p.Id, p.Name, Path.Combine(p.RootPath, "notes"), p.RootPath));
+        // Вики владельца — отдельный источник графа рядом с личным vault и notes/ проектов
+        // (ADR-035, решение 1). Признак — признак на диске (pages/_schema.md), а не
+        // фич-флаг: не заведена — источника нет, заведённая — работает всегда (fail-closed).
+        // Ссылки [[…]] между заметками человека и страницами вики резолвятся обычным
+        // образом: тот же ByName, без отдельного резолвера (резолв префикса раздела — S2c).
+        if (WikiPaths.IsInitialized(_dataDir, userId))
+            list.Add(new(WikiKey, WikiLabel, WikiPaths.Pages(_dataDir, userId), ReadOnly: true));
         return list;
     }
 
-    // Источники для выбора «куда создать заметку»
+    // Источники для выбора «куда создать заметку»: read-only (wiki) не предлагается —
+    // создание в него всё равно отказывает (wiki_readonly). Читать страницы вики это не
+    // касается: они видны в списке, графе и резолве как страницы любого источника.
     public IReadOnlyList<NoteSourceDto> GetSources(string userId) =>
-        SourcesFor(userId).Select(s => new NoteSourceDto(s.Key, s.Label)).ToList();
+        SourcesFor(userId).Where(s => !s.ReadOnly).Select(s => new NoteSourceDto(s.Key, s.Label)).ToList();
 
     // --- Сканирование и парсинг ---
 
-    private sealed class RawNote
+    // internal (не private) вместе с Model: их видит Хранитель и его тесты через BuildFresh.
+    internal sealed class RawNote
     {
         public required string Id;
         public required string SourceKey;
@@ -123,6 +152,10 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
                 var rel = NormalizeRel(Path.GetRelativePath(src.RootDir, full));
                 // templates/ — шаблоны, не заметки: в список/граф не попадают
                 if (rel.StartsWith("templates/", StringComparison.OrdinalIgnoreCase)) continue;
+                // Служебные файлы раздела вики (_schema/_index/_log/_health) — не заметки,
+                // тот же смысл, что templates/ для остальных источников (ADR-035, реш. 1 и 8:
+                // _schema — признак заведённости, проекции не участвуют ни в графе, ни в индексе)
+                if (src.Key == WikiKey && WikiPaths.IsProjection(rel)) continue;
                 var fm = ParseFrontmatter(text, Path.GetFileNameWithoutExtension(full));
                 var tags = fm.Tags;
                 // Inline-теги #тег из тела + теги из frontmatter (без дублей).
@@ -324,7 +357,9 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
 
     // --- Модель графа (строится один раз из скана) ---
 
-    private sealed class Model
+    // internal (не private): её отдаёт BuildFresh — Хранителю (та же сборка) и тестам
+    // валидации применения пакета (ADR-035, решение 4).
+    internal sealed class Model
     {
         public required List<RawNote> Notes;
         public required Dictionary<string, RawNote> ById;
@@ -1230,6 +1265,14 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     {
         if (sourceKey == PersonalKey)
             return Path.Combine(_dataDir, "notes", userId);
+
+        // Источник вики — тот же корень и тот же признак «заведена», что в графе: без
+        // pages/_schema.md источника нет (KeyNotFoundException → 404), а не «пустой корень».
+        // С самим записыванием разберётся EnsureNotWiki: любой путь под data/wiki/ — отказ.
+        if (sourceKey == WikiKey)
+            return WikiPaths.IsInitialized(_dataDir, userId)
+                ? WikiPaths.Pages(_dataDir, userId)
+                : throw new KeyNotFoundException("Вики не заведена");
 
         var project = _projects.GetById(sourceKey)
             ?? throw new KeyNotFoundException($"Источник {sourceKey} не найден");

@@ -138,6 +138,7 @@ public sealed class NotesToolset(
                     await BroadcastAsync(context.OwnerId, "created", created.Id);
                     return Json(created);
                 }
+                catch (WikiReadOnlyException ex) { return WikiRefusal(ex); }
                 catch (KeyNotFoundException) { return Deny("Источник заметок не найден (проект удалён?)."); }
                 catch (UnauthorizedAccessException) { return Deny("Нет доступа к источнику заметок."); }
             }
@@ -157,6 +158,7 @@ public sealed class NotesToolset(
                     await BroadcastAsync(context.OwnerId, "updated", id);
                     return Json(updated);
                 }
+                catch (WikiReadOnlyException ex) { return WikiRefusal(ex); }
                 catch (UnauthorizedAccessException) { return Deny("Нет доступа к заметке."); }
                 catch (ArgumentException) { return Deny("Некорректный id заметки."); }
             }
@@ -176,6 +178,7 @@ public sealed class NotesToolset(
                     await BroadcastAsync(context.OwnerId, "deleted", id);
                     return Text($"Заметка {id} удалена.");
                 }
+                catch (WikiReadOnlyException ex) { return WikiRefusal(ex); }
                 catch (UnauthorizedAccessException) { return Deny("Нет доступа к заметке."); }
                 catch (ArgumentException) { return Deny("Некорректный id заметки."); }
             }
@@ -198,6 +201,7 @@ public sealed class NotesToolset(
                     await BroadcastAsync(context.OwnerId, "created", created.Id);
                     return Json(created);
                 }
+                catch (WikiReadOnlyException ex) { return WikiRefusal(ex); }
                 catch (AnnotationConflictException ex) { return Deny(ex.Message); }
                 catch (ArgumentException ex) { return Deny(ex.Message); }
                 catch (KeyNotFoundException) { return Deny("Документ не найден."); }
@@ -224,6 +228,7 @@ public sealed class NotesToolset(
                     await BroadcastAsync(context.OwnerId, "created", created.Id);
                     return Json(created);
                 }
+                catch (WikiReadOnlyException ex) { return WikiRefusal(ex); }
                 catch (ArgumentException ex) { return Deny(ex.Message); }
                 catch (InvalidOperationException ex) { return Deny(ex.Message); }
                 catch (KeyNotFoundException) { return Deny($"Комментарий {id} не найден."); }
@@ -255,6 +260,7 @@ public sealed class NotesToolset(
                     await BroadcastAsync(context.OwnerId, "updated", id);
                     return Json(updated);
                 }
+                catch (WikiReadOnlyException ex) { return WikiRefusal(ex); }
                 catch (ArgumentException ex) { return Deny(ex.Message); }
                 catch (InvalidOperationException ex) { return Deny(ex.Message); }
                 catch (UnauthorizedAccessException) { return Deny("Нет доступа к заметке."); }
@@ -272,6 +278,7 @@ public sealed class NotesToolset(
                     await BroadcastAsync(context.OwnerId, "updated", moved.Id);
                     return Json(moved);
                 }
+                catch (WikiReadOnlyException ex) { return WikiRefusal(ex); }
                 catch (UnauthorizedAccessException) { return Deny("Нет доступа к заметке."); }
                 catch (ArgumentException) { return Deny("Некорректный id заметки."); }
                 catch (InvalidOperationException ex) { return Deny(ex.Message); }
@@ -427,6 +434,14 @@ public sealed class NotesToolset(
         new(JsonSerializer.Serialize(value, JsonOpts));
 
     private static McpToolCallResult Deny(string text) => new(text, IsError: true);
+
+    // Отказ «в вики пишет только Хранитель» (ADR-035, решение 2): тот же код, что у REST
+    // (409 wiki_readonly), и текст-подсказка, какую операцию звать вместо прямой правки.
+    // Catch во всех мутирующих инструментах обязан стоять ПЕРЕД catch (InvalidOperationException):
+    // WikiReadOnlyException наследует её, и общий путь терял код (ревью S1a: у create/update/
+    // delete/annotate отказа не было вовсе — его догонял транспорт как «Ошибка: …»).
+    private static McpToolCallResult WikiRefusal(WikiReadOnlyException ex) =>
+        Deny($"{WikiReadOnlyException.ErrorCode}: {ex.Message}");
 
     private static string StringArg(JsonObject arguments, string name) =>
         arguments[name] is JsonValue value && value.TryGetValue<string>(out var text) ? text : "";

@@ -44,6 +44,8 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
     private readonly NamedLocalEngines? _namedEngines = services.GetService<NamedLocalEngines>();
     private readonly IEngineArbiterStateReader? _arbiter = services.GetService<IEngineArbiterStateReader>();
     private readonly EngineCallLedger? _callLedger = services.GetService<EngineCallLedger>();
+    // Подписи основного стенда (Stats:Model/EngineLabel/Topology локального провайдера) — только показ.
+    private readonly LlmProviderRegistry? _providers = services.GetService<LlmProviderRegistry>();
     // Рубильник «медиа для обычных пользователей» (ADR-030, 2026-10-18): единственная точка
     // чтения секции LocalModelStats (связывание в Program.cs).
     private readonly IOptions<LocalModelStatsMediaOptions> _mediaOptions = mediaOptions;
@@ -134,12 +136,16 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
         // только ходы, прошедшие через шлюз): max(0, running + waiting − живых чатов).
         var othersCount = Math.Max(0, (current.Running ?? 0) + (current.Waiting ?? 0) - active.Count);
 
+        var labels = _providers?.All.FirstOrDefault(p => p.IsLocal)?.Stats;
+
         return Ok(new LocalModelStatsResponse
         {
             Configured = current.Configured,
             Engine = current.Engine,
-            Model = current.Model,
+            EngineLabel = Label(labels?.EngineLabel),
+            Model = Label(labels?.Model) ?? current.Model,
             TensorParallel = current.TensorParallel,
+            Topology = Label(labels?.Topology),
             Status = current.Status,
             DownSince = current.DownSince?.ToUnixTimeMilliseconds(),
             Running = current.Running,
@@ -213,6 +219,10 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
     // Подпись сегмента из ключа словаря: заглавная первая буква ("bonsai" → "Bonsai").
     private static string TitleOf(string name) =>
         name.Length == 0 ? name : char.ToUpperInvariant(name[0]) + name[1..];
+
+    // Подпись из конфига: пустая или из пробелов — как не заданная.
+    private static string? Label(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     // GET /api/local-model/stats?engine=<имя> — стенд именованного движка (B3c): тот же
     // LocalModelStatsResponse плюс блок «Дежурство» (duty). Без engine или с engine=main —
@@ -686,11 +696,21 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
         // Тип движка ("vllm" | "llama-server" | "ollama"); null — не задан.
         public string? Engine { get; init; }
 
-        // Идентификатор модели стенда; null — неизвестен.
+        // Подпись движка из Stats:EngineLabel (только основной стенд); нет — поля нет
+        // в ответе (WhenWritingNull: без подписей ответ побайтно прежний), фронт покажет Engine.
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? EngineLabel { get; init; }
+
+        // Модель стенда: Stats:Model, иначе идентификатор из каталога провайдера; null — неизвестна.
         public string? Model { get; init; }
 
         // Число карт тензор-параллелизма из секции Stats; null — не задано (фронт покажет число карт).
         public int? TensorParallel { get; init; }
+
+        // Раскладка по картам из Stats:Topology (только основной стенд) — фронт пишет её
+        // вместо «TP=N»; нет — поля нет в ответе, как у EngineLabel.
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? Topology { get; init; }
 
         // working | busy | down | notConnected.
         public string Status { get; init; } = "notConnected";

@@ -118,17 +118,33 @@ internal static class QuoteMatcher
     // никогда. Замена посимвольная — карта офсетов документа не съезжает.
     internal static string FoldQuotes(string s) => s.Replace('"', '\'');
 
+    // Нормализованная цитата — та же канонизация, что и при сопоставлении: длина
+    // цитаты меряется по ней, иначе цитата из одной разметки («*******a») проходит
+    // как содержательная.
+    internal static string NormalizeQuote(string quote) => FoldQuotes(NormalizeForMatch(quote).Norm);
+
     /// <summary>Есть ли цитата в тексте источника с точностью до пробелов, кавычек
     /// и разметки (ADR-035, §12г мера 1): обе стороны канонизированы «как рендер»,
     /// прямые двойные кавычки свёрнуты. Регистр и прочие символы значимы — цитата
+    /// дословная. Совпадение обязано быть выдержкой по границам слов: усечённая
+    /// цитата («15 тыс.» из «115 тыс.», «планировать» из «перепланировать») — не
     /// дословная. В отличие от ре-якоря аннотаций единственность вхождения здесь
     /// не требуется: важно наличие в источнике, два вхождения в нём допустимы.</summary>
     internal static bool ContainsVerbatim(string sourceText, string quote)
     {
-        var q = FoldQuotes(NormalizeForMatch(quote).Norm);
+        var q = NormalizeQuote(quote);
         if (q.Length == 0)
             return false;
         var src = FoldQuotes(NormalizeForMatch(sourceText).Norm);
-        return src.IndexOf(q, StringComparison.Ordinal) >= 0;
+        for (var at = src.IndexOf(q, StringComparison.Ordinal); at >= 0; at = src.IndexOf(q, at + 1, StringComparison.Ordinal))
+            if (!CutInsideWord(src, at) && !CutInsideWord(src, at + q.Length))
+                return true;
+        return false;
     }
+
+    // Позиция pos лежит внутри буквенно-цифрового токена: с обеих сторон — буква
+    // или цифра, т.е. токен начинается раньше и продолжается за pos. Совпадение,
+    // ограниченное такой позицией, рассечено посреди слова или числа.
+    private static bool CutInsideWord(string s, int pos) =>
+        pos > 0 && pos < s.Length && char.IsLetterOrDigit(s[pos - 1]) && char.IsLetterOrDigit(s[pos]);
 }

@@ -5,7 +5,9 @@ namespace ClaudeHomeServer.Tests.Services;
 // QuoteMatcher: дословное сопоставление цитаты с источником (S6a; ADR-035, решение 3,
 // §12г мера 1). Юнит — нормализация и наличие циты; ниже — правило дословности WikiGate:
 // цитата сноски обязана быть в тексте своей карточки с точностью до пробелов, кавычек
-// и разметки; два вхождения (в источнике и на странице) допустимы.
+// и разметки, но по границам слов: усечённая цитата («15 тыс.» из «115 тыс.»,
+// «планировать» из «перепланировать») — не дословная; два вхождения (в источнике и
+// на странице) допустимы.
 public class QuoteMatcherTests
 {
     // —— Юнит: ContainsVerbatim ——
@@ -33,6 +35,24 @@ public class QuoteMatcherTests
     [Fact]
     public void ДваВхожденияВИсточнике_допустимы() =>
         QuoteMatcher.ContainsVerbatim("бюджет до 15 тыс. ₽. И ещё раз: бюджет до 15 тыс. ₽", "бюджет до 15 тыс. ₽").Should().BeTrue();
+
+    [Fact]
+    public void ПробелыСхлопываютсяАНеУдаляются_ложь() =>
+        // Схлопывание — не удаление: цитата без пробелов не совпадает с источником,
+        // где пробелы есть (иначе «бюджетдо15тыс.₽» сошлась бы с «бюджет до 15 тыс. ₽»).
+        QuoteMatcher.ContainsVerbatim("бюджет до 15 тыс. ₽", "бюджетдо15тыс.₽").Should().BeFalse();
+
+    [Theory]
+    // Усечение посреди буквенно-цифрового токена — не дословная выдержка (§12г мера 1):
+    // модель меняет число или слово в цитате, и её нет в источнике.
+    [InlineData("Бюджет — 115 тыс. ₽ в месяц", "15 тыс. ₽ в месяц")]
+    [InlineData("перепланировать бюджет", "планировать бюджет")]
+    public void УсечённаяЦитатаНеДословная_ложь(string source, string quote) =>
+        QuoteMatcher.ContainsVerbatim(source, quote).Should().BeFalse();
+
+    [Fact]
+    public void ЦелаяЦитатаПоГраницамСловПроходит_истина() =>
+        QuoteMatcher.ContainsVerbatim("решили: бюджет до 15 тыс. ₽ в месяц, не больше", "бюджет до 15 тыс. ₽ в месяц").Should().BeTrue();
 
     [Fact]
     public void РегистрИПрочиеСимволыЗначимы_ложь()
@@ -114,6 +134,35 @@ public class QuoteMatcherTests
     {
         WikiGate.Check(State("точная цитата из источника"), P1, [], new Dictionary<string, string>())
             .Should().Contain(e => e.Contains("нет текста источника"));
+    }
+
+    [Fact]
+    public void Гейт_текстИсточникаNull_отбитаБезИсключения()
+    {
+        // Слой захвата (S6h/S6j) может отдать null для недоступного источника:
+        // это нарушение (fail-closed), а не NullReferenceException.
+        var texts = new Dictionary<string, string> { [CardPath] = null! };
+        WikiGate.Check(State("точная цитата из источника"), P1, [], texts)
+            .Should().Contain(e => e.Contains("нет текста источника"));
+    }
+
+    [Fact]
+    public void Гейт_цитатаУсечённаяОтЧисла_отбита()
+    {
+        var texts = new Dictionary<string, string> { [CardPath] = "Бюджет — 115 тыс. ₽ в месяц." };
+        WikiGate.Check(State("15 тыс. ₽ в месяц"), P1, [], texts)
+            .Should().Contain(e => e.Contains("отсутствует в тексте источника"));
+    }
+
+    [Fact]
+    public void Гейт_цитатаТолькоИзРазметки_отбита()
+    {
+        // «*******a» — 8 сырых символов (контракт по сырой длине соблюдён), но после
+        // нормализации остаётся один значащий символ: минимальная длина меряется
+        // по нормализованной строке.
+        var texts = new Dictionary<string, string> { [CardPath] = "В документе есть буква a." };
+        WikiGate.Check(State("*******a"), P1, [], texts)
+            .Should().Contain(e => e.Contains("после нормализации"));
     }
 
     [Fact]

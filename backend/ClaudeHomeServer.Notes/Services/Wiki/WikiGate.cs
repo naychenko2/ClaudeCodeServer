@@ -10,7 +10,8 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // человека и для Хранителя: «на ремонт модели даётся одна попытка с перечнем нарушений».
 // Дословность цитаты проверяется, когда вызывающий дал тексты источников (sourceTexts,
 // захват — S6h/S6j): каждая сноска сверяется с текстом своей карточки через QuoteMatcher
-// (ADR-035, §12г мера 1). Без текстов правило молчит — оно не может быть пройдено молча.
+// (ADR-035, §12г мера 1). При sourceTexts == null правило не выполняется — это режим
+// по умолчанию до слоя захвата, а не «пройдено молча».
 public static class WikiGate
 {
     // Закрытый перечень origin карточки источника (ADR-035, решение 3).
@@ -176,8 +177,13 @@ public static class WikiGate
             for (var fi = 0; fi < page.Footnotes.Count; fi++)
             {
                 var footnote = page.Footnotes[fi];
-                if (footnote.Quote.Length < WikiPage.MinQuoteLength || footnote.Quote.Length > WikiPage.MaxQuoteLength)
-                    violations.Add($"{draft.Path}: цитата {footnote.Quote.Length} символов, контракт {WikiPage.MinQuoteLength}–{WikiPage.MaxQuoteLength}");
+                // Минимальная длина — по нормализованной строке (той же, по которой
+                // сверяется дословность): цитата из одной разметки («*******a») не
+                // содержательна, даже если сырая длина в контракте. Верхняя граница —
+                // по сырой: нормализация только укорачивает, верхнюю меру она не обходит.
+                var normQuote = QuoteMatcher.NormalizeQuote(footnote.Quote);
+                if (normQuote.Length < WikiPage.MinQuoteLength || footnote.Quote.Length > WikiPage.MaxQuoteLength)
+                    violations.Add($"{draft.Path}: цитата {footnote.Quote.Length} символов ({normQuote.Length} после нормализации), контракт {WikiPage.MinQuoteLength}–{WikiPage.MaxQuoteLength}");
                 var card = FindPage(footnote.Target.Text, reach, allSections);
                 if (card is null)
                     violations.Add($"{draft.Path}: сноска на неизвестную карточку '[[{footnote.Target.Text}]]'");
@@ -188,8 +194,9 @@ public static class WikiGate
                     // Дословность (ADR-035, §12г мера 1): цитата обязана быть в тексте
                     // источника с точностью до пробелов, кавычек и разметки (QuoteMatcher).
                     // Два вхождения в источнике допустимы — важно наличие, не единственность.
-                    // Нет текста карточки → не подтвердить → нарушение (fail-closed).
-                    if (!sourceTexts.TryGetValue(card.Value.Path, out var sourceText))
+                    // Нет текста карточки (ключа нет, или значение null — так отдаёт
+                    // словарь) → не подтвердить → нарушение (fail-closed), а не исключение.
+                    if (!sourceTexts.TryGetValue(card.Value.Path, out var sourceText) || sourceText is null)
                         violations.Add($"{draft.Path}: сноска s{fi + 1} на '[[{footnote.Target.Text}]]': нет текста источника карточки — дословность не подтвердить");
                     else if (!QuoteMatcher.ContainsVerbatim(sourceText, footnote.Quote))
                         violations.Add($"{draft.Path}: цитата сноски s{fi + 1} '[[{footnote.Target.Text}]]' отсутствует в тексте источника дословно");

@@ -15,7 +15,6 @@
 //   настроенных движках (список — GET /api/local-model/engines);
 // — статус 'yielded' разводится точными подписями по состоянию арбитра (format.ts);
 //   уступка — нейтральный баннер и нейтральный тон, НЕ авария и не приглушение;
-//   выгрузка без причины и без отсчёта возврата ('unexplained', Ф8) — warning-баннер;
 // — при выгруженной модели «Сейчас»/«Скорость» — спокойная строка, не нули;
 // — поля из `unsupported` (Кэш, Вытеснения, время агентов) скрыты целиком;
 // — видеокарта — своя карточка «Видеокарта · Video» с чипом «общая с ComfyUI»
@@ -34,7 +33,7 @@ import type { LocalModelEngine, LocalModelEngineName, LocalModelStats } from './
 import type { StatsPollError } from './useLocalModelStats';
 import {
   formatGpuMem, formatPower, formatSince, formatTps, formatUpdatedAt, gpuCountLabel, notReportedText, whoRows,
-  standDot, standHint, statusPill, yieldPhase, type StatusTone, type WhoRow,
+  standDot, standHint, statusPill, type StatusTone, type WhoRow,
 } from './format';
 import { dutyWhoRows } from './dutyFormat';
 import { DutyBlock } from './DutyBlock';
@@ -173,41 +172,28 @@ function DownBanner({ data, onCheck, bonsai }: { data: LocalModelStats; onCheck:
   );
 }
 
-// === Баннер уступки (макет §4/§6) ===
-// Плановая выгрузка модели ('yielded' с причиной или с отсчётом возврата): фон C.bgInset,
-// рамка C.borderLight, текст C.textSecondary, иконка CirclePause. НЕ красный и без
-// приглушения остальных блоков: стенд жив, просто модель сейчас не на карте.
-// Выгрузка БЕЗ причины и БЕЗ отсчёта возврата ('unexplained', Ф8): тот же баннер, но
-// warning (C.warningBg/C.warning/C.warningText, AlertTriangle): арбитр ставит yielded и
-// по мёртвому юниту (gpu-arbiter.py:217) — это не рассосётся само. Текст — только то,
-// что говорят данные, без выдуманных деталей.
+// === Нейтральный баннер уступки (макет §4/§6) ===
+// 'yielded' — плановая выгрузка модели: фон C.bgInset, рамка C.borderLight,
+// текст C.textSecondary, иконка CirclePause. НЕ красный и без приглушения
+// остальных блоков: стенд жив, просто модель сейчас не на карте.
 function YieldBanner({ data }: { data: LocalModelStats }) {
-  const unexplained = yieldPhase(data) === 'unexplained';
   const state = data.duty?.arbiter?.state;
-  const head = unexplained
-    ? 'Bonsai выгружена, но арбитр не называет причину и не обещает возврата.'
-    : state === 'waiting-vram' ? 'Bonsai ждёт память карты.'
+  const head =
+    state === 'waiting-vram' ? 'Bonsai ждёт память карты.'
       : state === 'starting' ? 'Bonsai загружается.'
         : 'Bonsai уступила карту — это по плану.';
-  const tail = unexplained
-    ? 'Возможно, упал bonsai.service на Video — проверьте журнал.'
-    : 'Модель выгружена, места идут на MiniMax. Причина и срок — в блоке «Дежурство» ниже.';
   return (
     <div style={{
       display: 'flex', gap: SP.sm, alignItems: 'flex-start',
-      background: unexplained ? C.warningBg : C.bgInset,
-      border: `1px solid ${unexplained ? C.warning : C.borderLight}`,
-      color: unexplained ? C.warningText : C.textSecondary,
+      background: C.bgInset, border: `1px solid ${C.borderLight}`, color: C.textSecondary,
       borderRadius: R.lg, padding: `${SP.sm}px ${SP.md}px`, fontSize: FS.sm, lineHeight: 1.45,
     }}>
       <span style={{ flexShrink: 0, marginTop: 1 }}>
-        {unexplained
-          ? <AlertTriangle size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-          : <CirclePause size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+        <CirclePause size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
       </span>
       <div style={{ minWidth: 0 }}>
         <b style={{ fontWeight: 700 }}>{head}</b>{' '}
-        {tail}
+        Модель выгружена, места идут на MiniMax. Причина и срок — в блоке «Дежурство» ниже.
       </div>
     </div>
   );

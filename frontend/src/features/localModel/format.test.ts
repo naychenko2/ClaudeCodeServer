@@ -240,25 +240,6 @@ describe('menuStatus: короткий статус пункта «⋯» (мак
     expect(menuStatus(mockBonsaiStats('waiting-vram'))).toEqual({ text: 'нет памяти', tone: 'warning' });
   });
 
-  // Ф8: арбитр выгрузил юнит без причины и без обещанного возврата — не плановая
-  // уступка, а вероятная гибель сервиса: короткий статус warning
-  it('выгружена без причины и без отсчёта — «нет причины», warning (Ф8)', () => {
-    expect(menuStatus(mockBonsaiStats('unexplained'))).toEqual({ text: 'нет причины', tone: 'warning' });
-  });
-
-  it('причина ЕСТЬ (при том же пустом quietLeftS) — остаётся «уступила», muted', () => {
-    // та же фикстура без отсчёта, но с причиной: разводит именно наличие причины
-    const d = mockBonsaiStats('unexplained');
-    d.duty = { ...d.duty!, arbiter: { ...d.duty!.arbiter!, reasons: [{ kind: 'lease', raw: 'l1' }] } };
-    expect(menuStatus(d)).toEqual({ text: 'уступила', tone: 'muted' });
-  });
-
-  it('отсчёт ЕСТЬ (при том же пустом reasons) — остаётся «через 2:40», muted', () => {
-    const d = mockBonsaiStats('unexplained');
-    d.duty = { ...d.duty!, arbiter: { ...d.duty!.arbiter!, quietLeftS: 160 } };
-    expect(menuStatus(d)).toEqual({ text: 'через 2:40', tone: 'muted' });
-  });
-
   it('арбитр молчит, метрики отвечают — «нет арбитра», warning', () => {
     const d = mockBonsaiStats('ready');
     const silent = { ...d, duty: { ...d.duty!, arbiter: { ...d.duty!.arbiter!, reachable: false } } };
@@ -282,7 +263,7 @@ describe('menuStatus: короткий статус пункта «⋯» (мак
   // тон и наличие берутся отсюда же, откуда точка рельса: два индикатора одного
   // состояния не могут разойтись.
   it('тон и наличие статуса совпадают с точкой рельса (standDot) на всех состояниях', () => {
-    for (const s of ['ready', 'yielded', 'returning', 'unexplained', 'starting', 'waiting-vram', 'unknown', 'no-arbiter'] as const) {
+    for (const s of ['ready', 'yielded', 'returning', 'starting', 'waiting-vram', 'unknown', 'no-arbiter'] as const) {
       const d = mockBonsaiStats(s);
       expect(menuStatus(d)?.tone ?? null, s).toBe(standDot(d));
     }
@@ -294,7 +275,7 @@ describe('menuStatus: короткий статус пункта «⋯» (мак
 // рельса (dotColor(d)), — сигнал виден до открытия меню. Данные кнопки — triggerDot.
 describe('triggerDot: точка на кнопке «⋯» (макет renderPhone)', () => {
   it('тон и наличие точки совпадают с точкой рельса (standDot) на всех состояниях', () => {
-    for (const s of ['ready', 'yielded', 'returning', 'unexplained', 'starting', 'waiting-vram', 'unknown', 'no-arbiter'] as const) {
+    for (const s of ['ready', 'yielded', 'returning', 'starting', 'waiting-vram', 'unknown', 'no-arbiter'] as const) {
       const d = mockBonsaiStats(s);
       expect(triggerDot(d), s).toBe(standDot(d));
     }

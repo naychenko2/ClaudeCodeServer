@@ -102,15 +102,22 @@ function StatusRow({ data }: { data: LocalModelStats }) {
   );
 }
 
-// Подстрока под статусом: движок · N карт, TP=N · обновлено HH:MM:SS / данные на HH:MM
-function StatusSubline({ data }: { data: LocalModelStats }) {
+// Подстрока под статусом: main — движок · N карт, TP=N · обновлено HH:MM:SS / данные на HH:MM.
+// Стенд Bonsai (макет §3, .html:414): движок · Video · … — карта на Video одна и общая с
+// ComfyUI, её данные — с узла ComfyUI: число карт и TP там не о чём, по макету стоит
+// положение стенда «Video» (тот же факт, что в заголовке VideoCard).
+function StatusSubline({ data, bonsai }: { data: LocalModelStats; bonsai?: boolean }) {
   const parts: string[] = [];
   if (data.engine) parts.push(data.engine);
-  const n = data.gpus?.length ?? 0;
-  if (n > 0) {
-    // TP: из необязательного поля tensorParallel, иначе = число карт
-    const tp = data.tensorParallel ?? n;
-    parts.push(`${gpuCountLabel(n)}, TP=${tp}`);
+  if (bonsai) {
+    parts.push('Video');
+  } else {
+    const n = data.gpus?.length ?? 0;
+    if (n > 0) {
+      // TP: из необязательного поля tensorParallel, иначе = число карт
+      const tp = data.tensorParallel ?? n;
+      parts.push(`${gpuCountLabel(n)}, TP=${tp}`);
+    }
   }
   if (data.status === 'down') {
     const since = formatSince(data.downSince);
@@ -499,17 +506,22 @@ function WhoPlacesCard({ data, isMobile }: { data: LocalModelStats; isMobile: bo
 // Первая строка вкладки, над стендом. Виден ТОЛЬКО когда настроены оба движка:
 // с одним движком стенд открывается сразу, переключателя нет. Подписи — titles из
 // /engines («Основная», «Bonsai»): имена моделей в сегмент не ставим (на 320 не
-// помещаются, имя и так стоит первой строкой стенда). Точка 6 px на сегменте
-// «Bonsai» — тон рельса: уступку видно и с основного стенда; title/aria-label
-// сегмента — та же подсказка, что у рельса.
+// помещаются, имя и так стоит первой строкой стенда). Точка 6 px и подсказка на
+// сегменте «Bonsai» — только когда выбран сам «Bonsai» и по ЕГО снимку: data —
+// снимок текущего движка, состояние Bonsai с основного стенда неизвестно (при
+// падении основного старая логика зажигала на сегменте «Bonsai недоступна» —
+// неправда). Состояние Bonsai на основном стенде придёт в Ф6 из лёгкого опроса
+// useLocalModelWatcher. title/aria-label сегмента — та же подсказка, что у рельса.
 function EngineSwitch({ data, engines, engine, onChange, isMobile }: {
   data: LocalModelStats; engines: LocalModelEngine[]; engine: LocalModelEngineName;
   onChange: (e: LocalModelEngineName) => void; isMobile: boolean;
 }) {
   const configured = engines.filter(e => e.configured);
   if (configured.length < 2) return null;
-  const dot = standDot(data);
-  const hint = standHint(data);
+  // Точка и подсказка — только по снимку выбранного движка (составитель — format.ts)
+  const bonsaiSelected = engine === 'bonsai';
+  const dot = bonsaiSelected ? standDot(data) : null;
+  const hint = bonsaiSelected ? standHint(data) : null;
   return (
     <InlineSegmented<LocalModelEngineName>
       value={engine}
@@ -622,7 +634,7 @@ export function TextTab({ data, loading, isMobile, onOpenChat, onRefetch, onOpen
       {down && <DownBanner data={data} onCheck={onRefetch} bonsai={bonsai} />}
       {yielded && <YieldBanner data={data} />}
       <StatusRow data={data} />
-      <StatusSubline data={data} />
+      <StatusSubline data={data} bonsai={bonsai} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, ...stale }}>
         <NowCard data={data} />
         <SpeedCard data={data} bonsai={bonsai} />

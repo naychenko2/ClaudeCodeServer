@@ -159,11 +159,40 @@ describe('переключатель «Основная · Bonsai» (c1)', () =>
     expect(html).not.toContain('Основная');
     expect(html).not.toContain('Bonsai');
   });
-  it('точка и подсказка на сегменте «Bonsai» при уступке — видны с основного стенда', () => {
+  // Точка и подсказка — по снимку ВЫБРАННОГО движка: data — снимок текущего стенда,
+  // состояние Bonsai с основного стенда неизвестно (Ф6 — из useLocalModelWatcher).
+  // Раньше тест подставлял невозможную пару (main + снимок Bonsai); теперь — реальные.
+  it('основной стенд со своим снимком (down) — на сегменте «Bonsai» нет точки и подсказки', () => {
     const html = renderTab({
-      data: mockBonsaiStats('yielded'), engines: ENGINES_BOTH, engine: 'main', onEngineChange: () => {},
+      data: mockLocalModelStats('down'), engines: ENGINES_BOTH, engine: 'main', onEngineChange: () => {},
+    });
+    // сегмент есть, но пустой: ни title-подсказки, ни 6-пиксельной точки
+    expect(html).toContain('Bonsai');
+    expect(html).not.toContain('Bonsai —');
+    expect(html).not.toContain('width:6px');
+  });
+  it('выбран «Bonsai» и его снимок (yielded) — точка и подсказка на сегменте', () => {
+    const html = renderTab({
+      data: mockBonsaiStats('yielded'), engines: ENGINES_BOTH, engine: 'bonsai', onEngineChange: () => {},
     });
     expect(html).toContain('Bonsai — уступила карту');
+    expect(html).toContain('width:6px');
+  });
+});
+
+describe('подстрока под статусом (макет §3, .html:414)', () => {
+  it('Bonsai — «llama-server · Video · обновлено …», без «карта/карт, TP=»', () => {
+    const html = renderTab({
+      data: { ...mockBonsaiStats('ready'), history: historyWithKv() }, engine: 'bonsai',
+    });
+    expect(html).toContain('llama-server · Video ·');
+    expect(html).toContain('обновлено');
+    expect(html).not.toContain('TP=');
+  });
+  it('main — прежняя «N карты, TP=N», без «Video»', () => {
+    const html = renderTab({ data: mockLocalModelStats('working') });
+    expect(html).toContain('vLLM · 2 карты, TP=2');
+    expect(html).not.toContain('Video');
   });
 });
 
@@ -186,6 +215,21 @@ describe('поля из unsupported не рендерятся (c2)', () => {
     expect(html).not.toContain('Движок llama-server это не сообщает');
     expect(html).toContain('>Нагрузка</h3>');
     expect(html).toContain('ступеньками');
+  });
+  it('main с unsupported сырыми именами метрик vLLM — ничего не скрыто: блоки на месте', () => {
+    // Сокрытие идёт по ИМЕНАМ ПОЛЕЙ снимка (KvUsagePerc/Preemptions/QueueTimeSum —
+    // ThroughputChart.tsx:919, TextTab.kvHidden), а не по сырым именам метрик движка:
+    // незнакомые строки не должны прятать ни одного блока
+    const html = renderTab({
+      data: {
+        ...mockLocalModelStats('busy'), history: historyWithKv(),
+        unsupported: ['vllm:kv_cache_usage_perc', 'vllm:num_preemptions_total', 'vllm:request_queue_time_seconds_sum'],
+      },
+    });
+    expect(html).toContain('Нагрузка и кэш');
+    expect(html).toContain('Кэш, %');
+    expect(html).toContain('Вытеснения');
+    expect(html).toContain('Куда уходит время агентов');
   });
 });
 

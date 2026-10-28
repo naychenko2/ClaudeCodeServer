@@ -8,18 +8,19 @@ namespace ClaudeHomeServer.Services.Llm;
 // «уступила») и блок «Дежурство» — только когда на них смотрят.
 //
 // Ответ арбитра — недоверенный (разрез c4b4c1cc §2, ADR-029):
-//   • тело больше 64 КБ — отказ без исключения;
+//   • тело больше 64 КБ — отказ без исключения, хвост не читается (тело — поток);
 //   • не больше 32 причин и 32 аренд; текст `lease:` — произвольная строка из POST /lease
 //     от любого в сети, обрезается до 64 символов;
 //   • неверный тип поля обнуляет только это поле (элемент неверного типа в массиве пропускается);
 //   • неизвестное значение `bonsai` → `unknown`; `mode` вне exclusive/shared → null;
 //   • часы Video и CCS расходятся: возраст состояния меряется часами арбитра (ts − since) и
-//     переносится на нашу ось — `sinceAt = now − (ts − since)`; сам `ts` наружу не отдаётся.
+//     переносится на нашу ось — `sinceAt = now − (ts − since)`; сам `ts` наружу не отдаётся;
+//     абсурдные часы (отрицательный возраст или вне диапазона) обнуляют только `sinceAt`.
 //
 // На каждый движок: кэш 1 с с single-flight (два опроса в пределах секунды → один HTTP),
 // последний удачный снимок: при отказе `reachable: false` с полями последнего удачного
 // (до первого успеха — все null). HTTP-клиент — существующий тихий `local-engine-ready`,
-// таймаут запроса 800 мс: арбитр отвечает мгновенно, дольше — его нет.
+// общий бюджет 800 мс на заголовки и тело: арбитр отвечает мгновенно, дольше — его нет.
 public sealed record EngineArbiterSnapshot(
     bool Reachable,
     string? Bonsai,                     // ready | yielded | starting | waiting-vram | unknown
@@ -93,27 +94,32 @@ public sealed class LocalEngineStateClient
             if (slot.InFlight is null || now - slot.StartedTicks >= CacheMs)
             {
                 slot.StartedTicks = now;
-                slot.InFlight = FetchAsync(slot, url, ct);
+                slot.InFlight = FetchAsync(slot, url);
             }
             task = slot.InFlight!;
         }
-        // Присоединившийся к чужому запросу не наследует его отмену: свой ct — своё решение.
+        // Общий запрос окна кэша ведётся без ct вызывающего: чужая отмена не даёт остальным
+        // ложный reachable:false. Свой ct — своё решение: отменившийся получает
+        // OperationCanceledException здесь (само ожидание ограничено бюджетом запроса).
         var result = await task;
         ct.ThrowIfCancellationRequested();
         return result;
     }
 
-    private async Task<EngineArbiterSnapshot> FetchAsync(Slot slot, string url, CancellationToken ct)
+    private async Task<EngineArbiterSnapshot> FetchAsync(Slot slot, string url)
     {
         EngineArbiterSnapshot? good = null;
+        // Один бюджет 800 мс на заголовки и тело: при ResponseHeadersRead client.Timeout
+        // держит только заголовки, медленное тело обрывает этот cts.
+        using var budget = new CancellationTokenSource(RequestTimeoutMs);
         try
         {
             var client = _http.CreateClient(NamedLocalEngines.HttpClientName);
             client.Timeout = TimeSpan.FromMilliseconds(RequestTimeoutMs);
-            using var r = await client.GetAsync(url, ct);
+            using var r = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, budget.Token);
             if (r.IsSuccessStatusCode)
             {
-                var body = await ReadCappedAsync(r.Content, ct);
+                var body = await ReadCappedAsync(r.Content, budget.Token);
                 if (body is not null) good = Parse(body);
             }
         }
@@ -136,6 +142,7 @@ public sealed class LocalEngineStateClient
     }
 
     // Тело больше 64 КБ — отказ (null), не исключение: такой ответ не читали.
+    // Чтение обрывается на лимите: поток закрывается раньше, чем соединение опустошится до конца.
     private static async Task<byte[]?> ReadCappedAsync(HttpContent content, CancellationToken ct)
     {
         using var ms = new MemoryStream();
@@ -162,11 +169,7 @@ public sealed class LocalEngineStateClient
             if (root.ValueKind != JsonValueKind.Object) return null;
 
             // Возраст состояния — по часам арбитра (ts − since), перенос на нашу ось.
-            var ts = GetDouble(root, "ts");
-            var since = GetDouble(root, "since");
-            DateTimeOffset? sinceAt = ts is not null && since is not null
-                ? DateTimeOffset.UtcNow.AddSeconds(-(ts.Value - since.Value))
-                : null;
+            var sinceAt = AgeToOurAxis(GetDouble(root, "ts"), GetDouble(root, "since"));
 
             return new EngineArbiterSnapshot(
                 Reachable: true,
@@ -185,6 +188,23 @@ public sealed class LocalEngineStateClient
         catch (JsonException)
         {
             return null;
+        }
+    }
+
+    // Абсурдные часы арбитра обнуляют только sinceAt — снимок остаётся живым:
+    // since > ts (возраст отрицательный) или возраст вне диапазона DateTimeOffset.
+    private static DateTimeOffset? AgeToOurAxis(double? ts, double? since)
+    {
+        if (ts is null || since is null) return null;
+        var age = ts.Value - since.Value;
+        if (age < 0) return null; // часы разошлись: отрицательный возраст выдумывать нечего.
+        try
+        {
+            return DateTimeOffset.UtcNow.AddSeconds(-age);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return null; // возраст вне диапазона часов.
         }
     }
 

@@ -51,20 +51,38 @@ public class LocalEngineStateClientTests
                     {
                         try
                         {
-                            if (delay > 0) await Task.Delay(delay);
                             var bytes = Encoding.UTF8.GetBytes(body);
                             ctx.Response.StatusCode = status;
                             ctx.Response.ContentType = "application/json";
-                            await ctx.Response.OutputStream.WriteAsync(bytes);
+                            if (delay > 0)
+                            {
+                                // Заголовки и первая часть — сразу, остальное позже: меряется бюджет
+                                // медленного ТЕЛА, а не медленных заголовков.
+                                var cut = Math.Min(512, bytes.Length);
+                                await ctx.Response.OutputStream.WriteAsync(bytes.AsMemory(0, cut));
+                                await Task.Delay(delay);
+                                await ctx.Response.OutputStream.WriteAsync(bytes.AsMemory(cut));
+                            }
+                            else
+                            {
+                                // WriteAsync отдаёт тело частями: если клиент ушёл рано (потолок 64 КБ
+                                // или бюджет), хвост не дописывается — это меряют тесты потребления.
+                                await ctx.Response.OutputStream.WriteAsync(bytes);
+                            }
                             ctx.Response.Close();
                         }
-                        catch { /* клиент ушёл по таймауту */ }
+                        catch
+                        {
+                            ClientLeftEarly = true; // клиент ушёл: хвост тела не дописан.
+                        }
                     });
                 }
             });
         }
 
         public int RequestCount { get { lock (_gate) return _requests.Count; } }
+        // Клиент закрыл соединение до конца тела: хвост не был отправлен (потолок/бюджет сработали).
+        public bool ClientLeftEarly { get; private set; }
         public void Dispose() => _listener.Stop();
     }
 
@@ -107,6 +125,27 @@ public class LocalEngineStateClientTests
         Assert.Equal(1, stub.RequestCount);
         Assert.True(both[0]!.Reachable);
         Assert.Same(both[0], both[1]);
+    }
+
+    // MAJOR-2: отмена одного вызывающего не даёт второму ложный reachable:false:
+    // общий запрос ведётся без ct вызывающего. Первый — OperationCanceledException,
+    // второй — живой снимок. Мутация — вернуть ct в сетевой запрос: второй получает
+    // reachable:false, тест краснеет.
+    [Fact]
+    public async Task CancelOneCaller_OtherGetsLiveSnapshot()
+    {
+        using var stub = new Stub(_ => (200, GoodBody(), 300)); // задержка, чтобы отмена пришлась в середину запроса
+        var client = ClientFor(stub);
+        using var cts1 = new CancellationTokenSource();
+        var t1 = client.GetAsync(Engine, cts1.Token);
+        var t2 = client.GetAsync(Engine);
+        cts1.Cancel();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => t1);
+        var second = await t2;
+        Assert.NotNull(second);
+        Assert.True(second.Reachable);
+        Assert.Equal(1, stub.RequestCount);
     }
 
     // Кэш 1 с: второй опрос сразу после удачного — без нового запроса.
@@ -176,6 +215,34 @@ public class LocalEngineStateClientTests
             $"sinceAt {s.SinceAt} вне ±1 с от ожидаемого {expected}");
     }
 
+    // Хвост ревью: абсурдные часы арбитра не должны терять весь снимок.
+    // `since > ts` (возраст отрицательный) и гигантский возраст (вне диапазона часов)
+    // обнуляют только sinceAt; остальное читается. Мутация — старая формула: первый снимок
+    // краснеет на NotNull(SinceAt), второй — на Reachable (ArgumentOutOfRangeException).
+    [Fact]
+    public async Task AbsurdClocks_ZeroOnlySinceAt_SnapshotKept()
+    {
+        var nowUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var future = "{\"bonsai\":\"yielded\",\"yields\":7,\"ts\":" + nowUnix + ",\"since\":" + (nowUnix + 600) + "}";
+        var huge = "{\"bonsai\":\"yielded\",\"yields\":8,\"ts\":1e18,\"since\":1699999990}";
+        using var stub = new Stub(n => (200, n == 1 ? future : huge, 0));
+        var client = ClientFor(stub);
+
+        var a = await client.GetAsync(Engine);
+        Assert.NotNull(a);
+        Assert.True(a.Reachable);
+        Assert.Null(a.SinceAt);
+        Assert.Equal(EngineArbiterSnapshot.StateYielded, a.Bonsai);
+        Assert.Equal(7, a.Yields);
+
+        await Task.Delay(1100); // окно кэша истекло — будет второй запрос
+        var b = await client.GetAsync(Engine);
+        Assert.NotNull(b);
+        Assert.True(b.Reachable);
+        Assert.Null(b.SinceAt);
+        Assert.Equal(8, b.Yields);
+    }
+
     // c3: неверный тип поля обнуляет только это поле, остальные читаются.
     [Fact]
     public async Task BadFieldType_ZeroesOnlyThatField()
@@ -228,6 +295,36 @@ public class LocalEngineStateClientTests
         Assert.NotNull(s);
         Assert.False(s.Reachable);
         Assert.Null(s.Bonsai);
+    }
+
+    // MAJOR-1 (c1): тело 10 МБ — клиент читает до потолка и уходит, хвост не читается:
+    // заглушка не дописала тело. Снимок отвергнут без исключения.
+    // Мутация — вернуть ResponseContentRead: клиент буферизует всё целиком, дописывает
+    // хвост и тест краснеет на ClientLeftEarly.
+    [Fact]
+    public async Task Body10Mb_TailNotRead_SnapshotRejected()
+    {
+        var body = "{\"bonsai\":\"ready\",\"junk\":\"" + new string('a', 10_000_000) + "\"}";
+        using var stub = new Stub(_ => (200, body, 0));
+        var s = await ClientFor(stub).GetAsync(Engine);
+
+        Assert.NotNull(s);
+        Assert.False(s.Reachable);
+        Assert.True(stub.ClientLeftEarly, "клиент прочитал тело целиком: хвост 10 МБ дописан заглушкой");
+    }
+
+    // MAJOR-1 (c1): медленный арбитр отдаёт валидное тело по байту — общий бюджет 800 мс
+    // на заголовки и тело обрывает чтение, снимок отвергнут. Без бюджета (client.Timeout
+    // при потоковом чтении держит только заголовки) тело дочиталось бы за 1,2 с и было принято.
+    [Fact]
+    public async Task SlowBody_Budget800ms_CancelsRead_SnapshotRejected()
+    {
+        var body = "{\"bonsai\":\"ready\",\"reasons\":[\"gpu:ok\"],\"ts\":1700000000,\"since\":1699999990}";
+        using var stub = new Stub(_ => (200, body, 1200)); // тело валидное, но позже бюджета
+        var s = await ClientFor(stub).GetAsync(Engine);
+
+        Assert.NotNull(s);
+        Assert.False(s.Reachable);
     }
 
     // Больше 32 причин — наружу только 32; лишние аренды — так же.

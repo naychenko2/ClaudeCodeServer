@@ -343,8 +343,9 @@ export function resolveCardsFromHistory(serverItems: ChatItem[], prevItems: Chat
 // Завершён ли ход: последний содержательный элемент серверной истории — result или error.
 // fal_cost дописывается асинхронно уже после конца хода, на признак не влияет. Пока ход
 // идёт, хвостом истории всегда что-то из хода (user_message пишется в аккумулятор сразу
-// при отправке) — ложного «завершён» это не даёт. Перенесено из useSession.ts: на этом
-// признаке держится и подмена ленты (adoptServerHistory ниже) — точка правды одна.
+// при отправке) — ложного «завершён» это не даёт. Служит только лечению залипшего isWaiting
+// (useSession): подмена ленты (adoptServerHistory ниже) держится более полного
+// turnAlreadyEnded — у прерванного «Стопом» хода result нет, а лечение здесь вне его.
 export function historyTurnFinished(items: ChatItem[]): boolean {
   for (let i = items.length - 1; i >= 0; i--) {
     const kind = items[i].kind;
@@ -359,13 +360,16 @@ export function historyTurnFinished(items: ChatItem[]): boolean {
 // Хаб реплеит их при JoinSession (SessionHub), но в history.json не пишет (их нет в
 // PERSISTED_KINDS) — без переноса первая же подмена уносит карточку с кнопками, а CLI
 // ждёт ответа до таймаута (дефект «карточка разрешения пропадает после F5»).
-// Перенос только пока ход в истории не кончен: после result/error выжившая карточка —
-// зомби, отвечать ею уже нечем. Решённые не переносим: вердикт живёт только в живой
+// Перенос только пока ход в истории не кончен; конец хода — те же маркеры, что у
+// turnAlreadyEnded (result / error / interrupted / session_ended): один общий предикат,
+// третьей копии нет. Прерванный «Стопом» или аварийный ход ответа уже не ждёт: выжившая
+// карточка — зомби, сервер его ответ проигнорирует (IsStaleInteractionAnswer), а клиент
+// оптимистично покрасит «разрешено». Решённые не переносим: вердикт живёт только в живой
 // ленте, пары в истории нет — «решённая» карточка без ответа показала бы ложное «отвечено».
 // Остаточный риск прежний: середина хода, ответ пришёл с другого устройства,
 // interaction_resolved прошёл мимо — карточка висит до конца хода.
 export function adoptServerHistory(serverItems: ChatItem[], prevItems: ChatItem[]): ChatItem[] {
-  if (historyTurnFinished(serverItems)) return serverItems;
+  if (turnAlreadyEnded(serverItems)) return serverItems;
   const known = new Set<string>();
   for (const it of serverItems) if (it.kind === 'permission_request') known.add(it.requestId);
   const carry = prevItems.filter(it =>

@@ -100,9 +100,9 @@ vi.mock('../../lib/signalr', () => ({
   setMode: vi.fn(async () => { }),
 }));
 
-const { useSession, waitDiag, __test } = await import('../useSession');
+const { useSession, waitDiag, warmSession, __test } = await import('../useSession');
 const { toolLiveness } = await import('../../lib/toolTiming');
-const { normalizeHistory } = await import('../../lib/chatReducer');
+const { normalizeHistory, initialChatState } = await import('../../lib/chatReducer');
 
 // Сервер шлёт статус в сессию (в т.ч. replay в ответ на JoinSession)
 const emitStatus = (sid: string, status: string) =>
@@ -413,6 +413,77 @@ describe('useSession: карточка разрешения и подмена и
     expect(card.resolved).toBe(false);
 
     chat.unmount();
+  });
+});
+
+describe('useSession: карточка переживает подмену в каждой ветке (F3-S3c)', () => {
+  // Ревью R-F3-S3c: adoptServerHistory вызывается из четырёх веток подмены, а тест F5
+  // покрывал только joinAndLoadHistory. Каждая ветка обязана нести карточку сама:
+  // убираешь вызов в ветке — красный её собственный тест.
+  const emitPerm = (sid: string) =>
+    m.messageHandlers.forEach(h => h({
+      type: 'permission_request', sessionId: sid, requestId: 'perm-1', toolName: 'Bash', toolInput: { command: 'ls' },
+    }));
+  const expectCarriedCard = (items: ChatItem[]) => {
+    const card = items.at(-1);
+    expect(card).toMatchObject({ kind: 'permission_request', requestId: 'perm-1', resolved: false });
+  };
+
+  it('reloadHistory (по реплею статуса «active»): карточка переживает подмену', async () => {
+    const sid = nextSid();
+    const chat = openChat(sid);
+    await flush();
+
+    await chat.first.send('делай'); // user_message в ленту, isWaiting=true
+    emitPerm(sid); // хаб прислал карточку посреди хода (live-only, в истории её нет)
+    expect(chat.render().items.some(i => i.kind === 'permission_request')).toBe(true);
+
+    // Реплей статуса «active» при наличии зрителя зовёт перезагрузку истории
+    // (useSession.ts:409); история с дозаписанным хвостом новее живой ленты → подмена
+    m.getHistory.mockResolvedValue([user('делай'), text('работаю…')]);
+    emitStatus(sid, 'active');
+    await flush();
+
+    expectCarriedCard(chat.render().items);
+    chat.unmount();
+  });
+
+  it('реконнект: карточка переживает подмену', async () => {
+    const sid = nextSid();
+    const chat = openChat(sid);
+    await flush();
+
+    await chat.first.send('делай');
+    emitPerm(sid);
+
+    // Перебой связи и восстановление: ветка реконнекта перезаходит в группу и тянет
+    // историю — сессия ждала на момент разрыва (wasWaiting, useSession.ts:333) → подмена
+    m.getHistory.mockResolvedValue([user('делай'), text('работаю…')]);
+    await m.reconnectHandlers[0]!();
+    await flush();
+
+    expectCarriedCard(chat.render().items);
+    chat.unmount();
+  });
+
+  it('warmSession: карточка переживает подмену', async () => {
+    const sid = nextSid();
+    // Ветка пропускает чат, история которого ещё не снята (isHistoryLoading=true), —
+    // с live-карточкой в ленте. Прогрев обязан пройти ту же подмену, что остальные
+    // ветки (useSession.ts:508), и карточку сохранить, а не выбросить.
+    __test._store.set(sid, {
+      ...initialChatState(), isJoined: false, isHistoryLoading: true,
+      items: [
+        { kind: 'user_message', text: 'делай' },
+        { kind: 'permission_request', requestId: 'perm-1', toolName: 'Bash', toolInput: { command: 'ls' }, resolved: false },
+      ],
+    });
+    m.getHistory.mockResolvedValue([user('делай'), text('работаю…')]);
+
+    warmSession(sid);
+    await flush();
+
+    expectCarriedCard(__test._store.get(sid)!.items);
   });
 });
 

@@ -1485,6 +1485,20 @@ describe('adoptServerHistory: перенос нерешённых карточе
     expect(adoptServerHistory(server, [u('делай'), perm('r1')])).toEqual(server);
   });
 
+  // Ревью R-F3-S3c: «Стоп» пишет в историю interrupted (StoredInterruptedMessage), а
+  // предикат конца хода видел только result/error — карточка переносилась в следующую
+  // подмену и воскресала зомби: сервер ответ проигнорирует (IsStaleInteractionAnswer),
+  // клиент покрасит «разрешено». Маркеры конца — общие с turnAlreadyEnded.
+  it('interrupted в хвосте («Стоп») — кончен, не переносим', () => {
+    const server: ChatItem[] = [u('делай'), t('хвост убитого хода'), { kind: 'interrupted' }];
+    expect(adoptServerHistory(server, [u('делай'), perm('r1')])).toEqual(server);
+  });
+
+  it('session_ended в хвосте (аварийный выход) — тоже кончен, не переносим', () => {
+    const server: ChatItem[] = [u('делай'), { kind: 'session_ended' }];
+    expect(adoptServerHistory(server, [u('делай'), perm('r1')])).toEqual(server);
+  });
+
   it('карточка с тем же requestId уже в истории — второй не плодим', () => {
     const server: ChatItem[] = [u('делай'), perm('r1')];
     expect(adoptServerHistory(server, [u('делай'), perm('r1')])).toBe(server);

@@ -19,6 +19,7 @@ namespace ClaudeHomeServer.Tests.Composition;
 // `ConfigureApp` переехал блок регистрации языковых провайдеров `.cs`/`.ts`/`.tsx`
 // (бывший блок 926-946 в Program.cs, под `if (!inspectionMode)`). Гейт инспекции
 // сохраняется через `app.Configuration.GetValue<bool>("InspectionMode")`.
+[Trait("Category", "Host")]
 public class CodeGraphSubsystemRegistrationTests
 {
     private static IConfiguration BuildConfig() =>

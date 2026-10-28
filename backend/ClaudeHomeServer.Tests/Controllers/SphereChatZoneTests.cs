@@ -10,6 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ClaudeHomeServer.Tests.Controllers;
 
 // B4 «Сфер»: персона сферы не ведёт чат и не становится собеседником в проекте вне своей сферы — 400.
+[Trait("Category", "Host")]
 public class SphereChatZoneTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

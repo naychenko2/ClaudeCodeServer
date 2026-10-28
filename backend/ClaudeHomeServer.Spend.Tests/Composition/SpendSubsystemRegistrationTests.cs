@@ -16,6 +16,7 @@ namespace ClaudeHomeServer.Tests.Composition;
 // Ключевой инвариант — `ISpendCollector` и `SpendStore` указывают на ОДИН инстанс
 // (`sp => sp.GetRequiredService<SpendStore>()`). Тест `Register_SpendCollector_IsSameInstanceAsStore`
 // ловит регрессию «поставили `AddSingleton<ISpendCollector, SpendStore>()` и завели второй стор».
+[Trait("Category", "Host")]
 public class SpendSubsystemRegistrationTests
 {
     private static IConfiguration BuildConfig(string dataPath) =>

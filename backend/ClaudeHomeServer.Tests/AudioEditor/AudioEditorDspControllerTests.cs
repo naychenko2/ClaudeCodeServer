@@ -14,6 +14,7 @@ namespace ClaudeHomeServer.Tests.AudioEditor;
 
 // Ручки «Без ИИ» на собранном приложении: правка и склейка её версии, пики, нет шва — 503
 // dsp_unavailable, а не 500. Шов IAudioDsp — подставной (регистрация позже боевой побеждает)
+[Trait("Category", "Host")]
 public class AudioEditorDspControllerTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

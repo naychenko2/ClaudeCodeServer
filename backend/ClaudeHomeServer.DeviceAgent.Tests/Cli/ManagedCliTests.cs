@@ -373,6 +373,7 @@ public sealed class ManagedCliTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task Нет_выпуска_в_раздаче_понятная_причина()
     {
         var cli = Create();

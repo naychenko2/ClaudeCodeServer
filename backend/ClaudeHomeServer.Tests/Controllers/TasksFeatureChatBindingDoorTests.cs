@@ -16,6 +16,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // текстом. Мутация: убрать вызов FeatureChatDoor.DenyReason в case "tasks_create" тулсета —
 // краснеют MCP-тесты создания и сравнение текстов.
 [Trait("Category", "Integration")]
+[Trait("Category", "Host")]
 public class TasksFeatureChatBindingDoorTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

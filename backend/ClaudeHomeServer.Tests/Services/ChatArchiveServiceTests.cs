@@ -134,6 +134,7 @@ public class ChatArchiveServiceTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task Тик_Потолок200ЗаПроход()
     {
         var owner = EnableRule(days: 7);

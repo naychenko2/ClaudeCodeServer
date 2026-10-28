@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
+[Trait("Category", "Host")]
 public class SessionsControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly HttpClient _client;

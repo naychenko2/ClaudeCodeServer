@@ -16,6 +16,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// Фронт в хосте не раздаётся (<c>UseFrontend = false</c>): иначе SPA-фолбэк отвечал бы
 /// 200 на всё, что мимо маршрутов, и 404 здесь ничего бы не доказывал.
 /// </summary>
+[Trait("Category", "Host")]
 public class AgentDownloadsEndpointTests : IDisposable
 {
     private readonly AgentReleaseFixture _rel = new();

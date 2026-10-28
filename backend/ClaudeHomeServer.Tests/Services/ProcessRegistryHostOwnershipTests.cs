@@ -14,6 +14,7 @@ namespace ClaudeHomeServer.Tests.Services;
 //
 // Инвариант: хост, который реестром не владеет (Execution:ProcessRegistry:Enabled=false из
 // appsettings.Testing.json), при остановке его не трогает.
+[Trait("Category", "Host")]
 public class ProcessRegistryHostOwnershipTests
 {
     [Fact]

@@ -13,6 +13,7 @@ namespace ClaudeHomeServer.Tests.Composition;
 //   - адаптер зарегистрирован в Program.cs (резолвится из полного графа как
 //     ProjectManagerAdapter, а не как ProjectManager напрямую);
 //   - мутационная проверка: Stub-адаптер возвращает «нет данных» по всем 4 методам.
+[Trait("Category", "Host")]
 public class ProjectManagerAdapterTests
 {
     private static IConfiguration BuildConfig() =>

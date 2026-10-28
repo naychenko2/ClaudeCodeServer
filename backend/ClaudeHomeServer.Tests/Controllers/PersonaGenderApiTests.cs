@@ -9,6 +9,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // Пол персоны (Gender): REST create/update принимает строки "female"/"male"/"unspecified"
 // (глобальный JsonStringEnumConverter), null в update = не менять, явный "unspecified" — сброс.
 // Поле персистентно: после create/update GET возвращает сохранённое значение.
+[Trait("Category", "Host")]
 public class PersonaGenderApiTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

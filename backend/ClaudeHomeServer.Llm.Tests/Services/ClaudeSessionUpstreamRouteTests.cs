@@ -263,6 +263,7 @@ public class ClaudeSessionUpstreamRouteTests
     /// (ClaudeSession.cs) — в ResultMessage будет null.
     /// </summary>
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task РеальныйСтартПрогона_КлючПосчитанПриСтартеДоезжаетДоResultMessage()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "upstream_route_run_" + Guid.NewGuid().ToString("N"));

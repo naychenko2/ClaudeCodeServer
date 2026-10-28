@@ -22,6 +22,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// отдельным режимом списка), гейт живости отдаётся текстом сервиса как есть, чужой чат
 /// не архивируется (та же формула владения, что у соседей по тулсету).
 /// </summary>
+[Trait("Category", "Host")]
 public class WorkspaceHttpChatArchiveTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

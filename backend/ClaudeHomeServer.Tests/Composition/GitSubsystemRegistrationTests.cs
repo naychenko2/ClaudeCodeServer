@@ -30,6 +30,7 @@ namespace ClaudeHomeServer.Tests.Composition;
 // дефолт для стража подсистемы — Main.Tests, потому что ему нужен Program из Main
 // (или его эквивалент через TestWebApplicationFactory<Program>). Перенос в Git.Tests
 // потребовал бы поднимать полный стенд Main ради регистрации, что не задача стража.
+[Trait("Category", "Host")]
 public class GitSubsystemRegistrationTests
 {
     private static IConfiguration BuildConfig() =>

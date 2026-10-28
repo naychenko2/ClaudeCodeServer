@@ -14,6 +14,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // через продукт (GitService.CommitAsync), так и мимо него (сырой git commit).
 // Хост — TestWebApplicationFactory (как в ProjectFileSessionsIndexTests).
 [Trait("Category", "Slow")]
+[Trait("Category", "Host")]
 public class CommitAttributionServiceTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly ProjectManager _projects;

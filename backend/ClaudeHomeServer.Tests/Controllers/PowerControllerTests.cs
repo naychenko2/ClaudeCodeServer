@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // Два отказа легко перепутать, поэтому проверяем оба: не-админ получает отказ по правам, а
 // выключенная фича — 404, потому что дело не в правах. И отдельно — что GET отвечает 200 даже
 // выключенным: его зовёт шапка при каждом монтировании.
+[Trait("Category", "Host")]
 public class PowerControllerTests(TestWebApplicationFactory factory) : IClassFixture<TestWebApplicationFactory>
 {
     private sealed record StatusResponse(bool Enabled, bool Available, int DelaySeconds, object? Pending);

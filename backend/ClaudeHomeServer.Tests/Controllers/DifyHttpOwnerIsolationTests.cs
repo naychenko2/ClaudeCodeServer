@@ -22,6 +22,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// и оси живого состава скипаются; оси изоляции (чужая сессия) работают всегда — fail-closed
 /// и на пустой конфигурации.
 /// </summary>
+[Trait("Category", "Host")]
 public class DifyHttpOwnerIsolationTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

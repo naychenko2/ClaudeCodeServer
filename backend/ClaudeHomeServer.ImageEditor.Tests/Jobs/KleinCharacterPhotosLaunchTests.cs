@@ -133,6 +133,7 @@ public class KleinCharacterPhotosLaunchTests : IDisposable
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    [Trait("Category", "Slow")]
     public async Task Пять_фото_разных_ракурсов_главное_первым(bool flagOn)
     {
         var request = await Run(flagOn, "портрет в профиль у окна");

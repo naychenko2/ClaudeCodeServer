@@ -17,6 +17,7 @@ namespace ClaudeHomeServer.Tests.VideoEditor;
 // Ручки фильма и сохранения сцены на собранном приложении (ADR-022 §2, блок 2): сохранение → фильм в списке и в
 // состоянии, правка под ревизией (409 со свежим состоянием), границы записи (video/**, ссылки наружу), личный чат —
 // personal_scope_no_films, чужое неотличимо от несуществующего. Съёмка — фейковый поставщик в памяти.
+[Trait("Category", "Host")]
 public class FilmControllerTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

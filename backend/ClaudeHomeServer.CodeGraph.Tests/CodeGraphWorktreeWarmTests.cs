@@ -16,6 +16,7 @@ namespace ClaudeHomeServer.Tests.Services;
 /// Прогрев графа worktree и ответ по основному дереву, пока граф дерева строится (ADR-003):
 /// инспектор не трогает свежий граф, а тулсет не отказывает, если у проекта граф есть.
 /// </summary>
+[Trait("Category", "Host")]
 public class CodeGraphWorktreeWarmTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

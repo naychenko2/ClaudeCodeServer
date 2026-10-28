@@ -14,6 +14,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // мутируют UserStore напрямую, состояние per-факт не должно течь в обычные auth-тесты.
 // Дефолт/заготовку каждый тест выставляет сам — порядок фактов внутри класса не
 // гарантирован (общая фабрика на класс, как в ChatCreationPersonaGateTests).
+[Trait("Category", "Host")]
 public class AuthControllerIntroTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

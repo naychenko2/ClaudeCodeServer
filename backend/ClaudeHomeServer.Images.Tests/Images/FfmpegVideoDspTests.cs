@@ -130,6 +130,7 @@ public sealed class FfmpegVideoDspTests : IDisposable
     }
 
     [SkippableFact]
+    [Trait("Category", "Slow")]
     public async Task Полоса_кадров_и_последний_кадр_снимаются_файлами()
     {
         var dsp = Dsp();

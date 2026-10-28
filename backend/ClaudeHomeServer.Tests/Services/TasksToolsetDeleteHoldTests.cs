@@ -16,6 +16,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // RestoreFrozenChatsBeforeDelete до tasks.Delete. Мутация: убрать вызов в case
 // "tasks_delete" — последний абзац краснеет (чат остаётся без срока).
 [Trait("Category", "Integration")]
+[Trait("Category", "Host")]
 public class TasksToolsetDeleteHoldTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

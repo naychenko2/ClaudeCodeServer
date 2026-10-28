@@ -11,6 +11,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // Онбординги: старт/резюм сессий, идемпотентность
 // double-start, кейс удалённой сессии, 400 без личного дефолта у проектного онбординга,
 // финализация через make-default из онбординг-сессии и MCP-гейт обычного чата.
+[Trait("Category", "Host")]
 public class OnboardingControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

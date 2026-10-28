@@ -16,6 +16,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // Отдельный класс (не SpecialtiesControllerTests): FallbackSettingsStore — singleton на
 // хост, а здесь мы мутируем его global/owner прямо через DI. Свой TestWebApplicationFactory
 // даёт чистый стор без интерференции с тестами специальностей.
+[Trait("Category", "Host")]
 public class SpecialtiesFallbackSettingsTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

@@ -19,6 +19,7 @@ namespace ClaudeHomeServer.Tests.ImageEditor.Threads;
 // Выбор человека в полосе «Картинки» проекта на собранном приложении: GET без файла — умолчания,
 // PUT сохраняет и рассылает image_prefs_changed владельцу, чужой проект — 404 и чужой выбор не
 // трогает, новая нить из ручки нитей наследует сохранённый выбор.
+[Trait("Category", "Host")]
 public class ImagePrefsEndpointTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

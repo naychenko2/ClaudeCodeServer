@@ -17,6 +17,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // проверять надо именно его: ручка пишет в ЧУЖУЮ ленту, а веб-морда торчит наружу. Три отказа
 // разные по смыслу и их легко перепутать: секрет не настроен — ручки нет вовсе (404), секрет
 // не тот — 401, сессии нет — 404.
+[Trait("Category", "Host")]
 public class LlmProxyEventsControllerTests
 {
     private const string Url = "/api/internal/llm-proxy/events";

@@ -19,6 +19,7 @@ namespace ClaudeHomeServer.Tests.Composition;
 // Тест живёт в `ClaudeHomeServer.Tests`, а не в `ClaudeHomeServer.Skills.Tests`,
 // по прецеденту уже вынесенных Video и Yandex: стенду нужен `Program` из Main, а
 // тестовая сборка вертикали намеренно не ссылается на Main (её тесты — чистый парсинг).
+[Trait("Category", "Host")]
 public class SkillsSubsystemRegistrationTests
 {
     private static IConfiguration BuildConfig() =>

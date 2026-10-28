@@ -20,6 +20,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 //  - эндпоинты, которые хост заводит только в Production (или по конфигу, которого в тестовом
 //    хосте нет).
 // Анонимность такой ветки проверяется её собственными тестами, а не этим списком.
+[Trait("Category", "Host")]
 public class AnonymousEndpointsGuardTests
 {
     // Запись — «владелец: МЕТОДЫ маршрут»; владелец — имя контроллера или «minimal» у минимальных API

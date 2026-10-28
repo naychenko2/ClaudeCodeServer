@@ -64,6 +64,7 @@ public class TurnFileWatcherSubscriptionTests
     }
 
     [SkippableFact]
+    [Trait("Category", "Slow")]
     public async Task ФайлВГлубинеИВНовомКаталоге_ДоходитДоЛенты_АСлужебныйКаталогНет()
     {
         Skip.IfNot(OperatingSystem.IsLinux(), "подписка по перечню каталогов — только Linux");

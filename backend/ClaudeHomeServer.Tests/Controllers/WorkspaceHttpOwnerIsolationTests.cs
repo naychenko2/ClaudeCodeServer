@@ -22,6 +22,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// - чужая сессия в хвосте — ни состава, ни вызова (fail-closed).
 /// Парные тесты: NotesHttpOwnerIsolationTests (волна 2), MemoryHttpTransportTests (волна 1).
 /// </summary>
+[Trait("Category", "Host")]
 public class WorkspaceHttpOwnerIsolationTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

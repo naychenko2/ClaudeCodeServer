@@ -23,6 +23,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// сквозная проводка false → без прерывания, дефолт → прерывание. Поведение очереди
 /// по result покрыто юнит-тестами SessionManagerTests (PreemptFalse_*).
 /// </summary>
+[Trait("Category", "Host")]
 public class WorkspaceHttpChatsSendPreemptTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

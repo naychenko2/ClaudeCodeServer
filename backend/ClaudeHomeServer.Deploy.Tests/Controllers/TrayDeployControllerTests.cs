@@ -13,6 +13,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // а выключенная фича — 404, потому что дело не в правах и говорить «вам нельзя» было бы враньём.
 // И отдельно — что GET отвечает 200 даже выключенным: его зовёт шапка при каждом монтировании,
 // и 404 шумел бы в консоли у каждого админа.
+[Trait("Category", "Host")]
 public class TrayDeployControllerTests(TestWebApplicationFactory factory) : IClassFixture<TestWebApplicationFactory>
 {
     [Fact]

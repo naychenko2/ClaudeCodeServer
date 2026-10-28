@@ -14,6 +14,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // Свежая фабрика на каждый тест: состояние OnboardingSessionId/AssistantPersonaId живёт в
 // общем UserStore синглтона, и тесты на нём зависели бы от порядка. Плюс своя ICheapTextRunner-заглушка,
 // отдающая готовый черновик: боевой раннер погнал бы claude.exe/Ollama в интеграционном тесте.
+[Trait("Category", "Host")]
 public class OnboardingApplyTranscriptTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory;

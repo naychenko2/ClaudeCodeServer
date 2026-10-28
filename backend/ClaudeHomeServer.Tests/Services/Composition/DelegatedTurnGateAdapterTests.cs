@@ -16,6 +16,7 @@ namespace ClaudeHomeServer.Tests.Services.Composition;
 /// адаптер зовёт DelegatedTurnGate с нужными флагами (ADR-018 §2): отказ на делегированном
 /// ходу и на ходу доклада исполнителя, отказ без вызывателя (fail-closed), пропуск обычного хода.
 /// </summary>
+[Trait("Category", "Host")]
 public class DelegatedTurnGateAdapterTests : IDisposable
 {
     // Глубину и флаг «ход доклада» меняем на лету: GetActiveTurnDelegation читает живой адаптер

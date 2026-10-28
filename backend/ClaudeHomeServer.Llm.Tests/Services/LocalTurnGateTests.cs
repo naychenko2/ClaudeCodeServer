@@ -410,6 +410,7 @@ public class LocalTurnGateTests
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task ПоздниеСдвигиПозиции_ПослеСнятияСтроки_НеВоскрешаютЕё()
     {
         var gate = new LocalEngineBusyTracker(_clock);

@@ -17,6 +17,7 @@ namespace ClaudeHomeServer.Tests.Services;
 /// и короткий CodeGraph:RebuildDebounceMs из TestWebApplicationFactory.
 /// </summary>
 [Collection(TestCollections.Inotify)]
+[Trait("Category", "Host")]
 public class FileWatcherServiceTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

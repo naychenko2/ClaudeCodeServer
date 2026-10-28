@@ -19,6 +19,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // ответе List обязана иметь group=integration, ручная — group!=integration, и сам
 // ключ group обязан присутствовать в JSON (не быть пропущенным null/undefined). Уберут
 // поле из DTO — тест упадёт на ассертах ключа и значения.
+[Trait("Category", "Host")]
 public class McpServersListGroupTests(TestWebApplicationFactory factory)
     : IClassFixture<TestWebApplicationFactory>
 {

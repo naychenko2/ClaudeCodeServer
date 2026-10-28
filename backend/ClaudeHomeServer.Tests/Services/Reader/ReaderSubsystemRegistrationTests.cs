@@ -16,6 +16,7 @@ namespace ClaudeHomeServer.Tests.Services.Reader;
 // или забудет `ConfigurePrimaryHttpMessageHandler`, тест хендлера упадёт с понятным
 // сообщением, а не молча пустит трафик через системный egress-прокси (а тот
 // релеит на приватные адреса без фильтрации).
+[Trait("Category", "Host")]
 public class ReaderSubsystemRegistrationTests
 {
     private static (IServiceCollection services, IConfiguration config) NewHost()

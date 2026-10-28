@@ -19,6 +19,7 @@ namespace ClaudeHomeServer.Tests.ImageEditor;
 // Запуск с FaceTarget: HTTP-статусы отказов (ADR-028, этап 2).
 // faces_changed → 409, feature_disabled → 404, busy → 503, provider_unavailable → 409,
 // version_not_found → 404, invalid_request → 400.
+[Trait("Category", "Host")]
 public class FaceTargetLaunchHttpTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory;

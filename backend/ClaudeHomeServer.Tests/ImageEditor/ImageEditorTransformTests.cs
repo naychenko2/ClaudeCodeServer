@@ -15,6 +15,7 @@ namespace ClaudeHomeServer.Tests.ImageEditor;
 // Ручка правок без ИИ POST …/image-editor/transform и шаги истории (ADR-018 §9): флаг гейтит
 // её так же, как остальные; путь базы — только внутри проекта и не через ссылку; в проект она
 // не пишет никогда; dryRun шага не создаёт; шаги складываются в ленту с родителем.
+[Trait("Category", "Host")]
 public class ImageEditorTransformTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

@@ -20,6 +20,7 @@ namespace ClaudeHomeServer.Tests.Composition;
 // Проверяем РЕГИСТРАЦИЮ через `services.Any(...)`, а не резолв: `VoiceResolver` зависит
 // от `PersonaManager` (Services/ корень) — полный резолв потребовал бы поднимать
 // граф персон, это не задача стража.
+[Trait("Category", "Host")]
 public class TtsSubsystemRegistrationTests
 {
     private static IConfiguration BuildConfig() =>

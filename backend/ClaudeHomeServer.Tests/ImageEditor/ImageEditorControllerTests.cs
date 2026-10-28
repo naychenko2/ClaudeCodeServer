@@ -16,6 +16,7 @@ namespace ClaudeHomeServer.Tests.ImageEditor;
 // флаг гейтит сервер, ненастроенный поставщик скрыт и не даёт 500, запуск — 202 с id или
 // понятный отказ, чужая задача неотличима от несуществующей, выключенная подсистема
 // картинок не роняет хост.
+[Trait("Category", "Host")]
 public class ImageEditorControllerTests : IDisposable
 {
     private readonly List<TestWebApplicationFactory> _factories = [];

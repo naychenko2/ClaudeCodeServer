@@ -442,6 +442,7 @@ public class ComfyQueueMonitorTests
     // Мутация: вернуть период в DelayAsync к LastDelay (без пересчёта) — следующий тик через 15с,
     // в пределах 5с второй тик не происходит, тест краснеет.
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task Touch_ВоВремяТика_НеТеряется_СледующийТик_В_АктивнойПаузе()
     {
         var h = Build();

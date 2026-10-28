@@ -10,6 +10,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // Стык бэкенд↔фронт: REST создания/правки персоны обязан принимать sphereId у scope=Sphere.
 // Раньше DTO его не содержали — персона создавалась сферной, но без сферы и не попадала в команду.
+[Trait("Category", "Host")]
 public class PersonaSphereIdApiTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

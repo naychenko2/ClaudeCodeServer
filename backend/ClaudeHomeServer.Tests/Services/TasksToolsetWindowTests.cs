@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Services;
 
 // Окно закрытых и потолок tasks_list (MCP) плюс параметр doneDays у REST GET /api/tasks.
 [Trait("Category", "Integration")]
+[Trait("Category", "Host")]
 public class TasksToolsetWindowTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

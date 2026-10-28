@@ -4871,6 +4871,7 @@ public partial class SessionManagerTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task TurnWire_OutcomeInterrupted_ШтабНеРазбираетКарточкиНет()
     {
         // interrupted — НЕ конец хода штаба. Обе точки прерывания (Стоп, прерывание ради
@@ -4905,6 +4906,7 @@ public partial class SessionManagerTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task TurnWire_OutcomeCancelled_ШтабНеРазбирает()
     {
         // MakeTeamStabAsync (не InterviewStab): не запускает реальный адаптер — тест
@@ -4921,6 +4923,7 @@ public partial class SessionManagerTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task TurnWire_OutcomeCrashed_БезТерминалаDownstreamШтабНеРазбирает()
     {
         // crashed через SettleAsync: сбой оркестрации случился ДО первой попытки (lastEnd=null,
@@ -10214,6 +10217,7 @@ public partial class SessionManagerTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task Pending_АвтодренажНаСтарте_ЧатБезХодаПолучаетСообщение()
     {
         var session = await MkBusySessionAsync("persist-drain");

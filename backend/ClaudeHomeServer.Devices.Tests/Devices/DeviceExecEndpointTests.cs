@@ -19,6 +19,7 @@ namespace ClaudeHomeServer.Tests.Services.Devices;
 // ТОЛЬКО токен устройства с отпечатком — пользовательский JWT и сервисный JWT владельца
 // отвергаются; несовместимая версия протокола — явный отказ до апгрейда; кадры
 // подтверждаются, неподтверждённое досылается после реконнекта, дубли не доходят дважды.
+[Trait("Category", "Host")]
 public class DeviceExecEndpointTests : IDisposable
 {
     private const string Conn = "exec-conn-1";

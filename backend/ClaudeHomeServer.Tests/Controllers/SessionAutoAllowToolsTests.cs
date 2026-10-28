@@ -11,6 +11,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // Снятие инструмента с «Разрешать всегда»: DELETE /api/sessions/{id}/auto-allow?tool=Bash.
 // Единый маршрут по id сессии — покрывает и проектные сессии, и чаты вне проекта
 // (как /pending и снимки промпта в этом же контроллере).
+[Trait("Category", "Host")]
 public class SessionAutoAllowToolsTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

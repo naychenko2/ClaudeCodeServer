@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // + TaskManager целиком (юниты покрывают только парсер). Номера строк и контент
 // читаем обратно через API — тест устойчив к трансформациям контента при создании.
 [Trait("Category", "Integration")]
+[Trait("Category", "Host")]
 public class NotesTaskSyncIntegrationTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly HttpClient _client;

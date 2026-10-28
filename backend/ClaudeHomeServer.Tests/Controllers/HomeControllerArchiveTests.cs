@@ -13,6 +13,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // .Take(recent) — иначе архивированные свежие чаты занимают слоты и блок «Недавние»
 // пустеет; поле archived — готовый bool с сервера (второй копии правила на фронте нет).
 // Ветку active сервер не режет: активный архивный чат приходит с archived=true.
+[Trait("Category", "Host")]
 public class HomeControllerArchiveTests(TestWebApplicationFactory factory)
     : IClassFixture<TestWebApplicationFactory>
 {

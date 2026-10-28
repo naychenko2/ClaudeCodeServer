@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // приглашение не должна гаснуть от косметики. Своя фабрика НА КАЖДЫЙ тест (не IClassFixture):
 // AssistantPersonaId/DefaultPersonaId живут в общем UserStore синглтона, и общая фабрика на
 // класс сделала бы факты зависимыми от порядка выполнения (как и в OnboardingApplyTranscriptTests).
+[Trait("Category", "Host")]
 public class AssistantStatusTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

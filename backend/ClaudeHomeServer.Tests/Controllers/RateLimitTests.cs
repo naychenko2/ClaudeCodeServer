@@ -24,6 +24,7 @@ public class LowLoginLimitFactory : TestWebApplicationFactory
     }
 }
 
+[Trait("Category", "Host")]
 public class RateLimitTests : IClassFixture<LowLoginLimitFactory>
 {
     private readonly HttpClient _client;

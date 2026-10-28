@@ -18,6 +18,7 @@ namespace ClaudeHomeServer.Tests.AudioEditor;
 // Ручки библиотеки «Голоса» на собранном приложении (ADR-021 §2): CRUD по voices/<slug>/ проекта,
 // образцы из загрузки и из файлов проекта, модель RVC из версии нити, изоляция владельцев, отказ
 // локальному проекту до диска и пустое состояние личного чата.
+[Trait("Category", "Host")]
 public class AudioVoicesControllerTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

@@ -13,6 +13,7 @@ namespace ClaudeHomeServer.Tests.ImageEditor.Threads;
 // Миграция чатов картинки v2 на v3 (ADR-019, решение 2): чат уходит в архив без сдвига
 // UpdatedAt, получает маркер MigratedAt, повторный прогон ничего не меняет, чат, который человек
 // вернул из архива, повторно не архивируется, обычные чаты не трогаются, схема бэкапа та же.
+[Trait("Category", "Host")]
 public class ImageChatV3MigrationTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

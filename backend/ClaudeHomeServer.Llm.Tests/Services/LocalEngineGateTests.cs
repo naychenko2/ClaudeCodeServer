@@ -185,6 +185,7 @@ public class LocalEngineGateTests
 
 // Полный хост: коллекция Inotify, как у соседних тестов с TestWebApplicationFactory
 [Collection(TestCollections.Inotify)]
+[Trait("Category", "Host")]
 public class LocalEngineGateDiTests
 {
     // Регистрация ILocalLlmClient в LlmSubsystem обёрнута слотом общего счётчика: снятие обёртки

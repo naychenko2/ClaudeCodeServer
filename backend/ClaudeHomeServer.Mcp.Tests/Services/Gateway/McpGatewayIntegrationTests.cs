@@ -20,6 +20,7 @@ namespace ClaudeHomeServer.Tests.Services.Gateway;
 /// JwtService, а MCP-over-HTTP бэкенда отвечает шлюзу тем же составом, что и серверному
 /// ходу (сторож G9). Звонок «в свой Kestrel» уводится в TestServer того же хоста.
 /// </summary>
+[Trait("Category", "Host")]
 public sealed class McpGatewayIntegrationTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new()

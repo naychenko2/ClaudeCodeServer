@@ -17,6 +17,7 @@ namespace ClaudeHomeServer.Tests.ImageEditor.Threads;
 // Личный маршрут редактора api/image-editor/chats/{sessionId} на собранном приложении (разрез
 // docs/research/image-editor-personal-chats-cut-2026-09.md): черновик → запуск → версии → байты шага,
 // чужой личный чат и чат проекта неотличимы, у личного чата нет записи в проект, персонажей и файлов.
+[Trait("Category", "Host")]
 public class PersonalChatEndpointTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

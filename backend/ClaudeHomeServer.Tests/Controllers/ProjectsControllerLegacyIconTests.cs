@@ -10,6 +10,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // «без значка» — состояние инициалов, а не ошибка. Обе формы старых данных —
 // отсутствие поля и явный null — читаются в тот же дефолтный запись, что и
 // недавно созданный проект без цвета: kind=initials, glyph=null, color=null.
+[Trait("Category", "Host")]
 public class ProjectsControllerLegacyIconTests
 {
     private const string LegacyId = "legacy-no-icon";

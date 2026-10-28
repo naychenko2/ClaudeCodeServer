@@ -24,6 +24,7 @@ namespace ClaudeHomeServer.Tests.Services;
 //
 // Тест сквозной: боевая DI и боевые контрибьюторы, подменён только адаптер (перехват
 // LlmSessionContext) и лаунчер (чтобы не стартовал настоящий CLI).
+[Trait("Category", "Host")]
 public class ProjectSessionPersonaLayerGuardTests : IDisposable
 {
     private const string PersonaPrompt = "МАРКЕР_ХАРАКТЕР_ПРОЕКТНОЙ_ПЕРСОНЫ";

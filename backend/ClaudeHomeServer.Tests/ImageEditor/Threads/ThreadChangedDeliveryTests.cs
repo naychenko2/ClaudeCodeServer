@@ -15,6 +15,7 @@ namespace ClaudeHomeServer.Tests.ImageEditor.Threads;
 
 // Доставка image_thread_changed по настоящему SignalR до соединения в группе владельца:
 // запись нити через REST в личном чате и в чате проекта обязана долететь одинаково
+[Trait("Category", "Host")]
 public class ThreadChangedDeliveryTests : IAsyncLifetime
 {
     private readonly TestWebApplicationFactory _factory = new();

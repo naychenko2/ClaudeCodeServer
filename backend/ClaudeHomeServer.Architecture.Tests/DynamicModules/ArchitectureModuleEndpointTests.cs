@@ -13,6 +13,7 @@ namespace ClaudeHomeServer.Tests.DynamicModules;
 // modules/architecture (копия CopyArchitectureModuleForTests), контроллер подключается
 // AssemblyPart'ом. Main на компиляции типы вертикали не видит — отвечает только загруженная
 // сборка. Образец — StubModuleEndpointTests.
+[Trait("Category", "Host")]
 public class ArchitectureModuleEndpointTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

@@ -19,6 +19,7 @@ namespace ClaudeHomeServer.Tests.VideoEditor;
 // неотличимо от несуществующего), ревизия сцен — 409, отдача клипа версии с Range, папки только внутри
 // video/, личный чат без local и без проектных путей, локальный проект отказывает до диска.
 // Поставщик — фейк в памяти поверх настоящего исполнителя съёмки.
+[Trait("Category", "Host")]
 public class VideoEditorControllerTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

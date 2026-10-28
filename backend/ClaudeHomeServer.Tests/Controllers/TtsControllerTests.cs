@@ -10,6 +10,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // POST /api/tts — синтез речи голосового режима. Коды ответа — контракт фолбэка фронта:
 // 503 not_configured (постоянно, фронт запоминает), 502 upstream (временно), 400 — плохой текст.
 // В тестовом окружении Yandex:SpeechKit не задан — штатный путь «ключа нет».
+[Trait("Category", "Host")]
 public class TtsControllerTests(TestWebApplicationFactory factory) : IClassFixture<TestWebApplicationFactory>
 {
     private readonly HttpClient _client = factory.CreateAuthenticatedClient();

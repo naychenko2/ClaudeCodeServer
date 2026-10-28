@@ -299,6 +299,7 @@ public class ClaudeSessionReplayEchoCorrelationTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task ЭхаНетСовсем_ResultПослеОтсечки_ЗасчитываетсяБезПропуска()
     {
         var (results, errors, turnDone) = await RunNoEchoScenarioAsync(

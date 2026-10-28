@@ -24,6 +24,7 @@ namespace ClaudeHomeServer.Tests.Services;
 //   2) снятие паузы (70eb01877)          — TasksController.ClearFeatureHold: эпик
 //   3) продолжение шага (ca193aa03)      — ResumeFeatureTurnsAfterHold: снятая пометка feature_held
 //   4) чат исчез за паузу (8ef589f7e)    — ResumeFeatureTurnsAfterHold: пометка feature_held_expired
+[Trait("Category", "Host")]
 public class TaskChangedBroadcastContractTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

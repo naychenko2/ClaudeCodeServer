@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// принадлежать владельцу ТОКЕНА. Парный тест для задач — TasksHttpDelegationGateTests,
 /// для памяти — MemoryHttpTransportTests.
 /// </summary>
+[Trait("Category", "Host")]
 public class NotesHttpOwnerIsolationTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

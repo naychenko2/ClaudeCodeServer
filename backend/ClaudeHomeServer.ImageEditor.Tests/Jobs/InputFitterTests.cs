@@ -33,6 +33,7 @@ public class InputFitterTests : IDisposable
             MaxInputSide: 2048);
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task Ужатие_6000x4000_под_2048_маска_и_исходник_равны_маска_бинарна()
     {
         var fitter = new InputFitter(_raster);
@@ -86,6 +87,7 @@ public class InputFitterTests : IDisposable
     // проверка файла одна была бы вакуумной. Сторожим то, до чего конвейер реально дотягивается:
     // байты оригинала в памяти, из которых читается исходник, ужимаются в НОВЫЙ массив
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task Автоуменьшение_не_пишет_в_проект_хеш_оригинала_не_меняется()
     {
         var project = Path.Combine(_dir, "project");

@@ -21,6 +21,7 @@ public class BuildConcurrencyGateTests
         await Task.WhenAny(task, Task.Delay(Beat)) == task;
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task ПревышениеПотолка_СтавитВОчередь_ОсвобождениеПускаетСледующего()
     {
         var gate = new BuildConcurrencyGate(2);

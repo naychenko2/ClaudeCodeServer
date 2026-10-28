@@ -157,6 +157,7 @@ public class ConsumersHookTests
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public void Таймаут3Секунды_ХукМолчитИНеТормозитХод()
     {
         if (OperatingSystem.IsWindows()) return;
@@ -230,6 +231,7 @@ public class ConsumersHookTests
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public void ПослеСбоя_ХукМолчитБезОжиданияПотолка()
     {
         if (OperatingSystem.IsWindows()) return;

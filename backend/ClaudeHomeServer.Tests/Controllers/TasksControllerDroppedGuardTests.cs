@@ -23,6 +23,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // Мутация: убрать isAgentCall из вызова tasks.Update в TasksController — первый тест
 // получит 200 вместо 400 и покраснеет.
 [Trait("Category", "Integration")]
+[Trait("Category", "Host")]
 public class TasksControllerDroppedGuardTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

@@ -18,6 +18,7 @@ namespace ClaudeHomeServer.Tests.Plugins;
 // зовёт адаптер).
 // Мутация: убрать регистрацию шва в Program.cs:480 → DI отдаёт null → каскад no-op →
 // привязка не снимается → тест красный.
+[Trait("Category", "Host")]
 public class PluginBindingPurgeBattleTests : IDisposable
 {
     private const string Owner = "owner-a";

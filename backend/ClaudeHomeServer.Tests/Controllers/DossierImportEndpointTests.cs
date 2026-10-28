@@ -18,6 +18,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // происхождения в ответе. Содержательная логика коллизий/парсинга покрыта
 // DossierImporterTests — здесь только транспорт.
 [Trait("Category", "Slow")]
+[Trait("Category", "Host")]
 public class DossierImportEndpointTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

@@ -18,6 +18,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// ClaudeHomeServer.Git. Перенос в Git.Tests потребовал бы выноса контроллера в
 /// вертикаль (отдельная задача — обсуждать с архитектором, сейчас не в скоупе).
 /// </summary>
+[Trait("Category", "Host")]
 public class GitControllerLogTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

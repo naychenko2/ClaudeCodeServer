@@ -29,6 +29,7 @@ public class ImageProvidersFactory : TestWebApplicationFactory
 
 // Настройка генератора картинок для вкладки «Применение»: по месту (аватар персоны —
 // иконка проекта ушла к SVG-значкам, ADR-009), чтение — всем, запись — админам.
+[Trait("Category", "Host")]
 public class ImageGenerationControllerTests : IClassFixture<ImageProvidersFactory>
 {
     private const string Url = "/api/image-generation";

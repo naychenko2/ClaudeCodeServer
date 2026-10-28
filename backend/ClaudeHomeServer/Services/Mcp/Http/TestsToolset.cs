@@ -667,7 +667,7 @@ public sealed class TestsToolset(
             }),
         new(PregateName,
             "Предгейт шага твоей задачи (role=step|rework с собственным деревом): детерминированные проверки из секции "
-            + "Pregate в appsettings.json — по умолчанию tsc, lint:design, build, сторожа границ — в дереве задачи. "
+            + "Pregate в appsettings.json — по умолчанию tsc, lint:design, build, быстрые тесты, сторожа границ — в дереве задачи. "
             + "Сборка build: в ошибку идут только nullable и xUnit1031 (backend/Directory.Build.props), остальные "
             + "предупреждения остаются предупреждениями; строгий гейт (все предупреждения как ошибки) остаётся в CI. "
             + "Результат пишется в карточку и виден ревьюеру; закрытие он не блокирует. "

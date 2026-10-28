@@ -15,6 +15,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // §6): эндпоинт-обёртка над SessionManager.BranchAsync (шаг 3, гейты §9 и резак покрыты
 // SessionManagerBranchTests). Здесь проверяются только контроллерные аспекты: резолв владельца
 // (404 — как у /archived и /migrate-provider) и форма успешного ответа (200).
+[Trait("Category", "Host")]
 public class ChatsControllerBranchTests(TestWebApplicationFactory factory)
     : IClassFixture<TestWebApplicationFactory>
 {

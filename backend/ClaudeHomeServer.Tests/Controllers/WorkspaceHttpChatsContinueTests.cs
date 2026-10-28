@@ -17,6 +17,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// новый чат появляется только после TurnCompleted. Настоящую отправку (процесс CLI) подменяет
 /// шов ChatContinueService.SendOverride.
 /// </summary>
+[Trait("Category", "Host")]
 public class WorkspaceHttpChatsContinueTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

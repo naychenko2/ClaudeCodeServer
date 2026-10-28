@@ -13,6 +13,7 @@ namespace ClaudeHomeServer.Tests.ImageEditor.Threads;
 // есть, флаг владельца выключен — нет. Модуль выключен — тулсета нет в реестре и контекста тоже
 // (ImageEditorDisabledTests). Инструменты сервера идут без карточки разрешения — но только в
 // ходе, куда сервер действительно едет.
+[Trait("Category", "Host")]
 public class ImageEditorMcpContextTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

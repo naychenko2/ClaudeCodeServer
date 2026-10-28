@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// <c>AlertsOptions.IsUsable</c>: эндпоинты обязаны отвечать «не настроено», а не падать
 /// на резолве зависимостей контроллера.
 /// </summary>
+[Trait("Category", "Host")]
 public class TelemetryIncidentsControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

@@ -10,6 +10,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // Модель тут обязательна: фронт резолвит её из назначения места ДО вызова. Проверка живёт
 // у эндпоинта, а не в SessionManager: там пустая модель — законное «По умолчанию» из
 // настроек чата (переезд на родной Claude без закреплённой модели).
+[Trait("Category", "Host")]
 public class ChatsMigrateProviderTests(TestWebApplicationFactory factory)
     : IClassFixture<TestWebApplicationFactory>
 {

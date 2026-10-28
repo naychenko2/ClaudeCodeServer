@@ -9,6 +9,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // Голосовой режим чата (Session.VoiceMode): тумблер включается через PUT ОБОИХ путей —
 // /api/chats/{id} (чаты вне проектов) и /api/projects/{pid}/sessions/{sid} (проектные).
 // Sentinel-семантика как у notificationsMuted: поле не прислано (null) — значение не трогаем.
+[Trait("Category", "Host")]
 public class VoiceModeUpdateTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

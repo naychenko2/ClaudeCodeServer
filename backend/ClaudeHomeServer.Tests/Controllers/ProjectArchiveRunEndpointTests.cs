@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // POST /api/projects/{id}/archive-run и гейт первого прохода у PUT /api/projects/{id}/archive-days:
 // «Сохранить» в настройках проекта = согласие на правило (снимает гейт фонового тика) и сразу
 // убирает залежи ЭТОГО проекта — отдельной кнопки «Применить сейчас» у проекта нет.
+[Trait("Category", "Host")]
 public class ProjectArchiveRunEndpointTests(TestWebApplicationFactory factory)
     : IClassFixture<TestWebApplicationFactory>
 {

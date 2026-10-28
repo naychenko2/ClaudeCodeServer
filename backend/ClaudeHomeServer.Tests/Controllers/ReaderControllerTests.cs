@@ -16,6 +16,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // и счастливый путь. Сетевую часть подменяем StubHandler на именованном клиенте "link-reader" —
 // редиректы, SSRF-рубежи и вердикты встраиваемости уже покрыты ReaderServiceTests/ReaderEmbedCheckTests
 // без реального HTTP.
+[Trait("Category", "Host")]
 public class ReaderControllerTests(TestWebApplicationFactory factory) : IClassFixture<TestWebApplicationFactory>
 {
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler

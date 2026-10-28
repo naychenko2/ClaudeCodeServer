@@ -8,6 +8,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // HTTP-слой панели «Доки»: авторизация, чужой проект, гейт области.
 // Разбор корпуса покрыт юнит-тестами DocsIndexTests — здесь только контракт эндпоинтов.
+[Trait("Category", "Host")]
 public class DocsControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly HttpClient _client;

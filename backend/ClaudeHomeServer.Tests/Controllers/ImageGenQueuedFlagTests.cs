@@ -42,6 +42,7 @@ public class SilentImageProviderFactory : TestWebApplicationFactory
 
 // Признак queued в отказах генерации: он определяет, что скажет человеку фронт —
 // «картинка появится сама» (заявка в очереди) или честный отказ.
+[Trait("Category", "Host")]
 public class ImageGenQueuedFlagTests : IClassFixture<SilentImageProviderFactory>
 {
     private readonly SilentImageProviderFactory _factory;
@@ -112,6 +113,7 @@ public class ImageGenQueuedFlagTests : IClassFixture<SilentImageProviderFactory>
 
 // Ветка «провайдер выключен»: заявка там ставилась и раньше — проверяем, что ответ теперь
 // об этом честно сообщает признаком queued.
+[Trait("Category", "Host")]
 public class ImageGenOffQueuedFlagTests : IClassFixture<NoImageProvidersFactory>
 {
     private readonly NoImageProvidersFactory _factory;

@@ -14,6 +14,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // шаблонный url держит), ранний отказ при создании и подтверждение пробы с полной
 // строкой запуска у stdio-записи local-владельца. Адреса в тестах — IP-литералы:
 // гейт и создание не должны ходить в DNS.
+[Trait("Category", "Host")]
 public class McpServersCatalogProbeTests(TestWebApplicationFactory factory)
     : IClassFixture<TestWebApplicationFactory>
 {

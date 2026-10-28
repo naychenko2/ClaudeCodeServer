@@ -19,6 +19,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // • Brief отдаёт kind и hasVerification, чтобы персоны в списке видели, что карточка
 //   это дефект, а в MCP-схеме tools/list есть свойства kind/repro/verification/outcome.
 [Trait("Category", "Integration")]
+[Trait("Category", "Host")]
 public class TasksToolsetDefectTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly HttpClient _client;

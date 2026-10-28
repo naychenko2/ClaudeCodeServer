@@ -15,6 +15,7 @@ namespace ClaudeHomeServer.Tests.VideoEditor;
 
 // Загрузка кадра «С компьютера» в личном чате (ADR-022, «Контракты»): у личного чата нет проекта, кадр ложится в
 // рабочую папку владельца, а FrameRef вида file годен для настроек сцены, котировки и запуска
+[Trait("Category", "Host")]
 public class VideoFrameUploadTests : IDisposable
 {
     private static readonly byte[] Png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4];

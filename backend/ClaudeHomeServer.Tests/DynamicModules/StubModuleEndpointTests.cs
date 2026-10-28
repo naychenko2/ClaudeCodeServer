@@ -13,6 +13,7 @@ namespace ClaudeHomeServer.Tests.DynamicModules;
 // GET /api/stub-module/ping → 200 + тело заглушки. (См. ModuleLoaderTests — юнит той же механики.)
 // N3: в базовом appsettings.json заглушка Disabled; в test-среде её включает appsettings.Testing.json
 // (тот же файл читает ModuleRegistry ДО builder.Build()), поэтому __stub здесь грузится и роутер его находит.
+[Trait("Category", "Host")]
 public class StubModuleEndpointTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

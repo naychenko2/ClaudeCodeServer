@@ -505,6 +505,7 @@ public class McpOAuthServiceTests : IDisposable
     [InlineData("5", false)]
     [InlineData("30", false)]
     [InlineData("5", true)]
+    [Trait("Category", "Slow")]
     public async Task Вход_НедоступныйСерверАвторизации_УкладываетсяВПотолокИДаётПонятнуюОшибку(
         string overallSeconds, bool issuerKnown)
     {

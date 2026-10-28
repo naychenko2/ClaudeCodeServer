@@ -15,6 +15,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// решается ДО обращения к каналу — чужой владелец, серверный проект, выключенный флаг,
 /// офлайн. Офлайн — честный 409 с причиной, а не таймаут.
 /// </summary>
+[Trait("Category", "Host")]
 public sealed class ProjectRelayControllerTests : IDisposable
 {
     private const string Device = "dev-relay";

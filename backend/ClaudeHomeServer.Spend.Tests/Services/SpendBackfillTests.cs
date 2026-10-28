@@ -386,6 +386,7 @@ public class SpendBackfillTests : IDisposable
     // Проводка: часовой цикл SpendMaintenanceService реально зовёт обратный проход.
     // Тест на сам цикл (StartAsync), а не на метод хранилища: удаление вызова его краснит.
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task Обслуживание_ЧасовойЦикл_ПереводитПлатныйПрямойАдаптерИзFreeВOneShot()
     {
         var store = new SpendStore(Path.Combine(_dir, "spend_maintenance_loop"), detailDays: 30);
@@ -537,6 +538,7 @@ public class SpendBackfillTests : IDisposable
     // ReclassifyLocalAsFree (локальная запись за один запуск доходит до free). Тест на сам цикл
     // (StartAsync): удаление вызова или перестановка проходов его краснит.
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task Обслуживание_Rekey_ЗапускаетсяОдинРазСМаркером_ДоЧасовогоReclassify()
     {
         var store = new SpendStore(Path.Combine(_dir, "spend_rekey_loop"), detailDays: 30);
@@ -572,6 +574,7 @@ public class SpendBackfillTests : IDisposable
     // Пункт 1 (minor-1): сбой записи turns-*.jsonl в проходе пробрасывается — сервис не
     // ставит маркер, при рестарте (новый стор с диска) проход повторяется и дописывает диск.
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task Обслуживание_Rekey_СбойЗаписиTurns_МаркерНеСтавится_ПриРестартеПроходПовторяется()
     {
         var dir = Path.Combine(_dir, "spend_rekey_fail");

@@ -11,6 +11,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // POST /api/projects/{id}/files/changed-by — панель «Изменения»: для присланных путей
 // отдаёт, какие ещё чаты проекта их меняли.
+[Trait("Category", "Host")]
 public class FilesControllerChangedByTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly HttpClient _client;

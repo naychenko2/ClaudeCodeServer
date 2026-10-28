@@ -8,6 +8,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // Маршруты сброса настроек моделей: гейт роли на глобальном слое, валидация ключа
 // и разведение scope — персоны чистятся только у «Только для меня».
+[Trait("Category", "Host")]
 public class ModelSettingsResetAccessTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly HttpClient _admin;

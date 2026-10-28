@@ -266,6 +266,7 @@ public class ImageBackfillTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task Прогон_владельца_не_запускается_дважды_одновременно()
     {
         var persona = NewPersona();

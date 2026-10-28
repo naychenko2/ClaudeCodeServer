@@ -20,6 +20,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// значит, и пишущие входы до диска не дошли.
 /// Отражательная часть (каждый вход размечен) — <c>ProjectCapabilityGuardTests</c>.
 /// </summary>
+[Trait("Category", "Host")]
 public sealed class ProjectCapabilityGuardHttpTests : IDisposable
 {
     private sealed class FakeDeviceExec : IDeviceExecChannel

@@ -14,6 +14,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // (идемпотентность, гонка, профиль) покрыта DefaultAssistantProvisionerTests. Своя фабрика НА
 // КАЖДЫЙ тест (не IClassFixture): счётчик персон общего UserStore иначе тёк бы между фактами
 // класса и делал бы результат зависимым от порядка выполнения.
+[Trait("Category", "Host")]
 public class ProvisionEntryPointsTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

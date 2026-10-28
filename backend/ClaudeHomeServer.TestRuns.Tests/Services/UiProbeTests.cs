@@ -734,6 +734,7 @@ public class UiProbeTests : IDisposable
     }
 
     [SkippableFact]
+    [Trait("Category", "Slow")]
     public async Task ЧастичнаяОтрисовка_СтраницаСтупенями_ЗамерСовпадаетСПолной()
     {
         var full = await ProbeRealAsync("full");
@@ -749,6 +750,7 @@ public class UiProbeTests : IDisposable
     }
 
     [SkippableFact]
+    [Trait("Category", "Slow")]
     public async Task СтупениСПаузойБольшеПрежнегоОкна_ЗамерСовпадаетСПолнойОтрисовкой()
     {
         var full = await ProbeRealAsync("full31");
@@ -763,6 +765,7 @@ public class UiProbeTests : IDisposable
     }
 
     [SkippableFact]
+    [Trait("Category", "Slow")]
     public async Task МеняютсяТолькоРазмеры_ЗамерЖдётПоследнегоИзменения()
     {
         var grown = await ProbeRealAsync("grown");
@@ -778,6 +781,7 @@ public class UiProbeTests : IDisposable
     }
 
     [SkippableFact]
+    [Trait("Category", "Slow")]
     public async Task ПоздноеИмяКнопки_ЗамерЖдётЛейбла_БезЛожнойНаходки()
     {
         var late = await ProbeRealAsync("late-label");
@@ -789,6 +793,7 @@ public class UiProbeTests : IDisposable
     }
 
     [SkippableFact]
+    [Trait("Category", "Slow")]
     public async Task РостПереполненияПриТомЖеЧислеКонтейнеров_ЗамерЖдётПоследнегоЗначения()
     {
         var grow = await ProbeRealAsync("overflow-grow");
@@ -801,6 +806,7 @@ public class UiProbeTests : IDisposable
     }
 
     [SkippableFact]
+    [Trait("Category", "Slow")]
     public async Task СтраницаНеУстаканивается_ОтказВместоЗаниженногоЗамера()
     {
         var never = await ProbeRealAsync("never", settleMs: 3000);
@@ -810,6 +816,7 @@ public class UiProbeTests : IDisposable
     }
 
     [SkippableFact]
+    [Trait("Category", "Slow")]
     public async Task ЭкранВхода_НаЖивомБраузере_ОтказВместоНаходокНет()
     {
         var login = await ProbeRealAsync("login", settleMs: 8000);

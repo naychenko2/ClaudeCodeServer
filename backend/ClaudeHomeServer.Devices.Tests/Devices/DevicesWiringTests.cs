@@ -13,6 +13,7 @@ namespace ClaudeHomeServer.Tests.Services.Devices;
 /// теоретический риск: не зарегистрированная служба или незнакомое имя схемы авторизации
 /// ломают канал ТОЛЬКО в рантайме, юнит-тесты про них ничего не знают.
 /// </summary>
+[Trait("Category", "Host")]
 public class DevicesWiringTests(TestWebApplicationFactory factory) : IClassFixture<TestWebApplicationFactory>
 {
     [Fact]

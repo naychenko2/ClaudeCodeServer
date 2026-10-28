@@ -15,6 +15,7 @@ namespace ClaudeHomeServer.Tests.Subsystems;
 // Контекст чата при выключенной вертикали (ADR-023, ADR-014 «Пилот отключаемости»): в файле лежит
 // элемент вида audio, а Subsystems:AudioEditor:Enabled=false — провайдера нет. GET отдаёт элемент с
 // missing, ручки отвечают 400/200, но не 500.
+[Trait("Category", "Host")]
 public class ChatContextDisabledVerticalTests : IDisposable
 {
     private sealed class AudioOffFactory : TestWebApplicationFactory

@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // A5 «Сфер»: членство проекта как выдача прав (400 на чужую/несуществующую сферу, MCP не
 // переносит проект, событие), удаление сферы с командой (409) и сводка сферы.
+[Trait("Category", "Host")]
 public class SpheresApiTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

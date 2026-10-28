@@ -213,6 +213,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
     /// к тесту облачного.
     /// </summary>
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task ХодНаЛокальном_BareMode_СтавитСистемныйПромптИПризнакTrue()
     {
         var providers = LocalProviders(
@@ -235,6 +236,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
     /// бы молча — так и было до круга 8.
     /// </summary>
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task ХодНаОблачномПровайдере_BareModeОтсутствует_СистемногоПромптаНет()
     {
         var providers = LocalProviders(localBareMode: false, localSystemPromptFile: null);
@@ -254,6 +256,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
     /// канала: args без --bare, признак false, И в stderr есть сообщение о выходе за корень.
     /// </summary>
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task ХодНаЛокальном_ПутьЗаКорень_CatchСбрасываетBareMode()
     {
         var providers = LocalProviders(
@@ -290,6 +293,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
     /// в песочнице (мутация удаления catch → RED по любому из трёх каналов).
     /// </summary>
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task ХодНаЛокальном_ToRuntimeБросает_CatchСбрасываетBareMode()
     {
         var providers = LocalProviders(
@@ -429,6 +433,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
     /// только в обратном случае, второй — нет.
     /// </summary>
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task СнимокПромпта_BareModeПрименён_СодержитСекциюBare()
     {
         var providers = LocalProviders(
@@ -447,6 +452,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
     /// Мутация инверсии гейта приведёт к показу "(bare)" в обычном режиме → RED.
     /// </summary>
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task СнимокПромпта_BareModeСнятИззаПроваФайла_НетСекцииBare()
     {
         var providers = LocalProviders(
@@ -470,6 +476,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
     /// или «поменять catch (Exception) на catch (NotSupportedException)» — RED по stderr.
     /// </summary>
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task safeEstimate_EstimateБросает_ВstderrУходитWarning()
     {
         var providers = LocalProviders(localBareMode: false, localSystemPromptFile: null);
@@ -874,6 +881,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
     /// не трогают. Мутация «считать только input_tokens» → RED (21 ≠ 1).
     /// </summary>
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task TrackContextUsage_ИзДельтыПотока_СуммаВходаИКэша_НулиНеЗатирают()
     {
         var providers = LocalProviders(localBareMode: true, localSystemPromptFile: "SystemPrompts/CLAUDE-local.md");
@@ -896,6 +904,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
     /// Заодно сторож текста сообщения: в нём обязана быть база для сравнения.
     /// </summary>
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task BareModeСторож_РаздутыйВход_СтреляетРовноОдинРаз()
     {
         var providers = LocalProviders(
@@ -931,6 +940,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
     /// Мутация «вернуть константу 15 000» → RED.
     /// </summary>
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task BareModeСторож_ШтатныйВход_Молчит()
     {
         var providers = LocalProviders(

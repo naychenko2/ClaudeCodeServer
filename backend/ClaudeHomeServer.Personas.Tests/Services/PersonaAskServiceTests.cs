@@ -11,6 +11,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // persona_ask обязан запускать one-shot от имени владельца: по ownerId раннер выбирает среду
 // исполнения (local / песочница). Раньше effort персоны позиционно вставал на место ownerId —
 // ход container-владельца уходил на хост мимо песочницы, а effort терялся.
+[Trait("Category", "Host")]
 public class PersonaAskServiceTests
 {
     private sealed class CapturingOneShot : IOneShotRunner

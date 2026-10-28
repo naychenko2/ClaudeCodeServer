@@ -155,6 +155,7 @@ public sealed class ClaudeSessionServerGatewayTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task ПровайдерСФлагом_EnvНаШлюз_КлючаВEnvНет_ТокенЖивОтозванПоВыходу()
     {
         var turn = await RunTurnAsync("mmx-m3");
@@ -177,6 +178,7 @@ public sealed class ClaudeSessionServerGatewayTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task ДваХода_СигнатураСтабильна_ТокеныРазные()
     {
         var first = await RunTurnAsync("mmx-m3");
@@ -217,6 +219,7 @@ public sealed class ClaudeSessionServerGatewayTests : IDisposable
     [InlineData("deepseek-v4-pro", GatewayApi, true)] // провайдер без флага
     [InlineData("mmx-m3", GatewayApi, false)] // шлюз выключен — ход напрямую
     [InlineData("mmx-m3", null, true)] // чат проекта на устройстве: шлюз ставит раннер устройства
+    [Trait("Category", "Slow")]
     public async Task БезСерверногоРежима_ХодНапрямую(string model, string? gatewayApiUrl, bool gatewayEnabled)
     {
         var turn = await RunTurnAsync(model, gatewayApiUrl, gatewayEnabled);
@@ -235,6 +238,7 @@ public sealed class ClaudeSessionServerGatewayTests : IDisposable
     [InlineData("qwen3.8-27b", true, false, false)] // локаль + статистика, шлюз выключен — напрямую
     [InlineData("qwen3.8-27b", false, true, false)] // локаль, статистика выключена — напрямую
     [InlineData("deepseek-v4-pro", true, true, false)] // не локаль, статистика включена — напрямую
+    [Trait("Category", "Slow")]
     public async Task ЛокальнаяМодель_ШлюзТолькоСоВключённойСтатистикой(
         string model, bool statsEnabled, bool gatewayEnabled, bool expectGateway)
     {
@@ -271,6 +275,7 @@ public sealed class ClaudeSessionServerGatewayTests : IDisposable
     [InlineData("qwen3.8-27b", false, true, "owner-1", true)] // статистика выключена — напрямую, заголовки есть
     [InlineData("qwen3.8-27b", true, true, "owner-1", true)] // через шлюз — как и раньше
     [InlineData("deepseek-v4-pro", true, true, "owner-1", false)] // не локаль — заголовков нет
+    [Trait("Category", "Slow")]
     public async Task ЛокальнаяМодель_ПодсказочныеЗаголовкиИНаПрямомПути(
         string model, bool statsEnabled, bool gatewayEnabled, string? ownerId, bool expectHint)
     {

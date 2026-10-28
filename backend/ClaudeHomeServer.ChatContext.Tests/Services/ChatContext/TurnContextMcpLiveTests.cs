@@ -15,6 +15,7 @@ namespace ClaudeHomeServer.Tests.Services.ChatContext;
 // реестр тулсетов и стор контекста. Живого хода агента тут нет (нужен ключ модели) — вызываем MCP-ручку
 // POST /mcp/turn-context/{sessionId} так, как её вызывает CLI, и читаем результат ручкой GET контекста,
 // которую читает строка контекста человека: «подключи palette.png как образец стиля» → чип ✦.
+[Trait("Category", "Host")]
 public sealed class TurnContextMcpLiveTests : IDisposable
 {
     private sealed class DepthAdapterFactory : ILlmSessionAdapterFactory

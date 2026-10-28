@@ -16,6 +16,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // 7 суток. Коммиты делает живой git в temp-репозитории; записи стора сеет DossierStore
 // напрямую — сам захват паспорта при коммите из чата тут не субъект.
 [Trait("Category", "Slow")]
+[Trait("Category", "Host")]
 public class DossiersControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

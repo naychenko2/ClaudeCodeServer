@@ -14,6 +14,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // GET /api/local-model/hardware (вкладка «Железо», Б1): только admin (роль на действии → 403 не-админу),
 // плюс серверный флаг local-model-stats (без него 404); неверное window → 400. Поле hardware в stats и
 // stats/media — только у админа (у не-админа scope "self" его нет).
+[Trait("Category", "Host")]
 public class HardwareEndpointTests : IDisposable
 {
     private sealed class FakeComfyStats : IComfyStats

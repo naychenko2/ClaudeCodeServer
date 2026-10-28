@@ -15,6 +15,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// делегированного хода (ADR-025, F1-5) стоит и там: ход процесса или chats_send
 /// инструменты deploy_* не получает, обычный ход админа — получает.
 /// </summary>
+[Trait("Category", "Host")]
 public class WorkspaceDeployDelegationTests : IDisposable
 {
     private sealed class DepthAdapterFactory : ILlmSessionAdapterFactory

@@ -169,6 +169,7 @@ public class ClaudeSessionEffortArgsTests : IDisposable
     /// лишний --effort у DeepSeek/cli/cli-эквивалента ничего бы не сломал, но зачем.
     /// </summary>
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task ХодНаОблачномПровайдере_ПустойEffort_ФлагаНет()
     {
         var args = await RunTurnAsync("deepseek-v4-pro", effort: null, providers: LocalProviders());
@@ -211,6 +212,7 @@ public class ClaudeSessionEffortArgsTests : IDisposable
     [Theory]
     [InlineData(null, "medium")]
     [InlineData("high", "high")]
+    [Trait("Category", "Slow")]
     public async Task ХодНаM31_DefaultEffortМодели(string? effort, string expected)
     {
         var providers = new LlmProviderRegistry(Helpers.TestConfig.Build(new Dictionary<string, string?>

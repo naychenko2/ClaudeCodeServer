@@ -126,6 +126,7 @@ public class TurnFileWatcherTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task ЗаявкаДругойСессииОпоздала_КарточкаПодавленаПослеПерепроверки()
     {
         // Регресс на гонку параллельных ходов: файл правит чат A (Edit/Write), но его

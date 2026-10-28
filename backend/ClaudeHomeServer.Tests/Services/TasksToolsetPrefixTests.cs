@@ -16,6 +16,7 @@ namespace ClaudeHomeServer.Tests.Services;
 //  • изоляция: чужой владелец и проект вне allowed не находятся и не попадают в список;
 //  • запись (tasks_update) по префиксу по-прежнему не находит задачу.
 [Trait("Category", "Integration")]
+[Trait("Category", "Host")]
 public class TasksToolsetPrefixTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

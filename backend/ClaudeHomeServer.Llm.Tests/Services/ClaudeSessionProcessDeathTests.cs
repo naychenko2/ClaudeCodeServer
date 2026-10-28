@@ -89,6 +89,7 @@ public class ClaudeSessionProcessDeathTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task УбитыйПосредиХодаПроцесс_ДаетErrorВЛентеИТерминал()
     {
         var messages = new List<ServerMessage>();

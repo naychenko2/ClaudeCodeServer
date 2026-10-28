@@ -12,6 +12,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 namespace ClaudeHomeServer.Tests.ImageEditor.Characters;
 
 // Ручки обучающих фото и обучения LoRA персонажа (ADR-026-contracts §7.1, §7.2, §7.4)
+[Trait("Category", "Host")]
 public class CharacterLoraTrainEndpointsTests : IDisposable
 {
     private readonly List<TestWebApplicationFactory> _factories = [];

@@ -18,6 +18,7 @@ namespace ClaudeHomeServer.Tests.Services.Gateway;
 /// открытый прокси. Вход только с токеном хода и учёткой его устройства, SSRF-граница после
 /// разрешения имени, порты из конфига, тумблер выключен — честный 403.
 /// </summary>
+[Trait("Category", "Host")]
 public sealed class EgressGatewayTests : IDisposable
 {
     private readonly List<IDisposable> _cleanup = [];

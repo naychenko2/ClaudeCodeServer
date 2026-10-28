@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // • Major 4: знаменатель не молчит — не-массив (объект), не-объект в массиве (строки),
 //   смесь → явный isError, а не «задача создана без шагов, isError нет».
 [Trait("Category", "Integration")]
+[Trait("Category", "Host")]
 public class TasksToolsetPlanStepsTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly HttpClient _client;

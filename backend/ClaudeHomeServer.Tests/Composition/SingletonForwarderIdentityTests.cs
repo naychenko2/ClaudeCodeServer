@@ -21,6 +21,7 @@ namespace ClaudeHomeServer.Tests.Composition;
 // паттерна, и без явной проверки следующий регресс поймает только один из четырёх.
 // JwtValidatorGateway закрывает два интерфейса (`IUserTokenValidator` + `IPreviewTokenValidator`)
 // из одного адаптера — здесь три резолва и один ассерт на ReferenceEquals по базовому типу.
+[Trait("Category", "Host")]
 public class SingletonForwarderIdentityTests
 {
     [Fact]

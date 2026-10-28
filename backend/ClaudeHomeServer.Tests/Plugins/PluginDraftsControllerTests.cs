@@ -33,6 +33,7 @@ namespace ClaudeHomeServer.Tests.Plugins;
 //   - обновление → granted = старые ∩ новые запрошенные; consentRequired + newPermissions;
 //   - 409 при том же id+version и другом sha; no-op при том же sha (granted/secrets не сбрасываются);
 //   - заданные секреты прошлой версии сохраняются; черновик после успеха не удаляется.
+[Trait("Category", "Host")]
 public class PluginDraftsControllerTests : IDisposable
 {
     private const string OwnerA = "owner-a";

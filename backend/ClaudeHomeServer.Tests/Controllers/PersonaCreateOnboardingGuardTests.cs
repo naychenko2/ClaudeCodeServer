@@ -14,6 +14,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // personas_update, а не плодить дубликат. Резолв, а не проверка на непустоту: мёртвый
 // AssistantPersonaId разрешает создание (деградация мастера). Проектное знакомство создаёт
 // руководителя штатно — предохранитель его не трогает.
+[Trait("Category", "Host")]
 public class PersonaCreateOnboardingGuardTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

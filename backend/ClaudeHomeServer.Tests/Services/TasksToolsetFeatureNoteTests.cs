@@ -28,6 +28,7 @@ namespace ClaudeHomeServer.Tests.Services;
 //   «БезИдущихЗадачей» краснеет (B14 возврат FIN: штамп — FeatureBrief.ActiveStageOf,
 //   та же база, что у StaleOf; R-B4 минор 2 закрыт).
 [Trait("Category", "Integration")]
+[Trait("Category", "Host")]
 public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

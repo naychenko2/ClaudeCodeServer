@@ -28,6 +28,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// вне корней — разрешена, запретный путь и выключенная автовыдача — 400. Устройства без
 /// этой возможности («dev-exec») — старый агент: прежний отказ с подсказкой команды.
 /// </summary>
+[Trait("Category", "Host")]
 public sealed class ProjectsControllerLocalProjectTests : IDisposable
 {
     private sealed class FakeDeviceExec : IDeviceExecChannel

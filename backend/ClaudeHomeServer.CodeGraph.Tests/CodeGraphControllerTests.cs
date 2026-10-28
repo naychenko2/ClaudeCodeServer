@@ -16,6 +16,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// Граф кладётся напрямую в стор (построение Roslyn покрыто CSharpGraphRoslynAcceptanceTests) —
 /// здесь проверяется именно REST-контракт: контроллер → GetSnapshotAsync → DTO → isStale.
 /// </summary>
+[Trait("Category", "Host")]
 public class CodeGraphControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

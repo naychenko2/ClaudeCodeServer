@@ -8,6 +8,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // /api/proxy: белый список доменов и WARN при отказе. Сторож синхронности списков с
 // фронтендом живёт в ProxyAllowedHostsSyncTests, конкретный отказ разрешённого/чужого
 // хоста — здесь.
+[Trait("Category", "Host")]
 public class ProxyControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler

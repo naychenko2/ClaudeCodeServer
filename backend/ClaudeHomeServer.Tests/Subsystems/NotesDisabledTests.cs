@@ -68,6 +68,7 @@ namespace ClaudeHomeServer.Tests.Subsystems;
 /// закрытом гейте, контроль при открытом; такое утверждение не зависит от окружения и
 /// переживёт починку `db09722c`, после которой нынешние 404 станут проверять фолбэк.
 /// </summary>
+[Trait("Category", "Host")]
 public class NotesDisabledTests : IDisposable
 {
     // Хост с выключенной вертикалью заметок.

@@ -9,6 +9,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // HTTP-слой гигиены карты проекта: авторизация, чужой проект, форма ответа.
 // Сам разбор покрыт юнит-тестами ProjectMapScannerTests — здесь только контракт эндпоинта.
+[Trait("Category", "Host")]
 public class ProjectMapControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

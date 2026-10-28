@@ -18,6 +18,7 @@ namespace ClaudeHomeServer.Tests.ImageEditor.Threads;
 // PUT фокуса с ревизией, смена фокуса — настройка (UpdatedAt и sessions.json не меняются),
 // чужой чат и чужая нить неотличимы от несуществующих, удаление чата сносит нити через шину,
 // запись модуля в ленту через IChatFeed — активность с живой парой module_record.
+[Trait("Category", "Host")]
 public class ThreadsEndpointTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

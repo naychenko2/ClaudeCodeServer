@@ -11,6 +11,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // сквозное применение шаблона при создании/смене специальности и ручная правка после.
 // Фич-флаг model-routing-rules снят — эндпоинты доступны безусловно, контроль доступа
 // сводится к роли admin (глобальный слой) и per-owner изоляции JWT.
+[Trait("Category", "Host")]
 public class SpecialtiesControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

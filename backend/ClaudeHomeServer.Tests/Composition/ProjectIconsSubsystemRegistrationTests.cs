@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Composition;
 // (ProjectIconGlyphService, ProjectIconMigration и его hosted-сервис). Если кто-то
 // добавит регистрацию в Program.cs вместо подсистемы — или вынесет регистрацию из
 // Register — тест упадёт, и ревью это поймает.
+[Trait("Category", "Host")]
 public class ProjectIconsSubsystemRegistrationTests
 {
     private static IConfiguration BuildConfig() =>

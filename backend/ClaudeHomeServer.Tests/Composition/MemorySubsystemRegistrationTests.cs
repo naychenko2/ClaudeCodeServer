@@ -23,6 +23,7 @@ namespace ClaudeHomeServer.Tests.Composition;
 //
 // Конфиг минимальный: ключей Memory не задаём (MemoryConsolidationService/AutolearnService
 // тихо работают на дефолтах; теста этого не трогает).
+[Trait("Category", "Host")]
 public class MemorySubsystemRegistrationTests
 {
     private static IConfiguration BuildConfig(string dataPath) =>

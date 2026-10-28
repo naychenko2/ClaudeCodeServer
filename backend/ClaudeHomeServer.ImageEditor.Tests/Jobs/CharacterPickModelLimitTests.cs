@@ -119,6 +119,7 @@ public class CharacterPickModelLimitTests : IDisposable
 
     // Сюжет «в профиль»: подбор даёт три фото, но модель берёт одно — запись обрезается до одного
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task Запись_обрезается_до_числа_фото_которые_модель_взяла()
     {
         var request = await Run(true, "портрет в профиль у окна");

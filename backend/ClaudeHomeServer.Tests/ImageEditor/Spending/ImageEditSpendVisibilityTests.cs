@@ -14,6 +14,7 @@ namespace ClaudeHomeServer.Tests.ImageEditor.Spending;
 // Траты редактора картинок лежат в общем учёте (ADR-017 §4, ревью M1): настоящий исполнитель
 // пишет через ISpendCollector в SpendStore, а сводка «Модели и расход» (/api/spend) показывает
 // владельцу только его траты, админу — всех с разбивкой по пользователям
+[Trait("Category", "Host")]
 public class ImageEditSpendVisibilityTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new()

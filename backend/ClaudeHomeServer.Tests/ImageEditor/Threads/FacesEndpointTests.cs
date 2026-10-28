@@ -20,6 +20,7 @@ namespace ClaudeHomeServer.Tests.ImageEditor.Threads;
 // Флаг character-face-swap гейтит ручку (выключен — 404 feature_disabled), 200 — список лиц + facesKey,
 // повторный запрос на те же байты берётся из кэша (детектор один раз), Busy — 503, Error — 409, оба не кэшируются,
 // версии нет — 404 version_not_found, чужая нить — 404 thread_not_found, личная область — 404 (маршрута нет).
+[Trait("Category", "Host")]
 public class FacesEndpointTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory;

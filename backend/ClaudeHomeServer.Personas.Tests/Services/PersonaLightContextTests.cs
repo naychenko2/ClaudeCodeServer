@@ -217,6 +217,7 @@ public class PersonaLightContextTests : IDisposable
 /// здесь доказываем со стороны фильтра: чат персоны на модели БЕЗ собственного профиля
 /// (Opus-подобной) получает урезанный набор только при LightContext=true.
 /// </summary>
+[Trait("Category", "Host")]
 public class PersonaLightContextWhitelistTests : IDisposable
 {
     private const string Server = "test-light";

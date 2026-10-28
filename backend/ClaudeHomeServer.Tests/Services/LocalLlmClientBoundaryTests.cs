@@ -50,6 +50,7 @@ public class LocalLlmClientBoundaryTests
     ];
 
     [Fact]
+    [Trait("Category", "Slow")]
     public void ILocalLlmClient_НеВыходитЗаГраницуВертикалиLlm()
     {
         var asms = AppDomain.CurrentDomain.GetAssemblies()

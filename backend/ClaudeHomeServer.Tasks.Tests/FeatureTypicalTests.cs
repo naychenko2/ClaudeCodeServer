@@ -613,6 +613,7 @@ public class FeatureTypicalTests
     // ни одного (счётчик), и обязан быть быстрее. Числа пишутся в файл тестовой папки —
     // они идут в отчёт задачи; папка удаляется.
     [Fact]
+    [Trait("Category", "Slow")]
     public void Typical_ЦенаХолодногоИТёплогоЗапросаНа100ФичахСФайловымиЖурналами()
     {
         FeatureTypical.ClearCache();

@@ -16,6 +16,7 @@ namespace ClaudeHomeServer.Tests.AudioEditor;
 // (чужое неотличимо от несуществующего), ревизия нитей — 409, отдача файла версии с Range, сохранение
 // в проект новыми файлами с версионированием имени и папкой стемов, отказ путям вне проекта, личный
 // чат без сохранения в проект. Поставщик — фейк в памяти поверх настоящего исполнителя задач.
+[Trait("Category", "Host")]
 public class AudioEditorControllerTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

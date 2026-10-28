@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // (а на доске визуально окажется в Done — обход гейта). После правки должен бросать
 // 400 «нельзя создавать сразу в Done».
 [Trait("Category", "Integration")]
+[Trait("Category", "Host")]
 public class DefectCreateBoardGateTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly HttpClient _client;

@@ -9,6 +9,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // /api/host-files/content: read-only просмотр абсолютных хостовых путей вне корня проекта.
 // Гейт: local-юзер видит весь хост, container-юзер — только монтирования песочницы.
+[Trait("Category", "Host")]
 public class HostFilesControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

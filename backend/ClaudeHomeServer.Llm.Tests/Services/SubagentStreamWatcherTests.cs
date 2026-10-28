@@ -105,6 +105,7 @@ public class SubagentStreamWatcherTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public void ProfilesRoot_ВатчерНаходитПапкуИПарсит()
     {
         // Устанавливаем ProfilesRoot перед созданием ватчера
@@ -149,6 +150,7 @@ public class SubagentStreamWatcherTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public void СтарыйФайл_БезНовыхСтрок_ПаспортНеПишется()
     {
         // Arrange: создаём БОГАТЫЙ файл агента ДО старта ватчера (Prompt + ToolCall + Report)
@@ -178,6 +180,7 @@ public class SubagentStreamWatcherTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public void СтарыйФайл_СНовымиСтроками_ПаспортПишется()
     {
         // Arrange: создаём БОГАТЫЙ файл с базовым содержимым ДО старта ватчера
@@ -368,6 +371,7 @@ public class SubagentStreamWatcherTests : IDisposable
     // она "run_end". Ветка bg_done этим полем не управляется.
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task ОбычныйКонец_RunEndПоУмолчанию()
     {
         // Без FinalizeAsync и без MarkRunInterrupted: путь Dispose идёт через дефолт
@@ -398,6 +402,7 @@ public class SubagentStreamWatcherTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task ПрерванныйХод_ПаспортInterrutpted()
     {
         // ClaudeSession перед Dispose ватчера ставит MarkRunInterrupted — паспорт

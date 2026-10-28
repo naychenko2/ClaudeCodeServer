@@ -137,6 +137,7 @@ public class TaskPregateServiceTests : IDisposable
     // отдельно и могла перевалить MCP_TOOL_TIMEOUT хода. Медленное дерево съедает потолок —
     // проверки тогда уже не запускаются.
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task ПотолокИстёкНаGitПроверках_ПроверкиНеЗапускались()
     {
         _pregate.CeilingSeconds = 1;

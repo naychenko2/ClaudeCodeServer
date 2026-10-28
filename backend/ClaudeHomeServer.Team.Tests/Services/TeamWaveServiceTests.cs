@@ -2307,6 +2307,7 @@ public class TeamWaveServiceTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task ПерезапускЗадачи_ЖивойНоЗависшийПрогон_ТишинаДольшеПорога_Перевыдаёт()
     {
         var (session, a, _) = await MakeStalledWaveAsync("restart-task-hung");

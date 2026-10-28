@@ -25,6 +25,7 @@ namespace ClaudeHomeServer.Tests.Composition;
 // «InspectionMode» влияет на весь процесс, и параллельные тесты других коллекций
 // не должны её перехватывать.
 [Collection("InspectionSerial")]
+[Trait("Category", "Host")]
 public class InspectionModeHostedServicesTests
 {
     private const string EnvVar = "InspectionMode";

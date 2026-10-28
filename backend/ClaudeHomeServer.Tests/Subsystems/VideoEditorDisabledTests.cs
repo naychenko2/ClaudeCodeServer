@@ -14,6 +14,7 @@ namespace ClaudeHomeServer.Tests.Subsystems;
 // UseSetting — механика и почему это не гонка разобраны в шапке NotesDisabledTests.
 //
 // Ручки: см. VideoEditorRoutes.
+[Trait("Category", "Host")]
 public class VideoEditorDisabledTests : IDisposable
 {
     // Индекс записи videoeditor в DynamicModules appsettings.Testing.json

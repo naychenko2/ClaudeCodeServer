@@ -15,6 +15,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// тулсете, который возвращает свой ownerId, потому что в фазе 2 сюда переедет tasks, и
 /// анонимный или подменённый владелец означал бы чтение чужих задач.
 /// </summary>
+[Trait("Category", "Host")]
 public class McpHttpOwnerIsolationTests : IDisposable
 {
     // Тулсет-эхо: единственный инструмент возвращает владельца, каким его увидел контроллер

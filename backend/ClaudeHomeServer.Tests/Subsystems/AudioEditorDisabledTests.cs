@@ -15,6 +15,7 @@ namespace ClaudeHomeServer.Tests.Subsystems;
 //
 // Пока модуль — скелет без ручек, поэтому предмет проверки — активность подсистемы с контролем
 // по включённому хосту; HTTP-кейс фиксирует контракт для будущих ручек audio-editor/*.
+[Trait("Category", "Host")]
 public class AudioEditorDisabledTests : IDisposable
 {
     // Индекс записи audioeditor в DynamicModules appsettings.Testing.json

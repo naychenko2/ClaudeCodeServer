@@ -13,6 +13,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // крупный markdown (docs/architecture/features.md) → POST /api/plans/map → карта.
 // Модель подменена стабом раннера, но якоря ответа — НАСТОЯЩИЕ заголовки файла:
 // валидация якорей и кэш прогоняются на реальном тексте, а не на мини-фикстуре.
+[Trait("Category", "Host")]
 public class PlansControllerTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

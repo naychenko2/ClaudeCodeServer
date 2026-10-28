@@ -26,6 +26,9 @@ export interface HistoryCursor {
   raw: unknown[];
   anchorIndex: number;
   anchorFp: string | null;
+  // Вес сырой истории в raw: сумма весов полученных ответов (длина их JSON),
+  // накопленная applyHistoryReply
+  bytes: number;
 }
 
 // Параметры запроса: after=-1 — «ленты нет, дай всё и якорь» (так клиент получает первый курсор)
@@ -44,25 +47,36 @@ export function cursorQuery(cursor: HistoryCursor | undefined): HistoryCursorQue
 // Конверт ли это (а не плоский массив старого контракта)
 const isEnvelope = (reply: HistoryReply): reply is HistoryTailEnvelope => !Array.isArray(reply);
 
-// Применяет ответ к тому, что было: возвращает полную сырую историю и новый курсор.
-// cursor=undefined — сервер курсора не дал (плоский массив): следующая загрузка снова полная.
+// Применяет ответ к тому, что было: возвращает полную сырую историю, новый курсор и его вес.
+// bytes — вес этого ответа (длина JSON сообщений, мерит вызывающий); в курсоре и результате —
+// суммарный вес raw. cursor=undefined — сервер курсора не дал (плоский массив): следующая
+// загрузка снова полная.
 export function applyHistoryReply(
   prev: HistoryCursor | undefined,
   sent: HistoryCursorQuery,
   reply: HistoryReply,
-): { raw: unknown[]; cursor: HistoryCursor | undefined } {
-  if (!isEnvelope(reply)) return { raw: reply, cursor: undefined };
+  bytes = 0,
+): { raw: unknown[]; cursor: HistoryCursor | undefined; bytes: number } {
+  if (!isEnvelope(reply)) return { raw: reply, cursor: undefined, bytes };
 
   // reset — сервер велит заменить всё; то же, если хвост не к чему приклеить
-  // (курсора у нас не было или в ответе не хвост, а полная выдача после after=-1)
+  // (курсора у нас не было или в ответе не хвост, а полная выдача после after=-1):
+  // вес считается заново, только вес ответа
   if (reply.reset || !prev || sent.after < 0 || sent.after >= prev.raw.length) {
     return {
       raw: reply.messages,
-      cursor: { raw: reply.messages, anchorIndex: reply.anchorIndex, anchorFp: reply.anchorFp },
+      cursor: { raw: reply.messages, anchorIndex: reply.anchorIndex, anchorFp: reply.anchorFp, bytes },
+      bytes,
     };
   }
 
-  // Префикс [0..after] у нас и у сервера общий (отпечаток совпал) — дописываем хвост
+  // Префикс [0..after] у нас и у сервера общий (отпечаток совпал) — дописываем хвост:
+  // вес = прошлый + хвост
   const raw = prev.raw.slice(0, sent.after + 1).concat(reply.messages);
-  return { raw, cursor: { raw, anchorIndex: reply.anchorIndex, anchorFp: reply.anchorFp } };
+  const totalBytes = prev.bytes + bytes;
+  return {
+    raw,
+    cursor: { raw, anchorIndex: reply.anchorIndex, anchorFp: reply.anchorFp, bytes: totalBytes },
+    bytes: totalBytes,
+  };
 }

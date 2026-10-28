@@ -22,6 +22,8 @@ import {
   mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps,
 } from '../../../../components/chat/__tests__/fakeDom';
 import { WikiTab } from '../WikiTab';
+import { WIKI_SUBTABS } from '../wikiTabs';
+import { useState } from 'react';
 import { __test as wikiStore } from '../../../../lib/wiki';
 
 vi.mock('../../../../lib/signalr', () => ({
@@ -198,5 +200,190 @@ describe('Вкладка «Вики» (S5c)', () => {
     expect(has(c, '4 ист.')).toBe(true);
     // Оглавление — из каталога раздела: префикс раздела над списком
     expect(has(c, 'Проекты / AI Home')).toBe(true);
+  });
+});
+
+// ─── Доработка S5c: удаление сироты, отказы, реестр подвкладок ───
+
+type Cont = ReturnType<typeof mount>['container'];
+type AnyNode = Cont;
+
+function allNodes(root: AnyNode, out: AnyNode[] = []): AnyNode[] {
+  out.push(root);
+  for (const c of root.childNodes) allNodes(c, out);
+  return out;
+}
+
+// Модалка рендерится порталом в document.body — ищем от него, а не от контейнера
+const bodyRoot = () => (globalThis as unknown as { document: { body: AnyNode } }).document.body;
+
+function buttonByText(root: AnyNode, text: string): AnyNode | null {
+  return allNodes(root).find(n => n.nodeName === 'BUTTON' && textNodes(n).join('').includes(text)) ?? null;
+}
+
+function click(node: AnyNode | null, what: string) {
+  if (!node) throw new Error(`нет узла: ${what}`);
+  const props = reactProps(node) as { onClick?: (e: unknown) => void } | null;
+  if (!props?.onClick) throw new Error(`у «${what}» нет onClick`);
+  act(() => { props.onClick!(undefined); });
+}
+
+function selectOrphan(c: Cont) {
+  const row = allNodes(c).find(n => n.getAttribute('data-testid') === 'wiki-section-row'
+    && textNodes(n).join('').includes('Удалённый проект'));
+  click(row ?? null, 'строка сироты');
+}
+
+const deleteCalls = () => req.mock.calls.filter(
+  ([, init]) => (init as { method?: string } | undefined)?.method === 'DELETE',
+);
+
+function routeWithDelete(del: () => Promise<unknown>) {
+  req.mockImplementation((url: string, init?: { method?: string }) => {
+    if (init?.method === 'DELETE') return del();
+    if (url.startsWith('/api/wiki/tree')) return Promise.resolve(TREE);
+    if (url.startsWith('/api/wiki/section')) return Promise.resolve(CATALOG);
+    return Promise.resolve(null);
+  });
+}
+
+function mountWithDelete(del: () => Promise<unknown>) {
+  routeWithDelete(del);
+  installFakeDom();
+  const { root, container } = mount(createElement(WikiTab));
+  roots.push(root);
+  return container;
+}
+
+describe('Вкладка «Вики»: удаление сироты (доработка S5c)', () => {
+  it('«Удалить раздел» открывает модалку; «Отмена» не удаляет; подтверждение — один DELETE', async () => {
+    const c = mountWithDelete(() => Promise.resolve({ deleted: true }));
+    await settle();
+    selectOrphan(c);
+    await settle();
+    click(findNodeByAttr(c, 'data-testid', 'wiki-delete-section-btn'), 'Удалить раздел');
+    await settle();
+    // модалка называет, что удаляется
+    expect(has(bodyRoot(), 'Удалить раздел удалённого проекта?')).toBe(true);
+    expect(has(bodyRoot(), '9 стр. удалятся')).toBe(true);
+    // Отмена — ничего не удалено, модалка закрылась
+    click(buttonByText(bodyRoot(), 'Отмена'), 'Отмена');
+    await settle();
+    expect(deleteCalls()).toHaveLength(0);
+    expect(has(bodyRoot(), 'удалятся из вики')).toBe(false);
+    // Повторно открыть и подтвердить — ровно один DELETE
+    click(findNodeByAttr(c, 'data-testid', 'wiki-delete-section-btn'), 'Удалить раздел');
+    await settle();
+    const confirmBtn = allNodes(bodyRoot()).filter(n => n.nodeName === 'BUTTON'
+      && textNodes(n).join('').includes('Удалить раздел')).pop() ?? null;
+    click(confirmBtn, 'подтвердить');
+    await settle();
+    expect(deleteCalls()).toHaveLength(1);
+    expect(String(deleteCalls()[0][0])).toContain('/api/wiki/section');
+  });
+
+  it('у не-сироты кнопки «Удалить раздел» нет', async () => {
+    const c = mountWithDelete(() => Promise.resolve({ deleted: true }));
+    await settle();
+    // выбран живой проект «AI Home» — не сирота
+    expect(has(c, 'Проекты / AI Home')).toBe(true);
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-delete-section-btn')).toBeNull();
+  });
+
+  it('отказ 409 wiki_not_orphan виден русским текстом, unhandled rejection нет', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (e: unknown) => { unhandled.push(e); };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const c = mountWithDelete(() => Promise.reject({ status: 409, body: { code: 'wiki_not_orphan', message: 'x' } }));
+      await settle();
+      selectOrphan(c);
+      await settle();
+      click(findNodeByAttr(c, 'data-testid', 'wiki-delete-section-btn'), 'Удалить раздел');
+      await settle();
+      const confirmBtn = allNodes(bodyRoot()).filter(n => n.nodeName === 'BUTTON'
+        && textNodes(n).join('').includes('Удалить раздел')).pop() ?? null;
+      click(confirmBtn, 'подтвердить');
+      await settle();
+      await new Promise(r => setTimeout(r, 10));
+      expect(has(c, 'Удалить можно только раздел удалённого проекта')).toBe(true);
+      expect(has(c, 'wiki_not_orphan')).toBe(false);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+});
+
+// Заглушка подвкладки с хуком внутри — он не должен считаться в WikiTab
+function StubInbox({ selectedKey }: { selectedKey: string | null }) {
+  const [n] = useState(7);
+  return createElement('div', { 'data-testid': 'stub-inbox' }, `раздел=${selectedKey} n=${n}`);
+}
+
+describe('Вкладка «Вики»: ошибки и подвкладки (доработка S5c)', () => {
+  it('у ошибки действия — «Закрыть» (сбрасывает), «Повторить» нет', async () => {
+    req.mockImplementation((url: string) => {
+      if (url.startsWith('/api/wiki/tree')) return Promise.resolve(EMPTY_TREE);
+      if (url.startsWith('/api/wiki/initialize')) {
+        return Promise.reject({ status: 409, body: { code: 'wiki_section_off', message: 'x' } });
+      }
+      return Promise.resolve(null);
+    });
+    installFakeDom();
+    const { root, container } = mount(createElement(WikiTab));
+    roots.push(root);
+    await settle();
+    clickTestId(container, 'wiki-init-btn');
+    await settle();
+    expect(has(container, 'Вики локальных проектов — отдельной фичей')).toBe(true);
+    expect(buttonByText(container, 'Повторить')).toBeNull();
+    click(buttonByText(container, 'Закрыть'), 'Закрыть');
+    await settle();
+    expect(has(container, 'Вики локальных проектов — отдельной фичей')).toBe(false);
+  });
+
+  it('у ошибки загрузки «Повторить» перечитывает дерево', async () => {
+    let fail = true;
+    req.mockImplementation((url: string) => {
+      if (url.startsWith('/api/wiki/tree')) {
+        return fail ? Promise.reject({ status: 500, body: null }) : Promise.resolve(TREE);
+      }
+      return Promise.resolve(CATALOG);
+    });
+    installFakeDom();
+    const { root, container } = mount(createElement(WikiTab));
+    roots.push(root);
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-error')).not.toBeNull();
+    fail = false;
+    click(buttonByText(container, 'Повторить'), 'Повторить');
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-error')).toBeNull();
+    expect(has(container, 'AI Home')).toBe(true);
+  });
+
+  it('подвкладка с хуком: переключение туда-обратно не бросает, раздел передаётся', async () => {
+    (globalThis as { requestAnimationFrame?: unknown }).requestAnimationFrame = (cb: () => void) => { cb(); return 1; };
+    const inbox = WIKI_SUBTABS.find(t => t.id === 'inbox')!;
+    const saved = inbox.component;
+    inbox.component = StubInbox;
+    try {
+      const c = render(TREE);
+      await settle();
+      const pills = () => findNodeByAttr(c, 'aria-label', 'Входящие');
+      click(pills(), 'Входящие');
+      await settle();
+      expect(has(c, `раздел=projects/${PROJECT_ID}`)).toBe(true);
+      click(findNodeByAttr(c, 'aria-label', 'Страницы'), 'Страницы');
+      await settle();
+      expect(findNodeByAttr(c, 'data-testid', 'stub-inbox')).toBeNull();
+      click(pills(), 'Входящие');
+      await settle();
+      expect(findNodeByAttr(c, 'data-testid', 'stub-inbox')).not.toBeNull();
+    } finally {
+      inbox.component = saved;
+      delete (globalThis as { requestAnimationFrame?: unknown }).requestAnimationFrame;
+    }
   });
 });

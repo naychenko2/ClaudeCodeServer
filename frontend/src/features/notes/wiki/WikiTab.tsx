@@ -113,18 +113,19 @@ function LoadingSkeleton() {
   );
 }
 
-// Отказ загрузки — с «Повторить»; отказ действия (отклонил бэк) — без повторa:
-// повторять надо само действие, а не перечитку
-function ErrorNotice({ e, onRetry }: { e: unknown; onRetry?: () => void }) {
+// Отказ загрузки — с «Повторить» (перечитать и есть повторение загрузки); отказ действия —
+// с «Закрыть»: повторять надо само действие (оно уже отказано), а не перечитку дерева,
+// поэтому у отказа действия кнопки «Повторить» нет — его либо принимают, либо закрывают.
+function ErrorNotice({ e, onRetry, onDismiss }: { e: unknown; onRetry?: () => void; onDismiss?: () => void }) {
   const text = e instanceof WikiError ? wikiErrorText(e) : 'Не удалось загрузить вики';
+  const action = onRetry
+    ? <Button variant="ghost" size="sm" onClick={onRetry}>Повторить</Button>
+    : onDismiss
+      ? <Button variant="ghost" size="sm" onClick={onDismiss}>Закрыть</Button>
+      : undefined;
   return (
     <div data-testid="wiki-error" style={{ padding: SP.sm }}>
-      <Notice
-        tone="danger"
-        icon={AlertTriangle}
-        title={text}
-        action={onRetry ? <Button variant="ghost" size="sm" onClick={onRetry}>Повторить</Button> : undefined}
-      />
+      <Notice tone="danger" icon={AlertTriangle} title={text} action={action} />
     </div>
   );
 }
@@ -263,6 +264,7 @@ export function WikiTab() {
 
   useEffect(() => {
     if (!enabled) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- старт загрузки при монтировании/флаге: load() синхронно снимает прошлую ошибку загрузки перед запросом — другого места старта нет
     load();
   }, [enabled, load]);
 
@@ -274,6 +276,7 @@ export function WikiTab() {
   useEffect(() => {
     if (!tree?.initialized) return;
     if (selectedKey && tree.sections.some(s => s.key === selectedKey)) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- инвариант выбора: на экране нет допустимого выбранного раздела — дефолт выбирается синхронно, экран без раздела хуже
     setSelectedKey(defaultSectionKey(tree.sections));
   }, [tree, selectedKey]);
 
@@ -335,6 +338,7 @@ export function WikiTab() {
   };
 
   const subtab = WIKI_SUBTABS.find(t => t.id === tab) ?? WIKI_SUBTABS[0];
+  const SubTabComp = subtab.component;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, minHeight: 0, height: '100%' }}>
@@ -349,15 +353,17 @@ export function WikiTab() {
         />
       </div>
 
-      {actionError ? <div style={{ padding: `0 ${SP.sm}px` }}><ErrorNotice e={actionError} onRetry={load} /></div> : null}
+      {actionError ? <div style={{ padding: `0 ${SP.sm}px` }}><ErrorNotice e={actionError} onDismiss={() => setActionError(null)} /></div> : null}
 
       <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: SP.md, flex: 1, minHeight: 0 }}>
         <div style={{ width: isMobile ? '100%' : TREE_W, flexShrink: 0 }}>
           <WikiSectionTree sections={sections} selectedKey={selectedKey} onSelect={setSelectedKey} />
         </div>
         <div style={{ flex: 1, minWidth: 0, overflow: 'auto' }}>
-          {subtab.component
-            ? subtab.component()
+          {/* Рендер элементом, не вызовом в теле WikiTab: хуки подвкладки живут в ней,
+              переключение подвкладки не меняет число хуков родителя (реестр — wikiTabs) */}
+          {SubTabComp
+            ? <SubTabComp selectedKey={selectedKey} />
             : subtab.id === 'pages'
               ? center()
               : <div style={{ padding: SP.sm }}><WikiSubTabStub label={subtab.label} when={subtab.stubNote ?? ''} /></div>}
@@ -373,7 +379,17 @@ export function WikiTab() {
           confirmLabel="Удалить раздел"
           confirmVariant="danger"
           onConfirm={async () => {
-            await deleteWikiSection(confirmDelete.key);
+            // Отказ — тем же путём, что у действия в runAction: русским текстом в баннер.
+            // Без catch rejection ушёл бы в void result.finally() (ConfirmDialog) и
+            // пользователь не увидел бы ничего. Диалог закрываем при обоих исходах:
+            // отказ видно в баннере вкладки, а не за спиннером диалога.
+            try {
+              await deleteWikiSection(confirmDelete.key);
+            } catch (e) {
+              setActionError(e);
+              setConfirmDelete(null);
+              return;
+            }
             setConfirmDelete(null);
             setSelectedKey(null);
           }}

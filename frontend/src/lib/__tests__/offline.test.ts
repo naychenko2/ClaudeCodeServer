@@ -134,6 +134,32 @@ describe('request: onBytes', () => {
     expect(data).toEqual({ cached: true });
     expect(onBytes).toHaveBeenCalledWith(1234);
   });
+
+  it('onBytes — поле слоя offline: в fetch не уходит', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ items: [1, 2] }));
+    const onBytes = vi.fn();
+
+    const data = await offline.request<{ items: number[] }>('/projects', { onBytes });
+
+    expect(data).toEqual({ items: [1, 2] });
+    // Колбэк потребляет сам слой: в опции fetch его быть не должно — лишний ключ
+    // на сетевой стороне нарушает контракт (objectContaining его не увидел бы)
+    expect(fetchMock).toHaveBeenCalledWith('/api/projects', expect.not.objectContaining({ onBytes: expect.anything() }));
+  });
+
+  it('запись кэша без bytes — веса нет: колбэк не зовётся, данные отдаются', async () => {
+    fetchMock.mockRejectedValue(new TypeError('failed to fetch'));
+    // Запись, написанная до появления поля bytes: веса у неё нет
+    idbGet.mockResolvedValue({ data: { cached: true }, savedAt: 1 });
+    const onBytes = vi.fn();
+
+    const data = await offline.request<{ cached: boolean }>('/projects', { onBytes });
+
+    // Данные из кэша отдаются как обычно, но вызывающий веса не получает:
+    // undefined в бюджете лент S2b стал бы NaN
+    expect(data).toEqual({ cached: true });
+    expect(onBytes).not.toHaveBeenCalled();
+  });
 });
 
 describe('request: мутации офлайн', () => {

@@ -1076,15 +1076,22 @@ export const api = {
   localModel: {
     // GET /api/local-model/engines: список движков для переключателя «Основная / Bonsai»
     // (макет §2). Один configured — переключателя нет, стенд того движка открывается сразу.
-    engines: () => request<LocalModelEngine[]>('/local-model/engines'),
+    // live: true — тот же класс, что у /video/* и статуса выкатки: панель «Локальные модели»
+    // опрашивается каждые 15 с, и подставленный из IndexedDB список сказал бы «Bonsai есть»
+    // про движок, который уже выключили (или наоборот).
+    engines: () => request<LocalModelEngine[]>('/local-model/engines', { live: true }),
     // GET /api/local-model/stats?window=1m|5m|15m|1h&since=<unix ms>&engine=main|bonsai.
     // Без engine — основной стенд, URL и ответ прежние (обратная совместимость, разрез v2, §5).
     // engine — только ключ словаря ('main'|'bonsai'), не имя модели и не URL.
+    // live: true — снимок стенда отвечает за «что происходит СЕЙЧАС»: ключ кэша зависит от
+    // window/since/engine, поэтому опрос ещё и копил бы по записи на каждый тик, а при обрыве
+    // связи подставлял бы СТАРОЕ состояние Bonsai как текущее — ровно то вранье, на котором
+    // держится вся панель.
     stats: (window: '1m' | '5m' | '15m' | '1h' = '15m', since?: number, engine?: LocalModelEngineName) => {
       const qs = new URLSearchParams({ window });
       if (since != null) qs.set('since', String(since));
       if (engine != null) qs.set('engine', engine);
-      return request<LocalModelStats>(`/local-model/stats?${qs.toString()}`);
+      return request<LocalModelStats>(`/local-model/stats?${qs.toString()}`, { live: true });
     },
     // GET /api/local-model/hardware?window=1m|5m|15m|1h — вкладка «Железо» (только админ;
     // 403 не-админу, 404 без флага). window — окно графика «Температуры» (дефолт 15m).

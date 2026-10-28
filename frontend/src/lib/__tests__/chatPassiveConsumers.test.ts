@@ -86,6 +86,40 @@ describe('по-чатовые потребители: что в по-чатов�
     expect(keys().filter(k => k.includes('git/unpushed'))).toEqual([]);
   });
 
+  // Панель «Локальные модели» (Ф7): опрос рельса каждые 15 с и stats с ключом от
+  // window/since/engine — пассивный кэш здесь ВРЕДЕН (тот же класс, что у /video/*):
+  // он копил бы по записи на каждый тик, а при обрыве подставлял бы СТАРОЕ состояние
+  // движка как текущее. Поэтому engines/stats — live: ни записи, ни подстановки.
+  it('снимок панели «Локальные модели» (engines/stats) не кэшируется вовсе', async () => {
+    const { api } = await import('../api');
+    const { flushPassiveWrites } = await import('../offline');
+
+    await api.localModel.engines();
+    await api.localModel.stats('15m');
+    await api.localModel.stats('5m', 1700000000000, 'bonsai');
+    await flushPassiveWrites();
+
+    // Ни один ответ панели не лёг в какой бы то ни было класс кэша
+    expect(keys().filter(k => k.includes('local-model/'))).toEqual([]);
+  });
+
+  it('при обрыве связи старый снимок панели НЕ подставляется: engines/stats дают OfflineError', async () => {
+    const { api } = await import('../api');
+    const { OfflineError } = await import('../offline');
+
+    // Связь пропала: молчат и сам запрос, и пинг /api/health — по нему confirmOffline
+    // решает про состояние (иначе «офлайн» включился бы по одному провалу)
+    vi.mocked(globalThis.fetch).mockImplementation(() => Promise.reject(new TypeError('failed to fetch')));
+    // В сторе лежит старый снимок — для live-запроса он не читается вовсе
+    mocks.idbGet.mockResolvedValue({ data: { status: 'working' }, savedAt: 1, usedAt: 1 });
+
+    await expect(api.localModel.stats('15m', undefined, 'bonsai')).rejects.toBeInstanceOf(OfflineError);
+    await expect(api.localModel.engines()).rejects.toBeInstanceOf(OfflineError);
+
+    // Подстановки не было: кэш по этим URL не читался ни разу
+    expect(mocks.idbGet.mock.calls.filter(c => String(c[0]).includes('local-model/'))).toEqual([]);
+  });
+
   it('git-статус без активного чата — общий класс, с активным чатом — по-чатовой', async () => {
     const { api, setGitSessionContext } = await import('../api');
     // Запись в общий класс идёт в фоне (ответ сети её не ждёт) — дожидаемся

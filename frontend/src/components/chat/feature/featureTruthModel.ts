@@ -22,6 +22,7 @@
 import { C } from '../../../lib/design';
 import { trackerPercent, type StepProgress } from '../../../lib/featureProgress';
 import { roleLabel } from '../../../lib/roleLabel';
+import { stepDisplayName } from '../../../lib/stepRef';
 import { formatClock, formatDuration, minutesSince } from '../../feature/FeatureStatsBits';
 import { readyAtText } from '../../feature/FeatureBriefModel';
 import type { FeatureRun, FeatureRoundVerdict, FeatureStepChain } from '../../../types/featureRun';
@@ -134,6 +135,9 @@ function agoText(iso: string, nowMs: number): string | null {
 // ── Тревога: ОДНИ слова для строки В2 и попапа П2 ───────────────────────────────────
 // «ждёт вас»/«ждёт согласия» — warn, «стоит» — danger (тоны В2). Десктоп — с причиной,
 // мобила — с именем (причина на 360 не помещается). Имена резолвит вызывающий.
+// Действие — без имени: «Ответить» / «Открыть чат» (дизайн-ревью F2, minor 5): имя уже
+// стоит во фразе слева, а в кнопке оно не склоняется и читается как обращение к человеку
+// («Ответить Кира»).
 export interface AlarmView { tone: 'warn' | 'stop'; text: string; actionLabel: string }
 
 export function alarmView(state: string, reason: string | null, personName: string | null, isMobile: boolean): AlarmView {
@@ -141,10 +145,10 @@ export function alarmView(state: string, reason: string | null, personName: stri
     const text = isMobile
       ? (personName ? `Ждёт вас · ${personName}` : 'Ждёт вас')
       : `Ждёт вас · ${reason ?? personName ?? 'нужен ваш ответ'}`;
-    return { tone: 'warn', text, actionLabel: personName && !isMobile ? `Ответить ${personName}` : 'Ответить' };
+    return { tone: 'warn', text, actionLabel: 'Ответить' };
   }
   if (state === 'merge_pending') return { tone: 'warn', text: 'Ждёт согласия на мерж', actionLabel: 'К мержу' };
-  return { tone: 'stop', text: personName ? `Стоит · ${personName}` : 'Стоит', actionLabel: personName && !isMobile ? `Чат ${personName}` : 'Чат' };
+  return { tone: 'stop', text: personName ? `Стоит · ${personName}` : 'Стоит', actionLabel: 'Открыть чат' };
 }
 
 // ── «Сейчас»: строки из run.now (список бэка, порядок бэка) ──────────────────────────
@@ -173,7 +177,7 @@ export function featureNowRows(run: FeatureRun, sessionId: string | null, nameOf
     return {
       taskId: n.taskId,
       name: n.personaId ? nameOf(n.personaId) : null,
-      what: n.stepRef ? `${n.stepRef} · ${n.title}` : n.title,
+      what: stepWhatLabel(n.stepRef, n.title),
       time: dur != null && dur > 0 ? formatDuration(dur) : null,
       isThisChat: n.linkedSessionId != null && n.linkedSessionId === sessionId,
       stopped,
@@ -267,6 +271,17 @@ export function stepStatusText(chain: FeatureStepChain, nowMs: number, stoppedBy
   return p.time ? `${p.word}${p.sep}${p.time}` : p.word;
 }
 
+// «{stepRef} · {название}» без дубля номера: заголовок задачи в трекере часто начинается
+// с «{stepRef}:» («Ш1: парсер»), и рядом с моно-номером он читается дважды — «Ш1 · Ш1: парсер»
+// (дизайн-ревью F2, minor 4). Общий хелпер stripStepRefPrefix/stepDisplayName (lib/stepRef.ts):
+// если после отсечения названия нет — остаётся только номер.
+export function stepWhatLabel(stepRef: string | null | undefined, title: string): string {
+  const ref = (stepRef ?? '').trim();
+  if (!ref) return title;
+  const name = stepDisplayName(title, ref);
+  return name ? `${ref} · ${name}` : ref;
+}
+
 // Строка цепочки шага: точка цвета корзины, текст, время справа.
 export interface TruthChainRow {
   id: string;
@@ -309,7 +324,8 @@ export function featureStepChainRows(run: FeatureRun, chain: FeatureStepChain, n
   rows.push({
     id: `step-${chain.stepRef}`,
     color: stoppedBy ? C.danger : chain.outcome === 'accepted' ? C.success : chain.status === 'ждёт ревью' ? C.info : chain.outcome === 'withdrawn' ? C.textMuted : C.accent,
-    text: `${chain.stepRef} · ${chain.title} — ${word}`,
+    // Название не повторяется: оно уже в карточке «Этот чат» выше (дизайн-ревью F2, minor 4).
+    text: `${chain.stepRef} — ${word}`,
     time: null,
   });
   for (const r of chain.rounds ?? []) {

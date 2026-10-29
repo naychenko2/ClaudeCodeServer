@@ -69,7 +69,7 @@ describe('featureRowModel: состояния строки', () => {
     const d = featureRowModel(f, null, false);
     expect(d.alarm).toBe('wait');
     expect(d.alarmText).toBe('Ждёт вас · Полина спрашивает про отступы');
-    expect(d.actionLabel).toBe('Ответить Кира');
+    expect(d.actionLabel).toBe('Ответить');
     const m = featureRowModel(f, null, true);
     expect(m.alarmText).toBe('Ждёт вас · Кира');
     expect(m.actionLabel).toBe('Ответить');
@@ -80,7 +80,7 @@ describe('featureRowModel: состояния строки', () => {
     const m = featureRowModel(f, null, false);
     expect(m.alarm).toBe('stop');
     expect(m.alarmText).toBe('Стоит · Глеб');
-    expect(m.actionLabel).toBe('Чат Глеб');
+    expect(m.actionLabel).toBe('Открыть чат');
   });
 
   it('merge_pending: «Ждёт согласия на мерж», действие «К мержу»', () => {

@@ -106,11 +106,12 @@ describe('featureTruthBar: полосы и процент', () => {
 });
 
 describe('alarmView: одни слова для строки В2 и попапа П2', () => {
-  it('waiting десктоп — «Ждёт вас · {причина}», действие «Ответить {Имя}» (warn)', () => {
+  it('waiting десктоп — «Ждёт вас · {причина}», действие «Ответить» без имени (warn)', () => {
     const a = alarmView('waiting', 'Полина спрашивает про отступы', 'Полина', false);
     expect(a.tone).toBe('warn');
     expect(a.text).toBe('Ждёт вас · Полина спрашивает про отступы');
-    expect(a.actionLabel).toBe('Ответить Полина');
+    // Имя — во фразе слева; в кнопке оно не склоняется и читается как обращение («Ответить Полина»).
+    expect(a.actionLabel).toBe('Ответить');
   });
 
   it('waiting мобила — «Ждёт вас · {Имя}» (причина на 360 не помещается), действие «Ответить»', () => {
@@ -126,9 +127,9 @@ describe('alarmView: одни слова для строки В2 и попапа
     expect(a.actionLabel).toBe('К мержу');
   });
 
-  it('stopped — «Стоит · {Имя}», действие «Чат {Имя}» / на мобиле «Чат» (danger)', () => {
-    expect(alarmView('stopped', null, 'Тимур', false)).toEqual({ tone: 'stop', text: 'Стоит · Тимур', actionLabel: 'Чат Тимур' });
-    expect(alarmView('stopped', null, 'Тимур', true).actionLabel).toBe('Чат');
+  it('stopped — «Стоит · {Имя}», действие «Открыть чат» без имени (danger)', () => {
+    expect(alarmView('stopped', null, 'Тимур', false)).toEqual({ tone: 'stop', text: 'Стоит · Тимур', actionLabel: 'Открыть чат' });
+    expect(alarmView('stopped', null, 'Тимур', true).actionLabel).toBe('Открыть чат');
   });
 });
 
@@ -193,7 +194,7 @@ describe('шаг этого чата: цепочка, статус, роль', (
       stepChains: [chain()],
     });
     const rows = featureStepChainRows(r, r.stepChains![0], nameOf);
-    expect(rows[0].text).toBe('Ш8 · Вёрстка шапки — стоит');
+    expect(rows[0].text).toBe('Ш8 — стоит');
     expect(rows[0].color).toBe(C.danger);
   });
 
@@ -211,7 +212,9 @@ describe('шаг этого чата: цепочка, статус, роль', (
       ],
     });
     const rows = featureStepChainRows(r, r.stepChains![0], nameOf);
-    expect(rows[0].text).toBe('Ш8 · Вёрстка шапки — идёт');
+    // Первая строка — «{stepRef} — {статус}»: название уже в карточке «Этот чат» выше
+    // (дизайн-ревью F2, minor 4).
+    expect(rows[0].text).toBe('Ш8 — идёт');
     expect(rows[1].text).toBe('виток 1 — Глеб, вернул');
     expect(rows[1].time).toBe(formatClock('2026-10-29T11:00:00Z'));
     const waitingRow = rows.find(x => x.id === 'rv-2')!;
@@ -274,6 +277,18 @@ describe('оценка и «Сейчас»', () => {
     expect(rows[1].what).toBe('Ревью шапки'); // без stepRef — заголовок задачи
     expect(rows[1].time).toBeNull(); // нет старта — нет времени
     expect(rows[1].isThisChat).toBe(false);
+  });
+
+  it('дубль кода шага снят: «Ш8: Вёрстка» рядом с номером → «Ш8 · Вёрстка»; название = номер → только номер', () => {
+    const r = run({
+      now: [
+        { taskId: 't-8', stage: 'prod', personaId: 'p-kira', stepRef: 'Ш8', title: 'Ш8: Вёрстка шапки', startedAt: null, linkedSessionId: null },
+        { taskId: 't-9', stage: 'prod', personaId: 'p-gleb', stepRef: 'R4', title: 'R4', startedAt: null, linkedSessionId: null },
+      ],
+    });
+    const rows = featureNowRows(r, null, nameOf, NOW);
+    expect(rows[0].what).toBe('Ш8 · Вёрстка шапки');
+    expect(rows[1].what).toBe('R4');
   });
 
   it('«Сейчас» о стоящем: строка помечена stopped, время — с момента остановки, а не от старта задачи', () => {

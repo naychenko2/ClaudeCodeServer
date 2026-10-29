@@ -14,7 +14,7 @@ import { roleLabel } from '../../../lib/roleLabel';
 import { CHAT_ROLE_LABEL } from '../../../lib/featureChatRole';
 import { FeatureTruthBody } from './FeatureTruthBody';
 import { FeatureTrackerBar, trackerBarAria } from './FeatureTrackerBar';
-import { alarmView, featureEstimateView, featureTruthBar, type NameOf } from './featureTruthModel';
+import { alarmView, featureEstimateView, featureTruthBar, stepWhatLabel, type NameOf } from './featureTruthModel';
 import type { FeatureIndexFeature, FeatureChatLink } from '../../../types/featureIndex';
 import type { FeatureRun } from '../../../types/featureRun';
 
@@ -89,7 +89,7 @@ export function featureRowModel(feature: FeatureIndexFeature, run: FeatureRun | 
     return {
       alarm: null, alarmText: '', actionLabel: '',
       nowName: first.personaId ? nameOfPersona(first.personaId) : null,
-      nowWhat: first.stepRef ? `${first.stepRef} · ${first.title}` : first.title,
+      nowWhat: stepWhatLabel(first.stepRef, first.title),
       nowRest: Math.max(0, named - 1),
       statusWord: null, statusWordPost: '',
     };

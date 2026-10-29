@@ -7,7 +7,7 @@ import { FeatureTrackerBar, trackerBarAria } from './FeatureTrackerBar';
 import { FeatureTruthFooter } from './FeatureTruthBody';
 import {
   alarmView, chatRoleFromRun, featureEstimateView, featureStepChainRows, featureTruthBar,
-  stepBadgeTone, stepStatusText, stepStoppedBy, type NameOf,
+  stepBadgeTone, stepStatusText, stepStoppedBy, stepWhatLabel, type NameOf,
 } from './featureTruthModel';
 import { laneWord } from '../../../lib/roleLabel';
 import type { FeatureRun, FeatureStepChain } from '../../../types/featureRun';
@@ -98,7 +98,7 @@ export function FeatureStepView({ run, chain, sessionId, chatTaskId, isMobile, o
       <div data-testid="feature-step-card" style={{ padding: '8px 10px', borderRadius: R.lg, background: C.bgInset }}>
         <div style={{ display: 'flex', gap: SP.sm, alignItems: 'center', minWidth: 0 }}>
           <span data-testid="feature-step-title" style={{ flex: 1, minWidth: 0, fontSize: FS.base, fontWeight: 700, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {chain.stepRef} · {chain.title}
+            {stepWhatLabel(chain.stepRef, chain.title)}
           </span>
           <span data-testid="feature-step-status" style={{ flexShrink: 0 }}>
             {/* Тревога на ЭТОМ шаге (attention.taskId ∈ цепочки) — danger «стоит · N»

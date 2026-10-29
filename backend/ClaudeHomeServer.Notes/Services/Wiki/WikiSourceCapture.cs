@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Media;
 
 namespace ClaudeHomeServer.Services.Notes.Wiki;
 
@@ -25,12 +26,18 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // Чтение заметки — только публичными средствами NotesService с владельцем (GetDetail для
 // текста, ResolveAttachmentPath для пути файла): источник принадлежит тому же владельцу, что
 // вики; заметка другого владельца в модели этого владельца не существует — отказ. Файл —
-// только внутри корня своего проекта (SafePath), не за его пределами и не под {data}/wiki:
-// тот файл — страница самой вики (корень проекта может быть предком data/, ADR-035, решение 2).
+// только внутри КАНОНИЧЕСКОГО корня своего проекта: SafePath (лексический) плюс ProjectLinkGuard
+// (сегмент-ссылка наружу — не файл проекта, ADR-017 §8), и не под {data} целиком: там живут
+// {data}/wiki (страницы самой вики) и notes/ чужих владельцев — источник не выходит за своего
+// (корень проекта может быть предком data/, ADR-035, решение 2). Текст — только валидный UTF-8
+// в пределах размера источника; хэш и текст — одних байт одного чтения.
 //
 // Данные источника — недоверенный ввод (урок ревью S2b-3): заголовок нормализуется в безопасную
 // форму — управляющие символы и разделители, "|" (разделитель подписи ссылки), "[[]]" (чужие
-// ссылки: файл карточки граф читает как страницу источника wiki), "---" (ограда frontmatter).
+// ссылки: файл карточки граф читает как страницу источника wiki), "---" (ограда frontmatter),
+// символы, недопустимые в имени файла на Windows («:*?"<>») → "_": карточка пишется на обеих
+// платформах (CI — Linux, разработка — Windows), и имя, которое одна из них отвергает при
+// записи, — не имя карточки.
 public sealed class WikiSourceCapture
 {
     // Папка карточек источников внутри раздела (ADR-035, решение 3).
@@ -39,6 +46,16 @@ public sealed class WikiSourceCapture
     // Потолок безопасной формы имени: полное имя карточки = форма + "-" + дискриминатор (8 hex),
     // с запасом под лимит имени файла (255).
     private const int MaxNameLength = 80;
+
+    // Предел файла-источника: его байты идут целиком и в хэш, и в текст источника (sourceText
+    // правила дословности WikiGate живёт в памяти прогона). Файл больше — не заметка для вики,
+    // а документ/архив: захват его не читает вовсе (отказ до чтения, а не «прочитал и отказал»).
+    // internal: предел проверяется тестом напрямую, чтобы тест не зависел от угаданного числа.
+    internal const long MaxSourceBytes = 2 * 1024 * 1024;
+
+    // Строгая декодировка: невалидная последовательность — исключение, а не U+FFFD в тексте
+    // источника (дословность QuoteMatcher по разрушенному тексту лгала бы).
+    private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     private readonly string _dataDir;
     private readonly NotesService _notes;
@@ -128,13 +145,56 @@ public sealed class WikiSourceCapture
         string full;
         try { full = SafePath.JoinBelowRoot(project.RootPath, rel); }
         catch (UnauthorizedAccessException) { return Refused("файл за пределами корня проекта"); }
+
+        // SafePath сравнивает строки и символьную ссылку наружу не видит: «docs/link.md →
+        // ~/.ssh/id_rsa» лексически лежит в корне и читался бы целиком как файл проекта.
+        // Инвариант: файл проекта читается только изнутри канонического корня (ProjectLinkGuard,
+        // ADR-017 §8; тип — в сборке Core, шов вертикали к спинке).
+        if (ProjectLinkGuard.HasLink(project.RootPath, full))
+            return Refused("файл в проекте идёт через символическую ссылку — это не файл проекта");
+
+        // Всё {data} — служебное пространство сервера, а не файлы проекта: {data}/wiki — страницы
+        // самой вики, {data}/notes/{другойOwner}/ — чужой владелец (источник не выходит за своего).
+        // {data}/wiki — канонически (IsWikiPath разыменывает ссылки со стороны data/: «data/wiki»
+        // как ссылка задаёт корень своей целью); остальное — по абсолютному пути: после проверки
+        // выше ни один сегмент ниже корня не является ссылкой, поэтому здесь лексическая форма
+        // и есть физическая.
         if (WikiPaths.IsWikiPath(full, _dataDir))
             return Refused("файл под {data}/wiki — страница вики, а не источник");
+        if (IsUnderData(full))
+            return Refused("файл под {data} — служебные данные сервера, а не файл проекта");
         if (!File.Exists(full))
             return Refused("файл не найден");
 
-        var versionHash = Sha256OfBytes(File.ReadAllBytes(full));
-        var sourceText = File.ReadAllText(full, Encoding.UTF8);
+        // Хэш и текст — ОДНИХ байт одного чтения: ReadAllBytes + ReadAllText описывали бы
+        // разные состояния, если файл изменился между ними, а карточка обязана описывать одно.
+        // Предел — до чтения: большой файл — память и время, которых захват не берёт.
+        byte[] bytes;
+        string sourceText;
+        try
+        {
+            var length = new FileInfo(full).Length;
+            if (length > MaxSourceBytes)
+                return Refused($"файл больше предела источника ({MaxSourceBytes} байт): {length}");
+            bytes = File.ReadAllBytes(full);
+            sourceText = StrictUtf8.GetString(bytes);
+        }
+        catch (DecoderFallbackException)
+        {
+            return Refused("файл не является текстом UTF-8");
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            return Refused($"файл не читается: {e.Message}");
+        }
+
+        // BOM — маркер кодировки файла, а не символ текста: в текст источника он не идёт
+        // (GetString, в отличие от ReadAllText, преамбулу не снимает; дословность QuoteMatcher
+        // сверяет то, что человек видит в тексте). Хэш при этом остаётся байтов файла, включая
+        // BOM: карточка описывает файл, а не его текст.
+        if (sourceText.Length > 0 && sourceText[0] == (char)0xFEFF) sourceText = sourceText[1..];
+
+        var versionHash = Sha256OfBytes(bytes);
         var decision = WikiSourceHome.Decide(WikiSections.ProjectsPrefix + projectId);
         if (decision.SectionKey is null)
             return Refused(decision.Reason!);
@@ -193,8 +253,16 @@ public sealed class WikiSourceCapture
     // Управляющие символы и разделители путей → пробел (имя — не путь), "|" выпадается
     // (разделитель подписи в [[цель|подпись]]), парные "[["/"]]" выпадается (иначе граф,
     // читающий файл карточки как страницу источника wiki, нашёл бы в заголовке чужую ссылку),
-    // последовательности "---" сворачиваются в "-" (одиночная "---" — ограда frontmatter), пробелы и точки
+    // последовательности "---" сворачиваются в "-" (одиночная "---" — ограда frontmatter),
+    // «:*?"<>» → "_" (имя файла недопустимо на Windows: «План: Q4» не записался бы вовсе, и
+    // исключение записи шло бы наружу захвата), пробелы и точки
     // схлопываются, хвостовые "." и пробел снимаются (имя не «..» и не «x. »), длина ограничена.
+    //
+    // Path.GetInvalidFileNameChars() (образец NotesService.SanitizeFileName) здесь НЕ образец:
+    // он платформозависим — на Linux отдаёт только "/" и NUL, а карточка пишется и на Linux (CI),
+    // и на Windows (разработка): набор недопустимого явный, форма имени одна на обеих платформах.
+    private static readonly char[] InvalidOnWindows = ['<', '>', ':', '"', '?', '*'];
+
     private static string SafeName(string raw)
     {
         var sb = new StringBuilder(raw.Length);
@@ -202,6 +270,7 @@ public sealed class WikiSourceCapture
         {
             if (ch < ' ' || ch is '/' or '\\') { sb.Append(' '); continue; }
             if (ch == '|') continue;
+            if (Array.IndexOf(InvalidOnWindows, ch) >= 0) { sb.Append('_'); continue; }
             sb.Append(ch);
         }
         var s = sb.ToString();
@@ -213,6 +282,19 @@ public sealed class WikiSourceCapture
         if (s.Length > MaxNameLength)
             s = s[..MaxNameLength].TrimEnd('.', ' ');
         return s;
+    }
+
+    // Файл под {data} — служебное пространство сервера, а не файл проекта (чужие владельцы,
+    // реестры, сама вики). Сравнение по абсолютному пути, компаратор — как у SafePath: регистр
+    // значим там, где его значим ФС хоста. Вызывается только после ProjectLinkGuard, поэтому
+    // разыменование ссылок здесь не нужен: ниже корня проекта ссылок уже нет.
+    private bool IsUnderData(string fullPath)
+    {
+        var data = Path.GetFullPath(_dataDir)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var cmp = SafePath.ComparisonFor(OperatingSystem.IsWindows());
+        return fullPath.Equals(data, cmp)
+            || fullPath.StartsWith(data + Path.DirectorySeparatorChar, cmp);
     }
 
     // Одна форма хэша на всю вики (манифест, baseHashes, сверка диска, карточка): hex в нижнем

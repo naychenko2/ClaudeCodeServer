@@ -12,13 +12,16 @@ namespace ClaudeHomeServer.Tests.Services;
 // ADR-036, решения 1 и 3); карточка type: source лежит в Источники/ своего раздела, текста
 // источника не несёт, hash — sha256 байтов файла на диске (не строки); наружу — путь карточки
 // (ключ sourceTexts правила дословности WikiGate — контракт S6a) и текст источника для
-// QuoteMatcher. Отказы: заметка с expires, чужой владелец/проект, файл за корнем проекта и
-// под {data}/wiki, невалидный дом; заголовок с спецсимволами не ломает карточку и не
-// затирает карточку другого источника (урок ревью S2b-3).
+// QuoteMatcher. Отказы: заметка с expires, чужой владелец/проект, файл за корнем проекта или
+// через символьную ссылку в нём, под {data} целиком (не только {data}/wiki), файл свыше
+// предела или невалидный UTF-8, невалидный дом; заголовок с спецсимволами (в т.ч. недопустимыми
+// на Windows) не ломает карточку и не затирает карточку другого источника (урок ревью S2b-3,
+// доработка ревью S6h).
 public class WikiSourceCaptureTests : IDisposable
 {
     private const string User = "u1";
     private readonly string _dir; // dataDir
+    private readonly string _roots; // рабочие каталоги проектов — вне {data}
     private readonly ProjectManager _projects;
     private readonly NotesService _notes;
     private readonly WikiSourceCapture _sut;
@@ -26,8 +29,14 @@ public class WikiSourceCaptureTests : IDisposable
     public WikiSourceCaptureTests()
     {
         _dir = Path.Combine(Path.GetTempPath(), "wiki_source_capture_" + Guid.NewGuid().ToString("N"));
+        // Корни проектов — вне {data}: в реальности они лежат в рабочих папках владельца, а
+        // {data} — служебное пространство сервера (notes/ всех владельцев, wiki/, реестры).
+        // Корень под dataDir дал бы «файл проекта», который новый отказ (M3 ревью S6h) закрывает;
+        // случай «корень проекта = предок {data}» проверяется отдельно, проектом «Шир».
+        _roots = Path.Combine(Path.GetTempPath(), "wiki_source_capture_roots_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_dir);
         Directory.CreateDirectory(Path.Combine(_dir, "notes", User));
+        Directory.CreateDirectory(_roots);
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = Path.Combine(_dir, "projects.json") })
             .Build();
@@ -39,11 +48,14 @@ public class WikiSourceCaptureTests : IDisposable
 
     public void Dispose()
     {
-        try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
+        foreach (var dir in new[] { _dir, _roots })
+        {
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
     }
 
     private Project NewProject(string name) =>
-        _projects.Create(name, Path.Combine(_dir, "proj_" + name), User, User, createDirectory: true);
+        _projects.Create(name, Path.Combine(_roots, "proj_" + name), User, User, createDirectory: true);
 
     private string ReadCard(WikiSourceCapture.Result r) =>
         File.ReadAllText(SafePath.Join(WikiPaths.Root(_dir, User), "pages/" + r.CardRelPath!));
@@ -249,7 +261,7 @@ public class WikiSourceCaptureTests : IDisposable
         var alienNote = _notes.Create("u2", new CreateNoteRequest("Чужая", "тело"));
         _sut.CaptureNote(User, alienNote.Id).Ok.Should().BeFalse();
 
-        var alien = _projects.Create("Чужой", Path.Combine(_dir, "alien"), "u2", "u2", createDirectory: true);
+        var alien = _projects.Create("Чужой", Path.Combine(_roots, "alien"), "u2", "u2", createDirectory: true);
         File.WriteAllText(Path.Combine(alien.RootPath!, "файл.md"), "чужой текст");
         _sut.CaptureFile(User, alien.Id, "файл.md").Ok.Should().BeFalse();
     }
@@ -270,6 +282,50 @@ public class WikiSourceCaptureTests : IDisposable
         var r = _sut.CaptureFile(User, wide.Id, $"wiki/{User}/pages/Общее/Страница.md");
         r.Ok.Should().BeFalse();
         r.Reason.Should().Contain("wiki");
+    }
+
+    // M1 ревью S6h: SafePath лексический — «docs/link.md → ~/.ssh/id_rsa» лежит в корне строкой
+    // и читался бы целиком. Инвариант: файл проекта читается только изнутри канонического корня.
+    [Fact]
+    public void ФайлЧерезСимвольнуюСсылку_отказ_цельНеЧитается()
+    {
+        var project = NewProject("П8");
+        var outside = Path.Combine(_roots, "вне_" + project.Id, "id_rsa");
+        Directory.CreateDirectory(Path.GetDirectoryName(outside)!);
+        File.WriteAllText(outside, "приватный ключ вне корня проекта");
+        var link = Path.Combine(project.RootPath!, "docs/link.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(link)!);
+        try { File.CreateSymbolicLink(link, outside); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return; // создание ссылки на Windows требует прав (Developer Mode) — случай POSIX
+        }
+
+        var r = _sut.CaptureFile(User, project.Id, "docs/link.md");
+        r.Ok.Should().BeFalse();
+        r.Reason.Should().Contain("ссылк");
+        // Цель не «прочиталась как файл проекта»: на диске вики не появилось ничего.
+        Directory.Exists(Path.Combine(WikiPaths.Pages(_dir, User), "Проекты", project.Id, "Источники"))
+            .Should().BeFalse();
+    }
+
+    // M3 ревью S6h: закрыт весь {data}, а не только {data}/wiki: под ним живут чужие владельцы
+    // (notes/{другойOwner}/) и реестры — источник не выходит за своего.
+    [Fact]
+    public void ФайлПодData_ЧужойВладелецИлиРеестр_отказ()
+    {
+        // Реальный случай правки: корень проекта — предок {data} (рабочая папка содержит data/).
+        var wide = _projects.Create("Шир2", _dir, User, User, createDirectory: true);
+        var other = Path.Combine(_dir, "notes", "u2", "x.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(other)!);
+        File.WriteAllText(other, "заметка другого владельца");
+
+        var r = _sut.CaptureFile(User, wide.Id, "notes/u2/x.md");
+        r.Ok.Should().BeFalse();
+        r.Reason.Should().Contain("{data}");
+
+        // Тот же отказ и для реестра — positional, до обращения к файлу.
+        _sut.CaptureFile(User, wide.Id, "projects.json").Ok.Should().BeFalse();
     }
 
     // —— карточка файла: ref с проектом, хэш байтов, а не строки (c2/c3) ——
@@ -295,6 +351,39 @@ public class WikiSourceCaptureTests : IDisposable
         var bytes = File.ReadAllBytes(full);
         card.Frontmatter.Hash.Should().Be(Sha256OfBytes(bytes));
         Sha256OfBytes(Encoding.UTF8.GetBytes(r.SourceText!)).Should().NotBe(card.Frontmatter.Hash);
+    }
+
+    // M4 ревью S6h: предел — до чтения. Файл разрежённый: на диске он почти ничего не занимает,
+    // но прочитанный целиком стал бы источником (без проверки размера этот тест краснеет).
+    [Fact]
+    public void ФайлСвышеПредела_отказДоЧтения()
+    {
+        var project = NewProject("П9");
+        var full = Path.Combine(project.RootPath!, "big.bin");
+        using (var fs = new FileStream(full, FileMode.Create)) fs.SetLength(WikiSourceCapture.MaxSourceBytes + 1);
+
+        var r = _sut.CaptureFile(User, project.Id, "big.bin");
+        r.Ok.Should().BeFalse();
+        r.Reason.Should().Contain("предела");
+    }
+
+    // M4 ревью S6h: бинарник и битый UTF-8 — отказ с причиной, а не U+FFFD в тексте источника
+    // (раньше ReadAllText молча заменял битые байты, и дословность QuoteMatcher лгала бы).
+    [Fact]
+    public void БинарникИлиНевалидныйUTF8_отказБезИсключения()
+    {
+        var project = NewProject("П10");
+        var bin = Path.Combine(project.RootPath!, "shot.png");
+        File.WriteAllBytes(bin, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0xFF, 0xFE]); // PNG: 0x89 и 0xFF — не UTF-8
+        var r = _sut.CaptureFile(User, project.Id, "shot.png");
+        r.Ok.Should().BeFalse();
+        r.Reason.Should().Contain("UTF-8");
+
+        var broken = Path.Combine(project.RootPath!, "broken.md");
+        File.WriteAllBytes(broken, [.. Encoding.UTF8.GetBytes("текст "), 0xC3, 0x28]); // битая последовательность
+        var r2 = _sut.CaptureFile(User, project.Id, "broken.md");
+        r2.Ok.Should().BeFalse();
+        r2.Reason.Should().Contain("UTF-8");
     }
 
     // —— недоверенный заголовок (c3, урок ревью S2b-3) ——
@@ -339,5 +428,36 @@ public class WikiSourceCaptureTests : IDisposable
         WikiSourceCapture.CardName("...", "id3", "note:3", "h3").Should().StartWith("id3-");
         WikiSourceCapture.CardName(new string('к', 300), "id", "note:4", "h4")
             .Should().MatchRegex("^к{80}-[0-9a-f]{8}$");
+    }
+
+    // M2 ревью S6h: «План: Q4» на Windows не записался бы вовсе — исключение из записи карточки
+    // шло бы наружу захвата. Форма имени одна на обеих платформах: недопустимые на Windows
+    // символы («:*?"<>») заменяются «_» (Path.GetInvalidFileNameChars здесь не образец: на Linux
+    // он их не отдаёт, а карточка пишется и там, и там).
+    [Fact]
+    public void ИмяКарточки_НедопустимыеНаWindowsСимволы_ЗаменяютсяПодчёркиванием()
+    {
+        WikiSourceCapture.CardName("План: Q4", "id", "note:5", "h5").Should().StartWith("План_ Q4-");
+        foreach (var title in new[] { "a * b", "c ? d", "e \"f\"", "g < h", "i > j" })
+        {
+            var name = WikiSourceCapture.CardName(title, "id", "note:6", "h6");
+            foreach (var bad in new[] { ':', '*', '?', '"', '<', '>', '|', '/', '\\' })
+                name.Should().NotContain(bad.ToString());
+        }
+    }
+
+    // Тот же случай через захват: карточка пишется, исключения наружу нет, имя реально на диске.
+    [Fact]
+    public void ЗахватЗаметкиСНедопустимымНаWindowsЗаголовком_карточкаБезИсключения()
+    {
+        var project = NewProject("П11");
+        var note = _notes.Create(User, new CreateNoteRequest("План: Q4 <сезон*>", "тело заметки", project.Id));
+
+        var r = _sut.CaptureNote(User, note.Id);
+        r.Ok.Should().BeTrue(r.Reason);
+        var name = Path.GetFileNameWithoutExtension(r.CardRelPath!);
+        foreach (var bad in new[] { ':', '*', '?', '"', '<', '>' })
+            name.Should().NotContain(bad.ToString());
+        ReadCard(r).Should().Contain("# " + name);
     }
 }

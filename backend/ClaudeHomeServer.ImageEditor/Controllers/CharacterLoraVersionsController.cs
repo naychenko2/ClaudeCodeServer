@@ -52,7 +52,7 @@ public class CharacterLoraVersionsController(
         if (Run(project, slug, runId) is not { } run) return VersionNotFound();
         if (run.Status != CharacterLoraRuns.Status.Ready || run.LoraFile is not { Length: > 0 } loraFile)
             return Error(StatusCodes.Status409Conflict, "version_not_ready", "Версия ещё не обучена");
-        if (!LoraNamespace.VisibleTo(UserId, loraFile))
+        if (!LoraNamespace.VisibleTo(ImageEditScope.TenantOf(project), loraFile))
             return Error(StatusCodes.Status403Forbidden, ImageEditErrorCodes.LoraNotVisible, "Эта LoRA вам недоступна.");
         if (localMedia is null) return NoSeam();
         var known = await localMedia.ListLorasAsync(ct);
@@ -65,7 +65,7 @@ public class CharacterLoraVersionsController(
         manifest = CharacterStore.Get(project.RootPath, slug) ?? manifest;
         var strength = manifest.ReadLora()?.Strength;
         var patch = new CharacterPatch(null, null, [], [], null, CharacterLoraPatch.Set(loraFile, run.Trigger, strength, known));
-        var updated = CharacterStore.Update(project.RootPath, UserId, slug, patch);
+        var updated = CharacterStore.Update(project.RootPath, ImageEditScope.TenantOf(project), slug, patch);
         if (updated?.Value is not { } change)
             return Error(StatusCodes.Status409Conflict, updated?.ErrorCode ?? ImageEditErrorCodes.InvalidRequest,
                 updated?.Error ?? "Не удалось подключить LoRA");
@@ -100,7 +100,7 @@ public class CharacterLoraVersionsController(
         var disconnected = CharacterLoraRuns.IsConnected(run, manifest.ReadLora()?.Name);
         if (disconnected)
         {
-            var updated = CharacterStore.Update(project.RootPath, UserId, slug,
+            var updated = CharacterStore.Update(project.RootPath, ImageEditScope.TenantOf(project), slug,
                 new CharacterPatch(null, null, [], [], null, CharacterLoraPatch.Removal()));
             if (updated?.Value is not { } change)
                 return Error(StatusCodes.Status409Conflict, updated?.ErrorCode ?? ImageEditErrorCodes.InvalidRequest,

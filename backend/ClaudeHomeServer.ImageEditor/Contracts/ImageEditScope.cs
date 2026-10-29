@@ -15,8 +15,17 @@ public sealed record ImageEditScope(string Key, Project? Project)
     // Заполняет только гейт области; у Of(Session) для сопоставления по ключу не задан
     public string? TenantOwnerId { get; init; }
 
+    // Ключ хранилищ проектных действий. Область без арендатора (Of(Session) мимо гейта) — отказ,
+    // а не тихий откат на id вызывающего
+    public string Tenant => TenantOwnerId
+        ?? throw new InvalidOperationException("Область редактора не прошла гейт: TenantOwnerId не задан");
+
     // Без двоеточия: ImageProjectPrefsStore.Safe его режет; с id проекта (Guid) не пересекается
     public const string Personal = "personal";
+
+    // Ключ хранилищ проектного действия по самому проекту (когда область не нужна); проект без владельца — отказ
+    public static string TenantOf(Project project) => project.OwnerId
+        ?? throw new InvalidOperationException("У проекта нет владельца: ключ хранилищ не определён");
 
     public static ImageEditScope Of(Project project) => new(project.Id, project) { TenantOwnerId = project.OwnerId };
 

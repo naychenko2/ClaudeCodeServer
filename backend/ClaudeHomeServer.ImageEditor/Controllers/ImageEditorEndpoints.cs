@@ -65,7 +65,7 @@ public abstract class ImageEditorEndpoints(
     private ImageProjectPrefsService? PrefsService => HttpContext?.RequestServices.GetService<ImageProjectPrefsService>();
 
     // Формат проекта для генерации без явного формата в теле (ADR-025: умолчание — желание из префов)
-    private MediaFormat? StoredFormat(ImageEditScope scope) => PrefsService?.Get(UserId, scope).Format;
+    private MediaFormat? StoredFormat(ImageEditScope scope) => PrefsService?.Get(scope.Tenant, scope).Format;
 
     // GET …/format?provider&model&op — состояние чипа «Формат»: всё посчитано на сервере (ADR-025 §3), у
     // каждой ступени своя цена из той же котировки, что на кнопке запуска
@@ -95,7 +95,7 @@ public abstract class ImageEditorEndpoints(
             var probe = new ImageEditQuoteRequest(editor.Key, info.Id, EditMode.Auto, operation, 1, false,
                 Format: new MediaFormat(FormatModes.Aspect, state.Resolved.Aspect, tier.Tier, null, null,
                     ClaudeHomeServer.Services.ChatContext.ContextActor.Human, DateTime.UtcNow));
-            var quoted = await jobs.QuoteAsync(UserId, scope.Key, probe, ct);
+            var quoted = await jobs.QuoteAsync(scope.Tenant, scope.Key, probe, ct);
             FormatPrice? price = quoted.Value?.Estimate is { Amount: { } amount } e ? new FormatPrice(amount, e.Unit, e.Approx) : null;
             tiers.Add(tier with { Price = price });
         }
@@ -147,11 +147,11 @@ public abstract class ImageEditorEndpoints(
         if (req.ContextRevision is { } revision)
         {
             if (context is null) return JobsUnavailable();
-            var resolved = context.Resolve(UserId, scope, req.SessionId, revision, req.Op);
+            var resolved = context.Resolve(scope.Tenant, scope, req.SessionId, revision, req.Op);
             if (resolved.ErrorCode is not null) return Map(resolved, _ => Ok());
             var (inputs, _, sessionId) = resolved.Value;
             byContext = inputs;
-            var size = await context.BaseSizeAsync(UserId, scope, sessionId, inputs, ct);
+            var size = await context.BaseSizeAsync(scope.Tenant, scope, sessionId, inputs, ct);
             req = req with
             {
                 References = inputs.ReferenceCount,
@@ -161,7 +161,7 @@ public abstract class ImageEditorEndpoints(
             };
         }
 
-        var quoted = await jobs.QuoteAsync(UserId, scope.Key, req, ct);
+        var quoted = await jobs.QuoteAsync(scope.Tenant, scope.Key, req, ct);
         if (byContext is null) return Map(quoted, Ok);
         // Строки «Чем» по операции запроса: источник один для строки контекста и панели (КТ-3)
         return Map(quoted, q => Ok(q with { Executors = ExecutorRows(req.Op, byContext.BaseHasImage, req.HasMask) }));
@@ -218,13 +218,13 @@ public abstract class ImageEditorEndpoints(
             CharacterPhotos: form.CharacterPhotos,
             FaceTarget: faceTarget);
 
-        var started = await launcher.LaunchAsync(UserId, scope, request, ct);
+        var started = await launcher.LaunchAsync(scope.Tenant, scope, request, ct);
         return Map(started, created => StatusCode(StatusCodes.Status202Accepted, created));
     }
 
     // Образец с диска → рабочая папка модуля → uploadId для ref {upload}. Не картинку и слишком тяжёлый
     // файл отвергаем здесь, до записи на диск
-    protected async Task<IActionResult> UploadIn(IFormFile? file, CancellationToken ct)
+    protected async Task<IActionResult> UploadIn(ImageEditScope scope, IFormFile? file, CancellationToken ct)
     {
         if (context is null) return JobsUnavailable();
         if (file is null || file.Length == 0)
@@ -235,25 +235,25 @@ public abstract class ImageEditorEndpoints(
         var bytes = await ReadAsync(file, ct);
         if (ImageFormatSniffer.DetectExtension(bytes) is null)
             return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, "Образец должен быть картинкой: png, jpeg, webp или gif");
-        return StatusCode(StatusCodes.Status201Created, new { uploadId = context.SaveUpload(UserId, bytes) });
+        return StatusCode(StatusCodes.Status201Created, new { uploadId = context.SaveUpload(scope.Tenant, bytes) });
     }
 
     protected IActionResult JobIn(ImageEditScope scope, string jobId)
     {
-        var job = jobs?.Get(UserId, scope.Key, jobId);
+        var job = jobs?.Get(scope.Tenant, scope.Key, jobId);
         return job is null ? JobNotFound() : Ok(job);
     }
 
     protected async Task<IActionResult> CancelIn(ImageEditScope scope, string jobId, CancellationToken ct)
     {
         if (jobs is null) return JobNotFound();
-        var job = await jobs.CancelAsync(UserId, scope.Key, jobId, ct);
+        var job = await jobs.CancelAsync(scope.Tenant, scope.Key, jobId, ct);
         return job is null ? JobNotFound() : Ok(job);
     }
 
     protected IActionResult VariantIn(ImageEditScope scope, string jobId, int variant)
     {
-        var image = jobs?.OpenVariant(UserId, scope.Key, jobId, variant);
+        var image = jobs?.OpenVariant(scope.Tenant, scope.Key, jobId, variant);
         return image is null ? JobNotFound() : File(image.Bytes, image.ContentType);
     }
 
@@ -283,12 +283,12 @@ public abstract class ImageEditorEndpoints(
                 await System.IO.File.ReadAllBytesAsync(full, ct));
         }
 
-        return Map(steps.Transform(UserId, scope.Key, req, file, dryRun), Ok);
+        return Map(steps.Transform(scope.Tenant, scope.Key, req, file, dryRun), Ok);
     }
 
     protected IActionResult StepIn(ImageEditScope scope, string stepId)
     {
-        if (steps?.Open(UserId, scope.Key, stepId) is not { } found)
+        if (steps?.Open(scope.Tenant, scope.Key, stepId) is not { } found)
             return Error(StatusCodes.Status404NotFound, ImageEditErrorCodes.StepNotFound, "Шаг истории не найден");
         return File(found.Image.Bytes, found.Image.ContentType);
     }

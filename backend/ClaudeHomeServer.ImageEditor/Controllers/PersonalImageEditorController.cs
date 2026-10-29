@@ -54,7 +54,7 @@ public class PersonalImageEditorController(
     [RequestSizeLimit(MaxUploadBodyBytes)]
     [RequestFormLimits(MultipartBodyLengthLimit = MaxUploadBodyBytes)]
     public async Task<IActionResult> Upload(string sessionId, IFormFile? file, CancellationToken ct) =>
-        Gate(sessionId, out _, out var denied) ? await UploadIn(file, ct) : denied;
+        Gate(sessionId, out var scope, out var denied) ? await UploadIn(scope, file, ct) : denied;
 
     [HttpGet("jobs/{jobId}")]
     public IActionResult GetJob(string sessionId, string jobId) =>
@@ -81,7 +81,7 @@ public class PersonalImageEditorController(
     // Выбор человека личной области — один на владельца, как и сама область
     [HttpGet("prefs")]
     public IActionResult GetPrefs(string sessionId) =>
-        Gate(sessionId, out var scope, out var denied) ? Ok(prefs.Get(UserId, scope)) : denied;
+        Gate(sessionId, out var scope, out var denied) ? Ok(prefs.Get(scope.Tenant, scope)) : denied;
 
     // characterSlug принудительно null: персонажей у личной области нет
     [HttpPut("prefs")]
@@ -90,7 +90,7 @@ public class PersonalImageEditorController(
         if (!Gate(sessionId, out var scope, out var denied)) return denied;
         if (ImageProjectPrefsService.Validate(req is null ? null : req with { CharacterSlug = null }) is { } error)
             return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, error);
-        return Ok(await prefs.SetAsync(UserId, scope, req!));
+        return Ok(await prefs.SetAsync(scope.Tenant, scope, req!));
     }
 
     private bool Gate(string sessionId, [NotNullWhen(true)] out ImageEditScope? scope,
@@ -111,7 +111,7 @@ public class PersonalThreadsController(
 {
     [HttpGet]
     public IActionResult Get(string sessionId) =>
-        Gate(sessionId, out _, out var denied) ? GetIn(sessionId) : denied;
+        Gate(sessionId, out var scope, out var denied) ? GetIn(scope, sessionId) : denied;
 
     [HttpPost]
     public async Task<IActionResult> Open(string sessionId, [FromBody] ImageThreadOpenRequest req, CancellationToken ct) =>

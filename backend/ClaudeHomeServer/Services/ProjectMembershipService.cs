@@ -1,6 +1,8 @@
+using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Git;
+using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services;
 
@@ -16,11 +18,15 @@ public sealed record MembershipResult(int Status, string? Code = null, string? E
 /// <summary>
 /// Членство в общем проекте (shared-projects, план §5 S1-2): добавить по ТОЧНОМУ username,
 /// сменить роль, убрать, покинуть. Перечисления учёток здесь нет по построению — единственный
-/// вход в поиск это точное имя. Приглашает и отзывает только владелец, участник может лишь
+/// вход в поиск — это точное имя. Приглашает и отзывает только владелец, участник может лишь
 /// покинуть проект. Права проверяются точкой доступа <see cref="ProjectAccess"/>.
+/// Отзыв и смена роли имеют хаб-следствие (S1-4, разрез §2.2): доступ теряется немедленно —
+/// живые соединения отозванного выкидываются из групп проекта, при смене роли группа остаётся
+/// и приходит событие обновления прав (К3 плана v2).
 /// </summary>
 public sealed class ProjectMembershipService(
-    ProjectManager projects, UserStore users, SharedProjectsGate gate, GitService git)
+    ProjectManager projects, UserStore users, SharedProjectsGate gate, GitService git,
+    SessionManager sessions, UserConnectionRegistry userConnections, IHubContext<SessionHub> hub)
 {
     // Чтение-проверка-запись списка участников — одна секция, иначе два приглашения подряд
     // перезапишут друг друга
@@ -88,13 +94,15 @@ public sealed class ProjectMembershipService(
     }
 
     /// <summary>Сменить роль участника (только владелец).</summary>
-    public MembershipResult ChangeRole(string callerId, string projectId, string memberUserId, ProjectRole role)
+    public async Task<MembershipResult> ChangeRoleAsync(
+        string callerId, string projectId, string memberUserId, ProjectRole role)
     {
         var denied = RequireOwner(callerId, projectId, out _);
         if (denied is not null) return denied;
         if (role is not (ProjectRole.Editor or ProjectRole.Reader))
             return new(400, "invalid_role", "Роль участника — редактор или читатель.");
 
+        Project updated;
         lock (_lock)
         {
             var project = projects.GetById(projectId)!;
@@ -105,27 +113,32 @@ public sealed class ProjectMembershipService(
             {
                 UserId = member.UserId, Role = role, AddedAt = member.AddedAt, AddedBy = member.AddedBy,
             };
-            return new(200, Project: projects.SetMembers(projectId, members));
+            updated = projects.SetMembers(projectId, members);
         }
+        // К3 (план v2): смена роли — группа хаба остаётся (доступ не отзывается); фронт по
+        // событию перечитывает поля проекта, в том числе свою роль (в обе стороны)
+        await hub.Clients.Group("project_" + projectId)
+            .SendAsync("project_members_changed", new { projectId });
+        return new(200, Project: updated);
     }
 
     /// <summary>Убрать участника (только владелец).</summary>
-    public MembershipResult Remove(string callerId, string projectId, string memberUserId)
+    public async Task<MembershipResult> RemoveAsync(string callerId, string projectId, string memberUserId)
     {
         var denied = RequireOwner(callerId, projectId, out _);
         if (denied is not null) return denied;
-        return Drop(projectId, memberUserId);
+        return await DropAsync(projectId, memberUserId);
     }
 
     /// <summary>Покинуть проект: единственная операция, доступная не владельцу.</summary>
-    public MembershipResult Leave(string callerId, string projectId)
+    public async Task<MembershipResult> LeaveAsync(string callerId, string projectId)
     {
         var project = projects.GetById(projectId);
         var role = ProjectAccess.Check(project, callerId);
         if (role is null) return new(404, "not_found", "Не найдено.");
         if (role == ProjectRole.Owner)
             return new(400, "owner_cannot_leave", "Владелец не может покинуть свой проект.");
-        return Drop(projectId, callerId);
+        return await DropAsync(projectId, callerId);
     }
 
     /// <summary>
@@ -135,16 +148,43 @@ public sealed class ProjectMembershipService(
     public bool OwnerHasMembers(string ownerId) =>
         projects.GetAll().Any(p => p.OwnerId == ownerId && p.Members is { Count: > 0 });
 
-    private MembershipResult Drop(string projectId, string memberUserId)
+    private async Task<MembershipResult> DropAsync(string projectId, string memberUserId)
     {
+        Project updated;
         lock (_lock)
         {
             var project = projects.GetById(projectId)!;
             var members = project.Members?.ToList() ?? [];
             if (members.RemoveAll(m => m.UserId == memberUserId) == 0)
                 return new(404, "not_member", "Этот человек не участвует в проекте.");
-            return new(200, Project: projects.SetMembers(projectId, members));
+            updated = projects.SetMembers(projectId, members);
         }
+        // Хаб-следствие отзыва (разрез §2.2): доступ теряется немедленно — без перезагрузки
+        // клиента его живые соединения выкидываются из групп проекта и его чатов
+        await RevokeHubAccessAsync(projectId, memberUserId, updated);
+        return new(200, Project: updated);
+    }
+
+    /// <summary>
+    /// Выкидывание отозванного из групп хаба и личное событие К3 (план v2).
+    /// Ключ — userId отозванного, не арендатор: SignalR адресует группу только соединением,
+    /// поэтому берём все его живые вкладки из реестра (S1-4) и снимаем с каждой и группу
+    /// проекта, и группы чатов этого проекта. Затем личное событие К3 project_access_revoked
+    /// в его собственную группу user_{id} (её выкидывание не касается).
+    /// Порядок внутри одного соединения — FIFO исходящего канала: событие приходит после
+    /// выкидывания, и его получение для клиента — доказательство завершённого выкидывания.
+    /// </summary>
+    private async Task RevokeHubAccessAsync(string projectId, string memberUserId, Project project)
+    {
+        var sessionIds = sessions.GetByProject(projectId).Select(s => s.Id).ToList();
+        foreach (var connectionId in userConnections.ConnectionIdsOf(memberUserId))
+        {
+            await hub.Groups.RemoveFromGroupAsync(connectionId, "project_" + projectId);
+            foreach (var sessionId in sessionIds)
+                await hub.Groups.RemoveFromGroupAsync(connectionId, sessionId);
+        }
+        await hub.Clients.Group("user_" + memberUserId).SendAsync("project_access_revoked",
+            new { projectId, ownerDisplayName = users.GetById(project.OwnerId)?.DisplayName });
     }
 
     // Не видит проекта — 404 (существование не раскрываем), видит, но не владелец — 403

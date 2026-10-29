@@ -14,6 +14,7 @@
 // формулировки; блок только вызывает модель и красит числа моно).
 
 import { formatClock, formatDate, formatDuration, minutesSince, stageLabel } from './FeatureStatsBits';
+import { trackerPercent } from '../../lib/featureProgress';
 import { laneWord } from '../../lib/roleLabel';
 import { knownStopVisual } from '../../lib/tasks';
 import type { FeatureBrief, FeatureBriefActive, FeatureBriefActiveState, FeatureBriefKind, FeatureBriefNote } from '../../lib/featurePage';
@@ -471,7 +472,9 @@ export function briefReadinessText(brief: FeatureBrief, opts: BriefTextOptions =
     caption.push({ text: ' · ', mono: false }, { text: `${percent} %`, mono: true });
   } else {
     const { stepsAccepted, stepsTotal } = brief.done;
-    percent = stepsTotal > 0 ? clampPercent((stepsAccepted / stepsTotal) * 100) : 0;
+    // Процент по трекеру — общий trackerPercent (та же функция, что полосам В2/С1/П2):
+    // числитель и знаменатель бэковые, второй копии арифметики в проекте нет.
+    percent = trackerPercent(stepsAccepted, stepsTotal);
     caption = [
       { text: `${stepsAccepted} из ${stepsTotal}`, mono: true }, { text: ' шагов · ', mono: false },
       { text: `${percent} %`, mono: true },

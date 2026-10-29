@@ -1330,7 +1330,8 @@ public class SubsystemBoundaryTests
         // мост чекбоксов заметок ↔ задач (`NoteTaskSyncService`), авто-истечение
         // заметок (`NoteExpiryService`). `UnifiedSearchService` остаётся в корне —
         // он фасад поперёк Notes+Task, отдельная задача на разрез.
-        // **Допусков нет вовсе — ни префиксов, ни точечных типов.** Пустой
+        // **Точечных допусков нет.** Один префикс-шов добавлен S6b-3 (Prompts —
+        // промпты Хранителя для WikiIngestService, по образцу Team→Prompts). Пустой
         // `AllowedExactNamespaces` здесь не забытая строка, а результат Этапа 5: после
         // выноса в `ClaudeHomeServer.Notes.csproj` вертикаль физически не может сослаться
         // на Main (нет `ProjectReference`), и весь прежний список швов закрыт контрактами
@@ -1363,6 +1364,11 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.Notes",
+                        // Префикс-шов по факту ссылок (S6b-3, по образцу Team→Prompts):
+                        // WikiIngestService строит промпты двух проходов разбора из
+                        // WikiKeeperPrompts (S6b-1). Промпт-материал Хранителя живёт в
+                        // Prompts; копия в Notes была бы второй точкой правды.
+                        "ClaudeHomeServer.Services.Prompts",
                     })
                     .ToArray(),
                 Array.Empty<string>()),

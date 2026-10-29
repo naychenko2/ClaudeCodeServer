@@ -32,6 +32,11 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
+    <!-- Префикс-шов по факту ссылок (S6b-3, по образцу Team→Prompts):
+         WikiIngestService строит промпты двух проходов разбора из WikiKeeperPrompts
+         (S6b-1). Промпт-материал живёт в Prompts; дублировать его в Notes — вторая
+         точка правды про формулировках Хранителя. -->
+    <ProjectReference Include="..\ClaudeHomeServer.Prompts\ClaudeHomeServer.Prompts.csproj" />
   </ItemGroup>
 
   <ItemGroup>

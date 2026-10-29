@@ -253,12 +253,28 @@ public class WikiApplyPolicyTests
         var wrongOpInClass = WikiApplyPolicy.Decide(Op(WikiPackage.OpAppend) with { Class = "session×link" }, Ctx());
         var noPage = WikiApplyPolicy.Decide(Op(WikiPackage.OpAppend) with { Page = "" }, Ctx());
         var nullOp = WikiApplyPolicy.Decide(null!, Ctx());
+        var futureOp = WikiApplyPolicy.Decide(Op("promote"), Ctx());
 
-        foreach (var v in new[] { unknownOp, emptyClass, foreignOrigin, wrongOpInClass, noPage, nullOp })
+        foreach (var v in new[] { unknownOp, emptyClass, foreignOrigin, wrongOpInClass, noPage, nullOp, futureOp })
         {
             v.Decision.Should().Be(WikiPackage.DecisionInbox);
             v.Reason.Should().NotBeNullOrWhiteSpace();
         }
+    }
+
+    [Fact]
+    public void Auto_НеизвестнойОперацииНеДаётСамо_Link_Даёт()
+    {
+        // Хвост ревью S4d: ветка `_` раньше молча отдавала «auto» любой операции,
+        // до неё дошедшей (в т.ч. будущей из OpValues: promote/graduate). Теперь —
+        // только link (строка §12г «link»), прочее во «Входящие» с причиной.
+        var future = WikiApplyPolicy.Auto(Op("promote"), Ctx());
+        future.Decision.Should().Be(WikiPackage.DecisionInbox);
+        future.Reason.Should().Contain("вне известных").And.NotBeNullOrWhiteSpace();
+
+        var link = WikiApplyPolicy.Auto(Op(WikiPackage.OpLink), Ctx());
+        link.Decision.Should().Be(WikiPackage.DecisionAuto);
+        link.Reason.Should().NotBeNullOrWhiteSpace();
     }
 
     [Fact]

@@ -147,17 +147,24 @@ public static class WikiApplyPolicy
         return new(true, null);
     }
 
-    private static Verdict Auto(WikiPackage.Operation op, ApplyContext context) => new(WikiPackage.DecisionAuto, op.Op switch
+    // internal: ветка «вне известных» тестируется напрямую — Decide отсекает неизвестные
+    // операции раньше, и она работает только для операции, добавленной в OpValues позже
+    // (promote/graduate): молча «auto» ей быть нельзя (хвост ревью S4d).
+    internal static Verdict Auto(WikiPackage.Operation op, ApplyContext context) => op.Op switch
     {
         WikiPackage.OpCreate when context.TargetIsChronicle =>
-            "хроника чата: механическая операция разбора (§12г)",
+            Auto("хроника чата: механическая операция разбора (§12г)"),
         WikiPackage.OpCreate =>
-            "новая страница знаний: похожей нет, лимит новых страниц не исчерпан (§12г)",
+            Auto("новая страница знаний: похожей нет, лимит новых страниц не исчерпан (§12г)"),
         WikiPackage.OpAppend =>
-            "утверждение в «Сводку»/«Хронологию»: применяется само (§12г)",
+            Auto("утверждение в «Сводку»/«Хронологию»: применяется само (§12г)"),
+        WikiPackage.OpLink =>
+            Auto("связь между страницами: применяется само (§12г)"),
         _ =>
-            "связь между страницами: применяется само (§12г)",
-    });
+            Inbox($"операция «{op.Op ?? "—"}» вне известных автоприменению: её риска политика не знает"),
+    };
+
+    private static Verdict Auto(string reason) => new(WikiPackage.DecisionAuto, reason);
 
     // Класс правки — ключ «origin × op» (WikiPackage.ClassKey). Origin берётся из него же:
     // второй источник origin у операции нет. Кривой ключ (не две части, origin вне перечня,

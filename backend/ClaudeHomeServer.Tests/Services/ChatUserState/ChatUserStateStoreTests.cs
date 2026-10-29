@@ -15,7 +15,9 @@ namespace ClaudeHomeServer.Tests.Services.ChatUserState;
 ///    вызывающий; битый JSON не роняет стор и не стирает данные молча;
 /// 3. операции правят по одному полю, не затирая остальные;
 /// 4. корень — из резолвера путей данных (DataPath), не хардкод; файл стора лежит в data/
-///    и по правилам бэкапа (BackupPaths.ShouldInclude) едет в архив.
+///    и по правилам бэкапа (BackupPaths.ShouldInclude) едет в архив;
+/// 5. конкурентные записи одного пользователя двумя экземплярами стора на одном корне не
+///    теряют друг друга (лок держится по пути файла, а не по экземпляру — ревью R-S1-6).
 /// Платформонезависимо: Path.GetTempPath()+Path.Combine, без задержек.
 /// </summary>
 public sealed class ChatUserStateStoreTests : IDisposable
@@ -108,6 +110,59 @@ public sealed class ChatUserStateStoreTests : IDisposable
 
         // И то же состояние читается с диска после перезагрузки стора (тот же корень, новый экземпляр).
         Store().Get("user-a", "chat-1").Should().BeEquivalentTo(s4);
+    }
+
+    [Fact]
+    public async Task ДваЭкземпляраНаОдномКорне_КонкурентныеЗаписиОдногоПользователяНеТеряются()
+    {
+        // Ревью R-S1-6 (major): файл один на пользователя и держит записи по всем его чатам,
+        // а Update — read-modify-write всего файла. Лок по экземпляру не защищает от второго
+        // экземпляра на том же корне: второй Save затирает чужую запись молча (зонд ревью:
+        // «Потеря записи на итерации 0»). Проверка: два стора на одном корне, параллельная
+        // запись в РАЗНЫЕ чаты одного пользователя — в файле остаются обе.
+        //
+        // Без задержек: Barrier не отпускает ни один вызов, пока не придут оба, — оба входят в
+        // read-modify-write одновременно. Каждый повтор начинается с пустого файла, поэтому
+        // потеря видна именно как потеря, а не как остаток прошлых повторов; 200 независимых
+        // повторов: без общего лока по пути достаточно пересечения на одной итерации.
+        const int iterations = 200;
+        var at = new DateTime(2026, 10, 29, 12, 0, 0, DateTimeKind.Utc);
+
+        for (var i = 0; i < iterations; i++)
+        {
+            var file = FileFor("user-a");
+            if (File.Exists(file)) File.Delete(file);
+
+            var start = new Barrier(2);
+            var storeA = Store();
+            var storeB = Store();
+
+            var markRead = Task.Run(() =>
+            {
+                start.SignalAndWait();
+                return storeA.MarkRead("user-a", "chat-1", at);
+            });
+            var setPinned = Task.Run(() =>
+            {
+                start.SignalAndWait();
+                return storeB.SetPinned("user-a", "chat-2", true);
+            });
+            await Task.WhenAll(markRead, setPinned);
+
+            // Обе записи остаются в файле и читаются с обоих экземпляров: состояние общее для
+            // корня, а не для экземпляра стора.
+            var a1 = storeA.Get("user-a", "chat-1");
+            var a2 = storeA.Get("user-a", "chat-2");
+            var b1 = storeB.Get("user-a", "chat-1");
+            var b2 = storeB.Get("user-a", "chat-2");
+
+            a1.Should().NotBeNull($"итерация {i}: отметка прочтения затёрта записью второго экземпляра");
+            a2.Should().NotBeNull($"итерация {i}: закрепление затёрто записью первого экземпляра");
+            a1!.LastReadAt.Should().Be(at);
+            a2!.IsPinned.Should().BeTrue();
+            b1.Should().BeEquivalentTo(a1);
+            b2.Should().BeEquivalentTo(a2);
+        }
     }
 
     [Fact]

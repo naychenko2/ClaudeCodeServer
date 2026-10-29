@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 
 namespace ClaudeHomeServer.Services.ChatUserState;
@@ -10,7 +11,9 @@ namespace ClaudeHomeServer.Services.ChatUserState;
 // оверлей поверх Session, а не замена: нет файла или нет записи — Get отдаёт null («не задано»),
 // решение о значении с Session — за вызывающим. Поля на Session стор не трогает, формат не ломается.
 //
-// Запись атомарна (JsonFileStore: tmp + File.Move). Битый файл не стирается молча: цельный
+// Запись атомарна (JsonFileStore: tmp + File.Move) и сериализована по пути файла: весь
+// read-modify-write одного файла пользователя держит лок по полному пути, а не по экземпляру
+// стора — иначе два экземпляра на одном корне затирают записи друг друга. Битый файл не стирается молча: цельный
 // уходит в .corrupt-*.bak, частично валинный поднимается поэлементно (битая запись пропускается,
 // копия исходника ложится рядом в .partial-*.bak) — тот же путь, что у остальных JSON-сторов.
 // Каталог лежит в data/ и попадает в бэкап сам (для него нет строки-исключения в BackupPaths).
@@ -19,7 +22,6 @@ public sealed class ChatUserStateStore(string root, TimeProvider? time = null)
     public const string DirName = "chat-user-state";
 
     private readonly TimeProvider _time = time ?? TimeProvider.System;
-    private readonly Lock _gate = new();
 
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
@@ -36,11 +38,11 @@ public sealed class ChatUserStateStore(string root, TimeProvider? time = null)
     public UserChatState? Get(string userId, string sessionId)
     {
         RequireSessionId(sessionId);
-        lock (_gate)
-        {
-            var all = ReadAll(userId);
-            return all is not null && all.TryGetValue(sessionId, out var state) ? state : null;
-        }
+        // Лок не берётся: вся запись держится под локом по пути файла в Update, а сам перенос
+        // файла атомарен (tmp + File.Move, JsonFileStore.cs:332) — частично записанного файла
+        // читателю не встречается.
+        var all = ReadAll(FileFor(userId));
+        return all is not null && all.TryGetValue(sessionId, out var state) ? state : null;
     }
 
     // Отметить чат прочитанным. По умолчанию — текущее время; вызывающий может передать отметку
@@ -59,20 +61,32 @@ public sealed class ChatUserStateStore(string root, TimeProvider? time = null)
     private UserChatState Update(string userId, string sessionId, Func<UserChatState, UserChatState> apply)
     {
         RequireSessionId(sessionId);
-        lock (_gate)
+        var path = FileFor(userId);
+        // Лок по пути файла, а не по экземпляру: файл один на пользователя и держит записи по
+        // всем его чатам, а Update — read-modify-write всего файла. Два экземпляра стора на одном
+        // корне (например, стор зарегистрирован в DI не синглтоном) без общего лока затирают
+        // записи друг друга молча. Тот же приём, что у JsonFileStore: лок по полному пути,
+        // число путей конечно — словарь не растёт бесконтрольно (JsonFileStore.cs:342-345).
+        lock (LockFor(path))
         {
-            var all = ReadAll(userId) ?? [];
+            var all = ReadAll(path) ?? [];
             var current = all.TryGetValue(sessionId, out var existing) ? existing : new UserChatState(null, null, null);
             var next = apply(current);
             if (next == current) return current;
             all[sessionId] = next;
-            JsonFileStore.Save(FileFor(userId), all, Json);
+            JsonFileStore.Save(path, all, Json);
             return next;
         }
     }
 
-    private Dictionary<string, UserChatState>? ReadAll(string userId) =>
-        JsonFileStore.Load<Dictionary<string, UserChatState>>(FileFor(userId), Json);
+    // Лок на путь файла, общий для всех экземпляров стора этого процесса.
+    private static readonly ConcurrentDictionary<string, Lock> PathLocks = new(StringComparer.OrdinalIgnoreCase);
+
+    private static Lock LockFor(string path) =>
+        PathLocks.GetOrAdd(Path.GetFullPath(path), _ => new Lock());
+
+    private static Dictionary<string, UserChatState>? ReadAll(string path) =>
+        JsonFileStore.Load<Dictionary<string, UserChatState>>(path, Json);
 
     private string FileFor(string userId)
     {

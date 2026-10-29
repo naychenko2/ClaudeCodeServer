@@ -220,8 +220,10 @@ jobs:
           --logger "trx;LogFilePrefix=rest" --results-directory "$RUNNER_TEMP/trx/rest"
           --blame-hang-timeout 5m --blame-hang-dump-type full
       # Сторож Э3: тест набора Fast дольше порога — нехостовый тест без метки Slow (гейт, блокирующий);
-      # порог CI — DURATION_GUARD_THRESHOLD выше, тесты между 2 с и порогом печатаются без падения
+      # порог CI — DURATION_GUARD_THRESHOLD выше, тесты между 2 с и порогом печатаются без падения.
+      # Идёт и при упавших тестах: TRX Fast есть всегда, вердикт сторожа не должен теряться
       - name: Duration guard (Fast)
+        if: success() || failure()
         run: python3 -I scripts/test-profile.py "$RUNNER_TEMP/trx/fast" --check --threshold "$DURATION_GUARD_THRESHOLD"
       - uses: actions/upload-artifact@v4
         if: always()

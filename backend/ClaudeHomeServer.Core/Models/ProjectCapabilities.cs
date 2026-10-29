@@ -163,7 +163,7 @@ public sealed record ProjectCapabilities(
     /// проекта — участник с другой машины не смог бы править их вообще. Отказ проверяется ДО
     /// записи участника; это та же единственная точка правды, что и остальная матрица.
     /// </summary>
-    public static bool Shareable(Project project) => true; // МУТАЦИЯ c3
+    public static bool Shareable(Project project) => FilesOnServer(project);
 
     /// <summary>
     /// Доступны ли плагины проекта (ADR-031 §5.8, M8/minor) — ЕДИНАЯ точка для

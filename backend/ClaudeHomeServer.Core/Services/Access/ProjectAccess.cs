@@ -50,7 +50,7 @@ public static class ProjectAccess
         if (project.OwnerId == userId) return ProjectRole.Owner;
         var member = project.Members?.FirstOrDefault(m => m.UserId == userId);
         if (member is null) return null;
-        return member.Role is ProjectRole.Editor or ProjectRole.Reader ? ProjectRole.Editor : null; // МУТАЦИЯ c4
+        return member.Role is ProjectRole.Editor or ProjectRole.Reader ? member.Role : null;
     }
 
     /// <summary>Можно ли человеку право <paramref name="right"/> в проекте.</summary>

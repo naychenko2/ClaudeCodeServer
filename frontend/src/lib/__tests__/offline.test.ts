@@ -1,11 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-// Мокаем IndexedDB-обёртку целиком: offline.ts работает с ней только через idbGet/idbSet
-const { idbGet, idbSet } = vi.hoisted(() => ({
+// Мокаем IndexedDB-обёртку целиком: офлайн-пути этого файла работают с ней через
+// idbGet/idbSet/idbDelete
+const { idbGet, idbSet, idbDelete } = vi.hoisted(() => ({
   idbGet: vi.fn(),
   idbSet: vi.fn(),
+  idbDelete: vi.fn(),
 }));
-vi.mock('../idb', () => ({ idbGet, idbSet }));
+vi.mock('../idb', () => ({ idbGet, idbSet, idbDelete }));
 
 // Простая замена Web Storage
 function storageStub(init: Record<string, string> = {}) {
@@ -44,6 +46,8 @@ beforeEach(async () => {
   idbGet.mockReset();
   idbSet.mockReset();
   idbSet.mockResolvedValue('key');
+  idbDelete.mockReset();
+  idbDelete.mockResolvedValue(undefined);
 
   fetchMock = vi.fn();
   dispatched = [];
@@ -103,6 +107,156 @@ describe('request: network-first', () => {
   it('204 → undefined, пустое тело не парсится как JSON', async () => {
     fetchMock.mockResolvedValue({ ok: true, status: 204, statusText: 'No Content', json: async () => ({}), text: async () => '' });
     await expect(offline.request('/tasks/1', { method: 'DELETE' })).resolves.toBeUndefined();
+  });
+});
+
+describe('request: onBytes', () => {
+  it('онлайн GET с onBytes — колбэк получает ровно длину тела ответа', async () => {
+    const body = { items: [1, 2] };
+    const text = JSON.stringify(body);
+    fetchMock.mockResolvedValue(jsonResponse(body));
+    const onBytes = vi.fn();
+
+    const data = await offline.request<{ items: number[] }>('/projects', { onBytes });
+
+    expect(data).toEqual(body);
+    expect(onBytes).toHaveBeenCalledTimes(1);
+    // Мера та же, что идёт в кэш: длина текста ответа, второй меры нет
+    expect(onBytes).toHaveBeenCalledWith(text.length);
+    // …и то же число лежит в bytes записи кэша — оценка вызывающего и учёт кэша сходятся
+    await offline.flushPassiveWrites();
+    expect(idbSet).toHaveBeenCalledWith('offline:u1:/projects', expect.objectContaining({ bytes: text.length }));
+  });
+
+  it('сетевой обрыв + запись кэша с bytes — данные из кэша, колбэк получает вес записи', async () => {
+    fetchMock.mockRejectedValue(new TypeError('failed to fetch'));
+    idbGet.mockResolvedValue({ data: { cached: true }, savedAt: 1, bytes: 1234 });
+    const onBytes = vi.fn();
+
+    const data = await offline.request<{ cached: boolean }>('/projects', { onBytes });
+
+    expect(data).toEqual({ cached: true });
+    expect(onBytes).toHaveBeenCalledWith(1234);
+  });
+
+  it('onBytes — поле слоя offline: в fetch не уходит', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ items: [1, 2] }));
+    const onBytes = vi.fn();
+
+    const data = await offline.request<{ items: number[] }>('/projects', { onBytes });
+
+    expect(data).toEqual({ items: [1, 2] });
+    // Колбэк потребляет сам слой: в опции fetch его быть не должно — лишний ключ
+    // на сетевой стороне нарушает контракт (objectContaining его не увидел бы)
+    expect(fetchMock).toHaveBeenCalledWith('/api/projects', expect.not.objectContaining({ onBytes: expect.anything() }));
+  });
+
+  it('запись кэша без bytes — веса нет: колбэк не зовётся, данные отдаются', async () => {
+    fetchMock.mockRejectedValue(new TypeError('failed to fetch'));
+    // Запись, написанная до появления поля bytes: веса у неё нет
+    idbGet.mockResolvedValue({ data: { cached: true }, savedAt: 1 });
+    const onBytes = vi.fn();
+
+    const data = await offline.request<{ cached: boolean }>('/projects', { onBytes });
+
+    // Данные из кэша отдаются как обычно, но вызывающий веса не получает:
+    // undefined в бюджете лент S2b стал бы NaN
+    expect(data).toEqual({ cached: true });
+    expect(onBytes).not.toHaveBeenCalled();
+  });
+});
+
+describe('request: потолок веса по-чатовой записи (F3-S4b)', () => {
+  // Полные истории чата бывают по несколько МБ: такая запись одна исчерпала бы весь
+  // бюджет по-чатового класса, а её чтение при загрузке снапшота раздувает вкладку.
+  // Тяжелее CHAT_CLASS_MAX_BYTES — в кэш не пишется вовсе.
+
+  const chatUrl = '/chats/c1';
+  const chatKey = 'offlinechat:u1:c1:/chats/c1';
+
+  it('запись тяжелее CHAT_CLASS_MAX_BYTES не пишется; офлайн-чтение — miss', async () => {
+    const body = { blob: 'x'.repeat(offline.CHAT_CLASS_MAX_BYTES) };
+    const text = JSON.stringify(body);
+    expect(text.length).toBeGreaterThan(offline.CHAT_CLASS_MAX_BYTES);
+    fetchMock.mockResolvedValue(jsonResponse(body));
+
+    const data = await offline.request<typeof body>(chatUrl, { chatScope: 'c1' });
+
+    // Сетевой ответ отдаётся как обычно — пропуск касается только записи в кэш
+    expect(data).toEqual(body);
+    expect(idbSet).not.toHaveBeenCalled();
+
+    // Офлайн-чтение той же истории — miss: в кэше её нет
+    fetchMock.mockRejectedValue(new TypeError('failed to fetch'));
+    await expect(offline.request(chatUrl, { chatScope: 'c1' })).rejects.toThrowError(offline.OfflineError);
+  });
+
+  it('ответ тяжелее потолка удаляет прежнюю запись под тем же ключом; офлайн-чтение — miss', async () => {
+    // Чат вырос за потолок: новый ответ в кэш не пишется, но и прежняя запись (раньше
+    // влезала в стор) больше не отвечает текущему запросу — её удаляем, иначе офлайн
+    // отдавал бы старую ленту вместо miss. Стор — фейковое хранилище: мок idbGet
+    // отражает прежнюю запись, иначе дефект не ловится.
+    const store = new Map<string, { data: unknown; savedAt: number; bytes?: number }>();
+    store.set(chatKey, { data: { d: 'old' }, savedAt: 1, bytes: 2_500_000 });
+    idbGet.mockImplementation((k: string) => Promise.resolve(store.get(k)));
+    idbSet.mockImplementation((k: string, v: unknown) => { store.set(k, v as { data: unknown; savedAt: number; bytes?: number }); return Promise.resolve(k); });
+    idbDelete.mockImplementation((k: string) => { store.delete(k); return Promise.resolve(undefined); });
+
+    const body = { blob: 'x'.repeat(offline.CHAT_CLASS_MAX_BYTES) };
+    expect(JSON.stringify(body).length).toBeGreaterThan(offline.CHAT_CLASS_MAX_BYTES);
+    fetchMock.mockResolvedValue(jsonResponse(body));
+
+    const data = await offline.request<typeof body>(chatUrl, { chatScope: 'c1' });
+
+    // Сетевой ответ отдаётся как обычно; новая запись не пишется…
+    expect(data).toEqual(body);
+    const written = idbSet.mock.calls.find(c => c[0] === chatKey);
+    expect(written).toBeUndefined();
+    // …а прежняя — удалена из стора
+    expect(idbDelete).toHaveBeenCalledWith(chatKey);
+    expect(store.has(chatKey)).toBe(false);
+
+    // Офлайн-чтение той же истории — miss, а не старая лента
+    fetchMock.mockRejectedValue(new TypeError('failed to fetch'));
+    await expect(offline.request(chatUrl, { chatScope: 'c1' })).rejects.toThrowError(offline.OfflineError);
+  });
+
+  it('запись ровно на пороге и легче — пишется', async () => {
+    // Граница открыта «тяжелее — не пишем»: ровно на пороге — пишем. Длина текста ответа
+    // подобрана ровно до CHAT_CLASS_MAX_BYTES (обёртка {"d":"…"} известной длины).
+    const payload = 'x'.repeat(offline.CHAT_CLASS_MAX_BYTES - JSON.stringify({ d: '' }).length);
+    const body = { d: payload };
+    expect(JSON.stringify(body).length).toBe(offline.CHAT_CLASS_MAX_BYTES);
+    fetchMock.mockResolvedValue(jsonResponse(body));
+
+    await offline.request<typeof body>(chatUrl, { chatScope: 'c1' });
+
+    const atLimit = idbSet.mock.calls.find(c => c[0] === chatKey);
+    expect(atLimit).toBeDefined();
+    expect((atLimit![1] as { bytes?: number }).bytes).toBe(offline.CHAT_CLASS_MAX_BYTES);
+
+    // Легче порога — обычный путь класса, запись на месте
+    idbSet.mockClear();
+    fetchMock.mockResolvedValue(jsonResponse({ d: 'light' }));
+    await offline.request('/chats/c2/history', { chatScope: 'c2' });
+    expect(idbSet).toHaveBeenCalledWith('offlinechat:u1:c2:/chats/c2/history', expect.objectContaining({ data: { d: 'light' } }));
+  });
+
+  it('вес ответа неизвестен (у тела нет меры) — запись пишется как раньше', async () => {
+    // Единственный путь request() сообщает длину текста ответа; «вес неизвестен» — это
+    // bytes === undefined в passiveWrite. Достичимо только когда у тела нет .length:
+    // тело-число (JSON от него валиден, меры у него нет). Отсутствие меры — не тяжесть:
+    // guard такую запись пропускает в стор как раньше.
+    fetchMock.mockResolvedValue({
+      ok: true, status: 200, statusText: 'OK',
+      json: async () => 1, text: async () => 12345 as unknown as string,
+    });
+
+    await offline.request<number>(chatUrl, { chatScope: 'c1' });
+
+    const written = idbSet.mock.calls.find(c => c[0] === chatKey);
+    expect(written).toBeDefined();
+    expect((written![1] as { bytes?: number }).bytes).toBeUndefined();
   });
 });
 

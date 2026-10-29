@@ -46,8 +46,9 @@ vi.mock('react', () => ({
 const m = vi.hoisted(() => ({
   getHistory: vi.fn<(sid: string) => Promise<unknown[]>>(async () => []),
   // Докачка по курсору (B5). По умолчанию сервер «старый»: отвечает плоским массивом из
-  // getHistory — прежние тесты идут как раньше; тесты курсора переопределяют ответ конвертом
-  getHistoryTail: vi.fn<(sid: string, q: { after: number; fp?: string }) => Promise<unknown>>(async () => []),
+  // getHistory — прежние тесты идут как раньше; тесты курсора переопределяют ответ конвертом.
+  // onBytes — колбэк веса ответа (как в настоящей api): тест, проверяющий вес, сам его зовёт
+  getHistoryTail: vi.fn<(sid: string, q: { after: number; fp?: string }, onBytes?: (n: number) => void) => Promise<unknown>>(async () => []),
   joinSession: vi.fn<(sid: string) => Promise<void>>(async () => { }),
   leaveSession: vi.fn<(sid: string) => Promise<void>>(async () => { }),
   sendMessage: vi.fn<() => Promise<'started' | 'queued' | 'queued-preempted'>>(async () => 'started'),
@@ -72,11 +73,11 @@ vi.mock('../../lib/api', () => ({
   api: {
     chats: {
       getHistory: (sid: string) => m.getHistory(sid),
-      getHistoryTail: (sid: string, q: { after: number; fp?: string }) => m.getHistoryTail(sid, q),
+      getHistoryTail: (sid: string, q: { after: number; fp?: string }, onBytes?: (n: number) => void) => m.getHistoryTail(sid, q, onBytes),
     },
     sessions: {
       getHistory: (_projectId: string, sid: string) => m.getHistory(sid),
-      getHistoryTail: (_projectId: string, sid: string, q: { after: number; fp?: string }) => m.getHistoryTail(sid, q),
+      getHistoryTail: (_projectId: string, sid: string, q: { after: number; fp?: string }, onBytes?: (n: number) => void) => m.getHistoryTail(sid, q, onBytes),
       cancelPending: vi.fn(async () => { }),
       preemptForPending: (sid: string) => m.preemptForPending(sid),
     },
@@ -100,8 +101,9 @@ vi.mock('../../lib/signalr', () => ({
   setMode: vi.fn(async () => { }),
 }));
 
-const { useSession, waitDiag, __test } = await import('../useSession');
+const { useSession, waitDiag, warmSession, __test } = await import('../useSession');
 const { toolLiveness } = await import('../../lib/toolTiming');
+const { normalizeHistory, initialChatState } = await import('../../lib/chatReducer');
 
 // Сервер шлёт статус в сессию (в т.ч. replay в ответ на JoinSession)
 const emitStatus = (sid: string, status: string) =>
@@ -379,6 +381,110 @@ describe('useSession: снапшот после входа в группу', () 
     const st = back.render();
     expect(st.items).toHaveLength(6);
     expect(st.items.at(-1)!.kind).toBe('result');
+  });
+});
+
+describe('useSession: карточка разрешения и подмена истории (F5)', () => {
+  // Дефект «карточка разрешения пропадает после F5»: хаб реплеит permission_request
+  // внутри JoinSession (SessionHub), карточка успевает лечь в ленту ДО снимка истории,
+  // а в history.json её нет (не персистится) — подмена уносила её, и CLI ждал ответа
+  // до таймаута. Ф5 (пустой стор → join → история новее) — тот же путь на master.
+  it('реплеянная при join карточка переживает подмену серверной историей', async () => {
+    const sid = nextSid();
+    // Мок хаба реплеит карточку синхронно внутри JoinSession — ровно как SessionHub
+    m.joinSession.mockImplementationOnce(async () => {
+      m.messageHandlers.forEach(h => h({
+        type: 'permission_request', sessionId: sid, requestId: 'perm-1', toolName: 'Bash', toolInput: { command: 'ls' },
+      }));
+    });
+    // История: незаконченный ход (result нет) — сервер новее живой ленты, подмена происходит
+    const raw = [user('делай'), text('работаю…')];
+    m.getHistory.mockResolvedValue(raw);
+
+    const chat = openChat(sid);
+    await flush();
+
+    const st = chat.render();
+    // Итог — серверная история плюс перенесённая карточка с кнопками (resolved:false)
+    expect(st.items).toHaveLength(raw.length + 1);
+    expect(st.items.slice(0, raw.length)).toEqual(normalizeHistory(raw));
+    const card = st.items.at(-1) as Extract<ChatItem, { kind: 'permission_request' }>;
+    expect(card.kind).toBe('permission_request');
+    expect(card.requestId).toBe('perm-1');
+    expect(card.resolved).toBe(false);
+
+    chat.unmount();
+  });
+});
+
+describe('useSession: карточка переживает подмену в каждой ветке (F3-S3c)', () => {
+  // Ревью R-F3-S3c: adoptServerHistory вызывается из четырёх веток подмены, а тест F5
+  // покрывал только joinAndLoadHistory. Каждая ветка обязана нести карточку сама:
+  // убираешь вызов в ветке — красный её собственный тест.
+  const emitPerm = (sid: string) =>
+    m.messageHandlers.forEach(h => h({
+      type: 'permission_request', sessionId: sid, requestId: 'perm-1', toolName: 'Bash', toolInput: { command: 'ls' },
+    }));
+  const expectCarriedCard = (items: ChatItem[]) => {
+    const card = items.at(-1);
+    expect(card).toMatchObject({ kind: 'permission_request', requestId: 'perm-1', resolved: false });
+  };
+
+  it('reloadHistory (по реплею статуса «active»): карточка переживает подмену', async () => {
+    const sid = nextSid();
+    const chat = openChat(sid);
+    await flush();
+
+    await chat.first.send('делай'); // user_message в ленту, isWaiting=true
+    emitPerm(sid); // хаб прислал карточку посреди хода (live-only, в истории её нет)
+    expect(chat.render().items.some(i => i.kind === 'permission_request')).toBe(true);
+
+    // Реплей статуса «active» при наличии зрителя зовёт перезагрузку истории
+    // (useSession.ts:409); история с дозаписанным хвостом новее живой ленты → подмена
+    m.getHistory.mockResolvedValue([user('делай'), text('работаю…')]);
+    emitStatus(sid, 'active');
+    await flush();
+
+    expectCarriedCard(chat.render().items);
+    chat.unmount();
+  });
+
+  it('реконнект: карточка переживает подмену', async () => {
+    const sid = nextSid();
+    const chat = openChat(sid);
+    await flush();
+
+    await chat.first.send('делай');
+    emitPerm(sid);
+
+    // Перебой связи и восстановление: ветка реконнекта перезаходит в группу и тянет
+    // историю — сессия ждала на момент разрыва (wasWaiting, useSession.ts:333) → подмена
+    m.getHistory.mockResolvedValue([user('делай'), text('работаю…')]);
+    await m.reconnectHandlers[0]!();
+    await flush();
+
+    expectCarriedCard(chat.render().items);
+    chat.unmount();
+  });
+
+  it('warmSession: карточка переживает подмену', async () => {
+    const sid = nextSid();
+    // Ветка пропускает чат, история которого ещё не снята (isHistoryLoading=true), —
+    // с live-карточкой в ленте. Прогрев обязан пройти ту же подмену, что остальные
+    // ветки (useSession.ts:508), и карточку сохранить, а не выбросить.
+    __test._store.set(sid, {
+      ...initialChatState(), isJoined: false, isHistoryLoading: true,
+      items: [
+        { kind: 'user_message', text: 'делай' },
+        { kind: 'permission_request', requestId: 'perm-1', toolName: 'Bash', toolInput: { command: 'ls' }, resolved: false },
+      ],
+    });
+    m.getHistory.mockResolvedValue([user('делай'), text('работаю…')]);
+
+    warmSession(sid);
+    await flush();
+
+    expectCarriedCard(__test._store.get(sid)!.items);
   });
 });
 
@@ -912,7 +1018,7 @@ describe('useSession: реконнект и повторная загрузка 
 });
 
 describe('useSession: потолок памяти (OOM fix)', () => {
-  const { MAX_CACHED_SESSIONS, MAX_TAIL_CURSORS, _store, _cursors, _lastSeen } = __test;
+  const { MAX_CACHED_SESSIONS, COLD_BUDGET_BYTES, _store, _cursors, _lastSeen, _warmed } = __test;
 
   // Модульный стор переживает тесты: чистим перед каждым, чтобы предыдущие
   // describe-блоки не нафláсили холодные сессии в кэши
@@ -930,7 +1036,16 @@ describe('useSession: потолок памяти (OOM fix)', () => {
       return { reset: false, messages: [], anchorIndex: 2, anchorFp: 'fp' };
     });
 
-  it('30 чатов подряд → курсоры и ленты ограничены', async () => {
+  // Открыть чат, дождаться загрузки, вернуться с новым серверным состоянием:
+  // та же цепочка, что reopen в describe курсора (здесь она локальна)
+  async function reopenLocal(prev: { unmount: () => void } | null, sid: string) {
+    prev?.unmount();
+    const chat = openChat(sid);
+    await flush();
+    return chat;
+  }
+
+  it('30 чатов подряд → лента ограничена, осиротевших курсоров нет', async () => {
     mockTail();
     let prev: { unmount: () => void } | null = null;
 
@@ -944,20 +1059,21 @@ describe('useSession: потолок памяти (OOM fix)', () => {
 
     // Ленты в сторе: не более MAX_CACHED_SESSIONS холодных + 1 открытая
     expect(_store.size).toBeLessThanOrEqual(MAX_CACHED_SESSIONS + 1);
-    // Курсоры: не более MAX_TAIL_CURSORS холодных + 1 открытая
-    expect(_cursors.size).toBeLessThanOrEqual(MAX_TAIL_CURSORS + 1);
+    // Инвариант «курсор ⇔ лента» (F3-S2a): штучного потолка курсоров больше нет —
+    // вместо него осиротевших курсоров: у каждого курсора лента в сторе есть
+    for (const sid of _cursors.keys()) expect(_store.has(sid)).toBe(true);
 
     prev!.unmount();
   });
 
-  it('возврат в чат с выброшенным курсором → after=-1', async () => {
+  it('выселение снимает курсор вместе с лентой → возврат after=-1', async () => {
     mockTail();
-    // Открываем MAX_TAIL_CURSORS + 2 чата: первый потеряет курсор
+    // Открываем MAX_CACHED_SESSIONS + 2 чата: первый выселяется из стора целиком
     const firstSid = nextSid();
     const sids: string[] = [firstSid];
     let prev: { unmount: () => void } | null = null;
 
-    for (let i = 0; i <= MAX_TAIL_CURSORS + 1; i++) {
+    for (let i = 0; i <= MAX_CACHED_SESSIONS + 1; i++) {
       if (i > 0) sids.push(nextSid());
       const chat = openChat(sids[i]);
       await flush();
@@ -965,7 +1081,8 @@ describe('useSession: потолок памяти (OOM fix)', () => {
       prev = chat;
     }
 
-    // Курсор первого чата выброшен (он самый старый)
+    // Первый чат выселен (он самый старый): ни ленты, ни курсора — курсор не переживает свою ленту
+    expect(_store.has(firstSid)).toBe(false);
     expect(_cursors.has(firstSid)).toBe(false);
 
     // Возвращаемся: запрос должен быть after=-1 (полная загрузка)
@@ -985,13 +1102,14 @@ describe('useSession: потолок памяти (OOM fix)', () => {
     back.unmount();
   });
 
-  it('возврат в один из последних MAX_TAIL_CURSORS → докачка хвоста', async () => {
+  it('курсор живёт ровно пока лента в сторе: возврат в оставшийся чат → докачка хвоста', async () => {
     mockTail();
-    // Открываем MAX_TAIL_CURSORS + 1 чат; последний (свежий) сохраняет курсор
+    // Открываем MAX_CACHED_SESSIONS + 1 чат: выселения нет (холодных ровно по потолку),
+    // ленты и курсоры всех чатов остаются в сторе
     const sids: string[] = [];
     let prev: { unmount: () => void } | null = null;
 
-    for (let i = 0; i <= MAX_TAIL_CURSORS; i++) {
+    for (let i = 0; i <= MAX_CACHED_SESSIONS; i++) {
       sids.push(nextSid());
       const chat = openChat(sids[i]);
       await flush();
@@ -999,9 +1117,10 @@ describe('useSession: потолок памяти (OOM fix)', () => {
       prev = chat;
     }
 
-    // Последний открытый чат — его курсор сохранён
-    const recentSid = sids[MAX_TAIL_CURSORS];
-    expect(_cursors.has(recentSid)).toBe(true);
+    // Самый старый из оставшихся: лента в сторе — курсор тоже (штучного потолка нет)
+    const oldestSid = sids[0];
+    expect(_store.has(oldestSid)).toBe(true);
+    expect(_cursors.has(oldestSid)).toBe(true);
 
     // Возвращаемся: запрос хвоста (after >= 0)
     const queries: Array<{ after: number; fp?: string }> = [];
@@ -1011,12 +1130,638 @@ describe('useSession: потолок памяти (OOM fix)', () => {
       return { reset: false, messages: [], anchorIndex: 2, anchorFp: 'fp' };
     });
 
-    prev!.unmount();
-    const back = openChat(recentSid);
+    const back = openChat(oldestSid);
     await flush();
 
     expect(queries.at(-1)!.after).toBeGreaterThanOrEqual(0);
     expect(back.render().items).toHaveLength(3);
+    back.unmount();
+    prev!.unmount();
+  });
+
+  it('вес ленты в сторе: сумма весов ответов, растёт при дозагрузке хвоста', async () => {
+    const sid = nextSid();
+    // Тот же конверт-сервер, что mockTail, но вес ответа сообщается через onBytes —
+    // как его мерит настоящая api (длина тела ответа, F3-S1a)
+    let server: unknown[] = [...DONE_TURN];
+    const replyOf = (q: { after: number; fp?: string }) => (q.after < 0
+      ? { reset: true, messages: server, anchorIndex: 2, anchorFp: 'fp' }
+      : { reset: false, messages: server.slice(q.after + 1), anchorIndex: 2, anchorFp: 'fp' });
+    const weightOf = (q: { after: number; fp?: string }) => JSON.stringify(replyOf(q)).length;
+    m.getHistoryTail.mockImplementation(async (_s: string, q: { after: number; fp?: string }, onBytes?: (n: number) => void) => {
+      const reply = replyOf(q);
+      onBytes?.(JSON.stringify(reply).length);
+      return reply;
+    });
+
+    // Полная загрузка: вес ленты = вес ответа
+    let chat = await reopenLocal(null, sid);
+    const w1 = _store.get(sid)!.historyBytes;
+    expect(w1).toBe(weightOf({ after: -1 }));
+
+    // Сервер дописал завершённый ход → следующая загрузка идёт хвостом:
+    // вес = прошлый + вес этого ответа (сумма весов ответов, а не вес склеенной ленты)
+    server = [...DONE_TURN, user('второй'), text('ответ 2'), result()];
+    chat = await reopenLocal(chat, sid);
+    const w2 = _store.get(sid)!.historyBytes;
+    expect(w2).toBe(w1 + weightOf({ after: 2, fp: 'fp' }));
+    expect(w2).toBeGreaterThan(w1);
+
+    chat.unmount();
+  });
+
+  // --- Весовой бюджет холодных лент (F3-S2b) ---
+
+  const MB = 1024 * 1024;
+
+  // Сервер с управляемым весом ответа: onBytes(N) — как настоящая api мерит тело
+  // ответа (F3-S1a); тест задаёт вес напрямую, не раздувая JSON
+  const mockWeightedTail = (weight: () => number) =>
+    m.getHistoryTail.mockImplementation(async (_s: string, q: { after: number; fp?: string }, onBytes?: (n: number) => void) => {
+      const reply = q.after < 0
+        ? { reset: true, messages: serverHistory, anchorIndex: 2, anchorFp: 'fp' }
+        : { reset: false, messages: [], anchorIndex: 2, anchorFp: 'fp' };
+      onBytes?.(weight());
+      return reply;
+    });
+
+  it('весовой бюджет: сумма холодных лент больше бюджета → старейшая выселена, младшие остались', async () => {
+    mockWeightedTail(() => 10 * MB);
+    const sids: string[] = [];
+    let prev: { unmount: () => void } | null = null;
+
+    // Четыре чата по 10 МБ: при закрытии третьего холодные {1,2,3} = 30 МБ > 24 МБ
+    // при штучном порядке (3 ≤ 8) — выселение происходит только по весу
+    for (let i = 0; i < 4; i++) {
+      sids.push(nextSid());
+      const chat = openChat(sids[i]);
+      await flush();
+      prev?.unmount();
+      prev = chat;
+    }
+
+    // Старейшая выселена: ни ленты, ни курсора; младшие остались (их сумма в бюджете)
+    expect(_store.has(sids[0])).toBe(false);
+    expect(_cursors.has(sids[0])).toBe(false);
+    expect(_store.has(sids[1])).toBe(true);
+    expect(_store.has(sids[2])).toBe(true);
+
+    prev!.unmount();
+  });
+
+  it('последняя покинутая: не выселяется весом, даже когда тяжелее бюджета', async () => {
+    let weight = 10 * MB;
+    mockWeightedTail(() => weight);
+    const sids: string[] = [];
+    let prev: { unmount: () => void } | null = null;
+
+    // Четыре чата по 10 МБ, затем пятый — 30 МБ (тяжелее всего бюджета) и его закрытие:
+    // холодные {3,4,5} = 50 МБ — вычистка старейшими доходит до последней покинутой
+    for (let i = 0; i < 5; i++) {
+      if (i === 4) weight = 30 * MB;
+      sids.push(nextSid());
+      const chat = openChat(sids[i]);
+      await flush();
+      prev?.unmount();
+      prev = chat;
+    }
+    prev!.unmount(); // закрываем тяжёлый: он — самая свежая холодная («последняя покинутая»)
+
+    // Всё, что старше последней покинутой, выселено; она осталась, хотя одна больше бюджета:
+    // возврат «назад» в только что закрытый чат остаётся мгновенным
+    expect(_store.has(sids[0])).toBe(false);
+    expect(_store.has(sids[1])).toBe(false);
+    expect(_store.has(sids[2])).toBe(false);
+    expect(_store.has(sids[3])).toBe(false);
+    expect(_store.has(sids[4])).toBe(true);
+    expect(_store.get(sids[4])!.historyBytes).toBeGreaterThan(COLD_BUDGET_BYTES);
+  });
+
+  // --- Метка LRU двигается только действиями зрителя (F3-S3a) ---
+
+  it('фоновое событие у ленты без зрителя не двигает LRU-метку', async () => {
+    mockWeightedTail(() => 10 * MB);
+
+    // A: ушёл посреди хода — isWaiting залипший, лента не холодная (защищена isWaiting),
+    // метка — момент ухода
+    const a = nextSid();
+    const chatA = openChat(a);
+    await flush();
+    await chatA.first.send('иди');
+    chatA.unmount();
+    expect(_store.get(a)!.isWaiting).toBe(true);
+
+    // B и C: обычные холодные, свежее A; их сумма в бюджете — выселения нет
+    const b = nextSid();
+    const chatB = openChat(b);
+    await flush();
+    chatB.unmount();
+    const c = nextSid();
+    const chatC = openChat(c);
+    await flush();
+    chatC.unmount();
+    expect(_store.has(b)).toBe(true);
+    expect(_store.has(c)).toBe(true);
+
+    // Реконнект: сброс isWaiting у A без зрителя — состояние обновляется (лента стала
+    // холодной), метка — нет: A не «последняя покинутая», она ушла раньше всех
+    await Promise.all(m.reconnectHandlers.map(h => h()));
+    expect(_store.get(a)!.isWaiting).toBe(false);
+
+    // D: его закрытие переводит весовой бюджет (40 > 24 МБ) — выселение по фактическому
+    // порядку уходов
+    const d = nextSid();
+    const chatD = openChat(d);
+    await flush();
+    chatD.unmount();
+
+    // Выселены A и B (ушли раньше всех); C и D остались, D — защищён как последний.
+    // Без этой правки реконнект сделал бы метку A свежайшей, и выселились бы B и C
+    expect(_store.has(a)).toBe(false);
+    expect(_store.has(b)).toBe(false);
+    expect(_store.has(c)).toBe(true);
+    expect(_store.has(d)).toBe(true);
+  });
+
+  it('два закрытия в одну миллисекунду: защищается закрытая последней, а не позже вставленная', async () => {
+    // Замороженные часы: все действия попадают в одну миллисекунду — wall-clock не различает
+    // их. Порядок обязан давать счётчик действий, а не порядок вставки в _store
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(7000);
+    try {
+      mockWeightedTail(() => 10 * MB);
+      const a = nextSid();
+      const b = nextSid();
+      const chatA = openChat(a);
+      await flush();
+      const chatB = openChat(b);
+      await flush();
+      // Закрываем в обратном порядке вставки: B первой, A последней
+      chatB.unmount();
+      chatA.unmount();
+      // C: его закрытие переводит весовой бюджет (30 > 24 МБ)
+      const c = nextSid();
+      const chatC = openChat(c);
+      await flush();
+      chatC.unmount();
+
+      // B выселена: она покинула первой. A осталась: она покинула последней —
+      // хотя в _store она вставлена позже B, и по порядку вставки выселилась бы A
+      expect(_store.has(b)).toBe(false);
+      expect(_store.has(a)).toBe(true);
+      expect(_store.has(c)).toBe(true);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('isWaiting и isJoined: весом не выселяются, но при переходе бюджета сбрасываются до оболочки', async () => {
+    mockWeightedTail(() => 10 * MB);
+
+    // Самая старая лента — с идущим ходом (isWaiting). С F3-S3b она не пропускается
+    // вычисткой, а её вес входит в сумму: при переходе бюджета первой сбрасывается именно она
+    const waiting = nextSid();
+    let chat = openChat(waiting);
+    await flush();
+    emitStatus(waiting, 'working');
+    chat.unmount();
+
+    // Следующая по старшинству — в SignalR-группе (isJoined): та же судьба.
+    // Состояние ставится напрямую: штатный unmount всегда снимает isJoined,
+    // а ветка «isJoined без зрителей» в evictColdSessions — защитная
+    const joined = nextSid();
+    chat = openChat(joined);
+    await flush();
+    chat.unmount();
+    _store.get(joined)!.isJoined = true;
+
+    // Три обычных холодных по 10 МБ: их сумма с двумя занятыми переводит бюджет —
+    // вычистка идёт по старшинству уходов: первой занятая старейшая (до оболочки),
+    // затем остальные по порядку
+    const sids: string[] = [];
+    let prev: { unmount: () => void } | null = null;
+    for (let i = 0; i < 4; i++) {
+      sids.push(nextSid());
+      chat = openChat(sids[i]);
+      await flush();
+      prev?.unmount();
+      prev = chat;
+    }
+
+    // Занятые остались записями с живыми статусами, но без лент (оболочки):
+    // их ход продолжает идти, а лента к моменту вычистки уже не их главная память
+    expect(_store.has(waiting)).toBe(true);
+    expect(_store.get(waiting)!.isWaiting).toBe(true);
+    expect(_store.get(waiting)!.isShell).toBe(true);
+    expect(_store.get(waiting)!.items).toHaveLength(0);
+    expect(_cursors.has(waiting)).toBe(false);
+    expect(_store.has(joined)).toBe(true);
+    expect(_store.get(joined)!.isJoined).toBe(true);
+    expect(_store.get(joined)!.isShell).toBe(true);
+    expect(_store.get(joined)!.items).toHaveLength(0);
+    expect(_cursors.has(joined)).toBe(false);
+
+    // Обычные ленты: старейшая удалена целиком вместе с записью (не оболочка), остальные
+    // в бюджете — целые.
+    // «Последняя покинутая» (sids[3]) защищена как всегда
+    expect(_store.has(sids[0])).toBe(false);
+    expect(_store.has(sids[1])).toBe(true);
+    expect(_store.get(sids[1])!.isShell).toBeFalsy();
+    expect(_store.get(sids[1])!.items.length).toBeGreaterThan(0);
+    expect(_store.has(sids[2])).toBe(true);
+    expect(_store.has(sids[3])).toBe(true);
+
+    prev!.unmount();
+  });
+
+  // --- Сброс ленты с идущим ходом до «оболочки» (F3-S3b) ---
+
+  // Вес зависит от типа запроса: полный (after=-1) — полный, хвост — малый.
+  // Так тест держит точный вес записи и момент перехода бюджета
+  const mockWeightedTailQ = (fullW: number, tailW: number) =>
+    m.getHistoryTail.mockImplementation(async (_s: string, q: { after: number; fp?: string }, onBytes?: (n: number) => void) => {
+      const isFull = q.after < 0;
+      const reply = isFull
+        ? { reset: true, messages: serverHistory, anchorIndex: 2, anchorFp: 'fp' }
+        : { reset: false, messages: [], anchorIndex: 2, anchorFp: 'fp' };
+      onBytes?.(isFull ? fullW : tailW);
+      return reply;
+    });
+
+  // Запись, оставленная посреди хода: прогрев + открытие + сообщение + уход.
+  // Вес 11 МБ (полный 10 + хвост 1), isWaiting, отметка прогрева стоит
+  async function leaveMidTurnWarm(sid: string) {
+    warmSession(sid);
+    await flush();
+    const chat = openChat(sid);
+    await flush();
+    await chat.first.send('иди');
+    chat.unmount();
+    expect(_store.get(sid)!.isWaiting).toBe(true);
+  }
+
+  // Открыть и закрыть обычный чат: его вес — сколько даёт текущий мок на полном запросе.
+  // Его закрытие — запуск вычистки (evictColdSessions из cleanup последнего зрителя)
+  async function openCloseCold() {
+    const sid = nextSid();
+    const chat = openChat(sid);
+    await flush();
+    chat.unmount();
+    return sid;
+  }
+
+  const callsFor = (sid: string) => m.getHistoryTail.mock.calls.filter(c => c[0] === sid).length;
+  const queriesFor = (sid: string) => m.getHistoryTail.mock.calls.filter(c => c[0] === sid).map(c => c[1]);
+
+  it('лента без зрителя с идущим ходом сверх бюджета → оболочка: лента снята, статус живой', async () => {
+    mockWeightedTailQ(10 * MB, 1 * MB);
+    const a = nextSid();
+    await leaveMidTurnWarm(a);
+    expect(_warmed.has(a)).toBe(true); // отметка прогрева стоит — оболочка обязана её снять
+
+    // Доводим сумму холодных до перехода бюджета: 11 + 10 + 10 > 24 МБ
+    const b = await openCloseCold();
+    const c = await openCloseCold();
+
+    // A — старейшая без зрителя с идущим ходом: сброшена до оболочки.
+    // Запись осталась (ход продолжает идти), лента/курсор/прогрев/вес — сняты;
+    // статусные поля живые
+    expect(_store.has(a)).toBe(true);
+    expect(_store.get(a)!.isShell).toBe(true);
+    expect(_store.get(a)!.items).toHaveLength(0);
+    expect(_store.get(a)!.historyBytes).toBe(0);
+    expect(_store.get(a)!.isWaiting).toBe(true);
+    expect(_cursors.has(a)).toBe(false);
+    expect(_warmed.has(a)).toBe(false);
+
+    // B — холодная, но в бюджете после сброса A (20 ≤ 24): целая, не тронута
+    expect(_store.has(b)).toBe(true);
+    expect(_store.get(b)!.isShell).toBeFalsy();
+    expect(_store.get(b)!.items.length).toBeGreaterThan(0);
+    expect(_cursors.has(b)).toBe(true);
+    // C — «последняя покинутая», защищена как всегда
+    expect(_store.has(c)).toBe(true);
+  });
+
+  it('по оболочке live-дельты не копятся; исход хода её гасит, и мёртвая выметается', async () => {
+    mockWeightedTailQ(10 * MB, 1 * MB);
+    const a = nextSid();
+    await leaveMidTurnWarm(a);
+    await openCloseCold();
+    await openCloseCold();
+    expect(_store.get(a)!.isShell).toBe(true);
+
+    // Ход в фоне дописывает ленту: дельты не должны возвращать ей элементы
+    m.messageHandlers.forEach(h => h({ type: 'text_delta', sessionId: a, text: 'фон' }));
+    expect(_store.get(a)!.items).toHaveLength(0);
+
+    // Исход гасит статус: запись знает, что её ход кончился (иначе живая оболочка
+    // никогда бы не стала мёртвой). Сам исход ленту не наполняет
+    m.messageHandlers.forEach(h => h({ type: 'result', sessionId: a, subtype: 'success', durationMs: 1, numTurns: 1 }));
+    expect(_store.get(a)!.isShell).toBe(true);
+    expect(_store.get(a)!.isWaiting).toBe(false);
+    expect(_store.get(a)!.items).toHaveLength(0);
+
+    // Мёртвая оболочка — пустая запись: при следующей вычистке выметается на общих
+    // основаниях, не занимая места зря
+    await openCloseCold();
+    expect(_store.has(a)).toBe(false);
+  });
+
+  it('возврат в оболочку: один запрос after=-1, лента равна серверной, дельты на месте', async () => {
+    let server: unknown[] = [...DONE_TURN];
+    m.getHistoryTail.mockImplementation(async (_s: string, q: { after: number; fp?: string }, onBytes?: (n: number) => void) => {
+      const isFull = q.after < 0;
+      const reply = isFull
+        ? { reset: true, messages: server, anchorIndex: 2, anchorFp: 'fp' }
+        : { reset: false, messages: server.slice(q.after + 1), anchorIndex: 2, anchorFp: 'fp' };
+      onBytes?.(isFull ? 10 * MB : 1 * MB);
+      return reply;
+    });
+
+    const a = nextSid();
+    await leaveMidTurnWarm(a);
+    await openCloseCold();
+    await openCloseCold();
+    expect(_store.get(a)!.isShell).toBe(true);
+
+    // Пока A в оболочке, сервер дописал ход: эти дельты клиент не копил — они в истории
+    server = [...DONE_TURN, user('второй'), text('ответ 2'), result()];
+
+    const before = callsFor(a);
+    const chat = openChat(a);
+    await flush();
+
+    // Ровно один запрос, и полный: курсора нет → after=-1, сервер — источник истины
+    expect(callsFor(a)).toBe(before + 1);
+    expect(queriesFor(a).at(-1)).toMatchObject({ after: -1 });
+
+    // Лента равна серверной истории целиком, включая дельты периода оболочки
+    expect(chat.render().items).toEqual(normalizeHistory(server));
+    expect(_store.get(a)!.isShell).toBeFalsy();
+
+    chat.unmount();
+  });
+
+  it('нерешённая карточка разрешения после возврата — ровно одна (реплей join, без дубля)', async () => {
+    // История посреди хода: карточка разрешения в неё не пишется (live-only),
+    // хаб реплеит её при JoinSession
+    const midTurn = [user('иди'), text('делаю'), { kind: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }];
+    m.getHistoryTail.mockImplementation(async (_s: string, q: { after: number; fp?: string }, onBytes?: (n: number) => void) => {
+      const isFull = q.after < 0;
+      const reply = isFull
+        ? { reset: true, messages: midTurn, anchorIndex: 2, anchorFp: 'fp' }
+        : { reset: false, messages: [], anchorIndex: 2, anchorFp: 'fp' };
+      onBytes?.(isFull ? 10 * MB : 1 * MB);
+      return reply;
+    });
+
+    const a = nextSid();
+    const chatA = openChat(a);
+    await flush();
+    // Сервер спросил разрешение — карточка в живой ленте
+    m.messageHandlers.forEach(h => h({ type: 'permission_request', sessionId: a, requestId: 'perm-1', toolName: 'Bash', toolInput: { command: 'ls' } }));
+    expect(chatA.render().items.some(it => it.kind === 'permission_request' && it.requestId === 'perm-1')).toBe(true);
+    chatA.unmount(); // ушли посреди хода с нерешённой карточкой — она уйдёт вместе с лентой
+
+    await openCloseCold();
+    await openCloseCold();
+    expect(_store.get(a)!.isShell).toBe(true);
+    expect(_store.get(a)!.items).toHaveLength(0);
+
+    // Возврат: хаб реплеит нерешённую карточку в ответ на JoinSession (как живой сервер)
+    m.joinSession.mockImplementation(async (sid: string) => {
+      if (sid === a) m.messageHandlers.forEach(h => h({ type: 'permission_request', sessionId: a, requestId: 'perm-1', toolName: 'Bash', toolInput: { command: 'ls' } }));
+    });
+    const back = openChat(a);
+    await flush();
+
+    // Ровно одна карточка с кнопками: реплей + перенос adoptServerHistory не плодят дубль
+    const cards = back.render().items.filter(it => it.kind === 'permission_request');
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ requestId: 'perm-1', resolved: false });
+
+    back.unmount();
+  });
+
+  it('живая оболочка: вес 0 вне суммы, не обрабатывается повторно; «последняя покинутая» защищена', async () => {
+    mockWeightedTailQ(10 * MB, 1 * MB);
+    const a = nextSid();
+    await leaveMidTurnWarm(a);
+    const b = await openCloseCold();
+    const c = await openCloseCold();
+    expect(_store.get(a)!.isShell).toBe(true); // вес стал 0, сумма 20 ≤ 24 — B цела
+    expect(_store.has(b)).toBe(true);
+
+    // Ещё два тяжёлых: сумма холодных 30 > 24 при каждом закрытии. Живая оболочка
+    // в обработке пропускается (брать нечего), берутся старейшие обычные — B, затем C;
+    // D остаётся в бюджете, E защищена как «последняя покинутая»
+    const d = await openCloseCold();
+    const e = await openCloseCold();
+
+    expect(_store.has(a)).toBe(true); // живая оболочка осталась: её ход идёт, вес 0 не считался
+    expect(_store.get(a)!.isShell).toBe(true);
+    expect(_store.has(b)).toBe(false); // старейшая обычная выселена первой — не оболочка
+    expect(_store.has(c)).toBe(false);
+    expect(_store.has(d)).toBe(true);
+    expect(_store.has(e)).toBe(true);
+  });
+
+  // --- Поздний loadHistory (R-F3-S3b): ответ, вернувшийся ПОСЛЕ сброса в оболочку ---
+
+  it('поздний loadHistory: ответ хвоста после сброса — оболочка снята вместе с применённой лентой', async () => {
+    const a = nextSid();
+    let server: unknown[] = [...DONE_TURN];
+    // Хвостовой запрос A «в полёте»: ответ отдаёт тест — уже после вычистки.
+    // onBytes помним и зовём его в момент ответа, как настоящая api
+    const tail = deferred<{ reset: boolean; messages: unknown[]; anchorIndex: number; anchorFp: string | null }>();
+    let tailOnBytes: ((n: number) => void) | undefined;
+    m.getHistoryTail.mockImplementation(async (s: string, q: { after: number; fp?: string }, onBytes?: (n: number) => void) => {
+      if (s === a && q.after >= 0) { tailOnBytes = onBytes; return tail.promise; }
+      const isFull = q.after < 0;
+      const reply = isFull
+        ? { reset: true, messages: server, anchorIndex: 2, anchorFp: 'fp' }
+        : { reset: false, messages: server.slice(q.after + 1), anchorIndex: 2, anchorFp: 'fp' };
+      onBytes?.(isFull ? 10 * MB : 1 * MB);
+      return reply;
+    });
+
+    // Прогрев и открытие A: полный запрос (10 МБ) пришёл, хвостовой ушёл и висит
+    warmSession(a);
+    await flush();
+    expect(_cursors.has(a)).toBe(true); // курсор есть — запрос при открытии идёт хвостом
+    const chat = openChat(a);
+    await flush();
+    expect(callsFor(a)).toBe(2); // полный + хвостовой; хвостовой ещё не вернулся
+    await chat.first.send('иди');
+    chat.unmount(); // ушли посреди хода: A — холодная запись с живым статусом и лентой
+
+    // Ещё два холодных по 10 МБ: сумма 30 > 24 → старейшая (A, ход идёт) сбрасывается
+    // до оболочки: сняты лента и всё, что живёт с ней (курсор, вес), статус живой
+    await openCloseCold();
+    await openCloseCold();
+    expect(_store.get(a)!.isShell).toBe(true);
+    expect(_store.get(a)!.items).toHaveLength(0);
+    expect(_store.get(a)!.historyBytes).toBe(0);
+    expect(_cursors.has(a)).toBe(false);
+
+    // Сервер дописал и завершил ход; ответ на летевший ДО сброса запрос приходит только теперь
+    server = [...DONE_TURN, user('иди'), text('ответ 2'), result()];
+    tailOnBytes?.(1 * MB);
+    tail.resolve({ reset: false, messages: [user('иди'), text('ответ 2'), result()], anchorIndex: 5, anchorFp: 'fp2' });
+    await flush();
+
+    // Инвариант «оболочка снимается только вместе с применённой лентой»: запись стала
+    // полной — лента ровно серверный ответ, включая ход, доросший за время оболочки
+    expect(_store.get(a)!.isShell).toBeFalsy();
+    expect(_store.get(a)!.items).toEqual(normalizeHistory(server));
+    // «вес ⇔ лента»: счётчик полученного (10 + 1 МБ), а не нуль оболочки
+    expect(_store.get(a)!.historyBytes).toBe(11 * MB);
+    // «курсор ⇔ лента»: курсор восстановлен вместе с лентой, его счётчик равен весу стора
+    expect(_cursors.get(a)!.receivedBytes).toBe(11 * MB);
+  });
+
+  // --- Возврат из «оболочки»: индикатор загрузки истории (F3-S3d, дефект dd0c5df3) ---
+
+  it('возврат из оболочки: пока история не пришла — isHistoryLoading, пришла — снят', async () => {
+    const a = nextSid();
+    // Полный снимок A при возврате «в полёте»: ответ отдаёт тест — иначе состояние
+    // «между появлением панели и приходом истории» не поймать
+    let fullForA = 0;
+    const holdReturn = deferred<void>();
+    const liveTurn = [...DONE_TURN, user('иди'), text('ответ ещё идёт')]; // ход не закончен
+    m.getHistoryTail.mockImplementation(async (s: string, q: { after: number; fp?: string }, onBytes?: (n: number) => void) => {
+      const isFull = q.after < 0;
+      onBytes?.(isFull ? 10 * MB : 1 * MB);
+      if (!isFull) return { reset: false, messages: [], anchorIndex: 2, anchorFp: 'fp' };
+      if (s === a && ++fullForA > 1)
+        return holdReturn.promise.then(() => ({
+          reset: true, messages: liveTurn, anchorIndex: liveTurn.length - 1, anchorFp: 'fp2',
+        }));
+      return { reset: true, messages: serverHistory, anchorIndex: 2, anchorFp: 'fp' };
+    });
+
+    await leaveMidTurnWarm(a);
+    await openCloseCold();
+    await openCloseCold();
+    expect(_store.get(a)!.isShell).toBe(true);
+
+    const back = openChat(a);
+    // Оболочка снята, история ещё летит: панель под индикатором загрузки, а не пустая
+    expect(_store.get(a)!.isShell).toBeFalsy();
+    expect(back.render().isHistoryLoading).toBe(true);
+    expect(back.render().items).toHaveLength(0);
+    await flush();
+    expect(back.render().isHistoryLoading).toBe(true); // снимок всё ещё в полёте
+
+    holdReturn.resolve();
+    await flush();
+    // История пришла — индикатор снят, лента полная
+    expect(back.render().isHistoryLoading).toBe(false);
+    expect(back.render().items).toEqual(normalizeHistory(liveTurn));
+
+    back.unmount();
+  });
+
+  // --- Ошибка загрузки истории после возврата из оболочки (F3-S3d, ревью R-F3-S3d) ---
+  //     Инвариант: ни один исход загрузки не оставляет спиннер висеть.
+
+  it('ошибка загрузки истории после возврата из оболочки: спиннер гасится, а не залипает', async () => {
+    const a = nextSid();
+    mockWeightedTailQ(10 * MB, 1 * MB);
+    await leaveMidTurnWarm(a);
+    await openCloseCold();
+    await openCloseCold();
+    expect(_store.get(a)!.isShell).toBe(true);
+
+    // Сервер при возврате недоступен: полный снимок (after=-1) отклонён. Курсора у
+    // оболочки нет — запрос только полный, поэтому отказ падает ровно в ветку возврата
+    // из оболочки (catch joinAndLoadHistory)
+    m.getHistoryTail.mockImplementation(async (_s: string, q: { after: number; fp?: string }) => {
+      if (q.after < 0) throw new Error('история недоступна');
+      return { reset: false, messages: [], anchorIndex: 2, anchorFp: 'fp' };
+    });
+
+    const back = openChat(a);
+    // То же состояние, что в тесте выше: оболочка снята зрителем, история в полёте —
+    // панель под индикатором загрузки
+    expect(_store.get(a)!.isShell).toBeFalsy();
+    expect(back.render().isHistoryLoading).toBe(true);
+
+    await flush();
+    // Загрузка не удалась — флаг обязан погаситься и здесь, иначе спиннер висел бы
+    // до следующей удачной загрузки (противоположный исход теста «пришла — снят»)
+    expect(back.render().isHistoryLoading).toBe(false);
+    expect(_store.get(a)!.isHistoryLoading).toBe(false);
+
+    back.unmount();
+  });
+
+  // --- Аварийный выход процесса у «оболочки»: маркер конца хода после возврата
+  //     (F3-S3d, дефект 3e22fbeb) ---
+
+  // Оболочка чата, чей процесс умер в фоне. Первый полный снимок — «до обрыва»,
+  // второй (при возврате) — с оборванным ходом в хвосте
+  const mockCrashedReturn = (sid: string, brokenHistory: unknown[]) => {
+    let fullForSid = 0;
+    return m.getHistoryTail.mockImplementation(async (s: string, q: { after: number; fp?: string }, onBytes?: (n: number) => void) => {
+      const isFull = q.after < 0;
+      onBytes?.(isFull ? 10 * MB : 1 * MB);
+      if (!isFull) return { reset: false, messages: [], anchorIndex: 2, anchorFp: 'fp' };
+      const messages = s === sid && ++fullForSid > 1 ? brokenHistory : serverHistory;
+      return { reset: true, messages, anchorIndex: messages.length - 1, anchorFp: 'fp' };
+    });
+  };
+
+  // A сброшен в оболочку, потом его процесс умер: 'exited' дошёл до пустой ленты
+  async function shellThenCrash(sid: string) {
+    await leaveMidTurnWarm(sid);
+    await openCloseCold();
+    await openCloseCold();
+    expect(_store.get(sid)!.isShell).toBe(true);
+    m.messageHandlers.forEach(h => h({ type: 'exited', sessionId: sid }));
+    // Статус гасится как раньше; маркер в пустую ленту не ставится — держится признак
+    expect(_store.get(sid)!.isShell).toBe(true);
+    expect(_store.get(sid)!.isWaiting).toBe(false);
+    expect(_store.get(sid)!.items).toHaveLength(0);
+  }
+
+  it('аварийный exited у оболочки: после возврата в ленте ровно один session_ended', async () => {
+    // Сервер при аварийном выходе конец хода в историю не пишет — хвост оборван на тексте
+    const brokenTurn = [...DONE_TURN, user('иди'), text('оборвалось на полуслове')];
+    const a = nextSid();
+    mockCrashedReturn(a, brokenTurn);
+
+    await shellThenCrash(a);
+
+    const back = openChat(a);
+    await flush();
+    const tape = back.render().items;
+    // Лента = серверная история + ровно один маркер конца хода в хвосте
+    expect(tape).toEqual([...normalizeHistory(brokenTurn), { kind: 'session_ended' }]);
+    expect(tape.filter(i => i.kind === 'session_ended')).toHaveLength(1);
+
+    // Повторный вход маркера не добавляет: флаг снимается той же точкой, что ставит маркер
+    back.unmount();
+    const again = openChat(a);
+    await flush();
+    expect(again.render().items.filter(i => i.kind === 'session_ended')).toHaveLength(1);
+    again.unmount();
+  });
+
+  it('сервер сам записал конец хода — клиентского маркера поверх него нет', async () => {
+    // Прерванный сервером ход: 'interrupted' персистится и приходит с историей сам
+    const stoppedTurn = [...DONE_TURN, user('иди'), text('оборвалось'), { kind: 'interrupted', ts: 1 }];
+    const a = nextSid();
+    mockCrashedReturn(a, stoppedTurn);
+
+    await shellThenCrash(a);
+
+    const back = openChat(a);
+    await flush();
+    const tape = back.render().items;
+    expect(tape.filter(i => i.kind === 'session_ended')).toHaveLength(0);
+    expect(tape[tape.length - 1]?.kind).toBe('interrupted');
+
     back.unmount();
   });
 });

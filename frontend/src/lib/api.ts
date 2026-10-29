@@ -2504,10 +2504,11 @@ export const api = {
     // хвост в офлайн-кэше был бы мусором (подстановка куска вместо ленты).
     // Полная история — по-чатовой класс кэша: она тяжёлая (до 2,5 МБ на чат), и без своего
     // потолка по-чатовые записи съедали бы общий бюджет кэша и росли вместе с числом чатов.
-    getHistoryTail: (projectId: string, sessionId: string, q: HistoryCursorQuery) =>
+    // onBytes — необязательный колбэк веса ответа (мера та же, что у офлайн-кэша)
+    getHistoryTail: (projectId: string, sessionId: string, q: HistoryCursorQuery, onBytes?: (n: number) => void) =>
       request<HistoryReply>(
         `/projects/${projectId}/sessions/${sessionId}/history?${historyCursorParams(q)}`,
-        { live: q.after >= 0, chatScope: q.after < 0 ? sessionId : undefined }),
+        { live: q.after >= 0, chatScope: q.after < 0 ? sessionId : undefined, onBytes }),
     // «Итог сессии»: конспект сессии заметкой (флаг notes-session-summary).
     // Маршрут по id сессии — работает и для проектных сессий, и для чатов
     summary: (sessionId: string) =>
@@ -2755,9 +2756,9 @@ export const api = {
       .then(r => { forgetChatContextSession(id); return r; }),
     getHistory: (id: string) => request<unknown[]>(`/chats/${id}/history`, { chatScope: id }),
     // То же, что api.sessions.getHistoryTail, для чата вне проекта
-    getHistoryTail: (id: string, q: HistoryCursorQuery) =>
+    getHistoryTail: (id: string, q: HistoryCursorQuery, onBytes?: (n: number) => void) =>
       request<HistoryReply>(`/chats/${id}/history?${historyCursorParams(q)}`,
-        { live: q.after >= 0, chatScope: q.after < 0 ? id : undefined }),
+        { live: q.after >= 0, chatScope: q.after < 0 ? id : undefined, onBytes }),
     // Вложение локального проекта ложится на машину проекта через агента: сервер на свой
     // маршрут для него отвечает отказом G1
     uploadFile: async (id: string, file: File, projectId?: string): Promise<{ path: string }> => {

@@ -1662,6 +1662,40 @@ describe('useSession: потолок памяти (OOM fix)', () => {
     back.unmount();
   });
 
+  // --- Ошибка загрузки истории после возврата из оболочки (F3-S3d, ревью R-F3-S3d) ---
+  //     Инвариант: ни один исход загрузки не оставляет спиннер висеть.
+
+  it('ошибка загрузки истории после возврата из оболочки: спиннер гасится, а не залипает', async () => {
+    const a = nextSid();
+    mockWeightedTailQ(10 * MB, 1 * MB);
+    await leaveMidTurnWarm(a);
+    await openCloseCold();
+    await openCloseCold();
+    expect(_store.get(a)!.isShell).toBe(true);
+
+    // Сервер при возврате недоступен: полный снимок (after=-1) отклонён. Курсора у
+    // оболочки нет — запрос только полный, поэтому отказ падает ровно в ветку возврата
+    // из оболочки (catch joinAndLoadHistory)
+    m.getHistoryTail.mockImplementation(async (_s: string, q: { after: number; fp?: string }) => {
+      if (q.after < 0) throw new Error('история недоступна');
+      return { reset: false, messages: [], anchorIndex: 2, anchorFp: 'fp' };
+    });
+
+    const back = openChat(a);
+    // То же состояние, что в тесте выше: оболочка снята зрителем, история в полёте —
+    // панель под индикатором загрузки
+    expect(_store.get(a)!.isShell).toBeFalsy();
+    expect(back.render().isHistoryLoading).toBe(true);
+
+    await flush();
+    // Загрузка не удалась — флаг обязан погаситься и здесь, иначе спиннер висел бы
+    // до следующей удачной загрузки (противоположный исход теста «пришла — снят»)
+    expect(back.render().isHistoryLoading).toBe(false);
+    expect(_store.get(a)!.isHistoryLoading).toBe(false);
+
+    back.unmount();
+  });
+
   // --- Аварийный выход процесса у «оболочки»: маркер конца хода после возврата
   //     (F3-S3d, дефект 3e22fbeb) ---
 

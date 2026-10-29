@@ -11,7 +11,8 @@ import { act, createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NoteSummary } from '../../types';
 import { NotesPage } from './NotesPage';
-import { installFakeDom, mount, reactProps, uninstallFakeDom } from '../../components/chat/__tests__/fakeDom';
+import { findNodeByAttr, installFakeDom, mount, reactProps, uninstallFakeDom } from '../../components/chat/__tests__/fakeDom';
+import { setAllFlags } from '../../lib/featureFlags';
 
 // fakeDom не экспортирует FNode — тип узла берём из сигнатуры reactProps.
 type AnyNode = {
@@ -58,6 +59,19 @@ vi.mock('../../lib/signalr', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../lib/signalr')>();
   return { ...orig, onMessage: () => () => {}, onPreviewMessage: () => () => {} };
 });
+// S5d: стор вики мокан на уровне хуков — настоящий поток «ответ REST → стор → экран» проверен
+// в WikiTab.test; здесь проверяется связь вкладки со страницей заметок, а не стор.
+const { wikiMock } = vi.hoisted(() => ({ wikiMock: { tree: null as unknown, catalog: null as unknown } }));
+vi.mock('../../lib/wiki', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../lib/wiki')>();
+  return {
+    ...orig,
+    ensureWikiLoaded: async () => {},
+    loadWikiCatalog: async () => {},
+    useWikiTree: () => wikiMock.tree,
+    useWikiCatalog: () => wikiMock.catalog,
+  };
+});
 
 function note(id: string, title: string, tags: string[], annotation?: NoteSummary['annotation']): NoteSummary {
   return {
@@ -78,17 +92,23 @@ function mountNotes() {
   return { root, container };
 }
 
+// Окружение рендера NotesPage: fake-DOM + стабы хранилищ и слушателей, которые
+// HubHeader/эффекты берут напрямую (общее для обоих describe)
+function prepareEnv() {
+  installFakeDom();
+  // HubHeader читает localStorage напрямую (не под guard'ом) — в node его нет, stub.
+  vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {}, clear: () => {} });
+  // fake-window не несёт addEventListener — HubHeader вешает слушателей в эффекте.
+  const w = (globalThis as { window: Record<string, unknown> }).window;
+  if (typeof w.addEventListener !== 'function') { w.addEventListener = () => {}; w.removeEventListener = () => {}; }
+  // parseHash читает window.location.hash; эффект consume читает sessionStorage — оба под stub.
+  if (!w.location) w.location = { hash: '' };
+  vi.stubGlobal('sessionStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {}, clear: () => {} });
+}
+
 describe('NotesPage: клик по ui/Chip переключает фильтр', () => {
   beforeEach(() => {
-    installFakeDom();
-    // HubHeader читает localStorage напрямую (не под guard'ом) — в node его нет, stub.
-    vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {}, clear: () => {} });
-    // fake-window не несёт addEventListener — HubHeader вешает слушателей в эффекте.
-    const w = (globalThis as { window: Record<string, unknown> }).window;
-    if (typeof w.addEventListener !== 'function') { w.addEventListener = () => {}; w.removeEventListener = () => {}; }
-    // parseHash читает window.location.hash; эффект consume читает sessionStorage — оба под stub.
-    if (!w.location) w.location = { hash: '' };
-    vi.stubGlobal('sessionStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {}, clear: () => {} });
+    prepareEnv();
     notesMock.length = 0;
     notesMock.push(
       note('n1', 'Н1', ['идея', 'избранное']),
@@ -174,6 +194,105 @@ describe('NotesPage: клик по ui/Chip переключает фильтр',
     const open = findButtonByText(container, 'Открытые');
     expect(open, 'чип «Открытые» найден').not.toBeNull();
     expect(open!.style.minHeight, 'статус комментария: minHeight 40px').toBe('40px');
+    root.unmount();
+  });
+});
+
+// ─── S5d: вкладка «Вики» за флагом llmWiki ───
+// Флаг — реальный стор featureFlags (setAllFlags), как в тесте флага у WikiTab, но с другой
+// стороны: проверяется вкладка на странице заметок. Утверждения — по конечному состоянию
+// после полного маршрута: «Вики» → каталог раздела → «Раздел ▸» → экран «Разделы» →
+// выбор раздела → обратно каталог. Мобильный режим (useIsMobile=true мокан выше) —
+// он же маршрут Веры на 360.
+
+const wikiSection = (key: string, over: Record<string, unknown> = {}) => ({
+  key, name: null, orphan: false, local: false, sphereReserved: false, pageCount: 0, ...over,
+});
+const WIKI_TREE = {
+  initialized: true,
+  sections: [
+    wikiSection('common', { name: 'Общее', pageCount: 12 }),
+    wikiSection('personal', { name: 'Личное', pageCount: 31 }),
+    wikiSection('projects/aaa11111', { name: 'AI Home', pageCount: 3 }),
+  ],
+};
+const WIKI_CATALOG = {
+  key: 'projects/aaa11111', name: 'AI Home', orphan: false,
+  pages: [{
+    pageKey: 'test-page', title: 'Тестовая страница вики', summary: 'Проверка связи вкладки',
+    type: 'topic', status: 'active', sourcesCount: 1, updated: '2026-10-28T00:00:00Z',
+  }],
+};
+
+function hasText(container: AnyNode, needle: string): boolean {
+  return textOf(container).join(' ').includes(needle);
+}
+
+// Прогнать промисы эффектов вкладки (загрузка → выбор раздела): тот же паттерн settle,
+// что в WikiTab.test
+async function settle() {
+  for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve(); });
+}
+
+function clickNode(node: AnyNode) {
+  const props = reactProps(node) as { onClick?: () => void } | null;
+  if (!props?.onClick) throw new Error('у узла нет onClick');
+  act(() => props.onClick());
+}
+
+describe('NotesPage: вкладка «Вики» за флагом llmWiki (S5d)', () => {
+  beforeEach(() => {
+    prepareEnv();
+    notesMock.length = 0;
+    wikiMock.tree = null;
+    wikiMock.catalog = null;
+  });
+  afterEach(() => {
+    // флаг — глобальный стор: снять его надо явно, иначе следующий тест увидел бы вкладку
+    setAllFlags({});
+    wikiMock.tree = null;
+    wikiMock.catalog = null;
+    notesMock.length = 0;
+    vi.unstubAllGlobals();
+    uninstallFakeDom();
+  });
+
+  it('флаг выключен: вкладки «Вики» на странице заметок нет', () => {
+    setAllFlags({});
+    const { root, container } = mountNotes();
+    expect(findButtonByText(container, 'Вики'), 'сегмента «Вики» в переключателе нет').toBeNull();
+    // остальная страница — ровно как была
+    expect(findButtonByText(container, 'Заметки'), 'сегмент «Заметки»').not.toBeNull();
+    expect(findButtonByText(container, 'Граф'), 'сегмент «Граф»').not.toBeNull();
+    root.unmount();
+  });
+
+  it('флаг включён: «Вики» → каталог; «Раздел ▸» → экран «Разделы»; раздел → обратно каталог', async () => {
+    setAllFlags({ 'llm-wiki': true });
+    wikiMock.tree = WIKI_TREE;
+    wikiMock.catalog = WIKI_CATALOG;
+    const { root, container } = mountNotes();
+    const tab = findButtonByText(container, 'Вики');
+    expect(tab, 'сегмент «Вики» в мобильном переключателе').not.toBeNull();
+    clickNode(tab!);
+    await settle();
+    // Центр — вкладка «Вики»: каталог выбранного раздела. Мобильного дерева над каталогом
+    // нет (оно и схлопывало каталог в нулевую высоту — хвост ревью S5c) — вместо него кнопка
+    expect(hasText(container, 'Тестовая страница вики'), 'каталог раздела открыт').toBe(true);
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-tree'), 'дерева над каталогом нет').toBeNull();
+    const switchBtn = findNodeByAttr(container, 'data-testid', 'wiki-section-switch');
+    expect(switchBtn, 'кнопка «Раздел ▸»').not.toBeNull();
+    expect(hasText(container, 'Проекты / AI Home'), 'кнопка показывает префикс выбранного раздела').toBe(true);
+    clickNode(switchBtn!);
+    // Экран «Разделы»: полное дерево, без ограничения высоты
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-tree'), 'список разделов открыт').not.toBeNull();
+    const row = findNodeByAttr(container, 'data-testid', 'wiki-section-row');
+    expect(row, 'строка раздела в списке').not.toBeNull();
+    clickNode(row!);
+    await settle();
+    // Выбор раздела возвращает к каталогу этого раздела
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-tree'), 'экран «Разделы» закрыт').toBeNull();
+    expect(hasText(container, 'Тестовая страница вики'), 'каталог снова открыт').toBe(true);
     root.unmount();
   });
 });

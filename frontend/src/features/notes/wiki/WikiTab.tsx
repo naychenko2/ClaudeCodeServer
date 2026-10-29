@@ -6,11 +6,13 @@
 // Данные — только стор S5a (lib/wiki): ensureWikiLoaded при монтировании, каталог раздела —
 // GET /api/wiki/section (оглавление строится из него: проекции _index/_log через
 // /api/wiki/page не читаются — 400 wiki_page_key, хвост ревью S2f Н1).
-// Подключение к странице заметок и шапка «Заметки · Вики» — шаг S5d, здесь их нет.
+// Подключение к странице заметок (переключатель «Заметки | Вики») — на стороне NotesPage (S5d).
+// На мобили дерево — отдельный экран «Разделы» (кнопка «Раздел ▸» в каталоге): макет 360,
+// хвост ревью S5c — каталог не должен схлопываться в нулевую высоту под деревом.
 
 import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { AlertTriangle, BookOpen, Check, Folder, Lock, Monitor, Shield, Trash2 } from 'lucide-react';
+import { AlertTriangle, BookOpen, Check, ChevronRight, Folder, Lock, Monitor, Shield, Trash2 } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../../lib/design';
 import { Badge, type BadgeTone } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
@@ -37,8 +39,11 @@ import {
 import { WikiSectionTree } from './WikiSectionTree';
 import { WIKI_SUBTABS, wikiSubTabIcon, WikiSubTabStub, type WikiSubTabId } from './wikiTabs';
 
-// Колонка дерева на десктопе; на мобиле — одна колонка, дерево над каталогом
+// Колонка дерева на десктопе; на мобиле дерева в каталоге нет вовсе — оно отдельный
+// экран «Разделы» (кнопка «Раздел ▸»)
 const TREE_W = 300;
+// Строка кнопки «Раздел ▸» — та же тач-высота, что у строк дерева (макет .trow 44)
+const SECTION_SWITCH_H = 44;
 
 // ─── Словари подписей ───
 
@@ -254,6 +259,9 @@ export function WikiTab() {
   const [actionError, setActionError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<WikiSectionDto | null>(null);
+  // Мобильный экран «Разделы» (S5d, хвост ревью S5c): true — вместо каталога показан
+  // полноэкранный список разделов; выбор раздела возвращает к каталогу
+  const [showSections, setShowSections] = useState(false);
 
   const load = useCallback(() => {
     setLoadError(null);
@@ -300,6 +308,32 @@ export function WikiTab() {
   };
 
   const commonKey = groupSectionsByKind(sections).common[0]?.key ?? null;
+
+  // Кнопка «Раздел ▸» (макет 360, строка каталога над заголовком раздела): на мобили
+  // заменяет «дерево над каталогом» и открывает полноэкранный экран «Разделы».
+  // Префикс раздела — общий для фичи sectionPrefix, тот же вид, что у бэка в выдаче notes_*.
+  const sectionSwitch = () => (
+    <div style={{ padding: `${SP.sm}px ${SP.sm}px 0` }}>
+      <button
+        type="button"
+        data-testid="wiki-section-switch"
+        onClick={() => setShowSections(true)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: SP.sm, width: '100%', textAlign: 'left',
+          border: `1px solid ${C.border}`, borderRadius: R.md, padding: `${SP.xs}px ${SP.sm}px`,
+          minHeight: SECTION_SWITCH_H, background: 'transparent', cursor: 'pointer',
+          fontFamily: FONT.sans, fontSize: FS.base, color: C.textPrimary,
+        }}
+      >
+        <Folder size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+        <span style={{ fontSize: FS.sm, color: C.textMuted, flexShrink: 0 }}>Раздел</span>
+        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600, color: C.textHeading }}>
+          {selected ? sectionPrefix(selected) : 'не выбран'}
+        </span>
+        <ChevronRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ marginLeft: 'auto', flexShrink: 0, color: C.textMuted }} />
+      </button>
+    </div>
+  );
 
   const center = () => {
     if (loadError) return <ErrorNotice e={loadError} onRetry={load} />;
@@ -355,17 +389,32 @@ export function WikiTab() {
 
       {actionError ? <div style={{ padding: `0 ${SP.sm}px` }}><ErrorNotice e={actionError} onDismiss={() => setActionError(null)} /></div> : null}
 
-      <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: SP.md, flex: 1, minHeight: 0 }}>
-        <div style={{ width: isMobile ? '100%' : TREE_W, flexShrink: 0 }}>
-          <WikiSectionTree sections={sections} selectedKey={selectedKey} onSelect={setSelectedKey} />
-        </div>
+      <div style={{ display: 'flex', gap: SP.md, flex: 1, minHeight: 0 }}>
+        {/* Дерево — колонка слева только на десктопе. На мобили оно не стоит над каталогом
+            (каталог схлопывался в нулевую высоту — хвост ревью S5c): там дерево — экран
+            «Разделы», который открывает кнопка «Раздел ▸» внутри каталога */}
+        {!isMobile && (
+          <div style={{ width: TREE_W, flexShrink: 0 }}>
+            <WikiSectionTree sections={sections} selectedKey={selectedKey} onSelect={setSelectedKey} />
+          </div>
+        )}
         <div style={{ flex: 1, minWidth: 0, overflow: 'auto' }}>
           {/* Рендер элементом, не вызовом в теле WikiTab: хуки подвкладки живут в ней,
               переключение подвкладки не меняет число хуков родителя (реестр — wikiTabs) */}
           {SubTabComp
             ? <SubTabComp selectedKey={selectedKey} />
             : subtab.id === 'pages'
-              ? center()
+              ? (isMobile && showSections
+                // Экран «Разделы» (макет 360): полноэкранный список без ограничения
+                // высоты; выбор раздела возвращает к каталогу этого раздела
+                ? <WikiSectionTree
+                    sections={sections} selectedKey={selectedKey}
+                    onSelect={k => { setSelectedKey(k); setShowSections(false); }}
+                  />
+                : <>
+                    {isMobile && tree?.initialized && sectionSwitch()}
+                    {center()}
+                  </>)
               : <div style={{ padding: SP.sm }}><WikiSubTabStub label={subtab.label} when={subtab.stubNote ?? ''} /></div>}
         </div>
       </div>

@@ -57,9 +57,11 @@ export function getConnection(): signalR.HubConnection {
     // приходит через ветки reject в ensureConnected ниже — таймаут ожидания
     // (8с) и переход в Disconnected, — где и поднимается offline.
     connection.onclose(() => { if (!_intentionalStop) setConnectionState('offline'); });
-    // onreconnected — онлайн + диспатч подписчикам
+    // onreconnected — онлайн + возврат в держимые project-группы + диспатч подписчикам
     connection.onreconnected(() => {
       setConnectionState('online');
+      // после разрыва сервер не помнит групп — перезаходим в те, что держит счётчик (_projectGroups)
+      void rejoinProjectGroups();
       fireReconnected();
     });
   }
@@ -98,6 +100,10 @@ export async function ensureConnected(): Promise<signalR.HubConnection> {
           // Без явного подъёма флаг останется offline при заведомо живом хабе —
           // на экране логина это и был дефект «Повторить врёт».
           setConnectionState('online');
+          // группы теряются при рестарте так же, как при реконнекте — перезаходим в держимые
+          // (после resetConnection токен уже новый: сервер отказывает недоступный новому
+          // аккаунту проект — это нормально, намерение остаётся у счётчика)
+          void rejoinProjectGroups();
           if (_resyncOnNextStart) {
             _resyncOnNextStart = false;
             fireReconnected();
@@ -277,12 +283,38 @@ export function onLocalModelMessage(sessionId: string, handler: (msg: LocalModel
   });
 }
 
+// Членство в project-группе ведётся счётчиком: воркспейс, секция участников, стена —
+// несколько мест держат один и тот же проект открытым одновременно, и выход одного
+// не должен выбивать остальных из группы. Соединение состоит в группе, пока счётчик > 0;
+// неудачный вход и то, что сервер забывает группу после разрыва, догоняет возврат
+// (см. onreconnected и старт в ensureConnected) — вызывающим перезаходить самим
+// больше не нужно.
+const _projectGroups = new Map<string, number>();
+
+async function rejoinProjectGroups(): Promise<void> {
+  const conn = connection;
+  if (!conn || conn.state !== signalR.HubConnectionState.Connected) return;
+  for (const projectId of _projectGroups.keys()) {
+    // неудачный возврат (проект стал недоступен, обрыв сети) не страшен: намерение
+    // остаётся у счётчика, его догонит следующий реконнект или новый joinProject
+    try { await conn.invoke('JoinProject', projectId); } catch { /* ignore */ }
+  }
+}
+
 export async function joinProject(projectId: string): Promise<void> {
+  const held = _projectGroups.get(projectId) ?? 0;
+  _projectGroups.set(projectId, held + 1);
+  if (held > 0) return; // соединение уже в группе — второй вход не нужен
   const conn = await ensureConnected();
   await conn.invoke('JoinProject', projectId);
 }
 
 export async function leaveProject(projectId: string): Promise<void> {
+  const held = _projectGroups.get(projectId) ?? 0;
+  if (held === 0) return; // в эту группу не входили — выходить не из чего
+  if (held === 1) _projectGroups.delete(projectId);
+  else _projectGroups.set(projectId, held - 1);
+  if (held > 1) return; // группу держит кто-то ещё — его не выбиваем
   const conn = getConnection();
   if (conn.state === signalR.HubConnectionState.Connected)
     await conn.invoke('LeaveProject', projectId);

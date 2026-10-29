@@ -109,10 +109,20 @@ vi.mock('../../../../components/ui/Menu', async () => {
 vi.mock('../MembersList', () => ({
   MembersList: (p: any) => { reg.list = p; return createElement('div'); },
 }));
-// Подписка на событие состава проекта: мок запоминает хендлеры и отдаёт тестируемую отписку
-const signalrMock = vi.hoisted(() => ({ onProjectMembersChanged: vi.fn() }));
+// Подписка на событие состава проекта: мок запоминает хендлеры и отдаёт тестируемую отписку.
+// joinProject/leaveProject — членство в группе проекта (без него событие не доходит):
+// сам счётчик держит signalr.ts, здесь проверяется, что секция им пользуется.
+const signalrMock = vi.hoisted(() => ({
+  onProjectMembersChanged: vi.fn(),
+  joinProject: vi.fn(async () => {}),
+  leaveProject: vi.fn(async () => {}),
+}));
 const subs = { handlers: [] as Array<(d: { projectId: string }) => void>, offs: [] as Array<() => void> };
-vi.mock('../../../../lib/signalr', () => ({ onProjectMembersChanged: signalrMock.onProjectMembersChanged }));
+vi.mock('../../../../lib/signalr', () => ({
+  onProjectMembersChanged: signalrMock.onProjectMembersChanged,
+  joinProject: signalrMock.joinProject,
+  leaveProject: signalrMock.leaveProject,
+}));
 
 import { MembersSection } from '../MembersSection';
 
@@ -289,5 +299,14 @@ describe('секция «Участники»: живое обновление �
     expect(subs.offs[0]).not.toHaveBeenCalled();
     await act(async () => { root.unmount(); });
     expect(subs.offs[0]).toHaveBeenCalledTimes(1);
+  });
+
+  it('на время своей жизни секция входит в группу проекта и выходит при закрытии', async () => {
+    // без членства в группе project_{id} событие состава до секции не доходит
+    // (страница «Проекты» в группу сама не входит); выход считает signalr.ts
+    const root = await mount('owner', [maria]);
+    expect(signalrMock.joinProject, 'секция не вошла в группу проекта').toHaveBeenCalledWith('p1');
+    await act(async () => { root.unmount(); });
+    expect(signalrMock.leaveProject, 'закрытие секции не вышло из группы').toHaveBeenCalledWith('p1');
   });
 });

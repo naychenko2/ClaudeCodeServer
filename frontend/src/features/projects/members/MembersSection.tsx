@@ -13,7 +13,7 @@ import { Button, ConfirmDialog, Field, Notice, Select, TextField } from '../../.
 import { Menu, MenuItem } from '../../../components/ui/Menu';
 import { ICON_SIZE } from '../../../components/ui/icons';
 import { useMe } from '../../../lib/defaultPersona';
-import { onProjectMembersChanged } from '../../../lib/signalr';
+import { joinProject, leaveProject, onProjectMembersChanged } from '../../../lib/signalr';
 import { isLocalProject } from '../../../lib/projectCapabilities';
 import { useIsMobile } from '../../../lib/breakpoints';
 import { AccordionSection } from '../dialogs/AccordionSection';
@@ -78,6 +78,15 @@ export function MembersSection({ project, mode, onMembersChanged, onLeft, defaul
     }
   }, [project.id]);
   useEffect(() => { void load(); }, [load]);
+
+  // Событие состава приходит в группу проекта, а страница «Проекты» в неё сама не
+  // входит: чтобы его слышать, секция входит в группу на всё время своей жизни.
+  // Выход считает signalr.ts: закрытие диалога внутри открытого воркспейса того же
+  // проекта не выбивает воркспейс из группы.
+  useEffect(() => {
+    joinProject(project.id).catch(() => { /* офлайн — соединение догонит на реконнекте */ });
+    return () => { leaveProject(project.id).catch(() => { /* офлайн — мёртвое соединение снимает сервер */ }); };
+  }, [project.id]);
 
   // Сервер сообщает об изменении состава (Add/Remove/Leave/ChangeRole) событием
   // project_members_changed в группу проекта: кто держит секцию открытой — перечитывает

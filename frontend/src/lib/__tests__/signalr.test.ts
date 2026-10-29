@@ -321,6 +321,63 @@ describe('подписка на project_members_changed', () => {
   });
 });
 
+describe('project-группа: счётчик членства и возврат после разрыва', () => {
+  it('вторый держатель не вызывает второго входа; выход первого не выбивает второго', async () => {
+    await signalr.joinProject('p1');
+    await signalr.joinProject('p1'); // второй держатель того же проекта (воркспейс + секция участников)
+    expect(h.fake.invoke, 'повторный вход в группу лишний').toHaveBeenCalledTimes(1);
+
+    await signalr.leaveProject('p1'); // секция закрылась — воркспейс этого же проекта остаётся открыт
+    expect(h.fake.invoke, 'выход секции выбил группу у открытого воркспейса').not.toHaveBeenCalledWith('LeaveProject', 'p1');
+
+    await signalr.leaveProject('p1'); // вышел и последний держатель — только теперь реальный выход
+    expect(h.fake.invoke).toHaveBeenCalledWith('LeaveProject', 'p1');
+  });
+
+  it('выход без входа не трогает хаб', async () => {
+    await signalr.leaveProject('p1');
+    expect(h.fake.invoke).not.toHaveBeenCalled();
+  });
+
+  it('после реконнекта перезаходим в держимые группы; полностью вышедшая не возобновляется', async () => {
+    await signalr.joinProject('p1');
+    await signalr.joinProject('p2');
+    await signalr.joinProject('p2');
+    await signalr.leaveProject('p2'); // один из двух держателей вышел — группу держим
+    h.fake.invoke.mockClear();
+
+    fireReconnected();
+    await vi.advanceTimersByTimeAsync(0); // возврат асинхронный — дать микрозадачам завершиться
+
+    expect(h.fake.invoke).toHaveBeenCalledWith('JoinProject', 'p1');
+    expect(h.fake.invoke).toHaveBeenCalledWith('JoinProject', 'p2');
+    expect(h.fake.invoke, 'сброшенный проект не должен вернуться').not.toHaveBeenCalledWith('JoinProject', 'p3');
+  });
+
+  it('полностью вышедшая группа после реконнекта не возобновляется', async () => {
+    await signalr.joinProject('p1');
+    await signalr.leaveProject('p1');
+    h.fake.invoke.mockClear();
+
+    fireReconnected();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(h.fake.invoke).not.toHaveBeenCalled();
+  });
+
+  it('после рестарта из Disconnected держимые группы возобновляются', async () => {
+    await signalr.joinProject('p1');
+    h.fake.state = h.HubConnectionState.Disconnected;
+    h.fake.invoke.mockClear();
+
+    await signalr.ensureConnected();
+    await vi.advanceTimersByTimeAsync(0); // возврат после start — fire-and-forget
+
+    expect(h.fake.start).toHaveBeenCalledTimes(1);
+    expect(h.fake.invoke).toHaveBeenCalledWith('JoinProject', 'p1');
+  });
+});
+
 describe('resetConnection: перезапуск хаба при смене аккаунта', () => {
   it('stop зовётся один раз, индикатор связи не уходит в offline', async () => {
     await signalr.resetConnection();

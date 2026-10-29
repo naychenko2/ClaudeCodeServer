@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import type { ChatItem, Session, ServerMessage, RateLimitInfo, WorkLoopState, TeamImplementState, TeamPlanDecision, TeamWavePulse } from '../types';
-import { joinSession, joinProject, leaveSession, onMessage, onReconnected, sendMessage, respondPermission, interruptSession, compactSession, answerQuestion as sendAnswer, respondPlan as sendPlanDecision, respondTeamPlan as sendTeamPlanDecision, respondTeamEscalation as sendTeamEscalationDecision, setMode as sendSetMode } from '../lib/signalr';
+import { joinSession, leaveSession, onMessage, onReconnected, sendMessage, respondPermission, interruptSession, compactSession, answerQuestion as sendAnswer, respondPlan as sendPlanDecision, respondTeamPlan as sendTeamPlanDecision, respondTeamEscalation as sendTeamEscalationDecision, setMode as sendSetMode } from '../lib/signalr';
 import { setRecallManifest } from '../lib/recallManifest';
 import { requestWakeLock, releaseWakeLock } from '../lib/wakeLock';
 import { api } from '../lib/api';
@@ -319,18 +319,9 @@ function ensureHandler() {
         setState(sid, prev => ({ ...prev, isWaiting: false }));
       }
     }
-    // Переподключаем project-группы (для real-time статусов) — но только проектов,
-    // где есть ОТКРЫТЫЙ (смотримый) чат. Ушедший проект (все его сессии холодные,
-    // зритель ушёл) группу не держит: иначе реконнект перевступал бы во все проекты,
-    // в которых когда-либо был чат, и куча групп росла без ограничения
-    const projectIds = new Set<string>();
-    for (const [sid, s] of _store) {
-      if (s.projectId && isWatched(sid)) projectIds.add(s.projectId);
-    }
-    for (const pid of projectIds) {
-      // Осознанно: неудача переподключения project-группы не критична — догонится следующим join
-      try { await joinProject(pid); } catch { /* ignore */ }
-    }
+    // Project-группы здесь не переподключаем: их ведёт счётчиком signalr.ts и сам
+    // перезаходит в держимые после реконнекта. Здесь остаются только session-группы
+    // (joinTracked ниже) — их держит этот стор.
 
     for (const [sid, s] of _store) {
       // Перезаходим и в сессии, которые считают себя вне группы, но их кто-то смотрит:

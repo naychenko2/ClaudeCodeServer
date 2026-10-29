@@ -1852,9 +1852,11 @@ const windowWidth = useWindowWidth();
   useEffect(() => {
     joinProject(project.id).catch(() => {});
     // onReconnected возвращает cleanup — иначе при смене проекта старый callback остаётся
-    // навсегда и продолжает джойнить уже закрытый проект при каждом реконнекте
+    // навсегда и продолжает трогать уже закрытый проект при каждом реконнекте
     const unsub = onReconnected(async () => {
-      joinProject(project.id).catch(() => {});
+      // Повторного входа в группу здесь нет: signalr.ts держит её счётчиком и сам
+      // перезаходит в держимые группы после реконнекта. Повторный joinProject отсюда
+      // только надул бы счётчик — и выход воркспейса перестал бы покидать группу.
       // Сервер не шлёт status_changed при рестарте — рефетчим статус активной сессии
       // чтобы session.status в ChatPanel не застрял в 'working' после убийства процесса
       const sess = activeSessionRef.current;

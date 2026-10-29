@@ -28,10 +28,14 @@ public class SharedProjectNotesHttpTests : IClassFixture<TestWebApplicationFacto
     private const string NoteContent = "Текст проектной заметки. Упоминание ЦелеваяТема.";
 
     private readonly TestWebApplicationFactory _factory;
-    private readonly SemaphoreSlim _init = new(1, 1);
-    private string? _projectId;
-    private string? _noteId;
-    private string? _memberId;
+
+    // xUnit создаёт новый экземпляр класса на каждый тест: общий на класс состав
+    // (проект, заметка, участник) живёт в static-полях — экземплярные поля были бы
+    // пусты для каждого теста, и каждый создавал бы свой проект с тем же именем (400).
+    private static readonly SemaphoreSlim InitLock = new(1, 1);
+    private static string? _projectId;
+    private static string? _noteId;
+    private static string? _memberId;
 
     public SharedProjectNotesHttpTests(TestWebApplicationFactory factory)
     {
@@ -54,7 +58,7 @@ public class SharedProjectNotesHttpTests : IClassFixture<TestWebApplicationFacto
     /// <summary>Проект владельца с основной заметкой в нём — создан ровно раз на класс.</summary>
     private async Task<string> SharedProjectIdAsync()
     {
-        await _init.WaitAsync();
+        await InitLock.WaitAsync();
         try
         {
             if (_projectId is not null) return _projectId;
@@ -76,7 +80,7 @@ public class SharedProjectNotesHttpTests : IClassFixture<TestWebApplicationFacto
             _noteId = IdOf(await note.Content.ReadAsStringAsync());
             return _projectId;
         }
-        finally { _init.Release(); }
+        finally { InitLock.Release(); }
     }
 
     /// <summary>Состав проекта перед тестом: участник в заданной роли (null — участника нет,

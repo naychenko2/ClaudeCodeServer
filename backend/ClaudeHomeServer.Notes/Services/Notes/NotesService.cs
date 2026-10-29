@@ -2,13 +2,16 @@ using System.Collections.Concurrent;
 using System.Text;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Access;
 
 namespace ClaudeHomeServer.Services.Notes;
 
 // Obsidian-совместимая база заметок. Источник правды — .md файлы на диске:
-//   • личный vault пользователя:  {dataDir}/notes/{userId}/
-//   • notes/ внутри каждого проекта, которым владеет пользователь
-// Единый per-owner граф агрегирует все источники владельца (Модель 3 из плана).
+//   • личный vault смотрящего:  {dataDir}/notes/{userId}/
+//   • notes/ внутри каждого проекта, к которому у смотрящего есть право чтения:
+//     своего или общего (участник — через точку доступа, S1-3b)
+// Единый граф строится по смотрящему (Модель 3 из плана): чужой личный vault в него не
+// попадает ни с одной стороны — участник не видит «Личный» владельца, владелец — его «Личный».
 // Класс не хранит состояние заметок — сканирует файлы на каждый запрос
 // (заметок немного; кэш-инвалидация — возможная оптимизация позже).
 public sealed partial class NotesService : ClaudeHomeServer.Services.Composition.INoteSummaryReader, INoteAccessor
@@ -16,6 +19,12 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     private readonly IProjectManager _projects;
     private readonly ILogger<NotesService> _logger;
     private readonly IProjectEventLogService? _events;
+    // Точка доступа к проекту-источнику (Core-контракт, S1-3b): в ней роль по членству и
+    // гейт «рубильник + флаг» общих проектов. В прода она есть всегда: единственный путь
+    // сборки сервиса — DI вертикали (NotesSubsystem.cs:61), а IProjectAccess зарегистрирован
+    // в Main (Program.cs:405). Опциональна по той же причине, что _events: тестовые
+    // конструирования вне DI остаются без неё — см. ProjectScope.
+    private readonly IProjectAccess? _access;
     private readonly string _dataDir;
 
     private const string PersonalKey = "personal";
@@ -36,11 +45,12 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(2);
 
     public NotesService(IProjectManager projects, IConfiguration config, ILogger<NotesService> logger,
-        IProjectEventLogService? events = null)
+        IProjectEventLogService? events = null, IProjectAccess? access = null)
     {
         _projects = projects;
         _logger = logger;
         _events = events;
+        _access = access;
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
     }
@@ -56,30 +66,41 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
 
     private void Invalidate(string userId) => _cache.TryRemove(userId, out _);
 
-    // --- Источники владельца ---
+    // --- Источники смотрящего ---
 
     // ProjectRoot — корень проекта-источника (null у личного vault): по нему
     // резолвится привязка заметки к файлу (frontmatter file:, путь от корня проекта)
     private sealed record Source(string Key, string Label, string RootDir, string? ProjectRoot = null);
 
-    private IReadOnlyList<Source> SourcesFor(string userId)
+    // Источники, к которым у вызывающего есть право <right>. Read — то, что человек видит
+    // (список, граф, папки, вложения): свои проекты плюс общие, где он участник при
+    // включённом гейте. Write — то, в чём он может менять файлы: в S1 это только своё
+    // (участник общего проекта читает, не пишет — право на запись откроют S2a/S2c).
+    private IReadOnlyList<Source> SourcesFor(string userId, ProjectRight right)
     {
         var list = new List<Source>
         {
             new(PersonalKey, PersonalLabel, Path.Combine(_dataDir, "notes", userId)),
         };
         // Заметки проекта лежат в его папке: у локального проекта она на устройстве, сервер
-        // её не читает — такой источник в списке не участвует (ADR-016 §4, search_unified)
-        foreach (var p in _projects.GetByOwner(userId))
+        // её не читает — такой источник в списке не участвует (ADR-016 §4, search_unified).
+        // Право на чужой проект решает точка доступа (ProjectScope): в общем проекте участник
+        // видит его заметки только при роли и включённом гейте (S1-2). Список строится по
+        // вызывающему: личный vault другого человека сюда не попадает ни с одной стороны.
+        foreach (var p in _projects.GetAll())
             if (!string.IsNullOrWhiteSpace(p.RootPath)
-                && Composition.ProjectCapabilityGuard.Allows(p, Composition.ProjectCapabilityArea.FileBound))
+                && Composition.ProjectCapabilityGuard.Allows(p, Composition.ProjectCapabilityArea.FileBound)
+                && ProjectScope(userId, p.Id, right) is not null)
                 list.Add(new(p.Id, p.Name, Path.Combine(p.RootPath, "notes"), p.RootPath));
         return list;
     }
 
-    // Источники для выбора «куда создать заметку»
+    // Источники, которые человек видит: они же подсказка «куда создать». Источник,
+    // доступный только на чтение (общий проект для участника), в списке остаётся —
+    // его заметки человек видит; отказ на запись придёт из Create (403), а не из исчезновения
+    // источника из списка.
     public IReadOnlyList<NoteSourceDto> GetSources(string userId) =>
-        SourcesFor(userId).Select(s => new NoteSourceDto(s.Key, s.Label)).ToList();
+        SourcesFor(userId, ProjectRight.Read).Select(s => new NoteSourceDto(s.Key, s.Label)).ToList();
 
     // --- Сканирование и парсинг ---
 
@@ -107,7 +128,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     private List<RawNote> Scan(string userId)
     {
         var notes = new List<RawNote>();
-        foreach (var src in SourcesFor(userId))
+        foreach (var src in SourcesFor(userId, ProjectRight.Read))
         {
             if (!Directory.Exists(src.RootDir)) continue;
             IEnumerable<string> files;
@@ -537,9 +558,11 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     }
 
     // Абсолютный путь вложения (картинки и т.п.) внутри vault источника — для отдачи
-    // в <img>; владение источником проверяет ResolveRoot, traversal — SafeJoin.
+    // в <img>: право ЧТЕНИЯ источника проверяет ResolveRoot, traversal — SafeJoin.
+    // Участник общего проекта видит картинку из notes/ проекта, которую ему показал его
+    // ![[…]] в прочитанной заметке проекта.
     public string ResolveAttachmentPath(string userId, string sourceKey, string relativePath) =>
-        SafePath.Join(ResolveRoot(userId, sourceKey), relativePath);
+        SafePath.Join(ResolveRoot(userId, sourceKey, ProjectRight.Read), relativePath);
 
     // --- Публичное API ---
 
@@ -890,7 +913,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     public IReadOnlyList<NoteFolderDto> GetFolders(string userId)
     {
         var result = new List<NoteFolderDto>();
-        foreach (var src in SourcesFor(userId))
+        foreach (var src in SourcesFor(userId, ProjectRight.Read))
         {
             if (!Directory.Exists(src.RootDir)) continue;
             IEnumerable<string> dirs;
@@ -913,7 +936,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // Создать физическую папку (идемпотентно — дубликат не ошибка).
     public NoteFolderDto CreateFolder(string userId, string sourceKey, string path)
     {
-        var rootDir = ResolveRoot(userId, sourceKey);   // проверка владения
+        var rootDir = ResolveRoot(userId, sourceKey);   // право на запись проверяет ResolveRoot
         var folder = SanitizeFolder(path);
         if (folder.Length == 0) throw new ArgumentException("Не задана папка");
         var full = SafePath.Join(rootDir, folder);
@@ -928,7 +951,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // Возвращает число удалённых .md-заметок.
     public int DeleteFolder(string userId, string sourceKey, string path)
     {
-        var rootDir = ResolveRoot(userId, sourceKey);   // проверка владения
+        var rootDir = ResolveRoot(userId, sourceKey);   // право на запись проверяет ResolveRoot
         var folder = SanitizeFolder(path);
         if (folder.Length == 0) throw new ArgumentException("Не задана папка");
         var full = SafePath.Join(rootDir, folder);
@@ -1064,8 +1087,12 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // Не инвалидирует кэш — чистая проверка на скане.
     public IReadOnlyList<(string Id, string Title)> GetExpiredNotes(string userId, DateTime nowUtc)
     {
+        // Уборка истёкших — это запись: только по Write-источникам. Иначе участник с
+        // истёкшей заметкой общего проекта получил бы 403 посреди фоновой уборки и
+        // остановил бы очистку своих собственных заметок (NoteExpiryService ловит
+        // исключение сразу над всем списком пользователя).
         var result = new List<(string, string)>();
-        foreach (var src in SourcesFor(userId))
+        foreach (var src in SourcesFor(userId, ProjectRight.Write))
         {
             if (!Directory.Exists(src.RootDir)) continue;
             try
@@ -1200,17 +1227,47 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
             n.CreatedAt, n.UpdatedAt, n.ExpiresAt, n.SourceSessionId, n.Annotation,
             n.FileRef, n.FileMissing);
 
-    // --- Разрешение источника и валидация владения ---
+    // --- Разрешение источника и права к нему ---
 
-    private string ResolveRoot(string userId, string sourceKey)
+    /// <summary>
+    /// Область вызывающего к проекту-источнику или null — доступа нет. Решает её
+    /// <see cref="IProjectAccess"/>: роль по членству и гейт «рубильник и флаг» (S1-2) живут
+    /// там, собственной таблицы прав здесь нет. Без точки доступа (тестовое конструирование
+    /// сервиса вне DI) остаётся собственное владение: для чужого проекта тот же отказ, что при
+    /// выключенном гейте — fail-closed, а не «разрешили на всякий случай».
+    /// </summary>
+    private RequestScope? ProjectScope(string userId, string projectId, ProjectRight right)
+    {
+        if (_access is not null) return _access.Resolve(userId, projectId, right);
+        var own = _projects.GetById(projectId);
+        if (own is null || own.OwnerId != userId) return null;
+        return new RequestScope(userId, own.OwnerId!, ProjectRole.Owner);
+    }
+
+    /// <summary>
+    /// Корень источника заметок. Личный vault — папка самого вызывающего (личное ключается
+    /// личным id, карта S0-3 §3 «сверх перечня»). Проектный источник — notes/ самого проекта:
+    /// папка одна на всех и лежит она у арендатора, поэтому корень берётся из проекта,
+    /// к которому вызывающего допустила точка доступа (RequestScope.TenantOwnerId), а не
+    /// выводится из id вызывающего: иначе участник и владелец читали бы разные файлы
+    /// об одном проекте.
+    /// Отказы: нет права чтения (посторонний, выключенный флаг или рубильник, проекта нет) —
+    /// KeyNotFoundException → 404, «чужое» и «несуществующее» не различаем, как в IProjectAccess;
+    /// право чтения есть, а нужного права нет (в S1 участник только читает) —
+    /// UnauthorizedAccessException → 403.
+    /// </summary>
+    private string ResolveRoot(string userId, string sourceKey, ProjectRight right = ProjectRight.Write)
     {
         if (sourceKey == PersonalKey)
             return Path.Combine(_dataDir, "notes", userId);
 
+        if (ProjectScope(userId, sourceKey, ProjectRight.Read) is null)
+            throw new KeyNotFoundException($"Источник {sourceKey} не найден");
+        if (right != ProjectRight.Read && ProjectScope(userId, sourceKey, right) is null)
+            throw new UnauthorizedAccessException("Нет права на это действие в проекте");
+
         var project = _projects.GetById(sourceKey)
             ?? throw new KeyNotFoundException($"Источник {sourceKey} не найден");
-        if (project.OwnerId != userId)
-            throw new UnauthorizedAccessException("Проект не принадлежит пользователю");
         if (string.IsNullOrWhiteSpace(project.RootPath))
             throw new InvalidOperationException("У проекта нет корневой папки");
         return Path.Combine(Composition.ProjectCapabilityGuard.ServerRoot(project), "notes");

@@ -1445,9 +1445,7 @@ public sealed class TasksToolset(
                     ["featureNote"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = "Голос фичи (только у эпика): ≤600, \"\" — снять. Исполнитель откажет. "
-                            + "Оркестратор обновляет голос вместе с featureEstimate в каждом ходе, где фича сдвинулась "
-                            + "(закрыт шаг, сменилась стадия, изменился срок); пустой текст снимает и оценку.",
+                        ["description"] = "Голос фичи (только у эпика): ≤600, \"\" — снять вместе с оценкой. Исполнитель откажет. Пиши в каждом ходе с featureEstimate.",
                     },
                     ["featureEstimate"] = FeatureEstimateSchema(),
                     ["verification"] = VerificationSchema(),
@@ -1799,16 +1797,10 @@ public sealed class TasksToolset(
     private static JsonObject FeatureEstimateSchema() => new()
     {
         ["type"] = "object",
-        ["description"] = "Оценка оркестратора, только вместе с featureNote (иначе отказ). Оркестратор обновляет её в каждом ходе, "
-            + "где фича сдвинулась, одним вызовом с голосом: они стареют вместе. done — готово единиц, inProgress — "
-            + "сейчас в работе, total — всего (шаги плана плюс стадии конвейера: ревью, проверка, финал, мерж), "
-            + "percent — если шаги неравные по объёму (нет — done/total), remaining — ещё НЕ начатое, "
-            + "первый пункт — «дальше», etaMinutes — сколько минут до готовности по самой длинной цепочке "
-            + "(нет — не указывай), why — одна фраза, почему срок заметно отличается от обычного "
-            + "(заполняй при заметном расхождении, показывается только тогда).",
+        ["description"] = "Оценка оркестратора, только с featureNote, в каждом ходе, где фича сдвинулась; why — причина расхождения срока.",
         ["properties"] = new JsonObject
         {
-            ["done"] = new JsonObject { ["type"] = "integer", ["description"] = "Готово единиц: 0..total" },
+            ["done"] = new JsonObject { ["type"] = "integer", ["description"] = "Готово единиц: 0..total (шаги плана плюс стадии конвейера)" },
             ["inProgress"] = new JsonObject { ["type"] = "integer", ["description"] = "В работе сейчас: 0..total−done" },
             ["total"] = new JsonObject { ["type"] = "integer", ["description"] = "Всего единиц: 1..50" },
             ["percent"] = new JsonObject { ["type"] = "integer", ["description"] = "Готовность 0..100; опусти — done/total" },
@@ -1816,10 +1808,10 @@ public sealed class TasksToolset(
             {
                 ["type"] = "array",
                 ["items"] = new JsonObject { ["type"] = "string" },
-                ["description"] = "Ещё не начатое, до 8 пунктов по ≤40 символов; первый — «дальше»",
+                ["description"] = "Не начатое, ≤8 пунктов по ≤40 символов; первый — «дальше»",
             },
-            ["etaMinutes"] = new JsonObject { ["type"] = "integer", ["description"] = "Минут до готовности, ≥1" },
-            ["why"] = new JsonObject { ["type"] = "string", ["description"] = "Почему срок отличается от обычного, ≤160" },
+            ["etaMinutes"] = new JsonObject { ["type"] = "integer", ["description"] = "Минут до готовности по самой длинной цепочке, ≥1; нет оценки — не указывай" },
+            ["why"] = new JsonObject { ["type"] = "string", ["description"] = "Почему срок заметно отличается от обычного, ≤160; только при расхождении" },
         },
         ["required"] = new JsonArray("done", "inProgress", "total"),
     };

@@ -17,9 +17,12 @@
 # проектов (GetAccessible), владельце создаваемого проекта, личных настройках (устройства, группа/сфера,
 # среда исполнения, правило архива, персона-вызывающий, подбор значка); ProjectMembersController — актёр
 # операций членства и роль вызывающего в представлении. Ключом хранилищ задач/заметок/памяти это не служит.
+# Мост плагинов: пакеты и флаг plugins-mvp — личные (data/plugins/{owner}, ADR-031), id вызывающего ключует
+# их по построению; в проектном действии он входит только в IProjectAccess.Resolve (право чтения слота).
 backend/ClaudeHomeServer.Architecture/Controllers/ArchitectureController.cs|2
 backend/ClaudeHomeServer.AudioEditor/Controllers/AudioEditScopeGate.cs|3
 backend/ClaudeHomeServer.ImageEditor/Controllers/ImageEditScopeGate.cs|3
+backend/ClaudeHomeServer.Plugins/Controllers/PluginBridgeController.cs|5
 backend/ClaudeHomeServer.VideoEditor/Controllers/VideoEditScopeGate.cs|3
 backend/ClaudeHomeServer/Controllers/CodeGraphController.cs|1
 backend/ClaudeHomeServer/Controllers/DossiersController.cs|4

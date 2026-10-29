@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
@@ -39,7 +40,8 @@ public class FeatureVoiceReminderContributorTests : IDisposable
             .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = Path.Combine(_dir, "projects.json") })
             .Build();
         _tasks = new TaskManager(config);
-        _sut = new FeatureVoiceReminderContributor(_tasks, new FeatureProjector(_tasks), new Sessions(KeyChat, "chat-other"));
+        _sut = new FeatureVoiceReminderContributor(_tasks, new FeatureProjector(_tasks),
+            new ServiceCollection().AddSingleton<ISessionDirectory>(new Sessions(KeyChat, "chat-other")).BuildServiceProvider());
     }
 
     public void Dispose() => Directory.Delete(_dir, true);

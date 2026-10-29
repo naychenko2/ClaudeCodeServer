@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using Microsoft.Extensions.DependencyInjection;
 using ClaudeHomeServer.Services.Tasks.Projector;
 using ClaudeHomeServer.Services.Turn;
 
@@ -12,8 +13,12 @@ namespace ClaudeHomeServer.Services.Tasks;
 // Условие: сессия — ключевой чат фичи (первое ЖИВОЕ звено FeatureKeyChain, как keySessionId
 // проектора), а голос эпика отсутствует или устарел (brief.note.stale — тот же StaleOf, второго
 // правила нет). Закрытые и смерженные фичи молчат.
+//
+// ISessionDirectory (SessionManager) берётся лениво из IServiceProvider: контрибьюторов собирает
+// шина Turn, которую строит сам SessionManager, — прямая зависимость в конструкторе даёт цикл
+// DI и зависание резолва при старте хоста.
 public sealed class FeatureVoiceReminderContributor(
-    TaskManager tasks, FeatureProjector features, ISessionDirectory sessions) : IPromptSectionContributor
+    TaskManager tasks, FeatureProjector features, IServiceProvider services) : IPromptSectionContributor
 {
     public const string SectionKey = "feature-voice-reminder";
     // Больше трёх фич на один ключевой чат — аномалия; хвост держим коротким
@@ -47,15 +52,19 @@ public sealed class FeatureVoiceReminderContributor(
     private string? Render(string ownerId, string sessionId)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
+        // Один проход: задачи фич по FeatureId, чтобы не перебирать весь список на каждый эпик
+        var byFeature = owner.Where(t => t.FeatureId is not null)
+            .GroupBy(t => t.FeatureId!).ToDictionary(g => g.Key, g => g.ToList());
+        var sessions = services.GetRequiredService<ISessionDirectory>();
         var lines = new List<string>();
         foreach (var epic in owner.Where(t => t.Role == TaskRoles.Feature))
         {
             if (lines.Count >= MaxFeatures) break;
-            var featureTasks = owner.Where(t => t.FeatureId == epic.Id).Append(epic).ToList();
+            var featureTasks = (byFeature.TryGetValue(epic.Id, out var linked) ? linked : []).Append(epic).ToList();
             var chain = FeatureKeyChain.Of(epic, featureTasks);
             // Дешёвый отсев до проекции: сессии нет в цепочке — фича не наша
             if (!chain.Contains(sessionId)) continue;
-            if (chain.FirstOrDefault(id => IsLive(id, ownerId)) != sessionId) continue;
+            if (chain.FirstOrDefault(id => IsLive(sessions, id, ownerId)) != sessionId) continue;
 
             var run = features.Project(epic.Id, ownerId);
             if (run is null) continue;
@@ -72,6 +81,6 @@ public sealed class FeatureVoiceReminderContributor(
     }
 
     // Живое звено: сессия есть и принадлежит владельцу (чужая/удалённая пропускается, как в KeySession)
-    private bool IsLive(string id, string ownerId) =>
+    private static bool IsLive(ISessionDirectory sessions, string id, string ownerId) =>
         sessions.GetById(id) is { } s && sessions.ResolveOwnerId(s) == ownerId;
 }

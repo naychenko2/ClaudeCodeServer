@@ -325,7 +325,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
                 && users.GetById(UserId)?.ExecutionEnvironment != ExecutionEnvironments.Container)
             {
                 // container-владельцу порога нет: процесс родится в песочнице
-                var risky = mcpRegistry.GetByOwner(UserId)
+                var risky = mcpRegistry.GetByOwner(TenantId)
                     .Where(r => r.CatalogRef is not null && r.Transport == McpTransport.Stdio
                         && added.Contains(r.Key))
                     .Select(r => new { key = r.Key, command = McpServersController.LaunchPreviewOf(r) })
@@ -417,7 +417,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         {
             await DropKnowledgeIfOrphanAsync(oldKnowledgeRoot);
             // Заметки notes/ серверной папки выпали из источников — вычистить их из индекса
-            notesKb?.QueueSync(UserId);
+            notesKb?.QueueSync(TenantId);
         }
         return Ok(WithCount(moved, folderNotice));
     }
@@ -593,7 +593,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
 
         // Заметки notes/ проекта выпали из alive-set — вычистить их из «{user}:notes» сразу,
         // не дожидаясь следующей несвязанной правки заметок
-        notesKb?.QueueSync(UserId);
+        notesKb?.QueueSync(TenantId);
 
         // Проектные персоны осиротели вместе с проектом — каскад: память (стор + Dify-датасет),
         // сама персона (файлы сабагента снимет OnPersonaDeleted), событие фронту

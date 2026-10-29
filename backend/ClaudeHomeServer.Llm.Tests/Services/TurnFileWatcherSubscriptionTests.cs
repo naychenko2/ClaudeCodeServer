@@ -17,8 +17,10 @@ namespace ClaudeHomeServer.Tests.Services;
 /// Замер идёт на настоящем дереве репозитория: синтетическая папка в temp такой формы
 /// (двадцать .csproj с bin/obj, node_modules, .git) не воспроизводит.
 /// </summary>
+// Ожиданий в классе нет: первый тест — замер подписки (без пауз вовсе), второй ждёт
+// события карточек с ограниченными окнами. Метка Slow снята по переводу ожидания
+// на событие (паттерн Э4, W4).
 [Collection(TestCollections.Inotify)]
-[Trait("Category", "Slow")]
 public class TurnFileWatcherSubscriptionTests
 {
     // Потолок задачи: один ход на этом репозитории — меньше 5 000 слежек.
@@ -90,18 +92,30 @@ public class TurnFileWatcherSubscriptionTests
             File.WriteAllText(deepFile, "one\ntwo\n");
             (await signal.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeTrue("правка в глубине дерева видна");
 
-            // Каталог, созданный уже ПОСЛЕ старта наблюдения, тоже должен подписаться
+            // Каталог, созданный уже ПОСЛЕ старта наблюдения, тоже должен подписаться.
+            // Подписку ставит поток чтения на событии mkdir; первая запись может попасть
+            // до неё — тогда файл ловится обзором нового каталога (AddSubtree с
+            // emitExistingFiles, RecursiveDirectoryWatcher.cs:414-463). Не спим «на глазок»:
+            // повторяем запись, пока не пришла карточка — подписка гарантирована, поэтому
+            // ни одна попытка после первой не мимо.
             var fresh = Path.Combine(root, "src", "fresh");
             Directory.CreateDirectory(fresh);
-            await Task.Delay(300);
-            File.WriteAllText(Path.Combine(fresh, "b.txt"), "hello\n");
-            (await signal.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeTrue("новый каталог подписывается на лету");
+            var freshFile = Path.Combine(fresh, "b.txt");
+            var gotFresh = false;
+            for (var attempt = 1; attempt <= 3 && !gotFresh; attempt++)
+            {
+                File.WriteAllText(freshFile, $"hello {attempt}\n");
+                gotFresh = await signal.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+            gotFresh.Should().BeTrue("новый каталог подписывается на лету");
 
             // Из служебного каталога карточка не доходит. Что на него ещё и не ПОДПИСЫВАЮТСЯ —
             // отдельная проверка (RecursiveDirectoryWatcherTests): здесь лишнюю подписку
             // замаскировал бы фильтр событий ShouldIgnore.
+            // Negative-окно выведено из тестового debounce (80мс): карточка, просочись она
+            // через обе защиты, пришла бы не позже debounce+обработки; 800мс — ~10× запас.
             File.WriteAllText(Path.Combine(root, "node_modules", "pkg", "index.js"), "x\n");
-            (await signal.WaitAsync(TimeSpan.FromSeconds(2))).Should().BeFalse("карточки из служебного каталога нет");
+            (await signal.WaitAsync(TimeSpan.FromMilliseconds(800))).Should().BeFalse("карточки из служебного каталога нет");
 
             seen.Should().Contain(p => p.EndsWith("deep/a.txt", StringComparison.Ordinal));
             seen.Should().Contain(p => p.EndsWith("fresh/b.txt", StringComparison.Ordinal));

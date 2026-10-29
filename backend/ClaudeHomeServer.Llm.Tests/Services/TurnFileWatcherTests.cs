@@ -10,8 +10,11 @@ namespace ClaudeHomeServer.Tests.Services;
 // FileChangedMessage вообще, хотя git-панель прирост файла увидела. Ручной прогон это
 // окно не воспроизводит (правка должна попасть между стартом и концом хода за секунды) —
 // здесь события эмулируются прямой записью на диск, без гонки с реальным claude CLI.
+// Подписка ставится СИНХРОННО в Start(): на Linux — в конструкторе InotifyBackend
+// (RecursiveDirectoryWatcher.cs:288-322 — inotify_add_watch и обход поддерева до возврата),
+// на Windows — в EnableRaisingEvents. Поэтому записи после Start() видны сразу,
+// прогрев «дать FileSystemWatcher подготовиться» здесь не нужен ни на одной платформе.
 [Collection(TestCollections.Inotify)]
-[Trait("Category", "Slow")]
 public class TurnFileWatcherTests : IDisposable
 {
     private readonly string _root;
@@ -62,7 +65,6 @@ public class TurnFileWatcherTests : IDisposable
         var signal = new SemaphoreSlim(0);
         using var watcher = CreateWatcher(_root, received, signal);
         watcher.Start();
-        await Task.Delay(200); // дать FileSystemWatcher подготовиться
 
         // _fileCache заполняется только по факту FS-события ПОСЛЕ Start — файл, созданный
         // до старта, в кэше отсутствует. Прогрев обязателен, иначе oldContent=null и added
@@ -93,7 +95,6 @@ public class TurnFileWatcherTests : IDisposable
         var signal = new SemaphoreSlim(0);
         using var watcher = CreateWatcher(_root, received, signal);
         watcher.Start();
-        await Task.Delay(200);
 
         File.WriteAllText(path, "a\nb\nc");
         var msg = await WaitForMessageAsync(signal, received, TimeSpan.FromSeconds(3));
@@ -117,7 +118,6 @@ public class TurnFileWatcherTests : IDisposable
         var attributor = new FileChangeAttributor();
         using var watcher = CreateWatcher(_root, received, signal, attributor, ownerSessionId: "session-a");
         watcher.Start();
-        await Task.Delay(200);
 
         File.WriteAllText(path, "a\nb\nc");
         var msg = await WaitForMessageAsync(signal, received, TimeSpan.FromSeconds(5));
@@ -142,12 +142,13 @@ public class TurnFileWatcherTests : IDisposable
         var signal = new SemaphoreSlim(0);
         var attributor = new FileChangeAttributor();
         // Заявку подаём не по таймеру, а из хука ватчера — на прогреве кэша хук молчит
-        // (иначе подавился бы и прогрев), на целевой правке подаёт заявку «чата A»
+        // (иначе подавился бы и прогрев), на целевой правке подаёт заявку «чата A» и
+        // signal-ит тест: «ватчер вошёл в окно перепроверки, заявка уже стоит».
+        var claimEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Func<string, Task>? claimInRetryWindow = null;
         using var watcher = CreateWatcher(_root, received, signal, attributor, ownerSessionId: "session-b",
             timing: TestTiming(_ => claimInRetryWindow?.Invoke(path) ?? Task.CompletedTask));
         watcher.Start();
-        await Task.Delay(200);
 
         // Прогрев кэша: без него oldContent=null и added считается от нуля
         File.WriteAllText(path, "a\nb\nc");
@@ -157,10 +158,21 @@ public class TurnFileWatcherTests : IDisposable
         // Правка «чата A»: файл меняется, заявка A приходит ВНУТРИ retry-окна — уже после
         // debounce, но до перепроверки. Момент подачи заявки задаёт сам ватчер (хук на входе
         // в окно), поэтому попадание в окно не зависит от скорости раннера.
-        claimInRetryWindow = _ => { attributor.Claim("session-a", path); return Task.CompletedTask; };
+        claimInRetryWindow = _ =>
+        {
+            attributor.Claim("session-a", path);
+            claimEntered.TrySetResult();
+            return Task.CompletedTask;
+        };
         File.WriteAllText(path, "a\nb\nc\nd");
 
-        var msg = await WaitForMessageAsync(signal, received, TimeSpan.FromSeconds(4));
+        // Ожидание — событие, таймаут красный (паттерн Э4): без TrySetResult выше этот
+        // WaitAsync краснеет через 5 с — та мутация, которой проверяется сам механизм.
+        await claimEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        // После сигнала у продукта осталось ровно Task.Delay(ExternalRetry=150мс в тесте),
+        // перепроверка и вердикт — negative-окно равно этому интервалу с запасом, а не
+        // полным таймаутом «на всякий случай»: карточки здесь не будет никогда.
+        var msg = await WaitForMessageAsync(signal, received, TimeSpan.FromMilliseconds(1000));
 
         msg.Should().BeNull("заявка чужой сессии появилась в retry-окне — карточку в этом чате гасим, её покажет ватчер чата-источника");
     }
@@ -181,7 +193,6 @@ public class TurnFileWatcherTests : IDisposable
         using var watcher = CreateWatcher(_root, received, signal, attributor, ownerSessionId: "session-a",
             timing: TestTiming(_ => claimInRetryWindow?.Invoke(path) ?? Task.CompletedTask));
         watcher.Start();
-        await Task.Delay(200);
 
         File.WriteAllText(path, "a\nb\nc");
         var warmup = await WaitForMessageAsync(signal, received, TimeSpan.FromSeconds(5));
@@ -212,7 +223,6 @@ public class TurnFileWatcherTests : IDisposable
         var attributor = new FileChangeAttributor();
         using var watcher = CreateWatcher(_root, received, signal, attributor, ownerSessionId: "session-a");
         watcher.Start();
-        await Task.Delay(200);
 
         // Прогрев кэша: без него oldContent=null и любое изменение даёт ненулевой diff —
         // это маскировало бы проверяемый сценарий. Обе карточки здесь с атрибутором,
@@ -244,7 +254,6 @@ public class TurnFileWatcherTests : IDisposable
         var signal = new SemaphoreSlim(0);
         using var watcher = CreateWatcher(_root, received, signal);
         watcher.Start();
-        await Task.Delay(200);
 
         // Прогрев кэша.
         File.WriteAllText(path, "line1\nline2X\nline3");
@@ -253,7 +262,10 @@ public class TurnFileWatcherTests : IDisposable
 
         // Перезапись тем же самым содержимым — реального изменения нет.
         File.WriteAllText(path, "line1\nline2X\nline3");
-        var msg = await WaitForMessageAsync(signal, received, TimeSpan.FromMilliseconds(1500));
+        // Negative-окно выведено из тестового же debounce (80мс): карточка, будь она
+        // ошибкой, пришла бы не позже debounce+чтения+сравнения. 500мс — ~6× запас на
+        // слабый раннер; прежние 1,5 с тест платил просто таймаутом.
+        var msg = await WaitForMessageAsync(signal, received, TimeSpan.FromMilliseconds(500));
 
         msg.Should().BeNull("содержимое не изменилось — карточка не должна приходить");
     }
@@ -274,7 +286,6 @@ public class TurnFileWatcherTests : IDisposable
         var signal = new SemaphoreSlim(0);
         using var watcher = CreateWatcher(_root, received, signal);
         watcher.Start();
-        await Task.Delay(200);
 
         // Прогрева кэша нет намеренно — проверяется именно первое касание
         File.WriteAllText(path, "line1\nline2X\nline3\n");
@@ -293,7 +304,6 @@ public class TurnFileWatcherTests : IDisposable
         var signal = new SemaphoreSlim(0);
         using var watcher = CreateWatcher(_root, received, signal);
         watcher.Start();
-        await Task.Delay(200);
 
         File.WriteAllText(Path.Combine(_root, "new.txt"), "a\nb\n");
         var msg = await WaitForMessageAsync(signal, received, TimeSpan.FromSeconds(3));
@@ -330,13 +340,27 @@ public class TurnFileWatcherTests : IDisposable
         var signal = new SemaphoreSlim(0);
         var watcher = CreateWatcher(_root, received, signal);
         watcher.Start();
-        await Task.Delay(200);
+        // Stop() гасит наблюдатель синхронно (InotifyBackend.Dispose ждёт выхода потока
+        // чтения и только потом close(fd)), и раньше он отменяет debounce-токены:
+        // записи после Stop() нечем родиться. Окно в 400мс — страховка от регрессии
+        // самого Stop(), а не «прогрев»: карточка живой подписи пришла бы за ~debounce.
         watcher.Stop();
 
         File.WriteAllText(path, "line1\nline2");
-        var msg = await WaitForMessageAsync(signal, received, TimeSpan.FromMilliseconds(800));
+        var msg = await WaitForMessageAsync(signal, received, TimeSpan.FromMilliseconds(400));
 
         msg.Should().BeNull();
         watcher.Dispose();
+    }
+
+    // Продуктовые дефолты таймингов ватчера (паттерн Э4): тесты укорачивают их только
+    // в своих кейсах (TestTiming), прод — нет. Этот тест держит значения.
+    [Fact]
+    public void ДефолтыТайминговВатчераПрежние()
+    {
+        FileWatcherTiming.Default.Debounce.Should().Be(TimeSpan.FromMilliseconds(400),
+            "debounce 400 мс — склейка серии событий одной записью файла");
+        FileWatcherTiming.Default.ExternalRetry.Should().Be(TimeSpan.FromSeconds(1.5),
+            "окно перепроверки атрибуции 1,5 с — опоздавший tool_result чужого хода успевает в него");
     }
 }

@@ -87,7 +87,7 @@ public class OnboardingController(SessionManager sessions, UserStore users,
     // владельца и OnboardingKind="project". Без личного дефолта — 400 (сначала онбординг
     // пользователя). Живая сессия из Project.OnboardingSessionId возвращается как есть.
     [HttpPost("project/{projectId}/start")]
-    [ProjectScope(Right = ProjectRight.Write)]
+    [ProjectScope(Right = ProjectRight.RunTurn)]
     public async Task<IActionResult> StartProject(string projectId)
     {
         var project = projects.GetById(projectId);

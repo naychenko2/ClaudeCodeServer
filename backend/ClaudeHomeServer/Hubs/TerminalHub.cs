@@ -23,7 +23,7 @@ public class TerminalHub : Hub
     private string? UserId => Context.User?.FindFirstValue(JwtRegisteredClaimNames.Sub);
 
     // Право на проект резолвит одна точка доступа (S0-6), а не сравнение владельца с id
-    // соединения: просмотр — Read, запуск/правка терминала — Write (в S0 роль одна — владелец,
+    // соединения: просмотр — Read, запуск терминала (shell на хосте) — RunTurn, только владелец (в S0 роль одна — владелец,
     // поведение не меняется). Ключом самого терминала остаётся создавший его человек
     // (TerminalInstance.UserId): терминалы не входят в перечень хранилищ с ключом {ownerId}
     // (карта S0-3 §3), их поведение в общем проекте решает S1.
@@ -36,7 +36,7 @@ public class TerminalHub : Hub
     [ProjectCapability(ProjectCapabilityArea.FileBound)]
     public async Task<TerminalInfoDto> CreateTerminal(string projectId, int cols, int rows, string? name = null)
     {
-        if (!CanProject(projectId, ProjectRight.Write)) throw Denied();
+        if (!CanProject(projectId, ProjectRight.RunTurn)) throw Denied();
         return await _terminal.CreateAsync(projectId, UserId!, Context.ConnectionId, cols, rows, name);
     }
 

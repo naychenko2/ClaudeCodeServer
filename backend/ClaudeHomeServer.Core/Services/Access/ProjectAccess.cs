@@ -19,13 +19,16 @@ public enum ProjectRole
 }
 
 /// <summary>
-/// Право действия над проектом: Read — просмотр проекта и его чатов, Write — правка и
-/// запуск ходов (нужно с S2a-10). Матрица «роль → права» — <see cref="ProjectAccess.RoleHasRight"/>.
+/// Право действия над проектом: Read — просмотр проекта и его чатов, Write — правка
+/// файлов и данных, RunTurn — запуск и ведение ходов агента и терминал на хосте (до S2a-10
+/// только владелец: у редактора ход шёл бы без рамки хода). Матрица «роль → права» —
+/// <see cref="ProjectAccess.RoleHasRight"/>. Новые значения — только в конец (порядок значим).
 /// </summary>
 public enum ProjectRight
 {
     Read,
     Write,
+    RunTurn,
 }
 
 /// <summary>
@@ -58,15 +61,17 @@ public static class ProjectAccess
         RoleHasRight(Check(project, userId), right);
 
     /// <summary>
-    /// Матрица «роль → права» (разрез §2.1, минимальная): владелец и редактор имеют оба
-    /// права, читатель — только Read («нет права на запись»). Тонкие права (настройки
+    /// Матрица «роль → права» (разрез §2.1, минимальная): владелец имеет все права,
+    /// редактор — Read и Write (RunTurn ему откроет S2a-10 одной строкой здесь), читатель —
+    /// только Read («нет права на запись»). Тонкие права (настройки
     /// проекта, приглашение участников) в матрицу привнесёт их шаг, здесь их нет.
     /// null-роль не имеет ни одного права.
     /// </summary>
     private static bool RoleHasRight(ProjectRole? role, ProjectRight right) =>
         role switch
         {
-            ProjectRole.Owner or ProjectRole.Editor => true,
+            ProjectRole.Owner => true,
+            ProjectRole.Editor => right != ProjectRight.RunTurn,
             ProjectRole.Reader => right == ProjectRight.Read,
             _ => false,
         };

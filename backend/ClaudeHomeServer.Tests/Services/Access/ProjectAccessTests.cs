@@ -113,6 +113,16 @@ public class ProjectAccessTests
         ProjectAccess.Can(project, OwnerId, ProjectRight.Write).Should().BeTrue();
     }
 
+    [Fact]
+    public void МатрицаПрав_RunTurn_ТолькоВладелец_РедакторИЧитательНет()
+    {
+        var project = SharedProject((EditorId, ProjectRole.Editor), (ReaderId, ProjectRole.Reader));
+        ProjectAccess.Can(project, OwnerId, ProjectRight.RunTurn).Should().BeTrue();
+        ProjectAccess.Can(project, EditorId, ProjectRight.RunTurn).Should().BeFalse();
+        ProjectAccess.Can(project, ReaderId, ProjectRight.RunTurn).Should().BeFalse();
+        ProjectAccess.Can(project, OtherId, ProjectRight.RunTurn).Should().BeFalse();
+    }
+
     // --- S1-1: поле Members в projects.json — без участников поля нет (round-trip стора)
 
     [Fact]

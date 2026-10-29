@@ -18,10 +18,35 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // разные по смыслу и их легко перепутать: секрет не настроен — ручки нет вовсе (404), секрет
 // не тот — 401, сессии нет — 404.
 [Trait("Category", "Host")]
-public class LlmProxyEventsControllerTests
+public class LlmProxyEventsControllerTests : IClassFixture<LlmProxyEventsControllerTests.Host>
 {
     private const string Url = "/api/internal/llm-proxy/events";
     private const string Secret = "proxy-secret-for-tests";
+
+    /// <summary>
+    /// Хост на класс: секрет настроен, широка — наблюдаемая. Содержимое широки чистится перед
+    /// каждым тестом (конструктор класса): общий хост доставки класса между тестами помнит.
+    /// </summary>
+    public sealed class Host : TestWebApplicationFactory
+    {
+        public TestSessionBroadcaster Broadcaster { get; } = new();
+
+        public Host()
+        {
+            ExtraConfig[LlmProxyEventsController.SecretKey] = Secret;
+            ExtraServices = s => s.AddSingleton<ISessionBroadcaster>(Broadcaster);
+        }
+    }
+
+    private readonly Host _host;
+    private readonly TestWebApplicationFactory _factory;
+
+    public LlmProxyEventsControllerTests(Host host)
+    {
+        _host = host;
+        _factory = host;
+        host.Broadcaster.Clear();
+    }
 
     private static object Body(string sessionId, string kind = "prune") => new
     {
@@ -38,20 +63,12 @@ public class LlmProxyEventsControllerTests
         promptTokens = 20_000,
     };
 
-    private static TestWebApplicationFactory WithSecret(string? secret)
-    {
-        var factory = new TestWebApplicationFactory();
-        if (secret is not null) factory.ExtraConfig[LlmProxyEventsController.SecretKey] = secret;
-        return factory;
-    }
-
-    private static HttpClient Anonymous(TestWebApplicationFactory factory) => factory.CreateClient();
-
     [Fact]
     public async Task Секрет_НеНастроен_РучкиНет()
     {
-        using var factory = WithSecret(null);
-        var client = Anonymous(factory);
+        // Свой хост вне фикстуры: проверяется именно отсутствие конфига, а общий хост класса его имеет
+        using var factory = new TestWebApplicationFactory();
+        var client = factory.CreateClient();
 
         var response = await client.PostAsJsonAsync(Url, Body("any-session"));
 
@@ -62,8 +79,7 @@ public class LlmProxyEventsControllerTests
     [Fact]
     public async Task БезСекрета_Отказ()
     {
-        using var factory = WithSecret(Secret);
-        var client = Anonymous(factory);
+        var client = _factory.CreateClient();
 
         var response = await client.PostAsJsonAsync(Url, Body("any-session"));
 
@@ -73,8 +89,7 @@ public class LlmProxyEventsControllerTests
     [Fact]
     public async Task ЧужойСекрет_Отказ()
     {
-        using var factory = WithSecret(Secret);
-        var client = Anonymous(factory);
+        var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Add(LlmProxyEventsController.SecretHeader, Secret + "x");
 
         var response = await client.PostAsJsonAsync(Url, Body("any-session"));
@@ -85,8 +100,7 @@ public class LlmProxyEventsControllerTests
     [Fact]
     public async Task НеизвестнаяСессия_404()
     {
-        using var factory = WithSecret(Secret);
-        var client = Anonymous(factory);
+        var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Add(LlmProxyEventsController.SecretHeader, Secret);
 
         var response = await client.PostAsJsonAsync(Url, Body("нет-такой-сессии"));
@@ -97,8 +111,7 @@ public class LlmProxyEventsControllerTests
     [Fact]
     public async Task НеизвестныйВид_ОтказПоТелу()
     {
-        using var factory = WithSecret(Secret);
-        var client = Anonymous(factory);
+        var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Add(LlmProxyEventsController.SecretHeader, Secret);
 
         var response = await client.PostAsJsonAsync(Url, Body("any-session", kind: "что-то-новое"));
@@ -110,11 +123,10 @@ public class LlmProxyEventsControllerTests
     [Fact]
     public async Task ВерныйСекрет_КарточкаЛожитсяВИсторию()
     {
-        using var factory = WithSecret(Secret);
-        var owner = factory.CreateAuthenticatedClient();
-        var (projectId, sessionId) = await CreateSessionAsync(factory, owner);
+        var owner = _factory.CreateAuthenticatedClient();
+        var (projectId, sessionId) = await CreateSessionAsync(_factory, owner);
 
-        var client = Anonymous(factory);
+        var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Add(LlmProxyEventsController.SecretHeader, Secret);
         var response = await client.PostAsJsonAsync(Url, Body(sessionId));
         response.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -137,11 +149,10 @@ public class LlmProxyEventsControllerTests
     [Fact]
     public async Task ПерехватПетли_КарточкаЛожитсяВИсторию()
     {
-        using var factory = WithSecret(Secret);
-        var owner = factory.CreateAuthenticatedClient();
-        var (projectId, sessionId) = await CreateSessionAsync(factory, owner);
+        var owner = _factory.CreateAuthenticatedClient();
+        var (projectId, sessionId) = await CreateSessionAsync(_factory, owner);
 
-        var client = Anonymous(factory);
+        var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Add(LlmProxyEventsController.SecretHeader, Secret);
         var response = await client.PostAsJsonAsync(Url, Body(sessionId, kind: "loop_guard"));
         response.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -157,11 +168,10 @@ public class LlmProxyEventsControllerTests
     [Fact]
     public async Task ВырезанныеКартинки_ДоезжаютДоИстории()
     {
-        using var factory = WithSecret(Secret);
-        var owner = factory.CreateAuthenticatedClient();
-        var (projectId, sessionId) = await CreateSessionAsync(factory, owner);
+        var owner = _factory.CreateAuthenticatedClient();
+        var (projectId, sessionId) = await CreateSessionAsync(_factory, owner);
 
-        var client = Anonymous(factory);
+        var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Add(LlmProxyEventsController.SecretHeader, Secret);
         var body = new
         {
@@ -194,14 +204,12 @@ public class LlmProxyEventsControllerTests
     [Fact]
     public async Task КарточкаУезжаетВДвеГруппы_ОднимСобытиемИСОднойЛичностью()
     {
-        var broadcaster = new TestSessionBroadcaster();
-        using var factory = WithSecret(Secret);
-        factory.ExtraServices = s => s.AddSingleton<ISessionBroadcaster>(broadcaster);
-        var owner = factory.CreateAuthenticatedClient();
-        var (projectId, sessionId) = await CreateSessionAsync(factory, owner);
+        var broadcaster = _host.Broadcaster; // широка фикстуры: её чистит конструктор класса
+        var owner = _factory.CreateAuthenticatedClient();
+        var (projectId, sessionId) = await CreateSessionAsync(_factory, owner);
         broadcaster.Clear();
 
-        var client = Anonymous(factory);
+        var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Add(LlmProxyEventsController.SecretHeader, Secret);
         (await client.PostAsJsonAsync(Url, Body(sessionId))).EnsureSuccessStatusCode();
 
@@ -227,13 +235,11 @@ public class LlmProxyEventsControllerTests
     [Fact]
     public async Task ДваСдвига_ПолучаютРазныеЛичности()
     {
-        var broadcaster = new TestSessionBroadcaster();
-        using var factory = WithSecret(Secret);
-        factory.ExtraServices = s => s.AddSingleton<ISessionBroadcaster>(broadcaster);
-        var owner = factory.CreateAuthenticatedClient();
-        var (_, sessionId) = await CreateSessionAsync(factory, owner);
+        var broadcaster = _host.Broadcaster; // широка фикстуры: её чистит конструктор класса
+        var owner = _factory.CreateAuthenticatedClient();
+        var (_, sessionId) = await CreateSessionAsync(_factory, owner);
 
-        var client = Anonymous(factory);
+        var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Add(LlmProxyEventsController.SecretHeader, Secret);
         (await client.PostAsJsonAsync(Url, Body(sessionId))).EnsureSuccessStatusCode();
         (await client.PostAsJsonAsync(Url, Body(sessionId))).EnsureSuccessStatusCode();

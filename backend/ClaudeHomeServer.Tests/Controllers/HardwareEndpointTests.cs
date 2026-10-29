@@ -15,7 +15,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // плюс серверный флаг local-model-stats (без него 404); неверное window → 400. Поле hardware в stats и
 // stats/media — только у админа (у не-админа scope "self" его нет).
 [Trait("Category", "Host")]
-public class HardwareEndpointTests : IDisposable
+public class HardwareEndpointTests : IClassFixture<HardwareEndpointTests.Host>, IDisposable
 {
     private sealed class FakeComfyStats : IComfyStats
     {
@@ -32,28 +32,39 @@ public class HardwareEndpointTests : IDisposable
         public IReadOnlyList<LocalModelStatsPoint> GetHistory(TimeSpan window, long? sinceUnixMs = null) => [];
     }
 
-    private readonly TestWebApplicationFactory _factory;
-    private readonly HttpClient _admin;
-    private readonly HttpClient _user;
-
-    public HardwareEndpointTests()
+    /// <summary>
+    /// Хост на класс: заглушки датчиков зарегистрированы один раз на весь класс (не на тест).
+    /// </summary>
+    public sealed class Host : TestWebApplicationFactory
     {
-        _factory = new TestWebApplicationFactory
+        public Host()
         {
             ExtraServices = s =>
             {
                 s.AddSingleton<IComfyStats>(new FakeComfyStats());
                 s.AddSingleton<ILocalModelStatsReader>(new FakeReader());
-            },
-        };
-        var users = _factory.Services.GetRequiredService<UserStore>();
+            };
+        }
+    }
+
+    private readonly TestWebApplicationFactory _factory;
+    private readonly HttpClient _admin;
+    private readonly HttpClient _user;
+
+    public HardwareEndpointTests(Host host)
+    {
+        _factory = host;
+        // Знамя флага поднимается перед каждым тестом: «БезФлага_404» снимает его на своём,
+        // а общий хост состояние между тестами помнит.
+        var users = host.Services.GetRequiredService<UserStore>();
         users.SetFeatureFlag(users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id, "local-model-stats", true);
-        _admin = _factory.CreateAuthenticatedClient();
-        _user = _factory.CreateAuthenticatedClient(
+        _admin = host.CreateAuthenticatedClient();
+        _user = host.CreateAuthenticatedClient(
             TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
     }
 
-    public void Dispose() { _admin.Dispose(); _user.Dispose(); _factory.Dispose(); }
+    // Хост гасит фикстура после класса; здесь — только клиенты теста
+    public void Dispose() { _admin.Dispose(); _user.Dispose(); }
 
     // Мутация: убрать [Authorize(Roles="admin")] с действия — не-админ получит 200, тест краснеет.
     [Fact]

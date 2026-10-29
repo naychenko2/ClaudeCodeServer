@@ -29,9 +29,11 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// этой возможности («dev-exec») — старый агент: прежний отказ с подсказкой команды.
 /// </summary>
 [Trait("Category", "Host")]
-public sealed class ProjectsControllerLocalProjectTests : IDisposable
+public sealed class ProjectsControllerLocalProjectTests : IClassFixture<ProjectsControllerLocalProjectTests.Host>, IDisposable
 {
-    private sealed class FakeDeviceExec : IDeviceExecChannel
+    // internal, не public: заглушки держат Dictionary<string, LoopbackRelayChannel>, а он internal
+    // в TestKit.Host — public-свойство с таким типом не соберётся (CS0053)
+    internal sealed class FakeDeviceExec : IDeviceExecChannel
     {
         public Dictionary<string, DeviceExecStatus> Devices { get; } = [];
         public DeviceExecStatus? GetStatus(string ownerId, string deviceId) => Devices.GetValueOrDefault(deviceId);
@@ -40,7 +42,7 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     }
 
     /// <summary>Канал ретранслятора по устройствам: у каждого свой агент.</summary>
-    private sealed class RelayByDevice : IDeviceRelayChannel
+    internal sealed class RelayByDevice : IDeviceRelayChannel
     {
         public Dictionary<string, LoopbackRelayChannel> Agents { get; } = [];
         public Task<IDeviceExecStream> OpenRelayAsync(string ownerId, string deviceId, CancellationToken ct = default) =>
@@ -48,7 +50,7 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     }
 
     /// <summary>Канал выдачи папки по устройствам.</summary>
-    private sealed class BindByDevice : IDeviceFolderBindChannel
+    internal sealed class BindByDevice : IDeviceFolderBindChannel
     {
         public Dictionary<string, LoopbackRelayChannel> Agents { get; } = [];
         public Task<IDeviceExecStream> OpenBindFolderAsync(string ownerId, string deviceId, CancellationToken ct = default) =>
@@ -60,11 +62,35 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
         public IReadOnlyList<string> Roots { get; } = roots;
     }
 
-    private readonly FakeDeviceExec _devices = new();
-    private readonly RelayByDevice _relay = new();
-    private readonly BindByDevice _bind = new();
+    /// <summary>
+    /// Хост на класс: каналы-заглушки зарегистрированы один раз на весь класс. Их СОДЕРЖИМОЕ
+    /// (статусы устройств, агенты по устройствам) наполняется перед каждым тестом в конструкторе
+    /// класса — общий хост состояние между тестами помнит, а тесты его меняют.
+    /// </summary>
+    public sealed class Host : TestWebApplicationFactory
+    {
+        // internal: типы заглушек internal (см. заметку выше), public-свойства фикстуры были бы
+        // доступнее своего типа — CS0053
+        internal FakeDeviceExec DeviceStatuses { get; } = new();
+        internal RelayByDevice Relay { get; } = new();
+        internal BindByDevice Bind { get; } = new();
+
+        public Host()
+        {
+            ExtraServices = s =>
+            {
+                s.AddSingleton<IDeviceExecChannel>(DeviceStatuses);
+                s.AddSingleton<IDeviceRelayChannel>(Relay);
+                s.AddSingleton<IDeviceFolderBindChannel>(Bind);
+            };
+        }
+    }
+
     private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
+    private readonly FakeDeviceExec _devices;
+    private readonly RelayByDevice _relay;
+    private readonly BindByDevice _bind;
 
     // Машина устройства: разрешённый корень агента и «чужой» каталог рядом
     private readonly string _machine = Path.Combine(Path.GetTempPath(), "lp-agent-" + Guid.NewGuid().ToString("N"));
@@ -79,11 +105,20 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     private string BindHome => Path.Combine(_bindMachine, "home");
     private readonly AgentRootsStore _bindRoots;
 
-    public ProjectsControllerLocalProjectTests()
+    public ProjectsControllerLocalProjectTests(Host host)
     {
+        _factory = host;
+        _devices = host.DeviceStatuses;
+        _relay = host.Relay;
+        _bind = host.Bind;
+        _client = host.CreateAuthenticatedClient();
+
         Directory.CreateDirectory(AllowedRoot);
         Directory.CreateDirectory(Outside);
 
+        // Базовое содержимое каналов перед каждым тестом: его изменил предыдущий тест,
+        // а общий хост держит эти же объекты на весь класс
+        _devices.Devices.Clear();
         _devices.Devices["dev-exec"] = Status("dev-exec", online: true, DeviceCapabilities.Exec, DeviceCapabilities.Relay);
         _devices.Devices["dev-offline"] = Status("dev-offline", online: false, DeviceCapabilities.Exec, DeviceCapabilities.Relay);
         _devices.Devices["dev-old"] = Status("dev-old", online: true, DeviceCapabilities.Exec);
@@ -94,18 +129,9 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
         _devices.Devices["dev-bind-refused"] = Status("dev-bind-refused", online: true,
             DeviceCapabilities.Exec, DeviceCapabilities.Relay, DeviceCapabilities.BindFolder);
 
-        _factory = new TestWebApplicationFactory
-        {
-            ExtraServices = s =>
-            {
-                s.AddSingleton<IDeviceExecChannel>(_devices);
-                s.AddSingleton<IDeviceRelayChannel>(_relay);
-                s.AddSingleton<IDeviceFolderBindChannel>(_bind);
-            },
-        };
-        _client = _factory.CreateAuthenticatedClient();
-
         // Папки сервера тоже разрешены агенту: «один путь на сервере и устройстве»
+        _relay.Agents.Clear();
+        _bind.Agents.Clear();
         var git = new GitService(AgentLauncherFactory.Instance);
         var policy = new AgentPathPolicy(new AllowedRoots(AllowedRoot, _factory.TempDir));
         var agent = new RelayHandler(new AgentProjectFiles(new FileService(git), policy), git);
@@ -152,9 +178,9 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
         return path;
     }
 
+    // Хост гасит фикстура после класса; здесь — только «машины» этого теста
     public void Dispose()
     {
-        _factory.Dispose();
         try { Directory.Delete(_machine, recursive: true); } catch { /* временная папка */ }
         try { Directory.Delete(_bindMachine, recursive: true); } catch { /* временная папка */ }
     }

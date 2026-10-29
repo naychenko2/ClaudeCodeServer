@@ -17,21 +17,39 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// 200 на всё, что мимо маршрутов, и 404 здесь ничего бы не доказывал.
 /// </summary>
 [Trait("Category", "Host")]
-public class AgentDownloadsEndpointTests : IDisposable
+public class AgentDownloadsEndpointTests : IClassFixture<AgentDownloadsEndpointTests.Host>
 {
-    private readonly AgentReleaseFixture _rel = new();
-    private readonly TestWebApplicationFactory _factory;
-
-    public AgentDownloadsEndpointTests()
+    /// <summary>
+    /// Хост на класс: раздача агента без фронта и каталог релизов — общие на весь класс.
+    /// </summary>
+    public sealed class Host : TestWebApplicationFactory
     {
-        _factory = new TestWebApplicationFactory { UseFrontend = false };
-        foreach (var (k, v) in _rel.Settings()) _factory.ExtraConfig[k] = v;
+        public AgentReleaseFixture Rel { get; } = new();
+
+        public Host()
+        {
+            UseFrontend = false;
+            foreach (var (k, v) in Rel.Settings()) ExtraConfig[k] = v;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            base.Dispose(disposing);
+            if (disposing) Rel.Dispose();
+        }
     }
 
-    public void Dispose()
+    private readonly Host _host;
+
+    public AgentDownloadsEndpointTests(Host host) => _host = host;
+
+    // Хост той же конфигурации, что фикстура, но под одну правку конфига или под свой каталог:
+    // такие конфигурации общему хосту класса не подходят (исключения — в отчёте задачи)
+    private static TestWebApplicationFactory HostWith(AgentReleaseFixture rel)
     {
-        _factory.Dispose();
-        _rel.Dispose();
+        var factory = new TestWebApplicationFactory { UseFrontend = false };
+        foreach (var (k, v) in rel.Settings()) factory.ExtraConfig[k] = v;
+        return factory;
     }
 
     private static string ArchiveUrl(string file = AgentReleaseFixture.WinFile, string rid = "win-x64") =>
@@ -43,7 +61,7 @@ public class AgentDownloadsEndpointTests : IDisposable
     [InlineData("/agent/manifest.json")]
     public async Task Анонимно_СкриптыИУказатель_200(string url)
     {
-        using var client = _factory.CreateClient();
+        using var client = _host.CreateClient();
 
         var response = await client.GetAsync(url);
 
@@ -54,15 +72,15 @@ public class AgentDownloadsEndpointTests : IDisposable
     [Fact]
     public async Task Анонимно_Архив_200БайтВБайт_ИHead()
     {
-        using var client = _factory.CreateClient();
+        using var client = _host.CreateClient();
 
         var get = await client.GetAsync(ArchiveUrl());
         get.StatusCode.Should().Be(HttpStatusCode.OK);
-        (await get.Content.ReadAsByteArrayAsync()).Should().Equal(_rel.WinBytes);
+        (await get.Content.ReadAsByteArrayAsync()).Should().Equal(_host.Rel.WinBytes);
 
         var head = await client.SendAsync(new HttpRequestMessage(HttpMethod.Head, ArchiveUrl()));
         head.StatusCode.Should().Be(HttpStatusCode.OK);
-        head.Content.Headers.ContentLength.Should().Be(_rel.WinBytes.Length);
+        head.Content.Headers.ContentLength.Should().Be(_host.Rel.WinBytes.Length);
     }
 
     [Theory]
@@ -75,7 +93,7 @@ public class AgentDownloadsEndpointTests : IDisposable
     [InlineData("/agent/1.9.0/win-x64/ai-home-agent-1.200.0-win-x64.zip")]
     public async Task ВраждебныйПуть_404(string url)
     {
-        using var client = _factory.CreateClient();
+        using var client = _host.CreateClient();
 
         var response = await client.GetAsync(url);
 
@@ -85,8 +103,10 @@ public class AgentDownloadsEndpointTests : IDisposable
     [Fact]
     public async Task ЛимитПоIp_СверхЛимита429()
     {
-        _factory.ExtraConfig["DeviceAgent:DownloadRateLimit"] = "2";
-        using var client = _factory.CreateClient();
+        // Свой хост: лимит «2 на IP» общему хосту класса не подходит — другие тесты его выбьют
+        using var limited = HostWith(_host.Rel);
+        limited.ExtraConfig["DeviceAgent:DownloadRateLimit"] = "2";
+        using var client = limited.CreateClient();
 
         (await client.GetAsync("/agent/manifest.json")).StatusCode.Should().Be(HttpStatusCode.OK);
         (await client.GetAsync("/agent/install.sh")).StatusCode.Should().Be(HttpStatusCode.OK);
@@ -96,8 +116,11 @@ public class AgentDownloadsEndpointTests : IDisposable
     [Fact]
     public async Task КаталогаНет_503СПричиной()
     {
-        Directory.Delete(_rel.Root, recursive: true);
-        using var client = _factory.CreateClient();
+        // Свой каталог и свой хост: общий каталог класса удалять нельзя — он нужен другим тестам
+        using var rel = new AgentReleaseFixture();
+        Directory.Delete(rel.Root, recursive: true);
+        using var factory = HostWith(rel);
+        using var client = factory.CreateClient();
 
         var response = await client.GetAsync("/agent/manifest.json");
 
@@ -110,7 +133,7 @@ public class AgentDownloadsEndpointTests : IDisposable
     public async Task ДесктопВыключен_503АНе500()
     {
         using var disabled = new DesktopDisabledFactory();
-        foreach (var (k, v) in _rel.Settings()) disabled.ExtraConfig[k] = v;
+        foreach (var (k, v) in _host.Rel.Settings()) disabled.ExtraConfig[k] = v;
         using var client = disabled.CreateClient();
 
         foreach (var url in new[] { "/agent/install.sh", "/agent/manifest.json", ArchiveUrl() })
@@ -141,7 +164,7 @@ public class AgentDownloadsEndpointTests : IDisposable
 
     private (string DeviceId, string Token, string Fingerprint) Pair(string name, string machine)
     {
-        var registry = _factory.Services.GetRequiredService<DeviceRegistry>();
+        var registry = _host.Services.GetRequiredService<DeviceRegistry>();
         var fingerprint = MachineFingerprint.Of(machine);
         var (device, token) = registry.Register("owner-self-revoke", name, fingerprint);
         return (device.Id, token, fingerprint);
@@ -160,12 +183,12 @@ public class AgentDownloadsEndpointTests : IDisposable
     {
         var mine = Pair("home", "machine-a");
         var other = Pair("work", "machine-b");
-        using var client = _factory.CreateClient();
+        using var client = _host.CreateClient();
 
         var response = await client.SendAsync(SelfRevoke(mine.Token, mine.Fingerprint));
 
         response.StatusCode.Should().Be(HttpStatusCode.NoContent);
-        var registry = _factory.Services.GetRequiredService<DeviceRegistry>();
+        var registry = _host.Services.GetRequiredService<DeviceRegistry>();
         registry.Get("owner-self-revoke", mine.DeviceId)!.Revoked.Should().BeTrue();
         registry.Get("owner-self-revoke", other.DeviceId)!.Revoked.Should().BeFalse("чужое устройство не трогается");
         registry.Authenticate(mine.Token, mine.Fingerprint).Should().BeNull("токен умер вместе с устройством");
@@ -179,8 +202,8 @@ public class AgentDownloadsEndpointTests : IDisposable
     {
         var mine = Pair("home", "machine-a");
         var other = Pair("work", "machine-b");
-        using var anonymous = _factory.CreateClient();
-        using var web = _factory.CreateAuthenticatedClient();
+        using var anonymous = _host.CreateClient();
+        using var web = _host.CreateAuthenticatedClient();
 
         (await anonymous.SendAsync(SelfRevoke(null, null))).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
         (await anonymous.SendAsync(SelfRevoke(mine.Token, other.Fingerprint))).StatusCode
@@ -190,7 +213,7 @@ public class AgentDownloadsEndpointTests : IDisposable
         (await web.DeleteAsync("/api/devices/self")).StatusCode
             .Should().Be(HttpStatusCode.Unauthorized, "веб-JWT самоотзыв не открывает");
 
-        var registry = _factory.Services.GetRequiredService<DeviceRegistry>();
+        var registry = _host.Services.GetRequiredService<DeviceRegistry>();
         registry.Get("owner-self-revoke", mine.DeviceId)!.Revoked.Should().BeFalse();
         registry.Get("owner-self-revoke", other.DeviceId)!.Revoked.Should().BeFalse();
     }

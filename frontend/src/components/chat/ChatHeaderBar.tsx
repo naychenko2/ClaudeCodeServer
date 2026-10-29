@@ -2092,6 +2092,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       // композер растянут во весь экран и места ему не осталось (placeFab, hidden)
       ...(isMobile ? [{
         key: 'ai-hub', icon: <Sparkles size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'AI-действия',
+        disabled: !!chatAuthorOnlyReason(project),
+        sublabel: chatAuthorOnlyReason(project) ?? undefined,
         onClick: () => window.dispatchEvent(new Event(OPEN_AI_EVENT)),
       }] : []),
       ...(canContinue ? [{

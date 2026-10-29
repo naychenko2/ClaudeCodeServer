@@ -9,6 +9,7 @@ import {
   parseHash, navPush, navReplace, getNav,
   Button, IslandScaffold, ConfirmDialog, PageCanvas, ICON_SIZE, Chip,
   PanelZone, notesPanels, zoneOf, NOTES_KEYS, useIsMobile, useWindowWidth, useListAutoFocus,
+  FLAGS, useFeature,
 } from 'aihome_shell/kit';
 import type { NavSnapshot } from 'aihome_shell/kit';
 import type { HubTabValue } from 'aihome_shell/kit';
@@ -17,9 +18,10 @@ import { NoteView } from './NoteView';
 import { NotesGraph, type GraphStats } from './NotesGraph';
 import { GraphSettingsBody } from './graph/GraphSettingsBody';
 import { useGraphSettings } from './graph/graphSettings';
+import { WikiTab } from './wiki/WikiTab';
 import { CollapseGroup, IconSearch, IconPlus, IconCalendarDay, SourceDot } from './shared';
 
-type Mode = 'notes' | 'graph';
+type Mode = 'notes' | 'graph' | 'wiki';
 
 // --- Чипы-фильтры списка: патчат операторы (tag:/status:) в строке поиска ---
 
@@ -68,6 +70,9 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   const connectionsBelow = !isMobile && windowWidth < NOTE_CONN_SIDEBAR_MIN;
   const notes = useNotes();
   const online = useOnline();
+  // Вкладка «Вики» — только при флаге llmWiki (dark launch): при выключенном флаге
+  // страница заметок ровно такая, какой была — ни вкладки, ни переключателя на десктопе
+  const wikiEnabled = useFeature(FLAGS.llmWiki);
   // Теги всех заметок по частоте — чипы-фильтры списка (клик = оператор tag: в поиске).
   // Тег избранного среди них не показываем: у него свой чип над группой фильтров.
   const allTags = useMemo(() => {
@@ -83,6 +88,9 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   // Режим МОБИЛЬНОЙ ветки: там панелей нет, разделами по-прежнему рулит переключатель.
   // На десктопе режим задаёт открытая панель графа (см. graphPanelOpen ниже).
   const [mobileMode, setMobileMode] = useState<Mode>('notes');
+  // Десктопный режим «Вики»: граф на десктопе — панель (своего mode у него нет), поэтому
+  // второй режим — отдельный флаг, а не третье значение mobileMode
+  const [wikiOn, setWikiOn] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   // Активные фильтры-операторы в запросе — бейдж на свёрнутой группе «Фильтры»
@@ -104,13 +112,24 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   // есть «вход в граф», а центр показывает то, чем сейчас управляют слева.
   const graphPanelOpen = zoneOf(zones, 'notesGraph') != null;
 
-  // Уйти из графа обратно к заметкам: на мобиле это смена режима, на десктопе —
-  // закрытие панели графа (центр сам вернётся к заметке). Ссылка стабильна —
-  // функцию слушает эффект AI-хаба, и пересоздание переподписывало бы его каждый рендер.
-  const leaveGraph = useCallback(() => {
+  // Вернуться к заметкам из любого режима: снять панель графа, вкладку «Вики» и мобильный
+  // режим. Ссылка стабильна — функцию слушает эффект AI-хаба, и пересоздание
+  // переподписывало бы его каждый рендер.
+  const goToNotes = useCallback(() => {
     setMobileMode('notes');
+    setWikiOn(false);
     closePanel('notesGraph');
   }, [closePanel]);
+
+  // Выбор заметки открывает заметку независимо от активной вкладки: снимаем режим «Вики» —
+  // десктопный флаг и мобильный режим ветки (иначе центр продолжал бы рисовать WikiTab
+  // при выставленном selectedId — мёртвый клик, доработка S5d, major ревью). Стабильна
+  // (без deps): её слушает эффект диплинка, пересоздание переподписывало бы его каждый рендер.
+  const selectNote = useCallback((id: string) => {
+    setMobileMode('notes');
+    setWikiOn(false);
+    setSelectedId(id); setMobileView('note'); navPush({ screen: 'notes', note: id });
+  }, []);
 
   useEffect(() => { void ensureNotesLoaded(); }, []);
 
@@ -126,6 +145,9 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     const onPop = (e: PopStateEvent) => {
       const s = e.state as NavSnapshot | null;
       if (s?.screen === 'notes') {
+        // История указывает на заметку — показываем заметку: снимаем режим «Вики» тем же
+        // порядком, что selectNote (экран обязан совпадать с тем, на что указывает история)
+        if (s.note) { setMobileMode('notes'); setWikiOn(false); }
         setSelectedId(s.note ?? null);
         setMobileView(s.note ? 'note' : 'list');
       }
@@ -135,21 +157,23 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   }, []);
 
   // Открытие заметки по заголовку (из [[wikilink]] в файлах/чате). Заголовок в
-  // sessionStorage; ждём загрузки списка (deps: notes) и открываем по совпадению.
+  // sessionStorage; ждём загрузки списка (deps: notes, selectNote) и открываем по совпадению.
   useEffect(() => {
+    // Открытие заметки извне (чат/файл) — тем же selectNote: заметка открывается
+    // независимо от активной вкладки, тот же инвариант
     const consume = () => {
       // По id (из графа сайдбара FileViewer) — приоритетнее
       const id = sessionStorage.getItem('cc_pending_note_id');
-      if (id) { sessionStorage.removeItem('cc_pending_note_id'); setSelectedId(id); setMobileView('note'); navPush({ screen: 'notes', note: id }); return; }
+      if (id) { sessionStorage.removeItem('cc_pending_note_id'); selectNote(id); return; }
       const title = sessionStorage.getItem('cc_pending_note_title');
       if (!title) return;
       const n = notes.find(x => x.title.trim().toLowerCase() === title.trim().toLowerCase());
-      if (n) { sessionStorage.removeItem('cc_pending_note_title'); setSelectedId(n.id); setMobileView('note'); navPush({ screen: 'notes', note: n.id }); }
+      if (n) { sessionStorage.removeItem('cc_pending_note_title'); selectNote(n.id); }
     };
     consume();
     window.addEventListener('cc-open-note', consume);
     return () => window.removeEventListener('cc-open-note', consume);
-  }, [notes]);
+  }, [notes, selectNote]);
 
   // Синхронизация офлайн-заметки сменила её id (localKey/старый serverId → серверный):
   // если открыта эта заметка — переключаемся на новый id.
@@ -178,13 +202,13 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   useEffect(() => {
     const onRun = (e: Event) => {
       if ((e as CustomEvent<{ action?: string }>).detail?.action !== 'note.semantic') return;
-      leaveGraph();
+      goToNotes();
       if (semanticAvailable) setSearchMode('semantic');
       if (searchShouldFocus) setTimeout(() => searchInputRef.current?.focus(), 50);
     };
     window.addEventListener('cc-ai-run', onRun);
     return () => window.removeEventListener('cc-ai-run', onRun);
-  }, [semanticAvailable, leaveGraph, searchShouldFocus]);
+  }, [semanticAvailable, goToNotes, searchShouldFocus]);
   useEffect(() => {
     const q = query.trim();
     // eslint-disable-next-line react-hooks/set-state-in-effect -- часть debounce-эффекта: очистка результатов на пустом запросе
@@ -219,10 +243,6 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     return [...s].sort((a, b) => a.localeCompare(b, 'ru'));
   }, [notes]);
 
-  const selectNote = (id: string) => {
-    setSelectedId(id); setMobileView('note'); navPush({ screen: 'notes', note: id });
-  };
-
   // Возврат к списку (удаление/кнопка «назад» на мобилке): снимаем выбор и
   // откатываем запись истории с note к списку (детерминированно, как в «Чатах»).
   const clearNote = () => { setSelectedId(null); setMobileView('list'); if (getNav()?.note) navReplace({ screen: 'notes' }); };
@@ -254,7 +274,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   const openDaily = () => {
     const d = new Date();
     const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    void api.notes.daily(iso).then(n => { bumpNotes(); leaveGraph(); selectNote(n.id); });
+    void api.notes.daily(iso).then(n => { bumpNotes(); goToNotes(); selectNote(n.id); });
   };
 
   const askClaude = (note: NoteDetail) => {
@@ -264,16 +284,33 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     onHubTab('chats');
   };
 
-  // Управление разделом. На десктопе список и граф — две панели рельсы, поэтому
-  // переключатель режима там не нужен: withModeSwitch остаётся только для мобилы,
-  // где панелей нет. listMode — показывать ли поиск и фильтры списка.
+  // Управление разделом. На мобиле панелей нет, и переключатель там полный:
+  // «Заметки | Вики | Граф» (макет llm-wiki-v2, 360). На десктопе список и граф — панели
+  // рельсы, граф не режим, поэтому десктопный переключатель — «Заметки | Вики» и только
+  // при включённом флаге. listMode — показывать ли поиск и фильтры списка.
+  const modeOptions: { value: Mode; label: string }[] = [
+    { value: 'notes', label: 'Заметки' },
+    // в spread контекст аннотации не доходит — значения приводятся к Mode явно
+    ...(wikiEnabled ? [{ value: 'wiki' as Mode, label: 'Вики' }] : []),
+    ...(isMobile ? [{ value: 'graph' as Mode, label: 'Граф' }] : []),
+  ];
+  // Значение переключателя на десктопе: при открытой панели графа — ни один сегмент
+  // (PillSwitch: value вне options не подсвечивает ничего — честная картина, «Заметки»
+  // не выглядят выбранными при открытом графе)
+  const switcherValue: Mode = isMobile ? mobileMode : graphPanelOpen ? 'graph' : wikiOn ? 'wiki' : 'notes';
+  const switchMode = (v: Mode) => {
+    if (isMobile) { setMobileMode(v); return; }
+    setWikiOn(v === 'wiki');
+    // Центр показывает одно: вход в «Вики» или возврат к «Заметкам» закрывает панель графа
+    closePanel('notesGraph');
+  };
   const sidebarControls = ({ withModeSwitch, listMode }: { withModeSwitch: boolean; listMode: boolean }) => (
     <div style={{ padding: '10px 10px 9px', borderBottom: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column', gap: 8, flex: 'none' }}>
       {withModeSwitch && (
         <PillSwitch<Mode>
           fill
-          value={mobileMode} onChange={setMobileMode}
-          options={[{ value: 'notes', label: 'Заметки' }, { value: 'graph', label: 'Граф' }]}
+          value={switcherValue} onChange={switchMode}
+          options={modeOptions}
         />
       )}
       {listMode && (
@@ -449,7 +486,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   const zonePanels = {
     notesList: (
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
-        {sidebarControls({ withModeSwitch: false, listMode: true })}
+        {sidebarControls({ withModeSwitch: wikiEnabled, listMode: true })}
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>{listPane}</div>
       </div>
     ),
@@ -463,13 +500,16 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   // Центральная зона: заметка/пустое состояние или граф. Десктоп (hero-стиль
   // «как календарь и чаты»): центр без общего острова — заметка сама рисует
   // заголовок на холсте + тело-остров; граф оборачивается в остров здесь.
-  // Что показывать в центре: на мобиле — выбранный режим, на десктопе — граф,
-  // пока открыта его панель (она и есть вход в карту связей)
-  const mode: Mode = isMobile ? mobileMode : (graphPanelOpen ? 'graph' : 'notes');
-  const centerPane = mode === 'graph'
+  // Что показывать в центре: на мобиле — выбранный режим, на десктопе — граф, пока
+  // открыта его панель (она и есть вход в карту связей), иначе «Вики», если включён
+  // десктопный режим вкладки
+  const mode: Mode = isMobile ? mobileMode : (graphPanelOpen ? 'graph' : wikiOn ? 'wiki' : 'notes');
+  const centerPane = mode === 'wiki'
+    ? <WikiTab />
+    : mode === 'graph'
     ? <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden',
         ...(!isMobile ? { background: C.bgMain, border: `1px solid ${ISLAND.border}`, borderRadius: ISLAND.radius, boxShadow: ISLAND.shadow } : {}) }}>
-        <NotesGraph selectedId={selectedId} onSelectNode={id => { leaveGraph(); selectNote(id); }}
+        <NotesGraph selectedId={selectedId} onSelectNode={id => { goToNotes(); selectNote(id); }}
           maxNodes={isMobile ? 40 : undefined}
           settings={graphSettings} onSettingsChange={setGraphSettings}
           hidePanel={false} onStats={setGraphStats} />
@@ -505,8 +545,8 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
         </div>;
 
   const body = isMobile ? (
-    // Мобайл: один экран за раз — сайдбар (список/фильтры+граф) ↔ заметка
-    mode === 'graph'
+    // Мобайл: один экран за раз — сайдбар (список/фильтры) ↔ граф ↔ «Вики» ↔ заметка
+    mode === 'graph' || mode === 'wiki'
       ? <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel }}>
           {sidebarControls({ withModeSwitch: true, listMode: false })}
           <div style={{ flex: 1, minHeight: 0, background: C.bgMain }}>{centerPane}</div>

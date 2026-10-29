@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Home · панель фичи в чате · 3 варианта (v1)</title>
+<!--
+  Макет v1: панель фичи в чате — легче и информативнее, в языке композера и его губ.
+  Три варианта: А «Верхняя губа», Б «Ушко + карточка», В «Висячая губа под шапкой».
+  Предложение, состав «как сейчас» и рекомендация — feature-chat-panel-v1-proposal.md.
+  Привязка: задача 4efc4440 (дизайн, ветка feat/feature-progress-truth); featureId эпика и
+  stepRef шагов фронта назначит план после выбора варианта Андреем.
+  Код продукта не правится. Данные выдуманы.
+  Сырые значения цветов — ТОЛЬКО в блоке токенов ниже (копия theme.css); дальше — var(--c-*).
+-->
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css, семантика — C.* из design.ts ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-dashed:#D0C6B4;
+  --c-progress-track:#D8CFBE;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  --shadow-lift-soft:0 -1px 2px rgba(60,50,35,.06),0 -3px 10px rgba(60,50,35,.08);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-sheet:0 -8px 40px rgba(23,19,15,.22);
+  --c-overlay:rgba(23,19,15,.42);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-dashed:#4A443B;
+  --c-progress-track:#5C544A;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+  --shadow-lift-soft:0 -1px 2px rgba(0,0,0,.30),0 -4px 12px rgba(0,0,0,.35);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  --shadow-sheet:0 -10px 46px rgba(0,0,0,.55);
+  --c-overlay:rgba(0,0,0,.55);
+}
+/* Шкалы design.ts: FS xs11 sm12 base13 md14 lg16 · SP 2/4/8/12/16/24 · R sm6 md8 lg10 xl12 xxl14 sheet22 max999 */
+* { box-sizing:border-box; }
+html,body { margin:0; }
+body { background:var(--c-bg-panel); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.45; }
+button { font:inherit; color:inherit; border:0; background:none; margin:0; padding:0; cursor:pointer; text-align:left; }
+button:focus-visible { outline:none; box-shadow:var(--shadow-focus); border-radius:8px; }
+.mono { font-family:"JetBrains Mono","Courier New",monospace; }
+svg { flex-shrink:0; display:block; }
+
+/* ===== Обвязка макета (не часть продукта) ===== */
+.mk { position:sticky; top:0; z-index:20; display:flex; flex-wrap:wrap; gap:12px 20px; align-items:center;
+  padding:12px 16px; background:var(--c-bg-card); border-bottom:1px solid var(--c-border); }
+.mk h1 { font-family:"PT Serif",Georgia,serif; font-size:16px; margin:0 8px 0 0; color:var(--c-text-heading); }
+.grp { display:flex; align-items:center; gap:8px; }
+.lbl { font-size:11px; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.04em; }
+.pills { display:flex; gap:2px; background:var(--c-bg-inset); padding:2px; border-radius:9px; }
+.pills button { padding:4px 10px; border-radius:8px; font-size:12px; color:var(--c-text-secondary); }
+.pills button.on { background:var(--c-bg-card); color:var(--c-text-heading); font-weight:600; box-shadow:0 0 0 1px var(--c-border); }
+.note { max-width:1240px; margin:16px auto 0; padding:0 16px; font-size:12px; color:var(--c-text-secondary); }
+.note b { color:var(--c-text-heading); }
+.stage { display:flex; flex-wrap:wrap; gap:24px; justify-content:center; padding:16px 16px 48px; align-items:flex-start; }
+.cap { font-size:11px; color:var(--c-text-muted); margin:0 0 6px 4px; text-transform:uppercase; letter-spacing:.04em; }
+
+/* ===== Кадр чата ===== */
+.frame { position:relative; display:flex; flex-direction:column; overflow:hidden;
+  background:var(--c-bg-main); border:1px solid var(--c-border); border-radius:14px; box-shadow:var(--shadow-island); }
+.desk { width:780px; height:640px; }
+.mob  { width:360px; height:720px; }
+.hdr { flex-shrink:0; display:flex; align-items:center; gap:8px; height:44px; padding:0 16px;
+  border-bottom:1px solid var(--c-border-light); background:var(--c-bg-main); position:relative; z-index:3; }
+.hdr .t { font-weight:600; color:var(--c-text-heading); font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.hdr .s { font-size:12px; color:var(--c-text-muted); white-space:nowrap; }
+.feed { flex:1; min-height:0; overflow:hidden; padding:16px 24px; display:flex; flex-direction:column; gap:12px; }
+.mob .feed { padding:12px; }
+.msg { max-width:80%; padding:8px 12px; border-radius:12px; background:var(--c-bg-card); border:1px solid var(--c-border-light); color:var(--c-text-primary); }
+.msg.me { align-self:flex-end; background:var(--c-accent-light); border-color:transparent; }
+.msg.ph { height:14px; padding:0; border:0; background:var(--c-bg-inset); border-radius:6px; }
+
+/* ===== Композер ===== */
+.dock { flex-shrink:0; position:relative; padding:0 24px 16px; }
+.mob .dock { padding:0 8px 8px; }
+.field { position:relative; z-index:2; min-height:64px; padding:12px 16px; border:1px solid var(--c-border);
+  background:var(--c-bg-white); border-radius:14px; color:var(--c-text-muted); font-size:14px; box-shadow:var(--shadow-island); }
+/* нижняя губа (composerLip('bottom')): overlap 12, gap 3, edge 4, row 32 */
+.lipb { position:relative; z-index:1; margin-top:-12px; height:54px; padding:15px 8px 4px;
+  background:var(--c-bg-main); border:1px solid var(--c-border-light); border-top:0;
+  border-radius:0 0 14px 14px; box-shadow:var(--shadow-island); display:flex; align-items:center; gap:4px; }
+.mob .lipb { margin-top:6px; height:auto; padding:0; border:0; background:none; box-shadow:none; }
+.lb { height:32px; padding:0 8px; border-radius:8px; font-size:12px; color:var(--c-text-secondary); display:inline-flex; align-items:center; gap:4px; }
+.lb.send { margin-left:auto; width:32px; justify-content:center; background:var(--c-accent); color:var(--c-on-accent); }
+/* верхняя губа (composerLip('top')): edge 4 сверху, overlap+gap 15 к полю, row 32 */
+.lipt { position:relative; z-index:1; margin-bottom:-12px; padding:4px 8px 15px;
+  background:var(--c-bg-main); border:1px solid var(--c-border-light); border-bottom:0;
+  border-radius:14px 14px 0 0; box-shadow:var(--shadow-lift-soft); }
+
+/* ===== Общие кирпичики панели ===== */
+.row { display:flex; align-items:center; gap:8px; min-width:0; height:32px; }
+.ttl { font-weight:700; color:var(--c-text-heading); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:40px; }
+.dim { color:var(--c-text-muted); }
+.sec { color:var(--c-text-secondary); }
+.ell { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+.chip { display:inline-flex; align-items:center; gap:4px; height:20px; padding:0 6px; border-radius:6px; font-size:11px;
+  background:var(--c-bg-selected); color:var(--c-text-secondary); white-space:nowrap; flex-shrink:0; }
+.chip.master { background:var(--c-success-bg); color:var(--c-success-text); }
+.chip.warn { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.act { flex-shrink:0; display:inline-flex; align-items:center; gap:4px; height:28px; padding:0 8px; border-radius:8px; font-weight:600; font-size:12px; color:var(--c-accent); white-space:nowrap; }
+.act:hover { background:var(--c-accent-light); }
+.act.solid { background:var(--c-accent); color:var(--c-on-accent); }
+.ico { width:28px; height:28px; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; color:var(--c-text-secondary); flex-shrink:0; }
+.ico:hover { background:var(--c-bg-selected); }
+.t-wait { color:var(--c-info); font-weight:600; }
+.t-stop { color:var(--c-danger-text); font-weight:600; }
+.num { font-variant-numeric:tabular-nums; font-weight:600; font-size:12px; color:var(--c-text-heading); white-space:nowrap; flex-shrink:0; }
+
+/* Полоса прогресса по трекеру: в master · принято · ревью · работа · не заведено */
+.bar { display:flex; gap:2px; height:6px; border-radius:999px; overflow:hidden; }
+.bar i { display:block; height:100%; }
+.bar .m { background:var(--c-success-text); } .bar .a { background:var(--c-success); }
+.bar .r { background:var(--c-info); } .bar .w { background:var(--c-accent); }
+.bar .n { background:var(--c-progress-track); }
+.leg { display:flex; flex-wrap:wrap; gap:4px 12px; font-size:11px; color:var(--c-text-secondary); margin-top:6px; }
+.leg span { display:inline-flex; align-items:center; gap:4px; }
+.leg i { width:8px; height:8px; border-radius:2px; display:inline-block; }
+
+/* Тело раскрытия (секции по приоритету) */
+.body { display:flex; flex-direction:column; gap:12px; padding:8px 4px 4px; }
+.h .chip { text-transform:none; letter-spacing:0; }
+.h { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); margin-bottom:4px; display:flex; align-items:center; gap:6px; }
+.li { display:flex; align-items:center; gap:8px; min-height:28px; font-size:12px; }
+.li .who { color:var(--c-text-heading); font-weight:600; white-space:nowrap; }
+.li .what { color:var(--c-text-secondary); }
+.li .t { margin-left:auto; color:var(--c-text-muted); font-size:11px; white-space:nowrap; }
+.pd { width:6px; height:6px; border-radius:3px; flex-shrink:0; background:var(--c-accent); }
+.pd.r { background:var(--c-info); } .pd.n { background:transparent; box-shadow:inset 0 0 0 1px var(--c-dashed); }
+.pd.wait { background:var(--c-info); } .pd.stop { background:var(--c-danger); }
+.pair { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.cell { background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:10px; padding:8px 10px; }
+.cell .k { font-size:11px; color:var(--c-text-muted); }
+.cell .v { font-size:16px; font-weight:700; color:var(--c-text-heading); }
+.cell .s { font-size:11px; color:var(--c-text-secondary); }
+.fold { display:flex; align-items:center; gap:8px; width:100%; min-height:32px; padding:0 8px; border-radius:8px;
+  background:var(--c-bg-card); border:1px solid var(--c-border-light); font-size:12px; color:var(--c-text-secondary); }
+.fold:hover { background:var(--c-bg-selected); }
+.fold .cnt { margin-left:auto; }
+.issue { font-size:12px; color:var(--c-text-secondary); padding:4px 8px 0 22px; }
+.foot { display:flex; align-items:center; gap:8px; padding-top:4px; border-top:1px solid var(--c-border-light); }
+.foot .role { font-size:11px; color:var(--c-text-muted); }
+.rolechip { font-family:"JetBrains Mono","Courier New",monospace; font-size:11px; background:var(--c-bg-selected); color:var(--c-text-secondary); padding:0 5px; border-radius:6px; }
+
+/* ===== А · верхняя губа ===== */
+.a-lip .row { cursor:pointer; padding:0 4px; }
+.a-lip.tone-wait { background:var(--c-info-bg); }
+.a-lip.tone-stop { background:var(--c-danger-bg); }
+.a-lip .body { max-height:340px; overflow:auto; border-bottom:1px solid var(--c-border-light); margin-bottom:4px; padding-bottom:12px; }
+.a-strip { position:relative; z-index:1; margin-bottom:6px; padding:0 4px 0 8px; background:var(--c-bg-main);
+  border:1px solid var(--c-border-light); border-radius:12px; }
+.a-strip.tone-wait { background:var(--c-info-bg); border-color:transparent; }
+.a-strip.tone-stop { background:var(--c-danger-bg); border-color:transparent; }
+.a-strip .row { height:40px; }
+
+/* ===== Б · ушко ===== */
+.ear-wrap { display:flex; padding-left:22px; position:relative; z-index:3; }
+.ear { position:relative; display:flex; align-items:center; gap:6px; height:23px; margin-bottom:-1px; padding:0 8px;
+  background:var(--c-bg-white); border:1px solid var(--c-border); border-bottom:0; border-radius:10px 10px 0 0;
+  box-shadow:var(--shadow-lift-soft); font-size:12px; color:var(--c-text-secondary); white-space:nowrap; }
+.mob .ear { height:31px; }
+.ear::after { content:""; position:absolute; left:0; right:0; bottom:-2px; height:3px; background:var(--c-bg-white); }
+.ear.tone-wait { color:var(--c-info); }
+.ear.tone-stop { color:var(--c-danger-text); }
+.ear b { color:var(--c-text-heading); font-weight:600; }
+.pop { position:absolute; z-index:5; left:24px; bottom:calc(100% - 4px); width:380px; padding:12px;
+  background:var(--c-bg-card); border:1px solid var(--c-border); border-radius:12px; box-shadow:var(--shadow-dropdown); max-height:440px; overflow:auto; }
+.pop .lead { font-size:14px; color:var(--c-text-heading); font-weight:600; }
+
+/* ===== В · висячая губа под шапкой ===== */
+.c-lip { position:relative; z-index:2; margin:0 24px; padding:15px 8px 4px; margin-top:-12px;
+  background:var(--c-bg-main); border:1px solid var(--c-border-light); border-top:0;
+  border-radius:0 0 14px 14px; box-shadow:var(--shadow-island); }
+.mob .c-lip { margin:-12px 8px 0; }
+.c-lip.tone-wait { background:var(--c-info-bg); border-color:transparent; }
+.c-lip.tone-stop { background:var(--c-danger-bg); border-color:transparent; }
+.c-lip .row { cursor:pointer; padding:0 4px; }
+.c-lip .thin { margin:0 4px 2px; }
+.c-lip .thin .bar { height:3px; }
+.c-lip .body { border-top:1px solid var(--c-border-light); margin-top:6px; padding-top:12px; max-height:330px; overflow:auto; }
+.cols { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+
+/* ===== Мобильная шторка ===== */
+.scrim { position:absolute; inset:0; z-index:8; background:var(--c-overlay); }
+.sheet { position:absolute; z-index:9; left:0; right:0; bottom:0; max-height:78%; overflow:auto; padding:8px 16px 16px;
+  background:var(--c-bg-card); border-radius:22px 22px 0 0; box-shadow:var(--shadow-sheet); }
+.grab { width:36px; height:4px; border-radius:999px; background:var(--c-dashed); margin:0 auto 8px; }
+.sheet .li { min-height:40px; }
+.sheet .act, .sheet .ico { min-height:40px; min-width:40px; }
+</style>
+</head>
+<body>
+<div class="mk">
+  <h1>Панель фичи в чате · v1</h1>
+  <div class="grp"><span class="lbl">Вариант</span><div class="pills" data-k="v"></div></div>
+  <div class="grp"><span class="lbl">Состояние</span><div class="pills" data-k="st"></div></div>
+  <div class="grp"><span class="lbl">Панель</span><div class="pills" data-k="open"></div></div>
+  <div class="grp"><span class="lbl">Тема</span><div class="pills" data-k="theme"></div></div>
+</div>
+<div class="note" id="note"></div>
+<div class="stage">
+  <div><div class="cap">Десктоп · колонка чата</div><div class="frame desk" id="desk"></div></div>
+  <div><div class="cap">Мобила · 360 px</div><div class="frame mob" id="mob"></div></div>
+</div>
+
+<script>
+// Данные выдуманы. Процент — «по трекеру»: принято / всего шагов (бэк, FeatureStepProgress).
+const F = {
+  title: 'Правда прогресса фичи',
+  branch: 'feat/feature-progress-truth',
+  p: { total: 13, inMaster: 4, accepted: 7, review: 2, work: 2, notCreated: 2 },
+  now: [
+    { who: 'Полина', what: 'Ш8 · фронт — плашка «в master»', t: '25 мин', k: 'w' },
+    { who: 'Тимур',  what: 'Ш9 · бэк — отсечка по мержу', t: '12 мин', k: 'w' },
+    { who: 'Глеб',   what: 'ревью Ш6', t: '4 мин', k: 'r' },
+  ],
+  next: [
+    { what: 'Ш10 · фронт — легенда полосы', k: 'n' },
+    { what: 'QA · Вера — живой прогон', k: 'n' },
+  ],
+  est: { ready: '≈ 60 %', readyS: 'оценка Софьи · 14:05', eta: '≈ 2 ч 40 мин', etaS: 'к 18:30 · по статистике ≈ 3 ч' },
+  issues: [ 'Ш5 сдан без ревью', 'доработка без привязки к шагу' ],
+  role: 'Ш8 · фронт',
+};
+const pct = Math.round(F.p.accepted / F.p.total * 100);
+const STATES = {
+  run:  { label: 'Идёт', tone: 'run' },
+  wait: { label: 'Ждёт вас', tone: 'wait', head: 'Ждёт вас · Глеб спрашивает про Ш6', act: 'Ответить' },
+  stop: { label: 'Стоит', tone: 'stop', head: 'Стоит · Тимур упал на Ш9', act: 'Чат Тимура' },
+};
+const S = { v: 'A', st: 'run', open: 'closed', theme: 'light' };
+const OPT = {
+  v: [['A','А · Верхняя губа'],['B','Б · Ушко'],['C','В · Висячая губа']],
+  st: [['run','Идёт'],['wait','Ждёт вас'],['stop','Стоит']],
+  open: [['closed','Свёрнута'],['open','Раскрыта']],
+  theme: [['light','Светлая'],['dark','Тёмная']],
+};
+const NOTES = {
+  A: '<b>А · Верхняя губа.</b> Фича переезжает из плашки под шапкой в верхнюю губу композера — туда, куда смотрит глаз перед ответом. Свёрнута: кольцо % · название · «Сейчас» · срок. Раскрыта: губа растёт вверх, секции по приоритету. На телефоне губ нет — отдельная полоска над полем и шторка.',
+  B: '<b>Б · Ушко.</b> Самый лёгкий: в покое — только ушко на кромке поля ввода «54 % · ≈ 2 ч 40». Всё остальное — в карточке по тапу. Тревога меняет цвет ушка и даёт действие прямо в нём.',
+  C: '<b>В · Висячая губа под шапкой.</b> Ближе всего к нынешней плашке: место то же, но форма — перевёрнутая губа с тонкой полосой прогресса по кромке. Раскрытие вниз поверх ленты, две колонки.',
+};
+
+// ---- кирпичики ----
+function ring(size = 16) {
+  const r = (size - 3) / 2, c = 2 * Math.PI * r, d = c * pct / 100;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true">
+    <circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke="var(--c-progress-track)" stroke-width="2.5"/>
+    <circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke="var(--c-success)" stroke-width="2.5"
+      stroke-dasharray="${d} ${c}" transform="rotate(-90 ${size/2} ${size/2})" stroke-linecap="round"/></svg>`;
+}
+const chev = (up) => `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="${up ? 'M6 15l6-6 6 6' : 'M6 9l6 6 6-6'}"/></svg>`;
+const arrow = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>`;
+const xIco = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>`;
+function bar() {
+  const p = F.p, seg = (cls, n) => n ? `<i class="${cls}" style="flex:${n}"></i>` : '';
+  return `<div class="bar" role="img" aria-label="Принято ${p.accepted} из ${p.total}, в master ${p.inMaster}">${seg('m', p.inMaster)}${seg('a', p.accepted - p.inMaster)}${seg('r', p.review)}${seg('w', p.work)}${seg('n', p.notCreated)}</div>`;
+}
+function legend() {
+  const p = F.p;
+  return `<div class="leg">
+    <span><i style="background:var(--c-success-text)"></i>в master ${p.inMaster}</span>
+    <span><i style="background:var(--c-success)"></i>принято ещё ${p.accepted - p.inMaster}</span>
+    <span><i style="background:var(--c-info)"></i>в ревью ${p.review}</span>
+    <span><i style="background:var(--c-accent)"></i>в работе ${p.work}</span>
+    <span><i style="background:var(--c-progress-track)"></i>не заведено ${p.notCreated}</span></div>`;
+}
+function nowLine(short) {
+  const st = STATES[S.st];
+  if (st.tone !== 'run') return `<span class="ell t-${st.tone}">${st.head}</span>`;
+  const n = F.now[0];
+  return short
+    ? `<span class="ell sec"><span class="dim">Сейчас</span> ${n.who} · Ш8</span>`
+    : `<span class="ell sec"><span class="dim">Сейчас</span> ${n.who} · ${n.what.split(' — ')[0]}<span class="dim"> +${F.now.length - 1}</span></span>`;
+}
+function actionBtn() {
+  const st = STATES[S.st];
+  return st.act ? `<button class="act solid">${st.act}</button>` : '';
+}
+function sections({ mobile = false, cols = false } = {}) {
+  const st = STATES[S.st];
+  const alert = st.tone !== 'run'
+    ? `<div class="li"><span class="pd ${st.tone}"></span><span class="ell t-${st.tone}">${st.head}</span>${st.act ? `<button class="act solid" style="margin-left:auto">${st.act}</button>` : ''}</div>` : '';
+  const now = `<div><div class="h">Сейчас · ${F.now.length}</div>${F.now.map(n =>
+    `<div class="li"><span class="pd ${n.k}"></span><span class="who">${n.who}</span><span class="ell what">${n.what}</span><span class="t">${n.t}</span></div>`).join('')}</div>`;
+  const next = `<div><div class="h">Дальше</div>${F.next.map(n =>
+    `<div class="li"><span class="pd n"></span><span class="ell what">${n.what}</span></div>`).join('')}</div>`;
+  const est = `<div class="pair">
+    <div class="cell"><div class="k">Готовность</div><div class="v">${F.est.ready}</div><div class="s">${F.est.readyS}</div></div>
+    <div class="cell"><div class="k">Срок</div><div class="v">${F.est.eta}</div><div class="s">${F.est.etaS}</div></div></div>`;
+  const prog = `<div><div class="h">По трекеру · <span class="num">${pct} %</span> <span class="chip master" style="margin-left:auto">в master ${F.p.inMaster}</span></div>${bar()}${legend()}</div>`;
+  const issues = `<div><button class="fold" aria-expanded="false"><span class="pd" style="background:var(--c-warning)"></span>Трекер расходится<span class="cnt chip warn">${F.issues.length}</span>${chev(false)}</button>
+    ${S.open === 'open' && mobile ? F.issues.map(i => `<div class="issue">· ${i}</div>`).join('') : ''}</div>`;
+  const foot = `<div class="foot"><span class="role">этот чат — <span class="rolechip">${F.role}</span></span><button class="act" style="margin-left:auto">Страница фичи ${arrow}</button></div>`;
+  if (cols) return `<div class="body">${alert}<div class="cols"><div style="display:flex;flex-direction:column;gap:12px">${now}${next}</div><div style="display:flex;flex-direction:column;gap:12px">${est}${prog}${issues}</div></div>${foot}</div>`;
+  return `<div class="body">${alert}${now}${next}${est}${prog}${issues}${foot}</div>`;
+}
+const feed = `<div class="feed">
+  <div class="msg">Ш8 взяла: плашка «в master» на ганте и в сводке. Начинаю с модели.</div>
+  <div class="msg me">Покажи, как выглядит на 360.</div>
+  <div class="msg ph" style="width:60%"></div><div class="msg ph" style="width:45%"></div>
+  <div class="msg ph" style="width:70%"></div></div>`;
+const hdr = (m) => `<div class="hdr"><span class="t">Ш8 · фронт — плашка «в master»</span>${m ? '' : '<span class="s">Полина · Sonnet</span>'}</div>`;
+const field = `<div class="field">Ответить Полине…</div>`;
+const lipb = (m) => m
+  ? `<div class="lipb"><span class="lb">⚡ Обычный</span><span class="lb">Sonnet</span><span class="lb send">↑</span></div>`
+  : `<div class="lipb"><span class="lb">⚡ Обычный</span><span class="lb">Sonnet 5.5</span><span class="lb">＋</span><span class="lb send">↑</span></div>`;
+function mobSheet() {
+  if (S.open !== 'open') return '';
+  return `<div class="scrim"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Фича этого чата">
+    <div class="grab"></div>
+    <div class="row" style="height:40px">${ring(18)}<span class="ttl">${F.title}</span><span class="num" style="margin-left:auto">${pct} %</span><button class="ico" aria-label="Закрыть">${xIco}</button></div>
+    ${sections({ mobile: true })}</div>`;
+}
+
+// ---- варианты ----
+function renderA(m) {
+  const st = STATES[S.st], open = S.open === 'open';
+  if (m) {
+    const strip = `<div class="a-strip tone-${st.tone}"><div class="row" role="button" aria-expanded="${open}">
+      ${ring()}<span class="num">${pct} %</span>${nowLine(true)}
+      ${st.act ? actionBtn() : `<span class="chip" style="margin-left:auto">≈ 2 ч 40</span>`}<button class="ico" aria-label="Подробнее">${chev(true)}</button></div></div>`;
+    return hdr(m) + feed + `<div class="dock">${strip}${field}${lipb(m)}</div>` + mobSheet();
+  }
+  const lip = `<div class="lipt a-lip tone-${open ? 'run' : st.tone}">
+    ${open ? sections({ cols: true }) : ''}
+    <div class="row" role="button" aria-expanded="${open}">
+      ${ring()}<span class="num">${pct} %</span><span class="ttl" style="max-width:190px">${F.title}</span>
+      ${nowLine(false)}
+      <span style="margin-left:auto;display:flex;gap:4px;align-items:center">
+        ${st.act && !open ? actionBtn() : `<span class="chip">≈ 2 ч 40 · к 18:30</span>`}
+        <button class="ico" aria-label="${open ? 'Свернуть' : 'Подробнее'}">${chev(!open)}</button></span></div></div>`;
+  return hdr(m) + feed + `<div class="dock">${lip}${field}${lipb(m)}</div>`;
+}
+function renderB(m) {
+  const st = STATES[S.st], open = S.open === 'open';
+  const dot = st.tone === 'run' ? ring(14) : `<span class="pd ${st.tone}"></span>`;
+  const word = st.tone === 'run' ? `<b>${pct} %</b> · ≈ 2 ч 40` : (st.tone === 'wait' ? 'Ждёт вас · <b>Ответить</b>' : 'Стоит · <b>Чат Тимура</b>');
+  const ear = `<div class="ear-wrap"><button class="ear tone-${st.tone}" aria-expanded="${open}" aria-label="Фича «${F.title}»">${dot}${word}${chev(!open)}</button></div>`;
+  const pop = (!m && open) ? `<div class="pop" role="dialog" aria-label="Фича этого чата">
+    <div class="row" style="height:28px">${ring(18)}<span class="ttl lead">${F.title}</span><button class="ico" style="margin-left:auto" aria-label="Закрыть">${xIco}</button></div>
+    ${sections()}</div>` : '';
+  return hdr(m) + feed + `<div class="dock">${pop}${ear}${field}${lipb(m)}</div>` + (m ? mobSheet() : '');
+}
+function renderC(m) {
+  const st = STATES[S.st], open = S.open === 'open';
+  const lip = `<div class="c-lip tone-${open ? 'run' : st.tone}">
+    <div class="row" role="button" aria-expanded="${open}">
+      ${m ? '' : `<span class="ttl" style="max-width:200px">${F.title}</span>`}
+      <span class="num">${pct} %</span>${nowLine(m)}
+      <span style="margin-left:auto;display:flex;gap:4px;align-items:center">
+        ${st.act && !open ? actionBtn() : (m ? '' : `<span class="chip">≈ 18:30</span>`)}
+        <button class="ico" aria-label="${open ? 'Свернуть' : 'Подробнее'}">${chev(open)}</button></span></div>
+    <div class="thin">${bar()}</div>
+    ${open && !m ? sections({ cols: true }) : ''}</div>`;
+  return hdr(m) + lip + feed + `<div class="dock">${field}${lipb(m)}</div>` + (m ? mobSheet() : '');
+}
+
+function render() {
+  document.documentElement.dataset.theme = S.theme;
+  const f = { A: renderA, B: renderB, C: renderC }[S.v];
+  document.getElementById('desk').innerHTML = f(false);
+  document.getElementById('mob').innerHTML = f(true);
+  document.getElementById('note').innerHTML = NOTES[S.v];
+  document.querySelectorAll('.pills').forEach(p => {
+    const k = p.dataset.k;
+    p.innerHTML = OPT[k].map(([v, l]) => `<button data-v="${v}" class="${S[k] === v ? 'on' : ''}">${l}</button>`).join('');
+  });
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('.pills button');
+  if (b) { S[b.parentElement.dataset.k] = b.dataset.v; render(); return; }
+  if (e.target.closest('.frame [aria-expanded], .frame .ico, .frame .scrim')) { S.open = S.open === 'open' ? 'closed' : 'open'; render(); }
+});
+render();
+</script>
+</body>
+</html>

@@ -249,7 +249,7 @@ public sealed class DailyBriefingService
     {
         var sb = new StringBuilder();
         // git локального проекта на устройстве — серверный git его не видит (ADR-016 §4)
-        foreach (var p in _projects.GetByOwner(userId).Where(ProjectCapabilities.FilesOnServer).Take(12))
+        foreach (var p in _projects.GetAccessible(userId).Where(ProjectCapabilities.FilesOnServer).Take(12))
         {
             var lines = await RunGitLogAsync(p.RootPath, ct);
             if (lines.Count == 0) continue;

@@ -7,14 +7,23 @@ namespace ClaudeHomeServer.Services;
 /// сессий: решение о доступе принимает Core-примитив <see cref="ProjectAccess"/> /
 /// <see cref="SessionAccess"/>, здесь только достаём модели и собираем <see cref="RequestScope"/>.
 /// </summary>
-public sealed class ProjectAccessService(ProjectManager projects, ISessionDirectory sessions) : IProjectAccess
+public sealed class ProjectAccessService(
+    ProjectManager projects, ISessionDirectory sessions, SharedProjectsGate? gate = null) : IProjectAccess
 {
     public RequestScope? Resolve(string? callerUserId, string? projectId, ProjectRight right = ProjectRight.Read)
     {
         if (string.IsNullOrEmpty(callerUserId) || string.IsNullOrEmpty(projectId)) return null;
         var project = projects.GetById(projectId);
         if (!ProjectAccess.Can(project, callerUserId, right)) return null;
-        return new RequestScope(callerUserId, project!.OwnerId!, ProjectAccess.Check(project, callerUserId)!.Value);
+        var role = ProjectAccess.Check(project, callerUserId)!.Value;
+        if (role != ProjectRole.Owner)
+        {
+            // Участник видит общий проект только при рубильнике и флаге; без гейта — fail-closed
+            if (gate?.IsOn(callerUserId) != true) return null;
+            // S1: участник только читает — запись редактора откроют S2a/S2c
+            if (right == ProjectRight.Write) return null;
+        }
+        return new RequestScope(callerUserId, project!.OwnerId!, role);
     }
 
     public RequestScope? ResolveSession(string? callerUserId, string? sessionId, ProjectRight right = ProjectRight.Read)

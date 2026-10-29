@@ -80,6 +80,14 @@ public sealed class ProjectScopeAttribute : Attribute, IAsyncActionFilter, IOrde
             : access.Resolve(caller, id, Right);
         if (scope is null)
         {
+            // Проект виден, но права на запись нет (читатель; в S1 и редактор) — 403, а не 404:
+            // существование ему и так известно
+            if (From == ScopeSource.Project && Right == ProjectRight.Write
+                && access.Resolve(caller, id, ProjectRight.Read) is not null)
+            {
+                context.Result = Fail(StatusCodes.Status403Forbidden, "Нет права на запись");
+                return;
+            }
             context.Result = Fail(StatusCodes.Status404NotFound, "Не найдено");
             return;
         }

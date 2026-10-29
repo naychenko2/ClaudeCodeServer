@@ -405,7 +405,7 @@ public sealed partial class WorkspaceToolset(
                 var groupName = groups.GetByOwner(context.OwnerId)
                     .ToDictionary(g => g.Id, g => g.Name);
                 var query = StringArg(arguments, "query").Trim();
-                var items = projects.GetByOwner(context.OwnerId)
+                var items = projects.GetAccessible(context.OwnerId)
                     .Where(p => plan.AllowedProjectIds is not { Count: > 0 } allowed
                         || allowed.Contains(p.Id))
                     .Where(p => query.Length == 0

@@ -30,11 +30,15 @@ public class ProjectManager : IProjectManager
     // Домашняя папка владельца ({база по среде}/{username} либо override из конфига)
     private readonly UserHomeResolver _homes;
     private readonly Lock _saveLock = new();
+    // Рубильник и флаг общих проектов; null — в тестах без гейта (участники не видны, fail-closed)
+    private readonly SharedProjectsGate? _sharedGate;
 
     public ProjectManager(IConfiguration config, UserStore users, AppSettingsService appSettings,
-        Execution.SandboxManager? sandbox = null, UserHomeResolver? homes = null)
+        Execution.SandboxManager? sandbox = null, UserHomeResolver? homes = null,
+        SharedProjectsGate? sharedGate = null)
     {
         _users = users;
+        _sharedGate = sharedGate;
         _sandbox = sandbox;
         _homes = homes ?? UserHomeResolver.WithoutOverrides(appSettings, sandbox);
         _storePath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
@@ -69,6 +73,18 @@ public class ProjectManager : IProjectManager
 
     public IReadOnlyCollection<Project> GetByOwner(string userId) =>
         _projects.Values.Where(p => p.OwnerId == userId).ToList();
+
+    // Видимость: свои проекты и проекты, где человек участник (Editor/Reader). Участник видит
+    // общий проект только при включённых рубильнике и флаге (SharedProjectsGate); без членства
+    // чужое не отдаётся. Места «владение» (каскады, ключи хранилищ) остаются на GetByOwner.
+    public IReadOnlyCollection<Project> GetAccessible(string userId)
+    {
+        var sharedOn = _sharedGate?.IsOn(userId) == true;
+        return _projects.Values
+            .Where(p => p.OwnerId == userId
+                || (sharedOn && Services.Access.ProjectAccess.Check(p, userId) is not null))
+            .ToList();
+    }
 
     public Project? GetById(string id) => _projects.GetValueOrDefault(id);
 

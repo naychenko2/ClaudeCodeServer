@@ -146,7 +146,9 @@ public class TasksController(
     FeatureSummaryService? summary = null,
     // Очередь фич (волна 6): пересчёт очереди проекта после постановки/снятия удержания.
     // null — подсистема Tasks выключена (тот же гейт, что у features) → пересчёта нет.
-    FeatureQueueService? queue = null) : ControllerBase
+    FeatureQueueService? queue = null,
+    // Лимит слотов очереди для brief.queueStartEstimate (FeatureQueuePolicy.Limit): тот же ключ, что у снятия очереди.
+    IConfiguration? config = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -880,7 +882,9 @@ public class TasksController(
         // B1b: brief — сводка состояния фичи (разрез п.6): чистая функция над теми же run/timeline/typical,
         // что пошли в stats: ни второго ProjectFull, ни второго FeatureTimeline.Build, ни второго
         // FeatureTypical.Build (разрез п.7). B2b: estimate считается над этим же typical; queue/note — null.
-        var brief = FeatureBrief.Build(run, timeline, typical, now);
+        // queueStartEstimate: набор фич проекта нужен, только когда фича сама стоит в очереди.
+        var projectRuns = run.Queue is null ? null : features!.ProjectAll(UserId, snapshot);
+        var brief = FeatureBrief.Build(run, timeline, typical, now, projectRuns, FeatureQueuePolicy.Limit(config));
         // Б-mk-b: макеты фичи (вкладка «Планы и макеты»): mockups[] + mockupsUnavailable.
         // Порядок и fail-closed — в BuildMockups (ADR-031 «Макеты фичи»).
         var (mockups, mockupsUnavailable) = await BuildMockups(run, catalog);

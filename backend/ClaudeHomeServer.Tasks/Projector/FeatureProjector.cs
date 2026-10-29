@@ -1053,7 +1053,7 @@ public sealed class FeatureProjector(TaskManager tasks)
     // Пометка остановки валидна, только если позже старта — тот же guard, что у Attention
     // (:132) и журнала (:649): после перезапуска MarkClaudeStarted сбрасывает пометку, но
     // она может не успеть сброситься; «устаревшая» пометка (раньше ClaudeStartedAt) — не остановка.
-    private static bool HasValidStopMark(TaskItem t)
+    internal static bool HasValidStopMark(TaskItem t)
         => t.ExecutorStoppedAt is not null
         && (t.ClaudeStartedAt is null || t.ExecutorStoppedAt > t.ClaudeStartedAt);
 

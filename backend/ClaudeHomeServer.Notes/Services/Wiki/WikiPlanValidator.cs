@@ -10,11 +10,13 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // в пакет (с классом и решением политики — ставит код, не модель), операции «ждущие»
 // сверх лимита, отклонённые с причиной и общие нарушения состояния.
 //
-// Порядок: форма операции → разрешение страницы → подтверждение цитаты (QuoteMatcher,
-// мера 1) → анти-петля → повтор утверждения (дедуп меры 2) → цель операции → лимиты
-// (CheckLimits ДО сборки, счётчик включает текущий элемент) → политика (S4d) →
-// черновой рендер → весь WikiGate с текстами источников. Отклонение по первой причине:
-// дальше операция не идёт.
+// Порядок: форма цепочки вверх → форма операции → разрешение страницы → подтверждение
+// цитаты (QuoteMatcher, мера 1) → анти-петля → повтор утверждения (дедуп меры 2) → цель
+// операции (кроме supersede: его цель проверяется рендером — в том состоянии, что будет
+// записано) → лимиты (CheckLimits ДО сборки, счётчик включает текущий элемент) → политика
+// (S4d) → черновой рендер → весь WikiGate с текстами источников (дословность — только для
+// карточек этого пакета, GivenOnly). Отклонение по первой причине: дальше операция не
+// идёт; внутренняя ошибка одной операции отклоняет её, а не роняет валидатор наружу.
 //
 // Текст плана и источника — недоверенный ввод модели: ничто из него не исполняется и не
 // становится путём без проверки: существующая страница разрешается только по снимку,
@@ -88,7 +90,17 @@ public static class WikiPlanValidator
             return new([], [], IndexAll(plan, $"раздел «{sectionKey ?? "—"}» не задан или не является записываемым"),
                 [.. violations, "пустой или неразобранный раздел — плана нет"]);
 
+        // Цепочку «вверх» даёт вызывающий (WikiSections.UpChain от раздела назначения).
+        // Сфер и проектов он здесь не знает, поэтому валидатор держит её форму: только
+        // spheres/* и common, без projects/*, повторов, пустых элементов и самого раздела.
+        // Невалидная цепочка отвергает весь пакет ДО снимка и дедупа: чужой путь не войдёт
+        // ни в дедуп-пул, ни в причину операции, а нарушение цепочки не утонет в общем
+        // списке без пути (ревью S6b-2, M3).
         var chain = upChain ?? [];
+        var chainError = ChainError(chain, sectionKey);
+        if (chainError is not null)
+            return new([], [], IndexAll(plan, chainError), [.. violations, "цепочка вверх не валидна — план не применяется"]);
+
         var allowed = new HashSet<string>(StringComparer.Ordinal) { sectionKey };
         allowed.UnionWith(chain);
 
@@ -216,16 +228,13 @@ public static class WikiPlanValidator
                 rejectedAt.Add(i);
                 continue;
             }
-            if (op.Op == WikiPackage.OpSupersede && FindStatement(page.Model!, op.Target!).Section is null)
-            {
-                rejected.Add(new(i, $"цель supersede не на странице «{page.Path}»: замещать нечего"));
-                rejectedAt.Add(i);
-                continue;
-            }
+            // Цель supersede здесь НЕ ищется: замещаемое утверждение проверяется рендером —
+            // в том состоянии, которое будет записано (после предыдущих принятых операций).
+            // Проверка по исходному снимку расходилась с рендером: план из двух правок одного
+            // факта ронял валидатор исключением (ревью S6b-2, M1).
             string? targetSection = op.Op switch
             {
                 WikiPackage.OpConflict => "Противоречия",
-                WikiPackage.OpSupersede => FindStatement(page.Model!, op.Target!).Section,
                 _ when op.Op is WikiPackage.OpAppend or WikiPackage.OpLink => "Сводка",
                 _ => null,
             };
@@ -308,9 +317,29 @@ public static class WikiPlanValidator
         {
             if (!rendered)
                 continue;
-            // Рендер читает страницу ДО замены: иначе вторая операция на той же
-            // странице теряла результат первой.
-            var draft = RenderApply(state, op, quote, card.Model!.Title);
+            // Рендер читает страницу ПОСЛЕ предыдущих принятых операций: вторая операция на
+            // той же странице видит результат первой — и цель её проверяется там же, где
+            // рендер (ревью S6b-2, M1).
+            WikiGate.Draft? draftOrNull;
+            try
+            {
+                draftOrNull = RenderApply(state, op, quote, card.Model!.Title);
+            }
+            catch (Exception)
+            {
+                // Подстраховка: план недоверен, и ни одна внутренняя ошибка одной операции
+                // не должна ронять валидатор наружу — она отклоняет свою операцию.
+                if (rejectedAt.Add(index))
+                    rejected.Add(new(index, "внутренняя ошибка обработки операции"));
+                continue;
+            }
+            if (draftOrNull is null)
+            {
+                if (rejectedAt.Add(index))
+                    rejected.Add(new(index, $"цель supersede не на странице «{op.Page}»: замещать нечего"));
+                continue;
+            }
+            var draft = draftOrNull.Value;
             state.RemoveAll(d => d.Path == op.Page);
             state.Add(draft);
             if (!touched.TryGetValue(op.Page, out var ids))
@@ -318,8 +347,11 @@ public static class WikiPlanValidator
             ids.Add(index);
         }
 
+        // Тексты источников, которые есть у этого пакета: только карточка его источника.
+        // GivenOnly — потому и проверяются только сноски на неё: чужие (принятые прошлыми
+        // ночами) сноски страницы не могут отвергнуть новую операцию (ревью S6b-2, M2).
         var sourceTexts = new Dictionary<string, string> { [card.Path] = source.Text };
-        foreach (var v in WikiGate.Check(state, sectionKey, chain, sourceTexts))
+        foreach (var v in WikiGate.Check(state, sectionKey, chain, sourceTexts, WikiGate.VerbatimScope.GivenOnly))
         {
             var path = v.Split(':', 2)[0];
             if (touched.TryGetValue(path, out var ids))
@@ -466,6 +498,27 @@ public static class WikiPlanValidator
         return new(null, -1);
     }
 
+    // Форма цепочки «вверх» (ADR-036, решение 4): только сферы и общее, без проектов,
+    // повторов, пустых элементов и самого раздела назначения. Содержательную цепочку
+    // (какая сфера у какого проекта) знает вызывающий — WikiSections.UpChain; здесь
+    // держится только то, что не даёт чужому пути войти в снимок и в причину операции.
+    private static string? ChainError(IReadOnlyList<string> chain, string sectionKey)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var key in chain)
+        {
+            if (string.IsNullOrEmpty(key))
+                return "цепочка вверх: пустой элемент цепочки";
+            if (key == sectionKey)
+                return $"цепочка вверх: '{key}' — это сам раздел назначения, вверх по цепочке он не идёт";
+            if (key != WikiSections.Common && !WikiSections.TrySphereId(key, out _))
+                return $"цепочка вверх: '{key}' недопустима: вверх идут только spheres/* и {WikiSections.Common}, без projects/*";
+            if (!seen.Add(key))
+                return $"цепочка вверх: '{key}' повторён";
+        }
+        return null;
+    }
+
     private static List<WikiDedup.ExistingPage> DedupPool(List<Snap> pages, HashSet<string> allowed) =>
         pages.Where(p => p.Model is not null && allowed.Contains(p.Section))
              .Select(p => new WikiDedup.ExistingPage(p.Path, p.Model!))
@@ -476,7 +529,10 @@ public static class WikiPlanValidator
     // в её секции; create → новая страница с шапкой-заглушкой (полные поля решает
     // применение). Сноска каждой добавленной строки — на карточку источника, с той самой
     // цитатой, что подтверждена мерой 1: утверждение принятого плана без сноски невозможн.
-    private static WikiGate.Draft RenderApply(List<WikiGate.Draft> state, WikiPackage.Operation op, string quote, string cardTitle)
+    /// <summary>Черновой рендер операции в состояние. null — цель supersede не найдена в
+    /// этом состоянии страницы (её уже заместила предыдущая принятая операция): операции
+    /// нечего замещать, вызывающий отклоняет её с причиной.</summary>
+    private static WikiGate.Draft? RenderApply(List<WikiGate.Draft> state, WikiPackage.Operation op, string quote, string cardTitle)
     {
         // Черновой рендер: страница уже в состоянии или её нет (create) — для create
         // страница строится заново; неразобранная существующая сюда не доходит, она
@@ -495,10 +551,16 @@ public static class WikiPlanValidator
             };
         }
 
+        // Цель supersede ищется здесь и один раз — в состоянии после предыдущих принятых
+        // операций: та же точка, куда смотрит запись (ревью S6b-2, M1).
+        var hit = op.Op == WikiPackage.OpSupersede ? FindStatement(page, op.Target) : default;
+        if (op.Op == WikiPackage.OpSupersede && hit.Section is null)
+            return null;
+
         var sectionName = op.Op switch
         {
             WikiPackage.OpConflict => "Противоречия",
-            WikiPackage.OpSupersede => FindStatement(page, op.Target).Section!,
+            WikiPackage.OpSupersede => hit.Section!,
             _ => "Сводка",
         };
         var sections = page.Sections
@@ -509,7 +571,7 @@ public static class WikiPlanValidator
         var link = op.Op == WikiPackage.OpLink ? $" [[{op.Target}]]" : "";
         var line = $"{op.Text}{link} [^s{page.Footnotes.Count + 1}]";
         if (op.Op == WikiPackage.OpSupersede)
-            sections[targetIdx].Lines[FindStatement(page, op.Target).Line] = line;
+            sections[targetIdx].Lines[hit.Line] = line;
         else
             sections[targetIdx].Lines.Add(line);
 

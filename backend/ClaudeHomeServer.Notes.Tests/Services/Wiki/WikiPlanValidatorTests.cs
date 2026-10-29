@@ -14,6 +14,14 @@ public class WikiPlanValidatorTests
     private const string CardPath = "Проекты/p1/Карточка-чата.md";
     private const string PagePath = "Проекты/p1/Сущность.md";
 
+    // Карточка прошлой ночи: страница накоплена ею, текста этого источника у текущего
+    // пакета нет. Цитата её сноски намеренно НЕ совпадает с SourceText: иначе базовые
+    // тесты зелёные случайно, а живой случай (вторая ночь на той же странице) падает
+    // (ревью S6b-2, M2).
+    private const string ForeignCardTitle = "Карточка прежнего чата";
+    private const string ForeignCardPath = "Проекты/p1/Карточка-прежнего-чата.md";
+    private const string ForeignQuote = "Собрано в прошлом чате: план был остаться на другой системе";
+
     private const string SourceText =
         "Решение: перенести сборку на Linux. Прежний план был остаться на Windows.";
 
@@ -47,6 +55,22 @@ public class WikiPlanValidatorTests
         # {{CardTitle}}
         """;
 
+    private static readonly string ForeignCardFile = $$"""
+        ---
+        type: source
+        origin: session
+        ref: session:s0#m1-4
+        hash: 0000000000000000000000000000000000000000000000000000000000000000
+        captured: 2026-10-26
+        aliases: []
+        owns: []
+        sources: []
+        status: active
+        ---
+
+        # {{ForeignCardTitle}}
+        """;
+
     private static readonly string PageFile = $$"""
         ---
         type: topic
@@ -67,7 +91,7 @@ public class WikiPlanValidatorTests
 
         ## История
 
-        [^s1]: [[{{CardTitle}}]] — «Прежний план был остаться на Windows»
+        [^s1]: [[{{ForeignCardTitle}}]] — «{{ForeignQuote}}»
         """;
 
     private static WikiPlanValidator.PlanOp Op(string op, string page, int claim, string? target = null) =>
@@ -77,8 +101,10 @@ public class WikiPlanValidatorTests
 
     private static IReadOnlyList<WikiPlanValidator.Claim> Claims(params WikiPlanValidator.Claim[] c) => [.. c];
 
+    // Снимок «второй ночи»: карточка текущего чата, карточка прошлой ночи и накопленная
+    // страница, чья сноска ведёт чужую карточку.
     private static IReadOnlyList<WikiGate.Draft> Snapshot() =>
-        [new(CardPath, CardFile), new(PagePath, PageFile)];
+        [new(CardPath, CardFile), new(ForeignCardPath, ForeignCardFile), new(PagePath, PageFile)];
 
     private static WikiPlanValidator.Result Run(
         WikiPlanValidator.Plan? plan,
@@ -279,5 +305,96 @@ public class WikiPlanValidatorTests
         r.Accepted.Should().ContainSingle().Which.Decision.Should().Be(WikiPackage.DecisionAuto);
         // Чужой раздел не вошёл ни в дедуп, ни в состояние: нарушений по нему нет.
         r.Violations.Should().BeEmpty();
+    }
+
+    // ─── M1 (ревью S6b-2): проверка цели и рендер — в одном состоянии ──────────
+
+    [Fact]
+    public void Validate_ДваSupersedeНаОднуЦель_ВтораяОтклонена_ИсключенияНаружуНет()
+    {
+        // Штатный план модели: две правки одного факта. После первой операции цель уже не
+        // на странице — вторая отклоняется как операция без цели, а не роняет валидатор
+        // исключением: и проверка цели, и рендер видят то состояние, что будет записан.
+        var target = "Прежний план был остаться на Windows";
+
+        var r = Run(Plan(
+            Op(WikiPackage.OpSupersede, "Сущность", 0, target),
+            Op(WikiPackage.OpSupersede, "Сущность", 0, target)));
+
+        r.Accepted.Should().ContainSingle(op => op.Op == WikiPackage.OpSupersede);
+        r.Rejected.Should().ContainSingle().Which.Reason.Should().Contain("цель supersede не на странице");
+        r.Waiting.Should().BeEmpty();
+    }
+
+    // ─── M2 (ревью S6b-2): дословность — только для сносок этого пакета ───────
+
+    [Fact]
+    public void Validate_СноскаПрошлойНочиНаЧужуюКарточку_НовуюОперациюНеОтвергает()
+    {
+        // Страница накоплена прошлой ночью: её сноска ведёт карточку другого источника,
+        // текста которого у этого пакета нет. Новая операция с цитатой, подтверждённой по
+        // своему источнику, принимается: чужая сноска не может её отвергнуть.
+        var r = Run(Plan(Op(WikiPackage.OpAppend, "Сущность", 0)));
+
+        r.Accepted.Should().HaveCount(1).And.ContainSingle(op =>
+            op.Op == WikiPackage.OpAppend && op.Text == GoodClaim.Text);
+        r.Rejected.Should().BeEmpty();
+        r.Violations.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Validate_СноскаНаКарточкуЭтогоПакетаСЦитатойНеИзИсточника_ОтклоняетсяГейтом()
+    {
+        // Контраст: текст этой карточки у пакета ЕСТЬ — её сноска проверяется по-прежнему,
+        // даже если добавлена не этим пакетом. GivenOnly не отменяет дословность, он
+        // ограничивает её теми источниками, чей текст вызывающий дал.
+        var page = PageFile.Replace(
+            $"[^s1]: [[{ForeignCardTitle}]] — «{ForeignQuote}»",
+            $"[^s1]: [[{CardTitle}]] — «{ForeignQuote}»");
+
+        var r = WikiPlanValidator.Validate(
+            Plan(Op(WikiPackage.OpAppend, "Сущность", 0)),
+            Claims(GoodClaim), Src, Section, [WikiSections.Common],
+            [new(CardPath, CardFile), new(PagePath, page)], new());
+
+        r.Accepted.Should().BeEmpty();
+        r.Rejected.Should().ContainSingle().Which.Reason.Should().Contain("отсутствует в тексте источника");
+    }
+
+    // ─── M3 (ревью S6b-2): цепочка вверх валидируется до снимка и дедупа ──────
+
+    [Fact]
+    public void Validate_ЧужойПроектВЦепочкеВверх_ПакетОтвержен_ЧужойПутьВПричинуНеУходит()
+    {
+        // Цепочку даёт вызывающий (WikiSections.UpChain): «projects/q2» в ней — ошибка
+        // вызывающего, и она отвергает весь пакет ДО дедупа. Снимок с чужой страницей того
+        // же заголовка не успевает попасть ни в дедуп-пул, ни в причину операции.
+        var foreign = new WikiGate.Draft("Проекты/q2/Знание-новое.md", PageFile.Replace("# Сущность", "# Знание-новое"));
+
+        var r = WikiPlanValidator.Validate(
+            Plan(Op(WikiPackage.OpCreate, "Знание-новое", 0)),
+            Claims(GoodClaim), Src, Section, ["projects/q2"],
+            [.. Snapshot(), foreign], new());
+
+        r.Accepted.Should().BeEmpty();
+        r.Rejected.Should().ContainSingle().Which.Reason.Should().Contain("цепочка вверх");
+        r.Rejected.Should().NotContain(i => i.Reason.Contains("Проекты/q2"));
+        r.Violations.Should().Contain(v => v.Contains("цепочка вверх"));
+    }
+
+    [Fact]
+    public void Validate_ПовторИлиСамРазделВЦепочке_ПакетОтвергнут_ДедупНеСтроится()
+    {
+        var repeated = WikiPlanValidator.Validate(
+            Plan(Op(WikiPackage.OpAppend, "Сущность", 0)), Claims(GoodClaim), Src, Section,
+            [WikiSections.Common, WikiSections.Common], Snapshot(), new());
+        repeated.Accepted.Should().BeEmpty();
+        repeated.Rejected.Should().ContainSingle().Which.Reason.Should().Contain("повтор");
+
+        var self = WikiPlanValidator.Validate(
+            Plan(Op(WikiPackage.OpAppend, "Сущность", 0)), Claims(GoodClaim), Src, Section,
+            [Section], Snapshot(), new());
+        self.Accepted.Should().BeEmpty();
+        self.Rejected.Should().ContainSingle().Which.Reason.Should().Contain("цепочка вверх");
     }
 }

@@ -9,9 +9,11 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // гейт сам их разбирает и проверяет правила. Нарушение — строка с причиной для
 // человека и для Хранителя: «на ремонт модели даётся одна попытка с перечнем нарушений».
 // Дословность цитаты проверяется, когда вызывающий дал тексты источников (sourceTexts,
-// захват — S6h/S6j): каждая сноска сверяется с текстом своей карточки через QuoteMatcher
+// захват — S6h/S6j): сноска сверяется с текстом своей карточки через QuoteMatcher
 // (ADR-035, §12г мера 1). При sourceTexts == null правило не выполняется — это режим
-// по умолчанию до слоя захвата, а не «пройдено молча».
+// по умолчанию до слоя захвата, а не «пройдено молча». Область правила — verbatimScope:
+// All (по умолчанию) требует текст для каждой сноски; GivenOnly проверяет только сноски
+// на карточки, чей текст дан (ревью S6b-2, M2).
 public static class WikiGate
 {
     // Закрытый перечень origin карточки источника (ADR-035, решение 3).
@@ -33,6 +35,20 @@ public static class WikiGate
     /// <summary>Страница состояния: путь относительно pages/ и текст файла.</summary>
     public readonly record struct Draft(string Path, string Content);
 
+    /// <summary>Область правила дословности (применяется, когда sourceTexts задан).</summary>
+    public enum VerbatimScope
+    {
+        /// <summary>Каждая сноска требует текст своей карточки: нет текста — нарушение
+        /// (fail-closed). Поведение по умолчанию.</summary>
+        All,
+        /// <summary>Только сноски на карточки, чей текст есть в словаре. Сноска на карточку
+        /// вне словаря не проверяется и нарушения не даёт: вызывающий знает тексты своих
+        /// источников и не может чужой (принятой ранее) сноской отвергнуть новую запись —
+        /// её дословность проверялась, когда её добавляли. Сноски на карточки из словаря
+        /// проверяются как в All (ревью S6b-2, M2).</summary>
+        GivenOnly,
+    }
+
     /// <summary>Проверяет состояние после изменения перед записью в раздел sectionKey.
     /// Контракт state: страницы раздела sectionKey плюс страницы разделов цепочки upChain;
     /// путь, не принадлежащий вики, и страница вне этих разделов — нарушение (fail-closed).
@@ -41,13 +57,15 @@ public static class WikiGate
     /// допустимы только spheres/* и common, без повторов. Пустой список — нарушений нет.
     /// sourceTexts — тексты источников по пути карточки (ключ — Draft.Path карточки):
     /// правило дословности (ADR-035, §12г мера 1). null — правило не проверяется (захват
-    /// источников — S6h/S6j); задан — каждая сноска разрешённой карточки требует её текста,
-    /// цитата без дословного вхождения в тексте — нарушение.</summary>
+    /// источников — S6h/S6j); задан — сноска карточки вне словаря даёт нарушение только в
+    /// All, цитата без дословного вхождения в тексте своей карточки — нарушение всегда.
+    /// verbatimScope — область этого правила (см. VerbatimScope); по умолчанию All.</summary>
     public static IReadOnlyList<string> Check(
         IReadOnlyList<Draft> state,
         string sectionKey,
         IReadOnlyList<string> rawUpChain,
-        IReadOnlyDictionary<string, string>? sourceTexts = null)
+        IReadOnlyDictionary<string, string>? sourceTexts = null,
+        VerbatimScope verbatimScope = VerbatimScope.All)
     {
         var violations = new List<string>();
         var upChain = ValidateUpChain(rawUpChain, violations);
@@ -106,7 +124,7 @@ public static class WikiGate
                 violations.Add($"{draft.Path}: страница раздела '{section}' вне раздела '{sectionKey}' и его цепочки вверх");
         }
 
-        CheckPageForm(target, sectionKey, upChain, allSections, sourceTexts, violations);
+        CheckPageForm(target, sectionKey, upChain, allSections, sourceTexts, verbatimScope, violations);
         CheckUniqueness(target, context, violations);
         CheckLinks(target, sectionKey, upChain, allSections, violations);
         return violations;
@@ -137,6 +155,7 @@ public static class WikiGate
         IReadOnlyList<string> upChain,
         List<(string Section, WikiPage Page, string Path)> allSections,
         IReadOnlyDictionary<string, string>? sourceTexts,
+        VerbatimScope verbatimScope,
         List<string> violations)
     {
         var reach = new List<string> { sectionKey };
@@ -195,9 +214,14 @@ public static class WikiGate
                     // источника с точностью до пробелов, кавычек и разметки (QuoteMatcher).
                     // Два вхождения в источнике допустимы — важно наличие, не единственность.
                     // Нет текста карточки (ключа нет, или значение null — так отдаёт
-                    // словарь) → не подтвердить → нарушение (fail-closed), а не исключение.
+                    // словарь): в All — не подтвердить → нарушение (fail-closed); в
+                    // GivenOnly — этой карточки здесь нет и быть не может: сноска, принятая
+                    // раньше по своему источнику, не отвергает новую запись (ревью S6b-2, M2).
                     if (!sourceTexts.TryGetValue(card.Value.Path, out var sourceText) || sourceText is null)
-                        violations.Add($"{draft.Path}: сноска s{fi + 1} на '[[{footnote.Target.Text}]]': нет текста источника карточки — дословность не подтвердить");
+                    {
+                        if (verbatimScope == VerbatimScope.All)
+                            violations.Add($"{draft.Path}: сноска s{fi + 1} на '[[{footnote.Target.Text}]]': нет текста источника карточки — дословность не подтвердить");
+                    }
                     else if (!QuoteMatcher.ContainsVerbatim(sourceText, footnote.Quote))
                         violations.Add($"{draft.Path}: цитата сноски s{fi + 1} '[[{footnote.Target.Text}]]' отсутствует в тексте источника дословно");
                 }

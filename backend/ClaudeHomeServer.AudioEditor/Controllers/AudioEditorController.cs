@@ -69,7 +69,7 @@ public class AudioEditorController(
 
     [HttpGet("sessions/{sessionId}/threads")]
     public IActionResult Threads(string projectId, string sessionId) =>
-        ChatGate(projectId, sessionId, out _, out var denied) ? ThreadsIn(sessionId) : denied;
+        ChatGate(projectId, sessionId, out var scope, out var denied) ? ThreadsIn(scope, sessionId) : denied;
 
     [HttpPost("sessions/{sessionId}/threads")]
     public async Task<IActionResult> Open(string projectId, string sessionId, [FromBody] AudioThreadOpenRequest req,
@@ -134,7 +134,7 @@ public class AudioEditorController(
         if (mode is not (AudioProjectSaver.NextVersion or AudioProjectSaver.As))
             return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, $"Неизвестный режим сохранения «{mode}»");
 
-        var thread = _threads.Store.Get(UserId, sessionId).Threads.FirstOrDefault(t => t.Id == threadId);
+        var thread = _threads.Store.Get(Owner(scope), sessionId).Threads.FirstOrDefault(t => t.Id == threadId);
         if (thread is null) return ThreadNotFound();
         var version = string.IsNullOrWhiteSpace(req.VersionId) ? thread.CurrentVersion : thread.Version(req.VersionId.Trim());
         if (version is null) return VersionNotFound();
@@ -144,7 +144,7 @@ public class AudioEditorController(
         var items = new List<AudioProjectSaver.Item>();
         foreach (var file in version.Files)
         {
-            if (AudioVersionFiles.Resolve(_workspace, UserId, scope, version, file) is not { } path || !System.IO.File.Exists(path))
+            if (AudioVersionFiles.Resolve(_workspace, Owner(scope), scope, version, file) is not { } path || !System.IO.File.Exists(path))
                 return Error(StatusCodes.Status404NotFound, AudioEditErrorCodes.FileNotFound,
                     "Файлы версии больше не найдены — рабочая папка очищена");
             items.Add(new AudioProjectSaver.Item(file.Role, path));
@@ -159,7 +159,7 @@ public class AudioEditorController(
         // Новые файлы — обычная запись в проект: синк знаний и ватчеры узнают о них сразу
         foreach (var rel in result.Files) files?.NotifyMutated(project.RootPath, rel, FileMutationKind.Create);
         // Нить помнит, что звук уже в проекте; версия из одних стемов звука не даёт — нить остаётся при своём
-        await _threads.OnSavedAsync(UserId, scope.Key, sessionId, threadId, result.Path,
+        await _threads.OnSavedAsync(Owner(scope), scope.Key, sessionId, threadId, result.Path,
             result.HasAudio ? null : result.Name);
         return Ok(result);
     }

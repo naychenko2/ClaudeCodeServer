@@ -353,10 +353,12 @@ public class WikiApplyCheckTests : IDisposable
     [Fact]
     public async Task ДваПараллельныхПримененияОдногоПакета_РовноОдноДоходитДоПроверок_ВтороеОтказаноПоСтатусу()
     {
-        // Окно гонки — сама заявка: чтение и запись пакета из 200 операций занимают
-        // миллисекунды, два старта от барьера пересекаются не случайно (паттерн S4a).
-        // Мутация «без блокировки» (убрать Transition-заявку, проверять статус карточки):
-        // оба вызова доходят до проверок — Count(Ready)==2, тест красный стабильно.
+        // Окно гонки — чтение с диска и заявка: чтение и запись пакета из 200 операций
+        // занимают миллисекунды, два старта от барьера пересекаются не случайно (паттерн S4a).
+        // Проигравший отказан по дисковому состоянию: «applying» уже занял первый — это
+        // CodeStatus (прочитал после его записи) или CodeClaim (Transition под блоком).
+        // Мутация «без заявки» (убрать Transition, проверять статус карточки): оба вызова
+        // доходят до проверок — Count(Ready)==2, тест красный стабильно.
         await WriteCardAndPage();
         var facts = Enumerable.Range(0, 200).Select(i => $"Факт {i:D3}: сборка контейнера прошла").ToArray();
         var pkg = CreateAccepted([.. facts.Select(t => Op(WikiPackage.OpAppend, PagePath, t))]);
@@ -373,7 +375,8 @@ public class WikiApplyCheckTests : IDisposable
         var r1 = await first.WaitAsync(TimeSpan.FromSeconds(30));
         var r2 = await second.WaitAsync(TimeSpan.FromSeconds(30));
         new[] { r1.Ready, r2.Ready }.Count(x => x).Should().Be(1, "заявка под блоком id: ровно один вызов доходит до проверок");
-        (r1.Ready ? r2 : r1).Code.Should().Be(WikiApplyService.CodeClaim);
+        new[] { WikiApplyService.CodeClaim, WikiApplyService.CodeStatus }
+            .Should().Contain((r1.Ready ? r2 : r1).Code, "проигравший гонку отказан по дисковому состоянию");
         ReadStatus(pkg.Id).Should().Be(WikiPackage.StatusApplying, "пакет занят одним применением, а не применён дважды");
     }
 
@@ -430,5 +433,68 @@ public class WikiApplyCheckTests : IDisposable
         var r = await _sut.ApplyAsync(User, proposed, Ctx);
         r.Code.Should().Be(WikiApplyService.CodeStatus);
         ReadStatus(proposed.Id).Should().Be(WikiPackage.StatusChecking);
+    }
+
+    // ─── 7. Гейт судит по дисковой копии, не по карточке вызывающего (ревью S4b-1, MAJOR 1) ───
+
+    [Fact]
+    public async Task ДисковыйProposedСКарточкойAccepted_Отказ_СпорнаяОперацияНеВРендее_СтатусНеТронут()
+    {
+        // Пакет на диске — «proposed», спорная операция без решения человека. Вызывающий
+        // принёс устаревшую карточку: Status=accepted, HumanDecision=accepted. Гейт обязан
+        // судить по диску: «proposed» на диске → отказ до заявки, спорная операция не
+        // попадает ни в рендер, ни на диск, статус пакета не двигается.
+        // Мутация «брать карточку аргумента» (status = package.Status вместо disk.Status):
+        // заявка проходит по таблице (на диске proposed→applying разрешён), HumanDecision
+        // из карточки рендерит спорную — r.Ready.Should().BeFalse() краснеет.
+        await WriteCardAndPage();
+        var pkg = new WikiPackage
+        {
+            Id = WikiPackageStore.NewId(),
+            Section = Section,
+            Sources = [new WikiPackage.SourceRef("session", "chat-1")],
+            Operations = [Op(WikiPackage.OpAppend, PagePath, "Решение: перенести сборку на Linux", decision: WikiPackage.DecisionInbox)],
+            Status = WikiPackage.StatusChecking,
+        };
+        WikiPackageStore.Create(Root, pkg).Ok.Should().BeTrue();
+        WikiPackageStore.Transition(Root, pkg.Id, WikiPackage.StatusProposed).Ok.Should().BeTrue();
+        var staleCopy = pkg with
+        {
+            Status = WikiPackage.StatusAccepted,
+            Operations = [pkg.Operations[0] with { HumanDecision = WikiPackage.HumanAccepted }],
+        };
+        var before = SnapshotPages();
+
+        var r = await _sut.ApplyAsync(User, staleCopy, Ctx);
+
+        r.Ready.Should().BeFalse();
+        r.Code.Should().Be(WikiApplyService.CodeStatus);
+        r.Reason.Should().Contain("не принят к применению");
+        r.Rendered.Should().BeEmpty("спорная операция не попала в рендер");
+        SnapshotPages().Should().Equal(before, "отказ до заявки не трогает файлов раздела");
+        ReadStatus(pkg.Id).Should().Be(WikiPackage.StatusProposed, "отказ по дисковому статусу не двигает его");
+    }
+
+    // ─── 8. Сбой под блоком раздела — apply_failed с причиной, не исключение наружу (MAJOR 2) ───
+
+    [Fact]
+    public async Task НечитаемыйФайлСтраницы_ApplyFailedСПричиной_ПакетНеОстаётсяВApplying()
+    {
+        // Файл страницы есть, но его байты прочитать нельзя — сбой внутри проверок
+        // (File.ReadAllBytes в сверке с манифестом). Без обёртки исключение ушло бы
+        // наружу, и пакет навсегда остался бы в «applying».
+        // Мутация «снять try/catch» в PrepareUnderLock: ApplyAsync бросает — тест красный.
+        await WriteCardAndPage();
+        var pkg = CreateAccepted(Op(WikiPackage.OpAppend, PagePath, "Контенер собран на второй машине"));
+        var pageFull = PageFull(PagePath);
+        using (var gate = new FileStream(pageFull, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            var r = await _sut.ApplyAsync(User, pkg, Ctx);
+
+            r.Ready.Should().BeFalse();
+            r.Code.Should().Be(WikiApplyService.CodeInternal);
+            r.Reason.Should().NotBeNullOrWhiteSpace("причина сбоя — в тексте отказа");
+        }
+        ReadStatus(pkg.Id).Should().Be(WikiPackage.StatusApplyFailed, "сбой проверки не оставляет пакет в «applying»");
     }
 }

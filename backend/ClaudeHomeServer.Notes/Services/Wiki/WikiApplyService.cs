@@ -10,8 +10,12 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // второй отказан по состоянию на диске, а не по переданной карточке.
 //
 // Порядок:
-// 1. Заявка пакета: accepted | partially_accepted → applying через Transition (блок пакета):
-//    две параллельные заявки одного пакета дают ровно один переход.
+// 1. Чтение пакета с диска под его id (TryRead) и заявка: accepted | partially_accepted →
+//    applying через Transition (блок пакета): две параллельные заявки одного пакета дают
+//    ровно один переход. Гейт и рендер судят по ДИСКОВОЙ копии (Status, Operations,
+//    HumanDecision) — аргумент метода несёт только идентификатор (ревью S4b-1, MAJOR 1):
+//    устаревшая карточка вызывающего не может обойти ни статус на диске («proposed» на
+//    диске → отказ), ни решение человека по спорной операции.
 // 2. Блокировка раздела через Хранителя (тот же замок, что у записи страницы; своего второго
 //    блока того же ключа в потоке нет — иначе зависание) и под ней: модель мимо кэша
 //    (BuildFresh, шаг 1 решения 4), сверка манифеста раздела с диском по sha256 БАЙТОВ
@@ -44,6 +48,9 @@ public sealed class WikiApplyService
     public const string CodeDrift = "wiki_apply_drift";
     public const string CodeStale = "wiki_apply_stale";
     public const string CodeGate = "wiki_apply_gate";
+    // Внутренний сбой проверки (ФС, чтение файла, неожиданный вход): пакет ведётся в
+    // «apply_failed» с текстом сбоя — исключение наружу не выходит (ревью S4b-1, MAJOR 2).
+    public const string CodeInternal = "wiki_apply_internal";
 
     private readonly NotesService _notes;
     private readonly WikiKeeper _keeper;
@@ -75,23 +82,36 @@ public sealed class WikiApplyService
         IReadOnlyList<string> Violations,
         IReadOnlyList<WikiGate.Draft> Rendered);
 
-    /// <summary>Применить пакет. В этом шаге (S4b-1) доходит до шага 3 решения 4: проверки
+    /// <summary>Применить пакет по его идентификатору: состояние (Status, Operations,
+    /// HumanDecision) читается с диска под id, карточка аргумента несёт только id
+    /// (ревью S4b-1, MAJOR 1). В этом шаге (S4b-1) доходит до шага 3 решения 4: проверки
     /// и рендер в памяти; запись (прообразы, файлы, «applied») — S4b-2.</summary>
     public Task<PrepareResult> ApplyAsync(string ownerId, WikiPackage? package, ApplyContext? context = null) =>
         PrepareAsync(ownerId, package, context);
 
     internal async Task<PrepareResult> PrepareAsync(string ownerId, WikiPackage? package, ApplyContext? context)
     {
-        // Fail-closed входа: null и кривой пакет — отказ с причиной, не NRE и не исключение (уроки S4a/S6b-2).
+        // Fail-closed входа: null и пустой владелец — отказ с причиной, не NRE и не исключение
+        // (уроки S4a/S6b-2). Форма пакета проверяется не по карточке аргумента: дальше
+        // работает только дисковая копия, её форма — у TryRead (ревью S4b-1, MAJOR 1).
         if (package is null)
             return Fail(CodeShape, "пакет null");
-        var shape = WikiPackage.ShapeErrors(package);
-        if (shape.Count > 0)
-            return Fail(CodeShape, shape[0]);
         if (string.IsNullOrWhiteSpace(ownerId))
             return Fail(CodeShape, "владелец пустой");
+        if (!WikiPaths.IsInitialized(_dataDir, ownerId))
+            return Fail(CodeOff, "вики этого владельца не заведена");
 
-        var status = package.Status;
+        var root = WikiPaths.Root(_dataDir, ownerId);
+        var read = WikiPackageStore.TryRead(root, package.Id);
+        if (read.State == WikiPackageFileState.Missing)
+            return Fail(CodeClaim, "пакета нет на диске: применять нечего");
+        if (read.State == WikiPackageFileState.Invalid)
+            return Fail(CodeShape, "файл пакета не читается как пакет v:1");
+        var disk = read.Package!;
+
+        // Статусный гейт — по дисковому состоянию, не по карточке вызывающего: «proposed»
+        // на диске — отказ, решение человека по спорным операциям ещё не вынесено.
+        var status = disk.Status;
         if (!WikiPackage.IsOpen(status))
             return Fail(CodeStatus, $"пакет в конечном статусе «{status}»: применить его дважды нельзя");
         if (status is not (WikiPackage.StatusAccepted or WikiPackage.StatusPartiallyAccepted))
@@ -102,24 +122,39 @@ public sealed class WikiApplyService
             return Fail(CodeSource, "карточка источника не задана: сноскам рендера нечем назвать цель");
         if (context.SourceText is not { Length: > 0 })
             return Fail(CodeSource, "текст источника не задан: цитату вывести не из чего");
-        if (!WikiPaths.IsInitialized(_dataDir, ownerId))
-            return Fail(CodeOff, "вики этого владельца не заведена");
 
-        var root = WikiPaths.Root(_dataDir, ownerId);
-        // Заявка пакета — единственная дверь в «applying»: Transition читает состояние на
-        // диске под блоком id. Два параллельных вызова одного пакета: первый пишет «applying»,
+        // Заявка пакета — единственная дверь в «applying»: Transition перечитывает состояние
+        // под блоком id. Два параллельных вызова одного пакета: первый пишет «applying»,
         // второй под тем же блоком видит его и отказан — двойного перехода нет.
-        var claim = WikiPackageStore.Transition(root, package.Id, WikiPackage.StatusApplying);
+        var claim = WikiPackageStore.Transition(root, disk.Id, WikiPackage.StatusApplying);
         if (!claim.Ok)
             return Fail(CodeClaim, claim.Reason ?? "переход в «applying» не удался");
 
         // Блокировка раздела — та же, что у записи страницы (решение 10): применение не берёт
         // второй блокировки того же ключа и не пишет под чужой правкой посреди проверки.
-        return await _keeper.WithSectionsLockedAsync(ownerId, [package.Section],
-            () => Task.FromResult(PrepareUnderLock(ownerId, root, package, context!)));
+        // Работаем с дисковой копией: её Operations и HumanDecision — те, что на диске.
+        return await _keeper.WithSectionsLockedAsync(ownerId, [disk.Section],
+            () => Task.FromResult(PrepareUnderLock(ownerId, root, disk, context!)));
     }
 
+    // Тело проверки под блоком раздела обёрнуто: файловые чтения (манифест, байты страниц,
+    // обход каталога) и сборка модели могут бросить — наружу исключение не уходит: пакет
+    // ведётся в «apply_failed» с текстом сбоя, а не остаётся в «applying» навсегда
+    // (ревью S4b-1, MAJOR 2).
     private PrepareResult PrepareUnderLock(string ownerId, string root, WikiPackage package, ApplyContext context)
+    {
+        try
+        {
+            return PrepareChecked(ownerId, root, package, context);
+        }
+        catch (Exception ex)
+        {
+            return FailApply(root, package.Id, CodeInternal,
+                $"внутренний сбой проверки применения: {ex.Message}");
+        }
+    }
+
+    private PrepareResult PrepareChecked(string ownerId, string root, WikiPackage package, ApplyContext context)
     {
         var section = package.Section;
 
@@ -297,8 +332,13 @@ public sealed class WikiApplyService
     // что у всех переходов); причина — текст для человека («Входящие», журнал).
     private static PrepareResult FailApply(string root, string id, string code, string reason, IReadOnlyList<string>? violations = null)
     {
-        WikiPackageStore.Transition(root, id, WikiPackage.StatusApplyFailed, reason);
-        return new PrepareResult(false, code, reason, violations ?? [reason], []);
+        var transition = WikiPackageStore.Transition(root, id, WikiPackage.StatusApplyFailed, reason);
+        // Минор 4 (ревью S4b-1): исход перехода — часть отказа. Если статус не сдвинулся,
+        // вызывающий обязан видеть это в причине, а не читать молча «apply_failed».
+        var resultReason = transition.Ok
+            ? reason
+            : $"{reason} (статус «apply_failed» не записан: {transition.Reason ?? transition.Code})";
+        return new PrepareResult(false, code, resultReason, violations ?? [reason], []);
     }
 
     private static PrepareResult StaleResult(string root, string id, string reason)

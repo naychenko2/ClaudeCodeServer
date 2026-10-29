@@ -2030,8 +2030,14 @@ public class SubsystemBoundaryTests
             .FirstOrDefault(a => a.GetName().Name == CoreAssemblyName);
         Assert.NotNull(asm);
 
+        // Compiler-generated типы (имя с «<» — async state-машины, лямбды, генератор
+        // [GeneratedRegex] кладёт свой помощник в namespace System.Text.RegularExpressions.Generated)
+        // — не типы вертикали, а machinery файла, и здесь тот же отказ, что в
+        // SubsystemBoundaryCoverageTests («мусорные имена» не заводят строк в таблицах):
+        // первый GeneratedRegex в Core (SecretRedactor, S6j) дал бы ложный «stray» namespace.
         var types = asm!.GetTypes()
             .Where(t => !t.IsNested && t.Namespace is not null)
+            .Where(t => !(t.Name?.Contains('<') ?? false))
             .ToArray();
         Assert.NotEmpty(types); // защита от вакуумного прохода: пустой набор зеленит что угодно
 

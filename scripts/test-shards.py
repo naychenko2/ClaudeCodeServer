@@ -235,6 +235,10 @@ def median(values):
     return v[mid] if len(v) % 2 else (v[mid - 1] + v[mid]) / 2
 
 
+def split_profiles(path):
+    return [p for p in (path or "").split(",") if p]
+
+
 def load_profile(path):
     """(секунды по классам, проект по классам, секунды Fast по классам) из JSON профиля; нет файла —
     (None, None, None). Профиль без разбивки на проходы даёт fast = None: раскладка тогда по сумме.
@@ -242,7 +246,12 @@ def load_profile(path):
     path — один файл или несколько через запятую («run1.json,run2.json,run3.json»): секунды и Fast
     класса — МЕДИАНА по профилям, где он есть. Один прогон под нагрузкой раздувает вес класса в разы
     (R3: 78 с против 6 с в покое) и ломает раскладку, медиана трёх спокойных прогонов эту помеху отсекает."""
-    files = [p for p in (path or "").split(",") if p and os.path.exists(p)]
+    requested = split_profiles(path)
+    files = [p for p in requested if os.path.exists(p)]
+    missing = [p for p in requested if p not in files]
+    if missing:
+        print(f"Предупреждение: профили не найдены: {', '.join(missing)}; "
+              f"использовано {len(files)} из {len(requested)}", file=sys.stderr)
     if not files:
         return None, None, None
     seconds, fasts, projects = {}, {}, {}
@@ -526,7 +535,7 @@ def main(argv=None):
     ap.add_argument("--results", default=os.path.join(".cc-attachments", "test-shards"), help="папка TRX для --run")
     ap.add_argument("--parallel", type=float, help=f"во сколько раз сумма длительностей шарда больше его стены "
                     f"(CI-режимы {PARALLEL:g}, локальные --run/--run-fast {LOCAL_PARALLEL:g})")
-    ap.add_argument("--timings", help="JSON профиля (test-profile.py --json), можно несколько через запятую — вес класса тогда медиана; нет файла — раскладка по хешу")
+    ap.add_argument("--timings", help="JSON профиля (test-profile.py --json), можно несколько через запятую — вес класса тогда медиана; нет файла — предупреждение, раскладка по доступным (все пропали при нескольких — exit 2; единственный — по хешу)")
     ap.add_argument("--filter", dest="extra_filter", help="дополнительный фильтр к каждому шарду (--run)")
     args = ap.parse_args(argv)
     if args.parallel is not None:
@@ -534,6 +543,11 @@ def main(argv=None):
     elif args.run or args.run_fast:
         PARALLEL = LOCAL_PARALLEL
     timings, class_projects, fast = load_profile(args.timings)
+    if timings is None and len(split_profiles(args.timings)) > 1:
+        # один отсутствующий файл — штатно (холодный кэш CI, раскладка по хешу); несколько заказанных и ни
+        # одного найденного — ошибка команды, а не отсутствие профиля
+        print("Ни один из профилей --timings не найден", file=sys.stderr)
+        return 2
 
     if args.run_fast:
         try:

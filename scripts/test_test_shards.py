@@ -204,6 +204,65 @@ class CostLayoutTests(unittest.TestCase):
             self.assertEqual({"A": 3.0, "B": 9.0}, timings)
             self.assertIsNone(fast)
 
+    def test_load_profile_пропавший_профиль_даёт_предупреждение_с_перечнем_и_числом_использованных(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            a, b = os.path.join(tmp, "a.json"), os.path.join(tmp, "b.json")
+            gone = os.path.join(tmp, "gone.json")
+            for p in (a, b):
+                with open(p, "w", encoding="utf-8") as f:
+                    json.dump({"classes": {"A": {"tests": 1, "seconds": 2.0}}}, f)
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                timings, _, _ = ts.load_profile(f"{a},{gone},{b}")
+            self.assertEqual({"A": 2.0}, timings)
+            self.assertIn(gone, err.getvalue())
+            self.assertIn("использовано 2 из 3", err.getvalue())
+            # все на месте — тишина
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                ts.load_profile(f"{a},{b}")
+            self.assertEqual("", err.getvalue())
+
+    def _main_cli(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = ts.main(list(argv))
+        return code, out.getvalue(), err.getvalue()
+
+    def test_cli_timings_все_заказанные_профили_пропали_exit_2_а_один_пропавший_не_ошибка(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lst = os.path.join(tmp, "list.txt")
+            with open(lst, "w", encoding="utf-8") as f:
+                f.write(LIST)
+            g1, g2 = os.path.join(tmp, "g1.json"), os.path.join(tmp, "g2.json")
+            code, _, err = self._main_cli("--list", lst, "--verify", "--timings", f"{g1},{g2}")
+            self.assertEqual(2, code)
+            self.assertIn("Ни один из профилей", err)
+            # холодный кэш CI: единственный профиль отсутствует — предупреждение и раскладка по хешу
+            code, _, err = self._main_cli("--list", lst, "--verify", "--timings", g1)
+            self.assertEqual(0, code)
+            self.assertIn("использовано 0 из 1", err)
+
+    def test_cli_PARALLEL_локальные_режимы_берут_LOCAL_PARALLEL_а_CI_режимы_пятёрку(self):
+        seen = {}
+        orig = (ts.PARALLEL, ts.run_fast, ts.run_shards)
+        ts.run_fast = lambda *a, **k: seen.setdefault("run_fast", ts.PARALLEL) and 0
+        ts.run_shards = lambda *a, **k: seen.setdefault("run", ts.PARALLEL) and 0
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                lst = os.path.join(tmp, "list.txt")
+                with open(lst, "w", encoding="utf-8") as f:
+                    f.write(LIST)
+                for mode, argv in (("run_fast", ["--run-fast", "x.slnx"]), ("run", ["--run", "x.csproj"])):
+                    ts.PARALLEL = 5.0
+                    self._main_cli(*argv)
+                    self.assertEqual(ts.LOCAL_PARALLEL, seen[mode], mode)
+                ts.PARALLEL = 5.0
+                self._main_cli("--list", lst, "--verify")
+                self.assertEqual(5.0, ts.PARALLEL)
+        finally:
+            ts.PARALLEL, ts.run_fast, ts.run_shards = orig
+
 
 SLNX = """<Solution>
   <Project Path="App/App.csproj" />

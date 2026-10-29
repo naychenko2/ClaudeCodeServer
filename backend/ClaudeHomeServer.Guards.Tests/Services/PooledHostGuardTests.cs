@@ -23,6 +23,7 @@ public class PooledHostGuardTests
     private static readonly HashSet<string> Exempt = ["ClaudeHomeServer.Tests.Fixtures.SharedHostPoolTests"];
 
     [Fact]
+    [Trait("Category", "Slow")]
     public void КлассВПуле_НеМеняетКонфигХоста()
     {
         // Скан общий со сторожем Host (HostScan.Solution)

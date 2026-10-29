@@ -86,6 +86,7 @@ public class AgentInstallScriptChannelTests : IDisposable
     [SkippableTheory]
     [InlineData("http://192.168.1.5", 2)]
     [InlineData("https://127.0.0.1:9", 3)]
+    [Trait("Category", "Slow")]
     public async Task Ps1_ScriptblockВОткрытомОкне_ХостЖивёт_КодВLastExitCode(string server, int expected)
     {
         var pwsh = FindOnPath("pwsh");

@@ -78,9 +78,19 @@ cd backend; dotnet test --filter "Category!=Dns"   # чистый прогон �
 (сторож `HostCategoryGuardTests` в Guards.Tests, скан собранных сборок — после правки собери
 решение), и `[Trait("Category", "Slow")]` на МЕТОДЕ без хоста, который не укладывается в
 гейт. Сторож — `scripts/test-profile.py --check` на TRX набора Fast (CI и предгейт): гейт —
-5 с, тесты 2–5 с печатаются блоком «цель доводки» без падения (стена теста под параллелью
-десятков сборок шумит на секунды, 2 с — цель, а не гейт). Slow на методе — временная мера
+5 с локально и в предгейте, тесты 2–5 с печатаются блоком «цель доводки» без падения (стена
+теста под параллелью десятков сборок шумит на секунды, 2 с — цель, а не гейт). В CI порог —
+30 с (`DURATION_GUARD_THRESHOLD` в `ci.yml`, единственное место): на 4 vCPU раннера стена
+вырастает в разы, и там сторож ловит только грубые регрессии. Slow на методе — временная мера
 до перевода ожидания на событие (паттерн выше).
+
+Навсегда в Slow — тесты, чья стоимость не в ожидании, а в самой работе: спавн внешнего
+процесса или скан всего решения. Сейчас это `RecursiveDirectoryWatcherTests`,
+`RemoteProcessRunnerDeviceAgentE2ETests`, `InotifyLeakRegressionTests`,
+`ProjectCapabilitiesGuardTests`, `LauncherProjectContextGuardTests`,
+`LocalLlmClientBoundaryTests`; сторожа `HostCategoryGuardTests` и `PooledHostGuardTests`
+(скан сборок решения); ffmpeg — `FfmpegVideoDspTests`, `VideoAssembleIsolationTests`,
+`FilmAssemblyAcceptanceTests`; PowerShell — `AgentInstallScriptChannelTests`.
 
 На итеративную правку гоняй только релевантный набор:
 `dotnet test --filter "FullyQualifiedName~SessionManagerTests"`. Медленные категории запускай

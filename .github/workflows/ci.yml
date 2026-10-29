@@ -144,6 +144,11 @@ jobs:
       # в скриптах — FAST_FILTER в scripts/test-profile.py, в предгейте — Pregate:Checks.
       FAST: "Category!=Host&Category!=Slow&Category!=Integration&Category!=Node&Category!=Bench"
       NOT_FAST: "(Category=Host|Category=Slow|Category=Integration|Category=Bench)&Category!=Node"
+      # Порог сторожа длительности в CI — единственное место. Стена теста на 4 vCPU раннера
+      # под параллелью шумит в разы (сторож Host локально 1,9 с, здесь ~10 с), поэтому CI ловит
+      # только грубые регрессии; гейт 5 с (CHECK_THRESHOLD в scripts/test-profile.py) — локально
+      # и в предгейте, где машина своя
+      DURATION_GUARD_THRESHOLD: "30"
     steps:
       - uses: actions/checkout@v4
       # ffmpeg для тестов монтажа без ИИ модуля «Звук» (ADR-021, этап 5).
@@ -214,10 +219,10 @@ jobs:
           --filter "${SHARD}(${NOT_FAST})"
           --logger "trx;LogFilePrefix=rest" --results-directory "$RUNNER_TEMP/trx/rest"
           --blame-hang-timeout 5m --blame-hang-dump-type full
-      # Сторож Э3: тест набора Fast дольше 5 с — нехостовый тест без метки Slow (гейт); 2–5 с
-      # печатаются блоком «цель доводки» без падения: стена теста на 4 vCPU под параллелью — шум
+      # Сторож Э3: тест набора Fast дольше порога — нехостовый тест без метки Slow (гейт, блокирующий);
+      # порог CI — DURATION_GUARD_THRESHOLD выше, тесты между 2 с и порогом печатаются без падения
       - name: Duration guard (Fast)
-        run: python3 -I scripts/test-profile.py "$RUNNER_TEMP/trx/fast" --check
+        run: python3 -I scripts/test-profile.py "$RUNNER_TEMP/trx/fast" --check --threshold "$DURATION_GUARD_THRESHOLD"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

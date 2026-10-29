@@ -26,6 +26,7 @@ public sealed class VideoAssembleIsolationTests(ITestOutputHelper output) : IDis
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task Сборка_фильма_идёт_в_scope_slice_под_занятым_слотом()
     {
         if (!OperatingSystem.IsLinux()) return;

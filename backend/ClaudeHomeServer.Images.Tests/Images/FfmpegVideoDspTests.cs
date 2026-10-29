@@ -81,6 +81,7 @@ public sealed class FfmpegVideoDspTests : IDisposable
         TimeSpan.FromMinutes(2));
 
     [SkippableFact]
+    [Trait("Category", "Slow")]
     public async Task Фильм_из_трёх_клипов_разного_размера_один_без_звука_собирается_с_наплывом_затемнением_и_музыкой()
     {
         var dsp = Dsp();

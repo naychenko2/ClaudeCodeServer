@@ -30,6 +30,7 @@ public class HostCategoryGuardTests
     private static readonly string Backend = FindBackend();
 
     [Fact]
+    [Trait("Category", "Slow")]
     public void ХостовыйКласс_ПомеченHost()
     {
         // Скан общий со сторожем пула (HostScan.Solution): сборки параллельно, IL — один раз

@@ -436,6 +436,7 @@ public sealed class ManagedCliTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task Фоновый_цикл_ставит_версию_по_сигналу_сервера()
     {
         _dist.Publish("2.1.281");

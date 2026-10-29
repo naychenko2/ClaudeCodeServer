@@ -2307,7 +2307,6 @@ public class TeamWaveServiceTests : IDisposable
     }
 
     [Fact]
-    [Trait("Category", "Slow")]
     public async Task ПерезапускЗадачи_ЖивойНоЗависшийПрогон_ТишинаДольшеПорога_Перевыдаёт()
     {
         var (session, a, _) = await MakeStalledWaveAsync("restart-task-hung");
@@ -2316,12 +2315,48 @@ public class TeamWaveServiceTests : IDisposable
         _tasks.GetById(a.Id)!.UpdatedAt = DateTime.UtcNow.AddMinutes(-45);
         child.UpdatedAt = DateTime.UtcNow.AddMinutes(-45);
 
+        // Сигнал простоя отдаёт тест: в проде статус снимает финализация остановленного
+        // прогона, здесь это делает фейк-интейк (тот же приём, что в DropSubtaskAsync-тестах).
+        // Без него тест платил бы полным ExecutorIdleTimeout (10 с) на каждый прогон;
+        // мутация «убрать TrySetResult» краснеет по таймауту ожидания ниже.
+        var idleAt = new TaskCompletionSource<DateTime>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var intake = new FakeTurnIntake
+        {
+            OnInterrupt = sid =>
+            {
+                if (_sessions.GetById(sid) is { } s) s.Status = SessionStatus.Active;
+                idleAt.TrySetResult(DateTime.UtcNow);
+            },
+        };
+        _sut.IntakeForTestOverride = intake;
+
         var result = await _sut.RestartWaveTaskAsync(_sessions.GetById(session.Id)!, a.Id);
 
         result.Outcome.Should().Be("reissued");
         result.Message.Should().Contain("попытка 2", "повторная попытка той же под-задачи");
         _tasks.GetById(a.Id)!.Description.Should().Contain("не подавало признаков жизни",
             "зависшему исполнителю объясняем причину перезапуска, а не провала");
+        // Порядок «остановить → дождаться простоя → перевыдать», тот же инвариант, что у
+        // DropSubtaskAsync: перевыдача поверх занятого исполнения упёрлась бы в гейт задачи.
+        // Ожидание — событие с потолком, таймаут красный (паттерн Э4).
+        intake.InterruptCount(child.Id).Should().Be(1,
+            "зависшее исполнение перед перевыдачей останавливается");
+        var idleMoment = await idleAt.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        _tasks.GetById(a.Id)!.UpdatedAt.Should().BeOnOrAfter(idleMoment,
+            "перевыдача идёт после простоя исполнения, а не поверх него");
+        _logLines.Should().NotContain(l => l.Contains("не встал за"),
+            "исполнитель встал штатно — выхода по таймауту здесь быть не должно");
+    }
+
+    // Продуктовые дефолты ожидания простоя исполнителя — те же, что до превращения их в
+    // настройки (паттерн Э4): тесты меняют их только в своих кейсах, прод — нет.
+    [Fact]
+    public void ДефолтыОжиданияПростояИсполнителяПрежние()
+    {
+        _sut.ExecutorIdleTimeout.Should().Be(TimeSpan.FromSeconds(10),
+            "потолок ожидания — 10 с, как был: он страхует настоящий зависший прогон");
+        _sut.ExecutorIdlePollInterval.Should().Be(TimeSpan.FromMilliseconds(200),
+            "интервал опроса статуса — 200 мс, как был");
     }
 
     [Fact]

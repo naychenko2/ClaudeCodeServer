@@ -80,6 +80,12 @@ public class TeamWaveService
     // десять секунд прогона (фикс-волна 4 team-blocker-honest).
     internal TimeSpan ExecutorIdleTimeout { get; set; } = TimeSpan.FromSeconds(10);
 
+    // Интервал опроса статуса в WaitExecutorIdleAsync. Поле с ПРЕЖНИМ дефолтом, а не литерал
+    // в теле: кейсу, которому нужен именно выход по таймауту, не платить полным интервалом
+    // на каждый прогон (паттерн «интервал — опция, ожидание — событие»,
+    // docs/architecture/conventions.md, раздел тестов).
+    internal TimeSpan ExecutorIdlePollInterval { get; set; } = TimeSpan.FromMilliseconds(200);
+
     public TeamWaveService(SessionManager sessions, TaskManager tasks, IProjectManager projects,
         ISessionBroadcaster broadcaster, ILogger<TeamWaveService> log,
         // Имя персоны-автора для текста уведомлений и push (Э8) — зависимость обязательная:
@@ -841,7 +847,7 @@ public class TeamWaveService
                     ExecutorIdleTimeout, what);
                 return false;
             }
-            await Task.Delay(TimeSpan.FromMilliseconds(200));
+            await Task.Delay(ExecutorIdlePollInterval);
         }
         return true;
     }

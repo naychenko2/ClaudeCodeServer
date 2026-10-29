@@ -246,7 +246,8 @@ public sealed class WikiKeeper
         // ничего не переписывая.
         WikiManifest.RecordApplied(root, sectionKey,
             new Dictionary<string, string> { [pageKey] = Sha256OfBytes(File.ReadAllBytes(full)) });
-        WikiManifest.AppendLog(root, "adopt", sectionKey, [pageKey], null, "user");
+        // policy null: у системной операции нет решения политики — есть только автор (человек).
+        WikiManifest.AppendLog(root, "adopt", sectionKey, [pageKey], null, "user", null);
         // Журнал изменился → _log.md раздела перегенерируется (тот же блок, что у adopt).
         WikiProjections.RegenerateSection(root, sectionKey);
         // Кэш графа не трогается: содержимое файлов не изменилось, модель та же.

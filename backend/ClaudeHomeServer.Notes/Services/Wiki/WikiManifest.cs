@@ -23,10 +23,18 @@ public static class WikiManifest
     {
         // Форма строк журнала — как в ADR: {ts, op, section, pages, source, actor}.
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        // Имена страниц и карточки источников — по-русски: «О…» в файле, который человек
+        // читает при откате (решение 13), нечитаем. Тот же приём, что в WikiPackageStore
+        // (класс правки «origin × op»).
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
+    // Policy — политика применения пакета: «auto» | «inbox» (решение 12г, мера 6: журнал
+    // показывает «само» или «Входящие»). null для системных операций (adopt): у них нет
+    // политики, есть только автор. Пустым полем не заменяется: «не указано» и «auto» — разные
+    // утверждения.
     private sealed record LogLine(
-        DateTimeOffset Ts, string Op, string Section, IReadOnlyList<string> Pages, string? Source, string Actor);
+        DateTimeOffset Ts, string Op, string Section, IReadOnlyList<string> Pages, string? Source, string Actor, string? Policy);
 
     /// <summary>Безопасная форма ключа раздела для имени файла манифеста: «/» в ключе —
     /// разделитель ключа, не папка: манифесты всех разделов лежат в одной директории.
@@ -84,14 +92,16 @@ public static class WikiManifest
     }
 
     /// <summary>Дописать строку журнала. Строки не переписываются: append, не перезапись
-    /// файла. ts — время сервера (ISO-8601, UTC).</summary>
+    /// файла. ts — время сервера (ISO-8601, UTC). policy — «auto» | «inbox» для строки
+    /// применения (мера 6); для системных операций — null.</summary>
     public static void AppendLog(
-        string root, string op, string section, IReadOnlyList<string> pages, string? source, string actor)
+        string root, string op, string section, IReadOnlyList<string> pages, string? source, string actor,
+        string? policy = null)
     {
         var full = SafePath.Join(root, LogRelPath);
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         var line = JsonSerializer.Serialize(
-            new LogLine(DateTimeOffset.UtcNow, op, section, pages, source, actor), JsonOpts);
+            new LogLine(DateTimeOffset.UtcNow, op, section, pages, source, actor, policy), JsonOpts);
         File.AppendAllText(full, line + "\n");
     }
 

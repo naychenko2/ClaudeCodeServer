@@ -11,10 +11,11 @@ using Xunit;
 namespace ClaudeHomeServer.Tests.Services;
 
 // S4b-1 (ADR-035, решение 4 шаги 1–3, решение 10): проверки применения пакета до записи.
-// На диске ничего не пишется: файлы раздела остаются байт в байт — меняется только статус
-// пакета, и только через WikiPackageStore.Transition. Две параллельные заявки одного
-// пакета дают ровно один переход (окно гонки — чтение и запись пакета из 200 операций,
-// паттерн теста S4a: два старта от одного барьера, без Task.Delay).
+// Эти тесты держат фазу проверок — PrepareAsync: на диске ничего не пишется, файлы раздела
+// остаются байт в байт, меняется только статус пакета и только через WikiPackageStore.Transition.
+// Две параллельные заявки одного пакета дают ровно один переход (окно гонки — чтение и запись
+// пакета из 200 операций, паттерн теста S4a: два старта от одного барьера, без Task.Delay).
+// Запись (шаги 4–6: прообразы, файлы, журнал, откат) и полный ApplyAsync — WikiApplyTests.
 public class WikiApplyCheckTests : IDisposable
 {
     private const string User = "u1";
@@ -206,7 +207,7 @@ public class WikiApplyCheckTests : IDisposable
     };
 
     // Пакет доводится до «accepted» штатными переходами хранилища (checking → proposed →
-    // accepted): карточка для ApplyAsync читается с диска, как её прочтёт REST.
+    // accepted): карточка для проверки читается с диска, как её прочтёт REST.
     private WikiPackage CreateAccepted(params WikiPackage.Operation[] ops)
     {
         var pkg = new WikiPackage
@@ -244,7 +245,7 @@ public class WikiApplyCheckTests : IDisposable
         var pkg = CreateAccepted(Op(WikiPackage.OpLink, PagePath, "Контенер собран на второй машине", "Нет-такой-страницы"));
         var before = SnapshotPages();
 
-        var r = await _sut.ApplyAsync(User, pkg, Ctx);
+        var r = await _sut.PrepareAsync(User, pkg, Ctx);
 
         r.Ready.Should().BeFalse();
         r.Code.Should().Be(WikiApplyService.CodeGate);
@@ -253,7 +254,7 @@ public class WikiApplyCheckTests : IDisposable
         ReadStatus(pkg.Id).Should().Be(WikiPackage.StatusApplyFailed);
 
         // Замкнутый статус: повторного применения нет ни при какой заявке.
-        var again = await _sut.ApplyAsync(User, WikiPackageStore.TryRead(Root, pkg.Id).Package!, Ctx);
+        var again = await _sut.PrepareAsync(User, WikiPackageStore.TryRead(Root, pkg.Id).Package!, Ctx);
         again.Ready.Should().BeFalse();
         again.Code.Should().Be(WikiApplyService.CodeStatus);
     }
@@ -269,7 +270,7 @@ public class WikiApplyCheckTests : IDisposable
         var pkg = CreateAccepted(Op(WikiPackage.OpAppend, PagePath, "Контенер собран на второй машине"));
         var before = SnapshotPages();
 
-        var r = await _sut.ApplyAsync(User, pkg, Ctx);
+        var r = await _sut.PrepareAsync(User, pkg, Ctx);
 
         r.Code.Should().Be(WikiApplyService.CodeDrift);
         SnapshotPages().Should().Equal(before, "дрейф не откатывается и не перезаписывается молча");
@@ -288,7 +289,7 @@ public class WikiApplyCheckTests : IDisposable
             baseHashes: new Dictionary<string, string> { [PagePath] = WikiManifest.Sha256Hex(PageBase) }));
         var before = SnapshotPages();
 
-        var r = await _sut.ApplyAsync(User, pkg, Ctx);
+        var r = await _sut.PrepareAsync(User, pkg, Ctx);
 
         r.Ready.Should().BeFalse();
         r.Code.Should().Be(WikiApplyService.CodeStale);
@@ -308,7 +309,7 @@ public class WikiApplyCheckTests : IDisposable
             baseHashes: new Dictionary<string, string> { [PagePath] = WikiManifest.Sha256Hex(PageBase) }));
         var before = SnapshotPages();
 
-        var r = await _sut.ApplyAsync(User, pkg, Ctx);
+        var r = await _sut.PrepareAsync(User, pkg, Ctx);
 
         r.Ready.Should().BeTrue(r.Reason);
         var rendered = r.Rendered.Single(d => d.Path == PagePath).Content;
@@ -330,7 +331,7 @@ public class WikiApplyCheckTests : IDisposable
             Op(WikiPackage.OpAppend, PagePath, "Контенер собран на второй машине"),
             Op(WikiPackage.OpAppend, PagePath, "Решение: перенести сборку на Linux", decision: WikiPackage.DecisionInbox));
 
-        var r = await _sut.ApplyAsync(User, pkg, Ctx);
+        var r = await _sut.PrepareAsync(User, pkg, Ctx);
 
         r.Ready.Should().BeTrue(r.Reason);
         var rendered = r.Rendered.Single(d => d.Path == PagePath).Content;
@@ -342,7 +343,7 @@ public class WikiApplyCheckTests : IDisposable
             Op(WikiPackage.OpAppend, PagePath, "Контенер собран на второй машине"),
             Op(WikiPackage.OpAppend, PagePath, "Решение: перенести сборку на Linux",
                 decision: WikiPackage.DecisionInbox, human: WikiPackage.HumanAccepted));
-        var r2 = await _sut.ApplyAsync(User, decided, Ctx);
+        var r2 = await _sut.PrepareAsync(User, decided, Ctx);
         r2.Ready.Should().BeTrue(r2.Reason);
         r2.Rendered.Single(d => d.Path == PagePath).Content
             .Should().Contain("Решение: перенести сборку на Linux");
@@ -368,8 +369,8 @@ public class WikiApplyCheckTests : IDisposable
             "Прежний план был остаться на Windows. " + string.Join(". ", facts) + ".");
 
         var barrier = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var first = Task.Run(async () => { await barrier.Task; return await _sut.ApplyAsync(User, pkg, ctx); });
-        var second = Task.Run(async () => { await barrier.Task; return await _sut.ApplyAsync(User, pkg, ctx); });
+        var first = Task.Run(async () => { await barrier.Task; return await _sut.PrepareAsync(User, pkg, ctx); });
+        var second = Task.Run(async () => { await barrier.Task; return await _sut.PrepareAsync(User, pkg, ctx); });
         barrier.SetResult();
 
         var r1 = await first.WaitAsync(TimeSpan.FromSeconds(30));
@@ -390,7 +391,7 @@ public class WikiApplyCheckTests : IDisposable
         var op = Op(WikiPackage.OpAppend, PagePath, text);
         var pkg = CreateAccepted(op);
 
-        var r = await _sut.ApplyAsync(User, pkg, Ctx);
+        var r = await _sut.PrepareAsync(User, pkg, Ctx);
         r.Ready.Should().BeTrue(r.Reason);
 
         // Та же операция на том же состоянии — прямым вызовом общего рендера.
@@ -409,12 +410,12 @@ public class WikiApplyCheckTests : IDisposable
     [Fact]
     public async Task NullПакетИОтказБезКонтекста_РезультатОтказ_СтатусНеТронут()
     {
-        var nullPkg = await _sut.ApplyAsync(User, null, Ctx);
+        var nullPkg = await _sut.PrepareAsync(User, null, Ctx);
         nullPkg.Ready.Should().BeFalse();
         nullPkg.Code.Should().Be(WikiApplyService.CodeShape);
 
         var pkg = CreateAccepted(Op(WikiPackage.OpAppend, PagePath, "Контенер собран на второй машине"));
-        var noCtx = await _sut.ApplyAsync(User, pkg);
+        var noCtx = await _sut.PrepareAsync(User, pkg, null);
         noCtx.Ready.Should().BeFalse();
         noCtx.Code.Should().Be(WikiApplyService.CodeSource);
         // Отказ до заявки: статус пакета не двигался ни на шаг.
@@ -430,7 +431,7 @@ public class WikiApplyCheckTests : IDisposable
             Status = WikiPackage.StatusChecking,
         };
         WikiPackageStore.Create(Root, proposed).Ok.Should().BeTrue();
-        var r = await _sut.ApplyAsync(User, proposed, Ctx);
+        var r = await _sut.PrepareAsync(User, proposed, Ctx);
         r.Code.Should().Be(WikiApplyService.CodeStatus);
         ReadStatus(proposed.Id).Should().Be(WikiPackage.StatusChecking);
     }
@@ -465,7 +466,7 @@ public class WikiApplyCheckTests : IDisposable
         };
         var before = SnapshotPages();
 
-        var r = await _sut.ApplyAsync(User, staleCopy, Ctx);
+        var r = await _sut.PrepareAsync(User, staleCopy, Ctx);
 
         r.Ready.Should().BeFalse();
         r.Code.Should().Be(WikiApplyService.CodeStatus);
@@ -489,7 +490,7 @@ public class WikiApplyCheckTests : IDisposable
         var pageFull = PageFull(PagePath);
         using (var gate = new FileStream(pageFull, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
         {
-            var r = await _sut.ApplyAsync(User, pkg, Ctx);
+            var r = await _sut.PrepareAsync(User, pkg, Ctx);
 
             r.Ready.Should().BeFalse();
             r.Code.Should().Be(WikiApplyService.CodeInternal);

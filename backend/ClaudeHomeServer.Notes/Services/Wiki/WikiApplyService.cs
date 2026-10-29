@@ -1,11 +1,15 @@
 using System.Security.Cryptography;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Spheres;
 
 namespace ClaudeHomeServer.Services.Notes.Wiki;
 
-// S4b-1 (ADR-035, решение 4 шаги 1–3, решение 10): проверки применения пакета до записи.
-// На диск здесь ничего не пишется: файлы раздела остаются байт в байт — меняется только
-// статус пакета, и только через WikiPackageStore.Transition под его блокировкой (единственная
+// Применение пакета (ADR-035, решение 4, решение 10): S4b-1 — проверки до записи (шаги 1–3),
+// S4b-2 — сама запись (шаги 4–6) и откат при сбое. Публичная дверь одна: ApplyAsync проходит
+// оба цикла. PrepareAsync (шаги 1–3) и WriteAsync (шаги 4–6) — internal: тот же разделитель,
+// которым их тестируют: между проверкой и записью тест ставит диск с состоянием «между ними»
+// (чужую правку, сбой ФС) — определённо, без рандомной гонки.
+// Заявка и статусы — только через WikiPackageStore.Transition под его блокировкой (единственная
 // дверь в статусы): применить пакет дважды нельзя — первый вызов ведёт его в «applying»,
 // второй отказан по состоянию на диске, а не по переданной карточке.
 //
@@ -23,6 +27,34 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // 3. Рендер операций в памяти общим рендером (WikiPlanValidator.RenderApply) и весь
 //    WikiGate на итоговом состоянии; цепочка «вверх» — WikiSections.UpChain, не «видимые»
 //    разделы (видимость шире: она для recall и UI, право на ссылку даёт только цепочка).
+//    Итог — снимок базового состояния каждой коснутой страницы (PrepareResult.BaseSnapshot:
+//    хэш манифеста на момент проверки; null — страницы в манифеста нет, это create).
+// 4. Прообразы каждой коснутой страницы — keeper/preimages/{pkgId}/ по тому же относительному
+//    пути, что у страницы под pages/, байтами и с fsync: между бэкапами откат держат они
+//    (решение 13). Пустой прообраз = страницы не было (create): возврат по нему — удалить файл.
+// 5. Каждая страница — сверка базового состояния с тем, на котором строился рендер (байты
+//    диска и запись манифеста против снимка шага 3), затем temp + File.Move (WikiFileWriter,
+//    тот же атомарный писатель, что у Хранителя).
+// 6. Манифест (хэши байтов, прочитанных с диска) → строка log.jsonl (op=apply, политика
+//    auto|inbox, источник, список изменённых страниц) → проекции раздела → статус «applied»
+//    через Transition → инвалидация кэша графа → событие проекта (WikiChanged, только для
+//    раздела проекта: у «Общего» и «Личного» нет адресата — тот же порядок, что у Хранителя).
+//
+// Порядок шага 6 — не дословный список ADR: журнал перед проекциями, иначе _log.md раздела
+// не донесёт строку этого применения (проекции — производные от log.jsonl). Диффа в строке
+// журнала нет: он восстанавливается из прообразов и текущего файла (тот же источник, чем
+// держится откат) — «Журнал» на фронте (S7a) собирает его из них.
+//
+// Проверка и запись — два блока раздела, а не один: между ними состояние могло измениться
+// (чужой писатель вне блокировки, другой применённый пакет). Опасность снимает не длина
+// блока, а шаг 5: он не пишет поверх того, чего не видел, — расхождение с базовым снимком
+// остановка, а не перезапись. Плюс заявка: «applying» держит повторное применение того же
+// пакета до конца цикла (решение 10).
+//
+// Сбой на 4–6 — откат: возвращаются только страницы, записанные этим вызовом (по их
+// прообразам); остальное — чужая правка, файл, на котором споткнулась проверка, — не
+// тронуто. Статус «apply_failed» с причиной; пакет не остаётся в «applying» никогда:
+// незавершённый после падения процесса доводит сторож старта (WikiApplyStartupGuard).
 // Любой неожиданный вход — результат-отказ с причиной, не исключение наружу.
 //
 // baseHashes: несущий здесь смысл — не «хэш совпал», а «на что опиралось намерение»:
@@ -52,16 +84,23 @@ public sealed class WikiApplyService
     // «apply_failed» с текстом сбоя — исключение наружу не выходит (ревью S4b-1, MAJOR 2).
     public const string CodeInternal = "wiki_apply_internal";
 
+    // Значение поля op строки журнала для применения пакета (шаг 6, мера 6): та же форма, что
+    // у op=adopt у Хранителя; по нему «Журнал» отличает применение от системных операций.
+    private const string LogOpApply = "apply";
+
     private readonly NotesService _notes;
     private readonly WikiKeeper _keeper;
     private readonly ISphereDirectory _spheres;
+    private readonly IProjectEventLogService? _events;
     private readonly string _dataDir;
 
-    public WikiApplyService(NotesService notes, WikiKeeper keeper, ISphereDirectory spheres, IConfiguration config)
+    public WikiApplyService(NotesService notes, WikiKeeper keeper, ISphereDirectory spheres, IConfiguration config,
+        IProjectEventLogService? events = null)
     {
         _notes = notes;
         _keeper = keeper;
         _spheres = spheres;
+        _events = events;
         // Каталог данных — как у всех сервисов вертикали (тот же корень, что у Хранителя).
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
@@ -72,22 +111,45 @@ public sealed class WikiApplyService
     /// текст источника (по нему заново выводится цитата).</summary>
     public sealed record ApplyContext(string? SourceCard, string? SourceText);
 
-    /// <summary>Итог проверок до записи. Ready — «готово к записи» (S4b-2): Rendered —
-    /// изменённые рендером страницы раздела. Отказ — код и причина; для провала гейта —
-    /// весь перечень нарушений. На диске изменён только статус пакета.</summary>
+    /// <summary>Итог проверок (шаги 1–3). Ready — «готово к записи»: Rendered — изменённые
+    /// рендером страницы раздела, в порядке их первой правки (он и есть порядок записи).
+    /// Отказ — код и причина; для провала гейта — весь перечень нарушений. На диске изменён
+    /// только статус пакета.</summary>
     public readonly record struct PrepareResult(
         bool Ready,
         string? Code,
         string? Reason,
         IReadOnlyList<string> Violations,
-        IReadOnlyList<WikiGate.Draft> Rendered);
+        IReadOnlyList<WikiGate.Draft> Rendered)
+    {
+        /// <summary>Раздел пакета: под его блокировке идёт запись (шаги 4–6).</summary>
+        public string? Section { get; init; }
 
-    /// <summary>Применить пакет по его идентификатору: состояние (Status, Operations,
+        /// <summary>Снимок базового состояния каждой коснутой страницы: хэш её записи в
+        /// манифесте на момент проверки; null — страницы в манифеста нет (create). Шаг 5
+        /// сверяет с этим снимком байты диска и запись манифеста: рендер построен на том,
+        /// что на диске сейчас, — иначе запись остановлена, а не наложена поверх чужого.</summary>
+        public IReadOnlyDictionary<string, string?>? BaseSnapshot { get; init; }
+    }
+
+    /// <summary>Итог применения целиком (шаги 1–6). Applied — страницы записаны, манифест и
+    /// журнал обновлены, проекции перегенерированы, пакет в «applied». Отказ — код и причина
+    /// (те же коды, что у проверок): записанное до сбоя откатано по прообразам, чужие файлы
+    /// не тронуты, на диске изменён только статус пакета.</summary>
+    public readonly record struct ApplyResult(bool Applied, string? Code, string? Reason, IReadOnlyList<string> Violations);
+
+    /// <summary>Применить пакет по его идентификатору целиком: состояние (Status, Operations,
     /// HumanDecision) читается с диска под id, карточка аргумента несёт только id
-    /// (ревью S4b-1, MAJOR 1). В этом шаге (S4b-1) доходит до шага 3 решения 4: проверки
-    /// и рендер в памяти; запись (прообразы, файлы, «applied») — S4b-2.</summary>
-    public Task<PrepareResult> ApplyAsync(string ownerId, WikiPackage? package, ApplyContext? context = null) =>
-        PrepareAsync(ownerId, package, context);
+    /// (ревью S4b-1, MAJOR 1). Сначала проверки и рендер в памяти (PrepareAsync, шаги 1–3),
+    /// затем прообразы, запись, журнал и статус (WriteAsync, шаги 4–6). Отказ любой фазы —
+    /// результат-отказ с причиной: исключения наружу нет.</summary>
+    public async Task<ApplyResult> ApplyAsync(string ownerId, WikiPackage? package, ApplyContext? context = null)
+    {
+        var prepared = await PrepareAsync(ownerId, package, context).ConfigureAwait(false);
+        if (!prepared.Ready)
+            return new ApplyResult(false, prepared.Code, prepared.Reason, prepared.Violations);
+        return await WriteAsync(ownerId, package!.Id, prepared, context!).ConfigureAwait(false);
+    }
 
     internal async Task<PrepareResult> PrepareAsync(string ownerId, WikiPackage? package, ApplyContext? context)
     {
@@ -135,6 +197,233 @@ public sealed class WikiApplyService
         // Работаем с дисковой копией: её Operations и HumanDecision — те, что на диске.
         return await _keeper.WithSectionsLockedAsync(ownerId, [disk.Section],
             () => Task.FromResult(PrepareUnderLock(ownerId, root, disk, context!)));
+    }
+
+    /// <summary>Запись проверенного пакета (шаги 4–6). internal — та же граница фазы, что у
+    /// PrepareAsync: тест ставит между ними диск с нужным состоянием (чужую правку, файл,
+    /// который нельзя прочитать) и видит откат, а не гонку.</summary>
+    internal Task<ApplyResult> WriteAsync(string ownerId, string packageId, PrepareResult prepared, ApplyContext context)
+    {
+        if (prepared.Section is not { Length: > 0 } || prepared.BaseSnapshot is null)
+            return Task.FromResult(new ApplyResult(false, CodeShape,
+                "запись невозможна: у результата проверок нет раздела и снимка базового состояния",
+                ["запись невозможна: нет снимка проверки"]));
+        var root = WikiPaths.Root(_dataDir, ownerId);
+        // Блок раздела — тот же замок, что у проверок и у записи страницы Хранителя.
+        // WritePageAsync отсюда не зовём: он взял бы второй блок той же пары (зависание),
+        // а весь шаг 5 обязан идти под тем же блоком, что и сверка.
+        return _keeper.WithSectionsLockedAsync(ownerId, [prepared.Section],
+            () => Task.FromResult(WriteUnderLock(ownerId, root, packageId, prepared, context)));
+    }
+
+    private ApplyResult WriteUnderLock(string ownerId, string root, string packageId, PrepareResult prepared, ApplyContext context)
+    {
+        var written = new List<string>();
+        try
+        {
+            return WriteBody(ownerId, root, packageId, prepared, context, written);
+        }
+        catch (Exception ex)
+        {
+            // Любой неожиданный сбой записи (ФС, нечитаемый манифест, пустая страница рендера) —
+            // тот же контракт, что у проверки: откат записанного по прообразам и «apply_failed»
+            // с причиной, а не исключение вызывающему и не «applying» навсегда (ревью S4b-1, MAJOR 2).
+            return FailAfterWrite(root, packageId, written, CodeInternal,
+                $"внутренний сбой записи применения: {ex.Message}");
+        }
+    }
+
+    private ApplyResult WriteBody(string ownerId, string root, string packageId, PrepareResult prepared, ApplyContext context, List<string> written)
+    {
+        // Судим по дисковому пакету (урок S4b-1): здесь нужен он целиком — источник и решения
+        // операций идут в журнал, их PrepareResult не несёт.
+        var read = WikiPackageStore.TryRead(root, packageId);
+        if (read.State != WikiPackageFileState.Valid)
+            return new ApplyResult(false, CodeClaim, "файл пакета не читается как пакет v:1: запись не начата",
+                ["файл пакета не читается: запись не начата"]);
+        var package = read.Package!;
+        if (package.Status != WikiPackage.StatusApplying)
+            return new ApplyResult(false, CodeStatus,
+                $"пакет в «{package.Status}», а не в «{WikiPackage.StatusApplying}»: его записывает не этот вызов",
+                ["статус пакета не «applying»"]);
+        var section = package.Section;
+        if (section != prepared.Section)
+            return new ApplyResult(false, CodeInternal,
+                $"раздел пакета «{section}» не тот, что проверялся («{prepared.Section}»): запись остановлена",
+                ["раздел пакета изменился между проверкой и записью"]);
+
+        var snapshot = prepared.BaseSnapshot!;
+        var manifest = WikiManifest.TryRead(root, section);
+        if (manifest.State == WikiManifestState.Invalid)
+            throw new InvalidOperationException($"манифест раздела «{section}» невалиден — запись невозможна");
+
+        foreach (var draft in prepared.Rendered)
+        {
+            if (draft.Content.Length == 0)
+                throw new InvalidOperationException($"рендер дал пустую страницу «{draft.Path}»: пустой страницы вики не бывает");
+
+            var rel = "pages/" + draft.Path;
+            var full = SafePath.JoinBelowRoot(root, rel);
+            // Шаг 5, сверка базы: байты диска и запись манифеста обязаны быть тем, что было при
+            // проверке. Расхождение — правка мимо Хранителя или чужое применение: стоп. Чужое
+            // остаётся на диске: молчаливой перезаписи нет (тот же закон, что у WritePageAsync).
+            var diskNow = File.Exists(full) ? File.ReadAllBytes(full) : null;
+            var baseHash = snapshot.TryGetValue(draft.Path, out var b) ? b : null;
+            var diskHash = diskNow is null ? null : Sha256OfBytes(diskNow);
+            var recorded = manifest.Manifest.TryGetValue(draft.Path, out var cur) ? cur : null;
+            if (diskHash != baseHash || recorded != baseHash)
+                return FailAfterWrite(root, packageId, written, CodeDrift,
+                    $"базовое состояние «{draft.Path}» изменилось после проверки (правка мимо Хранителя или чужое применение): запись остановлена, чужая правка не тронута");
+
+            // Шаг 4: прообраз — байты страницы до записи, по тому же относительному пути.
+            // Пустой прообраз = страницы не было (create): возврат по нему — удалить файл.
+            // fsync: прообразы — то, чем откатывают после падения процесса (решение 13).
+            WriteBytesAtomic(root, PreimageRel(packageId, draft.Path), diskNow ?? []);
+
+            // Шаг 5: temp + File.Move — тот же атомарный писатель, что у Хранителя: цель либо
+            // прежняя, либо новая целиком, temp-мусора нет ни в одном исходе.
+            WikiFileWriter.Write(root, rel, draft.Content);
+            written.Add(draft.Path);
+        }
+
+        // Шаг 6, манифест: хэши байтов, прочитанных с диска, а не из строки рендера (та же
+        // форма, что у Хранителя): следующая сверка сравнивает то, что реально лежит в файле.
+        var applied = new Dictionary<string, string>(written.Count, StringComparer.Ordinal);
+        foreach (var p in written)
+            applied[p] = Sha256OfBytes(File.ReadAllBytes(SafePath.JoinBelowRoot(root, "pages/" + p)));
+        WikiManifest.RecordApplied(root, section, applied);
+
+        // Строка журнала (мера 6): политика пакета, его источник, изменённые страницы.
+        // Политика — «inbox», если хоть одна применённая операция пришла из «Входящих» (её
+        // решил человек), иначе «auto»: журнал обязан показывать, что человека спросили, а не
+        // только то, что он принял. Диффа в строке нет: он собирается из прообразов и
+        // текущего файла (тот же источник, чем держится откат) — на фронте (S7a).
+        var policy = package.Operations.Any(o => Applies(o) && o.Decision == WikiPackage.DecisionInbox)
+            ? WikiPackage.DecisionInbox
+            : WikiPackage.DecisionAuto;
+        WikiManifest.AppendLog(root, LogOpApply, section, written, SourceOf(package), "keeper", policy);
+
+        // Проекции — после журнала: _log.md — производная от log.jsonl и без этой строки
+        // остался бы на полшага позади применения.
+        WikiProjections.RegenerateSection(root, section);
+
+        // Статус — до побочных эффектов: «applied» значит «файлы и записи согласованы», и с
+        // него пакет замкнут (повторить применение нельзя).
+        var done = WikiPackageStore.Transition(root, packageId, WikiPackage.StatusApplied);
+        if (!done.Ok)
+            // Файлы применены и согласованы с манифестом, но пакет не закрыт: переход, который
+            // его закрыл бы, уже не в таблице. Откатывать здесь — снять то, что уже принято
+            // человеком и лежит на диске; состояние доведёт сторож старта (он откатит по
+            // прообразам и назовёт причину). Вызывающий видит исход, а не молчание (минор 4).
+            return new ApplyResult(false, CodeClaim,
+                $"файлы применены, статус «applied» не записан: {done.Reason ?? done.Code}",
+                ["файлы применены, статус «applied» не записан"]);
+
+        // Граф обязан видеть запись сразу (шаг 6 транзакции). Событие — только раздела
+        // проекта: у «Общего» и «Личного» нет адресата (тот же порядок, что у Хранителя).
+        _notes.Invalidate(ownerId);
+        foreach (var p in written)
+            AppendEvent(ownerId, section, p);
+        return new ApplyResult(true, null, null, []);
+    }
+
+    /// <summary>Берётся ли операция в рендер и на диск: «auto» — всегда, «inbox» — только с
+    /// принятым решением человека (решение читается из HumanDecision дисковой копии, не из
+    /// тела пакета). Одно правило на шаг 3 (рендер) и на шаг 6 (политика журнала): «что
+    /// применилось» в них не может разойтись.</summary>
+    private static bool Applies(WikiPackage.Operation op) =>
+        op.Decision == WikiPackage.DecisionAuto ||
+        (op.Decision == WikiPackage.DecisionInbox && op.HumanDecision == WikiPackage.HumanAccepted);
+
+    /// <summary>Карточка источника строки журнала — карточки всех источников пакета: по ним
+    /// же человек откатывает «всё из этого источника» (мера 5).</summary>
+    private static string SourceOf(WikiPackage package) =>
+        string.Join(", ", package.Sources.Select(s => s.Ref));
+
+    private void AppendEvent(string ownerId, string sectionKey, string pageKey)
+    {
+        if (WikiSections.TryProjectId(sectionKey, out var projectId))
+            _events?.Append(projectId, ownerId, ProjectEventTypes.WikiChanged, "keeper",
+                $"Хранитель применил страницу вики «{pageKey}»");
+    }
+
+    // Отказ после начала записи: откат — только того, что записал этот вызов. Всё остальное
+    // (чужая правка, файл, на котором споткнулась сверка) остаётся как есть: молча отменить
+    // то, чего не трогал, права нет — тот же закон, что у дрейфа у Хранителя.
+    private static ApplyResult FailAfterWrite(string root, string packageId, List<string> written, string code, string reason)
+    {
+        var (restored, failed) = RestoreFromPreimages(root, packageId, written);
+        var text = reason;
+        if (restored.Count > 0)
+            text += $" (откатано по прообразам: {string.Join(", ", restored)})";
+        if (failed.Count > 0)
+            text += $" (откат не удался: {string.Join("; ", failed)} — файл мог остаться применённым при закрытом пакете)";
+        var fail = FailApply(root, packageId, code, text);
+        return new ApplyResult(false, fail.Code, fail.Reason, fail.Violations);
+    }
+
+    /// <summary>Вернуть страницы к состоянию до пакета по их прообразам. Пустой прообраз =
+    /// страницы не было (create) → файл удалить. Файла прообразов нет → этой записи не было:
+    /// откатывать нечего. Сбой на одном файле не останавливает остальные (окно чистки, а не
+    /// половина отката) и называется в причине.</summary>
+    private static (List<string> Restored, List<string> Failed) RestoreFromPreimages(string root, string packageId, IReadOnlyList<string> pageKeys)
+    {
+        var restored = new List<string>();
+        var failed = new List<string>();
+        foreach (var page in pageKeys)
+        {
+            try
+            {
+                var pre = SafePath.Join(root, PreimageRel(packageId, page));
+                if (!File.Exists(pre))
+                    continue;
+                var bytes = File.ReadAllBytes(pre);
+                var full = SafePath.Join(root, "pages/" + page);
+                if (bytes.Length == 0)
+                    File.Delete(full);
+                else
+                    WriteBytesAtomic(root, "pages/" + page, bytes);
+                restored.Add(page);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                failed.Add($"{page}: {ex.Message}");
+            }
+        }
+        return (restored, failed);
+    }
+
+    // Тот же относительный путь, что у страницы под pages/: прообраз читается рядом с тем,
+    // что он описывает, и не требует обратного разбора имени.
+    private static string PreimageRel(string packageId, string pageKey) =>
+        $"keeper/preimages/{packageId}/{pageKey}";
+
+    /// <summary>Записать байты атомарно и с fsync: temp в той же папке → Flush(true) → Move.
+    /// Для прообразов и их возврата: это то, что держит откат после падения процесса, и его
+    /// нельзя отдавать половине записи. Не WikiFileWriter: тот пишет СТРОКУ (свою кодировку),
+    /// а прообраз и возврат меряются байтами — «тот же файл» здесь значит именно байты.</summary>
+    // internal: та же операция нужна сторожу старта (WikiApplyStartupGuard) — вторая половина
+    // этого же отката.
+    internal static void WriteBytesAtomic(string root, string relPath, byte[] bytes)
+    {
+        var full = SafePath.Join(root, relPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        var temp = full + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            using (var fs = new FileStream(temp, FileMode.CreateNew, FileAccess.Write))
+            {
+                fs.Write(bytes);
+                fs.Flush(true); // fsync: данные на диске до того, как файл станет прообразом
+            }
+            File.Move(temp, full, overwrite: true);
+        }
+        catch
+        {
+            // Исходная ошибка идёт дальше; ошибка уборки её не подменяет (тот же порядок, что у WikiFileWriter).
+            try { File.Delete(temp); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            throw;
+        }
     }
 
     // Тело проверки под блоком раздела обёрнуто: файловые чтения (манифест, байты страниц,
@@ -216,9 +505,7 @@ public sealed class WikiApplyService
         {
             // «inbox» без решения человека или отклонённое человеком из рендера не берётся:
             // решение читается только из HumanDecision, не из тела пакета.
-            var applies = op.Decision == WikiPackage.DecisionAuto ||
-                (op.Decision == WikiPackage.DecisionInbox && op.HumanDecision == WikiPackage.HumanAccepted);
-            if (!applies)
+            if (!Applies(op))
                 continue;
 
             var existing = working.FirstOrDefault(d => d.Path == op.Page);
@@ -270,11 +557,19 @@ public sealed class WikiApplyService
             return FailApply(root, package.Id, CodeGate, $"итоговое состояние не проходит гейт: {violations[0]}", violations);
 
         var rendered = new List<WikiGate.Draft>(renderedOrder.Count);
+        // Снимок базы каждой коснутой страницы: её хэш в манифесте на момент проверки
+        // (null — страницы в манифеста нет: create). Шаг 5 сверяет с ним байты диска и
+        // запись манифеста — «база цела» означает «то же состояние, на котором строился
+        // рендер», а не «когда-то было похоже».
+        var snapshot = new Dictionary<string, string?>(renderedOrder.Count, StringComparer.Ordinal);
         foreach (var path in renderedOrder)
+        {
             rendered.Add(working.First(d => d.Path == path));
-        // Готово к записи (S4b-2): пакет остаётся в «applying» — его заявка держит
-        // повторное применение до конца цикла.
-        return new PrepareResult(true, null, null, [], rendered);
+            snapshot[path] = manifest.TryGetValue(path, out var h) ? h : null;
+        }
+        // Готово к записи: пакет остаётся в «applying» — его заявка держит повторное
+        // применение до конца цикла (до status «applied» или «apply_failed»).
+        return new PrepareResult(true, null, null, [], rendered) { Section = section, BaseSnapshot = snapshot };
     }
 
     // Манифест против диска, по байтам: каждая запись манифеста — файл с этим хэшем; каждый
@@ -350,6 +645,7 @@ public sealed class WikiApplyService
     private static PrepareResult Fail(string code, string reason) => new(false, code, reason, [reason], []);
 
     // sha256 БАЙТОВ — та же форма, что у манифеста и сверки Хранителя: сравнивать должны одно и то же.
-    private static string Sha256OfBytes(byte[] bytes) =>
+    // internal — та же форма нужна сторожу старта при возврате страницы (хэш в манифест).
+    internal static string Sha256OfBytes(byte[] bytes) =>
         Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 }

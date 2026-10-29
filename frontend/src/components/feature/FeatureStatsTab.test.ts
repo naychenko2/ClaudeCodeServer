@@ -128,7 +128,9 @@ function mkStats(over: Partial<FeatureStats> = {}): FeatureStats {
 
 describe('formatDuration', () => {
   it('минуты / часы / часы+минуты (минуты с ведущим 0)', () => {
-    expect(formatDuration(0)).toBe('0 мин');
+    // 0 — не «0 мин»: единая нижняя граница формата (Ш1a, chatGroups) — «1 мин»;
+    // нули в строке итогов дополнительно гейтит потребитель (FeatureBriefTimeline.tsx:24).
+    expect(formatDuration(0)).toBe('1 мин');
     expect(formatDuration(35)).toBe('35 мин');
     expect(formatDuration(60)).toBe('1 ч');
     expect(formatDuration(90)).toBe('1 ч 30 мин');

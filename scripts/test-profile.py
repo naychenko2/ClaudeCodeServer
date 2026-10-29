@@ -190,8 +190,10 @@ def build_report(results, skipped, host, known, top_tests=25, top_classes=20):
     return "\n".join(out)
 
 
-def class_durations(results, projects=None):
-    """{класс: {"tests": n, "seconds": t[, "project": p]}} — вход для раскладки шардов; project
+def class_durations(results, projects=None, fast_results=None):
+    """{класс: {"tests": n, "seconds": t[, "fast": f][, "project": p]}} — вход для раскладки шардов;
+    fast — секунды класса в проходе Fast (TRX с префиксом fast), по ним шарды учитывают, что класс
+    серийный и держит один поток прохода; project
     (тестовый проект класса) нужен шардированию по проектам: пространство имён класса с именем
     проекта не совпадает."""
     per_class = {}
@@ -199,6 +201,12 @@ def class_durations(results, projects=None):
         n, t = per_class.get(cls, (0, 0.0))
         per_class[cls] = (n + 1, t + s)
     out = {c: {"tests": n, "seconds": round(t, 3)} for c, (n, t) in sorted(per_class.items())}
+    if fast_results is not None:
+        fast = {}
+        for cls, _, s in fast_results:
+            fast[cls] = fast.get(cls, 0.0) + s
+        for c, v in out.items():
+            v["fast"] = round(fast.get(c, 0.0), 3)
     for c, p in (projects or {}).items():
         if c in out:
             out[c]["project"] = p
@@ -235,7 +243,7 @@ def main(argv=None):
     if not files:
         print(f"TRX не найден: {args.path}", file=sys.stderr)
         return 2
-    results, skipped, broken, projects = [], 0, 0, {}
+    results, skipped, broken, projects, fast_results, saw_fast = [], 0, 0, {}, [], False
     for f in files:
         try:
             r, s = read_trx(f)
@@ -246,6 +254,9 @@ def main(argv=None):
             continue
         results += r
         skipped += s
+        if os.path.basename(f).lower().startswith("fast"):
+            fast_results += r
+            saw_fast = True
         if args.json:
             projects.update(read_class_projects(f))
     if broken == len(files):
@@ -253,7 +264,7 @@ def main(argv=None):
         return 2
     if args.json:
         json.dump({"tests": len(results), "skipped": skipped, "seconds": round(sum(r[2] for r in results), 3),
-                   "classes": class_durations(results, projects)}, sys.stdout, ensure_ascii=False, indent=1)
+                   "classes": class_durations(results, projects, fast_results if saw_fast else None)}, sys.stdout, ensure_ascii=False, indent=1)
         print()
         return 0
     if args.check:

@@ -143,6 +143,21 @@ class TestProfileTests(unittest.TestCase):
         # класс без codeBase проекта не получает — раскладка по проектам вернётся к префиксу имени
         self.assertNotIn("project", data["classes"]["Mini.Host.HostedTests"])
 
+    def test_json_fast_только_из_trx_с_префиксом_fast(self):
+        d = os.path.join(self.tmp.name, "passes")
+        os.makedirs(d)
+        with open(FIXTURE, encoding="utf-8") as f:
+            text = f.read()
+        for name in ("fast_a.trx", "rest_a.trx"):
+            with open(os.path.join(d, name), "w", encoding="utf-8") as g:
+                g.write(text)
+        data = json.loads(self._main(d, "--json")[1])
+        plain = data["classes"]["Mini.Plain.PlainTests"]
+        self.assertEqual(1.02, plain["seconds"])  # оба прохода
+        self.assertEqual(0.51, plain["fast"])     # только fast_a.trx
+        # без fast-файлов ключа нет — шарды вернутся к раскладке по сумме
+        self.assertNotIn("fast", json.loads(self._main(FIXTURE, "--json")[1])["classes"]["Mini.Plain.PlainTests"])
+
     def test_check_тест_дольше_порога_даёт_exit_1(self):
         code, out, err = self._main(FIXTURE, "--check")
         self.assertEqual(1, code)

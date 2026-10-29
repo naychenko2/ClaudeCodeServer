@@ -97,7 +97,7 @@ class TestShardsTests(unittest.TestCase):
             with open(path, "w", encoding="utf-8") as f:
                 f.write(LIST)
             original = ts.layout
-            ts.layout = lambda classes, n, timings=None: [s[1:] for s in original(classes, n, timings)]
+            ts.layout = lambda classes, n, timings=None, fast=None: [s[1:] for s in original(classes, n, timings, fast)]
             try:
                 code, _, err = self._main("--list", path, "--shard", "1/3")
             finally:
@@ -122,6 +122,47 @@ class TestShardsTests(unittest.TestCase):
             with open(path, "w", encoding="utf-8") as f:
                 f.write("Build failed")
             self.assertEqual(2, self._main("--list", path, "--verify")[0])
+
+
+class CostLayoutTests(unittest.TestCase):
+    TIMINGS = {"S": 60, "F1": 30, "F2": 30, **{f"H{i}": 40 for i in range(10)}}
+    FAST = {"S": 60, "F1": 30, "F2": 30}  # S — серийный гигант Fast; H* — только второй проход
+
+    def _max_cost(self, shards):
+        costs = []
+        for s in shards:
+            fs = [self.FAST.get(c, 0) for c in s]
+            rs = [self.TIMINGS[c] - self.FAST.get(c, 0) for c in s]
+            costs.append(ts.pass_cost(sum(fs), max(fs, default=0)) + ts.pass_cost(sum(rs), max(rs, default=0)))
+        return max(costs)
+
+    def test_серийный_гигант_fast_делит_шард_только_с_тем_что_в_его_проход_укладывается(self):
+        classes = {c: 1 for c in self.TIMINGS}
+        by_sum = ts.layout(classes, 2, self.TIMINGS)
+        by_cost = ts.layout(classes, 2, self.TIMINGS, self.FAST)
+        # по сумме гигант делит шард с тяжёлым вторым проходом и тянет шард вверх; по модели — нет
+        self.assertLess(self._max_cost(by_cost), self._max_cost(by_sum))
+        self.assertEqual(sorted(self.TIMINGS), sorted(c for s in by_cost for c in s))
+
+    def test_без_разбивки_на_проходы_раскладка_по_сумме_как_раньше(self):
+        classes = {c: 1 for c in self.TIMINGS}
+        self.assertEqual(ts.layout(classes, 3, self.TIMINGS), ts.layout(classes, 3, self.TIMINGS, None))
+
+    def test_раскладка_с_fast_детерминирована_и_не_теряет_классы_без_профиля(self):
+        classes = {**{c: 1 for c in self.TIMINGS}, "Unknown": 1}
+        a = ts.layout(classes, 3, self.TIMINGS, self.FAST)
+        self.assertEqual(a, ts.layout(dict(reversed(list(classes.items()))), 3, self.TIMINGS, self.FAST))
+        self.assertIn("Unknown", [c for s in a for c in s])
+
+    def test_load_profile_отдаёт_fast_только_если_он_есть_в_профиле(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old, new = os.path.join(tmp, "old.json"), os.path.join(tmp, "new.json")
+            with open(old, "w", encoding="utf-8") as f:
+                json.dump({"classes": {"A": {"tests": 1, "seconds": 2.0}}}, f)
+            with open(new, "w", encoding="utf-8") as f:
+                json.dump({"classes": {"A": {"tests": 1, "seconds": 2.0, "fast": 0.5, "project": "P"}}}, f)
+            self.assertIsNone(ts.load_profile(old)[2])
+            self.assertEqual(({"A": 2.0}, {"A": "P"}, {"A": 0.5}), ts.load_profile(new))
 
 
 SLNX = """<Solution>

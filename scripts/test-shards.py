@@ -76,16 +76,48 @@ def stable_bucket(cls, n):
     return int(hashlib.sha1(cls.encode("utf-8")).hexdigest(), 16) % n
 
 
-def layout(classes, n, timings=None):
-    """Список из n списков классов. timings — {класс: секунды} из профиля или None."""
+# Во сколько раз сумма длительностей тестов проекта больше его стены: 4 потока xUnit на 4 vCPU раннера,
+# а длительности теста раздуты ожиданием процессора. Замер CI 29.10 (6 шардов монолита): отношение суммы
+# к стене прохода 4,3–5,6, модель с 5 даёт корреляцию с реальной стеной шарда 0,89 против 0,44 у голой суммы.
+PARALLEL = 5.0
+
+
+def pass_cost(total, longest):
+    """Оценка стены прохода: класс серийный и держит поток целиком, остальное делится на потоки."""
+    return max(longest, total / PARALLEL)
+
+
+def layout(classes, n, timings=None, fast=None):
+    """Список из n списков классов. timings — {класс: секунды} из профиля или None.
+
+    fast — {класс: секунды в проходе Fast} из профиля. Есть — класс кладётся в шард, где РЕЗУЛЬТАТ
+    (стена Fast + стена остального прохода, каждая — max(самый долгий класс, сумма / PARALLEL)) меньше:
+    серийный гигант вроде SessionManagerTests (56 с в Fast) не делает шард медленным, пока рядом лежит
+    лишь то, что в его проход укладывается бесплатно. Нет — жадная упаковка по сумме секунд."""
     shards = [[] for _ in range(n)]
-    load = [0.0] * n
     timings = timings or {}
     known = sorted((c for c in classes if c in timings), key=lambda c: (-timings[c], c))
-    for c in known:
-        i = min(range(n), key=lambda k: (load[k], k))
-        shards[i].append(c)
-        load[i] += timings[c]
+    if fast is None:
+        load = [0.0] * n
+        for c in known:
+            i = min(range(n), key=lambda k: (load[k], k))
+            shards[i].append(c)
+            load[i] += timings[c]
+    else:
+        acc = [[0.0, 0.0, 0.0, 0.0] for _ in range(n)]  # сумма и максимум Fast, сумма и максимум остального
+
+        def cost(a):
+            return pass_cost(a[0], a[1]) + pass_cost(a[2], a[3])
+
+        def added(a, f, r):
+            return [a[0] + f, max(a[1], f), a[2] + r, max(a[3], r)]
+
+        for c in known:
+            f = min(fast.get(c, 0.0), timings[c])
+            r = timings[c] - f
+            i = min(range(n), key=lambda k: (cost(added(acc[k], f, r)), cost(acc[k]), k))
+            shards[i].append(c)
+            acc[i] = added(acc[i], f, r)
     for c in sorted(c for c in classes if c not in timings):
         shards[stable_bucket(c, n)].append(c)
     return [sorted(s) for s in shards]
@@ -190,31 +222,39 @@ def verify(tests, shards):
 
 
 def load_profile(path):
-    """(секунды по классам, проект по классам) из JSON профиля; нет файла — (None, None)."""
+    """(секунды по классам, проект по классам, секунды Fast по классам) из JSON профиля; нет файла —
+    (None, None, None). Профиль без разбивки на проходы даёт fast = None: раскладка тогда по сумме."""
     if not path or not os.path.exists(path):
-        return None, None
+        return None, None, None
     with open(path, encoding="utf-8") as f:
         classes = json.load(f)["classes"]
+    fast = {c: v["fast"] for c, v in classes.items() if "fast" in v}
     return ({c: v["seconds"] for c, v in classes.items()},
-            {c: v["project"] for c, v in classes.items() if v.get("project")})
+            {c: v["project"] for c, v in classes.items() if v.get("project")},
+            fast or None)
 
 
 def load_timings(path):
     return load_profile(path)[0]
 
 
-def summary(tests, shards, timings):
+def summary(tests, shards, timings, fast=None):
     counts = classes_of(tests)
     out = []
     for i, s in enumerate(shards):
         sec = sum((timings or {}).get(c, 0.0) for c in s)
-        out.append(f"  шард {i + 1}: классов {len(s)}, тестов {sum(counts.get(c, 0) for c in s)}, "
-                   f"по профилю {sec:.1f} с")
+        line = (f"  шард {i + 1}: классов {len(s)}, тестов {sum(counts.get(c, 0) for c in s)}, "
+                f"по профилю {sec:.1f} с")
+        if fast is not None:
+            fs = [min(fast.get(c, 0.0), timings.get(c, 0.0)) for c in s]
+            rs = [timings.get(c, 0.0) - f for c, f in zip(s, fs)]
+            line += (f", оценка стены {pass_cost(sum(fs), max(fs, default=0.0)) + pass_cost(sum(rs), max(rs, default=0.0)):.0f} с")
+        out.append(line)
     return "\n".join(out)
 
 
-def checked_layout(tests, n, timings):
-    shards = layout(classes_of(tests), n, timings)
+def checked_layout(tests, n, timings, fast=None):
+    shards = layout(classes_of(tests), n, timings, fast)
     errors = verify(tests, shards)
     if errors:
         print(f"Объединение шардов не равно списку тестов ({len(errors)}):", file=sys.stderr)
@@ -260,7 +300,7 @@ def dotnet_env():
     return env
 
 
-def run_shards(project, n, results, timings, extra_filter):
+def run_shards(project, n, results, timings, extra_filter, fast=None):
     listed = subprocess.run(["dotnet", "test", project, "--no-build", "--list-tests"]
                             + (["--filter", extra_filter] if extra_filter else []),
                             capture_output=True, text=True, env=dotnet_env())
@@ -268,11 +308,11 @@ def run_shards(project, n, results, timings, extra_filter):
     if listed.returncode != 0 or not tests:
         print(listed.stdout[-2000:] + listed.stderr[-2000:], file=sys.stderr)
         return 2
-    shards = checked_layout(tests, n, timings)
+    shards = checked_layout(tests, n, timings, fast)
     if shards is None:
         return 1
     print(f"Тестов {len(tests)}, классов {len(classes_of(tests))}, шардов {n}:")
-    print(summary(tests, shards, timings))
+    print(summary(tests, shards, timings, fast))
     os.makedirs(results, exist_ok=True)
     procs = []
     start = time.monotonic()
@@ -352,10 +392,10 @@ def main(argv=None):
     ap.add_argument("--timings", help="JSON профиля (test-profile.py --json); нет файла — раскладка по хешу")
     ap.add_argument("--filter", dest="extra_filter", help="дополнительный фильтр к каждому шарду (--run)")
     args = ap.parse_args(argv)
-    timings, class_projects = load_profile(args.timings)
+    timings, class_projects, fast = load_profile(args.timings)
 
     if args.run:
-        return run_shards(args.run, args.n, args.results, timings, args.extra_filter)
+        return run_shards(args.run, args.n, args.results, timings, args.extra_filter, fast)
     if args.slnx:
         return main_slnx(args, ap, timings, class_projects)
     if not args.list:
@@ -366,14 +406,14 @@ def main(argv=None):
         print(f"В {args.list} нет списка тестов", file=sys.stderr)
         return 2
     index, n = parse_shard(args.shard, ap, args.n)
-    shards = checked_layout(tests, n, timings)
+    shards = checked_layout(tests, n, timings, fast)
     if shards is None:
         return 1
     if index is not None:
         print(shard_filter(shards[index - 1]))
     else:
         print(f"OK: тестов {len(tests)}, каждый ровно в одном из {n} шардов")
-        print(summary(tests, shards, timings))
+        print(summary(tests, shards, timings, fast))
     return 0
 
 

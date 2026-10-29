@@ -3579,6 +3579,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // Занятость чата проверяет вызывающий (ChatContinueService): ход передачи уже завершён.
     public async Task<Session> CreateContinuationAsync(string sessionId, string ownerId)
     {
+        // S1: участнику общего проекта отказ (GetOwned → 404): продолжение ушло бы в личное
+        // пространство вызывающего вместе с содержимым проекта
         if (GetOwned(sessionId, ownerId) is not { } source
             || !_sessions.TryGetValue(sessionId, out _))
             throw new KeyNotFoundException("Чат не найден");
@@ -6806,6 +6808,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // транскрипт и ВСЕГДА перезаписывает имя. Раннер как у «Итога сессии»: локаль или claude-фолбэк.
     public async Task<Session?> RetitleAsync(string userId, string sessionId, CancellationToken ct)
     {
+        // S1: участнику общего проекта отказ (GetOwned → 404): LLM-расход платит арендатор
         var session = GetOwned(sessionId, userId);
         if (session is null) return null;
         if (_cheap is null) throw new InvalidOperationException("ИИ недоступен");
@@ -6840,6 +6843,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // (нет переписки, модель не дала имя, чат исчез). Зовётся и пакетным прогоном.
     public async Task<Session?> SetChatIconAsync(string userId, string sessionId, CancellationToken ct)
     {
+        // S1: участнику общего проекта отказ (GetOwned → null): LLM-расход платит арендатор
         var session = GetOwned(sessionId, userId);
         if (session is null) return null;
         if (_cheap is null) throw new InvalidOperationException("ИИ недоступен");
@@ -11028,6 +11032,21 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     {
         var s = GetById(sessionId);
         return s is not null && ResolveOwnerId(s) == ownerId ? s : null;
+    }
+
+    // Чат, который человеку ВИДЕН (владелец проекта, участник общего проекта при флаге и
+    // рубильнике, владелец чата вне проекта), вместе с областью запроса. Только для чтения:
+    // ключ хранилищ дальше — scope.TenantOwnerId, а не id вызывающего. Запись и ходы остаются
+    // на GetOwned (в S1 участник чаты не пишет). Точка доступа берётся из корня DI лениво:
+    // прямая зависимость замкнула бы цикл ProjectAccessService → ISessionDirectory → SessionManager.
+    public (Session Session, Access.RequestScope Scope)? GetAccessible(string sessionId, string userId)
+    {
+        var s = GetById(sessionId);
+        if (s is null) return null;
+        var scope = _services?.GetService<Access.IProjectAccess>() is { } access
+            ? access.ResolveSession(userId, sessionId)
+            : ResolveOwnerId(s) == userId ? new Access.RequestScope(userId, userId, Access.ProjectRole.Owner) : null;
+        return scope is null ? null : (s, scope);
     }
 
     // Рассылаем в session-группу (сам чат) всегда, плюс в project-группу (все вкладки проекта)

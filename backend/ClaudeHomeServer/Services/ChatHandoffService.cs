@@ -83,7 +83,8 @@ public class ChatHandoffService(
     /// </summary>
     public async Task<ChatHandoffResult> HandoffAsync(string userId, string sessionId, CancellationToken ct)
     {
-        // Владение — GetOwned (проектные сессии тоже): чужой id — KeyNotFound, не 500
+        // Владение — GetOwned (проектные сессии тоже): чужой id — KeyNotFound, не 500.
+        // S1: участнику общего проекта отказ — передача создала бы чат в его пространстве
         var source = sessions.GetOwned(sessionId, userId)
             ?? throw new KeyNotFoundException("Чат не найден");
 

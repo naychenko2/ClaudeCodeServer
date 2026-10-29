@@ -116,8 +116,8 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpGet("{id}")]
     public IActionResult Get(string id)
     {
-        var s = sessions.GetOwned(id, UserId);
-        return s is null ? NotFound() : Ok(s);
+        // Чтение: чат виден и участнику общего проекта (GetAccessible), запись остаётся на GetOwned
+        return sessions.GetAccessible(id, UserId) is { } found ? Ok(found.Session) : NotFound();
     }
 
     [HttpPost]
@@ -382,10 +382,10 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpGet("{id}/team-wave-snapshot")]
     public IActionResult GetTeamWaveSnapshot(string id)
     {
-        // Сессию берём из GetOwned одним lookup'ом: повторный GetById — двойная работа
+        // Сессию берём из GetAccessible одним lookup'ом: повторный GetById — двойная работа
         // и NRE→500, если чат удалён между вызовами (ревью этапа 1).
-        if (sessions.GetOwned(id, UserId) is not { } session) return NotFound();
-        if (teamWaves.BuildWaveSnapshot(session) is not { } snap) return NotFound();
+        if (sessions.GetAccessible(id, UserId) is not { } found) return NotFound();
+        if (teamWaves.BuildWaveSnapshot(found.Session) is not { } snap) return NotFound();
         return Ok(new
         {
             sessionId = id,

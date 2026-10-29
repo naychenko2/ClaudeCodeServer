@@ -87,6 +87,7 @@ public sealed class ChatContinueService(
     /// </summary>
     public async Task<ChatContinueResult> ContinueAsync(string ownerId, string sessionId, string? userNote)
     {
+        // S1: участнику общего проекта отказ (KeyNotFound → 404): продолжение ушло бы в его пространство
         var source = sessions.GetOwned(sessionId, ownerId)
             ?? throw new KeyNotFoundException("Чат не найден");
 

@@ -89,6 +89,8 @@ public class ChatContextController(
 
     private ContextScope? Scope(string sessionId)
     {
+        // S1: участнику общего проекта отказ (404): стор chat-context/{UserId} — личный ключ
+        // вызывающего, контекст чата арендатора в него не кладём
         if (sessions.GetOwned(sessionId, UserId) is not { } session) return null;
         var project = session.ProjectId is { } pid ? projects.GetById(pid) : null;
         return new ContextScope(UserId, session, project);

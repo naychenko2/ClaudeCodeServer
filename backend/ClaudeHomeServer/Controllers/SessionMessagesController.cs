@@ -27,6 +27,10 @@ public class SessionMessagesController(SessionManager sessions, SessionMessaging
     // Чужая/несуществующая — как отсутствующая (404). Владелец резолвится в SessionManager.
     private Models.Session? OwnedSession(string sessionId) => sessions.GetOwned(sessionId, UserId);
 
+    // Чат, который человек ВИДИТ (в т.ч. участник общего проекта): только для чтения. Снимки
+    // промпта, разбор, запись и очередь остаются на OwnedSession — в S1 участник чаты не пишет.
+    private Models.Session? VisibleSession(string sessionId) => sessions.GetAccessible(sessionId, UserId)?.Session;
+
     // GET /api/sessions/{sid}/prompt/{snapshotId} — что ушло модели на этом ходу
     // (секции системного промпта, текст хода, аргументы запуска, доступная часть слоя CLI).
     // Тексты файлов слоя CLI по умолчанию НЕ отдаются — один CLAUDE.md с раскрытыми
@@ -113,7 +117,7 @@ public class SessionMessagesController(SessionManager sessions, SessionMessaging
     [HttpGet("history")]
     public async Task<IActionResult> GetHistory(string sessionId, [FromQuery] int limit = 20)
     {
-        var session = OwnedSession(sessionId);
+        var session = VisibleSession(sessionId);
         if (session is null) return NotFound();
 
         var all = await sessions.GetHistoryAsync(sessionId);
@@ -252,7 +256,7 @@ public class SessionMessagesController(SessionManager sessions, SessionMessaging
     [HttpGet("pending")]
     public IActionResult GetPending(string sessionId)
     {
-        if (OwnedSession(sessionId) is null) return NotFound();
+        if (VisibleSession(sessionId) is null) return NotFound();
         return Ok(sessions.GetPending(sessionId).Select(p => new
         {
             id = p.Id,

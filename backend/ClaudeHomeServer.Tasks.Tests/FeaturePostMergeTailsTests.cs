@@ -149,7 +149,8 @@ public class FeaturePostMergeTailsTests
         final.Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted };
         var merge = Child("m1", epic.Id, TaskRoles.Merge, TaskItemStatus.Done, T0);
         merge.CompletedAt = T0.AddHours(5);
-        var stoppedTail = Child("s1", epic.Id, TaskRoles.Step, TaskItemStatus.InProgress, T0.AddHours(6));
+        // Роль не step: шаг, заведённый после мержа, открывает волну и снимает merged (P1).
+        var stoppedTail = Child("s1", epic.Id, null, TaskItemStatus.InProgress, T0.AddHours(6));
         stoppedTail.ClaudeStartedAt = T0.AddHours(6);
         stoppedTail.ExecutorStoppedAt = T0.AddHours(7);
         stoppedTail.ExecutorStopReason = "auth_failed";

@@ -45,6 +45,7 @@ import { useIsMobile, MOBILE_MAX, TABLET_MAX } from '../lib/breakpoints';
 import { CanvasBackdrop } from '../components/ui/CanvasBackdrop';
 import {
   Island, IslandHeader, SegmentedControl, IconSegmented, Toggle, Dot, FileTypeTile, FileStatusBadge, Badge,
+  UserAvatar,
   SidebarSection,
   Button, IconButton, Modal, ModalActions, ConfirmDialog,
   Menu, MenuItem, MenuSep, BackButton, PressableArea, WaitingIndicator,
@@ -533,6 +534,25 @@ function TogglesSection() {
               <Badge tone="success" dot onClick={() => {}}>Принято</Badge>
               <Badge tone="info" dot onClick={() => {}} active>Предложено (меню открыто)</Badge>
               <Badge tone="danger" icon={<X size={11} />}>С иконкой</Badge>
+            </div>
+          </div>
+        </SubBlock>
+
+        {/* UserAvatar: знак участника — круглый инициал со стабильным цветом по userId
+            (палитра-данные GROUP_COLORS, от темы не зависит; текст C.onDark). Бывший
+            участник — нейтральный вид: цвет больше ничего не несёт */}
+        <SubBlock label="UserAvatar — знак участника (4 размера, цвет по userId, «бывший»)">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.md, alignItems: 'center' }}>
+              <UserAvatar userId="demo-maria" displayName="Мария" />
+              <UserAvatar userId="demo-andrey" displayName="Андрей" size={18} />
+              <UserAvatar userId="demo-zoya" displayName="Зоя" size={28} />
+              <UserAvatar userId="demo-egor" displayName="Егор" size={34} />
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.md, alignItems: 'center' }}>
+              <UserAvatar userId="demo-maria" displayName="Мария" />
+              <UserAvatar userId="demo-maria" displayName="Мария" gone />
+              <span style={{ fontSize: FS.sm, color: C.textMuted }}>тот же id: слева активный, справа бывший (цвет ключа — id, не имя)</span>
             </div>
           </div>
         </SubBlock>

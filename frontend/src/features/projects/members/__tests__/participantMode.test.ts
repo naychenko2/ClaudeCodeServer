@@ -97,7 +97,7 @@ vi.mock('../../../../components/ui/Button', async () => {
 import { MembersStack } from '../MembersStack';
 import { OwnerSettingsNotice } from '../OwnerSettingsNotice';
 import {
-  EDITOR_TURNS_ENABLED, canCreateChats, composerExecBlocked, guardTurnAction, turnDeniedReason, participantComposerGate, participantComposerText,
+  ACCESS_REVOKED_TITLE, EDITOR_TURNS_ENABLED, accessRevokedOwnerLine, canCreateChats, composerExecBlocked, guardTurnAction, turnDeniedReason, participantComposerGate, participantComposerText,
 } from '../participantGate';
 
 type FN = InstanceType<typeof FakeNode>;
@@ -207,6 +207,16 @@ describe('плашки владельца', () => {
     await mount(createElement(OwnerSettingsNotice, { project: own, onGoHome: vi.fn() }));
     await mount(createElement(OwnerSettingsNotice, { project: base, revoked: true, onGoHome: vi.fn() }));
     expect(reg.notices).toHaveLength(0);
+  });
+});
+
+describe('сообщение об отзыве доступа на списке проектов (QA-1)', () => {
+  it('базовый текст фиксирован; строка с именем владельца — только когда имя есть', () => {
+    expect(ACCESS_REVOKED_TITLE).toBe('Доступ к проекту отозван');
+    expect(accessRevokedOwnerLine('Андрей')).toBe('Андрей закрыл вам доступ к проекту.');
+    expect(accessRevokedOwnerLine(null)).toBeNull();
+    expect(accessRevokedOwnerLine(undefined)).toBeNull();
+    expect(accessRevokedOwnerLine('   ')).toBeNull();
   });
 });
 

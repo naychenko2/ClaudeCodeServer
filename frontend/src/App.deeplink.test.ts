@@ -102,6 +102,7 @@ vi.mock('./lib/signalr', () => {
     __esModule: true,
     onMessage: sub, onReconnected: sub, onFilesChanged: sub, onPreviewMessage: sub,
     onLocalModelMessage: sub, onGitStatusChanged: sub, onAgentHubMessage: sub,
+    onProjectAccessRevoked: sub,
     joinProject: act, leaveProject: act, joinSession: act, leaveSession: act,
     joinUser: act, leaveUser: act, sendMessage: act, respondPermission: act,
     interruptSession: act, compactSession: act, answerQuestion: act, respondPlan: act,

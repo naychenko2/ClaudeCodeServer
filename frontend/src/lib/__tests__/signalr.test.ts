@@ -321,6 +321,27 @@ describe('подписка на project_members_changed', () => {
   });
 });
 
+describe('подписка на project_access_revoked', () => {
+  it('личное событие доходит только до подписчиков этого события; отписка снимает', () => {
+    const first = vi.fn();
+    const otherEvent = vi.fn(); // подписчик другого события (message)
+    signalr.onMessage(otherEvent);
+    const offFirst = signalr.onProjectAccessRevoked(first);
+
+    // чужое хаб-событие — мимо
+    h.fake.fire('project_members_changed', { projectId: 'p1' });
+    expect(first, 'чужое событие не трогает').not.toHaveBeenCalled();
+
+    h.fake.fire('project_access_revoked', { projectId: 'p2', ownerDisplayName: 'admin' });
+    expect(first).toHaveBeenCalledWith({ projectId: 'p2', ownerDisplayName: 'admin' });
+    expect(otherEvent, 'личное событие не трогает подписчиков message').not.toHaveBeenCalled();
+
+    offFirst();
+    h.fake.fire('project_access_revoked', { projectId: 'p3' });
+    expect(first, 'после отписки событие не должно приходить').toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('project-группа: счётчик членства и возврат после разрыва', () => {
   it('вторый держатель не вызывает второго входа; выход первого не выбивает второго', async () => {
     await signalr.joinProject('p1');

@@ -271,6 +271,17 @@ export function onProjectMembersChanged(handler: (data: { projectId: string }) =
   return () => conn.off('project_members_changed', handler);
 }
 
+// Доступ к проекту отозван (QA-1): после выкидывания соединения из всех групп этого
+// человека сервер шлёт личное событие project_access_revoked в группу user_{id} — его
+// приход для клиента есть доказательство завершённого выкидывания. ownerDisplayName может
+// быть null (проект без владельца). Подписчик убирает проект из списка; если он сейчас
+// открыт — сообщение и уход к списку (App).
+export function onProjectAccessRevoked(handler: (data: { projectId: string; ownerDisplayName?: string | null }) => void): () => void {
+  const conn = getConnection();
+  conn.on('project_access_revoked', handler);
+  return () => conn.off('project_access_revoked', handler);
+}
+
 // Живые метрики локальной модели (флаг local-model-stats): тиковый снимок состояния
 // генерации (local_model_live) и итог завершённого хода (local_model_turn_stats). Оба
 // эфемерные (в историю не пишутся) и приходят в группу сессии — подписчик фильтрует по

@@ -56,6 +56,15 @@ export function chatActionAuthorLock(key: string, project: Pick<Project, 'myRole
   return AUTHOR_ONLY_ACTIONS.includes(key) ? chatAuthorOnlyReason(project) : null;
 }
 
+// Сообщение об отзыве доступа на списке проектов (QA-1): базовый текст фиксирован; строка
+// с именем владельца добавляется только когда сервер его принёс (у проекта без владельца
+// ownerDisplayName — null). Формулировка та же, что у плашки в воркспейсе.
+export const ACCESS_REVOKED_TITLE = 'Доступ к проекту отозван';
+export function accessRevokedOwnerLine(ownerDisplayName?: string | null): string | null {
+  const name = ownerDisplayName?.trim();
+  return name ? `${name} закрыл вам доступ к проекту.` : null;
+}
+
 // Бэк мог всё же отказать (устаревшая роль на клиенте): 403 с code not_chat_author
 export function isNotChatAuthorError(e: unknown): boolean {
   const body = (e as { status?: number; body?: { code?: string } } | null);

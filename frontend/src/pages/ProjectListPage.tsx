@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowDownAZ, Clock, List, Orbit, Plus, Search } from 'lucide-react';
+import { ArrowDownAZ, Clock, List, Orbit, Plus, Search, UserX } from 'lucide-react';
 import type { Project, ProjectGroup, Session, AuthState } from '../types';
 import { api } from '../lib/api';
 import { useOnline } from '../hooks/useOnline';
@@ -9,7 +9,7 @@ import { MOBILE_MAX } from '../lib/breakpoints';
 import { PanelZone } from './workspace/PanelZone';
 import { projectsPanels } from './workspace/panelStackState';
 import { PROJECTS_KEYS } from './workspace/panelCatalog';
-import { Button, EmptyState, IslandScaffold } from '../components/ui';
+import { Button, EmptyState, IslandScaffold, Notice } from '../components/ui';
 import { PageCanvas } from '../components/ui/PageCanvas';
 import { ICON_SIZE } from '../components/ui/icons';
 import { PillSwitch } from '../components/Toolbar';
@@ -26,6 +26,8 @@ import { DeleteDialog } from '../features/projects/dialogs/DeleteDialog';
 import { MoveToGroupDialog } from '../features/projects/dialogs/MoveToGroupDialog';
 import { GroupManagerDialog } from '../features/projects/dialogs/GroupManagerDialog';
 import { onProjectIconBackfilled } from '../features/projects/useAllProjects';
+import { onProjectAccessRevoked } from '../lib/signalr';
+import { ACCESS_REVOKED_TITLE, accessRevokedOwnerLine } from '../features/projects/members/participantGate';
 import { FLAGS, useFeature } from '../lib/featureFlags';
 import { SphereHeader } from '../features/spheres/SphereHeader';
 import { SphereDialog } from '../features/spheres/SphereDialog';
@@ -51,6 +53,9 @@ interface Props {
   onLogout: () => void;
   auth?: AuthState | null;
   onHubTab: (t: HubTabValue) => void;
+  // Доступ к открытому сейчас проекту отозван и человек приведён сюда (QA-1):
+  // плашка объясняет, почему проекта в списке больше нет. Гасится App при любом переходе.
+  accessNotice?: { projectId: string; ownerDisplayName?: string | null } | null;
 }
 
 const ACTIVE_STATUSES = new Set(['starting', 'working', 'active', 'waiting']);
@@ -86,7 +91,7 @@ function useMeasuredWidth<T extends HTMLElement>() {
   return [ref, width] as const;
 }
 
-export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
+export function ProjectListPage({ onOpen, onLogout, auth, onHubTab, accessNotice }: Props) {
   const online = useOnline();
   const spheresOn = useFeature(FLAGS.spheres);
   const wide = useWide();
@@ -149,6 +154,12 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   // новый URL: он бустится именем файла иконки)
   useEffect(() => onProjectIconBackfilled(fresh =>
     setProjects(prev => prev.map(p => p.id === fresh.id ? fresh : p))), []);
+
+  // Доступ к проекту отозван (QA-1): бэк его больше не отдаёт — убираем из списка без
+  // сообщения (плашку об открытом проекте рисует App по пропу accessNotice; здесь —
+  // только чтобы строка отозванного проекта не осталась кликом в 404). Чужой id — ничего.
+  useEffect(() => onProjectAccessRevoked(({ projectId }) =>
+    setProjects(prev => (prev.some(p => p.id === projectId) ? prev.filter(p => p.id !== projectId) : prev))), []);
 
   const filtered = projects.filter(p =>
     p.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -311,6 +322,15 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
       )}
     </div>
   );
+  // Плашка об отзыве доступа приведённому сюда человеку (QA-1): текст тот же, что у
+  // плашки в воркспейсе (participantGate), тон warning — событие неприятное.
+  // Отступы задаёт ветка раскладки (у десктопа список отбит на 26px, у мобилы — 22px)
+  const revokedBanner = accessNotice ? (
+    <Notice tone="warning" icon={UserX} data-testid="access-revoked-banner" title={ACCESS_REVOKED_TITLE}>
+      {accessRevokedOwnerLine(accessNotice.ownerDisplayName)}
+    </Notice>
+  ) : null;
+
   const retryBlock = (msg: string) => (
     <div style={{ textAlign: 'center', padding: '48px 0 0' }}>
       <div style={{ color: C.textMuted, fontSize: 14, marginBottom: 12 }}>{msg}</div>
@@ -357,6 +377,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
           // вместе со списком, тот раздувался до полной высоты контента, и прокрутка
           // не включалась совсем: хвост уезжал за нижний край экрана без доступа
           <main style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto' }}>
+            {revokedBanner && <div style={{ flexShrink: 0, padding: '14px 26px 0' }}>{revokedBanner}</div>}
             {sphereOpen && (
               <SpherePage
                 key={sphereOpen.id}
@@ -496,6 +517,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
     <PageCanvas>
       <HubHeader value="projects" onTab={onHubTab} auth={auth!} onLogout={onLogout} />
       <div style={{ maxWidth: 640, width: '100%', margin: '0 auto', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, padding: '0 22px' }}>
+        {revokedBanner && <div style={{ flexShrink: 0, paddingTop: 12 }}>{revokedBanner}</div>}
 
         {/* Поиск + управление группами */}
         <div style={{ flexShrink: 0, paddingTop: 18, paddingBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}>

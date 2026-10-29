@@ -52,6 +52,15 @@ function load(force = false): Promise<Project[]> {
 // Сбросить кэш и оповестить подписчиков (напр. после создания/удаления проекта)
 export function invalidateProjectsCache() { fetchedAt = 0; void load(true); }
 
+// Доступ к проекту отозван (QA-1): бэк его больше не отдаёт — убираем из кэша без запроса
+// (в офлайне load() оставил бы прежний список) и оповещаем подписчиков: зона переключения
+// и палитра перерисовываются без этого проекта.
+export function dropProjectFromCache(id: string): void {
+  if (!cache.some(p => p.id === id)) return;
+  cache = cache.filter(p => p.id !== id);
+  listeners.forEach(l => l());
+}
+
 // Прогреть кэш (если ещё не свежий) и дождаться списка. Вне React — напр. для навигации
 // в проект по id из глобального стора, когда готового Project-объекта нет под рукой.
 export function ensureProjectsLoaded(): Promise<Project[]> { return load(); }

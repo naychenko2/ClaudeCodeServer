@@ -31,10 +31,10 @@ import { useOnline } from './hooks/useOnline'
 import { useThemeColor } from './hooks/useThemeColor'
 import { projectMainColor } from './features/projects/projectUtil'
 import { runOfflineSnapshot, syncProjectFiles, drainOfflineQueues } from './lib/sync'
-import { onFilesChanged, onMessage, resetConnection } from './lib/signalr'
+import { onFilesChanged, onMessage, onProjectAccessRevoked, resetConnection } from './lib/signalr'
 import { resetTerminalConnection } from './lib/terminalSignalr'
 import { resetAgentHubs } from './lib/agentHub'
-import { onProjectIconBackfilled } from './features/projects/useAllProjects'
+import { dropProjectFromCache, onProjectIconBackfilled } from './features/projects/useAllProjects'
 import { loadWorkspaceState } from './lib/workspaceState'
 import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from './lib/nav'
 import { pendingChatOnPop, encodePendingChat } from './lib/pendingProjectChat'
@@ -174,6 +174,10 @@ export default function App() {
       return null
     }
   })
+  // Доступ к открытому проекту отозван (QA-1): сообщение для списка проектов — его рисует
+  // ProjectListPage по этому снимку. Снимок гасится любым переходом в проект или раздел:
+  // он объясняет внезапный выход, а не постоянная плашка.
+  const [accessNotice, setAccessNotice] = useState<{ projectId: string; ownerDisplayName?: string | null } | null>(null)
 
   // Активная вкладка хаба — вне открытого проекта. Стартовый экран — дашборд «Домой»:
   // hash-диплинк приоритетнее, а без hash всегда открывается 'home'. Ключ HUB_TAB_KEY
@@ -823,6 +827,8 @@ export default function App() {
   // тянут за собой openProject и navPush/navReplace. Приём тот же, что у openUrlRef ниже.
   const openProjectFromHomeRef = useRef<((p: Project) => void) | null>(null)
   const switchHubTabRef = useRef<((t: HubTabValue) => void) | null>(null)
+  // Зеркало выхода к списку проектов — для эффекта подписки ниже (тот же приём, что выше)
+  const goToProjectsRef = useRef<(() => void) | null>(null)
 
   // Синхронизация раздела с URL при внешней смене hash. Внутренняя навигация (navPush/
   // navReplace) идёт через pushState/replaceState и сама НЕ диспатчит hashchange → рекурсии
@@ -894,6 +900,8 @@ export default function App() {
   // chatId — сразу запись чата, а не списка проекта: переход в чат чужого проекта кладёт
   // в историю одну запись, и «назад» из него возвращает в прежний чат
   const openProject = (p: Project, chatId?: string) => {
+    // Открыли другой проект — сообщение об отзыве больше не к месту
+    setAccessNotice(null)
     recordRecentProject(p.id)
     localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(p))
     navPush(chatId
@@ -916,9 +924,24 @@ export default function App() {
     navReplace({ screen: 'projects' })
     setProject(null)
   }
+  // Доступ к проекту отозван (дефект QA-1): после выкидывания всех групп этого человека
+  // сервер шлёт личное событие в его группу user_{id}. Клиент убирает проект из общего
+  // кэша списка (зона шапки и палитра перерисовываются); если это сейчас открытый проект —
+  // закрываем его и уходим к списку: загруженные чаты проекта без доступа не должны
+  // оставаться на экране, а причину объясняет Notice на списке (снимок accessNotice).
+  // Событие про другой проект текущий экран не трогает.
+  useEffect(() => onProjectAccessRevoked(({ projectId, ownerDisplayName }) => {
+    dropProjectFromCache(projectId)
+    if (projectId !== projectIdRef.current) return
+    setAccessNotice({ projectId, ownerDisplayName })
+    goToProjectsRef.current?.()
+  }), [])
   // Переключатель раздела «Чаты | Проекты». НЕ сбрасывает открытый проект — он «спит»
   // при уходе в «Чаты» и восстанавливается при возврате в «Проекты» (навигационная память).
   const switchHubTab = (t: HubTabValue) => {
+    // Ушли в другой раздел — сообщение об отзыве доступа гасится (объяснить — его дело,
+    // но только сразу после увода, а не постоянной плашкой на списке)
+    setAccessNotice(null)
     // Гейт подсистемной вкладки: если подсистема не зарегистрирована в бандле или
     // выключена пользователю — ведём в «Чаты». Точка одна, покрывает все вызывающие
     // (пилюлю, диплинк из уведомления, программный switchHubTabRef/hashchange).
@@ -1028,6 +1051,7 @@ export default function App() {
   // обработчик там живёт дольше рендера и обязан звать свежие версии
   useEffect(() => { openProjectFromHomeRef.current = openProjectFromHome })
   useEffect(() => { switchHubTabRef.current = switchHubTab })
+  useEffect(() => { goToProjectsRef.current = goToProjects })
 
   // Чип «← к фиче» в разделе «Чаты» (воркспейса нет, cc-open-feature никто не принял):
   // открываем проект фичи сразу со страницей фичи — снимок с feature читает WorkspacePage
@@ -1404,7 +1428,7 @@ export default function App() {
                 // WorkspacePage — иначе useState-инициализаторы не перечитают состояние
                 // нового проекта и на экране остаётся чат/файл/вкладка старого
                 ? <WorkspacePage key={project.id} project={project} onProjectUpdated={handleOpenProjectUpdated} onGoToProjects={goToProjects} onSwitchHub={switchHubTab} auth={auth} onLogout={logout} />
-                : <ProjectListPage onOpen={openProject} onLogout={logout} auth={auth} onHubTab={switchHubTab} />
+                : <ProjectListPage onOpen={openProject} onLogout={logout} auth={auth} onHubTab={switchHubTab} accessNotice={accessNotice} />
       }
       {auth && historyOpen && (
         <ProductHistory

@@ -3011,6 +3011,19 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
               Режим «Без ограничений» — {asstName} действует без подтверждений
             </div>
           )}
+          {/* Закреплённая полоса «практика ждёт вашего решения»: пока в ленте есть
+              открытая карточка эскалации, человек видит её над композером, даже если
+              её уже унесло вверх потоком докладов. Клик раздвигает окно ленты,
+              скроллит к карточке и мягко подсвечивает (.escalation-flash в index.css).
+              Стоит НАД строкой контекста: та — верхняя губа поля ввода (заезжает под
+              него отрицательным отступом), и полоса между ними разрывала стык */}
+          {topEscalation && (
+            <EscalationStickyBanner
+              top={topEscalation}
+              others={openEscalations.length - 1}
+              onJump={jumpToEscalation}
+            />
+          )}
           {/* Строка контекста над композером: ветка, «С чем», что подключено (ADR-023).
               Офлайн её нет: композер — одна заглушка, и губе не к чему прилегать */}
           {!embedded && online && (
@@ -3028,17 +3041,6 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             style={{ display: 'none' }}
             onChange={e => { const fs = Array.from(e.target.files ?? []); e.target.value = ''; if (fs.length) void handleComposerFiles(fs); }}
           />
-          {/* Закреплённая полоса «практика ждёт вашего решения»: пока в ленте есть
-              открытая карточка эскалации, человек видит её над композером, даже если
-              её уже унесло вверх потоком докладов. Клик раздвигает окно ленты,
-              скроллит к карточке и мягко подсвечивает (.escalation-flash в index.css) */}
-          {topEscalation && (
-            <EscalationStickyBanner
-              top={topEscalation}
-              others={openEscalations.length - 1}
-              onJump={jumpToEscalation}
-            />
-          )}
           <Composer
             // key по чату: Composer полностью перемонтируется при смене сессии, поэтому
             // его внутренний стейт (текст черновика, teamMech/teamOpen/teamSettings,

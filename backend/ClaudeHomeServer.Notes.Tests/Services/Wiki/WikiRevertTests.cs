@@ -292,15 +292,55 @@ public class WikiRevertTests : IDisposable
         // _log.md — производная от log.jsonl: строка отката в ней (порядок: журнал до проекций).
         File.ReadAllText(PageFull("Общее/_log.md")).Should().Contain("revert");
 
-        // Статус не меняется: таблицы переходов «reverted» не содержат (WikiPackage.Transitions);
-        // придумать статус — не решение этого шага, вопрос — к постановщику.
-        ReadStatus(pkg.Id).Item1.Should().Be(WikiPackage.StatusApplied);
+        // Статус ведётся Transition стора: applied → reverted, конечный (решение постановщика).
+        ReadStatus(pkg.Id).Item1.Should().Be(WikiPackage.StatusReverted);
 
         // Инвариант урока S4b: после отката раздел открыт следующему пакету, а не заблокирован
         // «дрейфом» — второй PrepareAsync того же раздела проходит.
         var next = CreateAccepted(Op(WikiPackage.OpAppend, PagePath, "Контенер собран на второй машине"));
         var again = await _sut.PrepareAsync(User, next, Ctx);
         again.Ready.Should().BeTrue(again.Reason);
+    }
+
+    // ─── 1b. Повторный откат: отказ по статусу, второй строки журнала нет (доработка) ──────
+
+    [Fact]
+    public async Task ПовторныйОткат_ОтказПоСтатусу_ВторойСтрокиЖурналаНет()
+    {
+        // Мутация «убрать проверку статуса» (снять гейты «reverted»/«не applied» в RevertAsync):
+        // второй вызов идёт к откату — Code=CodeStatus краснеет (он CodeClaim: переход
+        // «reverted» → «reverted» отвергнут таблицей), и «второй строки нет» краснеет: журнал
+        // получает вторую строку op=revert.
+        await WriteCardAndPage();
+        var pkg = CreateAccepted(Op(WikiPackage.OpAppend, PagePath, "Контенер собран на второй машине"));
+        var applied = await _sut.ApplyAsync(User, pkg, Ctx);
+        applied.Applied.Should().BeTrue(applied.Reason);
+        var first = await _revert.RevertAsync(User, pkg.Id);
+        first.Reverted.Should().BeTrue(first.Reason);
+        var afterFirst = SnapshotPages();
+
+        var r = await _revert.RevertAsync(User, pkg.Id);
+
+        r.Reverted.Should().BeFalse();
+        r.Code.Should().Be(WikiPackageRevert.CodeStatus);
+        r.Reason.Should().Contain("уже откатан");
+        // Вторая строка op=revert не дописывается: кнопка не повторяет уже сделанный откат.
+        LogLines().Count(l => l.Contains("\"op\":\"revert\"")).Should().Be(1);
+        // Файлы и статус — такие, какими остались после первого отката.
+        SnapshotPages().Should().Equal(afterFirst);
+        ReadStatus(pkg.Id).Item1.Should().Be(WikiPackage.StatusReverted);
+
+        // Из «reverted» нет переходов вовсе: статус конечный (таблица переходов).
+        var t = WikiPackageStore.Transition(Root, pkg.Id, WikiPackage.StatusStale);
+        t.Ok.Should().BeFalse();
+        t.Code.Should().Be(WikiPackageStore.CodeTransition);
+
+        // «reverted» и «applied» — не открытые: не ждут разбора и не держат лимит 20
+        // (список открытых — не ключи таблицы: у «applied» есть переход человека, но он закрыт
+        // для кода). Открытые — ровно те, из которых работу продолжает код или человек.
+        WikiPackage.IsOpen(WikiPackage.StatusReverted).Should().BeFalse();
+        WikiPackage.IsOpen(WikiPackage.StatusApplied).Should().BeFalse();
+        WikiPackage.IsOpen(WikiPackage.StatusApplying).Should().BeTrue();
     }
 
     // ─── 2. Чужая правка одной страницы: отказ с перечнем, файлы не тронуты (c2) ──────────

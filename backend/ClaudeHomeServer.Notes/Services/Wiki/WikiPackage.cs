@@ -38,7 +38,8 @@ public sealed record WikiPackage
     public static readonly IReadOnlyList<string> DecisionValues = [DecisionAuto, DecisionInbox];
 
     // Статусы пакета (ADR-035, решение 4): checking → proposed | rejected_by_checks →
-    // accepted | partially_accepted | rejected → applying → applied | apply_failed | stale.
+    // accepted | partially_accepted | rejected → applying → applied | apply_failed | stale;
+    // applied → reverted — «Откатить пакет» человека (решение 12г, мера 4, S4b-3).
     public const string StatusChecking = "checking";
     public const string StatusProposed = "proposed";
     public const string StatusRejectedByChecks = "rejected_by_checks";
@@ -49,6 +50,7 @@ public sealed record WikiPackage
     public const string StatusApplied = "applied";
     public const string StatusApplyFailed = "apply_failed";
     public const string StatusStale = "stale";
+    public const string StatusReverted = "reverted";
 
     /// <summary>Решение человека по операции `inbox` (REST, S4a): ставится только поверх
     /// решения политики и только в статусе `proposed`.</summary>
@@ -63,10 +65,13 @@ public sealed record WikiPackage
     ///   → stale: база ops изменилась, авто-rebase нет (решение 4).
     /// accepted/partially_accepted → applying | stale.
     /// applying → applied | apply_failed (откат по прообразам) | stale.
+    /// applied → reverted: «Откатить пакет» — только кнопка человека из журнала (решение 12г,
+    ///   мера 4, S4b-3); другой выход из применённого пакета не предусмотрен.
     /// Замкнутые: rejected_by_checks — отказ кодов человек не пересматривает (мера 1:
     ///   утверждение без дословной цитаты не применяется ни при какой политике);
-    /// rejected, applied, apply_failed, stale — следующим шагом здесь же быть не может:
-    ///   откат и повторный разбор дают НОВЫЙ пакет (меры 4–5, решение 4 про stale).</summary>
+    /// rejected, apply_failed, stale, reverted — следующим шагом здесь же быть не может:
+    ///   откат и повторный разбор дают НОВЫЙ пакет (меры 4–5, решение 4 про stale);
+    ///   из «reverted» переходов нет: повторный откат того же пакета — отказ по статусу.</summary>
     public static readonly IReadOnlyDictionary<string, string[]> Transitions =
         new Dictionary<string, string[]>
         {
@@ -75,17 +80,22 @@ public sealed record WikiPackage
             [StatusAccepted] = [StatusApplying, StatusStale],
             [StatusPartiallyAccepted] = [StatusApplying, StatusStale],
             [StatusApplying] = [StatusApplied, StatusApplyFailed, StatusStale],
+            [StatusApplied] = [StatusReverted],
         };
 
     public static readonly IReadOnlyList<string> StatusValues =
         [StatusChecking, StatusProposed, StatusRejectedByChecks, StatusAccepted, StatusPartiallyAccepted,
-         StatusRejected, StatusApplying, StatusApplied, StatusApplyFailed, StatusStale];
+         StatusRejected, StatusApplying, StatusApplied, StatusApplyFailed, StatusStale, StatusReverted];
 
-    /// <summary>Открытый пакет — тот, из которого возможен следующий переход: он ещё ждёт
-    /// работы и занимает лимит 20 (в лимит входят и спорные во «Входящих» = proposed).
-    /// Замкнутый — отказ кодов, отказ человека, применённый, неудачно применённый,
-    /// устаревший: с самим этим пакетом дальше ничего не делается.</summary>
-    public static bool IsOpen(string status) => Transitions.ContainsKey(status);
+    /// <summary>Открытый пакет — тот, который ещё ждёт работы и занимает лимит 20 (в лимит
+    /// входят и спорные во «Входящих» = proposed). Список открытых — НЕ ключи таблицы переходов:
+    /// «applied» имеет переход (человеческая кнопка отката), но открытым не является — применённый
+    /// пакет ночной разбор не ждёт и места в лимите не держит; открытые — ровно те, из которых
+    /// работу продолжает код или человек по спорным операциям. Закрытые для кода — отказ кодов,
+    /// отказ человека, применённый, неудачно применённый, устаревший, откатанный: ночной разбор
+    /// с ними не работает; с применённым возможен только человеческий откат (мера 4).</summary>
+    public static bool IsOpen(string status) =>
+        status is StatusChecking or StatusProposed or StatusAccepted or StatusPartiallyAccepted or StatusApplying;
 
     public static bool CanTransition(string from, string to) =>
         Transitions.TryGetValue(from, out var next) && Array.IndexOf(next, to) >= 0;

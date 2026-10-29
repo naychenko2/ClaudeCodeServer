@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, useReducer, type ReactNode } from 'react';
-import { Plus, MessageCircle, Network, Puzzle, GitCompare, BookOpen, DraftingCompass, Plug, type LucideIcon } from 'lucide-react';
+import { Plus, MessageCircle, Network, Puzzle, GitCompare, BookOpen, DraftingCompass, Plug, Users, type LucideIcon } from 'lucide-react';
 import type { Project, Session, SkillsData, AuthState, Task, ProjectService, SessionContextEntry } from '../types';
 import { DeviceAgentGate } from '../components/DeviceAgentGate';
 import { ProjectFeature } from '../types';
@@ -54,6 +54,8 @@ import { centerFingerprint as computeCenterFingerprint } from '../lib/centerOccu
 import type { CenterOccupancy } from '../lib/centerOccupancy';
 import { useFeature, useFlagsLoaded, FLAGS } from '../lib/featureFlags';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
+import { OwnerSettingsNotice } from '../features/projects/members/OwnerSettingsNotice';
+import { isParticipant } from '../features/projects/members/participantGate';
 import { TasksPanel } from '../features/tasks/TasksPanel';
 import { useTaskFilters, useTaskGroupTab } from '../lib/taskFilters';
 import { TaskDetailsPane } from '../features/tasks/TaskDetailsPane';
@@ -610,6 +612,13 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   // Сам обработчик — ниже (после объявления isMobile), эффект-подписка тоже там.
 
   const [editProjectOpen, setEditProjectOpen] = useState(false);
+  // Диалог открыт по стопке аватаров / пункту «Участники»: секция раскрыта сразу
+  const [editMembersOpen, setEditMembersOpen] = useState(false);
+  const openProjectSettings = () => { setEditMembersOpen(false); setEditProjectOpen(true); };
+  const openMembersSettings = () => { setEditMembersOpen(true); setEditProjectOpen(true); };
+  const closeProjectSettings = () => { setEditProjectOpen(false); setEditMembersOpen(false); };
+  // Доступ участника отозван, пока проект открыт: проекта больше нет в его списке
+  const [accessRevoked, setAccessRevoked] = useState(false);
   const [projectForEdit, setProjectForEdit] = useState(project);
   // «Открыть в «Плагинах»» (карточка черновика в ленте/настройках): существующий способ —
   // раскрыть диалог настроек проекта, где секция плагинов (тот же приём, что onOpenPlugins у PluginFrame).
@@ -1303,6 +1312,12 @@ const windowWidth = useWindowWidth();
       onClick: () => setLocalModelOpen(true),
     }] : []),
     ...overflowTabItems.slice(splitAt),
+    // Общий проект: на телефоне стопки аватаров нет (карта v2 п.10) — вход в «Участники» здесь
+    ...((projectForEdit.members?.count ?? 0) > 0 || isParticipant(projectForEdit) ? [{
+      key: 'members', label: 'Участники',
+      icon: <Users size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />,
+      onClick: openMembersSettings,
+    }] : []),
     {
       key: 'models-spend', label: 'Модели и расход',
       icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>,
@@ -1598,7 +1613,7 @@ const windowWidth = useWindowWidth();
       .then(list => {
         if (cancelled) return;
         const fresh = list.find(p => p.id === project.id);
-        if (!fresh) return;
+        if (!fresh) { if (isParticipant(project)) setAccessRevoked(true); return; }
         setProjectDefaultId(fresh.defaultPersonaId ?? null);
       })
       .catch(() => { /* офлайн — работаем с тем, что знаем */ });
@@ -2478,6 +2493,9 @@ const windowWidth = useWindowWidth();
             На мобиле появляется только в режиме sidebar (как headerBar выше); не гейт —
             workspace остаётся полностью доступным. */}
         {!openFile && mobileView === 'sidebar' && (
+          <OwnerSettingsNotice project={projectForEdit} revoked={accessRevoked} onGoHome={() => onSwitchHub('home')} />
+        )}
+        {!openFile && mobileView === 'sidebar' && (
           <ProjectIntroCard
             projectId={project.id}
             projectOwnerId={project.ownerId}
@@ -2565,10 +2583,11 @@ const windowWidth = useWindowWidth();
         {editProjectOpen && (
           <EditDialog
             project={projectForEdit}
-            onSuccess={updated => { setProjectForEdit(updated); setEditProjectOpen(false); }}
+            onSuccess={updated => { setProjectForEdit(updated); closeProjectSettings(); }}
             onIconUpdated={setProjectForEdit}
             onProjectUpdated={handleProjectUpdated}
-            onClose={() => setEditProjectOpen(false)}
+            openMembers={editMembersOpen}
+            onClose={closeProjectSettings}
           />
         )}
       </PageCanvas>
@@ -2578,11 +2597,12 @@ const windowWidth = useWindowWidth();
   return (
     <PageCanvas project={project}>
       {/* Единый верхний хаб-хедер на всю ширину (симметрия с разделом «Чаты») */}
-      <HubHeader value="projects" onTab={onSwitchHub} auth={auth} onLogout={onLogout} project={projectForEdit} onOpenProjectSettings={() => setEditProjectOpen(true)} />
+      <HubHeader value="projects" onTab={onSwitchHub} auth={auth} onLogout={onLogout} project={projectForEdit} onOpenProjectSettings={openProjectSettings} onOpenMembers={openMembersSettings} />
 
       {/* Мягкое приглашение к знакомству с проектом (фича default-personas-onboarding).
           Появляется между HubHeader и DesktopWorkspace как горизонтальная полоска,
           DesktopWorkspace под ней получает оставшуюся высоту через flex:1. */}
+      <OwnerSettingsNotice project={projectForEdit} revoked={accessRevoked} onGoHome={() => onSwitchHub('home')} />
       <ProjectIntroCard
         projectId={project.id}
         projectOwnerId={project.ownerId}
@@ -2613,7 +2633,7 @@ const windowWidth = useWindowWidth();
           projectForEdit={projectForEdit}
           onOpenWall={() => onSwitchHub('wall')}
           railBadges={localModelBadge ? { ...railBadges, localModel: localModelBadge } : railBadges}
-          onOpenProjectSettings={() => setEditProjectOpen(true)}
+          onOpenProjectSettings={openProjectSettings}
           activeSession={activeSession}
           onSelectSession={handleSelectSession}
           onSessionUpdated={handleSessionUpdated}
@@ -2736,10 +2756,11 @@ const windowWidth = useWindowWidth();
       {editProjectOpen && (
         <EditDialog
           project={projectForEdit}
-          onSuccess={updated => { setProjectForEdit(updated); setEditProjectOpen(false); }}
+          onSuccess={updated => { setProjectForEdit(updated); closeProjectSettings(); }}
           onIconUpdated={setProjectForEdit}
           onProjectUpdated={handleProjectUpdated}
-          onClose={() => setEditProjectOpen(false)}
+          openMembers={editMembersOpen}
+          onClose={closeProjectSettings}
         />
       )}
     </PageCanvas>

@@ -183,8 +183,10 @@ public sealed class ProjectMembershipService(
             foreach (var sessionId in sessionIds)
                 await hub.Groups.RemoveFromGroupAsync(connectionId, sessionId);
         }
+        // модель допускает проект без владельца — имя отдаём null, а не падающим вызовом
+        var ownerDisplayName = project.OwnerId is null ? null : users.GetById(project.OwnerId)?.DisplayName;
         await hub.Clients.Group("user_" + memberUserId).SendAsync("project_access_revoked",
-            new { projectId, ownerDisplayName = users.GetById(project.OwnerId)?.DisplayName });
+            new { projectId, ownerDisplayName });
     }
 
     // Не видит проекта — 404 (существование не раскрываем), видит, но не владелец — 403

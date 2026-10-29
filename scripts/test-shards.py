@@ -331,7 +331,9 @@ def launch_shards(project, shards, results, prefix, extra_filter):
 
 
 def wait_all(procs, start):
-    """Ждёт все процессы, меряя стену и пик RSS дерева; печатает итог, возвращает максимальный код выхода."""
+    """Ждёт все процессы, меряя стену и пик RSS дерева; печатает итог, возвращает 0, только если все шарды вышли с 0.
+
+    Убитый сигналом шард (OOM-killer, -9) даёт отрицательный код: max() проглотил бы его нулём соседа."""
     peak = [0]
     done = threading.Event()
 
@@ -350,7 +352,8 @@ def wait_all(procs, start):
     done.set()
     sampler.join()
     print(f"Стена шардов: {wall:.1f} с; коды выхода: {codes}; пик RSS дерева: {peak[0] / 1024 / 1024:.2f} ГиБ")
-    return max(codes)
+    failed = [c for c in codes if c != 0]
+    return max((c for c in failed if c > 0), default=1) if failed else 0
 
 
 def run_shards(project, n, results, timings, extra_filter, fast=None):

@@ -4,7 +4,10 @@ import importlib.util
 import io
 import json
 import os
+import subprocess
+import sys
 import tempfile
+import time
 import unittest
 
 _here = os.path.dirname(__file__)
@@ -255,6 +258,23 @@ class ProjectShardsTests(unittest.TestCase):
             with open(path, "w", encoding="utf-8") as f:
                 f.write("<Solution><Project Path=\"App/App.csproj\" /></Solution>")
             self.assertEqual(2, self._main("--slnx", path, "--verify")[0])
+
+
+class WaitAllTests(unittest.TestCase):
+    def _codes(self, *scripts):
+        with tempfile.TemporaryDirectory() as tmp:
+            procs = [(subprocess.Popen([sys.executable, "-c", c]), open(os.path.join(tmp, f"{i}.log"), "w"))
+                     for i, c in enumerate(scripts)]
+            with contextlib.redirect_stdout(io.StringIO()):
+                return ts.wait_all(procs, time.monotonic())
+
+    def test_шард_убитый_сигналом_рядом_с_нулевым_даёт_ненулевой_код(self):
+        kill = "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"
+        self.assertNotEqual(0, self._codes("pass", kill))
+
+    def test_все_шарды_нулевые_дают_ноль_а_ненулевой_код_сохраняется(self):
+        self.assertEqual(0, self._codes("pass", "pass"))
+        self.assertEqual(3, self._codes("pass", "raise SystemExit(3)"))
 
 
 class RunFastTests(unittest.TestCase):

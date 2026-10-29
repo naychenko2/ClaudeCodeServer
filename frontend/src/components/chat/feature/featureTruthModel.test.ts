@@ -17,7 +17,7 @@ import {
 import { trackerBarAria } from './FeatureTrackerBar';
 import { C } from '../../../lib/design';
 import { trackerPercent as tp } from '../../../lib/featureProgress';
-import { formatClock } from '../../feature/FeatureStatsBits';
+import { formatClock, formatDate } from '../../feature/FeatureStatsBits';
 import type { FeatureRun, FeatureStepChain } from '../../../types/featureRun';
 import type { StepProgress } from '../../../lib/featureProgress';
 
@@ -263,6 +263,19 @@ describe('оценка и «Сейчас»', () => {
 
   it('нет голоса/оценки — view null (строка без срока)', () => {
     expect(featureEstimateView(run(), NOW)).toBeNull();
+  });
+
+  it('давность оценки — общий agoText со страницей фичи: дальше суток та же дата, а не null', () => {
+    const at = '2026-10-27T18:06:00Z';
+    const r = run({
+      epic: {
+        id: 'epic-1', title: 'Фича', status: 'todo',
+        note: { text: 'голос', at, byUser: false, stageAtWrite: 'prod', stateAtWrite: 'running', estimate: { done: 1, total: 9, inProgress: 1, percent: 11 } },
+      },
+    });
+    // Одна копия хелпера — один ответ на всех поверхностях (код-ревью F2, minor 1):
+    // локальная версия давала null и на попапе «когда написана оценка» просто пропадала.
+    expect(featureEstimateView(r, NOW)!.ago).toBe(`${formatDate(at)}, ${formatClock(at)}`);
   });
 
   it('«Сейчас»: строки из run.now (имя, «{stepRef} · задача», длительность, метка «этот чат»)', () => {

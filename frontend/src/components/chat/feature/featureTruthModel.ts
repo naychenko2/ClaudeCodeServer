@@ -24,7 +24,9 @@ import { trackerPercent, type StepProgress } from '../../../lib/featureProgress'
 import { roleLabel } from '../../../lib/roleLabel';
 import { stepDisplayName } from '../../../lib/stepRef';
 import { formatClock, formatDuration, minutesSince } from '../../feature/FeatureStatsBits';
-import { readyAtText } from '../../feature/FeatureBriefModel';
+// agoText — общий со страницей фичи (FeatureBriefModel): один факт («когда записана
+// оценка») — один ответ на всех поверхностях; дальше суток та же дата, а не null.
+import { agoText, readyAtText } from '../../feature/FeatureBriefModel';
 import type { FeatureRun, FeatureRoundVerdict, FeatureStepChain } from '../../../types/featureRun';
 
 // Резолвер имени персоны (тот же контракт, что PersonaNameResolver в FeatureBriefModel).
@@ -65,12 +67,6 @@ export function featureTruthBar(sp: StepProgress | null, inMaster: number | null
   push('work', sp.work, C.accent, 'в работе');
   push('notCreated', sp.notCreated, C.progressTrack, 'не заведено');
   return { percent, segments, inMaster: inMasterReal, masterDraw: Math.min(inMasterReal, sp.accepted) };
-}
-
-// Строка числа для правого края: «56 % · ≈ 18:30» (без срока — только «56 %»).
-// Момент готовности нечитаемый (нет etaMinutes/дата) — срока нет.
-export function truthRightText(bar: TruthBar, eta: TruthEstimateView | null): string {
-  return bar.percent + ' %' + (eta?.rowEta ? ` · ${eta.rowEta}` : '');
 }
 
 // ── Срок по оценке оркестратора (epic.note.estimate) ─────────────────────────────────
@@ -117,19 +113,6 @@ export function featureEstimateView(run: FeatureRun, nowMs: number): TruthEstima
     inProgress: est.inProgress,
     total: est.total,
   };
-}
-
-// «N мин/ч назад» — та же шкала, что agoText на странице фичи (полные минуты, «только
-// что» меньше минуты). Короткая копия здесь — у страницы свой agoText привязан к её
-// форматам обновления; менять их место — не задача F2.
-function agoText(iso: string, nowMs: number): string | null {
-  const t = Date.parse(iso);
-  if (!Number.isFinite(t)) return null;
-  const m = Math.max(0, Math.floor((nowMs - t) / 60000));
-  if (m < 1) return 'только что';
-  if (m < 60) return `${m} мин назад`;
-  if (m < 24 * 60) return `${Math.floor(m / 60)} ч назад`;
-  return null;
 }
 
 // ── Тревога: ОДНИ слова для строки В2 и попапа П2 ───────────────────────────────────

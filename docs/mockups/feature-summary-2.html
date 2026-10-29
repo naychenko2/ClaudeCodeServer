@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Home · страница фичи · сводка 2: готовность и срок</title>
+<!--
+  Макет 2 блока «Сводка» на вкладке «Хронология»: готовность объёма и срок от оркестратора
+  рядом со статистической оценкой; блок «Жизнь фичи» убран из сводки.
+  Пояснение и спецификация для Киры — feature-summary-2.md. Код продукта не правится.
+  Привязка: эпик featureId 86277f4f-bd3a-4158-886b-4f4a12553817, задача макета 75d9efaa
+  (role=design); шаги фронта, которые пользуются макетом, нарежет план (stepRef — по плану).
+  Основа — feature-summary-1.html: строка «Сейчас», голос, теги и глифы не меняются.
+  Данные выдуманы.
+-->
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css, семантика — C.* из design.ts.
+   Единственное место с сырыми значениями; ниже — только var(--c-*) и var(--shadow-*). ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4;
+  --c-progress-track:#D8CFBE;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A;
+  --c-progress-track:#5C544A;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45);
+}
+* { box-sizing:border-box; }
+html,body { margin:0; }
+body { background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.45; }
+button { font:inherit; color:inherit; border:0; background:none; margin:0; padding:0; cursor:pointer; text-align:left; }
+button:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.mono { font-family:"JetBrains Mono","Courier New",monospace; }
+svg { flex-shrink:0; }
+
+/* ===== Обвязка макета (не часть продукта) ===== */
+.mk { position:sticky; top:0; z-index:100; display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center;
+  padding:10px 16px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.mk h1 { margin:0; font-size:15px; font-weight:600; color:var(--c-text-heading); }
+.mk .grp { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.mk .lbl { font-size:10px; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.05em; }
+.pills { display:inline-flex; flex-wrap:wrap; gap:2px; padding:2px; background:var(--c-bg-selected); border-radius:9px; }
+.pills button { color:var(--c-text-secondary); padding:4px 10px; border-radius:7px; font-size:12px; }
+.pills button.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-thumb); font-weight:600; }
+.wrap { max-width:1680px; margin:0 auto; padding:16px; }
+section.sc { margin:0 0 32px; }
+section.sc > h2 { font-family:"PT Serif",Georgia,serif; font-size:20px; color:var(--c-text-heading); margin:4px 0 6px; }
+.brief { font-size:13px; color:var(--c-text-secondary); max-width:920px; margin:0 0 12px; }
+.brief b { color:var(--c-text-heading); }
+.row { display:flex; gap:20px; align-items:flex-start; flex-wrap:wrap; }
+.cap { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); margin:0 0 4px 2px; }
+.dkcol { flex:1 1 auto; min-width:0; max-width:100%; }
+.scrollx { max-width:100%; overflow-x:auto; padding-bottom:4px; }
+.note { font-size:12px; color:var(--c-text-secondary); margin:6px 2px 0; max-width:860px; }
+.note b { color:var(--c-text-heading); }
+
+/* Кадры: 1280 — окно браузера с сайдбаром; 360 — телефон. */
+.dk { width:1280px; display:grid; grid-template-columns:264px 1fr; gap:12px; padding:12px; background:var(--c-bg-main);
+  border:1px solid var(--c-border); border-radius:14px; }
+.side { background:var(--c-bg-panel); border-radius:14px; padding:12px; display:flex; flex-direction:column; gap:8px; min-height:640px; }
+.side .sk { height:28px; border-radius:8px; background:var(--c-bg-selected); opacity:.6; }
+.side .sk.on { background:var(--c-bg-white); opacity:1; box-shadow:var(--shadow-thumb); }
+.isl { background:var(--c-bg-white); border-radius:14px; box-shadow:var(--shadow-island); overflow:hidden; min-width:0; }
+.mb { width:360px; }
+.mb .isl { border-radius:22px; border:1px solid var(--c-border); box-shadow:none; }
+.body { padding:12px 20px 20px; }
+.mb .body { padding:10px 12px 16px; }
+
+/* ===== Страница фичи (контекст, без изменений) ===== */
+.ttl { font-family:"PT Serif",Georgia,serif; font-size:20px; font-weight:700; color:var(--c-text-heading); margin:0; }
+.mb .ttl { font-size:18px; }
+.tbar { display:flex; align-items:center; gap:10px; padding:10px 20px; min-height:52px; border-bottom:1px solid var(--c-border); background:var(--c-bg-main); }
+.mb .tbar { padding:8px 8px 8px 6px; min-height:56px; gap:4px; }
+.tbar .ttl { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tib { width:32px; height:32px; border-radius:32px; color:var(--c-text-secondary); display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; }
+.mb .tib { width:40px; height:40px; }
+.btn { display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 12px; border-radius:8px; font-size:13px; font-weight:600; white-space:nowrap; }
+.mb .btn { height:40px; }
+.btn.pri { background:var(--c-accent); color:var(--c-on-accent); }
+.btn.sec { background:var(--c-bg-white); border:1px solid var(--c-border); color:var(--c-text-primary); }
+.tag { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; line-height:16px; padding:1px 7px; border-radius:6px; white-space:nowrap; flex-shrink:0; }
+.tag .dot { width:6px; height:6px; border-radius:50%; background:var(--c-info); }
+.t-run { background:var(--c-bg-selected); color:var(--c-text-heading); }
+.t-wait { background:var(--c-info-bg); color:var(--c-text-primary); }
+.t-hold { background:var(--c-bg-inset); color:var(--c-text-primary); box-shadow:inset 0 0 0 1px var(--c-border); }
+.t-queue { background:var(--c-bg-selected); color:var(--c-text-secondary); }
+.t-merged { background:var(--c-success-bg); color:var(--c-success-text); }
+.meta { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; font-size:12px; color:var(--c-text-secondary); margin-bottom:6px; }
+.tabs { display:flex; gap:16px; border-bottom:1px solid var(--c-border-light); margin:12px 0 12px; font-size:13px; color:var(--c-text-secondary); overflow-x:auto; scrollbar-width:none; }
+.tabs span { padding:8px 0; white-space:nowrap; }
+.tabs span.on { color:var(--c-text-heading); font-weight:600; box-shadow:inset 0 -2px 0 var(--c-accent); }
+.feed { display:flex; flex-direction:column; gap:8px; margin-top:16px; }
+.feed .ev { display:flex; gap:8px; align-items:center; font-size:12px; color:var(--c-text-muted); }
+.feed .ev i { width:6px; height:6px; border-radius:50%; background:var(--c-border); flex-shrink:0; }
+.feed .ev s { text-decoration:none; height:8px; border-radius:6px; background:var(--c-bg-selected); flex:1; max-width:420px; }
+
+/* ===== Блок «Сводка» 2. «Сейчас», голос, теги — как в макете 1. Новое: «Готовность» и «Срок»
+   вместо «Сделано · Дальше · Оценка», строка итогов вместо «Жизни фичи». ===== */
+.sum { background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:10px; padding:16px; }
+.mb .sum { padding:12px; }
+.sum.s-wait { border-color:var(--c-info); }
+.now { display:flex; gap:8px; align-items:flex-start; }
+.now .g { padding-top:3px; display:inline-flex; }
+.now .tx { flex:1; min-width:0; }
+.k { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); }
+.now .v { font-size:16px; font-weight:600; color:var(--c-text-heading); line-height:1.35; }
+.now .sub { font-size:12px; color:var(--c-text-secondary); margin-top:2px; }
+.now .side-r { display:flex; flex-direction:column; align-items:flex-end; gap:4px; flex-shrink:0; }
+.upd { font-size:11px; color:var(--c-text-muted); white-space:nowrap; }
+.mb .now .side-r { display:none; }
+.mb-head { display:none; }
+.mb .mb-head { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px; }
+.ask { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+
+/* Сетка «Готовность | Срок»: 1.4fr / 1fr на десктопе, столбик на 360. */
+.pg { display:grid; grid-template-columns:1.4fr 1fr; gap:12px 24px; margin-top:12px; padding-top:12px; border-top:1px solid var(--c-border-light); }
+.mb .pg { grid-template-columns:1fr; gap:12px; }
+.hd { display:flex; justify-content:space-between; align-items:baseline; gap:8px; margin-bottom:4px; }
+.cnt { font-size:12px; color:var(--c-text-secondary); white-space:nowrap; }
+.cnt b { font-family:"JetBrains Mono",monospace; font-weight:600; color:var(--c-text-heading); font-size:13px; }
+.cnt.muted b { color:var(--c-text-secondary); }
+
+/* Полоска готовности: 8 px, R.max, дорожка C.progressTrack; заливка C.accent,
+   у закрытой — C.success, у устаревшей оценки — C.accentMuted. */
+.bar { height:8px; border-radius:999px; background:var(--c-progress-track); overflow:hidden; }
+.bar > i { display:block; height:100%; border-radius:999px; background:var(--c-accent); }
+.bar.done > i { background:var(--c-success); }
+.bar.stale > i { background:var(--c-accent-muted); }
+.trk { font-size:12px; color:var(--c-text-secondary); margin-top:4px; }
+.trk b { font-family:"JetBrains Mono",monospace; font-weight:600; color:var(--c-text-primary); }
+
+/* «Осталось»: чипы R.sm, FS.xs; первый — «дальше» (C.accentLight / C.textHeading). */
+.left { display:flex; flex-wrap:wrap; gap:4px; align-items:center; margin-top:8px; font-size:11px; }
+.left .lk { color:var(--c-text-muted); margin-right:2px; }
+.chip { display:inline-flex; align-items:center; gap:4px; padding:1px 7px; border-radius:6px; background:var(--c-bg-selected); color:var(--c-text-secondary); line-height:16px; white-space:nowrap; max-width:100%; overflow:hidden; text-overflow:ellipsis; }
+.chip.nx { background:var(--c-accent-light); color:var(--c-text-heading); font-weight:600; }
+.chip.you { background:var(--c-info-bg); color:var(--c-text-primary); font-weight:600; }
+
+/* «Срок»: главное число FS.lg mono 600 C.textHeading; источник FS.xs C.textMuted;
+   вторая оценка — FS.sm C.textSecondary. */
+.eta .main { font-size:16px; font-weight:600; color:var(--c-text-heading); line-height:1.35; }
+.eta .main b { font-family:"JetBrains Mono",monospace; font-weight:600; }
+.eta .main .cl { font-size:12px; font-weight:400; color:var(--c-text-secondary); }
+.eta .main.na { font-size:13px; font-weight:400; color:var(--c-text-muted); }
+.eta .src { font-size:11px; color:var(--c-text-muted); margin-top:2px; }
+.eta .alt { font-size:12px; color:var(--c-text-secondary); margin-top:6px; display:flex; flex-wrap:wrap; gap:4px 6px; align-items:baseline; }
+.eta .alt b { font-family:"JetBrains Mono",monospace; font-weight:600; color:var(--c-text-primary); }
+.ok { color:var(--c-success-text); font-weight:600; }
+/* Метки устаревания и расхождения: FS.xs 600, R.sm, C.warningBg / C.warningText. */
+.stale, .div { font-size:11px; font-weight:600; background:var(--c-warning-bg); color:var(--c-warning-text); border-radius:6px; padding:0 6px; white-space:nowrap; }
+.why { font-size:12px; color:var(--c-text-secondary); margin-top:4px; padding-left:8px; border-left:2px solid var(--c-warning); }
+
+/* Голос — как в макете 1. */
+.voice { display:flex; gap:8px; margin-top:12px; padding:8px 12px; background:var(--c-bg-inset); border-radius:10px; border-left:3px solid var(--c-accent-muted); }
+.voice .av { width:24px; height:24px; border-radius:50%; background:var(--c-accent-light); color:var(--c-accent); font-weight:700; font-size:11px; display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; }
+.voice .q { font-size:13px; color:var(--c-text-primary); }
+.voice .by { font-size:11px; color:var(--c-text-muted); margin-top:2px; display:flex; flex-wrap:wrap; gap:4px 8px; align-items:center; }
+
+/* Строка итогов вместо «Жизни фичи»: FS.sm C.textSecondary, числа mono; «Статистика ›». */
+.totals { display:flex; align-items:center; flex-wrap:wrap; gap:4px 12px; margin-top:12px; padding-top:8px; border-top:1px solid var(--c-border-light); font-size:12px; color:var(--c-text-secondary); }
+.totals b { font-family:"JetBrains Mono",monospace; font-weight:600; color:var(--c-text-heading); }
+.totals .go { margin-left:auto; color:var(--c-accent); font-size:11px; font-weight:600; padding:4px 6px; border-radius:8px; }
+.mb .totals .go { min-height:40px; padding:0 8px; display:inline-flex; align-items:center; }
+
+/* Было (макет 1) — только для сравнения в разделе 4. */
+.strip { display:flex; gap:1px; height:8px; border-radius:999px; overflow:hidden; }
+.strip > div { min-width:2px; }
+.k-work { background:var(--c-accent); } .k-waiting { background:var(--c-info); } .k-idle { background:var(--c-progress-track); } .k-error { background:var(--c-danger); }
+.legend { display:flex; flex-wrap:wrap; gap:4px 12px; margin-top:8px; font-size:11px; color:var(--c-text-secondary); }
+.legend span { display:inline-flex; align-items:center; gap:4px; } .legend i { width:10px; height:10px; border-radius:2px; display:inline-block; }
+.axis { display:flex; justify-content:space-between; font-size:11px; color:var(--c-text-muted); margin-top:4px; }
+.old { opacity:.9; }
+
+.sk { height:10px; border-radius:6px; background:var(--c-bg-selected); }
+@media (max-width:400px) { .wrap { padding:16px 0; } section.sc > h2, .brief, .cap { padding:0 12px; } .gal { gap:16px 0; } }
+.gal { display:flex; flex-wrap:wrap; gap:16px; }
+.gal .cell { width:360px; }
+table.rule { border-collapse:collapse; font-size:12px; max-width:920px; margin-top:8px; }
+table.rule .div, table.rule .stale { white-space:normal; }
+table.rule td, table.rule th { border:1px solid var(--c-border-light); padding:6px 8px; text-align:left; vertical-align:top; color:var(--c-text-primary); }
+table.rule th { background:var(--c-bg-panel); color:var(--c-text-heading); font-weight:600; }
+</style>
+</head>
+<body>
+
+<div class="mk">
+  <h1>Сводка фичи · макет 2 · готовность и срок</h1>
+  <div class="grp"><span class="lbl">Тема</span>
+    <div class="pills" data-ctl="theme"><button class="on" data-v="light">Светлая</button><button data-v="dark">Тёмная</button></div></div>
+  <div class="grp"><span class="lbl">Состояние</span>
+    <div class="pills" data-ctl="state">
+      <button class="on" data-v="run">Идёт</button><button data-v="diverge">Идёт · расходятся</button><button data-v="wait">Ждёт вас</button><button data-v="hold">На паузе</button><button data-v="queue">В очереди</button><button data-v="closed">Закрыта</button>
+    </div></div>
+  <div class="grp"><span class="lbl">Оценка оркестратора</span>
+    <div class="pills" data-ctl="state">
+      <button data-v="noorch">Нет</button><button data-v="stale">Устарела</button><button data-v="nothing">Нет никакой</button><button data-v="loading">Загрузка</button>
+    </div></div>
+</div>
+
+<div class="wrap">
+  <section class="sc">
+    <h2>1. Вкладка «Хронология» · 1280 и 360</h2>
+    <p class="brief">Андрей открывает фичу и на первом экране получает три ответа: <b>какая доля готова</b> (полоска и «4 из 9»),
+      <b>что осталось</b> (чипы, первый — «дальше») и <b>сколько ещё ждать</b> (одно главное число и время готовности).
+      Вторая оценка срока — по истории прошлых фич — стоит строкой ниже и либо подтверждает главное число («сходится»),
+      либо явно с ним спорит («дольше, чем по истории» + почему). «Жизнь фичи» из сводки ушла: её место заняла полоска готовности.</p>
+    <div class="row">
+      <div class="dkcol"><div class="cap">1280 · окно браузера</div><div class="scrollx"><div class="dk" id="dk"></div></div></div>
+      <div class="mb"><div class="cap">360 · телефон</div><div class="isl" id="mb"></div></div>
+    </div>
+  </section>
+
+  <section class="sc">
+    <h2>2. Две оценки срока: какая главная</h2>
+    <p class="brief">Главное число — <b>одно</b>. Вторая оценка никогда не стоит рядом «на равных»: она подписана и окрашена как справка.</p>
+    <div class="scrollx"><table class="rule">
+      <tr><th>Оценка оркестратора</th><th>Главное число</th><th>Строка под ним</th></tr>
+      <tr><td>свежая, внутри разброса истории</td><td>оркестратора: «≈ 2 ч 40 мин · к 16:50», «по оценке Софьи»</td><td>«по истории ≈ 2 ч 30 мин (1 ч 50 – 3 ч 40) · <span class="ok">сходится</span>»</td></tr>
+      <tr><td>свежая, вне разброса истории</td><td>оркестратора</td><td>история + метка <span class="div">дольше, чем по истории</span> / <span class="div">быстрее, чем по истории</span> и строка «почему» от оркестратора</td></tr>
+      <tr><td>устарела (сменился этап / пауза)</td><td>по истории (она пересчитывается сама)</td><td>«Софья: ≈ 2 ч 40 мин · 2 ч назад» + <span class="stale">до смены этапа</span></td></tr>
+      <tr><td>нет</td><td>по истории с разбросом</td><td>«по 14 прошлым фичам» — ни слова о молчащем оркестраторе</td></tr>
+      <tr><td>нет и истории</td><td colspan="2">«Оценки пока нет» (C.textMuted), никаких «≈ 0»</td></tr>
+    </table></div>
+  </section>
+
+  <section class="sc">
+    <h2>3. Все состояния · 360</h2>
+    <p class="brief">Идёт, расходятся, ждёт вас, пауза, очередь, закрыта; затем — оценки оркестратора нет, оценка устарела, нет никакой оценки, загрузка. Тема — по переключателю сверху.</p>
+    <div class="gal" id="gal"></div>
+  </section>
+
+  <section class="sc">
+    <h2>4. «Жизнь фичи»: было → стало</h2>
+    <p class="brief">Полоска «Жизни фичи» отвечала на вопрос «как тратилось время» (работа / ждала вас / простой), а Андрей приходит в сводку с вопросом
+      «далеко ли до конца». Длина полоски растёт со временем, а не с готовностью: у фичи, которая сутки стоит, полоска самая длинная. Поэтому
+      <b>полоску, ось и легенду убираем из сводки целиком</b> — они уже есть, крупнее и с разбивкой по стадиям, на вкладке «Статистика».
+      На их месте — полоска готовности. Из «Жизни фичи» остаётся только <b>строка итогов</b> (идёт · работа · ждала вас · токены · $) со ссылкой «Статистика ›»: деньги и время видны без перехода.</p>
+    <div class="gal" id="cmp"></div>
+  </section>
+</div>
+
+<script>
+const G = {
+  run:'<svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="var(--c-accent)" stroke-width="1.5"/><circle cx="8" cy="8" r="3.5" fill="var(--c-accent)"/></svg>',
+  wait:'<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1.5 14.5 8 8 14.5 1.5 8Z" fill="var(--c-info)"/></svg>',
+  hold:'<svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="var(--c-bg-inset)" stroke="var(--c-text-muted)" stroke-width="1"/><rect x="5.3" y="4.6" width="1.9" height="6.8" rx="0.6" fill="var(--c-text-secondary)"/><rect x="8.8" y="4.6" width="1.9" height="6.8" rx="0.6" fill="var(--c-text-secondary)"/></svg>',
+  queue:'<svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="var(--c-bg-selected)"/><circle cx="4.8" cy="8" r="1.3" fill="var(--c-text-muted)"/><circle cx="8" cy="8" r="1.3" fill="var(--c-text-secondary)"/><circle cx="11.2" cy="8" r="1.3" fill="var(--c-text-muted)"/></svg>',
+  closed:'<svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="var(--c-success-bg)" stroke="var(--c-success)" stroke-width="1"/><path d="m5 8.2 2 2 4-4.4" fill="none" stroke="var(--c-success)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  back:'<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M10 3 5 8l5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  more:'<svg width="16" height="16" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1.4" fill="currentColor"/><circle cx="8" cy="8" r="1.4" fill="currentColor"/><circle cx="12.5" cy="8" r="1.4" fill="currentColor"/></svg>',
+  pause:'<svg width="14" height="14" viewBox="0 0 16 16"><rect x="4" y="3" width="2.6" height="10" rx="0.8" fill="currentColor"/><rect x="9.4" y="3" width="2.6" height="10" rx="0.8" fill="currentColor"/></svg>',
+  play:'<svg width="14" height="14" viewBox="0 0 16 16"><path d="M5 3.2v9.6a.6.6 0 0 0 .9.5l7.4-4.8a.6.6 0 0 0 0-1L5.9 2.7a.6.6 0 0 0-.9.5Z" fill="currentColor"/></svg>',
+};
+const HOLDTAG = '<span class="tag t-hold"><svg width="10" height="10" viewBox="0 0 16 16"><rect x="3.5" y="2.5" width="3" height="11" rx="1" fill="currentColor"/><rect x="9.5" y="2.5" width="3" height="11" rx="1" fill="currentColor"/></svg>на паузе</span>';
+
+// ready: { n, of, pct, src:'orch'|'tracker', stale, done } — полоска готовности.
+// trk — факт трекера под полоской; left — чипы «осталось» (первый — «дальше»).
+// eta: main — главное число; src — подпись источника; alt — вторая оценка; why — почему расходятся.
+const RUN_BASE = {
+  tag:'<span class="tag t-run">идёт · Ревью</span>', glyph:'run', upd:'обновлено 2 мин назад',
+  now:'Ревью шага 3 (бэк) — у Глеба', sub:'с 14:05 · 12 мин',
+  ready:{ n:4, of:9, pct:45, src:'orch' },
+  trk:'по трекеру: <b>2 из 5</b> шагов приняты · <b>1</b> виток правок',
+  left:[['nx','ревью шага 3 · Глеб'],['','шаг 4 фронт · Кира'],['','шаг 5'],['','проверка · Вера'],['','финал · Александр']],
+  eta:{ main:'≈ <b>2 ч 40 мин</b> <span class="cl">· к 16:50</span>', src:'по оценке Софьи · 14 мин назад',
+        alt:'по истории ≈ <b>2 ч 30 мин</b> (1 ч 50 – 3 ч 40) · <span class="ok">сходится</span>' },
+  voice:{ who:'Софья', role:'ведёт фичу', when:'14 мин назад',
+    text:'Глеб смотрит бэк третьего шага, по первым двум замечаний не было. Если вернёт — Денис поправит минут за тридцать, срок сдвинется на столько же.' },
+  totals:'идёт <b>1 ч 10 мин</b> · работа ≈ <b>1 ч 00 мин</b> · ждала вас <b>6 мин</b> · <b>1,2 млн</b> токенов · <b>$4,10</b>',
+  btns:'pause',
+};
+const ST = {
+  run: RUN_BASE,
+  diverge: Object.assign({}, RUN_BASE, {
+    ready:{ n:4, of:10, pct:35, src:'orch' },
+    left:[['nx','ревью шага 3 · Глеб'],['','шаг 4 фронт · Кира'],['','шаг 4б — переделка панели'],['','шаг 5'],['','проверка · Вера'],['','финал · Александр']],
+    eta:{ main:'≈ <b>6 ч</b> <span class="cl">· к 20:10</span>', src:'по оценке Софьи · 10 мин назад',
+          alt:'по истории ≈ <b>2 ч 30 мин</b> (1 ч 50 – 3 ч 40) <span class="div">дольше, чем по истории</span>',
+          why:'Софья: «Шаг 4 вырос — Кира переделывает панель целиком, добавила шаг 4б».' },
+    voice:{ who:'Софья', role:'ведёт фичу', when:'10 мин назад',
+      text:'Глеб нашёл, что панель не держит мобильную ширину. Решили переделать её целиком — добавила шаг 4б, срок вырос.' },
+  }),
+  wait: {
+    tag:'<span class="tag t-wait"><span class="dot"></span>ждёт вас</span>', glyph:'wait', upd:'обновлено только что', cls:'s-wait',
+    now:'Ждёт вашего согласия на мерж в master', sub:'ждёт <span class="mono">25 мин</span> · без вас фича стоит', ask:true,
+    ready:{ n:8, of:9, pct:95, src:'orch' },
+    trk:'по трекеру: <b>5 из 5</b> шагов приняты · финальное ревью принято',
+    left:[['you','мерж · за вами']],
+    eta:{ main:'за вами', src:'после вашего «да» — мерж ≈ <span class="mono">5 мин</span> (Софья)', alt:'' },
+    voice:{ who:'Софья', role:'ведёт фичу', when:'25 мин назад', text:'Всё принято, Александр подписал финал. Осталось ваше «да» на мерж — конфликтов с master нет.' },
+    totals:'идёт <b>4 ч 20 мин</b>, из них ждёт вас <b>25 мин</b> · работа ≈ <b>3 ч 26 мин</b> · <b>3,8 млн</b> токенов · <b>$11,40</b>',
+    btns:'merge',
+  },
+  hold: {
+    tag:HOLDTAG, glyph:'hold', upd:'обновлено 40 мин назад',
+    now:'На паузе — поставили вы в 13:40', sub:'на паузе <span class="mono">40 мин</span> · исполнители не запускаются',
+    ready:{ n:5, of:9, pct:55, src:'orch', stale:true, staleLbl:'до паузы' },
+    trk:'по трекеру: <b>3 из 5</b> шагов приняты',
+    left:[['nx','шаг 4 фронт · Кира'],['','шаг 5'],['','проверка · Вера'],['','финал · Александр']],
+    eta:{ main:'≈ <b>1 ч 50 мин</b> <span class="cl">после снятия паузы</span>', src:'по истории: 1 ч 20 – 2 ч 40 · 14 фич',
+          alt:'Софья: ≈ <b>2 ч</b> · 45 мин назад <span class="stale">до паузы</span>' },
+    voice:{ who:'Софья', role:'ведёт фичу', when:'45 мин назад', stale:'до паузы', text:'Третий шаг принят с первого раза. Следующий — фронт у Киры, макет Майи уже утверждён.' },
+    totals:'идёт <b>2 ч 05 мин</b>, из них пауза <b>40 мин</b> · работа ≈ <b>1 ч 15 мин</b> · <b>1,9 млн</b> токенов · <b>$6,20</b>',
+    btns:'unpause',
+  },
+  queue: {
+    tag:'<span class="tag t-queue">в очереди · 2 из 3</span>', glyph:'queue', upd:'обновлено 5 мин назад',
+    now:'В очереди: вторая из трёх', sub:'стартует сама после «Очереди фич»',
+    ready:{ n:0, of:9, pct:0, src:'orch' },
+    trk:'по трекеру: план готов · <b>0 из 5</b> шагов',
+    left:[['nx','старт после «Очереди фич»'],['','5 шагов'],['','проверка · Вера'],['','финал']],
+    eta:{ main:'≈ <b>4 ч</b> <span class="cl">после старта</span>', src:'по оценке Софьи · 25 мин назад · старт ≈ 15:00',
+          alt:'по истории ≈ <b>3 ч 50 мин</b> (2 ч 40 – 5 ч) · <span class="ok">сходится</span>' },
+    voice:{ who:'Софья', role:'ведёт фичу', when:'25 мин назад', text:'План Егора готов, исполнители назначены. Ждём, пока освободится место, — дальше фича пойдёт сама.' },
+    totals:'в очереди <b>25 мин</b> · <b>0,2 млн</b> токенов',
+    btns:'none',
+  },
+  closed: {
+    tag:'<span class="tag t-merged">смержена</span>', glyph:'closed', upd:'24.10, 18:05',
+    now:'Смержена в master 24.10 в 18:05', sub:'фича закрыта',
+    ready:{ n:9, of:9, pct:100, src:'orch', done:true },
+    trk:'по трекеру: <b>5 из 5</b> шагов приняты · <b>2</b> витка правок',
+    left:[],
+    etaK:'Итог',
+    eta:{ main:'шла <b>6 ч 40 мин</b>', src:'24.10, 11:25 → 18:05',
+          alt:'на старте Софья обещала ≈ <b>5 ч</b> · по истории ≈ <b>4 ч 30 мин</b>' },
+    voice:{ who:'Софья', role:'вела фичу', when:'24.10, 18:06', text:'Смержили без конфликтов. Вере понадобился второй заход на мобильную раскладку — добавили пункт в чек-лист.' },
+    totals:'работа ≈ <b>5 ч 25 мин</b> · ждала вас <b>50 мин</b> · <b>7,6 млн</b> токенов · <b>$23,80</b>',
+    btns:'none',
+  },
+};
+// Оценки оркестратора нет: полоска и «осталось» — по трекеру, срок — по истории.
+ST.noorch = Object.assign({}, RUN_BASE, {
+  ready:{ n:2, of:5, pct:40, src:'tracker' }, trk:'<b>1</b> виток правок',
+  left:[['nx','ревью шага 3 · Глеб'],['','шаг 4 фронт · Кира'],['','шаг 5']],
+  eta:{ main:'≈ <b>2 ч 30 мин</b> <span class="cl">· к 16:40</span>', src:'по истории · 14 прошлых фич', alt:'разброс <b>1 ч 50 – 3 ч 40</b>' },
+});
+// Оценка устарела: сменился этап — главным становится срок по истории.
+ST.stale = Object.assign({}, RUN_BASE, {
+  now:'Шаг 4 (фронт) — у Киры', sub:'с 16:05 · 20 мин', upd:'обновлено 1 мин назад', tag:'<span class="tag t-run">идёт · Шаг 4</span>',
+  ready:{ n:4, of:9, pct:45, src:'orch', stale:true, staleLbl:'до смены этапа' },
+  trk:'по трекеру: <b>3 из 5</b> шагов приняты · <b>1</b> виток правок',
+  left:[['nx','шаг 4 фронт · Кира'],['','шаг 5'],['','проверка · Вера'],['','финал · Александр']],
+  eta:{ main:'≈ <b>1 ч 40 мин</b> <span class="cl">· к 18:05</span>', src:'по истории: 1 ч 10 – 2 ч 30 · 14 фич',
+        alt:'Софья: ≈ <b>2 ч 40 мин</b> · 2 ч назад <span class="stale">до смены этапа</span>' },
+  voice:Object.assign({}, RUN_BASE.voice, { when:'2 ч назад', stale:'до смены этапа' }),
+});
+// Нет ни оценки оркестратора, ни истории.
+ST.nothing = Object.assign({}, ST.noorch, {
+  voice:null, eta:{ main:'Оценки пока нет', na:true, src:'прошлых фич для сравнения мало', alt:'' },
+});
+
+const LBL = { run:'Идёт', diverge:'Идёт · оценки расходятся', wait:'Ждёт вас', hold:'На паузе (оценка до паузы)', queue:'В очереди', closed:'Закрыта',
+  noorch:'Оценки оркестратора нет', stale:'Оценка и голос устарели', nothing:'Нет никакой оценки', loading:'Загрузка' };
+
+function readyHtml(s) {
+  const r = s.ready, cls = r.done ? 'done' : (r.stale ? 'stale' : '');
+  const cnt = r.src === 'tracker'
+    ? `<span class="cnt"><b>${r.n} из ${r.of}</b> шагов · ${r.pct} %</span>`
+    : `<span class="cnt${r.stale?' muted':''}"><b>${r.n} из ${r.of}</b> · ${r.pct} %</span>`;
+  let h = `<div class="ready"><div class="hd"><span class="k">Готовность${r.src==='tracker'?' · по трекеру':''}</span>${cnt}</div>`;
+  h += `<div class="bar ${cls}" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${r.pct}" aria-label="Готовность ${r.pct} %"><i style="width:${Math.max(r.pct,0)}%"></i></div>`;
+  h += `<div class="trk">${r.stale ? `<span class="stale">${r.staleLbl}</span> ` : ''}${s.trk}</div>`;
+  if (s.left.length) h += `<div class="left"><span class="lk">Осталось:</span>${s.left.map(([c,t]) => `<span class="chip ${c}">${c==='nx'?'дальше · ':''}${t}</span>`).join('')}</div>`;
+  else h += `<div class="left"><span class="lk">Осталось:</span><span class="ok">ничего — всё сделано</span></div>`;
+  return h + '</div>';
+}
+function etaHtml(s) {
+  const e = s.eta;
+  let h = `<div class="eta"><div class="k" style="margin-bottom:4px">${s.etaK || 'Срок'}</div>`;
+  h += `<div class="main${e.na?' na':''}">${e.main}</div><div class="src">${e.src}</div>`;
+  if (e.alt) h += `<div class="alt">${e.alt}</div>`;
+  if (e.why) h += `<div class="why">${e.why}</div>`;
+  return h + '</div>';
+}
+function card(key, mob) {
+  if (key === 'loading') {
+    return `<div class="sum" aria-busy="true"><div class="sk" style="width:40%;height:8px"></div><div class="sk" style="width:80%;height:14px;margin-top:8px"></div>
+      <div class="pg"><div><div class="sk" style="width:30%;height:8px"></div><div class="sk" style="height:8px;margin-top:8px;border-radius:999px"></div><div class="sk" style="width:70%;margin-top:8px"></div></div>
+      <div><div class="sk" style="width:30%;height:8px"></div><div class="sk" style="width:60%;height:14px;margin-top:8px"></div><div class="sk" style="width:80%;margin-top:8px"></div></div></div>
+      <div class="sk" style="height:44px;margin-top:12px;border-radius:10px"></div></div>`;
+  }
+  const s = ST[key];
+  let h = `<section class="sum ${s.cls||''}" aria-label="Сводка состояния фичи">`;
+  h += `<div class="mb-head">${s.tag}<span class="upd">${s.upd}</span></div>`;
+  h += `<div class="now"><span class="g">${G[s.glyph]}</span><div class="tx"><div class="k">Сейчас</div>
+        <div class="v" aria-live="polite">${s.now}</div><div class="sub">${s.sub}</div>`;
+  if (s.ask && mob) h += `<div class="ask"><button class="btn pri">Мерж…</button><button class="btn sec">Открыть финальное ревью</button></div>`;
+  h += `</div><div class="side-r">${s.tag}<span class="upd">${s.upd}</span></div></div>`;
+  h += `<div class="pg">${readyHtml(s)}${etaHtml(s)}</div>`;
+  if (s.voice) {
+    const v = s.voice;
+    h += `<div class="voice"><span class="av" aria-hidden="true">${v.who[0]}</span><div><div class="q">${v.text}</div>
+        <div class="by"><span>${v.who} · ${v.role} · ${v.when}</span>${v.stale ? `<span class="stale">${v.stale}</span>` : ''}</div></div></div>`;
+  }
+  h += `<div class="totals"><span>${s.totals}</span><button class="go" aria-label="Открыть вкладку «Статистика»">Статистика ›</button></div>`;
+  return h + '</section>';
+}
+function oldLife() {
+  const strip = [['work',18],['idle',4],['work',22],['waiting',6],['work',14],['error',3],['work',12]];
+  return `<div class="sum old"><div class="k" style="margin-bottom:4px">Жизнь фичи</div><div class="strip">${strip.map(([k,m])=>`<div class="k-${k}" style="flex:${m}"></div>`).join('')}</div>
+    <div class="axis"><span>создана 13:00</span><span>сейчас 14:10</span></div>
+    <div class="legend"><span><i class="k-work"></i>работа</span><span><i class="k-waiting"></i>ждёт вас</span><span><i class="k-idle"></i>простой</span><span><i class="k-error"></i>ошибка / стоит</span></div>
+    <div class="totals" style="border-top:0;padding-top:0;margin-top:8px"><span>работа ≈ <b>1 ч 00 мин</b> · ждала вас <b>6 мин</b> · <b>1,2 млн</b> · <b>$4,10</b></span><button class="go">Статистика ›</button></div></div>`;
+}
+function newLife() {
+  const s = ST.run;
+  return `<div class="sum">${readyHtml(s)}<div class="totals"><span>${s.totals}</span><button class="go">Статистика ›</button></div></div>`;
+}
+
+const TITLE = 'Сводка состояния фичи';
+function page(key, mob) {
+  const s = ST[key] || ST.run;
+  let btn = '';
+  if (s.btns === 'pause') btn = `<button class="btn sec">${G.pause}Пауза</button>`;
+  if (s.btns === 'unpause') btn = `<button class="btn pri">${G.play}Снять паузу</button>`;
+  if (s.btns === 'merge') btn = `<button class="btn pri">Мерж…</button>`;
+  let h = `<div class="tbar"><button class="tib" aria-label="Назад">${G.back}</button><h3 class="ttl">${TITLE}</h3>`;
+  if (!mob) h += (key === 'loading' ? '' : s.tag) + btn;
+  h += `<button class="tib" aria-label="Ещё">${G.more}</button></div><div class="body">`;
+  h += `<div class="meta"><span class="mono">feat/feature-brief-estimate</span><span>9 задач</span></div>`;
+  h += `<div class="tabs"><span class="on">Хронология</span><span>Задачи</span><span>Чаты</span><span>Планы</span><span>Макеты</span><span>Статистика</span></div>`;
+  h += card(key, mob);
+  h += `<div class="feed">${[1,2,3,4].map(()=>'<div class="ev"><i></i><s></s></div>').join('')}</div></div>`;
+  return h;
+}
+
+let S = { theme:'light', state:'run' };
+function render() {
+  document.documentElement.dataset.theme = S.theme;
+  const side = '<div class="side">' + [0,1,2,3,4,5,6].map(i=>`<div class="sk${i===2?' on':''}"></div>`).join('') + '</div>';
+  document.getElementById('dk').innerHTML = side + `<div class="isl">${page(S.state,false)}</div>`;
+  document.getElementById('mb').innerHTML = page(S.state, true);
+  document.getElementById('gal').innerHTML = Object.keys(LBL).map(k =>
+    `<div class="cell mb"><div class="cap">${LBL[k]}</div>${card(k,true)}</div>`).join('');
+  document.getElementById('cmp').innerHTML =
+    `<div class="cell mb"><div class="cap">Было · макет 1</div>${oldLife()}</div><div class="cell mb"><div class="cap">Стало · макет 2</div>${newLife()}</div>`;
+  document.querySelectorAll('.pills[data-ctl]').forEach(p => p.querySelectorAll('button').forEach(b =>
+    b.classList.toggle('on', S[p.dataset.ctl] === b.dataset.v)));
+  try { history.replaceState(null, '', '#' + S.theme + '-' + S.state); } catch (e) {}
+}
+document.querySelectorAll('.pills[data-ctl]').forEach(p => p.addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return; S[p.dataset.ctl] = b.dataset.v; render();
+}));
+try { const m = location.hash.slice(1).split('-'); if (m[0] === 'dark' || m[0] === 'light') S.theme = m[0]; if (m[1] && (ST[m[1]] || m[1]==='loading')) S.state = m[1]; } catch (e) {}
+render();
+</script>
+</body>
+</html>

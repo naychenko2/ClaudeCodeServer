@@ -23,10 +23,18 @@ public static class WikiManifest
     {
         // Форма строк журнала — как в ADR: {ts, op, section, pages, source, actor}.
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        // Имена страниц и карточки источников — по-русски: «О…» в файле, который человек
+        // читает при откате (решение 13), нечитаем. Тот же приём, что в WikiPackageStore
+        // (класс правки «origin × op»).
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
+    // Policy — политика применения пакета: «auto» | «inbox» (решение 12г, мера 6: журнал
+    // показывает «само» или «Входящие»). null для системных операций (adopt): у них нет
+    // политики, есть только автор. Пустым полем не заменяется: «не указано» и «auto» — разные
+    // утверждения.
     private sealed record LogLine(
-        DateTimeOffset Ts, string Op, string Section, IReadOnlyList<string> Pages, string? Source, string Actor);
+        DateTimeOffset Ts, string Op, string Section, IReadOnlyList<string> Pages, string? Source, string Actor, string? Policy);
 
     /// <summary>Безопасная форма ключа раздела для имени файла манифеста: «/» в ключе —
     /// разделитель ключа, не папка: манифесты всех разделов лежат в одной директории.
@@ -69,14 +77,43 @@ public static class WikiManifest
     /// битый файл означало бы молча стереть его записи (тот же fail-closed).</summary>
     public static void RecordApplied(string root, string sectionKey, IReadOnlyDictionary<string, string> pageHashes)
     {
+        var manifest = ReadForEdit(root, sectionKey);
+        foreach (var (page, hash) in pageHashes)
+            manifest[page] = hash;
+        WriteManifest(root, sectionKey, manifest);
+    }
+
+    /// <summary>Вернуть коснутые страницы к прежним записям манифеста (откат применения,
+    /// ревью S4b-2, M1/M2): baselines — прежнее состояние страницы: хэш → вернуть запись
+    /// с этим хэшем; null → страницы в манифеста не было (create), её запись убрать вместе
+    /// с файлом. Трогаются только перечисленные ключи, чужие записи — как были. Тот же
+    /// порядок ключей и та же атомарная запись, что у RecordApplied; на невалидном
+    /// манифесте — тот же отказ, что у него.</summary>
+    public static void RollbackTo(string root, string sectionKey, IReadOnlyDictionary<string, string?> baselines)
+    {
+        var manifest = ReadForEdit(root, sectionKey);
+        foreach (var (page, hash) in baselines)
+        {
+            if (hash is null)
+                manifest.Remove(page);
+            else
+                manifest[page] = hash;
+        }
+        WriteManifest(root, sectionKey, manifest);
+    }
+
+    private static Dictionary<string, string> ReadForEdit(string root, string sectionKey)
+    {
         var existing = TryRead(root, sectionKey);
         if (existing.State == WikiManifestState.Invalid)
             throw new InvalidOperationException($"Манифест раздела «{sectionKey}» невалиден — запись в него невозможна");
-        var manifest = new Dictionary<string, string>(existing.Manifest);
-        foreach (var (page, hash) in pageHashes)
-            manifest[page] = hash;
-        // Порядок ключей фиксированный: манифест — данные на диске и в бэкапе, его diff
-        // между применениями должен быть читаемым, а не зависеть от обхода словаря.
+        return new Dictionary<string, string>(existing.Manifest);
+    }
+
+    // Порядок ключей фиксированный: манифест — данные на диске и в бэкапе, его diff
+    // между применениями должен быть читаемым, а не зависеть от обхода словаря.
+    private static void WriteManifest(string root, string sectionKey, Dictionary<string, string> manifest)
+    {
         var sorted = new Dictionary<string, string>();
         foreach (var kv in manifest.OrderBy(kv => kv.Key, StringComparer.Ordinal))
             sorted[kv.Key] = kv.Value;
@@ -84,14 +121,16 @@ public static class WikiManifest
     }
 
     /// <summary>Дописать строку журнала. Строки не переписываются: append, не перезапись
-    /// файла. ts — время сервера (ISO-8601, UTC).</summary>
+    /// файла. ts — время сервера (ISO-8601, UTC). policy — «auto» | «inbox» для строки
+    /// применения (мера 6); для системных операций — null.</summary>
     public static void AppendLog(
-        string root, string op, string section, IReadOnlyList<string> pages, string? source, string actor)
+        string root, string op, string section, IReadOnlyList<string> pages, string? source, string actor,
+        string? policy = null)
     {
         var full = SafePath.Join(root, LogRelPath);
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         var line = JsonSerializer.Serialize(
-            new LogLine(DateTimeOffset.UtcNow, op, section, pages, source, actor), JsonOpts);
+            new LogLine(DateTimeOffset.UtcNow, op, section, pages, source, actor, policy), JsonOpts);
         File.AppendAllText(full, line + "\n");
     }
 

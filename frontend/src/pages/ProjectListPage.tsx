@@ -175,6 +175,9 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
 
   const closeDialog = () => setActiveDialog(null);
   const upsertProject = (updated: Project) => setProjects(prev => prev.map(p => p.id === updated.id ? updated : p));
+  // Участник покинул проект: row/card сами подтверждают и зовут api.projects.members.leave,
+  // здесь — только убрать проект из списка (карта п.7)
+  const leftProject = (p: Project) => setProjects(prev => prev.filter(x => x.id !== p.id));
   const idx = (p: Project) => colorIndex.get(p.id) ?? 0;
   // Сфера удалена: её проекты уходят в «Без сферы» (бэкенд сбросил groupId), вид возвращается к списку
   const removeSphere = (id: string) => {
@@ -433,6 +436,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
                         onEdit={(pr, e) => { e.stopPropagation(); setActiveDialog({ type: 'edit', project: pr }); }}
                         onDelete={pr => setActiveDialog({ type: 'delete', project: pr })}
                         onRemoveFromSphere={removeFromSphere}
+                        onLeft={leftProject}
                       />
                     ))}
                     {sec.items.length === 0 && (
@@ -463,7 +467,8 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
       onMove={pr => setActiveDialog({ type: 'move', project: pr })}
       onEdit={(pr, e) => { e.stopPropagation(); setActiveDialog({ type: 'edit', project: pr }); }}
       onDelete={pr => setActiveDialog({ type: 'delete', project: pr })}
-      onRemoveFromSphere={removeFromSphere} />
+      onRemoveFromSphere={removeFromSphere}
+      onLeft={leftProject} />
   );
 
   if (sphereOpen) {

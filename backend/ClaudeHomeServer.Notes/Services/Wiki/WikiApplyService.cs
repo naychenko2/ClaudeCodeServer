@@ -52,9 +52,13 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // пакета до конца цикла (решение 10).
 //
 // Сбой на 4–6 — откат: возвращаются только страницы, записанные этим вызовом (по их
-// прообразам); остальное — чужая правка, файл, на котором споткнулась проверка, — не
-// тронуто. Статус «apply_failed» с причиной; пакет не остаётся в «applying» никогда:
-// незавершённый после падения процесса доводит сторож старта (WikiApplyStartupGuard).
+// прообразам), и — там, где этот вызов успел их изменить, — их записи в манифесте
+// (прежний хэш из снимка проверки; для create — удаление) с проекциями раздела;
+// остальное — чужая правка, файл, на котором споткнулась проверка, — не тронуто. Манифест
+// без этой правки остался бы с хэшем применённого состояния при возвращённых файлах — и
+// следующий PrepareAsync любого пакета раздела отказал бы на «дрейфе» (ревью S4b-2, M1).
+// Статус «apply_failed» с причиной; пакет не остаётся в «applying» никогда: незавершённый
+// после падения процесса доводит сторож старта (WikiApplyStartupGuard).
 // Любой неожиданный вход — результат-отказ с причиной, не исключение наружу.
 //
 // baseHashes: несущий здесь смысл — не «хэш совпал», а «на что опиралось намерение»:
@@ -228,7 +232,7 @@ public sealed class WikiApplyService
             // Любой неожиданный сбой записи (ФС, нечитаемый манифест, пустая страница рендера) —
             // тот же контракт, что у проверки: откат записанного по прообразам и «apply_failed»
             // с причиной, а не исключение вызывающему и не «applying» навсегда (ревью S4b-1, MAJOR 2).
-            return FailAfterWrite(root, packageId, written, CodeInternal,
+            return FailAfterWrite(root, packageId, prepared.Section!, prepared.BaseSnapshot!, written, CodeInternal,
                 $"внутренний сбой записи применения: {ex.Message}");
         }
     }
@@ -272,7 +276,7 @@ public sealed class WikiApplyService
             var diskHash = diskNow is null ? null : Sha256OfBytes(diskNow);
             var recorded = manifest.Manifest.TryGetValue(draft.Path, out var cur) ? cur : null;
             if (diskHash != baseHash || recorded != baseHash)
-                return FailAfterWrite(root, packageId, written, CodeDrift,
+                return FailAfterWrite(root, packageId, section, snapshot, written, CodeDrift,
                     $"базовое состояние «{draft.Path}» изменилось после проверки (правка мимо Хранителя или чужое применение): запись остановлена, чужая правка не тронута");
 
             // Шаг 4: прообраз — байты страницы до записи, по тому же относительному пути.
@@ -350,7 +354,8 @@ public sealed class WikiApplyService
     // Отказ после начала записи: откат — только того, что записал этот вызов. Всё остальное
     // (чужая правка, файл, на котором споткнулась сверка) остаётся как есть: молча отменить
     // то, чего не трогал, права нет — тот же закон, что у дрейфа у Хранителя.
-    private static ApplyResult FailAfterWrite(string root, string packageId, List<string> written, string code, string reason)
+    private static ApplyResult FailAfterWrite(string root, string packageId, string section,
+        IReadOnlyDictionary<string, string?> baseSnapshot, List<string> written, string code, string reason)
     {
         var (restored, failed) = RestoreFromPreimages(root, packageId, written);
         var text = reason;
@@ -358,6 +363,44 @@ public sealed class WikiApplyService
             text += $" (откатано по прообразам: {string.Join(", ", restored)})";
         if (failed.Count > 0)
             text += $" (откат не удался: {string.Join("; ", failed)} — файл мог остаться применённым при закрытом пакете)";
+        // Манифест следует за файлами: что возвращено к прежнему состоянию, то и записано
+        // обратно (для create — прежней записи нет вовсе, она убирается). Без этого сбой ПОСЛЕ
+        // записи манифеста оставлял в нём хэш применённого состояния при возвращённых файлах,
+        // и следующий PrepareAsync любого пакета раздела отказывал на «дрейфе»: раздел был
+        // заблокирован до ручного adopt (ревью S4b-2, M1).
+        // Правится ровно то, что отличается от базового состояния: при сбое ДО шага 6
+        // (сверка базы, чтение файла) манифест не менялся и уже описывает возвращённые файлы:
+        // править его и перегенерировывать проекции — значит трогать то, что не сломано.
+        // Не откатываются страницы, чей возврат не удался: их
+        // файл мог остаться применённым, и его хэш в манифесте — хотя бы согласован с диском.
+        if (restored.Count > 0)
+        {
+            var manifest = WikiManifest.TryRead(root, section);
+            var rollback = new Dictionary<string, string?>(StringComparer.Ordinal);
+            if (manifest.State != WikiManifestState.Invalid)
+                foreach (var p in restored)
+                {
+                    var current = manifest.Manifest.TryGetValue(p, out var c) ? c : null;
+                    var baseline = baseSnapshot.TryGetValue(p, out var b) ? b : null;
+                    if (current != baseline)
+                        rollback[p] = baseline;
+                }
+            if (rollback.Count > 0)
+            {
+                try
+                {
+                    WikiManifest.RollbackTo(root, section, rollback);
+                    // Проекции — за файлами и манифестом: они производные от них, как и в шаге 6.
+                    WikiProjections.RegenerateSection(root, section);
+                }
+                catch (Exception ex)
+                {
+                    // Откат записей — часть того же отказа: его сбой называется в причине,
+                    // а не превращает результат-отказ в исключение вызывающему.
+                    text += $" (откат записей манифеста не удался: {ex.Message} — хэш применённого состояния мог остаться в манифесте)";
+                }
+            }
+        }
         var fail = FailApply(root, packageId, code, text);
         return new ApplyResult(false, fail.Code, fail.Reason, fail.Violations);
     }
@@ -385,8 +428,10 @@ public sealed class WikiApplyService
                     WriteBytesAtomic(root, "pages/" + page, bytes);
                 restored.Add(page);
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            catch (Exception ex)
             {
+                // Любая причина, а не только файловая: сбой этого файла обязан попасть в
+                // текст отказа, а не выйти из отката исключением (ревью S4b-2, п. 4).
                 failed.Add($"{page}: {ex.Message}");
             }
         }

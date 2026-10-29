@@ -9,9 +9,12 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 //
 // Возврат — ровно того, что успело быть записано: страница с прообразом возвращается к его
 // байтам (пустой прообраз = страницы не было → файл удаляется); страниц без прообразов сторож
-// не трогает — их записи не было. Манифест после возврата дописывается прежним хэшем страницы:
-// падение могло случиться и ПОСЛЕ шага 6 (манифест уже новый) — возврат байтов без этой правки
-// оставил бы «дрейф» на ровном месте, а человек решал бы то, что уже решено.
+// не трогает — их записи не было. Манифест после возврата приводится к прежнему состоянию:
+// прежний хэш возвращается записью, а запись create-страницы (её в манифеста не было) —
+// убирается вместе с файлом. Падение могло случиться и ПОСЛЕ шага 6 (манифест уже новый):
+// возврат файлов без этой правки оставил бы «дрейф» на ровном месте — для изменённой страницы
+// как расхождение хэша, для create — как «файл из манифеста отсутствует на диске»
+// (ревью S4b-2, M2), — а человек решал бы то, что уже решено.
 //
 // Исключение из службы не выходит ни при каком сбое: невынесенное останавливает хост, а
 // фоновая служба не имеет права ронять сервер (тот же приём запуска, что у
@@ -127,7 +130,9 @@ public sealed class WikiApplyStartupGuard : IHostedService
             .ToList();
 
         var restored = new List<string>();
-        var hashes = new Dictionary<string, string>(StringComparer.Ordinal);
+        // То же состояние манифеста, что и возвращённые файлы: хэш прежней страницы или
+        // null — её записи в манифеста не было (create), её запись убирается (ревью S4b-2, M2).
+        var rollback = new Dictionary<string, string?>(StringComparer.Ordinal);
         foreach (var page in pages)
         {
             var bytes = File.ReadAllBytes(Path.Combine(dir, page));
@@ -135,24 +140,26 @@ public sealed class WikiApplyStartupGuard : IHostedService
             if (bytes.Length == 0)
             {
                 // Пустой прообраз = страницы не было (create): её запись — файл, которого
-                // раньше не было; возврат — удалить. Файла нет и сейчас: этой записи не
-                // было, в списке возвращённого её быть не должно.
+                // раньше не было, и строка манифеста, добавленная шагом 6; возврат убирает
+                // и то, и другое. Файла нет и сейчас: этой записи не было, в списке
+                // возвращённого её быть не должно — и манифест не трогается.
                 if (File.Exists(full))
                 {
                     File.Delete(full);
                     restored.Add(page);
+                    rollback[page] = null;
                 }
             }
             else
             {
                 WikiApplyService.WriteBytesAtomic(root, "pages/" + page, bytes);
-                hashes[page] = WikiApplyService.Sha256OfBytes(bytes);
+                rollback[page] = WikiApplyService.Sha256OfBytes(bytes);
                 restored.Add(page);
             }
         }
 
-        if (hashes.Count > 0)
-            WikiManifest.RecordApplied(root, package.Section, hashes);
+        if (rollback.Count > 0)
+            WikiManifest.RollbackTo(root, package.Section, rollback);
         if (restored.Count > 0)
             WikiProjections.RegenerateSection(root, package.Section);
 

@@ -77,14 +77,43 @@ public static class WikiManifest
     /// битый файл означало бы молча стереть его записи (тот же fail-closed).</summary>
     public static void RecordApplied(string root, string sectionKey, IReadOnlyDictionary<string, string> pageHashes)
     {
+        var manifest = ReadForEdit(root, sectionKey);
+        foreach (var (page, hash) in pageHashes)
+            manifest[page] = hash;
+        WriteManifest(root, sectionKey, manifest);
+    }
+
+    /// <summary>Вернуть коснутые страницы к прежним записям манифеста (откат применения,
+    /// ревью S4b-2, M1/M2): baselines — прежнее состояние страницы: хэш → вернуть запись
+    /// с этим хэшем; null → страницы в манифеста не было (create), её запись убрать вместе
+    /// с файлом. Трогаются только перечисленные ключи, чужие записи — как были. Тот же
+    /// порядок ключей и та же атомарная запись, что у RecordApplied; на невалидном
+    /// манифесте — тот же отказ, что у него.</summary>
+    public static void RollbackTo(string root, string sectionKey, IReadOnlyDictionary<string, string?> baselines)
+    {
+        var manifest = ReadForEdit(root, sectionKey);
+        foreach (var (page, hash) in baselines)
+        {
+            if (hash is null)
+                manifest.Remove(page);
+            else
+                manifest[page] = hash;
+        }
+        WriteManifest(root, sectionKey, manifest);
+    }
+
+    private static Dictionary<string, string> ReadForEdit(string root, string sectionKey)
+    {
         var existing = TryRead(root, sectionKey);
         if (existing.State == WikiManifestState.Invalid)
             throw new InvalidOperationException($"Манифест раздела «{sectionKey}» невалиден — запись в него невозможна");
-        var manifest = new Dictionary<string, string>(existing.Manifest);
-        foreach (var (page, hash) in pageHashes)
-            manifest[page] = hash;
-        // Порядок ключей фиксированный: манифест — данные на диске и в бэкапе, его diff
-        // между применениями должен быть читаемым, а не зависеть от обхода словаря.
+        return new Dictionary<string, string>(existing.Manifest);
+    }
+
+    // Порядок ключей фиксированный: манифест — данные на диске и в бэкапе, его diff
+    // между применениями должен быть читаемым, а не зависеть от обхода словаря.
+    private static void WriteManifest(string root, string sectionKey, Dictionary<string, string> manifest)
+    {
         var sorted = new Dictionary<string, string>();
         foreach (var kv in manifest.OrderBy(kv => kv.Key, StringComparer.Ordinal))
             sorted[kv.Key] = kv.Value;

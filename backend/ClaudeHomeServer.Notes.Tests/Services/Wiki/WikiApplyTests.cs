@@ -480,4 +480,115 @@ public class WikiApplyTests : IDisposable
         _events.Appended.Select(e => (e.ProjectId, e.Type, e.Actor)).Should().Equal(
             ("p1", ProjectEventTypes.WikiChanged, "keeper"));
     }
+
+    // ─── 7. Сбой ПОСЛЕ записи манифеста: манифест откатан вместе с файлами (ревью S4b-2, M1) ───
+
+    [Fact]
+    public async Task СбойПослеЗаписиМанифеста_ФайлыИМанифестКакДоПакета_ВторойPrepareПроходит()
+    {
+        // Мутация «не откатывать манифест» (в FailAfterWrite убрать RollbackTo и проекции):
+        // манифест остаётся с хэшем применённого состояния при возвращённых файлах →
+        // Should().Equal(beforeManifest) краснеет, а второй PrepareAsync падает на CodeDrift:
+        // раздел был бы заблокирован до ручного adopt.
+        await WriteCardAndPage();
+        var pkg = CreateAccepted(Op(WikiPackage.OpAppend, PagePath, "Контенер собран на второй машине"));
+
+        var prepared = await _sut.PrepareAsync(User, pkg, Ctx);
+        prepared.Ready.Should().BeTrue(prepared.Reason);
+
+        var before = SnapshotPages();
+        var beforeManifest = new Dictionary<string, string>(WikiManifest.TryRead(Root, Section).Manifest);
+
+        // Сбой ровно там, где риск: log.jsonl сделан каталогом ПОСЛЕ того, как шаг 6 уже
+        // записал хэши в манифест, — AppendLog бросает уже после RecordApplied. Окно между
+        // фазами ставится дисковым состоянием, не гонкой.
+        var logPath = Path.Combine(WikiPaths.Keeper(_dir, User), "log.jsonl");
+        File.Exists(logPath).Should().BeFalse("до применения журнала этого раздела нет");
+        Directory.CreateDirectory(logPath);
+
+        var r = await _sut.WriteAsync(User, pkg.Id, prepared, Ctx);
+
+        r.Applied.Should().BeFalse();
+        r.Code.Should().Be(WikiApplyService.CodeInternal);
+        r.Reason.Should().Contain("откатано по прообразам").And.Contain(PagePath);
+
+        // Файлы побайтно как до — и манифест как до: его хэши равны байтам на диске, т.е.
+        // сверка следующего PrepareAsync проходит, а не отказывает разделу.
+        SnapshotPages().Should().Equal(before, "страницы возвращены по прообразам");
+        WikiManifest.TryRead(Root, Section).Manifest.Should().Equal(beforeManifest,
+            "хэш применённого состояния в манифесте при возвращённых файлах — и есть заблокированный раздел");
+
+        ReadStatus(pkg.Id).Item1.Should().Be(WikiPackage.StatusApplyFailed);
+
+        // Инвариант: следующий пакет этого раздела проходит проверку, а не «wiki_apply_drift».
+        var next = CreateAccepted(Op(WikiPackage.OpAppend, PagePath, "Контенер собран на второй машине"));
+        var again = await _sut.PrepareAsync(User, next, Ctx);
+        again.Ready.Should().BeTrue(again.Reason);
+    }
+
+    // ─── 8. Сторож старта и create-страница: запись манифеста убрана вместе с файлом (M2) ───
+
+    [Fact]
+    public async Task СторожСтарта_CreateСтраницы_ФайлУдалён_ЗаписьМанифестаУбрана_ВторойPrepareПроходит()
+    {
+        // Мутация «не убирать ключ» (в RollbackOne для пустого прообраза не ставить
+        // rollback[page] = null): запись остаётся в манифесте при удалённом файле →
+        // Should().Equal(beforeManifest) краснеет, а второй PrepareAsync падает на CodeDrift
+        // («файл из манифеста отсутствует на диске»).
+        const string newPage = "Общее/Новое-знание.md";
+        await WriteCardAndPage();
+        var pkg = CreateAccepted(Op(WikiPackage.OpCreate, newPage, "Решение: перенести сборку на Linux"));
+        WikiPackageStore.Transition(Root, pkg.Id, WikiPackage.StatusApplying).Ok.Should().BeTrue();
+
+        var before = SnapshotPages();
+        var beforeManifest = new Dictionary<string, string>(WikiManifest.TryRead(Root, Section).Manifest);
+
+        // Дисковое состояние после падения процесса посреди шага 6 применения create:
+        // страница записана (прообраз пустой — её не было), её хэш в манифесте, статус не дописан.
+        Directory.CreateDirectory(Path.GetDirectoryName(PreimageOf(pkg.Id, newPage))!);
+        File.WriteAllBytes(PreimageOf(pkg.Id, newPage), []);
+        var created = $$"""
+            ---
+            type: topic
+            aliases: []
+            owns: []
+            sources: []
+            status: active
+            ---
+
+            # Новое знание
+
+            ## Сводка
+            Решение: перенести сборку на Linux [^s1]
+
+            ## Хронология
+
+            ## Противоречия
+
+            ## История
+
+            [^s1]: [[{{CardTitle}}]] — «Решение: перенести сборку на Linux»
+            """;
+        File.WriteAllText(PageFull(newPage), created, new UTF8Encoding(false));
+        WikiManifest.RecordApplied(Root, Section,
+            new Dictionary<string, string> { [newPage] = Sha256Of(new UTF8Encoding(false).GetBytes(created)) });
+
+        await NewGuard().StartAsync(CancellationToken.None);
+
+        // Файла нет — и записи о нём нет: манифест и дерево побайтно таковы, каковы были до
+        // оборванного применения. Иначе человек получил бы «дрейф» там, где всё уже решено.
+        File.Exists(PageFull(newPage)).Should().BeFalse();
+        SnapshotPages().Should().Equal(before, "возвращено ровно то, что было записано, и только это");
+        WikiManifest.TryRead(Root, Section).Manifest.Should().Equal(beforeManifest,
+            "запись create-страницы переживает её файл — это и есть «файл из манифеста отсутствует»");
+
+        var (status, reason) = ReadStatus(pkg.Id);
+        status.Should().Be(WikiPackage.StatusApplyFailed);
+        reason.Should().Contain("сторож старта").And.Contain(newPage);
+
+        // Инвариант: следующий PrepareAsync раздела проходит.
+        var next = CreateAccepted(Op(WikiPackage.OpCreate, newPage, "Решение: перенести сборку на Linux"));
+        var again = await _sut.PrepareAsync(User, next, Ctx);
+        again.Ready.Should().BeTrue(again.Reason);
+    }
 }

@@ -171,7 +171,8 @@ jobs:
           - { name: "monolith 4/6", key: m4, kind: monolith, shard: "4/6" }
           - { name: "monolith 5/6", key: m5, kind: monolith, shard: "5/6" }
           - { name: "monolith 6/6", key: m6, kind: monolith, shard: "6/6" }
-          # Llm.Tests — отдельная цель (параллель коллекций там ограничена inotify), классы по профилю
+          # Llm.Tests — отдельная цель (свой тестовый проект), классы по профилю; параллель коллекций включена,
+          # inotify-классы помечены Inotify+Slow и идут вторым проходом
           - { name: "Llm.Tests 1/2", key: l1, kind: llm, shard: "1/2" }
           - { name: "Llm.Tests 2/2", key: l2, kind: llm, shard: "2/2" }
           # rest — остальные тестовые проекты slnx, по проектам: вынесенные проекты идут в том же гейте master

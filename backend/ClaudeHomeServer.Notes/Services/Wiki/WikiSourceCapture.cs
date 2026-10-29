@@ -13,6 +13,11 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // манифеста и сверки дрейфа — WikiKeeper.Sha256OfBytes): хэш строки и хэш файла — разные
 // вещи при BOM или чужой кодировке, а сверять надо файл.
 //
+// Для origin `session` (S6j) файл-источник на диске не читается: версия — sha256 самой выдержки,
+// её режет WikiChatSlicer (у чата нет файла, переписанная история даёт новую выдержку — новую
+// карточку). Остальные правила общие: неизменяемость, детерминированное имя, текст в карточку
+// не пишется.
+//
 // Карточку пишет только Хранитель: этот класс — его внутренний инструмент (ADR-035, решение 2:
 // «Хранитель пишет своим внутренним WikiFileWriter внутри сборки Notes»), запись — через
 // WikiFileWriter (атомарный temp+Move), не прямым File.WriteAllText. Карточка неизменяема
@@ -60,11 +65,14 @@ public sealed class WikiSourceCapture
     private readonly string _dataDir;
     private readonly NotesService _notes;
     private readonly IProjectManager _projects;
+    private readonly ISessionDirectory _sessions;
 
-    public WikiSourceCapture(NotesService notes, IProjectManager projects, IConfiguration config)
+    public WikiSourceCapture(NotesService notes, IProjectManager projects, ISessionDirectory sessions,
+        IConfiguration config)
     {
         _notes = notes;
         _projects = projects;
+        _sessions = sessions;
         // Каталог данных — как у всех сервисов вертикали (DataPath указывает на projects.json).
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
@@ -203,6 +211,69 @@ public sealed class WikiSourceCapture
         // (ADR-036, решение 5), и по одному только пути файла источник не опознать.
         return WriteCard(ownerId, decision.SectionKey, WikiGate.OriginFile, $"file:{projectId}/{rel}",
             versionHash, Path.GetFileNameWithoutExtension(rel), rel, sourceText);
+    }
+
+    /// <summary>Захват чата (origin: session, ADR-035, решение 3 и §12б): выдержка
+    /// `session:{id}#m{a}-{b}` — её режет WikiChatSlicer (реплики человека и ответы агента,
+    /// всё через SecretRedactor, без вызовов инструментов), ≤8 КБ. Сессия обязана принадлежать
+    /// тому же владельцу и тому же проекту, что раздел назначения: раздел определяет дом чата
+    /// (ADR-036, решение 3), и разбор раздела не цитирует чужие чаты. Чаты исполнения задач —
+    /// отказ: «чаты исполнения задач не разбираются» (§12, решение Андрея), их итоги уже
+    /// триггер. exactSecrets — точные значения секретов инстанса от вызывающего: их собирает
+    /// InstanceSecretsProvider вертикали Dossiers (Notes его не видит), без них работает
+    /// регулярковая часть SecretRedactor (известные форматы токенов). Любой неожиданный вход —
+    /// отказ с причиной, не исключение (урок ревью S6h).</summary>
+    public async Task<Result> CaptureSession(string ownerId, string sectionKey, string sessionId,
+        int from, int to, IReadOnlyCollection<string>? exactSecrets = null)
+    {
+        var writable = WikiSections.IsWritable(sectionKey);
+        if (!writable.Writable)
+            return Refused($"раздел назначения не является разделом вики: {writable.Reason}");
+        if (from < 1 || from > to)
+            return Refused($"неверный диапазон сообщений: m{from}-m{to}");
+        if (string.IsNullOrEmpty(sessionId))
+            return Refused("id сессии пустой");
+
+        // ref проверяется той же формой, которой будет читаться (WikiPage.TryParseSessionRef):
+        // нерезолвимый ref — карточка со битой сноской, её писать нельзя (id с спецсимволами —
+        // сюда же).
+        var ref_ = $"session:{sessionId}#m{from}-{to}";
+        if (!WikiPage.TryParseSessionRef(ref_, out _, out _, out _))
+            return Refused($"ref карточки не представим формой session:{{id}}#m{{a}}-{{b}}: '{ref_}'");
+
+        var session = _sessions.GetById(sessionId);
+        if (session is null)
+            return Refused("сессия не существует");
+        if (_sessions.ResolveOwnerId(session) != ownerId)
+            return Refused("чат принадлежит другому владельцу: источник — тому же владельцу, что вики");
+        if (session.TaskExecution)
+            return Refused("чаты исполнения задач не разбираются: их итоги уже источники");
+
+        var home = session.ProjectId is not null
+            ? WikiSections.ProjectsPrefix + session.ProjectId
+            : WikiSections.Personal;
+        if (home != sectionKey)
+            return Refused($"чат принадлежит другому дому '{home}': карточка пишется в раздел дома чата");
+
+        var history = await _sessions.GetHistoryAsync(sessionId);
+        if (history is null || history.Count == 0)
+            return Refused("у чата нет истории");
+        var branchPoint = WikiChatSlicer.BranchPoint(history);
+        if (branchPoint > 0 && from <= branchPoint)
+            return Refused($"диапазон захватывает префикс ветки: префикс — ответственность родителя, " +
+                $"диапазон начинается с m{branchPoint + 1}");
+        if (from > history.Count)
+            return Refused($"в диапазоне нет сообщений: длина истории чата {history.Count}");
+
+        var excerpt = WikiChatSlicer.Excerpt(history, from, to, exactSecrets);
+        if (excerpt.Length == 0)
+            return Refused("в диапазоне нечего цитировать: всё его содержимое — служебные записи");
+
+        // Версия источника-сессии — сама выдержка: карточка неизменяема (решение 3), а
+        // переписывание истории (сброс курсора, §12б этап 1) даёт другую выдержку → новую
+        // карточку, не перезапись старой. Заголовок — имя чата, при пустом — id (CardName).
+        return WriteCard(ownerId, sectionKey, WikiGate.OriginSession, ref_,
+            Sha256OfBytes(Encoding.UTF8.GetBytes(excerpt)), session.Name ?? "", sessionId, excerpt);
     }
 
     // Карточка = шапка (поля кода: type/origin/ref/hash/captured) + заголовок; текста нет

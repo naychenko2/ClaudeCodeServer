@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Notes.Wiki;
@@ -24,6 +25,7 @@ public class WikiSourceCaptureTests : IDisposable
     private readonly string _roots; // рабочие каталоги проектов — вне {data}
     private readonly ProjectManager _projects;
     private readonly NotesService _notes;
+    private readonly FakeSessions _sessions;
     private readonly WikiSourceCapture _sut;
 
     public WikiSourceCaptureTests()
@@ -43,7 +45,8 @@ public class WikiSourceCaptureTests : IDisposable
         var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         _projects = new ProjectManager(config, users, new AppSettingsService(config));
         _notes = new NotesService(_projects, config, NullLogger<NotesService>.Instance);
-        _sut = new WikiSourceCapture(_notes, _projects, config);
+        _sessions = new FakeSessions();
+        _sut = new WikiSourceCapture(_notes, _projects, _sessions, config);
     }
 
     public void Dispose()
@@ -459,5 +462,192 @@ public class WikiSourceCaptureTests : IDisposable
         foreach (var bad in new[] { ':', '*', '?', '"', '<', '>' })
             name.Should().NotContain(bad.ToString());
         ReadCard(r).Should().Contain("# " + name);
+    }
+
+    // —— CaptureSession (S6j, origin: session): выдержка чата и её границы ——
+
+    private Session AddSession(string id, string? projectId, bool taskExecution = false, string? name = "Чат разбора")
+    {
+        var s = new Session { Id = id, OwnerId = User, ProjectId = projectId, Name = name, TaskExecution = taskExecution };
+        _sessions.All.Add(s);
+        _sessions.History[id] =
+        [
+            new StoredUserMessage("Решили: нарезку делает код, выдержка не больше 8 КБ."),
+            new StoredTextMessage("Принято, режу по диапазону m{a}-m{b}."),
+        ];
+        return s;
+    }
+
+    [Fact]
+    public async Task ЗахватСессии_тотЖеВладелецИПроект_карточкаСВыдержкой()
+    {
+        AddSession("s1", "p1");
+
+        var r = await _sut.CaptureSession(User, "projects/p1", "s1", 1, 2);
+
+        r.Ok.Should().BeTrue(r.Reason);
+        r.SourceText.Should().Contain("Решили: нарезку делает код");
+        r.SourceText.Should().Contain("Принято, режу по диапазону");
+        var card = CardModel(r);
+        card.Frontmatter.Origin.Should().Be(WikiGate.OriginSession);
+        // ref — та же форма, которую читает TryParseSessionRef (и UI «Открыть в чате» по m{a})
+        card.Frontmatter.Ref.Should().Be("session:s1#m1-2");
+        WikiPage.TryParseSessionRef(card.Frontmatter.Ref!, out var sid, out var a, out var b).Should().BeTrue();
+        (sid, a, b).Should().Be(("s1", 1, 2));
+    }
+
+    // Три отказа по владению (c3): чат чужого владельца, чат другого проекта, чат исполнения
+    // задачи. Каждый — с причиной, ни один — исключением.
+    [Fact]
+    public async Task ЗахватСессии_чужойВладелец_отказ()
+    {
+        var s = AddSession("s1", "p1");
+        s.OwnerId = "u2";
+
+        var r = await _sut.CaptureSession(User, "projects/p1", "s1", 1, 2);
+        r.Ok.Should().BeFalse();
+        r.Reason.Should().Contain("владел");
+    }
+
+    [Fact]
+    public async Task ЗахватСессии_чужойПроект_отказ()
+    {
+        AddSession("s1", "p2");
+
+        var r = await _sut.CaptureSession(User, "projects/p1", "s1", 1, 2);
+        r.Ok.Should().BeFalse();
+        r.Reason.Should().Contain("дом");
+    }
+
+    [Fact]
+    public async Task ЗахватСессии_чатИсполненияЗадачи_отказ()
+    {
+        AddSession("s1", "p1", taskExecution: true);
+
+        var r = await _sut.CaptureSession(User, "projects/p1", "s1", 1, 2);
+        r.Ok.Should().BeFalse();
+        r.Reason.Should().Contain("исполнения задач");
+    }
+
+    // Чат вне проекта — дом «Личное» (ADR-036, решение 3): в свой раздел пишется,
+    // в проектный — отказ.
+    [Fact]
+    public async Task ЗахватСессии_чатВнеПроекта_пишетсяВЛичное()
+    {
+        AddSession("s1", null);
+
+        var r = await _sut.CaptureSession(User, "personal", "s1", 1, 2);
+        r.Ok.Should().BeTrue(r.Reason);
+        r.CardRelPath!.Should().StartWith("Личное/Источники/");
+
+        var r2 = await _sut.CaptureSession(User, "projects/p1", "s1", 1, 2);
+        r2.Ok.Should().BeFalse();
+        r2.Reason.Should().Contain("personal", "дом чата вне проекта — «Личное», в раздел проекта он не идёт");
+    }
+
+    // Диапазон за точку ветвления: префикс ветки — ответственность родителя (§12б этап 3),
+    // карточка ветки его не цитирует — отказ с номером, с которого начинается диапазон.
+    [Fact]
+    public async Task ЗахватСессии_диапазонЗахватываетПрефиксВетки_отказ()
+    {
+        AddSession("s1", "p1");
+        _sessions.History["s1"] =
+        [
+            new StoredUserMessage("реплика префикса"),
+            new StoredTextMessage("ответ префикса"),
+            new StoredBranchedFromMessage { SourceSessionId = "p0", SourceName = "Родитель" },
+            new StoredUserMessage("реплика после ветвления"),
+        ];
+
+        var r = await _sut.CaptureSession(User, "projects/p1", "s1", 1, 4);
+        r.Ok.Should().BeFalse();
+        r.Reason.Should().Contain("m4");
+
+        var ok = await _sut.CaptureSession(User, "projects/p1", "s1", 4, 4);
+        ok.Ok.Should().BeTrue(ok.Reason);
+        ok.SourceText.Should().Contain("реплика после ветвления").And.NotContain("реплика префикса");
+    }
+
+    // Границы диапазона: m{N} 1-based (TryParseSessionRef: a ≥ 1); from>to — отказ;
+    // from за концом истории — отказ; пустая история — отказ. Ничего не пишется на диске.
+    [Theory]
+    [InlineData(0, 2)]   // m{0} не существует
+    [InlineData(2, 1)]   // пустой перевёрнутый диапазон
+    [InlineData(3, 4)]   // за концом истории (2 записи)
+    public async Task ЗахватСессии_неверныйДиапазон_отказ(int from, int to)
+    {
+        AddSession("s1", "p1");
+
+        var r = await _sut.CaptureSession(User, "projects/p1", "s1", from, to);
+        r.Ok.Should().BeFalse();
+        r.Reason.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task ЗахватСессии_пустаяИсторияИлиТолькоСлужебное_отказ()
+    {
+        AddSession("s1", "p1");
+        _sessions.History["s1"] = [];
+        var empty = await _sut.CaptureSession(User, "projects/p1", "s1", 1, 1);
+        empty.Ok.Should().BeFalse();
+        empty.Reason.Should().Contain("истории");
+
+        _sessions.History["s1"] = [new StoredResultMessage("success", 10, 1)];
+        var onlyService = await _sut.CaptureSession(User, "projects/p1", "s1", 1, 1);
+        onlyService.Ok.Should().BeFalse();
+        onlyService.Reason.Should().Contain("нечего цитировать");
+    }
+
+    // Выдержка карточки — ≤8 КБ (решение 3): в карточку входят целые реплики, целиком
+    // помещающиеся в предел; обрезанной реплики нет (дословность QuoteMatcher — по целым).
+    [Fact]
+    public async Task ЗахватСессии_выдержкаНеБольше8КБ_целымиРепликами()
+    {
+        AddSession("s1", "p1");
+        var longText = new string('к', 3000); // 6000 байт UTF-8 на реплику
+        _sessions.History["s1"] =
+        [
+            new StoredUserMessage(longText),
+            new StoredTextMessage(longText),
+            new StoredUserMessage(longText),
+        ];
+
+        var r = await _sut.CaptureSession(User, "projects/p1", "s1", 1, 3);
+        r.Ok.Should().BeTrue(r.Reason);
+        Encoding.UTF8.GetByteCount(r.SourceText!).Should().BeLessThanOrEqualTo(WikiChatSlicer.MaxExcerptBytes);
+        // 3 реплики по ~6 КБ в 8 КБ не помещаются: вошла одна, остальные — не обрезанные куски
+        (r.SourceText!.Split("Пользователь:").Length - 1).Should().Be(1);
+    }
+
+    // Точные секреты вызывающего доходят до выдержки (параметр exactSecrets):
+    // значение длиннее порога SecretRedactor не остаётся в тексте карточки.
+    [Fact]
+    public async Task ЗахватСессии_точныйСекретВызывающего_неПопадаетВВыдержку()
+    {
+        AddSession("s1", "p1");
+        _sessions.History["s1"] = [new StoredUserMessage("ключ провайдера: zzz-тайный-секрет-инстанса-12345")];
+
+        var r = await _sut.CaptureSession(User, "projects/p1", "s1", 1, 1,
+            new[] { "zzz-тайный-секрет-инстанса-12345" });
+        r.Ok.Should().BeTrue(r.Reason);
+        r.SourceText.Should().NotContain("zzz-тайный-секрет-инстанса-12345");
+        r.SourceText.Should().Contain("[REDACTED:instance-secret]");
+    }
+
+    // Stub каталога сессий: набор чатов и их история — какие построил тест.
+    // ResolveOwnerId возвращает поле OwnerId: правила делегирования — механика
+    // SessionManager, не этот тест.
+    private sealed class FakeSessions : ISessionDirectory
+    {
+        public readonly List<Session> All = [];
+        public readonly Dictionary<string, List<StoredMessage>> History = [];
+
+        public Session? GetById(string id) => All.FirstOrDefault(s => s.Id == id);
+        public IReadOnlyCollection<Session> GetAll() => All;
+        public string? ResolveOwnerId(Session s) => s.OwnerId;
+        public Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId) =>
+            Task.FromResult<IReadOnlyList<StoredMessage>>(
+                History.TryGetValue(sessionId, out var h) ? h : new List<StoredMessage>());
+        public bool SetWikiMark(string sessionId, string? mark) => true;
     }
 }

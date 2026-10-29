@@ -35,6 +35,12 @@ describe('stripServiceMarkers', () => {
     )).toBe('Жду ответа.');
   });
 
+  // Снятие блокера штабом: без пары тег становился markdown-автоссылкой «team:resolved»
+  it('режет маркер снятия блокера, в том числе закрытый по имени', () => {
+    expect(stripServiceMarkers('Снял.\n<team:resolved>задача переписана</team>')).toBe('Снял.');
+    expect(stripServiceMarkers('Снял.\n<team:resolved>блокер снят</team:resolved>')).toBe('Снял.');
+  });
+
   it('режет незакрытый маркер в хвосте — ход ещё стримится', () => {
     expect(stripServiceMarkers('Беру.\n<team:work>Создать Coun')).toBe('Беру.');
   });

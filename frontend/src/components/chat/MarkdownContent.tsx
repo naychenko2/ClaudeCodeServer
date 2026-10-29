@@ -196,6 +196,10 @@ export function FileLink({ path, onOpen, mono, children }: {
 const PAIRED_MARKERS: ReadonlyArray<readonly [RegExp, RegExp]> = [
   [/<escalate:[a-z]+>/i, /<\/escalate(?::\w+)?>/i],
   [/<team:work>/i, /<\/team(?::work)?>/i],
+  // Снятие блокера штабом (<team:resolved>суть</team>) — бэкенд вырезает его так же
+  // (TeamProtocolMarkers.StripTeamProtocolMarkers); без пары здесь тег становился
+  // markdown-автоссылкой «team:resolved»
+  [/<team:resolved>/i, /<\/team(?::resolved)?>/i],
   [/<promise>/i, /<\/promise>/i],
   [/<blocked>/i, /<\/blocked>/i],
   [/<waiting>/i, /<\/waiting>/i],
@@ -203,7 +207,7 @@ const PAIRED_MARKERS: ReadonlyArray<readonly [RegExp, RegExp]> = [
 // Незакрытый открывающий тег в хвосте — ход ещё стримится, закрывающий тег придёт позже;
 // без этого пользователь успевает прочитать «<team:work>Создать …» целиком. Хвост прячем
 // до конца текста (включая код-блок внутри незакрытой постановки), а не до фенса.
-const OPEN_TAGS = /<(?:promise|blocked|waiting|team:work|escalate:[a-z]+)>/gi;
+const OPEN_TAGS = /<(?:promise|blocked|waiting|team:work|team:resolved|escalate:[a-z]+)>/gi;
 // Осиротевший закрывающий тег без пары (повторное закрытие, цитата закрытия отдельно от
 // открытия) — служебный синтаксис протокола, человеку не место ни в какой форме
 // (симметрично OrphanCloserRegex бэкенда)

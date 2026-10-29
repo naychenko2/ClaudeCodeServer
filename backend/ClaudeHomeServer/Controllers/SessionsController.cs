@@ -78,12 +78,15 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
+    // Переименование и прочие правки чата: до S2a-10 только автор. Область — Read, чтобы
+    // участник дошёл до проверки автора и получил not_chat_author, а не общий project_scope
     [HttpPut("{sessionId}")]
-    [ProjectScope(Right = ProjectRight.Write)]
+    [ProjectScope]
     public async Task<IActionResult> Update(string projectId, string sessionId, [FromBody] UpdateSessionRequest req)
     {
         var session = sessions.GetById(sessionId);
         if (session == null || session.ProjectId != projectId) return NotFound();
+        if (sessions.GetOwned(sessionId, UserId) is null) return ChatAuthorGate.Denied();
         if (req.NotificationsMuted is bool muted) sessions.SetNotificationsMuted(sessionId, muted);
         // Хотя бы одно из двух — см. тот же блок в ChatsController.Update
         if (req.VoiceStyle is not null && !VoiceStyles.IsKnown(req.VoiceStyle))
@@ -174,7 +177,7 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     }
 
     [HttpDelete("{sessionId}")]
-    [ProjectScope(Right = ProjectRight.Write)]
+    [ProjectScope]
     // Секция destructive: на делегированном ходу агент не удаляет чаты (см. FilesController.Delete)
     [DenyOnDelegatedTurn("Удаление чата")]
     public async Task<IActionResult> Delete(string projectId, string sessionId)
@@ -182,6 +185,7 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         var session = sessions.GetById(sessionId);
         if (session == null) return NoContent(); // идемпотентное удаление
         if (session.ProjectId != projectId) return NotFound(); // чужая сессия — не удаляем
+        if (sessions.GetOwned(sessionId, UserId) is null) return ChatAuthorGate.Denied();
         await sessions.DeleteAsync(sessionId);
         return NoContent();
     }

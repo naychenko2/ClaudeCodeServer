@@ -3,6 +3,7 @@ using System.Security.Claims;
 using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Team;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -35,6 +36,14 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
         var s = sessions.GetById(id);
         return s is not null && s.ProjectId is null && s.OwnerId == UserId ? s : null;
     }
+
+    // Чат проекта виден, но не свой: участнику — 403 not_chat_author, постороннему и
+    // несуществующему — 404 (существование не раскрываем); владелец чата проекта на ручках
+    // «только чат вне проекта» получает прежний 404
+    private IActionResult NotAuthorOrNotFound(string id) =>
+        sessions.GetOwned(id, UserId) is null && sessions.GetAccessible(id, UserId) is { Session.ProjectId: not null }
+            ? ChatAuthorGate.Denied()
+            : NotFound();
 
     [HttpGet]
     public IActionResult GetAll() =>
@@ -183,7 +192,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpPut("{id}")]
     public async Task<IActionResult> Update(string id, [FromBody] UpdateChatRequest req)
     {
-        if (OwnedChat(id) is null) return NotFound();
+        if (OwnedChat(id) is null) return NotAuthorOrNotFound(id);
         if (req.Pinned is bool pinned) sessions.SetPinned(id, pinned);
         if (req.NotificationsMuted is bool muted) sessions.SetNotificationsMuted(id, muted);
         // Хотя бы одно из двух: стиль приезжает и отдельным запросом, без флага (устройство
@@ -290,7 +299,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpPut("{id}/archived")]
     public async Task<IActionResult> SetArchived(string id, [FromBody] SetArchivedRequest req)
     {
-        if (sessions.GetOwned(id, UserId) is null) return NotFound();
+        if (sessions.GetOwned(id, UserId) is null) return NotAuthorOrNotFound(id);
         try
         {
             var updated = await sessions.SetArchivedAsync(id, UserId, req.Archived);
@@ -708,7 +717,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [DenyOnDelegatedTurn("Удаление чата")]
     public async Task<IActionResult> Delete(string id)
     {
-        if (OwnedChat(id) is null) return NotFound();
+        if (OwnedChat(id) is null) return NotAuthorOrNotFound(id);
         await sessions.DeleteAsync(id);
         return NoContent();
     }

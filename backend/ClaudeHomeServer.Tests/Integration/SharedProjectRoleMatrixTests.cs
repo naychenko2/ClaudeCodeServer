@@ -62,6 +62,10 @@ public class SharedProjectRoleMatrixTests : IClassFixture<TestWebApplicationFact
         new("задача: создание", "POST", "/api/projects/{p}/tasks", new { title = "Задача матрицы" }, Ok2xx, 403, 403, 404),
         new("память команды: запись", "POST", "/api/projects/{p}/team-memory", new { text = "Факт матрицы" }, Ok2xx, 403, 403, 404),
         new("чат: удаление", "DELETE", "/api/projects/{p}/sessions/{s}", null, Ok2xx, 403, 403, 404),
+        new("чат: переименование", "PUT", "/api/projects/{p}/sessions/{s}", new { name = "Имя матрицы" }, Ok2xx, 403, 403, 404),
+        new("чат: архив", "PUT", "/api/chats/{s}/archived", new { archived = true }, Ok2xx, 403, 403, 404),
+        new("чат: удаление по /api/chats", "DELETE", "/api/chats/{s}", null, 404, 403, 403, 404),
+        new("чат: переименование по /api/chats", "PUT", "/api/chats/{s}", new { name = "Имя матрицы" }, 404, 403, 403, 404),
         // настройки и удаление проекта — Configure, только владелец
         new("проект: настройки", "PUT", "/api/projects/{p}", new { name = "Имя матрицы" }, Ok2xx, 403, 403, 404),
         new("проект: удаление", "DELETE", "/api/projects/{p}", null, Ok2xx, 403, 403, 404),
@@ -136,6 +140,9 @@ public class SharedProjectRoleMatrixTests : IClassFixture<TestWebApplicationFact
         var response = await ClientOf(role).SendAsync(request);
 
         var expected = endpoint.For(role);
+        // Отказ автору-чата различается кодом, а не только статусом: общий project_scope не годится
+        if (expected == 403 && endpointName.StartsWith("чат: "))
+            (await response.Content.ReadAsStringAsync()).Should().Contain("not_chat_author", $"{role}: {endpointName}");
         if (expected == Ok2xx)
             response.IsSuccessStatusCode.Should().BeTrue($"{role}: {endpointName} → {(int)response.StatusCode}");
         else if (expected == PassesGate)

@@ -57,8 +57,11 @@ public class UpstreamSelector(
             var main = string.IsNullOrWhiteSpace(model) ? p.Models.FirstOrDefault()?.Id ?? "" : model!;
             return new(new GatewayRoute(GatewayUpstreamKind.Provider, main, ProviderKey: p.Key), null);
         }
+        // Модель выключенного стороннего провайдера — причина «не настроен», а не «не найдена».
         if (!LlmProviderRegistry.IsNativeClaudeModel(model))
-            return new(null, $"Модель «{model}» не найдена ни у одного провайдера сервера.");
+            return providers.ResolveByModel(model) is not null
+                ? new(null, TurnFailureText.GatewayProviderNotConfigured)
+                : new(null, $"Модель «{model}» не найдена ни у одного провайдера сервера.");
 
         if (!options.CurrentValue.AllowSubscriptions)
             return new(null, TurnFailureText.GatewaySubscriptionsDisabled);

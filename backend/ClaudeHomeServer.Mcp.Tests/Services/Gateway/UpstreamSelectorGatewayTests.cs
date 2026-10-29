@@ -242,6 +242,25 @@ public class UpstreamSelectorGatewayTests
     }
 
     [Fact]
+    public void ВыключенныйПровайдер_СобственнаяМодель_ОтказПровайдерНеНастроен()
+    {
+        using var kit = new GatewayTestKit(("st", "tok-st", null));
+        var cfg = new Microsoft.Extensions.Configuration.ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["LlmProviders:off:DisplayName"] = "Off",
+                ["LlmProviders:off:AnthropicBaseUrl"] = "https://off.test",
+                ["LlmProviders:off:Models:0:Id"] = "off-model-1",
+            }).Build();
+        var selector = new UpstreamSelector(kit.Pool, new LlmProviderRegistry(cfg), kit.Options);
+
+        var d = selector.SelectRoute("off-model-1");
+
+        d.Route.Should().BeNull();
+        d.FailureText.Should().Be(TurnFailureText.GatewayProviderNotConfigured);
+    }
+
+    [Fact]
     public void ВключённыйПровайдерСПрефиксомClaude_ПоПрежнемуПерехватывает()
     {
         using var kit = new GatewayTestKit(("st", "tok-st", null));

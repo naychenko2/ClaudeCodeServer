@@ -91,6 +91,20 @@ def read_trx(path):
     return results, skipped
 
 
+def read_class_projects(path):
+    """{класс: имя тестового проекта} по codeBase теста («…/Имя.Tests.dll»); нет codeBase — класс пропущен."""
+    root = ET.parse(path).getroot()
+    ns = {"t": root.tag[1:root.tag.index("}")]} if root.tag.startswith("{") else {}
+    q = (lambda n: "t:" + n) if ns else (lambda n: n)
+    found = {}
+    for ut in root.iter(("{%s}" % ns["t"] if ns else "") + "UnitTest"):
+        method = ut.find(q("TestMethod"), ns)
+        code = method.get("codeBase") if method is not None else None
+        if code and method.get("className"):
+            found[method.get("className")] = os.path.basename(code.replace("\\", "/")).rsplit(".", 1)[0]
+    return found
+
+
 def short_class(full):
     """'Ns.Outer+Inner' -> 'Inner'; для поиска файла нужно простое имя."""
     return re.split(r"[.+]", full)[-1]
@@ -176,13 +190,19 @@ def build_report(results, skipped, host, known, top_tests=25, top_classes=20):
     return "\n".join(out)
 
 
-def class_durations(results):
-    """{класс: {"tests": n, "seconds": t}} — вход для раскладки шардов."""
+def class_durations(results, projects=None):
+    """{класс: {"tests": n, "seconds": t[, "project": p]}} — вход для раскладки шардов; project
+    (тестовый проект класса) нужен шардированию по проектам: пространство имён класса с именем
+    проекта не совпадает."""
     per_class = {}
     for cls, _, s in results:
         n, t = per_class.get(cls, (0, 0.0))
         per_class[cls] = (n + 1, t + s)
-    return {c: {"tests": n, "seconds": round(t, 3)} for c, (n, t) in sorted(per_class.items())}
+    out = {c: {"tests": n, "seconds": round(t, 3)} for c, (n, t) in sorted(per_class.items())}
+    for c, p in (projects or {}).items():
+        if c in out:
+            out[c]["project"] = p
+    return out
 
 
 def slow_offenders(results, threshold):
@@ -215,7 +235,7 @@ def main(argv=None):
     if not files:
         print(f"TRX не найден: {args.path}", file=sys.stderr)
         return 2
-    results, skipped, broken = [], 0, 0
+    results, skipped, broken, projects = [], 0, 0, {}
     for f in files:
         try:
             r, s = read_trx(f)
@@ -226,12 +246,14 @@ def main(argv=None):
             continue
         results += r
         skipped += s
+        if args.json:
+            projects.update(read_class_projects(f))
     if broken == len(files):
         print(f"Ни одного читаемого TRX: {args.path}", file=sys.stderr)
         return 2
     if args.json:
         json.dump({"tests": len(results), "skipped": skipped, "seconds": round(sum(r[2] for r in results), 3),
-                   "classes": class_durations(results)}, sys.stdout, ensure_ascii=False, indent=1)
+                   "classes": class_durations(results, projects)}, sys.stdout, ensure_ascii=False, indent=1)
         print()
         return 0
     if args.check:

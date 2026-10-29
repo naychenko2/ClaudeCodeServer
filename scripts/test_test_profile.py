@@ -131,6 +131,18 @@ class TestProfileTests(unittest.TestCase):
         self.assertEqual({"tests": 1, "seconds": 3.0}, data["classes"]["Mini.Host.HostedTests"])
         self.assertEqual({"tests": 1, "seconds": 10.0}, data["classes"]["Mini.Host.HostedTests+Nested"])
 
+    def test_json_проект_класса_из_codebase(self):
+        trx = os.path.join(self.tmp.name, "proj.trx")
+        with open(FIXTURE, encoding="utf-8") as f:
+            text = f.read().replace('<TestMethod className="Mini.Plain.PlainTests"',
+                                    '<TestMethod codeBase="/w/backend/App.Tests/bin/Debug/net10.0/App.Tests.dll" className="Mini.Plain.PlainTests"')
+        with open(trx, "w", encoding="utf-8") as f:
+            f.write(text)
+        data = json.loads(self._main(trx, "--json")[1])
+        self.assertEqual("App.Tests", data["classes"]["Mini.Plain.PlainTests"]["project"])
+        # класс без codeBase проекта не получает — раскладка по проектам вернётся к префиксу имени
+        self.assertNotIn("project", data["classes"]["Mini.Host.HostedTests"])
+
     def test_check_тест_дольше_порога_даёт_exit_1(self):
         code, out, err = self._main(FIXTURE, "--check")
         self.assertEqual(1, code)

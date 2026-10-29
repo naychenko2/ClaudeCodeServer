@@ -22,9 +22,13 @@ describe('formatDuration — одна ссылка на lib/chatGroups', () => {
     expect(formatDuration(0)).toBe('1 мин');
   });
 
-  it('дня нет: длинные интервалы — часы («24 ч», не «1 дн») — одно поведение страницы и индекса', () => {
+  it('дни от 48 ч: границы 2879/2880 — одно поведение страницы и индекса', () => {
+    expect(formatDuration(2879)).toBe('47 ч 59 мин');
+    expect(formatDuration(2880)).toBe('2 дн');
+    expect(formatDuration(4320)).toBe('3 дн');
+    expect(formatDuration(4716)).toBe('3 дн 6 ч');
+    expect(formatDuration(1439)).toBe('23 ч 59 мин');
     expect(formatDuration(1440)).toBe('24 ч');
-    expect(formatDuration(1583)).toBe('26 ч 23 мин');
   });
 });
 

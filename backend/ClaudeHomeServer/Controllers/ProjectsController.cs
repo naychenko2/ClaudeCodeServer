@@ -41,7 +41,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     {
         // Путь показываем относительно домашней папки владельца — с учётом override она может
         // не совпадать с DefaultProjectsPath (иначе получилось бы «..\..\GIT\myproj»)
-        var basePath = homes.Resolve(users.GetById(UserId)) ?? appSettings.Get().DefaultProjectsPath;
+        var basePath = homes.Resolve(users.GetById(p.OwnerId!)) ?? appSettings.Get().DefaultProjectsPath;
         // У локального проекта путь — на устройстве, относительно серверной домашней папки он не считается
         var relativePath = string.IsNullOrEmpty(basePath) || !ProjectCapabilities.FilesOnServer(p)
             ? p.RootPath : Path.GetRelativePath(basePath, p.RootPath);
@@ -49,10 +49,10 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         // Дефолт-персона проекта. Сирота (персона удалена в обход проверки преемника)
         // нормализуется в null — онбординг-гейт фронта сам чинит
         // осиротевший дефолт (как в AuthController.Me для личной)
-        var defaultPersonaId = p.DefaultPersonaId is { } dpid && personas.Get(dpid, UserId) is not null
+        var defaultPersonaId = p.DefaultPersonaId is { } dpid && personas.Get(dpid, p.OwnerId!) is not null
             ? dpid : null;
         // OwnerId — часть контракта (ревью F2): фронтовые гейты «только владелец» читают
-        // поле; API отдаёт только проекты запросившего, поэтому это всегда его id
+        // поле; API отдаёт проекты запросившего и общие, где он участник: OwnerId — владелец, не обязательно запросивший
         return new { p.Id, p.OwnerId, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.PermissionRules, p.BoardColumns, p.TagRegistry, p.SubjectRegistry, p.SubjectsSweepSince, Icon = ProjectIconDto(p.Icon), p.McpServersOn, p.HandsEnabled, HandsRefusal = HandsToggleRefusal(p, device), Background = Services.Backgrounds.ProjectBackgroundView.Of(p), BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id), DefaultPersonaId = defaultPersonaId, p.OnboardingSessionId, p.PresetKey, p.AutoImportDossiers, p.ArchiveAfterDays, p.DeviceId, Device = DeviceDto(device), Capabilities = ProjectCapabilities.For(p, device), FolderNotice = folderNotice };
     }
 
@@ -65,7 +65,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // Состояние устройства локального проекта (ADR-016); у серверного — null. Канала нет
     // (подсистема устройств выключена) — устройство считается ненайденным, а не падает.
     private ClaudeHomeServer.Services.Execution.DeviceExecStatus? DeviceStatusOf(Project p) =>
-        ProjectCapabilities.IsDeviceBound(p) ? deviceExec?.GetStatus(UserId, p.DeviceId!) : null;
+        ProjectCapabilities.IsDeviceBound(p) ? deviceExec?.GetStatus(p.OwnerId!, p.DeviceId!) : null;
 
     // DTO устройства проекта для фронта (контракт задачи 3.4): онлайн и готовность харнеса
     private static object? DeviceDto(ClaudeHomeServer.Services.Execution.DeviceExecStatus? d) => d is null ? null : new
@@ -133,7 +133,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     }
 
     [HttpGet]
-    public IActionResult GetAll() => Ok(projects.GetByOwner(UserId).Select(WithCount));
+    public IActionResult GetAll() => Ok(projects.GetAccessible(UserId).Select(WithCount));
 
     [HttpGet("{id}")]
     [ProjectScope(Key = "id")]
@@ -357,7 +357,8 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
             // ({user}:{project} и {user}:team:{project}); сбой не ломает работу по id
             if (!string.Equals(oldName, updated.Name, StringComparison.Ordinal))
             {
-                var username = User.FindFirstValue(ClaimTypes.Name) ?? UserId;
+                // Датасеты ключуются именем владельца проекта (арендатора), не вызывающего
+                var username = users.GetById(TenantId)?.Username ?? TenantId;
                 var datasetId = ProjectCapabilities.KnowledgeRoot(updated) is { } knowledgeRoot
                     ? wkStore.GetByPath(knowledgeRoot)?.DifyDatasetId : null;
                 if (!string.IsNullOrEmpty(datasetId))

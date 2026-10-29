@@ -25,6 +25,10 @@ namespace ClaudeHomeServer.Tests.Services;
 // «личный раздел — с Ф2», ноль вызовов модели; c5 — корректный план → auto применён
 // (страница на диске), usage разбора в пакете. Плюс гонка: две заявки одного источника —
 // один прогон (two calls, один пакет), и недоверенный ответ модели — отказ с причиной.
+// Плюс доработка ревью S6b-3: M1 — пересказ в text и дословная цитата в quote (нетривиальная
+// фикстура): в пакет и на страницу идёт подтверждённая цитата, сноска — она; M2 — нарушения
+// состояния раздела (битая ссылка на чужой странице) не зовут ремонт и не решают исход,
+// они называются в причине.
 public class WikiIngestTests : IDisposable
 {
     private const string User = "u1";
@@ -34,15 +38,19 @@ public class WikiIngestTests : IDisposable
     private const string PageTitle = "Сущность";
     private const string PagePath = "Проекты/p1/Сущность.md";
 
-    // Текст источника: по нему QuoteMatcher подтверждает цитату (мера 1). Утверждение
-    // тестов — его часть (та же связка, что в WikiApplyTests).
+    // Текст источника: по нему QuoteMatcher подтверждает цитату (мера 1).
     private const string SourceText =
         "Решение: перенести сборку на Linux. Прежний план был остаться на Windows. Контенер собран на второй машине.";
 
-    private const string ClaimText = "Решение: перенести сборку на Linux";
+    // Утверждение нетривиальное (доработка ревью S6b-3, M1): text — пересказ (не подстрока
+    // источника), quote — дословная выдержка. Промпт просит ровно этого
+    // (WikiKeeperPrompts.cs:126); вырожденная фикстура text == quote маскировала то,
+    // что пересказ до применения не доходит.
+    private const string ClaimText = "Сборку решено перенести на Linux";
+    private const string ClaimQuote = "Решение: перенести сборку на Linux";
 
     private static readonly string ClaimsJson =
-        $$"""{"claims":[{"text":"{{ClaimText}}","quote":"{{ClaimText}}"}]}""";
+        $$"""{"claims":[{"text":"{{ClaimText}}","quote":"{{ClaimQuote}}"}]}""";
 
     private static readonly string PlanJson = $$"""
         {"chronicle":{"about":0,"decided":[0],"learned":[],"open_questions":[]},
@@ -98,6 +106,29 @@ public class WikiIngestTests : IDisposable
         ## История
 
         [^s1]: [[{{CardTitle}}]] — «Прежний план был остаться на Windows»
+        """;
+
+    // Страница с битой ссылкой (для M2): её нарушение — состояние раздела, а не вина плана
+    // (WikiPlanValidator.cs:60-64): план её не создал и починить не может.
+    private static readonly string BrokenLinkPage = $$"""
+        ---
+        type: topic
+        aliases: []
+        owns: []
+        sources: []
+        status: active
+        ---
+
+        # Битая-страница
+
+        ## Сводка
+        Запись с битой ссылкой [[Несуществующая-страница]]
+
+        ## Хронология
+
+        ## Противоречия
+
+        ## История
         """;
 
     private readonly string _dir;
@@ -242,7 +273,7 @@ public class WikiIngestTests : IDisposable
         res.PackageId.Should().NotBeNullOrEmpty();
 
         var page = File.ReadAllText(Path.Combine(Root, "pages/" + PagePath));
-        page.Should().Contain(ClaimText, "утверждение append'а — на странице");
+        page.Should().Contain(ClaimQuote, "утверждение append'а — дословная цитата источника (M1)");
 
         var read = WikiPackageStore.TryRead(Root, res.PackageId!);
         read.State.Should().Be(WikiPackageFileState.Valid);
@@ -251,6 +282,54 @@ public class WikiIngestTests : IDisposable
         read.Package.Operations.Should().NotBeEmpty();
         read.Package.Operations.Should().OnlyContain(o =>
             o.InputTokens == 20 && o.OutputTokens == 10);
+    }
+
+    // ── M1 (доработка ревью S6b-3): подтверждённая цитата доходит до пакета и сноски ──
+    // Модель отвечает как просит промпт: пересказ в text, дословная выдержка в quote
+    // (WikiKeeperPrompts.cs:126). В пакет идёт цитата: применение рендерит строку
+    // утверждения и сноску по op.Text и требует его дословности в источнике
+    // (WikiApplyService.cs:564) — пересказ был бы отказан по цитате, уже подтверждённой кодом.
+
+    [Fact]
+    public async Task M1_ПересказИДословнаяЦитата_АвтоПрименён_СноскаСЦитатойПроходаA()
+    {
+        var llm = new FakeLlm(claims: ClaimsJson, plan: PlanJson);
+        var res = await Sut(llm).IngestAsync(User, Req());
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeApplied, res.Reason);
+
+        var read = WikiPackageStore.TryRead(Root, res.PackageId!);
+        read.State.Should().Be(WikiPackageFileState.Valid);
+        read.Package!.Operations.Should().NotBeEmpty();
+        read.Package.Operations.Should().OnlyContain(o => o.Text == ClaimQuote,
+            "в пакет идёт цитата, подтверждённая валидатором (мера 1), а не пересказ");
+
+        var page = File.ReadAllText(Path.Combine(Root, "pages/" + PagePath));
+        page.Should().Contain(ClaimQuote, "строка утверждения — дословная выдержка источника");
+        page.Should().NotContain(ClaimText, "пересказ в страницу не пишется: там только подтверждённое дословно");
+        page.Should().Contain("[^s2]: [[" + CardTitle + "]] — «" + ClaimQuote + "»",
+            "сноска принятого утверждения — цитата из прохода A");
+    }
+
+    // ── M2 (доработка ревью S6b-3): нарушения состояния раздела — не вина плана ──
+    // Битая ссылка на чужой странице — Violations (WikiPlanValidator.cs:60-64): ремонт из-за
+    // них не вызывают (модель состояние раздела не чинит), решение по ним не принимают;
+    // они называются в причине исхода отдельно.
+
+    [Fact]
+    public async Task M2_БитаяСсылкаВРазделе_БезРемонта_ДоПакета_НарушениеВПричине()
+    {
+        Write(User, Section, "Проекты/p1/Битая-страница.md", BrokenLinkPage);
+
+        var llm = new FakeLlm(claims: ClaimsJson, plan: PlanJson);
+        var res = await Sut(llm).IngestAsync(User, Req());
+
+        llm.Calls.Should().HaveCount(2, "состояние раздела — не вина плана: третьего вызова модели нет");
+        llm.Calls.Should().NotContain(c => c.Pass == "R", "ремонт из-за Violations не вызывают");
+        PackagesOnDisk().Should().HaveCount(1, "разбор дошёл до пакета: нарушения плана не решили его");
+        res.Reason.Should().Contain("в разделе есть нарушения:",
+            "нарушения состояния раздела доходят до вызывающего отдельной частью причины");
+        res.Reason.Should().Contain("[[Несуществующая-страница]]", "названо конкретное нарушение");
     }
 
     // ── гонка: две заявки одного источника — один прогон, один пакет ──

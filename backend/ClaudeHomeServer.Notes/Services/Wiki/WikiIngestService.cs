@@ -27,15 +27,21 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // 5. Проход B — план (хроника + операции). В промпт — _index только раздела назначения и
 //    цепочки вверх: каталогов соседних проектов и личного в промпте не бывает (ADR-036,
 //    решение 3; совпадения с соседями ищет код, не модель).
-// 6. WikiPlanValidator; при нарушениях плана — одна попытка ремонта с перечнем нарушений
-//    (третий вызов модели); после ремонта все операции пакета — «inbox» (признак
-//    PackageAfterModelRepair в политике: низкое качество прохода человек не пропускает).
-//    Второй отказ — заявка отказана, четвёртого прохода нет.
+// 6. WikiPlanValidator; решение — по Rejected: это вина плана. При ней — одна попытка
+//    ремонта с перечнем Rejected (третий вызов модели); после ремонта все операции пакета
+//    — «inbox» (признак PackageAfterModelRepair в политике: низкое качество прохода человек
+//    не пропускает). Второй отказ — заявка отказана, четвёртого прохода нет. Violations —
+//    состояние раздела, а не вина плана (WikiPlanValidator.cs:60-64): ремонт из-за них не
+//    вызывают (модель его не чинит), но их видит вызывающий — они называются в причине
+//    исхода отдельно (ревью S6b-3, M2).
 // 7. Исход «нечего добавить» — штатный (ADR-035 §12б): пакет не создаётся, исход
 //    nothing_new. Пустой план (операций нет) — тот же исход: модель сказала, что писать
 //    нечего, только маркер не поставила.
 // 8. Пакет — в WikiPackageStore (usage разбора — в операции пакета: токены того разбора,
-//    который их породил), status checking → proposed (вердикт проверок). Все операции
+//    который их породил). Содержание операции — подтверждённая валидатором цитата прохода A:
+//    применение рендерит строку утверждения и сноску по op.Text и требует его дословности
+//    в источнике (S4b) — пересказ в op.Text был бы отказан по цитате, уже подтверждённой
+//    кодом (ревью S6b-3, M1). Status checking → proposed (вердикт проверок). Все операции
 //    auto → proposed → accepted → WikiApplyService.ApplyAsync (состояние читается с диска).
 //    Есть inbox → пакет остаётся в «proposed», исход awaiting_human: решает человек (S4a).
 //
@@ -261,7 +267,9 @@ public sealed class WikiIngestService
             if (plan.Operations is { Count: 0 })
                 return new IngestResult(OutcomeNothingNew, "план без операций: писать нечего", null);
 
-            // 6. Проверки кода; при нарушениях плана — ровно одна попытка ремонта.
+            // 6. Проверки кода. Решение — по Rejected: это вина плана. Violations — состояние
+            // раздела (уже лежит на страницах): план от него не зависит, модель его не чинит —
+            // лишний вызов за него не платят (ревью S6b-3, M2).
             var source = new WikiPlanValidator.Source(request.Origin, cardTitle, request.SourceText);
             var policy = new WikiApplyPolicy.ApplyContext
             {
@@ -270,9 +278,9 @@ public sealed class WikiIngestService
             };
             var verdict = WikiPlanValidator.Validate(
                 plan, claims, source, sectionKey, upChain, sectionPages, policy);
-            if (verdict.Rejected.Count > 0 || verdict.Violations.Count > 0)
+            if (verdict.Rejected.Count > 0)
             {
-                var issues = verdict.Rejected.Select(i => i.Reason).Concat(verdict.Violations).ToList();
+                var issues = verdict.Rejected.Select(i => i.Reason).ToList();
                 var repairPrompt =
                     "YOUR PREVIOUS PLAN WAS REJECTED BY THE CODE. Produce a corrected plan in the same "
                     + "format; fix every issue below, or answer the no-op outcome if the claims leave "
@@ -281,22 +289,24 @@ public sealed class WikiIngestService
                     + promptB;
                 var answerR = await CallModelAsync(repairPrompt, ownerId, "ремонт плана", usage, ct);
                 if (answerR.Reason is not null)
-                    return Rejected(answerR.Reason);
+                    return WithSectionIssues(Rejected(answerR.Reason), verdict);
                 if (TryNothingToAdd(answerR.Text!, out var modelReasonR))
-                    return new IngestResult(OutcomeNothingNew, modelReasonR, null);
+                    return WithSectionIssues(new IngestResult(OutcomeNothingNew, modelReasonR, null), verdict);
                 var planR = ParsePlan(answerR.Text!, out _, out _, out var parseErrorR);
                 if (planR is null)
-                    return Rejected("ремонт не дал плана: " + parseErrorR);
+                    return WithSectionIssues(Rejected("ремонт не дал плана: " + parseErrorR), verdict);
                 if (planR.Operations is { Count: 0 })
-                    return new IngestResult(OutcomeNothingNew, "после ремонта план без операций", null);
+                    return WithSectionIssues(
+                        new IngestResult(OutcomeNothingNew, "после ремонта план без операций", null), verdict);
                 // Пакет после ремонта — весь в «Входящие»: признак низкого качества прохода
                 // (WikiApplyPolicy.PackageAfterModelRepair), человек решает, код не применяет.
                 verdict = WikiPlanValidator.Validate(
                     planR, claims, source, sectionKey, upChain, sectionPages,
                     policy with { PackageAfterModelRepair = true });
-                if (verdict.Rejected.Count > 0 || verdict.Violations.Count > 0)
-                    return Rejected("план после одной попытки ремонта снова отклонён кодом: "
-                        + FirstReason(verdict));
+                if (verdict.Rejected.Count > 0)
+                    return WithSectionIssues(
+                        Rejected("план после одной попытки ремонта снова отклонён кодом: "
+                            + FirstReason(verdict)), verdict);
             }
 
             if (verdict.Accepted.Count == 0)
@@ -304,12 +314,16 @@ public sealed class WikiIngestService
                 // Все операции оказались отклонёнными сверх лимитов (Waiting) — пакета нет,
                 // человек их не спрашивает (мера 3); исход — тот же штатный.
                 var waiting = verdict.Waiting.FirstOrDefault();
-                return new IngestResult(OutcomeNothingNew,
-                    waiting is null ? "ни одна операция не прошла проверки" : waiting.Reason, null);
+                return WithSectionIssues(new IngestResult(OutcomeNothingNew,
+                    waiting is null ? "ни одна операция не прошла проверки" : waiting.Reason, null), verdict);
             }
 
             // 7. Пакет: usage разбора — в каждую его операцию (токены того разбора,
-            //    который их породил). Статус: checking → proposed (вердикт проверок кода).
+            //    который их породил). Содержание операции — подтверждённая валидатором цитата
+            //    прохода A: применение рендерит строку утверждения и сноску по op.Text и
+            //    требует его дословности в источнике (WikiApplyService.cs:564) — пересказ в
+            //    op.Text был бы отказан по цитате, уже подтверждённой кодом (ревью S6b-3, M1).
+            //    Статус: checking → proposed (вердикт проверок кода).
             var package = new WikiPackage
             {
                 Id = WikiPackageStore.NewId(),
@@ -318,6 +332,7 @@ public sealed class WikiIngestService
                 Operations = verdict.Accepted
                     .Select(op => op with
                     {
+                        Text = VerifiedQuote(claims, op.Text),
                         InputTokens = ToIntOrMax(usage.InputTokens),
                         OutputTokens = ToIntOrMax(usage.OutputTokens),
                     })
@@ -333,8 +348,8 @@ public sealed class WikiIngestService
                 return Rejected($"вердикт проверок не записан: {proposed.Reason ?? proposed.Code}");
 
             if (created.Package.Operations.Any(o => o.Decision != WikiPackage.DecisionAuto))
-                return new IngestResult(OutcomeAwaitingHuman,
-                    "в пакете есть спорные операции: их решает человек («Входящие»)", created.Package.Id);
+                return WithSectionIssues(new IngestResult(OutcomeAwaitingHuman,
+                    "в пакете есть спорные операции: их решает человек («Входящие»)", created.Package.Id), verdict);
 
             var accepted = WikiPackageStore.Transition(root, created.Package.Id, WikiPackage.StatusAccepted);
             if (!accepted.Ok)
@@ -344,8 +359,9 @@ public sealed class WikiIngestService
                 ownerId, created.Package,
                 new WikiApplyService.ApplyContext(cardTitle, request.SourceText));
             if (!applied.Applied)
-                return Rejected($"применение пакета не удалось: {applied.Reason ?? applied.Code}");
-            return new IngestResult(OutcomeApplied, null, created.Package.Id);
+                return WithSectionIssues(
+                    Rejected($"применение пакета не удалось: {applied.Reason ?? applied.Code}"), verdict);
+            return WithSectionIssues(new IngestResult(OutcomeApplied, null, created.Package.Id), verdict);
         }
         finally
         {
@@ -622,9 +638,36 @@ public sealed class WikiIngestService
         return true;
     }
 
+    // Причина отказа плана — вина плана (Rejected): нарушения состояния раздела к ней не
+    // примешиваются, они называются отдельно (WithSectionIssues).
     private static string FirstReason(WikiPlanValidator.Result verdict) =>
-        verdict.Violations.FirstOrDefault()
-        ?? (verdict.Rejected.FirstOrDefault() is { } rejected ? rejected.Reason : "без причины");
+        verdict.Rejected.FirstOrDefault() is { } rejected ? rejected.Reason
+        : verdict.Violations.FirstOrDefault() ?? "без причины";
+
+    /// <summary>Содержание операции пакета — цитата прохода A, подтверждённая валидатором
+    /// (мера 1). Принятую операцию валидатор построил из утверждения с этим Text
+    /// (WikiPlanValidator.cs:298-310), поэтому связь операции с утверждением — тот же Text;
+    /// цитата этого утверждения и есть то, что подтверждено дословно. Пересказ в op.Text
+    /// применение отказало бы по цитате, уже подтверждённой кодом (ревью S6b-3, M1):
+    /// применение рендерит строку утверждения и сноску по op.Text (WikiApplyService.cs:564,574).</summary>
+    private static string? VerifiedQuote(IReadOnlyList<WikiPlanValidator.Claim> claims, string? opText)
+    {
+        if (opText is not { Length: > 0 })
+            return opText;
+        var quote = claims.FirstOrDefault(c => c.Text == opText)?.Quote;
+        return quote is { Length: > 0 } ? quote : opText;
+    }
+
+    /// <summary>Нарушения состояния раздела — не вина плана (WikiPlanValidator.cs:60-64):
+    /// решение заявки от них не зависит, но их видит вызывающий — они доходят до него
+    /// отдельной частью причины исхода (ревью S6b-3, M2).</summary>
+    private static IngestResult WithSectionIssues(IngestResult r, WikiPlanValidator.Result verdict)
+    {
+        if (verdict.Violations.Count == 0)
+            return r;
+        var issues = "в разделе есть нарушения: " + string.Join("; ", verdict.Violations);
+        return r with { Reason = r.Reason is { Length: > 0 } ? r.Reason + "; " + issues : issues };
+    }
 
     private static int ToIntOrMax(long value) => value > int.MaxValue ? int.MaxValue : (int)value;
 

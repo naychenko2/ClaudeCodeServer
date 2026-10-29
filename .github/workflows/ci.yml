@@ -290,13 +290,6 @@ jobs:
           name: trx-${{ matrix.key }}
           path: ${{ runner.temp }}/trx/**/*.trx
           retention-days: 7
-      # РАЗОВЫЙ ЗАМЕР (CI-2, c3): restore без кэша NuGet — пакеты из сети в пустую папку. Убрать после записи цифр
-      - name: Cold restore measurement (one-off)
-        if: always() && matrix.key == 'm1'
-        run: |
-          start=$(date +%s)
-          NUGET_PACKAGES="$RUNNER_TEMP/nuget-cold" dotnet restore backend/ClaudeHomeServer.slnx --force > /dev/null
-          echo "Холодный restore (без кэша NuGet): $(( $(date +%s) - start )) с"
       # Дампы и Sequence.xml blame складывает в TestResults — при падении выгружаем,
       # иначе они умирают вместе с раннером.
       - name: Upload hang dumps

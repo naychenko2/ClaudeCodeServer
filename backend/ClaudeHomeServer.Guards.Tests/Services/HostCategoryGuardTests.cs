@@ -27,15 +27,13 @@ namespace ClaudeHomeServer.Tests.Services;
 /// </summary>
 public class HostCategoryGuardTests
 {
-    private const string FactoryName = "ClaudeHomeServer.Tests.Helpers.TestWebApplicationFactory";
-
     private static readonly string Backend = FindBackend();
 
     [Fact]
     public void ХостовыйКласс_ПомеченHost()
     {
-        // Сборки независимы — параллельно: сторож входит в набор Fast и обязан укладываться в 2 с
-        var scans = TestAssemblies().ToList().AsParallel().Select(dll => HostScan.Hosted(dll, FactoryName)).ToList();
+        // Скан общий со сторожем пула (HostScan.Solution): сборки параллельно, IL — один раз
+        var scans = HostScan.Solution.Select(s => s.Hosted).ToList();
         var hostedTotal = scans.Sum(h => h.Count);
         var missing = scans.SelectMany(h => h).Where(c => !c.HasHostLabel).Select(c => c.Name).ToList();
         hostedTotal.Should().BeGreaterThan(100, "иначе сторож прошёл вакуумно: хостовых классов в решении сотни");
@@ -127,7 +125,13 @@ internal static class HostScan
     private static readonly Dictionary<short, OperandType> Operands = BuildOperandTable();
 
     // candidate == null — тестовые классы (есть метод с атрибутом *FactAttribute/*TheoryAttribute)
-    public static List<HostedClass> Hosted(string dll, string factoryName, Func<string, bool>? candidate = null)
+    public static List<HostedClass> Hosted(string dll, string factoryName, Func<string, bool>? candidate = null) =>
+        HostedMany(dll, [factoryName], candidate)[factoryName];
+
+    // Один проход по сборке на несколько корней хоста (фабрика, пул): IL тестовых классов
+    // разбирается один раз — дорогая часть скана общая для обоих сторожей
+    public static Dictionary<string, List<HostedClass>> HostedMany(string dll, IReadOnlyList<string> roots,
+        Func<string, bool>? candidate = null)
     {
         var dir = Path.GetDirectoryName(dll)!;
         using var main = new Asm(dll);
@@ -141,25 +145,29 @@ internal static class HostScan
             var byName = types.GroupBy(t => t.Name).ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
             bool IsCandidate(TypeInfoMd t) => candidate is null ? t.IsTestClass : candidate(t.Name);
 
-            // Хост: фабрика и наследники (по цепочке баз в известных сборках), затем — до неподвижной
-            // точки — не тестовые типы, держащие хост полем
-            var host = new HashSet<string>(StringComparer.Ordinal) { factoryName };
-            foreach (var t in types)
-                for (var b = t.BaseName; b is not null; b = byName.TryGetValue(b, out var bt) ? bt.BaseName : null)
-                    if (b == factoryName) { host.Add(t.Name); break; }
-            bool grew;
-            do
+            var mentioned = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+            var candidates = main.Types().Where(IsCandidate).ToList();
+            var result = new Dictionary<string, List<HostedClass>>(StringComparer.Ordinal);
+            foreach (var root in roots)
             {
-                grew = false;
+                // Хост: корень и наследники (по цепочке баз в известных сборках), затем — до
+                // неподвижной точки — не тестовые типы, держащие хост полем
+                var host = new HashSet<string>(StringComparer.Ordinal) { root };
                 foreach (var t in types)
-                    if (!host.Contains(t.Name) && !IsCandidate(t) && t.FieldTypes().Any(host.Contains))
-                        grew |= host.Add(t.Name);
-            } while (grew);
+                    for (var b = t.BaseName; b is not null; b = byName.TryGetValue(b, out var bt) ? bt.BaseName : null)
+                        if (b == root) { host.Add(t.Name); break; }
+                bool grew;
+                do
+                {
+                    grew = false;
+                    foreach (var t in types)
+                        if (!host.Contains(t.Name) && !IsCandidate(t) && t.FieldTypes().Any(host.Contains))
+                            grew |= host.Add(t.Name);
+                } while (grew);
 
-            var result = new List<HostedClass>();
-            foreach (var t in main.Types())
-                if (IsCandidate(t) && UsesHost(t, byName, host))
-                    result.Add(new HostedClass(t.Name, t.HasCategory("Host")));
+                result[root] = [.. candidates.Where(t => UsesHost(t, byName, host, mentioned))
+                    .Select(t => new HostedClass(t.Name, t.HasCategory("Host")))];
+            }
             return result;
         }
         finally
@@ -179,15 +187,34 @@ internal static class HostScan
         return members;
     }
 
-    private static bool UsesHost(TypeInfoMd t, Dictionary<string, TypeInfoMd> byName, HashSet<string> host)
+    private static bool UsesHost(TypeInfoMd t, Dictionary<string, TypeInfoMd> byName, HashSet<string> host,
+        Dictionary<string, HashSet<string>> mentioned)
     {
         for (var c = t; c is not null; c = c.BaseName is { } b && byName.TryGetValue(b, out var bt) ? bt : null)
         {
             if (c.BaseName is { } baseName && host.Contains(baseName)) return true;
-            if (c.MentionedTypes().Any(host.Contains)) return true;
+            if (!mentioned.TryGetValue(c.Name, out var names))
+                mentioned[c.Name] = names = new HashSet<string>(c.MentionedTypes(), StringComparer.Ordinal);
+            if (names.Overlaps(host)) return true;
         }
         return false;
     }
+
+    // Скан всего решения — один на процесс: его делят сторож Host и сторож пула
+    public sealed record AssemblyScan(string Dll, List<HostedClass> Hosted, List<(string Name, HashSet<string> Used)> Pooled);
+
+    public const string FactoryName = "ClaudeHomeServer.Tests.Helpers.TestWebApplicationFactory";
+    public const string PooledHostName = "ClaudeHomeServer.Tests.Helpers.PooledHost";
+
+    private static readonly Lazy<List<AssemblyScan>> SolutionScan = new(() =>
+        [.. HostCategoryGuardTests.TestAssemblies().ToList().AsParallel().AsOrdered().Select(dll =>
+        {
+            var many = HostedMany(dll, [FactoryName, PooledHostName]);
+            return new AssemblyScan(dll, many[FactoryName],
+                [.. many[PooledHostName].Select(c => (c.Name, MembersUsedBy(dll, c.Name)))]);
+        })]);
+
+    public static List<AssemblyScan> Solution => SolutionScan.Value;
 
     private static Dictionary<short, OperandType> BuildOperandTable()
     {

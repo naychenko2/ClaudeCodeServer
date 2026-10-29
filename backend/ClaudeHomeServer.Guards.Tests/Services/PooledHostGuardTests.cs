@@ -11,8 +11,6 @@ namespace ClaudeHomeServer.Tests.Services;
 /// </summary>
 public class PooledHostGuardTests
 {
-    private const string PooledHostName = "ClaudeHomeServer.Tests.Helpers.PooledHost";
-
     internal static readonly string[] Forbidden =
     [
         "ClaudeHomeServer.Tests.Helpers.TestWebApplicationFactory::set_ExtraServices",
@@ -27,10 +25,8 @@ public class PooledHostGuardTests
     [Fact]
     public void КлассВПуле_НеМеняетКонфигХоста()
     {
-        // Сборки независимы — параллельно, как в стороже Host
-        var scans = HostCategoryGuardTests.TestAssemblies().ToList().AsParallel().Select(dll =>
-            HostScan.Hosted(dll, PooledHostName).Where(c => !Exempt.Contains(c.Name)).Select(cls =>
-                (cls.Name, Used: HostScan.MembersUsedBy(dll, cls.Name))).ToList()).ToList();
+        // Скан общий со сторожем Host (HostScan.Solution)
+        var scans = HostScan.Solution.Select(s => s.Pooled.Where(c => !Exempt.Contains(c.Name)).ToList()).ToList();
         var pooled = scans.Sum(s => s.Count);
         var violations = scans.SelectMany(s => s)
             .SelectMany(c => Forbidden.Where(c.Used.Contains).Select(f => $"{c.Name}: {f.Split("::")[1]}")).ToList();

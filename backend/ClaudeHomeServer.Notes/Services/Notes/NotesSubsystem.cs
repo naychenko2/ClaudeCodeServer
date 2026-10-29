@@ -86,6 +86,8 @@ public sealed class NotesSubsystem : IAppSubsystem
         // зовётся применением пакетов (S2c) и REST (S2f); наружу его контракт не выходит —
         // vertical-внутренний тип, как остальные Services/Wiki.
         services.AddSingleton<WikiKeeper>();
+        // Проверки применения пакета до записи (S4b-1): vertical-внутренний тип, как Хранитель.
+        services.AddSingleton<WikiApplyService>();
         services.AddGatedHostedService<NoteExpiryService>(config);
         // Этап 5, шаг 6 (инверсия контрибьюторов промпта): контрибьютор секции
         // «recall-notes» зарегистрирован в своей вертикали, Turn собирает

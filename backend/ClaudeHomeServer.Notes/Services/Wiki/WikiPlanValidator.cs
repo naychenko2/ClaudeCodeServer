@@ -531,8 +531,9 @@ public static class WikiPlanValidator
     // цитатой, что подтверждена мерой 1: утверждение принятого плана без сноски невозможн.
     /// <summary>Черновой рендер операции в состояние. null — цель supersede не найдена в
     /// этом состоянии страницы (её уже заместила предыдущая принятая операция): операции
-    /// нечего замещать, вызывающий отклоняет её с причиной.</summary>
-    private static WikiGate.Draft? RenderApply(List<WikiGate.Draft> state, WikiPackage.Operation op, string quote, string cardTitle)
+    /// нечего замещать, вызывающий отклоняет её с причиной. internal (S4b-1): тот же рендер
+    /// зовёт проверка применения — второй копии рендера в проекте нет; поведение не менялось.</summary>
+    internal static WikiGate.Draft? RenderApply(List<WikiGate.Draft> state, WikiPackage.Operation op, string quote, string cardTitle)
     {
         // Черновой рендер: страница уже в состоянии или её нет (create) — для create
         // страница строится заново; неразобранная существующая сюда не доходит, она

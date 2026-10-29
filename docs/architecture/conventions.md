@@ -19,7 +19,7 @@ ThreadPool там голодает: коллбэк `Timer`/фоновая зад
 Слепая пауза (`await Task.Delay(500)` в расчёте на окно в 30мс) даёт плавающий провал вида
 «collection is empty» — ждать надо **событие**, а не время: `TaskCompletionSource` +
 `Task.WhenAny(tcs.Task, Task.Delay(таймаут))` со щедрым потолком (образец —
-`WorkflowWatcherTests`, `SessionManagerTests`).
+`WorkflowWatcherTests`, `SessionManagerQueueTests`).
 
 **Паттерн «интервал — опция, ожидание — событие»** (фича «Ускорение тестов», Э4). Тест,
 который ждёт тик продукта, платит этим тиком на каждом прогоне. Порядок перевода:
@@ -93,7 +93,7 @@ cd backend; dotnet test --filter "Category!=Dns"   # чистый прогон �
 `FilmAssemblyAcceptanceTests`; PowerShell — `AgentInstallScriptChannelTests`.
 
 На итеративную правку гоняй только релевантный набор:
-`dotnet test --filter "FullyQualifiedName~SessionManagerTests"`. Медленные категории запускай
+`dotnet test --filter "FullyQualifiedName~Services.SessionManager"`. Медленные категории запускай
 только при правках в покрываемом ими коде либо при действительной необходимости — полный прогон
 перед коммитом/PR.
 
@@ -103,7 +103,7 @@ cd backend; dotnet test --filter "Category!=Dns"   # чистый прогон �
 (его переустанавливает конструктор каждого нового `TaskManager` в параллельном классе) это давало
 плавающее падение `Sweep_ЖивойПотомокВГлубину` на полном прогоне — по отдельности ни один фактор
 не воспроизводился. Лечится ключом `Session:AutoSaveSeconds = 0`, он уже стоит в `TestConfig.Build`
-и в конфиге `SessionManagerTests`. Заводя новый фоновый таймер, сразу предусмотри способ его
+и в конфиге `SessionManagerTestBase`. Заводя новый фоновый таймер, сразу предусмотри способ его
 выключить из конфига.
 
 ## Сторож регистрации подсистемы: где ему жить

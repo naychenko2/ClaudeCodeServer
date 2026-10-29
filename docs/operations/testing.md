@@ -54,7 +54,7 @@ Fast — **исключение категорий**, а не перечень �
 | Задача | Команда |
 |---|---|
 | Какие тестовые проекты задела правка | `scripts/tests-affected.sh` (по `git diff` и графу `ProjectReference`; только читает git) |
-| Один набор тестов | `dotnet test backend/ClaudeHomeServer.Tests --filter "FullyQualifiedName~SessionManagerTests"` |
+| Один набор тестов | `dotnet test backend/ClaudeHomeServer.Tests --filter "FullyQualifiedName~Services.SessionManager"` |
 | Fast по решению | `dotnet test backend/ClaudeHomeServer.slnx --no-build --filter "Category!=Host&Category!=Slow&Category!=Integration&Category!=Node&Category!=Bench"` |
 | Монолит шардами локально | `python3 -I scripts/test-shards.py --run backend/ClaudeHomeServer.Tests -n 3 --results .cc-attachments/test-shards` |
 | Fast шардами (как в предгейте) | `python3 -I scripts/test-shards.py --run-fast backend/ClaudeHomeServer.slnx --split backend/ClaudeHomeServer.Tests=3,backend/ClaudeHomeServer.Llm.Tests=2 --filter "<фильтр Fast>" --results .cc-attachments/pregate-fast` |
@@ -165,9 +165,10 @@ Fast — **исключение категорий**, а не перечень �
 
 **В пул нельзя:** классы с `ExtraServices`/`ExtraConfig`/`WithWebHostBuilder` (конфиг общего
 хоста не меняется; сторож плюс проверка при каждой выдаче хоста), `*DisabledTests`, честные e2e
-и классы, проверяющие «пустое состояние» всего хоста. `SessionManagerTests` вне пула: там
-тяжёлый конструктор на каждый тест, а не хост. Нужен свой хост — свой подкласс
-`TestWebApplicationFactory` в `IClassFixture`. Расширять пул только по цифре профиля.
+и классы, проверяющие «пустое состояние» всего хоста. Классы `SessionManager*Tests` (бывший
+`SessionManagerTests`, разрезан по темам) вне пула: там тяжёлый конструктор на каждый тест, а не
+хост. Нужен свой хост — свой подкласс `TestWebApplicationFactory` в `IClassFixture`. Расширять
+пул только по цифре профиля.
 
 ## Коллекции xunit
 

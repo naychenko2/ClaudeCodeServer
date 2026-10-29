@@ -96,7 +96,7 @@ def layout(classes, n, timings=None, fast=None):
 
     fast — {класс: секунды в проходе Fast} из профиля. Есть — класс кладётся в шард, где РЕЗУЛЬТАТ
     (стена Fast + стена остального прохода, каждая — max(самый долгий класс, сумма / PARALLEL)) меньше:
-    серийный гигант вроде SessionManagerTests (56 с в Fast) не делает шард медленным, пока рядом лежит
+    серийный гигант вроде ClaudeSessionPromptSectionsOrderTests (33–60 с в Fast Llm.Tests) не делает шард медленным, пока рядом лежит
     лишь то, что в его проход укладывается бесплатно. Нет — жадная упаковка по сумме секунд."""
     shards = [[] for _ in range(n)]
     timings = timings or {}
@@ -445,7 +445,7 @@ def run_fast(slnx, split, results, timings, extra_filter, fast=None):
                                 os.path.join(results, "rest.log")))
         for path, shards in layouts:
             # Префикс fast: профиль этих TRX отдаёт секунды прохода Fast, и следующая раскладка
-            # держит серийного гиганта (SessionManagerTests) в шарде с тем, что укладывается в его поток
+            # держит серийного гиганта (ClaudeSessionPromptSectionsOrderTests) в шарде с тем, что укладывается в его поток
             procs += launch_shards(path, shards, results, "fast-" + os.path.basename(path.rstrip("/")) + "-", extra_filter)
         print(f"Подготовка до запуска: {time.monotonic() - start:.1f} с; процессов {len(procs)}")
         run_start = time.monotonic()

@@ -136,7 +136,7 @@
     внутри самого делегированного хода — нет. Admin-действия — `AdminByStoreHandler`
     (сервисный токен), `deploy_*` в `wsp`, удаление публичной базы в `dify` — идут через гейт
     с `alsoWhenExecutorSuppressed: true` и закрыты и на ходе-реакции на доклад исполнителя.
-    Тесты — `SessionManagerTests.RunDelegation.cs`, `WorkspaceDeployDelegationTests`,
+    Тесты — `SessionManagerHierarchyTests.RunDelegation.cs`, `WorkspaceDeployDelegationTests`,
     `StructuredBgEventsTests` (`HasLiveBgAgents_*`).
 11. **Код ответа — текстом** (`isError`), не HTTP-кодом: у инструмента нет HTTP-кода,
     модель обязана прочитать причину; необработанные исключения наружу не выпускать —

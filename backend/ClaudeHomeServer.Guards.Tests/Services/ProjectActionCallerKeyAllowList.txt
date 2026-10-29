@@ -9,7 +9,6 @@
 # S1-3c: точка доступа вертикали Architecture — id вызывающего входит только в IProjectAccess
 # (запрошенное право, затем чтение, чтобы различить 403 и 404); ключом хранилищ здесь ничего
 # не стало: модель проекта берётся по id из маршрута, автор записи — человек-вызывающий.
-backend/ClaudeHomeServer.Architecture/Controllers/ArchitectureController.cs|2
 backend/ClaudeHomeServer/Controllers/CodeGraphController.cs|1
 backend/ClaudeHomeServer/Controllers/DossiersController.cs|4
 backend/ClaudeHomeServer/Controllers/FilesController.cs|5

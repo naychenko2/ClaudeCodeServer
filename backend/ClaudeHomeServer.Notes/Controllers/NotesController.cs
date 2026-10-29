@@ -194,6 +194,8 @@ public class NotesController : ControllerBase
         }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+        // «Источник не мой/не существует» = несуществующее: 404, как в Create (:459)
+        catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return Forbid(); }
     }
 
@@ -412,6 +414,8 @@ public class NotesController : ControllerBase
             return Ok(note);
         }
         catch (UnauthorizedAccessException) { return Forbid(); }
+        // «Источник не мой/не существует» = несуществующее: 404, как в Create (:459)
+        catch (KeyNotFoundException) { return NotFound(); }
         catch (ArgumentException) { return BadRequest("Некорректный id заметки"); }
         catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
     }
@@ -430,6 +434,8 @@ public class NotesController : ControllerBase
             return Ok(note);
         }
         catch (UnauthorizedAccessException) { return Forbid(); }
+        // «Источник не мой/не существует» = несуществующее: 404, как в Create (:459)
+        catch (KeyNotFoundException) { return NotFound(); }
         catch (ArgumentException) { return BadRequest("Некорректный id заметки"); }
     }
 
@@ -470,6 +476,8 @@ public class NotesController : ControllerBase
             return Ok(note);
         }
         catch (UnauthorizedAccessException) { return Forbid(); }
+        // «Источник не мой/не существует» = несуществующее: 404, как в Create (:459)
+        catch (KeyNotFoundException) { return NotFound(); }
         catch (ArgumentException) { return BadRequest("Некорректный id заметки"); }
     }
 
@@ -483,6 +491,8 @@ public class NotesController : ControllerBase
             return NoContent();
         }
         catch (UnauthorizedAccessException) { return Forbid(); }
+        // «Источник не мой/не существует» = несуществующее: 404, как в Create (:459)
+        catch (KeyNotFoundException) { return NotFound(); }
         catch (ArgumentException) { return BadRequest("Некорректный id заметки"); }
     }
 }

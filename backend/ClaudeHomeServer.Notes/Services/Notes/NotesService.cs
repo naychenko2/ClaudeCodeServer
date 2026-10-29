@@ -822,6 +822,12 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // в [[…]]; при отличии регистра исходный текст сохраняется как алиас.
     public NoteDetail? LinkMention(string userId, string id, string targetTitle)
     {
+        // Право записи — как в Move/Update: ResolveRoot с правым Write. В S1 участник
+        // общего проекта только читает: без этой проверки «связать» переписывало файл
+        // проекта, видимого участнику лишь на чтение (отказ ловит NotesController → 403).
+        var (sourceKey, _) = DecodeId(id);
+        ResolveRoot(userId, sourceKey);
+
         var model = GetModel(userId);
         if (!model.ById.TryGetValue(id, out var note)) return null;
 

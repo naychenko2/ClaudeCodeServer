@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Llm.Claude;
@@ -68,6 +69,9 @@ public class ClaudeSessionBareArgsTests : IDisposable
         Path.Combine(Path.GetTempPath(), "bare_server_" + Guid.NewGuid().ToString("N"));
 
     private static readonly IPathMapper Paths = IdentityPathMapper.Instance;
+
+    // Потолок ожидания события: страховка от зависания (TimeoutException = красный), не пауза
+    private static readonly TimeSpan Ceiling = TimeSpan.FromSeconds(30);
 
     public ClaudeSessionBareArgsTests()
     {
@@ -175,12 +179,17 @@ public class ClaudeSessionBareArgsTests : IDisposable
         string model, LlmProviderRegistry providers, string? effort = null)
     {
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var root = NewTempDir("ccs-bare-args-tests-");
 
         var launcher = new ArgsCapturingLauncher(_processes, started);
         var context = new LlmSessionContext(
             RootPath: root,
-            OnMessage: _ => Task.CompletedTask,
+            OnMessage: m =>
+            {
+                if (m is ExitedMessage) exited.TrySetResult();
+                return Task.CompletedTask;
+            },
             RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
             PermissionRules: null,
             TasksMcp: null,
@@ -200,8 +209,12 @@ public class ClaudeSessionBareArgsTests : IDisposable
 
         Process cli;
         lock (_processes) cli = _processes[^1];
-        cli.Kill();
-        await Task.WhenAny(Task.Delay(TimeSpan.FromSeconds(2)));
+        // Дерево целиком: на Windows «CLI» — cmd с дочерним ping
+        cli.Kill(entireProcessTree: true);
+        // Ждём терминальное событие хода (ExitedMessage), а не паузу 2 с: при exec-sleep
+        // «CLI» смерть процесса закрывает stdout сразу, финализация доезвает до конца
+        // теста — её stderr и уборка файлов не попадают в окно захвата следующего теста
+        await exited.Task.WaitAsync(Ceiling);
         return (launcher.CapturedArgs, session);
     }
 
@@ -213,7 +226,6 @@ public class ClaudeSessionBareArgsTests : IDisposable
     /// к тесту облачного.
     /// </summary>
     [Fact]
-    [Trait("Category", "Slow")]
     public async Task ХодНаЛокальном_BareMode_СтавитСистемныйПромптИПризнакTrue()
     {
         var providers = LocalProviders(
@@ -236,7 +248,6 @@ public class ClaudeSessionBareArgsTests : IDisposable
     /// бы молча — так и было до круга 8.
     /// </summary>
     [Fact]
-    [Trait("Category", "Slow")]
     public async Task ХодНаОблачномПровайдере_BareModeОтсутствует_СистемногоПромптаНет()
     {
         var providers = LocalProviders(localBareMode: false, localSystemPromptFile: null);
@@ -256,7 +267,6 @@ public class ClaudeSessionBareArgsTests : IDisposable
     /// канала: args без --bare, признак false, И в stderr есть сообщение о выходе за корень.
     /// </summary>
     [Fact]
-    [Trait("Category", "Slow")]
     public async Task ХодНаЛокальном_ПутьЗаКорень_CatchСбрасываетBareMode()
     {
         var providers = LocalProviders(
@@ -293,20 +303,20 @@ public class ClaudeSessionBareArgsTests : IDisposable
     /// в песочнице (мутация удаления catch → RED по любому из трёх каналов).
     /// </summary>
     [Fact]
-    [Trait("Category", "Slow")]
     public async Task ХодНаЛокальном_ToRuntimeБросает_CatchСбрасываетBareMode()
     {
         var providers = LocalProviders(
             localBareMode: true,
             localSystemPromptFile: "SystemPrompts/CLAUDE-local.md");
-        var throwingLauncher = new ThrowingRuntimeLauncher(_processes);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var throwingLauncher = new ThrowingRuntimeLauncher(_processes, started);
 
         var originalErr = Console.Error;
         var errCapture = new System.IO.StringWriter();
         Console.SetError(errCapture);
         try
         {
-            var (args, session) = await RunTurnAsyncWithLauncher(LocalModelId, providers, throwingLauncher);
+            var (args, session) = await RunTurnAsyncWithLauncher(LocalModelId, providers, throwingLauncher, started);
 
             args!.Should().NotContain("--system-prompt-file",
                 "InvalidOperationException из ToRuntime должен быть пойман вторым catch, BareMode снят");
@@ -321,13 +331,18 @@ public class ClaudeSessionBareArgsTests : IDisposable
     }
 
     private async Task<(IReadOnlyList<string>? Args, ClaudeSession Session)> RunTurnAsyncWithLauncher(
-        string model, LlmProviderRegistry providers, IProcessLauncher launcher)
+        string model, LlmProviderRegistry providers, IProcessLauncher launcher, TaskCompletionSource started)
     {
         var root = NewTempDir("ccs-bare-throwing-");
+        var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var context = new LlmSessionContext(
             RootPath: root,
-            OnMessage: _ => Task.CompletedTask,
+            OnMessage: m =>
+            {
+                if (m is ExitedMessage) exited.TrySetResult();
+                return Task.CompletedTask;
+            },
             RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
             PermissionRules: null,
             TasksMcp: null,
@@ -340,10 +355,10 @@ public class ClaudeSessionBareArgsTests : IDisposable
         var session = new ClaudeSession(new Session { Model = model }, context, providers: providers);
 
         await session.SendMessageAsync("тестовый ход");
-        // Args собираются BuildArgs ДО запуска процесса (в try до Start), поэтому ждать
-        // started не нужно: ToRuntime бросает ПОСЛЕ сборки args, а Catch ловит — args уже
-        // у лаунчера. Даём короткий таймаут на отработку исключения в фоне.
-        await Task.WhenAny(Task.Delay(TimeSpan.FromSeconds(3)));
+        // Ждём событие Start: safeEstimate (ApplyBudget, ClaudeSession.cs:4483) и catch
+        // ToRuntime идут ДО _launcher.Start (ClaudeSession.cs:4671) в одном потоке BuildArgs,
+        // поэтому к моменту старта процесса диагностика в stderr уже написана, а args — у лаунчера
+        await started.Task.WaitAsync(Ceiling);
         // CapturedArgs читается через рефлексию, чтобы не зависеть от конкретного типа лаунчера.
         var capturedArgs = GetCapturedArgs(launcher);
         capturedArgs.Should().NotBeNull("args хода собираются до запуска процесса");
@@ -354,10 +369,12 @@ public class ClaudeSessionBareArgsTests : IDisposable
             if (_processes.Count > 0)
             {
                 cli = _processes[^1];
-                try { cli.Kill(); } catch { /* может быть уже мёртв */ }
+                // Дерево целиком: на Windows «CLI» — cmd с дочерним ping
+                try { cli.Kill(entireProcessTree: true); } catch { /* может быть уже мёртв */ }
             }
         }
-        await Task.WhenAny(Task.Delay(TimeSpan.FromSeconds(2)));
+        // Ждём терминальное событие хода, а не паузу 2 с: финализация доезвает до конца теста
+        await exited.Task.WaitAsync(Ceiling);
         return (capturedArgs, session);
     }
 
@@ -373,6 +390,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
     private sealed class ThrowingRuntimeLauncher : IProcessLauncher
     {
         private readonly List<Process> _processes;
+        private readonly TaskCompletionSource _started;
         public IReadOnlyList<string>? CapturedArgs { get; private set; }
         public bool IsSandboxed => true;
         public bool TargetIsWindows => OperatingSystem.IsWindows();
@@ -381,7 +399,11 @@ public class ClaudeSessionBareArgsTests : IDisposable
         public string HostTempDir => Path.GetTempPath();
         public string? McpApiUrlOverride => null;
 
-        public ThrowingRuntimeLauncher(List<Process> processes) => _processes = processes;
+        public ThrowingRuntimeLauncher(List<Process> processes, TaskCompletionSource started)
+        {
+            _processes = processes;
+            _started = started;
+        }
 
         public Process Start(ProcessSpec spec)
         {
@@ -389,9 +411,11 @@ public class ClaudeSessionBareArgsTests : IDisposable
             var fake = new ProcessSpec
             {
                 FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
+                // exec: «CLI» — сам sleep, без дочернего процесса. Осиротевший потомок держал бы
+                // stdout, и ClaudeSession финализировал бы ход только по ReaderEofGrace (5 с)
                 Args = OperatingSystem.IsWindows()
                     ? ["/c", "ping -n 60 127.0.0.1 >nul"]
-                    : ["-c", "sleep 60"],
+                    : ["-c", "exec sleep 60"],
                 WorkingDirectory = spec.WorkingDirectory,
                 StdioEncoding = spec.StdioEncoding,
                 EnableRaisingEvents = spec.EnableRaisingEvents,
@@ -400,6 +424,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
             };
             var process = LocalProcessRunner.Instance.Start(fake);
             lock (_processes) _processes.Add(process);
+            _started.TrySetResult();
             return process;
         }
 
@@ -433,7 +458,6 @@ public class ClaudeSessionBareArgsTests : IDisposable
     /// только в обратном случае, второй — нет.
     /// </summary>
     [Fact]
-    [Trait("Category", "Slow")]
     public async Task СнимокПромпта_BareModeПрименён_СодержитСекциюBare()
     {
         var providers = LocalProviders(
@@ -452,7 +476,6 @@ public class ClaudeSessionBareArgsTests : IDisposable
     /// Мутация инверсии гейта приведёт к показу "(bare)" в обычном режиме → RED.
     /// </summary>
     [Fact]
-    [Trait("Category", "Slow")]
     public async Task СнимокПромпта_BareModeСнятИззаПроваФайла_НетСекцииBare()
     {
         var providers = LocalProviders(
@@ -476,18 +499,18 @@ public class ClaudeSessionBareArgsTests : IDisposable
     /// или «поменять catch (Exception) на catch (NotSupportedException)» — RED по stderr.
     /// </summary>
     [Fact]
-    [Trait("Category", "Slow")]
     public async Task safeEstimate_EstimateБросает_ВstderrУходитWarning()
     {
         var providers = LocalProviders(localBareMode: false, localSystemPromptFile: null);
-        var throwingLauncher = new ThrowingRuntimeLauncher(_processes);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var throwingLauncher = new ThrowingRuntimeLauncher(_processes, started);
 
         var originalErr = Console.Error;
         var errCapture = new System.IO.StringWriter();
         Console.SetError(errCapture);
         try
         {
-            await RunTurnAsyncWithLauncher(LocalModelId, providers, throwingLauncher);
+            await RunTurnAsyncWithLauncher(LocalModelId, providers, throwingLauncher, started);
 
             var err = errCapture.ToString();
             err.Should().Contain("[ClaudeSession] safeEstimate: EstimateCommandLineLength упал",
@@ -881,7 +904,6 @@ public class ClaudeSessionBareArgsTests : IDisposable
     /// не трогают. Мутация «считать только input_tokens» → RED (21 ≠ 1).
     /// </summary>
     [Fact]
-    [Trait("Category", "Slow")]
     public async Task TrackContextUsage_ИзДельтыПотока_СуммаВходаИКэша_НулиНеЗатирают()
     {
         var providers = LocalProviders(localBareMode: true, localSystemPromptFile: "SystemPrompts/CLAUDE-local.md");
@@ -904,7 +926,6 @@ public class ClaudeSessionBareArgsTests : IDisposable
     /// Заодно сторож текста сообщения: в нём обязана быть база для сравнения.
     /// </summary>
     [Fact]
-    [Trait("Category", "Slow")]
     public async Task BareModeСторож_РаздутыйВход_СтреляетРовноОдинРаз()
     {
         var providers = LocalProviders(
@@ -940,7 +961,6 @@ public class ClaudeSessionBareArgsTests : IDisposable
     /// Мутация «вернуть константу 15 000» → RED.
     /// </summary>
     [Fact]
-    [Trait("Category", "Slow")]
     public async Task BareModeСторож_ШтатныйВход_Молчит()
     {
         var providers = LocalProviders(

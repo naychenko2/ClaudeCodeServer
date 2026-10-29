@@ -38,7 +38,7 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
         foreach (var p in _clis.Values)
         {
             try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { /* уже мёртв */ }
-            p.Dispose();
+            try { p.Dispose(); } catch (NullReferenceException) { } // Process.Close гонится с уборкой сессии
         }
         try { Directory.Delete(_root, recursive: true); } catch { /* best-effort */ }
     }
@@ -820,7 +820,8 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
             foreach (var p in clis.Values)
             {
                 try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { /* уже мёртв */ }
-                p.Dispose();
+                // Process.Dispose гонится с сессией, которая убирает тот же процесс сама (NRE в Close)
+                try { p.Dispose(); } catch (NullReferenceException) { }
             }
         }
     }

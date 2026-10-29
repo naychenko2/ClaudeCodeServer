@@ -41,7 +41,7 @@ public class ClaudeSessionEffortArgsTests : IDisposable
         foreach (var p in _processes)
         {
             try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { /* уже мёртв */ }
-            p.Dispose();
+            try { p.Dispose(); } catch (NullReferenceException) { } // Process.Close гонится с уборкой сессии
         }
     }
 

@@ -11,6 +11,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // окно не воспроизводит (правка должна попасть между стартом и концом хода за секунды) —
 // здесь события эмулируются прямой записью на диск, без гонки с реальным claude CLI.
 [Collection(TestCollections.Inotify)]
+[Trait("Category", "Slow")]
 public class TurnFileWatcherTests : IDisposable
 {
     private readonly string _root;
@@ -126,7 +127,6 @@ public class TurnFileWatcherTests : IDisposable
     }
 
     [Fact]
-    [Trait("Category", "Slow")]
     public async Task ЗаявкаДругойСессииОпоздала_КарточкаПодавленаПослеПерепроверки()
     {
         // Регресс на гонку параллельных ходов: файл правит чат A (Edit/Write), но его

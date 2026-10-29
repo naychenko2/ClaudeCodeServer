@@ -11,6 +11,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // Хук PreToolUse на Edit|Write: потребители правленого файла приходят в ход additionalContext.
 // Гоняем настоящий скрипт из файла настроек против заглушки сервера на loopback: хук не должен
 // ни блокировать правку, ни тормозить ход, поэтому каждое «молчание» проверяем отдельно.
+[Collection(LlmTestCollections.TimingSensitive)]
 public class ConsumersHookTests
 {
     private sealed record Run(string Stdout, int Exit, TimeSpan Elapsed);
@@ -24,16 +25,25 @@ public class ConsumersHookTests
     // Заглушка сервера: отвечает на каждый запрос handler'ом (статус, тело, задержка)
     private sealed class Stub : IDisposable
     {
-        private readonly HttpListener _listener = new();
+        private readonly HttpListener _listener;
         public string Url { get; }
         public List<string> Requests { get; } = [];
 
         public Stub(Func<string, (int Status, string Body, int DelayMs)> handler)
         {
-            var port = new Random().Next(20000, 60000);
-            Url = $"http://127.0.0.1:{port}";
-            _listener.Prefixes.Add(Url + "/");
-            _listener.Start();
+            // Порт случайный: под параллельным прогоном он может оказаться занят — пробуем другой.
+            HttpListener? listener = null;
+            string? url = null;
+            for (var attempt = 0; attempt < 20 && url is null; attempt++)
+            {
+                var candidate = $"http://127.0.0.1:{Random.Shared.Next(20000, 60000)}";
+                listener = new HttpListener();
+                listener.Prefixes.Add(candidate + "/");
+                try { listener.Start(); url = candidate; }
+                catch (HttpListenerException) when (attempt < 19) { listener.Close(); }
+            }
+            _listener = listener!;
+            Url = url!;
             _ = Task.Run(async () =>
             {
                 while (_listener.IsListening)

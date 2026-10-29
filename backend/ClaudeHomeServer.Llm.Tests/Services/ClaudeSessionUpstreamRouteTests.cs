@@ -42,7 +42,7 @@ public class ClaudeSessionUpstreamRouteTests : IDisposable
 
     public void Dispose()
     {
-        foreach (var p in _fakeProcesses) p.Dispose();
+        foreach (var p in _fakeProcesses) try { p.Dispose(); } catch (NullReferenceException) { } // Process.Close гонится с уборкой сессии
     }
 
     // Конфиг: сторонний облачный (minimax), локальный (localqwen) и ghostcli с общим префиксом

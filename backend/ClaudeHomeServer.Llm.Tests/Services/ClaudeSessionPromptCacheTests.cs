@@ -34,7 +34,7 @@ public class ClaudeSessionPromptCacheTests : IDisposable
 
     public void Dispose()
     {
-        foreach (var p in _fakeProcesses) p.Dispose();
+        foreach (var p in _fakeProcesses) try { p.Dispose(); } catch (NullReferenceException) { } // Process.Close гонится с уборкой сессии
     }
 
     // Ручные часы: якорь записи обязан ставиться в момент прихода message_start, а не real-часами

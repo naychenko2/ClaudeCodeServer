@@ -18,6 +18,7 @@ namespace ClaudeHomeServer.Tests.Services;
 /// (двадцать .csproj с bin/obj, node_modules, .git) не воспроизводит.
 /// </summary>
 [Collection(TestCollections.Inotify)]
+[Trait("Category", "Slow")]
 public class TurnFileWatcherSubscriptionTests
 {
     // Потолок задачи: один ход на этом репозитории — меньше 5 000 слежек.
@@ -64,7 +65,6 @@ public class TurnFileWatcherSubscriptionTests
     }
 
     [SkippableFact]
-    [Trait("Category", "Slow")]
     public async Task ФайлВГлубинеИВНовомКаталоге_ДоходитДоЛенты_АСлужебныйКаталогНет()
     {
         Skip.IfNot(OperatingSystem.IsLinux(), "подписка по перечню каталогов — только Linux");

@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // последний удачный снимок с reachable:false, часы арбитра пересчитываются на нашу ось,
 // тело/причины/аренды — недоверенные (потолки, обрезка всех причин на входе, обнуление поля неверного типа).
 // Заглушка арбитра — HttpListener, как в ConsumersHookTests.
+[Collection(LlmTestCollections.TimingSensitive)]
 public class LocalEngineStateClientTests
 {
     private const string Engine = "bonsai";
@@ -24,17 +25,26 @@ public class LocalEngineStateClientTests
     // Заглушка /state: handler получает номер запроса (1-based) и отвечает статусом/телом/задержкой.
     private sealed class Stub : IDisposable
     {
-        private readonly HttpListener _listener = new();
+        private readonly HttpListener _listener;
         private readonly List<string> _requests = [];
         private readonly object _gate = new();
         public string Url { get; }
 
         public Stub(Func<int, (int Status, string Body, int DelayMs)> handler)
         {
-            var port = new Random().Next(20000, 60000);
-            Url = $"http://127.0.0.1:{port}";
-            _listener.Prefixes.Add(Url + "/");
-            _listener.Start();
+            // Порт случайный: под параллельным прогоном он может оказаться занят — пробуем другой.
+            HttpListener? listener = null;
+            string? url = null;
+            for (var attempt = 0; attempt < 20 && url is null; attempt++)
+            {
+                var candidate = $"http://127.0.0.1:{Random.Shared.Next(20000, 60000)}";
+                listener = new HttpListener();
+                listener.Prefixes.Add(candidate + "/");
+                try { listener.Start(); url = candidate; }
+                catch (HttpListenerException) when (attempt < 19) { listener.Close(); }
+            }
+            _listener = listener!;
+            Url = url!;
             _ = Task.Run(async () =>
             {
                 while (_listener.IsListening)
@@ -114,7 +124,7 @@ public class LocalEngineStateClientTests
     [Fact]
     public async Task SingleFlight_TwoParallelCalls_OneHttpRequest()
     {
-        using var stub = new Stub(_ => (200, GoodBody(), 300)); // задержка, чтобы второй вызов успел присоединиться
+        using var stub = new Stub(_ => (200, GoodBody(), 150)); // задержка, чтобы второй вызов успел присоединиться
         var client = ClientFor(stub);
         var t1 = client.GetAsync(Engine);
         var t2 = client.GetAsync(Engine);
@@ -132,7 +142,7 @@ public class LocalEngineStateClientTests
     [Fact]
     public async Task CancelOneCaller_OtherGetsLiveSnapshot()
     {
-        using var stub = new Stub(_ => (200, GoodBody(), 300)); // задержка, чтобы отмена пришлась в середину запроса
+        using var stub = new Stub(_ => (200, GoodBody(), 150)); // задержка, чтобы отмена пришлась в середину запроса
         var client = ClientFor(stub);
         using var cts1 = new CancellationTokenSource();
         var t1 = client.GetAsync(Engine, cts1.Token);

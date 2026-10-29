@@ -54,9 +54,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Сериализация коллекций: InotifyLeakRegressionTests меряет inotify-бюджет процесса,
-         а TurnFileWatcher*Tests/FileWatcherService открывают наблюдатели — параллельный прогон
-         выедал лимит. Глобально отключаем параллелизацию ТОЛЬКО для Llm.Tests (как в монолите). -->
+    <!-- Параллель коллекций включена (maxParallelThreads=6, как в монолите). Inotify-классы
+         сериализованы коллекцией TestCollections.Inotify и помечены Category=Slow: лимит
+         inotify общий на пользователя ОС, TurnFileWatcherSubscriptionTests открывает
+         наблюдатель на всём дереве репозитория (инцидент 86c2e71e9). -->
     <None Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 

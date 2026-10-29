@@ -35,7 +35,7 @@ public class ClaudeSessionUserInterruptDeathTests : IDisposable
 
     public void Dispose()
     {
-        foreach (var p in _fakeProcesses) p.Dispose();
+        foreach (var p in _fakeProcesses) try { p.Dispose(); } catch (NullReferenceException) { } // Process.Close гонится с уборкой сессии
     }
 
     // Активный ход: TurnDone=false (по умолчанию), RetryOnEmptyExit=false → ретрая не будет,

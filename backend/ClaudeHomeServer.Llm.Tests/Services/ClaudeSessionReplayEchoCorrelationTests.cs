@@ -30,7 +30,7 @@ public class ClaudeSessionReplayEchoCorrelationTests : IDisposable
 
     public void Dispose()
     {
-        foreach (var p in _fakeProcesses) p.Dispose();
+        foreach (var p in _fakeProcesses) try { p.Dispose(); } catch (NullReferenceException) { } // Process.Close гонится с уборкой сессии
     }
 
     private object NewRun(string? pendingEcho = Uuid)

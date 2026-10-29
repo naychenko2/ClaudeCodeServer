@@ -157,6 +157,66 @@ export interface ProjectDeviceView {
   harnessProblem: string | null;
 }
 
+// --- Участники общего проекта (shared-projects, план docs/research/shared-projects-plan-2026-10.md §5) ---
+//
+// Роль участника: editor (читает и пишет) или reader (только читает) — матрица прав
+// разреза §2.1. «Владелец» в списке участников не живёт никогда: он выводится из
+// Project.OwnerId (ProjectAccess.Check), поэтому ни на бэке, ни здесь его в списке нет.
+export type ProjectMemberRole = 'editor' | 'reader';
+
+// Роль ТЕКУЩЕГО человека в проекте. Сервер пока не отдаёт её нигде (в DTO проекта её
+// нет — ProjectsController.WithCount), поле резервируем под следующий шаг UI. Сегодня
+// право действия определяют по ownerId, а не по этому полю.
+export type ProjectRoleView = 'owner' | 'editor' | 'reader';
+
+// Строка списка участников в ответах /api/projects/{id}/members. Бэк отдаёт ТОЛЬКО
+// userId и role (ProjectMembersController.Result); username/displayName/addedAt/addedBy
+// не присылаются — списка учёток и поиска по части имени на бэке нет по построению
+// (ProjectMembershipService: единственный вход в поиск — точное username). Поэтому эти
+// поля необязательные: UI не показывает их как есть, пока бэк их не отдаёт.
+export interface ProjectMember {
+  userId: string;
+  role: ProjectMemberRole;
+  username?: string;
+  displayName?: string;
+  addedAt?: string;
+  addedBy?: string;
+}
+
+// Машинные коды отказов операций членства. Текст отказа бэк отдаёт готовым для человека;
+// по коду фронт выбирает действие («включить флаг», «это проект на устройстве»,
+// «человек уже здесь»). Тело ошибки приносит lib/offline целиком (err.body).
+export const MEMBER_REFUSAL = {
+  // Рубильник «Общие проекты» выключен на сервере (503)
+  SwitchDisabled: 'shared_projects_disabled',
+  // Флаг выключен у владельца ИЛИ у приглашаемого (409)
+  FlagDisabled: 'flag_disabled',
+  // Проект на устройстве — его нельзя открыть другим людям (409)
+  LocalProject: 'local_project',
+  // Роль не editor/reader (400)
+  InvalidRole: 'invalid_role',
+  // Пользователя с таким username нет (404)
+  UserNotFound: 'user_not_found',
+  // Владелец приглашает сам себя (400)
+  Self: 'self',
+  // Человек уже в списке (409)
+  AlreadyMember: 'already_member',
+  // Меняют/убирают не участника (404)
+  NotMember: 'not_member',
+  // Проект не виден вызывающему (404, ответ сервиса членства)
+  NotFound: 'not_found',
+  // Проект виден, но управляет им только владелец (403)
+  NotOwner: 'not_owner',
+  // Владелец не может покинуть свой проект (400)
+  OwnerCannotLeave: 'owner_cannot_leave',
+  // Не удалось подготовить git-репозиторий проекта (500)
+  GitInitFailed: 'git_init_failed',
+  // Отказ точки доступа [ProjectScope] до тела действия: 404 «не найдено» или 403
+  // «нет права на запись» — один код на оба (ProjectScopeAttribute.ErrorCode)
+  ProjectScope: 'project_scope',
+} as const;
+export type MemberRefusalCode = (typeof MEMBER_REFUSAL)[keyof typeof MEMBER_REFUSAL];
+
 export interface Project {
   id: string;
   name: string;
@@ -219,6 +279,15 @@ export interface Project {
   // Только в ответе создания и перепривязки локального проекта: агент устройства создал или
   // разрешил папку («Папка «…» создана и разрешена агенту на «…»»). Показывается уведомлением
   folderNotice?: string | null;
+  // Участники общего проекта. В DTO проекта их НЕТ (ProjectsController.WithCount не
+  // перечисляет Members): список отдаёт только /api/projects/{id}/members — его ответы и
+  // есть источник истины. Поле необязательное и сегодня всегда отсутствует; читать его
+  // как источник истины нельзя (резервируем под шаг, где бэк начнёт его отдавать).
+  members?: ProjectMember[] | null;
+  // Роль текущего человека в проекте. Сервер её не отдаёт (нет в WithCount): сегодня
+  // право действия — по ownerId. Резервируем под UI-гейты следующих шагов (не-владелец
+  // не видит «Пригласить»).
+  myRole?: ProjectRoleView;
 }
 
 // Иконка проекта (ADR-009): initials — две буквы на цветной плитке; glyph — значок из

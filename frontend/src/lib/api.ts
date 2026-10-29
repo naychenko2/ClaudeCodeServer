@@ -1,4 +1,4 @@
-import type { Me, Project, ProjectGroup, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, ModelUnavailableMark, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap, VideoFavoritesResponse, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult, SphereOverview, DeleteSphereResponse, SphereMemoryResponse, SphereMemoryEntry, SphereMemoryType } from '../types';
+import type { Me, Project, ProjectGroup, ProjectMember, ProjectMemberRole, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, ModelUnavailableMark, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap, VideoFavoritesResponse, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult, SphereOverview, DeleteSphereResponse, SphereMemoryResponse, SphereMemoryEntry, SphereMemoryType } from '../types';
 import { cachedToken, readStoredToken, request, writeStoredToken } from './offline';
 import type { FeatureRun } from '../types/featureRun';
 import type { FeaturesIndex, FeaturePage } from '../types/featureIndex';
@@ -1656,6 +1656,47 @@ export const api = {
       runState: (id: string) => request<SubjectRunState>(`/projects/${encodeURIComponent(id)}/subjects/run`, { live: true }),
     },
     delete: (id: string) => request<void>(`/projects/${id}`, { method: 'DELETE' }),
+
+    // --- Участники общего проекта (shared-projects, план §5 S1-F2) ---
+    //
+    // Эндпоинты — ProjectMembersController: POST /members, PUT /members/{userId},
+    // DELETE /members/{userId}, DELETE /members/me. GET-списка на бэке НЕТ: полный
+    // список участников ({ members }) приходит ТЕЛОМ каждой мутации, поэтому здесь нет
+    // list() — после любой правки фронт берёт список из ответа, отдельный запрос не нужен.
+    // У удачи — { members: [{ userId, role }] }; у отказа — { error, code }: текст отказа
+    // готовый для человека, машинный код — из MEMBER_REFUSAL (lib/offline прикрепляет
+    // тело ошибки целиком к err.body, читают его как в ImageGenNote.isImageGenQueued).
+    // Права: приглашает/меняет роль/убирает только владелец (403 not_owner); участник
+    // может только покинуть сам. Снаружи проекта — 404 от [ProjectScope] (код
+    // project_scope), существование не раскрываем.
+    members: {
+      // Пригласить по ТОЧНОМУ username (регистр не важен, как при входе). Поиска по части
+      // имени на бэке нет: нет пользователя → 404 user_not_found; уже участвует → 409
+      // already_member; сам себе → 400 self; флаг выключен у кого-то из них → 409
+      // flag_disabled; проект на устройстве → 409 local_project.
+      add: (id: string, username: string, role: ProjectMemberRole) =>
+        request<{ members: ProjectMember[] }>(`/projects/${encodeURIComponent(id)}/members`, {
+          method: 'POST', body: JSON.stringify({ username, role }),
+        }),
+      // Сменить роль участника (только владелец). Не участника → 404 not_member.
+      changeRole: (id: string, userId: string, role: ProjectMemberRole) =>
+        request<{ members: ProjectMember[] }>(
+          `/projects/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`,
+          { method: 'PUT', body: JSON.stringify({ role }) },
+        ),
+      // Убрать участника (только владелец). Его нет в списке → 404 not_member.
+      remove: (id: string, userId: string) =>
+        request<{ members: ProjectMember[] }>(
+          `/projects/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`,
+          { method: 'DELETE' },
+        ),
+      // Покинуть проект: та же операция удаления, но её делает сам участник — id берёт
+      // сервер из токена, «me» в пути — маркер, не id. Владелец → 400 owner_cannot_leave.
+      leave: (id: string) =>
+        request<{ members: ProjectMember[] }>(
+          `/projects/${encodeURIComponent(id)}/members/me`, { method: 'DELETE' },
+        ),
+    },
 
     // --- Значок проекта (ADR-009: SVG, белый список lucide, модельный подбор) ---
     // Кандидаты двух видов: name (из белого списка) или paths (нарисованные моделью).

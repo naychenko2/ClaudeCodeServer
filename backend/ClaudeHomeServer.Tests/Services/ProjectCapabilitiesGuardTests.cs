@@ -132,6 +132,7 @@ public class ProjectCapabilitiesGuardTests
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public void ПроверкиЛокальностиПроекта_ТолькоВМатрице()
     {
         var hits = Scan(RepoRoot());

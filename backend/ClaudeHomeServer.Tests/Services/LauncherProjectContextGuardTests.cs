@@ -134,6 +134,7 @@ public class LauncherProjectContextGuardTests(ITestOutputHelper output)
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public void AllowList_НеПротух()
     {
         // Разрешение, под которым вызовов стало меньше, — дыра: туда молча встанет новый

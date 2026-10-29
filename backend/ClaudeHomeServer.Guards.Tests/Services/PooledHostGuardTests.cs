@@ -27,15 +27,13 @@ public class PooledHostGuardTests
     [Fact]
     public void КлассВПуле_НеМеняетКонфигХоста()
     {
-        var violations = new List<string>();
-        var pooled = 0;
-        foreach (var dll in HostCategoryGuardTests.TestAssemblies())
-            foreach (var cls in HostScan.Hosted(dll, PooledHostName).Where(c => !Exempt.Contains(c.Name)))
-            {
-                pooled++;
-                var used = HostScan.MembersUsedBy(dll, cls.Name);
-                violations.AddRange(Forbidden.Where(used.Contains).Select(f => $"{cls.Name}: {f.Split("::")[1]}"));
-            }
+        // Сборки независимы — параллельно, как в стороже Host
+        var scans = HostCategoryGuardTests.TestAssemblies().ToList().AsParallel().Select(dll =>
+            HostScan.Hosted(dll, PooledHostName).Where(c => !Exempt.Contains(c.Name)).Select(cls =>
+                (cls.Name, Used: HostScan.MembersUsedBy(dll, cls.Name))).ToList()).ToList();
+        var pooled = scans.Sum(s => s.Count);
+        var violations = scans.SelectMany(s => s)
+            .SelectMany(c => Forbidden.Where(c.Used.Contains).Select(f => $"{c.Name}: {f.Split("::")[1]}")).ToList();
         pooled.Should().BeGreaterThanOrEqualTo(2, "образцы пула (TasksControllerTests, SessionsControllerTests) обязаны найтись — иначе сторож прошёл вакуумно");
         Assert.True(violations.Count == 0, "Класс в пуле общих хостов меняет конфиг хоста — ему нужен свой хост "
             + "(IClassFixture<свой подкласс TestWebApplicationFactory>):\n" + string.Join("\n", violations));

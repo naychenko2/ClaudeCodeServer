@@ -45,9 +45,10 @@ public class TeamWaveServiceTests : IClassFixture<TeamWaveServiceTests.Fixture>
     {
         _fx = fx;
         // Явный сброс состояния между тестами: общий граф помнит за предыдущим тестом
-        // снимки рассылки, строки лога, ответ планировщика и тестовые хуки на _sut/SessionManager
-        // (интейк, таймаут простоя, холд рестарта, HasLiveDelegatedTasks). Каждый тест
-        // начинает с чистых снимков и дефолтов службы — как начинал со свежего графа на тест.
+        // его сессии и задачи, снимки рассылки, строки лога, ответ планировщика и тестовые
+        // хуки на _sut/SessionManager (интейк, таймаут простоя, холд рестарта,
+        // HasLiveDelegatedTasks). Каждый тест начинает с чистых снимков и дефолтов службы —
+        // как начинал со свежего графа на тест.
         fx.ResetTestState();
         _dir = fx.Dir;
         _tasks = fx.Tasks;
@@ -67,6 +68,12 @@ public class TeamWaveServiceTests : IClassFixture<TeamWaveServiceTests.Fixture>
     /// данные — штабы, задачи, чаты — названы уникально на тест, через общий граф чужой
     /// тест в ассерты не попадает (задачи — только по GetByProject своего штаба, рассылка —
     /// по Clear()).
+    /// Инвариант для новых тестов: глобальные сторожа волны (CheckStalledWaves, SendWavePulses,
+    /// CheckAwaitingEscalations) обходят ВСЕ штабы стора, а не свои. Тест, публикующий
+    /// «состаренную» карточку, обязан либо получить напоминание по ней сам, либо закрыть её
+    /// внутри себя: незакрытая карточка живёт в сторе до следующих вызовов сторожа ЭТОГО же
+    /// теста (лишний NotificationMessage ломает его ContainSingle/HaveCount), а в чужой тест
+    /// она не доезжает — с W1c её сессия сносится в ResetTestState.
     /// </summary>
     public sealed class Fixture : IDisposable
     {
@@ -129,9 +136,25 @@ public class TeamWaveServiceTests : IClassFixture<TeamWaveServiceTests.Fixture>
         /// <summary>
         /// Сброс всего, что тесты меняют в общем графе: снимки рассылки, строки лога,
         /// ответ планировщика и тестовые хуки на _sut/SessionManager — к дефолтам службы.
+        /// Плюс данные предыдущего теста: его сессии и задачи его проекта (W1c).
         /// </summary>
         public void ResetTestState()
         {
+            // W1c: сессии и задачи предыдущего теста сносятся здесь: в сторе класса больше нет
+            // чужих штабов и задач, и глобальные сторожа волны (CheckStalledWaves, SendWavePulses,
+            // CheckAwaitingEscalations) не видят чужих штабов — класс перестаёт зависеть от
+            // порядка тестов. Замерено (W1c): на время класса это не влияет — 11,7 с против
+            // 11,9 с с закомментированными циклами (в пределах шума), и рост длительности к
+            // концу класса остаётся в обоих вариантах: в сторе после этой чистки растёт только
+            // Projects/Personas, а их Create пишет весь стор на каждую вставку
+            // (ProjectManager.cs:205, PersonaManager.cs:422) — вот он и есть оставшийся
+            // квадратичный член.
+            // Порядок: сессии — ДО снимков рассылки: DeleteAsync сам вещает «чат удалён»
+            // (SessionManager.cs:9844), и этот шум не должен попасть в снимки следующего теста.
+            foreach (var session in Sessions.GetAll())
+                Sessions.DeleteAsync(session.Id).GetAwaiter().GetResult();
+            foreach (var project in Projects.GetAll())
+                Tasks.DeleteByProject(project.Id);
             Broadcaster.Clear();
             // CollectingLogger пишет под тем же lock, под которым чистим
             lock (LogLines) LogLines.Clear();

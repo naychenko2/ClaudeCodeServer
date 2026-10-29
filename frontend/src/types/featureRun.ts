@@ -285,6 +285,16 @@ export interface FeatureNow {
   staleAlertedAt?: string | null;
 }
 
+// Риск мержа (бэк: `FeatureMergeRisk`): только у тревоги kind == 'merge' — что
+// в трекере расходится с «финал принят» (Ш8). Фронт ничего не считает: печатает
+// список как пришёл (нули бэк не кладёт, порядок даёт бэк). Виды:
+// not_created — не заведено шагов; open — заведены, но не приняты;
+// tracker — трекер расходится.
+export interface FeatureMergeRisk {
+  kind: 'not_created' | 'open' | 'tracker';
+  count: number;
+}
+
 // Тревога фичи (бэк: `FeatureAttention`): один элемент либо null.
 // Приоритет: stopped → wait явный → wait «мерж».
 export interface FeatureAttention {
@@ -300,6 +310,9 @@ export interface FeatureAttention {
   personaId?: string | null;
   // Связанный чат исполнителя.
   linkedSessionId?: string | null;
+  // Риски мержа (бэк: `FeatureRun.MergeRisks`): только у kind == 'merge' (Ш8).
+  // Аддитивное: старые ответы поля не несут — UI обязан пережить отсутствие.
+  mergeRisks?: FeatureMergeRisk[];
 }
 
 // Итог смерженной фичи (бэк: `FeatureSummary`): только у закрытой, иначе null.

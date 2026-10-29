@@ -29,6 +29,8 @@ public class KnowledgeIndexReconcilerTests
         public readonly List<string> Requests = new();
         // datasetId → JSON-массив документов листинга
         public readonly Dictionary<string, string> DocumentsJson = new();
+        // datasetId → JSON-массив документов листинга ?status=queuing
+        public readonly Dictionary<string, string> QueuedJson = new();
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
@@ -37,7 +39,9 @@ public class KnowledgeIndexReconcilerTests
             var parts = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
             // /v1/datasets/{id}/documents
             var datasetId = parts.Length >= 3 ? parts[2] : "";
-            var docs = DocumentsJson.GetValueOrDefault(datasetId, "[]");
+            var docs = uri.Query.Contains("status=queuing")
+                ? QueuedJson.GetValueOrDefault(datasetId, "[]")
+                : DocumentsJson.GetValueOrDefault(datasetId, "[]");
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent($"{{\"data\":{docs},\"has_more\":false,\"total\":0}}",
@@ -91,21 +95,28 @@ public class KnowledgeIndexReconcilerTests
     private static string Doc(string id, string status = "error", string? error = null) =>
         JsonSerializer.Serialize(new { id, name = id, indexing_status = status, error });
 
+    // Документ очереди: сырой indexing_status у Dify — "waiting", created_at — unix-секунды
+    private static string Queued(string id, DateTimeOffset createdAt, string status = "waiting") =>
+        JsonSerializer.Serialize(new { id, name = id, indexing_status = status, created_at = createdAt.ToUnixTimeSeconds() });
+
     private readonly FakeDifyHandler _dify = new();
     private readonly FakeTime _time = new(DateTimeOffset.Parse("2026-08-13T12:00:00Z"));
     private readonly FakeParticipant _participant = new();
 
+    // staleQueuingAfter: по умолчанию очередь выключена — тесты error-пути считают запросы к
+    // Dify и не должны видеть лишний листинг queuing; null — ключа нет (дефолт 6 ч)
     private KnowledgeIndexReconciler Create(string mode, bool difyConfigured = true,
-        int maxPerCycle = 100, int maxAttempts = 5, IKnowledgeAlertNotifier? notifier = null)
+        int maxPerCycle = 100, int maxAttempts = 5, IKnowledgeAlertNotifier? notifier = null,
+        string? staleQueuingAfter = "00:00:00")
     {
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Dify:Reconcile:Mode"] = mode,
-                ["Dify:Reconcile:MaxPerCycle"] = maxPerCycle.ToString(),
-                ["Dify:Reconcile:MaxAttemptsPerEntry"] = maxAttempts.ToString(),
-            })
-            .Build();
+        var settings = new Dictionary<string, string?>
+        {
+            ["Dify:Reconcile:Mode"] = mode,
+            ["Dify:Reconcile:MaxPerCycle"] = maxPerCycle.ToString(),
+            ["Dify:Reconcile:MaxAttemptsPerEntry"] = maxAttempts.ToString(),
+        };
+        if (staleQueuingAfter is not null) settings["Dify:Reconcile:StaleQueuingAfter"] = staleQueuingAfter;
+        var config = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(f => f.CreateClient(It.IsAny<string>()))
             .Returns(() => new HttpClient(_dify, disposeHandler: false));
@@ -325,7 +336,11 @@ public class KnowledgeIndexReconcilerTests
         _participant.AddTarget("ds-1", "t1", new() { ["doc-1"] = "entry-1" });
         _dify.DocumentsJson["ds-1"] = $"[{Doc("doc-1", error: "Connection refused")}]";
 
-        var configData = new Dictionary<string, string?> { ["Dify:Reconcile:Mode"] = "observe" };
+        var configData = new Dictionary<string, string?>
+        {
+            ["Dify:Reconcile:Mode"] = "observe",
+            ["Dify:Reconcile:StaleQueuingAfter"] = "00:00:00",   // считаем только error-листинги
+        };
         var config = new ConfigurationBuilder().AddInMemoryCollection(configData).Build();
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(f => f.CreateClient(It.IsAny<string>()))
@@ -449,6 +464,110 @@ public class KnowledgeIndexReconcilerTests
         _time.Advance(TimeSpan.FromHours(25));
         await after.TickAsync();
         notifier.Sent.Should().BeEquivalentTo(["owner-1", "owner-1"]);
+    }
+
+    [Fact]
+    public async Task Зависший_В_Очереди_Старше_Порога_Лечится_Моложе_Не_Трогается()
+    {
+        // Прод 29.10.2026: 91 документ висел в queuing с сентября — Dify потерял celery-задачи
+        _participant.AddTarget("ds-1", "persona:p1", new()
+        {
+            ["doc-old"] = "entry-old", ["doc-fresh"] = "entry-fresh", ["doc-err"] = "entry-err",
+        });
+        _dify.DocumentsJson["ds-1"] = $"[{Doc("doc-err", error: "Connection refused")}]";
+        _dify.QueuedJson["ds-1"] = $"[{Queued("doc-old", _time.Now - TimeSpan.FromHours(7))}," +
+                                   $"{Queued("doc-fresh", _time.Now - TimeSpan.FromHours(5))}," +
+                                   $"{Queued("doc-orphan", _time.Now - TimeSpan.FromDays(30))}]";
+        var sut = Create("heal", staleQueuingAfter: "06:00:00");
+
+        await sut.TickAsync();
+
+        // Старше 6 ч — той же цепочкой, что error; моложе — честно ждёт очереди
+        _participant.Invalidations.Should().ContainSingle()
+            .Which.Keys.Should().BeEquivalentTo(["entry-err", "entry-old"]);
+        _participant.Kicks.Should().BeEquivalentTo(["persona:p1"]);
+        // Счётчики error и очереди раздельны: сирота очереди — в StaleUnhealable
+        sut.LastCounts.Should().ContainSingle()
+            .Which.Should().Be(new ReconcileTargetStatus("persona:p1", 1, 0, 1, 1));
+        KnowledgeIndexReconciler.AggregateByType(sut.LastCounts, stale: true).Should().BeEquivalentTo(new[]
+        {
+            ("persona", true, 1L),
+            ("persona", false, 1L),
+        });
+    }
+
+    [Fact]
+    public async Task Зависшие_В_Очереди_Делят_Бюджет_Тика_С_Error()
+    {
+        _participant.AddTarget("ds-1", "t1", new() { ["doc-err"] = "entry-err", ["doc-q"] = "entry-q" });
+        _dify.DocumentsJson["ds-1"] = $"[{Doc("doc-err", error: "Connection refused")}]";
+        _dify.QueuedJson["ds-1"] = $"[{Queued("doc-q", _time.Now - TimeSpan.FromDays(1))}]";
+        var sut = Create("heal", maxPerCycle: 1, staleQueuingAfter: "06:00:00");
+
+        // Каждый тик — не больше потолка, а за два обхода вылечены обе записи
+        await sut.TickAsync();
+        _dify.DocumentsJson["ds-1"] = "[]";   // error-документ пересоздался
+        _time.Advance(TimeSpan.FromMinutes(16));
+        await sut.TickAsync();
+
+        _participant.Invalidations.Should().HaveCount(2);
+        _participant.Invalidations.Should().OnlyContain(i => i.Keys.Count == 1);
+        _participant.Invalidations.SelectMany(i => i.Keys).Should().BeEquivalentTo(["entry-err", "entry-q"]);
+    }
+
+    [Fact]
+    public async Task Выключенный_Порог_Не_Запрашивает_Очередь()
+    {
+        _participant.AddTarget("ds-1", "t1", new() { ["doc-q"] = "entry-q" });
+        _dify.QueuedJson["ds-1"] = $"[{Queued("doc-q", _time.Now - TimeSpan.FromDays(30))}]";
+        var sut = Create("heal", staleQueuingAfter: "00:00:00");
+
+        await sut.TickAsync();
+
+        _dify.Requests.Should().NotBeEmpty();   // error-листинг был
+        _dify.Requests.Should().NotContain(r => r.Contains("status=queuing"));
+        _participant.Invalidations.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Без_Ключа_Порог_По_Умолчанию_Шесть_Часов()
+    {
+        _participant.AddTarget("ds-1", "t1", new() { ["doc-q"] = "entry-q" });
+        _dify.QueuedJson["ds-1"] = $"[{Queued("doc-q", _time.Now - TimeSpan.FromHours(6.5))}]";
+        var sut = Create("heal", staleQueuingAfter: null);
+
+        await sut.TickAsync();
+
+        _dify.Requests.Should().Contain(r => r.Contains("status=queuing"));
+        _participant.Invalidations.Should().ContainSingle().Which.Keys.Should().BeEquivalentTo(["entry-q"]);
+    }
+
+    [Theory]
+    [InlineData(null, 6.0)]          // ключа нет — дефолт
+    [InlineData("06:00:00", 6.0)]
+    [InlineData("12:00:00", 12.0)]
+    [InlineData("мусор", 6.0)]       // нечитаемое — дефолт, а не выключение
+    [InlineData("00:00:00", null)]   // явное выключение
+    [InlineData("", null)]
+    public void ReadStaleQueuingAfter_Разбирает_Порог(string? raw, double? hours)
+    {
+        KnowledgeReconcileOptions.ReadStaleQueuingAfter(raw)
+            .Should().Be(hours is null ? null : TimeSpan.FromHours(hours.Value));
+    }
+
+    [Fact]
+    public void IsStaleQueued_Только_Ожидающие_С_Известным_Возрастом()
+    {
+        var now = DateTimeOffset.Parse("2026-10-29T12:00:00Z");
+        var old = now.AddHours(-7).ToUnixTimeSeconds();
+        var after = TimeSpan.FromHours(6);
+
+        KnowledgeIndexReconciler.IsStaleQueued(new("d", "d", "waiting", CreatedAt: old), now, after).Should().BeTrue();
+        KnowledgeIndexReconciler.IsStaleQueued(new("d", "d", "queuing", CreatedAt: old), now, after).Should().BeTrue();
+        // Клиентская страховка: старая версия могла проигнорировать ?status=queuing
+        KnowledgeIndexReconciler.IsStaleQueued(new("d", "d", "completed", CreatedAt: old), now, after).Should().BeFalse();
+        KnowledgeIndexReconciler.IsStaleQueued(new("d", "d", "indexing", CreatedAt: old), now, after).Should().BeFalse();
+        KnowledgeIndexReconciler.IsStaleQueued(new("d", "d", "waiting"), now, after).Should().BeFalse();
     }
 
     [Fact]

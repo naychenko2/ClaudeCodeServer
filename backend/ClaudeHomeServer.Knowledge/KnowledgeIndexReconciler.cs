@@ -10,9 +10,17 @@ public sealed record KnowledgeReconcileOptions(
     TimeSpan TargetInterval,    // базовый период обхода одного датасета
     int MaxPerCycle,            // потолок инвалидаций за тик (на все цели)
     TimeSpan MaxBackoff,        // потолок личного периода цели
-    int MaxAttemptsPerEntry)    // попыток лечения записи до карантина (временные ошибки)
+    int MaxAttemptsPerEntry,    // попыток лечения записи до карантина (временные ошибки)
+    // Сколько документ может стоять в очереди Dify (display-статус queuing), прежде чем
+    // считаться зависшим (celery-задача потеряна при рестарте worker/redis). null — выключено.
+    TimeSpan? StaleQueuingAfter = null)
 {
     public const string Section = "Dify:Reconcile";
+
+    // Порог крупный намеренно: при массовой переиндексации (28.10.2026 в очереди стояло
+    // ~2000 документов) честно ждущий документ висит в queuing часами, и маленький порог
+    // пересоздавал бы документы прямо в очереди — дубли и лишняя нагрузка на эмбеддинги
+    public static readonly TimeSpan DefaultStaleQueuingAfter = TimeSpan.FromHours(6);
 
     public static KnowledgeReconcileOptions Read(IConfiguration config)
     {
@@ -23,7 +31,20 @@ public sealed record KnowledgeReconcileOptions(
             TargetInterval: ReadSpan(s, "TargetInterval", TimeSpan.FromMinutes(15)),
             MaxPerCycle: int.TryParse(s["MaxPerCycle"], out var mpc) && mpc > 0 ? mpc : 100,
             MaxBackoff: ReadSpan(s, "MaxBackoff", TimeSpan.FromHours(2)),
-            MaxAttemptsPerEntry: int.TryParse(s["MaxAttemptsPerEntry"], out var maxA) && maxA > 0 ? maxA : 5);
+            MaxAttemptsPerEntry: int.TryParse(s["MaxAttemptsPerEntry"], out var maxA) && maxA > 0 ? maxA : 5,
+            StaleQueuingAfter: ReadStaleQueuingAfter(s["StaleQueuingAfter"]));
+    }
+
+    // Ключа нет — дефолт 6 ч. Выключение — явный "00:00:00" (любое неположительное) или
+    // пустая строка: на JSON-null полагаться нельзя, провайдер конфигурации может отдать его
+    // как отсутствие ключа, и «выключенное» тихо включилось бы дефолтом. Мусор — дефолт.
+    internal static TimeSpan? ReadStaleQueuingAfter(string? raw)
+    {
+        if (raw is null) return DefaultStaleQueuingAfter;
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        if (!TimeSpan.TryParse(raw, System.Globalization.CultureInfo.InvariantCulture, out var v))
+            return DefaultStaleQueuingAfter;
+        return v > TimeSpan.Zero ? v : null;
     }
 
     private static TimeSpan ReadSpan(IConfiguration s, string key, TimeSpan fallback) =>
@@ -31,8 +52,11 @@ public sealed record KnowledgeReconcileOptions(
             ? v : fallback;
 }
 
-// Состояние цели после обхода — для видимости (шаг 4) и тестов
-public sealed record ReconcileTargetStatus(string Label, int Healable, int Unhealable);
+// Состояние цели после обхода — для видимости (шаг 4) и тестов. Healable/Unhealable —
+// документы в error; StaleHealable/StaleUnhealable — зависшие в очереди (отдельный гейдж,
+// чтобы потерянные celery-задачи не смешивались с упавшими эмбеддингами)
+public sealed record ReconcileTargetStatus(string Label, int Healable, int Unhealable,
+    int StaleHealable = 0, int StaleUnhealable = 0);
 
 // Фоновый реконсайлер error-документов Dify (план «восстановление error-документов»,
 // вариант B). CCS принимает подтверждение ПРИЁМА документа за подтверждение ИНДЕКСАЦИИ:
@@ -43,6 +67,10 @@ public sealed record ReconcileTargetStatus(string Label, int Healable, int Unhea
 // Hash="") и пинает штатный синк (KickSync) — тот сам удаляет error-док и пересоздаёт
 // документ из источника истины. Состояние живёт в самом Dify (список error-доков —
 // персистентная очередь ретраев), нового хранилища нет.
+//
+// Тем же путём лечатся документы, зависшие в очереди (?status=queuing дольше
+// StaleQueuingAfter): Dify теряет celery-задачи при рестарте worker/redis, и документ
+// навсегда остаётся queuing. Бюджет MaxPerCycle, карантин и backoff — общие с error.
 //
 // - Backoff per-target: у каждой цели свой NextDueAt; число healable не уменьшилось —
 //   личный период ×2 до MaxBackoff, уменьшилось — сброс. Сироты (unhealable) в расчёт
@@ -129,19 +157,32 @@ public sealed class KnowledgeIndexReconciler : BackgroundService
 
     // Срез для гейджа: суммы по типу датасета (префикс Label — notes/persona/team/dossiers/
     // project) и по лечимости. Именно суммы, а не по цели: Label содержит id персоны и путь
-    // проекта — как тег это и PII, и кардинальность.
+    // проекта — как тег это и PII, и кардинальность. stale=false — документы в error,
+    // stale=true — зависшие в очереди (свой гейдж).
     public static IReadOnlyList<(string DatasetType, bool Healable, long Count)> AggregateByType(
-        IReadOnlyList<ReconcileTargetStatus> counts)
+        IReadOnlyList<ReconcileTargetStatus> counts, bool stale = false)
     {
         var acc = new Dictionary<(string, bool), long>();
         foreach (var c in counts)
         {
             var colon = c.Label.IndexOf(':');
             var type = colon > 0 ? c.Label[..colon] : c.Label;
-            acc[(type, true)] = acc.GetValueOrDefault((type, true)) + c.Healable;
-            acc[(type, false)] = acc.GetValueOrDefault((type, false)) + c.Unhealable;
+            acc[(type, true)] = acc.GetValueOrDefault((type, true)) + (stale ? c.StaleHealable : c.Healable);
+            acc[(type, false)] = acc.GetValueOrDefault((type, false)) + (stale ? c.StaleUnhealable : c.Unhealable);
         }
         return acc.Select(kv => (kv.Key.Item1, kv.Key.Item2, kv.Value)).ToList();
+    }
+
+    // Документ ждёт в очереди дольше порога. Фильтр ?status=queuing — display-статус Dify,
+    // в ответе ему соответствует сырой indexing_status "waiting"; "queuing" принимаем тоже
+    // на случай версии, отдающей display-статус. Без created_at возраст неизвестен — не трогаем.
+    internal static bool IsStaleQueued(DifyDocumentItem doc, DateTimeOffset now, TimeSpan after)
+    {
+        if (!string.Equals(doc.IndexingStatus, "waiting", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(doc.IndexingStatus, "queuing", StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (doc.CreatedAt is not { } created) return false;
+        return now - DateTimeOffset.FromUnixTimeSeconds((long)created) > after;
     }
 
     // Временная ошибка индексации (лежит провайдер эмбеддингов) — ретраи оправданы дольше,
@@ -241,10 +282,30 @@ public sealed class KnowledgeIndexReconciler : BackgroundService
             .Where(d => string.Equals(d.IndexingStatus, "error", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        // Сопоставление со стором участника: нашлись — healable, остальные — сироты
-        var resolved = await target.ResolveAsync(errorDocs.Select(d => d.Id).ToList());
+        // Зависшие в очереди: Dify потерял celery-задачу (рестарт worker/redis), документ
+        // навсегда остаётся queuing и для дифф-синка так же невидим, как error. Лечатся той
+        // же цепочкой; порог выключен — очередь не запрашивается вовсе
+        var staleDocs = new List<DifyDocumentItem>();
+        if (opts.StaleQueuingAfter is { } staleAfter)
+        {
+            var queued = await _knowledge.ListAllDocumentsAsync(target.DatasetId, status: "queuing");
+            ct.ThrowIfCancellationRequested();
+            staleDocs = queued.Data.Where(d => IsStaleQueued(d, now, staleAfter)).ToList();
+        }
+        var staleIds = staleDocs.Select(d => d.Id).ToHashSet(StringComparer.Ordinal);
+
+        // Сопоставление со стором участника: нашлись — healable, остальные — сироты.
+        // Сирот считаем по DocId, а не вычитанием: на общем DocId одному документу
+        // соответствует несколько ключей, и разность ушла бы в минус
+        var resolved = await target.ResolveAsync(errorDocs.Concat(staleDocs).Select(d => d.Id).ToList());
         var healableKeys = resolved.Select(r => r.EntryKey).ToHashSet(StringComparer.Ordinal);
-        var unhealable = errorDocs.Count - resolved.Count;
+        var resolvedDocIds = resolved.Select(r => r.DocId).ToHashSet(StringComparer.Ordinal);
+        var healableError = resolved.Where(r => !staleIds.Contains(r.DocId))
+            .Select(r => r.EntryKey).Distinct(StringComparer.Ordinal).Count();
+        var healableStale = resolved.Where(r => staleIds.Contains(r.DocId))
+            .Select(r => r.EntryKey).Distinct(StringComparer.Ordinal).Count();
+        var unhealable = errorDocs.Count(d => !resolvedDocIds.Contains(d.Id));
+        var unhealableStale = staleDocs.Count(d => !resolvedDocIds.Contains(d.Id));
 
         List<(string DocId, string EntryKey)> toHeal = new();
         List<string> notifyOwners = new();
@@ -258,7 +319,8 @@ public sealed class KnowledgeIndexReconciler : BackgroundService
                 _recovered++;
                 _attempts.Remove($"{target.Label}:{key}");
             }
-            _lastCounts[target.Label] = new ReconcileTargetStatus(target.Label, healableKeys.Count, unhealable);
+            _lastCounts[target.Label] = new ReconcileTargetStatus(target.Label, healableError, unhealable,
+                healableStale, unhealableStale);
 
             st.CurrentInterval = NextInterval(st.CurrentInterval, opts, st.LastHealableCount, healableKeys.Count);
             st.LastHealableCount = healableKeys.Count;
@@ -269,6 +331,9 @@ public sealed class KnowledgeIndexReconciler : BackgroundService
             if (unhealable > 0)
                 _log.LogInformation("reconcile: {Label} — {Orphans} error-документов без записи в сторе (сироты)",
                     target.Label, unhealable);
+            if (unhealableStale > 0)
+                _log.LogInformation("reconcile: {Label} — {Orphans} зависших в очереди документов без записи в сторе (сироты)",
+                    target.Label, unhealableStale);
 
             // Владельцу сообщаем и в observe: видимость от режима лечения не зависит.
             if (st.HealableRounds >= RoundsBeforeNotify)
@@ -284,7 +349,8 @@ public sealed class KnowledgeIndexReconciler : BackgroundService
                 }
             }
 
-            // Карантин отбрасывается ДО мутации; классификация по тексту ошибки Dify
+            // Карантин отбрасывается ДО мутации; классификация по тексту ошибки Dify.
+            // Зависание в очереди — сбой инфраструктуры, не контента: лимит как у временной
             var errorByDoc = errorDocs.ToDictionary(d => d.Id, d => d.Error ?? "");
             foreach (var pair in resolved)
             {
@@ -292,14 +358,16 @@ public sealed class KnowledgeIndexReconciler : BackgroundService
                 var qk = $"{target.Label}:{pair.EntryKey}";
                 if (_quarantine.Contains(qk)) continue;
                 var attempts = _attempts.GetValueOrDefault(qk);
-                var limit = IsTransientError(errorByDoc.GetValueOrDefault(pair.DocId, ""))
+                var stale = staleIds.Contains(pair.DocId);
+                var reason = stale ? "зависла в очереди" : errorByDoc.GetValueOrDefault(pair.DocId, "");
+                var limit = stale || IsTransientError(reason)
                     ? opts.MaxAttemptsPerEntry
                     : Math.Min(2, opts.MaxAttemptsPerEntry);
                 if (attempts >= limit)
                 {
                     _quarantine.Add(qk);
                     _log.LogWarning("reconcile: запись {Entry} в карантине после {Attempts} попыток (ошибка: {Error})",
-                        qk, attempts, errorByDoc.GetValueOrDefault(pair.DocId, "—"));
+                        qk, attempts, reason.Length > 0 ? reason : "—");
                     continue;
                 }
                 _attempts[qk] = attempts + 1;

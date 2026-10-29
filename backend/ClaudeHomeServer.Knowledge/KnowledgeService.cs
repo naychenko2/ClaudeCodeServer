@@ -18,7 +18,11 @@ public record DifyDocumentItem(
     // индексации). Non-nullable int тут ронял разбор ВСЕГО ответа (17 362 JsonException за
     // четверо суток: реконсайлер и память персон не работали). null — «ещё не посчитано»,
     // 0 — утверждение «ноль слов»; для человека и модели это разные вещи.
-    [property: JsonPropertyName("word_count")] int? WordCount = null);
+    [property: JsonPropertyName("word_count")] int? WordCount = null,
+    // Unix-время приёма документа (секунды). По нему реконсайлер отличает документ, честно
+    // ждущий в очереди, от зависшего (Dify потерял celery-задачу). Nullable: старые версии
+    // могли не отдавать поле — такой документ зависшим не считается.
+    [property: JsonPropertyName("created_at")] double? CreatedAt = null);
 
 // DifyDocumentInfo (id/name/indexing_status) — переехал в Core/Services/Knowledge/
 // KnowledgeDtos.cs (Этап 5, волна 5): IKnowledgeIndex в Core возвращает DifyDocumentInfo.

@@ -3,7 +3,8 @@ using System.Text.RegularExpressions;
 namespace ClaudeHomeServer.Tests.Services;
 
 /// <summary>
-/// Сторож прямого вызова чистой функции <c>ProjectAccess.Can/Check</c> (дефект R-S1-3a): роль
+/// Сторож прямого вызова чистых функций <c>ProjectAccess.Can/Check</c> и <c>SessionAccess.CanSee</c>
+/// (дефект R-S1-3a; <c>CanSee</c> сторож не видел — FINAL-1, Spend.Badge ходил мимо гейта): роль
 /// участника общего проекта, рубильник <c>SharedProjects:Enabled</c> и запрет записи участнику в S1
 /// решает ТОЛЬКО <c>IProjectAccess</c> (<c>ProjectAccessService</c>). Контроллер или вертикаль, зовущие
 /// <c>ProjectAccess.Can</c> напрямую, дали бы редактору запись в проект владельца мимо гейта.
@@ -17,7 +18,7 @@ public class DirectProjectAccessGuardTests
     private const string AllowListPath =
         "backend/ClaudeHomeServer.Guards.Tests/Services/DirectProjectAccessAllowList.txt";
 
-    private static readonly Regex DirectCall = new(@"\bProjectAccess\s*\.\s*(Can|Check)\s*\(", RegexOptions.Compiled);
+    private static readonly Regex DirectCall = new(@"\b(ProjectAccess\s*\.\s*(Can|Check)|SessionAccess\s*\.\s*CanSee)\s*\(", RegexOptions.Compiled);
 
     [Fact]
     public void ПрямойВызовProjectAccess_ВнеСнимка_Отсутствует()
@@ -36,6 +37,15 @@ public class DirectProjectAccessGuardTests
             "решение о доступе принимает IProjectAccess.Resolve/ResolveSession (роль, рубильник, запрет записи " +
             "участнику); прямой ProjectAccess.Can/Check обходит гейт:\n" + string.Join("\n", outside));
     }
+
+    [Theory]
+    [InlineData("if (!SessionAccess.CanSee(session, project, id))", true)]
+    [InlineData("SessionAccess . CanSee (s, null, u)", true)]
+    [InlineData("ProjectAccess.Check(project, userId)", true)]
+    [InlineData("access.ResolveSession(userId, sessionId)", false)]
+    [InlineData("var canSee = CanSee(session)", false)]
+    public void Шаблон_ЛовитПрямыеВызовыЧистыхФункцийДоступа(string line, bool expected) =>
+        DirectCall.IsMatch(line).Should().Be(expected);
 
     [Fact]
     public void Снимок_НеСодержитСтрокКоторыхНетВКоде()

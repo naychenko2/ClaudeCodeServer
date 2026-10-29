@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -149,6 +150,29 @@ public class SharedProjectRoleMatrixTests : IClassFixture<TestWebApplicationFact
             response.StatusCode.Should().NotBe(HttpStatusCode.Forbidden, $"{role}: {endpointName}");
         else
             ((int)response.StatusCode).Should().Be(expected, $"{role}: {endpointName}");
+    }
+
+    // ── перенос личной задачи в чужой проект: запись в проект, а не чтение ─────────────────────
+
+    [Theory]
+    [InlineData(Owner, 200)]
+    [InlineData(Editor, 403)]
+    [InlineData(Reader, 403)]
+    [InlineData(Outsider, 400)]
+    public async Task ПереносЛичнойЗадачиВПроект_ТребуетЗаписи(string role, int expected)
+    {
+        var (projectId, _) = await ProjectWithChatAsync(role);
+        var client = ClientOf(role);
+        var created = await client.PostAsJsonAsync("/api/tasks", new { title = "Личная задача переноса" });
+        created.EnsureSuccessStatusCode();
+        var taskId = IdOf(await created.Content.ReadAsStringAsync());
+
+        var response = await client.PutAsJsonAsync($"/api/tasks/{taskId}", new { projectId });
+
+        ((int)response.StatusCode).Should().Be(expected, $"{role}: перенос личной задачи в проект");
+        var moved = _factory.Services.GetRequiredService<TaskManager>().GetById(taskId)!;
+        if (expected == 200) moved.ProjectId.Should().Be(projectId);
+        else moved.ProjectId.Should().BeNull("отказ не должен переносить задачу");
     }
 
     // ── личное состояние: отметки участника не меняют отметок владельца и наоборот ────────────────

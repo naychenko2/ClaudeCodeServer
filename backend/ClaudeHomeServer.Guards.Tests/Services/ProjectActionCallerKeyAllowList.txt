@@ -22,10 +22,17 @@
 # S1-4 (реестр соединений): id соединения пишется в реестр под своим userId — это личная группа
 # SignalR (тот же класс мест, что user_{id} выше), а не ключ проектных хранилищ: выкидывание из
 # групп при отзыве доступа адресует соединения человека, арендатором проекта оно не становится.
+# FINAL-1 (доработка S1): SessionsController 6→8 — S1-7 добавил проверки авторства чата (GetOwned: личная
+# проверка «я автор», а не ключ проектных хранилищ); TurnRightExtensions 0→2 — резолв права RunTurn
+# вызывающего (IProjectAccess.ResolveSession), id уходит только в него; TasksController +1 — проверка
+# права Write на целевом проекте при переносе задачи; SpendController 8 — файл стал точкой доступа
+# (IProjectAccess в Badge), его CurrentUserId — фильтр личного расхода владельца (SpendAccess), расход
+# ключуется по userId записи хода, а не арендатором проекта; ключом проектных хранилищ ничто не служит.
 backend/ClaudeHomeServer.Architecture/Controllers/ArchitectureController.cs|2
 backend/ClaudeHomeServer.AudioEditor/Controllers/AudioEditScopeGate.cs|3
 backend/ClaudeHomeServer.ImageEditor/Controllers/ImageEditScopeGate.cs|3
 backend/ClaudeHomeServer.Plugins/Controllers/PluginBridgeController.cs|5
+backend/ClaudeHomeServer.Spend/Controllers/SpendController.cs|8
 backend/ClaudeHomeServer.VideoEditor/Controllers/VideoEditScopeGate.cs|3
 backend/ClaudeHomeServer/Controllers/CodeGraphController.cs|1
 backend/ClaudeHomeServer/Controllers/DossiersController.cs|4
@@ -37,8 +44,9 @@ backend/ClaudeHomeServer/Controllers/PreviewController.cs|12
 backend/ClaudeHomeServer/Controllers/ProjectMapController.cs|1
 backend/ClaudeHomeServer/Controllers/ProjectMembersController.cs|6
 backend/ClaudeHomeServer/Controllers/ProjectsController.cs|14
-backend/ClaudeHomeServer/Controllers/SessionsController.cs|6
+backend/ClaudeHomeServer/Controllers/SessionsController.cs|8
 backend/ClaudeHomeServer/Controllers/SkillsController.cs|10
-backend/ClaudeHomeServer/Controllers/TasksController.cs|77
+backend/ClaudeHomeServer/Controllers/TasksController.cs|78
+backend/ClaudeHomeServer/Controllers/TurnRightExtensions.cs|2
 backend/ClaudeHomeServer/Hubs/SessionHub.cs|7
 backend/ClaudeHomeServer/Hubs/TerminalHub.cs|1

@@ -407,6 +407,11 @@ public class TasksController(
             targetProjectId = req.ProjectId == "" ? null : req.ProjectId;
             if (targetProjectId is not null && !CanUseProject(targetProjectId))
                 return BadRequest(new { error = "Проект не найден или недоступен" });
+            // Перенос в другой проект — это запись в него (задача появится на доске и уйдёт в группу
+            // проекта): читателю/редактору 403, как у создания задачи проекта; до S2b право Write — владелец
+            if (targetProjectId is not null && targetProjectId != task.ProjectId
+                && access?.Resolve(UserId, targetProjectId, ProjectRight.Write) is null)
+                return StatusCode(403, new { error = "Нет права на запись", code = ProjectScopeAttribute.ErrorCode });
         }
 
         // Колонка доски → статус выводим из её категории (единый источник для MCP/Claude и доски).

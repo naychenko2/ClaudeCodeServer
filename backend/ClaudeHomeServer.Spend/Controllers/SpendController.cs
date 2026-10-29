@@ -20,7 +20,8 @@ namespace ClaudeHomeServer.Services.Spend.Controllers;
 [Route("api/spend")]
 [Authorize]
 public class SpendController(SpendAnalyticsService analytics, ISessionDirectory sessions,
-    ITaskLookup tasks, TaskPromptMetricsStore promptMetrics, IProjectManager projects) : ControllerBase
+    ITaskLookup tasks, TaskPromptMetricsStore promptMetrics,
+    IProjectAccess access) : ControllerBase
 {
     private string CurrentUserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub) ?? "";
     private bool IsAdmin => User.IsInRole("admin");
@@ -104,8 +105,9 @@ public class SpendController(SpendAnalyticsService analytics, ISessionDirectory 
     {
         var session = sessions.GetById(sessionId);
         if (session is null) return NotFound();
-        var project = session.ProjectId is { } pid ? projects.GetById(pid) : null;
-        if (!IsAdmin && !SessionAccess.CanSee(session, project, CurrentUserId))
+        // Расход — только владельцу чата: решение о доступе принимает IProjectAccess (рубильник общих
+        // проектов, роль), участнику общего проекта расход чужого чата не открыт (S2a-6b)
+        if (!IsAdmin && access.ResolveSession(CurrentUserId, sessionId) is not { Role: ProjectRole.Owner })
             return Forbidden("Чужой чат доступен только администратору");
         return Ok(analytics.Badge(sessionId));
     }

@@ -2388,18 +2388,15 @@ public class TeamWaveServiceTests : IClassFixture<TeamWaveServiceTests.Fixture>
         child.UpdatedAt = DateTime.UtcNow.AddMinutes(-45);
 
         // Сигнал простоя отдаёт тест: в проде статус снимает финализация остановленного
-        // прогона, здесь это делает фейк-интейк (тот же приём, что в DropSubtaskAsync-тестах).
-        // Без него тест платил бы полным ExecutorIdleTimeout (10 с) на каждый прогон;
-        // мутация «убрать TrySetResult» краснеет по таймауту ожидания ниже.
+        // прогона — асинхронно, не в момент прерывания. Здесь это делает фейк-интейк с
+        // задержкой 250 мс (приём ClearBusyAfter, тот же, что в DropSubtaskAsync-тестах).
+        // Мгновенное снятие (вердикт R-W1) делало ожидание ненаблюдаемым:
+        // WaitExecutorIdleAsync выходил true с первой проверки, и мутация «убрать await»
+        // не краснила ничего. С задержкой перевыдача без ожидания случается раньше
+        // простоя — ассерт порядка ниже краснеет; без сигнала тест платил бы полным
+        // ExecutorIdleTimeout (10 с).
         var idleAt = new TaskCompletionSource<DateTime>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var intake = new FakeTurnIntake
-        {
-            OnInterrupt = sid =>
-            {
-                if (_sessions.GetById(sid) is { } s) s.Status = SessionStatus.Active;
-                idleAt.TrySetResult(DateTime.UtcNow);
-            },
-        };
+        var intake = new FakeTurnIntake { OnInterrupt = ClearBusyAfter(TimeSpan.FromMilliseconds(250), idleAt) };
         _sut.IntakeForTestOverride = intake;
 
         var result = await _sut.RestartWaveTaskAsync(_sessions.GetById(session.Id)!, a.Id);
@@ -2414,10 +2411,43 @@ public class TeamWaveServiceTests : IClassFixture<TeamWaveServiceTests.Fixture>
         intake.InterruptCount(child.Id).Should().Be(1,
             "зависшее исполнение перед перевыдачей останавливается");
         var idleMoment = await idleAt.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        // Перевыдача не раньше простоя: UpdatedAt задачи выставляет сама перевыдача
+        // (LaunchReissueAsync → Update). Мутация M1 (заменить await WaitExecutorIdleAsync
+        // на Task.CompletedTask): перевыдача идёт сразу после прерывания — за 250 мс до
+        // простоя, этот ассерт краснеет.
         _tasks.GetById(a.Id)!.UpdatedAt.Should().BeOnOrAfter(idleMoment,
             "перевыдача идёт после простоя исполнения, а не поверх него");
         _logLines.Should().NotContain(l => l.Contains("не встал за"),
             "исполнитель встал штатно — выхода по таймауту здесь быть не должно");
+    }
+
+    // Обратный случай к предыдущему тесту: прерывание послано, а занятость так и не
+    // снялась (зависший Working без процесса, который не реанимируется). Перезапуск не
+    // имеет права висеть вечно: по истечении ExecutorIdleTimeout он идёт дальше и
+    // перевыдаёт — но молчать здесь не должен: без записи в логе про то, что «исполнитель
+    // не встал», узнать об этом неоткуда (тот же инвариант, что у
+    // DropSubtaskAsync_ИсполнительНеВсталЗаТаймаут). Таймаут — поле, а не литерал 10 с:
+    // иначе кейс стоил бы десять секунд прогона. Мутация «бросать на false в
+    // WaitExecutorIdleAsync» краснит весь тест: до перевыдачи дело не доходит.
+    [Fact]
+    public async Task ПерезапускЗадачи_ИсполнительНеВсталЗаТаймаут_ПеревыдаётСПредупреждениемВЛоге()
+    {
+        var (session, a, _) = await MakeStalledWaveAsync("restart-task-notidle");
+        var intake = new FakeTurnIntake(); // OnInterrupt пуст — занятость не снимается никогда
+        _sut.IntakeForTestOverride = intake;
+        _sut.ExecutorIdleTimeout = TimeSpan.FromMilliseconds(100);
+        var child = await AttachExecutorAsync(a, session, busyStatus: true);
+
+        var result = await _sut.RestartWaveTaskAsync(_sessions.GetById(session.Id)!, a.Id);
+
+        intake.InterruptCount(child.Id).Should().Be(1,
+            "зависшее исполнение перед перевыдачей останавливается");
+        _sessions.GetById(child.Id)!.Status.Should().Be(SessionStatus.Working,
+            "исполнитель так и не встал — это и есть проверяемый случай");
+        result.Outcome.Should().Be("reissued",
+            "таймаут ожидания не отменяет перевыдачу: штаб идёт дальше, а не виснет");
+        _logLines.Should().Contain(l => l.Contains("не встал за") && l.Contains(a.Id),
+            "выход по таймауту обязан оставить след в логе — иначе про несостоявшейся реанимации не узнать");
     }
 
     // Продуктовые дефолты ожидания простоя исполнителя — те же, что до превращения их в

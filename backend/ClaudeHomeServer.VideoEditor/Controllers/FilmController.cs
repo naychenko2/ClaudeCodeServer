@@ -28,6 +28,10 @@ public class FilmController(
 
     private string UserId => User.FindFirstValue(SubClaim)!;
 
+    // Ключ хранилищ фильмов — арендатор области, UserId остаётся только в гейте (право доступа)
+    private static string Tenant(VideoEditScope scope) =>
+        scope.TenantOwnerId ?? throw new InvalidOperationException("Область без арендатора: её выдаёт только VideoEditScopeGate");
+
     [HttpGet(VideoEditorRoutes.Films)]
     public IActionResult List(string projectId) =>
         Gate(projectId, out var scope, out var denied)
@@ -37,13 +41,13 @@ public class FilmController(
     [HttpGet(VideoEditorRoutes.FilmState)]
     public IActionResult State(string projectId, [FromQuery] string? path) =>
         Gate(projectId, out var scope, out var denied)
-            ? FilmHttp.Map(films.State(UserId, scope, path), state => Ok(state))
+            ? FilmHttp.Map(films.State(Tenant(scope), scope, path), state => Ok(state))
             : denied;
 
     [HttpPost(VideoEditorRoutes.FilmCreate)]
     public async Task<IActionResult> Create(string projectId, [FromBody] FilmCreateRequest? req, CancellationToken ct) =>
         Gate(projectId, out var scope, out var denied)
-            ? FilmHttp.Map(await films.CreateAsync(UserId, scope, req, ct),
+            ? FilmHttp.Map(await films.CreateAsync(Tenant(scope), scope, req, ct),
                 state => StatusCode(StatusCodes.Status201Created, state))
             : denied;
 
@@ -51,7 +55,7 @@ public class FilmController(
     public async Task<IActionResult> Patch(string projectId, [FromQuery] string? path, [FromBody] FilmPatch? patch,
         CancellationToken ct, [FromQuery] string? sessionId = null) =>
         Gate(projectId, out var scope, out var denied)
-            ? FilmHttp.Map(await films.PatchAsync(UserId, scope, path, patch, VideoInitiators.Human, ct, sessionId), state => Ok(state))
+            ? FilmHttp.Map(await films.PatchAsync(Tenant(scope), scope, path, patch, VideoInitiators.Human, ct, sessionId), state => Ok(state))
             : denied;
 
     [HttpPost(VideoEditorRoutes.FilmBuild)]
@@ -62,7 +66,7 @@ public class FilmController(
         // Ревизия контекста (ADR-023 §Д2.1): основной объект обязан быть этим фильмом, иначе 409/400 до сборки
         if (contextRevision is { } revision && ContextRefusal(scope, path, sessionId, revision) is { } refusal)
             return refusal;
-        return FilmHttp.Map(assembler.Start(UserId, scope, path, VideoInitiators.Human, sessionId),
+        return FilmHttp.Map(assembler.Start(Tenant(scope), scope, path, VideoInitiators.Human, sessionId),
             status => StatusCode(StatusCodes.Status202Accepted, status));
     }
 
@@ -71,7 +75,7 @@ public class FilmController(
         if (context is null)
             return StatusCode(StatusCodes.Status503ServiceUnavailable,
                 new { error = ChatContext.VideoContextLaunch.UnavailableText, code = VideoEditorErrors.ProviderUnavailable });
-        var read = context.Read(UserId, scope, sessionId, revision);
+        var read = context.Read(Tenant(scope), scope, sessionId, revision);
         if (!read.Ok)
             return read.Fresh is { } fresh
                 ? StatusCode(StatusCodes.Status409Conflict, new Protocol.ChatContextConflictDto(read.ErrorCode!, fresh))
@@ -85,7 +89,7 @@ public class FilmController(
     [HttpGet(VideoEditorRoutes.FilmBuild)]
     public IActionResult BuildStatus(string projectId, [FromQuery] string? path) =>
         Gate(projectId, out var scope, out var denied)
-            ? assembler.Status(UserId, scope, path) is { } status
+            ? assembler.Status(Tenant(scope), scope, path) is { } status
                 ? Ok(status)
                 : FilmHttp.Map(FilmCallResult<FilmBuildStatusDto>.Fail(VideoEditorErrors.JobNotFound, "Сборки ещё не было"), s => Ok(s))
             : denied;
@@ -93,7 +97,7 @@ public class FilmController(
     [HttpDelete(VideoEditorRoutes.FilmBuild)]
     public IActionResult CancelBuild(string projectId, [FromQuery] string? path) =>
         Gate(projectId, out var scope, out var denied)
-            ? assembler.Cancel(UserId, scope, path) && assembler.Status(UserId, scope, path) is { } status
+            ? assembler.Cancel(Tenant(scope), scope, path) && assembler.Status(Tenant(scope), scope, path) is { } status
                 ? Ok(status)
                 : FilmHttp.Map(FilmCallResult<FilmBuildStatusDto>.Fail(VideoEditorErrors.JobNotFound, "Сборка не идёт"), s => Ok(s))
             : denied;
@@ -102,7 +106,7 @@ public class FilmController(
     public async Task<IActionResult> ComposeMusic(string projectId, [FromQuery] string? path,
         [FromBody] FilmMusicRequest? req, CancellationToken ct) =>
         Gate(projectId, out var scope, out var denied)
-            ? FilmHttp.Map(await music.CreateDraftAsync(UserId, scope, path, req, ct), draft => Ok(draft))
+            ? FilmHttp.Map(await music.CreateDraftAsync(Tenant(scope), scope, path, req, ct), draft => Ok(draft))
             : denied;
 
     [HttpPost("sessions/{sessionId}/" + VideoEditorRoutes.SceneSave)]
@@ -112,7 +116,7 @@ public class FilmController(
         if (!gate.TryProjectChat(UserId, projectId, sessionId, out var scope, out var denied)) return denied;
         // Чат и сцена — из маршрута: тело не может подсунуть чужие
         var request = req is null ? null : req with { SessionId = sessionId, SceneId = sceneId };
-        return FilmHttp.Map(await saver.SaveAsync(UserId, scope, request, VideoInitiators.Human, ct), saved => Ok(saved));
+        return FilmHttp.Map(await saver.SaveAsync(Tenant(scope), scope, request, VideoInitiators.Human, ct), saved => Ok(saved));
     }
 
     private bool Gate(string projectId, [NotNullWhen(true)] out VideoEditScope? scope,

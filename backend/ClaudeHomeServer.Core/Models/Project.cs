@@ -182,4 +182,16 @@ public class Project
     // Нижняя граница фонового разбора: ставится на первом тике, где флаг владельца включён.
     // Фон берёт только чаты с активностью не раньше неё, залежи — только кнопкой.
     public DateTime? SubjectsSweepSince { get; set; }
+    // Участники общего проекта (shared-projects, разрез §2.1, S1-1). «Нет участников» —
+    // всегда null: пустой список нормализуется в null на записи, и в projects.json поле
+    // не пишется вовсе (WhenWritingNull). Старые записи без поля читаются штатно: миграции
+    // нет, BackupSchema.Version не двигается (разрез §6.3); откат кода молча потеряет поле —
+    // проект снова станет личным, это принято.
+    private List<ProjectMember>? _members;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<ProjectMember>? Members
+    {
+        get => _members;
+        set => _members = value is { Count: 0 } ? null : value;
+    }
 }

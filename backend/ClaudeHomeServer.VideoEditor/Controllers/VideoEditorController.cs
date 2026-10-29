@@ -71,7 +71,7 @@ public class VideoEditorController(
 
     [HttpGet("sessions/{sessionId}/" + VideoEditorRoutes.Scenes)]
     public IActionResult Scenes(string projectId, string sessionId) =>
-        ChatGate(projectId, sessionId, out _, out var denied) ? ScenesIn(sessionId) : denied;
+        ChatGate(projectId, sessionId, out var scope, out var denied) ? ScenesIn(scope, sessionId) : denied;
 
     [HttpPost("sessions/{sessionId}/" + VideoEditorRoutes.Scenes)]
     public async Task<IActionResult> AddScene(string projectId, string sessionId, [FromBody] VideoSceneCreateRequest? req,
@@ -104,7 +104,7 @@ public class VideoEditorController(
     [HttpGet("sessions/{sessionId}/" + VideoEditorRoutes.SceneVersionFile)]
     public IActionResult VersionFile(string projectId, string sessionId, string sceneId, string versionId,
         [FromQuery] bool download) =>
-        ChatGate(projectId, sessionId, out _, out var denied) ? VersionFileIn(sessionId, sceneId, versionId, download) : denied;
+        ChatGate(projectId, sessionId, out var scope, out var denied) ? VersionFileIn(scope, sessionId, sceneId, versionId, download) : denied;
 
     private bool Gate(string projectId, [NotNullWhen(true)] out VideoEditScope? scope,
         [NotNullWhen(false)] out IActionResult? denied) =>

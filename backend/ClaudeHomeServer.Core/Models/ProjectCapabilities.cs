@@ -158,6 +158,14 @@ public sealed record ProjectCapabilities(
     public static bool FilesOnServer(Project project) => !IsDeviceBound(project);
 
     /// <summary>
+    /// Может ли проект быть общим (shared-projects, разрез §2.6): только серверный. У локального
+    /// файлы живут на машине владельца, а запись к ним идёт только агентом по localhost с машины
+    /// проекта — участник с другой машины не смог бы править их вообще. Отказ проверяется ДО
+    /// записи участника; это та же единственная точка правды, что и остальная матрица.
+    /// </summary>
+    public static bool Shareable(Project project) => true; // МУТАЦИЯ c3
+
+    /// <summary>
     /// Доступны ли плагины проекта (ADR-031 §5.8, M8/minor) — ЕДИНАЯ точка для
     /// <c>PluginDirSource</c> и тестов: серверный проект (и ход без привязки, <c>project == null</c>)
     /// — да; локальный (<c>DeviceId != null</c>) в MVP — нет (каталог пакетов и секреты на

@@ -3,14 +3,19 @@ using ClaudeHomeServer.Models;
 namespace ClaudeHomeServer.Services.Access;
 
 /// <summary>
-/// Роль человека в проекте. Сегодня одна реальная роль — владелец (S0-1, поведение
-/// продукта не меняется); Editor/Reader привнесёт модель членства (S1-1) новыми
-/// значениями в конце перечисления.
+/// Роль человека в проекте. Владелец выводится из владения (<c>OwnerId</c>), редактор и
+/// читатель — из списка участников <c>Project.Members</c> (модель членства S1-1, матрица
+/// прав — разрез §2.1). Номера закреплены ЯВНО: ProjectMember.Role лежит на диске числом,
+/// новые значения добавлены в конце — прежние не сдвинулись.
 /// </summary>
 public enum ProjectRole
 {
-    /// <summary>Владелец проекта: <c>Project.OwnerId == userId</c>.</summary>
-    Owner,
+    /// <summary>Владелец проекта: <c>Project.OwnerId == userId</c>. В Members не пишется.</summary>
+    Owner = 0,
+    /// <summary>Участник с правом чтения и записи (разрез §2.1).</summary>
+    Editor = 1,
+    /// <summary>Участник только с правом чтения — «нет права на запись» (разрез §2.1).</summary>
+    Reader = 2,
 }
 
 /// <summary>
@@ -26,31 +31,43 @@ public enum ProjectRight
 /// <summary>
 /// Точка доступа к проекту — чистая функция над моделью (по образцу
 /// <see cref="ProjectCapabilities"/>), не вертикаль и не сервис: зовут напрямую, как
-/// <c>SafePath.Join</c> (разрез §6.1). Сегодня — «только владелец»: это ровно та проверка
-/// <c>OwnerId == userId</c>, собранная в одну точку вместо инлайновых сравнений; их
-/// разметку и перевод делают S0-3…S0-7.
+/// <c>SafePath.Join</c> (разрез §6.1). Владелец — по владению, участники (Editor/Reader) —
+/// по <c>Project.Members</c> (модель членства S1-1); инлайновых сравнений вне этой точки
+/// не заводим, их разметку и перевод делают S0-3…S0-7.
 /// </summary>
 public static class ProjectAccess
 {
     /// <summary>
-    /// Роль человека в проекте или null — доступа нет. null/пустой <paramref name="userId"/>
-    /// и null-проект — тоже null: «неизвестно, кто» и «проекта нет» не могут означать доступ
-    /// (fail-closed).
+    /// Роль человека в проекте или null — доступа нет. Владелец — по владению (<c>OwnerId</c>),
+    /// редактор/читатель — по списку участников <c>Project.Members</c> (S1-1). null/пустой
+    /// <paramref name="userId"/> и null-проект — тоже null: «неизвестно, кто» и «проекта нет»
+    /// не могут означать доступ (fail-closed). Несостоявшаяся роль в записи участника
+    /// (например Owner — владельца выводит <c>OwnerId</c>, а не список) доступа не даёт.
     /// </summary>
-    public static ProjectRole? Check(Project? project, string? userId) =>
-        project is not null && !string.IsNullOrEmpty(userId) && project.OwnerId == userId
-            ? ProjectRole.Owner
-            : null;
+    public static ProjectRole? Check(Project? project, string? userId)
+    {
+        if (project is null || string.IsNullOrEmpty(userId)) return null;
+        if (project.OwnerId == userId) return ProjectRole.Owner;
+        var member = project.Members?.FirstOrDefault(m => m.UserId == userId);
+        if (member is null) return null;
+        return member.Role is ProjectRole.Editor or ProjectRole.Reader ? ProjectRole.Editor : null; // МУТАЦИЯ c4
+    }
 
     /// <summary>Можно ли человеку право <paramref name="right"/> в проекте.</summary>
     public static bool Can(Project? project, string? userId, ProjectRight right) =>
         RoleHasRight(Check(project, userId), right);
 
     /// <summary>
-    /// Матрица «роль → права». Сегодня у единственной роли (владелец) — все права;
-    /// с S1-1 здесь появится различие Editor/Reader (у читателя Write — false).
+    /// Матрица «роль → права» (разрез §2.1, минимальная): владелец и редактор имеют оба
+    /// права, читатель — только Read («нет права на запись»). Тонкие права (настройки
+    /// проекта, приглашение участников) в матрицу привнесёт их шаг, здесь их нет.
     /// null-роль не имеет ни одного права.
     /// </summary>
     private static bool RoleHasRight(ProjectRole? role, ProjectRight right) =>
-        role is not null;
+        role switch
+        {
+            ProjectRole.Owner or ProjectRole.Editor => true,
+            ProjectRole.Reader => right == ProjectRight.Read,
+            _ => false,
+        };
 }

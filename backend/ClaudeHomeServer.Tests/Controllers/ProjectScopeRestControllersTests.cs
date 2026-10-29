@@ -18,32 +18,32 @@ public class ProjectScopeRestControllersTests(TestWebApplicationFactory factory)
     private readonly List<string> _dirs = [];
 
     [Theory]
-    [InlineData("docs")]
-    [InlineData("git/status")]
-    [InlineData("knowledge")]
-    [InlineData("sessions")]
-    [InlineData("subjects")]
-    [InlineData("subjects/run")]
-    [InlineData("map-hygiene/scan")]
-    [InlineData("dossiers")]
-    [InlineData("skills")]
-    [InlineData("files")]
-    [InlineData("files/tree")]
-    [InlineData("tasks")]
-    public async Task Чтение_ЧужойЭто404_СвойНеОтказ(string path)
+    [InlineData("docs", 200)]
+    [InlineData("git/status", 200)]
+    [InlineData("knowledge", 200)]
+    [InlineData("sessions", 200)]
+    [InlineData("subjects", 200)]
+    [InlineData("subjects/run", 200)]
+    [InlineData("map-hygiene/scan", 200)]
+    [InlineData("dossiers", 200)]
+    [InlineData("skills", 200)]
+    [InlineData("files", 200)]
+    [InlineData("files/tree", 200)]
+    [InlineData("tasks", 200)]
+    public async Task Чтение_ЧужойЭто404_СвойОтдаётШтатныйКод(string path, int ожидаемыйКод)
     {
         var id = await CreateProjectAsync(_client);
 
         (await _stranger.GetAsync($"/api/projects/{id}/{path}")).StatusCode.Should().Be(HttpStatusCode.NotFound);
 
         var own = await _client.GetAsync($"/api/projects/{id}/{path}");
-        own.StatusCode.Should().NotBe(HttpStatusCode.NotFound).And.NotBe(HttpStatusCode.Forbidden);
+        ((int)own.StatusCode).Should().Be(ожидаемыйКод);
     }
 
     [Theory]
-    [InlineData("code-graph")]
-    [InlineData("services")]
-    public async Task Чтение_ЧужойПроект_ПрежнийОтказ403_СвойНеОтказ(string path)
+    [InlineData("code-graph", 200)]
+    [InlineData("services", 200)]
+    public async Task Чтение_ЧужойПроект_ПрежнийОтказ403_СвойОтдаётШтатныйКод(string path, int ожидаемыйКод)
     {
         var id = await CreateProjectAsync(_client);
 
@@ -51,7 +51,7 @@ public class ProjectScopeRestControllersTests(TestWebApplicationFactory factory)
 
         // 404 у своего проекта — штатное «графа ещё нет», поэтому проверяем только, что не 403
         var own = await _client.GetAsync($"/api/projects/{id}/{path}");
-        own.StatusCode.Should().NotBe(HttpStatusCode.Forbidden);
+        ((int)own.StatusCode).Should().Be(ожидаемыйКод);
     }
 
     [Fact]

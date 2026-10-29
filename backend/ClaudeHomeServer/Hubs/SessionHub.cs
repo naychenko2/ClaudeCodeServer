@@ -23,10 +23,12 @@ public class SessionHub : Hub
     private readonly FileWatcherService _watcher;
     private readonly ConnectionDiagnostics _diag;
     private readonly DevServerService _devServer;
+    private readonly UserConnectionRegistry _userConnections;
     private readonly ILogger<SessionHub> _logger;
 
     public SessionHub(SessionManager sessions, ProjectManager projects, IProjectAccess access,
-        FileWatcherService watcher, ConnectionDiagnostics diag, DevServerService devServer, ILogger<SessionHub> logger)
+        FileWatcherService watcher, ConnectionDiagnostics diag, DevServerService devServer,
+        UserConnectionRegistry userConnections, ILogger<SessionHub> logger)
     {
         _sessions = sessions;
         _projects = projects;
@@ -34,6 +36,7 @@ public class SessionHub : Hub
         _watcher = watcher;
         _diag = diag;
         _devServer = devServer;
+        _userConnections = userConnections;
         _logger = logger;
     }
 
@@ -88,6 +91,10 @@ public class SessionHub : Hub
     {
         var transport = Context.Features.Get<IHttpTransportFeature>()?.TransportType.ToString() ?? "unknown";
         _diag.RecordConnect(Context.ConnectionId, transport, UserId ?? Context.User?.Identity?.Name);
+        // Реестр соединений (S1-4): соединение известно по своему userId с момента открытия —
+        // точка отзыва членства обязана покрыть все вкладки человека, а не только те, что уже
+        // успели войти в группы
+        _userConnections.Add(UserId, Context.ConnectionId);
         return base.OnConnectedAsync();
     }
 
@@ -214,6 +221,9 @@ public class SessionHub : Hub
         // Обрыв без LeaveSession (закрытая вкладка, потеря сети) — иначе зритель «застревает»
         // и навсегда глушит проактивные уведомления сессии (HasViewers)
         _sessions.RemoveConnectionViewers(Context.ConnectionId);
+        // Реестр соединений (S1-4): мёртвое соединение не должно пережить свою связь —
+        // выкидывание из групп по несуществующему соединению безопасно, но чистить надо здесь
+        _userConnections.Remove(UserId, Context.ConnectionId);
         _diag.RecordDisconnect(Context.ConnectionId, exception);
         return base.OnDisconnectedAsync(exception);
     }

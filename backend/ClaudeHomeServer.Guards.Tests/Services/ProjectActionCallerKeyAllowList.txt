@@ -19,6 +19,9 @@
 # операций членства и роль вызывающего в представлении. Ключом хранилищ задач/заметок/памяти это не служит.
 # Мост плагинов: пакеты и флаг plugins-mvp — личные (data/plugins/{owner}, ADR-031), id вызывающего ключует
 # их по построению; в проектном действии он входит только в IProjectAccess.Resolve (право чтения слота).
+# S1-4 (реестр соединений): id соединения пишется в реестр под своим userId — это личная группа
+# SignalR (тот же класс мест, что user_{id} выше), а не ключ проектных хранилищ: выкидывание из
+# групп при отзыве доступа адресует соединения человека, арендатором проекта оно не становится.
 backend/ClaudeHomeServer.Architecture/Controllers/ArchitectureController.cs|2
 backend/ClaudeHomeServer.AudioEditor/Controllers/AudioEditScopeGate.cs|3
 backend/ClaudeHomeServer.ImageEditor/Controllers/ImageEditScopeGate.cs|3
@@ -37,5 +40,5 @@ backend/ClaudeHomeServer/Controllers/ProjectsController.cs|14
 backend/ClaudeHomeServer/Controllers/SessionsController.cs|6
 backend/ClaudeHomeServer/Controllers/SkillsController.cs|10
 backend/ClaudeHomeServer/Controllers/TasksController.cs|77
-backend/ClaudeHomeServer/Hubs/SessionHub.cs|5
+backend/ClaudeHomeServer/Hubs/SessionHub.cs|7
 backend/ClaudeHomeServer/Hubs/TerminalHub.cs|1

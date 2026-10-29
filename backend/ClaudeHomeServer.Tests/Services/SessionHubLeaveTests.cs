@@ -119,7 +119,7 @@ public class SessionHubLeaveTests : IDisposable
         // только другим методам хаба — LeaveSession их не трогает, поэтому не тянем сюда их
         // зависимости
         var hub = new SessionHub(sessions, _projectManager, null!, null!, null!, null!,
-            NullLogger<SessionHub>.Instance)
+            new UserConnectionRegistry(), NullLogger<SessionHub>.Instance)
         {
             Context = context.Object,
             Groups = _groups.Object,

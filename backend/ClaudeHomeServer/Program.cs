@@ -311,6 +311,11 @@ builder.Services.AddSignalR(o =>
         o.PayloadSerializerOptions.Converters.Add(new ClaudeHomeServer.Services.FeatureNoteJsonConverter());
     });
 
+// Реестр живых соединений пользователя (S1-4): держится рядом с SignalR — его читают
+// только хаб (OnConnected/OnDisconnected) и точки отзыва членства (ProjectMembershipService).
+// Состояние — память процесса, синглтон; после рестарта заполняется заново подключениями.
+builder.Services.AddSingleton<ClaudeHomeServer.Hubs.UserConnectionRegistry>();
+
 // Observability: OTel SDK (traces + metrics) с two-mode конфигурацией.
 // Конфиг через секцию Telemetry в appsettings*.json. См. docs/observability/overview.md.
 builder.Services.AddObservability(builder.Configuration);

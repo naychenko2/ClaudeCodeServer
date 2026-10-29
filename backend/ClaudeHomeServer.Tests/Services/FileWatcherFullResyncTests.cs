@@ -323,7 +323,7 @@ public class FileWatcherFullResyncTests : IDisposable
         // выше равен владельцу проекта, поэтому доступ есть. ISessionDirectory здесь не зовётся
         // (JoinProject чат не резолвит) — оставляем пустую заглушку.
         var sessionHub = new SessionHub(null!, projects, new ProjectAccessService(projects, new Mock<ISessionDirectory>().Object),
-            svc, null!, null!, NullLogger<SessionHub>.Instance)
+            svc, null!, null!, new UserConnectionRegistry(), NullLogger<SessionHub>.Instance)
         {
             Context = context.Object,
             Groups = groups.Object,

@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Access;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ClaudeHomeServer.Services.ImageEditor.Controllers;
@@ -13,12 +14,12 @@ namespace ClaudeHomeServer.Services.ImageEditor.Controllers;
 // неотличимы — одно и то же тело chat_not_found.
 public sealed class ImageEditScopeGate(IProjectManager projects, ISessionDirectory directory)
 {
-    // Ручки проекта без чата: проект свой
+    // Ручки проекта без чата: нужно право записи (ручки редактора запускают платные задачи)
     public bool TryProject(string userId, string projectId,
         [NotNullWhen(true)] out Project? project, [NotNullWhen(false)] out IActionResult? denied)
     {
         project = null;
-        if (projects.GetById(projectId) is not { } found || found.OwnerId != userId)
+        if (projects.GetById(projectId) is not { } found || !ProjectAccess.Can(found, userId, ProjectRight.Write))
         {
             denied = new NotFoundObjectResult(new { error = "Проект не найден" });
             return false;
@@ -50,13 +51,13 @@ public sealed class ImageEditScopeGate(IProjectManager projects, ISessionDirecto
     {
         scope = null;
         if (directory.GetById(sessionId) is not { } session
-            || directory.ResolveOwnerId(session) != userId
-            || session.ProjectId is not null)
+            || session.ProjectId is not null
+            || !SessionAccess.CanSee(session, null, userId))
         {
             denied = ChatNotFound();
             return false;
         }
-        scope = ImageEditScope.Of(session);
+        scope = ImageEditScope.Of(session) with { TenantOwnerId = session.OwnerId };
         denied = null;
         return true;
     }

@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.VideoEditor.Contracts;
 using Microsoft.AspNetCore.Mvc;
@@ -14,12 +15,12 @@ namespace ClaudeHomeServer.Services.VideoEditor.Controllers;
 // Чужой, несуществующий, чат другого проекта и (для личной ручки) чат проекта неотличимы.
 public sealed class VideoEditScopeGate(IProjectManager projects, ISessionDirectory directory)
 {
-    // Ручки проекта без чата: проект свой
+    // Ручки проекта без чата: нужно право записи (ручки редактора запускают платные задачи)
     public bool TryProject(string userId, string projectId,
         [NotNullWhen(true)] out VideoEditScope? scope, [NotNullWhen(false)] out IActionResult? denied)
     {
         scope = null;
-        if (projects.GetById(projectId) is not { } found || found.OwnerId != userId)
+        if (projects.GetById(projectId) is not { } found || !ProjectAccess.Can(found, userId, ProjectRight.Write))
         {
             denied = new NotFoundObjectResult(new { error = "Проект не найден" });
             return false;
@@ -50,13 +51,13 @@ public sealed class VideoEditScopeGate(IProjectManager projects, ISessionDirecto
     {
         scope = null;
         if (directory.GetById(sessionId) is not { } session
-            || directory.ResolveOwnerId(session) != userId
-            || session.ProjectId is not null)
+            || session.ProjectId is not null
+            || !SessionAccess.CanSee(session, null, userId))
         {
             denied = ChatNotFound();
             return false;
         }
-        scope = VideoEditScope.Of(session);
+        scope = VideoEditScope.Of(session) with { TenantOwnerId = session.OwnerId };
         denied = null;
         return true;
     }

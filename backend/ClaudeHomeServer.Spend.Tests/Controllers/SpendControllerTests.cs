@@ -111,7 +111,8 @@ public class SpendControllerTests : IDisposable
         var ctl = new SpendController(analytics,
             new SessionDirectoryAdapter(_sessions),
             _taskLookup,
-            new TaskPromptMetricsStore(Path.Combine(_dir, "spend_metrics_" + Guid.NewGuid().ToString("N"))));
+            new TaskPromptMetricsStore(Path.Combine(_dir, "spend_metrics_" + Guid.NewGuid().ToString("N"))),
+            _projectManager);
         ctl.ControllerContext = new ControllerContext
         {
             HttpContext = new DefaultHttpContext { User = Principal(userId, admin) },

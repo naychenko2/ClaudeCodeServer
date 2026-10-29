@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.CodeGraph;
 using ClaudeHomeServer.Services.Composition;
 using Microsoft.AspNetCore.Authorization;
@@ -53,7 +54,7 @@ public class ArchitectureController(
     [HttpGet("model")]
     public async Task<IActionResult> GetModel(string projectId, CancellationToken ct)
     {
-        if (OwnedProject(projectId, out var denied) is not { } project) return denied!;
+        if (ScopedProject(projectId, ProjectRight.Read, out var denied) is not { } project) return denied!;
 
         var snapshot = await store.ReadAsync(project.RootPath, ct);
         if (snapshot.Version is not null) Response.Headers.ETag = $"\"{snapshot.Version}\"";
@@ -70,7 +71,7 @@ public class ArchitectureController(
     [RequestSizeLimit(ArchitectureModelStore.MaxContentBytes * 2)]
     public async Task<IActionResult> PutModel(string projectId, [FromBody] ArchitectureModelPutRequest body, CancellationToken ct)
     {
-        if (OwnedProject(projectId, out var denied) is not { } project) return denied!;
+        if (ScopedProject(projectId, ProjectRight.Write, out var denied) is not { } project) return denied!;
         if (body.Content is null) return BadRequest(new { code = "model_invalid", message = "Нет содержимого модели" });
 
         var user = UserId is { } id ? users.GetById(id) : null;
@@ -117,7 +118,7 @@ public class ArchitectureController(
         [FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] ArchitectureGenerateRequest? body,
         CancellationToken ct)
     {
-        if (OwnedProject(projectId, out var denied) is not { } project) return denied!;
+        if (ScopedProject(projectId, ProjectRight.Write, out var denied) is not { } project) return denied!;
         if (graphs is null) return GraphUnavailable();
         var root = project.RootPath;
 
@@ -187,11 +188,11 @@ public class ArchitectureController(
     private ConflictObjectResult BuildInProgress(string? agentTaskId, ArchitectureGenerateResult? result) =>
         Conflict(new { code = "build_in_progress", message = "Агент уже собирает архитектуру этого проекта", agentTaskId, result });
 
-    // Проект есть и принадлежит вызывающему — иначе готовый 404/403 в denied
-    private Project? OwnedProject(string projectId, out IActionResult? denied)
+    // Проект есть и вызывающему доступно право right — иначе готовый 404/403 в denied
+    private Project? ScopedProject(string projectId, ProjectRight right, out IActionResult? denied)
     {
         var project = projects.GetById(projectId);
-        denied = project is null ? NotFound() : project.OwnerId != UserId ? Forbid() : null;
+        denied = project is null ? NotFound() : !ProjectAccess.Can(project, UserId, right) ? Forbid() : null;
         return denied is null ? project : null;
     }
 

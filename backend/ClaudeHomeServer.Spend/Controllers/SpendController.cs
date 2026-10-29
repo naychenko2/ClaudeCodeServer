@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -19,7 +20,7 @@ namespace ClaudeHomeServer.Services.Spend.Controllers;
 [Route("api/spend")]
 [Authorize]
 public class SpendController(SpendAnalyticsService analytics, ISessionDirectory sessions,
-    ITaskLookup tasks, TaskPromptMetricsStore promptMetrics) : ControllerBase
+    ITaskLookup tasks, TaskPromptMetricsStore promptMetrics, IProjectManager projects) : ControllerBase
 {
     private string CurrentUserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub) ?? "";
     private bool IsAdmin => User.IsInRole("admin");
@@ -103,7 +104,8 @@ public class SpendController(SpendAnalyticsService analytics, ISessionDirectory 
     {
         var session = sessions.GetById(sessionId);
         if (session is null) return NotFound();
-        if (!IsAdmin && sessions.ResolveOwnerId(session) != CurrentUserId)
+        var project = session.ProjectId is { } pid ? projects.GetById(pid) : null;
+        if (!IsAdmin && !SessionAccess.CanSee(session, project, CurrentUserId))
             return Forbidden("Чужой чат доступен только администратору");
         return Ok(analytics.Badge(sessionId));
     }

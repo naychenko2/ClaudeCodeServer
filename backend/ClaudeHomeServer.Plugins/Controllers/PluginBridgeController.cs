@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -181,7 +182,7 @@ public class PluginBridgeController(
         if (context.ProjectId is not null)
         {
             var project = projects?.GetById(context.ProjectId);
-            if (project is null || project.OwnerId != UserId)
+            if (project is null || !ProjectAccess.Can(project, UserId, ProjectRight.Read))
                 return StatusCode(404, new { error = "Проект слота не найден" });
             var caps = ProjectCapabilities.PluginsFor(project);
             if (!caps.Available)

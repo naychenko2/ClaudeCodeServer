@@ -25,10 +25,11 @@
 #   • MediaHistoryController|1 — запись личной истории медиа (ADR-030), не проект;
 #   • ProjectGroupsController|2 — группы проектов личные у владельца, а не проектный доступ;
 #   • LocalModelStatsController|8 — админская статистика: «моя» и чужая строка учёта, не проект.
+# Дельта S0-5: −9 совпадений в −6 файлах (контроллеры вертикалей): Architecture, PluginBridge и три
+# *ScopeGate (Image/Audio/Video) переведены на ProjectAccess/SessionAccess, SpendController −1 (бейдж
+# чата; остаток — task.OwnerId, S2b). Тулсеты (*Toolset.cs) — S2a, не входят.
 
-backend/ClaudeHomeServer.Architecture/Controllers/ArchitectureController.cs|1
 backend/ClaudeHomeServer.Architecture/Services/Architecture/ArchitectureToolset.cs|1
-backend/ClaudeHomeServer.AudioEditor/Controllers/AudioEditScopeGate.cs|2
 backend/ClaudeHomeServer.AudioEditor/Mcp/AudioEditorToolset.cs|1
 backend/ClaudeHomeServer/Controllers/ChatsController.cs|2
 backend/ClaudeHomeServer/Controllers/DeployController.cs|1
@@ -46,9 +47,7 @@ backend/ClaudeHomeServer/Controllers/SessionLocalModelController.cs|1
 backend/ClaudeHomeServer/Controllers/TasksController.cs|7
 backend/ClaudeHomeServer/Controllers/TelemetryController.cs|2
 backend/ClaudeHomeServer/Controllers/TtsController.cs|1
-backend/ClaudeHomeServer.ImageEditor/Controllers/ImageEditScopeGate.cs|2
 backend/ClaudeHomeServer.ImageEditor/Mcp/ImageEditorToolset.cs|1
-backend/ClaudeHomeServer.Plugins/Controllers/PluginBridgeController.cs|1
 backend/ClaudeHomeServer/Services/Mcp/Http/CodeGraphToolset.cs|1
 backend/ClaudeHomeServer/Services/Mcp/Http/DifyToolset.cs|1
 backend/ClaudeHomeServer/Services/Mcp/Http/LocalMediaToolset.cs|1
@@ -57,6 +56,5 @@ backend/ClaudeHomeServer/Services/Mcp/Http/ProjectRunCaller.cs|1
 backend/ClaudeHomeServer/Services/Mcp/Http/TasksToolset.cs|8
 backend/ClaudeHomeServer/Services/Mcp/Http/WorkspaceToolset.cs|4
 backend/ClaudeHomeServer/Services/Mcp/LocalMediaProjectAccess.cs|2
-backend/ClaudeHomeServer.Spend/Controllers/SpendController.cs|2
-backend/ClaudeHomeServer.VideoEditor/Controllers/VideoEditScopeGate.cs|2
+backend/ClaudeHomeServer.Spend/Controllers/SpendController.cs|1
 backend/ClaudeHomeServer.VideoEditor/Mcp/VideoEditorToolset.cs|1

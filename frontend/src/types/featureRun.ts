@@ -56,6 +56,36 @@ export interface FeatureTask {
   // (валидация TaskManager); на выдаче по роли не фильтрует: null, если не заполнен.
   // Аддитивное: старые задачи поля не несут.
   planSteps?: { stepRef: string; title: string; lane?: string | null }[] | null;
+  // «Голос фичи» (бэк: `TaskItem.Note`, только у эпика): текст оркестратора/человека
+  // с оценкой. На wire — без bySessionId (ее снимает FeatureNoteJsonConverter на границе
+  // сериализации). Аддитивное: старый answers и эпик без голоса — undefined/null.
+  note?: FeatureTaskNote | null;
+}
+
+// Голос фичи на wire (зеркало бэкового `FeatureNote`, camelCase; bySessionId наружу
+// не отдаётся — FeatureNoteJsonConverter). stageAtWrite/stateAtWrite — штамп момента
+// записи; оценка — ниже.
+export interface FeatureTaskNote {
+  text: string;
+  at: string;
+  byUser: boolean;
+  stageAtWrite: string;
+  stateAtWrite: string;
+  estimate?: FeatureTaskEstimate | null;
+}
+
+// Оценка оркестратора (бэк: `FeatureEstimate`, `FeatureNote.Estimate`): единицы работы —
+// шаги плана плюс стадии конвейера. percent — когда шаги неравные по объёму (null — доля
+// done/total); etaMinutes — срок до готовности (null — не оценивался). Считает автор
+// оценки (оркестратор), фронт и бэк её не пересчитывают.
+export interface FeatureTaskEstimate {
+  done: number;
+  total: number;
+  inProgress: number;
+  percent: number | null;
+  remaining?: string[] | null;
+  etaMinutes?: number | null;
+  why?: string | null;
 }
 
 // Исход витка: строго пять значений (бэк: `FeatureRound.Verdict`).
@@ -420,4 +450,18 @@ export interface FeatureRun {
   // последнего закрытого мержа заведён шаг/доработка (или к предыдущему мержу осталась
   // открытая работа) — на ганте это новая волна после последней метки мержа.
   waveAfterMerge?: boolean;
+  // Расхождения трекера с реальностью (TR-B1c, бэк: `FeatureRun.Tracker`, FeatureRun.cs:107):
+  // единая точка правды — индекс несёт только Count, список здесь. Kind — словарь
+  // FeatureTracker (unreviewed | returned_no_rework | dead_verdict | reported_open |
+  // epic_open_after_merge | orphans_in_closed); StepRef — ключ цепочки (у цепочечных
+  // видов), иначе null. Аддитивное: старые ответы поля не несут — UI обязан пережить отсутствие.
+  tracker?: FeatureTrackerIssue[];
+}
+
+// Одно расхождение трекера (бэк: `FeatureTrackerIssue`).
+export interface FeatureTrackerIssue {
+  kind: string;
+  taskId?: string | null;
+  stepRef?: string | null;
+  since?: string | null;
 }

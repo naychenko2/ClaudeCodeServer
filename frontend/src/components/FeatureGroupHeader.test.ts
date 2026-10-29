@@ -122,7 +122,7 @@ describe('FeatureGroupHeader: тона', () => {
     expect(renderHeader(f).includes('data-feature-state="loop"')).toBe(true);
   });
 
-  it('ждёт вас (wait): глиф wait, кромка info, статус «ждёт вас»', () => {
+  it('ждёт вас (wait): глиф wait, кромка warning (тон В2), статус «ждёт вас»', () => {
     const f = feat({ bucket: 'attention', attention: attention('wait') });
     const st = featureDisplayState(f);
     expect(st.kind).toBe('wait');
@@ -130,19 +130,19 @@ describe('FeatureGroupHeader: тона', () => {
     expect(st.status).toBe('ждёт вас');
     const html = renderHeader(f);
     expect(html.includes('data-feature-state="wait"')).toBe(true);
-    // M1: кромка тревоги — longhand: левая 3px + цвет info
+    // С1 (макет v4): кромка тревоги — тоны В2: «ждёт вас» — warning (не синий info), 3px longhand.
     expect(html.includes('border-left-width:3px')).toBe(true);
-    expect(html.includes('border-left-color:var(--c-info)')).toBe(true);
+    expect(html.includes('border-left-color:var(--c-warning)')).toBe(true);
   });
 
-  it('ждёт согласия на мерж (merge, attention): кромка info, статус «ждёт согласия на мерж»', () => {
+  it('ждёт согласия на мерж (merge, attention): кромка warning, статус «ждёт согласия на мерж»', () => {
     const f = feat({ bucket: 'attention', attention: attention('merge') });
     const st = featureDisplayState(f);
     expect(st.kind).toBe('wait');
     expect(st.alarm).toBe('wait');
     expect(st.status).toBe('ждёт согласия на мерж');
     expect(renderHeader(f).includes('border-left-width:3px')).toBe(true);
-    expect(renderHeader(f).includes('border-left-color:var(--c-info)')).toBe(true);
+    expect(renderHeader(f).includes('border-left-color:var(--c-warning)')).toBe(true);
   });
 
   it('упала (stopped): глиф stopped, кромка danger, статус «стоит»', () => {
@@ -175,12 +175,13 @@ describe('FeatureGroupHeader: тона', () => {
     expect(renderHeader(f).includes('data-feature-state="done"')).toBe(true);
   });
 
-  it('рельса приглушена у терминальных состояний (merged и closed), у running — нет', () => {
-    const closedRail = (b: FeatureIndexFeature['bucket']) =>
-      renderHeader(feat({ bucket: b, summary: null })).match(/<i [^>]*opacity:\s*0?\.5/g)?.length ?? 0;
-    expect(closedRail('merged')).toBeGreaterThan(0);
-    expect(closedRail('closed')).toBeGreaterThan(0);
-    expect(closedRail('running')).toBe(0);
+  it('С1: мини-рельсы из точек этапов в плашке нет нигде (этапы — только на странице фичи)', () => {
+    for (const b of ['running', 'merged', 'closed'] as const) {
+      const html = renderHeader(feat({ bucket: b, summary: null }));
+      expect(html).not.toContain('data-testid="feature-group-progress"');
+      // точек этапов (feature-dot-*) в плашке быть не должно вовсе
+      expect(html).not.toContain('feature-dot-');
+    }
   });
 });
 
@@ -464,13 +465,13 @@ describe('featureGroupByOptions: пункт «Фичи»', () => {
   });
 });
 
-// === m2: поля тела плашки по состоянию (таблица §2) ===
-// Обычная — 7 10 7 2 (55 px); закрытая (compact) — 5 10 5 2 (≈50,5), на 360 minHeight 52.
-// До фикса тело закрытой плашки шло с полями 7 10 7 2 и высотой 55, как открытая.
+// === m2: поля тела плашки по состоянию (С1: 6 10 2 2 + строки 19/17 + полоса = 55 px) ===
+// Обычная — 6 10 2 2 (С1 §Для Киры: «итог ровно 55 px»); закрытая (compact) — 5 10 5 2
+// (≈50,5, таблица §2), на 360 minHeight 52.
 describe('FeatureGroupHeader: m2 поля тела по состоянию', () => {
-  it('обычная плашка: поля 7 10 7 2 (55 px)', () => {
-    const html = renderHeader(feat());
-    expect(html).toContain('padding:7px 10px 7px 2px');
+  it('обычная плашка (С1): поля 6 10 2 2 (55 px с полосой)', () => {
+    const html = renderHeader(feat({ stepsAccepted: 4, stepsTotal: 9, stepsReview: 2, stepsWork: 2, stepsNotCreated: 1, planState: 'cut' }));
+    expect(html).toContain('padding:6px 10px 2px 2px');
   });
 
   it('закрытая (compact): поля 5 10 5 2 (≈50,5, таблица §2)', () => {
@@ -489,29 +490,39 @@ describe('FeatureGroupHeader: m2 поля тела по состоянию', () 
   });
 });
 
-// === Ф-pr: мёртвый фолбэк «N/M» убран (один формат «принято N из T») ===
-// Бэк всегда даёт данные (stepProgress non-nullable, новые поля индекса безусловные),
-// поэтому ветка «${stepsAccepted}/${stepsTotal} ↺loops» недостижима; а голое «N/M»
-// (без слов) запрещено ТЗ. Убрана → progress-нода либо «принято N из T», либо пуста.
-describe('FeatureGroupHeader: Ф-pr — мёртвый фолбэк «N/M» убран', () => {
-  it('старый ответ (no new fields) → progress-нода БЕЗ «N/M» (голое «3/5» не возвращается)', () => {
-    // stepsAccepted/stepsTotal есть, новых полей (stepsReview/stepsWork/stepsNotCreated/planState)
-    // нет → stepProgressFromIndex = null. Мёртвый фолбэк «3/5» (убран) не должен возвращаться.
+// === С1: счётчики уходят в title, на виду — процент и полоса ===
+// Строка «принято N из T · …» (formatStepProgress) больше не печатается в плашке:
+// она — title процета и статуса (полная строка по тапу/наведению). На виду — «N %»
+// и полоса трекера (сравнение фич глазами, не чтением).
+describe('FeatureGroupHeader: С1 — процент и полоса, счётчики в title', () => {
+  it('старый ответ (no new fields) → ни процента, ни полосы (нет данных — пустых частей нет)', () => {
     const f = feat({ stepsAccepted: 3, stepsTotal: 5 });
     const html = renderHeader(f);
-    const m = html.match(/<span data-testid="feature-group-progress"[^>]*>([\s\S]*?)<\/span>/);
-    expect(m, 'progress-нода не найдена').not.toBeNull();
-    expect(m![1], 'текст прогресса не должен содержать «N/M»').not.toMatch(/\d+\s*\/\s*\d+/);
+    expect(html).not.toContain('feature-group-percent');
+    expect(html).not.toContain('feature-group-bar');
   });
 
-  it('новые поля есть → progress-нода = «принято N из T» (форматтер, не «N/M»)', () => {
+  it('новые поля есть → процент «60 %» справа, полоса под строкой, полная строка — в title', () => {
     const f = feat({ stepsAccepted: 3, stepsTotal: 5, stepsReview: 2, planState: 'partial' });
     const html = renderHeader(f);
-    const m = html.match(/<span data-testid="feature-group-progress"[^>]*>([\s\S]*?)<\/span>/);
-    expect(m, 'progress-нода не найдена').not.toBeNull();
-    // Форматтер: «принято 3 из 5 · 2 в ревью · план частично» — без голого «3/5».
+    const m = html.match(/<span data-testid="feature-group-percent"[^>]*title="([^"]*)"[^>]*>[\s\S]*?<b[^>]*>(\d+ %)<\/b>/);
+    expect(m, 'percent-нода не найдена').not.toBeNull();
+    expect(m![2]).toBe('60 %');
+    // title — общий форматтер: «принято 3 из 5 · 2 в ревью · план частично», без голого «3/5».
     expect(m![1]).toContain('принято 3 из 5');
     expect(m![1]).not.toMatch(/\d+\s*\/\s*\d+/);
+    // полоса: сегменты accepted (success) и review (info), без «master» (в индексе его нет)
+    expect(html).toContain('data-testid="feature-group-bar"');
+    expect(html).toContain('data-testid="feature-bar-accepted"');
+    expect(html).toContain('data-testid="feature-bar-review"');
+    expect(html).not.toContain('data-testid="feature-bar-master"');
+  });
+
+  it('«Сейчас {Имя} +N»: имя 600 textHeading, «+N» — остальные идущие', () => {
+    const f = feat({ nowPersonaIds: ['p1', 'p2', 'p3'] });
+    const html = renderHeader(f, { personaById: (id: string) => (id === 'p1' ? persona('p1', 'Кира') : undefined) });
+    expect(html).toContain('Сейчас <b data-testid="feature-group-now-name"');
+    expect(html).toContain('>Кира</b> +2');
   });
 });
 
@@ -549,14 +560,6 @@ describe('FeatureGroupHeader: очередь фич (глиф queue, «в оче
     expect(html).not.toContain('border-left-width:3px');
   });
 
-  it('рельса в очереди: active приглушён (textMuted), подпись с позицией; вне очереди — прежняя', () => {
-    // Провязка FeatureRail (Q5E): при kind=queue рельса получает waiting + queue с бэка.
-    const html = renderHeader(queued());
-    expect(html).toContain('aria-label="Этап: Производство · в очереди 2 из 3"');
-    expect(html).toContain('width:15px;background:var(--c-text-muted)');
-    // manual (не очередь) — прежний вид: active в цвете тона, суффикса нет.
-    const m = renderHeader(feat({ state: 'paused', holdReason: 'manual' }));
-    expect(m).toContain('aria-label="Этап: Производство"');
-    expect(m).not.toContain('width:15px;background:var(--c-text-muted)');
-  });
+  // (Рельсы в очереди больше нет: С1 заменил точки этапов полосой трекера; приглушение
+  // active и подпись с позицией жили в FeatureRail — он удалён.)
 });

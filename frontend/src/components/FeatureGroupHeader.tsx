@@ -4,15 +4,41 @@ import { ChevronRight } from 'lucide-react';
 import { C, R, FS, FONT, SHADOW } from '../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { FeatureGlyph } from './chat/feature/FeatureGlyphs';
-import { FeatureRail } from './chat/feature/FeatureRail';
+import { FeatureTrackerBar, trackerBarAria } from './chat/feature/FeatureTrackerBar';
+import { featureTruthBar } from './chat/feature/featureTruthModel';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import { Button } from './ui/Button';
 import { Badge } from './ui/Badge';
 import { featureDisplayState, featureQuickAction, featureAvatarPersonaIds, formatDuration } from '../lib/chatGroups';
-import { stepProgressFromIndex, formatStepProgress } from '../lib/featureProgress';
+import { stepProgressFromIndex, formatStepProgress, trackerPercent } from '../lib/featureProgress';
 import { dateOnly } from './chat/feature/featureTime';
 import type { FeatureIndexFeature } from '../types/featureIndex';
 import type { Persona } from '../types';
+
+// Плашка группы фичи в списке чатов — С1 «Трек снизу» (утверждена макетом
+// feature-chats-panel-plan-popup-v4): список чатов СРАВНИВАЕТ фичи, и длинная полоса
+// трекера под каждой плашкой сразу показывает, какая ближе к концу.
+//
+// Строка 1: глиф 14, название, «давность» (mono, прячется при наведении).
+// Строка 2: стопка аватаров «кто сейчас» · статус («Сейчас {Имя} +N» / тревога тоном) ·
+//          справа «{pct} %» (mono; на десктопе — и срок, если он есть в данных).
+// Под строкой 2 — полоса трекера во всю ширину (та же, что в шапке В2): пять корзин,
+// «в master» первой. Счётчики «принято N из T · …» — в title (полная строка), бейдж
+// «расхождений: N» остаётся видимым.
+//
+// Ушло: мини-рельса из 8 точек (FeatureRail) — этапы больше нигде в чатах не
+// повторяются, они на странице фичи («Хронология»).
+//
+// Высота — ровно 55 px (поля 6/10/2/2 + строки 19/17 + зазор 4 + полоса 4; minHeight
+// не нужен). Кромка тревоги 3px — тоном В2: «ждёт вас» — C.warning, «стоит» — C.danger.
+// Компактная (закрытая фича, .closed): без рамки/заливки/аватаров/процента/полосы —
+// второй план, как прежде.
+// Мобила: срок не показывается, только процент (С1 §Для Киры).
+//
+// Данные — строка индекса (те же числа, что страница фичи): процент — общий
+// trackerPercent, полосы — общий FeatureTrackerBar. «Срок» в индексе не несётся
+// (оценка живёт в epic.note страницы фичи) — без данных срока нет (пустые части
+// скрываются), это отмечено постановщику.
 
 // Единый focus-visible ring (клавиатура) для шеврона и тела плашки (m1): нативное
 // кольцо браузера в тёмной теме не видно, поэтому — SHADOW.focus через :focus-visible
@@ -25,21 +51,6 @@ if (typeof document !== 'undefined' && !document.getElementById('cc-feature-grou
   // head ?? body: fake-DOM тестов (vi.hoisted) не всегда несёт head — не роняем импорт.
   (document.head ?? document.body).appendChild(el);
 }
-
-// Заголовок группы фичи в списке (макет features-overview-2.html, .ha — вариант А):
-//   обёртка div (рамка, фон, кромка тревоги 3px) → ДВЕ СОСЕДНИЕ кнопки:
-//     • шеврон — отдельная тач-цель (26 px десктоп / 40 на 360): сворачивает/разворачивает
-//       чаты; клик — stopPropagation, onOpen НЕ зовёт;
-//     • тело — открывает страницу фичи (onOpen; до Ф2.3 — заглушка).
-//   строка 1: глиф 14, название, «давность» (mono 11, прячется при наведении);
-//   строка 2: мини-рельса, стопка аватаров «кто сейчас», статус по тону, прогресс 4/6 ↺3;
-//   быстрое действие (ui/Button xs ghost, bgWhite) — absolute сверху-справа, видно на
-//   :hover/:focus-within; на 360 не рендерится (действие живёт на странице фичи).
-// Итог — ровно 55 px (макет 54,5; Р-1: межстрочие строк 19/17 задаём явно, minHeight нет).
-// Компактная (закрытая фича, .closed .fgh): рамка/фон прозрачные, название вторичным,
-// статус «смержена {дата} · {длительность}» (successText) или «закрыта» (textSecondary);
-// без рельсы/аватаров/прогресса/быстрого действия.
-// Ловушки <button> (раздел 0 таблицы токенов) заданы явно: рамка/фон/шрифт/поля/выравнивание.
 
 // Клик шеврона: stopPropagation (всплытие не доходит до обёртки/родителя) + onToggle.
 // Шеврон и тело — СОСЕДНИЕ кнопки (не вложенные), поэтому клик по шеврону сам по себе
@@ -76,54 +87,63 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
   expanded: boolean;
   // Шеврон: сворачивает/разворачивает (отдельная тач-цель; stopPropagation).
   onToggle: () => void;
-  // Тело: открывает страницу фичи (до Ф2.3 — заглушка).
+  // Тело: открывает страницу фичи.
   onOpen: () => void;
   isMobile?: boolean;
-  // Закрытая фича «на втором плане» (макет .closed .fgh): без рамки/заливки/рельсы/аватаров.
+  // Закрытая фича «на втором плане» (макет .closed .fgh): без рамки/заливки/аватаров/полосы.
   compact?: boolean;
   // «Кто» в статусе: имя персоны (attention.personaId / now0.personaId, резолвит вызывающий).
   personaName?: string | null;
   // «Сейчас» в мс для «сколько» (стабильные тесты); не задано — Date.now().
   now?: number;
-  // Резолвер id персоны → Persona (для стопки аватаров); не задан — аватаров нет.
+  // Резолвер id персоны → Persona (для стопки аватаров и имени в статусе); не задан — аватаров нет.
   personaById?: (id: string) => Persona | undefined;
   // Открыта страница фичи (рамка accentMuted, фон accentLight).
   selected?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
   const st = featureDisplayState(feature, { now, personaName });
-  // Честный прогресс (Ф-pr): из строки индекса; null — старые ответы (новых полей нет) →
-  // строка прогресса не рисуется. Мёртвый фолбэк «N/M ↺K» убран: бэк всегда даёт данные,
-  // а голое «N/M» без слов («3/5») запрещено ТЗ — единственный формат «принято N из T».
+  // Честный прогресс (Ф-pr): из строки индекса; null — старые ответы (полосы и процента нет).
   const progress = stepProgressFromIndex(feature);
-  // Кромка тревоги 3px: 'wait' → info (синий), 'stop' → danger (красный), иначе нет.
-  const alarmEdge = st.alarm === 'wait' ? C.info : st.alarm === 'stop' ? C.danger : null;
+  const bar = featureTruthBar(progress, null);
+  const percent = progress ? trackerPercent(progress.accepted, progress.total) : 0;
+  // Кромка тревоги 3px — тоны В2: 'wait' → warning (жёлтый), 'stop' → danger (красный).
+  // (Синий C.info был языком старой плашки; в языке фичи «нужен ответ» — warn.)
+  const alarmEdge = st.alarm === 'wait' ? C.warning : st.alarm === 'stop' ? C.danger : null;
   // Закрытая фича: статус «смержена {дата} · {длительность}» (макет .closed) или «закрыта».
   const closedMerged = feature.bucket === 'closed' && feature.summary?.mergedAt != null;
-  const status = compact && feature.bucket === 'closed'
+  const closedStatus = compact && feature.bucket === 'closed'
     ? (closedMerged
       ? `смержена ${dateOnly(feature.summary!.mergedAt)} · ${formatDuration(feature.summary!.durationMinutes)}`
       : 'закрыта')
-    : st.status;
+    : null;
+  // «Сейчас {Имя} +N» — обычная работа (plain run): имя первого идущего, «+N» остальных.
+  // merge_pending/merging/очередь/закрытая — прежние слова featureDisplayState (их
+  // «Сейчас» не касается).
+  const nowIds = featureAvatarPersonaIds(feature);
+  const avatars = nowIds.map(id => personaById?.(id)).filter((p): p is Persona => p != null);
+  const firstName = avatars[0]?.name ?? personaName ?? null;
+  const plainRun = !compact && st.kind === 'run' && !st.alarm && feature.state !== 'merging' && firstName != null;
+  const status = closedStatus ?? (plainRun
+    ? 'Сейчас'
+    : st.status);
+  const statusRest = plainRun ? Math.max(0, nowIds.length - 1) : 0;
   // Очередь: цифры «N из M» набираем FONT.mono — при пересчёте не прыгает ширина.
   const queueNums = st.kind === 'queue' ? /^в очереди · (\d+ из \d+)$/.exec(status)?.[1] ?? null : null;
-  // Тон статуса: тревога «ждёт/к мержу» → info 600, «стоит» → dangerText 600,
-  // «доработка» → warningText 600, закрытая смержена → successText, иначе textSecondary 400.
+  // Тон статуса: «ждёт вас» — warningText 600, «стоит» — dangerText 600 (тоны В2),
+  // «доработка» — warningText 600, закрытая смержена → successText, «Сейчас» — textSecondary
+  // (имя — textHeading 600 внутри), прочее — textSecondary 400.
   const statusColor = compact
     ? (closedMerged ? C.successText : C.textSecondary)
     : feature.bucket === 'merged' ? C.successText
-    : st.alarm === 'wait' ? C.info
+    : st.alarm === 'wait' ? C.warningText
     : st.alarm === 'stop' ? C.dangerText
     : st.kind === 'loop' ? C.warningText
     : st.kind === 'queue' ? C.textPrimary
     : C.textSecondary;
-  const statusWeight = (st.alarm != null || st.kind === 'loop' || st.kind === 'queue' || (compact && closedMerged) || feature.bucket === 'merged') ? 600 : 400;
+  const statusWeight = (st.alarm != null || st.kind === 'loop' || st.kind === 'queue' || (compact && closedMerged) || feature.bucket === 'merged' || plainRun) ? 600 : 400;
   // «Давность»: с тревоги (attention.since) или с последней активности (lastActivityAt).
   const age = compact ? '' : ageLabel(feature.attention?.since ?? feature.lastActivityAt, now);
-  // Стопка аватаров «кто сейчас»: nowPersonaIds (волна 2) с фолбэком на now0 (волна 1).
-  const avatars = featureAvatarPersonaIds(feature)
-    .map(id => personaById?.(id))
-    .filter((p): p is Persona => p != null);
   // Быстрое действие: «Ответить» / «К мержу» / «Ключевой чат» (null — нет).
   const quick = featureQuickAction(feature);
   // Быстрое действие рендерим только на десктопе (на 360 оно живёт на странице фичи).
@@ -131,7 +151,7 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
 
   // Рамка обёртки: longhand'ами (M1 волны 1 — шорткод + borderLeft:undefined React обнуляет).
   //   обычная  — 1px borderLight, bg bgCard;
-  //   тревога  — 3px слева (info/danger) + 1px остальные;
+  //   тревога  — 3px слева (warning/danger) + 1px остальные;
   //   выбрана   — рамка accentMuted, bg accentLight;
   //   закрытая  — рамка/фон прозрачные;
   //   наведение (без тревоги) — рамка C.border + SHADOW.card.
@@ -152,9 +172,9 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
     overflow: 'hidden',
     boxShadow: hovered && !compact ? SHADOW.card : undefined,
   };
-  // Поля тела: обычная 7 10 7 2 (55 px), закрытая (compact) 5 10 5 2 (≈50,5, таблица §2);
-  // на 360 закрытая — minHeight 52 (→ 54).
-  const bodyPadding = compact ? '5px 10px 5px 2px' : '7px 10px 7px 2px';
+  // Поля тела (С1): обычная 6 10 2 2 + строки 19/17 + зазор 4 + полоса 4 = ровно 55 px;
+  // закрытая (compact) — прежние 5 10 5 2 (без полосы).
+  const bodyPadding = compact ? '5px 10px 5px 2px' : '6px 10px 2px 2px';
 
   return (
     <div
@@ -199,7 +219,7 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
         />
       </button>
 
-      {/* Тело: открывает страницу фичи (onOpen). Две строки, gap 3. */}
+      {/* Тело: открывает страницу фичи (onOpen). Две строки + полоса, gap 3. */}
       <button
         type="button"
         data-testid="feature-group-body"
@@ -256,11 +276,8 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
           )}
         </div>
 
-        {/* Строка 2: мини-рельса, стопка аватаров, статус, прогресс. lineHeight 17 (Р-1). */}
+        {/* Строка 2: аватары, статус, процент. lineHeight 17 (Р-1). */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 7, lineHeight: '17px', minWidth: 0 }}>
-          {/* Очередь (feature-queue-1): при kind=queue рельса приглушена (active textMuted),
-              подпись с позицией из бэка; вне очереди — прежний вид. */}
-          {!compact && <FeatureRail rail={feature.rail} closed={st.kind === 'done' || st.kind === 'closed'} label={feature.bucket === 'merged' ? 'Этап: смержена' : undefined} waiting={st.kind === 'queue'} queue={feature.queue} />}
           {avatars.length > 0 && (
             <span style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}>
               {avatars.map((p, i) => (
@@ -281,6 +298,7 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
           )}
           <span
             data-testid="feature-group-status"
+            title={progress ? formatStepProgress(progress) : undefined}
             style={{
               flex: 1, minWidth: 0,
               fontSize: FS.xs,
@@ -290,21 +308,22 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
             }}
           >
-            {queueNums
+            {plainRun ? (
+              <>Сейчас <b data-testid="feature-group-now-name" style={{ color: C.textHeading, fontWeight: 600 }}>{firstName}</b>{statusRest > 0 ? ` +${statusRest}` : ''}</>
+            ) : queueNums
               ? <>в очереди · <span data-testid="feature-group-queue-nums" style={{ fontFamily: FONT.mono }}>{queueNums}</span></>
               : status}
           </span>
-          {!compact && (
+          {!compact && bar && (
             <span
-              data-testid="feature-group-progress"
+              data-testid="feature-group-percent"
               title={progress ? formatStepProgress(progress) : undefined}
               style={{
-                flexShrink: 1, minWidth: 0,
-                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                flexShrink: 0, whiteSpace: 'nowrap',
                 fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted,
               }}
             >
-              {progress ? formatStepProgress(progress) : null}
+              <b style={{ color: C.textHeading }}>{percent} %</b>
             </span>
           )}
           {!compact && (feature.trackerIssues ?? 0) > 0 && (
@@ -315,6 +334,16 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
             </span>
           )}
         </div>
+
+        {/* Полоса трекера во всю ширину (С1 «Трек снизу»): та же, что в шапке В2. */}
+        {!compact && bar && (
+          <FeatureTrackerBar
+            bar={bar}
+            ariaLabel={trackerBarAria(bar)}
+            testId="feature-group-bar"
+            style={{ width: '100%', marginTop: 4 }}
+          />
+        )}
       </button>
 
       {/* Быстрое действие: absolute сверху-справа, видно на :hover/:focus-within.
@@ -326,7 +355,7 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
             position: 'absolute',
             top: 6,
             right: 6,
-            // Видно при наведении/фокусе; в покое — прозрачно (но в DOM, для стабильных тестов).
+            // Видно при наведении/фокуса; в покое — прозрачно (но в DOM, для стабильных тестов).
             opacity: hovered ? 1 : 0,
             pointerEvents: hovered ? 'auto' : 'none',
             transition: 'opacity 0.15s',

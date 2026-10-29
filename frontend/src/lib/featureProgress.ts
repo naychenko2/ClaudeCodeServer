@@ -84,6 +84,17 @@ export function stepProgressFromRun(run: FeatureRun): StepProgress | null {
   return run.stepProgress ?? null;
 }
 
+// Процент по трекеру: доля принятых шагов от знаменателя, 0..100 (целое). ОДНА функция
+// на все места (F2: строка шапки В2, плашка С1, пилюля/попап, «Готовность» страницы):
+// числитель и знаменатель — бэковые (stepProgress / строка индекса), фронт только делит.
+// Знаменателя нет — 0 (не «100» и не NaN). Снаружи: оценка оркестратора — другая величина,
+// её этот хелпер не касается.
+export function trackerPercent(accepted: number, total: number): number {
+  if (!(total > 0)) return 0;
+  const p = Math.round((accepted / total) * 100);
+  return Number.isFinite(p) ? Math.max(0, Math.min(100, p)) : 0;
+}
+
 // Защита от переполнения: отрицательные/NaN значения бэка (баг) не должны давать
 // «принято -2 из -5» — обнуляем (честнее, чем минус).
 const nonNeg = (n: number): number => (Number.isFinite(n) && n > 0 ? n : 0);

@@ -2720,6 +2720,18 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
       onSessionUpdated={onSessionUpdated}
       onAddToWall={onAddToWall}
       onChatDeleted={onChatDeleted}
+      // Строка фичи — вторая строка шапки (В2 «Трек», F2): под заголовком, над
+      // контекстом. Чат без фичи — FeatureBanner сам отдаёт null, слот пустой.
+      featureBar={
+        <FeatureBanner
+          sessionId={session.id}
+          projectId={session.projectId ?? null}
+          isMobile={!!isMobile}
+          chatTaskId={session.taskId ?? null}
+          // Ждут В ЭТОМ чате (waiting/stopped) — фокус в композер (M2), не страница фичи.
+          onFocusComposer={() => setComposerFocusBump(b => b + 1)}
+        />
+      }
       contextBar={contextBar}
     />
   );
@@ -2800,19 +2812,6 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
           </Button>
         </div>
       )}
-
-      {/* Плашка фичи: чат принадлежит фиче (индекс фич) — где фичи, её статус и
-          куда вернуться в ключевой чат. Под двумя флагами (режим «Исполнение фичи»
-          + «Обзор фич»); чат без фичи — плашки нет (FeatureBanner сам отдаёт null).
-          Центрирование по колонке чата (CHAT_MAX_W, как у ленты) — ВНУТРИ баннера. */}
-      <FeatureBanner
-        sessionId={session.id}
-        projectId={session.projectId ?? null}
-        isMobile={!!isMobile}
-        chatTaskId={session.taskId ?? null}
-        // Ждут В ЭТОМ чате (waiting/stopped) — фокус в композер (M2), не страница фичи.
-        onFocusComposer={() => setComposerFocusBump(b => b + 1)}
-      />
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор).
           Прокручивается НЕ вся ширина области, а колонка сообщений: иначе полоса

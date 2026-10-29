@@ -1,4 +1,5 @@
-// Тег статуса фичи: глиф очереди и моно-цифры «N из M» (макет feature-queue-1.md, «Тег и глиф»).
+// Тег статуса фичи: глиф очереди и моно-цифры «N из M» (макет feature-queue-1.md, «Тег и
+// глиф»); подпись закрытия — «закрыта без мержа» (Ш1c, единая подпись, решена с Майей).
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, it, expect } from 'vitest';
@@ -75,5 +76,17 @@ describe('queueLabel: единый источник подписи (тег = с�
     const tag = featureRunStatusTag('paused', null, { holdReason: 'queue' });
     expect(tag.label).toBe('в очереди');
     expect(featureDisplayState(queuedFeature({ queue: null })).status).toBe(tag.label);
+  });
+});
+
+// Ш1c: одна подпись закрытия — «закрыта без мержа» (с маленькой буквы), решена с Майей.
+describe('закрытие фичи', () => {
+  it('тег closed — «закрыта без мержа», тон closed, без точки', () => {
+    const tag = featureRunStatusTag('closed');
+    expect(tag.label).toBe('закрыта без мержа');
+    expect(tag.tone).toBe('closed');
+    expect(tag.dot).toBeUndefined();
+    // И в рендере — та же строка, целиком.
+    expect(html(tag).replace(/<[^>]+>/g, '')).toBe('закрыта без мержа');
   });
 });

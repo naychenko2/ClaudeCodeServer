@@ -1,0 +1,27 @@
+# Allow-list сторожа ProjectActionCallerKeyGuardTests (S1-3a, хвост M-11): места в точках доступа
+# (Controllers/Hubs, файлы с [ProjectScope] или IProjectAccess), где id ВЫЗЫВАЮЩЕГО (UserId,
+# userId, CallerUserId, CurrentUserId) передаётся аргументом вызова. В проектном действии ключ
+# хранилищ (задачи, заметки, память, досье, деревья git) — только TenantOwnerId из RequestScope;
+# оставшиеся места — личное (персоны, настройки, уведомления, устройства, личная группа SignalR)
+# или «до S4/S1-3a2/S1-3c». Формат строки: «путь|число» — по ФАЙЛУ со счётчиком строк (по номеру
+# строки снимок рассыпается). Счётчик в известном файле можно поднять только осознанно, с
+# вердиктом в дифе; стереть — когда место переведено на TenantOwnerId.
+# S1-3c: точка доступа вертикали Architecture — id вызывающего входит только в IProjectAccess
+# (запрошенное право, затем чтение, чтобы различить 403 и 404); ключом хранилищ здесь ничего
+# не стало: модель проекта берётся по id из маршрута, автор записи — человек-вызывающий.
+backend/ClaudeHomeServer.Architecture/Controllers/ArchitectureController.cs|2
+backend/ClaudeHomeServer/Controllers/CodeGraphController.cs|1
+backend/ClaudeHomeServer/Controllers/DossiersController.cs|4
+backend/ClaudeHomeServer/Controllers/FilesController.cs|5
+backend/ClaudeHomeServer/Controllers/GitController.cs|1
+backend/ClaudeHomeServer/Controllers/OnboardingController.cs|18
+backend/ClaudeHomeServer/Controllers/PersonasController.cs|110
+backend/ClaudeHomeServer/Controllers/PreviewController.cs|12
+backend/ClaudeHomeServer/Controllers/ProjectMapController.cs|1
+backend/ClaudeHomeServer/Controllers/ProjectMembersController.cs|4
+backend/ClaudeHomeServer/Controllers/ProjectsController.cs|13
+backend/ClaudeHomeServer/Controllers/SessionsController.cs|6
+backend/ClaudeHomeServer/Controllers/SkillsController.cs|10
+backend/ClaudeHomeServer/Controllers/TasksController.cs|77
+backend/ClaudeHomeServer/Hubs/SessionHub.cs|5
+backend/ClaudeHomeServer/Hubs/TerminalHub.cs|1

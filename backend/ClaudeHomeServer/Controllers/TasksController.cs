@@ -1026,8 +1026,9 @@ public class TasksController(
     // величина, что brief.kind (B15, дефект 415c1c80); пустой text снимает голос. Не-эпик → 400,
     // чужой/кривой id → 404.
 
-    // Тело PUT note: только text — прочих полей FeatureNote у клиента нет.
-    public record FeatureNoteRequest(string? Text);
+    // Тело PUT note: text и необязательная оценка оркестратора (featureEstimate) — прочих полей FeatureNote
+    // у клиента нет.
+    public record FeatureNoteRequest(string? Text, FeatureEstimate? FeatureEstimate = null);
 
     [HttpPut("features/{featureId}/note")]
     public async Task<IActionResult> SetFeatureNote(string featureId, [FromBody] FeatureNoteRequest? req)
@@ -1043,11 +1044,19 @@ public class TasksController(
         if (epic0 is null) return NotFound(new { error = "Фича не найдена" });
         if (epic0.Role != TaskRoles.Feature)
             return BadRequest(new { error = "Голос пишется только у фичи (role=feature)" });
+        FeatureEstimate? estimate = null;
+        if (req?.FeatureEstimate is { } rawEstimate)
+        {
+            if (string.IsNullOrWhiteSpace(req.Text))
+                return BadRequest(new { error = "Оценка пишется вместе с голосом" });
+            estimate = rawEstimate.Normalize();
+            if (estimate.Validate() is { } invalid) return BadRequest(new { error = invalid });
+        }
         var run = features.Project(featureId, UserId);
         if (run is null) return NotFound(new { error = "Фича не найдена" });
 
         var epic = tasks.SetFeatureNote(featureId, req?.Text, null, true,
-            FeatureBrief.ActiveStageOf(run), FeatureBrief.KindAtWriteOf(run));
+            FeatureBrief.ActiveStageOf(run), FeatureBrief.KindAtWriteOf(run), estimate);
         if (epic is null) return NotFound(new { error = "Фича не найдена" });
         await broadcaster.ToOwner(UserId, new TaskChangedMessage("updated", epic));
         return Ok(new { note = epic.Note is null ? null : new { text = epic.Note.Text, at = epic.Note.At } });

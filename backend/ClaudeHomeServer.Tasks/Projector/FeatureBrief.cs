@@ -75,7 +75,27 @@ public static class FeatureBrief
     // BriefNote — контракт голоса наружу (разрез п.6): ровно эти поля. StateAtWrite хранимого
     // FeatureNote наружу не уходит (нужен только StaleOf), BySessionId — тем более.
     public sealed record BriefNote(
-        string Text, DateTime At, string? ByPersonaId, bool ByUser, string StageAtWrite, bool Stale);
+        string Text, DateTime At, string? ByPersonaId, bool ByUser, string StageAtWrite, bool Stale,
+        BriefNoteEstimate? Estimate = null);
+
+    // Оценка оркестратора наружу (макет 2, «Данные» таблицы 1–3): percent бэк отдаёт всегда
+    // (досчитанный из done/total, когда оркестратор его не задал); agreement — within/above/below
+    // против истории (null — сравнивать не с чем); etaEndsAt — At + etaMinutes (null на паузе, в
+    // очереди, в «ждёт вас» и без срока).
+    public sealed record BriefNoteEstimate(
+        int Done, int Total, int InProgress, int Percent, List<string> Remaining, int? EtaMinutes,
+        string? Why, string? Agreement, DateTime? EtaEndsAt);
+
+    // Метки согласия (brief.note.estimate.agreement).
+    public static class Agreements
+    {
+        public const string Within = "within";
+        public const string Above = "above";
+        public const string Below = "below";
+    }
+
+    // Порог правила двух оценок: расхождение — вне [p25, p75] И не меньше 30 мин против remainingMinutes.
+    public const int AgreementMinGapMinutes = 30;
 
     // brief: контракт ответа (разрез п. 6).
     public sealed record Brief(
@@ -93,6 +113,9 @@ public static class FeatureBrief
         // null — фича не в очереди.
         int? QueueWaitMinutes,
         BriefNote? Note,
+        // Срок первой оценки оркестратора после старта фичи (TaskItem.InitialEtaMinutes, пишется один
+        // раз): итог закрытой фичи «на старте обещали ≈ N». null — оценки со сроком после старта не было.
+        int? InitialEtaMinutes,
         // B6 (дефект f2da9354): время последнего записанного события состояния фичи (UpdatedAtOf).
         // Отличается от ComputedAt: он — момент этого ответа, updatedAt — момент последнего записанного
         // события состояния (снятие паузы/ожидания события не создаёт, значение откатывается).
@@ -129,6 +152,8 @@ public static class FeatureBrief
 
         var kind = KindOf(run);
 
+        var estimate = EstimateOf(run, typical, kind);
+
         return new Brief(
             kind,
             NowOf(run),
@@ -136,10 +161,11 @@ public static class FeatureBrief
             new BriefDone(run.StepsAccepted, run.StepsTotal, run.Verdicts.Loops, run.StepProgress.PlanState),
             NextOf(run),
             timeline?.Totals.WorkWallMinutes,
-            EstimateOf(run, typical, kind),
+            estimate,
             Queue: null,
             QueueWaitMinutes: QueueWaitOf(run, kind, now),
-            Note: NoteOf(run, kind),
+            Note: NoteOf(run, kind, estimate),
+            InitialEtaMinutes: run.Epic?.InitialEtaMinutes,
             UpdatedAt: UpdatedAtOf(run),
             now);
     }
@@ -270,14 +296,40 @@ public static class FeatureBrief
     // служит только StaleOf. ByPersonaId — null: хранимый FeatureNote (B3) persona автора не несёт
     // (только чат BySessionId); заполнить его — аддитивная правка модели, не проектора.
     // Run без эпика (тестовая фикстура) или без голоса — null: «голоса нет → строки нет совсем».
-    private static BriefNote? NoteOf(FeatureRun run, string kind)
+    private static BriefNote? NoteOf(FeatureRun run, string kind, BriefEstimate? history)
     {
         var note = run.Epic?.Note;
         if (note is null) return null;
 
         return new BriefNote(
             note.Text, note.At, null, note.ByUser, note.StageAtWrite,
-            StaleOf(run, note, kind));
+            StaleOf(run, note, kind), EstimateOfNote(note, kind, history));
+    }
+
+    // Оценка оркестратора (макет 2): устаревание — то же StaleOf, что у голоса (отдельной логики нет:
+    // фронт берёт brief.note.stale). Percent — заданный или round(done/total·100).
+    // etaEndsAt = note.At + etaMinutes от момента записи, а не от «сейчас» (срок не «уползает» с
+    // каждым обновлением страницы); на паузе, в очереди и в «ждёт вас» не отдаётся.
+    private static BriefNoteEstimate? EstimateOfNote(FeatureNote note, string kind, BriefEstimate? history)
+    {
+        if (note.Estimate is not { } e) return null;
+        var percent = e.Percent ?? (int)Math.Round(100.0 * e.Done / e.Total, MidpointRounding.AwayFromZero);
+        DateTime? endsAt = e.EtaMinutes is { } eta && kind is not (Kinds.Paused or Kinds.Queued or Kinds.WaitingYou)
+            ? note.At.AddMinutes(eta)
+            : null;
+        return new BriefNoteEstimate(e.Done, e.Total, e.InProgress, percent, (e.Remaining ?? []).ToList(),
+            e.EtaMinutes, e.Why, AgreementOf(e.EtaMinutes, history), endsAt);
+    }
+
+    // Правило двух оценок: вне [p25, p75] истории И разница с remainingMinutes ≥ 30 мин — above/below,
+    // иначе within; нет срока оркестратора или истории — null.
+    internal static string? AgreementOf(int? eta, BriefEstimate? history)
+    {
+        if (eta is not { } minutes || history is null) return null;
+        if (Math.Abs(minutes - history.RemainingMinutes) < AgreementMinGapMinutes) return Agreements.Within;
+        if (minutes > history.P75) return Agreements.Above;
+        if (minutes < history.P25) return Agreements.Below;
+        return Agreements.Within;
     }
 
     // Признак устаревания (разрез п.2, B14 возврат FIN 74722f13, B15 дефект 415c1c80): голос устарел,

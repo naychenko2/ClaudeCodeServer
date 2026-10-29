@@ -121,6 +121,16 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     closePanel('notesGraph');
   }, [closePanel]);
 
+  // Выбор заметки открывает заметку независимо от активной вкладки: снимаем режим «Вики» —
+  // десктопный флаг и мобильный режим ветки (иначе центр продолжал бы рисовать WikiTab
+  // при выставленном selectedId — мёртвый клик, доработка S5d, major ревью). Стабильна
+  // (без deps): её слушает эффект диплинка, пересоздание переподписывало бы его каждый рендер.
+  const selectNote = useCallback((id: string) => {
+    setMobileMode('notes');
+    setWikiOn(false);
+    setSelectedId(id); setMobileView('note'); navPush({ screen: 'notes', note: id });
+  }, []);
+
   useEffect(() => { void ensureNotesLoaded(); }, []);
 
   // Диплинк #/notes/{id}
@@ -135,6 +145,9 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     const onPop = (e: PopStateEvent) => {
       const s = e.state as NavSnapshot | null;
       if (s?.screen === 'notes') {
+        // История указывает на заметку — показываем заметку: снимаем режим «Вики» тем же
+        // порядком, что selectNote (экран обязан совпадать с тем, на что указывает история)
+        if (s.note) { setMobileMode('notes'); setWikiOn(false); }
         setSelectedId(s.note ?? null);
         setMobileView(s.note ? 'note' : 'list');
       }
@@ -144,21 +157,23 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   }, []);
 
   // Открытие заметки по заголовку (из [[wikilink]] в файлах/чате). Заголовок в
-  // sessionStorage; ждём загрузки списка (deps: notes) и открываем по совпадению.
+  // sessionStorage; ждём загрузки списка (deps: notes, selectNote) и открываем по совпадению.
   useEffect(() => {
+    // Открытие заметки извне (чат/файл) — тем же selectNote: заметка открывается
+    // независимо от активной вкладки, тот же инвариант
     const consume = () => {
       // По id (из графа сайдбара FileViewer) — приоритетнее
       const id = sessionStorage.getItem('cc_pending_note_id');
-      if (id) { sessionStorage.removeItem('cc_pending_note_id'); setSelectedId(id); setMobileView('note'); navPush({ screen: 'notes', note: id }); return; }
+      if (id) { sessionStorage.removeItem('cc_pending_note_id'); selectNote(id); return; }
       const title = sessionStorage.getItem('cc_pending_note_title');
       if (!title) return;
       const n = notes.find(x => x.title.trim().toLowerCase() === title.trim().toLowerCase());
-      if (n) { sessionStorage.removeItem('cc_pending_note_title'); setSelectedId(n.id); setMobileView('note'); navPush({ screen: 'notes', note: n.id }); }
+      if (n) { sessionStorage.removeItem('cc_pending_note_title'); selectNote(n.id); }
     };
     consume();
     window.addEventListener('cc-open-note', consume);
     return () => window.removeEventListener('cc-open-note', consume);
-  }, [notes]);
+  }, [notes, selectNote]);
 
   // Синхронизация офлайн-заметки сменила её id (localKey/старый serverId → серверный):
   // если открыта эта заметка — переключаемся на новый id.
@@ -227,10 +242,6 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     notes.forEach(n => n.tags.forEach(t => s.add(t)));
     return [...s].sort((a, b) => a.localeCompare(b, 'ru'));
   }, [notes]);
-
-  const selectNote = (id: string) => {
-    setSelectedId(id); setMobileView('note'); navPush({ screen: 'notes', note: id });
-  };
 
   // Возврат к списку (удаление/кнопка «назад» на мобилке): снимаем выбор и
   // откатываем запись истории с note к списку (детерминированно, как в «Чатах»).

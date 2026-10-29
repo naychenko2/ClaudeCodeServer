@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { AlertTriangle, BookOpen, Check, ChevronRight, Folder, Lock, Monitor, Shield, Trash2 } from 'lucide-react';
+import { AlertTriangle, BookOpen, Check, ChevronLeft, ChevronRight, Folder, Lock, Monitor, Shield, Trash2 } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../../lib/design';
 import { Badge, type BadgeTone } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
@@ -382,7 +382,9 @@ export function WikiTab() {
           fill
           isMobile={isMobile}
           iconsOnly={isMobile}
-          onChange={setTab}
+          // Смена подвкладки закрывает экран «Разделы» (минор 4 ревью S5d): возврат на
+          // «Страницы» не должен открывать его снова — экран относится к «Страницам»
+          onChange={(v) => { setTab(v); setShowSections(false); }}
           options={WIKI_SUBTABS.map(t => ({ value: t.id, label: t.label, icon: wikiSubTabIcon(t), title: t.label }))}
         />
       </div>
@@ -406,11 +408,26 @@ export function WikiTab() {
             : subtab.id === 'pages'
               ? (isMobile && showSections
                 // Экран «Разделы» (макет 360): полноэкранный список без ограничения
-                // высоты; выбор раздела возвращает к каталогу этого раздела
-                ? <WikiSectionTree
-                    sections={sections} selectedKey={selectedKey}
-                    onSelect={k => { setSelectedKey(k); setShowSections(false); }}
-                  />
+                // высоты; выбор раздела возвращает к каталогу. Кнопка «Назад» — явный возврат
+                // к каталогу выбранного раздела (минор 3 ревью S5d): состояние локальное,
+                // в историю не пишется — аппаратный «назад» остаётся как есть
+                ? <>
+                    <div style={{ padding: `${SP.sm}px ${SP.sm}px 0` }}>
+                      <Button
+                        variant="ghost" size="sm"
+                        dataTestId="wiki-sections-back"
+                        ariaLabel="Вернуться к каталогу раздела"
+                        leftIcon={<ChevronLeft size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+                        onClick={() => setShowSections(false)}
+                      >
+                        Назад
+                      </Button>
+                    </div>
+                    <WikiSectionTree
+                      sections={sections} selectedKey={selectedKey}
+                      onSelect={k => { setSelectedKey(k); setShowSections(false); }}
+                    />
+                  </>
                 : <>
                     {isMobile && tree?.initialized && sectionSwitch()}
                     {center()}

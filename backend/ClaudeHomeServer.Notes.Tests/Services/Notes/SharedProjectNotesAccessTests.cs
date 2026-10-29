@@ -166,6 +166,27 @@ public class SharedProjectNotesAccessTests : IDisposable
             .Should().Contain("Текст проектной заметки.");
     }
 
+    // --- Запись владельца: 200, и файл — в папке проекта ---
+
+    [Fact]
+    public void Владелец_СоздаётЗаметкуВПроект_ФайлВПапкеПроекта()
+    {
+        var memberId = AddMember("reader"); // проект остаётся общим: корень один на всех
+        var sut = Service();
+
+        var created = sut.Create(_ownerId, new CreateNoteRequest("Заметка владельца", "тело", _projectId));
+        created.Source.Should().Be(_projectId);
+
+        // Проектная заметка лежит в папке проекта, а не в личном vault'е создавшего:
+        // иначе она была бы видна только владельцу (мутация c3 бьёт ровно здесь)
+        File.Exists(Path.Combine(_projects.GetById(_projectId)!.RootPath!, "notes", "Заметка владельца.md"))
+            .Should().BeTrue();
+        File.Exists(Path.Combine(_dir, "notes", _ownerId, "Заметка владельца.md")).Should().BeFalse();
+
+        // И её видит участник: тот же файл, тот же источник
+        sut.GetSummaries(_readerId, _projectId, null).Should().Contain(n => n.Title == "Заметка владельца");
+    }
+
     // --- Посторонний: 404 ---
 
     [Fact]

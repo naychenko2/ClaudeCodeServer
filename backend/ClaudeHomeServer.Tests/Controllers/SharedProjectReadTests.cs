@@ -83,9 +83,13 @@ public class SharedProjectReadTests : IClassFixture<TestWebApplicationFactory>
         body.GetProperty("code").GetString().Should().Be("project_scope");
     }
 
-    private static StringContent ModelJson() =>
-        new("""{"state":{"model":{"systems":[],"containers":[],"components":[],"codeElements":[]}},"version":0}""",
-            System.Text.Encoding.UTF8);
+    /// <summary>Содержимое модели (та же форма, что в тестах вертикали). Тело PUT — объект
+    /// {content, baseVersion}: сама модель как строка. PUT без такой обёртки — 400 от
+    /// связывателя, и проверка отказа доступа до тела действия не дошла бы.</summary>
+    private const string ModelBody = """{"state":{"model":{"systems":[],"viewLevel":"system"}},"version":0}""";
+
+    private static async Task<HttpResponseMessage> PutModelAsync(HttpClient client, string url) =>
+        await client.PutAsJsonAsync(url, new { content = ModelBody, baseVersion = (string?)null });
 
     // ── чтение участника, отказ записи ────────────────────────────────────────────
 
@@ -134,7 +138,7 @@ public class SharedProjectReadTests : IClassFixture<TestWebApplicationFactory>
         JsonSerializer.Deserialize<JsonElement>(await got.Content.ReadAsStringAsync())
             .GetProperty("exists").GetBoolean().Should().BeFalse("модели ещё нет — её отсутствие участнику тоже видно");
 
-        await AssertDeniedAsync(await member.PutAsync(url, ModelJson()));
+        await AssertDeniedAsync(await PutModelAsync(member, url));
         await AssertDeniedAsync(await member.PostAsync($"/api/projects/{projectId}/architecture/generate", null));
 
         // Отказ не оставил файла: владельцу модель всё так же нечего показать
@@ -154,7 +158,7 @@ public class SharedProjectReadTests : IClassFixture<TestWebApplicationFactory>
         (await client.PutAsJsonAsync($"/api/tasks/{taskId}", new { title = "перебил" })).StatusCode
             .Should().Be(HttpStatusCode.NotFound);
         (await client.GetAsync(modelUrl)).StatusCode.Should().Be(HttpStatusCode.NotFound);
-        (await client.PutAsync(modelUrl, ModelJson())).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await PutModelAsync(client, modelUrl)).StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     [Fact]
@@ -214,7 +218,7 @@ public class SharedProjectReadTests : IClassFixture<TestWebApplicationFactory>
 
         (await Owner().GetAsync(url)).EnsureSuccessStatusCode();
 
-        var put = await Owner().PutAsync(url, ModelJson());
+        var put = await PutModelAsync(Owner(), url);
         put.StatusCode.Should().Be(HttpStatusCode.OK, "право записи владельца точка доступа не трогает");
         JsonSerializer.Deserialize<JsonElement>(await put.Content.ReadAsStringAsync())
             .GetProperty("version").GetString().Should().NotBeNullOrEmpty();

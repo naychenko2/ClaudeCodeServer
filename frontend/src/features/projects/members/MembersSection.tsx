@@ -5,7 +5,7 @@
 // Состояние списка живёт здесь: любая мутация отвечает полным ProjectMembersView.
 
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, UserMinus, Users } from 'lucide-react';
+import { AlertTriangle, Info, UserMinus, Users } from 'lucide-react';
 import type { Project, ProjectMember, ProjectMemberRole, ProjectMembersView } from '../../../types';
 import { api } from '../../../lib/api';
 import { C, FS, SP } from '../../../lib/design';
@@ -13,6 +13,7 @@ import { Button, ConfirmDialog, Field, Notice, Select, TextField } from '../../.
 import { Menu, MenuItem } from '../../../components/ui/Menu';
 import { ICON_SIZE } from '../../../components/ui/icons';
 import { useMe } from '../../../lib/defaultPersona';
+import { isLocalProject } from '../../../lib/projectCapabilities';
 import { useIsMobile } from '../../../lib/breakpoints';
 import { AccordionSection } from '../dialogs/AccordionSection';
 import { MembersList } from './MembersList';
@@ -36,6 +37,8 @@ export function MembersSection({ project, mode, onMembersChanged, onLeft }: Prop
   const me = useMe();
   const isMobile = useIsMobile();
   const isOwner = mode === 'owner';
+  // Проект на устройстве нельзя открыть другим людям: формы приглашения нет, вместо неё причина
+  const local = isOwner && isLocalProject(project);
 
   const [view, setView] = useState<ProjectMembersView | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -135,7 +138,12 @@ export function MembersSection({ project, mode, onMembersChanged, onLeft }: Prop
       defaultOpen={!isOwner}
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
-        {isOwner && (
+        {local && (
+          <Notice tone="info" icon={Info}>
+            Проект хранится на вашем устройстве, поэтому открыть его другим людям нельзя.
+          </Notice>
+        )}
+        {isOwner && !local && (
           <Field label="Имя учётки" error={formError || undefined}>
             <div style={{ display: 'flex', gap: SP.sm, flexDirection: isMobile ? 'column' : 'row', alignItems: isMobile ? 'stretch' : 'flex-start' }}>
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -173,7 +181,7 @@ export function MembersSection({ project, mode, onMembersChanged, onLeft }: Prop
             busy={busy} rowErrors={rowErrors} onRoleChange={onRoleChange}
             onMenu={(member, anchor) => setMenu({ member, anchor })} />
         )}
-        {view && isOwner && members.length === 0 && (
+        {view && isOwner && !local && members.length === 0 && (
           <div style={{ fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.5 }}>
             Пригласите человека с учёткой на этом сервере: он увидит чаты, файлы и задачи проекта.
             Ходы участников идут за ваш счёт.

@@ -71,3 +71,23 @@ describe('проводка в шапку открытого чата', () => {
     expect(bar).toContain('isNotChatAuthorError(e)');
   });
 });
+
+describe('проводка AI-переименования в шапке (S1-F10)', () => {
+  const bar = readFileSync(new URL('../../../../components/chat/ChatHeaderBar.tsx', import.meta.url), 'utf8');
+  // Блок JSX/объекта от якоря до ближайшего onClick — внутри обязаны быть и hint, и disabled
+  const block = (anchor: string): string => {
+    const start = bar.indexOf(anchor);
+    expect(start, `якорь не найден: ${anchor}`).toBeGreaterThan(-1);
+    return bar.slice(start, bar.indexOf('onClick', start));
+  };
+  it('right-click меню: «Переименовать по переписке» выключен и подписан причиной', () => {
+    const b = block('label="Переименовать по переписке"');
+    expect(b).toContain('hint={chatAuthorOnlyReason(project) ?? undefined}');
+    expect(b).toContain('disabled={!!chatAuthorOnlyReason(project)}');
+  });
+  it('мобильный пункт «AI-действия» выключен и подписан причиной', () => {
+    const b = block("label: 'AI-действия'");
+    expect(b).toContain('disabled: !!chatAuthorOnlyReason(project)');
+    expect(b).toContain('sublabel: chatAuthorOnlyReason(project) ?? undefined');
+  });
+});

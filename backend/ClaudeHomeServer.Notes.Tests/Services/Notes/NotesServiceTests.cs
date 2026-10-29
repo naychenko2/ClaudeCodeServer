@@ -268,10 +268,11 @@ public class NotesServiceTests : IDisposable
         back.Source.Should().Be("personal");
         File.Exists(Path.Combine(_vault, "Мигрант.md")).Should().BeTrue();
 
-        // Чужой проект — нельзя
+        // Чужой проект — нельзя, и он же «не найден»: с точкой доступа IProjectAccess чужое
+        // не различается с несуществующим (тот же отказ, что для постороннего в общем проекте)
         var alien = _projects.Create("Чужой", Path.Combine(_dir, "alien"), "u2", "u2", createDirectory: true);
         var act = () => _sut.Move(User, back.Id, null, alien.Id);
-        act.Should().Throw<UnauthorizedAccessException>();
+        act.Should().Throw<KeyNotFoundException>();
     }
 
     [Fact]

@@ -3,7 +3,7 @@
 // функциями, проводка в карточку и список — сверкой исходников.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { CHAT_AUTHOR_ONLY, chatAuthorOnlyReason, isNotChatAuthorError } from '../participantGate';
+import { CHAT_AUTHOR_ONLY, chatActionAuthorLock, chatAuthorOnlyReason, isNotChatAuthorError } from '../participantGate';
 
 describe('chatAuthorOnlyReason', () => {
   it('участнику (editor/reader) — причина', () => {
@@ -42,5 +42,32 @@ describe('проводка в карточку и список', () => {
   it('список передаёт причину из единого гейта и ловит отказ', () => {
     expect(list).toContain('authorOnlyReason={chatAuthorOnlyReason(project)}');
     expect(list).toContain('isNotChatAuthorError(e)');
+  });
+});
+
+describe('chatActionAuthorLock (шапка открытого чата)', () => {
+  it('участнику rename/archive/delete выключены причиной', () => {
+    for (const key of ['rename', 'archive', 'delete']) {
+      expect(chatActionAuthorLock(key, { myRole: 'editor' })).toBe(CHAT_AUTHOR_ONLY);
+      expect(chatActionAuthorLock(key, { myRole: 'reader' })).toBe(CHAT_AUTHOR_ONLY);
+    }
+  });
+  it('владельцу и чату вне проекта активны; прочие пункты гейт не трогает', () => {
+    for (const key of ['rename', 'archive', 'delete']) {
+      expect(chatActionAuthorLock(key, { myRole: 'owner' } as never)).toBeNull();
+      expect(chatActionAuthorLock(key, undefined)).toBeNull();
+    }
+    expect(chatActionAuthorLock('tags', { myRole: 'reader' })).toBeNull();
+    expect(chatActionAuthorLock('expiry', { myRole: 'editor' })).toBeNull();
+  });
+});
+
+describe('проводка в шапку открытого чата', () => {
+  const bar = readFileSync(new URL('../../../../components/chat/ChatHeaderBar.tsx', import.meta.url), 'utf8');
+  it('кнопки ряда, «⋯» и runAction идут через единый гейт; отказ бэка ловится', () => {
+    expect(bar).toContain('disabled={!!authorLock}');
+    expect(bar).toContain('disabled: !!authorLock');
+    expect(bar).toContain('if (chatActionAuthorLock(key, project)) return;');
+    expect(bar).toContain('isNotChatAuthorError(e)');
   });
 });

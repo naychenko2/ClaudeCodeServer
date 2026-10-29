@@ -42,6 +42,7 @@ import { Badge, Button, IconButton, ChatTopicIcon, Modal, ModalActions, ConfirmD
 import { FeatureBackChip } from './FeatureBackChip';
 import { createTask } from '../../lib/tasks';
 import { showToast } from '../../lib/toast';
+import { chatActionAuthorLock, isNotChatAuthorError } from '../../features/projects/members/participantGate';
 import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
 import { useSlotItem } from '../../lib/subsystems/registry';
 import type { ChatHeaderSummaryCtx, ChatHeaderMenuItemCtx, ChatHeaderBadgeCtx } from '../../lib/subsystems/registryCore';
@@ -1852,15 +1853,19 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const [renameDialog, setRenameDialog] = useState<string | null>(null);
   const [deleteAsk, setDeleteAsk] = useState(false);
   // Сохранение имени — одна точка на кнопку «Сохранить» и на Enter в поле
+  // Отказ бэка «только автор» (устаревшая роль на клиенте) показываем текстом ответа
+  const failToast = (title: string, fallback: string) => (e: unknown) =>
+    showToast(title, isNotChatAuthorError(e) ? (e as Error).message : fallback, 'info');
   const saveRename = () => {
     const next = (renameDialog ?? '').trim();
     setRenameDialog(null);
     if (!next || next === (session.name ?? '')) return;
     void updateChatFields(session, { name: next })
       .then(s => onSessionUpdated?.(s))
-      .catch(() => showToast('Чат', 'Не удалось переименовать чат', 'info'));
+      .catch(failToast('Чат', 'Не удалось переименовать чат'));
   };
   const runAction = (key: ChatActionKey, anchor?: DOMRect) => {
+    if (chatActionAuthorLock(key, project)) return;
     switch (key) {
       case 'rename': setRenameDialog(session.name ?? ''); break;
       case 'pin':
@@ -1897,7 +1902,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
             // где этого чата уже нет, значит прятать его от человека второй раз
             if (isArchivedChat(session) && !isArchivedChat(s)) leaveChatArchiveView(chatFilterScope(s));
           })
-          .catch(() => showToast('Архив', 'Не удалось изменить архив чата', 'info'));
+          .catch(failToast('Архив', 'Не удалось изменить архив чата'));
         break;
       case 'delete': setDeleteAsk(true); break;
     }
@@ -1955,10 +1960,12 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     if (key === 'expiry') return expiryBadge;
     if (key === 'notify') return notifyBtn;
     const m = actionMeta(key);
+    const authorLock = chatActionAuthorLock(key, project);
     return (
       <ToolbarIconButton
         onClick={e => runAction(key, (e.currentTarget as HTMLElement).getBoundingClientRect())}
-        title={m.label}
+        title={authorLock ?? m.label}
+        disabled={!!authorLock}
         isMobile={isCompact}
         active={m.active}
         color={m.danger ? C.danger : undefined}
@@ -2045,12 +2052,15 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // «осталось 2 ч» (меньше часа — C.warningText); порядок остальных — канонический
   const overflowActionItems: OverflowItem[] = headerActions.map(k => {
     const m = actionMeta(k);
+    const authorLock = chatActionAuthorLock(k, project);
     const visible = headerVis.isVisible(k);
     const it: OverflowItem = {
       key: k,
       icon: m.icon,
       label: m.label,
       danger: m.danger,
+      disabled: !!authorLock,
+      sublabel: authorLock ?? undefined,
       // Теги и срок открывают свои поповеры по якорю «⋯» — сама кнопка исчезнет
       // вместе с меню, и её rect брать было бы неоткуда
       onClick: () => runAction(k, overflowAnchorRef.current ?? undefined),
@@ -2285,7 +2295,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
             // Уйти из удалённого чата и обновить список — дело владельца экрана
             return del
               .then(() => { setDeleteAsk(false); onChatDeleted?.(session.id); })
-              .catch(() => { setDeleteAsk(false); showToast('Чат', 'Не удалось удалить чат', 'info'); });
+              .catch(e => { setDeleteAsk(false); failToast('Чат', 'Не удалось удалить чат')(e); });
           }}
           onCancel={() => setDeleteAsk(false)}
         />

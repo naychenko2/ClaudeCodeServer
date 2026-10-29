@@ -49,6 +49,13 @@ export function chatAuthorOnlyReason(project: Pick<Project, 'myRole'> | null | u
   return isParticipant(project) ? CHAT_AUTHOR_ONLY : null;
 }
 
+// Причина блокировки действия шапки чата для участника: только rename/archive/delete
+// принадлежат автору; остальные пункты («Теги», «Срок» и др.) гейт не трогает
+const AUTHOR_ONLY_ACTIONS: readonly string[] = ['rename', 'archive', 'delete'];
+export function chatActionAuthorLock(key: string, project: Pick<Project, 'myRole'> | null | undefined): string | null {
+  return AUTHOR_ONLY_ACTIONS.includes(key) ? chatAuthorOnlyReason(project) : null;
+}
+
 // Бэк мог всё же отказать (устаревшая роль на клиенте): 403 с code not_chat_author
 export function isNotChatAuthorError(e: unknown): boolean {
   const body = (e as { status?: number; body?: { code?: string } } | null);

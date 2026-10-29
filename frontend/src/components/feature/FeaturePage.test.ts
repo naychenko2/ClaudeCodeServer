@@ -16,7 +16,7 @@ import { createElement, StrictMode } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeaturePage, type FeaturePageBackTarget } from './FeaturePage';
 import { pluralTasks, featureRunStatusTag } from './FeaturePageHeader';
-import { __test as pageTest, setFeaturePageTab, type FeatureBrief } from '../../lib/featurePage';
+import { __test as pageTest, setFeaturePageTab, refetchFeaturePage, type FeatureBrief } from '../../lib/featurePage';
 import { __test as indexTest } from '../../lib/featuresIndex';
 import { __test as backNavTest, recordBackNav, clearBackNav } from '../../lib/featureBackNav';
 import { setAllFlags } from '../../lib/featureFlags';
@@ -27,7 +27,7 @@ import { api } from '../../lib/api';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureIndexFeature, FeaturesIndex } from '../../types/featureIndex';
 import type { FeaturePage as FeaturePageData } from '../../types/featureIndex';
-import type { FeatureState } from '../../types/featureRun';
+import type { FeatureMergeRisk, FeatureState } from '../../types/featureRun';
 import type { FeatureStats } from '../../types/featureStats';
 import type { Session, Task } from '../../types';
 
@@ -2382,6 +2382,113 @@ describe('F6: блок «Сводка» на вкладке «Хронологи
     expect(voice, 'плашка голоса').not.toBeNull();
     const sig = findNodeByAttr(voice as never, 'data-testid', 'brief-voice-by')!;
     expect(textNodes(sig).join(''), 'имя оркестратора из стора персон').toContain('Софья');
+  });
+});
+
+// === Ш8-wire: риски мержа в диалоге подтверждения ===
+// FeaturePage передаёт attention.mergeRisks ПОСЛЕДНЕГО снимка страницы в FeatureMergeDialog
+// (FeaturePage.tsx:429). Диалог открывается главным действием «Мерж…» (state merge_pending +
+// attention.kind='merge', FeaturePageHeader.tsx:883-896). Конкурентность: диалог берёт риски
+// из последнего page, а не из момента открытия — второй тест перезапрашивает страницу
+// (refetchFeaturePage, lib/featurePage.ts:381) при открытом диалоге: блок обязан уйти.
+// Мутации (в отчёте): (1) не передавать risks в FeaturePage.tsx → первый тест красный
+// (блока нет); второй остаётся зелёным — там блока нет по данным.
+describe('Ш8-wire: риски мержа в диалоге подтверждения', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    pageTest.reset();
+    indexTest.reset();
+    backNavTest.reset();
+    personaMap.clear();
+    setAllFlags({ 'features-overview': true });
+    mockIndex.features = [feat()];
+    mockIndex.chats = {};
+    mockChats.clear();
+    openChatCalls.length = 0;
+    mockGetFeature.pending = false;
+    mockGetFeature.result = null;
+    mockGetFeature.error = null;
+    mockGetFeature.calls = [];
+    mockGetFeature.perCall = [];
+    mockMergeFeature.pending = false;
+    mockMergeFeature.result = null;
+    mockMergeFeature.error = null;
+    mockMergeFeature.calls = [];
+    toasts.length = 0;
+    indexTest.setIndex('p1', mockIndex as FeaturesIndex);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  const bodyNode = () => (globalThis as { document: { body: unknown } }).document.body as unknown as AnyNode;
+
+  // Страница фичи, ждущей согласия на мерж: state merge_pending + тревога kind='merge'.
+  // Риски — attention.mergeRisks (бэк при отсутствии рисков поля не даёт — undefined).
+  function mergePage(risks?: FeatureMergeRisk[]): FeaturePageData {
+    const pd = pageData();
+    pd.run = {
+      ...pd.run,
+      state: 'merge_pending',
+      attention: {
+        kind: 'merge', taskId: 'f-fin', since: '2026-10-19T11:00:00Z', reason: 'мерж',
+        mergeRisks: risks,
+      },
+    } as never;
+    return pd;
+  }
+
+  // Открыть диалог главным действием шапки: span[data-testid] → Button внутри.
+  async function openMerge(c: ReturnType<typeof render>) {
+    const main = findNodeByAttr(c, 'data-testid', 'feature-page-main-action');
+    expect(main, 'главное действие «Мерж…»').not.toBeNull();
+    const btn = firstButton(main as unknown as AnyNode);
+    expect(btn, 'кнопка внутри главного действия').not.toBeNull();
+    await act(async () => { (reactProps(btn!)!.onClick as () => void)(); });
+  }
+
+  it('attention.kind=merge + риски: «Мерж…» открывает диалог, в нём feature-merge-risks', async () => {
+    mockGetFeature.result = mergePage([
+      { kind: 'not_created', count: 59 },
+      { kind: 'open', count: 13 },
+      { kind: 'tracker', count: 1 },
+    ]);
+    const c = render({});
+    await settle();
+    await openMerge(c);
+    const body = bodyNode();
+    expect(textNodes(body).join(' '), 'модалка мержа открыта').toContain('Смержить «Моя фича» в master?');
+    const risks = findNodeByAttr(body as never, 'data-testid', 'feature-merge-risks');
+    expect(risks, 'блок рисков мержа').not.toBeNull();
+    expect(textNodes(risks!).join(''), 'текст — список бэка, фронт ничего не считает')
+      .toContain('Не заведено шагов: 59 · Заведены, но не приняты: 13 · Трекер расходится: 1');
+    // Закрыть модалку здесь же: незакрытая утекает в следующий тест (портал не анмонтирован).
+    const cancel = findButtonWithText(body, 'Отмена');
+    expect(cancel, '«Отмена» в модалке').not.toBeNull();
+    await act(async () => { (reactProps(cancel!)!.onClick as () => void)(); });
+  });
+
+  it('перезапрос страницы без рисков: блок убран из открытого диалога (диалог берёт последний page)', async () => {
+    mockGetFeature.perCall = [
+      { result: mergePage([{ kind: 'not_created', count: 59 }]) }, // call 1: с рисками
+      { result: mergePage(undefined) }, // call 2: бэк пересчитал — рисков больше нет
+    ];
+    const c = render({});
+    await settle();
+    await openMerge(c);
+    expect(findNodeByAttr(bodyNode() as never, 'data-testid', 'feature-merge-risks'), 'блок первого снимка').not.toBeNull();
+    // Перезапрос страницы при открытом диалоге: модалка не закрывается, данные — новые.
+    refetchFeaturePage('f1');
+    await settle();
+    const body = bodyNode();
+    expect(textNodes(body).join(' '), 'диалог остался открыт').toContain('Смержить «Моя фича» в master?');
+    expect(findNodeByAttr(body as never, 'data-testid', 'feature-merge-risks'), 'устаревший снимок рисков не показан').toBeNull();
+    const cancel = findButtonWithText(body, 'Отмена');
+    expect(cancel, '«Отмена» в модалке').not.toBeNull();
+    await act(async () => { (reactProps(cancel!)!.onClick as () => void)(); });
   });
 });
 

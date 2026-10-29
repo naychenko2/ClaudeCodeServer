@@ -431,6 +431,10 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
             branch={feature?.branch ?? null}
             pending={mergePending}
             error={mergeError}
+            // Риски мержа (Ш8-wire): из attention последнего снимка страницы, а не из
+            // момента открытия — при перезапросе страницы диалог перерисовывается с
+            // новыми рисками (исчезли — блока нет). Отсутствия поля UI обязан пережить.
+            risks={run?.attention?.mergeRisks}
             onCancel={closeMergeDialog}
             onConfirm={confirmMerge}
           />

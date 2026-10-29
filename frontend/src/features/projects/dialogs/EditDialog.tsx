@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Crown, Folder, GitBranch, Info, Lock, Sparkles, X } from 'lucide-react';
-import type { Project, ProjectGroup, PermissionRule, SystemPromptPart } from '../../../types';
+import type { Project, ProjectGroup, ProjectMember, PermissionRule, SystemPromptPart } from '../../../types';
 import { ProjectFeature } from '../../../types';
 import { useProjectFeature } from '../../../lib/projectCapabilities';
 import { api } from '../../../lib/api';
@@ -490,9 +490,17 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
     );
   }
 
-  // Список участников изменился — проект в сторе узнаёт о них (метка «общий» в списках)
-  const handleMembersChanged = (members: NonNullable<Project['members']>) =>
-    onProjectUpdated?.({ ...project, members });
+  // Список участников изменился — проект в сторе узнаёт о них (метка «общий» в списках).
+  // project.members — сводка формы бэка (ProjectMembersSummary: count + первые трое),
+  // полный список MembersSection к нам и приходит — сводим к сводке здесь.
+  const handleMembersChanged = (members: ProjectMember[]) =>
+    onProjectUpdated?.({
+      ...project,
+      members: {
+        count: members.length,
+        first: members.slice(0, 3).map(({ userId, username, displayName }) => ({ userId, username, displayName })),
+      },
+    });
 
   if (isParticipant) {
     const ownerName = project.ownerDisplayName?.trim();

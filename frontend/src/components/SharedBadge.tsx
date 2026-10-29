@@ -6,34 +6,35 @@
 // это проект, чей, что писать» обязано говориться везде одинаково. Здесь только метка:
 // права участников решает бэк (ProjectAccess), фронт показывает то, что сказано в данных.
 //
-// Источник данных: Project.members/myRole — резервированные поля S1-F2: бэк их пока
-// не отдаёт, поэтому сегодня «свой/чужой» определяется по ownerId против меня. Имени
-// владельца в DTO проекта нет — его приносит вызывающий из того, что есть у него;
-// имени нет — говорим «чужой проект». Имя берётся как есть: его падеж — забота
-// вызывающего, здесь нет русской склонялки.
+// Источник данных — поля DTO проекта (S1-2b, ProjectsController.WithCount → ProjectMembersView.Summary):
+// members — сводка { count, first }, myRole — роль вызывающего, ownerUsername/ownerDisplayName —
+// имя владельца. У обычного проекта, где вызывающий владелец, бэк отдаёт все эти поля null —
+// метки нет. Имя берётся как есть: его падеж — забота вызывающего, здесь нет русской склонялки.
 
 import { Users } from 'lucide-react';
 import { C } from '../lib/design';
 import { useIsMobile } from '../lib/breakpoints';
 import { ICON_PROPS, ICON_SIZE } from './ui/icons';
 import { Badge } from './ui/Badge';
-import type { ProjectMember, ProjectRoleView } from '../types';
+import type { ProjectMembersSummary, ProjectRoleView } from '../types';
 
 // Поля проекта, которые метка читает. Берём только их: компоненту не нужен весь DTO —
 // довольно того, что есть у вызывающего (S1-F5).
 export interface SharedProjectData {
   ownerId?: string | null;
-  members?: ProjectMember[] | null;
+  // Имя владельца из данных проекта (Summary): «проект {displayName}», запасной — username.
+  ownerDisplayName?: string | null;
+  ownerUsername?: string | null;
+  // Состав участников — сводка из DTO, не список: «есть ли участники» решается по count.
+  members?: ProjectMembersSummary | null;
   myRole?: ProjectRoleView;
 }
 
 export interface SharedBadgeProps {
   project: SharedProjectData;
-  // Кому принадлежит взгляд: без него свой и чужой по ownerId не различить.
-  // Не задан — проект считаем своим (старые данные, где членства не было).
-  currentUserId?: string | null;
-  // Имя владельца — из данных проекта, его приносит вызывающий. Пусто — «чужой проект».
-  ownerName?: string | null;
+  // Кому принадлежит взгляд: без него свой и чужой по ownerId не различить и любой
+  // чужой проект сочтётся своим. Обязателен: вызывающий обязан назвать взгляд (ревью M-37).
+  currentUserId: string | null;
   // xs — плотные строки списков (спека п.6), sm — шапки и формы.
   size?: 'xs' | 'sm';
 }
@@ -41,11 +42,11 @@ export interface SharedBadgeProps {
 type Kind = 'own' | 'foreign';
 
 // Какого рода проект: null — не общий, метки нет.
-function kindOf(project: SharedProjectData, currentUserId?: string | null): Kind | null {
-  // myRole авторитетна, когда есть (резервированное поле S1-F2, следующий шаг бэка)
+function kindOf(project: SharedProjectData, currentUserId: string | null): Kind | null {
+  // myRole авторитетна, когда есть (Summary отдаёт её для общих проектов)
   if (project.myRole === 'editor' || project.myRole === 'reader') return 'foreign';
   if (project.myRole === 'owner') return ownKind(project);
-  // myRole бэк не отдаёт — различаем по владельцу.
+  // myRole нет (старый бэк): различаем по владельцу.
   if (currentUserId && project.ownerId) {
     return project.ownerId === currentUserId ? ownKind(project) : 'foreign';
   }
@@ -54,8 +55,9 @@ function kindOf(project: SharedProjectData, currentUserId?: string | null): Kind
 }
 
 // Свой проект общий, только если в нём есть участники; без них метки нет.
+// Состав — сводка бэка: «есть» это count > 0 (ревью M-2).
 function ownKind(project: SharedProjectData): Kind | null {
-  return (project.members?.length ?? 0) > 0 ? 'own' : null;
+  return (project.members?.count ?? 0) > 0 ? 'own' : null;
 }
 
 /**
@@ -63,14 +65,15 @@ function ownKind(project: SharedProjectData): Kind | null {
  * На мобиле остаётся один значок: смысл несут title/aria-label (свой текст «общий» там
  * нечитаем без плашки, поэтому подсказка — полная фраза).
  */
-export function SharedBadge({ project, currentUserId, ownerName, size = 'xs' }: SharedBadgeProps) {
+export function SharedBadge({ project, currentUserId, size = 'xs' }: SharedBadgeProps) {
   // Хук до любого выхода: когда метка появляется/исчезает от обновления данных,
   // порядок хуков не должен съехать
   const isMobile = useIsMobile();
   const kind = kindOf(project, currentUserId);
   if (!kind) return null;
 
-  const name = ownerName?.trim();
+  // Имя — из данных проекта (ревью M-1): displayName, запасной — username; нет обоих — «чужой проект».
+  const name = project.ownerDisplayName?.trim() || project.ownerUsername?.trim();
   const text = kind === 'foreign' ? (name ? `проект ${name}` : 'чужой проект') : 'общий';
   const label = kind === 'foreign' ? text : 'общий проект';
 

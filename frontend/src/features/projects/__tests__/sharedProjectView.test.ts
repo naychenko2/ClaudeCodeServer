@@ -123,7 +123,8 @@ type FN = InstanceType<typeof FakeNode>;
 
 // Данные: свой общий (есть участники), чужой (владелец другой, есть имя владельца),
 // приватный (ни участников, ни чужого владельца) — на нём проверяем «верстки нет»
-const ownShared = { id: 'p-own', name: 'Свой', rootPath: '/a', ownerId: 'me-id', updatedAt: '2026-10-03T00:00:00Z', members: [{ userId: 'u-other', role: 'editor' }] } as Project;
+// members — сводка той формы, что отдаёт бэк (ProjectMembersView.Summary): count + первые трое
+const ownShared = { id: 'p-own', name: 'Свой', rootPath: '/a', ownerId: 'me-id', updatedAt: '2026-10-03T00:00:00Z', members: { count: 1, first: [{ userId: 'u-other', username: 'u-other' }] } } as Project;
 const foreign = { id: 'p-foreign', name: 'Чужой', rootPath: '/b', ownerId: 'andrey', updatedAt: '2026-10-02T00:00:00Z', ownerDisplayName: 'Андрей' } as Project;
 const plain = { id: 'p-plain', name: 'Приватный', rootPath: '/c', ownerId: 'me-id', updatedAt: '2026-10-01T00:00:00Z' } as Project;
 

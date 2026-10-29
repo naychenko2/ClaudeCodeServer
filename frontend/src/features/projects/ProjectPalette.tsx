@@ -41,7 +41,7 @@ function ProjectRowItem({ p, active, onOpen }: { p: Project; active: boolean; on
         <span style={{ minWidth: 0, fontSize: FS.md, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {p.name}
         </span>
-        <SharedBadge project={p} currentUserId={me.userId} ownerName={p.ownerDisplayName} />
+        <SharedBadge project={p} currentUserId={me.userId} />
       </span>
       <button
         aria-label={pinned ? 'Открепить' : 'Закрепить'}

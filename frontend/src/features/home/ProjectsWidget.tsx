@@ -73,7 +73,7 @@ export function ProjectsWidget({ onOpenProject }: {
                     }}>
                       {p.name}
                     </span>
-                    <SharedBadge project={p} currentUserId={me.userId} ownerName={p.ownerDisplayName} />
+                    <SharedBadge project={p} currentUserId={me.userId} />
                   </span>
                   {typeof p.sessionCount === 'number' && p.sessionCount > 0 && (
                     <span style={{

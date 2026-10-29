@@ -197,6 +197,21 @@ export interface ProjectMembersView {
   myRole: ProjectRoleView;
 }
 
+// Человек в сводке участников (ProjectMembersView.Summary): только опознавательные поля,
+// роли нет — она есть в полном списке.
+export interface ProjectMemberSummaryRef {
+  userId: string;
+  username?: string;
+  displayName?: string | null;
+}
+
+// Сводка участников в DTO проекта (S1-2b): количество + первые трое. Не полный список:
+// он только в GET /api/projects/{id}/members (ProjectMembersView).
+export interface ProjectMembersSummary {
+  count: number;
+  first: ProjectMemberSummaryRef[];
+}
+
 // Машинные коды отказов операций членства. Текст отказа бэк отдаёт готовым для человека;
 // по коду фронт выбирает действие («включить флаг», «это проект на устройстве»,
 // «человек уже здесь»). Тело ошибки приносит lib/offline целиком (err.body).
@@ -293,17 +308,17 @@ export interface Project {
   // Только в ответе создания и перепривязки локального проекта: агент устройства создал или
   // разрешил папку («Папка «…» создана и разрешена агенту на «…»»). Показывается уведомлением
   folderNotice?: string | null;
-  // Участники общего проекта. В DTO проекта их НЕТ (ProjectsController.WithCount не
-  // перечисляет Members): список отдаёт только /api/projects/{id}/members — его ответы и
-  // есть источник истины. Поле необязательное и сегодня всегда отсутствует; читать его
-  // как источник истины нельзя (резервируем под шаг, где бэк начнёт его отдавать).
-  members?: ProjectMember[] | null;
-  // Роль текущего человека в проекте. Сервер её не отдаёт (нет в WithCount): сегодня
-  // право действия — по ownerId. Резервируем под UI-гейты следующих шагов (не-владелец
-  // не видит «Пригласить»).
+  // Участники общего проекта: сводка из DTO (S1-2b, ProjectsController.WithCount →
+  // ProjectMembersView.Summary): { count, first }. null у обычного проекта, где
+  // вызывающий — владелец, и у старого бэка. Полный список — только в
+  // /api/projects/{id}/members; здесь решать «кого пригласили» нельзя.
+  members?: ProjectMembersSummary | null;
+  // Роль вызывающего в общем проекте (Summary.MyRole): null у обычного проекта и у старого
+  // бэка. Где есть — авторитетна; где её нет — право действия по ownerId.
   myRole?: ProjectRoleView;
-  // Имя владельца для заголовка «Проект Андрея» и метки на чужом проекте; у своего проекта
-  // и у старого бэка отсутствует
+  // Владелец общего проекта для заголовка «Проект Андрея» и метки на чужом проекте
+  // (Summary.OwnerUsername/OwnerDisplayName). null у обычного проекта и у старого бэка.
+  ownerUsername?: string | null;
   ownerDisplayName?: string | null;
 }
 

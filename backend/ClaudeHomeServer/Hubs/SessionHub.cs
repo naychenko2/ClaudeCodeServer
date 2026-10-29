@@ -3,6 +3,7 @@ using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.ProjectServices;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http.Connections.Features;
@@ -18,16 +19,18 @@ public class SessionHub : Hub
 {
     private readonly SessionManager _sessions;
     private readonly ProjectManager _projects;
+    private readonly IProjectAccess _access;
     private readonly FileWatcherService _watcher;
     private readonly ConnectionDiagnostics _diag;
     private readonly DevServerService _devServer;
     private readonly ILogger<SessionHub> _logger;
 
-    public SessionHub(SessionManager sessions, ProjectManager projects, FileWatcherService watcher,
-        ConnectionDiagnostics diag, DevServerService devServer, ILogger<SessionHub> logger)
+    public SessionHub(SessionManager sessions, ProjectManager projects, IProjectAccess access,
+        FileWatcherService watcher, ConnectionDiagnostics diag, DevServerService devServer, ILogger<SessionHub> logger)
     {
         _sessions = sessions;
         _projects = projects;
+        _access = access;
         _watcher = watcher;
         _diag = diag;
         _devServer = devServer;
@@ -37,21 +40,20 @@ public class SessionHub : Hub
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string? UserId => Context.User?.FindFirstValue(JwtRegisteredClaimNames.Sub);
 
-    // Владелец сессии: у проектной — владелец проекта, у чата вне проекта — сама сессия.
-    // Сессии без владельца (легаси/удалённый проект) недоступны никому — как в REST-контроллерах.
-    private bool OwnsSession(string sessionId)
-    {
-        var info = _sessions.GetById(sessionId);
-        if (info is null) return false;
-        var ownerId = _sessions.ResolveOwnerId(info);
-        return ownerId is not null && ownerId == UserId;
-    }
+    // Единственная точка доступа хаба (S0-6): чат резолвится через свой проект, чат вне проекта —
+    // через владение самим чатом (SessionAccess.CanSee). Чат без владельца (легаси/удалённый
+    // проект) и проект без владельца остаются недоступными никому: резолв fail-closed, как в
+    // REST-контроллерах. Инлайн-сравнений «владелец == id соединения» в хабе больше нет; дальше
+    // идёт только RequestScope, и ключ хранилищ проекта берётся из его TenantOwnerId, а не из id
+    // вызывающего — иначе в общем проекте участник читал бы и правил своё отражение данных
+    // (ловушка ключа, разрез §6.6 п. 2). В S0 роль одна (владелец), поведение продукта не
+    // меняется; право названо явно (просмотр — Read, действия — Write), чтобы при появлении
+    // ролей (S1) хаб не пришлось перечитывать.
+    private RequestScope? ScopeOfSession(string sessionId, ProjectRight right = ProjectRight.Read) =>
+        _access.ResolveSession(UserId, sessionId, right);
 
-    private bool OwnsProject(string projectId)
-    {
-        var ownerId = _projects.GetById(projectId)?.OwnerId;
-        return ownerId is not null && ownerId == UserId;
-    }
+    private RequestScope? ScopeOfProject(string projectId, ProjectRight right = ProjectRight.Read) =>
+        _access.Resolve(UserId, projectId, right);
 
     // Текст «Доступ запрещён» — контракт фронта. Отказ логируется: sub соединения и владелец
     // ресурса сразу показывают рассинхрон аккаунта (токен/query-строку не пишем никогда).
@@ -92,7 +94,7 @@ public class SessionHub : Hub
     public async Task JoinSession(string sessionId)
     {
         if (_sessions.GetById(sessionId) is null) throw NotFound();
-        if (!OwnsSession(sessionId)) throw DeniedSession(sessionId);
+        if (ScopeOfSession(sessionId) is null) throw DeniedSession(sessionId);
         _sessions.AddViewer(sessionId, Context.ConnectionId);
         await Groups.AddToGroupAsync(Context.ConnectionId, sessionId);
 
@@ -149,7 +151,7 @@ public class SessionHub : Hub
     [ProjectCapability(ProjectCapabilityArea.Platform)]
     public async Task JoinProject(string projectId)
     {
-        if (!OwnsProject(projectId)) throw DeniedProject(projectId);
+        if (ScopeOfProject(projectId) is null) throw DeniedProject(projectId);
         await Groups.AddToGroupAsync(Context.ConnectionId, "project_" + projectId);
         if (_watcher.Watch(projectId, Context.ConnectionId))
         {
@@ -182,8 +184,12 @@ public class SessionHub : Hub
     [ProjectCapability(ProjectCapabilityArea.FileBound)]
     public async Task<string?> JoinPreviewLog(string projectId, string serviceId)
     {
-        if (!OwnsProject(projectId)) throw DeniedProject(projectId);
-        var buffered = _devServer.GetLogBuffer(projectId, serviceId, UserId!);
+        var scope = ScopeOfProject(projectId);
+        if (scope is null) throw DeniedProject(projectId);
+        // Буфер лога принадлежит пространству проекта (процесс запущен в его папке), поэтому его
+        // ключ — арендатор, а не id соединения: в общем проекте участник читает тот же лог, что
+        // и владелец, а не своё пустое «отражение» (ловушка ключа, разрез §6.6 п. 2).
+        var buffered = _devServer.GetLogBuffer(projectId, serviceId, scope.TenantOwnerId);
         await Groups.AddToGroupAsync(Context.ConnectionId, DevServerService.LogGroup(projectId, serviceId));
         return buffered;
     }
@@ -217,7 +223,7 @@ public class SessionHub : Hub
     // придёт снимком pending_messages, а доставленное — событием user_message).
     public async Task<string> SendMessage(string sessionId, string text, List<string>? attachedPaths = null, string? mode = null, bool auto = false)
     {
-        if (!OwnsSession(sessionId)) throw DeniedSession(sessionId);
+        if (ScopeOfSession(sessionId, ProjectRight.Write) is null) throw DeniedSession(sessionId);
         // auto — сообщение опубликовано автоматически (например, «Обсудить с командой»):
         // UI покажет источник вместо пузыря пользователя
         // cause=User: ход, прерванный ради этого сообщения, помечается в истории как
@@ -237,7 +243,7 @@ public class SessionHub : Hub
 
     public void RespondPermission(string sessionId, string requestId, string behavior)
     {
-        if (!OwnsSession(sessionId)) throw DeniedSession(sessionId);
+        if (ScopeOfSession(sessionId, ProjectRight.Write) is null) throw DeniedSession(sessionId);
         _sessions.RespondPermission(sessionId, requestId, behavior);
     }
 
@@ -245,14 +251,14 @@ public class SessionHub : Hub
     // не дожидаясь следующего сообщения.
     public void SetMode(string sessionId, string mode)
     {
-        if (!OwnsSession(sessionId)) throw DeniedSession(sessionId);
+        if (ScopeOfSession(sessionId, ProjectRight.Write) is null) throw DeniedSession(sessionId);
         _sessions.SetMode(sessionId, mode);
     }
 
     // executions — из DI параметром метода (сервис хабу нужен только здесь, конструктор не трогаем)
     public async Task Interrupt(string sessionId, TaskExecutionService executions)
     {
-        if (!OwnsSession(sessionId)) throw DeniedSession(sessionId);
+        if (ScopeOfSession(sessionId, ProjectRight.Write) is null) throw DeniedSession(sessionId);
         _sessions.Interrupt(sessionId);
         // «Стоп» в чате исполнителя задачи: прерванный ход result не пришлёт — фиксируем
         // остановку сами, как на доске агентов (BoardController.InterruptAgent)
@@ -262,19 +268,19 @@ public class SessionHub : Hub
     // Ручное сворачивание контекста сессии (/compact)
     public async Task CompactSession(string sessionId)
     {
-        if (!OwnsSession(sessionId)) throw DeniedSession(sessionId);
+        if (ScopeOfSession(sessionId, ProjectRight.Write) is null) throw DeniedSession(sessionId);
         await _sessions.CompactAsync(sessionId);
     }
 
     public void AnswerQuestion(string sessionId, string toolUseId, string answerText)
     {
-        if (!OwnsSession(sessionId)) throw DeniedSession(sessionId);
+        if (ScopeOfSession(sessionId, ProjectRight.Write) is null) throw DeniedSession(sessionId);
         _sessions.AnswerQuestion(sessionId, toolUseId, answerText);
     }
 
     public void RespondPlan(string sessionId, string requestId, bool approve, string? feedback = null)
     {
-        if (!OwnsSession(sessionId)) throw DeniedSession(sessionId);
+        if (ScopeOfSession(sessionId, ProjectRight.Write) is null) throw DeniedSession(sessionId);
         _sessions.RespondPlan(sessionId, requestId, approve, feedback);
     }
 
@@ -286,7 +292,7 @@ public class SessionHub : Hub
     public async Task RespondTeamPlan(string sessionId, string planId, string decision,
         string? subtaskId = null, string? executorPersonaId = null, string? feedback = null)
     {
-        if (!OwnsSession(sessionId)) throw DeniedSession(sessionId);
+        if (ScopeOfSession(sessionId, ProjectRight.Write) is null) throw DeniedSession(sessionId);
         var parsed = decision?.ToLowerInvariant() switch
         {
             "run" => TeamPlanDecision.Run,
@@ -308,7 +314,7 @@ public class SessionHub : Hub
     public async Task RespondTeamEscalation(string sessionId, string escalationId,
         string? actionId = null, string? comment = null)
     {
-        if (!OwnsSession(sessionId)) throw DeniedSession(sessionId);
+        if (ScopeOfSession(sessionId, ProjectRight.Write) is null) throw DeniedSession(sessionId);
         await _sessions.RespondTeamEscalationAsync(sessionId, escalationId, actionId, comment);
     }
 }

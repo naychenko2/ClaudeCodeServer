@@ -319,7 +319,11 @@ public class FileWatcherFullResyncTests : IDisposable
         context.Setup(c => c.ConnectionId).Returns("conn-1");
         context.Setup(c => c.User).Returns(principal);
 
-        var sessionHub = new SessionHub(null!, projects, svc, null!, null!, NullLogger<SessionHub>.Instance)
+        // Точка доступа хаба (S0-6) — настоящая, поверх ProjectManager этого теста: sub-claim
+        // выше равен владельцу проекта, поэтому доступ есть. ISessionDirectory здесь не зовётся
+        // (JoinProject чат не резолвит) — оставляем пустую заглушку.
+        var sessionHub = new SessionHub(null!, projects, new ProjectAccessService(projects, new Mock<ISessionDirectory>().Object),
+            svc, null!, null!, NullLogger<SessionHub>.Instance)
         {
             Context = context.Object,
             Groups = groups.Object,

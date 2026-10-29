@@ -9,6 +9,9 @@
 # Снимок может только сокращаться по мере перевода точек доступа на IProjectAccess/RequestScope
 # (шаги S0-4a/S0-4b/S0-5/S0-6/S0-7, S2a-3). Новая строка — только осознанно, с вердиктом
 # в дифе (личное/админское/«до S4»).
+#
+# Дельта после снимка: −3 совпадения в −2 файлах (S0-6, хаб на точку доступа): SessionHub.cs
+# (OwnsSession/OwnsProject → IProjectAccess) и TerminalHub.cs (OwnsProject → IProjectAccess).
 
 backend/ClaudeHomeServer.Architecture/Controllers/ArchitectureController.cs|1
 backend/ClaudeHomeServer.Architecture/Services/Architecture/ArchitectureToolset.cs|1
@@ -44,8 +47,6 @@ backend/ClaudeHomeServer/Controllers/SkillsController.cs|1
 backend/ClaudeHomeServer/Controllers/TasksController.cs|11
 backend/ClaudeHomeServer/Controllers/TelemetryController.cs|2
 backend/ClaudeHomeServer/Controllers/TtsController.cs|1
-backend/ClaudeHomeServer/Hubs/SessionHub.cs|2
-backend/ClaudeHomeServer/Hubs/TerminalHub.cs|1
 backend/ClaudeHomeServer.ImageEditor/Controllers/ImageEditScopeGate.cs|2
 backend/ClaudeHomeServer.ImageEditor/Mcp/ImageEditorToolset.cs|1
 backend/ClaudeHomeServer.Plugins/Controllers/PluginBridgeController.cs|1

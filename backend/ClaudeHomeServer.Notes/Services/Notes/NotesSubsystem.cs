@@ -88,6 +88,9 @@ public sealed class NotesSubsystem : IAppSubsystem
         services.AddSingleton<WikiKeeper>();
         // Проверки и запись применения пакета (S4b-1/S4b-2): vertical-внутренний тип, как Хранитель.
         services.AddSingleton<WikiApplyService>();
+        // Откат применённого пакета по прообразам (S4b-3, решение 12г мера 4): вызывается только
+        // REST-контроллером («Журнал», кнопка человека); наружу его контракт не выходит.
+        services.AddSingleton<WikiPackageRevert>();
         // Сторож старта: пакеты, застрявшие в «applying» после падения процесса, откатывает по
         // прообразам (ADR-035, решение 4). Гейт по подсистеме и по Testing — общий хелпер.
         services.AddGatedHostedService<WikiApplyStartupGuard>(config, Key);

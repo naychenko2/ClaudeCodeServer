@@ -439,9 +439,13 @@ public sealed class WikiApplyService
     }
 
     // Тот же относительный путь, что у страницы под pages/: прообраз читается рядом с тем,
-    // что он описывает, и не требует обратного разбора имени.
-    private static string PreimageRel(string packageId, string pageKey) =>
-        $"keeper/preimages/{packageId}/{pageKey}";
+    // что он описывает, и не требует обратного разбора имени. internal: та же форма нужна
+    // откату пакета (WikiPackageRevert): местоположение прообразов определено в одном месте.
+    internal static string PreimagesRel(string packageId) =>
+        $"keeper/preimages/{packageId}";
+
+    internal static string PreimageRel(string packageId, string pageKey) =>
+        $"{PreimagesRel(packageId)}/{pageKey}";
 
     /// <summary>Записать байты атомарно и с fsync: temp в той же папке → Flush(true) → Move.
     /// Для прообразов и их возврата: это то, что держит откат после падения процесса, и его

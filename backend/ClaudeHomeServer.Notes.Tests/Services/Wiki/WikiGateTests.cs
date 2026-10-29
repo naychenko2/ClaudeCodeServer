@@ -531,4 +531,35 @@ public class WikiGateTests
         r.Model.Should().BeNull();
         r.Errors.Should().Contain(e => e.Contains("не может быть секций"));
     }
+
+    // —— Область правила дословности (S6b-2, M2): GivenOnly ——
+
+    private static readonly List<WikiGate.Draft> FootnoteState =
+        [CardDraft, D(P1Dir + "Тет.md", Page(swodka: Good, footnotes: Foot))];
+
+    [Fact]
+    public void Гейт_дословностьGivenOnlyСноскаБезТекстаКарточки_проходит()
+    {
+        // Вызывающий дал тексты только своих источников: этой карточки в словаре нет —
+        // её сноска (принятая раньше, по своему источнику) не может отвергнуть запись.
+        WikiGate.Check(FootnoteState, P1, [], new Dictionary<string, string>(), WikiGate.VerbatimScope.GivenOnly)
+            .Should().BeEmpty();
+
+        // Тот же вход в режиме по умолчанию — по-прежнему нарушение (fail-closed).
+        WikiGate.Check(FootnoteState, P1, [], new Dictionary<string, string>())
+            .Should().Contain(e => e.Contains("нет текста источника карточки"));
+    }
+
+    [Fact]
+    public void Гейт_дословностьGivenOnlyЦитатаВнеТекстаСвоейКарточки_отбита()
+    {
+        // Текст карточки у вызывающего ЕСТЬ — GivenOnly не отменяет дословность своей
+        // карточки: цитата вне её текста — нарушение, как в All.
+        var texts = new Dictionary<string, string> { [CardDraft.Path] = "совсем другой текст источника" };
+        WikiGate.Check(FootnoteState, P1, [], texts, WikiGate.VerbatimScope.GivenOnly)
+            .Should().Contain(e => e.Contains("отсутствует в тексте источника"));
+
+        var own = new Dictionary<string, string> { [CardDraft.Path] = "вступление. " + Quote + " окончание" };
+        WikiGate.Check(FootnoteState, P1, [], own, WikiGate.VerbatimScope.GivenOnly).Should().BeEmpty();
+    }
 }

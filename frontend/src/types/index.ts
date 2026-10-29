@@ -169,11 +169,10 @@ export type ProjectMemberRole = 'editor' | 'reader';
 // право действия определяют по ownerId, а не по этому полю.
 export type ProjectRoleView = 'owner' | 'editor' | 'reader';
 
-// Строка списка участников в ответах /api/projects/{id}/members. Бэк отдаёт ТОЛЬКО
-// userId и role (ProjectMembersController.Result); username/displayName/addedAt/addedBy
-// не присылаются — списка учёток и поиска по части имени на бэке нет по построению
-// (ProjectMembershipService: единственный вход в поиск — точное username). Поэтому эти
-// поля необязательные: UI не показывает их как есть, пока бэк их не отдаёт.
+// Строка списка участников в ответах /api/projects/{id}/members. Владельца в списке нет:
+// он приходит отдельным полем ответа (ProjectMembersView.owner). username/displayName/
+// addedAt остаются необязательными: старые данные и тесты строят участника из одной пары
+// userId + role, а UI в таком случае показывает то, что есть.
 export interface ProjectMember {
   userId: string;
   role: ProjectMemberRole;
@@ -181,6 +180,21 @@ export interface ProjectMember {
   displayName?: string;
   addedAt?: string;
   addedBy?: string;
+}
+
+// Владелец проекта в ответе списка участников
+export interface ProjectOwnerRef {
+  userId: string;
+  username: string;
+  displayName?: string | null;
+}
+
+// Тело GET /api/projects/{id}/members и ответ каждой мутации членства: участники, владелец
+// и роль того, кто спрашивает (по ней вид настроек — владелец или участник).
+export interface ProjectMembersView {
+  members: ProjectMember[];
+  owner: ProjectOwnerRef;
+  myRole: ProjectRoleView;
 }
 
 // Машинные коды отказов операций членства. Текст отказа бэк отдаёт готовым для человека;
@@ -288,6 +302,9 @@ export interface Project {
   // право действия — по ownerId. Резервируем под UI-гейты следующих шагов (не-владелец
   // не видит «Пригласить»).
   myRole?: ProjectRoleView;
+  // Имя владельца для заголовка «Проект Андрея» и метки на чужом проекте; у своего проекта
+  // и у старого бэка отсутствует
+  ownerDisplayName?: string | null;
 }
 
 // Иконка проекта (ADR-009): initials — две буквы на цветной плитке; glyph — значок из

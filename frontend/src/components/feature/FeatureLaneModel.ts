@@ -277,8 +277,11 @@ export function buildStageLanes(run: FeatureRun, stats: FeatureStats | null, now
     .map(m => ({ taskId: m.taskId, at: m.at, stepRefs: m.stepRefs ?? [] }))
     .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
   // Волна после мержа — только когда её сказал бэк и есть что отмечать (без мержей волны
-  // не бывает: waveAfterMerge без метки — противоречие контракта, не рисуем).
-  const waveFrom = run.waveAfterMerge === true && mergeMarks.length > 0
+  // не бывает: waveAfterMerge без метки — противоречие контракта, не рисуем). У закрытой
+  // фичи (closed/merged — finished выше) волны нет: бэк оставляет waveAfterMerge и при
+  // закрытом состоянии (эпик Done перекрывает её только в TerminalState, FeatureProjector.cs),
+  // а «новая волна» после закрытой фичи — ложь истории (ревю 07eee660 минор 4).
+  const waveFrom = run.waveAfterMerge === true && !finished && mergeMarks.length > 0
     ? mergeMarks[mergeMarks.length - 1]!.at
     : null;
 

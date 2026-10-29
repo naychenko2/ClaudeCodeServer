@@ -618,6 +618,21 @@ describe('метки мержей и волна: данные run.merges/waveAft
     expect(noMerge.waveFrom).toBeNull();
   });
 
+  it('закрытая/смерженная фича: волны нет, даже когда бэк держит waveAfterMerge (минор 4 ревью 07eee660)', () => {
+    // Эпик Done перекрывает волну на бэке (TerminalState), но поле остаётся true;
+    // «новая волна» после закрытой фичи — ложь истории, гасим по finished.
+    const closed = buildStageLanes(
+      mkRun({ state: 'closed', closed: true, stages: [mkStage('prod', 'done')], merges: [M1, M2], waveAfterMerge: true }),
+      mkStats(), NOW,
+    );
+    expect(closed.waveFrom).toBeNull();
+    const merged = buildStageLanes(
+      mkRun({ state: 'merged', stages: [mkStage('prod', 'done')], merges: [M1, M2], waveAfterMerge: true }),
+      mkStats(), NOW,
+    );
+    expect(merged.waveFrom).toBeNull();
+  });
+
   it('битая дата — не метка; порядок меток не зависит от порядка ответа', () => {
     const model = buildStageLanes(
       mkRun({

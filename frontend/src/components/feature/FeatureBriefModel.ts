@@ -432,7 +432,8 @@ function nonNeg(n: number | null | undefined): number {
   return Number.isFinite(n) && (n as number) > 0 ? Math.round(n as number) : 0;
 }
 
-// Часть «· N в master» (F1): пометка на полоске готовности и в факте трекера. Пусто при
+// Часть «· N в master» (F1): пометка ОДНА, на подписи полоски готовности — в факте трекера
+// её нет (ревю 07eee660 минор 3: в одном блоке «N в master» печаталось дважды). Пусто при
 // 0/отсутствии данных — поведение прежнее (отметки нет там, где шагов в master нет).
 function masterParts(inMaster: number): BriefDonePart[] {
   if (inMaster <= 0) return [];
@@ -449,9 +450,8 @@ export function briefReadinessText(brief: FeatureBrief, opts: BriefTextOptions =
   const trackerParts = briefDoneText(brief);
   const planFact = brief.kind === 'queued' && (brief.done.planState === 'cut' || brief.done.planState === 'done');
   const tracker: BriefDonePart[] = planFact ? trackerParts : [{ text: 'по трекеру: ', mono: false }, ...trackerParts];
-  // Факт «в master» — к строке трекера: это ровно тот же ортогональный счётчик бэка,
-  // что и корзины, но не корзина: к «приняты» и «виткам» добавляется отдельной частью.
-  tracker.push(...masterParts(inMaster));
+  // «в master» к строке трекера НЕ добавляется: это ровно тот же ортогональный счётчик,
+  // что показан на подписи полоски ниже; второй раз в том же блоке он не звучит (минор 3).
 
   let caption: BriefDonePart[];
   let percent: number;
@@ -477,7 +477,12 @@ export function briefReadinessText(brief: FeatureBrief, opts: BriefTextOptions =
       { text: `${percent} %`, mono: true },
     ];
     // Та же шкала, что у знаменателя полоски: доля шагов в master от total, не выше
-    // залитой части (бэк гарантирует inMaster ≤ accepted; clamp — защита от битых чисел).
+    // залитой части. Бэк НЕ гарантирует inMaster ≤ accepted: отсечка требует allDone
+    // цепочки, а не принятия (FeatureStepAccounting.cs:321-328), поэтому шаг «в master»
+    // без витка (корзина review) даёт inMaster > accepted. Это не битые числа, а правило
+    // полоски: «в master» — часть принятой части шкалы готовности, за неё сегмент не
+    // выходит; текст при этом честно называет факт (он ортогональный счётчик бэка),
+    // а расхождение говорит себе в «Трекер расходится» (вид unreviewed).
     if (inMaster > 0 && stepsTotal > 0) inMasterPercent = Math.min(clampPercent((inMaster / stepsTotal) * 100), percent);
   }
   caption.push(...masterParts(inMaster));
@@ -553,16 +558,18 @@ function etaMain(minutes: number): string {
 }
 
 // «к 16:50»; дальше 12 ч от «сейчас» — дата: «завтра к 10:30», «к 31.10». Нечитаемый момент — null.
-function readyAtText(iso: string | null | undefined, nowMs: number): string | null {
+// marker — связующее слово («к» / «завтра к»); строка шапки В2 («≈ 18:30») зовёт с «≈» —
+// тот же момент, другая интонация строки (общий форматтер, второй копии нет).
+export function readyAtText(iso: string | null | undefined, nowMs: number, marker = 'к'): string | null {
   if (!iso) return null;
   const t = Date.parse(iso);
   if (!Number.isFinite(t)) return null;
-  if (t - nowMs <= HOUR_12) return `к ${formatClock(iso)}`;
+  if (t - nowMs <= HOUR_12) return `${marker} ${formatClock(iso)}`;
   const target = new Date(t);
   const tomorrow = new Date(nowMs);
   tomorrow.setDate(tomorrow.getDate() + 1);
   const isTomorrow = target.getFullYear() === tomorrow.getFullYear() && target.getMonth() === tomorrow.getMonth() && target.getDate() === tomorrow.getDate();
-  return isTomorrow ? `завтра к ${formatClock(iso)}` : `к ${formatDate(iso)}`;
+  return isTomorrow ? `завтра ${marker} ${formatClock(iso)}` : `${marker} ${formatDate(iso)}`;
 }
 
 function pastFeatures(n: number): string {

@@ -552,12 +552,13 @@ describe('Готовность', () => {
 describe('Готовность: пометка «в master» (F1)', () => {
   const D5 = { stepsAccepted: 4, stepsTotal: 5, loops: 0, planState: 'cut' as const };
 
-  it('по трекеру: пометка в подписи и в факте, сегмент полоски 3 из 5 = 60 %', () => {
+  it('по трекеру: пометка ОДНА — в подписи (не в факте), сегмент полоски 3 из 5 = 60 %', () => {
     const v = briefReadinessText(brief({ done: D5 }), { nameOf, inMaster: 3 });
     expect(v.inMaster).toBe(3);
     expect(v.inMasterPercent).toBe(60);
     expect(text(v.caption)).toBe('4 из 5 шагов · 80 % · 3 в master');
-    expect(text(v.tracker)).toBe('по трекеру: 4 из 5 шагов приняты · 3 в master');
+    // Ревю 07eee660 минор 3: «N в master» в одном блоке печаталось дважды (подпись + факт).
+    expect(text(v.tracker)).toBe('по трекеру: 4 из 5 шагов приняты');
     expect(v.ariaLabel).toBe('Готовность 80 %, 3 в master');
   });
 
@@ -577,7 +578,7 @@ describe('Готовность: пометка «в master» (F1)', () => {
     expect(v.inMaster).toBe(2);
     expect(v.inMasterPercent).toBe(0);
     expect(text(v.caption)).toBe('4 из 9 · 45 % · 2 в master');
-    expect(text(v.tracker)).toBe('по трекеру: 2 из 5 шагов приняты · 1 виток правок · 2 в master');
+    expect(text(v.tracker)).toBe('по трекеру: 2 из 5 шагов приняты · 1 виток правок');
     expect(v.ariaLabel).toBe('Готовность 45 %, 2 в master');
   });
 
@@ -589,8 +590,10 @@ describe('Готовность: пометка «в master» (F1)', () => {
   it('закрытая очередь с планом: без inMaster — «План готов» без хвоста; с inMaster — хвост есть', () => {
     const plain = briefReadinessText(brief({ kind: 'queued', done: { stepsAccepted: 0, stepsTotal: 4, loops: 0, planState: 'cut' } }), { nameOf });
     expect(text(plain.tracker)).toBe('План готов · 0 из 4 шагов');
+    // С inMaster — хвост в подписи полоски (одна пометка), не в строке «План готов».
     const withMaster = briefReadinessText(brief({ kind: 'queued', done: { stepsAccepted: 0, stepsTotal: 4, loops: 0, planState: 'cut' } }), { nameOf, inMaster: 1 });
-    expect(text(withMaster.tracker)).toBe('План готов · 0 из 4 шагов · 1 в master');
+    expect(text(withMaster.tracker)).toBe('План готов · 0 из 4 шагов');
+    expect(text(withMaster.caption)).toContain('1 в master');
   });
 });
 

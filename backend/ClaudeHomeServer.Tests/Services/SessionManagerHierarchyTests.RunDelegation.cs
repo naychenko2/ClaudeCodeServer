@@ -17,7 +17,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // концом, а фоновые агенты делегированного хода (Agent run_in_background, Workflow) живут после
 // result и ходят в MCP с заголовком этого чата. Гейты видят их делегированными, пока они живы и
 // пока ход не подаст человек; без фоновых делегированность действует ровно ход.
-public partial class SessionManagerTests
+public partial class SessionManagerHierarchyTests
 {
     private const string ChatsSend = "Отправка сообщения в другой чат";
     private const string ReportUp = "Отчёт в вышестоящий чат";

@@ -18,12 +18,20 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects/{id}/members")]
-public class ProjectMembersController(ProjectMembershipService membership) : ControllerBase
+public class ProjectMembersController(ProjectMembershipService membership, UserStore users) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
     public sealed record AddMemberRequest(string? Username, string? Role);
     public sealed record ChangeRoleRequest(string? Role);
+
+    // Список доступен владельцу и участникам; посторонний получает 404 от [ProjectScope]
+    [HttpGet]
+    public IActionResult List(string id, [FromServices] ProjectManager projects)
+    {
+        var project = projects.GetById(id);
+        return project is null ? NotFound() : Ok(ProjectMembersView.Full(project, UserId, users));
+    }
 
     [HttpPost]
     public async Task<IActionResult> Add(string id, [FromBody] AddMemberRequest req, CancellationToken ct)
@@ -63,6 +71,6 @@ public class ProjectMembersController(ProjectMembershipService membership) : Con
 
     private IActionResult Result(MembershipResult r) =>
         r.Ok
-            ? Ok(new { members = (r.Project!.Members ?? []).Select(m => new { userId = m.UserId, role = m.Role.ToString().ToLowerInvariant() }) })
+            ? Ok(ProjectMembersView.Full(r.Project!, UserId, users))
             : StatusCode(r.Status, new { error = r.Error, code = r.Code });
 }

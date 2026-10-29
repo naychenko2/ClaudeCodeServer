@@ -158,3 +158,46 @@ public sealed class ProjectMembershipService(
         return null;
     }
 }
+
+/// <summary>
+/// Представление участников проекта для REST: полный список (GET members и ответы мутаций) и
+/// короткая сводка для DTO проекта. Имена берутся из каталога пользователей; чужие учётки
+/// не перечисляются — только владелец и участники самого проекта.
+/// </summary>
+public static class ProjectMembersView
+{
+    private static string RoleName(ProjectRole r) => r.ToString().ToLowerInvariant();
+
+    private static object Person(UserStore users, string userId)
+    {
+        var u = users.GetById(userId);
+        return new { userId, username = u?.Username ?? "", displayName = u?.DisplayName };
+    }
+
+    /// <summary>Полный ответ: участники, владелец и роль вызывающего.</summary>
+    public static object Full(Project p, string callerId, UserStore users) => new
+    {
+        members = (p.Members ?? []).Select(m =>
+        {
+            var u = users.GetById(m.UserId);
+            return new { userId = m.UserId, username = u?.Username ?? "", displayName = u?.DisplayName, role = RoleName(m.Role), addedAt = m.AddedAt };
+        }),
+        owner = Person(users, p.OwnerId!),
+        myRole = ProjectAccess.Check(p, callerId) is { } r ? RoleName(r) : null,
+    };
+
+    /// <summary>
+    /// Сводка для DTO проекта: null у обычного проекта без участников, где вызывающий — владелец.
+    /// </summary>
+    public static (object? Members, string? MyRole, string? OwnerUsername, string? OwnerDisplayName) Summary(
+        Project p, string callerId, UserStore users)
+    {
+        var role = ProjectAccess.Check(p, callerId);
+        var shared = p.Members is { Count: > 0 } || role is not (null or ProjectRole.Owner);
+        if (!shared) return (null, null, null, null);
+        var owner = users.GetById(p.OwnerId!);
+        var members = p.Members ?? [];
+        return (new { count = members.Count, first = members.Take(3).Select(m => Person(users, m.UserId)) },
+            role is { } r ? RoleName(r) : null, owner?.Username, owner?.DisplayName);
+    }
+}

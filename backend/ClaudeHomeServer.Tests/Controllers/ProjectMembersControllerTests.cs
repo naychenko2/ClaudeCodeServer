@@ -219,12 +219,57 @@ public class ProjectMembersControllerTests : IClassFixture<TestWebApplicationFac
     }
 
     [Fact]
-    public async Task НетПеречисленияУчёток()
+    public async Task НетПоискаУчётокПоЧастиИмени()
     {
         var owner = Owner(); await SetFlagAsync(owner, true);
         var id = await CreateProjectAsync(owner);
-        // GET на коллекцию и по имени/части имени не существует
-        (await owner.GetAsync($"/api/projects/{id}/members")).IsSuccessStatusCode.Should().BeFalse();
         (await owner.GetAsync($"/api/projects/{id}/members/sec")).IsSuccessStatusCode.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task СписокУчастников_ВладелецИУчастникВидятВладельцаИМоюРоль_ПосторонийДаёт404()
+    {
+        var owner = Owner(); var second = Second();
+        await SetFlagAsync(owner, true); await SetFlagAsync(second, true);
+        var id = await CreateProjectAsync(owner);
+
+        var asOwner = JsonSerializer.Deserialize<JsonElement>(await (await owner.GetAsync($"/api/projects/{id}/members")).Content.ReadAsStringAsync());
+        asOwner.GetProperty("myRole").GetString().Should().Be("owner");
+        asOwner.GetProperty("members").GetArrayLength().Should().Be(0);
+        asOwner.GetProperty("owner").GetProperty("userId").GetString().Should().Be(IdOf(TestWebApplicationFactory.TestUsername));
+
+        // Посторонний до приглашения — 404
+        (await second.GetAsync($"/api/projects/{id}/members")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+
+        var add = await AddAsync(owner, id, TestWebApplicationFactory.SecondUsername, "reader");
+        var addJson = JsonSerializer.Deserialize<JsonElement>(await add.Content.ReadAsStringAsync());
+        addJson.GetProperty("members")[0].GetProperty("username").GetString().Should().Be(TestWebApplicationFactory.SecondUsername);
+
+        var asMember = JsonSerializer.Deserialize<JsonElement>(await (await second.GetAsync($"/api/projects/{id}/members")).Content.ReadAsStringAsync());
+        asMember.GetProperty("myRole").GetString().Should().Be("reader");
+        asMember.GetProperty("members")[0].GetProperty("role").GetString().Should().Be("reader");
+        asMember.GetProperty("members")[0].TryGetProperty("addedAt", out _).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task DtoПроекта_ОбычныйБезУчастников_ПолейНет_ОбщийСОбеихСторон_Есть()
+    {
+        var owner = Owner(); var second = Second();
+        await SetFlagAsync(owner, true); await SetFlagAsync(second, true);
+        var id = await CreateProjectAsync(owner);
+
+        var plain = JsonSerializer.Deserialize<JsonElement>(await (await owner.GetAsync($"/api/projects/{id}")).Content.ReadAsStringAsync());
+        plain.GetProperty("members").ValueKind.Should().Be(JsonValueKind.Null);
+        plain.GetProperty("myRole").ValueKind.Should().Be(JsonValueKind.Null);
+
+        (await AddAsync(owner, id, TestWebApplicationFactory.SecondUsername)).EnsureSuccessStatusCode();
+
+        var asMember = JsonSerializer.Deserialize<JsonElement>(await (await second.GetAsync($"/api/projects/{id}")).Content.ReadAsStringAsync());
+        asMember.GetProperty("myRole").GetString().Should().Be("editor");
+        asMember.GetProperty("ownerUsername").GetString().Should().Be(TestWebApplicationFactory.TestUsername);
+        asMember.GetProperty("members").GetProperty("count").GetInt32().Should().Be(1);
+
+        var asOwner = JsonSerializer.Deserialize<JsonElement>(await (await owner.GetAsync($"/api/projects/{id}")).Content.ReadAsStringAsync());
+        asOwner.GetProperty("myRole").GetString().Should().Be("owner");
     }
 }

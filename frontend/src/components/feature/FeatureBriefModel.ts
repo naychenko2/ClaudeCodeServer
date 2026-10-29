@@ -16,7 +16,7 @@
 import { formatClock, formatDate, formatDuration, minutesSince, stageLabel } from './FeatureStatsBits';
 import { laneWord } from '../../lib/roleLabel';
 import { knownStopVisual } from '../../lib/tasks';
-import type { FeatureBrief, FeatureBriefKind, FeatureBriefNote } from '../../lib/featurePage';
+import type { FeatureBrief, FeatureBriefActive, FeatureBriefActiveState, FeatureBriefKind, FeatureBriefNote } from '../../lib/featurePage';
 import type { FeatureRailKey } from '../../types/featureIndex';
 
 // Резолвер имени персоны по personaId (данные вызывают: usePersonas/getPersonaById).
@@ -259,6 +259,121 @@ export function briefNextText(brief: FeatureBrief, nameOf?: PersonaNameResolver)
   let s = `${prefix} — ${parts[0]}`;
   if (parts.length > 1) s += `, затем ${parts.slice(1).join(' и ')}`;
   return s;
+}
+
+// ── «Сейчас»: заголовок и список задач в работе ──────────────────────────────────────
+// Макет feature-summary-2, «Итерация 2». Порядок строк задаёт бэк (ждёт вас → ошибка/стоит →
+// по времени), фронт его не меняет: он собирает только слова. null — списка нет, блок рисует
+// прежнюю строку briefNowText: поля active нет (старый бэк), эпик ждёт мержа (stage feature —
+// там «Мерж…»), либо задача одна и никто не ждёт.
+export const ACTIVE_ROWS_MAX = 4;
+
+export interface BriefActiveRow {
+  taskId: string;
+  state: FeatureBriefActiveState;
+  // «Шаг 4 (фронт)» / «Ревью шага 3 (бэк)».
+  title: string;
+  who: string | null;
+  // Ошибка: «· стоит» после имени (красным); у остальных null.
+  stopped: string | null;
+  // «с 14:05 · 12 мин» / «ждёт 8 мин» / «остановлен в 13:40».
+  time: string | null;
+  ariaLabel: string;
+}
+
+export interface BriefActiveView {
+  // Заголовок вместо briefNowText; null — оставить прежнюю строку (пауза).
+  heading: string | null;
+  sub: string | null;
+  // Кнопка «Ответить Кире»: открывает чат задачи, которая ждёт человека.
+  answer: { taskId: string; label: string } | null;
+  rows: BriefActiveRow[];
+  // «ещё N в работе — во вкладке «Задачи» ›»; null — все строки на виду.
+  tail: string | null;
+}
+
+// Дательный падеж имени для «Ответить {Кире}» (эвристика, как genitiveName).
+export function dativeName(name: string): string {
+  const last = name.slice(-1).toLowerCase();
+  if (last === 'ь' || last === 'й') return `${name.slice(0, -1)}ю`;
+  if (last === 'я' || last === 'а') return `${name.slice(0, -1)}е`;
+  if (/[а-яё]/.test(last) && !/[еиоуыэюё]/.test(last)) return `${name}у`;
+  return name;
+}
+
+function activeTitle(a: FeatureBriefActive): string {
+  const lane = laneWord(a.lane);
+  const laneText = lane ? ` (${lane})` : '';
+  if (a.stage === 'prod') return a.stepRef ? `Шаг ${a.stepRef}${laneText}` : `${stageLabel('prod')}${laneText}`;
+  return `${stageLabel(a.stage)}${a.stepRef ? ` шага ${a.stepRef}` : ''}${laneText}`;
+}
+
+function activeTime(a: FeatureBriefActive, nowMs: number): string | null {
+  const clock = formatClock(a.since);
+  if (!clock) return null;
+  if (a.state === 'held') return `остановлен в ${clock}`;
+  const dur = shownDuration(a.since, nowMs);
+  if (a.state === 'waiting_you') return dur ? `ждёт ${dur}` : `с ${clock}`;
+  if (a.state === 'error') return `с ${clock}`;
+  return dur ? `с ${clock} · ${dur}` : `с ${clock}`;
+}
+
+// Подстрока при нескольких задачах: «параллельно: бэк и фронт».
+function lanesText(list: FeatureBriefActive[]): string | null {
+  const lanes = [...new Set(list.map(a => laneWord(a.lane)).filter(Boolean))];
+  if (!lanes.length) return null;
+  if (lanes.length === 1) return `линия: ${lanes[0]}`;
+  return `параллельно: ${lanes.slice(0, -1).join(', ')} и ${lanes[lanes.length - 1]}`;
+}
+
+export function briefActiveView(brief: FeatureBrief, opts: BriefTextOptions & { nowMs: number }): BriefActiveView | null {
+  const list = brief.active ?? [];
+  const n = list.length;
+  if (!n || list.some(a => a.stage === 'feature')) return null;
+  const paused = brief.kind === 'paused';
+  const waiting = list.find(a => a.state === 'waiting_you') ?? null;
+  if (n === 1 && !paused && !waiting) return null;
+
+  const nameOf = (a: FeatureBriefActive) => (a.personaId ? opts.nameOf?.(a.personaId) ?? null : null);
+  const rows: BriefActiveRow[] = n === 1 && !paused ? [] : list.slice(0, ACTIVE_ROWS_MAX).map(a => {
+    const title = activeTitle(a);
+    const who = nameOf(a);
+    return {
+      taskId: a.taskId, state: a.state, title, who, stopped: a.state === 'error' ? '· стоит' : null, time: activeTime(a, opts.nowMs),
+      ariaLabel: `${title}${who ? ` — ${who}` : ''}, открыть задачу`,
+    };
+  });
+  const tail = rows.length && n > ACTIVE_ROWS_MAX ? `ещё ${n - ACTIVE_ROWS_MAX} в работе — во вкладке «Задачи» ›` : null;
+
+  if (waiting) {
+    const name = nameOf(waiting);
+    const step = waiting.stepRef ? ` по шагу ${waiting.stepRef}` : '';
+    const others = n - 1;
+    const dur = shownDuration(waiting.since, opts.nowMs);
+    const stuck = waiting.stepRef ? `шаг ${waiting.stepRef} стоит` : 'задача стоит';
+    const rest = others > 0 ? `, ${others} ${pluralRu(others, 'другая задача идёт', 'другие задачи идут', 'других задач идут')}` : '';
+    return {
+      heading: `${name ?? 'Задача'} ждёт вашего ответа${step}`,
+      sub: [dur ? `ждёт ${dur}` : null, `${stuck}${rest}`].filter(Boolean).join(' · '),
+      answer: { taskId: waiting.taskId, label: name ? `Ответить ${dativeName(name)}` : 'Ответить' },
+      rows, tail,
+    };
+  }
+  return {
+    heading: paused ? null : `${n} ${pluralRu(n, 'задача', 'задачи', 'задач')} в работе`,
+    sub: paused ? null : lanesText(list),
+    answer: null, rows, tail,
+  };
+}
+
+// Тег в шапке со счётом задач: «идёт · 3 в работе», «ждёт вас · 1 из 3». null — тег прежний
+// (задача одна или поля active нет).
+export function briefActiveTagLabel(brief: FeatureBrief): string | null {
+  const list = brief.active ?? [];
+  if (list.length < 2) return null;
+  if (brief.kind === 'running') return `идёт · ${list.length} в работе`;
+  if (brief.kind === 'waiting_you') return `ждёт вас · ${list.filter(a => a.state === 'waiting_you').length} из ${list.length}`;
+  return null;
 }
 
 // ── «Готовность» ────────────────────────────────────────────────────────────────────
@@ -635,6 +750,21 @@ export const BRIEF_MODEL_WORDS: readonly string[] = [
   'Срок',
   'Готовность',
   'за вами',
+  'старт ≈',
+  // Задачи в работе (briefActiveView, briefActiveTagLabel)
+  'ждёт вашего ответа',
+  'Ответить',
+  'параллельно:',
+  'линия:',
+  'в работе',
+  'во вкладке',
+  'остановлен в',
+  '· стоит',
+  'открыть задачу',
+  'другая задача',
+  'другие задачи',
+  'других задач',
+  'ждёт вас',
   'по трекеру',
   'Ещё не начато',
   'Осталось:',

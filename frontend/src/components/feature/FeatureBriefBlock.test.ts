@@ -37,7 +37,7 @@ import { stageLabel } from './FeatureStatsBits';
 import { C, FONT } from '../../lib/design';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureBriefBlockProps } from './FeatureBriefBlock';
-import type { FeatureBrief, FeatureBriefKind } from '../../lib/featurePage';
+import type { FeatureBrief, FeatureBriefActive, FeatureBriefKind } from '../../lib/featurePage';
 import type { FeatureStats } from '../../types/featureStats';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -600,5 +600,115 @@ describe('Grep-сторож (инвариант 3: фронт не пересч�
     for (const w of BRIEF_MODEL_WORDS) {
       expect(code.includes(w), `блок содержит «${w}»`).toBe(false);
     }
+  });
+});
+
+// ── Задачи в работе: заголовок, список, «Ответить», тег, старт в очереди ──────────────
+
+const A = (over: Partial<FeatureBriefActive> = {}): FeatureBriefActive => ({
+  taskId: 't1', stage: 'prod', stepRef: '4', lane: 'front', personaId: 'p-kira', state: 'working',
+  since: at(25, 14, 5), reason: null, ...over,
+});
+const allNodes = (c: ReturnType<typeof render>['c'], id: string) => {
+  const out: NonNullable<ReturnType<typeof findNodeByAttr>>[] = [];
+  const walk = (n: unknown): void => {
+    const node = n as { children?: unknown[] } | null;
+    if (!node || typeof node !== 'object') return;
+    const p = reactProps(node as never);
+    if (p && (p as Record<string, unknown>)['data-testid'] === id) out.push(node as never);
+    (node.children ?? []).forEach(walk);
+  };
+  walk(c);
+  return out;
+};
+
+describe('Задачи в работе (макет 2, «Итерация 2»)', () => {
+  const three = [A(), A({ taskId: 't2', stage: 'review', stepRef: '3', lane: 'back', personaId: 'p-gleb', state: 'review' }), A({ taskId: 't3', personaId: 'p-vera', stepRef: '5' })];
+
+  it('несколько задач: заголовок «3 задачи в работе», подстрока полос, список из role=list, тег «идёт · 3 в работе»', () => {
+    const { c } = render({ brief: brief({ active: three }), nameOf });
+    expect(joined(c, 'brief-now-line')).toBe('3 задачи в работе');
+    expect(joined(c, 'brief-now-sub')).toBe('параллельно: фронт и бэк');
+    expect(allNodes(c, 'brief-active-row')).toHaveLength(3);
+    expect(reactProps(findNodeByAttr(c, 'data-testid', 'brief-active')!.children![0] as never)!.role).toBe('list');
+    expect(joined(c, 'brief-tag')).toBe('идёт · 3 в работе');
+    expect(findNodeByAttr(c, 'data-testid', 'brief-answer')).toBeNull();
+  });
+
+  it('строка — кнопка с aria-label и переходом в задачу', () => {
+    const opened: string[] = [];
+    const { c } = render({ brief: brief({ active: three }), nameOf, onOpenTask: id => opened.push(id) });
+    const row = allNodes(c, 'brief-active-row')[1];
+    expect(reactProps(row)!['aria-label']).toBe('Ревью шага 3 (бэк) — Глеб, открыть задачу');
+    act(() => { (reactProps(row)!.onClick as () => void)(); });
+    expect(opened).toEqual(['t2']);
+  });
+
+  it('одна задача — строка «Сейчас» как раньше, списка нет', () => {
+    const { c } = render({ brief: brief({ now: { stage: 'review', taskId: 't2', personaId: 'p-gleb', stepRef: '3', lane: 'back', since: at(25, 13, 58) }, active: [A()] }), nameOf });
+    expect(joined(c, 'brief-now-line')).toBe('Ревью шага 3 (бэк) — у Глеба');
+    expect(findNodeByAttr(c, 'data-testid', 'brief-active')).toBeNull();
+    expect(joined(c, 'brief-tag')).not.toContain('в работе');
+  });
+
+  it('ждёт человека: заголовок про задачу, рамка C.info, «Ответить Кире» открывает чат; тег «ждёт вас · 1 из 3»', () => {
+    const answered: string[] = [];
+    const list = [A({ state: 'waiting_you', since: at(25, 14, 2) }), A({ taskId: 't2', personaId: 'p-gleb' }), A({ taskId: 't3', personaId: 'p-vera' })];
+    for (const isMobile of [false, true]) {
+      const { c } = render({ brief: brief({ kind: 'waiting_you', active: list }), nameOf, isMobile, onAnswer: id => answered.push(id) });
+      expect(joined(c, 'brief-now-line')).toBe('Кира ждёт вашего ответа по шагу 4');
+      expect(joined(c, 'brief-now-sub')).toBe('ждёт 8 мин · шаг 4 стоит, 2 другие задачи идут');
+      expect(styleOf(c, 'feature-brief-block').border).toBe(`1px solid ${C.info}`);
+      expect(joined(c, 'brief-answer')).toBe('Ответить Кире');
+      expect(joined(c, 'brief-tag')).toBe('ждёт вас · 1 из 3');
+      // Мерж-кнопки не конкурируют с «Ответить»: ждут не мерж.
+      expect(findNodeByAttr(c, 'data-testid', 'brief-merge')).toBeNull();
+      click(c, 'brief-answer');
+    }
+    expect(answered).toEqual(['t1', 't1']);
+  });
+
+  it('пауза: заголовок паузы прежний, в списке остановленные («остановлен в 13:40»)', () => {
+    const { c } = render({
+      brief: brief({ kind: 'paused', now: { stage: 'prod', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 13, 40) }, active: [A({ state: 'held', since: at(25, 13, 40) })] }),
+      nameOf,
+    });
+    expect(joined(c, 'brief-now-line')).toBe('На паузе — поставили вы в 13:40');
+    const row = allNodes(c, 'brief-active-row')[0];
+    expect(reactProps(row)!['data-state']).toBe('held');
+    expect(joined(c, 'brief-active-time')).toBe('остановлен в 13:40');
+  });
+
+  it('больше четырёх: 4 строки и хвост ведёт во вкладку «Задачи»', () => {
+    const calls: string[] = [];
+    const six = Array.from({ length: 6 }, (_, i) => A({ taskId: `t${i}` }));
+    const { c } = render({ brief: brief({ active: six }), nameOf, onOpenTasks: () => calls.push('tasks') });
+    expect(allNodes(c, 'brief-active-row')).toHaveLength(4);
+    expect(joined(c, 'brief-active-tail')).toBe('ещё 2 в работе — во вкладке «Задачи» ›');
+    click(c, 'brief-active-tail');
+    expect(calls).toEqual(['tasks']);
+  });
+
+  it('ошибка: «· стоит» красным 600', () => {
+    const { c } = render({ brief: brief({ active: [A({ state: 'error' }), A({ taskId: 't2' })] }), nameOf });
+    const st = styleOf(c, 'brief-active-stopped');
+    expect(st.color).toBe(C.dangerText);
+    expect(st.fontWeight).toBe(600);
+  });
+
+  it('360: без отступа 24, высота строки 40, время вторым столбцом; десктоп — отступ SP.xl, строка в одну линию', () => {
+    const m = render({ brief: brief({ active: three }), nameOf, isMobile: true });
+    expect(styleOf(m.c, 'brief-active').marginLeft).toBe(0);
+    expect(reactProps(allNodes(m.c, 'brief-active-row')[0])!.style).toMatchObject({ minHeight: 40 });
+    const d = render({ brief: brief({ active: three }), nameOf, isMobile: false });
+    expect(styleOf(d.c, 'brief-active').marginLeft).toBe(24);
+    expect((reactProps(allNodes(d.c, 'brief-active-row')[0])!.style as Record<string, unknown>).minHeight).toBeUndefined();
+  });
+
+  it('в очереди: «старт ≈ 15:00» из queueStartEstimate; нет значения — строки нет', () => {
+    const q = brief({ kind: 'queued', queueStartEstimate: at(25, 15, 0), estimate: HIST });
+    expect(joined(render({ brief: q, nameOf }).c, 'brief-eta')).toContain('старт ≈ 15:00');
+    const none = brief({ kind: 'queued', estimate: HIST });
+    expect(joined(render({ brief: none, nameOf }).c, 'brief-eta')).not.toContain('старт ≈');
   });
 });

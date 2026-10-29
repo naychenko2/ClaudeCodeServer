@@ -17,9 +17,10 @@ import { C, R, SP, FS, FONT } from '../../lib/design';
 import { Button } from '../ui/Button';
 import { StatusTag, featureRunStatusTag, type FeatureRunTag } from './FeatureStatusTag';
 import {
-  briefElapsedFact, briefEstimateText, briefNowText, briefReadinessText, briefSubText, briefUpdatedText, voiceRoleText, voiceStaleLabel, voiceWhenText,
+  briefActiveTagLabel, briefActiveView, briefElapsedFact, briefEstimateText, briefNowText, briefReadinessText, briefSubText, briefUpdatedText, voiceRoleText, voiceStaleLabel, voiceWhenText,
   type BriefDonePart, type BriefEstimateView, type BriefReadinessView, type PersonaNameResolver,
 } from './FeatureBriefModel';
+import { ActiveList } from './FeatureBriefActive';
 import { SummaryRow } from './FeatureBriefTimeline';
 import { stageLabel } from './FeatureStatsBits';
 import type { FeatureBrief, FeatureBriefKind } from '../../lib/featurePage';
@@ -44,6 +45,10 @@ export interface FeatureBriefBlockProps {
   // Кнопки состояния «ждёт вас»: только на мобиле (на десктопе «Мерж…» — в шапке страницы).
   onMerge?: () => void;
   onOpenFinal?: () => void;
+  // Строки «Сейчас»: id задачи → переход в задачу; «Ответить» → чат задачи; хвост → вкладка «Задачи».
+  onOpenTask?: (taskId: string) => void;
+  onAnswer?: (taskId: string) => void;
+  onOpenTasks?: () => void;
 }
 
 // ── Тег состояния ────────────────────────────────────────────────────────────────────
@@ -55,6 +60,13 @@ export interface FeatureBriefBlockProps {
 // 'merged' для карточки ведётся ровно как 'closed'). «в очереди» — новый вариант тега
 // (макет: bgSelected/textSecondary), состояния для него в таблице нет.
 export function briefTag(brief: FeatureBrief, mergedAt: string | null): FeatureRunTag {
+  // Несколько задач — тег считает их: «идёт · 3 в работе», «ждёт вас · 1 из 3».
+  const counted = briefActiveTagLabel(brief);
+  if (counted) return { ...briefTagBase(brief, mergedAt), label: counted };
+  return briefTagBase(brief, mergedAt);
+}
+
+function briefTagBase(brief: FeatureBrief, mergedAt: string | null): FeatureRunTag {
   switch (brief.kind) {
     case 'running':
       return featureRunStatusTag('running', brief.now?.stage ? stageLabel(brief.now.stage) : null);
@@ -354,7 +366,7 @@ function BriefSkeleton({ isMobile }: { isMobile: boolean }) {
 // ── Карточка ─────────────────────────────────────────────────────────────────────────
 export function FeatureBriefBlock({
   loading = false, brief, stats, mergedAt = null, nameOf, isMobile = false,
-  onOpenStats, onRetry, onMerge, onOpenFinal,
+  onOpenStats, onRetry, onMerge, onOpenFinal, onOpenTask, onAnswer, onOpenTasks,
 }: FeatureBriefBlockProps) {
   // Одно «сейчас» на ответ (R-F8): относительные строки («ждёт N», «обновлено N назад»,
   // время голоса) считаются от одного момента, привязанного к данным, а не от часов в
@@ -396,10 +408,14 @@ export function FeatureBriefBlock({
 
   const tag = briefTag(brief, mergedAt);
   const nowText = briefNowText(brief, { nameOf, mergedAt });
-  const subText = briefSubText(brief, nowMs);
+  // Задачи в работе: заголовок вместо прежней строки, кнопка «Ответить» и список.
+  const active = briefActiveView(brief, { nameOf, nowMs });
+  const headingText = active?.heading ?? nowText;
+  const subText = active?.heading != null ? active.sub : briefSubText(brief, nowMs);
   const readiness = briefReadinessText(brief, { nameOf });
   const eta = briefEstimateText(brief, { nameOf, nowMs });
   const isWait = brief.kind === 'waiting_you';
+  const answer = active?.answer && onAnswer ? active.answer : null;
   // «обновлено …» — по updatedAt (время последнего события состояния, B6), а не по computedAt
   // (дефект f2da9354); у закрытой — дата закрытия; поля нет — строки нет (решает модель).
   const upd = briefUpdatedText(brief, mergedAt, nowMs);
@@ -413,7 +429,7 @@ export function FeatureBriefBlock({
 
   return (
     <section data-testid="feature-brief-block" aria-label="Сводка состояния фичи" style={{
-      background: C.bgCard, border: `1px solid ${isWait ? C.info : C.borderLight}`, borderRadius: R.lg,
+      background: C.bgCard, border: `1px solid ${isWait || active?.answer ? C.info : C.borderLight}`, borderRadius: R.lg,
       padding: isMobile ? SP.md : SP.lg, fontFamily: FONT.sans,
     }}>
       {/* Мобильная шапка: тег и «обновлено» — отдельной строкой над «Сейчас» (макет §1). */}
@@ -429,17 +445,23 @@ export function FeatureBriefBlock({
         {GLYPH[brief.kind] && <span aria-hidden data-testid="brief-glyph" style={{ paddingTop: 3, display: 'inline-flex', flexShrink: 0 }}>{GLYPH[brief.kind]}</span>}
         <div style={{ flex: 1, minWidth: 0 }}>
           {/* Подпись без значения не рисуется (макет: «поля нет — строку не рисуем», R-F8). */}
-          {nowText && <div style={LABEL}>Сейчас</div>}
-          {nowText && (
+          {headingText && <div style={LABEL}>Сейчас</div>}
+          {headingText && (
             <div data-testid="brief-now-line" aria-live="polite" style={{ fontSize: FS.lg, fontWeight: 600, color: C.textHeading, lineHeight: 1.35 }}>
-              {nowText}
+              {headingText}
             </div>
           )}
           {subText && <div data-testid="brief-now-sub" style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: 2 }}>{monoNumbers(subText)}</div>}
+          {/* «Ответить Кире»: на обоих размерах, открывает чат задачи, которая ждёт человека. */}
+          {answer && (
+            <div style={{ marginTop: SP.sm }}>
+              <Button variant="primary" size="md" dataTestId="brief-answer" onClick={() => onAnswer?.(answer.taskId)}>{answer.label}</Button>
+            </div>
+          )}
           {/* Кнопки «ждёт вас» — только на мобиле (на десктопе «Мерж…» уже в шапке страницы).
               Каждая рисуется по своему пропу независимо (R-F5 п.6): без живого чата финала
               onOpenFinal не передан — «Мерж…» остаётся, путь к мержу в этом состоянии есть. */}
-          {isWait && isMobile && (onMerge || onOpenFinal) && (
+          {isWait && !active?.answer && isMobile && (onMerge || onOpenFinal) && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm, marginTop: SP.sm }}>
               {onMerge && <Button variant="primary" size="md" dataTestId="brief-merge" onClick={onMerge}>Мерж…</Button>}
               {/* «Открыть финальное ревью» — secondary (R-F8): второе действие ряда, не ghost-ссылка. */}
@@ -449,6 +471,8 @@ export function FeatureBriefBlock({
         </div>
         {!isMobile && tagBlock}
       </div>
+
+      {active && <ActiveList view={active} isMobile={isMobile} onOpenTask={onOpenTask} onOpenTasks={onOpenTasks} />}
 
       {/* «Готовность | Срок»: две колонки 1.4fr 1fr на десктопе, столбик на 360. */}
       <div

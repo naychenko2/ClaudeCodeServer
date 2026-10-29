@@ -123,6 +123,23 @@ export interface FeatureBriefNote {
   estimate?: FeatureBriefNoteEstimate | null;
 }
 
+// Строка «Сейчас» (brief.active[], макет 2): активная задача фичи. Порядок задаёт бэк:
+// ждёт человека → ошибка/стоит → остальные по времени. Текст строки собирает фронт по
+// stage/stepRef/lane; у эпика, ждущего человека, stage = 'feature'.
+export type FeatureBriefActiveState = 'working' | 'review' | 'waiting_you' | 'error' | 'held';
+
+export interface FeatureBriefActive {
+  taskId: string;
+  stage: string;
+  stepRef: string | null;
+  lane: string | null;
+  personaId: string | null;
+  state: FeatureBriefActiveState;
+  since: string;
+  // waiting_you — причина ожидания, error — причина остановки.
+  reason: string | null;
+}
+
 // Блок «Сводка» страницы фичи: аддитивное поле `brief` ответа
 // `GET /api/tasks/features/{featureId}` (в `FeaturePage` — опционально).
 export interface FeatureBrief {
@@ -143,6 +160,8 @@ export interface FeatureBrief {
   initialEtaMinutes?: number | null;
   // Оценка старта по впереди стоящим фичам очереди: «старт ≈ 15:00».
   queueStartEstimate?: string | null;
+  // Все активные задачи фичи; brief.now — его первая строка. Старый бэк поля не несёт.
+  active?: FeatureBriefActive[];
   // Время последнего ЗАПИСАННОГО события состояния (бэк B6, дефект f2da9354); снятие
   // паузы/ожидания значение откатывает (см. ADR-031 §2). Отдельное от computedAt — момента
   // этого ответа: computedAt — «насколько свеж снимок», updatedAt — «насколько old показано».

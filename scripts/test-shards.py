@@ -84,6 +84,10 @@ def stable_bucket(cls, n):
 # а длительности теста раздуты ожиданием процессора. Замер CI 29.10 (6 шардов монолита): отношение суммы
 # к стене прохода 4,3–5,6, модель с 5 даёт корреляцию с реальной стеной шарда 0,89 против 0,44 у голой суммы.
 PARALLEL = 5.0
+# Локальные режимы (--run, --run-fast): все шарды и десятки testhost'ов rest делят одну машину с чужой нагрузкой,
+# CPU забит, и стена шарда следует за суммой его длительностей, а не за «сумма / 5». Замер R5 (30.10, load1 ≈ 20):
+# при 5 в шард Llm.Tests-2 легло 39 с суммы против 18 с в соседнем, и он держал стену 73–105 с.
+LOCAL_PARALLEL = 3.0
 
 
 def pass_cost(total, longest):
@@ -225,17 +229,34 @@ def verify(tests, shards):
     return errors
 
 
+def median(values):
+    v = sorted(values)
+    mid = len(v) // 2
+    return v[mid] if len(v) % 2 else (v[mid - 1] + v[mid]) / 2
+
+
 def load_profile(path):
     """(секунды по классам, проект по классам, секунды Fast по классам) из JSON профиля; нет файла —
-    (None, None, None). Профиль без разбивки на проходы даёт fast = None: раскладка тогда по сумме."""
-    if not path or not os.path.exists(path):
+    (None, None, None). Профиль без разбивки на проходы даёт fast = None: раскладка тогда по сумме.
+
+    path — один файл или несколько через запятую («run1.json,run2.json,run3.json»): секунды и Fast
+    класса — МЕДИАНА по профилям, где он есть. Один прогон под нагрузкой раздувает вес класса в разы
+    (R3: 78 с против 6 с в покое) и ломает раскладку, медиана трёх спокойных прогонов эту помеху отсекает."""
+    files = [p for p in (path or "").split(",") if p and os.path.exists(p)]
+    if not files:
         return None, None, None
-    with open(path, encoding="utf-8") as f:
-        classes = json.load(f)["classes"]
-    fast = {c: v["fast"] for c, v in classes.items() if "fast" in v}
-    return ({c: v["seconds"] for c, v in classes.items()},
-            {c: v["project"] for c, v in classes.items() if v.get("project")},
-            fast or None)
+    seconds, fasts, projects = {}, {}, {}
+    for p in files:
+        with open(p, encoding="utf-8") as f:
+            classes = json.load(f)["classes"]
+        for c, v in classes.items():
+            seconds.setdefault(c, []).append(v["seconds"])
+            if "fast" in v:
+                fasts.setdefault(c, []).append(v["fast"])
+            if v.get("project"):
+                projects.setdefault(c, v["project"])
+    fast = {c: median(v) for c, v in fasts.items()}
+    return {c: median(v) for c, v in seconds.items()}, projects, fast or None
 
 
 def load_timings(path):
@@ -491,6 +512,7 @@ def main_slnx(args, ap, timings, class_projects):
 
 
 def main(argv=None):
+    global PARALLEL
     ap = argparse.ArgumentParser(description="Шарды тестов по классам с самопроверкой покрытия")
     ap.add_argument("--list", help="вывод `dotnet test --list-tests` (файл)")
     ap.add_argument("--shard", help="i/N — напечатать фильтр шарда i из N (с 1)")
@@ -502,9 +524,15 @@ def main(argv=None):
     ap.add_argument("--split", default="", help="для --run-fast: «проект=N,проект=N»")
     ap.add_argument("-n", type=int, default=3, help="число шардов (для --verify и --run)")
     ap.add_argument("--results", default=os.path.join(".cc-attachments", "test-shards"), help="папка TRX для --run")
-    ap.add_argument("--timings", help="JSON профиля (test-profile.py --json); нет файла — раскладка по хешу")
+    ap.add_argument("--parallel", type=float, help=f"во сколько раз сумма длительностей шарда больше его стены "
+                    f"(CI-режимы {PARALLEL:g}, локальные --run/--run-fast {LOCAL_PARALLEL:g})")
+    ap.add_argument("--timings", help="JSON профиля (test-profile.py --json), можно несколько через запятую — вес класса тогда медиана; нет файла — раскладка по хешу")
     ap.add_argument("--filter", dest="extra_filter", help="дополнительный фильтр к каждому шарду (--run)")
     args = ap.parse_args(argv)
+    if args.parallel is not None:
+        PARALLEL = args.parallel
+    elif args.run or args.run_fast:
+        PARALLEL = LOCAL_PARALLEL
     timings, class_projects, fast = load_profile(args.timings)
 
     if args.run_fast:

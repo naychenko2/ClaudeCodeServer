@@ -59,6 +59,7 @@ Fast — **исключение категорий**, а не перечень �
 | Монолит шардами локально | `python3 -I scripts/test-shards.py --run backend/ClaudeHomeServer.Tests -n 3 --results .cc-attachments/test-shards` |
 | Fast шардами (как в предгейте) | `python3 -I scripts/test-shards.py --run-fast backend/ClaudeHomeServer.slnx --split backend/ClaudeHomeServer.Tests=3,backend/ClaudeHomeServer.Llm.Tests=2 --filter "<фильтр Fast>" --results .cc-attachments/pregate-fast` |
 | Профиль прогона по TRX | `python3 -I scripts/test-profile.py <папка с TRX или .trx>` |
+| Профиль для раскладки (3 спокойных прогона) | см. «Профиль раскладки: как снимать» ниже |
 | Сторож длительности | `python3 -I scripts/test-profile.py <папка TRX набора Fast> --check` |
 | Тесты самих скриптов | `python3 -I scripts/test_test_profile.py` и `python3 -I scripts/test_test_shards.py` |
 
@@ -67,7 +68,8 @@ Fast — **исключение категорий**, а не перечень �
 - `--run` берёт готовую сборку (`dotnet test --no-build`) — сначала собери. Папка результатов
   получает `shard{i}.log` и TRX каждого шарда; в конце печатаются стена и пик RSS дерева
   процессов (на Linux). Без `--timings` раскладка идёт по хешу имени класса; с профилем —
-  `python3 -I scripts/test-profile.py <trx> --json > profile.json` и `--timings profile.json`.
+  `python3 -I scripts/test-profile.py <trx> --json > profile.json` и `--timings profile.json`
+  (несколько профилей через запятую — вес класса берётся МЕДИАНОЙ, см. ниже).
 - `--check` гонять **только на TRX набора Fast**: там любой тест дольше порога — нехостовый
   тест без метки Slow. Гейт — 5 с (`--threshold`), тесты от 2 с до порога печатаются блоком
   «цель доводки» без падения. `--latest-run` берёт TRX последнего прогона из общей папки
@@ -92,6 +94,39 @@ Fast — **исключение категорий**, а не перечень �
   же префиксом).
 - **Самопроверка** в каждом режиме: каждый тест списка попадает ровно в один шард, иначе exit 1.
   Объединение шардов равно списку тестов — состав не сокращается.
+- **Профиль раскладки: как снимать.** Вес класса берём из **спокойных одиночных прогонов**, а не
+  из прогона под нагрузкой: в R3 профиль снят при load1 65–108, класс весил 78 с вместо 6, и
+  жадная упаковка положила оба тяжёлых класса в один шард. Процедура (каждый прогон — один
+  процесс на проект, проекты **по очереди**, не параллельно друг другу; префикс TRX `fast-` обязателен —
+  по нему профиль отдаёт секунды Fast):
+
+  ```bash
+  F='Category!=Host&Category!=Slow&Category!=Integration&Category!=Node&Category!=Bench'
+  python3 -I scripts/test-shards.py --slnx backend/ClaudeHomeServer.slnx \
+      --exclude ClaudeHomeServer.Tests,ClaudeHomeServer.Llm.Tests --shard 1/1 > backend/ClaudeHomeServer.FastRest.slnx
+  for i in 1 2 3; do
+    for t in backend/ClaudeHomeServer.Llm.Tests backend/ClaudeHomeServer.Tests backend/ClaudeHomeServer.FastRest.slnx; do
+      dotnet test $t --no-build --filter "$F" --logger "trx;LogFilePrefix=fast-$(basename $t)" \
+          --results-directory .cc-attachments/profile/run$i/$(basename $t)
+    done
+    python3 -I scripts/test-profile.py .cc-attachments/profile/run$i --json > .cc-attachments/profile/run$i.json
+  done
+  rm backend/ClaudeHomeServer.FastRest.slnx
+  # раскладка по медиане трёх профилей
+  python3 -I scripts/test-shards.py --run-fast backend/ClaudeHomeServer.slnx \
+      --split backend/ClaudeHomeServer.Tests=3,backend/ClaudeHomeServer.Llm.Tests=2 --filter "$F" \
+      --timings .cc-attachments/profile/run1.json,.cc-attachments/profile/run2.json,.cc-attachments/profile/run3.json
+  ```
+
+  `--timings` принимает список через запятую: секунды и Fast класса — **медиана** по профилям, где
+  он есть (один выброс из трёх отсекается). Пересчитывай профиль после резки больших классов и
+  после заметного роста набора. Одиночный прогон монолита Fast идёт ~45 с, `Llm.Tests` ~30 с, rest ~33 с
+  (замер 30.10, load1 ≈ 20 из-за фонового стенда LLM).
+- **Локальная модель стены шарда.** Оценка `max(самый долгий класс, сумма / PARALLEL)` верна, пока
+  шарды не конкурируют за CPU. CI считает с `PARALLEL = 5` (4 vCPU раннера), локальные `--run` и
+  `--run-fast` — с `LOCAL_PARALLEL = 3` (`--parallel N` переопределяет): на рабочей машине десятки
+  testhost'ов rest и чужая нагрузка забивают процессор, и стена шарда следует за суммой его
+  длительностей. При 5 в `Llm.Tests-2` легло 39 с суммы против 18 с у соседа, и он держал стену.
 - **CI** ([ci.yml](../../.github/workflows/ci.yml)): сборка один раз, её `bin` едет артефактом
   в матрицу — монолит 6 шардов, `Llm.Tests` 2 шарда по классам, остальные тестовые проекты
   («rest», 3 шарда) — по проектам (`--slnx … --exclude … --shard i/N` печатает slnx шарда).
@@ -221,6 +256,20 @@ Fast — **исключение категорий**, а не перечень �
 - **Inotify-классы монолита идут последовательным хвостом.** Коллекция `Inotify` определена с
   `DisableParallelization`: её классы xunit запускает после параллельной части, по одному. В
   `Llm.Tests` они дополнительно помечены `Slow` и уходят из Fast.
+- **Замер Fast R5 (30.10, `--run-fast`, `Tests=3,Llm.Tests=2`, профиль — медиана трёх спокойных
+  прогонов).** load1 перед стартом ни разу не опустился ниже 17,9 (ждали 3 мин: стенд LLM `strata`
+  держит ~6 ядер), поэтому порог «≤ 60 с при load1 < 12» **не проверен**. Стена по TRX: `PARALLEL = 5` —
+  100,4 / 84,1 / 71,4 с (держит `Llm.Tests-2`); `PARALLEL = 3` — 79,5 / 73,8 / 59,4 с (держат шарды
+  `Llm.Tests`). Для сравнения: до резки 106–123 с, R3 80–99 с при load1 65–108. Серийные классы Fast
+  в одиночном прогоне — не дольше 12,5 с (`SessionManagerTeamLoopTests`). `Llm.Tests` под
+  нагрузкой растёт в разы больше монолита: классы `ClaudeSessionPromptSections*` порождают
+  настоящие процессы `sh -c sleep` и под нагрузкой тянут 10–15 с на тест вместо долей секунды.
+- **Rest в Fast под нагрузкой флакает на таймингах чужих тестов.** Падали по одному за прогон, набор
+  каждый раз разный: `ConsumersTailContributorTests.Потолки_…` (CodeGraph.Tests; тест не меняет
+  3-секундный `DefaultTimeout`, при таймауте `BuildAsync` отдаёт `null` и `!` даёт NRE),
+  `NpmBuildServiceTests.Разбор_…` (порог `watch.Elapsed < 100ms`), `TurnTokenAdapterBranchesTests.СбойЗапускаПроцесса`,
+  `TaskManagerHoldRaceTests.ClearHold_…`, `VideoEditorToolsetTests.Ожидание_идущей_съёмки…`. Все —
+  привязанные к часам ожидания в тестах чужих проектов, не к раскладке. Карточка дефекта 6af27416.
 - **Режим `run_tests` — без профиля и без `env`.** Серверная раскладка шардов идёт по числу
   тестов класса, а не по секундам (профиля у сервера нет); параметр `env` инструмента принимает
   только белый список Playwright, для `dotnet` переменные окружения тестов задать нельзя.

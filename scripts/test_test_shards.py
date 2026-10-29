@@ -167,6 +167,43 @@ class CostLayoutTests(unittest.TestCase):
             self.assertIsNone(ts.load_profile(old)[2])
             self.assertEqual(({"A": 2.0}, {"A": "P"}, {"A": 0.5}), ts.load_profile(new))
 
+    def test_локальная_модель_PARALLEL_выравнивает_суммы_шардов_вокруг_серийного_гиганта(self):
+        timings = {"A": 8.0, **{c: 4.0 for c in "BCDEFGHI"}}
+        classes = {c: 1 for c in timings}
+
+        def sums(parallel):
+            old, ts.PARALLEL = ts.PARALLEL, parallel
+            try:
+                return sorted(sum(timings[c] for c in s) for s in ts.layout(classes, 2, timings, dict(timings)))
+            finally:
+                ts.PARALLEL = old
+
+        ci, local = sums(5.0), sums(ts.LOCAL_PARALLEL)
+        self.assertGreater(ci[1] - ci[0], local[1] - local[0])
+
+    def test_load_profile_несколько_профилей_даёт_медиану_и_отсекает_выброс_под_нагрузкой(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = []
+            for i, (sec, fast) in enumerate([(6.0, 5.0), (78.0, 70.0), (7.0, 6.0)]):
+                p = os.path.join(tmp, f"r{i}.json")
+                with open(p, "w", encoding="utf-8") as f:
+                    json.dump({"classes": {"A": {"tests": 1, "seconds": sec, "fast": fast, "project": "P"}}}, f)
+                paths.append(p)
+            self.assertEqual(({"A": 7.0}, {"A": "P"}, {"A": 6.0}), ts.load_profile(",".join(paths)))
+            # чётное число профилей — среднее двух средних значений
+            self.assertEqual(6.5, ts.load_profile(",".join([paths[0], paths[2]]))[0]["A"])
+
+    def test_load_profile_класс_только_в_части_профилей_берётся_по_имеющимся(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            a, b = os.path.join(tmp, "a.json"), os.path.join(tmp, "b.json")
+            with open(a, "w", encoding="utf-8") as f:
+                json.dump({"classes": {"A": {"tests": 1, "seconds": 2.0}, "B": {"tests": 1, "seconds": 9.0}}}, f)
+            with open(b, "w", encoding="utf-8") as f:
+                json.dump({"classes": {"A": {"tests": 1, "seconds": 4.0}}}, f)
+            timings, _, fast = ts.load_profile(f"{a},{b}")
+            self.assertEqual({"A": 3.0, "B": 9.0}, timings)
+            self.assertIsNone(fast)
+
 
 SLNX = """<Solution>
   <Project Path="App/App.csproj" />

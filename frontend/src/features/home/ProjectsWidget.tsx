@@ -4,6 +4,8 @@ import type { Project, ProjectGroup } from '../../types';
 import { api } from '../../lib/api';
 import { C, FONT, R } from '../../lib/design';
 import { ProjectIcon } from '../projects/ProjectIcon';
+import { SharedBadge } from '../../components/SharedBadge';
+import { useMe } from '../../lib/defaultPersona';
 import { AddProjectDialog } from '../projects/dialogs/AddProjectDialog';
 import { WidgetCard, WidgetAction, WidgetEmpty, relTime } from './WidgetCard';
 
@@ -12,6 +14,7 @@ import { WidgetCard, WidgetAction, WidgetEmpty, relTime } from './WidgetCard';
 export function ProjectsWidget({ onOpenProject }: {
   onOpenProject: (p: Project) => void;
 }) {
+  const me = useMe();
   // «Все проекты» — к СПИСКУ проектов (сброс открытого проекта): диплинк #/projects,
   // как в палитре. Просто переключение раздела при открытом проекте показало бы его
   // воркспейс, а не список.
@@ -61,11 +64,16 @@ export function ProjectsWidget({ onOpenProject }: {
                 >
                   {/* Иконка проекта — мини-версия */}
                   <ProjectIcon project={p} size={28} radius={R.md} />
-                  <span style={{
-                    fontFamily: FONT.sans, fontSize: 13, color: C.textPrimary, flex: 1, minWidth: 0,
-                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                  }}>
-                    {p.name}
+                  {/* Имя + метка общего проекта (карта п.6): бейдж после имени;
+                      Badge несёт flexShrink:0 — при длинном имени сжимается имя */}
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}>
+                    <span style={{
+                      fontFamily: FONT.sans, fontSize: 13, color: C.textPrimary, minWidth: 0,
+                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                    }}>
+                      {p.name}
+                    </span>
+                    <SharedBadge project={p} currentUserId={me.userId} ownerName={p.ownerDisplayName} />
                   </span>
                   {typeof p.sessionCount === 'number' && p.sessionCount > 0 && (
                     <span style={{

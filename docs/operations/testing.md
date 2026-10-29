@@ -45,6 +45,7 @@ Fast — **исключение категорий**, а не перечень �
 | Один набор тестов | `dotnet test backend/ClaudeHomeServer.Tests --filter "FullyQualifiedName~SessionManagerTests"` |
 | Fast по решению | `dotnet test backend/ClaudeHomeServer.slnx --no-build --filter "Category!=Host&Category!=Slow&Category!=Integration&Category!=Node&Category!=Bench"` |
 | Монолит шардами локально | `python3 -I scripts/test-shards.py --run backend/ClaudeHomeServer.Tests -n 3 --results .cc-attachments/test-shards` |
+| Fast шардами (как в предгейте) | `python3 -I scripts/test-shards.py --run-fast backend/ClaudeHomeServer.slnx --split backend/ClaudeHomeServer.Tests=3,backend/ClaudeHomeServer.Llm.Tests=2 --filter "<фильтр Fast>" --results .cc-attachments/pregate-fast` |
 | Профиль прогона по TRX | `python3 -I scripts/test-profile.py <папка с TRX или .trx>` |
 | Сторож длительности | `python3 -I scripts/test-profile.py <папка TRX набора Fast> --check` |
 | Тесты самих скриптов | `python3 -I scripts/test_test_profile.py` и `python3 -I scripts/test_test_shards.py` |
@@ -121,8 +122,10 @@ Fast — **исключение категорий**, а не перечень �
 | `CollectionDefinitionGuard` | определения xunit-коллекций лежат в сборке самих тестов (см. ниже) | вызывается из `Tests` и `Llm.Tests` |
 | `test-profile.py --check` | нехостовый тест без `Slow` дольше порога | CI (30 с), предгейт и локально (5 с) |
 
-Предгейт шага (секция `Pregate` в `appsettings.json`) включает «быстрые тесты» (Order 35: Fast по
-решению без пересборки) и «сторож длительности» (Order 36) после `build`; закрытие задачи они
+Предгейт шага (секция `Pregate` в `appsettings.json`) включает «быстрые тесты» (Order 35: Fast без
+пересборки, `test-shards.py --run-fast`: монолит 3 шарда и `Llm.Tests` 2 шарда по классам, остальные
+тестовые проекты — одним процессом на rest-slnx, всё параллельно; раскладка по профилю TRX прошлого
+прогона из той же папки, первый прогон — по хешу класса) и «сторож длительности» (Order 36) после `build`; закрытие задачи они
 не блокируют, результат виден ревьюеру.
 
 Оба сканирующих сторожа делят один скан решения (`HostScan.Solution`) и помечены `Slow`:

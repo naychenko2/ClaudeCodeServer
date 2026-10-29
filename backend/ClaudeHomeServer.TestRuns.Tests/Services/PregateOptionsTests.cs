@@ -144,9 +144,12 @@ public class PregateOptionsTests
         var fast = options.Checks.Single(c => c.Name == "быстрые тесты");
         fast.Order.Should().Be(35);
         fast.WhenChanged.Should().Equal("backend/");
-        fast.Args.Should().ContainInOrder("test", "backend/ClaudeHomeServer.slnx", "--no-build", "--filter",
+        // Монолит и Llm.Tests идут шардами по классам (scripts/test-shards.py --run-fast), остальное — одним процессом
+        fast.Command.Should().Be("python3");
+        fast.Args.Should().ContainInOrder("-I", "scripts/test-shards.py", "--run-fast", "backend/ClaudeHomeServer.slnx",
+            "--split", "backend/ClaudeHomeServer.Tests=3,backend/ClaudeHomeServer.Llm.Tests=2", "--filter",
             "Category!=Host&Category!=Slow&Category!=Integration&Category!=Node&Category!=Bench",
-            "--results-directory", ".cc-attachments/pregate-fast");
+            "--results", ".cc-attachments/pregate-fast");
 
         // Сторож длительности читает TRX этого же прогона, порог — дефолт скрипта (5 с)
         var guard = options.Checks.Single(c => c.Name == "сторож длительности");

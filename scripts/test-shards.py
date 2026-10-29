@@ -24,6 +24,10 @@
   python3 -I scripts/test-shards.py --run backend/ClaudeHomeServer.Tests -n 3 --results DIR
       локально: список, N параллельных `dotnet test --no-build` по шардам, TRX всех шардов
       в одной папке (её и читает test-profile.py), стена и пик RSS дерева процессов.
+  python3 -I scripts/test-shards.py --run-fast backend/X.slnx --split backend/A.Tests=3,backend/B.Tests=2 \
+      --filter "<фильтр Fast>" --results DIR
+      Fast предгейта: проекты из --split идут шардами по классам, остальные тестовые проекты решения —
+      одним процессом на «rest»-slnx; всё параллельно, TRX в одной папке, стена и пик RSS общие.
 """
 import argparse
 import hashlib
@@ -300,29 +304,34 @@ def dotnet_env():
     return env
 
 
-def run_shards(project, n, results, timings, extra_filter, fast=None):
+def list_tests(project, extra_filter):
+    """(тесты, ошибка) из `dotnet test --no-build --list-tests`."""
     listed = subprocess.run(["dotnet", "test", project, "--no-build", "--list-tests"]
                             + (["--filter", extra_filter] if extra_filter else []),
                             capture_output=True, text=True, env=dotnet_env())
     tests = parse_list(listed.stdout)
     if listed.returncode != 0 or not tests:
-        print(listed.stdout[-2000:] + listed.stderr[-2000:], file=sys.stderr)
-        return 2
-    shards = checked_layout(tests, n, timings, fast)
-    if shards is None:
-        return 1
-    print(f"Тестов {len(tests)}, классов {len(classes_of(tests))}, шардов {n}:")
-    print(summary(tests, shards, timings, fast))
-    os.makedirs(results, exist_ok=True)
+        return None, listed.stdout[-2000:] + listed.stderr[-2000:]
+    return tests, None
+
+
+def launch(args, log_path):
+    log = open(log_path, "w", encoding="utf-8")
+    return subprocess.Popen(["dotnet", "test"] + args, stdout=log, stderr=subprocess.STDOUT, env=dotnet_env()), log
+
+
+def launch_shards(project, shards, results, prefix, extra_filter):
     procs = []
-    start = time.monotonic()
     for i, s in enumerate(shards):
         expr = f"({shard_filter(s)})" + (f"&({extra_filter})" if extra_filter else "")
-        log = open(os.path.join(results, f"shard{i + 1}.log"), "w", encoding="utf-8")
-        procs.append((subprocess.Popen(["dotnet", "test", project, "--no-build", "--filter", expr,
-                                        "--logger", f"trx;LogFilePrefix=shard{i + 1}",
-                                        "--results-directory", results],
-                                       stdout=log, stderr=subprocess.STDOUT, env=dotnet_env()), log))
+        name = f"{prefix}{i + 1}"
+        procs.append(launch([project, "--no-build", "--filter", expr, "--logger", f"trx;LogFilePrefix={name}",
+                             "--results-directory", results], os.path.join(results, f"{name}.log")))
+    return procs
+
+
+def wait_all(procs, start):
+    """Ждёт все процессы, меряя стену и пик RSS дерева; печатает итог, возвращает максимальный код выхода."""
     peak = [0]
     done = threading.Event()
 
@@ -342,6 +351,105 @@ def run_shards(project, n, results, timings, extra_filter, fast=None):
     sampler.join()
     print(f"Стена шардов: {wall:.1f} с; коды выхода: {codes}; пик RSS дерева: {peak[0] / 1024 / 1024:.2f} ГиБ")
     return max(codes)
+
+
+def run_shards(project, n, results, timings, extra_filter, fast=None):
+    tests, err = list_tests(project, extra_filter)
+    if tests is None:
+        print(err, file=sys.stderr)
+        return 2
+    shards = checked_layout(tests, n, timings, fast)
+    if shards is None:
+        return 1
+    print(f"Тестов {len(tests)}, классов {len(classes_of(tests))}, шардов {n}:")
+    print(summary(tests, shards, timings, fast))
+    os.makedirs(results, exist_ok=True)
+    start = time.monotonic()
+    return wait_all(launch_shards(project, shards, results, "shard", extra_filter), start)
+
+
+def parse_split(text):
+    """«путь=N,путь=N» -> [(проект, N)]; N ≥ 1."""
+    out = []
+    for item in (x for x in text.split(",") if x):
+        path, _, n = item.rpartition("=")
+        if not path or not n.isdigit() or int(n) < 1:
+            raise ValueError(f"--split: ожидается «проект=N», получено «{item}»")
+        out.append((path, int(n)))
+    return out
+
+
+def calibrate(results):
+    """Профиль прошлого прогона из TRX той же папки (предгейт пишет в одну и ту же): раскладка без него
+    идёт по хешу класса и сваливает серийных гигантов в один шард. Нет TRX или профиль не прочитался —
+    (None, None, None), раскладка по хешу."""
+    if not os.path.isdir(results):
+        return None, None, None
+    done = subprocess.run([sys.executable, "-I", os.path.join(os.path.dirname(os.path.abspath(__file__)), "test-profile.py"),
+                           results, "--json", "--latest-run"], capture_output=True, text=True)
+    if done.returncode != 0:
+        return None, None, None
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
+        f.write(done.stdout)
+    try:
+        return load_profile(f.name)
+    finally:
+        os.remove(f.name)
+
+
+def run_fast(slnx, split, results, timings, extra_filter, fast=None):
+    """Fast предгейта: проекты --split — шардами по классам, остальные тестовые проекты — одним процессом
+    на rest-slnx. Каждый тест списка попадает ровно в один шард (иначе exit 1) — самопроверка до запуска."""
+    start = time.monotonic()
+    if timings is None:
+        timings, _, fast = calibrate(results)
+        print("Раскладка по профилю прошлого прогона" if timings else "Профиля нет — раскладка по хешу класса")
+    with open(slnx, encoding="utf-8") as f:
+        text = f.read()
+    exclude = [os.path.basename(p.rstrip("/")) for p, _ in split]
+    rest_projects = slnx_test_projects(text, exclude)
+    listings, errors = {}, {}
+
+    def lister(path):
+        listings[path], errors[path] = list_tests(path, extra_filter)
+
+    threads = [threading.Thread(target=lister, args=(p,)) for p, _ in split]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    layouts = []
+    for path, n in split:
+        if listings[path] is None:
+            print(errors[path], file=sys.stderr)
+            return 2
+        shards = checked_layout(listings[path], n, timings, fast)
+        if shards is None:
+            return 1
+        print(f"{os.path.basename(path.rstrip('/'))}: тестов {len(listings[path])}, шардов {n}")
+        print(summary(listings[path], shards, timings, fast))
+        layouts.append((path, shards))
+    os.makedirs(results, exist_ok=True)
+    procs = []
+    rest_path = os.path.join(os.path.dirname(slnx), "ClaudeHomeServer.FastRest.slnx")
+    try:
+        if rest_projects:
+            with open(rest_path, "w", encoding="utf-8") as f:
+                f.write(shard_slnx(text, rest_projects, exclude))
+            procs.append(launch([rest_path, "--no-build"] + (["--filter", extra_filter] if extra_filter else [])
+                                + ["--logger", "trx;LogFilePrefix=fast-rest", "--results-directory", results],
+                                os.path.join(results, "rest.log")))
+        for path, shards in layouts:
+            # Префикс fast: профиль этих TRX отдаёт секунды прохода Fast, и следующая раскладка
+            # держит серийного гиганта (SessionManagerTests) в шарде с тем, что укладывается в его поток
+            procs += launch_shards(path, shards, results, "fast-" + os.path.basename(path.rstrip("/")) + "-", extra_filter)
+        print(f"Подготовка до запуска: {time.monotonic() - start:.1f} с; процессов {len(procs)}")
+        run_start = time.monotonic()
+        return wait_all(procs, run_start)
+    finally:
+        if os.path.exists(rest_path):
+            os.remove(rest_path)
 
 
 def parse_shard(arg, ap, default_n):
@@ -387,6 +495,8 @@ def main(argv=None):
     ap.add_argument("--exclude", default="", help="проекты через запятую, которых нет в --slnx-шардах")
     ap.add_argument("--verify", action="store_true", help="только самопроверка и сводка")
     ap.add_argument("--run", metavar="PROJECT", help="локально: N параллельных dotnet test --no-build")
+    ap.add_argument("--run-fast", metavar="SLNX", help="локально: Fast решения — проекты --split шардами, остальные одним процессом")
+    ap.add_argument("--split", default="", help="для --run-fast: «проект=N,проект=N»")
     ap.add_argument("-n", type=int, default=3, help="число шардов (для --verify и --run)")
     ap.add_argument("--results", default=os.path.join(".cc-attachments", "test-shards"), help="папка TRX для --run")
     ap.add_argument("--timings", help="JSON профиля (test-profile.py --json); нет файла — раскладка по хешу")
@@ -394,6 +504,12 @@ def main(argv=None):
     args = ap.parse_args(argv)
     timings, class_projects, fast = load_profile(args.timings)
 
+    if args.run_fast:
+        try:
+            split = parse_split(args.split)
+        except ValueError as e:
+            ap.error(str(e))
+        return run_fast(args.run_fast, split, args.results, timings, args.extra_filter, fast)
     if args.run:
         return run_shards(args.run, args.n, args.results, timings, args.extra_filter, fast)
     if args.slnx:

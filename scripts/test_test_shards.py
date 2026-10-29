@@ -257,5 +257,67 @@ class ProjectShardsTests(unittest.TestCase):
             self.assertEqual(2, self._main("--slnx", path, "--verify")[0])
 
 
+class RunFastTests(unittest.TestCase):
+    """Fast предгейта: проекты --split шардами, остальные — rest-slnx; процессы подменены."""
+    SLNX = """<Solution>
+  <Project Path="App/App.csproj" />
+  <Project Path="App.Tests/App.Tests.csproj" />
+  <Project Path="Llm.Tests/Llm.Tests.csproj" />
+  <Project Path="Other.Tests/Other.Tests.csproj" />
+</Solution>
+"""
+
+    def _run(self, tamper=False):
+        launched, rest = [], {}
+        orig = (ts.list_tests, ts.launch, ts.wait_all, ts.layout)
+        listing = {"b/App.Tests": [f"App.Tests.C{i}.T{j}" for i in range(6) for j in range(2)],
+                   "b/Llm.Tests": [f"Llm.Tests.L{i}.T" for i in range(4)]}
+        ts.list_tests = lambda path, flt: (listing[path], None)
+
+        def fake_launch(args, log):
+            launched.append(args)
+            if args[0].endswith("FastRest.slnx"):
+                with open(args[0], encoding="utf-8") as f:
+                    rest["text"] = f.read()
+            return object(), None
+        ts.launch = fake_launch
+        ts.wait_all = lambda procs, start: 0
+        if tamper:  # шард теряет класс: самопроверка обязана остановить прогон до запуска
+            real = ts.layout
+            ts.layout = lambda classes, n, t=None, f=None: [real(classes, n, t, f)[0][1:]] + real(classes, n, t, f)[1:]
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                slnx = os.path.join(tmp, "x.slnx")
+                with open(slnx, "w", encoding="utf-8") as f:
+                    f.write(self.SLNX)
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    code = ts.run_fast(slnx, [("b/App.Tests", 3), ("b/Llm.Tests", 2)], os.path.join(tmp, "r"), {}, "F")
+                self.assertFalse(os.path.exists(os.path.join(tmp, "ClaudeHomeServer.FastRest.slnx")))
+        finally:
+            ts.list_tests, ts.launch, ts.wait_all, ts.layout = orig
+        return code, launched, rest
+
+    def test_parse_split(self):
+        self.assertEqual([("a/B.Tests", 3), ("c/D.Tests", 2)], ts.parse_split("a/B.Tests=3,c/D.Tests=2"))
+        with self.assertRaises(ValueError):
+            ts.parse_split("a/B.Tests=0")
+        with self.assertRaises(ValueError):
+            ts.parse_split("a/B.Tests")
+
+    def test_шарды_покрывают_проекты_а_rest_держит_остальные_тестовые_проекты(self):
+        code, launched, rest = self._run()
+        self.assertEqual(0, code)
+        self.assertEqual(1 + 3 + 2, len(launched))  # rest, монолит 3 шарда, Llm 2 шарда
+        self.assertIn("Other.Tests", rest["text"])
+        self.assertNotIn("App.Tests", rest["text"])
+        self.assertNotIn("Llm.Tests", rest["text"])
+        self.assertIn("App/App.csproj", rest["text"])
+
+    def test_шард_потерял_класс_самопроверка_краснеет_до_запуска(self):
+        code, launched, _ = self._run(tamper=True)
+        self.assertEqual(1, code)
+        self.assertEqual([], launched)
+
+
 if __name__ == "__main__":
     unittest.main()

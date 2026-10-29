@@ -4,6 +4,7 @@ using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Abstractions;
+using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
@@ -38,7 +39,8 @@ public class RequestScopeTests
     private static Project P() => new() { Name = "p", RootPath = "/srv/p", OwnerId = OwnerId };
 
     private static (ActionExecutingContext ctx, bool[] nextCalled, ActionExecutionDelegate next) Ctx(
-        ProjectScopeAttribute attr, string? caller, string? routeKey, string? routeValue, IProjectAccess access)
+        ProjectScopeAttribute attr, string? caller, string? routeKey, string? routeValue, IProjectAccess access,
+        ActionDescriptor? descriptor = null, IDictionary<string, object?>? args = null)
     {
         var http = new DefaultHttpContext
         {
@@ -49,8 +51,8 @@ public class RequestScopeTests
         var route = new RouteData();
         if (routeKey is not null) route.Values[routeKey] = routeValue;
         var ctx = new ActionExecutingContext(
-            new ActionContext(http, route, new ActionDescriptor()),
-            [], new Dictionary<string, object?>(), controller: new object());
+            new ActionContext(http, route, descriptor ?? new ActionDescriptor()),
+            [], args ?? new Dictionary<string, object?>(), controller: new object());
         var called = new[] { false };
         ActionExecutionDelegate next = () =>
         {
@@ -139,5 +141,69 @@ public class RequestScopeTests
         var http = new DefaultHttpContext();
         http.SetRequestScope(new RequestScope("u", "t", ProjectRole.Owner));
         http.GetRequestScope().TenantOwnerId.Should().Be("t");
+    }
+
+    [Fact]
+    public async Task СоставнойАргументБезId_400_НеДа404()
+    {
+        var attr = new ProjectScopeAttribute();
+        var args = new Dictionary<string, object?> { ["projectId"] = new object() };
+        var (ctx, called, next) = Ctx(attr, OwnerId, null, null, new FakeAccess(P(), null), args: args);
+        await attr.OnActionExecutionAsync(ctx, next);
+
+        called[0].Should().BeFalse();
+        ((ObjectResult)ctx.Result!).StatusCode.Should().Be(400);
+    }
+
+    [Fact]
+    public async Task ТолькоNameIdentifier_БезSub_403()
+    {
+        var attr = new ProjectScopeAttribute();
+        var (ctx, called, next) = Ctx(attr, null, "projectId", "p-1", new FakeAccess(P(), null));
+        ctx.HttpContext.User = new ClaimsPrincipal(
+            new ClaimsIdentity([new Claim(ClaimTypes.NameIdentifier, OwnerId)], "test"));
+        await attr.OnActionExecutionAsync(ctx, next);
+
+        called[0].Should().BeFalse();
+        ((ObjectResult)ctx.Result!).StatusCode.Should().Be(403);
+    }
+
+    [ProjectScope]
+    private sealed class ScopedController
+    {
+        [ProjectScope(Right = ProjectRight.Write)]
+        public void Overridden() { }
+
+        public void Inherited() { }
+    }
+
+    private static ControllerActionDescriptor Descriptor(string method) =>
+        new() { MethodInfo = typeof(ScopedController).GetMethod(method)! };
+
+    [Fact]
+    public async Task КлассИМетод_КлассовыйЭкземпляр_УступаетМетодовому()
+    {
+        // Класс требует Read, метод — Write: чужой читатель по классовому экземпляру прошёл бы
+        var classAttr = new ProjectScopeAttribute();
+        var collab = new Project { Name = "p", RootPath = "/srv/p", OwnerId = OwnerId };
+        var (ctx, called, next) = Ctx(classAttr, OtherId, "projectId", "p-1", new FakeAccess(collab, null),
+            Descriptor(nameof(ScopedController.Overridden)));
+        await classAttr.OnActionExecutionAsync(ctx, next);
+
+        called[0].Should().BeTrue("классовый экземпляр не действующий — пропускает дальше");
+        ctx.Result.Should().BeNull();
+        ctx.HttpContext.Items.Should().BeEmpty("область ставит только действующий экземпляр");
+    }
+
+    [Fact]
+    public async Task КлассБезМетодового_ДействуетКлассовый()
+    {
+        var classAttr = new ProjectScopeAttribute();
+        var (ctx, called, next) = Ctx(classAttr, OtherId, "projectId", "p-1", new FakeAccess(P(), null),
+            Descriptor(nameof(ScopedController.Inherited)));
+        await classAttr.OnActionExecutionAsync(ctx, next);
+
+        called[0].Should().BeFalse();
+        ((ObjectResult)ctx.Result!).StatusCode.Should().Be(404);
     }
 }

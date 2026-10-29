@@ -1,5 +1,7 @@
+using System.Reflection;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -39,11 +41,24 @@ public sealed class ProjectScopeAttribute : Attribute, IAsyncActionFilter, IOrde
     // После авторизации, до прочих фильтров действия
     public int Order => int.MinValue + 2000;
 
+    /// <summary>Действующая разметка метода: атрибут метода, иначе класса.</summary>
+    public static ProjectScopeAttribute? For(MethodInfo method) =>
+        method.GetCustomAttribute<ProjectScopeAttribute>()
+        ?? method.DeclaringType?.GetCustomAttribute<ProjectScopeAttribute>(inherit: true);
+
     public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
     {
+        // Атрибуты класса и метода — два экземпляра фильтра; решает только действующий
+        var effective = context.ActionDescriptor is ControllerActionDescriptor cad ? For(cad.MethodInfo) : this;
+        if (effective is not null && (effective.From != From || effective.Key != Key || effective.Right != Right))
+        {
+            await next();
+            return;
+        }
+
         var key = Key ?? (From == ScopeSource.Session ? "sessionId" : "projectId");
         var id = context.RouteData.Values.TryGetValue(key, out var fromRoute) ? fromRoute?.ToString()
-            : context.ActionArguments.TryGetValue(key, out var fromArgs) ? fromArgs?.ToString()
+            : context.ActionArguments.TryGetValue(key, out var fromArgs) ? ScalarId(fromArgs)
             : context.HttpContext.Request.Query.TryGetValue(key, out var fromQuery) ? fromQuery.ToString()
             : null;
         if (string.IsNullOrEmpty(id))
@@ -52,8 +67,7 @@ public sealed class ProjectScopeAttribute : Attribute, IAsyncActionFilter, IOrde
             return;
         }
 
-        var caller = context.HttpContext.User.FindFirst("sub")?.Value
-            ?? context.HttpContext.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        var caller = context.HttpContext.User.FindFirst("sub")?.Value;
         if (string.IsNullOrEmpty(caller))
         {
             context.Result = Fail(StatusCodes.Status403Forbidden, "Не определён пользователь");
@@ -73,6 +87,10 @@ public sealed class ProjectScopeAttribute : Attribute, IAsyncActionFilter, IOrde
         context.HttpContext.SetRequestScope(scope);
         await next();
     }
+
+    // Составной аргумент (DTO) без id — «параметр не указан», а не ToString() с именем типа
+    private static string? ScalarId(object? value) =>
+        value is string or ValueType ? value.ToString() : null;
 
     private static ObjectResult Fail(int status, string message) =>
         new(new { error = message, code = ErrorCode }) { StatusCode = status };

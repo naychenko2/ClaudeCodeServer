@@ -91,6 +91,25 @@ public class ImageEditJobServiceTests : IDisposable
         _broadcaster.ToOwnerCalls.Should().BeEmpty();
     }
 
+    // Область «personal» (чат вне проекта) — не id проекта: события идут владельцу, а не в несуществующую группу project_personal
+    [Fact]
+    public async Task ЛичнаяОбласть_СобытияЗадачиИдутВладельцуНеВГруппуПроекта()
+    {
+        var (higgsfield, _, _) = HiggsfieldImageEditorTests.Create();
+        var service = Service(higgsfield);
+        var quote = await service.QuoteAsync("user-b", ImageEditScope.Personal, Quote("higgsfield"), default);
+        var started = await service.StartAsync("user-b", ImageEditScope.Personal, Input(quote.Value!.QuoteId), default);
+        for (var i = 0; i < 500; i++)
+        {
+            var j = service.Get("user-b", ImageEditScope.Personal, started.Value!.JobId)!;
+            if (j.Status is ImageEditJobStatus.Completed or ImageEditJobStatus.Failed) break;
+            await Task.Delay(10);
+        }
+
+        _broadcaster.ToOwnerCalls.Should().Contain(c => c.OwnerId == "user-b" && c.Message is ImageEditCompletedMessage);
+        _broadcaster.ToProjectCalls.Should().BeEmpty();
+    }
+
     // ADR-018 §2: чат картинки и инициатор идут из входа в задачу, её события и запись траты —
     // «Модели и расход» различает, сколько потратил агент
     [Theory]

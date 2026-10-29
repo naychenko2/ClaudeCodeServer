@@ -598,7 +598,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             sizeNote = job.SizeNote;
         }
         await NotifyFinishedAsync(job);
-        await Broadcast(job.OwnerId, job.ProjectId, new ImageEditCompletedMessage(job.Id, job.ProjectId, [.. job.Variants], cost,
+        await Broadcast(job.OwnerId, ImageEditScope.ProjectIdOf(job.ProjectId), new ImageEditCompletedMessage(job.Id, job.ProjectId, [.. job.Variants], cost,
             job.ChatSessionId, job.Initiator, sizeNote, job.ThreadId));
     }
 
@@ -630,7 +630,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 job.Cost = new EditCost(amount, editor.PriceUnit);
         }
         await NotifyFinishedAsync(job);
-        await Broadcast(job.OwnerId, job.ProjectId,
+        await Broadcast(job.OwnerId, ImageEditScope.ProjectIdOf(job.ProjectId),
             new ImageEditFailedMessage(job.Id, job.ProjectId, result.Outcome, charged, result.Error, retry,
                 job.ChatSessionId, job.Initiator, job.ThreadId));
     }
@@ -660,7 +660,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             job.Error = result.Error;
         }
         await NotifyFinishedAsync(job);
-        await Broadcast(job.OwnerId, job.ProjectId,
+        await Broadcast(job.OwnerId, ImageEditScope.ProjectIdOf(job.ProjectId),
             new ImageEditFailedMessage(job.Id, job.ProjectId, EditOutcome.Cancelled, charged, result.Error, null,
                 job.ChatSessionId, job.Initiator, job.ThreadId));
     }
@@ -827,7 +827,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 job.Gpu = value.Gpu;
                 elapsed = owner.RunElapsedSeconds(job);
             }
-            _ = owner.Broadcast(job.OwnerId, job.ProjectId,
+            _ = owner.Broadcast(job.OwnerId, ImageEditScope.ProjectIdOf(job.ProjectId),
                 new ImageEditProgressMessage(job.Id, job.ProjectId, value.Stage, value.QueuePosition,
                     job.ChatSessionId, job.Initiator, job.ThreadId, value.Run, value.Runs, value.EtaSeconds,
                     elapsed, value.Gpu));

@@ -196,11 +196,13 @@ jobs:
       # В ubuntu-latest он есть в репозитории universe, но ставится явно — без
       # зависимости от состава предустановленного софта в будущих образах.
       # Установка идёт в ФОНЕ параллельно с setup-dotnet, restore и загрузкой артефакта
-      # (20–30 с на каждом шарде); итог ждёт шаг «Дождаться фона». Вывод — только в файлы:
+      # (20–30 с на каждом шарде); итог ждёт шаг «Дождаться фона». apt update — только если
+      # установка по индексам образа не прошла (устаревший индекс): на удачном пути он стоит 10–20 с.
+      # Вывод — только в файлы:
       # дескрипторы шага фоновый процесс не держит, иначе шаг не завершится.
       - name: Install ffmpeg (background)
         run: |
-          setsid nohup bash -c 'sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg; echo $? > "$RUNNER_TEMP/ffmpeg.status"' \
+          setsid nohup bash -c 'sudo apt-get install -y -qq --no-install-recommends ffmpeg || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg; }; echo $? > "$RUNNER_TEMP/ffmpeg.status"' \
             > "$RUNNER_TEMP/ffmpeg.log" 2>&1 < /dev/null &
       - uses: actions/setup-dotnet@v4
         with:

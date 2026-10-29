@@ -216,6 +216,59 @@ class TestProfileTests(unittest.TestCase):
         self.assertEqual([new], tp.latest_run(sorted([old, new])))
         self.assertEqual(5, json.loads(self._main(art, "--json", "--latest-run")[1])["tests"])
 
+    def _slow_src(self):
+        d = os.path.join(self.tmp.name, "slowsrc")
+        os.makedirs(d)
+        with open(os.path.join(d, "OnMethod.cs"), "w", encoding="utf-8") as f:
+            f.write("""public class A {
+    [Fact] public void Quick() { }
+    [Fact]
+    [Trait("Category", "Slow")]
+    public void Heavy() { var s = "{"; }
+    [Fact] public void AfterHeavy() { }
+}""")
+        with open(os.path.join(d, "OnClass.cs"), "w", encoding="utf-8") as f:
+            f.write("""[Trait("Category", "Slow")]
+public class B : IDisposable {
+    [Fact] public void One() { if (true) { } }
+    [Theory] [InlineData(1)] [InlineData(2)] public void Two(int x) { }
+}
+public class C { [Fact] public void Outside() { } }""")
+        return d
+
+    def test_slow_метка_на_методе_один_тест_на_классе_все_факты_класса(self):
+        # Heavy (1) + One и Two (2); Quick, AfterHeavy и Outside под Slow не попадают
+        self.assertEqual((2, 3), tp.count_slow_tests(self._slow_src()))
+
+    def test_отчёт_две_строки_про_fast_и_slow(self):
+        results, skipped = tp.read_trx(FIXTURE)
+        host, known = tp.host_classes(self.src)
+        report = tp.build_report(results, skipped, host, known, slow=tp.count_slow_tests(self._slow_src()))
+        lines = report.splitlines()
+        self.assertEqual("Fast: 5 тестов в 3 классах (все переданные TRX)", lines[1])
+        self.assertEqual("Под Slow: 3 тестов (2 меток в исходниках; [Theory] — как один тест)", lines[2])
+
+    def test_fast_строка_берёт_только_trx_с_префиксом_fast(self):
+        d = os.path.join(self.tmp.name, "passes2")
+        os.makedirs(d)
+        with open(FIXTURE, encoding="utf-8") as f:
+            text = f.read()
+        # rest-проход дважды: в строку Fast он не входит, в общую шапку входит
+        for name in ("fast_a.trx", "rest_a.trx", "rest_b.trx"):
+            with open(os.path.join(d, name), "w", encoding="utf-8") as g:
+                g.write(text)
+        code, out, _ = self._main(d, "--src", self.src, "--slow-src", self._slow_src())
+        self.assertEqual(0, code)
+        self.assertIn("Тестов: 15 ", out)
+        self.assertIn("Fast: 5 тестов в 3 классах (TRX с префиксом fast)", out)
+        self.assertIn("Под Slow: 3 тестов (2 меток", out)
+
+    def test_отчёт_slow_не_падает_по_числу_меток(self):
+        # сторож роста — отчёт, не гейт: сколько бы ни было меток, код возврата 0
+        code, out, _ = self._main(FIXTURE, "--src", self.src, "--slow-src", self._slow_src())
+        self.assertEqual(0, code)
+        self.assertIn("Под Slow:", out)
+
 
 if __name__ == "__main__":
     unittest.main()

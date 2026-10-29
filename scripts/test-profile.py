@@ -25,6 +25,8 @@ BUCKETS = [(0.0, 0.1, "< 0,1 с"), (0.1, 1.0, "0,1–1 с"), (1.0, 5.0, "1–5 �
            (5.0, 30.0, "5–30 с"), (30.0, float("inf"), "≥ 30 с")]
 CLASS_RE = re.compile(r"\b(?:class|record|struct)\s+([A-Za-z_]\w*)")
 SKIP_DIRS = {"bin", "obj", "node_modules", ".git"}
+SLOW_MARK_RE = re.compile(r'\[\s*Trait\(\s*"Category"\s*,\s*"Slow"\s*\)\s*\]')
+TEST_ATTR_RE = re.compile(r"\[\s*(?:Fact|Theory)\b")
 
 
 def parse_duration(text):
@@ -130,6 +132,40 @@ def host_classes(src):
     return host, known
 
 
+def count_slow_tests(src):
+    """(меток Slow, тестов под ними) по исходникам: TRX категорий не несёт.
+
+    Метка на классе покрывает все его [Fact]/[Theory], на методе — один; [Theory] считается
+    один раз (строки данных по исходникам не посчитать), так что это нижняя оценка. Границу
+    класса ищет по скобкам без учёта строк — для отчёта о росте точности хватает."""
+    marks = tests = 0
+    for root, dirs, files in os.walk(src):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        for f in files:
+            if not f.endswith(".cs"):
+                continue
+            try:
+                with open(os.path.join(root, f), encoding="utf-8-sig", errors="replace") as fh:
+                    text = fh.read()
+            except OSError:
+                continue
+            for m in SLOW_MARK_RE.finditer(text):
+                marks += 1
+                brace = text.find("{", m.end())
+                head = text[m.end():brace] if brace >= 0 else ""
+                if not CLASS_RE.search(head):
+                    tests += 1  # метка на методе
+                    continue
+                depth, end = 0, brace
+                for i in range(brace, len(text)):
+                    depth += (text[i] == "{") - (text[i] == "}")
+                    if depth == 0:
+                        end = i
+                        break
+                tests += len(TEST_ATTR_RE.findall(text[brace:end]))
+    return marks, tests
+
+
 def bucket_of(sec):
     for i, (lo, hi, _) in enumerate(BUCKETS):
         if lo <= sec < hi:
@@ -145,10 +181,20 @@ def fmt(sec, digits=2):
     return f"{sec:.{digits}f}".replace(".", ",")
 
 
-def build_report(results, skipped, host, known, top_tests=25, top_classes=20):
+def build_report(results, skipped, host, known, top_tests=25, top_classes=20,
+                fast_results=None, slow=None):
+    """fast_results — результаты прохода Fast (None: все переданные TRX считаются Fast);
+    slow — (меток, тестов) из count_slow_tests или None, если исходники Slow не сканировались.
+    Две строки про Fast и Slow — отчёт о росте Slow-меток, не гейт (вердикт 29.10)."""
     total = sum(s for _, _, s in results)
     out = [f"Тестов: {len(results)} (из них не выполнено: {skipped}), "
-           f"сумма длительностей тестов (не wall-clock): {fmt(total)} с", ""]
+           f"сумма длительностей тестов (не wall-clock): {fmt(total)} с"]
+    fast = results if fast_results is None else fast_results
+    scope = "все переданные TRX" if fast_results is None else "TRX с префиксом fast"
+    out.append(f"Fast: {len(fast)} тестов в {len({c for c, _, _ in fast})} классах ({scope})")
+    if slow is not None:
+        out.append(f"Под Slow: {slow[1]} тестов ({slow[0]} меток в исходниках; [Theory] — как один тест)")
+    out.append("")
 
     out.append("Гистограмма длительностей:")
     counts, sums = [0] * len(BUCKETS), [0.0] * len(BUCKETS)
@@ -225,6 +271,8 @@ def main(argv=None):
     ap.add_argument("--src", default=os.path.join(os.path.dirname(here), "backend", "ClaudeHomeServer.Tests"),
                     help="где искать .cs для определения хостовых классов (по умолчанию монолит "
                          "backend/ClaudeHomeServer.Tests; для прогона нескольких проектов — backend/)")
+    ap.add_argument("--slow-src", default=os.path.join(os.path.dirname(here), "backend"),
+                    help="где считать метки Slow (по умолчанию весь backend/: метки живут в нескольких проектах)")
     ap.add_argument("--top-tests", type=int, default=25)
     ap.add_argument("--top-classes", type=int, default=20)
     ap.add_argument("--json", action="store_true", help="длительность каждого класса в JSON (stdout)")
@@ -285,7 +333,8 @@ def main(argv=None):
         print(f"Сторож длительности: OK, {len(results)} тестов, все не дольше {fmt(args.threshold, 1)} с")
         return 0
     host, known = host_classes(args.src)
-    print(build_report(results, skipped, host, known, args.top_tests, args.top_classes))
+    print(build_report(results, skipped, host, known, args.top_tests, args.top_classes,
+                       fast_results if saw_fast else None, count_slow_tests(args.slow_src)))
     return 0
 
 

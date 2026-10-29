@@ -2,6 +2,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Access;
+using ClaudeHomeServer.Services.Notes;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -134,7 +135,7 @@ public class SharedProjectNotesAccessTests : IDisposable
         var detail = sut.GetDetail(memberId, id);
         detail.Should().NotBeNull();
         detail!.Content.Should().Contain("Текст проектной заметки.");
-        detail.SourceKey.Should().Be(_projectId);
+        detail.Source.Should().Be(_projectId);
 
         // Источник проекта — в перечне источников участника: его заметки ему доступны
         sut.GetSources(memberId).Should().Contain(s => s.Key == _projectId);

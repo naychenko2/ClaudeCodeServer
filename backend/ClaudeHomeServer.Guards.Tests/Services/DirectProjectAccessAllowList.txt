@@ -10,5 +10,3 @@ backend/ClaudeHomeServer/Services/ProjectMembershipService.cs|4
 # Список проектов (рубильник учитывается рядом, sharedOn) и WebDAV (только владелец)
 backend/ClaudeHomeServer/Services/ProjectManager.cs|1
 backend/ClaudeHomeServer/WebDav/WebDavHandler.cs|1
-# Мост плагинов: чтение слота проекта, данных проекта владельца не отдаёт (ADR-031); перевод на IProjectAccess — отдельным шагом
-backend/ClaudeHomeServer.Plugins/Controllers/PluginBridgeController.cs|1

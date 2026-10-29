@@ -2,6 +2,7 @@ using System.Security.Claims;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Plugins;
 using ClaudeHomeServer.Services.Plugins.Controllers;
@@ -60,7 +61,8 @@ public class PluginBridgeControllerTests : IDisposable
         var config = NewConfig(userId, subsystemEnabled, flagOn);
         // projects: null — гейт по проекту слота (QA-фикс L1) no-op (ProjectId в теле null);
         // тест гейта (чужой/свой/локальный проект) — со стабом IProjectManager.
-        var ctl = new PluginBridgeController(config, new StubFlagGate { PluginsMvp = flagOn }, _store, bridge ?? _bridge, projects);
+        var ctl = new PluginBridgeController(config, new StubFlagGate { PluginsMvp = flagOn }, _store, bridge ?? _bridge, projects,
+            projects is null ? null : new OwnerOnlyAccess(projects));
         ctl.ControllerContext = new ControllerContext
         {
             HttpContext = new DefaultHttpContext { User = Principal(userId, serviceToken) },
@@ -785,6 +787,17 @@ public class PluginBridgeControllerTests : IDisposable
         public Task<PluginCapabilityResult> HandleAsync(
             PluginCallContext context, string op, JsonElement args, IReadOnlyList<string> granted, CancellationToken ct)
             => Task.FromResult(new PluginCapabilityResult(false, Error: new PluginCallError(_code, "test")));
+    }
+
+    // Область проекта для владельца: чужой и несуществующий проект — null (как IProjectAccess)
+    private sealed class OwnerOnlyAccess(IProjectManager projects) : IProjectAccess
+    {
+        public RequestScope? Resolve(string? callerUserId, string? projectId, ProjectRight right = ProjectRight.Read) =>
+            projectId is not null && projects.GetById(projectId) is { } p && p.OwnerId == callerUserId
+                ? new RequestScope(callerUserId!, p.OwnerId!, ProjectRole.Owner)
+                : null;
+
+        public RequestScope? ResolveSession(string? callerUserId, string? sessionId, ProjectRight right = ProjectRight.Read) => null;
     }
 
     // Стаб IProjectManager для гейта по проекту слота (QA-фикс L1): GetById возвращает

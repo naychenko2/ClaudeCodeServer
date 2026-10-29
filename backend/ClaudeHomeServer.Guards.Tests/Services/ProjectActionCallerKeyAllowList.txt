@@ -9,7 +9,18 @@
 # S1-3c: точка доступа вертикали Architecture — id вызывающего входит только в IProjectAccess
 # (запрошенное право, затем чтение, чтобы различить 403 и 404); ключом хранилищ здесь ничего
 # не стало: модель проекта берётся по id из маршрута, автор записи — человек-вызывающий.
+# S1-3a (шлюзы редакторов): в ImageEditScopeGate/AudioEditScopeGate/VideoEditScopeGate (по 3) id вызывающего
+# входит только в IProjectAccess.Resolve (запрошенное право), во внутренний TryProject и в
+# SessionAccess.CanSee (видимость чата); ключом хранилищ он не является — арендатор отдаётся по
+# Project.OwnerId.
+# S1-2b: ProjectsController — id вызывающего в сводке участников (роль вызывающего), списке доступных
+# проектов (GetAccessible), владельце создаваемого проекта, личных настройках (устройства, группа/сфера,
+# среда исполнения, правило архива, персона-вызывающий, подбор значка); ProjectMembersController — актёр
+# операций членства и роль вызывающего в представлении. Ключом хранилищ задач/заметок/памяти это не служит.
 backend/ClaudeHomeServer.Architecture/Controllers/ArchitectureController.cs|2
+backend/ClaudeHomeServer.AudioEditor/Controllers/AudioEditScopeGate.cs|3
+backend/ClaudeHomeServer.ImageEditor/Controllers/ImageEditScopeGate.cs|3
+backend/ClaudeHomeServer.VideoEditor/Controllers/VideoEditScopeGate.cs|3
 backend/ClaudeHomeServer/Controllers/CodeGraphController.cs|1
 backend/ClaudeHomeServer/Controllers/DossiersController.cs|4
 backend/ClaudeHomeServer/Controllers/FilesController.cs|5
@@ -18,8 +29,8 @@ backend/ClaudeHomeServer/Controllers/OnboardingController.cs|18
 backend/ClaudeHomeServer/Controllers/PersonasController.cs|110
 backend/ClaudeHomeServer/Controllers/PreviewController.cs|12
 backend/ClaudeHomeServer/Controllers/ProjectMapController.cs|1
-backend/ClaudeHomeServer/Controllers/ProjectMembersController.cs|4
-backend/ClaudeHomeServer/Controllers/ProjectsController.cs|13
+backend/ClaudeHomeServer/Controllers/ProjectMembersController.cs|6
+backend/ClaudeHomeServer/Controllers/ProjectsController.cs|14
 backend/ClaudeHomeServer/Controllers/SessionsController.cs|6
 backend/ClaudeHomeServer/Controllers/SkillsController.cs|10
 backend/ClaudeHomeServer/Controllers/TasksController.cs|77

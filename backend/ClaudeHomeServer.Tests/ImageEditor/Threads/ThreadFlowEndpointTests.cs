@@ -176,7 +176,7 @@ public class ThreadFlowEndpointTests : IDisposable
         anchor.Data!.Value.GetProperty("threadId").GetString().Should().Be(threadId);
         anchor.Data.Value.GetProperty("versionId").GetString().Should().Be(ImageThreadVersion.OriginId, "якорь нити — карточка исходника");
         anchor.Fallback.Should().Be("Картинка: images/hero.png");
-        _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageThreadChangedMessage>()
+        _broadcaster.AllMessages.OfType<ImageThreadChangedMessage>()
             .Should().Contain(m => m.SessionId == chat.Id && m.State.Focus == threadId);
     }
 

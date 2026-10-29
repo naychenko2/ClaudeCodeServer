@@ -79,7 +79,7 @@ public class ImageThreadRecoveryTests : IDisposable
             .Which.Should().Match<ImageThreadEvent>(e => e.JobId == "job-before-restart" && e.ThreadId == dead.Id
                 && e.Text.StartsWith(ImageThreadService.InterruptedText));
 
-        var changed = _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageThreadChangedMessage>().Should().ContainSingle().Subject;
+        var changed = _broadcaster.AllMessages.OfType<ImageThreadChangedMessage>().Should().ContainSingle().Subject;
         changed.SessionId.Should().Be(Chat);
         changed.Revision.Should().Be(state.Revision);
 

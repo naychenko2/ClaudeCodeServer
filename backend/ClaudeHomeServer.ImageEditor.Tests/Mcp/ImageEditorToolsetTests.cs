@@ -466,7 +466,7 @@ public class ImageEditorToolsetTests : IDisposable
         Lines(ImageThreadService.RecordTypes.Focus).Should().ContainSingle()
             .Which.Fallback.Should().Be("Claude взял в работу: images/hero.png");
         Lines(ImageThreadService.RecordTypes.Thread).Should().ContainSingle("новая нить — её карточка в ленте");
-        _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageThreadChangedMessage>().Should().NotBeEmpty();
+        _broadcaster.AllMessages.OfType<ImageThreadChangedMessage>().Should().NotBeEmpty();
     }
 
     [Fact]
@@ -769,7 +769,7 @@ public class ImageEditorToolsetTests : IDisposable
         result.IsError.Should().BeFalse();
         Parse(result)["prompt"]!.GetValue<string>().Should().Be("закатное небо");
         _store.Get(Owner, ChatId).Revision.Should().Be(0);
-        _broadcaster.ToOwnerCalls.Should().BeEmpty();
+        _broadcaster.AllMessages.Should().BeEmpty();
         _feed.Records.Should().BeEmpty();
     }
 

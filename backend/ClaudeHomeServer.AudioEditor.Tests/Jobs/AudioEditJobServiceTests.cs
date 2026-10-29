@@ -319,7 +319,9 @@ public sealed class AudioEditJobServiceTests : IDisposable
         var started = await LaunchAsync(svc, Speak("local"), input: new AudioJobInput("", Session, thread.Id));
         await svc.WhenDone(started.Value!.JobId);
 
-        _broadcaster.Owners.Should().OnlyContain(o => o == Owner);
+        // Область проекта: события идут группе проекта, владельцу адресно не уходит ничего
+        _broadcaster.Projects.Should().OnlyContain(p => p == Scope.Key);
+        _broadcaster.Owners.Should().BeEmpty();
         _broadcaster.Of<AudioEditProgressMessage>().Should().NotBeEmpty();
         _broadcaster.Of<AudioThreadChangedMessage>().Should().HaveCountGreaterThanOrEqualTo(2)
             .And.OnlyContain(m => m.SessionId == Session);
@@ -407,7 +409,8 @@ public sealed class AudioEditJobServiceTests : IDisposable
         var changed = _broadcaster.Of<AudioPrefsChangedMessage>().Should().ContainSingle().Subject;
         changed.Mode.Should().Be(AudioModes.Music);
         changed.Prefs.Count.Should().Be(2);
-        _broadcaster.Owners.Should().Equal(Owner);
+        _broadcaster.Projects.Should().Equal(Scope.Key);
+        _broadcaster.Owners.Should().BeEmpty();
     }
 
     // ── Подставки ────────────────────────────────────────────────────────────────
@@ -423,8 +426,11 @@ public sealed class AudioEditJobServiceTests : IDisposable
     {
         private readonly ConcurrentQueue<(string Owner, ServerMessage Message)> _sent = new();
 
-        public List<ServerMessage> Messages => [.. _sent.Select(s => s.Message)];
+        private readonly ConcurrentQueue<(string Project, ServerMessage Message)> _sentToProject = new();
+
+        public List<ServerMessage> Messages => [.. _sent.Select(s => s.Message), .. _sentToProject.Select(s => s.Message)];
         public List<string> Owners => [.. _sent.Select(s => s.Owner)];
+        public List<string> Projects => [.. _sentToProject.Select(s => s.Project)];
         public List<T> Of<T>() => [.. Messages.OfType<T>()];
 
         public Task ToOwner(string ownerId, ServerMessage message)
@@ -435,7 +441,13 @@ public sealed class AudioEditJobServiceTests : IDisposable
 
         public Task ToSession(string sessionId, ServerMessage message) => Task.CompletedTask;
         public Task ToSessionExcept(string sessionId, string exceptConnectionId, ServerMessage message) => Task.CompletedTask;
-        public Task ToProject(string projectId, ServerMessage message) => Task.CompletedTask;
+
+        public Task ToProject(string projectId, ServerMessage message)
+        {
+            _sentToProject.Enqueue((projectId, message));
+            return Task.CompletedTask;
+        }
+
         public Task ToPreviewLog(string projectId, string serviceId, ServerMessage message) => Task.CompletedTask;
     }
 

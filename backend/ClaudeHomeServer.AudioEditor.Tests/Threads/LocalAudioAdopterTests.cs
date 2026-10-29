@@ -70,7 +70,7 @@ public sealed class LocalAudioAdopterTests : IDisposable
         record.RecordType.Should().Be(AudioJobThreads.RecordTypes.Thread);
         record.Data!.Value.GetProperty("threadId").GetString().Should().Be(thread.Id);
         record.Data!.Value.GetProperty("versionId").GetString().Should().Be(thread.CurrentVersionId);
-        _broadcaster.Verify(b => b.ToOwner(Owner, It.IsAny<AudioThreadChangedMessage>()), Times.Once);
+        _broadcaster.Verify(b => b.ToProject(Project, It.IsAny<AudioThreadChangedMessage>()), Times.Once);
     }
 
     [Fact]

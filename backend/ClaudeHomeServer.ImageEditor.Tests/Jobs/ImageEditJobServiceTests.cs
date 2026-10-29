@@ -86,8 +86,9 @@ public class ImageEditJobServiceTests : IDisposable
         record.CostCredits.Should().Be(3.0);
         record.CostUsd.Should().BeNull("кредиты с долларами не складываются");
         record.Generations.Should().Be(2);
-        _broadcaster.ToOwnerCalls.Should().Contain(c => c.OwnerId == "user-b" && c.Message is ImageEditCompletedMessage);
-        _broadcaster.ToOwnerCalls.Should().OnlyContain(c => c.OwnerId == "user-b");
+        // Задача редактора проекта идёт группе проекта (участники общего проекта), а не одному владельцу
+        _broadcaster.ToProjectCalls.Should().Contain(c => c.ProjectId == Project && c.Message is ImageEditCompletedMessage);
+        _broadcaster.ToOwnerCalls.Should().BeEmpty();
     }
 
     // ADR-018 §2: чат картинки и инициатор идут из входа в задачу, её события и запись траты —
@@ -112,7 +113,7 @@ public class ImageEditJobServiceTests : IDisposable
         var record = _spend.Records.Should().ContainSingle().Subject;
         record.SessionId.Should().Be("chat-1");
         record.Initiator.Should().Be(spendInitiator);
-        _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageEditCompletedMessage>().Should()
+        _broadcaster.AllMessages.OfType<ImageEditCompletedMessage>().Should()
             .ContainSingle().Which.Should().Match<ImageEditCompletedMessage>(m => m.ChatSessionId == "chat-1" && m.Initiator == initiator);
     }
 
@@ -156,7 +157,7 @@ public class ImageEditJobServiceTests : IDisposable
         fal.Runs.Should().Be(0);
         higgsfield.Runs.Should().Be(1);
         _spend.Records.Should().BeEmpty();
-        var failed = _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageEditFailedMessage>().Single();
+        var failed = _broadcaster.AllMessages.OfType<ImageEditFailedMessage>().Single();
         failed.RetryQuote!.Provider.Should().Be("fal");
     }
 
@@ -192,7 +193,7 @@ public class ImageEditJobServiceTests : IDisposable
         // Higgsfield работу не останавливает: списание неизвестно, трата по котировке остаётся
         cancelled.Charged.Should().BeNull();
         _spend.Records.Should().ContainSingle(r => r.OwnerId == "user-a" && r.CostCredits == 3.0 && r.Generations == 2);
-        _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageEditFailedMessage>()
+        _broadcaster.AllMessages.OfType<ImageEditFailedMessage>()
             .Should().ContainSingle(m => m.JobId == jobId && m.Outcome == EditOutcome.Cancelled);
     }
 
@@ -243,7 +244,7 @@ public class ImageEditJobServiceTests : IDisposable
         var job = await WaitDone(service, "user-a", await StartAsync(service, "user-a", "fal"));
 
         job.Status.Should().Be(ImageEditJobStatus.Failed);
-        var retry = _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageEditFailedMessage>().Single().RetryQuote;
+        var retry = _broadcaster.AllMessages.OfType<ImageEditFailedMessage>().Single().RetryQuote;
         retry!.Provider.Should().Be("higgsfield");
         retry.Estimate.Amount.Should().BeNull();
         higgsfield.Runs.Should().Be(0);
@@ -409,7 +410,7 @@ public class ImageEditJobServiceTests : IDisposable
         job.Status.Should().Be(ImageEditJobStatus.Running);
         job.RunElapsedSeconds.Should().Be(7, "отсчёт — с перехода в Running, а не с постановки в очередь");
         (job.Run, job.Runs, job.EtaSeconds).Should().Be((2, 3, 40));
-        var progress = _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageEditProgressMessage>().ToList();
+        var progress = _broadcaster.AllMessages.OfType<ImageEditProgressMessage>().ToList();
         progress.First().RunElapsedSeconds.Should().BeNull("в очереди прогон ещё не идёт");
         progress.Last().Should().Match<ImageEditProgressMessage>(m =>
             m.Run == 2 && m.Runs == 3 && m.EtaSeconds == 40 && m.RunElapsedSeconds == 0);
@@ -439,7 +440,7 @@ public class ImageEditJobServiceTests : IDisposable
 
         done.Status.Should().Be(ImageEditJobStatus.Completed);
         // Событие прогресса несёт живой снимок очереди GPU
-        _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageEditProgressMessage>()
+        _broadcaster.AllMessages.OfType<ImageEditProgressMessage>()
             .Should().ContainSingle().Which.Gpu.Should().Be(gpu);
         // Статус, трата и recordType не зависят от Gpu: итог Completed, трата по котировке,
         // подпись записи — обычный (не «сумма уточняется»)
@@ -512,7 +513,7 @@ public class ImageEditJobServiceTests : IDisposable
         done.Variants.Should().Equal(1, 2, 3);
         service.OpenVariant("owner", Project, jobId, 3)!.Bytes.Should().Equal(images[2].Bytes);
         lock (ready) ready.Select(d => d.Variants.Count).Should().Equal(1, 2, 3);
-        _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageEditCompletedMessage>()
+        _broadcaster.AllMessages.OfType<ImageEditCompletedMessage>()
             .Should().ContainSingle().Which.Variants.Should().Equal(1, 2, 3);
     }
 

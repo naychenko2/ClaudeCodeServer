@@ -45,6 +45,13 @@ public sealed class SessionHubBroadcaster(IHubContext<SessionHub> hub) : ISessio
     public static string PreviewLogGroup(string projectId, string serviceId) =>
         $"{PreviewLogGroupPrefix}{projectId}:{serviceId}";
 
+    /// <summary>Группа — лог-группа ЭТОГО проекта? Нужна точкам отзыва членства (S1-4b):
+    /// из записанных соединением групп снимается только то, что относится к отзываемому
+    /// проекту. Формат — тот же, что собирают здесь и DevServerService.LogGroup (расхождение
+    /// ловит парный тест), поэтому проверка по префиксу безопасна.</summary>
+    public static bool IsPreviewLogGroupOf(string group, string projectId) =>
+        group.StartsWith(PreviewLogGroupPrefix + projectId + ":", StringComparison.Ordinal);
+
     public Task ToSession(string sessionId, ServerMessage message) =>
         hub.Clients.Group(sessionId).SendAsync("message", message);
 

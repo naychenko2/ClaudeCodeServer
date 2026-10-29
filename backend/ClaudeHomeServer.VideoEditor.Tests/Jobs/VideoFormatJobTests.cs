@@ -51,7 +51,7 @@ public sealed class VideoFormatJobTests : IDisposable
         public Task ToOwner(string ownerId, ServerMessage message) { lock (Sent) Sent.Add(message); return Task.CompletedTask; }
         public Task ToSession(string sessionId, ServerMessage message) => Task.CompletedTask;
         public Task ToSessionExcept(string sessionId, string exceptConnectionId, ServerMessage message) => Task.CompletedTask;
-        public Task ToProject(string projectId, ServerMessage message) => Task.CompletedTask;
+        public Task ToProject(string projectId, ServerMessage message) { lock (Sent) Sent.Add(message); return Task.CompletedTask; }
         public Task ToPreviewLog(string projectId, string serviceId, ServerMessage message) => Task.CompletedTask;
     }
 

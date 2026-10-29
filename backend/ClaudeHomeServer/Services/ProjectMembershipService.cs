@@ -1,6 +1,7 @@
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Access;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Git;
 using Microsoft.AspNetCore.SignalR;
 
@@ -20,9 +21,12 @@ public sealed record MembershipResult(int Status, string? Code = null, string? E
 /// сменить роль, убрать, покинуть. Перечисления учёток здесь нет по построению — единственный
 /// вход в поиск — это точное имя. Приглашает и отзывает только владелец, участник может лишь
 /// покинуть проект. Права проверяются точкой доступа <see cref="ProjectAccess"/>.
-/// Отзыв и смена роли имеют хаб-следствие (S1-4, разрез §2.2): доступ теряется немедленно —
-/// живые соединения отозванного выкидываются из групп проекта, при смене роли группа остаётся
-/// и приходит событие обновления прав (К3 плана v2).
+/// Любая операция над членством имеет хаб-следствие: Add/Remove/Leave/смена роли шлют в группу
+/// проекта событие project_members_changed (К3 плана v2), чтобы список участников обновлялся
+/// без перезагрузки. Отзыв и смена роли — S1-4, разрез §2.2: доступ теряется немедленно —
+/// живые соединения отозванного выкидываются из групп проекта и из всех его групп логов
+/// дев-сервера этого проекта (S1-4b: после отзыва живое соединение не получает ни одного
+/// проектного потока); при смене роли группа остаётся.
 /// </summary>
 public sealed class ProjectMembershipService(
     ProjectManager projects, UserStore users, SharedProjectsGate gate, GitService git,
@@ -78,6 +82,7 @@ public sealed class ProjectMembershipService(
             }
         }
 
+        Project updated;
         lock (_lock)
         {
             // Состояние могло уйти, пока шёл git init
@@ -89,8 +94,14 @@ public sealed class ProjectMembershipService(
             {
                 UserId = target.Id, Role = role, AddedAt = DateTime.UtcNow, AddedBy = callerId,
             });
-            return new(200, Project: projects.SetMembers(projectId, members));
+            updated = projects.SetMembers(projectId, members);
         }
+        // Список участников обновляется у владельца и существующих участников без перезагрузки
+        // страницы (К3 плана v2, тот же событие, что при смене роли). Сам добавленный ещё не
+        // в группе проекта — событие дойдёт до него, когда он придёт и подпишется
+        await hub.Clients.Group("project_" + projectId)
+            .SendAsync("project_members_changed", new { projectId });
+        return new(200, Project: updated);
     }
 
     /// <summary>Сменить роль участника (только владелец).</summary>
@@ -166,11 +177,17 @@ public sealed class ProjectMembershipService(
     }
 
     /// <summary>
-    /// Выкидывание отозванного из групп хаба и личное событие К3 (план v2).
+    /// Выкидывание отозванного из групп хаба и события К3 (план v2).
     /// Ключ — userId отозванного, не арендатор: SignalR адресует группу только соединением,
     /// поэтому берём все его живые вкладки из реестра (S1-4) и снимаем с каждой и группу
-    /// проекта, и группы чатов этого проекта. Затем личное событие К3 project_access_revoked
-    /// в его собственную группу user_{id} (её выкидывание не касается).
+    /// проекта, и группы чатов этого проекта, и все его группы логов дев-сервера этого
+    /// проекта (S1-4b, хвост №1 ревью R-S1-4) — по записям подписки из реестра: перечисление
+    /// живых сервисов пропустило бы группу уже остановленного сервиса, в которой вкладка
+    /// осталась бы до следующего его подъёма. Инвариант: после отзыва живое соединение
+    /// отозванного не получает ни одного проектного потока. Затем обновление списка
+    /// project_members_changed в группу проекта (отозванный уже выкинут из неё — для него
+    /// личное событие ниже) и личное событие К3 project_access_revoked в его собственную
+    /// группу user_{id} (её выкидывание не касается).
     /// Порядок внутри одного соединения — FIFO исходящего канала: событие приходит после
     /// выкидывания, и его получение для клиента — доказательство завершённого выкидывания.
     /// </summary>
@@ -182,7 +199,12 @@ public sealed class ProjectMembershipService(
             await hub.Groups.RemoveFromGroupAsync(connectionId, "project_" + projectId);
             foreach (var sessionId in sessionIds)
                 await hub.Groups.RemoveFromGroupAsync(connectionId, sessionId);
+            foreach (var group in userConnections.GroupsOf(connectionId))
+                if (SessionHubBroadcaster.IsPreviewLogGroupOf(group, projectId))
+                    await hub.Groups.RemoveFromGroupAsync(connectionId, group);
         }
+        await hub.Clients.Group("project_" + projectId)
+            .SendAsync("project_members_changed", new { projectId });
         // модель допускает проект без владельца — имя отдаём null, а не падающим вызовом
         var ownerDisplayName = project.OwnerId is null ? null : users.GetById(project.OwnerId)?.DisplayName;
         await hub.Clients.Group("user_" + memberUserId).SendAsync("project_access_revoked",

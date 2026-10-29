@@ -197,7 +197,12 @@ public class SessionHub : Hub
         // ключ — арендатор, а не id соединения: в общем проекте участник читает тот же лог, что
         // и владелец, а не своё пустое «отражение» (ловушка ключа, разрез §6.6 п. 2).
         var buffered = _devServer.GetLogBuffer(projectId, serviceId, scope.TenantOwnerId);
-        await Groups.AddToGroupAsync(Context.ConnectionId, DevServerService.LogGroup(projectId, serviceId));
+        var group = DevServerService.LogGroup(projectId, serviceId);
+        await Groups.AddToGroupAsync(Context.ConnectionId, group);
+        // Подписка записывается в реестр соединений (S1-4b, хвост №1 ревью R-S1-4): точка
+        // отзыва членства не видит хабовых соединений и не перечисляет сервисы проекта —
+        // снять отозванного со всех его групп логов можно только по записи подписки
+        _userConnections.AddGroup(Context.ConnectionId, group);
         return buffered;
     }
 

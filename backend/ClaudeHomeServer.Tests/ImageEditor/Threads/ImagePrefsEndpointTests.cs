@@ -77,9 +77,9 @@ public class ImagePrefsEndpointTests : IDisposable
         got.GetProperty("count").GetInt32().Should().Be(3);
         got.GetProperty("matchSourceSize").GetBoolean().Should().BeFalse();
 
-        var sent = _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageProjectPrefsChangedMessage>()
+        var sent = _broadcaster.AllMessages.OfType<ImageProjectPrefsChangedMessage>()
             .Should().ContainSingle().Subject;
-        _broadcaster.ToOwnerCalls.Single(c => c.Message == sent).OwnerId.Should().Be(_ownerId);
+        _broadcaster.ToProjectCalls.Single(c => c.Message == sent).ProjectId.Should().Be(_projectId);
         sent.ProjectId.Should().Be(_projectId);
         sent.Prefs.Provider.Should().Be("fal");
     }

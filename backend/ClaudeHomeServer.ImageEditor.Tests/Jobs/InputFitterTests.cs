@@ -327,7 +327,11 @@ public class InputFitterTests : IDisposable
         private TaskCompletionSource Source(string jobId) =>
             _jobs.GetOrAdd(jobId, _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
 
-        public Task ToOwner(string ownerId, ServerMessage message)
+        public Task ToOwner(string ownerId, ServerMessage message) => Deliver(message);
+
+        public Task ToProject(string projectId, ServerMessage message) => Deliver(message);
+
+        private Task Deliver(ServerMessage message)
         {
             var jobId = message switch
             {
@@ -341,7 +345,6 @@ public class InputFitterTests : IDisposable
 
         public Task ToSession(string sessionId, ServerMessage message) => Task.CompletedTask;
         public Task ToSessionExcept(string sessionId, string exceptConnectionId, ServerMessage message) => Task.CompletedTask;
-        public Task ToProject(string projectId, ServerMessage message) => Task.CompletedTask;
         public Task ToPreviewLog(string projectId, string serviceId, ServerMessage message) => Task.CompletedTask;
     }
 

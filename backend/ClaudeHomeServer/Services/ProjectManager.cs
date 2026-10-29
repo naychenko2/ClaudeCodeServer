@@ -533,6 +533,18 @@ public class ProjectManager : IProjectManager
         return project;
     }
 
+    // Список участников общего проекта (shared-projects). Пустой список нормализует сама
+    // модель в null. Валидацию (роли, дубли, владельца) делает ProjectMembershipService.
+    public Project SetMembers(string id, List<ProjectMember>? members)
+    {
+        var project = _projects.GetValueOrDefault(id)
+            ?? throw new KeyNotFoundException($"Проект не найден: {id}");
+        project.Members = members;
+        project.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return project;
+    }
+
     // Кастомные колонки Kanban-доски проекта; пустой список/null → дефолтные 3
     // Тумблер рук локального проекта (ADR-016 §7): одно из условий ProjectCapabilities.HandsRefusal.
     // Пересоздание адаптеров живых чатов — забота вызывающего контроллера.

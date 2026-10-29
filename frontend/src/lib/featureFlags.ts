@@ -33,6 +33,7 @@ export const FLAGS = {
   // «Индикатор prompt cache и перенос в новый чат»: регистрация (шаг B-1), фича обвязывается
   // следующими шагами. Dark launch, выключено по умолчанию.
   promptCache: 'prompt-cache',
+  sharedProjects: 'shared-projects',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

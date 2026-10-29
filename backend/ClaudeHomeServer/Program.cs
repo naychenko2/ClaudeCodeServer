@@ -577,6 +577,8 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.ProjectMapApplyServ
 // Применение пресета каркаса знакомства v2: только добавляет поверх живой папки,
 // отчёт по каждому шагу; зависимости-синглтоны, сам тоже stateless-синглтон
 builder.Services.AddSingleton<ProjectPresetService>();
+builder.Services.AddSingleton<SharedProjectsGate>();
+builder.Services.AddSingleton<ProjectMembershipService>();
 // Документы AI: конвертация в Markdown (markitdown) + ИИ-помощь (суммари/выжимка/теги) на локальной модели
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.MarkitdownService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.DocumentAiService>();

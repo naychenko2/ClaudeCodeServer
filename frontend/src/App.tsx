@@ -434,6 +434,14 @@ export default function App() {
   // Текущий проект — приоритет для снапшота при выходе из офлайна (без ре-триггера при смене проекта)
   const projectIdRef = useRef<string | undefined>(undefined)
   useEffect(() => { projectIdRef.current = project?.id }, [project?.id])
+  // Id проекта, чей воркспейс реально на экране: тот же гейт, что у useThemeColor
+  // (inProjectScreen выше), плюс сам id. Нужен слушателю project_access_revoked:
+  // уход к списку допустим только когда человек видит этот проект; «спящий» проект
+  // (человек в другом разделе — switchHubTab его не сбрасывает) снимается тихо.
+  const projectOnScreenRef = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    projectOnScreenRef.current = effectiveHubTab === 'projects' && project ? project.id : undefined
+  }, [effectiveHubTab, project])
 
   // Инвалидация DTO открытого проекта при смене дефолт-персоны: бэк шлёт
   // personas_changed action='default' из PersonasController.MakeDefault — и при
@@ -926,15 +934,23 @@ export default function App() {
   }
   // Доступ к проекту отозван (дефект QA-1): после выкидывания всех групп этого человека
   // сервер шлёт личное событие в его группу user_{id}. Клиент убирает проект из общего
-  // кэша списка (зона шапки и палитра перерисовываются); если это сейчас открытый проект —
-  // закрываем его и уходим к списку: загруженные чаты проекта без доступа не должны
-  // оставаться на экране, а причину объясняет Notice на списке (снимок accessNotice).
+  // кэша списка (зона шапки и палитра перерисовываются). Если это открытый проект:
+  // — его воркспейс на экране — закрываем и уходим к списку: загруженные чаты без доступа
+  //   не должны оставаться на экране, а причину объясняет Notice (снимок accessNotice);
+  // — проект «спит» (человек в другом разделе) — состояние снимается тихо, без навигации
+  //   и без Notice: выкинуть человека из «Чатов» на список из-за проекта, которого он
+  //   сейчас не видит, — потерять открытый чат и ввод без объяснимой причины (ревью S1-F8).
   // Событие про другой проект текущий экран не трогает.
   useEffect(() => onProjectAccessRevoked(({ projectId, ownerDisplayName }) => {
     dropProjectFromCache(projectId)
     if (projectId !== projectIdRef.current) return
-    setAccessNotice({ projectId, ownerDisplayName })
-    goToProjectsRef.current?.()
+    if (projectOnScreenRef.current === projectId) {
+      setAccessNotice({ projectId, ownerDisplayName })
+      goToProjectsRef.current?.()
+      return
+    }
+    localStorage.removeItem(OPEN_PROJECT_KEY)
+    setProject(null)
   }), [])
   // Переключатель раздела «Чаты | Проекты». НЕ сбрасывает открытый проект — он «спит»
   // при уходе в «Чаты» и восстанавливается при возврате в «Проекты» (навигационная память).

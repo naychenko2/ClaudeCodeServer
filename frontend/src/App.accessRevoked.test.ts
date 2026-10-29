@@ -3,7 +3,8 @@
 // к списку проектов (#/projects), а список получает снимок accessNotice — по нему
 // ProjectListPage рисует Notice (саму плашку и текст проверяет ProjectListPage.test).
 // Отзыв другого (не открытого) проекта: текущий экран не трогается, проект лишь уходит из
-// общего кэша списка (dropProjectFromCache).
+// общего кэша списка (dropProjectFromCache). Отзыв «спящего» открытого проекта (человек в
+// другом разделе): состояние снимается тихо — без навигации и без Notice (ревью S1-F8).
 //
 // Окружение — то же, что у App.deeplink.test.ts: node без jsdom, fakeDom + тяжёлые
 // либы/страницы no-op-моками; nav — настоящий.
@@ -303,6 +304,40 @@ describe('App: project_access_revoked при открытом проекте (QA
     const last = plpPropsReg.at(-1);
     expect(last, 'ProjectListPage не отрисован').toBeTruthy();
     expect(last!.accessNotice, 'снимок для Notice не дошёл').toEqual({ projectId: 'p1', ownerDisplayName: 'admin' });
+  });
+
+  it('отзыв «спящего» проекта (человек в «Чатах»): не выкидывает с раздела, тихо снимает состояние, без Notice', async () => {
+    const { container } = mount(createElement(App));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(findNodeByAttr(container, 'data-stub', 'WorkspacePage'), 'воркспейс не открылся').not.toBeNull();
+
+    // Человек ушёл в раздел «Чаты» (смена hash → switchHubTab): открытый проект «спит»,
+    // его состояние и снимок сохранены (навигационная память).
+    await act(async () => {
+      (globalThis as any).window.location.hash = '#/chats';
+      (globalThis as any).window.dispatchEvent({ type: 'hashchange' });
+    });
+    expect((globalThis as any).window.location.hash, 'не открылись «Чаты»').toBe('#/chats');
+    expect(findNodeByAttr(container, 'data-stub', 'ChatsPage'), '«Чаты» не отрисованы').not.toBeNull();
+    expect(store.get('cc_open_project'), 'спящий проект не сохранён').toBeTruthy();
+
+    await fireRevoked({ projectId: 'p1', ownerDisplayName: 'admin' });
+
+    // Тихое снятие: тот же адрес, список не появился, состояние проекта и снимок сняты
+    expect((globalThis as any).window.location.hash, 'выкинул из «Чатов» на список').toBe('#/chats');
+    expect(findNodeByAttr(container, 'data-stub', 'ProjectListPage'), 'список проектов появился').toBeNull();
+    expect(store.get('cc_open_project'), 'снимок открытого проекта не снят').toBeUndefined();
+    // Из общего кэша списка проект убран (шапка и палитра без него) — как и для видимого
+    expect(cacheSpy.dropped, 'проект не убран из общего кэша').toContain('p1');
+
+    // Возврат к списку (клик «Проекты»): Notice нет — человек не видел этот проект на экране
+    await act(async () => {
+      (globalThis as any).window.location.hash = '#/projects';
+      (globalThis as any).window.dispatchEvent({ type: 'hashchange' });
+    });
+    const last = plpPropsReg.at(-1);
+    expect(last, 'список не отрисован после возврата').toBeTruthy();
+    expect(last!.accessNotice, 'Notice про невиденный проект').toBeFalsy();
   });
 
   it('отзыв другого (не открытого) проекта: экран и открытый проект не тронуты, кэш списка очищен', async () => {

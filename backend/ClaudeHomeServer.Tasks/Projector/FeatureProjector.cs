@@ -1228,11 +1228,15 @@ public sealed class FeatureProjector(TaskManager tasks)
     }
 
     // Одна фича по id эпика (владельца ownerId). null — эпика нет.
-    public FeatureRun? Project(string featureId, string ownerId)
+    // sessions (P2 «расхождения в хвост хода»): узкий снимок сессий владельца — без него
+    // reported_open не выдаётся вовсе (FeatureTracker fail-closed, FeatureTracker.cs:131-151),
+    // с ним — тот же состав шести видов, что у страницы фичи и блока «Сверка трекера» в MCP.
+    public FeatureRun? Project(string featureId, string ownerId,
+        IReadOnlyCollection<FeatureIndexSession>? sessions = null)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
         var epic = owner.FirstOrDefault(t => t.Id == featureId && t.Role == TaskRoles.Feature);
-        return epic is null ? null : WithQueue(Build(epic, FeatureTasks(epic, owner)), owner);
+        return epic is null ? null : WithQueue(Build(epic, FeatureTasks(epic, owner), null, sessions), owner);
     }
 
     // Одна фича по id эпика — ПОЛНЫЙ (необлегчённый) run: для страницы фичи (GetFeature).

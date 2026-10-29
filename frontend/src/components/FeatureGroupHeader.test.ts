@@ -157,12 +157,12 @@ describe('FeatureGroupHeader: тона', () => {
     expect(html.includes('border-left-color:var(--c-danger)')).toBe(true);
   });
 
-  it('закрыта (closed, без мержа): глиф closed, статус «закрыта», кромки нет', () => {
+  it('закрыта (closed, без мержа): глиф closed, статус «закрыта без мержа» (Ш1d), кромки нет', () => {
     const f = feat({ bucket: 'closed', summary: null });
     const st = featureDisplayState(f);
     expect(st.kind).toBe('closed');
     expect(st.alarm).toBeNull();
-    expect(st.status).toBe('закрыта');
+    expect(st.status).toBe('закрыта без мержа');
     expect(renderHeader(f).includes('data-feature-state="closed"')).toBe(true);
   });
 

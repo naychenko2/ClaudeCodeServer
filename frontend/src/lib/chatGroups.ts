@@ -360,6 +360,12 @@ export function formatDuration(minutes: number): string {
 // чтобы не разъезжалась (ревью фронта 1, major 1).
 export const MERGE_PENDING_STATUS = 'ждёт согласия на мерж';
 
+// Единая подпись закрытия фичи без мержа (Ш1d, замена дефекта dac211b4, решена с Майей):
+// строка индекса (featureDisplayState) и фолбэк страницы (featureStatusTag) — одна строка;
+// тег страницы (FeatureStatusTag.tsx:67) даёт побайтно ту же (тест FeatureStatusTag.test.ts).
+// Короткая строка индекса («закрыта», «Без мержа») — не аргумент: две подписи разъезжались.
+export const CLOSED_NO_MERGE_STATUS = 'закрыта без мержа';
+
 // Единая формулировка подписи очереди (макет feature-queue-1.md, «Тег и глиф»):
 // «в очереди · 2 из 3»; без queue (бэк ещё не отдал) — просто «в очереди», нулей не показываем.
 // Позицию и длину считает бэк (FeatureQueuePolicy), фронт не пересчитывает. Зовут её тег
@@ -487,10 +493,10 @@ export function featureDisplayState(
   const join = (base: string, w: string | null, d: string | null): string =>
     `${base}${w ? ` · ${w}` : ''}${d ? ` · ${d}` : ''}`;
 
-  // Закрыта: смержена (summary.mergedAt) или закрыта без мержа.
+  // Закрыта: смержена (summary.mergedAt) или закрыта без мержа — одна подпись (Ш1d).
   if (f.bucket === 'closed') {
     const merged = f.summary?.mergedAt != null;
-    return { kind: merged ? 'done' : 'closed', alarm: null, status: merged ? 'смержена' : 'закрыта' };
+    return { kind: merged ? 'done' : 'closed', alarm: null, status: merged ? 'смержена' : CLOSED_NO_MERGE_STATUS };
   }
   // Смержена, но ещё не закрыта (bucket=merged): ждёт закрытия.
   if (f.bucket === 'merged') return { kind: 'done', alarm: null, status: 'смержена, ждёт закрытия' };
@@ -533,9 +539,10 @@ export interface FeatureStatusTag { label: string; tone: FeatureStatusTone }
 
 export function featureStatusTag(f: FeatureIndexFeature): FeatureStatusTag {
   if (f.bucket === 'closed') {
+    // Одна подпись закрытия с индексом и тегом страницы (Ш1d): без мержа — CLOSED_NO_MERGE_STATUS.
     return f.summary?.mergedAt != null
       ? { label: 'Смержена', tone: 'merged' }
-      : { label: 'Без мержа', tone: 'closed' };
+      : { label: CLOSED_NO_MERGE_STATUS, tone: 'closed' };
   }
   if (f.bucket === 'merged') return { label: 'Смержена', tone: 'merged' };
   // Источник правды — f.state (бэк Б1a/Б1b): merge_pending → «К мержу», merging → «Идёт»,

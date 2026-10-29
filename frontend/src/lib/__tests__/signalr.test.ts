@@ -15,8 +15,16 @@ const h = vi.hoisted(() => {
     state: HubConnectionState.Connected as string,
     start: vi.fn(async () => { fake.state = HubConnectionState.Connected; }),
     invoke: vi.fn(async () => {}),
-    on: vi.fn(),
-    off: vi.fn(),
+    // Реестр хаб-событий (.on/.off): тест может «прислать» событие и проверить,
+    // дошло ли оно ровно до подписчиков этого события (mock-учёт .on/.off сохраняется)
+    events: new Map<string, Set<(data: any) => void>>(),
+    on: vi.fn((ev: string, cb: (data: any) => void) => {
+      const set = fake.events.get(ev) ?? new Set();
+      set.add(cb);
+      fake.events.set(ev, set);
+    }),
+    off: vi.fn((ev: string, cb: (data: any) => void) => { fake.events.get(ev)?.delete(cb); }),
+    fire(ev: string, data: any) { (fake.events.get(ev) ?? new Set()).forEach(cb => cb(data)); },
     stop: vi.fn(async () => { fake.state = HubConnectionState.Disconnected; fake.closeCbs.forEach(cb => cb()); }),
     // Колбэки, зарегистрированные signalr.ts — дёргаем их из тестов как «события» соединения
     reconnectingCbs: [] as Array<() => void>,
@@ -76,7 +84,9 @@ beforeEach(async () => {
   h.fake.start.mockClear();
   h.fake.invoke.mockClear();
   h.fake.stop.mockClear();
+  h.fake.on.mockClear();
   h.fake.off.mockClear();
+  h.fake.events.clear();
   h.build.mockClear();
   h.isOnline = true;
   h.serverAlive = false;
@@ -282,6 +292,32 @@ describe('onReconnected-подписки', () => {
 
     expect(() => fireReconnected()).not.toThrow();
     expect(good).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('подписка на project_members_changed', () => {
+  it('событие доходит только до подписчиков этого события; отписка снимает', () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    const otherEvent = vi.fn(); // подписчик другого события (message)
+    signalr.onMessage(otherEvent);
+    const offFirst = signalr.onProjectMembersChanged(first);
+    signalr.onProjectMembersChanged(second);
+
+    h.fake.fire('project_members_changed', { projectId: 'p1' });
+    expect(first).toHaveBeenCalledWith({ projectId: 'p1' });
+    expect(second).toHaveBeenCalledWith({ projectId: 'p1' });
+    expect(otherEvent, 'чужое событие не трогает').not.toHaveBeenCalled();
+
+    // чужое хаб-событие — тоже мимо
+    h.fake.fire('filesChanged', { projectId: 'p1', paths: [] });
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
+
+    offFirst();
+    h.fake.fire('project_members_changed', { projectId: 'p2' });
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(2);
   });
 });
 

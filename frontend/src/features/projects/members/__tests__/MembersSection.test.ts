@@ -109,6 +109,10 @@ vi.mock('../../../../components/ui/Menu', async () => {
 vi.mock('../MembersList', () => ({
   MembersList: (p: any) => { reg.list = p; return createElement('div'); },
 }));
+// Подписка на событие состава проекта: мок запоминает хендлеры и отдаёт тестируемую отписку
+const signalrMock = vi.hoisted(() => ({ onProjectMembersChanged: vi.fn() }));
+const subs = { handlers: [] as Array<(d: { projectId: string }) => void>, offs: [] as Array<() => void> };
+vi.mock('../../../../lib/signalr', () => ({ onProjectMembersChanged: signalrMock.onProjectMembersChanged }));
 
 import { MembersSection } from '../MembersSection';
 
@@ -116,6 +120,7 @@ type FN = InstanceType<typeof FakeNode>;
 
 const owner = { userId: 'u-owner', username: 'andrey', displayName: 'Андрей' };
 const maria: ProjectMember = { userId: 'u-maria', username: 'maria', displayName: 'Мария', role: 'editor' };
+const petr: ProjectMember = { userId: 'u-petr', username: 'petr', displayName: 'Пётр', role: 'reader' };
 const project = { id: 'p1', name: 'Test', rootPath: '/x' } as Project;
 const view = (members: ProjectMember[]): ProjectMembersView => ({ owner, members }) as ProjectMembersView;
 
@@ -135,6 +140,7 @@ async function mount(mode: 'owner' | 'member', initial: ProjectMember[], props: 
   container = new FakeNode();
   const root = createRoot(container);
   await act(async () => { root.render(createElement(MembersSection, { project, mode, ...props })); });
+  return root;
 }
 
 const typeName = (v: string) => act(async () => { reg.text.onChange(v); });
@@ -145,6 +151,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   reg.text = null; reg.field = null; reg.list = null;
   reg.buttons = {}; reg.confirms = {}; reg.items = {};
+  subs.handlers = []; subs.offs = [];
+  signalrMock.onProjectMembersChanged.mockImplementation((h: (d: { projectId: string }) => void) => {
+    subs.handlers.push(h);
+    const off = vi.fn();
+    subs.offs.push(off);
+    return off;
+  });
 });
 
 describe('секция «Участники»: приглашение', () => {
@@ -245,5 +258,36 @@ describe('секция «Участники»: вид по роли', () => {
     await mount('member', []);
     expect(reg.buttons['Покинуть проект']).toBeTruthy();
     expect(reg.field).toBeNull();
+  });
+});
+
+describe('секция «Участники»: живое обновление состава (S1-F7)', () => {
+  it('событие по своему проекту перечитывает список и передаёт его вызывающему', async () => {
+    const onMembersChanged = vi.fn();
+    await mount('owner', [maria], { onMembersChanged });
+    expect(signalrMock.onProjectMembersChanged, 'секция не подписана на событие').toHaveBeenCalledTimes(1);
+
+    api.list.mockResolvedValue(view([maria, petr]));
+    await act(async () => { subs.handlers[0]({ projectId: 'p1' }); });
+
+    expect(api.list).toHaveBeenCalledTimes(2);
+    expect(reg.list.members.map((m: ProjectMember) => m.userId)).toEqual(['u-maria', 'u-petr']);
+    // сводка в карточке проекта живёт через этот колбэк — он обязан получить новый список
+    expect(onMembersChanged).toHaveBeenCalledTimes(1);
+    expect(onMembersChanged.mock.calls[0][0].map((m: ProjectMember) => m.userId)).toEqual(['u-maria', 'u-petr']);
+  });
+
+  it('событие чужого проекта ничего не перечитывает', async () => {
+    await mount('owner', [maria]);
+    await act(async () => { subs.handlers[0]({ projectId: 'other' }); });
+    expect(api.list).toHaveBeenCalledTimes(1);
+    expect(reg.list.members.map((m: ProjectMember) => m.userId)).toEqual(['u-maria']);
+  });
+
+  it('отписка при размонтировании', async () => {
+    const root = await mount('member', [maria]);
+    expect(subs.offs[0]).not.toHaveBeenCalled();
+    await act(async () => { root.unmount(); });
+    expect(subs.offs[0]).toHaveBeenCalledTimes(1);
   });
 });

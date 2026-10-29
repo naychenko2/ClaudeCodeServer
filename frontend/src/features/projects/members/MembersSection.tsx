@@ -4,7 +4,7 @@
 //  · участник (editor/reader) — список без контролов и «Покинуть проект».
 // Состояние списка живёт здесь: любая мутация отвечает полным ProjectMembersView.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Info, UserMinus, Users } from 'lucide-react';
 import type { Project, ProjectMember, ProjectMemberRole, ProjectMembersView } from '../../../types';
 import { api } from '../../../lib/api';
@@ -13,6 +13,7 @@ import { Button, ConfirmDialog, Field, Notice, Select, TextField } from '../../.
 import { Menu, MenuItem } from '../../../components/ui/Menu';
 import { ICON_SIZE } from '../../../components/ui/icons';
 import { useMe } from '../../../lib/defaultPersona';
+import { onProjectMembersChanged } from '../../../lib/signalr';
 import { isLocalProject } from '../../../lib/projectCapabilities';
 import { useIsMobile } from '../../../lib/breakpoints';
 import { AccordionSection } from '../dialogs/AccordionSection';
@@ -58,10 +59,15 @@ export function MembersSection({ project, mode, onMembersChanged, onLeft, defaul
   const [leaving, setLeaving] = useState(false);
   const [leaveError, setLeaveError] = useState('');
 
+  // Колбэк вызывающего пересоздаётся на каждый его рендер — держим свежий в ref,
+  // чтобы apply и подписка на событие оставались стабильными (без переподписки).
+  const onChangedRef = useRef(onMembersChanged);
+  onChangedRef.current = onMembersChanged;
+
   const apply = useCallback((next: ProjectMembersView) => {
     setView(next);
-    onMembersChanged?.(next.members);
-  }, [onMembersChanged]);
+    onChangedRef.current?.(next.members);
+  }, []);
 
   const load = useCallback(async () => {
     setLoadFailed(false);
@@ -72,6 +78,24 @@ export function MembersSection({ project, mode, onMembersChanged, onLeft, defaul
     }
   }, [project.id]);
   useEffect(() => { void load(); }, [load]);
+
+  // Сервер сообщает об изменении состава (Add/Remove/Leave/ChangeRole) событием
+  // project_members_changed в группу проекта: кто держит секцию открытой — перечитывает
+  // список своего проекта и передаёт его вызывающему (метка «общий» и сводка в карточке
+  // остаются живыми). Чужие проекты игнорируем; отписка при размонтировании.
+  const reload = useCallback(async () => {
+    try {
+      apply(await api.projects.members.list(project.id));
+    } catch {
+      // Старый список остаётся на экране, но он мог устареть — показываем причину,
+      // «Повторить» перечитает (тот же путь, что у сбоя первой загрузки)
+      setLoadFailed(true);
+    }
+  }, [project.id, apply]);
+  useEffect(() => onProjectMembersChanged(({ projectId }) => {
+    if (projectId !== project.id) return;
+    void reload();
+  }), [project.id, reload]);
 
   const members = view?.members ?? [];
   const summary = view ? membersSummary(members.length) : undefined;

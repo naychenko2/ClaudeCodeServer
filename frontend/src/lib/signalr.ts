@@ -256,6 +256,15 @@ export function onGitStatusChanged(handler: (data: { projectId: string }) => voi
   return () => conn.off('message', h);
 }
 
+// Состав участников проекта изменился (Add/Remove/Leave/ChangeRole): сервер шлёт событие
+// project_members_changed в группу проекта (отозванный уже выведен из группы — до него
+// событие не доходит). Подписчик перечитывает список участников своего projectId.
+export function onProjectMembersChanged(handler: (data: { projectId: string }) => void): () => void {
+  const conn = getConnection();
+  conn.on('project_members_changed', handler);
+  return () => conn.off('project_members_changed', handler);
+}
+
 // Живые метрики локальной модели (флаг local-model-stats): тиковый снимок состояния
 // генерации (local_model_live) и итог завершённого хода (local_model_turn_stats). Оба
 // эфемерные (в историю не пишутся) и приходят в группу сессии — подписчик фильтрует по

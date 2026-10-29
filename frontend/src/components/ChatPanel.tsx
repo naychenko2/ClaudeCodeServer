@@ -245,13 +245,13 @@ function memoizedCacheEntry(
 }
 
 export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpenReader, onOpenTaskAside, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, onAddToWall, onChatDeleted, skills, agents, attachedFiles, onAttachedFilesChange, greetingBubble, headerIsland, embedded, composerFocusSignal, contextBar, headerDragProps, availableChatIds }: Props) {
-  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, liveContextTokens, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, teamPlanning: liveTeamPlanning, teamWavePulse, promptSuggestion, pending, composerRestore, consumeRestore, send: rawSend, allowPermission: rawAllowPermission, denyPermission, allowAlways: rawAllowAlways, answerQuestion: rawAnswerQuestion, respondPlan: rawRespondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending, preemptForPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
+  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, liveContextTokens, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, teamPlanning: liveTeamPlanning, teamWavePulse, promptSuggestion, pending, composerRestore, consumeRestore, send: rawSend, allowPermission: rawAllowPermission, denyPermission: rawDenyPermission, allowAlways: rawAllowAlways, answerQuestion: rawAnswerQuestion, respondPlan: rawRespondPlan, respondTeamPlan: rawRespondTeamPlan, respondTeamEscalation: rawRespondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending, preemptForPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Участник общего проекта не запускает ходы и не отвечает агенту (бэк откажет): все входы
   // вне композера идут через гейт в точке отправки, а не каждый со своей проверкой
   const projectRef = useRef(project);
   projectRef.current = project;
   const turnDenied = turnDeniedReason(project);
-  const { send, allowPermission, allowAlways, answerQuestion, respondPlan } = useMemo(() => {
+  const { send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation } = useMemo(() => {
     const deny = (reason: string) => showToast('Чат', reason);
     const get = () => projectRef.current;
     return {
@@ -260,8 +260,11 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
       allowAlways: guardTurnAction(get, rawAllowAlways, deny),
       answerQuestion: guardTurnAction(get, rawAnswerQuestion, deny),
       respondPlan: guardTurnAction(get, rawRespondPlan, deny),
+      denyPermission: guardTurnAction(get, rawDenyPermission, deny),
+      respondTeamPlan: guardTurnAction(get, rawRespondTeamPlan, deny),
+      respondTeamEscalation: guardTurnAction(get, rawRespondTeamEscalation, deny),
     };
-  }, [rawSend, rawAllowPermission, rawAllowAlways, rawAnswerQuestion, rawRespondPlan]);
+  }, [rawSend, rawAllowPermission, rawDenyPermission, rawAllowAlways, rawAnswerQuestion, rawRespondPlan, rawRespondTeamPlan, rawRespondTeamEscalation]);
   // Открылся пустой чат (только что создан — своей истории у него нет) — курсор сразу
   // в поле ввода: сюда пришли писать, а не читать. Решение принимаем один раз на чат и
   // только ПОСЛЕ загрузки истории: до неё items пуст у любого чата, и фокус улетал бы
@@ -1481,7 +1484,7 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
   // карточка лежит глубоко в ленте.
   const handleRespondTeamPlan = useCallback((planId: string, decision: TeamPlanDecision,
     subtaskId?: string, executorPersonaId?: string, feedback?: string) => {
-    respondTeamPlan(planId, decision, subtaskId, executorPersonaId, feedback).catch(err => {
+    respondTeamPlan(planId, decision, subtaskId, executorPersonaId, feedback)?.catch(err => {
       showToast('Командная реализация', err instanceof Error ? err.message : 'Не удалось отправить решение по плану');
     });
   }, [respondTeamPlan]);
@@ -1950,7 +1953,7 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
   // topEscalation зависит от openEscalations. Контекст живёт, пока включён режим —
   // в выключенном чате карточки только читаются
   const handleRespondTeamEscalation = useCallback((escalationId: string, actionId?: string, comment?: string) => {
-    respondTeamEscalation(escalationId, actionId, comment).catch((err: unknown) => {
+    respondTeamEscalation(escalationId, actionId, comment)?.catch((err: unknown) => {
       showToast('Командная реализация', err instanceof Error ? err.message : 'Не удалось отправить решение');
     });
   }, [respondTeamEscalation]);

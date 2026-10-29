@@ -3,6 +3,7 @@
 // монтируются в fake-DOM с заглушками контролов (проверяются решения встраивания, а не
 // вёрстка ui-кита), композер и входы запуска хода вне него — поведением чистых функций
 // participantGate (Composer/ChatPanel целиком в fake-DOM не поднять: сотни хуков и рефы).
+import { readFileSync } from 'node:fs';
 import { createElement } from 'react';
 import type { ReactElement } from 'react';
 import { act } from 'react';
@@ -212,7 +213,8 @@ describe('плашки владельца', () => {
 describe('входы запуска хода вне композера (гейт в точке отправки)', () => {
   // Те же действия, что ChatPanel заворачивает: send (чипы, «Повторить», «Зафиксировать»,
   // «Возобновить», механики команды, сброс режимов), ответ на разрешение/вопрос/план
-  const entries = ['send', 'allowPermission', 'allowAlways', 'answerQuestion', 'respondPlan'] as const;
+  const entries = ['send', 'allowPermission', 'allowAlways', 'answerQuestion', 'respondPlan',
+    'denyPermission', 'respondTeamPlan', 'respondTeamEscalation'] as const;
 
   it.each(entries)('%s: у читателя и редактора не доходит до сервера, показывает причину', (name) => {
     for (const p of [reader, editor]) {
@@ -224,6 +226,12 @@ describe('входы запуска хода вне композера (гейт
       expect(denied).toHaveBeenCalledTimes(1);
       expect(denied.mock.calls[0][0]).toBe(turnDeniedReason(p));
     }
+  });
+
+  it.each(entries)('%s: ChatPanel заворачивает вход в гейт', (name) => {
+    const src = readFileSync(new URL('../../../../components/ChatPanel.tsx', import.meta.url), 'utf8');
+    const cap = name[0].toUpperCase() + name.slice(1);
+    expect(src).toContain(`${name}: guardTurnAction(get, raw${cap}, deny)`);
   });
 
   it.each(entries)('%s: владелец и обычный проект проходят', (name) => {

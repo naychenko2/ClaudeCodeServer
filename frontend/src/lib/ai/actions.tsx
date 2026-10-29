@@ -20,6 +20,7 @@ import { showToast } from '../toast';
 import { getSlotAction } from '../subsystems/registryCore';
 import type { AiNoteOpenerApi } from '../subsystems/registryCore';
 import { addChatsToWall } from '../../features/wall/wallSuggest';
+import { chatAuthorOnlyReason } from '../../features/projects/members/participantGate';
 import { startChatWithPrompt } from './startChat';
 import { allAnnotationsPrompt, docAnnotationsPrompt, ANNOTATIONS_TOOL_KEY } from './annotationsPrompt';
 
@@ -329,7 +330,7 @@ export const AI_ACTIONS: AiAction[] = [
   {
     id: 'chat.retitle', title: 'Обновить название чата', hint: 'переименовать по смыслу переписки',
     section: 'chat', sectionLabel: 'Чат', icon: IcRetitle,
-    when: c => chatOpen(c) && c.chat.hasMessages && c.online, contextual: chatOpen,
+    when: c => chatOpen(c) && c.chat.hasMessages && c.online && !chatAuthorOnlyReason(c.nav?.project), contextual: chatOpen,
     run: () => dispatchAiRun('chat.retitle'),
   },
   {

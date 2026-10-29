@@ -42,7 +42,7 @@ import { Badge, Button, IconButton, ChatTopicIcon, Modal, ModalActions, ConfirmD
 import { FeatureBackChip } from './FeatureBackChip';
 import { createTask } from '../../lib/tasks';
 import { showToast } from '../../lib/toast';
-import { chatActionAuthorLock, isNotChatAuthorError } from '../../features/projects/members/participantGate';
+import { chatActionAuthorLock, chatAuthorOnlyReason, isNotChatAuthorError } from '../../features/projects/members/participantGate';
 import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
 import { useSlotItem } from '../../lib/subsystems/registry';
 import type { ChatHeaderSummaryCtx, ChatHeaderMenuItemCtx, ChatHeaderBadgeCtx } from '../../lib/subsystems/registryCore';
@@ -1230,7 +1230,7 @@ interface ChatHeaderBarProps {
 
 // «Обновить название чата» — запускается через AI-палитру (действие chat.retitle).
 // Невидимый слушатель cc-ai-run: перечитывает переписку и переименовывает чат по её смыслу.
-function RetitleButton({ session, hasMessages, online }: { session: Session; hasMessages: boolean; online: boolean }) {
+function RetitleButton({ session, hasMessages, online, locked }: { session: Session; hasMessages: boolean; online: boolean; locked?: boolean }) {
   const [busy, setBusy] = useState(false);
   // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс busy при смене чата
   useEffect(() => { setBusy(false); }, [session.id]);
@@ -1244,7 +1244,7 @@ function RetitleButton({ session, hasMessages, online }: { session: Session; has
       .finally(() => { setBusy(false); endAiBusy(); });
   };
   useEffect(() => {
-    if (!online || !hasMessages) return;
+    if (!online || !hasMessages || locked) return;
     const onRun = (e: Event) => { if ((e as CustomEvent<{ action?: string }>).detail?.action === 'chat.retitle') run(); };
     window.addEventListener('cc-ai-run', onRun);
     return () => window.removeEventListener('cc-ai-run', onRun);
@@ -1811,7 +1811,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // TB.gap), читаются как единая группа действий чата; на десктопе — как раньше, врозь.
   const summaryBtn = summaryAction?.render?.({ session, hasMessages, online });
   const extractBtn = <ExtractTasksButton session={session} hasMessages={hasMessages} online={online} />;
-  const retitleBtn = <RetitleButton session={session} hasMessages={hasMessages} online={online} />;
+  const retitleBtn = <RetitleButton session={session} hasMessages={hasMessages} online={online} locked={!!chatAuthorOnlyReason(project)} />;
 
   // === Видимость ряда действий ===
   // «⋯» стоит в ряду ВСЕГДА, а тумблеры внутри решают, что показывать рядом с ним.
@@ -2234,6 +2234,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           <MenuItem
             icon={<Pencil size={15} strokeWidth={2} />}
             label="Переименовать по переписке"
+            hint={chatAuthorOnlyReason(project) ?? undefined}
+            disabled={!!chatAuthorOnlyReason(project)}
             onClick={() => { setCtxMenu(null); runAi('chat.retitle'); }}
           />
           <MenuItem

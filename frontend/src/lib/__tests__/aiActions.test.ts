@@ -105,3 +105,17 @@ describe('rankedActions — file.toMarkdown и файл не из корня', (
     expect(ids({ path: 'other.pdf', fromRoot: false })).toContain('file.toMarkdown');
   });
 });
+
+describe('chat.retitle — не-автор чата', () => {
+  const ids = (myRole?: 'owner' | 'editor' | 'reader') => rankedActions(ctx({
+    nav: { screen: 'project', project: { id: 'p', myRole } as never },
+    chat: { active: true, hasMessages: true },
+  })).map(x => x.action.id);
+
+  it('участнику пункта нет, владельцу и проекту без роли — есть', () => {
+    expect(ids('editor')).not.toContain('chat.retitle');
+    expect(ids('reader')).not.toContain('chat.retitle');
+    expect(ids('owner')).toContain('chat.retitle');
+    expect(ids(undefined)).toContain('chat.retitle');
+  });
+});

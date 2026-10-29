@@ -114,6 +114,16 @@ public class ProjectAccessTests
     }
 
     [Fact]
+    public void МатрицаПрав_Configure_ТолькоВладелец_РедакторИЧитательНет()
+    {
+        var project = SharedProject((EditorId, ProjectRole.Editor), (ReaderId, ProjectRole.Reader));
+        ProjectAccess.Can(project, OwnerId, ProjectRight.Configure).Should().BeTrue();
+        ProjectAccess.Can(project, EditorId, ProjectRight.Configure).Should().BeFalse();
+        ProjectAccess.Can(project, ReaderId, ProjectRight.Configure).Should().BeFalse();
+        ProjectAccess.Can(project, OtherId, ProjectRight.Configure).Should().BeFalse();
+    }
+
+    [Fact]
     public void МатрицаПрав_RunTurn_ТолькоВладелец_РедакторИЧитательНет()
     {
         var project = SharedProject((EditorId, ProjectRole.Editor), (ReaderId, ProjectRole.Reader));

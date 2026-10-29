@@ -277,7 +277,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
 
     // Сброс пароля Forgejo (утерян — например аккаунт создан до хранения паролей)
     [HttpPost("forgejo-credentials/reset")]
-    [ProjectScope(Right = ProjectRight.Write)]
+    [ProjectScope(Right = ProjectRight.Configure)]
     public async Task<IActionResult> ResetForgejoPassword(string projectId, CancellationToken ct)
     {
         try
@@ -432,7 +432,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     // Сохранить оба промпта: глобальный (User) пишем всегда; проектный override — только
     // если useProject=true (иначе снимаем, активным становится глобальный).
     [HttpPut("commit-prompt")]
-    [ProjectScope(Right = ProjectRight.Write)]
+    [ProjectScope(Right = ProjectRight.Configure)]
     public IActionResult SetCommitPrompt(string projectId, [FromBody] GitCommitPromptRequest body)
     {
         try
@@ -581,7 +581,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
 
     // Инициализация git в папке проекта + (при настроенном Forgejo) создание remote-репозитория
     [HttpPost("init")]
-    [ProjectScope(Right = ProjectRight.Write)]
+    [ProjectScope(Right = ProjectRight.Configure)]
     public async Task<IActionResult> Init(string projectId, CancellationToken ct)
     {
         try
@@ -640,7 +640,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     // Подключить/обновить origin вручную введённым адресом. Всегда про КОРЕНЬ проекта:
     // worktree чата делит с ним общий .git, своего origin у него нет.
     [HttpPost("remote")]
-    [ProjectScope(Right = ProjectRight.Write)]
+    [ProjectScope(Right = ProjectRight.Configure)]
     public async Task<IActionResult> SetRemote(string projectId, [FromBody] GitSetRemoteRequest body, CancellationToken ct)
     {
         try
@@ -665,7 +665,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     // Завести репозиторий на встроенном Forgejo для уже инициализированной репы и подключить
     // его как origin (у /git/init это делается заодно с созданием репозитория)
     [HttpPost("remote/server")]
-    [ProjectScope(Right = ProjectRight.Write)]
+    [ProjectScope(Right = ProjectRight.Configure)]
     public async Task<IActionResult> CreateServerRepo(string projectId, CancellationToken ct)
     {
         try
@@ -683,7 +683,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
 
     // Режим документов: авто-commit (и опционально push) после каждого хода Claude
     [HttpPut("auto-commit")]
-    [ProjectScope(Right = ProjectRight.Write)]
+    [ProjectScope(Right = ProjectRight.Configure)]
     public IActionResult SetAutoCommit(string projectId, [FromBody] GitAutoCommitRequest body)
     {
         try

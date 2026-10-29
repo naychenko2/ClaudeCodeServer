@@ -301,7 +301,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     }
 
     [HttpPut("{id}")]
-    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
+    [ProjectScope(Key = "id", Right = ProjectRight.Configure)]
     public async Task<IActionResult> Update(string id, [FromBody] UpdateProjectRequest req)
     {
         var p = projects.GetById(id);
@@ -379,7 +379,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // При существующих чатах запрещена — по образцу смены среды исполнения (UsersController):
     // resume-транскрипты и рабочие деревья чатов живут на машине прежней привязки.
     [HttpPut("{id}/device")]
-    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
+    [ProjectScope(Key = "id", Right = ProjectRight.Configure)]
     public async Task<IActionResult> SetDevice(string id, [FromBody] SetProjectDeviceRequest req)
     {
         var p = projects.GetById(id);
@@ -445,7 +445,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // Руки — свойство чата: адаптеры живых чатов проекта пересоздаются при следующем сообщении.
     // Идущий ход доработает со старым составом — гасит руки на месте человек у машины («Стоп»).
     [HttpPut("{id}/hands")]
-    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
+    [ProjectScope(Key = "id", Right = ProjectRight.Configure)]
     public IActionResult SetHands(string id, [FromBody] SetHandsRequest req)
     {
         var p = projects.GetById(id);
@@ -462,7 +462,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // убирать в архив чаты проекта без сообщений дольше N дней. days = null — наследовать
     // личный порог владельца.
     [HttpPut("{id}/archive-days")]
-    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
+    [ProjectScope(Key = "id", Right = ProjectRight.Configure)]
     public IActionResult SetArchiveDays(string id, [FromBody] SetProjectArchiveDaysRequest req)
     {
         var p = projects.GetById(id);
@@ -482,7 +482,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // у проекта нет. Порог не задан ни у проекта, ни у владельца — пустой проход (0), а не
     // ошибка: настройки сохранены, убирать нечего.
     [HttpPost("{id}/archive-run")]
-    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
+    [ProjectScope(Key = "id", Right = ProjectRight.Configure)]
     public async Task<IActionResult> ArchiveRun(string id)
     {
         var p = projects.GetById(id);
@@ -493,7 +493,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
 
     // Кастомные колонки Kanban-доски проекта (пустой список → дефолтные 3)
     [HttpPut("{id}/board-columns")]
-    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
+    [ProjectScope(Key = "id", Right = ProjectRight.Configure)]
     public IActionResult UpdateBoardColumns(string id, [FromBody] UpdateBoardColumnsRequest req)
     {
         var p = projects.GetById(id);
@@ -504,7 +504,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
 
     // Реестр общих тегов проекта (имя, порядок, цвет) — перезапись целиком
     [HttpPut("{id}/tags")]
-    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
+    [ProjectScope(Key = "id", Right = ProjectRight.Configure)]
     public IActionResult UpdateTags(string id, [FromBody] List<ProjectTag> registry)
     {
         var p = projects.GetById(id);
@@ -534,7 +534,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     }
 
     [HttpDelete("{id}")]
-    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
+    [ProjectScope(Key = "id", Right = ProjectRight.Configure)]
     public async Task<IActionResult> Delete(string id)
     {
         var p = projects.GetById(id);
@@ -619,7 +619,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // сбой (место не настроено, битый JSON, ни одного годного) = пустой набор с причиной:
     // проект остаётся на инициалах, это фолбэк, а не ошибка (ADR-009 §7).
     [HttpPost("{id}/icon/suggest")]
-    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
+    [ProjectScope(Key = "id", Right = ProjectRight.Configure)]
     public async Task<ActionResult> SuggestIcon(string id, [FromBody] SuggestIconRequest? req)
     {
         var p = projects.GetById(id);
@@ -653,7 +653,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // валидатором, что и ответ модели, — клиент такой же недоверенный источник
     // (ADR-009 §8, инвариант «валидация на входе в стор» §11.3).
     [HttpPost("{id}/icon/select")]
-    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
+    [ProjectScope(Key = "id", Right = ProjectRight.Configure)]
     public ActionResult SelectIcon(string id, [FromBody] SelectIconRequest req)
     {
         var p = projects.GetById(id);
@@ -678,7 +678,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // Переключить режим иконки: инициалы ↔ значок. Значок при возврате на инициалы НЕ
     // стирается — это путь «назад» и «снова вперёд» без повторного подбора.
     [HttpPost("{id}/icon/mode")]
-    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
+    [ProjectScope(Key = "id", Right = ProjectRight.Configure)]
     public ActionResult SetIconMode(string id, [FromBody] SetIconModeRequest req)
     {
         var p = projects.GetById(id);
@@ -704,7 +704,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // до 512 КБ, без кропа — плитка вписывает её как есть. Формат — по байтам
     // (ProjectIconImage.Detect), имя и Content-Type от клиента не используются вовсе.
     [HttpPost("{id}/icon/upload")]
-    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
+    [ProjectScope(Key = "id", Right = ProjectRight.Configure)]
     [RequestSizeLimit(1_000_000)]
     public async Task<ActionResult> UploadIconImage(string id, [FromForm] IFormFile? file)
     {

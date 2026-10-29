@@ -29,6 +29,12 @@ public enum ProjectRight
     Read,
     Write,
     RunTurn,
+    /// <summary>
+    /// Настройки проекта и необратимые действия над ним: удаление, имя/путь/значок, устройство,
+    /// руки, архивация, колонки доски, git-удалённый репозиторий. Только владелец — у редактора
+    /// и читателя этого права нет и не будет (ревью S1-2).
+    /// </summary>
+    Configure,
 }
 
 /// <summary>
@@ -62,16 +68,15 @@ public static class ProjectAccess
 
     /// <summary>
     /// Матрица «роль → права» (разрез §2.1, минимальная): владелец имеет все права,
-    /// редактор — Read и Write (RunTurn ему откроет S2a-10 одной строкой здесь), читатель —
-    /// только Read («нет права на запись»). Тонкие права (настройки
-    /// проекта, приглашение участников) в матрицу привнесёт их шаг, здесь их нет.
-    /// null-роль не имеет ни одного права.
+    /// редактор — Read и Write (RunTurn ему откроет S2a-10 одной строкой здесь; Configure не
+    /// получит никогда), читатель — только Read («нет права на запись»). Приглашение участников
+    /// — отдельное решение владельца в ProjectMembersController. null-роль не имеет ни одного права.
     /// </summary>
     private static bool RoleHasRight(ProjectRole? role, ProjectRight right) =>
         role switch
         {
             ProjectRole.Owner => true,
-            ProjectRole.Editor => right != ProjectRight.RunTurn,
+            ProjectRole.Editor => right is ProjectRight.Read or ProjectRight.Write,
             ProjectRole.Reader => right == ProjectRight.Read,
             _ => false,
         };

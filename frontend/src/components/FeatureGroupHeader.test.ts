@@ -465,13 +465,40 @@ describe('featureGroupByOptions: пункт «Фичи»', () => {
   });
 });
 
-// === m2: поля тела плашки по состоянию (С1: 6 10 2 2 + строки 19/17 + полоса = 55 px) ===
-// Обычная — 6 10 2 2 (С1 §Для Киры: «итог ровно 55 px»); закрытая (compact) — 5 10 5 2
-// (≈50,5, таблица §2), на 360 minHeight 52.
-describe('FeatureGroupHeader: m2 поля тела по состоянию', () => {
-  it('обычная плашка (С1): поля 6 10 2 2 (55 px с полосой)', () => {
+// === m2: высота плашки как СУММА слоёв (С1 = ровно 55 px) ===
+// Раньше тест проверял только строку полей («вакуумный»: дизайн-ревью F2, major 2 — при
+// gap 3 ×2 и растянутой бейджем строке плашка вышла 60,4). Теперь собираем высоту из тех
+// же чисел, которые рисует компонент: рамка + поля + фиксированные строки + отступ над
+// полосой + полоса. Сдвинется любой слой — краснеет.
+describe('FeatureGroupHeader: m2 высота С1 как сумма слоёв', () => {
+  it('обычная плашка: 1 + 6 + 19 + 17 + 4 + 4 + 3 + 1 = ровно 55 px, без фиксированной height', () => {
     const html = renderHeader(feat({ stepsAccepted: 4, stepsTotal: 9, stepsReview: 2, stepsWork: 2, stepsNotCreated: 1, planState: 'cut' }));
-    expect(html).toContain('padding:6px 10px 2px 2px');
+    const styleOf = (testId: string): string => {
+      const m = new RegExp(`data-testid="${testId}"[^>]*style="([^"]*)"`).exec(html);
+      if (!m) throw new Error(`слой не найден в разметке: ${testId}`);
+      return m[1];
+    };
+    const px = (style: string, prop: string): number => {
+      const m = new RegExp(`${prop}:(\\d+)px`).exec(style);
+      if (!m) throw new Error(`слоя нет в стиле ${prop}: ${style}`);
+      return Number(m[1]);
+    };
+    const frame = styleOf('feature-group-header');
+    const body = styleOf('feature-group-body');
+    const bar = styleOf('feature-group-bar');
+    const pad = /padding:(\d+)px (\d+)px (\d+)px (\d+)px/.exec(body);
+    if (!pad) throw new Error(`полей тела нет: ${body}`);
+    const total =
+      px(frame, 'border-top-width') + Number(pad[1])
+      + px(styleOf('feature-group-row1'), 'height')
+      + px(styleOf('feature-group-row2'), 'height')
+      + px(bar, 'margin-top') + px(bar, 'height')
+      + Number(pad[3]) + px(frame, 'border-bottom-width');
+    expect(total).toBe(55);
+    // Строки идут вплотную (зазора между слоями нет) и высота не задана фиксированной —
+    // она складывается из слоёв (фиксированных), поэтому не съезжает от содержимого.
+    expect(body).not.toContain('gap:');
+    expect(frame).not.toContain('height:55px');
   });
 
   it('закрытая (compact): поля 5 10 5 2 (≈50,5, таблица §2)', () => {

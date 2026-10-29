@@ -105,6 +105,12 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
   const st = featureDisplayState(feature, { now, personaName });
   // Честный прогресс (Ф-pr): из строки индекса; null — старые ответы (полосы и процента нет).
   const progress = stepProgressFromIndex(feature);
+  // Полоса С1 — БЕЗ подсветки «в master», и это не пропуск: строка индекса (FeatureIndex.cs)
+  // несёт корзины stepsAccepted/Review/Work/NotCreated, а ортогонального InMaster у неё
+  // нет — выдумывать поле или просить новый бэк для плашки не стали (решение постановщика,
+  // отступление от макета v4 принял Александр; новых полей в бэк не заводим). Числа,
+  // которые индекс несёт, рисуются как есть; «в master» остаётся там, где он есть — в
+  // строке В2 и в попапе (берут run.stepProgress.inMaster).
   const bar = featureTruthBar(progress, null);
   const percent = progress ? trackerPercent(progress.accepted, progress.total) : 0;
   // Кромка тревоги 3px — тоны В2: 'wait' → warning (жёлтый), 'stop' → danger (красный).
@@ -172,9 +178,14 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
     overflow: 'hidden',
     boxShadow: hovered && !compact ? SHADOW.card : undefined,
   };
-  // Поля тела (С1): обычная 6 10 2 2 + строки 19/17 + зазор 4 + полоса 4 = ровно 55 px;
-  // закрытая (compact) — прежние 5 10 5 2 (без полосы).
-  const bodyPadding = compact ? '5px 10px 5px 2px' : '6px 10px 2px 2px';
+  // Поля тела (С1) — высота как сумма слоёв, ровно 55 px, без фиксированной height:
+  //   1 рамка + 6 + строка1 19 + строка2 17 + отступ над полосой 4 + полоса 4 + 3 + 1 рамка = 55.
+  // Строки идут вплотную (gap убран): зазор 3 ×2 поднимал плашку до 60,4 (дизайн-ревью
+  // F2, major 2). Нижнее поле 3, а не 2: формула макета v4 (6/10/2/2 + 19 + 17 + 4 + 4)
+  // даёт 54 при заявленных 55 — недостающий 1 px берём сюда, чтобы сумма слоёв была
+  // ровно spec без height:55 и без обрезки содержимого.
+  // Закрытая (compact) — прежние 5 10 5 2 (без полосы).
+  const bodyPadding = compact ? '5px 10px 5px 2px' : '6px 10px 3px 2px';
 
   return (
     <div
@@ -219,7 +230,8 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
         />
       </button>
 
-      {/* Тело: открывает страницу фичи (onOpen). Две строки + полоса, gap 3. */}
+      {/* Тело: открывает страницу фичи (onOpen). Две строки + полоса — вплотную (gap 0):
+          высота плашки складывается из фиксированных слоёв, а не из зазоров между ними. */}
       <button
         type="button"
         data-testid="feature-group-body"
@@ -240,12 +252,12 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
           minWidth: 0,
           display: 'flex',
           flexDirection: 'column',
-          gap: 3,
           ...(compact && isMobile ? { minHeight: 52 } : null),
         }}
       >
-        {/* Строка 1: глиф, название, давность. lineHeight 19 (Р-1). */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, lineHeight: '19px' }}>
+        {/* Строка 1: глиф, название, давность. Высота 19 фиксирована (как .r1 в макете):
+            содержимое не растягивает строку — из неё складывается высота плашки (55). */}
+        <div data-testid="feature-group-row1" style={{ display: 'flex', alignItems: 'center', gap: 7, height: 19, lineHeight: '19px' }}>
           <span style={{ display: 'flex', flexShrink: 0 }}>
             <FeatureGlyph kind={st.kind} size={14} />
           </span>
@@ -276,8 +288,10 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
           )}
         </div>
 
-        {/* Строка 2: аватары, статус, процент. lineHeight 17 (Р-1). */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, lineHeight: '17px', minWidth: 0 }}>
+        {/* Строка 2: аватары, статус, процент, бейдж расхождений. Высота 17 фиксирована
+            (.r2 макета) и alignItems: center: бейдж/аватар не растягивают строку до 17,4+
+            — иначе высота плашки съезжает (дизайн-ревью F2, major 2). */}
+        <div data-testid="feature-group-row2" style={{ display: 'flex', alignItems: 'center', gap: 7, height: 17, lineHeight: '17px', minWidth: 0 }}>
           {avatars.length > 0 && (
             <span style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}>
               {avatars.map((p, i) => (

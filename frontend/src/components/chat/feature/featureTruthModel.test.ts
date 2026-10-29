@@ -11,9 +11,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   alarmView, chatRoleFromRun, featureEstimateView, featureNowRows, featureStepChainRows,
-  featureTrackerIssues, featureTruthBar, findChatChain, stepStatusParts, stepStatusText, trackerPercent,
+  featureTrackerIssues, featureTruthBar, findChatChain, stepBadgeTone, stepStatusParts, stepStatusText,
+  stepStoppedBy, trackerPercent,
 } from './featureTruthModel';
 import { trackerBarAria } from './FeatureTrackerBar';
+import { C } from '../../../lib/design';
 import { trackerPercent as tp } from '../../../lib/featureProgress';
 import { formatClock } from '../../feature/FeatureStatsBits';
 import type { FeatureRun, FeatureStepChain } from '../../../types/featureRun';
@@ -158,6 +160,43 @@ describe('шаг этого чата: цепочка, статус, роль', (
     expect(p).toEqual({ word: 'идёт', time: '24 мин', sep: ' · ' });
   });
 
+  // «Стоит» против «идёт» (дизайн-ревью F2, major 3): шаг inProgress, исполнитель
+  // остановлен — карточка, цепочка и «Сейчас» не должны утверждать, что он идёт.
+  it('тревога на этом шаге (attention.kind stopped и его taskId в цепочке): «стоит · с момента остановки», тон danger', () => {
+    const r = run({
+      state: 'stopped',
+      attention: { kind: 'stopped', taskId: 't-8', since: '2026-10-29T10:08:00Z', reason: 'auth_failed', personaId: 'p-kira', linkedSessionId: 's-me' },
+      stepChains: [chain()],
+    });
+    const c = r.stepChains![0];
+    const stopped = stepStoppedBy(r, c);
+    expect(stopped).toEqual({ since: '2026-10-29T10:08:00Z' });
+    // Время — с attention.since (1 ч 52 мин), а не с durationMinutes цепочки (24 мин).
+    expect(stepStatusParts(c, NOW, stopped)).toEqual({ word: 'стоит', time: '1 ч 52 мин', sep: ' · ' });
+    expect(stepStatusText(c, NOW, stopped)).toBe('стоит · 1 ч 52 мин');
+    expect(stepBadgeTone(c, stopped)).toBe('danger');
+  });
+
+  it('тревога не про этот шаг (чужая задача или другой вид) — статус остаётся бэковым', () => {
+    const other = run({ attention: { kind: 'stopped', taskId: 't-9', since: null }, stepChains: [chain()] });
+    expect(stepStoppedBy(other, other.stepChains![0])).toBeNull();
+    const wait = run({ attention: { kind: 'wait', taskId: 't-8', since: null }, stepChains: [chain()] });
+    expect(stepStoppedBy(wait, wait.stepChains![0])).toBeNull();
+    expect(stepStatusText(chain(), NOW, stepStoppedBy(wait, chain()))).toBe('идёт · 24 мин');
+    expect(stepBadgeTone(chain(), null)).toBe('accent');
+  });
+
+  it('первая строка цепочки при «стоит»: «— стоит» и точка danger (цепочка не спорит с карточкой)', () => {
+    const r = run({
+      state: 'stopped',
+      attention: { kind: 'stopped', taskId: 't-8', since: '2026-10-29T10:08:00Z', reason: 'auth_failed', personaId: 'p-kira', linkedSessionId: 's-me' },
+      stepChains: [chain()],
+    });
+    const rows = featureStepChainRows(r, r.stepChains![0], nameOf);
+    expect(rows[0].text).toBe('Ш8 · Вёрстка шапки — стоит');
+    expect(rows[0].color).toBe(C.danger);
+  });
+
   it('цепочка П2: свой шаг → витки (кто, исход, когда) → незакрытое ревью, ждущее этот шаг; закрытое ревью — нет', () => {
     const r = run({
       stepChains: [chain({
@@ -231,10 +270,23 @@ describe('оценка и «Сейчас»', () => {
       ],
     });
     const rows = featureNowRows(r, 'sess-me', nameOf, NOW);
-    expect(rows[0]).toEqual({ taskId: 't-8', name: 'Кира', what: 'Ш8 · Вёрстка шапки', time: '24 мин', isThisChat: true });
+    expect(rows[0]).toEqual({ taskId: 't-8', name: 'Кира', what: 'Ш8 · Вёрстка шапки', time: '24 мин', isThisChat: true, stopped: false });
     expect(rows[1].what).toBe('Ревью шапки'); // без stepRef — заголовок задачи
     expect(rows[1].time).toBeNull(); // нет старта — нет времени
     expect(rows[1].isThisChat).toBe(false);
+  });
+
+  it('«Сейчас» о стоящем: строка помечена stopped, время — с момента остановки, а не от старта задачи', () => {
+    const r = run({
+      state: 'stopped',
+      attention: { kind: 'stopped', taskId: 't-8', since: '2026-10-29T10:08:00Z', reason: 'auth_failed', personaId: 'p-kira', linkedSessionId: 'sess-me' },
+      now: [{ taskId: 't-8', stage: 'prod', personaId: 'p-kira', stepRef: 'Ш8', title: 'Вёрстка шапки', startedAt: '2026-10-29T11:36:00Z', linkedSessionId: 'sess-me' }],
+    });
+    const rows = featureNowRows(r, 'sess-me', nameOf, NOW);
+    expect(rows[0].stopped).toBe(true);
+    // 1 ч 52 мин с остановки (10:08), а не 24 мин от старта задачи: от старта стоящее
+    // только растёт и читается как «ещё идёт».
+    expect(rows[0].time).toBe('1 ч 52 мин');
   });
 });
 

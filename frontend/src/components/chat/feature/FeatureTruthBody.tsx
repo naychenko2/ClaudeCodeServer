@@ -89,8 +89,12 @@ export function FeatureTruthBody({ run, sessionId, isMobile, roleText, isKey = f
             {r.isThisChat && (
               <span data-testid="feature-truth-this-chat" style={{ color: C.accent, fontSize: FS.xs, fontWeight: 600 }}> · этот чат</span>
             )}
+            {/* Стоящий на этом шаге — тоном тревоги: «Сейчас» не выдаёт его за идущий. */}
+            {r.stopped && (
+              <span data-testid="feature-truth-now-stopped" style={{ color: C.dangerText, fontSize: FS.xs, fontWeight: 600 }}> · стоит</span>
+            )}
           </span>
-          {r.time && <span style={rowTimeStyle}>{r.time}</span>}
+          {r.time && <span style={r.stopped ? { ...rowTimeStyle, color: C.dangerText } : rowTimeStyle}>{r.time}</span>}
         </div>
       ))}
     </>

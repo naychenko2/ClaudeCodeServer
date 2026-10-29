@@ -156,17 +156,27 @@ export interface TruthNowRow {
   // «24 мин» — от старта задачи до сейчас; нет старта или меньше минуты — нет времени.
   time: string | null;
   isThisChat: boolean;
+  // Тревога «стоит» на этой задаче (attention.kind 'stopped' и её taskId): строка «Сейчас»
+  // не должна выдавать стоящее за идущее (дизайн-ревью F2, major 3).
+  stopped: boolean;
 }
 
 export function featureNowRows(run: FeatureRun, sessionId: string | null, nameOf: NameOf, nowMs: number): TruthNowRow[] {
+  const at = run.attention;
+  const stoppedTaskId = at && at.kind === 'stopped' ? at.taskId ?? null : null;
   return (run.now ?? []).map(n => {
-    const dur = n.startedAt ? minutesSince(n.startedAt, nowMs) : null;
+    const stopped = stoppedTaskId != null && n.taskId === stoppedTaskId;
+    // Время стоящего — с момента остановки (attention.since), а не от старта задачи:
+    // длительность от старта у стоящего только растёт и читается как «ещё идёт».
+    const from = stopped ? at!.since ?? n.startedAt : n.startedAt;
+    const dur = from ? minutesSince(from, nowMs) : null;
     return {
       taskId: n.taskId,
       name: n.personaId ? nameOf(n.personaId) : null,
       what: n.stepRef ? `${n.stepRef} · ${n.title}` : n.title,
       time: dur != null && dur > 0 ? formatDuration(dur) : null,
       isThisChat: n.linkedSessionId != null && n.linkedSessionId === sessionId,
+      stopped,
     };
   });
 }
@@ -200,12 +210,28 @@ export function findChatChain(run: FeatureRun, chatTaskId: string | null | undef
   return (run.stepChains ?? []).find(c => (c.taskIds ?? []).includes(chatTaskId)) ?? null;
 }
 
-// Тон плашки статуса шага: принят — success, «ждёт ревью» — info, снят — neutral,
-// работа — accent (макет v4 .chip.a/.r/.w). Слова — бэковые (chain.status), второй
-// копии слов нет.
-export type StepBadgeTone = 'accent' | 'info' | 'success' | 'neutral';
+// «Стоит» на шаге этого чата: тревога фичи (run.attention, kind 'stopped') указывает на
+// задачу ЭТОЙ цепочки — значит фича стоит именно на этом шаге (исполнитель остановлен,
+// auth_failed и т.п.). Поле бэковое, нового состояния нет: слово то же, что в тревоге
+// (alarmView 'stopped' → «Стоит»), время — с attention.since (бэковый ExecutorStoppedAt),
+// а не с chain.durationMinutes (он считает от старта задачи и у стоящего растёт).
+// Возвращает сам маркер (null — тревога не про этот шаг): его передают в тон и статусы.
+export interface StepStoppedBy { since: string | null }
 
-export function stepBadgeTone(chain: FeatureStepChain): StepBadgeTone {
+export function stepStoppedBy(run: FeatureRun, chain: FeatureStepChain): StepStoppedBy | null {
+  const at = run.attention;
+  if (!at || at.kind !== 'stopped' || !at.taskId) return null;
+  if (!(chain.taskIds ?? []).includes(at.taskId)) return null;
+  return { since: at.since ?? null };
+}
+
+// Тон плашки статуса шага: стоит (тревога на этом шаге) — danger, принят — success,
+// «ждёт ревью» — info, снят — neutral, работа — accent (макет v4 .chip.a/.r/.w).
+// Слова — бэковые (chain.status / attention), второй копии слов нет.
+export type StepBadgeTone = 'accent' | 'danger' | 'info' | 'success' | 'neutral';
+
+export function stepBadgeTone(chain: FeatureStepChain, stoppedBy?: StepStoppedBy | null): StepBadgeTone {
+  if (stoppedBy) return 'danger';
   if (chain.outcome === 'accepted') return 'success';
   if (chain.status === 'ждёт ревью') return 'info';
   if (chain.outcome === 'withdrawn') return 'neutral';
@@ -216,9 +242,15 @@ export function stepBadgeTone(chain: FeatureStepChain): StepBadgeTone {
 // разделителем): «идёт» · «24 мин» (длительность бэка: у идущей — до сейчас),
 // «ждёт ревью» · «8 мин» (waitingSince), «принят» «13:40» (acceptedAt, без разделителя —
 // «принят 13:40» читается одним фактом). Без времени — только слово (слов — бэковых).
+// stoppedBy (тревога на этом шаге) — перевешивает состояние цепочки: «стоит» · «1 ч 52»
+// с attention.since (дизайн-ревью F2, major 3: карточка не должна спорить с тревогой).
 export interface StepStatusParts { word: string; time: string | null; sep: string }
 
-export function stepStatusParts(chain: FeatureStepChain, nowMs: number): StepStatusParts {
+export function stepStatusParts(chain: FeatureStepChain, nowMs: number, stoppedBy?: StepStoppedBy | null): StepStatusParts {
+  if (stoppedBy) {
+    const s = stoppedBy.since ? minutesSince(stoppedBy.since, nowMs) : null;
+    return { word: 'стоит', time: s != null && s > 0 ? formatDuration(s) : null, sep: ' · ' };
+  }
   if (chain.outcome === 'accepted') {
     return { word: 'принят', time: chain.acceptedAt ? formatClock(chain.acceptedAt) : null, sep: ' ' };
   }
@@ -230,8 +262,8 @@ export function stepStatusParts(chain: FeatureStepChain, nowMs: number): StepSta
   return { word: chain.status, time: d != null && d > 0 ? formatDuration(d) : null, sep: ' · ' };
 }
 
-export function stepStatusText(chain: FeatureStepChain, nowMs: number): string {
-  const p = stepStatusParts(chain, nowMs);
+export function stepStatusText(chain: FeatureStepChain, nowMs: number, stoppedBy?: StepStoppedBy | null): string {
+  const p = stepStatusParts(chain, nowMs, stoppedBy);
   return p.time ? `${p.word}${p.sep}${p.time}` : p.word;
 }
 
@@ -269,10 +301,15 @@ export function chatRoleFromRun(run: FeatureRun, chatTaskId: string | null | und
 // финал, которые жДУТ этот шаг (reviewOf ∩ задачи цепочки, незакрытые — «после сдачи»).
 export function featureStepChainRows(run: FeatureRun, chain: FeatureStepChain, nameOf: NameOf): TruthChainRow[] {
   const rows: TruthChainRow[] = [];
+  // Первая строка — сам шаг: то же слово статуса, что и на плашке карточки (те же
+  // источники: chain.status / «стоит» из тревоги на этом шаге — stepStatusParts и
+  // stepStoppedBy). Цепочка не должна спорить с карточкой (дизайн-ревью F2, major 3).
+  const stoppedBy = stepStoppedBy(run, chain);
+  const word = stoppedBy ? 'стоит' : chain.status;
   rows.push({
     id: `step-${chain.stepRef}`,
-    color: chain.outcome === 'accepted' ? C.success : chain.status === 'ждёт ревью' ? C.info : chain.outcome === 'withdrawn' ? C.textMuted : C.accent,
-    text: `${chain.stepRef} · ${chain.title} — ${chain.status}`,
+    color: stoppedBy ? C.danger : chain.outcome === 'accepted' ? C.success : chain.status === 'ждёт ревью' ? C.info : chain.outcome === 'withdrawn' ? C.textMuted : C.accent,
+    text: `${chain.stepRef} · ${chain.title} — ${word}`,
     time: null,
   });
   for (const r of chain.rounds ?? []) {

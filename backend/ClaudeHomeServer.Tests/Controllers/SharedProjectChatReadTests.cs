@@ -156,7 +156,7 @@ public class SharedProjectChatReadTests : IClassFixture<TestWebApplicationFactor
             .EnumerateArray().Should().BeEmpty("в личное пространство участника ничего не утекло");
     }
 
-    // ── «сужение, безопасно»: внутри снова GetOwned → участнику 404 ──────────────
+    // ── «сужение, безопасно»: внутри снова GetOwned → участнику 404 (кроме архива и ход-входов) ──
 
     [Fact]
     public async Task Участник_ДействияНадЧатомСвнутреннимGetOwned_404()
@@ -166,8 +166,7 @@ public class SharedProjectChatReadTests : IClassFixture<TestWebApplicationFactor
 
         (await member.PostAsync($"/api/chats/{sessionId}/window-1m/drop", null)).StatusCode
             .Should().Be(HttpStatusCode.NotFound);
-        (await member.PutAsJsonAsync($"/api/chats/{sessionId}/archived", new { archived = true })).StatusCode
-            .Should().Be(HttpStatusCode.NotFound);
+        // архив чата в группу GetOwned → 404 больше не входит: участнику 403 not_chat_author (матрица ролей)
         // ход-входы (RunTurn, S1-7): чат участнику виден, вести ход ему нельзя — 403, а не 404
         (await member.PutAsJsonAsync($"/api/chats/{sessionId}/team-implement", new { })).StatusCode
             .Should().Be(HttpStatusCode.Forbidden);

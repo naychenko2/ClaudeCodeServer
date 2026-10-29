@@ -272,6 +272,10 @@ public class SubsystemBoundaryCoverageTests
             // спина Core без вертикали-владельца, её типы покрыты CoreAllowedNamespaces
             // соседнего сторожа; вертикали зовут её напрямую, как SafePath.Join (IsCoreAssembly).
             "ClaudeHomeServer.Services.Access",
+            // «Общие проекты», S1-6 (разрез §«Личное состояние чата»): стор оверлея личного
+            // состояния чата — спина Core без вертикали-владельца (тот же порядок, что
+            // ChatContext/Access выше); его границы — в явности типов: только спина.
+            "ClaudeHomeServer.Services.ChatUserState",
         };
 
         // Все namespace, покрытые через SubsystemBoundaryTests.Boundaries (по полю

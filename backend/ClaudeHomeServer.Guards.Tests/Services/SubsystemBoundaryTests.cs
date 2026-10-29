@@ -1885,6 +1885,11 @@ public class SubsystemBoundaryTests
         // Прецедент SessionTaskLinks/FeatureTurnGate (примитив без владения вертикалью),
         // но под своим namespace — под ним соберётся вся точка доступа (S0-2, S2a-2, S2d-1).
         "ClaudeHomeServer.Services.Access",
+        // «Общие проекты», S1-6 (разрез §«Личное состояние чата»): оверлей личного состояния
+        // чата по пользователю (ChatUserStateStore, data/chat-user-state/{userId}.json) —
+        // Core-стор без вертикали-владельца, его зовут эндпоинты Main (S1-7). Тот же
+        // порядок, что у ChatContext/Access: спина без своей строки в Boundaries.
+        "ClaudeHomeServer.Services.ChatUserState",
     ];
 
     /// <summary>

@@ -74,7 +74,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     }
 
     private Task NotifyChanged(string projectId) =>
-        hub.Clients.Group("user_" + UserId).SendAsync("message", new GitStatusChangedMessage(projectId));
+        hub.Clients.Group(SessionHubBroadcaster.ProjectGroup(projectId)).SendAsync("message", new GitStatusChangedMessage(projectId));
 
     [HttpGet("status")]
     public async Task<IActionResult> Status(string projectId, CancellationToken ct)

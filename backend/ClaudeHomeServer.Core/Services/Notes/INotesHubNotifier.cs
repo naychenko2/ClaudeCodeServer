@@ -29,5 +29,5 @@ public interface INotesHubNotifier
     // (например "created"/"updated"/"deleted"), идентификатор задачи taskId.
     // Реализация в Main конструирует TaskChangedMessage и шлёт в группу
     // user_{userId}.
-    Task BroadcastTaskChangedAsync(string userId, string action, string taskId);
+    Task BroadcastTaskChangedAsync(string userId, string action, string taskId, string? projectId = null);
 }

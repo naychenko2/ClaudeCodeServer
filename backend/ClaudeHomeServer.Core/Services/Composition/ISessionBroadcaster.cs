@@ -53,3 +53,28 @@ public interface ISessionBroadcaster
     Task ToProject(string projectId, ServerMessage message);
     Task ToPreviewLog(string projectId, string serviceId, ServerMessage message);
 }
+
+// Проектные рассылки общих проектов (S1-5): событие про проект идёт всем участникам группы
+// project_{id}, а не только владельцу. Условная форма нужна там, где сущность бывает личной.
+public static class SessionBroadcasterExtensions
+{
+    // Проектное событие: есть projectId — группа проекта, нет — личное владельцу
+    public static Task ToProjectOrOwner(this ISessionBroadcaster broadcaster, string ownerId, string? projectId, ServerMessage message) =>
+        string.IsNullOrEmpty(projectId)
+            ? broadcaster.ToOwner(ownerId, message)
+            : broadcaster.ToProject(projectId, message);
+
+    // Событие доски: у задачи проекта — участникам группы проекта и дополнительно владельцу
+    // карточки, потому что общий стор задач (календарь, список вне проекта) подписан только
+    // на user_{id} и без второй адресации не увидел бы собственных проектных задач.
+    public static async Task ToTaskBoard(this ISessionBroadcaster broadcaster, string ownerId, string? projectId, ServerMessage message)
+    {
+        if (string.IsNullOrEmpty(projectId))
+        {
+            await broadcaster.ToOwner(ownerId, message);
+            return;
+        }
+        await broadcaster.ToProject(projectId, message);
+        await broadcaster.ToOwner(ownerId, message);
+    }
+}

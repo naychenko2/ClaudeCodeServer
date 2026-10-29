@@ -546,7 +546,7 @@ public sealed class VideoEditJobService : IDisposable
         if (job is { ChatSessionId: { } sessionId, SceneId: { } sceneId })
             await _threads.OnFinishedAsync(job.OwnerId, job.Scope.Key, sessionId, sceneId, job.Id,
                 VideoEditJobStatus.Completed, variants, job.Inputs, partialError);
-        await Broadcast(job.OwnerId, new VideoEditCompletedMessage(job.Id, job.Scope.Key, job.SceneId ?? "",
+        await Broadcast(job.OwnerId, VideoEditScope.ProjectIdOf(job.Scope.Key), new VideoEditCompletedMessage(job.Id, job.Scope.Key, job.SceneId ?? "",
             [.. variants.Select(v => v.Variant)], job.Cost, partialError, job.Initiator) { SessionId = job.ChatSessionId ?? "" });
     }
 
@@ -582,7 +582,7 @@ public sealed class VideoEditJobService : IDisposable
         if (job is { ChatSessionId: { } sessionId, SceneId: { } sceneId })
             await _threads.OnFinishedAsync(job.OwnerId, job.Scope.Key, sessionId, sceneId, job.Id,
                 cancelled ? VideoEditJobStatus.Cancelled : VideoEditJobStatus.Failed, variants, job.Inputs, result.Error);
-        await Broadcast(job.OwnerId, new VideoEditFailedMessage(job.Id, job.Scope.Key, job.SceneId ?? "", charged, result.Error,
+        await Broadcast(job.OwnerId, VideoEditScope.ProjectIdOf(job.Scope.Key), new VideoEditFailedMessage(job.Id, job.Scope.Key, job.SceneId ?? "", charged, result.Error,
             retry, job.Initiator) { SessionId = job.ChatSessionId ?? "" });
     }
 
@@ -896,7 +896,7 @@ public sealed class VideoEditJobService : IDisposable
                 else if (value.Stage != VideoStage.Queued && value.Stage != VideoStage.Running) job.UpscaleEtaSeconds = null;
                 if (value.RemoteId is { } remote) job.RemoteId = remote;
             }
-            _ = owner.Broadcast(job.OwnerId, new VideoEditProgressMessage(job.Id, job.Scope.Key, job.SceneId ?? "",
+            _ = owner.Broadcast(job.OwnerId, VideoEditScope.ProjectIdOf(job.Scope.Key), new VideoEditProgressMessage(job.Id, job.Scope.Key, job.SceneId ?? "",
                 StageName(value.Stage), value.QueuePosition, value.EtaSeconds, variant, job.Quote.Count, job.Initiator, value.Percent,
                 value.UpscaleEtaSeconds, Gpu: value.Gpu)
             { SessionId = job.ChatSessionId ?? "" });
@@ -911,12 +911,12 @@ public sealed class VideoEditJobService : IDisposable
         _ => VideoProgressStages.Queued,
     };
 
-    private async Task Broadcast(string ownerId, ServerMessage message)
+    private async Task Broadcast(string ownerId, string? projectId, ServerMessage message)
     {
         if (_broadcaster is null) return;
         try
         {
-            await _broadcaster.ToOwner(ownerId, message);
+            await _broadcaster.ToProjectOrOwner(ownerId, projectId, message);
         }
         catch (Exception ex)
         {

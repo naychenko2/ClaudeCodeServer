@@ -627,7 +627,7 @@ public sealed class AudioEditJobService : IDisposable
         if (job is { ChatSessionId: { } sessionId, ThreadId: { } threadId })
             await _threads!.OnFinishedAsync(job.OwnerId, job.Scope.Key, sessionId, threadId, job.Id,
                 AudioEditJobStatus.Completed, variants, partialError);
-        await Broadcast(job.OwnerId, new AudioEditCompletedMessage(job.Id, job.Scope.Key, [.. variants.Select(v => v.Variant)],
+        await Broadcast(job.OwnerId, AudioEditScope.ProjectIdOf(job.Scope.Key), new AudioEditCompletedMessage(job.Id, job.Scope.Key, [.. variants.Select(v => v.Variant)],
             cost, partialError, job.ChatSessionId, job.ThreadId, job.Initiator));
     }
 
@@ -662,7 +662,7 @@ public sealed class AudioEditJobService : IDisposable
         if (job is { ChatSessionId: { } sessionId, ThreadId: { } threadId })
             await _threads!.OnFinishedAsync(job.OwnerId, job.Scope.Key, sessionId, threadId, job.Id,
                 cancelled ? AudioEditJobStatus.Cancelled : AudioEditJobStatus.Failed, variants, result.Error);
-        await Broadcast(job.OwnerId, new AudioEditFailedMessage(job.Id, job.Scope.Key, result.Outcome, charged, result.Error,
+        await Broadcast(job.OwnerId, AudioEditScope.ProjectIdOf(job.Scope.Key), new AudioEditFailedMessage(job.Id, job.Scope.Key, result.Outcome, charged, result.Error,
             retry, job.ChatSessionId, job.ThreadId, job.Initiator));
     }
 
@@ -842,18 +842,18 @@ public sealed class AudioEditJobService : IDisposable
                 job.EtaSeconds = value.EtaSeconds;
                 job.Gpu = value.Gpu;
             }
-            _ = owner.Broadcast(job.OwnerId, new AudioEditProgressMessage(job.Id, job.Scope.Key, value.Stage,
+            _ = owner.Broadcast(job.OwnerId, AudioEditScope.ProjectIdOf(job.Scope.Key), new AudioEditProgressMessage(job.Id, job.Scope.Key, value.Stage,
                 value.QueuePosition, value.EtaSeconds, variant, job.Quote.Count, job.ChatSessionId, job.ThreadId, job.Initiator,
                 Gpu: value.Gpu));
         }
     }
 
-    private async Task Broadcast(string ownerId, ServerMessage message)
+    private async Task Broadcast(string ownerId, string? projectId, ServerMessage message)
     {
         if (_broadcaster is null) return;
         try
         {
-            await _broadcaster.ToOwner(ownerId, message);
+            await _broadcaster.ToProjectOrOwner(ownerId, projectId, message);
         }
         catch (Exception ex)
         {

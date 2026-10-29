@@ -32,7 +32,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     private string TenantId => HttpContext.GetRequestScope().TenantOwnerId;
 
     private Task BroadcastTeamMemory(string action, string projectId, string? entryId = null) =>
-        hub.Clients.Group("user_" + UserId).SendAsync("message", new TeamMemoryChangedMessage(action, projectId, entryId));
+        hub.Clients.Group(SessionHubBroadcaster.ProjectGroup(projectId)).SendAsync("message", new TeamMemoryChangedMessage(action, projectId, entryId));
 
     private object WithCount(Project p) => WithCount(p, folderNotice: null);
 

@@ -332,7 +332,7 @@ public class TeamWaveService
                 return true;
             });
             created.Add(task);
-            await _broadcaster.ToOwner(ownerId, new TaskChangedMessage("created", task));
+            await _broadcaster.ToTaskBoard(ownerId, task.ProjectId, new TaskChangedMessage("created", task));
         }
 
         // Состояние и бюджет уже записаны транзакцией-резервом выше (счёт ведёт бэкенд
@@ -463,7 +463,7 @@ public class TeamWaveService
         var stopped = _tasks.MarkExecutorStopped(taskId, DateTime.UtcNow, stopReason)
             ?? markedDropped;
         if (stopped.OwnerId is { } ownerId)
-            await _broadcaster.ToOwner(ownerId, new TaskChangedMessage("updated", stopped));
+            await _broadcaster.ToTaskBoard(ownerId, stopped.ProjectId, new TaskChangedMessage("updated", stopped));
         // Волна 1 team-blocker-honest: сняли под-задачу, на которую был открыт блокер —
         // гасим карточку штаба по факту (стадия возвращается в работу).
         if (stopped.SourceSessionId is { } sourceSessionId)
@@ -760,7 +760,7 @@ public class TeamWaveService
                 $"Прошлый запуск не довёл задачу до конца ({reason}). Разберись, что пошло не так, " +
                 "и доведи работу до фактической проверки — «почти готово» не считается."));
         if (updated is null) return (false, "задача удалена");
-        await _broadcaster.ToOwner(updated.OwnerId!, new TaskChangedMessage("updated", updated));
+        await _broadcaster.ToTaskBoard(updated.OwnerId!, updated.ProjectId, new TaskChangedMessage("updated", updated));
 
         if (_exec is null) return (true, null);
         try

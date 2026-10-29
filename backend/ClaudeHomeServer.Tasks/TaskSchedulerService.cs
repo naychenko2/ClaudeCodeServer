@@ -160,7 +160,7 @@ public class TaskSchedulerService(
             Url: TaskUrl.Of(updated),
             Kind: "reminder"));
         // Синхронизируем сторы клиентов (ReminderSentAt изменился)
-        await broadcaster.ToOwner(updated.OwnerId!, new TaskChangedMessage("updated", updated));
+        await broadcaster.ToTaskBoard(updated.OwnerId!, updated.ProjectId, new TaskChangedMessage("updated", updated));
 
         log.LogInformation("Напоминание отправлено: задача {TaskId} «{Title}»", updated.Id, updated.Title);
     }

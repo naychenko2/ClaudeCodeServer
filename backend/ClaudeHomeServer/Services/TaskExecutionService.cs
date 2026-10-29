@@ -352,7 +352,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         {
             _log.LogWarning("Задача {TaskId}: исполнитель отклонён — {Reason}", task.Id, zoneRefusal);
             if (_tasks.MarkClaudeResult(task.Id, "error") is { } refused)
-                await _broadcaster.ToOwner(task.OwnerId, new TaskChangedMessage("updated", refused));
+                await _broadcaster.ToTaskBoard(task.OwnerId, refused.ProjectId, new TaskChangedMessage("updated", refused));
             throw new InvalidOperationException(zoneRefusal);
         }
 
@@ -420,7 +420,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
             ReleaseReviewTree(task.Id);
             throw new InvalidOperationException("Задача удалена");
         }
-        await _broadcaster.ToOwner(task.OwnerId, new TaskChangedMessage("updated", updated));
+        await _broadcaster.ToTaskBoard(task.OwnerId, updated.ProjectId, new TaskChangedMessage("updated", updated));
 
         var prompt = BuildPrompt(updated, persona, ResolveTierAliases(task.OwnerId),
             ResolveCategoryProfilesPath(task), ResolveRulesTemplate(session.Id, task.OwnerId));
@@ -457,7 +457,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
             _log.LogError(ex, "Постановка исполнителю задачи {TaskId} не отправлена", task.Id);
             ReleaseReviewTree(task.Id);
             if (_tasks.MarkClaudeResult(task.Id, "error") is { } failed)
-                await _broadcaster.ToOwner(task.OwnerId, new TaskChangedMessage("updated", failed));
+                await _broadcaster.ToTaskBoard(task.OwnerId, failed.ProjectId, new TaskChangedMessage("updated", failed));
             throw;
         }
 
@@ -486,7 +486,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         var first = _tasks.GetById(task.Id)?.DeviceWaitSince is null;
         var updated = _tasks.MarkDeviceWait(task.Id, DateTime.UtcNow, reason)
             ?? throw new InvalidOperationException("Задача удалена");
-        await _broadcaster.ToOwner(task.OwnerId!, new TaskChangedMessage("updated", updated));
+        await _broadcaster.ToTaskBoard(task.OwnerId!, updated.ProjectId, new TaskChangedMessage("updated", updated));
         if (first)
         {
             await NotifyAsync(updated, new NotificationMessage(
@@ -1115,7 +1115,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
                     var ok = IsSuccess(result) && stopReason is null;
                     var updated = _tasks.MarkClaudeResult(task.Id, ok ? "success" : "error");
                     if (updated is null) return;
-                    await _broadcaster.ToOwner(updated.OwnerId!, new TaskChangedMessage("updated", updated));
+                    await _broadcaster.ToTaskBoard(updated.OwnerId!, updated.ProjectId, new TaskChangedMessage("updated", updated));
                     if (stopReason is not null)
                     {
                         // Своё уведомление вместо обычного «Не смог выполнить задачу»: у человека
@@ -1264,7 +1264,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         var stopped = _tasks.MarkExecutorStopped(task.Id, DateTime.UtcNow, ExecutorStopClassifier.InterruptedByUserReason);
         if (stopped is null) return null;
         ReleaseReviewTree(task.Id);
-        await _broadcaster.ToOwner(stopped.OwnerId!, new TaskChangedMessage("updated", stopped));
+        await _broadcaster.ToTaskBoard(stopped.OwnerId!, stopped.ProjectId, new TaskChangedMessage("updated", stopped));
         return stopped;
     }
 
@@ -1278,7 +1278,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         if (task is null || task.ExecutorStopReason != ExecutorStopClassifier.InterruptedByUserReason) return;
         var resumed = _tasks.ClearExecutorStopped(task.Id, ExecutorStopClassifier.InterruptedByUserReason);
         if (resumed is null) return;
-        await _broadcaster.ToOwner(resumed.OwnerId!, new TaskChangedMessage("updated", resumed));
+        await _broadcaster.ToTaskBoard(resumed.OwnerId!, resumed.ProjectId, new TaskChangedMessage("updated", resumed));
     }
 
     // Физическое прерывание идущих ходов фичи при постановке паузы (W4-HOLD-E, контракт §1 :208):
@@ -1386,7 +1386,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         // ПРОДОЛЖЕНным шагам, а если прерванных не было — вещания нет вовсе. Тот же формат, что
         // у постановки: task_changed("updated") по эпику — с снятым Hold проектор считает
         // состояние не-пауза, экран уходит с «на паузе» живьём.
-        await _broadcaster.ToOwner(ownerId, new TaskChangedMessage("updated", epic));
+        await _broadcaster.ToTaskBoard(ownerId, epic.ProjectId, new TaskChangedMessage("updated", epic));
         // W4-HOLD-D (контракт §1, :231): снятие паузы возвращает отнятое — прерванные ходы
         // продолжаются в своих сессиях, карточка уходит оркестратору в ключевой чат при любом
         // снятии (W4-HOLD-K): draft — «фича запущена», без продолженных — «пауза снята, запуски
@@ -1478,7 +1478,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
                 // остальные шаги продолжают, карточка оркестратору уходит.
                 try
                 {
-                    await _broadcaster.ToOwner(marked.OwnerId!, new TaskChangedMessage("updated", marked));
+                    await _broadcaster.ToTaskBoard(marked.OwnerId!, marked.ProjectId, new TaskChangedMessage("updated", marked));
                 }
                 catch (Exception ex)
                 {
@@ -1546,7 +1546,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
                 resumed++;
                 try
                 {
-                    await _broadcaster.ToOwner(cleared.OwnerId!, new TaskChangedMessage("updated", cleared));
+                    await _broadcaster.ToTaskBoard(cleared.OwnerId!, cleared.ProjectId, new TaskChangedMessage("updated", cleared));
                 }
                 catch (Exception ex)
                 {
@@ -1729,7 +1729,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
     {
         var stopped = _tasks.MarkExecutorStopped(task.Id, DateTime.UtcNow, reason) ?? task;
         ReleaseReviewTree(task.Id);
-        await _broadcaster.ToOwner(stopped.OwnerId!, new TaskChangedMessage("updated", stopped));
+        await _broadcaster.ToTaskBoard(stopped.OwnerId!, stopped.ProjectId, new TaskChangedMessage("updated", stopped));
 
         var persona = stopped.PersonaId is not null ? _personas.Get(stopped.PersonaId, stopped.OwnerId!) : null;
         await NotifyAsync(stopped, BuildExecutorStoppedNotification(stopped, persona));
@@ -2008,7 +2008,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         if (updated is null) return;
         _log.LogWarning("Задача {TaskId} «{Title}» закрыта, а итог хода не пришёл (сессия {SessionId}) — " +
             "доставляю доклад по сигналу D", updated.Id, updated.Title, updated.LinkedSessionId);
-        await _broadcaster.ToOwner(updated.OwnerId!, new TaskChangedMessage("updated", updated));
+        await _broadcaster.ToTaskBoard(updated.OwnerId!, updated.ProjectId, new TaskChangedMessage("updated", updated));
         await TryDeliverCompletionAsync(updated);
     }
 
@@ -2052,7 +2052,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
     private async Task AlertStaleTaskAsync(TaskItem task, DateTime nowUtc, bool waitingForBlocker)
     {
         var updated = _tasks.MarkExecutorStaleAlerted(task.Id, nowUtc) ?? task;
-        await _broadcaster.ToOwner(updated.OwnerId!, new TaskChangedMessage("updated", updated));
+        await _broadcaster.ToTaskBoard(updated.OwnerId!, updated.ProjectId, new TaskChangedMessage("updated", updated));
 
         var persona = updated.PersonaId is not null ? _personas.Get(updated.PersonaId, updated.OwnerId!) : null;
         await NotifyAsync(updated, BuildStaleNotification(updated, persona, waitingForBlocker));

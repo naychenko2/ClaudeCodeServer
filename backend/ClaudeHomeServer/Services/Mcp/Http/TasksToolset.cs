@@ -291,7 +291,7 @@ public sealed class TasksToolset(
                     // — тот же текст, что в REST-контроллере, в Deny пробрасываем как есть
                     return Deny(ex.Message);
                 }
-                await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("created", created));
+                await broadcaster.ToTaskBoard(context.OwnerId, created.ProjectId, new TaskChangedMessage("created", created));
                 return Json(created);
             }
 
@@ -482,14 +482,14 @@ public sealed class TasksToolset(
                         run is null ? "" : FeatureBrief.ActiveStageOf(run),
                         run is null ? "" : FeatureBrief.KindAtWriteOf(run)) ?? updated;
                 }
-                await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("updated", updated));
+                await broadcaster.ToTaskBoard(context.OwnerId, updated.ProjectId, new TaskChangedMessage("updated", updated));
 
                 // Завершение регулярной задачи → следующий экземпляр серии (тот же путь, что REST)
                 if (!wasDone && updated.Status == TaskItemStatus.Done && updated.Recurrence is not null)
                 {
                     var next = tasks.SpawnNextOccurrence(updated);
                     if (next is not null)
-                        await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("created", next));
+                        await broadcaster.ToTaskBoard(context.OwnerId, next.ProjectId, new TaskChangedMessage("created", next));
                 }
                 // Обратная запись в заметку-источник: смена done-состояния ставит/снимает галочку
                 if (wasDone != (updated.Status == TaskItemStatus.Done))
@@ -551,10 +551,10 @@ public sealed class TasksToolset(
                     // же ловит и наш «не найдена» с подставленным id (см. ?? throw выше)
                     return Deny(ex.Message);
                 }
-                await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("updated", updated));
+                await broadcaster.ToTaskBoard(context.OwnerId, updated.ProjectId, new TaskChangedMessage("updated", updated));
                 if (!wasDone && updated.Recurrence is not null
                     && tasks.SpawnNextOccurrence(updated) is { } next)
-                    await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("created", next));
+                    await broadcaster.ToTaskBoard(context.OwnerId, next.ProjectId, new TaskChangedMessage("created", next));
                 if (wasDone != (updated.Status == TaskItemStatus.Done))
                     await (noteSync?.SyncTaskToNoteAsync(context.OwnerId, updated) ?? Task.CompletedTask);
                 // Волна 1 team-blocker-honest: задача-блокер закрыта координатором — гасим
@@ -655,7 +655,7 @@ public sealed class TasksToolset(
                 // её обходил — удалённый на паузе эпик/шаг оставлял чат «вечным».
                 executor.RestoreFrozenChatsBeforeDelete(task);
                 tasks.Delete(id);
-                await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("deleted", task));
+                await broadcaster.ToTaskBoard(context.OwnerId, task.ProjectId, new TaskChangedMessage("deleted", task));
                 return Text($"Задача {id} удалена.");
             }
 
@@ -681,7 +681,7 @@ public sealed class TasksToolset(
                     return Deny(ex.Message);
                 }
                 if (updated is null) return Deny($"Задача {taskId} не найдена.");
-                await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("updated", updated));
+                await broadcaster.ToTaskBoard(context.OwnerId, updated.ProjectId, new TaskChangedMessage("updated", updated));
                 return Json(updated);
             }
 
@@ -711,7 +711,7 @@ public sealed class TasksToolset(
                     return Deny(ex.Message);
                 }
                 if (updated is null) return Deny($"Задача {taskId} не найдена.");
-                await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("updated", updated));
+                await broadcaster.ToTaskBoard(context.OwnerId, updated.ProjectId, new TaskChangedMessage("updated", updated));
                 return Json(updated);
             }
 

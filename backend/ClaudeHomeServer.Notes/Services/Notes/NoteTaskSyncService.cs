@@ -61,7 +61,7 @@ public sealed class NoteTaskSyncService(
                 ? null
                 : new NoteTaskRecurrence(parsed.Recurrence.Type.ToString().ToLowerInvariant())));
 
-        await notifier.BroadcastTaskChangedAsync(userId, "created", created.Id);
+        await notifier.BroadcastTaskChangedAsync(userId, "created", created.Id, created.ProjectId);
         log.LogInformation("Чекбокс заметки {NoteId}:{Line} промоутнут в задачу {TaskId}", noteId, line, created.Id);
         return created;
     }
@@ -107,7 +107,7 @@ public sealed class NoteTaskSyncService(
         {
             var updated = tasks.Update(userId, linked.Id,
                 new NoteTaskUpdateRequest(Status: linked.Status, DueDate: due));
-            if (updated is not null) await notifier.BroadcastTaskChangedAsync(userId, "updated", updated.Id);
+            if (updated is not null) await notifier.BroadcastTaskChangedAsync(userId, "updated", updated.Id, updated.ProjectId);
         }
         return saved;
     }
@@ -161,12 +161,12 @@ public sealed class NoteTaskSyncService(
         // DefectOutcome.ClosedWithoutCheck, для обычных — нет.
         var updated = tasks.Update(userId, task.Id, new NoteTaskUpdateRequest(newStatus));
         if (updated is null) return;
-        await notifier.BroadcastTaskChangedAsync(userId, "updated", updated.Id);
+        await notifier.BroadcastTaskChangedAsync(userId, "updated", updated.Id, updated.ProjectId);
 
         if (!wasDone && done && updated.Recurrence is not null)
         {
             var next = tasks.SpawnNextOccurrence(userId, updated.Id);
-            if (next is not null) await notifier.BroadcastTaskChangedAsync(userId, "created", next.Id);
+            if (next is not null) await notifier.BroadcastTaskChangedAsync(userId, "created", next.Id, next.ProjectId);
         }
     }
 }

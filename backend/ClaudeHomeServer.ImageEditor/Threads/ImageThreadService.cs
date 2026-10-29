@@ -799,7 +799,7 @@ public sealed class ImageThreadService(
         if (broadcaster is null) return;
         try
         {
-            await broadcaster.ToOwner(ownerId, new ImageThreadChangedMessage(projectId, state.Revision, Project(ownerId, sessionId, state)) { SessionId = sessionId });
+            await broadcaster.ToProjectOrOwner(ownerId, ImageEditScope.ProjectIdOf(projectId), new ImageThreadChangedMessage(projectId, state.Revision, Project(ownerId, sessionId, state)) { SessionId = sessionId });
         }
         catch (Exception ex)
         {

@@ -178,7 +178,7 @@ public sealed class VideoJobThreads(
         if (broadcaster is null) return;
         try
         {
-            await broadcaster.ToOwner(ownerId, new VideoFilmChangedMessage(scopeKey, path, state));
+            await broadcaster.ToProjectOrOwner(ownerId, VideoEditScope.ProjectIdOf(scopeKey), new VideoFilmChangedMessage(scopeKey, path, state));
         }
         catch (Exception ex)
         {
@@ -191,7 +191,7 @@ public sealed class VideoJobThreads(
         if (broadcaster is null) return;
         try
         {
-            await broadcaster.ToOwner(ownerId,
+            await broadcaster.ToProjectOrOwner(ownerId, VideoEditScope.ProjectIdOf(scopeKey),
                 new VideoThreadChangedMessage(scopeKey, state.Revision, Dto(ownerId, sessionId, state)) { SessionId = sessionId });
         }
         catch (Exception ex)

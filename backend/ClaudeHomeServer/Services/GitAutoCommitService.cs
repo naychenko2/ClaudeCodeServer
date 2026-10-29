@@ -77,7 +77,7 @@ public sealed class GitAutoCommitService(
             }
 
             if (project.OwnerId is not null)
-                await broadcaster.ToOwner(project.OwnerId, new GitStatusChangedMessage(project.Id));
+                await broadcaster.ToProject(project.Id, new GitStatusChangedMessage(project.Id));
         }
         catch (Exception ex)
         {

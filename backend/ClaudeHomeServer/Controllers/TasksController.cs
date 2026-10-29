@@ -98,7 +98,7 @@ public class ProjectTasksController(
         {
             return BadRequest(new { error = ex.Message });
         }
-        await broadcaster.ToOwner(UserId, new TaskChangedMessage("created", task));
+        await broadcaster.ToTaskBoard(UserId, task.ProjectId, new TaskChangedMessage("created", task));
         return Ok(task);
     }
 }
@@ -327,7 +327,7 @@ public class TasksController(
         {
             return BadRequest(new { error = ex.Message });
         }
-        await broadcaster.ToOwner(UserId, new TaskChangedMessage("created", task));
+        await broadcaster.ToTaskBoard(UserId, task.ProjectId, new TaskChangedMessage("created", task));
         return Ok(task);
     }
 
@@ -511,7 +511,7 @@ public class TasksController(
         {
             return BadRequest(new { error = ex.Message });
         }
-        await broadcaster.ToOwner(UserId, new TaskChangedMessage("updated", updated));
+        await broadcaster.ToTaskBoard(UserId, updated.ProjectId, new TaskChangedMessage("updated", updated));
 
         // Завершение экземпляра регулярной задачи → следующий экземпляр серии.
         // Покрывает и UI, и MCP (tasks_complete/tasks_update идут через этот PUT)
@@ -519,7 +519,7 @@ public class TasksController(
         {
             var next = tasks.SpawnNextOccurrence(updated);
             if (next is not null)
-                await broadcaster.ToOwner(UserId, new TaskChangedMessage("created", next));
+                await broadcaster.ToTaskBoard(UserId, next.ProjectId, new TaskChangedMessage("created", next));
         }
 
         // Обратная запись в заметку-источник: смена done-состояния ставит/снимает галочку
@@ -1017,12 +1017,12 @@ public class TasksController(
         // в группу владельца для эпика (с Hold — проектор по нему считает state=paused)
         // и каждого шага, помеченного этой паузой. Без вещания стор обновляется только по
         // снятию — асимметрия, которую Вера и зафиксировала.
-        await broadcaster.ToOwner(UserId, new TaskChangedMessage("updated", epic));
+        await broadcaster.ToTaskBoard(UserId, epic.ProjectId, new TaskChangedMessage("updated", epic));
         foreach (var t in tasks.GetByOwner(UserId))
         {
             if (t.FeatureId != featureId) continue;
             if (t.ExecutorStopReason != ExecutorStopClassifier.FeatureHeldReason) continue;
-            await broadcaster.ToOwner(UserId, new TaskChangedMessage("updated", t));
+            await broadcaster.ToTaskBoard(UserId, t.ProjectId, new TaskChangedMessage("updated", t));
         }
         // W4-HOLD-D2 (контракт :364): ответ — прерванные этой паузой задачи. Тот же набор,
         // что поле run.interrupted на странице («на паузе» читает его, а не пустой now), —
@@ -1066,7 +1066,7 @@ public class TasksController(
         var epic = tasks.SetFeatureNote(featureId, req?.Text, null, true,
             FeatureBrief.ActiveStageOf(run), FeatureBrief.KindAtWriteOf(run));
         if (epic is null) return NotFound(new { error = "Фича не найдена" });
-        await broadcaster.ToOwner(UserId, new TaskChangedMessage("updated", epic));
+        await broadcaster.ToTaskBoard(UserId, epic.ProjectId, new TaskChangedMessage("updated", epic));
         return Ok(new { note = epic.Note is null ? null : new { text = epic.Note.Text, at = epic.Note.At } });
     }
 
@@ -1392,7 +1392,7 @@ public class TasksController(
                 return BadRequest(new { error = ex.Message });
             }
 
-            await broadcaster.ToOwner(UserId, new TaskChangedMessage("created", task));
+            await broadcaster.ToTaskBoard(UserId, task.ProjectId, new TaskChangedMessage("created", task));
 
             // Возвращаем задачу ПОСЛЕ запуска: ClaudeStartedAt/статус подтверждают, что исполнитель стартовал.
             TaskItem started;
@@ -1589,7 +1589,7 @@ public class TasksController(
         // после него задачи в реестре нет, и путь возврата срока для её чата больше не выполнится.
         executor.RestoreFrozenChatsBeforeDelete(task);
         tasks.Delete(taskId);
-        await broadcaster.ToOwner(UserId, new TaskChangedMessage("deleted", task));
+        await broadcaster.ToTaskBoard(UserId, task.ProjectId, new TaskChangedMessage("deleted", task));
         return NoContent();
     }
 }

@@ -21,11 +21,11 @@ public sealed class NotesHubNotifier(ISessionBroadcaster broadcaster) : INotesHu
     public Task BroadcastNotesChangedAsync(string userId, string action, string noteId) =>
         broadcaster.ToOwner(userId, new NotesChangedMessage(action, noteId));
 
-    public Task BroadcastTaskChangedAsync(string userId, string action, string taskId) =>
+    public Task BroadcastTaskChangedAsync(string userId, string action, string taskId, string? projectId = null) =>
         // TaskChangedMessage хранит весь TaskItem (контракт шире, чем нужно для
         // подписки фронта «карточка обновилась → перезагрузить»), но фронт
         // использует только Id. Передаём минимальный TaskItem c одним id —
         // клиент всё равно перезапросит задачу через REST для отображения.
-        broadcaster.ToOwner(userId, new TaskChangedMessage(action,
-            new TaskItem { Id = taskId }));
+        broadcaster.ToTaskBoard(userId, projectId, new TaskChangedMessage(action,
+            new TaskItem { Id = taskId, ProjectId = projectId }));
 }

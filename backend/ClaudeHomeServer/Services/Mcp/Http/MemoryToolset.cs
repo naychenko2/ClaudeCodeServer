@@ -581,7 +581,7 @@ public sealed class MemoryToolset(
             new PersonasChangedMessage("memory", personaId));
 
     private async Task BroadcastTeamAsync(string ownerId, string projectId, string action, string? entryId) =>
-        await broadcaster.ToOwner(ownerId,
+        await broadcaster.ToProject(projectId,
             new TeamMemoryChangedMessage(action, projectId, entryId));
 
     // --- Схемы инструментов: копия mcp/memory-server/index.js (источник контракта — здесь,

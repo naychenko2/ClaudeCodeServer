@@ -152,7 +152,7 @@ public sealed class TeamMemoryAutolearnService : IHostedService
                 _consolidation.RequestConsolidation(ownerId, projectId);
 
             // Realtime: командный центр слушает team_memory_changed
-            await _broadcaster.ToOwner(ownerId,
+            await _broadcaster.ToProject(projectId,
                 new TeamMemoryChangedMessage("added", projectId, lastId));
 
             // Активность-лента проекта

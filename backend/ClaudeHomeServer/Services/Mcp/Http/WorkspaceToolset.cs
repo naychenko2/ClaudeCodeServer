@@ -606,7 +606,7 @@ public sealed partial class WorkspaceToolset(
                 // интерфейс жил бы с устаревшими метками до перезагрузки (блокер волны 3.1;
                 // TaskManager.Update бродкаста не делает — он был обязанностью контроллера)
                 if (updatedTask is not null)
-                    await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("updated", updatedTask));
+                    await broadcaster.ToTaskBoard(context.OwnerId, updatedTask.ProjectId, new TaskChangedMessage("updated", updatedTask));
                 var taskAnswer = new Dictionary<string, object?>
                 {
                     ["entityType"] = "task",
@@ -683,7 +683,7 @@ public sealed partial class WorkspaceToolset(
                 // Бродкаст task_changed(updated) — как tags_apply (блокер волны 3.1): без него
                 // интерфейс жил бы с устаревшими метками до перезагрузки
                 if (updatedTask is not null)
-                    await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("updated", updatedTask));
+                    await broadcaster.ToTaskBoard(context.OwnerId, updatedTask.ProjectId, new TaskChangedMessage("updated", updatedTask));
                 return Json(new Dictionary<string, object?>
                 {
                     ["entityType"] = "task",
@@ -1259,7 +1259,7 @@ public sealed partial class WorkspaceToolset(
 
     // Событие git_status_changed в хаб — тот же канал, что у GitController.NotifyChanged
     private Task BroadcastGitChanged(string ownerId, string projectId) =>
-        broadcaster.ToOwner(ownerId, new GitStatusChangedMessage(projectId));
+        broadcaster.ToProject(projectId, new GitStatusChangedMessage(projectId));
 
     // --- Секция knowledge_bases (менеджер баз Dify владельца) ---
 

@@ -31,7 +31,8 @@ public record NoteTaskRef(
     string? DueDate,
     NoteTaskStatus Status,
     NoteTaskRecurrence? Recurrence,
-    NoteTaskKind Kind);
+    NoteTaskKind Kind,
+    string? ProjectId = null);
 
 // Параметры создания задачи из чекбокса заметки (см. NoteTaskSyncService.PromoteAsync:53-59).
 public record NoteTaskCreateRequest(

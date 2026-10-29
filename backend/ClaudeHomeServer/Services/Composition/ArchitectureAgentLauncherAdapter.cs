@@ -56,7 +56,7 @@ public sealed class ArchitectureAgentLauncherAdapter(
                 ModelTier: "strong"));
         }
 
-        await broadcaster.ToOwner(ownerId, new TaskChangedMessage("created", task));
+        await broadcaster.ToTaskBoard(ownerId, task.ProjectId, new TaskChangedMessage("created", task));
         try
         {
             await executor.ExecuteAsync(task, auto: true);

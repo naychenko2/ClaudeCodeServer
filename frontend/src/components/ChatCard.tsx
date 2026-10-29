@@ -230,6 +230,9 @@ interface Props {
   // Архив: убрать/вернуть. Вызывающая сторона ловит 409 «в чате идёт ход» и показывает
   // тостом. Не задан — пункта меню «В архив» нет (например, витрина UI-кита)
   onArchive?: (archived: boolean) => void;
+  // Причина, по которой автор-только действия (переименовать, в архив, удалить) недоступны
+  // участнику общего проекта. Задана — пункты выключены с этой подсказкой
+  authorOnlyReason?: string | null;
   // Сохранить сессию как заметку. Сеть на стороне списка (saveArchiveSessionAsNote).
   // Не задан — пункта меню «Сохранить в заметки» нет
   onSaveAsNote?: () => Promise<unknown>;
@@ -319,7 +322,7 @@ function ChatCardView({
   session: s, isActive, isMobile, fallbackName, online, hovered, workflowRunning,
   agentsRunning: agentsRunningProp, bgCommandRunning: bgCommandRunningProp, uncommitted,
   onSelect, onHover, onDelete, onTogglePin, tags, onAssignTags, onPickSubject, subjectHint, subjectTitle,
-  onRename, onAddToWall, onArchive, onSaveAsNote, onEdited, leadingInset = 0, swipeOpen, onSwipeToggle, featureRole, inFeatureGroup,
+  onRename, onAddToWall, onArchive, authorOnlyReason, onSaveAsNote, onEdited, leadingInset = 0, swipeOpen, onSwipeToggle, featureRole, inFeatureGroup,
 }: Props) {
   // Персоны и механики карточка читает из сторов напрямую — подписка своя, иначе
   // мемоизированная карточка не узнает, что персона догрузилась или механика сменилась
@@ -479,6 +482,7 @@ function ChatCardView({
   // переименования нет: там в заголовке стоит имя ЗАДАЧИ (taskChat.title), и правка
   // s.name не изменила бы ни строчки на экране
   const canRename = !!onRename && !taskChat;
+  const isAuthorOnly = (k: ChatActionKey) => !!authorOnlyReason && (k === 'rename' || k === 'archive' || k === 'delete');
 
   // Быстрые действия карточки (hover-кластер на desktop, кнопки свайпа на мобиле).
   // Набор — общий каталог действий чата (тот же, что в шапке открытого чата); какие
@@ -560,7 +564,7 @@ function ChatCardView({
   // чтобы жест и наведение всегда делали ровно одно и то же. Клики гасят всплытие:
   // иначе любое действие заодно открывало бы чат (onClick карточки)
   const quickButton = (key: ChatActionKey): {
-    icon: ReactNode; title: string; danger?: boolean; active?: boolean;
+    icon: ReactNode; title: string; danger?: boolean; active?: boolean; disabled?: boolean;
     onClick: (e: React.MouseEvent<Element>) => void;
   } => {
     switch (key) {
@@ -616,6 +620,14 @@ function ChatCardView({
         onClick: e => { e.stopPropagation(); onArchive?.(!isArchivedChat(s)); },
       };
     }
+  };
+
+  // Автор-только действия участнику выключены: подсказка вместо названия, клика нет
+  const quickBtn = (key: ChatActionKey) => {
+    const b = quickButton(key);
+    return isAuthorOnly(key)
+      ? { ...b, disabled: true, title: `${b.title}: ${authorOnlyReason}` }
+      : b;
   };
 
   const [editing, setEditing] = useState(false);
@@ -897,7 +909,7 @@ function ChatCardView({
               берём обязательно: имя (aria-label — на таче title не показывается вовсе)
               и видимое кольцо фокуса (класс cc-iconbtn) */}
           {quickButtons.map((k, i) => {
-            const b = quickButton(k);
+            const b = quickBtn(k);
             return (
               <button
                 key={k}
@@ -906,10 +918,11 @@ function ChatCardView({
                 // Раскрытие закрываем ПЕРЕД действием: пикер тегов/срока встаёт по rect
                 // кнопки, а сама кнопка уедет вместе с закрытием — rect берём заранее
                 onClick={e => { onSwipeToggle?.(false); b.onClick(e); }}
+                disabled={b.disabled}
                 title={b.title}
                 aria-label={b.title}
                 style={{
-                  flex: 1, border: 'none', cursor: 'pointer', display: 'grid', placeItems: 'center',
+                  flex: 1, border: 'none', cursor: b.disabled ? 'not-allowed' : 'pointer', opacity: b.disabled ? 0.5 : 1, display: 'grid', placeItems: 'center',
                   borderLeft: i === 0 ? 'none' : `1px solid ${C.borderLight}`,
                   // Подложка — bgInset, а не bgWhite: у карточки тот же тон, и слой
                   // «под» ней не читался бы ни в светлой теме, ни в тёмной
@@ -1250,7 +1263,7 @@ function ChatCardView({
           background: cardBg, borderRadius: R.lg, boxShadow: SHADOW.card,
         }}>
           {quickButtons.map(k => {
-            const b = quickButton(k);
+            const b = quickBtn(k);
             return (
               <IconButton
                 key={k}
@@ -1259,6 +1272,7 @@ function ChatCardView({
                 size="xs"
                 tone={b.danger ? 'danger' : undefined}
                 active={b.active}
+                disabled={b.disabled}
               >
                 {b.icon}
               </IconButton>
@@ -1306,6 +1320,8 @@ function ChatCardView({
             <MenuItem
               icon={<Pencil size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
               label="Переименовать"
+              hint={authorOnlyReason ?? undefined}
+              disabled={isAuthorOnly('rename')}
               isMobile={isMobile}
             action={visAction('rename')}
               onClick={e => { e.stopPropagation(); setMenu(null); startRename(); }}
@@ -1391,6 +1407,8 @@ function ChatCardView({
                 ? <ArchiveRestore size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
                 : <Archive size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
               label={isArchivedChat(s) ? 'Вернуть из архива' : 'В архив'}
+              hint={authorOnlyReason ?? undefined}
+              disabled={isAuthorOnly('archive')}
               isMobile={isMobile}
               action={visAction('archive')}
               onClick={e => { e.stopPropagation(); setMenu(null); onArchive(!isArchivedChat(s)); }}
@@ -1413,6 +1431,8 @@ function ChatCardView({
           <MenuItem
             icon={<Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
             label="Удалить"
+            hint={authorOnlyReason ?? undefined}
+            disabled={isAuthorOnly('delete')}
             danger
             isMobile={isMobile}
             action={visAction('delete')}

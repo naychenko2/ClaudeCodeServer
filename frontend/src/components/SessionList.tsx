@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, useRef } from 'react';
-import { canCreateChats } from '../features/projects/members/participantGate';
+import { canCreateChats, chatAuthorOnlyReason, isNotChatAuthorError } from '../features/projects/members/participantGate';
 import { FilterX, ChevronUp, ChevronDown, MessageCircle, Archive, CheckCircle2, Sparkles } from 'lucide-react';
 import type { Project, ProjectSubject, ProjectTag, Session } from '../types';
 import type { FeatureIndexFeature } from '../types/featureIndex';
@@ -242,7 +242,10 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // Переименование из карточки списка: ответ раскладывается тем же путём, что и теги —
   // в список и (если чат открыт) владельцу, чтобы шапка панели не отстала
   const renameSession = (s: Session, name: string) =>
-    api.sessions.update(project.id, s.id, { name }).then(updated => handleSessionUpdated(updated));
+    api.sessions.update(project.id, s.id, { name }).then(updated => handleSessionUpdated(updated)).catch(e => {
+      if (isNotChatAuthorError(e)) showToast('Переименование', (e as Error).message, 'info');
+      throw e;
+    });
 
   const toggleTag = (s: Session, name: string) => {
     const tags = s.tags ?? [];
@@ -638,7 +641,8 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     // защищаемся от unhandled rejection и не закрываем диалог при сбое
     try {
       await api.sessions.delete(project.id, deleteTarget.id);
-    } catch {
+    } catch (e) {
+      if (isNotChatAuthorError(e)) showToast('Удаление чата', (e as Error).message, 'info');
       setDeleteTarget(null);
       return;
     }
@@ -1233,6 +1237,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
           // Возврат из архива открывает чат и выводит список из архивного вида
           if (!archived) leaveArchiveAndOpen(s);
         } : undefined}
+        authorOnlyReason={chatAuthorOnlyReason(project)}
         onSaveAsNote={online && notesOn ? () => handleSaveAsNote(s) : undefined}
         swipeOpen={openSwipeId === s.id}
         onSwipeToggle={open => setOpenSwipeId(open ? s.id : null)}

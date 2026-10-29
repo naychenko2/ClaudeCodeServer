@@ -42,6 +42,19 @@ export function participantSendTitle(gate: Extract<ParticipantComposerGate, { bl
   return gate.role === 'reader' ? 'Не отправится: вы читатель проекта' : 'Не отправится: ходы редактора пока выключены';
 }
 
+// Переименовать, архивировать и удалить чат может только его автор (в S1 — владелец проекта).
+// null — можно; строка — причина для подсказки выключенного пункта и тоста
+export const CHAT_AUTHOR_ONLY = 'Только автор чата';
+export function chatAuthorOnlyReason(project: Pick<Project, 'myRole'> | null | undefined): string | null {
+  return isParticipant(project) ? CHAT_AUTHOR_ONLY : null;
+}
+
+// Бэк мог всё же отказать (устаревшая роль на клиенте): 403 с code not_chat_author
+export function isNotChatAuthorError(e: unknown): boolean {
+  const body = (e as { status?: number; body?: { code?: string } } | null);
+  return body?.status === 403 && body.body?.code === 'not_chat_author';
+}
+
 // Создавать чаты в проекте читателю нельзя: входы создания скрыты
 export function canCreateChats(project: Pick<Project, 'myRole'> | null | undefined): boolean {
   return project?.myRole !== 'reader';

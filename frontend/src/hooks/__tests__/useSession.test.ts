@@ -1619,4 +1619,115 @@ describe('useSession: потолок памяти (OOM fix)', () => {
     // «курсор ⇔ лента»: курсор восстановлен вместе с лентой, его счётчик равен весу стора
     expect(_cursors.get(a)!.receivedBytes).toBe(11 * MB);
   });
+
+  // --- Возврат из «оболочки»: индикатор загрузки истории (F3-S3d, дефект dd0c5df3) ---
+
+  it('возврат из оболочки: пока история не пришла — isHistoryLoading, пришла — снят', async () => {
+    const a = nextSid();
+    // Полный снимок A при возврате «в полёте»: ответ отдаёт тест — иначе состояние
+    // «между появлением панели и приходом истории» не поймать
+    let fullForA = 0;
+    const holdReturn = deferred<void>();
+    const liveTurn = [...DONE_TURN, user('иди'), text('ответ ещё идёт')]; // ход не закончен
+    m.getHistoryTail.mockImplementation(async (s: string, q: { after: number; fp?: string }, onBytes?: (n: number) => void) => {
+      const isFull = q.after < 0;
+      onBytes?.(isFull ? 10 * MB : 1 * MB);
+      if (!isFull) return { reset: false, messages: [], anchorIndex: 2, anchorFp: 'fp' };
+      if (s === a && ++fullForA > 1)
+        return holdReturn.promise.then(() => ({
+          reset: true, messages: liveTurn, anchorIndex: liveTurn.length - 1, anchorFp: 'fp2',
+        }));
+      return { reset: true, messages: serverHistory, anchorIndex: 2, anchorFp: 'fp' };
+    });
+
+    await leaveMidTurnWarm(a);
+    await openCloseCold();
+    await openCloseCold();
+    expect(_store.get(a)!.isShell).toBe(true);
+
+    const back = openChat(a);
+    // Оболочка снята, история ещё летит: панель под индикатором загрузки, а не пустая
+    expect(_store.get(a)!.isShell).toBeFalsy();
+    expect(back.render().isHistoryLoading).toBe(true);
+    expect(back.render().items).toHaveLength(0);
+    await flush();
+    expect(back.render().isHistoryLoading).toBe(true); // снимок всё ещё в полёте
+
+    holdReturn.resolve();
+    await flush();
+    // История пришла — индикатор снят, лента полная
+    expect(back.render().isHistoryLoading).toBe(false);
+    expect(back.render().items).toEqual(normalizeHistory(liveTurn));
+
+    back.unmount();
+  });
+
+  // --- Аварийный выход процесса у «оболочки»: маркер конца хода после возврата
+  //     (F3-S3d, дефект 3e22fbeb) ---
+
+  // Оболочка чата, чей процесс умер в фоне. Первый полный снимок — «до обрыва»,
+  // второй (при возврате) — с оборванным ходом в хвосте
+  const mockCrashedReturn = (sid: string, brokenHistory: unknown[]) => {
+    let fullForSid = 0;
+    return m.getHistoryTail.mockImplementation(async (s: string, q: { after: number; fp?: string }, onBytes?: (n: number) => void) => {
+      const isFull = q.after < 0;
+      onBytes?.(isFull ? 10 * MB : 1 * MB);
+      if (!isFull) return { reset: false, messages: [], anchorIndex: 2, anchorFp: 'fp' };
+      const messages = s === sid && ++fullForSid > 1 ? brokenHistory : serverHistory;
+      return { reset: true, messages, anchorIndex: messages.length - 1, anchorFp: 'fp' };
+    });
+  };
+
+  // A сброшен в оболочку, потом его процесс умер: 'exited' дошёл до пустой ленты
+  async function shellThenCrash(sid: string) {
+    await leaveMidTurnWarm(sid);
+    await openCloseCold();
+    await openCloseCold();
+    expect(_store.get(sid)!.isShell).toBe(true);
+    m.messageHandlers.forEach(h => h({ type: 'exited', sessionId: sid }));
+    // Статус гасится как раньше; маркер в пустую ленту не ставится — держится признак
+    expect(_store.get(sid)!.isShell).toBe(true);
+    expect(_store.get(sid)!.isWaiting).toBe(false);
+    expect(_store.get(sid)!.items).toHaveLength(0);
+  }
+
+  it('аварийный exited у оболочки: после возврата в ленте ровно один session_ended', async () => {
+    // Сервер при аварийном выходе конец хода в историю не пишет — хвост оборван на тексте
+    const brokenTurn = [...DONE_TURN, user('иди'), text('оборвалось на полуслове')];
+    const a = nextSid();
+    mockCrashedReturn(a, brokenTurn);
+
+    await shellThenCrash(a);
+
+    const back = openChat(a);
+    await flush();
+    const tape = back.render().items;
+    // Лента = серверная история + ровно один маркер конца хода в хвосте
+    expect(tape).toEqual([...normalizeHistory(brokenTurn), { kind: 'session_ended' }]);
+    expect(tape.filter(i => i.kind === 'session_ended')).toHaveLength(1);
+
+    // Повторный вход маркера не добавляет: флаг снимается той же точкой, что ставит маркер
+    back.unmount();
+    const again = openChat(a);
+    await flush();
+    expect(again.render().items.filter(i => i.kind === 'session_ended')).toHaveLength(1);
+    again.unmount();
+  });
+
+  it('сервер сам записал конец хода — клиентского маркера поверх него нет', async () => {
+    // Прерванный сервером ход: 'interrupted' персистится и приходит с историей сам
+    const stoppedTurn = [...DONE_TURN, user('иди'), text('оборвалось'), { kind: 'interrupted', ts: 1 }];
+    const a = nextSid();
+    mockCrashedReturn(a, stoppedTurn);
+
+    await shellThenCrash(a);
+
+    const back = openChat(a);
+    await flush();
+    const tape = back.render().items;
+    expect(tape.filter(i => i.kind === 'session_ended')).toHaveLength(0);
+    expect(tape[tape.length - 1]?.kind).toBe('interrupted');
+
+    back.unmount();
+  });
 });

@@ -33,6 +33,12 @@ interface SessionState extends ChatState {
   // Пока зрителя нет, items по live-событиям не растут — дельты не копятся и не теряются:
   // сервер — источник истины, полная лента придёт при возврате (курсора нет → after=-1).
   isShell?: boolean;
+  // Ход этой записи оборвался аварийно ('exited'), а отметить его в ленте нечем (F3-S3d,
+  // дефект 3e22fbeb): у «оболочки» items пусты по построению, а сервер свой маркер в
+  // историю не пишет ('session_ended' не персистится — см. PERSISTED_KINDS). Факт держится
+  // здесь; маркер допишется в хвост восстановленной ленты при возврате (см.
+  // withPendingEndMarker) и будет снят ровно один раз.
+  pendingEndMarker?: boolean;
 }
 
 const _store = new Map<string, SessionState>();
@@ -133,21 +139,31 @@ async function reloadHistory(sid: string, projectId?: string, fresh = false) {
     const raw = await loadHistoryOnce(sid, projectId, fresh);
     const items = normalizeFor(sid, raw);
     setState(sid, prev => {
+      // Приход истории — конец и «возврата из оболочки»: здесь гасится isHistoryLoading,
+      // поставленный при её снятии (F3-S3d, дефект dd0c5df3), и дописывается маркер
+      // аварийного конца хода, снятого вместе с лентой (withPendingEndMarker). Флаг гасим
+      // только если он был: фоновые перезагрузки не должны будить подписчиков без изменения
+      const settled = (next: SessionState) => withPendingEndMarker(
+        prev.isHistoryLoading ? { ...next, isHistoryLoading: false } : next);
       if (serverHistoryNewer(items, prev.items))
         // Карточки разрешения, реплеянные хабом, в истории нет — переносим (adoptServerHistory)
-        return { ...prev, items: adoptServerHistory(items, prev.items), isWaiting: historyTurnFinished(items) ? false : prev.isWaiting };
+        return settled({ ...prev, items: adoptServerHistory(items, prev.items), isWaiting: historyTurnFinished(items) ? false : prev.isWaiting });
       // Ленту сервер не обгоняет, но в его истории может быть карточка, погашенная
       // ответом с другого устройства: событие interaction_resolved могло пройти мимо
       // (разрыв WS в момент ответа), а сверка длин такой ответ не видит — он элемента
       // не добавляет. Гасим точечно; подменять ленту нельзя, она несёт live-only
       // элементы, которых в истории нет (permission_request не персистится).
       const patched = resolveCardsFromHistory(items, prev.items);
-      return patched ? { ...prev, items: patched } : prev;
+      return settled(patched ? { ...prev, items: patched } : prev);
     });
     // Фоновая перезагрузка кладёт сессию в стор: если холодных стало больше потолка,
     // выселяем старейшие (иначе куча растёт на каждый фоновый ход)
     evictColdSessions();
-  } catch { /* история недоступна — не блокируем */ }
+  } catch {
+    // История недоступна — не блокируем; но спиннер возврата из оболочки обязан погаситься
+    // и здесь, иначе висел бы до следующей удачной загрузки (F3-S3d)
+    if (getState(sid).isHistoryLoading) setState(sid, prev => ({ ...prev, isHistoryLoading: false }));
+  }
 }
 
 // Авторитетное состояние режима «Командная реализация» с сервера (M10/M12).
@@ -467,7 +483,15 @@ function ensureHandler() {
       // Статусные поля (isWaiting, статус хода, rateLimits, очередь) применяются обычно:
       // запись обязана знать, что её ход кончился, — иначе живая оболочка никогда бы
       // не стала мёртвой и не выметалась
-      touch(sid, prev.isShell ? { ...next, items: prev.items } : next);
+      // Аварийный конец хода у «оболочки» (F3-S3d, дефект 3e22fbeb): тот же признак, что
+      // у редьюсера (ждали ответ), плюс второй его проверки здесь нет намеренно — лента
+      // оболочки пуста по построению, «уже отмеченный конец» в ней быть не может.
+      // Ставить маркер некуда, а сервер его в историю не пишет: факт держим полем,
+      // маркер допишется при возврате (withPendingEndMarker)
+      const shellAbnormalEnd = prev.isShell && msg.type === 'exited' && prev.isWaiting;
+      touch(sid, prev.isShell
+        ? { ...next, items: prev.items, ...(shellAbnormalEnd ? { pendingEndMarker: true } : {}) }
+        : next);
       _listeners.get(sid)?.forEach(fn => fn());
     }
 
@@ -499,6 +523,22 @@ function ensureHandler() {
   }
 }
 
+
+// Маркер аварийного конца хода для ленты, восстановленной из «оболочки» (F3-S3d, дефект
+// 3e22fbeb): при 'exited' лента была пуста и ставить маркер было некуда — факт держался
+// статусным полем (SessionState.pendingEndMarker). Здесь он дописывается в хвост и флаг
+// гасится в этой же точке — второго раза не будет. Не добавляем, если:
+// — сервер записал конец сам: turnAlreadyEnded — общий предикат конца хода
+//   (result / error / interrupted / session_ended), дубля поверх него не ставим;
+// — ход продолжается (isWaiting): после обрыва начался новый, вешать старый маркер
+//   поверх него нельзя;
+// — лента пуста: отмечать нечего.
+function withPendingEndMarker(next: SessionState): SessionState {
+  if (!next.pendingEndMarker) return next;
+  const cleared: SessionState = { ...next, pendingEndMarker: false };
+  if (!cleared.items.length || cleared.isWaiting || turnAlreadyEnded(cleared.items)) return cleared;
+  return { ...cleared, items: [...cleared.items, { kind: 'session_ended' }] };
+}
 
 // Присоединяемся к сессии один раз и остаёмся — даже при переключении между сессиями
 function ensureJoined(sid: string, projectId?: string) {
@@ -534,13 +574,17 @@ async function joinAndLoadHistory(sid: string, projectId?: string) {
       // Сервер — источник истины: используем его данные, если история новее
       // (сверка без live-only элементов — см. serverHistoryNewer). Иначе оставляем
       // живые сообщения от стриминга (race condition при активном ходе).
-      if (!serverHistoryNewer(items, prev.items)) return { ...prev, isHistoryLoading: false };
-      return {
+      // Приход истории — конец и «возврата из оболочки»: здесь гасится поставленный при
+      // её снятии isHistoryLoading (F3-S3d, дефект dd0c5df3) и дописывается снятый вместе
+      // с лентой маркер аварийного конца хода (withPendingEndMarker)
+      const settled = (next: SessionState) => withPendingEndMarker({ ...next, isHistoryLoading: false });
+      if (!serverHistoryNewer(items, prev.items)) return settled(prev);
+      return settled({
         // Реплей permission_request из JoinSession пришёл ДО истории — без переноса
         // подмена унесла бы карточку (дефект «карточка разрешения пропадает после F5»)
-        ...prev, items: adoptServerHistory(items, prev.items), isHistoryLoading: false,
+        ...prev, items: adoptServerHistory(items, prev.items),
         isWaiting: historyTurnFinished(items) ? false : prev.isWaiting,
-      };
+      });
     });
   } catch {
     // История недоступна — не блокируем работу
@@ -632,7 +676,11 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     // Возврат зрителя снимает «оболочку» (F3-S3b): с этого момента items снова живут
     // (join-replay карточек разрешения, стрим идущего хода), а полную ленту принесёт
     // ensureJoined → joinAndLoadHistory: курсора нет → after=-1, сервер — источник истины.
-    if (getState(sessionId).isShell) setState(sessionId, prev => ({ ...prev, isShell: false }));
+    // Снимать оболочку без признака загрузки — значит показать пустую ленту без спиннера
+    // на всё время ответа (дефект dd0c5df3): флаг ставится здесь и гасится приходом
+    // истории (joinAndLoadHistory / reloadHistory), как при обычном первом открытии чата
+    if (getState(sessionId).isShell)
+      setState(sessionId, prev => ({ ...prev, isShell: false, isHistoryLoading: true }));
 
     // Признак группового чата — до загрузки истории (влияет на normalizeHistory).
     // Только от потребителя, который его знает: useSessionArtifacts зовёт хук без

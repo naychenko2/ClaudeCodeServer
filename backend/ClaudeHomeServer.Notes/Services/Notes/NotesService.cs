@@ -20,11 +20,18 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     private readonly ILogger<NotesService> _logger;
     private readonly IProjectEventLogService? _events;
     // Точка доступа к проекту-источнику (Core-контракт, S1-3b): в ней роль по членству и
-    // гейт «рубильник + флаг» общих проектов. В прода она есть всегда: единственный путь
-    // сборки сервиса — DI вертикали (NotesSubsystem.cs:61), а IProjectAccess зарегистрирован
-    // в Main (Program.cs:405). Опциональна по той же причине, что _events: тестовые
-    // конструирования вне DI остаются без неё — см. ProjectScope.
-    private readonly IProjectAccess? _access;
+    // гейт «рубильник + флаг» общих проектов. НЕ параметр конструктора: прямая зависимость
+    // замыкает DI-цикл NotesService → IProjectAccess → ProjectAccessService → ISessionDirectory
+    // → SessionManager → PersonaBindingsService → INoteAccessor → форвардер (NotesSubsystem.cs:71)
+    // → NotesService — на повторном GetOrAdd того же синглтона StartAsync хоста виснет
+    // навсегда (бисект 2026-10-29: все тесты с WebApplicationFactory). Тот же приём, что
+    // с реестром тулсетов в SessionManager (SessionManager.cs:829): в конструкторе — провайдер,
+    // точка доступа — лениво при первом обращении, когда создание синглона уже завершено
+    // и ре-энтри нет.
+    // Вне DI (тестовые конструирования) точка передаётся напрямую internal-конструктором
+    // или не передаётся вовсе — ProjectScope остаётся на владении, fail-closed.
+    private readonly IServiceProvider? _services;
+    private IProjectAccess? _access;
     private readonly string _dataDir;
 
     private const string PersonalKey = "personal";
@@ -45,14 +52,23 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(2);
 
     public NotesService(IProjectManager projects, IConfiguration config, ILogger<NotesService> logger,
-        IProjectEventLogService? events = null, IProjectAccess? access = null)
+        IProjectEventLogService? events = null, IServiceProvider? services = null)
     {
         _projects = projects;
         _logger = logger;
         _events = events;
-        _access = access;
+        _services = services;
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
+    }
+
+    // Тестовое конструирование вне DI: точка доступа передаётся напрямую, без провайдера.
+    // internal — виден только тестовым сборкам (InternalsVisibleTo); DI выбирает публичный
+    // конструктор, этот для него не кандидат.
+    internal NotesService(IProjectManager projects, IConfiguration config, ILogger<NotesService> logger,
+        IProjectEventLogService? events, IProjectAccess access) : this(projects, config, logger, events)
+    {
+        _access = access;
     }
 
     private Model GetModel(string userId)
@@ -1232,13 +1248,19 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     /// <summary>
     /// Область вызывающего к проекту-источнику или null — доступа нет. Решает её
     /// <see cref="IProjectAccess"/>: роль по членству и гейт «рубильник и флаг» (S1-2) живут
-    /// там, собственной таблицы прав здесь нет. Без точки доступа (тестовое конструирование
-    /// сервиса вне DI) остаётся собственное владение: для чужого проекта тот же отказ, что при
-    /// выключенном гейте — fail-closed, а не «разрешили на всякий случай».
+    /// там, собственной таблицы прав здесь нет. Точка доступа резолвится при первом обращении
+    /// (см. комментарий поля _services): к этому моменту синглтон NotesService уже создан и
+    /// резолв не ре-ентрит в свой ключ. Без точки доступа (тестовое конструирование сервиса
+    /// вне DI или непробужденный провайдер) остаётся собственное владение: для чужого проекта
+    /// тот же отказ, что при выключенном гейте — fail-closed, а не «разрешили на всякий случай».
     /// </summary>
     private RequestScope? ProjectScope(string userId, string projectId, ProjectRight right)
     {
-        if (_access is not null) return _access.Resolve(userId, projectId, right);
+        // Гонка первой резолва безопасна: GetService отдаёт тот же синглтон, лишняя запись
+        // идемпотентна. GetService, не GetRequiredService: непробужденный провайдер (тест вне
+        // DI) — не ошибка, а путь к запасной ветке владения.
+        var access = _access ??= _services?.GetService<IProjectAccess>();
+        if (access is not null) return access.Resolve(userId, projectId, right);
         var own = _projects.GetById(projectId);
         if (own is null || own.OwnerId != userId) return null;
         return new RequestScope(userId, own.OwnerId!, ProjectRole.Owner);

@@ -197,7 +197,9 @@ public class RevokedMemberHubTests : IClassFixture<TestWebApplicationFactory>, I
 
         (await revokedSink.FirstOf("direct").WaitAsync(Wait)).Should().Be("direct",
             "живое соединение обязано слушать: его молчание объясняется только выходом из групп");
-        revokedSink.Got().Should().Equal("direct",
+        // Equal(params[]) съел бы строку-причину как второй ожидаемый элемент — ожидаемое
+        // передаём массивом, причину отдельным параметром
+        revokedSink.Got().Should().Equal(new[] { "direct" },
             "после отзыва живое соединение не получает ни событий проекта, ни событий чата");
 
         (await ownerSink.FirstOf("project").WaitAsync(Wait)).Should().Be("project");
@@ -245,9 +247,9 @@ public class RevokedMemberHubTests : IClassFixture<TestWebApplicationFactory>, I
         await Hub().Clients.Client(tab2.ConnectionId!).SendAsync(ProbeEvent, new { probe = "direct2" });
 
         (await sink1.FirstOf("direct1").WaitAsync(Wait)).Should().Be("direct1");
-        sink1.Got().Should().Equal("direct1", "первая вкладка выкинута из группы проекта");
+        sink1.Got().Should().Equal(new[] { "direct1" }, "первая вкладка выкинута из группы проекта");
         (await sink2.FirstOf("direct2").WaitAsync(Wait)).Should().Be("direct2");
-        sink2.Got().Should().Equal("direct2", "вторая вкладка того же человека выкинута тоже");
+        sink2.Got().Should().Equal(new[] { "direct2" }, "вторая вкладка того же человека выкинута тоже");
 
         (await ownerSink.FirstOf("project").WaitAsync(Wait)).Should().Be("project",
             "выкидываются соединения отозванного, а не все соединения группы");
@@ -282,7 +284,7 @@ public class RevokedMemberHubTests : IClassFixture<TestWebApplicationFactory>, I
         await Hub().Clients.Client(left.ConnectionId!).SendAsync(ProbeEvent, new { probe = "direct" });
 
         (await leftSink.FirstOf("direct").WaitAsync(Wait)).Should().Be("direct");
-        leftSink.Got().Should().Equal("direct", "покинувший проект не остаётся ни в группе проекта, ни в группе чата");
+        leftSink.Got().Should().Equal(new[] { "direct" }, "покинувший проект не остаётся ни в группе проекта, ни в группе чата");
         (await ownerSink.FirstOf("project").WaitAsync(Wait)).Should().Be("project");
         (await ownerSink.FirstOf("session").WaitAsync(Wait)).Should().Be("session");
     }

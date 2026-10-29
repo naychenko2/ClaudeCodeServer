@@ -261,68 +261,269 @@ export function briefNextText(brief: FeatureBrief, nameOf?: PersonaNameResolver)
   return s;
 }
 
-// ── «Оценка» ────────────────────────────────────────────────────────────────────────
+// ── «Готовность» ────────────────────────────────────────────────────────────────────
+// Макет feature-summary-2: полоска по оценке оркестратора (шаги плюс стадии конвейера), без
+// неё — по трекеру. Счёт и согласие оценок приходят с бэка; единственная арифметика здесь —
+// доля штриховки «в работе» и процент по трекеру (done/total), когда оценки нет.
+export interface BriefChip {
+  text: string;
+  // next — первый («следом»), you — «за вами», plain — остальные.
+  tone: 'next' | 'you' | 'plain';
+}
+
+export interface BriefReadinessView {
+  // Подпись: «Готовность» / «Готовность · по трекеру».
+  label: string;
+  // Подпись под полоской: «4 готово · 3 в работе · из 9 · 45 %» (mono — числа).
+  caption: BriefDonePart[];
+  percent: number;
+  // aria-label полоски: «Готовность 45 %».
+  ariaLabel: string;
+  // Доля штриховки «в работе», 0 — штриховки нет.
+  inProgressPercent: number;
+  // Оценка оркестратора устарела: полоска тускнеет.
+  stale: boolean;
+  closed: boolean;
+  // Метка устаревания у факта трекера («до смены этапа» / «до паузы»).
+  staleLabel: string | null;
+  // Факт трекера: «по трекеру: 2 из 5 шагов приняты · 1 виток правок».
+  tracker: BriefDonePart[];
+  // Подпись чипов: «Ещё не начато:» / «Осталось:».
+  chipsLabel: string;
+  chips: BriefChip[];
+  // Вместо чипов (закрытая): «ничего — всё сделано».
+  chipsEmpty: string | null;
+}
+
+const MERGE_CHIP = 'мерж · за вами';
+const CHIP_CAP = 3;
+
+function clampPercent(n: number): number {
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+export function briefReadinessText(brief: FeatureBrief, opts: BriefTextOptions = {}): BriefReadinessView {
+  const closed = brief.kind === 'closed' || brief.kind === 'merged';
+  const est = brief.note?.estimate ?? null;
+  const stale = !!est && !!brief.note?.stale;
+  const staleLabel = stale && brief.note ? voiceStaleLabel(brief.note, brief.kind) : null;
+
+  const trackerParts = briefDoneText(brief);
+  const planFact = brief.kind === 'queued' && (brief.done.planState === 'cut' || brief.done.planState === 'done');
+  const tracker: BriefDonePart[] = planFact ? trackerParts : [{ text: 'по трекеру: ', mono: false }, ...trackerParts];
+
+  let caption: BriefDonePart[];
+  let percent: number;
+  let inProgressPercent = 0;
+  if (est && est.total > 0) {
+    percent = clampPercent(est.percent ?? (est.done / est.total) * 100);
+    const w = est.inProgress ?? 0;
+    if (w > 0 && !closed) inProgressPercent = Math.min(clampPercent((w / est.total) * 100), 100 - percent);
+    caption = w > 0 && !closed
+      ? [
+        { text: String(est.done), mono: true }, { text: ' готово · ', mono: false },
+        { text: String(w), mono: true }, { text: ' в работе · из ', mono: false }, { text: String(est.total), mono: true },
+      ]
+      : [{ text: `${est.done} из ${est.total}`, mono: true }];
+    caption.push({ text: ' · ', mono: false }, { text: `${percent} %`, mono: true });
+  } else {
+    const { stepsAccepted, stepsTotal } = brief.done;
+    percent = stepsTotal > 0 ? clampPercent((stepsAccepted / stepsTotal) * 100) : 0;
+    caption = [
+      { text: `${stepsAccepted} из ${stepsTotal}`, mono: true }, { text: ' шагов · ', mono: false },
+      { text: `${percent} %`, mono: true },
+    ];
+  }
+
+  // Чипы «ещё не начато»: оркестратор — его remaining; без оценки — brief.next (до трёх стадий).
+  const mergeAsk = brief.kind === 'waiting_you' && (brief.reason === 'мерж' || brief.next[0]?.stage === 'merge');
+  let texts: string[];
+  if (est) {
+    texts = est.remaining.filter(Boolean);
+  } else {
+    texts = brief.next.slice(0, CHIP_CAP).map(n => {
+      const name = n.personaId ? opts.nameOf?.(n.personaId) : null;
+      return name ? `${stageWord(n.stage)} · ${name}` : stageWord(n.stage);
+    });
+  }
+  let chips: BriefChip[];
+  if (mergeAsk) {
+    chips = [{ text: MERGE_CHIP, tone: 'you' }];
+  } else {
+    chips = texts.map((t, i) => (i === 0 ? { text: `следом · ${t}`, tone: 'next' as const } : { text: t, tone: 'plain' as const }));
+  }
+
+  return {
+    label: est ? 'Готовность' : 'Готовность · по трекеру',
+    caption, percent, ariaLabel: `Готовность ${percent} %`, inProgressPercent, stale, closed, staleLabel, tracker,
+    chipsLabel: est ? 'Ещё не начато:' : 'Осталось:',
+    chips,
+    chipsEmpty: closed ? 'ничего — всё сделано' : null,
+  };
+}
+
+// ── «Срок» ──────────────────────────────────────────────────────────────────────────
+// Правило двух оценок (макет feature-summary-2): главное число всегда одно. Свежая оценка
+// оркестратора главнее; устаревшая или отсутствующая — по истории. «Расходятся» считает бэк
+// (agreement), фронт не сравнивает. Время готовности: у оркестратора — etaEndsAt бэка, у
+// истории — computedAt + remainingMinutes.
+export interface BriefEtaVerdict {
+  text: string;
+  // ok — «сходится» (зелёный), warn — «дольше / быстрее / до смены этапа» (жёлтая метка).
+  tone: 'ok' | 'warn';
+}
+
 export interface BriefEstimateView {
-  // Подпись блока: «Оценка»; у закрытой меняется на «Итог» (макет §2 closed).
+  // Подпись блока: «Срок»; у закрытой — «Итог».
   header: string;
-  // Главная строка: «≈ 2 ч 30 мин осталось» / «Осталось — за вами» / «Оценки пока нет» /
-  // queued: «Оценка — после старта» / closed: «шла 6 ч 40 мин».
+  // Главное число: «≈ 2 ч 40 мин» / «за вами» / «Оценки пока нет» / «шла 6 ч 40 мин».
   main: string;
-  // true — main не значение, а обещание: блок красит её приглушённым (макет queue:
-  // «Оценка — после старта» (C.textMuted)).
+  // Хвост главного числа: «· к 16:50», «после старта», «после снятия паузы».
+  tail: string | null;
+  // main не значение, а обещание/пустота: блок красит приглушённым.
   mainMuted: boolean;
-  // Второстепенный факт: «идёт N» по готовому elapsedMinutes; для queued — «в очереди N»
-  // (макет) только по отдельному полю queueWaitMinutes (R-F8): у queued нет work-интервалов,
-  // число из elapsedMinutes для него всегда 0. Разбивка «из них ждёт вас / пауза» — вне
-  // контракта, не показываем — решение плана.
-  fact: string | null;
+  // Подпись источника: «по оценке Софьи · 14 мин назад» / «разброс … · по 14 прошлым фичам».
+  source: string | null;
+  // Вторая оценка — справка, строка под числом; verdict — метка в её конце.
+  alt: string | null;
+  verdict: BriefEtaVerdict | null;
+  // «Почему» оркестратора: только при расхождении.
+  why: string | null;
+}
+
+export interface BriefEstimateOptions extends BriefTextOptions {
+  nowMs?: number;
 }
 
 const NO_ESTIMATE = 'Оценки пока нет';
+const HOUR_12 = 12 * 60 * 60 * 1000;
 
-export function briefEstimateText(brief: FeatureBrief): BriefEstimateView {
-  // «идёт 0 мин» — не факт: ноль работы (или меньше округляемой минуты) не число (R-F8,
-  // та же болезнь, что «в очереди 0 мин»). Порог — тот же round, что у formatDuration.
-  const elapsed = brief.elapsedMinutes != null && Math.round(brief.elapsedMinutes) > 0
-    ? formatDuration(brief.elapsedMinutes) : null;
+function etaMain(minutes: number): string {
+  return minutes < 1 ? 'меньше минуты' : `≈ ${formatDuration(minutes)}`;
+}
+
+// «к 16:50»; дальше 12 ч от «сейчас» — дата: «завтра к 10:30», «к 31.10». Нечитаемый момент — null.
+function readyAtText(iso: string | null | undefined, nowMs: number): string | null {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return null;
+  if (t - nowMs <= HOUR_12) return `к ${formatClock(iso)}`;
+  const target = new Date(t);
+  const tomorrow = new Date(nowMs);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const isTomorrow = target.getFullYear() === tomorrow.getFullYear() && target.getMonth() === tomorrow.getMonth() && target.getDate() === tomorrow.getDate();
+  return isTomorrow ? `завтра к ${formatClock(iso)}` : `к ${formatDate(iso)}`;
+}
+
+function pastFeatures(n: number): string {
+  const d = n % 10, h = n % 100;
+  return `по ${n} ${d === 1 && h !== 11 ? 'прошлой фиче' : 'прошлым фичам'}`;
+}
+
+function spread(h: { p25: number; p75: number }): string {
+  return `${formatDuration(h.p25)} – ${formatDuration(h.p75)}`;
+}
+
+export function briefEstimateText(brief: FeatureBrief, opts: BriefEstimateOptions = {}): BriefEstimateView {
+  const out = estimateView(brief, opts);
+  // Очередь: «старт ≈ 15:00» — справка, если вторая оценка строку не заняла.
+  if (brief.kind === 'queued' && brief.queueStartEstimate && !out.alt) {
+    const t = formatClock(brief.queueStartEstimate);
+    if (t) out.alt = `старт ≈ ${t}`;
+  }
+  return out;
+}
+
+function estimateView(brief: FeatureBrief, opts: BriefEstimateOptions): BriefEstimateView {
+  const nowMs = opts.nowMs ?? Date.now();
+  const note = brief.note;
+  const est = note?.estimate ?? null;
+  const orchName = note?.byPersonaId ? opts.nameOf?.(note.byPersonaId) ?? null : null;
+  const hist = brief.estimate;
+  const histMinutes = hist && hist.remainingMinutes >= 1 ? hist.remainingMinutes : null;
+  const orchMinutes = est?.etaMinutes ?? null;
+  const staleLabel = note ? voiceStaleLabel(note, brief.kind) : null;
+  const orchFresh = orchMinutes != null && !note?.stale;
+  const orchStale = orchMinutes != null && !!note?.stale;
+  const orchAgo = note ? agoText(note.at, nowMs) : null;
+  const base = { header: 'Срок', mainMuted: false, tail: null, source: null, alt: null, verdict: null, why: null };
 
   if (brief.kind === 'closed' || brief.kind === 'merged') {
-    // Итог: «шла 6 ч 40 мин» по elapsedMinutes; «по плану было ≈ 5 ч» — v2, не делаем.
-    // 'merged' (Ф-1.1) — тот же итог, что у 'closed'.
-    return { header: 'Итог', main: elapsed ? `шла ${elapsed}` : NO_ESTIMATE, mainMuted: false, fact: null };
+    // Итог: «шла N» + на старте оркестратор обещал ≈ M (и история, если есть).
+    const elapsed = brief.elapsedMinutes != null && Math.round(brief.elapsedMinutes) > 0 ? formatDuration(brief.elapsedMinutes) : null;
+    const promised = brief.initialEtaMinutes != null && brief.initialEtaMinutes >= 1 ? brief.initialEtaMinutes : null;
+    const altParts: string[] = [];
+    if (promised != null) altParts.push(`на старте ${orchName ? `${orchName} обещала` : 'обещано'} ≈ ${formatDuration(promised)}`);
+    if (histMinutes != null) altParts.push(`по истории ≈ ${formatDuration(histMinutes)}`);
+    return {
+      ...base, header: 'Итог', main: elapsed ? `шла ${elapsed}` : NO_ESTIMATE,
+      alt: altParts.length ? altParts.join(' · ') : null,
+    };
   }
 
+  // Хвост по состоянию: пауза и очередь — слова; «ждёт вас» — без времени; «идёт» — «к HH:MM».
+  const tailFor = (iso: string | null | undefined): string | null => {
+    if (brief.kind === 'paused') return 'после снятия паузы';
+    if (brief.kind === 'queued') return 'после старта';
+    if (brief.kind === 'running') {
+      const at = readyAtText(iso, nowMs);
+      return at ? `· ${at}` : null;
+    }
+    return null;
+  };
+  const histAt = brief.kind === 'running' && histMinutes != null
+    ? new Date(Date.parse(brief.computedAt) + histMinutes * 60000).toISOString() : null;
+  const histSpread = hist && histMinutes != null ? `по истории ≈ ${formatDuration(histMinutes)} (${spread(hist)})` : null;
+
+  if (brief.kind === 'waiting_you') {
+    // Остальное — за человеком: числа оценки нет, времени тоже; строка оркестратора — про мерж.
+    const alt = orchMinutes != null
+      ? `после вашего «да» — мерж ${etaMain(orchMinutes)}${orchName ? ` (${orchName})` : ''}` : null;
+    return { ...base, main: 'за вами', alt };
+  }
+
+  if (orchFresh) {
+    const source = `по оценке ${orchName ? genitiveName(orchName) : 'оркестратора'}${orchAgo ? ` · ${orchAgo}` : ''}`;
+    const out: BriefEstimateView = {
+      ...base, main: etaMain(orchMinutes!), tail: tailFor(est?.etaEndsAt), source,
+    };
+    if (histSpread && est?.agreement) {
+      out.alt = histSpread;
+      if (est.agreement === 'within') out.verdict = { text: 'сходится', tone: 'ok' };
+      else {
+        out.verdict = { text: est.agreement === 'above' ? 'дольше, чем по истории' : 'быстрее, чем по истории', tone: 'warn' };
+        out.why = est.why || null;
+      }
+    }
+    return out;
+  }
+
+  if (histMinutes != null) {
+    const out: BriefEstimateView = {
+      ...base, main: etaMain(histMinutes), tail: tailFor(histAt),
+      source: `разброс ${spread(hist!)} · ${pastFeatures(hist!.sampleSize)}`,
+    };
+    if (orchStale) {
+      out.alt = `${orchName ?? 'оркестратор'}: ${etaMain(orchMinutes!)}${orchAgo ? ` · ${orchAgo}` : ''}`;
+      if (staleLabel) out.verdict = { text: staleLabel, tone: 'warn' };
+    }
+    return out;
+  }
+
+  if (brief.kind === 'queued') return { ...base, main: 'Оценка — после старта', mainMuted: true };
+  return { ...base, main: NO_ESTIMATE, mainMuted: true, source: 'прошлых фич для сравнения мало' };
+}
+
+// Первый факт строки итогов: «идёт 1 ч 10 мин» по elapsedMinutes; у очереди — «в очереди N» по
+// queueWaitMinutes. «0 мин» — не факт (тот же порог round, что у formatDuration); у закрытой —
+// нет: её длительность уже в «Итог».
+export function briefElapsedFact(brief: FeatureBrief): { label: string; value: string } | null {
+  const pos = (m: number | null | undefined): m is number => m != null && Math.round(m) > 0;
+  if (brief.kind === 'closed' || brief.kind === 'merged') return null;
   if (brief.kind === 'queued') {
-    // Для очереди оценки нет не от нехватки данных, а потому что фича не началась
-    // (решение Софьи, R-F2→F5): строка — обещание, не значение (макет: без «осталось»,
-    // приглушённая). Факт «в очереди N» — только по отдельному полю контракта
-    // queueWaitMinutes (бэк-шаг B8; R-F8): elapsedMinutes — объединение work-интервалов
-    // (бэк: timeline.Totals.WorkWallMinutes), а у queued фичи их нет — число из него
-    // всегда 0 и для очереди не используется никогда.
-    // «в очереди 0 мин» — не факт: очередь короче округляемой минуты не число (F12: бэк
-    // отдаёт 0 сознательно — QueueWaitOf режет целой частью, «ровно в момент ответа — 0».
-    // Порог — тот же round, что у «идёт» выше.)
-    const qw = brief.queueWaitMinutes != null && Math.round(brief.queueWaitMinutes) > 0
-      ? `в очереди ${formatDuration(brief.queueWaitMinutes)}` : null;
-    return { header: 'Оценка', main: 'Оценка — после старта', mainMuted: true, fact: qw };
+    return pos(brief.queueWaitMinutes) ? { label: 'в очереди', value: formatDuration(brief.queueWaitMinutes) } : null;
   }
-
-  const est = brief.estimate;
-  let main: string;
-  if (!est) {
-    main = NO_ESTIMATE;
-  } else if (brief.kind === 'waiting_you') {
-    // Остальное — за человеком (макет wait); число оценки за ним не стоит.
-    main = 'Осталось — за вами';
-  } else if (est.remainingMinutes < 1) {
-    // «≈ 0» не печатается ни в одном выходе (критерий F2).
-    main = 'меньше минуты осталось';
-  } else if (brief.kind === 'paused') {
-    main = `≈ ${formatDuration(est.remainingMinutes)} после снятия паузы`;
-  } else {
-    main = `≈ ${formatDuration(est.remainingMinutes)} осталось`;
-  }
-  return { header: 'Оценка', main, mainMuted: false, fact: elapsed ? `идёт ${elapsed}` : null };
+  return pos(brief.elapsedMinutes) ? { label: 'идёт', value: formatDuration(brief.elapsedMinutes) } : null;
 }
 
 // ── «N мин/ч назад» ────────────────────────────────────────────────────────────────
@@ -431,8 +632,17 @@ export const BRIEF_MODEL_WORDS: readonly string[] = [
   'Оценки пока нет',
   'Оценка',
   'Итог',
-  'Осталось — за вами',
-  'осталось', // «меньше минуты осталось», «≈ N осталось»
+  'Срок',
+  'Готовность',
+  'за вами',
+  'по трекеру',
+  'Ещё не начато',
+  'Осталось:',
+  'следом · ',
+  'сходится',
+  'чем по истории',
+  'после старта',
+  'после вашего',
   'снятия паузы', // «≈ N после снятия паузы»
   'идёт ',
   'шла ',

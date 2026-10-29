@@ -31,7 +31,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FeatureBriefBlock } from './FeatureBriefBlock';
-import { briefDoneText, briefEstimateText, briefNowText, briefSubText, BRIEF_MODEL_WORDS } from './FeatureBriefModel';
+import { briefEstimateText, briefNowText, briefReadinessText, briefSubText, BRIEF_MODEL_WORDS } from './FeatureBriefModel';
 import { featureRunStatusTag } from './FeatureStatusTag';
 import { stageLabel } from './FeatureStatsBits';
 import { C, FONT } from '../../lib/design';
@@ -197,97 +197,169 @@ describe('FeatureBriefBlock: девять kind', () => {
   });
 });
 
-// ── 2. «Сделано» и «Оценка» ──────────────────────────────────────────────────────────
+// ── 2. «Готовность | Срок» ───────────────────────────────────────────────────────────
 
-describe('«Сделано» и «Оценка»', () => {
-  it('«Сделано» в DOM равно выходу briefDoneText (слова модели, R-F5)', () => {
-    const b = brief({ done: { stepsAccepted: 2, stepsTotal: 5, loops: 1, planState: 'cut' } });
-    const { c } = render({ brief: b });
-    expect(textNodes(findNodeByAttr(c, 'data-testid', 'brief-done-line')!).join('')).toBe(briefDoneText(b).map(p => p.text).join(''));
+const HIST = { remainingMinutes: 150, p25: 110, p75: 220, source: 'history' as const, sampleSize: 14 };
+
+function note(est: Record<string, unknown> | null = {}, over: Partial<NonNullable<FeatureBrief['note']>> = {}): FeatureBrief['note'] {
+  return {
+    text: 'голос', at: at(25, 13, 56), byPersonaId: 'p-sofya', byUser: false, stageAtWrite: 'prod', stale: false,
+    estimate: est === null ? null : {
+      done: 4, total: 9, percent: 45, inProgress: 3, remaining: ['проверка · Вера', 'финал'], etaMinutes: 160,
+      why: null, agreement: 'within', etaEndsAt: at(25, 16, 50), ...est,
+    } as NonNullable<FeatureBrief['note']>['estimate'],
+    ...over,
+  };
+}
+
+const joined = (c: ReturnType<typeof render>['c'], id: string): string => textNodes(findNodeByAttr(c, 'data-testid', id)!).join('');
+const styleOf = (c: ReturnType<typeof render>['c'], id: string): Record<string, unknown> =>
+  reactProps(findNodeByAttr(c, 'data-testid', id)!)!.style as Record<string, unknown>;
+
+describe('«Готовность | Срок»', () => {
+  it('«Готовность» в DOM равна выходам модели: подпись, подпись под полоской, факт трекера (слова модели, R-F5)', () => {
+    const b = brief({ estimate: HIST, note: note() });
+    const { c } = render({ brief: b, nameOf });
+    const v = briefReadinessText(b, { nameOf });
+    expect(joined(c, 'brief-ready-caption')).toBe(v.caption.map(p => p.text).join(''));
+    expect(joined(c, 'brief-ready-caption')).toBe('4 готово · 3 в работе · из 9 · 45 %');
+    expect(joined(c, 'brief-ready-tracker')).toBe(v.tracker.map(p => p.text).join(''));
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'brief-ready')!).join(' ')).toContain('Готовность');
   });
 
-  it('loops = 0 — хвоста про витки нет', () => {
-    const b = brief({ done: { stepsAccepted: 5, stepsTotal: 5, loops: 0, planState: 'cut' } });
-    const { c } = render({ brief: b });
-    expect(textNodes(findNodeByAttr(c, 'data-testid', 'brief-done-line')!).join('')).toBe(briefDoneText(b).map(p => p.text).join(''));
+  it('полоска — progressbar с aria-label и значением; заливка «готово» C.accent, штриховка «в работе» по inProgress', () => {
+    const { c } = render({ brief: brief({ note: note() }), nameOf });
+    const bar = findNodeByAttr(c, 'data-testid', 'brief-ready-bar')!;
+    expect(bar.attributes.role).toBe('progressbar');
+    expect(bar.attributes['aria-valuenow']).toBe('45');
+    expect(bar.attributes['aria-label']).toBe('Готовность 45 %');
+    expect(styleOf(c, 'brief-ready-fill').width).toBe('45%');
+    expect(styleOf(c, 'brief-ready-fill').background).toBe(C.accent);
+    expect(styleOf(c, 'brief-ready-hatch').width).toBe('33%');
+    expect(String(styleOf(c, 'brief-ready-hatch').background)).toContain('repeating-linear-gradient(135deg');
   });
 
-  it('queued с нарезанным планом — «Сделано»: «План готов · 0 из 4 шагов» (макет queue, R-F8)', () => {
+  it('устаревшая оценка — заливка C.accentMuted, штриховка accentMuted/progressTrack, метка у факта трекера', () => {
+    const { c } = render({ brief: brief({ note: note({}, { stale: true }) }), nameOf });
+    expect(styleOf(c, 'brief-ready-fill').background).toBe(C.accentMuted);
+    expect(String(styleOf(c, 'brief-ready-hatch').background)).toContain(C.progressTrack);
+    expect(joined(c, 'brief-ready-stale')).toBe('до смены этапа');
+  });
+
+  it('закрытая — заливка C.success, штриховки нет, вместо чипов «ничего — всё сделано»', () => {
+    const { c } = render({ brief: brief({ kind: 'closed', note: note({ done: 9, total: 9, percent: 100, remaining: [] }) }), mergedAt: at(24, 18, 5), nameOf });
+    expect(styleOf(c, 'brief-ready-fill').background).toBe(C.success);
+    expect(findNodeByAttr(c, 'data-testid', 'brief-ready-hatch')).toBeNull();
+    expect(joined(c, 'brief-chip-empty')).toBe('ничего — всё сделано');
+  });
+
+  it('чипы «ещё не начато»: первый «следом», «за вами» — на фоне C.infoBg', () => {
+    const { c } = render({ brief: brief({ note: note() }), nameOf });
+    const chips = [findNodeByAttr(c, 'data-testid', 'brief-chip')!];
+    expect(textNodes(chips[0]).join('')).toBe('следом · проверка · Вера');
+    expect((reactProps(chips[0])!.style as Record<string, unknown>).background).toBe(C.accentLight);
+    const w = render({ brief: brief({ kind: 'waiting_you', reason: 'мерж', note: note({ remaining: ['мерж'] }) }), nameOf }).c;
+    const you = findNodeByAttr(w, 'data-testid', 'brief-chip')!;
+    expect(textNodes(you).join('')).toBe('мерж · за вами');
+    expect((reactProps(you)!.style as Record<string, unknown>).background).toBe(C.infoBg);
+  });
+
+  it('без оценки оркестратора — «по трекеру» из done и next', () => {
+    const b = brief({ next: [{ stage: 'qa', personaId: 'p-vera' }] });
+    const { c } = render({ brief: b, nameOf });
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'brief-ready')!).join(' ')).toContain('Готовность · по трекеру');
+    expect(joined(c, 'brief-ready-caption')).toBe('2 из 5 шагов · 40 %');
+    expect(joined(c, 'brief-chip')).toBe('следом · проверка · Вера');
+  });
+
+  it('«Срок» в DOM равен выходу briefEstimateText: число, хвост, источник, вторая оценка, метка', () => {
+    const b = brief({ estimate: HIST, note: note() });
+    const { c } = render({ brief: b, nameOf });
+    const v = briefEstimateText(b, { nameOf, nowMs: NOW });
+    expect(joined(c, 'brief-estimate-main')).toBe(`${v.main} ${v.tail}`);
+    expect(joined(c, 'brief-estimate-main')).toBe('≈ 2 ч 40 мин · к 16:50');
+    expect(joined(c, 'brief-estimate-source')).toBe(v.source);
+    expect(joined(c, 'brief-estimate-alt')).toBe(`${v.alt} · сходится`);
+    expect(joined(c, 'brief-estimate-verdict')).toBe('сходится');
+    expect(styleOf(c, 'brief-estimate-verdict').color).toBe(C.successText);
+    expect(findNodeByAttr(c, 'data-testid', 'brief-estimate-why')).toBeNull();
+  });
+
+  it('расхождение — метка на C.warningBg и «почему» с кромкой C.warning', () => {
+    const b = brief({ estimate: HIST, note: note({ etaMinutes: 360, agreement: 'above', why: 'добавился шаг 4б', etaEndsAt: at(25, 20, 10) }) });
+    const { c } = render({ brief: b, nameOf });
+    expect(joined(c, 'brief-estimate-verdict')).toBe('дольше, чем по истории');
+    expect(styleOf(c, 'brief-estimate-verdict').background).toBe(C.warningBg);
+    expect(joined(c, 'brief-estimate-why')).toBe('добавился шаг 4б');
+    expect(String(styleOf(c, 'brief-estimate-why').borderLeft)).toContain(C.warning);
+  });
+
+  it('нет никакой оценки — «Оценки пока нет» приглушённым, «≈ 0» нигде в карточке', () => {
+    const { c } = render({ brief: brief({ elapsedMinutes: 70 }) });
+    expect(joined(c, 'brief-estimate-main')).toBe('Оценки пока нет');
+    expect(styleOf(c, 'brief-estimate-main').color).toBe(C.textMuted);
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'feature-brief-block')!).join(' ')).not.toMatch(/≈\s*0/);
+  });
+
+  it('closed — подпись «Итог»: «шла 6 ч 40 мин» и строка «на старте … обещала»', () => {
+    const b = brief({ kind: 'closed', elapsedMinutes: 400, initialEtaMinutes: 300, note: note({ done: 9, total: 9, percent: 100, remaining: [] }) });
+    const { c } = render({ brief: b, mergedAt: at(24, 18, 5), nameOf });
+    const eta = joined(c, 'brief-eta');
+    expect(eta).toContain('Итог');
+    expect(eta).toContain('шла 6 ч 40 мин');
+    expect(eta).toContain('на старте Софья обещала ≈ 5 ч');
+  });
+
+  it('queued с нарезанным планом — факт трекера «План готов · 0 из 4 шагов» (макет queue, R-F8)', () => {
     const b = brief({ kind: 'queued', done: { stepsAccepted: 0, stepsTotal: 4, loops: 0, planState: 'cut' } });
     const { c } = render({ brief: b });
-    expect(textNodes(findNodeByAttr(c, 'data-testid', 'brief-done-line')!).join('')).toBe('План готов · 0 из 4 шагов');
+    expect(joined(c, 'brief-ready-tracker')).toBe('План готов · 0 из 4 шагов');
   });
 
-  it('queued — «Оценка» карточки: строки модели («Оценка — после старта», «в очереди 25 мин») по полю queueWaitMinutes (R-F8)', () => {
+  it('queued: «Оценка — после старта» приглушённо; «в очереди N» — первым фактом строки итогов по queueWaitMinutes, из elapsedMinutes — никогда', () => {
     const b = brief({ kind: 'queued', elapsedMinutes: 0, queueWaitMinutes: 25 });
-    const { c } = render({ brief: b });
-    expect(textNodes(findNodeByAttr(c, 'data-testid', 'brief-estimate-main')!).join('')).toBe(briefEstimateText(b).main);
-    expect(textNodes(findNodeByAttr(c, 'data-testid', 'brief-estimate-fact')!).join('')).toBe(briefEstimateText(b).fact);
+    const { c } = render({ brief: b, stats: stats() });
+    expect(joined(c, 'brief-estimate-main')).toBe('Оценка — после старта');
+    expect(joined(c, 'mini-summary-row')).toContain('в очереди 25 мин');
+    const c2 = render({ brief: brief({ kind: 'queued', elapsedMinutes: 25 }), stats: stats() }).c;
+    expect(joined(c2, 'mini-summary-row')).not.toContain('в очереди');
   });
 
-  it('queued только с elapsedMinutes — строки «в очереди» в карточке нет: число из работы не используется (R-F8, дефект «в очереди 0 мин»)', () => {
-    const { c } = render({ brief: brief({ kind: 'queued', elapsedMinutes: 0 }) });
-    expect(textNodes(findNodeByAttr(c, 'data-testid', 'brief-estimate-main')!).join('')).toBe('Оценка — после старта');
-    expect(findNodeByAttr(c, 'data-testid', 'brief-estimate-fact'), 'строки факта нет').toBeNull();
-    // nonzero elapsed (иной источник данных) тоже не становится «числом в очереди».
-    const { c: c2 } = render({ brief: brief({ kind: 'queued', elapsedMinutes: 25 }) });
-    expect(textNodes(findNodeByAttr(c2, 'data-testid', 'brief-facts')!).join(' ')).not.toContain('в очереди 25');
-  });
-
-  it('«Оценка»: «≈ … осталось» + «идёт N» из elapsedMinutes (макет run)', () => {
-    const b = brief({
-      elapsedMinutes: 70,
-      estimate: { remainingMinutes: 150, p25: 120, p75: 180, source: 'history', sampleSize: 4 },
-    });
-    const { c } = render({ brief: b });
-    expect(textNodes(findNodeByAttr(c, 'data-testid', 'brief-estimate-main')!).join('')).toBe('≈ 2 ч 30 мин осталось');
-    expect(textNodes(findNodeByAttr(c, 'data-testid', 'brief-estimate-fact')!).join('')).toBe('идёт 1 ч 10 мин');
-  });
-
-  it('estimate = null — «Оценки пока нет», «≈ 0» нигде в карточке (критерий F2)', () => {
-    const { c } = render({ brief: brief({ elapsedMinutes: 70 }) });
-    const sec = findNodeByAttr(c, 'data-testid', 'feature-brief-block')!;
-    expect(textNodes(findNodeByAttr(c, 'data-testid', 'brief-estimate-main')!).join('')).toBe('Оценки пока нет');
-    expect(textNodes(sec).join(' ')).not.toMatch(/≈\s*0/);
-  });
-
-  it('closed — подпись блока меняется на «Итог»: «шла 6 ч 40 мин» (макет closed)', () => {
-    const { c } = render({ brief: brief({ kind: 'closed', elapsedMinutes: 400 }), mergedAt: at(24, 18, 5) });
-    const facts = textNodes(findNodeByAttr(c, 'data-testid', 'brief-facts')!).join(' ');
-    expect(facts).toContain('Итог');
-    expect(facts).toContain('шла 6 ч 40 мин');
+  it('строка итогов: «идёт N» из elapsedMinutes первым фактом', () => {
+    const { c } = render({ brief: brief({ elapsedMinutes: 70 }), stats: stats() });
+    expect(joined(c, 'mini-summary-row').startsWith('идёт 1 ч 10 мин')).toBe(true);
   });
 });
 
 // ── 2a. Порядок секций, пустые подписи, вид значений (R-F8) ──────────────────────────
 
 describe('Порядок секций и пустые подписи (R-F8)', () => {
-  // running со всеми тремя фактами: «Сделано», «Дальше» и «Оценка» заполнены.
+  // running с историей, следующей стадией и оценкой оркестратора.
   const full = brief({
     now: { stage: 'review', taskId: 't-rev', personaId: 'p-gleb', stepRef: '3', lane: 'back', since: at(25, 14, 5) },
     next: [{ stage: 'qa', personaId: 'p-vera' }],
-    estimate: { remainingMinutes: 150, p25: 120, p75: 180, source: 'history', sampleSize: 4 },
+    estimate: HIST,
+    note: note(),
   });
 
-  it('факты идут «Сделано · Дальше · Оценка» — порядок закреплён (проба Глеба: перестановка была зелёной)', () => {
-    const { c } = render({ brief: full, nameOf });
+  it('порядок колонок «Готовность | Срок» закреплён; «Сделано · Дальше · Оценка» и «Жизни фичи» в сводке нет', () => {
+    const { c } = render({ brief: full, stats: stats(), nameOf });
     const facts = textNodes(findNodeByAttr(c, 'data-testid', 'brief-facts')!).join(' ');
-    const iDone = facts.indexOf('Сделано');
-    const iNext = facts.indexOf('Дальше');
-    const iEst = facts.indexOf('Оценка');
-    expect(iDone, '«Сделано» есть').toBeGreaterThanOrEqual(0);
-    expect(iNext, '«Дальше» после «Сделано»').toBeGreaterThan(iDone);
-    expect(iEst, '«Оценка» после «Дальше»').toBeGreaterThan(iNext);
+    expect(facts.indexOf('Готовность'), '«Готовность» есть').toBeGreaterThanOrEqual(0);
+    expect(facts.indexOf('Срок'), '«Срок» после «Готовности»').toBeGreaterThan(facts.indexOf('Готовность'));
+    const all = textNodes(findNodeByAttr(c, 'data-testid', 'feature-brief-block')!).join(' ');
+    for (const gone of ['Сделано', 'Дальше', 'Жизнь фичи']) expect(all, gone).not.toContain(gone);
+    for (const id of ['brief-life', 'mini-timeline', 'mini-timeline-axis', 'brief-legend-work']) {
+      expect(findNodeByAttr(c, 'data-testid', id), id).toBeNull();
+    }
   });
 
-  it('next = null — подписи «Дальше» нет вовсе, соседние факты на месте (макет: поля нет — строку не рисуем)', () => {
-    const b = brief({ now: { stage: 'prod', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 14, 5) }, next: [] });
-    const { c } = render({ brief: b, nameOf });
-    const facts = textNodes(findNodeByAttr(c, 'data-testid', 'brief-facts')!).join(' ');
-    expect(facts).toContain('Сделано');
-    expect(facts).toContain('Оценка');
-    expect(findNodeByAttr(c, 'data-testid', 'brief-next-line'), 'строки «Дальше» нет').toBeNull();
-    expect(facts, 'голой подписи «Дальше» нет').not.toContain('Дальше');
+  it('грид — 1.4fr 1fr на десктопе и столбик на мобиле; у колонок minWidth: 0', () => {
+    const d = render({ brief: full, nameOf }).c;
+    expect(styleOf(d, 'brief-facts').gridTemplateColumns).toBe('1.4fr 1fr');
+    const m = render({ brief: full, nameOf, isMobile: true }).c;
+    expect(styleOf(m, 'brief-facts').gridTemplateColumns).toBe('1fr');
+    for (const id of ['brief-ready', 'brief-eta']) expect(styleOf(d, id).minWidth, id).toBe(0);
   });
 
   it('числа в подстроке «Сейчас» — моно, текст подстроки — выход модели без изменений (R-F8, макет)', () => {
@@ -304,16 +376,6 @@ describe('Порядок секций и пустые подписи (R-F8)', ()
     };
     walk(sub);
     expect(monoTexts, 'моно-обёрнуты ровно числовые токены').toEqual(['13:58', '12 мин']);
-  });
-
-  it('у значения факта и ячейки — minWidth: 0 (R-F8): длинное слово не раздвигает колонку', () => {
-    const { c } = render({ brief: full, nameOf });
-    for (const id of ['brief-done-line', 'brief-next-line', 'brief-estimate-main']) {
-      const val = findNodeByAttr(c, 'data-testid', id)!;
-      const holder = val.parentElement!;
-      expect((reactProps(holder)!.style as Record<string, unknown>).minWidth, `обёртка значения ${id}`).toBe(0);
-      expect((reactProps(holder.parentElement!)!.style as Record<string, unknown>).minWidth, `ячейка факта ${id}`).toBe(0);
-    }
   });
 
   it('error — глиф состояния есть, тот же что у «Сводка не загрузилась» (R-F8, макет)', () => {
@@ -351,34 +413,6 @@ describe('Порядок секций и пустые подписи (R-F8)', ()
     vi.setSystemTime(NOW + 10 * 60_000);
     act(() => { root.render(createElement(FeatureBriefBlock, { ...props, brief: { ...props.brief! } })); });
     expect(textNodes(findNodeByAttr(container, 'data-testid', 'brief-updated')!).join(''), 'новая ссылка данных — новое «сейчас»: 14:20 − 14:00').toBe('обновлено 20 мин назад');
-  });
-
-  it('без «Дальше» «Оценка» остаётся в правой колонке: «Сделано» занимает 1–2, середина не пустует (R-F8 минор 2)', () => {
-    const cellStyle = (cont: ReturnType<typeof render>['c'], testId: string): Record<string, unknown> => {
-      const cell = findNodeByAttr(cont, 'data-testid', testId)!.parentElement!.parentElement!;
-      return reactProps(cell)!.style as Record<string, unknown>;
-    };
-    const b = brief({ now: { stage: 'prod', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 14, 5) }, next: [] });
-    const { c } = render({ brief: b, nameOf });
-    expect(cellStyle(c, 'brief-done-line').gridColumn, '«Сделано» занимает колонки 1–2').toBe('1 / 3');
-    expect(cellStyle(c, 'brief-estimate-main').gridColumn, '«Оценка» в правой колонке').toBe(3);
-    // С заполненным «Дальше» — обычный порядок потока, расстановки нет.
-    const cf = render({ brief: full, nameOf }).c;
-    expect(cellStyle(cf, 'brief-done-line').gridColumn, 'с «Дальше» расстановки нет').toBeUndefined();
-    expect(cellStyle(cf, 'brief-estimate-main').gridColumn, 'с «Дальше» расстановки нет').toBeUndefined();
-  });
-
-  it('на мобили расстановки колонок нет даже без «Дальше»: грид в одну колонку, у ячеек нет gridColumn (F12: гард !isMobile)', () => {
-    const b = brief({ now: { stage: 'prod', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 14, 5) }, next: [] });
-    const { c } = render({ brief: b, nameOf, isMobile: true });
-    const grid = findNodeByAttr(c, 'data-testid', 'brief-facts')!;
-    expect((reactProps(grid)!.style as Record<string, unknown>).gridTemplateColumns, 'мобильный грид — одна колонка').toBe('1fr');
-    // Тот же случай, что красит десктопный тест выше (next пуст → noNext был бы true без гарда):
-    // на мобили ячейки не получают gridColumn — гард !isMobile закреплён.
-    for (const id of ['brief-done-line', 'brief-estimate-main']) {
-      const cell = findNodeByAttr(c, 'data-testid', id)!.parentElement!.parentElement!;
-      expect((reactProps(cell)!.style as Record<string, unknown>).gridColumn, `ячейка «${id}» без gridColumn`).toBeUndefined();
-    }
   });
 });
 
@@ -444,16 +478,15 @@ describe('Служебные состояния', () => {
     expect(findNodeByAttr(c, 'data-testid', 'feature-brief-block'), 'карточки под скелетоном нет').toBeNull();
   });
 
-  it('brief = null при живых статах — «Сводка не загрузилась» + «Повторить», полоска остаётся', () => {
+  it('brief = null при живых статах — «Сводка не загрузилась» + «Повторить» и строка итогов, полоски и оси нет', () => {
     const { c, calls } = render({ brief: null, stats: stats() });
     const sec = findNodeByAttr(c, 'data-testid', 'feature-brief-block');
     expect(sec, 'карточка есть').not.toBeNull();
     const all = textNodes(sec!).join(' ');
     expect(all).toContain('Сводка не загрузилась');
-    expect(findNodeByAttr(c, 'data-testid', 'mini-timeline'), 'полоска остаётся').not.toBeNull();
-    // Ось карточки закреплена (R-F8): раньше её отсутствие в блоке проходило зелёным.
-    expect(findNodeByAttr(c, 'data-testid', 'mini-timeline-axis'), 'ось «создана…/сейчас…» на месте').not.toBeNull();
-    expect(findNodeByAttr(c, 'data-testid', 'brief-life'), 'хвост «Жизнь фичи» остаётся').not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'mini-timeline'), 'полоски жизни в сводке нет').toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'brief-totals'), 'строка итогов остаётся').not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'brief-ready'), 'полоски готовности без brief нет').toBeNull();
     click(c, 'brief-retry');
     expect(calls, '«Повторить» зовёт перезапрос').toContain('retry');
   });
@@ -471,37 +504,15 @@ describe('Служебные состояния', () => {
   });
 });
 
-// ── 4a. Closedность ленты и оси — из модели состояния, не из сырого поля (R-F8);
-//      'merged' — та же карточка, что 'closed' (Ф-1.1) ────────────────────────────────
+// ── 4a. 'merged' — та же карточка, что 'closed' (Ф-1.1) ──────────────────────────────
 
-describe('Closedность ленты и оси (R-F8)', () => {
-  it('brief.kind = closed — ось «закрыта», даже при живом current ленты (проба: подменить closed — видимое меняется)', () => {
-    const s = stats({ timeline: { ...stats().timeline, current: { kind: 'waiting', since: at(25, 14, 0), taskId: 't-prod' } } });
-    const { c } = render({ brief: brief({ kind: 'closed' }), stats: s, mergedAt: at(24, 18, 5) });
-    const axis = textNodes(findNodeByAttr(c, 'data-testid', 'mini-timeline-axis')!).join(' ');
-    expect(axis, 'ось закрывается по модели состояния').toContain('закрыта');
-    expect(axis, 'у закрытой нет «сейчас»').not.toContain('сейчас');
-  });
-
-  it('brief.kind = running — ось «сейчас», даже при пустом current ленты (closedность — не эвристика по current)', () => {
-    const s = stats({ timeline: { ...stats().timeline, current: null } });
-    const { c } = render({
-      brief: brief({ kind: 'running', now: { stage: 'prod', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 14, 5) } }),
-      stats: s,
-    });
-    const axis = textNodes(findNodeByAttr(c, 'data-testid', 'mini-timeline-axis')!).join(' ');
-    expect(axis, 'ось открыта по модели состояния').toContain('сейчас');
-    expect(axis, 'у идущей нет «закрыта»').not.toContain('закрыта');
-  });
-
-  it('brief.kind = merged с mergedAt — карточка равна closed с тем же mergedAt: тег, строка «Сейчас», сводка, ось «закрыта» (Ф-1.1)', () => {
-    const s = stats({ timeline: { ...stats().timeline, current: { kind: 'waiting', since: at(25, 14, 0), taskId: 't-prod' } } });
+describe('Closedность карточки (R-F8)', () => {
+  it('brief.kind = merged с mergedAt — карточка равна closed с тем же mergedAt: тег, строка «Сейчас», сводка, готовность, срок (Ф-1.1)', () => {
     const mergedAt = at(24, 18, 5);
-    const closed = render({ brief: brief({ kind: 'closed', elapsedMinutes: 400 }), stats: s, mergedAt });
-    const merged = render({ brief: brief({ kind: 'merged', elapsedMinutes: 400 }), stats: s, mergedAt });
-    // Равенство по всем видимым частям карточки: тег, глиф, «Сейчас» с подстрокой,
-    // сводка («Итог»/«шла …») и ось.
-    for (const id of ['brief-tag', 'brief-glyph', 'brief-now-line', 'brief-now-sub', 'brief-facts', 'mini-timeline-axis']) {
+    const est = note({ done: 9, total: 9, percent: 100, remaining: [] });
+    const closed = render({ brief: brief({ kind: 'closed', elapsedMinutes: 400, note: est }), stats: stats(), mergedAt, nameOf });
+    const merged = render({ brief: brief({ kind: 'merged', elapsedMinutes: 400, note: est }), stats: stats(), mergedAt, nameOf });
+    for (const id of ['brief-tag', 'brief-glyph', 'brief-now-line', 'brief-now-sub', 'brief-facts', 'brief-totals']) {
       const a = findNodeByAttr(closed.c, 'data-testid', id);
       const b = findNodeByAttr(merged.c, 'data-testid', id);
       expect(a, `элемент ${id} у closed`).not.toBeNull();
@@ -560,56 +571,6 @@ describe('Кнопки «Мерж…» и «Открыть финальное р
       nameOf, isMobile: true,
     });
     expect(findNodeByAttr(c, 'data-testid', 'brief-merge')).toBeNull();
-  });
-});
-
-// ── 6. Легенда: MAIN-сегменты общей модели, «⫽» — только при разрыве ─────────────────
-
-describe('Легенда полоски', () => {
-  it('виды — из MAIN-сегментов: ревью-дорожка в легенду не попадает', () => {
-    const s = stats({
-      timeline: {
-        ...stats().timeline,
-        segments: [
-          { from: '2026-10-25T10:00:00Z', to: '2026-10-25T10:30:00Z', kind: 'work', track: 'main', stage: 'prod', taskId: 't-prod' },
-          { from: '2026-10-25T10:30:00Z', to: '2026-10-25T10:40:00Z', kind: 'idle', track: 'review', stage: 'review', taskId: 't-rev' },
-        ],
-      },
-    });
-    const { c } = render({ brief: null, stats: s });
-    expect(findNodeByAttr(c, 'data-testid', 'brief-legend-work'), 'main-вид').not.toBeNull();
-    expect(findNodeByAttr(c, 'data-testid', 'brief-legend-idle'), 'вида с ревью-дорожки нет').toBeNull();
-  });
-
-  it('пауза длиннее порога — «⫽» есть; короче порога — нет', () => {
-    const base = stats();
-    const withBreak = stats({
-      timeline: {
-        ...base.timeline,
-        segments: [
-          { from: '2026-10-25T10:00:00Z', to: '2026-10-25T10:30:00Z', kind: 'work', track: 'main', stage: 'prod', taskId: 't-prod' },
-          { from: '2026-10-25T13:00:00Z', to: '2026-10-25T13:30:00Z', kind: 'work', track: 'main', stage: 'prod', taskId: 't-prod' },
-        ],
-      },
-    });
-    const cBreak = render({ brief: null, stats: withBreak }).c;
-    expect(findNodeByAttr(cBreak, 'data-testid', 'brief-legend-break'), 'разрыв > 2 ч').not.toBeNull();
-
-    const noBreak = stats({
-      timeline: {
-        ...base.timeline,
-        // Конец таймлайна близко к последнему сегменту: иначе хвост 11:30→14:10 сам
-        // дал бы законный разрыв > 2 ч после последнего блока.
-        to: '2026-10-25T11:40:00Z',
-        current: { kind: 'waiting', since: '2026-10-25T11:35:00Z', taskId: 't-prod' },
-        segments: [
-          { from: '2026-10-25T10:00:00Z', to: '2026-10-25T10:30:00Z', kind: 'work', track: 'main', stage: 'prod', taskId: 't-prod' },
-          { from: '2026-10-25T11:00:00Z', to: '2026-10-25T11:30:00Z', kind: 'work', track: 'main', stage: 'prod', taskId: 't-prod' },
-        ],
-      },
-    });
-    const cNo = render({ brief: null, stats: noBreak }).c;
-    expect(findNodeByAttr(cNo, 'data-testid', 'brief-legend-break'), 'разрыва ≤ 2 ч нет').toBeNull();
   });
 });
 

@@ -15,6 +15,12 @@ public interface IDeviceClient
     /// /api/devices/exec с этим execId.
     /// </summary>
     Task ExecOpen(DeviceExecOpenCommand command);
+
+    /// <summary>
+    /// Повторить Hello: требуемая версия CLI на сервере сменилась. Версию push не несёт —
+    /// единственная точка правды остаётся ack на Hello.
+    /// </summary>
+    Task RequestHello();
 }
 
 /// <summary>

@@ -40,7 +40,7 @@ public class ClaudeSessionEofDeathTests : IDisposable
 
     public void Dispose()
     {
-        foreach (var p in _processes) try { p.Dispose(); } catch (NullReferenceException) { } // Process.Close гонится с уборкой сессии
+        foreach (var p in _processes) ProcessTestCleanup.SafeDispose(p); // Process.Close гонится с уборкой сессии
     }
 
     // Реальный процесс, который уже завершился: HasExited=true безопасен, ExitCode валиден

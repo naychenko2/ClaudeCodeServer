@@ -41,7 +41,7 @@ public class ClaudeSessionPendingControlDeathTests : IDisposable
 
     public void Dispose()
     {
-        foreach (var p in _fakeProcesses) try { p.Dispose(); } catch (NullReferenceException) { } // Process.Close гонится с уборкой сессии
+        foreach (var p in _fakeProcesses) ProcessTestCleanup.SafeDispose(p); // Process.Close гонится с уборкой сессии
     }
 
     // CliRun — приватный вложенный класс: Process required, но ResolvePendingControlAtDeath его

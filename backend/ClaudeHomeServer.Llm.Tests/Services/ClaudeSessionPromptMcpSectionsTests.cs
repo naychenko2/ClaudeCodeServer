@@ -45,7 +45,7 @@ public class ClaudeSessionPromptMcpSectionsTests : IDisposable
         foreach (var p in _clis.Values)
         {
             try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { /* уже мёртв */ }
-            try { p.Dispose(); } catch (NullReferenceException) { } // Process.Close гонится с уборкой сессии
+            ProcessTestCleanup.SafeDispose(p); // Process.Close гонится с уборкой сессии
         }
         foreach (var cfg in _tempConfigs)
             try { File.Delete(cfg); } catch { /* уборка best-effort */ }

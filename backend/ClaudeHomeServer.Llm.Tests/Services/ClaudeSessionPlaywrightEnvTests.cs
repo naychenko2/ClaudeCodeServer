@@ -21,7 +21,7 @@ public class ClaudeSessionPlaywrightEnvTests : IDisposable
         foreach (var p in _processes)
         {
             try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { /* уже мёртв */ }
-            try { p.Dispose(); } catch (NullReferenceException) { } // Process.Close гонится с уборкой сессии
+            ProcessTestCleanup.SafeDispose(p); // Process.Close гонится с уборкой сессии
         }
         foreach (var dir in _tempDirs)
         {

@@ -54,7 +54,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Параллель коллекций включена (maxParallelThreads=6, как в монолите). Inotify-классы
+    <!-- Параллель коллекций включена (maxParallelThreads=4, см. xunit.runner.json). Inotify-классы
          сериализованы коллекцией TestCollections.Inotify и помечены Category=Slow: лимит
          inotify общий на пользователя ОС, TurnFileWatcherSubscriptionTests открывает
          наблюдатель на всём дереве репозитория (инцидент 86c2e71e9). -->

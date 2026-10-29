@@ -39,7 +39,7 @@ public class ClaudeSessionPersonaLayerSnapshotTests : IDisposable
         foreach (var p in _clis.Values)
         {
             try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { /* уже мёртв */ }
-            try { p.Dispose(); } catch (NullReferenceException) { } // Process.Close гонится с уборкой сессии
+            ProcessTestCleanup.SafeDispose(p); // Process.Close гонится с уборкой сессии
         }
         try { Directory.Delete(_root, recursive: true); } catch { /* best-effort */ }
     }

@@ -3,15 +3,17 @@
 // Окружение node (без DOM): чистые функции, стабильный nowMs.
 //
 // Что защищается в первую очередь (постановка F2): состояния идёт/ждёт вас/стоит,
-// «нет мержей / есть мержи» (сегмент «в master»), «фича без трекера» (полосы и
-// процента нет), отсутствие оценки (срока нет), ортогональность inMaster (в процент
-// не входит, сегмент не выходит за принятую часть).
+// «нет мержей / есть мержи» (подсветка «в master»), «фича без трекера» (полосы и
+// процента нет), отсутствие оценки (срока нет), ортогональность inMaster (в процент не
+// входит, «принято» не уменьшается, сумма сегментов == total, для рисования — не больше
+// принятой части).
 
 import { describe, expect, it } from 'vitest';
 import {
   alarmView, chatRoleFromRun, featureEstimateView, featureNowRows, featureStepChainRows,
   featureTrackerIssues, featureTruthBar, findChatChain, stepStatusParts, stepStatusText, trackerPercent,
 } from './featureTruthModel';
+import { trackerBarAria } from './FeatureTrackerBar';
 import { trackerPercent as tp } from '../../../lib/featureProgress';
 import { formatClock } from '../../feature/FeatureStatsBits';
 import type { FeatureRun, FeatureStepChain } from '../../../types/featureRun';
@@ -45,26 +47,42 @@ function run(over: Partial<FeatureRun> = {}): FeatureRun {
 const nameOf = (id: string) => ({ 'p-kira': 'Кира', 'p-gleb': 'Глеб' }[id] ?? null);
 
 describe('featureTruthBar: полосы и процент', () => {
-  it('есть мержи: «в master» первой корзиной (тёмно-зелёной), принятая часть — остатком', () => {
+  it('корзины — бэковые числа без пересчёта: сумма сегментов == total; «в master» — не корзина', () => {
     const bar = featureTruthBar(sp(), 3)!;
     expect(bar.percent).toBe(56); // 5 из 9 — 55.6 → 56
-    expect(bar.segments.map(s => s.key)).toEqual(['master', 'accepted', 'review', 'work', 'notCreated']);
-    expect(bar.segments.map(s => s.count)).toEqual([3, 2, 1, 2, 1]);
+    expect(bar.segments.map(s => s.key)).toEqual(['accepted', 'review', 'work', 'notCreated']);
+    const counts = bar.segments.map(s => s.count);
+    expect(counts).toEqual([5, 1, 2, 1]); // accepted не уменьшается из-за inMaster
+    expect(counts.reduce((a, c) => a + c, 0)).toBe(9); // сумма == total
+    // «в master» — подсветка принятой части: реальное число и длина для рисования.
+    expect(bar.inMaster).toBe(3);
+    expect(bar.masterDraw).toBe(3);
   });
 
-  it('нет мержей: корзины без «master», accepted полной', () => {
+  it('нет мержей: inMaster 0, подсветки нет, accepted полной', () => {
     const bar = featureTruthBar(sp(), undefined)!;
     expect(bar.segments.map(s => s.key)).toEqual(['accepted', 'review', 'work', 'notCreated']);
     expect(bar.segments[0].count).toBe(5);
+    expect(bar.inMaster).toBe(0);
+    expect(bar.masterDraw).toBe(0);
     expect(bar.percent).toBe(56);
   });
 
-  it('inMaster > accepted (сданный без ревью шаг): сегмент не выходит за принятую часть, процент не меняется', () => {
-    // Мутация «убери clamp в featureTruthBar» краснеет: master-сегмент стал бы 4 при accepted 2.
+  it('inMaster > accepted (шаг сдан в master без витка принятия): числа бэковые, «принято» не вычитается', () => {
+    // Мутация «убери min(inMaster, accepted) в masterDraw» краснеет: подсветка вышла бы
+    // за принятую часть (4 при accepted 2). Мутация «accepted - master» (старый вычет) —
+    // краснеет по сумме сегментов и по «принято».
     const bar = featureTruthBar(sp({ accepted: 2, review: 4, work: 2, notCreated: 1, total: 9 }), 4)!;
-    expect(bar.segments.map(s => s.key)).toEqual(['master', 'review', 'work', 'notCreated']);
-    expect(bar.segments.map(s => s.count)).toEqual([2, 4, 2, 1]); // принятых «сверху» нет — остатка нет
+    const counts = bar.segments.map(s => s.count);
+    expect(bar.segments.map(s => s.key)).toEqual(['accepted', 'review', 'work', 'notCreated']);
+    expect(counts).toEqual([2, 4, 2, 1]); // «принято» = 2, не 0
+    expect(counts.reduce((a, c) => a + c, 0)).toBe(9); // сумма сегментов == total
+    expect(bar.inMaster).toBe(4); // реальное число бэка
+    expect(bar.masterDraw).toBe(2); // для рисования — не больше принятой части
     expect(bar.percent).toBe(22); // 2 из 9: inMaster в числитель и знаменатель не входит
+    // Текст называет факт как есть: 4 в master, 2 принято.
+    expect(trackerBarAria(bar)).toContain('4 в master');
+    expect(trackerBarAria(bar)).toContain('2 принято');
   });
 
   it('фича без трекера: stepProgress null → бара нет (ни процента, ни полос)', () => {

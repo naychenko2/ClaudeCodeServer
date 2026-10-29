@@ -125,6 +125,14 @@ export function FeatureTruthBody({ run, sessionId, isMobile, roleText, isKey = f
       </div>
       <FeatureTrackerBar bar={bar} ariaLabel={trackerBarAria(bar)} style={{ margin: '4px 0 2px' }} testId="feature-truth-bar" />
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 10px', fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4 }}>
+        {/* «в master» — ортогональный счётчик бэка: реальное число (может быть больше
+            «принято»), вне суммы корзин — на полосе это подсветка принятой части. */}
+        {bar.inMaster > 0 && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, whiteSpace: 'nowrap' }}>
+            <i style={{ width: 7, height: 7, borderRadius: 2, display: 'inline-block', background: C.successText }} />
+            в master {bar.inMaster}
+          </span>
+        )}
         {bar.segments.map(s => (
           <span key={s.key} style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, whiteSpace: 'nowrap' }}>
             <i style={{ width: 7, height: 7, borderRadius: 2, display: 'inline-block', background: s.color }} />

@@ -30,30 +30,40 @@ import type { FeatureRun, FeatureRoundVerdict, FeatureStepChain } from '../../..
 export type NameOf = (personaId: string) => string | null;
 
 // ── Полоса трекера (В2 / С1 / П2 / «По трекеру») ──────────────────────────────────────
-// Пять корзин в порядке: «в master» первой (тёмно-зелёная часть принятой части),
-// принято, в ревью, в работе, не заведено. Нулевых корзин на полосе нет — пустые
-// части скрываются (макет v3 §Состояния).
-export type TruthSegmentKey = 'master' | 'accepted' | 'review' | 'work' | 'notCreated';
+// Четыре корзины в порядке: принято, в ревью, в работе, не заведено. Нулевых корзин на
+// полосе нет — пустые части скрываются (макет v3 §Состояния). Числа сегментов — бэковые
+// stepProgress БЕЗ пересчёта; сумма сегментов == total (корзины взаимоисключающие,
+// lib/featureProgress.ts:34-35).
+// «в master» — ортогональный бэковый счётчик (FeatureStepAccounting.cs:354,381-395): он
+// НЕ вычитается из «принято» и может быть больше accepted (шаг сдан в master без витка
+// принятия). На полосе он — подсветка начала принятой части (тот же приём, что полоска
+// «Готовности» страницы фичи: FeatureBriefModel.ts:483-491, FeatureBriefBlock.tsx:225):
+// длина для рисования masterDraw = min(inMaster, accepted), а РЕАЛЬНОЕ число — в подписи
+// и aria (inMaster). Так же живёт страница фичи — здесь то же правило, второй копии нет.
+export type TruthSegmentKey = 'accepted' | 'review' | 'work' | 'notCreated';
 export interface TruthSegment { key: TruthSegmentKey; count: number; color: string; label: string }
-export interface TruthBar { percent: number; segments: TruthSegment[] }
+export interface TruthBar {
+  percent: number;
+  segments: TruthSegment[];
+  // Реальный ортогональный счётчик бэка — для подписей и aria (0 — поля нет).
+  inMaster: number;
+  // Только длина подсветка начала принятой части: min(inMaster, accepted).
+  masterDraw: number;
+}
 
 export function featureTruthBar(sp: StepProgress | null, inMaster: number | null | undefined): TruthBar | null {
   if (!sp) return null;
   const percent = trackerPercent(sp.accepted, sp.total);
-  // «в master» — ортогональный счётчик бэка, но на полосе он часть принятой части шкалы
-  // готовности: сегмент не выходит за залитое (то же правило, что полоска «Готовности»,
-  // FeatureBriefModel). Текст при этом называет факт как есть (ниже, в подписях).
-  const master = Math.max(0, Math.min(inMaster ?? 0, sp.accepted));
+  const inMasterReal = Math.max(0, inMaster ?? 0);
   const segments: TruthSegment[] = [];
   const push = (key: TruthSegmentKey, count: number, color: string, label: string) => {
     if (count > 0) segments.push({ key, count, color, label });
   };
-  push('master', master, C.successText, 'в master');
-  push('accepted', sp.accepted - master, C.success, 'принято');
+  push('accepted', sp.accepted, C.success, 'принято');
   push('review', sp.review, C.info, 'в ревью');
   push('work', sp.work, C.accent, 'в работе');
   push('notCreated', sp.notCreated, C.progressTrack, 'не заведено');
-  return { percent, segments };
+  return { percent, segments, inMaster: inMasterReal, masterDraw: Math.min(inMasterReal, sp.accepted) };
 }
 
 // Строка числа для правого края: «56 % · ≈ 18:30» (без срока — только «56 %»).

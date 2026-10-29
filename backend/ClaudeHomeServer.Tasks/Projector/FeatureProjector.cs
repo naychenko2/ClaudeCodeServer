@@ -100,7 +100,10 @@ public sealed class FeatureProjector(TaskManager tasks)
         var tailIds = postMergeTails.ToHashSet();
 
         // Вердикты — только по задачам, которые их несут (ревью/проверка/финал).
-        var verdictBearing = reviews.Concat(qa).Concat(final is not null ? [final] : []).ToList();
+        // Финалов может быть несколько (круги): счётчики считают ВСЕ, как и цепочки шагов, —
+        // одна правда о возвратах; «последний финал» нужен только состоянию и текущей стадии.
+        var allFinals = children.Where(t => t.Role == TaskRoles.Final).ToList();
+        var verdictBearing = reviews.Concat(qa).Concat(allFinals).ToList();
         var verdicts = new FeatureVerdicts
         {
             Accepted = verdictBearing.Count(t => t.Verification?.Verdict == TaskVerdicts.Accepted),
@@ -132,7 +135,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         var tracker = FeatureTracker.Build(epic, children, accounting, nowUtc, sessions);
 
         // Возвраты по источникам (ревью/проверка/финал): число возвратов и сколько открыто.
-        var returnsBySource = BuildReturnsBySource(reviews, qa, final, steps);
+        var returnsBySource = BuildReturnsBySource(reviews, qa, allFinals, steps);
 
         // Линии (back/front/прочее): исполнители и счётчики.
         var lanes = accounting.Lanes;
@@ -388,8 +391,7 @@ public sealed class FeatureProjector(TaskManager tasks)
                 case "prod":
                     int returns = reviews.Count(t => t.Verification?.Verdict is TaskVerdicts.Returned or TaskVerdicts.AcceptedWithRemarks)
                         + qa.Count(t => t.Verification?.Verdict is TaskVerdicts.Returned or TaskVerdicts.AcceptedWithRemarks);
-                    if (final is not null && final.Verification?.Verdict is TaskVerdicts.Returned or TaskVerdicts.AcceptedWithRemarks)
-                        returns++;
+                    returns += allFinals.Count(t => t.Verification?.Verdict is TaskVerdicts.Returned or TaskVerdicts.AcceptedWithRemarks);
                     passes = 1 + returns;
                     break;
                 case "review":
@@ -969,7 +971,7 @@ public sealed class FeatureProjector(TaskManager tasks)
     // (уникальные задачи с returned/accepted_with_remarks) и сколько из них открыто (их доработка
     // ещё не done). «Доработка» — rework-задача, чей ReviewOf ссылается на задачу-источник.
     private static FeatureReturnsBySource BuildReturnsBySource(
-        List<TaskItem> reviews, List<TaskItem> qa, TaskItem? final, List<TaskItem> steps)
+        List<TaskItem> reviews, List<TaskItem> qa, List<TaskItem> finals, List<TaskItem> steps)
     {
         var reworks = steps.Where(t => t.Role == TaskRoles.Rework).ToList();
         FeatureSourceReturns Count(List<TaskItem> tasks)
@@ -985,12 +987,11 @@ public sealed class FeatureProjector(TaskManager tasks)
             }
             return new FeatureSourceReturns { Count = count, Open = open };
         }
-        List<TaskItem> finalList = final is not null ? [final] : [];
         return new FeatureReturnsBySource
         {
             Review = Count(reviews),
             Qa = Count(qa),
-            Final = Count(finalList),
+            Final = Count(finals),
         };
     }
 

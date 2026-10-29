@@ -17,10 +17,10 @@ import { __test as backNav } from '../../lib/featureBackNav';
 import { __test as pageStore, setFeaturePageTab, type FeaturePageTab } from '../../lib/featurePage';
 
 // Ожидаемые подписи — литералы (не из словаря кода), иначе подмена словаря не краснела бы.
-// minor 1: ЕДИНЫЙ словарь FEATURE_TAB_LABEL — чип и полоса не разъезжаются, «Планы и макеты»
-// (короткого «Планы» в чипе больше нет).
+// minor 1: ЕДИНЫЙ словарь FEATURE_TAB_LABEL — чип и полоса не разъезжаются (короткого
+// «Планы» в чипе больше нет). Ш1b: имена разреза — «Материалы»/«История».
 const CHIP_TEXT: Record<FeaturePageTab, string> = {
-  timeline: 'Хронология', plans: 'Планы и макеты', chats: 'Чаты', tasks: 'Задачи', events: 'События', stats: 'Статистика',
+  timeline: 'Хронология', plans: 'Материалы', chats: 'Чаты', tasks: 'Задачи', events: 'История', stats: 'Статистика',
 };
 const TABS = Object.keys(CHIP_TEXT) as FeaturePageTab[];
 
@@ -57,12 +57,12 @@ describe('FeatureBackChip: название вкладки', () => {
     });
   }
 
-  it('aria-label несёт название фичи и вкладки (полное имя «Планы и макеты»)', () => {
+  it('aria-label несёт название фичи и вкладки (полное имя «Материалы»)', () => {
     setFeaturePageTab('plans');
     backNav.recordFeatureReturn('f1', { kind: 'chat', id: 'c1' }, 'Моя фича');
     const c = render('c1');
     const btn = findNodeByAttr(c, 'role', 'button')!;
-    expect(btn.getAttribute('aria-label')).toBe('К фиче «Моя фича», вкладка «Планы и макеты»');
+    expect(btn.getAttribute('aria-label')).toBe('К фиче «Моя фича», вкладка «Материалы»');
   });
 
   it('вкладка запоминается В МОМЕНТ перехода: потом сменили — чип показывает прежнюю', () => {

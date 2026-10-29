@@ -439,7 +439,7 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
       });
     };
 
-    it('вкладка «События»: страница передаёт marks — чат c-arch «в архиве», задача t-done «закрыта»', async () => {
+    it('вкладка «История»: страница передаёт marks — чат c-arch «в архиве», задача t-done «закрыта»', async () => {
       withData();
       const c = render({});
       await settle();
@@ -469,7 +469,7 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
 
     // Вкладка запоминается при реальном клике из вкладки: чип в чате покажет её название.
     for (const [tab, rowPrefix, label, btnId] of [
-      ['events', 'event-row-', 'События', 'nav-target-chat'],
+      ['events', 'event-row-', 'История', 'nav-target-chat'],
       ['tasks', 'task-row-t-done', 'Задачи', 'nav-target-chat'],
       ['stats', 'loss-longest-nav', 'Статистика', 'nav-target-chat'],
       // «Статистика»: кнопки задач под лентой времени (TaskButtons) — отдельный путь записи.
@@ -497,8 +497,8 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     }
   });
 
-  // === 2в. Переключение вкладок Чаты/Задачи/События → свои компоненты (мутация: ComingSoon → red) ===
-  it('переключение вкладок Чаты/Задачи/События показывает свои компоненты (мутация → ComingSoon → red)', async () => {
+  // === 2в. Переключение вкладок Чаты/Задачи/История → свои компоненты (мутация: ComingSoon → red) ===
+  it('переключение вкладок Чаты/Задачи/История показывает свои компоненты (мутация → ComingSoon → red)', async () => {
     mockGetFeature.result = pageData({
       run: {
         featureId: 'f1',
@@ -529,18 +529,23 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     expect(findNodeByAttr(c, 'data-testid', 'tasks'), 'вкладка «Задачи» → FeatureTasksTab').not.toBeNull();
     expect(findNodeByAttr(c, 'data-testid', 'feature-page-tab-stub'), '«Задачи»: не ComingSoon').toBeNull();
 
-    // «События» → FeatureEventsTab (data-testid="events").
+    // «История» → FeatureEventsTab (data-testid="events").
     act(() => { setFeaturePageTab('events'); });
-    expect(findNodeByAttr(c, 'data-testid', 'events'), 'вкладка «События» → FeatureEventsTab').not.toBeNull();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-tab-stub'), '«События»: не ComingSoon').toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'events'), 'вкладка «История» → FeatureEventsTab').not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-tab-stub'), '«История»: не ComingSoon').toBeNull();
   });
 
-  // === 2г. Счётчики вкладок = честные числа (мутация: обнулить → red) ===
-  // «События» (major 2): счётчик = ИСТОЧНИК «что реально доступно» = events.length
-  // (загружено), НЕ eventsTotal (общее до обрезки бэком). В фикстуре значения
-  // РАЗВЕДЕНЫ (eventsTotal=1000 ≠ events.length=3): мутация events.length→eventsTotal
-  // (и обратная) красит — счётчик стал бы 1000, а не 3.
-  it('счётчики вкладок Чаты/Задачи/События = честные числа (мутация: обнулить → red)', async () => {
+  // === 2г. Счётчики вкладок = честные числа (мутация: обнулить / вернуть загруженное → red) ===
+  // «История» (Ш1b, разворот решения): счётчик = ОБЩЕЕ число (eventsTotal), лента грузится
+  // частями (по eventsLimit, «Показать все» догружает всё). Раньше (major 2) счётчик брал
+  // events.length (загружено). В фикстуре значения РАЗВЕДЕНЫ (events.length=100 ≠
+  // eventsTotal=361): мутация eventsTotal→events.length красит — счётчик стал бы 100, а не 361.
+  it('счётчики вкладок Чаты/Задачи/История = честные числа (мутация: обнулить → red)', async () => {
+    // Лента обрезана бэком: загружено 100 (eventsLimit), всего 361.
+    const events100: import('../../types/featureIndex').FeatureEvent[] = [];
+    for (let i = 0; i < 100; i++) {
+      events100.push({ at: `2026-10-19T10:00:${String(i % 60).padStart(2, '0')}Z`, kind: 'started', taskId: 's1', role: null, stepRef: null, personaId: null, sessionId: null, round: null, reason: null });
+    }
     mockGetFeature.result = pageData({
       run: {
         featureId: 'f1',
@@ -554,14 +559,10 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
         { id: 'c1', kind: 'curator', taskId: null, archived: false, personaId: 'p-kira', taskRole: null, stepRef: null, lane: null, modelLabel: null, modelFull: null },
         { id: 'c2', kind: 'executor', taskId: null, archived: false, personaId: 'p-denis', taskRole: null, stepRef: null, lane: null, modelLabel: null, modelFull: null },
       ],
-      events: [
-        { at: '2026-10-19T10:00:00Z', kind: 'started', taskId: 's1', role: null, stepRef: null, personaId: null, sessionId: null, round: null, reason: null },
-        { at: '2026-10-19T11:00:00Z', kind: 'started', taskId: 's1', role: null, stepRef: null, personaId: null, sessionId: null, round: null, reason: null },
-        { at: '2026-10-19T12:00:00Z', kind: 'started', taskId: 's1', role: null, stepRef: null, personaId: null, sessionId: null, round: null, reason: null },
-      ],
-      // eventsTotal ≠ events.length: счётчик «События» обязан брать events.length (3),
-      // не eventsTotal (1000) — иначе мутация источника была бы незаметна.
-      eventsTotal: 1000,
+      events: events100,
+      // eventsTotal ≠ events.length: счётчик «История» обязан брать общее (361),
+      // не загруженное (100) — иначе мутация источника была бы незаметна.
+      eventsTotal: 361,
     });
     const c = render({});
     await settle();
@@ -574,13 +575,13 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     const tasksTab = findTab(c, 'Задачи');
     expect(tasksTab, 'вкладка «Задачи»').not.toBeNull();
     expect(textNodes(tasksTab!).join(''), 'счётчик «Задачи» = 2 (эпик + шаг)').toContain('2');
-    // «События» = 3 = events.length (загружено), НЕ eventsTotal=1000 (общее до обрезки).
-    // Мутация events.length→eventsTotal → счётчик 1000 → «3» не найдётся → red.
-    const eventsTab = findTab(c, 'События');
-    expect(eventsTab, 'вкладка «События»').not.toBeNull();
+    // «История» = 361 = eventsTotal (общее), НЕ events.length=100 (загруженная часть).
+    // Мутация eventsTotal→events.length → счётчик 100 → «361» не найдётся → red.
+    const eventsTab = findTab(c, 'История');
+    expect(eventsTab, 'вкладка «История»').not.toBeNull();
     const eventsText = textNodes(eventsTab!).join('');
-    expect(eventsText, 'счётчик «События» = events.length = 3').toContain('3');
-    expect(eventsText, 'счётчик «События» ≠ eventsTotal=1000').not.toContain('1000');
+    expect(eventsText, 'счётчик «История» = eventsTotal = 361').toContain('361');
+    expect(eventsText, 'счётчик «История» ≠ events.length=100').not.toContain('100');
   });
 
 
@@ -716,7 +717,7 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
 
   // === Ф2.5: «Показать все» — догрузка ВСЕЙ ленты (eventsLimit=all) ===
   // Связка «кнопка «Показать все» → стор → запрос»: БЕЗ мока expandFeaturePageEvents
-  // (реальный стор lib/featurePage). Клик по кнопке во вкладке «События» →
+  // (реальный стор lib/featurePage). Клик по кнопке во вкладке «История» →
   // expandFeaturePageEvents → fetchPage → getFeature(fid, 'all').
   // Мутация (в отчёте): getFeature(fid, undefined, signal) (догрузка eventsLimit=all
   // отключена) → последний вызов без eventsLimit='all' → red.
@@ -729,7 +730,7 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     mockGetFeature.result = pageData({ events, eventsTotal: 1000 });
     const c = render({});
     await settle();
-    // Вкладка «События» (кнопка «Показать все» — только там).
+    // Вкладка «История» (кнопка «Показать все» — только там).
     act(() => { setFeaturePageTab('events'); });
     // Кнопка «Показать все · 1000» есть (лента > 8).
     const showAll = findNodeByAttr(c, 'data-testid', 'events-show-all');

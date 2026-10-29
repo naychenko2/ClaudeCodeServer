@@ -57,7 +57,7 @@ export interface FeaturePageProps {
   isMobile?: boolean;
   // Исполнитель закрытия: закрывает страницу и ведёт в target.
   onBack: (target: FeaturePageBackTarget) => void;
-  // Открыть файл проекта (существующий просмотр; «Открыть макет» в «Планы и макеты»).
+  // Открыть файл проекта (существующий просмотр; «Открыть макет» в «Материалы»).
   onOpenFile?: (path: string) => void;
 }
 
@@ -125,7 +125,7 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
   const featuresOn = useFeature(FLAGS.featuresOverview);
   const index = useFeaturesIndex(projectId, featuresOn);
   const feature = index.features.find(f => f.featureId === featureId) ?? null;
-  // «Открыть ключевой чат» (общее пустое «Планы и макеты»): тот же переход, что в шапке.
+  // «Открыть ключевой чат» (общее пустое «Материалы»): тот же переход, что в шапке.
   const keyChat = feature?.keySessionId ?? null;
   const onOpenKeyChat = keyChat ? () => { void openChatById(keyChat); } : undefined;
   // Корень «просмотра» — для правила «скрытый центр не перехватывает Esc» (useEscapeClose):
@@ -340,10 +340,11 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
           // «Задачи N» — ОДИН источник со строками вкладки: число задач из run
           // (taskCounters), не taskCount из индекса (индекс может расходиться с run).
           tasksCount={taskCounters(okRun).total}
-          // «События N» — что реально загружено/доступно (events.length), не eventsTotal
-          // (общее до обрезки бэком): лента приходит по eventsLimit (100), eventsTotal —
-          // всего. «Показать все» догружает всю ленту, и счётчик становится честным.
-          eventsCount={page.page.events.length}
+          // «История N» — разворот решения (Ш1b): счётчик вкладки — общее число
+          // (eventsTotal), лента грузится частями (по eventsLimit, «Показать все» догружает
+          // всё). Раньше счётчик брал events.length (загружено) — теперь он говорит о всей
+          // истории фичи, а не о загруженной части ленты.
+          eventsCount={page.page.eventsTotal}
           waitingDot={okRun.attention?.kind === 'wait'}
         />
         <div data-testid="feature-page-body" style={{ marginTop: SP.md }}>

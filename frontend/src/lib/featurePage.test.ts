@@ -8,7 +8,7 @@
 //   3. Мутация: сломанный фильтр/дебаунс красит тест.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { __test } from './featurePage';
+import { __test, FEATURE_TAB_LABEL } from './featurePage';
 import { api } from './api';
 import { setAllFlags } from './featureFlags';
 import type { Task } from '../types';
@@ -320,3 +320,13 @@ describe('brief: ответ страницы с brief и без него', () =>
 
 // p.15/p.16 («Показать все») — замороженный блок: функция refetchFeaturePageAll убрана,
 // её тесты (персист режима + тост при сбое) — с ней.
+
+// ── 6. Названия вкладок (Ш1b) ──────────────────────────────────────────────────
+describe('названия вкладок (Ш1b, разрез упрощения страницы)', () => {
+  // Разворот словаря по разрезу: лента событий — «История» фичи, планы и макеты —
+  // «Материалы». Мутация: вернуть старое имя → red.
+  it('events → «История», plans → «Материалы»', () => {
+    expect(FEATURE_TAB_LABEL.events).toBe('История');
+    expect(FEATURE_TAB_LABEL.plans).toBe('Материалы');
+  });
+});

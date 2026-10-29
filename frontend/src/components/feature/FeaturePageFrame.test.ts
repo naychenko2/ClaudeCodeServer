@@ -326,13 +326,13 @@ describe('Вкладки (макет §4)', () => {
   it('счётчики: задачи — число, события 0 — без счётчика', async () => {
     // «Задачи» — ОДИН источник со строками вкладки: число задач из run (taskCounters),
     // не taskCount из индекса. Дефолтный run (pageData) = только эпик → счётчик 1.
-    // events = 0 → «События» без счётчика.
+    // events = 0 → «История» без счётчика.
     const c = render({});
     await settle();
     const tasks = tabByLabel(c, 'Задачи');
     expect(tasks).not.toBeNull();
     expect(textNodes(tasks!).join('')).toBe('Задачи1');
-    const events = tabByLabel(c, 'События');
+    const events = tabByLabel(c, 'История');
     expect(events).not.toBeNull();
     expect(textNodes(events!).join('')).not.toContain('0');
   });

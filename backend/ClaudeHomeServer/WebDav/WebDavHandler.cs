@@ -48,6 +48,10 @@ public static class WebDavHandler
     internal static void SendAuthChallenge(HttpContext ctx) =>
         ctx.Response.Headers["WWW-Authenticate"] = BuildAuthChallenge(OfferNegotiate(ctx));
 
+    // LOCK тоже пишет: на несуществующем файле он создаёт пустой
+    private static bool IsWriteMethod(string method) =>
+        method is "PUT" or "DELETE" or "MKCOL" or "COPY" or "MOVE" or "LOCK";
+
     public static async Task HandleAsync(HttpContext ctx)
     {
         var authHdr = ctx.Request.Headers.Authorization.ToString();
@@ -122,9 +126,11 @@ public static class WebDavHandler
             return;
         }
 
-        // Ищем проект по имени только среди проектов текущего пользователя,
-        // чтобы не попасть на чужой проект с тем же именем.
-        var project = projects.GetByOwner(davUserId)
+        // Ищем проект по имени среди доступных пользователю (свои и общие, где он участник),
+        // чтобы не попасть на чужой проект с тем же именем. Свой проект с тем же именем
+        // приоритетнее общего.
+        var project = projects.GetAccessible(davUserId)
+            .OrderBy(p => p.OwnerId == davUserId ? 0 : 1)
             // Локальный проект WebDav сервера не отдаёт: его файлы на устройстве (ADR-016 §4)
             .FirstOrDefault(p => string.Equals(p.Name, projectName, StringComparison.OrdinalIgnoreCase)
                 && Models.ProjectCapabilities.FilesOnServer(p));
@@ -141,6 +147,15 @@ public static class WebDavHandler
         var relPath = rawPath.Trim('/').Replace('\\', '/');
 
         var method = ctx.Request.Method.ToUpperInvariant();
+
+        // S1: участник общего проекта только читает — запись по WebDAV только у владельца
+        if (IsWriteMethod(method)
+            && Services.Access.ProjectAccess.Check(project, davUserId) != Services.Access.ProjectRole.Owner)
+        {
+            ctx.Response.StatusCode = 403;
+            ctx.Response.ContentLength = 0;
+            return;
+        }
 
         try
         {
@@ -324,7 +339,7 @@ public static class WebDavHandler
         var depth = ctx.Request.Headers["Depth"].ToString();
         if (depth == "1")
         {
-            foreach (var p in projects.GetByOwner(davUserId).Where(Models.ProjectCapabilities.FilesOnServer))
+            foreach (var p in projects.GetAccessible(davUserId).Where(Models.ProjectCapabilities.FilesOnServer))
             {
                 var pHref = $"{ctx.Request.Scheme}://{ctx.Request.Host}{pb}/projects/{Uri.EscapeDataString(p.Name)}/";
                 DateTime pModified = now, pCreated = now;

@@ -7,6 +7,11 @@ namespace ClaudeHomeServer.Tests;
 [CollectionDefinition(TestCollections.Inotify, DisableParallelization = true)]
 public class LlmInotifyCollection;
 
+// РАСХОЖДЕНИЕ с монолитом, зафиксированное намеренно (разрез 3908fd11): здесь ProcessGlobalState
+// с DisableParallelization (Llm-классы реально дерутся за stderr/env процесса рядом с живыми
+// процессами CLI), в монолите та же коллекция — без флага (её поведение перенесено 1:1 из
+// времени, когда флаг в TestKit не действовал). Решение выравнивать стороны — отдельное,
+// по факту флака; расхождение зафиксировано в обоих TestCollectionDefinitions.cs.
 [CollectionDefinition(TestCollections.ProcessGlobalState, DisableParallelization = true)]
 public class LlmProcessGlobalStateCollection;
 

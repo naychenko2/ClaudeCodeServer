@@ -1,11 +1,18 @@
-using Xunit;
-
 namespace ClaudeHomeServer.Tests;
 
 // Имена xunit-коллекций. Коллекция сериализует классы МЕЖДУ СОБОЙ, оставляя остальной
 // набор параллельным — точечная замена глобальному parallelizeTestCollections=false,
 // который уводил в один поток все сотни классов, включая WebApplicationFactory-буты,
 // git и MCP-интеграции (ревью 2026-09-06, M-3).
+//
+// Здесь только ИМЕНА: определения ([CollectionDefinition]) обязаны лежать в сборке самих
+// тестов — xunit находит их только в прогоняемой сборке, а TestKit не прогоняется никогда.
+// Определения отсюда удалены (разрез 3908fd11): они молчали и ничего не давали, а
+// [Collection(...)] без локального определения становился неявной коллекцией «по имени»
+// (классы сериализованы внутри, но параллельны остальному прогону). Локальность определений
+// проверяет CollectionDefinitionGuard — его вызывают тесты Tests и Llm.Tests; новый
+// тест-проект, использующий эти имена, обязан вызвать сторож сам: сторож проверяет только
+// те сборки, которые его зовут.
 public static class TestCollections
 {
     // Классы, которые правят ПРОЦЕСС-ГЛОБАЛЬНОЕ состояние и потому не могут идти
@@ -17,6 +24,10 @@ public static class TestCollections
     // классу состоять ровно в одной коллекции, а SubscriptionOAuthUsageServiceTests
     // трогает и env, и stderr — держать их раздельно значило бы потерять изоляцию
     // на этом классе.
+    //
+    // Семантика одного имени РАЗЛИЧАЕТСЯ по сборкам: в Llm.Tests определение стоит с
+    // DisableParallelization, в монолите — без него (перенесено 1:1 из времени, когда
+    // флаг здесь не действовал). Расхождение зафиксировано в обоих TestCollectionDefinitions.cs.
     public const string ProcessGlobalState = "process-global-state";
 
     // (Коллекция `SessionStaticResolvers` снята, эксперимент-4: она сериализовала классы,
@@ -31,12 +42,3 @@ public static class TestCollections
     // искажался чужими наблюдателями.
     public const string Inotify = "inotify";
 }
-
-// Объявление коллекции (без фикстуры — общего состояния тестам не нужно, нужна только
-// сериализация). Раньше жило в DockerProcessRunnerEnvTests.cs под именем SystemEnv;
-// переехало сюда вместе с расширением области на stderr-классы.
-[CollectionDefinition(TestCollections.ProcessGlobalState)]
-public class ProcessGlobalStateCollection;
-
-[CollectionDefinition(TestCollections.Inotify, DisableParallelization = true)]
-public class InotifyCollection;

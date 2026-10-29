@@ -4,6 +4,7 @@ using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Knowledge;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -14,6 +15,7 @@ using ClaudeHomeServer.Services.Files;
 namespace ClaudeHomeServer.Controllers;
 
 [ProjectCapability(ProjectCapabilityArea.ServerContent)]
+[ProjectScope]
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/knowledge")]
@@ -35,17 +37,14 @@ public class KnowledgeController(
     private Task Broadcast(string? datasetId) =>
         hub.Clients.Group("user_" + UserId).SendAsync("message", new KnowledgeChangedMessage("doc_changed", datasetId));
 
-    private Project? GetOwnedProject(string projectId)
-    {
-        var p = projects.GetById(projectId);
-        return p?.OwnerId == UserId ? p : null;
-    }
+    // Проект запроса; доступ проверил [ProjectScope] (чужой — 404)
+    private Project? GetScopedProject(string projectId) => projects.GetById(projectId);
 
     // GET /api/projects/{id}/knowledge — статус БЗ + список документов
     [HttpGet]
     public async Task<IActionResult> GetStatus(string projectId)
     {
-        var p = GetOwnedProject(projectId);
+        var p = GetScopedProject(projectId);
         if (p is null) return NotFound();
 
         var wk = workspaceStore.GetByPath(p.RootPath);
@@ -80,7 +79,7 @@ public class KnowledgeController(
     [HttpGet("search")]
     public async Task<IActionResult> Search(string projectId, [FromQuery] string q = "", [FromQuery] int topK = 8)
     {
-        var p = GetOwnedProject(projectId);
+        var p = GetScopedProject(projectId);
         if (p is null) return NotFound();
 
         if (string.IsNullOrWhiteSpace(q))
@@ -103,9 +102,10 @@ public class KnowledgeController(
 
     // POST /api/projects/{id}/knowledge/index — индексировать файл (lazy-создаёт датасет)
     [HttpPost("index")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public async Task<IActionResult> IndexFile(string projectId, [FromBody] IndexFileRequest req)
     {
-        var p = GetOwnedProject(projectId);
+        var p = GetScopedProject(projectId);
         if (p is null) return NotFound();
 
         if (!KnowledgeService.IsKnowledgeIndexable(req.RelativePath))
@@ -131,7 +131,7 @@ public class KnowledgeController(
     [HttpGet("tags")]
     public IActionResult GetTags(string projectId)
     {
-        var p = GetOwnedProject(projectId);
+        var p = GetScopedProject(projectId);
         if (p is null) return NotFound();
         var wk = workspaceStore.GetByPath(p.RootPath);
         return Ok(wk?.DocumentTags ?? new Dictionary<string, List<string>>());
@@ -139,9 +139,10 @@ public class KnowledgeController(
 
     // PUT /api/projects/{id}/knowledge/tags — задать теги для документа
     [HttpPut("tags")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public async Task<IActionResult> SetTags(string projectId, [FromBody] SetTagsRequest req)
     {
-        var p = GetOwnedProject(projectId);
+        var p = GetScopedProject(projectId);
         if (p is null) return NotFound();
 
         var tags = req.Tags ?? [];
@@ -175,9 +176,10 @@ public class KnowledgeController(
 
     // POST /api/projects/{id}/knowledge/index-folder — рекурсивно индексировать папку
     [HttpPost("index-folder")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public async Task<IActionResult> IndexFolder(string projectId, [FromBody] IndexFileRequest req)
     {
-        var p = GetOwnedProject(projectId);
+        var p = GetScopedProject(projectId);
         if (p is null) return NotFound();
 
         // Папка заметок индексируется отдельной базой знаний (NotesKnowledgeService,
@@ -231,9 +233,10 @@ public class KnowledgeController(
 
     // DELETE /api/projects/{id}/knowledge/documents/{documentId}
     [HttpDelete("documents/{documentId}")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public async Task<IActionResult> DeleteDocument(string projectId, string documentId)
     {
-        var p = GetOwnedProject(projectId);
+        var p = GetScopedProject(projectId);
         if (p is null) return NotFound();
 
         var wk = workspaceStore.GetByPath(p.RootPath);
@@ -252,9 +255,10 @@ public class KnowledgeController(
 
     // DELETE /api/projects/{id}/knowledge — удалить датасет
     [HttpDelete]
+    [ProjectScope(Right = ProjectRight.Write)]
     public async Task<IActionResult> DeleteDataset(string projectId)
     {
-        var p = GetOwnedProject(projectId);
+        var p = GetScopedProject(projectId);
         if (p is null) return NotFound();
 
         var wk = workspaceStore.GetByPath(p.RootPath);

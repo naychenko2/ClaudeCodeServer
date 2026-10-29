@@ -3,6 +3,7 @@ using System.Security.Claims;
 using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using ClaudeHomeServer.Services.Composition;
@@ -23,14 +24,10 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     // Кэш отпечатков префиксов истории (Перф-3 B8) — см. ChatsController._prefixFpCache
     private readonly PrefixFingerprintCache _prefixFpCache = prefixFpCache;
 
-    // Проект принадлежит текущему пользователю; чужой/несуществующий — как отсутствующий (404)
-    private bool OwnsProject(string projectId) =>
-        projects.GetById(projectId)?.OwnerId == UserId;
-
     [HttpGet]
+    [ProjectScope]
     public IActionResult GetAll(string projectId)
     {
-        if (!OwnsProject(projectId)) return NotFound();
         // Вычисляемые parentSessionId/taskDone дописывает конвертер Session на границе
         // сериализации (SessionJsonConverter) — здесь ничего подставлять не нужно.
         // Условный GET: фронт опрашивает список каждые несколько секунд, а меняется он редко;
@@ -39,9 +36,9 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     }
 
     [HttpPost]
+    [ProjectScope(Right = ProjectRight.Write)]
     public async Task<IActionResult> Create(string projectId, [FromBody] CreateSessionRequest req)
     {
-        if (!OwnsProject(projectId)) return NotFound();
         string? personaId = req.PersonaId;
         // Последний рубеж инварианта «новый чат человека — только с персоной» (парная связь
         // с фронтом): без personaId/resumeSessionId сначала провижним ассистента и продолжим
@@ -82,9 +79,9 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     }
 
     [HttpPut("{sessionId}")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public async Task<IActionResult> Update(string projectId, string sessionId, [FromBody] UpdateSessionRequest req)
     {
-        if (!OwnsProject(projectId)) return NotFound();
         var session = sessions.GetById(sessionId);
         if (session == null || session.ProjectId != projectId) return NotFound();
         if (req.NotificationsMuted is bool muted) sessions.SetNotificationsMuted(sessionId, muted);
@@ -111,9 +108,9 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
 
     // Назначить/сменить/снять собеседника (персону или .md-агента) у проектной сессии — в т.ч. по ходу разговора
     [HttpPost("{sessionId}/persona")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public IActionResult SetPersona(string projectId, string sessionId, [FromBody] SetPersonaRequest req)
     {
-        if (!OwnsProject(projectId)) return NotFound();
         var session = sessions.GetById(sessionId);
         if (session == null || session.ProjectId != projectId) return NotFound();
         try
@@ -135,6 +132,7 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     // anchorFp }: reset=false — messages = хвост (дописывается), reset=true — messages =
     // полная история (замена), anchor* — новый курсор для следующего запроса.
     [HttpGet("{sessionId}/history")]
+    [ProjectScope]
     public async Task<IActionResult> GetHistory(
         string projectId, string sessionId,
         [FromQuery] int? limit = null,
@@ -142,7 +140,6 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         [FromQuery] int? after = null,
         [FromQuery] string? fp = null)
     {
-        if (!OwnsProject(projectId)) return NotFound();
         var session = sessions.GetById(sessionId);
         if (session == null || session.ProjectId != projectId) return NotFound();
 
@@ -177,11 +174,11 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     }
 
     [HttpDelete("{sessionId}")]
+    [ProjectScope(Right = ProjectRight.Write)]
     // Секция destructive: на делегированном ходу агент не удаляет чаты (см. FilesController.Delete)
     [DenyOnDelegatedTurn("Удаление чата")]
     public async Task<IActionResult> Delete(string projectId, string sessionId)
     {
-        if (!OwnsProject(projectId)) return NotFound();
         var session = sessions.GetById(sessionId);
         if (session == null) return NoContent(); // идемпотентное удаление
         if (session.ProjectId != projectId) return NotFound(); // чужая сессия — не удаляем
@@ -200,9 +197,9 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     // разошлись бы в оценке одной записи. Битая запись отдаётся с missing=true
     // (убрать/переуказать — решение клиента), молча не чистим: состав меняется только PUT.
     [HttpGet("{sessionId}/context")]
+    [ProjectScope]
     public IActionResult GetContext(string projectId, string sessionId)
     {
-        if (!OwnsProject(projectId)) return NotFound();
         var session = sessions.GetById(sessionId);
         if (session == null || session.ProjectId != projectId) return NotFound();
 
@@ -214,10 +211,10 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     // «не найден» отображается (missing в GET), а PUT описывает желание человека,
     // а не состояние файловой системы.
     [HttpPut("{sessionId}/context")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public async Task<IActionResult> PutContext(string projectId, string sessionId,
         [FromBody] List<SessionContextItemRequest> req)
     {
-        if (!OwnsProject(projectId)) return NotFound();
         var session = sessions.GetById(sessionId);
         if (session == null || session.ProjectId != projectId) return NotFound();
 
@@ -245,9 +242,9 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     // Подобрать значки-иконки чатам проекта без них (действие AI-палитры «Проставить значки
     // тем» в разделе проекта). Возвращает счётчики для тоста.
     [HttpPost("icon-batch")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public async Task<IActionResult> IconBatch(string projectId, CancellationToken ct)
     {
-        if (!OwnsProject(projectId)) return NotFound();
         try
         {
             var result = await sessions.SetChatIconsAsync(UserId, ct, projectId);

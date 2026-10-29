@@ -3,6 +3,7 @@ using System.Security.Claims;
 using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Docs;
 using ClaudeHomeServer.Services.Notes;
 using Microsoft.AspNetCore.Authorization;
@@ -18,7 +19,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/files")]
-public class FilesController(FileService files, ProjectManager projects, SyncService sync, IConfiguration config, JwtService jwt, ILogger<FilesController> logger, DocumentAiService docAi, ProjectFileSessionsIndex fileSessions, ProjectTreeLocator locator, INoteAccessor? notes = null,
+public class FilesController(FileService files, ProjectManager projects, IProjectAccess access, SyncService sync, IConfiguration config, JwtService jwt, ILogger<FilesController> logger, DocumentAiService docAi, ProjectFileSessionsIndex fileSessions, ProjectTreeLocator locator, INoteAccessor? notes = null,
     // W4-5B2 (п.5.2): чтение файла из проверенного дерева эпика (?featureId=). Tasks и Git —
     // отключаемые подсистемы: нет Tasks — маршрут featureId отказывает 404 (fail-closed); нет
     // Git — отказывает заявленное дерево, а отсутствие дерева читает корень (общее правило
@@ -31,22 +32,26 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
 
-    // Проект текущего пользователя; чужой/несуществующий → KeyNotFoundException (клиенту 404, как в ProjectsController)
+    // Ключ хранилищ (задачи, заметки, деревья git) — арендатор из RequestScope ([ProjectScope]), не вызывающий
+    private string TenantId => HttpContext.GetRequestScope().TenantOwnerId;
+
+    // Проект запроса (доступ проверил [ProjectScope]); несуществующий → KeyNotFoundException (клиенту 404, как в ProjectsController)
     private ClaudeHomeServer.Models.Project GetProject(string projectId)
     {
         var p = projects.GetById(projectId);
-        if (p is null || p.OwnerId != UserId)
+        if (p is null)
             throw new KeyNotFoundException($"Проект не найден: {projectId}");
         return p;
     }
 
     // Для анонимных OnlyOffice-эндпоинтов (office-download/office-callback): JWT нет,
     // доступ защищён подписанным office-токеном, привязанным к владельцу+projectId+path.
-    // ownerId извлекается из проверенного токена — сверяем с владельцем проекта.
+    // Пользователь из проверенного токена (ownerId — тот, кто его выдал) обязан иметь право записи
+    // в проект: области запроса у анонимного входа нет, поэтому явный Resolve.
     private ClaudeHomeServer.Models.Project GetProjectByOfficeToken(string projectId, string ownerId)
     {
         var p = projects.GetById(projectId);
-        if (p is null || p.OwnerId != ownerId)
+        if (p is null || access.Resolve(ownerId, projectId, ProjectRight.Write) is null)
             throw new KeyNotFoundException($"Проект не найден: {projectId}");
         return p;
     }
@@ -65,6 +70,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         entries.Select(e => e with { Synced = sync.GetSyncState(projectId, e.Path) });
 
     [HttpGet]
+    [ProjectScope]
     public IActionResult List(string projectId, [FromQuery] string path = "")
     {
         try
@@ -79,6 +85,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     }
 
     [HttpGet("tree")]
+    [ProjectScope]
     public IActionResult Tree(string projectId, [FromQuery] string path = "", [FromQuery] bool? showHidden = null)
     {
         try
@@ -93,6 +100,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     }
 
     [HttpGet("search")]
+    [ProjectScope]
     public IActionResult Search(string projectId, [FromQuery] string q = "")
     {
         try { return Ok(Annotate(projectId, files.Search(GetRoot(projectId), q))); }
@@ -100,6 +108,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     }
 
     [HttpGet("content")]
+    [ProjectScope]
     public async Task<IActionResult> GetContent(string projectId, [FromQuery] string path, [FromQuery] string? featureId = null, [FromQuery] string? sessionId = null)
     {
         try
@@ -125,7 +134,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
             {
                 var s = GetOwnedSession(projectId, sessionId);
                 if (s is null) return NotFound(new { error = "Чат не найден" });
-                var hit = await locator.LocateAsync(UserId, p, path, ChatTreeRootForAsync(p, s));
+                var hit = await locator.LocateAsync(TenantId, p, path, ChatTreeRootForAsync(p, s));
                 if (hit is null) return NotFound(new { error = "Файл не найден ни в одном дереве проекта" });
                 root = hit.Root;
                 branch = hit.Branch;
@@ -170,7 +179,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         if (PathNormalizer.NormalizePath(worktreePath) == PathNormalizer.NormalizePath(project.RootPath))
             return project.RootPath;
         if (git is null || UserId is null) return null;
-        return await git.VerifiedFeatureTreeAsync(UserId, project.RootPath, worktreePath);
+        return await git.VerifiedFeatureTreeAsync(TenantId, project.RootPath, worktreePath);
     }
 
     // W4-LINK-B (п.14, смена решения W4-LINK-B — шаг B2a): цепочка заявленного дерева для
@@ -195,7 +204,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     private async Task<string?> FeatureTreeRootForAsync(ClaudeHomeServer.Models.Project project, string featureId)
     {
         if (tasks is null || UserId is null) return null;
-        var epic = tasks.GetByOwner(UserId).FirstOrDefault(t => t.Id == featureId);
+        var epic = tasks.GetByOwner(TenantId).FirstOrDefault(t => t.Id == featureId);
         if (epic is null || epic.ProjectId != project.Id) return null;
         return await TreeRootForAsync(project, epic.WorktreePath);
     }
@@ -206,7 +215,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     private string? TaskTreeRootForAsync(ClaudeHomeServer.Models.Project project, string taskId)
     {
         if (tasks is null || UserId is null) return null;
-        var task = tasks.GetByOwner(UserId).FirstOrDefault(t => t.Id == taskId);
+        var task = tasks.GetByOwner(TenantId).FirstOrDefault(t => t.Id == taskId);
         if (task is null || task.ProjectId != project.Id) return null;
         return task.WorktreePath;
     }
@@ -237,6 +246,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
 
     // Конвертация документа в Markdown (markitdown, без модели). Возвращает { markdown }.
     [HttpPost("document/convert")]
+    [ProjectScope]
     public async Task<IActionResult> DocumentConvert(string projectId, [FromQuery] string path, CancellationToken ct)
     {
         try
@@ -253,6 +263,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
 
     // Краткое содержание документа (локальная модель / claude).
     [HttpPost("document/summary")]
+    [ProjectScope]
     public async Task<IActionResult> DocumentSummary(string projectId, [FromQuery] string path, CancellationToken ct)
     {
         try
@@ -267,6 +278,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
 
     // Структурная выжимка: решения, даты, участники, action items.
     [HttpPost("document/extract")]
+    [ProjectScope]
     public async Task<IActionResult> DocumentExtract(string projectId, [FromQuery] string path, CancellationToken ct)
     {
         try
@@ -285,6 +297,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     // targetDir (относительно корня проекта) — куда положить .md; пусто → рядом с исходником.
     // Возвращает { savedPath, markdown }.
     [HttpPost("document/to-markdown")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public async Task<IActionResult> ToMarkdown(string projectId, [FromBody] ToMarkdownRequest req, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(req.Path))
@@ -321,6 +334,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
 
     // Теги документа по содержимому.
     [HttpPost("document/tags")]
+    [ProjectScope]
     public async Task<IActionResult> DocumentTags(string projectId, [FromQuery] string path, CancellationToken ct)
     {
         try
@@ -334,6 +348,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     }
 
     [HttpPut("content")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public IActionResult SaveContent(string projectId, [FromQuery] string path, [FromBody] SaveContentRequest req)
     {
         try
@@ -349,6 +364,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     }
 
     [HttpGet("diff")]
+    [ProjectScope]
     public async Task<IActionResult> GetDiff(string projectId, [FromQuery] string path)
     {
         try
@@ -363,6 +379,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     // строки (в исходном регистре/разделителях) — сопоставление с индексом идёт по lowercase,
     // поэтому caller получает узнаваемые пути git status без перекодировки на фронте.
     [HttpPost("changed-by")]
+    [ProjectScope]
     public async Task<IActionResult> ChangedBy(string projectId, [FromBody] ChangedByRequest req)
     {
         try
@@ -382,6 +399,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     private static string Normalize(string path) => path.Replace('\\', '/').ToLowerInvariant();
 
     [HttpPost("revert")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public IActionResult Revert(string projectId, [FromBody] PathRequest req)
     {
         try
@@ -393,6 +411,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     }
 
     [HttpPost("create")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public IActionResult CreateFile(string projectId, [FromBody] CreateFileRequest req)
     {
         try { files.CreateFile(GetRoot(projectId), req.Path, req.Content ?? ""); return Ok(); }
@@ -403,6 +422,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     }
 
     [HttpPost("mkdir")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public IActionResult CreateDir(string projectId, [FromBody] PathRequest req)
     {
         try { files.CreateDirectory(GetRoot(projectId), req.Path); return Ok(); }
@@ -411,6 +431,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     }
 
     [HttpPost("rename")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public IActionResult Rename(string projectId, [FromBody] RenameRequest req)
     {
         try
@@ -420,7 +441,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
             // внутри папки) следуют за новым путём — привязка не сиротеет
             if (notes is not null)
             {
-                try { notes.RewriteAnnotationTargets(UserId!, projectId, req.OldPath, projectId, req.NewPath, prefix: true); }
+                try { notes.RewriteAnnotationTargets(TenantId, projectId, req.OldPath, projectId, req.NewPath, prefix: true); }
                 catch (Exception ex) { logger.LogWarning(ex, "Перепись привязок комментариев при rename {Old}", req.OldPath); }
             }
             return Ok();
@@ -430,6 +451,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     }
 
     [HttpDelete]
+    [ProjectScope(Right = ProjectRight.Write)]
     // Секция destructive: на делегированном ходу агент не удаляет данные (раньше — срезанием
     // секции из состава инструментов wsp, что перезапускало процесс CLI со всеми MCP)
     [DenyOnDelegatedTurn("Удаление файлов")]
@@ -442,6 +464,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     }
 
     [HttpPost("upload")]
+    [ProjectScope(Right = ProjectRight.Write)]
     [RequestSizeLimit(100 * 1024 * 1024)] // 100 МБ
     public async Task<IActionResult> Upload(string projectId, [FromQuery] string path = "", IFormFile? file = null)
     {
@@ -476,6 +499,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     // остальным worktree. Чужой/несуществующий чат — 404 (общая GetOwnedSession). Без
     // параметра — прежнее поведение: корень проекта.
     [HttpGet("stream")]
+    [ProjectScope]
     public async Task<IActionResult> Stream(string projectId, [FromQuery] string path, [FromQuery] string? sessionId = null)
     {
         try
@@ -486,7 +510,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
                 var p = GetProject(projectId);
                 var s = GetOwnedSession(projectId, sessionId);
                 if (s is null) return NotFound(new { error = "Чат не найден" });
-                var hit = await locator.LocateAsync(UserId, p, path, ChatTreeRootForAsync(p, s));
+                var hit = await locator.LocateAsync(TenantId, p, path, ChatTreeRootForAsync(p, s));
                 if (hit is null) return NotFound();
                 abs = hit.FullPath;
             }
@@ -508,6 +532,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     // остаётся в отрицательном кэше фронта. Лимит 50 — батчинг фронта (F1b): больше — отказ,
     // не тихая обрезка.
     [HttpPost("locate")]
+    [ProjectScope]
     public async Task<IActionResult> Locate(string projectId, [FromBody] LocateRequest req, CancellationToken ct)
     {
         var paths = req.Paths ?? [];
@@ -523,7 +548,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
                 if (s is null) return NotFound(new { error = "Чат не найден" });
                 anchor = ChatTreeRootForAsync(p, s);
             }
-            return Ok(await locator.LocateManyAsync(UserId, p, paths, anchor, ct));
+            return Ok(await locator.LocateManyAsync(TenantId, p, paths, anchor, ct));
         }
         catch (KeyNotFoundException) { return NotFound(); }
     }
@@ -554,6 +579,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
 
     // Возвращает конфиг для DocsAPI.DocEditor: URL сервера DS и параметры документа.
     [HttpGet("office-config")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public IActionResult OfficeConfig(string projectId, [FromQuery] string path, [FromQuery] string mode = "view", [FromQuery] string? cacheKey = null)
     {
         try
@@ -715,6 +741,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     // Вызывается фронтом при нажатии «Отмена» в режиме редактирования OO.
     // Помечает edit-ключ как «выбросить» и откатывает файл через git.
     [HttpPost("office-discard")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public IActionResult OfficeDiscard(string projectId, [FromQuery] string path)
     {
         try
@@ -732,6 +759,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     // Принудительно сохраняет документ через OO Command API и ждёт callback.
     // Вызывается фронтом при нажатии «Сохранить» — быстрее чем ждать savetimeoutdelay (5 с).
     [HttpPost("office-force-save")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public async Task<IActionResult> OfficeForceSave(
         string projectId,
         [FromQuery] string path,
@@ -783,6 +811,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
 
     // Возвращает Unix-время последней записи файла (мс) — для polling после OO-сохранения.
     [HttpGet("office-version")]
+    [ProjectScope]
     public IActionResult OfficeVersion(string projectId, [FromQuery] string path)
     {
         try
@@ -798,6 +827,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     }
 
     [HttpPost("save-from-url")]
+    [ProjectScope(Right = ProjectRight.Write)]
     [RequestSizeLimit(200 * 1024 * 1024)] // 200 МБ для видео
     public async Task<IActionResult> SaveFromUrl(
         string projectId,

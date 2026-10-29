@@ -8,6 +8,7 @@ using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Docs;
 using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Llm;
@@ -34,13 +35,11 @@ public class ProjectTasksController(
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
-    private Project? OwnProject(string projectId)
-    {
-        var project = projects.GetById(projectId);
-        return project?.OwnerId == UserId ? project : null;
-    }
+    // Проект запроса; доступ проверил [ProjectScope] (чужой — 404)
+    private Project? OwnProject(string projectId) => projects.GetById(projectId);
 
     [HttpGet]
+    [ProjectScope]
     public IActionResult GetAll(string projectId)
     {
         if (OwnProject(projectId) is null) return NotFound();
@@ -49,6 +48,7 @@ public class ProjectTasksController(
     }
 
     [HttpPost]
+    [ProjectScope(Right = ProjectRight.Write)]
     public async Task<IActionResult> Create(string projectId, [FromBody] CreateTaskRequest req)
     {
         var project = OwnProject(projectId);
@@ -146,7 +146,10 @@ public class TasksController(
     FeatureSummaryService? summary = null,
     // Очередь фич (волна 6): пересчёт очереди проекта после постановки/снятия удержания.
     // null — подсистема Tasks выключена (тот же гейт, что у features) → пересчёта нет.
-    FeatureQueueService? queue = null) : ControllerBase
+    FeatureQueueService? queue = null,
+    // Явный резолв доступа к проекту из тела/запроса ([ProjectScope] такого id не видит);
+    // null — fail-closed (проект недоступен)
+    IProjectAccess? access = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -159,7 +162,11 @@ public class TasksController(
 
     // Проект генерации: только свой; чужой/несуществующий → личный контекст
     private string? OwnProjectId(string? projectId) =>
-        projectId is not null && projects.GetById(projectId)?.OwnerId == UserId ? projectId : null;
+        projectId is not null && CanUseProject(projectId) ? projectId : null;
+
+    // Доступ вызывающего к проекту, названному в теле/запросе (в S0 — только владелец)
+    private bool CanUseProject(string projectId) =>
+        access?.Resolve(UserId, projectId, ProjectRight.Read) is not null && projects.GetById(projectId) is not null;
 
     // Сгенерировать описание задачи (Claude): по названию + контекст проекта (личная — только название)
     [HttpPost("ai/description")]
@@ -271,7 +278,7 @@ public class TasksController(
 
         // Проект из тела (если он свой) — для резолва кастомной колонки. Чужой проект
         // игнорируем: личный эндпоинт не должен подменять статус по чужой доске.
-        var project = bodyProjectId is not null && projects.GetById(bodyProjectId)?.OwnerId == UserId
+        var project = bodyProjectId is not null && CanUseProject(bodyProjectId)
             ? projects.GetById(bodyProjectId)
             : null;
 
@@ -388,7 +395,7 @@ public class TasksController(
         if (req.ProjectId is not null)
         {
             targetProjectId = req.ProjectId == "" ? null : req.ProjectId;
-            if (targetProjectId is not null && projects.GetById(targetProjectId)?.OwnerId != UserId)
+            if (targetProjectId is not null && !CanUseProject(targetProjectId))
                 return BadRequest(new { error = "Проект не найден или недоступен" });
         }
 

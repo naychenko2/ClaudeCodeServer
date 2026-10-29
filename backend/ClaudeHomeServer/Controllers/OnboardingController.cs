@@ -5,6 +5,7 @@ using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Personas;
 using ClaudeHomeServer.Services.Prompts;
@@ -86,10 +87,11 @@ public class OnboardingController(SessionManager sessions, UserStore users,
     // владельца и OnboardingKind="project". Без личного дефолта — 400 (сначала онбординг
     // пользователя). Живая сессия из Project.OnboardingSessionId возвращается как есть.
     [HttpPost("project/{projectId}/start")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public async Task<IActionResult> StartProject(string projectId)
     {
         var project = projects.GetById(projectId);
-        if (project is null || project.OwnerId != UserId) return NotFound();
+        if (project is null) return NotFound();
 
         var gate = LockFor("project:" + projectId);
         await gate.WaitAsync(HttpContext.RequestAborted);

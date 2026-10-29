@@ -13,38 +13,37 @@
 # Дельта после снимка: −3 совпадения в −2 файлах (S0-6, хаб на точку доступа): SessionHub.cs
 # (OwnsSession/OwnsProject → IProjectAccess) и TerminalHub.cs (OwnsProject → IProjectAccess).
 # Дельта S0-4a: −21 совпадение в −1 файле: ProjectsController.cs переведён на [ProjectScope].
+# Дельта S0-4b: −19 совпадений в −13 файлах (остальные контроллеры Main переведены на
+# [ProjectScope] / явный IProjectAccess.Resolve; CodeGraph и Preview сохраняют контракт 403 через
+# Resolve). Остались осознанно (вердикты):
+#   • DossiersController|1 — x.OwnerId != p.OwnerId сравнивает владельцев двух проектов одной папки
+#     (признак «общая папка»), а не вызывающего;
+#   • TasksController|7 — сравнивают task.OwnerId, не проект (S2b);
+#   • ModelsController|4 — задачи (S2b) и личные персоны;
+#   • PersonasController|2 — до S4;
+#   • TtsController|1 — владение чатом при записи расхода (чат — S1-3a, личный расход);
+#   • MediaHistoryController|1 — запись личной истории медиа (ADR-030), не проект;
+#   • ProjectGroupsController|2 — группы проектов личные у владельца, а не проектный доступ;
+#   • LocalModelStatsController|8 — админская статистика: «моя» и чужая строка учёта, не проект.
 
 backend/ClaudeHomeServer.Architecture/Controllers/ArchitectureController.cs|1
 backend/ClaudeHomeServer.Architecture/Services/Architecture/ArchitectureToolset.cs|1
 backend/ClaudeHomeServer.AudioEditor/Controllers/AudioEditScopeGate.cs|2
 backend/ClaudeHomeServer.AudioEditor/Mcp/AudioEditorToolset.cs|1
 backend/ClaudeHomeServer/Controllers/ChatsController.cs|2
-backend/ClaudeHomeServer/Controllers/ChatSubjectsController.cs|1
-backend/ClaudeHomeServer/Controllers/CodeGraphController.cs|3
 backend/ClaudeHomeServer/Controllers/DeployController.cs|1
 backend/ClaudeHomeServer/Controllers/DeviceAgentTicketController.cs|1
-backend/ClaudeHomeServer/Controllers/DocsController.cs|1
-backend/ClaudeHomeServer/Controllers/DossiersController.cs|4
+backend/ClaudeHomeServer/Controllers/DossiersController.cs|1
 backend/ClaudeHomeServer/Controllers/FeatureChatDoor.cs|1
-backend/ClaudeHomeServer/Controllers/FilesController.cs|2
-backend/ClaudeHomeServer/Controllers/GitController.cs|1
-backend/ClaudeHomeServer/Controllers/KnowledgeController.cs|1
 backend/ClaudeHomeServer/Controllers/LocalModelStatsController.cs|8
 backend/ClaudeHomeServer/Controllers/MediaHistoryController.cs|1
 backend/ClaudeHomeServer/Controllers/ModelsController.cs|4
-backend/ClaudeHomeServer/Controllers/OnboardingController.cs|1
 backend/ClaudeHomeServer/Controllers/PersonasController.cs|2
-backend/ClaudeHomeServer/Controllers/PreviewController.cs|1
-backend/ClaudeHomeServer/Controllers/ProjectBackgroundsController.cs|1
 backend/ClaudeHomeServer/Controllers/ProjectGroupsController.cs|2
-backend/ClaudeHomeServer/Controllers/ProjectMapController.cs|3
-backend/ClaudeHomeServer/Controllers/ProjectPresetsController.cs|1
 backend/ClaudeHomeServer/Controllers/ProjectRelayController.cs|1
 backend/ClaudeHomeServer/Controllers/SessionHandsController.cs|1
 backend/ClaudeHomeServer/Controllers/SessionLocalModelController.cs|1
-backend/ClaudeHomeServer/Controllers/SessionsController.cs|1
-backend/ClaudeHomeServer/Controllers/SkillsController.cs|1
-backend/ClaudeHomeServer/Controllers/TasksController.cs|11
+backend/ClaudeHomeServer/Controllers/TasksController.cs|7
 backend/ClaudeHomeServer/Controllers/TelemetryController.cs|2
 backend/ClaudeHomeServer/Controllers/TtsController.cs|1
 backend/ClaudeHomeServer.ImageEditor/Controllers/ImageEditScopeGate.cs|2

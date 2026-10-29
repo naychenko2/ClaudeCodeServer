@@ -238,11 +238,13 @@ interface Props {
   // повторное открытие диалога показывало состояние до клика (устаревший project prop)
   onProjectUpdated?: (updated: Project) => void;
   onClose: () => void;
+  // Раскрыть секцию «Участники» (вход по стопке аватаров в шапке проекта)
+  openMembers?: boolean;
 }
 
 type View = 'main' | 'prompt' | 'rules';
 
-export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onProjectUpdated, onClose }: Props) {
+export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onProjectUpdated, onClose, openMembers }: Props) {
   const online = useOnline();
   // Фон проекта — только владельцу: участник без прав владельца фон менять не может
   // (ADR-008 §7, постановка задачи). Бэк тоже гейтит (404), кнопки прячем за тем же
@@ -634,7 +636,7 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
       {/* Участники (shared-projects, S1-F3): приглашать и менять роли — только владелец
           и только за флагом «Общие проекты» */}
       {isOwner && sharedEnabled && (
-        <MembersSection project={project} mode="owner" onMembersChanged={handleMembersChanged} />
+        <MembersSection project={project} mode="owner" defaultOpen={openMembers} onMembersChanged={handleMembersChanged} />
       )}
       <McpProjectSection project={project} onUpdated={onProjectUpdated} />
       {/* Плагины (ADR-031): секция сама решает, рисовать ли список (серверный проект)

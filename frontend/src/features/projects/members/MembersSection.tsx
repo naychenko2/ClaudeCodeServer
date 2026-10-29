@@ -31,9 +31,11 @@ interface Props {
   onMembersChanged?: (members: ProjectMember[]) => void;
   // Участник покинул проект — вызывающий закрывает диалог
   onLeft?: () => void;
+  // Раскрыть сразу: пришли по стопке аватаров в шапке (у участника секция открыта всегда)
+  defaultOpen?: boolean;
 }
 
-export function MembersSection({ project, mode, onMembersChanged, onLeft }: Props) {
+export function MembersSection({ project, mode, onMembersChanged, onLeft, defaultOpen }: Props) {
   const me = useMe();
   const isMobile = useIsMobile();
   const isOwner = mode === 'owner';
@@ -135,7 +137,7 @@ export function MembersSection({ project, mode, onMembersChanged, onLeft }: Prop
       title="Участники"
       summary={summary?.text}
       summaryTone={summary?.tone}
-      defaultOpen={!isOwner}
+      defaultOpen={!isOwner || !!defaultOpen}
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
         {local && (

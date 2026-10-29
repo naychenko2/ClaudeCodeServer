@@ -34,6 +34,7 @@ import { getDraft, setDraft } from '../lib/drafts';
 import { middleEllipsis } from '../lib/paths';
 import { dativeName } from '../lib/russianName';
 import { showToast } from '../lib/toast';
+import { participantComposerGate, participantComposerText, participantSendTitle } from '../features/projects/members/participantGate';
 import { Button, Chip, FileTypeTile, IconButton, Menu, MenuItem, MenuSep, Modal, Notice } from './ui';
 import { plusButtonTitle, shortcutOverflowItems, useCreateShortcuts } from './chat/composerShortcuts';
 import { SLOT_COMPOSER_CHIP, useSlot } from '../lib/subsystems/registry';
@@ -776,7 +777,10 @@ export function Composer({
   const execGate = useMemo(() => canRunTurn(project), [project?.capabilities, project?.deviceId]);
   // Прямой ввод человека при закрытом гейте получает честный отказ, а не очередь: ждать
   // устройство умеет только фоновая работа (ADR-016 §5). Кнопка видно недоступна
-  const execBlocked = !!project && !execGate.available;
+  // Участник общего проекта: ходы запускает только владелец (бэк, S1-7a), поэтому отправка
+  // выключена у любого участника — читателю по роли, редактору до включения его ходов
+  const participantGate = useMemo(() => participantComposerGate(project), [project?.myRole, project?.ownerDisplayName, project?.ownerUsername]);
+  const execBlocked = !!project && (!execGate.available || participantGate.blocked);
   const execDeviceOffline = project?.device?.online === false;
   // Опасный режим (bypass) ждёт подтверждения в модалке перед применением
   const [pendingMode, setPendingMode] = useState<Mode | null>(null);
@@ -1646,7 +1650,9 @@ export function Composer({
   const teamMechMeta = teamMech ? teamMechanic(teamMech) : null;
   // Подсказка обычного (однострочного) поля. «Написать Вере…»: имя в дательном; не
   // склоняется однозначно — фраза без имени
-  const basePlaceholder = teamMechMeta ? teamMechMeta.placeholder
+  const readerOnly = participantGate.blocked && participantGate.role === 'reader';
+  const basePlaceholder = readerOnly ? 'Только просмотр'
+    : teamMechMeta ? teamMechMeta.placeholder
     : executorTask ? 'Написать исполнителю…'
     : addressee ? `Написать ${addressee}…` : 'Написать сообщение…';
   // Своим слоем рисуем только в пустом однострочном поле: у режимов поле высокое, и их
@@ -1861,6 +1867,7 @@ export function Composer({
           setText(e.target.value);
           updateSkillDropdown(e.target.value, e.target.selectionStart ?? e.target.value.length);
         }}
+        disabled={readerOnly}
         onKeyDown={handleKeyDown}
         onInput={autoResize}
         onPaste={handlePaste}
@@ -2269,7 +2276,7 @@ export function Composer({
       disabled={!canSend || execBlocked}
       data-composer-send
       title={execBlocked
-        ? `Не отправится: ${execGate.reason ?? 'ход сейчас недоступен'}`
+        ? (participantGate.blocked ? participantSendTitle(participantGate) : `Не отправится: ${execGate.reason ?? 'ход сейчас недоступен'}`)
         : isMobile ? 'Отправить' : 'Отправить (Enter) · Shift+Enter — новая строка'}
       style={{
         ...iconBtnGuard,
@@ -2481,7 +2488,17 @@ export function Composer({
       {/* Баннер закрытого гейта хода (ADR-016 §3.4): у локального проекта с недоступной
           exec говорим, что сообщение не уйдёт и что с этим делать. Кнопка отправки при
           этом недоступна, Enter гасится в handleSend */}
-      {execBlocked && (
+      {participantGate.blocked && (
+        <Notice
+          tone="info"
+          icon={Eye}
+          data-composer-participant-gate
+          style={{ margin: `0 ${SP.sm}px ${SP.xs}px` }}
+        >
+          {participantComposerText(participantGate)}
+        </Notice>
+      )}
+      {execBlocked && !participantGate.blocked && (
         <Notice
           data-composer-exec-gate
           icon={Unplug}

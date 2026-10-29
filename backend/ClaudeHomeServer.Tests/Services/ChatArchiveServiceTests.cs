@@ -20,7 +20,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // потолок 200, гейт первого прохода (кнопка «Применить сейчас»),
 // наследование порога проекта, откат пачки по ArchiveBatchId и агрегированное
 // уведомление. Ожиданий на час вперёд нет — nowUtc всегда параметром.
-public class ChatArchiveServiceTests : IDisposable
+public class ChatArchiveServiceTests : IClassFixture<ChatArchiveServiceTests.Fixture>
 {
     private const string TestUserId = "test-user-id";
     private const string TestUsername = "test-user";
@@ -32,19 +32,114 @@ public class ChatArchiveServiceTests : IDisposable
     private readonly NotificationStore _notifStore;
     private readonly ChatArchiveService _sut;
 
-    public ChatArchiveServiceTests()
+    public ChatArchiveServiceTests(Fixture fx)
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), "chat_archive_rule_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_tempDir);
-        (_sessions, _projects, _users, _, _notifStore) = BuildSut(_tempDir);
-        _sut = new ChatArchiveService(_sessions, _projects, _users,
-            BuildNotifications(_tempDir, _projects, _notifStore), NullLogger<ChatArchiveService>.Instance);
+        _tempDir = fx.TempDir;
+        _sessions = fx.Sessions;
+        _projects = fx.Projects;
+        _users = fx.Users;
+        _notifStore = fx.NotifStore;
+        _sut = fx.Sut;
     }
 
-    public void Dispose()
+    /// <summary>
+    /// Граф на класс: SessionManager с окружением поднимается один раз на весь класс, а не
+    /// на экземпляр теста (~0,13–0,35 с на тест уходило на BuildSut). Разделение состояния
+    /// между тестами — построением, а не сбросом: каждый тест работает со своим новым
+    /// пользователем (EnableRule/CreateUser) и своими каталогами проектов, а все чтения
+    /// скоупятся владельцем/проектом; и потолок TickAsync — на владельца
+    /// (ArchiveCandidatesAsync: candidates → Take(MaxBatchSize)), залежи соседнего теста
+    /// в ассерты текущего не попадают. Сбрасывать в общем графе нечего — чужой тест
+    /// в него не пишет ничего, что читает этот.
+    /// </summary>
+    public sealed class Fixture : IDisposable
     {
-        _sessions.Dispose();
-        Helpers.TestFs.DeleteDirectoryResilient(_tempDir);
+        public readonly string TempDir;
+        public readonly SessionManager Sessions;
+        public readonly ProjectManager Projects;
+        public readonly UserStore Users;
+        public readonly NotificationStore NotifStore;
+        public readonly ChatArchiveService Sut;
+
+        public Fixture()
+        {
+            TempDir = Path.Combine(Path.GetTempPath(), "chat_archive_rule_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(TempDir);
+            (Sessions, Projects, Users, _, NotifStore) = BuildSut(TempDir);
+            Sut = new ChatArchiveService(Sessions, Projects, Users,
+                BuildNotifications(TempDir, Projects, NotifStore), NullLogger<ChatArchiveService>.Instance);
+        }
+
+        public void Dispose()
+        {
+            Sessions.Dispose();
+            Helpers.TestFs.DeleteDirectoryResilient(TempDir);
+        }
+
+        private static (SessionManager Sessions, ProjectManager Projects, UserStore Users,
+            FeatureFlagService Flags, NotificationStore NotifStore) BuildSut(string tempDir)
+        {
+            var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(tempDir, "projects.json"),
+                // Автосейв выключен (как в SessionManagerTests): фоновая запись стора не
+                // вмешивается между правкой и ассертами
+                ["Session:AutoSaveSeconds"] = "0",
+                ["DefaultProjectsPath"] = Path.Combine(tempDir, "homes"),
+                ["ClaudeUserProfileDir"] = Path.Combine(tempDir, "claude-profile"),
+            }).Build();
+
+            var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+            var appSettings = new AppSettingsService(config);
+            var projects = new ProjectManager(config, users, appSettings);
+            var history = new ChatHistoryService(config);
+
+            var broadcaster = new TestSessionBroadcaster();
+
+            var llmProviders = new LlmProviderRegistry(config);
+            var subPool = new ClaudeSubscriptionPool(config);
+            var adapters = new LlmSessionAdapterFactory(config, new AgentPromptSourceAdapter(new SkillsService()),
+                new WorkspaceDatasetLookup(new WorkspaceKnowledgeStore(config)), llmProviders, subPool);
+            var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
+            var usage = new UsageService(config);
+            var jwt = new JwtService(config, users, NullLogger<JwtService>.Instance);
+            var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
+            server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
+            var wkStore = new WorkspaceKnowledgeStore(config);
+            var knowledge = new KnowledgeService(new Mock<IHttpClientFactory>().Object,
+                Microsoft.Extensions.Options.Options.Create(new DifyOptions()), wkStore);
+            var flags = new FeatureFlagService(users);
+            var notesSvc = new NotesService(projects, config, NullLogger<NotesService>.Instance);
+            var notesKb = new NotesKnowledgeService(knowledge, notesSvc, users, config,
+                NullLogger<NotesKnowledgeService>.Instance);
+            var personas = new PersonaManager(config);
+            var bindings = new PersonaBindingsService(personas, projects, wkStore,
+                knowledge, new SkillsService(), users, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
+            var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
+                NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
+
+            var sessions = new SessionManager(projects, history, config, adapters, falCost,
+                usage, appSettings, users, jwt, server.Object, llmProviders, flags, personas,
+                bindings, subPool, NullLogger<SessionManager>.Instance,
+                TestLauncherFactory.Instance, sandbox, broadcaster: broadcaster);
+            var notifStore = new NotificationStore(config, NullLogger<NotificationStore>.Instance);
+            return (sessions, projects, users, flags, notifStore);
+        }
+
+        private static NotificationService BuildNotifications(string tempDir, ProjectManager projects,
+            NotificationStore notifStore)
+        {
+            var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(tempDir, "projects.json"),
+            }).Build();
+            var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+            var push = new PushService(config,
+                new PushSubscriptionStore(config), new JwtService(config, users, NullLogger<JwtService>.Instance),
+                NullLogger<PushService>.Instance);
+            return new NotificationService(notifStore, new TestSessionBroadcaster(), push, new PersonaManager(config), projects,
+                NullLogger<NotificationService>.Instance);
+        }
     }
 
     // --- Прохождение порога ---
@@ -364,69 +459,4 @@ public class ChatArchiveServiceTests : IDisposable
     }
 
     private static void CoolDown(Session chat, int ageDays) => chat.UpdatedAt = DateTime.UtcNow - TimeSpan.FromDays(ageDays);
-
-    private static (SessionManager Sessions, ProjectManager Projects, UserStore Users,
-        FeatureFlagService Flags, NotificationStore NotifStore) BuildSut(string tempDir)
-    {
-        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["DataPath"] = Path.Combine(tempDir, "projects.json"),
-            // Автосейв выключен (как в SessionManagerTests): фоновая запись стора не
-            // вмешивается между правкой и ассертами
-            ["Session:AutoSaveSeconds"] = "0",
-            ["DefaultProjectsPath"] = Path.Combine(tempDir, "homes"),
-            ["ClaudeUserProfileDir"] = Path.Combine(tempDir, "claude-profile"),
-        }).Build();
-
-        var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
-        var appSettings = new AppSettingsService(config);
-        var projects = new ProjectManager(config, users, appSettings);
-        var history = new ChatHistoryService(config);
-
-        var broadcaster = new TestSessionBroadcaster();
-
-        var llmProviders = new LlmProviderRegistry(config);
-        var subPool = new ClaudeSubscriptionPool(config);
-        var adapters = new LlmSessionAdapterFactory(config, new AgentPromptSourceAdapter(new SkillsService()),
-            new WorkspaceDatasetLookup(new WorkspaceKnowledgeStore(config)), llmProviders, subPool);
-        var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
-        var usage = new UsageService(config);
-        var jwt = new JwtService(config, users, NullLogger<JwtService>.Instance);
-        var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
-        server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
-        var wkStore = new WorkspaceKnowledgeStore(config);
-        var knowledge = new KnowledgeService(new Mock<IHttpClientFactory>().Object,
-            Microsoft.Extensions.Options.Options.Create(new DifyOptions()), wkStore);
-        var flags = new FeatureFlagService(users);
-        var notesSvc = new NotesService(projects, config, NullLogger<NotesService>.Instance);
-        var notesKb = new NotesKnowledgeService(knowledge, notesSvc, users, config,
-            NullLogger<NotesKnowledgeService>.Instance);
-        var personas = new PersonaManager(config);
-        var bindings = new PersonaBindingsService(personas, projects, wkStore,
-            knowledge, new SkillsService(), users, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
-        var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
-            NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
-
-        var sessions = new SessionManager(projects, history, config, adapters, falCost,
-            usage, appSettings, users, jwt, server.Object, llmProviders, flags, personas,
-            bindings, subPool, NullLogger<SessionManager>.Instance,
-            TestLauncherFactory.Instance, sandbox, broadcaster: broadcaster);
-        var notifStore = new NotificationStore(config, NullLogger<NotificationStore>.Instance);
-        return (sessions, projects, users, flags, notifStore);
-    }
-
-    private static NotificationService BuildNotifications(string tempDir, ProjectManager projects,
-        NotificationStore notifStore)
-    {
-        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["DataPath"] = Path.Combine(tempDir, "projects.json"),
-        }).Build();
-        var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
-        var push = new PushService(config,
-            new PushSubscriptionStore(config), new JwtService(config, users, NullLogger<JwtService>.Instance),
-            NullLogger<PushService>.Instance);
-        return new NotificationService(notifStore, new TestSessionBroadcaster(), push, new PersonaManager(config), projects,
-            NullLogger<NotificationService>.Instance);
-    }
 }

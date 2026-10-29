@@ -178,6 +178,22 @@ public sealed class FeatureAttention
     public string? PersonaId { get; init; }
     // Связанный чат исполнителя.
     public string? LinkedSessionId { get; init; }
+    // Только у Kind == "merge": что в трекере не сходится с «финал принят» (предупреждение, не гейт).
+    // Виды — FeatureMergeRiskKinds, порядок фиксированный, нулевые не кладутся.
+    public List<FeatureMergeRisk> MergeRisks { get; init; } = [];
+}
+
+// Риск мержа: вид и сколько шагов/расхождений под него попало.
+public sealed record FeatureMergeRisk(string Kind, int Count);
+
+public static class FeatureMergeRiskKinds
+{
+    // Шагов плана без задач (NotCreated).
+    public const string NotCreated = "not_created";
+    // Заведены, но не приняты (Work + Review).
+    public const string Open = "open";
+    // Расхождения сверки трекера.
+    public const string Tracker = "tracker";
 }
 
 // Итог смерженной фичи: только у закрытой фичи, иначе null.

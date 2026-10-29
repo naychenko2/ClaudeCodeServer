@@ -200,6 +200,7 @@ public sealed class FeatureProjector(TaskManager tasks)
                 Reason = "мерж",
                 PersonaId = final.PersonaId,
                 LinkedSessionId = LiveSession(final.LinkedSessionId)?.Id, // Б7: fail-closed (только если в снимке)
+                MergeRisks = BuildMergeRisks(accounting.Progress, tracker.Count),
             };
         }
 
@@ -948,6 +949,17 @@ public sealed class FeatureProjector(TaskManager tasks)
     // Возвраты по источникам: для каждого источника (ревью/проверка/финал) — число возвратов
     // (уникальные задачи с returned/accepted_with_remarks) и сколько из них открыто (их доработка
     // ещё не done). «Доработка» — rework-задача, чей ReviewOf ссылается на задачу-источник.
+    // Риски мержа из уже посчитанных учёта шагов и сверки трекера; порядок фиксирован, нули не кладём.
+    internal static List<FeatureMergeRisk> BuildMergeRisks(FeatureStepProgress progress, int trackerCount)
+    {
+        var risks = new List<FeatureMergeRisk>();
+        if (progress.NotCreated > 0) risks.Add(new(FeatureMergeRiskKinds.NotCreated, progress.NotCreated));
+        int open = progress.Work + progress.Review;
+        if (open > 0) risks.Add(new(FeatureMergeRiskKinds.Open, open));
+        if (trackerCount > 0) risks.Add(new(FeatureMergeRiskKinds.Tracker, trackerCount));
+        return risks;
+    }
+
     private static FeatureReturnsBySource BuildReturnsBySource(
         List<TaskItem> reviews, List<TaskItem> qa, TaskItem? final, List<TaskItem> steps)
     {

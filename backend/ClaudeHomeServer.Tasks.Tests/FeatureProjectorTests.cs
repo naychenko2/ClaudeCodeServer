@@ -3927,4 +3927,84 @@ public class FeatureProjectorTests
             "карточка шага несёт проект задачи-шага, а не эпика");
         run.StepChains.Single(c => c.StepRef == "Ш2").ProjectId.Should().BeNull("личная задача — null");
     }
+
+    // Ш8: риски мержа — из учёта шагов и сверки трекера, порядок not_created → open → tracker, нули не кладутся.
+    [Fact]
+    public void BuildMergeRisks_ТриВида_ВФиксированномПорядке()
+    {
+        var progress = new FeatureStepProgress { NotCreated = 59, Review = 13, Work = 0 };
+
+        var risks = FeatureProjector.BuildMergeRisks(progress, trackerCount: 1);
+
+        risks.Should().Equal(
+            new FeatureMergeRisk("not_created", 59),
+            new FeatureMergeRisk("open", 13),
+            new FeatureMergeRisk("tracker", 1));
+    }
+
+    [Fact]
+    public void BuildMergeRisks_ОткрытоЭтоРаботаПлюсРевью_НулиНеКладутся()
+    {
+        FeatureProjector.BuildMergeRisks(new FeatureStepProgress { Work = 2, Review = 3 }, 0)
+            .Should().Equal(new FeatureMergeRisk("open", 5));
+        FeatureProjector.BuildMergeRisks(new FeatureStepProgress(), 0).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Build_МержСНезаведённымиШагами_AttentionНесётMergeRisks()
+    {
+        const string epicId = "epic-merge-risks";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var plan = new TaskItem
+        {
+            Id = "p1", FeatureId = epicId, Role = TaskRoles.Plan, Status = TaskItemStatus.Done,
+            PlanSteps = [new() { StepRef = "a" }, new() { StepRef = "b" }, new() { StepRef = "c" }],
+        };
+        var step = new TaskItem { Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "a", Status = TaskItemStatus.InProgress };
+        var final = new TaskItem
+        {
+            Id = "f1", FeatureId = epicId, Role = TaskRoles.Final, Status = TaskItemStatus.Done,
+            CompletedAt = new DateTime(2026, 10, 17, 12, 0, 0),
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, plan, step, final]);
+
+        run.Attention!.Kind.Should().Be("merge");
+        run.Attention.MergeRisks.Should().StartWith(new FeatureMergeRisk("not_created", 2));
+        run.Attention.MergeRisks.Should().Contain(new FeatureMergeRisk("open", 1));
+        var json = System.Text.Json.JsonSerializer.Serialize(run.Attention,
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+        json.Should().Contain("\"mergeRisks\":[{\"kind\":\"not_created\",\"count\":2}");
+    }
+
+    [Fact]
+    public void Build_ЧистыйМерж_MergeRisksПуст()
+    {
+        const string epicId = "epic-merge-clean";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var final = new TaskItem
+        {
+            Id = "f1", FeatureId = epicId, Role = TaskRoles.Final, Status = TaskItemStatus.Done,
+            CompletedAt = new DateTime(2026, 10, 17, 12, 0, 0),
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, final]);
+
+        run.Attention!.Kind.Should().Be("merge");
+        run.Attention.MergeRisks.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Build_НеМерж_MergeRisksПуст()
+    {
+        const string epicId = "epic-wait-risks";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature, AwaitingHumanSince = new DateTime(2026, 10, 17), AwaitingHumanReason = "x" };
+
+        var run = FeatureProjector.Build(epic, [epic]);
+
+        run.Attention!.Kind.Should().Be("wait");
+        run.Attention.MergeRisks.Should().BeEmpty();
+    }
 }

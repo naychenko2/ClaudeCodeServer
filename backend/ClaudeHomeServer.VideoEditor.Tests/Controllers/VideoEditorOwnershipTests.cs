@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.VideoEditor.Contracts;
 using ClaudeHomeServer.Services.VideoEditor.Controllers;
@@ -30,7 +31,10 @@ public sealed class VideoEditorOwnershipTests : IDisposable
         projects.Setup(p => p.GetById("p1")).Returns(new Project { Id = "p1", OwnerId = Owner, RootPath = "/p1" });
         var dir = new Mock<ISessionDirectory>();
         dir.Setup(d => d.GetById("chat")).Returns(new Session { Id = "chat", OwnerId = Owner, ProjectId = "p1" });
-        _gate = new VideoEditScopeGate(projects.Object, dir.Object);
+        var access = new Mock<IProjectAccess>();
+        access.Setup(a => a.Resolve(Owner, "p1", It.IsAny<ProjectRight>()))
+            .Returns(new RequestScope(Owner, Owner, ProjectRole.Owner));
+        _gate = new VideoEditScopeGate(projects.Object, dir.Object, access.Object);
         _store.AddScene(Owner, "chat", "video/a",
             new VideoSceneSettingsDto(null, null, "т", "fal", "veo", 5, "16:9", false, 1), null);
     }

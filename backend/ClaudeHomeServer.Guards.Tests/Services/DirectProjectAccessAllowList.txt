@@ -1,0 +1,14 @@
+# Allow-list сторожа DirectProjectAccessGuardTests (дефект R-S1-3a): файлы, где ProjectAccess.Can/Check
+# зовётся напрямую, мимо IProjectAccess. Формат строки: «путь|число» — по ФАЙЛУ со счётчиком.
+# Поднять счётчик или добавить файл можно только осознанно, с вердиктом в дифе: роль, рубильник общих
+# проектов и запрет записи участнику решает IProjectAccess, а не чистая функция.
+# Сама точка доступа и Core-примитив над ней
+backend/ClaudeHomeServer/Services/ProjectAccessService.cs|2
+backend/ClaudeHomeServer.Core/Services/Access/SessionAccess.cs|1
+# Управление участниками: роль вызывающего нужна самой операции, рубильник проверяется в контроллере
+backend/ClaudeHomeServer/Services/ProjectMembershipService.cs|4
+# Список проектов (рубильник учитывается рядом, sharedOn) и WebDAV (только владелец)
+backend/ClaudeHomeServer/Services/ProjectManager.cs|1
+backend/ClaudeHomeServer/WebDav/WebDavHandler.cs|1
+# Мост плагинов: чтение слота проекта, данных проекта владельца не отдаёт (ADR-031); перевод на IProjectAccess — отдельным шагом
+backend/ClaudeHomeServer.Plugins/Controllers/PluginBridgeController.cs|1

@@ -13,14 +13,15 @@ namespace ClaudeHomeServer.Services.VideoEditor.Controllers;
 //
 // Чужой проект и чужой чат одинаково 404: ручки не выдают чужие id.
 // Чужой, несуществующий, чат другого проекта и (для личной ручки) чат проекта неотличимы.
-public sealed class VideoEditScopeGate(IProjectManager projects, ISessionDirectory directory)
+public sealed class VideoEditScopeGate(IProjectManager projects, ISessionDirectory directory, IProjectAccess access)
 {
     // Ручки проекта без чата: нужно право записи (ручки редактора запускают платные задачи)
     public bool TryProject(string userId, string projectId,
         [NotNullWhen(true)] out VideoEditScope? scope, [NotNullWhen(false)] out IActionResult? denied)
     {
         scope = null;
-        if (projects.GetById(projectId) is not { } found || !ProjectAccess.Can(found, userId, ProjectRight.Write))
+        // Решение (роль, рубильник общих проектов, запрет записи участнику в S1) — только через точку доступа
+        if (projects.GetById(projectId) is not { } found || access.Resolve(userId, projectId, ProjectRight.Write) is null)
         {
             denied = new NotFoundObjectResult(new { error = "Проект не найден" });
             return false;

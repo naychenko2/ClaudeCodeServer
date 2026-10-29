@@ -3,6 +3,7 @@ using System.Security.Claims;
 using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Team;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -19,7 +20,7 @@ namespace ClaudeHomeServer.Controllers;
 public class ChatsController(SessionManager sessions, ProjectManager projects, FileService files,
     DefaultAssistantProvisioner provisioner, TeamWaveService teamWaves,
     ChatDigestService digest, ChatArchiveService autoArchive,
-    UserStore users, PrefixFingerprintCache prefixFpCache,
+    UserStore users, PrefixFingerprintCache prefixFpCache, ChatUserStateService userState,
     ILogger<ChatsController> logger) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
@@ -246,9 +247,41 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     // Отметить чат прочитанным (синк непрочитанности между устройствами). Один эндпоинт
     // на оба списка (как /parent и /loop) — GetOwned внутри MarkRead резолвит и проектную
     // сессию. Отметка не двигает UpdatedAt и не поднимает чат в списке.
+    // Участник общего проекта отмечает СВОЮ прочитанность (оверлей ChatUserStateStore): у владельца
+    // и у других участников она не меняется. Видимость чата — GetAccessible (Read), не владение.
     [HttpPut("{id}/read")]
     public IActionResult MarkRead(string id)
-        => sessions.MarkRead(id, UserId) ? NoContent() : NotFound();
+    {
+        if (sessions.GetAccessible(id, UserId) is not { } found) return NotFound();
+        if (userState.IsMember(found.Session, UserId))
+        {
+            userState.MarkRead(UserId, found.Session);
+            return NoContent();
+        }
+        return sessions.MarkRead(id, UserId) ? NoContent() : NotFound();
+    }
+
+    // Личные отметки чата «закреплён» и «уведомления заглушены» (тело: pinned, notificationsMuted —
+    // null не меняет). Нужны отдельной ручкой: PUT {id} правит и имя/модель, а проектный
+    // PUT сессии требует права записи, которого у читателя нет, — личная отметка записью в проект
+    // не является. Владелец пишет в поля Session (как прежде), участник — в свой оверлей; ответ
+    // с сессией проходит конвертер и отдаёт вызывающему его собственные значения.
+    [HttpPut("{id}/user-state")]
+    public IActionResult SetUserState(string id, [FromBody] UserStateRequest req)
+    {
+        if (sessions.GetAccessible(id, UserId) is not { } found) return NotFound();
+        if (userState.IsMember(found.Session, UserId))
+        {
+            if (req.Pinned is bool pinned) userState.SetPinned(UserId, id, pinned);
+            if (req.NotificationsMuted is bool muted) userState.SetMuted(UserId, id, muted);
+        }
+        else
+        {
+            if (req.Pinned is bool pinned) sessions.SetPinned(id, pinned);
+            if (req.NotificationsMuted is bool muted) sessions.SetNotificationsMuted(id, muted);
+        }
+        return Ok(found.Session);
+    }
 
     // Убрать чат в архив (archived=true) / вернуть (false) — шаг 2 плана «Архив чатов»:
     // архив ПРЯЧЕТ чат, а не удаляет, история и claudeSessionId целы. Как /parent и /loop,
@@ -308,7 +341,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpPut("{id}/loop")]
     public async Task<IActionResult> SetWorkLoop(string id, [FromBody] SetWorkLoopRequest req)
     {
-        if (sessions.GetOwned(id, UserId) is null) return NotFound();
+        if (sessions.GetWithRight(id, UserId, ProjectRight.RunTurn) is null) return NotFound();
         try
         {
             // manual: true — эндпоинт дёргает только человек через тумблер UI; явное
@@ -329,7 +362,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpPut("{id}/team-implement")]
     public async Task<IActionResult> SetTeamImplement(string id, [FromBody] SetTeamImplementRequest req)
     {
-        if (sessions.GetOwned(id, UserId) is null) return NotFound();
+        if (sessions.GetWithRight(id, UserId, ProjectRight.RunTurn) is null) return NotFound();
         try
         {
             var updated = await sessions.SetTeamImplementAsync(id, req.Enabled,
@@ -357,7 +390,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpPut("{id}/team-implement/stop")]
     public async Task<IActionResult> StopTeamImplement(string id)
     {
-        if (sessions.GetOwned(id, UserId) is null) return NotFound();
+        if (sessions.GetWithRight(id, UserId, ProjectRight.RunTurn) is null) return NotFound();
         var updated = await sessions.StopTeamImplementAsync(id, UserId);
         return updated is null ? NotFound() : Ok(updated);
     }
@@ -367,7 +400,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpPut("{id}/team-implement/auto")]
     public async Task<IActionResult> SetTeamImplementAuto(string id, [FromBody] SetTeamImplementAutoRequest req)
     {
-        if (sessions.GetOwned(id, UserId) is null) return NotFound();
+        if (sessions.GetWithRight(id, UserId, ProjectRight.RunTurn) is null) return NotFound();
         var updated = await sessions.SetTeamImplementAutoAsync(id, req.AutoWaves, UserId);
         return updated is null ? NotFound() : Ok(updated);
     }
@@ -418,7 +451,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpPost("{id}/team-wave/tasks/{taskId}/restart")]
     public async Task<IActionResult> RestartWaveTask(string id, string taskId)
     {
-        if (sessions.GetOwned(id, UserId) is not { } session) return NotFound();
+        if (sessions.GetWithRight(id, UserId, ProjectRight.RunTurn) is not { } session) return NotFound();
         try
         {
             var result = await teamWaves.RestartWaveTaskAsync(session, taskId);
@@ -436,7 +469,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpPost("{id}/team-wave/restart")]
     public async Task<IActionResult> RestartWave(string id, [FromBody] TeamWaveRestartRequest? req)
     {
-        if (sessions.GetOwned(id, UserId) is not { } session) return NotFound();
+        if (sessions.GetWithRight(id, UserId, ProjectRight.RunTurn) is not { } session) return NotFound();
         try
         {
             var result = await teamWaves.RestartWaveAsync(session, req?.Confirm == true);
@@ -464,7 +497,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpPost("{id}/team-wave/restart-turn")]
     public async Task<IActionResult> RestartTeamWaveTurn(string id, [FromBody] TeamTurnRestartRequest? req)
     {
-        if (sessions.GetOwned(id, UserId) is null) return NotFound();
+        if (sessions.GetWithRight(id, UserId, ProjectRight.RunTurn) is null) return NotFound();
         try
         {
             var result = await sessions.RestartStuckTurnAsync(id, req?.StartFresh == true);
@@ -506,7 +539,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpPut("{id}/mode")]
     public IActionResult SetMode(string id, [FromBody] SetModeRequest req)
     {
-        if (sessions.GetOwned(id, UserId) is null) return NotFound();
+        if (sessions.GetWithRight(id, UserId, ProjectRight.RunTurn) is null) return NotFound();
         try
         {
             var updated = sessions.SetMode(id, req.Mode);
@@ -530,6 +563,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
         // о чём просит эндпоинт.
         if (string.IsNullOrWhiteSpace(req.Model))
             return BadRequest(new { error = "Не указана модель" });
+        if (sessions.GetWithRight(id, UserId, ProjectRight.RunTurn) is null) return NotFound();
         try
         {
             return Ok(await sessions.MigrateProviderAsync(id, UserId, req.Model, req.SubscriptionKey));
@@ -582,6 +616,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     public async Task<IActionResult> Continue(string id, [FromBody] ContinueChatRequest? req,
         [FromServices] ChatContinueService continuation)
     {
+        if (sessions.GetWithRight(id, UserId, ProjectRight.RunTurn) is null) return NotFound();
         try
         {
             var result = await continuation.ContinueAsync(UserId, id, req?.Note);
@@ -610,6 +645,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
         // у владельца, не включавшего фичу (dark launch не должен прятать только интерфейс)
         if (!flags.IsEnabled(UserId, FeatureFlagKeys.PromptCache))
             return StatusCode(403, new { error = "Флаг prompt-cache выключен" });
+        if (sessions.GetWithRight(id, UserId, ProjectRight.RunTurn) is null) return NotFound(new { error = "Чат не найден или удалён" });
         try
         {
             var result = await handoff.HandoffAsync(UserId, id, ct);
@@ -718,6 +754,7 @@ public record CreateChatRequest(string? Mode = null, string? ResumeSessionId = n
 // VoiceMode: null — не менять; иначе — озвучка ответов включена/выключена
 // VoiceStyle: null — не менять; иначе VoiceStyles.Talk (короткий ответ целиком) | Digest (полный
 // ответ, вслух только выжимка). Приходит и без VoiceMode — стиль принадлежит устройству
+public record UserStateRequest(bool? Pinned = null, bool? NotificationsMuted = null);
 public record UpdateChatRequest(string? Name = null, string? Model = null, string? Effort = null, bool? Pinned = null, int? ExpiresAfterMinutes = -1, bool? NotificationsMuted = null, bool? VoiceMode = null, string? VoiceStyle = null);
 
 // ParentId: null — вынести чат в корень списка; иначе id чата-родителя

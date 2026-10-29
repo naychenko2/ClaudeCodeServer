@@ -3,6 +3,7 @@ using System.Security.Claims;
 using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -30,6 +31,10 @@ public class SessionMessagesController(SessionManager sessions, SessionMessaging
     // Чат, который человек ВИДИТ (в т.ч. участник общего проекта): только для чтения. Снимки
     // промпта, разбор, запись и очередь остаются на OwnedSession — в S1 участник чаты не пишет.
     private Models.Session? VisibleSession(string sessionId) => sessions.GetAccessible(sessionId, UserId)?.Session;
+
+    // Чат, ход которого человек вправе запускать и вести (S1-7): право RunTurn через точку доступа,
+    // а не владение. Сегодня оно у владельца; редактору его откроет S2a-10 строкой матрицы ProjectAccess.
+    private Models.Session? TurnSession(string sessionId) => sessions.GetWithRight(sessionId, UserId, ProjectRight.RunTurn);
 
     // GET /api/sessions/{sid}/prompt/{snapshotId} — что ушло модели на этом ходу
     // (секции системного промпта, текст хода, аргументы запуска, доступная часть слоя CLI).
@@ -160,6 +165,7 @@ public class SessionMessagesController(SessionManager sessions, SessionMessaging
         var sender = Request.Headers.TryGetValue("X-Sender-Session-Id", out var sh)
             ? sh.FirstOrDefault() : null;
 
+        if (TurnSession(sessionId) is null) return NotFound();
         var outcome = await messaging.SendAsync(UserId, sessionId, req.Text,
             caller, sender, agentDepth, req.Wait, req.TimeoutSec);
         return outcome switch
@@ -276,7 +282,7 @@ public class SessionMessagesController(SessionManager sessions, SessionMessaging
     [HttpDelete("pending/{messageId}")]
     public async Task<IActionResult> CancelPending(string sessionId, string messageId)
     {
-        if (OwnedSession(sessionId) is null) return NotFound();
+        if (TurnSession(sessionId) is null) return NotFound();
         return await sessions.CancelPendingAsync(sessionId, messageId) ? NoContent() : NotFound();
     }
 
@@ -286,7 +292,7 @@ public class SessionMessagesController(SessionManager sessions, SessionMessaging
     [HttpPost("pending/preempt")]
     public IActionResult PreemptForPending(string sessionId)
     {
-        if (OwnedSession(sessionId) is null) return NotFound();
+        if (TurnSession(sessionId) is null) return NotFound();
         return sessions.PreemptForPending(sessionId)
             ? NoContent()
             : Conflict(new { error = "Прерывать нечего: ход уже завершился или очередь пуста" });

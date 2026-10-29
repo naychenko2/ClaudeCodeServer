@@ -45,6 +45,10 @@ public sealed class ChatUserStateStore(string root, TimeProvider? time = null)
         return all is not null && all.TryGetValue(sessionId, out var state) ? state : null;
     }
 
+    // Все записи пользователя одним чтением файла — для списков (по записи на чат файл не читаем).
+    public IReadOnlyDictionary<string, UserChatState> GetAll(string userId) =>
+        ReadAll(FileFor(userId)) ?? [];
+
     // Отметить чат прочитанным. По умолчанию — текущее время; вызывающий может передать отметку
     // сам (например, когда событие уже известно).
     public UserChatState MarkRead(string userId, string sessionId, DateTime? at = null) =>

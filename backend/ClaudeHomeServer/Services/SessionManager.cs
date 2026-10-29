@@ -11034,6 +11034,18 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         return s is not null && ResolveOwnerId(s) == ownerId ? s : null;
     }
 
+    // Сессия, на которую у человека есть право right (S1-7): REST-входы хода (RunTurn) проверяют
+    // его здесь, а не владением, чтобы открытие права редактору (S2a-10) было строкой матрицы
+    // ProjectAccess, а не правкой каждого эндпоинта. Нет доступа — null (404, существование не раскрываем).
+    public Session? GetWithRight(string sessionId, string userId, Access.ProjectRight right)
+    {
+        var s = GetById(sessionId);
+        if (s is null) return null;
+        return _services?.GetService<Access.IProjectAccess>() is { } access
+            ? access.ResolveSession(userId, sessionId, right) is null ? null : s
+            : ResolveOwnerId(s) == userId ? s : null;
+    }
+
     // Чат, который человеку ВИДЕН (владелец проекта, участник общего проекта при флаге и
     // рубильнике, владелец чата вне проекта), вместе с областью запроса. Только для чтения:
     // ключ хранилищ дальше — scope.TenantOwnerId, а не id вызывающего. Запись и ходы остаются

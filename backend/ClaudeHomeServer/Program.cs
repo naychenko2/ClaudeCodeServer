@@ -985,6 +985,12 @@ builder.Services.AddHttpClient("safe-download")
 // провайдеров: подсистема самодостаточна, точку регистрации кеша в `Program.cs`
 // больше не держим.
 builder.Services.AddChatContext();
+// Личное состояние чата участника общего проекта (S1-7): оверлей поверх полей Session. Читает его
+// конвертер Session на границе сериализации, поэтому нужен доступ к текущему запросу.
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddSingleton(sp => new ClaudeHomeServer.Services.ChatUserState.ChatUserStateStore(
+    ClaudeHomeServer.Services.ChatUserState.ChatUserStateStore.RootFromConfig(sp.GetRequiredService<IConfiguration>())));
+builder.Services.AddSingleton<ClaudeHomeServer.Services.ChatUserStateService>();
 builder.Services.AddSubsystems(builder.Configuration,
     // `git` идёт ПЕРВЫМ: это нижний слой вертикалей — на него смотрят будущие
     // Dossiers (захват коммитов), Knowledge (синк файлов), Deploy (publish/rollback),

@@ -1,21 +1,15 @@
 // Карточка «Сводка» на вкладке «Хронология» страницы фичи (волна 6 «Сводка состояния фичи»,
-// шаг F5, макет docs/mockups/feature-summary-1).
+// макет docs/mockups/feature-summary-2: пара «Готовность | Срок» вместо «Сделано · Дальше · Оценка»).
 //
-// Блок — только композиция: слова — FeatureBriefModel (F2), тег состояния — FeatureStatusTag
-// (единая точка правды тега), полоска/ось/итоги — FeatureBriefTimeline (F4), легенда —
-// FeatureBriefLegend (F3). Ничего не пересчитывает: не трогает напрямую ни поля состояния,
-// ни полосы стадий, ни полей таймлайна — статы отдаёт общей модели ленты целиком
-// (Grep-сторож в тесте).
+// Блок — только композиция: слова — FeatureBriefModel, тег состояния — FeatureStatusTag
+// (единая точка правды тега), строка итогов — FeatureBriefTimeline. Ничего не пересчитывает:
+// не трогает напрямую ни поля состояния, ни полосы стадий, ни полей таймлайна (Grep-сторож в
+// тесте); «расходятся» и время оценки оркестратора приходят с бэка.
 //
-// Состояния (макет §2–3): loading — скелетон с aria-busy; brief = null при живых статах —
-// «Сводка не загрузилась» + «Повторить», полоска остаётся; brief = null и статов нет —
-// блока нет; иначе — карточка состояния. Подстрока «Сейчас» и строка «Сделано» — тоже
-// строки модели (R-F5): блок только вызывает модель и красит mono-части моно (числа
-// подстроки — FONT.mono, «Токены поимённо»). Подпись факта без значения не рисуется
-// (макет: «если какого-то поля нет, строку не рисуем»); порядок секций «Сделано ·
-// Дальше · Оценка» и закрытость ленты — закреплены тестом; без «Дальше» «Оценка»
-// остаётся в правой колонке грида (R-F8 минор 2). Одно «сейчас» на ответ
-// (R-F8): относительные строки считаются от него, а не от часов в каждом рендере.
+// Состояния: loading — скелетон с aria-busy; brief = null при живых статах — «Сводка не
+// загрузилась» + «Повторить» и строка итогов; brief = null и статов нет — блока нет; иначе —
+// карточка состояния. Подстрока «Сейчас» — строка модели, блок красит числа моно. Подпись без
+// значения не рисуется. Одно «сейчас» на ответ (R-F8): относительные строки считаются от него.
 
 import { useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
@@ -23,12 +17,12 @@ import { C, R, SP, FS, FONT } from '../../lib/design';
 import { Button } from '../ui/Button';
 import { StatusTag, featureRunStatusTag, type FeatureRunTag } from './FeatureStatusTag';
 import {
-  briefDoneText, briefEstimateText, briefNextText, briefNowText, briefSubText, briefUpdatedText, voiceRoleText, voiceStaleLabel, voiceWhenText,
-  type PersonaNameResolver,
+  briefActiveTagLabel, briefActiveView, briefElapsedFact, briefEstimateText, briefNowText, briefReadinessText, briefSubText, briefUpdatedText, voiceRoleText, voiceStaleLabel, voiceWhenText,
+  type BriefDonePart, type BriefEstimateView, type BriefReadinessView, type PersonaNameResolver,
 } from './FeatureBriefModel';
-import { MiniTimeline, MiniTimelineAxis, SummaryRow } from './FeatureBriefTimeline';
-import { FeatureBriefLegend } from './FeatureBriefLegend';
-import { buildTimelineModel, stageLabel, type SegmentKind } from './FeatureStatsBits';
+import { ActiveList } from './FeatureBriefActive';
+import { SummaryRow } from './FeatureBriefTimeline';
+import { stageLabel } from './FeatureStatsBits';
 import type { FeatureBrief, FeatureBriefKind } from '../../lib/featurePage';
 import type { FeatureStats } from '../../types/featureStats';
 
@@ -51,6 +45,10 @@ export interface FeatureBriefBlockProps {
   // Кнопки состояния «ждёт вас»: только на мобиле (на десктопе «Мерж…» — в шапке страницы).
   onMerge?: () => void;
   onOpenFinal?: () => void;
+  // Строки «Сейчас»: id задачи → переход в задачу; «Ответить» → чат задачи; хвост → вкладка «Задачи».
+  onOpenTask?: (taskId: string) => void;
+  onAnswer?: (taskId: string) => void;
+  onOpenTasks?: () => void;
 }
 
 // ── Тег состояния ────────────────────────────────────────────────────────────────────
@@ -62,6 +60,13 @@ export interface FeatureBriefBlockProps {
 // 'merged' для карточки ведётся ровно как 'closed'). «в очереди» — новый вариант тега
 // (макет: bgSelected/textSecondary), состояния для него в таблице нет.
 export function briefTag(brief: FeatureBrief, mergedAt: string | null): FeatureRunTag {
+  // Несколько задач — тег считает их: «идёт · 3 в работе», «ждёт вас · 1 из 3».
+  const counted = briefActiveTagLabel(brief);
+  if (counted) return { ...briefTagBase(brief, mergedAt), label: counted };
+  return briefTagBase(brief, mergedAt);
+}
+
+function briefTagBase(brief: FeatureBrief, mergedAt: string | null): FeatureRunTag {
   switch (brief.kind) {
     case 'running':
       return featureRunStatusTag('running', brief.now?.stage ? stageLabel(brief.now.stage) : null);
@@ -145,6 +150,8 @@ const LABEL: CSSProperties = {
   fontSize: FS.xxs, textTransform: 'uppercase', letterSpacing: '.05em', color: C.textMuted,
 };
 const UPD: CSSProperties = { fontSize: FS.xs, color: C.textMuted };
+// Метка предупреждения: «дольше, чем по истории», «до смены этапа», «до паузы».
+const STALE_TAG: CSSProperties = { fontSize: FS.xs, fontWeight: 600, background: C.warningBg, color: C.warningText, borderRadius: R.sm, padding: '0 6px' };
 
 // ── Числа подстроки «Сейчас» — моно (R-F8, макет §«Токены поимённо») ────────────────
 // Модель отдаёт подстроку строкой; блок только красит числовые токены — текст не меняет.
@@ -167,49 +174,120 @@ function monoNumbers(text: string): ReactNode[] {
   return out;
 }
 
-// ── Хвост карточки «Жизнь фичи»: полоска, ось, легенда, итоги + «Статистика ›» ───────
-// Поля статов деструктурируются и отдаются общей модели ленты как есть — блок сам ничего
-// из сырых полей не считает, включая поля `timeline` (Grep-сторож теста, R-F8). Признак
-// закрытости ленты — не эвристика по `current == null`, а общая модель состояния:
-// закрытость приходит из карточки (brief.kind 'closed'/'merged', Ф-1.1); без brief — не закрыта.
-function LifeSection({ stats, closed, onOpenStats, isMobile }: { stats: FeatureStats; closed: boolean; onOpenStats: () => void; isMobile: boolean }) {
-  const { timeline, source, truncated } = stats;
-  const model = buildTimelineModel(timeline, source, truncated, closed);
-  // Виды легенды — только из MAIN-сегментов: ревью — отдельная дорожка, на полоске её нет.
-  const kinds = new Set<SegmentKind>();
-  for (const b of model.blocks) {
-    if (b.type === 'stage') for (const s of b.segments) kinds.add(s.kind);
-  }
-  const hasBreak = model.blocks.some(b => b.type === 'break');
+// ── Строка итогов + «Статистика ›» ───────────────────────────────────────────────────
+// Из «Жизни фичи» в сводке остаётся только она (деньги и время видны без перехода); полоска,
+// ось и легенда — на вкладке «Статистика». Поля статов отдаются общей модели строки как есть.
+function TotalsRow({ stats, lead, onOpenStats, isMobile }: { stats: FeatureStats; lead: { label: string; value: string } | null; onOpenStats: () => void; isMobile: boolean }) {
   return (
-    <div data-testid="brief-life" style={{ marginTop: SP.md, paddingTop: SP.md, borderTop: `1px solid ${C.borderLight}` }}>
-      <div style={{ ...LABEL, marginBottom: SP.xs }}>Жизнь фичи</div>
-      {model.hasData && (
-        <div role="img" aria-label="Полоска жизни фичи">
-          <MiniTimeline stats={stats} closed={closed} />
+    <div data-testid="brief-totals" style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap', marginTop: SP.md, paddingTop: SP.sm, borderTop: `1px solid ${C.borderLight}` }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <SummaryRow stats={stats} lead={lead} />
+      </div>
+      <Button
+        variant="ghost"
+        size="xs"
+        dataTestId="brief-go-stats"
+        ariaLabel="Открыть вкладку «Статистика»"
+        onClick={onOpenStats}
+        style={{
+          background: 'transparent', border: 'none', color: C.accent,
+          fontSize: FS.xs, whiteSpace: 'nowrap', flexShrink: 0,
+          minHeight: isMobile ? 40 : undefined,
+        }}
+      >
+        Статистика ›
+      </Button>
+    </div>
+  );
+}
+
+// ── Готовность: подпись, полоска, факт трекера, чипы «ещё не начато» ─────────────────
+const MONO_STRONG: CSSProperties = { fontFamily: FONT.mono, fontWeight: 600 };
+
+function parts(list: BriefDonePart[], monoColor: string): ReactNode[] {
+  return list.map((p, i) => (p.mono ? <b key={i} style={{ ...MONO_STRONG, color: monoColor }}>{p.text}</b> : <span key={i}>{p.text}</span>));
+}
+
+function ReadinessColumn({ view }: { view: BriefReadinessView }) {
+  // Заливка: «готово» — accent, у закрытой — success, у устаревшей — тусклая; штриховка «в работе»
+  // той же краской (макет «Токены поимённо»). Анимации заполнения нет намеренно.
+  const fill = view.closed ? C.success : view.stale ? C.accentMuted : C.accent;
+  const hatch = view.stale
+    ? `repeating-linear-gradient(135deg, ${C.accentMuted} 0 3px, ${C.progressTrack} 3px 6px)`
+    : `repeating-linear-gradient(135deg, ${C.accent} 0 3px, ${C.accentMuted} 3px 6px)`;
+  return (
+    <div data-testid="brief-ready" style={{ minWidth: 0 }}>
+      <div style={LABEL}>{view.label}</div>
+      <div data-testid="brief-ready-caption" style={{ fontSize: FS.sm, color: C.textSecondary, margin: `${SP.xs}px 0` }}>
+        {/* Число — mono 600 textHeading, у устаревшей оценки — textSecondary. */}
+        {parts(view.caption, view.stale ? C.textSecondary : C.textHeading)}
+      </div>
+      <div
+        data-testid="brief-ready-bar"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={view.percent}
+        aria-label={view.ariaLabel}
+        style={{ display: 'flex', height: 8, borderRadius: R.max, overflow: 'hidden', background: C.progressTrack }}
+      >
+        <div data-testid="brief-ready-fill" style={{ width: `${view.percent}%`, background: fill }} />
+        {view.inProgressPercent > 0 && <div data-testid="brief-ready-hatch" style={{ width: `${view.inProgressPercent}%`, background: hatch }} />}
+      </div>
+      <div data-testid="brief-ready-tracker" style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: SP.xs }}>
+        {view.staleLabel && <span data-testid="brief-ready-stale" style={{ ...STALE_TAG, marginRight: SP.xs }}>{view.staleLabel}</span>}
+        {parts(view.tracker, C.textPrimary)}
+      </div>
+      {(view.chips.length > 0 || view.chipsEmpty) && (
+        <div data-testid="brief-ready-left" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: SP.xs, marginTop: SP.sm }}>
+          <span style={{ fontSize: FS.xs, color: C.textMuted }}>{view.chipsLabel}</span>
+          {view.chips.map((c, i) => (
+            <span key={i} data-testid="brief-chip" style={{
+              fontSize: FS.xs, borderRadius: R.sm, padding: '1px 7px', maxWidth: '100%',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              background: c.tone === 'next' ? C.accentLight : c.tone === 'you' ? C.infoBg : C.bgSelected,
+              color: c.tone === 'next' ? C.textHeading : c.tone === 'you' ? C.textPrimary : C.textSecondary,
+              fontWeight: c.tone === 'plain' ? 400 : 600,
+            }}>{c.text}</span>
+          ))}
+          {view.chipsEmpty && <span data-testid="brief-chip-empty" style={{ fontSize: FS.sm, color: C.successText }}>{view.chipsEmpty}</span>}
         </div>
       )}
-      <MiniTimelineAxis stats={stats} closed={closed} />
-      <FeatureBriefLegend kinds={kinds} hasBreak={hasBreak} />
-      <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap', marginTop: SP.xs }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <SummaryRow stats={stats} />
-        </div>
-        <Button
-          variant="ghost"
-          size="xs"
-          dataTestId="brief-go-stats"
-          ariaLabel="Открыть вкладку «Статистика»"
-          onClick={onOpenStats}
-          style={{
-            background: 'transparent', border: 'none', color: C.accent,
-            fontSize: FS.xs, whiteSpace: 'nowrap', flexShrink: 0,
-            minHeight: isMobile ? 40 : undefined,
-          }}
-        >
-          Статистика ›
-        </Button>
+    </div>
+  );
+}
+
+// ── Срок: главное число, источник, вторая оценка, «почему» ────────────────────────────
+function EtaColumn({ view }: { view: BriefEstimateView }) {
+  return (
+    <div data-testid="brief-eta" style={{ minWidth: 0 }}>
+      <div style={LABEL}>{view.header}</div>
+      <div data-testid="brief-estimate-main" style={{
+        marginTop: SP.xs, fontSize: view.mainMuted ? FS.base : FS.lg, fontWeight: view.mainMuted ? 400 : 600,
+        color: view.mainMuted ? C.textMuted : C.textHeading, lineHeight: 1.35,
+      }}>
+        {monoNumbers(view.main)}
+        {view.tail && <span data-testid="brief-estimate-tail" style={{ fontSize: FS.sm, fontWeight: 400, color: C.textSecondary }}> {monoNumbers(view.tail)}</span>}
       </div>
+      {view.source && <div data-testid="brief-estimate-source" style={UPD}>{monoNumbers(view.source)}</div>}
+      {view.alt && (
+        <div data-testid="brief-estimate-alt" style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: SP.xs + 2 }}>
+          {monoNumbers(view.alt)}
+          {view.verdict && (
+            <>
+              {' · '}
+              {view.verdict.tone === 'ok'
+                ? <span data-testid="brief-estimate-verdict" style={{ fontWeight: 600, color: C.successText }}>{view.verdict.text}</span>
+                : <span data-testid="brief-estimate-verdict" style={STALE_TAG}>{view.verdict.text}</span>}
+            </>
+          )}
+        </div>
+      )}
+      {view.why && (
+        <div data-testid="brief-estimate-why" style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: SP.xs, paddingLeft: SP.sm, borderLeft: `2px solid ${C.warning}` }}>
+          {view.why}
+        </div>
+      )}
     </div>
   );
 }
@@ -242,7 +320,7 @@ function VoiceBlock({ note, kind, nameOf, nowMs }: { note: NonNullable<FeatureBr
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: `${SP.xs}px ${SP.sm}px`, alignItems: 'center', marginTop: 2, fontSize: FS.xs, color: C.textMuted }}>
           <span data-testid="brief-voice-by">{sig}</span>
           {stale && (
-            <span data-testid="brief-voice-stale" style={{ fontSize: FS.xs, fontWeight: 600, background: C.warningBg, color: C.warningText, borderRadius: R.sm, padding: '0 6px' }}>
+            <span data-testid="brief-voice-stale" style={STALE_TAG}>
               {stale}
             </span>
           )}
@@ -264,13 +342,17 @@ function BriefSkeleton({ isMobile }: { isMobile: boolean }) {
     >
       <div style={sk({ width: '40%', height: 8 })} />
       <div style={sk({ width: '80%', height: 14, marginTop: SP.sm })} />
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr 1fr', gap: `${SP.md}px ${SP.xl}px`, marginTop: SP.md, paddingTop: SP.md, borderTop: `1px solid ${C.borderLight}` }}>
-        {[0, 1, 2].map(i => (
-          <div key={i}>
-            <div style={sk({ width: 56, height: 8 })} />
-            <div style={sk({ width: '90%', marginTop: SP.xs })} />
-          </div>
-        ))}
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1.4fr 1fr', gap: `${SP.md}px ${SP.xl}px`, marginTop: SP.md, paddingTop: SP.md, borderTop: `1px solid ${C.borderLight}` }}>
+        <div>
+          <div style={sk({ width: 72, height: 8 })} />
+          <div style={sk({ height: 8, borderRadius: R.max, marginTop: SP.sm })} />
+          <div style={sk({ width: '70%', marginTop: SP.sm })} />
+        </div>
+        <div>
+          <div style={sk({ width: 40, height: 8 })} />
+          <div style={sk({ width: '60%', height: 14, marginTop: SP.sm })} />
+          <div style={sk({ width: '80%', marginTop: SP.sm })} />
+        </div>
       </div>
       <div style={sk({ height: 44, marginTop: SP.md, borderRadius: R.lg })} />
       <div style={{ marginTop: SP.md, paddingTop: SP.md, borderTop: `1px solid ${C.borderLight}` }}>
@@ -284,7 +366,7 @@ function BriefSkeleton({ isMobile }: { isMobile: boolean }) {
 // ── Карточка ─────────────────────────────────────────────────────────────────────────
 export function FeatureBriefBlock({
   loading = false, brief, stats, mergedAt = null, nameOf, isMobile = false,
-  onOpenStats, onRetry, onMerge, onOpenFinal,
+  onOpenStats, onRetry, onMerge, onOpenFinal, onOpenTask, onAnswer, onOpenTasks,
 }: FeatureBriefBlockProps) {
   // Одно «сейчас» на ответ (R-F8): относительные строки («ждёт N», «обновлено N назад»,
   // время голоса) считаются от одного момента, привязанного к данным, а не от часов в
@@ -302,12 +384,9 @@ export function FeatureBriefBlock({
   // «summary и stats оба null — блока нет» (макет §3).
   if (!brief && !stats) return null;
 
-  // Закрытость ленты — из общей модели состояния (brief.kind), не из эвристики по
-  // сырому текущему полю ленты (R-F8). Без brief лента не закрыта: признака нет.
-  const closed = brief?.kind === 'closed' || brief?.kind === 'merged';
-  const life = stats ? <LifeSection stats={stats} closed={closed} onOpenStats={onOpenStats} isMobile={isMobile} /> : null;
+  const totals = stats ? <TotalsRow stats={stats} lead={brief ? briefElapsedFact(brief) : null} onOpenStats={onOpenStats} isMobile={isMobile} /> : null;
 
-  // «Сводка не загрузилась» (макет §3): одна строка + «Повторить»; полоска и итоги — как раньше.
+  // «Сводка не загрузилась» (макет §3): одна строка + «Повторить» и строка итогов, если пришли статы.
   if (!brief) {
     return (
       <section data-testid="feature-brief-block" aria-label="Сводка состояния фичи" style={{
@@ -318,21 +397,25 @@ export function FeatureBriefBlock({
           <span aria-hidden style={{ display: 'inline-flex', flexShrink: 0 }}>{ERROR_GLYPH}</span>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading }}>Сводка не загрузилась</div>
-            <div style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: 2 }}>Полоска и итоги ниже — как раньше.</div>
+            <div style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: 2 }}>Строка итогов ниже — как раньше.</div>
           </div>
           <Button variant="secondary" size={isMobile ? 'md' : 'sm'} dataTestId="brief-retry" onClick={onRetry}>Повторить</Button>
         </div>
-        {life}
+        {totals}
       </section>
     );
   }
 
   const tag = briefTag(brief, mergedAt);
   const nowText = briefNowText(brief, { nameOf, mergedAt });
-  const subText = briefSubText(brief, nowMs);
-  const nextText = briefNextText(brief, nameOf);
-  const est = briefEstimateText(brief);
+  // Задачи в работе: заголовок вместо прежней строки, кнопка «Ответить» и список.
+  const active = briefActiveView(brief, { nameOf, nowMs });
+  const headingText = active?.heading ?? nowText;
+  const subText = active?.heading != null ? active.sub : briefSubText(brief, nowMs);
+  const readiness = briefReadinessText(brief, { nameOf });
+  const eta = briefEstimateText(brief, { nameOf, nowMs });
   const isWait = brief.kind === 'waiting_you';
+  const answer = active?.answer && onAnswer ? active.answer : null;
   // «обновлено …» — по updatedAt (время последнего события состояния, B6), а не по computedAt
   // (дефект f2da9354); у закрытой — дата закрытия; поля нет — строки нет (решает модель).
   const upd = briefUpdatedText(brief, mergedAt, nowMs);
@@ -344,25 +427,9 @@ export function FeatureBriefBlock({
     </div>
   );
 
-  const doneParts = briefDoneText(brief);
-  const mono: CSSProperties = { fontFamily: FONT.mono, fontWeight: 600, color: C.textHeading };
-  const factLabel = (text: string) => <div style={LABEL}>{text}</div>;
-  // Ячейка факта: «подпись | значение». minWidth: 0 у ячейки и у значения — длинное слово
-  // не раздвигает колонку грида (R-F8). gridColumn — расстановка в колонках грида.
-  const factCell = (label: string, value: ReactNode, gridColumn?: string | number) => (
-    <div style={{ minWidth: 0, ...(gridColumn !== undefined ? { gridColumn } : null), ...(isMobile ? { display: 'grid', gridTemplateColumns: '72px 1fr', gap: SP.sm, alignItems: 'baseline' } : null) }}>
-      {factLabel(label)}
-      <div style={{ minWidth: 0 }}>{value}</div>
-    </div>
-  );
-  // Без «Дальше» грид не сдвигается: «Сделано» растягивается на колонки 1–2, «Оценка»
-  // остаётся в правой колонке (R-F8 минор 2: макет ждёт «Оценку» справа, третья колонка
-  // не пустует зря). На мобиле (одна колонка) расстановки нет.
-  const noNext = !isMobile && !nextText;
-
   return (
     <section data-testid="feature-brief-block" aria-label="Сводка состояния фичи" style={{
-      background: C.bgCard, border: `1px solid ${isWait ? C.info : C.borderLight}`, borderRadius: R.lg,
+      background: C.bgCard, border: `1px solid ${isWait || active?.answer ? C.info : C.borderLight}`, borderRadius: R.lg,
       padding: isMobile ? SP.md : SP.lg, fontFamily: FONT.sans,
     }}>
       {/* Мобильная шапка: тег и «обновлено» — отдельной строкой над «Сейчас» (макет §1). */}
@@ -378,17 +445,23 @@ export function FeatureBriefBlock({
         {GLYPH[brief.kind] && <span aria-hidden data-testid="brief-glyph" style={{ paddingTop: 3, display: 'inline-flex', flexShrink: 0 }}>{GLYPH[brief.kind]}</span>}
         <div style={{ flex: 1, minWidth: 0 }}>
           {/* Подпись без значения не рисуется (макет: «поля нет — строку не рисуем», R-F8). */}
-          {nowText && factLabel('Сейчас')}
-          {nowText && (
+          {headingText && <div style={LABEL}>Сейчас</div>}
+          {headingText && (
             <div data-testid="brief-now-line" aria-live="polite" style={{ fontSize: FS.lg, fontWeight: 600, color: C.textHeading, lineHeight: 1.35 }}>
-              {nowText}
+              {headingText}
             </div>
           )}
           {subText && <div data-testid="brief-now-sub" style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: 2 }}>{monoNumbers(subText)}</div>}
+          {/* «Ответить Кире»: на обоих размерах, открывает чат задачи, которая ждёт человека. */}
+          {answer && (
+            <div style={{ marginTop: SP.sm }}>
+              <Button variant="primary" size="md" dataTestId="brief-answer" onClick={() => onAnswer?.(answer.taskId)}>{answer.label}</Button>
+            </div>
+          )}
           {/* Кнопки «ждёт вас» — только на мобиле (на десктопе «Мерж…» уже в шапке страницы).
               Каждая рисуется по своему пропу независимо (R-F5 п.6): без живого чата финала
               onOpenFinal не передан — «Мерж…» остаётся, путь к мержу в этом состоянии есть. */}
-          {isWait && isMobile && (onMerge || onOpenFinal) && (
+          {isWait && !active?.answer && isMobile && (onMerge || onOpenFinal) && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm, marginTop: SP.sm }}>
               {onMerge && <Button variant="primary" size="md" dataTestId="brief-merge" onClick={onMerge}>Мерж…</Button>}
               {/* «Открыть финальное ревью» — secondary (R-F8): второе действие ряда, не ghost-ссылка. */}
@@ -399,36 +472,24 @@ export function FeatureBriefBlock({
         {!isMobile && tagBlock}
       </div>
 
-      {/* «Сделано · Дальше · Оценка»: три колонки на десктопе, столбик «подпись | значение» на 360. */}
+      {active && <ActiveList view={active} isMobile={isMobile} onOpenTask={onOpenTask} onOpenTasks={onOpenTasks} />}
+
+      {/* «Готовность | Срок»: две колонки 1.4fr 1fr на десктопе, столбик на 360. */}
       <div
         data-testid="brief-facts"
         style={{
           display: 'grid',
-          gridTemplateColumns: isMobile ? '1fr' : '1fr 1.5fr 1fr',
-          gap: isMobile ? SP.sm : `${SP.md}px ${SP.xl}px`,
+          gridTemplateColumns: isMobile ? '1fr' : '1.4fr 1fr',
+          gap: isMobile ? SP.md : `${SP.md}px ${SP.xl}px`,
           marginTop: SP.md, paddingTop: SP.md, borderTop: `1px solid ${C.borderLight}`,
         }}
       >
-        {factCell('Сделано', (
-          <div data-testid="brief-done-line" style={{ fontSize: FS.base, color: C.textPrimary }}>
-            {doneParts.map((p, i) => (p.mono
-              ? <b key={i} style={mono}>{p.text}</b>
-              : <span key={i}>{p.text}</span>))}
-          </div>
-        ), noNext ? '1 / 3' : undefined)}
-        {/* «Дальше» без строки модели не рисуется вовсе — голый заголовок не показываем (R-F8). */}
-        {nextText ? factCell('Дальше', <div data-testid="brief-next-line" style={{ fontSize: FS.base, color: C.textPrimary }}>{nextText}</div>) : null}
-        {factCell(est.header, (
-          <>
-            {/* mainMuted (queued): строка-обещание, не значение — приглушённый (макет queue). */}
-            <div data-testid="brief-estimate-main" style={{ fontSize: FS.base, color: est.mainMuted ? C.textMuted : C.textPrimary }}>{est.main}</div>
-            {est.fact && <div data-testid="brief-estimate-fact" style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: 2 }}>{est.fact}</div>}
-          </>
-        ), noNext ? 3 : undefined)}
+        <ReadinessColumn view={readiness} />
+        <EtaColumn view={eta} />
       </div>
 
       {brief.note && <VoiceBlock note={brief.note} kind={brief.kind} nameOf={nameOf} nowMs={nowMs} />}
-      {life}
+      {totals}
     </section>
   );
 }

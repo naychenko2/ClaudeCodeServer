@@ -154,6 +154,9 @@ public class TaskItem
     // (role=feature), пишет TaskManager.SetFeatureNote. Аддитивное nullable-поле: старый tasks.json
     // без «note» читается как null, BackupSchema.Version не растёт.
     public FeatureNote? Note { get; set; }
+    // Срок из первой оценки оркестратора после старта фичи (FeatureEstimate.EtaMinutes): пишется один раз
+    // SetFeatureNote и не перезаписывается, снятие голоса его не трогает. Аддитивное nullable-поле.
+    public int? InitialEtaMinutes { get; set; }
     // Глубина цепочки делегирования: 0 — создана не из чата-исполнителя (обычный чат/UI/API);
     // из чата-исполнителя родительской задачи — её DelegationDepth + 1 (TaskManager.Create).
     // Анти-рекурсия делегирования проверяется гейтом по глубине хода (DelegatedTurnGate /
@@ -215,10 +218,49 @@ public record FeatureHold(string Reason, DateTime Since, string? BySessionId, bo
 // девятая категория, «Фильтр фич по состоянию», R-Б1/2); имя поля и
 // JSON-контракт прежние — голоса, записанные до B15, хранят СОСТОЯНИЕ («running», «paused»…), они
 // достраиваются до категории таблицей FeatureBrief.KindByState (fail-closed для неизвестного).
+// Estimate — оценка оркестратора (макет 2 сводки фичи): пишется только вместе с голосом, штамп
+// At/StageAtWrite/StateAtWrite общий; записи без оценки читаются с Estimate = null.
 public record FeatureNote(string Text, DateTime At, string? BySessionId, bool ByUser,
-    string StageAtWrite, string StateAtWrite)
+    string StageAtWrite, string StateAtWrite, FeatureEstimate? Estimate = null)
 {
     public const int MaxTextLength = 600;
+}
+
+// Оценка оркестратора (FeatureNote.Estimate): Done/InProgress/Total — единицы работы (шаги плана плюс
+// стадии конвейера), Percent — когда шаги неравные по объёму (null — доля done/total), Remaining —
+// ещё не начатое (первый пункт — «дальше»), EtaMinutes — срок до готовности (null — не берётся
+// оценить), Why — почему срок заметно отличается от обычного. Ограничения — Validate.
+public record FeatureEstimate(int Done, int Total, int InProgress, int? Percent,
+    List<string>? Remaining, int? EtaMinutes, string? Why)
+{
+    public const int MaxTotal = 50;
+    public const int MaxRemaining = 8;
+    public const int MaxRemainingLength = 40;
+    public const int MaxWhyLength = 160;
+
+    // Текст отказа или null. Remaining/Why вызывающий нормализует Normalize до проверки.
+    public string? Validate()
+    {
+        if (Total is < 1 or > MaxTotal) return $"featureEstimate.total: от 1 до {MaxTotal}";
+        if (Done < 0 || Done > Total) return "featureEstimate.done: от 0 до total";
+        if (InProgress < 0 || InProgress > Total - Done) return "featureEstimate.inProgress: от 0 до total − done";
+        if (Percent is < 0 or > 100) return "featureEstimate.percent: от 0 до 100";
+        var remaining = Remaining ?? [];
+        if (remaining.Count > MaxRemaining) return $"featureEstimate.remaining: не больше {MaxRemaining} пунктов";
+        if (remaining.Any(r => r.Length == 0 || r.Length > MaxRemainingLength))
+            return $"featureEstimate.remaining: пункт непустой, не длиннее {MaxRemainingLength} символов";
+        if (EtaMinutes is < 1) return "featureEstimate.etaMinutes: не меньше 1";
+        if (Why is { Length: > MaxWhyLength }) return $"featureEstimate.why: не длиннее {MaxWhyLength} символов";
+        return null;
+    }
+
+    // Trim пунктов и why; пустой why — null. Remaining null (ключа нет) — пустой список: после
+    // Normalize Remaining не null.
+    public FeatureEstimate Normalize() => this with
+    {
+        Remaining = (Remaining ?? []).Select(r => (r ?? "").Trim()).ToList(),
+        Why = string.IsNullOrWhiteSpace(Why) ? null : Why.Trim(),
+    };
 }
 
 // Критерий приёмки задачи: Id стабилен (на него ссылается свидетельство), Text — измеримая формулировка.

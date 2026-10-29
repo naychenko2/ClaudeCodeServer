@@ -67,6 +67,31 @@ public class TaskStoreWriteTests : IDisposable
         back.Note.Should().Be(note);
     }
 
+    // Оценка оркестратора в голосе: круговая сериализация; запись старого формата (без estimate) читается
+    // с Estimate = null — стор и бэкап не мигрируем.
+    [Fact]
+    public void Note_ОценкаКруговаяСериализацияИСтарыйФорматБезОценки()
+    {
+        var at = new DateTime(2026, 10, 25, 12, 0, 0, DateTimeKind.Utc);
+        var estimate = new FeatureEstimate(2, 8, 1, 30, ["ревью", "финал"], 90, "дольше всех — фронт");
+        var item = new TaskItem
+        {
+            Title = "эпик", Role = TaskRoles.Feature, InitialEtaMinutes = 240,
+            Note = new FeatureNote("голос", at, "sess", false, "review", "running", estimate),
+        };
+
+        var back = JsonSerializer.Deserialize<TaskItem>(JsonSerializer.Serialize(item, Web), Web)!;
+
+        back.Note!.Estimate.Should().BeEquivalentTo(estimate);
+        back.InitialEtaMinutes.Should().Be(240);
+
+        const string old = """{"title":"эпик","role":"feature","note":{"text":"голос","at":"2026-10-25T12:00:00Z","bySessionId":"s","byUser":false,"stageAtWrite":"review","stateAtWrite":"running"}}""";
+        var legacy = JsonSerializer.Deserialize<TaskItem>(old, Web)!;
+        legacy.Note!.Text.Should().Be("голос");
+        legacy.Note.Estimate.Should().BeNull();
+        legacy.InitialEtaMinutes.Should().BeNull();
+    }
+
     // Голос переживает перезагрузку стора с диска.
     [Fact]
     public void Note_ПереживаетПерезагрузкуСтора()

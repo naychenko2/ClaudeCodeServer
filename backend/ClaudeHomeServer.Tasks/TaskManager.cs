@@ -1489,11 +1489,17 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         finally { _holdLock.Exit(); }
     }
 
+    private static readonly HashSet<string> StartedKinds =
+        ["running", "waiting_you", "error", "paused"];
+
     // Голос фичи (волна 6, B3): только эпик (role=feature), иначе null. Пустой текст (после Trim)
     // снимает голос; длиннее FeatureNote.MaxTextLength обрезается. At штампуем здесь, этап и
     // состояние на момент записи передаёт вызывающий из проекции (клиентских значений нет).
+    // estimate (макет 2) пишется только вместе с голосом: пустой текст снимает и голос, и оценку.
+    // InitialEtaMinutes — один раз, из первой оценки со сроком, записанной после старта фичи
+    // (категории draft/queued/idle — до старта).
     public TaskItem? SetFeatureNote(string id, string? text, string? bySessionId, bool byUser,
-        string stageAtWrite, string stateAtWrite)
+        string stageAtWrite, string stateAtWrite, FeatureEstimate? estimate = null)
     {
         var task = _tasks.GetValueOrDefault(id);
         if (task is null || task.Role != TaskRoles.Feature) return null;
@@ -1502,7 +1508,10 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         var now = DateTime.UtcNow;
         task.Note = trimmed.Length == 0
             ? null
-            : new FeatureNote(trimmed, now, bySessionId, byUser, stageAtWrite, stateAtWrite);
+            : new FeatureNote(trimmed, now, bySessionId, byUser, stageAtWrite, stateAtWrite, estimate);
+        if (task.Note is not null && task.InitialEtaMinutes is null && estimate?.EtaMinutes is { } eta
+            && StartedKinds.Contains(stateAtWrite))
+            task.InitialEtaMinutes = eta;
         task.UpdatedAt = now;
         ScheduleSave();
         return task;

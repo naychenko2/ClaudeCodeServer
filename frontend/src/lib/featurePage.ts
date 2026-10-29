@@ -90,6 +90,26 @@ export interface FeatureBriefQueue {
   total: number;
 }
 
+// Согласие двух оценок срока (макет feature-summary-2, «Правило двух оценок»): считает бэк —
+// оценка оркестратора против [p25, p75] истории и порога 30 мин; null — сравнивать не с чем.
+export type FeatureBriefAgreement = 'within' | 'above' | 'below';
+
+// Оценка оркестратора: пишется одним вызовом с голосом, стареет вместе с ним (`note.stale`).
+// percent бэк отдаёт всегда; etaEndsAt = `note.at + etaMinutes` (null на паузе, в очереди,
+// в «ждёт вас»). inProgress — число задач в работе (штриховка полоски); старый бэк его не несёт.
+export interface FeatureBriefNoteEstimate {
+  done: number;
+  total: number;
+  percent: number;
+  inProgress?: number | null;
+  // Ещё не начатое: первый пункт — «следом».
+  remaining: string[];
+  etaMinutes: number | null;
+  why: string | null;
+  agreement: FeatureBriefAgreement | null;
+  etaEndsAt: string | null;
+}
+
 // Голос оркестратора (п. 1–2): `text` наружу только владельцу; `stale` считает бэк.
 export interface FeatureBriefNote {
   text: string;
@@ -99,6 +119,25 @@ export interface FeatureBriefNote {
   byUser: boolean;
   stageAtWrite: string;
   stale: boolean;
+  // Оценка оркестратора; нет — null или поля нет (старый ответ).
+  estimate?: FeatureBriefNoteEstimate | null;
+}
+
+// Строка «Сейчас» (brief.active[], макет 2): активная задача фичи. Порядок задаёт бэк:
+// ждёт человека → ошибка/стоит → остальные по времени. Текст строки собирает фронт по
+// stage/stepRef/lane; у эпика, ждущего человека, stage = 'feature'.
+export type FeatureBriefActiveState = 'working' | 'review' | 'waiting_you' | 'error' | 'held';
+
+export interface FeatureBriefActive {
+  taskId: string;
+  stage: string;
+  stepRef: string | null;
+  lane: string | null;
+  personaId: string | null;
+  state: FeatureBriefActiveState;
+  since: string;
+  // waiting_you — причина ожидания, error — причина остановки.
+  reason: string | null;
 }
 
 // Блок «Сводка» страницы фичи: аддитивное поле `brief` ответа
@@ -117,6 +156,12 @@ export interface FeatureBrief {
   estimate: FeatureBriefEstimate | null;
   queue: FeatureBriefQueue | null;
   note: FeatureBriefNote | null;
+  // Срок из первой оценки оркестратора после старта: «на старте обещала ≈ N» в итоге закрытой.
+  initialEtaMinutes?: number | null;
+  // Оценка старта по впереди стоящим фичам очереди: «старт ≈ 15:00».
+  queueStartEstimate?: string | null;
+  // Все активные задачи фичи; brief.now — его первая строка. Старый бэк поля не несёт.
+  active?: FeatureBriefActive[];
   // Время последнего ЗАПИСАННОГО события состояния (бэк B6, дефект f2da9354); снятие
   // паузы/ожидания значение откатывает (см. ADR-031 §2). Отдельное от computedAt — момента
   // этого ответа: computedAt — «насколько свеж снимок», updatedAt — «насколько old показано».

@@ -318,6 +318,14 @@ public sealed class TasksToolset(
                 // а не «не executor»: новый вид, который Б2 добавит в BuildDetailed («key», цепочка
                 // ключевого чата), не должен молча получить право — только явный вход в список.
                 var featureNoteArg = arguments.ContainsKey("featureNote") ? StringArg(arguments, "featureNote") : null;
+                FeatureEstimate? featureEstimateArg = null;
+                if (arguments.ContainsKey("featureEstimate") && arguments["featureEstimate"] is not null)
+                {
+                    if (string.IsNullOrWhiteSpace(featureNoteArg))
+                        return Deny("Оценка пишется вместе с голосом (featureNote)");
+                    if (FeatureEstimateArg(arguments) is not { } parsed) return Deny("featureEstimate: ожидается объект");
+                    featureEstimateArg = parsed;
+                }
                 if (featureNoteArg is not null)
                 {
                     if ((arguments.ContainsKey("role") ? StringArg(arguments, "role") : existing.Role) != TaskRoles.Feature)
@@ -339,6 +347,8 @@ public sealed class TasksToolset(
                     }
                     if (voiceLink is null || !CanWriteFeatureVoice(voiceLink))
                         return Deny("Голос фичи пишет оркестратор или человек");
+                    // Права проверены — теперь ограничения таблицы оценки
+                    if (featureEstimateArg?.Validate() is { } invalidEstimate) return Deny(invalidEstimate);
                 }
 
                 // Целевой проект для валидации колонки/персоны: текущий, либо новый из projectId
@@ -480,7 +490,7 @@ public sealed class TasksToolset(
                     var run = features.Project(existing.Id, context.OwnerId);
                     updated = tasks.SetFeatureNote(existing.Id, featureNoteArg, session.Id, byUser: false,
                         run is null ? "" : FeatureBrief.ActiveStageOf(run),
-                        run is null ? "" : FeatureBrief.KindAtWriteOf(run)) ?? updated;
+                        run is null ? "" : FeatureBrief.KindAtWriteOf(run), featureEstimateArg) ?? updated;
                 }
                 await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("updated", updated));
 
@@ -1172,6 +1182,17 @@ public sealed class TasksToolset(
             ReturnReason = OptionalArg(ver, "returnReason"),
         };
 
+    // Оценка оркестратора: null — ключа нет или не объект; поля как в схеме featureEstimate. Нечисловые
+    // done/total/inProgress дают -1: Validate отклонит (молча подставлять 0 нельзя).
+    private static FeatureEstimate? FeatureEstimateArg(JsonObject arguments)
+    {
+        if (arguments["featureEstimate"] is not JsonObject est) return null;
+        int Required(string name) => NullableIntArg(est, name) ?? -1;
+        return new FeatureEstimate(
+            Required("done"), Required("total"), Required("inProgress"), NullableIntArg(est, "percent"),
+            LabelsArg(est, "remaining") ?? [], NullableIntArg(est, "etaMinutes"), OptionalArg(est, "why")).Normalize();
+    }
+
     // Критерии приёмки: [{id?, text}]; id пустой — присвоит TaskManager. null — ключа нет, не менять
     private static List<AcceptanceCriterion>? AcceptanceArg(JsonObject arguments) =>
         arguments["acceptance"] is not JsonArray arr ? null
@@ -1424,8 +1445,9 @@ public sealed class TasksToolset(
                     ["featureNote"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = "Голос фичи (только у эпика): ≤600, \"\" — снять. Исполнитель откажет.",
+                        ["description"] = "Голос фичи (только у эпика): ≤600, \"\" — снять вместе с оценкой. Исполнитель откажет. Пиши в каждом ходе с featureEstimate.",
                     },
+                    ["featureEstimate"] = FeatureEstimateSchema(),
                     ["verification"] = VerificationSchema(),
                     ["outcome"] = OutcomeSchema(),
                     ["projectId"] = new JsonObject
@@ -1772,6 +1794,28 @@ public sealed class TasksToolset(
 
     // Структурный список шагов плана (честный прогресс фичи): массив {stepRef, title, lane}.
     // Допустим только у role=plan; stepRef непуст и уникален, лимиты — в TaskManager.
+    private static JsonObject FeatureEstimateSchema() => new()
+    {
+        ["type"] = "object",
+        ["description"] = "Оценка оркестратора, только с featureNote, в каждом ходе, где фича сдвинулась; why — причина расхождения срока.",
+        ["properties"] = new JsonObject
+        {
+            ["done"] = new JsonObject { ["type"] = "integer", ["description"] = "Готово единиц: 0..total (шаги плана плюс стадии конвейера)" },
+            ["inProgress"] = new JsonObject { ["type"] = "integer", ["description"] = "В работе сейчас: 0..total−done" },
+            ["total"] = new JsonObject { ["type"] = "integer", ["description"] = "Всего единиц: 1..50" },
+            ["percent"] = new JsonObject { ["type"] = "integer", ["description"] = "Готовность 0..100; опусти — done/total" },
+            ["remaining"] = new JsonObject
+            {
+                ["type"] = "array",
+                ["items"] = new JsonObject { ["type"] = "string" },
+                ["description"] = "Не начатое, ≤8 пунктов по ≤40 символов; первый — «дальше»",
+            },
+            ["etaMinutes"] = new JsonObject { ["type"] = "integer", ["description"] = "Минут до готовности по самой длинной цепочке, ≥1; нет оценки — не указывай" },
+            ["why"] = new JsonObject { ["type"] = "string", ["description"] = "Почему срок заметно отличается от обычного, ≤160; только при расхождении" },
+        },
+        ["required"] = new JsonArray("done", "inProgress", "total"),
+    };
+
     private static JsonObject PlanStepsSchema() => new()
     {
         ["type"] = "array",

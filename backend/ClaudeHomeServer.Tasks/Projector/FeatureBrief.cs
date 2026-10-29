@@ -75,7 +75,44 @@ public static class FeatureBrief
     // BriefNote — контракт голоса наружу (разрез п.6): ровно эти поля. StateAtWrite хранимого
     // FeatureNote наружу не уходит (нужен только StaleOf), BySessionId — тем более.
     public sealed record BriefNote(
-        string Text, DateTime At, string? ByPersonaId, bool ByUser, string StageAtWrite, bool Stale);
+        string Text, DateTime At, string? ByPersonaId, bool ByUser, string StageAtWrite, bool Stale,
+        BriefNoteEstimate? Estimate = null);
+
+    // Оценка оркестратора наружу (макет 2, «Данные» таблицы 1–3): percent бэк отдаёт всегда
+    // (досчитанный из done/total, когда оркестратор его не задал); agreement — within/above/below
+    // против истории (null — сравнивать не с чем); etaEndsAt — At + etaMinutes (null на паузе, в
+    // очереди, в «ждёт вас» и без срока).
+    public sealed record BriefNoteEstimate(
+        int Done, int Total, int InProgress, int Percent, List<string> Remaining, int? EtaMinutes,
+        string? Why, string? Agreement, DateTime? EtaEndsAt);
+
+    // Метки согласия (brief.note.estimate.agreement).
+    public static class Agreements
+    {
+        public const string Within = "within";
+        public const string Above = "above";
+        public const string Below = "below";
+    }
+
+    // Порог правила двух оценок: расхождение — вне [p25, p75] И не меньше 30 мин против remainingMinutes.
+    public const int AgreementMinGapMinutes = 30;
+
+    // Состояния строки brief.active[] (макет 2, «Данные» таблица 3).
+    public static class ActiveStates
+    {
+        public const string Working = "working";
+        public const string Review = "review";
+        public const string WaitingYou = "waiting_you";
+        public const string Error = "error";
+        public const string Held = "held";
+    }
+
+    // Строка «Сейчас» (brief.active[]): текст строки собирает фронт по stage/stepRef/lane, бэк
+    // его не склеивает. Stage — стадия конвейера (cut|design|plan|prod|review|qa|final|merge);
+    // у эпика, ждущего человека, — «feature».
+    public sealed record BriefActive(
+        string TaskId, string Stage, string? StepRef, string? Lane, string? PersonaId,
+        string State, DateTime Since, string? Reason);
 
     // brief: контракт ответа (разрез п. 6).
     public sealed record Brief(
@@ -93,12 +130,20 @@ public static class FeatureBrief
         // null — фича не в очереди.
         int? QueueWaitMinutes,
         BriefNote? Note,
+        // Срок первой оценки оркестратора после старта фичи (TaskItem.InitialEtaMinutes, пишется один
+        // раз): итог закрытой фичи «на старте обещали ≈ N». null — оценки со сроком после старта не было.
+        int? InitialEtaMinutes,
         // B6 (дефект f2da9354): время последнего записанного события состояния фичи (UpdatedAtOf).
         // Отличается от ComputedAt: он — момент этого ответа, updatedAt — момент последнего записанного
         // события состояния (снятие паузы/ожидания события не создаёт, значение откатывается).
         // null — событий состояния нет вовсе (run без эпика и без задач — тестовая фикстура);
         // в реальных данных эпик есть всегда, поэтому у живой фичи поле заполнено.
         DateTime? UpdatedAt,
+        // Все активные задачи фичи (макет 2, таблица 3); brief.now остаётся для совместимости.
+        List<BriefActive> Active,
+        // Оценка старта фичи в очереди по впереди стоящим фичам и их remainingMinutes
+        // (QueueStartEstimateOf); null — не в очереди или данных нет.
+        DateTime? QueueStartEstimate,
         DateTime ComputedAt);
 
     // Таблица kind: FeatureStates → категория. paused расщепляется по Hold.Reason, merged — по
@@ -122,12 +167,17 @@ public static class FeatureBrief
     // timeline — null, если статистики нет (elapsedMinutes тогда null). typical — чужая выборка,
     // тот же экземпляр, что пошёл в stats; null или без шаговых метрик — estimate null. Состояние
     // вне таблицы — InvalidOperationException: молча подставлять категорию нельзя (фронт сам не маппит).
+    // projectRuns — все фичи владельца (для queueStartEstimate; null — очередь не считаем),
+    // slotLimit — FeatureQueuePolicy.Limit(config).
     public static Brief Build(FeatureRun run, FeatureTimeline? timeline,
-        FeatureTypical.TypicalFeatureStats? typical, DateTime now)
+        FeatureTypical.TypicalFeatureStats? typical, DateTime now,
+        IReadOnlyList<FeatureRun>? projectRuns = null, int slotLimit = 1)
     {
         ArgumentNullException.ThrowIfNull(run);
 
         var kind = KindOf(run);
+
+        var estimate = EstimateOf(run, typical, kind);
 
         return new Brief(
             kind,
@@ -136,12 +186,116 @@ public static class FeatureBrief
             new BriefDone(run.StepsAccepted, run.StepsTotal, run.Verdicts.Loops, run.StepProgress.PlanState),
             NextOf(run),
             timeline?.Totals.WorkWallMinutes,
-            EstimateOf(run, typical, kind),
+            estimate,
             Queue: null,
             QueueWaitMinutes: QueueWaitOf(run, kind, now),
-            Note: NoteOf(run, kind),
+            Note: NoteOf(run, kind, estimate),
+            InitialEtaMinutes: run.Epic?.InitialEtaMinutes,
             UpdatedAt: UpdatedAtOf(run),
+            Active: ActiveOf(run),
+            QueueStartEstimate: QueueStartEstimateOf(run, kind, typical, now, projectRuns, slotLimit),
             now);
+    }
+
+    // brief.active[] (макет 2, таблица 3): InProgress-задачи фичи (эпик — только когда он ждёт
+    // человека) без хвостов после мержа. Состояние: прервана паузой (run.Interrupted) → held;
+    // валидная остановка → error (приоритет stopped → wait, как у Attention); AwaitingHumanSince
+    // → waiting_you; ревью/проверка/финал → review; иначе working. Порядок: ждёт человека →
+    // ошибка/стоит (error, held) → остальные; внутри первых двух групп давно ждущая выше, у
+    // остальных свежая выше — как в Now, чтобы brief.now (первая строка) совпадал с active[0].
+    private static List<BriefActive> ActiveOf(FeatureRun run)
+    {
+        var tails = run.PostMergeTails.ToHashSet(StringComparer.Ordinal);
+        var rows = new List<BriefActive>();
+        foreach (var t in AllTasksOf(run))
+        {
+            if (t.Status == TaskItemStatus.Done || tails.Contains(t.Id)) continue;
+            var isEpic = ReferenceEquals(t, run.Epic);
+            var inWork = !isEpic && t.Status == TaskItemStatus.InProgress;
+            if (!inWork && t.AwaitingHumanSince is null) continue;
+
+            var stage = isEpic ? "feature" : FeatureTimeMath.RoleToStage(t.Role);
+            string state;
+            DateTime since;
+            string? reason = null;
+            if (run.Interrupted.Contains(t.Id))
+            {
+                state = ActiveStates.Held;
+                since = t.ExecutorStoppedAt ?? run.Hold?.Since ?? t.CreatedAt;
+            }
+            else if (FeatureProjector.HasValidStopMark(t))
+            {
+                state = ActiveStates.Error;
+                since = t.ExecutorStoppedAt!.Value;
+                reason = t.ExecutorStopReason;
+            }
+            else if (t.AwaitingHumanSince is { } awaiting)
+            {
+                state = ActiveStates.WaitingYou;
+                since = awaiting;
+                reason = t.AwaitingHumanReason;
+            }
+            else
+            {
+                state = stage is "review" or "qa" or "final" ? ActiveStates.Review : ActiveStates.Working;
+                since = t.ClaudeStartedAt ?? t.CreatedAt;
+            }
+            rows.Add(new BriefActive(t.Id, stage, t.StepRef, t.Lane ?? LaneOf(run, t.StepRef),
+                t.PersonaId, state, since, reason));
+        }
+
+        static int Group(BriefActive a) => a.State switch
+        {
+            ActiveStates.WaitingYou => 0,
+            ActiveStates.Error or ActiveStates.Held => 1,
+            _ => 2,
+        };
+        return rows
+            .OrderBy(Group)
+            .ThenBy(a => Group(a) < 2 ? a.Since : DateTime.MinValue)
+            .ThenByDescending(a => Group(a) < 2 ? DateTime.MinValue : a.Since)
+            .ThenBy(a => a.TaskId, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    // brief.queueStartEstimate (макет 2, таблица 2): старт фичи в очереди = now + время, когда
+    // освободится слот для неё. Очередь и занятость слота — те же функции, по которым очередь
+    // снимает следующую фичу (FeatureQueuePolicy.Order, FeatureProjector.OccupiesSlot) — второго
+    // порядка нет. Слоты — limit штук: занятые фичи освобождают слот через свой remainingMinutes,
+    // фичи очереди впереди берут самый ранний слот и держат его свой remainingMinutes. Нет данных
+    // хотя бы по одной фиче впереди (RemainingOf = null) — null: частичное число обещать нельзя.
+    // Для фичи не в очереди и без набора фич проекта — null.
+    private static DateTime? QueueStartEstimateOf(FeatureRun run, string kind,
+        FeatureTypical.TypicalFeatureStats? typical, DateTime now,
+        IReadOnlyList<FeatureRun>? projectRuns, int slotLimit)
+    {
+        if (kind != Kinds.Queued || projectRuns is null) return null;
+        var peers = projectRuns.Where(r => r.Epic.ProjectId == run.Epic.ProjectId).ToList();
+        var queue = FeatureQueuePolicy.Order(peers);
+        var index = -1;
+        for (var i = 0; i < queue.Count; i++)
+            if (queue[i].FeatureId == run.FeatureId) { index = i; break; }
+        if (index < 0) return null;
+
+        var finish = new List<int>();
+        foreach (var busy in peers.Where(FeatureProjector.OccupiesSlot))
+        {
+            if (RemainingOf(busy, typical) is not { } minutes) return null;
+            finish.Add(minutes);
+        }
+        var limit = Math.Max(1, slotLimit);
+        finish.Sort();
+        // Занято больше лимита: голова очереди стартует, когда число занятых упадёт ниже лимита.
+        if (finish.Count > limit) finish.RemoveRange(0, finish.Count - limit);
+        while (finish.Count < limit) finish.Add(0);
+
+        for (var i = 0; i < index; i++)
+        {
+            if (RemainingOf(queue[i], typical) is not { } minutes) return null;
+            var slot = finish.IndexOf(finish.Min());
+            finish[slot] += minutes;
+        }
+        return now.AddMinutes(finish.Min());
     }
 
     // paused + Hold.Reason = queue → queued («в очереди»), иначе paused («на паузе»).
@@ -248,6 +402,16 @@ public static class FeatureBrief
         FeatureTypical.TypicalFeatureStats? typical, string kind)
     {
         if (kind is Kinds.Queued or Kinds.Paused or Kinds.Closed or Kinds.Draft or Kinds.Merged) return null;
+        return EstimateCore(run, typical);
+    }
+
+    // «Осталось» фичи без проверки категории: нужна и для фич впереди в очереди (у них kind=queued,
+    // EstimateOf там null по смыслу «часы стоят», а работа до конца остаётся тем же числом).
+    private static int? RemainingOf(FeatureRun run, FeatureTypical.TypicalFeatureStats? typical) =>
+        EstimateCore(run, typical)?.RemainingMinutes;
+
+    private static BriefEstimate? EstimateCore(FeatureRun run, FeatureTypical.TypicalFeatureStats? typical)
+    {
         if (run.StepProgress.PlanState is FeatureStepAccounting.PlanPending or FeatureStepAccounting.PlanPartial)
             return null;
         var steps = typical?.StepMinutes;
@@ -270,14 +434,40 @@ public static class FeatureBrief
     // служит только StaleOf. ByPersonaId — null: хранимый FeatureNote (B3) persona автора не несёт
     // (только чат BySessionId); заполнить его — аддитивная правка модели, не проектора.
     // Run без эпика (тестовая фикстура) или без голоса — null: «голоса нет → строки нет совсем».
-    private static BriefNote? NoteOf(FeatureRun run, string kind)
+    private static BriefNote? NoteOf(FeatureRun run, string kind, BriefEstimate? history)
     {
         var note = run.Epic?.Note;
         if (note is null) return null;
 
         return new BriefNote(
             note.Text, note.At, null, note.ByUser, note.StageAtWrite,
-            StaleOf(run, note, kind));
+            StaleOf(run, note, kind), EstimateOfNote(note, kind, history));
+    }
+
+    // Оценка оркестратора (макет 2): устаревание — то же StaleOf, что у голоса (отдельной логики нет:
+    // фронт берёт brief.note.stale). Percent — заданный или round(done/total·100).
+    // etaEndsAt = note.At + etaMinutes от момента записи, а не от «сейчас» (срок не «уползает» с
+    // каждым обновлением страницы); на паузе, в очереди и в «ждёт вас» не отдаётся.
+    private static BriefNoteEstimate? EstimateOfNote(FeatureNote note, string kind, BriefEstimate? history)
+    {
+        if (note.Estimate is not { } e) return null;
+        var percent = e.Percent ?? (int)Math.Round(100.0 * e.Done / e.Total, MidpointRounding.AwayFromZero);
+        DateTime? endsAt = e.EtaMinutes is { } eta && kind is not (Kinds.Paused or Kinds.Queued or Kinds.WaitingYou)
+            ? note.At.AddMinutes(eta)
+            : null;
+        return new BriefNoteEstimate(e.Done, e.Total, e.InProgress, percent, (e.Remaining ?? []).ToList(),
+            e.EtaMinutes, e.Why, AgreementOf(e.EtaMinutes, history), endsAt);
+    }
+
+    // Правило двух оценок: вне [p25, p75] истории И разница с remainingMinutes ≥ 30 мин — above/below,
+    // иначе within; нет срока оркестратора или истории — null.
+    internal static string? AgreementOf(int? eta, BriefEstimate? history)
+    {
+        if (eta is not { } minutes || history is null) return null;
+        if (Math.Abs(minutes - history.RemainingMinutes) < AgreementMinGapMinutes) return Agreements.Within;
+        if (minutes > history.P75) return Agreements.Above;
+        if (minutes < history.P25) return Agreements.Below;
+        return Agreements.Within;
     }
 
     // Признак устаревания (разрез п.2, B14 возврат FIN 74722f13, B15 дефект 415c1c80): голос устарел,

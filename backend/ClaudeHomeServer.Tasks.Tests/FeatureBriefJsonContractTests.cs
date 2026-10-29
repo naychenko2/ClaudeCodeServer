@@ -42,8 +42,12 @@ public class FeatureBriefJsonContractTests
         new FeatureBrief.BriefEstimate(100, 76, 124, "history", 5),
         new FeatureBrief.BriefQueue(2, 5),
         25,
-        new FeatureBrief.BriefNote("ревью началось", NOW.AddHours(-2), "gleb", true, "review", false),
+        new FeatureBrief.BriefNote("ревью началось", NOW.AddHours(-2), "gleb", true, "review", false,
+            new FeatureBrief.BriefNoteEstimate(2, 6, 1, 33, ["ревью"], 120, "дольше всех — фронт", "above", NOW.AddHours(2))),
+        300,
         NOW.AddHours(-3),
+        [new FeatureBrief.BriefActive("t1", "prod", "B2", "back", "timur", "working", NOW.AddMinutes(-12), null)],
+        NOW.AddHours(1),
         NOW);
 
     // Точный набор ключей JSON-объекта в данной точке контракта: отсутствие ожидаемого имени или
@@ -65,13 +69,17 @@ public class FeatureBriefJsonContractTests
 
         AssertKeys(root, "brief",
             "kind", "now", "reason", "done", "next", "elapsedMinutes",
-            "estimate", "queue", "queueWaitMinutes", "note", "updatedAt", "computedAt");
+            "estimate", "queue", "queueWaitMinutes", "note", "initialEtaMinutes", "updatedAt", "active", "queueStartEstimate", "computedAt");
 
         AssertKeys(root!["now"], "brief.now", "stage", "taskId", "personaId", "stepRef", "lane", "since");
         AssertKeys(root["done"], "brief.done", "stepsAccepted", "stepsTotal", "loops", "planState");
         AssertKeys(root["next"]![0], "brief.next[]", "stage", "personaId");
         AssertKeys(root["estimate"], "brief.estimate", "remainingMinutes", "p25", "p75", "source", "sampleSize");
         AssertKeys(root["queue"], "brief.queue", "position", "total");
-        AssertKeys(root["note"], "brief.note", "text", "at", "byPersonaId", "byUser", "stageAtWrite", "stale");
+        AssertKeys(root["active"]![0], "brief.active[]",
+            "taskId", "stage", "stepRef", "lane", "personaId", "state", "since", "reason");
+        AssertKeys(root["note"], "brief.note", "text", "at", "byPersonaId", "byUser", "stageAtWrite", "stale", "estimate");
+        AssertKeys(root["note"]!["estimate"], "brief.note.estimate",
+            "done", "total", "inProgress", "percent", "remaining", "etaMinutes", "why", "agreement", "etaEndsAt");
     }
 }

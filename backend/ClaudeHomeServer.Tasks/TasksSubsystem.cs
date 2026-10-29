@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.Turn;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Plugins;
 using ClaudeHomeServer.Services.Tasks.Journal;
@@ -69,6 +70,8 @@ public sealed class TasksSubsystem : IAppSubsystem
         // Агрегат фичи (режим «Исполнение фичи»): чистая проекция TaskItem'ов в FeatureRun.
         // Зависимость только на TaskManager (тот же singleton, что выше) — нового шва нет.
         services.AddSingleton<FeatureProjector>();
+        // Напоминание оркестратору об устаревшем голосе фичи — хвост хода ключевого чата (InTurnTail).
+        services.AddPromptSectionContributor<FeatureVoiceReminderContributor>();
         // Журнал событий фичи (волна 3, Б8a): append-only JSONL, источник точной статистики.
         // Зависимость только на IConfiguration (DataPath) — новых швов нет.
         services.AddSingleton<FeatureJournalStore>();

@@ -2039,6 +2039,38 @@ public class TaskManagerTests : IDisposable
         note.StateAtWrite.Should().Be("running");
     }
 
+    private static FeatureEstimate Estimate(int? eta = 120) => new(2, 8, 1, null, ["ревью"], eta, null);
+
+    // Оценка пишется вместе с голосом и снимается вместе с ним.
+    [Fact]
+    public void SetFeatureNote_Оценка_ХранитсяСГолосомИСнимаетсяПустымТекстом()
+    {
+        var epic = CreateEpic("u");
+
+        var res = _sut.SetFeatureNote(epic.Id, "идём", null, false, "prod", "running", Estimate());
+        res!.Note!.Estimate.Should().BeEquivalentTo(Estimate());
+
+        _sut.SetFeatureNote(epic.Id, "", null, false, "prod", "running", Estimate())!.Note.Should().BeNull();
+    }
+
+    // Мутация: убрать условие InitialEtaMinutes is null — второй вызов перезапишет срок, тест краснеет.
+    [Fact]
+    public void SetFeatureNote_InitialEtaMinutes_ПишетсяОдинРазИзПервойОценкиПослеСтарта()
+    {
+        var epic = CreateEpic("u");
+
+        _sut.SetFeatureNote(epic.Id, "до старта", null, false, "cut", "queued", Estimate(500));
+        _sut.GetById(epic.Id)!.InitialEtaMinutes.Should().BeNull("очередь — до старта");
+        _sut.SetFeatureNote(epic.Id, "идёт", null, false, "prod", "running", Estimate(null));
+        _sut.GetById(epic.Id)!.InitialEtaMinutes.Should().BeNull("оценка без срока не считается");
+
+        _sut.SetFeatureNote(epic.Id, "идёт", null, false, "prod", "running", Estimate(300));
+        _sut.SetFeatureNote(epic.Id, "дольше", null, false, "prod", "running", Estimate(400));
+        _sut.SetFeatureNote(epic.Id, "", null, false, "prod", "running");
+
+        _sut.GetById(epic.Id)!.InitialEtaMinutes.Should().Be(300, "первая после старта, не перезаписывается, снятие голоса не трогает");
+    }
+
     [Fact]
     public void SetFeatureNote_НеЭпикИНетТакого_Null()
     {

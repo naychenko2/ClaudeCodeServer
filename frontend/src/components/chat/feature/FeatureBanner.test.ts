@@ -8,8 +8,10 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import { featureRowModel } from './FeatureBanner';
+import { FeatureBanner, featureRowModel } from './FeatureBanner';
 import { FeatureTruthBody } from './FeatureTruthBody';
+import { FLAGS, setFlagLocal } from '../../../lib/featureFlags';
+import { __test as indexStore } from '../../../lib/featuresIndex';
 import type { FeatureIndexFeature } from '../../../types/featureIndex';
 import type { FeatureRun } from '../../../types/featureRun';
 
@@ -145,5 +147,65 @@ describe('FeatureTruthBody: сводка (раскрытие В2 = попап П
     const html = renderBody(r);
     expect(html).toContain('Трекер расходится · 1');
     expect(html).toContain('aria-expanded="false"');
+  });
+});
+
+// РЕНДЕР самой строки В2 (постановка F2, п. 8): идёт / ждёт вас / стоит — на живом
+// компоненте с индексом стора (run не запрошен: строка честно деградирует до данных
+// индекса). Паспел и раскрытие здесь не проверяются — это FeatureTruthBody выше.
+describe('FeatureBanner: рендер строки В2', () => {
+  function seedIndex(f: FeatureIndexFeature, flagsOn = true): void {
+    setFlagLocal(FLAGS.turnPlanFeatureMode, flagsOn);
+    setFlagLocal(FLAGS.featuresOverview, flagsOn);
+    indexStore.setIndex('p1', {
+      features: [f],
+      chats: { 's-me': [{ featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш8', lane: 'front' }] },
+    });
+  }
+  function renderRow(): string {
+    return renderToStaticMarkup(createElement(FeatureBanner, {
+      sessionId: 's-me', projectId: 'p1', isMobile: false, chatTaskId: 't-8', onFocusComposer: () => {},
+    }));
+  }
+  const progress = { stepsAccepted: 2, stepsTotal: 9, stepsReview: 4, stepsWork: 2, stepsNotCreated: 1, planState: 'cut' as const };
+
+  it('идёт: название + «Сейчас {Имя}», процент и полоса; без run — только то, что несёт индекс', () => {
+    seedIndex(feat({ ...progress, state: 'running', nowPersonaIds: ['p-kira'] }));
+    const html = renderRow();
+    expect(html).toContain('data-testid="feature-banner"');
+    expect(html).toContain('Правда о прогрессе');
+    expect(html).toContain('Сейчас');
+    expect(html).toContain('Кира');
+    expect(html).toContain('22 %');
+    expect(html).toContain('data-testid="feature-row-bar"');
+  });
+
+  it('ждёт вас: фраза warn и действие «Ответить» (без имени)', () => {
+    seedIndex(feat({
+      ...progress,
+      state: 'waiting',
+      attention: { kind: 'wait', since: null, reason: 'Полина спрашивает про отступы', personaId: 'p-kira', sessionId: 's-me', taskId: 't-8' },
+    }));
+    const html = renderRow();
+    expect(html).toContain('data-banner-alarm="wait"');
+    expect(html).toContain('Ждёт вас · Полина спрашивает про отступы');
+    expect(html).toContain('Ответить');
+  });
+
+  it('стоит: фраза danger и действие «Открыть чат» (без имени)', () => {
+    seedIndex(feat({
+      ...progress,
+      state: 'stopped',
+      attention: { kind: 'stopped', since: null, reason: 'auth_failed', personaId: 'p-gleb', sessionId: 's-other', taskId: 't-8' },
+    }));
+    const html = renderRow();
+    expect(html).toContain('data-banner-alarm="stop"');
+    expect(html).toContain('Стоит · Глеб');
+    expect(html).toContain('Открыть чат');
+  });
+
+  it('флаги выключены — строки нет вовсе (источник не зовётся, слот пустой)', () => {
+    seedIndex(feat({ ...progress, state: 'running', nowPersonaIds: ['p-kira'] }), false);
+    expect(renderRow()).toBe('');
   });
 });

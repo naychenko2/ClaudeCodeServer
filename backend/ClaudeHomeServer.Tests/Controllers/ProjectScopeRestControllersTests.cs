@@ -41,7 +41,7 @@ public class ProjectScopeRestControllersTests(TestWebApplicationFactory factory)
     }
 
     [Theory]
-    [InlineData("code-graph", 200)]
+    [InlineData("code-graph", 404)] // у свежего проекта графа ещё нет — штатный 404
     [InlineData("services", 200)]
     public async Task Чтение_ЧужойПроект_ПрежнийОтказ403_СвойОтдаётШтатныйКод(string path, int ожидаемыйКод)
     {
@@ -49,7 +49,7 @@ public class ProjectScopeRestControllersTests(TestWebApplicationFactory factory)
 
         (await _stranger.GetAsync($"/api/projects/{id}/{path}")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
 
-        // 404 у своего проекта — штатное «графа ещё нет», поэтому проверяем только, что не 403
+        // свой проект — явный штатный код (code-graph: 404 «графа ещё нет», services: 200), а не «не 403»
         var own = await _client.GetAsync($"/api/projects/{id}/{path}");
         ((int)own.StatusCode).Should().Be(ожидаемыйКод);
     }

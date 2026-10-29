@@ -168,6 +168,15 @@ public class TasksController(
     private bool CanUseProject(string projectId) =>
         access?.Resolve(UserId, projectId, ProjectRight.Read) is not null && projects.GetById(projectId) is not null;
 
+    // S1: участник общего проекта задачи проекта только читает (право записи откроет S2b). Задача
+    // проекта, который вызывающему виден на чтение, не «чужая»: отказ 403 той же формы, что у
+    // [ProjectScope], а не 404 — список проекта её id уже назвал. Строки, сравнивающие
+    // task.OwnerId, ниже не тронуты: перевод этих сравнений участнику — S2b.
+    private IActionResult? SharedProjectWriteDenied(TaskItem? task) =>
+        task is not null && task.OwnerId != UserId && task.ProjectId is { } pid && CanUseProject(pid)
+            ? StatusCode(403, new { error = "Нет права на запись", code = ProjectScopeAttribute.ErrorCode })
+            : null;
+
     // Сгенерировать описание задачи (Claude): по названию + контекст проекта (личная — только название)
     [HttpPost("ai/description")]
     public async Task<IActionResult> GenerateDescription([FromBody] GenerateDescriptionRequest req, CancellationToken ct)
@@ -379,6 +388,7 @@ public class TasksController(
     public async Task<IActionResult> Update(string taskId, [FromBody] UpdateTaskRequest req)
     {
         var task = tasks.GetById(taskId);
+        if (SharedProjectWriteDenied(task) is { } denied) return denied;
         if (task is null || task.OwnerId != UserId) return NotFound();
         if (!ModelTiers.IsValidWireValue(req.ModelTier))
             return BadRequest(new { error = ModelTiers.WireError });
@@ -1525,6 +1535,7 @@ public class TasksController(
     public async Task<IActionResult> Execute(string taskId)
     {
         var task = tasks.GetById(taskId);
+        if (SharedProjectWriteDenied(task) is { } denied) return denied;
         if (task is null || task.OwnerId != UserId) return NotFound();
 
         try
@@ -1570,6 +1581,7 @@ public class TasksController(
     public async Task<IActionResult> Delete(string taskId)
     {
         var task = tasks.GetById(taskId);
+        if (SharedProjectWriteDenied(task) is { } denied) return denied;
         if (task is null || task.OwnerId != UserId) return NotFound();
 
         // W4-HOLD-N (хвост R-N п.3): страховка на любой двери удаления: эпик возвращает

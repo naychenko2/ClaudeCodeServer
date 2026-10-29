@@ -18,7 +18,8 @@
 # Resolve). Остались осознанно (вердикты):
 #   • DossiersController|1 — x.OwnerId != p.OwnerId сравнивает владельцев двух проектов одной папки
 #     (признак «общая папка»), а не вызывающего;
-#   • TasksController|7 — сравнивают task.OwnerId, не проект (S2b);
+#   • TasksController|8 — сравнивают task.OwnerId, не проект (S2b). +1 в S1-3c: та же класс
+#     сравнений в отказе записи участника общего проекта («не твоя задача, но проект виден»);
 #   • ModelsController|4 — задачи (S2b) и личные персоны;
 #   • PersonasController|2 — до S4;
 #   • TtsController|1 — владение чатом при записи расхода (чат — S1-3a, личный расход);
@@ -44,7 +45,7 @@ backend/ClaudeHomeServer/Controllers/ProjectGroupsController.cs|2
 backend/ClaudeHomeServer/Controllers/ProjectRelayController.cs|1
 backend/ClaudeHomeServer/Controllers/SessionHandsController.cs|1
 backend/ClaudeHomeServer/Controllers/SessionLocalModelController.cs|1
-backend/ClaudeHomeServer/Controllers/TasksController.cs|7
+backend/ClaudeHomeServer/Controllers/TasksController.cs|8
 backend/ClaudeHomeServer/Controllers/TelemetryController.cs|2
 backend/ClaudeHomeServer/Controllers/TtsController.cs|1
 backend/ClaudeHomeServer.ImageEditor/Mcp/ImageEditorToolset.cs|1

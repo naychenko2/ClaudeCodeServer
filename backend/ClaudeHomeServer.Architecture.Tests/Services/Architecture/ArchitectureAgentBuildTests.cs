@@ -212,7 +212,8 @@ public class ArchitectureAgentBuildTests : IDisposable
         var users = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         var projects = new ProjectManager(_config, users, new AppSettingsService(_config));
         var project = projects.Create("Alice", _root, "alice", "alice", createDirectory: false);
-        var controller = new ArchitectureController(projects, users, NullLogger<ArchitectureController>.Instance,
+        var controller = new ArchitectureController(projects, new OwnerOnlyAccess(projects), users,
+            NullLogger<ArchitectureController>.Instance,
             new ArchitectureModelGenerator(NullLogger<ArchitectureModelGenerator>.Instance),
             new ArchitectureModelStore(), new EmptyGraph(), agents)
         {

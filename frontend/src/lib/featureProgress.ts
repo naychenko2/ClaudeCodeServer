@@ -42,6 +42,11 @@ export interface StepProgress {
   notCreated: number;
   withdrawn: number;
   unlinkedReworks: number;
+  // Сколько шагов уже в master (P1/F1, бэк: `FeatureStepProgress.InMaster`, FeatureRun.cs:454).
+  // Ортогональный счётчик: НЕ входит в total и в сумму корзин, процент им не считается —
+  // поэтому в formatStepProgress его нет: он звучит только на полоске готовности (F1).
+  // Аддитивное: старые ответы поля не несут — undefined.
+  inMaster?: number;
 }
 
 // «Готово»: только planState === 'done' — бэк сам гарантирует для него total > 0 и

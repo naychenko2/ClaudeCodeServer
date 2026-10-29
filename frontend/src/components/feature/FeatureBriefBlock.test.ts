@@ -253,6 +253,24 @@ describe('«Готовность | Срок»', () => {
     expect(joined(c, 'brief-chip-empty')).toBe('ничего — всё сделано');
   });
 
+  it('«в master» (F1): сегмент C.success в начале заливки, остаток готового — обычная краска; пометка в подписи и факте', () => {
+    const { c } = render({ brief: brief({ done: { stepsAccepted: 4, stepsTotal: 5, loops: 0, planState: 'cut' } }), inMaster: 3, nameOf });
+    expect(styleOf(c, 'brief-ready-fill-master').width).toBe('60%');
+    expect(styleOf(c, 'brief-ready-fill-master').background).toBe(C.success);
+    expect(styleOf(c, 'brief-ready-fill').width).toBe('20%');
+    expect(styleOf(c, 'brief-ready-fill').background).toBe(C.accent);
+    expect(joined(c, 'brief-ready-caption')).toContain('3 в master');
+    expect(joined(c, 'brief-ready-tracker')).toContain('3 в master');
+    expect(findNodeByAttr(c, 'data-testid', 'brief-ready-bar')!.attributes['aria-label']).toBe('Готовность 80 %, 3 в master');
+  });
+
+  it('без inMaster (старые ответы) — сегмента нет, заливка целиком прежняя', () => {
+    const { c } = render({ brief: brief({ done: { stepsAccepted: 4, stepsTotal: 5, loops: 0, planState: 'cut' } }), nameOf });
+    expect(findNodeByAttr(c, 'data-testid', 'brief-ready-fill-master')).toBeNull();
+    expect(styleOf(c, 'brief-ready-fill').width).toBe('80%');
+    expect(joined(c, 'brief-ready-tracker')).not.toContain('в master');
+  });
+
   it('чипы «ещё не начато»: первый «следом», «за вами» — на фоне C.infoBg', () => {
     const { c } = render({ brief: brief({ note: note() }), nameOf });
     const chips = [findNodeByAttr(c, 'data-testid', 'brief-chip')!];

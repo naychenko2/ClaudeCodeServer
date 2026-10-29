@@ -350,11 +350,13 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
           {tab === 'timeline' ? (
             <>
               {/* Блок «Сводка» (волна 6, Ф6): brief/stats/mergedAt — из ответа страницы,
-                  фронт ничего не пересчитывает; «Повторить» — перезапрос страницы. */}
+                  фронт ничего не пересчитывает; «Повторить» — перезапрос страницы.
+                  inMaster (F1) — ортогональный счётчик бэка из stepProgress, не корзина. */}
               <FeatureBriefWithNames
                 brief={page.page.brief ?? null}
                 stats={page.page.stats ?? null}
                 mergedAt={okRun.summary?.mergedAt ?? null}
+                inMaster={okRun.stepProgress?.inMaster ?? null}
                 isMobile={isMobile}
                 onOpenStats={() => setFeaturePageTab('stats')}
                 onRetry={() => refetchFeaturePage(featureId)}

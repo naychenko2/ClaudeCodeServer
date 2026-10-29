@@ -26,9 +26,12 @@ export type PersonaNameResolver = (personaId: string) => string | null;
 
 // Дополнительные данные строки «Сейчас» вне brief:
 // mergedAt — момент мержа из run.summary.mergedAt (в brief его нет; для строк closed/merged).
+// inMaster — сколько шагов уже в master (F1, бэк: run.stepProgress.inMaster; в brief его
+// нет): ортогональный счётчик, процентом не считается, звучит только как пометка.
 export interface BriefTextOptions {
   nameOf?: PersonaNameResolver;
   mergedAt?: string | null;
+  inMaster?: number | null;
 }
 
 // Родительный падеж имени для «у {Имя}» (макет: «— у Глеба»). Эвристика для частых
@@ -389,11 +392,18 @@ export interface BriefChip {
 export interface BriefReadinessView {
   // Подпись: «Готовность» / «Готовность · по трекеру».
   label: string;
-  // Подпись под полоской: «4 готово · 3 в работе · из 9 · 45 %» (mono — числа).
+  // Подпись под полоской: «4 готово · 3 в работе · из 9 · 45 %» (mono — числа);
+  // при шагах в master — пометка «· N в master» (F1).
   caption: BriefDonePart[];
   percent: number;
-  // aria-label полоски: «Готовность 45 %».
+  // aria-label полоски: «Готовность 45 %», при шагах в master — «Готовность 45 %, 3 в master».
   ariaLabel: string;
+  // F1: сколько шагов в master (0 — нет или данных нет; ортогональный счётчик бэка).
+  inMaster: number;
+  // «в master»-сегмент полоски, % ширины полоски — только когда полоска по шкале трекера
+  // (оценки нет): на шкале оценки оркестратора счётчик шагов не стоит — тик был бы ложью.
+  // 0 — сегмента нет. Никогда не больше percent.
+  inMasterPercent: number;
   // Доля штриховки «в работе», 0 — штриховки нет.
   inProgressPercent: number;
   // Оценка оркестратора устарела: полоска тускнеет.
@@ -417,19 +427,37 @@ function clampPercent(n: number): number {
   return Math.max(0, Math.min(100, Math.round(n)));
 }
 
+// Защита от битых чисел (тот же приём, что nonNeg в featureProgress): отрицательное/NaN — 0.
+function nonNeg(n: number | null | undefined): number {
+  return Number.isFinite(n) && (n as number) > 0 ? Math.round(n as number) : 0;
+}
+
+// Часть «· N в master» (F1): пометка на полоске готовности и в факте трекера. Пусто при
+// 0/отсутствии данных — поведение прежнее (отметки нет там, где шагов в master нет).
+function masterParts(inMaster: number): BriefDonePart[] {
+  if (inMaster <= 0) return [];
+  return [{ text: ' · ', mono: false }, { text: String(inMaster), mono: true }, { text: ' в master', mono: false }];
+}
+
 export function briefReadinessText(brief: FeatureBrief, opts: BriefTextOptions = {}): BriefReadinessView {
   const closed = brief.kind === 'closed' || brief.kind === 'merged';
   const est = brief.note?.estimate ?? null;
   const stale = !!est && !!brief.note?.stale;
   const staleLabel = stale && brief.note ? voiceStaleLabel(brief.note, brief.kind) : null;
+  const inMaster = nonNeg(opts.inMaster);
 
   const trackerParts = briefDoneText(brief);
   const planFact = brief.kind === 'queued' && (brief.done.planState === 'cut' || brief.done.planState === 'done');
   const tracker: BriefDonePart[] = planFact ? trackerParts : [{ text: 'по трекеру: ', mono: false }, ...trackerParts];
+  // Факт «в master» — к строке трекера: это ровно тот же ортогональный счётчик бэка,
+  // что и корзины, но не корзина: к «приняты» и «виткам» добавляется отдельной частью.
+  tracker.push(...masterParts(inMaster));
 
   let caption: BriefDonePart[];
   let percent: number;
   let inProgressPercent = 0;
+  // Сегмент «в master» на полоске — только по шкале трекера (ниже); на шкале оценки — 0.
+  let inMasterPercent = 0;
   if (est && est.total > 0) {
     percent = clampPercent(est.percent ?? (est.done / est.total) * 100);
     const w = est.inProgress ?? 0;
@@ -448,7 +476,11 @@ export function briefReadinessText(brief: FeatureBrief, opts: BriefTextOptions =
       { text: `${stepsAccepted} из ${stepsTotal}`, mono: true }, { text: ' шагов · ', mono: false },
       { text: `${percent} %`, mono: true },
     ];
+    // Та же шкала, что у знаменателя полоски: доля шагов в master от total, не выше
+    // залитой части (бэк гарантирует inMaster ≤ accepted; clamp — защита от битых чисел).
+    if (inMaster > 0 && stepsTotal > 0) inMasterPercent = Math.min(clampPercent((inMaster / stepsTotal) * 100), percent);
   }
+  caption.push(...masterParts(inMaster));
 
   // Чипы «ещё не начато»: оркестратор — его remaining; без оценки — brief.next (до трёх стадий).
   const mergeAsk = brief.kind === 'waiting_you' && (brief.reason === 'мерж' || brief.next[0]?.stage === 'merge');
@@ -470,7 +502,10 @@ export function briefReadinessText(brief: FeatureBrief, opts: BriefTextOptions =
 
   return {
     label: est ? 'Готовность' : 'Готовность · по трекеру',
-    caption, percent, ariaLabel: `Готовность ${percent} %`, inProgressPercent, stale, closed, staleLabel, tracker,
+    caption, percent,
+    ariaLabel: inMaster > 0 ? `Готовность ${percent} %, ${inMaster} в master` : `Готовность ${percent} %`,
+    inProgressPercent, stale, closed, staleLabel, tracker,
+    inMaster, inMasterPercent,
     chipsLabel: est ? 'Ещё не начато:' : 'Осталось:',
     chips,
     chipsEmpty: closed ? 'ничего — всё сделано' : null,
@@ -739,6 +774,9 @@ export const BRIEF_MODEL_WORDS: readonly string[] = [
   ' шагов', // «План готов · 0 из 4 шагов»
   'План готов',
   'правок',
+  // «в master» (F1, masterParts): пометка готовности и факта трекера; покрывает и
+  // «Смержена в master» (она и так выше списком), и aria-label «N в master»
+  'в master',
   // «Дальше» (briefNextText): «После …» — любой префикс живой строки;
   // «Дальше — » — модельный префикс error/idle (метка блока — без тире, вне списка)
   'После ',

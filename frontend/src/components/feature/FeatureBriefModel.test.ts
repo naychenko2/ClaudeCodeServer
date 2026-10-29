@@ -547,6 +547,53 @@ describe('Готовность', () => {
   });
 });
 
+// ── «Готовность»: пометка «в master» (F1) ───────────────────────────────────────────
+
+describe('Готовность: пометка «в master» (F1)', () => {
+  const D5 = { stepsAccepted: 4, stepsTotal: 5, loops: 0, planState: 'cut' as const };
+
+  it('по трекеру: пометка в подписи и в факте, сегмент полоски 3 из 5 = 60 %', () => {
+    const v = briefReadinessText(brief({ done: D5 }), { nameOf, inMaster: 3 });
+    expect(v.inMaster).toBe(3);
+    expect(v.inMasterPercent).toBe(60);
+    expect(text(v.caption)).toBe('4 из 5 шагов · 80 % · 3 в master');
+    expect(text(v.tracker)).toBe('по трекеру: 4 из 5 шагов приняты · 3 в master');
+    expect(v.ariaLabel).toBe('Готовность 80 %, 3 в master');
+  });
+
+  it('нет поля / 0 / битые числа — поведение прежнее: ни пометки, ни сегмента', () => {
+    for (const opts of [{}, { inMaster: 0 }, { inMaster: -3 }, { inMaster: Number.NaN }, { inMaster: null }]) {
+      const v = briefReadinessText(brief({ done: D5 }), { nameOf, ...opts });
+      expect(v.inMaster).toBe(0);
+      expect(v.inMasterPercent).toBe(0);
+      expect(text(v.caption)).toBe('4 из 5 шагов · 80 %');
+      expect(text(v.tracker)).toBe('по трекеру: 4 из 5 шагов приняты');
+      expect(v.ariaLabel).toBe('Готовность 80 %');
+    }
+  });
+
+  it('при оценке оркестратора пометка есть, сегмента нет: счётчик шагов не стоит на шкале оценки', () => {
+    const v = briefReadinessText(brief({ note: noteWith({}) }), { nameOf, inMaster: 2 });
+    expect(v.inMaster).toBe(2);
+    expect(v.inMasterPercent).toBe(0);
+    expect(text(v.caption)).toBe('4 из 9 · 45 % · 2 в master');
+    expect(text(v.tracker)).toBe('по трекеру: 2 из 5 шагов приняты · 1 виток правок · 2 в master');
+    expect(v.ariaLabel).toBe('Готовность 45 %, 2 в master');
+  });
+
+  it('сегмент не больше залитой части: inMaster > accepted (битые числа бэка) — не выше percent', () => {
+    const v = briefReadinessText(brief({ done: { stepsAccepted: 2, stepsTotal: 5, loops: 0, planState: 'cut' } }), { nameOf, inMaster: 4 });
+    expect(v.inMasterPercent).toBe(40);
+  });
+
+  it('закрытая очередь с планом: без inMaster — «План готов» без хвоста; с inMaster — хвост есть', () => {
+    const plain = briefReadinessText(brief({ kind: 'queued', done: { stepsAccepted: 0, stepsTotal: 4, loops: 0, planState: 'cut' } }), { nameOf });
+    expect(text(plain.tracker)).toBe('План готов · 0 из 4 шагов');
+    const withMaster = briefReadinessText(brief({ kind: 'queued', done: { stepsAccepted: 0, stepsTotal: 4, loops: 0, planState: 'cut' } }), { nameOf, inMaster: 1 });
+    expect(text(withMaster.tracker)).toBe('План готов · 0 из 4 шагов · 1 в master');
+  });
+});
+
 // ── 4. «N мин/ч назад» ──────────────────────────────────────────────────────────────
 
 describe('«N мин/ч назад»', () => {

@@ -234,6 +234,22 @@ export interface FeatureStepChain {
   // лента показывает только слово состояния без времени.
   waitingSince?: string | null;
   acceptedAt?: string | null;
+  // Шаг «в master» (P1/F1, бэк: `FeatureStepChain.InMaster`, FeatureRun.cs:384): все задачи
+  // цепочки сданы строго до закрытия мержа (у мержа с reviewOf — только перечисленные).
+  // Ортогонален Outcome: принятость от него не зависит. Аддитивное: старые ответы не несут.
+  inMaster?: boolean;
+  // Момент мержа, в который шаг попал в master (первый подходящий; бэк: `MergedAt`,
+  // FeatureRun.cs:386); null — не в master.
+  mergedAt?: string | null;
+}
+
+// Метка мержа для ганта (P1/F1, бэк: `FeatureMergeMark`, FeatureRun.cs:118-123): id задачи
+// мержа, момент закрытия и шаги, попавшие в master по этому мержу (шаг — в первом
+// подходящем мерже: `FeatureStepChain.mergedAt == at`).
+export interface FeatureMergeMark {
+  taskId: string;
+  at: string;
+  stepRefs: string[];
 }
 
 // Возвраты одного источника (ревью/проверка/финал) (бэк: `FeatureSourceReturns`).
@@ -396,4 +412,12 @@ export interface FeatureRun {
   // отдельной строкой. У недоведённой до терминального состояния фичи — пустой список.
   // Аддитивное: старые ответы поля не несут — UI обязан пережить отсутствие.
   postMergeTails?: string[];
+  // Все закрытые мержи фичи (P1/F1, бэк: `FeatureRun.Merges`, FeatureRun.cs:110): метки для
+  // ганта, по моменту закрытия. Не обрезают график: ClosureAt смотрит только на State.
+  // Пусто/отсутствует — мержей не было (старые ответы).
+  merges?: FeatureMergeMark[];
+  // Волна после мержа (P1/F1, бэк: `FeatureRun.WaveAfterMerge`, FeatureRun.cs:113): после
+  // последнего закрытого мержа заведён шаг/доработка (или к предыдущему мержу осталась
+  // открытая работа) — на ганте это новая волна после последней метки мержа.
+  waveAfterMerge?: boolean;
 }

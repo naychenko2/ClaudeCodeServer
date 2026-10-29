@@ -105,12 +105,27 @@ export interface StageLane {
   returns: GanttReturnFlag[];
 }
 
+// Метка мержа на ганте (F1): данные run.merges (бэк: `FeatureMergeMark`, FeatureRun.cs:118).
+// Позицию на оси рисует рендер через axisFrac — здесь только данные и порядок по времени.
+export interface GanttMergeMark {
+  taskId: string;
+  at: string;
+  stepRefs: string[];
+}
+
 export interface StageLanesModel {
   // Ось из таймлайна; null — данных нет (нет stats/timeline).
   axis: LaneAxis | null;
   // Дорожки по стадиям из run.stages, кроме absent (этой стадии в конвейере нет —
   // дорожки нет). Ключ — StageKey: индексация lanes[key] типизирована.
   lanes: Partial<Record<StageKey, StageLane>>;
+  // Все метки мержей по времени (F1, run.merges): вертикальные метки с датой на ганте.
+  // Пусто — мержей не было (и старые ответы без поля): поведение прежнее.
+  mergeMarks: GanttMergeMark[];
+  // Начало «новой волны» (F1): момент последнего мержа, если бэк сказал waveAfterMerge
+  // (после него заведена новая работа) — правее этой границы рендерит отдельную группу.
+  // null — волны нет (в т.ч. waveAfterMerge без мержей: отмечать нечего).
+  waveFrom: string | null;
 }
 
 // Длительность интервала в минуты (0, если невалидно/отрицательно). Та же арифметика,
@@ -254,6 +269,19 @@ export function buildStageLanes(run: FeatureRun, stats: FeatureStats | null, now
   const returnsByStage = collectReturnFlags(run);
   const nowIso = new Date(now).toISOString();
 
+  // Метки мержей (F1): только данные с читаемой датой (битая дата — не метка: линия без
+  // позиции была бы ложью). Порядок — по времени: бэк отдаёт отсортированным, сортируем
+  // и здесь, чтобы waveFrom (последний мерж) не зависел от порядка ответа.
+  const mergeMarks: GanttMergeMark[] = (run.merges ?? [])
+    .filter(m => !!m && !!m.at && !Number.isNaN(new Date(m.at).getTime()))
+    .map(m => ({ taskId: m.taskId, at: m.at, stepRefs: m.stepRefs ?? [] }))
+    .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+  // Волна после мержа — только когда её сказал бэк и есть что отмечать (без мержей волны
+  // не бывает: waveAfterMerge без метки — противоречие контракта, не рисуем).
+  const waveFrom = run.waveAfterMerge === true && mergeMarks.length > 0
+    ? mergeMarks[mergeMarks.length - 1]!.at
+    : null;
+
   const lanes: Partial<Record<StageKey, StageLane>> = {};
   for (const stage of run.stages ?? []) {
     // absent — стадии нет в конвейере этой фичи: дорожки нет (строку рисует рендер по
@@ -312,5 +340,5 @@ export function buildStageLanes(run: FeatureRun, stats: FeatureStats | null, now
     };
   }
 
-  return { axis, lanes };
+  return { axis, lanes, mergeMarks, waveFrom };
 }

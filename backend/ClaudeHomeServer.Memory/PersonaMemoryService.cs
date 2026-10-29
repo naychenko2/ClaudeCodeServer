@@ -219,11 +219,14 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
         var chunks = await _knowledge.RetrieveAsync(state.DatasetId!, text, 5);
         if (chunks.Count == 0) return null;
 
-        Dictionary<string, string> byDocId;
+        ILookup<string, string> byDocId;
         List<PersonaMemoryEntry> entries;
         lock (_saveLock)
         {
-            byDocId = state.Docs.ToDictionary(kv => kv.Value.DocId, kv => kv.Key);
+            // Не ToDictionary по DocId: на общем DocId он падает (см. MatchDocIds)
+            byDocId = Knowledge.KnowledgeSyncTarget.MatchDocIds(state.Docs, d => d.DocId,
+                    chunks.Select(c => c.DocumentId).ToList())
+                .ToLookup(p => p.DocId, p => p.EntryKey);
             entries = state.Entries.ToList();
         }
         var byId = entries.ToDictionary(e => e.Id);
@@ -231,9 +234,9 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
         foreach (var ch in chunks.OrderByDescending(c => c.Score))
         {
             if (ch.Score < _dedupThreshold) break;   // дальше только менее близкие
-            if (byDocId.TryGetValue(ch.DocumentId, out var entryId)
-                && byId.TryGetValue(entryId, out var e) && e.Type == type)
-                return e;
+            foreach (var entryId in byDocId[ch.DocumentId])
+                if (byId.TryGetValue(entryId, out var e) && e.Type == type)
+                    return e;
         }
         return null;
     }
@@ -304,11 +307,13 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
         var chunks = await _knowledge.RetrieveAsync(state.DatasetId!, text, 8);
         if (chunks.Count == 0) return (null, candidates);
 
-        Dictionary<string, string> byDocId;
+        ILookup<string, string> byDocId;
         List<PersonaMemoryEntry> entries;
         lock (_saveLock)
         {
-            byDocId = state.Docs.ToDictionary(kv => kv.Value.DocId, kv => kv.Key);
+            byDocId = Knowledge.KnowledgeSyncTarget.MatchDocIds(state.Docs, d => d.DocId,
+                    chunks.Select(c => c.DocumentId).ToList())
+                .ToLookup(p => p.DocId, p => p.EntryKey);
             entries = state.Entries.ToList();
         }
         var byId = entries.ToDictionary(e => e.Id);
@@ -316,10 +321,12 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
         foreach (var ch in chunks.OrderByDescending(c => c.Score))
         {
             if (ch.Score < _conflictThreshold) break;   // дальше только менее близкие — не интересны
-            if (!byDocId.TryGetValue(ch.DocumentId, out var entryId)) continue;
-            if (!byId.TryGetValue(entryId, out var e) || e.Type != type) continue;
-            if (ch.Score >= _dedupThreshold) return (e, candidates);   // явный дубль
-            candidates.Add(new Memory.MemoryWriteCandidate(e.Id, e.Text));
+            foreach (var entryId in byDocId[ch.DocumentId])
+            {
+                if (!byId.TryGetValue(entryId, out var e) || e.Type != type) continue;
+                if (ch.Score >= _dedupThreshold) return (e, candidates);   // явный дубль
+                candidates.Add(new Memory.MemoryWriteCandidate(e.Id, e.Text));
+            }
         }
         return (null, candidates);
     }
@@ -425,11 +432,13 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
         {
             // Гибридный retrieval: semantic (Dify) + keyword (полнотекст) сливаются в единый relevance.
             // Keyword добирает точные термины/идентификаторы, которые вектор пропускает (③-#3).
-            var byDocId = state.Docs.ToDictionary(kv => kv.Value.DocId, kv => kv.Key);
             var chunks = await _knowledge.RetrieveAsync(state.DatasetId!, query, Math.Max(topK, 12));
+            var byDocId = Knowledge.KnowledgeSyncTarget.MatchDocIds(state.Docs, d => d.DocId,
+                    chunks.Select(c => c.DocumentId).ToList())
+                .ToLookup(p => p.DocId, p => p.EntryKey);
             var semantic = new Dictionary<string, double>();
             foreach (var ch in chunks)
-                if (byDocId.TryGetValue(ch.DocumentId, out var entryId))
+                foreach (var entryId in byDocId[ch.DocumentId])
                     semantic[entryId] = Math.Max(semantic.GetValueOrDefault(entryId), ch.Score);
             // Keyword-сигнал считаем по всему скоупу (а не только по кандидатам Dify): дёшево
             // (in-memory подстроки по ≤150 записям) и позволяет всплыть точному совпадению, которое

@@ -160,20 +160,25 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
         var entry = GetEntry(userId);
         if (string.IsNullOrEmpty(entry.DatasetId)) return [];
 
-        var byDocId = entry.Docs.ToDictionary(kv => kv.Value.DocId, kv => kv.Key);
         var chunks = await _knowledge.RetrieveAsync(entry.DatasetId!, query, topK);
+        // Не ToDictionary по DocId: на общем DocId он падает (см. MatchDocIds)
+        var byDocId = Knowledge.KnowledgeSyncTarget.MatchDocIds(entry.Docs, d => d.DocId,
+                chunks.Select(c => c.DocumentId).ToList())
+            .ToLookup(p => p.DocId, p => p.EntryKey);
         var summaries = _notes.GetSummaries(userId, null, null).ToDictionary(s => s.Id);
 
         var hits = new List<NoteSemanticHit>();
         var seen = new HashSet<string>();
         foreach (var ch in chunks)
         {
-            if (!byDocId.TryGetValue(ch.DocumentId, out var noteId)) continue;
-            if (!summaries.TryGetValue(noteId, out var note)) continue;
-            if (!seen.Add(noteId)) continue;   // одна заметка — лучший чанк
             var snippet = ch.Content.Length > 220 ? ch.Content[..217] + "…" : ch.Content;
-            hits.Add(new NoteSemanticHit(noteId, note.Title, note.Source, note.SourceLabel,
-                Math.Round(ch.Score, 3), snippet.Replace('\n', ' ')));
+            foreach (var noteId in byDocId[ch.DocumentId])
+            {
+                if (!summaries.TryGetValue(noteId, out var note)) continue;
+                if (!seen.Add(noteId)) continue;   // одна заметка — лучший чанк
+                hits.Add(new NoteSemanticHit(noteId, note.Title, note.Source, note.SourceLabel,
+                    Math.Round(ch.Score, 3), snippet.Replace('\n', ' ')));
+            }
         }
         return hits;
     }

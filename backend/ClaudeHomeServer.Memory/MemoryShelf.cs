@@ -231,6 +231,12 @@ internal sealed class MemoryShelf : Knowledge.IKnowledgeSyncParticipant, IDispos
         return Add(ownerId, scopeId, trimmed, type, source, sourceSessionId, salience, promotedFrom);
     }
 
+    // DocId чанков → ВСЕ ключи записей с этим документом. Не ToDictionary по DocId: на общем
+    // DocId он падает (см. KnowledgeSyncTarget.MatchDocIds). Звать под _kLock.
+    private static ILookup<string, string> MatchByDocId(KnowledgeState state, IEnumerable<string> docIds) =>
+        Knowledge.KnowledgeSyncTarget.MatchDocIds(state.Docs, d => d.DocId, docIds.ToList())
+            .ToLookup(p => p.DocId, p => p.EntryKey);
+
     // Найти запись того же типа, семантически близкую к тексту (Dify retrieve, порог DedupThreshold)
     private async Task<TeamMemoryEntry?> FindSemanticDuplicateAsync(
         KnowledgeState state, TeamMemoryType type, string text)
@@ -238,8 +244,9 @@ internal sealed class MemoryShelf : Knowledge.IKnowledgeSyncParticipant, IDispos
         var chunks = await _knowledge!.RetrieveAsync(state.DatasetId!, text, 5);
         if (chunks.Count == 0) return null;
 
-        Dictionary<string, string> byDocId;
-        lock (_kLock) byDocId = state.Docs.ToDictionary(kv => kv.Value.DocId, kv => kv.Key);
+        ILookup<string, string> byDocId;
+        // Не ToDictionary по DocId: на общем DocId он падает (см. MatchDocIds)
+        lock (_kLock) byDocId = MatchByDocId(state, chunks.Select(c => c.DocumentId));
 
         List<TeamMemoryEntry> entries;
         lock (_saveLock) entries = Get(state.OwnerId, state.ScopeId).ToList();
@@ -248,9 +255,9 @@ internal sealed class MemoryShelf : Knowledge.IKnowledgeSyncParticipant, IDispos
         foreach (var ch in chunks.OrderByDescending(c => c.Score))
         {
             if (ch.Score < _dedupThreshold) break;   // дальше только менее близкие
-            if (byDocId.TryGetValue(ch.DocumentId, out var entryId)
-                && byId.TryGetValue(entryId, out var e) && e.Type == type)
-                return e;
+            foreach (var entryId in byDocId[ch.DocumentId])
+                if (byId.TryGetValue(entryId, out var e) && e.Type == type)
+                    return e;
         }
         return null;
     }
@@ -320,8 +327,8 @@ internal sealed class MemoryShelf : Knowledge.IKnowledgeSyncParticipant, IDispos
         var chunks = await _knowledge!.RetrieveAsync(state.DatasetId!, text, 8);
         if (chunks.Count == 0) return (null, candidates);
 
-        Dictionary<string, string> byDocId;
-        lock (_kLock) byDocId = state.Docs.ToDictionary(kv => kv.Value.DocId, kv => kv.Key);
+        ILookup<string, string> byDocId;
+        lock (_kLock) byDocId = MatchByDocId(state, chunks.Select(c => c.DocumentId));
 
         List<TeamMemoryEntry> entries;
         lock (_saveLock) entries = Get(state.OwnerId, state.ScopeId).ToList();
@@ -330,10 +337,12 @@ internal sealed class MemoryShelf : Knowledge.IKnowledgeSyncParticipant, IDispos
         foreach (var ch in chunks.OrderByDescending(c => c.Score))
         {
             if (ch.Score < _conflictThreshold) break;   // дальше только менее близкие — не интересны
-            if (!byDocId.TryGetValue(ch.DocumentId, out var entryId)) continue;
-            if (!byId.TryGetValue(entryId, out var e) || e.Type != type) continue;
-            if (ch.Score >= _dedupThreshold) return (e, candidates);   // явный дубль
-            candidates.Add(new Memory.MemoryWriteCandidate(e.Id, e.Text));
+            foreach (var entryId in byDocId[ch.DocumentId])
+            {
+                if (!byId.TryGetValue(entryId, out var e) || e.Type != type) continue;
+                if (ch.Score >= _dedupThreshold) return (e, candidates);   // явный дубль
+                candidates.Add(new Memory.MemoryWriteCandidate(e.Id, e.Text));
+            }
         }
         return (null, candidates);
     }
@@ -438,15 +447,14 @@ internal sealed class MemoryShelf : Knowledge.IKnowledgeSyncParticipant, IDispos
     private async Task<List<TeamMemoryEntry>> RankViaDifyAsync(
         KnowledgeState state, IReadOnlyList<TeamMemoryEntry> snapshot, string query, int topK)
     {
-        Dictionary<string, string> byDocId;
-        lock (_kLock) byDocId = state.Docs.ToDictionary(kv => kv.Value.DocId, kv => kv.Key);
-
         // Гибридный retrieval: semantic (Dify) + keyword (полнотекст) сливаются в единый relevance.
         // Keyword добирает точные термины/идентификаторы, которые вектор пропускает (③-#3).
         var chunks = await _knowledge!.RetrieveAsync(state.DatasetId!, query, Math.Max(topK, 12));
+        ILookup<string, string> byDocId;
+        lock (_kLock) byDocId = MatchByDocId(state, chunks.Select(c => c.DocumentId));
         var semantic = new Dictionary<string, double>();
         foreach (var ch in chunks)
-            if (byDocId.TryGetValue(ch.DocumentId, out var entryId))
+            foreach (var entryId in byDocId[ch.DocumentId])
                 semantic[entryId] = Math.Max(semantic.GetValueOrDefault(entryId), ch.Score);
         // Keyword-сигнал считаем по всему снапшоту (не только по кандидатам Dify): дёшево и позволяет
         // всплыть точному совпадению, не попавшему в топ-чанки Dify.

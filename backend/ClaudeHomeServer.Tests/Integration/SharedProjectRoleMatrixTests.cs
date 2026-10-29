@@ -14,7 +14,7 @@ namespace ClaudeHomeServer.Tests.Integration;
 /// редактор, читатель, посторонний — против чтения, записи, настроек, хода и личных отметок чата.
 /// Правила S1: посторонний получает 404 на всё (существование не раскрываем); читатель и редактор
 /// читают, а запись проекта и настройки им закрыты — 403 (редактору запись откроют S2a/S2b);
-/// ход и его управление (право RunTurn) — только владельцу, остальным 404, как чужому чату;
+/// ход и его управление (право RunTurn) — только владельцу, участнику 403;
 /// личные отметки (прочитано, закреплён) доступны всем, кто чат видит, и у каждого свои.
 /// Каждая строка матрицы — отдельный случай теории: снятая проверка в одном эндпоинте
 /// красит только его строки.
@@ -25,6 +25,10 @@ public class SharedProjectRoleMatrixTests : IClassFixture<TestWebApplicationFact
 
     // 200 в ожиданиях значит «любой 2xx»: владелец получает 200/201/202/204 по ручке
     private const int Ok2xx = 200;
+
+    // -1 в ожиданиях значит «не 403»: гейт права пройден, а дальше ручка вправе ответить по делу
+    // (409 «нечего перезапускать», 400 «нет координатора» и т. п.) — для владельца важно только, что его не отшили правом
+    private const int PassesGate = -1;
 
     private readonly TestWebApplicationFactory _factory;
 
@@ -61,11 +65,17 @@ public class SharedProjectRoleMatrixTests : IClassFixture<TestWebApplicationFact
         // настройки и удаление проекта — Configure, только владелец
         new("проект: настройки", "PUT", "/api/projects/{p}", new { name = "Имя матрицы" }, Ok2xx, 403, 403, 404),
         new("проект: удаление", "DELETE", "/api/projects/{p}", null, Ok2xx, 403, 403, 404),
-        // ход и управление им — RunTurn: у участника чат «чужой», 404
-        new("ход: сообщение", "POST", "/api/sessions/{s}/messages", new { text = "привет", wait = "none" }, Ok2xx, 404, 404, 404),
-        new("ход: режим прав", "PUT", "/api/chats/{s}/mode", new { mode = "auto" }, Ok2xx, 404, 404, 404),
-        new("ход: цикл до готово", "PUT", "/api/chats/{s}/loop", new { enabled = false }, Ok2xx, 404, 404, 404),
-        new("ход: очередь, перебить", "POST", "/api/sessions/{s}/pending/preempt", null, 409, 404, 404, 404),
+        // ход и управление им — RunTurn: только владелец; участник чат видит, но вести ход не вправе — 403
+        new("ход: сообщение", "POST", "/api/sessions/{s}/messages", new { text = "привет", wait = "none" }, Ok2xx, 403, 403, 404),
+        new("ход: режим прав", "PUT", "/api/chats/{s}/mode", new { mode = "auto" }, Ok2xx, 403, 403, 404),
+        new("ход: цикл до готово", "PUT", "/api/chats/{s}/loop", new { enabled = false }, Ok2xx, 403, 403, 404),
+        new("ход: очередь, перебить", "POST", "/api/sessions/{s}/pending/preempt", null, 409, 403, 403, 404),
+        new("ход: штаб, остановить", "PUT", "/api/chats/{s}/team-implement/stop", null, PassesGate, 403, 403, 404),
+        new("ход: штаб, авто-волны", "PUT", "/api/chats/{s}/team-implement/auto", new { autoWaves = false }, PassesGate, 403, 403, 404),
+        new("ход: штаб, перезапуск волны", "POST", "/api/chats/{s}/team-wave/restart", null, PassesGate, 403, 403, 404),
+        new("ход: штаб, перезапуск хода", "POST", "/api/chats/{s}/team-wave/restart-turn", null, PassesGate, 403, 403, 404),
+        new("ход: смена провайдера", "POST", "/api/chats/{s}/migrate-provider", new { model = "sonnet" }, PassesGate, 403, 403, 404),
+        new("ход: продолжить в новом чате", "POST", "/api/chats/{s}/continue", null, PassesGate, 403, 403, 404),
         // личное состояние: у каждого своё, достаточно видеть чат
         new("личное: прочитано", "PUT", "/api/chats/{s}/read", null, Ok2xx, Ok2xx, Ok2xx, 404),
         new("личное: закрепить", "PUT", "/api/chats/{s}/user-state", new { pinned = true }, Ok2xx, Ok2xx, Ok2xx, 404),
@@ -128,6 +138,8 @@ public class SharedProjectRoleMatrixTests : IClassFixture<TestWebApplicationFact
         var expected = endpoint.For(role);
         if (expected == Ok2xx)
             response.IsSuccessStatusCode.Should().BeTrue($"{role}: {endpointName} → {(int)response.StatusCode}");
+        else if (expected == PassesGate)
+            response.StatusCode.Should().NotBe(HttpStatusCode.Forbidden, $"{role}: {endpointName}");
         else
             ((int)response.StatusCode).Should().Be(expected, $"{role}: {endpointName}");
     }

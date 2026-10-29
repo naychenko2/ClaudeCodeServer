@@ -646,7 +646,9 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
         // у владельца, не включавшего фичу (dark launch не должен прятать только интерфейс)
         if (!flags.IsEnabled(UserId, FeatureFlagKeys.PromptCache))
             return StatusCode(403, new { error = "Флаг prompt-cache выключен" });
-        if (sessions.DenyTurn(id, UserId) is { } denied) return denied;
+        // Тело обязательно и у 404: без него фронт подставляет свой «Not Found» (минор ревью F-4)
+        if (sessions.DenyTurn(id, UserId) is { } denied)
+            return denied is NotFoundResult ? NotFound(new { error = "Чат не найден или удалён" }) : denied;
         try
         {
             var result = await handoff.HandoffAsync(UserId, id, ct);

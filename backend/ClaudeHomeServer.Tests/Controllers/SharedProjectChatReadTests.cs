@@ -168,10 +168,11 @@ public class SharedProjectChatReadTests : IClassFixture<TestWebApplicationFactor
             .Should().Be(HttpStatusCode.NotFound);
         (await member.PutAsJsonAsync($"/api/chats/{sessionId}/archived", new { archived = true })).StatusCode
             .Should().Be(HttpStatusCode.NotFound);
+        // ход-входы (RunTurn, S1-7): чат участнику виден, вести ход ему нельзя — 403, а не 404
         (await member.PutAsJsonAsync($"/api/chats/{sessionId}/team-implement", new { })).StatusCode
-            .Should().Be(HttpStatusCode.NotFound);
+            .Should().Be(HttpStatusCode.Forbidden);
         (await member.PutAsync($"/api/chats/{sessionId}/team-implement/stop", null)).StatusCode
-            .Should().Be(HttpStatusCode.NotFound);
+            .Should().Be(HttpStatusCode.Forbidden);
         (await member.PostAsJsonAsync($"/api/chats/{sessionId}/files/upload", new { })).StatusCode
             .Should().BeOneOf([HttpStatusCode.NotFound, HttpStatusCode.UnsupportedMediaType, HttpStatusCode.BadRequest]);
     }

@@ -7,6 +7,7 @@ using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Notes;
@@ -26,6 +27,9 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
+
+    // Ключ хранилищ проектных действий — только арендатор из RequestScope ([ProjectScope]), не вызывающий
+    private string TenantId => HttpContext.GetRequestScope().TenantOwnerId;
 
     private Task BroadcastTeamMemory(string action, string projectId, string? entryId = null) =>
         hub.Clients.Group("user_" + UserId).SendAsync("message", new TeamMemoryChangedMessage(action, projectId, entryId));
@@ -117,10 +121,11 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // Эффективный системный промпт проекта — ровно те части, что уходят в --append-system-prompt
     // (без промпта агента: он добавляется per-session для агент-чатов)
     [HttpGet("{id}/effective-prompt")]
+    [ProjectScope(Key = "id")]
     public IActionResult GetEffectivePrompt(string id)
     {
         var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (p is null) return NotFound();
         var wk = ProjectCapabilities.KnowledgeRoot(p) is { } knowledgeRoot ? wkStore.GetByPath(knowledgeRoot) : null;
         var parts = Services.Llm.SystemPromptComposer.GetSystemPromptParts(
             ProjectManager.BuiltInSystemPrompt, p.SystemPrompt, wk?.DifyDatasetId != null, wk?.DocumentTags);
@@ -131,23 +136,25 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     public IActionResult GetAll() => Ok(projects.GetByOwner(UserId).Select(WithCount));
 
     [HttpGet("{id}")]
+    [ProjectScope(Key = "id")]
     public IActionResult GetById(string id)
     {
         var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (p is null) return NotFound();
         return Ok(WithCount(p));
     }
 
     // Лента событий проекта (активность команды): ходы, задачи, память, база, заметки, состав.
     // Фильтры опциональны (since/type/actor/limit). Источник для командного центра (①-L1).
     [HttpGet("{id}/events")]
+    [ProjectScope(Key = "id")]
     public IActionResult GetEvents(string id,
         [FromQuery] DateTime? since, [FromQuery] string? type,
         [FromQuery] string? actor, [FromQuery] int? limit)
     {
         var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId) return NotFound();
-        return Ok(events.Query(id, UserId, since, type, actor, limit ?? 100));
+        if (p is null) return NotFound();
+        return Ok(events.Query(id, TenantId, since, type, actor, limit ?? 100));
     }
 
     // === Память команды проекта (③-3.4) === — общие факты/договорённости, которые recall'ят
@@ -174,62 +181,67 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     }
 
     [HttpGet("{id}/team-memory")]
+    [ProjectScope(Key = "id")]
     public IActionResult TeamMemory(string id)
     {
         var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId) return NotFound();
-        return Ok(teamMemory.List(UserId, id));
+        if (p is null) return NotFound();
+        return Ok(teamMemory.List(TenantId, id));
     }
 
     [HttpPost("{id}/team-memory")]
+    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
     public async Task<IActionResult> AddTeamMemory(string id, [FromBody] TeamMemoryRequest req)
     {
         var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (p is null) return NotFound();
         if (!TeamMemoryWriteAllowed(id, out var denied)) return StatusCode(403, denied);
         if (string.IsNullOrWhiteSpace(req.Text)) return BadRequest(new { error = "Пустой текст" });
         if (TeamMemoryService.LengthViolation(req.Text, 0) is { } tooLong) return BadRequest(new { error = tooLong });
-        var entry = teamMemory.Add(UserId, id, req.Text, req.Type ?? TeamMemoryType.Fact);
+        var entry = teamMemory.Add(TenantId, id, req.Text, req.Type ?? TeamMemoryType.Fact);
         await BroadcastTeamMemory("added", id, entry.Id);
         return Ok(entry);
     }
 
     [HttpPut("{id}/team-memory/{entryId}")]
+    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
     public async Task<IActionResult> UpdateTeamMemory(string id, string entryId, [FromBody] TeamMemoryRequest req)
     {
         var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (p is null) return NotFound();
         if (!TeamMemoryWriteAllowed(id, out var denied)) return StatusCode(403, denied);
-        var existing = teamMemory.List(UserId, id).FirstOrDefault(e => e.Id == entryId);
+        var existing = teamMemory.List(TenantId, id).FirstOrDefault(e => e.Id == entryId);
         if (existing is null) return NotFound();
         if (string.IsNullOrWhiteSpace(req.Text)) return BadRequest(new { error = "Пустой текст" });
         if (TeamMemoryService.LengthViolation(req.Text, existing.Text.Trim().Length) is { } tooLong)
             return BadRequest(new { error = tooLong });
-        var entry = teamMemory.Update(UserId, id, entryId, req.Text);
+        var entry = teamMemory.Update(TenantId, id, entryId, req.Text);
         if (entry is null) return NotFound();
         await BroadcastTeamMemory("updated", id, entryId);
         return Ok(entry);
     }
 
     [HttpDelete("{id}/team-memory/{entryId}")]
+    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
     public async Task<IActionResult> RemoveTeamMemory(string id, string entryId)
     {
         var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (p is null) return NotFound();
         if (!TeamMemoryWriteAllowed(id, out var denied)) return StatusCode(403, denied);
-        if (!teamMemory.Remove(UserId, id, entryId)) return NotFound();
+        if (!teamMemory.Remove(TenantId, id, entryId)) return NotFound();
         await BroadcastTeamMemory("removed", id, entryId);
         return NoContent();
     }
 
     // Поиск по памяти команды: семантический (при Dify) либо полнотекстовый. Дёргается MCP team_memory_search.
     [HttpGet("{id}/team-memory/search")]
+    [ProjectScope(Key = "id")]
     public async Task<IActionResult> SearchTeamMemory(string id, [FromQuery] string q, [FromQuery] int topK = 8)
     {
         var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (p is null) return NotFound();
         if (string.IsNullOrWhiteSpace(q)) return Ok(Array.Empty<TeamMemoryEntry>());
-        return Ok(await teamMemory.SearchAsync(UserId, id, q.Trim(), Math.Clamp(topK, 1, 20)));
+        return Ok(await teamMemory.SearchAsync(TenantId, id, q.Trim(), Math.Clamp(topK, 1, 20)));
     }
 
     [HttpPost]
@@ -289,10 +301,11 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     }
 
     [HttpPut("{id}")]
+    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
     public async Task<IActionResult> Update(string id, [FromBody] UpdateProjectRequest req)
     {
         var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (p is null) return NotFound();
         // Update мутирует объект проекта на месте — старые значения снимаем до вызова
         var oldName = p.Name;
         var oldRoot = p.RootPath;
@@ -350,7 +363,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
                 if (!string.IsNullOrEmpty(datasetId))
                     try { await knowledge.RenameDatasetAsync(datasetId, $"{username}:{updated.Name}"); }
                     catch { /* стухшее имя не критично */ }
-                try { await teamMemory.RenameProjectDatasetAsync(UserId, id, username, updated.Name); }
+                try { await teamMemory.RenameProjectDatasetAsync(TenantId, id, username, updated.Name); }
                 catch { /* стухшее имя не критично */ }
             }
 
@@ -365,10 +378,11 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // При существующих чатах запрещена — по образцу смены среды исполнения (UsersController):
     // resume-транскрипты и рабочие деревья чатов живут на машине прежней привязки.
     [HttpPut("{id}/device")]
+    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
     public async Task<IActionResult> SetDevice(string id, [FromBody] SetProjectDeviceRequest req)
     {
         var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (p is null) return NotFound();
         var deviceId = string.IsNullOrWhiteSpace(req.DeviceId) ? null : req.DeviceId;
         if (deviceId is not null && BindRefusal(deviceId) is { } refusal)
             return BadRequest(new { error = refusal });
@@ -430,15 +444,16 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // Руки — свойство чата: адаптеры живых чатов проекта пересоздаются при следующем сообщении.
     // Идущий ход доработает со старым составом — гасит руки на месте человек у машины («Стоп»).
     [HttpPut("{id}/hands")]
+    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
     public IActionResult SetHands(string id, [FromBody] SetHandsRequest req)
     {
         var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (p is null) return NotFound();
         if (req.Enabled && HandsToggleRefusal(p, DeviceStatusOf(p)) is { } refusal)
             return BadRequest(new { error = refusal });
 
         var updated = projects.SetHandsEnabled(id, req.Enabled);
-        sessions.InvalidateHandsSessions(UserId, id);
+        sessions.InvalidateHandsSessions(TenantId, id);
         return Ok(WithCount(updated));
     }
 
@@ -446,10 +461,11 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // убирать в архив чаты проекта без сообщений дольше N дней. days = null — наследовать
     // личный порог владельца.
     [HttpPut("{id}/archive-days")]
+    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
     public IActionResult SetArchiveDays(string id, [FromBody] SetProjectArchiveDaysRequest req)
     {
         var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (p is null) return NotFound();
         if (req.Days is not null && req.Days is not (>= 1 and <= 365))
             return BadRequest(new { error = "Порог должен быть от 1 до 365 дней" });
         var updated = projects.SetArchiveAfterDays(id, req.Days);
@@ -465,30 +481,33 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // у проекта нет. Порог не задан ни у проекта, ни у владельца — пустой проход (0), а не
     // ошибка: настройки сохранены, убирать нечего.
     [HttpPost("{id}/archive-run")]
+    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
     public async Task<IActionResult> ArchiveRun(string id)
     {
         var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId) return NotFound();
-        var (archived, batchId) = await autoArchive.RunNowForProjectAsync(UserId, id, DateTime.UtcNow);
+        if (p is null) return NotFound();
+        var (archived, batchId) = await autoArchive.RunNowForProjectAsync(TenantId, id, DateTime.UtcNow);
         return Ok(new { archived, batchId });
     }
 
     // Кастомные колонки Kanban-доски проекта (пустой список → дефолтные 3)
     [HttpPut("{id}/board-columns")]
+    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
     public IActionResult UpdateBoardColumns(string id, [FromBody] UpdateBoardColumnsRequest req)
     {
         var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (p is null) return NotFound();
         var updated = projects.UpdateBoardColumns(id, req.Columns);
         return Ok(WithCount(updated));
     }
 
     // Реестр общих тегов проекта (имя, порядок, цвет) — перезапись целиком
     [HttpPut("{id}/tags")]
+    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
     public IActionResult UpdateTags(string id, [FromBody] List<ProjectTag> registry)
     {
         var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (p is null) return NotFound();
 
         // Валидация состава: имена непустые, уникальные (без учёта регистра)
         if (registry is not null)
@@ -514,25 +533,26 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     }
 
     [HttpDelete("{id}")]
+    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
     public async Task<IActionResult> Delete(string id)
     {
         var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (p is null) return NotFound();
         // W4-HOLD-N (хвост R-N п.3): страховка до зачистки задач: удалённый вместе с проектом
         // эпик на паузе больше ни «снялся», ни «встал» — его шаги остались бы с замороженным
         // сроком навсегда. Чистим все двери удаления до DeleteByProject.
-        foreach (var t in tasks.GetByOwner(p.OwnerId).Where(t => t.ProjectId == id))
+        foreach (var t in tasks.GetByOwner(TenantId).Where(t => t.ProjectId == id))
             executor.RestoreFrozenChatsBeforeDelete(t);
         projects.Delete(id);
         tasks.DeleteByProject(id);
         // Память команды проекта: локальные сторы + Dify-датасет (best-effort — уборка не должна ронять удаление)
-        try { await teamMemory.DeleteProjectTeamMemoryAsync(UserId, id); }
+        try { await teamMemory.DeleteProjectTeamMemoryAsync(TenantId, id); }
         catch { /* удаление проекта не зависит от уборки памяти команды */ }
         // Паспорта изменений проекта: локальный стор + Dify-датасет (best-effort, тот же образец)
-        try { await dossiers.DeleteProjectDossiersAsync(UserId, id); }
+        try { await dossiers.DeleteProjectDossiersAsync(TenantId, id); }
         catch { /* удаление проекта не зависит от уборки паспортов */ }
         // Обучающие фото персонажей для LoRA (биометрия): шов Core, нет подсистемы ImageEditor — пропуск
-        try { trainingPhotos?.PurgeProject(UserId, id); }
+        try { trainingPhotos?.PurgeProject(TenantId, id); }
         catch (Exception ex) { logger.LogWarning(ex, "Не удалось убрать обучающие фото проекта {ProjectId}", id); }
 
         // Worktree чатов проекта: сессии при удалении проекта НЕ удаляются (осознанно),
@@ -577,12 +597,12 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
 
         // Проектные персоны осиротели вместе с проектом — каскад: память (стор + Dify-датасет),
         // сама персона (файлы сабагента снимет OnPersonaDeleted), событие фронту
-        foreach (var persona in personas.GetByOwner(UserId)
+        foreach (var persona in personas.GetByOwner(TenantId)
                      .Where(x => PersonaZone.IsProjectTeam(x, id)).ToList())
         {
             try { await personaMemory.DeletePersonaAsync(persona.Id); }
             catch { /* память персоны — best-effort */ }
-            personas.Delete(persona.Id, UserId);
+            personas.Delete(persona.Id, TenantId);
             await hub.Clients.Group("user_" + UserId)
                 .SendAsync("message", new PersonasChangedMessage("deleted", persona.Id));
         }
@@ -598,10 +618,11 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // сбой (место не настроено, битый JSON, ни одного годного) = пустой набор с причиной:
     // проект остаётся на инициалах, это фолбэк, а не ошибка (ADR-009 §7).
     [HttpPost("{id}/icon/suggest")]
+    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
     public async Task<ActionResult> SuggestIcon(string id, [FromBody] SuggestIconRequest? req)
     {
         var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (p is null) return NotFound();
         var result = await iconGlyphs.SuggestAsync(p.Name, req?.Hint, p.OwnerId!, HttpContext.RequestAborted);
         return Ok(IconSuggestView(result));
     }
@@ -631,10 +652,11 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // валидатором, что и ответ модели, — клиент такой же недоверенный источник
     // (ADR-009 §8, инвариант «валидация на входе в стор» §11.3).
     [HttpPost("{id}/icon/select")]
+    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
     public ActionResult SelectIcon(string id, [FromBody] SelectIconRequest req)
     {
         var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (p is null) return NotFound();
 
         var candidate = Services.ProjectIcons.ProjectIconGlyphService.ValidateGlyph(req.Name);
         // Paths в теле — пережиток вырезанной ветки рисования: неоднозначное тело (имя
@@ -655,10 +677,11 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // Переключить режим иконки: инициалы ↔ значок. Значок при возврате на инициалы НЕ
     // стирается — это путь «назад» и «снова вперёд» без повторного подбора.
     [HttpPost("{id}/icon/mode")]
+    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
     public ActionResult SetIconMode(string id, [FromBody] SetIconModeRequest req)
     {
         var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (p is null) return NotFound();
 
         var kind = (req.Kind ?? "").Trim().ToLowerInvariant() switch
         {
@@ -680,11 +703,12 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // до 512 КБ, без кропа — плитка вписывает её как есть. Формат — по байтам
     // (ProjectIconImage.Detect), имя и Content-Type от клиента не используются вовсе.
     [HttpPost("{id}/icon/upload")]
+    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
     [RequestSizeLimit(1_000_000)]
     public async Task<ActionResult> UploadIconImage(string id, [FromForm] IFormFile? file)
     {
         var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (p is null) return NotFound();
         if (file is null || file.Length == 0) return BadRequest(new { error = "Файл не передан" });
         if (file.Length > Services.ProjectIcons.ProjectIconImage.MaxBytes)
             return BadRequest(new { error = "Картинка больше 512 КБ" });
@@ -702,10 +726,11 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // туда браузер не поставит. v — только cache-buster: имя файла берётся из стора, из
     // запроса путь не строится никогда. CSP закрывает скрипты SVG при прямом открытии URL.
     [HttpGet("{id}/icon/image")]
+    [ProjectScope(Key = "id")]
     public IActionResult IconImage(string id)
     {
         var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId || p.Icon.ImageFile is not { } file) return NotFound();
+        if (p is null || p.Icon.ImageFile is not { } file) return NotFound();
         var contentType = Services.ProjectIcons.ProjectIconImage.ContentTypeOf(file);
         var full = Path.Combine(projects.IconImagesDir, id, file);
         if (contentType is null || !System.IO.File.Exists(full)) return NotFound();

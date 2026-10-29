@@ -12,6 +12,7 @@
 #
 # Дельта после снимка: −3 совпадения в −2 файлах (S0-6, хаб на точку доступа): SessionHub.cs
 # (OwnsSession/OwnsProject → IProjectAccess) и TerminalHub.cs (OwnsProject → IProjectAccess).
+# Дельта S0-4a: −21 совпадение в −1 файле: ProjectsController.cs переведён на [ProjectScope].
 
 backend/ClaudeHomeServer.Architecture/Controllers/ArchitectureController.cs|1
 backend/ClaudeHomeServer.Architecture/Services/Architecture/ArchitectureToolset.cs|1
@@ -39,7 +40,6 @@ backend/ClaudeHomeServer/Controllers/ProjectGroupsController.cs|2
 backend/ClaudeHomeServer/Controllers/ProjectMapController.cs|3
 backend/ClaudeHomeServer/Controllers/ProjectPresetsController.cs|1
 backend/ClaudeHomeServer/Controllers/ProjectRelayController.cs|1
-backend/ClaudeHomeServer/Controllers/ProjectsController.cs|21
 backend/ClaudeHomeServer/Controllers/SessionHandsController.cs|1
 backend/ClaudeHomeServer/Controllers/SessionLocalModelController.cs|1
 backend/ClaudeHomeServer/Controllers/SessionsController.cs|1

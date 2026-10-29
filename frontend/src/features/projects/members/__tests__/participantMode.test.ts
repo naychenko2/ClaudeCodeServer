@@ -1,13 +1,12 @@
 // Режим участника общего проекта (S1-F6): стопка аватаров в крошке, плашки владельца и
 // отзыва доступа, блокировка композера. Окружение vitest — node без jsdom: стопка и плашки
 // монтируются в fake-DOM с заглушками контролов (проверяются решения встраивания, а не
-// вёрстка ui-кита), композер — логикой participantGate и сторожем на исходник Composer.tsx
-// (его целиком в fake-DOM не поднять: сотни хуков и рефы textarea).
+// вёрстка ui-кита), композер и входы запуска хода вне него — поведением чистых функций
+// participantGate (Composer/ChatPanel целиком в fake-DOM не поднять: сотни хуков и рефы).
 import { createElement } from 'react';
 import type { ReactElement } from 'react';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from '../../../../types';
 
@@ -97,7 +96,7 @@ vi.mock('../../../../components/ui/Button', async () => {
 import { MembersStack } from '../MembersStack';
 import { OwnerSettingsNotice } from '../OwnerSettingsNotice';
 import {
-  EDITOR_TURNS_ENABLED, canCreateChats, participantComposerGate, participantComposerText,
+  EDITOR_TURNS_ENABLED, canCreateChats, composerExecBlocked, guardTurnAction, turnDeniedReason, participantComposerGate, participantComposerText,
 } from '../participantGate';
 
 type FN = InstanceType<typeof FakeNode>;
@@ -172,13 +171,16 @@ describe('композер участника', () => {
     expect(canCreateChats(own)).toBe(true);
   });
 
-  // Composer не поднять в node-окружении: сторож на исходник держит связку «гейт участника →
-  // кнопка отправки disabled → плашка». Развязка любого звена краснит тест
-  it('Composer: гейт участника входит в execBlocked, отправка disabled и плашка есть', () => {
-    const src = readFileSync(new URL('../../../../components/Composer.tsx', import.meta.url), 'utf8');
-    expect(src).toMatch(/const execBlocked = !!project && \(!execGate\.available \|\| participantGate\.blocked\);/);
-    expect(src).toMatch(/disabled=\{!canSend \|\| execBlocked\}\s+data-composer-send/);
-    expect(src).toMatch(/\{participantGate\.blocked && \(\s*<Notice[\s\S]*?data-composer-participant-gate/);
+  // Composer целиком в fake-DOM не поднять (сотни хуков, рефы textarea): решение о блокировке
+  // вынесено в чистую composerExecBlocked, из неё берутся и disabled отправки, и сброс режимов
+  it('composerExecBlocked: участник блокирует отправку даже при доступном исполнении', () => {
+    const ok = (p: Project) => composerExecBlocked(p, true, participantComposerGate(p));
+    expect(ok(reader)).toBe(true);
+    expect(ok(editor)).toBe(true);
+    expect(ok(own)).toBe(false);
+    expect(ok(base)).toBe(false);
+    expect(composerExecBlocked(own, false, participantComposerGate(own))).toBe(true);
+    expect(composerExecBlocked(null, false, participantComposerGate(null))).toBe(false);
   });
 });
 
@@ -204,5 +206,49 @@ describe('плашки владельца', () => {
     await mount(createElement(OwnerSettingsNotice, { project: own, onGoHome: vi.fn() }));
     await mount(createElement(OwnerSettingsNotice, { project: base, revoked: true, onGoHome: vi.fn() }));
     expect(reg.notices).toHaveLength(0);
+  });
+});
+
+describe('входы запуска хода вне композера (гейт в точке отправки)', () => {
+  // Те же действия, что ChatPanel заворачивает: send (чипы, «Повторить», «Зафиксировать»,
+  // «Возобновить», механики команды, сброс режимов), ответ на разрешение/вопрос/план
+  const entries = ['send', 'allowPermission', 'allowAlways', 'answerQuestion', 'respondPlan'] as const;
+
+  it.each(entries)('%s: у читателя и редактора не доходит до сервера, показывает причину', (name) => {
+    for (const p of [reader, editor]) {
+      const action = vi.fn(() => 'ok');
+      const denied = vi.fn();
+      const guarded = guardTurnAction(() => p, action, denied);
+      expect(guarded('x')).toBeUndefined();
+      expect(action, `${name}/${p.myRole}`).not.toHaveBeenCalled();
+      expect(denied).toHaveBeenCalledTimes(1);
+      expect(denied.mock.calls[0][0]).toBe(turnDeniedReason(p));
+    }
+  });
+
+  it.each(entries)('%s: владелец и обычный проект проходят', (name) => {
+    for (const p of [own, base, null]) {
+      const action = vi.fn((a: string) => a + '!');
+      const denied = vi.fn();
+      const guarded = guardTurnAction(() => p, action, denied);
+      expect(guarded(name)).toBe(name + '!');
+      expect(denied).not.toHaveBeenCalled();
+    }
+  });
+
+  it('роль читается в момент вызова: смена роли после создания обёртки учитывается', () => {
+    let current: Project = own;
+    const action = vi.fn();
+    const guarded = guardTurnAction(() => current, action, vi.fn());
+    guarded();
+    current = reader;
+    guarded();
+    expect(action).toHaveBeenCalledTimes(1);
+  });
+
+  it('тексты отказа различают читателя и редактора', () => {
+    expect(turnDeniedReason(reader)).toBe('Недоступно: вы читатель проекта');
+    expect(turnDeniedReason(editor)).toBe('Недоступно: ходы редактора пока выключены');
+    expect(turnDeniedReason(own)).toBeNull();
   });
 });

@@ -11,6 +11,7 @@ import { isZoneRefusal } from '../lib/personaZone';
 import { buildBranchAnchors, branchAnchorText as branchAnchorTextOf, BRANCH_BEFORE_PROMPT } from '../lib/branchAnchors';
 import { findConsultedPersona } from './chat/PersonaTaskView';
 import { showToast } from '../lib/toast';
+import { guardTurnAction, turnDeniedReason } from '../features/projects/members/participantGate';
 import { isArchivedChat } from '../lib/chatFilters';
 import { archiveApi } from '../api/chats';
 import { projectMainColor } from '../features/projects/projectUtil';
@@ -244,7 +245,23 @@ function memoizedCacheEntry(
 }
 
 export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpenReader, onOpenTaskAside, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, onAddToWall, onChatDeleted, skills, agents, attachedFiles, onAttachedFilesChange, greetingBubble, headerIsland, embedded, composerFocusSignal, contextBar, headerDragProps, availableChatIds }: Props) {
-  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, liveContextTokens, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, teamPlanning: liveTeamPlanning, teamWavePulse, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending, preemptForPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
+  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, liveContextTokens, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, teamPlanning: liveTeamPlanning, teamWavePulse, promptSuggestion, pending, composerRestore, consumeRestore, send: rawSend, allowPermission: rawAllowPermission, denyPermission, allowAlways: rawAllowAlways, answerQuestion: rawAnswerQuestion, respondPlan: rawRespondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending, preemptForPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
+  // Участник общего проекта не запускает ходы и не отвечает агенту (бэк откажет): все входы
+  // вне композера идут через гейт в точке отправки, а не каждый со своей проверкой
+  const projectRef = useRef(project);
+  projectRef.current = project;
+  const turnDenied = turnDeniedReason(project);
+  const { send, allowPermission, allowAlways, answerQuestion, respondPlan } = useMemo(() => {
+    const deny = (reason: string) => showToast('Чат', reason);
+    const get = () => projectRef.current;
+    return {
+      send: guardTurnAction(get, rawSend, deny),
+      allowPermission: guardTurnAction(get, rawAllowPermission, deny),
+      allowAlways: guardTurnAction(get, rawAllowAlways, deny),
+      answerQuestion: guardTurnAction(get, rawAnswerQuestion, deny),
+      respondPlan: guardTurnAction(get, rawRespondPlan, deny),
+    };
+  }, [rawSend, rawAllowPermission, rawAllowAlways, rawAnswerQuestion, rawRespondPlan]);
   // Открылся пустой чат (только что создан — своей истории у него нет) — курсор сразу
   // в поле ввода: сюда пришли писать, а не читать. Решение принимаем один раз на чат и
   // только ПОСЛЕ загрузки истории: до неё items пуст у любого чата, и фокус улетал бы
@@ -3031,10 +3048,12 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
               </div>
               <button
                 onClick={() => { atBottomRef.current = true; void send('Продолжи', [], mode); }}
+                disabled={!!turnDenied}
+                title={turnDenied ?? undefined}
                 style={{
                   display: 'inline-flex', alignItems: 'center', gap: 7,
                   padding: '9px 22px', borderRadius: R.lg, fontSize: 13, fontWeight: 600,
-                  background: C.accent, border: 'none', cursor: 'pointer', color: C.onAccent,
+                  background: C.accent, border: 'none', cursor: turnDenied ? 'not-allowed' : 'pointer', color: C.onAccent, opacity: turnDenied ? 0.5 : 1,
                   boxShadow: SHADOW.button, transition: 'opacity 0.12s',
                 }}
                 onMouseEnter={e => { e.currentTarget.style.opacity = '0.88'; }}

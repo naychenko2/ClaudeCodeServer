@@ -46,3 +46,36 @@ export function participantSendTitle(gate: Extract<ParticipantComposerGate, { bl
 export function canCreateChats(project: Pick<Project, 'myRole'> | null | undefined): boolean {
   return project?.myRole !== 'reader';
 }
+
+// Единый гейт «запустить ход / ответить агенту» для входов вне композера (чипы-подсказки,
+// «Повторить», «Зафиксировать», «Возобновить», ответы на план/вопрос/разрешение, механики
+// команды, сброс режимов). Бэк откажет участнику (RunTurn только у владельца), поэтому
+// запрос не шлём вовсе. null — можно; строка — текст отказа для тоста и подсказки кнопки
+export function turnDeniedReason(project: Project | null | undefined): string | null {
+  const gate = participantComposerGate(project);
+  return gate.blocked ? participantSendTitle(gate).replace(/^Не отправится: /, 'Недоступно: ') : null;
+}
+
+// Оборачивает действие гейтом: у участника вместо вызова — onDenied(текст), результат undefined.
+// Проект читается в момент вызова (getProject), чтобы обёртка могла быть стабильной по ссылке
+export function guardTurnAction<A extends unknown[], R>(
+  getProject: () => Project | null | undefined,
+  action: (...args: A) => R,
+  onDenied: (reason: string) => void,
+): (...args: A) => R | undefined {
+  return (...args: A) => {
+    const reason = turnDeniedReason(getProject());
+    if (reason) { onDenied(reason); return undefined; }
+    return action(...args);
+  };
+}
+
+// Блокировка отправки композера: проект есть и (ход недоступен по исполнению ИЛИ участник).
+// Единственное место решения — из него же берётся disabled кнопки отправки и сброс режимов
+export function composerExecBlocked(
+  project: Project | null | undefined,
+  execAvailable: boolean,
+  gate: ParticipantComposerGate,
+): boolean {
+  return !!project && (!execAvailable || gate.blocked);
+}

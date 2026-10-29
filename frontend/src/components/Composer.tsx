@@ -34,7 +34,7 @@ import { getDraft, setDraft } from '../lib/drafts';
 import { middleEllipsis } from '../lib/paths';
 import { dativeName } from '../lib/russianName';
 import { showToast } from '../lib/toast';
-import { participantComposerGate, participantComposerText, participantSendTitle } from '../features/projects/members/participantGate';
+import { composerExecBlocked, participantComposerGate, participantComposerText, participantSendTitle } from '../features/projects/members/participantGate';
 import { Button, Chip, FileTypeTile, IconButton, Menu, MenuItem, MenuSep, Modal, Notice } from './ui';
 import { plusButtonTitle, shortcutOverflowItems, useCreateShortcuts } from './chat/composerShortcuts';
 import { SLOT_COMPOSER_CHIP, useSlot } from '../lib/subsystems/registry';
@@ -780,7 +780,7 @@ export function Composer({
   // Участник общего проекта: ходы запускает только владелец (бэк, S1-7a), поэтому отправка
   // выключена у любого участника — читателю по роли, редактору до включения его ходов
   const participantGate = useMemo(() => participantComposerGate(project), [project?.myRole, project?.ownerDisplayName, project?.ownerUsername]);
-  const execBlocked = !!project && (!execGate.available || participantGate.blocked);
+  const execBlocked = composerExecBlocked(project, execGate.available, participantGate);
   const execDeviceOffline = project?.device?.online === false;
   // Опасный режим (bypass) ждёт подтверждения в модалке перед применением
   const [pendingMode, setPendingMode] = useState<Mode | null>(null);
@@ -2528,7 +2528,7 @@ export function Composer({
           onPick={id => { setTeamMech(id); textareaRef.current?.focus(); }}
           onSettings={setTeamSettings}
           onClose={() => setTeamOpen(false)}
-          onResetModes={skills.some(s => s.name === 'oh-my-claudecode:cancel')
+          onResetModes={!execBlocked && skills.some(s => s.name === 'oh-my-claudecode:cancel')
             ? () => {
                 // Тихий ход: чистит state зависших OMC-режимов (autopilot/ultraqa/ralph).
                 // Признака «было ли что чистить» на фронте нет — тост нейтральный

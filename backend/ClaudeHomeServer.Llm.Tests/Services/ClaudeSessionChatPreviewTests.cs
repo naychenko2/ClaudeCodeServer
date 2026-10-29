@@ -49,7 +49,7 @@ public class ClaudeSessionChatPreviewTests : IDisposable
                 FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
                 Args = OperatingSystem.IsWindows()
                     ? ["/c", "ping -n 120 127.0.0.1 >nul"]
-                    : ["-c", "sleep 120"],
+                    : ["-c", "exec sleep 120"],
                 WorkingDirectory = spec.WorkingDirectory,
                 RedirectStdin = spec.RedirectStdin,
                 Track = false,

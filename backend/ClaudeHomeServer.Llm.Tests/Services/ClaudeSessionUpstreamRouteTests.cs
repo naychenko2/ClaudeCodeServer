@@ -229,7 +229,7 @@ public class ClaudeSessionUpstreamRouteTests : IDisposable
                 FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
                 Args = OperatingSystem.IsWindows()
                     ? ["/c", $"type \"{resultFile}\" & ping -n 120 127.0.0.1 >nul"]
-                    : ["-c", $"cat '{resultFile}'; sleep 120"],
+                    : ["-c", $"cat '{resultFile}'; exec sleep 120"],
                 WorkingDirectory = spec.WorkingDirectory,
                 StdioEncoding = spec.StdioEncoding,
                 EnableRaisingEvents = spec.EnableRaisingEvents,

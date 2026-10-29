@@ -63,7 +63,7 @@ public class ClaudeSessionLocalEngineBusyTests : IDisposable
                 FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
                 Args = OperatingSystem.IsWindows()
                     ? ["/c", "ping -n 120 127.0.0.1 >nul"]
-                    : ["-c", "sleep 120"],
+                    : ["-c", "exec sleep 120"],
                 WorkingDirectory = spec.WorkingDirectory,
                 StdioEncoding = spec.StdioEncoding,
                 EnableRaisingEvents = spec.EnableRaisingEvents,
@@ -137,7 +137,8 @@ public class ClaudeSessionLocalEngineBusyTests : IDisposable
         // законно остаётся занятым). Отмена сессии завершает тело хода — ровно тот выход, на
         // котором обязан сняться признак.
         await adapter.DisposeAsync();
-        await Task.WhenAny(exited.Task, Task.Delay(TimeSpan.FromSeconds(5)));
+        // ExitedMessage после Dispose не приходит: прежний WhenAny(exited, 5 с) молча съедал
+        // 5 с на каждом прогоне. Ждём то, что проверяем, — снятие признака
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
         while (busy.Busy && DateTime.UtcNow < deadline)
             await Task.Delay(20);

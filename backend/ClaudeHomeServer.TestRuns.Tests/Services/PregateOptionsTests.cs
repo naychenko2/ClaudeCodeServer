@@ -79,7 +79,7 @@ public class PregateOptionsTests
 
         var options = PregateOptions.From(ConfigWithLocalOverride(baseChecks));
 
-        options.Checks.Select(c => c.Name).Should().Contain(["tsc", "lint:design", "build", "быстрые тесты", "сторожа границ", OwnCheckName],
+        options.Checks.Select(c => c.Name).Should().Contain(["tsc", "lint:design", "build", "быстрые тесты", "сторож длительности", "сторожа границ", OwnCheckName],
             "базовый набор сохраняется целиком, своя проверка добавляется к нему");
         options.Problem.Should().BeNull();
         baseChecks.Should().BeOfType<JsonObject>(
@@ -131,7 +131,7 @@ public class PregateOptionsTests
 
         var options = PregateOptions.From(ConfigWithLocalOverride(baseChecks));
 
-        options.Checks.Select(c => c.Name).Should().Equal(["tsc", "lint:design", "build", "быстрые тесты", "сторожа границ", OwnCheckName]);
+        options.Checks.Select(c => c.Name).Should().Equal(["tsc", "lint:design", "build", "быстрые тесты", "сторож длительности", "сторожа границ", OwnCheckName]);
     }
 
     // Быстрый гейт (фича «Ускорение тестов», Э3): набор Fast — исключением категорий, после сборки
@@ -145,7 +145,13 @@ public class PregateOptionsTests
         fast.Order.Should().Be(35);
         fast.WhenChanged.Should().Equal("backend/");
         fast.Args.Should().ContainInOrder("test", "backend/ClaudeHomeServer.slnx", "--no-build", "--filter",
-            "Category!=Host&Category!=Slow&Category!=Integration&Category!=Node&Category!=Bench");
+            "Category!=Host&Category!=Slow&Category!=Integration&Category!=Node&Category!=Bench",
+            "--results-directory", ".cc-attachments/pregate-fast");
+
+        // Сторож длительности читает TRX этого же прогона, порог — дефолт скрипта (5 с)
+        var guard = options.Checks.Single(c => c.Name == "сторож длительности");
+        guard.Order.Should().Be(36);
+        guard.Args.Should().Equal("-I", "scripts/test-profile.py", ".cc-attachments/pregate-fast", "--check", "--latest-run");
     }
 
     // Старая форма (массив) — не молчаливый пустой набор: предгейт обязан отказать с текстом

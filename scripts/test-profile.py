@@ -7,7 +7,8 @@
 
 Запуск:  python3 -I scripts/test-profile.py <папка артефакта run_tests | файл.trx> [--src КОРЕНЬ]
          ... --json              — длительность каждого класса в JSON (вход для scripts/test-shards.py)
-         ... --check [--threshold 2] — сторож длительности: exit 1, если есть тест дольше порога.
+         ... --check [--threshold 5] — сторож длительности: exit 1, если есть тест дольше порога;
+             тесты между целью доводки (2 с) и порогом печатаются отдельным блоком, exit 0.
              Гонять ТОЛЬКО на TRX набора Fast (фильтр исключает Host/Slow/Integration/Node/Bench):
              там каждый тест дольше порога — нехостовый тест без метки Slow.
 """
@@ -37,7 +38,10 @@ def parse_duration(text):
 
 # Фильтр набора Fast: исключение категорий, а не перечень меток. Единственная копия в скриптах.
 FAST_FILTER = "Category!=Host&Category!=Slow&Category!=Integration&Category!=Node&Category!=Bench"
-CHECK_THRESHOLD = 2.0
+# Гейт — 5 с: стену одного теста под конкуренцией десятков сборок за ядра мерить с точностью
+# до 2 с бессмысленно (решение Александра 29.10). 2 с — цель доводки Э4, не гейт
+CHECK_THRESHOLD = 5.0
+TARGET_SECONDS = 2.0
 
 
 def find_trx(path):
@@ -48,6 +52,18 @@ def find_trx(path):
         dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
         found += [os.path.join(root, f) for f in files if f.lower().endswith(".trx")]
     return sorted(found)
+
+
+# Окно «одного прогона» для --latest-run: потолок run_tests и предгейта — 9 мин
+LATEST_RUN_WINDOW = 600
+
+
+def latest_run(files, window=LATEST_RUN_WINDOW):
+    """TRX последнего прогона в общей папке: не старше самого свежего файла больше чем на окно."""
+    if not files:
+        return files
+    newest = max(os.path.getmtime(f) for f in files)
+    return [f for f in files if newest - os.path.getmtime(f) <= window]
 
 
 def read_trx(path):
@@ -186,10 +202,16 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true", help="длительность каждого класса в JSON (stdout)")
     ap.add_argument("--check", action="store_true",
                     help="сторож длительности на TRX набора Fast: exit 1, если есть тест дольше --threshold")
-    ap.add_argument("--threshold", type=float, default=CHECK_THRESHOLD, help="порог --check, секунды (по умолчанию 2)")
+    ap.add_argument("--threshold", type=float, default=CHECK_THRESHOLD, help="порог --check, секунды (по умолчанию 5)")
+    ap.add_argument("--latest-run", action="store_true",
+                    help="только TRX последнего прогона в папке (предгейт пишет в одну и ту же папку)")
+    ap.add_argument("--target", type=float, default=TARGET_SECONDS,
+                    help="цель доводки, секунды: тесты между целью и порогом печатаются отдельно, exit 0")
     args = ap.parse_args(argv)
 
     files = find_trx(args.path)
+    if args.latest_run:
+        files = latest_run(files)
     if not files:
         print(f"TRX не найден: {args.path}", file=sys.stderr)
         return 2
@@ -214,6 +236,12 @@ def main(argv=None):
         return 0
     if args.check:
         bad = slow_offenders(results, args.threshold)
+        near = [r for r in slow_offenders(results, args.target) if r[2] <= args.threshold]
+        if near:
+            print(f"Цель доводки: {len(near)} тестов дольше {fmt(args.target, 1)} с, но не дольше "
+                  f"{fmt(args.threshold, 1)} с — не гейт:")
+            for cls, name, s in near:
+                print(f"  {fmt(s):>8} с  {cls}.{name}")
         for cls, name, s in bad:
             print(f"  {fmt(s):>8} с  {cls}.{name}")
         if bad:

@@ -9,8 +9,8 @@ on:
 jobs:
   # Backend разнесён на сборку и прогон (фича «Ускорение тестов», Э2): сборка идёт ОДИН раз,
   # её bin/obj едут артефактом в матрицу прогонов — три шарда монолита ClaudeHomeServer.Tests
-  # по классам (scripts/test-shards.py, раскладка по профилю прошлого прогона) плюс шард «rest»
-  # (все остальные тестовые проекты slnx). Состав не сокращается: объединение шардов скрипт
+  # по классам (scripts/test-shards.py, раскладка по профилю прошлого прогона) плюс шарды «Llm.Tests» и «rest»
+  # (остальные тестовые проекты slnx). Состав не сокращается: объединение шардов скрипт
   # сверяет с `dotnet test --list-tests` и падает при расхождении.
   backend-build:
     name: Backend (build)
@@ -134,7 +134,10 @@ jobs:
           - { name: "monolith 1/3", key: m1, shard: "1/3" }
           - { name: "monolith 2/3", key: m2, shard: "2/3" }
           - { name: "monolith 3/3", key: m3, shard: "3/3" }
-          - { name: "rest", key: rest, shard: "" }
+          # Llm.Tests — отдельной строкой: параллель коллекций там выключена (inotify), и в общем
+          # шарде он один был критическим путём
+          - { name: "Llm.Tests", key: llm, shard: "llm" }
+          - { name: "rest", key: rest, shard: "rest" }
     env:
       DOTNET_CLI_UI_LANGUAGE: en
       # Fast — исключение категорий, а не перечень меток (Э3). Единственная копия фильтра в CI;
@@ -177,15 +180,20 @@ jobs:
       # вынесенные тестовые проекты должны идти в том же гейте master.
       - name: Shard filter
         run: |
-          if [ -n "${{ matrix.shard }}" ]; then
-            SHARD=$(python3 -I scripts/test-shards.py --list monolith-tests.txt --shard "${{ matrix.shard }}" --timings test-profile.json)
-            echo "TARGET=backend/ClaudeHomeServer.Tests" >> "$GITHUB_ENV"
-            echo "SHARD=($SHARD)&" >> "$GITHUB_ENV"
-          else
-            grep -v 'ClaudeHomeServer.Tests/ClaudeHomeServer.Tests.csproj' backend/ClaudeHomeServer.slnx > backend/ClaudeHomeServer.Rest.slnx
-            echo "TARGET=backend/ClaudeHomeServer.Rest.slnx" >> "$GITHUB_ENV"
-            echo "SHARD=" >> "$GITHUB_ENV"
-          fi
+          case "${{ matrix.shard }}" in
+            llm)
+              echo "TARGET=backend/ClaudeHomeServer.Llm.Tests" >> "$GITHUB_ENV"
+              echo "SHARD=" >> "$GITHUB_ENV" ;;
+            rest)
+              grep -v -e 'ClaudeHomeServer.Tests/ClaudeHomeServer.Tests.csproj' -e 'ClaudeHomeServer.Llm.Tests/ClaudeHomeServer.Llm.Tests.csproj' \
+                backend/ClaudeHomeServer.slnx > backend/ClaudeHomeServer.Rest.slnx
+              echo "TARGET=backend/ClaudeHomeServer.Rest.slnx" >> "$GITHUB_ENV"
+              echo "SHARD=" >> "$GITHUB_ENV" ;;
+            *)
+              SHARD=$(python3 -I scripts/test-shards.py --list monolith-tests.txt --shard "${{ matrix.shard }}" --timings test-profile.json)
+              echo "TARGET=backend/ClaudeHomeServer.Tests" >> "$GITHUB_ENV"
+              echo "SHARD=($SHARD)&" >> "$GITHUB_ENV" ;;
+          esac
       # Два прохода на шард: набор Fast отдельно — его TRX проверяет сторож длительности,
       # остальное (Host/Slow/Integration/Bench) — вторым проходом; вместе это весь шард.
       # Blame-режим: молчание тестового процесса дольше 5 минут — VSTest снимает дамп,
@@ -206,7 +214,8 @@ jobs:
           --filter "${SHARD}(${NOT_FAST})"
           --logger "trx;LogFilePrefix=rest" --results-directory "$RUNNER_TEMP/trx/rest"
           --blame-hang-timeout 5m --blame-hang-dump-type full
-      # Сторож Э3: тест набора Fast дольше 2 с — это нехостовый тест без метки Slow
+      # Сторож Э3: тест набора Fast дольше 5 с — нехостовый тест без метки Slow (гейт); 2–5 с
+      # печатаются блоком «цель доводки» без падения: стена теста на 4 vCPU под параллелью — шум
       - name: Duration guard (Fast)
         run: python3 -I scripts/test-profile.py "$RUNNER_TEMP/trx/fast" --check
       - uses: actions/upload-artifact@v4

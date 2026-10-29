@@ -135,9 +135,15 @@ class TestProfileTests(unittest.TestCase):
         code, out, err = self._main(FIXTURE, "--check")
         self.assertEqual(1, code)
         self.assertIn("Mini.Host.HostedTests+Nested.Heavy", out)
-        self.assertIn("Mini.Host.HostedTests.Slow", out)
         self.assertNotIn("PlainTests.Mid", out)
-        self.assertIn("2 тестов дольше 2,0 с", err)
+        self.assertIn("1 тестов дольше 5,0 с", err)
+
+    def test_check_между_целью_и_порогом_отдельный_блок_exit_0(self):
+        code, out, _ = self._main(FIXTURE, "--check", "--threshold", "10")
+        self.assertEqual(0, code)
+        self.assertIn("Цель доводки: 2 тестов дольше 2,0 с", out)
+        self.assertIn("Mini.Host.HostedTests.Slow", out)
+        self.assertIn("Сторож длительности: OK", out)
 
     def test_check_граница_порога_не_нарушение(self):
         self.assertEqual(0, self._main(FIXTURE, "--check", "--threshold", "10")[0])
@@ -170,6 +176,18 @@ class TestProfileTests(unittest.TestCase):
         data = json.loads(self._main(art, "--json")[1])
         self.assertEqual(10, data["tests"])
         self.assertEqual(6, data["classes"]["Mini.Plain.PlainTests"]["tests"])
+
+
+    def test_latest_run_берёт_только_свежий_прогон(self):
+        art = os.path.join(self.tmp.name, "pregate")
+        os.makedirs(art)
+        old, new = os.path.join(art, "old.trx"), os.path.join(art, "new.trx")
+        for f in (old, new):
+            with open(FIXTURE, encoding="utf-8") as src, open(f, "w", encoding="utf-8") as dst:
+                dst.write(src.read())
+        os.utime(old, (1000, 1000))
+        self.assertEqual([new], tp.latest_run(sorted([old, new])))
+        self.assertEqual(5, json.loads(self._main(art, "--json", "--latest-run")[1])["tests"])
 
 
 if __name__ == "__main__":

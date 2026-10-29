@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { CSSProperties } from 'react';
-import { ChevronRight } from 'lucide-react';
+import { AlertTriangle, ChevronRight } from 'lucide-react';
 import { C, R, FS, FONT, SHADOW } from '../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { FeatureGlyph } from './chat/feature/FeatureGlyphs';
@@ -340,10 +340,17 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
               <b style={{ color: C.textHeading }}>{percent} %</b>
             </span>
           )}
+          {/* Бейдж расхождений — глиф + число (дизайн-ревью F2, minor 10): длинное слово
+              «расхождений: N» резало статус до «ждёт согласия на ме…». Пояснение — в title. */}
           {!compact && (feature.trackerIssues ?? 0) > 0 && (
             <span data-testid="feature-group-tracker-issues" style={{ display: 'inline-flex', flexShrink: 0 }}>
-              <Badge tone="warning" size="xs" title="Трекер расходится с работой — оркестратор поправит">
-                {`расхождений: ${feature.trackerIssues}`}
+              <Badge
+                tone="warning"
+                size="xs"
+                icon={<AlertTriangle size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+                title={`Трекер расходится с работой: ${feature.trackerIssues} — оркестратор поправит`}
+              >
+                {feature.trackerIssues}
               </Badge>
             </span>
           )}

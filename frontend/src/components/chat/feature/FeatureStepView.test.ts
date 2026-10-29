@@ -110,6 +110,15 @@ describe('FeatureStepView: тело П2 «Мой шаг»', () => {
     expect(html).toContain('Готовность 22 %: 4 в master, 2 принято, 4 в ревью, 2 в работе, 1 не заведено');
   });
 
+  it('на 360 длинный бейдж переносится второй строкой (название не сжимается до «Ш8 · П…»)', () => {
+    const c = chain();
+    const html = render(run({ stepChains: [c] }), c, { isMobile: true });
+    const card = /data-testid="feature-step-card"[\s\S]*?<div style="([^"]*)"/.exec(html);
+    expect(card?.[1]).toContain('flex-wrap:wrap');
+    // На десктопе строка одна.
+    expect(render(run({ stepChains: [c] }), c).match(/data-testid="feature-step-card"[\s\S]*?<div style="([^"]*)"/)?.[1]).not.toContain('flex-wrap');
+  });
+
   it('подвал: роль этого чата по его задаче и переход на страницу фичи', () => {
     const c = chain();
     const html = render(run({ stepChains: [c] }), c);

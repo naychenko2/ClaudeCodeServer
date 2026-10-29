@@ -44,6 +44,17 @@ import type { FeatureRun } from '../../../types/featureRun';
 
 const nameOfPersona: NameOf = (id) => getPersonaById(id)?.name ?? null;
 
+// Наведение шеврона — CSS :hover (дизайн-ревью F2, minor 11): на тач-устройстве мышь
+// не уходит, и после тапа у шеврона оставался фон bgSelected (снимок stop-m-light).
+// Паттерн FOCUS_CLASS (FeatureGroupHeader/SessionList): один <style>, класс на элементе.
+const HOVER_CLASS = 'cc-feature-row-hover';
+if (typeof document !== 'undefined' && !document.getElementById('cc-feature-row-hover-style')) {
+  const el = document.createElement('style');
+  el.id = 'cc-feature-row-hover-style';
+  el.textContent = `.${HOVER_CLASS}:hover{background:${C.bgSelected};}`;
+  (document.head ?? document.body).appendChild(el);
+}
+
 // ── Модель строки (чистая, тестируется без DOM) ──────────────────────────────────────
 export type BannerAlarm = 'wait' | 'stop';
 
@@ -221,7 +232,9 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
         }}
       >
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5, padding: '3px 0' }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: SP.sm, minWidth: 0 }}>
+          {/* alignItems: center (дизайн-ревью F2, minor 6): по baseline строка прыгала
+              с 41 до 49 px, когда вместо «Сейчас» вставала кнопка тревоги 24. */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, minWidth: 0 }}>
             {model.alarm ? (
               <span
                 data-testid="feature-row-alarm"
@@ -231,11 +244,14 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
               </span>
             ) : (
               <>
+                {/* Порядок сжатия (дизайн-ревью F2, minor 7): при нехватке места первым
+                    сжимается название (большой flexShrink, пол не ниже 120), фраза
+                    «Сейчас» — только после него: иначе резались оба сразу пополам. */}
                 {!isMobile && (
                   <span
                     data-testid="feature-row-title"
                     title={feature.title}
-                    style={{ fontSize: FS.sm, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}
+                    style={{ fontSize: FS.sm, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 120, flexShrink: 4 }}
                   >
                     <b style={{ color: C.textHeading, fontWeight: 600 }}>{feature.title}</b>
                   </span>
@@ -246,7 +262,7 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
                   </span>
                 )}
                 {statusPhraseText && (
-                  <span data-testid="feature-row-status" style={{ fontSize: FS.sm, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
+                  <span data-testid="feature-row-status" style={{ fontSize: FS.sm, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0, flexShrink: 1 }}>
                     {(isMobile ? (bar ? ' · ' : '') : ' · ')}{statusPhraseText}
                   </span>
                 )}
@@ -263,7 +279,10 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
                 >
                   {model.actionLabel}
                 </Button>
-              ) : bar && !model.statusWord ? (
+              ) : bar ? (
+                /* Процент при слове состояния тоже (дизайн-ревью F2, minor 9): на десктопе
+                   его не было у «смержена»/«Простаивает», а на мобиле был — одна величина
+                   в двух ширинах. Не показывается он только при тревоге (выше). */
                 <>
                   {!isMobile && (
                     <span data-testid="feature-row-pct" style={{ fontFamily: FONT.mono, fontSize: FS.sm, fontWeight: 700, color: C.textHeading, whiteSpace: 'nowrap' }}>
@@ -294,8 +313,7 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
           aria-expanded={expanded}
           aria-label={expanded ? 'Свернуть сводку фичи' : 'Подробнее о фиче'}
           onClick={() => setExpanded(e => !e)}
-          onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
-          onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+          className={HOVER_CLASS}
           style={{
             width: isMobile ? 40 : 28, height: isMobile ? 40 : 28, borderRadius: R.md,
             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',

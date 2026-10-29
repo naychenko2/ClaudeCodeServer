@@ -242,11 +242,13 @@ describe('FeatureGroupHeader: bucket merged (смержена, ждёт закр
 });
 
 describe('FeatureGroupHeader: счётчик расхождений трекера', () => {
-  it('trackerIssues > 0: бейдж «расхождений: N» с пояснением в title', () => {
+  it('trackerIssues > 0: бейдж «⚠ N» (глиф + число, статус не режется) с пояснением в title', () => {
     const html = renderHeader(feat({ trackerIssues: 3 }));
     expect(html).toContain('data-testid="feature-group-tracker-issues"');
-    expect(html).toContain('расхождений: 3');
-    expect(html).toContain('Трекер расходится с работой — оркестратор поправит');
+    // Длинного слова нет: «расхождений: N» резало статус до «ждёт согласия на ме…».
+    expect(html).not.toContain('расхождений:');
+    expect(html).toContain('>3<');
+    expect(html).toContain('Трекер расходится с работой: 3 — оркестратор поправит');
   });
 
   it('нет поля или 0: бейджа нет', () => {

@@ -96,7 +96,9 @@ export function FeatureStepView({ run, chain, sessionId, chatTaskId, isMobile, o
       {/* «Этот чат»: карточка шага этого чата. */}
       <div style={{ ...secStyle, margin: '2px 0 4px' }}>Этот чат</div>
       <div data-testid="feature-step-card" style={{ padding: '8px 10px', borderRadius: R.lg, background: C.bgInset }}>
-        <div style={{ display: 'flex', gap: SP.sm, alignItems: 'center', minWidth: 0 }}>
+        {/* На 360 длинный бейдж статуса уходит второй строкой (дизайн-ревью F2, minor 8):
+            иначе он сжимал название до «P2 · P…». На десктопе строка одна. */}
+        <div style={{ display: 'flex', gap: SP.sm, alignItems: 'center', minWidth: 0, ...(isMobile ? { flexWrap: 'wrap' as const } : null) }}>
           <span data-testid="feature-step-title" style={{ flex: 1, minWidth: 0, fontSize: FS.base, fontWeight: 700, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {stepWhatLabel(chain.stepRef, chain.title)}
           </span>

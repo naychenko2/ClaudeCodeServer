@@ -387,3 +387,76 @@ describe('Вкладка «Вики»: ошибки и подвкладки (д�
     }
   });
 });
+
+// ─── Доработка S5b M3: гонка открытия страницы ───
+// Мутация этого прогона (вывод — в отчёте задачи): в catch openPage закрыть страницу и
+// показать ошибку без сверки поколения → «поздний отказ прежней страницы» краснеет.
+
+const PAGE_B_TEXT = `---
+type: topic
+status: active
+updated: 2026-10-28
+---
+
+# Страница B
+
+## Сводка
+- Содержание страницы B.
+`;
+
+const CATALOG_A = {
+  key: `projects/${PROJECT_ID}`, name: 'AI Home', orphan: false,
+  pages: [{ pageKey: 'page-a', title: 'Страница A', summary: null, type: 'topic', status: 'active', sourcesCount: 0, updated: null }],
+};
+const CATALOG_COMMON = {
+  key: 'common', name: 'Общее', orphan: false,
+  pages: [{ pageKey: 'page-b', title: 'Страница B', summary: null, type: 'topic', status: 'active', sourcesCount: 0, updated: null }],
+};
+
+function clickPageRow(c: Cont, title: string) {
+  const row = allNodes(c).find(n => n.getAttribute('data-testid') === 'wiki-page-row'
+    && textNodes(n).join('').includes(title));
+  click(row ?? null, `строку страницы «${title}»`);
+}
+
+function clickSectionRow(c: Cont, name: string) {
+  const row = allNodes(c).find(n => n.getAttribute('data-testid') === 'wiki-section-row'
+    && textNodes(n).join('').includes(name));
+  click(row ?? null, `строку раздела «${name}»`);
+}
+
+describe('Вкладка «Вики»: гонка открытия страницы (доработка S5b M3)', () => {
+  it('поздний отказ прежней страницы не закрывает открытую свежую и не показывает свою ошибку', async () => {
+    let rejectA: (e: unknown) => void = () => {};
+    const pendingA = new Promise<unknown>((_, rej) => { rejectA = rej; });
+    req.mockImplementation((url: string) => {
+      if (url.startsWith('/api/wiki/tree')) return Promise.resolve(TREE);
+      if (url.startsWith('/api/wiki/page?')) {
+        if (url.includes('page=page-a')) return pendingA;
+        return Promise.resolve({ pageKey: 'page-b', content: PAGE_B_TEXT, drift: false });
+      }
+      if (url.startsWith('/api/wiki/section')) {
+        return Promise.resolve(url.includes('section=common') ? CATALOG_COMMON : CATALOG_A);
+      }
+      return Promise.resolve(null);
+    });
+    installFakeDom();
+    const { root, container } = mount(createElement(WikiTab));
+    roots.push(root);
+    await settle();
+    // A открыта и ещё читается; пользователь уходит в «Общее» и открывает B
+    clickPageRow(container, 'Страница A');
+    await settle();
+    clickSectionRow(container, 'Общее');
+    await settle();
+    clickPageRow(container, 'Страница B');
+    await settle();
+    expect(has(container, 'Содержание страницы B')).toBe(true);
+    // поздний отказ A: он не относится к уже прочитанной B — её не закрывает, своей
+    // ошибки не показывает
+    rejectA({ status: 404 });
+    await settle();
+    expect(has(container, 'Содержание страницы B')).toBe(true);
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-error')).toBeNull();
+  });
+});

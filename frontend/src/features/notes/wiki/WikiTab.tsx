@@ -12,7 +12,7 @@
 // На мобили дерево — отдельный экран «Разделы» (кнопка «Раздел ▸» в каталоге): макет 360,
 // хвост ревью S5c — каталог не должен схлопываться в нулевую высоту под деревом.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { AlertTriangle, BookOpen, Check, ChevronLeft, ChevronRight, Folder, Lock, Monitor, Shield, Trash2 } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../../lib/design';
@@ -285,6 +285,9 @@ export function WikiTab() {
   // Открытая страница (S5b): pageKey открытой страницы выбранного раздела; null — каталог.
   // Смена или удаление раздела закрывает её (страница принадлежит разделу) — selectSection
   const [openedPage, setOpenPage] = useState<string | null>(null);
+  // Поколение последнего открытия (доработка S5b M3, образец — _pageGen в lib/wiki):
+  // отказ прежнего запроса не должен закрывать уже открытую свежую страницу
+  const openSeq = useRef({ gen: 0, pageKey: '' });
 
   const selectSection = useCallback((key: string | null) => {
     setSelectedKey(key);
@@ -339,13 +342,19 @@ export function WikiTab() {
   // Открытие страницы из каталога — одна точка подключения (S5b): текст читает стор
   // (поколение и владелец — в нём). Отказ загрузки — возврат к каталогу с названным
   // отказом: пустой экран страницы хуже строки, из которой её открыли.
+  // Отказ актуален только для последнего открытия (доработка S5b M3): поздний отказ A,
+  // пока открыта B, не закрывает B и не показывает свою ошибку — иначе пользователь
+  // вылетает из уже прочитанной страницы с чужой ошибкой.
   // Обычная функция, не useCallback: она ниже раннего return (условный хук — rules-of-hooks),
   // порядок — как у runAction рядом
   const openPage = (pageKey: string) => {
     if (!selectedKey) return;
+    const mine = { gen: openSeq.current.gen + 1, pageKey };
+    openSeq.current = mine;
     setOpenPage(pageKey);
     setActionError(null);
     loadWikiPage(selectedKey, pageKey).catch(e => {
+      if (openSeq.current.gen !== mine.gen || openSeq.current.pageKey !== pageKey) return;
       setOpenPage(null);
       setActionError(e);
     });
@@ -397,15 +406,16 @@ export function WikiTab() {
     }
     if (selected.local) return <LocalSection onOpenCommon={commonKey ? () => selectSection(commonKey) : undefined} />;
 
-    // Открытая страница (S5b) — вместо каталога; key — по паре (раздел, страница):
-    // локальное состояние страницы (принятый дрейф) не переезжает на другую страницу
+    // Открытая страница (S5b) — вместо каталога; текст и дрейф читает сам экран из стора
+    // (доработка S5b M2), здесь остаётся только порог: пока страницы нет — спиннер.
+    // key — по паре (раздел, страница): локальное состояние действия (занятость и отказ
+    // adopt) не переезжает на другую страницу
     if (openedPage) {
       return pageSnap ? (
         <WikiPageView
           key={`${selectedKey}\n${openedPage}`}
           section={selected}
           pageKey={openedPage}
-          content={pageSnap.content}
           onBack={() => setOpenPage(null)}
         />
       ) : <LoadingSkeleton />;

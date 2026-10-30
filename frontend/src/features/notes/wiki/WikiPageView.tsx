@@ -1,10 +1,14 @@
 // Страница вики (только чтение): макет llm-wiki-v2.html, экраны «Страница вики» и «Хроника
 // чата». Страница только для чтения — ни одного контрола правки текста; единственное
 // действие — «Принять как есть» при дрейфе (решение человека о файле, ADR-035, решение 6):
-// только при status: drift, блокируется на время запроса, ошибка называется (не молча).
+// только при drift из ответа бэка, блокируется на время запроса, ошибка называется (не молча).
 //
-// Данные — сырой текст страницы из стора (lib/wiki: GET /api/wiki/page отдаёт
-// {pageKey, content} — контракт S2f). Разбор здесь — зеркало бэкового WikiPage.Parse
+// Данные — страница из стора (lib/wiki: GET /api/wiki/page отдаёт {pageKey, content,
+// drift?, manifestState?} — контракт S2f плюс доработка S5b): экран читает слот последней
+// прочитанной страницы, поэтому перечитывание после adopt видно здесь без локального
+// состояния. Дрейф — поле ответа (его считает бэк сверкой файла с манифестом), а не шапка
+// status: шапку пишет модель, она не сигнал (ревью S5b M1). Разбор здесь — зеркало бэкового
+// WikiPage.Parse
 // (WikiPage.cs:68): шапка → '# заголовок' → '## секции' → '[^sN]: [[цель]] — «цитата»'.
 // Фронт-разбор терпимый: страница с неразобранной шапкой или секциями остаётся видимой
 // (тот же принцип, что у каталога, lib/wiki.ts:40) — строгость бэка это его гейт записи,
@@ -24,7 +28,7 @@ import { Button } from '../../../components/ui/Button';
 import { Notice } from '../../../components/ui/Notice';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { useIsMobile } from '../../../lib/breakpoints';
-import { WikiError, adoptWikiPage, type WikiSectionDto } from '../../../lib/wiki';
+import { WikiError, adoptWikiPage, useWikiPage, type WikiSectionDto } from '../../../lib/wiki';
 import { PAGE_STATUS, PAGE_TYPE, sectionPrefix, wikiErrorText } from './WikiTab';
 
 // ─── Разбор страницы (зеркало бэкового WikiPage.Parse, терпимый) ───
@@ -210,24 +214,24 @@ function SourcesBlock({ footnotes }: { footnotes: ParsedWikiPage['footnotes'] })
 interface Props {
   section: WikiSectionDto;
   pageKey: string;
-  // Сырой текст страницы из стора (useWikiPage); разбор — здесь
-  content: string;
   onBack: () => void;
 }
 
-export function WikiPageView({ section, pageKey, content, onBack }: Props) {
+export function WikiPageView({ section, pageKey, onBack }: Props) {
   const isMobile = useIsMobile();
+  // Страницу и её дрейф читает стор (ревью S5b M2): после adopt он перечитывает страницу,
+  // и экран показывает новый ответ бэка, а не локальную копию прежнего
+  const dto = useWikiPage(section.key, pageKey);
+  const content = dto?.content ?? '';
   const page = useMemo(() => parseWikiPage(content), [content]);
   const [adoptBusy, setAdoptBusy] = useState(false);
   const [adoptError, setAdoptError] = useState<unknown>(null);
-  // Успешный adopt: файл не трогается, и его шапка может сохранять status: drift до
-  // ближайшей записи Хранителя — поэтому плашка снимается локально: бэк подтвердил
-  // принятие (манифест == диск), а витрина не должна спорить с ответом сервера.
-  const [adopted, setAdopted] = useState(false);
 
+  // Дрейф — поле ответа (его считает бэк сверкой файла с манифестом). Шапка status: drift
+  // — текст модели, не сигнал: плашка и кнопка по ней не поднимаются (ревью S5b M1)
   const isChronicle = page.type === 'chronicle';
   const st = page.status ? PAGE_STATUS[page.status] : undefined;
-  const drift = page.status === 'drift' && !adopted;
+  const drift = dto?.drift === true;
   const quotes = new Map(page.footnotes.map(f => [f.id, f.quote]));
 
   // «О чём» — не секция-заголовок, а строка-описание под заголовком (макет «Хроника»)
@@ -235,11 +239,16 @@ export function WikiPageView({ section, pageKey, content, onBack }: Props) {
   const bodySections = isChronicle ? page.sections.filter(s => s.name !== 'О чём') : page.sections;
   const aboutText = aboutSection?.lines.map(l => l.replace(BULLET_RX, '')).join(' ') || page.summary;
 
+  // Страницы в сторе нет — её ещё читают: родитель держит свой спиннер, здесь рендерить нечего
+  if (!dto) return null;
+
   const runAdopt = () => {
     setAdoptBusy(true);
     setAdoptError(null);
+    // После принятого adopt стор перечитывает страницу (lib/wiki) — плашка и кнопка уходят
+    // по drift=false в новом ответе; локального флага «принято» больше нет (ревью S5b M2).
+    // Отказ по-прежнему называется, кнопка блокируется на время запроса.
     void adoptWikiPage(section.key, pageKey)
-      .then(() => setAdopted(true))
       .catch(e => setAdoptError(e))
       .finally(() => setAdoptBusy(false));
   };

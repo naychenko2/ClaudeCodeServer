@@ -1,16 +1,20 @@
-// Рендер-тест страницы вики (S5b): обычная страница — четыре секции в фиксированном
-// порядке; хроника — «О чём» строкой-описанием + три свои секции; сноска — маркер в тексте
-// и блок «Источники» из определений; дрейф — плашка + «Принять как есть» (только при
-// drift; блокируется на время запроса; ошибка называется); сирота — плашка «проект удалён»;
-// на странице нет ни одного контрола правки текста (критерий c3).
+// Рендер-тест страницы вики (S5b + доработка): обычная страница — четыре секции в
+// фиксированном порядке; хроника — «О чём» строкой-описанием + три свои секции; сноска —
+// маркер в тексте и блок «Источники» из определений; дрейф — поле ответа бэка (не шапка
+// status): плашка + «Принять как есть» только при drift=true, после успешного adopt
+// страница перечитывается и плашка уходит по drift=false нового ответа; отказ adopt
+// называется, плашка остаётся; сирота — плашка «проект удалён»; на странице нет ни одного
+// контрола правки текста (критерий c3).
 //
-// Стор S5a НЕ мокан: мокан только его транспорт (offline.request) и signalr — adopt идёт
-// по настоящему пути lib/wiki → request (тот же приём, что в WikiTab.test).
+// Стор S5a НЕ мокан: мокан только его транспорт (offline.request) и signalr — загрузка
+// страницы и adopt идут по настоящему пути lib/wiki → request (тот же приём, что в
+// WikiTab.test). Экран читает слот «последней прочитанной страницы» (доработка S5b M2),
+// поэтому тест начинает с настоящей загрузки: моканный GET /api/wiki/page → стор → экран.
 //
-// Мутации (проверены прогоном, вывод — в отчёте задачи):
-//  (1) не рендерить секцию «История» → «четыре секции в порядке» краснеет;
-//  (2) не убирать плашку после успешного adopt → «успешный принимается» краснеет;
-//  (3) не показывать блок «Источники» → «блок из сносок» краснеет.
+// Мутации этого прогона (вывод — в отчёте задачи):
+//  (1) дрейф из шапки status вместо поля ответа → «дрейф из поля ответа» краснеет;
+//  (2) не перечитывать страницу после adopt → «успешный принимается» краснеет.
+// Прежние мутации шага S5b (секции, «Источники», плашка adopt) проверялись в том шаге.
 
 import { act } from 'react';
 import { createElement } from 'react';
@@ -20,7 +24,7 @@ import {
   mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps,
 } from '../../../../components/chat/__tests__/fakeDom';
 import { WikiPageView } from '../WikiPageView';
-import { __test as wikiStore } from '../../../../lib/wiki';
+import { __test as wikiStore, loadWikiPage, type WikiPageDto } from '../../../../lib/wiki';
 
 vi.mock('../../../../lib/signalr', () => ({
   onMessage: vi.fn(() => () => {}),
@@ -42,6 +46,7 @@ const SECTION = {
 };
 const ORPHAN_SECTION = { ...SECTION, key: 'projects/dead', name: null, orphan: true };
 const PAGE_KEY = 'projects/p1/gleb';
+const ORPHAN_PAGE_KEY = 'projects/dead/gleb';
 
 // Обычная страница — как её пишет Хранитель (5 сносок — та же плотность, что в c4)
 const PAGE_PLAIN = `---
@@ -77,8 +82,8 @@ status: active
 [^s4]: [[Досье «волна 1»]] — «Глеб ревьюит только бэкенд»
 [^s5]: [[Чат «Ревью звука»]] — «звук тоже на Глебе»`;
 
-// Та же страница в дрейфе: шапка status: drift — единственный канал дрейфа для фронта
-// (манифест бэк не отдаёт; статус в шапке — тот же источник, что у каталога)
+// Та же страница с status: drift в шапке. Шапку пишет модель, и сама по себе она плашку не
+// поднимает: сигнал дрейфа — поле ответа бэка (доработка S5b M1)
 const PAGE_DRIFT = PAGE_PLAIN.replace('status: active', 'status: drift');
 
 const PAGE_CHRONICLE = `---
@@ -111,14 +116,35 @@ type AnyNode = Cont;
 
 const roots: Root[] = [];
 
-function renderPage(content: string, section = SECTION, onBack = () => {}): Cont {
+// Мок транспорта и настоящая загрузка страницы в стор: экран читает слот «последней
+// прочитанной страницы» (доработка S5b M2), поэтому страница попадает в него тем же
+// путём, что в приложении. extra — чем отвечать на прочие вызовы (POST adopt, перечитанный
+// ответ), если это нужно тесту; без него страница всегда та же, что в dto
+async function seedPage(
+  dto: WikiPageDto,
+  sectionKey = SECTION.key,
+  pageKey = PAGE_KEY,
+  extra?: (url: string, init?: { method?: string }) => unknown,
+): Promise<void> {
+  req.mockImplementation((url: string, init?: { method?: string }) => {
+    const viaExtra = extra?.(url, init);
+    if (viaExtra !== undefined) return viaExtra as Promise<unknown>;
+    if (url.startsWith('/api/wiki/page')) return Promise.resolve(dto);
+    if (url.startsWith('/api/wiki/tree')) return Promise.resolve({ initialized: true, sections: [] });
+    return Promise.resolve(null);
+  });
+  await act(async () => { await loadWikiPage(sectionKey, pageKey); });
+}
+
+function renderPage(section = SECTION, pageKey = PAGE_KEY, onBack = () => {}): Cont {
   installFakeDom();
-  const { root, container } = mount(
-    createElement(WikiPageView, { section, pageKey: PAGE_KEY, content, onBack }),
-  );
+  const { root, container } = mount(createElement(WikiPageView, { section, pageKey, onBack }));
   roots.push(root);
   return container;
 }
+
+// Было ли перечитывание страницы — видно по числу её GET-запросов
+const pageGets = () => req.mock.calls.filter(([u]) => String(u).startsWith('/api/wiki/page'));
 
 async function settle(times = 10) {
   for (let i = 0; i < times; i++) await act(async () => { await Promise.resolve(); });
@@ -170,7 +196,8 @@ afterEach(() => {
 
 describe('Страница вики (S5b)', () => {
   it('обычная страница: заголовок, мета, плашка «только чтение», четыре секции в порядке', async () => {
-    const c = renderPage(PAGE_PLAIN);
+    await seedPage({ pageKey: PAGE_KEY, content: PAGE_PLAIN });
+    const c = renderPage();
     await settle();
     expect(has(c, 'Глеб (ревьюер)')).toBe(true);
     expect(has(c, 'Ревьюер AI Home: находки по severity, фронт и звук')).toBe(true);
@@ -186,7 +213,8 @@ describe('Страница вики (S5b)', () => {
   });
 
   it('сноски: маркеры в тексте вместо [^sN], «Источники» из определений сносок', async () => {
-    const c = renderPage(PAGE_PLAIN);
+    await seedPage({ pageKey: PAGE_KEY, content: PAGE_PLAIN });
+    const c = renderPage();
     await settle();
     // сырой маркер в тексте не остаётся — он становится надстрочником
     expect(has(c, '[^s1]')).toBe(false);
@@ -198,7 +226,8 @@ describe('Страница вики (S5b)', () => {
   });
 
   it('хроника: «О чём» описанием и три свои секции; «Сводки» и «Хронологии» нет', async () => {
-    const c = renderPage(PAGE_CHRONICLE, SECTION, () => {});
+    await seedPage({ pageKey: PAGE_KEY, content: PAGE_CHRONICLE });
+    const c = renderPage();
     await settle();
     expect(has(c, 'хроника · чат')).toBe(true);
     expect(has(c, 'О чём:')).toBe(true);
@@ -209,15 +238,40 @@ describe('Страница вики (S5b)', () => {
     expect(has(c, 'Хронология')).toBe(false);
   });
 
-  it('дрейф: плашка и «Принять как есть»; запрос блокирует кнопку; успех снимает плашку', async () => {
+  it('дрейф — поле ответа, не шапка: status: drift без drift=true — ни плашки, ни кнопки', async () => {
+    await seedPage({ pageKey: PAGE_KEY, content: PAGE_DRIFT, drift: false });
+    const c = renderPage();
+    await settle();
+    expect(has(c, 'Расходится с журналом Хранителя')).toBe(false);
+    expect(buttonByText(c, 'Принять как есть')).toBeNull();
+  });
+
+  it('дрейф — поле ответа, не шапка: drift=true с обычной шапкой — плашка и кнопка есть', async () => {
+    await seedPage({ pageKey: PAGE_KEY, content: PAGE_PLAIN, drift: true });
+    const c = renderPage();
+    await settle();
+    expect(has(c, 'Расходится с журналом Хранителя')).toBe(true);
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-adopt-btn')).not.toBeNull();
+  });
+
+  it('успешный принимается: страница перечитывается, плашка снимается по drift=false ответа', async () => {
+    let accepted = false;
     let resolveAdopt: (v: unknown) => void = () => {};
     const adopt = new Promise<unknown>(r => { resolveAdopt = r; });
-    req.mockImplementation((url: string, init?: { method?: string }) => {
-      if (init?.method === 'POST') return adopt;
-      if (url.startsWith('/api/wiki/tree')) return Promise.resolve({ initialized: true, sections: [] });
-      return Promise.resolve(null);
-    });
-    const c = renderPage(PAGE_DRIFT);
+    await seedPage(
+      { pageKey: PAGE_KEY, content: PAGE_PLAIN, drift: true },
+      SECTION.key,
+      PAGE_KEY,
+      (url, init) => {
+        if (init?.method === 'POST') return adopt;
+        // После принятого бэк отдаёт ту же страницу без дрейфа: файл == манифест
+        if (accepted && url.startsWith('/api/wiki/page')) {
+          return Promise.resolve({ pageKey: PAGE_KEY, content: PAGE_PLAIN, drift: false });
+        }
+        return undefined;
+      },
+    );
+    const c = renderPage();
     await settle();
     expect(has(c, 'Расходится с журналом Хранителя')).toBe(true);
     const btn = findNodeByAttr(c, 'data-testid', 'wiki-adopt-btn');
@@ -226,34 +280,43 @@ describe('Страница вики (S5b)', () => {
     await settle();
     // пока запрос идёт — кнопка блокируется (урок постановки: не повторить нажатие)
     expect(reactProps(btn!)!.disabled).toBe(true);
+    accepted = true;
     resolveAdopt({ status: 'applied' });
     await settle(16);
     const postCalls = req.mock.calls.filter(([, init]) => (init as { method?: string } | undefined)?.method === 'POST');
     expect(postCalls).toHaveLength(1);
     expect(String(postCalls[0][0])).toContain('/api/wiki/adopt');
-    // принято — плашки и кнопки нет (файл не меняется, спорить с ответом сервера витрина не будет)
+    // Страницу перечитали вторым GET: без перечитывания плашка осталась бы на принятой
+    // странице, а «Назад» → открыть снова показал бы дрейф (ревью S5b M2)
+    expect(pageGets()).toHaveLength(2);
+    // принято — плашки и кнопки нет: их снял ответ бэка, а не локальный флаг витрины
     expect(has(c, 'Расходится с журналом')).toBe(false);
     expect(findNodeByAttr(c, 'data-testid', 'wiki-adopt-btn')).toBeNull();
   });
 
-  it('отказ adopt называется русским текстом, плашка остаётся, сырой код не виден', async () => {
-    req.mockImplementation((url: string, init?: { method?: string }) => {
-      if (init?.method === 'POST') return Promise.reject({ status: 409, body: { code: 'wiki_refused', message: 'x' } });
-      if (url.startsWith('/api/wiki/tree')) return Promise.resolve({ initialized: true, sections: [] });
-      return Promise.resolve(null);
-    });
-    const c = renderPage(PAGE_DRIFT);
+  it('отказ adopt называется русским текстом, плашка остаётся, страницу не перечитываем', async () => {
+    await seedPage(
+      { pageKey: PAGE_KEY, content: PAGE_PLAIN, drift: true },
+      SECTION.key,
+      PAGE_KEY,
+      (url, init) => (init?.method === 'POST'
+        ? Promise.reject({ status: 409, body: { code: 'wiki_refused', message: 'x' } })
+        : undefined),
+    );
+    const c = renderPage();
     await settle();
     click(findNodeByAttr(c, 'data-testid', 'wiki-adopt-btn'), 'Принять как есть');
     await settle();
     expect(has(c, 'Правку нельзя применить к этому состоянию страницы')).toBe(true);
     expect(has(c, 'wiki_refused')).toBe(false);
-    // отказ — дрейф не решён: плашка на месте
+    // отказ — дрейф не решён: плашка на месте, перечитывания не было
     expect(has(c, 'Расходится с журналом Хранителя')).toBe(true);
+    expect(pageGets()).toHaveLength(1);
   });
 
   it('сирота: плашка «проект удалён»', async () => {
-    const c = renderPage(PAGE_PLAIN, ORPHAN_SECTION);
+    await seedPage({ pageKey: ORPHAN_PAGE_KEY, content: PAGE_PLAIN }, ORPHAN_SECTION.key, ORPHAN_PAGE_KEY);
+    const c = renderPage(ORPHAN_SECTION, ORPHAN_PAGE_KEY);
     await settle();
     expect(has(c, 'Проект удалён')).toBe(true);
     expect(has(c, 'Раздел скрыт от всех чатов, агентов и персон')).toBe(true);
@@ -261,14 +324,16 @@ describe('Страница вики (S5b)', () => {
 
   it('«Назад» возвращает к каталогу', async () => {
     let back = 0;
-    const c = renderPage(PAGE_PLAIN, SECTION, () => { back += 1; });
+    await seedPage({ pageKey: PAGE_KEY, content: PAGE_PLAIN });
+    const c = renderPage(SECTION, PAGE_KEY, () => { back += 1; });
     await settle();
     click(findNodeByAttr(c, 'data-testid', 'wiki-page-back'), 'Назад');
     expect(back).toBe(1);
   });
 
   it('на странице нет ни одного контрола правки текста (c3)', async () => {
-    const c = renderPage(PAGE_PLAIN);
+    await seedPage({ pageKey: PAGE_KEY, content: PAGE_PLAIN });
+    const c = renderPage();
     await settle();
     const editors = allNodes(c).filter(n =>
       n.nodeName === 'TEXTAREA' || n.nodeName === 'INPUT' || n.getAttribute('contenteditable') !== null);

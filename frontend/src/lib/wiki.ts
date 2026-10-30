@@ -37,7 +37,14 @@ export interface WikiSectionDto {
 // initialized — есть pages/_schema.md: «Вики не заведена», когда false
 export interface WikiTreeDto { initialized: boolean; sections: WikiSectionDto[] }
 
-// summary/type/status — из шапки страницы (null — шапка не разобрана, страница остаётся видимой)
+// Состояние манифеста раздела (контракт доработки S5b): не-'ok' — тихая подсказка
+// «манифест раздела не прочитан», НЕ плашка дрейфа (UI для него — не этот шаг)
+export type WikiManifestState = 'ok' | 'missing' | 'invalid';
+
+// summary/type/status — из шапки страницы (null — шапка не разобрана, страница остаётся видимой).
+// drift/manifestState — их считает БЭК сверкой файла с манифестом, а не шапка status (шапку
+// пишет модель — она не сигнал, ревью S5b M1). Поля опциональны: до появления в ответе
+// отсутствие читаем как drift=false.
 export interface WikiPageInfoDto {
   pageKey: string;
   title: string;
@@ -46,12 +53,15 @@ export interface WikiPageInfoDto {
   status: string | null;
   sourcesCount: number;
   updated: string | null;
+  drift?: boolean;
+  manifestState?: WikiManifestState;
 }
 
 // Оглавление раздела строится отсюда: проекции _index/_log через /api/wiki/page не читаются (400 wiki_page_key)
 export interface WikiCatalogDto { key: string; name: string | null; orphan: boolean; pages: WikiPageInfoDto[] }
 
-export interface WikiPageDto { pageKey: string; content: string }
+// drift — тот же сигнал, что у каталога: сверка файла с манифестом на бэке (доработка S5b)
+export interface WikiPageDto { pageKey: string; content: string; drift?: boolean; manifestState?: WikiManifestState }
 
 export interface WikiInitResult { initialized: boolean }
 export interface WikiAdoptResult { status: 'applied' }
@@ -294,11 +304,18 @@ export async function initializeWiki(section?: string | null): Promise<WikiInitR
 }
 
 // «Принять как есть» для страницы раздела: 409 wiki_refused/wiki_drift — по коду WikiError.
+// После принятого перечитываем и саму страницу (ревью S5b M2): файл не меняется, но
+// сверка с манифестом уже даёт drift=false — витрина снимает плашку по ответу бэка,
+// а не по локальному флагу «принято». Сбой перечитки не отменяет принятое: она
+// не роняет ответ и не затирает прежний снимок (тот же порядок, что в refreshWiki).
 export async function adoptWikiPage(sectionKey: string, pageKey: string): Promise<WikiAdoptResult> {
   const res = await wikiHttp<WikiAdoptResult>('/api/wiki/adopt', {
     method: 'POST',
     body: JSON.stringify({ section: sectionKey, page: pageKey }),
   });
+  if (_page && _page.cacheKey === pageCacheKey(sectionKey, pageKey)) {
+    await loadWikiPage(sectionKey, pageKey).catch(() => undefined);
+  }
   await refreshWiki();
   return res;
 }

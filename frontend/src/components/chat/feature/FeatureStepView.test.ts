@@ -110,13 +110,17 @@ describe('FeatureStepView: тело П2 «Мой шаг»', () => {
     expect(html).toContain('Готовность 22 %: 4 в master, 2 принято, 4 в ревью, 2 в работе, 1 не заведено');
   });
 
-  it('на 360 длинный бейдж переносится второй строкой (название не сжимается до «Ш8 · П…»)', () => {
+  it('на 360 длинный бейдж переносится второй строкой: название занимает всю первую (flex-basis 100%), бейдж не сжимает её до «Ш8 · П…» (п. 4)', () => {
     const c = chain();
     const html = render(run({ stepChains: [c] }), c, { isMobile: true });
     const card = /data-testid="feature-step-card"[\s\S]*?<div style="([^"]*)"/.exec(html);
     expect(card?.[1]).toContain('flex-wrap:wrap');
-    // На десктопе строка одна.
-    expect(render(run({ stepChains: [c] }), c).match(/data-testid="feature-step-card"[\s\S]*?<div style="([^"]*)"/)?.[1]).not.toContain('flex-wrap');
+    const title = /data-testid="feature-step-title"[^>]*style="([^"]*)"/.exec(html)?.[1] ?? '';
+    expect(title).toContain('flex-basis:100%');
+    // На десктопе строка одна: ни переноса, ни basis.
+    const d = render(run({ stepChains: [c] }), c);
+    expect(d.match(/data-testid="feature-step-card"[\s\S]*?<div style="([^"]*)"/)?.[1]).not.toContain('flex-wrap');
+    expect(d.match(/data-testid="feature-step-title"[^>]*style="([^"]*)"/)?.[1]).not.toContain('flex-basis');
   });
 
   it('подвал: роль этого чата по его задаче и переход на страницу фичи', () => {

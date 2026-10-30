@@ -97,9 +97,12 @@ export function FeatureStepView({ run, chain, sessionId, chatTaskId, isMobile, o
       <div style={{ ...secStyle, margin: '2px 0 4px' }}>Этот чат</div>
       <div data-testid="feature-step-card" style={{ padding: '8px 10px', borderRadius: R.lg, background: C.bgInset }}>
         {/* На 360 длинный бейдж статуса уходит второй строкой (дизайн-ревью F2, minor 8):
-            иначе он сжимал название до «P2 · P…». На десктопе строка одна. */}
+            иначе он сжимал название до «P2 · P…». На десктопе строка одна.
+            Одного flexWrap мало: flex:1/minWidth:0 сжимает название до 43 px и перенос не
+            наступает — на мобиле название занимает всю первую строку (flexBasis 100%),
+            бейдж переносится сам (дизайн-ревью F2, п. 4). */}
         <div style={{ display: 'flex', gap: SP.sm, alignItems: 'center', minWidth: 0, ...(isMobile ? { flexWrap: 'wrap' as const } : null) }}>
-          <span data-testid="feature-step-title" style={{ flex: 1, minWidth: 0, fontSize: FS.base, fontWeight: 700, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          <span data-testid="feature-step-title" style={{ flex: 1, minWidth: 0, fontSize: FS.base, fontWeight: 700, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', ...(isMobile ? { flexBasis: '100%' } : null) }}>
             {stepWhatLabel(chain.stepRef, chain.title)}
           </span>
           <span data-testid="feature-step-status" style={{ flexShrink: 0 }}>

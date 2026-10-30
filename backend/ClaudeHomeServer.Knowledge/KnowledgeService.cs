@@ -140,8 +140,8 @@ public class KnowledgeService : IKnowledgeIndex
         IndexFileByTextAsync(datasetId, fileName, content, tags, metadata: metadata);
 
     Task<IReadOnlyList<DifyRetrieveChunk>> IKnowledgeIndex.RetrieveAsync(string datasetId, string query,
-        int topK, IReadOnlyList<KnowledgeMetadataFilter>? filters) =>
-        RetrieveAsync(datasetId, query, topK, filters);
+        int topK, IReadOnlyList<KnowledgeMetadataFilter>? filters, string logic) =>
+        RetrieveAsync(datasetId, query, topK, filters, logic);
 
     // Расширения, которые индексируем как текст (прямая отправка содержимого)
     private static readonly HashSet<string> TextExtensions = new(StringComparer.OrdinalIgnoreCase)

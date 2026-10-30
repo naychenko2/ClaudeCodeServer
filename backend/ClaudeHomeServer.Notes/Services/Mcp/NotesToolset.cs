@@ -377,7 +377,11 @@ public sealed class NotesToolset(
                 if (arguments["topK"] is JsonValue tv && tv.TryGetValue<int>(out var k)) topK = k;
                 try
                 {
-                    var results = await kbSvc.SearchAsync(context.OwnerId, query, Math.Clamp(topK, 1, 20));
+                    // Тот же путь, что у auto-recall (ADR-036, решение 6): notes_semantic_search —
+                    // recall по запросу модели, сужается набором видимых разделов хода
+                    // (явные notes_list/notes_search/notes_read — не сужаются, решение 2).
+                    var results = await kbSvc.SearchAsync(context.OwnerId, query, Math.Clamp(topK, 1, 20),
+                        new WikiVisibility.CallContext(session.ProjectId, persona));
                     return Json(results);
                 }
                 catch (HttpRequestException ex) { return Deny($"Dify недоступен: {ex.Message}"); }

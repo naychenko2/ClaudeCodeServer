@@ -244,7 +244,7 @@ public class SphereMemoryServiceTests : IDisposable
         }
 
         public Task<IReadOnlyList<DifyRetrieveChunk>> RetrieveAsync(string datasetId, string query, int topK = 8,
-            IReadOnlyList<KnowledgeMetadataFilter>? filters = null) =>
+            IReadOnlyList<KnowledgeMetadataFilter>? filters = null, string logic = "and") =>
             Task.FromResult<IReadOnlyList<DifyRetrieveChunk>>([]);
     }
 }

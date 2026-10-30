@@ -372,7 +372,7 @@ public class NotesWikiSourceTests : IDisposable
             string content, List<string>? tags = null,
             IReadOnlyDictionary<string, string>? metadata = null) => No<DifyDocumentInfo>();
         public Task<IReadOnlyList<DifyRetrieveChunk>> RetrieveAsync(string datasetId, string query,
-            int topK = 8, IReadOnlyList<KnowledgeMetadataFilter>? filters = null) =>
+            int topK = 8, IReadOnlyList<KnowledgeMetadataFilter>? filters = null, string logic = "and") =>
             No<IReadOnlyList<DifyRetrieveChunk>>();
         private static Exception Error() => new InvalidOperationException("Dify не настроен");
         private static Task No() => Task.FromException(Error());

@@ -60,6 +60,9 @@ public interface IKnowledgeIndex
 
     // Семантический поиск по датасету: возвращает topK чанков с метаданными.
     // Notes использует для подсказок связей; memory — для recall.
+    // logic — как объединять условия фильтра ("and"/"or"); "or" нужен фильтру
+    // «wiki_section ∈ набор видимых разделов» (ADR-036, решение 6): набор — OR по
+    // ключам, отдельного оператора «in» у Dify нет.
     Task<IReadOnlyList<DifyRetrieveChunk>> RetrieveAsync(string datasetId, string query, int topK = 8,
-        IReadOnlyList<KnowledgeMetadataFilter>? filters = null);
+        IReadOnlyList<KnowledgeMetadataFilter>? filters = null, string logic = "and");
 }

@@ -650,10 +650,10 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
       {tag && (
         // На 360 тег не должен вытеснять название: потолок ширины, хвост подписи клипается
         // (полный текст — в title). Расчёт: 360 − поля 24 − «К списку» ~72 − глиф 14 − ⋯ 36 −
-        // зазоры 24 − тег 88 ≈ 100 px названию (≈ 2 слова). На десктопе — без изменений.
+        // зазоры 24 − тег 80 ≈ 108 px названию (≈ 2 слова). На десктопе — без изменений.
         <span
           title={isMobile ? tag.label : undefined}
-          style={isMobile ? { display: 'inline-flex', flexShrink: 0, maxWidth: 88, overflow: 'hidden' } : { display: 'contents' }}
+          style={isMobile ? { display: 'inline-flex', flexShrink: 0, maxWidth: 80, overflow: 'hidden' } : { display: 'contents' }}
         >
           <StatusTag tag={tag} testId="feature-page-status" />
         </span>

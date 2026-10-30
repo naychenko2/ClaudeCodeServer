@@ -151,10 +151,10 @@ public class PregateOptionsTests
             "Category!=Host&Category!=Slow&Category!=Integration&Category!=Node&Category!=Bench",
             "--results", ".cc-attachments/pregate-fast");
 
-        // Сторож длительности читает TRX этого же прогона, порог — дефолт скрипта (5 с)
+        // Сторож длительности читает TRX этого же прогона, порог 30 с задан явно (предгейт идёт на загруженной общей машине: шум до 32 с при load1 45–70, дефолт 5 с краснел на каждом прогоне)
         var guard = options.Checks.Single(c => c.Name == "сторож длительности");
         guard.Order.Should().Be(36);
-        guard.Args.Should().Equal("-I", "scripts/test-profile.py", ".cc-attachments/pregate-fast", "--check", "--latest-run");
+        guard.Args.Should().Equal("-I", "scripts/test-profile.py", ".cc-attachments/pregate-fast", "--check", "--latest-run", "--threshold", "30");
     }
 
     // Старая форма (массив) — не молчаливый пустой набор: предгейт обязан отказать с текстом

@@ -246,10 +246,13 @@ public record FeatureEstimate(List<string>? Remaining, int? EtaMinutes, string? 
             return $"featureEstimate.remaining: пункт непустой, не длиннее {MaxRemainingLength} символов";
         if (EtaMinutes is < 1) return "featureEstimate.etaMinutes: не меньше 1";
         if (Why is { Length: > MaxWhyLength }) return $"featureEstimate.why: не длиннее {MaxWhyLength} символов";
-        // Оценка = срок ИЛИ «что дальше»: пустая {} (в т.ч. из одних старых done/total) бессодержательна.
-        if (EtaMinutes is null && remaining.Count == 0) return "featureEstimate: нужен etaMinutes или remaining";
+        // Пустую оценку (ни срока, ни remaining) вызывающий отбрасывает через NullIfEmpty до Validate.
         return null;
     }
+
+    // Без срока и без «что дальше» (в т.ч. {} и одни старые done/total) оценка бессодержательна: её молча
+    // отбрасывают (null), а не отказывают — голос, с которым она пришла, при этом сохраняется. Вызывать после Normalize.
+    public FeatureEstimate? NullIfEmpty() => EtaMinutes is null && (Remaining ?? []).Count == 0 ? null : this;
 
     // Trim пунктов и why; пустой why — null. Remaining null (ключа нет) — пустой список: после
     // Normalize Remaining не null.

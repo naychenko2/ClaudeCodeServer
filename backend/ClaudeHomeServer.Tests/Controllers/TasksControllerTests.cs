@@ -3136,10 +3136,11 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         return null;
     }
 
-    // Инвариант «оценка = срок ИЛИ что дальше»: пустая и «одни старые поля» — 400, срок или remaining — ок.
+    // Оценка без срока и remaining (пустая, одни старые поля) отбрасывается молча — 200, а не 400; срок или remaining — ок.
     [Theory]
-    [InlineData("{}", false)]
-    [InlineData("{\"done\":4,\"total\":9,\"percent\":60}", false)]
+    [InlineData("{}", true)]
+    [InlineData("{\"done\":4,\"total\":9,\"percent\":60}", true)]
+    [InlineData("{\"etaMinutes\":0}", false)]
     [InlineData("{\"etaMinutes\":160}", true)]
     [InlineData("{\"remaining\":[\"x\"]}", true)]
     public async Task PutNote_ОценкаСрокИлиЧтоДальше(string estimateJson, bool ok)

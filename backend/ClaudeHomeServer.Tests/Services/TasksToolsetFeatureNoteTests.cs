@@ -435,7 +435,8 @@ public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFact
             est.Should().NotContain($"\"{dropped}\"");
     }
 
-    // Оценка = срок ИЛИ «что дальше»: пустая и «одни старые поля» — отказ, срок или remaining — ок.
+    // Оценка без срока и без remaining (пустая, одни старые done/total) молча отбрасывается: голос
+    // пишется, ошибки нет, пустая оценка не сохраняется; срок или remaining — принимаются.
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
@@ -449,8 +450,11 @@ public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFact
             : withRemaining ? new { remaining = new[] { "x" } }
             : new { };
         var (text, isError) = await CallToolAsync(curatorId, "tasks_update", new { id = epicId, featureNote = "г", featureEstimate = est });
-        isError.Should().Be(!withRemaining, text);
-        if (!withRemaining) text.Should().Contain("etaMinutes или remaining");
+        isError.Should().BeFalse(text);
+        var note = Tasks.GetById(epicId)!.Note!;
+        note.Text.Should().Be("г", "голос сохранён");
+        if (withRemaining) note.Estimate.Should().NotBeNull();
+        else note.Estimate.Should().BeNull("пустая оценка отброшена");
 
         var (_, eta) = await CallToolAsync(curatorId, "tasks_update", new { id = epicId, featureNote = "г2", featureEstimate = new { etaMinutes = 160 } });
         eta.Should().BeFalse();
@@ -509,7 +513,7 @@ public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFact
         var (t3, e3) = await CallToolAsync(curatorId, "tasks_update", new
         {
             id = epicId, featureNote = "г",
-            featureEstimate = new { why = new string('я', 161) },
+            featureEstimate = new { etaMinutes = 60, why = new string('я', 161) },
         });
         e3.Should().BeTrue(); t3.Should().Contain("why");
         // Ровно на границе — принимается.

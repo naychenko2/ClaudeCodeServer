@@ -323,8 +323,8 @@ public sealed class TasksToolset(
                 {
                     if (string.IsNullOrWhiteSpace(featureNoteArg))
                         return Deny("Оценка пишется вместе с голосом (featureNote)");
-                    if (FeatureEstimateArg(arguments) is not { } parsed) return Deny("featureEstimate: ожидается объект");
-                    featureEstimateArg = parsed;
+                    if (arguments["featureEstimate"] is not JsonObject) return Deny("featureEstimate: ожидается объект");
+                    featureEstimateArg = FeatureEstimateArg(arguments);
                 }
                 if (featureNoteArg is not null)
                 {
@@ -1183,13 +1183,13 @@ public sealed class TasksToolset(
             ReturnReason = OptionalArg(ver, "returnReason"),
         };
 
-    // Оценка оркестратора: null — ключа нет или не объект; поля как в схеме featureEstimate. Старые
+    // Оценка оркестратора: null — ключа нет, не объект или оценка пуста (ни срока, ни remaining); поля как в схеме featureEstimate. Старые
     // done/total/inProgress/percent принимаются и отбрасываются: процент — только из run.stepProgress.
     private static FeatureEstimate? FeatureEstimateArg(JsonObject arguments)
     {
         if (arguments["featureEstimate"] is not JsonObject est) return null;
         return new FeatureEstimate(
-            LabelsArg(est, "remaining") ?? [], NullableIntArg(est, "etaMinutes"), OptionalArg(est, "why")).Normalize();
+            LabelsArg(est, "remaining") ?? [], NullableIntArg(est, "etaMinutes"), OptionalArg(est, "why")).Normalize().NullIfEmpty();
     }
 
     // Критерии приёмки: [{id?, text}]; id пустой — присвоит TaskManager. null — ключа нет, не менять

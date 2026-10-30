@@ -157,6 +157,7 @@ const TRACKER_KIND_TEXT: Record<string, string> = {
   reported_open: 'отчёт без закрытия задачи',
   epic_open_after_merge: 'мерж закрыт, эпик открыт',
   orphans_in_closed: 'открытые задачи в закрытой фиче',
+  unplanned_step: 'шаг вне плана',
 };
 
 export interface TruthTrackerIssue { text: string; since: string | null }

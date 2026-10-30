@@ -332,6 +332,13 @@ describe('расхождения трекера: перевод видов Featu
     expect(issues[2].text).toBe('future_kind — шаг Ш7');
   });
 
+  it('unplanned_step (B4) — «шаг вне плана — шаг {stepRef}», формат как у соседних видов', () => {
+    const r = run({
+      tracker: [{ kind: 'unplanned_step', taskId: 's-9', stepRef: 'S0-4a', since: null }],
+    });
+    expect(featureTrackerIssues(r)[0].text).toBe('шаг вне плана — шаг S0-4a');
+  });
+
   it('поля нет (старые ответы) — пустой список, не падение', () => {
     expect(featureTrackerIssues(run())).toEqual([]);
   });

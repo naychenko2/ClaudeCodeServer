@@ -26,6 +26,7 @@ import { api } from './api';
 import { onMessage } from './signalr';
 import { getFlag, FLAGS } from './featureFlags';
 import type { FeaturePage } from '../types/featureIndex';
+import type { FeatureRun } from '../types/featureRun';
 import type { ServerMessage } from '../types';
 import type { PlanState } from './featureProgress';
 
@@ -284,10 +285,16 @@ export const FEATURE_TAB_LABEL: Record<FeaturePageTab, string> = {
   timeline: 'Хронология',
   plans: 'Материалы',
   chats: 'Чаты',
-  tasks: 'Задачи',
+  tasks: 'Шаги',
   events: 'История',
   stats: 'Статистика',
 };
+
+// Счётчик вкладки «Шаги»: знаменатель трекера (stepProgress.total — тот же, что на полосе
+// готовности), а не число задач. Нет агрегата прогресса (старый ответ) — число цепочек.
+export function stepsTabCount(run: FeatureRun): number {
+  return run.stepProgress?.total ?? run.stepChains?.length ?? 0;
+}
 
 // Текущая вкладка без подписки: recordFeatureReturn запоминает её в момент перехода.
 export function getFeaturePageTab(): FeaturePageTab {

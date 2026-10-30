@@ -413,6 +413,10 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
             { id: 't-done', title: 'Закрытая', status: 'done', role: 'step', linkedSessionId: 'c-arch' },
           ],
           reviews: [], qa: [], final: null, merge: null,
+          stepChains: [
+            { stepRef: 'A', title: 'Открытая', taskIds: ['t-open'], outcome: 'running', status: 'идёт', durationMinutes: 0, loops: 0, rounds: [], chatId: 'c-live' },
+            { stepRef: 'B', title: 'Закрытая', taskIds: ['t-done'], outcome: 'accepted', status: 'принят', durationMinutes: 0, loops: 0, rounds: [], chatId: 'c-arch' },
+          ],
           verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
           progress: 0, ready: false,
         } as never,
@@ -460,19 +464,19 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
       expect(navFlags(c, 'loss-longest-nav')).toEqual([{ chatArchived: true, taskClosed: true }]);
     });
 
-    it('вкладка «Задачи»: закрытая и архивная строки помечены', async () => {
+    it('вкладка «Шаги»: закрытая и архивная строки помечены', async () => {
       withData();
       const c = render({});
       await settle();
       act(() => { setFeaturePageTab('tasks'); });
-      expect(navFlags(c, 'task-row-t-done')).toEqual([{ chatArchived: true, taskClosed: true }]);
-      expect(navFlags(c, 'task-row-t-open')).toEqual([{ chatArchived: false, taskClosed: false }]);
+      expect(navFlags(c, 'step-row-B')).toEqual([{ chatArchived: true, taskClosed: true }]);
+      expect(navFlags(c, 'step-row-A')).toEqual([{ chatArchived: false, taskClosed: false }]);
     });
 
     // Вкладка запоминается при реальном клике из вкладки: чип в чате покажет её название.
     for (const [tab, rowPrefix, label, btnId] of [
       ['events', 'event-row-', 'История', 'nav-target-chat'],
-      ['tasks', 'task-row-t-done', 'Задачи', 'nav-target-chat'],
+      ['tasks', 'step-row-B', 'Шаги', 'nav-target-chat'],
       ['stats', 'loss-longest-nav', 'Статистика', 'nav-target-chat'],
       // «Статистика»: кнопки задач под лентой времени (TaskButtons) — отдельный путь записи.
       ['stats', 'stats-tasks', 'Статистика', 'nav-target-task'],
@@ -500,7 +504,7 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
   });
 
   // === 2в. Переключение вкладок Чаты/Задачи/История → свои компоненты (мутация: ComingSoon → red) ===
-  it('переключение вкладок Чаты/Задачи/История показывает свои компоненты (мутация → ComingSoon → red)', async () => {
+  it('переключение вкладок Чаты/Шаги/История показывает свои компоненты (мутация → ComingSoon → red)', async () => {
     mockGetFeature.result = pageData({
       run: {
         featureId: 'f1',
@@ -526,10 +530,10 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     expect(findNodeByAttr(c, 'data-testid', 'chats'), 'вкладка «Чаты» → FeatureChatsTab').not.toBeNull();
     expect(findNodeByAttr(c, 'data-testid', 'feature-page-tab-stub'), '«Чаты»: не ComingSoon').toBeNull();
 
-    // «Задачи» → FeatureTasksTab (data-testid="tasks").
+    // «Шаги» → FeatureTasksTab (data-testid="tasks").
     act(() => { setFeaturePageTab('tasks'); });
-    expect(findNodeByAttr(c, 'data-testid', 'tasks'), 'вкладка «Задачи» → FeatureTasksTab').not.toBeNull();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-tab-stub'), '«Задачи»: не ComingSoon').toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'tasks'), 'вкладка «Шаги» → FeatureTasksTab').not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-tab-stub'), '«Шаги»: не ComingSoon').toBeNull();
 
     // «История» → FeatureEventsTab (data-testid="events").
     act(() => { setFeaturePageTab('events'); });
@@ -542,7 +546,7 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
   // частями (по eventsLimit, «Показать все» догружает всё). Раньше (major 2) счётчик брал
   // events.length (загружено). В фикстуре значения РАЗВЕДЕНЫ (events.length=100 ≠
   // eventsTotal=361): мутация eventsTotal→events.length красит — счётчик стал бы 100, а не 361.
-  it('счётчики вкладок Чаты/Задачи/История = честные числа (мутация: обнулить → red)', async () => {
+  it('счётчики вкладок Чаты/Шаги/История = честные числа (мутация: обнулить → red)', async () => {
     // Лента обрезана бэком: загружено 100 (eventsLimit), всего 361.
     const events100: import('../../types/featureIndex').FeatureEvent[] = [];
     for (let i = 0; i < 100; i++) {
@@ -554,6 +558,8 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
         epic: { id: 'f1', title: 'Моя фича' },
         steps: [{ id: 's1', title: 'Шаг 1', status: 'inProgress' }],
         reviews: [], qa: [], final: null, merge: null,
+        // Знаменатель трекера (7) ≠ числу задач (2): счётчик «Шаги» берёт stepProgress.total.
+        stepProgress: { planState: 'partial', total: 7, accepted: 1, review: 1, work: 1, notCreated: 4, withdrawn: 0, unlinkedReworks: 0 },
         verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
         progress: 0, ready: false,
       },
@@ -573,10 +579,10 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     const chatsTab = findTab(c, 'Чаты');
     expect(chatsTab, 'вкладка «Чаты»').not.toBeNull();
     expect(textNodes(chatsTab!).join(''), 'счётчик «Чаты» = 2').toContain('2');
-    // «Задачи» = 2 (эпик + шаг).
-    const tasksTab = findTab(c, 'Задачи');
-    expect(tasksTab, 'вкладка «Задачи»').not.toBeNull();
-    expect(textNodes(tasksTab!).join(''), 'счётчик «Задачи» = 2 (эпик + шаг)').toContain('2');
+    // «Шаги» = 7 = stepProgress.total (не число задач 2).
+    const tasksTab = findTab(c, 'Шаги');
+    expect(tasksTab, 'вкладка «Шаги»').not.toBeNull();
+    expect(textNodes(tasksTab!).join(''), 'счётчик «Шаги» = stepProgress.total').toContain('7');
     // «История» = 361 = eventsTotal (общее), НЕ events.length=100 (загруженная часть).
     // Мутация eventsTotal→events.length → счётчик 100 → «361» не найдётся → red.
     const eventsTab = findTab(c, 'История');

@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { AlertTriangle, Inbox, RotateCw } from 'lucide-react';
 import { C, R, FS, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { useFeaturePage, refetchFeaturePage, useFeaturePageTab, setFeaturePageTab, type FeatureBrief } from '../../lib/featurePage';
+import { useFeaturePage, refetchFeaturePage, useFeaturePageTab, setFeaturePageTab, stepsTabCount, type FeatureBrief } from '../../lib/featurePage';
 import { useMe } from '../../lib/defaultPersona';
 import { buildNavMarks } from '../../lib/featureNavMarks';
 import { getBackNav, clearBackNav, registerFeaturePage, recordFeatureReturn } from '../../lib/featureBackNav';
@@ -13,7 +13,6 @@ import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { featureStatusTag, featureDisplayState } from '../../lib/chatGroups';
 import { openChatById } from '../../lib/openChat';
 import { openTaskInSection } from '../../lib/tasks';
-import { taskCounters } from './featurePageBody';
 import { showToast } from '../../lib/toast';
 import { FeatureMergeDialog } from './FeatureMergeDialog';
 import { CenterViewShell } from '../CenterViewShell';
@@ -344,9 +343,9 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
           isMobile={isMobile}
           plansCount={plansTabCount(page.page)}
           chatsCount={chatsCount}
-          // «Задачи N» — ОДИН источник со строками вкладки: число задач из run
-          // (taskCounters), не taskCount из индекса (индекс может расходиться с run).
-          tasksCount={taskCounters(okRun).total}
+          // «Шаги N» — знаменатель трекера (stepProgress.total), как на полосе готовности:
+          // строки вкладки по корзинам дают ту же сумму.
+          tasksCount={stepsTabCount(okRun)}
           // «История N» — разворот решения (Ш1b): счётчик вкладки — общее число
           // (eventsTotal), лента грузится частями (по eventsLimit, «Показать все» догружает
           // всё). Раньше счётчик брал events.length (загружено) — теперь он говорит о всей

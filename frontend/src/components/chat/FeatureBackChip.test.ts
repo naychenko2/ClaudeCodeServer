@@ -20,7 +20,7 @@ import { __test as pageStore, setFeaturePageTab, type FeaturePageTab } from '../
 // minor 1: ЕДИНЫЙ словарь FEATURE_TAB_LABEL — чип и полоса не разъезжаются (короткого
 // «Планы» в чипе больше нет). Ш1b: имена разреза — «Материалы»/«История».
 const CHIP_TEXT: Record<FeaturePageTab, string> = {
-  timeline: 'Хронология', plans: 'Материалы', chats: 'Чаты', tasks: 'Задачи', events: 'История', stats: 'Статистика',
+  timeline: 'Хронология', plans: 'Материалы', chats: 'Чаты', tasks: 'Шаги', events: 'История', stats: 'Статистика',
 };
 const TABS = Object.keys(CHIP_TEXT) as FeaturePageTab[];
 

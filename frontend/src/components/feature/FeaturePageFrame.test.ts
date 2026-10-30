@@ -326,15 +326,14 @@ describe('Вкладки (макет §4)', () => {
     expect((tl as unknown as { getAttribute: (a: string) => string | null }).getAttribute('aria-selected')).toBe('false');
   });
 
-  it('счётчики: задачи — число, события 0 — без счётчика', async () => {
-    // «Задачи» — ОДИН источник со строками вкладки: число задач из run (taskCounters),
-    // не taskCount из индекса. Дефолтный run (pageData) = только эпик → счётчик 1.
-    // events = 0 → «История» без счётчика.
+  it('счётчики: «Шаги» без трекера — без числа, события 0 — без счётчика', async () => {
+    // «Шаги» — знаменатель трекера (stepProgress.total); дефолтный run (pageData) = только
+    // эпик, трекера нет → счётчика нет. events = 0 → «История» без счётчика.
     const c = render({});
     await settle();
-    const tasks = tabByLabel(c, 'Задачи');
+    const tasks = tabByLabel(c, 'Шаги');
     expect(tasks).not.toBeNull();
-    expect(textNodes(tasks!).join('')).toBe('Задачи1');
+    expect(textNodes(tasks!).join('')).toBe('Шаги');
     const events = tabByLabel(c, 'История');
     expect(events).not.toBeNull();
     expect(textNodes(events!).join('')).not.toContain('0');

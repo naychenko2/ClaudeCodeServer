@@ -1,16 +1,16 @@
-// Вкладка «Задачи» страницы фичи (волна 3, Ф4; макет features-overview-3-final §4/§9а).
+// Вкладка «Шаги» страницы фичи (Ш7; макет feature-page-simplify-v1-proposal, П6/П12).
 //
-// Перенос блока «Задачи» из волны 2 (FeaturePageBody) в новую вёрстку макета:
-//   • строка = аватар исполнителя · название · роль (roleLabel) · статус (факт) ·
-//     пара «чат · задача» (NavTargetPair: чат = linkedSessionId, задача = id);
-//   • фильтр по статусу: «все» (всегда) + каждый статус с числом > 0 (макет: r/w/x/d/t);
-//   • сортировка по времени (последняя активность: completedAt → claudeStartedAt → createdAt);
-//   • «Показать все» при длинном списке: порог 8 (макет LIM), по умолчанию — 8 последних;
-//   • пустое: «Задач нет» (фича создана, конвейер не запускался).
-//
-// Честный прогресс (разрез Б-pr1/Б-pr2/Ф-pr): статус показываем как ФАКТ
-// («закрыта», «в работе», «ждёт вас», «стоит», «впереди»), а НЕ «принято N из M».
-// Прогресс-бар и «принято» — не здесь (это вкладка «Статистика»).
+// Строки — из run.stepChains (+ шаги плана без задачи, как в «Производстве»): шаг = одна
+// строка, доработка корзину не плодит. Корзину шага отдаёт бэк (FeatureStepAccounting) через
+// карточку ленты (buildProdCards): статус по полям задачи фронт НЕ выводит.
+// Фильтры = корзины stepProgress: «в работе · в ревью · не заведено · принято», нулевые
+// скрыты; сумма строк по ним = stepProgress.total. «В master» — ортогональный признак
+// (в сумму не входит), «снято» — вне знаменателя. Служебные задачи (эпик, разрез, план,
+// ревью, проверка, финал, мерж и всё, что не вошло в цепочки) — под фильтром «служебные».
+// «Нужен ответ» — слово из общего источника (BRIEF_WAIT_WORD): «ждёт вас» говорит одна тревога.
+//   • строка = аватар · название · роль · корзина · пара «чат · задача»;
+//   • «Показать все» при длинном списке: порог 8 (макет LIM);
+//   • пустое: «Шагов нет» (фича создана, конвейер не запускался).
 
 import { useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
@@ -18,15 +18,17 @@ import { C, R, FS, SP, FONT } from '../../lib/design';
 import { roleLabel } from '../../lib/roleLabel';
 import { openChatById } from '../../lib/openChat';
 import { openTaskInSection } from '../../lib/tasks';
+import { formatDuration } from '../../lib/chatGroups';
 import { recordFeatureReturn } from '../../lib/featureBackNav';
 import { EMPTY_NAV_MARKS, buildNavMarks, type NavMarks } from '../../lib/featureNavMarks';
 import { ExecutorAvatar } from './FeatureTimelineBits';
 import { NavTargetPair } from './NavTargetButton';
+import { buildProdCards, type ProdCard } from './FeatureProdCards';
+import { BRIEF_WAIT_WORD } from './FeatureBriefModel';
 import { Button } from '../ui/Button';
-import type { FeatureRun, FeatureTask } from '../../types/featureRun';
+import type { FeatureRun, FeatureStepChain, FeatureTask } from '../../types/featureRun';
 
-// Порог «Показать все» (макет: LIM=8 у событий; тот же порог и у задач).
-// По умолчанию — 8 последних (по времени); «Показать все» — весь список.
+// Порог «Показать все» (макет: LIM=8 у событий; тот же порог и у шагов).
 export const TASKS_COLLAPSED_LIMIT = 8;
 
 // === Чистые функции (тестируются в node, без DOM) ===
@@ -47,123 +49,224 @@ export function allFeatureTasks(run: FeatureRun): FeatureTask[] {
   ];
 }
 
-// Статус задачи (макет TST): ключ → подпись.
-//   d — готово (done); r — в работе (inProgress, идёт); w — ждёт вас (inProgress,
-//   ждёт человека); x — стоит (inProgress, исполнитель встал); t — впереди (todo/нет).
-// Это ФАКТ состояния, не «принято»: честный прогресс (разрез Ф-pr).
-export type TaskStatusKey = 'd' | 'r' | 'w' | 'x' | 't';
-export function taskStatusKey(t: FeatureTask): TaskStatusKey {
-  if (t.status === 'done') return 'd';
-  if (t.status === 'inProgress') {
-    if (t.awaitingHumanSince) return 'w';
-    if (t.executorStoppedAt) return 'x';
-    return 'r';
-  }
-  return 't';
+// Корзина шага (взаимоисключающие): четыре входят в stepProgress.total, withdrawn — вне него.
+export type StepBucket = 'work' | 'review' | 'accepted' | 'notCreated' | 'withdrawn';
+
+// Корзина из карточки ленты: состояние карточки уже построено по корзине бэка (bucketOf в
+// FeatureProdCards), здесь только раскладка по словарю stepProgress.
+export function cardBucket(card: ProdCard): StepBucket {
+  if (card.planned) return 'notCreated';
+  if (card.state === 'done') return 'accepted';
+  if (card.state === 'withdrawn') return 'withdrawn';
+  return card.awaitingReview ? 'review' : 'work';
 }
 
-// Подпись статуса (макет TST, по-русски): готово / в работе / ждёт вас / стоит / впереди.
-export function taskStatusLabel(key: TaskStatusKey): string {
-  switch (key) {
-    case 'd': return 'готово';
-    case 'r': return 'в работе';
-    case 'w': return 'ждёт вас';
-    case 'x': return 'стоит';
-    case 't': return 'впереди';
-    default: return '';
-  }
+export const BUCKET_LABEL: Record<StepBucket, string> = {
+  work: 'в работе',
+  review: 'в ревью',
+  accepted: 'принято',
+  notCreated: 'не заведено',
+  withdrawn: 'снято',
+};
+
+export interface StepRow {
+  card: ProdCard;
+  bucket: StepBucket;
+  // «В master» — ортогональный признак цепочки; в корзины не входит.
+  inMaster: boolean;
+  chain: FeatureStepChain | null;
+  // Первая задача цепочки (шапка шага): цель кнопки «задача»; у шага плана без задачи — null.
+  headTask: FeatureTask | null;
+  // Исполнитель шага ждёт ответа человека (awaitingHumanSince у идущей задачи цепочки).
+  needsAnswer: boolean;
 }
 
-// Ключ сортировки: последняя активность (completedAt → claudeStartedAt → createdAt).
-// Пусто/невалидно — '' (сортируется в конец при desc по строке? нет — отдельно).
+export interface StepsTabModel {
+  steps: StepRow[];
+  // Задачи вне цепочек шагов: эпик, разрез, план, ревью, проверки, финал, мерж, сироты.
+  service: FeatureTask[];
+}
+
+export function buildStepsTab(run: FeatureRun): StepsTabModel {
+  const chains = run.stepChains ?? [];
+  const chainByRef = new Map<string, FeatureStepChain>();
+  for (const ch of chains) chainByRef.set(ch.stepRef, ch);
+  const all = allFeatureTasks(run);
+  const taskById = new Map<string, FeatureTask>();
+  for (const t of all) taskById.set(t.id, t);
+
+  const steps: StepRow[] = buildProdCards(run).map(card => {
+    const chain = chainByRef.get(card.stepRef) ?? null;
+    const own = chain ? chain.taskIds.map(id => taskById.get(id)).filter((t): t is FeatureTask => !!t) : [];
+    return {
+      card,
+      bucket: cardBucket(card),
+      inMaster: chain?.inMaster === true,
+      chain,
+      headTask: own[0] ?? null,
+      needsAnswer: own.some(t => t.status === 'inProgress' && !!t.awaitingHumanSince),
+    };
+  });
+
+  const inChains = new Set(chains.flatMap(c => c.taskIds));
+  return { steps, service: sortTasksByTime(all.filter(t => !inChains.has(t.id))) };
+}
+
+// Ключ сортировки служебных: последняя активность (completedAt → claudeStartedAt → createdAt).
 function taskSortKey(t: FeatureTask): string {
   return t.completedAt ?? t.claudeStartedAt ?? t.createdAt ?? '';
 }
 
-// Сортировка по времени: последняя активность — сначала (desc). Стабильная: при
-// равенстве ключей — исходный порядок (Array.prototype.sort стабилен в ES2019+).
+// Сортировка по времени: последняя активность — сначала (desc), стабильная.
 export function sortTasksByTime(tasks: FeatureTask[]): FeatureTask[] {
   return [...tasks].sort((a, b) => {
     const ka = taskSortKey(a);
     const kb = taskSortKey(b);
     if (ka === kb) return 0;
-    return ka < kb ? 1 : -1; // desc: более свежее — раньше
+    return ka < kb ? 1 : -1;
   });
 }
 
-// Фильтр по статусу: 'all' — все; иначе — только с этим статусом.
-export function filterTasksByStatus(tasks: FeatureTask[], filter: 'all' | TaskStatusKey): FeatureTask[] {
-  if (filter === 'all') return tasks;
-  return tasks.filter(t => taskStatusKey(t) === filter);
-}
+export type StepsFilter = 'all' | StepBucket | 'inMaster' | 'service';
 
-// Чипы-фильтр (макет): «все» (всегда, с общим числом) + каждый статус с числом > 0.
-// Порядок статусов — как в макете (r, w, x, d, t).
-export interface TaskFilterChip {
-  key: 'all' | TaskStatusKey;
+export interface StepsFilterChip {
+  key: StepsFilter;
   label: string;
   count: number;
 }
-export function taskFilterChips(tasks: FeatureTask[]): TaskFilterChip[] {
-  const cnt = (k: TaskStatusKey) => tasks.filter(t => taskStatusKey(t) === k).length;
-  const chips: TaskFilterChip[] = [{ key: 'all', label: 'все', count: tasks.length }];
-  for (const k of ['r', 'w', 'x', 'd', 't'] as TaskStatusKey[]) {
-    if (cnt(k) > 0) chips.push({ key: k, label: taskStatusLabel(k), count: cnt(k) });
-  }
+
+// Порядок как в полосе трекера: в работе · в ревью · не заведено · принято; затем «в master»,
+// «снято», «служебные». «Все» — всегда, остальные только с числом > 0.
+const CHIP_ORDER: StepBucket[] = ['work', 'review', 'notCreated', 'accepted'];
+
+export function stepsFilterChips(model: StepsTabModel): StepsFilterChip[] {
+  const count = (b: StepBucket) => model.steps.filter(r => r.bucket === b).length;
+  const chips: StepsFilterChip[] = [{ key: 'all', label: 'все', count: model.steps.length }];
+  for (const b of CHIP_ORDER) if (count(b) > 0) chips.push({ key: b, label: BUCKET_LABEL[b], count: count(b) });
+  const master = model.steps.filter(r => r.inMaster).length;
+  if (master > 0) chips.push({ key: 'inMaster', label: 'в master', count: master });
+  if (count('withdrawn') > 0) chips.push({ key: 'withdrawn', label: BUCKET_LABEL.withdrawn, count: count('withdrawn') });
+  if (model.service.length > 0) chips.push({ key: 'service', label: 'служебные', count: model.service.length });
   return chips;
+}
+
+export function filterStepRows(steps: StepRow[], filter: Exclude<StepsFilter, 'service'>): StepRow[] {
+  if (filter === 'all') return steps;
+  if (filter === 'inMaster') return steps.filter(r => r.inMaster);
+  return steps.filter(r => r.bucket === filter);
+}
+
+// Подпись состояния служебной задачи (у неё цепочки нет, корзины нет): факт по статусу задачи.
+export function serviceStatusLabel(t: FeatureTask): string {
+  if (t.status === 'done') return 'готово';
+  if (t.status === 'inProgress') return 'в работе';
+  return 'впереди';
 }
 
 // === Компоненты ===
 
-// Тег статуса (макет .tst): 11/600, padding 0 6, R.sm, line-height 16; цвет по ключу.
-// Проп `status` (не `key` — `key` зарезервирован React'ом и теряется).
-function TaskStatusTag({ status, isMobile = false }: { status: TaskStatusKey; isMobile?: boolean }) {
-  const style: CSSProperties =
-    status === 'd' ? { background: C.successBg, color: C.successText } :
-    status === 'r' ? { background: C.bgSelected, color: C.textHeading } :
-    status === 'w' ? { background: C.infoBg, color: C.textPrimary } :
-    status === 'x' ? { background: C.dangerBg, color: C.dangerText } :
-    { background: 'transparent', color: C.textMuted, boxShadow: `inset 0 0 0 1px ${C.border}` };
+// Тег состояния (макет .tst): 11/600, padding 0 6, R.sm, line-height 16.
+type TagTone = 'ok' | 'info' | 'work' | 'warn' | 'danger' | 'muted';
+function tagStyle(tone: TagTone): CSSProperties {
+  switch (tone) {
+    case 'ok': return { background: C.successBg, color: C.successText };
+    case 'info': return { background: C.infoBg, color: C.textPrimary };
+    case 'work': return { background: C.bgSelected, color: C.textHeading };
+    case 'warn': return { background: C.warningBg, color: C.warningText };
+    case 'danger': return { background: C.dangerBg, color: C.dangerText };
+    default: return { background: 'transparent', color: C.textMuted, boxShadow: `inset 0 0 0 1px ${C.border}` };
+  }
+}
+const BUCKET_TONE: Record<StepBucket, TagTone> = {
+  accepted: 'ok', review: 'info', work: 'work', notCreated: 'muted', withdrawn: 'muted',
+};
+
+function StatusTag({ tone, text, testId, isMobile }: { tone: TagTone; text: string; testId: string; isMobile: boolean }) {
   return (
     <span
-      data-testid="task-status"
+      data-testid={testId}
       style={{
         fontSize: FS.xs, fontWeight: 600, padding: '0 6px', borderRadius: R.sm,
         lineHeight: '16px', whiteSpace: 'nowrap', flexShrink: 0,
         minHeight: isMobile ? 40 : undefined, display: 'inline-flex', alignItems: 'center',
-        ...style,
+        ...tagStyle(tone),
       }}
     >
-      {taskStatusLabel(status)}
+      {text}
     </span>
   );
 }
 
-// Строка задачи (макет §9а, .srow): аватар · название · роль (roleLabel) · статус ·
-// пара «чат · задача». Клик по строке — в задачу; «чат» — в чат исполнителя.
-// Честная деградация: без исполнителя — нейтральный аватар; без чата — «чата нет».
-function TaskRow({ task, featureId, featureTitle = null, marks = EMPTY_NAV_MARKS, isMobile = false }: {
-  task: FeatureTask; featureId: string; featureTitle?: string | null; marks?: NavMarks; isMobile?: boolean;
-}) {
+// Общая строка вкладки: аватар · название · роль · теги · пара «чат · задача».
+// Без задачи (шаг плана, ещё не заведённый) пары нет, название — не кнопка.
+interface RowProps {
+  testId: string;
+  title: string;
+  role: string;
+  personaId: string | null;
+  tags: { tone: TagTone; text: string; testId: string }[];
+  meta?: string | null;
+  task: FeatureTask | null;
+  chatId: string | null;
+  featureId: string;
+  featureTitle: string | null;
+  marks?: NavMarks;
+  isMobile: boolean;
+}
+
+function StepsRow({ testId, title, role, personaId, tags, meta = null, task, chatId, featureId, featureTitle, marks = EMPTY_NAV_MARKS, isMobile }: RowProps) {
   const [hover, setHover] = useState(false);
-  const role = roleLabel(task.role ?? null, task.stepRef ?? null, task.lane ?? null);
-  const statusKey = taskStatusKey(task);
+  const taskClosed = task?.status === 'done';
 
   // Переход в задачу: openTaskInSection (id + projectId) + точка возврата (Ф9b).
   const openTask = () => {
+    if (!task) return;
     recordFeatureReturn(featureId, { kind: 'task', id: task.id }, featureTitle);
     openTaskInSection({ id: task.id, projectId: task.projectId ?? undefined });
   };
-  // Переход в чат исполнителя: openChatById(linkedSessionId) + точка возврата.
+  // Переход в чат исполнителя: openChatById + точка возврата.
   const openChat = () => {
-    if (!task.linkedSessionId) return;
-    recordFeatureReturn(featureId, { kind: 'chat', id: task.linkedSessionId }, featureTitle);
-    void openChatById(task.linkedSessionId);
+    if (!chatId) return;
+    recordFeatureReturn(featureId, { kind: 'chat', id: chatId }, featureTitle);
+    void openChatById(chatId);
   };
+
+  const titleNode = (
+    <>
+      <span
+        data-testid="task-title"
+        style={{
+          fontSize: FS.sm, fontWeight: 600, color: C.textHeading,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          minWidth: 0, flex: '1 1 auto',
+        }}
+      >
+        {title}
+      </span>
+      {role && (
+        <span
+          data-testid="task-role"
+          style={{
+            fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary,
+            background: C.bgSelected, borderRadius: R.sm, padding: '0 5px',
+            whiteSpace: 'nowrap', flexShrink: 0,
+          }}
+        >
+          {role}
+        </span>
+      )}
+      {tags.map(t => <StatusTag key={t.testId} tone={t.tone} text={t.text} testId={t.testId} isMobile={isMobile} />)}
+      {meta && (
+        <span data-testid="task-meta" style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', flexShrink: 0 }}>
+          {meta}
+        </span>
+      )}
+    </>
+  );
 
   return (
     <div
-      data-testid={`task-row-${task.id}`}
+      data-testid={testId}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
@@ -174,60 +277,43 @@ function TaskRow({ task, featureId, featureTitle = null, marks = EMPTY_NAV_MARKS
         minHeight: isMobile ? 52 : 44,
       }}
     >
-      <ExecutorAvatar personaId={task.personaId ?? null} />
-      <button
-        type="button"
-        data-testid="task-open"
-        onClick={openTask}
-        title={`Открыть задачу${statusKey === 'd' ? ' (закрыта — для просмотра)' : ''}. Страница фичи скроется, вернётся по плашке.`}
-        aria-label={`Открыть задачу «${task.title}»`}
-        style={{
-          flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
-          background: 'transparent', border: 'none', cursor: 'pointer', padding: `${SP.xxs}px 0`,
-          fontFamily: FONT.sans, textAlign: 'left',
-        }}
-      >
-        <span
-          data-testid="task-title"
+      <ExecutorAvatar personaId={personaId} />
+      {task ? (
+        <button
+          type="button"
+          data-testid="task-open"
+          onClick={openTask}
+          title={`Открыть задачу${taskClosed ? ' (закрыта — для просмотра)' : ''}. Страница фичи скроется, вернётся по плашке.`}
+          aria-label={`Открыть задачу «${title}»`}
           style={{
-            fontSize: FS.sm, fontWeight: 600, color: C.textHeading,
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            minWidth: 0, flex: '1 1 auto',
+            flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
+            background: 'transparent', border: 'none', cursor: 'pointer', padding: `${SP.xxs}px 0`,
+            fontFamily: FONT.sans, textAlign: 'left',
           }}
         >
-          {task.title}
+          {titleNode}
+        </button>
+      ) : (
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: `${SP.xxs}px 0` }}>
+          {titleNode}
+        </div>
+      )}
+      {task && (
+        <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: SP.xs, flexShrink: 0 }}>
+          <NavTargetPair
+            chatId={chatId}
+            chatArchived={marks.chatArchived(chatId)}
+            onOpenChat={openChat}
+            chatTitle="Открыть чат. Страница фичи скроется, вернётся по плашке."
+            showNoChat
+            taskId={task.id}
+            taskClosed={taskClosed}
+            onOpenTask={openTask}
+            taskTitle="Открыть задачу. Страница фичи скроется, вернётся по плашке."
+            isMobile={isMobile}
+          />
         </span>
-        {role && (
-          <span
-            data-testid="task-role"
-            style={{
-              fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary,
-              background: C.bgSelected, borderRadius: R.sm, padding: '0 5px',
-              whiteSpace: 'nowrap', flexShrink: 0,
-            }}
-          >
-            {role}
-          </span>
-        )}
-        <TaskStatusTag status={statusKey} isMobile={isMobile} />
-      </button>
-      <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: SP.xs, flexShrink: 0 }}>
-        <NavTargetPair
-          chatId={task.linkedSessionId ?? null}
-          chatArchived={marks.chatArchived(task.linkedSessionId)}
-          onOpenChat={openChat}
-          chatTitle="Открыть чат. Страница фичи скроется, вернётся по плашке."
-          showNoChat
-          taskId={task.id}
-          // major 3: ОДИН источник «закрыта» — статус реальной задачи (task.status === 'done'),
-          // не `marks.taskClosed` (тот же факт из агрегата — дубль; мутация снятия дубля
-          // не краснила — проводка была мертва).
-          taskClosed={task.status === 'done'}
-          onOpenTask={openTask}
-          taskTitle="Открыть задачу. Страница фичи скроется, вернётся по плашке."
-          isMobile={isMobile}
-        />
-      </span>
+      )}
     </div>
   );
 }
@@ -246,7 +332,7 @@ function TasksNavNote() {
     >
       <span aria-hidden style={{ flexShrink: 0, marginTop: 1 }}>ⓘ</span>
       <span>
-        Строка ведёт в задачу, кнопка «чат» — в чат исполнителя. Страница фичи скроется
+        Строка ведёт в задачу шага, кнопка «чат» — в чат исполнителя. Страница фичи скроется
         и вернётся по плашке на этой же вкладке.
       </span>
     </div>
@@ -254,34 +340,40 @@ function TasksNavNote() {
 }
 
 export interface FeatureTasksTabProps {
-  // Агрегат фичи: задачи (epic/steps/reviews/qa/final/merge/cut/plan) — единственный источник.
+  // Агрегат фичи: stepChains + stepProgress — источник шагов, задачи — служебные строки.
   run: FeatureRun;
   // Id фичи (навигация: точка возврата).
   featureId: string;
-  // Пометки (страница даёт с чатами; без пропа — из агрегата: задачи закрыты, чаты — по стадиям).
+  // Пометки (страница даёт с чатами; без пропа — из агрегата).
   marks?: NavMarks;
   isMobile?: boolean;
 }
 
 export function FeatureTasksTab({ run, featureId, marks: marksProp, isMobile = false }: FeatureTasksTabProps) {
   const marks = useMemo(() => marksProp ?? buildNavMarks(run), [marksProp, run]);
-  const all = useMemo(() => allFeatureTasks(run), [run]);
+  const model = useMemo(() => buildStepsTab(run), [run]);
   // Название фичи (epic.title) — для «← к фиче {название}» в шапке чата (Ф-pl-b).
   const featureTitle = run.epic?.title ?? null;
-  const [filter, setFilter] = useState<'all' | TaskStatusKey>('all');
+  const [filter, setFilter] = useState<StepsFilter>('all');
   const [expanded, setExpanded] = useState(false);
 
-  // Фильтр → сортировка по времени → (свёрнуто) 8 последних.
-  const filtered = useMemo(() => filterTasksByStatus(all, filter), [all, filter]);
-  const sorted = useMemo(() => sortTasksByTime(filtered), [filtered]);
-  const shown = expanded ? sorted : sorted.slice(0, TASKS_COLLAPSED_LIMIT);
-  const chips = useMemo(() => taskFilterChips(all), [all]);
+  const chips = useMemo(() => stepsFilterChips(model), [model]);
+  // Выбранный фильтр мог исчезнуть (корзина опустела после обновления) — откат на «все».
+  const active: StepsFilter = chips.some(c => c.key === filter) ? filter : 'all';
+  const stepRows = useMemo(
+    () => (active === 'service' ? [] : filterStepRows(model.steps, active)),
+    [model, active],
+  );
+  const serviceRows = active === 'service' ? model.service : [];
+  const total = active === 'service' ? serviceRows.length : stepRows.length;
+  const shownSteps = expanded ? stepRows : stepRows.slice(0, TASKS_COLLAPSED_LIMIT);
+  const shownService = expanded ? serviceRows : serviceRows.slice(0, TASKS_COLLAPSED_LIMIT);
 
-  // Пустое: задач нет вовсе (фича создана, конвейер не запускался).
-  if (all.length === 0) {
+  // Пустое: ни шагов, ни задач (фича создана, конвейер не запускался).
+  if (model.steps.length === 0 && model.service.length === 0) {
     return (
       <div data-testid="tasks-empty" style={{ padding: `${SP.xl}px 0`, textAlign: 'center', fontFamily: FONT.sans }}>
-        <div style={{ fontSize: FS.md, fontWeight: 700, color: C.textHeading, marginBottom: SP.xs }}>Задач нет</div>
+        <div style={{ fontSize: FS.md, fontWeight: 700, color: C.textHeading, marginBottom: SP.xs }}>Шагов нет</div>
         <div style={{ fontSize: FS.sm, color: C.textMuted }}>Фича создана, но конвейер ещё не запускался.</div>
       </div>
     );
@@ -289,23 +381,23 @@ export function FeatureTasksTab({ run, featureId, marks: marksProp, isMobile = f
 
   return (
     <div data-testid="tasks" style={{ display: 'flex', flexDirection: 'column', fontFamily: FONT.sans }}>
-      {/* Фильтр по статусу (макет .cnts): «все» + статусы с числом > 0. */}
-      <div data-testid="tasks-filter" role="group" aria-label="Фильтр задач" style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, marginBottom: SP.sm }}>
+      {/* Фильтр: «все» + корзины трекера с числом > 0 + «в master», «снято», «служебные». */}
+      <div data-testid="tasks-filter" role="group" aria-label="Фильтр шагов" style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, marginBottom: SP.sm }}>
         {chips.map(chip => {
-          const active = filter === chip.key;
+          const isActive = active === chip.key;
           return (
             <Button
               key={chip.key}
               variant="ghost"
               size="xs"
               dataTestId={`tasks-filter-${chip.key}`}
-              ariaPressed={active}
-              onClick={() => setFilter(chip.key)}
+              ariaPressed={isActive}
+              onClick={() => { setFilter(chip.key); setExpanded(false); }}
               style={{
                 padding: '1px 8px', borderRadius: R.sm, lineHeight: '18px',
                 fontSize: FS.xs, height: 'auto', whiteSpace: 'nowrap',
-                background: active ? C.accent : C.bgSelected,
-                color: active ? C.onAccent : C.textSecondary,
+                background: isActive ? C.accent : C.bgSelected,
+                color: isActive ? C.onAccent : C.textSecondary,
                 border: 'none',
                 minHeight: isMobile ? 40 : undefined,
               }}
@@ -316,21 +408,65 @@ export function FeatureTasksTab({ run, featureId, marks: marksProp, isMobile = f
         })}
       </div>
 
-      {/* Список: 8 последних (по времени) или все (раскрыто). */}
       <div data-testid="tasks-list" style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
-        {shown.length === 0 ? (
+        {total === 0 ? (
           <div data-testid="tasks-filter-empty" style={{ fontSize: FS.sm, color: C.textMuted, padding: SP.xs }}>
-            Задач с этим статусом нет.
+            Шагов пока нет.
           </div>
         ) : (
-          shown.map(t => (
-            <TaskRow key={t.id} task={t} featureId={featureId} featureTitle={featureTitle} marks={marks} isMobile={isMobile} />
-          ))
+          <>
+            {shownSteps.map(r => {
+              const tags: RowProps['tags'] = [{ tone: BUCKET_TONE[r.bucket], text: BUCKET_LABEL[r.bucket], testId: 'task-status' }];
+              if (r.card.stopped) tags.push({ tone: 'danger', text: 'стоит', testId: 'task-stopped' });
+              if (r.needsAnswer) tags.push({ tone: 'warn', text: BRIEF_WAIT_WORD, testId: 'task-wait' });
+              const minutes = r.chain?.durationMinutes ?? 0;
+              return (
+                <StepsRow
+                  key={r.card.stepRef}
+                  testId={`step-row-${r.card.stepRef}`}
+                  title={r.card.title}
+                  role={roleLabel('step', r.card.stepRef, r.chain?.lane ?? null)}
+                  personaId={r.card.personaId}
+                  tags={tags}
+                  meta={minutes > 0 ? formatDuration(minutes) : null}
+                  task={r.headTask}
+                  chatId={r.card.chatId}
+                  featureId={featureId}
+                  featureTitle={featureTitle}
+                  marks={marks}
+                  isMobile={isMobile}
+                />
+              );
+            })}
+            {shownService.map(t => {
+              const tags: RowProps['tags'] = [{
+                tone: t.status === 'done' ? 'ok' : t.status === 'inProgress' ? 'work' : 'muted',
+                text: serviceStatusLabel(t), testId: 'task-status',
+              }];
+              if (t.status === 'inProgress' && t.awaitingHumanSince) tags.push({ tone: 'warn', text: BRIEF_WAIT_WORD, testId: 'task-wait' });
+              return (
+                <StepsRow
+                  key={t.id}
+                  testId={`task-row-${t.id}`}
+                  title={t.title}
+                  role={roleLabel(t.role ?? null, t.stepRef ?? null, t.lane ?? null)}
+                  personaId={t.personaId ?? null}
+                  tags={tags}
+                  task={t}
+                  chatId={t.linkedSessionId ?? null}
+                  featureId={featureId}
+                  featureTitle={featureTitle}
+                  marks={marks}
+                  isMobile={isMobile}
+                />
+              );
+            })}
+          </>
         )}
       </div>
 
       {/* «Показать все» / «Свернуть» при длинном списке (порог 8). */}
-      {sorted.length > TASKS_COLLAPSED_LIMIT && (
+      {total > TASKS_COLLAPSED_LIMIT && (
         <Button
           variant="ghost"
           size="sm"
@@ -345,7 +481,7 @@ export function FeatureTasksTab({ run, featureId, marks: marksProp, isMobile = f
             minHeight: isMobile ? 40 : 32,
           }}
         >
-          {expanded ? 'Свернуть' : `Показать все · ${sorted.length}`}
+          {expanded ? 'Свернуть' : `Показать все · ${total}`}
         </Button>
       )}
 

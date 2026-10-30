@@ -9,7 +9,7 @@ import { featureTruthBar } from './chat/feature/featureTruthModel';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import { Button } from './ui/Button';
 import { Badge } from './ui/Badge';
-import { featureDisplayState, featureQuickAction, featureAvatarPersonaIds, formatDuration } from '../lib/chatGroups';
+import { featureDisplayState, featureQuickAction, featureAvatarPersonaIds, formatDuration, CLOSED_NO_MERGE_STATUS } from '../lib/chatGroups';
 import { stepProgressFromIndex, formatStepProgress, trackerPercent } from '../lib/featureProgress';
 import { dateOnly } from './chat/feature/featureTime';
 import type { FeatureIndexFeature } from '../types/featureIndex';
@@ -116,12 +116,15 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
   // Кромка тревоги 3px — тоны В2: 'wait' → warning (жёлтый), 'stop' → danger (красный).
   // (Синий C.info был языком старой плашки; в языке фичи «нужен ответ» — warn.)
   const alarmEdge = st.alarm === 'wait' ? C.warning : st.alarm === 'stop' ? C.danger : null;
-  // Закрытая фича: статус «смержена {дата} · {длительность}» (макет .closed) или «закрыта».
+  // Закрытая фича: статус «смержена {дата} · {длительность}» (макет .closed) или общая
+  // CLOSED_NO_MERGE_STATUS («закрыта без мержа», Ш1f): та же подпись, что строка индекса
+  // (featureDisplayState) и тег страницы — короткая «закрыта» в компактной плашке больше
+  // не печатается (решение Майи «везде одна подпись», хвост ревью Ш1e).
   const closedMerged = feature.bucket === 'closed' && feature.summary?.mergedAt != null;
   const closedStatus = compact && feature.bucket === 'closed'
     ? (closedMerged
       ? `смержена ${dateOnly(feature.summary!.mergedAt)} · ${formatDuration(feature.summary!.durationMinutes)}`
-      : 'закрыта')
+      : CLOSED_NO_MERGE_STATUS)
     : null;
   // «Сейчас {Имя} +N» — обычная работа (plain run): имя первого идущего, «+N» остальных.
   // merge_pending/merging/очередь/закрытая — прежние слова featureDisplayState (их

@@ -460,6 +460,19 @@ public class FeatureProjectorTests
         run.ReturnsBySource.Final.Open.Should().Be(0);
     }
 
+    // Одна база возвратов: Count источника — витки (задача-ревью/проверка/финал несёт ровно один
+    // вердикт), сумма по источникам обязана равняться verdicts.loops (Ш6).
+    [Fact]
+    public void Build_ВозвратыПоИсточникам_СуммаРавнаВиткам()
+    {
+        var (epic, tasks) = LoadChains();
+        var run = FeatureProjector.Build(epic, tasks);
+
+        var rb = run.ReturnsBySource;
+        (rb.Review.Count + rb.Qa.Count + rb.Final.Count).Should().Be(run.Verdicts.Loops);
+        run.Verdicts.Loops.Should().BeGreaterThan(0);
+    }
+
     // Мутация (а): связь шага с ревью идёт ТОЛЬКО через пересечение ReviewOf.
     // Сломал: цепляем витки без пересечения (всегда true) → sc-r2 (только про sc-s3)
     // ошибочно попадает в цепочку Ш1. Без мутации тест зелёный.

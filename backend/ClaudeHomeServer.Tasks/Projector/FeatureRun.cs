@@ -410,8 +410,8 @@ public sealed class FeatureStepChain
 // Возвраты одного источника (ревью/проверка/финал): число возвратов и сколько из них открыто.
 public sealed class FeatureSourceReturns
 {
-    // Возвраты этого источника: число уникальных задач ревью/проверки/финала с вердиктом
-    // returned/accepted_with_remarks.
+    // Возвраты этого источника — витки с вердиктом returned/accepted_with_remarks (задача
+    // ревью/проверки/финала несёт один вердикт). Сумма по источникам = Verdicts.Loops.
     public int Count { get; init; }
     // Сколько из них, чья доработка ещё не done (фронт красит бейдж в тревожный тон).
     public int Open { get; init; }

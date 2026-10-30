@@ -213,10 +213,11 @@ export function stepAlarmBy(run: FeatureRun, chain: FeatureStepChain): StepAlarm
   return { kind: at.kind, since: at.since ?? null };
 }
 
-// Тон плашки статуса шага: стоит (тревога на этом шаге) — danger, принят — success,
-// «ждёт ревью» — info, снят — neutral, работа — accent (макет v4 .chip.a/.r/.w).
+// Тон плашки статуса шага: стоит (тревога на этом шаге) — danger, «ждёт вас» — warning
+// (тот же тон, что у блока тревоги), принят — success, «ждёт ревью» — info, снят — neutral,
+// работа — accent (макет v4 .chip.a/.r/.w).
 // Слова — бэковые (chain.status / attention), второй копии слов нет.
-export type StepBadgeTone = 'accent' | 'danger' | 'info' | 'success' | 'neutral';
+export type StepBadgeTone = 'accent' | 'danger' | 'warning' | 'info' | 'success' | 'neutral';
 
 export function stepBadgeTone(chain: FeatureStepChain, alarmBy?: StepAlarmBy | null): StepBadgeTone {
   // Тревога на этом шаге перешивает тон: «стоит» — danger, «ждёт вас» — warning

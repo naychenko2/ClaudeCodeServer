@@ -373,7 +373,7 @@ internal interface ITeamTurnIntake
     /// </summary>
     Task<bool> SendOrEnqueueAsync(string sessionId, string text,
         string? senderPersonaId = null, bool silent = false,
-        bool suppressTasksExecute = false, string? staffNote = null);
+        bool suppressTasksExecute = false, string? staffNote = null, string? senderUserId = null);
 
     /// <summary>
     /// Прервать ход чата: зависший статус реанимируется, живой зависший прогон убивается.

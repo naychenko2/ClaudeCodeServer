@@ -331,6 +331,7 @@ public class SessionHub : Hub
         string? actionId = null, string? comment = null)
     {
         if (ScopeOfSession(sessionId, ProjectRight.RunTurn) is null) throw DeniedSession(sessionId);
-        await _sessions.RespondTeamEscalationAsync(sessionId, escalationId, actionId, comment);
+        await _sessions.RespondTeamEscalationAsync(sessionId, escalationId, actionId, comment,
+            actorUserId: UserId);
     }
 }

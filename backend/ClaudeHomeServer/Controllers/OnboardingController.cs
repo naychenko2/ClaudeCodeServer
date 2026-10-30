@@ -161,7 +161,7 @@ public class OnboardingController(SessionManager sessions, UserStore users,
             var history = await sessions.GetHistoryAsync(fresh.Id);
             if (!IsMuteOnboarding(history, fresh.Status)) return;
             await sessions.SendMessageAsync(fresh.Id, OnboardingPrompts.KickoffDirectiveFor(onboardingKind),
-                [], systemDirective: true);
+                [], systemDirective: true, senderUserId: UserId);
         }
         catch (Exception ex)
         {

@@ -249,8 +249,10 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
     /// Запуск выполнения задачи Claude-ом: отдельная сессия в проекте задачи
     /// (личная — чат вне проекта) в режиме acceptEdits, первым сообщением — постановка.
     /// </summary>
+    /// <param name="actorUserId">Кто запустил исполнителя (человек или актор хода-вызывателя); null — автозапуск, актор неизвестен (fail-closed).</param>
     /// <exception cref="InvalidOperationException">задача не подходит или уже выполняется</exception>
-    public async Task<TaskItem> ExecuteAsync(TaskItem task, bool auto, ExecutorLauncher? launcher = null)
+    public async Task<TaskItem> ExecuteAsync(TaskItem task, bool auto, ExecutorLauncher? launcher = null,
+        string? actorUserId = null)
     {
         if (task.Status == TaskItemStatus.Done)
             throw new InvalidOperationException("Задача уже завершена");
@@ -285,7 +287,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
             throw new InvalidOperationException("По задаче уже запускается исполнитель — подождите и повторите");
         try
         {
-            return await ExecuteClaimedAsync(task, auto, launcher).ConfigureAwait(false);
+            return await ExecuteClaimedAsync(task, auto, launcher, actorUserId).ConfigureAwait(false);
         }
         finally
         {
@@ -304,7 +306,8 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         _tasks.SetExecutorLauncher(task.Id, launcher.SessionId, launcher.PersonaId);
     }
 
-    private async Task<TaskItem> ExecuteClaimedAsync(TaskItem task, bool auto, ExecutorLauncher? launcher)
+    private async Task<TaskItem> ExecuteClaimedAsync(TaskItem task, bool auto, ExecutorLauncher? launcher,
+        string? actorUserId)
     {
         // Инвариант проверен в ExecuteAsync ДО claim'а; повторяем ради nullability-анализа
         // этого метода (граница методов рвёт поток null-check из вызывающего)
@@ -448,7 +451,8 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
             metrics.OmOChars, metrics.ContextChars, metrics.NotesContextChars));
         try
         {
-            await _sessions.SendMessageAsync(session.Id, prompt, [], auto: true, senderPersonaId: persona?.Id);
+            await _sessions.SendMessageAsync(session.Id, prompt, [], auto: true, senderPersonaId: persona?.Id,
+                senderUserId: actorUserId);
         }
         catch (Exception ex)
         {

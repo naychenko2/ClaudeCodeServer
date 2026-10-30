@@ -1363,7 +1363,7 @@ public class TasksController(
                 {
                     try
                     {
-                        existing = await executor.ExecuteAsync(existing, auto: false, null);
+                        existing = await executor.ExecuteAsync(existing, auto: false, null, UserId);
                     }
                     catch (InvalidOperationException ex)
                     {
@@ -1403,7 +1403,7 @@ public class TasksController(
             TaskItem started;
             try
             {
-                started = await executor.ExecuteAsync(task, auto: false, null);
+                started = await executor.ExecuteAsync(task, auto: false, null, UserId);
             }
             catch (InvalidOperationException ex)
             {
@@ -1555,7 +1555,8 @@ public class TasksController(
                     FeatureChatDoor.TargetFeature(task)) is { } bound)
                 return Conflict(new { error = bound, code = FeatureChatDoor.DeniedCode });
             return Ok(await executor.ExecuteAsync(task, auto: false,
-                new ExecutorLauncher(callerSession?.Id, callerSession?.PersonaId)));
+                new ExecutorLauncher(callerSession?.Id, callerSession?.PersonaId),
+                callerSession is null ? UserId : sessions.GetTurnActor(callerSession.Id, UserId)));
         }
         catch (InvalidOperationException ex)
         {

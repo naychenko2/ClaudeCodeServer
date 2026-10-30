@@ -612,7 +612,8 @@ public sealed class TasksToolset(
                     // в чат-создатель карточки; запись делает сам запуск после захвата claim'а —
                     // отказ («уже работает сессия») адресата не меняет
                     var executed = await executor.ExecuteAsync(task, auto: false,
-                        new ExecutorLauncher(session.Id, session.PersonaId));
+                        new ExecutorLauncher(session.Id, session.PersonaId),
+                        sessions.GetTurnActor(session.Id, context.OwnerId));
                     // Волна 1 team-blocker-honest: координатор перезапустил исполнителя по
                     // задаче-блокеру — гасим блокер по факту, стадия возвращается в работу.
                     // S2 (фикс-волна): caller == SourceSessionId — иначе запуск из чата

@@ -83,7 +83,7 @@ public partial class SessionManagerTests
     }
 
     [Fact]
-    public async Task ПодачаЧеловека_СбрасываетПрогон_НовыйАктор()
+    public async Task ПодачаЧеловека_ПокаЖивыАгентыУчастника_НеРасширяетПрогон_ПотомНачинаетНовый()
     {
         var (session, fake) = await RunChatAsync("ta-reset");
         await _sut.SendMessageAndWaitAsync(session.Id, "из чата", TimeSpan.Zero, senderUserId: Участник);
@@ -91,9 +91,17 @@ public partial class SessionManagerTests
         EndTurn(session, fake);
 
         await _sut.SendMessageAsync(session.Id, "дальше я", [], senderUserId: TestUserId);
+        _sut.GetTurnActor(session.Id, TestUserId).Should().Be(Участник,
+            "агенты участника живы — человеческая подача арендатора прогон не расширяет (канал хаба)");
 
+        await _sut.SendMessageAndWaitAsync(session.Id, "из чата REST", TimeSpan.Zero, senderUserId: TestUserId);
+        _sut.GetTurnActor(session.Id, TestUserId).Should().Be(Участник, "REST-канал даёт тот же результат");
+
+        fake.BgAlive = false;
+        EndTurn(session, fake);
+        await _sut.SendMessageAsync(session.Id, "теперь точно я", [], senderUserId: TestUserId);
         _sut.GetTurnActor(session.Id, TestUserId).Should().Be(TestUserId,
-            "подача человека начинает новую ответственность");
+            "агентов не осталось — подача человека начинает новую ответственность");
     }
 
     [Fact]

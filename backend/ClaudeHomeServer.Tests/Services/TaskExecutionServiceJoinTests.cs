@@ -173,6 +173,32 @@ public class TaskExecutionServiceJoinTests : IDisposable
         failure.Error.Should().ContainAny("уже запускается", "уже работает сессия");
     }
 
+    // ─── Актор хода исполнителя (S2a-1, критерий c1) ─────
+
+    [Fact]
+    public async Task ExecuteAsync_ЗапущенВладельцем_АкторомХодаИсполнителяСтановитсяВладелец()
+    {
+        var user = _userStore.Add("actor-owner", "password123", "user");
+        var task = _tasks.Create(null, user.Id, new CreateTaskRequest("Актор исполнителя"));
+
+        await _sut.ExecuteAsync(task, auto: false, null, actorUserId: user.Id);
+
+        var sessionId = _tasks.GetById(task.Id)!.LinkedSessionId!;
+        _sessions.GetTurnActor(sessionId, user.Id).Should().Be(user.Id);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_АвтозапускБезИнициатора_АкторНеизвестен()
+    {
+        var user = _userStore.Add("actor-auto", "password123", "user");
+        var task = _tasks.Create(null, user.Id, new CreateTaskRequest("Автозапуск"));
+
+        await _sut.ExecuteAsync(task, auto: true);
+
+        var sessionId = _tasks.GetById(task.Id)!.LinkedSessionId!;
+        _sessions.GetTurnActor(sessionId, user.Id).Should().BeNull("инициатор неизвестен — fail-closed");
+    }
+
     // ─── Запустивший записывается только после принятого запуска ─────
 
     [Fact]

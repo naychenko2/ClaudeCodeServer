@@ -59,6 +59,9 @@ public class WatchdogRecord
     public string SessionId { get; init; } = "";
     // Проект чата (для резолва WorkingDirectory); null — чат вне проектов
     public string? ProjectId { get; init; }
+    // Актор хода, поставившего сторожа (S2a-1): будильник наследует его, а не «неизвестного».
+    // null — актор на момент постановки неизвестен (fail-closed на доставке)
+    public string? ActorUserId { get; init; }
     // Короткое имя для будильника («⏰ Сторож «{Name}»…»)
     public string Name { get; set; } = "";
     // Команда опроса: exit 0 = дождались (терминал fired); exit != 0 = «ещё нет» (НЕ терминал)

@@ -226,7 +226,8 @@ public sealed class PersonaAutomationService : IDisposable, Execution.IDeviceOnl
         catch (Exception ex) { _log.LogWarning(ex, "создание чата правила {RuleId}", rule.Id); MarkResult(state, "error"); return; }
 
         // 4. Промпт → ход от лица персоны (контекст срабатывания — внутри сообщения чата)
-        try { await _sessions.SendMessageAsync(targetSessionId, prompt, [], auto: true, senderPersonaId: freshPersona.Id); }
+        try { await _sessions.SendMessageAsync(targetSessionId, prompt, [], auto: true, senderPersonaId: freshPersona.Id,
+            senderUserId: freshPersona.OwnerId); }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "send правило {RuleId}", rule.Id);

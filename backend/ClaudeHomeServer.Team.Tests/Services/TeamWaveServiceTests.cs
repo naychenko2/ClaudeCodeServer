@@ -2840,7 +2840,7 @@ public class TeamWaveServiceTests : IDisposable
 
         public Task<bool> SendOrEnqueueAsync(string sessionId, string text,
             string? senderPersonaId = null, bool silent = false,
-            bool suppressTasksExecute = false, string? staffNote = null) => Task.FromResult(true);
+            bool suppressTasksExecute = false, string? staffNote = null, string? senderUserId = null) => Task.FromResult(true);
 
         public int InterruptCount(string? sessionId = null)
         {

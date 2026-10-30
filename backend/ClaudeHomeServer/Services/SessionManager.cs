@@ -3740,7 +3740,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     private void NoteTurnActor(SessionEntry entry, string? actor, bool fromHuman)
     {
         var tenant = ResolveOwnerId(entry.Info);
-        var keep = !fromHuman && RunAgentsAlive(entry.Process);
+        // Сужение побеждает и на человеческой подаче: пока живы фоновые агенты участника, актор
+        // арендатора прогон не расширяет (1:1 с NoteRunDelegation, одинаково для хаба и REST)
+        var keep = RunAgentsAlive(entry.Process);
         lock (entry.PendingLock)
         {
             var prev = keep ? entry.RunActor : null;
@@ -3748,7 +3750,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 : !fromHuman && prev is not null ? prev
                 : UnknownActor;
             entry.SubmitActor = effective;
-            entry.RunActor = fromHuman ? effective : NarrowerActor(prev, effective, tenant);
+            entry.RunActor = NarrowerActor(prev, effective, tenant);
         }
     }
 
@@ -8224,8 +8226,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // которую спрятал публичный ResolveEscalationAsync в ядре). Обёртка сохранена ради
     // публичной сигнатуры — SessionHub зовёт её по этому контракту.
     public Task<bool> RespondTeamEscalationAsync(string sessionId, string escalationId,
-        string? actionId, string? comment = null, string? userId = null) =>
-        _teamDecision.RespondTeamEscalationAsync(sessionId, escalationId, actionId, comment, userId);
+        string? actionId, string? comment = null, string? userId = null, string? actorUserId = null) =>
+        _teamDecision.RespondTeamEscalationAsync(sessionId, escalationId, actionId, comment, userId, actorUserId);
 
     // «Остановить» (кнопка человека): текущие исполнители дорабатывают, новые волны не
     // стартуют. Единая точка остановки для кнопки режима (ChatsController) и кнопки
@@ -9041,9 +9043,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     }
 
     Task<bool> ITeamTurnIntake.SendOrEnqueueAsync(string sessionId, string text,
-        string? senderPersonaId, bool silent, bool suppressTasksExecute, string? staffNote)
+        string? senderPersonaId, bool silent, bool suppressTasksExecute, string? staffNote, string? senderUserId)
         => SendOrEnqueueAsync(sessionId, text, senderPersonaId,
-            silent: silent, suppressTasksExecute: suppressTasksExecute, staffNote: staffNote);
+            silent: silent, suppressTasksExecute: suppressTasksExecute, staffNote: staffNote,
+            senderUserId: senderUserId);
 
     void ITeamTurnIntake.InterruptTurn(string sessionId) => InterruptCore(sessionId, byUser: false);
 

@@ -6,5 +6,6 @@ namespace ClaudeHomeServer.Services.Composition;
 // код через ISessionDirectory.GetById — этот шов только отправляет.
 public interface ISessionMessageSender
 {
-    Task<bool> SendOrEnqueueAsync(string sessionId, string text, bool suppressTasksExecute = false);
+    Task<bool> SendOrEnqueueAsync(string sessionId, string text, bool suppressTasksExecute = false,
+        string? senderUserId = null);
 }

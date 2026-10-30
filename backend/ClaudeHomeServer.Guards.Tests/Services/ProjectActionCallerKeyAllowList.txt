@@ -6,6 +6,8 @@
 # или «до S4/S1-3a2/S1-3c». Формат строки: «путь|число» — по ФАЙЛУ со счётчиком строк (по номеру
 # строки снимок рассыпается). Счётчик в известном файле можно поднять только осознанно, с
 # вердиктом в дифе; стереть — когда место переведено на TenantOwnerId.
+# S2a-1 (доработка): TasksController +3 — UserId уходит в ExecuteAsync как актор хода исполнителя
+# (ActorUserId), а не ключ хранилищ: задача и её чат уже резолвлены по TenantOwnerId.
 # S1-3c: точка доступа вертикали Architecture — id вызывающего входит только в IProjectAccess
 # (запрошенное право, затем чтение, чтобы различить 403 и 404); ключом хранилищ здесь ничего
 # не стало: модель проекта берётся по id из маршрута, автор записи — человек-вызывающий.
@@ -46,7 +48,7 @@ backend/ClaudeHomeServer/Controllers/ProjectMembersController.cs|6
 backend/ClaudeHomeServer/Controllers/ProjectsController.cs|14
 backend/ClaudeHomeServer/Controllers/SessionsController.cs|8
 backend/ClaudeHomeServer/Controllers/SkillsController.cs|10
-backend/ClaudeHomeServer/Controllers/TasksController.cs|78
+backend/ClaudeHomeServer/Controllers/TasksController.cs|81
 backend/ClaudeHomeServer/Controllers/TurnRightExtensions.cs|2
 backend/ClaudeHomeServer/Hubs/SessionHub.cs|7
 backend/ClaudeHomeServer/Hubs/TerminalHub.cs|1

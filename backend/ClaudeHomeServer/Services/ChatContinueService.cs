@@ -63,10 +63,11 @@ public sealed class ChatContinueService(
     internal Func<string, string, TimeSpan, bool, Task<SendAndWaitResult>>? SendOverride { get; set; }
 
     private Task<SendAndWaitResult> SendAsync(string sessionId, string text, TimeSpan timeout, bool systemDirective,
-        bool preempt = true) =>
+        bool preempt = true, string? actorUserId = null) =>
         SendOverride is { } send
             ? send(sessionId, text, timeout, systemDirective)
-            : sessions.SendMessageAndWaitAsync(sessionId, text, timeout, preempt: preempt, systemDirective: systemDirective);
+            : sessions.SendMessageAndWaitAsync(sessionId, text, timeout, preempt: preempt, systemDirective: systemDirective,
+                senderUserId: actorUserId);
 
     private int _subscribed;
 
@@ -118,7 +119,7 @@ public sealed class ChatContinueService(
             throw new InvalidOperationException("Продолжение этого чата уже выполняется");
         try
         {
-            var handoff = await RequestHandoffAsync(sessionId);
+            var handoff = await RequestHandoffAsync(sessionId, ownerId);
 
             var noteId = SaveHandoffNote(ownerId, source, handoff);
 
@@ -130,7 +131,7 @@ public sealed class ChatContinueService(
             try
             {
                 await SendAsync(created.Id, BuildFirstMessage(source, handoff, userNote), TimeSpan.Zero,
-                    systemDirective: false);
+                    systemDirective: false, actorUserId: ownerId);
             }
             catch (Exception ex)
             {
@@ -203,12 +204,13 @@ public sealed class ChatContinueService(
     }
 
     // Ход передачи в старом чате: служебное сообщение с промптом, ждём конца хода, берём ответ агента
-    private async Task<string> RequestHandoffAsync(string sessionId)
+    private async Task<string> RequestHandoffAsync(string sessionId, string ownerId)
     {
         // preempt: false — чужой ход, успевший занять чат между проверкой занятости и отправкой, не
         // рубим: промпт записки встанет в очередь, а мы его вычистим и откажем (409), не дождавшись
         // его хода
-        var sent = await SendAsync(sessionId, HandoffPrompt, HandoffTurnTimeout, systemDirective: true, preempt: false);
+        var sent = await SendAsync(sessionId, HandoffPrompt, HandoffTurnTimeout, systemDirective: true, preempt: false,
+            actorUserId: ownerId);
         switch (sent)
         {
             case SendAndWaitResult.Completed c when c.Result.Succeeded && !string.IsNullOrWhiteSpace(c.Result.Reply):

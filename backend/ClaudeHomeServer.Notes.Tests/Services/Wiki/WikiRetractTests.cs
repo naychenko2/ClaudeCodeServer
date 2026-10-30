@@ -565,6 +565,8 @@ public class WikiRetractTests : IDisposable
 
         // Пакет «до меры S4b-3»: записи состояния применения на диске нет.
         File.Delete(AppliedRecordOf(pkg.Id));
+        var preimageBefore = File.ReadAllBytes(PreimageOf(pkg.Id, PagePath));
+        var diskBefore = File.ReadAllBytes(PageFull(PagePath));
 
         var r = await _sut.RetractAsync(User, SourceRef);
 
@@ -580,6 +582,15 @@ public class WikiRetractTests : IDisposable
         var pageText = File.ReadAllText(PageFull(PagePath));
         pageText.Should().NotContain("[^").And.NotContain(CardTitle);
         WikiPage.Parse(pageText).Model.Should().NotBeNull("страница после снятия сносок остаётся валидной");
+
+        // Пункт 1(в) доработки ревью S4f-2: обработки страницы не превращаются в записи пакета.
+        // Applied-записи как не было — снятие её не создаёт: «отката нет» остаётся fail-closed и
+        // после того, как сноска снята. Прообраз — по-прежнему состояние до применения пакета,
+        // состояние «до снятия» — отдельным файлом (его держит те же 90 дней).
+        File.Exists(AppliedRecordOf(pkg.Id)).Should().BeFalse("снятие не создаёт запись состояния применения");
+        File.ReadAllBytes(PreimageOf(pkg.Id, PagePath)).Should().Equal(preimageBefore);
+        File.ReadAllBytes(RetractStateOf(pkg.Id, PagePath)).Should().Equal(diskBefore,
+            "состояние «до снятия сносок» — отдельным файлом");
 
         // Обработанный пакет — «reverted»: он не остаётся в «оставшихся» и повтором не берётся.
         r.NeedsUnlink.Should().BeEmpty();
@@ -655,6 +666,8 @@ public class WikiRetractTests : IDisposable
 
     private string AppliedRecordOf(string packageId) =>
         Path.Combine(WikiPaths.Keeper(_dir, User), "applied", packageId + ".json");
+    private string RetractStateOf(string packageId, string pageKey) =>
+        Path.Combine(WikiPaths.Keeper(_dir, User), "retract", packageId, pageKey);
 
     private Project CreateServerProject(string name, string owner = User)
     {

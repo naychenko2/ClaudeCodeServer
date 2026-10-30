@@ -415,23 +415,30 @@ public sealed class WikiPackageRevert
     private static string? Str(JsonElement el, string name) =>
         el.TryGetProperty(name, out var v) ? v.GetString() : null;
 
-    /// <summary>Срок хранения прообразов: между бэкапами откат держат они (ADR-035, решение 13);
-    /// после него — мусор, который чистит сторож старта.</summary>
+    /// <summary>Срок хранения прообразов и состояний «до снятия сносок»: между бэкапами откат
+    /// держит они (ADR-035, решение 13); после него — мусор, который чистит сторож старта.</summary>
     public static readonly TimeSpan PreimageRetention = TimeSpan.FromDays(90);
 
-    /// <summary>Удалить прообразы старше срока хранения (90 дней). Возраст — по времени записи файла:
-    /// это тот момент, когда прообраз стал прообразом. Ровно на границе (90 суток) файл остаётся:
-    /// «старше» значит строго старше (интервал хранения — [now−90d, now]). Сбой на одном файле не
-    /// останавливает остальные и наружу исключения не выходит: вызывающий — сторож старта, фоновая
-    /// служба не имеет права ронять сервер. Пустой каталог пакета удаляется: держать нечего.
-    /// now — то же время, которым помечены файлы (тест подставляет своё); returns — число удалённых
-    /// файлов.</summary>
+    /// <summary>Удалить прообразы и состояния «до снятия сносок» (keeper/retract/, S4f-2) старше
+    /// срока хранения (90 дней): и то и другое держит откат между бэкапами (решение 13), после
+    /// срока — мусор; срок один, чтобы «снять след» и «вернуть файл» не жили разными сроками.
+    /// Возраст — по времени записи файла: это тот момент, когда файл стал прообразом/состоянием.
+    /// Ровно на границе (90 суток) файл остаётся: «старше» значит строго старше (интервал
+    /// хранения — [now−90d, now]). Сбой на одном файле не останавливает остальные и наружу
+    /// исключения не выходит: вызывающий — сторож старта, фоновая служба не имеет права ронять
+    /// сервер. Пустой каталог пакета удаляется: держать нечего. now — то же время, которым
+    /// помечены файлы (тест подставляет своё); returns — число удалённых файлов.</summary>
     public static int PurgeOldPreimages(string root, DateTimeOffset now)
     {
-        var dir = SafePath.Join(root, "keeper/preimages");
+        var cutoff = now.ToUniversalTime() - PreimageRetention;
+        return PurgeOldDir(SafePath.Join(root, "keeper/preimages"), cutoff)
+            + PurgeOldDir(SafePath.Join(root, "keeper/retract"), cutoff);
+    }
+
+    private static int PurgeOldDir(string dir, DateTimeOffset cutoff)
+    {
         if (!Directory.Exists(dir))
             return 0;
-        var cutoff = now.ToUniversalTime() - PreimageRetention;
         var deleted = 0;
         foreach (var pkgDir in Directory.EnumerateDirectories(dir))
         {

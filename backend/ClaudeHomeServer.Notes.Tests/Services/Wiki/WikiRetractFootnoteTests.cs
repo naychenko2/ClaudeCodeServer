@@ -30,6 +30,7 @@ public class WikiRetractFootnoteTests : IDisposable
     private const string CardPathA = "Общее/Карточка-чата-A.md";
     private const string CardPathB = "Общее/Карточка-чата-B.md";
     private const string PagePath = "Общее/Сущность.md";
+    private const string Page2Path = "Общее/Сущность-2.md";
 
     // Утверждения — части текстов своих источников (мера 1: что применяется, дословно в своём).
     private const string ClaimAOnly = "Прежний план был остаться на Windows";
@@ -75,6 +76,34 @@ public class WikiRetractFootnoteTests : IDisposable
         ## Сводка
         {{ClaimBoth}} [^s1][^s2]
         {{ClaimAOnly}} [^s1]
+
+        ## Хронология
+
+        ## Противоречия
+
+        ## История
+
+        [^s1]: [[{{CardTitleA}}]] — «{{ClaimAOnly}}»
+        [^s2]: [[{{CardTitleB}}]] — «{{ClaimBoth}}»
+        """;
+
+    // Страница, которую снятие не может оставить валидной: её утверждение заканчивается сноской на
+    // A, а сноска на B стоит раньше. Сняв A, строка перестаёт заканчиваться сноской — и это
+    // нарушение гейта («утверждение без сноски»): на диске страница валидна, неснимемой её делает
+    // только само снятие. Так проверяется частичный исход (доработка ревью S4f-2, MAJOR 3).
+    private static readonly string PageBase2 = $$"""
+        ---
+        type: topic
+        aliases: []
+        owns: []
+        sources: []
+        status: active
+        ---
+
+        # Сущность-2
+
+        ## Сводка
+        {{ClaimBoth}} [^s2] — и это тоже из A [^s1]
 
         ## Хронология
 
@@ -153,6 +182,12 @@ public class WikiRetractFootnoteTests : IDisposable
 
     private string Root => WikiPaths.Root(_dir, User);
     private string PageFull(string pageKey) => Path.Combine(WikiPaths.Pages(_dir, User), pageKey);
+    private string PreimageOf(string packageId, string pageKey) =>
+        Path.Combine(WikiPaths.Keeper(_dir, User), "preimages", packageId, pageKey);
+    private string AppliedRecordOf(string packageId) =>
+        Path.Combine(WikiPaths.Keeper(_dir, User), "applied", packageId + ".json");
+    private string RetractStateOf(string packageId, string pageKey) =>
+        Path.Combine(WikiPaths.Keeper(_dir, User), "retract", packageId, pageKey);
 
     private List<string> LogLines(string op)
     {
@@ -382,5 +417,152 @@ public class WikiRetractFootnoteTests : IDisposable
         // Строка журнала — одна, с id того, кто реально правил; пустая правка строки не требует.
         LogLines("retract").Should().HaveCount(linesBefore + 1);
         LogLines("retract").Single().Should().Contain(pkgA2.Id).And.NotContain(pkgA1.Id);
+    }
+
+    // ─── 6. c1 (доработка ревью S4f-2, MAJOR 1): снятие не затирает прообраз и applied-запись ──
+
+    [Fact]
+    public async Task СнятиеНеЗатираетПрообразИAppliedЗаписьПакета_ЦепочкаЦела()
+    {
+        // Мутация «затирать прообраз и applied-запись пакета» (вернуть в UnlinkPageUnderLock
+        // запись PreimageRel ← байты диска и applied[page] = newHash): прообраз A стал бы
+        // состоянием «после B» — Equal(preimageA) и Equal(beforeA) краснеют; applied-запись A
+        // перестала бы быть тем, что записал пакет A, — Equal(appliedA) краснеет; состояния «до
+        // снятия» отдельным файлом не стало бы — чтение RetractStateOf краснеет.
+        await WriteCardsAndPage();
+        var beforeA = File.ReadAllBytes(PageFull(PagePath));
+        var pkgA = await Applied(RefA, CtxA, Op(WikiPackage.OpAppend, PagePath, ClaimA2));
+        var preimageA = File.ReadAllBytes(PreimageOf(pkgA.Id, PagePath));
+        var appliedA = File.ReadAllText(AppliedRecordOf(pkgA.Id));
+        var afterA = File.ReadAllBytes(PageFull(PagePath));
+        var pkgB = await Applied(RefB, CtxB, Op(WikiPackage.OpAppend, PagePath, ClaimBOnly));
+        var afterB = File.ReadAllBytes(PageFull(PagePath));
+        var appliedB = File.ReadAllText(AppliedRecordOf(pkgB.Id));
+
+        var r = await _sut.RetractAsync(User, RefA);
+
+        r.Ok.Should().BeTrue(r.Reason);
+        r.Outcomes.Should().ContainSingle().Which.Code.Should().Be(WikiPackageRevert.CodeChanged);
+        r.Unlinked.Select(u => u.PackageId).Should().Equal(pkgA.Id);
+        r.NeedsUnlink.Should().BeEmpty("страница пакета снята целиком");
+
+        // (а) прообраз A — байты ДО применения A (не до снятия сносок): их подмены нет. Состояние
+        // «до снятия» — отдельным файлом рядом, тот же срок хранения 90 дней.
+        preimageA.Should().Equal(beforeA, "прообраз пакета — состояние до его применения");
+        File.ReadAllBytes(PreimageOf(pkgA.Id, PagePath)).Should().Equal(beforeA);
+        File.ReadAllBytes(RetractStateOf(pkgA.Id, PagePath)).Should().Equal(afterB);
+        // applied-записи обоих пакетов — ровно то, что записали они: подмены снятием нет;
+        // прообраз B — состояние «до B» (после A): цепочка не тронута.
+        File.ReadAllText(AppliedRecordOf(pkgA.Id)).Should().Be(appliedA);
+        File.ReadAllText(AppliedRecordOf(pkgB.Id)).Should().Be(appliedB);
+        File.ReadAllBytes(PreimageOf(pkgB.Id, PagePath)).Should().Equal(afterA);
+
+        // (б) «Откатить пакет B» после этого — отказ по реальной причине: диск изменён снятием
+        // сносок A (applied B — то, что записал B, его на диске уже нет). Записи B целы, и отказ
+        // называет именно изменённую страницу, а не подбитую сверку.
+        File.ReadAllText(PageFull(PagePath)).Should().NotContain(CardTitleA);
+        var rb = await _revert.RevertAsync(User, pkgB.Id);
+        rb.Reverted.Should().BeFalse();
+        rb.Code.Should().Be(WikiPackageRevert.CodeChanged);
+        rb.ChangedPages.Should().Equal(new[] { PagePath });
+        rb.Reason.Should().Contain(PagePath);
+        ReadStatus(pkgB.Id).Item1.Should().Be(WikiPackage.StatusApplied, "отказ — диск не тронут");
+
+        // Тот же срок хранения, что у прообразов (решение 13): ровно на границе 90 суток файл
+        // остаётся («старше» — строго старше), после — его чистит тот же вызов сторожа старта.
+        var now = DateTimeOffset.UtcNow;
+        File.SetLastWriteTimeUtc(RetractStateOf(pkgA.Id, PagePath), now.UtcDateTime.AddDays(-90));
+        WikiPackageRevert.PurgeOldPreimages(Root, now).Should().Be(0, "свежие прообразы и граница срока");
+        File.Exists(RetractStateOf(pkgA.Id, PagePath)).Should().BeTrue();
+        File.SetLastWriteTimeUtc(RetractStateOf(pkgA.Id, PagePath), now.UtcDateTime.AddDays(-90).AddSeconds(-1));
+        WikiPackageRevert.PurgeOldPreimages(Root, now).Should().Be(1);
+        File.Exists(RetractStateOf(pkgA.Id, PagePath)).Should().BeFalse("после срока — мусор");
+    }
+
+    // ─── 7. c2 (доработка ревью S4f-2, MAJOR 2): сноска без карточки — не «следов нет» ──────────
+
+    [Fact]
+    public async Task КарточкаИсточникаУдалена_СтраницаНеОбработана_ПакетВСпискеСносок()
+    {
+        // Мутация «неопознанную сноску считать обработанной» (вернуть Trace.Unknown как Other):
+        // страница прошла бы как «следов нет» — пакет ушёл бы в «reverted» и выпал бы из списка,
+        // а сноска на снятый источник осталась бы навсегда: Contain(«не опознан»), BeEmpty(Unlinked
+        // .Pages), Be(Applied), Equal(NeedsUnlink) и BeEmpty(Outcomes) повтором краснеют.
+        await WriteCardsAndPage();
+        var pkgA = await Applied(RefA, CtxA, Op(WikiPackage.OpAppend, PagePath, ClaimA2));
+        await Applied(RefB, CtxB, Op(WikiPackage.OpAppend, PagePath, ClaimBOnly));
+
+        // Карточка источника снята со страницы раздела: сноска на неё на странице знания осталась,
+        // и опознать её этим источником больше нельзя.
+        File.Delete(PageFull(CardPathA));
+        var before = File.ReadAllText(PageFull(PagePath));
+
+        var r = await _sut.RetractAsync(User, RefA);
+
+        r.Ok.Should().BeTrue(r.Reason, "неопознанная сноска — частичный исход меры 5, не отказ операции");
+        r.Failed.Should().ContainSingle()
+            .Which.Should().Contain(pkgA.Id).And.Contain(PagePath).And.Contain("не опознан");
+        // Инвариант меры: «reverted» — только когда страницы фактически очищены от следов.
+        ReadStatus(pkgA.Id).Item1.Should().Be(WikiPackage.StatusApplied);
+        r.NeedsUnlink.Select(o => o.PackageId).Should().Equal(pkgA.Id);
+        r.Unlinked.Should().ContainSingle().Which.Pages.Should().BeEmpty("ничего не переписано");
+
+        // Диск не тронут, журнала нет, пометки нет: о странице решает человек.
+        File.ReadAllText(PageFull(PagePath)).Should().Be(before);
+        LogLines("retract").Should().BeEmpty();
+        r.MarkedSkip.Should().BeFalse();
+
+        // Повтор не «дочитывает» страницу как обработанную: она названа снова, статус тот же.
+        var again = await _sut.RetractAsync(User, RefA);
+        again.Failed.Should().ContainSingle().Which.Should().Contain("не опознан");
+        ReadStatus(pkgA.Id).Item1.Should().Be(WikiPackage.StatusApplied);
+        again.NeedsUnlink.Select(o => o.PackageId).Should().Equal(pkgA.Id);
+    }
+
+    // ─── 8. c3 (доработка ревью S4f-2, MAJOR 3): журнал по фактически изменённым страницам ─────
+
+    [Fact]
+    public async Task ЧастичноОбработанныйПакет_ИзменённаяСтраницавЖурнале_ХвостВСписке()
+    {
+        // Мутация «журнал только по полностью обработанным пакетам» (вернуть unlinked.Add ПОСЛЕ
+        // if (pkgFailed > 0) continue): строки retract не стало бы вовсе — ContainSingle, _log.md
+        // и Unlinked краснеют.
+        await WriteCardsAndPage();
+        await WriteViaKeeper(WikiSections.Common, Page2Path, PageBase2);
+        var pkgA = await Applied(RefA, CtxA,
+            Op(WikiPackage.OpAppend, PagePath, ClaimA2),
+            Op(WikiPackage.OpAppend, Page2Path, ClaimA3));
+        await Applied(RefB, CtxB, Op(WikiPackage.OpAppend, PagePath, ClaimBOnly));
+        var before2 = File.ReadAllText(PageFull(Page2Path));
+
+        var r = await _sut.RetractAsync(User, RefA);
+
+        r.Ok.Should().BeTrue(r.Reason);
+        // Одна страница снялась, вторая после снятия перестала быть валидной: обе названы честно.
+        r.Failed.Should().ContainSingle()
+            .Which.Should().Contain(pkgA.Id).And.Contain(Page2Path).And.Contain("не проходит гейт");
+
+        // Изменённая страница — на диске, в журнале и в проекции; неснятая — целая.
+        File.ReadAllText(PageFull(PagePath)).Should().NotContain(CardTitleA);
+        File.ReadAllText(PageFull(Page2Path)).Should().Be(before2);
+        LogLines("retract").Should().ContainSingle()
+            .Which.Should().Contain(PagePath).And.Contain(pkgA.Id).And.NotContain(Page2Path);
+        var log = File.ReadAllText(PageFull("Общее/_log.md"));
+        log.Split('\n').Where(l => l.Contains("retract")).Should()
+            .NotContain(l => l.Contains(Page2Path), "проекция — по той же строке журнала");
+
+        // Необработанным остался только хвост: пакет не «reverted» и он в списке меры 5.
+        ReadStatus(pkgA.Id).Item1.Should().Be(WikiPackage.StatusApplied);
+        r.NeedsUnlink.Select(o => o.PackageId).Should().Equal(pkgA.Id);
+        r.Unlinked.Should().ContainSingle().Which.Pages.Should().Equal(PagePath);
+
+        // Повтор идемпотентен: снятое не переписывается, хвост называется снова, строка не двоится.
+        var linesBefore = LogLines("retract").Count;
+        var again = await _sut.RetractAsync(User, RefA);
+        again.Ok.Should().BeTrue(again.Reason);
+        again.Failed.Should().ContainSingle().Which.Should().Contain(Page2Path);
+        File.ReadAllText(PageFull(PagePath)).Should().NotContain(CardTitleA);
+        File.ReadAllText(PageFull(Page2Path)).Should().Be(before2);
+        LogLines("retract").Should().HaveCount(linesBefore, "повтор не дописывает строку");
     }
 }

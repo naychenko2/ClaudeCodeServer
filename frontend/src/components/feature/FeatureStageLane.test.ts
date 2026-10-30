@@ -33,7 +33,9 @@
 // накрывает полосу, не шире половины зазора, зоны соседей не пересекаются. На 360 — без зоны.
 // Мутации: (10) убрать pointer-events: none у паузы → «декоративные слои» красный;
 // (11) зона высотой 10 → «высота зоны» красный; (12) дотянуть зону на весь зазор,
-// а не на половину → «зоны соседей не пересекаются» красный.
+// а не на половину → «зоны соседей не пересекаются» красный; (13) заменить источник слова
+// на дорожке (lane.status.text) литералом «впереди» → «слово стадии на дорожке» красный
+// (доработка Ш2b: связка «модель → DOM» защищена здесь).
 
 import { act, createElement } from 'react';
 import { describe, it, expect, afterEach } from 'vitest';
@@ -382,6 +384,70 @@ describe('FeatureStageLane: состояния этапа', () => {
     expect(bg).toContain(C.warning);
     expect(bg).toContain(C.warningBg);
     expect(parseFloat(styleOf(zone).left!)).toBeCloseTo(axisFrac('2026-10-20T09:00:00Z', axis) * 100, 2);
+  });
+});
+
+// === Слово стадии на дорожке (доработка Ш2b, ревью c51cd49c, находка 3) ===
+// Связка «модель → DOM» защищена здесь: слово приходит из единого источника
+// (stageStatusLabel), донесено моделью через lane.status и напечатано рендером —
+// то же слово и тот же тон, что говорит строка этой же стадии.
+
+describe('FeatureStageLane: слово стадии на дорожке (доработка Ш2b)', () => {
+  // Мутация 13: заменить источник слова в FeatureStageLane.tsx (statusWord ← lane.status.text)
+  // литералом «впереди» → краснеет первый тест этого блока (раньше такая мутация
+  // проходила незамеченной — находка 3 ревью).
+  it('pending с runningSince — «идёт» в lane-ahead-*, не «впереди» (П2 на дорожке)', () => {
+    const model = buildStageLanes(
+      mkRun({ stages: [mkStage('merge', 'pending', { runningSince: '2026-10-20T11:00:00Z' })] }),
+      mkStats(),
+      NOW,
+    );
+    const { container } = renderLane(model, 'merge', 'Мерж');
+    const ahead = findNodeByAttr(container, 'data-testid', 'lane-ahead-merge');
+    expect(ahead, 'словесной зоны нет').not.toBeNull();
+    expect(textNodes(ahead!).join(''), 'дорожка не сказала «идёт»').toBe('идёт');
+    expect(styleOf(ahead!).color, '«идёт» — muted').toBe(C.textMuted);
+  });
+
+  it('без runningSince — «впереди», как было', () => {
+    const model = buildStageLanes(mkRun({ stages: [mkStage('merge', 'pending')] }), mkStats(), NOW);
+    const { container } = renderLane(model, 'merge', 'Мерж');
+    const ahead = findNodeByAttr(container, 'data-testid', 'lane-ahead-merge');
+    expect(textNodes(ahead!).join('')).toBe('впереди');
+    expect(styleOf(ahead!).color).toBe(C.textMuted);
+  });
+
+  it('wait с runningSince — «нужен ответ» в тоне info, НЕ «идёт» (то же слово и тон, что у строки стадии)', () => {
+    const model = buildStageLanes(
+      mkRun({ stages: [mkStage('qa', 'active', { tone: 'wait', runningSince: '2026-10-20T11:00:00Z' })] }),
+      mkStats(),
+      NOW,
+    );
+    const { container } = renderLane(model, 'qa', 'Проверка');
+    const ahead = findNodeByAttr(container, 'data-testid', 'lane-ahead-qa');
+    expect(ahead, 'словесной зоны нет').not.toBeNull();
+    expect(textNodes(ahead!).join(''), 'дорожка сказала «идёт» там, где стадия ждёт ответа').not.toBe('идёт');
+    expect(textNodes(ahead!).join('')).toBe('нужен ответ');
+    expect(styleOf(ahead!).color).toBe(C.info);
+  });
+
+  it('stopped с runningSince — «стоит» в тоне danger, НЕ «идёт»', () => {
+    const model = buildStageLanes(
+      mkRun({ stages: [mkStage('qa', 'active', { tone: 'stopped', runningSince: '2026-10-20T11:00:00Z' })] }),
+      mkStats(),
+      NOW,
+    );
+    const { container } = renderLane(model, 'qa', 'Проверка');
+    const ahead = findNodeByAttr(container, 'data-testid', 'lane-ahead-qa');
+    expect(textNodes(ahead!).join(''), 'дорожка сказала «идёт» там, где стадия стоит').not.toBe('идёт');
+    expect(textNodes(ahead!).join('')).toBe('стоит');
+    expect(styleOf(ahead!).color).toBe(C.dangerText);
+  });
+
+  it('done с пустой дорожкой — слова нет, поэтому и словесной зоны нет', () => {
+    const model = buildStageLanes(mkRun({ stages: [mkStage('merge', 'done')] }), mkStats(), NOW);
+    const { container } = renderLane(model, 'merge', 'Мерж');
+    expect(findNodeByAttr(container, 'data-testid', 'lane-ahead-merge'), 'словесная зона появилась').toBeNull();
   });
 });
 

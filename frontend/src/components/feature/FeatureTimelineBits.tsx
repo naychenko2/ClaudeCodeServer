@@ -37,20 +37,30 @@ export function stageName(key: StageKey): string {
   return STAGE_NAME[key] ?? key;
 }
 
-// Подпись состояния этапа (макет §5): done — нет; active — по тону (run/loop — «идёт»,
-// wait — «нужен ответ», stopped — «стоит»); pending — «впереди»; absent — «не было».
-// overlapsActive — «идёт параллельно» (стадия пересекается с идущей, макет: кольцо вместо точки).
-// tone — muted (textMuted) | info (C.info) | danger (C.dangerText).
+// Подпись состояния этапа (макет §5) — ЕДИНСТВЕННЫЙ источник слова о состоянии стадии
+// на весь экран, включая Гант (доработка Ш2b по ревью c51cd49c): done — нет;
+// wait — «нужен ответ», stopped — «стоит»; факт идущей задачи (runningSince) — «идёт»
+// при любом state; иначе по state: active (run/loop) — «идёт», pending — «впереди»,
+// skipped/absent — «не было».
+// Порядок проверки — смысл, а не техника (решение по находкам 1–2): тон wait/stopped
+// важнее «идёт» — ждущая ответа или вставшая стадия не «идёт», даже когда по ней есть
+// живой ход (после Ш2c runningSince приходит при любом state: FeatureProjector IsRunning).
+// runningSince важнее state — Гант и строка отвечают на вопрос «работа началась или нет»,
+// не пересчитывая state (его семантику читают рельса индекса, MCP, тон).
+// overlapsActive — «идёт параллельно» — только без тона и без идущей задачи.
+// Слово и тон выводятся вместе (одна пара StageStatus): потребители не выводят их
+// из разных признаков — Гант несёт эту пару через lane.status (FeatureLaneModel).
 export interface StageStatus {
   text: string;
   tone: 'muted' | 'info' | 'danger';
 }
 export function stageStatusLabel(stage: FeatureStage): StageStatus | null {
   if (stage.state === 'done') return null;
+  if (stage.tone === 'wait') return { text: 'нужен ответ', tone: 'info' };
+  if (stage.tone === 'stopped') return { text: 'стоит', tone: 'danger' };
+  if (stage.runningSince != null) return { text: 'идёт', tone: 'muted' };
   if (stage.state === 'active') {
     if (stage.overlapsActive) return { text: 'идёт параллельно', tone: 'muted' };
-    if (stage.tone === 'wait') return { text: 'нужен ответ', tone: 'info' };
-    if (stage.tone === 'stopped') return { text: 'стоит', tone: 'danger' };
     return { text: 'идёт', tone: 'muted' };
   }
   if (stage.state === 'pending') return { text: 'впереди', tone: 'muted' };

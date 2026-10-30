@@ -873,6 +873,82 @@ public class WikiSourceCaptureTests : IDisposable
         File.ReadAllText(foreignFile).Should().Be("# Чужой файл без шапки вики\n");
     }
 
+    // Потерянная СВОЯ карточка — не дрейф, а «восстановить из источника» (хвост ревью
+    // S6e-2, п.1). Сценарий жизни: restore с неполного бэкапа или ручное удаление файла.
+    // Без этой правки сверка отказывала по отсутствующему файлу из манифеста: захват,
+    // применение и adopt отказывали разделу навсегда, и починить его можно было только
+    // ручной правкой манифеста. Мутация «сверка ловит потерянную свою карточку как дрейф»
+    // (вернуть отказ по отсутствующему файлу без исключения ourCardRel) краснит этот тест.
+    [Fact]
+    public async Task Захват_потеряннаяСвояКарточка_восстановленаИзИсточника_иРазделСноваПрименяется()
+    {
+        var project = NewProject("П20");
+        var section = "projects/" + project.Id;
+        var root = WikiPaths.Root(_dir, User);
+        await _keeper.EnsureInitializedAsync(User);
+        var pageRel = $"Проекты/{project.Id}/Ритм встреч.md";
+        var w = await _keeper.WritePageAsync(User, section, pageRel, TopicPage("Ритм встреч"));
+        w.Status.Should().Be(WikiOpStatus.Applied, w.Reason);
+
+        var note = _notes.Create(User, new CreateNoteRequest(
+            "Заметка о ритме", "Мы решили открывать встречу в понедельник.", project.Id));
+        var first = await _sut.CaptureNote(User, note.Id);
+        first.Ok.Should().BeTrue(first.Reason);
+
+        // Файл карточки потерян, запись в манифесте — осталась.
+        var cardFull = SafePath.Join(root, "pages/" + first.CardRelPath!);
+        File.Delete(cardFull);
+        File.Exists(cardFull).Should().BeFalse();
+
+        var again = await _sut.CaptureNote(User, note.Id);
+        again.Ok.Should().BeTrue(again.Reason);
+        again.CardRelPath.Should().Be(first.CardRelPath, "имя — функция (ref, version): та же версия того же источника");
+
+        // Карточка по источнику: валидная страница type: source со своим ref и хэшем версии.
+        File.Exists(cardFull).Should().BeTrue("карточка восстановлена");
+        var model = CardModel(again);
+        model.Frontmatter.Type.Should().Be(WikiFrontmatter.TypeSource);
+        model.Frontmatter.Ref.Should().Be("note:" + note.Id);
+        model.Frontmatter.Hash.Should()
+            .Be(Sha256OfBytes(File.ReadAllBytes(_notes.ResolveAttachmentPath(User, project.Id, note.Path))),
+            "хэш карточки — байты файла источника, той же версии");
+
+        // Запись манифеста — под восстановленные байты: старая запись той же карточки
+        // отличается от них только полем captured (версия источника — в имени, она та же),
+        // и оставленная она вернула бы разделу дрейф по хэшу его собственной карточки.
+        var manifest = WikiManifest.TryRead(root, section);
+        manifest.State.Should().Be(WikiManifestState.Valid);
+        manifest.Manifest[again.CardRelPath!].Should().Be(Sha256OfBytes(File.ReadAllBytes(cardFull)));
+
+        // Раздел проекта снова применяется: та же настоящая проверка, что в тесте d144bb0f.
+        var pkg = CreateAccepted(section,
+            AppendOp(pageRel, "Мы решили открывать встречу в понедельник", manifest.Manifest[pageRel]));
+        var prepared = await _apply.PrepareAsync(User, pkg, new WikiApplyService.ApplyContext(
+            Path.GetFileNameWithoutExtension(again.CardRelPath!), again.SourceText));
+        prepared.Ready.Should().BeTrue($"код {prepared.Code}: {prepared.Reason}");
+    }
+
+    // Отсутствие файла ДРУГОЙ страницы из манифеста — по-прежнему дрейф: исключение
+    // касается только своей карточки этого захвата. На диске не появилось ничего.
+    [Fact]
+    public async Task Захват_потерянаДРУГАЯСтраницаИзМанифеста_отказИКарточкаНеНаписана()
+    {
+        var project = NewProject("П21");
+        var section = "projects/" + project.Id;
+        await _keeper.EnsureInitializedAsync(User);
+        var pageRel = $"Проекты/{project.Id}/Страница.md";
+        var w = await _keeper.WritePageAsync(User, section, pageRel, TopicPage("Страница"));
+        w.Status.Should().Be(WikiOpStatus.Applied, w.Reason);
+        File.Delete(SafePath.Join(WikiPaths.Root(_dir, User), "pages/" + pageRel));
+
+        var note = _notes.Create(User, new CreateNoteRequest("После потери страницы", "текст", project.Id));
+        var r = await _sut.CaptureNote(User, note.Id);
+        r.Ok.Should().BeFalse();
+        r.Reason.Should().Contain("отсутствует на диске");
+        Directory.Exists(Path.Combine(WikiPaths.Pages(_dir, User), "Проекты", project.Id, "Источники"))
+            .Should().BeFalse("отказ — на диске ничего не пишется");
+    }
+
     private sealed class WikiFlagOn : ClaudeHomeServer.Services.Composition.IFeatureFlagGate
     {
         public bool IsEnabled(string userId, string key) => key == FeatureFlagKeys.LlmWiki;

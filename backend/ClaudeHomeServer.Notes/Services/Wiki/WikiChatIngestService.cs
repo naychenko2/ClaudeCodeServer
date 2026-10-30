@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
@@ -409,14 +410,48 @@ public sealed class WikiChatIngestService
 
     // ── курсор ─────────────────────────────────────────────────────────────────────
 
-    /// <summary>Хэш записи N — sha256 её JSON (с дискриминатором типа — базовый
-    /// StoredMessage): «история переписана» значит изменилось содержимое записи, а не
+    /// <summary>Хэш записи N — sha256 её JSON без служебных полей (с дискриминатором типа —
+    /// базовый StoredMessage): «история переписана» значит изменилось содержимое записи, а не
     /// только байты файла под ней. Добавление поля в модель истории сдвинет все хэши —
     /// следующий разбор начнётся с нуля и упрётся в дедup, а не в потерю данных
-    /// (fail-closed дороже экономии).</summary>
-    private static string HashOfRecord(StoredMessage record) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
-            JsonSerializer.Serialize<StoredMessage>(record)))).ToLowerInvariant();
+    /// (fail-closed дороже экономии).
+    ///
+    /// Инвариант (хвост ревью S6e-2, п.2): хэш зависит только от неизменяемого содержимого
+    /// реплики — роли, текста и признаков, которые не дописываются потом. Поля, которые
+    /// дописываются ПОСЛЕ создания записи (см. Protocol/StoredMessage.cs: PromptSnapshotId —
+    /// при запуске хода, TurnAccumulator.cs:97; Model у текста — backfill'ом по result;
+    /// Result/IsError/… у tool_use — при tool_result; Resolved/Answers — при ответе
+    /// человека), меняют служебное состояние записи, а не то, что в ней сказано: живой чат,
+    /// разобранный посреди хода, держал бы курсор на реплике, хэш которой изменился бы без
+    /// всякой правки истории, — и следующий разбор видел бы «историю переписали» и звал бы
+    /// модель заново на весь чат (дедup гасит повторы, но модель-то зовётся). Удаляются по
+    /// дискриминатору kind: имена, которые у других типов несут неизменяемое содержимое
+    /// (Model у session_started, PersonaId у текста), выпадают только у своего kind.
+    ///
+    /// Обратная совместимость: курсоры, записанные прежним полным хэшем, при смене формата
+    /// дают разовый сброс в 0 — допустимо: переразбор гасит дедup, потеря данных не.</summary>
+    private static string HashOfRecord(StoredMessage record)
+    {
+        var node = JsonSerializer.SerializeToNode<StoredMessage>(record)!.AsObject();
+        if (node["kind"] is JsonValue kind && ServiceFieldsByKind.TryGetValue(kind.GetValue<string>(), out var fields))
+            foreach (var field in fields)
+                node.Remove(field);
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(node.ToJsonString()))).ToLowerInvariant();
+    }
+
+    // Служебные поля по типу записи — то, что дописывается после её создания (строки
+    // Protocol/StoredMessage.cs: 45, 117, 277-302, 311-313, 321-322, 325-327, 342-352, 361).
+    private static readonly Dictionary<string, string[]> ServiceFieldsByKind = new(StringComparer.Ordinal)
+    {
+        ["user_message"] = ["PromptSnapshotId"],
+        ["text"] = ["Model"],
+        ["tool_use"] = ["Result", "IsError", "BgDone", "StartedAt", "FinishedAt", "Started", "Stages", "Totals"],
+        ["workflow_progress"] = ["IsDone", "Aborted", "Agents"],
+        ["ask_question"] = ["Resolved", "Answers"],
+        ["plan_review"] = ["Resolved", "Approved", "Feedback"],
+        ["team_plan"] = ["Plan", "Resolved", "Approved", "Feedback", "SupersededBy", "PersonaId"],
+        ["team_escalation"] = ["Escalation"],
+    };
 
     private static bool IsSessionIdSafe(string sessionId) =>
         sessionId.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');

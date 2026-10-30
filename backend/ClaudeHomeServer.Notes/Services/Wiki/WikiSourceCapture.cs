@@ -338,7 +338,8 @@ public sealed class WikiSourceCapture
             return Refused(drift);
 
         var full = SafePath.JoinBelowRoot(root, "pages/" + cardRel);
-        if (File.Exists(full))
+        var existed = File.Exists(full);
+        if (existed)
         {
             // Имя — функция (ref, version): существующий файл под этим именем — карточка именно
             // этой версии этого источника. Карточка неизменяема — не перечитываем и не переписываем
@@ -361,9 +362,15 @@ public sealed class WikiSourceCapture
         }
 
         // Запись карточки в манифест раздела — её делает Хранитель (он её написал): карточка
-        // вне манифеста — дрейф для ближайшего применения (дефект d144bb0f). Запись уже
-        // подтверждена сверкой выше (запись в манифесте совпадает с диском) — не повторяем.
-        if (!manifest.Manifest.ContainsKey(cardRel))
+        // вне манифеста — дрейф для ближайшего применения (дефект d144bb0f). Три случая:
+        // новой карточке — записать; карточке на диске без записи (сбой посреди прежней записи) —
+        // дописать; восстановленной по потерянной (запись была, файла не стало) — обновить под её
+        // новые байты. Имя — функция (ref, version), поэтому та же запись того же источника не
+        // может отличаться от восстановленных байтов ничем, кроме captured (время этой фиксации;
+        // версия источника в имени, и она та же): оставить старую запись — значит вернуть
+        // раздел в дрейф по хэшу его собственной карточки. Совпадающую запись существующей
+        // карточки не повторяем: она подтверждена сверкой выше.
+        if (!existed || !manifest.Manifest.ContainsKey(cardRel))
             _keeper.RegisterCapturedUnderLock(ownerId, sectionKey, cardRel);
         return new(true, null, cardRel, sourceText);
     }
@@ -372,6 +379,12 @@ public sealed class WikiSourceCapture
     // (CheckSectionAgainstDisk у него — private, файл вне права этой правки), за вычетом
     // нашей карточки: её записи в манифесте ещё нет, это ровно то, что мы записываем.
     // Служебные «_*» — не страницы (тот же контракт, что у Хранителя).
+    //
+    // Исключение — потерянная СВОЯ карточка: её пишет сам этот захват (WriteCard ниже), и
+    // имя карточки — функция (ref, version), так что восстановленный файл — та же версия
+    // того же источника. Считать её дрейфом значило бы закрыть разделу путь к применению
+    // навсегда: захват, применение и adopt отказывают по отсутствующему файлу из манифеста,
+    // а починить его можно только ручной правкой манифеста (хвост ревью S6e-2, п.1).
     private static string? CheckSectionForCapture(string root, string sectionKey,
         IReadOnlyDictionary<string, string> manifest, string ourCardRel)
     {
@@ -379,7 +392,11 @@ public sealed class WikiSourceCapture
         {
             var full = SafePath.JoinBelowRoot(root, "pages/" + page);
             if (!File.Exists(full))
+            {
+                if (page == ourCardRel)
+                    continue;
                 return $"файл «{page}» из манифеста раздела отсутствует на диске: захват не пишет в раздел с потерянным файлом";
+            }
             if (Sha256OfBytes(File.ReadAllBytes(full)) != hash)
                 return $"файл «{page}» расходится с манифестом раздела: захват не пишет в раздел с правкой мимо Хранителя";
         }

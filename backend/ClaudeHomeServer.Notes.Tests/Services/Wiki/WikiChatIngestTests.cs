@@ -264,6 +264,45 @@ public class WikiChatIngestTests : IDisposable
             "второй разбор дошёл до «нечего добавить», второго пакета нет");
     }
 
+    // ── хэш курсора — по неизменяемому содержимому реплики (хвост ревью S6e-2, п.2) ──
+
+    // Живой чат разбирают и посреди хода: реплика человека уже записана, а снимок промпта
+    // к ней дописывается позже (TurnAccumulator.cs:97). Курсор встаёт на этой реплике, и
+    // хэш, покрывающий PromptSnapshotId, изменился бы без всякой правки истории: следующий
+    // разбор видел бы «историю переписали» — курсор в 0 и модель заново на весь чат.
+    // Мутация «хэш включает PromptSnapshotId» (вернуть сериализацию записи целиком) краснит
+    // этот тест; подмена ТЕКСТА записи N остаётся сбросом курсора (тест C2 выше).
+    [Fact]
+    public async Task Курсор_СлужебныеПоляЗаписиЕгоНеСбрасывают_ПереразбораНет()
+    {
+        AddSession();
+        // История оборвана на реплике человека — ровно то состояние, в котором чат
+        // разбирают посреди хода: курсор встаёт на НЕЙ, а не на ответе агента.
+        SetHistory(ChatId, [
+            new StoredSessionStartedMessage("claude", "default"),
+            new StoredUserMessage($"{Claim1}. Хронология: {Marker1}."),
+            new StoredTextMessage("Принято, готовлю план."),
+            new StoredUserMessage("Давай."),
+        ]);
+
+        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1));
+        var sut = Sut(llm);
+
+        var first = await sut.AnalyzeAsync(User, ChatId);
+        first.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, first.Reason);
+        var entry = WikiChatTriageStore.Get(Root).Entries.Single();
+        entry.Cursor.Should().Be(4, "курсор на последней записи — реплике человека");
+
+        // Снимок промпта дописан ПОСЛЕ создания реплики: служебное состояние записи, а не
+        // то, что в ней сказано. Хэш курсора обязан этого не увидеть.
+        ((StoredUserMessage)_sessions.History[ChatId][3]).PromptSnapshotId = "1700000000000-abcd";
+
+        var again = await sut.AnalyzeAsync(User, ChatId);
+        again.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected, again.Reason);
+        again.Reason.Should().Contain("новых сообщений нет", "хэш тот же — курсор на месте, чат не переразобрывается");
+        llm.Calls.Should().HaveCount(2, "модель заново не звалась");
+    }
+
     // ── c3a: сбой при применении — курсор на месте, хроники нет ──
 
     [Fact]

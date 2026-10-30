@@ -79,7 +79,7 @@ public class PregateOptionsTests
 
         var options = PregateOptions.From(ConfigWithLocalOverride(baseChecks));
 
-        options.Checks.Select(c => c.Name).Should().Contain(["tsc", "lint:design", "build", "быстрые тесты", "сторож длительности", "сторожа границ", OwnCheckName],
+        options.Checks.Select(c => c.Name).Should().Contain(["tsc", "lint:design", "build", "быстрые тесты", "сторожа границ", OwnCheckName],
             "базовый набор сохраняется целиком, своя проверка добавляется к нему");
         options.Problem.Should().BeNull();
         baseChecks.Should().BeOfType<JsonObject>(
@@ -131,7 +131,7 @@ public class PregateOptionsTests
 
         var options = PregateOptions.From(ConfigWithLocalOverride(baseChecks));
 
-        options.Checks.Select(c => c.Name).Should().Equal(["tsc", "lint:design", "build", "быстрые тесты", "сторож длительности", "сторожа границ", OwnCheckName]);
+        options.Checks.Select(c => c.Name).Should().Equal(["tsc", "lint:design", "build", "быстрые тесты", "сторожа границ", OwnCheckName]);
     }
 
     // Быстрый гейт (фича «Ускорение тестов», Э3): набор Fast — исключением категорий, после сборки
@@ -151,10 +151,8 @@ public class PregateOptionsTests
             "Category!=Host&Category!=Slow&Category!=Integration&Category!=Node&Category!=Bench",
             "--results", ".cc-attachments/pregate-fast");
 
-        // Сторож длительности читает TRX этого же прогона, порог 30 с задан явно (предгейт идёт на загруженной общей машине: шум до 32 с при load1 45–70, дефолт 5 с краснел на каждом прогоне)
-        var guard = options.Checks.Single(c => c.Name == "сторож длительности");
-        guard.Order.Should().Be(36);
-        guard.Args.Should().Equal("-I", "scripts/test-profile.py", ".cc-attachments/pregate-fast", "--check", "--latest-run", "--threshold", "30");
+        // Сторожа длительности в предгейте нет: порог по стене на общей машине — шум; он живёт в CI и в ручном --check
+        options.Checks.Select(c => c.Name).Should().NotContain("сторож длительности");
     }
 
     // Старая форма (массив) — не молчаливый пустой набор: предгейт обязан отказать с текстом

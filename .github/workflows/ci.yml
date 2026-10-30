@@ -184,10 +184,10 @@ jobs:
       # в скриптах — FAST_FILTER в scripts/test-profile.py, в предгейте — Pregate:Checks.
       FAST: "Category!=Host&Category!=Slow&Category!=Integration&Category!=Node&Category!=Bench"
       NOT_FAST: "(Category=Host|Category=Slow|Category=Integration|Category=Bench)&Category!=Node"
-      # Порог сторожа длительности в CI — единственное место. Стена теста на 4 vCPU раннера
-      # под параллелью шумит в разы (сторож Host локально 1,9 с, здесь ~10 с), поэтому CI ловит
-      # только грубые регрессии; гейт 5 с (CHECK_THRESHOLD в scripts/test-profile.py) — локально
-      # и в предгейте, где машина своя
+      # Порог сторожа длительности — единственная константа, и она здесь. Стена теста на 4 vCPU
+      # раннера под параллелью шумит в разы (сторож Host локально 1,9 с, здесь ~10 с), поэтому CI
+      # ловит только грубые регрессии; острый порог 5 с (CHECK_THRESHOLD в scripts/test-profile.py) —
+      # ручной --check на спокойной машине, в предгейт сторож не входит
       DURATION_GUARD_THRESHOLD: "30"
     steps:
       - uses: actions/checkout@v4

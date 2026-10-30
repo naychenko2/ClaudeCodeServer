@@ -402,7 +402,7 @@ public class ConsumersTailContributorTests
         var graphs = new CodeGraphService(NullLogger<CodeGraphService>.Instance, null!, persistence,
             new ConfigurationBuilder().Build());
         var sut = new ConsumersTailContributor(graphs, new CodeGraphQueryService(graphs), new OpenGate(),
-            NullLogger<ConsumersTailContributor>.Instance, null, null, dependencies);
+            NullLogger<ConsumersTailContributor>.Instance, timeout, null, dependencies);
         return (sut, dir, data);
     }
 
@@ -511,7 +511,9 @@ public class ConsumersTailContributorTests
         // четыре файла в тексте — берутся три; на каждом 30 зависимостей, 30 потребителей и сторожа frontend/
         var files = new[] { "frontend/src/a.ts", "frontend/src/b.ts", "frontend/src/c.ts", "frontend/src/d.ts" };
         // 30 с — потолок под нагрузкой прогона: в загруженном rest-прогоне этот граф не укладывался в
-        // DefaultTimeout 3 с, BuildAsync молчал null и разбор секции падал с NRE (дефект 6af27416).
+        // DefaultTimeout 3 с. Механизм падения: ConsumersTailContributor.cs:69 `_timeout = timeout ??
+        // DefaultTimeout` → :101 `WaitAsync(_timeout)` срывает BuildTextAsync TimeoutException'ом →
+        // :106-110 возвращает null → `!.Sections` ниже падает с NRE (дефект 6af27416).
         // Сам потолок — только потолок: ожидание остаётся событийным, ретраев здесь нет.
         var (sut, dir, data) = await PrepareMany(files, deps: 30, consumers: 30, timeout: TimeSpan.FromSeconds(30));
         try

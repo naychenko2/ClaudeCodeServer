@@ -16,6 +16,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// гейт целевого проекта на записи, скоупы назначаемой персоны, пустое значение как
 /// очистка, гейт mentions на вызове и согласованность состава с отпечатком запуска.
 /// </summary>
+[Trait("Category", "Host")]
 public class TasksToolsetScopesTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

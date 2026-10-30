@@ -20,6 +20,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // роняет сервер. Проверка идёт прямо на контроллерах с подставленным ClaimsPrincipal: токен без
 // sub до контроллера не доходит (его отсекает JwtService.IsSessionCurrent, 401 — см.
 // JwtServiceTests), поэтому контроллерная проверка — запасная, и держать её надо отдельно.
+[Trait("Category", "Host")]
 public class MediaSelfScopeFailClosedTests : IDisposable
 {
     // Источник результата: отдаёт «файл», чтобы без fail-closed запрос дошёл до выдачи файла.

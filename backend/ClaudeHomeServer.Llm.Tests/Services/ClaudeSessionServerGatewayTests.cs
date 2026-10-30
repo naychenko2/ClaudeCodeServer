@@ -25,6 +25,7 @@ namespace ClaudeHomeServer.Tests.Services;
 public sealed class ClaudeSessionServerGatewayTests : IDisposable
 {
     private const string GatewayApi = "http://ccs-gw-host:5000";
+    private static readonly TimeSpan Ceiling = TimeSpan.FromSeconds(30);
     private readonly List<Process> _processes = [];
     private readonly GatewayTestKit _kit = new();
     private readonly TurnTokenService _tokens = new(new TurnEventBus());
@@ -34,7 +35,7 @@ public sealed class ClaudeSessionServerGatewayTests : IDisposable
         foreach (var p in _processes)
         {
             try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { /* уже мёртв */ }
-            p.Dispose();
+            ProcessTestCleanup.SafeDispose(p); // Process.Close гонится с уборкой сессии
         }
         _kit.Dispose();
     }
@@ -57,7 +58,9 @@ public sealed class ClaudeSessionServerGatewayTests : IDisposable
             var process = LocalProcessRunner.Instance.Start(new ProcessSpec
             {
                 FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
-                Args = OperatingSystem.IsWindows() ? ["/c", "ping -n 120 127.0.0.1 >nul"] : ["-c", "sleep 120"],
+                // exec: «CLI» — сам sleep, без дочернего процесса. Осиротевший потомок держал бы
+                // stdout, и ClaudeSession финализировал бы ход только по ReaderEofGrace (5 с)
+                Args = OperatingSystem.IsWindows() ? ["/c", "ping -n 120 127.0.0.1 >nul"] : ["-c", "exec sleep 120"],
                 WorkingDirectory = spec.WorkingDirectory,
                 StdioEncoding = spec.StdioEncoding,
                 EnableRaisingEvents = spec.EnableRaisingEvents,
@@ -130,9 +133,8 @@ public sealed class ClaudeSessionServerGatewayTests : IDisposable
 
         try { await session.SendMessageAsync("тестовый ход"); }
         catch (InvalidOperationException) when (failStart) { }
-        if (!failStart)
-            (await Task.WhenAny(launcher.Started.Task, Task.Delay(TimeSpan.FromSeconds(15))))
-                .Should().Be(launcher.Started.Task, "процесс хода обязан стартовать");
+        // Событие старта; потолок — только страховка от зависания (TimeoutException = красный)
+        if (!failStart) await launcher.Started.Task.WaitAsync(Ceiling);
         return new TurnResult(launcher.CapturedEnv, session, exited);
     }
 
@@ -140,8 +142,10 @@ public sealed class ClaudeSessionServerGatewayTests : IDisposable
     {
         Process cli;
         lock (_processes) cli = _processes[^1];
-        cli.Kill();
-        await Task.WhenAny(turn.Exited.Task, Task.Delay(TimeSpan.FromSeconds(30)));
+        // Дерево целиком: на Windows «CLI» — cmd с дочерним ping
+        cli.Kill(entireProcessTree: true);
+        // Ждём событие ExitedMessage, а не таймаут: прежний WhenAny молча проглатывал 30 с
+        await turn.Exited.Task.WaitAsync(Ceiling);
     }
 
     private static (string TurnId, string Token) GatewayOf(Dictionary<string, string> env)

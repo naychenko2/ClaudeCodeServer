@@ -22,6 +22,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// fail-closed проверяется и с другой стороны: гейт идёт по сессии из ХВОСТА маршрута
 /// (изолирована GetOwned по владельцу токена), а не по заголовку от клиента.
 /// </summary>
+[Trait("Category", "Host")]
 public class TasksHttpDelegationGateTests : IDisposable
 {
     // Фабрика адаптеров с настраиваемой глубиной хода: GetActiveTurnDelegation спрашивает

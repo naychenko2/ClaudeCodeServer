@@ -17,6 +17,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // 404 — чат не найден/чужой (per-owner: чужой id — 404, не 500), 409 — пустой чат, 502 —
 // модель не дала записку. Настоящий дешёвый вызов подменяет своя заглушка ICheapTextRunner
 // через ExtraServices, тёплый ход — шов SendOverride сервиса.
+[Trait("Category", "Host")]
 public class ChatsControllerHandoffTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

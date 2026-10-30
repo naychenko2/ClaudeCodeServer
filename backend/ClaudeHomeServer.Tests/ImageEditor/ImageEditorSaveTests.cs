@@ -15,6 +15,7 @@ namespace ClaudeHomeServer.Tests.ImageEditor;
 // «вариант задачи» и «шаг истории», пустой запрос — 400, а не «задача не найдена»; «Сохранить
 // как…» на занятое имя — 409 name_taken с suggestion и без перезаписи; проверка ничего не пишет;
 // шаг истории сохраняется без генерации.
+[Trait("Category", "Host")]
 public class ImageEditorSaveTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

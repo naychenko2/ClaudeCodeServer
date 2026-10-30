@@ -17,7 +17,17 @@ namespace ClaudeHomeServer.Services.Llm.Claude;
 // продукт объявляет его результат готовым.
 internal sealed class SubagentStreamWatcher : IDisposable
 {
-    private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(1500);
+    internal static readonly TimeSpan DefaultPollInterval = TimeSpan.FromMilliseconds(1500);
+
+    // Пауза цикла поллинга. internal-поле с прежним дефолтом, а не константа: тесты сокращают
+    // её и ждут событие ScanCompleted, а не фиксированную паузу (conventions.md, раздел тестов)
+    internal TimeSpan PollInterval = DefaultPollInterval;
+
+    // Цикл поллинга закончил очередной скан (удачный или нет). Для тестов: «ватчер дочитал
+    // то, что лежало на диске до этого момента» — это два скана после записи
+    internal event Action? ScanCompleted;
+
+    internal static readonly TimeSpan DefaultBgDoneRecheckDelay = TimeSpan.FromSeconds(10);
 
     // Дебаунс детектора обрыва на bg_done: событие bg_agent_done приходит РАНЬШЕ, чем финальный
     // отчёт агента доезжает до транскрипта agent-*.jsonl (по журналу subagent-runs за 19–23.08:
@@ -26,7 +36,11 @@ internal sealed class SubagentStreamWatcher : IDisposable
     // паспорт уходит штатным. 10 с покрывают медиану с запасом; редкий хвост в десятки секунд
     // доберёт финальный Emit при Dispose (там транскрипт дочитывается ещё раз).
     // internal-поле, а не константа: тесты сокращают ожидание.
-    internal TimeSpan BgDoneRecheckDelay = TimeSpan.FromSeconds(10);
+    internal TimeSpan BgDoneRecheckDelay = DefaultBgDoneRecheckDelay;
+
+    // Ожидание перед перепроверкой обрыва; тесты подменяют его ожиданием своего сигнала,
+    // чтобы порядок «сигнал → дозапись финала → перепроверка» не зависел от таймингов
+    internal Func<TimeSpan, CancellationToken, Task> RecheckDelay = Task.Delay;
 
     private readonly string _cwd;
     private readonly string _claudeSessionId;
@@ -148,6 +162,7 @@ internal sealed class SubagentStreamWatcher : IDisposable
                     {
                         Console.Error.WriteLine($"[SubagentWatcher] Скан не удался, пропускаем тик: {ex.Message}");
                     }
+                    ScanCompleted?.Invoke();
                     await Task.Delay(PollInterval, _cts.Token);
                 }
             }
@@ -218,7 +233,7 @@ internal sealed class SubagentStreamWatcher : IDisposable
         {
             try
             {
-                await Task.Delay(BgDoneRecheckDelay, ct);
+                await RecheckDelay(BgDoneRecheckDelay, ct);
                 await _scanLock.WaitAsync(ct);
                 try
                 {

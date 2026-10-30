@@ -14,6 +14,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// watch_cancel, изоляция чужого токена и видимость тулсета в реестре/журнале вызовов.
 /// Форма теста — по образцу DifyHttpOwnerIsolationTests (ADR-012, волна 2).
 /// </summary>
+[Trait("Category", "Host")]
 public class WatchHttpToolsetTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

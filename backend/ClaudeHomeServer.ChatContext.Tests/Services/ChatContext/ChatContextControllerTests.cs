@@ -18,6 +18,7 @@ namespace ClaudeHomeServer.Tests.Services.ChatContext;
 // Ручки контекста чата (ADR-023 §2.1) на собранном приложении: пять ручек и saved-files, 409 со
 // свежим DTO, 404 на чужую сессию, засев из фокусов вертикалей без записи на диск, двойная запись
 // фокуса и проекция фокуса в DTO вертикали, событие в хаб.
+[Trait("Category", "Host")]
 public class ChatContextControllerTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

@@ -11,6 +11,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // C4 «Сфер»: инструменты sphere_memory_* сервера памяти — состав по флагу владельца, сфера из проекта
 // чата, запись только персонами ЭТОЙ сферы, adopt = перемещение с полки проекта на полку сферы.
+[Trait("Category", "Host")]
 public class SphereMemoryToolsetTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

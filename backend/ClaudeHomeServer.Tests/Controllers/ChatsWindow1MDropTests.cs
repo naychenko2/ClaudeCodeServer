@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // под карточкой отказа Window1MUnavailable. Единственный путь, которым суффикс [1m] снимается
 // с чата: автоматического среза в ходе больше нет (тихая деградация длинного разговора в 200K
 // — мина), поэтому решение принимает человек, а сервер только исполняет.
+[Trait("Category", "Host")]
 public class ChatsWindow1MDropTests(TestWebApplicationFactory factory)
     : IClassFixture<TestWebApplicationFactory>
 {

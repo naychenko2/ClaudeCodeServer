@@ -9,6 +9,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // Отметка прочтения чата (PUT /api/chats/{id}/read) — синк непрочитанности между
 // устройствами. Один эндпоинт на оба типа сессий (как /parent и /loop); отметка
 // не двигает updatedAt — иначе чат прыгал бы в списке и сам метил себя непрочитанным.
+[Trait("Category", "Host")]
 public class ChatsReadStateTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

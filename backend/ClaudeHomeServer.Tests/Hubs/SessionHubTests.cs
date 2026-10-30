@@ -14,6 +14,7 @@ namespace ClaudeHomeServer.Tests.Hubs;
 
 // Интеграционные тесты SignalR-хаба: подключение через TestServer,
 // проверка ownership-ограничений JoinSession / JoinProject / JoinUser
+[Trait("Category", "Host")]
 public class SessionHubTests : IClassFixture<TestWebApplicationFactory>, IAsyncLifetime
 {
     private readonly TestWebApplicationFactory _factory;
@@ -279,6 +280,7 @@ public class SessionHubTests : IClassFixture<TestWebApplicationFactory>, IAsyncL
 }
 
 // Лог отказа доступа в хабе: отдельный хост со стоком Warning-записей
+[Trait("Category", "Host")]
 public class SessionHubDeniedLogTests : IDisposable
 {
     private readonly LoggingFactory _factory = new();

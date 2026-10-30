@@ -8,6 +8,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // Права у эндпоинтов фона проекта (ADR-008 §7): чужой проект — 404 на всех трёх,
 // владельцу они доступны.
+[Trait("Category", "Host")]
 public class ProjectBackgroundsControllerTests(TestWebApplicationFactory factory)
     : IClassFixture<TestWebApplicationFactory>
 {

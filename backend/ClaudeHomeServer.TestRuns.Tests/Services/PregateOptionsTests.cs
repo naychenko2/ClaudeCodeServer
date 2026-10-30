@@ -79,7 +79,7 @@ public class PregateOptionsTests
 
         var options = PregateOptions.From(ConfigWithLocalOverride(baseChecks));
 
-        options.Checks.Select(c => c.Name).Should().Contain(["tsc", "lint:design", "build", "сторожа границ", OwnCheckName],
+        options.Checks.Select(c => c.Name).Should().Contain(["tsc", "lint:design", "build", "быстрые тесты", "сторожа границ", OwnCheckName],
             "базовый набор сохраняется целиком, своя проверка добавляется к нему");
         options.Problem.Should().BeNull();
         baseChecks.Should().BeOfType<JsonObject>(
@@ -131,7 +131,28 @@ public class PregateOptionsTests
 
         var options = PregateOptions.From(ConfigWithLocalOverride(baseChecks));
 
-        options.Checks.Select(c => c.Name).Should().Equal(["tsc", "lint:design", "build", "сторожа границ", OwnCheckName]);
+        options.Checks.Select(c => c.Name).Should().Equal(["tsc", "lint:design", "build", "быстрые тесты", "сторожа границ", OwnCheckName]);
+    }
+
+    // Быстрый гейт (фича «Ускорение тестов», Э3): набор Fast — исключением категорий, после сборки
+    // (Order 30) и с --no-build, только при правках backend/
+    [Fact]
+    public void БыстрыеТесты_ПослеСборки_ИсключениемКатегорий()
+    {
+        var options = PregateOptions.From(ConfigWithLocalOverride(BaseChecks()));
+
+        var fast = options.Checks.Single(c => c.Name == "быстрые тесты");
+        fast.Order.Should().Be(35);
+        fast.WhenChanged.Should().Equal("backend/");
+        // Монолит и Llm.Tests идут шардами по классам (scripts/test-shards.py --run-fast), остальное — одним процессом
+        fast.Command.Should().Be("python3");
+        fast.Args.Should().ContainInOrder("-I", "scripts/test-shards.py", "--run-fast", "backend/ClaudeHomeServer.slnx",
+            "--split", "backend/ClaudeHomeServer.Tests=3,backend/ClaudeHomeServer.Llm.Tests=2", "--filter",
+            "Category!=Host&Category!=Slow&Category!=Integration&Category!=Node&Category!=Bench",
+            "--results", ".cc-attachments/pregate-fast");
+
+        // Сторожа длительности в предгейте нет: порог по стене на общей машине — шум; он живёт в CI и в ручном --check
+        options.Checks.Select(c => c.Name).Should().NotContain("сторож длительности");
     }
 
     // Старая форма (массив) — не молчаливый пустой набор: предгейт обязан отказать с текстом

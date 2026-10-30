@@ -17,6 +17,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // История медиа-генераций (ADR-030, шаг 3): GET /api/local-model/history и .../{id}/file.
 // Обе ручки — [Authorize(Roles="admin")] (не-админ — 403) плюс серверный флаг local-model-stats
 // (без него — 404). Файл — только по id записи и номеру варианта; 410 — файла нет (reason).
+[Trait("Category", "Host")]
 public class LocalModelStatsHistoryTests
 {
     // Управляемый источник: тест задаёт Source и поведение Resolve (410-причины, число вариантов)

@@ -15,6 +15,7 @@ namespace ClaudeHomeServer.Tests.Subsystems;
 // Гейт доезжает до хоста через UseSetting — механика и почему это не гонка разобраны в
 // шапке NotesDisabledTests. Ключ модуля совпадает с ключом подсистемы (imageeditor), поэтому
 // ModuleLoader читает ровно эту секцию: ключи конфигурации без учёта регистра.
+[Trait("Category", "Host")]
 public class ImageEditorDisabledTests : IDisposable
 {
     private readonly DisabledFactory _disabled = new();

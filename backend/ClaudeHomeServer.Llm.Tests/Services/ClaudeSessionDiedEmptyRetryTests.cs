@@ -93,12 +93,14 @@ public class ClaudeSessionDiedEmptyRetryTests : IDisposable
         {
             // Настоящий CLI эхом возвращает user-сообщение (--replay-user-messages) с тем же uuid:
             // result до эха бэкенд считает чужим, так что фейк обязан его напечатать первым.
+            // exec: после эха и событий скрипт уступает место sleep'у — процесса-потомка, держащего
+            // stdout, нет: смерть процесса закрывает pipe сама, не завися от убийства дерева
             var text = "#!/bin/sh\n"
                 + "read -r L\n"
                 + "U=$(printf '%s' \"$L\" | sed 's/.*\"uuid\":\"\\([^\"]*\\)\".*/\\1/')\n"
                 + "echo \"{\\\"type\\\":\\\"user\\\",\\\"message\\\":{\\\"role\\\":\\\"user\\\",\\\"content\\\":\\\"x\\\"},\\\"uuid\\\":\\\"$U\\\",\\\"isReplay\\\":true}\"\n"
                 + string.Join("\n", lines.Select(l => $"echo '{l}'"))
-                + "\nsleep 120\n";
+                + "\nexec sleep 120\n";
             script = Path.Combine(_root, "fake-cli.sh");
             File.WriteAllText(script, text, System.Text.Encoding.ASCII);
         }
@@ -148,7 +150,7 @@ public class ClaudeSessionDiedEmptyRetryTests : IDisposable
                         : [firstCliScript])
                     : (OperatingSystem.IsWindows()
                         ? ["/c", "ping -n 120 127.0.0.1 >nul"]
-                        : ["-c", "sleep 120"]),
+                        : ["-c", "exec sleep 120"]),
                 WorkingDirectory = spec.WorkingDirectory,
                 ClearEnv = spec.ClearEnv,
                 StdioEncoding = spec.StdioEncoding,

@@ -17,6 +17,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // GET api/mcp/catalog/search (план «Каталог MCP-серверов», волна 1, шаг 3): флаг,
 // «пустой адрес = выключен», доменный отказ при лежащем реестре, потолок запросов
 // на бэке и изоляция по авторизации. Записей отсюда не создаётся — это только поиск.
+[Trait("Category", "Host")]
 public class McpCatalogControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     // Фейковый клиент: FetchAndMapAsync переопределён, кэш не задействован

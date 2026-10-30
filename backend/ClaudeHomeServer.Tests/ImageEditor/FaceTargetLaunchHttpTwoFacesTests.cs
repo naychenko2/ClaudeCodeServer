@@ -18,6 +18,7 @@ namespace ClaudeHomeServer.Tests.ImageEditor;
 // задача с цепочкой проходов и нить; подменные только драйвер «local» и детектор лиц.
 // Котировка на 2 лица → запуск → одна версия, в нити FaceTargets лицо → персонаж со статусами done.
 // Отказы: котировка на 1 лицо + запуск на 2, один персонаж на два лица, три лица.
+[Trait("Category", "Host")]
 public class FaceTargetLaunchHttpTwoFacesTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory;

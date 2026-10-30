@@ -15,6 +15,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // REST-панель «Локальные модели» (вкладка «Текст»): авторизация (403/401),
 // валидация window (400), since (только хвост), выключенная вертикаль (configured:false),
 // unsupported из снимка.
+[Trait("Category", "Host")]
 public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

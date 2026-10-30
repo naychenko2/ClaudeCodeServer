@@ -102,7 +102,8 @@ public static class TestRunSummaryFormatter
             : $"{name} {FormatElapsed(TimeSpan.Zero)} (пропущен{(name == "сборка" ? "а" : "")}: {skipped})";
         // Сборка упала — подсчёта и тестов не было, их нули были бы враньём
         if (reached == TestRunPhase.Build) return Part("сборка", t.Build, t.BuildSkipped);
-        return $"{Part("сборка", t.Build, t.BuildSkipped)} · {Part("подсчёт", t.List, t.ListSkipped)} · тесты {FormatElapsed(t.Test)}";
+        return $"{Part("сборка", t.Build, t.BuildSkipped)} · {Part("подсчёт", t.List, t.ListSkipped)} · тесты {FormatElapsed(t.Test)}"
+            + (t.Shards > 1 ? $" (шардов параллельно: {t.Shards})" : "");
     }
 
     // Что лежит в папке артефактов: упоминаем только то, что там правда есть (на ошибке

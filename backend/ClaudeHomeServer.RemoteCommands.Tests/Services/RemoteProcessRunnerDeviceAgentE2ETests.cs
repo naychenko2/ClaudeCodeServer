@@ -485,6 +485,7 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
     // сокет. Серверный поток ждёт реконнекта не дольше потолка простоя, затем закрывается:
     // ретранслятор выходит с ошибкой, токен отзывается
     [SkippableFact]
+    [Trait("Category", "Slow")]
     public async Task ОбрывКаналаУстройстваБезВозврата_РетрансляторЖив_ТокенОтзываетсяПоПотолкуПростоя()
     {
         Skip.If(OperatingSystem.IsWindows(), "фейковый CLI — скрипт с shebang, дерево процессов — группа Unix");
@@ -592,6 +593,7 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
     // (ForProject), ClaudeSession сам ставит в spec свой чат — по нему шлюз выдаёт токен.
     // Два хода идут одним процессом CLI на устройстве, и оба проходят шлюз LLM.
     [SkippableFact]
+    [Trait("Category", "Slow")]
     public async Task ХодЧатаЛокальногоПроекта_ЧерезForProject_ТокенСЧатомИУстройством_ДваХодаОднимПроцессом()
     {
         Skip.If(OperatingSystem.IsWindows(), "фейковый CLI — скрипт с shebang, дерево процессов — группа Unix");

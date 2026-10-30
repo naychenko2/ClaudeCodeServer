@@ -22,6 +22,7 @@ namespace ClaudeHomeServer.Tests.Subsystems;
 /// в хост-конфигурацию → командная строка → CreateBuilder(args) → успевает
 /// к ModuleLoader'у, который читает `DynamicModules:2:Enabled` из конфига.
 /// </summary>
+[Trait("Category", "Host")]
 public class SpendDisabledTests : IDisposable
 {
     private readonly DisabledSpendFactory _disabled = new();

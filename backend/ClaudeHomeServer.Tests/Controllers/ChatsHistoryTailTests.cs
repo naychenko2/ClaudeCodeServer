@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // GET /api/chats/{id}/history: без after — прежний плоский массив, с after — конверт докачки
 // (Перф-2 B5). Логика курсора общая с проектной ручкой (ChatHistoryTail), здесь проверяется
 // проводка и изоляция per-owner.
+[Trait("Category", "Host")]
 public class ChatsHistoryTailTests(TestWebApplicationFactory factory)
     : IClassFixture<TestWebApplicationFactory>
 {

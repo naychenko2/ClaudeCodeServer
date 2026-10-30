@@ -24,6 +24,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// фоновых агентов прогона задаёт тест.
 /// Тест держится только ядра сессий и гейтов: вертикаль «Процессов» ему не нужна.
 /// </summary>
+[Trait("Category", "Host")]
 public class RunDelegationGateTests : IDisposable
 {
     private sealed class DepthAdapterFactory : ILlmSessionAdapterFactory

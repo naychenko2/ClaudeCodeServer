@@ -13,6 +13,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// До этого следа на бэкенде не было вовсе — разбор жалобы «инструменты отваливаются» шёл
 /// вручную по data/sessions/*/history.json, и такой разбор пришлось бы повторять каждый раз.
 /// </summary>
+[Trait("Category", "Host")]
 public class McpCallsControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

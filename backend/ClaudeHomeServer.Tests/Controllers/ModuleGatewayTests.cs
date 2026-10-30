@@ -16,6 +16,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// на входе и инъекция модульного RS256-токена (CT-2, CT-10).
 /// </summary>
 [Trait("Category", "Integration")]
+[Trait("Category", "Host")]
 public class ModuleGatewayTests : IClassFixture<ModuleGatewayTests.ModuleFactory>, IDisposable
 {
     public sealed class ModuleFactory : TestWebApplicationFactory

@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // GET /api/sessions/{id}/local-model (фича local-model-stats, шаг 19): итог последнего
 // хода на локальной модели для владельца чата. Чужая/неизвестная сессия — 404 (существование
 // не раскрываем), аноним — 401.
+[Trait("Category", "Host")]
 public class SessionLocalModelControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

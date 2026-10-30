@@ -712,6 +712,7 @@ public class LocalImageEditorTests : IDisposable
     [InlineData("photo of ANDREYK sitting in a cafe", "photo of ANDREYK sitting in a cafe")]
     [InlineData("сидит в кафе", "photo of andreyk, сидит в кафе")]
     [InlineData("andreykov в кафе", "photo of andreyk, andreykov в кафе")]
+    [Trait("Category", "Slow")]
     public async Task ТриггерЛоры_НеДублируетсяЕслиЕстьСловом(string prompt, string expected)
     {
         var media = new FakeMedia();

@@ -14,6 +14,7 @@ namespace ClaudeHomeServer.Tests.Services.Mcp.Http;
 /// описании длиннее 2048 с именем инструмента. Платформонезависимый: резолвит реестр из
 /// DI, не читает файлы и не запускает node.
 /// </summary>
+[Trait("Category", "Host")]
 public class McpToolDescriptionLengthTests
 {
     // Порог CLI: CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH. Описание длиннее — CLI режет молча.

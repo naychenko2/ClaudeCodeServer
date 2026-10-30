@@ -8,6 +8,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // Изоляция заметок по владельцу (per-owner по claim sub, как у задач). Базовый CRUD
 // заметок не за фич-флагом — тестируем прямо через HTTP.
+[Trait("Category", "Host")]
 public class NotesControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly HttpClient _client;     // владелец

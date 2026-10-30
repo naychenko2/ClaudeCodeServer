@@ -11,6 +11,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // Единый путь загрузки вложений сообщения: POST /api/chats/{id}/files/upload работает
 // и для чата вне проекта, и для проектной сессии (рабочая папка — корень проекта).
+[Trait("Category", "Host")]
 public class ChatAttachmentsControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

@@ -735,6 +735,7 @@ public class ImageEditorToolsetTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task Явный_local_админа_при_лежащем_ComfyUI_отказывает_с_котировкой_облака_без_запуска()
     {
         var fal = new FakeImageEditor("fal", enabled: true, models: FakeImageEditor.Model("fal-edit"));

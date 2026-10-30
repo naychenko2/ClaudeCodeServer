@@ -8,6 +8,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // Ревью Б5, п.2: DI-обвязка журнала. Единственный писатель EngineCallLedger — контейнерный
 // CheapTextRunner (LlmSubsystem.cs:256,259): если параметр до него не дойдёт (null) или придёт
 // второй экземпляр, боевой «Дежурство» видел бы пустой журнал — и ничего в коде не сломалось бы.
+[Trait("Category", "Host")]
 public class EngineCallLedgerDiTests
 {
     [Fact]

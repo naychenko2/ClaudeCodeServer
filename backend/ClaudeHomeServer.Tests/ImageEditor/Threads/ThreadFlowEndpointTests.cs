@@ -23,6 +23,7 @@ namespace ClaudeHomeServer.Tests.ImageEditor.Threads;
 // правка без ИИ — шаг текущей версии, «продолжить от версии», сохранение уводит нить на новый
 // файл, чужая сессия и чужая нить изолированы, ветвление и удаление чата доходят до нитей через
 // шину. Стопки («Взять», откат со старой стопкой) проверяются на нити в формате до 27.09.
+[Trait("Category", "Host")]
 public class ThreadFlowEndpointTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

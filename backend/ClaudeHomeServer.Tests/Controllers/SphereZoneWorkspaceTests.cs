@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // B3 «Сфер»: персона сферы видит задачи и файлы ВСЕХ проектов сферы и ни одного вне её;
 // состав зоны считается на каждый вызов — выход проекта из сферы снимает доступ сразу.
+[Trait("Category", "Host")]
 public class SphereZoneWorkspaceTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

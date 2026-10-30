@@ -246,6 +246,8 @@ public record FeatureEstimate(List<string>? Remaining, int? EtaMinutes, string? 
             return $"featureEstimate.remaining: пункт непустой, не длиннее {MaxRemainingLength} символов";
         if (EtaMinutes is < 1) return "featureEstimate.etaMinutes: не меньше 1";
         if (Why is { Length: > MaxWhyLength }) return $"featureEstimate.why: не длиннее {MaxWhyLength} символов";
+        // Оценка = срок ИЛИ «что дальше»: пустая {} (в т.ч. из одних старых done/total) бессодержательна.
+        if (EtaMinutes is null && remaining.Count == 0) return "featureEstimate: нужен etaMinutes или remaining";
         return null;
     }
 

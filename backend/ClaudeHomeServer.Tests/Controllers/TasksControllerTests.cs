@@ -3116,7 +3116,40 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var est = _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.Note!.Estimate!;
         est.EtaMinutes.Should().Be(45);
-        System.Text.Json.JsonSerializer.Serialize(est).Should().NotContain("Total").And.NotContain("Percent");
+        // Контракт API (camelCase), а не внутренняя сериализация record.
+        var body = await (await _client.GetAsync($"/api/tasks/features/{epicId}")).Content.ReadAsStringAsync();
+        using var doc = System.Text.Json.JsonDocument.Parse(body);
+        var estimate = FindProperty(doc.RootElement, "estimate")!.Value;
+        estimate.GetProperty("etaMinutes").GetInt32().Should().Be(45);
+        foreach (var dropped in new[] { "done", "total", "inProgress", "percent" })
+            estimate.TryGetProperty(dropped, out _).Should().BeFalse($"{dropped} отброшено");
+    }
+
+    private static System.Text.Json.JsonElement? FindProperty(System.Text.Json.JsonElement el, string name)
+    {
+        if (el.ValueKind == System.Text.Json.JsonValueKind.Object)
+            foreach (var p in el.EnumerateObject())
+            {
+                if (p.Name == name && p.Value.ValueKind == System.Text.Json.JsonValueKind.Object) return p.Value;
+                if (FindProperty(p.Value, name) is { } found) return found;
+            }
+        return null;
+    }
+
+    // Инвариант «оценка = срок ИЛИ что дальше»: пустая и «одни старые поля» — 400, срок или remaining — ок.
+    [Theory]
+    [InlineData("{}", false)]
+    [InlineData("{\"done\":4,\"total\":9,\"percent\":60}", false)]
+    [InlineData("{\"etaMinutes\":160}", true)]
+    [InlineData("{\"remaining\":[\"x\"]}", true)]
+    public async Task PutNote_ОценкаСрокИлиЧтоДальше(string estimateJson, bool ok)
+    {
+        var epicId = await CreateFeatureEpicAsync();
+
+        var response = await _client.PutAsync($"/api/tasks/features/{epicId}/note",
+            new StringContent($"{{\"text\":\"г\",\"featureEstimate\":{estimateJson}}}", System.Text.Encoding.UTF8, "application/json"));
+
+        response.StatusCode.Should().Be(ok ? HttpStatusCode.OK : HttpStatusCode.BadRequest);
     }
 
     // B14 (возврат FIN 74722f13): голос, записанный у фичи БЕЗ идущих задач (шаг в todo — Now пуст),

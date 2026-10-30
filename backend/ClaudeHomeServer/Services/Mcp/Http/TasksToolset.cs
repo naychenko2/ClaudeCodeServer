@@ -1796,7 +1796,7 @@ public sealed class TasksToolset(
     private static JsonObject FeatureEstimateSchema() => new()
     {
         ["type"] = "object",
-        ["description"] = "Срок и «что дальше», только с featureNote, в каждом ходе, где фича сдвинулась; why — причина расхождения срока. Процент не пишется: его берёт трекер.",
+        ["description"] = "Срок и «что дальше» с featureNote, в каждом ходе; why — причина расхождения; процента нет — его берёт трекер.",
         ["properties"] = new JsonObject
         {
             ["remaining"] = new JsonObject

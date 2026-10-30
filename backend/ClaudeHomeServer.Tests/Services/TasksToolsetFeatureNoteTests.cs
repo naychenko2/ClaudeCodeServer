@@ -435,6 +435,27 @@ public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFact
             est.Should().NotContain($"\"{dropped}\"");
     }
 
+    // Оценка = срок ИЛИ «что дальше»: пустая и «одни старые поля» — отказ, срок или remaining — ок.
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task FeatureEstimate_СрокИлиЧтоДальше(bool onlyLegacy, bool withRemaining)
+    {
+        var (projectId, _) = await CreateProjectWithSessionAsync("estempty");
+        var (curatorId, epicId, _) = await CreateFeatureFromCuratorAsync(projectId, "estempty");
+
+        object est = onlyLegacy ? new { done = 4, total = 9 }
+            : withRemaining ? new { remaining = new[] { "x" } }
+            : new { };
+        var (text, isError) = await CallToolAsync(curatorId, "tasks_update", new { id = epicId, featureNote = "г", featureEstimate = est });
+        isError.Should().Be(!withRemaining, text);
+        if (!withRemaining) text.Should().Contain("etaMinutes или remaining");
+
+        var (_, eta) = await CallToolAsync(curatorId, "tasks_update", new { id = epicId, featureNote = "г2", featureEstimate = new { etaMinutes = 160 } });
+        eta.Should().BeFalse();
+    }
+
     [Fact]
     public async Task FeatureEstimate_БезГолоса_Отказ()
     {

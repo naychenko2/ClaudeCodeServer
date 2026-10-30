@@ -1,7 +1,7 @@
 import { getPersonaById } from '../../../lib/personas';
 import { MERGE_PENDING_STATUS, queueLabelParts } from '../../../lib/chatGroups';
 import { trackerPercent } from '../../../lib/featureProgress';
-import { alarmView, findChatChain, stepStatusParts } from './featureTruthModel';
+import { alarmView, findChatChain, stepAlarmBy, stepStatusParts } from './featureTruthModel';
 import type { FeatureQueue, FeatureRun, FeatureState } from '../../../types/featureRun';
 
 // Тон пилюли (макет turn-plan-feature-popup-1, S[state].pill[0]):
@@ -93,12 +93,27 @@ export function statusPhrase(
   }
 }
 
+// Словарь коротких слов пилюли (словарь Майи, дизайн-ревью F2, п. 8): ключ — chain.outcome
+// (бэковый перечислимый), а НЕ текст chain.status — сокращение переживает смену формулировки
+// на бэке. Сокращение ТОЛЬКО в пилюле: карточка и цепочка печатают полное слово
+// (stepStatusParts). Неизвестный outcome (более новый бэк) — слово как есть, строка не теряется.
+const PILL_SHORT: Record<string, string> = {
+  accepted: 'принят',
+  returned: 'закрыт без ревью',
+  withdrawn: 'снят',
+  running: 'идёт',
+  pending: 'ждёт ревью',
+};
+
 // Модель пилюли (F2, макет v4 §П2 «Мой шаг»). null — фич нет и загрузка/ошибка не
 // идёт (пилюля скрыта). Три ветки:
-//   • чат ШАГА (цепочка найдена по задаче-владельцу чата) — «{Ш8} · {статус} · {давность}»:
-//     stepRef обычный, статус — бэковое слово (stepStatusParts), время — суффиксом;
+//   • чат ШАГА (цепочка найдена по задаче-владельцу чата) — «{Ш8} · {коротко} · {давность}»:
+//     stepRef обычный, статус — короткое слово по outcome (PILL_SHORT; тревога на этом
+//     шаге — «стоит»/«ждёт вас» из бэкового attention), время — суффиксом;
 //   • тревога фичи (waiting/merge_pending/stopped) — заменяет текст шага: «Ждёт вас ·
 //     {Имя}»/«Стоит · {Имя}» тоном (сигнал на пилюле не теряется; действие — в строке шапки);
+//     если тревога на ЭТОМ шаге — формат шага «{stepRef} · стоит/ждёт вас · {время}»
+//     (тот же тон, слова и время, что у карточки П2 — словарь п. 8);
 //   • чат БЕЗ шага (оркестратор, ревью) — «фича · {pct} %» (процент по трекеру, общий
 //     trackerPercent): П2 к такому чату неприменим, попап тогда сводка (П1).
 // 'loading'/'error' → «фича · …».
@@ -108,22 +123,33 @@ export function buildPillModel(runs: FeatureRun[], chatTaskId: string | null | u
     return { state: loading ? 'loading' : 'error', tone: 'neutral', pre: 'фича · …', bold: '', post: '', ariaExtra: null };
   }
   const run = runs[0];
+  const chain = findChatChain(run, chatTaskId);
 
   if (run.state === 'waiting' || run.state === 'merge_pending' || run.state === 'stopped') {
     const who = stoppedName(run);
     const a = alarmView(run.state, run.attention?.reason ?? null, who || null, true);
     const aria = run.state === 'stopped' ? 'исполнитель остановлен' : run.state === 'merge_pending' ? MERGE_PENDING_STATUS : 'фича ждёт вас';
-    return { state: run.state, tone: a.tone === 'warn' ? 'wait' : 'stop', pre: a.text, bold: '', post: '', ariaExtra: aria };
+    const tone = a.tone === 'warn' ? 'wait' : 'stop';
+    // Тревога на ЭТОМ шаге: слово и время те же, что в карточке («стоит»/«ждёт вас» с
+    // attention.since), формат пилюли «{stepRef} · {коротко} · {время}» (словарь, п. 8).
+    const alarmBy = chain ? stepAlarmBy(run, chain) : null;
+    if (chain && alarmBy) {
+      const p = stepStatusParts(chain, Date.now(), alarmBy);
+      return { state: run.state, tone, pre: `${chain.stepRef} · `, bold: p.word, post: p.time ? `${p.sep}${p.time}` : '', ariaExtra: aria };
+    }
+    // Тревога не этого шага (или чат без шага): текст тревоги фичи — сигнал на пилюле не теряется.
+    return { state: run.state, tone, pre: a.text, bold: '', post: '', ariaExtra: aria };
   }
 
-  const chain = findChatChain(run, chatTaskId);
   if (chain) {
+    // Статус шага — короткое слово по outcome (PILL_SHORT); неизвестный outcome —
+    // бэковое слово как есть. Время — общее с карточкой (stepStatusParts).
     const p = stepStatusParts(chain, Date.now());
     return {
       state: run.state,
       tone: 'neutral',
       pre: `${chain.stepRef} · `,
-      bold: p.word,
+      bold: PILL_SHORT[chain.outcome] ?? p.word,
       post: p.time ? `${p.sep}${p.time}` : '',
       ariaExtra: null,
     };

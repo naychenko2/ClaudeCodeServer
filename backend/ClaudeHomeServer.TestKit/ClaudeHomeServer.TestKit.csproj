@@ -24,10 +24,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- xunit: TestCollections (шаг 3.1) — [CollectionDefinition]-маркеры xunit-коллекций.
-         Хелперы TestKit в целом без [Fact], но этот файл использует тест-раннер-атрибут,
-         поэтому xunit.core нужен как PackageReference (не делает TestKit тест-проектом:
-         IsTestProject=false выше). -->
+    <!-- xunit: TestCollections (имена коллекций) и сторож CollectionDefinitionGuard читают
+         [Collection]/[CollectionDefinition]-атрибуты и ассертят, поэтому xunit нужен как
+         PackageReference. Сам TestKit не тест-проект (IsTestProject=false): [Fact] здесь нет,
+         [CollectionDefinition] здесь быть не должно — определения живут в сборках тестов
+         (шапка TestCollections.cs, разрез 3908fd11). -->
     <PackageReference Include="xunit" Version="2.9.2" />
   </ItemGroup>
 

@@ -21,6 +21,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// Глобальный каталог навыков (`api/skills`, scope=global) осознанно общий и здесь не
 /// проверяется.
 /// </summary>
+[Trait("Category", "Host")]
 public class SkillsProjectOwnerIsolationTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

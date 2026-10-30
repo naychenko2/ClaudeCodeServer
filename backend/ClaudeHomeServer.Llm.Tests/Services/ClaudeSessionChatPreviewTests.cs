@@ -27,7 +27,7 @@ public class ClaudeSessionChatPreviewTests : IDisposable
         foreach (var p in _clis.Values)
         {
             try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { /* уже мёртв */ }
-            p.Dispose();
+            ProcessTestCleanup.SafeDispose(p); // Process.Close гонится с уборкой сессии
         }
         try { Directory.Delete(_root, recursive: true); } catch { /* best-effort */ }
     }
@@ -49,7 +49,7 @@ public class ClaudeSessionChatPreviewTests : IDisposable
                 FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
                 Args = OperatingSystem.IsWindows()
                     ? ["/c", "ping -n 120 127.0.0.1 >nul"]
-                    : ["-c", "sleep 120"],
+                    : ["-c", "exec sleep 120"],
                 WorkingDirectory = spec.WorkingDirectory,
                 RedirectStdin = spec.RedirectStdin,
                 Track = false,

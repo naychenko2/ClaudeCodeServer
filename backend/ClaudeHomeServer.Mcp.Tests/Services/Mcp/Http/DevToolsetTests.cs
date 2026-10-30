@@ -507,6 +507,7 @@ public class DevToolsetTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task StartStand_ПотолокВоВремяПробыHealth_ТекстПроПотолокНеПроСтоп()
     {
         // Потолок 8 с: запуск занимает секунду, проба получает остаток бюджета и упирается в потолок

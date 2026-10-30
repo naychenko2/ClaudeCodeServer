@@ -8,6 +8,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // GET /api/personas/binding-targets?type=tool[&personaId=...]: каталог Tool-привязок
 // с дефолтным состоянием для конкретной персоны.
+[Trait("Category", "Host")]
 public class PersonasControllerBindingTargetsTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

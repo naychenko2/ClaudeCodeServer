@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // Каскад удаления проекта → шов уборки обучающих фото (ADR-026, раздел 5): биометрия не должна
 // оставаться сиротой в data/lora-training, а сбой или отсутствие шва не должны ронять удаление.
+[Trait("Category", "Host")]
 public class ProjectsControllerTrainingPhotosCascadeTests
 {
     private sealed class RecordingCleaner(bool throws = false) : IProjectTrainingPhotoCleaner

@@ -17,6 +17,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // • Находка 3: tasks_update {verification: {}} (без notes) на дефекте → 400; прежний
 //   HasMeaningfulNotes считал null Notes валидным, паспорт 432b6de2 это запрещает.
 [Trait("Category", "Integration")]
+[Trait("Category", "Host")]
 public class DefectUpdateGatesTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly HttpClient _client;

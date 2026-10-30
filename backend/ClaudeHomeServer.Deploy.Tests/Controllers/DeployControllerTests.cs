@@ -14,6 +14,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // владельца. Здесь проверяем именно поверхность: доступ (аноним, не-админ), отказ на
 // машине без контура (в тестовой среде секции Deploy нет — штатный путь «выключено»)
 // и заголовок X-Build у health, который не должен ломать контракт эндпоинта.
+[Trait("Category", "Host")]
 public class DeployControllerTests(TestWebApplicationFactory factory) : IClassFixture<TestWebApplicationFactory>
 {
     [Fact]

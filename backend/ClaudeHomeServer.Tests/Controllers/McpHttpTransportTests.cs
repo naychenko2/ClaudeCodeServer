@@ -15,6 +15,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// Проверяем ровно то, на что опирается конфиг хода — иначе поломка транспорта видна только
 /// тем, что инструмент МОЛЧА исчезает у модели.
 /// </summary>
+[Trait("Category", "Host")]
 public class McpHttpTransportTests(TestWebApplicationFactory factory)
     : IClassFixture<TestWebApplicationFactory>
 {

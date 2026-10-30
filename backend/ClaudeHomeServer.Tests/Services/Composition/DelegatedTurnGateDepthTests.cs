@@ -25,6 +25,7 @@ namespace ClaudeHomeServer.Tests.Services.Composition;
 /// реально передают allowedDepth) покрыт отдельно — TasksHttpDelegationGateTests и
 /// SessionManagerTests (ExecuteFilter).
 /// </summary>
+[Trait("Category", "Host")]
 public class DelegatedTurnGateDepthTests : IDisposable
 {
     // Глубину хода меняем на лету: GetActiveTurnDelegation читает живой адаптер

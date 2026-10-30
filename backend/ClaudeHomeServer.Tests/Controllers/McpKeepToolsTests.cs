@@ -20,6 +20,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// отказом и НЕ доходить до тулсета (fail-closed). Тулсет-стенд считает свои вызовы — это
 /// и есть доказательство «не выполнился», текста ответа для него мало.
 /// </summary>
+[Trait("Category", "Host")]
 public class McpKeepToolsTests : IDisposable
 {
     private const string Server = "test-keep";

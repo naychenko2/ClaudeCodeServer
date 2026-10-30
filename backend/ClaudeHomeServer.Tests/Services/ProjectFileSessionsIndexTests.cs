@@ -11,6 +11,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // per-чат по LastWriteUtc истории. Хост — TestWebApplicationFactory: SessionManager
 // собран полностью (LLM-адаптер подменён фейком, реального claude.exe не запускает),
 // поэтому проще резолвить сервисы из контейнера, чем вручную собирать граф зависимостей.
+[Trait("Category", "Host")]
 public class ProjectFileSessionsIndexTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly ProjectManager _projects;

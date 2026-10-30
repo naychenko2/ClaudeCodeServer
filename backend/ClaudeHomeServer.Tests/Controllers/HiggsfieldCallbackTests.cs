@@ -10,6 +10,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// одноразовому state (в редиректе нет JWT), ответ — HTML-страница с postMessage.
 /// Паттерн скопирован из McpOAuthController.
 /// </summary>
+[Trait("Category", "Host")]
 public class HiggsfieldCallbackTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

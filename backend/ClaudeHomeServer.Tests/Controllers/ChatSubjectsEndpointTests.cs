@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // REST тем чатов проекта: владение, авторизация, реестр, ручной перенос и запуск разбора
 // (202). Идемпотентность повторного запуска с блокирующей моделью — в ChatSubjectSweeperTests:
 // здесь раннер фабрики без локального маршрута.
+[Trait("Category", "Host")]
 public class ChatSubjectsEndpointTests(TestWebApplicationFactory factory)
     : IClassFixture<TestWebApplicationFactory>, IDisposable
 {

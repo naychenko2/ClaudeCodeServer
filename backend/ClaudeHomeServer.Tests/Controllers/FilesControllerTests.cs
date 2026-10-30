@@ -11,6 +11,7 @@ using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
+[Trait("Category", "Host")]
 public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

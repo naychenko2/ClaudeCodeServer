@@ -34,7 +34,7 @@ public class ClaudeSessionDisposeTests : IDisposable
         foreach (var p in _clis.Values)
         {
             try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { /* уже мёртв */ }
-            p.Dispose();
+            ProcessTestCleanup.SafeDispose(p); // Process.Close гонится с уборкой сессии
         }
         try { Directory.Delete(_root, recursive: true); } catch { /* best-effort */ }
     }
@@ -145,8 +145,11 @@ public class ClaudeSessionDisposeTests : IDisposable
         launcher.KillCallsSinceStart.Should().BeGreaterThanOrEqualTo(1,
             "DisposeAsync обязан звать _launcher.Kill — иначе процесс CLI переживёт сессию и утечёт в фоне (на Windows это node-MCP-серверы, остаются сиротами на сутки)");
         // 2. Процесс реально завершился. Фейк живёт 60 с — заметно дольше 10-секундного
-        // ожидания выхода в уборке: без Kill он переживает DisposeAsync, и событие не приходит
-        (await Task.WhenAny(launcher.Exited, Task.Delay(TimeSpan.FromSeconds(5))))
+        // ожидания выхода в уборке: без Kill он переживает DisposeAsync, и событие не приходит.
+        // Ожидание событийное: Delay — только потолок таймаута, а не время ожидания. На
+        // загруженном раннере выход процесса приходил позже 5 с (флак 0805d3fa) — тест про то,
+        // что процесс в итоге умирает, а не про скорость уборки.
+        (await Task.WhenAny(launcher.Exited, Task.Delay(TimeSpan.FromSeconds(30))))
             .Should().Be(launcher.Exited,
                 "уборка должна не просто позвать Kill, а довести процесс до выхода");
     }

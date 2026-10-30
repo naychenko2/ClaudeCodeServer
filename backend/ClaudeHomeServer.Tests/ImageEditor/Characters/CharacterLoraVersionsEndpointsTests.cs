@@ -13,6 +13,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 namespace ClaudeHomeServer.Tests.ImageEditor.Characters;
 
 // Ручки версий LoRA персонажа (ADR-026-contracts §7.3)
+[Trait("Category", "Host")]
 public class CharacterLoraVersionsEndpointsTests : IDisposable
 {
     private readonly List<TestWebApplicationFactory> _factories = [];

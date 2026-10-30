@@ -111,6 +111,7 @@ public class InotifyLeakRegressionTests : IDisposable
     }
 
     [SkippableFact]
+    [Trait("Category", "Slow")]
     public async Task ОшибкаСлежкиПриСтарте_ВсплескВДереве_InotifyНеБольшеЖивыхНаблюдателей()
     {
         Skip.IfNot(OperatingSystem.IsLinux(), "inotify и /proc/self/fd — только Linux");

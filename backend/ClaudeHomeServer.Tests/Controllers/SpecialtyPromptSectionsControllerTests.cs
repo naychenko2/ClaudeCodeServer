@@ -17,6 +17,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // у каждого пользователя); скиллы из каталога хоста в тестах недоступны — контракт
 // «отсутствующий скилл пропускается молча» проверяется на несуществующем имени.
 [Trait("Category", "Slow")]
+[Trait("Category", "Host")]
 public class SpecialtyPromptSectionsControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

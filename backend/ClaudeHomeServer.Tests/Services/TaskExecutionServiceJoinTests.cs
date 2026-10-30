@@ -1000,8 +1000,24 @@ public class TaskExecutionServiceJoinTests : IDisposable
     public async Task ReviewTree_ТерминальнаяОстановкаИсполнителя_ОсвобождаетСлот()
     {
         var (task, project, wave, _) = await ArrangeReviewLaunchAsync(TaskRoles.Review);
+        // ExecuteAsync ставит в чат настоящий ход: без claude он за ~0,5 с кончается своим
+        // result «error» и закрывает запуск раньше синтетического (FindTracked → null, причина
+        // остановки не ставится). Ждём конец реального хода по событию и заново открываем запуск.
+        var realTurnEnded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _onOwnerBroadcast = msg =>
+        {
+            if (msg is TaskChangedMessage { Task: { Id: var id, ClaudeResult: not null } } && id == task.Id)
+                realTurnEnded.TrySetResult();
+            return Task.CompletedTask;
+        };
         await _sut.ExecuteAsync(task, auto: false);
+        try { await realTurnEnded.Task.WaitAsync(TimeSpan.FromSeconds(30)); }
+        finally { _onOwnerBroadcast = null; }
         var session = _sessions.GetById(_tasks.GetById(task.Id)!.LinkedSessionId!)!;
+        _tasks.MarkClaudeStarted(task.Id, session.Id, DateTime.UtcNow);
+        // настоящий ход мог кончиться и терминальной остановкой (на машине с claude — отказ входа)
+        // и снять аренду: возвращаем слот задаче (повторная аренда той же задачи идемпотентна)
+        (await _reviewPool.TryAcquireAsync(task.OwnerId, project, wave, task.Id)).Should().NotBeNull();
         (await _reviewPool.TryAcquireAsync(task.OwnerId, project, wave, "вторая")).Should().NotBeNull();
         (await _reviewPool.TryAcquireAsync(task.OwnerId, project, wave, "третья")).Should().BeNull();
 

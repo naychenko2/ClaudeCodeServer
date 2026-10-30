@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Composition;
 // (ProjectBackgroundService рядом с DocumentAiService, ProjectBackgroundBackfill и его
 // hosted-сервис блоком ниже). Если кто-то добавит регистрацию в Program.cs вместо
 // подсистемы — или вынесет регистрацию из Register — тест упадёт, и ревью это поймает.
+[Trait("Category", "Host")]
 public class BackgroundsSubsystemRegistrationTests
 {
     private static IConfiguration BuildConfig() =>

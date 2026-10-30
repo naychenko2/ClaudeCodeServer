@@ -14,6 +14,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // Волна 1 «Каталога MCP-серверов», шаг 4: CatalogRef в запросе создания и DTO,
 // каталожная запись заводится выключенной, PUT её не выключает и не теряет,
 // AllowOutsideProjects начинает переноситься, стор переживает неизвестные поля.
+[Trait("Category", "Host")]
 public class McpServersCatalogRefTests(TestWebApplicationFactory factory)
     : IClassFixture<TestWebApplicationFactory>
 {

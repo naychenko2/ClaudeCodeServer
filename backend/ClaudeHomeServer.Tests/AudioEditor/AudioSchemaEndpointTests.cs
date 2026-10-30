@@ -10,6 +10,7 @@ namespace ClaudeHomeServer.Tests.AudioEditor;
 
 // Ручка схемы «Дополнительно» модуля «Звук» на живом хосте: под флагом audio-editor (выключен — 404),
 // только модели каталога. Схема local не требует ни сети, ни GPU — ею и проверяем
+[Trait("Category", "Host")]
 public sealed class AudioSchemaEndpointTests : IDisposable
 {
     private const string ChatterboxSchema = "/api/audio-editor/schema?provider=local&model=chatterbox-multilingual&op=Speak";

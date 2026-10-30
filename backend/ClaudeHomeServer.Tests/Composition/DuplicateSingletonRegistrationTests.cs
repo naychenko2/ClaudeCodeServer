@@ -20,6 +20,7 @@ namespace ClaudeHomeServer.Tests.Composition;
 // Защита от пустого фильтра: явный ассерт, что singleton-дескрипторы с ImplementationType
 // вообще есть в коллекции (без него пустой набор проходил бы зелёным — прецедент у сторожей
 // границ подсистем: 17/17 зелёных при нулевом наборе).
+[Trait("Category", "Host")]
 public class DuplicateSingletonRegistrationTests
 {
     // Дескрипторы с `ImplementationFactory` (форвардеры `sp.GetRequiredService<T>()`

@@ -16,6 +16,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // ответил и ClaudeSessionId нет, не ложилась на диск — после перезагрузки карточки нитей
 // пропадали. История до первого ответа ключуется id чата, а первый ответ переносит её под
 // ClaudeSessionId; запись не должна теряться ни на одном из этих шагов.
+[Trait("Category", "Host")]
 public class ModuleRecordFreshChatTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

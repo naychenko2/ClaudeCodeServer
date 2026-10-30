@@ -16,6 +16,7 @@ namespace ClaudeHomeServer.Tests.Composition;
 // Конфиг минимальный: ключей Dossiers не задаём (DossierStore тихо работает на дефолтах;
 // DossierCaptureService читает Dossiers:SkipCommitTypes при первом тике, тест этого не
 // трогает).
+[Trait("Category", "Host")]
 public class DossiersSubsystemRegistrationTests
 {
     private static IConfiguration BuildConfig(string dataPath) =>

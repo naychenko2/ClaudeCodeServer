@@ -41,7 +41,7 @@ public class ClaudeSessionEffortArgsTests : IDisposable
         foreach (var p in _processes)
         {
             try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { /* уже мёртв */ }
-            p.Dispose();
+            ProcessTestCleanup.SafeDispose(p); // Process.Close гонится с уборкой сессии
         }
     }
 
@@ -68,7 +68,7 @@ public class ClaudeSessionEffortArgsTests : IDisposable
                 FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
                 Args = OperatingSystem.IsWindows()
                     ? ["/c", "ping -n 120 127.0.0.1 >nul"]
-                    : ["-c", "sleep 120"],
+                    : ["-c", "exec sleep 120"],
                 WorkingDirectory = spec.WorkingDirectory,
                 StdioEncoding = spec.StdioEncoding,
                 EnableRaisingEvents = spec.EnableRaisingEvents,
@@ -169,6 +169,7 @@ public class ClaudeSessionEffortArgsTests : IDisposable
     /// лишний --effort у DeepSeek/cli/cli-эквивалента ничего бы не сломал, но зачем.
     /// </summary>
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task ХодНаОблачномПровайдере_ПустойEffort_ФлагаНет()
     {
         var args = await RunTurnAsync("deepseek-v4-pro", effort: null, providers: LocalProviders());
@@ -211,6 +212,7 @@ public class ClaudeSessionEffortArgsTests : IDisposable
     [Theory]
     [InlineData(null, "medium")]
     [InlineData("high", "high")]
+    [Trait("Category", "Slow")]
     public async Task ХодНаM31_DefaultEffortМодели(string? effort, string expected)
     {
         var providers = new LlmProviderRegistry(Helpers.TestConfig.Build(new Dictionary<string, string?>

@@ -10,6 +10,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // MCP personas_create/personas_update не расширяют зону персоны: неизвестный scope — отказ
 // (раньше молча становился Global), персона сферы не создаётся и не меняет зону через MCP.
+[Trait("Category", "Host")]
 public class PersonasToolsetZoneTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

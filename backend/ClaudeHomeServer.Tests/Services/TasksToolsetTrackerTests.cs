@@ -18,6 +18,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // Порог FeatureTracker.TrackerGraceMinutes — константа (30 мин), дата закрытия ставится
 // прямым сдвигом CompletedAt на живой задаче (отдельного «закрыть с датой» API нет).
 [Trait("Category", "Integration")]
+[Trait("Category", "Host")]
 public class TasksToolsetTrackerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

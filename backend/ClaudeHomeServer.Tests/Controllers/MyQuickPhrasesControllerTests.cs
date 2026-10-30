@@ -10,6 +10,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // Быстрые фразы (/api/me/quick-phrases): персист набора в User.QuickPhrases через
 // UserStore и молчаливая валидация PUT (обрезка пробелов → отброс пустых → дедуп
 // пары «группа + фраза» → потолки длины и количества). Группа — второй уровень попапа.
+[Trait("Category", "Host")]
 public class MyQuickPhrasesControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

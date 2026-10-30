@@ -15,6 +15,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // только на РОСТ сверх TeamMemoryService.MaxTextLength — уже сохранённую сверхлимитную запись
 // (легаси, авто-захват) можно пересохранить без изменений или сократить, как
 // PersonaManager.ExceedsContractLimit для контракта персоны.
+[Trait("Category", "Host")]
 public class ProjectsControllerTeamMemoryTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

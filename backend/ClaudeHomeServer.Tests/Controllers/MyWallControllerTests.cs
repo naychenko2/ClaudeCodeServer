@@ -9,6 +9,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // «Стена» (/api/me/wall): персист набора чатов в User.WallChatIds через UserStore,
 // молчаливая валидация PUT (дедуп → отброс чужих/мёртвых → потолок), ленивая
 // фильтрация мёртвых id на GET, кандидаты для пикера.
+[Trait("Category", "Host")]
 public class MyWallControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

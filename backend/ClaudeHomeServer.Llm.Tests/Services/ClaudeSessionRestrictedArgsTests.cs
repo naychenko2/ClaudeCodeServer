@@ -47,7 +47,7 @@ public class ClaudeSessionRestrictedArgsTests : IDisposable
                 FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
                 Args = OperatingSystem.IsWindows()
                     ? ["/c", "ping -n 120 127.0.0.1 >nul"]
-                    : ["-c", "sleep 120"],
+                    : ["-c", "exec sleep 120"],
                 WorkingDirectory = spec.WorkingDirectory,
                 StdioEncoding = spec.StdioEncoding,
                 EnableRaisingEvents = spec.EnableRaisingEvents,
@@ -79,7 +79,7 @@ public class ClaudeSessionRestrictedArgsTests : IDisposable
         foreach (var p in _processes)
         {
             try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { /* уже мёртв */ }
-            p.Dispose();
+            ProcessTestCleanup.SafeDispose(p); // Process.Close гонится с уборкой сессии
         }
         // Шов версии процесс-глобален: сбрасываем, чтобы параллельные классы не видели нашу
         // фиксированную версию (всё равно никто не ассертит на версию-зависимые аргументы).

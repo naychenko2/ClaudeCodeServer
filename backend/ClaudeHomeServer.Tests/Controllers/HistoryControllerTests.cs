@@ -9,6 +9,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // Интеграционные тесты эндпоинтов продуктовой истории (api/history/*).
 // В тестовом окружении нет проектов с git-репозиториями, поэтому коммитов нет —
 // GetDay для любой даты возвращает пустой день БЕЗ вызова claude (ветка dayCommits.Count == 0).
+[Trait("Category", "Host")]
 public class HistoryControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

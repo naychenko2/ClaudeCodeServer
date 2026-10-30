@@ -32,6 +32,7 @@ namespace ClaudeHomeServer.Tests.Composition;
 // Коллекция Inotify: полный хост открывает inotify-экземпляры (reload конфигурации), а
 // InotifyLeakRegressionTests меряет их число в процессе — параллельный хост раздувал пик.
 [Collection(TestCollections.Inotify)]
+[Trait("Category", "Host")]
 public class LlmSubsystemDiCycleTests
 {
     [Fact]

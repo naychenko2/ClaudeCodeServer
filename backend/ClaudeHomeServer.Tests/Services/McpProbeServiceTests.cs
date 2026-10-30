@@ -13,7 +13,6 @@ namespace ClaudeHomeServer.Tests.Services;
 /// нечего — ценность пробы ровно в том, что она поднимает сервер так же, как это сделал бы ход.
 /// Сервер берём свой (mcp/widgets-server — чистый Node без зависимостей и без сети).
 /// </summary>
-[Trait("Category", "Slow")]
 public class McpProbeServiceTests : IDisposable
 {
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "ccs-mcp-probe-" + Guid.NewGuid().ToString("N")[..8]);

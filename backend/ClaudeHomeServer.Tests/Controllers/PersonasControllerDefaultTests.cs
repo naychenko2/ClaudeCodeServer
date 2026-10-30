@@ -8,6 +8,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // Дефолт-персоны: назначение make-default (валидация зон,
 // ручной путь профиль НЕ меняет) и удаление дефолтной только с преемником по той же зоне.
+[Trait("Category", "Host")]
 public class PersonasControllerDefaultTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly HttpClient _client;

@@ -31,6 +31,7 @@ namespace ClaudeHomeServer.Tests.Contract;
 /// Отказ «слишком большой» (413) есть только у агента — серверные маршруты читают и пишут
 /// без потолка (тело режет хост); сам отказ агента проверяет LocalApiTests в тестах агента.
 /// </summary>
+[Trait("Category", "Host")]
 public sealed class DeviceAgentApiContractTests : IClassFixture<TestWebApplicationFactory>, IAsyncLifetime
 {
     private const string AgentProjectId = "p1";

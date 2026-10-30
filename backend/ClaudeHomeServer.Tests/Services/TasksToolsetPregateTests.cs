@@ -11,6 +11,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // Запись предгейта в карточке задачи (MCP): ревьюер смотрит tasks_get и должен увидеть
 // вердикт и коммит, к которому он привязан. Без этого предгейт для ревьюера — пустое место.
 [Trait("Category", "Integration")]
+[Trait("Category", "Host")]
 public class TasksToolsetPregateTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

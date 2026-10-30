@@ -10,6 +10,7 @@ using FluentAssertions;
 namespace ClaudeHomeServer.Tests.Controllers;
 
 // Управление маршрутом фоновых действий (локаль/claude) — эндпоинт только для админов.
+[Trait("Category", "Host")]
 public class LocalActionsAdminControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly HttpClient _admin;

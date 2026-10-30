@@ -13,6 +13,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // ADR-016, задача 3.2: SessionManager отдаёт ходу среду ПРОЕКТА. Боевая фабрика раннеров
 // (LauncherFactory из DI), перехвачен только адаптер: какой Launcher пришёл в контексте.
+[Trait("Category", "Host")]
 public class SessionManagerProjectLauncherTests : IDisposable
 {
     private sealed class CapturingFactory : ILlmSessionAdapterFactory

@@ -24,8 +24,17 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // (решение 3): имя — детерминированная функция пары (ref, version), поэтому одна версия
 // одного источника — одна карточка (повторный захват ничего не переписывает), новая версия —
 // новая карточка, а два разных источника одного имени получить не могут: дискриминатор имени
-// — хэш ref+version. Общего изменяемого состояния здесь нет и блокировка раздела не нужна:
-// пишется новый файл, состояние раздела (его страницы) не трогается; проекции раздела
+// — хэш ref+version.
+//
+// Карточка — страница раздела, и её запись в манифесте раздела обязательна (дефект d144bb0f):
+// сверка применения (WikiApplyService.CheckSectionAgainstDisk) считает любой .md раздела вне
+// манифеста дрейфом — карточка без записи отбивала первое же применение после захвата, и
+// цепочка «захват → разбор → применение» не работала. Поэтому запись идёт под блокировкой
+// раздела (тот же замок, что у Хранителя и применения): файл и его запись атомарны относительно
+// других операций раздела — иначе параллельное применение увидело бы файл до записи и
+// отказало бы разделу. Записывает хэш байтов диска Хранитель (RegisterCapturedUnderLock):
+// манифест — его состояние. Строки журнала захват не даёт: журнал — изменения знаний
+// (словарь op — apply/adopt), карточка — данные захвата, не знание. Проекции раздела
 // обновляет транзакция применения (шаг 6), не захват.
 //
 // Чтение заметки — только публичными средствами NotesService с владельцем (GetDetail для
@@ -66,13 +75,17 @@ public sealed class WikiSourceCapture
     private readonly NotesService _notes;
     private readonly IProjectManager _projects;
     private readonly ISessionDirectory _sessions;
+    // Замок раздела и запись в его манифест — у Хранителя: карточка, которую он не запишет,
+    // станет дрейфом для ближайшего применения (дефект d144bb0f, см. шапку).
+    private readonly WikiKeeper _keeper;
 
     public WikiSourceCapture(NotesService notes, IProjectManager projects, ISessionDirectory sessions,
-        IConfiguration config)
+        IConfiguration config, WikiKeeper keeper)
     {
         _notes = notes;
         _projects = projects;
         _sessions = sessions;
+        _keeper = keeper;
         // Каталог данных — как у всех сервисов вертикали (DataPath указывает на projects.json).
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
@@ -80,14 +93,16 @@ public sealed class WikiSourceCapture
 
     /// <summary>Результат захвата. При Ok: CardRelPath — путь карточки относительно pages/
     /// (он же ключ sourceTexts правила дословности WikiGate — S6a), SourceText — текст
-    /// источника для QuoteMatcher. При отказе: только Reason, на диске не появилось ничего.</summary>
+    /// источника для QuoteMatcher. При отказе: только Reason, на диске не появилось ничего
+    /// — кроме сбоя посреди записи (файл карточки уже на диске, записи в манифесте нет):
+    /// причина называет это, повторный захват той же версии дописывает запись (п. идемпотентности).</summary>
     public readonly record struct Result(bool Ok, string? Reason, string? CardRelPath, string? SourceText);
 
     /// <summary>Захват заметки (origin: note). target — null или "common": явный выбор человека
     /// для источника вне проекта (ADR-036, решение 3); проектному источнику — отказ там же.
     /// Заметка с `expires` — не источник: она временная, карточка временного источника
     /// навсегда осталась бы stale (триггер «заметка» в ADR-035, решение 12 — тоже «не expires»).</summary>
-    public Result CaptureNote(string ownerId, string noteId, string? target = null)
+    public async Task<Result> CaptureNote(string ownerId, string noteId, string? target = null)
     {
         var note = _notes.GetDetail(ownerId, noteId);
         if (note is null)
@@ -124,14 +139,14 @@ public sealed class WikiSourceCapture
             return Refused($"файл заметки не читается: {e.Message}");
         }
 
-        return WriteCard(ownerId, decision.SectionKey, WikiGate.OriginNote, $"note:{note.Id}",
+        return await WriteCard(ownerId, decision.SectionKey, WikiGate.OriginNote, $"note:{note.Id}",
             versionHash, note.Title, note.Id, note.Content);
     }
 
     /// <summary>Захват файла проекта (origin: file): только внутри корня своего проекта и не
     /// под {data}/wiki. Файл вне проекта (дом «личный») здесь не принимается: его принесёт
     /// следующий источник.</summary>
-    public Result CaptureFile(string ownerId, string projectId, string relPath)
+    public async Task<Result> CaptureFile(string ownerId, string projectId, string relPath)
     {
         var project = _projects.GetById(projectId);
         if (project is null || project.OwnerId != ownerId)
@@ -209,7 +224,7 @@ public sealed class WikiSourceCapture
 
         // ref файла несёт проект: карточка может быть скопирована в раздел выше при повышении
         // (ADR-036, решение 5), и по одному только пути файла источник не опознать.
-        return WriteCard(ownerId, decision.SectionKey, WikiGate.OriginFile, $"file:{projectId}/{rel}",
+        return await WriteCard(ownerId, decision.SectionKey, WikiGate.OriginFile, $"file:{projectId}/{rel}",
             versionHash, Path.GetFileNameWithoutExtension(rel), rel, sourceText);
     }
 
@@ -272,7 +287,7 @@ public sealed class WikiSourceCapture
         // Версия источника-сессии — сама выдержка: карточка неизменяема (решение 3), а
         // переписывание истории (сброс курсора, §12б этап 1) даёт другую выдержку → новую
         // карточку, не перезапись старой. Заголовок — имя чата, при пустом — id (CardName).
-        return WriteCard(ownerId, sectionKey, WikiGate.OriginSession, ref_,
+        return await WriteCard(ownerId, sectionKey, WikiGate.OriginSession, ref_,
             Sha256OfBytes(Encoding.UTF8.GetBytes(excerpt)), session.Name ?? "", sessionId, excerpt);
     }
 
@@ -281,18 +296,58 @@ public sealed class WikiSourceCapture
     // заголовок страницы — одна строка: сноска резолвится по заголовку (WikiGate.FindPage),
     // уникальность заголовка в разделе — правило гейта (CheckUniqueness), и она же держит
     // «два разных источника не затирают карточку друг друга».
-    private Result WriteCard(string ownerId, string sectionKey, string origin, string ref_,
+    //
+    // Запись — под блокировкой раздела (тот же замок, что у Хранителя и применения): проверка
+    // состояния раздела, файл карточки и его запись в манифесте — одна атомарная относительно
+    // других операций раздела операция. Вызывающий захват замок не держит (разбор чатов зовёт
+    // CaptureSession до очереди заявок, хронику пишет через WritePageAsync после применения) —
+    // вложенной второй блокировки того же ключа здесь нет.
+    private async Task<Result> WriteCard(string ownerId, string sectionKey, string origin, string ref_,
         string versionHash, string titleRaw, string idFallback, string sourceText)
     {
         var root = WikiPaths.Root(_dataDir, ownerId);
         var name = CardName(titleRaw, idFallback, ref_, versionHash);
         var cardRel = WikiSections.Folder(sectionKey)! + SourceDirName + "/" + name + ".md";
-        var full = SafePath.JoinBelowRoot(root, "pages/" + cardRel);
+        try
+        {
+            return await _keeper.WithSectionsLockedAsync(ownerId, [sectionKey],
+                () => Task.FromResult(WriteCardUnderLock(ownerId, root, sectionKey, name, cardRel, origin, ref_,
+                    versionHash, sourceText)));
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException
+            or InvalidOperationException or NotSupportedException)
+        {
+            // Сбой посреди записи (файл карточки на диске, записи в манифесте нет) наружу не
+            // выходит: исход — отказ с причиной, повторный захват той же версии дописывает
+            // запись (файл под своим именем принимается без перезаписи).
+            return Refused($"запись карточки не завершена: {e.Message}");
+        }
+    }
 
-        // Имя — функция (ref, version): существующий файл под этим именем — карточка именно
-        // этой версии этого источника. Карточка неизменяема — не перечитываем и не переписываем
-        // (в том числе captured: время первой фиксации — факт, не метка последнего обращения).
-        if (!File.Exists(full))
+    private Result WriteCardUnderLock(string ownerId, string root, string sectionKey, string name, string cardRel,
+        string origin, string ref_, string versionHash, string sourceText)
+    {
+        var manifest = WikiManifest.TryRead(root, sectionKey);
+        if (manifest.State == WikiManifestState.Invalid)
+            return Refused($"манифест раздела «{sectionKey}» невалиден — захват в него не пишет");
+
+        // Раздел должен быть согласован с манифестом до нашей записи: писать карточку в
+        // разложенный дрейфом раздел значило бы прятать чужую правку за своей записью.
+        var drift = CheckSectionForCapture(root, sectionKey, manifest.Manifest, cardRel);
+        if (drift is not null)
+            return Refused(drift);
+
+        var full = SafePath.JoinBelowRoot(root, "pages/" + cardRel);
+        if (File.Exists(full))
+        {
+            // Имя — функция (ref, version): существующий файл под этим именем — карточка именно
+            // этой версии этого источника. Карточка неизменяема — не перечитываем и не переписываем
+            // (в том числе captured: время первой фиксации — факт, не метка последнего обращения).
+            var foreign = CheckExistingCard(root, cardRel, ref_);
+            if (foreign is not null)
+                return Refused(foreign);
+        }
+        else
         {
             var fm = new WikiFrontmatter
             {
@@ -304,7 +359,65 @@ public sealed class WikiSourceCapture
             };
             WikiFileWriter.Write(root, "pages/" + cardRel, fm.Render() + "\n\n# " + name + "\n");
         }
+
+        // Запись карточки в манифест раздела — её делает Хранитель (он её написал): карточка
+        // вне манифеста — дрейф для ближайшего применения (дефект d144bb0f). Запись уже
+        // подтверждена сверкой выше (запись в манифесте совпадает с диском) — не повторяем.
+        if (!manifest.Manifest.ContainsKey(cardRel))
+            _keeper.RegisterCapturedUnderLock(ownerId, sectionKey, cardRel);
         return new(true, null, cardRel, sourceText);
+    }
+
+    // Состояние раздела перед записью карточки — та же сверка, что шаг 2 применения
+    // (CheckSectionAgainstDisk у него — private, файл вне права этой правки), за вычетом
+    // нашей карточки: её записи в манифесте ещё нет, это ровно то, что мы записываем.
+    // Служебные «_*» — не страницы (тот же контракт, что у Хранителя).
+    private static string? CheckSectionForCapture(string root, string sectionKey,
+        IReadOnlyDictionary<string, string> manifest, string ourCardRel)
+    {
+        foreach (var (page, hash) in manifest)
+        {
+            var full = SafePath.JoinBelowRoot(root, "pages/" + page);
+            if (!File.Exists(full))
+                return $"файл «{page}» из манифеста раздела отсутствует на диске: захват не пишет в раздел с потерянным файлом";
+            if (Sha256OfBytes(File.ReadAllBytes(full)) != hash)
+                return $"файл «{page}» расходится с манифестом раздела: захват не пишет в раздел с правкой мимо Хранителя";
+        }
+
+        var folder = WikiSections.Folder(sectionKey);
+        if (folder is null)
+            return $"«{sectionKey}» не ключ раздела вики";
+        var dir = SafePath.JoinBelowRoot(root, "pages/" + folder);
+        if (!Directory.Exists(dir))
+            return null; // раздела на диске нет: норма до первой операции (пустой манифест проверен выше)
+
+        var known = new HashSet<string>(manifest.Keys, StringComparer.Ordinal);
+        foreach (var full in Directory.EnumerateFiles(dir, "*.md", SearchOption.AllDirectories))
+        {
+            var pageKey = folder + Path.GetRelativePath(dir, full).Replace('\\', '/');
+            if (WikiPaths.IsProjection(pageKey) || pageKey == ourCardRel)
+                continue;
+            if (!known.Contains(pageKey))
+                return $"файл «{pageKey}» на диске, но не в манифесте раздела: захват не пишет в раздел с чужими файлами вне манифеста";
+        }
+        return null;
+    }
+
+    // Файл под нашим именем уже на диске (повторный захват или карточка прежней версии кода,
+    // записанная без манифеста): имя — функция (ref, version), так что файл под ним — наша
+    // карточка, если это вообще она: принимаем только валидную страницу type: source со своим
+    // ref; чужой файл под нашим именем — отказ, а не молчаливая перезапись чужого.
+    private static string? CheckExistingCard(string root, string cardRel, string ref_)
+    {
+        var text = WikiFileWriter.Read(root, "pages/" + cardRel);
+        if (text is null)
+            return $"файл «{cardRel}» исчез между проверкой и чтением: состояние раздела меняется под рукой, захват повторяется";
+        var parsed = WikiPage.Parse(text);
+        if (parsed.Model is null || parsed.Model.Frontmatter.Type != WikiFrontmatter.TypeSource)
+            return $"файл «{cardRel}» под именем карточки не читается как карточка источника";
+        if (parsed.Model.Frontmatter.Ref != ref_)
+            return $"файл «{cardRel}» — карточка другого источника (ref «{parsed.Model.Frontmatter.Ref}»): имя занято";
+        return null;
     }
 
     /// <summary>Безопасная форма имени карточки: из заголовка, при пустом — из id источника

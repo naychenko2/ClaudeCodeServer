@@ -140,7 +140,7 @@ public class WikiChatIngestTests : IDisposable
     ]);
 
     private WikiChatIngestService Sut(FakeLlm llm) =>
-        new(new WikiSourceCapture(_notes, _projects, _sessions, _config),
+        new(new WikiSourceCapture(_notes, _projects, _sessions, _config, _keeper),
             new WikiIngestService(llm, new NoSpheres(), _apply, _config),
             _sessions, _keeper, _config);
 
@@ -172,11 +172,9 @@ public class WikiChatIngestTests : IDisposable
 
     // ── c1: второй разбор — только дельта после курсора; хроника одна и дописана ──
 
-    // Skip: дефект d144bb0f — карточка захвата пишется вне манифеста раздела, первое
-    // же применение отбивается дрейфом; цепка «захват → разбор → применение» зелёная
-    // только с решением по дефекту (проверено: с экспериментальным исключением
-    // Источники/ из дрейфа эти пять тестов зелёные, правка не коммитилась).
-    [Fact(Skip = "дефект d144bb0f: карточка захвата вне манифеста — применение отбито дрейфом; снять skip после решения")]
+    // Цепка «захват → разбор → применение»: зелёна, когда захват регистрирует карточку в
+    // манифесте раздела (дефект d144bb0f решён — см. WikiSourceCaptureTests).
+    [Fact]
     public async Task C1_ВторойРазбор_ТолькоДельта_ХроникаОднаИДописана()
     {
         AddSession();
@@ -225,7 +223,7 @@ public class WikiChatIngestTests : IDisposable
 
     // ── c2: подмена записи N — курсор сброшен в 0, повторные утверждения не дублируются ──
 
-    [Fact(Skip = "дефект d144bb0f: карточка захвата вне манифеста — применение отбито дрейфом; снять skip после решения")]
+    [Fact]
     public async Task C2_ПодменаЗаписиN_КурсорСброшен_УтвержденияНеДублируются()
     {
         AddSession();
@@ -275,8 +273,10 @@ public class WikiChatIngestTests : IDisposable
         SetShortHistory();
 
         var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1));
-        // Сбой при применении: карточка источника исчезает с диска во время прохода B —
-        // применение не находит цель сносок (WikiApplyService.cs:540-542) и отказывает пакет.
+        // Сбой при применении: карточка источника исчезает с диска во время прохода B.
+        // Карточку при захвате регистрирует Хранитель (дефект d144bb0f), поэтому её удаление —
+        // расхождение диска с манифестом: применение стопорит шаг 2 (CheckSectionAgainstDisk,
+        // WikiApplyService.cs:628-629) раньше рендера — «файл из манифеста отсутствует на диске».
         llm.BeforeNextCall(() =>
         {
             var dir = SafePath.JoinBelowRoot(Root, "pages/Проекты/p1/" + WikiSourceCapture.SourceDirName);
@@ -286,7 +286,7 @@ public class WikiChatIngestTests : IDisposable
         var res = await Sut(llm).AnalyzeAsync(User, ChatId);
 
         res.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected, res.Reason);
-        res.Reason.Should().Contain("не найдена в разделе", "причина применения доходит до вызывающего");
+        res.Reason.Should().Contain("из манифеста раздела отсутствует на диске", "причина применения доходит до вызывающего");
         WikiChatTriageStore.Get(Root).Entries.Should().BeEmpty("сбой — курсор не двигается");
         ChronicleFiles().Should().BeEmpty("сбой не оставляет половины хроники");
     }
@@ -371,7 +371,7 @@ public class WikiChatIngestTests : IDisposable
 
     // ── гонка (хвост ревью S6b-3): две заявки одного чата — один разбор ──
 
-    [Fact(Skip = "дефект d144bb0f: карточка захвата вне манифеста — применение отбито дрейфом; снять skip после решения")]
+    [Fact]
     public async Task Гонка_ДвеЗаявкиОдногоЧата_ОдинРазбор()
     {
         AddSession();
@@ -404,7 +404,7 @@ public class WikiChatIngestTests : IDisposable
 
     // ── отмена заявителя не гасит чужую заявку (хвост ревью S6b-3) ──
 
-    [Fact(Skip = "дефект d144bb0f: карточка захвата вне манифеста — применение отбито дрейфом; снять skip после решения")]
+    [Fact]
     public async Task ОтменаЗаявителя_НеГаситОбщийРазбор()
     {
         AddSession();
@@ -432,7 +432,7 @@ public class WikiChatIngestTests : IDisposable
 
     // ── сбой посреди окон: курсор на месте, половины хроники нет (урок S6e-2) ──
 
-    [Fact(Skip = "дефект d144bb0f: карточка захвата вне манифеста — применение отбито дрейфом; снять skip после решения")]
+    [Fact]
     public async Task СбойПосредиОкон_КурсорНаМесте_БезПоловиныХроники()
     {
         AddSession();

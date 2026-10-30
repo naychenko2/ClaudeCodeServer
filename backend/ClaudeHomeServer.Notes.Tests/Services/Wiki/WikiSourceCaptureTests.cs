@@ -5,6 +5,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Notes.Wiki;
+using ClaudeHomeServer.Services.Spheres;
 using ClaudeHomeServer.Tests.Helpers;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -26,6 +27,8 @@ public class WikiSourceCaptureTests : IDisposable
     private readonly ProjectManager _projects;
     private readonly NotesService _notes;
     private readonly FakeSessions _sessions;
+    private readonly WikiKeeper _keeper;
+    private readonly WikiApplyService _apply;
     private readonly WikiSourceCapture _sut;
 
     public WikiSourceCaptureTests()
@@ -44,9 +47,15 @@ public class WikiSourceCaptureTests : IDisposable
             .Build();
         var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         _projects = new ProjectManager(config, users, new AppSettingsService(config));
-        _notes = new NotesService(_projects, config, NullLogger<NotesService>.Instance);
+        // Флаг llm-wiki: состояние раздела читается моделью (BuildFresh) — нужно проверке
+        // применения в тесте дефекта d144bb0f (тот же фиксатор, что в WikiApplyCheckTests).
+        _notes = new NotesService(_projects, config, NullLogger<NotesService>.Instance, null, new WikiFlagOn());
         _sessions = new FakeSessions();
-        _sut = new WikiSourceCapture(_notes, _projects, _sessions, config);
+        // Замок раздела и запись карточки в манифест — у Хранителя; проверка применения —
+        // настоящая (тест «первый Prepare после захвата — Ready»).
+        _keeper = new WikiKeeper(_notes, config);
+        _apply = new WikiApplyService(_notes, _keeper, new NoSpheres(), config);
+        _sut = new WikiSourceCapture(_notes, _projects, _sessions, config, _keeper);
     }
 
     public void Dispose()
@@ -129,13 +138,13 @@ public class WikiSourceCaptureTests : IDisposable
     // —— карточка заметки: место, отсутствие текста, хэш байтов (c2) ——
 
     [Fact]
-    public void ЗахватЗаметки_карточкаВИсточникахСвоегоРаздела_безТекста_хэшБайтов()
+    public async Task ЗахватЗаметки_карточкаВИсточникахСвоегоРаздела_безТекста_хэшБайтов()
     {
         var project = NewProject("П1");
         var note = _notes.Create(User, new CreateNoteRequest(
             "Заметка встречи", "ТЕЛО-КАРТОЧКА-НЕ-КОПИРУЕТСЯ. Мы решили открывать встречу в понедельник.", project.Id));
 
-        var r = _sut.CaptureNote(User, note.Id);
+        var r = await _sut.CaptureNote(User, note.Id);
         r.Ok.Should().BeTrue(r.Reason);
         r.CardRelPath.Should().StartWith($"Проекты/{project.Id}/Источники/");
         r.CardRelPath.Should().EndWith(".md");
@@ -159,13 +168,13 @@ public class WikiSourceCaptureTests : IDisposable
     // Контракт S6a (хвост ревью S6a, 9fee4bc6): ключ sourceTexts — путь карточки (Draft.Path),
     // значение — текст источника, не null; с ним правило дословности гейта проходит.
     [Fact]
-    public void ЗахватЗаметки_текстИКлючКарточкиПроходятДословностьГейта()
+    public async Task ЗахватЗаметки_текстИКлючКарточкиПроходятДословностьГейта()
     {
         var project = NewProject("П2");
         var note = _notes.Create(User, new CreateNoteRequest(
             "Заметка встречи", "Мы решили открывать встречу в понедельник.", project.Id));
 
-        var r = _sut.CaptureNote(User, note.Id);
+        var r = await _sut.CaptureNote(User, note.Id);
         r.Ok.Should().BeTrue(r.Reason);
         r.SourceText.Should().Be(note.Content);
 
@@ -201,14 +210,14 @@ public class WikiSourceCaptureTests : IDisposable
     // Карточка неизменяема: повторный захват той же версии — та же карточка, файл не тронут
     // (в том числе captured: время первой фиксации, не метка последнего обращения).
     [Fact]
-    public void ЗахватЗаметки_идемпотентен_карточкаНеПерезаписывается()
+    public async Task ЗахватЗаметки_идемпотентен_карточкаНеПерезаписывается()
     {
         var project = NewProject("П3");
         var note = _notes.Create(User, new CreateNoteRequest("Один раз", "содержание", project.Id));
 
-        var r1 = _sut.CaptureNote(User, note.Id);
+        var r1 = await _sut.CaptureNote(User, note.Id);
         var first = ReadCard(r1);
-        var r2 = _sut.CaptureNote(User, note.Id);
+        var r2 = await _sut.CaptureNote(User, note.Id);
 
         r2.Ok.Should().BeTrue(r2.Reason);
         r2.CardRelPath.Should().Be(r1.CardRelPath);
@@ -217,28 +226,28 @@ public class WikiSourceCaptureTests : IDisposable
 
     // Дом вне проекта: по умолчанию «Личное»; с явным target — «Общее» (решение 3).
     [Fact]
-    public void ЗахватЛичнойЗаметки_личныйРаздел_аСTargetCommon_общее()
+    public async Task ЗахватЛичнойЗаметки_личныйРаздел_аСTargetCommon_общее()
     {
         var a = _notes.Create(User, new CreateNoteRequest("Личная мысль", "текст а"));
         var b = _notes.Create(User, new CreateNoteRequest("Мысль в общее", "текст б"));
 
-        var personal = _sut.CaptureNote(User, a.Id);
+        var personal = await _sut.CaptureNote(User, a.Id);
         personal.Ok.Should().BeTrue(personal.Reason);
         personal.CardRelPath.Should().StartWith("Личное/Источники/");
 
-        var common = _sut.CaptureNote(User, b.Id, "common");
+        var common = await _sut.CaptureNote(User, b.Id, "common");
         common.Ok.Should().BeTrue(common.Reason);
         common.CardRelPath.Should().StartWith("Общее/Источники/");
     }
 
     // Проектный источник с target — отказ на слое захвата, и ничего не записано (c1).
     [Fact]
-    public void ЗахватПроектнойЗаметки_сTargetCommon_отказИНичегоНеЗаписано()
+    public async Task ЗахватПроектнойЗаметки_сTargetCommon_отказИНичегоНеЗаписано()
     {
         var project = NewProject("П4");
         var note = _notes.Create(User, new CreateNoteRequest("Проектная", "текст", project.Id));
 
-        var r = _sut.CaptureNote(User, note.Id, "common");
+        var r = await _sut.CaptureNote(User, note.Id, "common");
         r.Ok.Should().BeFalse();
         r.Reason.Should().Contain("повышени");
         Directory.Exists(Path.Combine(WikiPaths.Pages(_dir, User), "Проекты", project.Id, "Источники"))
@@ -248,33 +257,33 @@ public class WikiSourceCaptureTests : IDisposable
     // —— отказы (c3) ——
 
     [Fact]
-    public void ЗаметкаСExpires_неИсточник()
+    public async Task ЗаметкаСExpires_неИсточник()
     {
         var note = _notes.Create(User, new CreateNoteRequest("Временная", "текст", "personal", ExpiresAfterMinutes: 60));
-        var r = _sut.CaptureNote(User, note.Id);
+        var r = await _sut.CaptureNote(User, note.Id);
         r.Ok.Should().BeFalse();
         r.Reason.Should().Contain("expires");
     }
 
     [Fact]
-    public void ЧужойВладелецИЧужойПроект_отказ()
+    public async Task ЧужойВладелецИЧужойПроект_отказ()
     {
         // Заметка другого владельца в модели этого владельца не существует — не читается
         // «по произвольному пути» и не захватывается.
         var alienNote = _notes.Create("u2", new CreateNoteRequest("Чужая", "тело"));
-        _sut.CaptureNote(User, alienNote.Id).Ok.Should().BeFalse();
+        (await _sut.CaptureNote(User, alienNote.Id)).Ok.Should().BeFalse();
 
         var alien = _projects.Create("Чужой", Path.Combine(_roots, "alien"), "u2", "u2", createDirectory: true);
         File.WriteAllText(Path.Combine(alien.RootPath!, "файл.md"), "чужой текст");
-        _sut.CaptureFile(User, alien.Id, "файл.md").Ok.Should().BeFalse();
+        (await _sut.CaptureFile(User, alien.Id, "файл.md")).Ok.Should().BeFalse();
     }
 
     [Fact]
-    public void ФайлЗаКорнемПроектаИПодDataWiki_отказ()
+    public async Task ФайлЗаКорнемПроектаИПодDataWiki_отказ()
     {
         var project = NewProject("П5");
-        _sut.CaptureFile(User, project.Id, "../вне.md").Ok.Should().BeFalse();
-        _sut.CaptureFile(User, project.Id, "docs/../вне.md").Ok.Should().BeFalse();
+        (await _sut.CaptureFile(User, project.Id, "../вне.md")).Ok.Should().BeFalse();
+        (await _sut.CaptureFile(User, project.Id, "docs/../вне.md")).Ok.Should().BeFalse();
 
         // Корень проекта может быть предком data/ (реальный случай серверного проекта):
         // файл под {data}/wiki — страница вики, а не источник (ADR-035, решение 2).
@@ -282,7 +291,7 @@ public class WikiSourceCaptureTests : IDisposable
         var wikiFile = Path.Combine(_dir, "wiki", User, "pages", "Общее", "Страница.md");
         Directory.CreateDirectory(Path.GetDirectoryName(wikiFile)!);
         File.WriteAllText(wikiFile, "страница вики");
-        var r = _sut.CaptureFile(User, wide.Id, $"wiki/{User}/pages/Общее/Страница.md");
+        var r = await _sut.CaptureFile(User, wide.Id, $"wiki/{User}/pages/Общее/Страница.md");
         r.Ok.Should().BeFalse();
         r.Reason.Should().Contain("wiki");
     }
@@ -290,7 +299,7 @@ public class WikiSourceCaptureTests : IDisposable
     // M1 ревью S6h: SafePath лексический — «docs/link.md → ~/.ssh/id_rsa» лежит в корне строкой
     // и читался бы целиком. Инвариант: файл проекта читается только изнутри канонического корня.
     [Fact]
-    public void ФайлЧерезСимвольнуюСсылку_отказ_цельНеЧитается()
+    public async Task ФайлЧерезСимвольнуюСсылку_отказ_цельНеЧитается()
     {
         var project = NewProject("П8");
         var outside = Path.Combine(_roots, "вне_" + project.Id, "id_rsa");
@@ -304,7 +313,7 @@ public class WikiSourceCaptureTests : IDisposable
             return; // создание ссылки на Windows требует прав (Developer Mode) — случай POSIX
         }
 
-        var r = _sut.CaptureFile(User, project.Id, "docs/link.md");
+        var r = await _sut.CaptureFile(User, project.Id, "docs/link.md");
         r.Ok.Should().BeFalse();
         r.Reason.Should().Contain("ссылк");
         // Цель не «прочиталась как файл проекта»: на диске вики не появилось ничего.
@@ -315,7 +324,7 @@ public class WikiSourceCaptureTests : IDisposable
     // M3 ревью S6h: закрыт весь {data}, а не только {data}/wiki: под ним живут чужие владельцы
     // (notes/{другойOwner}/) и реестры — источник не выходит за своего.
     [Fact]
-    public void ФайлПодData_ЧужойВладелецИлиРеестр_отказ()
+    public async Task ФайлПодData_ЧужойВладелецИлиРеестр_отказ()
     {
         // Реальный случай правки: корень проекта — предок {data} (рабочая папка содержит data/).
         var wide = _projects.Create("Шир2", _dir, User, User, createDirectory: true);
@@ -323,18 +332,18 @@ public class WikiSourceCaptureTests : IDisposable
         Directory.CreateDirectory(Path.GetDirectoryName(other)!);
         File.WriteAllText(other, "заметка другого владельца");
 
-        var r = _sut.CaptureFile(User, wide.Id, "notes/u2/x.md");
+        var r = await _sut.CaptureFile(User, wide.Id, "notes/u2/x.md");
         r.Ok.Should().BeFalse();
         r.Reason.Should().Contain("{data}");
 
         // Тот же отказ и для реестра — positional, до обращения к файлу.
-        _sut.CaptureFile(User, wide.Id, "projects.json").Ok.Should().BeFalse();
+        (await _sut.CaptureFile(User, wide.Id, "projects.json")).Ok.Should().BeFalse();
     }
 
     // —— карточка файла: ref с проектом, хэш байтов, а не строки (c2/c3) ——
 
     [Fact]
-    public void ЗахватФайла_карточкаВРазделеПроекта_хэшБайтовАНеСтроки()
+    public async Task ЗахватФайла_карточкаВРазделеПроекта_хэшБайтовАНеСтроки()
     {
         var project = NewProject("П6");
         const string fileRel = "docs/Гайд.md";
@@ -343,7 +352,7 @@ public class WikiSourceCaptureTests : IDisposable
         // BOM: байты файла ≠ UTF8-байты прочитанной строки — карточка обязана держать хэш файла.
         File.WriteAllText(full, "файл источника: решено вести обзор", new UTF8Encoding(true));
 
-        var r = _sut.CaptureFile(User, project.Id, fileRel);
+        var r = await _sut.CaptureFile(User, project.Id, fileRel);
         r.Ok.Should().BeTrue(r.Reason);
         r.CardRelPath.Should().StartWith($"Проекты/{project.Id}/Источники/");
 
@@ -359,13 +368,13 @@ public class WikiSourceCaptureTests : IDisposable
     // M4 ревью S6h: предел — до чтения. Файл разрежённый: на диске он почти ничего не занимает,
     // но прочитанный целиком стал бы источником (без проверки размера этот тест краснеет).
     [Fact]
-    public void ФайлСвышеПредела_отказДоЧтения()
+    public async Task ФайлСвышеПредела_отказДоЧтения()
     {
         var project = NewProject("П9");
         var full = Path.Combine(project.RootPath!, "big.bin");
         using (var fs = new FileStream(full, FileMode.Create)) fs.SetLength(WikiSourceCapture.MaxSourceBytes + 1);
 
-        var r = _sut.CaptureFile(User, project.Id, "big.bin");
+        var r = await _sut.CaptureFile(User, project.Id, "big.bin");
         r.Ok.Should().BeFalse();
         r.Reason.Should().Contain("предела");
     }
@@ -373,18 +382,18 @@ public class WikiSourceCaptureTests : IDisposable
     // M4 ревью S6h: бинарник и битый UTF-8 — отказ с причиной, а не U+FFFD в тексте источника
     // (раньше ReadAllText молча заменял битые байты, и дословность QuoteMatcher лгала бы).
     [Fact]
-    public void БинарникИлиНевалидныйUTF8_отказБезИсключения()
+    public async Task БинарникИлиНевалидныйUTF8_отказБезИсключения()
     {
         var project = NewProject("П10");
         var bin = Path.Combine(project.RootPath!, "shot.png");
         File.WriteAllBytes(bin, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0xFF, 0xFE]); // PNG: 0x89 и 0xFF — не UTF-8
-        var r = _sut.CaptureFile(User, project.Id, "shot.png");
+        var r = await _sut.CaptureFile(User, project.Id, "shot.png");
         r.Ok.Should().BeFalse();
         r.Reason.Should().Contain("UTF-8");
 
         var broken = Path.Combine(project.RootPath!, "broken.md");
         File.WriteAllBytes(broken, [.. Encoding.UTF8.GetBytes("текст "), 0xC3, 0x28]); // битая последовательность
-        var r2 = _sut.CaptureFile(User, project.Id, "broken.md");
+        var r2 = await _sut.CaptureFile(User, project.Id, "broken.md");
         r2.Ok.Should().BeFalse();
         r2.Reason.Should().Contain("UTF-8");
     }
@@ -392,15 +401,15 @@ public class WikiSourceCaptureTests : IDisposable
     // —— недоверенный заголовок (c3, урок ревью S2b-3) ——
 
     [Fact]
-    public void ЗаголовкиСпецсимволов_неЛомаютКарточкуИНеЗатираютДругДруга()
+    public async Task ЗаголовкиСпецсимволов_неЛомаютКарточкуИНеЗатираютДругДруга()
     {
         var project = NewProject("П7");
         // После нормализации безопасные имена равны ("A B") — карточки различает дискриминатор версии.
         var n1 = _notes.Create(User, new CreateNoteRequest("A | B", "содержание первое", project.Id));
         var n2 = _notes.Create(User, new CreateNoteRequest("A  B", "содержание второе", project.Id));
 
-        var r1 = _sut.CaptureNote(User, n1.Id);
-        var r2 = _sut.CaptureNote(User, n2.Id);
+        var r1 = await _sut.CaptureNote(User, n1.Id);
+        var r2 = await _sut.CaptureNote(User, n2.Id);
         r1.Ok.Should().BeTrue(r1.Reason);
         r2.Ok.Should().BeTrue(r2.Reason);
         r1.CardRelPath.Should().NotBe(r2.CardRelPath);
@@ -451,12 +460,12 @@ public class WikiSourceCaptureTests : IDisposable
 
     // Тот же случай через захват: карточка пишется, исключения наружу нет, имя реально на диске.
     [Fact]
-    public void ЗахватЗаметкиСНедопустимымНаWindowsЗаголовком_карточкаБезИсключения()
+    public async Task ЗахватЗаметкиСНедопустимымНаWindowsЗаголовком_карточкаБезИсключения()
     {
         var project = NewProject("П11");
         var note = _notes.Create(User, new CreateNoteRequest("План: Q4 <сезон*>", "тело заметки", project.Id));
 
-        var r = _sut.CaptureNote(User, note.Id);
+        var r = await _sut.CaptureNote(User, note.Id);
         r.Ok.Should().BeTrue(r.Reason);
         var name = Path.GetFileNameWithoutExtension(r.CardRelPath!);
         foreach (var bad in new[] { ':', '*', '?', '"', '<', '>' })
@@ -632,6 +641,250 @@ public class WikiSourceCaptureTests : IDisposable
         r.Ok.Should().BeTrue(r.Reason);
         r.SourceText.Should().NotContain("zzz-тайный-секрет-инстанса-12345");
         r.SourceText.Should().Contain("[REDACTED:instance-secret]");
+    }
+
+    // —— карточка в манифесте раздела (дефект d144bb0f, хвост ревью S6h, п.3) ——
+    //
+    // Карточка — страница раздела: без её записи в манифесте сверка применения
+    // (CheckSectionAgainstDisk) считает любой .md раздела вне манифеста дрейфом, и первое
+    // же применение после первого захвата отбито. Запись делает Хранитель под замком
+    // раздела; захват не пишет в раздел, состояние которого расходится с манифестом.
+
+    private string ManifestFile(string sectionKey) =>
+        Path.Combine(WikiPaths.Root(_dir, User), "keeper/manifest", WikiManifest.SafeFileName(sectionKey) + ".json");
+
+    private static string TopicPage(string title) => $$"""
+        ---
+        type: topic
+        aliases: []
+        owns: []
+        sources: []
+        status: active
+        ---
+
+        # {{title}}
+
+        ## Сводка
+
+        ## Хронология
+
+        ## Противоречия
+
+        ## История
+        """;
+
+    private static WikiPackage.Operation AppendOp(string page, string text, string baseHash) => new()
+    {
+        Op = WikiPackage.OpAppend,
+        Page = page,
+        Text = text,
+        Class = WikiPackage.ClassKey(WikiGate.OriginNote, WikiPackage.OpAppend),
+        Decision = WikiPackage.DecisionAuto,
+        BaseHashes = new Dictionary<string, string> { [page] = baseHash },
+    };
+
+    // Пакет доводится до «accepted» штатными переходами хранилища (тот же порядок,
+    // что в WikiApplyCheckTests): карточка и базовые хэши читаются с диска.
+    private WikiPackage CreateAccepted(string section, params WikiPackage.Operation[] ops)
+    {
+        var root = WikiPaths.Root(_dir, User);
+        var pkg = new WikiPackage
+        {
+            Id = WikiPackageStore.NewId(),
+            Section = section,
+            Sources = [new WikiPackage.SourceRef(WikiGate.OriginNote, "n1")],
+            Operations = ops,
+            Status = WikiPackage.StatusChecking,
+        };
+        var created = WikiPackageStore.Create(root, pkg);
+        created.Ok.Should().BeTrue(created.Reason);
+        WikiPackageStore.Transition(root, pkg.Id, WikiPackage.StatusProposed).Ok.Should().BeTrue();
+        WikiPackageStore.Transition(root, pkg.Id, WikiPackage.StatusAccepted).Ok.Should().BeTrue();
+        return WikiPackageStore.TryRead(root, pkg.Id).Package!;
+    }
+
+    // Сам дефект: первый Prepare раздела после захвата — Ready, а не CodeDrift.
+    // Раздел настоящий: базовая страница через Хранителя, пакет — штатными переходами,
+    // проверка — реальный WikiApplyService.
+    [Fact]
+    public async Task Захват_первыйPrepareРазделаПослеЗахвата_ReadyАНеCodeDrift()
+    {
+        var project = NewProject("П13");
+        var section = "projects/" + project.Id;
+        var root = WikiPaths.Root(_dir, User);
+        await _keeper.EnsureInitializedAsync(User);
+        var pageRel = $"Проекты/{project.Id}/Ритм встреч.md";
+        var w = await _keeper.WritePageAsync(User, section, pageRel, TopicPage("Ритм встреч"));
+        w.Status.Should().Be(WikiOpStatus.Applied, w.Reason);
+
+        var note = _notes.Create(User, new CreateNoteRequest(
+            "Заметка о ритме", "Мы решили открывать встречу в понедельник.", project.Id));
+        var r = await _sut.CaptureNote(User, note.Id);
+        r.Ok.Should().BeTrue(r.Reason);
+
+        var pkg = CreateAccepted(section,
+            AppendOp(pageRel, "Мы решили открывать встречу в понедельник",
+                WikiManifest.TryRead(root, section).Manifest[pageRel]));
+        var prepared = await _apply.PrepareAsync(User, pkg, new WikiApplyService.ApplyContext(
+            Path.GetFileNameWithoutExtension(r.CardRelPath!), r.SourceText));
+        prepared.Ready.Should().BeTrue($"код {prepared.Code}: {prepared.Reason}");
+    }
+
+    // Карточку регистрирует Хранитель: в манифесте — путь карточки и хэш БАЙТОВ её файла
+    // (та же форма, что сверяет применение). Мутация «не регистрировать» краснит этот тест
+    // и тест выше.
+    [Fact]
+    public async Task Захват_карточкаЗаписанаВМанифестеРаздела_хэшБайтовФайла()
+    {
+        var project = NewProject("П12");
+        var note = _notes.Create(User, new CreateNoteRequest("Ритм встреч", "Мы решили открывать встречу.", project.Id));
+
+        var r = await _sut.CaptureNote(User, note.Id);
+        r.Ok.Should().BeTrue(r.Reason);
+
+        var read = WikiManifest.TryRead(WikiPaths.Root(_dir, User), "projects/" + project.Id);
+        read.State.Should().Be(WikiManifestState.Valid);
+        var bytes = File.ReadAllBytes(SafePath.Join(WikiPaths.Root(_dir, User), "pages/" + r.CardRelPath!));
+        read.Manifest[r.CardRelPath!].Should().Be(Sha256OfBytes(bytes));
+    }
+
+    // Идемпотентность записи: повторный захват той же версии не двигает ни файл
+    // (existing test), ни манифест — байт в байт.
+    [Fact]
+    public async Task Захват_повторныйЗахват_манифестНеДополняется_карточкаНеДвижется()
+    {
+        var project = NewProject("П14");
+        var note = _notes.Create(User, new CreateNoteRequest("Один раз", "содержание", project.Id));
+
+        var r1 = await _sut.CaptureNote(User, note.Id);
+        r1.Ok.Should().BeTrue(r1.Reason);
+        var root = WikiPaths.Root(_dir, User);
+        var firstCard = File.ReadAllText(SafePath.Join(root, "pages/" + r1.CardRelPath!));
+        var firstManifest = File.ReadAllText(ManifestFile("projects/" + project.Id));
+
+        var r2 = await _sut.CaptureNote(User, note.Id);
+        r2.Ok.Should().BeTrue(r2.Reason);
+        r2.CardRelPath.Should().Be(r1.CardRelPath);
+        File.ReadAllText(SafePath.Join(root, "pages/" + r2.CardRelPath!)).Should().Be(firstCard);
+        File.ReadAllText(ManifestFile("projects/" + project.Id)).Should().Be(firstManifest);
+    }
+
+    // Карточка на диске без записи (записана прежней версией кода — или сбой посреди
+    // записи): следующий захват той же версии регистрирует её без ошибки и без перезаписи
+    // файла. Это же — доказательство «повтор безопасен» для сбоя посреди записи.
+    [Fact]
+    public async Task Захват_карточкаНаДискеБезЗаписи_регистрируетсяБезПерезаписи()
+    {
+        var project = NewProject("П15");
+        var section = "projects/" + project.Id;
+        var note = _notes.Create(User, new CreateNoteRequest("Прежняя", "содержание прежней", project.Id));
+        var r = await _sut.CaptureNote(User, note.Id);
+        r.Ok.Should().BeTrue(r.Reason);
+
+        var root = WikiPaths.Root(_dir, User);
+        var cardFull = SafePath.Join(root, "pages/" + r.CardRelPath!);
+        var before = File.ReadAllText(cardFull);
+        // Снимаем запись — состояние, в котором карточку оставила прежняя версия кода
+        // (RollbackTo с null — тот же API, которым применение откатывает create).
+        WikiManifest.RollbackTo(root, section, new Dictionary<string, string?> { [r.CardRelPath!] = null });
+
+        var again = await _sut.CaptureNote(User, note.Id);
+        again.Ok.Should().BeTrue(again.Reason);
+        again.CardRelPath.Should().Be(r.CardRelPath);
+        File.ReadAllText(cardFull).Should().Be(before, "карточка неизменяема: регистрация не переписывает файл");
+        WikiManifest.TryRead(root, section).Manifest[r.CardRelPath!]
+            .Should().Be(Sha256OfBytes(File.ReadAllBytes(cardFull)));
+    }
+
+    // Захват не пишет в раздел, состояние которого расходится с его манифестом: чужой файл
+    // вне записи — отказ с причиной, на диске не появилось ничего.
+    [Fact]
+    public async Task Захват_вРазделеЧужойФайлВнеМанифеста_отказИНичегоНеЗаписано()
+    {
+        var project = NewProject("П16");
+        var foreign = Path.Combine(WikiPaths.Pages(_dir, User), "Проекты", project.Id, "Чужое.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(foreign)!);
+        File.WriteAllText(foreign, "файл вне манифеста");
+
+        var note = _notes.Create(User, new CreateNoteRequest("В дрейфующий", "текст", project.Id));
+        var r = await _sut.CaptureNote(User, note.Id);
+        r.Ok.Should().BeFalse();
+        r.Reason.Should().Contain("не в манифесте");
+        Directory.Exists(Path.Combine(WikiPaths.Pages(_dir, User), "Проекты", project.Id, "Источники"))
+            .Should().BeFalse();
+    }
+
+    // Тот же отказ по второй стороне сверки: запись манифеста не совпадает с диском
+    // (страницу правили мимо Хранителя).
+    [Fact]
+    public async Task Захват_записьМанифестаРасходитсяСДиском_отказ()
+    {
+        var project = NewProject("П17");
+        var section = "projects/" + project.Id;
+        await _keeper.EnsureInitializedAsync(User);
+        var pageRel = $"Проекты/{project.Id}/Страница.md";
+        var w = await _keeper.WritePageAsync(User, section, pageRel, TopicPage("Страница"));
+        w.Status.Should().Be(WikiOpStatus.Applied, w.Reason);
+        File.WriteAllText(SafePath.Join(WikiPaths.Root(_dir, User), "pages/" + pageRel),
+            TopicPage("Страница") + "\nправка мимо Хранителя\n");
+
+        var note = _notes.Create(User, new CreateNoteRequest("После чужой правки", "текст", project.Id));
+        var r = await _sut.CaptureNote(User, note.Id);
+        r.Ok.Should().BeFalse();
+        r.Reason.Should().Contain("расходится с манифестом");
+    }
+
+    // Невалидный манифест раздела — тот же fail-closed, что у записи Хранителя и применения:
+    // отказ с причиной, ничего не пишется.
+    [Fact]
+    public async Task Захват_манифестРазделаНевалиден_отказБезЗаписи()
+    {
+        var project = NewProject("П18");
+        Directory.CreateDirectory(Path.GetDirectoryName(ManifestFile("projects/" + project.Id))!);
+        File.WriteAllText(ManifestFile("projects/" + project.Id), "");
+
+        var note = _notes.Create(User, new CreateNoteRequest("В битый манифест", "текст", project.Id));
+        var r = await _sut.CaptureNote(User, note.Id);
+        r.Ok.Should().BeFalse();
+        r.Reason.Should().Contain("невалиден");
+        Directory.Exists(Path.Combine(WikiPaths.Pages(_dir, User), "Проекты", project.Id, "Источники"))
+            .Should().BeFalse();
+    }
+
+    // Имя карточки — функция (ref, version); файл под ним, не являющийся карточкой,
+    // не перезаписывается: захват отказывается с причиной, чужой файл цел.
+    [Fact]
+    public async Task Захват_подИменемКарточкиЧужойФайл_отказБезПерезаписи()
+    {
+        var project = NewProject("П19");
+        var note = _notes.Create(User, new CreateNoteRequest("Занятое имя", "текст", project.Id));
+
+        // Имя, которое возьмёт захват (та же функция), занято чужим файлом.
+        var versionHash = Sha256OfBytes(File.ReadAllBytes(_notes.ResolveAttachmentPath(User, project.Id, note.Path)));
+        var name = WikiSourceCapture.CardName("Занятое имя", note.Id, "note:" + note.Id, versionHash);
+        var cardDir = Path.Combine(WikiPaths.Pages(_dir, User), "Проекты", project.Id, "Источники");
+        Directory.CreateDirectory(cardDir);
+        var foreignFile = Path.Combine(cardDir, name + ".md");
+        File.WriteAllText(foreignFile, "# Чужой файл без шапки вики\n");
+
+        var r = await _sut.CaptureNote(User, note.Id);
+        r.Ok.Should().BeFalse();
+        r.Reason.Should().Contain("не читается как карточка");
+        File.ReadAllText(foreignFile).Should().Be("# Чужой файл без шапки вики\n");
+    }
+
+    private sealed class WikiFlagOn : ClaudeHomeServer.Services.Composition.IFeatureFlagGate
+    {
+        public bool IsEnabled(string userId, string key) => key == FeatureFlagKeys.LlmWiki;
+    }
+
+    private sealed class NoSpheres : ISphereDirectory
+    {
+        public string? SphereOf(string ownerId, string projectId) => null;
+        public IReadOnlyList<string> ProjectsOf(string ownerId, string sphereId) => [];
+        public bool Enabled(string ownerId) => false;
+        public string? SphereName(string ownerId, string sphereId) => null;
+        public string? CharterOf(string ownerId, string sphereId) => null;
     }
 
     // Stub каталога сессий: набор чатов и их история — какие построил тест.

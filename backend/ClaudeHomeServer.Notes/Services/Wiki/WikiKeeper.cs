@@ -255,6 +255,23 @@ public sealed class WikiKeeper
         return new WikiOpResult(WikiOpStatus.Applied, null);
     }
 
+    /// <summary>Запись в манифест раздела страницы, которую Хранитель написал своим
+    /// внутренним инструментом (карточка источника — захват S6h): файл уже на диске, и его
+    /// запись в манифесте обязательна — страница раздела вне манифеста считается дрейфом
+    /// (сверка применения), и карточка без записи отбивала первое же применение после захвата
+    /// (дефект d144bb0f). Хэш — байтов, прочитанных с диска (та же форма, что у записи и
+    /// adopt). Вызывается изнутри WithSectionsLockedAsync: вызывающий держит замок раздела,
+    /// вторая блокировка того же ключа дала бы зависание. Строки журнала нет: журнал —
+    /// изменения знаний (словарь op — apply/adopt), карточка — данные захвата, не знание;
+    /// автора «user», как у adopt, здесь и быть не может — это авто-операция Хранителя.</summary>
+    internal void RegisterCapturedUnderLock(string ownerId, string sectionKey, string pageKey)
+    {
+        var root = WikiPaths.Root(_dataDir, ownerId);
+        var full = SafePath.JoinBelowRoot(root, "pages/" + pageKey);
+        WikiManifest.RecordApplied(root, sectionKey,
+            new Dictionary<string, string> { [pageKey] = Sha256OfBytes(File.ReadAllBytes(full)) });
+    }
+
     private void AppendEvent(string ownerId, string sectionKey, string pageKey, string actor, string summary)
     {
         if (WikiSections.TryProjectId(sectionKey, out var projectId))

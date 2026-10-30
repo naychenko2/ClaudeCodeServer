@@ -347,8 +347,10 @@ public sealed class WikiPackageRevert
 
     /// <summary>Прочитать запись состояния применения пакета: страница → sha256 тех байтов, которые
     /// записал этот пакет (пишет её шаг 6 применения — WikiApplyService.AppliedRecordRel). Нет
-    /// файла или не читается — null: отката нет (fail-closed), а не откат по манифесту.</summary>
-    private static IReadOnlyDictionary<string, string>? TryReadAppliedRecord(string root, string packageId)
+    /// файла или не читается — null: отката нет (fail-closed), а не откат по манифесту.
+    /// internal: её читает и снятие сносок (WikiRetractService, S4f-2), дополняя запись своим
+    /// состоянием, — форма определена здесь, в одном месте, как прообразы.</summary>
+    internal static IReadOnlyDictionary<string, string>? TryReadAppliedRecord(string root, string packageId)
     {
         var full = SafePath.Join(root, WikiApplyService.AppliedRecordRel(packageId));
         if (!File.Exists(full))

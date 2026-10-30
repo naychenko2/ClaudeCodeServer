@@ -475,8 +475,9 @@ public sealed class WikiApplyService
         $"keeper/applied/{packageId}.json";
 
     // Порядок ключей фиксированный (как у манифеста): файл — данные, его diff между применениями
-    // должен читаться, а не зависеть от обхода словаря.
-    private static byte[] AppliedRecordBytes(IReadOnlyDictionary<string, string> applied)
+    // должен читаться, а не зависеть от обхода словаря. internal: ту же форму пишет и снятие
+    // сносок (WikiRetractService, S4f-2): форма записи состояния определена здесь, в одном месте.
+    internal static byte[] AppliedRecordBytes(IReadOnlyDictionary<string, string> applied)
     {
         var sorted = new Dictionary<string, string>(applied.Count, StringComparer.Ordinal);
         foreach (var kv in applied.OrderBy(kv => kv.Key, StringComparer.Ordinal))

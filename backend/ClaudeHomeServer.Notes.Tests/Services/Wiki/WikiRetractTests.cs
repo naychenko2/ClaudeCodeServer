@@ -101,7 +101,7 @@ public class WikiRetractTests : IDisposable
         _keeper = new WikiKeeper(_notes, _config, _events);
         _apply = new WikiApplyService(_notes, _keeper, new NoSpheres(), _config, _events);
         _revert = new WikiPackageRevert(_notes, _keeper, _config);
-        _sut = new WikiRetractService(_notes, _keeper, _revert, _sessions, _config);
+        _sut = new WikiRetractService(_notes, _keeper, _revert, _sessions, new NoSpheres(), _config);
         _keeper.EnsureInitializedAsync(User).GetAwaiter().GetResult();
     }
 
@@ -536,7 +536,7 @@ public class WikiRetractTests : IDisposable
             var offCfg = new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = Path.Combine(other, "projects.json") })
                 .Build();
-            var off = new WikiRetractService(_notes, _keeper, _revert, _sessions, offCfg);
+            var off = new WikiRetractService(_notes, _keeper, _revert, _sessions, new NoSpheres(), offCfg);
             var rOff = await off.RetractAsync("u9", SourceRef);
             rOff.Ok.Should().BeFalse();
             rOff.Code.Should().Be(WikiRetractService.CodeOff);
@@ -549,22 +549,22 @@ public class WikiRetractTests : IDisposable
         SnapshotPages().Should().Equal(before, "отказ — это отказ: файлов не тронуто");
     }
 
-    // ─── 9. доработка ревью S4f-1: пакет без записи состояния применения — в списке сносок ─────
+    // ─── 9. Пакет без записи состояния применения: в списке — и обработан снятием сносок (S4f-2) ──
 
     [Fact]
-    public async Task Retract_НетЗаписиСостоянияПрименения_ПакетВСпискеСносок_ДискНеТронут()
+    public async Task Retract_НетЗаписиСостоянияПрименения_СнимаетСноски_ПакетReverted()
     {
-        // Мутация «фильтр только по CodeChanged» (вернуть прежний NeedsUnlink): NoApplied не
-        // попадает в список — NeedsUnlink краснеет. Сценарий: вики заведена до меры S4b-3, у
-        // пакета нет applied-записи — откат fail-closed (верно), но страница остаётся со сноской
-        // на снятый источник навсегда, и S4f-2 её не увидит.
+        // Мутации: «фильтр только по CodeChanged» (прежний NeedsUnlink) — NoApplied не доходит
+        // до снятия сносок: Unlinked и строка журнала краснеют. «не писать результат» (снять
+        // запись в UnlinkPageUnderLock): NotContain("[^") и статус краснеют. Сценарий: вики
+        // заведена до меры S4b-3, applied-записи нет — побайтный откат fail-closed, и ровно для
+        // таких пакетов мера 5 второй абзац: сноски снимаются на месте.
         await WriteCardAndPage();
         var pkg = await Applied(WikiSections.Common, Op(WikiPackage.OpAppend, PagePath, ClaimA));
         File.Exists(AppliedRecordOf(pkg.Id)).Should().BeTrue("применение записало состояние применения");
 
         // Пакет «до меры S4b-3»: записи состояния применения на диске нет.
         File.Delete(AppliedRecordOf(pkg.Id));
-        var before = SnapshotPages();
 
         var r = await _sut.RetractAsync(User, SourceRef);
 
@@ -572,14 +572,23 @@ public class WikiRetractTests : IDisposable
         var outcome = r.Outcomes.Should().ContainSingle().Which;
         outcome.Reverted.Should().BeFalse();
         outcome.Code.Should().Be(WikiPackageRevert.CodeNoApplied);
-        // Инвариант меры: страницы остались на диске — пакет в списке «требует снятия сносок».
-        r.NeedsUnlink.Select(o => o.PackageId).Should().Equal(pkg.Id);
 
-        // На диске не тронуто ничего: ни страниц, ни статуса пакета, ни строк журнала, ни пометки.
-        SnapshotPages().Should().Equal(before);
-        ReadStatus(pkg.Id).Item1.Should().Be(WikiPackage.StatusApplied);
-        LogLines("retract").Should().BeEmpty();
-        r.MarkedSkip.Should().BeFalse("с диска ничего не снято — пометки нет");
+        // Инвариант меры + S4f-2: страницы остались на диске — пакет обработан на месте:
+        // сносок источника на странице нет, утверждения без сносок убраны, страница валидна.
+        r.Unlinked.Select(u => u.PackageId).Should().Equal(pkg.Id);
+        r.Unlinked.Single().Pages.Should().Equal(PagePath);
+        var pageText = File.ReadAllText(PageFull(PagePath));
+        pageText.Should().NotContain("[^").And.NotContain(CardTitle);
+        WikiPage.Parse(pageText).Model.Should().NotBeNull("страница после снятия сносок остаётся валидной");
+
+        // Обработанный пакет — «reverted»: он не остаётся в «оставшихся» и повтором не берётся.
+        r.NeedsUnlink.Should().BeEmpty();
+        ReadStatus(pkg.Id).Item1.Should().Be(WikiPackage.StatusReverted);
+
+        // Факт снятия — в журнале: страница и id пакета.
+        LogLines("retract").Should().ContainSingle()
+            .Which.Should().Contain(PagePath).And.Contain(pkg.Id);
+        r.MarkedSkip.Should().BeFalse("чата нет в каталоге — пометки чужому нет");
     }
 
     // ─── 10. доработка ревью S4f-1: повторный откат по откатанному — не в списке, идемпотентен ─

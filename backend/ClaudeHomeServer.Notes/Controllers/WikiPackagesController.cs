@@ -27,12 +27,17 @@ public class WikiPackagesController : ControllerBase
 {
     private readonly IProjectManager _projects;
     private readonly WikiPackageRevert _revert;
+    private readonly WikiRetractService _retract;
+    private readonly ISessionDirectory _sessions;
     private readonly string _dataDir;
 
-    public WikiPackagesController(IProjectManager projects, IConfiguration config, WikiPackageRevert revert)
+    public WikiPackagesController(IProjectManager projects, IConfiguration config, WikiPackageRevert revert,
+        WikiRetractService retract, ISessionDirectory sessions)
     {
         _projects = projects;
         _revert = revert;
+        _retract = retract;
+        _sessions = sessions;
         // Каталог данных — как у всех сервисов (DataPath указывает на projects.json в dataDir).
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
@@ -45,6 +50,9 @@ public class WikiPackagesController : ControllerBase
 
     private const string CodeForeign = "wiki_foreign";
     private const string CodeRequest = "wiki_pkg_request";
+    // Чат не найден или чужой — один ответ: по нему нельзя отличить «нет» от «не твой»
+    // (отказ без утечки существования, мера 5).
+    private const string CodeSource = "wiki_retract_source";
 
     /// <summary>GET /api/wiki/packages?inbox=true — список пакетов своей вики.
     /// inbox=true — только «Входящие»: ждущие решения человека (status proposed);
@@ -123,6 +131,46 @@ public class WikiPackagesController : ControllerBase
         if (r.Reverted)
             return Ok(new WikiRevertDto(r.RestoredPages));
         return StatusCode(409, new { code = r.Code, message = r.Reason, pages = r.ChangedPages });
+    }
+
+    /// <summary>POST /api/wiki/packages/retract — {sourceRef}: «Откатить всё из этого источника»
+    /// (кнопка у хроники, у карточки источника и в «Журнале», мера 5; S4f-2). Только действие
+    /// человека: ни у агента, ни у персоны такого инструмента нет (решение 5, как у отката пакета).
+    /// 400 — форма sourceRef (тот же разбор, что у сервиса); 404 — чата нет или он чужой: один
+    /// ответ на оба случая, он не выдаёт наружу, существует ли источник (свой/чужой проверяется
+    /// по каталогу чатов — единственному имени здесь; для прочих origin граница — per-owner:
+    /// чужого в своём корне нет по построению, и их карточки этот путь не зовёт). 409 — вики не
+    /// заведена или внутренний сбой операции (с причиной). 200 — исход: списки пакетов
+    /// откатанных / снятых (сноски сняты) / оставшихся, снятые хроники, названные проблемы
+    /// частичного исхода и признак пометки «не разбирать».</summary>
+    [HttpPost("retract")]
+    public async Task<IActionResult> Retract([FromBody] WikiRetractRequest? req)
+    {
+        var userId = OwnerOrNull();
+        if (userId is null) return Unauthorized();
+        if (string.IsNullOrWhiteSpace(req?.SourceRef))
+            return BadRequest(new { code = WikiRetractService.CodeShape, message = "нужен sourceRef" });
+
+        if (WikiRetractService.OriginOf(req.SourceRef) == "session")
+        {
+            var session = _sessions.GetById(WikiRetractService.IdPartOf(req.SourceRef));
+            if (session is null || _sessions.ResolveOwnerId(session) != userId)
+                return NotFound(new { code = CodeSource, message = "такого источника в твоей вики нет" });
+        }
+
+        var r = await _retract.RetractAsync(userId, req.SourceRef).ConfigureAwait(false);
+        if (!r.Ok)
+            return r.Code == WikiRetractService.CodeShape
+                ? BadRequest(new { code = r.Code, message = r.Reason })
+                : StatusCode(409, new { code = r.Code, message = r.Reason });
+
+        return Ok(new WikiRetractDto(
+            [.. r.Outcomes.Where(o => o.Reverted).Select(o => o.PackageId)],
+            [.. r.Unlinked.Select(u => u.PackageId)],
+            [.. r.NeedsUnlink.Select(o => o.PackageId)],
+            [.. r.RemovedChronicles],
+            [.. r.Failed],
+            r.MarkedSkip));
     }
 
     // ─── Помощники ──────────────────────────────────────────────────────────
@@ -209,3 +257,20 @@ public sealed record WikiDecideRequest(int? Index, bool? Accept, string? Reason)
 /// их и дифф строки op=revert). Отказ — в теле 409: code + message + pages (pages — изменённые
 /// страницы, на которые человеку смотреть перед повторной попыткой).</summary>
 public sealed record WikiRevertDto(IReadOnlyList<string> RestoredPages);
+
+/// <summary>Запрос «Откатить всё из этого источника»: карточка источника
+/// («{origin}:…» — та же форма, что в пакетах и журнале).</summary>
+public sealed record WikiRetractRequest(string? SourceRef);
+
+/// <summary>Исход отката по источнику (мера 5): revertedPackages — побайтно откатанные;
+/// unlinkedPackages — обработанные снятием сносок (страницы этих пакетов больше не несут
+/// ссылок на источник); remainingPackages — «остались»: пакеты, чьи страницы не удалось обработать
+/// (причины — в failed); removedChronicles — страницы хроники, снятые целиком; failed —
+/// названные проблемы частичного исхода; markedSkip — чату поставлена пометка «не разбирать».</summary>
+public sealed record WikiRetractDto(
+    IReadOnlyList<string> RevertedPackages,
+    IReadOnlyList<string> UnlinkedPackages,
+    IReadOnlyList<string> RemainingPackages,
+    IReadOnlyList<string> RemovedChronicles,
+    IReadOnlyList<string> Failed,
+    bool MarkedSkip);

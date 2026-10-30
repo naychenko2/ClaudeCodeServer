@@ -3,9 +3,11 @@ using System.Security.Claims;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Notes.Controllers;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Notes.Wiki;
+using ClaudeHomeServer.Services.Spheres;
 using ClaudeHomeServer.Tests.Helpers;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -29,9 +31,13 @@ public class WikiPackagesControllerTests : IDisposable
     private readonly string _dir;
     private readonly IConfiguration _config;
     private readonly ProjectManager _projects;
-    // С4b-3: конструктор контроллера теперь требует сервис отката. Эти тесты откат не вызывают —
-    // экземпляр нужен только чтобы резолвился конструктор; свой сценарий отката — в WikiRevertTests.
+    // S4b-3: конструктор контроллера требует сервис отката; S4f-2 — сервис отката по источнику
+    // и каталог чатов (граница владения sourceRef). Тесты 1–4 эти сервисы не вызывают —
+    // экземпляры нужны, чтобы резолвился конструктор; свой сценарий retract — в тесте 6.
     private readonly WikiPackageRevert _revert;
+    private readonly WikiRetractService _retract;
+    private readonly SessionsStub _sessions = new();
+    private readonly WikiKeeper _keeper;
 
     public WikiPackagesControllerTests()
     {
@@ -43,7 +49,9 @@ public class WikiPackagesControllerTests : IDisposable
         var users = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         _projects = new ProjectManager(_config, users, new AppSettingsService(_config));
         var notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance);
-        _revert = new WikiPackageRevert(notes, new WikiKeeper(notes, _config), _config);
+        _keeper = new WikiKeeper(notes, _config);
+        _revert = new WikiPackageRevert(notes, _keeper, _config);
+        _retract = new WikiRetractService(notes, _keeper, _revert, _sessions, new NoSpheres(), _config);
     }
 
     public void Dispose()
@@ -161,6 +169,108 @@ public class WikiPackagesControllerTests : IDisposable
 
     // ─── Помощники ─────────────────────────────────────────────────────────
 
+    // ─── 6. S4f-2: «Откатить всё из этого источника» (c3) ────────────────────
+
+    [Fact]
+    public async Task Retract_ЧужойИсточник_404_НеверныйSourceRef_400_Свой_200_ИСтрокаВЖурнале()
+    {
+        // Мутация «без границы владения» (снять проверку ResolveOwnerId): чат-F дал бы 200 с
+        // пустым исходом — 404 краснеет. Мутация «без журнала» (снять строку op=retract в
+        // сервисе): проверка строки на диске краснеет. Пакет здесь намеренно без прообразов:
+        // это путь NoPreimages → снятие сносок — ровно то, для чего REST и поставлен.
+        await _keeper.EnsureInitializedAsync(User);
+        const string cardTitle = "Карточка чата";
+        const string cardPath = "Общее/Карточка-чата.md";
+        var card = $$"""
+            ---
+            type: source
+            origin: session
+            ref: session:chat-A#m1-9
+            hash: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+            captured: 2026-10-30
+            aliases: []
+            owns: []
+            sources: []
+            status: active
+            ---
+
+            # {{cardTitle}}
+            """;
+        var page = $$"""
+            ---
+            type: topic
+            aliases: []
+            owns: []
+            sources: []
+            status: active
+            ---
+
+            # X
+
+            ## Сводка
+            Утверждение из чата [^s1]
+
+            ## Хронология
+
+            ## Противоречия
+
+            ## История
+
+            [^s1]: [[{{cardTitle}}]] — «Утверждение из чата»
+            """;
+        (await _keeper.WritePageAsync(User, "common", cardPath, card)).Status.Should().Be(WikiOpStatus.Applied);
+        (await _keeper.WritePageAsync(User, "common", Page, page)).Status.Should().Be(WikiOpStatus.Applied);
+        _sessions.Known["chat-A"] = new Session { Id = "chat-A", OwnerId = User };
+        _sessions.Known["chat-F"] = new Session { Id = "chat-F", OwnerId = "u2" };
+
+        var pkg = new WikiPackage
+        {
+            Id = WikiPackageStore.NewId(),
+            Section = "common",
+            Sources = [new WikiPackage.SourceRef("session", "chat-A")],
+            Operations = [Op(WikiPackage.OpAppend, WikiPackage.DecisionAuto)],
+            Status = WikiPackage.StatusChecking,
+        };
+        WikiPackageStore.Create(WikiPaths.Root(_dir, User), pkg).Ok.Should().BeTrue();
+        foreach (var step in new[] { WikiPackage.StatusProposed, WikiPackage.StatusApplying, WikiPackage.StatusApplied })
+            WikiPackageStore.Transition(WikiPaths.Root(_dir, User), pkg.Id, step).Ok.Should().BeTrue();
+
+        // Чужой чат и несуществующий — один 404: ответ не выдаёт наружу, существует ли источник.
+        ((IStatusCodeActionResult)await Controller().Retract(new WikiRetractRequest("session:chat-F")))
+            .StatusCode.Should().Be(404);
+        ((IStatusCodeActionResult)await Controller().Retract(new WikiRetractRequest("session:chat-none")))
+            .StatusCode.Should().Be(404);
+        // Неверная форма — 400 (тот же разбор, что у сервиса: без префикса origin, пустое тело).
+        AssertCode(await Controller().Retract(new WikiRetractRequest("chat-A")), 400, "wiki_retract_shape");
+        AssertCode(await Controller().Retract(null), 400, "wiki_retract_shape");
+
+        // Свой: 200 со списками; страница без сносок; пакет «reverted»; строка op=retract на диске.
+        var dto = ((OkObjectResult)await Controller().Retract(new WikiRetractRequest("session:chat-A"))).Value
+            .Should().BeAssignableTo<WikiRetractDto>().Which;
+        dto.RevertedPackages.Should().BeEmpty("побайтного отката здесь не было — путь снятия сносок");
+        dto.UnlinkedPackages.Should().Equal(pkg.Id);
+        dto.RemainingPackages.Should().BeEmpty();
+        dto.MarkedSkip.Should().BeTrue("с диска снято — своему чату поставлена пометка");
+        File.ReadAllText(Path.Combine(WikiPaths.Keeper(_dir, User), "log.jsonl"))
+            .Should().Contain("\"op\":\"retract\"").And.Contain(pkg.Id);
+        File.ReadAllText(Path.Combine(WikiPaths.Pages(_dir, User), Page)).Should().NotContain("[^");
+        StatusOnDisk(pkg.Id).Should().Be(WikiPackage.StatusReverted);
+
+        // Повтор: обработанный пакет из выбора выпадает — исход пустой, журнал не двоится.
+        var again = ((OkObjectResult)await Controller().Retract(new WikiRetractRequest("session:chat-A"))).Value
+            .Should().BeAssignableTo<WikiRetractDto>().Which;
+        again.UnlinkedPackages.Should().BeEmpty();
+        LogLines("retract").Should().HaveCount(1);
+    }
+
+    private List<string> LogLines(string op)
+    {
+        var p = Path.Combine(WikiPaths.Keeper(_dir, User), "log.jsonl");
+        return File.Exists(p)
+            ? File.ReadAllLines(p).Where(l => l.Contains($"\"op\":\"{op}\"")).ToList()
+            : [];
+    }
+
     private Project CreateServerProject(string name, string owner = User)
     {
         var root = Path.Combine(_dir, "repo", owner, name);
@@ -224,7 +334,7 @@ public class WikiPackagesControllerTests : IDisposable
     {
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, user)], "test"));
-        return new WikiPackagesController(_projects, _config, _revert)
+        return new WikiPackagesController(_projects, _config, _revert, _retract, _sessions)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
@@ -233,9 +343,31 @@ public class WikiPackagesControllerTests : IDisposable
     private WikiPackagesController AnonymousController()
     {
         var http = new DefaultHttpContext(); // User без идентичности — путь боя без токена
-        return new WikiPackagesController(_projects, _config, _revert)
+        return new WikiPackagesController(_projects, _config, _revert, _retract, _sessions)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
+    }
+
+    // ─── Стабы для отката по источнику (S4f-2) ─────────────────────────────
+
+    private sealed class NoSpheres : ISphereDirectory
+    {
+        public string? SphereOf(string ownerId, string projectId) => null;
+        public IReadOnlyList<string> ProjectsOf(string ownerId, string sphereId) => [];
+        public bool Enabled(string ownerId) => false;
+        public string? SphereName(string ownerId, string sphereId) => null;
+        public string? CharterOf(string ownerId, string sphereId) => null;
+    }
+
+    private sealed class SessionsStub : ISessionDirectory
+    {
+        public readonly Dictionary<string, Session> Known = new();
+        public Session? GetById(string id) => Known.TryGetValue(id, out var s) ? s : null;
+        public IReadOnlyCollection<Session> GetAll() => Known.Values;
+        public string? ResolveOwnerId(Session s) => s.OwnerId;
+        public Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId) =>
+            Task.FromResult<IReadOnlyList<StoredMessage>>([]);
+        public bool SetWikiMark(string sessionId, string? mark) => Known.ContainsKey(sessionId);
     }
 }

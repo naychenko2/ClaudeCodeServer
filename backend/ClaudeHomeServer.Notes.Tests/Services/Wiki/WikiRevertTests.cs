@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Notes.Controllers;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Notes.Wiki;
@@ -110,6 +111,7 @@ public class WikiRevertTests : IDisposable
     private readonly RecordingEventLog _events = new();
     private readonly WikiApplyService _sut;
     private readonly WikiPackageRevert _revert;
+    private readonly WikiRetractService _retract;
 
     public WikiRevertTests()
     {
@@ -126,6 +128,9 @@ public class WikiRevertTests : IDisposable
         _keeper = new WikiKeeper(_notes, _config, _events);
         _sut = new WikiApplyService(_notes, _keeper, new NoSpheres(), _config, _events);
         _revert = new WikiPackageRevert(_notes, _keeper, _config);
+        // S4f-2: конструктор контроллера требует сервис отката по источнику и каталог чатов.
+        // Эти тесты retract не вызывают — экземпляры нужны, чтобы резолвился конструктор.
+        _retract = new WikiRetractService(_notes, _keeper, _revert, new EmptySessions(), new NoSpheres(), _config);
         _keeper.EnsureInitializedAsync(User).GetAwaiter().GetResult();
     }
 
@@ -723,7 +728,7 @@ public class WikiRevertTests : IDisposable
     {
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, user)], "test"));
-        return new WikiPackagesController(_projects, _config, _revert)
+        return new WikiPackagesController(_projects, _config, _revert, _retract, new EmptySessions())
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
@@ -732,9 +737,19 @@ public class WikiRevertTests : IDisposable
     private WikiPackagesController AnonymousController()
     {
         var http = new DefaultHttpContext(); // User без идентичности — путь боя без токена
-        return new WikiPackagesController(_projects, _config, _revert)
+        return new WikiPackagesController(_projects, _config, _revert, _retract, new EmptySessions())
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
+    }
+
+    private sealed class EmptySessions : ISessionDirectory
+    {
+        public Session? GetById(string id) => null;
+        public IReadOnlyCollection<Session> GetAll() => [];
+        public string? ResolveOwnerId(Session s) => s.OwnerId;
+        public Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId) =>
+            Task.FromResult<IReadOnlyList<StoredMessage>>([]);
+        public bool SetWikiMark(string sessionId, string? mark) => false;
     }
 }

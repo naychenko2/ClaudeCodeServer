@@ -1,3 +1,4 @@
+using System.Reflection.Metadata;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -9,7 +10,12 @@ namespace ClaudeHomeServer.Tests.Services;
 /// и её наследников) допустим ТОЛЬКО вне тест-класса — во вложенной фикстуре или помощнике; в теле теста,
 /// конструкторе, инициализаторе поля, async-машине и замыкании тест-класса — красное, если класса нет
 /// в <see cref="Remainder"/>. Скан — по метаданным и IL собранных тестовых сборок (общий с HostScan).
-/// Список остатка только УМЕНЬШАЕТСЯ: запись, у которой в коде создания фабрики уже нет, — красное.
+/// Список остатка только УМЕНЬШАЕТСЯ: запись, у которой в коде создания фабрики уже нет, — красное, а рост списков
+/// режет потолок (<see cref="RemainderCeiling"/>, <see cref="UndoneH0Ceiling"/>).
+/// Охват скана: тело тест-класса, его async-машины и замыкания, любые вложенные типы тест-класса (кроме
+/// вложенной фикстуры-наследника фабрики и держателя хоста из `IClassFixture<...>`) и базовые классы тест-класса из той же тестовой сборки. Ограничение: внешний
+/// helper-класс, на который лишь ссылается тест и который сам создаёт фабрику, сторож не видит — для него нужен
+/// межтиповой граф вызовов, дешёвого способа без ложных срабатываний на пулы хостов нет.
 /// </summary>
 public class HostPerClassRatchetGuardTests
 {
@@ -115,6 +121,11 @@ public class HostPerClassRatchetGuardTests
         ["ClaudeHomeServer.Tests.Subsystems.ChatContextDisabledVerticalTests"] = "недоделанный H0: хост на каждый тест или на конфигурацию без разбора — перевести на хост на класс",
     };
 
+    // Потолки списков: запись в Remainder/UndoneH0 не лазейка, а долг — размер только уменьшается
+    internal const int UndoneH0Ceiling = 57;
+    internal const int RemainderCeiling = 28;
+
+    // Скан решения (все тестовые сборки по метаданным и IL) — Slow по «Правилу новой метки» testing.md
     [Fact]
     [Trait("Category", "Slow")]
     public void НовыйХостТестКласса_ТолькоВоВложеннойФикстуреИлиВОстатке()
@@ -134,6 +145,15 @@ public class HostPerClassRatchetGuardTests
         var stale = Remainder.Keys.Concat(UndoneH0.Keys).Where(k => !creators.Contains(k)).Order(StringComparer.Ordinal).ToList();
         Assert.True(stale.Count == 0, "Запись остатка устарела — в классе уже нет создания фабрики, удали строку из Remainder "
             + "(храповик закручивается):\n" + string.Join("\n", stale));
+    }
+
+    [Fact]
+    public void ОстатокИДолгНеВышеПотолка()
+    {
+        (UndoneH0.Count <= UndoneH0Ceiling).Should().BeTrue(
+            $"в UndoneH0 {UndoneH0.Count} записей при потолке {UndoneH0Ceiling}: список можно только уменьшать; при удалении записи опусти потолок");
+        (Remainder.Count <= RemainderCeiling).Should().BeTrue(
+            $"в Remainder {Remainder.Count} записей при потолке {RemainderCeiling}: список можно только уменьшать; при удалении записи опусти потолок");
     }
 
     [Fact]
@@ -171,13 +191,57 @@ public class HostPerClassRatchetGuardTests
                     if (b == HostScan.FactoryName) { factories.Add(t.Name); break; }
             var ctors = factories.Select(f => f + "::.ctor").ToHashSet(StringComparer.Ordinal);
 
-            var tests = mainTypes.Where(t => t.IsTestClass).Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
-            var result = new HashSet<string>(StringComparer.Ordinal);
+            // Типы, создающие фабрику (сама фабрика, её наследники и их вложенные типы не в счёт);
+            // сгенерированные вложенные (async-машины, замыкания) сворачиваются в объявивший их тип
+            var creators = new HashSet<string>(StringComparer.Ordinal);
+            // Члены каждого типа — один разбор IL на все проверки ниже
+            var members = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+            foreach (var t in mainTypes) members.TryAdd(t.Name, t.MemberNames().ToHashSet(StringComparer.Ordinal));
+
+            // Вложенный держатель хоста класса: тип из `IClassFixture<T+Hosts>` тест-класса. xunit передаёт его в
+            // конструктор сам, поэтому ему положено создавать фабрику. Если тест-класс (с async-машинами и замыканиями)
+            // создаёт его сам, `new Hosts()` на тест — это уже не фикстура, красное.
+            var testNames = mainTypes.Where(t => t.IsTestClass).Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
+            var holders = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var h in main.Md.TypeDefinitions)
+            {
+                var owner = HostScan.Names.Of(main.Md, h);
+                if (!testNames.Contains(owner)) continue;
+                foreach (var ih in main.Md.GetTypeDefinition(h).GetInterfaceImplementations())
+                {
+                    var named = HostScan.Names.All(main.Md, main.Md.GetInterfaceImplementation(ih).Interface).ToList();
+                    if (!named.Any(n => n.Contains("IClassFixture", StringComparison.Ordinal))) continue;
+                    foreach (var x in named.Where(n => n.StartsWith(owner + "+", StringComparison.Ordinal)))
+                    {
+                        var createdBySelf = mainTypes.Any(u => (u.Name == owner || u.Name.StartsWith(owner + "+<", StringComparison.Ordinal))
+                            && members[u.Name].Contains(x + "::.ctor"));
+                        if (!createdBySelf) holders.Add(x);
+                    }
+                }
+            }
             foreach (var t in mainTypes)
             {
-                var owner = OwnerTestClass(t.Name, tests);
-                if (owner is null || result.Contains(owner)) continue;
-                if (t.MemberNames().Any(ctors.Contains)) result.Add(owner);
+                if (factories.Contains(t.Name) || factories.Any(f => t.Name.StartsWith(f + "+", StringComparison.Ordinal))) continue;
+                if (holders.Any(h => t.Name == h || t.Name.StartsWith(h + "+", StringComparison.Ordinal))) continue;
+                if (!members[t.Name].Any(ctors.Contains)) continue;
+                var i = t.Name.IndexOf("+<", StringComparison.Ordinal);
+                creators.Add(i < 0 ? t.Name : t.Name[..i]);
+            }
+
+            // Все «+»-префиксы создателей: тест-класс владеет создателем, если он сам, его вложенный тип или
+            // один из его баз (по цепочке BaseType) стоит в этом наборе
+            var prefixes = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var c in creators)
+            {
+                prefixes.Add(c);
+                for (var i = c.LastIndexOf('+'); i > 0; i = c.LastIndexOf('+', i - 1)) prefixes.Add(c[..i]);
+            }
+
+            var result = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var t in mainTypes.Where(t => t.IsTestClass))
+            {
+                for (var n = t.Name; n is not null; n = byName.TryGetValue(n, out var nt) ? nt.BaseName : null)
+                    if (prefixes.Contains(n)) { result.Add(t.Name); break; }
             }
             return result;
         }
@@ -185,15 +249,5 @@ public class HostPerClassRatchetGuardTests
         {
             foreach (var o in others) o.Dispose();
         }
-    }
-
-    // Сам тест-класс или его сгенерированный вложенный тип (async-машина, замыкание: сегмент начинается с «<»);
-    // вложенная фикстура-помощник тест-классу не принадлежит
-    private static string? OwnerTestClass(string typeName, HashSet<string> tests)
-    {
-        if (tests.Contains(typeName)) return typeName;
-        var i = typeName.IndexOf("+<", StringComparison.Ordinal);
-        if (i < 0) return null;
-        return tests.Contains(typeName[..i]) ? typeName[..i] : null;
     }
 }

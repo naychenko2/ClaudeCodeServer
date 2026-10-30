@@ -6,6 +6,8 @@
 // Данные — только стор S5a (lib/wiki): ensureWikiLoaded при монтировании, каталог раздела —
 // GET /api/wiki/section (оглавление строится из него: проекции _index/_log через
 // /api/wiki/page не читаются — 400 wiki_page_key, хвост ревью S2f Н1).
+// Открытие страницы из каталога (S5b) — здесь одна точка: строка каталога зовёт openPage,
+// центр вместо каталога рисует WikiPageView; смена или удаление раздела закрывают страницу.
 // Подключение к странице заметок (переключатель «Заметки | Вики») — на стороне NotesPage (S5d).
 // На мобили дерево — отдельный экран «Разделы» (кнопка «Раздел ▸» в каталоге): макет 360,
 // хвост ревью S5c — каталог не должен схлопываться в нулевую высоту под деревом.
@@ -31,11 +33,14 @@ import {
   initializeWiki,
   parseSectionKey,
   loadWikiCatalog,
+  loadWikiPage,
   useWikiCatalog,
+  useWikiPage,
   useWikiTree,
   type WikiPageInfoDto,
   type WikiSectionDto,
 } from '../../../lib/wiki';
+import { WikiPageView } from './WikiPageView';
 import { WikiSectionTree } from './WikiSectionTree';
 import { WIKI_SUBTABS, wikiSubTabIcon, WikiSubTabStub, type WikiSubTabId } from './wikiTabs';
 
@@ -47,16 +52,17 @@ const SECTION_SWITCH_H = 44;
 
 // ─── Словари подписей ───
 
-// Статусы страницы — их считает код, не модель (ADR-035 §3, WikiFrontmatter.StatusValues)
-const PAGE_STATUS: Record<string, { tone: BadgeTone; text: string; title: string }> = {
+// Статусы страницы — их считает код, не модель (ADR-035 §3, WikiFrontmatter.StatusValues).
+// Экспорт: словарь общий для каталога и страницы (WikiPageView), один на всю фичу
+export const PAGE_STATUS: Record<string, { tone: BadgeTone; text: string; title: string }> = {
   active: { tone: 'success', text: 'актуальна', title: 'Утверждения подтверждены источниками, противоречий нет' },
   stale: { tone: 'neutral', text: 'устарела', title: 'Источник новее опроверг утверждение или страница не менялась 90 дней' },
   disputed: { tone: 'warning', text: 'спорная', title: 'Есть открытые противоречия — см. раздел на странице' },
   drift: { tone: 'danger', text: 'дрейф', title: 'Файл изменён мимо Хранителя' },
 };
 
-// Типы страниц — WikiFrontmatter.TypeValues
-const PAGE_TYPE: Record<string, string> = {
+// Типы страниц — WikiFrontmatter.TypeValues. Экспорт — общий для каталога и страницы
+export const PAGE_TYPE: Record<string, string> = {
   overview: 'Обзор', topic: 'Тема', entity: 'Сущность', concept: 'Понятие',
   decision: 'Решение', chronicle: 'Хроника', source: 'Источник',
 };
@@ -227,12 +233,26 @@ function SectionHeader({ section, count }: { section: WikiSectionDto; count: num
   );
 }
 
-// Строка каталога: тип, название, бейдж статуса, summary, число источников.
-// Открытие страницы — следующий шаг фичи, здесь строка не кликается.
-function PageRow({ page }: { page: WikiPageInfoDto }) {
+// Строка каталога: тип, название, бейдж статуса, summary, число источников. Клик открывает
+// страницу (S5b) — единственное место фичи, где страница открывается (одна точка
+// подключения). Hover — только на десктопе (тот же порядок, что у строк дерева S5c)
+function PageRow({ page, onOpen }: { page: WikiPageInfoDto; onOpen: () => void }) {
+  const isMobile = useIsMobile();
+  const [hovered, setHovered] = useState(false);
   const st = page.status ? PAGE_STATUS[page.status] : undefined;
   return (
-    <div style={{ display: 'flex', gap: SP.sm, padding: `${SP.sm}px ${SP.sm}px`, borderRadius: R.md }}>
+    <button
+      type="button"
+      data-testid="wiki-page-row"
+      onClick={onOpen}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: 'flex', gap: SP.sm, padding: `${SP.sm}px ${SP.sm}px`, borderRadius: R.md,
+        border: 'none', background: !isMobile && hovered ? C.bgCard : 'transparent',
+        cursor: 'pointer', textAlign: 'left', width: '100%', fontFamily: FONT.sans, color: C.textPrimary,
+      }}
+    >
       <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap' }}>
           <span style={{ fontSize: FS.base, fontWeight: 500, color: C.textHeading }}>{page.title}</span>
@@ -243,7 +263,7 @@ function PageRow({ page }: { page: WikiPageInfoDto }) {
           {PAGE_TYPE[page.type ?? ''] ?? 'Страница'} · {page.sourcesCount} ист.
         </div>
       </div>
-    </div>
+    </button>
   );
 }
 
@@ -262,6 +282,14 @@ export function WikiTab() {
   // Мобильный экран «Разделы» (S5d, хвост ревью S5c): true — вместо каталога показан
   // полноэкранный список разделов; выбор раздела возвращает к каталогу
   const [showSections, setShowSections] = useState(false);
+  // Открытая страница (S5b): pageKey открытой страницы выбранного раздела; null — каталог.
+  // Смена или удаление раздела закрывает её (страница принадлежит разделу) — selectSection
+  const [openedPage, setOpenPage] = useState<string | null>(null);
+
+  const selectSection = useCallback((key: string | null) => {
+    setSelectedKey(key);
+    setOpenPage(null);
+  }, []);
 
   const load = useCallback(() => {
     setLoadError(null);
@@ -279,14 +307,15 @@ export function WikiTab() {
   const sections = tree?.sections ?? [];
   const selected = selectedKey ? sections.find(s => s.key === selectedKey) ?? null : null;
   const catalog = useWikiCatalog(selectedKey ?? '');
+  const pageSnap = useWikiPage(selectedKey ?? '', openedPage ?? '');
 
   // Раздел по умолчанию — когда своего ещё нет или выбранный исчез из дерева
   useEffect(() => {
     if (!tree?.initialized) return;
     if (selectedKey && tree.sections.some(s => s.key === selectedKey)) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- инвариант выбора: на экране нет допустимого выбранного раздела — дефолт выбирается синхронно, экран без раздела хуже
-    setSelectedKey(defaultSectionKey(tree.sections));
-  }, [tree, selectedKey]);
+    selectSection(defaultSectionKey(tree.sections));
+  }, [tree, selectedKey, selectSection]);
 
   // Каталог выбранного раздела. Для локального проекта его нет вовсе (409 wiki_section_off).
   // Зависимость — ключ, а не объект selected: объект новый на каждый рендер, эффект
@@ -305,6 +334,21 @@ export function WikiTab() {
     void fn()
       .catch(e => setActionError(e))
       .finally(() => setBusy(false));
+  };
+
+  // Открытие страницы из каталога — одна точка подключения (S5b): текст читает стор
+  // (поколение и владелец — в нём). Отказ загрузки — возврат к каталогу с названным
+  // отказом: пустой экран страницы хуже строки, из которой её открыли.
+  // Обычная функция, не useCallback: она ниже раннего return (условный хук — rules-of-hooks),
+  // порядок — как у runAction рядом
+  const openPage = (pageKey: string) => {
+    if (!selectedKey) return;
+    setOpenPage(pageKey);
+    setActionError(null);
+    loadWikiPage(selectedKey, pageKey).catch(e => {
+      setOpenPage(null);
+      setActionError(e);
+    });
   };
 
   const commonKey = groupSectionsByKind(sections).common[0]?.key ?? null;
@@ -351,7 +395,21 @@ export function WikiTab() {
         />
       );
     }
-    if (selected.local) return <LocalSection onOpenCommon={commonKey ? () => setSelectedKey(commonKey) : undefined} />;
+    if (selected.local) return <LocalSection onOpenCommon={commonKey ? () => selectSection(commonKey) : undefined} />;
+
+    // Открытая страница (S5b) — вместо каталога; key — по паре (раздел, страница):
+    // локальное состояние страницы (принятый дрейф) не переезжает на другую страницу
+    if (openedPage) {
+      return pageSnap ? (
+        <WikiPageView
+          key={`${selectedKey}\n${openedPage}`}
+          section={selected}
+          pageKey={openedPage}
+          content={pageSnap.content}
+          onBack={() => setOpenPage(null)}
+        />
+      ) : <LoadingSkeleton />;
+    }
 
     const pages = catalog?.pages ?? [];
     return (
@@ -361,7 +419,7 @@ export function WikiTab() {
         )}
         <SectionHeader section={selected} count={selected.pageCount} />
         {pages.length
-          ? pages.map(p => <div key={p.pageKey}><PageRow page={p} /></div>)
+          ? pages.map(p => <div key={p.pageKey}><PageRow page={p} onOpen={() => openPage(p.pageKey)} /></div>)
           : (
             <div style={{ padding: `${SP.md}px ${SP.sm}px`, fontSize: FS.sm, color: C.textMuted }}>
               В разделе пока нет страниц. Их напишет Хранитель, когда разрешите разбор.
@@ -397,7 +455,7 @@ export function WikiTab() {
             «Разделы», который открывает кнопка «Раздел ▸» внутри каталога */}
         {!isMobile && (
           <div style={{ width: TREE_W, flexShrink: 0 }}>
-            <WikiSectionTree sections={sections} selectedKey={selectedKey} onSelect={setSelectedKey} />
+            <WikiSectionTree sections={sections} selectedKey={selectedKey} onSelect={selectSection} />
           </div>
         )}
         <div style={{ flex: 1, minWidth: 0, overflow: 'auto' }}>
@@ -425,11 +483,13 @@ export function WikiTab() {
                     </div>
                     <WikiSectionTree
                       sections={sections} selectedKey={selectedKey}
-                      onSelect={k => { setSelectedKey(k); setShowSections(false); }}
+                      onSelect={k => { selectSection(k); setShowSections(false); }}
                     />
                   </>
                 : <>
-                    {isMobile && tree?.initialized && sectionSwitch()}
+                    {/* Открытая страница — отдельный экран (макет 360): кнопки «Раздел ▸»
+                        над ней нет, возврат — её кнопкой «Назад» */}
+                    {isMobile && tree?.initialized && !openedPage && sectionSwitch()}
                     {center()}
                   </>)
               : <div style={{ padding: SP.sm }}><WikiSubTabStub label={subtab.label} when={subtab.stubNote ?? ''} /></div>}
@@ -457,7 +517,7 @@ export function WikiTab() {
               return;
             }
             setConfirmDelete(null);
-            setSelectedKey(null);
+            selectSection(null);
           }}
           onCancel={() => setConfirmDelete(null)}
         />

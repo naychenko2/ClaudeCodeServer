@@ -17,9 +17,17 @@ namespace ClaudeHomeServer.Tests.Services;
 /// тот же номер ОС отдаёт следующему тесту, а свежая запись — своя или чужого класса того
 /// же testhost'а — отдалась бы чужой семьёй без пробы (LoopbackResolver.cs:64). Поэтому
 /// каждый тест снимает чужую запись на входе, сразу после захвата порта, и свою — в finally.
+///
+/// Бюджет пробы здесь — 5 с, а не продуктовые 400 мс: тест проверяет «живой порт резолвится»,
+/// а не скорость продуктового бюджета. На полном шарде CI проба живого порта с дефолтным
+/// бюджетом вернула null (При_двух_живых_семьях и Кэш_семьи падали на 3-й–5-й секунде прогона,
+/// на пике старта тестхоста; изолированно всегда зелёные — CI-ран 41004166921, monolith 5/6).
+/// Дефолт продукта не изменён.
 /// </summary>
 public class LoopbackResolverTests
 {
+    private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(5);
+
     /// <summary>Слушающий сокет на свободном порту заданной семьи; null — семья недоступна.</summary>
     private static TcpListener? TryListen(IPAddress address, out int port)
     {
@@ -42,8 +50,8 @@ public class LoopbackResolverTests
         LoopbackResolver.Invalidate(port);
         try
         {
-            (await LoopbackResolver.ResolveBaseAsync(port)).Should().Be($"http://127.0.0.1:{port}");
-            (await LoopbackResolver.IsListeningAsync(port)).Should().BeTrue();
+            (await LoopbackResolver.ResolveBaseAsync(port, TestTimeout)).Should().Be($"http://127.0.0.1:{port}");
+            (await LoopbackResolver.IsListeningAsync(port, TestTimeout)).Should().BeTrue();
         }
         finally { listener!.Stop(); LoopbackResolver.Invalidate(port); }
     }
@@ -63,7 +71,7 @@ public class LoopbackResolverTests
         {
             // DualMode по умолчанию выключен, значит 127.0.0.1 этот порт не отдаёт —
             // ровно как у Node-сервера на «localhost»
-            (await LoopbackResolver.ResolveBaseAsync(port)).Should().Be($"http://[::1]:{port}");
+            (await LoopbackResolver.ResolveBaseAsync(port, TestTimeout)).Should().Be($"http://[::1]:{port}");
         }
         finally { listener!.Stop(); LoopbackResolver.Invalidate(port); }
     }
@@ -76,8 +84,8 @@ public class LoopbackResolverTests
         probe!.Stop();
         LoopbackResolver.Invalidate(port);
 
-        (await LoopbackResolver.ResolveBaseAsync(port)).Should().BeNull();
-        (await LoopbackResolver.IsListeningAsync(port)).Should().BeFalse();
+        (await LoopbackResolver.ResolveBaseAsync(port, TestTimeout)).Should().BeNull();
+        (await LoopbackResolver.IsListeningAsync(port, TestTimeout)).Should().BeFalse();
     }
 
     /// <summary>
@@ -93,12 +101,12 @@ public class LoopbackResolverTests
         try
         {
             // Заполняем кэш живым портом
-            (await LoopbackResolver.ResolveBaseAsync(port)).Should().NotBeNull();
+            (await LoopbackResolver.ResolveBaseAsync(port, TestTimeout)).Should().NotBeNull();
 
             listener!.Stop();
 
             // TTL кэша ещё не истёк, но проба обязана сходить на порт и увидеть, что он мёртв
-            (await LoopbackResolver.IsListeningAsync(port)).Should().BeFalse(
+            (await LoopbackResolver.IsListeningAsync(port, TestTimeout)).Should().BeFalse(
                 "IsListeningAsync проверяет соединением, а не кэшем");
         }
         // finally обязателен на провале: если IsListeningAsync вернул true, значит порт
@@ -134,7 +142,7 @@ public class LoopbackResolverTests
                 Skip.If(true, "ОС не даёт занять один порт в обеих семьях независимо");
             }
 
-            (await LoopbackResolver.ResolveBaseAsync(port)).Should().Be($"http://127.0.0.1:{port}");
+            (await LoopbackResolver.ResolveBaseAsync(port, TestTimeout)).Should().Be($"http://127.0.0.1:{port}");
         }
         finally { v4?.Stop(); v6!.Stop(); LoopbackResolver.Invalidate(port); }
     }

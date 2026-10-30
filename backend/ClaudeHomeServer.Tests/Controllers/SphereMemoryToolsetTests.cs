@@ -12,14 +12,23 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // C4 «Сфер»: инструменты sphere_memory_* сервера памяти — состав по флагу владельца, сфера из проекта
 // чата, запись только персонами ЭТОЙ сферы, adopt = перемещение с полки проекта на полку сферы.
 [Trait("Category", "Host")]
-public class SphereMemoryToolsetTests : IDisposable
+public class SphereMemoryToolsetTests : IClassFixture<SphereMemoryToolsetTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new();
+    // Хост на КЛАСС, а не на тест. Сферы, проекты и персоны каждый тест заводит свои (новые id),
+    // записи памяти и полки team-памяти читаются только в своих сферах/проектах. Единственное
+    // общее изменяемое — флаг spheres владельца: тест состава проверяет и «выключен», поэтому
+    // конструктор класса сбрасывает его перед каждым тестом, остальные включают сами.
+    public sealed class Hosts : TestWebApplicationFactory;
+
+    private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
 
-    public SphereMemoryToolsetTests() => _client = _factory.CreateAuthenticatedClient();
-
-    public void Dispose() => _factory.Dispose();
+    public SphereMemoryToolsetTests(Hosts hosts)
+    {
+        _factory = hosts;
+        _client = _factory.CreateAuthenticatedClient();
+        _factory.Services.GetRequiredService<UserStore>().SetFeatureFlag(OwnerId, FeatureFlagKeys.Spheres, false);
+    }
 
     private string OwnerId => _factory.Services.GetRequiredService<UserStore>()
         .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;

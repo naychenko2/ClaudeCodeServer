@@ -17,11 +17,17 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// очистка, гейт mentions на вызове и согласованность состава с отпечатком запуска.
 /// </summary>
 [Trait("Category", "Host")]
-public class TasksToolsetScopesTests : IDisposable
+public class TasksToolsetScopesTests : IClassFixture<TasksToolsetScopesTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new();
+    // Хост на КЛАСС, а не на тест. Проекты, сессии и персоны каждый тест заводит свои (имена
+    // с Guid), off-привязка теста — на его собственной персоне; общего изменяемого состояния
+    // владельца класс не трогает. Второй владелец (тест «ЕдинственнаяПерсона…») один в классе,
+    // его состояние к моменту теста совпадает со свежим хостом.
+    public sealed class Hosts : TestWebApplicationFactory;
 
-    public void Dispose() => _factory.Dispose();
+    private readonly TestWebApplicationFactory _factory;
+
+    public TasksToolsetScopesTests(Hosts hosts) => _factory = hosts;
 
     private HttpClient Client => _factory.CreateAuthenticatedClient();
 

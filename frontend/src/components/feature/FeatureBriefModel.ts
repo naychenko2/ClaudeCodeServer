@@ -25,6 +25,7 @@ import type { FeatureRailKey } from '../../types/featureIndex';
 // null — имя неизвестно: часть строки с именем опускается, строка остаётся валидной
 // (тот же приём, что personaName в FeatureProdCards.ts).
 export type PersonaNameResolver = (personaId: string) => string | null;
+export type PersonaGenderResolver = (personaId: string) => 'female' | 'male' | null;
 
 // Дополнительные данные строки «Сейчас» вне brief:
 // mergedAt — момент мержа из run.summary.mergedAt (в brief его нет; для строк closed/merged).
@@ -34,6 +35,9 @@ export interface BriefTextOptions {
   nameOf?: PersonaNameResolver;
   mergedAt?: string | null;
   inMaster?: number | null;
+  // Корзины трекера страницы: подпись готовности считается по ним же, что и полоса
+  // (иначе «2 из 5 · 40 %» над полосой на 27 %). Нет — по brief.done.
+  stepProgress?: { accepted: number; total: number } | null;
 }
 
 // Родительный падеж имени для «у {Имя}» (макет: «— у Глеба»). Эвристика для частых
@@ -453,7 +457,8 @@ export function briefReadinessText(brief: FeatureBrief, opts: BriefTextOptions =
   // «в master» к строке трекера НЕ добавляется: это ровно тот же ортогональный счётчик,
   // что показан на подписи полоски ниже; второй раз в том же блоке он не звучит (минор 3).
 
-  const { stepsAccepted, stepsTotal } = brief.done;
+  const stepsAccepted = opts.stepProgress ? opts.stepProgress.accepted : brief.done.stepsAccepted;
+  const stepsTotal = opts.stepProgress ? opts.stepProgress.total : brief.done.stepsTotal;
   // Процент и подпись — только по трекеру (Ш3): общий trackerPercent (та же функция, что
   // полосам В2/С1/П2), числитель и знаменатель бэковые, второй копии арифметики в проекте
   // нет. note.estimate в готовность не входит — она идёт только в «Срок».
@@ -713,6 +718,20 @@ export function voiceRoleText(kind: FeatureBriefKind): string {
   return (kind === 'closed' || kind === 'merged') ? 'вела фичу' : 'ведёт фичу';
 }
 
+// Подпись заметки ведущего (Ш5, решение Майи): «— Софья, ведущая · 14 мин назад». Имени нет —
+// прежняя подпись без тире («ведёт фичу · 14 мин назад»). Пол неизвестен — женский (как у
+// оркестратора по умолчанию); «ведущий» — только при явном male.
+export function voiceSignature(note: FeatureBriefNote, kind: FeatureBriefKind, name: string | null, nowMs: number, gender?: 'female' | 'male' | null): string {
+  const when = voiceWhenText(note, kind, nowMs);
+  if (!name) return [voiceRoleText(kind), when].filter(Boolean).join(' · ');
+  return [`— ${name}, ${gender === 'male' ? 'ведущий' : 'ведущая'}`, when].filter(Boolean).join(' · ');
+}
+
+// Строка сводки, когда заметки ведущего нет: имя ведущего не теряется вместе с чипом шапки.
+export function leadNoNoteText(name: string): string {
+  return `Ведёт ${name} · заметки пока нет`;
+}
+
 // ── Сторож перенесённых слов: слова модели (R-F8) ────────────────────────────────────
 // Все статические строки, которые модель может сказать в карточке. Их не должно быть в
 // коде блока (сторож — FeatureBriefBlock.test.ts): формулировка живёт здесь, блок только
@@ -795,6 +814,9 @@ export const BRIEF_MODEL_WORDS: readonly string[] = [
   'до смены этапа',
   'ведёт фичу',
   'вела фичу',
+  'ведущая',
+  'ведущий',
+  'заметки пока нет',
   'только что',
   'мин назад',
   'ч назад',

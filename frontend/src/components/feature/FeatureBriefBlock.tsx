@@ -14,11 +14,14 @@
 import { useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { C, R, SP, FS, FONT } from '../../lib/design';
+import { GitBranch } from 'lucide-react';
 import { Button } from '../ui/Button';
+import { ICON_STROKE } from '../ui/icons';
+import { showToast } from '../../lib/toast';
 import { StatusTag, featureRunStatusTag, type FeatureRunTag } from './FeatureStatusTag';
 import {
-  briefActiveTagLabel, briefActiveView, briefWaitTagLabel, briefElapsedFact, briefEstimateText, briefNowText, briefReadinessText, briefSubText, briefUpdatedText, voiceRoleText, voiceStaleLabel, voiceWhenText,
-  type BriefDonePart, type BriefEstimateView, type BriefReadinessView, type PersonaNameResolver,
+  briefActiveTagLabel, briefActiveView, briefWaitTagLabel, briefElapsedFact, briefEstimateText, briefNowText, briefReadinessText, briefSubText, briefUpdatedText, leadNoNoteText, voiceSignature, voiceStaleLabel,
+  type BriefDonePart, type BriefEstimateView, type BriefReadinessView, type PersonaGenderResolver, type PersonaNameResolver,
 } from './FeatureBriefModel';
 import { ActiveList } from './FeatureBriefActive';
 import { SummaryRow } from './FeatureBriefTimeline';
@@ -46,6 +49,12 @@ export interface FeatureBriefBlockProps {
   stepProgress?: StepProgress | null;
   // Резолвер имени персоны (usePersonas/getPersonaById); null — часть строки с именем опускается.
   nameOf?: PersonaNameResolver;
+  // Пол персоны для подписи заметки («ведущая»/«ведущий»); нет — женский.
+  genderOf?: PersonaGenderResolver;
+  // Ведущий фичи (индекс: orchestratorPersonaId): при пустой заметке — строка «Ведёт …».
+  leadPersonaId?: string | null;
+  // Ветка фичи (индекс): отдельная строка сводки, клик копирует.
+  branch?: string | null;
   isMobile?: boolean;
   // «Статистика ›» → вкладка «Статистика».
   onOpenStats: () => void;
@@ -307,10 +316,9 @@ function EtaColumn({ view }: { view: BriefEstimateView }) {
 // Плашка только при note (макет §3: «голоса нет» — плашки нет вовсе). Подпись —
 // «Имя · роль · когда» (F2); имя неизвестно (byUser или нет персоны) — часть с именем
 // опускается, аватар не рисуем. Устаревший голос — метка рядом с подписью, текст не прячем.
-function VoiceBlock({ note, kind, nameOf, nowMs }: { note: NonNullable<FeatureBrief['note']>; kind: FeatureBriefKind; nameOf?: PersonaNameResolver; nowMs: number }) {
+function VoiceBlock({ note, kind, nameOf, genderOf, nowMs }: { note: NonNullable<FeatureBrief['note']>; kind: FeatureBriefKind; nameOf?: PersonaNameResolver; genderOf?: PersonaGenderResolver; nowMs: number }) {
   const name = note.byPersonaId ? nameOf?.(note.byPersonaId) ?? null : null;
-  const when = voiceWhenText(note, kind, nowMs);
-  const sig = [name, voiceRoleText(kind), when].filter(Boolean).join(' · ');
+  const sig = voiceSignature(note, kind, name, nowMs, note.byPersonaId ? genderOf?.(note.byPersonaId) : null);
   const stale = voiceStaleLabel(note, kind);
   return (
     <div data-testid="brief-voice" style={{
@@ -337,6 +345,43 @@ function VoiceBlock({ note, kind, nameOf, nowMs }: { note: NonNullable<FeatureBr
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Ветка: чип-кнопка, клик/тап копирует (раньше жила в мета-строке шапки) ─────────────
+function BranchRow({ branch, isMobile }: { branch: string; isMobile: boolean }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      void navigator.clipboard.writeText(branch).catch(() => {});
+    }
+    showToast('Ветка скопирована', branch);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <div style={{ display: 'flex', marginTop: SP.sm, minWidth: 0 }}>
+      <button
+        type="button"
+        data-testid="feature-page-branch"
+        onClick={copy}
+        title={copied ? 'Ветка скопирована' : 'Скопировать ветку'}
+        aria-label={`Скопировать ветку ${branch}`}
+        onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
+        onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+        onFocus={e => { e.currentTarget.style.background = C.bgSelected; }}
+        onBlur={e => { e.currentTarget.style.background = 'transparent'; }}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: SP.xs, minWidth: 0, maxWidth: '100%',
+          height: isMobile ? 40 : 24, padding: `0 ${SP.xs}px`, marginLeft: -SP.xs,
+          border: 'none', borderRadius: R.sm, background: 'transparent', cursor: 'pointer',
+          fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary,
+        }}
+      >
+        <GitBranch size={12} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{branch}</span>
+      </button>
     </div>
   );
 }
@@ -376,7 +421,7 @@ function BriefSkeleton({ isMobile }: { isMobile: boolean }) {
 
 // ── Карточка ─────────────────────────────────────────────────────────────────────────
 export function FeatureBriefBlock({
-  loading = false, brief, stats, mergedAt = null, inMaster = null, stepProgress = null, nameOf, isMobile = false,
+  loading = false, brief, stats, mergedAt = null, inMaster = null, stepProgress = null, nameOf, genderOf, leadPersonaId = null, branch = null, isMobile = false,
   onOpenStats, onRetry, onMerge, onOpenFinal, onOpenTask, onAnswer, onOpenTasks,
 }: FeatureBriefBlockProps) {
   // Одно «сейчас» на ответ (R-F8): относительные строки («ждёт N», «обновлено N назад»,
@@ -413,6 +458,7 @@ export function FeatureBriefBlock({
           <Button variant="secondary" size={isMobile ? 'md' : 'sm'} dataTestId="brief-retry" onClick={onRetry}>Повторить</Button>
         </div>
         {totals}
+        {branch && <BranchRow branch={branch} isMobile={isMobile} />}
       </section>
     );
   }
@@ -423,7 +469,8 @@ export function FeatureBriefBlock({
   const active = briefActiveView(brief, { nameOf, nowMs });
   const headingText = active?.heading ?? nowText;
   const subText = active?.heading != null ? active.sub : briefSubText(brief, nowMs);
-  const readiness = briefReadinessText(brief, { nameOf, inMaster });
+  const readiness = briefReadinessText(brief, { nameOf, inMaster, stepProgress });
+  const leadName = leadPersonaId ? nameOf?.(leadPersonaId) ?? null : null;
   const eta = briefEstimateText(brief, { nameOf, nowMs });
   const isWait = brief.kind === 'waiting_you';
   const answer = active?.answer && onAnswer ? active.answer : null;
@@ -499,7 +546,11 @@ export function FeatureBriefBlock({
         <EtaColumn view={eta} />
       </div>
 
-      {brief.note && <VoiceBlock note={brief.note} kind={brief.kind} nameOf={nameOf} nowMs={nowMs} />}
+      {brief.note && <VoiceBlock note={brief.note} kind={brief.kind} nameOf={nameOf} genderOf={genderOf} nowMs={nowMs} />}
+      {!brief.note && leadName && (
+        <div data-testid="brief-lead" style={{ marginTop: SP.md, fontSize: FS.sm, color: C.textMuted }}>{leadNoNoteText(leadName)}</div>
+      )}
+      {branch && <BranchRow branch={branch} isMobile={isMobile} />}
       {totals}
     </section>
   );

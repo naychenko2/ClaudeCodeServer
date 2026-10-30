@@ -373,7 +373,7 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     // (в дефолте running/без тревоги их нет).
     expect(findNodeByAttr(c, 'data-testid', 'feature-page-alarm'), 'тревога (running, без attention — нет)').toBeNull();
     expect(findNodeByAttr(c, 'data-testid', 'feature-page-main-action'), 'главное действие (running, без attention — нет)').toBeNull();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-branch'), 'ветка в мета-строке (волна 3)').not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-meta'), 'мета-строки нет (Ш5)').toBeNull();
     // Ш5: возраст, «M задач» и сегменты ушли из шапки в сводку — в DOM их нет.
     expect(findNodeByAttr(c, 'data-testid', 'feature-page-taskcount'), '«M задач» в мета-строке убрано (Ш5)').toBeNull();
     expect(findNodeByAttr(c, 'data-testid', 'feature-page-steps'), 'сегменты прогресса убраны (Ш5)').toBeNull();
@@ -904,10 +904,8 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
 });
 
 
-// === W4-1F: чип «ведёт ·» в мета-строке шапки (макет pt1) ===
-// Чип — сам вход в ключевой чат: клик открывает keySessionId. Мутация (в отчёте):
-// убрать openChatById в обработчике чипа → вызов не попадёт в журнал → тест краснеет.
-describe('W4-1F: чип «ведёт ·» в шапке фичи', () => {
+// === Ш5: ветка и «ведёт» — в сводке, мета-строки шапки нет ===
+describe('Ш5: ветка и ведущий в сводке', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
@@ -939,158 +937,102 @@ describe('W4-1F: чип «ведёт ·» в шапке фичи', () => {
     indexTest.setIndex('p1', mockIndex as FeaturesIndex);
   };
 
-  // Клик чипа — переход с записью возврата (плашка Ф9b): recordFeatureReturn пишет
-  // указатель {from: фича, to: ключевой чат}. Мутация: убрать вызов recordFeatureReturn
-  // в onClick → getBackNav() пуст → тест краснеет (хвост R-1F-T, п.3).
-  it('клик по чипу открывает keySessionId и записывает возврат к фиче; на чипе — «ведёт» и имя', async () => {
-    const c = render({});
-    await settle();
-    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead');
-    expect(chip, 'чип «ведёт» в мета-строке').not.toBeNull();
-    const text = textNodes(chip!).join('');
-    expect(text, 'подпись «ведёт» и имя оркестратора').toContain('ведёт');
-    expect(text, 'имя оркестратора').toContain('Софья (локальная)');
-    await act(async () => { (reactProps(chip)!.onClick as () => void)(); });
-    expect(openChatCalls, 'клик ведёт в keySessionId').toEqual(['chat-key']);
-    const nav = backNavTest.getBackNav();
-    expect(nav?.from, 'запись возврата — из фичы f1').toBe('f1');
-    expect(nav?.fromKind, 'дискриминатор — feature').toBe('feature');
-    expect(nav?.to, 'цель возврата — ключевой чат').toEqual({ kind: 'chat', id: 'chat-key' });
-    expect(nav?.fromTitle, 'название фичи для плашки').toBe('Моя фича');
+  const brief = (over: Partial<FeatureBrief> = {}): FeatureBrief => ({
+    kind: 'running', now: null, reason: null,
+    done: { stepsAccepted: 2, stepsTotal: 5, loops: 1, planState: 'cut' },
+    next: [], elapsedMinutes: null, estimate: null, queue: null, note: null,
+    computedAt: '2026-10-19T11:50:00Z',
+    ...over,
+  });
+  const fbStats = (): FeatureStats => ({
+    source: 'journal',
+    truncated: false,
+    timeline: {
+      from: '2026-10-19T10:00:00Z',
+      to: '2026-10-19T11:50:00Z',
+      stages: [{ key: 'prod', startedAt: '2026-10-19T10:00:00Z', barEnd: null }],
+      segments: [
+        { from: '2026-10-19T10:00:00Z', to: '2026-10-19T10:30:00Z', kind: 'work', track: 'main', stage: 'prod', taskId: 't-prod' },
+      ],
+      current: { kind: 'work', since: '2026-10-19T11:40:00Z', taskId: 't-prod' },
+      totals: {
+        elapsedMinutes: 110, workWallMinutes: 30, agentsSumMinutes: 30, notWorkingMinutes: 80,
+        waitingMinutes: null, idleMinutes: null, waitingCount: null, longestWaitMinutes: null,
+        errorCount: null, errorMinutes: null,
+      },
+    },
+    breakdown: { personas: [], models: [], roles: [] },
+    longestNow: null,
+    spend: null,
+  });
+  const note = (byPersonaId: string | null): FeatureBrief['note'] =>
+    ({ text: 'Идём по плану.', at: '2026-10-19T11:30:00Z', byPersonaId, byUser: false, stageAtWrite: 'prod', stale: false });
+
+  it('мета-строки страницы нет ни на 1280, ни на 360; тег статуса — в тулбаре на обеих ширинах', async () => {
+    for (const isMobile of [false, true]) {
+      mockGetFeature.result = pageData({ brief: brief() });
+      const c = render({ isMobile });
+      await settle();
+      expect(findNodeByAttr(c, 'data-testid', 'feature-page-meta'), `мета-строка (mobile=${isMobile})`).toBeNull();
+      expect(findNodeByAttr(c, 'data-testid', 'feature-page-lead'), `чип «ведёт» (mobile=${isMobile})`).toBeNull();
+      expect(findNodeByAttr(c, 'data-testid', 'feature-page-status'), `тег в тулбаре (mobile=${isMobile})`).not.toBeNull();
+    }
   });
 
-  it('keyArchived: чип помечен «в архиве»', async () => {
-    reindex({ keyArchived: true });
+  it('ветка — чип-кнопка в сводке: клик копирует и даёт тост', async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    reindex({ branch: 'feat/x' });
+    mockGetFeature.result = pageData({ brief: brief() });
     const c = render({});
     await settle();
-    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead')!;
-    expect(textNodes(chip).join(''), 'пометка «в архиве»').toContain('в архиве');
+    const btn = findNodeByAttr(c, 'data-testid', 'feature-page-branch');
+    expect(btn, 'ветка в сводке').not.toBeNull();
+    expect(textNodes(btn!).join('')).toBe('feat/x');
+    await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
+    expect(writeText).toHaveBeenCalledWith('feat/x');
+    vi.unstubAllGlobals();
   });
 
-  it('чата нет, персона есть: чип без перехода (не кнопка, нет onClick)', async () => {
-    reindex({ keySessionId: null });
+  it('ветка есть и при «сводка не загрузилась»', async () => {
+    reindex({ branch: 'feat/x' });
+    mockGetFeature.result = pageData({ brief: null, stats: fbStats() });
     const c = render({});
     await settle();
-    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead');
-    expect(chip, 'статичный чип (без ключевого чата)').not.toBeNull();
-    expect(chip!.nodeName, 'не кнопка — перехода нет').not.toBe('BUTTON');
-    expect(reactProps(chip)?.onClick, 'у статичного чипа нет обработчика клика').toBeUndefined();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-branch')).not.toBeNull();
   });
 
-  it('персоны нет: элемента нет', async () => {
-    mockIndex.features = [feat()]; // дефолт без orchestratorPersonaId
-    indexTest.setIndex('p1', mockIndex as FeaturesIndex);
+  it('заметка ведущего: подпись «— Имя, ведущая · время»; отдельной строки «Ведёт» нет', async () => {
+    mockGetFeature.result = pageData({ brief: brief({ note: note('p-sofya') }) });
     const c = render({});
     await settle();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-lead'), 'без персоны — чипа нет').toBeNull();
+    const sig = findNodeByAttr(c, 'data-testid', 'brief-voice-by')!;
+    expect(textNodes(sig).join('')).toMatch(/^— Софья \(локальная\), ведущая · /);
+    expect(findNodeByAttr(c, 'data-testid', 'brief-lead')).toBeNull();
   });
 
-  // Состояния чипа (хвосты R-1F-R/R-1F-T): контрол — ui.Button, состояния —
-  // React-состояние LeadChip, обработчики на обёртке (ui.Button их не форвардит,
-  // прецедент TaskCreatedView). Нажатие — pointer-события (тач и мышь дают их
-  // одинаково), фокус — :focus-visible (кольцо только с клавиатуры), глиф-стрелка
-  // красится только по наведению. Мутации (в отчёте): убрать onPointerDown на
-  // обёртке → тест нажатия краснеет; вернуть setFocused(true) без :focus-visible →
-  // тест фокуса краснеет; убрать recordFeatureReturn в onClick → тест записи возврата
-  // краснеет; убрать textOverflow у спана имени → тест ellipsis краснеет.
-  it('наведение: фон и рамка меняются, глиф красится только здесь; с наведения — обратно', async () => {
+  it('заметки нет: одна строка «Ведёт Имя · заметки пока нет» вторичным цветом, не чип', async () => {
+    mockGetFeature.result = pageData({ brief: brief() });
     const c = render({});
     await settle();
-    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead')!;
-    const icon = findNodeByAttr(c, 'data-testid', 'feature-page-lead-icon')!;
-    expect(chip.nodeName, 'контрол — кнопка из ui.Button').toBe('BUTTON');
-    expect(chip.style.background, 'базовый фон чипа').toBe(C.bgWhite);
-    expect(icon.style.color, 'глиф без наведения — тихий').toBe(C.textMuted);
-    const wrap = reactProps(chip!.parentNode as never) ?? {};
-    const enter = wrap.onMouseEnter as (() => void) | undefined;
-    const leave = wrap.onMouseLeave as (() => void) | undefined;
-    expect(enter && leave, 'на обёртке обработчики наведения').toBeTruthy();
-    act(() => { enter!(); });
-    expect(chip.style.background, 'фон на наведении').toBe(C.bgSelected);
-    expect(chip.style.borderColor, 'рамка на наведении').toBe(C.accentMuted);
-    expect(icon.style.color, 'глиф на наведении — accent').toBe(C.accent);
-    act(() => { leave!(); });
-    expect(chip.style.background, 'фон возвращается после наведения').toBe(C.bgWhite);
-    expect(chip.style.borderColor, 'рамка возвращается после наведения').toBe(C.border);
-    expect(icon.style.color, 'глиф после наведения — тихий').toBe(C.textMuted);
+    const line = findNodeByAttr(c, 'data-testid', 'brief-lead')!;
+    expect(textNodes(line).join('')).toBe('Ведёт Софья (локальная) · заметки пока нет');
+    expect((reactProps(line)!.style as Record<string, unknown>).color).toBe(C.textMuted);
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-lead')).toBeNull();
   });
 
-  it('нажатие: фон accentLight; отпускание и pointercancel — снова фон наведения', async () => {
+  it('стор персон не догружен: строки нет; после догрузки — появляется', async () => {
+    personaMap.clear();
+    mockGetFeature.result = pageData({ brief: brief() });
     const c = render({});
     await settle();
-    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead')!;
-    const wrap = reactProps(chip!.parentNode as never) ?? {};
-    const enter = wrap.onMouseEnter as (() => void) | undefined;
-    const down = wrap.onPointerDown as (() => void) | undefined;
-    const up = wrap.onPointerUp as (() => void) | undefined;
-    const cancel = wrap.onPointerCancel as (() => void) | undefined;
-    expect(down && up && cancel, 'нажатие — по pointer-событиям (не mouse)').toBeTruthy();
-    act(() => { enter!(); });
-    act(() => { down!(); });
-    expect(chip.style.background, 'фон на нажатии').toBe(C.accentLight);
-    act(() => { up!(); });
-    expect(chip.style.background, 'после отпускания — фон наведения').toBe(C.bgSelected);
-    // Сход пальца (pointercancel без pointerup): нажатие должно сниматься.
-    act(() => { down!(); });
-    act(() => { cancel!(); });
-    expect(chip.style.background, 'pointercancel — нажатие снято').toBe(C.bgSelected);
-  });
-
-  it('фокус с клавиатуры: кольцо и accent-рамка; фокус после мыши (:focus-visible false) — нет', async () => {
-    const c = render({});
-    await settle();
-    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead')!;
-    const icon = findNodeByAttr(c, 'data-testid', 'feature-page-lead-icon')!;
-    const wrapNode = chip!.parentNode as unknown as { focusVisible: boolean };
-    const wrap = reactProps(wrapNode as never) ?? {};
-    const focus = wrap.onFocus as ((e: unknown) => void) | undefined;
-    const blur = wrap.onBlur as (() => void) | undefined;
-    expect(focus && blur, 'на обёртке обработчики фокуса').toBeTruthy();
-    // Tab: :focus-visible = true → кольцо + accent-рамка (макет pt1).
-    wrapNode.focusVisible = true;
-    act(() => { focus!({ currentTarget: wrapNode }); });
-    expect(chip.style.boxShadow, 'фокус с клавиатуры — кольцо').toBe(SHADOW.focus);
-    expect(chip.style.borderColor, 'фокус с клавиатуры — accent-рамка').toBe(C.accent);
-    expect(icon.style.color, 'глиф по фокусу не красится (только по наведению)').toBe(C.textMuted);
-    // Мышь/тап: :focus-visible = false → рамка и кольцо не залипают (хвост R-1F-T).
-    act(() => { blur!(); });
-    wrapNode.focusVisible = false;
-    act(() => { focus!({ currentTarget: wrapNode }); });
-    expect(chip.style.boxShadow, 'фокус после мыши — без кольца').toBe('none');
-    expect(chip.style.borderColor, 'фокус после мыши — базовая рамка').toBe(C.border);
-    act(() => { blur!(); });
-    expect(chip.style.boxShadow, 'blur — без кольца').toBe('none');
-    expect(chip.style.borderColor, 'blur — базовая рамка').toBe(C.border);
-  });
-
-  it('длинное имя: спан имени с ellipsis (чип не лезет за 360)', async () => {
-    const c = render({});
-    await settle();
-    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead')!;
-    const nameSpan = (chip!.childNodes as FNodeLike[]).find((n) => textNodes(n as never).join('') === 'Софья (локальная)');
-    expect(nameSpan, 'спан с именем оркестратора').not.toBeUndefined();
-    expect(nameSpan!.style.textOverflow, 'имя реется многоточием').toBe('ellipsis');
-    expect(nameSpan!.style.overflow, 'overflow скрыт').toBe('hidden');
-  });
-
-  // Реактивность стора персон (возврат R-2): getPersonaById сам по себе не реактивен
-  // (lib/personas.ts:75) — чип подписывается на версию стора и просит загрузку.
-  // Мутация (в отчёте): убрать usePersonasVersion() в LeadChip → подъём версии не
-  // перерисовывает чип → тест краснеет.
-  it('стор персон не догружен: чипа нет; после догрузки — появляется', async () => {
-    personaMap.clear(); // оркестратор в индексе есть, в сторе — пока нет
-    const c = render({});
-    await settle();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-lead'), 'пока стор не догружен — чипа нет').toBeNull();
-    expect(personaStore.ensureCalls, 'чип запросил загрузку стора персон').toBeGreaterThan(0);
+    expect(findNodeByAttr(c, 'data-testid', 'brief-lead'), 'пока стор не догружен — строки нет').toBeNull();
     act(() => {
       personaMap.set('p-sofya', 'Софья (локальная)');
       personaStore.version++;
       for (const fn of [...personaStore.listeners]) fn();
     });
-    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead');
-    expect(chip, 'чип появляется после догрузки стора').not.toBeNull();
-    expect(textNodes(chip!).join(''), 'имя оркестратора после догрузки').toContain('Софья (локальная)');
+    expect(findNodeByAttr(c, 'data-testid', 'brief-lead'), 'строка появляется после догрузки').not.toBeNull();
   });
 });
 

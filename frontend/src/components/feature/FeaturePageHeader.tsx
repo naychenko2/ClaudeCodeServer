@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import type { CSSProperties, FocusEvent, ReactNode } from 'react';
-import { ArrowRight, Check, GitBranch, ListChecks, MessageCircle, ListEnd, ListX, Pause, Play, RotateCcw, Zap } from 'lucide-react';
-import { C, R, SHADOW, FS, SP, FONT, MODAL_W } from '../../lib/design';
+import type { ReactNode } from 'react';
+import { Check, GitBranch, ListChecks, ListEnd, ListX, Pause, Play, RotateCcw, Zap } from 'lucide-react';
+import { C, R, FS, SP, FONT, MODAL_W } from '../../lib/design';
 import { refetchFeaturePage } from '../../lib/featurePage';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { ToolbarOverflowMenu, type OverflowItem } from '../ToolbarOverflowMenu';
@@ -9,9 +9,8 @@ import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { FeatureGlyph } from '../chat/feature/FeatureGlyphs';
 import { alarmView } from '../chat/feature/featureTruthModel';
-import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { formatDuration, queueOrdinalWord, queuePhraseParts } from '../../lib/chatGroups';
-import { ensurePersonasLoaded, getPersonaById, usePersonasVersion } from '../../lib/personas';
+import { getPersonaById } from '../../lib/personas';
 import { openChatById } from '../../lib/openChat';
 import { executorStopVisual, openTaskInSection } from '../../lib/tasks';
 import { recordFeatureReturn } from '../../lib/featureBackNav';
@@ -58,194 +57,6 @@ export function featurePrimaryAction(a: FeatureAttention | null | undefined, per
 function attentionPersonaName(a: FeatureAttention | null | undefined): string | null {
   if (!a?.personaId) return null;
   return getPersonaById(a.personaId)?.name ?? null;
-}
-
-// === Мета-строка под шапкой (макет §1) ===
-//
-// Тег (только 360: на 1280 он в шапке) · ветка (клик копирует, тост) · чип «ведёт».
-// Возраст, число задач и сегменты прогресса ушли в сводку (Ш5). Поля 4 12, перенос; 12 textSecondary; ветка — mono 11 + GitBranch 12,
-// наведение bgSelected, на 360 minHeight 40.
-export interface FeaturePageHeaderProps {
-  // null — данных страницы ещё нет (loading): строится по индексу.
-  run: FeatureRun | null;
-  // Строка индекса (ветка, createdAt, taskCount, ключевой чат); null — фичи нет в индексе.
-  feature: FeatureIndexFeature | null;
-  isMobile: boolean;
-  // Тег страницы (считает FeaturePage: run.state, фолбэк — индекс).
-  tag: FeatureRunTag | null;
-}
-
-// === Чип «ведёт ·» (макет pt1, W4-1F) ===
-//
-// Оркестратор фичи (поле индекса orchestratorPersonaId, W4-1B) — кому писать. Чип
-// сам и есть вход в ключевой чат: отдельной ссылки «Ключевой чат» нет (пункт ⋯
-// «Открыть ключевой чат» убран — переход дублировался).
-// Состояния (макет pt1): чат есть — кнопка, клик открывает keySessionId с плашкой
-// возврата к фиче (как у «чат · задача»); keyArchived — пометка «в архиве»;
-// чата нет — статичный чип (пунктирная рамка, без стрелки); персоны нет — элемента нет.
-//
-// Контрол — ui.Button (железное правило дизайн-системы): база — ghostFilled + pill;
-// состояния наведения/нажатия/фокуса — React-состояние этой компоненты, стиль считается
-// от него. ui.Button не форвардит mouse/focus-обработчики, поэтому они живут на
-// обёртке-спане (прецедент: чип плана в TaskCreatedView). Фокус по pt1 — кольцо
-// SHADOW.focus + accent-рамка, не только кольцо.
-function LeadChip({ feature, isMobile }: { feature: FeatureIndexFeature; isMobile: boolean }) {
-  const personaId = feature.orchestratorPersonaId ?? null;
-  // getPersonaById сам по себе не реактивен (lib/personas.ts:75): подписка на версию
-  // стора + запрос загрузки. Состояние одно: персона не резолвится (нет id в индексе
-  // или стор ещё не догружен) — элемента нет. Чип НЕ различает «не загрузилась» и
-  // «нет оркестратора» — оба случая пустые; подписка лишь гарантирует, что чип
-  // появится после догрузки (прецедент: NotificationAvatar, TaskPersonaBadge).
-  usePersonasVersion();
-  useEffect(() => { void ensurePersonasLoaded(); }, []);
-  // Состояния (макет pt1): наведение — bgSelected + кромка accentMuted; нажатие —
-  // accentLight; фокус — кольцо + accent-рамка, только с клавиатуры (:focus-visible),
-  // иначе рамка залипает после тапа. Значок-стрелка красится только по наведению.
-  // Состояние — локальное React-состояние (до ранних return: порядок хуков не должен
-  // плыть), стиль ui.Button считается от него; обработчики — на обёртке, потому что
-  // ui.Button их не форвардит.
-  const [hover, setHover] = useState(false);
-  const [pressed, setPressed] = useState(false);
-  const [focused, setFocused] = useState(false);
-  const persona = personaId ? getPersonaById(personaId) : null;
-  // Персона не задана или не резолвится — элемента нет (состояние «Оркестратора нет»).
-  if (!persona) return null;
-  const keyChat = feature.keySessionId ?? null;
-  const name = persona.name;
-
-  // Каркас чипа (макет pt1): pill 24 px (на 360 — 40), поля 8/3 (десктоп) и 12/8
-  // (мобила), gap 6, 12 sans — числа по макету .who, вне 4px-шкалы. Ширину не
-  // фиксируем: если чип длиннее строки, он сжимается, а имя реется (ellipsis) —
-  // длинное имя не лезет за 360. fontWeight и выравнивание перебивают дефолты
-  // ui.Button: чип — подпись, не кнопка с центровкой.
-  const shell: CSSProperties = {
-    display: 'inline-flex', alignItems: 'center', gap: 6,
-    height: isMobile ? 40 : 24,
-    padding: isMobile ? `0 ${SP.md}px 0 ${SP.sm}px` : `0 ${SP.sm}px 0 3px`,
-    borderRadius: R.max, fontSize: FS.sm, color: C.textPrimary, fontFamily: FONT.sans,
-    fontWeight: 400, justifyContent: 'flex-start',
-  };
-
-  if (!keyChat) {
-    // Чата нет — чип не кнопка: пунктирная рамка, без значка-стрелки.
-    return (
-      <span
-        data-testid="feature-page-lead"
-        title="Ключевого чата у фичи нет"
-        style={{ ...shell, border: `1px dashed ${C.dashed}`, background: 'transparent' }}
-      >
-        <PersonaAvatar persona={persona} size={18} />
-        <span style={{ color: C.textMuted, flexShrink: 0 }}>ведёт</span>
-        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
-      </span>
-    );
-  }
-
-  return (
-    // Обёртка — flex-контейнер без фиксации ширины: если чип длиннее строки, он
-    // сжимается, и имя уходит в ellipsis (прецедент: FeatureProdCardsView).
-    <span
-      style={{ display: 'inline-flex', minWidth: 0 }}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => { setHover(false); setPressed(false); }}
-      // Нажатие — по pointer-событиям: тач и мышь дают их одинаково, на тапе
-      // состояние видно сразу (прецедент: FeatureProdCardsView, ResizeHandle).
-      onPointerDown={() => setPressed(true)}
-      onPointerUp={() => setPressed(false)}
-      // Сход пальца с чипа: браузер посылает pointercancel — без него pressed залипает.
-      onPointerCancel={() => setPressed(false)}
-      // Фокус — только с клавиатуры (:focus-visible): после клика/тапа рамка и кольцо
-      // не залипают (прецедент: FeatureProdCardsView:113).
-      onFocus={(e: FocusEvent<HTMLSpanElement>) => setFocused(e.currentTarget.matches(':focus-visible'))}
-      onBlur={() => setFocused(false)}
-    >
-      <Button
-        variant="ghostFilled"
-        pill
-        size="xs"
-        dataTestId="feature-page-lead"
-        ariaLabel={`Открыть ключевой чат${feature.keyArchived ? ' (в архиве)' : ''} · ведёт ${name}`}
-        title={`Ключевой чат фичи${feature.keyArchived ? ' · в архиве' : ''}\nклик — открыть чат`}
-        onClick={() => {
-          recordFeatureReturn(feature.featureId, { kind: 'chat', id: keyChat }, feature.title ?? null);
-          void openChatById(keyChat);
-        }}
-        // Рамка — longhand (borderColor): база 1px solid из ghostFilled остаётся,
-        // цвет меняется состоянием; shorthand затёр бы саму толщину рамки.
-        style={{
-          ...shell,
-          background: pressed ? C.accentLight : hover ? C.bgSelected : C.bgWhite,
-          borderColor: focused ? C.accent : hover ? C.accentMuted : C.border,
-          boxShadow: focused ? SHADOW.focus : 'none',
-          outline: 'none',
-        }}
-      >
-        <PersonaAvatar persona={persona} size={18} />
-        <span style={{ color: C.textMuted, flexShrink: 0 }}>ведёт</span>
-        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
-        {feature.keyArchived && (
-          <span style={{ color: C.textMuted, fontSize: FS.xs, flexShrink: 0 }}>в архиве</span>
-        )}
-        <span aria-hidden data-testid="feature-page-lead-icon" style={{ display: 'inline-flex', flexShrink: 0, color: hover ? C.accent : C.textMuted }}>
-          <MessageCircle size={12} strokeWidth={ICON_STROKE} />
-          <ArrowRight size={12} strokeWidth={ICON_STROKE} />
-        </span>
-      </Button>
-    </span>
-  );
-}
-
-export function FeaturePageHeader({ feature, isMobile, tag }: FeaturePageHeaderProps) {
-  const branch = feature?.branch ?? null;
-
-  // Копировать ветку: clipboard + тост (макет: «клик копирует, тост»).
-  const [copied, setCopied] = useState(false);
-  const copyBranch = () => {
-    if (!branch) return;
-    if (typeof navigator !== 'undefined' && navigator.clipboard) {
-      void navigator.clipboard.writeText(branch).catch(() => {});
-    }
-    showToast('Ветка скопирована', branch);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const branchBtn = branch && (
-    <button
-      type="button"
-      data-testid="feature-page-branch"
-      onClick={copyBranch}
-      title={copied ? 'Ветка скопирована' : 'Скопировать ветку'}
-      aria-label={`Скопировать ветку ${branch}`}
-      onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
-      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: SP.xs, flex: '0 1 auto', minWidth: 0,
-        height: isMobile ? 40 : 18, padding: `0 ${SP.xs}px`, margin: isMobile ? 0 : `-${SP.xxs}px -${SP.xs}px`,
-        border: 'none', borderRadius: R.sm, background: 'transparent', cursor: 'pointer',
-        fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary,
-      }}
-    >
-      <GitBranch size={12} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{branch}</span>
-    </button>
-  );
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
-      <div
-        data-testid="feature-page-meta"
-        style={{
-          display: 'flex', flexWrap: 'wrap', alignItems: 'center',
-          gap: `${SP.xs}px ${SP.md}px`, fontSize: FS.sm, color: C.textSecondary, fontFamily: FONT.sans,
-        }}
-      >
-        {isMobile && tag && <StatusTag tag={tag} testId="feature-page-status" />}
-        {branchBtn}
-        {feature && <LeadChip feature={feature} isMobile={isMobile} />}
-      </div>
-    </div>
-  );
 }
 
 // === Пауза и черновик (W4-HOLD-F2, макет feature-hold-1) ===
@@ -832,12 +643,11 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
       onClick: () => void resumeClick(),
     });
   }
-  // Пункта «Открыть ключевой чат» здесь нет (W4-1F): вход в ключевой чат — чип
-  // «ведёт ·» в мета-строке, отдельная ссылка не дублируется.
+  // Пункта «Открыть ключевой чат» здесь нет: ключевой чат открывается из вкладки «Чаты».
 
   return (
     <>
-      {!isMobile && tag && <StatusTag tag={tag} testId="feature-page-status" />}
+      {tag && <StatusTag tag={tag} testId="feature-page-status" />}
       {canPause && !isMobile && (
         <span data-testid="feature-page-pause-wrap" style={{ display: 'inline-flex', flexShrink: 0 }}>
           <Button

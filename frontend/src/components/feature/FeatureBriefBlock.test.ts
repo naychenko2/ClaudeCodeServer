@@ -254,7 +254,8 @@ describe('«Готовность | Срок»', () => {
 
   it('оценка оркестратора полосу не красит: caption и полоса по stepProgress, не по note.estimate', () => {
     const { c } = render({ brief: brief({ note: note({ inProgress: 3 }) }), stepProgress: SP98, nameOf });
-    expect(joined(c, 'brief-ready-caption')).toBe('2 из 5 шагов · 40 %');
+    // Подпись и полоса — один источник (stepProgress): 26 из 98 → 27 %, не 2 из 5 → 40 % из brief.done.
+    expect(joined(c, 'brief-ready-caption')).toBe('26 из 98 шагов · 27 %');
     expect(segFlex(c, 'accepted')).toBe(26);
   });
 
@@ -465,13 +466,13 @@ describe('«обновлено …» (F15, дефект f2da9354)', () => {
 describe('Голос оркестратора', () => {
   const fresh = { text: 'Идём по плану', at: at(25, 13, 56), byPersonaId: 'p-sofya', byUser: false, stageAtWrite: 'review', stale: false };
 
-  it('свежий — плашка с текстом и подписью «Имя · ведёт фичу · N мин назад»', () => {
+  it('свежий — плашка с текстом и подписью «— Имя, ведущая · N мин назад»', () => {
     const { c } = render({ brief: brief({ note: fresh }), nameOf });
     const voice = findNodeByAttr(c, 'data-testid', 'brief-voice');
     expect(voice, 'плашка голоса').not.toBeNull();
     const all = textNodes(voice!).join(' ');
     expect(all).toContain('Идём по плану');
-    expect(all).toContain('Софья · ведёт фичу · 14 мин назад');
+    expect(all).toContain('— Софья, ведущая · 14 мин назад');
     expect(findNodeByAttr(c, 'data-testid', 'brief-voice-stale'), 'метки устаревшего нет').toBeNull();
   });
 

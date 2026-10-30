@@ -30,10 +30,10 @@ import { FeatureEventsTab } from './FeatureEventsTab';
 import { FeatureStatsTab } from './FeatureStatsTab';
 import { FeatureBriefBlock, type FeatureBriefBlockProps } from './FeatureBriefBlock';
 import { stageLabel } from './FeatureStatsBits';
-import { type PersonaNameResolver } from './FeatureBriefModel';
+import { type PersonaGenderResolver, type PersonaNameResolver } from './FeatureBriefModel';
 import { ensurePersonasLoaded, getPersonaById, usePersonasVersion } from '../../lib/personas';
 import {
-  FeaturePageHeader, FeaturePageToolbar, FeaturePageAlert,
+  FeaturePageToolbar, FeaturePageAlert,
   featurePageStatusTag, toRunTag, type FeatureRunTag,
 } from './FeaturePageHeader';
 import { FeaturePageTabs } from './FeaturePageTabs';
@@ -107,11 +107,15 @@ function activeStageName(brief: FeatureBrief | null | undefined): string | null 
 // (тот же приём, что LeadChip): после догрузки стора имена в подписи голоса и в «Дальше»
 // появляются. Подписка на обёртке, не на странице: подъём стора персон не должен
 // перерисовывать всю страницу.
-function FeatureBriefWithNames(props: Omit<FeatureBriefBlockProps, 'nameOf'>) {
+function FeatureBriefWithNames(props: Omit<FeatureBriefBlockProps, 'nameOf' | 'genderOf'>) {
   usePersonasVersion();
   useEffect(() => { void ensurePersonasLoaded(); }, []);
   const nameOf: PersonaNameResolver = (id) => getPersonaById(id)?.name ?? null;
-  return <FeatureBriefBlock {...props} nameOf={nameOf} />;
+  const genderOf: PersonaGenderResolver = (id) => {
+    const g = getPersonaById(id)?.gender;
+    return g === 'female' || g === 'male' ? g : null;
+  };
+  return <FeatureBriefBlock {...props} nameOf={nameOf} genderOf={genderOf} />;
 }
 
 // Страница фичи (волна 3, Ф1 — каркас). Оболочка — «как файл» (CenterViewShell):
@@ -333,7 +337,6 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
     const marks = buildNavMarks(okRun, page.page.chats);
     body = (
       <>
-        <FeaturePageHeader run={okRun} feature={feature} isMobile={isMobile} tag={tag} />
         <FeaturePageAlert run={okRun} feature={feature} isMobile={isMobile} onMerge={openMergeDialog} marks={marks} />
         <FeaturePageTabs
           value={tab}
@@ -363,6 +366,8 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
                 mergedAt={okRun.summary?.mergedAt ?? null}
                 inMaster={okRun.stepProgress?.inMaster ?? null}
                 stepProgress={okRun.stepProgress ?? null}
+                leadPersonaId={feature?.orchestratorPersonaId ?? null}
+                branch={feature?.branch ?? null}
                 isMobile={isMobile}
                 onOpenStats={() => setFeaturePageTab('stats')}
                 onRetry={() => refetchFeaturePage(featureId)}

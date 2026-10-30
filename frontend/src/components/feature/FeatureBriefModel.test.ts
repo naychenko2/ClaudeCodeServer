@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   agoText, briefActiveTagLabel, briefActiveView, briefWaitTagLabel, briefDoneText, briefElapsedFact, briefEstimateText, briefNextText, briefNowText, briefReadinessText, briefSubText, briefUpdatedText, genitiveName, dativeName,
-  voiceRoleText, voiceStaleLabel, voiceWhenText,
+  voiceRoleText, voiceSignature, leadNoNoteText, voiceStaleLabel, voiceWhenText,
 } from './FeatureBriefModel';
 import type { FeatureBrief, FeatureBriefActive, FeatureBriefKind } from '../../lib/featurePage';
 
@@ -688,6 +688,15 @@ describe('Голос оркестратора', () => {
 
   it('нечитаемая дата голоса — только метка, без висячего запятого', () => {
     expect(voiceWhenText({ ...stale, at: 'не дата' }, 'paused', NOW)).toBe('до паузы');
+  });
+
+  it('подпись заметки: «— Имя, ведущая · время»; male — «ведущий»; без имени — прежняя', () => {
+    const n = { text: 'x', at: '2026-10-19T11:36:00Z', byPersonaId: 'p', byUser: false, stageAtWrite: 'prod', stale: false } as never;
+    const now = Date.parse('2026-10-19T11:50:00Z');
+    expect(voiceSignature(n, 'running', 'Софья', now)).toBe('— Софья, ведущая · 14 мин назад');
+    expect(voiceSignature(n, 'running', 'Егор', now, 'male')).toBe('— Егор, ведущий · 14 мин назад');
+    expect(voiceSignature(n, 'running', null, now)).toBe('ведёт фичу · 14 мин назад');
+    expect(leadNoNoteText('Софья')).toBe('Ведёт Софья · заметки пока нет');
   });
 
   it('роль: «ведёт фичу», у закрытой — «вела фичу» (макет closed)', () => {

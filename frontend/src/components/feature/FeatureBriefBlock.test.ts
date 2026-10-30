@@ -217,33 +217,33 @@ const styleOf = (c: ReturnType<typeof render>['c'], id: string): Record<string, 
   reactProps(findNodeByAttr(c, 'data-testid', id)!)!.style as Record<string, unknown>;
 
 describe('«Готовность | Срок»', () => {
-  it('«Готовность» в DOM равна выходам модели: подпись, подпись под полоской, факт трекера (слова модели, R-F5)', () => {
+  it('«Готовность» в DOM равна выходам модели даже при оценке: процент по трекеру, без «по оценке» (Ш3, R-F5)', () => {
     const b = brief({ estimate: HIST, note: note() });
     const { c } = render({ brief: b, nameOf });
     const v = briefReadinessText(b, { nameOf });
     expect(joined(c, 'brief-ready-caption')).toBe(v.caption.map(p => p.text).join(''));
-    expect(joined(c, 'brief-ready-caption')).toBe('4 готово · 3 в работе · из 9 · 45 %');
+    // note.estimate (4/9, 45 %) в DOM не попала: подпись — трекерные 2 из 5 (40 %).
+    expect(joined(c, 'brief-ready-caption')).toBe('2 из 5 шагов · 40 %');
     expect(joined(c, 'brief-ready-tracker')).toBe(v.tracker.map(p => p.text).join(''));
     expect(textNodes(findNodeByAttr(c, 'data-testid', 'brief-ready')!).join(' ')).toContain('Готовность');
   });
 
-  it('полоска — progressbar с aria-label и значением; заливка «готово» C.accent, штриховка «в работе» по inProgress', () => {
-    const { c } = render({ brief: brief({ note: note() }), nameOf });
+  it('полоска — progressbar с трекерным значением; заливка «готово» C.accent, штриховки нет (Ш3)', () => {
+    const { c } = render({ brief: brief({ note: note({ inProgress: 3 }) }), nameOf });
     const bar = findNodeByAttr(c, 'data-testid', 'brief-ready-bar')!;
     expect(bar.attributes.role).toBe('progressbar');
-    expect(bar.attributes['aria-valuenow']).toBe('45');
-    expect(bar.attributes['aria-label']).toBe('Готовность 45 %');
-    expect(styleOf(c, 'brief-ready-fill').width).toBe('45%');
+    expect(bar.attributes['aria-valuenow']).toBe('40');
+    expect(bar.attributes['aria-label']).toBe('Готовность 40 %');
+    expect(styleOf(c, 'brief-ready-fill').width).toBe('40%');
     expect(styleOf(c, 'brief-ready-fill').background).toBe(C.accent);
-    expect(styleOf(c, 'brief-ready-hatch').width).toBe('33%');
-    expect(String(styleOf(c, 'brief-ready-hatch').background)).toContain('repeating-linear-gradient(135deg');
+    expect(findNodeByAttr(c, 'data-testid', 'brief-ready-hatch'), 'штриховки «в работе» нет').toBeNull();
   });
 
-  it('устаревшая оценка — заливка C.accentMuted, штриховка accentMuted/progressTrack, метка у факта трекера', () => {
+  it('устаревшая оценка не тускнит полосу и не даёт метки: полоска по живому трекеру (Ш3)', () => {
     const { c } = render({ brief: brief({ note: note({}, { stale: true }) }), nameOf });
-    expect(styleOf(c, 'brief-ready-fill').background).toBe(C.accentMuted);
-    expect(String(styleOf(c, 'brief-ready-hatch').background)).toContain(C.progressTrack);
-    expect(joined(c, 'brief-ready-stale')).toBe('до смены этапа');
+    expect(styleOf(c, 'brief-ready-fill').background).toBe(C.accent);
+    expect(findNodeByAttr(c, 'data-testid', 'brief-ready-hatch')).toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'brief-ready-stale'), 'метки устаревания нет').toBeNull();
   });
 
   it('закрытая — заливка C.success, штриховки нет, вместо чипов «ничего — всё сделано»', () => {
@@ -272,12 +272,13 @@ describe('«Готовность | Срок»', () => {
     expect(joined(c, 'brief-ready-tracker')).not.toContain('в master');
   });
 
-  it('чипы «ещё не начато»: первый «следом», «за вами» — на фоне C.infoBg', () => {
-    const { c } = render({ brief: brief({ note: note() }), nameOf });
+  it('чипы «осталось» из next (Ш3): первый «следом», «за вами» — на фоне C.infoBg', () => {
+    // Чипы не берутся из estimate.remaining: фикстур с оценкой, но next даёт свою цепочку.
+    const { c } = render({ brief: brief({ note: note(), next: [{ stage: 'qa', personaId: 'p-vera' }] }), nameOf });
     const chips = [findNodeByAttr(c, 'data-testid', 'brief-chip')!];
     expect(textNodes(chips[0]).join('')).toBe('следом · проверка · Вера');
     expect((reactProps(chips[0])!.style as Record<string, unknown>).background).toBe(C.accentLight);
-    const w = render({ brief: brief({ kind: 'waiting_you', reason: 'мерж', note: note({ remaining: ['мерж'] }) }), nameOf }).c;
+    const w = render({ brief: brief({ kind: 'waiting_you', reason: 'мерж' }), nameOf }).c;
     const you = findNodeByAttr(w, 'data-testid', 'brief-chip')!;
     expect(textNodes(you).join('')).toBe('мерж · за вами');
     expect((reactProps(you)!.style as Record<string, unknown>).background).toBe(C.infoBg);

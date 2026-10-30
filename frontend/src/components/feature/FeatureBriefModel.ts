@@ -179,7 +179,7 @@ export function briefSubText(brief: FeatureBrief, nowMs: number): string | null 
 }
 
 // ── «Сделано» ───────────────────────────────────────────────────────────────────────
-// Счётчики done как есть (макет: «2 из 5 шагов приняты · 1 виток правок»). Для «в очереди»
+// Счётчики done как есть (макет: «2 из 5 шагов приняты · 1 возврат»). Для «в очереди»
 // с нарезанным планом (planState cut/done) — строка макета queue «План готов · 0 из 4 шагов»:
 // факт готовности плана несёт done.planState (R-F8). При незавершённом плане очереди
 // («pending»/«partial») формулировки нет — обычный счётчик, не выдумываем.
@@ -214,8 +214,10 @@ export function briefDoneText(brief: FeatureBrief): BriefDonePart[] {
     { text: ' шагов приняты', mono: false },
   ];
   if (loops > 0) {
+    // Ш3 (словарь проекта): витки называются «возвратами» — то же слово и та же схема
+    // склонения, что в плитке «Возвраты» статистики (FeatureStatsTiles.tsx:106).
     parts.push({ text: ` · ${loops}`, mono: true });
-    parts.push({ text: ` ${pluralRu(loops, 'виток', 'витка', 'витков')} правок`, mono: false });
+    parts.push({ text: ` ${pluralRu(loops, 'возврат', 'возврата', 'возвратов')}`, mono: false });
   }
   return parts;
 }
@@ -381,9 +383,10 @@ export function briefActiveTagLabel(brief: FeatureBrief): string | null {
 }
 
 // ── «Готовность» ────────────────────────────────────────────────────────────────────
-// Макет feature-summary-2: полоска по оценке оркестратора (шаги плюс стадии конвейера), без
-// неё — по трекеру. Счёт и согласие оценок приходят с бэка; единственная арифметика здесь —
-// доля штриховки «в работе» и процент по трекеру (done/total), когда оценки нет.
+// Полоска и процент — только по трекеру (Ш3): тот же trackerPercent, что у полос В2/С1/П2,
+// числитель и знаменатель — бэковые. note.estimate в готовность не входит и идёт ТОЛЬКО
+// в «Срок»: оценка оркестратора не красит полоску, не тускнит её от устаревания и не
+// задаёт чипы. Подписи «Готовность · по оценке» нет нигде: готовность одна, «по трекеру».
 export interface BriefChip {
   text: string;
   // next — первый («следом»), you — «за вами», plain — остальные.
@@ -391,30 +394,32 @@ export interface BriefChip {
 }
 
 export interface BriefReadinessView {
-  // Подпись: «Готовность» / «Готовность · по трекеру».
+  // Подпись: «Готовность · по трекеру» — единственная (Ш3: шкалы «по оценке» нет).
   label: string;
-  // Подпись под полоской: «4 готово · 3 в работе · из 9 · 45 %» (mono — числа);
+  // Подпись под полоской: «2 из 5 шагов · 40 %» (mono — числа);
   // при шагах в master — пометка «· N в master» (F1).
   caption: BriefDonePart[];
   percent: number;
-  // aria-label полоски: «Готовность 45 %», при шагах в master — «Готовность 45 %, 3 в master».
+  // aria-label полоски: «Готовность 40 %», при шагах в master — «Готовность 40 %, 3 в master».
   ariaLabel: string;
   // F1: сколько шагов в master (0 — нет или данных нет; ортогональный счётчик бэка).
   inMaster: number;
-  // «в master»-сегмент полоски, % ширины полоски — только когда полоска по шкале трекера
-  // (оценки нет): на шкале оценки оркестратора счётчик шагов не стоит — тик был бы ложью.
-  // 0 — сегмента нет. Никогда не больше percent.
+  // «в master»-сегмент полоски, % ширины полоски: доля шагов в master от знаменателя
+  // шкалы трекера. 0 — сегмента нет. Никогда не больше percent.
   inMasterPercent: number;
-  // Доля штриховки «в работе», 0 — штриховки нет.
+  // Место под Ш5: полоска по трекеру — штриховки «в работе» не из чего строить (корзину
+  // work brief не несёт), поле всегда 0; уходит вместе со старой полосой в Ш5.
   inProgressPercent: number;
-  // Оценка оркестратора устарела: полоска тускнеет.
+  // Место под Ш5: полоска не по оценке — устаревшая оценка её не тускнит, всегда false.
   stale: boolean;
   closed: boolean;
-  // Метка устаревания у факта трекера («до смены этапа» / «до паузы»).
+  // Место под Ш5: всегда null — метка «до смены этапа»/«до паузы» принадлежит оценке и
+  // живёт в «Срок» (briefEstimateText.verdict), не на полоске трекера.
   staleLabel: string | null;
-  // Факт трекера: «по трекеру: 2 из 5 шагов приняты · 1 виток правок».
+  // Факт трекера: «по трекеру: 2 из 5 шагов приняты · 1 возврат».
   tracker: BriefDonePart[];
-  // Подпись чипов: «Ещё не начато:» / «Осталось:».
+  // Подпись чипов: «Осталось:» — единственная (Ш3: «Ещё не начато:» было подписью
+  // estimate.remaining, его в готовности нет).
   chipsLabel: string;
   chips: BriefChip[];
   // Вместо чипов (закрытая): «ничего — всё сделано».
@@ -443,9 +448,6 @@ function masterParts(inMaster: number): BriefDonePart[] {
 
 export function briefReadinessText(brief: FeatureBrief, opts: BriefTextOptions = {}): BriefReadinessView {
   const closed = brief.kind === 'closed' || brief.kind === 'merged';
-  const est = brief.note?.estimate ?? null;
-  const stale = !!est && !!brief.note?.stale;
-  const staleLabel = stale && brief.note ? voiceStaleLabel(brief.note, brief.kind) : null;
   const inMaster = nonNeg(opts.inMaster);
 
   const trackerParts = briefDoneText(brief);
@@ -454,53 +456,33 @@ export function briefReadinessText(brief: FeatureBrief, opts: BriefTextOptions =
   // «в master» к строке трекера НЕ добавляется: это ровно тот же ортогональный счётчик,
   // что показан на подписи полоски ниже; второй раз в том же блоке он не звучит (минор 3).
 
-  let caption: BriefDonePart[];
-  let percent: number;
-  let inProgressPercent = 0;
-  // Сегмент «в master» на полоске — только по шкале трекера (ниже); на шкале оценки — 0.
+  const { stepsAccepted, stepsTotal } = brief.done;
+  // Процент и подпись — только по трекеру (Ш3): общий trackerPercent (та же функция, что
+  // полосам В2/С1/П2), числитель и знаменатель бэковые, второй копии арифметики в проекте
+  // нет. note.estimate в готовность не входит — она идёт только в «Срок».
+  const percent = trackerPercent(stepsAccepted, stepsTotal);
+  const caption: BriefDonePart[] = [
+    { text: `${stepsAccepted} из ${stepsTotal}`, mono: true }, { text: ' шагов · ', mono: false },
+    { text: `${percent} %`, mono: true },
+  ];
+  // Та же шкала, что у знаменателя полоски: доля шагов в master от total, не выше
+  // залитой части. Бэк НЕ гарантирует inMaster ≤ accepted: отсечка требует allDone
+  // цепочки, а не принятия (FeatureStepAccounting.cs:321-328), поэтому шаг «в master»
+  // без витка (корзина review) даёт inMaster > accepted. Это не битые числа, а правило
+  // полоски: «в master» — часть принятой части шкалы готовности, за неё сегмент не
+  // выходит; текст при этом честно называет факт (он ортогональный счётчик бэка),
+  // а расхождение говорит себе в «Трекер расходится» (вид unreviewed).
   let inMasterPercent = 0;
-  if (est && est.total > 0) {
-    percent = clampPercent(est.percent ?? (est.done / est.total) * 100);
-    const w = est.inProgress ?? 0;
-    if (w > 0 && !closed) inProgressPercent = Math.min(clampPercent((w / est.total) * 100), 100 - percent);
-    caption = w > 0 && !closed
-      ? [
-        { text: String(est.done), mono: true }, { text: ' готово · ', mono: false },
-        { text: String(w), mono: true }, { text: ' в работе · из ', mono: false }, { text: String(est.total), mono: true },
-      ]
-      : [{ text: `${est.done} из ${est.total}`, mono: true }];
-    caption.push({ text: ' · ', mono: false }, { text: `${percent} %`, mono: true });
-  } else {
-    const { stepsAccepted, stepsTotal } = brief.done;
-    // Процент по трекеру — общий trackerPercent (та же функция, что полосам В2/С1/П2):
-    // числитель и знаменатель бэковые, второй копии арифметики в проекте нет.
-    percent = trackerPercent(stepsAccepted, stepsTotal);
-    caption = [
-      { text: `${stepsAccepted} из ${stepsTotal}`, mono: true }, { text: ' шагов · ', mono: false },
-      { text: `${percent} %`, mono: true },
-    ];
-    // Та же шкала, что у знаменателя полоски: доля шагов в master от total, не выше
-    // залитой части. Бэк НЕ гарантирует inMaster ≤ accepted: отсечка требует allDone
-    // цепочки, а не принятия (FeatureStepAccounting.cs:321-328), поэтому шаг «в master»
-    // без витка (корзина review) даёт inMaster > accepted. Это не битые числа, а правило
-    // полоски: «в master» — часть принятой части шкалы готовности, за неё сегмент не
-    // выходит; текст при этом честно называет факт (он ортогональный счётчик бэка),
-    // а расхождение говорит себе в «Трекер расходится» (вид unreviewed).
-    if (inMaster > 0 && stepsTotal > 0) inMasterPercent = Math.min(clampPercent((inMaster / stepsTotal) * 100), percent);
-  }
+  if (inMaster > 0 && stepsTotal > 0) inMasterPercent = Math.min(clampPercent((inMaster / stepsTotal) * 100), percent);
   caption.push(...masterParts(inMaster));
 
-  // Чипы «ещё не начато»: оркестратор — его remaining; без оценки — brief.next (до трёх стадий).
+  // Чипы «осталось»: brief.next (до трёх стадий). estimate.remaining в готовности не
+  // участвует (Ш3): оценка оркестратора живёт только в «Срок».
   const mergeAsk = brief.kind === 'waiting_you' && (brief.reason === 'мерж' || brief.next[0]?.stage === 'merge');
-  let texts: string[];
-  if (est) {
-    texts = est.remaining.filter(Boolean);
-  } else {
-    texts = brief.next.slice(0, CHIP_CAP).map(n => {
-      const name = n.personaId ? opts.nameOf?.(n.personaId) : null;
-      return name ? `${stageWord(n.stage)} · ${name}` : stageWord(n.stage);
-    });
-  }
+  const texts = brief.next.slice(0, CHIP_CAP).map(n => {
+    const name = n.personaId ? opts.nameOf?.(n.personaId) : null;
+    return name ? `${stageWord(n.stage)} · ${name}` : stageWord(n.stage);
+  });
   let chips: BriefChip[];
   if (mergeAsk) {
     chips = [{ text: MERGE_CHIP, tone: 'you' }];
@@ -509,12 +491,13 @@ export function briefReadinessText(brief: FeatureBrief, opts: BriefTextOptions =
   }
 
   return {
-    label: est ? 'Готовность' : 'Готовность · по трекеру',
+    label: 'Готовность · по трекеру',
     caption, percent,
     ariaLabel: inMaster > 0 ? `Готовность ${percent} %, ${inMaster} в master` : `Готовность ${percent} %`,
-    inProgressPercent, stale, closed, staleLabel, tracker,
+    // Штриховки, тускнения и метки устаревания у полосы трекера нет: поля — место под Ш5.
+    inProgressPercent: 0, stale: false, closed, staleLabel: null, tracker,
     inMaster, inMasterPercent,
-    chipsLabel: est ? 'Ещё не начато:' : 'Осталось:',
+    chipsLabel: 'Осталось:',
     chips,
     chipsEmpty: closed ? 'ничего — всё сделано' : null,
   };
@@ -783,7 +766,7 @@ export const BRIEF_MODEL_WORDS: readonly string[] = [
   'шагов приняты',
   ' шагов', // «План готов · 0 из 4 шагов»
   'План готов',
-  'правок',
+  'возврат', // «· N возврат/возврата/возвратов» (Ш3): одна основа покрывает все формы
   // «в master» (F1, masterParts): пометка готовности и факта трекера; покрывает и
   // «Смержена в master» (она и так выше списком), и aria-label «N в master»
   'в master',
@@ -814,7 +797,6 @@ export const BRIEF_MODEL_WORDS: readonly string[] = [
   'других задач',
   'ждёт вас',
   'по трекеру',
-  'Ещё не начато',
   'Осталось:',
   'следом · ',
   'сходится',

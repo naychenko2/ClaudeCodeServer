@@ -208,21 +208,21 @@ describe('Подстрока «Сейчас»', () => {
 describe('Сделано', () => {
   const textOf = (b: FeatureBrief) => briefDoneText(b).map(p => p.text).join('');
 
-  it('«2 из 5 шагов приняты · 1 виток правок»: числа — mono-части, связный текст — обычные', () => {
+  it('«2 из 5 шагов приняты · 1 возврат»: числа — mono-части, связный текст — обычные', () => {
     const parts = briefDoneText(brief({ done: { stepsAccepted: 2, stepsTotal: 5, loops: 1, planState: 'cut' } }));
-    expect(parts.map(p => p.text).join('')).toBe('2 из 5 шагов приняты · 1 виток правок');
+    expect(parts.map(p => p.text).join('')).toBe('2 из 5 шагов приняты · 1 возврат');
     expect(parts.map(p => p.mono)).toEqual([true, false, true, false]);
   });
 
-  it('loops = 0 — хвоста про витки нет', () => {
+  it('loops = 0 — хвоста про возвраты нет', () => {
     expect(textOf(brief({ done: { stepsAccepted: 5, stepsTotal: 5, loops: 0, planState: 'cut' } }))).toBe('5 из 5 шагов приняты');
   });
 
-  it('склонение разряда: 1 виток / 2 витка / 5 витков / 11 витков', () => {
-    expect(textOf(brief({ done: { stepsAccepted: 1, stepsTotal: 5, loops: 1, planState: 'cut' } }))).toContain('1 виток правок');
-    expect(textOf(brief({ done: { stepsAccepted: 1, stepsTotal: 5, loops: 2, planState: 'cut' } }))).toContain('2 витка правок');
-    expect(textOf(brief({ done: { stepsAccepted: 1, stepsTotal: 5, loops: 5, planState: 'cut' } }))).toContain('5 витков правок');
-    expect(textOf(brief({ done: { stepsAccepted: 1, stepsTotal: 5, loops: 11, planState: 'cut' } }))).toContain('11 витков правок');
+  it('склонение разряда: 1 возврат / 2 возврата / 5 возвратов / 11 возвратов (Ш3: словарь «возвратов»)', () => {
+    expect(textOf(brief({ done: { stepsAccepted: 1, stepsTotal: 5, loops: 1, planState: 'cut' } }))).toContain('1 возврат');
+    expect(textOf(brief({ done: { stepsAccepted: 1, stepsTotal: 5, loops: 2, planState: 'cut' } }))).toContain('2 возврата');
+    expect(textOf(brief({ done: { stepsAccepted: 1, stepsTotal: 5, loops: 5, planState: 'cut' } }))).toContain('5 возвратов');
+    expect(textOf(brief({ done: { stepsAccepted: 1, stepsTotal: 5, loops: 11, planState: 'cut' } }))).toContain('11 возвратов');
   });
 
   it('queued с нарезанным планом — «План готов · 0 из 4 шагов» (макет queue, R-F8)', () => {
@@ -476,36 +476,49 @@ describe('Первый факт строки итогов', () => {
 
 const text = (parts: { text: string }[]): string => parts.map(p => p.text).join('');
 
+// Ш3: процент и полоса — только по трекеру (тот же trackerPercent, что у полос В2/С1/П2).
+// note.estimate в готовность не входит ни числом, ни чипами, ни тускнением — она живёт
+// только в «Срок» (тесты ниже не тронуты).
 describe('Готовность', () => {
-  it('по оценке оркестратора: «4 готово · 3 в работе · из 9 · 45 %», штриховка по inProgress', () => {
-    const v = briefReadinessText(brief({ note: noteWith({ inProgress: 3 }) }), { nameOf });
-    expect(v.label).toBe('Готовность');
-    expect(text(v.caption)).toBe('4 готово · 3 в работе · из 9 · 45 %');
-    expect(v.percent).toBe(45);
-    expect(v.inProgressPercent).toBe(33);
-    expect(v.ariaLabel).toBe('Готовность 45 %');
-    expect(v.stale).toBe(false);
+  const D98 = { stepsAccepted: 26, stepsTotal: 98, loops: 0, planState: 'cut' as const };
+
+  it('при оценке оркестратора процент всё равно по трекеру: 26/98 → «27 %», без «по оценке»', () => {
+    const v = briefReadinessText(brief({
+      done: D98,
+      note: noteWith({ done: 26, total: 98, percent: 100, inProgress: 30, remaining: ['что-то'] }),
+    }), { nameOf });
+    expect(v.percent).toBe(27);
+    expect(v.label).toBe('Готовность · по трекеру');
+    expect(text(v.caption)).toBe('26 из 98 шагов · 27 %');
+    expect(text(v.caption)).not.toContain('по оценке');
+    expect(v.ariaLabel).toBe('Готовность 27 %');
   });
 
-  it('без задач в работе — «4 из 9 · 45 %» и без штриховки', () => {
-    const v = briefReadinessText(brief({ note: noteWith({ inProgress: 0 }) }), { nameOf });
-    expect(text(v.caption)).toBe('4 из 9 · 45 %');
+  it('без оценки — те же «27 %»: оценка не влияет на готовность', () => {
+    const v = briefReadinessText(brief({ done: D98 }), { nameOf });
+    expect(v.percent).toBe(27);
+    expect(text(v.caption)).toBe('26 из 98 шагов · 27 %');
+  });
+
+  it('inProgress оценки не штрихует полосу: у трекерной шкалы штриховки нет', () => {
+    const v = briefReadinessText(brief({ note: noteWith({ inProgress: 3 }) }), { nameOf });
     expect(v.inProgressPercent).toBe(0);
   });
 
-  it('факт трекера и чипы: первый «следом», остальные как есть', () => {
-    const v = briefReadinessText(brief({ note: noteWith({}) }), { nameOf });
-    expect(text(v.tracker)).toBe('по трекеру: 2 из 5 шагов приняты · 1 виток правок');
-    expect(v.chipsLabel).toBe('Ещё не начато:');
-    expect(v.chips).toEqual([{ text: 'следом · проверка · Вера', tone: 'next' }, { text: 'финал', tone: 'plain' }]);
+  it('факт трекера и чипы из next (до трёх), «Осталось:» — и при оценке', () => {
+    const v = briefReadinessText(brief({
+      note: noteWith({}),
+      next: [{ stage: 'qa', personaId: 'p-vera' }, { stage: 'final', personaId: null }, { stage: 'merge', personaId: null }, { stage: 'x', personaId: null }],
+    }), { nameOf });
+    expect(text(v.tracker)).toBe('по трекеру: 2 из 5 шагов приняты · 1 возврат');
+    expect(v.chipsLabel).toBe('Осталось:');
+    expect(v.chips.map(c => c.text)).toEqual(['следом · проверка · Вера', 'финальное ревью', 'мерж']);
   });
 
-  it('устаревшая оценка — полоска тусклая, у факта трекера метка', () => {
+  it('устаревшая оценка не тускнит полосу и не даёт метки: полоска по живому трекеру', () => {
     const v = briefReadinessText(brief({ note: noteWith({}, { stale: true }) }), { nameOf });
-    expect(v.stale).toBe(true);
-    expect(v.staleLabel).toBe('до смены этапа');
-    const paused = briefReadinessText(brief({ kind: 'paused', note: noteWith({}, { stale: true }) }), { nameOf });
-    expect(paused.staleLabel).toBe('до паузы');
+    expect(v.stale).toBe(false);
+    expect(v.staleLabel).toBeNull();
   });
 
   it('без оценки — по трекеру: «2 из 5 шагов · 40 %», чипы из next (до трёх)', () => {
@@ -519,19 +532,19 @@ describe('Готовность', () => {
     expect(v.stale).toBe(false);
   });
 
-  it('ждёт мержа — один чип «мерж · за вами»', () => {
-    const v = briefReadinessText(brief({ kind: 'waiting_you', reason: 'мерж', note: noteWith({ done: 8, total: 9, percent: 95, remaining: ['мерж'] }) }), { nameOf });
+  it('ждёт мержа — один чип «мерж · за вами», процент по трекеру', () => {
+    const v = briefReadinessText(brief({ kind: 'waiting_you', reason: 'мерж', done: { stepsAccepted: 8, stepsTotal: 9, loops: 0, planState: 'done' }, note: noteWith({}) }), { nameOf });
     expect(v.chips).toEqual([{ text: 'мерж · за вами', tone: 'you' }]);
-    expect(text(v.caption)).toBe('8 из 9 · 95 %');
+    expect(text(v.caption)).toBe('8 из 9 шагов · 89 %');
   });
 
-  it('закрытая — «всё сделано», штриховки нет, флаг closed', () => {
-    const v = briefReadinessText(brief({ kind: 'closed', note: noteWith({ done: 9, total: 9, percent: 100, inProgress: 2, remaining: [] }) }), { nameOf });
+  it('закрытая — «всё сделано», штриховки нет, флаг closed, процент по трекеру', () => {
+    const v = briefReadinessText(brief({ kind: 'closed', done: { stepsAccepted: 9, stepsTotal: 9, loops: 0, planState: 'done' }, note: noteWith({}) }), { nameOf });
     expect(v.closed).toBe(true);
     expect(v.chipsEmpty).toBe('ничего — всё сделано');
     expect(v.chips).toEqual([]);
     expect(v.inProgressPercent).toBe(0);
-    expect(text(v.caption)).toBe('9 из 9 · 100 %');
+    expect(text(v.caption)).toBe('9 из 9 шагов · 100 %');
   });
 
   it('очередь с нарезанным планом — без «по трекеру:» перед «План готов»', () => {
@@ -539,9 +552,7 @@ describe('Готовность', () => {
     expect(text(v.tracker)).toBe('План готов · 0 из 4 шагов');
   });
 
-  it('percent не пришёл — округлённое done/total; шагов нет — 0 %', () => {
-    const noPct = briefReadinessText(brief({ note: noteWith({ percent: undefined as unknown as number }) }), { nameOf });
-    expect(noPct.percent).toBe(44);
+  it('знаменателя нет — 0 %', () => {
     const empty = briefReadinessText(brief({ done: { stepsAccepted: 0, stepsTotal: 0, loops: 0, planState: 'pending' } }), { nameOf });
     expect(empty.percent).toBe(0);
   });
@@ -573,13 +584,14 @@ describe('Готовность: пометка «в master» (F1)', () => {
     }
   });
 
-  it('при оценке оркестратора пометка есть, сегмента нет: счётчик шагов не стоит на шкале оценки', () => {
+  it('при оценке оркестратора полоса всё равно трекерная: пометка и сегмент на месте (Ш3)', () => {
     const v = briefReadinessText(brief({ note: noteWith({}) }), { nameOf, inMaster: 2 });
     expect(v.inMaster).toBe(2);
-    expect(v.inMasterPercent).toBe(0);
-    expect(text(v.caption)).toBe('4 из 9 · 45 % · 2 в master');
-    expect(text(v.tracker)).toBe('по трекеру: 2 из 5 шагов приняты · 1 виток правок');
-    expect(v.ariaLabel).toBe('Готовность 45 %, 2 в master');
+    // Шкала одна, трекерная: 2 из 5 = 40 %, сегмент 2/5 = 40 % — не больше залитой части.
+    expect(v.inMasterPercent).toBe(40);
+    expect(text(v.caption)).toBe('2 из 5 шагов · 40 % · 2 в master');
+    expect(text(v.tracker)).toBe('по трекеру: 2 из 5 шагов приняты · 1 возврат');
+    expect(v.ariaLabel).toBe('Готовность 40 %, 2 в master');
   });
 
   it('сегмент не больше залитой части: inMaster > accepted (битые числа бэка) — не выше percent', () => {

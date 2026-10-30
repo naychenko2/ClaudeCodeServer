@@ -12,8 +12,8 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// <summary>
 /// Чаты общего проекта для участника (shared-projects, S1-3a2). В S1 участник ТОЛЬКО ЧИТАЕТ:
 /// список чатов проекта (включая созданные ДО приглашения), карточку чата и историю — 200;
-/// создание, переименование, клон, продолжение, передача, значок и отправка сообщения —
-/// 403/404 (а чат владельца при этом не меняется). Посторонний, выключенный флаг и выключенный
+/// создание, переименование, клон, продолжение, передача и значок —
+/// 403/404 (отправка сообщения редактору открыта в S2a-10, читателю 403) (а чат владельца при этом не меняется). Посторонний, выключенный флаг и выключенный
 /// рубильник — 404: существование не раскрываем. Владелец идёт прежним путём.
 /// </summary>
 public class SharedProjectChatReadTests : IClassFixture<TestWebApplicationFactory>
@@ -140,8 +140,11 @@ public class SharedProjectChatReadTests : IClassFixture<TestWebApplicationFactor
         ShouldBeRefused(await member.PostAsJsonAsync($"/api/chats/{sessionId}/continue", new { }), "продолжение");
         ShouldBeRefused(await member.PostAsync($"/api/chats/{sessionId}/handoff", null), "передача");
         ShouldBeRefused(await member.PostAsync($"/api/chats/{sessionId}/retitle", null), "AI-переименование");
-        ShouldBeRefused(await member.PostAsJsonAsync($"/api/sessions/{sessionId}/messages",
-            new { text = "привет", wait = "none" }), "отправка сообщения");
+        // Отправка в чат — право RunTurn: редактору открыто в S2a-10, читателю нет
+        var send = await member.PostAsJsonAsync($"/api/sessions/{sessionId}/messages",
+            new { text = "привет", wait = "none" });
+        if (role == "editor") send.IsSuccessStatusCode.Should().BeTrue($"редактор отправляет: {(int)send.StatusCode}");
+        else ShouldBeRefused(send, "отправка сообщения");
         ShouldBeRefused(await member.GetAsync($"/api/chats/{sessionId}/context"), "стор контекста чата");
         ShouldBeRefused(await member.PutAsJsonAsync($"/api/chats/{sessionId}/loop", new { enabled = true }),
             "запись настроек чата");

@@ -55,6 +55,12 @@ public class SessionHub : Hub
     private RequestScope? ScopeOfSession(string sessionId, ProjectRight right = ProjectRight.Read) =>
         _access.ResolveSession(UserId, sessionId, right);
 
+    // Управление идущим ходом (S2a-10): RunTurn плюс «владелец или автор хода». Участник чужой ход
+    // не останавливает и на чужие вопросы агента не отвечает.
+    private bool OwnerOrTurnAuthor(string sessionId) =>
+        ScopeOfSession(sessionId, ProjectRight.RunTurn) is not null && UserId is { } uid
+        && _sessions.IsOwnerOrTurnAuthor(sessionId, uid);
+
     private RequestScope? ScopeOfProject(string projectId, ProjectRight right = ProjectRight.Read) =>
         _access.Resolve(UserId, projectId, right);
 
@@ -259,7 +265,7 @@ public class SessionHub : Hub
 
     public void RespondPermission(string sessionId, string requestId, string behavior)
     {
-        if (ScopeOfSession(sessionId, ProjectRight.RunTurn) is null) throw DeniedSession(sessionId);
+        if (ScopeOfSession(sessionId, ProjectRight.Configure) is null) throw DeniedSession(sessionId);
         _sessions.RespondPermission(sessionId, requestId, behavior);
     }
 
@@ -267,14 +273,14 @@ public class SessionHub : Hub
     // не дожидаясь следующего сообщения.
     public void SetMode(string sessionId, string mode)
     {
-        if (ScopeOfSession(sessionId, ProjectRight.RunTurn) is null) throw DeniedSession(sessionId);
+        if (ScopeOfSession(sessionId, ProjectRight.Configure) is null) throw DeniedSession(sessionId);
         _sessions.SetMode(sessionId, mode);
     }
 
     // executions — из DI параметром метода (сервис хабу нужен только здесь, конструктор не трогаем)
     public async Task Interrupt(string sessionId, TaskExecutionService executions)
     {
-        if (ScopeOfSession(sessionId, ProjectRight.RunTurn) is null) throw DeniedSession(sessionId);
+        if (!OwnerOrTurnAuthor(sessionId)) throw DeniedSession(sessionId);
         _sessions.Interrupt(sessionId);
         // «Стоп» в чате исполнителя задачи: прерванный ход result не пришлёт — фиксируем
         // остановку сами, как на доске агентов (BoardController.InterruptAgent)
@@ -284,19 +290,19 @@ public class SessionHub : Hub
     // Ручное сворачивание контекста сессии (/compact)
     public async Task CompactSession(string sessionId)
     {
-        if (ScopeOfSession(sessionId, ProjectRight.RunTurn) is null) throw DeniedSession(sessionId);
+        if (ScopeOfSession(sessionId, ProjectRight.Configure) is null) throw DeniedSession(sessionId);
         await _sessions.CompactAsync(sessionId);
     }
 
     public void AnswerQuestion(string sessionId, string toolUseId, string answerText)
     {
-        if (ScopeOfSession(sessionId, ProjectRight.RunTurn) is null) throw DeniedSession(sessionId);
+        if (!OwnerOrTurnAuthor(sessionId)) throw DeniedSession(sessionId);
         _sessions.AnswerQuestion(sessionId, toolUseId, answerText);
     }
 
     public void RespondPlan(string sessionId, string requestId, bool approve, string? feedback = null)
     {
-        if (ScopeOfSession(sessionId, ProjectRight.RunTurn) is null) throw DeniedSession(sessionId);
+        if (ScopeOfSession(sessionId, ProjectRight.Configure) is null) throw DeniedSession(sessionId);
         _sessions.RespondPlan(sessionId, requestId, approve, feedback);
     }
 
@@ -308,7 +314,7 @@ public class SessionHub : Hub
     public async Task RespondTeamPlan(string sessionId, string planId, string decision,
         string? subtaskId = null, string? executorPersonaId = null, string? feedback = null)
     {
-        if (ScopeOfSession(sessionId, ProjectRight.RunTurn) is null) throw DeniedSession(sessionId);
+        if (ScopeOfSession(sessionId, ProjectRight.Configure) is null) throw DeniedSession(sessionId);
         var parsed = decision?.ToLowerInvariant() switch
         {
             "run" => TeamPlanDecision.Run,
@@ -330,7 +336,7 @@ public class SessionHub : Hub
     public async Task RespondTeamEscalation(string sessionId, string escalationId,
         string? actionId = null, string? comment = null)
     {
-        if (ScopeOfSession(sessionId, ProjectRight.RunTurn) is null) throw DeniedSession(sessionId);
+        if (ScopeOfSession(sessionId, ProjectRight.Configure) is null) throw DeniedSession(sessionId);
         await _sessions.RespondTeamEscalationAsync(sessionId, escalationId, actionId, comment,
             actorUserId: UserId);
     }

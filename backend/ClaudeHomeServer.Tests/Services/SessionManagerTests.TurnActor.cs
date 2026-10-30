@@ -199,3 +199,60 @@ public partial class SessionManagerTests
         _sut.GetTurnFrame(session.Id, TestUserId).Should().Be(TurnFrameKind.Narrow, "решение 29.10");
     }
 }
+
+// S2a-10a: участник-редактор ведёт ход в чате общего проекта. Очередь под PendingLock хранит
+// отправителя каждого сообщения; «автор хода» и «автор сообщения в очереди» — основание, по которому
+// редактор останавливает свой ход и снимает своё сообщение, а чужое нет.
+public partial class SessionManagerTests
+{
+    [Fact]
+    public async Task ГонкаДвухУчастников_ВИдущийХод_ОбаВОчереди_КаждыйСоСвоимОтправителем()
+    {
+        var (session, _) = await RunChatAsync("ta-two-queue", SessionStatus.Active);
+        await _sut.SendMessageAsync(session.Id, "ход первого", [], senderUserId: Участник);
+        session.Status = SessionStatus.Working;
+
+        var start = new TaskCompletionSource();
+        var senders = new[] { Участник, ДругойУчастник };
+        var sends = Enumerable.Range(0, 8).Select(i => Task.Run(async () =>
+        {
+            await start.Task;
+            await _sut.SendMessageAsync(session.Id, $"сообщение {i}", [], senderUserId: senders[i % 2]);
+        })).ToArray();
+        start.SetResult();
+        await Task.WhenAll(sends);
+
+        var pending = _sut.GetPending(session.Id);
+        pending.Should().HaveCount(8, "ни одно сообщение гонки не потеряно");
+        pending.Count(p => p.SenderUserId == Участник).Should().Be(4);
+        pending.Count(p => p.SenderUserId == ДругойУчастник).Should().Be(4);
+        pending.All(p => p.Text.Length > 0 && (p.SenderUserId == senders[int.Parse(p.Text.Split(' ')[1]) % 2]))
+            .Should().BeTrue("отправитель не перепутан между участниками");
+        _sut.GetTurnActor(session.Id, TestUserId).Should().Be(Участник, "идущий ход остался за первым");
+    }
+
+    [Fact]
+    public async Task АвторХода_ВладелецИАвторДа_ДругойУчастникИНеизвестныйНет()
+    {
+        var (session, _) = await RunChatAsync("ta-author");
+        await _sut.SendMessageAndWaitAsync(session.Id, "из чата", TimeSpan.Zero, senderUserId: Участник);
+
+        _sut.IsOwnerOrTurnAuthor(session.Id, TestUserId).Should().BeTrue("владелец управляет любым ходом");
+        _sut.IsOwnerOrTurnAuthor(session.Id, Участник).Should().BeTrue("автор хода");
+        _sut.IsOwnerOrTurnAuthor(session.Id, ДругойУчастник).Should().BeFalse("чужой ход не его");
+        _sut.IsOwnerOrTurnAuthor("нет-такого", Участник).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ОтправительВОчереди_ВидитсяПоИдентификаторуСообщения()
+    {
+        var (session, _) = await RunChatAsync("ta-pending-sender", SessionStatus.Active);
+        await _sut.SendMessageAsync(session.Id, "ход", [], senderUserId: Участник);
+        session.Status = SessionStatus.Working;
+        await _sut.SendMessageAsync(session.Id, "от второго", [], senderUserId: ДругойУчастник);
+
+        var queued = _sut.GetPending(session.Id).Single();
+        _sut.PendingSentBy(session.Id, queued.Id).Should().Be(ДругойУчастник);
+        _sut.PendingSentBy(session.Id, "нет-такого").Should().BeNull();
+    }
+}

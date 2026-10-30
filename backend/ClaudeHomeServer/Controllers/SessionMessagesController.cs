@@ -160,9 +160,11 @@ public class SessionMessagesController(SessionManager sessions, SessionMessaging
         var sender = Request.Headers.TryGetValue("X-Sender-Session-Id", out var sh)
             ? sh.FirstOrDefault() : null;
 
-        // Ход и его очередь — право RunTurn, не владение (S1-7); редактору его откроет S2a-10
+        // Ход и его очередь — право RunTurn, не владение (S1-7); редактору открыто в S2a-10
         if (sessions.DenyTurn(sessionId, UserId) is { } denied) return denied;
-        var outcome = await messaging.SendAsync(UserId, sessionId, req.Text,
+        // Ключ чата — арендатор (владелец проекта), а не вызывающий: редактор отправляет в чужой каталог
+        var tenantId = (sessions.GetById(sessionId) is { } chat ? sessions.ResolveOwnerId(chat) : null) ?? UserId;
+        var outcome = await messaging.SendAsync(tenantId, sessionId, req.Text,
             caller, sender, agentDepth, req.Wait, req.TimeoutSec, actorUserId: UserId);
         return outcome switch
         {
@@ -278,8 +280,13 @@ public class SessionMessagesController(SessionManager sessions, SessionMessaging
     [HttpDelete("pending/{messageId}")]
     public async Task<IActionResult> CancelPending(string sessionId, string messageId)
     {
-        // Ход и его очередь — право RunTurn, не владение (S1-7); редактору его откроет S2a-10
+        // Снять сообщение из очереди — владелец или тот, кто его поставил (S2a-10): чужое сообщение
+        // участник не отменяет
         if (sessions.DenyTurn(sessionId, UserId) is { } denied) return denied;
+        if (sessions.PendingSentBy(sessionId, messageId) is { } sender && sender != UserId
+            && sessions.GetWithRight(sessionId, UserId, Services.Access.ProjectRight.Configure) is null)
+            return StatusCode(StatusCodes.Status403Forbidden,
+                new { error = "Чужое сообщение из очереди снимает только его автор или владелец", code = Services.Access.ProjectScopeAttribute.ErrorCode });
         return await sessions.CancelPendingAsync(sessionId, messageId) ? NoContent() : NotFound();
     }
 
@@ -289,8 +296,8 @@ public class SessionMessagesController(SessionManager sessions, SessionMessaging
     [HttpPost("pending/preempt")]
     public IActionResult PreemptForPending(string sessionId)
     {
-        // Ход и его очередь — право RunTurn, не владение (S1-7); редактору его откроет S2a-10
-        if (sessions.DenyTurn(sessionId, UserId) is { } denied) return denied;
+        // Перебой убивает идущий ход — владелец или автор этого хода (S2a-10)
+        if (sessions.DenyTurnAuthor(sessionId, UserId) is { } denied) return denied;
         return sessions.PreemptForPending(sessionId)
             ? NoContent()
             : Conflict(new { error = "Прерывать нечего: ход уже завершился или очередь пуста" });

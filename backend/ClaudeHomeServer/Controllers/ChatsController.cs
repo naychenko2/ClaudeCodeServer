@@ -349,7 +349,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpPut("{id}/loop")]
     public async Task<IActionResult> SetWorkLoop(string id, [FromBody] SetWorkLoopRequest req)
     {
-        if (sessions.DenyTurn(id, UserId) is { } denied) return denied;
+        if (sessions.DenyOwnerTurn(id, UserId) is { } denied) return denied;
         try
         {
             // manual: true — эндпоинт дёргает только человек через тумблер UI; явное
@@ -370,7 +370,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpPut("{id}/team-implement")]
     public async Task<IActionResult> SetTeamImplement(string id, [FromBody] SetTeamImplementRequest req)
     {
-        if (sessions.DenyTurn(id, UserId) is { } denied) return denied;
+        if (sessions.DenyOwnerTurn(id, UserId) is { } denied) return denied;
         try
         {
             var updated = await sessions.SetTeamImplementAsync(id, req.Enabled,
@@ -398,7 +398,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpPut("{id}/team-implement/stop")]
     public async Task<IActionResult> StopTeamImplement(string id)
     {
-        if (sessions.DenyTurn(id, UserId) is { } denied) return denied;
+        if (sessions.DenyOwnerTurn(id, UserId) is { } denied) return denied;
         var updated = await sessions.StopTeamImplementAsync(id, UserId);
         return updated is null ? NotFound() : Ok(updated);
     }
@@ -408,7 +408,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpPut("{id}/team-implement/auto")]
     public async Task<IActionResult> SetTeamImplementAuto(string id, [FromBody] SetTeamImplementAutoRequest req)
     {
-        if (sessions.DenyTurn(id, UserId) is { } denied) return denied;
+        if (sessions.DenyOwnerTurn(id, UserId) is { } denied) return denied;
         var updated = await sessions.SetTeamImplementAutoAsync(id, req.AutoWaves, UserId);
         return updated is null ? NotFound() : Ok(updated);
     }
@@ -459,7 +459,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpPost("{id}/team-wave/tasks/{taskId}/restart")]
     public async Task<IActionResult> RestartWaveTask(string id, string taskId)
     {
-        if (sessions.DenyTurn(id, UserId) is { } denied) return denied;
+        if (sessions.DenyOwnerTurn(id, UserId) is { } denied) return denied;
         if (sessions.GetOwned(id, UserId) is not { } session) return NotFound();
         try
         {
@@ -478,7 +478,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpPost("{id}/team-wave/restart")]
     public async Task<IActionResult> RestartWave(string id, [FromBody] TeamWaveRestartRequest? req)
     {
-        if (sessions.DenyTurn(id, UserId) is { } denied) return denied;
+        if (sessions.DenyOwnerTurn(id, UserId) is { } denied) return denied;
         if (sessions.GetOwned(id, UserId) is not { } session) return NotFound();
         try
         {
@@ -507,7 +507,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpPost("{id}/team-wave/restart-turn")]
     public async Task<IActionResult> RestartTeamWaveTurn(string id, [FromBody] TeamTurnRestartRequest? req)
     {
-        if (sessions.DenyTurn(id, UserId) is { } denied) return denied;
+        if (sessions.DenyOwnerTurn(id, UserId) is { } denied) return denied;
         try
         {
             var result = await sessions.RestartStuckTurnAsync(id, req?.StartFresh == true);
@@ -549,7 +549,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpPut("{id}/mode")]
     public IActionResult SetMode(string id, [FromBody] SetModeRequest req)
     {
-        if (sessions.DenyTurn(id, UserId) is { } denied) return denied;
+        if (sessions.DenyOwnerTurn(id, UserId) is { } denied) return denied;
         try
         {
             var updated = sessions.SetMode(id, req.Mode);
@@ -573,7 +573,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
         // о чём просит эндпоинт.
         if (string.IsNullOrWhiteSpace(req.Model))
             return BadRequest(new { error = "Не указана модель" });
-        if (sessions.DenyTurn(id, UserId) is { } denied) return denied;
+        if (sessions.DenyOwnerTurn(id, UserId) is { } denied) return denied;
         try
         {
             return Ok(await sessions.MigrateProviderAsync(id, UserId, req.Model, req.SubscriptionKey));
@@ -626,7 +626,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     public async Task<IActionResult> Continue(string id, [FromBody] ContinueChatRequest? req,
         [FromServices] ChatContinueService continuation)
     {
-        if (sessions.DenyTurn(id, UserId) is { } denied) return denied;
+        if (sessions.DenyOwnerTurn(id, UserId) is { } denied) return denied;
         try
         {
             var result = await continuation.ContinueAsync(UserId, id, req?.Note);
@@ -656,7 +656,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
         if (!flags.IsEnabled(UserId, FeatureFlagKeys.PromptCache))
             return StatusCode(403, new { error = "Флаг prompt-cache выключен" });
         // Тело обязательно и у 404: без него фронт подставляет свой «Not Found» (минор ревью F-4)
-        if (sessions.DenyTurn(id, UserId) is { } denied)
+        if (sessions.DenyOwnerTurn(id, UserId) is { } denied)
             return denied is NotFoundResult ? NotFound(new { error = "Чат не найден или удалён" }) : denied;
         try
         {

@@ -20,7 +20,7 @@ public sealed class ProjectAccessService(
         {
             // Участник видит общий проект только при рубильнике и флаге; без гейта — fail-closed
             if (gate?.IsOn(callerUserId) != true) return null;
-            // S1: участник только читает — запись редактора откроют S2a/S2c
+            // Участник Write не получает: S2a-10 открыл ему только RunTurn (отправка в чат); запись откроют S2b/S2c
             if (right == ProjectRight.Write) return null;
         }
         return new RequestScope(callerUserId, project!.OwnerId!, role);

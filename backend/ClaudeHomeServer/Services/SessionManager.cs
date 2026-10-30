@@ -3783,6 +3783,24 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         return Access.TurnFrame.Resolve(project, session, ResolveOwnerId(session), GetTurnActor(sessionId, ownerId));
     }
 
+    // Владелец чата (арендатор) либо автор идущего хода (S2a-10): им доступно «Стоп»/перебой/ответ на
+    // вопрос агента. Неизвестный актор автором не считается (fail-closed).
+    public bool IsOwnerOrTurnAuthor(string sessionId, string userId)
+    {
+        var s = GetById(sessionId);
+        if (s is null) return false;
+        var tenant = ResolveOwnerId(s);
+        return tenant is not null && (tenant == userId || GetTurnActor(sessionId, tenant) == userId);
+    }
+
+    // Кто поставил сообщение в очередь: null — сообщения нет либо отправитель не записан (серверное).
+    public string? PendingSentBy(string sessionId, string messageId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        lock (entry.PendingLock)
+            return entry.Pending.FirstOrDefault(p => p.Id == messageId)?.SenderUserId;
+    }
+
     string? Access.ITurnActorRegistry.Actor(string sessionId, string ownerId) => GetTurnActor(sessionId, ownerId);
     Access.TurnFrameKind Access.ITurnFrameSource.Frame(string? sessionId, string ownerId) => GetTurnFrame(sessionId, ownerId);
 

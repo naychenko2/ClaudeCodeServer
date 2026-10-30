@@ -18,8 +18,10 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 namespace ClaudeHomeServer.Tests.Hubs;
 
 /// <summary>
-/// S1-7a: право RunTurn. Редактор общего проекта пишет (Write), но НЕ запускает и не ведёт
-/// ходы владельца и не открывает shell на хосте — рамки хода (S2a) ещё нет. Точка доступа
+/// S1-7a / S2a-10a: право RunTurn. Редактор общего проекта отправляет сообщения в чаты (его ход
+/// идёт в узкой рамке S2a-2…S2a-5) и останавливает/отвечает на вопросы СВОЕГО хода; режим прав,
+/// одобрение разрешений, план, штаб, сворачивание контекста и shell на хосте — только владельцу.
+/// Таблица «метод хаба → кто может → почему» — <see cref="EditorMayCall"/>. Точка доступа
 /// подменена на «чистую» (только <see cref="ProjectAccess"/>, без рубильника общих проектов
 /// из <c>ProjectAccessService</c>): иначе отказ редактору давал бы сам рубильник, и тест не
 /// краснел бы на подмене права в хабе.
@@ -32,6 +34,18 @@ public class RunTurnGateTests : IClassFixture<RunTurnGateTests.Fixture>, IAsyncL
         "SendMessage", "RespondPermission", "SetMode", "Interrupt", "CompactSession",
         "AnswerQuestion", "RespondPlan", "RespondTeamPlan", "RespondTeamEscalation",
     ];
+
+    /// <summary>
+    /// Методы, которые редактор вправе вызвать (S2a-10): SendMessage — отправка в чат проекта (право
+    /// RunTurn). Остальные ход-методы владельцу: SetMode/RespondPermission/RespondPlan — права и
+    /// план владельца, CompactSession — общая история чата, RespondTeam* — бюджет и штаб, CreateTerminal —
+    /// shell на хосте. Interrupt и AnswerQuestion — владельцу или автору хода, чужому участнику нет
+    /// (редактор, не запускавший ход, здесь отказ — <see cref="EditorMayCallOwnTurn"/>).
+    /// </summary>
+    private static readonly string[] EditorMayCall = ["SendMessage"];
+
+    /// <summary>Методы, доступные владельцу и автору хода (по актору хода), но не чужому участнику.</summary>
+    private static readonly string[] EditorMayCallOwnTurn = ["Interrupt", "AnswerQuestion"];
 
     /// <summary>Методы хаба, ход не запускающие и не ведущие (подписка на события).</summary>
     private static readonly string[] NonTurnMethods =
@@ -100,7 +114,7 @@ public class RunTurnGateTests : IClassFixture<RunTurnGateTests.Fixture>, IAsyncL
 
     [Theory]
     [MemberData(nameof(HubMatrix))]
-    public async Task ХодМетодХаба_РазрешёнТолькоВладельцу(string method, ProjectRole role)
+    public async Task ХодМетодХаба_РазрешёнПоТаблицеРолей(string method, ProjectRole role)
     {
         var (projectId, sessionId, userId) = await CreateSharedProjectAsync(role);
         _ = userId;
@@ -114,7 +128,8 @@ public class RunTurnGateTests : IClassFixture<RunTurnGateTests.Fixture>, IAsyncL
         catch (HubException ex) { if (ex.Message.Contains("Доступ запрещён")) denied = ex.Message; }
         catch (Exception) { /* прошёл гейт и упал позже на заглушечных аргументах — не отказ доступа */ }
 
-        if (role == ProjectRole.Owner) denied.Should().BeNull($"владелец должен пройти {method}");
+        if (role == ProjectRole.Owner || (role == ProjectRole.Editor && EditorMayCall.Contains(method)))
+            denied.Should().BeNull($"{role} должен пройти {method}");
         else denied.Should().NotBeNull($"{role} не должен проходить {method}");
     }
 
@@ -178,19 +193,22 @@ public class RunTurnGateTests : IClassFixture<RunTurnGateTests.Fixture>, IAsyncL
             m.Success.Should().BeTrue($"{method} не найден в SessionHub.cs");
             var next = source.IndexOf("\n    public ", m.Index + 1, StringComparison.Ordinal);
             var body = next < 0 ? source[m.Index..] : source[m.Index..next];
-            body.Should().Contain("ProjectRight.RunTurn", $"{method} обязан проверять RunTurn");
+            var expected = method == "SendMessage" ? "ProjectRight.RunTurn"
+                : EditorMayCallOwnTurn.Contains(method) ? "OwnerOrTurnAuthor"
+                : "ProjectRight.Configure";
+            body.Should().Contain(expected, $"{method} обязан проверять {expected}");
             body.Should().NotContain("ProjectRight.Write", $"{method} — ход-метод, Write редактору не даёт ходить");
         }
     }
 
     [Fact]
-    public void Сторож_СозданиеТерминала_иСтартОнбордингаПроекта_ПроверяютRunTurn()
+    public void Сторож_СозданиеТерминала_иСтартОнбордингаПроекта_ТребуютТолькоВладельца()
     {
         var hubs = File.ReadAllText(Path.Combine(RepoRoot(), "backend", "ClaudeHomeServer", "Hubs", "TerminalHub.cs"));
-        Regex.Match(hubs, @"CreateTerminal\([^\n]*\n\s*\{[^\n]*\n[^\n]*").Value.Should().Contain("ProjectRight.RunTurn");
+        Regex.Match(hubs, @"CreateTerminal\([^\n]*\n\s*\{[^\n]*\n[^\n]*").Value.Should().Contain("ProjectRight.Configure");
         var onboarding = File.ReadAllText(Path.Combine(RepoRoot(), "backend", "ClaudeHomeServer", "Controllers", "OnboardingController.cs"));
         Regex.Match(onboarding, @"\[ProjectScope[^\n]*\]\s*public async Task<IActionResult> StartProject").Value
-            .Should().Contain("ProjectRight.RunTurn");
+            .Should().Contain("ProjectRight.Configure");
     }
 
     private static string RepoRoot()

@@ -8,11 +8,13 @@ using FluentAssertions;
 namespace ClaudeHomeServer.Tests.Controllers;
 
 /// <summary>
-/// Собеседник чата общего проекта (shared-projects, S2a-8). Глобальная персона чату общего
-/// проекта не назначается: 400 с кодом global_persona_in_shared — рамка хода в общем проекте
-/// узкая для всех, включая арендатора (TurnFrame, решение 29.10), а глобальная персона —
-/// личное пространство арендатора. Проектная персона того же проекта, личный проект и чат
-/// вне проекта — прежнее поведение.
+/// Собеседник чата общего проекта (shared-projects, S2a-8 + доработка R-S2a-8). Глобальная
+/// персона чату общего проекта не назначается ни в одной точке назначения: ни смена собеседника,
+/// ни создание чата с явной personaId, ни чат от лица персоны с projectId общего проекта, ни
+/// групповой чат (создание и смена состава) — везде 400 с кодом global_persona_in_shared.
+/// Рамка хода в общем проекте узкая для всех, включая арендатора (TurnFrame, решение 29.10),
+/// а глобальная персона — личное пространство арендатора. Проектная персона того же проекта,
+/// личный проект и чат вне проекта — прежнее поведение.
 /// </summary>
 public class SharedProjectPersonaTests : IClassFixture<TestWebApplicationFactory>
 {
@@ -81,6 +83,14 @@ public class SharedProjectPersonaTests : IClassFixture<TestWebApplicationFactory
         return JsonSerializer.Deserialize<JsonElement>(await r.Content.ReadAsStringAsync());
     }
 
+    private static async Task<JsonElement> BodyAsync(HttpResponseMessage r) =>
+        JsonSerializer.Deserialize<JsonElement>(await r.Content.ReadAsStringAsync());
+
+    /// <summary>id чатов проекта — чтобы проверить, что отказ не оставил нового чата.</summary>
+    private static async Task<List<string>> ProjectChatIdsAsync(HttpClient client, string projectId) =>
+        (await BodyAsync(await client.GetAsync($"/api/projects/{projectId}/sessions")))
+            .EnumerateArray().Select(s => s.GetProperty("id").GetString()!).ToList();
+
     // ── отказ: глобальная персона в общем чате ───────────────────────────────────────
 
     [Fact]
@@ -101,7 +111,89 @@ public class SharedProjectPersonaTests : IClassFixture<TestWebApplicationFactory
         after.Should().Be(before, "отказ не трогает собеседника чата");
     }
 
+    [Fact]
+    public async Task СозданиеЧатаОбщегоПроектаСГлобальнойПерсоной_400СКодомИЧатНеСоздан()
+    {
+        var (projectId, _) = await ProjectWithChatAsync("editor");
+        var personaId = await CreatePersonaAsync(Owner(), "Глобальная-" + Guid.NewGuid().ToString("N")[..6], "global");
+        var before = await ProjectChatIdsAsync(Owner(), projectId);
+
+        var r = await Owner().PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "auto", personaId });
+
+        r.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await BodyAsync(r)).GetProperty("code").GetString().Should().Be(SessionManager.GlobalPersonaInSharedException.Code,
+            "тот же машинный код, что при смене собеседника");
+        (await ProjectChatIdsAsync(Owner(), projectId)).Should().BeEquivalentTo(before,
+            "отказ не оставил в проекте нового чата");
+    }
+
+    [Fact]
+    public async Task ЧатОтЛицаГлобальнойПерсоныВОбщемПроекте_400СКодомИЧатНеСоздан()
+    {
+        var (projectId, _) = await ProjectWithChatAsync("editor");
+        var personaId = await CreatePersonaAsync(Owner(), "Глобальная-" + Guid.NewGuid().ToString("N")[..6], "global");
+        var before = await ProjectChatIdsAsync(Owner(), projectId);
+
+        var r = await Owner().PostAsJsonAsync($"/api/personas/{personaId}/chats", new { projectId });
+
+        r.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await BodyAsync(r)).GetProperty("code").GetString().Should().Be(SessionManager.GlobalPersonaInSharedException.Code);
+        (await ProjectChatIdsAsync(Owner(), projectId)).Should().BeEquivalentTo(before,
+            "отказ не оставил в проекте нового чата");
+    }
+
+    [Fact]
+    public async Task ГрупповойЧатОбщегоПроектаСГлобальнымУчастником_400СКодомИЧатНеСоздан()
+    {
+        var (projectId, _) = await ProjectWithChatAsync("editor");
+        var lead = await CreatePersonaAsync(Owner(), "Проектная-" + Guid.NewGuid().ToString("N")[..6], "project", projectId);
+        var global = await CreatePersonaAsync(Owner(), "Глобальная-" + Guid.NewGuid().ToString("N")[..6], "global");
+        var before = await ProjectChatIdsAsync(Owner(), projectId);
+
+        var r = await Owner().PostAsJsonAsync("/api/chats/group", new { personaIds = new[] { lead, global } });
+
+        r.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await BodyAsync(r)).GetProperty("code").GetString().Should().Be(SessionManager.GlobalPersonaInSharedException.Code);
+        (await ProjectChatIdsAsync(Owner(), projectId)).Should().BeEquivalentTo(before,
+            "отказ не оставил в проекте нового чата");
+    }
+
+    [Fact]
+    public async Task СменаСоставаГрупповогоЧатаОбщегоПроекта_ГлобальнаяПерсона_400СКодомИСоставНеМеняется()
+    {
+        var (projectId, _) = await ProjectWithChatAsync("editor");
+        var p1 = await CreatePersonaAsync(Owner(), "Проектная-1-" + Guid.NewGuid().ToString("N")[..6], "project", projectId);
+        var p2 = await CreatePersonaAsync(Owner(), "Проектная-2-" + Guid.NewGuid().ToString("N")[..6], "project", projectId);
+        var global = await CreatePersonaAsync(Owner(), "Глобальная-" + Guid.NewGuid().ToString("N")[..6], "global");
+
+        var created = await Owner().PostAsJsonAsync("/api/chats/group", new { personaIds = new[] { p1, p2 } });
+        created.StatusCode.Should().Be(HttpStatusCode.OK, "групповой чат проектных персон общего проекта — прежнее поведение");
+        var chatId = IdOf(await created.Content.ReadAsStringAsync());
+
+        var r = await Owner().PutAsJsonAsync($"/api/chats/{chatId}/participants", new { personaIds = new[] { p1, global } });
+
+        r.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await BodyAsync(r)).GetProperty("code").GetString().Should().Be(SessionManager.GlobalPersonaInSharedException.Code);
+        // Отказ не трогает состав чата.
+        (await ChatAsync(Owner(), chatId)).GetProperty("participants").EnumerateArray()
+            .Select(e => e.GetString()).Should().Equal(p1, p2);
+    }
+
     // ── прежнее поведение ────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task СозданиеЧатаОбщегоПроектаСПроектнойПерсоной_Разрешено()
+    {
+        var (projectId, _) = await ProjectWithChatAsync("editor");
+        var personaId = await CreatePersonaAsync(Owner(),
+            "Проектная-" + Guid.NewGuid().ToString("N")[..6], "project", projectId);
+
+        var r = await Owner().PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "auto", personaId });
+
+        r.StatusCode.Should().Be(HttpStatusCode.Created, "персона проекта того же проекта — как раньше");
+        var chatId = IdOf(await r.Content.ReadAsStringAsync());
+        (await ChatAsync(Owner(), chatId)).GetProperty("personaId").GetString().Should().Be(personaId);
+    }
 
     [Fact]
     public async Task ПроектнаяПерсонаТогоЖеПроекта_Разрешена()

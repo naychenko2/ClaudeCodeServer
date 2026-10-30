@@ -69,12 +69,26 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         }
         try
         {
+            // Явное назначение собеседника (доработка R-S2a-8): глобальной персоне чат общего
+            // проекта не назначается — общая проверка рамки SessionManager. Персона резолвится
+            // по id вызывающего или владельца проекта: участник назначает свою, арендатор — свою;
+            // чужой id вне проверки (и сегодня, и дальше). Фолбэк сервера ниже (без personaId в
+            // теле) — не назначение вызывающим, проверка его не касается.
+            if (!string.IsNullOrWhiteSpace(req.PersonaId))
+            {
+                var assigned = personas.Get(req.PersonaId, UserId)
+                    ?? (projects.GetById(projectId)?.OwnerId is { } tenantId ? personas.Get(req.PersonaId, tenantId) : null);
+                sessions.EnsurePersonasVisibleInFrame(projectId, new[] { assigned });
+            }
             var mode = Enum.TryParse<ClaudeMode>(req.Mode, true, out var m) ? m : ClaudeMode.AcceptEdits;
             var session = await sessions.CreateAsync(projectId, mode, req.ResumeSessionId, req.Name,
                 req.Model, req.AgentName, req.Effort, personaId: personaId);
             return CreatedAtAction(nameof(GetAll), new { projectId }, session);
         }
         catch (KeyNotFoundException ex) { return NotFound(new { error = ex.Message }); }
+        // Глобальная персона в общем чате (R-S2a-8): 400 с машинным кодом — тот же, что при смене собеседника.
+        catch (SessionManager.GlobalPersonaInSharedException ex)
+        { return BadRequest(new { error = ex.Message, code = SessionManager.GlobalPersonaInSharedException.Code }); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 

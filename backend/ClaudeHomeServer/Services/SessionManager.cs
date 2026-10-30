@@ -4029,6 +4029,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (!string.IsNullOrEmpty(targetProjectId)
             && _projects.GetById(targetProjectId) is { } project && project.OwnerId == ownerId)
         {
+            // Глобальной персоне чат общего проекта не назначается (доработка R-S2a-8): общая проверка
+            // рамки — здесь проект чата известен точно (иначе чат вышел бы вне проекта, где отказа нет).
+            EnsurePersonasVisibleInFrame(project.Id, new[] { persona });
             var projectSession = new Session
             {
                 ProjectId = project.Id,
@@ -4089,6 +4092,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (PersonaZone.OwnProjectId(leader) is { } leaderProjectId
             && _projects.GetById(leaderProjectId) is { } project && project.OwnerId == ownerId)
         {
+            // Групповой чат общего проекта без глобальных участников (доработка R-S2a-8): та же
+            // общая проверка рамки, что для собеседника — состав чата и есть его спикеры.
+            // Здесь проект чата известен точно (иначе чат создался бы вне проекта, где отказа нет).
+            EnsurePersonasVisibleInFrame(project.Id, participants);
             var projectSession = new Session
             {
                 ProjectId = project.Id,
@@ -4133,6 +4140,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (ResolveOwnerId(entry.Info) != ownerId) return null;
 
         var participants = ValidateParticipants(ownerId, personaIds, entry.Info.ProjectId);
+        // Новый участник чата общего проекта не глобальная персона (доработка R-S2a-8): та же общая
+        // проверка рамки, что при создании группового чата, — по фактическому проекту этого чата.
+        EnsurePersonasVisibleInFrame(entry.Info.ProjectId, participants);
         entry.Info.Participants = participants.Select(p => p.Id).ToList();
         var speaker = participants.FirstOrDefault(p => p.Id == entry.Info.PersonaId) ?? participants[0];
         SwitchSpeaker(entry, speaker);
@@ -4845,6 +4855,30 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         public const string Code = "global_persona_in_shared";
     }
 
+    /// <summary>
+    /// Персона, назначаемая чату, обязана быть видна в рамке этого чата (доработка R-S2a-8):
+    /// рамка чата общего проекта узкая для всех, включая арендатора (TurnFrame, решение 29.10),
+    /// а глобальная персона — личное пространство арендатора: её характер и память утекали бы
+    /// в общий чат. Одна проверка результата, а не точки входа: итоговый PersonaId/Participants
+    /// сессии в общем проекте без глобальных персон. Зовётся там, где проект чата известен
+    /// точно: создание чата с персоной вызывающего (SessionsController.Create), чат от лица
+    /// персоны (CreatePersonaChatAsync), групповой чат (CreateGroupChatAsync, SetParticipants),
+    /// смена собеседника (SetPersona). Новый путь назначения обязан звать этот метод, а не
+    /// писать свою проверку. Вердикт — по свойствам проекта, без актора (как в PluginDirSource):
+    /// исключение приватного чата (S2d-1) здесь не реализовано — признака приватности в модели
+    /// ещё нет, проверка встанет вместе с ним (см. комментарий TurnFrame.Resolve).
+    /// </summary>
+    public void EnsurePersonasVisibleInFrame(string? projectId, IEnumerable<Persona?> personas)
+    {
+        if (projectId is null) return; // чат вне проекта — личное пространство арендатора (Wide)
+        if (_projects.GetById(projectId) is not { } project) return; // проект исчез — не забота этой проверки
+        if (Access.TurnFrame.Resolve(project, null, project.OwnerId, null) != Access.TurnFrameKind.Narrow) return;
+        foreach (var persona in personas)
+            if (persona is not null && persona.Scope == PersonaScope.Global)
+                throw new GlobalPersonaInSharedException(
+                    $"Персона «{persona.Name}» — глобальная: в общем проекте она не может быть собеседником чата");
+    }
+
     // Назначить/сменить собеседника чату (единый селектор): персону (personaId) ИЛИ
     // стандартного .md-агента Claude (agentName) — взаимоисключающе. Оба пустые = снять.
     // Разрешено и ПО ХОДУ разговора: персона-слой строится на каждый ход, транскрипт
@@ -4864,13 +4898,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 ?? throw new KeyNotFoundException("Персона не найдена");
             EnsurePersonaVisible(persona, entry.Info.ProjectId);
             // Глобальной персоне отказывает рамка, а не зона: VisibleIn для Global всегда
-            // открыт (PersonaZone.cs:24), поэтому единственная точка — GetTurnFrame: личный
-            // проект и чат вне проекта Wide (поведение прежнее), общий проект Narrow —
-            // включая случай самого арендатора (решение 29.10).
-            if (persona.Scope == PersonaScope.Global
-                && GetTurnFrame(sessionId, ownerId) == Access.TurnFrameKind.Narrow)
-                throw new GlobalPersonaInSharedException(
-                    $"Персона «{persona.Name}» — глобальная: в общем проекте она не может быть собеседником чата");
+            // открыт (PersonaZone.cs:24) — работает общая проверка рамки EnsurePersonasVisibleInFrame
+            // (доработка R-S2a-8): личный проект и чат вне проекта Wide (поведение прежнее),
+            // общий проект Narrow — включая случай самого арендатора (решение 29.10).
+            EnsurePersonasVisibleInFrame(entry.Info.ProjectId, new[] { persona });
         }
 
         SwitchSpeaker(entry, persona, agentName);

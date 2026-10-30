@@ -171,6 +171,10 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
             var chat = await sessions.CreateGroupChatAsync(UserId, req.PersonaIds ?? [], mode, req.Name);
             return Ok(chat);
         }
+        // Групповой чат общего проекта с глобальной персоной в составе (доработка R-S2a-8):
+        // 400 с машинным кодом — тот же, что при смене собеседника.
+        catch (SessionManager.GlobalPersonaInSharedException ex)
+        { return BadRequest(new { error = ex.Message, code = SessionManager.GlobalPersonaInSharedException.Code }); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
         catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
     }
@@ -185,6 +189,9 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
             var updated = sessions.SetParticipants(id, UserId, req.PersonaIds ?? []);
             return updated is null ? NotFound() : Ok(updated);
         }
+        // Глобальная персона в состав чата общего проекта (доработка R-S2a-8): тот же код отказа.
+        catch (SessionManager.GlobalPersonaInSharedException ex)
+        { return BadRequest(new { error = ex.Message, code = SessionManager.GlobalPersonaInSharedException.Code }); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
         catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
     }

@@ -237,6 +237,9 @@ public class PersonasController(
             return Ok(chat);
         }
         catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
+        // Чат от лица глобальной персоны в общем проекте (доработка R-S2a-8): 400 с машинным кодом.
+        catch (SessionManager.GlobalPersonaInSharedException ex)
+        { return BadRequest(new { error = ex.Message, code = SessionManager.GlobalPersonaInSharedException.Code }); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 

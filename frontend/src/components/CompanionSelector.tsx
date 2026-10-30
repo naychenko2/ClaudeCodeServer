@@ -46,12 +46,15 @@ interface Props {
   // с фактом. Не задано — для персон 200, для .md-агентов 200 (только десктоп — на
   // мобиле своя фиксированная ширина)
   maxLabelWidth?: number;
+  // Общий проект: группа «Глобальные» убирается у всех, включая владельца (п.17 карты),
+  // внизу списка — строка-пояснение. В личном проекте поведение не меняется
+  sharedProject?: boolean;
 }
 
 // Единый селектор «собеседника» чата: персоны (наша фича) и стандартные .md-агенты
 // Claude в одном дропдауне. Заменяет пару PersonaSelector + AgentSelector в композере.
 // Раскрытие/мобильное позиционирование — по образцу PersonaSelector.
-export function CompanionSelector({ personas, agents, selectedPersona, selectedAgentName, onSelect, isMobile, dropUp = true, onCreateGroup, wide, compact, compactCompanion, maxLabelWidth }: Props) {
+export function CompanionSelector({ personas, agents, selectedPersona, selectedAgentName, onSelect, isMobile, dropUp = true, onCreateGroup, wide, compact, compactCompanion, maxLabelWidth, sharedProject }: Props) {
   const [open, setOpen] = useState(false);
   // Режим мультивыбора участников группового чата (внутри того же дропдауна)
   const [groupMode, setGroupMode] = useState(false);
@@ -102,7 +105,13 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
   // Материализованный пантеон OmO (scope=global + templateKey) в выбор собеседника
   // не включаем — как и виртуальные роли; подключение только через раздел «Персоны».
   const projectPersonas = personas.filter(isZonedPersona);
-  const regularGlobals = personas.filter(p => p.scope === 'global' && !p.templateKey);
+  const allGlobalPersonas = personas.filter(p => p.scope === 'global' && !p.templateKey);
+  // В общем проекте глобальные персоны недоступны ни у кого — ни участнику, ни владельцу
+  // (п.17 карты): их нет ни в списке, ни в групповом мультивыборе (общий пул один).
+  // Пояснение ставим только когда было что убирать — иначе строка говорила бы о том,
+  // чего и так нет
+  const regularGlobals = sharedProject ? [] : allGlobalPersonas;
+  const globalsHidden = !!sharedProject && allGlobalPersonas.length > 0;
   const selectablePersonas = [...projectPersonas, ...regularGlobals];
 
   if (selectablePersonas.length === 0 && plainAgents.length === 0) return null;
@@ -489,6 +498,17 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
               <Users size={16} strokeWidth={2} style={{ flexShrink: 0 }} />
               Групповой чат…
             </button>
+          )}
+
+          {/* Низ списка: почему нет группы «Глобальные» (п.17). Отделена от действий
+              отчерком и глухим цветом: это сведения о проекте, а не пункт выбора */}
+          {globalsHidden && (
+            <div style={{
+              marginTop: 2, padding: '6px 10px 4px', borderTop: `1px solid ${C.divider}`,
+              fontSize: FS.xs, color: C.textMuted, lineHeight: 1.35, fontFamily: FONT.sans,
+            }}>
+              Глобальные персоны в общем проекте недоступны
+            </div>
           )}
         </div>
       )}

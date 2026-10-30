@@ -41,6 +41,9 @@ public sealed class FeatureRun
     public List<TaskItem> Design { get; init; } = [];
     // План (role=plan): задачи с ролью plan и FeatureId == epic.Id.
     public List<TaskItem> Plan { get; init; } = [];
+    // Id действующих планов из Plan: не снятые и не вытесненные более поздним (тот же ActivePlans,
+    // что считает учёт шагов). План не из списка — снят или замещён; фронт «В очереди» фильтрует по нему.
+    public List<string> ActivePlanIds { get; init; } = [];
     // Безролевые задачи фичи (role=null): ни в одну стадию не попадают, но входят в
     // ленту событий (W4-DES-B: хронология — ВСЕ задачи с featureId).
     public List<TaskItem> Unroled { get; init; } = [];

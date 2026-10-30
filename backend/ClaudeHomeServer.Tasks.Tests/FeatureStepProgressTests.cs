@@ -549,6 +549,25 @@ public class FeatureStepProgressTests
         FeatureStepAccounting.ActivePlans([p2, p3, p1]).Select(p => p.Id).Should().Equal("p3");
     }
 
+    // B3b: run.ActivePlanIds — ровно действующие планы (тот же ActivePlans): вытесненный и снятый
+    // в списке отсутствуют, независимый (без пересечений) присутствует; SlimRun id не теряет.
+    [Fact]
+    public void ActivePlanIds_ТолькоДействующиеПланы_ПереживаетSlimRun()
+    {
+        var early = Plan("p1", 0, ("A", "back"));
+        var late = Plan("p2", 5, ("A", "back"));
+        var other = Plan("p3", 1, ("Z", "front"));
+        var withdrawn = Plan("p4", 2, ("W", "back"));
+        withdrawn.Verification = new TaskVerification { Verdict = TaskVerdicts.Withdrawn };
+
+        var run = Run(Feature(), early, late, other, withdrawn);
+
+        run.Plan.Should().HaveCount(4);
+        run.ActivePlanIds.Should().BeEquivalentTo("p2", "p3");
+        FeatureProjector.SlimRun(run).ActivePlanIds.Should().BeEquivalentTo("p2", "p3");
+        Run(Feature()).ActivePlanIds.Should().BeEmpty();
+    }
+
     // Планы по линиям без пересечений объединяются.
     [Fact]
     public void ПланыБезПересечения_Объединяются()

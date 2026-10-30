@@ -18,7 +18,9 @@ internal static class FeatureStepAccounting
         // Вспомогательные факты цепочки для сверки трекера (TR-B1a, разрез Александра 26.10):
         // ключ — канонический stepRef (тот же сравнитель, что KeyOf). Оба поля считаются здесь же,
         // второй точки правды и нового прохода нет.
-        Dictionary<string, ChainFacts> Facts);
+        Dictionary<string, ChainFacts> Facts,
+        // Id действующих планов (результат ActivePlans этого же прохода) — для признака плана в run.
+        List<string> ActivePlanIds);
 
     // Факты цепочки для трекера: последняя сданная задача и витки — оба уже посчитаны в этом проходе.
     internal sealed record ChainFacts(
@@ -459,6 +461,6 @@ internal static class FeatureStepAccounting
             });
         }
 
-        return new Result(chains, progress, lanes, facts);
+        return new Result(chains, progress, lanes, facts, countedPlans.Select(p => p.Id).ToList());
     }
 }

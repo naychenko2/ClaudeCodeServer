@@ -93,6 +93,22 @@ public class ProjectMembersControllerTests : IClassFixture<TestWebApplicationFac
     }
 
     [Fact]
+    public async Task FormerMembers_ПосторонникуНет404_ЛичныйПроектБезПоля()
+    {
+        var owner = Owner(); await SetFlagAsync(owner, true); await SetFlagAsync(Second(), true);
+        var id = await CreateProjectAsync(owner);
+        var secondId = IdOf(TestWebApplicationFactory.SecondUsername);
+        var personalId = await CreateProjectAsync(owner);
+
+        (await Second().GetAsync($"/api/projects/{id}")).StatusCode.Should().Be(HttpStatusCode.NotFound,
+            "посторонний (ни владелец, ни участник) проект не видит — formerMembers не раскрывается");
+        var personal = JsonSerializer.Deserialize<JsonElement>(await (await owner.GetAsync($"/api/projects/{personalId}")).Content.ReadAsStringAsync());
+        personal.TryGetProperty("formerMembers", out var fm).Should().BeTrue();
+        fm.ValueKind.Should().Be(JsonValueKind.Null, "у личного проекта бывших участников нет");
+        secondId.Should().NotBeNullOrEmpty();
+    }
+
+    [Fact]
     public async Task Отказ_UserNotFound()
     {
         var owner = Owner(); await SetFlagAsync(owner, true);

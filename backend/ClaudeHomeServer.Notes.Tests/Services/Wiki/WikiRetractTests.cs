@@ -549,7 +549,103 @@ public class WikiRetractTests : IDisposable
         SnapshotPages().Should().Equal(before, "отказ — это отказ: файлов не тронуто");
     }
 
+    // ─── 9. доработка ревью S4f-1: пакет без записи состояния применения — в списке сносок ─────
+
+    [Fact]
+    public async Task Retract_НетЗаписиСостоянияПрименения_ПакетВСпискеСносок_ДискНеТронут()
+    {
+        // Мутация «фильтр только по CodeChanged» (вернуть прежний NeedsUnlink): NoApplied не
+        // попадает в список — NeedsUnlink краснеет. Сценарий: вики заведена до меры S4b-3, у
+        // пакета нет applied-записи — откат fail-closed (верно), но страница остаётся со сноской
+        // на снятый источник навсегда, и S4f-2 её не увидит.
+        await WriteCardAndPage();
+        var pkg = await Applied(WikiSections.Common, Op(WikiPackage.OpAppend, PagePath, ClaimA));
+        File.Exists(AppliedRecordOf(pkg.Id)).Should().BeTrue("применение записало состояние применения");
+
+        // Пакет «до меры S4b-3»: записи состояния применения на диске нет.
+        File.Delete(AppliedRecordOf(pkg.Id));
+        var before = SnapshotPages();
+
+        var r = await _sut.RetractAsync(User, SourceRef);
+
+        r.Ok.Should().BeTrue(r.Reason, "отказ пакета — частичный исход меры 5, не отказ операции");
+        var outcome = r.Outcomes.Should().ContainSingle().Which;
+        outcome.Reverted.Should().BeFalse();
+        outcome.Code.Should().Be(WikiPackageRevert.CodeNoApplied);
+        // Инвариант меры: страницы остались на диске — пакет в списке «требует снятия сносок».
+        r.NeedsUnlink.Select(o => o.PackageId).Should().Equal(pkg.Id);
+
+        // На диске не тронуто ничего: ни страниц, ни статуса пакета, ни строк журнала, ни пометки.
+        SnapshotPages().Should().Equal(before);
+        ReadStatus(pkg.Id).Item1.Should().Be(WikiPackage.StatusApplied);
+        LogLines("retract").Should().BeEmpty();
+        r.MarkedSkip.Should().BeFalse("с диска ничего не снято — пометки нет");
+    }
+
+    // ─── 10. доработка ревью S4f-1: повторный откат по откатанному — не в списке, идемпотентен ─
+
+    [Fact]
+    public async Task Retract_ПовторныйОткатПоОткатанномуПакету_НеВСписке_ИсходИдемпотентен()
+    {
+        // Мутация «выборка без фильтра по статусу» (снять Status == Applied в Candidates):
+        // откатанный пакет вернулся бы в Outcomes с wiki_revert_status — BeEmpty(Outcomes)
+        // краснеет; при «фильтре по всем кодам» он попал бы и в NeedsUnlink — BeEmpty краснеет.
+        await WriteCardAndPage();
+        var pkg = await Applied(WikiSections.Common, Op(WikiPackage.OpAppend, PagePath, ClaimA));
+
+        var first = await _sut.RetractAsync(User, SourceRef);
+        first.Outcomes.Should().ContainSingle().Which.Reverted.Should().BeTrue();
+        ReadStatus(pkg.Id).Item1.Should().Be(WikiPackage.StatusReverted);
+
+        var before = SnapshotPages();
+        var linesBefore = LogLines("revert").Count + LogLines("retract").Count;
+
+        var again = await _sut.RetractAsync(User, SourceRef);
+
+        // Пакет в «reverted»: его страницы уже сняты прежним откатом — он не в Outcomes и не в
+        // списке сносок; исход пустой, журнал не двоится, диск не тронут, пометки нет.
+        again.Ok.Should().BeTrue(again.Reason);
+        again.Outcomes.Should().BeEmpty();
+        again.NeedsUnlink.Should().BeEmpty();
+        again.MarkedSkip.Should().BeFalse();
+        SnapshotPages().Should().Equal(before);
+        (LogLines("revert").Count + LogLines("retract").Count).Should().Be(linesBefore);
+    }
+
+    // ─── 11. Контракт NeedsUnlink: ровно отказы, при которых страницы остались на диске ──────
+
+    [Fact]
+    public void NeedsUnlink_РовноОтказыСОставшимисяСтраницами()
+    {
+        // Мутация «фильтр только по CodeChanged» (прежний NeedsUnlink): NoApplied/NoPreimages
+        // выпадают — Equal краснеет. Мутация «фильтр по всем кодам» (снять PagesRemained):
+        // CodeStatus и CodeInternal попали бы в список — Equal краснеет.
+        var outcomes = new[]
+        {
+            new WikiRetractService.PackageOutcome("p-ok", WikiSections.Common, true, null, null, [], []),
+            new WikiRetractService.PackageOutcome("p-changed", WikiSections.Common, false,
+                WikiPackageRevert.CodeChanged, null, [], ["Общее/Страница.md"]),
+            new WikiRetractService.PackageOutcome("p-noapplied", WikiSections.Common, false,
+                WikiPackageRevert.CodeNoApplied, null, [], []),
+            new WikiRetractService.PackageOutcome("p-nopreimages", WikiSections.Common, false,
+                WikiPackageRevert.CodeNoPreimages, null, [], []),
+            // «reverted» — страницы уже сняты прежним откатом; внутренний сбой — не «страница со
+            // снятием сносок», а сигнал неисправности раздела: ни тот, ни другой не в списке.
+            new WikiRetractService.PackageOutcome("p-status", WikiSections.Common, false,
+                WikiPackageRevert.CodeStatus, "пакет уже откатан", [], []),
+            new WikiRetractService.PackageOutcome("p-internal", WikiSections.Common, false,
+                WikiPackageRevert.CodeInternal, "внутренний сбой", [], []),
+        };
+        var result = new WikiRetractService.RetractResult(true, null, null, outcomes, [], false);
+
+        result.NeedsUnlink.Select(o => o.PackageId)
+            .Should().Equal("p-changed", "p-noapplied", "p-nopreimages");
+    }
+
     // ─── Помощники ────────────────────────────────────────────────────────────────────────────
+
+    private string AppliedRecordOf(string packageId) =>
+        Path.Combine(WikiPaths.Keeper(_dir, User), "applied", packageId + ".json");
 
     private Project CreateServerProject(string name, string owner = User)
     {

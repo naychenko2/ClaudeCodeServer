@@ -361,11 +361,15 @@ public class WikiChatScorerTests : IDisposable
         entries.Select(e => e.SessionId).Should().Equal(new[] { "chat-a", "chat-b", "chat-c" });
         var a = entries.Single(e => e.SessionId == "chat-a");
         a.Cursor.Should().Be(42, "пересчёт не двигает курсор разбора");
-        a.Zone.Should().Be(WikiChatScorer.ZoneTriage);
+        // Зона пересчёта — в своём поле (доработка S6f, M1): общий zone принадлежит разбору,
+        // и пересчёт его не пишет — ни на существующей записи, ни на новой.
+        a.Zone.Should().BeNull("исхода разбора здесь не было: zone — не поле пересчёта");
+        a.Reason.Should().BeNull();
+        a.Stage1Zone.Should().Be(WikiChatScorer.ZoneTriage);
         a.Score.Should().BeGreaterThanOrEqualTo(WikiChatScorer.ThresholdTriage);
         a.Signals.Should().NotBeEmpty();
-        entries.Single(e => e.SessionId == "chat-b").Zone.Should().Be(WikiChatScorer.ZoneGray);
-        entries.Single(e => e.SessionId == "chat-c").Zone.Should().Be(WikiChatScorer.ZoneExcluded);
+        entries.Single(e => e.SessionId == "chat-b").Stage1Zone.Should().Be(WikiChatScorer.ZoneGray);
+        entries.Single(e => e.SessionId == "chat-c").Stage1Zone.Should().Be(WikiChatScorer.ZoneExcluded);
     }
 
     [Fact]
@@ -394,6 +398,53 @@ public class WikiChatScorerTests : IDisposable
         var code = ((IStatusCodeActionResult)Controller().List()).StatusCode;
         code.Should().Be(409);
         ((IStatusCodeActionResult)await Controller().Recalculate()).StatusCode.Should().Be(409);
+    }
+
+    [Fact]
+    public async Task Список_ИсходРазбораНечегоДобавить_ДержитсяПослеПересчёта()
+    {
+        // Доработка S6f: чат с исходом разбора nothing_new не переселяется пересчётом в
+        // «разбирается» — в списке его зона (и причина) разбора, а зона ступени 1 остаётся
+        // в своём поле стора.
+        SeedChats();
+        WikiChatTriageStore.Upsert(_wikiRoot, new WikiChatTriageEntry(
+            "chat-a", 42, null, WikiChatIngestService.ZoneNothingNew, "нет новых утверждений", 3, default))
+            .Ok.Should().BeTrue();
+
+        await Controller().Recalculate();
+
+        var list = ((OkObjectResult)Controller().List()).Value.Should().BeAssignableTo<WikiChatsListDto>().Which;
+        var a = list.Items.Single(i => i.SessionId == "chat-a");
+        a.Zone.Should().Be(WikiChatIngestService.ZoneNothingNew, "исход разбора приоритетнее зоны ступени 1");
+        a.Reason.Should().Be("нет новых утверждений", "причина показанной зоны — причина разбора");
+        a.Score.Should().NotBeNull("балл пересчёта остаётся в строке: поле скорера не стёрто");
+        // Чаты без исхода разбора — по зоне ступени 1.
+        list.Items.Single(i => i.SessionId == "chat-b").Zone.Should().Be(WikiChatScorer.ZoneGray);
+        // counts — по показанной зоне.
+        list.Counts[WikiChatIngestService.ZoneNothingNew].Should().Be(1);
+
+        // На диске оба владения на своих местах: исход разбора и балл со своей зоной.
+        var stored = WikiChatTriageStore.Get(_wikiRoot).Entries.Single(e => e.SessionId == "chat-a");
+        stored.Zone.Should().Be(WikiChatIngestService.ZoneNothingNew);
+        stored.NothingNewStreak.Should().Be(3, "пересчёт не сбрасывает счётчик разбора");
+        stored.Stage1Zone.Should().Be(WikiChatScorer.ZoneTriage);
+    }
+
+    [Fact]
+    public void Список_СтараяЗаписьБезЗоныСтупени1_ПоказываетПрежнийZone()
+    {
+        // Файл до разведения владения (пересчёт писал общий zone, stage1Zone нет) остаётся
+        // показуемым без пересчёта: fallback на написанную зону, а не пустая строка.
+        SeedChats();
+        var file = Path.Combine(_wikiRoot, "keeper", "chat-triage.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        File.WriteAllText(file, """[{"sessionId":"chat-a","cursor":7,"triagedAt":"2026-10-20T12:00:00+00:00","zone":"gray","reason":"балл 8: …","score":8}]""");
+
+        var items = ((WikiChatsListDto)((OkObjectResult)Controller().List()).Value!).Items;
+        var a = items.Single(i => i.SessionId == "chat-a");
+        a.Zone.Should().Be(WikiChatScorer.ZoneGray, "своей зоны ступени 1 нет — показывается написанная");
+        a.Reason.Should().Be("балл 8: …");
+        a.Score.Should().Be(8);
     }
 
     [Fact]

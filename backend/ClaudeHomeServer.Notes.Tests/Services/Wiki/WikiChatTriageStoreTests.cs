@@ -11,7 +11,10 @@ namespace ClaudeHomeServer.Tests.Services;
 // подряд. Запись расширяемая: чужие поля (будущих шагов) при перезаписи сохраняются.
 // Битый/пустой файл — «невалиден» с причиной, не исключение и не «пустой стор»; отсутствие
 // файла — норма. С S6f (тесты 3a/3b): score/signals — известные поля (round-trip равный,
-// чужая форма — Invalid), UpdateScoring правит только их и не трогает курсор/счётчик.
+// чужая форма — Invalid). Доработка S6f (ревью M1/M2): у стора два писателя, владение
+// разведено — UpdateScoring правит score/signals и stage1Zone/stage1Reason и не трогает
+// поля разбора (курсор, zone, reason, nothingNewStreak), а Upsert разбора переносит поля
+// скорера из прежней записи.
 public class WikiChatTriageStoreTests : IDisposable
 {
     private const string Hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -129,6 +132,16 @@ public class WikiChatTriageStoreTests : IDisposable
         var old = WikiChatTriageStore.Get(_root).Entries.Single();
         old.Score.Should().BeNull();
         old.Signals.Should().BeNull();
+        old.Stage1Zone.Should().BeNull();
+        old.Stage1Reason.Should().BeNull();
+
+        // Запись до разведения владения (балл и общий zone написаны пересчётом, stage1Zone
+        // нет) читается равной: новые поля необязательны, старый файл не пересобирается.
+        WriteRaw("""[{"sessionId":"old2","cursor":2,"zone":"triage","triagedAt":"2026-10-20T12:00:00+00:00","score":17,"signals":[{"name":"human_turns","weight":6}]}]""");
+        var legacy = WikiChatTriageStore.Get(_root).Entries.Single();
+        legacy.Zone.Should().Be("triage");
+        legacy.Score.Should().Be(17);
+        legacy.Stage1Zone.Should().BeNull("своей зоны ступени 1 у старой записи нет");
     }
 
     [Theory]
@@ -145,13 +158,13 @@ public class WikiChatTriageStoreTests : IDisposable
             "известное поле испорченной формы — тот же класс повреждения файла, что испорченный курсор");
     }
 
-    // ─── 3b. UpdateScoring (S6f): правит только балл, курсор и счётчик — нет ───
+    // ─── 3b. UpdateScoring (доработка S6f): правит только свои поля, поля разбора — нет ───
 
     [Fact]
-    public void UpdateScoring_БаллОбновлен_КурсорСчётчикИЧужиеПоляНеТронуты()
+    public void UpdateScoring_ИсходРазбораСохранён_БаллИЗонаСтупени1Записаны()
     {
-        // Существующая запись с продвинутым курсором и рядом «нечего добавить»: пересчёт
-        // балла не владеет ни тем, ни другим (их ведёт разбор).
+        // Существующая запись с продвинутым курсором и исходом «нечего добавить»: пересчёт
+        // балла не владеет ни курсором, ни исходом разбора — своя зона у него в своём поле.
         WikiChatTriageStore.Upsert(_root, Entry("chat-a", 42, Hash, "nothing_new", "нет новых", 2)).Ok.Should().BeTrue();
         var up = WikiChatTriageStore.UpdateScoring(_root, "chat-a", 17,
             [new("decision_words", 8), new("human_turns", 9)], "triage", "балл 17: …");
@@ -161,11 +174,34 @@ public class WikiChatTriageStoreTests : IDisposable
         read.Cursor.Should().Be(42, "пересчёт не двигает курсор разбора");
         read.CursorHash.Should().Be(Hash);
         read.NothingNewStreak.Should().Be(2, "счётчик ведёт исход разбора, не пересчёт");
-        read.Zone.Should().Be("triage");
-        read.Reason.Should().Be("балл 17: …");
+        read.Zone.Should().Be("nothing_new", "зону исхода ставит разбор: пересчёт её не перекрывает");
+        read.Reason.Should().Be("нет новых", "причина исхода — тоже поле разбора");
         read.Score.Should().Be(17);
         read.Signals.Should().Equal(new List<WikiTriageSignal> { new("decision_words", 8), new("human_turns", 9) });
+        read.Stage1Zone.Should().Be("triage", "своя зона скорера — в отдельном поле (M1)");
+        read.Stage1Reason.Should().Be("балл 17: …");
         read.TriagedAt.Should().BeOnOrAfter(DateTimeOffset.UtcNow.AddMinutes(-1));
+    }
+
+    [Fact]
+    public void РазборПослеПересчёта_БаллСигналыИЗонаСтупени1Сохранены()
+    {
+        // Порядок «пересчёт → ночной разбор» на одном чате: разбор двигает курсор и ставит
+        // свой исход, но не имеет права стирать посчитанный балл и зону ступени 1 (M2).
+        var scored = WikiChatTriageStore.UpdateScoring(_root, "chat-a", 17,
+            [new("decision_words", 8)], "triage", "балл 17: …").Entry!;
+        var up = WikiChatTriageStore.Upsert(_root, Entry("chat-a", 44, Hash, "nothing_new", "нет новых", 1));
+        up.Ok.Should().BeTrue(up.Reason);
+
+        var read = WikiChatTriageStore.Get(_root).Entries.Single();
+        read.Cursor.Should().Be(44, "курсор — поле разбора: он двигается");
+        read.Zone.Should().Be("nothing_new");
+        read.Reason.Should().Be("нет новых");
+        read.NothingNewStreak.Should().Be(1);
+        read.Score.Should().Be(17, "балл — поле скорера: разбор его не стирает");
+        read.Signals.Should().Equal(scored.Signals);
+        read.Stage1Zone.Should().Be("triage");
+        read.Stage1Reason.Should().Be("балл 17: …");
     }
 
     [Fact]

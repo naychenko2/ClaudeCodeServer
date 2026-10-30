@@ -18,8 +18,10 @@ namespace ClaudeHomeServer.Notes.Controllers;
 // Образец — WikiPackagesController: [Authorize], владелец только из токена, коды отказов —
 // контракт для фронта. Состояние читается из стора keeper/chat-triage.json (S6e): список
 // показывает то, что уже посчитано; несчитанные чаты в список не встают — их посчитает
-// пересчёт. Пересчёт обновляет только поля балла (UpdateScoring): курсор разбора ему не
-// принадлежит (его двигает разбор), nothingNewStreak — его ведёт исход разбора.
+// пересчёт. Пересчёт обновляет только свои поля (UpdateScoring): балл и зону ступени 1;
+// курсор, зона и причина исхода, nothingNewStreak принадлежат разбору (разведение владения
+// по ревью S6f). Поэтому список СОБИРАЕТ показ: исход разбора nothing_new приоритетен,
+// пока его поставил разбор, иначе показывается зона ступени 1 (ShownZone).
 [ApiController]
 [Authorize]
 [Route("api/wiki/chats")]
@@ -53,11 +55,23 @@ public class WikiChatsController : ControllerBase
         return i < 0 ? ZoneOrder.Length : i;
     }
 
+    // Показанная зона записи и её причина: поле zone принадлежит разбору (его исход
+    // nothing_new), зона ступени 1 — пересчёту (stage1Zone). Показываем исход разбора, пока
+    // он поставлен; иначе — зону ступени 1. Для записей до разведения владения (пересчёт
+    // писал общий zone, stage1Zone нет) — прежний zone: старый файл показывается без пересчёта.
+    private static string ShownZone(WikiChatTriageEntry e) =>
+        e.Zone == WikiChatIngestService.ZoneNothingNew
+            ? e.Zone
+            : e.Stage1Zone ?? e.Zone ?? "";
+
+    private static string? ShownReason(WikiChatTriageEntry e) =>
+        e.Zone == WikiChatIngestService.ZoneNothingNew ? e.Reason : e.Stage1Reason ?? e.Reason;
+
     /// <summary>GET /api/wiki/chats — список отбора по своей вики: запись стора на каждый
-    /// существующий свой чат, с причиной и сигналами; counts — число чатов по каждой зоне.
-    /// Записи несуществующего или уже чужого чата из списка выпадают (список — про чаты,
-    /// а не про файл), но на counts несуществующего чата нет. Нечитаемый стор — 409 с кодом:
-    /// список не притворяется пустым там, где файл сломан.</summary>
+    /// существующий свой чат, с причиной и сигналами; counts — число чатов по каждой
+    /// ПОКАЗАННОЙ зоне (ShownZone). Записи несуществующего или уже чужого чата из списка
+    /// выпадают (список — про чаты, а не про файл), но на counts несуществующего чата нет.
+    /// Нечитаемый стор — 409 с кодом: список не притворяется пустым там, где файл сломан.</summary>
     [HttpGet]
     public IActionResult List()
     {
@@ -75,10 +89,10 @@ public class WikiChatsController : ControllerBase
             var session = _sessions.GetById(e.SessionId);
             if (session is null || _sessions.ResolveOwnerId(session) != userId)
                 continue;
-            var zone = e.Zone ?? "";
+            var zone = ShownZone(e);
             counts[zone] = counts.TryGetValue(zone, out var c) ? c + 1 : 1;
             items.Add(new WikiChatTriageDto(
-                e.SessionId, session.Name, zone, e.Score, e.Signals, e.Reason,
+                e.SessionId, session.Name, zone, e.Score, e.Signals, ShownReason(e),
                 e.NothingNewStreak, e.TriagedAt));
         }
 
@@ -92,9 +106,11 @@ public class WikiChatsController : ControllerBase
 
     /// <summary>POST /api/wiki/chats/recalculate — «пересчитать» (кнопка блока «Отбор чатов»):
     /// ступень 0 и балл ступени 1 по всем своим чатам, результат — в стор. Ничего не запускает:
-    /// ни модели, ни разбора (теневой режим). Курсор и nothingNewStreak существующих записей
-    /// сохраняются. 409 — нечитаемый стор (пересчёт его не перезапишет молча). Успех — число
-    /// пересчитанных чатов и counts по зонам.</summary>
+    /// ни модели, ни разбора (теневой режим). Курсор, зона и причина исхода разбора,
+    /// nothingNewStreak существующих записей сохраняются: пересчёт пишет только свои поля
+    /// (score/signals/stage1Zone/stage1Reason). 409 — нечитаемый стор (пересчёт его не
+    /// перезапишет молча). Успех — число пересчитанных чатов и counts по зонам ступени 1
+    /// (их посчитал скорер; список показывает их с приоритетом исхода разбора — ShownZone).</summary>
     [HttpPost("recalculate")]
     public async Task<IActionResult> Recalculate()
     {
@@ -140,8 +156,9 @@ public class WikiChatsController : ControllerBase
 /// числа по зонам.</summary>
 public sealed record WikiChatsListDto(IReadOnlyList<WikiChatTriageDto> Items, IReadOnlyDictionary<string, int> Counts);
 
-/// <summary>Строка списка: чат, его зона, балл и сигналы (null — балла ещё нет), причина для
-/// человека, счётчик «нечего добавить».</summary>
+/// <summary>Строка списка: чат, его ПОКАЗАННАЯ зона (исход разбора либо зона ступени 1 —
+/// ShownZone), балл и сигналы (null — балла ещё нет), причина для человека этой зоны,
+/// счётчик «нечего добавить».</summary>
 public sealed record WikiChatTriageDto(
     string SessionId, string? Name, string Zone, int? Score,
     IReadOnlyList<WikiTriageSignal>? Signals, string? Reason,

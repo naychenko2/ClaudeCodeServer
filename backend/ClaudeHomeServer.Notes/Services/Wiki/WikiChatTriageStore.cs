@@ -8,12 +8,19 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 
 // Стор разбора чатов Хранителя (ADR-035, решения 12а/12б): keeper/chat-triage.json —
 // одна запись на чат: {sessionId, cursor, cursorHash, zone, reason, nothingNewStreak, triagedAt,
-// score, signals}. Курсор — «разобрано до записи N», cursorHash — хэш записи N: несовпадение
-// хэша (история переписана) сбрасывает курсор в 0 (ADR-035:249). nothingNewStreak — счётчик
-// исходов «нечего добавить» подряд, по нему чат понижается в балле (штраф считает
-// WikiChatScorer, ADR-035:269). Поля балла score/signals — с S6f: известные поля записи,
-// читаются сильнотипно; запись остаётся расширяемой — неизвестные поля (будущие шаги) при
-// правке сохраняются как есть.
+// score, signals, stage1Zone, stage1Reason}. Курсор — «разобрано до записи N», cursorHash — хэш
+// записи N: несовпадение хэша (история переписана) сбрасывает курсор в 0 (ADR-035:249).
+// nothingNewStreak — счётчик исходов «нечего добавить» подряд, по нему чат понижается в балле
+// (штраф считает WikiChatScorer, ADR-035:269). Поля балла score/signals — с S6f: известные поля
+// записи, читаются сильнотипно; запись остаётся расширяемой — неизвестные поля (будущие шаги)
+// при правке сохраняются как есть.
+//
+// У стора ДВА независимых писателя, и владение полями разведено (ревью S6f, M1/M2): разбор
+// (WikiChatIngestService) владеет cursor/cursorHash/zone/reason/nothingNewStreak, пересчёт
+// (WikiChatsController.Recalculate) — score/signals и СВОЕЙ зоной ступени 1 в отдельных полях
+// stage1Zone/stage1Reason. Зона одна на двоих быть не может: пересчёт затирал бы исход разбора
+// nothing_new, а ночной разбор — посчитанный балл. Какую зону показать, решает читающий
+// (WikiChatsController.List): пока разбор поставил nothing_new — она, иначе — зона ступени 1.
 //
 // Состояния файла — тот же класс, что у манифеста и пакета (ревью S2b-1, M1; S4a, MAJOR 2):
 // пустой/битый файл — «невалиден» с причиной, не исключение наружу и не «пустой стор»:
@@ -44,10 +51,17 @@ public static class WikiChatTriageStore
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
-    // Имена известных полей записи — контракт S6e-1 + S6f (score/signals). Всё, что не в этом
-    // списке, — чужое поле (будущие шаги): оно сохраняется при правке записи как есть.
+    // Имена известных полей записи — контракт S6e-1 + S6f. Всё, что не в этом списке, — чужое
+    // поле (будущие шаги): оно сохраняется при правке записи как есть.
     private static readonly string[] KnownFieldNames =
-        ["sessionId", "cursor", "cursorHash", "zone", "reason", "nothingNewStreak", "triagedAt", "score", "signals"];
+        ["sessionId", "cursor", "cursorHash", "zone", "reason", "nothingNewStreak", "triagedAt",
+         "score", "signals", "stage1Zone", "stage1Reason"];
+
+    // Поля, которыми владеет пересчёт (скорер), а не разбор: при Upsert разбора переносятся
+    // из прежней записи как есть — ночной разбор не имеет права стирать посчитанный балл
+    // и зону ступени 1 (ревью S6f, M2).
+    private static readonly string[] ScorerFieldNames =
+        ["score", "signals", "stage1Zone", "stage1Reason"];
 
     // Блокировка на корень вики владельца (ключ — как в контракте задачи), стиль WikiKeeper._locks
     // и WikiPackageStore._createLocks: весь цикл чтения-правки-записи внутри.
@@ -76,11 +90,12 @@ public static class WikiChatTriageStore
         });
     }
 
-    /// <summary>Поставить или обновить запись чата: весь цикл «прочитать стор → заменить
-    /// запись → записать файл» под блоком корня. Отказ: форма записи (CodeShape — нет ключа,
-    /// отрицательный курсор или счётчик), невалидный файл (CodeInvalid: битый файл не
+    /// <summary>Поставить или обновить запись чата (исход разбора): весь цикл «прочитать стор →
+    /// заменить запись → записать файл» под блоком корня. Отказ: форма записи (CodeShape — нет
+    /// ключа, отрицательный курсор или счётчик), невалидный файл (CodeInvalid: битый файл не
     /// перезаписывается молча — его записи были бы стёрты). Запись на несуществующем чате —
-    /// новая, на существующем — правка известных полей: чужие поля записи сохраняются.
+    /// новая, на существующем — правка полей разбора: чужие поля (будущие шаги) и поля скорера
+    /// (score/signals/stage1Zone/stage1Reason) переносятся из прежней записи как есть (M2).
     /// triagedAt ставит сервер (значение из входа игнорируется). Запись — через
     /// WikiFileWriter: атомарная, уникальный temp в нём уже есть.</summary>
     public static WikiTriageOpResult Upsert(string root, WikiChatTriageEntry entry, ILogger? log = null)
@@ -109,12 +124,13 @@ public static class WikiChatTriageStore
             var idx = nodes.FindIndex(n => KeyOf(n) == stamped.SessionId);
             if (idx >= 0)
             {
-                // Замена записи целиком канонической формой + перенос чужих полей прежней:
-                // известные поля всегда в порядке записи (diff стора читаем), неизвестные
-                // (поля будущих шагов) не теряются.
+                // Замена записи целиком канонической формой + перенос полей, которых этот
+                // писатель не касается: неизвестные (поля будущих шагов) и поля скорера —
+                // известные, но принадлежащие другому писателю (M2). Известные поля разбора
+                // всегда в порядке записи (diff стора читаем).
                 var old = (JsonObject)nodes[idx]!;
                 foreach (var (key, value) in old)
-                    if (!KnownFieldNames.Contains(key))
+                    if (!KnownFieldNames.Contains(key) || ScorerFieldNames.Contains(key))
                         fresh[key] = value?.DeepClone();
                 nodes[idx] = fresh;
             }
@@ -130,15 +146,16 @@ public static class WikiChatTriageStore
         });
     }
 
-    /// <summary>Обновить только поля балла (S6f): score/signals/zone/reason + дата сервера.
-    /// Курсор, cursorHash и nothingNewStreak существующей записи НЕ трогаются: пересчёт балла
-    /// (кнопка «пересчитать») не владеет курсором разбора — иначе он стёр бы продвижение,
-    /// сделанное параллельным ночным разбором между началом пересчёта и этой записью.
+    /// <summary>Обновить только поля скорера (S6f, разведение владения по ревью S6f M1):
+    /// score/signals и зона с причиной ступени 1 (stage1Zone/stage1Reason) + дата сервера.
+    /// Поля разбора — курсор, cursorHash, zone, reason, nothingNewStreak — НЕ трогаются:
+    /// пересчёт (кнопка «пересчитать») не владеет ни ходом разбора, ни его исходом: зона
+    /// nothing_new принадлежит разбору, и пересчёт не вправе её перекрыть своей zone.
     /// Записи нет — новая с курсором 0 (чат ещё ни разу не разбирался). Тот же цикл под
     /// блоком корня и тот же fail-closed, что у Upsert.</summary>
     public static WikiTriageOpResult UpdateScoring(
         string root, string sessionId, int score, IReadOnlyList<WikiTriageSignal>? signals,
-        string? zone, string? reason, ILogger? log = null)
+        string? stage1Zone, string? stage1Reason, ILogger? log = null)
     {
         if (string.IsNullOrWhiteSpace(sessionId))
             return Fail(CodeShape, "у записи нет sessionId — ключа чата");
@@ -157,20 +174,21 @@ public static class WikiChatTriageStore
             var idx = nodes.FindIndex(n => KeyOf(n) == sessionId);
             if (idx >= 0)
             {
-                // Правка известных полей существующего узла: чужие поля и курсор остаются
-                // как есть — их эта операция не касается.
+                // Правка только своих полей существующего узла: поля разбора (курсор, зона
+                // исхода, streak) и чужие поля остаются как есть — их эта операция не касается.
                 var obj = (JsonObject)nodes[idx]!;
                 obj["score"] = score;
                 obj["signals"] = signals is null
                     ? null
                     : (JsonNode)JsonSerializer.SerializeToNode(signals, JsonOpts)!;
-                obj["zone"] = zone;
-                obj["reason"] = reason;
+                obj["stage1Zone"] = stage1Zone;
+                obj["stage1Reason"] = stage1Reason;
                 obj["triagedAt"] = DateTimeOffset.UtcNow;
             }
             else
             {
-                var fresh = new WikiChatTriageEntry(sessionId, 0, null, zone, reason, 0, default, score, signals);
+                var fresh = new WikiChatTriageEntry(sessionId, 0, null, null, null, 0, default,
+                    score, signals, stage1Zone, stage1Reason);
                 nodes.Add((JsonNode)JsonSerializer.SerializeToNode(fresh, JsonOpts)!);
             }
             nodes.Sort((a, b) => string.CompareOrdinal(KeyOf(a), KeyOf(b)));
@@ -256,12 +274,16 @@ public static class WikiChatTriageStore
                     if (signals is null)
                         return null;
                 }
+                // Зона ступени 1 (доработка S6f): необязательна, как балл — запись до разведения
+                // владения читается с null. Форма — та же, что у zone: чужой тип значения.
                 entries.Add(new WikiChatTriageEntry(
                     sessionId, cursor.Value,
                     ReadString(obj, "cursorHash"),
                     ReadString(obj, "zone"),
                     ReadString(obj, "reason"),
-                    streak, triagedAt.Value, score, signals));
+                    streak, triagedAt.Value, score, signals,
+                    ReadString(obj, "stage1Zone"),
+                    ReadString(obj, "stage1Reason")));
             }
         }
         catch (JsonException) { return null; }
@@ -338,9 +360,13 @@ public static class WikiChatTriageStore
     private static WikiTriageOpResult Fail(string code, string reason) => new(false, code, reason, null);
 }
 
-/// <summary>Запись стора: курсор разбора чата и его исход. С S6f — и результат ступени 1:
-/// балл (score, null — балла ещё нет: запись S6e или чат до первого пересчёта) и сигналы
-/// (null — тех же двух случаях). Форма полей строгая: значение чужого типа — невалидный файл.</summary>
+/// <summary>Запись стора. Поля разбора: курсор чата и его исход (zone/reason,
+/// nothingNewStreak). С S6f — и результат ступени 1: балл (score, null — балла ещё нет:
+/// запись S6e или чат до первого пересчёта), сигналы (null — тех же двух случаях) и зона с
+/// причиной ступени 1 (stage1Zone/stage1Reason) — ОТДЕЛЬНО от зоны разбора: у стора два
+/// писателя, и общая на них zone означала бы, что пересчёт затирает исход nothing_new, а
+/// ночной разбор — посчитанный балл (ревью S6f, M1/M2). Форма полей строгая: значение чужого
+/// типа — невалидный файл.</summary>
 public sealed record WikiChatTriageEntry(
     string SessionId,
     int Cursor,
@@ -350,7 +376,9 @@ public sealed record WikiChatTriageEntry(
     int NothingNewStreak,
     DateTimeOffset TriagedAt,
     int? Score = null,
-    IReadOnlyList<WikiTriageSignal>? Signals = null);
+    IReadOnlyList<WikiTriageSignal>? Signals = null,
+    string? Stage1Zone = null,
+    string? Stage1Reason = null);
 
 /// <summary>Один сигнал ступени 1 в записи стора: имя — стабильный идентификатор из
 /// WikiChatScorer (метку для человека рисует вызывающий), вес — вклад в балл (штраф —

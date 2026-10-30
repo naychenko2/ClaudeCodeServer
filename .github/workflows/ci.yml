@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [master, feat/test-speedup]
+    branches: [master]
   pull_request:
 
 jobs:

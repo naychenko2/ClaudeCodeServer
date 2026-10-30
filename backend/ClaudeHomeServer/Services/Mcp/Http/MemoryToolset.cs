@@ -99,7 +99,8 @@ public sealed class MemoryToolset(
         // сферы (сферы — личная группировка владельца, §2.5 разреза). Командная память проекта —
         // контекст проекта, остаётся. Вердикт только читается: ни в стор, ни в кэш ничего не
         // пишется, состав tools/list от рамки не зависит (McpToolsetStabilityTests).
-        var narrow = frames.Frame(context.CallerSessionId, context.OwnerId) == TurnFrameKind.Narrow;
+        var frame = frames.Frame(context.CallerSessionId, context.OwnerId);
+        var narrow = frame == TurnFrameKind.Narrow;
         // Личная память закрыта только когда персона глобальная: память проектной и сферы-персоны —
         // контекст их команды, не личное пространство владельца
         if (narrow && tool.StartsWith("memory_", StringComparison.Ordinal)

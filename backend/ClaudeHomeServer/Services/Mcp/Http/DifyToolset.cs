@@ -94,7 +94,8 @@ public sealed class DifyToolset(
         // дефолтный датасет, резолвленный по рабочей папке сессии; личные и чужие датасеты
         // закрыты всем, включая владельца. Создание/удаление баз — тоже пространство
         // владельца. list_datasets в узкой рамке отдаёт только базу этого проекта.
-        var narrow = frames.Frame(context.CallerSessionId, context.OwnerId) == TurnFrameKind.Narrow;
+        var frame = frames.Frame(context.CallerSessionId, context.OwnerId);
+        var narrow = frame == TurnFrameKind.Narrow;
         if (narrow)
         {
             if (string.IsNullOrEmpty(defaultDatasetId))

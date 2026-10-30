@@ -105,7 +105,8 @@ public sealed partial class PersonasToolset(
         // команды) закрыты в его общем чате всем, включая самого владельца. Проектная команда
         // этого чата остаётся: personas_list по проекту, persona_ask к проектным персонам,
         // чтение и правка привязок проектной персоны. Вердикт только читается.
-        var narrow = frames.Frame(context.CallerSessionId, context.OwnerId) == TurnFrameKind.Narrow;
+        var frame = frames.Frame(context.CallerSessionId, context.OwnerId);
+        var narrow = frame == TurnFrameKind.Narrow;
         if (narrow && (tool is "personas_create" or "personas_update" or "personas_delete"
             or "personas_set_default" or "personas_mcp_list" or "personas_mcp_grant"
             or "personas_generate_avatar" or "personas_ai_team"

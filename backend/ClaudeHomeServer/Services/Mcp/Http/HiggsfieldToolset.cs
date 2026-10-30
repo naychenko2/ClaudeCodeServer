@@ -226,8 +226,8 @@ public sealed class HiggsfieldToolset : IMcpParameterizedToolset
         // всем, включая владельца. Остаётся models_explore: публичный справочник моделей,
         // не читает аккаунт и не тратит деньги. Отказ стоит ДО проверки токена: в общем
         // проекте причина отказа — рамка, а не состояние подключения.
-        if (frames is not null && frames.Frame(context.CallerSessionId, context.OwnerId)
-            == ClaudeHomeServer.Services.Access.TurnFrameKind.Narrow
+        var frame = frames?.Frame(context.CallerSessionId, context.OwnerId);
+        if (frame == ClaudeHomeServer.Services.Access.TurnFrameKind.Narrow
             && tool != "models_explore")
             return Deny(NarrowAccountText);
 

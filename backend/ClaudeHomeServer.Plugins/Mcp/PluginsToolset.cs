@@ -94,8 +94,8 @@ public sealed partial class PluginsToolset : IMcpParameterizedToolset, IMcpInstr
         // только его решения (шаг 4.3). Весь сервер черновиков закрыт в общем чате всем,
         // включая владельца. Отказ стоит ДО гейтов подсистемы и флагов: в общем проекте
         // причина отказа — рамка, а не конфигурация аккаунта.
-        if (_frames is not null && _frames.Frame(context.CallerSessionId, context.OwnerId)
-            == TurnFrameKind.Narrow)
+        var frame = _frames?.Frame(context.CallerSessionId, context.OwnerId);
+        if (frame == TurnFrameKind.Narrow)
             return Deny(
                 "Плагины закрыты в общем проекте: черновики, установка и права плагина — "
                 + "личное пространство и решения владельца.");

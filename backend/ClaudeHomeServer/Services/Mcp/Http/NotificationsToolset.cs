@@ -59,7 +59,8 @@ public sealed class NotificationsToolset(
         // удаление закрыты в общем чате всем, включая самого владельца. Создать уведомление
         // о работе этого проекта можно: это сообщение владельцу о текущем проекте, а не
         // чтение его личного ящика.
-        if (frames.Frame(context.CallerSessionId, context.OwnerId) == TurnFrameKind.Narrow
+        var frame = frames.Frame(context.CallerSessionId, context.OwnerId);
+        if (frame == TurnFrameKind.Narrow
             && tool is "notifications_list" or "notifications_mark_read" or "notifications_delete")
             return Deny(NarrowInboxText);
 

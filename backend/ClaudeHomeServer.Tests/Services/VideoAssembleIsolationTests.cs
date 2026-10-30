@@ -15,6 +15,15 @@ namespace ClaudeHomeServer.Tests.Services;
 // BuildConcurrencyGate занят всё время её работы. Живой запуск — только Linux с user-шиной, systemd-run и
 // ffmpeg; иначе пропуск, а не падение (CI, контейнер). Слой раннера читает глобальные IsolationOptions —
 // коллекция процесс-глобального состояния.
+//
+// Детерминизм (дефект 62b1631a, CI-ран 41004166921): проверка слота привязана к событию СТАРТА процесса,
+// а не к временному окну. Продукт берёт слот до Start и отдаёт его в finally на любом исходе
+// (FfmpegVideoDsp.cs:120-122), значит в момент Start слот занят по конструкции. Прежняя версия теста
+// проверяла слот после опроса cgroup: на быстром раннере сборка завершалась до проверки, и тест падал
+// с Available == 1 на живом порту — проверка зависела от скорости машины, а не от продукта.
+// Способность обёртки проверяется той же пробой, которой её решает продукт (LocalProcessRunner.cs:398):
+// проба не ОК — изоляция в этой среде не работает, тест пропускает assertions (намерение файла:
+// «иначе пропуск, а не падение»), а не валит их об окружении.
 [Collection(TestCollections.ProcessGlobalState)]
 public sealed class VideoAssembleIsolationTests(ITestOutputHelper output) : IDisposable
 {
@@ -32,35 +41,57 @@ public sealed class VideoAssembleIsolationTests(ITestOutputHelper output) : IDis
         if (!OperatingSystem.IsLinux()) return;
         if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR"))
             && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DBUS_SESSION_BUS_ADDRESS"))) return;
-        if (LocalProcessRunner.FindSystemdRun(Environment.GetEnvironmentVariable("PATH")) is null) return;
+        var systemdRun = LocalProcessRunner.FindSystemdRun(Environment.GetEnvironmentVariable("PATH"));
+        if (systemdRun is null) return;
 
         Directory.CreateDirectory(_dir);
-        var gate = new BuildConcurrencyGate(1);
-        var launchers = new RecordingLaunchers();
-        var dsp = new FfmpegVideoDsp(new ConfigurationBuilder().Build(), NullLogger<FfmpegVideoDsp>.Instance, launchers, gate);
-        if (!dsp.Available) return;
-
-        // Исходник побольше, а сборка — в 1080p60: процесс живёт достаточно, чтобы заглянуть в его cgroup
-        var clip = Path.Combine(_dir, "src.mp4");
-        RunSync("ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i",
-            "testsrc2=size=1280x720:rate=30:duration=40", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", clip]);
-        var plan = new FilmPlan(1920, 1080, 60, [new FilmPlanClip(clip, 0, 40, false)], [], null, TimeSpan.FromMinutes(5));
-
         const string slice = "ccs-isotest.slice";
         var prev = IsolationOptions.Instance;
         IsolationOptions.Instance = new IsolationOptions { Enabled = true, Slice = slice, MemoryMax = "4G" };
         try
         {
+            // Способность обёртки — пробой продукта, а не наличием бинаря и переменной: это ровно тот
+            // вызов, который сделает Start (результат кэшируется, боевой Start его переиспользует).
+            // Без успешной пробы обёртки не будет ни у одного запуска — проверять cgroup в такой среде
+            // значит валить тест об окружении, а не о продукте.
+            LocalProcessRunner.ResetProbeForTests();
+            var probe = LocalProcessRunner.ProbeOnce(IsolationOptions.Instance, systemdRun);
+            if (probe is not { Ok: true })
+            {
+                output.WriteLine("Изоляция в этой среде не работает: " + (probe?.FailReason ?? "проба не выполнена"));
+                return;
+            }
+
+            var gate = new BuildConcurrencyGate(1);
+            var started = new TaskCompletionSource();
+            var launchers = new RecordingLaunchers(gate, started);
+            var dsp = new FfmpegVideoDsp(new ConfigurationBuilder().Build(), NullLogger<FfmpegVideoDsp>.Instance, launchers, gate);
+            if (!dsp.Available) return;
+
+            // Исходник побольше, а сборка — в 1080p60: процесс живёт достаточно, чтобы заглянуть в его cgroup
+            var clip = Path.Combine(_dir, "src.mp4");
+            RunSync("ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i",
+                "testsrc2=size=1280x720:rate=30:duration=40", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", clip]);
+            var plan = new FilmPlan(1920, 1080, 60, [new FilmPlanClip(clip, 0, 40, false)], [], null, TimeSpan.FromMinutes(5));
+
             using var cts = new CancellationTokenSource();
             var running = dsp.AssembleAsync(plan, Path.Combine(_dir, "film.mp4"), null, cts.Token);
 
-            var deadline = DateTime.UtcNow.AddSeconds(30);
-            while (launchers.Pid is null && DateTime.UtcNow < deadline) await Task.Delay(20);
-            launchers.Pid.Should().NotBeNull("сборка стартовала через ILauncherFactory.Local");
+            // Событие удержания слота: Start ланчера — внутри продуктового `using var slot`
+            // (FfmpegVideoDsp.cs:120-122), слот занят по конструкции в этот момент. Замер — здесь,
+            // а не «когда-нибудь после опроса cgroup»: на быстром раннере сборка опережала прежнюю
+            // проверку, и тест флакал. Safety-окно — только против зависания старта, не механизм.
+            (await Task.WhenAny(started.Task, Task.Delay(30_000))).Should().BeSameAs(started.Task,
+                "сборка стартовала через ILauncherFactory.Local");
             launchers.Spec!.Heavy.Should().BeTrue();
+            launchers.SlotAtStart.Should().Be(0, "слот единого BuildConcurrencyGate занят в момент старта процесса");
 
             // Пока systemd-run не переложил процесс в свой scope, /proc/<pid>/cgroup показывает cgroup РОДИТЕЛЯ
-            // (у агента он тоже в scope) — ждём именно нашего slice, а не «любой .scope»
+            // (у агента он тоже в scope) — ждём именно нашего slice, а не «любой .scope». Переложение —
+            // часть старта: --scope исполняет команду в своём же процессе, уже в scope
+            // (LocalProcessRunner.cs:97-98), а процесс живёт секунды (сборка 40 с видео в 1080p60) —
+            // наблюдение раньше завершения.
+            var deadline = DateTime.UtcNow.AddSeconds(30);
             string cgroup = "";
             while (!cgroup.Contains(slice) && DateTime.UtcNow < deadline)
             {
@@ -68,7 +99,6 @@ public sealed class VideoAssembleIsolationTests(ITestOutputHelper output) : IDis
                 catch (IOException) { break; }
                 await Task.Delay(20);
             }
-            gate.Available.Should().Be(0, "слот единого BuildConcurrencyGate занят, пока ffmpeg жив");
             cgroup.Should().Contain(slice).And.Contain(".scope", "процесс сборки уходит в scope ccs-agents.slice");
             output.WriteLine("cgroup сборки: " + cgroup.Trim());
 
@@ -79,6 +109,9 @@ public sealed class VideoAssembleIsolationTests(ITestOutputHelper output) : IDis
         finally
         {
             IsolationOptions.Instance = prev;
+            // Свой результат пробы (со своим slice) не должен остаться следующему тесту:
+            // кэш пробы — процесс-глобальное состояние, тот же приём, что у LocalProcessRunnerIsolationTests.
+            LocalProcessRunner.ResetProbeForTests();
         }
     }
 
@@ -93,10 +126,17 @@ public sealed class VideoAssembleIsolationTests(ITestOutputHelper output) : IDis
         p.ExitCode.Should().Be(0, err.Result);
     }
 
-    private sealed class RecordingLaunchers : ILauncherFactory
+    private sealed class RecordingLaunchers(BuildConcurrencyGate gate, TaskCompletionSource started) : ILauncherFactory
     {
-        public int? Pid { get; set; }
-        public ProcessSpec? Spec { get; set; }
+        // Параметры первичного конструктора видны только телу самого класса — вложенному Recording
+        // нужны явные поля.
+        private readonly BuildConcurrencyGate _gate = gate;
+        private readonly TaskCompletionSource _started = started;
+
+        public int? Pid { get; private set; }
+        public ProcessSpec? Spec { get; private set; }
+        // Свободные слоты гейта в момент Start — замер привязан к событию, а не к позднему чтению Available
+        public int SlotAtStart { get; private set; }
         public IProcessLauncher Local => new Recording(this);
         public IProcessLauncher ForOwner(string? ownerId) => Local;
         public IProcessLauncher ForProject(Project project) => Local;
@@ -115,6 +155,8 @@ public sealed class VideoAssembleIsolationTests(ITestOutputHelper output) : IDis
                 var process = Real.Start(spec);
                 owner.Spec = spec;
                 owner.Pid = process.Id;
+                owner.SlotAtStart = owner._gate.Available;
+                owner._started.SetResult();
                 return process;
             }
             public void Kill(Process process, string? turnId = null) => Real.Kill(process, turnId);

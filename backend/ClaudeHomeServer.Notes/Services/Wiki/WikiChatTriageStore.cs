@@ -7,12 +7,13 @@ using Microsoft.Extensions.Logging;
 namespace ClaudeHomeServer.Services.Notes.Wiki;
 
 // Стор разбора чатов Хранителя (ADR-035, решения 12а/12б): keeper/chat-triage.json —
-// одна запись на чат: {sessionId, cursor, cursorHash, zone, reason, nothingNewStreak, triagedAt}.
-// Курсор — «разобрано до записи N», cursorHash — хэш записи N: несовпадение хэша (история
-// переписана) сбрасывает курсор в 0 (ADR-035:249). nothingNewStreak — счётчик исходов
-// «нечего добавить» подряд, по нему чат понижается в балле (ADR-035:269). Поля балла
-// (score, signals) добавит S6f: запись расширяемая — неизвестные поля при чтении не теряются
-// при перезаписи, иначе S6e затёр бы то, что пишет другой шаг.
+// одна запись на чат: {sessionId, cursor, cursorHash, zone, reason, nothingNewStreak, triagedAt,
+// score, signals}. Курсор — «разобрано до записи N», cursorHash — хэш записи N: несовпадение
+// хэша (история переписана) сбрасывает курсор в 0 (ADR-035:249). nothingNewStreak — счётчик
+// исходов «нечего добавить» подряд, по нему чат понижается в балле (штраф считает
+// WikiChatScorer, ADR-035:269). Поля балла score/signals — с S6f: известные поля записи,
+// читаются сильнотипно; запись остаётся расширяемой — неизвестные поля (будущие шаги) при
+// правке сохраняются как есть.
 //
 // Состояния файла — тот же класс, что у манифеста и пакета (ревью S2b-1, M1; S4a, MAJOR 2):
 // пустой/битый файл — «невалиден» с причиной, не исключение наружу и не «пустой стор»:
@@ -43,10 +44,10 @@ public static class WikiChatTriageStore
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
-    // Имена известных полей записи — контракт S6e-1. Всё, что не в этом списке, — чужое поле
-    // (балл S6f, будущие шаги): оно сохраняется при правке записи как есть.
+    // Имена известных полей записи — контракт S6e-1 + S6f (score/signals). Всё, что не в этом
+    // списке, — чужое поле (будущие шаги): оно сохраняется при правке записи как есть.
     private static readonly string[] KnownFieldNames =
-        ["sessionId", "cursor", "cursorHash", "zone", "reason", "nothingNewStreak", "triagedAt"];
+        ["sessionId", "cursor", "cursorHash", "zone", "reason", "nothingNewStreak", "triagedAt", "score", "signals"];
 
     // Блокировка на корень вики владельца (ключ — как в контракте задачи), стиль WikiKeeper._locks
     // и WikiPackageStore._createLocks: весь цикл чтения-правки-записи внутри.
@@ -110,7 +111,7 @@ public static class WikiChatTriageStore
             {
                 // Замена записи целиком канонической формой + перенос чужих полей прежней:
                 // известные поля всегда в порядке записи (diff стора читаем), неизвестные
-                // (score/signals S6f) не теряются.
+                // (поля будущих шагов) не теряются.
                 var old = (JsonObject)nodes[idx]!;
                 foreach (var (key, value) in old)
                     if (!KnownFieldNames.Contains(key))
@@ -126,6 +127,62 @@ public static class WikiChatTriageStore
             nodes.Sort((a, b) => string.CompareOrdinal(KeyOf(a), KeyOf(b)));
             WikiFileWriter.Write(root, TriageRelPath, JsonSerializer.Serialize(nodes, JsonOpts));
             return Ok(stamped);
+        });
+    }
+
+    /// <summary>Обновить только поля балла (S6f): score/signals/zone/reason + дата сервера.
+    /// Курсор, cursorHash и nothingNewStreak существующей записи НЕ трогаются: пересчёт балла
+    /// (кнопка «пересчитать») не владеет курсором разбора — иначе он стёр бы продвижение,
+    /// сделанное параллельным ночным разбором между началом пересчёта и этой записью.
+    /// Записи нет — новая с курсором 0 (чат ещё ни разу не разбирался). Тот же цикл под
+    /// блоком корня и тот же fail-closed, что у Upsert.</summary>
+    public static WikiTriageOpResult UpdateScoring(
+        string root, string sessionId, int score, IReadOnlyList<WikiTriageSignal>? signals,
+        string? zone, string? reason, ILogger? log = null)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+            return Fail(CodeShape, "у записи нет sessionId — ключа чата");
+        if (score < 0)
+            return Fail(CodeShape, $"балл не может быть отрицательным: {score}");
+
+        return WithRootLock<WikiTriageOpResult>(root, () =>
+        {
+            var (state, nodes, _) = ReadAll(root);
+            if (state == WikiTriageFileState.Invalid)
+            {
+                log?.LogWarning("Стор разбора чатов нечитаем, пересчёт невозможен: {Path}", TriageRelPath);
+                return Fail(CodeInvalid, "файл разбора чатов не читается — запись в него невозможна");
+            }
+
+            var idx = nodes.FindIndex(n => KeyOf(n) == sessionId);
+            if (idx >= 0)
+            {
+                // Правка известных полей существующего узла: чужие поля и курсор остаются
+                // как есть — их эта операция не касается.
+                var obj = (JsonObject)nodes[idx]!;
+                obj["score"] = score;
+                obj["signals"] = signals is null
+                    ? null
+                    : (JsonNode)JsonSerializer.SerializeToNode(signals, JsonOpts)!;
+                obj["zone"] = zone;
+                obj["reason"] = reason;
+                obj["triagedAt"] = DateTimeOffset.UtcNow;
+            }
+            else
+            {
+                var fresh = new WikiChatTriageEntry(sessionId, 0, null, zone, reason, 0, default, score, signals);
+                nodes.Add((JsonNode)JsonSerializer.SerializeToNode(fresh, JsonOpts)!);
+            }
+            nodes.Sort((a, b) => string.CompareOrdinal(KeyOf(a), KeyOf(b)));
+            var written = JsonSerializer.Serialize(nodes, JsonOpts);
+            WikiFileWriter.Write(root, TriageRelPath, written);
+            // Пересбор сильнотипной записи по узлам в памяти (тот же ParseEntries): вызывающий
+            // получает ровно то, что записано на диск. Null здесь невозможен (узлы собраны из
+            // прочитанного файла правкой известных полей) — но и не додумывается: отказ с формой.
+            var entries = ParseEntries(nodes);
+            if (entries is null)
+                return Fail(CodeShape, "запись пересчёта не читается после сборки");
+            return Ok(entries.Single(e => e.SessionId == sessionId));
         });
     }
 
@@ -185,12 +242,26 @@ public static class WikiChatTriageStore
                 var triagedAt = ReadDate(obj, "triagedAt");
                 if (triagedAt is null)
                     return null;
+                // Балл S6f: необязателен (запись S6e без него читается), но если есть —
+                // неотрицательное число (скорер нижнюю границу балла держит на 0). signals —
+                // массив {name, weight}; чужая форма — тот же класс повреждения файла.
+                var score = ReadInt(obj, "score");
+                if (score is < 0)
+                    return null;
+                var signalsNode = obj["signals"];
+                List<WikiTriageSignal>? signals = null;
+                if (signalsNode is not null && signalsNode.GetValueKind() != JsonValueKind.Null)
+                {
+                    signals = ReadSignals(signalsNode);
+                    if (signals is null)
+                        return null;
+                }
                 entries.Add(new WikiChatTriageEntry(
                     sessionId, cursor.Value,
                     ReadString(obj, "cursorHash"),
                     ReadString(obj, "zone"),
                     ReadString(obj, "reason"),
-                    streak, triagedAt.Value));
+                    streak, triagedAt.Value, score, signals));
             }
         }
         catch (JsonException) { return null; }
@@ -215,6 +286,31 @@ public static class WikiChatTriageStore
         if (v is null || v.GetValueKind() == JsonValueKind.Null)
             return null;
         return v.GetValue<int>();
+    }
+
+    // signals (S6f): вызывающий передаёт узел, который НЕ null и не JSON null. Строгая форма:
+    // массив объектов {name: непустая строка, weight: число}; чужая форма — null, и чтение
+    // трактует её как невалидный файл. Пустой массив — законен (балл без сигналов).
+    // Отрицательный weight законен: штраф за ряд «нечего добавить» — сигнал с отрицательным
+    // весом (WikiChatScorer).
+    private static List<WikiTriageSignal>? ReadSignals(JsonNode node)
+    {
+        if (node is not JsonArray arr)
+            return null;
+        var list = new List<WikiTriageSignal>();
+        foreach (var item in arr)
+        {
+            if (item is not JsonObject o)
+                return null;
+            var name = ReadString(o, "name");
+            if (string.IsNullOrEmpty(name))
+                return null;
+            var weight = ReadInt(o, "weight");
+            if (weight is null)
+                return null;
+            list.Add(new WikiTriageSignal(name, weight.Value));
+        }
+        return list;
     }
 
     private static DateTimeOffset? ReadDate(JsonObject obj, string key)
@@ -242,8 +338,9 @@ public static class WikiChatTriageStore
     private static WikiTriageOpResult Fail(string code, string reason) => new(false, code, reason, null);
 }
 
-/// <summary>Запись стора: курсор разбора чата и его исход. Поля балла (score, signals)
-/// добавит S6f — класс записи расширяемая, их несёт файл, а не эта модель.</summary>
+/// <summary>Запись стора: курсор разбора чата и его исход. С S6f — и результат ступени 1:
+/// балл (score, null — балла ещё нет: запись S6e или чат до первого пересчёта) и сигналы
+/// (null — тех же двух случаях). Форма полей строгая: значение чужого типа — невалидный файл.</summary>
 public sealed record WikiChatTriageEntry(
     string SessionId,
     int Cursor,
@@ -251,7 +348,14 @@ public sealed record WikiChatTriageEntry(
     string? Zone,
     string? Reason,
     int NothingNewStreak,
-    DateTimeOffset TriagedAt);
+    DateTimeOffset TriagedAt,
+    int? Score = null,
+    IReadOnlyList<WikiTriageSignal>? Signals = null);
+
+/// <summary>Один сигнал ступени 1 в записи стора: имя — стабильный идентификатор из
+/// WikiChatScorer (метку для человека рисует вызывающий), вес — вклад в балл (штраф —
+/// отрицательный).</summary>
+public sealed record WikiTriageSignal(string Name, int Weight);
 
 /// <summary>Состояние файла стора на диске: «невалиден» нельзя схлопнуть с «пусто» —
 /// нечитаемый файл — это потерянные курсоры всех чатов, а не «ничего не разобрано»

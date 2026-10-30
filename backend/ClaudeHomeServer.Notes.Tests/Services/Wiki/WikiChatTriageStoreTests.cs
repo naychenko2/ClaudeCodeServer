@@ -8,8 +8,10 @@ namespace ClaudeHomeServer.Tests.Services;
 
 // S6e-1 (ADR-035, решения 12а/12б): стор разбора чатов keeper/chat-triage.json — курсор
 // «разобрано до записи N» + хэш записи N, зона и причина исхода, счётчик «нечего добавить»
-// подряд. Запись расширяемая: чужие поля (балл S6f) при перезаписи сохраняются. Битый/пустой
-// файл — «невалиден» с причиной, не исключение и не «пустой стор»; отсутствие файла — норма.
+// подряд. Запись расширяемая: чужие поля (будущих шагов) при перезаписи сохраняются.
+// Битый/пустой файл — «невалиден» с причиной, не исключение и не «пустой стор»; отсутствие
+// файла — норма. С S6f (тесты 3a/3b): score/signals — известные поля (round-trip равный,
+// чужая форма — Invalid), UpdateScoring правит только их и не трогает курсор/счётчик.
 public class WikiChatTriageStoreTests : IDisposable
 {
     private const string Hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -80,21 +82,21 @@ public class WikiChatTriageStoreTests : IDisposable
     [Fact]
     public void НеизвестноеПолеЗаписи_СохраняетсяПриПравке_ИПриЧужомUpsert()
     {
-        // Балл S6f («score», «signals») и поле будущего шага («future»): стор S6e не знает их,
-        // но правка курсора не должна стирать то, что написал другой шаг.
+        // Поля будущих шагов («future», «futureObj»): стор их не знает, но правка курсора не
+        // должна стирать то, что написал другой шаг. (score/signals с S6f — известные поля,
+        // их round-trip — в тесте 3a.)
         WriteRaw("""
             [{"sessionId":"chat-a","cursor":4,"cursorHash":null,"zone":"nothing_new","reason":null,
               "nothingNewStreak":2,"triagedAt":"2026-10-20T12:00:00+00:00",
-              "score":7,"signals":["решения","факты"],"future":{"k":1}}]
+              "future":{"k":1},"futureObj":"значение"}]
             """);
 
         var up = WikiChatTriageStore.Upsert(_root, Entry("chat-a", 9, Hash, "triage", "есть утверждения"));
         up.Ok.Should().BeTrue(up.Reason);
 
         var raw = File.ReadAllText(TriageFile(), new UTF8Encoding(false));
-        raw.Should().Contain("\"score\":7");
-        raw.Should().Contain("решения");
         raw.Should().Contain("\"future\"");
+        raw.Should().Contain("значение");
 
         var disk = WikiChatTriageStore.Get(_root);
         disk.State.Should().Be(WikiTriageFileState.Valid);
@@ -104,7 +106,80 @@ public class WikiChatTriageStoreTests : IDisposable
 
         // Правка чужого чата тоже не задевает чужих полей первой записи.
         WikiChatTriageStore.Upsert(_root, Entry("chat-b", 1)).Ok.Should().BeTrue();
-        File.ReadAllText(TriageFile()).Should().Contain("\"score\":7");
+        File.ReadAllText(TriageFile()).Should().Contain("\"future\"");
+    }
+
+    // ─── 3a. Балл S6f: score/signals — известные поля, round-trip равный; чужая форма — Invalid ───
+
+    [Fact]
+    public void БаллИСигналы_ЧитываютсяРавноЗаписанному_ШтрафОтрицательнымВесом()
+    {
+        var up = WikiChatTriageStore.Upsert(_root, Entry("chat-a", 3, Hash, "triage", "балл 17", 0,
+            score: 17, signals: [new("decision_words", 8), new("human_turns", 6), new("nothing_new_penalty", -10)]));
+        up.Ok.Should().BeTrue(up.Reason);
+
+        var disk = WikiChatTriageStore.Get(_root);
+        disk.State.Should().Be(WikiTriageFileState.Valid);
+        var read = disk.Entries.Single(e => e.SessionId == "chat-a");
+        read.Score.Should().Be(17);
+        read.Signals.Should().Equal(up.Entry!.Signals, "порядок и веса сигналов — часть причины, они не переставляются");
+
+        // Запись S6e (без балла) читается с null-полем — adдитивность поля не ломает старый файл.
+        WriteRaw("""[{"sessionId":"old","cursor":1,"triagedAt":"2026-10-20T12:00:00+00:00"}]""");
+        var old = WikiChatTriageStore.Get(_root).Entries.Single();
+        old.Score.Should().BeNull();
+        old.Signals.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("""[{"sessionId":"a","cursor":1,"triagedAt":"2026-10-20T12:00:00+00:00","score":-1}]""")]
+    [InlineData("""[{"sessionId":"a","cursor":1,"triagedAt":"2026-10-20T12:00:00+00:00","score":"много"}]""")]
+    [InlineData("""[{"sessionId":"a","cursor":1,"triagedAt":"2026-10-20T12:00:00+00:00","signals":"решения"}]""")]
+    [InlineData("""[{"sessionId":"a","cursor":1,"triagedAt":"2026-10-20T12:00:00+00:00","signals":["решения","факты"]}]""")]
+    [InlineData("""[{"sessionId":"a","cursor":1,"triagedAt":"2026-10-20T12:00:00+00:00","signals":[{"name":"x"}]}]""")]
+    [InlineData("""[{"sessionId":"a","cursor":1,"triagedAt":"2026-10-20T12:00:00+00:00","signals":[{"name":"","weight":3}]}]""")]
+    public void ИспорченныйБаллИлиСигналы_Invalid_БезИсключения(string json)
+    {
+        WriteRaw(json);
+        WikiChatTriageStore.Get(_root).State.Should().Be(WikiTriageFileState.Invalid,
+            "известное поле испорченной формы — тот же класс повреждения файла, что испорченный курсор");
+    }
+
+    // ─── 3b. UpdateScoring (S6f): правит только балл, курсор и счётчик — нет ───
+
+    [Fact]
+    public void UpdateScoring_БаллОбновлен_КурсорСчётчикИЧужиеПоляНеТронуты()
+    {
+        // Существующая запись с продвинутым курсором и рядом «нечего добавить»: пересчёт
+        // балла не владеет ни тем, ни другим (их ведёт разбор).
+        WikiChatTriageStore.Upsert(_root, Entry("chat-a", 42, Hash, "nothing_new", "нет новых", 2)).Ok.Should().BeTrue();
+        var up = WikiChatTriageStore.UpdateScoring(_root, "chat-a", 17,
+            [new("decision_words", 8), new("human_turns", 9)], "triage", "балл 17: …");
+        up.Ok.Should().BeTrue(up.Reason);
+
+        var read = WikiChatTriageStore.Get(_root).Entries.Single();
+        read.Cursor.Should().Be(42, "пересчёт не двигает курсор разбора");
+        read.CursorHash.Should().Be(Hash);
+        read.NothingNewStreak.Should().Be(2, "счётчик ведёт исход разбора, не пересчёт");
+        read.Zone.Should().Be("triage");
+        read.Reason.Should().Be("балл 17: …");
+        read.Score.Should().Be(17);
+        read.Signals.Should().Equal(new List<WikiTriageSignal> { new("decision_words", 8), new("human_turns", 9) });
+        read.TriagedAt.Should().BeOnOrAfter(DateTimeOffset.UtcNow.AddMinutes(-1));
+    }
+
+    [Fact]
+    public void UpdateScoring_ЗаписиНет_НоваяСКурсоромНоль_ПлохаяФормыВхода_ОтказShape()
+    {
+        var up = WikiChatTriageStore.UpdateScoring(_root, "chat-new", 4, [], "gray", "балл 4");
+        up.Ok.Should().BeTrue(up.Reason);
+        var read = WikiChatTriageStore.Get(_root).Entries.Single();
+        read.Cursor.Should().Be(0);
+        read.Signals.Should().BeEmpty("пустой список сигналов — законен (балл без сигналов), null — то, что балла нет");
+
+        WikiChatTriageStore.UpdateScoring(_root, "", 1, null, null, null).Code.Should().Be(WikiChatTriageStore.CodeShape);
+        WikiChatTriageStore.UpdateScoring(_root, "chat-b", -3, null, null, null).Code.Should().Be(WikiChatTriageStore.CodeShape);
+        File.ReadAllText(TriageFile()).Should().NotContain("chat-b");
     }
 
     // ─── 4. Битый/пустой файл: Invalid, Get не бросает, Upsert отказ и не пишет (c3) ───
@@ -257,8 +332,9 @@ public class WikiChatTriageStoreTests : IDisposable
 
     private static WikiChatTriageEntry Entry(
         string id, int cursor = 0, string? cursorHash = null,
-        string? zone = null, string? reason = null, int streak = 0) =>
-        new(id, cursor, cursorHash, zone, reason, streak, default);
+        string? zone = null, string? reason = null, int streak = 0,
+        int? score = null, List<WikiTriageSignal>? signals = null) =>
+        new(id, cursor, cursorHash, zone, reason, streak, default, score, signals);
 
     private string TriageFile() => Path.Combine(_root, "keeper", "chat-triage.json");
 

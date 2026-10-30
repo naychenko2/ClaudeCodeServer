@@ -571,7 +571,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         string? featureId, string? role, string? verdict,
         List<string>? reviewOf, string? personaId, string ownerId,
         List<PlannedStep>? planSteps = null, bool enforceReworkReviewOf = false,
-        string? roleBefore = null, string? featureIdBefore = null)
+        string? roleBefore = null, string? featureIdBefore = null, bool checkReviewPrefix = true)
     {
         // role — только из списка TaskRoles
         if (role is not null && !TaskRoles.All.Contains(role))
@@ -685,7 +685,9 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
                     throw new InvalidOperationException(
                         $"Недопустимый kind «{step.Kind}» у шага плана «{step.StepRef}»: step|review|qa|final.");
                 // Ревью/проверка/финал не шаг плана: иначе раздувают знаменатель процента.
-                if (step.IsStep && ReviewLikeStepRef.IsMatch(step.StepRef))
+                // Префикс проверяем только у вновь присланных шагов (checkReviewPrefix): сохранённый
+                // легаси-план без kind не должен становиться нередактируемым и незакрываемым.
+                if (checkReviewPrefix && step.IsStep && ReviewLikeStepRef.IsMatch(step.StepRef))
                     throw new InvalidOperationException(
                         $"«{step.StepRef}»: ревью не шаг плана: укажи kind (review|qa|final) или переименуй.");
             }
@@ -919,7 +921,8 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         var enforceReworkReviewOf = req.ReviewOf is not null
             || (effRole == TaskRoles.Rework && task.Role != TaskRoles.Rework);
         ValidateFeatureFields(effFeatureId, effRole, effVerdict, effReviewOf, effPersonaId, task.OwnerId ?? "",
-            planSteps: effPlanSteps, enforceReworkReviewOf, roleBefore: task.Role, featureIdBefore: task.FeatureId);
+            planSteps: effPlanSteps, enforceReworkReviewOf, roleBefore: task.Role, featureIdBefore: task.FeatureId,
+            checkReviewPrefix: req.PlanSteps is not null);
         EnsureReturnReason(req.Verification);
 
         if (req.Title is not null) task.Title = req.Title;

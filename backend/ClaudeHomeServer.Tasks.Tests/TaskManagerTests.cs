@@ -1704,6 +1704,70 @@ public class TaskManagerTests : IDisposable
         plan.PlanSteps[1].Kind.Should().Be("review");
     }
 
+    // Легаси-план: R-B1 без kind, как в живых планах до B2. Create такое не пропускает,
+    // поэтому собираем план с kind, снимаем kind в сторе, сбрасываем на диск и поднимаем новый менеджер.
+    private (TaskManager Sut, TaskItem Plan) ЛегасиПлан()
+    {
+        var epic = CreateEpic("u");
+        var plan = _sut.Create(null, "u", new CreateTaskRequest("план",
+            FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps:
+            [
+                new PlannedStep { StepRef = "B1", Title = "t" },
+                new PlannedStep { StepRef = "R-B1", Title = "t", Kind = "review" },
+            ]));
+        plan.PlanSteps![1].Kind = null;
+        _sut.Flush();
+        var reloaded = new TaskManager(BuildConfig(_dir));
+        return (reloaded, reloaded.GetById(plan.Id)!);
+    }
+
+    [Fact]
+    public void ЛегасиПлан_ЗагрузкаСтарогоJsonБезKind_KindNull()
+    {
+        var (sut, plan) = ЛегасиПлан();
+        using var _ = sut;
+
+        plan.PlanSteps.Should().HaveCount(2);
+        plan.PlanSteps!.Should().OnlyContain(s => s.Kind == null);
+        plan.PlanSteps![1].StepRef.Should().Be("R-B1");
+    }
+
+    [Fact]
+    public void ЛегасиПлан_ОбновлениеЗаголовка_Проходит()
+    {
+        var (sut, plan) = ЛегасиПлан();
+        using var _ = sut;
+
+        var updated = sut.Update(plan.Id, new UpdateTaskRequest(Title: "новое имя"));
+
+        updated!.Title.Should().Be("новое имя");
+        updated.PlanSteps![1].StepRef.Should().Be("R-B1");
+    }
+
+    [Fact]
+    public void ЛегасиПлан_Закрытие_Проходит()
+    {
+        var (sut, plan) = ЛегасиПлан();
+        using var _ = sut;
+
+        var done = sut.Update(plan.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+
+        done!.Status.Should().Be(TaskItemStatus.Done);
+    }
+
+    [Fact]
+    public void ЛегасиПлан_НовыйPlanStepsСR_БезKind_Отказ()
+    {
+        var (sut, plan) = ЛегасиПлан();
+        using var _ = sut;
+
+        var act = () => sut.Update(plan.Id, new UpdateTaskRequest(
+            PlanSteps: [new PlannedStep { StepRef = "R-B2", Title = "t" }]));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*ревью не шаг плана*");
+    }
+
     [Fact]
     public void Create_PlanStepsСлишкомМного_Отказ()
     {

@@ -12,7 +12,11 @@
 // (WikiPage.cs:68): шапка → '# заголовок' → '## секции' → '[^sN]: [[цель]] — «цитата»'.
 // Фронт-разбор терпимый: страница с неразобранной шапкой или секциями остаётся видимой
 // (тот же принцип, что у каталога, lib/wiki.ts:40) — строгость бэка это его гейт записи,
-// не витрина. Рендер сносок в общем MarkdownViewer — S5e, здесь его не ждём: маркер-
+// не витрина. Нераспознанную шапку при этом человек видит: плашка вместо молчаливого
+// pageKey в заголовке, который иначе читается как настоящее имя страницы (хвост ревью
+// S5b). Порядок секций на странице — порядок файла: канонический пишет сам Хранитель
+// (ADR-035, решение 3), витрина его не переупорядочивает. Рендер сносок в общем
+// MarkdownViewer — S5e, здесь его не ждём: маркер-
 // надстрочник с цитатой в title и блок «Источники» из определений сносок.
 //
 // Открытие страницы — из каталога (WikiTab, одна точка подключения); открытие по ссылкам
@@ -29,7 +33,7 @@ import { Notice } from '../../../components/ui/Notice';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { useIsMobile } from '../../../lib/breakpoints';
 import { WikiError, adoptWikiPage, useWikiPage, type WikiSectionDto } from '../../../lib/wiki';
-import { PAGE_STATUS, PAGE_TYPE, sectionPrefix, wikiErrorText } from './WikiTab';
+import { PAGE_STATUS, PAGE_TYPE, sectionPrefix, wikiErrorText } from './wikiLabels';
 
 // ─── Разбор страницы (зеркало бэкового WikiPage.Parse, терпимый) ───
 
@@ -53,6 +57,9 @@ export interface ParsedWikiPage {
   footnotes: { id: string; target: string; quote: string }[];
   // Строки вне секций — для бэка это ошибка формата, для витрины — текст страницы
   strayLines: string[];
+  // Шапка разобрана по минимуму бэковой валидности: ограда закрыта и в ней есть 'type'
+  // из семи (WikiFrontmatter.cs:125 — без type модель null). Остальное витрина терпит
+  frontmatterOk: boolean;
 }
 
 // [a, b] — та же списочная форма, что у бэка (WikiFrontmatter.ParseList); прочее — пусто
@@ -66,7 +73,7 @@ export function parseWikiPage(text: string): ParsedWikiPage {
   const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
   const page: ParsedWikiPage = {
     type: null, kind: null, status: null, summary: null, updated: null, aliases: [],
-    title: null, sections: [], footnotes: [], strayLines: [],
+    title: null, sections: [], footnotes: [], strayLines: [], frontmatterOk: false,
   };
   let i = 0;
   // Шапка: только известные ключи (type/kind/status/summary/updated/aliases);
@@ -87,6 +94,9 @@ export function parseWikiPage(text: string): ParsedWikiPage {
         else if (key === 'aliases') page.aliases = parseListValue(value);
       }
       i = close + 1;
+      // «Разобрана» — по минимуму бэка: тип из семи (WikiFrontmatter.cs:125); прочие поля
+      // витрина терпит. Неразобранная — плашка на экране, а не молчаливый pageKey
+      page.frontmatterOk = page.type !== null && page.type in PAGE_TYPE;
     }
   }
   let current: { name: string; lines: string[] } | null = null;
@@ -169,7 +179,7 @@ function SectionBlock({ name, lines, quotes }: {
       {lines.length ? (
         <ul style={{ margin: `${SP.sm}px 0 0`, paddingLeft: SP.lg, display: 'flex', flexDirection: 'column', gap: SP.sm }}>
           {lines.map((ln, i) => (
-            <li key={i} style={{ fontSize: FS.md, color: C.textPrimary, lineHeight: 1.5 }}>
+            <li key={i} style={{ fontSize: FS.md, color: C.textPrimary, lineHeight: 1.5, overflowWrap: 'anywhere' }}>
               {renderLine(ln.replace(BULLET_RX, ''), quotes, `s${i}`)}
             </li>
           ))}
@@ -311,6 +321,17 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
         </div>
       ) : null}
 
+      {/* Шапка не прочитана — это видно: ниже в заголовке имя файла (фолбэк h2), а не
+          молчаливое «что-то похоже на страницу» (хвост ревью S5b) */}
+      {!page.frontmatterOk && (
+        <Notice
+          tone="warning"
+          icon={AlertTriangle}
+          title="Шапка страницы не разобрана — показано имя файла"
+          style={{ marginTop: SP.md }}
+        />
+      )}
+
       {/* Кикер: префикс раздела (тот же форматтер, что у каталога) + тип + статус */}
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap', marginTop: SP.md }}>
         <span style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textMuted }}>
@@ -372,7 +393,7 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
       </div>
 
       {page.strayLines.length > 0 && (
-        <div style={{ marginTop: SP.md, fontSize: FS.md, color: C.textPrimary, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+        <div style={{ marginTop: SP.md, fontSize: FS.md, color: C.textPrimary, lineHeight: 1.5, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
           {page.strayLines.join('\n')}
         </div>
       )}

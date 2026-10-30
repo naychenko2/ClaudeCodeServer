@@ -16,7 +16,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { AlertTriangle, BookOpen, Check, ChevronLeft, ChevronRight, Folder, Lock, Monitor, Shield, Trash2 } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../../lib/design';
-import { Badge, type BadgeTone } from '../../../components/ui/Badge';
+import { Badge } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
 import { ConfirmDialog } from '../../../components/ui/ConfirmDialog';
 import { EmptyState } from '../../../components/ui/EmptyState';
@@ -31,7 +31,6 @@ import {
   deleteWikiSection,
   groupSectionsByKind,
   initializeWiki,
-  parseSectionKey,
   loadWikiCatalog,
   loadWikiPage,
   useWikiCatalog,
@@ -43,6 +42,7 @@ import {
 import { WikiPageView } from './WikiPageView';
 import { WikiSectionTree } from './WikiSectionTree';
 import { WIKI_SUBTABS, wikiSubTabIcon, WikiSubTabStub, type WikiSubTabId } from './wikiTabs';
+import { PAGE_STATUS, PAGE_TYPE, sectionPrefix, wikiErrorText } from './wikiLabels';
 
 // Колонка дерева на десктопе; на мобиле дерева в каталоге нет вовсе — оно отдельный
 // экран «Разделы» (кнопка «Раздел ▸»)
@@ -52,51 +52,12 @@ const SECTION_SWITCH_H = 44;
 
 // ─── Словари подписей ───
 
-// Статусы страницы — их считает код, не модель (ADR-035 §3, WikiFrontmatter.StatusValues).
-// Экспорт: словарь общий для каталога и страницы (WikiPageView), один на всю фичу
-export const PAGE_STATUS: Record<string, { tone: BadgeTone; text: string; title: string }> = {
-  active: { tone: 'success', text: 'актуальна', title: 'Утверждения подтверждены источниками, противоречий нет' },
-  stale: { tone: 'neutral', text: 'устарела', title: 'Источник новее опроверг утверждение или страница не менялась 90 дней' },
-  disputed: { tone: 'warning', text: 'спорная', title: 'Есть открытые противоречия — см. раздел на странице' },
-  drift: { tone: 'danger', text: 'дрейф', title: 'Файл изменён мимо Хранителя' },
-};
-
-// Типы страниц — WikiFrontmatter.TypeValues. Экспорт — общий для каталога и страницы
-export const PAGE_TYPE: Record<string, string> = {
-  overview: 'Обзор', topic: 'Тема', entity: 'Сущность', concept: 'Понятие',
-  decision: 'Решение', chronicle: 'Хроника', source: 'Источник',
-};
-
-// Отказы контракта (WikiErrorCode, S2f) — понятным русским текстом; 401/404 приходят без
-// тела и без кода, их отличаем по статусу. Формулировки — черновые (тексты фичи ведёт Софья).
-export function wikiErrorText(e: WikiError): string {
-  switch (e.code) {
-    case 'wiki_foreign': return 'Нет доступа';
-    case 'wiki_section_key': return 'Раздел не найден';
-    case 'wiki_page_key': return 'Страница не найдена';
-    case 'wiki_project_missing': return 'Проект не найден';
-    case 'wiki_section_off': return 'Вики локальных проектов — отдельной фичей';
-    case 'wiki_sphere_reserved': return 'Раздел сферы — следующая фича';
-    case 'wiki_refused': return 'Правку нельзя применить к этому состоянию страницы';
-    case 'wiki_drift': return 'Страницу изменили мимо Хранителя — сначала разберите дрейф';
-    case 'wiki_not_orphan': return 'Удалить можно только раздел удалённого проекта';
-  }
-  if (e.status === 401 || e.status === 403) return 'Нет доступа';
-  if (e.status === 404) return 'Не найдено';
-  if (e.status === 409) return 'Действие отказано';
-  return 'Не удалось выполнить действие';
-}
-
-// Префикс раздела — один форматтер на всю фичу (тот же вид, что у бэка в выдаче notes_*):
-// «Проекты / AI Home», «Сферы / Банк», «Общее», «Личное»
-export function sectionPrefix(s: WikiSectionDto): string {
-  const ref = parseSectionKey(s.key);
-  if (!ref) return '—';
-  if (ref.kind === 'common') return 'Общее';
-  if (ref.kind === 'personal') return 'Личное';
-  if (ref.kind === 'sphere') return `Сферы / ${s.name ?? ''}`;
-  return `Проекты / ${s.name ?? '—'}`;
-}
+// Словари и форматтер — в wikiLabels.ts: их читают каталог, страница, «Входящие» и
+// карточка пакета, а прежний импорт страницы отсюда давал цикл WikiTab ↔ WikiPageView
+// (хвост ревью S5b). Re-export ниже — фасад прежних путей для «Входящих» и карточки
+// пакета (WikiInbox, WikiPackageView): их перевод на './wikiLabels' вне размера этой
+// правки; цикла фасад не создаёт — wikiLabels не импортирует ничего из фичи.
+export { PAGE_STATUS, PAGE_TYPE, sectionPrefix, wikiErrorText } from './wikiLabels';
 
 // Что открыть, когда раздел ещё не выбран: живой проект, иначе «Общее», иначе «Личное»;
 // локальный и сирота — в конце (их экраны — не каталог). Разделы сфер не выбираются.

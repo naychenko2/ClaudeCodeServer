@@ -163,7 +163,7 @@ public class SessionMessagesController(SessionManager sessions, SessionMessaging
         // Ход и его очередь — право RunTurn, не владение (S1-7); редактору его откроет S2a-10
         if (sessions.DenyTurn(sessionId, UserId) is { } denied) return denied;
         var outcome = await messaging.SendAsync(UserId, sessionId, req.Text,
-            caller, sender, agentDepth, req.Wait, req.TimeoutSec);
+            caller, sender, agentDepth, req.Wait, req.TimeoutSec, actorUserId: UserId);
         return outcome switch
         {
             SessionMessagingService.SendOutcome.NotFound => NotFound(),

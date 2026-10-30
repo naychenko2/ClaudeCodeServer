@@ -18,7 +18,8 @@ using ClaudeHomeServer.Services.Turn;
 namespace ClaudeHomeServer.Services;
 
 public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
-    ITeamSessionDirectory, ITeamHistoryStore, ITeamRunState, ITeamTurnIntake
+    ITeamSessionDirectory, ITeamHistoryStore, ITeamRunState, ITeamTurnIntake,
+    Access.ITurnActorRegistry, Access.ITurnFrameSource
 {
     private class SessionEntry
     {
@@ -207,6 +208,11 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // Под PendingLock: читают его потоки MCP-вызовов.
         public TurnDelegationState RunDelegation;
         public TurnDelegationState SubmitDelegation;
+        // Актор хода (S2a-1): 1:1 с делегированием, те же замок и правила жизни. SubmitActor — актор
+        // идущей подачи, RunActor — «липкий» актор прогона, пока живы его фоновые агенты. null —
+        // не записан; UnknownActor — подача без инициатора (fail-closed). Под PendingLock.
+        public string? SubmitActor;
+        public string? RunActor;
         // Прогон, в котором идёт сворачивание контекста (/compact). Обычный ход, но обёртка
         // фолбэка его не оркеструет, а exited убитой компакции глотает — поэтому прерывать
         // компакцию нельзя (чат залип бы в Working навсегда). Хранится идентификатор прогона,
@@ -353,7 +359,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         string Id, string Text, string? SenderPersonaId, string? SenderOrigin,
         int AgentDepth, DateTime EnqueuedAt, bool Silent = false, bool SuppressTasksExecute = false,
         string? SenderChatName = null, PendingKind Kind = PendingKind.Agent,
-        IReadOnlyList<string>? AttachedPaths = null, string? Mode = null, string? StaffNote = null);
+        IReadOnlyList<string>? AttachedPaths = null, string? Mode = null, string? StaffNote = null,
+        string? SenderUserId = null);
 
     // Вид ожидающего сообщения. Report отделён от Agent: при активном цикле «до готово» Report
     // будит ждущий цикл (как User), а обычные Agent-сообщения посторонних агентов продолжают
@@ -3710,6 +3717,73 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         }
     }
 
+    // Актор хода (S2a-1). Пишется ТОЛЬКО в двух точках подачи (SendDirectAsync, SendMessageAndWaitAsync),
+    // вызывающие передают его параметром senderUserId (по образцу senderPersonaId): запись в самих
+    // вызывающих оставила бы устаревшего актора на каждом пропуске. Запись безусловная: каждая подача
+    // перезаписывает оба поля, устаревший актор её не переживает; под PendingLock (читают потоки MCP-вызовов). Подача без инициатора
+    // (null) у внутренних ходов (дренаж, WorkLoop, nudge, resume) наследует «липкого» актора прогона,
+    // пока живы его фоновые агенты; у остальных пишется UnknownActor (fail-closed).
+    internal const string UnknownActor = "";
+
+    // Ранг сужения: неизвестный уже арендатора, арендатор — самый широкий. Тот, кто уже, выигрывает.
+    private static int ActorRank(string? actor, string? tenantOwnerId) =>
+        actor is null ? 3
+        : actor == UnknownActor ? 0
+        : actor == tenantOwnerId ? 2
+        : 1;
+
+    private static string? NarrowerActor(string? prev, string? next, string? tenantOwnerId) =>
+        prev is null ? next
+        : next is null ? prev
+        : ActorRank(next, tenantOwnerId) < ActorRank(prev, tenantOwnerId) ? next : prev;
+
+    private void NoteTurnActor(SessionEntry entry, string? actor, bool fromHuman)
+    {
+        var tenant = ResolveOwnerId(entry.Info);
+        var keep = !fromHuman && RunAgentsAlive(entry.Process);
+        lock (entry.PendingLock)
+        {
+            var prev = keep ? entry.RunActor : null;
+            var effective = !string.IsNullOrEmpty(actor) ? actor
+                : !fromHuman && prev is not null ? prev
+                : UnknownActor;
+            entry.SubmitActor = effective;
+            entry.RunActor = fromHuman ? effective : NarrowerActor(prev, effective, tenant);
+        }
+    }
+
+    // Актор хода чата: владение — через GetOwned (как у GetActiveTurnDelegation). null — неизвестен.
+    public string? GetTurnActor(string sessionId, string ownerId)
+    {
+        if (GetOwned(sessionId, ownerId) is null || !_sessions.TryGetValue(sessionId, out var entry))
+            return null;
+        var inFlight = entry.Info.Status is SessionStatus.Working or SessionStatus.Waiting;
+        var tenant = ResolveOwnerId(entry.Info);
+        string? merged;
+        lock (entry.PendingLock)
+        {
+            if (!inFlight && entry.RunActor is not null && !RunAgentsAlive(entry.Process))
+                entry.RunActor = entry.SubmitActor = null;
+            merged = NarrowerActor(inFlight ? entry.SubmitActor : null, entry.RunActor, tenant);
+        }
+        return string.IsNullOrEmpty(merged) ? null : merged;
+    }
+
+    // Вердикт рамки хода по чату. Нет чата / чужой / проект исчез — Narrow (fail-closed), чат вне
+    // проекта — Wide (личное пространство и так его).
+    public Access.TurnFrameKind GetTurnFrame(string? sessionId, string ownerId)
+    {
+        if (string.IsNullOrEmpty(sessionId) || GetOwned(sessionId, ownerId) is not { } session)
+            return Access.TurnFrameKind.Narrow;
+        Project? project = null;
+        if (session.ProjectId is not null && (project = _projects.GetById(session.ProjectId)) is null)
+            return Access.TurnFrameKind.Narrow;
+        return Access.TurnFrame.Resolve(project, session, ResolveOwnerId(session), GetTurnActor(sessionId, ownerId));
+    }
+
+    string? Access.ITurnActorRegistry.Actor(string sessionId, string ownerId) => GetTurnActor(sessionId, ownerId);
+    Access.TurnFrameKind Access.ITurnFrameSource.Frame(string? sessionId, string ownerId) => GetTurnFrame(sessionId, ownerId);
+
     // Активен ли цикл «до готово» в чате-вызывателе: гейт анти-рекурсии (DelegatedTurnGate.Decide)
     // спрашивает это, чтобы разрешить ход-реакцию на доклад при активном цикле (единственная точка,
     // где координатор принимает результат и запускает следующего). Владение — тот же путь, что в
@@ -5001,7 +5075,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // дописывает уточнение, а не просит остановиться. Для «перебить сейчас» есть явные
     // действия: кнопка «Стоп» и PreemptForPending (кнопка на карточке очереди).
     // Возвращаемый исход (Started/Queued) говорит клиенту, рисовать ли оптимистичный баллон.
-    public async Task<SendUserOutcome> SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null, bool suppressTasksExecute = false, string? senderOrigin = null, string? senderConnectionId = null, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown, int agentDepth = 0)
+    public async Task<SendUserOutcome> SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null, bool suppressTasksExecute = false, string? senderOrigin = null, string? senderConnectionId = null, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown, int agentDepth = 0, string? senderUserId = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
@@ -5068,7 +5142,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 // иначе форсаж dispatchNow и разбор по концу хода упёрлись бы в QueueFrozen
                 if (entry.QueueFrozen) { entry.QueueFrozen = false; PersistPending(entry); }
                 var enqueued = await EnqueuePendingAsync(sessionId, entry, text, senderPersonaId, senderOrigin,
-                    agentDepth: 0, kind: PendingKind.User, attachedPaths: attachedPaths, mode: mode);
+                    agentDepth: 0, kind: PendingKind.User, attachedPaths: attachedPaths, mode: mode,
+                    senderUserId: senderUserId);
                 if (enqueued is SendAndWaitResult.QueueFull f)
                     throw new InvalidOperationException(
                         $"В очереди чата уже {f.Limit} сообщений — дождитесь, пока она разберётся");
@@ -5120,7 +5195,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     // Потолок не пробивается: голова изъята до добавления
                     entry.Pending.Add(new QueuedMessage(Guid.NewGuid().ToString("N"), text, senderPersonaId,
                         senderOrigin, AgentDepth: 0, DateTime.UtcNow, Kind: PendingKind.User,
-                        AttachedPaths: attachedPaths, Mode: mode));
+                        AttachedPaths: attachedPaths, Mode: mode, SenderUserId: senderUserId));
                 }
             }
             if (head is not null)
@@ -5132,7 +5207,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         }
 
         await SendDirectAsync(sessionId, entry, text, attachedPaths, mode, systemDirective, auto,
-            senderPersonaId, suppressTasksExecute, senderOrigin, senderConnectionId: senderConnectionId, staffNote: staffNote, cause: cause, agentDepth: agentDepth);
+            senderPersonaId, suppressTasksExecute, senderOrigin, senderConnectionId: senderConnectionId, staffNote: staffNote, cause: cause, agentDepth: agentDepth,
+            senderUserId: senderUserId);
         return SendUserOutcome.Started;
     }
 
@@ -5156,7 +5232,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         IReadOnlyList<string> attachedPaths, string? mode, bool systemDirective, bool auto,
         string? senderPersonaId, bool suppressTasksExecute, string? senderOrigin, string? senderConnectionId = null,
         bool fromQueue = false, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown,
-        int agentDepth = 0)
+        int agentDepth = 0, string? senderUserId = null)
     {
         // Проект вышел из сферы персоны чата: ход не стартует, персону молча не подменяем
         if (entry.Info.PersonaId is { } zonePersonaId && ResolveOwnerId(entry.Info) is { } zoneOwnerId
@@ -5344,6 +5420,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (!systemDirective)
             entry.Info.LastMessage = ChatPreview(text);
         NoteRunDelegation(entry, agentDepth, suppressTasksExecute, fromHuman: !auto && !systemDirective);
+        NoteTurnActor(entry, senderUserId, fromHuman: !auto && !systemDirective && agentDepth == 0 && !suppressTasksExecute);
         // Диспетчеризация: локальный голосовой ход идёт мимо CLI (fire-and-forget — как
         // CLI-ветка, где SendMessageAsync лишь ставит ход в процесс; ответ приходит
         // событиями через OnMessageAsync). Реплика уже в аккумуляторе (OnUserMessage выше).
@@ -5667,7 +5744,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public async Task<SendAndWaitResult> SendMessageAndWaitAsync(string sessionId, string text,
         TimeSpan timeout, int agentDepth = 0, string? senderPersonaId = null,
         string? senderOrigin = null, string? senderChatName = null, bool preempt = true,
-        bool systemDirective = false)
+        bool systemDirective = false, string? senderUserId = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
@@ -5682,7 +5759,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (status is SessionStatus.Working or SessionStatus.Waiting)
         {
             var queued = await EnqueuePendingAsync(sessionId, entry, text, senderPersonaId, senderOrigin, agentDepth,
-                senderChatName: senderChatName);
+                senderChatName: senderChatName, senderUserId: senderUserId);
             // Агентское сообщение по умолчанию (preempt=true) прерывает текущий ход
             // (доставится сразу по его концу), но НЕ рушит цикл «до готово» и штаб
             // «Командной реализации» — там доклад ждёт штатного конца хода, как раньше.
@@ -5737,7 +5814,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var tcs = new TaskCompletionSource<TurnResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         if (Interlocked.CompareExchange(ref entry.TurnWaiter, tcs, null) is not null)
             return await EnqueuePendingAsync(sessionId, entry, text, senderPersonaId, senderOrigin, agentDepth,
-                senderChatName: senderChatName);
+                senderChatName: senderChatName, senderUserId: senderUserId);
         entry.TurnWaiterBaseline = entry.Accumulator?.GetAll().Count ?? 0;
 
         await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
@@ -5749,6 +5826,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         // Превью чата — сообщением агента: адаптер его больше не выставляет (см. ChatPreview)
         entry.Info.LastMessage = ChatPreview(text);
         NoteRunDelegation(entry, agentDepth, suppressTasksExecute: false, fromHuman: false);
+        NoteTurnActor(entry, senderUserId, fromHuman: false);
         await entry.Process!.SendMessageAsync(text, null, agentDepth);
 
         if (timeout <= TimeSpan.Zero) return new SendAndWaitResult.Running();
@@ -5768,7 +5846,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         string text, string? senderPersonaId, string? senderOrigin, int agentDepth,
         bool silent = false, bool suppressTasksExecute = false, string? senderChatName = null,
         PendingKind kind = PendingKind.Agent, IReadOnlyList<string>? attachedPaths = null,
-        string? mode = null, string? staffNote = null)
+        string? mode = null, string? staffNote = null, string? senderUserId = null)
     {
         bool dispatchNow;
         int position;
@@ -5782,7 +5860,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
             entry.Pending.Add(new QueuedMessage(Guid.NewGuid().ToString("N"), text, senderPersonaId,
                 senderOrigin, agentDepth, DateTime.UtcNow, silent, suppressTasksExecute, senderChatName,
-                kind, attachedPaths, mode, staffNote));
+                kind, attachedPaths, mode, staffNote, senderUserId));
             position = entry.Pending.Count;
 
             // Защита от гонки TOCTOU: статус занятости читается БЕЗ лока выше (в SendMessageAsync/
@@ -5859,7 +5937,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public async Task<bool> SendOrEnqueueAsync(string sessionId, string text,
         string? senderPersonaId = null, string? senderOrigin = null,
         bool silent = false, bool suppressTasksExecute = false, string? staffNote = null,
-        PendingKind kind = PendingKind.Agent)
+        PendingKind kind = PendingKind.Agent, string? senderUserId = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
@@ -5868,13 +5946,13 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         {
             await EnqueuePendingAsync(sessionId, entry, text, senderPersonaId, senderOrigin,
                 agentDepth: 0, silent, suppressTasksExecute, senderChatName: null, kind: kind,
-                staffNote: staffNote);
+                staffNote: staffNote, senderUserId: senderUserId);
             return true;
         }
 
         await SendMessageAsync(sessionId, text, [], auto: true, senderPersonaId: senderPersonaId,
             suppressTasksExecute: suppressTasksExecute, senderOrigin: senderOrigin, staffNote: staffNote,
-            cause: DeliveryCause.Direct);
+            cause: DeliveryCause.Direct, senderUserId: senderUserId);
         return false;
     }
 
@@ -6267,7 +6345,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 await SendDirectAsync(sessionId, entry, next.Text,
                     next.AttachedPaths ?? [], mode: next.Mode, systemDirective: false, auto: false,
                     senderPersonaId: next.SenderPersonaId, suppressTasksExecute: next.SuppressTasksExecute,
-                    senderOrigin: next.SenderOrigin, fromQueue: true, cause: DeliveryCause.QueueUser);
+                    senderOrigin: next.SenderOrigin, fromQueue: true, cause: DeliveryCause.QueueUser,
+                    senderUserId: next.SenderUserId);
             else
                 // Глубина сообщения едет в ход: агентское из очереди так же делегированное,
                 // как поданное сразу (иначе chats_send, отстоявший очередь, получил бы
@@ -6275,7 +6354,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 await SendMessageAsync(sessionId, next.Text, [], auto: true,
                     senderPersonaId: next.SenderPersonaId, senderOrigin: next.SenderOrigin,
                     suppressTasksExecute: next.SuppressTasksExecute, staffNote: next.StaffNote,
-                    cause: DeliveryCause.QueueAgent, agentDepth: next.AgentDepth);
+                    cause: DeliveryCause.QueueAgent, agentDepth: next.AgentDepth,
+                    senderUserId: next.SenderUserId);
             return true;
         }
         catch (Exception ex)

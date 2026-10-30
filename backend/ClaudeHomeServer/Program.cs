@@ -779,6 +779,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Media.IMediaEvents, Clau
 // ни предикат на регистрации, ни пост-хок удаление дескрипторов здесь больше не нужны.
 builder.Services.AddPromptSectionContributors();
 builder.Services.AddSingleton<SessionManager>();
+// Актор и рамка хода (S2a-1): читает только шов, пишет ядро сессий в двух точках подачи
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Access.ITurnActorRegistry>(sp => sp.GetRequiredService<SessionManager>());
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Access.ITurnFrameSource>(sp => sp.GetRequiredService<SessionManager>());
 // Серверные сторожа чатов: стор + цикл опроса. Запуск poll-команд — через
 // ILauncherFactory (среда владельца); цикл — hosted, в Testing-среде не поднимается
 // (см. AddHosted), юниты гоняют TickAsync напрямую

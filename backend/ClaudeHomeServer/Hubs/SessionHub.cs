@@ -245,7 +245,8 @@ public class SessionHub : Hub
         // остановленный человеком — так же, как его помечает клиент в живой ленте.
         // senderConnectionId: реплику получают остальные устройства, а отправитель её уже показал.
         var outcome = await _sessions.SendMessageAsync(sessionId, text, attachedPaths ?? [], mode, auto: auto,
-            senderConnectionId: Context.ConnectionId, cause: Services.SessionManager.DeliveryCause.User);
+            senderConnectionId: Context.ConnectionId, cause: Services.SessionManager.DeliveryCause.User,
+            senderUserId: UserId);
         return outcome switch
         {
             Services.SessionManager.SendUserOutcome.Started => "started",

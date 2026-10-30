@@ -226,13 +226,16 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets,
 
     // «Чей это id и знаю ли я этого владельца»: запись ищется по чужим реестрам, и если
     // она найдена у владельца, с которым вызывающий состоит в общем проекте, — это участник.
-    // Id записи — GUID двух других владельцев практически исключены, поэтому поиск
-    // останавливается на первом совпадении.
+    // Своей проверки «не себя ли»: в эту ветку попали только потому, что в реестре
+    // вызывающего записи нет (SetSharedWithMembers вернул null), — Get по его же owner
+    // пропустит её сам. Отдельное инлайн-сравнение владельца с вызывающим здесь не нужен
+    // (OwnerIdInlineGuardTests). Id записи — GUID, двух владельцев практически исключены,
+    // поэтому поиск останавливается на первом совпадении.
     private bool IsMemberOfAnotherOwner(string id)
     {
         foreach (var owner in registry.GetAllOwners())
         {
-            if (owner == UserId || registry.Get(owner, id) is null) continue;
+            if (registry.Get(owner, id) is null) continue;
             return projects.GetByOwner(owner).Any(p =>
                 p.Members is { Count: > 0 } && p.Members.Any(m => m.UserId == UserId));
         }

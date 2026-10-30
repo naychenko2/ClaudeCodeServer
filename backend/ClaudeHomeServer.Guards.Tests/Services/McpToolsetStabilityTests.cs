@@ -1260,6 +1260,56 @@ public class McpToolsetStabilityTests
         }
     }
 
+    /// <summary>
+    /// Состав инструментов вики в сервере заметок (S6c, ADR-035 §5): ровно четыре, имена и
+    /// порядок — часть отпечатка tools/list. Ни одного инструмента принятия или отката пакета,
+    /// повышения страницы, включения класса или смены политики: их нет ни у агента, ни у
+    /// персоны, ни у исполнителя — сторож здесь. И состав не читает состояние вики: ToolsFor
+    /// не спрашивает ни признак заведённости (_schema.md), ни лимит открытых пакетов, ни
+    /// фич-флаг — не заведённая вики даёт отказ на вызове (тот же порядок, что у выключенного
+    /// флага image-editor, mcp-servers.md «Инвариант: состав инструментов не зависит от хода»).
+    /// </summary>
+    [SkippableFact]
+    public void СоставИнструментовВики_Постоянен_ИБезПринятияПакета()
+    {
+        var wiki = ClaudeHomeServer.Services.Mcp.Http.NotesToolset.WikiTools;
+        var names = wiki.Select(t => t.Name).ToList();
+
+        // Ровно четыре, в этом порядке: пятый инструмент (например wiki_accept) или
+        // переименование краснеют здесь же.
+        names.Should().Equal("wiki_ingest", "wiki_add_fact", "wiki_query", "wiki_status");
+
+        // Ни одной операции человека или кода под любым из этих имён (ADR-035 §5 и §6).
+        foreach (var forbidden in new[] { "accept", "retract", "revert", "adopt", "promote", "policy", "class" })
+            names.Should().NotContain(n => n.Contains(forbidden, StringComparison.OrdinalIgnoreCase),
+                $"«{forbidden}» — решение человека или политика Хранителя: инструмента для этого быть не должно");
+
+        var path = FindSourceIn("ClaudeHomeServer.Notes", "Services", "Mcp", "NotesToolset.cs");
+        Skip.If(path is null, "NotesToolset.cs не найден (сборка вне дерева репозитория)");
+        var source = File.ReadAllText(path!).Replace("\r\n", "\n");
+        var start = source.IndexOf("public IReadOnlyList<McpToolSchema> ToolsFor(", StringComparison.Ordinal);
+        start.Should().BeGreaterThan(0, "ToolsFor сервера заметок обязан существовать");
+        var end = source.IndexOf("\n    public async Task<McpToolCallResult> CallAsync", start, StringComparison.Ordinal);
+        end.Should().BeGreaterThan(start, "за ToolsFor обязан идти CallAsync");
+        var toolsFor = string.Join('\n', source[start..end].Split('\n')
+            .Where(l => !l.TrimStart().StartsWith("//", StringComparison.Ordinal)));
+
+        toolsFor.Should().Contain("WikiTools", "инструменты вики — часть постоянного состава сервера заметок");
+        // Состояние вики и хода в составе не участвует: оно даёт отказ на вызове, а не мерцание
+        // tools/list между ходами (перезапуск процесса CLI со всеми MCP-серверами).
+        foreach (var forbidden in new[] { "IsInitialized", "CountOpen", "FeatureFlag", "_currentTurn", "GetActiveTurnDelegation" })
+            toolsFor.Should().NotContain(forbidden,
+                $"«{forbidden}» в теле ToolsFor: состояние вики или хода не меняет набор инструментов");
+
+        // Лимит стека MCP на новые схемы — та же граница, что у Фича_СхемаToolsList_…:
+        // суммарное tool-level description и сумма описаний параметров на инструмент.
+        wiki.Sum(t => t.Description.Length).Should().BeLessOrEqualTo(1950,
+            "суммарные tool-level description инструментов вики ушли за лимит стека MCP");
+        foreach (var tool in wiki)
+            SumPropertyDescriptions(tool).Should().BeLessOrEqualTo(1950,
+                $"{tool.Name}: сумма описаний параметров ушла за лимит стека MCP");
+    }
+
     // Минор 1: сумма длин description всех ПАРАМЕТРОВ (inputSchema.properties.*.description)
     // одного инструмента. Граница стека MCP (~1950) — на уровне параметра, а не только на
     // tool-level description; хелпер — единая точка, которую сверяют и основной тест, и провокация.

@@ -1,11 +1,15 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Notes.Wiki;
+using ClaudeHomeServer.Services.Spheres;
 
 namespace ClaudeHomeServer.Services.Mcp.Http;
 
@@ -20,11 +24,15 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 /// (источник по умолчанию для создания) и персону. Сессия обязана принадлежать владельцу
 /// токена — чужая это отказ.
 ///
-/// ИНВАРИАНТ состава: ядро заметок (7 инструментов) — всегда; модуль комментариев и редких
-/// операций (12 инструментов) — по живой привязке персоны notes-annotations (решение ПО
-/// ПЕРСОНЕ, не по ходу — формула та же, что у SessionManager.BuildNotesContext). Право на
-/// notes-сервер вообще (привязка tool:notes) проверяется на каждый вызов. Сторож парности —
-/// NotesToolsetParityTests (index.js заморожен).
+/// ИНВАРИАНТ состава: ядро заметок (7 инструментов) — всегда; модуль вики (4 инструмента,
+/// S6c) — всегда при включённой вертикали: не заведённая вика, пустой список или выключенный
+/// флаг дают ОТКАЗ НА ВЫЗОВЕ, а не исчезновение инструмента (тот же порядок, что у выключенного
+/// флага image-editor, mcp-servers.md «Инвариант: состав инструментов не зависит от хода»);
+/// модуль комментариев и редких операций (12 инструментов) — по живой привязке персоны
+/// notes-annotations (решение ПО ПЕРСОНЕ, не по ходу — формула та же, что у
+/// SessionManager.BuildNotesContext). Право на notes-сервер вообще (привязка tool:notes)
+/// проверяется на каждый вызов. Сторож парности — NotesToolsetParityTests (index.js заморожен;
+/// в stdio-ветке отката инструментов вики нет — поэтому WikiTools отдельным списком).
 /// </summary>
 public sealed class NotesToolset(
     IPersonaResolver personas,
@@ -38,8 +46,26 @@ public sealed class NotesToolset(
     // выключенной подсистеме — деградация ниже завязана на единственную проверку notes.
     NotesKnowledgeService? kb = null,
     NotesAiService? ai = null,
-    NoteTaskSyncService? noteTasks = null) : IMcpParameterizedToolset
+    NoteTaskSyncService? noteTasks = null,
+    // Горизонталь вики (S6c): те же синглтоны той же вертикали (NotesSubsystem.Register:
+    // WikiIngestService, WikiSourceCapture, WikiChatIngestService) и общие швы видимости
+    // (ISphereDirectory/IProjectManager — их читает только WikiVisibility.SectionsFor).
+    // Опциональность — та же, что у заметок: тестовая обвязка без вики обязана собираться.
+    IConfiguration? config = null,
+    WikiIngestService? wikiIngest = null,
+    WikiSourceCapture? wikiCapture = null,
+    WikiChatIngestService? wikiChat = null,
+    ISessionDirectory? sessionsDir = null,
+    ISphereDirectory? spheres = null,
+    IProjectManager? projects = null) : IMcpParameterizedToolset
 {
+    // Корень data — для признака заведённой вики (WikiPaths) и корня чтения её разделов.
+    // Та же формула, что у всех сервисов вертикали (DataPath указывает на projects.json).
+    private readonly string? _dataDir = config is null
+        ? null
+        : Path.GetDirectoryName(Path.GetFullPath(config["DataPath"]
+            ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json")))!;
+
     // Имя сервера = первый сегмент маршрута POST /mcp/notes/{sessionId}
     public const string ServerName = McpEndpoints.NotesName;
 
@@ -57,7 +83,10 @@ public sealed class NotesToolset(
         notes is null || kb is null || ai is null || noteTasks is null
             ? []
             : TryResolve(context, out _, out _, out var annotations, out _)
-                ? annotations ? [.. CoreTools, .. AnnotationTools] : CoreTools
+                // Состав не читает состояние вики (ни _schema.md, ни числа пакетов, ни флага):
+                // ядро + WikiTools — всегда, модуль комментариев — по живой привязке персоны.
+                ? annotations ? [.. CoreTools, .. WikiTools, .. AnnotationTools]
+                : [.. CoreTools, .. WikiTools]
                 : [];
 
     public async Task<McpToolCallResult> CallAsync(string tool, JsonObject arguments,
@@ -354,6 +383,22 @@ public sealed class NotesToolset(
                 catch (HttpRequestException ex) { return Deny($"Dify недоступен: {ex.Message}"); }
             }
 
+            // ─── Вики (S6c): заявка, факт, вопрос, состояние. Ни один не пишет файлы
+            // напрямую: запись — захват (S6h) и очередь разбора (S6b-3/S6e-2), чтение —
+            // каталог раздела через внутренний читатель Хранителя. ───
+
+            case "wiki_ingest":
+                return await WikiIngestCallAsync(arguments, context.OwnerId, session, ct);
+
+            case "wiki_add_fact":
+                return await WikiAddFactCallAsync(arguments, context.OwnerId, session, ct);
+
+            case "wiki_query":
+                return WikiQueryCall(arguments, context.OwnerId, session, persona);
+
+            case "wiki_status":
+                return WikiStatusCall(arguments, context.OwnerId);
+
             default:
                 throw new ArgumentException($"Неизвестный инструмент: {tool}", nameof(tool));
         }
@@ -442,6 +487,388 @@ public sealed class NotesToolset(
     // delete/annotate отказа не было вовсе — его догонял транспорт как «Ошибка: …»).
     private static McpToolCallResult WikiRefusal(WikiReadOnlyException ex) =>
         Deny($"{WikiReadOnlyException.ErrorCode}: {ex.Message}");
+
+    // --- Вики: четыре инструмента (S6c; ADR-035 §5 «нет MCP-принятия пакета», §7 «ссылка
+    // вместо текста», §8 «wiki_query без модели»; ADR-036 §2 «видимость», §3 «дом источника»).
+    //
+    // Порядок защит на каждый вход один: вертикаль → заведённость вики → лимит открытых
+    // пакетов → форма аргумента (длина, управляющие символы, «..», форма диапазона) →
+    // владение и дом источника (их делает захват, здесь он не дублируется) → заявка. Любой
+    // неожиданный сбой — отказ с причиной, не исключение наружу (уроки ревью S4b/S4f/S6e).
+    // Отказ не называет того, чего нет: чужой/невидимый раздел не отличается от несуществующего.
+
+    // Форма диапазона — та же, что у ссылки на чат в сноске (WikiPage.TryParseSessionRef):
+    // двух форм одного диапазона в контракте быть не должно.
+    private static readonly Regex SessionRangeRx = new(
+        @"^m(?<from>[0-9]{1,6})-(?<to>[0-9]{1,6})\z", RegexOptions.CultureInvariant);
+
+    private const int MaxSourceRefLength = 512;
+
+    // Id заметки — base64url (NotesService.EncodeId): пробелов и знаков препинания в нём нет.
+    // Поэтому «текст вместо ссылки» отсеивается здесь, а не приходит отказом «не найдено»:
+    // отказ схемы обязан называть причину схемы (ADR-035 §7: ссылка вместо текста).
+    private static readonly Regex NoteIdRx = new(@"^[A-Za-z0-9_-]{1,512}\z", RegexOptions.CultureInvariant);
+
+    // Что отдаётся модели на один вопрос: до трёх подходящих страниц, не больше N файлов
+    // раздела на просмотр и не больше MaxQueryPageChars на страницу — дальше полнотекст
+    // делает notes_search (ADR-035, решение 8: wiki_query — короткая сборка контекста).
+    private const int MaxQueryPages = 3;
+    private const int MaxQueryScannedFiles = 100;
+    private const int MaxQueryPageChars = 8000;
+
+    /// <summary>Заведённость вики и её корень: тот же признак, что у REST и у очереди
+    /// заявок (pages/_schema.md). Отказ — без утечки существования чужой вики.</summary>
+    private string? WikiRootOrRefusal(string ownerId, out string? root)
+    {
+        root = null;
+        if (_dataDir is null) return "Каталог данных не задан — вики недоступна.";
+        if (!WikiPaths.IsInitialized(_dataDir, ownerId))
+            return "Вики этого владельца не заведена: её инструменты работают только с заведённой.";
+        root = WikiPaths.Root(_dataDir, ownerId);
+        return null;
+    }
+
+    /// <summary>Лимит открытых пакетов на всю вики (ADR-035, решение 4): 21-я заявка не
+    /// ставится, пока человек не разберёт «Входящие». Занимают место и нечитаемые файлы —
+    /// CountOpen уже считает их (fail-closed).</summary>
+    private static string? OpenPackagesRefusal(string root) =>
+        WikiPackageStore.CountOpen(root) >= WikiPackage.MaxOpenPackages
+            ? $"Открытых пакетов уже {WikiPackage.MaxOpenPackages}: разберите Входящие, потом повторяй заявку."
+            : null;
+
+    /// <summary>Недоверенный ввод ссылки/аргумента: длина, управляющие символы, «..» —
+    /// отказ до обращения к диску.</summary>
+    private static bool IsSafeInput(string value, int maxLength) =>
+        value.Length > 0 && value.Length <= maxLength
+        && !value.Any(char.IsControl)
+        && !value.Contains("..", StringComparison.Ordinal);
+
+    private async Task<McpToolCallResult> WikiIngestCallAsync(
+        JsonObject arguments, string ownerId, Session chat, CancellationToken ct)
+    {
+        try
+        {
+            if (wikiIngest is null || wikiCapture is null || wikiChat is null)
+                return Deny("Горизонталь вики не собрана (подсистема Notes отключена).");
+            if (WikiRootOrRefusal(ownerId, out var root) is { } notReady) return Deny(notReady);
+            if (OpenPackagesRefusal(root!) is { } full) return Deny(full);
+
+            var source = StringArg(arguments, "source");
+            if (source.Length == 0)
+                return Deny("Нужна ССЫЛКА источника: id заметки, путь файла проекта, "
+                    + "session:{id}#m{a}-{b} или session:{id}. Текст источника вместо ссылки — не принимается.");
+            if (!IsSafeInput(source, MaxSourceRefLength))
+                return Deny($"Ссылка источника некорректна: длина до {MaxSourceRefLength}, без управляющих символов и «..».");
+            var target = OptionalArg(arguments, "target");
+            if (target is not null && target != WikiSections.Common)
+                return Deny("target: единственный допустимый — \"common\", и только для источника вне проекта.");
+
+            // Источники следующих фаз — отказ по имени с явной причиной, а не «не найдено».
+            if (source.StartsWith("task:", StringComparison.Ordinal)
+                || source.StartsWith("dossier:", StringComparison.Ordinal)
+                || source.StartsWith("http://", StringComparison.Ordinal)
+                || source.StartsWith("https://", StringComparison.Ordinal))
+                return Deny("Источники task:, dossier: и url будут в Ф2 (S6k): сейчас доступны "
+                    + "заметка, файл проекта и чат.");
+
+            if (source.StartsWith("session:", StringComparison.Ordinal))
+                return await IngestChatAsync(source, target, ownerId, ct);
+
+            if (source.Contains('/') || source.Contains('\\'))
+            {
+                if (chat.ProjectId is not { Length: > 0 } projectId)
+                    return Deny("Файл по пути принимается только в чате проекта; вне проекта — id заметки или ссылка чата.");
+                var cap = await wikiCapture.CaptureFile(ownerId, projectId, source);
+                return cap.Ok
+                    ? await IngestFromCardAsync(cap, root!, ownerId, ct)
+                    : Deny(cap.Reason ?? "файл не захвачен");
+            }
+
+            if (!NoteIdRx.IsMatch(source))
+                return Deny("Нужна ССЫЛКА источника — id заметки, путь файла проекта или session:…, "
+                    + "а не его текст: текст источника и готовый план не присылается (ADR-035 §7).");
+
+            var noteCap = await wikiCapture.CaptureNote(ownerId, source, target);
+            return noteCap.Ok
+                ? await IngestFromCardAsync(noteCap, root!, ownerId, ct)
+                : Deny(noteCap.Reason ?? "заметка не захвачена");
+        }
+        catch (Exception e)
+        {
+            return Deny($"сбой заявки: {e.Message}");
+        }
+    }
+
+    /// <summary>Ссылка на чат: с диапазоном — карточка этой выдержки и заявка на неё;
+    /// без диапазона — «разобрать этот чат» по курсору (S6e-2). Раздел назначения — дом
+    /// чата (ADR-036, решение 3): его выбирает код, и его же проверяет захват.</summary>
+    private async Task<McpToolCallResult> IngestChatAsync(string source, string? target, string ownerId, CancellationToken ct)
+    {
+        // Defense-in-depth: путь вызывается только из проверенного места, но компилятору это
+        // неизвестно — те же локальные переменные, что в CallAsync.
+        if (wikiCapture is not { } capture || wikiChat is not { } chatSvc)
+            return Deny("Горизонталь вики не собрана (подсистема Notes отключена).");
+
+        if (WikiPage.TryParseSessionRef(source, out var sessionId, out var from, out var to))
+        {
+            if (sessionsDir?.GetById(sessionId) is not { } chat)
+                return Deny("чат не существует");
+            if (sessionsDir.ResolveOwnerId(chat) != ownerId)
+                return Deny("чат принадлежит другому владельцу: источник — тому же владельцу, что вики");
+            var home = chat.ProjectId is { Length: > 0 } projectId
+                ? WikiSections.ProjectsPrefix + projectId
+                : WikiSections.Personal;
+            var cap = await capture.CaptureSession(ownerId, home, sessionId, from, to);
+            if (!cap.Ok) return Deny(cap.Reason ?? "выдержка чата не захвачена");
+            return await RunIngestAsync(new WikiIngestService.Request(
+                "session", source, cap.CardRelPath!, cap.SourceText!, home, target), ownerId, ct);
+        }
+
+        var id = source["session:".Length..];
+        if (id.Length is > 0 and <= 128 && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_'))
+        {
+            var res = await chatSvc.AnalyzeAsync(ownerId, id, ct);
+            return res.Outcome switch
+            {
+                WikiChatIngestService.OutcomeApplied => Json(new { outcome = res.Outcome, packageIds = res.PackageIds }),
+                WikiChatIngestService.OutcomeAwaitingHuman => Text(
+                    "разбор поставил пакеты, ни один не применён: они ждут человека в «Входящих»."),
+                WikiChatIngestService.OutcomeNothingNew => Text("нечего добавить: " + (res.Reason ?? "без причины")),
+                _ => Deny(res.Reason ?? "разбор отклонён"),
+            };
+        }
+        return Deny("Ссылка на чат не разбирается: форма session:{id}#m{a}-{b} или session:{id}.");
+    }
+
+    /// <summary>Заявка по уже захваченной карточке. origin и ref — с самой карточки: их
+    /// поставил захват (S6h), вторая формула здесь обязана бы когда-нибудь разойтись с
+    /// первой. Дом — по месту карточки: его тоже выбрал захват.</summary>
+    private async Task<McpToolCallResult> IngestFromCardAsync(
+        WikiSourceCapture.Result cap, string root, string ownerId, CancellationToken ct)
+    {
+        if (WikiFileWriter.Read(root, "pages/" + cap.CardRelPath!) is not { } cardText
+            || WikiFrontmatter.Parse(cardText).Model is not { } card
+            || card.Origin is not { Length: > 0 } origin
+            || card.Ref is not { Length: > 0 } sourceRef)
+            return Deny("карточка источника не читается — заявки нет");
+        if (HomeOfCard(cap.CardRelPath!) is not { } home)
+            return Deny("карточка источника встала вне раздела вики — заявки нет");
+
+        return await RunIngestAsync(new WikiIngestService.Request(
+            origin, sourceRef, cap.CardRelPath!, cap.SourceText!, home.Home, home.Target), ownerId, ct);
+    }
+
+    /// <summary>Дом источника для заявки — по разделу, где легла карточка. В «Общее»
+    /// карточка могла лечь только как явный target личного источника (ADR-036, решение 3),
+    /// поэтому target восстанавливается вместе с домом.</summary>
+    private static (string Home, string? Target)? HomeOfCard(string cardRel) => WikiSections.Parse(cardRel) switch
+    {
+        { } key when key.StartsWith(WikiSections.ProjectsPrefix, StringComparison.Ordinal) => (key, null),
+        WikiSections.Common => (WikiSections.Personal, WikiSections.Common),
+        WikiSections.Personal => (WikiSections.Personal, null),
+        _ => null,
+    };
+
+    private async Task<McpToolCallResult> RunIngestAsync(
+        WikiIngestService.Request request, string ownerId, CancellationToken ct)
+    {
+        if (wikiIngest is not { } ingest)
+            return Deny("Горизонталь вики не собрана (подсистема Notes отключена).");
+        var res = await ingest.IngestAsync(ownerId, request, ct);
+        return res.Outcome switch
+        {
+            WikiIngestService.OutcomeApplied => Json(new { outcome = res.Outcome, packageId = res.PackageId }),
+            WikiIngestService.OutcomeAwaitingHuman => Json(new
+            {
+                outcome = res.Outcome,
+                packageId = res.PackageId,
+                note = "пакет со спорными операциями ждёт решения человека в «Входящих»",
+            }),
+            WikiIngestService.OutcomeNothingNew => Text("нечего добавить: " + (res.Reason ?? "без причины")),
+            _ => Deny(res.Reason ?? "заявка отклонена"),
+        };
+    }
+
+    private async Task<McpToolCallResult> WikiAddFactCallAsync(
+        JsonObject arguments, string ownerId, Session chat, CancellationToken ct)
+    {
+        try
+        {
+            if (wikiIngest is null || wikiCapture is null)
+                return Deny("Горизонталь вики не собрана (подсистема Notes отключена).");
+            if (WikiRootOrRefusal(ownerId, out var root) is { } notReady) return Deny(notReady);
+            if (OpenPackagesRefusal(root!) is { } full) return Deny(full);
+
+            var fact = StringArg(arguments, "fact");
+            var quote = StringArg(arguments, "quote");
+            var range = StringArg(arguments, "sessionRange");
+            if (!IsSafeInput(fact, 600) || fact.Contains('\n'))
+                return Deny("факт — одна строка длиной до 600 символов, без управляющих символов");
+            if (quote.Length is < 8 or > 300)
+                return Deny("цитата — от 8 до 300 символов (ADR-035, решение 3)");
+            if (quote.Any(c => char.IsControl(c) && c != '\n'))
+                return Deny("в цитате управляющие символы");
+            var m = SessionRangeRx.Match(range);
+            if (!m.Success
+                || !int.TryParse(m.Groups["from"].Value, out var from)
+                || !int.TryParse(m.Groups["to"].Value, out var to)
+                || from < 1 || from > to)
+                return Deny("sessionRange — та же форма, что в ссылке на чат: m{a}-{b}, например m12-17");
+
+            // «Запиши это» относится к этому чату: его дом и есть раздел назначения.
+            if (chat.ProjectId is not { Length: > 0 } projectId)
+                return Deny("личный раздел — с Ф2");
+            var home = WikiSections.ProjectsPrefix + projectId;
+            var cap = await wikiCapture.CaptureSession(ownerId, home, chat.Id, from, to);
+            if (!cap.Ok) return Deny(cap.Reason ?? "выдержка чата не захвачена");
+
+            // Факт без дословной цитаты в этой выдержке — не факт: та же мера, что у проверок
+            // применения (мера 1), а не отдельная догадка тулсета.
+            if (!QuoteMatcher.ContainsVerbatim(cap.SourceText!, quote))
+                return Deny("цитаты нет в выдержке этого чата: факт обязан быть её дословным фрагментом; "
+                    + "страницу выводит Хранитель по этой выдержке");
+
+            return await RunIngestAsync(new WikiIngestService.Request(
+                "session", $"session:{chat.Id}#m{from}-{to}", cap.CardRelPath!, cap.SourceText!, home, null),
+                ownerId, ct);
+        }
+        catch (Exception e)
+        {
+            return Deny($"сбой заявки: {e.Message}");
+        }
+    }
+
+    private McpToolCallResult WikiQueryCall(
+        JsonObject arguments, string ownerId, Session chat, Persona? persona)
+    {
+        try
+        {
+            if (spheres is null || projects is null)
+                return Deny("Горизонталь вики не собрана (подсистема Notes отключена).");
+            var question = StringArg(arguments, "question");
+            if (question.Length is < 2 or > 500 || question.Any(char.IsControl))
+                return Deny("вопрос — строка от 2 до 500 символов без управляющих символов");
+            if (WikiRootOrRefusal(ownerId, out var root) is { } notReady) return Deny(notReady);
+
+            // Набор видимых разделов — только WikiVisibility (ADR-036, решение 2): контекст
+            // вызова берётся из хвоста маршрута — сессия → проект → персона.
+            var visible = WikiVisibility.SectionsFor(ownerId,
+                new WikiVisibility.CallContext(chat.ProjectId, persona), spheres, projects);
+
+            var words = QuestionWords(question);
+            var found = new List<(int Score, string Section, string Rel, string Text)>();
+            var sb = new StringBuilder();
+            sb.Append("Видимые разделы: ").Append(string.Join(", ", visible)).Append('\n');
+
+            foreach (var key in visible)
+            {
+                if (WikiSections.Folder(key) is not { } folder) continue;
+                // Строки каталога — из _index этого раздела (ADR-035, решение 8): просят
+                // его, пересобирать его здесь значило бы вторую точку правды.
+                if (WikiFileWriter.Read(root!, "pages/" + folder + WikiProjections.IndexFileName) is { } index)
+                    sb.Append('\n').Append(WikiVisibility.RedactLinks(index, visible));
+
+                var dir = SafePath.JoinBelowRoot(root!, "pages/" + folder);
+                if (!Directory.Exists(dir)) continue;
+                var allRels = Directory.EnumerateFiles(dir, "*.md", SearchOption.AllDirectories)
+                    .Select(f => Path.GetRelativePath(dir, f).Replace('\\', '/'))
+                    .Where(rel => !WikiPaths.IsProjection(rel))
+                    .OrderBy(rel => rel, StringComparer.Ordinal)
+                    .ToList();
+                // Усечение обхода названо вслух: молчание о том, что в разделе есть и
+                // другие страницы, читалось бы как «их нет» (тот же принцип, что у _index).
+                if (allRels.Count > MaxQueryScannedFiles)
+                    sb.Append("\n…ещё ").Append(allRels.Count - MaxQueryScannedFiles)
+                        .Append(" файлов раздела «").Append(key).Append("» не просмотрены — полнотекст: notes_search.");
+                foreach (var rel in allRels.Take(MaxQueryScannedFiles))
+                {
+                    if (WikiFileWriter.Read(root!, "pages/" + folder + rel) is not { } text) continue;
+                    var score = ScoreText(text, words);
+                    if (score > 0) found.Add((score, key, folder + rel, text));
+                }
+            }
+
+            var top = found
+                .OrderByDescending(p => p.Score)
+                .ThenBy(p => p.Rel, StringComparer.Ordinal)
+                .Take(MaxQueryPages)
+                .ToList();
+            if (top.Count == 0)
+                return Text(sb.Append("\nСтраниц по этому вопросу нет. Полнотекст по сырью — notes_search.").ToString());
+
+            foreach (var p in top)
+            {
+                // И строки каталога, и текст страницы — через RedactLinks: ссылка на раздел
+                // вне набора и её заголовок не должны доходить до модели (ADR-036, §2).
+                var body = WikiVisibility.RedactLinks(p.Text, visible);
+                sb.Append("\n—— ").Append(p.Section).Append(" / ").Append(p.Rel).Append(" ——\n")
+                    .Append(body.Length > MaxQueryPageChars ? body[..MaxQueryPageChars] + "\n…(обрезано)" : body);
+            }
+            return Text(sb.Append("\nПолнотекст по сырью — notes_search.").ToString());
+        }
+        catch (Exception e)
+        {
+            return Deny($"сбой вопроса: {e.Message}");
+        }
+    }
+
+    private static IReadOnlyList<string> QuestionWords(string question) =>
+        Regex.Split(question, @"[^\p{L}\p{N}]+")
+            .Where(w => w.Length >= 3)
+            .Select(w => w.ToLowerInvariant())
+            .Distinct()
+            .ToList();
+
+    private static int ScoreText(string text, IReadOnlyList<string> words)
+    {
+        if (words.Count == 0) return 0;
+        var hay = text.ToLowerInvariant();
+        var score = 0;
+        foreach (var w in words)
+            if (hay.Contains(w, StringComparison.Ordinal)) score++;
+        return score;
+    }
+
+    private McpToolCallResult WikiStatusCall(JsonObject arguments, string ownerId)
+    {
+        try
+        {
+            if (WikiRootOrRefusal(ownerId, out var root) is { } notReady) return Deny(notReady);
+            if (OptionalArg(arguments, "packageId") is { } id)
+            {
+                if (!WikiPackage.IsSafeId(id)) return Deny("id пакета некорректен");
+                var read = WikiPackageStore.TryRead(root!, id);
+                if (read.State != WikiPackageFileState.Valid || read.Package is not { } one)
+                    return Deny("пакета с таким id нет");
+                return Json(BriefPackage(one));
+            }
+            var list = WikiPackageStore.List(root!);
+            return Json(new
+            {
+                open = WikiPackageStore.CountOpen(root!),
+                limit = WikiPackage.MaxOpenPackages,
+                packages = list.Packages.Where(p => WikiPackage.IsOpen(p.Status)).Select(BriefPackage).ToList(),
+                unreadableFiles = list.InvalidFiles,
+            });
+        }
+        catch (Exception e)
+        {
+            return Deny($"сбой: {e.Message}");
+        }
+    }
+
+    // Сводка пакета для агента: где, что ждёт, сколько в нём спорного. Тел операций и цитат
+    // нет: их смотрит человек в «Входящих», агент их не принимает (ADR-035, решение 5).
+    private static object BriefPackage(WikiPackage p) => new
+    {
+        p.Id,
+        p.Section,
+        p.Status,
+        reason = p.StatusReason,
+        createdAt = p.CreatedAt,
+        operations = p.Operations.Count,
+        contested = p.Operations.Count(o => o.Decision == WikiPackage.DecisionInbox && o.HumanDecision is null),
+    };
 
     private static string StringArg(JsonObject arguments, string name) =>
         arguments[name] is JsonValue value && value.TryGetValue<string>(out var text) ? text : "";
@@ -594,6 +1021,90 @@ public sealed class NotesToolset(
                     {
                         ["type"] = "integer", ["minimum"] = 1, ["maximum"] = 20,
                         ["description"] = "Сколько результатов (по умолчанию 8)",
+                    },
+                },
+            }),
+    ];
+
+    // Инструменты вики (S6c): имена и порядок — часть отпечатка tools/list, их сторож —
+    // McpToolsetStabilityTests. В замороженной stdio-ветке отката их нет намеренно (там нет
+    // вертикали), поэтому WikiTools — отдельный список, не часть CoreTools: парность
+    // NotesToolsetParityTests этого требует. Ни один из них не принимает и не откатывает
+    // пакет, не повышает страницу и не меняет политику применения (ADR-035, решение 5).
+    internal static readonly IReadOnlyList<McpToolSchema> WikiTools =
+    [
+        Tool("wiki_ingest",
+            "Поставить источник в очередь разбора вики. source — только ССЫЛКА: id заметки | путь файла проекта | session:{id}#m{a}-{b} | session:{id}. Текст источника вместо ссылки — отказ. target=\"common\" — только для источника вне проекта.",
+            new JsonObject
+            {
+                ["type"] = "object",
+                ["required"] = new JsonArray { "source" },
+                ["properties"] = new JsonObject
+                {
+                    ["source"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = "Ссылка: id заметки, путь файла проекта или session:{id}#m{a}-{b} / session:{id}",
+                    },
+                    ["target"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["enum"] = new JsonArray { "common" },
+                        ["description"] = "Явный выбор человека: источник вне проекта — в «Общее»; проектным нельзя",
+                    },
+                },
+            }),
+        Tool("wiki_add_fact",
+            "Явное «запиши это» этого чата: выдержать указанный диапазон его сообщений и поставить заявку разбора. Факт обязан быть подтверждён дословной цитатой из этой выдержки; страницу пишет Хранитель.",
+            new JsonObject
+            {
+                ["type"] = "object",
+                ["required"] = new JsonArray { "fact", "quote", "sessionRange" },
+                ["properties"] = new JsonObject
+                {
+                    ["fact"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = "Что закрепить: одна строка до 600 символов",
+                    },
+                    ["quote"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = "Дословная цитата из этого чата, 8–300 символов (скопируй из его сообщений)",
+                    },
+                    ["sessionRange"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = "Диапазон сообщений этого чата в форме ссылки: m{a}-{b}, например m12-17",
+                    },
+                },
+            }),
+        Tool("wiki_query",
+            "Спросить вики без модели: каталоги (_index) видимых в этом ходу разделов плюс до трёх подходящих страниц. Строки и ссылки вне видимого набора отдаются как [скрыто].",
+            new JsonObject
+            {
+                ["type"] = "object",
+                ["required"] = new JsonArray { "question" },
+                ["properties"] = new JsonObject
+                {
+                    ["question"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = "Вопрос по базе знаний, 2–500 символов",
+                    },
+                },
+            }),
+        Tool("wiki_status",
+            "Состояние вики: сколько открытых пакетов (лимит 20) и какие; по packageId — сводка одного пакета. Принять или откатить пакет может только человек.",
+            new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["packageId"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = "id пакета из списка — его сводка; пусто — состояние всей вики",
                     },
                 },
             }),

@@ -138,6 +138,12 @@ public class ClaudeSession : ILlmSessionAdapter
     // тесты/старый контракт: deny нет. Свойство инстанса, не хода: состав deny-правил
     // от хода не зависит (иначе путь --settings мерцал бы в сигнатуре прогона).
     private readonly string? _dataDir;
+    // Заведена ли вики у владельца (признак — pages/_schema.md, ADR-035 §1). СВОЙСТВО
+    // СЕССИИ, не хода: считается один раз при создании сессии и больше не перечитывается.
+    // От него зависит только подсказка системного блока (подсказки в сигнатуру прогона не
+    // входят); состав tools/list сервера заметок от него не зависит — не заведённая вики
+    // даёт отказ на вызове инструмента, а не исчезновение инструмента (S6c).
+    private readonly bool _wikiExistsForOwner;
     // Фактическое состояние BareMode в последнем BuildArgs: true если BareMode реально
     // применён (карта найдена, CLAUDE_CODE_DISABLE_CLAUDE_MDS поставлен). Снимок промпта
     // читает этот признак, а не повторно ResolveByModel
@@ -1180,6 +1186,9 @@ public class ClaudeSession : ILlmSessionAdapter
         _transcriptOnServer = context.TranscriptOnServer;
         _serverContentRoot = context.ContentRootPath;
         _dataDir = context.DataDir;
+        // Признак вики владельца — ровно один раз на сессию (см. объявление поля): не на ход.
+        _wikiExistsForOwner = _dataDir is not null && _turnOwnerId is { Length: > 0 } wikiOwner
+            && WikiPaths.IsInitialized(_dataDir, wikiOwner);
         _onMessage = context.OnMessage;
         _mcpConfigPath = mcpConfigPath;
         _systemPromptViaFile = context.SystemPromptViaFile;
@@ -3917,13 +3926,21 @@ public class ClaudeSession : ILlmSessionAdapter
                       "статусами), notes_reply/notes_thread (ответы в треде комментария), " +
                       "notes_set_status (resolved = обработан), notes_search со status:open — найти необработанные."
                     : "";
+                // Подсказка вики — только если вики владельца заведена (признак сессии, см.
+                // поле _wikiExistsForOwner): звать модель к инструментам, которые при
+                // незаведённой вики дают только отказ, — значит гнать её в пустой вызов.
+                var wikiHint = _wikiExistsForOwner
+                    ? " Вики этого владельца заведена: в вики не пиши сама (её пишет только Хранитель); " +
+                      "вопрос по базе — сначала wiki_query; «запиши это» — wiki_add_fact (факт с дословной " +
+                      "цитатой из этого чата); разобрать источник — wiki_ingest (только ссылкой на него)."
+                    : "";
                 var notesHint =
                     "У пользователя есть база знаний «Заметки» (Obsidian-совместимая: markdown-файлы со связями [[Заголовок]], " +
                     "обратными ссылками и графом). Веди её через MCP-инструменты mcp__notes__* (notes_list, notes_search, " +
                     "notes_semantic_search, notes_read, notes_create, notes_update, notes_move). " + scope + " " +
                     "Связывай заметки друг с другом через [[Заголовок другой заметки]] — по этим ссылкам строится граф знаний. " +
                     "Когда пользователь просит записать/законспектировать/связать мысль или найти по заметкам — используй эти инструменты." +
-                    annotationsHint;
+                    annotationsHint + wikiHint;
                 Add("mcp-notes", "Как работать с заметками", notesHint, group: "mcp");
             }
 

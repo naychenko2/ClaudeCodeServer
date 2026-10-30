@@ -21,9 +21,12 @@ namespace ClaudeHomeServer.Tests.Services;
 // (FfmpegVideoDsp.cs:120-122), значит в момент Start слот занят по конструкции. Прежняя версия теста
 // проверяла слот после опроса cgroup: на быстром раннере сборка завершалась до проверки, и тест падал
 // с Available == 1 на живом порту — проверка зависела от скорости машины, а не от продукта.
-// Способность обёртки проверяется той же пробой, которой её решает продукт (LocalProcessRunner.cs:398):
-// проба не ОК — изоляция в этой среде не работает, тест пропускает assertions (намерение файла:
-// «иначе пропуск, а не падение»), а не валит их об окружении.
+// Способность среды (CI-ран 41019732275, шард monolith 5/6): на раннере GitHub боевая проба
+// LocalProcessRunner.ProbeOnce проходит (`systemd-run … true` → код 0), но процесс остаётся в cgroup
+// родителя (`0::/system.slice/hosted-compute-agent.service`) — user-менеджер не перекладывает его в scope.
+// Поэтому «проба ОК» не описывает то, что требует cgroup-утверждение; его условие — фактический переезд:
+// `systemd-run <те же флаги> cat /proc/self/cgroup` обязан показать наш slice (CgroupMoveWorks).
+// Нет переезда — настоящий skip с причиной, но уже ПОСЛЕ утверждений о слоте: они от cgroup не зависят.
 [Collection(TestCollections.ProcessGlobalState)]
 public sealed class VideoAssembleIsolationTests(ITestOutputHelper output) : IDisposable
 {
@@ -34,15 +37,16 @@ public sealed class VideoAssembleIsolationTests(ITestOutputHelper output) : IDis
         try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
     }
 
-    [Fact]
+    [SkippableFact]
     [Trait("Category", "Slow")]
     public async Task Сборка_фильма_идёт_в_scope_slice_под_занятым_слотом()
     {
-        if (!OperatingSystem.IsLinux()) return;
-        if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR"))
-            && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DBUS_SESSION_BUS_ADDRESS"))) return;
+        Skip.IfNot(OperatingSystem.IsLinux(), "живой запуск возможен только на Linux");
+        Skip.If(string.IsNullOrEmpty(Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR"))
+            && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DBUS_SESSION_BUS_ADDRESS")),
+            "нет user-шины (XDG_RUNTIME_DIR и DBUS_SESSION_BUS_ADDRESS пусты)");
         var systemdRun = LocalProcessRunner.FindSystemdRun(Environment.GetEnvironmentVariable("PATH"));
-        if (systemdRun is null) return;
+        Skip.If(systemdRun is null, "systemd-run не найден в PATH");
 
         Directory.CreateDirectory(_dir);
         const string slice = "ccs-isotest.slice";
@@ -50,23 +54,19 @@ public sealed class VideoAssembleIsolationTests(ITestOutputHelper output) : IDis
         IsolationOptions.Instance = new IsolationOptions { Enabled = true, Slice = slice, MemoryMax = "4G" };
         try
         {
-            // Способность обёртки — пробой продукта, а не наличием бинаря и переменной: это ровно тот
-            // вызов, который сделает Start (результат кэшируется, боевой Start его переиспользует).
-            // Без успешной пробы обёртки не будет ни у одного запуска — проверять cgroup в такой среде
-            // значит валить тест об окружении, а не о продукте.
+            // Проба продукта (результат кэшируется, боевой Start его переиспользует) не ОК — обёртки не будет
+            // ни у одного запуска: проверять тут нечего. Проба ОК ещё не значит, что процесс окажется
+            // в scope (раннер GitHub) — это решает CgroupMoveWorks.
             LocalProcessRunner.ResetProbeForTests();
-            var probe = LocalProcessRunner.ProbeOnce(IsolationOptions.Instance, systemdRun);
-            if (probe is not { Ok: true })
-            {
-                output.WriteLine("Изоляция в этой среде не работает: " + (probe?.FailReason ?? "проба не выполнена"));
-                return;
-            }
+            var probe = LocalProcessRunner.ProbeOnce(IsolationOptions.Instance, systemdRun!);
+            Skip.If(probe is not { Ok: true }, "изоляция в этой среде не работает: " + (probe?.FailReason ?? "проба не выполнена"));
+            var cgroupSkip = CgroupMoveWorks(IsolationOptions.Instance, systemdRun!, slice);
 
             var gate = new BuildConcurrencyGate(1);
             var started = new TaskCompletionSource();
             var launchers = new RecordingLaunchers(gate, started);
             var dsp = new FfmpegVideoDsp(new ConfigurationBuilder().Build(), NullLogger<FfmpegVideoDsp>.Instance, launchers, gate);
-            if (!dsp.Available) return;
+            Skip.IfNot(dsp.Available, "ffmpeg недоступен");
 
             // Исходник побольше, а сборка — в 1080p60: процесс живёт достаточно, чтобы заглянуть в его cgroup
             var clip = Path.Combine(_dir, "src.mp4");
@@ -90,21 +90,25 @@ public sealed class VideoAssembleIsolationTests(ITestOutputHelper output) : IDis
             // (у агента он тоже в scope) — ждём именно нашего slice, а не «любой .scope». Переложение —
             // часть старта: --scope исполняет команду в своём же процессе, уже в scope
             // (LocalProcessRunner.cs:97-98), а процесс живёт секунды (сборка 40 с видео в 1080p60) —
-            // наблюдение раньше завершения.
-            var deadline = DateTime.UtcNow.AddSeconds(30);
-            string cgroup = "";
-            while (!cgroup.Contains(slice) && DateTime.UtcNow < deadline)
+            // наблюдение раньше завершения. Не умеет среда перекладывать — не ждём 30 с впустую.
+            if (cgroupSkip is null)
             {
-                try { cgroup = await File.ReadAllTextAsync($"/proc/{launchers.Pid}/cgroup"); }
-                catch (IOException) { break; }
-                await Task.Delay(20);
+                var deadline = DateTime.UtcNow.AddSeconds(30);
+                string cgroup = "";
+                while (!cgroup.Contains(slice) && DateTime.UtcNow < deadline)
+                {
+                    try { cgroup = await File.ReadAllTextAsync($"/proc/{launchers.Pid}/cgroup"); }
+                    catch (IOException) { break; }
+                    await Task.Delay(20);
+                }
+                cgroup.Should().Contain(slice).And.Contain(".scope", "процесс сборки уходит в scope ccs-agents.slice");
+                output.WriteLine("cgroup сборки: " + cgroup.Trim());
             }
-            cgroup.Should().Contain(slice).And.Contain(".scope", "процесс сборки уходит в scope ccs-agents.slice");
-            output.WriteLine("cgroup сборки: " + cgroup.Trim());
 
             cts.Cancel();
             await running.Invoking(r => r).Should().ThrowAsync<OperationCanceledException>();
             gate.Available.Should().Be(1, "отмена отдаёт слот");
+            Skip.If(cgroupSkip is not null, cgroupSkip!);
         }
         finally
         {
@@ -112,6 +116,32 @@ public sealed class VideoAssembleIsolationTests(ITestOutputHelper output) : IDis
             // Свой результат пробы (со своим slice) не должен остаться следующему тесту:
             // кэш пробы — процесс-глобальное состояние, тот же приём, что у LocalProcessRunnerIsolationTests.
             LocalProcessRunner.ResetProbeForTests();
+        }
+    }
+
+    // null — среда перекладывает процесс в scope нужного slice; иначе — причина для skip. Проверка фактом:
+    // `cat /proc/self/cgroup` внутри обёртки с теми же флагами, что у боевого запуска (свежее имя юнита).
+    private string? CgroupMoveWorks(IsolationOptions options, string systemdRun, string slice)
+    {
+        var psi = new ProcessStartInfo(systemdRun) { RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var a in LocalProcessRunner.WrapperArgs(options, LocalProcessRunner.NewScopeUnitName())) psi.ArgumentList.Add(a);
+        psi.ArgumentList.Add("cat");
+        psi.ArgumentList.Add("/proc/self/cgroup");
+        try
+        {
+            using var p = Process.Start(psi)!;
+            var err = p.StandardError.ReadToEndAsync();
+            var outText = p.StandardOutput.ReadToEndAsync();
+            if (!p.WaitForExit(10_000)) { p.Kill(entireProcessTree: true); return "проверка переезда в scope не завершилась за 10 с"; }
+            var cgroup = outText.Result.Trim();
+            output.WriteLine("cgroup под systemd-run: " + cgroup + (err.Result.Length > 0 ? " | " + err.Result.Trim() : ""));
+            return cgroup.Contains(slice)
+                ? null
+                : $"systemd-run не переложил процесс в {slice} (cgroup: {cgroup}) — user-менеджер без делегирования cgroup";
+        }
+        catch (Exception ex)
+        {
+            return "проверка переезда в scope упала: " + ex.Message;
         }
     }
 

@@ -1,6 +1,7 @@
 // Режим участника общего проекта: чистая логика «что можно в композере» и «чей это проект».
-// Без React — проверяется юнит-тестами (S1-F6). Право хода решает бэк (RunTurn только у
-// владельца, S1-7a); фронт лишь не обещает того, что бэк откажет.
+// Без React — проверяется юнит-тестами (S1-F6). Право хода решает бэк (RunTurn у владельца
+// и редактора, S2a-10a; ответы на разрешения/планы — только Configure владельца); фронт лишь
+// не обещает того, что бэк откажет.
 
 import type { Project } from '../../../types';
 
@@ -69,13 +70,20 @@ export function canCreateChats(project: Pick<Project, 'myRole'> | null | undefin
   return project?.myRole !== 'reader';
 }
 
-// Единый гейт «запустить ход / ответить агенту» для входов вне композера (чипы-подсказки,
-// «Повторить», «Зафиксировать», «Возобновить», ответы на план/вопрос/разрешение, механики
-// команды, сброс режимов). Бэк откажет участнику (RunTurn только у владельца), поэтому
-// запрос не шлём вовсе. null — можно; строка — текст отказа для тоста и подсказки кнопки
+// Гейт «запустить ход / ответить на вопрос» для входов вне композера (чипы-подсказки,
+// «Повторить», «Зафиксировать», «Возобновить», сброс режимов). RunTurn есть у редактора,
+// читателю бэк откажет — запрос не шлём вовсе. null — можно; строка — текст отказа для тоста и подсказки кнопки
 export function turnDeniedReason(project: Project | null | undefined): string | null {
   const gate = participantComposerGate(project);
   return gate.blocked ? participantSendTitle(gate).replace(/^Не отправится: /, 'Недоступно: ') : null;
+}
+
+// Решения владельца (разрешить/запретить инструмент, ответ на план, эскалацию команды):
+// на сервере это Configure, редактору закрыто так же, как читателю. Читателю — причина про
+// чтение, редактору — про владельца. null — можно (владелец и обычный проект)
+export const OWNER_DECISION = 'Недоступно: решает владелец проекта';
+export function ownerDecisionDeniedReason(project: Project | null | undefined): string | null {
+  return turnDeniedReason(project) ?? (isParticipant(project) ? OWNER_DECISION : null);
 }
 
 // Оборачивает действие гейтом: у участника вместо вызова — onDenied(текст), результат undefined.
@@ -84,9 +92,10 @@ export function guardTurnAction<A extends unknown[], R>(
   getProject: () => Project | null | undefined,
   action: (...args: A) => R,
   onDenied: (reason: string) => void,
+  reasonOf: (project: Project | null | undefined) => string | null = turnDeniedReason,
 ): (...args: A) => R | undefined {
   return (...args: A) => {
-    const reason = turnDeniedReason(getProject());
+    const reason = reasonOf(getProject());
     if (reason) { onDenied(reason); return undefined; }
     return action(...args);
   };

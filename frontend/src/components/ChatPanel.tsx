@@ -11,7 +11,7 @@ import { isZoneRefusal } from '../lib/personaZone';
 import { buildBranchAnchors, branchAnchorText as branchAnchorTextOf, BRANCH_BEFORE_PROMPT } from '../lib/branchAnchors';
 import { findConsultedPersona } from './chat/PersonaTaskView';
 import { showToast } from '../lib/toast';
-import { guardTurnAction, turnDeniedReason } from '../features/projects/members/participantGate';
+import { guardTurnAction, ownerDecisionDeniedReason, turnDeniedReason } from '../features/projects/members/participantGate';
 import { isArchivedChat } from '../lib/chatFilters';
 import { archiveApi } from '../api/chats';
 import { projectMainColor } from '../features/projects/projectUtil';
@@ -256,13 +256,13 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
     const get = () => projectRef.current;
     return {
       send: guardTurnAction(get, rawSend, deny),
-      allowPermission: guardTurnAction(get, rawAllowPermission, deny),
-      allowAlways: guardTurnAction(get, rawAllowAlways, deny),
+      allowPermission: guardTurnAction(get, rawAllowPermission, deny, ownerDecisionDeniedReason),
+      allowAlways: guardTurnAction(get, rawAllowAlways, deny, ownerDecisionDeniedReason),
       answerQuestion: guardTurnAction(get, rawAnswerQuestion, deny),
-      respondPlan: guardTurnAction(get, rawRespondPlan, deny),
-      denyPermission: guardTurnAction(get, rawDenyPermission, deny),
-      respondTeamPlan: guardTurnAction(get, rawRespondTeamPlan, deny),
-      respondTeamEscalation: guardTurnAction(get, rawRespondTeamEscalation, deny),
+      respondPlan: guardTurnAction(get, rawRespondPlan, deny, ownerDecisionDeniedReason),
+      denyPermission: guardTurnAction(get, rawDenyPermission, deny, ownerDecisionDeniedReason),
+      respondTeamPlan: guardTurnAction(get, rawRespondTeamPlan, deny, ownerDecisionDeniedReason),
+      respondTeamEscalation: guardTurnAction(get, rawRespondTeamEscalation, deny, ownerDecisionDeniedReason),
     };
   }, [rawSend, rawAllowPermission, rawDenyPermission, rawAllowAlways, rawAnswerQuestion, rawRespondPlan, rawRespondTeamPlan, rawRespondTeamEscalation]);
   // Открылся пустой чат (только что создан — своей истории у него нет) — курсор сразу

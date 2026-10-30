@@ -34,7 +34,7 @@ import { getDraft, setDraft } from '../lib/drafts';
 import { middleEllipsis } from '../lib/paths';
 import { dativeName } from '../lib/russianName';
 import { showToast } from '../lib/toast';
-import { composerExecBlocked, participantComposerGate, participantComposerText, participantSendTitle } from '../features/projects/members/participantGate';
+import { composerExecBlocked, isParticipant, participantComposerGate, participantComposerText, participantSendTitle } from '../features/projects/members/participantGate';
 import { Button, Chip, FileTypeTile, IconButton, Menu, MenuItem, MenuSep, Modal, Notice } from './ui';
 import { plusButtonTitle, shortcutOverflowItems, useCreateShortcuts } from './chat/composerShortcuts';
 import { SLOT_COMPOSER_CHIP, useSlot } from '../lib/subsystems/registry';
@@ -780,6 +780,7 @@ export function Composer({
   // Участник общего проекта: ходы запускает только владелец (бэк, S1-7a), поэтому отправка
   // выключена у любого участника — читателю по роли, редактору до включения его ходов
   const participantGate = useMemo(() => participantComposerGate(project), [project?.myRole, project?.ownerDisplayName, project?.ownerUsername]);
+  const isMember = isParticipant(project);
   const execBlocked = composerExecBlocked(project, execGate.available, participantGate);
   const execDeviceOffline = project?.device?.online === false;
   // Опасный режим (bypass) ждёт подтверждения в модалке перед применением
@@ -2307,6 +2308,7 @@ export function Composer({
       selectedPersona={selectedPersona ?? null}
       selectedAgentName={selectedAgentName ?? null}
       onSelect={onCompanionChange}
+      sharedProject={isMember}
       isMobile={isMobile}
       wide={widePickers}
       compact={compactStrip}
@@ -2785,6 +2787,7 @@ export function Composer({
             <ComposerModelPicker
               value={model}
               onChange={onModelChange}
+              participant={isMember}
               started={chatStarted}
               isMobile={isMobile}
               compact={compactStrip}

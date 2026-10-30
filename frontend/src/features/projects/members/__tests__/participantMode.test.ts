@@ -97,7 +97,7 @@ vi.mock('../../../../components/ui/Button', async () => {
 import { MembersStack } from '../MembersStack';
 import { OwnerSettingsNotice } from '../OwnerSettingsNotice';
 import {
-  ACCESS_REVOKED_TITLE, accessRevokedOwnerLine, canCreateChats, composerExecBlocked, guardTurnAction, turnDeniedReason, participantComposerGate, participantComposerText,
+  ACCESS_REVOKED_TITLE, accessRevokedOwnerLine, canCreateChats, composerExecBlocked, guardTurnAction, ownerDecisionDeniedReason, turnDeniedReason, participantComposerGate, participantComposerText,
 } from '../participantGate';
 
 type FN = InstanceType<typeof FakeNode>;
@@ -225,10 +225,14 @@ describe('сообщение об отзыве доступа на списке 
 describe('входы запуска хода вне композера (гейт в точке отправки)', () => {
   // Те же действия, что ChatPanel заворачивает: send (чипы, «Повторить», «Зафиксировать»,
   // «Возобновить», механики команды, сброс режимов), ответ на разрешение/вопрос/план
-  const entries = ['send', 'allowPermission', 'allowAlways', 'answerQuestion', 'respondPlan',
-    'denyPermission', 'respondTeamPlan', 'respondTeamEscalation'] as const;
+  // Входы запуска хода/ответа на вопрос: редактору открыты (RunTurn, S2a-10a)
+  const turnEntries = ['send', 'answerQuestion'] as const;
+  // Решения владельца (Configure на сервере): редактору и читателю закрыты
+  const ownerEntries = ['allowPermission', 'allowAlways', 'denyPermission', 'respondPlan',
+    'respondTeamPlan', 'respondTeamEscalation'] as const;
+  const entries = [...turnEntries, ...ownerEntries] as const;
 
-  it.each(entries)('%s: у читателя не доходит до сервера, у редактора проходит', (name) => {
+  it.each(turnEntries)('%s: у читателя не доходит до сервера, у редактора проходит', (name) => {
     const action = vi.fn(() => 'ok');
     const denied = vi.fn();
     expect(guardTurnAction(() => reader, action, denied)('x')).toBeUndefined();
@@ -240,17 +244,43 @@ describe('входы запуска хода вне композера (гейт
     expect(denied).toHaveBeenCalledTimes(1);
   });
 
-  it.each(entries)('%s: ChatPanel заворачивает вход в гейт', (name) => {
+  it.each(ownerEntries)('%s: у читателя и редактора не доходит до сервера, причины различаются', (name) => {
+    const action = vi.fn(() => 'ok');
+    for (const p of [reader, editor]) {
+      const denied = vi.fn();
+      expect(guardTurnAction(() => p, action, denied, ownerDecisionDeniedReason)('x'), name).toBeUndefined();
+      expect(denied).toHaveBeenCalledTimes(1);
+      expect(denied.mock.calls[0][0]).toBe(ownerDecisionDeniedReason(p));
+    }
+    expect(action, name).not.toHaveBeenCalled();
+    expect(ownerDecisionDeniedReason(editor)).toBe('Недоступно: решает владелец проекта');
+    expect(ownerDecisionDeniedReason(reader)).toBe(turnDeniedReason(reader));
+  });
+
+  it.each(turnEntries)('%s: ChatPanel заворачивает вход в гейт запуска хода', (name) => {
     const src = readFileSync(new URL('../../../../components/ChatPanel.tsx', import.meta.url), 'utf8');
     const cap = name[0].toUpperCase() + name.slice(1);
-    expect(src).toContain(`${name}: guardTurnAction(get, raw${cap}, deny)`);
+    expect(src).toContain(`${name}: guardTurnAction(get, raw${cap}, deny),`);
+  });
+
+  it.each(ownerEntries)('%s: ChatPanel заворачивает вход в гейт решений владельца', (name) => {
+    const src = readFileSync(new URL('../../../../components/ChatPanel.tsx', import.meta.url), 'utf8');
+    const cap = name[0].toUpperCase() + name.slice(1);
+    expect(src).toContain(`${name}: guardTurnAction(get, raw${cap}, deny, ownerDecisionDeniedReason),`);
+  });
+
+  it('Composer передаёт признак участника в пикер модели и селектор собеседника', () => {
+    const src = readFileSync(new URL('../../../../components/Composer.tsx', import.meta.url), 'utf8');
+    expect(src).toContain('const isMember = isParticipant(project);');
+    expect(src).toContain('participant={isMember}');
+    expect(src).toContain('sharedProject={isMember}');
   });
 
   it.each(entries)('%s: владелец и обычный проект проходят', (name) => {
     for (const p of [own, base, null]) {
       const action = vi.fn((a: string) => a + '!');
       const denied = vi.fn();
-      const guarded = guardTurnAction(() => p, action, denied);
+      const guarded = guardTurnAction(() => p, action, denied, ownerDecisionDeniedReason);
       expect(guarded(name)).toBe(name + '!');
       expect(denied).not.toHaveBeenCalled();
     }

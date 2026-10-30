@@ -37,7 +37,7 @@ public class WorkspaceHttpChatsContinueTests : IDisposable
 
     private static async Task<JsonElement> CallRpcAsync(HttpClient client, string sessionId, string method, object? args)
     {
-        var resp = await client.PostAsJsonAsync($"/mcp/wsp/{sessionId}", new
+        var resp = await client.AsCaller(sessionId).PostAsJsonAsync($"/mcp/wsp/{sessionId}", new
         {
             jsonrpc = "2.0", id = 1, method, @params = args,
         });

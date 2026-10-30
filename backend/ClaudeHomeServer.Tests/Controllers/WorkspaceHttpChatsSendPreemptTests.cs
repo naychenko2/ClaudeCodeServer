@@ -41,7 +41,7 @@ public class WorkspaceHttpChatsSendPreemptTests : IDisposable
 
     private static async Task<JsonElement> RpcAsync(HttpClient client, string sessionId, object body)
     {
-        var resp = await client.PostAsJsonAsync($"/mcp/wsp/{sessionId}", body);
+        var resp = await client.AsCaller(sessionId).PostAsJsonAsync($"/mcp/wsp/{sessionId}", body);
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
         return JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
     }

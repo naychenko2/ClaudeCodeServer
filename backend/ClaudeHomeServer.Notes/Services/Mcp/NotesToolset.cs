@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Notes;
 
@@ -31,6 +32,7 @@ public sealed class NotesToolset(
     IMcpPersonaBindings bindings,
     IMcpSessionAccessor sessions,
     ISessionBroadcaster broadcaster,
+    ITurnFrameSource frames,
     NotesService? notes = null,
     // Все четыре — синглтоны одной отключаемой вертикали (NotesSubsystem.Register),
     // гейтятся ОДНИМ рубильником Subsystems:Notes:Enabled: либо все null, либо все не null.
@@ -81,10 +83,20 @@ public sealed class NotesToolset(
         var projectId = session.ProjectId;
         var defaultSource = projectId ?? "personal";
 
+        // Узкая рамка хода (общий проект, S2a-3a): доступны только заметки проекта чата-вызывателя;
+        // личный vault, поиск по всем источникам и заметки других проектов закрыты. Вердикт только
+        // читается — состав tools/list от него не зависит (McpToolsetStabilityTests).
+        var frame = frames.Frame(context.CallerSessionId, context.OwnerId);
+        var narrow = frame == TurnFrameKind.Narrow;
+        if (narrow && NarrowDenied(tool, arguments, projectId) is { } narrowDenied)
+            return Deny(narrowDenied);
+
         switch (tool)
         {
             case "notes_list":
-                return Json(notesSvc.GetSummaries(context.OwnerId, OptionalArg(arguments, "source"), null)
+                return Json(notesSvc.GetSummaries(context.OwnerId,
+                        narrow ? projectId : OptionalArg(arguments, "source"), null)
+                    .Where(n => !narrow || n.Source == projectId)
                     .Select(Brief).ToList());
 
             case "notes_search":
@@ -93,7 +105,9 @@ public sealed class NotesToolset(
                 var q = StringArg(arguments, "query");
                 var status = StringArg(arguments, "status");
                 var query = status.Length > 0 ? $"status:{status} {q}".Trim() : q;
-                return Json(notesSvc.GetSummaries(context.OwnerId, null, query.Length > 0 ? query : null)
+                return Json(notesSvc.GetSummaries(context.OwnerId, narrow ? projectId : null,
+                        query.Length > 0 ? query : null)
+                    .Where(n => !narrow || n.Source == projectId)
                     .Select(n => n.Annotation is null ? Brief(n) : new
                     {
                         n.Id, n.Title, n.Source, n.SourceLabel, n.Tags, n.UpdatedAt,
@@ -104,7 +118,7 @@ public sealed class NotesToolset(
 
             case "notes_read":
                 return notesSvc.GetDetail(context.OwnerId, StringArg(arguments, "id")) is { } detail
-                    ? Json(detail)
+                    ? Json(narrow ? NarrowDetail(detail, projectId!) : detail)
                     : Deny($"Заметка {StringArg(arguments, "id")} не найдена.");
 
             case "notes_suggest_title":
@@ -162,7 +176,8 @@ public sealed class NotesToolset(
             }
 
             case "notes_backlinks":
-                return Json(notesSvc.GetBacklinks(context.OwnerId, StringArg(arguments, "id")));
+                return Json(notesSvc.GetBacklinks(context.OwnerId, StringArg(arguments, "id"))
+                    .Where(b => !narrow || b.Source == projectId));
 
             case "notes_graph":
                 return Json(notesSvc.GetGraph(context.OwnerId, includeAnnotations: false));
@@ -235,9 +250,10 @@ public sealed class NotesToolset(
                 var id = StringArg(arguments, "id");
                 try
                 {
+                    var rootDetail = notesSvc.GetDetail(context.OwnerId, id);
                     return Json(new
                     {
-                        root = notesSvc.GetDetail(context.OwnerId, id),
+                        root = narrow && rootDetail is not null ? NarrowDetail(rootDetail, projectId!) : rootDetail,
                         replies = notesSvc.GetReplies(context.OwnerId, id),
                     });
                 }
@@ -351,6 +367,61 @@ public sealed class NotesToolset(
                 throw new ArgumentException($"Неизвестный инструмент: {tool}", nameof(tool));
         }
     }
+
+    // --- Узкая рамка (общий проект) ---
+
+    private const string NarrowText =
+        "Недоступно в общем проекте: заметки доступны только из источника этого проекта.";
+
+    // Отказ в узкой рамке или null. Текст фиксированный: ни id, ни названий из аргументов модели
+    // (в них может лежать адрес личной заметки владельца).
+    private static string? NarrowDenied(string tool, JsonObject arguments, string? projectId)
+    {
+        if (projectId is null) return NarrowText;
+        switch (tool)
+        {
+            // Поиск и обход по всем источникам: личный vault не отфильтровать на выходе
+            case "notes_graph" or "notes_semantic_search" or "notes_daily" or "notes_resolve":
+                return NarrowText;
+            case "notes_list":
+                return OptionalArg(arguments, "source") is { } src && src != projectId ? NarrowText : null;
+            case "notes_search":
+                return null;
+            case "notes_create":
+                return OptionalArg(arguments, "source") is { } cs && cs != projectId ? NarrowText : null;
+            case "notes_annotate" or "notes_annotations":
+                return OptionalArg(arguments, "scope") is { } sc && sc != projectId ? NarrowText : null;
+            case "notes_move":
+                if (OptionalArg(arguments, "targetSource") is { } ts && ts != projectId) return NarrowText;
+                return SourceOfId(StringArg(arguments, "id")) == projectId ? null : NarrowText;
+            default:
+                // Все остальные работают с заметкой по id: источник зашит в сам id
+                return SourceOfId(StringArg(arguments, "id")) == projectId ? null : NarrowText;
+        }
+    }
+
+    // Источник заметки из её id (base64url(sourceKey|relPath)); null — id не разобрался
+    private static string? SourceOfId(string id)
+    {
+        try
+        {
+            var b64 = id.Replace('-', '+').Replace('_', '/');
+            switch (b64.Length % 4) { case 2: b64 += "=="; break; case 3: b64 += "="; break; }
+            var raw = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(b64));
+            var sep = raw.IndexOf('|');
+            return sep < 0 ? null : raw[..sep];
+        }
+        catch (FormatException) { return null; }
+    }
+
+    // Карточка без ссылок и упоминаний из других источников (названия личных заметок владельца)
+    private static NoteDetail NarrowDetail(NoteDetail d, string projectId) => d with
+    {
+        Links = d.Links.Where(l => l.TargetId.StartsWith("ghost:", StringComparison.Ordinal)
+            || SourceOfId(l.TargetId) == projectId).ToList(),
+        Backlinks = d.Backlinks.Where(b => b.Source == projectId).ToList(),
+        UnlinkedMentions = d.UnlinkedMentions.Where(b => b.Source == projectId).ToList(),
+    };
 
     // --- Маршрут: /mcp/notes/{sessionId} ---
 

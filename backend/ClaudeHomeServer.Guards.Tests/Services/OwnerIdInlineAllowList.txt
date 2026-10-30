@@ -26,6 +26,8 @@
 #   • MediaHistoryController|1 — запись личной истории медиа (ADR-030), не проект;
 #   • ProjectGroupsController|2 — группы проектов личные у владельца, а не проектный доступ;
 #   • LocalModelStatsController|8 — админская статистика: «моя» и чужая строка учёта, не проект.
+# Дельта S2a-3a: −2 совпадения в 0 файлах: WorkspaceToolset.cs 4→2 (проверки проекта по владельцу → IProjectAccess;
+# остаток — task.OwnerId, S2b).
 # Дельта S0-5: −9 совпадений в −6 файлах (контроллеры вертикалей): Architecture, PluginBridge и три
 # *ScopeGate (Image/Audio/Video) переведены на ProjectAccess/SessionAccess, SpendController −1 (бейдж
 # чата; остаток — task.OwnerId, S2b). Тулсеты (*Toolset.cs) — S2a, не входят.
@@ -55,7 +57,7 @@ backend/ClaudeHomeServer/Services/Mcp/Http/LocalMediaToolset.cs|1
 backend/ClaudeHomeServer/Services/Mcp/Http/MemoryToolset.cs|1
 backend/ClaudeHomeServer/Services/Mcp/Http/ProjectRunCaller.cs|1
 backend/ClaudeHomeServer/Services/Mcp/Http/TasksToolset.cs|8
-backend/ClaudeHomeServer/Services/Mcp/Http/WorkspaceToolset.cs|4
+backend/ClaudeHomeServer/Services/Mcp/Http/WorkspaceToolset.cs|2
 backend/ClaudeHomeServer/Services/Mcp/LocalMediaProjectAccess.cs|2
 backend/ClaudeHomeServer.Spend/Controllers/SpendController.cs|1
 backend/ClaudeHomeServer.VideoEditor/Mcp/VideoEditorToolset.cs|1

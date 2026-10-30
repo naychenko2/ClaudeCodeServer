@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Controllers;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
@@ -50,6 +51,7 @@ public sealed class TasksToolset(
     // Подсистема Notes отключаемая: null — обратная запись в заметку-источник тихо
     // пропускается (см. использование ниже, паритет с TasksController).
     ClaudeHomeServer.Services.Spheres.ISphereDirectory spheres,
+    ITurnFrameSource frames,
     INoteTaskSync? noteSync = null) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/tasks/{sessionId}. Константа —
@@ -101,6 +103,15 @@ public sealed class TasksToolset(
         var projectId = session.ProjectId;
         var selfPersonaId = session.PersonaId;
         var extraScopes = bindings.BuildExternalTaskScopes(context.OwnerId, persona);
+        // Узкая рамка хода (общий проект, S2a-3a): только задачи проекта чата-вызывателя. Кросс-проектные
+        // привязки персоны отбрасываем (зона = один проект), scope=all, список проектов и поиск по
+        // всем задачам закрыты. Вердикт только читается; состав tools/list от него не зависит.
+        var frame = frames.Frame(context.CallerSessionId, context.OwnerId);
+        if (frame == TurnFrameKind.Narrow)
+        {
+            if (NarrowDenied(tool, arguments, projectId)) return Deny(NarrowText);
+            extraScopes = [];
+        }
         var allowed = AllowedProjectIds(projectId, extraScopes);
         var extraReadOnly = extraScopes.Where(s => s.ReadOnly).Select(s => s.ProjectId)
             .ToHashSet(StringComparer.Ordinal);
@@ -808,6 +819,17 @@ public sealed class TasksToolset(
     private IReadOnlyList<(string ProjectId, bool ReadOnly)> AssignedPersonaScopes(
         string ownerId, string personaId) =>
         personas.Get(personaId, ownerId) is { } p ? bindings.BuildExternalTaskScopes(ownerId, p) : [];
+
+    private const string NarrowText =
+        "Недоступно в общем проекте: задачи доступны только из проекта этого чата.";
+
+    // Отказ узкой рамки. Чат вне проекта (личные задачи владельца), список проектов, поиск по всем
+    // задачам, scope=all и чужой projectId закрыты; текст фиксированный, без id из аргументов.
+    private static bool NarrowDenied(string tool, JsonObject arguments, string? projectId) =>
+        projectId is null
+        || tool is "tasks_list_projects" or "tasks_search"
+        || (tool == "tasks_list" && StringArg(arguments, "scope") == "all")
+        || (OptionalArg(arguments, "projectId") is { } requested && requested != projectId);
 
     private static IReadOnlyCollection<string> AllowedProjectIds(string? projectId,
         IReadOnlyList<(string ProjectId, bool ReadOnly)> extraScopes)

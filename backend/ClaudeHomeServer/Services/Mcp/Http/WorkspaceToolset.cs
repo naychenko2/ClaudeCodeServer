@@ -2,6 +2,7 @@
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Controllers;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
@@ -75,6 +76,9 @@ public sealed partial class WorkspaceToolset(
     KnowledgeBaseCatalogService knowledgeCatalog,
     ISessionBroadcaster broadcaster,
     SessionContextResolver contextResolver,
+    IProjectAccess access,
+    ITurnFrameSource frames,
+    ITurnActorRegistry turnActors,
     INoteAccessor? notes = null,
     ChatContinueService? continuation = null) : IMcpParameterizedToolset
 {
@@ -215,7 +219,7 @@ public sealed partial class WorkspaceToolset(
     {
         if (!ToolCapability.TryGetValue(tool, out var area) || area == ProjectCapabilityArea.Platform) return null;
         var project = projects.GetById(StringArg(arguments, "projectId"));
-        if (project is null || project.OwnerId != context.OwnerId) return null;
+        if (project is null || access.Resolve(context.OwnerId, project.Id) is null) return null;
         return ProjectCapabilityGuard.Refusal(project, area) is { } reason
             ? ProjectCapabilityGuard.HubMessage(reason)
             : null;
@@ -291,7 +295,7 @@ public sealed partial class WorkspaceToolset(
         if (plan.AllowedProjectIds is { Count: > 0 } allowed && !allowed.Contains(projectId))
             return $"Проект {projectId} вне разрешённой зоны этой сессии";
         var project = projects.GetById(projectId);
-        if (project is null || project.OwnerId != context.OwnerId)
+        if (project is null || access.Resolve(context.OwnerId, project.Id) is null)
             return $"Проект {projectId} не найден или недоступен";
         return null;
     }
@@ -325,6 +329,47 @@ public sealed partial class WorkspaceToolset(
             ? gate.DenyText
             : null;
 
+    private const string NarrowText =
+        "Недоступно в общем проекте: инструмент работает только в рамках проекта этого чата.";
+
+    // Отказ узкой рамки или null. Текст фиксированный — без id и названий из аргументов модели
+    // (в них может лежать адрес личных данных владельца).
+    private string? NarrowDenied(string tool, JsonObject arguments, McpToolCallContext context, Session session)
+    {
+        var own = session.ProjectId;
+        if (tool == "context_list") return null;
+        // Личное пространство и опасные действия: поиск по всему, выкатка, создание/правка проектов,
+        // базы знаний владельца (Dify), безвозвратные удаления
+        if (tool is "search_unified" or "deploy_start" or "deploy_rollback" or "deploy_status"
+            or "files_delete" or "chats_delete" or "projects_create" or "projects_update"
+            || tool.StartsWith("kb_", StringComparison.Ordinal))
+            return NarrowText;
+        // Чат вне проекта (или проект не определён) в узкой рамке ничего своего не имеет
+        if (own is null) return NarrowText;
+        var requested = OptionalArg(arguments, "projectId");
+        if (requested is not null && requested != own) return NarrowText;
+        // Чаты без проекта — личное пространство; список/создание обязаны назвать свой проект
+        if (tool is "chats_list" or "chats_create" && requested is null) return NarrowText;
+        // Метки сессии/задачи: сущность обязана принадлежать своему проекту
+        if (tool is "tags_apply" or "tags_remove")
+        {
+            if (requested is null) return NarrowText;
+            if (StringArg(arguments, "entityType").Trim() == "task"
+                && tasks.GetById(StringArg(arguments, "entityId").Trim())?.ProjectId != own)
+                return NarrowText;
+        }
+        // Чат-адресат: из своего проекта и виден актору хода (IProjectAccess.ResolveSession); актор
+        // неизвестен — отказ (fail-closed)
+        if (tool.StartsWith("chats_", StringComparison.Ordinal) && StringArg(arguments, "sessionId") is { Length: > 0 } sid)
+        {
+            var target = sessions.GetOwned(sid, context.OwnerId);
+            var actor = turnActors.Actor(session.Id, context.OwnerId);
+            if (target is null || target.ProjectId != own || access.ResolveSession(actor, sid) is null)
+                return NarrowText;
+        }
+        return null;
+    }
+
     public async Task<McpToolCallResult> CallAsync(string tool, JsonObject arguments,
         McpToolCallContext context, CancellationToken ct)
     {
@@ -340,6 +385,23 @@ public sealed partial class WorkspaceToolset(
             return Deny($"Инструмент {tool} недоступен: секция {section} выключена для этой сессии");
         if (CapabilityDenied(tool, arguments, context) is { } localProject)
             return Deny(localProject);
+
+        // Узкая рамка хода (общий проект, S2a-3a): остаётся только проект чата-вызывателя. Зону плана
+        // сужаем до него — ProjectDenied, projects_list и прочие проверки зоны работают как обычно;
+        // отдельный отказ — у инструментов вне проекта. Вердикт только читается.
+        var frame = frames.Frame(context.CallerSessionId, context.OwnerId);
+        if (frame == TurnFrameKind.Narrow)
+        {
+            if (NarrowDenied(tool, arguments, context, session) is { } narrowDenied)
+                return Deny(narrowDenied);
+            var own = session.ProjectId!;
+            plan = plan with
+            {
+                AllowedProjectIds = plan.AllowedProjectIds is { Count: > 0 } zone && !zone.Contains(own)
+                    ? [SessionManager.NoProjectsZone]
+                    : [own],
+            };
+        }
 
         return section switch
         {

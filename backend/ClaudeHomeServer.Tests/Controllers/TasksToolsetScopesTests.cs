@@ -44,7 +44,7 @@ public class TasksToolsetScopesTests : IDisposable
     private static async Task<JsonElement> CallToolAsync(
         HttpClient client, string server, string sessionId, string tool, object args)
     {
-        var resp = await client.PostAsJsonAsync($"/mcp/{server}/{sessionId}", new
+        var resp = await client.AsCaller(sessionId).PostAsJsonAsync($"/mcp/{server}/{sessionId}", new
         {
             jsonrpc = "2.0", id = 1, method = "tools/call",
             @params = new { name = tool, arguments = args },

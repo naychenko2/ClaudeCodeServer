@@ -9,6 +9,8 @@ namespace ClaudeHomeServer.Models;
 // task_completed, task_spawned, task_deleted, memory_learned, knowledge_changed, note_changed,
 // team_joined, team_left и т.п. — намеренно открытый, чтобы не плодить enum.
 // Actor — personaId / persona «Роль (Имя)» / "user" / "system".
+// ActorUserId — человек, инициировавший событие (актор хода общего проекта); null у событий до
+// схемы v2 и там, где инициатор не известен (системные, персоны).
 // EntityRef — опциональная ссылка на сущность (id сессии/задачи/памяти/датасета) для диплинка.
 public class ProjectEvent
 {
@@ -20,6 +22,7 @@ public class ProjectEvent
     public string Actor { get; set; } = "";
     public string Summary { get; set; } = "";
     public string? EntityRef { get; set; }
+    public string? ActorUserId { get; set; }
 }
 
 // Известные типы событий проектного лога (строковые константы Type). Расширяемо.

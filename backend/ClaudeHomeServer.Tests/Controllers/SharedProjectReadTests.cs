@@ -193,6 +193,57 @@ public class SharedProjectReadTests : IClassFixture<TestWebApplicationFactory>
         finally { config[SharedProjectsGate.SwitchKey] = "true"; }
     }
 
+    // ── журнал событий проекта (S2a-6c): ключ хранилища — арендатор, не вызывающий ──
+
+    private async Task SeedEventAsync(string projectId)
+    {
+        var r = await Owner().GetAsync($"/api/projects/{projectId}");
+        var tenant = JsonSerializer.Deserialize<JsonElement>(await r.Content.ReadAsStringAsync())
+            .GetProperty("ownerId").GetString()!;
+        _factory.Services.GetRequiredService<ProjectEventLogService>()
+            .Append(projectId, tenant, "chat_turn", "user", "ход владельца", "s1", actorUserId: tenant);
+    }
+
+    [Theory]
+    [InlineData("reader")]
+    [InlineData("editor")]
+    public async Task Участник_ЧитаетЖурналСобытийПроекта_200(string role)
+    {
+        var (projectId, _) = await SharedProjectAsync(role);
+        await SeedEventAsync(projectId);
+
+        var r = await Member().GetAsync($"/api/projects/{projectId}/events");
+
+        r.StatusCode.Should().Be(HttpStatusCode.OK);
+        var events = JsonSerializer.Deserialize<JsonElement>(await r.Content.ReadAsStringAsync());
+        events.EnumerateArray().Should().ContainSingle(e => e.GetProperty("summary").GetString() == "ход владельца");
+    }
+
+    [Fact]
+    public async Task Посторонний_ЖурналСобытий_404()
+    {
+        var (projectId, _) = await SharedProjectAsync(role: null);
+        await SeedEventAsync(projectId);
+
+        (await Member().GetAsync($"/api/projects/{projectId}/events")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task ФлагИРубильникВыключены_ЖурналСобытийУчастнику_404()
+    {
+        var (projectId, _) = await SharedProjectAsync("editor");
+        await SeedEventAsync(projectId);
+
+        await SetFlagAsync(Member(), false);
+        try { (await Member().GetAsync($"/api/projects/{projectId}/events")).StatusCode.Should().Be(HttpStatusCode.NotFound); }
+        finally { await SetFlagAsync(Member(), true); }
+
+        var config = _factory.Services.GetRequiredService<IConfiguration>();
+        config[SharedProjectsGate.SwitchKey] = "false";
+        try { (await Member().GetAsync($"/api/projects/{projectId}/events")).StatusCode.Should().Be(HttpStatusCode.NotFound); }
+        finally { config[SharedProjectsGate.SwitchKey] = "true"; }
+    }
+
     // ── владелец: прежний путь не изменился ───────────────────────────────────────
 
     [Fact]

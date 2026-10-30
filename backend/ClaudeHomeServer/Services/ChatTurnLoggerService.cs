@@ -54,8 +54,10 @@ public sealed class ChatTurnLoggerService : IHostedService
         var projectId = session.ProjectId;
         var sessionId = session.Id;
         var actor = session.PersonaId ?? "user";
+        // Человек-инициатор хода (общий проект); null — неизвестен, запись остаётся без него
+        var actorUserId = _sessions.GetTurnActor(sessionId, owner!);
         _ = Task.Run(() => _events.Append(projectId, owner!, ProjectEventTypes.ChatTurn,
-            actor, label is not null ? $"{label} ответил" : "Ход чата завершён", sessionId));
+            actor, label is not null ? $"{label} ответил" : "Ход чата завершён", sessionId, actorUserId));
         return Task.CompletedTask;
     }
 }

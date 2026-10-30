@@ -197,6 +197,10 @@ jobs:
     # 6-часовом таймауте). Потолок джобы — страховка от сгоревших часов; виновника
     # зависания ищет blame-режим прогона ниже.
     timeout-minutes: 30
+    # actions: read — `gh run download` в фоне берёт артефакты этого прогона (подготовка шарда)
+    permissions:
+      contents: read
+      actions: read
     strategy:
       fail-fast: false
       matrix:
@@ -230,47 +234,46 @@ jobs:
       # ручной --check на спокойной машине, в предгейт сторож не входит
       DURATION_GUARD_THRESHOLD: "30"
     steps:
-      # Подготовка шарда идёт конвейером: последовательны только действия (скачать, checkout, setup-dotnet),
-      # тяжёлое — распаковка сборки и установка ffmpeg — работает ФОНОМ рядом с ними. Бюджет до первого
-      # `dotnet test` — ~35 с, поэтому в цепочке нет ни `dotnet restore`, ни `apt`, ни ожидания «на всякий случай».
-      #
-      # Сборка — первым делом: репозиторий ей не нужен, а распаковка идёт в склад $RUNNER_TEMP/stage
-      # (checkout чистит рабочую папку без .git, поэтому прямо в неё нельзя); после checkout склад
-      # сливается жёсткими ссылками.
-      - uses: actions/download-artifact@v4
-        with:
-          name: backend-build
-          path: ${{ runner.temp }}
-      - name: Unpack build output (background)
+      # Подготовка шарда идёт конвейером: последовательны только действия (checkout, setup-dotnet, кэш),
+      # тяжёлое — скачивание артефактов, распаковка сборки и установка ffmpeg — работает ФОНОМ с первой секунды.
+      # Бюджет до первого `dotnet test` — ~35 с, поэтому в цепочке нет ни `dotnet restore`, ни `apt`, ни
+      # `download-artifact` (действие нельзя увести в фон, а оно стоило 3–17 с подряд). Артефакты текущего
+      # прогона берёт `gh run download` (нужен actions: read, см. permissions). Распаковка идёт в склад
+      # $RUNNER_TEMP/stage, а не в рабочую папку: checkout чистит её, если в ней нет .git; после checkout
+      # склад сливается жёсткими ссылками.
+      - name: Start background prep (artifacts, unpack, ffmpeg)
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p "$RUNNER_TEMP/stage"
-          setsid nohup bash -o pipefail -c 'start=$(date +%s); zstd -d -q --long=27 -c "$RUNNER_TEMP/backend-build.tar.zst" | tar -xf - -C "$RUNNER_TEMP/stage"; rc=$?; echo "Распаковка заняла $(( $(date +%s) - start )) с"; echo $rc > "$RUNNER_TEMP/unpack.status"' \
+          # gh кладёт файлы артефакта под -D (глубина зависит от версии), поэтому имя файла ищем find-ом
+          setsid nohup bash -o pipefail -c 'start=$(date +%s)
+            for i in 1 2 3; do gh run download "$GITHUB_RUN_ID" -R "$GITHUB_REPOSITORY" -n backend-build -D "$RUNNER_TEMP/dl-build" && break; sleep 2; done
+            echo "Скачивание заняло $(( $(date +%s) - start )) с"
+            zstd -d -q --long=27 -c "$(find "$RUNNER_TEMP/dl-build" -name backend-build.tar.zst)" | tar -xf - -C "$RUNNER_TEMP/stage"; rc=$?
+            echo "Скачивание и распаковка заняли $(( $(date +%s) - start )) с"; echo $rc > "$RUNNER_TEMP/unpack.status"' \
             > "$RUNNER_TEMP/unpack.log" 2>&1 < /dev/null &
-      # ffmpeg нужен тестам монтажа без ИИ модуля «Звук» (ADR-021, этап 5) и миниатюрам истории медиа: на CI
-      # без него эти тесты падают (CI=true), а не пропускаются. Llm.Tests им не пользуется — ему не ставим.
-      # Монолит и «rest» — ставим всем: куда попадёт класс с ffmpeg (монолит) или проект Images.Tests («rest»),
-      # решает раскладка по профилю прошлого прогона, до распаковки её не узнать. Пакеты скачала сборка
-      # (артефакт ffmpeg-debs) — на шарде это dpkg -i без сети; нет артефакта или dpkg не справился —
-      # запасной путь через apt (устаревший индекс образа лечит apt update). Тоже фоном, итог ждёт шаг ниже.
-      - uses: actions/download-artifact@v4
-        if: matrix.kind != 'llm'
-        continue-on-error: true
-        with:
-          name: ffmpeg-debs
-          path: ${{ runner.temp }}/ffmpeg-debs
-      - name: Install ffmpeg (background)
-        if: matrix.kind != 'llm'
-        run: |
-          setsid nohup bash -c 'start=$(date +%s)
-            export DEBIAN_FRONTEND=noninteractive
-            if ls "$RUNNER_TEMP"/ffmpeg-debs/*.deb > /dev/null 2>&1 && sudo -E dpkg -i "$RUNNER_TEMP"/ffmpeg-debs/*.deb; then rc=0
-            else
-              echo "dpkg -i не вышел или .deb нет — ставим через apt"
-              sudo -E apt-get install -y -qq --no-install-recommends ffmpeg || { sudo -E apt-get update -qq && sudo -E apt-get install -y -qq --no-install-recommends ffmpeg; }
-              rc=$?
-            fi
-            echo "ffmpeg занял $(( $(date +%s) - start )) с"; echo $rc > "$RUNNER_TEMP/ffmpeg.status"' \
-            > "$RUNNER_TEMP/ffmpeg.log" 2>&1 < /dev/null &
+          # ffmpeg нужен тестам монтажа без ИИ модуля «Звук» (ADR-021, этап 5) и миниатюрам истории медиа: на CI
+          # без него эти тесты падают (CI=true), а не пропускаются. Llm.Tests им не пользуется — ему не ставим.
+          # Монолит и «rest» — ставим всем: куда попадёт класс с ffmpeg (монолит) или проект Images.Tests («rest»),
+          # решает раскладка по профилю прошлого прогона, до распаковки её не узнать. Пакеты скачала сборка
+          # (артефакт ffmpeg-debs) — на шарде это dpkg -i без сети; --force-unsafe-io: раннер одноразовый, fsync
+          # на сотнях файлов только тормозит. Нет артефакта или dpkg не справился — запасной путь через apt
+          # (устаревший индекс образа лечит apt update).
+          if [ "${{ matrix.kind }}" != llm ]; then
+            setsid nohup bash -c 'start=$(date +%s)
+              export DEBIAN_FRONTEND=noninteractive
+              gh run download "$GITHUB_RUN_ID" -R "$GITHUB_REPOSITORY" -n ffmpeg-debs -D "$RUNNER_TEMP/dl-debs" || echo "артефакта ffmpeg-debs нет"
+              debs=$(find "$RUNNER_TEMP/dl-debs" -name "*.deb" 2> /dev/null)
+              if [ -n "$debs" ] && sudo -E dpkg --force-unsafe-io -i $debs; then rc=0
+              else
+                echo "dpkg -i не вышел или .deb нет — ставим через apt"
+                sudo -E apt-get install -y -qq --no-install-recommends ffmpeg || { sudo -E apt-get update -qq && sudo -E apt-get install -y -qq --no-install-recommends ffmpeg; }
+                rc=$?
+              fi
+              echo "ffmpeg занял $(( $(date +%s) - start )) с"; echo $rc > "$RUNNER_TEMP/ffmpeg.status"' \
+              > "$RUNNER_TEMP/ffmpeg.log" 2>&1 < /dev/null &
+          fi
       - uses: actions/checkout@v4
       # Кэш пакетов NuGet нужен и без restore: из него берутся пакеты Test SDK, чьи props подключают
       # obj/*.nuget.g.props (без них `dotnet test --no-build` молча ничего не запускает, код 0).

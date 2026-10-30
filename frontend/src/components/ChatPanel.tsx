@@ -71,6 +71,7 @@ import { WaitingIndicator } from './ui/WaitingIndicator';
 import { TurnPlanPill } from './chat/TurnPlanPill';
 import { useFeatureRuns } from '../lib/featureRuns';
 import { useFeature, FLAGS } from '../lib/featureFlags';
+import { useFeaturesIndex, featureOf } from '../lib/featuresIndex';
 import { Modal, ModalActions, ConfirmDialog, Button } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { ChatEmptyState } from './chat/EmptyState';
@@ -1779,6 +1780,15 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
   // показывается и источник не зовётся. Агрегаты берутся из REST по сессии чата.
   const featureMode = useFeature(FLAGS.turnPlanFeatureMode);
   const featureRuns = useFeatureRuns(session.id, featureMode);
+  // Слот строки фичи в шапке (В2) живёт под ДВУМЯ флагами — как сама строка (FeatureBanner).
+  // Решение «есть ли у чата фича» принимается ЗДЕСЬ: React-элемент всегда truthy, и
+  // переданный при пустом чате слот гасил бы линию тулбара у каждого чата без фичи
+  // (ревью F2, major 2). Индекс — тот же стор, что у FeatureBanner (один запрос на
+  // проект, идемпотентен), нужен ровно чтобы отличить «слот задан» от «в нём есть».
+  const featuresOverview = useFeature(FLAGS.featuresOverview);
+  const featureRowOn = featureMode && featuresOverview;
+  useFeaturesIndex(session.projectId ?? null, featureRowOn);
+  const hasFeatureRow = featureRowOn && featureOf(session.id).length > 0;
 
 
   // Снимок промпта и размер контекста ДЛЯ КАЖДОГО индекса ленты: у постов ассистента
@@ -2720,6 +2730,19 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
       onSessionUpdated={onSessionUpdated}
       onAddToWall={onAddToWall}
       onChatDeleted={onChatDeleted}
+      // Строка фичи — вторая строка шапки (В2 «Трек», F2): под заголовком, над
+      // контекстом. Чат без фичи (или с выключенными флагами) — слот НЕ передаётся:
+      // шапка остаётся ровно как без строки фичи (ни пикселя, линия тулбара на месте).
+      featureBar={hasFeatureRow ? (
+        <FeatureBanner
+          sessionId={session.id}
+          projectId={session.projectId ?? null}
+          isMobile={!!isMobile}
+          chatTaskId={session.taskId ?? null}
+          // Ждут В ЭТОМ чате (waiting/stopped) — фокус в композер (M2), не страница фичи.
+          onFocusComposer={() => setComposerFocusBump(b => b + 1)}
+        />
+      ) : null}
       contextBar={contextBar}
     />
   );
@@ -2800,19 +2823,6 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
           </Button>
         </div>
       )}
-
-      {/* Плашка фичи: чат принадлежит фиче (индекс фич) — где фичи, её статус и
-          куда вернуться в ключевой чат. Под двумя флагами (режим «Исполнение фичи»
-          + «Обзор фич»); чат без фичи — плашки нет (FeatureBanner сам отдаёт null).
-          Центрирование по колонке чата (CHAT_MAX_W, как у ленты) — ВНУТРИ баннера. */}
-      <FeatureBanner
-        sessionId={session.id}
-        projectId={session.projectId ?? null}
-        isMobile={!!isMobile}
-        chatTaskId={session.taskId ?? null}
-        // Ждут В ЭТОМ чате (waiting/stopped) — фокус в композер (M2), не страница фичи.
-        onFocusComposer={() => setComposerFocusBump(b => b + 1)}
-      />
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор).
           Прокручивается НЕ вся ширина области, а колонка сообщений: иначе полоса

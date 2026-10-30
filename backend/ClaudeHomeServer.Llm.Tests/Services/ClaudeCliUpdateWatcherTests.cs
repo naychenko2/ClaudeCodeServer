@@ -560,4 +560,33 @@ public class CliVersionCacheTests
         (await cache.GetAsync()).Should().BeNull();
         cache.TryGetKnown(out _).Should().BeTrue();
     }
+
+    [Fact]
+    public async Task Changed_FiresOnlyWhenKnownVersionChanges()
+    {
+        var answers = new Queue<string?>(["2.1.283", "2.1.283", null, "2.1.300"]);
+        var cache = new CliVersionCache(() => Task.FromResult(answers.Dequeue()));
+        var fired = 0;
+        cache.Changed += () => Interlocked.Increment(ref fired);
+
+        await cache.GetAsync();      // null → X
+        fired.Should().Be(0);
+        await cache.RefreshAsync();  // X → X
+        fired.Should().Be(0);
+        await cache.RefreshAsync();  // неудачный опрос
+        fired.Should().Be(0);
+        await cache.RefreshAsync();  // X → Y
+        fired.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Changed_ThrowingSubscriber_DoesNotBreakRefresh()
+    {
+        var answers = new Queue<string?>(["2.1.283", "2.1.300"]);
+        var cache = new CliVersionCache(() => Task.FromResult(answers.Dequeue()));
+        cache.Changed += () => throw new InvalidOperationException("подписчик упал");
+
+        await cache.GetAsync();
+        (await cache.RefreshAsync()).Should().Be("2.1.300");
+    }
 }

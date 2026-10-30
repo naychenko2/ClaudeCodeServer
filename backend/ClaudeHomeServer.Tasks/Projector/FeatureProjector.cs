@@ -78,7 +78,13 @@ public sealed class FeatureProjector(TaskManager tasks)
         // первые ветви ComputeState, от тревоги они не зависят, поэтому формула та же, что
         // в ComputeState (:1648/:1653) — одна правда в двух местах не разойдётся.
         bool finalAccepted = IsFinalAccepted(final);
-        bool terminalState = TerminalState(epic, merge, finalAccepted) is not null;
+        // Закрытые мержи по моменту закрытия; волна после мержа снимает merged (см. WaveAfterMerge).
+        var closedMerges = children
+            .Where(t => t.Role == TaskRoles.Merge && t.Status == TaskItemStatus.Done && t.CompletedAt is not null)
+            .OrderBy(t => t.CompletedAt!.Value)
+            .ToList();
+        bool waveAfterMerge = WaveAfterMerge(steps, closedMerges);
+        bool terminalState = TerminalState(epic, merge, finalAccepted, waveAfterMerge) is not null;
 
         // GC-B4: «хвосты после мержа» — ЛЮБАЯ незакрытая дочерняя задача фичи, кроме merge
         // (решение Софьи, вопрос 1 плана GC-B4). Порядок — по CreatedAt. Хвосты не участвуют
@@ -94,7 +100,10 @@ public sealed class FeatureProjector(TaskManager tasks)
         var tailIds = postMergeTails.ToHashSet();
 
         // Вердикты — только по задачам, которые их несут (ревью/проверка/финал).
-        var verdictBearing = reviews.Concat(qa).Concat(final is not null ? [final] : []).ToList();
+        // Финалов может быть несколько (круги): счётчики считают ВСЕ, как и цепочки шагов, —
+        // одна правда о возвратах; «последний финал» нужен только состоянию и текущей стадии.
+        var allFinals = children.Where(t => t.Role == TaskRoles.Final).ToList();
+        var verdictBearing = reviews.Concat(qa).Concat(allFinals).ToList();
         var verdicts = new FeatureVerdicts
         {
             Accepted = verdictBearing.Count(t => t.Verification?.Verdict == TaskVerdicts.Accepted),
@@ -113,18 +122,20 @@ public sealed class FeatureProjector(TaskManager tasks)
 
         // ─── Б2: цепочки шагов, источники возврата, линии ─────────────────────────────────
         // Задачи, несущие вердикт витка (ревью/проверка/финал) — для витков и возвратов.
-        var verdictTasks = reviews.Concat(qa).Concat(final is not null ? [final] : []).ToList();
+        // Финалов может быть несколько (круги): в учёт шагов идут все — прошлый возврат тоже виток.
+        var verdictTasks = reviews.Concat(qa).Concat(children.Where(t => t.Role == TaskRoles.Final)).ToList();
 
         // Цепочки: по одной на шаг (stepRef). Шаг = stepRef; в цепочку входят задача шага
         // (role=step) и её доработки (role=rework, тот же stepRef), в порядке времени.
-        var accounting = FeatureStepAccounting.Build(steps, verdictTasks, plan, nowUtc, sessions);
+        var accounting = FeatureStepAccounting.Build(steps, verdictTasks, plan, nowUtc, sessions,
+            children.Where(t => t.Role == TaskRoles.Merge).ToList());
         var stepChains = accounting.Chains;
 
         // TR-B1c: сверка трекера — один вызов на том же проходе, что и учёт шагов.
         var tracker = FeatureTracker.Build(epic, children, accounting, nowUtc, sessions);
 
         // Возвраты по источникам (ревью/проверка/финал): число возвратов и сколько открыто.
-        var returnsBySource = BuildReturnsBySource(reviews, qa, final, steps);
+        var returnsBySource = BuildReturnsBySource(reviews, qa, allFinals, steps);
 
         // Линии (back/front/прочее): исполнители и счётчики.
         var lanes = accounting.Lanes;
@@ -239,7 +250,8 @@ public sealed class FeatureProjector(TaskManager tasks)
             hasStopped: stoppedTask is not null,
             hasExplicitWait: waitTask is not null,
             nowCount: nowList.Count,
-            anyStarted: featureTasks.Any(t => t.ClaudeStartedAt is not null));
+            anyStarted: featureTasks.Any(t => t.ClaudeStartedAt is not null),
+            waveAfterMerge: waveAfterMerge);
 
         // W4-HOLD-B1 (R-HOLD-B1): пауза — решение человека («фичу не вести»), а не тревога: при
         // state=paused Attention гасится — иначе фича на паузе показывает «stopped» (тон, чипы,
@@ -379,8 +391,7 @@ public sealed class FeatureProjector(TaskManager tasks)
                 case "prod":
                     int returns = reviews.Count(t => t.Verification?.Verdict is TaskVerdicts.Returned or TaskVerdicts.AcceptedWithRemarks)
                         + qa.Count(t => t.Verification?.Verdict is TaskVerdicts.Returned or TaskVerdicts.AcceptedWithRemarks);
-                    if (final is not null && final.Verification?.Verdict is TaskVerdicts.Returned or TaskVerdicts.AcceptedWithRemarks)
-                        returns++;
+                    returns += allFinals.Count(t => t.Verification?.Verdict is TaskVerdicts.Returned or TaskVerdicts.AcceptedWithRemarks);
                     passes = 1 + returns;
                     break;
                 case "review":
@@ -579,6 +590,15 @@ public sealed class FeatureProjector(TaskManager tasks)
             Qa = qa,
             Final = final,
             Merge = merge,
+            Merges = closedMerges
+                .Select(m => new FeatureMergeMark
+                {
+                    TaskId = m.Id,
+                    At = m.CompletedAt!.Value,
+                    StepRefs = stepChains.Where(c => c.InMaster && c.MergedAt == m.CompletedAt).Select(c => c.StepRef).ToList(),
+                })
+                .ToList(),
+            WaveAfterMerge = waveAfterMerge,
             AwaitingHumanSince = epic.AwaitingHumanSince,
             AwaitingHumanReason = epic.AwaitingHumanReason,
             Hold = epic.Hold,
@@ -874,6 +894,8 @@ public sealed class FeatureProjector(TaskManager tasks)
         Qa = SlimAll(run.Qa),
         Final = run.Final is null ? null : Slim(run.Final),
         Merge = run.Merge is null ? null : Slim(run.Merge),
+        Merges = run.Merges,
+        WaveAfterMerge = run.WaveAfterMerge,
         AwaitingHumanSince = run.AwaitingHumanSince,
         AwaitingHumanReason = run.AwaitingHumanReason,
         Hold = run.Hold,
@@ -949,7 +971,7 @@ public sealed class FeatureProjector(TaskManager tasks)
     // (уникальные задачи с returned/accepted_with_remarks) и сколько из них открыто (их доработка
     // ещё не done). «Доработка» — rework-задача, чей ReviewOf ссылается на задачу-источник.
     private static FeatureReturnsBySource BuildReturnsBySource(
-        List<TaskItem> reviews, List<TaskItem> qa, TaskItem? final, List<TaskItem> steps)
+        List<TaskItem> reviews, List<TaskItem> qa, List<TaskItem> finals, List<TaskItem> steps)
     {
         var reworks = steps.Where(t => t.Role == TaskRoles.Rework).ToList();
         FeatureSourceReturns Count(List<TaskItem> tasks)
@@ -965,12 +987,11 @@ public sealed class FeatureProjector(TaskManager tasks)
             }
             return new FeatureSourceReturns { Count = count, Open = open };
         }
-        List<TaskItem> finalList = final is not null ? [final] : [];
         return new FeatureReturnsBySource
         {
             Review = Count(reviews),
             Qa = Count(qa),
-            Final = Count(finalList),
+            Final = Count(finals),
         };
     }
 
@@ -1053,7 +1074,7 @@ public sealed class FeatureProjector(TaskManager tasks)
     // Пометка остановки валидна, только если позже старта — тот же guard, что у Attention
     // (:132) и журнала (:649): после перезапуска MarkClaudeStarted сбрасывает пометку, но
     // она может не успеть сброситься; «устаревшая» пометка (раньше ClaudeStartedAt) — не остановка.
-    private static bool HasValidStopMark(TaskItem t)
+    internal static bool HasValidStopMark(TaskItem t)
         => t.ExecutorStoppedAt is not null
         && (t.ClaudeStartedAt is null || t.ExecutorStoppedAt > t.ClaudeStartedAt);
 
@@ -1208,11 +1229,15 @@ public sealed class FeatureProjector(TaskManager tasks)
     }
 
     // Одна фича по id эпика (владельца ownerId). null — эпика нет.
-    public FeatureRun? Project(string featureId, string ownerId)
+    // sessions (P2 «расхождения в хвост хода»): узкий снимок сессий владельца — без него
+    // reported_open не выдаётся вовсе (FeatureTracker fail-closed, FeatureTracker.cs:131-151),
+    // с ним — тот же состав шести видов, что у страницы фичи и блока «Сверка трекера» в MCP.
+    public FeatureRun? Project(string featureId, string ownerId,
+        IReadOnlyCollection<FeatureIndexSession>? sessions = null)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
         var epic = owner.FirstOrDefault(t => t.Id == featureId && t.Role == TaskRoles.Feature);
-        return epic is null ? null : WithQueue(Build(epic, FeatureTasks(epic, owner)), owner);
+        return epic is null ? null : WithQueue(Build(epic, FeatureTasks(epic, owner), null, sessions), owner);
     }
 
     // Одна фича по id эпика — ПОЛНЫЙ (необлегчённый) run: для страницы фичи (GetFeature).
@@ -1741,12 +1766,14 @@ public sealed class FeatureProjector(TaskManager tasks)
     // Терминальное состояние фичи (merged/closed) — общая формула проектора и ComputeState
     // (GC-B4): хвосты после мержа считаются ДО тревоги, а merged/closed — первые ветви
     // ComputeState, от тревоги они не зависят. null — фича не терминальна.
-    internal static string? TerminalState(TaskItem epic, TaskItem? merge, bool finalAccepted)
+    internal static string? TerminalState(TaskItem epic, TaskItem? merge, bool finalAccepted, bool waveAfterMerge = false)
     {
         // merged: merge-задача Done И (финал принят ИЛИ эпик Done) — частичный мерж
         // (merge Done, финал не принят, эпик открыт) фичу не закрывает (инцидент 21.10).
+        // Волна после мержа (новый шаг/доработка) снимает merged у открытого эпика; эпик Done —
+        // решение человека, его волна не отменяет.
         if (merge is not null && merge.Status == TaskItemStatus.Done
-            && (finalAccepted || epic.Status == TaskItemStatus.Done)) return FeatureStates.Merged;
+            && ((finalAccepted && !waveAfterMerge) || epic.Status == TaskItemStatus.Done)) return FeatureStates.Merged;
         // closed: эпик Done и не merged (merged отфильтрован выше).
         if (epic.Status == TaskItemStatus.Done) return FeatureStates.Closed;
         return null;
@@ -1758,6 +1785,20 @@ public sealed class FeatureProjector(TaskManager tasks)
     // Чистая функция от полей эпика (в т.ч. Hold)/merge/тревог/«сейчас» — на ней золотые тесты
     // (FeatureProjectorTests). hasExplicitWait — явный wait (AwaitingHumanSince), КРОМЕ вычисленного
     // «мерж» (тот → merge_pending).
+    // Волна после мержа: шаг/доработка (не снятые), заведённые строго после закрытия ПОСЛЕДНЕГО
+    // мержа, либо — при двух и более мержах — любая незакрытая работа, заведённая после
+    // предыдущего (повторный мерж с открытой работой фичу не смерживает).
+    internal static bool WaveAfterMerge(IEnumerable<TaskItem> steps, IReadOnlyList<TaskItem> closedMerges)
+    {
+        if (closedMerges.Count == 0) return false;
+        var work = steps.Where(t => t.Verification?.Verdict != TaskVerdicts.Withdrawn).ToList();
+        var last = closedMerges[^1].CompletedAt!.Value;
+        if (work.Any(t => t.CreatedAt > last)) return true;
+        if (closedMerges.Count < 2) return false;
+        var prev = closedMerges[^2].CompletedAt!.Value;
+        return work.Any(t => t.CreatedAt > prev && t.Status != TaskItemStatus.Done);
+    }
+
     internal static string ComputeState(
         TaskItem epic,
         TaskItem? merge,
@@ -1765,7 +1806,8 @@ public sealed class FeatureProjector(TaskManager tasks)
         bool hasStopped,
         bool hasExplicitWait,
         int nowCount,
-        bool anyStarted)
+        bool anyStarted,
+        bool waveAfterMerge = false)
     {
         // 1. merged / 2. closed: формула общая с проектором (TerminalState) — хвосты после
         //    мержа (GC-B4) считаются по той же формуле, второй раз её писать нельзя.
@@ -1773,7 +1815,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         //    инцидент 21.10 — фича с двенадцатью шагами в работе стала «смержена».
         //    Эпик Done — решение человека «фича закончена»: даже если работа ещё идёт
         //    (running/stopped/waiting) — фича закрыта (старое «и нет активной работы» убрано).
-        string? terminal = TerminalState(epic, merge, finalAccepted);
+        string? terminal = TerminalState(epic, merge, finalAccepted, waveAfterMerge);
         if (terminal == FeatureStates.Merged) return FeatureStates.Merged;
         if (terminal == FeatureStates.Closed) return FeatureStates.Closed;
         // 3. paused: явное удержание человека — формула в FeatureProjector.IsPaused (общая с

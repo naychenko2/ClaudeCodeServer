@@ -24,6 +24,13 @@ public static class ClaudeCliVersion
     // Последняя известная версия без ожидания; null — опроса ещё не было или он не удался.
     public static bool TryGetKnown(out string? version) => Cache.TryGetKnown(out version);
 
+    // Известная версия сменилась (X → Y); первое заполнение и неудачный опрос не считаются.
+    public static event Action? Changed
+    {
+        add => Cache.Changed += value;
+        remove => Cache.Changed -= value;
+    }
+
     // «2.1.283 (Claude Code)» → «2.1.283»; без номера — null.
     public static string? Parse(string? output)
     {
@@ -73,6 +80,10 @@ internal sealed class CliVersionCache(Func<Task<string?>> probe)
     private string? _known;
     private bool _probed;
 
+    // Известная версия сменилась (было X → стало Y, Y != null); null → X событием не считается.
+    // Поднимается вне _gate; подписчик, бросивший исключение, потребителей кэша не роняет.
+    public event Action? Changed;
+
     public Task<string?> GetAsync()
     {
         lock (_gate)
@@ -112,12 +123,26 @@ internal sealed class CliVersionCache(Func<Task<string?>> probe)
         string? fresh = null;
         try { fresh = await probe(); }
         catch { /* опрос не должен ронять потребителей — считаем неудачей */ }
+        bool changed;
+        string? result;
         lock (_gate)
         {
+            changed = fresh is not null && _known is not null && _known != fresh;
             if (fresh is not null) _known = fresh;
             _probed = true;
             _inFlight = null;
-            return _known;
+            result = _known;
+        }
+        if (changed) RaiseChanged();
+        return result;
+    }
+
+    private void RaiseChanged()
+    {
+        foreach (var handler in Changed?.GetInvocationList() ?? [])
+        {
+            try { ((Action)handler)(); }
+            catch { /* подписчик не должен ронять опрос */ }
         }
     }
 }
@@ -127,6 +152,9 @@ internal sealed class CliVersionCache(Func<Task<string?>> probe)
 public interface IHostCliVersion
 {
     string? Current { get; }
+
+    // Версия CLI хоста сменилась (X → Y): устройствам пора перечитать требуемую версию.
+    event Action? Changed;
 }
 
 public sealed class HostCliVersion : IHostCliVersion
@@ -136,6 +164,12 @@ public sealed class HostCliVersion : IHostCliVersion
     // Первый опрос стартует при создании синглтона, а не на первом Hello: к приходу агента
     // ответ обычно уже готов, и чтение не ждёт процесс.
     private readonly Task<string?> _first = ClaudeCliVersion.GetAsync();
+
+    public event Action? Changed
+    {
+        add => ClaudeCliVersion.Changed += value;
+        remove => ClaudeCliVersion.Changed -= value;
+    }
 
     // После первого опроса — последняя известная версия (её обновляет RefreshAsync),
     // до него — ждём первый опрос не дольше WaitLimit.

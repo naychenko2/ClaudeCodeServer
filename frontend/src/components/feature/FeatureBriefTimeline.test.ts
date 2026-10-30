@@ -1,7 +1,6 @@
-// Таймлайн-элементы карточки «Сводка» (MiniTimeline/MiniTimelineAxis/SummaryRow из
-// FeatureBriefTimeline) — рендерятся ВНУТРИ карточки (FeatureBriefBlock → LifeSection) на
-// вкладке «Хронология». Файл переименован из FeatureMiniSummary.test.ts (F7): корень
-// мини-сводки удалён, тест описывает элементы карточки, а не его.
+// Строка итогов карточки «Сводка» (SummaryRow из FeatureBriefTimeline) — рендерится ВНУТРИ
+// карточки (FeatureBriefBlock → TotalsRow) на вкладке «Хронология». Полоска и ось «Жизни фичи»
+// из сводки убраны (макет feature-summary-2) и живут на вкладке «Статистика».
 // Рендер-тесты ЧЕРЕЗ страницу фичи (FeaturePage) с НАСТОЯЩИМ ответом `features/{id}`
 // (mock api.tasks.getFeature → page.stats; без brief — карточка в состоянии «Сводка
 // не загрузилась», полоска и итоги под ней рисуются — макет §3):
@@ -19,7 +18,7 @@ import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { FeaturePage } from './FeaturePage';
-import { MiniTimeline, MiniTimelineAxis, SummaryRow } from './FeatureBriefTimeline';
+import { SummaryRow } from './FeatureBriefTimeline';
 import { __test as pageTest, setFeaturePageTab } from '../../lib/featurePage';
 import { __test as indexTest } from '../../lib/featuresIndex';
 import { __test as backNavTest } from '../../lib/featureBackNav';
@@ -269,8 +268,8 @@ describe('Таймлайн-элементы карточки «Сводка» ч
     expect(all, 'после «ждёт вас» нет вычисленного числа минут').not.toMatch(/ждёт вас\s+\d/);
   });
 
-  // === 7. строка итогов без «идёт N» / «шла N» (оно переехало в «Оценку») ===
-  it('строка итогов не содержит «идёт» / «шла» (мутация «вернуть идёт N» красит)', async () => {
+  // === 7. без brief первого факта «идёт N» нет, «шла N» — нигде ===
+  it('строка итогов без brief не содержит «идёт» / «шла» (первый факт приходит только из brief)', async () => {
     mockGetFeature.result = pageData(mkStats());
     const c = render();
     await settle();
@@ -332,34 +331,13 @@ describe('Таймлайн-элементы карточки «Сводка» ч
     expect(all).not.toContain('токенов');
   });
 
-  // === 9. экспорты для блока сводки: полоска, ось, итоги ===
-  // Closedность — переданная из общей модели состояния (R-F8): ось и полоска слушают
-  // проп closed, а не сырой current — пробы ниже расцепляют их намеренно.
-  it('экспортирует полоску, ось и итоги; ось: «сейчас» у идущей, «закрыта» у закрытой', () => {
+  // === 9. экспорт для блока сводки: строка итогов с первым фактом ===
+  it('SummaryRow: lead («идёт N» / «в очереди N») идёт первым фактом; без lead — только данные stats', () => {
     const run = mkStats();
-    const html = renderToStaticMarkup(createElement(MiniTimelineAxis, { stats: run, closed: false }));
-    expect(html).toContain('создана');
-    expect(html).toContain('сейчас');
-    const closed = mkStats();
-    closed.timeline = { ...closed.timeline, current: null };
-    const htmlClosed = renderToStaticMarkup(createElement(MiniTimelineAxis, { stats: closed, closed: true }));
-    expect(htmlClosed).toContain('закрыта');
-    expect(htmlClosed).not.toContain('сейчас');
-    expect(renderToStaticMarkup(createElement(MiniTimeline, { stats: run, closed: false }))).toContain('mini-timeline');
-    expect(renderToStaticMarkup(createElement(SummaryRow, { stats: run }))).toContain('mini-summary-row');
-  });
-
-  it('ось слушает переданный closed, а не сырой current (R-F8: closed — из общей модели)', () => {
-    const run = mkStats(); // current != null
-    const open = mkStats();
-    open.timeline = { ...open.timeline, current: null };
-    // модель сказала «закрыта» при живом current — ось закрывается;
-    const htmlClosed = renderToStaticMarkup(createElement(MiniTimelineAxis, { stats: run, closed: true }));
-    expect(htmlClosed, 'закрыта по переданной closed').toContain('закрыта');
-    expect(htmlClosed).not.toContain('сейчас');
-    // модель сказала «не закрыта» при пустом current — ось остаётся открытой.
-    const htmlOpen = renderToStaticMarkup(createElement(MiniTimelineAxis, { stats: open, closed: false }));
-    expect(htmlOpen, 'сейчас по переданной closed=false').toContain('сейчас');
-    expect(htmlOpen).not.toContain('закрыта');
+    const withLead = renderToStaticMarkup(createElement(SummaryRow, { stats: run, lead: { label: 'идёт', value: '1 ч 10 мин' } }));
+    expect(withLead).toContain('mini-summary-row');
+    expect(withLead.replace(/<[^>]+>/g, '').startsWith('идёт 1 ч 10 мин')).toBe(true);
+    const without = renderToStaticMarkup(createElement(SummaryRow, { stats: run }));
+    expect(without.replace(/<[^>]+>/g, '')).not.toContain('идёт');
   });
 });

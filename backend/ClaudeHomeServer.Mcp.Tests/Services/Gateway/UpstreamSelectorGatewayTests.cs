@@ -201,6 +201,79 @@ public class UpstreamSelectorGatewayTests
         kit.Selector.RewriteModel(route, "deepseek-v4-pro").Should().Be("claude-opus-5-5");
     }
 
+    // ---- выключенный провайдер с префиксом claude- ----
+
+    private static UpstreamSelector SelectorWithGhost(GatewayTestKit kit, string? apiKey)
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:ghost:DisplayName"] = "Ghost",
+            ["LlmProviders:ghost:AnthropicBaseUrl"] = "https://ghost.test",
+            ["LlmProviders:ghost:ModelPrefixes:0"] = "claude-",
+            ["LlmProviders:ghost:Models:0:Id"] = "claude-opus-5-5",
+        };
+        if (apiKey is not null) dict["LlmProviders:ghost:ApiKey"] = apiKey;
+        var cfg = new Microsoft.Extensions.Configuration.ConfigurationBuilder().AddInMemoryCollection(dict).Build();
+        return new UpstreamSelector(kit.Pool, new LlmProviderRegistry(cfg), kit.Options);
+    }
+
+    [Theory]
+    [InlineData("claude-opus-5-5[1m]")]
+    [InlineData("opus")]
+    public void ВыключенныйПровайдерСПрефиксомClaude_МодельНеПерехватывает_Подписка(string model)
+    {
+        using var kit = new GatewayTestKit(("st", "tok-st", null));
+        var selector = SelectorWithGhost(kit, apiKey: null);
+
+        var d = selector.SelectRoute(model);
+
+        d.Route.Should().NotBeNull(d.FailureText);
+        d.Route!.Kind.Should().Be(GatewayUpstreamKind.Subscription);
+    }
+
+    [Fact]
+    public void ВыключенныйПровайдерСПрефиксомClaude_RewriteModelОставляетРодныеId()
+    {
+        using var kit = new GatewayTestKit(("st", "tok-st", null));
+        var selector = SelectorWithGhost(kit, apiKey: null);
+        var route = new GatewayRoute(GatewayUpstreamKind.Subscription, "opus", SubscriptionKey: "st");
+
+        selector.RewriteModel(route, "claude-opus-5-5").Should().Be("claude-opus-5-5");
+    }
+
+    [Fact]
+    public void ВыключенныйПровайдер_СобственнаяМодель_ОтказПровайдерНеНастроен()
+    {
+        using var kit = new GatewayTestKit(("st", "tok-st", null));
+        var cfg = new Microsoft.Extensions.Configuration.ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["LlmProviders:off:DisplayName"] = "Off",
+                ["LlmProviders:off:AnthropicBaseUrl"] = "https://off.test",
+                ["LlmProviders:off:Models:0:Id"] = "off-model-1",
+            }).Build();
+        var selector = new UpstreamSelector(kit.Pool, new LlmProviderRegistry(cfg), kit.Options);
+
+        var d = selector.SelectRoute("off-model-1");
+
+        d.Route.Should().BeNull();
+        d.FailureText.Should().Be(TurnFailureText.GatewayProviderNotConfigured);
+    }
+
+    [Fact]
+    public void ВключённыйПровайдерСПрефиксомClaude_ПоПрежнемуПерехватывает()
+    {
+        using var kit = new GatewayTestKit(("st", "tok-st", null));
+        var selector = SelectorWithGhost(kit, apiKey: "gcli_x");
+
+        var route = selector.SelectRoute("claude-opus-5-5[1m]").Route!;
+        route.Kind.Should().Be(GatewayUpstreamKind.Provider);
+        route.ProviderKey.Should().Be("ghost");
+
+        var sub = new GatewayRoute(GatewayUpstreamKind.Subscription, "opus", SubscriptionKey: "st");
+        selector.RewriteModel(sub, "claude-opus-5-5").Should().Be("opus");
+    }
+
     private static string RepoRoot()
     {
         for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)

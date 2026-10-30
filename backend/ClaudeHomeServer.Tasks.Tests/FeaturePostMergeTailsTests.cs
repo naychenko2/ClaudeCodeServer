@@ -149,7 +149,8 @@ public class FeaturePostMergeTailsTests
         final.Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted };
         var merge = Child("m1", epic.Id, TaskRoles.Merge, TaskItemStatus.Done, T0);
         merge.CompletedAt = T0.AddHours(5);
-        var stoppedTail = Child("s1", epic.Id, TaskRoles.Step, TaskItemStatus.InProgress, T0.AddHours(6));
+        // Роль не step: шаг, заведённый после мержа, открывает волну и снимает merged (P1).
+        var stoppedTail = Child("s1", epic.Id, null, TaskItemStatus.InProgress, T0.AddHours(6));
         stoppedTail.ClaudeStartedAt = T0.AddHours(6);
         stoppedTail.ExecutorStoppedAt = T0.AddHours(7);
         stoppedTail.ExecutorStopReason = "auth_failed";
@@ -210,5 +211,43 @@ public class FeaturePostMergeTailsTests
 
         full.PostMergeTails.Should().Equal("d1", "d2");
         slim.PostMergeTails.Should().Equal(new[] { "d1", "d2" }, "SlimRun копирует хвосты в ответ");
+    }
+
+    // Шаг, заведённый после мержа, — волна: merged снят, хвостов нет (шаг — работа, а не хвост).
+    [Fact]
+    public void Build_ШагПослеМержа_ДаётВолнуИСнимаетMerged()
+    {
+        var epic = Epic();
+        var final = Child("f1", epic.Id, TaskRoles.Final, TaskItemStatus.Done, T0);
+        final.CompletedAt = T0.AddHours(4);
+        final.Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted };
+        var merge = Child("m1", epic.Id, TaskRoles.Merge, TaskItemStatus.Done, T0);
+        merge.CompletedAt = T0.AddHours(5);
+        var waveStep = Child("s2", epic.Id, TaskRoles.Step, TaskItemStatus.Todo, T0.AddHours(6));
+
+        var run = FeatureProjector.Build(epic, [epic, final, merge, waveStep]);
+
+        run.WaveAfterMerge.Should().BeTrue("шаг заведён строго после закрытия мержа");
+        run.State.Should().NotBe(FeatureStates.Merged, "волна снимает merged");
+        run.PostMergeTails.Should().BeEmpty("при волне фича не терминальна — хвостов нет");
+    }
+
+    // Безролевая задача после мержа волны не открывает — остаётся хвостом, merged на месте.
+    [Fact]
+    public void Build_БезролеваяПослеМержа_ОстаётсяХвостом()
+    {
+        var epic = Epic();
+        var final = Child("f1", epic.Id, TaskRoles.Final, TaskItemStatus.Done, T0);
+        final.CompletedAt = T0.AddHours(4);
+        final.Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted };
+        var merge = Child("m1", epic.Id, TaskRoles.Merge, TaskItemStatus.Done, T0);
+        merge.CompletedAt = T0.AddHours(5);
+        var tail = Child("u1", epic.Id, null, TaskItemStatus.Todo, T0.AddHours(6));
+
+        var run = FeatureProjector.Build(epic, [epic, final, merge, tail]);
+
+        run.WaveAfterMerge.Should().BeFalse();
+        run.State.Should().Be(FeatureStates.Merged);
+        run.PostMergeTails.Should().Equal(new[] { "u1" });
     }
 }

@@ -12,6 +12,7 @@ import { api } from '../../lib/api';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { featureStatusTag, featureDisplayState, STAGE_NAME } from '../../lib/chatGroups';
 import { openChatById } from '../../lib/openChat';
+import { openTaskInSection } from '../../lib/tasks';
 import { taskCounters } from './featurePageBody';
 import { showToast } from '../../lib/toast';
 import { FeatureMergeDialog } from './FeatureMergeDialog';
@@ -24,7 +25,7 @@ import { Button } from '../ui/Button';
 import { FeatureTimelineTab } from './FeatureTimelineTab';
 import { FeaturePlansTab, plansTabCount } from './FeaturePlansTab';
 import { FeatureChatsTab } from './FeatureChatsTab';
-import { FeatureTasksTab } from './FeatureTasksTab';
+import { FeatureTasksTab, allFeatureTasks } from './FeatureTasksTab';
 import { FeatureEventsTab } from './FeatureEventsTab';
 import { FeatureStatsTab } from './FeatureStatsTab';
 import { FeatureBriefBlock, type FeatureBriefBlockProps } from './FeatureBriefBlock';
@@ -310,6 +311,18 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
           void openChatById(finalChat);
         }
       : undefined;
+    // Строки «Сейчас»: переход в задачу и «Ответить» (чат задачи; чата нет — сама задача).
+    const openActiveTask = (taskId: string) => {
+      const task = allFeatureTasks(okRun).find(t => t.id === taskId);
+      recordFeatureReturn(featureId, { kind: 'task', id: taskId }, title);
+      openTaskInSection({ id: taskId, projectId: task?.projectId ?? undefined });
+    };
+    const answerActive = (taskId: string) => {
+      const chat = allFeatureTasks(okRun).find(t => t.id === taskId)?.linkedSessionId ?? null;
+      if (!chat) { openActiveTask(taskId); return; }
+      recordFeatureReturn(featureId, { kind: 'chat', id: chat }, title);
+      void openChatById(chat);
+    };
     const chatsCount = (page.page.chats ?? []).filter(c => !c.archived).length;
     // Пометки «в архиве»/«задача закрыта» — из данных страницы (задачи run + чаты): одни
     // на все вкладки, шапку и тревогу.
@@ -337,16 +350,21 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
           {tab === 'timeline' ? (
             <>
               {/* Блок «Сводка» (волна 6, Ф6): brief/stats/mergedAt — из ответа страницы,
-                  фронт ничего не пересчитывает; «Повторить» — перезапрос страницы. */}
+                  фронт ничего не пересчитывает; «Повторить» — перезапрос страницы.
+                  inMaster (F1) — ортогональный счётчик бэка из stepProgress, не корзина. */}
               <FeatureBriefWithNames
                 brief={page.page.brief ?? null}
                 stats={page.page.stats ?? null}
                 mergedAt={okRun.summary?.mergedAt ?? null}
+                inMaster={okRun.stepProgress?.inMaster ?? null}
                 isMobile={isMobile}
                 onOpenStats={() => setFeaturePageTab('stats')}
                 onRetry={() => refetchFeaturePage(featureId)}
                 onMerge={openMergeDialog}
                 onOpenFinal={openFinalChat}
+                onOpenTask={openActiveTask}
+                onAnswer={answerActive}
+                onOpenTasks={() => setFeaturePageTab('tasks')}
               />
               {/* stats — таймлайн фичи: из него дорожки этапов и ось времени (GC-F5c). */}
               <FeatureTimelineTab run={okRun} marks={marks} isMobile={isMobile} stats={page.page.stats ?? null} />

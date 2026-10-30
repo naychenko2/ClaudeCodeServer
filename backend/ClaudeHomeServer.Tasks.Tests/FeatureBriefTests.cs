@@ -596,7 +596,7 @@ public class FeatureBriefTests
             .GetProperties(BindingFlags.Public | BindingFlags.Instance)
             .Select(p => p.Name)
             // bySessionId наружу не уходит; stateAtWrite служит только StaleOf.
-            .Should().BeEquivalentTo("Text", "At", "ByPersonaId", "ByUser", "StageAtWrite", "Stale");
+            .Should().BeEquivalentTo("Text", "At", "ByPersonaId", "ByUser", "StageAtWrite", "Stale", "Estimate");
     }
 
     // Категория на момент записи не подтверждается (штамп вне таблицы FeatureStates) — голос
@@ -890,5 +890,122 @@ public class FeatureBriefTests
         brief.Queue.Should().BeNull();
         brief.Note.Should().BeNull();
         brief.ComputedAt.Should().Be(NOW);
+    }
+
+    // ─── оценка оркестратора в голосе (макет 2 сводки): percent, agreement, etaEndsAt ───────────
+
+    private static FeatureRun RunWithEstimate(string state, FeatureHold? hold, FeatureEstimate? estimate,
+        string stateAtWrite = "running")
+    {
+        var run = RunWithVoice("prod", state, hold, "prod", stateAtWrite);
+        run.Epic!.Note = run.Epic.Note! with { Estimate = estimate };
+        return run;
+    }
+
+    private static FeatureEstimate Est(int done = 2, int total = 8, int? percent = null, int? eta = 120) =>
+        new(done, total, 1, percent, ["ревью", "проверка"], eta, "дольше всех — фронт");
+
+    private static FeatureBrief.BriefEstimate History(int remaining = 120, int p25 = 90, int p75 = 150) =>
+        new(remaining, p25, p75, "history", 5);
+
+    [Fact]
+    public void NoteEstimate_БезОценкиNull_ПоляИзХранимой()
+    {
+        FeatureBrief.Build(RunWithEstimate(FeatureStates.Running, null, null), null, null, NOW)
+            .Note!.Estimate.Should().BeNull();
+
+        var e = FeatureBrief.Build(RunWithEstimate(FeatureStates.Running, null, Est(percent: 40)), null, null, NOW)
+            .Note!.Estimate!;
+        (e.Done, e.Total, e.InProgress, e.Percent, e.EtaMinutes, e.Why)
+            .Should().Be((2, 8, 1, 40, 120, "дольше всех — фронт"));
+        e.Remaining.Should().Equal("ревью", "проверка");
+    }
+
+    [Theory]
+    [InlineData(2, 8, 25)]   // 25 ровно
+    [InlineData(1, 3, 33)]   // 33.3 → 33
+    [InlineData(1, 8, 13)]   // 12.5 → 13 (от нуля)
+    [InlineData(0, 5, 0)]
+    [InlineData(5, 5, 100)]
+    public void NoteEstimate_ПроцентДосчитываетсяИзDoneTotal(int done, int total, int expected) =>
+        FeatureBrief.Build(RunWithEstimate(FeatureStates.Running, null, Est(done, total)), null, null, NOW)
+            .Note!.Estimate!.Percent.Should().Be(expected);
+
+    [Fact]
+    public void NoteEstimate_ЗаданныйПроцентНеПерезаписывается() =>
+        FeatureBrief.Build(RunWithEstimate(FeatureStates.Running, null, Est(2, 8, percent: 70)), null, null, NOW)
+            .Note!.Estimate!.Percent.Should().Be(70);
+
+    [Fact]
+    public void NoteEstimate_EtaEndsAtОтМоментаЗаписиАНеОтСейчас()
+    {
+        var run = RunWithEstimate(FeatureStates.Running, null, Est(eta: 90));
+        var at = run.Epic!.Note!.At;
+        FeatureBrief.Build(run, null, null, NOW).Note!.Estimate!.EtaEndsAt.Should().Be(at.AddMinutes(90));
+        FeatureBrief.Build(run, null, null, NOW.AddHours(5)).Note!.Estimate!.EtaEndsAt.Should().Be(at.AddMinutes(90),
+            "срок не уползает вперёд с обновлением страницы");
+    }
+
+    [Fact]
+    public void NoteEstimate_EtaEndsAtNullБезСрока() =>
+        FeatureBrief.Build(RunWithEstimate(FeatureStates.Running, null, Est(eta: null)), null, null, NOW)
+            .Note!.Estimate!.EtaEndsAt.Should().BeNull();
+
+    [Fact]
+    public void NoteEstimate_EtaEndsAtNullНаПаузеВОчередиИВЖдётЧеловека()
+    {
+        var manual = new FeatureHold(FeatureHoldReasons.Manual, NOW.AddHours(-1), null, true);
+        var queue = new FeatureHold(FeatureHoldReasons.Queue, NOW.AddHours(-1), null, false);
+        FeatureBrief.Build(RunWithEstimate(FeatureStates.Paused, manual, Est(), "paused"), null, null, NOW)
+            .Note!.Estimate!.EtaEndsAt.Should().BeNull("пауза");
+        FeatureBrief.Build(RunWithEstimate(FeatureStates.Paused, queue, Est(), "queued"), null, null, NOW)
+            .Note!.Estimate!.EtaEndsAt.Should().BeNull("очередь");
+        FeatureBrief.Build(RunWithEstimate(FeatureStates.Waiting, null, Est(), "waiting_you"), null, null, NOW)
+            .Note!.Estimate!.EtaEndsAt.Should().BeNull("ждёт человека");
+    }
+
+    // Правило двух оценок: вне [p25, p75] И разница с remainingMinutes ≥ 30 мин. Концы разброса
+    // включены внутрь: ровно p25/p75 — within.
+    [Theory]
+    [InlineData(120, 120, 90, 150, "within")]
+    [InlineData(150, 120, 90, 150, "within")]   // ровно p75
+    [InlineData(90, 120, 90, 150, "within")]    // ровно p25
+    [InlineData(151, 120, 90, 150, "above")]    // вне разброса, разница 31
+    [InlineData(89, 120, 90, 150, "below")]     // вне разброса, разница 31
+    public void NoteEstimate_Agreement_Границы(int eta, int remaining, int p25, int p75, string expected) =>
+        FeatureBrief.AgreementOf(eta, History(remaining, p25, p75)).Should().Be(expected);
+
+    [Theory]
+    [InlineData(160, 140, 100, 150, "within")]  // вне разброса (>150), но разница 20 < 30 — без метки
+    [InlineData(170, 140, 100, 150, "above")]   // вне и разница ровно 30
+    [InlineData(110, 140, 100, 150, "within")]  // внутри разброса, разница 30 — within
+    [InlineData(60, 140, 100, 150, "below")]
+    public void NoteEstimate_Agreement_ОбаУсловия(int eta, int remaining, int p25, int p75, string expected) =>
+        FeatureBrief.AgreementOf(eta, History(remaining, p25, p75)).Should().Be(expected);
+
+    [Fact]
+    public void NoteEstimate_Agreement_NullБезИсторииИлиСрока()
+    {
+        FeatureBrief.AgreementOf(100, null).Should().BeNull();
+        FeatureBrief.AgreementOf(null, History()).Should().BeNull();
+    }
+
+    [Fact]
+    public void NoteEstimate_УстареваниеТоЖеЧтоУГолоса()
+    {
+        var run = RunWithEstimate(FeatureStates.Running, null, Est());
+        run.Epic!.Note = run.Epic.Note! with { StageAtWrite = "review" };
+        var note = FeatureBrief.Build(run, null, null, NOW).Note!;
+        note.Stale.Should().BeTrue("оценка стареет вместе с голосом: отдельного признака нет");
+        note.Estimate.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void InitialEtaMinutes_ИзЭпика()
+    {
+        var run = RunWithEstimate(FeatureStates.Running, null, Est());
+        FeatureBrief.Build(run, null, null, NOW).InitialEtaMinutes.Should().BeNull();
+        run.Epic!.InitialEtaMinutes = 300;
+        FeatureBrief.Build(run, null, null, NOW).InitialEtaMinutes.Should().Be(300);
     }
 }

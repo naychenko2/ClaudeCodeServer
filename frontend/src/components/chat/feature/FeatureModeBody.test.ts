@@ -1,8 +1,8 @@
-// Тело режима «План хода / Исполнение фичи» (общее для меню пилюли и карточки в ленте).
+// Тело режима «План хода / Исполнение фичи» (FeatureModeBody) — F2 (макет v4):
+// чат ШАГА → П2 «Мой шаг» (FeatureStepView); чат БЕЗ шага → П1-сводка (FeatureTruthBody);
+// загрузка/ошибка запроса — скелет/«Повторить» (состояния в теле, не в теле-компонентах).
 // Рендер — renderToStaticMarkup (окружение node: useIsMobile()=false, effects не идут).
-// F-pop-a: счётчик «принято/всего · ↺N» из шапки УБРАН (макет, вопрос 1); тело —
-// новая компактная карточка (StatusTag, строка состояния, этапы). Проверяем обе
-// поверхности (пилюля и карточка) — шапка одна, счётчика на обеих нет.
+
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,87 +10,84 @@ import type { FeatureRun } from '../../../types/featureRun';
 import { FeatureModeBody } from './FeatureModeBody';
 import { __test } from '../../../lib/featureRuns';
 
-// useIsMobile — управляемый флаг (SSR по умолчанию false).
 const { mobileFlag } = vi.hoisted(() => ({ mobileFlag: { value: false } }));
 vi.mock('../../../lib/breakpoints', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../../lib/breakpoints')>();
   return { ...orig, useIsMobile: () => mobileFlag.value };
 });
-// Стор персон (lib/personas) — мок: FeatureRunView внутри тела читает getPersonaById.
-const { personaMap } = vi.hoisted(() => ({ personaMap: new Map<string, string>() }));
+const { personaMap } = vi.hoisted(() => ({ personaMap: new Map<string, string>([['p-gleb', 'Глеб']]) }));
 vi.mock('../../../lib/personas', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../../lib/personas')>();
   return { ...orig, getPersonaById: (id: string) => (personaMap.has(id) ? { id, name: personaMap.get(id) } : undefined) };
 });
-// api (lib/api) — FeatureRunView вызывает api.tasks.mergeFeature в обработчиках (SSR — не идёт).
-vi.mock('../../../lib/api', () => ({
-  api: { tasks: { mergeFeature: async (_id: string) => {} } },
-}));
 
 beforeEach(() => { personaMap.clear(); mobileFlag.value = false; __test.reset(); });
 
-// Агрегат фичи: state задан (бэк всегда отдаёт), stepsAccepted/stepsTotal + loops.
 function run(over: Partial<FeatureRun> = {}): FeatureRun {
   return {
     featureId: 'epic-1',
     epic: { id: 'epic-1', title: 'Фича', status: 'todo' },
-    steps: [],
-    reviews: [],
-    qa: [],
-    final: null as never,
-    merge: null,
+    steps: [], reviews: [], qa: [], final: null, merge: null,
     state: 'running',
     verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
-    progress: 0,
-    ready: false,
-    now: [],
-    attention: null,
-    closed: false,
-    summary: null,
+    progress: 0, ready: false, now: [], attention: null, closed: false, summary: null,
     ...over,
   } as FeatureRun;
 }
 
-// Рендер тела: счётчик шапки — в шапке (controls) на обеих поверхностях.
-function renderBody(runs: FeatureRun[], variant: 'pill' | 'pipeline', sessionId: string): string {
-  // Стор: срез фич → modeFor(sessionId)='feature'; выбор не задан → runs[0].
+function renderBody(runs: FeatureRun[], sessionId: string, over: Record<string, unknown> = {}): string {
   __test.setRuns(sessionId, runs);
   return renderToStaticMarkup(
-    createElement(FeatureModeBody, { sessionId, todos: [], runs, isMobile: mobileFlag.value, variant }),
+    createElement(FeatureModeBody, { sessionId, todos: [], runs, isMobile: mobileFlag.value, ...over }),
   );
 }
 
-describe('FeatureModeBody — F-pop-a (счётчик убран, новая карточка)', () => {
-  it('обе поверхности: счётчика «acc/tot · ↺N» в шапке нет', () => {
-    const r = run({ stepsAccepted: 2, stepsTotal: 4, verdicts: { accepted: 2, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 1 } });
-    const pill = renderBody([r], 'pill', 'sess-pill');
-    const card = renderBody([r], 'pipeline', 'sess-card');
-    // Счётчик шагов «2/4 · ↺1» из шапки убран (на обеих поверхностях).
-    expect(pill).not.toContain('2/4 · ↺1');
-    expect(card).not.toContain('2/4 · ↺1');
-    // Старый «100%» (доля решённых витков) тоже не в шапке.
-    expect(pill).not.toMatch(/>100%</);
-    expect(card).not.toMatch(/>100%</);
+describe('FeatureModeBody (F2): выбор тела', () => {
+  it('чат шага (задача чата в цепочке) → П2 «Мой шаг»: карточка шага и его цепочка', () => {
+    const r = run({
+      steps: [{ id: 't-8', title: 'Вёрстка шапки', role: 'step', stepRef: 'Ш8', lane: 'front', status: 'inProgress' }],
+      stepChains: [{ stepRef: 'Ш8', title: 'Вёрстка шапки', taskIds: ['t-8'], outcome: 'running', status: 'идёт', durationMinutes: 24, rounds: [], chatId: null, lane: 'front', personaId: 'p-kira' } as never],
+    });
+    const html = renderBody([r], 's-step', { chatTaskId: 't-8' });
+    expect(html).toContain('feature-step-view');
+    expect(html).toContain('Этот чат');
+    expect(html).toContain('Цепочка шага');
+    expect(html).toContain('Ш8 · Вёрстка шапки');
+    // аккордеона этапов (старый FeatureRunView) нет
+    expect(html).not.toContain('feature-run-stages');
+    // подвал «этот чат — роль» — по задаче чата
+    expect(html).toContain('Ш8 · фронт');
   });
 
-  it('обе поверхности: тег статуса и переключатель на месте', () => {
-    const r = run({ state: 'running' });
-    const pill = renderBody([r], 'pill', 'sess-pill2');
-    const card = renderBody([r], 'pipeline', 'sess-card2');
-    // Тег статуса (StatusTag) — в шапке фичи (R2 minor 1: отдельный id feature-run-status-tag;
-    // строка состояния несёт feature-run-status-line).
-    expect(pill).toContain('feature-run-status-tag');
-    expect(card).toContain('feature-run-status-tag');
-    // Переключатель «План хода · Исполнение фичи» — в шапке.
-    expect(pill).toContain('Исполнение фичи');
-    expect(card).toContain('Исполнение фичи');
+  it('чат без шага (оркестратор/ревью) → П1-сводка (FeatureTruthBody), не карточка шага', () => {
+    const r = run({ stepChains: [{ stepRef: 'Ш8', title: 'Вёрстка', taskIds: ['t-8'], outcome: 'running', status: 'идёт', rounds: [], chatId: null } as never] });
+    const html = renderBody([r], 's-orch', { chatTaskId: 't-куратора' });
+    expect(html).toContain('feature-truth-body');
+    expect(html).not.toContain('feature-step-view');
   });
 
-  it('ноль шагов: счётчика «0/— · ↺N» в шапке нет', () => {
-    const r = run({ stepsAccepted: 0, stepsTotal: 0, verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 2 } });
-    const pill = renderBody([r], 'pill', 'sess-pill0');
-    const card = renderBody([r], 'pipeline', 'sess-card0');
-    expect(pill).not.toContain('0/— · ↺2');
-    expect(card).not.toContain('0/— · ↺2');
+  it('переключатель «План хода / Исполнение фичи» — в шапке; плана без фич — TodoList', () => {
+    const html = renderBody([run()], 's-sw');
+    expect(html).toContain('Исполнение фичи');
+    expect(html).toContain('План хода');
+  });
+});
+
+describe('FeatureModeBody (F2): состояния запроса', () => {
+  function renderState(sessionId: string, setup: () => void): string {
+    __test.setRuns(sessionId, []);
+    setup();
+    return renderToStaticMarkup(createElement(FeatureModeBody, { sessionId, todos: [], runs: [], isMobile: false }));
+  }
+
+  it('загрузка (run нет) — скелет 3 строк', () => {
+    const html = renderState('s-load', () => __test.setLoading('s-load', true));
+    expect(html).toContain('feature-mode-skeleton');
+  });
+
+  it('ошибка — «Не загрузилось · Повторить»', () => {
+    const html = renderState('s-err', () => __test.setError('s-err', 'Сервер не ответил'));
+    expect(html).toContain('feature-mode-error');
+    expect(html).toContain('Повторить');
   });
 });

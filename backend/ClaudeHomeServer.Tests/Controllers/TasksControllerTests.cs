@@ -3070,6 +3070,53 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         note.ByUser.Should().BeTrue();
     }
 
+    // ─── оценка оркестратора в PUT note (макет 2 сводки) ─────────────────────────────────
+
+    [Fact]
+    public async Task PutNote_ОценкаПишетсяВместеСГолосом()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+
+        var response = await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new
+        {
+            text = "идём",
+            featureEstimate = new { done = 2, total = 8, inProgress = 1, remaining = new[] { "ревью" }, etaMinutes = 90 },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var est = _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.Note!.Estimate!;
+        (est.Done, est.Total, est.InProgress, est.EtaMinutes).Should().Be((2, 8, 1, 90));
+        est.Remaining.Should().Equal("ревью");
+    }
+
+    [Fact]
+    public async Task PutNote_ОценкаБезГолоса_400()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+
+        var response = await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new
+        {
+            text = "", featureEstimate = new { done = 2, total = 8, inProgress = 0 },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("вместе с голосом");
+    }
+
+    [Fact]
+    public async Task PutNote_ОценкаНарушаетОграничения_400()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+
+        var response = await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new
+        {
+            text = "г", featureEstimate = new { done = 9, total = 8, inProgress = 0 },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.Note.Should().BeNull();
+    }
+
     // B14 (возврат FIN 74722f13): голос, записанный у фичи БЕЗ идущих задач (шаг в todo — Now пуст),
     // не устаревший с момента записи: штамп и StaleOf берут одну базу — активную стадию конвейера
     // («prod» для шага), а не Now[0]. До правки штамп был "" (Now пуст), StaleOf сверял с "prod" →

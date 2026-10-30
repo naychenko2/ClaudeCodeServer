@@ -1671,6 +1671,39 @@ public class TaskManagerTests : IDisposable
         act.Should().Throw<InvalidOperationException>().WithMessage("*Дублируется код шага*");
     }
 
+    [Theory]
+    [InlineData("R-B1", null)]
+    [InlineData("r-b1", "step")]
+    [InlineData("QA", null)]
+    [InlineData("FINAL", null)]
+    [InlineData("REV-1", null)]
+    [InlineData("B1", "bogus")]
+    public void Create_PlanStepsРевьюБезKind_ИлиКривойKind_Отказ(string stepRef, string? kind)
+    {
+        var epic = CreateEpic("u");
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("план",
+            FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps: [new PlannedStep { StepRef = stepRef, Title = "t", Kind = kind }]));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage(kind == "bogus" ? "*Недопустимый kind*" : "*ревью не шаг плана*");
+    }
+
+    [Fact]
+    public void Create_PlanStepsРевьюСKind_Принято_KindСохранён()
+    {
+        var epic = CreateEpic("u");
+        var plan = _sut.Create(null, "u", new CreateTaskRequest("план",
+            FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps:
+            [
+                new PlannedStep { StepRef = "B1", Title = "t" },
+                new PlannedStep { StepRef = "R-B1", Title = "t", Kind = " review " },
+            ]));
+
+        plan.PlanSteps![0].Kind.Should().BeNull();
+        plan.PlanSteps[1].Kind.Should().Be("review");
+    }
+
     [Fact]
     public void Create_PlanStepsСлишкомМного_Отказ()
     {

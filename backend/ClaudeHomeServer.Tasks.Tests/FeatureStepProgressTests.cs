@@ -453,6 +453,27 @@ public class FeatureStepProgressTests
     // ─── Знаменатель: план ∪ заведённые ──────────────────────────────────────────────────────
 
     [Fact]
+    public void ШагиПлана_СРевью_ВЗнаменателеТолькоStep()
+    {
+        var plan = Plan("p", 0, ("B1", "back"), ("B2", "back"), ("R-B1", "back"), ("QA", null));
+        plan.PlanSteps![2].Kind = PlannedStep.KindReview;
+        plan.PlanSteps[3].Kind = PlannedStep.KindQa;
+        var run = Run(Feature(), plan);
+
+        run.StepProgress.Total.Should().Be(2);
+        run.StepProgress.NotCreated.Should().Be(2);
+    }
+
+    [Fact]
+    public void ШагиПлана_ШагСExplicitKindStep_Считается()
+    {
+        var plan = Plan("p", 0, ("B1", "back"));
+        plan.PlanSteps![0].Kind = PlannedStep.KindStep;
+
+        Run(Feature(), plan).StepProgress.Total.Should().Be(1);
+    }
+
+    [Fact]
     public void ШагиПлана_БезЗадач_NotCreated_ВЗнаменателе()
     {
         var run = Run(Feature(), Plan("p", 0, ("Ш1", "back"), ("Ш2", "front"), ("Ш3", "front")), Step("s", "Ш1", 1));

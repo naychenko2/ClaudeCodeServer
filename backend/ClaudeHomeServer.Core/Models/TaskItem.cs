@@ -295,6 +295,19 @@ public class PlannedStep
     public string StepRef { get; set; } = "";
     public string Title { get; set; } = "";
     public string? Lane { get; set; }
+
+    // Вид шага: строка, а не enum — откат кода с новым значением enum уносит стор в .corrupt
+    // (урок McpCatalogRef). null = step; в знаменатель прогресса идут только шаги (null/step).
+    public string? Kind { get; set; }
+
+    public const string KindStep = "step";
+    public const string KindReview = "review";
+    public const string KindQa = "qa";
+    public const string KindFinal = "final";
+    public static readonly string[] Kinds = [KindStep, KindReview, KindQa, KindFinal];
+
+    // Исполняемый шаг плана (учитывается в знаменателе): kind не задан или step.
+    public bool IsStep => Kind is null || string.Equals(Kind, KindStep, StringComparison.Ordinal);
 }
 
 public enum TaskItemStatus { Todo, InProgress, Done }

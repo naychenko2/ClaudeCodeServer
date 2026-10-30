@@ -1128,6 +1128,7 @@ public sealed class TasksToolset(
                 StepRef = StringArg(obj, "stepRef"),
                 Title = StringArg(obj, "title"),
                 Lane = OptionalArg(obj, "lane"),
+                Kind = OptionalArg(obj, "kind"),
             });
         }
         return result;
@@ -1820,6 +1821,12 @@ public sealed class TasksToolset(
                 ["stepRef"] = new JsonObject { ["type"] = "string", ["description"] = "Код шага (уникален, непуст)" },
                 ["title"] = new JsonObject { ["type"] = "string", ["description"] = "Название шага" },
                 ["lane"] = new JsonObject { ["type"] = "string", ["description"] = "Линия (бэк/фронт)" },
+                ["kind"] = new JsonObject
+                {
+                    ["type"] = "string",
+                    ["enum"] = new JsonArray("step", "review", "qa", "final"),
+                    ["description"] = "Вид: step (по умолчанию) — исполняемый шаг, в знаменателе; review/qa/final — не шаг плана",
+                },
             },
         },
         // Инструкция (минор 7, паритет со stdio-веткой mcp/tasks-server/index.js): планировщик

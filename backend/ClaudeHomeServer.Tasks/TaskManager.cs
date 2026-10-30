@@ -513,6 +513,10 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // и «Б1»/«б1» — один шаг; Ordinal (не culture) — детерминизм и скорость.
     // null в StepRef/Title оставляем null (не «»): валидатор их ловит (пустой stepRef, null
     // title → 400, а не NRE). null — «не задано» (не менять); пустой список — «снять список».
+    private static readonly System.Text.RegularExpressions.Regex ReviewLikeStepRef =
+        new("^(R-|QA|FINAL|REV)", System.Text.RegularExpressions.RegexOptions.IgnoreCase
+            | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
     private static List<PlannedStep>? NormalizePlanSteps(List<PlannedStep>? steps)
     {
         if (steps is null) return null;
@@ -527,6 +531,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
                 StepRef = s.StepRef?.Trim()!,
                 Title = s.Title?.Trim()!,
                 Lane = s.Lane,
+                Kind = string.IsNullOrWhiteSpace(s.Kind) ? null : s.Kind.Trim(),
             });
         }
         return copy;
@@ -676,6 +681,13 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
                         $"Название шага плана «{step.StepRef}» длиннее {PlannedStep.MaxTitleLength} символов.");
                 if (!seen.Add(step.StepRef.Trim()))
                     throw new InvalidOperationException($"Дублируется код шага плана «{step.StepRef}».");
+                if (step.Kind is not null && !PlannedStep.Kinds.Contains(step.Kind, StringComparer.Ordinal))
+                    throw new InvalidOperationException(
+                        $"Недопустимый kind «{step.Kind}» у шага плана «{step.StepRef}»: step|review|qa|final.");
+                // Ревью/проверка/финал не шаг плана: иначе раздувают знаменатель процента.
+                if (step.IsStep && ReviewLikeStepRef.IsMatch(step.StepRef))
+                    throw new InvalidOperationException(
+                        $"«{step.StepRef}»: ревью не шаг плана: укажи kind (review|qa|final) или переименуй.");
             }
         }
 

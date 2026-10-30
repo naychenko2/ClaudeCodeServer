@@ -460,6 +460,11 @@ const PLAN_STEPS_SCHEMA = {
       stepRef: { type: 'string', description: 'Код шага (уникален, непуст)' },
       title: { type: 'string', description: 'Название шага' },
       lane: { type: 'string', description: 'Линия (бэк/фронт)' },
+      kind: {
+        type: 'string',
+        enum: ['step', 'review', 'qa', 'final'],
+        description: 'Вид: step (по умолчанию) — исполняемый шаг, в знаменателе; review/qa/final — не шаг плана',
+      },
     },
   },
   description: 'Структурный список шагов плана: планировщик (role=plan) заполняет знаменатель «сколько всего»; stepRef непуст и уникален',

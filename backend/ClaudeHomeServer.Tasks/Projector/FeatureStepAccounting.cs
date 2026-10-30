@@ -76,6 +76,8 @@ internal static class FeatureStepAccounting
             foreach (var ps in p.PlanSteps ?? [])
             {
                 if (ps is null || string.IsNullOrWhiteSpace(ps.StepRef)) continue;
+                // Ревью/проверка/финал (kind != step) в знаменатель не идут
+                if (!ps.IsStep) continue;
                 // Ключ шага плана тримится так же, как KeyOf (замечание 1 ревью Глеба): без трима
                 // «Б1 » в плане и «Б1» в шаге — два разных ключа, шаг считается дважды.
                 var key = ps.StepRef.Trim();

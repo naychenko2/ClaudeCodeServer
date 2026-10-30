@@ -36,10 +36,22 @@ public sealed class ChatTurnLoggerService : IHostedService
         return Task.CompletedTask;
     }
 
+    // Актор идущего хода по чату: к ResultMessage ядро уже сняло статус хода и обнулило актора
+    // (GetTurnActor вернул бы null), поэтому запоминаем его на сообщениях внутри хода
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _turnActors = new();
+
     private Task OnMsgAsync(Session session, ServerMessage msg)
     {
-        if (msg is not ResultMessage) return Task.CompletedTask;
         if (string.IsNullOrEmpty(session.ProjectId)) return Task.CompletedTask;
+        if (msg is not ResultMessage)
+        {
+            // Внутри хода актор ещё жив: обновляем запомненного на каждом сообщении
+            var tenant = session.OwnerId ?? _projects.GetById(session.ProjectId)?.OwnerId;
+            if (!string.IsNullOrEmpty(tenant)
+                && _sessions.GetTurnActor(session.Id, tenant) is { } live)
+                _turnActors[session.Id] = live;
+            return Task.CompletedTask;
+        }
 
         var owner = session.OwnerId;
         if (string.IsNullOrEmpty(owner))
@@ -55,7 +67,8 @@ public sealed class ChatTurnLoggerService : IHostedService
         var sessionId = session.Id;
         var actor = session.PersonaId ?? "user";
         // Человек-инициатор хода (общий проект); null — неизвестен, запись остаётся без него
-        var actorUserId = _sessions.GetTurnActor(sessionId, owner!);
+        _turnActors.TryRemove(sessionId, out var remembered);
+        var actorUserId = remembered ?? _sessions.GetTurnActor(sessionId, owner!);
         _ = Task.Run(() => _events.Append(projectId, owner!, ProjectEventTypes.ChatTurn,
             actor, label is not null ? $"{label} ответил" : "Ход чата завершён", sessionId, actorUserId));
         return Task.CompletedTask;

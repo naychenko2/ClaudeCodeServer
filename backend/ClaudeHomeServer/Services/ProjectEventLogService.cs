@@ -22,6 +22,9 @@ public class ProjectEventLogService : IDisposable, IProjectEventLogService
     private readonly int _retentionDays;
     private DateTime _lastPruneUtc = DateTime.MinValue;
     private readonly Action? _migrationProbe;
+    // Инициализация не удалась: события молча теряются — предупреждаем об этом один раз
+    private bool _initFailed;
+    private bool _initFailedWarned;
 
     // Открытие базы (журнал, WAL, миграция) сериализуется в процессе: два сервиса на одном файле
     // (рестарт хоста, тесты) не мигрируют одновременно. Между процессами то же держит BEGIN IMMEDIATE.
@@ -53,6 +56,7 @@ public class ProjectEventLogService : IDisposable, IProjectEventLogService
         {
             // Не роняем старт сервера из-за лога — фича деградирует до «нет событий»
             _log?.LogError(ex, "Не удалось инициализировать лог событий проекта ({DbPath})", dbPath);
+            _initFailed = true;
         }
     }
 
@@ -140,7 +144,7 @@ public class ProjectEventLogService : IDisposable, IProjectEventLogService
     {
         var c = new SqliteConnection(_connStr);
         c.Open();
-        // busy_timeout — параметр соединения, а не БД: ставим на каждом (Init покрывал только своё)
+        // busy_timeout — параметр соединения, а не БД: ставим на каждом открытом соединении
         Exec(c, "PRAGMA busy_timeout=5000;");
         return c;
     }
@@ -197,7 +201,16 @@ public class ProjectEventLogService : IDisposable, IProjectEventLogService
             }
             catch (Exception ex)
             {
-                _log?.LogError(ex, "Не удалось записать событие проекта ({Type})", ev.Type);
+                if (_initFailed)
+                {
+                    if (!_initFailedWarned)
+                    {
+                        _initFailedWarned = true;
+                        _log?.LogWarning(ex, "Лог событий проекта не инициализирован (миграция не удалась): события не пишутся");
+                    }
+                }
+                else
+                    _log?.LogError(ex, "Не удалось записать событие проекта ({Type})", ev.Type);
                 return null;
             }
         }

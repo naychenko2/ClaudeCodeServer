@@ -19,24 +19,29 @@ namespace ClaudeHomeServer.Tests.ImageEditor.Threads;
 // чужой чат и чужая нить неотличимы от несуществующих, удаление чата сносит нити через шину,
 // запись модуля в ленту через IChatFeed — активность с живой парой module_record.
 [Trait("Category", "Host")]
-public class ThreadsEndpointTests : IDisposable
+public class ThreadsEndpointTests : IClassFixture<ThreadsEndpointTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new();
+    /// <summary>
+    /// Хост на весь класс (IClassFixture), а не на тест: приложение собирается один раз.
+    /// Обного изменяемого состояния в хосте этот класс не заводит: проект и чат каждый
+    /// тест-экземпляр создаёт сам (CreateProject и Chat() — уникальные GUID), нити и фокус
+    /// ключуются парой (владелец, чат), sessions.json в Testing-среде пишется синхронно.
+    /// </summary>
+    public sealed class Hosts : TestWebApplicationFactory
+    {
+    }
+
+    private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
     private readonly string _ownerId;
     private readonly string _projectId;
 
-    public ThreadsEndpointTests()
+    public ThreadsEndpointTests(Hosts hosts)
     {
+        _factory = hosts;
         (_projectId, _) = CharacterEndpointsTests.CreateProject(_factory, TestWebApplicationFactory.TestUsername);
         _ownerId = _factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
         _client = _factory.CreateAuthenticatedClient();
-    }
-
-    public void Dispose()
-    {
-        _factory.Dispose();
-        GC.SuppressFinalize(this);
     }
 
     private SessionManager Sessions => _factory.Services.GetRequiredService<SessionManager>();

@@ -2,7 +2,8 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    # feat/test-speedup — временно, проверка матрицы шардов до PR; убрать перед мержем
+    branches: [master, feat/test-speedup]
   pull_request:
 
 jobs:

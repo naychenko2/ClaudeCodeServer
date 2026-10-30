@@ -14,17 +14,32 @@ namespace ClaudeHomeServer.Tests.DynamicModules;
 // AssemblyPart'ом. Main на компиляции типы вертикали не видит — отвечает только загруженная
 // сборка. Образец — StubModuleEndpointTests.
 [Trait("Category", "Host")]
-public class ArchitectureModuleEndpointTests : IDisposable
+public class ArchitectureModuleEndpointTests : IClassFixture<ArchitectureModuleEndpointTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new();
-    private readonly HttpClient _client;
-
-    public ArchitectureModuleEndpointTests()
+    // Хост на КОНФИГУРАЦИЮ: обычный и с выключенным гейтом подсистемы. Проект и каталог
+    // каждый тест заводит свои (имена каталогов разные), общего изменяемого состояния нет
+    public sealed class Hosts : IDisposable
     {
-        _client = _factory.CreateAuthenticatedClient();
+        public TestWebApplicationFactory Enabled { get; } = new();
+        public DisabledArchitectureFactory Disabled { get; } = new();
+
+        public void Dispose()
+        {
+            Enabled.Dispose();
+            Disabled.Dispose();
+        }
     }
 
-    public void Dispose() => _factory.Dispose();
+    private readonly TestWebApplicationFactory _factory;
+    private readonly Hosts _hosts;
+    private readonly HttpClient _client;
+
+    public ArchitectureModuleEndpointTests(Hosts hosts)
+    {
+        _hosts = hosts;
+        _factory = hosts.Enabled;
+        _client = _factory.CreateAuthenticatedClient();
+    }
 
     [Fact]
     public async Task Модель_проекта__контроллер_загруженного_модуля_отвечает_200()
@@ -141,7 +156,7 @@ public class ArchitectureModuleEndpointTests : IDisposable
     // Настройка едет UseSetting'ом — хост-конфигурацией в CreateBuilder(args), то есть успевает
     // к ModuleLoader.LoadAll (разбор механики — шапка NotesDisabledTests). Запись в
     // DynamicModules остаётся Enabled=true: выключает именно гейт подсистемы.
-    private sealed class DisabledArchitectureFactory : TestWebApplicationFactory
+    public sealed class DisabledArchitectureFactory : TestWebApplicationFactory
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
@@ -153,7 +168,7 @@ public class ArchitectureModuleEndpointTests : IDisposable
     [Fact]
     public async Task Гейт_выключен__модуль_не_загружен_REST_и_viaduct_недоступны()
     {
-        using var disabled = new DisabledArchitectureFactory();
+        var disabled = _hosts.Disabled;
         var client = disabled.CreateAuthenticatedClient();
 
         // Гейт доехал, RestartRequired честный: в конфиге выключено и в процессе не активно

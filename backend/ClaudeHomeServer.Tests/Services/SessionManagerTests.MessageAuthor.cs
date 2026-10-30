@@ -1,14 +1,21 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Access;
 using FluentAssertions;
+using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 
 namespace ClaudeHomeServer.Tests.Services;
 
 // S2a-6a: автор сообщения в истории чата. Что донёс податель (senderUserId — S2a-1) то и
-// пишется в user_message: владелец → владелец, редактор → редактор, подача без отправителя
-// → null. Запись идёт через существующий путь истории (OnUserMessage под _lock, диск — под
+// пишется в user_message: владелец → владелец, редактор → редактор. Агентская/персонная
+// подача автора-человека в историю не несёт — даже когда id инициатора хода при ней.
+// Запись идёт через существующий путь истории (OnUserMessage под _lock, диск — под
 // _saveLock аккумулятора); своего лока и второго writer здесь нет.
 public partial class SessionManagerTests
 {
@@ -21,7 +28,7 @@ public partial class SessionManagerTests
             .Invoke(_sut, [sessionId])!;
 
     [Fact]
-    public async Task СообщенияУчастников_ПишутВИсторию_СвоимАвтором_ПодачаБезОтправителя_Null()
+    public async Task СообщенияУчастников_ПишутВИсторию_СвоимАвтором_ПодачаАгентаСОтправителем_БезАвтора()
     {
         var (session, fake) = await RunChatAsync("ma-authors", SessionStatus.Active);
         var project = _projectManager.GetById(session.ProjectId!)!;
@@ -55,22 +62,43 @@ public partial class SessionManagerTests
         AuthorOfMessage(history, "авто от персоны").Should().BeNull("авто-ход с персоной — автора-человека нет");
     }
 
-    // Правка плана «Командной реализации» участником: текст виден в ленте и лежит в истории
-    // под его именем (решение по карточке — не агентская реплика)
+    // Правка плана «Командной реализации» владельцем: текст виден в ленте и лежит в истории
+    // под его именем (решение по карточке — не агентская реплика). Идём боевым путём — через
+    // хаб: в проде RespondTeamPlanAsync зовёт только он, и передача автора хабом проверяется
+    // здесь, а не обходится прямым вызовом сервиса. Прав карточки (Configure) и правка по
+    // плану — только владельца: хаб отсекает всех прочих на ScopeOfSession, сервис — на
+    // проверке владения (TeamDecisionService), поэтому имя теста — «Владельцем».
     [Fact]
-    public async Task ПравкаПлана_Участником_АвторВИсторииУчастник()
+    public async Task ПравкаПлана_Владельцем_АвторВИсторииВладелец()
     {
         var (session, plan, _) = await MakeStabWithPlanAndStarterAsync("ma-edit-plan");
         SetReplannedPlannerAnswer(GetAnyPersona(session), "ревью убрано из плана");
 
-        // Владелец проекта = TestUserId; проверка владения в RespondTeamPlanAsync сверяет userId
-        // с владельцем, поэтому автор здесь — владелец (участник проходит через тот же параметр)
-        await _sut.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Edit,
-            feedback: "убери ревью из плана", userId: TestUserId);
+        var hub = MakeHubFor(TestUserId);
+        await hub.RespondTeamPlan(session.Id, plan.Id, "edit", feedback: "убери ревью из плана");
 
         var history = await _historyService.LoadAsync(session.Id);
         AuthorOfMessage(history, "убери ревью из плана").Should().Be(TestUserId,
-            "правка плана несёт автора — пользователя, подавшего решение");
+            "хаб обязан передать автора правки в историю: без userId строка ляжет с null-автором");
+    }
+
+    // Хаб с соединением конкретного пользователя (тот же образец, что в SessionHubLeaveTests):
+    // UserId хаба читает sub из ClaimsPrincipal соединения. FileWatcherService/ConnectionDiagnostics/
+    // DevServerService нужны другим методам хаба — RespondTeamPlan их не трогает; IProjectAccess
+    // настоящая: гейт доступа RespondTeamPlan решается именно по ней.
+    private SessionHub MakeHubFor(string userId)
+    {
+        var context = new Mock<HubCallerContext>();
+        context.Setup(c => c.ConnectionId).Returns("conn-author");
+        context.Setup(c => c.User).Returns(new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim(JwtRegisteredClaimNames.Sub, userId)])));
+        return new SessionHub(_sut, _projectManager,
+            new ProjectAccessService(_projectManager, _sut), null!, null!, null!,
+            new UserConnectionRegistry(), NullLogger<SessionHub>.Instance)
+        {
+            Context = context.Object,
+            Groups = new Mock<IGroupManager>().Object,
+        };
     }
 
     // Гонка двух отправителей в одну сессию: пока идёт ход первого, оба пишут в очередь

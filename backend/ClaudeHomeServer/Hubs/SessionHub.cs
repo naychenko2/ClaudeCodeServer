@@ -325,7 +325,7 @@ public class SessionHub : Hub
         };
         if (parsed is null) throw new HubException($"Неизвестное решение по плану: {decision}");
         await _sessions.RespondTeamPlanAsync(sessionId, planId, parsed.Value, subtaskId, executorPersonaId,
-            feedback: feedback);
+            userId: UserId, feedback: feedback);
     }
 
     // Решение человека по карточке остановки «Командной реализации» (Э4). actionId — id

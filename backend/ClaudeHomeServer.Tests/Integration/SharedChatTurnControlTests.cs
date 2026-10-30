@@ -57,6 +57,14 @@ public class SharedChatTurnControlTests : IDisposable
         return IdOf(await chat.Content.ReadFromJsonAsync<JsonElement>());
     }
 
+    /// <summary>Арендатор чата — владелец его проекта: тот, чьим ключом живут хранилища и чей
+    /// токен платит ход.</summary>
+    private string OwnerOf(string chatId)
+    {
+        var sessions = _factory.Services.GetRequiredService<SessionManager>();
+        return sessions.ResolveOwnerId(sessions.GetById(chatId)!)!; // чат этого теста всегда с арендатором
+    }
+
     /// <summary>Послать сообщение (wait=none): первый — начинает ход, следующий в занятом чате
     /// встаёт в очередь (202). Стаб LLM-адаптера ход не завершает — он остаётся идущим.</summary>
     private static async Task SendAsync(HttpClient client, string chatId, string text)
@@ -95,13 +103,28 @@ public class SharedChatTurnControlTests : IDisposable
         await Assert403WithCodeAsync(response, ChatAuthorGate.ErrorCode);
     }
 
+    // Автор своего хода и владелец чата — оба проходят гейт (это разные случаи: человек,
+    // ведущий ход, и его арендатор). Ответ — 409 «прерывать нечего», а не 403: в тестовом хосте
+    // 204 принципиально не получить, потому что стаб-адаптер не объявляет живой прогон
+    // (FakeLlmSessionAdapter.HasLiveTurn = false → SessionManager.PreemptForPending, :6129
+    // «живого прогона нет — убивать нечего»). Правомерность автора и владельца подтверждается
+    // ниже по цепочке: актор записан (GetTurnActor) и IsOwnerOrTurnAuthor даёт им обоим true
+    // (тот же helper, что проверяет ручка), а на уровне стора это SessionManagerTests
+    // «АвторХода_ВладелецИАвторДа_ДругойУчастникИНеизвестныйНет» и гонка «ГонкаДвухПодач…».
     [Fact]
-    public async Task ПеребойСвоегоХода_АвторПроходит_ВладелецТоже()
+    public async Task ПеребойСвоегоХода_АвторИВладелецГейтПроходят_ЧужойУчастникНет()
     {
         var chatId = await SharedChatAsync();
-        await SendAsync(_editor, chatId, "ход ведёт редактор");
+        await SendAsync(_editor, chatId, "ход ведёт редактор"); // актор идущего хода — редактор
+        var sessions = _factory.Services.GetRequiredService<SessionManager>();
+        var editorUser = _factory.Services.GetRequiredService<UserStore>().FindByUsername(
+            TestWebApplicationFactory.SecondUsername)!;
 
-        // 409 — «прерывать нечего»: гейт авторства пройден, дальше ручка отвечает по делу
+        sessions.GetTurnActor(chatId, OwnerOf(chatId)).Should().Be(editorUser.Id,
+            "реестр актора: ход принадлежит подавшему его участнику");
+        sessions.IsOwnerOrTurnAuthor(chatId, editorUser.Id).Should().BeTrue("автор хода");
+        sessions.IsOwnerOrTurnAuthor(chatId, OwnerOf(chatId)).Should().BeTrue("владелец чата");
+
         var asAuthor = await _editor.PostAsync($"/api/sessions/{chatId}/pending/preempt", null);
         ((int)asAuthor.StatusCode).Should().Be(409, "автор идущего хода не отшит правом");
         var asOwner = await _owner.PostAsync($"/api/sessions/{chatId}/pending/preempt", null);

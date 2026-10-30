@@ -652,12 +652,13 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
     <>
       {tag && (
         // На 360 тег не должен вытеснять название: показываем только тон-слово (без суффикса
-        // стадии «· Производство», полный текст — в title/aria), потолок обёртки 64 px.
+        // стадии «· Производство», полный текст — в title/aria), потолок обёртки 64 px; обёртка не сжимается (flex-shrink 0) —
+        // сжимается название, иначе в ряду 332 px слово тега схлопывалось до 0–17 px.
         // Расчёт: 360 − поля 24 − «К списку» ~72 − глиф 14 − ⋯ 36 − зазоры 24 − тег 64 = 126 px
         // названию (≥ 2 слов, хвост — многоточием). На десктопе — без изменений.
         <span
           title={isMobile ? tag.label : undefined}
-          style={isMobile ? { display: 'inline-flex', flexShrink: 1, minWidth: 0, maxWidth: TAG_MAX_W_MOBILE, overflow: 'hidden' } : { display: 'contents' }}
+          style={isMobile ? { display: 'inline-flex', flexShrink: 0, maxWidth: TAG_MAX_W_MOBILE, overflow: 'hidden' } : { display: 'contents' }}
         >
           <StatusTag
             tag={isMobile ? { ...tag, label: shortRunTagLabel(tag.label) } : tag}

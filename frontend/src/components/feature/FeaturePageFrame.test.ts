@@ -882,6 +882,9 @@ describe('Ш9a: тег статуса на 360', () => {
         const titleW = 360 - 170 - Number(wrap.style?.maxWidth);
         expect(titleW).toBeGreaterThanOrEqual(125);
         expect(wrap.style?.overflow).toBe('hidden');
+        // Корень дефекта 7bcf9a39: обёртка не должна сжиматься flex'ом ниже слова тега.
+        expect(wrap.style?.flexShrink, 'обёртка тега сжимается flex-ом').toBe(0);
+        expect(wrap.style?.minWidth, 'min-width: 0 даёт путь сжатия ниже содержимого').toBeUndefined();
         // Только тон-слово, без суффикса стадии; тег клипается многоточием, не посреди слова.
         expect(String(tag!.textContent)).not.toContain('·');
         const tagStyle = (reactProps(tag as never) as { style?: Record<string, unknown> }).style;

@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest';
 import {
   alarmView, chatRoleFromRun, featureEstimateView, featureNowRows, featureStepChainRows,
   featureTrackerIssues, featureTruthBar, findChatChain, stepBadgeTone, stepStatusParts, stepStatusText,
-  stepStoppedBy, trackerPercent,
+  stepAlarmBy, trackerPercent,
 } from './featureTruthModel';
 import { trackerBarAria } from './FeatureTrackerBar';
 import { C } from '../../../lib/design';
@@ -170,20 +170,36 @@ describe('шаг этого чата: цепочка, статус, роль', (
       stepChains: [chain()],
     });
     const c = r.stepChains![0];
-    const stopped = stepStoppedBy(r, c);
-    expect(stopped).toEqual({ since: '2026-10-29T10:08:00Z' });
+    const alarm = stepAlarmBy(r, c);
+    expect(alarm).toEqual({ kind: 'stopped', since: '2026-10-29T10:08:00Z' });
     // Время — с attention.since (1 ч 52 мин), а не с durationMinutes цепочки (24 мин).
-    expect(stepStatusParts(c, NOW, stopped)).toEqual({ word: 'стоит', time: '1 ч 52 мин', sep: ' · ' });
-    expect(stepStatusText(c, NOW, stopped)).toBe('стоит · 1 ч 52 мин');
-    expect(stepBadgeTone(c, stopped)).toBe('danger');
+    expect(stepStatusParts(c, NOW, alarm)).toEqual({ word: 'стоит', time: '1 ч 52 мин', sep: ' · ' });
+    expect(stepStatusText(c, NOW, alarm)).toBe('стоит · 1 ч 52 мин');
+    expect(stepBadgeTone(c, alarm)).toBe('danger');
   });
 
-  it('тревога не про этот шаг (чужая задача или другой вид) — статус остаётся бэковым', () => {
+  // «Ждёт вас» по тому же правилу, что «стоит» (дизайн-ревью F2, п. 7): тревога kind 'wait'
+  // на задаче цепочки — карточка шага говорит «ждёт вас · время», а не «принят/идёт».
+  it('тревога wait на этом шаге: «ждёт вас · с attention.since», тон warning — даже для принятой цепочки', () => {
+    const c = chain({ outcome: 'accepted', status: 'принят', acceptedAt: '2026-10-29T13:40:00Z' });
+    const r = run({
+      state: 'waiting',
+      attention: { kind: 'wait', taskId: 't-8', since: '2026-10-29T11:30:00Z', reason: 'нужен ответ', personaId: 'p-kira', linkedSessionId: 's-me' },
+      stepChains: [c],
+    });
+    const alarm = stepAlarmBy(r, c);
+    expect(alarm).toEqual({ kind: 'wait', since: '2026-10-29T11:30:00Z' });
+    expect(stepStatusParts(c, NOW, alarm)).toEqual({ word: 'ждёт вас', time: '30 мин', sep: ' · ' });
+    expect(stepStatusText(c, NOW, alarm)).toBe('ждёт вас · 30 мин');
+    expect(stepBadgeTone(c, alarm)).toBe('warning');
+  });
+
+  it('тревога не про этот шаг (чужая задача или вид merge) — статус остаётся бэковым', () => {
     const other = run({ attention: { kind: 'stopped', taskId: 't-9', since: null }, stepChains: [chain()] });
-    expect(stepStoppedBy(other, other.stepChains![0])).toBeNull();
-    const wait = run({ attention: { kind: 'wait', taskId: 't-8', since: null }, stepChains: [chain()] });
-    expect(stepStoppedBy(wait, wait.stepChains![0])).toBeNull();
-    expect(stepStatusText(chain(), NOW, stepStoppedBy(wait, chain()))).toBe('идёт · 24 мин');
+    expect(stepAlarmBy(other, other.stepChains![0])).toBeNull();
+    const merge = run({ attention: { kind: 'merge', taskId: 't-8', since: null }, stepChains: [chain()] });
+    expect(stepAlarmBy(merge, merge.stepChains![0])).toBeNull();
+    expect(stepStatusText(chain(), NOW, stepAlarmBy(merge, chain()))).toBe('идёт · 24 мин');
     expect(stepBadgeTone(chain(), null)).toBe('accent');
   });
 

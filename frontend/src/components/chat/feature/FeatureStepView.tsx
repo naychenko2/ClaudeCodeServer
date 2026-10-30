@@ -7,7 +7,7 @@ import { FeatureTrackerBar, trackerBarAria } from './FeatureTrackerBar';
 import { FeatureTruthFooter } from './FeatureTruthBody';
 import {
   alarmView, chatRoleFromRun, featureEstimateView, featureStepChainRows, featureTruthBar,
-  stepBadgeTone, stepStatusText, stepStoppedBy, stepWhatLabel, type NameOf,
+  stepBadgeTone, stepStatusText, stepAlarmBy, stepWhatLabel, type NameOf,
 } from './featureTruthModel';
 import { laneWord } from '../../../lib/roleLabel';
 import type { FeatureRun, FeatureStepChain } from '../../../types/featureRun';
@@ -60,7 +60,7 @@ export function FeatureStepView({ run, chain, sessionId, chatTaskId, isMobile, o
     : null;
 
   // Тревога фичи относится к этому шагу? (бэковое поле, нового состояния не заводим)
-  const stoppedBy = stepStoppedBy(run, chain);
+  const alarmBy = stepAlarmBy(run, chain);
   const rows = featureStepChainRows(run, chain, nameOfPersona);
   const sp = run.stepProgress ?? null;
   const bar = featureTruthBar(sp, sp?.inMaster);
@@ -106,10 +106,11 @@ export function FeatureStepView({ run, chain, sessionId, chatTaskId, isMobile, o
             {stepWhatLabel(chain.stepRef, chain.title)}
           </span>
           <span data-testid="feature-step-status" style={{ flexShrink: 0 }}>
-            {/* Тревога на ЭТОМ шаге (attention.taskId ∈ цепочки) — danger «стоит · N»
-                вместо «идёт»: карточка не спорит с тревогой выше (дизайн-ревью F2, major 3). */}
-            <Badge tone={stepBadgeTone(chain, stoppedBy)} size="xs">
-              {stepStatusText(chain, nowMs, stoppedBy)}
+            {/* Тревога на ЭТОМ шаге (attention.taskId ∈ цепочки) — «стоит · N»/«ждёт вас · N»
+                вместо «идёт»/«принят»: карточка не спорит с тревогой выше
+                (дизайн-ревью F2, major 3 и п. 7). */}
+            <Badge tone={stepBadgeTone(chain, alarmBy)} size="xs">
+              {stepStatusText(chain, nowMs, alarmBy)}
             </Badge>
           </span>
         </div>

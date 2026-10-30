@@ -81,6 +81,24 @@ describe('FeatureStepView: тело П2 «Мой шаг»', () => {
     expect(html).not.toContain('S4b-3:');
   });
 
+  it('тревога wait на этом шаге: карточка «ждёт вас · время», цепочка «— ждёт вас», а не «принят» (п. 7)', () => {
+    const c = chain({ outcome: 'accepted', status: 'принят', acceptedAt: '2026-10-29T13:40:00Z' });
+    const r = run({
+      state: 'waiting',
+      attention: { kind: 'wait', taskId: 't-8', since: '2026-10-29T11:30:00Z', reason: 'нужен ваш ответ', personaId: 'p-kira', linkedSessionId: 's-me' },
+      stepChains: [c],
+    });
+    const html = render(r, c);
+    expect(html).toContain('feature-step-alarm');
+    // Печатается то же, что говорит тревога выше: «ждёт вас» с attention.since,
+    // а не «принят 13:40» рядом с тревогой.
+    // «принято N» встречается в aria полосы — про корзину, не про статус; проверяем саму плашку.
+    const statusHtml = /data-testid="feature-step-status"([\s\S]*?)<\/span>/.exec(html)?.[1] ?? '';
+    expect(statusHtml).toContain('ждёт вас');
+    expect(statusHtml).not.toContain('принят');
+    expect(html).toContain('Ш8 — ждёт вас');
+  });
+
   it('тревога вне этого шага (чужая задача): карточка остаётся «идёт»', () => {
     const c = chain();
     const r = run({

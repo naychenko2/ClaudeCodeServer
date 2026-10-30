@@ -197,19 +197,20 @@ export function findChatChain(run: FeatureRun, chatTaskId: string | null | undef
   return (run.stepChains ?? []).find(c => (c.taskIds ?? []).includes(chatTaskId)) ?? null;
 }
 
-// «Стоит» на шаге этого чата: тревога фичи (run.attention, kind 'stopped') указывает на
-// задачу ЭТОЙ цепочки — значит фича стоит именно на этом шаге (исполнитель остановлен,
-// auth_failed и т.п.). Поле бэковое, нового состояния нет: слово то же, что в тревоге
-// (alarmView 'stopped' → «Стоит»), время — с attention.since (бэковый ExecutorStoppedAt),
-// а не с chain.durationMinutes (он считает от старта задачи и у стоящего растёт).
-// Возвращает сам маркер (null — тревога не про этот шаг): его передают в тон и статусы.
-export interface StepStoppedBy { since: string | null }
+// Тревога на шаге этого чата: attention (kind 'stopped' или 'wait') указывает на задачу
+// ЭТОЙ цепочки — значит фича стоит/ждёт именно на этом шаге. Поле бэковое, нового
+// состояния нет: слова те же, что в тревоге (alarmView → «Стоит»/«Ждёт вас»), время — с
+// attention.since (бэковый ExecutorStoppedAt/AwaitingHumanSince), а не с
+// chain.durationMinutes (он считает от старта задачи и у стоящего растёт).
+// Возвращает сам маркер (null — тревога не про этот шаг): его передают в тон и статусы
+// (дизайн-ревью F2, п. 7: «ждёт вас» — то же правило, что «стоит»).
+export interface StepAlarmBy { kind: 'stopped' | 'wait'; since: string | null }
 
-export function stepStoppedBy(run: FeatureRun, chain: FeatureStepChain): StepStoppedBy | null {
+export function stepAlarmBy(run: FeatureRun, chain: FeatureStepChain): StepAlarmBy | null {
   const at = run.attention;
-  if (!at || at.kind !== 'stopped' || !at.taskId) return null;
+  if (!at || (at.kind !== 'stopped' && at.kind !== 'wait') || !at.taskId) return null;
   if (!(chain.taskIds ?? []).includes(at.taskId)) return null;
-  return { since: at.since ?? null };
+  return { kind: at.kind, since: at.since ?? null };
 }
 
 // Тон плашки статуса шага: стоит (тревога на этом шаге) — danger, принят — success,
@@ -217,8 +218,10 @@ export function stepStoppedBy(run: FeatureRun, chain: FeatureStepChain): StepSto
 // Слова — бэковые (chain.status / attention), второй копии слов нет.
 export type StepBadgeTone = 'accent' | 'danger' | 'info' | 'success' | 'neutral';
 
-export function stepBadgeTone(chain: FeatureStepChain, stoppedBy?: StepStoppedBy | null): StepBadgeTone {
-  if (stoppedBy) return 'danger';
+export function stepBadgeTone(chain: FeatureStepChain, alarmBy?: StepAlarmBy | null): StepBadgeTone {
+  // Тревога на этом шаге перешивает тон: «стоит» — danger, «ждёт вас» — warning
+  // (те же тона, что у блока тревоги выше карточки).
+  if (alarmBy) return alarmBy.kind === 'stopped' ? 'danger' : 'warning';
   if (chain.outcome === 'accepted') return 'success';
   if (chain.status === 'ждёт ревью') return 'info';
   if (chain.outcome === 'withdrawn') return 'neutral';
@@ -229,14 +232,15 @@ export function stepBadgeTone(chain: FeatureStepChain, stoppedBy?: StepStoppedBy
 // разделителем): «идёт» · «24 мин» (длительность бэка: у идущей — до сейчас),
 // «ждёт ревью» · «8 мин» (waitingSince), «принят» «13:40» (acceptedAt, без разделителя —
 // «принят 13:40» читается одним фактом). Без времени — только слово (слов — бэковых).
-// stoppedBy (тревога на этом шаге) — перевешивает состояние цепочки: «стоит» · «1 ч 52»
-// с attention.since (дизайн-ревью F2, major 3: карточка не должна спорить с тревогой).
+// alarmBy (тревога на этом шаге) — перевешивает состояние цепочки: «стоит»/«ждёт вас»
+// · время с attention.since (дизайн-ревью F2, major 3 и п. 7: карточка не спорит с тревогой).
 export interface StepStatusParts { word: string; time: string | null; sep: string }
 
-export function stepStatusParts(chain: FeatureStepChain, nowMs: number, stoppedBy?: StepStoppedBy | null): StepStatusParts {
-  if (stoppedBy) {
-    const s = stoppedBy.since ? minutesSince(stoppedBy.since, nowMs) : null;
-    return { word: 'стоит', time: s != null && s > 0 ? formatDuration(s) : null, sep: ' · ' };
+export function stepStatusParts(chain: FeatureStepChain, nowMs: number, alarmBy?: StepAlarmBy | null): StepStatusParts {
+  if (alarmBy) {
+    const s = alarmBy.since ? minutesSince(alarmBy.since, nowMs) : null;
+    const word = alarmBy.kind === 'wait' ? 'ждёт вас' : 'стоит';
+    return { word, time: s != null && s > 0 ? formatDuration(s) : null, sep: ' · ' };
   }
   if (chain.outcome === 'accepted') {
     return { word: 'принят', time: chain.acceptedAt ? formatClock(chain.acceptedAt) : null, sep: ' ' };
@@ -249,8 +253,8 @@ export function stepStatusParts(chain: FeatureStepChain, nowMs: number, stoppedB
   return { word: chain.status, time: d != null && d > 0 ? formatDuration(d) : null, sep: ' · ' };
 }
 
-export function stepStatusText(chain: FeatureStepChain, nowMs: number, stoppedBy?: StepStoppedBy | null): string {
-  const p = stepStatusParts(chain, nowMs, stoppedBy);
+export function stepStatusText(chain: FeatureStepChain, nowMs: number, alarmBy?: StepAlarmBy | null): string {
+  const p = stepStatusParts(chain, nowMs, alarmBy);
   return p.time ? `${p.word}${p.sep}${p.time}` : p.word;
 }
 
@@ -300,13 +304,14 @@ export function chatRoleFromRun(run: FeatureRun, chatTaskId: string | null | und
 export function featureStepChainRows(run: FeatureRun, chain: FeatureStepChain, nameOf: NameOf): TruthChainRow[] {
   const rows: TruthChainRow[] = [];
   // Первая строка — сам шаг: то же слово статуса, что и на плашке карточки (те же
-  // источники: chain.status / «стоит» из тревоги на этом шаге — stepStatusParts и
-  // stepStoppedBy). Цепочка не должна спорить с карточкой (дизайн-ревью F2, major 3).
-  const stoppedBy = stepStoppedBy(run, chain);
-  const word = stoppedBy ? 'стоит' : chain.status;
+  // источники: chain.status / «стоит»/«ждёт вас» из тревоги на этом шаге —
+  // stepStatusParts и stepAlarmBy). Цепочка не должна спорить с карточкой
+  // (дизайн-ревью F2, major 3 и п. 7).
+  const alarmBy = stepAlarmBy(run, chain);
+  const word = alarmBy ? (alarmBy.kind === 'wait' ? 'ждёт вас' : 'стоит') : chain.status;
   rows.push({
     id: `step-${chain.stepRef}`,
-    color: stoppedBy ? C.danger : chain.outcome === 'accepted' ? C.success : chain.status === 'ждёт ревью' ? C.info : chain.outcome === 'withdrawn' ? C.textMuted : C.accent,
+    color: alarmBy ? (alarmBy.kind === 'wait' ? C.warning : C.danger) : chain.outcome === 'accepted' ? C.success : chain.status === 'ждёт ревью' ? C.info : chain.outcome === 'withdrawn' ? C.textMuted : C.accent,
     // Название не повторяется: оно уже в карточке «Этот чат» выше (дизайн-ревью F2, minor 4).
     text: `${chain.stepRef} — ${word}`,
     time: null,

@@ -20,7 +20,7 @@ import type { FeatureRun, FeatureState, FeatureAttention, FeatureNow, FeatureQue
 import { api } from '../../lib/api';
 import type { FeatureIndexFeature } from '../../types/featureIndex';
 import { NavTargetButton } from './NavTargetButton';
-import { StatusTag, type FeatureRunTag } from './FeatureStatusTag';
+import { StatusTag, shortRunTagLabel, type FeatureRunTag } from './FeatureStatusTag';
 import { analysisLineState } from './FeatureAnalysisModel';
 import { minutesSince } from './FeatureStatsBits';
 import { useNow } from '../../lib/useNow';
@@ -660,7 +660,7 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
           style={isMobile ? { display: 'inline-flex', flexShrink: 1, minWidth: 0, maxWidth: TAG_MAX_W_MOBILE, overflow: 'hidden' } : { display: 'contents' }}
         >
           <StatusTag
-            tag={isMobile ? { ...tag, label: tag.label.split(' · ')[0] } : tag}
+            tag={isMobile ? { ...tag, label: shortRunTagLabel(tag.label) } : tag}
             testId="feature-page-status"
             clip={isMobile}
           />

@@ -13,7 +13,8 @@ import { act } from 'react';
 import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeaturePage, type FeaturePageBackTarget } from './FeaturePage';
-import { featureRunStatusTag, featurePrimaryAction } from './FeaturePageHeader';
+import { featureRunStatusTag, featurePageStatusTag, featurePrimaryAction } from './FeaturePageHeader';
+import { shortRunTagLabel } from './FeatureStatusTag';
 import { __test as pageTest, setFeaturePageTab } from '../../lib/featurePage';
 import { __test as indexTest } from '../../lib/featuresIndex';
 import { __test as backNavTest } from '../../lib/featureBackNav';
@@ -851,6 +852,22 @@ describe('featureRunStatusTag: подпись очереди (Q5A)', () => {
 
 // ═══ Ш9a: 360 — тег не вытесняет название ═══════════════════════════════════════
 describe('Ш9a: тег статуса на 360', () => {
+  it('короткая подпись на каждом состоянии: одно слово («в работе»/«в очереди» — исключения), без «·»', () => {
+    const states = ['not_started', 'idle', 'running', 'waiting', 'stopped', 'paused', 'draft', 'merge_pending', 'merging', 'merged', 'closed'] as const;
+    const labels = states.flatMap(s => [
+      featureRunStatusTag(s, 'Производство').label,
+      featurePageStatusTag(s, 'Производство').label,
+    ]);
+    labels.push(featureRunStatusTag('paused', null, { holdReason: 'queue', queue: { position: 2, total: 5 } as never }).label, 'в очереди', featureRunStatusTag('bogus' as never).label);
+    for (const label of labels) {
+      const short = shortRunTagLabel(label);
+      expect(short, label).not.toContain('·');
+      if (short !== 'в работе' && short !== 'в очереди') expect(short.split(' ').length, `${label} → ${short}`).toBe(1);
+    }
+    expect(shortRunTagLabel('закрыта без мержа')).toBe('закрыта');
+    expect(shortRunTagLabel('ждёт согласия на мерж')).toBe('ждёт');
+  });
+
   it('360: тег в обёртке с потолком ширины и клипом; на 1280 обёртка прозрачна', async () => {
     mockGetFeature.result = pageData({ state: 'waiting' });
     for (const isMobile of [true, false]) {

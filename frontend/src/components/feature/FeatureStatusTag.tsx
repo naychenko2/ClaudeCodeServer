@@ -81,6 +81,20 @@ export function featureRunStatusTag(state: FeatureState, stageName?: string | nu
   }
 }
 
+// Короткая подпись тега для узкой шапки (360): одно слово, а не срез по « · » — у «закрыта без
+// мержа» и «ждёт согласия на мерж» разделителя нет, и обрезок получался в 2–4 символа. Полный
+// текст остаётся в title обёртки. «в работе» и «в очереди» — устоявшиеся пары, исключения из «слова».
+export function shortRunTagLabel(label: string): string {
+  if (label === CLOSED_NO_MERGE_STATUS) return 'закрыта';
+  if (label === MERGE_PENDING_STATUS || label === 'ждёт вас') return 'ждёт';
+  if (label === UNKNOWN_RUN_TAG.label) return 'неясно';
+  if (label === 'не начата') return 'новая';
+  if (label === 'на паузе') return 'пауза';
+  if (label.startsWith('в работе')) return 'в работе';
+  if (label.startsWith('в очереди')) return 'в очереди';
+  return label.split(' · ')[0];
+}
+
 // Старый тег индекса (featureStatusTag, 7 тонов) → тег страницы: тоны совпадают
 // один в один (loop — только фолбэк по индексу, run.state его не возвращает).
 export function toRunTag(t: FeatureStatusTag): FeatureRunTag {

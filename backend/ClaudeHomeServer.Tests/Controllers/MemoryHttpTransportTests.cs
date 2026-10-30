@@ -54,6 +54,33 @@ public class MemoryHttpTransportTests : IClassFixture<TestWebApplicationFactory>
             .Select(t => t.GetProperty("name").GetString()!).ToList();
     }
 
+    /// <summary>
+    /// Клиент «от лица чата» (S2a-3): рамка хода читается по заголовку X-Caller-Session-Id,
+    /// вызов без него считается узким (fail-closed). Тестам личной памяти нужен живой чат
+    /// личного проекта тестового пользователя — там рамка широкая и поведение прежнее.
+    /// </summary>
+    private async Task<HttpClient> AsChatOfAsync(string projectId)
+    {
+        var resp = await _client.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "acceptEdits" });
+        resp.EnsureSuccessStatusCode();
+        var sessionId = JsonSerializer.Deserialize<JsonElement>(
+            await resp.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+        var client = _factory.CreateAuthenticatedClient();
+        client.DefaultRequestHeaders.Add("X-Caller-Session-Id", sessionId);
+        return client;
+    }
+
+    private async Task<JsonElement> RpcAsync(HttpClient client, string url, string method,
+        object? @params = null, int id = 1)
+    {
+        var body = @params is null
+            ? new { jsonrpc = "2.0", id, method }
+            : (object)new { jsonrpc = "2.0", id, method, @params };
+        var resp = await client.PostAsJsonAsync(url, body);
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        return JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
+    }
+
     private async Task<(string PersonaId, string ProjectId)> SeedAsync(bool projectScopedPersona = true)
     {
         var dir = Path.Combine(_factory.TempDir, "mcpmem_" + Guid.NewGuid().ToString("N")[..8]);
@@ -209,15 +236,18 @@ public class MemoryHttpTransportTests : IClassFixture<TestWebApplicationFactory>
     [Fact]
     public async Task MemoryRemember_ИRecall_РаботаютЧерезТулсет()
     {
-        var (personaId, _) = await SeedAsync(projectScopedPersona: false);
-        var remember = await RpcAsync(MemoryUrl(personaId, "-"), "tools/call", new
+        var (personaId, projectId) = await SeedAsync(projectScopedPersona: false);
+        // Личная память глобальной персоны открыта только в широкой рамке: вызов от лица
+        // чата личного проекта (S2a-3)
+        var chat = await AsChatOfAsync(projectId);
+        var remember = await RpcAsync(chat, MemoryUrl(personaId, "-"), "tools/call", new
         {
             name = "memory_remember",
             arguments = new { type = "semantic", text = "Мой рабочий стек — ASP.NET Core" },
         });
         remember.GetProperty("result").TryGetProperty("isError", out _).Should().BeFalse();
 
-        var recall = await RpcAsync(MemoryUrl(personaId, "-"), "tools/call", new
+        var recall = await RpcAsync(chat, MemoryUrl(personaId, "-"), "tools/call", new
         {
             name = "memory_recall",
             arguments = new { query = "какой у меня рабочий стек" },
@@ -320,17 +350,20 @@ public class MemoryHttpTransportTests : IClassFixture<TestWebApplicationFactory>
     [Fact]
     public async Task ЛичнаяПамятьПерсоны_НедоступнаЧерезХвостДругойПерсоныТогоЖеВладельца()
     {
-        var (personaA, _) = await SeedAsync(projectScopedPersona: false);
+        var (personaA, projectId) = await SeedAsync(projectScopedPersona: false);
         var (personaB, _) = await SeedAsync(projectScopedPersona: false);
+        // Все вызовы — от лица чата личного проекта: личная память глобальных персон открыта
+        // только в широкой рамке (S2a-3)
+        var chat = await AsChatOfAsync(projectId);
 
-        var remember = await RpcAsync(MemoryUrl(personaA, "-"), "tools/call", new
+        var remember = await RpcAsync(chat, MemoryUrl(personaA, "-"), "tools/call", new
         {
             name = "memory_remember",
             arguments = new { type = "semantic", text = "Личный секрет персоны A: пароль от сейфа" },
         });
         remember.GetProperty("result").TryGetProperty("isError", out _).Should().BeFalse();
 
-        var list = await RpcAsync(MemoryUrl(personaB, "-"), "tools/call", new
+        var list = await RpcAsync(chat, MemoryUrl(personaB, "-"), "tools/call", new
         {
             name = "memory_list",
             arguments = new { },
@@ -338,7 +371,7 @@ public class MemoryHttpTransportTests : IClassFixture<TestWebApplicationFactory>
         var listText = list.GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString()!;
         listText.Should().NotContain("сейфа", "хвост B — память B, а не окно в память соседа");
 
-        var recall = await RpcAsync(MemoryUrl(personaB, "-"), "tools/call", new
+        var recall = await RpcAsync(chat, MemoryUrl(personaB, "-"), "tools/call", new
         {
             name = "memory_recall",
             arguments = new { query = "пароль от сейфа" },
@@ -347,7 +380,7 @@ public class MemoryHttpTransportTests : IClassFixture<TestWebApplicationFactory>
         recallText.Should().NotContain("сейфа");
 
         // Память A при этом цела — изоляция не уничтожила её
-        var own = await RpcAsync(MemoryUrl(personaA, "-"), "tools/call", new
+        var own = await RpcAsync(chat, MemoryUrl(personaA, "-"), "tools/call", new
         {
             name = "memory_list",
             arguments = new { },

@@ -34,12 +34,20 @@ public class PersonasToolsetZoneTests : IDisposable
         return (await session.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
     }
 
+    // Вызов «от лица чата» (S2a-3): рамка хода читается по заголовку X-Caller-Session-Id,
+    // вызов без него считается узким (fail-closed). Тесты зовут от лица своего личного чата —
+    // рамка широкая, поведение прежнее
     private async Task<JsonElement> CallAsync(string sessionId, string tool, object args)
     {
-        var resp = await _client.PostAsJsonAsync($"/mcp/personas/{sessionId}", new
+        using var req = new HttpRequestMessage(HttpMethod.Post, $"/mcp/personas/{sessionId}")
         {
-            jsonrpc = "2.0", id = 1, method = "tools/call", @params = new { name = tool, arguments = args },
-        });
+            Content = new StringContent(JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0", id = 1, method = "tools/call", @params = new { name = tool, arguments = args },
+            }), System.Text.Encoding.UTF8, "application/json"),
+        };
+        req.Headers.Add("X-Caller-Session-Id", sessionId);
+        var resp = await _client.SendAsync(req);
         resp.EnsureSuccessStatusCode();
         return (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("result");
     }

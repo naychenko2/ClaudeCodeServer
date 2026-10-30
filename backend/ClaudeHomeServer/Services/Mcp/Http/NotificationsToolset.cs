@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Access;
 
 namespace ClaudeHomeServer.Services.Mcp.Http;
 
@@ -27,7 +28,8 @@ public sealed class NotificationsToolset(
     NotificationService notif,
     SessionManager sessions,
     PersonaManager personas,
-    PersonaBindingsService bindings) : IMcpParameterizedToolset
+    PersonaBindingsService bindings,
+    ITurnFrameSource frames) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/notifications/{sessionId}. Константа —
     // единственная точка правды для URL конфига хода (ClaudeSession)
@@ -51,6 +53,15 @@ public sealed class NotificationsToolset(
         // Права проверяются на КАЖДЫЙ вызов (гейт в составе недостаточен — см. шапку)
         if (!TryResolve(context, out var session, out _, out var routeError))
             return Deny(routeError);
+
+        // Узкая рамка хода (общий проект, S2a-3b, решение 29.10): почтовый ящик владельца
+        // по всем его проектам — его личное пространство; список, отметание прочитанным и
+        // удаление закрыты в общем чате всем, включая самого владельца. Создать уведомление
+        // о работе этого проекта можно: это сообщение владельцу о текущем проекте, а не
+        // чтение его личного ящика.
+        if (frames.Frame(context.CallerSessionId, context.OwnerId) == TurnFrameKind.Narrow
+            && tool is "notifications_list" or "notifications_mark_read" or "notifications_delete")
+            return Deny(NarrowInboxText);
 
         switch (tool)
         {
@@ -183,6 +194,11 @@ public sealed class NotificationsToolset(
     }
 
     // --- Ответы и аргументы ---
+
+    // Текст отказа узкой рамки — фиксированный, без id и названий из личных данных владельца
+    private const string NarrowInboxText =
+        "Уведомления владельца закрыты в общем проекте: это его личный ящик по всем его "
+        + "проектам. Создать уведомление о работе этого проекта можно (notifications_create).";
 
     private static McpToolCallResult Text(string text) => new(text);
 

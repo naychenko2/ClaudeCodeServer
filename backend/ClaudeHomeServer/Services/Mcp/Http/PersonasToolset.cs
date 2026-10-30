@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Knowledge;
 using Microsoft.AspNetCore.Mvc;
 
@@ -40,7 +41,8 @@ public sealed partial class PersonasToolset(
     KnowledgeService knowledge,
     ClaudeHomeServer.Services.Mcp.McpRegistry mcpRegistry,
     ClaudeHomeServer.Services.Mcp.McpStatusStore mcpStatus,
-    SessionManager sessions) : IMcpParameterizedToolset
+    SessionManager sessions,
+    ITurnFrameSource frames) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/personas/{sessionId}
     public const string ServerName = McpEndpoints.PersonasName;
@@ -97,6 +99,19 @@ public sealed partial class PersonasToolset(
         var mentions = sessions.MentionsToolsEnabled(ownerId, session, persona);
         var automationOn = bindings.SectionEnabled(ownerId, persona, "personas-automation");
 
+        // Узкая рамка хода (общий проект, S2a-3b, решение 29.10): персоны — личное пространство
+        // владельца: глобальные персоны (носят его личную память), управление персонами
+        // (создание/правка/удаление, автоматизация, реестр и доступы MCP, дефолт, аватар, сборка
+        // команды) закрыты в его общем чате всем, включая самого владельца. Проектная команда
+        // этого чата остаётся: personas_list по проекту, persona_ask к проектным персонам,
+        // чтение и правка привязок проектной персоны. Вердикт только читается.
+        var narrow = frames.Frame(context.CallerSessionId, context.OwnerId) == TurnFrameKind.Narrow;
+        if (narrow && (tool is "personas_create" or "personas_update" or "personas_delete"
+            or "personas_set_default" or "personas_mcp_list" or "personas_mcp_grant"
+            or "personas_generate_avatar" or "personas_ai_team"
+            || tool.StartsWith("personas_automation_", StringComparison.Ordinal)))
+            return Deny(NarrowManageText);
+
         // Defense-in-depth, как у stdio: выключенный модуль не отрабатывает и при ошибке
         // экспозиции состава. Для mentions это не косметика: без проверки вызов persona_ask
         // при выключенном tool:consultants запускал бы ПЛАТНЫЙ one-shot ход другой персоны
@@ -122,6 +137,9 @@ public sealed partial class PersonasToolset(
             case "personas_list":
             {
                 var scope = StringArg(arguments, "scope") is { Length: > 0 } s ? s : "context";
+                // Узкая рамка: глобальные персоны — личное пространство владельца, scope
+                // global/all в общем проекте закрыты целиком
+                if (narrow && scope is "global" or "all") return Deny(NarrowGlobalText);
                 if (scope == "all") return Json(personas.GetByOwner(ownerId));
                 if (scope == "project" && projectId is null)
                     return Deny("Текущая сессия вне проекта — проектных персон здесь нет "
@@ -131,14 +149,27 @@ public sealed partial class PersonasToolset(
                 if (scope == "global")
                     return Json(personas.GetByOwner(ownerId)
                         .Where(p => p.Scope == PersonaScope.Global).ToList());
-                // context: глобальные + проекта чата + кросс-проектные привязки персоны
-                return Json(personas.GetForContextWithExtras(ownerId, projectId, extraProjectIds, extraPersonaIds));
+                // context: глобальные + проекта чата + кросс-проектные привязки персоны.
+                // В узкой рамке ambient-глобальные из списка убираются: они не контекст этого
+                // проекта. Явно привязанные к проекту (extraPersonaIds) остаются — это
+                // конфигурация самой проектной персоны, не личное пространство владельца
+                var contextList = personas.GetForContextWithExtras(ownerId, projectId,
+                    extraProjectIds, extraPersonaIds);
+                if (narrow)
+                    contextList = contextList
+                        .Where(p => p.Scope != PersonaScope.Global
+                            || extraPersonaIds.Contains(p.Id))
+                        .ToList();
+                return Json(contextList);
             }
 
             case "personas_get":
-                return personas.Get(StringArg(arguments, "id"), ownerId) is { } found
-                    ? Json(found)
-                    : Deny($"Персона {StringArg(arguments, "id")} не найдена.");
+            {
+                if (personas.Get(StringArg(arguments, "id"), ownerId) is not { } found)
+                    return Deny($"Персона {StringArg(arguments, "id")} не найдена.");
+                if (narrow && found.Scope == PersonaScope.Global) return Deny(NarrowGlobalText);
+                return Json(found);
+            }
 
             case "personas_set_default":
             {
@@ -188,14 +219,20 @@ public sealed partial class PersonasToolset(
                     okText: $"Персона {StringArg(arguments, "id")} удалена (вместе с её памятью).");
 
             case "personas_bindings_list":
-                return personas.Get(StringArg(arguments, "id"), ownerId) is { } bp
-                    ? Json(bp.Bindings ?? [])
-                    : Deny($"Персона {StringArg(arguments, "id")} не найдена.");
+            {
+                if (personas.Get(StringArg(arguments, "id"), ownerId) is not { } bp)
+                    return Deny($"Персона {StringArg(arguments, "id")} не найдена.");
+                // Привязки глобальной персоны — её личная конфигурация (личный vault, личные
+                // заметки); в общем проекте закрыта вместе с самой персоной
+                if (narrow && bp.Scope == PersonaScope.Global) return Deny(NarrowGlobalText);
+                return Json(bp.Bindings ?? []);
+            }
 
             case "personas_suggest_bindings":
             {
                 var id = StringArg(arguments, "id");
                 if (personas.Get(id, ownerId) is not { } target) return Deny($"Персона {id} не найдена.");
+                if (narrow && target.Scope == PersonaScope.Global) return Deny(NarrowGlobalText);
                 try { return Json(new { candidates = await crud.SuggestBindingsAsync(ownerId, target, ct: ct) }); }
                 catch (Exception ex) { return Deny($"Не удалось подобрать привязки: {ex.Message}"); }
             }
@@ -205,6 +242,8 @@ public sealed partial class PersonasToolset(
                 var id = StringArg(arguments, "id");
                 if (selfPersonaId is not null && id == selfPersonaId)
                     return Deny("Персона не может менять собственные привязки — попроси об этом пользователя.");
+                if (narrow && personas.Get(id, ownerId) is { } target && target.Scope == PersonaScope.Global)
+                    return Deny(NarrowGlobalText);
                 return Unwrap(await crud.SetBindingsAsync(ownerId, id, BindingRequests(arguments, "bindings")));
             }
 
@@ -407,6 +446,10 @@ public sealed partial class PersonasToolset(
                 }
                 if (selfPersonaId is not null && target.Id == selfPersonaId)
                     return Deny("Это твой собственный id/handle — отвечай сам, спрашивать себя не нужно.");
+                // Глобальная персона отвечает со своей долгой памятью и своими привязками —
+                // это личная память владельца; в общем проекте она закрыта (тот же класс,
+                // что и personas_list global)
+                if (narrow && target.Scope == PersonaScope.Global) return Deny(NarrowGlobalText);
 
                 try
                 {
@@ -482,6 +525,18 @@ public sealed partial class PersonasToolset(
         || bindings.SectionEnabled(ownerId, persona, "personas-manage");
 
     // --- Ответы ---
+
+    // Тексты отказа узкой рамки — фиксированные, без id и названий из личных данных
+    // владельца (в аргументах модели они могут лежать — в ответе их быть не должно)
+    private const string NarrowManageText =
+        "Управление персонами владельца закрыто в общем проекте: персоны, их характеры, "
+        + "автоматизация, реестр MCP и сборка команды — личное пространство владельца. "
+        + "Проектная команда этого чата доступна: personas_list по проекту и persona_ask "
+        + "к проектным персонам.";
+
+    private const string NarrowGlobalText =
+        "Глобальные персоны владельца недоступны в общем проекте: они несут его личную "
+        + "память и его личные привязки. Доступны персоны этого проекта.";
 
     private static McpToolCallResult Text(string text) => new(text);
 

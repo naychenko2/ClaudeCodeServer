@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
@@ -45,7 +46,8 @@ public sealed class MemoryToolset(
     DossierRecallService dossierRecall,
     FeatureFlagService flags,
     IConfiguration config,
-    ISessionBroadcaster broadcaster) : IMcpParameterizedToolset
+    ISessionBroadcaster broadcaster,
+    ITurnFrameSource frames) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/memory/{personaId}/{projectId}.
     // Константа — единственная точка правды: URL конфига хода (ClaudeSession) и хвост
@@ -90,6 +92,19 @@ public sealed class MemoryToolset(
 
         var personal = persona is not null;
         var team = project is not null;
+
+        // Узкая рамка хода (общий проект, S2a-3b, решение 29.10): личное пространство владельца
+        // закрыто в его общем чате всем, включая самого владельца. Здесь это личная память
+        // глобальной персоны (она — долгая память владельца о его жизни, не проекта) и полка
+        // сферы (сферы — личная группировка владельца, §2.5 разреза). Командная память проекта —
+        // контекст проекта, остаётся. Вердикт только читается: ни в стор, ни в кэш ничего не
+        // пишется, состав tools/list от рамки не зависит (McpToolsetStabilityTests).
+        var narrow = frames.Frame(context.CallerSessionId, context.OwnerId) == TurnFrameKind.Narrow;
+        // Личная память закрыта только когда персона глобальная: память проектной и сферы-персоны —
+        // контекст их команды, не личное пространство владельца
+        if (narrow && tool.StartsWith("memory_", StringComparison.Ordinal)
+            && persona?.Scope == PersonaScope.Global)
+            return Deny(NarrowPersonalMemoryText);
 
         switch (tool)
         {
@@ -285,7 +300,7 @@ public sealed class MemoryToolset(
             case "sphere_memory_remember":
             case "sphere_memory_forget":
             case "sphere_memory_adopt":
-                return await CallSphereAsync(tool, arguments, context, persona, project);
+                return await CallSphereAsync(tool, arguments, context, persona, project, narrow);
 
             case "dossier_lookup":
             {
@@ -329,8 +344,11 @@ public sealed class MemoryToolset(
     // TryResolve), любой sphereId в аргументах игнорируется ---
 
     private async Task<McpToolCallResult> CallSphereAsync(string tool, JsonObject arguments,
-        McpToolCallContext context, Persona? persona, Project? project)
+        McpToolCallContext context, Persona? persona, Project? project, bool narrow)
     {
+        // Полка сферы — личное пространство владельца (сферы личные, §2.5 разреза): в общем
+        // проекте закрыта всем, включая владельца (решение 29.10)
+        if (narrow) return Deny(NarrowSphereMemoryText);
         if (!SphereToolsEnabled(context)) return Deny(
             "Память сферы не доступна: у владельца выключен флаг «Сферы».");
         if (project is null || sphereDirectory.SphereOf(context.OwnerId, project.Id) is not { } sphereId)
@@ -520,6 +538,16 @@ public sealed class MemoryToolset(
         TeamMemoryService.WriteDeniedFor(persona?.Id, persona, project.Id);
 
     // --- Ответы ---
+
+    // Тексты отказа узкой рамки — фиксированные, без id и названий из личных данных
+    // владельца (в аргументах модели они могут лежать — в ответе их быть не должно)
+    private const string NarrowPersonalMemoryText =
+        "Личная память глобальной персоны закрыта в общем проекте: это личное пространство "
+        + "владельца. Память проектной персоны и память команды проекта доступны как обычно.";
+
+    private const string NarrowSphereMemoryText =
+        "Память сферы закрыта в общем проекте: сфера — личное пространство владельца. "
+        + "Память команды этого проекта доступна как обычно (team_memory_*).";
 
     private static McpToolCallResult Text(string text) => new(text);
 

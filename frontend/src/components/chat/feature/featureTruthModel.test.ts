@@ -17,7 +17,7 @@ import {
 import { trackerBarAria } from './FeatureTrackerBar';
 import { C } from '../../../lib/design';
 import { trackerPercent as tp } from '../../../lib/featureProgress';
-import { formatClock, formatDate } from '../../feature/FeatureStatsBits';
+import { formatClock } from '../../feature/FeatureStatsBits';
 import type { FeatureRun, FeatureStepChain } from '../../../types/featureRun';
 import type { StepProgress } from '../../../lib/featureProgress';
 
@@ -248,50 +248,33 @@ describe('шаг этого чата: цепочка, статус, роль', (
 });
 
 describe('оценка и «Сейчас»', () => {
-  it('оценка с percent и eta: «≈ 18:30» в строку, «≈ 2 ч 40 · к 18:30» в плитку', () => {
+  it('оценка с eta: «≈ 18:30» в строку, «≈ 2 ч 40 · к 18:30» в плитку; view ровно из трёх полей срока (Ш3b)', () => {
     const r = run({
       epic: {
         id: 'epic-1', title: 'Фича', status: 'todo',
         note: { text: 'идём по плану', at: '2026-10-29T12:00:00Z', byUser: false, stageAtWrite: 'prod', stateAtWrite: 'running', estimate: { done: 4, total: 9, inProgress: 3, percent: 60, etaMinutes: 160 } },
       },
     });
-    const e = featureEstimateView(r, NOW)!;
-    expect(e.percent).toBe(60);
-    expect(e.etaMain).toBe('≈ 2 ч 40 мин');
-    expect(e.readyAt).toBe(`к ${formatClock('2026-10-29T14:40:00Z')}`);
-    expect(e.rowEta).toBe(`≈ ${formatClock('2026-10-29T14:40:00Z')}`);
-    expect(e.sourceLabel).toBe('оценка оркестратора');
-    expect(e.ago).toBe('только что');
+    // Оценка даёт только срок: percent, автор и давность в view не выходят (остаток П1).
+    expect(featureEstimateView(r, NOW)).toEqual({
+      rowEta: `≈ ${formatClock('2026-10-29T14:40:00Z')}`,
+      etaMain: '≈ 2 ч 40 мин',
+      readyAt: `к ${formatClock('2026-10-29T14:40:00Z')}`,
+    });
   });
 
-  it('оценка без percent — доля done/total; голос человека помечен как человека', () => {
+  it('оценка без eta: ни строки, ни плитки; view — только три поля срока', () => {
     const r = run({
       epic: {
         id: 'epic-1', title: 'Фича', status: 'todo',
         note: { text: 'ручной голос', at: '2026-10-29T11:00:00Z', byUser: true, stageAtWrite: 'prod', stateAtWrite: 'running', estimate: { done: 3, total: 9, inProgress: 1, percent: null } },
       },
     });
-    const e = featureEstimateView(r, NOW)!;
-    expect(e.percent).toBe(33);
-    expect(e.etaMain).toBeNull(); // eta не оценивался — срока нет
-    expect(e.sourceLabel).toBe('оценка человека');
+    expect(featureEstimateView(r, NOW)).toEqual({ rowEta: null, etaMain: null, readyAt: null });
   });
 
   it('нет голоса/оценки — view null (строка без срока)', () => {
     expect(featureEstimateView(run(), NOW)).toBeNull();
-  });
-
-  it('давность оценки — общий agoText со страницей фичи: дальше суток та же дата, а не null', () => {
-    const at = '2026-10-27T18:06:00Z';
-    const r = run({
-      epic: {
-        id: 'epic-1', title: 'Фича', status: 'todo',
-        note: { text: 'голос', at, byUser: false, stageAtWrite: 'prod', stateAtWrite: 'running', estimate: { done: 1, total: 9, inProgress: 1, percent: 11 } },
-      },
-    });
-    // Одна копия хелпера — один ответ на всех поверхностях (код-ревью F2, minor 1):
-    // локальная версия давала null и на попапе «когда написана оценка» просто пропадала.
-    expect(featureEstimateView(r, NOW)!.ago).toBe(`${formatDate(at)}, ${formatClock(at)}`);
   });
 
   it('«Сейчас»: строки из run.now (имя, «{stepRef} · задача», длительность, метка «этот чат»)', () => {

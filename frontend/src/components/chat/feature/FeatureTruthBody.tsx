@@ -11,8 +11,10 @@ import type { FeatureRun } from '../../../types/featureRun';
 
 // Тело «сводки фичи» — ОДНО на две поверхности (макет v3 .exp / v4 П1):
 // раскрытие В2 в шапке и попап пилюли для чата БЕЗ шага (оркестратор, ревью). Порядок
-// приоритета (v2 §4): «Сейчас» → «Готовность | Срок» → «По трекеру» → «Трекер
-// расходится» → подвал. Пустые секции не рисуются; тревога здесь не повторяется
+// приоритета (v2 §4, после Ш3b): «Сейчас» → «Срок» → «По трекеру» → «Трекер
+// расходится» → подвал. Готовности по оценке здесь нет: процент один — «По трекеру»,
+// оценка оркестратора даёт только срок (решение Александра, остаток П1). Пустые
+// секции не рисуются; тревога здесь не повторяется
 // (её действие — в строке). «Дальше» нет: поля нет в run (отмечено в featureTruthModel).
 //
 // Раскладка: columns (раскрытие В2 на десктопе) — две колонки («Сейчас» | остальное),
@@ -100,22 +102,15 @@ export function FeatureTruthBody({ run, sessionId, isMobile, roleText, isKey = f
     </>
   ) : null;
 
-  const pairSection = est ? (
-    <div data-testid="feature-truth-pair" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: SP.sm, marginTop: SP.sm }}>
+  // Плитка «Срок» на всю ширину: оценка оркестратора живёт здесь только как срок (Ш3b);
+  // нет etaMain — нет плитки. Готовность одна — «По трекеру» ниже.
+  const etaSection = est?.etaMain ? (
+    <div data-testid="feature-truth-eta" style={{ display: 'grid', gridTemplateColumns: '1fr', gap: SP.sm, marginTop: SP.sm }}>
       <div style={tileStyle}>
-        <div style={{ fontSize: FS.xs, color: C.textMuted }}>Готовность</div>
-        <div style={{ fontFamily: FONT.mono, fontSize: 16, fontWeight: 700, color: C.textHeading, whiteSpace: 'nowrap' }}>{est.percent} %</div>
-        <div style={{ fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {est.sourceLabel}{est.ago ? ` · ${est.ago}` : ''}
-        </div>
+        <div style={{ fontSize: FS.xs, color: C.textMuted }}>Срок</div>
+        <div style={{ fontFamily: FONT.mono, fontSize: 16, fontWeight: 700, color: C.textHeading, whiteSpace: 'nowrap' }}>{est.etaMain}</div>
+        <div style={{ fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{est.readyAt ?? ''}</div>
       </div>
-      {est.etaMain && (
-        <div style={tileStyle}>
-          <div style={{ fontSize: FS.xs, color: C.textMuted }}>Срок</div>
-          <div style={{ fontFamily: FONT.mono, fontSize: 16, fontWeight: 700, color: C.textHeading, whiteSpace: 'nowrap' }}>{est.etaMain}</div>
-          <div style={{ fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{est.readyAt ?? ''}</div>
-        </div>
-      )}
     </div>
   ) : null;
 
@@ -174,10 +169,10 @@ export function FeatureTruthBody({ run, sessionId, isMobile, roleText, isKey = f
       {columns ? (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 24px' }}>
           <div style={{ minWidth: 0 }}>{headRow}{nowSection}</div>
-          <div style={{ minWidth: 0 }}>{pairSection}{meterSection}{discSection}</div>
+          <div style={{ minWidth: 0 }}>{etaSection}{meterSection}{discSection}</div>
         </div>
       ) : (
-        <>{headRow}{nowSection}{pairSection}{meterSection}{discSection}</>
+        <>{headRow}{nowSection}{etaSection}{meterSection}{discSection}</>
       )}
       {/* Подвал: общий с П2 (FeatureStepView). */}
       <FeatureTruthFooter roleText={roleText} isKey={isKey} isMobile={isMobile} onOpenPage={onOpenPage} />

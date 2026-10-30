@@ -1,4 +1,7 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Notes.Controllers;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
@@ -8,6 +11,8 @@ using ClaudeHomeServer.Services.Prompts;
 using ClaudeHomeServer.Services.Spheres;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Xunit;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -22,7 +27,9 @@ namespace ClaudeHomeServer.Tests.Services;
 // и дописана (мутация «дельта от 0» красная); c2 — подмена записи N сбрасывает курсор
 // в 0, повторные утверждения гасит дедup (S4d), а не курсор; c3 — сбой при применении →
 // курсор на месте, «нечего добавить» → курсор сдвинут, zone=nothing_new,
-// nothingNewStreak=1, хроники нет; c4 — ступень 0 (исполнение задач / нет реплик
+// nothingNewStreak=1, хроники нет; c3c (доработка S6f, круг 2) — применённый разбор
+// снимает свой устаревший nothing_new: zone/reason обнулены, список контроллера
+// показывает зону ступени 1, а не «нечего добавить»; c4 — ступень 0 (исполнение задач / нет реплик
 // человека / WikiMark=skip) → отказ с причиной, 0 вызовов модели. Плюс уроки ревью
 // S6b-3: гонка двух заявок одного чата — один разбор (настоящий параллельный, через
 // TaskCompletionSource); отмена ct заявителя не гасит чужую заявку; сбой посреди окон
@@ -399,6 +406,60 @@ public class WikiChatIngestTests : IDisposable
         llm.Calls.Should().HaveCount(2, "отказ по пустой дельте — без обращения к модели");
     }
 
+    // ── c3c (доработка S6f, круг 2): применённый разбор снимает свой nothing_new ──
+    // Инвариант: зона отражает последний исход разбора. Применённый разбор означает
+    // «новые утверждения были» — его собственный устаревший nothing_new не переживает
+    // свой же исход: применённый путь пишет null/null, а не прежнюю зону/причину.
+
+    [Fact]
+    public async Task C3c_НечегоДобавить_ЗатемПрименённыйРазбор_ЗонаИПричинаСняты_ПоказанаЗонаСтупени1()
+    {
+        AddSession();
+        SetShortHistory();
+
+        // Шаг 1. Исход «нечего добавить»: зона и причина разбора в сторе, streak 1 —
+        // пока они не сняты, список показывает именно их (существующее поведение).
+        var llmNothing = new FakeLlm(("A", Claims(Claim1)), ("B", NothingJson));
+        var sut = Sut(llmNothing);
+        var first = await sut.AnalyzeAsync(User, ChatId);
+        first.Outcome.Should().Be(WikiChatIngestService.OutcomeNothingNew, first.Reason);
+
+        var shownBefore = ((WikiChatsListDto)((OkObjectResult)Controller().List()).Value!).Items.Single();
+        shownBefore.Zone.Should().Be(WikiChatIngestService.ZoneNothingNew, "исход разбора ещё не снят — он и показывается");
+        shownBefore.Reason.Should().Be("не о чём писать");
+
+        // Шаг 2. Чат продолжается: дельта за курсором, следующий разбор её применяет.
+        _sessions.History[ChatId].Add(new StoredUserMessage($"{Claim2}. Хронология: {Marker2}."));
+        _sessions.History[ChatId].Add(new StoredTextMessage("Готово."));
+
+        var llmApplied = new FakeLlm(("A", Claims(Claim2)), ("B", Plan1));
+        var res = await Sut(llmApplied).AnalyzeAsync(User, ChatId);
+        res.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, "отказ разбора: " + res.Reason);
+
+        // Шаг 3. Стор: применённый исход обнулил чужой устаревший nothing_new —
+        // зона и причина пусты, streak 0, курсор на конец применённой дельты.
+        var after = WikiChatTriageStore.Get(Root).Entries.Single();
+        after.Cursor.Should().Be(7, "курсор — на конец применённой дельты");
+        after.CursorHash.Should().NotBeNullOrEmpty();
+        after.Zone.Should().BeNull("зона отражает последний исход разбора: применённый снимает nothing_new");
+        after.Reason.Should().BeNull("причина снятой зоны не остаётся");
+        after.NothingNewStreak.Should().Be(0);
+
+        // Шаг 4. Список контроллера: чат больше не «нечего добавить» — его зона ступени 1
+        // (её поставил пересчёт), счётчики — по показанной зоне.
+        WikiChatTriageStore.UpdateScoring(Root, ChatId, 20,
+            [new WikiTriageSignal(WikiChatScorer.SignalDecisionWords, 20)],
+            WikiChatScorer.ZoneTriage, "балл 20: формулировки решений").Ok.Should().BeTrue();
+
+        var list = (WikiChatsListDto)((OkObjectResult)Controller().List()).Value!;
+        var item = list.Items.Single(i => i.SessionId == ChatId);
+        item.Zone.Should().Be(WikiChatScorer.ZoneTriage, "показана зона ступени 1, а не снятый nothing_new");
+        item.Reason.Should().Be("балл 20: формулировки решений", "причина показанной зоны — причина ступени 1");
+        list.Items.Should().NotContain(i => i.Zone == WikiChatIngestService.ZoneNothingNew);
+        list.Counts.Should().NotContainKey(WikiChatIngestService.ZoneNothingNew);
+        list.Counts[WikiChatScorer.ZoneTriage].Should().Be(1, "счётчик зон — по показанной зоне, не по старой");
+    }
+
     // ── c4: ступень 0 — отказ с причиной, ни одного вызова модели ──
 
     [Fact]
@@ -540,6 +601,18 @@ public class WikiChatIngestTests : IDisposable
     }
 
     // ── подменённый ICheapTextRunner: проходы по промптам, gate и побочные эффекты ──
+
+    // Контроллер списка отбора — на тех же подставных сессиях и конфиге: проверка показа
+    // (ShownZone) после применённого разбора — без своей копии цепки разбора.
+    private WikiChatsController Controller()
+    {
+        var http = new DefaultHttpContext();
+        http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, User)], "test"));
+        return new WikiChatsController(_sessions, _config)
+        {
+            ControllerContext = new ControllerContext { HttpContext = http },
+        };
+    }
 
     private sealed class FakeLlm : ICheapTextRunner
     {

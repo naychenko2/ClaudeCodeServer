@@ -32,8 +32,11 @@ public class WikiPackagesControllerTests : IDisposable
     private readonly IConfiguration _config;
     private readonly ProjectManager _projects;
     // S4b-3: конструктор контроллера требует сервис отката; S4f-2 — сервис отката по источнику
-    // и каталог чатов (граница владения sourceRef). Тесты 1–4 эти сервисы не вызывают —
-    // экземпляры нужны, чтобы резолвился конструктор; свой сценарий retract — в тесте 6.
+    // и каталог чатов (граница владения sourceRef); S4g — сервис применения (решение человека
+    // замыкается применением). Тесты 1–5 эти сервисы не вызывают — экземпляры нужны, чтобы
+    // резолвился конструктор; свои сценарии — в тестах 6 (retract) и 7–11 (применение).
+    private readonly NotesService _notes;
+    private readonly WikiApplyService _apply;
     private readonly WikiPackageRevert _revert;
     private readonly WikiRetractService _retract;
     private readonly SessionsStub _sessions = new();
@@ -48,10 +51,14 @@ public class WikiPackagesControllerTests : IDisposable
             .Build();
         var users = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         _projects = new ProjectManager(_config, users, new AppSettingsService(_config));
-        var notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance);
-        _keeper = new WikiKeeper(notes, _config);
-        _revert = new WikiPackageRevert(notes, _keeper, _config);
-        _retract = new WikiRetractService(notes, _keeper, _revert, _sessions, new NoSpheres(), _config);
+        // Флаг llm-wiki: состояние вики читается моделью (BuildFresh) только с ним — тот же
+        // приём, что в WikiApplyTests. Без инициализированной вики флаг ничего не меняет:
+        // тесты 1–6 вики не читают.
+        _notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, null, new WikiFlagOn());
+        _keeper = new WikiKeeper(_notes, _config);
+        _apply = new WikiApplyService(_notes, _keeper, new NoSpheres(), _config);
+        _revert = new WikiPackageRevert(_notes, _keeper, _config);
+        _retract = new WikiRetractService(_notes, _keeper, _revert, _sessions, new NoSpheres(), _config);
     }
 
     public void Dispose()
@@ -80,45 +87,53 @@ public class WikiPackagesControllerTests : IDisposable
     // ─── 2. Решение по операции: auto — 409, inbox — 200 и статус меняется ──
 
     [Fact]
-    public void РешениеПоAuto_409_ПоInbox_200_ИСтатусПакетаМеняется()
+    public async Task РешениеПоAuto_409_ПоInbox_200_ИСтатусПакетаМеняется()
     {
         var id = NewPackage(WikiPackage.StatusProposed, "common",
             Op(WikiPackage.OpAppend, WikiPackage.DecisionAuto),
             Op(WikiPackage.OpSupersede, WikiPackage.DecisionInbox));
 
         // Неспорную операцию человек не решает.
-        AssertCode(Controller().Decide(id, new WikiDecideRequest(0, true, null)), 409, "wiki_pkg_auto");
+        AssertCode(await Controller().Decide(id, new WikiDecideRequest(0, true, null)), 409, "wiki_pkg_auto");
         // Тело без index/accept — 400, а не додумывание индекса.
-        AssertCode(Controller().Decide(id, new WikiDecideRequest(null, true, null)), 400, "wiki_pkg_request");
-        AssertCode(Controller().Decide(id, null), 400, "wiki_pkg_request");
+        AssertCode(await Controller().Decide(id, new WikiDecideRequest(null, true, null)), 400, "wiki_pkg_request");
+        AssertCode(await Controller().Decide(id, null), 400, "wiki_pkg_request");
 
         // Отклонить без причины — нельзя.
-        AssertCode(Controller().Decide(id, new WikiDecideRequest(1, false, null)), 409, "wiki_pkg_reason_required");
+        AssertCode(await Controller().Decide(id, new WikiDecideRequest(1, false, null)), 409, "wiki_pkg_reason_required");
 
         // Принять спорную — 200, карточка с новым статусом, и на диске тот же статус.
-        var res = Controller().Decide(id, new WikiDecideRequest(1, true, "подтверждено источником"));
-        var dto = ((OkObjectResult)res).Value.Should().BeAssignableTo<WikiPackageDto>().Which;
-        dto.Status.Should().Be(WikiPackage.StatusAccepted);
-        dto.Operations[1].HumanDecision.Should().Be(WikiPackage.HumanAccepted);
+        // Применять здесь нечем: вики этого владельца не заведена — отказ применения в теле
+        // ответа, а не потеря решения: решение на диске, статус пакета не сдвинулся.
+        var dto = ((OkObjectResult)await Controller().Decide(id, new WikiDecideRequest(1, true, "подтверждено источником")))
+            .Value.Should().BeAssignableTo<WikiDecisionDto>().Which;
+        dto.Package.Status.Should().Be(WikiPackage.StatusAccepted);
+        dto.Package.Operations[1].HumanDecision.Should().Be(WikiPackage.HumanAccepted);
+        dto.Apply!.Applied.Should().BeFalse();
+        dto.Apply.Code.Should().Be(WikiApplyService.CodeOff);
         StatusOnDisk(id).Should().Be(WikiPackage.StatusAccepted);
     }
 
     // ─── 3. «Принять всё спорное» ───────────────────────────────────────────
 
     [Fact]
-    public void ПринятьВсёСпорное_200Accepted_БезСпорных_409()
+    public async Task ПринятьВсёСпорное_200Accepted_БезСпорных_409()
     {
         var id = NewPackage(WikiPackage.StatusProposed, "common",
             Op(WikiPackage.OpAppend, WikiPackage.DecisionAuto),
             Op(WikiPackage.OpConflict, WikiPackage.DecisionInbox),
             Op(WikiPackage.OpSupersede, WikiPackage.DecisionInbox, "Общее/Z.md"));
-        ((OkObjectResult)Controller().AcceptAll(id)).Value
-            .Should().BeAssignableTo<WikiPackageDto>().Which.Status.Should().Be(WikiPackage.StatusAccepted);
+        var dto = ((OkObjectResult)await Controller().AcceptAll(id)).Value
+            .Should().BeAssignableTo<WikiDecisionDto>().Which;
+        dto.Package.Status.Should().Be(WikiPackage.StatusAccepted);
         StatusOnDisk(id).Should().Be(WikiPackage.StatusAccepted);
+        // Вики этого владельца не заведена: применение отказано с причиной, решение цело.
+        dto.Apply!.Applied.Should().BeFalse();
+        dto.Apply.Code.Should().Be(WikiApplyService.CodeOff);
 
         // В пакете без спорных решать нечего: неспорные применяет политика.
         var noContested = NewPackage(WikiPackage.StatusProposed, "common", Op(WikiPackage.OpLink, WikiPackage.DecisionAuto));
-        AssertCode(Controller().AcceptAll(noContested), 409, "wiki_pkg_nothing_to_decide");
+        AssertCode(await Controller().AcceptAll(noContested), 409, "wiki_pkg_nothing_to_decide");
     }
 
     // ─── 4. Список и «Входящие» ────────────────────────────────────────────
@@ -152,19 +167,19 @@ public class WikiPackagesControllerTests : IDisposable
     // ─── 5. Нет пакета и нечитаемый файл — разные исходы ────────────────────
 
     [Fact]
-    public void НетПакета_404_НечитаемыйФайл_409_ИРешениеНаНём_409()
+    public async Task НетПакета_404_НечитаемыйФайл_409_ИРешениеНаНём_409()
     {
         var missing = WikiPackageStore.NewId();
         ((IStatusCodeActionResult)Controller().Get(missing)).StatusCode.Should().Be(404);
         // Решать по несуществующему пакету нечем — тот же 404, что и для чтения.
-        ((IStatusCodeActionResult)Controller().Decide(missing, new WikiDecideRequest(0, true, null)))
+        ((IStatusCodeActionResult)await Controller().Decide(missing, new WikiDecideRequest(0, true, null)))
             .StatusCode.Should().Be(404);
 
         var brokenId = WikiPackageStore.NewId();
         Directory.CreateDirectory(Path.Combine(WikiPaths.Keeper(_dir, User), "packages"));
         File.WriteAllText(Path.Combine(WikiPaths.Keeper(_dir, User), "packages", brokenId + ".json"), "   ");
         AssertCode(Controller().Get(brokenId), 409, "wiki_pkg_invalid");
-        AssertCode(Controller().AcceptAll(brokenId), 409, "wiki_pkg_invalid");
+        AssertCode(await Controller().AcceptAll(brokenId), 409, "wiki_pkg_invalid");
     }
 
     // ─── Помощники ─────────────────────────────────────────────────────────
@@ -263,6 +278,257 @@ public class WikiPackagesControllerTests : IDisposable
         LogLines("retract").Should().HaveCount(1);
     }
 
+    // ─── 7–12. S4g: решение человека замыкается применением (ADR-035 §5) ─────────
+    //
+    // Боевой фикстур: карточка источника и страница записаны Хранителем (манифест согласован —
+    // иначе любое применение отказал бы дрейф), пакет в proposed с спорной supersede-операцией
+    // на эту страницу. Текст источника нигде не хранится (в карточку он не пишется), поэтому
+    // дословность на этом пути не перепроверяется: она подтверждена при разборе, рендерит тот
+    // же Text из Operations пакета (решение Софьи по S4g).
+
+    private const string CardTitle = "Карточка чата";
+    private const string CardPageKey = "Общее/Карточка-чата.md";
+    private const string Claim = "Решение: перенести сборку на Linux";
+    private const string OldClaim = "Прежний план был остаться на Windows";
+
+    private const string SourceCardFile = $$"""
+        ---
+        type: source
+        origin: session
+        ref: session:chat-1#m1-9
+        hash: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+        captured: 2026-10-30
+        aliases: []
+        owns: []
+        sources: []
+        status: active
+        ---
+
+        # {{CardTitle}}
+        """;
+
+    private const string BasePage = $$"""
+        ---
+        type: topic
+        aliases: []
+        owns: []
+        sources: []
+        status: active
+        ---
+
+        # X
+
+        ## Сводка
+        {{OldClaim}} [^s1]
+
+        ## Хронология
+
+        ## Противоречия
+
+        ## История
+
+        [^s1]: [[{{CardTitle}}]] — «{{OldClaim}}»
+        """;
+
+    [Fact]
+    public async Task ПоследнееРешениеПринято_СтраницаЗаписана_ПакетApplied_ПричинаПуста()
+    {
+        // Мутация «не вызывать ApplyAsync после решения» (снять вызов в AfterDecision):
+        // краснеет Applied/Status/файл страницы/журнал этого теста.
+        var id = await NewRealPackage([RealOp()]);
+
+        var dto = ((OkObjectResult)await Controller().Decide(id, new WikiDecideRequest(0, true, "подтверждаю")))
+            .Value.Should().BeAssignableTo<WikiDecisionDto>().Which;
+
+        dto.Apply!.Applied.Should().BeTrue("решение, оставившее принятую операцию, применяет пакет тем же запросом");
+        dto.Apply.Code.Should().BeNull();
+        dto.Apply.Reason.Should().BeNull();
+        dto.Apply.Violations.Should().BeEmpty();
+        dto.Package.Status.Should().Be(WikiPackage.StatusApplied);
+        StatusOnDisk(id).Should().Be(WikiPackage.StatusApplied);
+
+        // Страница записана по-настоящему: новое утверждение в файле, прообраз базы на диске,
+        // ровно одна строка журнала — с политикой inbox (человека спросили, это видно).
+        File.ReadAllText(Path.Combine(WikiPaths.Pages(_dir, User), Page)).Should().Contain(Claim);
+        File.Exists(Path.Combine(WikiPaths.Keeper(_dir, User), "preimages", id, Page)).Should().BeTrue();
+        var applyLines = LogLines("apply");
+        applyLines.Should().HaveCount(1);
+        applyLines[0].Should().Contain("\"policy\":\"inbox\"");
+    }
+
+    [Fact]
+    public async Task ПоловинаСпорныхРешена_ПакетProposed_НаДискеНичегоНеПрименено()
+    {
+        // Мутация «применять при нерешённых спорных» (звать ApplyAsync для любого статуса):
+        // краснеют Apply.Should().BeNull() и статус proposed на диске этого теста.
+        var id = await NewRealPackage([RealOp(), RealOp(page: "Общее/Z.md")]);
+        var before = File.ReadAllText(Path.Combine(WikiPaths.Pages(_dir, User), Page));
+
+        var dto = ((OkObjectResult)await Controller().Decide(id, new WikiDecideRequest(0, true, "подтверждаю")))
+            .Value.Should().BeAssignableTo<WikiDecisionDto>().Which;
+
+        dto.Package.Status.Should().Be(WikiPackage.StatusProposed);
+        dto.Apply.Should().BeNull("осталась нерешённая спорная операция — применять нечего");
+        StatusOnDisk(id).Should().Be(WikiPackage.StatusProposed);
+        File.ReadAllText(Path.Combine(WikiPaths.Pages(_dir, User), Page)).Should().Be(before);
+        LogLines("apply").Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ВсеСпорныеОтклонены_ПакетRejected_НаДискеНичегоНеПрименено()
+    {
+        var id = await NewRealPackage([RealOp()]);
+        var before = File.ReadAllText(Path.Combine(WikiPaths.Pages(_dir, User), Page));
+
+        var dto = ((OkObjectResult)await Controller().Decide(id, new WikiDecideRequest(0, false, "не подтверждается")))
+            .Value.Should().BeAssignableTo<WikiDecisionDto>().Which;
+
+        dto.Package.Status.Should().Be(WikiPackage.StatusRejected);
+        dto.Apply.Should().BeNull("отклонены все спорные, принятых нет — применять нечего");
+        StatusOnDisk(id).Should().Be(WikiPackage.StatusRejected);
+        File.ReadAllText(Path.Combine(WikiPaths.Pages(_dir, User), Page)).Should().Be(before);
+        LogLines("apply").Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task БазаОперацииИсчезла_StaleВОтветеСПричиной_РешениеСохранено()
+    {
+        // baseHashes называют страницу, которой в манифеста нет: база намерения исчезла,
+        // авто-rebase нет (решение 4). Сбой применения не теряет решения человека.
+        var id = await NewRealPackage([RealOp(basePage: "Общее/Нет.md")]);
+        var before = File.ReadAllText(Path.Combine(WikiPaths.Pages(_dir, User), Page));
+
+        var dto = ((OkObjectResult)await Controller().Decide(id, new WikiDecideRequest(0, true, "подтверждаю")))
+            .Value.Should().BeAssignableTo<WikiDecisionDto>().Which;
+
+        dto.Apply!.Applied.Should().BeFalse();
+        dto.Apply.Code.Should().Be(WikiApplyService.CodeStale);
+        dto.Apply.Reason.Should().NotBeNullOrWhiteSpace("причина — текст для человека");
+        dto.Package.Status.Should().Be(WikiPackage.StatusStale);
+        StatusOnDisk(id).Should().Be(WikiPackage.StatusStale);
+        ReadOp(id).HumanDecision.Should().Be(WikiPackage.HumanAccepted, "решения записаны до применения");
+        File.ReadAllText(Path.Combine(WikiPaths.Pages(_dir, User), Page)).Should().Be(before);
+        LogLines("apply").Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task НетКарточкиИсточника_ApplyFailedСПричиной_РешениеСохранено()
+    {
+        // Пакет называет источник, карточки которого в его разделе нет: применять нечем —
+        // отказ с причиной после заявки, а не «зависший applying» и не исключение наружу.
+        var id = await NewRealPackage([RealOp()], sourceRef: "session:chat-9#m1-9");
+        var before = File.ReadAllText(Path.Combine(WikiPaths.Pages(_dir, User), Page));
+
+        var dto = ((OkObjectResult)await Controller().Decide(id, new WikiDecideRequest(0, true, "подтверждаю")))
+            .Value.Should().BeAssignableTo<WikiDecisionDto>().Which;
+
+        dto.Apply!.Applied.Should().BeFalse();
+        dto.Apply.Code.Should().Be(WikiApplyService.CodeSourceUnavailable);
+        dto.Apply.Reason.Should().NotBeNullOrWhiteSpace();
+        dto.Package.Status.Should().Be(WikiPackage.StatusApplyFailed);
+        StatusOnDisk(id).Should().Be(WikiPackage.StatusApplyFailed);
+        ReadOp(id).HumanDecision.Should().Be(WikiPackage.HumanAccepted);
+        File.ReadAllText(Path.Combine(WikiPaths.Pages(_dir, User), Page)).Should().Be(before);
+        LogLines("apply").Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ГонкаДвухРешений_ПрименениеРовноОдно_ВторойОтказПоСтатусу()
+    {
+        // Мутация «без проверки статуса» (снять в сторе отказ пакета не в proposed): краснеет
+        // HaveCount(1) отказа — оба вызова дошли бы до применения.
+        var id = await NewRealPackage([RealOp()]);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var a = Task.Run(async () => { await gate.Task; return await Controller().AcceptAll(id); });
+        var b = Task.Run(async () => { await gate.Task; return await Controller().AcceptAll(id); });
+        gate.SetResult();
+        var results = new[] { await a, await b };
+
+        var ok = results.OfType<OkObjectResult>().ToList();
+        var refused = results.OfType<ObjectResult>().Where(r => r.StatusCode == 409).ToList();
+        ok.Should().HaveCount(1);
+        refused.Should().HaveCount(1);
+        ((WikiDecisionDto)ok[0].Value!).Apply!.Applied.Should().BeTrue();
+        JsonDocument.Parse(JsonSerializer.Serialize(refused[0].Value)).RootElement
+            .GetProperty("code").GetString().Should().Be(WikiPackageStore.CodeNotDecidable);
+
+        // Ровно одно применение: одна строка журнала и один прообраз этой страницы — второй
+        // записи этого пакета нет ни при каком порядке двух вызовов.
+        LogLines("apply").Should().HaveCount(1);
+        Directory.GetFiles(Path.Combine(WikiPaths.Keeper(_dir, User), "preimages", id), "*", SearchOption.AllDirectories)
+            .Should().HaveCount(1);
+        StatusOnDisk(id).Should().Be(WikiPackage.StatusApplied);
+    }
+
+    [Fact]
+    public async Task ЧужойРазделПакета_Решение_403_ПримененияНет()
+    {
+        // Та же граница, что у остальных ручек: чужой раздел — 403 без утечки существования,
+        // и до применения дело не доходит.
+        var foreign = CreateServerProject("Чужой проект 2", owner: "u2");
+        var id = NewPackage(WikiPackage.StatusProposed, "projects/" + foreign.Id,
+            Op(WikiPackage.OpAppend, WikiPackage.DecisionInbox, $"Проекты/{foreign.Id}/X.md"));
+
+        AssertCode(await Controller().Decide(id, new WikiDecideRequest(0, true, null)), 403, "wiki_foreign");
+        AssertCode(await Controller().AcceptAll(id), 403, "wiki_foreign");
+        StatusOnDisk(id).Should().Be(WikiPackage.StatusProposed);
+        LogLines("apply").Should().BeEmpty();
+    }
+
+    // Пакет боевой пробы: карточка и страница записаны Хранителем (манифест согласован —
+    // применения без дрейфа нет), сам в proposed с одной спорной операцией. sourceRef —
+    // карточка, которую называет пакет: с другой на диске это «нет карточки источника».
+    private async Task<string> NewRealPackage(
+        WikiPackage.Operation[] ops, string sourceRef = "session:chat-1#m1-9")
+    {
+        await _keeper.EnsureInitializedAsync(User);
+        await WriteViaKeeper(CardPageKey, SourceCardFile);
+        await WriteViaKeeper(Page, BasePage);
+        var pkg = new WikiPackage
+        {
+            Id = WikiPackageStore.NewId(),
+            Section = "common",
+            Sources = [new WikiPackage.SourceRef("session", sourceRef)],
+            Operations = ops,
+            Status = WikiPackage.StatusChecking,
+        };
+        WikiPackageStore.Create(WikiPaths.Root(_dir, User), pkg).Ok.Should().BeTrue();
+        WikiPackageStore.Transition(WikiPaths.Root(_dir, User), pkg.Id, WikiPackage.StatusProposed).Ok.Should().BeTrue();
+        return pkg.Id;
+    }
+
+    private async Task WriteViaKeeper(string pageKey, string content)
+    {
+        var r = await _keeper.WritePageAsync(User, "common", pageKey, content);
+        r.Status.Should().Be(WikiOpStatus.Applied, r.Reason);
+    }
+
+    // Спорная supersede на боевую страницу: замещаемое утверждение в ней есть; basePage —
+    // страница, названная базой (несуществующая — случай «база исчезла»).
+    private static WikiPackage.Operation RealOp(string page = Page, string basePage = Page) => new()
+    {
+        Op = WikiPackage.OpSupersede,
+        Page = page,
+        Text = Claim,
+        Target = OldClaim,
+        Class = WikiPackage.ClassKey("session", WikiPackage.OpSupersede),
+        Decision = WikiPackage.DecisionInbox,
+        Reason = "замещает действующее утверждение",
+        BaseHashes = new Dictionary<string, string> { [basePage] = Hash },
+    };
+
+    private WikiPackage.Operation ReadOp(string id)
+    {
+        var res = WikiPackageStore.TryRead(WikiPaths.Root(_dir, User), id);
+        res.State.Should().Be(WikiPackageFileState.Valid);
+        return res.Package!.Operations[0];
+    }
+
+    private sealed class WikiFlagOn : ClaudeHomeServer.Services.Composition.IFeatureFlagGate
+    {
+        public bool IsEnabled(string userId, string key) => key == FeatureFlagKeys.LlmWiki;
+    }
+
     private List<string> LogLines(string op)
     {
         var p = Path.Combine(WikiPaths.Keeper(_dir, User), "log.jsonl");
@@ -334,7 +600,7 @@ public class WikiPackagesControllerTests : IDisposable
     {
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, user)], "test"));
-        return new WikiPackagesController(_projects, _config, _revert, _retract, _sessions)
+        return new WikiPackagesController(_projects, _config, _apply, _revert, _retract, _sessions)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
@@ -343,7 +609,7 @@ public class WikiPackagesControllerTests : IDisposable
     private WikiPackagesController AnonymousController()
     {
         var http = new DefaultHttpContext(); // User без идентичности — путь боя без токена
-        return new WikiPackagesController(_projects, _config, _revert, _retract, _sessions)
+        return new WikiPackagesController(_projects, _config, _apply, _revert, _retract, _sessions)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };

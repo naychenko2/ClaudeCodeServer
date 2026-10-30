@@ -728,7 +728,7 @@ public class WikiRevertTests : IDisposable
     {
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, user)], "test"));
-        return new WikiPackagesController(_projects, _config, _revert, _retract, new EmptySessions())
+        return new WikiPackagesController(_projects, _config, _sut, _revert, _retract, new EmptySessions())
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
@@ -737,7 +737,7 @@ public class WikiRevertTests : IDisposable
     private WikiPackagesController AnonymousController()
     {
         var http = new DefaultHttpContext(); // User без идентичности — путь боя без токена
-        return new WikiPackagesController(_projects, _config, _revert, _retract, new EmptySessions())
+        return new WikiPackagesController(_projects, _config, _sut, _revert, _retract, new EmptySessions())
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };

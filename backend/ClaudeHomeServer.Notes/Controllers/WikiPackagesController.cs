@@ -14,8 +14,12 @@ namespace ClaudeHomeServer.Notes.Controllers;
 //
 // Здесь человек решает только то, что ушло во «Входящие»: операция с решением политики
 // `auto` через REST не решается (409). Пакеты здесь читаются, решаются и откатываются (S4b-3):
-// их никто не создаёт (их строит Хранитель) и не применяет (применение — S4b); откат применённого
-// пакета — только кнопкой человека (мера 4), MCP-инструмента нет (решение 5).
+// их никто не создаёт (их строит Хранитель). Решение человека замкнуто применением (S4g,
+// ADR-035 §5): тот же запрос, который оставил в пакете ноль нерешённых спорных операций и
+// хотя бы одну принятую, применяет его через WikiApplyService и отвечает итоговое состояние
+// пакета; решение, оставившее нерешённые спорные (proposed) или отклонившее все (rejected),
+// ничего не применяет. Отдельной ручки «применить» нет (повтор применения человеком — не здесь);
+// откат применённого пакета — только кнопкой человека (мера 4), MCP-инструмента нет (решение 5).
 //
 // Пакеты лежат в data/wiki/{владельца}/keeper/packages/, поэтому чужой пакет в свой список
 // не попадает по построению; остаётся вторая граница — раздел пакета, называющий чужой
@@ -26,15 +30,17 @@ namespace ClaudeHomeServer.Notes.Controllers;
 public class WikiPackagesController : ControllerBase
 {
     private readonly IProjectManager _projects;
+    private readonly WikiApplyService _apply;
     private readonly WikiPackageRevert _revert;
     private readonly WikiRetractService _retract;
     private readonly ISessionDirectory _sessions;
     private readonly string _dataDir;
 
-    public WikiPackagesController(IProjectManager projects, IConfiguration config, WikiPackageRevert revert,
-        WikiRetractService retract, ISessionDirectory sessions)
+    public WikiPackagesController(IProjectManager projects, IConfiguration config, WikiApplyService apply,
+        WikiPackageRevert revert, WikiRetractService retract, ISessionDirectory sessions)
     {
         _projects = projects;
+        _apply = apply;
         _revert = revert;
         _retract = retract;
         _sessions = sessions;
@@ -91,27 +97,34 @@ public class WikiPackagesController : ControllerBase
     /// <summary>POST /api/wiki/packages/{id}/decide — {index, accept, reason?}: принять или
     /// отклонить с причиной одну спорную операцию. 409: операция не спорная (auto), пакет не
     /// в proposed, index вне списка, отказ без причины, файл пакета нечитаем, операция уже
-    /// решена (решение не меняется).</summary>
+    /// решена (решение не меняется). Успех — {package, apply}: карточка пакета после решения
+    /// и, если решение оставило ноль нерешённых спорных и хотя бы одну принятую операцию,
+    /// исход применения этого же пакета; для proposed/rejected apply — null.</summary>
     [HttpPost("{id}/decide")]
-    public IActionResult Decide(string id, [FromBody] WikiDecideRequest? req)
+    public async Task<IActionResult> Decide(string id, [FromBody] WikiDecideRequest? req)
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
         if (req?.Index is null || req.Accept is null)
             return BadRequest(new { code = CodeRequest, message = "нужны index операции и accept" });
         if (Owned(userId, id, out var root) is { } refusal) return refusal;
-        return Store(WikiPackageStore.DecideOperation(root, id, req.Index.Value, req.Accept.Value, req.Reason));
+        var res = WikiPackageStore.DecideOperation(root, id, req.Index.Value, req.Accept.Value, req.Reason);
+        if (!res.Ok) return Refusal(res);
+        return await AfterDecision(userId, root, res.Package!);
     }
 
     /// <summary>POST /api/wiki/packages/{id}/accept-all — «принять всё спорное пакета».
-    /// 409, если спорных операций нет: неспорные решает политика, а не человек.</summary>
+    /// 409, если спорных операций нет: неспорные решает политика, а не человек. Успех и
+    /// применение — те же, что у decide.</summary>
     [HttpPost("{id}/accept-all")]
-    public IActionResult AcceptAll(string id)
+    public async Task<IActionResult> AcceptAll(string id)
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
         if (Owned(userId, id, out var root) is { } refusal) return refusal;
-        return Store(WikiPackageStore.AcceptAllContested(root, id));
+        var res = WikiPackageStore.AcceptAllContested(root, id);
+        if (!res.Ok) return Refusal(res);
+        return await AfterDecision(userId, root, res.Package!);
     }
 
     /// <summary>POST /api/wiki/packages/{id}/revert — «Откатить пакет» (кнопка журнала,
@@ -192,11 +205,35 @@ public class WikiPackagesController : ControllerBase
 
     // Коды стора → HTTP: «нет пакета» — 404 (здесь он возможен только в гонке с удалением),
     // остальное — 409 с причиной для человека.
-    private IActionResult Store(WikiPackageOpResult res) => res.Ok
-        ? Ok(Dto(res.Package!))
-        : res.Code == WikiPackageStore.CodeNotFound
+    private IActionResult Refusal(WikiPackageOpResult res) =>
+        res.Code == WikiPackageStore.CodeNotFound
             ? NotFound()
             : StatusCode(409, new { code = res.Code, message = res.Reason });
+
+    /// <summary>Решение человека замкнуто применением (S4g, ADR-035 §5): если оно оставило в
+    /// пакете ноль нерешённых спорных операций и хотя бы одну принятую (accepted |
+    /// partially_accepted), тот же запрос применяет пакет; решение, оставившее нерешённые
+    /// спорные (proposed) или отклонившее все (rejected), ничего не применяет — применять
+    /// нечего, и это видно по статусу в ответе. Применение читает пакет с диска под своей
+    /// блокировкой (ApplyAsync, решение человека берётся только из дисковых HumanDecision),
+    /// его сбой — результат-отказ с причиной, а не исключение и не «зависший applying»:
+    /// решения записаны до применения и остаются на диске. Итоговый статус — прочитанный с
+    /// диска после применения, а не предположение: «applied»/«apply_failed»/«stale» или
+    /// прежний, если применять было нечего.</summary>
+    private async Task<IActionResult> AfterDecision(string userId, string root, WikiPackage decided)
+    {
+        WikiApplyOutcomeDto? apply = null;
+        if (decided.Status is WikiPackage.StatusAccepted or WikiPackage.StatusPartiallyAccepted)
+        {
+            var r = await _apply.ApplyAsync(userId, decided).ConfigureAwait(false);
+            apply = new WikiApplyOutcomeDto(r.Applied, r.Code, r.Reason, r.Violations);
+        }
+        var after = WikiPackageStore.TryRead(root, decided.Id);
+        if (after.State == WikiPackageFileState.Missing) return NotFound();
+        if (after.State != WikiPackageFileState.Valid || after.Package is null)
+            return StatusCode(409, new { code = WikiPackageStore.CodeInvalid, message = "файл пакета не читается" });
+        return Ok(new WikiDecisionDto(Dto(after.Package), apply));
+    }
 
     private static WikiPackageDto Dto(WikiPackage p) => new(
         p.Id, p.Section, p.Status, p.StatusReason, p.CreatedAt, p.UpdatedAt,
@@ -252,6 +289,22 @@ public sealed record WikiPackageOperationDto(
 
 /// <summary>Решение по одной спорной операции. accept=false требует reason.</summary>
 public sealed record WikiDecideRequest(int? Index, bool? Accept, string? Reason);
+
+/// <summary>Итог решения человека (S4g — по нему работает Кира): карточка пакета после решения
+/// и исход применения этого же пакета. package.status — состояние ПОСЛЕ применения: «applied»,
+/// «apply_failed», «stale» — или прежний («proposed»: остались нерешённые спорные; «rejected»:
+/// все отклонены), когда применять было нечего. apply = null ровно в этих двух случаях.
+/// Ничего чужого в ответе нет: только этот пакет и исход его применения.</summary>
+public sealed record WikiDecisionDto(WikiPackageDto Package, WikiApplyOutcomeDto? Apply);
+
+/// <summary>Исход применения: applied=true — страницы записаны, пакет «applied», code/reason
+/// пустые. Отказ — код (wiki_apply_*) и причина человеческим текстом; violations — полный
+/// перечень для провала гейта. При отказе решения человека сохранены в package.operations.</summary>
+public sealed record WikiApplyOutcomeDto(
+    bool Applied,
+    string? Code,
+    string? Reason,
+    IReadOnlyList<string> Violations);
 
 /// <summary>Результат отката: страницы, возвращённые к состоянию до применения («Журнал» обновляет
 /// их и дифф строки op=revert). Отказ — в теле 409: code + message + pages (pages — изменённые

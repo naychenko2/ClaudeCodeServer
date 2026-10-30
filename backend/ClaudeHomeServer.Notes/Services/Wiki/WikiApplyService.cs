@@ -88,6 +88,10 @@ public sealed class WikiApplyService
     public const string CodeClaim = "wiki_apply_claim";
     public const string CodeOff = "wiki_apply_off";
     public const string CodeSource = "wiki_apply_source";
+    // Путь решения человека (S4g): карточки источника пакета в его разделе на диске нет —
+    // применять нечем. Отказ после заявки: пакет «apply_failed» с причиной, решения человека
+    // сохранены (они записаны до применения).
+    public const string CodeSourceUnavailable = "wiki_apply_source_unavailable";
     public const string CodeManifest = "wiki_apply_manifest";
     public const string CodeDrift = "wiki_apply_drift";
     public const string CodeStale = "wiki_apply_stale";
@@ -161,7 +165,13 @@ public sealed class WikiApplyService
     /// HumanDecision) читается с диска под id, карточка аргумента несёт только id
     /// (ревью S4b-1, MAJOR 1). Сначала проверки и рендер в памяти (PrepareAsync, шаги 1–3),
     /// затем прообразы, запись, журнал и статус (WriteAsync, шаги 4–6). Отказ любой фазы —
-    /// результат-отказ с причиной: исключения наружу нет.</summary>
+    /// результат-отказ с причиной: исключения наружу нет.
+    ///
+    /// Два вызывающих — два источника карточки и текста (S4g, ADR-035 §5): контекст принесён
+    /// (авто-поток инджеста, у него свежий захват) или контекста нет (решение человека через
+    /// REST) — тогда карточка ищется на диске в разделе самого пакета, а дословность не
+    /// перепроверяется: она подтверждена при разборе, текст источника нигде не хранится
+    /// (в карточку он не пишется, в пакете — только намерения). См. PrepareChecked.</summary>
     public async Task<ApplyResult> ApplyAsync(string ownerId, WikiPackage? package, ApplyContext? context = null)
     {
         var prepared = await PrepareAsync(ownerId, package, context).ConfigureAwait(false);
@@ -199,10 +209,17 @@ public sealed class WikiApplyService
             return Fail(CodeStatus, status == WikiPackage.StatusApplying
                 ? "пакет уже в «applying»: его применяет другой вызов"
                 : $"пакет в «{status}» не принят к применению");
-        if (context?.SourceCard is not { Length: > 0 })
-            return Fail(CodeSource, "карточка источника не задана: сноскам рендера нечем назвать цель");
-        if (context.SourceText is not { Length: > 0 })
-            return Fail(CodeSource, "текст источника не задан: цитату вывести не из чего");
+        // Принесённый контекст проверяется так же строго и так же рано: полупустой контекст —
+        // отказ до заявки, «applying» на входе с битым контекстом не открывается. Контекста нет —
+        // путь решения человека через REST (S4g): источник берётся с диска под блокировкой
+        // раздела (PrepareChecked), и его отсутствие — отказ уже там, с «apply_failed».
+        if (context is not null)
+        {
+            if (context.SourceCard is not { Length: > 0 })
+                return Fail(CodeSource, "карточка источника не задана: сноскам рендера нечем назвать цель");
+            if (context.SourceText is not { Length: > 0 })
+                return Fail(CodeSource, "текст источника не задан: цитату вывести не из чего");
+        }
 
         // Заявка пакета — единственная дверь в «applying»: Transition перечитывает состояние
         // под блоком id. Два параллельных вызова одного пакета: первый пишет «applying»,
@@ -577,13 +594,44 @@ public sealed class WikiApplyService
                 // живо, пока цела его цель (чужой append той же страницы — проверка проходит).
             }
 
-        // Шаг 3: рендер операций в памяти и весь гейт на итоговом состоянии.
-        var card = FindCard(state, context.SourceCard!);
-        if (card is null)
-            return FailApply(root, package.Id, CodeSource,
-                $"карточка источника «{context.SourceCard}» не найдена в разделе или вверх по цепочке: сноскам рендера нечем подтвердить утверждения");
-        var cardPath = card.Value.Path;
-
+        // Шаг 3: рендер операций в памяти и весь гейт на итоговом состоянии. Карточка
+        // источника и её текст — по двум путям (S4g):
+        // — контекст принесён (авто-поток инджеста): карточка ищется по заголовку (раздел и
+        //   цепочка вверх), дословность проверяется по принесённому тексту источника (мера 1);
+        // — контекста нет (после решения человека через REST): карточка берётся с диска — она
+        //   уже в прочитанном состоянии раздела, её записал захват при разборе (WikiSourceCapture).
+        //   Только раздел самого пакета: чужих разделов этот путь не читает. Ни в карточке,
+        //   ни в пакете текста источника нет (в карточку он не пишется, пакет несёт намерения),
+        //   здесь он не перепроверяется: дословность подтверждена при разборе об текст источника
+        //   (WikiPlanValidator.cs:199), а в рендер идёт ровно тот Text, что лежит в Operations
+        //   пакета. Пустой sourceTexts для карточки — то же «этой карточки здесь нет», что
+        //   accepted-раньше сноска в GivenOnly (WikiGate.cs:214-218): она не отвергает новую запись.
+        // Нет карточки в разделе — отказ после заявки: «apply_failed» с причиной, решения
+        // человека на диске сохранены.
+        WikiGate.Draft? card;
+        string cardTitle;
+        Dictionary<string, string> sourceTexts;
+        if (context is null)
+        {
+            var found = FindSourceCard(state, section, package.Sources);
+            if (found is null)
+                return FailApply(root, package.Id, CodeSourceUnavailable,
+                    "карточка источника пакета не найдена в его разделе «" + section + "»: применять нечего — "
+                    + string.Join(", ", package.Sources.Select(s => s.Origin + ":" + s.Ref)));
+            card = found.Value.Draft;
+            cardTitle = found.Value.Title;
+            sourceTexts = new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+        else
+        {
+            var byTitle = FindCard(state, context.SourceCard!);
+            if (byTitle is null)
+                return FailApply(root, package.Id, CodeSource,
+                    $"карточка источника «{context.SourceCard}» не найдена в разделе или вверх по цепочке: сноскам рендера нечем подтвердить утверждения");
+            card = byTitle;
+            cardTitle = context.SourceCard!;
+            sourceTexts = new Dictionary<string, string>(StringComparer.Ordinal) { [byTitle.Value.Path] = context.SourceText! };
+        }
         var working = new List<WikiGate.Draft>(state);
         var renderedOrder = new List<string>(); // страницы раздела в порядке первой правки
         var unconfirmed = new List<string>();
@@ -603,7 +651,11 @@ public sealed class WikiApplyService
             // Цитата заново выводится из текста источника: утверждение может быть своей
             // цитатой только если оно дословно в источнике (мера 1). Не выводится — операция
             // не применяется ни при какой политике; пакет отказан, на диске ничего.
-            if (op.Text is not { Length: > 0 } || !QuoteMatcher.ContainsVerbatim(context.SourceText!, op.Text))
+            // У пути решения человека (S4g) текста источника нет и здесь: ни в карточке, ни в
+            // пакете его нет, а дословность подтверждена при разборе (WikiPlanValidator.cs:199) —
+            // рендерит тот же Text из Operations пакета, второй проверки тем же нечем.
+            if (op.Text is not { Length: > 0 } ||
+                (context is not null && !QuoteMatcher.ContainsVerbatim(context.SourceText!, op.Text)))
             {
                 unconfirmed.Add($"операция «{op.Op}» на «{op.Page}»: цитата не выводится из текста источника дословно");
                 continue;
@@ -613,7 +665,8 @@ public sealed class WikiApplyService
             try
             {
                 // Общий рендер плана (S6b-2): вторая копия рендера в проекте не заводится.
-                draft = WikiPlanValidator.RenderApply(working, op, op.Text, context.SourceCard!);
+                // cardTitle — из ветки выбора карточки выше: принесённый или с самой карточки.
+                draft = WikiPlanValidator.RenderApply(working, op, op.Text, cardTitle);
             }
             catch (Exception)
             {
@@ -638,7 +691,7 @@ public sealed class WikiApplyService
 
         // Дословность — только для карточек этого пакета (GivenOnly, тот же смысл, что в
         // проверке плана S6b-2): принятые раньше чужие сноски не могут отвергнуть новую запись.
-        var sourceTexts = new Dictionary<string, string> { [cardPath] = context.SourceText! };
+        // sourceTexts — из ветки выбора карточки выше: у пути решения человека он пустой.
         var violations = WikiGate.Check(working, section, upChain, sourceTexts, WikiGate.VerbatimScope.GivenOnly);
         if (violations.Count > 0)
             return FailApply(root, package.Id, CodeGate, $"итоговое состояние не проходит гейт: {violations[0]}", violations);
@@ -724,6 +777,47 @@ public sealed class WikiApplyService
         }
         return null;
     }
+
+    /// <summary>Карточка источника пакета — страница type: source в разделе САМОГО пакета
+    /// (чужих разделов путь решения человека не читает: ADR-036, решение 1), чьи origin и ref
+    /// совпадают с одним из источников пакета. Её записал захват при разборе (S6h), и она уже
+    /// прочитана в состоянии раздела — отдельного чтения файла нет. Терпимость сверки — та же,
+    /// чем мерит откат по источнику (WikiRetractService.SourceMatches): целое совпадение, карточ
+    /// с диапазоном против ссылки без него и старая форма Ref без префикса origin: две формулы
+    /// одного источника разошлись бы когда-нибудь.</summary>
+    private static (WikiGate.Draft Draft, string Title)? FindSourceCard(
+        List<WikiGate.Draft> state, string section, IReadOnlyList<WikiPackage.SourceRef> sources)
+    {
+        foreach (var d in state)
+        {
+            if (WikiSections.Parse(d.Path) != section)
+                continue;
+            var page = WikiPage.Parse(d.Content).Model;
+            if (page is null || page.Frontmatter.Type != WikiFrontmatter.TypeSource)
+                continue;
+            var cardOrigin = page.Frontmatter.Origin;
+            var cardRef = page.Frontmatter.Ref;
+            // Пустой заголовок — не цель сноски: сноска резолвится по заголовку (WikiGate).
+            var title = page.Title;
+            if (string.IsNullOrEmpty(cardRef) || string.IsNullOrWhiteSpace(title))
+                continue;
+            foreach (var s in sources)
+            {
+                if (s is null || string.IsNullOrEmpty(s.Ref) || cardOrigin != s.Origin)
+                    continue;
+                var cardId = cardRef.StartsWith(s.Origin + ":", StringComparison.Ordinal)
+                    ? cardRef[(s.Origin.Length + 1)..]
+                    : cardRef;
+                if (RefMatches(cardRef, s.Ref) || RefMatches(cardId, s.Ref))
+                    return (d, title);
+            }
+        }
+        return null;
+    }
+
+    private static bool RefMatches(string stored, string wanted) =>
+        wanted.Length > 0 && (string.Equals(stored, wanted, StringComparison.Ordinal)
+            || stored.StartsWith(wanted + "#", StringComparison.Ordinal));
 
     // Отказ применения: статус «apply_failed» — только через Transition (тот же порядок,
     // что у всех переходов); причина — текст для человека («Входящие», журнал).

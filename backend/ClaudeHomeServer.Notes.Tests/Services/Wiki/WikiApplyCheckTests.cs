@@ -408,18 +408,22 @@ public class WikiApplyCheckTests : IDisposable
     // ─── 6. Неожиданный вход — отказ с причиной, не исключение; статус не тронут ───
 
     [Fact]
-    public async Task NullПакетИОтказБезКонтекста_РезультатОтказ_СтатусНеТронут()
+    public async Task NullПакет_ОтказДоЗаявки_БезКонтекстаКарточкиНет_ПослеЗаявки()
     {
         var nullPkg = await _sut.PrepareAsync(User, null, Ctx);
         nullPkg.Ready.Should().BeFalse();
         nullPkg.Code.Should().Be(WikiApplyService.CodeShape);
+        // Пакета нет — и двигать нечего: этот отказ до заявки, ни одного перехода не сделано.
 
+        // Контекста нет — путь решения человека через REST (S4g): он легитимен, но карточка
+        // ищется на диске в разделе пакета. Её нет — отказ ПОСЛЕ заявки: «apply_failed» с
+        // причиной, а не «битый вызов» до неё и не «зависший applying».
         var pkg = CreateAccepted(Op(WikiPackage.OpAppend, PagePath, "Контенер собран на второй машине"));
         var noCtx = await _sut.PrepareAsync(User, pkg, null);
         noCtx.Ready.Should().BeFalse();
-        noCtx.Code.Should().Be(WikiApplyService.CodeSource);
-        // Отказ до заявки: статус пакета не двигался ни на шаг.
-        ReadStatus(pkg.Id).Should().Be(WikiPackage.StatusAccepted);
+        noCtx.Code.Should().Be(WikiApplyService.CodeSourceUnavailable);
+        noCtx.Reason.Should().NotBeNullOrWhiteSpace();
+        ReadStatus(pkg.Id).Should().Be(WikiPackage.StatusApplyFailed);
 
         // Пакет в «proposed» к применению не принят (переход в applying ему не положен).
         var proposed = new WikiPackage

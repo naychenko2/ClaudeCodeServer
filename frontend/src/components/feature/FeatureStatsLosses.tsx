@@ -34,7 +34,7 @@ export interface FeatureStatsLossesProps {
   nowMs?: number;
 }
 
-// Подпись секции: FS.xxs, UPPERCASE, textMuted (макет .sec, как в StatsHero).
+// Подпись секции: FS.xxs, UPPERCASE, textMuted (макет .sec, как у плиток).
 const SEC_LABEL: CSSProperties = {
   fontSize: FS.xxs, textTransform: 'uppercase', letterSpacing: 0.6,
   color: C.textMuted, fontFamily: FONT.sans, marginBottom: SP.xs,
@@ -149,7 +149,7 @@ function personName(personaId: string | null, personas: ReturnType<typeof usePer
   return personas.find(p => p.id === personaId)?.name ?? 'персона недоступна';
 }
 
-// Доля — проценты, не 0.42 (тот же формат, что percentText в compositionRows).
+// Доля — проценты, не 0.42.
 function shareText(share: number | null): string | null {
   if (share == null) return null;
   return `${Math.round(share * 100)} %`;
@@ -277,7 +277,7 @@ export function FeatureStatsLosses({ run, stats, isMobile = false, nav, nowMs }:
                       taskClosed={marks.taskClosed(ln.taskId)}
                       onOpenTask={() => {
                         if (nav?.featureId) recordFeatureReturn(nav.featureId, { kind: 'task', id: ln.taskId }, nav.featureTitle);
-                        // projectId — проект эпика фичи (тот же путь, что StatsHero:147):
+                        // projectId — проект эпика фичи (как у «Главных потерь» в той же вкладке):
                         // без него задача уходит в личный «Календарь» (дефект ee6825ff).
                         openTaskInSection({ id: ln.taskId, projectId: run.epic?.projectId ?? undefined });
                       }}

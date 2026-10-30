@@ -342,7 +342,7 @@ describe('пометки: Статистика', () => {
     expect(btns.map(b => attr(b, 'aria-label').includes('(задача закрыта)'))).toEqual([false, true]);
   });
 
-  // Вкладка «Пульс» (ST-F14a) рисуется только с run: блоки «Сейчас работают»,
+  // Вкладка «Пульс» (ST-F14a) рисуется только с run: блоки
   // «Главные потери» и разрез «Кто и на чём работал» получают пометки и контекст возврата.
   const NOW_ROW = { taskId: 't-b', stage: 'prod', personaId: null, stepRef: 'Ш2', title: 't-b', startedAt: '2026-10-20T10:00:00Z', linkedSessionId: 'c-arch' };
   const pulseStats = (): FeatureStats => {
@@ -375,19 +375,6 @@ describe('пометки: Статистика', () => {
     backNav.reset();
     click(byId(nav, 'nav-target-task')[0]);
     expectBack({ kind: 'task', id: 't-b' });
-  });
-
-  it('«Сейчас работают»: чат c-arch помечен «в архиве»', () => {
-    const c = renderTab();
-    expectFlags(byId(c, 'now-row-t-b')[0], { chat: 'archived', task: 'none' }, 'сейчас работают');
-  });
-
-  it('«Сейчас работают»: клик по чату пишет точку возврата с вкладкой «Статистика»', () => {
-    pageStore.reset(); backNav.reset();
-    setFeaturePageTab('stats');
-    const c = renderTab();
-    click(byId(byId(c, 'now-row-t-b')[0], 'nav-target-chat')[0]);
-    expectBack({ kind: 'chat', id: 'c-arch' });
   });
 
   it('разрез (чаты группы): c-live живой, c-arch в архиве', () => {

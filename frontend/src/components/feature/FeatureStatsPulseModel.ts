@@ -1,56 +1,21 @@
 // «Пульс» вкладки «Статистика» (волна 5, ST-F3; записка docs/mockups/feature-stats-5.md §A,
-// макет feature-stats-5.html). Чистые функции: состояние героя, состав времени, плитки,
-// главные потери. Бэк считает числа — фронт только раскладывает (тот же принцип, что в
-// FeatureStatsBits). Вид (StatsHero / FeatureStatsTiles / FeatureStatsLosses, ST-F4…ST-F7)
-// читает эту модель; цвета видов — из kindBackground (FeatureStatsBits), здесь их нет.
+// макет feature-stats-5.html). Чистые функции: словарь видов времени, плитки, главные
+// потери. Бэк считает числа — фронт только раскладывает (тот же принцип, что в
+// FeatureStatsBits). Вид (FeatureStatsTiles / FeatureStatsLosses) читает эту модель;
+// цвета видов — из kindBackground (FeatureStatsBits), здесь их нет.
 
 import type {
   FeatureRun, FeatureReturnsBySource, FeatureRoundVerdict, FeatureStage, FeatureStepChain,
 } from '../../types/featureRun';
-import type { FeatureStats, FeatureTimeline } from '../../types/featureStats';
+import type { FeatureStats } from '../../types/featureStats';
 import { stageLabel, minutesSince } from './FeatureStatsBits';
-
-// === Состояние героя ===
-
-// Порог «мало данных» (минуты): прошло меньше — считать доли рано. Значение согласовано с Софьей (ST-F3).
-export const FEW_DATA_MIN = 30;
-
-export type HeroState = 'running' | 'waiting' | 'merged' | 'few';
-
-// Приоритет сверху вниз: закрытая → ждёт человека (действие читателя важнее отсутствия
-// долей) → мало данных → всё остальное — идёт.
-export function pickHeroState(run: FeatureRun, stats: FeatureStats): HeroState {
-  // 1. Закрытая фича: герой — итог, сколько бы данных ни было.
-  if (run.state === 'merged' || run.state === 'closed') return 'merged';
-
-  // 2. Явная тревога бэка: ответ в чате — самое ценное действие на экране.
-  if (run.attention?.kind === 'wait') return 'waiting';
-
-  // 3. Мало данных: сегменты только у одного этапа (или их нет), или прошло меньше FEW_DATA_MIN.
-  const stageCount = new Set((stats.timeline.segments ?? []).map(s => s.stage)).size;
-  const elapsed = stats.timeline.totals?.elapsedMinutes ?? 0;
-  if (stageCount <= 1 || elapsed < FEW_DATA_MIN) return 'few';
-
-  // 4. Всё остальное — идёт.
-  return 'running';
-}
 
 // === Состав времени ===
 
 export type CompositionKind = 'work' | 'waiting' | 'idle' | 'error' | 'queued';
 
-export interface CompositionRow {
-  kind: CompositionKind;
-  // Подпись в прошедшем времени (KL макета): состав — о том, что уже было.
-  label: string;
-  minutes: number;   // как дал бэк
-  percent: number;   // 0..100, округление
-  percentText: string; // «63 %»
-}
-
-// Словарь видов состава (Q5H-3): единый источник слов видов состава (в т.ч. слова
-// очереди). Слово queued читают отсюда все три места: состав героя (compositionRows
-// ниже), «Подробнее» (FeatureStatsTab) и мини-сводка (FeatureMiniSummary) — формулировка
+// Словарь видов времени (Q5H-3): единый источник слов видов (в т.ч. слова очереди).
+// Слово queued читают отсюда два места: «Подробнее» (FeatureStatsTab) и мини-сводка (FeatureMiniSummary) — формулировка
 // очереди не плодится по компонентам (правило волны, ср. queueLabelParts в chatGroups.ts).
 // Значение закреплено тестом «сторож: слово очереди — единый источник» — смена слова
 // становится осознанным решением (лексика согласована: макет docs/mockups/feature-queue-1.md,
@@ -62,33 +27,6 @@ export const COMP_LABEL: Record<CompositionKind, string> = {
   queued: 'в очереди',
   error: 'ошибки',
 };
-
-// Строки «из чего сложилось время» в порядке макета (работа, ожидание, простой, в очереди,
-// ошибки). «В очереди» — самостоятельный пятый вид разряды (R-Q3B-2, коммит 6c659e527,
-// ADR-031 §«Время в очереди (queued)»): бэк вычитает перекрытия очереди из
-// work/waiting/error/idle, минуты queued у idle не отнимает — строка стоит рядом с простым
-// по порядку макета, а не как вид простоя. Без queuedMinutes (null/0/нет поля) строки нет —
-// поведение прежнее. Процент — от elapsed; сумма видов равна elapsed (контракт
-// TimelineTotals), но проценты округляются по частям и в сумме могут дать 99 % или 101 % —
-// поэтому ширина сегментов мерится минутами, а не процентами (см. преамбулу StatsHero).
-export function compositionRows(totals: FeatureTimeline['totals']): CompositionRow[] {
-  const elapsed = totals.elapsedMinutes;
-  if (!elapsed) return [];
-  const parts: Array<[CompositionKind, number | null | undefined]> = [
-    ['work', totals.workWallMinutes],
-    ['waiting', totals.waitingMinutes],
-    ['idle', totals.idleMinutes],
-    ['queued', totals.queuedMinutes],
-    ['error', totals.errorMinutes],
-  ];
-  return parts
-    .filter(([, v]) => v != null && v > 0)
-    .map(([kind, raw]) => {
-      const v = raw as number;
-      const percent = Math.round((v / elapsed) * 100);
-      return { kind, label: COMP_LABEL[kind], minutes: v, percent, percentText: `${percent} %` };
-    });
-}
 
 // === Плитки ===
 
@@ -120,6 +58,14 @@ export type StatTile =
   | { key: 'loops'; label: 'Возвраты'; loops: number; bySource: FeatureReturnsBySource | null; rounds: RoundMark[] }
   | { key: 'spend'; label: 'Расход'; costUsd: number; tokens: number; costPartial: boolean };
 
+// Крупное число «Возвратов» — сумма разбивки по источникам (бэк считает витки, сумма равна
+// verdicts.loops): число и хвост плитки не расходятся. Без разбивки (старые ответы) — verdicts.loops.
+function returnsTotal(run: FeatureRun): number {
+  const by = run.returnsBySource;
+  if (!by) return run.verdicts?.loops ?? 0;
+  return by.review.count + by.qa.count + by.final.count;
+}
+
 // Три плитки — работа, ожидание, возвраты. Четвёртая (расход) — только если бэк дал spend;
 // без него «Расход» не стоит нулем, а просто отсутствует (макет §A, п. 3).
 export function tilesModel(run: FeatureRun, stats: FeatureStats): StatTile[] {
@@ -127,7 +73,7 @@ export function tilesModel(run: FeatureRun, stats: FeatureStats): StatTile[] {
   const tiles: StatTile[] = [
     { key: 'work', label: 'Работали', minutes: t.workWallMinutes, agentsSum: t.agentsSumMinutes ?? null },
     { key: 'waiting', label: 'Ждали вас', minutes: t.waitingMinutes ?? null, count: t.waitingCount ?? null, longest: t.longestWaitMinutes ?? null },
-    { key: 'loops', label: 'Возвраты', loops: run.verdicts?.loops ?? 0, bySource: run.returnsBySource ?? null, rounds: roundMarks(run.stepChains) },
+    { key: 'loops', label: 'Возвраты', loops: returnsTotal(run), bySource: run.returnsBySource ?? null, rounds: roundMarks(run.stepChains) },
   ];
   const spend = stats.spend;
   if (spend) {
@@ -142,7 +88,7 @@ export function tilesModel(run: FeatureRun, stats: FeatureStats): StatTile[] {
 export type LossCard =
   // 1. Ожидание: живая, если фича сейчас ждёт человека.
   | { no: 1; kind: 'wait'; title: string; minutes: number | null; live: boolean; count: number | null }
-  // 2. Шаг с наибольшим числом витков.
+  // 2. Шаг с наибольшим числом возвратов.
   | { no: 2; kind: 'loops'; title: string; stepRef: string; stepTitle: string; loops: number; rounds: RoundMark[]; durationMinutes: number }
   // 3. Сейчас: задача, идущая дольше всех.
   | { no: 3; kind: 'longest'; title: string; stepRef: string | null; personaId: string | null; minutes: number; tokens: number | null; share: number | null }
@@ -186,7 +132,7 @@ export function lossesModel(run: FeatureRun, stats: FeatureStats, nowMs: number)
     });
   }
 
-  // 2. Шаг с максимальным loops; витков нет — карточки нет.
+  // 2. Шаг с максимальным loops; возвратов нет — карточки нет.
   let bestChain: FeatureStepChain | null = null;
   for (const ch of run.stepChains ?? []) {
     if (ch.loops > 0 && (bestChain === null || ch.loops > bestChain.loops)) bestChain = ch;
@@ -195,7 +141,7 @@ export function lossesModel(run: FeatureRun, stats: FeatureStats, nowMs: number)
     cards.push({
       no: 2,
       kind: 'loops',
-      title: 'Больше всего витков',
+      title: 'Больше всего возвратов',
       stepRef: bestChain.stepRef,
       stepTitle: bestChain.title,
       loops: bestChain.loops,

@@ -1,44 +1,34 @@
-import { useMemo, useState } from 'react';
-import { useNow } from '../../lib/useNow';
+import { useState } from 'react';
 import { C, R, FS, SP, FONT, SHADOW } from '../../lib/design';
-import { setFeaturePageTab } from '../../lib/featurePage';
 import { openTaskInSection } from '../../lib/tasks';
 import { EmptyState } from '../ui/EmptyState';
-import { Button } from '../ui/Button';
 import { NavTargetButton } from './NavTargetButton';
 import { recordFeatureReturn } from '../../lib/featureBackNav';
 import { EMPTY_NAV_MARKS, type NavMarks, type FeatureNavCtx } from '../../lib/featureNavMarks';
 import {
-  buildTimelineModel, formatDuration, stageLabel,
+  buildTimelineModel, formatDuration,
   type TimelineModel,
 } from './FeatureStatsBits';
-import { buildStageLanes, planCounterText } from './FeatureLaneModel';
 import { personaGroupLabel, modelGroupLabel, roleGroupLabel, formatTokens } from './FeatureStatsFormat';
 import { plural } from '../../lib/plural';
 import { usePersonas } from '../../lib/personas';
 import { useModels } from '../../lib/models';
 import { AGENT_COLORS } from '../AgentSelector';
-import { StatsHero } from './StatsHero';
 import { FeatureStatsTiles } from './FeatureStatsTiles';
-import { FeatureStatsNow } from './FeatureStatsNow';
 import { FeatureStatsLosses } from './FeatureStatsLosses';
 import { FeatureBreakdownBlock } from './FeatureBreakdownBlock';
 import { FeatureAnalysisLine } from './FeatureAnalysisLine';
 import { stageLabelShort } from './FeatureAnalysisModel';
 import { COMP_LABEL } from './FeatureStatsPulseModel';
 import type { FeatureStats, FeatureSpend, FeatureStatsSource, FeatureTimeline } from '../../types/featureStats';
-import type { FeatureRun, FeatureStage } from '../../types/featureRun';
+import type { FeatureRun } from '../../types/featureRun';
 
-// Вкладка «Статистика» (волна 5, ST-F14a; вариант A «Пульс» макета feature-stats-5).
-// Порядок: строка анализа → значки точности → герой → плитки → «Сейчас работают» →
-// «Главные потери» → сводка этапов (GC-F12) → «Кто и на чём работал» → свёрнутый
-// «Подробнее» (то, что новые блоки не покрывают: «не работали», эпизоды ошибок,
-// детали расхода). Прежние блоки итогов/разрезов/расхода удалены в ST-F14б.
-//
-// GC-F12: «Статистика» БЕЗ Ганта и без ленты времени — дорожки уехали на «Хронологию».
-// Здесь осталась сводка этапов: строка на этап (имя · слово состояния · «N/M» у
-// «Производства» · длительность) и ссылка на «Хронологию». `buildTimelineModel` живёт
-// (его читает ряд «задача»), а модель Ганта удалена вместе с самим Гантом (GC-F12).
+// Вкладка «Статистика» (вариант A «Пульс» макета feature-stats-5, упрощение Ш6).
+// Порядок: строка анализа → значки точности → плитки → «Главные потери» → «Кто и на чём
+// работал» → свёрнутый «Подробнее» (то, что плитки не покрывают: «не работали», эпизоды
+// ошибок, детали расхода). Героя «прошло с начала», «Сейчас работают» и таблицы этапов
+// нет: первое и второе — в сводке страницы, третье — в Ганте «Хронологии» (Ш6).
+// `buildTimelineModel` живёт (его читает ряд «задача»).
 // Данные ТОЛЬКО из `stats` и `run` (features/{id}): фронт не пересчитывает, только раскладывает.
 // Честность: нет stats (старые данные) → пустое состояние с причиной, а не нули.
 
@@ -83,114 +73,9 @@ function AccuracyBadges({ source, truncated }: { source: 'approx' | 'journal'; t
   );
 }
 
-// === Сводка этапов (GC-F12) ===
-// «Статистика» без дорожек: по строке на этап из run.stages — имя · слово состояния ·
-// «N/M» · длительность (approxMinutes бэка). Ниже — ссылка на «Хронологию», где дорожки.
-//
-// Счётчик плана «N/M» — ТОЛЬКО у «Производства»: там он значит «N шагов плана принято
-// из M». У прочих стадий плана нет, а `lanes[key].plan` у них — либо null, либо тот же
-// агрегат, что у prod: показывать его второй раз значило бы дублировать одну и ту же
-// цифру в двух строках сводки (решение m1 ревью GC-R-F2). Текст счётчика — из
-// `planCounterText()` модели (тот же, что печатает «Хронология»), своей арифметики нет (GC-F12R).
-
-// Слово состояния этапа: готов · идёт · стоит · впереди · этапа не было.
-function stageStateWord(stage: FeatureStage): string {
-  switch (stage.state) {
-    case 'done': return 'готов';
-    case 'active': return stage.tone === 'stopped' ? 'стоит' : 'идёт';
-    case 'pending': return 'впереди';
-    case 'skipped': return 'этапа не было';
-    default: return ''; // absent — такой стадии в конвейере нет, строки нет
-  }
-}
-
-// Цвет слова состояния: «стоит» — тревога (dangerText), «идёт» — заголовок, прочие — приглушённый.
-function stageStateColor(stage: FeatureStage): string {
-  if (stage.state === 'active') return stage.tone === 'stopped' ? C.dangerText : C.textHeading;
-  return C.textMuted;
-}
-
-// Сводка этапов: карточка со строками + ссылка на «Хронологию».
-function StageSummary({ run, stats, isMobile }: { run: FeatureRun; stats: FeatureStats | null; isMobile: boolean }) {
-  // Момент «сейчас» — состояние, а не Date.now() в рендере (общий useNow).
-  const now = useNow(60_000);
-  // Дорожки — из общей модели (GC-F2): план этапа берём оттуда, свою арифметику не заводим.
-  const lanes = useMemo(() => buildStageLanes(run, stats, now).lanes, [run, stats, now]);
-  // Стадии без строки: 'absent' — такой стадии в конвейере нет (как и у дорожек).
-  const stages = (run.stages ?? []).filter(s => s.state !== 'absent');
-  if (stages.length === 0) return null;
-  return (
-    <div data-testid="stats-stages" style={{ marginTop: SP.lg, fontFamily: FONT.sans }}>
-      <div
-        style={{
-          background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.lg,
-          padding: `${SP.xs}px ${SP.md}px`,
-        }}
-      >
-        {stages.map(stage => {
-          const plan = stage.key === 'prod' ? planCounterText(lanes[stage.key]) : null;
-          return (
-            <div
-              key={stage.key}
-              data-testid={`stats-stage-${stage.key}`}
-              data-stage={stage.key}
-              style={{
-                display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap',
-                minHeight: isMobile ? 40 : 28,
-              }}
-            >
-              <span
-                data-testid={`stats-stage-name-${stage.key}`}
-                style={{
-                  flex: '1 1 40%', minWidth: 0, fontSize: FS.sm, fontWeight: 600, color: C.textHeading,
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                }}
-              >
-                {stageLabel(stage.key)}
-              </span>
-              <span
-                data-testid={`stats-stage-state-${stage.key}`}
-                style={{ fontSize: FS.xs, color: stageStateColor(stage), whiteSpace: 'nowrap' }}
-              >
-                {stageStateWord(stage)}
-              </span>
-              {plan && (
-                <span
-                  data-testid={`stats-stage-plan-${stage.key}`}
-                  style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary, whiteSpace: 'nowrap' }}
-                >
-                  {plan}
-                </span>
-              )}
-              <span
-                data-testid={`stats-stage-minutes-${stage.key}`}
-                style={{
-                  fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary,
-                  textAlign: 'right', whiteSpace: 'nowrap', marginLeft: 'auto',
-                }}
-              >
-                {stage.state === 'skipped' ? '' : formatDuration(stage.approxMinutes ?? 0)}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-      <Button
-        variant="ghostAccent"
-        size="md"
-        dataTestId="stats-stages-timeline-link"
-        onClick={() => setFeaturePageTab('timeline')}
-        style={{ marginTop: SP.sm }}
-      >
-        Дорожки времени — на „Хронологии“
-      </Button>
-    </div>
-  );
-}
-
 // «Задача» по taskId сегмента/этапа: NavTargetButton (открывает задачу в «Задачах»).
-// run нужен для projectId: задачи фичи лежат в проекте её эпика (тот же путь, что
-// StatsHero:147) — без projectId openTaskInSection ведёт в личный «Календарь» (дефект ee6825ff).
+// run нужен для projectId: задачи фичи лежат в проекте её эпика (как у «Главных потерь»
+// FeatureStatsLosses) — без projectId openTaskInSection ведёт в личный «Календарь» (дефект ee6825ff).
 function TaskButtons({ model, run, nav, isMobile }: { model: TimelineModel; run?: FeatureRun | null; nav?: FeatureNavCtx; isMobile: boolean }) {
   const marks = nav?.marks ?? EMPTY_NAV_MARKS;
   // Собираем уникальные taskId по этапам (из сегментов) — по одному «задача» на этап.
@@ -339,7 +224,7 @@ function MoreDetails({ totals, spend, source, isMobile }: {
 
 export function FeatureStatsTab({ stats, run = null, featureId = null, featureTitle = null, marks, isMobile = false }: FeatureStatsTabProps) {
   // Хуки выше ранних return: labelOf/colorOf нужны только с run, но хук не может
-  // быть условным (react-hooks/rules-of-hooks) — тот же приём, что в FeatureStatsNow.
+  // быть условным (react-hooks/rules-of-hooks)
   const personas = usePersonas();
   useModels(); // реактивность: догрузка каталога моделей меняет подписи
   const nav: FeatureNavCtx = { featureId, featureTitle, marks };
@@ -381,8 +266,7 @@ export function FeatureStatsTab({ stats, run = null, featureId = null, featureTi
     );
   }
 
-  // «Пульс» (ST-F14a): герой, плитки, «Сейчас работают», «Главные потери» — всё из
-  // run + stats; без run (старые ответы) этих блоков нет.
+  // Плитки и «Главные потери» — из run + stats; без run (старые ответы) их нет.
   const costPartial = stats.spend?.costPartial ?? false;
 
   // labelOf/colorOf — те же источники подписей, что у прежнего Breakdown:
@@ -406,13 +290,10 @@ export function FeatureStatsTab({ stats, run = null, featureId = null, featureTi
       <AccuracyBadges source={stats.source} truncated={stats.truncated} />
       {run && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: SP.lg, marginTop: SP.lg }}>
-          <StatsHero run={run} stats={stats} isMobile={isMobile} />
           <FeatureStatsTiles run={run} stats={stats} isMobile={isMobile} />
-          <FeatureStatsNow run={run} nav={nav} isMobile={isMobile} />
           <FeatureStatsLosses run={run} stats={stats} nav={nav} isMobile={isMobile} />
         </div>
       )}
-      {run && <StageSummary run={run} stats={stats} isMobile={isMobile} />}
       <TaskButtons model={model} run={run} nav={nav} isMobile={isMobile} />
       {run && (
         <div style={{ marginTop: SP.lg }}>

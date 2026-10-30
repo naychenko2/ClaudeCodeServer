@@ -64,7 +64,7 @@ export interface FeatureStepDetailsProps {
   onShowIntervals?: () => void;
 }
 
-// Подпись секции — та же, что у блоков «Статистики» (FeatureStatsLosses, StatsHero).
+// Подпись секции — та же, что у блоков «Статистики» (FeatureStatsLosses).
 const SEC_LABEL: CSSProperties = {
   fontSize: FS.xxs, textTransform: 'uppercase', letterSpacing: 0.6,
   color: C.textMuted, fontFamily: FONT.sans,

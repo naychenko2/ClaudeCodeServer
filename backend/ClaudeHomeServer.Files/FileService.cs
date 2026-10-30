@@ -93,6 +93,18 @@ public class FileService(
         throw new UnauthorizedAccessException("В вики пишет только Хранитель");
     }
 
+    // Обратное направление — для операций, действующих рекурсивно над поддеревом (Delete,
+    // Rename каталога): путь сам может быть ПРЕДКОМ вики — корень проекта на весь домашний
+    // каталог («», «data»), и такое удаление/переименование снесло бы data/wiki/ целиком,
+    // обойдя гейт (ревью S1b, MAJOR 2). Путь сюда приходит абсолютным (SafeJoin), и предок
+    // сравнивается с ним тем же каноническим обходом, что у IsWikiPath.
+    private void GuardNotWikiSubtree(string path)
+    {
+        if (_dataDir is null) return;
+        if (!WikiPaths.IsWikiPath(path, _dataDir) && !WikiPaths.IsWikiAncestor(path, _dataDir)) return;
+        throw new UnauthorizedAccessException("В вики пишет только Хранитель");
+    }
+
     public IEnumerable<FileEntry> List(string rootPath, string relativePath = "", bool showHidden = false)
     {
         var dir = SafeJoin(rootPath, relativePath);
@@ -490,8 +502,9 @@ public class FileService(
     {
         var path = SafeJoin(rootPath, relativePath);
         // Удаление — тоже запись в вику её минусом: Хранитель не терпит, что страницу
-        // снесет файловый API (ADR-035, решение 2).
-        GuardNotWiki(path);
+        // снесет файловый API (ADR-035, решение 2). Directory.Delete(recursive) действует
+        // над поддеревом, поэтому ловится и обратный случай — путь-предок вики.
+        GuardNotWikiSubtree(path);
         VerifyParent(rootPath, path);
         if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
         else if (File.Exists(path)) File.Delete(path);
@@ -504,8 +517,10 @@ public class FileService(
         var src = SafeJoin(rootPath, oldRelative);
         var dst = SafeJoin(rootPath, newRelative);
         // Обе стороны: вынести из вики нельзя так же, как и внести в неё (как Move в NotesService).
-        GuardNotWiki(src);
-        GuardNotWiki(dst);
+        // Directory.Move действует над поддеревом — поэтому на каждой стороне проверяются
+        // оба направления: путь под вики и путь-предок вики (ревью S1b, MAJOR 2).
+        GuardNotWikiSubtree(src);
+        GuardNotWikiSubtree(dst);
         VerifyParent(rootPath, src);
         VerifyParent(rootPath, dst);
         if (Directory.Exists(src)) Directory.Move(src, dst);

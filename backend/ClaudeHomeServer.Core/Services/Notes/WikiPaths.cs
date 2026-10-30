@@ -58,6 +58,22 @@ public static class WikiPaths
             || full.StartsWith(wikiRoot + "/", StringComparison.OrdinalIgnoreCase);
     }
 
+    // Обратное направление того же сравнения: path — сам корень вики или его ПРЕДОК,
+    // т.е. data/wiki/ лежит под path. Нужно мутирующим точкам, действующим над поддеревом
+    // целиком (FileService.Delete/Rename каталога): рекурсивная операция над предком снесла
+    // бы вику, обойдя IsWikiPath (ревью S1b, MAJOR 2). Тот же канонический обход и та же
+    // fail-closed форма: неразобранный путь считается задевающим вику.
+    public static bool IsWikiAncestor(string path, string dataDir)
+    {
+        var full = Canonical(path);
+        var wikiRoot = WikiRootOf(dataDir);
+        if (full is null || wikiRoot is null) return true;
+        // Canonical отдаёт корень с завершающим разделителем («/», «c:/») — префикс не сдваиваем
+        var prefix = full.EndsWith('/') ? full : full + "/";
+        return wikiRoot.Equals(full, StringComparison.OrdinalIgnoreCase)
+            || wikiRoot.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+    }
+
     // Корень вики канонизируется тем же обходом, что и путь: «data/wiki» как символьная
     // ссылка (в том числе висячая) задаёт корень своей целью — иначе файл через ссылку
     // канонизируется в одно пространство имён, а корень — в другое, и гейт молчит (ревью S1a).

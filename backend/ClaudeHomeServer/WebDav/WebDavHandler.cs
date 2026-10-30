@@ -7,7 +7,11 @@ using System.Text;
 using ClaudeHomeServer.Services;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http.Features;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Files;
+// Гейт «в вики пишет только Хранитель» на путях PUT/COPY: предикат — тип сборки Core.dll
+// в namespace Services.Notes (тот же порядок, что в FileService и FilesController).
+using ClaudeHomeServer.Services.Notes;
 
 namespace ClaudeHomeServer.WebDav;
 
@@ -593,6 +597,18 @@ public static class WebDavHandler
 
     private sealed class PutBodyTooLargeException : Exception;
 
+    // Гейт «в вики пишет только Хранитель» для PUT и COPY: они пишут на диск мимо FileService
+    // (FileStream + File.Move / File.Copy), поэтому путь проверяют сами — тем же предикатом и
+    // тем же data-корнем из конфига, что у FileService и FilesController (ADR-035, решение 2;
+    // ревью S1b, MAJOR 1). Отказ — 403 здесь же, как и для DELETE корня; у DELETE/MKCOL/MOVE
+    // через files.* тот же отказ приходит exception'ом и переводится в 403 диспетчером.
+    // Без конфига data-корня нет и проверить нечем — тот же контракт, что у GuardNotWiki.
+    private static bool IsUnderDataWiki(HttpContext ctx, string absPath)
+    {
+        var config = ctx.RequestServices.GetService<IConfiguration>();
+        return config is not null && WikiPaths.IsWikiPath(absPath, SubsystemHostingExtensions.ResolveDataDir(config));
+    }
+
     internal static async Task HandlePutAsync(HttpContext ctx, string root, string relPath)
     {
         if (string.IsNullOrEmpty(relPath))
@@ -619,6 +635,14 @@ public static class WebDavHandler
             bodySize.MaxRequestBodySize = maxBytes;
 
         var absPath = FileService.SafeJoinPublic(root, relPath);
+        // Отказ стоит до создания папки и до чтения тела: под data/wiki/ не должно остаться
+        // ни файла, ни каталога, ни временного .davput-файла
+        if (IsUnderDataWiki(ctx, absPath))
+        {
+            ctx.Response.StatusCode = 403; // в вики пишет только Хранитель
+            return;
+        }
+
         var existed = File.Exists(absPath);
 
         // Тело пишется во временный файл рядом с целью (одна ФС — атомарный rename):
@@ -736,7 +760,8 @@ public static class WebDavHandler
     // COPY
     // ────────────────────────────────────────────────────────────────────────
 
-    private static async Task HandleCopyAsync(HttpContext ctx, FileService files, string root, string relPath, string projectName)
+    // internal — тестам гейта нужен сам COPY (по образцу internal HandlePutAsync)
+    internal static async Task HandleCopyAsync(HttpContext ctx, FileService files, string root, string relPath, string projectName)
     {
         var destRel = ParseDestination(ctx, projectName);
         if (destRel is null)
@@ -748,6 +773,14 @@ public static class WebDavHandler
         var overwrite = !string.Equals(ctx.Request.Headers["Overwrite"].ToString(), "F", StringComparison.OrdinalIgnoreCase);
         var srcAbs = FileService.SafeJoinPublic(root, relPath);
         var dstAbs = FileService.SafeJoinPublic(root, destRel);
+
+        // COPY пишет на диск мимо FileService (File.Copy/CopyDirectory) — поэтому обе стороны
+        // проверяются здесь: внести в вику нельзя так же, как вынести из неё (ревью S1b, MAJOR 1)
+        if (IsUnderDataWiki(ctx, srcAbs) || IsUnderDataWiki(ctx, dstAbs))
+        {
+            ctx.Response.StatusCode = 403; // в вики пишет только Хранитель
+            return;
+        }
 
         if (!overwrite && (File.Exists(dstAbs) || Directory.Exists(dstAbs)))
         {

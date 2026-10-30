@@ -13,6 +13,10 @@ namespace ClaudeHomeServer.Tests.Services;
 // (files_*, WebDAV, Docs) дотянулся бы до поддерева владельца. В бою data/ вне корней
 // проектов — проверка остаётся дешёвой страховкой, а не основным гейтом.
 // Таблица методов — default-deny, образец — NotesWikiGateTests и SubsystemBoundaryTests.
+//
+// Reverse-край того же случая: корень проекта может быть ПРЕДКОМ data/ (или самим data-
+// каталогом) — Delete каталога и Directory.Move действуют над поддеревом, поэтому эти две
+// операции проверяют путь в обе стороны (ревью S1b, MAJOR 2).
 public class FileServiceWikiGateTests : IDisposable
 {
     private readonly string _dir;        // он же dataDir, он же корень проекта
@@ -166,6 +170,68 @@ public class FileServiceWikiGateTests : IDisposable
         File.Exists(Path.Combine(_wikiPages, "ВВики.md")).Should().BeFalse();
     }
 
+    // ─── Каталог-предок data/wiki/ (ревью S1b, MAJOR 2) ──────────────────────
+    // Delete каталога и Directory.Move действуют над поддеревом целиком, поэтому путь
+    // проверяется в обе стороны: «path под data/wiki/» и «data/wiki/ под path». Предок —
+    // это и сам data-корень (корень проекта = dataDir), и каталог НАД ним («data/» как
+    // относительный путь): рекурсивная операция над таким путём снесла бы вику мимо гейта.
+
+    [Fact]
+    public void Delete_КорняКоторыйЕстьDataКорнем_Отказ_ФайлВикиНаМесте()
+    {
+        var file = WriteRaw(WikiRel("Страница"), "# Страница");
+
+        var ex = Record.Exception(() => _sut.Delete(_dir, ""));
+
+        ex.Should().BeOfType<UnauthorizedAccessException>().Which
+            .Message.Should().Be("В вики пишет только Хранитель");
+        File.Exists(file).Should().BeTrue();
+    }
+
+    [Fact]
+    public void DeleteIRename_КаталогаСодержащегоDataWiki_Отказ_ВикаНаМесте()
+    {
+        // Корень проекта НАД data-корнем: dataDir = {root}/data, страница — data/wiki/u1/pages.
+        // Тот же боковой случай «проект на весь домашний каталог», только с видимым «data/».
+        var root = Path.Combine(Path.GetTempPath(), "fs_wiki_anc_" + Guid.NewGuid().ToString("N"));
+        var dataDir = Path.Combine(root, "data");
+        try
+        {
+            var page = WriteRawIn(root, "data/wiki/u1/pages/Страница.md", "# Страница");
+            var other = WriteRawIn(root, "docs/файл.md", "# docs");
+            var keep = Path.Combine(root, "keep");
+            Directory.CreateDirectory(keep);
+            var config = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = Path.Combine(dataDir, "projects.json") })
+                .Build();
+            var sut = new FileService(config: config);
+
+            var delRoot = Record.Exception(() => sut.Delete(root, ""));
+            var delData = Record.Exception(() => sut.Delete(root, "data"));
+            var renameData = Record.Exception(() => sut.Rename(root, "data", "data2"));
+
+            delRoot.Should().BeOfType<UnauthorizedAccessException>();
+            delData.Should().BeOfType<UnauthorizedAccessException>().Which
+                .Message.Should().Be("В вики пишет только Хранитель");
+            renameData.Should().BeOfType<UnauthorizedAccessException>();
+            // ни одна из трёх операций вики не тронула
+            File.Exists(page).Should().BeTrue();
+            Directory.Exists(Path.Combine(root, "data2")).Should().BeFalse();
+
+            // Границы отказа: под data/, но мимо вики — обычные пути, прежний успех
+            Record.Exception(() => sut.Delete(root, "docs")).Should().BeNull();
+            Record.Exception(() => sut.Rename(root, "keep", "keep2")).Should().BeNull();
+            Directory.Exists(Path.Combine(root, "docs")).Should().BeFalse();
+            Directory.Exists(keep).Should().BeFalse();
+            Directory.Exists(Path.Combine(root, "keep2")).Should().BeTrue();
+            File.Exists(other).Should().BeFalse();
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
     // ─── Границы самого гейта ────────────────────────────────────────────────
 
     [Fact]
@@ -213,9 +279,12 @@ public class FileServiceWikiGateTests : IDisposable
     private static string WikiRel(string name) => $"wiki/u1/pages/{name}.md";
 
     // Запись мимо сервиса — «унаследованное» состояние под data/wiki/
-    private string WriteRaw(string relativePath, string content)
+    private string WriteRaw(string relativePath, string content) => WriteRawIn(_dir, relativePath, content);
+
+    // То же под другим корнем: тест про предка строит свой data-корень внутри проекта
+    private static string WriteRawIn(string root, string relativePath, string content)
     {
-        var full = Path.Combine(_dir, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        var full = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         File.WriteAllText(full, content, new System.Text.UTF8Encoding(false));
         return full;

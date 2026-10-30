@@ -6,7 +6,8 @@ namespace ClaudeHomeServer.Tests.Services.Access;
 
 /// <summary>
 /// Рамка хода (S2a-2, разрез §И.3 в редакции решения 29.10): в общем проекте — узкая при любом
-/// акторе, включая самого владельца и отсутствующего; широкая — только в личном проекте.
+/// акторе, включая самого владельца и отсутствующего; широкая — только в личном проекте
+/// и только при известном арендаторе (иначе — Narrow, fail-closed).
 /// </summary>
 public class TurnFrameTests
 {
@@ -90,6 +91,17 @@ public class TurnFrameTests
         // Чужого актора в личном проекте не бывает: доступ к нему даёт только владение
         // (ProjectAccess.Check). Второго guard'а рамка не добавляет: пространство — своё.
         TurnFrame.Resolve(PersonalProject(), null, TenantId, actorId).Should().Be(TurnFrameKind.Wide);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void БезАрендатораВЛичномПроекте_РамкаУзкая_FailClosed(string? tenantId)
+    {
+        // Wide открывает личное пространство арендатора; при неизвестном арендаторе — чьё оно,
+        // не определено: fail-closed и при известном акторе (прежний тест
+        // БезАрендатораПриИзвестномАкторе, снят без замены в S2a-2; возвращён по R-S2a-2).
+        TurnFrame.Resolve(PersonalProject(), null, tenantId, TenantId).Should().Be(TurnFrameKind.Narrow);
     }
 
     [Fact]

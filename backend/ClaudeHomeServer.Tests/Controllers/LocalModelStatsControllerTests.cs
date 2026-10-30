@@ -16,18 +16,188 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // валидация window (400), since (только хвост), выключенная вертикаль (configured:false),
 // unsupported из снимка.
 [Trait("Category", "Host")]
-public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFactory>
+public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsControllerTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory;
-    private readonly HttpClient _admin;
-    private readonly HttpClient _user;
+    private readonly Hosts _hosts;
 
-    public LocalModelStatsControllerTests(TestWebApplicationFactory factory)
+    public LocalModelStatsControllerTests(Hosts hosts) => _hosts = hosts;
+
+    // Клиенты базовых тестов берутся лениво: тесты второго стенда хост Plain не поднимают
+    private HttpClient _admin => _hosts.Plain.Use().CreateAuthenticatedClient();
+    private HttpClient _user => _hosts.Plain.Use().CreateAuthenticatedClient(
+        TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+
+    // Хост на КОНФИГУРАЦИЮ, а не на тест: конфиг и состав DI меняются только хостом, всё остальное
+    // (читатель, карты, счётчик хода, Comfy, дорожки, журнал вызовов, флаг) тест переключает сам
+    // через Use*. Хосты поднимаются лениво и гасятся вместе с фикстурой.
+    public sealed class Hosts : IDisposable
     {
-        _factory = factory;
-        _admin = factory.CreateAuthenticatedClient();
-        _user = factory.CreateAuthenticatedClient(
-            TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+        // Без LocalEngines и без правок конфига
+        public StatsHost Plain { get; } = new();
+        // Второй стенд bonsai: BaseUrl/Model/StateUrl/FallbackRoute/MetricsUrl из конфига
+        public StatsHost Bonsai { get; } = new(BonsaiConfig(metrics: true));
+        public StatsHost BonsaiNoMetrics { get; } = new(BonsaiConfig(metrics: false));
+        // Images выключена: IComfyStats нет вовсе (GetService → null)
+        public StatsHost BonsaiImagesOff { get; } = new(comfy: false,
+            config: [.. BonsaiConfig(metrics: true), ("Subsystems:images:Enabled", "false")]);
+        public StatsHost LabelsSet { get; } = new(
+            ("LlmProviders:local-qwen:Stats:Model", "Qwen3.8-Flash-Next IQ3_XXS"),
+            ("LlmProviders:local-qwen:Stats:EngineLabel", " Strata 0.2.7 "),
+            ("LlmProviders:local-qwen:Stats:Topology", "разрез слоёв 26/22"));
+        public StatsHost LabelsBlank { get; } = new(("LlmProviders:local-qwen:Stats:Model", "  "));
+        public StatsHost MediaOff { get; } = new(("LocalModelStats:MediaForUsers", "false"));
+        // Вертикаль Llm выключена: сервисов вертикали в контейнере нет, подмен тоже
+        public LlmOffHost LlmOff { get; } = new();
+
+        public void Dispose()
+        {
+            Plain.Dispose();
+            Bonsai.Dispose();
+            BonsaiNoMetrics.Dispose();
+            BonsaiImagesOff.Dispose();
+            LabelsSet.Dispose();
+            LabelsBlank.Dispose();
+            MediaOff.Dispose();
+            LlmOff.Dispose();
+        }
+
+        private static (string Key, string Value)[] BonsaiConfig(bool metrics)
+        {
+            var config = new List<(string Key, string Value)>
+            {
+                ("LocalEngines:bonsai:BaseUrl", "http://127.0.0.1:18030"),
+                ("LocalEngines:bonsai:Model", "bonsai2-27b"),
+                ("LocalEngines:bonsai:StateUrl", "http://127.0.0.1:8090/state"),
+                ("LocalEngines:bonsai:FallbackRoute", "direct:minimax"),
+            };
+            if (metrics) config.Add(("LocalEngines:bonsai:MetricsUrl", "http://127.0.0.1:18030/metrics"));
+            return [.. config];
+        }
+    }
+
+    public sealed class LlmOffHost : TestWebApplicationFactory
+    {
+        public LlmOffHost() => ExtraConfig["Subsystems:llm:Enabled"] = "false";
+    }
+
+    // Хост с переключаемыми заглушками: сервис в DI — прокси, цель которого тест подставляет
+    // на время теста (Use*). Прокси по умолчанию ведут на пустые фейки, поэтому «не подменено»
+    // равно «в этом тесте сервис ничего не сообщает»
+    public sealed class StatsHost : TestWebApplicationFactory
+    {
+        private readonly SwapReader _reader = new();
+        private readonly SwapGpu _gpu = new();
+        private readonly SwapMeter _meter = new();
+        private readonly SwapComfy _comfy = new();
+        private readonly SwapDirectory _directory = new();
+        private readonly SwapArbiter _arbiter = new();
+
+        // Журнал вызовов мест: у каждого теста свой (Use* заводит новый), сервис — transient
+        private EngineCallLedger _ledger = new();
+
+        public StatsHost(params (string Key, string Value)[] config) : this(true, config) { }
+
+        public StatsHost(bool comfy, params (string Key, string Value)[] config)
+        {
+            foreach (var (key, value) in config) ExtraConfig[key] = value;
+            ExtraServices = services =>
+            {
+                services.AddSingleton<ILocalModelStatsReader>(_reader);
+                services.AddSingleton<IGpuSampler>(_gpu);
+                services.AddSingleton<ILocalModelTurnMeter>(_meter);
+                services.AddSingleton<ILocalEngineStatsDirectory>(_directory);
+                services.AddSingleton<IEngineArbiterStateReader>(_arbiter);
+                services.AddTransient<EngineCallLedger>(_ => _ledger);
+                if (comfy) services.AddSingleton<IComfyStats>(_comfy);
+            };
+        }
+
+        // Чистое состояние: все цели — пустые фейки, флаг local-model-stats выключен
+        // (как у свежего пользователя), журнал вызовов новый
+        public StatsHost Use(FakeReader? reader = null, ILocalModelTurnMeter? meter = null, IGpuSampler? gpuSampler = null)
+        {
+            _reader.Target = reader ?? new FakeReader();
+            _gpu.Target = gpuSampler ?? new NoGpuSampler();
+            _meter.Target = meter ?? new FakeMeter();
+            _comfy.Target = new FakeComfyStats();
+            _directory.Target = new FakeDirectory();
+            _arbiter.Target = new FakeArbiterReader();
+            _ledger = new EngineCallLedger();
+            SetFlag(this, false);
+            return this;
+        }
+
+        public StatsHost UseComfy(IComfyStats comfy)
+        {
+            Use();
+            _comfy.Target = comfy;
+            return this;
+        }
+
+        // Второй стенд: читатель главного — по просьбе, дорожки и арбитр — фейки, флаг — по просьбе
+        public StatsHost UseBonsai(
+            FakeDirectory dir, FakeArbiterReader? arbiter = null, IComfyStats? comfy = null,
+            bool mainConfigured = false, bool flag = true)
+        {
+            Use(new FakeReader
+            {
+                Current = new LocalModelStatsCurrent
+                {
+                    Configured = mainConfigured,
+                    Status = mainConfigured ? "working" : "notConnected",
+                },
+            });
+            _directory.Target = dir;
+            if (arbiter is not null) _arbiter.Target = arbiter;
+            if (comfy is not null) _comfy.Target = comfy;
+            SetFlag(this, flag);
+            return this;
+        }
+
+        private sealed class SwapReader : ILocalModelStatsReader
+        {
+            public ILocalModelStatsReader Target { get; set; } = new FakeReader();
+            public LocalModelStatsCurrent Current => Target.Current;
+            public double? TokensPerStep => Target.TokensPerStep;
+            public IReadOnlyList<LocalModelStatsPoint> GetHistory(TimeSpan window, long? sinceUnixMs = null) =>
+                Target.GetHistory(window, sinceUnixMs);
+        }
+
+        private sealed class SwapGpu : IGpuSampler
+        {
+            public IGpuSampler Target { get; set; } = new NoGpuSampler();
+            public Task<IReadOnlyList<GpuSample>> ReadAsync(CancellationToken ct = default) => Target.ReadAsync(ct);
+        }
+
+        private sealed class SwapMeter : ILocalModelTurnMeter
+        {
+            public ILocalModelTurnMeter Target { get; set; } = new FakeMeter();
+            public IReadOnlyList<TurnChatLive> ActiveChats() => Target.ActiveChats();
+            public LocalModelTurnSummary? GetLastTurn(string sessionId) => Target.GetLastTurn(sessionId);
+        }
+
+        private sealed class SwapComfy : IComfyStats
+        {
+            public IComfyStats Target { get; set; } = new FakeComfyStats();
+            public Task<ComfyMediaStatsSnapshot?> GetMediaAsync(CancellationToken ct) => Target.GetMediaAsync(ct);
+            public string? DescribePromptKind(string idPrefix) => Target.DescribePromptKind(idPrefix);
+        }
+
+        private sealed class SwapDirectory : ILocalEngineStatsDirectory
+        {
+            public ILocalEngineStatsDirectory Target { get; set; } = new FakeDirectory();
+            public IReadOnlyList<string> Names => Target.Names;
+            public LocalModelStatsCurrent? CurrentOf(string name) => Target.CurrentOf(name);
+            public IReadOnlyList<LocalModelStatsPoint> HistoryOf(string name, TimeSpan window, long? sinceUnixMs = null) =>
+                Target.HistoryOf(name, window, sinceUnixMs);
+        }
+
+        private sealed class SwapArbiter : IEngineArbiterStateReader
+        {
+            public IEngineArbiterStateReader Target { get; set; } = new FakeArbiterReader();
+            public Task<EngineArbiterSnapshot?> GetAsync(string engineName, CancellationToken ct = default) =>
+                Target.GetAsync(engineName, ct);
+        }
     }
 
     // ─── Авторизация ─────────────────────────────────────────────────────────────
@@ -44,7 +214,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     [Fact]
     public async Task Аноним_401()
     {
-        var anon = _factory.CreateClient();
+        var anon = _hosts.Plain.Use().CreateClient();
         var resp = await anon.GetAsync("/api/local-model/stats");
         resp.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
@@ -111,7 +281,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
             Current = new LocalModelStatsCurrent { Configured = true, Status = "working" },
             Points = points,
         };
-        var factory = BuildFactoryWithFakes(reader);
+        var factory = _hosts.Plain.Use(reader);
         using var client = factory.CreateAuthenticatedClient();
 
         var since = (long)t0.AddSeconds(10).ToUnixTimeMilliseconds();
@@ -145,7 +315,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
                 },
             ],
         };
-        var factory = BuildFactoryWithFakes(reader);
+        var factory = _hosts.Plain.Use(reader);
         using var client = factory.CreateAuthenticatedClient();
 
         var resp = await client.GetAsync("/api/local-model/stats");
@@ -186,7 +356,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
                 },
             ],
         };
-        var factory = BuildFactoryWithFakes(reader);
+        var factory = _hosts.Plain.Use(reader);
         using var client = factory.CreateAuthenticatedClient();
 
         var resp = await client.GetAsync("/api/local-model/stats");
@@ -224,7 +394,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
                 },
             ],
         };
-        var factory = BuildFactoryWithFakes(reader);
+        var factory = _hosts.Plain.Use(reader);
         using var client = factory.CreateAuthenticatedClient();
 
         var resp = await client.GetAsync("/api/local-model/stats");
@@ -261,7 +431,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         {
             Current = new LocalModelStatsCurrent { Configured = true, Status = "working", Running = 2, Waiting = 0 },
         };
-        var factory = BuildFactoryWithFakes(reader, meter);
+        var factory = _hosts.Plain.Use(reader, meter);
         using var admin = factory.CreateAuthenticatedClient();
 
         // OwnerId в grant — user.Id (sub в JWT), не username; id генерируется на фабрику,
@@ -307,7 +477,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         {
             Current = new LocalModelStatsCurrent { Configured = true, Status = "working" },
         };
-        var factory = BuildFactoryWithFakes(reader, meter);
+        var factory = _hosts.Plain.Use(reader, meter);
         using var admin = factory.CreateAuthenticatedClient();
 
         var resp = await admin.GetAsync("/api/local-model/stats");
@@ -329,7 +499,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         {
             Current = new LocalModelStatsCurrent { Configured = true, Status = "working", Running = 3, Waiting = 1 },
         };
-        var factory = BuildFactoryWithFakes(reader, meter);
+        var factory = _hosts.Plain.Use(reader, meter);
         using var admin = factory.CreateAuthenticatedClient();
 
         var resp = await admin.GetAsync("/api/local-model/stats");
@@ -342,10 +512,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     [Fact]
     public async Task Chats_СчётчикВыключен_Пусто()
     {
-        using var factory = new TestWebApplicationFactory
-        {
-            ExtraConfig = { ["Subsystems:llm:Enabled"] = "false" },
-        };
+        var factory = _hosts.LlmOff;
         using var admin = factory.CreateAuthenticatedClient();
         var resp = await admin.GetAsync("/api/local-model/stats");
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -368,7 +535,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
                 Unsupported = ["vllm:kv_cache_usage_perc", "vllm:ram_tier_hits"],
             },
         };
-        var factory = BuildFactoryWithFakes(reader);
+        var factory = _hosts.Plain.Use(reader);
         using var client = factory.CreateAuthenticatedClient();
 
         var resp = await client.GetAsync("/api/local-model/stats");
@@ -397,7 +564,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
                 new GpuSample { Index = 1, Uuid = "GPU-uuid-2", Name = "NVIDIA GeForce RTX 3090", Utilization = 100, MemoryUsed = 24100, MemoryTotal = 24576, Temperature = 72, PowerDraw = 340, PowerLimit = 350 },
             ],
         };
-        var factory = BuildFactoryWithFakes(reader, gpuSampler: gpus);
+        var factory = _hosts.Plain.Use(reader, gpuSampler: gpus);
         using var admin = factory.CreateAuthenticatedClient();
 
         var resp = await admin.GetAsync("/api/local-model/stats");
@@ -420,7 +587,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         {
             Current = new LocalModelStatsCurrent { Configured = true, Status = "working" },
         };
-        var factory = BuildFactoryWithFakes(reader, gpuSampler: new FakeGpuSampler { Samples = [] });
+        var factory = _hosts.Plain.Use(reader, gpuSampler: new FakeGpuSampler { Samples = [] });
         using var admin = factory.CreateAuthenticatedClient();
 
         var resp = await admin.GetAsync("/api/local-model/stats");
@@ -440,7 +607,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         {
             Current = new LocalModelStatsCurrent { Configured = true, Status = "working", TensorParallel = 2 },
         };
-        var factory = BuildFactoryWithFakes(reader);
+        var factory = _hosts.Plain.Use(reader);
         using var admin = factory.CreateAuthenticatedClient();
 
         var resp = await admin.GetAsync("/api/local-model/stats");
@@ -457,7 +624,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         {
             Current = new LocalModelStatsCurrent { Configured = true, Status = "working" },
         };
-        var factory = BuildFactoryWithFakes(reader);
+        var factory = _hosts.Plain.Use(reader);
         using var admin = factory.CreateAuthenticatedClient();
 
         var resp = await admin.GetAsync("/api/local-model/stats");
@@ -478,10 +645,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         {
             Current = new LocalModelStatsCurrent { Configured = true, Status = "working", Engine = "vllm", Model = "qwen3.8-27b" },
         };
-        var factory = BuildFactoryWithFakes(reader);
-        factory.ExtraConfig["LlmProviders:local-qwen:Stats:Model"] = "Qwen3.8-Flash-Next IQ3_XXS";
-        factory.ExtraConfig["LlmProviders:local-qwen:Stats:EngineLabel"] = " Strata 0.2.7 ";
-        factory.ExtraConfig["LlmProviders:local-qwen:Stats:Topology"] = "разрез слоёв 26/22";
+        var factory = _hosts.LabelsSet.Use(reader);
         using var admin = factory.CreateAuthenticatedClient();
 
         var resp = await admin.GetAsync("/api/local-model/stats");
@@ -502,8 +666,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         {
             Current = new LocalModelStatsCurrent { Configured = true, Status = "working", Engine = "vllm", Model = "qwen3.8-27b" },
         };
-        var factory = BuildFactoryWithFakes(reader);
-        factory.ExtraConfig["LlmProviders:local-qwen:Stats:Model"] = "  ";
+        var factory = _hosts.LabelsBlank.Use(reader);
         using var admin = factory.CreateAuthenticatedClient();
 
         var resp = await admin.GetAsync("/api/local-model/stats");
@@ -521,10 +684,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     [Fact]
     public async Task ВертикальВыключена_ConfiguredFalse()
     {
-        using var factory = new TestWebApplicationFactory
-        {
-            ExtraConfig = { ["Subsystems:llm:Enabled"] = "false" },
-        };
+        var factory = _hosts.LlmOff;
         using var admin = factory.CreateAuthenticatedClient();
         var resp = await admin.GetAsync("/api/local-model/stats");
         resp.StatusCode.Should().Be(HttpStatusCode.OK, "выключенная вертикаль — 200, а не 500");
@@ -569,7 +729,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
                 LastHour: [],
                 Unsupported: []),
         };
-        var factory = BuildFactoryWithComfyStats(fake);
+        var factory = _hosts.Plain.UseComfy(fake);
         using var admin = factory.CreateAuthenticatedClient();
         var resp = await admin.GetAsync("/api/local-model/stats/media");
         resp.StatusCode.Should().Be(HttpStatusCode.OK, "не настроенный медиа-стенд — 200, а не 500");
@@ -585,7 +745,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     public async Task Media_АнонимизацияЧужих()
     {
         var fake = new FakeComfyStats();
-        var factory = BuildFactoryWithComfyStats(fake);
+        var factory = _hosts.Plain.UseComfy(fake);
         using var admin = factory.CreateAuthenticatedClient();
 
         // Ids из ТОЙ ЖЕ фабрики, что и запрос: sub в JWT генерируется на фабрику,
@@ -656,7 +816,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     public async Task Media_OwnerId_НеУтекает()
     {
         var fake = new FakeComfyStats();
-        var factory = BuildFactoryWithComfyStats(fake);
+        var factory = _hosts.Plain.UseComfy(fake);
         using var admin = factory.CreateAuthenticatedClient();
 
         var otherId = SubOf(factory.GetToken(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword));
@@ -699,7 +859,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     public async Task Media_Since_ФильтруетLastHour()
     {
         var fake = new FakeComfyStats();
-        var factory = BuildFactoryWithComfyStats(fake);
+        var factory = _hosts.Plain.UseComfy(fake);
         using var admin = factory.CreateAuthenticatedClient();
 
         var myId = SubOf(factory.GetToken(TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword));
@@ -737,7 +897,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     public async Task Media_Gpus_И_LoadedModels_Из_Узла()
     {
         var fake = new FakeComfyStats();
-        var factory = BuildFactoryWithComfyStats(fake);
+        var factory = _hosts.Plain.UseComfy(fake);
         using var admin = factory.CreateAuthenticatedClient();
 
         fake.Snapshot = new ComfyMediaStatsSnapshot(
@@ -780,7 +940,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     public async Task Media_БезДанных_Узла_GpusNull()
     {
         var fake = new FakeComfyStats();
-        var factory = BuildFactoryWithComfyStats(fake);
+        var factory = _hosts.Plain.UseComfy(fake);
         using var admin = factory.CreateAuthenticatedClient();
 
         fake.Snapshot = new ComfyMediaStatsSnapshot(
@@ -853,7 +1013,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     public async Task Media_НеАдмин_ТолькоСвоиСтроки()
     {
         var fake = new FakeComfyStats();
-        var factory = BuildFactoryWithComfyStats(fake);
+        var factory = _hosts.Plain.UseComfy(fake);
         using var nonAdmin = factory.CreateAuthenticatedClient(
             TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
 
@@ -891,7 +1051,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     public async Task Media_НеАдмин_GpusNull_И_QueueAhead()
     {
         var fake = new FakeComfyStats();
-        var factory = BuildFactoryWithComfyStats(fake);
+        var factory = _hosts.Plain.UseComfy(fake);
         using var nonAdmin = factory.CreateAuthenticatedClient(
             TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
 
@@ -918,7 +1078,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     public async Task Media_Админ_ScopeAll_ВсеСтроки()
     {
         var fake = new FakeComfyStats();
-        var factory = BuildFactoryWithComfyStats(fake);
+        var factory = _hosts.Plain.UseComfy(fake);
         using var admin = factory.CreateAuthenticatedClient();
 
         var myId = SubOf(factory.GetToken(TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword));
@@ -946,8 +1106,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     public async Task Media_MediaForUsersFalse_НеАдмин404_Админ200()
     {
         var fake = new FakeComfyStats();
-        var factory = BuildFactoryWithComfyStats(fake);
-        factory.ExtraConfig["LocalModelStats:MediaForUsers"] = "false";
+        var factory = _hosts.MediaOff.UseComfy(fake);
         using var nonAdmin = factory.CreateAuthenticatedClient(
             TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
         using var admin = factory.CreateAuthenticatedClient();
@@ -999,7 +1158,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
                 },
             ],
         };
-        var factory = BuildFactoryWithFakes(reader, gpuSampler: new FakeGpuSampler
+        var factory = _hosts.Plain.Use(reader, gpuSampler: new FakeGpuSampler
         {
             Samples = [new GpuSample { Index = 0, Uuid = "GPU-1", Name = "NVIDIA GeForce RTX 3090", Utilization = 99, MemoryUsed = 24000, MemoryTotal = 24576, Temperature = 71, PowerDraw = 338, PowerLimit = 350 }],
         });
@@ -1016,7 +1175,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     [Fact]
     public async Task Engines_НеАдмин_403()
     {
-        var factory = BonsaiFactory(new FakeDirectory());
+        var factory = _hosts.Bonsai.UseBonsai(new FakeDirectory());
         using var user = factory.CreateAuthenticatedClient(
             TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
         (await user.GetAsync("/api/local-model/engines")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
@@ -1027,7 +1186,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     [Fact]
     public async Task Engines_БезФлага_404()
     {
-        var factory = BonsaiFactory(new FakeDirectory(), flag: false);
+        var factory = _hosts.Bonsai.UseBonsai(new FakeDirectory(), flag: false);
         using var admin = factory.CreateAuthenticatedClient();
         (await admin.GetAsync("/api/local-model/engines")).StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
@@ -1041,7 +1200,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         var dir = new FakeDirectory();
         dir.Currents["main"] = new LocalModelStatsCurrent { Configured = false, Status = "notConnected" };
         dir.Currents["bonsai"] = new LocalModelStatsCurrent { Configured = true, Engine = "llama-server", Status = "working" };
-        var factory = BonsaiFactory(dir, mainConfigured: false);
+        var factory = _hosts.Bonsai.UseBonsai(dir, mainConfigured: false);
         using var admin = factory.CreateAuthenticatedClient();
 
         var body = await (await admin.GetAsync("/api/local-model/engines")).Content.ReadFromJsonAsync<JsonElement>();
@@ -1065,7 +1224,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     {
         var dir = new FakeDirectory();
         dir.Currents["main"] = new LocalModelStatsCurrent { Configured = true, Status = "working" };
-        var factory = BonsaiFactory(dir, mainConfigured: true, metricsUrl: false);
+        var factory = _hosts.BonsaiNoMetrics.UseBonsai(dir, mainConfigured: true);
         using var admin = factory.CreateAuthenticatedClient();
 
         var body = await (await admin.GetAsync("/api/local-model/engines")).Content.ReadFromJsonAsync<JsonElement>();
@@ -1080,7 +1239,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     [Fact]
     public async Task Engines_НичегоНеНастроено_НеПустойСписок()
     {
-        var factory = BonsaiFactory(new FakeDirectory(), engineInConfig: false);
+        var factory = _hosts.Plain.UseBonsai(new FakeDirectory());
         using var admin = factory.CreateAuthenticatedClient();
 
         var body = await (await admin.GetAsync("/api/local-model/engines")).Content.ReadFromJsonAsync<JsonElement>();
@@ -1094,8 +1253,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     [Fact]
     public async Task Engines_LlmВыключена_НеПустойСписок()
     {
-        var factory = new TestWebApplicationFactory();
-        factory.ExtraConfig["Subsystems:llm:Enabled"] = "false";
+        var factory = _hosts.LlmOff;
         SetFlag(factory, true);
         using var admin = factory.CreateAuthenticatedClient();
 
@@ -1116,7 +1274,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     {
         var dir = new FakeDirectory();
         dir.Currents["bonsai"] = new LocalModelStatsCurrent { Configured = true, Engine = "llama-server", Status = "working" };
-        var factory = BonsaiFactory(dir);
+        var factory = _hosts.Bonsai.UseBonsai(dir);
         using var user = factory.CreateAuthenticatedClient(
             TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
         (await user.GetAsync("/api/local-model/stats?engine=bonsai")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
@@ -1127,7 +1285,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     [Fact]
     public async Task StatsEngine_БезФлага_404()
     {
-        var factory = BonsaiFactory(new FakeDirectory(), flag: false);
+        var factory = _hosts.Bonsai.UseBonsai(new FakeDirectory(), flag: false);
         using var admin = factory.CreateAuthenticatedClient();
         (await admin.GetAsync("/api/local-model/stats?engine=bonsai")).StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
@@ -1136,7 +1294,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     [Fact]
     public async Task StatsEngine_НеизвестныйДвижок_ConfiguredFalse()
     {
-        var factory = BonsaiFactory(new FakeDirectory());
+        var factory = _hosts.Bonsai.UseBonsai(new FakeDirectory());
         using var admin = factory.CreateAuthenticatedClient();
 
         var resp = await admin.GetAsync("/api/local-model/stats?engine=nope");
@@ -1151,8 +1309,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     [Fact]
     public async Task StatsEngine_LlmВыключена_ConfiguredFalse()
     {
-        var factory = new TestWebApplicationFactory();
-        factory.ExtraConfig["Subsystems:llm:Enabled"] = "false";
+        var factory = _hosts.LlmOff;
         SetFlag(factory, true);
         using var admin = factory.CreateAuthenticatedClient();
 
@@ -1191,7 +1348,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
             Leases: [new EngineArbiterLease("съёмка хода", 37.5)],
             SeenAt: t0);
 
-        var factory = BonsaiFactory(dir, arbiter, new KindComfyStats());
+        var factory = _hosts.Bonsai.UseBonsai(dir, arbiter, new KindComfyStats());
         var ledger = factory.Services.GetRequiredService<EngineCallLedger>();
         var done = ledger.Begin("bonsai", "chat-retitle")!;
         done.Step(EngineCallLink.Insurance);
@@ -1267,7 +1424,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     {
         var dir = new FakeDirectory();
         dir.Currents["bonsai"] = new LocalModelStatsCurrent { Configured = true, Engine = "llama-server", Status = "working" };
-        var factory = BonsaiFactory(dir, new FakeArbiterReader());
+        var factory = _hosts.Bonsai.UseBonsai(dir, new FakeArbiterReader());
 
         var ledger = factory.Services.GetRequiredService<EngineCallLedger>();
         ledger.Begin("bonsai", "chat-retitle"); // без Step: ждёт пробы готовности/слота
@@ -1304,7 +1461,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
             Mode: null, QuietLeftS: null,
             Leases: [new EngineArbiterLease("съёмка хода", 37.5)],
             SeenAt: t0);
-        var factory = BonsaiFactory(dir, arbiter);
+        var factory = _hosts.Bonsai.UseBonsai(dir, arbiter);
         using var admin = factory.CreateAuthenticatedClient();
 
         var raw = await (await admin.GetAsync("/api/local-model/stats?engine=bonsai")).Content.ReadAsStringAsync();
@@ -1329,8 +1486,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
             Reachable: true, Bonsai: "waiting-vram", Reasons: ["comfy:a1b2c3d4"],
             SinceAt: t0, Yields: 1, Returns: 0, LastYieldS: 0.2, LastReturnS: null,
             Mode: "shared", QuietLeftS: null, Leases: null, SeenAt: t0);
-        var factory = BonsaiFactory(dir, arbiter);
-        factory.ExtraConfig["Subsystems:images:Enabled"] = "false";
+        var factory = _hosts.BonsaiImagesOff.UseBonsai(dir, arbiter);
 
         using var admin = factory.CreateAuthenticatedClient();
         var resp = await admin.GetAsync("/api/local-model/stats?engine=bonsai");
@@ -1355,7 +1511,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
             Configured = true, Engine = "llama-server", Status = "yielded", DownSince = null,
             Running = 0, Waiting = 0,
         };
-        var factory = BonsaiFactory(dir, new FakeArbiterReader());
+        var factory = _hosts.Bonsai.UseBonsai(dir, new FakeArbiterReader());
         using var admin = factory.CreateAuthenticatedClient();
 
         var body = await (await admin.GetAsync("/api/local-model/stats?engine=bonsai")).Content.ReadFromJsonAsync<JsonElement>();
@@ -1367,7 +1523,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
 
     // Фейковый ILocalModelStatsReader: тест задаёт Current и Points;
     // GetHistory фильтрует по since.
-    private sealed class FakeReader : ILocalModelStatsReader
+    public sealed class FakeReader : ILocalModelStatsReader
     {
         public LocalModelStatsCurrent Current { get; init; } = new() { Status = "notConnected", Configured = false };
         public List<LocalModelStatsPoint> Points { get; init; } = [];
@@ -1384,13 +1540,13 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     }
 
     // Фейковый IGpuSampler: пустой список — нет nvidia-smi (блок не показывать).
-    private sealed class NoGpuSampler : IGpuSampler
+    public sealed class NoGpuSampler : IGpuSampler
     {
         public Task<IReadOnlyList<GpuSample>> ReadAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<GpuSample>>([]);
     }
 
     // Фейковый IGpuSampler с управляемым списком карт: тест задаёт, сколько карт «видит» nvidia-smi.
-    private sealed class FakeGpuSampler : IGpuSampler
+    public sealed class FakeGpuSampler : IGpuSampler
     {
         public IReadOnlyList<GpuSample> Samples { get; set; } = [];
         public Task<IReadOnlyList<GpuSample>> ReadAsync(CancellationToken ct = default) => Task.FromResult(Samples);
@@ -1407,47 +1563,23 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
 
     // Фейковый ILocalModelTurnMeter: управляемый список живых чатов (settable — тест
     // заполняет его после старта фабрики, когда известен user.Id).
-    private sealed class FakeMeter : ILocalModelTurnMeter
+    public sealed class FakeMeter : ILocalModelTurnMeter
     {
         public List<TurnChatLive> Chats { get; set; } = [];
         public IReadOnlyList<TurnChatLive> ActiveChats() => Chats;
         public LocalModelTurnSummary? GetLastTurn(string sessionId) => null;
     }
 
-    // Фабрика с подменой ILocalModelStatsReader/IGpuSampler/ILocalModelTurnMeter на фейки
-    // (ExtraServices — после встроенных регистраций, перетирает forwarder подсистемы Llm).
-    private static TestWebApplicationFactory BuildFactoryWithFakes(FakeReader reader, ILocalModelTurnMeter? meter = null, IGpuSampler? gpuSampler = null)
-    {
-        var factory = new TestWebApplicationFactory();
-        factory.ExtraServices = services =>
-        {
-            services.AddSingleton<ILocalModelStatsReader>(reader);
-            services.AddSingleton<IGpuSampler>(gpuSampler ?? new NoGpuSampler());
-            if (meter is not null)
-                services.AddSingleton(meter);
-        };
-        return factory;
-    }
-
     // Фейковый IComfyStats: управляемый снимок (тест задаёт ComfyMediaStatsSnapshot).
-    private sealed class FakeComfyStats : IComfyStats
+    public sealed class FakeComfyStats : IComfyStats
     {
         public ComfyMediaStatsSnapshot? Snapshot { get; set; }
         public Task<ComfyMediaStatsSnapshot?> GetMediaAsync(CancellationToken ct) => Task.FromResult(Snapshot);
     }
 
-    // Фабрика с подменой IComfyStats на фейк: ExtraServices идёт после встроенных регистраций,
-    // поэтому перетирает ComfyStats подсистемы images (GetService<IComfyStats> → фейк).
-    private static TestWebApplicationFactory BuildFactoryWithComfyStats(FakeComfyStats comfy)
-    {
-        var factory = new TestWebApplicationFactory();
-        factory.ExtraServices = services => services.AddSingleton<IComfyStats>(comfy);
-        return factory;
-    }
-
     // Фейковый справочник дорожек (Б3c): тест задаёт снимки дорожек по именам; HistoryOf —
     // фиксированные точки для "bonsai", пусто для остальных.
-    private sealed class FakeDirectory : ILocalEngineStatsDirectory
+    public sealed class FakeDirectory : ILocalEngineStatsDirectory
     {
         public Dictionary<string, LocalModelStatsCurrent> Currents { get; } = new(StringComparer.Ordinal);
         public List<LocalModelStatsPoint> BonsaiPoints { get; } = [];
@@ -1463,7 +1595,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
 
     // Фейковый читатель состояния арбитра: подготовленный снимок по имени движка;
     // null — у движка нет StateUrl (или движок неизвестен) — как настоящий клиент.
-    private sealed class FakeArbiterReader : IEngineArbiterStateReader
+    public sealed class FakeArbiterReader : IEngineArbiterStateReader
     {
         public Dictionary<string, EngineArbiterSnapshot?> Snapshots { get; } = new(StringComparer.Ordinal);
 
@@ -1473,7 +1605,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
 
     // IComfyStats с реализованным швом вида задания (B4): "a1b2c3d4" → video; снимок — одна
     // карта Video (общая с ComfyUI). Остальные методы — как FakeComfyStats.
-    private sealed class KindComfyStats : IComfyStats
+    public sealed class KindComfyStats : IComfyStats
     {
         public Task<ComfyMediaStatsSnapshot?> GetMediaAsync(CancellationToken ct) =>
             Task.FromResult<ComfyMediaStatsSnapshot?>(new ComfyMediaStatsSnapshot(
@@ -1482,46 +1614,6 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
                 LoadedModels: [], SlotsUsed: 0, SlotsLimit: 4, Running: [], Queue: [], LastHour: [], Unsupported: []));
 
         public string? DescribePromptKind(string idPrefix) => idPrefix == "a1b2c3d4" ? "video" : null;
-    }
-
-    // Фабрика тестов второго стенда: настоящий NamedLocalEngines из конфига ("bonsai":
-    // BaseUrl/Model/StateUrl/FallbackRoute, MetricsUrl — по просьбе), фейковые директор и
-    // читатель арбитра вместо Llm-форвардеров (поллер при этом не строится), настоящий
-    // EngineCallLedger из DI (тест пишет в него до запроса). Флаг — по просьбе (по умолчанию
-    // выключен, как у свежего пользователя — образец HardwareEndpointTests).
-    private static TestWebApplicationFactory BonsaiFactory(
-        FakeDirectory dir, FakeArbiterReader? arbiter = null, IComfyStats? comfy = null,
-        bool mainConfigured = false, bool flag = true, bool engineInConfig = true, bool metricsUrl = true)
-    {
-        var factory = new TestWebApplicationFactory();
-        if (engineInConfig)
-        {
-            factory.ExtraConfig["LocalEngines:bonsai:BaseUrl"] = "http://127.0.0.1:18030";
-            factory.ExtraConfig["LocalEngines:bonsai:Model"] = "bonsai2-27b";
-            factory.ExtraConfig["LocalEngines:bonsai:StateUrl"] = "http://127.0.0.1:8090/state";
-            factory.ExtraConfig["LocalEngines:bonsai:FallbackRoute"] = "direct:minimax";
-            if (metricsUrl)
-                factory.ExtraConfig["LocalEngines:bonsai:MetricsUrl"] = "http://127.0.0.1:18030/metrics";
-        }
-        factory.ExtraServices = services =>
-        {
-            services.AddSingleton<ILocalModelStatsReader>(new FakeReader
-            {
-                Current = new LocalModelStatsCurrent
-                {
-                    Configured = mainConfigured,
-                    Status = mainConfigured ? "working" : "notConnected",
-                },
-            });
-            services.AddSingleton<ILocalEngineStatsDirectory>(dir);
-            if (arbiter is not null)
-                services.AddSingleton<IEngineArbiterStateReader>(arbiter);
-            if (comfy is not null)
-                services.AddSingleton<IComfyStats>(comfy);
-        };
-        if (flag)
-            SetFlag(factory, true);
-        return factory;
     }
 
     // Флаг per-user, как в HardwareEndpointTests: admin TestUsername.

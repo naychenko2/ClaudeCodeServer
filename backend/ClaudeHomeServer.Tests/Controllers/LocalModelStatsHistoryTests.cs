@@ -18,24 +18,103 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // Обе ручки — [Authorize(Roles="admin")] (не-админ — 403) плюс серверный флаг local-model-stats
 // (без него — 404). Файл — только по id записи и номеру варианта; 410 — файла нет (reason).
 [Trait("Category", "Host")]
-public class LocalModelStatsHistoryTests
+public class LocalModelStatsHistoryTests : IClassFixture<LocalModelStatsHistoryTests.Hosts>
 {
+    private readonly Hosts _hosts;
+
+    public LocalModelStatsHistoryTests(Hosts hosts) => _hosts = hosts;
+
+    // Хост на КОНФИГУРАЦИЮ, а не на тест: конфиг, часы и старт процесса — свойства хоста, а
+    // журнал, источник результатов и флаг тест заводит сам (Harness → HistoryHost.Use). Хосты
+    // поднимаются лениво и гасятся вместе с фикстурой
+    public sealed class Hosts : IDisposable
+    {
+        public HistoryHost Main { get; } = new();
+        // Часы и старт процесса — управляемые: старт индекса фиксирован 2026-10-15 12:00 UTC
+        public HistoryHost Clock { get; } = new(processStart: new DateTimeOffset(2026, 10, 15, 12, 0, 0, TimeSpan.Zero));
+        public HistoryHost MediaOff { get; } = new(config: ("LocalModelStats:MediaForUsers", "false"));
+        // Несуществующий ffmpeg: генерация миниатюры гарантированно не удаётся
+        public HistoryHost NoFfmpeg { get; } = new(config: ("AudioDsp:FfmpegPath",
+            Path.Combine(Path.GetTempPath(), "no-such-ffmpeg-" + Guid.NewGuid().ToString("N"))));
+
+        public void Dispose()
+        {
+            Main.Dispose();
+            Clock.Dispose();
+            MediaOff.Dispose();
+            NoFfmpeg.Dispose();
+        }
+    }
+
+    // Часы хоста Clock: «сейчас» задаёт тест; null — настоящее время
+    private sealed class SwitchableTime : TimeProvider
+    {
+        public DateTimeOffset? Now { get; set; }
+        public override DateTimeOffset GetUtcNow() => Now ?? base.GetUtcNow();
+    }
+
+    // Источник результатов в DI один; что он отвечает, решает тест
+    private sealed class SwitchableSource : IMediaHistoryResultSource
+    {
+        public FakeHistorySource Target { get; set; } = new();
+        public string Source => Target.Source;
+        public Task<MediaHistoryResolution?> ResolveAsync(MediaHistoryRef reference, int variant, CancellationToken ct)
+            => Target.ResolveAsync(reference, variant, ct);
+    }
+
+    public sealed class HistoryHost : TestWebApplicationFactory
+    {
+        private readonly SwitchableSource _source = new();
+        private readonly SwitchableTime? _time;
+
+        public HistoryHost(DateTimeOffset? processStart = null, params (string Key, string Value)[] config)
+        {
+            foreach (var (key, value) in config) ExtraConfig[key] = value;
+            if (processStart is not null) _time = new SwitchableTime();
+            ExtraServices = s =>
+            {
+                s.AddSingleton<IMediaHistoryResultSource>(_source);
+                if (_time is null) return;
+                s.AddSingleton<TimeProvider>(_time);
+                s.AddSingleton<MediaHistoryIndex>(sp => new MediaHistoryIndex(
+                    sp.GetRequiredService<IConfiguration>(),
+                    sp.GetRequiredService<UserStore>(),
+                    sp.GetService<TimeProvider>(),
+                    processStart));
+            };
+        }
+
+        // Чистое состояние теста: журнал и индекс пусты, источник и «сейчас» — как просит тест,
+        // флаг local-model-stats у админа включён
+        internal void Use(FakeHistorySource fake, DateTimeOffset? now)
+        {
+            _source.Target = fake;
+            if (_time is not null) _time.Now = now;
+            else if (now is not null) throw new InvalidOperationException("Часы задаются только на хосте Clock");
+
+            var index = Services.GetRequiredService<MediaHistoryIndex>();
+            index.Dispose(); // очищает записи, но не снимает признак «загружено»
+            typeof(MediaHistoryIndex).GetField("_loaded", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .SetValue(index, false);
+            if (Directory.Exists(index.Dir))
+            {
+                foreach (var file in Directory.GetFiles(index.Dir, "*.jsonl")) File.Delete(file);
+                var thumbs = Path.Combine(index.Dir, "thumbs");
+                if (Directory.Exists(thumbs)) Directory.Delete(thumbs, true);
+            }
+
+            var users = Services.GetRequiredService<UserStore>();
+            users.SetFeatureFlag(users.FindByUsername(TestUsername)!.Id, "local-model-stats", true);
+        }
+    }
+
     // Управляемый источник: тест задаёт Source и поведение Resolve (410-причины, число вариантов)
-    private sealed class FakeHistorySource : IMediaHistoryResultSource
+    public sealed class FakeHistorySource : IMediaHistoryResultSource
     {
         public string Source { get; set; } = "test-source";
         public Func<MediaHistoryRef, int, MediaHistoryResolution?>? Resolve { get; set; }
         public Task<MediaHistoryResolution?> ResolveAsync(MediaHistoryRef reference, int variant, CancellationToken ct)
             => Task.FromResult(Resolve?.Invoke(reference, variant));
-    }
-
-    // Фиксированный «now» (UTC) — детерминированный разбор period (today/24h/7d). Локальный
-    // день «today» считается от этого UTC через TimeZoneInfo.Local машины.
-    private sealed class FixedTimeProvider : TimeProvider
-    {
-        private readonly DateTimeOffset _utc;
-        public FixedTimeProvider(DateTimeOffset utc) => _utc = utc;
-        public override DateTimeOffset GetUtcNow() => _utc;
     }
 
     // Файл-результат во временном каталоге: резолвер истории отдаёт путь, который тест создал
@@ -61,34 +140,15 @@ public class LocalModelStatsHistoryTests
         // Реальный id не-админа (seconduser): для тестов изоляции «только свои записи»
         public string NonAdminId { get; }
 
-        public Harness(string source, Func<MediaHistoryRef, int, MediaHistoryResolution?>? resolve,
-            TimeProvider? time = null, DateTimeOffset? processStart = null, bool? mediaForUsers = null,
-            string? ffmpegPath = null)
+        public Harness(HistoryHost host, string source, Func<MediaHistoryRef, int, MediaHistoryResolution?>? resolve,
+            DateTimeOffset? now = null)
         {
             Fake = new FakeHistorySource { Source = source, Resolve = resolve };
-            Factory = new TestWebApplicationFactory();
-            if (mediaForUsers is { } mfu)
-                Factory.ExtraConfig["LocalModelStats:MediaForUsers"] = mfu ? "true" : "false";
-            // несуществующий ffmpeg: генерация миниатюры гарантированно не удаётся
-            if (ffmpegPath is not null)
-                Factory.ExtraConfig["AudioDsp:FfmpegPath"] = ffmpegPath;
-            Factory.ExtraServices = s =>
-            {
-                s.AddSingleton<IMediaHistoryResultSource>(Fake);
-                if (time is not null) s.AddSingleton<TimeProvider>(time);
-                if (processStart is not null)
-                    s.AddSingleton<ClaudeHomeServer.Services.MediaHistory.MediaHistoryIndex>(sp =>
-                        new ClaudeHomeServer.Services.MediaHistory.MediaHistoryIndex(
-                            sp.GetRequiredService<IConfiguration>(),
-                            sp.GetRequiredService<UserStore>(),
-                            sp.GetService<TimeProvider>(),
-                            processStart));
-            };
-            // Админу (testuser) включаем флаг local-model-stats
+            Factory = host;
+            host.Use(Fake, now);
             var users = Factory.Services.GetRequiredService<UserStore>();
             AdminId = users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
             NonAdminId = users.FindByUsername(TestWebApplicationFactory.SecondUsername)!.Id;
-            users.SetFeatureFlag(AdminId, "local-model-stats", true);
             Admin = Factory.CreateAuthenticatedClient();
             NonAdmin = Factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
         }
@@ -228,7 +288,12 @@ public class LocalModelStatsHistoryTests
                 enqueued.ToJsonString() + "\n" + started.ToJsonString() + "\n");
         }
 
-        public void Dispose() => Factory.Dispose();
+        // Хост общий на класс — гасит его фикстура; здесь только клиенты теста
+        public void Dispose()
+        {
+            Admin.Dispose();
+            NonAdmin.Dispose();
+        }
     }
 
     // Не-админ (seconduser, роль user) — 200 (ADR-030, 2026-10-18: история — любой
@@ -237,7 +302,7 @@ public class LocalModelStatsHistoryTests
     [Fact]
     public async Task НеАдмин_200_ScopeSelf()
     {
-        using var h = new Harness("test-source", null);
+        using var h = new Harness(_hosts.Main, "test-source", null);
         var resp = await h.NonAdmin.GetAsync("/api/local-model/history");
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
@@ -251,7 +316,7 @@ public class LocalModelStatsHistoryTests
     [Fact]
     public async Task НеАдмин_ТолькоСвоиЗаписи()
     {
-        using var h = new Harness("test-source", null);
+        using var h = new Harness(_hosts.Main, "test-source", null);
         h.WriteRecord("p_admin", "test-source");                       // админа
         h.WriteRecord("p_nonadmin", "test-source", ownerId: h.NonAdminId); // не-админа
 
@@ -275,7 +340,7 @@ public class LocalModelStatsHistoryTests
     [Fact]
     public async Task НеАдмин_ЛогинНеРаскрывается()
     {
-        using var h = new Harness("test-source", null);
+        using var h = new Harness(_hosts.Main, "test-source", null);
         h.WriteRecord("p_nonadmin", "test-source", ownerId: h.NonAdminId);
 
         // Не-админ: owner null (своя запись, логин не раскрываем).
@@ -296,7 +361,7 @@ public class LocalModelStatsHistoryTests
     [Fact]
     public async Task НеАдмин_LoginЧужой_НеРасширяет()
     {
-        using var h = new Harness("test-source", null);
+        using var h = new Harness(_hosts.Main, "test-source", null);
         h.WriteRecord("p_admin", "test-source");                        // админа (login=testuser)
         h.WriteRecord("p_nonadmin", "test-source", ownerId: h.NonAdminId); // не-админа
 
@@ -314,7 +379,7 @@ public class LocalModelStatsHistoryTests
     public async Task НеАдмин_ЧужойId_404()
     {
         using var file = new TempFile();
-        using var h = new Harness("test-source", (r, n) => new MediaHistoryResolution(1, file.FilePath, "image/png", null));
+        using var h = new Harness(_hosts.Main, "test-source", (r, n) => new MediaHistoryResolution(1, file.FilePath, "image/png", null));
         // Обе записи ДО первого запроса: индекс грузится один раз (Load идемпотентна).
         h.WriteRecord("p_admin", "test-source");                        // чужая (админа)
         h.WriteRecord("p_nonadmin", "test-source", ownerId: h.NonAdminId); // своя
@@ -336,7 +401,7 @@ public class LocalModelStatsHistoryTests
     [Fact]
     public void Index_ScopeSelf_ПустойВладелец_Пусто()
     {
-        using var h = new Harness("test-source", null);
+        using var h = new Harness(_hosts.Main, "test-source", null);
         h.WriteRecord("p_a", "test-source", ownerId: h.AdminId);
         h.WriteRecord("p_b", "test-source", ownerId: h.NonAdminId);
         h.WriteRecord("p_foreign", "test-source", ownerId: "");
@@ -362,7 +427,7 @@ public class LocalModelStatsHistoryTests
     [Fact]
     public async Task MediaForUsersFalse_НеАдмин404_Админ200()
     {
-        using var h = new Harness("test-source", null, mediaForUsers: false);
+        using var h = new Harness(_hosts.MediaOff, "test-source", null);
         h.WriteRecord("p_nonadmin", "test-source", ownerId: h.NonAdminId);
 
         var respUser = await h.NonAdmin.GetAsync("/api/local-model/history");
@@ -378,15 +443,13 @@ public class LocalModelStatsHistoryTests
     [Fact]
     public async Task АдминБезФлага_404()
     {
-        var factory = new TestWebApplicationFactory();
-        factory.ExtraServices = s => { };
-        using (factory)
-        using (var admin = factory.CreateAuthenticatedClient())
-        {
-            // Флаг не включён (тестовый users.json без override)
-            var resp = await admin.GetAsync("/api/local-model/history");
-            resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
-        }
+        using var h = new Harness(_hosts.Main, "test-source", null);
+        // Флаг не включён (как у пользователя без override)
+        var users = h.Factory.Services.GetRequiredService<UserStore>();
+        users.SetFeatureFlag(h.AdminId, "local-model-stats", false);
+
+        var resp = await h.Admin.GetAsync("/api/local-model/history");
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     // recordId с «..» — 404 (произвольное чтение диска не раскрываем). Мутация: убрать проверку — краснеет
@@ -394,7 +457,7 @@ public class LocalModelStatsHistoryTests
     public async Task RecordIdСДвумяТочками_404()
     {
         using var file = new TempFile();
-        using var h = new Harness("test-source", (r, n) => new MediaHistoryResolution(1, file.FilePath, "image/png", null));
+        using var h = new Harness(_hosts.Main, "test-source", (r, n) => new MediaHistoryResolution(1, file.FilePath, "image/png", null));
         var resp = await h.Admin.GetAsync("/api/local-model/history/a..b/file");
         resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
@@ -404,7 +467,7 @@ public class LocalModelStatsHistoryTests
     public async Task НеверныйN_404()
     {
         using var file = new TempFile();
-        using var h = new Harness("test-source", (r, n) => new MediaHistoryResolution(1, file.FilePath, "image/png", null));
+        using var h = new Harness(_hosts.Main, "test-source", (r, n) => new MediaHistoryResolution(1, file.FilePath, "image/png", null));
         h.WriteRecord("p1", "test-source");
         var resp = await h.Admin.GetAsync("/api/local-model/history/p1/file?n=5");
         resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
@@ -419,9 +482,8 @@ public class LocalModelStatsHistoryTests
     public async Task ThumbНеСделалась_404_АНеОригинал()
     {
         using var file = new TempFile();
-        using var h = new Harness("test-source",
-            (r, n) => new MediaHistoryResolution(1, file.FilePath, "image/png", null),
-            ffmpegPath: Path.Combine(Path.GetTempPath(), "no-such-ffmpeg-" + Guid.NewGuid().ToString("N")));
+        using var h = new Harness(_hosts.NoFfmpeg, "test-source",
+            (r, n) => new MediaHistoryResolution(1, file.FilePath, "image/png", null));
         h.WriteRecord("p1", "test-source");
 
         var resp = await h.Admin.GetAsync("/api/local-model/history/p1/file?size=thumb");
@@ -437,7 +499,7 @@ public class LocalModelStatsHistoryTests
     [Fact]
     public async Task Missing_410()
     {
-        using var h = new Harness("test-source", (r, n) => new MediaHistoryResolution(1, null, null, MediaHistoryGoneReason.Missing));
+        using var h = new Harness(_hosts.Main, "test-source", (r, n) => new MediaHistoryResolution(1, null, null, MediaHistoryGoneReason.Missing));
         h.WriteRecord("p1", "test-source");
         var resp = await h.Admin.GetAsync("/api/local-model/history/p1/file");
         resp.StatusCode.Should().Be(HttpStatusCode.Gone);
@@ -449,7 +511,7 @@ public class LocalModelStatsHistoryTests
     [Fact]
     public async Task Expired_410()
     {
-        using var h = new Harness("test-source", (r, n) => new MediaHistoryResolution(1, null, null, MediaHistoryGoneReason.Expired));
+        using var h = new Harness(_hosts.Main, "test-source", (r, n) => new MediaHistoryResolution(1, null, null, MediaHistoryGoneReason.Expired));
         h.WriteRecord("p1", "test-source");
         var resp = await h.Admin.GetAsync("/api/local-model/history/p1/file");
         resp.StatusCode.Should().Be(HttpStatusCode.Gone);
@@ -463,7 +525,7 @@ public class LocalModelStatsHistoryTests
     [Fact]
     public async Task SourceDisabled_410()
     {
-        using var h = new Harness("test-source", null);
+        using var h = new Harness(_hosts.Main, "test-source", null);
         h.WriteRecord("p1", "no-such-source");
         var resp = await h.Admin.GetAsync("/api/local-model/history/p1/file");
         resp.StatusCode.Should().Be(HttpStatusCode.Gone);
@@ -476,7 +538,7 @@ public class LocalModelStatsHistoryTests
     [Fact]
     public async Task Список_БезНазванияПроектаИЧата()
     {
-        using var h = new Harness("test-source", null);
+        using var h = new Harness(_hosts.Main, "test-source", null);
         h.WriteRecord("p1", "test-source");
         var resp = await h.Admin.GetAsync("/api/local-model/history");
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -496,7 +558,7 @@ public class LocalModelStatsHistoryTests
     [Fact]
     public async Task Список_ФильтрПоВиду()
     {
-        using var h = new Harness("test-source", null);
+        using var h = new Harness(_hosts.Main, "test-source", null);
         h.WriteRecord("p1", "test-source");
         var resp = await h.Admin.GetAsync("/api/local-model/history?kind=image");
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -511,7 +573,7 @@ public class LocalModelStatsHistoryTests
     [Fact]
     public async Task Interrupted_ОтдельныйИсход()
     {
-        using var h = new Harness("test-source", null);
+        using var h = new Harness(_hosts.Main, "test-source", null);
         h.WriteBareInterrupted("p1", "test-source");
         var resp = await h.Admin.GetAsync("/api/local-model/history?outcome=interrupted");
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -529,7 +591,7 @@ public class LocalModelStatsHistoryTests
     [Fact]
     public async Task ГолыйEnqueued_ПоляNull()
     {
-        using var h = new Harness("test-source", null);
+        using var h = new Harness(_hosts.Main, "test-source", null);
         h.WriteBareInterrupted("p1", "test-source");
         var resp = await h.Admin.GetAsync("/api/local-model/history");
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -549,7 +611,7 @@ public class LocalModelStatsHistoryTests
     public async Task Причина410_ПроверяетсяДоN()
     {
         // no_result: исход не completed, файлов нет (VariantCount==0)
-        using (var h = new Harness("test-source",
+        using (var h = new Harness(_hosts.Main, "test-source",
             (r, n) => new MediaHistoryResolution(0, null, null, MediaHistoryGoneReason.NoResult)))
         {
             h.WriteRecord("p1", "test-source");
@@ -560,7 +622,7 @@ public class LocalModelStatsHistoryTests
         }
 
         // missing: файл удалён (VariantCount==0)
-        using (var h = new Harness("test-source",
+        using (var h = new Harness(_hosts.Main, "test-source",
             (r, n) => new MediaHistoryResolution(0, null, null, MediaHistoryGoneReason.Missing)))
         {
             h.WriteRecord("p2", "test-source");
@@ -572,7 +634,7 @@ public class LocalModelStatsHistoryTests
 
         // available: Reason==null, 1 вариант; неверный n=5 → 404
         using (var file = new TempFile())
-        using (var h = new Harness("test-source",
+        using (var h = new Harness(_hosts.Main, "test-source",
             (r, n) => new MediaHistoryResolution(1, file.FilePath, "image/png", null)))
         {
             h.WriteRecord("p3", "test-source");
@@ -589,7 +651,7 @@ public class LocalModelStatsHistoryTests
     [InlineData("period", "foo")]
     public async Task НезнакомоеЗначениеФильтра_400(string param, string value)
     {
-        using var h = new Harness("test-source", null);
+        using var h = new Harness(_hosts.Main, "test-source", null);
         var resp = await h.Admin.GetAsync($"/api/local-model/history?{param}={value}");
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString()!
@@ -603,7 +665,7 @@ public class LocalModelStatsHistoryTests
     [InlineData("period", "today")]
     public async Task ВалидноеЗначениеФильтра_200(string param, string value)
     {
-        using var h = new Harness("test-source", null);
+        using var h = new Harness(_hosts.Main, "test-source", null);
         var resp = await h.Admin.GetAsync($"/api/local-model/history?{param}={value}");
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
     }
@@ -615,7 +677,7 @@ public class LocalModelStatsHistoryTests
     public async Task Period_ФильтруетПоВремени()
     {
         var now = new DateTimeOffset(2026, 10, 15, 12, 0, 0, TimeSpan.Zero);
-        using var h = new Harness("test-source", null, new FixedTimeProvider(now));
+        using var h = new Harness(_hosts.Clock, "test-source", null, now);
         h.WriteRecordAt("r_today", "test-source", "2026-10-15T12:00:00Z", "2026-10-15"); // = now, сегодня
         h.WriteRecordAt("r_2d", "test-source", "2026-10-13T12:00:00Z", "2026-10-13");    // 2 дня назад
 
@@ -645,8 +707,8 @@ public class LocalModelStatsHistoryTests
     public async Task ПрерванныйХод_ПослеРестарта_Interrupted()
     {
         var now = new DateTimeOffset(2026, 10, 15, 13, 0, 0, TimeSpan.Zero);
-        var processStart = new DateTimeOffset(2026, 10, 15, 12, 0, 0, TimeSpan.Zero);
-        using var h = new Harness("test-source", null, time: new FixedTimeProvider(now), processStart: processStart);
+        // Старт процесса — 2026-10-15 12:00 UTC, задан хосту Clock
+        using var h = new Harness(_hosts.Clock, "test-source", null, now);
 
         // До рестарта: enqueued+started в 10:00, finished НЕ записан → interrupted
         h.WriteBareRunning("p_old", "test-source", "2026-10-15T10:00:00Z", "2026-10-15");

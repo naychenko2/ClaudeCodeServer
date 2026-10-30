@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Tasks.Projector;
+using ClaudeHomeServer.Tasks.Tests.Fixtures;
 
 namespace ClaudeHomeServer.Tasks.Tests;
 
@@ -920,5 +921,93 @@ public class FeatureStepProgressTests
 
         // открытая фича: Summary нет.
         Run(Feature(), Step("s", "Ш1", 1)).Summary.Should().BeNull();
+    }
+
+    // ─── Ш7: инвариант «корзины вкладки Шагов = stepProgress» ──────────────────────────────────
+
+    // Корзина цепочки — то же правило, что у фронта (FeatureProdCards.bucketOf): снят → принят →
+    // pending = ревью; running при всех закрытых задачах = ревью; иначе работа.
+    private static string BucketOf(FeatureStepChain c, IReadOnlyList<TaskItem> all)
+    {
+        if (c.Outcome == "withdrawn" || c.Outcome == "accepted") return c.Outcome;
+        if (c.Outcome == "pending") return "review";
+        var own = all.Where(t => c.TaskIds.Contains(t.Id)).ToList();
+        bool allDone = own.Count > 0 && own.All(t => t.Status == TaskItemStatus.Done);
+        return c.Outcome == "running" && allDone ? "review" : "work";
+    }
+
+    private static void AssertBucketsMatchProgress(FeatureRun run, IReadOnlyList<TaskItem> all)
+    {
+        var p = run.StepProgress;
+        var chains = run.StepChains;
+
+        chains.Select(c => c.StepRef).Should().OnlyHaveUniqueItems("цепочка на шаг одна, доработка корзину не плодит");
+        var byBucket = chains.GroupBy(c => BucketOf(c, all)).ToDictionary(g => g.Key, g => g.Count());
+        int B(string k) => byBucket.GetValueOrDefault(k);
+
+        B("accepted").Should().Be(p.Accepted);
+        B("review").Should().Be(p.Review);
+        B("work").Should().Be(p.Work);
+        B("withdrawn").Should().Be(p.Withdrawn);
+        // Цепочки вне «снят» + шаги плана без задачи (у них цепочки нет) = знаменатель.
+        (chains.Count - B("withdrawn") + p.NotCreated).Should().Be(p.Total);
+        p.Total.Should().Be(p.Accepted + p.Review + p.Work + p.NotCreated);
+        // «В master» — ортогональный признак: в сумму не входит и не больше числа цепочек.
+        chains.Count(c => c.InMaster).Should().Be(p.InMaster);
+        p.InMaster.Should().BeLessThanOrEqualTo(chains.Count);
+    }
+
+    [Fact]
+    public void КорзиныЦепочек_Фикстура_СуммаРавнаStepProgress()
+    {
+        var tasks = FeatureRunFixture.Load("feat-step-chains.json");
+        var epic = tasks.Single(t => t.Role == TaskRoles.Feature);
+        var run = FeatureProjector.Build(epic, tasks);
+
+        run.StepChains.Should().NotBeEmpty();
+        run.StepProgress.Withdrawn.Should().BeGreaterThan(0, "в фикстуре есть снятый шаг");
+        AssertBucketsMatchProgress(run, tasks);
+    }
+
+    // Все четыре корзины + notCreated + доработка + «в master» одновременно.
+    [Fact]
+    public void КорзиныЦепочек_ВсеКорзиныИДоработка_СуммаРавнаTotal_InMasterВнеСуммы()
+    {
+        var tasks = new List<TaskItem>
+        {
+            Feature(),
+            Plan("p", 0, ("A", "back"), ("B", "back"), ("C", "back"), ("D", "back"), ("E", "back"), ("N", "front")),
+            Step("sA", "A", 1), Verdict("rA", TaskRoles.Review, TaskVerdicts.Accepted, 3, "sA"),
+            Step("sB", "B", 1), Step("sB2", "B", 2, TaskItemStatus.InProgress),
+            Step("sC", "C", 1),
+            Step("sD", "D", 1), Rework("wD", "D", 10, ["rD"], verdict: TaskVerdicts.Withdrawn),
+            Verdict("rD", TaskRoles.Review, TaskVerdicts.Returned, 3, "sD"),
+            Step("sE", "E", 1), Verdict("rE", TaskRoles.Review, TaskVerdicts.Returned, 3, "sE"),
+            Rework("wE", "E", 5, ["rE"], TaskItemStatus.InProgress),
+            new() { Id = "m", FeatureId = Epic, Role = TaskRoles.Merge, Status = TaskItemStatus.Done, CreatedAt = T0.AddMinutes(20), CompletedAt = T0.AddMinutes(21) },
+        };
+        var run = FeatureProjector.Build(tasks[0], tasks, T0.AddDays(1));
+
+        run.StepProgress.NotCreated.Should().Be(1);
+        run.StepProgress.InMaster.Should().BeGreaterThan(0);
+        run.StepChains.Select(c => c.StepRef).Should().OnlyHaveUniqueItems();
+        AssertBucketsMatchProgress(run, tasks);
+    }
+
+    // План с пересечением (B3): вытесненный план и его шаги не раздувают ни цепочки, ни знаменатель.
+    [Fact]
+    public void КорзиныЦепочек_ПланСПересечением_СуммаРавнаTotal()
+    {
+        var tasks = new List<TaskItem>
+        {
+            Feature(),
+            Plan("p1", 0, ("A", "back"), ("B", "back"), ("C", "back")),
+            Plan("p2", 5, ("A", "back"), ("B", "back")),
+            Step("sA", "A", 6), Step("sC", "C", 6),
+        };
+        var run = FeatureProjector.Build(tasks[0], tasks, T0.AddDays(1));
+
+        run.StepProgress.Total.Should().Be(3, "действующий p2 [A,B] плюс заведённый C");
+        AssertBucketsMatchProgress(run, tasks);
     }
 }

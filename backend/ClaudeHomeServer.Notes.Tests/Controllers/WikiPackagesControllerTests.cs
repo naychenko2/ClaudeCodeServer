@@ -475,6 +475,231 @@ public class WikiPackagesControllerTests : IDisposable
         LogLines("apply").Should().BeEmpty();
     }
 
+    // ─── 13–17. Ревью S4g: карточка источника — точная, а не «первая в разделе» ────
+    //
+    // Путь решения человека (контекста нет) берёт карточку с диска в разделе самого пакета.
+    // Здесь проверяется сам выбор: две карточки одного origin+ref — не «первая», а отказ;
+    // чужой origin и чужой раздел — не карточка; ровно одна — сноска ведёт именно на неё.
+
+    [Fact]
+    public async Task ДвеКарточкиОдногоИсточника_ОтказСПричиной_ЦитатаНеПриписана_РешениеСохранено()
+    {
+        // В разделе пакета лежат две карточки одного origin+ref — прежняя и новая версия
+        // одного источника. Взять первую — отнести сноску к версии, которую человек не
+        // выбирал: отказ с причиной, пакет «apply_failed», решения на диске (ревью S4g, MAJOR).
+        // Мутация «брать первое совпадение» (вместо проверки dup — matches[0]): краснеют Code
+        // и StatusOnDisk этого теста — применение дошло бы до записи страницы.
+        var id = await NewRealPackage([RealOp()]);
+        var otherVersion = """
+            ---
+            type: source
+            origin: session
+            ref: session:chat-1#m1-9
+            hash: fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
+            captured: 2026-10-20
+            aliases: []
+            owns: []
+            sources: []
+            status: active
+            ---
+
+            # Прежняя версия карточки
+            """;
+        await WriteViaKeeper("Общее/Прежняя-версия-карточки.md", otherVersion);
+        var before = File.ReadAllText(Path.Combine(WikiPaths.Pages(_dir, User), Page));
+
+        var dto = ((OkObjectResult)await Controller().Decide(id, new WikiDecideRequest(0, true, "подтверждаю")))
+            .Value.Should().BeAssignableTo<WikiDecisionDto>().Which;
+
+        dto.Apply!.Applied.Should().BeFalse();
+        dto.Apply.Code.Should().Be(WikiApplyService.CodeSourceUnavailable);
+        dto.Apply.Reason.Should().Contain("несколько версий источника, нужна точная карточка");
+        dto.Package.Status.Should().Be(WikiPackage.StatusApplyFailed);
+        StatusOnDisk(id).Should().Be(WikiPackage.StatusApplyFailed);
+        ReadOp(id).HumanDecision.Should().Be(WikiPackage.HumanAccepted, "решения записаны до применения");
+        // Ни одной из версий цитата не приписана: страница байт в байт прежняя, журнала нет.
+        File.ReadAllText(Path.Combine(WikiPaths.Pages(_dir, User), Page)).Should().Be(before);
+        LogLines("apply").Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task РовноОднаКарточкаИсточника_СноскаНовогоУтвержденияВедётНаНеё()
+    {
+        // Рядом в разделе — карточка соседнего источника («chat-10» против названного
+        // «chat-1»): при неточной сверке ref она совпала бы тоже, и сноска ушла бы на неё.
+        // Ровно одна карточка названа — сноска новой строки обязана вести именно на неё
+        // (ревью S4g, п. 2). Мутация «снять границу «#» в RefMatches» (StartsWith(wanted)
+        // без «#»): сошлись бы обе — краснеют Applied и строка s2 этого теста.
+        var id = await NewRealPackage([RealOp()], sourceRef: "chat-1");
+        var neighbour = """
+            ---
+            type: source
+            origin: session
+            ref: session:chat-10#m1-9
+            hash: fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
+            captured: 2026-10-29
+            aliases: []
+            owns: []
+            sources: []
+            status: active
+            ---
+
+            # Карточка другого чата
+            """;
+        await WriteViaKeeper("Общее/Карточка-другого-чата.md", neighbour);
+
+        var dto = ((OkObjectResult)await Controller().Decide(id, new WikiDecideRequest(0, true, "подтверждаю")))
+            .Value.Should().BeAssignableTo<WikiDecisionDto>().Which;
+
+        dto.Apply!.Applied.Should().BeTrue("ровно одна карточка названного источника — применять нечем только если её нет");
+        var after = File.ReadAllText(Path.Combine(WikiPaths.Pages(_dir, User), Page));
+        after.Should().Contain($"{Claim} [^s2]");
+        after.Should().Contain($"[^s2]: [[{CardTitle}]]");
+        after.Should().NotContain("[^s2]: [[Карточка другого чата]]", "соседний источник — не цель этой сноски");
+    }
+
+    [Fact]
+    public async Task КарточкаТогоЖеRefДругогоOrigin_НеКарточкаИсточника_ОтказПрименения()
+    {
+        // В разделе — карточка с той же строкой ref, но другого origin (task вместо session):
+        // это не источник пакета, и сноска на карточку чужого происхождения была бы молчаливой
+        // подменой источника (ревью S4g, M1). Мутация «снять сверку origin» (cardOrigin !=
+        // s.Origin): совпадение по одному ref выиграло бы — краснеют Code и StatusOnDisk.
+        var id = await NewRealPackage([RealOp()]);
+        var foreignOrigin = """
+            ---
+            type: source
+            origin: task
+            ref: session:chat-1#m1-9
+            hash: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+            captured: 2026-10-30
+            aliases: []
+            owns: []
+            sources: []
+            status: active
+            ---
+
+            # Карточка чата
+            """;
+        // Та же страница карточки, другой origin: в разделе ровно одна type: source, и она
+        // — чужого происхождения.
+        await WriteViaKeeper(CardPageKey, foreignOrigin);
+        var before = File.ReadAllText(Path.Combine(WikiPaths.Pages(_dir, User), Page));
+
+        var dto = ((OkObjectResult)await Controller().Decide(id, new WikiDecideRequest(0, true, "подтверждаю")))
+            .Value.Should().BeAssignableTo<WikiDecisionDto>().Which;
+
+        dto.Apply!.Applied.Should().BeFalse();
+        dto.Apply.Code.Should().Be(WikiApplyService.CodeSourceUnavailable);
+        dto.Apply.Reason.Should().Contain("карточка источника пакета не найдена");
+        StatusOnDisk(id).Should().Be(WikiPackage.StatusApplyFailed);
+        File.ReadAllText(Path.Combine(WikiPaths.Pages(_dir, User), Page)).Should().Be(before);
+        LogLines("apply").Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task КарточкаИзДругогоРаздела_ТотЖеOriginИRef_ОтказПрименения()
+    {
+        // Пакет в разделе своего проекта; карточка того же origin+ref — в «Общем», то есть в
+        // цепочке вверх: она в состоянии проверки (право на ссылку у цепочки есть), но не в
+        // разделе пакета — этот путь чужих разделов не читает (ADR-036, решение 1; ревью S4g,
+        // M1). Мутация «снять сверку раздела» (WikiSections.Parse(d.Path) != section): карточка
+        // из «Общего» подошла бы, и краснеют Code и StatusOnDisk этого теста.
+        var project = CreateServerProject("Проект карточки");
+        var section = "projects/" + project.Id;
+        var projectPage = $"Проекты/{project.Id}/X.md";
+        await _keeper.EnsureInitializedAsync(User);
+        await WriteViaKeeper(CardPageKey, SourceCardFile);
+        await WriteViaKeeper(section, projectPage, BasePage);
+        var pkg = new WikiPackage
+        {
+            Id = WikiPackageStore.NewId(),
+            Section = section,
+            Sources = [new WikiPackage.SourceRef("session", "session:chat-1#m1-9")],
+            Operations = [RealOp(page: projectPage, basePage: projectPage)],
+            Status = WikiPackage.StatusChecking,
+        };
+        WikiPackageStore.Create(WikiPaths.Root(_dir, User), pkg).Ok.Should().BeTrue();
+        WikiPackageStore.Transition(WikiPaths.Root(_dir, User), pkg.Id, WikiPackage.StatusProposed).Ok.Should().BeTrue();
+        var before = File.ReadAllText(Path.Combine(WikiPaths.Pages(_dir, User), projectPage));
+
+        var dto = ((OkObjectResult)await Controller().Decide(pkg.Id, new WikiDecideRequest(0, true, "подтверждаю")))
+            .Value.Should().BeAssignableTo<WikiDecisionDto>().Which;
+
+        dto.Apply!.Applied.Should().BeFalse();
+        dto.Apply.Code.Should().Be(WikiApplyService.CodeSourceUnavailable);
+        StatusOnDisk(pkg.Id).Should().Be(WikiPackage.StatusApplyFailed);
+        File.ReadAllText(Path.Combine(WikiPaths.Pages(_dir, User), projectPage)).Should().Be(before);
+        LogLines("apply").Should().BeEmpty();
+    }
+
+    // ─── 18–19. Ревью S4g, M2/M3: сбой применения и исчезнувший пакет — ответ, а не 500/404 ─
+
+    [Fact]
+    public async Task ИсключениеИзПрименения_Не500_РезультатОтказСПричиной_СтатусНеДвигается()
+    {
+        // Сбой, вышедший из ApplyAsync наружу (здесь — чужой формат владельца: Root бросает
+        // ArgumentException до заявки), не даёт 500: «Входящие» отвечают результатом-отказом с
+        // причиной, решения человека целы, пакет не двинут (ревью S4g, M3). Мутация «снять
+        // try/catch» в ApplyOutcomeAsync: тест падает с исключением, а не с ответом.
+        var id = await NewRealPackage([RealOp()]);
+        var root = WikiPaths.Root(_dir, User);
+        var decided = WikiPackageStore.DecideOperation(root, id, 0, true, "подтверждаю");
+        decided.Ok.Should().BeTrue(decided.Reason);
+
+        var dto = ((OkObjectResult)await Controller().AfterDecision("..", root, decided.Package!))
+            .Value.Should().BeAssignableTo<WikiDecisionDto>().Which;
+
+        dto.Apply!.Applied.Should().BeFalse();
+        dto.Apply.Code.Should().Be(WikiApplyService.CodeInternal);
+        dto.Apply.Reason.Should().Contain("внутренний сбой применения");
+        StatusOnDisk(id).Should().Be(WikiPackage.StatusAccepted, "сбой до заявки не ведёт пакет в «applying»");
+        LogLines("apply").Should().BeEmpty();
+    }
+
+    [Fact]
+    public void СбойПослеЗаявки_ПакетЗакрытApplyFailed_АНеЗависаетВApplying()
+    {
+        // «applying» без закрытия доводит только сторож старта; здесь сбой закрывается
+        // переходом сразу (ревью S4g, M3). Мутация «не закрывать переходом» (убрать Transition
+        // в CrashedApply): StatusOnDisk краснеет — пакет остался бы в «applying».
+        var id = NewPackage(WikiPackage.StatusProposed, "common", Op(WikiPackage.OpAppend, WikiPackage.DecisionAuto));
+        var root = WikiPaths.Root(_dir, User);
+        WikiPackageStore.Transition(root, id, WikiPackage.StatusApplying).Ok.Should().BeTrue();
+
+        var r = WikiPackagesController.CrashedApply(root, id, new IOException("диск отказал"));
+
+        r.Applied.Should().BeFalse();
+        r.Code.Should().Be(WikiApplyService.CodeInternal);
+        r.Reason.Should().Contain("внутренний сбой применения");
+        StatusOnDisk(id).Should().Be(WikiPackage.StatusApplyFailed);
+    }
+
+    [Fact]
+    public async Task ПакетИсчезПослеРешения_Не404_ОтветСРезультатомПрименения()
+    {
+        // Файл пакета исчез между решением и перечитыванием (гонка с удалением): 404 здесь —
+        // пустой отказ там, где человек только что вынес решение и где есть его исход. Ответ
+        // — 200 с результатом применения и последней прочитанной карточкой (ревью S4g, M2).
+        // Мутация «вернуть NotFound()»: краснеет весь тест — тела не будет.
+        var id = await NewRealPackage([RealOp()]);
+        var root = WikiPaths.Root(_dir, User);
+        var decided = WikiPackageStore.DecideOperation(root, id, 0, true, "подтверждаю");
+        decided.Ok.Should().BeTrue(decided.Reason);
+        File.Delete(Path.Combine(WikiPaths.Keeper(_dir, User), "packages", id + ".json"));
+
+        var dto = ((OkObjectResult)await Controller().AfterDecision(User, root, decided.Package!))
+            .Value.Should().BeAssignableTo<WikiDecisionDto>().Which;
+
+        dto.Apply!.Applied.Should().BeFalse();
+        dto.Apply.Code.Should().Be(WikiApplyService.CodeClaim, "применять нечем: пакета нет на диске");
+        dto.Apply.Reason.Should().NotBeNullOrWhiteSpace("причина — текст для человека");
+        dto.Package.Id.Should().Be(id);
+        dto.Package.Status.Should().Be(WikiPackage.StatusAccepted, "последняя прочитанная карточка");
+        dto.Package.Operations[0].HumanDecision.Should().Be(WikiPackage.HumanAccepted, "решение видно в ответе");
+        LogLines("apply").Should().BeEmpty();
+    }
+
     // Пакет боевой пробы: карточка и страница записаны Хранителем (манифест согласован —
     // применения без дрейфа нет), сам в proposed с одной спорной операцией. sourceRef —
     // карточка, которую называет пакет: с другой на диске это «нет карточки источника».
@@ -497,9 +722,11 @@ public class WikiPackagesControllerTests : IDisposable
         return pkg.Id;
     }
 
-    private async Task WriteViaKeeper(string pageKey, string content)
+    private async Task WriteViaKeeper(string pageKey, string content) => await WriteViaKeeper("common", pageKey, content);
+
+    private async Task WriteViaKeeper(string section, string pageKey, string content)
     {
-        var r = await _keeper.WritePageAsync(User, "common", pageKey, content);
+        var r = await _keeper.WritePageAsync(User, section, pageKey, content);
         r.Status.Should().Be(WikiOpStatus.Applied, r.Reason);
     }
 

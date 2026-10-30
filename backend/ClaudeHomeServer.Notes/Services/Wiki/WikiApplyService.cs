@@ -89,8 +89,10 @@ public sealed class WikiApplyService
     public const string CodeOff = "wiki_apply_off";
     public const string CodeSource = "wiki_apply_source";
     // Путь решения человека (S4g): карточки источника пакета в его разделе на диске нет —
-    // применять нечем. Отказ после заявки: пакет «apply_failed» с причиной, решения человека
-    // сохранены (они записаны до применения).
+    // применять нечем. Тот же код и на неоднозначности (ревью S4g, MAJOR): источник опознан
+    // несколькими карточками раздела — прежняя и новая версия, точная не названа. Отказ после
+    // заявки: пакет «apply_failed» с причиной, решения человека сохранены (они записаны до
+    // применения).
     public const string CodeSourceUnavailable = "wiki_apply_source_unavailable";
     public const string CodeManifest = "wiki_apply_manifest";
     public const string CodeDrift = "wiki_apply_drift";
@@ -613,13 +615,27 @@ public sealed class WikiApplyService
         Dictionary<string, string> sourceTexts;
         if (context is null)
         {
-            var found = FindSourceCard(state, section, package.Sources);
-            if (found is null)
+            var matches = FindSourceCards(state, section, package.Sources);
+            if (matches.Count == 0)
                 return FailApply(root, package.Id, CodeSourceUnavailable,
                     "карточка источника пакета не найдена в его разделе «" + section + "»: применять нечего — "
                     + string.Join(", ", package.Sources.Select(s => s.Origin + ":" + s.Ref)));
-            card = found.Value.Draft;
-            cardTitle = found.Value.Title;
+            // Неоднозначность — не выбор первой (ревью S4g, MAJOR): один источник опознан
+            // несколькими карточками раздела (его прежняя и новая версия). Сноска ушла бы на
+            // ту из них, что раньше легла в обход, — а не на ту, которую назвал человек.
+            // Отказ с причиной; решения человека на диске сохранены, как при любом отказе.
+            var dup = matches.GroupBy(m => m.SourceIndex).FirstOrDefault(g => g.Count() > 1);
+            if (dup is not null)
+            {
+                var src = package.Sources[dup.Key];
+                return FailApply(root, package.Id, CodeSourceUnavailable,
+                    $"несколько версий источника, нужна точная карточка: «{src.Origin}:{src.Ref}» опознан "
+                    + $"в разделе «{section}» {dup.Count()} карточками ({string.Join(", ", dup.Select(m => m.Draft.Path))}): "
+                    + "применять нечем");
+            }
+            var found = matches[0];
+            card = found.Draft;
+            cardTitle = found.Title;
             sourceTexts = new Dictionary<string, string>(StringComparer.Ordinal);
         }
         else
@@ -778,16 +794,24 @@ public sealed class WikiApplyService
         return null;
     }
 
-    /// <summary>Карточка источника пакета — страница type: source в разделе САМОГО пакета
+    /// <summary>Карточки источника пакета — страницы type: source в разделе САМОГО пакета
     /// (чужих разделов путь решения человека не читает: ADR-036, решение 1), чьи origin и ref
     /// совпадают с одним из источников пакета. Её записал захват при разборе (S6h), и она уже
     /// прочитана в состоянии раздела — отдельного чтения файла нет. Терпимость сверки — та же,
     /// чем мерит откат по источнику (WikiRetractService.SourceMatches): целое совпадение, карточ
     /// с диапазоном против ссылки без него и старая форма Ref без префикса origin: две формулы
-    /// одного источника разошлись бы когда-нибудь.</summary>
-    private static (WikiGate.Draft Draft, string Title)? FindSourceCard(
+    /// одного источника разошлись бы когда-нибудь.
+    ///
+    /// Возвращает ВСЕ совпадения, а не первое: в разделе могут лежать прежняя и новая версия
+    /// одного источника — одна и та же origin+ref в двух карточках. Выбрать первую значило бы
+    /// отнести сноску к версии, которую человек не выбирал (ревью S4g, MAJOR): пустой список —
+    /// «карточки нет», несколько совпадений на один источник — «несколько версий»; решает
+    /// вызывающий (PrepareChecked), ему нужен и текст отказа, и путь каждой карточки.
+    /// Одна карточка на один источник — тот же выбор, что был.</summary>
+    private static List<(WikiGate.Draft Draft, string Title, int SourceIndex)> FindSourceCards(
         List<WikiGate.Draft> state, string section, IReadOnlyList<WikiPackage.SourceRef> sources)
     {
+        var found = new List<(WikiGate.Draft Draft, string Title, int SourceIndex)>();
         foreach (var d in state)
         {
             if (WikiSections.Parse(d.Path) != section)
@@ -801,18 +825,24 @@ public sealed class WikiApplyService
             var title = page.Title;
             if (string.IsNullOrEmpty(cardRef) || string.IsNullOrWhiteSpace(title))
                 continue;
-            foreach (var s in sources)
+            for (var i = 0; i < sources.Count; i++)
             {
+                var s = sources[i];
                 if (s is null || string.IsNullOrEmpty(s.Ref) || cardOrigin != s.Origin)
                     continue;
                 var cardId = cardRef.StartsWith(s.Origin + ":", StringComparison.Ordinal)
                     ? cardRef[(s.Origin.Length + 1)..]
                     : cardRef;
                 if (RefMatches(cardRef, s.Ref) || RefMatches(cardId, s.Ref))
-                    return (d, title);
+                {
+                    // Одна карточка относится к одному источнику: второй источник той же
+                    // карточки — не второе совпадение, а та же карточка.
+                    found.Add((d, title, i));
+                    break;
+                }
             }
         }
-        return null;
+        return found;
     }
 
     private static bool RefMatches(string stored, string wanted) =>

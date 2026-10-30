@@ -2,8 +2,7 @@ name: CI
 
 on:
   push:
-    # feat/test-speedup — временно, проверка CI до PR; убрать перед мержем
-    branches: [master, feat/test-speedup]
+    branches: [master]
   pull_request:
 
 jobs:

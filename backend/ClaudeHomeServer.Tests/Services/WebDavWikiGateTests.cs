@@ -8,9 +8,9 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// Гейт «в вики пишет только Хранитель» на PUT и COPY (ревью S1b, MAJOR 1): оба пишут на диск
-// мимо FileService (FileStream + File.Move / File.Copy) и раньше дотянулись до data/wiki/
-// напрямую. data-корень — тот же резолв от DataPath, что у FileService; корень проекта здесь
+// Гейт «в вики пишет только Хранитель» на PUT, COPY и MOVE (ревью S1b, MAJOR 1): все три
+// пишут или сносят на диск мимо FileService (FileStream + File.Move / File.Copy; MOVE сносит
+// цель до files.Rename) и раньше дотянулись до data/wiki/ напрямую. data-корень — тот же резолв от DataPath, что у FileService; корень проекта здесь
 // НАД data-корнем, чтобы относительный путь имел форму боя «data/wiki/…» («проект на весь
 // домашний каталог»). Отказ — 403 и пустой диск: ни файла, ни каталога, ни временного файла.
 public class WebDavWikiGateTests : IDisposable
@@ -154,5 +154,71 @@ public class WebDavWikiGateTests : IDisposable
         await WebDavHandler.HandleCopyAsync(notes, new FileService(), _root, "docs/a.txt", Project);
         notes.Response.StatusCode.Should().Be(201);
         File.Exists(Path.Combine(_dataDir, "notes", "Копия.md")).Should().BeTrue();
+    }
+
+    // ─── MOVE ──────────────────────────────────────────────────────────────────
+
+    // Destination для MOVE: тот же абсолютный URI, метод запроса — MOVE (ParseDestination
+    // читает только заголовок Destination, метод для него не значим)
+    private static void SetMoveDestination(DefaultHttpContext ctx, string relPath)
+    {
+        ctx.Request.Method = "MOVE";
+        ctx.Request.Headers["Destination"] = $"http://localhost/projects/{Project}/{relPath}";
+    }
+
+    // Дефект хвоста ревью S1b: HandleMove сносил существующую цель до files.Rename, поэтому
+    // отказ по вики приходил уже после потери данных. Теперь гейт стоит до сноса: 403 и пустой
+    // диск — ни цель не снесена, ни источник не тронут.
+
+    [Fact]
+    public void Move_ЦельПодDataWiki_403_СтраницаИИсточникНаМесте()
+    {
+        var src = Path.Combine(_root, "notes", "x.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(src)!);
+        File.WriteAllText(src, "обычный файл");
+        var page = WriteWikiPage("Страница.md", "# Страница");
+
+        var ctx = Ctx();
+        SetMoveDestination(ctx, "data/wiki/u1/pages/Страница.md");
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "notes/x.md", Project);
+
+        ctx.Response.StatusCode.Should().Be(403);
+        File.Exists(page).Should().BeTrue(); // цель не снесена: отказ до любого следа на диске
+        File.Exists(src).Should().BeTrue();  // источник не тронут
+    }
+
+    [Fact]
+    public void Move_ИзВикиНаСуществующийФайл_403_ОбычныйФайлНаМесте()
+    {
+        var page = WriteWikiPage("Страница.md", "# Страница");
+        var dst = Path.Combine(_root, "docs", "x.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
+        File.WriteAllText(dst, "обычный файл");
+
+        var ctx = Ctx();
+        SetMoveDestination(ctx, "docs/x.md");
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "data/wiki/u1/pages/Страница.md", Project);
+
+        ctx.Response.StatusCode.Should().Be(403);
+        File.Exists(dst).Should().BeTrue();  // обычный файл не снесён
+        File.Exists(page).Should().BeTrue(); // страница вики на месте
+    }
+
+    [Fact]
+    public void Move_ОбычныйПерезаписывает_КакПрежде()
+    {
+        var src = Path.Combine(_root, "docs", "a.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(src)!);
+        File.WriteAllText(src, "новое");
+        var dst = Path.Combine(_root, "docs", "b.txt");
+        File.WriteAllText(dst, "старое");
+
+        var ctx = Ctx();
+        SetMoveDestination(ctx, "docs/b.txt");
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs/a.txt", Project);
+
+        ctx.Response.StatusCode.Should().Be(204);
+        File.ReadAllText(dst).Should().Be("новое");
+        File.Exists(src).Should().BeFalse();
     }
 }

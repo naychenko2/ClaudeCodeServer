@@ -597,12 +597,15 @@ public static class WebDavHandler
 
     private sealed class PutBodyTooLargeException : Exception;
 
-    // Гейт «в вики пишет только Хранитель» для PUT и COPY: они пишут на диск мимо FileService
-    // (FileStream + File.Move / File.Copy), поэтому путь проверяют сами — тем же предикатом и
-    // тем же data-корнем из конфига, что у FileService и FilesController (ADR-035, решение 2;
-    // ревью S1b, MAJOR 1). Отказ — 403 здесь же, как и для DELETE корня; у DELETE/MKCOL/MOVE
-    // через files.* тот же отказ приходит exception'ом и переводится в 403 диспетчером.
-    // Без конфига data-корня нет и проверить нечем — тот же контракт, что у GuardNotWiki.
+    // Гейт «в вики пишет только Хранитель» для PUT, COPY и MOVE: они пишут или сносят на диск
+    // мимо FileService (FileStream + File.Move / File.Copy; MOVE сносит существующую цель до
+    // files.Rename), поэтому путь проверяют сами — тем же предикатом и тем же data-корнем из
+    // конфига, что у FileService и FilesController (ADR-035, решение 2; ревью S1b, MAJOR 1).
+    // Отказ — 403 здесь же, до любого следа на диске. Для MOVE это обязано быть явным гейтом:
+    // отказ exception'ом из files.Rename пришёл бы уже после сноса существующей цели — данные
+    // были бы потеряны (хвост ревью S1b). У DELETE/MKCOL (снос идёт целиком через files.*) тот
+    // же отказ приходит exception'ом и переводится в 403 диспетчером. Без конфига data-корня нет
+    // и проверить нечем — тот же контракт, что у GuardNotWiki.
     private static bool IsUnderDataWiki(HttpContext ctx, string absPath)
     {
         var config = ctx.RequestServices.GetService<IConfiguration>();
@@ -820,7 +823,8 @@ public static class WebDavHandler
     // MOVE
     // ────────────────────────────────────────────────────────────────────────
 
-    private static void HandleMove(HttpContext ctx, FileService files, string root, string relPath, string projectName)
+    // internal — тестам гейта нужен сам MOVE (по образцу internal HandleCopyAsync)
+    internal static void HandleMove(HttpContext ctx, FileService files, string root, string relPath, string projectName)
     {
         var destRel = ParseDestination(ctx, projectName);
         if (destRel is null)
@@ -829,7 +833,18 @@ public static class WebDavHandler
             return;
         }
 
+        var srcAbs = FileService.SafeJoinPublic(root, relPath);
         var dstAbs = FileService.SafeJoinPublic(root, destRel);
+
+        // MOVE сносит существующую цель до files.Rename (ниже) — поэтому обе стороны проверяются
+        // здесь, до любого следа на диске: иначе отказ от files.Rename пришёл бы уже после сноса
+        // цели и данные были бы потеряны (хвост ревью S1b)
+        if (IsUnderDataWiki(ctx, srcAbs) || IsUnderDataWiki(ctx, dstAbs))
+        {
+            ctx.Response.StatusCode = 403; // в вики пишет только Хранитель
+            return;
+        }
+
         var existed = File.Exists(dstAbs) || Directory.Exists(dstAbs);
 
         var overwrite = !string.Equals(ctx.Request.Headers["Overwrite"].ToString(), "F", StringComparison.OrdinalIgnoreCase);

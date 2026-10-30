@@ -467,7 +467,7 @@ export interface FeatureRun {
   // Расхождения трекера с реальностью (TR-B1c, бэк: `FeatureRun.Tracker`, FeatureRun.cs:107):
   // единая точка правды — индекс несёт только Count, список здесь. Kind — словарь
   // FeatureTracker (unreviewed | returned_no_rework | dead_verdict | reported_open |
-  // epic_open_after_merge | orphans_in_closed); StepRef — ключ цепочки (у цепочечных
+  // epic_open_after_merge | orphans_in_closed | unplanned_step); StepRef — ключ цепочки (у цепочечных
   // видов), иначе null. Аддитивное: старые ответы поля не несут — UI обязан пережить отсутствие.
   tracker?: FeatureTrackerIssue[];
 }

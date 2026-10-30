@@ -74,6 +74,13 @@ describe('FeatureStepView: тело П2 «Мой шаг»', () => {
     expect(html).not.toContain('идёт');
   });
 
+  it('код не дублируется, когда перед ним имя фичи: «LLM-wiki · S4b-3: …» → «S4b-3 · LLM-wiki · …» (п. 6)', () => {
+    const c = chain({ stepRef: 'S4b-3', title: 'LLM-wiki · S4b-3: разбор транскрипта' });
+    const html = render(run({ stepChains: [c] }), c);
+    expect(html).toContain('S4b-3 · LLM-wiki · разбор транскрипта');
+    expect(html).not.toContain('S4b-3:');
+  });
+
   it('тревога вне этого шага (чужая задача): карточка остаётся «идёт»', () => {
     const c = chain();
     const r = run({

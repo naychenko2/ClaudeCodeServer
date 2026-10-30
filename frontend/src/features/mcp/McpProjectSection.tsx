@@ -93,8 +93,9 @@ export function McpProjectSection({ project, onUpdated }: { project: Project; on
     void sendUpdate(next, false, prev, seq);
   };
 
-  // Пометка «для участников» (S2a-F6): только у владельца общего проекта и только у сервера,
-  // включённого в этот проект. Ответ бэка — обновлённая запись, она и становится истиной
+  // Пометка «для участников» (S2a-F6): только у владельца общего проекта; сервер при этом
+  // может быть и вне mcpServersOn этого проекта — пометка всё равно действует во всех
+  // его общих проектах (S2a-7). Ответ бэка — обновлённая запись, она и становится истиной
   const toggleShared = (server: McpServer, nextVal: boolean) => {
     const prev = server.sharedWithMembers;
     const seq = (sharedSeqRef.current[server.id] ?? 0) + 1;
@@ -135,9 +136,10 @@ export function McpProjectSection({ project, onUpdated }: { project: Project; on
       summary={summary}
     >
       {servers.map((server, i) => {
-        // Пометка «для участников» касается только серверов, включённых в этот проект:
-        // выключенный сервер не доезжает в общий проект ни с какой пометкой (McpDelivery)
-        const canShare = ownerOfShared && on.includes(server.key);
+        // Пометка — свойство записи владельца и действует во всех его общих проектах (S2a-7):
+        // бэк доставляет помеченный сервер даже вне mcpServersOn этого проекта, поэтому
+        // владельцу показываем тумблер и у таких серверов — иначе пометку нечем снять
+        const canShare = ownerOfShared && (on.includes(server.key) || server.sharedWithMembers === true);
         return (
           <div
             key={server.id}
@@ -171,7 +173,9 @@ export function McpProjectSection({ project, onUpdated }: { project: Project; on
                 <span style={{ flex: '1 1 200px', minWidth: 0 }}>
                   <span style={{ fontSize: FS.sm, color: C.textSecondary }}>И для участников</span>
                   {' '}
-                  <span style={{ fontSize: FS.xs, color: C.textMuted }}>Без пометки сервер не доступен в ходах общего проекта.</span>
+                  <span style={{ fontSize: FS.xs, color: C.textMuted }}>
+                    Включено — сервер доступен участникам во всех ваших общих проектах; без пометки он не доступен в их ходах.
+                  </span>
                 </span>
                 <Toggle
                   checked={server.sharedWithMembers}

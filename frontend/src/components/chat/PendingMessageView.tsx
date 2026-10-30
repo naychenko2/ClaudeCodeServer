@@ -55,6 +55,8 @@ interface RowProps {
   item: PendingChatMessage;
   // Отмена доставки; undefined — нет связи, вместо крестика показываем причину
   onCancel?: (id: string) => void;
+  // false — отменять нельзя по роли (чужое в общем проекте): кнопки нет вовсе, а не «нет связи»
+  cancelAllowed?: boolean;
   // Прервать идущий ход и доставить это сейчас; undefined — нет связи или ход уже кончился
   onPreempt?: () => void;
   isMobile?: boolean;
@@ -65,7 +67,7 @@ interface RowProps {
   sessionId: string;
 }
 
-function PendingMessageRow({ item, onCancel, onPreempt, isMobile, leaving, sessionId }: RowProps) {
+function PendingMessageRow({ item, onCancel, cancelAllowed = true, onPreempt, isMobile, leaving, sessionId }: RowProps) {
   // Предупреждаем только ради INLINE-агентов: фоновая команда (дев-сервер, watch) переживёт
   // Interrupt и сообщение о ней было бы ложью. Источник — стор agentsPresence, ветка _ids
   const agentsRunning = useAgentsRunning(sessionId);
@@ -162,7 +164,7 @@ function PendingMessageRow({ item, onCancel, onPreempt, isMobile, leaving, sessi
           }}
         />
 
-        {onCancel ? (
+        {!cancelAllowed ? null : onCancel ? (
           <span onClick={e => e.stopPropagation()} style={{ display: 'inline-flex', flexShrink: 0 }}>
             <IconButton
               onClick={cancel}
@@ -277,6 +279,8 @@ function PendingMessageRow({ item, onCancel, onPreempt, isMobile, leaving, sessi
 interface Props {
   items: PendingChatMessage[];
   onCancel?: (id: string) => void;
+  // Можно ли отменять именно это сообщение (отправитель или владелец проекта); не задано — можно
+  canCancelItem?: (item: PendingChatMessage) => boolean;
   // Прервать ход ради очереди; undefined — нет связи или ход уже не идёт
   onPreempt?: () => void;
   isMobile?: boolean;
@@ -286,7 +290,7 @@ interface Props {
 
 // Держит ушедшие строки лишние 150мс, чтобы доставка/отмена не выглядела мгновенной
 // подменой. Сервер шлёт очередь полным снимком, поэтому «ушедшие» вычисляются здесь.
-export function PendingMessageList({ items, onCancel, onPreempt, isMobile, sessionId }: Props) {
+export function PendingMessageList({ items, onCancel, canCancelItem, onPreempt, isMobile, sessionId }: Props) {
   const [leavingIds, setLeavingIds] = useState<string[]>([]);
   const [shown, setShown] = useState(items);
   const prevRef = useRef(items);
@@ -327,6 +331,7 @@ export function PendingMessageList({ items, onCancel, onPreempt, isMobile, sessi
           leaving={leavingIds.includes(p.id)}
           sessionId={sessionId}
           onCancel={onCancel}
+          cancelAllowed={canCancelItem ? canCancelItem(p) : true}
           // Перебой доставляет ГОЛОВУ очереди (DrainNextPendingAsync), а не ту строку, что
           // раскрыл пользователь — поэтому кнопка только у первой. Иначе «отправить это
           // сейчас» на второй реплике отправляло бы первую.

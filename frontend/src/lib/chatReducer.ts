@@ -107,6 +107,8 @@ export interface PendingChatMessage {
   // Ждёт устройство локального проекта (ADR-016): лежит отдельно от обычной очереди и уйдёт
   // в работу, когда устройство выйдет на связь, а не по концу текущего хода
   waitingForDevice?: boolean;
+  // Кто поставил сообщение человека в очередь общего проекта; нет у агентских и старых
+  senderUserId?: string;
 }
 
 // Команда композеру подставить прерванное сообщение (событие composer_restore).
@@ -525,6 +527,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         ...(msg.auto ? { auto: true } : {}),
         ...(msg.delegationTaskId ? { delegationTaskId: msg.delegationTaskId } : {}),
         ...(msg.imageSnapshot ? { imageSnapshot: msg.imageSnapshot } : {}),
+        ...(msg.senderUserId ? { senderUserId: msg.senderUserId } : {}),
       }]);
     }
 

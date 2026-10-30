@@ -79,6 +79,8 @@ import { ToolGroupBlock, AgentActionsBlock, itemKey, type ActivityEntry } from '
 import { splitAgentResultTail } from '../lib/agentTail';
 import { ChatItemView, FileChangedRow, shouldHideAbortBanner } from './chat/ChatItemView';
 import { PendingMessageList } from './chat/PendingMessageView';
+import { readStoredUserId } from '../lib/offline';
+import { canCancelPending } from '../features/projects/members/messageAuthor';
 import { type ToolUseItem } from './chat/ToolUseView';
 import { buildMediaVisibility } from './chat/mediaDedup';
 import { isTasksCreate } from './chat/TaskCreatedView';
@@ -898,6 +900,7 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
     ? {
       id: project.id, rootPath: project.rootPath, transcriptReason: featureReason(project, ProjectFeature.WorkflowView),
       local: isLocalProject(project), devicePlatform: project.device?.platform ?? null,
+      myRole: project.myRole, formerMembers: project.formerMembers,
     }
     : null, [project]);
   // Ветка копирует транскрипт CLI на сервере — у локального проекта кнопок ветвления нет
@@ -3010,6 +3013,7 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
             а кнопка на стоящей очереди читалась бы как сломанная */}
         <PendingMessageList items={pending} isMobile={isMobile}
           sessionId={session.id}
+          canCancelItem={p => canCancelPending(project, p.senderUserId, readStoredUserId())}
           onCancel={online ? cancelPending : undefined}
           onPreempt={online && isWaiting ? preemptForPending : undefined} />
 

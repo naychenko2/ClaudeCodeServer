@@ -156,6 +156,12 @@ describe('композер участника', () => {
     expect(participantComposerGate(null).blocked).toBe(false);
   });
 
+  it('у редактора нет плашки и подсказки «ходы выключены»: тексты есть только у читателя', () => {
+    const src = readFileSync(new URL('../participantGate.ts', import.meta.url), 'utf8');
+    expect(src).not.toMatch(/Ходы редактора|ходы редактора пока|EDITOR_TURNS_ENABLED|Скоро/);
+    expect(participantComposerGate(editor)).toEqual({ blocked: false });
+  });
+
   it('текст читателя называет владельца и роль редактора', () => {
     const gate = participantComposerGate(reader);
     if (!gate.blocked) throw new Error('ожидалась блокировка');

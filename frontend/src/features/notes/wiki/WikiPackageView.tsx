@@ -282,6 +282,16 @@ export function WikiPackageView({ pkg: initialPkg, onBack }: { pkg: WikiPackageD
         </Notice>
       );
     }
+    if (!decided.apply && pkg.status !== 'rejected' && pending.length > 0) {
+      // apply=null ровно когда применять нечего: здесь часть спорных ещё не решена, статус
+      // остался proposed. Подтверждаем, что решение записано, и говорим, сколько осталось:
+      // человек продолжает решать на этом же экране (оставшиеся операции — ниже плашки).
+      return (
+        <Notice tone="info" icon={Inbox} title={`Решение записано, осталось ${pending.length} спорных`} style={{ marginTop: SP.sm }}>
+          Остальные спорные операции ниже — решите их, и пакет применится.
+        </Notice>
+      );
+    }
     return null;
   })();
 

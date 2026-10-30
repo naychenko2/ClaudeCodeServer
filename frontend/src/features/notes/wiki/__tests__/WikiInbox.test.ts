@@ -12,6 +12,10 @@
 //      «auto не показаны» краснеет;
 //  (2) снять условие причины у «Подтвердить отказ» (disabled={busy} ) →
 //      «отклонение без причины невозможно» краснеет.
+//  (3) снять блокировку «Принять» на время запроса (disabled={busy}→{false}) →
+//      «пока решение в пути, кнопки заблокированы» краснеет;
+//  (4) убрать !o.humanDecision из pendingContested → «0 на решение» краснеет;
+//  (5) убрать проверку loadSeq в загрузке списка → «гонка поколений» краснеет.
 
 import { act } from 'react';
 import { createElement } from 'react';
@@ -275,5 +279,95 @@ describe('«Входящие» (S7a)', () => {
     const c = render();
     await settle();
     expect(has(c, 'Нечитаемых файлов пакета: 2')).toBe(true);
+  });
+
+  it('частичное решение (apply=null, статус proposed): плашка «Решение записано, осталось N спорных»', async () => {
+    // пакет с двумя спорными: решение по первой оставляет вторую нерешённой — бэк отвечает
+    // {package: proposed с нерешённой операцией, apply: null} (применять нечего)
+    const two = {
+      ...PKG,
+      operations: [
+        op({}),
+        op({ index: 1, op: 'append', page: 'projects/p1/vera', target: null, text: 'Вера ведёт QA.', class: 'session×append', decision: 'inbox', reason: 'Дополняет страницу' }),
+      ],
+    };
+    const afterFirst = { ...two, operations: [op({ humanDecision: 'accepted' }), two.operations[1]] };
+    seedList({ packages: [two], invalidCount: 0 });
+    const c = render();
+    await settle();
+    openPackage(c);
+    await settle();
+    mockDecide(() => Promise.resolve({ package: afterFirst, apply: null }));
+    click(buttonByTestId(c, 'wiki-op-accept-0'), 'Принять');
+    await settle();
+    expect(has(c, 'Решение записано')).toBe(true);
+    expect(has(c, 'осталось 1 спорных')).toBe(true);
+    // решённая операция больше не на решение (бейдж «принята»), нерешённая осталась с кнопками
+    expect(has(c, 'принята')).toBe(true);
+    expect(buttonByTestId(c, 'wiki-op-accept-1')).not.toBeNull();
+  });
+
+  it('пока решение в пути, кнопки операции заблокированы', async () => {
+    seedList(LIST);
+    const c = render();
+    await settle();
+    openPackage(c);
+    await settle();
+    let resolvePost: (v: unknown) => void = () => {};
+    mockDecide(() => new Promise<unknown>(res => { resolvePost = res; }));
+    click(buttonByTestId(c, 'wiki-op-accept-0'), 'Принять');
+    await settle();
+    // POST ещё висит: «Принять» и «Отклонить» заблокированы (урок S5b/S5e)
+    expect((reactProps(buttonByTestId(c, 'wiki-op-accept-0')!) as { disabled?: boolean }).disabled).toBe(true);
+    expect((reactProps(buttonByTestId(c, 'wiki-op-reject-0')!) as { disabled?: boolean }).disabled).toBe(true);
+    // завершаем запрос, чтобы не оставлять висящий промис
+    resolvePost({ package: decidedPkg('applied', {}), apply: { applied: true, code: null, reason: null, violations: [] } });
+    await settle();
+  });
+
+  it('решённая человеком операция не считается «на решение»: строка «0 на решение»', async () => {
+    // строка «Входящих» для пакета, где единственная спорная уже решена человеком:
+    // pendingContested пуст → «0 на решение», не «1»
+    const row = { ...PKG, operations: [op({ humanDecision: 'accepted' }), PKG.operations[1]] };
+    seedList({ packages: [row], invalidCount: 0 });
+    const c = render();
+    await settle();
+    expect(has(c, '0 на решение')).toBe(true);
+    expect(has(c, '1 на решение')).toBe(false);
+  });
+
+  it('гонка поколений: поздний ответ прежней загрузки не затирает свежий список', async () => {
+    // mount → список A (быстрый). Первый «Назад» → загрузка B (висит). Пока B висит, снова
+    // открыть/закрыть → загрузка C (быстрая, свежий список). B отвечает ПОСЛЕ C: с проверкой
+    // поколения (loadSeq) B не затрёт C; без неё — затрёт (тест краснеет).
+    const A = { ...PKG, sources: [{ origin: 'session', ref: 'СПИСОК-А' }] };
+    const B = { ...PKG, sources: [{ origin: 'session', ref: 'ЗАПАЗДАЛЫЙ-B' }] };
+    const C = { ...PKG, sources: [{ origin: 'session', ref: 'СВЕЖИЙ-C' }] };
+    let resolveB: (v: unknown) => void = () => {};
+    let n = 0;
+    req.mockImplementation((url: string) => {
+      if (url.startsWith('/api/wiki/packages')) {
+        n++;
+        if (n === 1) return Promise.resolve({ packages: [A], invalidCount: 0 });
+        if (n === 2) return new Promise(res => { resolveB = res; });
+        return Promise.resolve({ packages: [C], invalidCount: 0 });
+      }
+      return Promise.resolve(null);
+    });
+    const c = render();
+    await settle();
+    expect(has(c, 'СПИСОК-А')).toBe(true);
+    // открыть/закрыть → загрузка B (висит); список остаётся A
+    openPackage(c); await settle();
+    click(buttonByTestId(c, 'wiki-pkg-back'), 'Назад'); await settle();
+    // пока B висит — снова открыть/закрыть → свежая загрузка C (быстрая)
+    openPackage(c); await settle();
+    click(buttonByTestId(c, 'wiki-pkg-back'), 'Назад'); await settle();
+    expect(has(c, 'СВЕЖИЙ-C')).toBe(true);
+    // запоздалый ответ B приходит ПОСЛЕ C: не должен затереть свежий список
+    resolveB({ packages: [B], invalidCount: 0 });
+    await settle();
+    expect(has(c, 'СВЕЖИЙ-C')).toBe(true);
+    expect(has(c, 'ЗАПАЗДАЛЫЙ-B')).toBe(false);
   });
 });

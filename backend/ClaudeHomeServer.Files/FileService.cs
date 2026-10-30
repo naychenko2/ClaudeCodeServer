@@ -1,4 +1,8 @@
 ﻿using ClaudeHomeServer.Services.Composition;
+// WikiPaths — тип сборки Core.dll в namespace Services.Notes, а не вертикали Notes:
+// граница Files проверяется по сборке (IsCoreAssembly в SubsystemBoundaryTests), ADR-014
+// (Files не зовёт Notes) не затронут.
+using WikiPaths = ClaudeHomeServer.Services.Notes.WikiPaths;
 
 namespace ClaudeHomeServer.Services.Files;
 
@@ -6,16 +10,21 @@ public class FileService(
     IGitWorkingTree? git = null,
     IProjectManager? projects = null,
     ILogger<FileService>? logger = null,
-    IOpenedPathGuard? openedPathGuard = null)
+    IOpenedPathGuard? openedPathGuard = null,
+    // data-корень для гейта «в вики пишет только Хранитель» (ADR-035, решение 2):
+    // тот же резолв от DataPath, что у NotesService/DeviceRegistry. Без конфига — см. GuardNotWiki.
+    IConfiguration? config = null)
 {
     private readonly ILogger<FileService>? _logger = logger;
+    private readonly IConfiguration? _config = config;
+    private readonly string? _dataDir = config is null ? null : SubsystemHostingExtensions.ResolveDataDir(config);
 
     /// <summary>
     /// Тот же сервис, но каждый открытый файл и каталог-родитель сверяются с корнем по
     /// дескриптору (агент устройства): проверка пути до открытия подмену ссылки не ловит.
     /// </summary>
     public FileService WithOpenedPathGuard(IOpenedPathGuard guard) =>
-        new(git, projects, _logger, guard) { GitStatusComputer = GitStatusComputer };
+        new(git, projects, _logger, guard, _config) { GitStatusComputer = GitStatusComputer };
 
     // git/projects/logger опциональны (DI подставляет): git-операции идут через слой Execution
     // с резолвом владельца по корню — статусы/дифф/револт честны и для container-юзеров.
@@ -69,6 +78,20 @@ public class FileService(
     // Публичная обёртка SafeJoin для использования вне сборки (WebDav и др.)
     public static string SafeJoinPublic(string root, string relativePath) =>
         SafePath.Join(root, relativePath);
+
+    // ─── гейт «в вики пишет только Хранитель» (ADR-035, решение 2) ─────────────
+    // data/ в норме вне корня любого проекта, но корень проекта может оказаться предком
+    // data/ (проект на весь домашний каталог) — тогда относительный путь «wiki/{owner}/…»
+    // лежит под data/wiki/ и файловый API дотянулся бы до поддерева владельца. Проверка
+    // по каноническому пути (WikiPaths): дешёвая страховка, не основной гейт. Безусловная:
+    // не зависит от фич-флага и от того, заведена ли вика (признак на диске — не здесь).
+    // _dataDir null (DeviceAgent, юнит-тесты без конфига) — data-корня нет и проверить
+    // нечем: отказа нет, тот же контракт, что у ClaudeSession.
+    private void GuardNotWiki(string path)
+    {
+        if (_dataDir is null || !WikiPaths.IsWikiPath(path, _dataDir)) return;
+        throw new UnauthorizedAccessException("В вики пишет только Хранитель");
+    }
 
     public IEnumerable<FileEntry> List(string rootPath, string relativePath = "", bool showHidden = false)
     {
@@ -422,6 +445,7 @@ public class FileService(
     public void WriteFile(string rootPath, string relativePath, string content)
     {
         var path = SafeJoin(rootPath, relativePath);
+        GuardNotWiki(path);
         using (var writer = new StreamWriter(OpenForWrite(rootPath, path, createNew: false), new System.Text.UTF8Encoding(false)))
             writer.Write(content);
         NotifyMutated(rootPath, relativePath, FileMutationKind.Write);
@@ -430,6 +454,7 @@ public class FileService(
     public void WriteFileBytes(string rootPath, string relativePath, byte[] content)
     {
         var path = SafeJoin(rootPath, relativePath);
+        GuardNotWiki(path);
         CreateDirectoryVerified(rootPath, Path.GetDirectoryName(path)!);
         using (var stream = OpenForWrite(rootPath, path, createNew: false))
             stream.Write(content);
@@ -446,6 +471,7 @@ public class FileService(
     public void CreateFile(string rootPath, string relativePath, string content)
     {
         var path = SafeJoin(rootPath, relativePath);
+        GuardNotWiki(path);
         if (File.Exists(path)) throw new InvalidOperationException("файл уже существует");
         CreateDirectoryVerified(rootPath, Path.GetDirectoryName(path)!);
         using (var writer = new StreamWriter(OpenForWrite(rootPath, path, createNew: true), new System.Text.UTF8Encoding(false)))
@@ -456,12 +482,16 @@ public class FileService(
     public void CreateDirectory(string rootPath, string relativePath)
     {
         var path = SafeJoin(rootPath, relativePath);
+        GuardNotWiki(path);
         CreateDirectoryVerified(rootPath, path);
     }
 
     public void Delete(string rootPath, string relativePath)
     {
         var path = SafeJoin(rootPath, relativePath);
+        // Удаление — тоже запись в вику её минусом: Хранитель не терпит, что страницу
+        // снесет файловый API (ADR-035, решение 2).
+        GuardNotWiki(path);
         VerifyParent(rootPath, path);
         if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
         else if (File.Exists(path)) File.Delete(path);
@@ -473,6 +503,9 @@ public class FileService(
     {
         var src = SafeJoin(rootPath, oldRelative);
         var dst = SafeJoin(rootPath, newRelative);
+        // Обе стороны: вынести из вики нельзя так же, как и внести в неё (как Move в NotesService).
+        GuardNotWiki(src);
+        GuardNotWiki(dst);
         VerifyParent(rootPath, src);
         VerifyParent(rootPath, dst);
         if (Directory.Exists(src)) Directory.Move(src, dst);
@@ -569,6 +602,9 @@ public class FileService(
 
     public bool RevertFile(string rootPath, string relativePath)
     {
+        // Откат HEAD — запись в файл (для подписчиков это Write), значит мутация. Вне try:
+        // catch ниже возвращает false на сбой git, а отказ вики — не сбой git и не false.
+        GuardNotWiki(SafeJoin(rootPath, relativePath));
         if (!IsGitRepo(rootPath)) return false;
         // git checkout HEAD -- file
         try

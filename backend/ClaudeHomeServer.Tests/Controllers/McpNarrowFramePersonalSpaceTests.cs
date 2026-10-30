@@ -209,12 +209,27 @@ public class McpNarrowFramePersonalSpaceTests : IDisposable
         f.AssertNoPersonal(text);
     }
 
-    [Fact]
-    public async Task Memory_ЛичныйПроект_ШирокаяРамка_ЛичнаяПамятьОткрыта()
+    [Theory]
+    // Wide — и у личного проекта, и у чата вне проекта: личное пространство и так своё,
+    // рамка его не режет ни при каком вызове (с2)
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Wide_ЛичныйПроектИЧатВнеПроекта_ЛичнаяПамятьОткрыта(bool viaProject)
     {
         var f = await ArrangeAsync();
+        string chatId;
+        if (viaProject)
+        {
+            chatId = f.PersonalChat;
+        }
+        else
+        {
+            var resp = await _client.PostAsJsonAsync("/api/chats", new { mode = "auto" });
+            resp.EnsureSuccessStatusCode();
+            chatId = IdOf(JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync()));
+        }
         var (text, isError) = await CallAsync($"/mcp/memory/{f.GlobalPersona}/-", "memory_search",
-            new { query = $"PERSONAL-секрет-{f.Tag}" }, f.PersonalChat);
+            new { query = $"PERSONAL-секрет-{f.Tag}" }, chatId);
         isError.Should().BeFalse(text);
         text.Should().Contain($"PERSONAL-секрет-{f.Tag}");
     }

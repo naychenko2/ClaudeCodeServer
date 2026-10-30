@@ -349,8 +349,9 @@ public class ClaudeSession : ILlmSessionAdapter
     private sealed class CliRun
     {
         public required Process Process { get; init; }
-        // Сигнатура окружения запуска (модель/режим/env/набор MCP/слой персоны) — следующий
-        // ход можно отдать живому процессу только при полном совпадении (см. BuildLaunchSignature)
+        // Сигнатура окружения запуска (модель/режим/env/набор MCP/рамка хода/слой персоны) —
+        // следующий ход можно отдать живому процессу только при полном совпадении
+        // (см. BuildLaunchSignature)
         public required string Signature { get; init; }
         public string? TurnMcpPath { get; init; }
         // Per-run файл --agents (состав сабагентов-персон): та же жизнь, что у MCP-конфига —
@@ -3612,10 +3613,13 @@ public class ClaudeSession : ILlmSessionAdapter
 
         // Рамка хода (S2a-4, разрез И.3 в ревизии 29.10): вердикт ITurnFrameSource (S2a-1) —
         // Narrow в общем проекте при любом акторе, включая владельца, Wide в личном.
-        // Вердикт — свойство проекта, а не хода: у живого процесса он постоялен и не двигает
-        // сигнатуру запуска. Нет вердикта (нет источника — тестовые пути без SessionManager,
-        // или нет арендатора — чей приватный горизонт закрывать не определено) — Wide:
-        // существующие пути без владельца остаются как были.
+        // Вердикт — свойство проекта, а не хода; рамка ВХОДИТ в сигнатуру запуска
+        // (BuildLaunchSignature, доработка по ревью R-S2a-4 Major 2): пока рамка не
+        // менялась, живой процесс постоялен; сменилась (участника добавили/сняли) —
+        // следующий ход стартует НОВЫМ процессом с подборкой новой рамки. Нет вердикта
+        // (нет источника — тестовые пути без SessionManager, или нет арендатора — чей
+        // приватный горизонт закрывать не определено) — Wide: существующие пути без
+        // владельца остаются как были.
         var turnFrame = _frameSource is { } frameSource && _turnOwnerId is { } frameOwnerId
             ? frameSource.Frame(Info.Id, frameOwnerId)
             : ClaudeHomeServer.Services.Access.TurnFrameKind.Wide;
@@ -3630,8 +3634,9 @@ public class ClaudeSession : ILlmSessionAdapter
         // Общий проект — то же при любой ручке провайдера (S2a-4): подборка собирается на ход
         // и на участника, а same-process ход системный промпт живого процесса НЕ обновляет
         // (ниже по файлу) — в системном блоке замерла бы подборка того хода, что поднял
-        // процесс; стал бы проект общим посреди прогона — участник получил бы личную
-        // подборку владельца.
+        // процесс. Стал бы проект общим посреди прогона — рамка меняется и вместе с ней
+        // сигнатура (доработка по ревью R-S2a-4 Major 2): ход участника стартует НОВЫМ
+        // процессом с узкой подборкой, личная подборка владельца к участнику не едет.
         var recallInTurnText = LightProfile is { RecallInTurnText: true }
             || _providers?.RecallInTurnTextFor(EffectiveModel) == true
             || turnFrame == ClaudeHomeServer.Services.Access.TurnFrameKind.Narrow;
@@ -3656,9 +3661,12 @@ public class ClaudeSession : ILlmSessionAdapter
         // сохраняется в транскрипте сессии: не передать → инструкции (fal-ai/правило
         // Mermaid-схем, Dify, теги) пропадут. Same-process ход промпт живого процесса НЕ обновляет —
         // recall/подсказки на нём остаются со старта прогона (мягкая деградация).
-        // Для общего проекта эта деградация закрыта рамкой (S2a-4): личных секций при Narrow
-        // нет вовсе, а нестабильные всегда уезжают хвостом (выше по файлу) — системный блок
-        // процесса общего проекта личной подборки владельца не содержит никогда.
+        // Для общего проекта эта деградация закрыта рамкой (S2a-4 + доработка по ревью
+        // R-S2a-4 Major 2): личных секций при Narrow нет вовсе, нестабильные всегда
+        // уезжают хвостом (выше по файлу), а рамка входит в сигнатуру запуска — живой
+        // процесс, поднятый Wide, хода Narrow не принимает. Системный блок процесса,
+        // поднятого в общем проекте, личной подборки владельца не содержит: он собран
+        // по рамке Narrow с первого своего хода.
         {
             // Секции — единственный источник правды: из этого списка собирается и текст для
             // --append-system-prompt (TurnPromptAssembler.Combine), и снимок «что ушло модели»
@@ -4577,7 +4585,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // учтены в его базе отдельно). Картинки не считаем: у local-qwen их нет.
         _lastTurnInputChars = (combinedPrompt?.Length ?? 0) + turnTextForCli.Length;
 
-        var signature = BuildLaunchSignature(args, mcpServerKeys, turnAgentsFingerprint, envOverrides, personaLayerPrompt);
+        var signature = BuildLaunchSignature(args, mcpServerKeys, turnAgentsFingerprint, envOverrides, personaLayerPrompt, turnFrame);
         LastLaunchSignature = signature;
 
         // Same-process ход: прогон дожил с прошлого хода (фоновые агенты ещё работают),
@@ -5726,7 +5734,10 @@ public class ClaudeSession : ILlmSessionAdapter
     // путь temp MCP-конфига (вместо него набор ключей серверов + отпечаток СОСТАВА их
     // инструментов — write/mentions/секции; токены/URL из содержимого намеренно опущены как
     // изменчивые) и системный промпт целиком — из него в сигнатуре только слой персоны,
-    // recall/подсказки деградируют мягко.
+    // recall/подсказки деградируют мягко. Рамка хода (Wide/Narrow) — В сигнатуре
+    // (доработка S2a-4 по ревью R-S2a-4 Major 2): это свойство проекта, а не хода —
+    // два хода одного чата дают один отпечаток, а смена состава участников (рамки)
+    // перезапускает процесс, стартующий уже с подборкой новой рамки.
     // Решение о ретрае same-process хода при пустой смерти процесса (гонка TOCTOU). Чистая
     // функция: FinalizeRunAsync применяет её исход, тест вызывает напрямую. activeTurnDied —
     // ход был активен (ждуresult) в момент смерти (не между ходами и не после result);
@@ -5980,9 +5991,16 @@ public class ClaudeSession : ILlmSessionAdapter
     }
 
     // internal для поведенческого теста --agents (зовёт её на реальных args PrepareTurnAgents).
+    // Рамка хода (TurnFrameKind) — в сигнатуре (доработка S2a-4 по ревью R-S2a-4, Major 2):
+    // рамка — свойство проекта, а не хода, и у живого процесса она обязана быть постоянной:
+    // сменилась (участника добавили/сняли) → другой отпечаток → новый процесс, чей системный
+    // блок собран уже по рамке его первого хода. Инвариант стабильности состава инструментов
+    // (McpToolsetStabilityTests) это не трогает: рамка не зависит от свойств хода, два хода
+    // одного чата дают один отпечаток (сторож: РукиВключены_ДваХода_ОднаСигнатура).
     internal static string BuildLaunchSignature(
         IReadOnlyList<string> args, string mcpServerKeys, string turnAgentsFingerprint,
-        IReadOnlyDictionary<string, string> envOverrides, string? personaLayerPrompt)
+        IReadOnlyDictionary<string, string> envOverrides, string? personaLayerPrompt,
+        ClaudeHomeServer.Services.Access.TurnFrameKind frame)
     {
         var sb = new System.Text.StringBuilder();
         for (var i = 0; i < args.Count; i++)
@@ -5993,6 +6011,10 @@ public class ClaudeSession : ILlmSessionAdapter
             sb.Append(args[i]).Append('\u0001');
         }
         sb.Append("mcp=").Append(mcpServerKeys).Append('\u0001');
+        // Рамка хода: Wide/Narrow — разные отпечатки. Смена рамки проекта (добавили/сняли
+        // участника) не отдаёт живому процессу, поднятому в другой рамке: новый процесс
+        // стартует с подборкой своей рамки (доработка S2a-4 по ревью R-S2a-4, Major 2).
+        sb.Append("frame=").Append(frame.ToString()).Append('\u0001');
         // Отпечаток содержимого файла --agents (вместо пути): смена состава сабагентов-персон
         // → новый отпечаток → новый процесс; правка персоны (personaLayerPrompt) — отдельно.
         if (!string.IsNullOrEmpty(turnAgentsFingerprint))

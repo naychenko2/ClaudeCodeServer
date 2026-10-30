@@ -36,7 +36,8 @@ public class ClaudeSessionTurnAgentsFileNameTests : System.IDisposable
         var args = new List<string> { "--print", "--output-format", "stream-json", "--model", "opus" };
         var (path, fingerprint) = ClaudeSession.PrepareTurnAgents(json, _dir, p => "/rt" + p, args);
         var signature = ClaudeSession.BuildLaunchSignature(
-            args, "tasks,notes", fingerprint, new Dictionary<string, string>(), null);
+            args, "tasks,notes", fingerprint, new Dictionary<string, string>(), null,
+            ClaudeHomeServer.Services.Access.TurnFrameKind.Wide);
         return (path, args, signature);
     }
 

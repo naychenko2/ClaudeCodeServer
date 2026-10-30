@@ -481,6 +481,7 @@ public sealed record LlmSessionContext(
     // Источник вердикта рамки хода (S2a-4): тот же шов ITurnFrameSource (S2a-1), которым
     // рамку применяют платформенные тулсеты (S2a-3). ClaudeSession зовёт его на каждый ход
     // и кладет вердикт в PromptSessionContext.Frame; вердикт — свойство проекта, а не хода:
-    // у живого процесса он постоялен и не двигает сигнатуру запуска. null (тесты без
-    // SessionManager) — рамка не применяется.
+    // рамка входит в сигнатуру запуска (доработка по ревью R-S2a-4 Major 2) — пока она
+    // не менялась, живой процесс постоялен, смена рамки поднимает новый процесс с
+    // подборкой новой рамки. null (тесты без SessionManager) — рамка не применяется.
     ClaudeHomeServer.Services.Access.ITurnFrameSource? FrameSource = null);

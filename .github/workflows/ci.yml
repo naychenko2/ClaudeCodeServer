@@ -25,9 +25,25 @@ jobs:
           # что на образе раннера случайно оказался предустановленный SDK 10.x — при
           # обновлении образа это молча сломалось бы.
           dotnet-version: 10.0.x
-          # Кэш NuGet общий со сборкой шардов: им нужен restore (см. backend-test)
+          # Кэш пакетов NuGet общий со сборкой шардов: пакеты Test SDK берутся из него (см. backend-test)
           cache: true
           cache-dependency-path: backend/**/*.csproj
+      # .deb ffmpeg для шардов качаем ЗДЕСЬ, фоном, пока идёт сборка (3+ минуты), и отдаём артефактом
+      # ffmpeg-debs: apt на самом шарде нестабилен по времени (в прогоне 41033318930 у 4 из 11 шардов
+      # установка шла 41–46 с — устаревший индекс образа и `apt update`), а подготовка шарда должна
+      # укладываться в ~35 с. На шарде остаётся `dpkg -i` без сети и без `apt update`. --download-only
+      # берёт только пакеты, которых нет на образе, — ровно тот набор, что нужен шарду (образ тот же).
+      # Вывод — только в файлы: дескрипторы шага фоновый процесс не держит, иначе шаг не завершится.
+      - name: Fetch ffmpeg .deb (background)
+        run: |
+          setsid nohup bash -c '
+            mkdir -p "$RUNNER_TEMP/ffmpeg-debs"
+            get="sudo apt-get install -y -qq --no-install-recommends --download-only ffmpeg"
+            $get || { sudo apt-get update -qq && $get; }
+            rc=$?
+            [ "$rc" = 0 ] && cp /var/cache/apt/archives/*.deb "$RUNNER_TEMP/ffmpeg-debs/"
+            echo $? > "$RUNNER_TEMP/ffmpeg-debs.status"' \
+            > "$RUNNER_TEMP/ffmpeg-debs.log" 2>&1 < /dev/null &
       # Предупреждения компилятора — ошибка сборки, но только здесь, а не в
       # Directory.Build.props: локально они не должны мешать отладке (временно
       # неиспользуемая переменная — норма в процессе работы, а не повод глушить
@@ -65,14 +81,20 @@ jobs:
           llm=$!
           wait "$monolith"
           wait "$llm"
-      # В артефакт — только bin (obj шард восстанавливает restore) и только нативные рантаймы
+      # В артефакт — bin и результаты restore (см. ниже), и только нативные рантаймы
       # linux-x64: нативы остальных платформ (SkiaSharp и пр. с pdb в сотни МБ) в КАЖДОМ из ~90 bin
       # раздували архив до 1,4 ГБ. Исключение по RID, а не перечень нужных: linux-[!x]* — все linux-*
       # кроме linux-x64/x86, x86 — отдельно. zstd --long=27: одни и те же dll лежат в десятках bin,
       # окно 128 МБ склеивает дубли (распаковка принимает окно 2^27 по умолчанию) — ~280 МБ вместо 1,4 ГБ
+      #
+      # Вместе с bin едут результаты restore (obj/project.assets.json, *.nuget.g.props/targets, project.nuget.cache,
+      # *.nuget.dgspec.json — десятки КБ на проект): шарду не нужен свой `dotnet restore` (10–16 с на 90 проектов),
+      # ему хватает кэша пакетов NuGet. Пути в assets абсолютные, но раннер и каталог те же, что у сборки.
       - name: Pack build output
         run: |
-          find backend -type d -name bin -prune -print0 \
+          { find backend -type d -name bin -prune -print0
+            find backend -type f -path '*/obj/*' \( -name project.assets.json -o -name project.nuget.cache \
+              -o -name '*.nuget.g.props' -o -name '*.nuget.g.targets' -o -name '*.nuget.dgspec.json' \) -print0; } \
             | tar --null --exclude='backend/*/bin/Release' \
                 --exclude='*/runtimes/win*' --exclude='*/runtimes/osx*' --exclude='*/runtimes/linux-musl*' \
                 --exclude='*/runtimes/linux-arm*' --exclude='*/runtimes/browser*' --exclude='*/runtimes/maccatalyst*' \
@@ -86,6 +108,24 @@ jobs:
           path: ${{ runner.temp }}/backend-build.tar.zst
           compression-level: 0
           retention-days: 1
+      # Фон с .deb к этому моменту давно закончен (сборка идёт минуты). Не вышло — артефакт не создаём,
+      # шарды ставят ffmpeg через apt (запасной путь, медленнее, но с теми же гарантиями)
+      - name: Wait ffmpeg .deb
+        run: |
+          for _ in $(seq 1 300); do [ -f "$RUNNER_TEMP/ffmpeg-debs.status" ] && break; sleep 1; done
+          tail -n 5 "$RUNNER_TEMP/ffmpeg-debs.log"
+          if [ "$(cat "$RUNNER_TEMP/ffmpeg-debs.status" 2>/dev/null)" != 0 ]; then
+            echo "::warning::.deb ffmpeg не скачались — шарды поставят ffmpeg через apt"
+            rm -rf "$RUNNER_TEMP/ffmpeg-debs"
+          fi
+          ls "$RUNNER_TEMP/ffmpeg-debs" 2>/dev/null | wc -l
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-debs
+          path: ${{ runner.temp }}/ffmpeg-debs
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: ignore
 
   # Проверки, не влияющие на шарды (вынесены из backend-build, чтобы не держать путь сборка → шарды)
   backend-checks:
@@ -190,48 +230,57 @@ jobs:
       # ручной --check на спокойной машине, в предгейт сторож не входит
       DURATION_GUARD_THRESHOLD: "30"
     steps:
-      - uses: actions/checkout@v4
-      # ffmpeg для тестов монтажа без ИИ модуля «Звук» (ADR-021, этап 5).
-      # В ubuntu-latest он есть в репозитории universe, но ставится явно — без
-      # зависимости от состава предустановленного софта в будущих образах.
-      # Установка идёт в ФОНЕ параллельно с setup-dotnet, restore и загрузкой артефакта
-      # (20–30 с на каждом шарде); итог ждёт шаг «Дождаться фона». apt update — только если
-      # установка по индексам образа не прошла (устаревший индекс): на удачном пути он стоит 10–20 с.
-      # Вывод — только в файлы:
-      # дескрипторы шага фоновый процесс не держит, иначе шаг не завершится.
-      - name: Install ffmpeg (background)
-        run: |
-          setsid nohup bash -c 'sudo apt-get install -y -qq --no-install-recommends ffmpeg || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg; }; echo $? > "$RUNNER_TEMP/ffmpeg.status"' \
-            > "$RUNNER_TEMP/ffmpeg.log" 2>&1 < /dev/null &
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 10.0.x
-          # Кэш NuGet общий со сборкой (ключ по csproj решения): пакеты берутся из кэша, не из сети
-          cache: true
-          cache-dependency-path: backend/**/*.csproj
-      # Без restore свежий раннер не видит пакетов Test SDK, и `dotnet test --no-build` молча
-      # ничего не запускает (код 0, ни одного TRX) — так прошёл первый прогон матрицы.
-      # Тоже в фоне: obj пишет только restore, bin распаковывается отдельно — пересечений нет
-      - name: Restore (background)
-        run: |
-          setsid nohup bash -c 'start=$(date +%s); dotnet restore backend/ClaudeHomeServer.slnx; rc=$?; echo "Restore занял $(( $(date +%s) - start )) с"; echo $rc > "$RUNNER_TEMP/restore.status"' \
-            > "$RUNNER_TEMP/restore.log" 2>&1 < /dev/null &
+      # Подготовка шарда идёт конвейером: последовательны только действия (скачать, checkout, setup-dotnet),
+      # тяжёлое — распаковка сборки и установка ffmpeg — работает ФОНОМ рядом с ними. Бюджет до первого
+      # `dotnet test` — ~35 с, поэтому в цепочке нет ни `dotnet restore`, ни `apt`, ни ожидания «на всякий случай».
+      #
+      # Сборка — первым делом: репозиторий ей не нужен, а распаковка идёт в склад $RUNNER_TEMP/stage
+      # (checkout чистит рабочую папку без .git, поэтому прямо в неё нельзя); после checkout склад
+      # сливается жёсткими ссылками.
       - uses: actions/download-artifact@v4
         with:
           name: backend-build
           path: ${{ runner.temp }}
-      - name: Unpack build output
-        run: zstd -d -q --long=27 -c "$RUNNER_TEMP/backend-build.tar.zst" | tar -xf -
-      - name: Дождаться фона (restore, ffmpeg)
+      - name: Unpack build output (background)
         run: |
-          for _ in $(seq 1 300); do
-            [ -f "$RUNNER_TEMP/restore.status" ] && [ -f "$RUNNER_TEMP/ffmpeg.status" ] && break
-            sleep 1
-          done
-          for t in restore ffmpeg; do
-            echo "::group::$t"; tail -n 20 "$RUNNER_TEMP/$t.log"; echo "::endgroup::"
-            [ "$(cat "$RUNNER_TEMP/$t.status" 2>/dev/null)" = 0 ] || { echo "$t: фоновый шаг не завершился успешно" >&2; exit 1; }
-          done
+          mkdir -p "$RUNNER_TEMP/stage"
+          setsid nohup bash -o pipefail -c 'start=$(date +%s); zstd -d -q --long=27 -c "$RUNNER_TEMP/backend-build.tar.zst" | tar -xf - -C "$RUNNER_TEMP/stage"; rc=$?; echo "Распаковка заняла $(( $(date +%s) - start )) с"; echo $rc > "$RUNNER_TEMP/unpack.status"' \
+            > "$RUNNER_TEMP/unpack.log" 2>&1 < /dev/null &
+      # ffmpeg нужен тестам монтажа без ИИ модуля «Звук» (ADR-021, этап 5) и миниатюрам истории медиа: на CI
+      # без него эти тесты падают (CI=true), а не пропускаются. Llm.Tests им не пользуется — ему не ставим.
+      # Монолит и «rest» — ставим всем: куда попадёт класс с ffmpeg (монолит) или проект Images.Tests («rest»),
+      # решает раскладка по профилю прошлого прогона, до распаковки её не узнать. Пакеты скачала сборка
+      # (артефакт ffmpeg-debs) — на шарде это dpkg -i без сети; нет артефакта или dpkg не справился —
+      # запасной путь через apt (устаревший индекс образа лечит apt update). Тоже фоном, итог ждёт шаг ниже.
+      - uses: actions/download-artifact@v4
+        if: matrix.kind != 'llm'
+        continue-on-error: true
+        with:
+          name: ffmpeg-debs
+          path: ${{ runner.temp }}/ffmpeg-debs
+      - name: Install ffmpeg (background)
+        if: matrix.kind != 'llm'
+        run: |
+          setsid nohup bash -c 'start=$(date +%s)
+            export DEBIAN_FRONTEND=noninteractive
+            if ls "$RUNNER_TEMP"/ffmpeg-debs/*.deb > /dev/null 2>&1 && sudo -E dpkg -i "$RUNNER_TEMP"/ffmpeg-debs/*.deb; then rc=0
+            else
+              echo "dpkg -i не вышел или .deb нет — ставим через apt"
+              sudo -E apt-get install -y -qq --no-install-recommends ffmpeg || { sudo -E apt-get update -qq && sudo -E apt-get install -y -qq --no-install-recommends ffmpeg; }
+              rc=$?
+            fi
+            echo "ffmpeg занял $(( $(date +%s) - start )) с"; echo $rc > "$RUNNER_TEMP/ffmpeg.status"' \
+            > "$RUNNER_TEMP/ffmpeg.log" 2>&1 < /dev/null &
+      - uses: actions/checkout@v4
+      # Кэш пакетов NuGet нужен и без restore: из него берутся пакеты Test SDK, чьи props подключают
+      # obj/*.nuget.g.props (без них `dotnet test --no-build` молча ничего не запускает, код 0).
+      # Ключ общий со сборкой — она сохраняет кэш до старта шардов. Цена: ~4 с (524 МБ: скачать ~2 с, распаковать ~2 с)
+      # из ~5,5 с шага; без кэша пакеты тянул бы restore из сети — это дороже
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: backend/**/*.csproj
       # Профиль прошлого прогона (job backend-profile) — веса раскладки; нет его — раскладка
       # по стабильному хешу имени класса, покрытие от этого не зависит
       - uses: actions/cache/restore@v4
@@ -239,6 +288,19 @@ jobs:
           path: test-profile.json
           key: test-profile-${{ github.run_id }}
           restore-keys: test-profile-
+      - name: Дождаться фона (распаковка, ffmpeg) и выложить сборку
+        run: |
+          waits="unpack"; [ "${{ matrix.kind }}" = llm ] || waits="unpack ffmpeg"
+          for _ in $(seq 1 1500); do
+            ready=1; for t in $waits; do [ -f "$RUNNER_TEMP/$t.status" ] || ready=0; done
+            [ "$ready" = 1 ] && break
+            sleep 0.2
+          done
+          for t in $waits; do
+            echo "::group::$t"; tail -n 20 "$RUNNER_TEMP/$t.log"; echo "::endgroup::"
+            [ "$(cat "$RUNNER_TEMP/$t.status" 2>/dev/null)" = 0 ] || { echo "$t: фоновый шаг не завершился успешно" >&2; exit 1; }
+          done
+          cp -al "$RUNNER_TEMP/stage/." . || cp -a "$RUNNER_TEMP/stage/." .
       # Цель и фильтр шарда. Категория "Node" — за бортом: нужен Node + frontend/node_modules,
       # не ставим. Категория "Dns" на ubuntu-latest НЕ исключается: внешний DNS-резолв в CI
       # работает штатно (исторический прогон 02.09: 1317 passed), а выкинуть её — потерять
@@ -250,6 +312,8 @@ jobs:
             monolith | llm)
               if [ "${{ matrix.kind }}" = llm ]; then target=backend/ClaudeHomeServer.Llm.Tests; list=llm-tests.txt
               else target=backend/ClaudeHomeServer.Tests; list=monolith-tests.txt; fi
+              # Без restore нет и assets: пусть падение будет громким, а не молчаливым прогоном ни одного теста
+              test -f "$target/obj/project.assets.json" || { echo "нет $target/obj/project.assets.json — артефакт сборки без результатов restore" >&2; exit 1; }
               SHARD=$(python3 -I scripts/test-shards.py --list "$list" --shard "${{ matrix.shard }}" --timings test-profile.json)
               echo "TARGET=$target" >> "$GITHUB_ENV"
               echo "SHARD=($SHARD)&" >> "$GITHUB_ENV" ;;
@@ -318,8 +382,8 @@ jobs:
           path: trx
       - name: Profile
         run: |
-          python3 -I scripts/test-profile.py trx
-          python3 -I scripts/test-profile.py trx --json > test-profile.json
+          python3 -I scripts/test-profile.py trx --src backend
+          python3 -I scripts/test-profile.py trx --src backend --json > test-profile.json
       - uses: actions/cache/save@v4
         with:
           path: test-profile.json

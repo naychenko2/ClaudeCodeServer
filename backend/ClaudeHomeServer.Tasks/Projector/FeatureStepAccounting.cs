@@ -64,23 +64,26 @@ internal static class FeatureStepAccounting
     }
 
     // Действующие планы в исходном порядке: не снятые и не замещённые более поздним планом с
-    // пересекающимися ключами. Идём от позднего (CreatedAt, Id) к раннему; ранний, чьи ключи
-    // пересекаются с уже принятыми, вычёркивается целиком.
+    // пересекающимися ключами. Правило попарное: план вытесняется, если существует более поздний
+    // (CreatedAt, Id) план с пересекающимися ключами — сам ли тот принят, неважно. Иначе
+    // вытесненный план через третий воскрешал бы свои шаги (p1[B], p2[A,B], p3[A] → живёт только p3).
     internal static List<TaskItem> ActivePlans(IEnumerable<TaskItem> plans)
     {
-        var live = plans.Where(p => p.Verification?.Verdict != TaskVerdicts.Withdrawn).ToList();
-        var taken = new HashSet<string>(StepKeyComparer);
-        var accepted = new HashSet<TaskItem>(ReferenceEqualityComparer.Instance);
-        foreach (var p in live
+        var live = plans
+            .Where(p => p.Verification?.Verdict != TaskVerdicts.Withdrawn)
             .OrderByDescending(p => p.CreatedAt)
-            .ThenByDescending(p => p.Id, StringComparer.Ordinal))
+            .ThenByDescending(p => p.Id, StringComparer.Ordinal)
+            .Select(p => (Plan: p, Keys: PlanStepKeys(p)))
+            .ToList();
+        var accepted = new HashSet<TaskItem>(ReferenceEqualityComparer.Instance);
+        for (var i = 0; i < live.Count; i++)
         {
-            var keys = PlanStepKeys(p);
-            if (keys.Overlaps(taken)) continue;
-            taken.UnionWith(keys);
-            accepted.Add(p);
+            var superseded = false;
+            for (var j = 0; j < i && !superseded; j++)
+                superseded = live[i].Keys.Overlaps(live[j].Keys);
+            if (!superseded) accepted.Add(live[i].Plan);
         }
-        return live.Where(accepted.Contains).ToList();
+        return plans.Where(accepted.Contains).ToList();
     }
 
     // steps — задачи role=step/rework; verdictTasks — ревью/проверки/финал; plan — задачи role=plan.

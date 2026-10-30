@@ -528,9 +528,25 @@ public class FeatureStepProgressTests
         var a = Plan("p-a", 0, ("A", "back"), ("X", "back"));
         var b = Plan("p-b", 0, ("A", "back"), ("Y", "back"));
 
-        Run(Feature(), a, b).StepProgress.Total.Should().Be(2, "действует p-b: A и Y");
+        // Конкретный победитель в обоих порядках входа: без tie-break по Id порядок решал бы исход.
+        FeatureStepAccounting.ActivePlans([a, b]).Select(p => p.Id).Should().Equal("p-b");
+        FeatureStepAccounting.ActivePlans([b, a]).Select(p => p.Id).Should().Equal("p-b");
+        Run(Feature(), a, b, Step("s", "Y", 3)).StepProgress.NotCreated.Should().Be(1, "Y заведён, A нет");
         Run(Feature(), b, a, Step("s", "Y", 3)).StepProgress.NotCreated.Should().Be(1, "Y заведён, A нет");
         Run(Feature(), b, a, Step("s", "X", 3)).StepProgress.Total.Should().Be(3, "X вне плана p-b, но заведён — считается");
+    }
+
+    // Вытесненный план не воскрешает шаги через третий: p1[B], p2[A,B], p3[A] → живёт только p3.
+    [Fact]
+    public void ПланыЦепочкойПересечений_ВытесненныйНеВозвращаетШаги()
+    {
+        var p1 = Plan("p1", 0, ("B", "back"));
+        var p2 = Plan("p2", 1, ("A", "back"), ("B", "back"));
+        var p3 = Plan("p3", 2, ("A", "back"));
+
+        Run(Feature(), p1, p2, p3).StepProgress.Total.Should().Be(1);
+        Run(Feature(), p3, p1, p2).StepProgress.Total.Should().Be(1);
+        FeatureStepAccounting.ActivePlans([p2, p3, p1]).Select(p => p.Id).Should().Equal("p3");
     }
 
     // Планы по линиям без пересечений объединяются.

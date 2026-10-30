@@ -1694,6 +1694,21 @@ public class TaskManagerTests : IDisposable
         late.Verification.Should().BeNull();
     }
 
+    // Цепочка p1[B], p2[A,B], p3[A]: стор и проекция сходятся — живёт один p3.
+    [Fact]
+    public void Create_ЦепочкаПересечений_СторИПроекцияДаютОдинаковыйНабор()
+    {
+        var epic = CreateEpic("u");
+        var p1 = CreatePlan("u", epic.Id, "B");
+        var p2 = CreatePlan("u", epic.Id, "A", "B");
+        var p3 = CreatePlan("u", epic.Id, "A");
+
+        p1.Verification?.Verdict.Should().Be(TaskVerdicts.Withdrawn);
+        p2.Verification?.Verdict.Should().Be(TaskVerdicts.Withdrawn);
+        p3.Verification.Should().BeNull();
+        FeatureStepAccounting.ActivePlans([p1, p2, p3]).Select(p => p.Id).Should().Equal(p3.Id);
+    }
+
     [Fact]
     public void Create_ПланБезПересечения_РаннийНеТрогается()
     {

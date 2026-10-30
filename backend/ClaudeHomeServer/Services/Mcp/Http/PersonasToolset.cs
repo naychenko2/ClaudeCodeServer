@@ -159,13 +159,16 @@ public sealed partial class PersonasToolset(
                 // context: глобальные + проекта чата + кросс-проектные привязки персоны.
                 // В узкой рамке ambient-глобальные из списка убираются: они не контекст этого
                 // проекта. Явно привязанные к проекту (extraPersonaIds) остаются — это
-                // конфигурация самой проектной персоны, не личное пространство владельца
+                // конфигурация самой проектной персоны, не личное пространство владельца.
+                // Сферные убираются целиком (дефект 837bb1c8): личная группировка владельца
+                // закрыта так же, как persona_ask (NarrowSpherePersonaText), — список, из
+                // которого нельзя спросить, модели не нужен
                 var contextList = personas.GetForContextWithExtras(ownerId, projectId,
                     extraProjectIds, extraPersonaIds);
                 if (narrow)
                     contextList = contextList
-                        .Where(p => p.Scope != PersonaScope.Global
-                            || extraPersonaIds.Contains(p.Id))
+                        .Where(p => !PersonaZone.IsSpherePersona(p)
+                            && (p.Scope != PersonaScope.Global || extraPersonaIds.Contains(p.Id)))
                         .ToList();
                 return Json(contextList);
             }
@@ -175,6 +178,9 @@ public sealed partial class PersonasToolset(
                 if (personas.Get(StringArg(arguments, "id"), ownerId) is not { } found)
                     return Deny($"Персона {StringArg(arguments, "id")} не найдена.");
                 if (narrow && found.Scope == PersonaScope.Global) return Deny(NarrowGlobalText);
+                // Профиль сферной персоны — та же личная группировка, что закрытая память и
+                // persona_ask (дефект 837bb1c8)
+                if (narrow && PersonaZone.IsSpherePersona(found)) return Deny(NarrowSpherePersonaText);
                 return Json(found);
             }
 
@@ -230,8 +236,10 @@ public sealed partial class PersonasToolset(
                 if (personas.Get(StringArg(arguments, "id"), ownerId) is not { } bp)
                     return Deny($"Персона {StringArg(arguments, "id")} не найдена.");
                 // Привязки глобальной персоны — её личная конфигурация (личный vault, личные
-                // заметки); в общем проекте закрыта вместе с самой персоной
+                // заметки); в общем проекте закрыта вместе с самой персоной. Привязки сферной —
+                // закрыты так же (дефект 837bb1c8)
                 if (narrow && bp.Scope == PersonaScope.Global) return Deny(NarrowGlobalText);
+                if (narrow && PersonaZone.IsSpherePersona(bp)) return Deny(NarrowSpherePersonaText);
                 return Json(bp.Bindings ?? []);
             }
 
@@ -484,7 +492,9 @@ public sealed partial class PersonasToolset(
                 // 30.10): сфера — личная группировка владельца, непоследовательно резать
                 // полку её памяти и оставлять ответ, приносящий личную память её персоны
                 if (narrow && target.Scope == PersonaScope.Global) return Deny(NarrowGlobalText);
-                if (narrow && target.Scope == PersonaScope.Sphere) return Deny(NarrowSpherePersonaText);
+                // Та же единая точка правды зоны, что в остальных местах файла (guard
+                // PersonaZoneGuardTests: прямых сравнений зоны в бэкенде нет)
+                if (narrow && PersonaZone.IsSpherePersona(target)) return Deny(NarrowSpherePersonaText);
 
                 try
                 {

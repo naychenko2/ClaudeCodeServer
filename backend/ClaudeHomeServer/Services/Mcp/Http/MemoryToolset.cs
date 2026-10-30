@@ -108,7 +108,9 @@ public sealed class MemoryToolset(
         if (narrow && tool.StartsWith("memory_", StringComparison.Ordinal))
         {
             if (persona?.Scope == PersonaScope.Global) return Deny(NarrowPersonalMemoryText);
-            if (persona?.Scope == PersonaScope.Sphere) return Deny(NarrowSpherePersonaMemoryText);
+            // Та же единая точка правды зоны, что в остальных местах (guard PersonaZoneGuardTests:
+            // прямых сравнений зоны в бэкенде нет)
+            if (persona is not null && PersonaZone.IsSpherePersona(persona)) return Deny(NarrowSpherePersonaMemoryText);
         }
 
         switch (tool)

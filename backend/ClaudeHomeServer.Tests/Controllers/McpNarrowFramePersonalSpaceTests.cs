@@ -391,6 +391,64 @@ public class McpNarrowFramePersonalSpaceTests : IDisposable
     }
 
     [Fact]
+    public async Task Personas_УзкаяРамка_СфернаяПерсонаВСпискеКонтекстаНет_ПроектнаяДоступна()
+    {
+        // Дефект 837bb1c8: сферная персона была закрыта по памяти и persona_ask, но оставалась
+        // в personas_list scope=context (GetForContext отдаёт команду сферы проекта чата) —
+        // список, из которого нельзя спросить. Личная группировка убирается целиком;
+        // проектная команда этого чата не тронута
+        var f = await ArrangeAsync();
+        var s = await ArrangeSphereAsync(f);
+        var sphereTeamPersona = await CreatePersonaAsync($"СФЕРА-КОМАНДА-{f.Tag}", "project", s.SharedInSphere);
+
+        var (list, listErr) = await CallAsync($"/mcp/personas/{s.SharedSphereChat}", "personas_list",
+            new { scope = "context" }, s.SharedSphereChat);
+        listErr.Should().BeFalse(list);
+        list.Should().Contain(sphereTeamPersona, "проектная персона этого чата — в списке");
+        list.Should().NotContain(s.SpherePersona, "сферная персона — личная группировка владельца");
+        list.Should().NotContain($"СФЕРА-персона-{f.Tag}", "и по имени: персоны нет в составе");
+    }
+
+    [Fact]
+    public async Task Personas_ШирокаяРамка_СфернаяПерсонаВСпискеКонтекстаЕсть()
+    {
+        // Анти-тест: та же персона и та же сфера в личном чате (широкая рамка) — в списке;
+        // проектная персона тоже в обеих рамках (Wide-путь не тронут)
+        var f = await ArrangeAsync();
+        var s = await ArrangeSphereAsync(f);
+        var personalTeamPersona = await CreatePersonaAsync($"СФЕРА-КОМАНДА-личный-{f.Tag}", "project", s.PersonalInSphere);
+
+        var (list, listErr) = await CallAsync($"/mcp/personas/{s.PersonalSphereChat}", "personas_list",
+            new { scope = "context" }, s.PersonalSphereChat);
+        listErr.Should().BeFalse(list);
+        list.Should().Contain(s.SpherePersona, "в личном чате личное пространство владельца — своё");
+        list.Should().Contain(personalTeamPersona);
+    }
+
+    [Fact]
+    public async Task Personas_УзкаяРамка_GetИПривязкиСфернойПерсоны_Отказ_ВЛичномЧатеРаботают()
+    {
+        // Другие пути отдачи данных персоны (перечислены грепом по PersonasToolset): профиль
+        // и привязки сферной персоны закрыты тем же отказом; в широкой рамке читаются
+        var f = await ArrangeAsync();
+        var s = await ArrangeSphereAsync(f);
+        foreach (var tool in new[] { "personas_get", "personas_bindings_list" })
+        {
+            var (text, isError) = await CallAsync($"/mcp/personas/{s.SharedSphereChat}", tool,
+                new { id = s.SpherePersona }, s.SharedSphereChat);
+            isError.Should().BeTrue($"{tool}: {text}");
+            text.Should().Contain("Персоны сферы");
+            f.AssertNoPersonal(text);
+        }
+        foreach (var tool in new[] { "personas_get", "personas_bindings_list" })
+        {
+            var (text, isError) = await CallAsync($"/mcp/personas/{s.PersonalSphereChat}", tool,
+                new { id = s.SpherePersona }, s.PersonalSphereChat);
+            isError.Should().BeFalse($"{tool}: {text}");
+        }
+    }
+
+    [Fact]
     public async Task PersonasSuggestBindings_УзкаяРамка_Отказ_ВЛичномЧатеРаботает()
     {
         // Каталог подбора — всё пространство владельца (проекты, заметки, базы), а не только

@@ -860,9 +860,15 @@ describe('Ш9a: тег статуса на 360', () => {
       expect(tag).not.toBeNull();
       const wrap = reactProps(tag!.parentNode as never) as { style?: Record<string, unknown> };
       if (isMobile) {
-        expect(wrap.style?.maxWidth).toBeLessThanOrEqual(96);
+        // Исход: название получает ≥ 125 px (≈ 2 слова). Остальное в строке тулбара на 360:
+        // поля 24 + «К списку» ~72 + глиф 14 + ⋯ 36 + зазоры 24 = 170.
+        const titleW = 360 - 170 - Number(wrap.style?.maxWidth);
+        expect(titleW).toBeGreaterThanOrEqual(125);
         expect(wrap.style?.overflow).toBe('hidden');
-        expect(wrap.style?.flexShrink).toBe(0);
+        // Только тон-слово, без суффикса стадии; тег клипается многоточием, не посреди слова.
+        expect(String(tag!.textContent)).not.toContain('·');
+        const tagStyle = (reactProps(tag as never) as { style?: Record<string, unknown> }).style;
+        expect(tagStyle?.overflow).toBe('hidden');
       } else {
         expect(wrap.style?.display).toBe('contents');
       }

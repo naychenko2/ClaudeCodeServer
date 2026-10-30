@@ -66,6 +66,9 @@ function attentionPersonaName(a: FeatureAttention | null | undefined): string | 
 // paused. Пункт «Вернуть в черновик» — только когда бэк отдаёт признак «шагов не
 // запускалось»; до него пункта нет. Страница обновляется событием агрегата (стор
 // featurePage слушает taskChanged) — оптимистично тег не меняем.
+// Потолок обёртки тега на 360 (расчёт ширины названия — в комментарии у обёртки).
+export const TAG_MAX_W_MOBILE = 64;
+
 const HOLD_ALLOWED: ReadonlySet<FeatureState> = new Set(['running', 'waiting', 'stopped', 'merge_pending', 'not_started', 'idle']);
 
 // Текст тоста 409: причина из ответа бэка (body.error); пустая — фолбэк из спецификации.
@@ -648,14 +651,19 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
   return (
     <>
       {tag && (
-        // На 360 тег не должен вытеснять название: потолок ширины, хвост подписи клипается
-        // (полный текст — в title). Расчёт: 360 − поля 24 − «К списку» ~72 − глиф 14 − ⋯ 36 −
-        // зазоры 24 − тег 80 ≈ 108 px названию (≈ 2 слова). На десктопе — без изменений.
+        // На 360 тег не должен вытеснять название: показываем только тон-слово (без суффикса
+        // стадии «· Производство», полный текст — в title/aria), потолок обёртки 64 px.
+        // Расчёт: 360 − поля 24 − «К списку» ~72 − глиф 14 − ⋯ 36 − зазоры 24 − тег 64 = 126 px
+        // названию (≥ 2 слов, хвост — многоточием). На десктопе — без изменений.
         <span
           title={isMobile ? tag.label : undefined}
-          style={isMobile ? { display: 'inline-flex', flexShrink: 0, maxWidth: 80, overflow: 'hidden' } : { display: 'contents' }}
+          style={isMobile ? { display: 'inline-flex', flexShrink: 1, minWidth: 0, maxWidth: TAG_MAX_W_MOBILE, overflow: 'hidden' } : { display: 'contents' }}
         >
-          <StatusTag tag={tag} testId="feature-page-status" />
+          <StatusTag
+            tag={isMobile ? { ...tag, label: tag.label.split(' · ')[0] } : tag}
+            testId="feature-page-status"
+            clip={isMobile}
+          />
         </span>
       )}
       {canPause && !isMobile && (

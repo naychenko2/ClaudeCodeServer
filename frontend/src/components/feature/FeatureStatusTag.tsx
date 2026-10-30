@@ -126,13 +126,14 @@ function QueueGlyph() {
 // Тег: 11/600, поля 1 7, R.sm, строка 16 (макет §1). Точка — у «ждёт вас»/«к мержу».
 // «На паузе» — глиф «‖» 10 px currentColor перед подписью (макет feature-hold-1);
 // «черновик» — поля 0 6: пунктирная рамка занимает место, её компенсируют полем.
-export function StatusTag({ tag, testId }: { tag: FeatureRunTag; testId?: string }) {
+export function StatusTag({ tag, testId, clip }: { tag: FeatureRunTag; testId?: string; clip?: boolean }) {
   const queue = tag.tone === 'hold' ? QUEUE_LABEL.exec(tag.label) : null;
   return (
     <span
       data-testid={testId}
       style={{
-        display: 'inline-flex', alignItems: 'center', gap: SP.xs, flexShrink: 0,
+        display: 'inline-flex', alignItems: 'center', gap: SP.xs, flexShrink: clip ? 1 : 0,
+        ...(clip ? { minWidth: 0, maxWidth: '100%', overflow: 'hidden' } : {}),
         fontSize: FS.xs, fontWeight: 600, fontFamily: FONT.sans, lineHeight: '16px',
         ...(tag.tone === 'draft' ? { padding: `0 6px` } : { padding: `${SP.xxs}px ${SP.xs}px` }),
         borderRadius: R.sm, whiteSpace: 'nowrap',
@@ -154,6 +155,9 @@ export function StatusTag({ tag, testId }: { tag: FeatureRunTag; testId?: string
           {tag.label.slice(0, -queue[1].length)}
           <span data-testid="queue-nums" style={{ fontFamily: FONT.mono }}>{queue[1]}</span>
         </>
+      ) : clip ? (
+        // обрезка по слову с многоточием, а не посреди слова
+        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{tag.label}</span>
       ) : tag.label}
     </span>
   );

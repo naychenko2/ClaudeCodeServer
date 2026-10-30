@@ -282,7 +282,8 @@ describe('Тег: run.state → подпись (макет §3)', () => {
     await settle();
     const tag = findNodeByAttr(c, 'data-testid', 'feature-page-status');
     expect(tag).not.toBeNull();
-    expect(textNodes(tag!).join('')).toContain('ждёт вас');
+    expect(textNodes(tag!).join('')).toContain('в работе');
+    expect(textNodes(tag!).join('')).not.toContain('ждёт вас');
   });
 
   it('страница: 360 — тег в мете, не в шапке', async () => {
@@ -291,7 +292,8 @@ describe('Тег: run.state → подпись (макет §3)', () => {
     await settle();
     const meta = findNodeByAttr(c, 'data-testid', 'feature-page-meta');
     expect(meta).not.toBeNull();
-    expect(textNodes(meta!).join('')).toContain('ждёт вас');
+    expect(textNodes(meta!).join('')).toContain('в работе');
+    expect(textNodes(meta!).join('')).not.toContain('ждёт вас');
   });
 });
 

@@ -27,7 +27,9 @@ internal static class FeatureStepAccounting
         // с порогом (тот же подход, что у waitingSince: null, а не «сейчас»).
         TaskItem? LastSubmitted,
         // Витки цепочки — тот же список, что FeatureStepChain.Rounds.
-        List<FeatureRound> Rounds);
+        List<FeatureRound> Rounds,
+        // Шаг назван в действующем плане (последний план, B3) — для вида «шаг вне плана» (B4).
+        bool InPlan);
 
     private const string Accepted = "accepted";
     private const string Review = "review";
@@ -51,6 +53,36 @@ internal static class FeatureStepAccounting
     // задача-шаг без stepRef — отдельный шаг, а не общая цепочка «»).
     internal static string KeyOf(TaskItem t) => string.IsNullOrWhiteSpace(t.StepRef) ? t.Id : t.StepRef.Trim();
 
+    // Ключи шагов плана для сравнения планов: непустые, trim, только исполняемые (kind step).
+    internal static HashSet<string> PlanStepKeys(TaskItem p)
+    {
+        var keys = new HashSet<string>(StepKeyComparer);
+        foreach (var ps in p.PlanSteps ?? [])
+            if (ps is not null && ps.IsStep && !string.IsNullOrWhiteSpace(ps.StepRef))
+                keys.Add(ps.StepRef.Trim());
+        return keys;
+    }
+
+    // Действующие планы в исходном порядке: не снятые и не замещённые более поздним планом с
+    // пересекающимися ключами. Идём от позднего (CreatedAt, Id) к раннему; ранний, чьи ключи
+    // пересекаются с уже принятыми, вычёркивается целиком.
+    internal static List<TaskItem> ActivePlans(IEnumerable<TaskItem> plans)
+    {
+        var live = plans.Where(p => p.Verification?.Verdict != TaskVerdicts.Withdrawn).ToList();
+        var taken = new HashSet<string>(StepKeyComparer);
+        var accepted = new HashSet<TaskItem>(ReferenceEqualityComparer.Instance);
+        foreach (var p in live
+            .OrderByDescending(p => p.CreatedAt)
+            .ThenByDescending(p => p.Id, StringComparer.Ordinal))
+        {
+            var keys = PlanStepKeys(p);
+            if (keys.Overlaps(taken)) continue;
+            taken.UnionWith(keys);
+            accepted.Add(p);
+        }
+        return live.Where(accepted.Contains).ToList();
+    }
+
     // steps — задачи role=step/rework; verdictTasks — ревью/проверки/финал; plan — задачи role=plan.
     internal static Result Build(
         List<TaskItem> steps, List<TaskItem> verdictTasks, List<TaskItem> plan, DateTime nowUtc,
@@ -69,10 +101,16 @@ internal static class FeatureStepAccounting
         string? LiveChat(string? chatId) =>
             chatId is not null && sessionById.ContainsKey(chatId) ? chatId : null;
 
-        // ─── План: структурный список шагов (объединение по всем задачам role=plan) ──────────
+        // ─── План: последний план вместо объединения (разрез «одна правда о проценте», B3) ─────
+        // Источник шагов — планы, не снятые (withdrawn). Если у двух планов пересекаются ключи
+        // шагов, берётся более поздний по (CreatedAt, Id), ранний вычёркивается ЦЕЛИКОМ; планы
+        // без пересечений (например, по линиям бэк/фронт) объединяются. Это отменяет объединение
+        // всех планов (шов 63a69b77 п.2а): замещённый план больше не раздувает знаменатель.
+        // Проекция не зависит от того, успел ли TaskManager.Create снять ранний план.
+        var countedPlans = ActivePlans(plan);
         var planned = new Dictionary<string, PlannedStep>(StepKeyComparer);
         var plannedOrder = new List<string>();
-        foreach (var p in plan)
+        foreach (var p in countedPlans)
             foreach (var ps in p.PlanSteps ?? [])
             {
                 if (ps is null || string.IsNullOrWhiteSpace(ps.StepRef)) continue;
@@ -83,12 +121,10 @@ internal static class FeatureStepAccounting
                 var key = ps.StepRef.Trim();
                 if (planned.TryAdd(key, ps)) plannedOrder.Add(key);
             }
-        // Маппинг состояния плана (решение Александра, шов 63a69b77 п.2а; строки контракта не
-        // меняются): учитываются задачи role=plan, КРОМЕ снятых (withdrawn) — снятый старый план
-        // не должен держать фичу в partial. pending — таких задач нет, или у всех planSteps пуст;
-        // partial — списки есть только у части планов; cut — у всех; done выводится ниже, когда
-        // план разобран и всё принято.
-        var countedPlans = plan.Where(p => p.Verification?.Verdict != TaskVerdicts.Withdrawn).ToList();
+        // Маппинг состояния плана (строки контракта не меняются): считается по тому же набору
+        // countedPlans, что и шаги, — снятые и замещённые планы не держат фичу в partial.
+        // pending — таких задач нет, или у всех planSteps пуст; partial — списки есть только у
+        // части планов; cut — у всех; done выводится ниже, когда план разобран и всё принято.
         int plansWithSteps = countedPlans.Count(p => p.PlanSteps is not null && p.PlanSteps.Count > 0);
         string planState = plansWithSteps == 0 ? PlanPending
             : plansWithSteps < countedPlans.Count ? PlanPartial : PlanCut;
@@ -261,7 +297,7 @@ internal static class FeatureStepAccounting
             var lastSubmitted = ordered
                 .Where(t => t.Status == TaskItemStatus.Done && t.CompletedAt is not null)
                 .MaxBy(t => t.CompletedAt!.Value);
-            facts[key] = new ChainFacts(lastSubmitted, featureRounds);
+            facts[key] = new ChainFacts(lastSubmitted, featureRounds, planned.ContainsKey(key));
 
             // Источник возврата: последний виток-возврат в порядке по завершению; связи нет — null.
             var returnTasks = rounds.Where(t => FeatureProjector.IsReturn(FeatureProjector.RoundVerdict(t))).ToList();

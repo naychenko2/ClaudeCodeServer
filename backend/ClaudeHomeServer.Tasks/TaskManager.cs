@@ -469,7 +469,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             task.Verification = null;
             task.Outcome = null;
         }
-        _tasks[task.Id] = task;
+        InsertWithPlanReplacement(task, ownerId);
         // created: эпик фичи — первая запись её журнала (журнал точный, только если
         // начинается с created; дочерние задачи фичи created не пишут).
         if (task.Role == TaskRoles.Feature)
@@ -484,6 +484,76 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         ScheduleSave();
         LogTask(task, ProjectEventTypes.TaskCreated, $"Создана задача «{task.Title}»");
         return task;
+    }
+
+    // Локи по FeatureId (не по экземпляру менеджера и не глобальный): сериализуют только создание
+    // планов ОДНОЙ фичи. Записи в словаре на фичу не чистятся — их число ограничено числом фич.
+    private readonly ConcurrentDictionary<string, object> _planLocks = new(StringComparer.Ordinal);
+
+    // Тестовый шов: вызывается внутри лока между поиском пересекающихся планов и вставкой
+    // нового — детерминированная точка интерливинга для теста гонки.
+    internal Action? PlanReplaceInterleaveHook { get; set; }
+
+    // Вставка задачи в стор. Для плана с шагами (B3, «последний план вместо объединения»):
+    // планы того же владельца и FeatureId с пересекающимися ключами шагов снимаются
+    // (withdrawn, «заменён планом {id}») — секция «найти → снять → вставить» под локом фичи, иначе
+    // два одновременных Create оставили бы оба плана живыми. Победитель — поздний по
+    // (CreatedAt, Id), как в проекции: если под локом нашёлся более поздний пересекающийся план
+    // (гонка: объект создан раньше, а в стор попал позже), снимается сам новый. Снятие — гигиена
+    // данных: проекция (FeatureStepAccounting.ActivePlans) от исхода гонки не зависит. План с уже
+    // существующим вердиктом не трогаем. Вердикт бывает только у закрытой задачи (инвариант
+    // Create/Update), поэтому снимаемый незакрытый план заодно закрывается.
+    private void InsertWithPlanReplacement(TaskItem task, string ownerId)
+    {
+        var keys = task.Role == TaskRoles.Plan && task.FeatureId is not null
+            ? FeatureStepAccounting.PlanStepKeys(task)
+            : null;
+        if (keys is not { Count: > 0 })
+        {
+            _tasks[task.Id] = task;
+            return;
+        }
+
+        bool changedOthers = false;
+        lock (_planLocks.GetOrAdd(task.FeatureId!, _ => new object()))
+        {
+            var overlapping = _tasks.Values
+                .Where(t => t.Role == TaskRoles.Plan && t.OwnerId == ownerId
+                    && string.Equals(t.FeatureId, task.FeatureId, StringComparison.Ordinal)
+                    && t.Verification is null
+                    && FeatureStepAccounting.PlanStepKeys(t).Overlaps(keys))
+                .ToList();
+            PlanReplaceInterleaveHook?.Invoke();
+            var newer = overlapping.FirstOrDefault(t => IsLaterPlan(t, task));
+            if (newer is not null)
+                WithdrawPlan(task, newer.Id);
+            foreach (var old in overlapping.Where(t => !IsLaterPlan(t, task)))
+            {
+                WithdrawPlan(old, task.Id);
+                changedOthers = true;
+            }
+            _tasks[task.Id] = task;
+        }
+        if (changedOthers) ScheduleSave();
+    }
+
+    private static bool IsLaterPlan(TaskItem a, TaskItem b) =>
+        a.CreatedAt != b.CreatedAt ? a.CreatedAt > b.CreatedAt : string.CompareOrdinal(a.Id, b.Id) > 0;
+
+    private static void WithdrawPlan(TaskItem plan, string replacedBy)
+    {
+        var now = DateTime.UtcNow;
+        if (plan.Status != TaskItemStatus.Done)
+        {
+            plan.Status = TaskItemStatus.Done;
+            plan.CompletedAt = now;
+        }
+        plan.Verification = new TaskVerification
+        {
+            VerifiedAt = now,
+            Verdict = TaskVerdicts.Withdrawn,
+            Notes = $"заменён планом {replacedBy}",
+        };
     }
 
     // Персона-исполнитель имеет смысл только у Claude-исполнения: если задаче назначена

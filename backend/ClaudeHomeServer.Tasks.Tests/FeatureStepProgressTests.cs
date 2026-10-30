@@ -487,16 +487,99 @@ public class FeatureStepProgressTests
         run.Lanes.Single(l => l.Lane == "front").Total.Should().Be(2);
     }
 
+    // B3: последний план вместо объединения. Ранний [A,B,C], поздний [A,B] — C не «не заведён».
     [Fact]
-    public void ДополнениеПлана_ДобавляетШагиВЗнаменатель()
+    public void ПланыСПересечением_ПобеждаетПоздний_РаннийВычёркиваетсяЦеликом()
     {
         var run = Run(Feature(),
-            Plan("p1", 0, ("Ш1", "back"), ("Ш2", "back")),
-            Plan("p2", 2, ("Ш2", "back"), ("Ш3", "back")),
-            Step("s", "Ш1", 4));
+            Plan("p1", 0, ("A", "back"), ("B", "back"), ("C", "back")),
+            Plan("p2", 5, ("A", "back"), ("B", "back")));
 
-        run.StepProgress.Total.Should().Be(3, "∪ шагов обоих планов: Ш1, Ш2, Ш3");
-        run.StepProgress.NotCreated.Should().Be(2);
+        run.StepProgress.Total.Should().Be(2);
+        run.StepProgress.NotCreated.Should().Be(2, "C из замещённого плана не считается");
+    }
+
+    // Ранний план вычёркивается целиком, даже если у него есть непересекающиеся шаги.
+    [Fact]
+    public void ПланыСПересечением_НепересекающийсяШагРаннегоТожеВычёркивается()
+    {
+        var run = Run(Feature(),
+            Plan("p1", 0, ("A", "back"), ("X", "back")),
+            Plan("p2", 5, ("A", "back"), ("B", "back")));
+
+        run.StepProgress.Total.Should().Be(2, "A и B; X ушёл вместе с ранним планом");
+    }
+
+    // Порядок на входе не важен: побеждает (CreatedAt, Id), а не позиция в списке.
+    [Fact]
+    public void ПланыСПересечением_ПорядокВхода_НеВлияет()
+    {
+        var early = Plan("p1", 0, ("A", "back"), ("C", "back"));
+        var late = Plan("p2", 5, ("A", "back"));
+
+        Run(Feature(), late, early).StepProgress.Total.Should().Be(1);
+        Run(Feature(), early, late).StepProgress.Total.Should().Be(1);
+    }
+
+    // Одинаковый CreatedAt: побеждает больший Id (детерминизм).
+    [Fact]
+    public void ПланыСПересечением_ОдинаковыйCreatedAt_ПобеждаетБольшийId()
+    {
+        var a = Plan("p-a", 0, ("A", "back"), ("X", "back"));
+        var b = Plan("p-b", 0, ("A", "back"), ("Y", "back"));
+
+        Run(Feature(), a, b).StepProgress.Total.Should().Be(2, "действует p-b: A и Y");
+        Run(Feature(), b, a, Step("s", "Y", 3)).StepProgress.NotCreated.Should().Be(1, "Y заведён, A нет");
+        Run(Feature(), b, a, Step("s", "X", 3)).StepProgress.Total.Should().Be(3, "X вне плана p-b, но заведён — считается");
+    }
+
+    // Планы по линиям без пересечений объединяются.
+    [Fact]
+    public void ПланыБезПересечения_Объединяются()
+    {
+        var run = Run(Feature(),
+            Plan("p1", 0, ("B1", "back"), ("B2", "back")),
+            Plan("p2", 2, ("F1", "front")));
+
+        run.StepProgress.Total.Should().Be(3);
+        run.StepProgress.NotCreated.Should().Be(3);
+        run.StepProgress.PlanState.Should().Be("cut");
+    }
+
+    // Снятый вручную план не входит ни в planned, ни в PlanState (находка плана №3).
+    [Fact]
+    public void СнятыйПлан_НеВходитВШагиИВСостояние()
+    {
+        var old = Plan("p-old", 0, ("A", "back"), ("Z", "back"));
+        old.Verification = new TaskVerification { Verdict = TaskVerdicts.Withdrawn };
+        var run = Run(Feature(), old, Plan("p-new", 1, ("B", "back")));
+
+        run.StepProgress.Total.Should().Be(1, "шаги снятого плана не считаются");
+        run.StepProgress.PlanState.Should().Be("cut");
+    }
+
+    // Замещённый план не держит фичу в partial: PlanState — по тому же набору, что и шаги.
+    [Fact]
+    public void ЗамещённыйПланБезСписка_НеВходитВPlanState()
+    {
+        var run = Run(Feature(), Plan("p-empty", 0), Plan("p1", 1, ("A", "back")), Plan("p2", 2, ("A", "back")));
+
+        // p-empty без списка остаётся действующим → partial; замещённый p1 в счёт не идёт.
+        run.StepProgress.PlanState.Should().Be("partial");
+        run.StepProgress.Total.Should().Be(1);
+    }
+
+    [Fact]
+    public void ПланыБезПересечения_ПлановШагиВПланеПомечены()
+    {
+        var plan1 = Plan("p1", 0, ("A", "back"), ("B", "back"));
+        var plan2 = Plan("p2", 5, ("B", "back"));
+        // A замещён целиком → шаг A вне действующего плана.
+        var acc = FeatureStepAccounting.Build(
+            [Step("sa", "A", 1), Step("sb", "B", 6)], [], [plan1, plan2], T0.AddDays(1), null);
+
+        acc.Facts["A"].InPlan.Should().BeFalse();
+        acc.Facts["B"].InPlan.Should().BeTrue();
     }
 
     [Fact]

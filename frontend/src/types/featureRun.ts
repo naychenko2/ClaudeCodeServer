@@ -55,7 +55,11 @@ export interface FeatureTask {
   // всего» для честного прогресса. На записи бэк допускает его только у role=plan
   // (валидация TaskManager); на выдаче по роли не фильтрует: null, если не заполнен.
   // Аддитивное: старые задачи поля не несут.
-  planSteps?: { stepRef: string; title: string; lane?: string | null }[] | null;
+  // kind (B2): тип пункта плана — step | review | qa | final; отсутствие или null —
+  // step (бэк: TaskItem.PlanStep.IsStep, TaskItem.cs:312, сравнение Ordinal). В
+  // знаменатель бэка идут только исполняемые пункты (FeatureStepAccounting.cs:123);
+  // «В очереди» фронта — подмножество ровно их же (FB2).
+  planSteps?: { stepRef: string; title: string; lane?: string | null; kind?: string | null }[] | null;
   // «Голос фичи» (бэк: `TaskItem.Note`, только у эпика): текст оркестратора/человека
   // с оценкой. На wire — без bySessionId (ее снимает FeatureNoteJsonConverter на границе
   // сериализации). Аддитивное: старый answers и эпик без голоса — undefined/null.

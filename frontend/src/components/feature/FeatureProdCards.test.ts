@@ -4,7 +4,8 @@
 // Тесты: обычный цикл, возврат+доработка, два возврата, активная задача,
 // «сейчас»-строка (текущая карточка), краевые (не начат, старые данные без rounds),
 // закрытие «принял с замечаниями» и хвостовая доработка (GC-F3), шаг плана без задачи (GC-F3),
-// «В очереди» только по действующим планам (activePlanIds, FB3 / дефект 128fd73a).
+// «В очереди» только по действующим планам (activePlanIds, FB3 / дефект 128fd73a),
+// «В очереди» только по пунктам плана вида step (kind, FB2).
 
 import { describe, it, expect } from 'vitest';
 import { buildProdCards } from './FeatureProdCards';
@@ -605,5 +606,52 @@ describe('«В очереди» по действующим планам (active
     });
     const cards = buildProdCards(r);
     expect(cards.map(c => [c.stepRef, c.state, c.planned])).toEqual([['A', 'run', false], ['B', 'queue', true]]);
+  });
+});
+
+// ── «В очереди» только по пунктам плана вида step (FB2, хвост ревью FB3) ─────────────────
+// B2 принят: у пункта плана на wire есть kind (step | review | qa | final; отсутствие или
+// null = step). В знаменатель бэка идёт только step (FeatureStepAccounting.cs:123,
+// TaskItem.PlanStep.IsStep = TaskItem.cs:312, сравнение Ordinal). Инвариант: карточка
+// «В очереди» — подмножество ровно тех пунктов, что вошли в знаменатель.
+
+describe('«В очереди» только по пунктам вида step (FB2)', () => {
+  type PlanStepFixture = { stepRef: string; title: string; kind?: string | null };
+  const planTask = (id: string, steps: PlanStepFixture[]): FeatureTask =>
+    task({ id, role: 'plan', planSteps: steps });
+
+  it('review/qa/final — карточки нет; отсутствие kind, kind=null и kind=step — есть', () => {
+    const r = run({
+      plan: [planTask('p1', [
+        { stepRef: 'A', title: 'без kind' },
+        { stepRef: 'B', title: 'kind null', kind: null },
+        { stepRef: 'C', title: 'kind step', kind: 'step' },
+        { stepRef: 'R1', title: 'ревью', kind: 'review' },
+        { stepRef: 'Q1', title: 'проверка', kind: 'qa' },
+        { stepRef: 'F1', title: 'финал', kind: 'final' },
+      ])],
+    });
+    const cards = buildProdCards(r);
+    expect(cards.map(c => c.stepRef)).toEqual(['A', 'B', 'C']);
+    expect(cards.map(c => c.planned)).toEqual([true, true, true]);
+    expect(cards.map(c => c.state)).toEqual(['queue', 'queue', 'queue']);
+  });
+
+  it('не-шаг не резервирует свой ключ: «R1» review и «R1» step — одна карточка шага', () => {
+    // Порядок тот же, что на бэке: IsStep (:123) раньше TryAdd (:127). Пункт review не должен
+    // «занять» ключ R1 — иначе шаг R1 из того же плана потерял бы карточку.
+    const r = run({
+      plan: [planTask('p1', [
+        { stepRef: 'R1', title: 'ревью-пункт', kind: 'review' },
+        { stepRef: 'R1', title: 'шаг', kind: 'step' },
+      ])],
+    });
+    const cards = buildProdCards(r);
+    expect(cards.map(c => [c.stepRef, c.title])).toEqual([['R1', 'шаг']]);
+  });
+
+  it('kind «Step» с заглавной — не шаг: сравнение Ordinal, как на бэке (TaskItem.cs:312)', () => {
+    const r = run({ plan: [planTask('p1', [{ stepRef: 'A', title: 'A', kind: 'Step' }])] });
+    expect(buildProdCards(r)).toEqual([]);
   });
 });

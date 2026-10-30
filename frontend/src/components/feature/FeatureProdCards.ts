@@ -11,8 +11,9 @@
 // закрывает шаг — фронт этого не выводит заново: бэк уже учёл хвостовую доработку
 // (FeatureStepAccounting: IsAcceptance(lastVerdict) && !reworkOpen), карточка верит
 // chain.outcome, второй истины нет; (б) шаг плана без задачи (бэковый notCreated) —
-// синтетическая карточка state='queue', planned:true, в конце ленты, в порядке плана и
-// только по ДЕЙСТВУЮЩИМ планам (run.activePlanIds, см. activePlansOf).
+// синтетическая карточка state='queue', planned:true, в конце ленты, в порядке плана,
+// только по ДЕЙСТВУЮЩИМ планам (run.activePlanIds, см. activePlansOf) и только по
+// пунктам плана вида step (см. isExecutablePlanStep, FB2).
 
 // Источники (спецификация docs/mockups/features-overview-4-spec.md, точка 2):
 //   • «работа»      → chain.chatId (чат исполнителя первой задачи цепочки);
@@ -244,6 +245,15 @@ function planKey(stepRef: string): string {
   return stepRef.trim().toLowerCase();
 }
 
+// Исполняемый пункт плана — зеркало бэкового TaskItem.PlanStep.IsStep (TaskItem.cs:312):
+// kind не задан (старый ответ), null или ровно 'step' (сравнение Ordinal: «Step» — не шаг).
+// Пункты review/qa/final — этапы конвейера, не шаг: в знаменатель бэка они не идут
+// (FeatureStepAccounting.cs:123), и карточка «В очереди» — их подмножество (FB2).
+// Единственное место правила: plannedCards читает только этот хелпер.
+function isExecutablePlanStep(ps: { kind?: string | null }): boolean {
+  return ps.kind === undefined || ps.kind === null || ps.kind === 'step';
+}
+
 // Действующие планы — ровно те, чьи id назвал бэк (FeatureRun.cs:44-46: тот же ActivePlans,
 // что считает учёт шагов). Фронт верит списку и НЕ выводит своё правило «поздний вытесняет
 // ранний»: план вне списка не возвращается никакими рассуждениями. Поля нет (старый ответ) —
@@ -263,16 +273,19 @@ function activePlansOf(run: FeatureRun): FeatureTask[] {
 // Шаги плана без цепочки — синтетические карточки «в очереди»: по тем же планам, по которым
 // бэк считает notCreated (действующие планы, activePlansOf; FeatureStepAccounting.cs:464 — id
 // ровно тех countedPlans, чьи шаги идут в знаменатель). Шаг из снятого или замещённого плана
-// в очередь не входит. Пересечений с заведёнными нет: ключ совпадает с бэковым; дубль stepRef
-// в плане — первое вхождение; пустой stepRef — не шаг. Карточка без старта: после всех
-// цепочек, в порядке плана (тот же порядок, что у бэковых линий: сначала заведённые шаги,
-// затем notCreated).
+// в очередь не входит. Пункты плана не-шаги (kind review/qa/final) — не шаг и не знаменатель
+// бэка (isExecutablePlanStep): карточки нет, и ключ их stepRef не резервируется — так же, как
+// на бэке, где проверка IsStep (:123) идёт раньше TryAdd (:127). Пересечений
+// с заведёнными нет: ключ совпадает с бэковым; дубль stepRef в плане — первое вхождение; пустой
+// stepRef — не шаг. Карточка без старта: после всех цепочек, в порядке плана (тот же порядок,
+// что у бэковых линий: сначала заведённые шаги, затем notCreated).
 function plannedCards(run: FeatureRun, chainKeys: Set<string>, startIndex: number): ProdCard[] {
   const out: ProdCard[] = [];
   const seen = new Set<string>();
   for (const p of activePlansOf(run)) {
     for (const ps of p.planSteps ?? []) {
       if (!ps || !ps.stepRef?.trim()) continue;
+      if (!isExecutablePlanStep(ps)) continue;
       const key = planKey(ps.stepRef);
       if (chainKeys.has(key) || seen.has(key)) continue;
       seen.add(key);

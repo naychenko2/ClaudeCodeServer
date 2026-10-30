@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Home · плашка фичи в панели чатов и попап «План хода» в языке В2 (v4)</title>
+<!--
+  Макет v4. Андрей выбрал вторую строку шапки В2 «Трек» (feature-chat-header-row2-v3.html).
+  Здесь — в том же языке (полоса трекера из корзин) ещё две поверхности фичи:
+    • плашка группы фичи в панели чатов (FeatureGroupHeader) — С1 «Трек снизу», С2 «Трек вместо рельсы», С3 «Кромка»;
+    • пилюля и попап «План хода» в чате (TurnPlanPill → FeatureModeBody) — П1 «Сводка», П2 «Мой шаг», П3 «Шаги по корзинам».
+  Подложка — снимок живого стенда этой ветки (29.10, Playwright, DPR 2): настоящие сайдбар с группой фичи,
+  шапка-остров, лента, пилюля и композер. Старый FeatureBanner на снимке скрыт, ленте добавлено место под
+  строку В2 (42 / 48 px) — как будет в продукте. Варианты наложены HTML-ом точно по координатам настоящих
+  элементов (плашка 57,103 · 322×55; пилюля справа до x 1336, y 372; мобила — плашка 8,127 · 344×55, пилюля 16,384).
+  Предложение — feature-chats-panel-plan-popup-v4-proposal.md.
+  Привязка: задача da0036ba (role=design), featureId эпика d2d8c8a5. Код продукта не правится.
+  Сырые значения цветов — ТОЛЬКО в блоке токенов (копия theme.css); дальше — var(--c-*).
+-->
+<style>
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2; --c-accent:#D97757; --c-accent-light:#F4ECE1;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-progress-track:#D8CFBE;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-av:#9A8F7E;
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18; --c-accent:#E38A6A; --c-accent-light:#3A2E27;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-progress-track:#5C544A;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-av:#8A8072;
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+}
+/* Шкалы design.ts: FS xxs10 xs11 sm12 base13 · SP 2/4/8/12/16 · R sm6 md8 lg10 max999 */
+* { box-sizing:border-box; }
+html,body { margin:0; }
+body { background:var(--c-bg-panel); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.45; }
+button { font:inherit; color:inherit; border:0; background:none; margin:0; padding:0; cursor:pointer; text-align:left; }
+button:focus-visible { outline:none; box-shadow:var(--shadow-focus); border-radius:8px; }
+.mono { font-family:"JetBrains Mono","Courier New",monospace; }
+svg { flex-shrink:0; display:block; }
+
+/* ===== Обвязка (не продукт) ===== */
+.mk { position:sticky; top:0; z-index:60; display:flex; flex-wrap:wrap; gap:10px 18px; align-items:center;
+  padding:12px 16px; background:var(--c-bg-card); border-bottom:1px solid var(--c-border); }
+.mk h1 { font-family:"PT Serif",Georgia,serif; font-size:16px; margin:0 6px 0 0; color:var(--c-text-heading); }
+.grp { display:flex; align-items:center; gap:8px; }
+.lbl { font-size:11px; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.04em; }
+.pills { display:flex; gap:2px; background:var(--c-bg-inset); padding:2px; border-radius:9px; flex-wrap:wrap; }
+.pills button { padding:4px 10px; border-radius:8px; font-size:12px; color:var(--c-text-secondary); }
+.pills button.on { background:var(--c-bg-card); color:var(--c-text-heading); font-weight:600; box-shadow:0 0 0 1px var(--c-border); }
+.note { max-width:1400px; margin:14px auto 0; padding:0 16px; font-size:12px; color:var(--c-text-secondary); }
+.note b { color:var(--c-text-heading); }
+.stage { display:flex; flex-wrap:wrap; gap:24px; justify-content:center; padding:14px 16px 48px; align-items:flex-start; }
+.cap { font-size:11px; color:var(--c-text-muted); margin:0 0 6px 4px; text-transform:uppercase; letter-spacing:.04em; }
+
+/* ===== Кадры: подложка — снимок стенда ===== */
+/* content-box: внутренняя область кадра = размер снимка, координаты наложений совпадают с настоящими */
+.frame { box-sizing:content-box; position:relative; overflow:hidden; border:1px solid var(--c-border); border-radius:14px; box-shadow:var(--shadow-island);
+  background-repeat:no-repeat; background-color:var(--c-bg-main); }
+.desk { width:1400px; height:900px; background-size:1400px 900px; }
+.mob { width:360px; height:740px; background-size:360px 740px; }
+[data-theme="light"] #desk { background-image:url(assets/feature-side-pop/chat-d-light.png); }
+[data-theme="dark"]  #desk { background-image:url(assets/feature-side-pop/chat-d-dark.png); }
+[data-theme="light"] #mlist { background-image:url(assets/feature-side-pop/list-m-light.png); }
+[data-theme="dark"]  #mlist { background-image:url(assets/feature-side-pop/list-m-dark.png); }
+[data-theme="light"] #mchat { background-image:url(assets/feature-side-pop/chat-m-light.png); }
+[data-theme="dark"]  #mchat { background-image:url(assets/feature-side-pop/chat-m-dark.png); }
+.ov { position:absolute; }
+
+/* ===== Общие кирпичики ===== */
+.bar { display:flex; gap:2px; height:4px; border-radius:999px; overflow:hidden; }
+.bar i { display:block; height:100%; }
+.k-m { background:var(--c-success-text); } .k-a { background:var(--c-success); } .k-r { background:var(--c-info); }
+.k-w { background:var(--c-accent); } .k-n { background:var(--c-progress-track); }
+.ph { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; color:var(--c-text-secondary); font-size:12px; }
+.ph b { color:var(--c-text-heading); font-weight:600; }
+.t-warn { color:var(--c-warning-text) !important; font-weight:600; }
+.t-stop { color:var(--c-danger-text) !important; font-weight:600; }
+.btn { display:inline-flex; align-items:center; gap:4px; height:24px; padding:0 10px; border-radius:8px; font-size:12px; font-weight:600;
+  background:var(--c-accent); color:var(--c-on-accent); white-space:nowrap; flex-shrink:0; }
+.mobile .btn { height:32px; }
+.lnk { display:inline-flex; align-items:center; gap:4px; font-size:12px; font-weight:600; color:var(--c-accent); white-space:nowrap; flex-shrink:0; }
+.chev { width:28px; height:28px; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; color:var(--c-text-muted); flex-shrink:0; }
+.mobile .chev { width:40px; height:40px; }
+.av { display:inline-flex; }
+.av i { width:16px; height:16px; border-radius:50%; background:var(--c-av); color:var(--c-on-accent); box-shadow:0 0 0 2px var(--c-bg-card);
+  margin-left:-5px; display:inline-flex; align-items:center; justify-content:center; font-style:normal; font-size:7px; font-weight:700; }
+.av i:first-child { margin-left:0; }
+
+/* ===== В2 «Трек» — вторая строка шапки (выбрана) ===== */
+.b2 { display:flex; align-items:center; gap:8px; flex:1; min-width:0; width:100%; }
+.b2 .stack { flex:1; min-width:0; display:flex; flex-direction:column; gap:5px; padding:3px 0; }
+.b2 .tl { display:flex; align-items:baseline; gap:8px; min-width:0; }
+.b2 .right { margin-left:auto; display:flex; align-items:center; gap:8px; flex-shrink:0; }
+.mobile.b2row { background:var(--c-bg-main); border-bottom:1px solid var(--c-border-light); padding:0 14px; }
+
+/* ===== Плашка группы фичи (FeatureGroupHeader): 55 px, шеврон 26 / 40 ===== */
+.fgh { display:flex; height:55px; border-style:solid; border-width:1px; border-color:var(--c-border-light); border-radius:10px;
+  background:var(--c-bg-card); overflow:hidden; position:relative; }
+.fgh.warn { border-left:3px solid var(--c-warning); }
+.fgh.stop { border-left:3px solid var(--c-danger); }
+.fgh .cv { width:26px; flex-shrink:0; display:flex; align-items:center; justify-content:center; color:var(--c-text-muted); }
+.mobile .fgh .cv { width:40px; }
+.fgh .body { flex:1; min-width:0; display:flex; flex-direction:column; padding:7px 10px 7px 2px; gap:3px; }
+.fgh .r1 { display:flex; align-items:center; gap:7px; height:19px; min-width:0; }
+.fgh .r2 { display:flex; align-items:center; gap:7px; height:17px; min-width:0; }
+.fgh .ttl { flex:1; min-width:0; font-size:13px; font-weight:700; color:var(--c-text-heading); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.fgh .age { font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-muted); flex-shrink:0; }
+.fgh .st { flex:1; min-width:0; font-size:11px; color:var(--c-text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.fgh .st b { color:var(--c-text-heading); font-weight:600; }
+.fgh .num { font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-muted); flex-shrink:0; white-space:nowrap; }
+.fgh .num b { color:var(--c-text-heading); }
+.fgh.c1 .body { padding:6px 10px 2px 2px; gap:3px; }
+.fgh.c1 .bar { margin-top:4px; }
+.fgh .mini { width:64px; flex-shrink:0; }
+.fgh .edge { position:absolute; left:0; right:0; bottom:0; height:3px; display:flex; gap:2px; }
+.fgh .edge i { display:block; height:100%; }
+
+/* ===== Пилюля «План хода» (TurnPlanPill) ===== */
+.tpp { display:flex; align-items:center; gap:7px; height:22px; padding:0 11px; border-radius:8px; background:var(--c-bg-selected);
+  font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-secondary); white-space:nowrap; max-width:300px; min-width:0; overflow:hidden; }
+.mobile .tpp { height:28px; }
+.tpp b { color:var(--c-text-heading); font-weight:600; }
+.tpp .tx { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.tpp .bar { width:36px; flex-shrink:0; height:4px; }
+.tpp .dot { position:absolute; right:-3px; top:-3px; width:6px; height:6px; border-radius:50%; box-shadow:0 0 0 1.5px var(--c-bg-selected); }
+
+/* ===== Попап (Menu): bgWhite, рамка, R.lg, SHADOW.dropdown; шапка с переключателем липкая ===== */
+.pop { background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:10px; box-shadow:var(--shadow-dropdown);
+  overflow-y:auto; z-index:41; min-height:0; }
+.pop .hd { position:sticky; top:0; background:var(--c-bg-white); padding:9px 12px 8px; border-bottom:1px solid var(--c-border-light); z-index:1; }
+.mode { display:inline-flex; gap:2px; padding:2px; border-radius:9px; background:var(--c-bg-inset); }
+.mode span { padding:3px 10px; border-radius:8px; font-size:12px; color:var(--c-text-secondary); white-space:nowrap; }
+.mode span.on { background:var(--c-bg-white); color:var(--c-accent); font-weight:600; box-shadow:0 0 0 1px var(--c-border); }
+.pop .bd { padding:8px 12px 10px; }
+.pt { font-size:13px; font-weight:700; color:var(--c-text-heading); display:flex; align-items:baseline; gap:8px; margin:2px 0 6px; min-width:0; }
+.pt .tx { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pt .more { margin-left:auto; font-size:11px; font-weight:600; color:var(--c-text-muted); white-space:nowrap; }
+.sec { font-size:11px; font-weight:700; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.4px; margin:10px 0 4px; display:flex; gap:6px; align-items:center; }
+.br { display:flex; justify-content:space-between; gap:12px; font-size:12px; color:var(--c-text-secondary); padding:2px 0; align-items:baseline; }
+.br .w { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.br .w b { color:var(--c-text-heading); font-weight:600; }
+.br .v { font-family:"JetBrains Mono",monospace; font-size:12px; font-weight:600; color:var(--c-text-muted); white-space:nowrap; flex-shrink:0; }
+.me { color:var(--c-accent); font-size:11px; font-weight:600; }
+.pair { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px; }
+.pc { padding:8px 10px; border-radius:10px; background:var(--c-bg-inset); min-width:0; }
+.pc .k { font-size:11px; color:var(--c-text-muted); }
+.pc .val { font-family:"JetBrains Mono",monospace; font-size:16px; font-weight:700; color:var(--c-text-heading); white-space:nowrap; }
+.pc .s { font-size:11px; color:var(--c-text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.meter { margin-top:8px; }
+.meter .h { display:flex; justify-content:space-between; align-items:baseline; gap:8px; font-size:13px; color:var(--c-text-secondary); margin-bottom:4px; }
+.meter .vl { font-family:"JetBrains Mono",monospace; font-size:12px; font-weight:700; color:var(--c-text-heading); white-space:nowrap; }
+.leg { display:flex; flex-wrap:wrap; gap:2px 10px; font-size:11px; color:var(--c-text-muted); line-height:1.4; margin-top:3px; }
+.leg span { display:inline-flex; align-items:center; gap:4px; white-space:nowrap; }
+.leg i { width:7px; height:7px; border-radius:2px; display:inline-block; }
+.alarm { display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:8px; font-size:12px; margin:4px 0 6px; }
+.alarm .tx { flex:1; min-width:0; }
+.alarm.warn { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.alarm.stop { background:var(--c-danger-bg); color:var(--c-danger-text); }
+.step { padding:8px 10px; border-radius:10px; background:var(--c-bg-inset); }
+.step .t { font-size:13px; font-weight:700; color:var(--c-text-heading); display:flex; gap:8px; align-items:center; min-width:0; }
+.step .t .tx { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chip { display:inline-flex; align-items:center; gap:4px; padding:1px 8px; border-radius:999px; font-size:11px; font-weight:600; white-space:nowrap; flex-shrink:0;
+  background:var(--c-bg-selected); color:var(--c-text-secondary); }
+.chip.w { background:var(--c-accent-light); color:var(--c-accent); }
+.chip.r { background:var(--c-info-bg); color:var(--c-info); }
+.chip.a { background:var(--c-success-bg); color:var(--c-success-text); }
+.step .m { font-size:11px; color:var(--c-text-muted); margin-top:2px; }
+.chain { display:flex; flex-direction:column; gap:0; margin-top:4px; }
+.chain .br .w { display:flex; align-items:center; gap:6px; }
+.dt { width:7px; height:7px; border-radius:50%; flex-shrink:0; display:inline-block; }
+.coll { display:flex; align-items:center; gap:4px; width:100%; font-size:12px; color:var(--c-text-secondary); padding:2px 0; }
+.coll .v { margin-left:auto; }
+.foot { display:flex; align-items:center; gap:8px; margin-top:10px; padding-top:8px; border-top:1px solid var(--c-bg-inset); font-size:11px; color:var(--c-text-muted); }
+.foot .lnk { margin-left:auto; }
+.role { display:inline-flex; align-items:center; height:18px; padding:0 6px; border-radius:6px; background:var(--c-bg-inset); color:var(--c-text-secondary); font-weight:600; font-size:11px; }
+.mobile .foot .lnk { min-height:40px; }
+</style>
+</head>
+<body>
+
+<div class="mk" data-mk>
+  <h1>Фича в панели чатов и «Плане хода» · v4</h1>
+  <div class="grp"><span class="lbl">Плашка</span>
+    <div class="pills" data-ctl="side"><button data-val="0">как сейчас</button><button data-val="1" class="on">С1 · Трек снизу</button><button data-val="2">С2 · Трек вместо рельсы</button><button data-val="3">С3 · Кромка</button></div></div>
+  <div class="grp"><span class="lbl">Попап</span>
+    <div class="pills" data-ctl="pop"><button data-val="1" class="on">П1 · Сводка</button><button data-val="2">П2 · Мой шаг</button><button data-val="3">П3 · Шаги по корзинам</button></div></div>
+  <div class="grp"><span class="lbl">Состояние</span>
+    <div class="pills" data-ctl="st"><button data-val="run" class="on">идёт</button><button data-val="wait">ждёт вас</button><button data-val="stop">стоит</button></div></div>
+  <div class="grp"><span class="lbl">Попап</span>
+    <div class="pills" data-ctl="open"><button data-val="0">закрыт</button><button data-val="1" class="on">открыт</button></div></div>
+  <div class="grp"><span class="lbl">Тема</span>
+    <div class="pills" data-ctl="theme"><button data-val="light" class="on">светлая</button><button data-val="dark">тёмная</button></div></div>
+</div>
+
+<div class="note" id="note"></div>
+
+<div class="stage">
+  <div><div class="cap">Десктоп 1400 · сайдбар с группой фичи, шапка с В2, пилюля «План хода» и попап</div><div class="frame desk" id="desk"></div></div>
+  <div><div class="cap">Мобила 360 · список чатов проекта</div><div class="frame mob mobile" id="mlist"></div></div>
+  <div><div class="cap">Мобила 360 · чат шага</div><div class="frame mob mobile" id="mchat"></div></div>
+</div>
+
+<script>
+const I = {
+  chevD:'<path d="m6 9 6 6 6-6"/>', chevR:'<path d="m9 18 6-6-6-6"/>', chevU:'<path d="m18 15-6-6-6 6"/>',
+  arrow:'<path d="M5 12h14M12 5l7 7-7 7"/>',
+  route:'<circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/>',
+  run:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4" fill="currentColor"/>',
+  wait:'<path d="M12 3 21 12 12 21 3 12Z"/>', stop:'<rect x="5" y="5" width="14" height="14" rx="2"/>',
+};
+const ic = (k, s = 16, extra = '') => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="${extra}">${I[k]}</svg>`;
+
+// Данные — как на стенде: принято 5 из 9, 1 в ревью, 2 в работе, 1 не заведён
+const F = {
+  title:'Правда о прогрессе фичи', pct:56, acc:5, total:9,
+  buckets:[['a',5,'принято'],['r',1,'в ревью'],['w',2,'в работе'],['n',1,'не заведено']],
+  now:[['Полина','Ш8 · вёрстка шапки','24 мин',true],['Тимур','Ш6 · проекция мержа','1 ч 10',false],['Глеб','ревью Ш5','8 мин',false]],
+  next:[['Ш9','e2e шапки · не заведён'],['Ревью Ш8','после сдачи · Глеб']],
+  disc:['Ш9 есть в плане, задачи нет'],
+};
+const ST = {
+  run:  { tone:null, color:'var(--c-success)', glyph:'run', glyphColor:'var(--c-accent)' },
+  wait: { tone:'warn', color:'var(--c-warning)', glyph:'wait', glyphColor:'var(--c-warning)', word:'Ждёт вас', who:'Полина', why:'Полина спрашивает про отступы', act:'Ответить', mact:'Ответить' },
+  stop: { tone:'stop', color:'var(--c-danger)', glyph:'stop', glyphColor:'var(--c-danger)', word:'Стоит', who:'Тимур', why:'у Тимура упала сборка Ш6', act:'Чат Тимура', mact:'Чат' },
+};
+const S = { side:'1', pop:'1', st:'run', open:true, theme:'light', acc:false };
+const bar = (cls = '') => `<div class="bar ${cls}">${F.buckets.map(([k, n]) => `<i class="k-${k}" style="flex:${n}"></i>`).join('')}</div>`;
+const legend = () => `<div class="leg">${F.buckets.map(([k, n, l]) => `<span><i class="k-${k}"></i>${l} ${n}</span>`).join('')}</div>`;
+const av = () => `<span class="av">${['ГЛ','ПО','ТИ'].map(x => `<i>${x}</i>`).join('')}</span>`;
+const tcls = () => ST[S.st].tone === 'warn' ? 't-warn' : 't-stop';
+const glyph = () => { const st = ST[S.st]; return `<span style="color:${st.glyphColor};display:flex">${ic(st.glyph, 14)}</span>`; };
+
+// ===== В2 «Трек» — строка шапки (выбрана; та же, что в v3) =====
+function b2(mob) {
+  const st = ST[S.st];
+  const left = st.tone ? `<span class="ph ${tcls()}">${st.word} · ${mob ? st.who : st.why}</span>`
+    : (mob ? `<span class="ph"><b>${F.pct} %</b> · Сейчас <b>Полина</b> +2</span>` : `<span class="ph"><b>${F.title}</b> · Сейчас <b>Полина</b> — Ш8 · вёрстка шапки +2</span>`);
+  const right = st.tone ? `<button class="btn">${mob ? st.mact : st.act}</button>`
+    : (mob ? `<span class="mono" style="font-size:12px;color:var(--c-text-muted)">≈ 18:30</span>`
+           : `<span class="mono" style="font-size:12px;font-weight:700;color:var(--c-text-heading)">${F.pct} %</span><span class="mono" style="font-size:12px;color:var(--c-text-muted)">· ≈ 18:30</span>`);
+  return `<div class="b2" data-b2><div class="stack"><div class="tl">${left}<span class="right">${right}</span></div>${bar()}</div><span class="chev">${ic('chevD', 16)}</span></div>`;
+}
+
+// ===== Плашка группы фичи =====
+function side(mob) {
+  const st = ST[S.st];
+  const v = S.side;
+  const toneCls = st.tone === 'warn' ? 'warn' : st.tone === 'stop' ? 'stop' : '';
+  const cv = `<span class="cv">${ic('chevD', 12)}</span>`;
+  const r1 = `<div class="r1">${glyph()}<span class="ttl" title="${F.title}">${F.title}</span><span class="age">${st.tone ? '3 мин' : '11 мин'}</span></div>`;
+  const status = st.tone ? `<span class="st ${tcls()}">${st.word} · ${st.who}</span>` : `<span class="st">Сейчас <b>Полина</b> +2</span>`;
+  if (v === '0') {
+    // как сейчас: мини-рельса из 8 точек + аватары + «принято 5 из 9 · 1 в ревью…»
+    const dots = ['n','n','a','w2','n','n','n','n'].map(d => d === 'w2' ? `<i style="width:16px;height:5px;border-radius:3px;background:var(--c-text-heading)"></i>` : `<i style="width:5px;height:5px;border-radius:50%;background:${d === 'a' ? 'var(--c-success)' : 'var(--c-progress-track)'}"></i>`).join('');
+    return `<div class="fgh ${toneCls}" data-fgh>${cv}<div class="body">${r1}<div class="r2"><span style="display:inline-flex;gap:3px;align-items:center;flex-shrink:0">${dots}</span>${av()}<span class="num" style="flex-shrink:1;min-width:0;overflow:hidden;text-overflow:ellipsis">принято 5 из 9 · 1 в ревью · 2 в работе</span></div></div></div>`;
+  }
+  if (v === '1') return `<div class="fgh c1 ${toneCls}" data-fgh>${cv}<div class="body">${r1}<div class="r2">${av()}${status}<span class="num"><b>${F.pct} %</b>${mob ? '' : ' · ≈ 18:30'}</span></div>${bar()}</div></div>`;
+  if (v === '2') return `<div class="fgh ${toneCls}" data-fgh>${cv}<div class="body">${r1}<div class="r2">${bar('mini')}<span class="num"><b>${F.pct} %</b></span>${av()}${st.tone ? status : `<span class="st">${mob ? 'Полина +2' : '5 из 9 · 1 в ревью · 2 в работе'}</span>`}</div></div></div>`;
+  // С3: нижняя кромка плашки — полоса корзин (тон тревоги красит кромку слева 3 px, а не полосу)
+  return `<div class="fgh ${toneCls}" data-fgh style="border-bottom-color:transparent">${cv}<div class="body">${r1}<div class="r2">${av()}${status}<span class="num"><b>${F.pct} %</b> · ≈ 18:30</span></div></div>
+    <div class="edge">${F.buckets.map(([k, n]) => `<i class="k-${k}" style="flex:${n}"></i>`).join('')}</div></div>`;
+}
+
+// ===== Пилюля «План хода» =====
+function pill(mob) {
+  const st = ST[S.st];
+  const dot = st.tone ? `<span class="dot" style="background:${st.color}"></span>` : '';
+  const icon = `<span style="position:relative;display:flex;flex-shrink:0">${ic('route', 12)}${dot}</span>`;
+  const tone = st.tone ? `class="tx ${tcls()}"` : 'class="tx"';
+  if (S.pop === '2') return `<button class="tpp" data-pill aria-expanded="${S.open}">${icon}<span ${tone}>${st.tone ? `${st.word} · ${st.who}` : `Ш8 · <b>в работе</b> · 24 мин`}</span></button>`;
+  if (S.pop === '3') return `<button class="tpp" data-pill aria-expanded="${S.open}">${icon}<span ${tone}>${st.tone ? `${st.word} · ${st.who}` : `шаги · <b>5 из 9</b>`}</span>${bar()}</button>`;
+  return `<button class="tpp" data-pill aria-expanded="${S.open}">${icon}<span ${tone}>${st.tone ? `${st.word} · ${st.who}` : `фича · <b>${F.pct} %</b>`}</span>${bar()}</button>`;
+}
+
+// ===== Попап =====
+function alarm(mob) {
+  const st = ST[S.st];
+  if (!st.tone) return '';
+  return `<div class="alarm ${st.tone}"><span class="tx"><b>${st.word}.</b> ${st.tone === 'warn' ? 'Полина спрашивает про отступы карточки — ответ нужен в этом чате.' : 'У Тимура упала сборка Ш6, 14 мин назад.'}</span><button class="btn">${mob ? st.mact : st.act}</button></div>`;
+}
+const foot = () => `<div class="foot">этот чат — <span class="role">Ш8 · фронт</span><button class="lnk">Страница фичи ${ic('arrow', 12)}</button></div>`;
+function popBody(mob) {
+  const head = `<div class="pt"><span class="tx">${F.title}</span><span class="more">· ещё 1</span></div>`;
+  if (S.pop === '1') {
+    return head + alarm(mob)
+      + `<div class="meter"><div class="h"><span>По трекеру</span><span class="vl">${F.pct} % · ${F.acc} из ${F.total}</span></div>${bar()}${legend()}</div>`
+      + `<div class="sec">Сейчас · 3</div>${F.now.map(r => `<div class="br"><span class="w"><b>${r[0]}</b> — ${r[1]}${r[3] ? ' <span class="me">· этот чат</span>' : ''}</span><span class="v">${r[2]}</span></div>`).join('')}`
+      + `<div class="sec">Дальше</div>${F.next.map(r => `<div class="br"><span class="w"><b>${r[0]}</b> — ${r[1]}</span></div>`).join('')}`
+      + `<div class="pair"><div class="pc"><div class="k">Готовность</div><div class="val">60 %</div><div class="s">оценка Софьи · 18:02</div></div><div class="pc"><div class="k">Срок</div><div class="val">≈ 2 ч 40</div><div class="s">к 18:30 · с запасом</div></div></div>`
+      + foot();
+  }
+  if (S.pop === '2') {
+    return alarm(mob)
+      + `<div class="sec" style="margin-top:2px">Этот чат</div>
+         <div class="step"><div class="t"><span class="tx">Ш8 · Вёрстка шапки</span><span class="chip w">в работе · 24 мин</span></div>
+         <div class="m">Полина · линия фронт · сдача ещё не было</div></div>
+         <div class="sec">Цепочка шага</div>
+         <div class="chain">
+           <div class="br"><span class="w"><span class="dt" style="background:var(--c-success)"></span><b>Ш7 · тексты</b> — принят, от него зависит</span><span class="v">13:40</span></div>
+           <div class="br"><span class="w"><span class="dt" style="background:var(--c-accent)"></span><b>Ш8 · вёрстка</b> — работа идёт</span><span class="v">сейчас</span></div>
+           <div class="br"><span class="w"><span class="dt" style="background:var(--c-progress-track)"></span><b>Ревью</b> — Глеб, после сдачи</span><span class="v">—</span></div>
+           <div class="br"><span class="w"><span class="dt" style="background:var(--c-progress-track)"></span><b>Ш9 · e2e</b> — ждёт этот шаг, не заведён</span><span class="v">—</span></div>
+         </div>
+         <div class="sec">Фича</div>
+         <div class="meter" style="margin-top:0"><div class="h"><span class="ph" style="font-size:13px"><b>${F.title}</b></span><span class="vl">${F.pct} % · ≈ 18:30</span></div>${bar()}</div>`
+      + foot();
+  }
+  // П3: шаги по корзинам
+  const group = (k, title, rows, open = true) => `<div class="sec"><i style="width:7px;height:7px;border-radius:2px;display:inline-block" class="k-${k}"></i>${title}</div>${open ? rows.map(r => `<div class="br"><span class="w"><b>${r[0]}</b> — ${r[1]}${r[3] ? ' <span class="me">· этот чат</span>' : ''}</span><span class="v">${r[2]}</span></div>`).join('') : ''}`;
+  return head + alarm(mob)
+    + `<div class="meter" style="margin-top:2px"><div class="h"><span>По трекеру</span><span class="vl">${F.pct} % · ${F.acc} из ${F.total}</span></div>${bar()}</div>`
+    + group('w', 'В работе · 2', [['Ш8','вёрстка шапки · Полина','24 мин',true],['Ш6','проекция мержа · Тимур','1 ч 10']])
+    + group('r', 'В ревью · 1', [['Ш5','расхождения трекера · Глеб','8 мин']])
+    + group('n', 'Не заведено · 1', [['Ш9','e2e шапки','—']])
+    + `<div class="sec"><i style="width:7px;height:7px;border-radius:2px;display:inline-block" class="k-a"></i>Принято · 5</div>
+       <button class="coll" data-acc aria-expanded="${S.acc}">${ic(S.acc ? 'chevD' : 'chevR', 12)}${S.acc ? 'Свернуть' : 'Ш1 · Ш2 · Ш3 · Ш4 · Ш7'}<span class="v mono" style="font-size:11px;color:var(--c-text-muted)">13:40</span></button>
+       ${S.acc ? [['Ш1','модель прогресса'],['Ш2','проекция трекера'],['Ш3','корзины «в master»'],['Ш4','сводка на странице'],['Ш7','тексты интерфейса']].map(r => `<div class="br"><span class="w"><b>${r[0]}</b> — ${r[1]}</span><span class="v">принят</span></div>`).join('') : ''}`
+    + `<div class="br" style="margin-top:8px"><span class="w" style="color:var(--c-warning-text)">Трекер расходится · 1 — ${F.disc[0]}</span></div>`
+    + foot();
+}
+function popup(mob) {
+  return `<div class="pop" data-pop role="dialog" aria-label="Исполнение фичи"><div class="hd"><span class="mode"><span>План хода</span><span class="on">Исполнение фичи</span></span></div><div class="bd">${popBody(mob)}</div></div>`;
+}
+
+// ===== Раскладка по координатам настоящих элементов =====
+function render() {
+  document.documentElement.dataset.theme = S.theme;
+  const D = { group:[57,103,322,55], row:[427,140,904,42], pillR:1336, pillY:371.7 };
+  document.getElementById('desk').innerHTML =
+    `<div class="ov" style="left:${D.group[0]}px;top:${D.group[1]}px;width:${D.group[2]}px">${side(false)}</div>
+     <div class="ov" style="left:${D.row[0]}px;top:${D.row[1]}px;width:${D.row[2]}px;height:32px">${b2(false)}</div>
+     <div class="ov" style="right:${1400 - D.pillR}px;top:${D.pillY}px;display:flex;justify-content:flex-end;width:340px">${pill(false)}</div>
+     ${S.open ? `<div class="ov" style="right:${1400 - D.pillR}px;top:${D.pillY + 28}px;width:380px;max-height:${900 - D.pillY - 38}px;display:flex"><div style="width:100%;max-height:inherit;display:flex;flex-direction:column">${popup(false)}</div></div>` : ''}`;
+  document.getElementById('mlist').innerHTML = `<div class="ov mobile" style="left:8px;top:127px;width:344px">${side(true)}</div>`;
+  document.getElementById('mchat').innerHTML =
+    `<div class="ov mobile b2row" style="left:0;top:57px;width:360px;height:48px;display:flex;align-items:center">${b2(true)}</div>
+     <div class="ov mobile" style="left:16px;top:384px;max-width:288px;display:flex">${pill(true)}</div>
+     ${S.open ? `<div class="ov mobile" style="left:8px;right:8px;top:113px;max-height:${740 - 113 - 8}px;display:flex;flex-direction:column">${popup(true)}</div>` : ''}`;
+  const NOTE = {
+    '0':'<b>Плашка «как сейчас»</b> — для сравнения: 8 точек этапов, аватары, «принято 5 из 9 · 1 в ревью…».',
+    '1':'<b>С1 · Трек снизу</b> — та же плашка 55 px, точки этапов заменены полосой трекера во всю ширину под текстом, как у В2. Во второй строке — кто сейчас и «56 %».',
+    '2':'<b>С2 · Трек вместо рельсы</b> — минимальная правка: на месте 8 точек короткая полоса 64 px из тех же корзин, рядом процент.',
+    '3':'<b>С3 · Кромка</b> — полоса трекера становится нижней кромкой плашки (3 px), текст не тронут. Самая тихая.',
+  };
+  const PNOTE = {
+    '1':'<b>П1 · Сводка</b> — пилюля «фича · 56 %» с мини-полосой; попап — то же содержимое, что раскрытие В2 (трекер, Сейчас, Дальше, Готовность|Срок). Этапы-аккордеон убраны.',
+    '2':'<b>П2 · Мой шаг</b> — пилюля говорит про шаг ЭТОГО чата («Ш8 · в работе · 24 мин»); попап — карточка шага, его цепочка (от чего зависит, ревью, кто ждёт) и одна строка фичи с полосой. Фича целиком — в В2 и на странице.',
+    '3':'<b>П3 · Шаги по корзинам</b> — пилюля «шаги · 5 из 9» с полосой; попап — шаги плана, разложенные по тем же корзинам, что полоса: в работе, в ревью, не заведено, принято (свёрнуто).',
+  };
+  document.getElementById('note').innerHTML = NOTE[S.side] + ' ' + PNOTE[S.pop] + ' Подложка — снимок живого стенда; варианты наложены точно на места настоящих элементов.';
+  document.querySelectorAll('[data-ctl]').forEach(g => {
+    const cur = g.dataset.ctl === 'open' ? String(+S.open) : S[g.dataset.ctl];
+    g.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.val === cur));
+  });
+}
+document.querySelector('[data-mk]').addEventListener('click', e => {
+  const b = e.target.closest('button[data-val]'); if (!b) return;
+  const k = b.parentElement.dataset.ctl;
+  if (k === 'open') S.open = b.dataset.val === '1'; else S[k] = b.dataset.val;
+  render();
+});
+document.querySelector('.stage').addEventListener('click', e => {
+  if (e.target.closest('[data-pill]')) { S.open = !S.open; render(); return; }
+  if (e.target.closest('[data-acc]')) { S.acc = !S.acc; render(); }
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && S.open) { S.open = false; render(); } });
+render();
+</script>
+</body>
+</html>

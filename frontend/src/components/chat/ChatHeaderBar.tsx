@@ -1222,6 +1222,16 @@ interface ChatHeaderBarProps {
   // Полоса контекста чата (фича chat-context): отдельная строка ПОД заголовком —
   // и в hero-шапке, и в тулбарной. Не задана — шапка ровно такая, как была
   contextBar?: ReactNode;
+  // Строка фичи этого чата (В2 «Трек», F2): вторая строка шапки, ПОД заголовком и НАД
+  // строкой контекста (макет feature-chat-header-row2-v3). Слот даёт только горизонталь
+  // поле (18 остров / padX тулбар) и не имеет своего фона: строка лежит на холсте, как
+  // шапка; нижний отступ строки (10) и её содержимое — дело самой FeatureBanner. В тулбарной
+  // линия «при прокрутке» переезжает на слот (линия остаётся одна, на нижней кромке шапки).
+  // Контракт «слот задан» = «в слоте есть строка»: НЕ задан (undefined/null) — шапка ровно
+  // как без строки фичи. Пустой чат НЕ передаёт <FeatureBanner/>: элемент truthy и для
+  // пустого рендера, и шапка приняла бы его за заполненный — гасила бы линию тулбара и
+  // ставила пустой div (ревью F2, major 2; решает ChatPanel).
+  featureBar?: ReactNode;
   // Лента прокручена от начала — только тогда шапку отделяет линия. В начале ленты
   // отделять нечего, и черта лежала бы поперёк пустого чата без причины
   scrolled?: boolean;
@@ -1333,7 +1343,7 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   );
 }
 
-export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, items, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAddToWall, onChatDeleted, island, compact, contextBar, scrolled }: ChatHeaderBarProps) {
+export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, items, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAddToWall, onChatDeleted, island, compact, contextBar, featureBar, scrolled }: ChatHeaderBarProps) {
   // Вклады слота chat-header-action: невидимый слушатель «Итог сессии в заметку»
   // и его пункт в правом клик-меню. Нет подсистемы — нет и вкладов, остальные
   // AI-действия чата к заметкам не относятся и остаются.
@@ -2352,6 +2362,9 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           {heroTitle}
           {rightCluster}
         </div>
+        {/* Строка фичи — над контекстом, в том же поле острова: она часть шапки,
+            её полоса трекера и отделяет шапку от ленты (макет В2) */}
+        {featureBar && <div data-testid="chat-feature-bar" style={{ padding: '0 18px' }}>{featureBar}</div>}
         {/* Контекст чата — своей строкой под заголовком, в том же острове: материалы
             стоят над лентой, а не сбоку от неё */}
         {contextBar && <div style={{ padding: '0 18px 10px' }}>{contextBar}</div>}
@@ -2367,7 +2380,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     // compact (колонка стены): фон прозрачный — подложку даёт стеклянный остров
     // колонки, плотный тулбар закрывал бы дудл-холст под шапкой. Линия снизу при этом
     // остаётся: она и отделяет шапку от ленты
-    <Toolbar isMobile={isCompact} noBorder={island} bg={island || compact ? 'transparent' : undefined}
+    // Строка фичи под тулбаром — часть шапки: её линия (при прокрутке) становится
+    // нижней кромкой шапки, поэтому у тулбаря своя линия гасится — иначе она резала
+    // бы шапку пополам, над строкой фичи.
+    <Toolbar isMobile={isCompact} noBorder={island || featureBar != null} bg={island || compact ? 'transparent' : undefined}
       // Правый клик по шапке — меню действий у курсора (desktop, см. ctxMenuEl)
       onContextMenu={isCompact ? undefined : e => {
         e.preventDefault();
@@ -2378,8 +2394,9 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         // Линия к ленте — только когда лента прокручена, и тоном мягче обычной границы:
         // это разделитель ВНУТРИ одной поверхности, а не край панели. Место под неё
         // занято всегда (прозрачный цвет), поэтому шапка не дёргается по высоте.
-        // На острове (island) границу даёт сама карточка — там своей линии не рисуем
-        ...(island ? null : {
+        // На острове (island) границу даёт сама карточка — там своей линии не рисуем;
+        // при строке фичи линия переезжает на неё (нижняя кромка шапки — под строкой).
+        ...(island || featureBar != null ? null : {
           borderBottom: `1px solid ${scrolled ? C.borderLight : 'transparent'}`,
           transition: 'border-color 0.18s ease-out',
         }),
@@ -2393,19 +2410,38 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       {actionDialogsEl}
     </Toolbar>
   );
-  if (!contextBar) return toolbarEl;
-  // Контекст чата — строкой под тулбаром, до ленты: фон свой не нужен (шапка уже
-  // отделена), линия снизу отбивает материалы от переписки
+  if (!featureBar && !contextBar) return toolbarEl;
+  // Строка фичи — первой под тулбаром: она часть шапки (своего фона не имеет, линия
+  // «при прокрутке» — её нижняя кромка, когда она последняя). Контекст чата — строкой
+  // ниже строки фичи, до ленты: фон свой не нужен (шапка уже отделена), линия снизу
+  // отбивает материалы от переписки.
   return (
     <>
       {toolbarEl}
-      <div style={{
-        flexShrink: 0, display: 'flex', alignItems: 'center',
-        padding: `${SP.xs}px ${isCompact ? TB.padXMobile : TB.padX}px`,
-        borderBottom: `1px solid ${C.border}`,
-      }}>
-        {contextBar}
-      </div>
+      {featureBar && (
+        <div
+          data-testid="chat-feature-bar"
+          style={{
+            flexShrink: 0,
+            padding: `0 ${isCompact ? TB.padXMobile : TB.padX}px`,
+            ...(contextBar ? null : {
+              borderBottom: `1px solid ${scrolled ? C.borderLight : 'transparent'}`,
+              transition: 'border-color 0.18s ease-out',
+            }),
+          }}
+        >
+          {featureBar}
+        </div>
+      )}
+      {contextBar && (
+        <div style={{
+          flexShrink: 0, display: 'flex', alignItems: 'center',
+          padding: `${SP.xs}px ${isCompact ? TB.padXMobile : TB.padX}px`,
+          borderBottom: `1px solid ${C.border}`,
+        }}>
+          {contextBar}
+        </div>
+      )}
     </>
   );
 }

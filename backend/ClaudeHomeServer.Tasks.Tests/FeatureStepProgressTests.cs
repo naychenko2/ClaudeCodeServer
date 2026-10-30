@@ -50,6 +50,47 @@ public class FeatureStepProgressTests
     private static FeatureRun Run(params TaskItem[] tasks) =>
         FeatureProjector.Build(tasks.First(t => t.Role == TaskRoles.Feature), tasks, T0.AddDays(1));
 
+    // ─── Возвраты финала на всех кругах: счётчики и цепочки не расходятся ──────────────────────
+
+    // f1 returned → доработка → f2 accepted: виток f1 виден и в цепочке, и в счётчиках.
+    [Fact]
+    public void Возвраты_ДваКруга_СчётчикиСовпадаютСЦепочкой()
+    {
+        var run = Run(Feature(), Step("s1", "A", 0), Verdict("f1", TaskRoles.Final, TaskVerdicts.Returned, 5, "s1"),
+            Rework("w1", "A", 8, ["f1"]), Verdict("f2", TaskRoles.Final, TaskVerdicts.Accepted, 12, "s1"));
+
+        run.StepChains.Single(c => c.StepRef == "A").Loops.Should().Be(1);
+        run.Verdicts.Loops.Should().Be(1, "возврат первого круга не теряется при принятом втором");
+        run.ReturnsBySource.Final.Count.Should().Be(1);
+        run.Verdicts.Returned.Should().Be(1);
+        run.Verdicts.Accepted.Should().Be(1);
+    }
+
+    [Fact]
+    public void Возвраты_ТриКруга_СчитаютсяВсеФиналы()
+    {
+        var run = Run(Feature(), Step("s1", "A", 0),
+            Verdict("f1", TaskRoles.Final, TaskVerdicts.Returned, 5, "s1"), Rework("w1", "A", 8, ["f1"]),
+            Verdict("f2", TaskRoles.Final, TaskVerdicts.Returned, 12, "s1"), Rework("w2", "A", 15, ["f2"]),
+            Verdict("f3", TaskRoles.Final, TaskVerdicts.Accepted, 20, "s1"));
+
+        run.StepChains.Single(c => c.StepRef == "A").Loops.Should().Be(2);
+        run.Verdicts.Loops.Should().Be(2);
+        run.ReturnsBySource.Final.Count.Should().Be(2);
+        run.ReturnsBySource.Final.Open.Should().Be(0, "обе доработки закрыты");
+        run.Verdicts.Accepted.Should().Be(1);
+    }
+
+    [Fact]
+    public void Возвраты_ОдинФинал_ПоведениеПрежнее()
+    {
+        var run = Run(Feature(), Step("s1", "A", 0), Verdict("f1", TaskRoles.Final, TaskVerdicts.Returned, 5, "s1"));
+
+        run.Verdicts.Loops.Should().Be(1);
+        run.ReturnsBySource.Final.Count.Should().Be(1);
+        run.StepChains.Single(c => c.StepRef == "A").Loops.Should().Be(1);
+    }
+
     // ─── Принятие: одна правда ───────────────────────────────────────────────────────────────
 
     [Theory]

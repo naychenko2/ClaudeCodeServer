@@ -14,6 +14,7 @@
 // формулировки; блок только вызывает модель и красит числа моно).
 
 import { formatClock, formatDate, formatDuration, minutesSince, stageLabel } from './FeatureStatsBits';
+import { trackerPercent } from '../../lib/featureProgress';
 import { laneWord } from '../../lib/roleLabel';
 import { knownStopVisual } from '../../lib/tasks';
 import type { FeatureBrief, FeatureBriefActive, FeatureBriefActiveState, FeatureBriefKind, FeatureBriefNote } from '../../lib/featurePage';
@@ -26,9 +27,12 @@ export type PersonaNameResolver = (personaId: string) => string | null;
 
 // Дополнительные данные строки «Сейчас» вне brief:
 // mergedAt — момент мержа из run.summary.mergedAt (в brief его нет; для строк closed/merged).
+// inMaster — сколько шагов уже в master (F1, бэк: run.stepProgress.inMaster; в brief его
+// нет): ортогональный счётчик, процентом не считается, звучит только как пометка.
 export interface BriefTextOptions {
   nameOf?: PersonaNameResolver;
   mergedAt?: string | null;
+  inMaster?: number | null;
 }
 
 // Родительный падеж имени для «у {Имя}» (макет: «— у Глеба»). Эвристика для частых
@@ -389,11 +393,18 @@ export interface BriefChip {
 export interface BriefReadinessView {
   // Подпись: «Готовность» / «Готовность · по трекеру».
   label: string;
-  // Подпись под полоской: «4 готово · 3 в работе · из 9 · 45 %» (mono — числа).
+  // Подпись под полоской: «4 готово · 3 в работе · из 9 · 45 %» (mono — числа);
+  // при шагах в master — пометка «· N в master» (F1).
   caption: BriefDonePart[];
   percent: number;
-  // aria-label полоски: «Готовность 45 %».
+  // aria-label полоски: «Готовность 45 %», при шагах в master — «Готовность 45 %, 3 в master».
   ariaLabel: string;
+  // F1: сколько шагов в master (0 — нет или данных нет; ортогональный счётчик бэка).
+  inMaster: number;
+  // «в master»-сегмент полоски, % ширины полоски — только когда полоска по шкале трекера
+  // (оценки нет): на шкале оценки оркестратора счётчик шагов не стоит — тик был бы ложью.
+  // 0 — сегмента нет. Никогда не больше percent.
+  inMasterPercent: number;
   // Доля штриховки «в работе», 0 — штриховки нет.
   inProgressPercent: number;
   // Оценка оркестратора устарела: полоска тускнеет.
@@ -417,19 +428,37 @@ function clampPercent(n: number): number {
   return Math.max(0, Math.min(100, Math.round(n)));
 }
 
+// Защита от битых чисел (тот же приём, что nonNeg в featureProgress): отрицательное/NaN — 0.
+function nonNeg(n: number | null | undefined): number {
+  return Number.isFinite(n) && (n as number) > 0 ? Math.round(n as number) : 0;
+}
+
+// Часть «· N в master» (F1): пометка ОДНА, на подписи полоски готовности — в факте трекера
+// её нет (ревю 07eee660 минор 3: в одном блоке «N в master» печаталось дважды). Пусто при
+// 0/отсутствии данных — поведение прежнее (отметки нет там, где шагов в master нет).
+function masterParts(inMaster: number): BriefDonePart[] {
+  if (inMaster <= 0) return [];
+  return [{ text: ' · ', mono: false }, { text: String(inMaster), mono: true }, { text: ' в master', mono: false }];
+}
+
 export function briefReadinessText(brief: FeatureBrief, opts: BriefTextOptions = {}): BriefReadinessView {
   const closed = brief.kind === 'closed' || brief.kind === 'merged';
   const est = brief.note?.estimate ?? null;
   const stale = !!est && !!brief.note?.stale;
   const staleLabel = stale && brief.note ? voiceStaleLabel(brief.note, brief.kind) : null;
+  const inMaster = nonNeg(opts.inMaster);
 
   const trackerParts = briefDoneText(brief);
   const planFact = brief.kind === 'queued' && (brief.done.planState === 'cut' || brief.done.planState === 'done');
   const tracker: BriefDonePart[] = planFact ? trackerParts : [{ text: 'по трекеру: ', mono: false }, ...trackerParts];
+  // «в master» к строке трекера НЕ добавляется: это ровно тот же ортогональный счётчик,
+  // что показан на подписи полоски ниже; второй раз в том же блоке он не звучит (минор 3).
 
   let caption: BriefDonePart[];
   let percent: number;
   let inProgressPercent = 0;
+  // Сегмент «в master» на полоске — только по шкале трекера (ниже); на шкале оценки — 0.
+  let inMasterPercent = 0;
   if (est && est.total > 0) {
     percent = clampPercent(est.percent ?? (est.done / est.total) * 100);
     const w = est.inProgress ?? 0;
@@ -443,12 +472,23 @@ export function briefReadinessText(brief: FeatureBrief, opts: BriefTextOptions =
     caption.push({ text: ' · ', mono: false }, { text: `${percent} %`, mono: true });
   } else {
     const { stepsAccepted, stepsTotal } = brief.done;
-    percent = stepsTotal > 0 ? clampPercent((stepsAccepted / stepsTotal) * 100) : 0;
+    // Процент по трекеру — общий trackerPercent (та же функция, что полосам В2/С1/П2):
+    // числитель и знаменатель бэковые, второй копии арифметики в проекте нет.
+    percent = trackerPercent(stepsAccepted, stepsTotal);
     caption = [
       { text: `${stepsAccepted} из ${stepsTotal}`, mono: true }, { text: ' шагов · ', mono: false },
       { text: `${percent} %`, mono: true },
     ];
+    // Та же шкала, что у знаменателя полоски: доля шагов в master от total, не выше
+    // залитой части. Бэк НЕ гарантирует inMaster ≤ accepted: отсечка требует allDone
+    // цепочки, а не принятия (FeatureStepAccounting.cs:321-328), поэтому шаг «в master»
+    // без витка (корзина review) даёт inMaster > accepted. Это не битые числа, а правило
+    // полоски: «в master» — часть принятой части шкалы готовности, за неё сегмент не
+    // выходит; текст при этом честно называет факт (он ортогональный счётчик бэка),
+    // а расхождение говорит себе в «Трекер расходится» (вид unreviewed).
+    if (inMaster > 0 && stepsTotal > 0) inMasterPercent = Math.min(clampPercent((inMaster / stepsTotal) * 100), percent);
   }
+  caption.push(...masterParts(inMaster));
 
   // Чипы «ещё не начато»: оркестратор — его remaining; без оценки — brief.next (до трёх стадий).
   const mergeAsk = brief.kind === 'waiting_you' && (brief.reason === 'мерж' || brief.next[0]?.stage === 'merge');
@@ -470,7 +510,10 @@ export function briefReadinessText(brief: FeatureBrief, opts: BriefTextOptions =
 
   return {
     label: est ? 'Готовность' : 'Готовность · по трекеру',
-    caption, percent, ariaLabel: `Готовность ${percent} %`, inProgressPercent, stale, closed, staleLabel, tracker,
+    caption, percent,
+    ariaLabel: inMaster > 0 ? `Готовность ${percent} %, ${inMaster} в master` : `Готовность ${percent} %`,
+    inProgressPercent, stale, closed, staleLabel, tracker,
+    inMaster, inMasterPercent,
     chipsLabel: est ? 'Ещё не начато:' : 'Осталось:',
     chips,
     chipsEmpty: closed ? 'ничего — всё сделано' : null,
@@ -518,16 +561,18 @@ function etaMain(minutes: number): string {
 }
 
 // «к 16:50»; дальше 12 ч от «сейчас» — дата: «завтра к 10:30», «к 31.10». Нечитаемый момент — null.
-function readyAtText(iso: string | null | undefined, nowMs: number): string | null {
+// marker — связующее слово («к» / «завтра к»); строка шапки В2 («≈ 18:30») зовёт с «≈» —
+// тот же момент, другая интонация строки (общий форматтер, второй копии нет).
+export function readyAtText(iso: string | null | undefined, nowMs: number, marker = 'к'): string | null {
   if (!iso) return null;
   const t = Date.parse(iso);
   if (!Number.isFinite(t)) return null;
-  if (t - nowMs <= HOUR_12) return `к ${formatClock(iso)}`;
+  if (t - nowMs <= HOUR_12) return `${marker} ${formatClock(iso)}`;
   const target = new Date(t);
   const tomorrow = new Date(nowMs);
   tomorrow.setDate(tomorrow.getDate() + 1);
   const isTomorrow = target.getFullYear() === tomorrow.getFullYear() && target.getMonth() === tomorrow.getMonth() && target.getDate() === tomorrow.getDate();
-  return isTomorrow ? `завтра к ${formatClock(iso)}` : `к ${formatDate(iso)}`;
+  return isTomorrow ? `завтра ${marker} ${formatClock(iso)}` : `${marker} ${formatDate(iso)}`;
 }
 
 function pastFeatures(n: number): string {
@@ -739,6 +784,9 @@ export const BRIEF_MODEL_WORDS: readonly string[] = [
   ' шагов', // «План готов · 0 из 4 шагов»
   'План готов',
   'правок',
+  // «в master» (F1, masterParts): пометка готовности и факта трекера; покрывает и
+  // «Смержена в master» (она и так выше списком), и aria-label «N в master»
+  'в master',
   // «Дальше» (briefNextText): «После …» — любой префикс живой строки;
   // «Дальше — » — модельный префикс error/idle (метка блока — без тире, вне списка)
   'После ',

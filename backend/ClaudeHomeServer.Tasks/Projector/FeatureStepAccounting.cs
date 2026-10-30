@@ -54,8 +54,14 @@ internal static class FeatureStepAccounting
     // steps — задачи role=step/rework; verdictTasks — ревью/проверки/финал; plan — задачи role=plan.
     internal static Result Build(
         List<TaskItem> steps, List<TaskItem> verdictTasks, List<TaskItem> plan, DateTime nowUtc,
-        IReadOnlyCollection<FeatureIndexSession>? sessions)
+        IReadOnlyCollection<FeatureIndexSession>? sessions,
+        IReadOnlyList<TaskItem>? merges = null)
     {
+        // Закрытые мержи (Done с датой) — отсечки «в master»; порядок по моменту закрытия.
+        var closedMerges = (merges ?? [])
+            .Where(m => m.Status == TaskItemStatus.Done && m.CompletedAt is not null)
+            .OrderBy(m => m.CompletedAt!.Value)
+            .ToList();
         // Б7: чаты шага/витка наружу только если в снимке сессий владельца (fail-closed).
         var sessionById = sessions is null
             ? new Dictionary<string, FeatureIndexSession>()
@@ -147,20 +153,74 @@ internal static class FeatureStepAccounting
             }
         }
 
+        // Состав цепочек до основного прохода: нужен, чтобы понять цели виткового вердикта
+        // (какие шаги он касается) до разбора каждой цепочки. Снятая доработка не член цепочки.
+        var membersByKey = new Dictionary<string, List<TaskItem>>(StepKeyComparer);
+        foreach (var (key, groupTasks) in groups)
+            membersByKey[key] = groupTasks
+                .Concat((reworksByKey.GetValueOrDefault(key) ?? []).Where(r => r.Verification?.Verdict != TaskVerdicts.Withdrawn))
+                .ToList();
+        var keysByTaskId = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (var (key, list) in membersByKey)
+            foreach (var t in list)
+            {
+                if (!keysByTaskId.TryGetValue(t.Id, out var ks)) keysByTaskId[t.Id] = ks = [];
+                ks.Add(key);
+            }
+
+        // Цели вердикта: шаги из ReviewOf плюс — транзитивно — цели ВОЗВРАЩЁННОГО прошлого витка,
+        // на который ссылается ReviewOf (принятый финал второго круга принимает и то, что вернул
+        // первый, а закрыла доработка). Принятый/снятый прошлый виток не раскрывается: его цели
+        // уже решены им самим.
+        HashSet<string> TargetKeys(TaskItem verdict, HashSet<string> path)
+        {
+            var result = new HashSet<string>(StepKeyComparer);
+            foreach (var id in verdict.ReviewOf ?? [])
+            {
+                if (keysByTaskId.TryGetValue(id, out var ks)) result.UnionWith(ks);
+                else if (verdictById.TryGetValue(id, out var prev)
+                    && prev.Verification?.Verdict == TaskVerdicts.Returned && path.Add(prev.Id))
+                {
+                    result.UnionWith(TargetKeys(prev, path));
+                    path.Remove(prev.Id);
+                }
+            }
+            return result;
+        }
+
+        // Витки по цепочкам. Возврат по нескольким целям возвращает только шаги, у которых заведена
+        // доработка с тем же stepRef; остальным цели вердикт «вернули» не ставится и витком не
+        // считается (у ревью фильтра нет). Один целевой шаг — вердикт его, как раньше.
+        var roundTasksByKey = new Dictionary<string, List<TaskItem>>(StepKeyComparer);
+        foreach (var v in verdictTasks)
+        {
+            var targets = TargetKeys(v, [v.Id]);
+            // Фильтр — только у финала и проверки: ревью на несколько шагов возвращает их все (как раньше).
+            bool filter = v.Verification?.Verdict == TaskVerdicts.Returned && targets.Count > 1
+                && v.Role is TaskRoles.Final or TaskRoles.Qa;
+            foreach (var k in targets)
+            {
+                if (filter && !membersByKey[k].Any(t => t.Role == TaskRoles.Rework
+                        && !string.IsNullOrWhiteSpace(t.StepRef)
+                        && StepKeyComparer.Equals(t.StepRef.Trim(), k))) continue;
+                if (!roundTasksByKey.TryGetValue(k, out var rl)) roundTasksByKey[k] = rl = [];
+                rl.Add(v);
+            }
+        }
+
         // ─── Цепочки и корзины ───────────────────────────────────────────────────────────────
         var chains = new List<FeatureStepChain>(groups.Count);
         var facts = new Dictionary<string, ChainFacts>(StepKeyComparer);
         var bucketByKey = new Dictionary<string, string>(StepKeyComparer);
         var laneByKey = new Dictionary<string, string>(StepKeyComparer);
         var returnedKeys = new HashSet<string>(StepKeyComparer);
+        var inMasterKeys = new HashSet<string>(StepKeyComparer);
         var personasByLane = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var (key, groupTasks) in groups)
         {
             // Снятая (withdrawn) доработка исключается из цепочки целиком (решение 3 ревью):
             // не открывает work, не считается в reworkOpen/allDone, не даёт withdrawn.
-            var members = groupTasks
-                .Concat((reworksByKey.GetValueOrDefault(key) ?? []).Where(r => r.Verification?.Verdict != TaskVerdicts.Withdrawn))
-                .ToList();
+            var members = membersByKey[key];
             // Порядок задач цепочки — по старту (длительность и шапка), НЕ трогать.
             var ordered = members.OrderBy(FeatureProjector.TaskStart).ToList();
             // Шапка цепочки — задача шага (role=step); доработки её не подменяют.
@@ -177,8 +237,7 @@ internal static class FeatureStepAccounting
             // «+∞, последним» верно. Порядок один на всю цепочку: Rounds/N, lastVerdict и Source
             // берутся из этого же списка.
             // Одно ревью на два шага попадает в обе цепочки (связка многие-ко-многим).
-            var rounds = verdictTasks
-                .Where(t => t.ReviewOf is not null && t.ReviewOf.Any(idSet.Contains))
+            var rounds = (roundTasksByKey.GetValueOrDefault(key) ?? [])
                 .OrderBy(t => t.CompletedAt ?? DateTime.MaxValue)
                 .ThenBy(FeatureProjector.TaskStart)
                 .ToList();
@@ -255,7 +314,21 @@ internal static class FeatureStepAccounting
             // TaskManager: вердикт только у Done-задачи), поэтому дата есть.
             DateTime? acceptedAt = outcome == Accepted ? featureRounds[^1].CompletedAt : null;
 
+            // «В master» — ортогональный признак, не корзина: все задачи цепочки сданы СТРОГО до
+            // закрытия мержа ([.., mergedAt)); у мержа с reviewOf — только перечисленные. Снятый
+            // шаг в master не считается. Первый подходящий мерж — момент попадания шага в master.
+            DateTime? inMasterAt = null;
+            if (!withdrawn && allDone && ordered.All(t => t.CompletedAt is not null))
+            {
+                var lastDone = ordered.Max(t => t.CompletedAt!.Value);
+                inMasterAt = closedMerges
+                    .FirstOrDefault(m => lastDone < m.CompletedAt!.Value
+                        && (m.ReviewOf is not { Count: > 0 } || m.ReviewOf.Any(idSet.Contains)))
+                    ?.CompletedAt;
+            }
+
             bucketByKey[key] = bucket;
+            if (inMasterAt is not null) inMasterKeys.Add(key);
             string lane = FeatureProjector.NormalizeLane(head.Lane);
             laneByKey[key] = lane;
             if (loops > 0) returnedKeys.Add(key);
@@ -278,6 +351,8 @@ internal static class FeatureStepAccounting
                 Status = status,
                 WaitingSince = waitingSince,
                 AcceptedAt = acceptedAt,
+                InMaster = inMasterAt is not null,
+                MergedAt = inMasterAt,
                 DurationMinutes = Math.Max(0, Math.Round((end - start).TotalMinutes)),
                 Source = source,
                 Loops = loops,
@@ -316,6 +391,8 @@ internal static class FeatureStepAccounting
             NotCreated = notCreated,
             Withdrawn = bucketByKey.Values.Count(b => b == Withdrawn),
             UnlinkedReworks = unlinked,
+            // Ортогональный счётчик к корзинам (не пятая корзина и не вторая точка правды процента).
+            InMaster = inMasterKeys.Count,
         };
 
         // Линии: порядок — по первому появлению (сначала заведённые шаги, затем шаги плана без задачи).

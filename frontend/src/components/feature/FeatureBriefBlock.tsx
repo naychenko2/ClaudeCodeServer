@@ -35,6 +35,9 @@ export interface FeatureBriefBlockProps {
   stats: FeatureStats | null;
   // Момент мержа (summary.mergedAt ответа страницы) — для строки и тега closed/merged; в brief его нет.
   mergedAt?: string | null;
+  // Сколько шагов уже в master (F1: run.stepProgress.inMaster ответа страницы; в brief его
+  // нет) — пометка на полоске готовности и в факте трекера. null/0 — отметки нет.
+  inMaster?: number | null;
   // Резолвер имени персоны (usePersonas/getPersonaById); null — часть строки с именем опускается.
   nameOf?: PersonaNameResolver;
   isMobile?: boolean;
@@ -215,6 +218,11 @@ function ReadinessColumn({ view }: { view: BriefReadinessView }) {
   const hatch = view.stale
     ? `repeating-linear-gradient(135deg, ${C.accentMuted} 0 3px, ${C.progressTrack} 3px 6px)`
     : `repeating-linear-gradient(135deg, ${C.accent} 0 3px, ${C.accentMuted} 3px 6px)`;
+  // Сегмент «в master» (F1): начало залитой части — success («влито в master»), остаток
+  // готового — обычная краска заливки. Только когда полоска по шкале трекера (модель
+  // отдаёт 0 при оценке: на шкале оценки счётчик шагов не стоит). При закрытой фиче
+  // заливка и так success — сегмент не меняет вид, меняет только смысл в aria.
+  const master = view.inMasterPercent > 0 ? Math.min(view.inMasterPercent, view.percent) : 0;
   return (
     <div data-testid="brief-ready" style={{ minWidth: 0 }}>
       <div style={LABEL}>{view.label}</div>
@@ -231,7 +239,8 @@ function ReadinessColumn({ view }: { view: BriefReadinessView }) {
         aria-label={view.ariaLabel}
         style={{ display: 'flex', height: 8, borderRadius: R.max, overflow: 'hidden', background: C.progressTrack }}
       >
-        <div data-testid="brief-ready-fill" style={{ width: `${view.percent}%`, background: fill }} />
+        {master > 0 && <div data-testid="brief-ready-fill-master" style={{ width: `${master}%`, background: C.success }} />}
+        <div data-testid="brief-ready-fill" style={{ width: `${Math.max(0, view.percent - master)}%`, background: fill }} />
         {view.inProgressPercent > 0 && <div data-testid="brief-ready-hatch" style={{ width: `${view.inProgressPercent}%`, background: hatch }} />}
       </div>
       <div data-testid="brief-ready-tracker" style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: SP.xs }}>
@@ -365,7 +374,7 @@ function BriefSkeleton({ isMobile }: { isMobile: boolean }) {
 
 // ── Карточка ─────────────────────────────────────────────────────────────────────────
 export function FeatureBriefBlock({
-  loading = false, brief, stats, mergedAt = null, nameOf, isMobile = false,
+  loading = false, brief, stats, mergedAt = null, inMaster = null, nameOf, isMobile = false,
   onOpenStats, onRetry, onMerge, onOpenFinal, onOpenTask, onAnswer, onOpenTasks,
 }: FeatureBriefBlockProps) {
   // Одно «сейчас» на ответ (R-F8): относительные строки («ждёт N», «обновлено N назад»,
@@ -412,7 +421,7 @@ export function FeatureBriefBlock({
   const active = briefActiveView(brief, { nameOf, nowMs });
   const headingText = active?.heading ?? nowText;
   const subText = active?.heading != null ? active.sub : briefSubText(brief, nowMs);
-  const readiness = briefReadinessText(brief, { nameOf });
+  const readiness = briefReadinessText(brief, { nameOf, inMaster });
   const eta = briefEstimateText(brief, { nameOf, nowMs });
   const isWait = brief.kind === 'waiting_you';
   const answer = active?.answer && onAnswer ? active.answer : null;

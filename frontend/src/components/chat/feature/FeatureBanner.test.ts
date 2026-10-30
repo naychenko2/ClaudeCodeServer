@@ -235,4 +235,14 @@ describe('FeatureBanner: рендер строки В2', () => {
     }));
     expect(renderRow()).toContain('min-height:24px');
   });
+
+  it('десктоп: название режется первым (flexShrink 100, пол 120), «Сейчас» — после (1) (п. 5)', () => {
+    seedIndex(feat({ ...progress, state: 'running', nowPersonaIds: ['p-kira'] }));
+    const html = renderRow();
+    const title = styleOf(html, 'feature-row-title');
+    expect(title, 'узел названия не найден').toBeDefined();
+    expect(title).toContain('flex-shrink:100');
+    expect(title).toContain('min-width:120px');
+    expect(styleOf(html, 'feature-row-status')).toContain('flex-shrink:1');
+  });
 });

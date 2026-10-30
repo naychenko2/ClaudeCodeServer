@@ -247,14 +247,14 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
               </span>
             ) : (
               <>
-                {/* Порядок сжатия (дизайн-ревью F2, minor 7): при нехватке места первым
-                    сжимается название (большой flexShrink, пол не ниже 120), фраза
-                    «Сейчас» — только после него: иначе резались оба сразу пополам. */}
+                {/* Порядок сжатия (дизайн-ревью F2, п. 5): сжатие делится пропорционально
+                    flexShrink×базис — при 4 против 1 резались оба сразу. Название режется
+                    первым (100 против 1), пол minWidth 120 сохранён. */}
                 {!isMobile && (
                   <span
                     data-testid="feature-row-title"
                     title={feature.title}
-                    style={{ fontSize: FS.sm, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 120, flexShrink: 4 }}
+                    style={{ fontSize: FS.sm, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 120, flexShrink: 100 }}
                   >
                     <b style={{ color: C.textHeading, fontWeight: 600 }}>{feature.title}</b>
                   </span>

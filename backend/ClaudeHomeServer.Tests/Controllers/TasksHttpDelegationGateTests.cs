@@ -252,8 +252,8 @@ public class TasksHttpDelegationGateTests : IDisposable
 
     private async Task<string> CreateEpicAsync(string projectId)
     {
-        var resp = await Client.PostAsJsonAsync("/api/tasks",
-            new { title = "эпик", role = "feature", projectId });
+        var resp = await Client.PostAsJsonAsync($"/api/projects/{projectId}/tasks",
+            new { title = "эпик", role = "feature" });
         resp.EnsureSuccessStatusCode();
         return JsonSerializer.Deserialize<JsonElement>(
             await resp.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
@@ -343,7 +343,7 @@ public class TasksHttpDelegationGateTests : IDisposable
     public async Task ЗакрытиеОбычнойЗадачи_ЧатИсполнитель_Проходит()
     {
         var (projectId, sessionId) = await CreateProjectWithSessionAsync();
-        var created = await Client.PostAsJsonAsync("/api/tasks", new { title = "шаг", projectId });
+        var created = await Client.PostAsJsonAsync($"/api/projects/{projectId}/tasks", new { title = "шаг" });
         var id = JsonSerializer.Deserialize<JsonElement>(
             await created.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
         _adapters.AgentDepth = 0;
@@ -525,7 +525,7 @@ public class TasksHttpDelegationGateTests : IDisposable
     public async Task ВозобновлениеОбычнойЗадачи_ЧатИсполнитель_Проходит()
     {
         var (projectId, sessionId) = await CreateProjectWithSessionAsync();
-        var created = await Client.PostAsJsonAsync("/api/tasks", new { title = "шаг", projectId });
+        var created = await Client.PostAsJsonAsync($"/api/projects/{projectId}/tasks", new { title = "шаг" });
         var id = JsonSerializer.Deserialize<JsonElement>(
             await created.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
         (await Client.PutAsJsonAsync($"/api/tasks/{id}", new { status = "done" })).EnsureSuccessStatusCode();

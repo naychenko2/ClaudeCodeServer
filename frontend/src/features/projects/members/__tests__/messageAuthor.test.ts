@@ -27,6 +27,9 @@ describe('resolveMessageAuthor', () => {
   it('бывший участник — серый аватар и пометка', () => {
     expect(resolveMessageAuthor(shared, 'u-old', 'u-me', view)).toEqual({ userId: 'u-old', name: 'Олег', gone: true });
   });
+  it('список загружен, но отправителя в нём нет и в бывших тоже — «Участник», не «ушёл»', () => {
+    expect(resolveMessageAuthor(shared, 'u-new', 'u-me', view)).toEqual({ userId: 'u-new', name: 'Участник', gone: false });
+  });
   it('список ещё не загружен — запасное имя, не «ушёл»', () => {
     expect(resolveMessageAuthor(shared, 'u-maria', 'u-me', null)).toEqual({ userId: 'u-maria', name: 'Участник', gone: false });
   });

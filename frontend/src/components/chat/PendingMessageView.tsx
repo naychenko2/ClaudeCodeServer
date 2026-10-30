@@ -15,6 +15,9 @@ import { IconButton } from '../ui/IconButton';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
+import { UserAvatar } from '../ui/UserAvatar';
+import { useMessageAuthor } from '../../features/projects/members/MessageAuthorLine';
+import { AUTHOR_GONE_LABEL } from '../../features/projects/members/messageAuthor';
 import { MarkdownContent } from './MarkdownContent';
 import { MessageOriginChip } from '../MessageOriginChip';
 import { getPersonaById, ensurePersonasLoaded, personaLabel } from '../../lib/personas';
@@ -87,10 +90,13 @@ function PendingMessageRow({ item, onCancel, cancelAllowed = true, onPreempt, is
   // kind=user — своё сообщение, ждущее в «честной очереди»: подпись «Вы», без персоны и
   // чипа-источника (это не чужое входящее). Агентские строки (chats_send) — прежняя логика.
   const isUser = item.kind === 'user';
+  // Чужое сообщение человека в общем проекте: аватар и имя автора вместо «Вы»
+  // (свои, личный проект и записи без senderUserId — author = null)
+  const author = useMessageAuthor(isUser ? item.senderUserId : undefined);
   // Ждёт устройство, а не конец хода: своя рамка, подпись и пояснение, перебоя нет
   const deviceWait = !!item.waitingForDevice;
   // Персона → её имя; иначе имя чата-отправителя; иначе нейтральная подпись
-  const title = isUser ? 'Вы' : (sender ? personaLabel(sender) : (item.senderChatName || 'Входящее сообщение'));
+  const title = isUser ? (author ? author.name : 'Вы') : (sender ? personaLabel(sender) : (item.senderChatName || 'Входящее сообщение'));
   const preview = previewOf(item.text);
 
   const cancel = () => {
@@ -115,7 +121,9 @@ function PendingMessageRow({ item, onCancel, cancelAllowed = true, onPreempt, is
           cursor: 'pointer', minHeight: isMobile ? 44 : undefined,
         }}
       >
-        {isUser
+        {author
+          ? <UserAvatar userId={author.userId} displayName={author.name} size={18} gone={author.gone} />
+          : isUser
           ? <User size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
               style={{ color: C.textMuted, flexShrink: 0 }} />
           : sender
@@ -129,6 +137,9 @@ function PendingMessageRow({ item, onCancel, cancelAllowed = true, onPreempt, is
         }}>
           {title}
         </span>
+        {author?.gone && (
+          <span style={{ fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', flexShrink: 0 }}>· {AUTHOR_GONE_LABEL}</span>
+        )}
 
         {deviceWait && (
           <Badge tone="warning" size="xs" title="Уйдёт в работу, когда устройство проекта выйдет на связь"
@@ -245,7 +256,7 @@ function PendingMessageRow({ item, onCancel, cancelAllowed = true, onPreempt, is
             display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap',
             fontSize: FS.xs, color: C.textMuted,
           }}>
-            <span>Уйдёт в работу, когда Claude закончит текущий шаг</span>
+            <span>{author ? `Уйдёт, когда агент ответит ${author.name}` : 'Уйдёт в работу, когда Claude закончит текущий шаг'}</span>
             {onPreempt && (
               <Button
                 variant="ghost"

@@ -39,8 +39,9 @@ export function resolveMessageAuthor(
   if (member) return { userId: senderUserId, name: nameOf(member), gone: false };
   const former = project?.formerMembers?.find(m => m.userId === senderUserId);
   if (former) return { userId: senderUserId, name: nameOf(former), gone: true };
-  // Ни среди участников, ни среди бывших: список мог не догрузиться — не объявляем «ушёл»
-  return { userId: senderUserId, name: UNKNOWN_NAME, gone: !!view };
+  // «Больше не в проекте» — только по явному попаданию в formerMembers. Неизвестный (список
+  // не догружен или участник добавлен офлайн) — запасное имя, не «ушёл»
+  return { userId: senderUserId, name: UNKNOWN_NAME, gone: false };
 }
 
 // «Не доставлять» в очереди: владелец проекта и отправитель. Участник (редактор/читатель)

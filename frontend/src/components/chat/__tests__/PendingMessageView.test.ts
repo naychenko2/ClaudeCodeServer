@@ -1,11 +1,14 @@
 // Очередь чата: элементы, ждущие устройство локального проекта (ADR-016), помечены отдельно
 // от обычных и не получают перебоя «Прервать и отправить». Рендер статикой (react-dom/server)
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { PendingMessageList } from '../PendingMessageView';
 import type { PendingChatMessage } from '../../../lib/chatReducer';
+import { ChatProjectContext } from '../contexts';
 import { canCancelPending } from '../../../features/projects/members/messageAuthor';
+
+vi.mock('../../../lib/offline', async orig => ({ ...(await orig<typeof import('../../../lib/offline')>()), readStoredUserId: () => 'u-me' }));
 
 const item = (id: string, over: Partial<PendingChatMessage> = {}): PendingChatMessage => ({
   id, text: `Сообщение ${id}`, enqueuedAt: new Date().toISOString(), kind: 'agent', ...over,
@@ -57,5 +60,28 @@ describe('очередь общего проекта: «Не доставлят�
 
   it('без canCancelItem (личный проект) кнопка у всех — как раньше', () => {
     expect(render([theirs])).toContain(cancelMark);
+  });
+});
+
+describe('очередь общего проекта: подпись автора', () => {
+  const proj = { id: 'p1', rootPath: '/p', myRole: 'editor' as const };
+  const renderIn = (items: PendingChatMessage[], project: typeof proj | null) =>
+    renderToStaticMarkup(createElement(ChatProjectContext.Provider, { value: project },
+      createElement(PendingMessageList, { items, sessionId: 's1' })));
+  const mine = item('mine', { kind: 'user', senderUserId: 'u-me' });
+  const theirs = item('theirs', { kind: 'user', senderUserId: 'u-maria' });
+
+  it('чужая строка — запасное имя автора и аватар, не «Вы»', () => {
+    const html = renderIn([theirs], proj);
+    expect(html).toContain('Участник');
+    expect(html).not.toContain('>Вы<');
+  });
+
+  it('своя строка — «Вы»', () => {
+    expect(renderIn([mine], proj)).toContain('>Вы<');
+  });
+
+  it('личный проект — «Вы», даже при senderUserId', () => {
+    expect(renderIn([theirs], { id: 'p1', rootPath: '/p' } as typeof proj)).toContain('>Вы<');
   });
 });

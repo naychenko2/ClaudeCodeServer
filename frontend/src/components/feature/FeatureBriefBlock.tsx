@@ -17,7 +17,7 @@ import { C, R, SP, FS, FONT } from '../../lib/design';
 import { Button } from '../ui/Button';
 import { StatusTag, featureRunStatusTag, type FeatureRunTag } from './FeatureStatusTag';
 import {
-  briefActiveTagLabel, briefActiveView, briefElapsedFact, briefEstimateText, briefNowText, briefReadinessText, briefSubText, briefUpdatedText, voiceRoleText, voiceStaleLabel, voiceWhenText,
+  briefActiveTagLabel, briefActiveView, briefWaitTagLabel, briefElapsedFact, briefEstimateText, briefNowText, briefReadinessText, briefSubText, briefUpdatedText, voiceRoleText, voiceStaleLabel, voiceWhenText,
   type BriefDonePart, type BriefEstimateView, type BriefReadinessView, type PersonaNameResolver,
 } from './FeatureBriefModel';
 import { ActiveList } from './FeatureBriefActive';
@@ -74,8 +74,12 @@ function briefTagBase(brief: FeatureBrief, mergedAt: string | null): FeatureRunT
     case 'running':
       return featureRunStatusTag('running', brief.now?.stage ? stageLabel(brief.now.stage) : null);
     case 'waiting_you':
-      // Макет: в состоянии мержа тег карточки — «ждёт вас» (само «согласие на мерж» — в строке «Сейчас»).
-      return featureRunStatusTag('waiting');
+      // Ш4: слова «ждёт вас» в сводке нет — их говорит тревога страницы. Тег — «нужен ответ»
+      // (слово модели), при вопросе про мерж — «к мержу» статуса фичи.
+      {
+        const wait = briefWaitTagLabel(brief);
+        return wait ? { ...featureRunStatusTag('waiting'), label: wait } : featureRunStatusTag('merge_pending');
+      }
     case 'error':
       return featureRunStatusTag('stopped');
     case 'paused':
@@ -279,6 +283,7 @@ function EtaColumn({ view }: { view: BriefEstimateView }) {
         {view.tail && <span data-testid="brief-estimate-tail" style={{ fontSize: FS.sm, fontWeight: 400, color: C.textSecondary }}> {monoNumbers(view.tail)}</span>}
       </div>
       {view.source && <div data-testid="brief-estimate-source" style={UPD}>{monoNumbers(view.source)}</div>}
+      {view.note && <div data-testid="brief-estimate-note" style={UPD}>{view.note}</div>}
       {view.alt && (
         <div data-testid="brief-estimate-alt" style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: SP.xs + 2 }}>
           {monoNumbers(view.alt)}

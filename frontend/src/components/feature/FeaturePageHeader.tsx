@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { CSSProperties, FocusEvent, ReactNode } from 'react';
-import { ArrowRight, Check, Clock, GitBranch, ListChecks, MessageCircle, ListEnd, ListX, Moon, Pause, Play, RotateCcw, Zap } from 'lucide-react';
+import { ArrowRight, Check, GitBranch, ListChecks, MessageCircle, ListEnd, ListX, Pause, Play, RotateCcw, Zap } from 'lucide-react';
 import { C, R, SHADOW, FS, SP, FONT, MODAL_W } from '../../lib/design';
 import { refetchFeaturePage } from '../../lib/featurePage';
 import { stepProgressFromRun, type StepProgress } from '../../lib/featureProgress';
@@ -9,6 +9,7 @@ import { ToolbarOverflowMenu, type OverflowItem } from '../ToolbarOverflowMenu';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { FeatureGlyph } from '../chat/feature/FeatureGlyphs';
+import { alarmView } from '../chat/feature/featureTruthModel';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { formatDuration, queueOrdinalWord, queuePhraseParts } from '../../lib/chatGroups';
 import { ensurePersonasLoaded, getPersonaById, usePersonasVersion } from '../../lib/personas';
@@ -25,7 +26,6 @@ import { NavTargetButton } from './NavTargetButton';
 import { StatusTag, type FeatureRunTag } from './FeatureStatusTag';
 import { analysisLineState } from './FeatureAnalysisModel';
 import { minutesSince } from './FeatureStatsBits';
-import { setFeaturePageTab } from '../../lib/featurePage';
 import { useNow } from '../../lib/useNow';
 
 // Статусный тег живёт в FeatureStatusTag.tsx (W5-F3a): шапка и строка анализа зовут
@@ -33,54 +33,6 @@ import { useNow } from '../../lib/useNow';
 // FeatureAnalysisModel разомкнут. Рё-экспорт — совместимость для существующих
 // потребителей (страница, view исполнения, тесты): их импорты не меняются.
 export { featureRunStatusTag, toRunTag, StatusTag, type FeatureRunTag, type FeatureRunTagTone } from './FeatureStatusTag';
-
-// === Тег «стоит»/«тихо» в шапке (спека pt6, W5-F3a) ===
-//
-// Только эти два состояния строки анализа. Состояние, тон и текст — из
-// analysisLineState (общая функция F1), не копия условий: что показывает строка,
-// то показывает и шапка. Тег нужен, потому что страница открывается на
-// «Хронологии»: до тревоги надо добраться одним нажатием — клик ведёт на
-// «Статистику». Наведение — внутреннее кольцо currentColor (макет), фокус с
-// клавиатуры — SHADOW.focus. На 360 — высота 40, поля 0 SP.sm+2 (цель касания).
-// На вкладке «Статистика» тег остаётся: он ещё и сигнал.
-function AnalysisTag({ run, isMobile }: { run: FeatureRun; isMobile: boolean }) {
-  // Хуки до раннего return: состояние может измениться между рендерами, число
-  // хуков не должно плыть (прецедент: LeadChip).
-  const [hover, setHover] = useState(false);
-  const [focused, setFocused] = useState(false);
-  const st = analysisLineState(run, Date.now());
-  if (st.key !== 'stuck' && st.key !== 'quiet') return null;
-  const danger = st.key === 'stuck';
-  const Icon = danger ? Clock : Moon;
-  return (
-    <button
-      type="button"
-      data-testid="feature-page-analysis-tag"
-      title="Перейти к анализу на «Статистике»"
-      aria-label="Перейти к анализу на «Статистике»"
-      onClick={() => setFeaturePageTab('stats')}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      // Фокус — только с клавиатуры (:focus-visible): после тапа кольцо не залипает
-      // (прецедент: LeadChip).
-      onFocus={(e: FocusEvent<HTMLButtonElement>) => setFocused(e.currentTarget.matches(':focus-visible'))}
-      onBlur={() => setFocused(false)}
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: SP.xs, flexShrink: 0,
-        fontSize: FS.xs, fontWeight: 600, fontFamily: FONT.sans, lineHeight: '16px',
-        padding: isMobile ? `0 ${SP.sm + 2}px` : `${SP.xxs}px ${SP.sm}px`,
-        minHeight: isMobile ? 40 : undefined,
-        borderRadius: R.max, whiteSpace: 'nowrap', border: 'none', cursor: 'pointer',
-        background: danger ? C.dangerBg : C.warningBg,
-        color: danger ? C.dangerText : C.warningText,
-        boxShadow: focused ? SHADOW.focus : hover ? 'inset 0 0 0 1px currentColor' : 'none',
-      }}
-    >
-      <Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-      {st.badge?.text}
-    </button>
-  );
-}
 
 // === Главное действие (макет §1/§2/§11) ===
 //
@@ -373,7 +325,6 @@ export function FeaturePageHeader({ run, feature, isMobile, tag }: FeaturePageHe
         }}
       >
         {isMobile && tag && <StatusTag tag={tag} testId="feature-page-status" />}
-        {isMobile && run && <AnalysisTag run={run} isMobile={isMobile} />}
         {branchBtn}
         {age && <span>{age}</span>}
         <span data-testid="feature-page-taskcount">{tasks}</span>
@@ -958,7 +909,9 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
   // «Закрыть фичу…» — последний пункт (конечное действие, не первый по тапу).
   // «Возобновить фичу» (F3) — тоже в конце: для закрытой фичи это главное действие,
   // но в ряд на 360 оно не лезет (макет A: на мобиле действия — только в шторке).
-  if (canCloseNow && isMobile) {
+  // Видимой кнопки «Закрыть фичу» нет (Ш4): конечное действие живёт только здесь, и на
+  // десктопе, и на 360 — рядом с главным действием оно соседствовало с тревогой.
+  if (canCloseNow) {
     items.push({
       key: 'close',
       icon: <Check size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
@@ -980,7 +933,6 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
   return (
     <>
       {!isMobile && tag && <StatusTag tag={tag} testId="feature-page-status" />}
-      {!isMobile && run && <AnalysisTag run={run} isMobile={isMobile} />}
       {canPause && !isMobile && (
         <span data-testid="feature-page-pause-wrap" style={{ display: 'inline-flex', flexShrink: 0 }}>
           <Button
@@ -1009,21 +961,6 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
             {holdAction === 'unpause' ? (holdBusy ? 'Снимаю паузу…' : 'Снять паузу')
               : holdAction === 'start' ? (holdBusy ? 'Запускаю…' : 'Запустить фичу')
               : effectivePrimary ? effectivePrimary.label : 'Открыть ключевой чат'}
-          </Button>
-        </span>
-      )}
-      {canCloseNow && !isMobile && (
-        <span data-testid="feature-page-close-wrap" style={{ display: 'inline-flex', flexShrink: 0 }}>
-          <Button
-            size="sm"
-            variant="secondary"
-            leftIcon={<Check size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
-            loading={closeBusy}
-            dataTestId="feature-page-close-btn"
-            title="Закрыть фичу: эпик будет отмечен «Готово»"
-            onClick={closeClick}
-          >
-            {closeBusy ? 'Закрываю…' : 'Закрыть фичу'}
           </Button>
         </span>
       )}
@@ -1074,9 +1011,11 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
 
 // === Блок тревоги / «ждёт вас» (макет §2) ===
 //
-// Рисуется, когда run.attention есть (wait/stopped/merge) или фича не начата
-// (нейтральный блок «Фича ещё не начата»). Тон: wait/merge — infoBg, stopped —
-// dangerBg, не начата — bgSelected + рамка. Каркас: R.lg, поля 10 12, gap 9, 13,
+// Единственная тревога страницы (Ш4): стоит под тулбаром, над вкладками — видна на всех
+// шести. Рисуется, когда run.attention есть (wait/stopped/merge), когда сторож говорит
+// «молчит/стоит/тихо» (analysisLineState) или фича не начата (нейтральный блок «Фича ещё
+// не начата»). Тон — alarmView (F2): wait/merge/молчит — warn (warningBg), стоит — stop
+// (dangerBg), не начата — bgSelected + рамка. Каркас: R.lg, поля 10 12, gap 9, 13,
 // глиф 14 сверху, отступ сверху 10. Действия: главное (на 360; на 1280 оно в
 // шапке) + пара «чат · задача» (NavTargetButton; у wait/stopped — только «задача»,
 // чат — и есть главное действие).
@@ -1266,40 +1205,52 @@ export function FeaturePageAlert({ run, feature, isMobile, onMerge, marks: marks
   const a = run?.attention ?? null;
   const marks = marksProp ?? buildNavMarks(run);
   const notStarted = run?.state === 'not_started';
-  if (!a && !notStarted) return null;
+  // «Молчит/стоит» (Ш4): состояния сторожа из analysisLineState переехали сюда из тега
+  // шапки и строки анализа — тревога страницы одна, на всех вкладках. Текст — модели
+  // строки анализа (своей копии условий нет), тон — alarmView (F2).
+  const nowMs = Date.now();
+  const lineSt = run ? analysisLineState(run, nowMs) : null;
+  const silent = lineSt && (lineSt.key === 'stuck' || lineSt.key === 'nudged' || lineSt.key === 'quiet') ? lineSt : null;
+  if (!a && !notStarted && !silent) return null;
 
-  // Тон блока: stopped — danger, wait/merge — info, не начата — нейтральный.
-  const tone: 'info' | 'danger' | 'neutral' =
-    a?.kind === 'stopped' ? 'danger' : (a ? 'info' : 'neutral');
-  const bg = tone === 'danger' ? C.dangerBg : tone === 'info' ? C.infoBg : C.bgSelected;
-  const emphasis = tone === 'danger' ? C.dangerText : C.textHeading;
+  // Тон блока — от alarmView: «стоит» — stop (danger), «ждёт вас»/«ждёт согласия»/
+  // «молчит» — warn, не начата — нейтральный.
+  const alarmState = silent
+    ? (silent.key === 'stuck' ? 'stopped' : 'waiting')
+    : a?.kind === 'stopped' ? 'stopped' : a?.kind === 'merge' ? 'merge_pending' : 'waiting';
+  const name = attentionPersonaName(a);
+  const view = silent || a ? alarmView(alarmState, a?.reason ?? null, name, isMobile) : null;
+  const tone: 'warn' | 'stop' | 'neutral' = view ? view.tone : 'neutral';
+  const bg = tone === 'stop' ? C.dangerBg : tone === 'warn' ? C.warningBg : C.bgSelected;
+  const emphasis = tone === 'stop' ? C.dangerText : C.textHeading;
 
-  // Глиф: wait/merge — ромб, stopped — квадрат, не начата — нейтральный run.
-  const glyphKind = a?.kind === 'stopped' ? 'stopped' : a ? 'wait' : 'run';
+  // Глиф: warn — ромб, stop — квадрат, не начата — нейтральный run.
+  const glyphKind = tone === 'stop' ? 'stopped' : tone === 'warn' ? 'wait' : 'run';
 
   // Длительность: с attention.since до сейчас.
   const sinceMin = a?.since
-    ? Math.max(0, Math.round((Date.now() - new Date(a.since).getTime()) / 60000))
+    ? Math.max(0, Math.round((nowMs - new Date(a.since).getTime()) / 60000))
     : null;
   const dur = sinceMin != null ? formatDuration(sinceMin) : null;
-  const name = attentionPersonaName(a);
 
-  // Главная фраза по kind (макет §2).
+  // Главная фраза: слова alarmView + длительность; детали — отдельной строкой.
   let head: string;
-  let reason: string | null = a?.reason ?? null;
-  if (a?.kind === 'wait') {
-    head = name
-      ? `${name} ждёт вашего ответа${dur ? ` ${dur}` : ''}`
-      : `Ждёт вашего ответа${dur ? ` ${dur}` : ''}`;
+  let reason: string | null = null;
+  if (silent) {
+    head = silent.badge?.text ?? silent.strong;
+    reason = [silent.badge ? silent.strong : '', silent.tail].filter(Boolean).join(' ') || null;
   } else if (a?.kind === 'stopped') {
-    head = `Стоит${dur ? ` ${dur}` : ''}`;
+    head = `${view!.text}${dur ? ` · ${dur}` : ''}`;
     // Дефект 5519f071: причина — формулировка из executorStopVisual, как на карточке
     // и в панели деталей; сырой ключ (feature_held_expired) человеку ничего не говорит.
     // Неизвестный ключ — нейтральная «Исполнение прервано», без ключа.
     reason = executorStopVisual(a.reason).text;
   } else if (a?.kind === 'merge') {
-    head = 'Мерж в master ждёт вашего согласия';
-    reason = null;
+    head = view!.text;
+  } else if (a) {
+    head = `${view!.text}${dur ? ` · ${dur}` : ''}`;
+    // На 360 причина во фразу не лезет (alarmView) — идёт второй строкой.
+    reason = isMobile ? a.reason ?? null : null;
   } else {
     head = 'Фича ещё не начата';
     reason = 'Запустить её можно из ключевого чата — куратор начнёт с разреза.';
@@ -1332,6 +1283,25 @@ export function FeaturePageAlert({ run, feature, isMobile, onMerge, marks: marks
         }}
       >
         {effectivePrimary.label}
+      </Button>,
+    );
+  }
+  // «Молчит/стоит»: переход в чат шага — главного действия у такой тревоги в шапке нет.
+  for (const [i, act] of (silent?.actions ?? []).entries()) {
+    if (act.kind !== 'openChat' || !act.sessionId || marks.chatArchived(act.sessionId)) continue;
+    const sid = act.sessionId;
+    acts.push(
+      <Button
+        key={`silent-chat-${i}`}
+        size="xs"
+        variant="secondary"
+        style={{ background: C.bgWhite, minHeight: isMobile ? 40 : undefined }}
+        onClick={() => {
+          recordFeatureReturn(fid, { kind: 'chat', id: sid }, featureTitle);
+          void openChatById(sid);
+        }}
+      >
+        {act.label}
       </Button>,
     );
   }

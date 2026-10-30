@@ -26,7 +26,7 @@ import type { StageTurn } from '../../types/featureStats';
 // Подкомпоненты вкладки «Хронология» (волна 3, Ф2a, макет features-overview-3-final §5):
 // точка/линия этапа, подпись состояния, границы «dd.mm · ЧЧ:ММ – ЧЧ:ММ», длительность «≈»,
 // исполнители (аватар, роль, чип модели, статус, время, пара «чат · задача»), плашки
-// «ждёт вас · N мин» / «стоит · N мин». Строки шагов и витков (Ф2b) удалены: «Производство»
+// «нужен ответ · N мин» / «стоит · N мин». Строки шагов и витков (Ф2b) удалены: «Производство»
 // рисуется лентой карточек (FeatureProdCardsView), других потребителей у них нет (хвост R4e).
 // Чистые функции — в этом же файле, тестируются в FeatureTimelineTab.test.ts.
 
@@ -38,7 +38,7 @@ export function stageName(key: StageKey): string {
 }
 
 // Подпись состояния этапа (макет §5): done — нет; active — по тону (run/loop — «идёт»,
-// wait — «ждёт вас», stopped — «стоит»); pending — «впереди»; absent — «не было».
+// wait — «нужен ответ», stopped — «стоит»); pending — «впереди»; absent — «не было».
 // overlapsActive — «идёт параллельно» (стадия пересекается с идущей, макет: кольцо вместо точки).
 // tone — muted (textMuted) | info (C.info) | danger (C.dangerText).
 export interface StageStatus {
@@ -49,7 +49,7 @@ export function stageStatusLabel(stage: FeatureStage): StageStatus | null {
   if (stage.state === 'done') return null;
   if (stage.state === 'active') {
     if (stage.overlapsActive) return { text: 'идёт параллельно', tone: 'muted' };
-    if (stage.tone === 'wait') return { text: 'ждёт вас', tone: 'info' };
+    if (stage.tone === 'wait') return { text: 'нужен ответ', tone: 'info' };
     if (stage.tone === 'stopped') return { text: 'стоит', tone: 'danger' };
     return { text: 'идёт', tone: 'muted' };
   }
@@ -138,7 +138,7 @@ export function minutesSince(iso: string | null | undefined, now: number): numbe
 }
 
 // Статус исполнителя (макет §5): label + тон + (идёт/ждёт/стоит) минуты от задачи.
-// Тон: muted (идёт/не начат) | info (ждёт вас) | danger (стоит) | success (готово).
+// Тон: muted (идёт/не начат) | info (нужен ответ) | danger (стоит) | success (готово).
 export interface ExecutorStatus {
   label: string;
   tone: 'muted' | 'info' | 'danger' | 'success';
@@ -153,7 +153,7 @@ export function executorStatus(x: FeatureStageExecutor, task: FeatureTask | unde
     }
     case 'waiting': {
       const minutes = minutesSince(task?.awaitingHumanSince, now);
-      return { label: 'ждёт вас', tone: 'info', minutes: minutes ?? undefined };
+      return { label: 'нужен ответ', tone: 'info', minutes: minutes ?? undefined };
     }
     case 'stopped': {
       const minutes = minutesSince(task?.executorStoppedAt, now);
@@ -168,7 +168,7 @@ export function executorStatus(x: FeatureStageExecutor, task: FeatureTask | unde
   }
 }
 
-// Плашка состояния этапа (макет §5): «ждёт вас · N мин» (info) / «стоит · N мин» (danger)
+// Плашка состояния этапа (макет §5; Ш4 — «ждёт вас» говорит одна тревога страницы): «нужен ответ · N мин» (info) / «стоит · N мин» (danger)
 // по тону стадии; N — максимум минут по исполнителям с этим статусом. Тоны run/loop — без
 // плашки (стадия просто идёт).
 export function stageStatusBadge(stage: FeatureStage, taskMap: Map<string, FeatureTask>, now: number):
@@ -182,7 +182,7 @@ export function stageStatusBadge(stage: FeatureStage, taskMap: Map<string, Featu
     const st = executorStatus(x, task, now);
     if (st.minutes != null) max = Math.max(max ?? 0, st.minutes);
   }
-  const base = stage.tone === 'wait' ? 'ждёт вас' : 'стоит';
+  const base = stage.tone === 'wait' ? 'нужен ответ' : 'стоит';
   return { text: max != null ? `${base} · ${max} мин` : base, tone: stage.tone === 'wait' ? 'info' : 'danger' };
 }
 

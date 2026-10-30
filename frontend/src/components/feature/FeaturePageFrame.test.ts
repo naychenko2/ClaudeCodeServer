@@ -356,14 +356,14 @@ describe('Вкладки (макет §4)', () => {
 
 // ═══ 3. Тревога: attention.kind → тон + главное действие ═══════════════════════
 describe('Тревога (макет §2)', () => {
-  it('wait: тон info, «Ответить {имя}» в шапке (1280), клик → чат', async () => {
+  it('wait: тон warn (alarmView), «Ответить {имя}» в шапке (1280), клик → чат', async () => {
     personaMap.set('p-kira', 'Кира');
     mockGetFeature.result = pageData({ state: 'waiting', attention: attention('wait') });
     const c = render({});
     await settle();
     const alarm = findNodeByAttr(c, 'data-testid', 'feature-page-alarm');
     expect(alarm).not.toBeNull();
-    expect((alarm as unknown as { getAttribute: (a: string) => string | null }).getAttribute('data-tone')).toBe('info');
+    expect((alarm as unknown as { getAttribute: (a: string) => string | null }).getAttribute('data-tone')).toBe('warn');
     // Главное действие — в шапке (1280), не в блоке.
     const main = findNodeByAttr(c, 'data-testid', 'feature-page-main-action');
     expect(main).not.toBeNull();
@@ -379,14 +379,14 @@ describe('Тревога (макет §2)', () => {
     expect(mockOpenChat.calls).toContain('chat-kira');
   });
 
-  it('stopped: тон danger, «Чат {имя}»', async () => {
+  it('stopped: тон stop (alarmView), «Чат {имя}»', async () => {
     personaMap.set('p-kira', 'Кира');
     mockGetFeature.result = pageData({ state: 'stopped', attention: attention('stopped') });
     const c = render({});
     await settle();
     const alarm = findNodeByAttr(c, 'data-testid', 'feature-page-alarm');
     expect(alarm).not.toBeNull();
-    expect((alarm as unknown as { getAttribute: (a: string) => string | null }).getAttribute('data-tone')).toBe('danger');
+    expect((alarm as unknown as { getAttribute: (a: string) => string | null }).getAttribute('data-tone')).toBe('stop');
     const main = findNodeByAttr(c, 'data-testid', 'feature-page-main-action');
     expect(main).not.toBeNull();
     expect(textNodes(main!).join('')).toContain('Чат Кира');
@@ -415,13 +415,13 @@ describe('Тревога (макет §2)', () => {
     expect(text, 'сырого ключа нет').not.toContain('weird_new_key');
   });
 
-  it('merge_pending: тон info, «Мерж…» (Ф6: кнопка → общая модалка), пара «чат · задача»', async () => {
+  it('merge_pending: тон warn, «Мерж…» (Ф6: кнопка → общая модалка), пара «чат · задача»', async () => {
     mockGetFeature.result = pageData({ state: 'merge_pending', attention: attention('merge') });
     const c = render({});
     await settle();
     const alarm = findNodeByAttr(c, 'data-testid', 'feature-page-alarm');
     expect(alarm).not.toBeNull();
-    expect((alarm as unknown as { getAttribute: (a: string) => string | null }).getAttribute('data-tone')).toBe('info');
+    expect((alarm as unknown as { getAttribute: (a: string) => string | null }).getAttribute('data-tone')).toBe('warn');
     const main = findNodeByAttr(c, 'data-testid', 'feature-page-main-action');
     expect(main).not.toBeNull();
     expect(textNodes(main!).join('')).toContain('Мерж…');
@@ -430,15 +430,15 @@ describe('Тревога (макет §2)', () => {
     expect(textNodes(alarm!).join('')).toContain('задача');
   });
 
-  it('мутация: перепутать merge/wait в тревоге → тон wait=info краснеет (red)', async () => {
-    // wait — info; если перепутать с merge-логикой (danger/stop) — тест выше падает.
+  it('мутация: перепутать merge/wait в тревоге → тон wait=warn краснеет (red)', async () => {
+    // wait — warn; если перепутать с merge-логикой (danger/stop) — тест выше падает.
     // Здесь фиксируем: wait ≠ stopped по тону.
     personaMap.set('p-kira', 'Кира');
     mockGetFeature.result = pageData({ state: 'waiting', attention: attention('wait') });
     const c = render({});
     await settle();
     const alarm = findNodeByAttr(c, 'data-testid', 'feature-page-alarm')!;
-    expect((alarm as unknown as { getAttribute: (a: string) => string | null }).getAttribute('data-tone')).toBe('info');
+    expect((alarm as unknown as { getAttribute: (a: string) => string | null }).getAttribute('data-tone')).toBe('warn');
   });
 
   it('360: главное действие — в блоке тревоги (не в шапке)', async () => {
@@ -708,36 +708,32 @@ describe('Ф6: «Мерж…» на странице фичи', () => {
   });
 });
 
-// ═══ 6. Тег «стоит/тихо» в шапке (спека pt6, W5-F3a) ══════════════════════════════
+// ═══ 6. Единая тревога (Ш4) ═══════════════════════════════════════════════════════
 //
-// Тег рисуется только для двух состояний строки анализа (stuck/quiet) — состояние
-// берётся из той же analysisLineState, что и строка. Подпись = st.badge.text,
-// тон danger↔Clock / warning↔Moon, клик → вкладка «Статистика». На 360 —
-// minHeight 40 (цель касания), на десктопе — не фиксируется.
-// Мутации (в отчёте): (1) setFeaturePageTab('stats') → 'chats' в FeaturePageHeader —
-// краснеет тест «клик»; (2) убрать в AnalysisTag гейт «не stuck/quiet» — краснеет
-// «рисуется только для stuck/quiet».
+// «Молчит/стоит/тихо» из analysisLineState переехали в блок тревоги страницы: тега в
+// шапке больше нет, а сама тревога стоит над вкладками и видна на всех шести. Тон —
+// alarmView (F2): стоит — stop, молчит/тихо — warn.
+// Мутации (в отчёте): (1) вернуть AnalysisTag в тулбар — краснеет «тега в шапке нет»;
+// (2) убрать из FeaturePageAlert ветку silent — краснеют stuck/quiet; (3) тон stuck из
+// 'waiting' вместо 'stopped' — краснеет тон stop.
 
-describe('Тег «стоит/тихо» в шапке (pt6)', () => {
-  const TAG = 'feature-page-analysis-tag';
+describe('Единая тревога (Ш4)', () => {
+  const OLD_TAG = 'feature-page-analysis-tag';
+  const TABS = ['timeline', 'plans', 'chats', 'tasks', 'events', 'stats'] as const;
 
-  // Первый <svg> в поддереве (глиф lucide).
-  function firstSvg(n: AnyNode): AnyNode | null {
-    if (n.nodeType === 1 && n.nodeName === 'SVG') return n;
-    for (const c of n.childNodes) {
-      const hit = firstSvg(c);
-      if (hit) return hit;
-    }
-    return null;
-  }
-
-  const styleOf = (n: AnyNode): Record<string, unknown> =>
-    (n as unknown as { style: Record<string, unknown> }).style;
   const attr = (n: AnyNode, a: string): string | null =>
     (n as unknown as { getAttribute: (a: string) => string | null }).getAttribute(a);
+  const countAlarms = (c: AnyNode): number => {
+    let n = 0;
+    const walk = (x: AnyNode) => {
+      if (x.nodeType === 1 && attr(x, 'data-testid') === 'feature-page-alarm') n++;
+      for (const ch of x.childNodes) walk(ch);
+    };
+    walk(c);
+    return n;
+  };
 
-  // «Зависла»: сторож позвал человека (staleAlertedAt), активности 3 часа —
-  // бейдж «стоит 3 ч».
+  // «Зависла»: сторож позвал человека (staleAlertedAt), активности 3 часа — «стоит 3 ч».
   const stuckRun = () => pageData({
     state: 'stopped',
     lastActivityAt: new Date(NOW - 3 * 3_600_000).toISOString(),
@@ -746,77 +742,94 @@ describe('Тег «стоит/тихо» в шапке (pt6)', () => {
       staleAlertedAt: new Date(NOW - 24 * 3_600_000).toISOString(),
     }],
   });
-  // «Тихо»: флаг бэка quiet=true, 24 ч тишины — бейдж «тихо 24 ч».
+  // «Тихо»: флаг бэка quiet=true, 24 ч тишины — «тихо 24 ч».
   const quietRun = () => pageData({
     quiet: true,
     lastActivityAt: new Date(NOW - 24 * 3_600_000).toISOString(),
   });
+  const nudgedRun = () => pageData({
+    now: [{ taskId: 't-1', stage: 'prod', title: 'Шаг', stepRef: 'Ш1', nudgedAt: new Date(NOW - 3 * 3_600_000).toISOString() }],
+  });
 
-  it('тег рисуется только для stuck/quiet: другие состояния — нет', async () => {
-    const cases: [string, Partial<FeatureRun>, boolean][] = [
-      ['moving — задача идёт', { now: [{ taskId: 't-1', stage: 'prod', title: 'Шаг', startedAt: new Date(NOW - 30 * 60000).toISOString() }] }, false],
-      ['nudged — окликнули, молчит', { now: [{ taskId: 't-1', stage: 'prod', title: 'Шаг', nudgedAt: new Date(NOW - 3 * 3_600_000).toISOString() }] }, false],
-      ['attention — ждёт вас', { state: 'waiting', attention: attention('wait') }, false],
-      ['merged — смержена', { state: 'merged' }, false],
-      ['draft — черновик', { state: 'draft' }, false],
-      ['stuck — зависла', stuckRun().run, true],
-      ['quiet — тихо', quietRun().run, true],
-    ];
-    for (const [label, runOver, expectTag] of cases) {
-      mockGetFeature.result = pageData(runOver);
-      const c = render({});
-      await settle();
-      const tag = findNodeByAttr(c, 'data-testid', TAG);
-      expect(tag !== null, `${label}: тег должен быть ${expectTag ? 'на месте' : 'отсутствовать'}`).toBe(expectTag);
+  it('полоса тревоги — одна и на каждой из шести вкладок (attention)', async () => {
+    mockGetFeature.result = pageData({ state: 'waiting', attention: attention('wait') });
+    const c = render({});
+    await settle();
+    for (const tab of TABS) {
+      act(() => { setFeaturePageTab(tab); });
+      expect(findNodeByAttr(c, 'data-testid', 'feature-page-alarm'), `вкладка ${tab}: тревоги нет`).not.toBeNull();
+      expect(countAlarms(c), `вкладка ${tab}: тревог не одна`).toBe(1);
     }
   });
 
-  it('stuck: подпись = badge.text «стоит 3 ч», тон danger, глиф Clock', async () => {
+  it('«стоит» сторожа — в той же полосе на всех шести вкладках, тон stop, без второй тревоги', async () => {
     mockGetFeature.result = stuckRun();
     const c = render({});
     await settle();
-    const tag = findNodeByAttr(c, 'data-testid', TAG);
-    expect(tag).not.toBeNull();
-    expect(textNodes(tag!).join('')).toBe('стоит 3 ч');
-    expect(styleOf(tag!).background, 'тон не danger').toBe(C.dangerBg);
-    const svg = firstSvg(tag!);
-    expect(svg).not.toBeNull();
-    expect(attr(svg!, 'class'), 'глиф не Clock').toContain('lucide-clock');
+    for (const tab of TABS) {
+      act(() => { setFeaturePageTab(tab); });
+      const alarm = findNodeByAttr(c, 'data-testid', 'feature-page-alarm');
+      expect(alarm, `вкладка ${tab}: тревоги нет`).not.toBeNull();
+      expect(countAlarms(c), `вкладка ${tab}: тревог не одна`).toBe(1);
+      expect(attr(alarm!, 'data-tone')).toBe('stop');
+      expect(textNodes(alarm!).join(''), `вкладка ${tab}`).toContain('стоит 3 ч');
+      expect(textNodes(alarm!).join('')).toContain('Ш1 без движения');
+    }
   });
 
-  it('quiet: подпись = badge.text «тихо 24 ч», тон warning, глиф Moon', async () => {
+  it('«молчит» (оклик без ответа) и «тихо» — тон warn, слова строки анализа', async () => {
+    mockGetFeature.result = nudgedRun();
+    let c = render({});
+    await settle();
+    let alarm = findNodeByAttr(c, 'data-testid', 'feature-page-alarm');
+    expect(alarm).not.toBeNull();
+    expect(attr(alarm!, 'data-tone')).toBe('warn');
+    expect(textNodes(alarm!).join('')).toContain('молчит 3 ч');
+    unmountAll();
+
     mockGetFeature.result = quietRun();
+    pageTest.reset();
+    indexTest.setIndex('p1', mockIndex as FeaturesIndex);
+    c = render({});
+    await settle();
+    alarm = findNodeByAttr(c, 'data-testid', 'feature-page-alarm');
+    expect(alarm).not.toBeNull();
+    expect(attr(alarm!, 'data-tone')).toBe('warn');
+    expect(textNodes(alarm!).join('')).toContain('тихо 24 ч');
+  });
+
+  it('тега «стоит/тихо» в шапке нет — ни на 1280, ни на 360', async () => {
+    for (const isMobile of [false, true]) {
+      mockGetFeature.result = stuckRun();
+      const c = render({ isMobile });
+      await settle();
+      expect(findNodeByAttr(c, 'data-testid', OLD_TAG), `isMobile=${isMobile}: тег остался`).toBeNull();
+      expect(findNodeByAttr(c, 'data-testid', 'feature-page-alarm')).not.toBeNull();
+      unmountAll();
+      pageTest.reset();
+    }
+  });
+
+  it('без сигнала сторожа и без attention — тревоги нет (moving, merged, draft)', async () => {
+    const cases: [string, Partial<FeatureRun>][] = [
+      ['moving — задача идёт', { now: [{ taskId: 't-1', stage: 'prod', title: 'Шаг', startedAt: new Date(NOW - 30 * 60000).toISOString() }] }],
+      ['merged — смержена', { state: 'merged' }],
+    ];
+    for (const [label, runOver] of cases) {
+      mockGetFeature.result = pageData(runOver);
+      const c = render({});
+      await settle();
+      expect(findNodeByAttr(c, 'data-testid', 'feature-page-alarm'), `${label}: тревоги быть не должно`).toBeNull();
+      unmountAll();
+      pageTest.reset();
+    }
+  });
+
+  it('wait: слова alarmView «Ждёт вас · …» и длительность; причина на 1280 — во фразе', async () => {
+    mockGetFeature.result = pageData({ state: 'waiting', attention: attention('wait', { reason: 'уточни отступы' }) });
     const c = render({});
     await settle();
-    const tag = findNodeByAttr(c, 'data-testid', TAG);
-    expect(tag).not.toBeNull();
-    expect(textNodes(tag!).join('')).toBe('тихо 24 ч');
-    expect(styleOf(tag!).background, 'тон не warning').toBe(C.warningBg);
-    const svg = firstSvg(tag!);
-    expect(svg).not.toBeNull();
-    expect(attr(svg!, 'class'), 'глиф не Moon').toContain('lucide-moon');
-  });
-
-  it('клик → вкладка «Статистика» (setFeaturePageTab("stats"))', async () => {
-    mockGetFeature.result = stuckRun();
-    const c = render({});
-    await settle();
-    const tag = findNodeByAttr(c, 'data-testid', TAG);
-    expect(tag).not.toBeNull();
-    const p = reactProps(tag!) as { onClick?: (e: unknown) => void } | null;
-    await act(async () => { p?.onClick?.({}); });
-    const stats = tabByLabel(c, 'Статистика');
-    expect(stats, 'вкладки «Статистика» нет на странице').not.toBeNull();
-    expect(attr(stats!, 'aria-selected'), 'клик не перевёл на «Статистику»').toBe('true');
-  });
-
-  it('360: minHeight 40 (цель касания)', async () => {
-    mockGetFeature.result = quietRun();
-    const c = render({ isMobile: true });
-    await settle();
-    const tag = findNodeByAttr(c, 'data-testid', TAG);
-    expect(tag).not.toBeNull();
-    expect(String(styleOf(tag!).minHeight), 'на 360 у тега нет высоты 40').toContain('40');
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'feature-page-alarm')!).join('')).toContain('Ждёт вас · уточни отступы · 30 мин');
   });
 });
 

@@ -1406,6 +1406,32 @@ describe('W4-HOLD-F2: пауза и черновик в шапке и блоке
   });
 });
 
+// Ш4: видимой кнопки «Закрыть фичу» нет — закрытие только пунктом ⋯ (и на 1280, и на 360).
+function menuItemsNow(): AnyNode[] {
+  const out: AnyNode[] = [];
+  const walk = (x: AnyNode) => {
+    if ((x as unknown as { getAttribute?: (a: string) => string | null }).getAttribute?.('role') === 'menuitem') out.push(x);
+    for (const ch of x.childNodes) walk(ch);
+  };
+  walk((globalThis as any).document.body as unknown as AnyNode);
+  return out;
+}
+async function openMoreMenu(c: AnyNode) {
+  const trigger = findNodeByAttr(c, 'aria-label', 'Ещё');
+  expect(trigger, 'триггер ⋯').not.toBeNull();
+  await act(async () => { (reactProps(trigger)!.onClick as () => void)(); });
+}
+async function hasCloseItem(c: AnyNode): Promise<boolean> {
+  await openMoreMenu(c);
+  return menuItemsNow().some(x => textNodes(x as never).join('').includes('Закрыть фичу'));
+}
+async function clickClose(c: AnyNode) {
+  await openMoreMenu(c);
+  const item = menuItemsNow().find(x => textNodes(x as never).join('').includes('Закрыть фичу'));
+  expect(item, 'пункт «Закрыть фичу…» в ⋯').toBeDefined();
+  await act(async () => { (reactProps(item)!.onClick as () => void)(); });
+}
+
 // === F2 (статусной модели): кнопка «Закрыть фичу» — только владелец, с подтверждением ===
 // Контракт бэка (гард B2, TasksHttpDelegationGateTests): PUT /api/tasks/{epicId}
 // {status:'done'} с пользовательским JWT проходит; сервисный токен — 403. Фронт
@@ -1418,7 +1444,7 @@ describe('W4-HOLD-F2: пауза и черновик в шапке и блоке
 // (5) закрывать модалку и при отказе (без ветки err) → тест «отказ бэка» красный;
 // (6) снять loading/текст на кнопке тулбара → тест «запрос в полёте» красный;
 // (7) убрать строку предупреждения (nowCount > 0) → тест «идущие шаги» красный.
-describe('F2: кнопка «Закрыть фичу» в шапке', () => {
+describe('F2: «Закрыть фичу» — пункт ⋯ (Ш4: кнопки нет)', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
@@ -1457,26 +1483,13 @@ describe('F2: кнопка «Закрыть фичу» в шапке', () => {
   };
   const owner = () => setMeFromServer({ userId: 'u-own', username: 'andrey', role: 'user' });
 
-  // Все пункты шторки ⋯ (их несколько: пауза, ветка, эпик, закрытие).
-  function menuItems(): AnyNode[] {
-    const out: AnyNode[] = [];
-    const walk = (x: AnyNode) => {
-      if ((x as unknown as { getAttribute?: (a: string) => string | null }).getAttribute?.('role') === 'menuitem') out.push(x);
-      for (const ch of x.childNodes) walk(ch);
-    };
-    walk((globalThis as any).document.body as unknown as AnyNode);
-    return out;
-  }
-
-  it('владелец: кнопка есть; клик — подтверждение; «Отмена» — запроса нет', async () => {
+  it('владелец: кнопки в ряду нет, пункт в ⋯; клик — подтверждение; «Отмена» — запроса нет', async () => {
     openPage();
     owner();
     const c = render({ projectOwnerId: 'u-own' });
     await settle();
-    const btn = findNodeByAttr(c, 'data-testid', 'feature-page-close-btn');
-    expect(btn, 'кнопка «Закрыть фичу» в тулбаре').not.toBeNull();
-    expect(textNodes(btn!).join('')).toContain('Закрыть фичу');
-    await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-close-btn'), 'видимой кнопки «Закрыть фичу» нет').toBeNull();
+    await clickClose(c);
     const modalText = textNodes((globalThis as any).document.body).join(' ');
     expect(modalText, 'заголовок с названием фичи').toContain('Закрыть «Моя фича»?');
     expect(modalText, 'пояснение про группу «Закрытые»').toContain('Закрытые');
@@ -1493,8 +1506,7 @@ describe('F2: кнопка «Закрыть фичу» в шапке', () => {
     owner();
     const c = render({ projectOwnerId: 'u-own' });
     await settle();
-    const btn = findNodeByAttr(c, 'data-testid', 'feature-page-close-btn')!;
-    await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
+    await clickClose(c);
     const confirm = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-close-confirm')!;
     await act(async () => { (reactProps(confirm)!.onClick as () => void)(); });
     expect(mockUpdateTask.calls, 'PUT done по эпику').toEqual([{ id: 'f1', dto: { status: 'done' } }]);
@@ -1515,7 +1527,7 @@ describe('F2: кнопка «Закрыть фичу» в шапке', () => {
     const project = { id: 'p1', ownerId: 'u-own' };
     const c = render({ projectOwnerId: project.ownerId });
     await settle();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-close-btn'), 'не владельцу кнопки нет').toBeNull();
+    expect(await hasCloseItem(c), 'не владельцу пункта нет').toBe(false);
   });
 
   // Фолбэка «поля нет — владелец по умолчанию» нет: бэк проставляет ownerId всем
@@ -1526,7 +1538,7 @@ describe('F2: кнопка «Закрыть фичу» в шапке', () => {
     owner();
     const c = render({});
     await settle();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-close-btn'), 'неизвестный владелец — не показываем').toBeNull();
+    expect(await hasCloseItem(c), 'неизвестный владелец — не показываем').toBe(false);
   });
 
   it('уже закрыта (эпик done): кнопки нет; тег — «закрыта без мержа»', async () => {
@@ -1536,7 +1548,7 @@ describe('F2: кнопка «Закрыть фичу» в шапке', () => {
     owner();
     const c = render({ projectOwnerId: 'u-own' });
     await settle();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-close-btn'), 'у закрытой фичи кнопки нет').toBeNull();
+    expect(await hasCloseItem(c), 'у закрытой фичи пункта нет').toBe(false);
     const tag = findNodeByAttr(c, 'data-testid', 'feature-page-status');
     expect(textNodes(tag!).join(''), 'состояние страницы — «закрыта»').toContain('закрыта');
   });
@@ -1547,12 +1559,7 @@ describe('F2: кнопка «Закрыть фичу» в шапке', () => {
     const c = render({ isMobile: true, projectOwnerId: 'u-own' });
     await settle();
     expect(findNodeByAttr(c, 'data-testid', 'feature-page-close-btn'), 'на мобиле кнопки в ряду нет').toBeNull();
-    const trigger = findNodeByAttr(c, 'aria-label', 'Ещё');
-    expect(trigger, 'триггер ⋯').not.toBeNull();
-    await act(async () => { (reactProps(trigger)!.onClick as () => void)(); });
-    const closeItem = menuItems().find(x => textNodes(x as never).join('').includes('Закрыть фичу'));
-    expect(closeItem, 'пункт «Закрыть фичу…»').not.toBeNull();
-    await act(async () => { (reactProps(closeItem)!.onClick as () => void)(); });
+    await clickClose(c);
     const confirm = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-close-confirm');
     expect(confirm, 'модалка подтверждения').not.toBeNull();
     // Закрыть модалку здесь же: незакрытая остаётся в DOM через портал и её
@@ -1568,8 +1575,7 @@ describe('F2: кнопка «Закрыть фичу» в шапке', () => {
     owner();
     const c = render({ projectOwnerId: 'u-own' });
     await settle();
-    const btn = findNodeByAttr(c, 'data-testid', 'feature-page-close-btn')!;
-    await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
+    await clickClose(c);
     const confirm = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-close-confirm')!;
     await act(async () => { (reactProps(confirm)!.onClick as () => void)(); });
     const last = toasts[toasts.length - 1];
@@ -1602,8 +1608,7 @@ describe('F2: кнопка «Закрыть фичу» в шапке', () => {
     owner();
     const c = render({ projectOwnerId: 'u-own' });
     await settle();
-    const btn = findNodeByAttr(c, 'data-testid', 'feature-page-close-btn')!;
-    await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
+    await clickClose(c);
     const warn = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-close-running');
     expect(warn, 'строка предупреждения').not.toBeNull();
     expect(textNodes(warn!).join(''), 'текст про идущие шаги').toContain('Идут 2 шага — они не остановятся, фича перейдёт в «Закрытые»');
@@ -1625,8 +1630,7 @@ describe('F2: кнопка «Закрыть фичу» в шапке', () => {
     owner();
     const c = render({ projectOwnerId: 'u-own' });
     await settle();
-    const btn = findNodeByAttr(c, 'data-testid', 'feature-page-close-btn')!;
-    await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
+    await clickClose(c);
     const warn = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-close-running');
     expect(warn, 'строка предупреждения').not.toBeNull();
     expect(textNodes(warn!).join(''), 'текст про один шаг').toContain('Идет 1 шаг — он не остановится, фича перейдёт в «Закрытые»');
@@ -1634,19 +1638,18 @@ describe('F2: кнопка «Закрыть фичу» в шапке', () => {
     await act(async () => { (reactProps(cancel)!.onClick as () => void)(); });
   });
 
-  it('запрос в полёте: кнопка тулбара disabled и «Закрываю…» (loading)', async () => {
+  it('запрос в полёте: «Закрыть» в модалке disabled и «Закрываю…» (loading)', async () => {
     openPage();
     mockUpdateTask.pending = true; // запрос не разрешается — состояние «в полёте» держится
     owner();
     const c = render({ projectOwnerId: 'u-own' });
     await settle();
-    const btn = findNodeByAttr(c, 'data-testid', 'feature-page-close-btn')!;
-    await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
+    await clickClose(c);
     const confirm = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-close-confirm')!;
     await act(async () => { (reactProps(confirm)!.onClick as () => void)(); });
-    const props = reactProps(btn) as { disabled?: boolean };
-    expect(props.disabled, 'хвост 2: индикация loading на кнопке').toBe(true);
-    expect(textNodes(btn).join(''), 'текст в полёте').toContain('Закрываю…');
+    const props = reactProps(confirm) as { disabled?: boolean };
+    expect(props.disabled, 'хвост 2: индикация loading на кнопке модалки').toBe(true);
+    expect(textNodes(confirm).join(''), 'текст в полёте').toContain('Закрываю…');
     // Разрешить запрос успехом: модалка закрывается сама (cleanup — незакрытая
     // модалка утекала бы в следующий тест, портал не анмонтирован).
     await act(async () => { mockUpdateTask.settle?.({} as Task); await Promise.resolve(); });
@@ -1659,8 +1662,7 @@ describe('F2: кнопка «Закрыть фичу» в шапке', () => {
     owner();
     const c = render({ projectOwnerId: 'u-own' });
     await settle();
-    const btn = findNodeByAttr(c, 'data-testid', 'feature-page-close-btn')!;
-    await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
+    await clickClose(c);
     const confirm = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-close-confirm')!;
     await act(async () => { (reactProps(confirm)!.onClick as () => void)(); });
     const stillOpen = () => findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-close-confirm');
@@ -1689,7 +1691,7 @@ describe('F2: кнопка «Закрыть фичу» в шапке', () => {
     pressEsc();
     expect(stillOpen(), 'Esc вне полёта закрывает модалку').toBeNull();
     // «Отмена» тоже работает: открыть снова и закрыть кнопкой.
-    await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
+    await clickClose(c);
     const cancel2 = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-close-cancel')!;
     await act(async () => { (reactProps(cancel2)!.onClick as () => void)(); });
     expect(stillOpen(), 'после отказа «Отмена» закрывает').toBeNull();
@@ -1766,7 +1768,8 @@ describe('F3: кнопка «Возобновить» на закрытой фи
     const btn = findNodeByAttr(c, 'data-testid', 'feature-page-resume-btn');
     expect(btn, 'кнопка «Возобновить» в тулбаре').not.toBeNull();
     expect(textNodes(btn!).join('')).toContain('Возобновить');
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-close-btn'), 'у закрытой фичи «Закрыть» нет').toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-close-btn'), 'кнопки «Закрыть» нет нигде').toBeNull();
+    expect(await hasCloseItem(c), 'у закрытой фичи «Закрыть» нет').toBe(false);
     await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
     expect(mockUpdateTask.calls, 'PUT todo по эпику').toEqual([{ id: 'f1', dto: { status: 'todo' } }]);
     const last = toasts[toasts.length - 1];
@@ -1804,7 +1807,7 @@ describe('F3: кнопка «Возобновить» на закрытой фи
     const c = render({ projectOwnerId: 'u-own' });
     await settle();
     expect(findNodeByAttr(c, 'data-testid', 'feature-page-resume-btn'), 'на открытой фиче «Возобновить» нет').toBeNull();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-close-btn'), '«Закрыть» на открытой — есть').not.toBeNull();
+    expect(await hasCloseItem(c), '«Закрыть» на открытой — есть').toBe(true);
   });
 
   it('после возобновления: refetch отдаёт открытый эпик — снова «Закрыть», «Возобновить» нет', async () => {
@@ -1820,8 +1823,7 @@ describe('F3: кнопка «Возобновить» на закрытой фи
     const btn = findNodeByAttr(c, 'data-testid', 'feature-page-resume-btn')!;
     await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
     await settle();
-    const closeBtn = findNodeByAttr(c, 'data-testid', 'feature-page-close-btn');
-    expect(closeBtn, 'после возобновления снова «Закрыть фичу»').not.toBeNull();
+    expect(await hasCloseItem(c), 'после возобновления снова «Закрыть фичу»').toBe(true);
     expect(findNodeByAttr(c, 'data-testid', 'feature-page-resume-btn'), '«Возобновить» исчезла').toBeNull();
   });
 

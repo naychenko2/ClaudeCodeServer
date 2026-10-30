@@ -216,9 +216,9 @@ describe('stageStatusLabel', () => {
   it('done → null (без подписи)', () => {
     expect(stageStatusLabel(mkStage({ state: 'done' }))).toBeNull();
   });
-  it('active: run → «идёт», wait → «ждёт вас» (info), stopped → «стоит» (danger)', () => {
+  it('active: run → «идёт», wait → «нужен ответ» (info), stopped → «стоит» (danger)', () => {
     expect(stageStatusLabel(mkStage({ state: 'active', tone: 'run' }))).toEqual({ text: 'идёт', tone: 'muted' });
-    expect(stageStatusLabel(mkStage({ state: 'active', tone: 'wait' }))).toEqual({ text: 'ждёт вас', tone: 'info' });
+    expect(stageStatusLabel(mkStage({ state: 'active', tone: 'wait' }))).toEqual({ text: 'нужен ответ', tone: 'info' });
     expect(stageStatusLabel(mkStage({ state: 'active', tone: 'stopped' }))).toEqual({ text: 'стоит', tone: 'danger' });
   });
   it('active + overlapsActive → «идёт параллельно»', () => {
@@ -327,14 +327,14 @@ describe('minutesSince', () => {
 });
 
 describe('executorStatus', () => {
-  it('running → «идёт» + минуты от старта; waiting → «ждёт вас» (info); stopped → «стоит» (danger); done → «готово»; pending → «не начат»', () => {
+  it('running → «идёт» + минуты от старта; waiting → «нужен ответ» (info); stopped → «стоит» (danger); done → «готово»; pending → «не начат»', () => {
     const running = executorStatus(mkExec({ status: 'running' }), { claudeStartedAt: '2026-10-20T11:00:00Z' } as FeatureTask, NOW);
     expect(running.label).toBe('идёт');
     expect(running.tone).toBe('muted');
     expect(running.minutes).toBe(60);
 
     const waiting = executorStatus(mkExec({ status: 'waiting' }), { awaitingHumanSince: '2026-10-20T11:35:00Z' } as FeatureTask, NOW);
-    expect(waiting).toEqual({ label: 'ждёт вас', tone: 'info', minutes: 25 });
+    expect(waiting).toEqual({ label: 'нужен ответ', tone: 'info', minutes: 25 });
 
     const stopped = executorStatus(mkExec({ status: 'stopped' }), { executorStoppedAt: '2026-10-20T11:48:00Z' } as FeatureTask, NOW);
     expect(stopped).toEqual({ label: 'стоит', tone: 'danger', minutes: 12 });
@@ -345,12 +345,12 @@ describe('executorStatus', () => {
   it('без задачи — минуты не выдумывает (undefined)', () => {
     const w = executorStatus(mkExec({ status: 'waiting' }), undefined, NOW);
     expect(w.minutes).toBeUndefined();
-    expect(w.label).toBe('ждёт вас');
+    expect(w.label).toBe('нужен ответ');
   });
 });
 
 describe('stageStatusBadge', () => {
-  it('tone wait → «ждёт вас · N мин» (info); tone stopped → «стоит · N мин» (danger); run/loop → null', () => {
+  it('tone wait → «нужен ответ · N мин» (info); tone stopped → «стоит · N мин» (danger); run/loop → null', () => {
     const taskMap = new Map<string, FeatureTask>([
       ['tw', { id: 'tw', awaitingHumanSince: '2026-10-20T11:35:00Z' } as FeatureTask],
       ['ts', { id: 'ts', executorStoppedAt: '2026-10-20T11:48:00Z' } as FeatureTask],
@@ -358,7 +358,7 @@ describe('stageStatusBadge', () => {
     const wait = stageStatusBadge(
       mkStage({ key: 'prod', state: 'active', tone: 'wait', executors: [mkExec({ taskId: 'tw', status: 'waiting' })] }),
       taskMap, NOW);
-    expect(wait).toEqual({ text: 'ждёт вас · 25 мин', tone: 'info' });
+    expect(wait).toEqual({ text: 'нужен ответ · 25 мин', tone: 'info' });
 
     const stop = stageStatusBadge(
       mkStage({ key: 'prod', state: 'active', tone: 'stopped', executors: [mkExec({ taskId: 'ts', status: 'stopped' })] }),
@@ -373,7 +373,7 @@ describe('stageStatusBadge', () => {
     const b = stageStatusBadge(
       mkStage({ key: 'prod', state: 'active', tone: 'wait', executors: [mkExec({ taskId: 'nope', status: 'waiting' })] }),
       new Map(), NOW);
-    expect(b).toEqual({ text: 'ждёт вас', tone: 'info' });
+    expect(b).toEqual({ text: 'нужен ответ', tone: 'info' });
   });
 });
 
@@ -558,7 +558,7 @@ describe('FeatureTimelineTab: рендер', () => {
   });
 
   // === 7. Плашки состояния этапа ===
-  it('этап wait → плашка «ждёт вас · N мин» (info); stopped → «стоит · N мин» (danger)', () => {
+  it('этап wait → плашка «нужен ответ · N мин» (info); stopped → «стоит · N мин» (danger)', () => {
     const taskMapRun = mkRun([
       mkStage({ key: 'prod', state: 'active', tone: 'wait',
         executors: [mkExec({ personaId: 'p1', taskId: 'tw', status: 'waiting' })] }),
@@ -567,7 +567,7 @@ describe('FeatureTimelineTab: рендер', () => {
     const c = renderTab(taskMapRun);
     const badge = findNodeByAttr(c, 'data-testid', 'timeline-stage-badge');
     expect(badge).not.toBeNull();
-    expect(textNodes(badge!).join('')).toContain('ждёт вас · 25 мин');
+    expect(textNodes(badge!).join('')).toContain('нужен ответ · 25 мин');
   });
 
   // === 8. 360: тач-цель 44 (кнопка-заголовок этапа, GC-F5c) ===

@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  agoText, briefActiveTagLabel, briefActiveView, briefDoneText, briefElapsedFact, briefEstimateText, briefNextText, briefNowText, briefReadinessText, briefSubText, briefUpdatedText, genitiveName, dativeName,
+  agoText, briefActiveTagLabel, briefActiveView, briefWaitTagLabel, briefDoneText, briefElapsedFact, briefEstimateText, briefNextText, briefNowText, briefReadinessText, briefSubText, briefUpdatedText, genitiveName, dativeName,
   voiceRoleText, voiceStaleLabel, voiceWhenText,
 } from './FeatureBriefModel';
 import type { FeatureBrief, FeatureBriefActive, FeatureBriefKind } from '../../lib/featurePage';
@@ -53,14 +53,14 @@ describe('Сейчас: строки восьми kind', () => {
     expect(briefNowText(b, { nameOf })).toBe('Ревью шага 3 (бэк)');
   });
 
-  it('waiting_you с тревогой «мерж» — «Ждёт вашего согласия на мерж в master» (макет wait)', () => {
+  it('waiting_you с тревогой «мерж» — «Нужно согласие на мерж в master» (Ш4: без «ждёт вас»)', () => {
     const b = brief({ kind: 'waiting_you', reason: 'мерж' });
-    expect(briefNowText(b, { nameOf })).toBe('Ждёт вашего согласия на мерж в master');
+    expect(briefNowText(b, { nameOf })).toBe('Нужно согласие на мерж в master');
   });
 
   it('waiting_you со своей причиной — текст причины', () => {
     const b = brief({ kind: 'waiting_you', reason: 'нужен твой ответ по макету' });
-    expect(briefNowText(b, { nameOf })).toBe('Ждёт вашего ответа: нужен твой ответ по макету');
+    expect(briefNowText(b, { nameOf })).toBe('Нужен ответ: нужен твой ответ по макету');
   });
 
   // Дефект c79050aa: у kind 'error' причина — машинный код бэка (ExecutorStopClassifier →
@@ -170,9 +170,9 @@ describe('Подстрока «Сейчас»', () => {
     expect(briefSubText(b, NOW)).toBe('с 13:58 · 12 мин');
   });
 
-  it('waiting_you — «ждёт N · без вас фича стоит»', () => {
+  it('waiting_you — «N · фича стоит» (Ш4: «ждёт вас» говорит тревога страницы)', () => {
     const b = brief({ kind: 'waiting_you', now: { stage: '', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 13, 40) } });
-    expect(briefSubText(b, NOW)).toBe('ждёт 30 мин · без вас фича стоит');
+    expect(briefSubText(b, NOW)).toBe('30 мин · фича стоит');
   });
 
   it('paused — «на паузе N · исполнители не запускаются»', () => {
@@ -185,11 +185,11 @@ describe('Подстрока «Сейчас»', () => {
     const run = brief({ kind: 'running', now: { stage: 'prod', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 14, 10) } });
     expect(briefSubText(run, NOW)).toBe('с 14:10');
     const wait = brief({ kind: 'waiting_you', now: { stage: '', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 14, 10) } });
-    expect(briefSubText(wait, NOW)).toBe('без вас фича стоит');
+    expect(briefSubText(wait, NOW)).toBe('фича стоит');
     const hold = brief({ kind: 'paused', reason: 'manual', now: { stage: '', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 14, 10) } });
     expect(briefSubText(hold, NOW)).toBe('исполнители не запускаются');
     const short = brief({ kind: 'waiting_you', now: { stage: '', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 14, 9, 40) } });
-    expect(briefSubText(short, NOW)).toBe('без вас фича стоит');
+    expect(briefSubText(short, NOW)).toBe('фича стоит');
   });
 
   it('closed — «фича закрыта»', () => {
@@ -412,12 +412,41 @@ describe('Срок', () => {
     expect(far.tail).toBe('· к 31.10');
   });
 
-  it('ждёт вас — «за вами», мерж оркестратора строкой, времени и строки истории нет', () => {
-    const v = briefEstimateText(brief({ kind: 'waiting_you', estimate: HIST, note: noteWith({ etaMinutes: 5, etaEndsAt: null }) }), OPTS);
-    expect(v.main).toBe('за вами');
-    expect(v.tail).toBeNull();
-    expect(v.alt).toBe('после вашего «да» — мерж ≈ 5 мин (Софья)');
-    expect(briefEstimateText(brief({ kind: 'waiting_you', estimate: HIST }), OPTS).alt).toBeNull();
+  it('при тревоге срок — дата как была и пояснение «пока ждёт вас, срок стоит» (Ш4); «за вами» нет', () => {
+    const v = briefEstimateText(brief({ kind: 'waiting_you', estimate: HIST, note: noteWith({ etaMinutes: 5, etaEndsAt: at(25, 14, 15) }) }), OPTS);
+    expect(v.main).toBe('≈ 5 мин');
+    expect(v.tail).toBe('· к 14:15');
+    expect(v.note).toBe('пока ждёт вас, срок стоит');
+    // Пояснение — только при тревоге: у идущей фичи его нет.
+    expect(briefEstimateText(brief({ kind: 'running', estimate: HIST, note: noteWith({ etaMinutes: 5, etaEndsAt: at(25, 14, 15) }) }), OPTS).note).toBeNull();
+    // Без оценки числа нет — стоять нечему, пояснения нет.
+    const none = briefEstimateText(brief({ kind: 'waiting_you' }), OPTS);
+    expect(none.mainMuted).toBe(true);
+    expect(none.note).toBeNull();
+  });
+
+  it('Ш4: «ждёт вас»/«за вами» в сводке не звучат — только пояснение срока', () => {
+    const waiting = brief({
+      kind: 'waiting_you', reason: 'мерж', estimate: HIST,
+      now: { stage: '', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 13, 40) },
+      done: { stepsAccepted: 8, stepsTotal: 9, loops: 0, planState: 'done' },
+      note: noteWith({ etaMinutes: 5, etaEndsAt: at(25, 14, 15) }),
+      active: [act({ state: 'waiting_you', since: at(25, 14, 2) }), act({ taskId: 't2', personaId: 'p-gleb' })],
+    });
+    const est = briefEstimateText(waiting, OPTS);
+    const chips = briefReadinessText(waiting, { nameOf });
+    const av = briefActiveView(waiting, AOPTS)!;
+    const texts = [
+      briefNowText(waiting, { nameOf }), briefSubText(waiting, NOW), est.main, est.tail, est.alt, est.source, est.verdict?.text,
+      ...chips.chips.map(c => c.text), chips.chipsLabel, av.heading, av.sub, briefActiveTagLabel(waiting), briefWaitTagLabel(waiting),
+    ].filter(Boolean).join(' | ');
+    expect(texts).not.toMatch(/ждёт вас|за вами|ждёт ваш|без вас/i);
+    expect(est.note).toBe('пока ждёт вас, срок стоит');
+  });
+
+  it('briefWaitTagLabel: вопрос — «нужен ответ», мерж-вопрос — тега-слова нет (тег «к мержу» из статуса)', () => {
+    expect(briefWaitTagLabel(brief({ kind: 'waiting_you', reason: 'уточни' }))).toBe('нужен ответ');
+    expect(briefWaitTagLabel(brief({ kind: 'waiting_you', reason: 'мерж' }))).toBeNull();
   });
 
   it('очередь: оценка оркестратора — «после старта» и «старт ≈ 15:00»; без оценки — «Оценка — после старта»', () => {
@@ -532,9 +561,9 @@ describe('Готовность', () => {
     expect(v.stale).toBe(false);
   });
 
-  it('ждёт мержа — один чип «мерж · за вами», процент по трекеру', () => {
+  it('ждёт мержа — один чип «мерж», процент по трекеру', () => {
     const v = briefReadinessText(brief({ kind: 'waiting_you', reason: 'мерж', done: { stepsAccepted: 8, stepsTotal: 9, loops: 0, planState: 'done' }, note: noteWith({}) }), { nameOf });
-    expect(v.chips).toEqual([{ text: 'мерж · за вами', tone: 'you' }]);
+    expect(v.chips).toEqual([{ text: 'мерж', tone: 'you' }]);
     expect(text(v.caption)).toBe('8 из 9 шагов · 89 %');
   });
 
@@ -753,18 +782,18 @@ describe('Задачи в работе: briefActiveView', () => {
     const v = briefActiveView(brief({ kind: 'waiting_you', active: [
       act({ state: 'waiting_you', since: at(25, 14, 2) }), act({ taskId: 't2', personaId: 'p-gleb' }), act({ taskId: 't3', personaId: 'p-vera' }),
     ] }), AOPTS)!;
-    expect(v.heading).toBe('Кира ждёт вашего ответа по шагу 4');
-    expect(v.sub).toBe('ждёт 8 мин · шаг 4 стоит, 2 другие задачи идут');
+    expect(v.heading).toBe('Кира задаёт вопрос по шагу 4');
+    expect(v.sub).toBe('8 мин · шаг 4 стоит, 2 другие задачи идут');
     expect(v.answer).toEqual({ taskId: 't1', label: 'Ответить Кире' });
     expect(v.rows).toHaveLength(3);
   });
 
   it('ждёт человека и задача одна — заголовок и кнопка есть, списка нет; имени нет — «Ответить»', () => {
     const v = briefActiveView(brief({ kind: 'waiting_you', active: [act({ state: 'waiting_you', personaId: null })] }), AOPTS)!;
-    expect(v.heading).toBe('Задача ждёт вашего ответа по шагу 4');
+    expect(v.heading).toBe('Задача задаёт вопрос по шагу 4');
     expect(v.answer?.label).toBe('Ответить');
     expect(v.rows).toEqual([]);
-    expect(v.sub).toBe('ждёт 5 мин · шаг 4 стоит');
+    expect(v.sub).toBe('5 мин · шаг 4 стоит');
   });
 
   it('пауза — заголовок прежний (null), в списке остановленные, даже если задача одна', () => {
@@ -798,10 +827,10 @@ describe('Задачи в работе: briefActiveView', () => {
 });
 
 describe('Задачи в работе: тег со счётом и падеж', () => {
-  it('«идёт · 3 в работе» и «ждёт вас · 1 из 3»; одна задача и прочие kind — тег прежний', () => {
+  it('«идёт · 3 в работе» и «нужен ответ · 1 из 3»; одна задача и прочие kind — тег прежний', () => {
     const three = [act(), act({ taskId: 't2' }), act({ taskId: 't3', state: 'waiting_you' })];
     expect(briefActiveTagLabel(brief({ kind: 'running', active: three }))).toBe('идёт · 3 в работе');
-    expect(briefActiveTagLabel(brief({ kind: 'waiting_you', active: three }))).toBe('ждёт вас · 1 из 3');
+    expect(briefActiveTagLabel(brief({ kind: 'waiting_you', active: three }))).toBe('нужен ответ · 1 из 3');
     expect(briefActiveTagLabel(brief({ kind: 'running', active: [act()] }))).toBeNull();
     expect(briefActiveTagLabel(brief({ kind: 'paused', active: three }))).toBeNull();
     expect(briefActiveTagLabel(brief({ kind: 'running' }))).toBeNull();

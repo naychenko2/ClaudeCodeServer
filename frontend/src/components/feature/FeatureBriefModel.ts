@@ -89,9 +89,11 @@ export function briefNowText(brief: FeatureBrief, opts: BriefTextOptions = {}): 
     }
     case 'waiting_you': {
       // Тревога «мерж» (бэк кладёт код «мерж») — строка макета; прочая причина — как есть.
+      // Ш4: «ждёт вас» говорит одна тревога страницы (FeaturePageAlert), сводка называет
+      // только факт — что нужно, без обращения к человеку.
       const r = brief.reason;
-      if (!r || r === 'мерж') return 'Ждёт вашего согласия на мерж в master';
-      return `Ждёт вашего ответа: ${r}`;
+      if (!r || r === 'мерж') return 'Нужно согласие на мерж в master';
+      return `Нужен ответ: ${r}`;
     }
     case 'error': {
       // Причина — машинный код бэка (ExecutorStopClassifier → Attention.Reason,
@@ -163,7 +165,7 @@ export function briefSubText(brief: FeatureBrief, nowMs: number): string | null 
     case 'waiting_you': {
       if (!since) return null;
       const dur = shownDuration(since, nowMs);
-      return dur ? `ждёт ${dur} · без вас фича стоит` : 'без вас фича стоит';
+      return dur ? `${dur} · фича стоит` : 'фича стоит';
     }
     case 'paused': {
       if (!since) return null;
@@ -359,8 +361,8 @@ export function briefActiveView(brief: FeatureBrief, opts: BriefTextOptions & { 
     const stuck = waiting.stepRef ? `шаг ${waiting.stepRef} стоит` : 'задача стоит';
     const rest = others > 0 ? `, ${others} ${pluralRu(others, 'другая задача идёт', 'другие задачи идут', 'других задач идут')}` : '';
     return {
-      heading: `${name ?? 'Задача'} ждёт вашего ответа${step}`,
-      sub: [dur ? `ждёт ${dur}` : null, `${stuck}${rest}`].filter(Boolean).join(' · '),
+      heading: `${name ?? 'Задача'} задаёт вопрос${step}`,
+      sub: [dur, `${stuck}${rest}`].filter(Boolean).join(' · '),
       answer: { taskId: waiting.taskId, label: name ? `Ответить ${dativeName(name)}` : 'Ответить' },
       rows, tail,
     };
@@ -372,14 +374,21 @@ export function briefActiveView(brief: FeatureBrief, opts: BriefTextOptions & { 
   };
 }
 
-// Тег в шапке со счётом задач: «идёт · 3 в работе», «ждёт вас · 1 из 3». null — тег прежний
+// Тег в шапке со счётом задач: «идёт · 3 в работе», «нужен ответ · 1 из 3». null — тег прежний
 // (задача одна или поля active нет).
 export function briefActiveTagLabel(brief: FeatureBrief): string | null {
   const list = brief.active ?? [];
   if (list.length < 2) return null;
   if (brief.kind === 'running') return `идёт · ${list.length} в работе`;
-  if (brief.kind === 'waiting_you') return `ждёт вас · ${list.filter(a => a.state === 'waiting_you').length} из ${list.length}`;
+  if (brief.kind === 'waiting_you') return `нужен ответ · ${list.filter(a => a.state === 'waiting_you').length} из ${list.length}`;
   return null;
+}
+
+// Тег карточки при ожидании человека (Ш4): без «ждёт вас» — это слово говорит одна тревога
+// страницы. Мерж-вопрос тега не получает (null) — там тег «к мержу», как у статуса фичи.
+export function briefWaitTagLabel(brief: FeatureBrief): string | null {
+  if (brief.reason === 'мерж' || brief.next[0]?.stage === 'merge') return null;
+  return 'нужен ответ';
 }
 
 // ── «Готовность» ────────────────────────────────────────────────────────────────────
@@ -426,7 +435,7 @@ export interface BriefReadinessView {
   chipsEmpty: string | null;
 }
 
-const MERGE_CHIP = 'мерж · за вами';
+const MERGE_CHIP = 'мерж';
 const CHIP_CAP = 3;
 
 function clampPercent(n: number): number {
@@ -527,6 +536,8 @@ export interface BriefEstimateView {
   source: string | null;
   // Вторая оценка — справка, строка под числом; verdict — метка в её конце.
   alt: string | null;
+  // Ш4: при тревоге срок не идёт — дата как была и пояснение, почему она стоит.
+  note: string | null;
   verdict: BriefEtaVerdict | null;
   // «Почему» оркестратора: только при расхождении.
   why: string | null;
@@ -537,6 +548,8 @@ export interface BriefEstimateOptions extends BriefTextOptions {
 }
 
 const NO_ESTIMATE = 'Оценки пока нет';
+// Ш4: единственное место сводки, где звучит «ждёт вас»: оно объясняет, почему срок не идёт.
+const ESTIMATE_HOLD_NOTE = 'пока ждёт вас, срок стоит';
 const HOUR_12 = 12 * 60 * 60 * 1000;
 
 function etaMain(minutes: number): string {
@@ -569,6 +582,7 @@ function spread(h: { p25: number; p75: number }): string {
 
 export function briefEstimateText(brief: FeatureBrief, opts: BriefEstimateOptions = {}): BriefEstimateView {
   const out = estimateView(brief, opts);
+  if (brief.kind === 'waiting_you' && !out.mainMuted) out.note = ESTIMATE_HOLD_NOTE;
   // Очередь: «старт ≈ 15:00» — справка, если вторая оценка строку не заняла.
   if (brief.kind === 'queued' && brief.queueStartEstimate && !out.alt) {
     const t = formatClock(brief.queueStartEstimate);
@@ -589,7 +603,7 @@ function estimateView(brief: FeatureBrief, opts: BriefEstimateOptions): BriefEst
   const orchFresh = orchMinutes != null && !note?.stale;
   const orchStale = orchMinutes != null && !!note?.stale;
   const orchAgo = note ? agoText(note.at, nowMs) : null;
-  const base = { header: 'Срок', mainMuted: false, tail: null, source: null, alt: null, verdict: null, why: null };
+  const base = { header: 'Срок', mainMuted: false, tail: null, source: null, alt: null, verdict: null, why: null, note: null };
 
   if (brief.kind === 'closed' || brief.kind === 'merged') {
     // Итог: «шла N» + на старте оркестратор обещал ≈ M (и история, если есть).
@@ -604,26 +618,20 @@ function estimateView(brief: FeatureBrief, opts: BriefEstimateOptions): BriefEst
     };
   }
 
-  // Хвост по состоянию: пауза и очередь — слова; «ждёт вас» — без времени; «идёт» — «к HH:MM».
+  // Хвост по состоянию: пауза и очередь — слова; «идёт» и тревога — «к HH:MM» (при тревоге
+  // это дата, которая стоит, пока человек не ответит: пояснение — в note).
   const tailFor = (iso: string | null | undefined): string | null => {
     if (brief.kind === 'paused') return 'после снятия паузы';
     if (brief.kind === 'queued') return 'после старта';
-    if (brief.kind === 'running') {
+    if (brief.kind === 'running' || brief.kind === 'waiting_you') {
       const at = readyAtText(iso, nowMs);
       return at ? `· ${at}` : null;
     }
     return null;
   };
-  const histAt = brief.kind === 'running' && histMinutes != null
+  const histAt = (brief.kind === 'running' || brief.kind === 'waiting_you') && histMinutes != null
     ? new Date(Date.parse(brief.computedAt) + histMinutes * 60000).toISOString() : null;
   const histSpread = hist && histMinutes != null ? `по истории ≈ ${formatDuration(histMinutes)} (${spread(hist)})` : null;
-
-  if (brief.kind === 'waiting_you') {
-    // Остальное — за человеком: числа оценки нет, времени тоже; строка оркестратора — про мерж.
-    const alt = orchMinutes != null
-      ? `после вашего «да» — мерж ${etaMain(orchMinutes)}${orchName ? ` (${orchName})` : ''}` : null;
-    return { ...base, main: 'за вами', alt };
-  }
 
   if (orchFresh) {
     const source = `по оценке ${orchName ? genitiveName(orchName) : 'оркестратора'}${orchAgo ? ` · ${orchAgo}` : ''}`;
@@ -745,8 +753,8 @@ export function voiceRoleText(kind: FeatureBriefKind): string {
 // односимвольные куски вроде 'с ' метод не покрывает.
 export const BRIEF_MODEL_WORDS: readonly string[] = [
   // «Сейчас» (briefNowText)
-  'Ждёт вашего согласия на мерж в master',
-  'Ждёт вашего ответа:',
+  'Нужно согласие на мерж в master',
+  'Нужен ответ:',
   'Исполнитель встал', // нет причины и неизвестный код — одна фраза (R-F17 п.5)
   'На паузе —', // оба варианта строки паузы
   'Ждёт своей очереди',
@@ -757,7 +765,7 @@ export const BRIEF_MODEL_WORDS: readonly string[] = [
   'Закрыта',
   'шага ', // «Ревью шага 3 (бэк)» — часть running-строки
   // Подстрока «Сейчас» (briefSubText); «фича закрыта» покрывает и «Ничего — фича закрыта»
-  'без вас фича стоит',
+  'фича стоит',
   'исполнители не запускаются',
   'фича закрыта',
   'ждёт ', // «ждёт N · без вас фича стоит»
@@ -780,10 +788,10 @@ export const BRIEF_MODEL_WORDS: readonly string[] = [
   'Итог',
   'Срок',
   'Готовность',
-  'за вами',
+  'пока ждёт вас, срок стоит',
   'старт ≈',
   // Задачи в работе (briefActiveView, briefActiveTagLabel)
-  'ждёт вашего ответа',
+  'задаёт вопрос',
   'Ответить',
   'параллельно:',
   'линия:',
@@ -795,14 +803,13 @@ export const BRIEF_MODEL_WORDS: readonly string[] = [
   'другая задача',
   'другие задачи',
   'других задач',
-  'ждёт вас',
+  'нужен ответ',
   'по трекеру',
   'Осталось:',
   'следом · ',
   'сходится',
   'чем по истории',
   'после старта',
-  'после вашего',
   'снятия паузы', // «≈ N после снятия паузы»
   'идёт ',
   'шла ',

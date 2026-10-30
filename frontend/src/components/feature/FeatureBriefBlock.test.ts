@@ -148,7 +148,9 @@ const CASES: Case[] = [
     over: { now: { stage: 'review', taskId: 't-rev', personaId: 'p-gleb', stepRef: '3', lane: 'back', since: at(25, 14, 5) } },
     tag: featureRunStatusTag('running', stageLabel('review')).label,
   },
-  { name: 'waiting_you (мерж)', kind: 'waiting_you', over: { reason: 'мерж' }, tag: featureRunStatusTag('waiting').label },
+  // Ш4: «ждёт вас» в сводке нет — тег мерж-вопроса «к мержу» из статуса фичи, прочего вопроса — «нужен ответ».
+  { name: 'waiting_you (мерж)', kind: 'waiting_you', over: { reason: 'мерж' }, tag: featureRunStatusTag('merge_pending').label },
+  { name: 'waiting_you (вопрос)', kind: 'waiting_you', over: { reason: 'уточни отступы' }, tag: 'нужен ответ' },
   { name: 'error', kind: 'error', over: { reason: 'сохранение журнала упало' }, tag: featureRunStatusTag('stopped').label },
   { name: 'paused', kind: 'paused', over: { reason: 'manual', now: { stage: '', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 13, 40) } }, tag: featureRunStatusTag('paused').label },
   { name: 'queued', kind: 'queued', tag: 'в очереди' },
@@ -272,7 +274,7 @@ describe('«Готовность | Срок»', () => {
     expect(joined(c, 'brief-ready-tracker')).not.toContain('в master');
   });
 
-  it('чипы «осталось» из next (Ш3): первый «следом», «за вами» — на фоне C.infoBg', () => {
+  it('чипы «осталось» из next (Ш3): первый «следом», мерж-чип — на фоне C.infoBg', () => {
     // Чипы не берутся из estimate.remaining: фикстур с оценкой, но next даёт свою цепочку.
     const { c } = render({ brief: brief({ note: note(), next: [{ stage: 'qa', personaId: 'p-vera' }] }), nameOf });
     const chips = [findNodeByAttr(c, 'data-testid', 'brief-chip')!];
@@ -280,7 +282,7 @@ describe('«Готовность | Срок»', () => {
     expect((reactProps(chips[0])!.style as Record<string, unknown>).background).toBe(C.accentLight);
     const w = render({ brief: brief({ kind: 'waiting_you', reason: 'мерж' }), nameOf }).c;
     const you = findNodeByAttr(w, 'data-testid', 'brief-chip')!;
-    expect(textNodes(you).join('')).toBe('мерж · за вами');
+    expect(textNodes(you).join('')).toBe('мерж');
     expect((reactProps(you)!.style as Record<string, unknown>).background).toBe(C.infoBg);
   });
 
@@ -671,16 +673,16 @@ describe('Задачи в работе (макет 2, «Итерация 2»)', 
     expect(joined(c, 'brief-tag')).not.toContain('в работе');
   });
 
-  it('ждёт человека: заголовок про задачу, рамка C.info, «Ответить Кире» открывает чат; тег «ждёт вас · 1 из 3»', () => {
+  it('ждёт человека: заголовок про задачу, рамка C.info, «Ответить Кире» открывает чат; тег «нужен ответ · 1 из 3»', () => {
     const answered: string[] = [];
     const list = [A({ state: 'waiting_you', since: at(25, 14, 2) }), A({ taskId: 't2', personaId: 'p-gleb' }), A({ taskId: 't3', personaId: 'p-vera' })];
     for (const isMobile of [false, true]) {
       const { c } = render({ brief: brief({ kind: 'waiting_you', active: list }), nameOf, isMobile, onAnswer: id => answered.push(id) });
-      expect(joined(c, 'brief-now-line')).toBe('Кира ждёт вашего ответа по шагу 4');
-      expect(joined(c, 'brief-now-sub')).toBe('ждёт 8 мин · шаг 4 стоит, 2 другие задачи идут');
+      expect(joined(c, 'brief-now-line')).toBe('Кира задаёт вопрос по шагу 4');
+      expect(joined(c, 'brief-now-sub')).toBe('8 мин · шаг 4 стоит, 2 другие задачи идут');
       expect(styleOf(c, 'feature-brief-block').border).toBe(`1px solid ${C.info}`);
       expect(joined(c, 'brief-answer')).toBe('Ответить Кире');
-      expect(joined(c, 'brief-tag')).toBe('ждёт вас · 1 из 3');
+      expect(joined(c, 'brief-tag')).toBe('нужен ответ · 1 из 3');
       // Мерж-кнопки не конкурируют с «Ответить»: ждут не мерж.
       expect(findNodeByAttr(c, 'data-testid', 'brief-merge')).toBeNull();
       click(c, 'brief-answer');

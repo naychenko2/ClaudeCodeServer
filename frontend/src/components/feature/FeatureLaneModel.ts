@@ -98,6 +98,10 @@ export interface StageLane {
   totalMinutes: number;
   // Этапа не было (state 'skipped', W4-DES-B): строка «этапа не было», без данных.
   skipped: boolean;
+  // Старт идущей задачи стадии — бэковый FeatureStage.RunningSince как есть: бэк ставит его,
+  // когда у стадии есть InProgress-задача. В модели его читает только laneStatusWord (Ш2b):
+  // «идёт» — по факту идущей задачи, а не по state (семантику state Гант не пересчитывает).
+  runningSince: string | null;
   // approx — журнала нет (intervalsByStage null/отсутствует): интервалов нет, потому что
   // они не считались. Пустой словарь журнала — НЕ approx (замечание GC-R-F1).
   approx: boolean;
@@ -229,6 +233,15 @@ export function planCounterText(lane: StageLane | null | undefined): string | nu
   return `${plan.done}/${total}`;
 }
 
+// Слово состояния стадии на ганте (Ш2b): бэк сказал об идущей задаче стадии
+// (runningSince != null) — «идёт», при любом state: Гант не пересчитывает семантику state
+// (её читают рельса индекса, MCP, тон), он отвечает на вопрос «работа началась или нет».
+// Без runningSince — «впереди». Показывать ли слово вообще (пустая дорожка живой фичи,
+// skipped/approx/закрытая ось) — решает рендер (FeatureStageLane): здесь только смысл слова.
+export function laneStatusWord(lane: StageLane | null | undefined): 'идёт' | 'впереди' {
+  return lane?.runningSince != null ? 'идёт' : 'впереди';
+}
+
 // Модель дорожек. `now` — текущее время (мс) для верха зоны «стоит»; тесты дают
 // фиксированное, в работе — Date.now() на момент построения.
 export function buildStageLanes(run: FeatureRun, stats: FeatureStats | null, now: number): StageLanesModel {
@@ -338,6 +351,7 @@ export function buildStageLanes(run: FeatureRun, stats: FeatureStats | null, now
       count: intervals.length,
       totalMinutes: intervals.reduce((a, iv) => a + spanMinutes(iv.from, iv.to), 0),
       skipped,
+      runningSince: stage.runningSince ?? null,
       approx,
       returns: stage.key === 'prod' ? returnsByStage : [],
     };

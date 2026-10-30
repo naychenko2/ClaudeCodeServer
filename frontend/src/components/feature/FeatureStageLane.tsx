@@ -12,8 +12,9 @@
 // над дорожкой в момент вердикта (возвраты в модели есть только у prod).
 //
 // Продуктовое решение (находка m1 ревью GC-R-F2, 26.10): счётчик плана бывает только у
-// «Производства». На дорожке это контур «ещё N» — он рисован ТОЛЬКО у prod; у прочих этапов,
-// где работа ещё не начиналась, — слово «впереди» (слово, не число); у «Ревью» никаких
+// «Производства». На дорожке это контур «ещё N» — он рисован ТОЛЬКО у prod; у этапов без
+// интервалов — слово из модели (laneStatusWord, Ш2b): «идёт», когда бэк сказал об идущей
+// задаче стадии (runningSince), иначе «впереди» (слово, не число); у «Ревью» никаких
 // плановых элементов нет: факт уже в aria-label каждого интервала («интервал i из n»).
 //
 // Пустая дорожка на закрытой оси (GC-F10c): у закрытой/смерженной фичи будущего нет, поэтому
@@ -45,7 +46,7 @@
 
 import { Fragment } from 'react';
 import { C, R, FS, FONT, SP, SHADOW } from '../../lib/design';
-import { axisFrac, type LaneAxis, type LaneIntervalState, type StageLane } from './FeatureLaneModel';
+import { axisFrac, laneStatusWord, type LaneAxis, type LaneIntervalState, type StageLane } from './FeatureLaneModel';
 import { formatClock, formatDateTime, formatDuration } from './FeatureStatsBits';
 
 // «Какие интервалы подсвечены» (GC-F8R): множество индексов lane.intervals + флаг рисования.
@@ -139,7 +140,9 @@ export function FeatureStageLane({
   // значит другое, а счётчик плана — только у «Производства». Только для этапа,
   // где работа уже шла (иначе это pending — ниже «впереди»).
   const showMore = hasAheadZone && lane.key === 'prod' && n > 0 && (lane.plan?.ahead ?? 0) > 0;
-  // «впереди» — этап, чья работа ещё не начиналась: ни интервалов, ни skipped, ни approx.
+  // Пустая дорожка живой фичи — зона слова: без идущей задачи стадии — «впереди», а если бэк
+  // сказал об идущей задаче (runningSince) — «идёт»; слово даёт модель (laneStatusWord, Ш2b).
+  // Сама зона — только у этапа без интервалов, без skipped и без approx.
   const showAhead = hasAheadZone && n === 0;
   // «Этапа не было» (GC-F10c): model-ный skipped или пустая дорожка на закрытой оси
   // (timeFrac = 1): у закрытой фичи будущего нет, и пустая дорожка здесь — не начатый
@@ -330,7 +333,7 @@ export function FeatureStageLane({
             fontFamily: FONT.mono, fontSize: FS.xxs, color: C.textMuted, pointerEvents: 'none',
           }}
         >
-          {showMore ? `ещё ${lane.plan?.ahead ?? 0}` : 'впереди'}
+          {showMore ? `ещё ${lane.plan?.ahead ?? 0}` : laneStatusWord(lane)}
         </span>
       )}
     </div>

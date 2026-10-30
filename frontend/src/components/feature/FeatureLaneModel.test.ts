@@ -17,10 +17,12 @@
 // считать approx → краснеет «пустой словарь — не approx»; (4) не искать стоящий этап по
 // attention.taskId (всегда текущий) → краснеет «стоит по taskId»; (5) вернуть пометку wait
 // по стадии (stage.key === waitKey) → краснеет «wait по задаче, а не по стадии»;
-// (6) waveFrom от первого мержа, не от последнего → краснеет «волна от последнего мержа».
+// (6) waveFrom от первого мержа, не от последнего → краснеет «волна от последнего мержа»;
+// (7) убрать проверку runningSince в laneStatusWord (всегда «впереди») → краснеет
+//     «pending с runningSince — слово «идёт»».
 
 import { describe, it, expect } from 'vitest';
-import { buildStageLanes, axisFrac, asStageKey, planCounterText, type StageLanesModel, type StageLane } from './FeatureLaneModel';
+import { buildStageLanes, axisFrac, asStageKey, planCounterText, laneStatusWord, type StageLanesModel, type StageLane } from './FeatureLaneModel';
 import type { StepProgress } from '../../lib/featureProgress';
 import type { FeatureRun, FeatureStage, FeatureStageExecutor, StageKey, StageState } from '../../types/featureRun';
 import type { FeatureStats, FeatureTimeline, StageInterval } from '../../types/featureStats';
@@ -61,6 +63,7 @@ function mkStage(key: StageKey, state: StageState, over: Partial<FeatureStage> =
     approxMinutes: 0,
     overlapsActive: false,
     executors: [],
+    runningSince: null,
     ...over,
   };
 }
@@ -506,6 +509,43 @@ describe('planCounterText: текст счётчика «N/M» (GC-F12R)', () =>
     // stepProgress нет → план prod = null → текста нет.
     const noSp = buildStageLanes(mkRun({ stages: [mkStage('prod', 'active')] }), mkStats(), NOW);
     expect(planCounterText(laneOf(noSp, 'prod'))).toBeNull();
+  });
+});
+
+// === Слово состояния стадии: «идёт» при runningSince (Ш2b) ===
+
+describe('laneStatusWord: «идёт» при runningSince, при любом state (Ш2b)', () => {
+  // Мутация 7: убрать проверку runningSince (всегда «впереди») → краснеет первый тест.
+  it('pending с runningSince — модель несёт его как есть, слово «идёт»', () => {
+    const model = buildStageLanes(
+      mkRun({ stages: [mkStage('qa', 'pending', { runningSince: '2026-10-20T11:00:00Z' })] }),
+      mkStats(),
+      NOW,
+    );
+    const qa = laneOf(model, 'qa');
+    expect(qa.runningSince).toBe('2026-10-20T11:00:00Z');
+    expect(laneStatusWord(qa)).toBe('идёт');
+  });
+
+  it('runningSince нет (null или поля нет) — «впереди», как было', () => {
+    const model = buildStageLanes(
+      mkRun({ stages: [mkStage('merge', 'pending'), mkStage('qa', 'active', { runningSince: null })] }),
+      mkStats(),
+      NOW,
+    );
+    expect(laneOf(model, 'merge').runningSince).toBeNull();
+    expect(laneStatusWord(laneOf(model, 'merge'))).toBe('впереди');
+    // active без идущей задачи — тоже «впереди»: слово решает runningSince, не state.
+    expect(laneStatusWord(laneOf(model, 'qa'))).toBe('впереди');
+  });
+
+  it('active с runningSince — тоже «идёт»: слово не зависит от state', () => {
+    const model = buildStageLanes(
+      mkRun({ stages: [mkStage('prod', 'active', { runningSince: '2026-10-20T10:00:00Z' })] }),
+      mkStats(),
+      NOW,
+    );
+    expect(laneStatusWord(laneOf(model, 'prod'))).toBe('идёт');
   });
 });
 

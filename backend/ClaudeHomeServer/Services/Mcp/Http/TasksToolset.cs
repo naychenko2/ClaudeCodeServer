@@ -830,8 +830,9 @@ public sealed class TasksToolset(
         projectId is null
         || tool is "tasks_list_projects" or "tasks_search"
         || (tool == "tasks_list" && StringArg(arguments, "scope") == "all")
-        // ContainsKey, а не OptionalArg: пустая строка в update значит «сделать личной» и рамку не проходит
-        || (arguments["projectId"] is not null && StringArg(arguments, "projectId") != projectId);
+        // ContainsKey, а не проверка на null: явный "projectId": null и пустая строка в update значат
+        // «сделать личной» (StringArg отдаёт ""), и рамку не проходят
+        || (arguments.ContainsKey("projectId") && StringArg(arguments, "projectId") != projectId);
 
     private static IReadOnlyCollection<string> AllowedProjectIds(string? projectId,
         IReadOnlyList<(string ProjectId, bool ReadOnly)> extraScopes)
@@ -868,7 +869,7 @@ public sealed class TasksToolset(
     // Задача видна в контексте: без проекта чата — весь воркспейс владельца; личные задачи
     // (без проекта) видны из любого чата; проектные — только из доступных проектов
     // В узкой рамке (общий проект) личные задачи арендатора/владельца вне рамки: у чата есть проект
-    private static bool InScope(string? projectId, IReadOnlyCollection<string> allowed, TaskItem t, bool narrow = false)
+    private static bool InScope(string? projectId, IReadOnlyCollection<string> allowed, TaskItem t, bool narrow)
     {
         if (projectId is null) return true;
         if (t.ProjectId is null) return !narrow;
@@ -876,7 +877,7 @@ public sealed class TasksToolset(
     }
 
     // Задача по id: владение + видимость в контексте (закрывает доступ к чужим проектам по id)
-    private TaskItem? GetAccessible(string ownerId, string? projectId, IReadOnlyCollection<string> allowed, string id, bool narrow = false)
+    private TaskItem? GetAccessible(string ownerId, string? projectId, IReadOnlyCollection<string> allowed, string id, bool narrow)
     {
         var task = tasks.GetById(id);
         if (task is null || task.OwnerId != ownerId) return null;
@@ -891,7 +892,7 @@ public sealed class TasksToolset(
     // Запись (update/complete/delete/сабтаски) идёт через GetAccessible — полным id: ошибка
     // в записи стоит дороже, чем в чтении, поэтому префикс туда не пускаем.
     private (TaskItem? Task, IReadOnlyList<TaskItem>? Candidates) GetForRead(
-        string ownerId, string? projectId, IReadOnlyCollection<string> allowed, string id, bool narrow = false)
+        string ownerId, string? projectId, IReadOnlyCollection<string> allowed, string id, bool narrow)
     {
         if (GetAccessible(ownerId, projectId, allowed, id, narrow) is { } exact) return (exact, null);
         if (!LooksLikeIdPrefix(id)) return (null, null);
@@ -913,7 +914,7 @@ public sealed class TasksToolset(
             c == '-' || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'));
 
     private static string? TaskDenied(string? projectId, IReadOnlyCollection<string> allowed, TaskItem task,
-        bool narrow = false)
+        bool narrow)
     {
         if (narrow && task.ProjectId is null) return NarrowText;
         if (projectId is null || task.ProjectId is null) return null;

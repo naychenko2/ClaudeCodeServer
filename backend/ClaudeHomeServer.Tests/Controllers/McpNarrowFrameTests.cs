@@ -233,6 +233,7 @@ public class McpNarrowFrameTests : IDisposable
 
     [Theory]
     [InlineData("")]
+    [InlineData(null)]
     [InlineData("чужой-проект")]
     public async Task Tasks_УзкаяРамка_UpdateСПустымИЛишнимProjectId_Отказ_ЗадачаОстаётсяВПроекте(string target)
     {

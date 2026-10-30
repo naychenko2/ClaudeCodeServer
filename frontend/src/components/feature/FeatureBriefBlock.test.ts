@@ -207,7 +207,7 @@ function note(est: Record<string, unknown> | null = {}, over: Partial<NonNullabl
   return {
     text: 'голос', at: at(25, 13, 56), byPersonaId: 'p-sofya', byUser: false, stageAtWrite: 'prod', stale: false,
     estimate: est === null ? null : {
-      done: 4, total: 9, percent: 45, inProgress: 3, remaining: ['проверка · Вера', 'финал'], etaMinutes: 160,
+      remaining: ['проверка · Вера', 'финал'], etaMinutes: 160,
       why: null, agreement: 'within', etaEndsAt: at(25, 16, 50), ...est,
     } as NonNullable<FeatureBrief['note']>['estimate'],
     ...over,
@@ -249,7 +249,7 @@ describe('«Готовность | Срок»', () => {
   });
 
   it('закрытая — заливка C.success, штриховки нет, вместо чипов «ничего — всё сделано»', () => {
-    const { c } = render({ brief: brief({ kind: 'closed', note: note({ done: 9, total: 9, percent: 100, remaining: [] }) }), mergedAt: at(24, 18, 5), nameOf });
+    const { c } = render({ brief: brief({ kind: 'closed', note: note({ remaining: [] }) }), mergedAt: at(24, 18, 5), nameOf });
     expect(styleOf(c, 'brief-ready-fill').background).toBe(C.success);
     expect(findNodeByAttr(c, 'data-testid', 'brief-ready-hatch')).toBeNull();
     expect(joined(c, 'brief-chip-empty')).toBe('ничего — всё сделано');
@@ -324,7 +324,7 @@ describe('«Готовность | Срок»', () => {
   });
 
   it('closed — подпись «Итог»: «шла 6 ч 40 мин» и строка «на старте … обещала»', () => {
-    const b = brief({ kind: 'closed', elapsedMinutes: 400, initialEtaMinutes: 300, note: note({ done: 9, total: 9, percent: 100, remaining: [] }) });
+    const b = brief({ kind: 'closed', elapsedMinutes: 400, initialEtaMinutes: 300, note: note({ remaining: [] }) });
     const { c } = render({ brief: b, mergedAt: at(24, 18, 5), nameOf });
     const eta = joined(c, 'brief-eta');
     expect(eta).toContain('Итог');
@@ -531,7 +531,7 @@ describe('Служебные состояния', () => {
 describe('Closedность карточки (R-F8)', () => {
   it('brief.kind = merged с mergedAt — карточка равна closed с тем же mergedAt: тег, строка «Сейчас», сводка, готовность, срок (Ф-1.1)', () => {
     const mergedAt = at(24, 18, 5);
-    const est = note({ done: 9, total: 9, percent: 100, remaining: [] });
+    const est = note({ remaining: [] });
     const closed = render({ brief: brief({ kind: 'closed', elapsedMinutes: 400, note: est }), stats: stats(), mergedAt, nameOf });
     const merged = render({ brief: brief({ kind: 'merged', elapsedMinutes: 400, note: est }), stats: stats(), mergedAt, nameOf });
     for (const id of ['brief-tag', 'brief-glyph', 'brief-now-line', 'brief-now-sub', 'brief-facts', 'brief-totals']) {

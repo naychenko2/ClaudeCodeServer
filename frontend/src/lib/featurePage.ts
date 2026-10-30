@@ -95,13 +95,9 @@ export interface FeatureBriefQueue {
 export type FeatureBriefAgreement = 'within' | 'above' | 'below';
 
 // Оценка оркестратора: пишется одним вызовом с голосом, стареет вместе с ним (`note.stale`).
-// percent бэк отдаёт всегда; etaEndsAt = `note.at + etaMinutes` (null на паузе, в очереди,
-// в «ждёт вас»). inProgress — число задач в работе (штриховка полоски); старый бэк его не несёт.
+// Процента и счётчиков в оценке нет; etaEndsAt = `note.at + etaMinutes` (null на паузе,
+// в очереди, в «ждёт вас»).
 export interface FeatureBriefNoteEstimate {
-  done: number;
-  total: number;
-  percent: number;
-  inProgress?: number | null;
   // Ещё не начатое: первый пункт — «следом».
   remaining: string[];
   etaMinutes: number | null;

@@ -82,14 +82,14 @@ export interface TruthEstimateView {
 export function featureEstimateView(run: FeatureRun, nowMs: number): TruthEstimateView | null {
   const note = run.epic?.note;
   const est = note?.estimate;
-  if (!est || !(est.total > 0)) return null;
-  const etaMin = est.etaMinutes != null && est.etaMinutes >= 0 ? Math.round(est.etaMinutes) : null;
+  const etaMin = est?.etaMinutes != null && est.etaMinutes >= 0 ? Math.round(est.etaMinutes) : null;
+  if (etaMin == null || !note) return null;
   const atMs = Date.parse(note.at);
   const readyIso = etaMin != null && Number.isFinite(atMs) ? new Date(atMs + etaMin * 60000).toISOString() : null;
   const ready = readyAtText(readyIso, nowMs);
   return {
     rowEta: readyAtText(readyIso, nowMs, '≈'),
-    etaMain: etaMin != null ? (etaMin < 1 ? 'меньше минуты' : `≈ ${formatDuration(etaMin)}`) : null,
+    etaMain: etaMin < 1 ? 'меньше минуты' : `≈ ${formatDuration(etaMin)}`,
     readyAt: ready,
   };
 }

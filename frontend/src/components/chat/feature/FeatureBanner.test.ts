@@ -147,7 +147,7 @@ describe('FeatureTruthBody: сводка (раскрытие В2 = попап П
     const sp98 = { planState: 'cut' as const, total: 98, accepted: 26, review: 0, work: 0, notCreated: 0, withdrawn: 0, unlinkedReworks: 0 };
     const html = renderBody(run({
       stepProgress: sp98,
-      epic: { id: 'f1', title: 'Фича', status: 'todo', note: { text: 'голос', at: '2026-10-29T12:00:00Z', byUser: false, stageAtWrite: 'prod', stateAtWrite: 'running', estimate: { done: 4, total: 9, inProgress: 3, percent: 100, etaMinutes: 160 } } },
+      epic: { id: 'f1', title: 'Фича', status: 'todo', note: { text: 'голос', at: '2026-10-29T12:00:00Z', byUser: false, stageAtWrite: 'prod', stateAtWrite: 'running', estimate: { etaMinutes: 160 } } },
     }));
     // percent оценки (100) не рисуется нигде; плитки «Готовность» в раскрытии нет
     // (слово «Готовность» остаётся только в aria полосы «По трекеру» — блок не тронут).
@@ -164,7 +164,7 @@ describe('FeatureTruthBody: сводка (раскрытие В2 = попап П
     // etaMain нет (eta не оценивался) — пары/плитки нет вовсе.
     const htmlNoEta = renderBody(run({
       stepProgress: sp98,
-      epic: { id: 'f1', title: 'Фича', status: 'todo', note: { text: 'голос', at: '2026-10-29T12:00:00Z', byUser: false, stageAtWrite: 'prod', stateAtWrite: 'running', estimate: { done: 4, total: 9, inProgress: 3, percent: 100 } } },
+      epic: { id: 'f1', title: 'Фича', status: 'todo', note: { text: 'голос', at: '2026-10-29T12:00:00Z', byUser: false, stageAtWrite: 'prod', stateAtWrite: 'running', estimate: { remaining: ['финал'] } } },
     }));
     expect(htmlNoEta).not.toContain('feature-truth-eta');
     expect(htmlNoEta).not.toContain('>Срок<');

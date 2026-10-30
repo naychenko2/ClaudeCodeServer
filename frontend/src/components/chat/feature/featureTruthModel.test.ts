@@ -252,10 +252,10 @@ describe('оценка и «Сейчас»', () => {
     const r = run({
       epic: {
         id: 'epic-1', title: 'Фича', status: 'todo',
-        note: { text: 'идём по плану', at: '2026-10-29T12:00:00Z', byUser: false, stageAtWrite: 'prod', stateAtWrite: 'running', estimate: { done: 4, total: 9, inProgress: 3, percent: 60, etaMinutes: 160 } },
+        note: { text: 'идём по плану', at: '2026-10-29T12:00:00Z', byUser: false, stageAtWrite: 'prod', stateAtWrite: 'running', estimate: { etaMinutes: 160 } },
       },
     });
-    // Оценка даёт только срок: percent, автор и давность в view не выходят (остаток П1).
+    // Оценка даёт только срок (total/percent не нужны): автор и давность в view не выходят (остаток П1).
     expect(featureEstimateView(r, NOW)).toEqual({
       rowEta: `≈ ${formatClock('2026-10-29T14:40:00Z')}`,
       etaMain: '≈ 2 ч 40 мин',
@@ -263,14 +263,14 @@ describe('оценка и «Сейчас»', () => {
     });
   });
 
-  it('оценка без eta: ни строки, ни плитки; view — только три поля срока', () => {
+  it('оценка без eta: срока нет — view null (ни строки, ни плитки)', () => {
     const r = run({
       epic: {
         id: 'epic-1', title: 'Фича', status: 'todo',
-        note: { text: 'ручной голос', at: '2026-10-29T11:00:00Z', byUser: true, stageAtWrite: 'prod', stateAtWrite: 'running', estimate: { done: 3, total: 9, inProgress: 1, percent: null } },
+        note: { text: 'ручной голос', at: '2026-10-29T11:00:00Z', byUser: true, stageAtWrite: 'prod', stateAtWrite: 'running', estimate: { remaining: ['финал'] } },
       },
     });
-    expect(featureEstimateView(r, NOW)).toEqual({ rowEta: null, etaMain: null, readyAt: null });
+    expect(featureEstimateView(r, NOW)).toBeNull();
   });
 
   it('нет голоса/оценки — view null (строка без срока)', () => {

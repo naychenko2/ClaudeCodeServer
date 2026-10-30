@@ -74,15 +74,9 @@ export interface FeatureTaskNote {
   estimate?: FeatureTaskEstimate | null;
 }
 
-// Оценка оркестратора (бэк: `FeatureEstimate`, `FeatureNote.Estimate`): единицы работы —
-// шаги плана плюс стадии конвейера. percent — когда шаги неравные по объёму (null — доля
-// done/total); etaMinutes — срок до готовности (null — не оценивался). Считает автор
-// оценки (оркестратор), фронт и бэк её не пересчитывают.
+// Оценка оркестратора (бэк: `FeatureEstimate`, `FeatureNote.Estimate`): срок до готовности (etaMinutes, null — не оценивался) и «что дальше». Процента в оценке
+// нет: готовность — только stepProgress. Считает автор оценки (оркестратор).
 export interface FeatureTaskEstimate {
-  done: number;
-  total: number;
-  inProgress: number;
-  percent: number | null;
   remaining?: string[] | null;
   etaMinutes?: number | null;
   why?: string | null;

@@ -110,6 +110,56 @@ public class WikiRelinkTests : IDisposable
         updated!.Backlinks.Should().Contain(b => b.SourceId == wikiId);
     }
 
+    // ─── 1б. Квалификатор цели: своим разделом — своя ссылка, чужим — чужая (M1) ─
+
+    [Fact]
+    public async Task Релинк_КвалифицированнаяСвоимРазделом_СохраняетКвалификаторИПодпись()
+    {
+        await _sut.EnsureInitializedAsync(User);
+        WriteNote("Заметка", "текст заметки");
+        const string body =
+            "# Страница\n" +
+            "\n" +
+            "Ссылка [[Заметка]] и квалифицированная [[Общее/Заметка|подпись]].\n" +
+            "В коде: `[[Общее/Заметка]]` — не ссылка.\n";
+        (await _sut.WritePageAsync(User, "common", "Общее/Страница.md", body))
+            .Status.Should().Be(WikiOpStatus.Applied);
+
+        _notes.Update(User, NoteId("Заметка"), new UpdateNoteRequest(Title: "Заметка новая"))
+            .Should().NotBeNull();
+
+
+        // Побайтно: у квалифицированной ссылки изменён только последний сегмент —
+        // префикс своего раздела и подпись на месте, ссылка в коде не тронута.
+        File.ReadAllText(PageFull("Общее/Страница.md"), Encoding.UTF8).Should().Be(
+            "# Страница\n" +
+            "\n" +
+            "Ссылка [[Заметка новая]] и квалифицированная [[Общее/Заметка новая|подпись]].\n" +
+            "В коде: `[[Общее/Заметка]]` — не ссылка.\n");
+        LogLines().Should().Contain(l => l.GetProperty("op").GetString() == "relink");
+    }
+
+    [Fact]
+    public async Task Релинк_СсылкаНаОдноимённуюСтраницуДругогоРаздела_НеТронута()
+    {
+        await _sut.EnsureInitializedAsync(User);
+        WriteNote("Отчёт", "текст заметки");
+        // Одноимённая страница другого раздела — другая сущность, не переименоываемая заметка.
+        (await _sut.WritePageAsync(User, "personal", "Личное/Отчёт.md", "# Отчёт\n"))
+            .Status.Should().Be(WikiOpStatus.Applied);
+        (await _sut.WritePageAsync(User, "common", "Общее/Обзор.md",
+                "Своя [[Отчёт]]; чужие: [[Сферы/s1/Отчёт]], [[Личное/Отчёт]].\n"))
+            .Status.Should().Be(WikiOpStatus.Applied);
+
+        // Та же операция, что запускает переименование заметки: отбор кандидатов и правка.
+        (await _sut.RelinkAsync(User, "Отчёт", "Отчёт новая")).Should().Be(1);
+
+        // Изменена только своя цель: qualified чужим разделом — чужая цель, она цела.
+        File.ReadAllText(PageFull("Общее/Обзор.md"), Encoding.UTF8)
+            .Should().Be("Своя [[Отчёт новая]]; чужие: [[Сферы/s1/Отчёт]], [[Личное/Отчёт]].\n");
+        File.ReadAllText(PageFull("Личное/Отчёт.md"), Encoding.UTF8).Should().Be("# Отчёт\n");
+    }
+
     // ─── 2. Истечение: ссылка разворачивается в текст ─────────────────────────
 
     [Fact]
@@ -125,6 +175,24 @@ public class WikiRelinkTests : IDisposable
 
         File.ReadAllText(PageFull("Общее/Страница.md"), Encoding.UTF8)
             .Should().Be("До подпись и после Заметка.\n");
+        LogLines().Should().Contain(l => l.GetProperty("op").GetString() == "relink");
+    }
+
+    [Fact]
+    public async Task Релинк_ИстекшаяЗаметка_РазворачиваетКвалифицированнуюСсылку_С_СтрокойЖурнала()
+    {
+        await _sut.EnsureInitializedAsync(User);
+        WriteNote("Заметка", "текст заметки");
+        (await _sut.WritePageAsync(User, "common", "Общее/Страница.md",
+                "До [[Заметка]] и после [[Общее/Заметка|подпись]].\n"))
+            .Status.Should().Be(WikiOpStatus.Applied);
+
+        // Тот же путь, что делает NoteExpiryService для истёкшей заметки.
+        _notes.RemoveWikilinksTo(User, "Заметка", NoteId("Заметка"));
+
+        // Обе формы развернуты одним отбором: qualified — в свою подпись.
+        File.ReadAllText(PageFull("Общее/Страница.md"), Encoding.UTF8)
+            .Should().Be("До Заметка и после подпись.\n");
         LogLines().Should().Contain(l => l.GetProperty("op").GetString() == "relink");
     }
 

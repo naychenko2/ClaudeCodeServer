@@ -155,9 +155,12 @@ public sealed class WikiKeeper : IWikiRelink
 
     /// <summary>relink — системная операция (ADR-035, решение 6): переименована (newTitle)
     /// или истекла/удалена (newTitle null) заметка, на которую ссылаются страницы вики.
-    /// Смысловых правок нет: переименование меняет только цель [[…]] с сохранением подписи
-    /// и якоря (тот же код NotesService.RewriteLinks), истечение разворачивает ссылку в
-    /// текст (тот же UnlinkTo) — второго варианта «замены ссылки» в вертикали нет.
+    /// Смысловых правок нет: переименование меняет только цель [[…]] с сохранением её
+    /// квалификатора (префикса раздела/источника), подписи и якоря (тот же код
+    /// NotesService.RewriteLinks), истечение разворачивает ссылку в текст в любой форме
+    /// записи (тот же UnlinkTo) — второго варианта «замены ссылки» в вертикали нет.
+    /// Ссылка, квалифицированная чужим разделом, называет страницу того раздела, а не
+    /// заметку: relink её не трогает (тот же смысл, что у резолвера — Resolve).
     /// Идёт под блокировкой затронутых разделов (решение 10) и с записью в журнал
     /// (op=relink, одна строка на раздел). Кандидаты отбираются чтением вне блокировки;
     /// файл под блокировкой читается заново — запись пакета, вклинившаяся между отбором
@@ -181,7 +184,9 @@ public sealed class WikiKeeper : IWikiRelink
                 if (section is null) continue; // путь вне разделов — не страница вики
                 string text;
                 try { text = File.ReadAllText(full, Encoding.UTF8); } catch { continue; }
-                if (NotesService.HasWikiLinkTo(text, oldTitle)) candidates.Add((section, rel));
+                // Отбор — с своим разделом страницы: qualified чужим разделом ссылка
+                // называет страницу того раздела, а не переименовываемую заметку (M1).
+                if (NotesService.HasWikiLinkTo(text, oldTitle, section)) candidates.Add((section, rel));
             }
         }
         catch (Exception) { return 0; } // каталог недоступен — нечего менять
@@ -198,8 +203,8 @@ public sealed class WikiKeeper : IWikiRelink
                 string current;
                 try { current = File.ReadAllText(full, Encoding.UTF8); } catch { continue; }
                 var updated = newTitle is null
-                    ? NotesService.UnlinkTo(current, oldTitle)
-                    : NotesService.RewriteLinks(current, oldTitle, newTitle);
+                    ? NotesService.UnlinkTo(current, oldTitle, section)
+                    : NotesService.RewriteLinks(current, oldTitle, newTitle, section);
                 if (updated == current) continue; // под блокировкой совпадений нет — нечего менять
 
                 var manifest = WikiManifest.TryRead(root, section);

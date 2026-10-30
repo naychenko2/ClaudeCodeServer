@@ -1123,7 +1123,8 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
                 if (WikiPaths.IsWikiPath(srcNote.FullPath, _dataDir)) { wikiInbound = true; continue; }
                 try
                 {
-                    var updated = RewriteLinks(File.ReadAllText(srcNote.FullPath, Encoding.UTF8), oldTitle, req.Title!);
+                    // Файл — обычная заметка, не страница вики: своего раздела нет (null).
+                    var updated = RewriteLinks(File.ReadAllText(srcNote.FullPath, Encoding.UTF8), oldTitle, req.Title!, null);
                     File.WriteAllText(srcNote.FullPath, updated, new UTF8Encoding(false));
                 }
                 catch (Exception ex) { _logger.LogWarning(ex, "Обновление ссылок в {File}", srcNote.FullPath); }
@@ -1138,64 +1139,101 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         return GetDetail(userId, effectiveId);
     }
 
-    // Заменяет [[Старый]] / [[Старый|подпись]] / [[Старый#якорь]] / [[Папка/Старый]]
-    // на [[Новый…]] с сохранением подписи и якоря; не-совпадающие ссылки и ссылки
-    // внутри кода (`…`/```-блока) не трогает.
+    // Квалификатор цели ссылки: всё до последнего «/» в имени — префикс раздела вики
+    // («Общее», «Сферы/s1», «Проекты/{id}»), источник или папка («projects/p1»,
+    // «Идеи/Черновики»). Пустой — ссылка без квалификатора.
+    private static string QualifierOf(string name)
+    {
+        var i = name.LastIndexOf('/');
+        return i < 0 ? "" : name[..i].Trim();
+    }
+
+    // Разобрать запись ссылки: имя цели (до первой «|» или «#») и её хвост — подпись/якорь,
+    // которые сохраняются побайтно.
+    private static (string Name, string Tail) SplitLink(string inner)
+    {
+        var cut = inner.Length;
+        var pipe = inner.IndexOf('|'); if (pipe >= 0) cut = Math.Min(cut, pipe);
+        var hash = inner.IndexOf('#'); if (hash >= 0) cut = Math.Min(cut, hash);
+        return (inner[..cut], inner[cut..]);
+    }
+
+    // Совпадение имени ссылки с целью relink — один смысл для отбора, замены и разворота:
+    // их расхождение и есть M2 (страница попала в кандидаты, но не была изменена).
+    // Последний сегмент — имя цели. Квалификатор — часть цели: распознанный префикс раздела
+    // вики называет страницу этого раздела (тот же смысл, что у Resolve:551-557), и для
+    // переименованной/истёкшей заметки это посторонняя сущность — ссылка не наша. Внутри
+    // своего раздела тот же префикс — избыточная запись локальной ссылки (ADR-035,
+    // решение 1: «внутри раздела ссылка пишется голой, между разделов — с префиксом
+    // раздела»), поэтому она наша. Нераспознанный префикс (источник, папка) — штатная
+    // форма той же цели: совпадение по последнему сегменту, префикс сохраняется.
+    private static bool LinkTargets(string name, string targetNorm, string? ownSectionKey)
+    {
+        if (Norm(name.Split('/')[^1].Trim()) != targetNorm) return false;
+        var qualifier = QualifierOf(name);
+        if (qualifier.Length == 0) return true;
+        var section = WikiSections.Parse(qualifier);
+        return section is null || section == ownSectionKey;
+    }
+
+    // Заменяет [[Старый]] / [[Старый|подпись]] / [[Старый#якорь]] / [[Префикс/Старый…]]
+    // на тот же текст с новым последним сегментом: квалификатор цели, подпись и якорь
+    // сохраняются — меняется только цель ссылки (ADR-035, решение 6). Не-совпадающие
+    // ссылки, ссылки на страницы чужого раздела и ссылки внутри кода (`…`/```-блока)
+    // не трогает.
     // internal static: та же операция нужна Хранителю для relink (ADR-035, решение 6) —
     // второй реализации «замены цели ссылки» в вертикали быть не должно.
-    internal static string RewriteLinks(string content, string oldTitle, string newTitle)
+    // ownSectionKey — раздел файла, в котором стоит ссылка (null — файл не страница вики):
+    // без него квалифицированная своим же разделом ссылка осталась бы чужой.
+    internal static string RewriteLinks(string content, string oldTitle, string newTitle, string? ownSectionKey)
     {
         var oldNorm = Norm(oldTitle);
         var mask = CodeMask(content);
         return WikiLink.Replace(content, m =>
         {
             if (InCode(mask, m.Index)) return m.Value;
-            var inner = m.Groups[1].Value;
-            var cut = inner.Length;
-            var pipe = inner.IndexOf('|'); if (pipe >= 0) cut = Math.Min(cut, pipe);
-            var hash = inner.IndexOf('#'); if (hash >= 0) cut = Math.Min(cut, hash);
-            var name = inner[..cut];
-            var rest = inner[cut..];               // подпись/якорь сохраняем
-            var lastSeg = name.Split('/')[^1].Trim();
-            return Norm(lastSeg) == oldNorm ? $"[[{newTitle}{rest}]]" : m.Value;
+            var (name, rest) = SplitLink(m.Groups[1].Value);
+            if (!LinkTargets(name, oldNorm, ownSectionKey)) return m.Value;
+            var i = name.LastIndexOf('/');
+            // Квалификатор цели — побайтно как написан, меняется только последний сегмент.
+            var prefix = i < 0 ? "" : name[..(i + 1)];
+            return $"[[{prefix}{newTitle}{rest}]]";
         });
     }
 
-    // Есть ли в тексте ссылка на этот заголовок — тот же смысл совпадения, что у RewriteLinks
-    // (последний сегмент цели, нормализация, вне кода). internal: нужен Хранителю для
-    // отбора кандидатов relink до записи (тот же критерий, что у самой замены).
-    internal static bool HasWikiLinkTo(string content, string title)
+    // Есть ли в тексте ссылка на эту цель — тот же смысл совпадения, что у RewriteLinks и
+    // UnlinkTo (отбор и правка не расходятся). internal: нужен Хранителю для отбора
+    // кандидатов relink до записи (тот же критерий, что у самой замены).
+    internal static bool HasWikiLinkTo(string content, string title, string? ownSectionKey)
     {
-        var oldNorm = Norm(title);
+        var targetNorm = Norm(title);
         var mask = CodeMask(content);
         foreach (Match m in WikiLink.Matches(content))
         {
             if (InCode(mask, m.Index)) continue;
-            var inner = m.Groups[1].Value;
-            var cut = inner.Length;
-            var pipe = inner.IndexOf('|'); if (pipe >= 0) cut = Math.Min(cut, pipe);
-            var hash = inner.IndexOf('#'); if (hash >= 0) cut = Math.Min(cut, hash);
-            var name = inner[..cut];
-            if (Norm(name.Split('/')[^1].Trim()) == oldNorm) return true;
+            if (LinkTargets(SplitLink(m.Groups[1].Value).Name, targetNorm, ownSectionKey)) return true;
         }
         return false;
     }
 
-    // [[TargetTitle]] → TargetTitle, [[TargetTitle|алиас]] → алиас; ссылки в коде
-    // (`…`/```-блок) не трогаем. Та же операция, что делал RemoveWikilinksTo in-line:
-    // вынесена, чтобы relink Хранителя (ADR-035, решение 6) разворачивал ссылку тем же
-    // кодом, а не второй реализацией.
-    internal static string UnlinkTo(string content, string targetTitle)
+    // Разворот ссылки на несуществующую цель в любой форме записи: [[Цель]] и
+    // [[Префикс/Цель]], [[Цель#якорь]] → Цель (заголовок цели), [[Цель|алиас]] → алиас
+    // (то, что видел человек). Квалификатор и якорь в текст не выписываем: цель больше
+    // нет, её раздел и якорь не о чём. Та же нормализация совпадения, что у HasWikiLinkTo
+    // и RewriteLinks. Ссылки в коде (`…`/```-блок) не трогаем. Та же операция, что делал
+    // RemoveWikilinksTo in-line: вынесена, чтобы relink Хранителя (ADR-035, решение 6)
+    // разворачивал ссылку тем же кодом, а не второй реализацией.
+    internal static string UnlinkTo(string content, string targetTitle, string? ownSectionKey)
     {
+        var targetNorm = Norm(targetTitle);
         var mask = CodeMask(content);
-        return Regex.Replace(content,
-            @"\[\[" + Regex.Escape(targetTitle) + @"(\|[^\[\]]*?)?\]\]",
-            m => InCode(mask, m.Index)
-                ? m.Value
-                : m.Groups[1].Success
-                    ? m.Groups[1].Value.TrimStart('|')
-                    : targetTitle,
-            RegexOptions.IgnoreCase);
+        return WikiLink.Replace(content, m =>
+        {
+            if (InCode(mask, m.Index)) return m.Value;
+            var (name, rest) = SplitLink(m.Groups[1].Value);
+            if (!LinkTargets(name, targetNorm, ownSectionKey)) return m.Value;
+            return rest.StartsWith('|') ? rest[1..] : targetTitle;
+        });
     }
 
     public bool Delete(string userId, string id)
@@ -1269,7 +1307,8 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
             if (WikiPaths.IsWikiPath(srcNote.FullPath, _dataDir)) { wikiInbound = true; continue; }
             try
             {
-                var updated = UnlinkTo(File.ReadAllText(srcNote.FullPath, Encoding.UTF8), targetTitle);
+                // Тот же смысл, что у правки при переименовании: файл — обычная заметка, раздела нет.
+                var updated = UnlinkTo(File.ReadAllText(srcNote.FullPath, Encoding.UTF8), targetTitle, null);
                 File.WriteAllText(srcNote.FullPath, updated, new UTF8Encoding(false));
             }
             catch (Exception ex)

@@ -97,7 +97,7 @@ vi.mock('../../../../components/ui/Button', async () => {
 import { MembersStack } from '../MembersStack';
 import { OwnerSettingsNotice } from '../OwnerSettingsNotice';
 import {
-  ACCESS_REVOKED_TITLE, EDITOR_TURNS_ENABLED, accessRevokedOwnerLine, canCreateChats, composerExecBlocked, guardTurnAction, turnDeniedReason, participantComposerGate, participantComposerText,
+  ACCESS_REVOKED_TITLE, accessRevokedOwnerLine, canCreateChats, composerExecBlocked, guardTurnAction, turnDeniedReason, participantComposerGate, participantComposerText,
 } from '../participantGate';
 
 type FN = InstanceType<typeof FakeNode>;
@@ -148,16 +148,12 @@ describe('стопка аватаров', () => {
 });
 
 describe('композер участника', () => {
-  it('читатель и редактор заблокированы, владелец и обычный проект — нет', () => {
+  it('читатель заблокирован, редактор, владелец и обычный проект — нет', () => {
     expect(participantComposerGate(reader).blocked).toBe(true);
-    expect(participantComposerGate(editor).blocked).toBe(true);
+    expect(participantComposerGate(editor).blocked).toBe(false);
     expect(participantComposerGate(own).blocked).toBe(false);
     expect(participantComposerGate(base).blocked).toBe(false);
     expect(participantComposerGate(null).blocked).toBe(false);
-  });
-
-  it('выключатель ходов редактора выключен (до S2a-10)', () => {
-    expect(EDITOR_TURNS_ENABLED).toBe(false);
   });
 
   it('текст читателя называет владельца и роль редактора', () => {
@@ -177,7 +173,7 @@ describe('композер участника', () => {
   it('composerExecBlocked: участник блокирует отправку даже при доступном исполнении', () => {
     const ok = (p: Project) => composerExecBlocked(p, true, participantComposerGate(p));
     expect(ok(reader)).toBe(true);
-    expect(ok(editor)).toBe(true);
+    expect(ok(editor)).toBe(false);
     expect(ok(own)).toBe(false);
     expect(ok(base)).toBe(false);
     expect(composerExecBlocked(own, false, participantComposerGate(own))).toBe(true);
@@ -226,16 +222,16 @@ describe('входы запуска хода вне композера (гейт
   const entries = ['send', 'allowPermission', 'allowAlways', 'answerQuestion', 'respondPlan',
     'denyPermission', 'respondTeamPlan', 'respondTeamEscalation'] as const;
 
-  it.each(entries)('%s: у читателя и редактора не доходит до сервера, показывает причину', (name) => {
-    for (const p of [reader, editor]) {
-      const action = vi.fn(() => 'ok');
-      const denied = vi.fn();
-      const guarded = guardTurnAction(() => p, action, denied);
-      expect(guarded('x')).toBeUndefined();
-      expect(action, `${name}/${p.myRole}`).not.toHaveBeenCalled();
-      expect(denied).toHaveBeenCalledTimes(1);
-      expect(denied.mock.calls[0][0]).toBe(turnDeniedReason(p));
-    }
+  it.each(entries)('%s: у читателя не доходит до сервера, у редактора проходит', (name) => {
+    const action = vi.fn(() => 'ok');
+    const denied = vi.fn();
+    expect(guardTurnAction(() => reader, action, denied)('x')).toBeUndefined();
+    expect(action, `${name}/reader`).not.toHaveBeenCalled();
+    expect(denied).toHaveBeenCalledTimes(1);
+    expect(denied.mock.calls[0][0]).toBe(turnDeniedReason(reader));
+    expect(guardTurnAction(() => editor, action, denied)('x')).toBe('ok');
+    expect(action, `${name}/editor`).toHaveBeenCalledTimes(1);
+    expect(denied).toHaveBeenCalledTimes(1);
   });
 
   it.each(entries)('%s: ChatPanel заворачивает вход в гейт', (name) => {
@@ -264,9 +260,9 @@ describe('входы запуска хода вне композера (гейт
     expect(action).toHaveBeenCalledTimes(1);
   });
 
-  it('тексты отказа различают читателя и редактора', () => {
+  it('отказ хода есть у читателя, у редактора и владельца — нет', () => {
     expect(turnDeniedReason(reader)).toBe('Недоступно: вы читатель проекта');
-    expect(turnDeniedReason(editor)).toBe('Недоступно: ходы редактора пока выключены');
+    expect(turnDeniedReason(editor)).toBeNull();
     expect(turnDeniedReason(own)).toBeNull();
   });
 });

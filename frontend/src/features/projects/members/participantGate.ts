@@ -4,10 +4,6 @@
 
 import type { Project } from '../../../types';
 
-// Ходы редактора включит этап S2a-10 (рамка хода). Пока выключатель один и константа:
-// композер заблокирован у ЛЮБОГО участника. Заводить фич-флаг в каталоге ради этого рано.
-export const EDITOR_TURNS_ENABLED = false;
-
 // Участник — не владелец общего проекта. myRole авторитетна, когда она есть
 export function isParticipant(project: Pick<Project, 'myRole'> | null | undefined): boolean {
   return project?.myRole === 'editor' || project?.myRole === 'reader';
@@ -15,31 +11,28 @@ export function isParticipant(project: Pick<Project, 'myRole'> | null | undefine
 
 export type ParticipantComposerGate =
   | { blocked: false }
-  | { blocked: true; role: 'editor' | 'reader'; ownerName: string };
+  | { blocked: true; role: 'reader'; ownerName: string };
 
 // Имя владельца для текстов: displayName, запасной username; без обоих — «владелец»
 export function ownerNameOf(project: Pick<Project, 'ownerDisplayName' | 'ownerUsername'> | null | undefined): string {
   return project?.ownerDisplayName?.trim() || project?.ownerUsername?.trim() || 'владелец';
 }
 
-// Можно ли участнику запускать ход из композера
+// Можно ли участнику запускать ход из композера: редактор может (право RunTurn, S2a-10a),
+// читатель — нет
 export function participantComposerGate(project: Project | null | undefined): ParticipantComposerGate {
-  const role = project?.myRole;
-  if (role !== 'editor' && role !== 'reader') return { blocked: false };
-  if (role === 'editor' && EDITOR_TURNS_ENABLED) return { blocked: false };
-  return { blocked: true, role, ownerName: ownerNameOf(project) };
+  if (project?.myRole !== 'reader') return { blocked: false };
+  return { blocked: true, role: 'reader', ownerName: ownerNameOf(project) };
 }
 
-// Текст плашки над полем. Читателю — про смену роли; редактору — что ходы включат позже
+// Текст плашки над полем: читателю — про смену роли
 export function participantComposerText(gate: Extract<ParticipantComposerGate, { blocked: true }>): string {
-  return gate.role === 'reader'
-    ? `Вы читатель — писать в чаты нельзя. Попросите ${gate.ownerName} сделать вас редактором.`
-    : 'Ходы редактора включит следующий этап. Пока чаты проекта доступны только для чтения.';
+  return `Вы читатель — писать в чаты нельзя. Попросите ${gate.ownerName} сделать вас редактором.`;
 }
 
 // Подсказка кнопки отправки
-export function participantSendTitle(gate: Extract<ParticipantComposerGate, { blocked: true }>): string {
-  return gate.role === 'reader' ? 'Не отправится: вы читатель проекта' : 'Не отправится: ходы редактора пока выключены';
+export function participantSendTitle(_gate: Extract<ParticipantComposerGate, { blocked: true }>): string {
+  return 'Не отправится: вы читатель проекта';
 }
 
 // Переименовать, архивировать и удалить чат может только его автор (в S1 — владелец проекта).

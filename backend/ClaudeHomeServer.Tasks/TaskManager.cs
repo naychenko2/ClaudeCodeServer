@@ -641,7 +641,8 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         string? featureId, string? role, string? verdict,
         List<string>? reviewOf, string? personaId, string ownerId,
         List<PlannedStep>? planSteps = null, bool enforceReworkReviewOf = false,
-        string? roleBefore = null, string? featureIdBefore = null, bool checkReviewPrefix = true)
+        string? roleBefore = null, string? featureIdBefore = null, bool checkReviewPrefix = true,
+        HashSet<string>? legacyStepRefs = null)
     {
         // role — только из списка TaskRoles
         if (role is not null && !TaskRoles.All.Contains(role))
@@ -757,7 +758,9 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
                 // Ревью/проверка/финал не шаг плана: иначе раздувают знаменатель процента.
                 // Префикс проверяем только у вновь присланных шагов (checkReviewPrefix): сохранённый
                 // легаси-план без kind не должен становиться нередактируемым и незакрываемым.
-                if (checkReviewPrefix && step.IsStep && ReviewLikeStepRef.IsMatch(step.StepRef))
+                // Шаг, чей stepRef уже был в прежнем плане без kind, при перезаписи остаётся легаси.
+                if (checkReviewPrefix && step.IsStep && ReviewLikeStepRef.IsMatch(step.StepRef)
+                    && legacyStepRefs?.Contains(step.StepRef.Trim()) != true)
                     throw new InvalidOperationException(
                         $"«{step.StepRef}»: ревью не шаг плана: укажи kind (review|qa|final) или переименуй.");
             }
@@ -992,7 +995,10 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             || (effRole == TaskRoles.Rework && task.Role != TaskRoles.Rework);
         ValidateFeatureFields(effFeatureId, effRole, effVerdict, effReviewOf, effPersonaId, task.OwnerId ?? "",
             planSteps: effPlanSteps, enforceReworkReviewOf, roleBefore: task.Role, featureIdBefore: task.FeatureId,
-            checkReviewPrefix: req.PlanSteps is not null);
+            checkReviewPrefix: req.PlanSteps is not null,
+            legacyStepRefs: req.PlanSteps is null || task.PlanSteps is null ? null
+                : task.PlanSteps.Where(s => s.IsStep && !string.IsNullOrWhiteSpace(s.StepRef))
+                    .Select(s => s.StepRef.Trim()).ToHashSet(FeatureStepAccounting.StepKeyComparer));
         EnsureReturnReason(req.Verification);
 
         if (req.Title is not null) task.Title = req.Title;

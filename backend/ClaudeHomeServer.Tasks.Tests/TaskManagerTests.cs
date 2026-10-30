@@ -1886,6 +1886,53 @@ public class TaskManagerTests : IDisposable
     }
 
     [Fact]
+    public void ЛегасиПлан_ПерезаписьPlanStepsСТемЖеR_БезKind_Принята()
+    {
+        var (sut, plan) = ЛегасиПлан();
+        using var _ = sut;
+
+        var updated = sut.Update(plan.Id, new UpdateTaskRequest(PlanSteps:
+        [
+            new PlannedStep { StepRef = "B1", Title = "t2" },
+            new PlannedStep { StepRef = "R-B1", Title = "t2" },
+        ]));
+
+        updated!.PlanSteps.Should().HaveCount(2);
+        updated.PlanSteps![1].Kind.Should().BeNull();
+    }
+
+    [Fact]
+    public void ЛегасиПлан_ПерезаписьСНовымR_БезKind_Отказ()
+    {
+        var (sut, plan) = ЛегасиПлан();
+        using var _ = sut;
+
+        var act = () => sut.Update(plan.Id, new UpdateTaskRequest(PlanSteps:
+        [
+            new PlannedStep { StepRef = "R-B1", Title = "t" },
+            new PlannedStep { StepRef = "R-B2", Title = "t" },
+        ]));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*ревью не шаг плана*");
+    }
+
+    [Fact]
+    public void НовыйПлан_ЧерезUpdateСR_БезKind_Отказ()
+    {
+        var epic = CreateEpic("u");
+        var plan = _sut.Create(null, "u", new CreateTaskRequest("план", FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps: [new PlannedStep { StepRef = "B1", Title = "t" }]));
+
+        var act = () => _sut.Update(plan.Id, new UpdateTaskRequest(PlanSteps:
+        [
+            new PlannedStep { StepRef = "B1", Title = "t" },
+            new PlannedStep { StepRef = "R-B1", Title = "t" },
+        ]));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*ревью не шаг плана*");
+    }
+
+    [Fact]
     public void Create_PlanStepsСлишкомМного_Отказ()
     {
         var epic = CreateEpic("u");

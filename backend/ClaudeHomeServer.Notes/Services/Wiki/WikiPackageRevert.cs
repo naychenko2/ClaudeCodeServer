@@ -120,7 +120,10 @@ public sealed class WikiPackageRevert
             () => Task.FromResult(RevertUnderLock(ownerId, root, packageId)));
     }
 
-    private RevertResult RevertUnderLock(string ownerId, string root, string packageId)
+    /// <summary>Тело отката под блоком раздела, который держит вызывающий. internal — для
+    /// отката по источнику (WikiRetractService, S4f-1): он держит блок всех затронутых разделов
+    /// разом и зовёт откат внутри него — второй блокировки того же ключа (зависания) нет.</summary>
+    internal RevertResult RevertUnderLock(string ownerId, string root, string packageId)
     {
         try
         {

@@ -8,6 +8,15 @@ import type { PendingChatMessage } from '../../../lib/chatReducer';
 import { ChatProjectContext } from '../contexts';
 import { canCancelPending } from '../../../features/projects/members/messageAuthor';
 
+// Статический рендер кликов не знает: подменяем начальное false у useState на true,
+// чтобы строка очереди отрисовалась раскрытой (флаг включается только в тестах ниже)
+const forceOpen = vi.hoisted(() => ({ on: false }));
+vi.mock('react', async orig => {
+  const react = await orig<typeof import('react')>();
+  const useState = ((init: unknown) => react.useState(forceOpen.on && init === false ? true : init)) as typeof react.useState;
+  return { ...react, default: react, useState };
+});
+
 vi.mock('../../../lib/offline', async orig => ({ ...(await orig<typeof import('../../../lib/offline')>()), readStoredUserId: () => 'u-me' }));
 
 const item = (id: string, over: Partial<PendingChatMessage> = {}): PendingChatMessage => ({
@@ -63,25 +72,41 @@ describe('очередь общего проекта: «Не доставлят�
   });
 });
 
-describe('очередь общего проекта: подпись автора', () => {
-  const proj = { id: 'p1', rootPath: '/p', myRole: 'editor' as const };
-  const renderIn = (items: PendingChatMessage[], project: typeof proj | null) =>
-    renderToStaticMarkup(createElement(ChatProjectContext.Provider, { value: project },
-      createElement(PendingMessageList, { items, sessionId: 's1' })));
+describe('очередь общего проекта: подпись автора (раскрытая строка)', () => {
+  const proj = { id: 'p1', rootPath: '/p', myRole: 'editor' as const, formerMembers: [{ userId: 'u-old', displayName: 'Олег' }] };
+  const renderIn = (items: PendingChatMessage[], project: typeof proj | null) => {
+    forceOpen.on = true;
+    try {
+      return renderToStaticMarkup(createElement(ChatProjectContext.Provider, { value: project },
+        createElement(PendingMessageList, { items, sessionId: 's1', onPreempt: () => {} })));
+    } finally { forceOpen.on = false; }
+  };
   const mine = item('mine', { kind: 'user', senderUserId: 'u-me' });
   const theirs = item('theirs', { kind: 'user', senderUserId: 'u-maria' });
+  const former = item('former', { kind: 'user', senderUserId: 'u-old' });
 
-  it('чужая строка — запасное имя автора и аватар, не «Вы»', () => {
+  it('чужая: имя автора (запасное «Участник») и пояснение с ним, без «Вы»', () => {
     const html = renderIn([theirs], proj);
-    expect(html).toContain('Участник');
+    expect(html).toContain('Уйдёт, когда агент ответит Участник');
     expect(html).not.toContain('>Вы<');
+    expect(html).not.toContain('больше не в проекте');
   });
 
-  it('своя строка — «Вы»', () => {
-    expect(renderIn([mine], proj)).toContain('>Вы<');
+  it('бывший участник — имя из formerMembers и пометка', () => {
+    const html = renderIn([former], proj);
+    expect(html).toContain('Олег');
+    expect(html).toContain('больше не в проекте');
   });
 
-  it('личный проект — «Вы», даже при senderUserId', () => {
+  it('своя — «Вы» и прежнее пояснение', () => {
+    const html = renderIn([mine], proj);
+    expect(html).toContain('>Вы<');
+    expect(html).toContain('Уйдёт в работу, когда Claude закончит текущий шаг');
+    expect(html).not.toContain('Уйдёт, когда агент ответит');
+  });
+
+  it('личный проект и строка без senderUserId — «Вы», как на master', () => {
     expect(renderIn([theirs], { id: 'p1', rootPath: '/p' } as typeof proj)).toContain('>Вы<');
+    expect(renderIn([item('x', { kind: 'user' })], proj)).toContain('>Вы<');
   });
 });

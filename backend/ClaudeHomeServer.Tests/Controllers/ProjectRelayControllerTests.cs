@@ -16,23 +16,28 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// офлайн. Офлайн — честный 409 с причиной, а не таймаут.
 /// </summary>
 [Trait("Category", "Host")]
-public sealed class ProjectRelayControllerTests : IDisposable
+public sealed class ProjectRelayControllerTests : IClassFixture<ProjectRelayControllerTests.Host>
 {
     private const string Device = "dev-relay";
 
-    private readonly FakeDeviceStatus _devices = new();
-    private readonly SpyRelay _relay = new();
-    private readonly TestWebApplicationFactory _factory;
-    private readonly HttpClient _client;
-
     /// <summary>Канал в одном процессе: агент отвечает сценарием теста или молча закрывает поток.</summary>
-    private sealed class SpyRelay : IDeviceRelayChannel
+    internal sealed class SpyRelay : IDeviceRelayChannel
     {
         public int Opened;
         public DeviceExecRefusedException? Refuse;
         public Func<InProcessExecStream, Task> Agent = s => s.DisposeAsync().AsTask();
 
         public Task BeforeReturn = Task.CompletedTask;
+
+        // Сброс перед каждым тестом: общий хост помнит счётчик и сценарий агента, а тесты
+        // проверяют абсолютные числа (Opened == 0) и не должны видеть чужих остатков
+        public void Reset()
+        {
+            Opened = 0;
+            Refuse = null;
+            Agent = s => s.DisposeAsync().AsTask();
+            BeforeReturn = Task.CompletedTask;
+        }
 
         public async Task<IDeviceExecStream> OpenRelayAsync(string ownerId, string deviceId, CancellationToken ct = default)
         {
@@ -45,22 +50,41 @@ public sealed class ProjectRelayControllerTests : IDisposable
         }
     }
 
-    public ProjectRelayControllerTests()
+    /// <summary>
+    /// Хост на весь класс (IClassFixture), а не на тест: состояние устройств и канал ретранслятора —
+    /// те же синглтоны на весь класс, их mutable-поля поднимает заново конструктор класса
+    /// перед каждым тестом — xUnit создаёт экземпляр класса на каждый тест.
+    /// </summary>
+    public sealed class Host : TestWebApplicationFactory
     {
-        _devices.Devices[Device] = FakeDeviceStatus.Status(Device, online: true,
-            DeviceCapabilities.Exec, DeviceCapabilities.Files, DeviceCapabilities.Relay);
-        _factory = new TestWebApplicationFactory
+        internal readonly FakeDeviceStatus Devices = new();
+        internal readonly SpyRelay Relay = new();
+
+        public Host()
         {
             ExtraServices = s =>
             {
-                s.AddSingleton<IDeviceExecChannel>(_devices);
-                s.AddSingleton<IDeviceRelayChannel>(_relay);
-            },
-        };
-        _client = _factory.CreateAuthenticatedClient();
+                s.AddSingleton<IDeviceExecChannel>(Devices);
+                s.AddSingleton<IDeviceRelayChannel>(Relay);
+            };
+        }
     }
 
-    public void Dispose() => _factory.Dispose();
+    private readonly FakeDeviceStatus _devices;
+    private readonly SpyRelay _relay;
+    private readonly TestWebApplicationFactory _factory;
+    private readonly HttpClient _client;
+
+    public ProjectRelayControllerTests(Host host)
+    {
+        _factory = host;
+        _devices = host.Devices;
+        _relay = host.Relay;
+        _devices.Devices[Device] = FakeDeviceStatus.Status(Device, online: true,
+            DeviceCapabilities.Exec, DeviceCapabilities.Files, DeviceCapabilities.Relay);
+        _relay.Reset();
+        _client = _factory.CreateAuthenticatedClient();
+    }
 
     private async Task<string> CreateAsync(string? deviceId)
     {

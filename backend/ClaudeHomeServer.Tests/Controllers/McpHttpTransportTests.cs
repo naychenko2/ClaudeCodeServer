@@ -16,11 +16,54 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// тем, что инструмент МОЛЧА исчезает у модели.
 /// </summary>
 [Trait("Category", "Host")]
-public class McpHttpTransportTests(TestWebApplicationFactory factory)
-    : IClassFixture<TestWebApplicationFactory>
+public class McpHttpTransportTests(TestWebApplicationFactory factory, McpHttpTransportTests.BoomHost boom,
+    McpHttpTransportTests.LogSinkHost logHost, McpHttpTransportTests.SlowHost slowHost)
+    : IClassFixture<TestWebApplicationFactory>,
+      IClassFixture<McpHttpTransportTests.BoomHost>,
+      IClassFixture<McpHttpTransportTests.LogSinkHost>,
+      IClassFixture<McpHttpTransportTests.SlowHost>
 {
+    // Фикстуры-подклассы, по одной на каждую конфигурацию хоста: спец-хосты поднимаются
+    // на весь класс, а не на тест. Обычный хост — общий для всех остальных тестов класса.
+    /// <summary>Хост с тулсетом-«бомбой»: внутренний сбой диспетчера проверяется на нём.</summary>
+    public sealed class BoomHost : TestWebApplicationFactory
+    {
+        public BoomHost() => ExtraServices = services =>
+            services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset>(new ExplodingToolset());
+    }
+
+    /// <summary>Хост с коллектором лога: санитизация имени проверяется по его записям.</summary>
+    public sealed class LogSinkHost : TestWebApplicationFactory
+    {
+        internal readonly CollectingLogSink Sink = new();
+
+        public LogSinkHost() => ExtraServices = services => services.AddSingleton<ILoggerProvider>(Sink);
+    }
+
+    /// <summary>
+    /// Хост с долгим тулсетом: пауза — mutable-поле, её поднимает каждый тест под свой сценарий;
+    /// общий на три теста ДолгийВызов вместо трёх подъёмов.
+    /// </summary>
+    public sealed class SlowHost : TestWebApplicationFactory
+    {
+        internal readonly SlowToolset Toolset = new();
+
+        public SlowHost()
+        {
+            ExtraServices = services =>
+            {
+                services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset>(Toolset);
+                services.AddSingleton(new ClaudeHomeServer.Controllers.McpStreamTiming(
+                    TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(300)));
+            };
+        }
+    }
+
     private readonly HttpClient _client = factory.CreateAuthenticatedClient();
     private readonly TestWebApplicationFactory _factory = factory;
+    private readonly BoomHost _boom = boom;
+    private readonly LogSinkHost _log = logHost;
+    private readonly SlowHost _slow = slowHost;
 
     private async Task<JsonElement> RpcAsync(string method, object? @params = null, int id = 1)
     {
@@ -335,13 +378,7 @@ public class McpHttpTransportTests(TestWebApplicationFactory factory)
     [Fact]
     public async Task ВнутреннийСбойТулсета_Отвечает32603_АНе500()
     {
-        using var boom = new TestWebApplicationFactory
-        {
-            ExtraServices = services => services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset>(
-                new ExplodingToolset()),
-        };
-
-        var client = boom.CreateAuthenticatedClient();
+        var client = _boom.CreateAuthenticatedClient();
         var answer = await client.PostAsJsonAsync("/mcp/boom",
             new { jsonrpc = "2.0", id = 1, method = "tools/list" });
 
@@ -484,13 +521,8 @@ public class McpHttpTransportTests(TestWebApplicationFactory factory)
     [Fact]
     public async Task ГигантскоеИмяСCRLF_НеПопадаетВЛогБэкенда()
     {
-        var sink = new CollectingLogSink();
-        using var factory = new TestWebApplicationFactory
-        {
-            ExtraServices = services => services.AddSingleton<ILoggerProvider>(sink),
-        };
-
-        using var caller = factory.CreateAuthenticatedClient();
+        var sink = _log.Sink;
+        using var caller = _log.CreateAuthenticatedClient();
         caller.DefaultRequestHeaders.Add("X-Caller-Session-Id", "evil-log-probe");
         var call = await caller.PostAsJsonAsync("/mcp/widgets", new
         {
@@ -536,8 +568,8 @@ public class McpHttpTransportTests(TestWebApplicationFactory factory)
     [Fact]
     public async Task ДолгийВызов_ПотокSSE_ПульсПрогрессаИОтвет()
     {
-        using var factory = SlowFactory(TimeSpan.FromMilliseconds(1500));
-        using var client = factory.CreateAuthenticatedClient();
+        _slow.Toolset.DelayMs = 1500;
+        using var client = _slow.CreateAuthenticatedClient();
 
         var resp = await client.SendAsync(SlowCall(eventStream: true));
 
@@ -565,8 +597,8 @@ public class McpHttpTransportTests(TestWebApplicationFactory factory)
     [Fact]
     public async Task ДолгийВызов_КлиентБезSSE_ОбычныйJson()
     {
-        using var factory = SlowFactory(TimeSpan.FromMilliseconds(600));
-        using var client = factory.CreateAuthenticatedClient();
+        _slow.Toolset.DelayMs = 600;
+        using var client = _slow.CreateAuthenticatedClient();
 
         var resp = await client.SendAsync(SlowCall(eventStream: false));
 
@@ -582,9 +614,11 @@ public class McpHttpTransportTests(TestWebApplicationFactory factory)
     [Fact]
     public async Task ДолгийВызов_ОбрывКлиентаПосредиПотока_ТулсетПолучилОтмену()
     {
-        var toolset = new SlowToolset(TimeSpan.FromMinutes(5));
-        using var factory = SlowFactory(toolset);
-        using var client = factory.CreateAuthenticatedClient();
+        var toolset = _slow.Toolset;
+        // Общий на класс тулсет: пауза и флаг отмены — свои на этот тест
+        toolset.DelayMs = 300_000;
+        toolset.Cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var client = _slow.CreateAuthenticatedClient();
 
         var resp = await client.SendAsync(SlowCall(eventStream: true), HttpCompletionOption.ResponseHeadersRead);
         resp.Content.Headers.ContentType!.MediaType.Should().Be("text/event-stream");
@@ -599,18 +633,6 @@ public class McpHttpTransportTests(TestWebApplicationFactory factory)
         cancelled.Should().BeTrue("обрыв клиента отменяет вызов тулсета тем же ct");
     }
 
-    private static TestWebApplicationFactory SlowFactory(TimeSpan delay) => SlowFactory(new SlowToolset(delay));
-
-    private static TestWebApplicationFactory SlowFactory(SlowToolset toolset) => new()
-    {
-        ExtraServices = services =>
-        {
-            services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset>(toolset);
-            services.AddSingleton(new ClaudeHomeServer.Controllers.McpStreamTiming(
-                TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(300)));
-        },
-    };
-
     private static HttpRequestMessage SlowCall(bool eventStream)
     {
         var message = new HttpRequestMessage(HttpMethod.Post, "/mcp/slow")
@@ -624,24 +646,27 @@ public class McpHttpTransportTests(TestWebApplicationFactory factory)
         return message;
     }
 
-    // Тулсет, отвечающий через заданную паузу: долгий вызов без собственного прогресса
-    private sealed class SlowToolset(TimeSpan delay) : ClaudeHomeServer.Services.Mcp.Http.IMcpStaticToolset
+    // Тулсет, отвечающий через заданную паузу: долгий вызов без собственного прогресса.
+    // Пауза и флаг отмены — mutable: общий на класс тулсет, каждый тест поднимает своё сам
+    internal sealed class SlowToolset : ClaudeHomeServer.Services.Mcp.Http.IMcpStaticToolset
     {
+        public volatile int DelayMs = 600;
         public string Name => "slow";
         public string Version => "0.0.1";
         public IReadOnlyList<ClaudeHomeServer.Services.Mcp.Http.McpToolSchema> Tools => [];
 
         // Вызов оборван отменой ct (а не доработал до конца)
-        public TaskCompletionSource<bool> Cancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public volatile TaskCompletionSource<bool> Cancelled = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async Task<ClaudeHomeServer.Services.Mcp.Http.McpToolCallResult> CallAsync(string tool,
             System.Text.Json.Nodes.JsonObject arguments,
             ClaudeHomeServer.Services.Mcp.Http.McpToolCallContext context, CancellationToken ct)
         {
-            try { await Task.Delay(delay, ct); }
+            var cancelled = Cancelled;
+            try { await Task.Delay(TimeSpan.FromMilliseconds(DelayMs), ct); }
             catch (OperationCanceledException)
             {
-                Cancelled.TrySetResult(true);
+                cancelled.TrySetResult(true);
                 throw;
             }
             return new("готово", IsError: false);
@@ -651,7 +676,7 @@ public class McpHttpTransportTests(TestWebApplicationFactory factory)
     // Сборщик записей лога: у TestServer нет консольного вывода, а проверить нужно сам текст,
     // который поедет в TimestampedConsoleWriter (переносы внутри записи там рисуют
     // поддельные строки с настоящими таймстемпами)
-    private sealed class CollectingLogSink : ILoggerProvider
+    internal sealed class CollectingLogSink : ILoggerProvider
     {
         public List<(LogLevel Level, string Text)> Entries { get; } = [];
 

@@ -364,9 +364,12 @@ public class ConsumersTailContributorTests
         Source = from, Target = to, Relation = relation, Confidence = EdgeConfidence.Extracted,
     };
 
-    // Дерево из заданных файлов; у каждого — deps исходящих целей в чужих файлах и consumers потребителей
+    // Дерево из заданных файлов; у каждого — deps исходящих целей в чужих файлах и consumers потребителей.
+    // timeout — потолок BuildAsync: null оставляет продуктовый DefaultTimeout (3 с); в загруженном
+    // rest-прогоне его не хватало (дефект 6af27416). Явный потолок — именно потолок, ожидание событийное.
     private static async Task<(ConsumersTailContributor Sut, string Dir, string Data)> PrepareMany(
-        string[] files, int deps, int consumers, Func<string, string, CancellationToken, Task<CodeGraphNeighborsOutcome>>? dependencies = null,
+        string[] files, int deps, int consumers, TimeSpan? timeout = null,
+        Func<string, string, CancellationToken, Task<CodeGraphNeighborsOutcome>>? dependencies = null,
         string depLocation = "line 1")
     {
         var dir = Path.Combine(Path.GetTempPath(), "cgtail_" + Guid.NewGuid().ToString("N")[..10]);
@@ -507,7 +510,10 @@ public class ConsumersTailContributorTests
     {
         // четыре файла в тексте — берутся три; на каждом 30 зависимостей, 30 потребителей и сторожа frontend/
         var files = new[] { "frontend/src/a.ts", "frontend/src/b.ts", "frontend/src/c.ts", "frontend/src/d.ts" };
-        var (sut, dir, data) = await PrepareMany(files, deps: 30, consumers: 30);
+        // 30 с — потолок под нагрузкой прогона: в загруженном rest-прогоне этот граф не укладывался в
+        // DefaultTimeout 3 с, BuildAsync молчал null и разбор секции падал с NRE (дефект 6af27416).
+        // Сам потолок — только потолок: ожидание остаётся событийным, ретраев здесь нет.
+        var (sut, dir, data) = await PrepareMany(files, deps: 30, consumers: 30, timeout: TimeSpan.FromSeconds(30));
         try
         {
             var text = (await sut.BuildAsync(Ctx(dir), string.Join(" ", files.Select(f => $"Правь {f}"))))!

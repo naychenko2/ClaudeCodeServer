@@ -39,6 +39,10 @@ public sealed partial class PersonasToolset(
     PersonaAutomationService automation,
     PersonasCrudService crud,
     KnowledgeService knowledge,
+    // Датасет проекта чата для узкой рамки knowledge_search — тот же стор, которым DifyToolset
+    // резолвит дефолтную базу: расхождение формул дало бы обход — одна база открыта одним
+    // тулсетом и закрыта соседним (находка R-S2a-3b)
+    ClaudeHomeServer.Services.Knowledge.WorkspaceKnowledgeStore workspaceKnowledge,
     ClaudeHomeServer.Services.Mcp.McpRegistry mcpRegistry,
     ClaudeHomeServer.Services.Mcp.McpStatusStore mcpStatus,
     SessionManager sessions,
@@ -99,12 +103,14 @@ public sealed partial class PersonasToolset(
         var mentions = sessions.MentionsToolsEnabled(ownerId, session, persona);
         var automationOn = bindings.SectionEnabled(ownerId, persona, "personas-automation");
 
-        // Узкая рамка хода (общий проект, S2a-3b, решение 29.10): персоны — личное пространство
-        // владельца: глобальные персоны (носят его личную память), управление персонами
-        // (создание/правка/удаление, автоматизация, реестр и доступы MCP, дефолт, аватар, сборка
-        // команды) закрыты в его общем чате всем, включая самого владельца. Проектная команда
-        // этого чата остаётся: personas_list по проекту, persona_ask к проектным персонам,
-        // чтение и правка привязок проектной персоны. Вердикт только читается.
+        // Узкая рамка хода (общий проект, S2a-3b, решение 29.10; дополнения по ревью R-S2a-3b
+        // от 30.10): персоны — личное пространство владельца: глобальные персоны (носят его
+        // личную память), управление персонами (создание/правка/удаление, автоматизация, реестр
+        // и доступы MCP, дефолт, аватар, сборка команды) закрыты в его общем чате всем, включая
+        // самого владельца. Так же закрыты: сферные персоны и их память, AI-подбор привязок
+        // (каталог подбора — всё пространство владельца) и поиск по базам вне проекта чата.
+        // Проектная команда этого чата остаётся: personas_list по проекту, persona_ask к
+        // проектным персонам, чтение и правка привязок проектной персоны. Вердикт только читается.
         var frame = frames.Frame(context.CallerSessionId, context.OwnerId);
         var narrow = frame == TurnFrameKind.Narrow;
         if (narrow && (tool is "personas_create" or "personas_update" or "personas_delete"
@@ -234,6 +240,12 @@ public sealed partial class PersonasToolset(
                 var id = StringArg(arguments, "id");
                 if (personas.Get(id, ownerId) is not { } target) return Deny($"Персона {id} не найдена.");
                 if (narrow && target.Scope == PersonaScope.Global) return Deny(NarrowGlobalText);
+                // Узкая рамка (R-S2a-3b): каталог подбора — всё пространство владельца: его проекты,
+                // заметки и базы (PersonasCrudService.AppendBindingCatalog), а не только датасеты;
+                // сузить его до проекта чата — значит пересобрать весь промпт подбора. Инструмент
+                // закрыт целиком (решение постановщика): id личных целей уходил в общий чат
+                // кандидатами подсказки
+                if (narrow) return Deny(NarrowSuggestText);
                 try { return Json(new { candidates = await crud.SuggestBindingsAsync(ownerId, target, ct: ct) }); }
                 catch (Exception ex) { return Deny($"Не удалось подобрать привязки: {ex.Message}"); }
             }
@@ -308,9 +320,28 @@ public sealed partial class PersonasToolset(
                 var query = StringArg(arguments, "query");
                 if (datasetId.Length == 0 || query.Length == 0) return Deny("Нужны datasetId и query");
                 if (!knowledge.IsConfigured) return Deny("База знаний (Dify) не настроена");
-                // Только датасеты, доступные владельцу (чужие скрыты)
-                if ((await bindings.KnowledgeTargetsAsync(ownerId)).All(d => d.Id != datasetId))
+                if (narrow)
+                {
+                    // Узкая рамка (R-S2a-3b): только база проекта чата — та же формула дефолтного
+                    // датасета и те же тексты отказа, что у DifyToolset (там датасеты вне проекта
+                    // закрыты этим же решением). Прежняя проверка шла по полному каталогу
+                    // владельца: id личной базы или «Заметок», попавший в общий чат через
+                    // подсказку привязок, возвращал их содержимое
+                    var projectDataset = ChatProjectDatasetId(session, ownerId);
+                    if (string.IsNullOrEmpty(projectDataset))
+                        return Deny("В общем проекте доступна только база знаний этого проекта — "
+                            + "у этого проекта её нет.");
+                    if (datasetId != projectDataset)
+                        return Deny("В этом чате доступна только база знаний этого проекта.");
+                }
+                else if ((await bindings.KnowledgeTargetsAsync(ownerId)).All(d => d.Id != datasetId))
+                {
+                    // Wide: только датасеты, доступные владельцу (чужие скрыты). Привязки персоны
+                    // здесь не проверяются — проверяется принадлежность каталогу владельца
+                    // (прежняя формулировка в таблице шага не соответствовала коду, исправлено
+                    // по R-S2a-3b)
                     return Deny("База знаний не найдена или недоступна");
+                }
 
                 IReadOnlyList<KnowledgeMetadataFieldInfo> fields;
                 try { fields = await knowledge.ListMetadataFieldsAsync(datasetId); }
@@ -449,8 +480,11 @@ public sealed partial class PersonasToolset(
                     return Deny("Это твой собственный id/handle — отвечай сам, спрашивать себя не нужно.");
                 // Глобальная персона отвечает со своей долгой памятью и своими привязками —
                 // это личная память владельца; в общем проекте она закрыта (тот же класс,
-                // что и personas_list global)
+                // что и personas_list global). Сферная — закрыта так же (R-S2a-3b, решение
+                // 30.10): сфера — личная группировка владельца, непоследовательно резать
+                // полку её памяти и оставлять ответ, приносящий личную память её персоны
                 if (narrow && target.Scope == PersonaScope.Global) return Deny(NarrowGlobalText);
+                if (narrow && target.Scope == PersonaScope.Sphere) return Deny(NarrowSpherePersonaText);
 
                 try
                 {
@@ -525,6 +559,16 @@ public sealed partial class PersonasToolset(
         session.OnboardingKind == OnboardingKinds.Project
         || bindings.SectionEnabled(ownerId, persona, "personas-manage");
 
+    // Дефолтный датасет проекта чата — ровно формула DifyToolset.TryResolve (EffectiveRoot
+    // + WorkspaceKnowledgeStore): в узкой рамке knowledge_search и dify должны видеть одну и
+    // ту же базу, иначе один тулсет обходит отказ соседнего (находка R-S2a-3b).
+    // null — у проекта чата базы нет (или чат вне проекта)
+    private string? ChatProjectDatasetId(Session session, string ownerId) =>
+        session.ProjectId is { } pid && projects.GetById(pid) is { OwnerId: var owner } project
+        && owner == ownerId && ProjectCapabilities.ServerContentEnabled(project)
+            ? workspaceKnowledge.GetByPath(SessionManager.EffectiveRoot(session, project.RootPath))?.DifyDatasetId
+            : null;
+
     // --- Ответы ---
 
     // Тексты отказа узкой рамки — фиксированные, без id и названий из личных данных
@@ -538,6 +582,16 @@ public sealed partial class PersonasToolset(
     private const string NarrowGlobalText =
         "Глобальные персоны владельца недоступны в общем проекте: они несут его личную "
         + "память и его личные привязки. Доступны персоны этого проекта.";
+
+    private const string NarrowSuggestText =
+        "AI-подбор привязок закрыт в общем проекте: каталог подбора — проекты, заметки и "
+        + "базы владельца, его личное пространство. Привязки проектной персоны этого чата "
+        + "можно задать явно (personas_bindings_set).";
+
+    private const string NarrowSpherePersonaText =
+        "Персоны сферы владельца закрыты в общем проекте: сфера — его личная группировка, "
+        + "её полка памяти и память её персон — его личное пространство. Доступны персоны "
+        + "этого проекта.";
 
     private static McpToolCallResult Text(string text) => new(text);
 

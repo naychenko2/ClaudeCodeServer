@@ -14,11 +14,13 @@ using Microsoft.Extensions.Options;
 namespace ClaudeHomeServer.Tests.Controllers;
 
 /// <summary>
-/// Узкая рамка хода в платформенном MCP (S2a-3b, решение 29.10): в чате ОБЩЕГО проекта личное
-/// пространство владельца закрыто всем, включая самого владельца. Здесь — память (личная память
-/// глобальной персоны, полка сферы), персоны (глобальные персоны и управление персонами),
-/// уведомления (личный ящик), Higgsfield (аккаунт: деньги и история генераций), плагины
-/// (черновики владельца), Dify (датасеты вне проекта чата). Контекст проекта остаётся:
+/// Узкая рамка хода в платформенном MCP (S2a-3b, решение 29.10; дополнения по ревью R-S2a-3b
+/// от 30.10): в чате ОБЩЕГО проекта личное пространство владельца закрыто всем, включая самого
+/// владельца. Здесь — память (личная память глобальной и сферной персон, полка сферы), персоны
+/// (глобальные и сферные персоны, управление персонами, AI-подбор привязок), knowledge_search
+/// (датасеты вне проекта чата — той же формулой, что Dify), уведомления (личный ящик),
+/// Higgsfield (аккаунт: деньги и история генераций), плагины (черновики владельца),
+/// Dify (датасеты вне проекта чата). Контекст проекта остаётся:
 /// командная память, проектная команда чата, уведомление о работе проекта, база этого проекта.
 /// Вердикт читается из ITurnFrameSource по заголовку X-Caller-Session-Id; «нет заголовка /
 /// чат не найден» — узкая рамка (fail-closed). В отказе нет id и названий из личных данных
@@ -129,6 +131,33 @@ public class McpNarrowFramePersonalSpaceTests : IDisposable
             .And.NotContain(PersonalProject).And.NotContain(PersonalChat);
     }
 
+    /// <summary>
+    /// Сфера с проектами владельца: общий проект сферы (участник-редактор) с чатом, личный
+    /// проект сферы с чатом и персона этой сферы (scope=sphere через REST — через MCP сферная
+    /// зона не создаётся). Фикстура решения «сфера — личное пространство владельца» (R-S2a-3b,
+    /// п.4): её полка была закрыта и раньше, теперь — память и persona_ask её персон.
+    /// </summary>
+    private async Task<(string SharedInSphere, string SharedSphereChat, string PersonalInSphere,
+        string PersonalSphereChat, string SpherePersona)> ArrangeSphereAsync(Fixture f)
+    {
+        (await _client.PutAsJsonAsync($"/api/feature-flags/{FeatureFlagKeys.Spheres}", new { enabled = true }))
+            .EnsureSuccessStatusCode();
+        var sphereResp = await _client.PostAsJsonAsync("/api/project-groups", new { name = $"сфера-{f.Tag}" });
+        sphereResp.EnsureSuccessStatusCode();
+        var sphere = IdOf(JsonSerializer.Deserialize<JsonElement>(await sphereResp.Content.ReadAsStringAsync()));
+        var sharedInSphere = await CreateProjectAsync($"Общий-сфера-{f.Tag}", sphere);
+        _factory.Services.GetRequiredService<ProjectManager>().SetMembers(sharedInSphere,
+            [new ProjectMember { UserId = "участник-" + f.Tag, Role = ProjectRole.Editor }]);
+        var sharedSphereChat = await CreateSessionAsync(sharedInSphere);
+        var personalInSphere = await CreateProjectAsync($"Личный-сфера-{f.Tag}", sphere);
+        var personalSphereChat = await CreateSessionAsync(personalInSphere);
+        var personaResp = await _client.PostAsJsonAsync("/api/personas",
+            new { name = $"СФЕРА-персона-{f.Tag}", role = "Роль", scope = "sphere", sphereId = sphere });
+        personaResp.EnsureSuccessStatusCode();
+        var spherePersona = IdOf(JsonSerializer.Deserialize<JsonElement>(await personaResp.Content.ReadAsStringAsync()));
+        return (sharedInSphere, sharedSphereChat, personalInSphere, personalSphereChat, spherePersona);
+    }
+
     // --- memory ---
 
     [Theory]
@@ -194,6 +223,39 @@ public class McpNarrowFramePersonalSpaceTests : IDisposable
         var (text, isError) = await CallAsync($"/mcp/memory/{f.ProjectPersona}/{f.SharedProject}",
             "memory_remember", new { type = "semantic", text = "рабочий факт проекта" }, f.SharedChat);
         isError.Should().BeFalse(text);
+    }
+
+    [Theory]
+    [InlineData("memory_list")]
+    [InlineData("memory_search")]
+    [InlineData("memory_remember")]
+    public async Task Memory_УзкаяРамка_ПамятьСфернойПерсоны_Отказ(string tool)
+    {
+        // Сферная персона — личная группировка владельца (решение 30.10, R-S2a-3b п.4): полка
+        // памяти сферы была закрыта, её персона — нет; теперь закрыты обе
+        var f = await ArrangeAsync();
+        var s = await ArrangeSphereAsync(f);
+        var (text, isError) = await CallAsync($"/mcp/memory/{s.SpherePersona}/{s.SharedInSphere}", tool,
+            new { query = f.Tag, type = "semantic", text = "x" }, s.SharedSphereChat);
+        isError.Should().BeTrue($"{tool}: {text}");
+        text.Should().Contain("Личная память сферной персоны закрыта");
+        f.AssertNoPersonal(text);
+    }
+
+    [Fact]
+    public async Task Memory_ПамятьСфернойПерсоны_ВЛичномЧатеРаботает()
+    {
+        // Анти-тест: та же персона и та же сфера в личном чате (широкая рамка) работают —
+        // отказывала рамка, а не зона персоны и не флаг сфер
+        var f = await ArrangeAsync();
+        var s = await ArrangeSphereAsync(f);
+        var (seed, seedErr) = await CallAsync($"/mcp/memory/{s.SpherePersona}/{s.PersonalInSphere}",
+            "memory_remember", new { type = "semantic", text = $"СФЕРА-факт-{f.Tag}" }, s.PersonalSphereChat);
+        seedErr.Should().BeFalse(seed);
+        var (list, listErr) = await CallAsync($"/mcp/memory/{s.SpherePersona}/{s.PersonalInSphere}",
+            "memory_list", new { }, s.PersonalSphereChat);
+        listErr.Should().BeFalse(list);
+        list.Should().Contain($"СФЕРА-факт-{f.Tag}");
     }
 
     [Theory]
@@ -312,6 +374,90 @@ public class McpNarrowFramePersonalSpaceTests : IDisposable
         var (mcp, mcpErr) = await CallAsync($"/mcp/personas/{f.PersonalChat}", "personas_mcp_list",
             new { }, f.PersonalChat);
         mcpErr.Should().BeFalse(mcp);
+    }
+
+    [Fact]
+    public async Task Personas_УзкаяРамка_ВопросСфернойПерсоне_Отказ()
+    {
+        // Ответ сферной персоны приносит её личную память — тот же класс, что закрытая
+        // полка памяти сферы (решение 30.10, R-S2a-3b п.4)
+        var f = await ArrangeAsync();
+        var s = await ArrangeSphereAsync(f);
+        var (text, isError) = await CallAsync($"/mcp/personas/{s.SharedSphereChat}", "persona_ask",
+            new { personaId = s.SpherePersona, question = "что ты помнишь?" }, s.SharedSphereChat);
+        isError.Should().BeTrue(text);
+        text.Should().Contain("Персоны сферы");
+        f.AssertNoPersonal(text);
+    }
+
+    [Fact]
+    public async Task PersonasSuggestBindings_УзкаяРамка_Отказ_ВЛичномЧатеРаботает()
+    {
+        // Каталог подбора — всё пространство владельца (проекты, заметки, базы), а не только
+        // датасеты: сузить его до проекта чата означало бы пересобрать промпт подбора;
+        // инструмент закрыт целиком (R-S2a-3b п.2)
+        var f = await ArrangeAsync();
+        var (denied, deniedErr) = await CallAsync($"/mcp/personas/{f.SharedChat}", "personas_suggest_bindings",
+            new { id = f.ProjectPersona }, f.SharedChat);
+        deniedErr.Should().BeTrue(denied);
+        denied.Should().Contain("подбор привязок закрыт");
+        f.AssertNoPersonal(denied);
+
+        // Анти-тест: та же подсказка в личном чате (широкая рамка) проходит — TestKit-стаб
+        // дешёвого LLM отвечает «[]»: кандидатов нет, но и отказа по рамке нет
+        var (ok, okErr) = await CallAsync($"/mcp/personas/{f.PersonalChat}", "personas_suggest_bindings",
+            new { id = f.GlobalPersona }, f.PersonalChat);
+        okErr.Should().BeFalse(ok);
+        ok.Should().NotContain("подбор привязок закрыт");
+    }
+
+    [Fact]
+    public async Task PersonasKnowledgeSearch_УзкаяРамка_БазаПроектаОткрыта_ЛичнаяОбщаяИЧужаяРезаны()
+    {
+        // Ровно то, что шаг закрыл в DifyToolset: в общем чате доступна только база этого
+        // проекта; прежняя проверка по полному каталогу владельца пропускала в общий чат
+        // содержимое личной базы, чей id модель знала из подсказки привязок (R-S2a-3b п.1)
+        var f = await ArrangeAsync();
+        GiveProjectDataset(f.SharedProject, "ds-project-1");
+
+        var (own, ownErr) = await CallAsync($"/mcp/personas/{f.SharedChat}", "knowledge_search",
+            new { datasetId = "ds-project-1", query = f.Tag }, f.SharedChat);
+        ownErr.Should().BeFalse(own);
+
+        foreach (var (id, label) in new[]
+        {
+            ("ds-personal-1", "личная база"), ("ds-common-1", "общая ничья база"), ("ds-foreign-1", "чужая база"),
+        })
+        {
+            var (text, isError) = await CallAsync($"/mcp/personas/{f.SharedChat}", "knowledge_search",
+                new { datasetId = id, query = f.Tag }, f.SharedChat);
+            isError.Should().BeTrue($"{label} {id}: {text}");
+            text.Should().Contain("только база знаний этого проекта");
+            f.AssertNoPersonal(text);
+        }
+    }
+
+    [Fact]
+    public async Task PersonasKnowledgeSearch_УзкаяРамка_БезБазыУПроекта_Отказ()
+    {
+        var f = await ArrangeAsync();
+        var (text, isError) = await CallAsync($"/mcp/personas/{f.SharedChat}", "knowledge_search",
+            new { datasetId = "ds-personal-1", query = f.Tag }, f.SharedChat);
+        isError.Should().BeTrue(text);
+        text.Should().Contain("у этого проекта её нет");
+        f.AssertNoPersonal(text);
+    }
+
+    [Fact]
+    public async Task PersonasKnowledgeSearch_ЛичныйПроект_ШирокаяРамка_КаталогВладельцаОткрыт()
+    {
+        // Анти-тест: те же id в личном чате (широкая рамка) доступны — отказывала рамка,
+        // а не проверка каталога (Wide-путь не тронут)
+        var f = await ArrangeAsync();
+        var (text, isError) = await CallAsync($"/mcp/personas/{f.PersonalChat}", "knowledge_search",
+            new { datasetId = "ds-personal-1", query = f.Tag }, f.PersonalChat);
+        isError.Should().BeFalse(text);
+        text.Should().NotContain("не найдена или недоступна");
     }
 
     // --- notifications ---
@@ -471,10 +617,12 @@ public class McpNarrowFramePersonalSpaceTests : IDisposable
     }
 
     /// <summary>
-    /// Стаб «Dify» для этого класса: два датасета тестового пользователя — личный
-    /// (ds-personal-1, маркер PERSONAL) и тот, что будет привязан к общему проекту
-    /// (ds-project-1). Остальное — пустые страницы. Свой, не общий TestKit-стаб: список
-    /// датасетов здесь — часть проверки фильтрации.
+    /// Стаб «Dify» для этого класса: датасеты тестового пользователя — личный (ds-personal-1,
+    /// маркер PERSONAL) и тот, что будет привязан к общему проекту (ds-project-1); плюс общая
+    /// ничья база (ds-common-1, без префикса — видна каталогу и обязана быть резана
+    /// узкой рамкой) и чужая (ds-foreign-1, префикс otheruser — скрыта каталогом). Остальное —
+    /// пустые страницы. Свой, не общий TestKit-стаб: список датасетов здесь — часть проверки
+    /// фильтрации.
     /// </summary>
     private sealed class FrameDifyHandler : HttpMessageHandler
     {
@@ -486,9 +634,13 @@ public class McpNarrowFramePersonalSpaceTests : IDisposable
                 ("/datasets", "POST") => "{\"id\":\"ds-created-1\"}",
                 ("/datasets", _) => "{\"data\":["
                     + "{\"id\":\"ds-personal-1\",\"name\":\"testuser:kb:PERSONAL-база\",\"permission\":\"only_me\",\"document_count\":0,\"word_count\":0,\"created_at\":0},"
-                    + "{\"id\":\"ds-project-1\",\"name\":\"testuser:kb:Проект-база\",\"permission\":\"only_me\",\"document_count\":0,\"word_count\":0,\"created_at\":0}"
+                    + "{\"id\":\"ds-project-1\",\"name\":\"testuser:kb:Проект-база\",\"permission\":\"only_me\",\"document_count\":0,\"word_count\":0,\"created_at\":0},"
+                    + "{\"id\":\"ds-common-1\",\"name\":\"ОБЩАЯ-база\",\"permission\":\"all_team_members\",\"document_count\":0,\"word_count\":0,\"created_at\":0},"
+                    + "{\"id\":\"ds-foreign-1\",\"name\":\"otheruser:kb:чужая-база\",\"permission\":\"only_me\",\"document_count\":0,\"word_count\":0,\"created_at\":0}"
                     + "],\"has_more\":false}",
                 var (p, _) when p.EndsWith("/segments") => "{\"data\":[]}",
+                // Dify retrieve: KnowledgeService читает records[] — пустой, но валидный ответ
+                var (p, _) when p.EndsWith("/retrieve") => "{\"query\":\"q\",\"records\":[],\"document_search_count\":0}",
                 var (p, _) when p.StartsWith("/datasets/") && p.Contains("/documents") =>
                     "{\"data\":[],\"has_more\":false,\"total\":0}",
                 _ => "{\"data\":[],\"has_more\":false}",

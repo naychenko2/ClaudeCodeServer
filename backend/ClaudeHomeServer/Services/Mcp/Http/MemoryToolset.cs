@@ -101,11 +101,15 @@ public sealed class MemoryToolset(
         // пишется, состав tools/list от рамки не зависит (McpToolsetStabilityTests).
         var frame = frames.Frame(context.CallerSessionId, context.OwnerId);
         var narrow = frame == TurnFrameKind.Narrow;
-        // Личная память закрыта только когда персона глобальная: память проектной и сферы-персоны —
-        // контекст их команды, не личное пространство владельца
-        if (narrow && tool.StartsWith("memory_", StringComparison.Ordinal)
-            && persona?.Scope == PersonaScope.Global)
-            return Deny(NarrowPersonalMemoryText);
+        // Личная память закрыта у глобальной и сферной персоны (сферная — по решению 30.10,
+        // R-S2a-3b): сфера — личная группировка владельца (§2.5 разреза), и резать полку её
+        // памяти, оставляя личную память её персоны, — непоследовательно. Память проектной
+        // персоны — контекст её команды, остаётся
+        if (narrow && tool.StartsWith("memory_", StringComparison.Ordinal))
+        {
+            if (persona?.Scope == PersonaScope.Global) return Deny(NarrowPersonalMemoryText);
+            if (persona?.Scope == PersonaScope.Sphere) return Deny(NarrowSpherePersonaMemoryText);
+        }
 
         switch (tool)
         {
@@ -549,6 +553,11 @@ public sealed class MemoryToolset(
     private const string NarrowSphereMemoryText =
         "Память сферы закрыта в общем проекте: сфера — личное пространство владельца. "
         + "Память команды этого проекта доступна как обычно (team_memory_*).";
+
+    private const string NarrowSpherePersonaMemoryText =
+        "Личная память сферной персоны закрыта в общем проекте: сфера — личная группировка "
+        + "владельца, её полка и память её персон — его личное пространство. Память команды "
+        + "этого проекта доступна как обычно (team_memory_*).";
 
     private static McpToolCallResult Text(string text) => new(text);
 

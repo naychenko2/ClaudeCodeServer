@@ -8,6 +8,7 @@
 
 import { C, FS, FONT } from '../../lib/design';
 import { formatDuration } from './FeatureStatsBits';
+import { BRIEF_WAIT_WORD } from './FeatureBriefModel';
 import { formatTokens, formatUsd } from './FeatureStatsFormat';
 import type { FeatureStats } from '../../types/featureStats';
 
@@ -25,7 +26,7 @@ export function SummaryRow({ stats, lead }: { stats: FeatureStats; lead?: { labe
 
   // «Ждёт вас» / «не работали» — только из данных бэка (фронт не пересчитывает):
   //   journal + waitingMinutes != null → «ждала вас N» (N = totals.waitingMinutes);
-  //   current.kind === 'waiting' → «ждёт вас» (длительность текущего ожидания — не поле
+  //   current.kind === 'waiting' → «нужен ответ» (длительность текущего ожидания — не поле
   //     бэка: `current` несёт только `since`, без минут — число не вычисляем, минор);
   //   иначе → «не работали ≈ N» (N = totals.notWorkingMinutes).
   let waitPart: string | null = null;
@@ -33,7 +34,7 @@ export function SummaryRow({ stats, lead }: { stats: FeatureStats; lead?: { labe
     const d = shown(t.waitingMinutes);
     if (d) waitPart = `ждала вас ${d}`;
   } else if (stats.timeline.current?.kind === 'waiting') {
-    waitPart = 'ждёт вас';
+    waitPart = BRIEF_WAIT_WORD;
   } else {
     const d = shown(t.notWorkingMinutes);
     if (d) waitPart = `не работали ${isApprox ? '≈ ' : ''}${d}`;

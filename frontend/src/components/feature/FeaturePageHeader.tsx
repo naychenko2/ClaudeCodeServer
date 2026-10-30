@@ -32,7 +32,7 @@ import { useNow } from '../../lib/useNow';
 // его оттуда — модель больше не тянет модуль шапки, цикл FeaturePageHeader ⇄
 // FeatureAnalysisModel разомкнут. Рё-экспорт — совместимость для существующих
 // потребителей (страница, view исполнения, тесты): их импорты не меняются.
-export { featureRunStatusTag, toRunTag, StatusTag, type FeatureRunTag, type FeatureRunTagTone } from './FeatureStatusTag';
+export { featureRunStatusTag, featurePageStatusTag, toRunTag, StatusTag, type FeatureRunTag, type FeatureRunTagTone } from './FeatureStatusTag';
 
 // === Главное действие (макет §1/§2/§11) ===
 //
@@ -1210,7 +1210,8 @@ export function FeaturePageAlert({ run, feature, isMobile, onMerge, marks: marks
   // строки анализа (своей копии условий нет), тон — alarmView (F2).
   const nowMs = Date.now();
   const lineSt = run ? analysisLineState(run, nowMs) : null;
-  const silent = lineSt && (lineSt.key === 'stuck' || lineSt.key === 'nudged' || lineSt.key === 'quiet') ? lineSt : null;
+  // Приоритет: attention говорит словами alarmView; сторож — только если attention нет.
+  const silent = !a && lineSt && (lineSt.key === 'stuck' || lineSt.key === 'nudged' || lineSt.key === 'quiet') ? lineSt : null;
   if (!a && !notStarted && !silent) return null;
 
   // Тон блока — от alarmView: «стоит» — stop (danger), «ждёт вас»/«ждёт согласия»/

@@ -102,6 +102,17 @@ describe('FeaturePageAlert: «молчит/стоит/тихо» сторожа 
     expect(text(h3)).toContain('тихо 24 ч');
   });
 
+  it('attention важнее сторожа: wait + quiet → «Ждёт вас», не «тихо»', () => {
+    const run = mkRun({
+      state: 'waiting', quiet: true, lastActivityAt: new Date(Date.now() - 24 * HOUR).toISOString(),
+      attention: att('wait', { reason: 'уточни отступы' }),
+    });
+    const t = text(html(run));
+    expect(t).toContain('Ждёт вас');
+    expect(t).not.toContain('тихо');
+    expect(tone(html(run))).toBe('warn');
+  });
+
   it('тревоги нет: идёт задача / смержена', () => {
     const now = Date.now();
     const moving = mkRun({ now: [{ taskId: 't-1', stage: 'prod', title: 'Шаг', startedAt: new Date(now - 30 * 60000).toISOString() }] } as Partial<FeatureRun>);

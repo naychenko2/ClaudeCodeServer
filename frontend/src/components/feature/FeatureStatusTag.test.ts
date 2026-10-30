@@ -3,7 +3,7 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, it, expect } from 'vitest';
-import { StatusTag, featureRunStatusTag } from './FeatureStatusTag';
+import { StatusTag, featureRunStatusTag, featurePageStatusTag } from './FeatureStatusTag';
 import { featureDisplayState } from '../../lib/chatGroups';
 import { FONT } from '../../lib/design';
 import type { FeatureIndexFeature } from '../../types/featureIndex';
@@ -88,5 +88,15 @@ describe('закрытие фичи', () => {
     expect(tag.dot).toBeUndefined();
     // И в рендере — та же строка, целиком.
     expect(html(tag).replace(/<[^>]+>/g, '')).toBe('закрыта без мержа');
+  });
+});
+
+describe('featurePageStatusTag: тег страницы без «ждёт вас» (Ш4)', () => {
+  it('waiting — стадия или «в работе», тон wait; остальные состояния как у featureRunStatusTag; общий тег прежний', () => {
+    expect(featurePageStatusTag('waiting', 'ревью').label).toBe('в работе · ревью');
+    expect(featurePageStatusTag('waiting').label).toBe('в работе');
+    expect(featurePageStatusTag('waiting').tone).toBe('wait');
+    expect(featurePageStatusTag('stopped')).toEqual(featureRunStatusTag('stopped'));
+    expect(featureRunStatusTag('waiting').label).toBe('ждёт вас');
   });
 });

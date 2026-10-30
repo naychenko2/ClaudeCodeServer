@@ -39,6 +39,14 @@ export interface FeatureHoldInfo {
   queue?: FeatureQueue | null;
 }
 
+// Тег шапки страницы фичи: слово «ждёт вас» говорит одна тревога страницы (Ш4), поэтому при
+// waiting тег называет стадию (или нейтральное «в работе»). Остальные потребители тега
+// (индекс, рельса, сводка, герой статистики) зовут featureRunStatusTag как раньше.
+export function featurePageStatusTag(state: FeatureState, stageName?: string | null, hold?: FeatureHoldInfo): FeatureRunTag {
+  const tag = featureRunStatusTag(state, stageName, hold);
+  return state === 'waiting' ? { ...tag, label: stageName ? `в работе · ${stageName}` : 'в работе' } : tag;
+}
+
 export function featureRunStatusTag(state: FeatureState, stageName?: string | null, hold?: FeatureHoldInfo): FeatureRunTag {
   switch (state) {
     case 'not_started':

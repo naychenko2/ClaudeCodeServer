@@ -34,7 +34,7 @@ import { type PersonaNameResolver } from './FeatureBriefModel';
 import { ensurePersonasLoaded, getPersonaById, usePersonasVersion } from '../../lib/personas';
 import {
   FeaturePageHeader, FeaturePageToolbar, FeaturePageAlert,
-  featureRunStatusTag, toRunTag, type FeatureRunTag,
+  featurePageStatusTag, toRunTag, type FeatureRunTag,
 } from './FeaturePageHeader';
 import { FeaturePageTabs } from './FeaturePageTabs';
 import type { FeatureRun } from '../../types/featureRun';
@@ -153,7 +153,7 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
   const glyph: GlyphKind = display ? display.kind : 'run';
   let tag: FeatureRunTag | null = null;
   if (page.status === 'ok' && page.page.run.state) {
-    tag = featureRunStatusTag(page.page.run.state, activeStageName(page.page.brief), {
+    tag = featurePageStatusTag(page.page.run.state, activeStageName(page.page.brief), {
       holdReason: page.page.run.hold?.reason, queue: page.page.run.queue,
     });
   } else if (feature) {

@@ -380,15 +380,17 @@ export function briefActiveTagLabel(brief: FeatureBrief): string | null {
   const list = brief.active ?? [];
   if (list.length < 2) return null;
   if (brief.kind === 'running') return `идёт · ${list.length} в работе`;
-  if (brief.kind === 'waiting_you') return `нужен ответ · ${list.filter(a => a.state === 'waiting_you').length} из ${list.length}`;
+  if (brief.kind === 'waiting_you') return `${BRIEF_WAIT_WORD} · ${list.filter(a => a.state === 'waiting_you').length} из ${list.length}`;
   return null;
 }
 
 // Тег карточки при ожидании человека (Ш4): без «ждёт вас» — это слово говорит одна тревога
 // страницы. Мерж-вопрос тега не получает (null) — там тег «к мержу», как у статуса фичи.
+export const BRIEF_WAIT_WORD = 'нужен ответ';
+
 export function briefWaitTagLabel(brief: FeatureBrief): string | null {
   if (brief.reason === 'мерж' || brief.next[0]?.stage === 'merge') return null;
-  return 'нужен ответ';
+  return BRIEF_WAIT_WORD;
 }
 
 // ── «Готовность» ────────────────────────────────────────────────────────────────────

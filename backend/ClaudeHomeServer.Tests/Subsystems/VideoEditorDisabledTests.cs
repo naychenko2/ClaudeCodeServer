@@ -15,27 +15,37 @@ namespace ClaudeHomeServer.Tests.Subsystems;
 //
 // Ручки: см. VideoEditorRoutes.
 [Trait("Category", "Host")]
-public class VideoEditorDisabledTests : IDisposable
+public class VideoEditorDisabledTests : IClassFixture<VideoEditorDisabledTests.Hosts>
 {
     // Индекс записи videoeditor в DynamicModules appsettings.Testing.json
     private const int ModuleIndex = 6;
 
-    private readonly GateDisabledFactory _gateDisabled = new();
-    private readonly ModuleDisabledFactory _moduleDisabled = new();
+    private readonly Hosts _hosts;
 
-    // Контрольный хост: без оверрайда модуль грузится — значит пустота ниже от рубильника,
-    // а не от опечатки в ключе или пути к dll
-    private readonly TestWebApplicationFactory _enabled = new();
+    public VideoEditorDisabledTests(Hosts hosts) => _hosts = hosts;
 
-    public void Dispose()
+    // Три хоста на КЛАСС, а не на тест: каждый поднимается лениво при первом обращении
+    // и гасится вместе с фикстурой. Тесты состояния хоста не меняют — только читают
+    public sealed class Hosts : IDisposable
     {
-        _gateDisabled.Dispose();
-        _moduleDisabled.Dispose();
-        _enabled.Dispose();
-        GC.SuppressFinalize(this);
+        public GateDisabledFactory GateDisabled { get; } = new();
+        public ModuleDisabledFactory ModuleDisabled { get; } = new();
+
+        // Контрольный хост: без оверрайда модуль грузится — значит пустота ниже от рубильника,
+        // а не от опечатки в ключе или пути к dll
+        public EnabledFactory Enabled { get; } = new();
+
+        public void Dispose()
+        {
+            GateDisabled.Dispose();
+            ModuleDisabled.Dispose();
+            Enabled.Dispose();
+        }
     }
 
-    private sealed class GateDisabledFactory : TestWebApplicationFactory
+    public sealed class EnabledFactory : TestWebApplicationFactory;
+
+    public sealed class GateDisabledFactory : TestWebApplicationFactory
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
@@ -44,7 +54,7 @@ public class VideoEditorDisabledTests : IDisposable
         }
     }
 
-    private sealed class ModuleDisabledFactory : TestWebApplicationFactory
+    public sealed class ModuleDisabledFactory : TestWebApplicationFactory
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
@@ -56,8 +66,8 @@ public class VideoEditorDisabledTests : IDisposable
 
     private TestWebApplicationFactory Host(string which) => which switch
     {
-        "gate" => _gateDisabled,
-        "module" => _moduleDisabled,
+        "gate" => _hosts.GateDisabled,
+        "module" => _hosts.ModuleDisabled,
         _ => throw new ArgumentOutOfRangeException(nameof(which)),
     };
 
@@ -72,7 +82,7 @@ public class VideoEditorDisabledTests : IDisposable
     [Fact]
     public async Task Контроль_включённый_модуль_активен()
     {
-        (await IsActive(_enabled)).Should().BeTrue("dll лежит в modules/video-editor и грузится ModuleLoader'ом");
+        (await IsActive(_hosts.Enabled)).Should().BeTrue("dll лежит в modules/video-editor и грузится ModuleLoader'ом");
     }
 
     [Theory]

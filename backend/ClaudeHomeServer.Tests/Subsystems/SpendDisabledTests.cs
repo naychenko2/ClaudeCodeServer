@@ -23,19 +23,32 @@ namespace ClaudeHomeServer.Tests.Subsystems;
 /// к ModuleLoader'у, который читает `DynamicModules:2:Enabled` из конфига.
 /// </summary>
 [Trait("Category", "Host")]
-public class SpendDisabledTests : IDisposable
+public class SpendDisabledTests : IClassFixture<SpendDisabledTests.Hosts>
 {
-    private readonly DisabledSpendFactory _disabled = new();
-    private readonly TestWebApplicationFactory _enabled = new();
+    private readonly Hosts _hosts;
 
-    public void Dispose()
+    public SpendDisabledTests(Hosts hosts) => _hosts = hosts;
+
+    private DisabledSpendFactory _disabled => _hosts.Disabled;
+    private TestWebApplicationFactory _enabled => _hosts.Enabled;
+
+    // Два хоста на КЛАСС, а не на тест: поднимаются лениво и гасятся вместе с фикстурой.
+    // Тесты состояния хоста не меняют — только читают
+    public sealed class Hosts : IDisposable
     {
-        _disabled.Dispose();
-        _enabled.Dispose();
-        GC.SuppressFinalize(this);
+        public DisabledSpendFactory Disabled { get; } = new();
+        public EnabledFactory Enabled { get; } = new();
+
+        public void Dispose()
+        {
+            Disabled.Dispose();
+            Enabled.Dispose();
+        }
     }
 
-    private sealed class DisabledSpendFactory : TestWebApplicationFactory
+    public sealed class EnabledFactory : TestWebApplicationFactory;
+
+    public sealed class DisabledSpendFactory : TestWebApplicationFactory
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {

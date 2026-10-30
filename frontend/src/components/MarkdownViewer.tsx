@@ -1,5 +1,5 @@
-import { cloneElement, isValidElement, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import type { ReactElement, ReactNode } from 'react';
+import { cloneElement, isValidElement, useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import type { KeyboardEvent as ReactKeyboardEvent, ReactElement, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -55,6 +55,12 @@ interface Props {
   // `<img src="docs/y.png">` в документе проекта не грузятся: путь относителен корню
   // репозитория, а не адресу страницы. Возвращает undefined — оставить src как есть.
   resolveImageSrc?: (src: string) => string | undefined;
+  // Данные вики-сносок (S5e, доработка по ревью 684d71c0): id → {цитата, ref источника}.
+  // Их передаёт вызывающий (вики-страница): компонент сам НЕ выводит сноски из текста —
+  // форма цели в тексте страницы бэком не гарантирована. Без пропа [^id] не трогается
+  // вообще: обычную GFM-сноску целиком рендерит remark-gfm, как до S5e. С пропом
+  // перехватываются только [^id] с записью в карте; остальные — тоже GFM.
+  wikiFootnotes?: Record<string, { quote: string; source: string }>;
 }
 
 const mono = FONT.mono;
@@ -122,27 +128,38 @@ export function codeMask(md: string): boolean[] {
   return mask;
 }
 
-// Единый проход по синтаксису заметок и вики: [[…]]-ссылки/embeds, определения сносок
-// (строго с начала строки) и ссылки сносок [^id]. Определение стоит ПЕРЕД ссылкой в
-// альтернативе: иначе [^s1] в начале строки определения прочитался бы ссылкой, и
-// определение рассыпалось бы на маркер + текст.
-const NOTE_SYNTAX_RX = /(!?)\[\[([^\]|]+)(?:\|([^\]]+))?\]\]|^\[\^([^\]\r\n]+)\]: (.+?) — «(.*)»[ \t\r]*$|\[\^([^\]\r\n]+)\]/gm;
+// Единый проход по синтаксису заметок и вики: [[…]]-ссылки/embeds и — только когда вызывающий
+// передал карту вики-сносок (см. Props.wikiFootnotes) — определения и ссылки сносок [^id].
+// Определение стоит ПЕРЕД ссылкой в альтернативе: иначе [^s1] в начале строки определения
+// прочитался бы ссылкой, и определение рассыпалось бы на маркер + текст. Без карты ветки
+// сносок не срабатывают вовсе: обычная GFM-сноска («[^1]: пояснение» без цитаты) — не синтаксис
+// вики, её целиком и байт-в-байт делает remark-gfm (маркер sup > a и секция Footnotes).
+const NOTE_SYNTAX_RX = /(!?)\[\[([^\]|]+)(?:\|([^\]]+))?\]\]|^\[\^([^\]\r\n]+)\]:[^\r\n]*$|\[\^([^\]\r\n]+)\]/gm;
 
-// Данные сноски: цель и цитата — недоверенный текст страницы, никуда не интерпретируется
-// как HTML (урок ревью S5b); цель опознаётся позже, по белому списку форм (classifyFnTarget).
+// Данные сноски: цель и цитата — из карты вызывающего, недоверенный текст, никуда не
+// интерпретируется как HTML (урок ревью S5b); цель опознаётся позже, по белому списку форм
+// (classifyFnTarget).
 export interface FootnoteDef { id: string; target: string; quote: string }
 
-// Пустая карта для режимов без препроцессинга (docsMode/plain): общего состояния на рендер нет
-const EMPTY_FOOTNOTES = new Map<string, FootnoteDef>();
+// Значение внутренней схемы в URL: битый percent-encoding не должен ронять рендер —
+// в «fnref:%zz» процент литеральный и decode бросает URIError; остаётся сырое значение.
+function decodeScheme(raw: string): string {
+  try { return decodeURIComponent(raw); } catch { return raw; }
+}
 
 // Единый проход по [[Заметка]] / [[Заметка|подпись]] / ![[…]]: embeds и wikilinks
 // переписываются в markdown-ссылки со схемами wikilink:/noteembed:/noteatt:
 // (urlTransform ниже пропускает эти схемы, иначе санитайзер react-markdown их вырежет).
-// Ссылки сносок [^id] переписываются в маркеры со схемой fnref: — их рендерит компонент a.
-// Определения сносок ВЫНОСЯЮТСЯ из потока текста в карту footnotes: блок «Источники»
-// собирает его UI из карточки (ADR-035, решение 3) — remark-gfm до них не доходит.
-// Параллельно строится карта офсетов — blockPos переводит позиции блоков в сырой текст.
-export function preprocessNotes(md: string, depth: number): { text: string; map: MapSegment[]; footnotes: Map<string, FootnoteDef> } {
+// Сноски — ТОЛЬКО для id из переданной карты footnoteIds (данные карточки компонент сам
+// из текста не выводит — решение по ревью S5e): ссылки таких id переписываются в маркеры
+// со схемой fnref:, определения выносятся из потока (блок «Источники» собирается UI из
+// карты вызывающего, ADR-035 решение 3). Остальные [^id] остаются литеральными — их ведёт
+// remark-gfm. Параллельно строится карта офсетов — blockPos переводит позиции блоков в сырой текст.
+export function preprocessNotes(
+  md: string,
+  depth: number,
+  footnoteIds?: Set<string>,
+): { text: string; map: MapSegment[] } {
   // [[…]] внутри кода — не ссылка: переписанная, она стала бы URL-мусором в блоке кода
   // (и мусором в графе: бэкенд такие связи не считает). То же для сносок: определение или
   // ссылка в заборе — пример синтаксиса, не сноска. Пропущенное совпадение остаётся
@@ -150,11 +167,13 @@ export function preprocessNotes(md: string, depth: number): { text: string; map:
   const code = codeMask(md);
   let out = '';
   const map: MapSegment[] = [];
-  const footnotes = new Map<string, FootnoteDef>();
   let last = 0;
   let m: RegExpExecArray | null;
   while ((m = NOTE_SYNTAX_RX.exec(md)) !== null) {
     if (code[m.index]) continue;
+    // Сноска без записи в карте вызывающего — не синтаксис вики: совпадение пропускается,
+    // текст остаётся литеральным (следующий литеральный сегмент начнётся с не сдвинутого last)
+    if ((m[4] !== undefined || m[5] !== undefined) && !footnoteIds?.has(m[4] ?? m[5]!)) continue;
     if (m.index > last) {
       map.push({ pre: out.length, raw: last, preLen: m.index - last, literal: true });
       out += md.slice(last, m.index);
@@ -162,12 +181,11 @@ export function preprocessNotes(md: string, depth: number): { text: string; map:
     const full = m[0];
     let replaced: string;
     if (m[4] !== undefined) {
-      // Определение: из потока убирается целиком; дубль (бэк его запрещает) — первая запись
-      const id = m[4];
-      if (!footnotes.has(id)) footnotes.set(id, { id, target: m[5].trim(), quote: m[6] });
+      // Определение известной вики-сноски: из потока убирается целиком — её данные в карте
+      // вызывающего; remark-gfm до неё не доходит
       replaced = '';
-    } else if (m[7] !== undefined) {
-      const id = m[7];
+    } else if (m[5] !== undefined) {
+      const id = m[5];
       replaced = `[${id}](fnref:${encodeURIComponent(id)})`;
     } else {
       const [bang, targetRaw, labelRaw] = [m[1], m[2], m[3]];
@@ -189,7 +207,7 @@ export function preprocessNotes(md: string, depth: number): { text: string; map:
     map.push({ pre: out.length, raw: last, preLen: md.length - last, literal: true });
     out += md.slice(last);
   }
-  return { text: out, map, footnotes };
+  return { text: out, map };
 }
 
 // Перевод офсета препроцессированного текста в сырой: внутри литерального сегмента 1:1,
@@ -358,11 +376,13 @@ function FootnoteBody({ def, onOpenNote }: { def: FootnoteDef; onOpenNote?: (tar
 }
 
 // Маркер сноски в тексте: надстрочник accent. На десктопе — по наведению, на мобиле — по тапу;
-// с клавиатуры: Enter/Space открывает, Esc закрывает (фокус возвращается маркеру — поповер его
-// не крадёт). Клик и Enter «пришпиливают» поповер: уход мыши его не закрывает, иначе кнопка
-// внутри поповера исчезала бы раньше клика. Тач-цель ≥ 40 px на мобиле — прозрачные поля с
-// отрицательными компенсаторами: область попадания растёт, строка текста не разъезжается.
-function FootnoteMarker({ def, touchMode, subscribe, snapshot, onOpen, onClose, onHoverClose }: {
+// с клавиатуры: Enter/Space открывает, Esc закрывает. Клик и Enter «пришпиливают» поповер,
+// повторный клик/Enter по маркеру его закрывает (и возвращает фокус маркеру). Уход мыши
+// закрывает с задержкой: поповер сам продлевает себе жизнь по onMouseEnter — иначе кнопка
+// внутри него исчезала бы раньше, чем до неё дойдёт курсор. Тач-цель ≥ 40 px на мобиле —
+// прозрачные поля с отрицательными компенсаторами: область попадания растёт, строка текста
+// не разъезжается.
+function FootnoteMarker({ def, touchMode, subscribe, snapshot, onOpen, onClose, onHoverClose, describedBy }: {
   def: FootnoteDef; touchMode: boolean;
   // открытое состояние читается подпиской, а не пропом: карта components при открытии
   // поповера не пересобирается и остальные ссылки документа не перемонтируются
@@ -371,6 +391,9 @@ function FootnoteMarker({ def, touchMode, subscribe, snapshot, onOpen, onClose, 
   onOpen: (el: HTMLElement, pinned: boolean) => void;
   onClose: (refocus: boolean) => void;
   onHoverClose: () => void;
+  // id открытой панели ЭТОГО экземпляра (useId): маркер связан со своей панелью, а не с
+  // общим на всех id — два рендера на странице не перепутали бы описания
+  describedBy: string;
 }) {
   const open = useSyncExternalStore(subscribe, snapshot) === def.id;
   const display = fnDisplay(def.id);
@@ -382,9 +405,10 @@ function FootnoteMarker({ def, touchMode, subscribe, snapshot, onOpen, onClose, 
       role="button"
       tabIndex={0}
       aria-label={`Сноска ${display}: источник и цитата`}
-      aria-describedby={open ? 'cc-fn-popover' : undefined}
-      onClick={e => { e.preventDefault(); if (open) onClose(false); else onOpen(e.currentTarget, true); }}
+      aria-describedby={open ? describedBy : undefined}
+      onClick={e => { e.preventDefault(); if (open) onClose(true); else onOpen(e.currentTarget, true); }}
       onMouseEnter={touchMode ? undefined : e => onOpen(e.currentTarget, false)}
+      // отложенное закрытие (см. scheduleFnClose у компонента): поповер живой, пока курсор в нём
       onMouseLeave={touchMode ? undefined : onHoverClose}
       onKeyDown={e => {
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (open) onClose(true); else onOpen(e.currentTarget, true); }
@@ -559,7 +583,7 @@ const CUSTOM_SCHEMES = ['wikilink:', 'noteembed:', 'noteatt:', 'fnref:'];
 
 interface HoverState { x: number; y: number; data: ResolvedNote }
 
-export function MarkdownViewer({ content, blockPos, onWikilink, existingTitles, resolveNote, embedSource, embedDepth = 0, hideLeadingH1, onDocLink, resolveImageSrc }: Props) {
+export function MarkdownViewer({ content, blockPos, onWikilink, existingTitles, resolveNote, embedSource, embedDepth = 0, hideLeadingH1, onDocLink, resolveImageSrc, wikiFootnotes }: Props) {
   // Режим заметок: включаем рендер [[wikilinks]]/![[embeds]] и внешние ссылки синим
   // (info), чтобы три класса ссылок различались (живая accent / призрак / внешняя).
   const notesMode = onWikilink != null;
@@ -567,9 +591,15 @@ export function MarkdownViewer({ content, blockPos, onWikilink, existingTitles, 
   // внутри проекта могли бы сойтись оба, и приоритет отдан заметкам (их ссылочная
   // модель богаче: hover-preview, embeds, призрачные ссылки).
   const docsMode = !notesMode && onDocLink != null;
+  // id панели сноски этого экземпляра: маркер описывает её через aria-describedby, а не
+  // общим на всех рендерами id (два MarkdownViewer на странице не перепутали бы описания)
+  const fnId = useId();
+  const footnoteIds = useMemo(
+    () => (wikiFootnotes ? new Set(Object.keys(wikiFootnotes)) : undefined),
+    [wikiFootnotes]);
   const pre = useMemo(
-    () => (notesMode ? preprocessNotes(content, embedDepth) : null),
-    [notesMode, content, embedDepth]);
+    () => (notesMode ? preprocessNotes(content, embedDepth, footnoteIds) : null),
+    [notesMode, content, embedDepth, footnoteIds]);
   const source = pre ? pre.text : content;
   const toRaw = useMemo(() => makeToRaw(pre?.map ?? null), [pre]);
 
@@ -599,10 +629,15 @@ export function MarkdownViewer({ content, blockPos, onWikilink, existingTitles, 
     }, 350);
   };
 
-  // ─── Сноски: состояния и переходы (S5e) ───
-  // Данные берутся из исходного текста (preprocessNotes вынес их в карту): ни котировка,
+  // ─── Сноски: состояния и переходы (S5e, доработка по ревью 684d71c0) ───
+  // Данные — из карты вызывающего (Props.wikiFootnotes): компонент сам их из текста не
+  // выводит. Без карты сносок нет вовсе: свои [^id] целиком ведёт remark-gfm. Ни котировка,
   // ни цель в DOM как HTML не попадают — FootnoteBody рендерит их текстовыми узлами.
-  const footnoteDefs = pre?.footnotes ?? EMPTY_FOOTNOTES;
+  const footnoteDefs = useMemo(() => {
+    const fm = new Map<string, FootnoteDef>();
+    if (wikiFootnotes) for (const [id, d] of Object.entries(wikiFootnotes)) fm.set(id, { id, target: d.source, quote: d.quote });
+    return fm;
+  }, [wikiFootnotes]);
   const touchMode = typeof window !== 'undefined' && window.matchMedia('(hover: none)').matches;
   // Состояние поповера — в ref с подпиской (как стор): маркер читает его через
   // useSyncExternalStore, а не через проп — map components при открытии не пересобирается,
@@ -612,6 +647,10 @@ export function MarkdownViewer({ content, blockPos, onWikilink, existingTitles, 
   const [fnTick, setFnTick] = useState(0);
   const fnSubsRef = useRef<Set<() => void>>(new Set());
   const fnTriggerRef = useRef<HTMLElement | null>(null);
+  // DOM открытой панели (поповер/шторка) — цель переноса фокуса при открытии
+  const fnPanelRef = useRef<HTMLDivElement | null>(null);
+  // маркер, которому вернуть фокус при закрытии (после комита рендера, см. эффекты ниже)
+  const closeRef = useRef<HTMLElement | null>(null);
   const notifyFn = () => { for (const cb of [...fnSubsRef.current]) cb(); };
   const subscribeFn = useCallback((cb: () => void) => {
     fnSubsRef.current.add(cb);
@@ -619,25 +658,38 @@ export function MarkdownViewer({ content, blockPos, onWikilink, existingTitles, 
   }, []);
   const fnSnapshot = useCallback(() => fnStateRef.current?.id ?? null, []);
 
-  const openFootnote = (id: string, el: HTMLElement, pinned: boolean) => {
-    const rect = el.getBoundingClientRect();
-    const vw = typeof window.innerWidth === 'number' ? window.innerWidth : 0;
-    fnTriggerRef.current = el;
-    fnStateRef.current = { id, x: Math.max(8, Math.min(rect.left, vw - 330)), y: rect.bottom + 6, pinned };
-    setFnTick(t => t + 1);
-    notifyFn();
-  };
-  // refocus=true — закрытие с клавиатуры: фокус возвращается маркеру, а не теряется
+  // refocus=true — закрытие с клавиатуры (Esc) или повторным кликом/Enter по маркеру:
+  // фокус возвращается маркеру, а не теряется; с затемнения/мыши — не крадём ничей
   const closeFootnote = (refocus: boolean) => {
     if (!fnStateRef.current) return;
     fnStateRef.current = null;
     setFnTick(t => t + 1);
     notifyFn();
-    if (refocus) fnTriggerRef.current?.focus();
+    closeRef.current = refocus ? fnTriggerRef.current : null;
   };
   // Уход мыши закрывает только непришпиленный поповер (открытый наведением)
   const hoverCloseFootnote = () => {
     if (fnStateRef.current && !fnStateRef.current.pinned) closeFootnote(false);
+  };
+  // Закрытие по наведению — с задержкой: уход с маркера ставит таймер, вход в поповер его
+  // снимает (панель сама продлевает себе жизнь): иначе кнопка «Открыть в чате» внутри поповера
+  // исчезала бы раньше, чем до неё дойдёт курсор
+  const fnTimerRef = useRef<number | null>(null);
+  const clearFnTimer = () => { if (fnTimerRef.current != null) { window.clearTimeout(fnTimerRef.current); fnTimerRef.current = null; } };
+  const scheduleFnClose = () => {
+    clearFnTimer();
+    fnTimerRef.current = window.setTimeout(() => { fnTimerRef.current = null; hoverCloseFootnote(); }, 250);
+  };
+  useEffect(() => clearFnTimer, []);
+
+  const openFootnote = (id: string, el: HTMLElement, pinned: boolean) => {
+    const rect = el.getBoundingClientRect();
+    const vw = typeof window.innerWidth === 'number' ? window.innerWidth : 0;
+    clearFnTimer();
+    fnTriggerRef.current = el;
+    fnStateRef.current = { id, x: Math.max(8, Math.min(rect.left, vw - 330)), y: rect.bottom + 6, pinned };
+    setFnTick(t => t + 1);
+    notifyFn();
   };
   // Esc — с любой точки экрана (и для мобильной шторки тоже)
   useEffect(() => {
@@ -648,14 +700,56 @@ export function MarkdownViewer({ content, blockPos, onWikilink, existingTitles, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fnTick]);
 
+  // Фокус за состоянием (содержимое панели интерактивно — кнопка чата/задачи/заметки):
+  // при открытии кликом/Enter — внутрь панели; при закрытии с возвратом — маркеру.
+  // Открытие наведением фокус не переносит: мышь не должна двигать клавиатурный фокус.
+  // rAF: при смене состояния панель может ещё не быть в DOM (портал) — фокус после комита.
+  // Нет rAF (node-тесты) — синхронно: там рендер к моменту эффекта уже завершён.
+  const afterPaint = (cb: () => void) =>
+    typeof requestAnimationFrame === 'function' ? requestAnimationFrame(cb) : (cb(), 0);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!fnStateRef.current || !fnStateRef.current.pinned) return;
+    const h = afterPaint(() => fnPanelRef.current?.focus());
+    return () => { if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(h); };
+  }, [fnTick]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (fnStateRef.current || !closeRef.current) return;
+    const el = closeRef.current;
+    closeRef.current = null;
+    const h = afterPaint(() => el.focus());
+    return () => { if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(h); };
+  }, [fnTick]);
+
+  // Клавиатура внутри панели: Esc закрывает (фокус — обратно маркеру). На модальной шторке
+  // Tab не уходит за её пределы (focus-trap): с последнего элемента — к первому, с первого
+  // с Shift — к последнему; фокусируемых нет — фокус держим на самой панели.
+  const onPanelKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Escape') { closeFootnote(true); return; }
+    if (e.key !== 'Tab' || !touchMode) return;
+    const panel = fnPanelRef.current;
+    if (!panel) return;
+    const nodes = Array.from(panel.querySelectorAll('a,button,input,select,textarea,[tabindex]'));
+    if (nodes.length === 0) { e.preventDefault(); panel.focus(); return; }
+    const first = nodes[0] as HTMLElement;
+    const last = nodes[nodes.length - 1] as HTMLElement;
+    const active = document.activeElement as HTMLElement | null;
+    if (e.shiftKey ? active === first || active === panel : active === last) {
+      e.preventDefault();
+      (e.shiftKey ? last : first).focus();
+    }
+  };
+
   const merged: Components = notesMode
     ? {
         ...components,
         a: ({ href, children }) => {
           if (href?.startsWith('fnref:')) {
-            const id = decodeURIComponent(href.slice('fnref:'.length));
+            const id = decodeScheme(href.slice('fnref:'.length));
             const def = footnoteDefs.get(id);
-            // Ссылка без определения не оживает: остаётся исходным текстом, как [скрытое] в графе
+            // Страховка: в fnref препроцессинг несёт только id из карты вызывающего —
+            // без записи в карте [^id] остаётся литеральным и до этой ветки не доходит
             if (!def) return <span>{`[^${id}]`}</span>;
             return (
               <FootnoteMarker
@@ -665,17 +759,18 @@ export function MarkdownViewer({ content, blockPos, onWikilink, existingTitles, 
                 snapshot={fnSnapshot}
                 onOpen={(el, pinned) => openFootnote(id, el, pinned)}
                 onClose={closeFootnote}
-                onHoverClose={hoverCloseFootnote}
+                onHoverClose={scheduleFnClose}
+                describedBy={fnId}
               />
             );
           }
           if (href?.startsWith('noteembed:') && resolveNote) {
-            const name = decodeURIComponent(href.slice('noteembed:'.length));
+            const name = decodeScheme(href.slice('noteembed:'.length));
             return <NoteEmbed name={name} resolveNote={resolveNote} onWikilink={onWikilink} embedSource={embedSource} />;
           }
           if (href?.startsWith('wikilink:') || href?.startsWith('noteembed:')) {
             const scheme = href.startsWith('wikilink:') ? 'wikilink:' : 'noteembed:';
-            const target = decodeURIComponent(href.slice(scheme.length));
+            const target = decodeScheme(href.slice(scheme.length));
             const live = existingTitles ? existingTitles.has(normTarget(target)) : true;
             return (
               <a
@@ -701,7 +796,7 @@ export function MarkdownViewer({ content, blockPos, onWikilink, existingTitles, 
         },
         img: ({ src, alt }) => {
           const url = typeof src === 'string' && src.startsWith('noteatt:')
-            ? attachmentUrl(decodeURIComponent(src.slice('noteatt:'.length)), embedSource)
+            ? attachmentUrl(decodeScheme(src.slice('noteatt:'.length)), embedSource)
             : src;
           return <img src={url} alt={alt ?? ''} style={{ maxWidth: '100%', borderRadius: 8, margin: '8px 0' }} />;
         },
@@ -777,8 +872,8 @@ export function MarkdownViewer({ content, blockPos, onWikilink, existingTitles, 
         urlTransform={url => (CUSTOM_SCHEMES.some(s => url.startsWith(s)) ? url : defaultUrlTransform(url))}
         components={finalComponents}
       >{source}</ReactMarkdown>
-      {/* «Источники» — блок из определений сносок (ADR-035, решение 3: рендерит его UI).
-          Определения вынесены из потока текста, поэтому порядок — по карте файла. */}
+      {/* «Источники» — блок из карты вызывающего (ADR-035, решение 3: рендерит его UI):
+          без wikiFootnotes блока нет — обычные GFM-сноски остаются в секции remark-gfm. */}
       {notesMode && footnoteDefs.size > 0 && (
         <section data-testid="md-sources" style={{ marginTop: 24 }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
@@ -812,20 +907,24 @@ export function MarkdownViewer({ content, blockPos, onWikilink, existingTitles, 
         </div>,
         document.body,
       )}
-      {/* Поповер сноски: на десктопе — карточка у маркера (role=tooltip, связан с маркером
-          через aria-describedby), на мобиле — шторка с затемнением: тап вне закрывает, Esc тоже. */}
+      {/* Поповер сноски: на десктопе — карточка у маркера, на мобиле — шторка с затемнением
+          (тап вне закрывает, Esc тоже). Обе панели — role=dialog: содержимое интерактивно
+          (кнопка чата/задачи/ссылка заметки), tooltip для этого не годится. Панели
+          фокусируемы (tabIndex=-1): при открытии кликом/Enter фокус переносится внутрь,
+          Esc закрывает и возвращает его маркеру; на модальной шторке ещё focus-trap — Tab
+          не уходит за её пределы. aria-describedby маркера — id этой панели (useId). */}
       {fnOpen && footnoteDefs.has(fnOpen.id) && createPortal(
         touchMode ? (
           <>
             <div data-testid="fn-scrim" onClick={() => closeFootnote(false)} style={{ position: 'fixed', inset: 0, background: C.overlay, zIndex: Z.modal }} />
-            <div id="cc-fn-popover" data-testid="fn-sheet" role="dialog" aria-modal="true" aria-label={`Сноска ${fnDisplay(fnOpen.id)}`} style={{ position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: Z.modal, background: C.bgWhite, borderRadius: `${R.xl}px ${R.xl}px 0 0`, boxShadow: SHADOW.sheet, padding: '8px 16px 20px' }}>
+            <div ref={fnPanelRef} id={fnId} data-testid="fn-sheet" role="dialog" aria-modal="true" aria-label={`Сноска ${fnDisplay(fnOpen.id)}`} tabIndex={-1} onKeyDown={onPanelKey} style={{ position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: Z.modal, background: C.bgWhite, borderRadius: `${R.xl}px ${R.xl}px 0 0`, boxShadow: SHADOW.sheet, padding: '8px 16px 20px' }}>
               <div style={{ width: 36, height: 4, borderRadius: 999, background: C.borderLight, margin: '0 auto 12px' }} aria-hidden />
               <div style={{ fontFamily: mono, fontSize: 10, color: C.textMuted, marginBottom: 8 }}>Сноска {fnDisplay(fnOpen.id)}</div>
               <FootnoteBody def={footnoteDefs.get(fnOpen.id)!} onOpenNote={onWikilink} />
             </div>
           </>
         ) : (
-          <div id="cc-fn-popover" data-testid="fn-popover" role="tooltip" style={{ position: 'fixed', left: `${fnOpen.x}px`, top: `${fnOpen.y}px`, zIndex: Z.modal, width: 320, maxHeight: 340, overflow: 'auto', background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: R.xl, boxShadow: SHADOW.dropdown, padding: '12px 14px' }}>
+          <div ref={fnPanelRef} id={fnId} data-testid="fn-popover" role="dialog" aria-label={`Сноска ${fnDisplay(fnOpen.id)}`} tabIndex={-1} onMouseEnter={clearFnTimer} onMouseLeave={scheduleFnClose} onKeyDown={onPanelKey} style={{ position: 'fixed', left: `${fnOpen.x}px`, top: `${fnOpen.y}px`, zIndex: Z.modal, width: 320, maxHeight: 340, overflow: 'auto', background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: R.xl, boxShadow: SHADOW.dropdown, padding: '12px 14px' }}>
             <FootnoteBody def={footnoteDefs.get(fnOpen.id)!} onOpenNote={onWikilink} />
           </div>
         ),

@@ -77,8 +77,10 @@ class FNode {
   setAttributeNS() {}
   removeAttribute(n: string) { delete this.attributes[n]; }
   getAttribute(n: string) { return this.attributes[n] ?? null; }
-  focus() {}
-  blur() {}
+  // focus() двигает document.activeElement (как в настоящем DOM): тестам фокуса
+  // (перенос внутрь панели сносок, focus-trap шторки) нужно знать, кто сейчас фокуса
+  focus() { this.ownerDocument.activeElement = this; }
+  blur() { if (this.ownerDocument.activeElement === this) this.ownerDocument.activeElement = null; }
   scrollIntoView() {}
   // querySelector: поддерживает атрибутный селектор [attr="value"] (PipelineFlow ищет строку
   // шага data-step-ref внутри своего корня); прочие формы — null (как раньше).

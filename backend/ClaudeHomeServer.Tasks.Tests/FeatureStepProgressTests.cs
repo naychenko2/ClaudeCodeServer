@@ -568,6 +568,16 @@ public class FeatureStepProgressTests
         Run(Feature()).ActivePlanIds.Should().BeEmpty();
     }
 
+    // B3b: цепочка пересечений p1[B], p2[A,B], p3[A] → действующий только p3.
+    [Fact]
+    public void ActivePlanIds_ЦепочкаПересечений_ТолькоПоследний()
+    {
+        var run = Run(Feature(), Plan("p1", 0, ("B", "back")), Plan("p2", 1, ("A", "back"), ("B", "back")),
+            Plan("p3", 2, ("A", "back")));
+
+        run.ActivePlanIds.Should().Equal("p3");
+    }
+
     // Планы по линиям без пересечений объединяются.
     [Fact]
     public void ПланыБезПересечения_Объединяются()

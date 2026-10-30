@@ -72,6 +72,9 @@ vi.mock('../../lib/wiki', async (importOriginal) => {
     ...orig,
     ensureWikiLoaded: async () => {},
     loadWikiCatalog: async () => {},
+    // S7a: «Входящие» — свои, экран списка зовёт listWikiPackages; здесь он пустой:
+    // тест проверяет смену подвкладки, а не список пакетов
+    listWikiPackages: async () => ({ packages: [], invalidCount: 0 }),
     useWikiTree: () => wikiMock.tree,
     useWikiCatalog: () => wikiMock.catalog,
   };
@@ -367,9 +370,11 @@ describe('NotesPage: вкладка «Вики» за флагом llmWiki (S5d)
     await settle();
     clickNode(findNodeByAttr(container, 'data-testid', 'wiki-section-switch')!);
     expect(findNodeByAttr(container, 'data-testid', 'wiki-tree'), 'экран «Разделы» открыт').not.toBeNull();
-    // Подвкладки на мобиле icons-only, имена — в aria-label (PillSwitch.tsx:273)
+    // Подвкладки на мобиле icons-only, имена — в aria-label (PillSwitch.tsx:273).
+    // С S7a «Входящие» — не заглушка: признак смены — пустое состояние своего экрана
     clickNode(findNodeByAttr(container, 'aria-label', 'Входящие')!);
-    expect(hasText(container, 'Этот раздел вики ещё не сделан'), 'заглушка «Входящие» открыта').toBe(true);
+    await settle();
+    expect(hasText(container, 'Спорного нет'), 'экран «Входящие» открыт').toBe(true);
     clickNode(findNodeByAttr(container, 'aria-label', 'Страницы')!);
     await settle();
     expect(findNodeByAttr(container, 'data-testid', 'wiki-tree'), '«Разделы» не открылся снова').toBeNull();

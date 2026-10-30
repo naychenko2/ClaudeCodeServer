@@ -104,6 +104,9 @@ export function groupSectionsByKind(sections: readonly WikiSectionDto[]): WikiSe
 
 // ─── Ошибки контракта ───
 
+// pkg_* — отказы «Входящих» (WikiPackagesController + WikiPackageStore, S4a/S4g);
+// читаются в экране пакета и списка (S7a). Коды применения (wiki_apply_*) — не отказы HTTP:
+// они живут в поле apply ответа decide/accept-all и показываются как итог применения.
 export type WikiErrorCode =
   | 'wiki_foreign'
   | 'wiki_section_key'
@@ -113,11 +116,23 @@ export type WikiErrorCode =
   | 'wiki_sphere_reserved'
   | 'wiki_refused'
   | 'wiki_drift'
-  | 'wiki_not_orphan';
+  | 'wiki_not_orphan'
+  | 'wiki_pkg_request'
+  | 'wiki_pkg_not_found'
+  | 'wiki_pkg_invalid'
+  | 'wiki_pkg_not_decidable'
+  | 'wiki_pkg_auto'
+  | 'wiki_pkg_op_index'
+  | 'wiki_pkg_already_decided'
+  | 'wiki_pkg_reason_required'
+  | 'wiki_pkg_nothing_to_decide';
 
 const WIKI_ERROR_CODES: ReadonlySet<string> = new Set<string>([
   'wiki_foreign', 'wiki_section_key', 'wiki_page_key', 'wiki_project_missing', 'wiki_section_off',
   'wiki_sphere_reserved', 'wiki_refused', 'wiki_drift', 'wiki_not_orphan',
+  'wiki_pkg_request', 'wiki_pkg_not_found', 'wiki_pkg_invalid', 'wiki_pkg_not_decidable',
+  'wiki_pkg_auto', 'wiki_pkg_op_index', 'wiki_pkg_already_decided', 'wiki_pkg_reason_required',
+  'wiki_pkg_nothing_to_decide',
 ]);
 
 export class WikiError extends Error {
@@ -331,6 +346,88 @@ export async function deleteWikiSection(sectionKey: string): Promise<WikiDeleteR
   _catalogs.delete(sectionKey);
   if (_page && _page.cacheKey.startsWith(`${sectionKey}\n`)) _page = null;
   await refreshWiki();
+  return res;
+}
+
+// ─── «Входящие»: пакеты и решение человека (S7a; контракт S4g) ───
+// GET /api/wiki/packages?inbox=true → {packages, invalidCount}: только proposed, чужие
+// разделы отфильтрованы бэком; нечитаемые файлы — числом, они не притворяются пакетами.
+// decide/accept-all → {package, apply}: карточка ПОСЛЕ решения и, если решение оставило
+// ноль нерешённых спорных и хотя бы одну принятую, — исход применения этого же запроса.
+// apply = null ровно когда применять нечего (пакет остался proposed или rejected).
+// Отдельной ручки «применить» нет: повторного применения человеком не существует (S4g).
+
+export interface WikiPackageSourceDto { origin: string; ref: string }
+
+// Операции — в порядке индексов, неизменяемы после создания: index и есть адрес операции.
+// decision: auto | inbox; reason — почему спорная (для inbox всегда есть, форма пакета);
+// humanDecision: accepted | rejected | null (не решено). text — НАМЕРЕНИЕ (что добавить/
+// заместить), target — что замещается/оспаривается или цель ссылки; baseHashes — хэши
+// базового состояния, не тексты. Отрендеренного результата в DTO нет (S4g).
+export interface WikiPackageOperationDto {
+  index: number;
+  op: string;
+  page: string;
+  target: string | null;
+  text: string | null;
+  class: string;
+  decision: string;
+  reason: string | null;
+  baseHashes: Record<string, string>;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  humanDecision: string | null;
+  humanReason: string | null;
+}
+
+export interface WikiPackageDto {
+  id: string;
+  section: string;
+  status: string;
+  statusReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+  sources: WikiPackageSourceDto[];
+  operations: WikiPackageOperationDto[];
+}
+
+// applied=true — страницы записаны; отказ — код (wiki_apply_*) и причина человеческим
+// текстом; violations — полный перечень для провала гейта. Решения человека при отказе
+// сохранены в package.operations — их не надо вводить заново.
+export interface WikiApplyOutcomeDto {
+  applied: boolean;
+  code: string | null;
+  reason: string | null;
+  violations: string[];
+}
+
+export interface WikiDecisionDto { package: WikiPackageDto; apply: WikiApplyOutcomeDto | null }
+
+export interface WikiPackagesDto { packages: WikiPackageDto[]; invalidCount: number }
+
+export async function listWikiPackages(): Promise<WikiPackagesDto> {
+  return wikiHttp<WikiPackagesDto>('/api/wiki/packages?inbox=true');
+}
+
+// Решение по одной спорной операции. accept=false требует reason (409 wiki_pkg_reason_required).
+// Успех — {package, apply}; после применённого перечитываем дерево и каталог: страницы
+// изменились, витрина не должна показывать прежний каталог (тот же порядок, что у adopt).
+export async function decideWikiPackage(
+  id: string, index: number, accept: boolean, reason: string | null,
+): Promise<WikiDecisionDto> {
+  const res = await wikiHttp<WikiDecisionDto>(`/api/wiki/packages/${encodeURIComponent(id)}/decide`, {
+    method: 'POST',
+    body: JSON.stringify({ index, accept, reason: reason ?? null }),
+  });
+  if (res.apply?.applied) await refreshWiki();
+  return res;
+}
+
+export async function acceptAllWikiPackage(id: string): Promise<WikiDecisionDto> {
+  const res = await wikiHttp<WikiDecisionDto>(`/api/wiki/packages/${encodeURIComponent(id)}/accept-all`, {
+    method: 'POST',
+  });
+  if (res.apply?.applied) await refreshWiki();
   return res;
 }
 

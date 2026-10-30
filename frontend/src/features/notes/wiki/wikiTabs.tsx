@@ -16,6 +16,7 @@ import type { LucideIcon } from 'lucide-react';
 import { Activity, ArrowDownToLine, BookOpen, History, Settings } from 'lucide-react';
 import { EmptyState } from '../../../components/ui/EmptyState';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
+import { WikiInbox } from './WikiInbox';
 
 export type WikiSubTabId = 'pages' | 'inbox' | 'journal' | 'health' | 'settings';
 
@@ -33,7 +34,8 @@ export interface WikiSubTab {
 export const WIKI_SUBTABS: WikiSubTab[] = [
   // Каталог выбранного раздела — сам экран вкладки, он в WikiTab.tsx (S5c)
   { id: 'pages', label: 'Страницы', icon: BookOpen },
-  { id: 'inbox', label: 'Входящие', icon: ArrowDownToLine, stubNote: 'Придёт с шагом «Входящие»: там только спорные правки, у каждой — почему она ждёт вас.' }, // S7a
+  // «Входящие» — свои с S7a: только спорные пакеты, у каждой операции причина
+  { id: 'inbox', label: 'Входящие', icon: ArrowDownToLine, component: WikiInbox },
   { id: 'journal', label: 'Журнал', icon: History, stubNote: 'Придёт с шагом «Журнал»: там откат пакета и откат всего чата.' }, // S7a/S7b
   { id: 'health', label: 'Здоровье', icon: Activity, stubNote: 'Придёт с шагом «Здоровье»: метрики вики и то, что просится наверх.' }, // S5f
   { id: 'settings', label: 'Настройки', icon: Settings, stubNote: 'Придёт с шагом «Настройки»: ночной разбор, применение и отбор чатов.' }, // S7c/S7d

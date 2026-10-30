@@ -323,8 +323,8 @@ public sealed class TasksToolset(
                 {
                     if (string.IsNullOrWhiteSpace(featureNoteArg))
                         return Deny("Оценка пишется вместе с голосом (featureNote)");
-                    if (FeatureEstimateArg(arguments) is not { } parsed) return Deny("featureEstimate: ожидается объект");
-                    featureEstimateArg = parsed;
+                    if (arguments["featureEstimate"] is not JsonObject) return Deny("featureEstimate: ожидается объект");
+                    featureEstimateArg = FeatureEstimateArg(arguments);
                 }
                 if (featureNoteArg is not null)
                 {
@@ -1128,6 +1128,7 @@ public sealed class TasksToolset(
                 StepRef = StringArg(obj, "stepRef"),
                 Title = StringArg(obj, "title"),
                 Lane = OptionalArg(obj, "lane"),
+                Kind = OptionalArg(obj, "kind"),
             });
         }
         return result;
@@ -1182,15 +1183,13 @@ public sealed class TasksToolset(
             ReturnReason = OptionalArg(ver, "returnReason"),
         };
 
-    // Оценка оркестратора: null — ключа нет или не объект; поля как в схеме featureEstimate. Нечисловые
-    // done/total/inProgress дают -1: Validate отклонит (молча подставлять 0 нельзя).
+    // Оценка оркестратора: null — ключа нет, не объект или оценка пуста (ни срока, ни remaining); поля как в схеме featureEstimate. Старые
+    // done/total/inProgress/percent принимаются и отбрасываются: процент — только из run.stepProgress.
     private static FeatureEstimate? FeatureEstimateArg(JsonObject arguments)
     {
         if (arguments["featureEstimate"] is not JsonObject est) return null;
-        int Required(string name) => NullableIntArg(est, name) ?? -1;
         return new FeatureEstimate(
-            Required("done"), Required("total"), Required("inProgress"), NullableIntArg(est, "percent"),
-            LabelsArg(est, "remaining") ?? [], NullableIntArg(est, "etaMinutes"), OptionalArg(est, "why")).Normalize();
+            LabelsArg(est, "remaining") ?? [], NullableIntArg(est, "etaMinutes"), OptionalArg(est, "why")).Normalize().NullIfEmpty();
     }
 
     // Критерии приёмки: [{id?, text}]; id пустой — присвоит TaskManager. null — ключа нет, не менять
@@ -1797,13 +1796,9 @@ public sealed class TasksToolset(
     private static JsonObject FeatureEstimateSchema() => new()
     {
         ["type"] = "object",
-        ["description"] = "Оценка оркестратора, только с featureNote, в каждом ходе, где фича сдвинулась; why — причина расхождения срока.",
+        ["description"] = "Срок и «что дальше» с featureNote, в каждом ходе; why — причина расхождения; процента нет — его берёт трекер.",
         ["properties"] = new JsonObject
         {
-            ["done"] = new JsonObject { ["type"] = "integer", ["description"] = "Готово единиц: 0..total (шаги плана плюс стадии конвейера)" },
-            ["inProgress"] = new JsonObject { ["type"] = "integer", ["description"] = "В работе сейчас: 0..total−done" },
-            ["total"] = new JsonObject { ["type"] = "integer", ["description"] = "Всего единиц: 1..50" },
-            ["percent"] = new JsonObject { ["type"] = "integer", ["description"] = "Готовность 0..100; опусти — done/total" },
             ["remaining"] = new JsonObject
             {
                 ["type"] = "array",
@@ -1813,7 +1808,6 @@ public sealed class TasksToolset(
             ["etaMinutes"] = new JsonObject { ["type"] = "integer", ["description"] = "Минут до готовности по самой длинной цепочке, ≥1; нет оценки — не указывай" },
             ["why"] = new JsonObject { ["type"] = "string", ["description"] = "Почему срок заметно отличается от обычного, ≤160; только при расхождении" },
         },
-        ["required"] = new JsonArray("done", "inProgress", "total"),
     };
 
     private static JsonObject PlanStepsSchema() => new()
@@ -1827,6 +1821,12 @@ public sealed class TasksToolset(
                 ["stepRef"] = new JsonObject { ["type"] = "string", ["description"] = "Код шага (уникален, непуст)" },
                 ["title"] = new JsonObject { ["type"] = "string", ["description"] = "Название шага" },
                 ["lane"] = new JsonObject { ["type"] = "string", ["description"] = "Линия (бэк/фронт)" },
+                ["kind"] = new JsonObject
+                {
+                    ["type"] = "string",
+                    ["enum"] = new JsonArray("step", "review", "qa", "final"),
+                    ["description"] = "Вид: step (по умолчанию) — исполняемый шаг, в знаменателе; review/qa/final — не шаг плана",
+                },
             },
         },
         // Инструкция (минор 7, паритет со stdio-веткой mcp/tasks-server/index.js): планировщик

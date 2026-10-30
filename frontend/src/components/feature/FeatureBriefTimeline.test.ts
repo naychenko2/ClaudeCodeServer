@@ -263,9 +263,9 @@ describe('Таймлайн-элементы карточки «Сводка» ч
     await settle();
     const row = findNodeByAttr(c, 'data-testid', 'mini-summary-row')!;
     const all = textNodes(row).join('');
-    expect(all, 'есть «ждёт вас»').toContain('ждёт вас');
+    expect(all, 'есть «нужен ответ»').toContain('нужен ответ');
     // Мутация «ждёт вас 45 мин» (вычисленное число) красит: после «ждёт вас» нет цифры.
-    expect(all, 'после «ждёт вас» нет вычисленного числа минут').not.toMatch(/ждёт вас\s+\d/);
+    expect(all, 'после «ждёт вас» нет вычисленного числа минут').not.toMatch(/нужен ответ\s+\d/);
   });
 
   // === 7. без brief первого факта «идёт N» нет, «шла N» — нигде ===

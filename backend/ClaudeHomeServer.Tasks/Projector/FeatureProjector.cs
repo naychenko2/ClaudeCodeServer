@@ -211,6 +211,7 @@ public sealed class FeatureProjector(TaskManager tasks)
                 Reason = "мерж",
                 PersonaId = final.PersonaId,
                 LinkedSessionId = LiveSession(final.LinkedSessionId)?.Id, // Б7: fail-closed (только если в снимке)
+                MergeRisks = BuildMergeRisks(accounting.Progress, tracker.Count),
             };
         }
 
@@ -222,7 +223,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         // InProgress). Вынесено до цикла стадий: nowCount нужен для ComputeState, а state —
         // для гашения тревоги при паузе (R-HOLD-B1).
         var nowList = featureTasks
-            .Where(t => t.Status == TaskItemStatus.InProgress && !ReferenceEquals(t, epic) && !IsHeld(t))
+            .Where(t => !ReferenceEquals(t, epic) && IsRunning(t))
             .OrderByDescending(t => t.ClaudeStartedAt ?? t.CreatedAt)
             .Select(t => new FeatureNow
             {
@@ -258,6 +259,12 @@ public sealed class FeatureProjector(TaskManager tasks)
         // тревога). Для draft не гасим: state=draft только когда остановленных задач нет (stopped
         // стоит выше), и упавший исполнитель разреза в черновике должен быть виден.
         if (featureState == FeatureStates.Paused) attention = null;
+
+        // Ш9 (QA-1 a18999b3): у терминальной фичи (closed/merged) тревоги нет вовсе — закрытая без
+        // мержа фича иначе показывала «Ждёт согласия на мерж» (финал принят, merge-задачи нет).
+        // Видов тревоги три (stopped/wait/merge), информационных среди них нет. merge_pending не
+        // трогаем: там тревога merge законна. Состояние — та же featureState, что идёт в run.state.
+        if (featureState is FeatureStates.Closed or FeatureStates.Merged) attention = null;
 
         // W4-HOLD-D: на паузе никто не идёт — «Сейчас» пустой. SetHold прервал исполнителей
         // (feature_held), но статус остаётся InProgress: без гашения строка показывала бы
@@ -417,10 +424,9 @@ public sealed class FeatureProjector(TaskManager tasks)
                     break;
             }
 
-            // RunningSince: ClaudeStartedAt идущей (InProgress) задачи стадии.
-            DateTime? runningSince = state == "active"
-                ? tasks.FirstOrDefault(t => t.Status == TaskItemStatus.InProgress)?.ClaudeStartedAt
-                : null;
+            // RunningSince: ClaudeStartedAt идущей задачи стадии при любом State (тот же
+            // предикат IsRunning, что у run.now); держащиеся (held) в расчёт не входят.
+            DateTime? runningSince = tasks.FirstOrDefault(IsRunning)?.ClaudeStartedAt;
 
             // Витки стадии: у qa/final каждая задача стадии — виток (формат как у цепочки шагов).
             // У review — шаг с наибольшим числом витков (строка «дольше всех D1c»).
@@ -608,6 +614,7 @@ public sealed class FeatureProjector(TaskManager tasks)
             Cut = cut,
             Design = design,
             Plan = plan,
+            ActivePlanIds = accounting.ActivePlanIds,
             Unroled = unroled,
             Stages = stages,
             StepChains = stepChains,
@@ -905,6 +912,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         Cut = SlimAll(run.Cut),
         Design = SlimAll(run.Design),
         Plan = SlimAll(run.Plan),
+        ActivePlanIds = run.ActivePlanIds,
         Unroled = SlimAll(run.Unroled),
         Stages = run.Stages,
         StepChains = run.StepChains,
@@ -968,8 +976,19 @@ public sealed class FeatureProjector(TaskManager tasks)
     // Эпик (feature) в «Сейчас» не доходит: он контейнер фичи и исключён из Now, см. Build.)
 
     // Возвраты по источникам: для каждого источника (ревью/проверка/финал) — число возвратов
-    // (уникальные задачи с returned/accepted_with_remarks) и сколько из них открыто (их доработка
+    // (витки — задачи-носители вердикта returned/accepted_with_remarks) и сколько из них открыто (их доработка
     // ещё не done). «Доработка» — rework-задача, чей ReviewOf ссылается на задачу-источник.
+    // Риски мержа из уже посчитанных учёта шагов и сверки трекера; порядок фиксирован, нули не кладём.
+    internal static List<FeatureMergeRisk> BuildMergeRisks(FeatureStepProgress progress, int trackerCount)
+    {
+        var risks = new List<FeatureMergeRisk>();
+        if (progress.NotCreated > 0) risks.Add(new(FeatureMergeRiskKinds.NotCreated, progress.NotCreated));
+        int open = progress.Work + progress.Review;
+        if (open > 0) risks.Add(new(FeatureMergeRiskKinds.Open, open));
+        if (trackerCount > 0) risks.Add(new(FeatureMergeRiskKinds.Tracker, trackerCount));
+        return risks;
+    }
+
     private static FeatureReturnsBySource BuildReturnsBySource(
         List<TaskItem> reviews, List<TaskItem> qa, List<TaskItem> finals, List<TaskItem> steps)
     {
@@ -1206,6 +1225,10 @@ public sealed class FeatureProjector(TaskManager tasks)
     // правила нигде нет.
     internal static bool IsHeld(TaskItem t)
         => t.AwaitingHumanSince is not null || HasValidStopMark(t);
+
+    // «Задача идёт»: InProgress и не held. Единая точка правды для run.now и stage.runningSince.
+    private static bool IsRunning(TaskItem t)
+        => t.Status == TaskItemStatus.InProgress && !IsHeld(t);
 
     // Б2: статус исполнителя из полей задачи. Приоритет: running (ход идёт сейчас —
     // IsTurnRunning) → stopped (валидная пометка остановки) → waiting (AwaitingHumanSince)

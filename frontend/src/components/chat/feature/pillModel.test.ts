@@ -6,7 +6,7 @@
 // показывает строка шапки В2 — пилюля её не повторяет.
 
 import { describe, expect, it, vi } from 'vitest';
-import { buildPillModel } from './pillModel';
+import { buildPillModel, statusPhrase } from './pillModel';
 import { formatClock } from '../../feature/FeatureStatsBits';
 import type { FeatureRun } from '../../../types/featureRun';
 
@@ -125,5 +125,14 @@ describe('buildPillModel (F2): тревога фичи и состояния з�
     expect(buildPillModel([], null, true, null)!.pre).toBe('фича · …');
     expect(buildPillModel([], null, false, 'нет связи')!.pre).toBe('фича · …');
     expect(buildPillModel([], null, false, null)).toBeNull();
+  });
+});
+
+// Ш1e (хвост ревью Ш1d, решение Майи): закрытая без мержа фича — одна подпись везде:
+// «закрыта без мержа» из общего CLOSED_NO_MERGE_STATUS (chatGroups). Короткая «закрыта»
+// здесь краснеет: мутация константы краснит и тест chatGroups, и этот.
+describe('statusPhrase: закрытая фича (общий источник слов пилюли и плашки)', () => {
+  it('closed — «закрыта без мержа», без суффикса', () => {
+    expect(statusPhrase('closed', null, {})).toEqual({ bold: 'закрыта без мержа', post: '' });
   });
 });

@@ -1,6 +1,7 @@
 import { Modal } from '../ui/Modal';
 import { ModalActions } from '../ui/ModalActions';
 import { C, R, FS, FONT, MODAL_W } from '../../lib/design';
+import type { FeatureMergeRisk } from '../../types/featureRun';
 
 // Общая модалка подтверждения мержа (волна 3, Ф6). Её берут и страница фичи,
 // и попап «Исполнение фичи» (Ф-pop-a) — один компонент, один вид.
@@ -24,13 +25,24 @@ export interface FeatureMergeDialogProps {
   pending: boolean;
   // Сообщение сервера при НЕ-409 сбое; null — ошибки нет.
   error: string | null;
+  // Риски мержа (из attention.mergeRisks, Ш8): undefined/пусто — блока нет.
+  // Фронт ничего не считает: печатает список как пришёл.
+  risks?: FeatureMergeRisk[];
   // «Отмена» (и клик по оверлею/крестику): закрывает диалог, API не шлёт.
   onCancel: () => void;
   // «Мерж»/«Запускаю…»/«Повторить»: подтверждение (вызывающий шлёт POST).
   onConfirm: () => void;
 }
 
-export function FeatureMergeDialog({ title, branch, pending, error, onCancel, onConfirm }: FeatureMergeDialogProps) {
+// Подпись вида риска (Ш8): слово по kind; неизвестный вид — сам ключ (фолбэк,
+// как stageName в FeatureTimelineBits).
+const RISK_LABEL: Record<FeatureMergeRisk['kind'], string> = {
+  not_created: 'Не заведено шагов',
+  open: 'Заведены, но не приняты',
+  tracker: 'Трекер расходится',
+};
+
+export function FeatureMergeDialog({ title, branch, pending, error, risks, onCancel, onConfirm }: FeatureMergeDialogProps) {
   // Пояснение: ветка в тексте; ветки нет — нейтральная фраза (без «ветку null»).
   const subtitle = branch
     ? `Марк получит задачу мержа и сольёт ветку ${branch}.`
@@ -65,6 +77,20 @@ export function FeatureMergeDialog({ title, branch, pending, error, onCancel, on
           }}
         >
           {error}
+        </div>
+      )}
+
+      {/* Риски мержа (Ш8): не пустой список — предупреждающий блок над кнопками.
+          Текст — по элементам списка, через « · »; ничего не добавляем и не сортируем. */}
+      {risks && risks.length > 0 && (
+        <div
+          data-testid="feature-merge-risks"
+          style={{
+            background: C.warningBg, color: C.warningText, borderRadius: R.sm,
+            padding: '8px 10px', fontSize: FS.sm, fontFamily: FONT.sans, lineHeight: 1.45,
+          }}
+        >
+          {risks.map((r) => `${RISK_LABEL[r.kind] ?? r.kind}: ${r.count}`).join(' · ')}
         </div>
       )}
     </Modal>

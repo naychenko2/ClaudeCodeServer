@@ -1,6 +1,6 @@
 // Верстка ленты «Производство» (W4-2F2, вариант 2А2 + GC-F8): карточка на шаг в порядке
 // старта, цепочка узлов «работа → вернул → доработка → принят» с переходами в чаты
-// витков, счётчик циклов (2+ — тон предупреждения), обведённый акцентом текущий узел,
+// витков, счётчик возвратов (2+ — тон предупреждения), обведённый акцентом текущий узел,
 // причина возврата строкой под цепочкой. Строки «старт · чат · задача» нет.
 //
 // GC-F8 (план «Гант на „Хронологии“»): в раскрытой карточке — блоки деталей
@@ -14,7 +14,7 @@
 // Тесты: обычный цикл; возврат + доработка (клик по узлу → чат витка); активная
 // задача («сейчас» только над текущей карточкой, «текущий» узел — акцентная рамка,
 // пунктирный «ревью» — не узел-действие); пустая фича (карточек нет); шаг без данных
-// (код — не кнопка); статус — слово из chain.status бэка; 2+ циклов — тон предупреждения;
+// (код — не кнопка); статус — слово из chain.status бэка; 2+ возвратов — тон предупреждения;
 // поле касания 40 px на 360; свёртка 48→11+кнопка→48; planned — кромка/плашка/имя;
 // details (приёмка последней задачи, вердикт, итог); подсветка — вызов с taskIds;
 // хвост — метка; ходы — только своей цепочки, живой — по «сейчас» вызывающего.
@@ -24,8 +24,8 @@
 //       «текущий узел обведён акцентом»;
 //   (2) узел игнорирует chatId (не кнопка) → краснеет «клик по узлу возврата
 //       открывает чат этого витка»;
-//   (3) cycles < 2 красить предупреждением → краснеет «2 цикла — предупреждение,
-//       1 цикл — нет»;
+//   (3) cycles < 2 красить предупреждением → краснеет «2 возврата — предупреждение,
+//       1 возврат — нет»;
 //   (4) 40 px вернуть некликабельной обёртке (кнопка без minHeight) → краснеет
 //       «зона касания 40 px — на самой кнопке»;
 //   (5) убрать onPointerCancel из обработчиков → краснеет
@@ -265,18 +265,24 @@ describe('возврат и доработка', () => {
     expect(mockOpenChat.calls).toEqual(['chat-gleb']);
   });
 
-  it('один цикл — без предупреждения; два цикла — тон warning', () => {
+  it('один возврат — без предупреждения; два возврата — тон warning', () => {
     const { container: one } = mount(createElement(FeatureProdCardsView, { run: returnedRun(1), featureId: 'F' }));
     const c1 = findNodeByAttr(one, 'data-testid', 'prod-cycles')!;
-    expect(textNodes(c1).join('')).toBe('1 цикл');
+    expect(textNodes(c1).join('')).toBe('1 возврат');
     expect(styleOf(c1).color).toBe(C.textSecondary);
     expect(styleOf(c1).border).toBe(`1px solid ${C.border}`);
 
     const { container: two } = mount(createElement(FeatureProdCardsView, { run: returnedRun(2), featureId: 'F' }));
     const c2 = findNodeByAttr(two, 'data-testid', 'prod-cycles')!;
-    expect(textNodes(c2).join('')).toBe('2 цикла');
+    expect(textNodes(c2).join('')).toBe('2 возврата');
     expect(styleOf(c2).color).toBe(C.warningText);
     expect(styleOf(c2).border).toBe(`1px solid ${C.warning}`);
+
+    // Словарь Ш1c проверяется весь: 2–4 — «возврата» (здесь и «3 возврата»), 5+ — «возвратов».
+    const { container: three } = mount(createElement(FeatureProdCardsView, { run: returnedRun(3), featureId: 'F' }));
+    expect(textNodes(findNodeByAttr(three, 'data-testid', 'prod-cycles')!).join('')).toBe('3 возврата');
+    const { container: five } = mount(createElement(FeatureProdCardsView, { run: returnedRun(5), featureId: 'F' }));
+    expect(textNodes(findNodeByAttr(five, 'data-testid', 'prod-cycles')!).join('')).toBe('5 возвратов');
   });
 
   // Мутация (1): тон «текущего» без акцентной рамки краснит этот тест.

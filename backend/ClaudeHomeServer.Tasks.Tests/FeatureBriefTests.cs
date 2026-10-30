@@ -892,7 +892,7 @@ public class FeatureBriefTests
         brief.ComputedAt.Should().Be(NOW);
     }
 
-    // ─── оценка оркестратора в голосе (макет 2 сводки): percent, agreement, etaEndsAt ───────────
+    // ─── оценка оркестратора в голосе (макет 2 сводки): agreement, etaEndsAt ───────────
 
     private static FeatureRun RunWithEstimate(string state, FeatureHold? hold, FeatureEstimate? estimate,
         string stateAtWrite = "running")
@@ -902,8 +902,8 @@ public class FeatureBriefTests
         return run;
     }
 
-    private static FeatureEstimate Est(int done = 2, int total = 8, int? percent = null, int? eta = 120) =>
-        new(done, total, 1, percent, ["ревью", "проверка"], eta, "дольше всех — фронт");
+    private static FeatureEstimate Est(int? eta = 120) =>
+        new(["ревью", "проверка"], eta, "дольше всех — фронт");
 
     private static FeatureBrief.BriefEstimate History(int remaining = 120, int p25 = 90, int p75 = 150) =>
         new(remaining, p25, p75, "history", 5);
@@ -914,27 +914,11 @@ public class FeatureBriefTests
         FeatureBrief.Build(RunWithEstimate(FeatureStates.Running, null, null), null, null, NOW)
             .Note!.Estimate.Should().BeNull();
 
-        var e = FeatureBrief.Build(RunWithEstimate(FeatureStates.Running, null, Est(percent: 40)), null, null, NOW)
+        var e = FeatureBrief.Build(RunWithEstimate(FeatureStates.Running, null, Est()), null, null, NOW)
             .Note!.Estimate!;
-        (e.Done, e.Total, e.InProgress, e.Percent, e.EtaMinutes, e.Why)
-            .Should().Be((2, 8, 1, 40, 120, "дольше всех — фронт"));
+        (e.EtaMinutes, e.Why).Should().Be((120, "дольше всех — фронт"));
         e.Remaining.Should().Equal("ревью", "проверка");
     }
-
-    [Theory]
-    [InlineData(2, 8, 25)]   // 25 ровно
-    [InlineData(1, 3, 33)]   // 33.3 → 33
-    [InlineData(1, 8, 13)]   // 12.5 → 13 (от нуля)
-    [InlineData(0, 5, 0)]
-    [InlineData(5, 5, 100)]
-    public void NoteEstimate_ПроцентДосчитываетсяИзDoneTotal(int done, int total, int expected) =>
-        FeatureBrief.Build(RunWithEstimate(FeatureStates.Running, null, Est(done, total)), null, null, NOW)
-            .Note!.Estimate!.Percent.Should().Be(expected);
-
-    [Fact]
-    public void NoteEstimate_ЗаданныйПроцентНеПерезаписывается() =>
-        FeatureBrief.Build(RunWithEstimate(FeatureStates.Running, null, Est(2, 8, percent: 70)), null, null, NOW)
-            .Note!.Estimate!.Percent.Should().Be(70);
 
     [Fact]
     public void NoteEstimate_EtaEndsAtОтМоментаЗаписиАНеОтСейчас()

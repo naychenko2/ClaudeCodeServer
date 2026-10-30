@@ -157,13 +157,21 @@ describe('FeatureGroupHeader: тона', () => {
     expect(html.includes('border-left-color:var(--c-danger)')).toBe(true);
   });
 
-  it('закрыта (closed, без мержа): глиф closed, статус «закрыта», кромки нет', () => {
+  it('закрыта (closed, без мержа): глиф closed, статус «закрыта без мержа» (Ш1d), кромки нет', () => {
     const f = feat({ bucket: 'closed', summary: null });
     const st = featureDisplayState(f);
     expect(st.kind).toBe('closed');
     expect(st.alarm).toBeNull();
-    expect(st.status).toBe('закрыта');
+    expect(st.status).toBe('закрыта без мержа');
     expect(renderHeader(f).includes('data-feature-state="closed"')).toBe(true);
+  });
+
+  // Ш1f (хвост ревью Ш1e, решение Майи «везде одна подпись»): компактная плашка закрытой
+  // фичи без мержа печатает полную CLOSED_NO_MERGE_STATUS, а не короткую «закрыта». Мутация
+  // «вернуть литерал «закрыта»» краснит этот тест.
+  it('закрытая (compact): полная «закрыта без мержа», не короткая «закрыта» (Ш1f)', () => {
+    const html = renderHeader(feat({ bucket: 'closed', summary: null }), { compact: true });
+    expect(html).toContain('закрыта без мержа');
   });
 
   it('смержена (closed + mergedAt): глиф done (галочка), статус «смержена»', () => {

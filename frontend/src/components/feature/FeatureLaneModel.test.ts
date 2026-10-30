@@ -3,6 +3,8 @@
 // Покрытие: ось и timeFrac (живая 0.86 / closed и merged 1), axisFrac (доли, clamp по окну);
 // интервалы (порядок, паузы, totalMinutes, lastOutcome); состояния (done/live/wait/stalled;
 // wait — по задаче из current.waiting, а не по стадии, замечание GC-R-F2 m3);
+// слово состояния стадии (lane.status — из единого источника stageStatusLabel:
+// тон wait/stopped > runningSince > state, доработка Ш2b по ревью c51cd49c);
 // зона «стоит» (только из attention.stopped; поиск этапа по taskId; фолбэк на текущий);
 // approx и пустой словарь — разные состояния (замечание GC-R-F1); skipped; план «N/M»
 // (prod/review из stepProgress, прочие из executors.status); возвраты (только prod);
@@ -17,7 +19,9 @@
 // считать approx → краснеет «пустой словарь — не approx»; (4) не искать стоящий этап по
 // attention.taskId (всегда текущий) → краснеет «стоит по taskId»; (5) вернуть пометку wait
 // по стадии (stage.key === waitKey) → краснеет «wait по задаче, а не по стадии»;
-// (6) waveFrom от первого мержа, не от последнего → краснеет «волна от последнего мержа».
+// (6) waveFrom от первого мержа, не от последнего → краснеет «волна от последнего мержа»;
+// (7) не звать stageStatusLabel в buildStageLanes (status всегда null) → краснеет первый
+//     тест блока «слово состояния стадии» (доработка Ш2b).
 
 import { describe, it, expect } from 'vitest';
 import { buildStageLanes, axisFrac, asStageKey, planCounterText, type StageLanesModel, type StageLane } from './FeatureLaneModel';
@@ -61,6 +65,7 @@ function mkStage(key: StageKey, state: StageState, over: Partial<FeatureStage> =
     approxMinutes: 0,
     overlapsActive: false,
     executors: [],
+    runningSince: null,
     ...over,
   };
 }
@@ -506,6 +511,60 @@ describe('planCounterText: текст счётчика «N/M» (GC-F12R)', () =>
     // stepProgress нет → план prod = null → текста нет.
     const noSp = buildStageLanes(mkRun({ stages: [mkStage('prod', 'active')] }), mkStats(), NOW);
     expect(planCounterText(laneOf(noSp, 'prod'))).toBeNull();
+  });
+});
+
+// === Слово состояния стадии: из единого источника stageStatusLabel (доработка Ш2b) ===
+//
+// Модель не выводит слово сама: она зовёт единый источник по стадии и несёт его пару
+// (текст + тон) в lane.status. Здесь — все сочетания state × tone × runningSince:
+// порядок «tone wait/stopped > runningSince > state» (решение по ревью c51cd49c:
+// ждущая ответа или вставшая стадия не «идёт», даже когда по ней есть живой ход;
+// факт идущей задачи — «идёт» при любом state, П2).
+
+describe('слово состояния стадии: тон важнее «идёт», runningSince важнее state (доработка Ш2b)', () => {
+  // Мутация 7: не звать stageStatusLabel в buildStageLanes (status всегда null) →
+  // краснеет первый тест; заменить слово в stageStatusLabel литералом → краснеют все.
+  const statusOf = (key: StageKey, state: StageState, over: Partial<FeatureStage> = {}) =>
+    laneOf(buildStageLanes(mkRun({ stages: [mkStage(key, state, over)] }), mkStats(), NOW), key).status;
+
+  it('pending с runningSince — «идёт» (П2: по стадии работают, хотя по конвейеру она ещё не активна)', () => {
+    expect(statusOf('qa', 'pending', { runningSince: '2026-10-20T11:00:00Z' })).toEqual({ text: 'идёт', tone: 'muted' });
+  });
+
+  it('active с runningSince — «идёт»', () => {
+    expect(statusOf('prod', 'active', { runningSince: '2026-10-20T10:00:00Z' })).toEqual({ text: 'идёт', tone: 'muted' });
+  });
+
+  it('wait с runningSince — «нужен ответ» (info), НЕ «идёт»: ждущая ответа стадия не идёт', () => {
+    expect(statusOf('qa', 'active', { tone: 'wait', runningSince: '2026-10-20T11:00:00Z' })).toEqual({ text: 'нужен ответ', tone: 'info' });
+  });
+
+  it('stopped с runningSince — «стоит» (danger), НЕ «идёт»', () => {
+    expect(statusOf('qa', 'active', { tone: 'stopped', runningSince: '2026-10-20T11:00:00Z' })).toEqual({ text: 'стоит', tone: 'danger' });
+  });
+
+  it('wait без runningSince (задача held — бэковый IsRunning её исключает) — «нужен ответ»', () => {
+    expect(statusOf('qa', 'active', { tone: 'wait' })).toEqual({ text: 'нужен ответ', tone: 'info' });
+  });
+
+  it('stopped без runningSince — «стоит»', () => {
+    expect(statusOf('qa', 'active', { tone: 'stopped' })).toEqual({ text: 'стоит', tone: 'danger' });
+  });
+
+  it('без тона и без runningSince — по state: active — «идёт», pending — «впереди», skipped — «не было»', () => {
+    expect(statusOf('prod', 'active')).toEqual({ text: 'идёт', tone: 'muted' });
+    expect(statusOf('merge', 'pending')).toEqual({ text: 'впереди', tone: 'muted' });
+    expect(statusOf('final', 'skipped')).toEqual({ text: 'не было', tone: 'muted' });
+  });
+
+  it('overlapsActive без тона и без живого хода — «идёт параллельно»; с живым ходом — «идёт» (runningSince важнее state)', () => {
+    expect(statusOf('review', 'active', { overlapsActive: true })).toEqual({ text: 'идёт параллельно', tone: 'muted' });
+    expect(statusOf('review', 'active', { overlapsActive: true, runningSince: '2026-10-20T11:00:00Z' })).toEqual({ text: 'идёт', tone: 'muted' });
+  });
+
+  it('done — слова нет (null), даже с мусорным runningSince', () => {
+    expect(statusOf('merge', 'done', { runningSince: '2026-10-20T11:00:00Z' })).toBeNull();
   });
 });
 

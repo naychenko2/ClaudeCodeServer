@@ -76,9 +76,10 @@ function tileContent(tile: StatTile): { big: string; hint: string | null } {
     case 'work':
       return {
         big: formatDuration(tile.minutes),
+        // Две базы названы прямо: крупное число — «стена» (время по часам), рядом — «сумма агентов».
         hint: tile.agentsSum == null
-          ? 'агенты суммарно — не считалось'
-          : `агенты суммарно ${formatDuration(tile.agentsSum)}`,
+          ? 'стена · сумма агентов — не считалось'
+          : `стена · сумма агентов ${formatDuration(tile.agentsSum)}`,
       };
     case 'waiting': {
       // null — бэк не считал (approx-режим), 0 — ожиданий действительно не было.
@@ -97,6 +98,7 @@ function tileContent(tile: StatTile): { big: string; hint: string | null } {
       };
     }
     case 'loops': {
+      // Хвост — та же база, что крупное число (витки): сумма разбивки = число плитки.
       const src = tile.bySource
         ? ` · ревью ${tile.bySource.review.count} · проверка ${tile.bySource.qa.count} · финал ${tile.bySource.final.count}`
         : '';

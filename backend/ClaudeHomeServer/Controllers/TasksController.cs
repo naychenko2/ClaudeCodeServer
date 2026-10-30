@@ -1053,8 +1053,8 @@ public class TasksController(
         {
             if (string.IsNullOrWhiteSpace(req.Text))
                 return BadRequest(new { error = "Оценка пишется вместе с голосом" });
-            estimate = rawEstimate.Normalize();
-            if (estimate.Validate() is { } invalid) return BadRequest(new { error = invalid });
+            estimate = rawEstimate.Normalize().NullIfEmpty();
+            if (estimate?.Validate() is { } invalid) return BadRequest(new { error = invalid });
         }
         var run = features.Project(featureId, UserId);
         if (run is null) return NotFound(new { error = "Фича не найдена" });

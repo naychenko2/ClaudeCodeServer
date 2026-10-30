@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Tasks.Projector;
+using ClaudeHomeServer.Tasks.Tests.Fixtures;
 
 namespace ClaudeHomeServer.Tasks.Tests;
 
@@ -453,6 +454,27 @@ public class FeatureStepProgressTests
     // ─── Знаменатель: план ∪ заведённые ──────────────────────────────────────────────────────
 
     [Fact]
+    public void ШагиПлана_СРевью_ВЗнаменателеТолькоStep()
+    {
+        var plan = Plan("p", 0, ("B1", "back"), ("B2", "back"), ("R-B1", "back"), ("QA", null));
+        plan.PlanSteps![2].Kind = PlannedStep.KindReview;
+        plan.PlanSteps[3].Kind = PlannedStep.KindQa;
+        var run = Run(Feature(), plan);
+
+        run.StepProgress.Total.Should().Be(2);
+        run.StepProgress.NotCreated.Should().Be(2);
+    }
+
+    [Fact]
+    public void ШагиПлана_ШагСExplicitKindStep_Считается()
+    {
+        var plan = Plan("p", 0, ("B1", "back"));
+        plan.PlanSteps![0].Kind = PlannedStep.KindStep;
+
+        Run(Feature(), plan).StepProgress.Total.Should().Be(1);
+    }
+
+    [Fact]
     public void ШагиПлана_БезЗадач_NotCreated_ВЗнаменателе()
     {
         var run = Run(Feature(), Plan("p", 0, ("Ш1", "back"), ("Ш2", "front"), ("Ш3", "front")), Step("s", "Ш1", 1));
@@ -466,16 +488,144 @@ public class FeatureStepProgressTests
         run.Lanes.Single(l => l.Lane == "front").Total.Should().Be(2);
     }
 
+    // B3: последний план вместо объединения. Ранний [A,B,C], поздний [A,B] — C не «не заведён».
     [Fact]
-    public void ДополнениеПлана_ДобавляетШагиВЗнаменатель()
+    public void ПланыСПересечением_ПобеждаетПоздний_РаннийВычёркиваетсяЦеликом()
     {
         var run = Run(Feature(),
-            Plan("p1", 0, ("Ш1", "back"), ("Ш2", "back")),
-            Plan("p2", 2, ("Ш2", "back"), ("Ш3", "back")),
-            Step("s", "Ш1", 4));
+            Plan("p1", 0, ("A", "back"), ("B", "back"), ("C", "back")),
+            Plan("p2", 5, ("A", "back"), ("B", "back")));
 
-        run.StepProgress.Total.Should().Be(3, "∪ шагов обоих планов: Ш1, Ш2, Ш3");
-        run.StepProgress.NotCreated.Should().Be(2);
+        run.StepProgress.Total.Should().Be(2);
+        run.StepProgress.NotCreated.Should().Be(2, "C из замещённого плана не считается");
+    }
+
+    // Ранний план вычёркивается целиком, даже если у него есть непересекающиеся шаги.
+    [Fact]
+    public void ПланыСПересечением_НепересекающийсяШагРаннегоТожеВычёркивается()
+    {
+        var run = Run(Feature(),
+            Plan("p1", 0, ("A", "back"), ("X", "back")),
+            Plan("p2", 5, ("A", "back"), ("B", "back")));
+
+        run.StepProgress.Total.Should().Be(2, "A и B; X ушёл вместе с ранним планом");
+    }
+
+    // Порядок на входе не важен: побеждает (CreatedAt, Id), а не позиция в списке.
+    [Fact]
+    public void ПланыСПересечением_ПорядокВхода_НеВлияет()
+    {
+        var early = Plan("p1", 0, ("A", "back"), ("C", "back"));
+        var late = Plan("p2", 5, ("A", "back"));
+
+        Run(Feature(), late, early).StepProgress.Total.Should().Be(1);
+        Run(Feature(), early, late).StepProgress.Total.Should().Be(1);
+    }
+
+    // Одинаковый CreatedAt: побеждает больший Id (детерминизм).
+    [Fact]
+    public void ПланыСПересечением_ОдинаковыйCreatedAt_ПобеждаетБольшийId()
+    {
+        var a = Plan("p-a", 0, ("A", "back"), ("X", "back"));
+        var b = Plan("p-b", 0, ("A", "back"), ("Y", "back"));
+
+        // Конкретный победитель в обоих порядках входа: без tie-break по Id порядок решал бы исход.
+        FeatureStepAccounting.ActivePlans([a, b]).Select(p => p.Id).Should().Equal("p-b");
+        FeatureStepAccounting.ActivePlans([b, a]).Select(p => p.Id).Should().Equal("p-b");
+        Run(Feature(), a, b, Step("s", "Y", 3)).StepProgress.NotCreated.Should().Be(1, "Y заведён, A нет");
+        Run(Feature(), b, a, Step("s", "Y", 3)).StepProgress.NotCreated.Should().Be(1, "Y заведён, A нет");
+        Run(Feature(), b, a, Step("s", "X", 3)).StepProgress.Total.Should().Be(3, "X вне плана p-b, но заведён — считается");
+    }
+
+    // Вытесненный план не воскрешает шаги через третий: p1[B], p2[A,B], p3[A] → живёт только p3.
+    [Fact]
+    public void ПланыЦепочкойПересечений_ВытесненныйНеВозвращаетШаги()
+    {
+        var p1 = Plan("p1", 0, ("B", "back"));
+        var p2 = Plan("p2", 1, ("A", "back"), ("B", "back"));
+        var p3 = Plan("p3", 2, ("A", "back"));
+
+        Run(Feature(), p1, p2, p3).StepProgress.Total.Should().Be(1);
+        Run(Feature(), p3, p1, p2).StepProgress.Total.Should().Be(1);
+        FeatureStepAccounting.ActivePlans([p2, p3, p1]).Select(p => p.Id).Should().Equal("p3");
+    }
+
+    // B3b: run.ActivePlanIds — ровно действующие планы (тот же ActivePlans): вытесненный и снятый
+    // в списке отсутствуют, независимый (без пересечений) присутствует; SlimRun id не теряет.
+    [Fact]
+    public void ActivePlanIds_ТолькоДействующиеПланы_ПереживаетSlimRun()
+    {
+        var early = Plan("p1", 0, ("A", "back"));
+        var late = Plan("p2", 5, ("A", "back"));
+        var other = Plan("p3", 1, ("Z", "front"));
+        var withdrawn = Plan("p4", 2, ("W", "back"));
+        withdrawn.Verification = new TaskVerification { Verdict = TaskVerdicts.Withdrawn };
+
+        var run = Run(Feature(), early, late, other, withdrawn);
+
+        run.Plan.Should().HaveCount(4);
+        run.ActivePlanIds.Should().BeEquivalentTo("p2", "p3");
+        FeatureProjector.SlimRun(run).ActivePlanIds.Should().BeEquivalentTo("p2", "p3");
+        Run(Feature()).ActivePlanIds.Should().BeEmpty();
+    }
+
+    // B3b: цепочка пересечений p1[B], p2[A,B], p3[A] → действующий только p3.
+    [Fact]
+    public void ActivePlanIds_ЦепочкаПересечений_ТолькоПоследний()
+    {
+        var run = Run(Feature(), Plan("p1", 0, ("B", "back")), Plan("p2", 1, ("A", "back"), ("B", "back")),
+            Plan("p3", 2, ("A", "back")));
+
+        run.ActivePlanIds.Should().Equal("p3");
+    }
+
+    // Планы по линиям без пересечений объединяются.
+    [Fact]
+    public void ПланыБезПересечения_Объединяются()
+    {
+        var run = Run(Feature(),
+            Plan("p1", 0, ("B1", "back"), ("B2", "back")),
+            Plan("p2", 2, ("F1", "front")));
+
+        run.StepProgress.Total.Should().Be(3);
+        run.StepProgress.NotCreated.Should().Be(3);
+        run.StepProgress.PlanState.Should().Be("cut");
+    }
+
+    // Снятый вручную план не входит ни в planned, ни в PlanState (находка плана №3).
+    [Fact]
+    public void СнятыйПлан_НеВходитВШагиИВСостояние()
+    {
+        var old = Plan("p-old", 0, ("A", "back"), ("Z", "back"));
+        old.Verification = new TaskVerification { Verdict = TaskVerdicts.Withdrawn };
+        var run = Run(Feature(), old, Plan("p-new", 1, ("B", "back")));
+
+        run.StepProgress.Total.Should().Be(1, "шаги снятого плана не считаются");
+        run.StepProgress.PlanState.Should().Be("cut");
+    }
+
+    // Замещённый план не держит фичу в partial: PlanState — по тому же набору, что и шаги.
+    [Fact]
+    public void ЗамещённыйПланБезСписка_НеВходитВPlanState()
+    {
+        var run = Run(Feature(), Plan("p-empty", 0), Plan("p1", 1, ("A", "back")), Plan("p2", 2, ("A", "back")));
+
+        // p-empty без списка остаётся действующим → partial; замещённый p1 в счёт не идёт.
+        run.StepProgress.PlanState.Should().Be("partial");
+        run.StepProgress.Total.Should().Be(1);
+    }
+
+    [Fact]
+    public void ПланыБезПересечения_ПлановШагиВПланеПомечены()
+    {
+        var plan1 = Plan("p1", 0, ("A", "back"), ("B", "back"));
+        var plan2 = Plan("p2", 5, ("B", "back"));
+        // A замещён целиком → шаг A вне действующего плана.
+        var acc = FeatureStepAccounting.Build(
+            [Step("sa", "A", 1), Step("sb", "B", 6)], [], [plan1, plan2], T0.AddDays(1), null);
+
+        acc.Facts["A"].InPlan.Should().BeFalse();
+        acc.Facts["B"].InPlan.Should().BeTrue();
     }
 
     [Fact]
@@ -771,5 +921,93 @@ public class FeatureStepProgressTests
 
         // открытая фича: Summary нет.
         Run(Feature(), Step("s", "Ш1", 1)).Summary.Should().BeNull();
+    }
+
+    // ─── Ш7: инвариант «корзины вкладки Шагов = stepProgress» ──────────────────────────────────
+
+    // Корзина цепочки — то же правило, что у фронта (FeatureProdCards.bucketOf): снят → принят →
+    // pending = ревью; running при всех закрытых задачах = ревью; иначе работа.
+    private static string BucketOf(FeatureStepChain c, IReadOnlyList<TaskItem> all)
+    {
+        if (c.Outcome == "withdrawn" || c.Outcome == "accepted") return c.Outcome;
+        if (c.Outcome == "pending") return "review";
+        var own = all.Where(t => c.TaskIds.Contains(t.Id)).ToList();
+        bool allDone = own.Count > 0 && own.All(t => t.Status == TaskItemStatus.Done);
+        return c.Outcome == "running" && allDone ? "review" : "work";
+    }
+
+    private static void AssertBucketsMatchProgress(FeatureRun run, IReadOnlyList<TaskItem> all)
+    {
+        var p = run.StepProgress;
+        var chains = run.StepChains;
+
+        chains.Select(c => c.StepRef).Should().OnlyHaveUniqueItems("цепочка на шаг одна, доработка корзину не плодит");
+        var byBucket = chains.GroupBy(c => BucketOf(c, all)).ToDictionary(g => g.Key, g => g.Count());
+        int B(string k) => byBucket.GetValueOrDefault(k);
+
+        B("accepted").Should().Be(p.Accepted);
+        B("review").Should().Be(p.Review);
+        B("work").Should().Be(p.Work);
+        B("withdrawn").Should().Be(p.Withdrawn);
+        // Цепочки вне «снят» + шаги плана без задачи (у них цепочки нет) = знаменатель.
+        (chains.Count - B("withdrawn") + p.NotCreated).Should().Be(p.Total);
+        p.Total.Should().Be(p.Accepted + p.Review + p.Work + p.NotCreated);
+        // «В master» — ортогональный признак: в сумму не входит и не больше числа цепочек.
+        chains.Count(c => c.InMaster).Should().Be(p.InMaster);
+        p.InMaster.Should().BeLessThanOrEqualTo(chains.Count);
+    }
+
+    [Fact]
+    public void КорзиныЦепочек_Фикстура_СуммаРавнаStepProgress()
+    {
+        var tasks = FeatureRunFixture.Load("feat-step-chains.json");
+        var epic = tasks.Single(t => t.Role == TaskRoles.Feature);
+        var run = FeatureProjector.Build(epic, tasks);
+
+        run.StepChains.Should().NotBeEmpty();
+        run.StepProgress.Withdrawn.Should().BeGreaterThan(0, "в фикстуре есть снятый шаг");
+        AssertBucketsMatchProgress(run, tasks);
+    }
+
+    // Все четыре корзины + notCreated + доработка + «в master» одновременно.
+    [Fact]
+    public void КорзиныЦепочек_ВсеКорзиныИДоработка_СуммаРавнаTotal_InMasterВнеСуммы()
+    {
+        var tasks = new List<TaskItem>
+        {
+            Feature(),
+            Plan("p", 0, ("A", "back"), ("B", "back"), ("C", "back"), ("D", "back"), ("E", "back"), ("N", "front")),
+            Step("sA", "A", 1), Verdict("rA", TaskRoles.Review, TaskVerdicts.Accepted, 3, "sA"),
+            Step("sB", "B", 1), Step("sB2", "B", 2, TaskItemStatus.InProgress),
+            Step("sC", "C", 1),
+            Step("sD", "D", 1), Rework("wD", "D", 10, ["rD"], verdict: TaskVerdicts.Withdrawn),
+            Verdict("rD", TaskRoles.Review, TaskVerdicts.Returned, 3, "sD"),
+            Step("sE", "E", 1), Verdict("rE", TaskRoles.Review, TaskVerdicts.Returned, 3, "sE"),
+            Rework("wE", "E", 5, ["rE"], TaskItemStatus.InProgress),
+            new() { Id = "m", FeatureId = Epic, Role = TaskRoles.Merge, Status = TaskItemStatus.Done, CreatedAt = T0.AddMinutes(20), CompletedAt = T0.AddMinutes(21) },
+        };
+        var run = FeatureProjector.Build(tasks[0], tasks, T0.AddDays(1));
+
+        run.StepProgress.NotCreated.Should().Be(1);
+        run.StepProgress.InMaster.Should().BeGreaterThan(0);
+        run.StepChains.Select(c => c.StepRef).Should().OnlyHaveUniqueItems();
+        AssertBucketsMatchProgress(run, tasks);
+    }
+
+    // План с пересечением (B3): вытесненный план и его шаги не раздувают ни цепочки, ни знаменатель.
+    [Fact]
+    public void КорзиныЦепочек_ПланСПересечением_СуммаРавнаTotal()
+    {
+        var tasks = new List<TaskItem>
+        {
+            Feature(),
+            Plan("p1", 0, ("A", "back"), ("B", "back"), ("C", "back")),
+            Plan("p2", 5, ("A", "back"), ("B", "back")),
+            Step("sA", "A", 6), Step("sC", "C", 6),
+        };
+        var run = FeatureProjector.Build(tasks[0], tasks, T0.AddDays(1));
+
+        run.StepProgress.Total.Should().Be(3, "действующий p2 [A,B] плюс заведённый C");
+        AssertBucketsMatchProgress(run, tasks);
     }
 }

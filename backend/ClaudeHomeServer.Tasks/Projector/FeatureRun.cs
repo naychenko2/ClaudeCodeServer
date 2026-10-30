@@ -41,6 +41,9 @@ public sealed class FeatureRun
     public List<TaskItem> Design { get; init; } = [];
     // План (role=plan): задачи с ролью plan и FeatureId == epic.Id.
     public List<TaskItem> Plan { get; init; } = [];
+    // Id действующих планов из Plan: не снятые и не вытесненные более поздним (тот же ActivePlans,
+    // что считает учёт шагов). План не из списка — снят или замещён; фронт «В очереди» фильтрует по нему.
+    public List<string> ActivePlanIds { get; init; } = [];
     // Безролевые задачи фичи (role=null): ни в одну стадию не попадают, но входят в
     // ленту событий (W4-DES-B: хронология — ВСЕ задачи с featureId).
     public List<TaskItem> Unroled { get; init; } = [];
@@ -193,6 +196,22 @@ public sealed class FeatureAttention
     public string? PersonaId { get; init; }
     // Связанный чат исполнителя.
     public string? LinkedSessionId { get; init; }
+    // Только у Kind == "merge": что в трекере не сходится с «финал принят» (предупреждение, не гейт).
+    // Виды — FeatureMergeRiskKinds, порядок фиксированный, нулевые не кладутся.
+    public List<FeatureMergeRisk> MergeRisks { get; init; } = [];
+}
+
+// Риск мержа: вид и сколько шагов/расхождений под него попало.
+public sealed record FeatureMergeRisk(string Kind, int Count);
+
+public static class FeatureMergeRiskKinds
+{
+    // Шагов плана без задач (NotCreated).
+    public const string NotCreated = "not_created";
+    // Заведены, но не приняты (Work + Review).
+    public const string Open = "open";
+    // Расхождения сверки трекера.
+    public const string Tracker = "tracker";
 }
 
 // Итог смерженной фичи: только у закрытой фичи, иначе null.
@@ -394,8 +413,8 @@ public sealed class FeatureStepChain
 // Возвраты одного источника (ревью/проверка/финал): число возвратов и сколько из них открыто.
 public sealed class FeatureSourceReturns
 {
-    // Возвраты этого источника: число уникальных задач ревью/проверки/финала с вердиктом
-    // returned/accepted_with_remarks.
+    // Возвраты этого источника — витки с вердиктом returned/accepted_with_remarks (задача
+    // ревью/проверки/финала несёт один вердикт). Сумма по источникам = Verdicts.Loops.
     public int Count { get; init; }
     // Сколько из них, чья доработка ещё не done (фронт красит бейдж в тревожный тон).
     public int Open { get; init; }

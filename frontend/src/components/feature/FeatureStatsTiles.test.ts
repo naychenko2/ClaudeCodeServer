@@ -4,8 +4,8 @@
 // дал tilesModel (ST-F3).
 //
 // Покрытие:
-//   · четыре плитки с testid tile-work/tile-waiting/tile-loops/tile-spend, подпись
-//     «агенты суммарно» (к1);
+//   · четыре плитки с testid tile-work/tile-waiting/tile-loops/tile-spend, две подписи
+//     «стена» и «сумма агентов» (к1);
 //   · spend = null → плитки «Расход» в DOM нет, в сетке три карточки (к1);
 //   · isMobile → gridTemplateColumns repeat(2, 1fr), десктоп — repeat(4, 1fr) (к2);
 //   · ряд витков: значок на каждый учтённый ход (returned → ↩, принятые → ✓), withdrawn
@@ -153,7 +153,7 @@ describe('состав плиток (к1)', () => {
     }
     // Числа — как дал бэк: работа 1 ч 40 мин, ожидание 1 ч, возвраты 2.
     expect(textOf(findNodeByAttr(g, 'data-testid', 'tile-work-big'))).toBe('1 ч 40 мин');
-    expect(textOf(findNodeByAttr(g, 'data-testid', 'tile-work-hint'))).toContain('агенты суммарно 2 ч');
+    expect(textOf(findNodeByAttr(g, 'data-testid', 'tile-work-hint'))).toContain('стена · сумма агентов 2 ч');
     expect(textOf(findNodeByAttr(g, 'data-testid', 'tile-spend-big'))).toBe('$21,80');
   });
 
@@ -169,8 +169,8 @@ describe('состав плиток (к1)', () => {
     stats.timeline.totals.agentsSumMinutes = null;
     const { container } = mountTiles(mkRun(), stats);
     const hint = textOf(findNodeByAttr(container, 'data-testid', 'tile-work-hint'));
-    expect(hint).toContain('агенты суммарно — не считалось');
-    expect(hint).not.toMatch(/агенты суммарно 0 мин/);
+    expect(hint).toContain('стена · сумма агентов — не считалось');
+    expect(hint).not.toMatch(/сумма агентов 0 мин/);
   });
 });
 
@@ -277,6 +277,19 @@ describe('ряд ✓/↩ в «Возвраты» (к3)', () => {
     expect(findNodeByAttr(container, 'data-testid', 'tile-rounds')).toBeNull();
     expect(textOf(findNodeByAttr(container, 'data-testid', 'tile-loops-big'))).toBe('0');
     expect(textOf(findNodeByAttr(container, 'data-testid', 'tile-loops-hint'))).toContain('возвратов не было');
+  });
+});
+
+describe('«Возвраты»: одна база (Ш6)', () => {
+  it('крупное число = сумма разбивки, хвост — те же числа', () => {
+    const run = mkRun({
+      verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
+      returnsBySource: { review: { count: 3, open: 0 }, qa: { count: 2, open: 0 }, final: { count: 1, open: 0 } },
+    });
+    const { container } = mountTiles(run, mkStats());
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'tile-loops-big'))).toBe('6');
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'tile-loops-hint')))
+      .toBe('6 возвратов · ревью 3 · проверка 2 · финал 1');
   });
 });
 

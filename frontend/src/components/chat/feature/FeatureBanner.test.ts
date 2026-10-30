@@ -94,7 +94,7 @@ describe('featureRowModel: состояния строки', () => {
 
   it('смержена/закрыта: слово состояния из общего statusPhrase (без даты, как в пилюле)', () => {
     expect(featureRowModel(feat({ state: 'merged' }), null, false).statusWord).toBe('смержена');
-    expect(featureRowModel(feat({ state: 'closed' }), null, false).statusWord).toBe('закрыта');
+    expect(featureRowModel(feat({ state: 'closed' }), null, false).statusWord).toBe('закрыта без мержа');
   });
 
   it('пауза с очередью: «В очереди · 2 из 3» (общий queueLabelParts), не «Сейчас»', () => {
@@ -132,14 +132,43 @@ describe('FeatureTruthBody: сводка (раскрытие В2 = попап П
     expect(html).toContain('ещё 2 фичи');
   });
 
-  it('пустые секции не рисуются: нет now/оценки/трекера/расхождений — ни «Сейчас», ни пары, ни метра, ни «расходится»', () => {
+  it('пустые секции не рисуются: нет now/оценки/трекера/расхождений — ни «Сейчас», ни «Срока», ни метра, ни «расходится»', () => {
     const html = renderBody(run());
     expect(html).not.toContain('Сейчас ·');
-    expect(html).not.toContain('feature-truth-pair');
+    expect(html).not.toContain('feature-truth-eta');
     expect(html).not.toContain('feature-truth-meter');
     expect(html).not.toContain('feature-truth-disc');
     // подвал — всегда (роль этого чата + переход)
     expect(html).toContain('feature-truth-page');
+  });
+
+  // Ш3b (остаток П1): процент один — «По трекеру»; оценка оркестратора даёт только срок.
+  it('оценка с eta: одна плитка «Срок» на всю ширину, «Готовности» по оценке нет; без etaMain — ни плитки, ни строки', () => {
+    const sp98 = { planState: 'cut' as const, total: 98, accepted: 26, review: 0, work: 0, notCreated: 0, withdrawn: 0, unlinkedReworks: 0 };
+    const html = renderBody(run({
+      stepProgress: sp98,
+      epic: { id: 'f1', title: 'Фича', status: 'todo', note: { text: 'голос', at: '2026-10-29T12:00:00Z', byUser: false, stageAtWrite: 'prod', stateAtWrite: 'running', estimate: { etaMinutes: 160 } } },
+    }));
+    // percent оценки (100) не рисуется нигде; плитки «Готовность» в раскрытии нет
+    // (слово «Готовность» остаётся только в aria полосы «По трекеру» — блок не тронут).
+    expect(html).not.toContain('>Готовность<');
+    expect(html).not.toContain('100 %');
+    // «Срок» на месте — единственная плитка, сетка на всю ширину.
+    expect(html).toContain('data-testid="feature-truth-eta"');
+    expect(html).toContain('grid-template-columns:1fr;');
+    expect(html).toContain('>Срок<');
+    expect(html).toContain('≈ 2 ч 40 мин');
+    // «По трекеру» не тронут: единственная готовность — 26 из 98.
+    expect(html).toContain('feature-truth-meter');
+    expect(html).toContain('26 из 98');
+    // etaMain нет (eta не оценивался) — пары/плитки нет вовсе.
+    const htmlNoEta = renderBody(run({
+      stepProgress: sp98,
+      epic: { id: 'f1', title: 'Фича', status: 'todo', note: { text: 'голос', at: '2026-10-29T12:00:00Z', byUser: false, stageAtWrite: 'prod', stateAtWrite: 'running', estimate: { remaining: ['финал'] } } },
+    }));
+    expect(htmlNoEta).not.toContain('feature-truth-eta');
+    expect(htmlNoEta).not.toContain('>Срок<');
+    expect(htmlNoEta).toContain('feature-truth-meter');
   });
 
   it('расхождения — свёрнутая строка «Трекер расходится · N» (список — по тапу, aria-expanded)', () => {

@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Home · страница фичи проще · три сценария (v1)</title>
+<!--
+  Макет v1: упрощение СТРАНИЦЫ ФИЧИ — одна величина в одном месте, без повторов и противоречий.
+  Подложка — снимок живого стенда (инспекционная копия на копии боевых данных 29.10, ветка
+  feat/feature-progress-truth, Playwright, DPR 2): десктоп 1400×900, мобила 360×740, обе темы.
+  Остров страницы фичи на десктопе (x 409, y 61, 930×822) и всё ниже шапки «К списку» на мобиле (57 px)
+  перекрыты HTML-ом сценария. Чаты слева и верхняя панель — настоящие.
+  Данные НАСТОЯЩИЕ: «идёт» — фича c926e0e5 «Общие проекты», «ждёт вас» — фича 2cc8123a «Ускорение тестов»
+  (поля FeatureRun ветки feat/feature-progress-truth: stepProgress c inMaster, returnsBySource, brief, tracker).
+  Сценарии: A «Сводка + вкладки», B «Один экран», C «Лента + карточка». Плюс «Как сейчас» — снимки стенда.
+  Предложение — feature-page-simplify-v1-proposal.md. Задача 13217214 (дизайн), код продукта не правится.
+  Сырые значения цветов — ТОЛЬКО в блоке токенов (копия theme.css); дальше — var(--c-*).
+-->
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css, семантика — C.* из design.ts ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2; --c-accent:#D97757; --c-accent-light:#F4ECE1;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-progress-track:#D8CFBE;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-persona-1:#5E8B4E; --c-persona-2:#3E7CA6; --c-persona-3:#8A6A28; --c-persona-4:#B4452F;
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18; --c-accent:#E38A6A; --c-accent-light:#3A2E27;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-progress-track:#5C544A;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-persona-1:#7CB86A; --c-persona-2:#5FA0CC; --c-persona-3:#E7B96E; --c-persona-4:#E8785E;
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+}
+/* Шкалы design.ts: FS xxs10 xs11 sm12 base13 md14 lg16 · SP 2/4/8/12/16/20 · R sm6 md8 lg10 xl14 max999 */
+* { box-sizing:border-box; }
+html,body { margin:0; }
+body { background:var(--c-bg-panel); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.45; }
+button { font:inherit; color:inherit; border:0; background:none; margin:0; padding:0; cursor:pointer; text-align:left; }
+button:focus-visible { outline:none; box-shadow:var(--shadow-focus); border-radius:8px; }
+.mono { font-family:"JetBrains Mono","Courier New",monospace; }
+.serif { font-family:"PT Serif",Georgia,serif; }
+
+/* ===== Обвязка макета (не часть продукта) ===== */
+.mk { position:sticky; top:0; z-index:50; display:flex; flex-wrap:wrap; gap:10px 20px; align-items:center;
+  padding:12px 16px; background:var(--c-bg-card); border-bottom:1px solid var(--c-border); }
+.mk h1 { font-family:"PT Serif",Georgia,serif; font-size:16px; margin:0 8px 0 0; color:var(--c-text-heading); }
+.grp { display:flex; align-items:center; gap:8px; }
+.lbl { font-size:11px; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.04em; }
+.pills { display:flex; gap:2px; background:var(--c-bg-inset); padding:2px; border-radius:9px; flex-wrap:wrap; }
+.pills button { padding:4px 10px; border-radius:8px; font-size:12px; color:var(--c-text-secondary); }
+.pills button.on { background:var(--c-bg-card); color:var(--c-text-heading); font-weight:600; box-shadow:0 0 0 1px var(--c-border); }
+.note { max-width:1800px; margin:14px auto 0; padding:0 16px; font-size:12px; color:var(--c-text-secondary); }
+.note b { color:var(--c-text-heading); }
+.stage { display:flex; flex-wrap:wrap; gap:24px; justify-content:center; padding:14px 16px 48px; align-items:flex-start; }
+.cap { font-size:11px; color:var(--c-text-muted); margin:0 0 6px 4px; text-transform:uppercase; letter-spacing:.04em; }
+
+/* ===== Кадры со снимком стенда ===== */
+.frame { position:relative; overflow:hidden; border:1px solid var(--c-border); border-radius:14px;
+  box-shadow:var(--shadow-island); background-repeat:no-repeat; background-position:0 0; }
+.desk { width:1400px; height:900px; background-size:1400px 900px; }
+.mob { width:360px; height:740px; background-size:360px 740px; }
+[data-theme="light"] .desk { background-image:url(assets/feature-page-simplify/desk-light.png); }
+[data-theme="dark"]  .desk { background-image:url(assets/feature-page-simplify/desk-dark.png); }
+[data-theme="light"] .mob { background-image:url(assets/feature-page-simplify/mob-light.png); }
+[data-theme="dark"]  .mob { background-image:url(assets/feature-page-simplify/mob-dark.png); }
+/* Остров страницы: точно на месте настоящего (x409 y61 930×822; скругление острова 14 снаружи) */
+.island { position:absolute; left:409px; top:61px; width:930px; height:822px; background:var(--c-bg-card);
+  border-radius:0 0 13px 13px; overflow:hidden; display:flex; flex-direction:column; }
+.mob .island { left:0; top:57px; width:360px; height:683px; border-radius:0; }
+.scroll { flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; scrollbar-width:thin; }
+
+/* ===== Кусочки продукта (только токены) ===== */
+.hd { display:flex; align-items:center; gap:8px; height:52px; padding:0 16px 0 12px; border-bottom:1px solid var(--c-border-light); flex-shrink:0; }
+.ic { width:32px; height:32px; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; color:var(--c-text-muted); flex-shrink:0; }
+.ic:hover { background:var(--c-bg-selected); }
+.title { font-family:"JetBrains Mono","Courier New",monospace; font-weight:700; font-size:14px; color:var(--c-text-heading);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:1; }
+.btn { display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 12px; border-radius:8px; font-size:13px; font-weight:600;
+  white-space:nowrap; flex-shrink:0; background:var(--c-bg-inset); color:var(--c-text-primary); }
+.btn.primary { background:var(--c-accent); color:var(--c-on-accent); }
+.btn.sm { height:24px; padding:0 10px; font-size:12px; }
+.btn.ghost { background:none; color:var(--c-text-secondary); }
+.btn.ghost:hover { background:var(--c-bg-selected); }
+.mob .btn { height:40px; }
+.mob .btn.sm { height:32px; }
+.bdg { display:inline-flex; align-items:center; gap:4px; padding:3px 8px; border-radius:999px; font-size:11px; font-weight:600; line-height:1.4;
+  white-space:nowrap; flex-shrink:0; background:var(--c-bg-inset); color:var(--c-text-secondary); }
+.bdg.accent { background:var(--c-accent-light); color:var(--c-accent); }
+.bdg.success { background:var(--c-success-bg); color:var(--c-success-text); }
+.bdg.warning { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.bdg.info { background:var(--c-info-bg); color:var(--c-info); }
+.dot { width:7px; height:7px; border-radius:999px; display:inline-block; flex-shrink:0; }
+.av { width:20px; height:20px; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; font-size:9px; font-weight:700;
+  color:var(--c-on-accent); flex-shrink:0; }
+.muted { color:var(--c-text-muted); }
+.sec { color:var(--c-text-secondary); }
+.h { color:var(--c-text-heading); font-weight:600; }
+.num { font-family:"JetBrains Mono","Courier New",monospace; font-variant-numeric:tabular-nums; }
+.lnk { color:var(--c-accent); font-weight:600; font-size:12px; white-space:nowrap; }
+.sl { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); }
+
+/* Тревога: одна полоса под шапкой, единственное место «ждёт вас» на странице */
+.alarm { display:flex; align-items:center; gap:10px; padding:8px 16px; background:var(--c-warning-bg); color:var(--c-text-heading);
+  border-bottom:1px solid var(--c-border-light); flex-shrink:0; font-size:13px; }
+.alarm b { font-weight:700; }
+.alarm > svg { color:var(--c-warning-text); }
+.mob .alarm { flex-wrap:wrap; padding:10px 14px; }
+.mob .alarm > span { flex-basis:calc(100% - 26px) !important; }
+
+/* Сводка В2 «Трек»: фраза + полоса трекера + «27 % · срок» */
+.sum { padding:14px 16px 12px; border-bottom:1px solid var(--c-border-light); flex-shrink:0; }
+.mob .sum { padding:12px 14px; }
+.sum-l { display:flex; align-items:baseline; gap:8px; min-width:0; }
+.sum-l .ph { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--c-text-secondary); }
+.sum-l .ph b { color:var(--c-text-heading); font-weight:600; }
+.pct { font-family:"JetBrains Mono","Courier New",monospace; font-weight:700; color:var(--c-text-heading); white-space:nowrap; }
+.eta { font-family:"JetBrains Mono","Courier New",monospace; color:var(--c-text-muted); white-space:nowrap; }
+.bar { display:flex; gap:2px; height:6px; margin:8px 0 6px; }
+.bar i { display:block; height:100%; border-radius:999px; min-width:3px; }
+.b-m { background:var(--c-success-text); } .b-a { background:var(--c-success); } .b-r { background:var(--c-info); }
+.b-w { background:var(--c-accent); } .b-n { background:var(--c-progress-track); }
+.leg { display:flex; flex-wrap:wrap; gap:4px 12px; font-size:11px; color:var(--c-text-muted); }
+.leg span { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
+.leg b { color:var(--c-text-secondary); font-weight:600; }
+.facts { display:flex; flex-wrap:wrap; gap:4px 16px; margin-top:8px; font-size:12px; color:var(--c-text-muted); }
+.facts b { color:var(--c-text-heading); font-weight:600; font-family:"JetBrains Mono","Courier New",monospace; }
+.memo { margin-top:10px; padding:8px 10px; background:var(--c-bg-inset); border-radius:8px; font-size:12px; color:var(--c-text-secondary); cursor:pointer; }
+.memo > span { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.memo b { color:var(--c-text-heading); font-weight:600; }
+.memo.open > span { -webkit-line-clamp:unset; }
+
+/* Вкладки */
+.tabs { display:flex; gap:2px; padding:0 12px; border-bottom:1px solid var(--c-border-light); flex-shrink:0; overflow-x:auto; scrollbar-width:none; }
+.tabs button { height:40px; padding:0 10px; font-size:13px; color:var(--c-text-secondary); white-space:nowrap; border-bottom:2px solid transparent; display:inline-flex; align-items:center; gap:6px; }
+.tabs button.on { color:var(--c-accent); border-bottom-color:var(--c-accent); font-weight:600; }
+.tabs .n { font-size:11px; color:var(--c-text-muted); font-family:"JetBrains Mono","Courier New",monospace; }
+
+/* Этапы-гант (упрощённые строки) */
+.lane { display:grid; grid-template-columns:150px 1fr 74px; align-items:center; gap:10px; padding:7px 16px; min-height:40px; }
+.lane:hover { background:var(--c-bg-selected); }
+.mob .lane { grid-template-columns:118px 1fr 58px; padding:8px 14px; gap:8px; }
+.ln { display:flex; flex-direction:column; min-width:0; }
+.ln .t { font-weight:600; color:var(--c-text-heading); font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.ln .s { font-size:11px; color:var(--c-text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.trk { position:relative; height:10px; background:none; border-top:1px dashed var(--c-border); margin-top:5px; }
+.trk i { position:absolute; top:-6px; height:10px; border-radius:3px; background:var(--c-success); }
+.trk i.w { background:var(--c-accent); } .trk i.q { background:var(--c-info); }
+.trk .nowl { position:absolute; top:-12px; bottom:-8px; width:1px; background:var(--c-danger); }
+.dur { text-align:right; font-family:"JetBrains Mono","Courier New",monospace; font-size:12px; color:var(--c-text-secondary); white-space:nowrap; }
+.axis { display:grid; grid-template-columns:150px 1fr 74px; gap:10px; padding:6px 16px; font-size:11px; color:var(--c-text-muted); font-family:"JetBrains Mono","Courier New",monospace; }
+.mob .axis { grid-template-columns:118px 1fr 58px; padding:6px 14px; gap:8px; }
+.axis .r { text-align:right; color:var(--c-danger-text); }
+.pend .t { color:var(--c-text-muted); font-weight:500; }
+
+/* Секции-аккордеоны (сценарий B) */
+.acc { border-top:1px solid var(--c-border-light); }
+.acc-h { display:flex; align-items:center; gap:10px; width:100%; padding:10px 16px; min-height:44px; }
+.acc-h:hover { background:var(--c-bg-selected); }
+.mob .acc-h { padding:10px 14px; min-height:48px; }
+.acc-h .t { font-weight:600; color:var(--c-text-heading); }
+.acc-h .p { flex:1; min-width:0; color:var(--c-text-muted); font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.blk { padding:12px 16px; }
+.mob .blk { padding:12px 14px; }
+.row { display:flex; align-items:center; gap:8px; min-height:32px; font-size:12px; }
+.row .g { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--c-text-primary); }
+
+/* Сценарий C: лента + боковая карточка */
+.split { display:flex; flex:1; min-height:0; }
+.feed { flex:1; min-width:0; overflow-y:auto; scrollbar-width:thin; }
+.side { width:300px; flex-shrink:0; border-left:1px solid var(--c-border-light); overflow-y:auto; background:var(--c-bg-main); padding:14px; scrollbar-width:thin; }
+.card { background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:10px; padding:12px; }
+.card + .card { margin-top:10px; }
+.day { padding:12px 16px 4px; font-size:11px; font-weight:700; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.05em; }
+.ev { display:flex; gap:10px; padding:6px 16px; align-items:flex-start; font-size:12px; }
+.mob .ev { padding:6px 14px; }
+.ev .tm { width:38px; flex-shrink:0; font-family:"JetBrains Mono","Courier New",monospace; color:var(--c-text-muted); padding-top:1px; }
+.ev .tx { flex:1; min-width:0; color:var(--c-text-primary); }
+.ev .tx b { color:var(--c-text-heading); font-weight:600; }
+.ev.stage .tx { color:var(--c-text-heading); font-weight:600; }
+.chip { display:inline-flex; align-items:center; height:24px; padding:0 10px; border-radius:999px; font-size:12px; background:var(--c-bg-inset); color:var(--c-text-secondary); white-space:nowrap; }
+.chip.on { background:var(--c-accent-light); color:var(--c-accent); font-weight:600; }
+.mob .chip { height:32px; }
+
+/* «Как сейчас» */
+.now-grid { display:flex; flex-wrap:wrap; gap:24px; justify-content:center; padding:14px 16px 48px; }
+.now-grid figure { margin:0; max-width:620px; }
+.now-grid img { display:block; width:100%; border:1px solid var(--c-border); border-radius:10px; }
+.now-grid figcaption { font-size:12px; color:var(--c-text-secondary); margin-top:8px; }
+.now-grid ol { margin:6px 0 0; padding-left:18px; }
+[data-scn="now"] .stage { display:none; }
+[data-scn]:not([data-scn="now"]) .now-grid { display:none; }
+</style>
+</head>
+<body data-scn="A" data-state="run">
+<div class="mk">
+  <h1>Страница фичи проще · v1</h1>
+  <div class="grp"><span class="lbl">Сценарий</span>
+    <div class="pills" id="p-scn">
+      <button data-v="now">Как сейчас</button>
+      <button data-v="A" class="on">A · Сводка + вкладки</button>
+      <button data-v="B">B · Один экран</button>
+      <button data-v="C">C · Лента + карточка</button>
+    </div></div>
+  <div class="grp"><span class="lbl">Состояние</span>
+    <div class="pills" id="p-state">
+      <button data-v="run" class="on">идёт</button>
+      <button data-v="wait">ждёт вас</button>
+    </div></div>
+  <div class="grp"><span class="lbl">Тема</span>
+    <div class="pills" id="p-theme">
+      <button data-v="light" class="on">светлая</button>
+      <button data-v="dark">тёмная</button>
+    </div></div>
+</div>
+<p class="note" id="note"></p>
+<div class="stage">
+  <div><div class="cap">Десктоп 1400 × 900 · снимок стенда, остров страницы — сценарий</div><div class="frame desk" id="f-desk"><div class="island" id="i-desk"></div></div></div>
+  <div><div class="cap">Мобила 360 × 740</div><div class="frame mob" id="f-mob"><div class="island" id="i-mob"></div></div></div>
+</div>
+<div class="now-grid">
+  <figure><img src="assets/feature-page-simplify/now-timeline.png" alt="Хронология сейчас">
+    <figcaption><b>«Общие проекты», вкладка «Хронология» (стенд, 29.10 23:47).</b>
+      <ol><li>Тег шапки «идёт · Разрез», в сводке «идёт · Проверка».</li>
+      <li>«Готовность 9 из 9 · 100 %» и тут же «по трекеру 26 из 98».</li>
+      <li>Счётчики шагов трижды: чипы под шапкой, строка под сводкой, строка над гантом.</li>
+      <li>«идёт 1 дн 2 ч» в шапке, «идёт 17 ч 34 мин» в сводке.</li>
+      <li>«Проверка · впереди» на ганте, хотя Вера проверяет сейчас.</li></ol></figcaption></figure>
+  <figure><img src="assets/feature-page-simplify/now-stats.png" alt="Статистика сейчас">
+    <figcaption><b>Та же фича, «Статистика».</b>
+      <ol><li>Тревога «Вера молчит» есть только здесь, на «Хронологии» её нет.</li>
+      <li>Время: 26 ч 43, 17 ч 34, 60 ч 55, 38 ч 01 — четыре базы без подписи, какая где.</li>
+      <li>Этапы второй раз, и длительности другие: производство 13 ч 45 против 11 ч 15.</li>
+      <li>«Возвраты 25», в сводке «25 витков правок», в вердиктах returned 15.</li></ol></figcaption></figure>
+  <figure><img src="assets/feature-page-simplify/now-waiting.png" alt="Ждёт вас сейчас">
+    <figcaption><b>«Ускорение тестов», ждёт мержа.</b>
+      <ol><li>«Ждёт вашего согласия на мерж» — пять раз: тег, баннер, сводка, «Осталось», дорожка.</li>
+      <li>«Срок · за вами», при этом в ответе оценка ≈ 10 дней.</li>
+      <li>План «впереди ≈ 14 мин» — у сделанного этапа.</li>
+      <li>Мерж просят при 90 незаведённых шагах — расхождение трекера не показано.</li></ol></figcaption></figure>
+  <figure style="max-width:300px"><img src="assets/feature-page-simplify/now-mobile.png" alt="Мобила сейчас">
+    <figcaption><b>360 px.</b> До ганта — полтора экрана: два тега, чипы в две строки, сводка, памятка, счётчики.</figcaption></figure>
+</div>
+
+<script>
+/* ===== Настоящие данные стенда (FeatureRun, 29.10 23:47) ===== */
+const D = {
+  run: {
+    title: 'Общие проекты: совместная работа нескольких пользователей в проекте',
+    state: ['accent', 'идёт · проверка'],
+    now: '<b>Вера</b> проверяет повторно · с 23:20',
+    nowShort: '<b>Вера</b> · проверка',
+    pct: 27, eta: 'срок —', etaLong: 'оценки нет: мало похожих фич',
+    basket: { m: 0, a: 26, r: 13, w: 0, n: 59, t: 98 },
+    facts: [['с начала', '26 ч 43'], ['работа', '17 ч 34'], ['возвратов', '25']],
+    memo: '<b>Софья · 27 мин назад.</b> Вся доводка после первой проверки Веры принята ревью: убранный участник видит «Доступ к проекту отозван» и его не выбрасывает из другого раздела, а «Переименовать/Удалить чужой чат» выключены с подсказкой. Сейчас Вера повторно проверяет оба места на живом стенде, примерно час. Затем финальное ревью архитектора и сборка.',
+    next: [['Вера', 'проверка', 'p1'], ['Александр', 'финальное ревью', 'p2'], ['Софья', 'мерж', 'p4']],
+    alarm: null, tracker: 5,
+    tabs: [['Хронология'], ['Шаги', 98], ['Чаты', 109], ['Материалы', 40], ['История', 361], ['Статистика']],
+    stages: [
+      ['Разрез', 'готов · 5 задач', [[1, 4], [8, 1], [30, 2]], '21 мин'],
+      ['Дизайн', 'готов · 2 задачи', [[2, 2]], '23 мин'],
+      ['План', 'готов · 2 задачи', [[3, 2]], '21 мин'],
+      ['Производство', 'принято 26 из 98', [[5, 2], [38, 6], [45, 14], [61, 4], [68, 3]], '11 ч 15'],
+      ['Ревью', '13 шагов ждут', [[6, 1], [37, 4], [43, 8], [53, 9], [64, 6]], '10 ч 03', 'q'],
+      ['Проверка', 'идёт · Вера', [[52, 2], [70, 8]], '1 ч 16', 'w', true],
+      ['Финальное ревью', 'впереди · Александр', [], '—', '', false, true],
+      ['Мерж', 'впереди', [], '—', '', false, true],
+    ],
+    feed: [
+      ['Сегодня', [['23:20', 'Проверка: <b>Вера</b> взяла QA-1b — повторная проверка дефектов', 'stage'], ['23:19', '<b>Глеб</b> принял R-S1-F10 · дельта'], ['22:58', '<b>Кира</b> сдала S1-F8 на ревью'], ['22:41', '<b>Глеб</b> вернул S1-F10 · 1 возврат', 'warn'], ['21:05', '<b>Полина</b> сдала S1-F10']]],
+      ['Вчера', [['22:46', 'Производство началось · 98 шагов в плане, 39 заведено', 'stage'], ['21:56', 'План принят · Егор'], ['21:36', 'Дизайн · Майя, 2 макета']]],
+    ],
+  },
+  wait: {
+    title: 'Ускорение тестов: шарды, быстрый гейт, хостовые фикстуры, ожидание события',
+    state: ['warning', 'ждёт вас · мерж'],
+    now: '<b>Кузьма</b> делает R2 · с 23:26',
+    nowShort: '<b>Кузьма</b> · R2',
+    pct: 13, eta: '≈ 8 нояб.', etaLong: '≈ 8 нояб. (5–18 дн., по 23 фичам) — пока ждёт вас, срок стоит',
+    basket: { m: 0, a: 16, r: 2, w: 16, n: 90, t: 124 },
+    facts: [['с начала', '13 ч 01'], ['работа', '12 ч 03'], ['возвратов', '12']],
+    memo: '<b>Софья · 21 мин назад.</b> R1 сдан (база SessionManagerTestBase, 586/572 тестов как до). В работе: R2 (Кузьма, раскладка на 6 классов скриптом), ревью R-R1 (Глеб). Дальше R3, ревью R2, повторный замер Fast. Push и мерж — по команде Андрея.',
+    next: [['Кузьма', 'R2 · раскладка', 'p3'], ['Вера', 'проверка', 'p1'], ['Софья', 'мерж', 'p4']],
+    alarm: { what: 'Мерж в master ждёт вашего согласия', since: '21 мин', act: 'Мерж…', act2: 'Чат Софьи' },
+    tracker: 3,
+    tabs: [['Хронология'], ['Шаги', 124], ['Чаты', 53], ['Материалы', 12], ['История', 183], ['Статистика']],
+    stages: [
+      ['Разрез', 'готов · 5 задач', [[3, 1], [80, 1]], '7 мин'],
+      ['Дизайн', 'не было', [], '—', '', false, true],
+      ['План', 'готов · 2 задачи', [[40, 2]], '14 мин'],
+      ['Производство', 'принято 16 из 124 · идёт', [[2, 8], [11, 8], [20, 3], [30, 2], [78, 4], [83, 3]], '7 ч 25', 'w'],
+      ['Ревью', '2 шага ждут', [[22, 3], [79, 2]], '1 ч 40', 'q'],
+      ['Проверка', 'впереди · Вера', [], '—', '', false, true],
+      ['Финальное ревью', 'готово', [[74, 3]], '38 мин'],
+      ['Мерж', 'ждёт вас · 21 мин', [[86, 2]], '—', 'w'],
+    ],
+    feed: [
+      ['Сегодня', [['23:26', 'Производство: <b>Кузьма</b> взял R2 · раскладка на 6 классов', 'stage'], ['23:05', '<b>Софья</b> просит согласия на мерж в master', 'warn'], ['22:58', '<b>Глеб</b> принял R1'], ['22:30', 'Финальное ревью · <b>Александр</b> принял'], ['21:00', '<b>Денис</b> сдал R1 на ревью']]],
+      ['Утро', [['11:59', 'Разрез · 124 шага', 'stage'], ['10:43', 'Производство началось', 'stage']]],
+    ],
+  },
+};
+const PCOL = { p1: 'var(--c-persona-1)', p2: 'var(--c-persona-2)', p3: 'var(--c-persona-3)', p4: 'var(--c-persona-4)' };
+const I = {
+  x: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>',
+  back: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>',
+  more: '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>',
+  chev: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>',
+  pause: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 5v14M16 5v14"/></svg>',
+  bell: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/></svg>',
+  warn: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>',
+};
+
+function header(d, mob) {
+  if (mob) return '';   // на мобиле шапка «К списку · название · ⋯» — настоящая, со снимка
+  const st = d.state;
+  const acts = d.alarm ? `<button class="btn primary sm">${d.alarm.act}</button>` : '';
+  return `<div class="hd"><button class="ic" aria-label="Закрыть">${I.x}</button>
+    <span class="title">${d.title}</span><span class="bdg ${st[0]}">${st[1]}</span>${acts}
+    <button class="btn ghost sm">${I.pause} Пауза</button><button class="ic" aria-label="Ещё: закрыть фичу, мерж, анализ">${I.more}</button></div>`;
+}
+function alarm(d, mob) {
+  if (!d.alarm) return '';
+  const a = d.alarm;
+  return `<div class="alarm">${I.bell}<span style="flex:1;min-width:0"><b>${a.what}</b> · ${a.since}</span>
+    ${mob ? `<button class="btn primary sm">${a.act}</button>` : ''}<button class="btn sm">${a.act2}</button></div>`;
+}
+function bar(b) {
+  const seg = (k, v) => v ? `<i class="b-${k}" style="flex:${v}"></i>` : '';
+  return `<div class="bar" aria-label="Шаги по трекеру">${seg('m', b.m)}${seg('a', b.a)}${seg('r', b.r)}${seg('w', b.w)}${seg('n', b.n)}</div>`;
+}
+function legend(b, short) {
+  const it = (cls, n, w) => n || cls === 'b-a' ? `<span><span class="dot ${cls}"></span><b>${n}</b> ${w}</span>` : '';
+  return `<div class="leg">${b.m ? it('b-m', b.m, 'в master') : ''}${it('b-a', b.a, 'принято')}${it('b-r', b.r, 'в ревью')}${it('b-w', b.w, 'в работе')}${it('b-n', b.n, 'не заведено')}<span>из <b>${b.t}</b> шагов</span></div>`;
+}
+function summary(d, mob, opts = {}) {
+  const tr = d.tracker ? `<span><button class="lnk" style="font-size:12px">⚠ трекер расходится · ${d.tracker}</button></span>` : '';
+  return `<div class="sum">
+    <div class="sum-l"><span class="ph">Сейчас ${mob ? d.nowShort : d.now}</span><span class="pct">${d.pct} %</span><span class="eta">· ${d.eta}</span></div>
+    ${bar(d.basket)}${legend(d.basket, mob)}
+    ${opts.noFacts ? '' : `<div class="facts">${d.facts.map(f => `<span>${f[0]} <b>${f[1]}</b></span>`).join('')}${tr}</div>`}
+    ${opts.noMemo ? '' : `<div class="memo"><span>${d.memo}</span></div>`}
+  </div>`;
+}
+function tabs(d, on = 0) {
+  return `<div class="tabs" role="tablist">${d.tabs.map((t, i) => `<button role="tab" class="${i === on ? 'on' : ''}">${t[0]}${t[1] ? `<span class="n">${t[1]}</span>` : ''}</button>`).join('')}</div>`;
+}
+function lanes(d, mob) {
+  const rows = d.stages.map(s => {
+    const [t, sub, segs, dur, tone, live, pend] = s;
+    const bars = segs.map(([x, w]) => `<i class="${tone || ''}" style="left:${x}%;width:${Math.max(w, 1)}%"></i>`).join('');
+    return `<div class="lane${pend ? ' pend' : ''}"><div class="ln"><span class="t">${t}</span><span class="s">${sub}</span></div>
+      <div class="trk">${bars}${live ? '<span class="nowl" style="left:96%"></span>' : ''}</div><div class="dur">${dur}</div></div>`;
+  }).join('');
+  return `<div class="axis"><span>этап</span><span>${d === D.run ? 'с 28.10 21:05' : 'с 29.10 10:43'}</span><span class="r">сейчас</span></div>${rows}`;
+}
+function people(d) {
+  return d.next.map(([n, w, c], i) => `<div class="row"><span class="av" style="background:${PCOL[c]}">${n.slice(0, 2).toUpperCase()}</span>
+    <span class="g"><span class="h">${n}</span> <span class="muted">· ${w}</span></span><span class="muted" style="font-size:11px">${i === 0 ? 'сейчас' : 'дальше'}</span></div>`).join('');
+}
+function feed(d) {
+  return d.feed.map(([day, evs]) => `<div class="day">${day}</div>` + evs.map(([tm, tx, k]) =>
+    `<div class="ev ${k === 'stage' ? 'stage' : ''}"><span class="tm">${tm}</span><span class="tx" ${k === 'warn' ? 'style="color:var(--c-warning-text)"' : ''}>${tx}</span></div>`).join('')).join('');
+}
+
+/* === A · Сводка + вкладки: шапка → [тревога] → сводка В2 → вкладки (Хронология без дублей) === */
+function scnA(d, mob) {
+  return header(d, mob) + alarm(d, mob) + `<div class="scroll">` + summary(d, mob) + tabs(d, 0) + lanes(d, mob) +
+    `<div class="blk muted" style="font-size:11px">Нажатие на этап раскрывает его задачи и чаты. Счётчики шагов и «кто сейчас» — только в сводке выше.</div></div>`;
+}
+/* === B · Один экран: шапка → [тревога] → сводка → «Сейчас и дальше» → этапы → свёрнутые разделы === */
+function scnB(d, mob) {
+  const acc = (t, p, n) => `<div class="acc"><button class="acc-h"><span class="t">${t}</span>${n ? `<span class="num muted">${n}</span>` : ''}<span class="p">${p}</span>${I.chev}</button></div>`;
+  return header(d, mob) + alarm(d, mob) + `<div class="scroll">` + summary(d, mob, { noMemo: true }) +
+    `<div class="blk"><div class="sl" style="margin-bottom:4px">Сейчас и дальше</div>${people(d)}<div class="memo" style="margin-top:8px"><span>${d.memo}</span></div></div>` +
+    `<div class="acc"><div class="acc-h" style="cursor:default"><span class="t">Этапы</span><span class="p"></span></div></div>` + lanes(d, mob) +
+    acc('Шаги', `${d.basket.r} ждут ревью · ${d.basket.w} в работе`, d.basket.t) +
+    acc('Чаты', 'исполнители и ревью', d.tabs[2][1]) +
+    acc('Материалы', 'планы и макеты', d.tabs[3][1]) +
+    acc('История', 'события по времени', d.tabs[4][1]) +
+    acc('Статистика', 'время, возвраты, кто и на чём работал', '') +
+    `<div style="height:16px"></div></div>`;
+}
+/* === C · Лента + карточка: слева история с вехами этапов, справа липкая карточка-сводка === */
+function scnC(d, mob) {
+  const filt = `<div style="display:flex;gap:6px;padding:10px 16px;overflow-x:auto;scrollbar-width:none;border-bottom:1px solid var(--c-border-light)">
+    <span class="chip on">Всё</span><span class="chip">Этапы</span><span class="chip">Возвраты</span><span class="chip">Шаги ${d.basket.t}</span><span class="chip">Чаты ${d.tabs[2][1]}</span><span class="chip">Материалы ${d.tabs[3][1]}</span></div>`;
+  const card = `<div class="card"><div class="sl">Фича</div>
+      <div style="display:flex;align-items:baseline;gap:8px;margin-top:4px"><span class="pct" style="font-size:20px">${d.pct} %</span><span class="eta" style="font-size:12px">${d.eta}</span></div>
+      ${bar(d.basket)}${legend(d.basket, false)}</div>
+    <div class="card"><div class="sl" style="margin-bottom:4px">Сейчас и дальше</div>${people(d)}</div>
+    <div class="card"><div class="facts" style="margin:0;flex-direction:column;gap:4px">${d.facts.map(f => `<span style="display:flex;justify-content:space-between">${f[0]} <b>${f[1]}</b></span>`).join('')}
+      ${d.tracker ? `<button class="lnk" style="margin-top:4px">⚠ трекер расходится · ${d.tracker}</button>` : ''}</div></div>
+    <div class="card"><div class="memo" style="margin:0"><span style="-webkit-line-clamp:4">${d.memo}</span></div></div>
+    <div class="card" style="padding:4px 12px"><button class="acc-h" style="padding:6px 0;min-height:32px"><span class="t">Статистика</span><span class="p"></span>${I.chev}</button></div>`;
+  if (mob) return alarm(d, mob) + `<div class="scroll">` + summary(d, mob, { noMemo: true }) +
+    `<div class="blk" style="padding-top:8px;padding-bottom:0"><button class="lnk">Карточка фичи: кто дальше, заметка, статистика ›</button></div>` + filt + feed(d) + `</div>`;
+  return header(d, mob) + alarm(d, mob) + `<div class="split"><div class="feed">${filt}${feed(d)}
+    <div class="blk muted" style="font-size:11px">Веха этапа раскрывает его гант-дорожку прямо в ленте.</div></div><div class="side">${card}</div></div>`;
+}
+
+const NOTES = {
+  A: '<b>A · Сводка + вкладки.</b> Наименьшая правка: одна сводка В2 над вкладками, вкладки остаются. Процент, срок, «кто сейчас», счётчики шагов, время и возвраты живут только в сводке; тревога — одной полосой под шапкой; «Хронология» — только этапы. Вкладка «Задачи» переименована в «Шаги», «Планы и макеты» — в «Материалы», «События» — в «История».',
+  B: '<b>B · Один экран с приоритетами.</b> Без вкладок: сверху вниз по важности — тревога, сводка, «Сейчас и дальше» с заметкой ведущего, этапы, а всё остальное — свёрнутыми разделами с одной строкой превью. На мобиле так прокручивать естественнее, на десктопе длинно.',
+  C: '<b>C · Лента + боковая карточка.</b> История фичи — главная ось: вехи этапов и возвраты в ленте, справа липкая карточка со сводкой. Сильна для «что случилось, пока меня не было», слабее для «что сейчас»; на мобиле карточка сворачивается в сводку В2 над лентой.',
+  now: '<b>Как сейчас.</b> Снимки стенда 29.10 на копии боевых данных. Номера — противоречия и повторы из матрицы в записке.',
+};
+const S = { scn: 'A', state: 'run', theme: 'light' };
+function render() {
+  document.documentElement.dataset.theme = S.theme;
+  document.body.dataset.scn = S.scn; document.body.dataset.state = S.state;
+  document.getElementById('note').innerHTML = NOTES[S.scn];
+  if (S.scn === 'now') return;
+  const f = { A: scnA, B: scnB, C: scnC }[S.scn], d = D[S.state];
+  document.getElementById('i-desk').innerHTML = f(d, false);
+  document.getElementById('i-mob').innerHTML = f(d, true);
+  document.querySelectorAll('.memo').forEach(m => m.addEventListener('click', () => m.classList.toggle('open')));
+}
+for (const [id, key] of [['p-scn', 'scn'], ['p-state', 'state'], ['p-theme', 'theme']]) {
+  document.getElementById(id).addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    S[key] = b.dataset.v;
+    document.querySelectorAll(`#${id} button`).forEach(x => x.classList.toggle('on', x === b));
+    render();
+  });
+}
+render();
+</script>
+</body>
+</html>

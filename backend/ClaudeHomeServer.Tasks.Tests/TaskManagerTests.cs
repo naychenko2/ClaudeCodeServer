@@ -1671,6 +1671,267 @@ public class TaskManagerTests : IDisposable
         act.Should().Throw<InvalidOperationException>().WithMessage("*Дублируется код шага*");
     }
 
+    // ─── B3: последний план вместо объединения, withdrawn раннего при создании ──────────────
+
+    private TaskItem CreatePlan(string owner, string epicId, params string[] refs) =>
+        _sut.Create(null, owner, new CreateTaskRequest("план",
+            FeatureId: epicId, Role: TaskRoles.Plan,
+            PlanSteps: refs.Select(r => new PlannedStep { StepRef = r, Title = r }).ToList()));
+
+    [Fact]
+    public void Create_ПланСПересечением_РаннийСнятсВердиктомWithdrawn()
+    {
+        var epic = CreateEpic("u");
+        var early = CreatePlan("u", epic.Id, "A", "B", "C");
+
+        var late = CreatePlan("u", epic.Id, "A", "B");
+
+        early.Verification.Should().NotBeNull();
+        early.Verification!.Verdict.Should().Be(TaskVerdicts.Withdrawn);
+        early.Verification.Notes.Should().Contain(late.Id);
+        early.Status.Should().Be(TaskItemStatus.Done, "вердикт бывает только у закрытой задачи");
+        early.CompletedAt.Should().NotBeNull();
+        late.Verification.Should().BeNull();
+    }
+
+    // Цепочка p1[B], p2[A,B], p3[A]: стор и проекция сходятся — живёт один p3.
+    [Fact]
+    public void Create_ЦепочкаПересечений_СторИПроекцияДаютОдинаковыйНабор()
+    {
+        var epic = CreateEpic("u");
+        var p1 = CreatePlan("u", epic.Id, "B");
+        var p2 = CreatePlan("u", epic.Id, "A", "B");
+        var p3 = CreatePlan("u", epic.Id, "A");
+
+        p1.Verification?.Verdict.Should().Be(TaskVerdicts.Withdrawn);
+        p2.Verification?.Verdict.Should().Be(TaskVerdicts.Withdrawn);
+        p3.Verification.Should().BeNull();
+        FeatureStepAccounting.ActivePlans([p1, p2, p3]).Select(p => p.Id).Should().Equal(p3.Id);
+    }
+
+    [Fact]
+    public void Create_ПланБезПересечения_РаннийНеТрогается()
+    {
+        var epic = CreateEpic("u");
+        var back = CreatePlan("u", epic.Id, "B1", "B2");
+
+        CreatePlan("u", epic.Id, "F1");
+
+        back.Verification.Should().BeNull();
+    }
+
+    [Fact]
+    public void Create_ПланДругойФичиИДругогоВладельца_НеТрогается()
+    {
+        var epic1 = CreateEpic("u");
+        var epic2 = CreateEpic("u");
+        var otherOwnerEpic = CreateEpic("v");
+        var otherFeature = CreatePlan("u", epic2.Id, "A");
+        var otherOwner = CreatePlan("v", otherOwnerEpic.Id, "A");
+
+        CreatePlan("u", epic1.Id, "A");
+
+        otherFeature.Verification.Should().BeNull();
+        otherOwner.Verification.Should().BeNull();
+    }
+
+    [Fact]
+    public void Create_СуществующийВердиктРаннегоПлана_НеЗатирается()
+    {
+        var epic = CreateEpic("u");
+        var early = CreatePlan("u", epic.Id, "A");
+        early.Status = TaskItemStatus.Done;
+        early.Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted, Notes = "принят" };
+
+        CreatePlan("u", epic.Id, "A");
+
+        early.Verification!.Verdict.Should().Be(TaskVerdicts.Accepted);
+        early.Verification.Notes.Should().Be("принят");
+    }
+
+    [Fact]
+    public void Update_PlanStepsСуществующегоПлана_ДругихПлановНеСнимает()
+    {
+        var epic = CreateEpic("u");
+        var p1 = CreatePlan("u", epic.Id, "A");
+        var p2 = CreatePlan("u", epic.Id, "B");
+
+        _sut.Update(p2.Id, new UpdateTaskRequest(PlanSteps: [new PlannedStep { StepRef = "A", Title = "A" }]));
+
+        p1.Verification.Should().BeNull("снимает только Create");
+    }
+
+    // Гонка: хук расширяет окно между поиском и вставкой. С локом по FeatureId один из двух
+    // одновременных Create видит другой и снимает ровно один план; без лока оба живые.
+    [Fact]
+    public async Task Create_ДваОдновременныхПлана_ОстаётсяРовноОдинНеСнятый()
+    {
+        _sut.PlanReplaceInterleaveHook = () => Thread.Sleep(15);
+        for (int i = 0; i < 20; i++)
+        {
+            var epic = CreateEpic("u");
+            using var barrier = new Barrier(2);
+            var plans = new TaskItem[2];
+            var tasks = Enumerable.Range(0, 2).Select(n => Task.Run(() =>
+            {
+                barrier.SignalAndWait();
+                plans[n] = CreatePlan("u", epic.Id, "A", $"X{n}");
+            })).ToArray();
+            await Task.WhenAll(tasks);
+
+            plans.Count(p => p.Verification?.Verdict != TaskVerdicts.Withdrawn)
+                .Should().Be(1, $"итерация {i}");
+            // Живой — поздний по (CreatedAt, Id), как в проекции.
+            var winner = plans.OrderByDescending(p => p.CreatedAt)
+                .ThenByDescending(p => p.Id, StringComparer.Ordinal).First();
+            winner.Verification.Should().BeNull($"итерация {i}");
+        }
+    }
+
+    [Theory]
+    [InlineData("R-B1", null)]
+    [InlineData("r-b1", "step")]
+    [InlineData("QA", null)]
+    [InlineData("FINAL", null)]
+    [InlineData("REV-1", null)]
+    [InlineData("B1", "bogus")]
+    public void Create_PlanStepsРевьюБезKind_ИлиКривойKind_Отказ(string stepRef, string? kind)
+    {
+        var epic = CreateEpic("u");
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("план",
+            FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps: [new PlannedStep { StepRef = stepRef, Title = "t", Kind = kind }]));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage(kind == "bogus" ? "*Недопустимый kind*" : "*ревью не шаг плана*");
+    }
+
+    [Fact]
+    public void Create_PlanStepsРевьюСKind_Принято_KindСохранён()
+    {
+        var epic = CreateEpic("u");
+        var plan = _sut.Create(null, "u", new CreateTaskRequest("план",
+            FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps:
+            [
+                new PlannedStep { StepRef = "B1", Title = "t" },
+                new PlannedStep { StepRef = "R-B1", Title = "t", Kind = " review " },
+            ]));
+
+        plan.PlanSteps![0].Kind.Should().BeNull();
+        plan.PlanSteps[1].Kind.Should().Be("review");
+    }
+
+    // Легаси-план: R-B1 без kind, как в живых планах до B2. Create такое не пропускает,
+    // поэтому собираем план с kind, снимаем kind в сторе, сбрасываем на диск и поднимаем новый менеджер.
+    private (TaskManager Sut, TaskItem Plan) ЛегасиПлан()
+    {
+        var epic = CreateEpic("u");
+        var plan = _sut.Create(null, "u", new CreateTaskRequest("план",
+            FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps:
+            [
+                new PlannedStep { StepRef = "B1", Title = "t" },
+                new PlannedStep { StepRef = "R-B1", Title = "t", Kind = "review" },
+            ]));
+        plan.PlanSteps![1].Kind = null;
+        _sut.Flush();
+        var reloaded = new TaskManager(BuildConfig(_dir));
+        return (reloaded, reloaded.GetById(plan.Id)!);
+    }
+
+    [Fact]
+    public void ЛегасиПлан_ЗагрузкаСтарогоJsonБезKind_KindNull()
+    {
+        var (sut, plan) = ЛегасиПлан();
+        using var _ = sut;
+
+        plan.PlanSteps.Should().HaveCount(2);
+        plan.PlanSteps!.Should().OnlyContain(s => s.Kind == null);
+        plan.PlanSteps![1].StepRef.Should().Be("R-B1");
+    }
+
+    [Fact]
+    public void ЛегасиПлан_ОбновлениеЗаголовка_Проходит()
+    {
+        var (sut, plan) = ЛегасиПлан();
+        using var _ = sut;
+
+        var updated = sut.Update(plan.Id, new UpdateTaskRequest(Title: "новое имя"));
+
+        updated!.Title.Should().Be("новое имя");
+        updated.PlanSteps![1].StepRef.Should().Be("R-B1");
+    }
+
+    [Fact]
+    public void ЛегасиПлан_Закрытие_Проходит()
+    {
+        var (sut, plan) = ЛегасиПлан();
+        using var _ = sut;
+
+        var done = sut.Update(plan.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+
+        done!.Status.Should().Be(TaskItemStatus.Done);
+    }
+
+    [Fact]
+    public void ЛегасиПлан_НовыйPlanStepsСR_БезKind_Отказ()
+    {
+        var (sut, plan) = ЛегасиПлан();
+        using var _ = sut;
+
+        var act = () => sut.Update(plan.Id, new UpdateTaskRequest(
+            PlanSteps: [new PlannedStep { StepRef = "R-B2", Title = "t" }]));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*ревью не шаг плана*");
+    }
+
+    [Fact]
+    public void ЛегасиПлан_ПерезаписьPlanStepsСТемЖеR_БезKind_Принята()
+    {
+        var (sut, plan) = ЛегасиПлан();
+        using var _ = sut;
+
+        var updated = sut.Update(plan.Id, new UpdateTaskRequest(PlanSteps:
+        [
+            new PlannedStep { StepRef = "B1", Title = "t2" },
+            new PlannedStep { StepRef = "R-B1", Title = "t2" },
+        ]));
+
+        updated!.PlanSteps.Should().HaveCount(2);
+        updated.PlanSteps![1].Kind.Should().BeNull();
+    }
+
+    [Fact]
+    public void ЛегасиПлан_ПерезаписьСНовымR_БезKind_Отказ()
+    {
+        var (sut, plan) = ЛегасиПлан();
+        using var _ = sut;
+
+        var act = () => sut.Update(plan.Id, new UpdateTaskRequest(PlanSteps:
+        [
+            new PlannedStep { StepRef = "R-B1", Title = "t" },
+            new PlannedStep { StepRef = "R-B2", Title = "t" },
+        ]));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*ревью не шаг плана*");
+    }
+
+    [Fact]
+    public void НовыйПлан_ЧерезUpdateСR_БезKind_Отказ()
+    {
+        var epic = CreateEpic("u");
+        var plan = _sut.Create(null, "u", new CreateTaskRequest("план", FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps: [new PlannedStep { StepRef = "B1", Title = "t" }]));
+
+        var act = () => _sut.Update(plan.Id, new UpdateTaskRequest(PlanSteps:
+        [
+            new PlannedStep { StepRef = "B1", Title = "t" },
+            new PlannedStep { StepRef = "R-B1", Title = "t" },
+        ]));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*ревью не шаг плана*");
+    }
+
     [Fact]
     public void Create_PlanStepsСлишкомМного_Отказ()
     {
@@ -2039,7 +2300,7 @@ public class TaskManagerTests : IDisposable
         note.StateAtWrite.Should().Be("running");
     }
 
-    private static FeatureEstimate Estimate(int? eta = 120) => new(2, 8, 1, null, ["ревью"], eta, null);
+    private static FeatureEstimate Estimate(int? eta = 120) => new(["ревью"], eta, null);
 
     // Оценка пишется вместе с голосом и снимается вместе с ним.
     [Fact]

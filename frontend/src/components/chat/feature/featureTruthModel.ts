@@ -10,23 +10,24 @@
 //   • момент готовности — note.at + etaMinutes (тот же момент, что etaEndsAt блока «Срок»),
 //     формат — общий readyAtText.
 //
+// Оценка оркестратора (note.estimate) живёт здесь только как срок: её percent, автор и
+// давность в чат не выходят (Ш3b, остаток П1, решение Александра) — готовность одна,
+// «По трекеру»; источник и давность оценки — на «Сроке» страницы фичи.
+//
 // Чего НЕТ в данных и потому нет в surfaces (не выдумываем):
 //   • «Дальше» — поля нет в run (есть только в brief страницы фичи);
 //   • «от чего зависит шаг» и «кто ждёт после него» — связей между шагами в run нет
 //     (строки Ш7/Ш9 макета); цепочка П2 стоит на том, что есть: сам шаг, его витки,
 //     ревью, которое ждёт этот шаг (reviewOf).
-//   • «устарелость» оценки (stale) — флаг brief-а, не голоса на wire: без него оценка
-//     показывается как написана, со временем записи («N назад») — свежести человек
-//     решает сам, ложной метки нет.
 
 import { C } from '../../../lib/design';
 import { trackerPercent, type StepProgress } from '../../../lib/featureProgress';
 import { roleLabel } from '../../../lib/roleLabel';
 import { stepDisplayName } from '../../../lib/stepRef';
 import { formatClock, formatDuration, minutesSince } from '../../feature/FeatureStatsBits';
-// agoText — общий со страницей фичи (FeatureBriefModel): один факт («когда записана
-// оценка») — один ответ на всех поверхностях; дальше суток та же дата, а не null.
-import { agoText, readyAtText } from '../../feature/FeatureBriefModel';
+// readyAtText — общий со страницей фичи (FeatureBriefModel): один момент готовности —
+// один ответ на всех поверхностях.
+import { readyAtText } from '../../feature/FeatureBriefModel';
 import type { FeatureRun, FeatureRoundVerdict, FeatureStepChain } from '../../../types/featureRun';
 
 // Резолвер имени персоны (тот же контракт, что PersonaNameResolver в FeatureBriefModel).
@@ -76,42 +77,20 @@ export interface TruthEstimateView {
   // Плитка «Срок»: главное число «≈ 2 ч 40» и хвост «к 18:30».
   etaMain: string | null;
   readyAt: string | null;
-  // Когда оценку написали: «14 мин назад» — человек сам видит свежесть.
-  ago: string | null;
-  // Кто писал оценку (по флагу byUser голоса): «оценка оркестратора» / «оценка человека».
-  // Имени автора на wire нет (FeatureNote его не несёт) — второй копии имени нет.
-  sourceLabel: string;
-  // Процент оценки: её percent, а без него — доля done/total (тот же trackerPercent).
-  percent: number;
-  // «Готовность» плитки: «4 готово · 3 в работе · из 9» — как на странице фичи.
-  done: number;
-  inProgress: number;
-  total: number;
 }
 
 export function featureEstimateView(run: FeatureRun, nowMs: number): TruthEstimateView | null {
   const note = run.epic?.note;
   const est = note?.estimate;
-  if (!est || !(est.total > 0)) return null;
-  // Процент оценки: её собственная percent (0 — тоже ответ), без неё — доля done/total.
-  const percent = est.percent != null
-    ? Math.max(0, Math.min(100, Math.round(est.percent)))
-    : trackerPercent(est.done, est.total);
-  const etaMin = est.etaMinutes != null && est.etaMinutes >= 0 ? Math.round(est.etaMinutes) : null;
+  const etaMin = est?.etaMinutes != null && est.etaMinutes >= 0 ? Math.round(est.etaMinutes) : null;
+  if (etaMin == null || !note) return null;
   const atMs = Date.parse(note.at);
   const readyIso = etaMin != null && Number.isFinite(atMs) ? new Date(atMs + etaMin * 60000).toISOString() : null;
   const ready = readyAtText(readyIso, nowMs);
-  const ago = agoText(note.at, nowMs);
   return {
     rowEta: readyAtText(readyIso, nowMs, '≈'),
-    etaMain: etaMin != null ? (etaMin < 1 ? 'меньше минуты' : `≈ ${formatDuration(etaMin)}`) : null,
+    etaMain: etaMin < 1 ? 'меньше минуты' : `≈ ${formatDuration(etaMin)}`,
     readyAt: ready,
-    ago,
-    sourceLabel: note.byUser ? 'оценка человека' : 'оценка оркестратора',
-    percent,
-    done: est.done,
-    inProgress: est.inProgress,
-    total: est.total,
   };
 }
 
@@ -178,6 +157,7 @@ const TRACKER_KIND_TEXT: Record<string, string> = {
   reported_open: 'отчёт без закрытия задачи',
   epic_open_after_merge: 'мерж закрыт, эпик открыт',
   orphans_in_closed: 'открытые задачи в закрытой фиче',
+  unplanned_step: 'шаг вне плана',
 };
 
 export interface TruthTrackerIssue { text: string; since: string | null }

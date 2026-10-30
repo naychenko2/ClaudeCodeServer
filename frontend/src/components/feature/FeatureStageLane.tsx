@@ -12,8 +12,11 @@
 // над дорожкой в момент вердикта (возвраты в модели есть только у prod).
 //
 // Продуктовое решение (находка m1 ревью GC-R-F2, 26.10): счётчик плана бывает только у
-// «Производства». На дорожке это контур «ещё N» — он рисован ТОЛЬКО у prod; у прочих этапов,
-// где работа ещё не начиналась, — слово «впереди» (слово, не число); у «Ревью» никаких
+// «Производства». На дорожке это контур «ещё N» — он рисован ТОЛЬКО у prod; у этапов без
+// интервалов — слово состояния (доработка Ш2b по ревью c51cd49c): пара (текст + тон) из
+// единого источника stageStatusLabel, донесённая моделью через lane.status, — тот же
+// слово и тот же тон, что говорит строка этой же стадии («нужен ответ»/«стоит»/«идёт»/
+// «впереди»); слова нет (done) — нет и словесной зоны. У «Ревью» никаких
 // плановых элементов нет: факт уже в aria-label каждого интервала («интервал i из n»).
 //
 // Пустая дорожка на закрытой оси (GC-F10c): у закрытой/смерженной фичи будущего нет, поэтому
@@ -139,8 +142,13 @@ export function FeatureStageLane({
   // значит другое, а счётчик плана — только у «Производства». Только для этапа,
   // где работа уже шла (иначе это pending — ниже «впереди»).
   const showMore = hasAheadZone && lane.key === 'prod' && n > 0 && (lane.plan?.ahead ?? 0) > 0;
-  // «впереди» — этап, чья работа ещё не начиналась: ни интервалов, ни skipped, ни approx.
-  const showAhead = hasAheadZone && n === 0;
+  // Пустая дорожка живой фичи — зона слова: слово и тон — из единого источника
+  // (stageStatusLabel, донесённые моделью через lane.status, доработка Ш2b): то же слово
+  // и тот же тон, что говорит строка этой же стадии. Слова нет (done) — нет и словесной
+  // зоны. Сама зона — только у этапа без интервалов, без skipped и без approx.
+  const statusWord = lane.status?.text ?? null;
+  const statusTone = lane.status?.tone ?? 'muted';
+  const showAhead = hasAheadZone && n === 0 && statusWord !== null;
   // «Этапа не было» (GC-F10c): model-ный skipped или пустая дорожка на закрытой оси
   // (timeFrac = 1): у закрытой фичи будущего нет, и пустая дорожка здесь — не начатый
   // этап, а этап, которого не было. Взаимоисключено с showAhead (тот требует timeFrac < 1);
@@ -327,10 +335,17 @@ export function FeatureStageLane({
             position: 'absolute', left: `${axis.timeFrac * 100}%`, right: 0, top: 0, bottom: 0,
             display: 'flex', alignItems: 'center', justifyContent: 'flex-end', paddingRight: SP.sm,
             border: `1px dashed ${C.dashed}`, borderRadius: R.sm,
-            fontFamily: FONT.mono, fontSize: FS.xxs, color: C.textMuted, pointerEvents: 'none',
+            fontFamily: FONT.mono, fontSize: FS.xxs, pointerEvents: 'none',
+            // Тон слова — из той же пары, что и слово (та же строка стадии красит то же
+            // слово тем же тоном): «нужен ответ» — info, «стоит» — danger, прочее — muted;
+            // «ещё N» — всегда muted, это счётчик, не состояние.
+            color: showMore ? C.textMuted
+              : statusTone === 'info' ? C.info
+                : statusTone === 'danger' ? C.dangerText
+                  : C.textMuted,
           }}
         >
-          {showMore ? `ещё ${lane.plan?.ahead ?? 0}` : 'впереди'}
+          {showMore ? `ещё ${lane.plan?.ahead ?? 0}` : statusWord}
         </span>
       )}
     </div>

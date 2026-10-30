@@ -7,7 +7,9 @@
 // Фронт НЕ пересчитывает конвейер и пороги: «стоит» — только из run.attention (stopped),
 // «ждёт» — только из timeline.current (waiting); интервалы — только с бэка. Единственная
 // арифметика модели — геометрия над данными бэка: минуты и паузы по границам интервалов
-// (тот же spanMinutes, что у Ганта) и обрезка интервалов по границе окна.
+// (тот же spanMinutes, что у Ганта) и обрезка интервалов по границе окна. Слово о состоянии
+// стадии модель тоже не выводит: зовёт единый источник (stageStatusLabel) и несёт его пару
+// в lane.status как есть (доработка Ш2b) — гант и строка стадии говорят одно слово.
 //
 // Обрезка по окну (находка GC-R-B): бэк НЕ клипит интервалы — живой хвост идущей задачи
 // дотянут до «сейчас» (FeatureStageIntervals.cs), а у смерженной фичи окно кончается
@@ -23,6 +25,12 @@ import type { FeatureRun, FeatureRound, FeatureStageExecutor, StageKey } from '.
 import type { FeatureStats } from '../../types/featureStats';
 import type { StepProgress } from '../../lib/featureProgress';
 import { minutesSince } from './FeatureStatsBits';
+// Слово о состоянии стадии модель не выводит сама: оно живёт в одном месте
+// (stageStatusLabel, FeatureTimelineBits — доработка Ш2b по ревью c51cd49c) и до
+// рендера доходит через эту модель как есть. Кольцо импорта (модель → FeatureTimelineBits
+// → FeatureStepDetails → axisFrac модели) безвредно: все его участники — объявления
+// функций, и никто не зовёт чужие связки на верхнем уровне модуля.
+import { stageStatusLabel, type StageStatus } from './FeatureTimelineBits';
 
 // Ключи стадии в порядке жизненного цикла (бэк: FeatureStage.Key).
 const STAGE_KEYS: readonly StageKey[] = ['cut', 'design', 'plan', 'prod', 'review', 'qa', 'final', 'merge'];
@@ -98,6 +106,12 @@ export interface StageLane {
   totalMinutes: number;
   // Этапа не было (state 'skipped', W4-DES-B): строка «этапа не было», без данных.
   skipped: boolean;
+  // Слово и тон состояния стадии — из единого источника (stageStatusLabel, FeatureTimelineBits;
+  // доработка Ш2b по ревью c51cd49c): модель зовёт его по стадии и несёт пару как есть,
+  // своей семантики состояния не заводит (порядок «тон → runningSince → state» живёт там).
+  // null — слова нет (done). Показывать ли слово вообще (пустая дорожка живой фичи,
+  // skipped/approx/закрытая ось) — решает рендер (FeatureStageLane).
+  status: StageStatus | null;
   // approx — журнала нет (intervalsByStage null/отсутствует): интервалов нет, потому что
   // они не считались. Пустой словарь журнала — НЕ approx (замечание GC-R-F1).
   approx: boolean;
@@ -338,6 +352,9 @@ export function buildStageLanes(run: FeatureRun, stats: FeatureStats | null, now
       count: intervals.length,
       totalMinutes: intervals.reduce((a, iv) => a + spanMinutes(iv.from, iv.to), 0),
       skipped,
+      // Слово и тон — из единого источника, пара как есть: модель не интерпретирует
+      // состояние стадии (доработка Ш2b).
+      status: stageStatusLabel(stage),
       approx,
       returns: stage.key === 'prod' ? returnsByStage : [],
     };

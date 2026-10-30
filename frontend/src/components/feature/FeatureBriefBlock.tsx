@@ -14,14 +14,20 @@
 import { useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { C, R, SP, FS, FONT } from '../../lib/design';
+import { GitBranch } from 'lucide-react';
 import { Button } from '../ui/Button';
+import { ICON_STROKE } from '../ui/icons';
+import { showToast } from '../../lib/toast';
 import { StatusTag, featureRunStatusTag, type FeatureRunTag } from './FeatureStatusTag';
 import {
-  briefActiveTagLabel, briefActiveView, briefElapsedFact, briefEstimateText, briefNowText, briefReadinessText, briefSubText, briefUpdatedText, voiceRoleText, voiceStaleLabel, voiceWhenText,
-  type BriefDonePart, type BriefEstimateView, type BriefReadinessView, type PersonaNameResolver,
+  briefActiveTagLabel, briefActiveView, briefWaitTagLabel, BRIEF_MERGE_TAG, briefElapsedFact, briefEstimateText, briefNowText, briefReadinessText, briefSubText, briefUpdatedText, leadNoNoteText, voiceSignature, voiceStaleLabel,
+  type BriefDonePart, type BriefEstimateView, type BriefReadinessView, type PersonaGenderResolver, type PersonaNameResolver,
 } from './FeatureBriefModel';
 import { ActiveList } from './FeatureBriefActive';
 import { SummaryRow } from './FeatureBriefTimeline';
+import { FeatureTrackerBar, trackerBarAria } from '../chat/feature/FeatureTrackerBar';
+import { featureTruthBar } from '../chat/feature/featureTruthModel';
+import type { StepProgress } from '../../lib/featureProgress';
 import { stageLabel } from './FeatureStatsBits';
 import type { FeatureBrief, FeatureBriefKind } from '../../lib/featurePage';
 import type { FeatureStats } from '../../types/featureStats';
@@ -38,8 +44,17 @@ export interface FeatureBriefBlockProps {
   // Сколько шагов уже в master (F1: run.stepProgress.inMaster ответа страницы; в brief его
   // нет) — пометка на полоске готовности и в факте трекера. null/0 — отметки нет.
   inMaster?: number | null;
+  // Корзины трекера (run.stepProgress ответа страницы): из них строится полоса готовности.
+  // null/нет — полосы нет, остаётся подпись «N из M шагов · P %».
+  stepProgress?: StepProgress | null;
   // Резолвер имени персоны (usePersonas/getPersonaById); null — часть строки с именем опускается.
   nameOf?: PersonaNameResolver;
+  // Пол персоны для подписи заметки («ведущая»/«ведущий»); нет — женский.
+  genderOf?: PersonaGenderResolver;
+  // Ведущий фичи (индекс: orchestratorPersonaId): при пустой заметке — строка «Ведёт …».
+  leadPersonaId?: string | null;
+  // Ветка фичи (индекс): отдельная строка сводки, клик копирует.
+  branch?: string | null;
   isMobile?: boolean;
   // «Статистика ›» → вкладка «Статистика».
   onOpenStats: () => void;
@@ -74,8 +89,12 @@ function briefTagBase(brief: FeatureBrief, mergedAt: string | null): FeatureRunT
     case 'running':
       return featureRunStatusTag('running', brief.now?.stage ? stageLabel(brief.now.stage) : null);
     case 'waiting_you':
-      // Макет: в состоянии мержа тег карточки — «ждёт вас» (само «согласие на мерж» — в строке «Сейчас»).
-      return featureRunStatusTag('waiting');
+      // Ш4: слова «ждёт вас» в сводке нет — их говорит тревога страницы. Тег — «нужен ответ»
+      // (слово модели), при вопросе про мерж — «к мержу» статуса фичи.
+      {
+        const wait = briefWaitTagLabel(brief);
+        return wait ? { ...featureRunStatusTag('waiting'), label: wait } : { ...featureRunStatusTag('merge_pending'), label: BRIEF_MERGE_TAG };
+      }
     case 'error':
       return featureRunStatusTag('stopped');
     case 'paused':
@@ -211,45 +230,36 @@ function parts(list: BriefDonePart[], monoColor: string): ReactNode[] {
   return list.map((p, i) => (p.mono ? <b key={i} style={{ ...MONO_STRONG, color: monoColor }}>{p.text}</b> : <span key={i}>{p.text}</span>));
 }
 
-function ReadinessColumn({ view }: { view: BriefReadinessView }) {
-  // Заливка: «готово» — accent, у закрытой — success, у устаревшей — тусклая; штриховка «в работе»
-  // той же краской (макет «Токены поимённо»). Анимации заполнения нет намеренно.
-  const fill = view.closed ? C.success : view.stale ? C.accentMuted : C.accent;
-  const hatch = view.stale
-    ? `repeating-linear-gradient(135deg, ${C.accentMuted} 0 3px, ${C.progressTrack} 3px 6px)`
-    : `repeating-linear-gradient(135deg, ${C.accent} 0 3px, ${C.accentMuted} 3px 6px)`;
-  // Сегмент «в master» (F1): начало залитой части — success («влито в master»), остаток
-  // готового — обычная краска заливки. Только когда полоска по шкале трекера (модель
-  // отдаёт 0 при оценке: на шкале оценки счётчик шагов не стоит). При закрытой фиче
-  // заливка и так success — сегмент не меняет вид, меняет только смысл в aria.
-  const master = view.inMasterPercent > 0 ? Math.min(view.inMasterPercent, view.percent) : 0;
+function ReadinessColumn({ view, stepProgress }: { view: BriefReadinessView; stepProgress: StepProgress | null }) {
+  // Полоса и легенда — тот же рендер, что у шапки чата (В2): корзины взаимоисключающие,
+  // сумма сегментов = stepProgress.total, «в master» в сумму не входит, пустые корзины скрыты.
+  const bar = featureTruthBar(stepProgress, view.inMaster);
   return (
     <div data-testid="brief-ready" style={{ minWidth: 0 }}>
       <div style={LABEL}>{view.label}</div>
       <div data-testid="brief-ready-caption" style={{ fontSize: FS.sm, color: C.textSecondary, margin: `${SP.xs}px 0` }}>
-        {/* Число — mono 600 textHeading, у устаревшей оценки — textSecondary. */}
-        {parts(view.caption, view.stale ? C.textSecondary : C.textHeading)}
+        {/* Число — mono 600 textHeading. */}
+        {parts(view.caption, C.textHeading)}
       </div>
-      <div
-        data-testid="brief-ready-bar"
-        role="progressbar"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={view.percent}
-        aria-label={view.ariaLabel}
-        style={{ display: 'flex', height: 8, borderRadius: R.max, overflow: 'hidden', background: C.progressTrack }}
-      >
-        {master > 0 && <div data-testid="brief-ready-fill-master" style={{ width: `${master}%`, background: C.success }} />}
-        <div data-testid="brief-ready-fill" style={{ width: `${Math.max(0, view.percent - master)}%`, background: fill }} />
-        {view.inProgressPercent > 0 && <div data-testid="brief-ready-hatch" style={{ width: `${view.inProgressPercent}%`, background: hatch }} />}
-      </div>
+      {bar && bar.segments.length > 0 && (
+        <>
+          <FeatureTrackerBar bar={bar} testId="brief-ready-bar" ariaLabel={trackerBarAria(bar)} />
+          <div data-testid="brief-ready-legend" style={{ display: 'flex', flexWrap: 'wrap', gap: `${SP.xxs}px ${SP.sm}px`, marginTop: SP.xs, fontSize: FS.xs, color: C.textSecondary }}>
+            {bar.segments.map(sg => (
+              <span key={sg.key} data-testid={`brief-legend-${sg.key}`} style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xxs }}>
+                <span aria-hidden style={{ width: 8, height: 8, borderRadius: R.max, background: sg.color, flexShrink: 0 }} />
+                <b style={{ ...MONO_STRONG, color: C.textHeading }}>{sg.count}</b> {sg.label}
+              </span>
+            ))}
+          </div>
+        </>
+      )}
       <div data-testid="brief-ready-tracker" style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: SP.xs }}>
-        {view.staleLabel && <span data-testid="brief-ready-stale" style={{ ...STALE_TAG, marginRight: SP.xs }}>{view.staleLabel}</span>}
         {parts(view.tracker, C.textPrimary)}
       </div>
       {(view.chips.length > 0 || view.chipsEmpty) && (
         <div data-testid="brief-ready-left" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: SP.xs, marginTop: SP.sm }}>
-          <span style={{ fontSize: FS.xs, color: C.textMuted }}>{view.chipsLabel}</span>
+          {view.chips.length > 0 && <span style={{ fontSize: FS.xs, color: C.textMuted }}>{view.chipsLabel}</span>}
           {view.chips.map((c, i) => (
             <span key={i} data-testid="brief-chip" style={{
               fontSize: FS.xs, borderRadius: R.sm, padding: '1px 7px', maxWidth: '100%',
@@ -279,6 +289,7 @@ function EtaColumn({ view }: { view: BriefEstimateView }) {
         {view.tail && <span data-testid="brief-estimate-tail" style={{ fontSize: FS.sm, fontWeight: 400, color: C.textSecondary }}> {monoNumbers(view.tail)}</span>}
       </div>
       {view.source && <div data-testid="brief-estimate-source" style={UPD}>{monoNumbers(view.source)}</div>}
+      {view.note && <div data-testid="brief-estimate-note" style={UPD}>{view.note}</div>}
       {view.alt && (
         <div data-testid="brief-estimate-alt" style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: SP.xs + 2 }}>
           {monoNumbers(view.alt)}
@@ -305,10 +316,9 @@ function EtaColumn({ view }: { view: BriefEstimateView }) {
 // Плашка только при note (макет §3: «голоса нет» — плашки нет вовсе). Подпись —
 // «Имя · роль · когда» (F2); имя неизвестно (byUser или нет персоны) — часть с именем
 // опускается, аватар не рисуем. Устаревший голос — метка рядом с подписью, текст не прячем.
-function VoiceBlock({ note, kind, nameOf, nowMs }: { note: NonNullable<FeatureBrief['note']>; kind: FeatureBriefKind; nameOf?: PersonaNameResolver; nowMs: number }) {
+function VoiceBlock({ note, kind, nameOf, genderOf, nowMs }: { note: NonNullable<FeatureBrief['note']>; kind: FeatureBriefKind; nameOf?: PersonaNameResolver; genderOf?: PersonaGenderResolver; nowMs: number }) {
   const name = note.byPersonaId ? nameOf?.(note.byPersonaId) ?? null : null;
-  const when = voiceWhenText(note, kind, nowMs);
-  const sig = [name, voiceRoleText(kind), when].filter(Boolean).join(' · ');
+  const sig = voiceSignature(note, kind, name, nowMs, note.byPersonaId ? genderOf?.(note.byPersonaId) : null);
   const stale = voiceStaleLabel(note, kind);
   return (
     <div data-testid="brief-voice" style={{
@@ -335,6 +345,43 @@ function VoiceBlock({ note, kind, nameOf, nowMs }: { note: NonNullable<FeatureBr
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Ветка: чип-кнопка, клик/тап копирует (раньше жила в мета-строке шапки) ─────────────
+function BranchRow({ branch, isMobile }: { branch: string; isMobile: boolean }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      void navigator.clipboard.writeText(branch).catch(() => {});
+    }
+    showToast('Ветка скопирована', branch);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <div style={{ display: 'flex', marginTop: SP.sm, minWidth: 0 }}>
+      <button
+        type="button"
+        data-testid="feature-page-branch"
+        onClick={copy}
+        title={copied ? 'Ветка скопирована' : 'Скопировать ветку'}
+        aria-label={`Скопировать ветку ${branch}`}
+        onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
+        onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+        onFocus={e => { e.currentTarget.style.background = C.bgSelected; }}
+        onBlur={e => { e.currentTarget.style.background = 'transparent'; }}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: SP.xs, minWidth: 0, maxWidth: '100%',
+          height: isMobile ? 40 : 24, padding: `0 ${SP.xs}px`, marginLeft: -SP.xs,
+          border: 'none', borderRadius: R.sm, background: 'transparent', cursor: 'pointer',
+          fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary,
+        }}
+      >
+        <GitBranch size={12} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{branch}</span>
+      </button>
     </div>
   );
 }
@@ -374,7 +421,7 @@ function BriefSkeleton({ isMobile }: { isMobile: boolean }) {
 
 // ── Карточка ─────────────────────────────────────────────────────────────────────────
 export function FeatureBriefBlock({
-  loading = false, brief, stats, mergedAt = null, inMaster = null, nameOf, isMobile = false,
+  loading = false, brief, stats, mergedAt = null, inMaster = null, stepProgress = null, nameOf, genderOf, leadPersonaId = null, branch = null, isMobile = false,
   onOpenStats, onRetry, onMerge, onOpenFinal, onOpenTask, onAnswer, onOpenTasks,
 }: FeatureBriefBlockProps) {
   // Одно «сейчас» на ответ (R-F8): относительные строки («ждёт N», «обновлено N назад»,
@@ -411,6 +458,7 @@ export function FeatureBriefBlock({
           <Button variant="secondary" size={isMobile ? 'md' : 'sm'} dataTestId="brief-retry" onClick={onRetry}>Повторить</Button>
         </div>
         {totals}
+        {branch && <BranchRow branch={branch} isMobile={isMobile} />}
       </section>
     );
   }
@@ -421,7 +469,8 @@ export function FeatureBriefBlock({
   const active = briefActiveView(brief, { nameOf, nowMs });
   const headingText = active?.heading ?? nowText;
   const subText = active?.heading != null ? active.sub : briefSubText(brief, nowMs);
-  const readiness = briefReadinessText(brief, { nameOf, inMaster });
+  const readiness = briefReadinessText(brief, { nameOf, inMaster, stepProgress });
+  const leadName = leadPersonaId ? nameOf?.(leadPersonaId) ?? null : null;
   const eta = briefEstimateText(brief, { nameOf, nowMs });
   const isWait = brief.kind === 'waiting_you';
   const answer = active?.answer && onAnswer ? active.answer : null;
@@ -493,11 +542,15 @@ export function FeatureBriefBlock({
           marginTop: SP.md, paddingTop: SP.md, borderTop: `1px solid ${C.borderLight}`,
         }}
       >
-        <ReadinessColumn view={readiness} />
+        <ReadinessColumn view={readiness} stepProgress={stepProgress} />
         <EtaColumn view={eta} />
       </div>
 
-      {brief.note && <VoiceBlock note={brief.note} kind={brief.kind} nameOf={nameOf} nowMs={nowMs} />}
+      {brief.note && <VoiceBlock note={brief.note} kind={brief.kind} nameOf={nameOf} genderOf={genderOf} nowMs={nowMs} />}
+      {!brief.note && leadName && (
+        <div data-testid="brief-lead" style={{ marginTop: SP.md, fontSize: FS.sm, color: C.textMuted }}>{leadNoNoteText(leadName)}</div>
+      )}
+      {branch && <BranchRow branch={branch} isMobile={isMobile} />}
       {totals}
     </section>
   );

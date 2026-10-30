@@ -678,6 +678,28 @@ describe('WorkspacePage: центр — страница фичи соседом
     expect(chatPanelInDom(), 'чат не восстановлен после возврата (C1)').toBe(true);
   });
 
+  // Ш4: «Закрыть фичу» живёт только пунктом ⋯ (видимой кнопки нет): перебираем триггеры
+  // «Ещё» в DOM и ищем пункт среди открывшихся меню.
+  async function hasCloseItem(container: any): Promise<boolean> {
+    const triggers: any[] = [];
+    const walk = (x: any) => {
+      if (x.nodeType === 1 && x.getAttribute?.('aria-label') === 'Ещё') triggers.push(x);
+      for (const ch of x.childNodes) walk(ch);
+    };
+    walk(container);
+    for (const t of triggers) {
+      await act(async () => { (reactProps(t)!.onClick as () => void)(); });
+      const items: any[] = [];
+      const scan = (x: any) => {
+        if (x.getAttribute?.('role') === 'menuitem') items.push(x);
+        for (const ch of x.childNodes) scan(ch);
+      };
+      scan((globalThis as any).document.body);
+      if (items.some(i => textNodes(i).join('').includes('Закрыть фичу'))) return true;
+    }
+    return false;
+  }
+
   // === Сквозной тест гейта владельца (хвост вердикта bb0a70c7) ===
   // Цепочка project.ownerId → WorkspacePage.tsx:2446 → FeatureCenter.tsx:42 →
   // FeaturePage.tsx:127 (canClose) раньше не проверялась: в FeaturePage.test.ts проп
@@ -698,11 +720,11 @@ describe('WorkspacePage: центр — страница фичи соседом
       }));
     });
     await act(async () => { vi.advanceTimersByTime(100); });
-    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close-btn'), 'владельцу «Закрыть фичу» есть').not.toBeNull();
+    expect(await hasCloseItem(container), 'владельцу «Закрыть фичу» есть').toBe(true);
     // Смена me на не-владельца: тот же рендер, кнопка исчезает (гейт живой, не разовый).
     act(() => { setMeFromServer({ userId: 'u-other', username: 'other', role: 'user' }); });
     await act(async () => { vi.advanceTimersByTime(100); });
-    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close-btn'), 'не владельцу кнопки нет').toBeNull();
+    expect(await hasCloseItem(container), 'не владельцу пункта нет').toBe(false);
   });
 
   // === N1: десктоп 1280 — названия/персоны чатов фичи приходят через SessionList-колбэк ===

@@ -13,7 +13,8 @@
 // Слова подстроки «Сейчас» и строки «Сделано» — тоже здесь (R-F5: единый источник
 // формулировки; блок только вызывает модель и красит числа моно).
 
-import { formatClock, formatDate, formatDuration, minutesSince, stageLabel } from './FeatureStatsBits';
+import { formatDuration } from '../../lib/chatGroups';
+import { formatClock, formatDate, minutesSince, stageLabel } from './FeatureStatsBits';
 import { trackerPercent } from '../../lib/featureProgress';
 import { laneWord } from '../../lib/roleLabel';
 import { knownStopVisual } from '../../lib/tasks';
@@ -24,6 +25,7 @@ import type { FeatureRailKey } from '../../types/featureIndex';
 // null — имя неизвестно: часть строки с именем опускается, строка остаётся валидной
 // (тот же приём, что personaName в FeatureProdCards.ts).
 export type PersonaNameResolver = (personaId: string) => string | null;
+export type PersonaGenderResolver = (personaId: string) => 'female' | 'male' | null;
 
 // Дополнительные данные строки «Сейчас» вне brief:
 // mergedAt — момент мержа из run.summary.mergedAt (в brief его нет; для строк closed/merged).
@@ -33,6 +35,9 @@ export interface BriefTextOptions {
   nameOf?: PersonaNameResolver;
   mergedAt?: string | null;
   inMaster?: number | null;
+  // Корзины трекера страницы: подпись готовности считается по ним же, что и полоса
+  // (иначе «2 из 5 · 40 %» над полосой на 27 %). Нет — по brief.done.
+  stepProgress?: { accepted: number; total: number } | null;
 }
 
 // Родительный падеж имени для «у {Имя}» (макет: «— у Глеба»). Эвристика для частых
@@ -89,9 +94,11 @@ export function briefNowText(brief: FeatureBrief, opts: BriefTextOptions = {}): 
     }
     case 'waiting_you': {
       // Тревога «мерж» (бэк кладёт код «мерж») — строка макета; прочая причина — как есть.
+      // Ш4: «ждёт вас» говорит одна тревога страницы (FeaturePageAlert), сводка называет
+      // только факт — что нужно, без обращения к человеку.
       const r = brief.reason;
-      if (!r || r === 'мерж') return 'Ждёт вашего согласия на мерж в master';
-      return `Ждёт вашего ответа: ${r}`;
+      if (!r || r === 'мерж') return 'Нужно согласие на мерж в master';
+      return `Нужен ответ: ${r}`;
     }
     case 'error': {
       // Причина — машинный код бэка (ExecutorStopClassifier → Attention.Reason,
@@ -131,11 +138,11 @@ export function briefNowText(brief: FeatureBrief, opts: BriefTextOptions = {}): 
     case 'closed':
     case 'merged': {
       // «Смержена в master 24.10 в 18:05» (макет) — дата мержа от вызывающего (run.summary);
-      // без даты — «Закрыта» (разрез п. 4). 'merged' (Ф-1.1) — та же строка, что 'closed':
-      // фича смержена, эпик ещё не закрыт (Б-1.1) — для свода ведётся так же, как 'closed'.
+      // без даты строки нет: закрытие говорит один тег (CLOSED_NO_MERGE_STATUS / «смержена»),
+      // «Закрыта» повторяла бы его (f100335b). 'merged' (Ф-1.1) — та же строка, что 'closed'.
       const at = opts.mergedAt;
       if (at) return `Смержена в master ${formatDate(at)} в ${formatClock(at)}`;
-      return 'Закрыта';
+      return null;
     }
   }
 }
@@ -163,23 +170,22 @@ export function briefSubText(brief: FeatureBrief, nowMs: number): string | null 
     case 'waiting_you': {
       if (!since) return null;
       const dur = shownDuration(since, nowMs);
-      return dur ? `ждёт ${dur} · без вас фича стоит` : 'без вас фича стоит';
+      // Мерж-вопрос: фича не стоит, она ждёт согласия — слов тревоги страницы не повторяем (e55194ed).
+      if (brief.reason === 'мерж' || brief.next[0]?.stage === 'merge') return dur ? `${dur} · ждёт ответа` : 'ждёт ответа';
+      return dur ? `${dur} · фича стоит` : 'фича стоит';
     }
     case 'paused': {
       if (!since) return null;
       const dur = shownDuration(since, nowMs);
       return dur ? `на паузе ${dur} · исполнители не запускаются` : 'исполнители не запускаются';
     }
-    case 'closed':
-    case 'merged':
-      return 'фича закрыта';
     default:
       return null;
   }
 }
 
 // ── «Сделано» ───────────────────────────────────────────────────────────────────────
-// Счётчики done как есть (макет: «2 из 5 шагов приняты · 1 виток правок»). Для «в очереди»
+// Счётчики done как есть (макет: «2 из 5 шагов приняты · 1 возврат»). Для «в очереди»
 // с нарезанным планом (planState cut/done) — строка макета queue «План готов · 0 из 4 шагов»:
 // факт готовности плана несёт done.planState (R-F8). При незавершённом плане очереди
 // («pending»/«partial») формулировки нет — обычный счётчик, не выдумываем.
@@ -214,8 +220,10 @@ export function briefDoneText(brief: FeatureBrief): BriefDonePart[] {
     { text: ' шагов приняты', mono: false },
   ];
   if (loops > 0) {
+    // Ш3 (словарь проекта): витки называются «возвратами» — то же слово и та же схема
+    // склонения, что в плитке «Возвраты» статистики (FeatureStatsTiles.tsx:106).
     parts.push({ text: ` · ${loops}`, mono: true });
-    parts.push({ text: ` ${pluralRu(loops, 'виток', 'витка', 'витков')} правок`, mono: false });
+    parts.push({ text: ` ${pluralRu(loops, 'возврат', 'возврата', 'возвратов')}`, mono: false });
   }
   return parts;
 }
@@ -292,7 +300,7 @@ export interface BriefActiveView {
   // Кнопка «Ответить Кире»: открывает чат задачи, которая ждёт человека.
   answer: { taskId: string; label: string } | null;
   rows: BriefActiveRow[];
-  // «ещё N в работе — во вкладке «Задачи» ›»; null — все строки на виду.
+  // «ещё N в работе — во вкладке «Шаги» ›»; null — все строки на виду.
   tail: string | null;
 }
 
@@ -347,7 +355,7 @@ export function briefActiveView(brief: FeatureBrief, opts: BriefTextOptions & { 
       ariaLabel: `${title}${who ? ` — ${who}` : ''}, открыть задачу`,
     };
   });
-  const tail = rows.length && n > ACTIVE_ROWS_MAX ? `ещё ${n - ACTIVE_ROWS_MAX} в работе — во вкладке «Задачи» ›` : null;
+  const tail = rows.length && n > ACTIVE_ROWS_MAX ? `ещё ${n - ACTIVE_ROWS_MAX} в работе — во вкладке «Шаги» ›` : null;
 
   if (waiting) {
     const name = nameOf(waiting);
@@ -357,8 +365,8 @@ export function briefActiveView(brief: FeatureBrief, opts: BriefTextOptions & { 
     const stuck = waiting.stepRef ? `шаг ${waiting.stepRef} стоит` : 'задача стоит';
     const rest = others > 0 ? `, ${others} ${pluralRu(others, 'другая задача идёт', 'другие задачи идут', 'других задач идут')}` : '';
     return {
-      heading: `${name ?? 'Задача'} ждёт вашего ответа${step}`,
-      sub: [dur ? `ждёт ${dur}` : null, `${stuck}${rest}`].filter(Boolean).join(' · '),
+      heading: `${name ?? 'Задача'} задаёт вопрос${step}`,
+      sub: [dur, `${stuck}${rest}`].filter(Boolean).join(' · '),
       answer: { taskId: waiting.taskId, label: name ? `Ответить ${dativeName(name)}` : 'Ответить' },
       rows, tail,
     };
@@ -370,20 +378,33 @@ export function briefActiveView(brief: FeatureBrief, opts: BriefTextOptions & { 
   };
 }
 
-// Тег в шапке со счётом задач: «идёт · 3 в работе», «ждёт вас · 1 из 3». null — тег прежний
+// Тег в шапке со счётом задач: «идёт · 3 в работе», «нужен ответ · 1 из 3». null — тег прежний
 // (задача одна или поля active нет).
 export function briefActiveTagLabel(brief: FeatureBrief): string | null {
   const list = brief.active ?? [];
   if (list.length < 2) return null;
   if (brief.kind === 'running') return `идёт · ${list.length} в работе`;
-  if (brief.kind === 'waiting_you') return `ждёт вас · ${list.filter(a => a.state === 'waiting_you').length} из ${list.length}`;
+  if (brief.kind === 'waiting_you') return `${BRIEF_WAIT_WORD} · ${list.filter(a => a.state === 'waiting_you').length} из ${list.length}`;
   return null;
 }
 
+// Тег карточки при ожидании человека (Ш4): без «ждёт вас» — это слово говорит одна тревога
+// страницы. Мерж-вопрос тега не получает (null) — там тег «к мержу», как у статуса фичи.
+export const BRIEF_WAIT_WORD = 'нужен ответ';
+
+// Тег мерж-вопроса: тревога страницы уже говорит «ждёт согласия на мерж» — тег короче (e55194ed).
+export const BRIEF_MERGE_TAG = 'к мержу';
+
+export function briefWaitTagLabel(brief: FeatureBrief): string | null {
+  if (brief.reason === 'мерж' || brief.next[0]?.stage === 'merge') return null;
+  return BRIEF_WAIT_WORD;
+}
+
 // ── «Готовность» ────────────────────────────────────────────────────────────────────
-// Макет feature-summary-2: полоска по оценке оркестратора (шаги плюс стадии конвейера), без
-// неё — по трекеру. Счёт и согласие оценок приходят с бэка; единственная арифметика здесь —
-// доля штриховки «в работе» и процент по трекеру (done/total), когда оценки нет.
+// Полоска и процент — только по трекеру (Ш3): тот же trackerPercent, что у полос В2/С1/П2,
+// числитель и знаменатель — бэковые. note.estimate в готовность не входит и идёт ТОЛЬКО
+// в «Срок»: оценка оркестратора не красит полоску, не тускнит её от устаревания и не
+// задаёт чипы. Подписи «Готовность · по оценке» нет нигде: готовность одна, «по трекеру».
 export interface BriefChip {
   text: string;
   // next — первый («следом»), you — «за вами», plain — остальные.
@@ -391,42 +412,30 @@ export interface BriefChip {
 }
 
 export interface BriefReadinessView {
-  // Подпись: «Готовность» / «Готовность · по трекеру».
+  // Подпись: «Готовность · по трекеру» — единственная (Ш3: шкалы «по оценке» нет).
   label: string;
-  // Подпись под полоской: «4 готово · 3 в работе · из 9 · 45 %» (mono — числа);
+  // Подпись под полоской: «2 из 5 шагов · 40 %» (mono — числа);
   // при шагах в master — пометка «· N в master» (F1).
   caption: BriefDonePart[];
   percent: number;
-  // aria-label полоски: «Готовность 45 %», при шагах в master — «Готовность 45 %, 3 в master».
+  // aria-label полоски: «Готовность 40 %», при шагах в master — «Готовность 40 %, 3 в master».
   ariaLabel: string;
   // F1: сколько шагов в master (0 — нет или данных нет; ортогональный счётчик бэка).
   inMaster: number;
-  // «в master»-сегмент полоски, % ширины полоски — только когда полоска по шкале трекера
-  // (оценки нет): на шкале оценки оркестратора счётчик шагов не стоит — тик был бы ложью.
-  // 0 — сегмента нет. Никогда не больше percent.
-  inMasterPercent: number;
-  // Доля штриховки «в работе», 0 — штриховки нет.
-  inProgressPercent: number;
-  // Оценка оркестратора устарела: полоска тускнеет.
-  stale: boolean;
   closed: boolean;
-  // Метка устаревания у факта трекера («до смены этапа» / «до паузы»).
-  staleLabel: string | null;
-  // Факт трекера: «по трекеру: 2 из 5 шагов приняты · 1 виток правок».
+  // Факт трекера: «по трекеру: 2 из 5 шагов приняты · 1 возврат».
   tracker: BriefDonePart[];
-  // Подпись чипов: «Ещё не начато:» / «Осталось:».
+  // Подпись чипов: «Осталось:» — единственная (Ш3: «Ещё не начато:» было подписью
+  // estimate.remaining, его в готовности нет).
   chipsLabel: string;
+  // У закрытой/смерженной пусто: «Осталось» не рисуется вовсе (2b18fd89).
   chips: BriefChip[];
   // Вместо чипов (закрытая): «ничего — всё сделано».
   chipsEmpty: string | null;
 }
 
-const MERGE_CHIP = 'мерж · за вами';
+const MERGE_CHIP = 'мерж';
 const CHIP_CAP = 3;
-
-function clampPercent(n: number): number {
-  return Math.max(0, Math.min(100, Math.round(n)));
-}
 
 // Защита от битых чисел (тот же приём, что nonNeg в featureProgress): отрицательное/NaN — 0.
 function nonNeg(n: number | null | undefined): number {
@@ -443,9 +452,6 @@ function masterParts(inMaster: number): BriefDonePart[] {
 
 export function briefReadinessText(brief: FeatureBrief, opts: BriefTextOptions = {}): BriefReadinessView {
   const closed = brief.kind === 'closed' || brief.kind === 'merged';
-  const est = brief.note?.estimate ?? null;
-  const stale = !!est && !!brief.note?.stale;
-  const staleLabel = stale && brief.note ? voiceStaleLabel(brief.note, brief.kind) : null;
   const inMaster = nonNeg(opts.inMaster);
 
   const trackerParts = briefDoneText(brief);
@@ -454,67 +460,42 @@ export function briefReadinessText(brief: FeatureBrief, opts: BriefTextOptions =
   // «в master» к строке трекера НЕ добавляется: это ровно тот же ортогональный счётчик,
   // что показан на подписи полоски ниже; второй раз в том же блоке он не звучит (минор 3).
 
-  let caption: BriefDonePart[];
-  let percent: number;
-  let inProgressPercent = 0;
-  // Сегмент «в master» на полоске — только по шкале трекера (ниже); на шкале оценки — 0.
-  let inMasterPercent = 0;
-  if (est && est.total > 0) {
-    percent = clampPercent(est.percent ?? (est.done / est.total) * 100);
-    const w = est.inProgress ?? 0;
-    if (w > 0 && !closed) inProgressPercent = Math.min(clampPercent((w / est.total) * 100), 100 - percent);
-    caption = w > 0 && !closed
-      ? [
-        { text: String(est.done), mono: true }, { text: ' готово · ', mono: false },
-        { text: String(w), mono: true }, { text: ' в работе · из ', mono: false }, { text: String(est.total), mono: true },
-      ]
-      : [{ text: `${est.done} из ${est.total}`, mono: true }];
-    caption.push({ text: ' · ', mono: false }, { text: `${percent} %`, mono: true });
-  } else {
-    const { stepsAccepted, stepsTotal } = brief.done;
-    // Процент по трекеру — общий trackerPercent (та же функция, что полосам В2/С1/П2):
-    // числитель и знаменатель бэковые, второй копии арифметики в проекте нет.
-    percent = trackerPercent(stepsAccepted, stepsTotal);
-    caption = [
-      { text: `${stepsAccepted} из ${stepsTotal}`, mono: true }, { text: ' шагов · ', mono: false },
-      { text: `${percent} %`, mono: true },
-    ];
-    // Та же шкала, что у знаменателя полоски: доля шагов в master от total, не выше
-    // залитой части. Бэк НЕ гарантирует inMaster ≤ accepted: отсечка требует allDone
-    // цепочки, а не принятия (FeatureStepAccounting.cs:321-328), поэтому шаг «в master»
-    // без витка (корзина review) даёт inMaster > accepted. Это не битые числа, а правило
-    // полоски: «в master» — часть принятой части шкалы готовности, за неё сегмент не
-    // выходит; текст при этом честно называет факт (он ортогональный счётчик бэка),
-    // а расхождение говорит себе в «Трекер расходится» (вид unreviewed).
-    if (inMaster > 0 && stepsTotal > 0) inMasterPercent = Math.min(clampPercent((inMaster / stepsTotal) * 100), percent);
-  }
+  const stepsAccepted = opts.stepProgress ? opts.stepProgress.accepted : brief.done.stepsAccepted;
+  const stepsTotal = opts.stepProgress ? opts.stepProgress.total : brief.done.stepsTotal;
+  // Процент и подпись — только по трекеру (Ш3): общий trackerPercent (та же функция, что
+  // полосам В2/С1/П2), числитель и знаменатель бэковые, второй копии арифметики в проекте
+  // нет. note.estimate в готовность не входит — она идёт только в «Срок».
+  const percent = trackerPercent(stepsAccepted, stepsTotal);
+  const caption: BriefDonePart[] = [
+    { text: `${stepsAccepted} из ${stepsTotal}`, mono: true }, { text: ' шагов · ', mono: false },
+    { text: `${percent} %`, mono: true },
+  ];
+  // Бэк НЕ гарантирует inMaster ≤ accepted (FeatureStepAccounting.cs:321-328): текст честно
+  // называет факт (ортогональный счётчик бэка), расхождение говорит «Трекер расходится».
   caption.push(...masterParts(inMaster));
 
-  // Чипы «ещё не начато»: оркестратор — его remaining; без оценки — brief.next (до трёх стадий).
+  // Чипы «осталось»: brief.next (до трёх стадий). estimate.remaining в готовности не
+  // участвует (Ш3): оценка оркестратора живёт только в «Срок».
   const mergeAsk = brief.kind === 'waiting_you' && (brief.reason === 'мерж' || brief.next[0]?.stage === 'merge');
-  let texts: string[];
-  if (est) {
-    texts = est.remaining.filter(Boolean);
-  } else {
-    texts = brief.next.slice(0, CHIP_CAP).map(n => {
-      const name = n.personaId ? opts.nameOf?.(n.personaId) : null;
-      return name ? `${stageWord(n.stage)} · ${name}` : stageWord(n.stage);
-    });
-  }
+  const texts = brief.next.slice(0, CHIP_CAP).map(n => {
+    const name = n.personaId ? opts.nameOf?.(n.personaId) : null;
+    return name ? `${stageWord(n.stage)} · ${name}` : stageWord(n.stage);
+  });
   let chips: BriefChip[];
-  if (mergeAsk) {
+  if (closed) {
+    chips = [];
+  } else if (mergeAsk) {
     chips = [{ text: MERGE_CHIP, tone: 'you' }];
   } else {
     chips = texts.map((t, i) => (i === 0 ? { text: `следом · ${t}`, tone: 'next' as const } : { text: t, tone: 'plain' as const }));
   }
 
   return {
-    label: est ? 'Готовность' : 'Готовность · по трекеру',
+    label: 'Готовность · по трекеру',
     caption, percent,
     ariaLabel: inMaster > 0 ? `Готовность ${percent} %, ${inMaster} в master` : `Готовность ${percent} %`,
-    inProgressPercent, stale, closed, staleLabel, tracker,
-    inMaster, inMasterPercent,
-    chipsLabel: est ? 'Ещё не начато:' : 'Осталось:',
+    closed, tracker, inMaster,
+    chipsLabel: 'Осталось:',
     chips,
     chipsEmpty: closed ? 'ничего — всё сделано' : null,
   };
@@ -544,6 +525,8 @@ export interface BriefEstimateView {
   source: string | null;
   // Вторая оценка — справка, строка под числом; verdict — метка в её конце.
   alt: string | null;
+  // Ш4: при тревоге срок не идёт — дата как была и пояснение, почему она стоит.
+  note: string | null;
   verdict: BriefEtaVerdict | null;
   // «Почему» оркестратора: только при расхождении.
   why: string | null;
@@ -554,6 +537,8 @@ export interface BriefEstimateOptions extends BriefTextOptions {
 }
 
 const NO_ESTIMATE = 'Оценки пока нет';
+// Ш4: единственное место сводки, где звучит «ждёт вас»: оно объясняет, почему срок не идёт.
+const ESTIMATE_HOLD_NOTE = 'пока ждёт вас, срок стоит';
 const HOUR_12 = 12 * 60 * 60 * 1000;
 
 function etaMain(minutes: number): string {
@@ -586,6 +571,7 @@ function spread(h: { p25: number; p75: number }): string {
 
 export function briefEstimateText(brief: FeatureBrief, opts: BriefEstimateOptions = {}): BriefEstimateView {
   const out = estimateView(brief, opts);
+  if (brief.kind === 'waiting_you' && !out.mainMuted) out.note = ESTIMATE_HOLD_NOTE;
   // Очередь: «старт ≈ 15:00» — справка, если вторая оценка строку не заняла.
   if (brief.kind === 'queued' && brief.queueStartEstimate && !out.alt) {
     const t = formatClock(brief.queueStartEstimate);
@@ -606,7 +592,7 @@ function estimateView(brief: FeatureBrief, opts: BriefEstimateOptions): BriefEst
   const orchFresh = orchMinutes != null && !note?.stale;
   const orchStale = orchMinutes != null && !!note?.stale;
   const orchAgo = note ? agoText(note.at, nowMs) : null;
-  const base = { header: 'Срок', mainMuted: false, tail: null, source: null, alt: null, verdict: null, why: null };
+  const base = { header: 'Срок', mainMuted: false, tail: null, source: null, alt: null, verdict: null, why: null, note: null };
 
   if (brief.kind === 'closed' || brief.kind === 'merged') {
     // Итог: «шла N» + на старте оркестратор обещал ≈ M (и история, если есть).
@@ -621,26 +607,20 @@ function estimateView(brief: FeatureBrief, opts: BriefEstimateOptions): BriefEst
     };
   }
 
-  // Хвост по состоянию: пауза и очередь — слова; «ждёт вас» — без времени; «идёт» — «к HH:MM».
+  // Хвост по состоянию: пауза и очередь — слова; «идёт» и тревога — «к HH:MM» (при тревоге
+  // это дата, которая стоит, пока человек не ответит: пояснение — в note).
   const tailFor = (iso: string | null | undefined): string | null => {
     if (brief.kind === 'paused') return 'после снятия паузы';
     if (brief.kind === 'queued') return 'после старта';
-    if (brief.kind === 'running') {
+    if (brief.kind === 'running' || brief.kind === 'waiting_you') {
       const at = readyAtText(iso, nowMs);
       return at ? `· ${at}` : null;
     }
     return null;
   };
-  const histAt = brief.kind === 'running' && histMinutes != null
+  const histAt = (brief.kind === 'running' || brief.kind === 'waiting_you') && histMinutes != null
     ? new Date(Date.parse(brief.computedAt) + histMinutes * 60000).toISOString() : null;
   const histSpread = hist && histMinutes != null ? `по истории ≈ ${formatDuration(histMinutes)} (${spread(hist)})` : null;
-
-  if (brief.kind === 'waiting_you') {
-    // Остальное — за человеком: числа оценки нет, времени тоже; строка оркестратора — про мерж.
-    const alt = orchMinutes != null
-      ? `после вашего «да» — мерж ${etaMain(orchMinutes)}${orchName ? ` (${orchName})` : ''}` : null;
-    return { ...base, main: 'за вами', alt };
-  }
 
   if (orchFresh) {
     const source = `по оценке ${orchName ? genitiveName(orchName) : 'оркестратора'}${orchAgo ? ` · ${orchAgo}` : ''}`;
@@ -674,16 +654,13 @@ function estimateView(brief: FeatureBrief, opts: BriefEstimateOptions): BriefEst
   return { ...base, main: NO_ESTIMATE, mainMuted: true, source: 'прошлых фич для сравнения мало' };
 }
 
-// Первый факт строки итогов: «идёт 1 ч 10 мин» по elapsedMinutes; у очереди — «в очереди N» по
-// queueWaitMinutes. «0 мин» — не факт (тот же порог round, что у formatDuration); у закрытой —
-// нет: её длительность уже в «Итог».
+// Первый факт строки итогов — только у очереди: «в очереди N» по queueWaitMinutes («0 мин» — не
+// факт, тот же порог round, что у formatDuration). «С начала» строка берёт сама из
+// totals.elapsedMinutes статов (Ш5), поэтому «идёт N» по brief.elapsedMinutes убрано (П3).
 export function briefElapsedFact(brief: FeatureBrief): { label: string; value: string } | null {
-  const pos = (m: number | null | undefined): m is number => m != null && Math.round(m) > 0;
-  if (brief.kind === 'closed' || brief.kind === 'merged') return null;
-  if (brief.kind === 'queued') {
-    return pos(brief.queueWaitMinutes) ? { label: 'в очереди', value: formatDuration(brief.queueWaitMinutes) } : null;
-  }
-  return pos(brief.elapsedMinutes) ? { label: 'идёт', value: formatDuration(brief.elapsedMinutes) } : null;
+  if (brief.kind !== 'queued') return null;
+  const m = brief.queueWaitMinutes;
+  return m != null && Math.round(m) > 0 ? { label: 'в очереди', value: formatDuration(m) } : null;
 }
 
 // ── «N мин/ч назад» ────────────────────────────────────────────────────────────────
@@ -746,6 +723,20 @@ export function voiceRoleText(kind: FeatureBriefKind): string {
   return (kind === 'closed' || kind === 'merged') ? 'вела фичу' : 'ведёт фичу';
 }
 
+// Подпись заметки ведущего (Ш5, решение Майи): «— Софья, ведущая · 14 мин назад». Имени нет —
+// прежняя подпись без тире («ведёт фичу · 14 мин назад»). Пол неизвестен — женский (как у
+// оркестратора по умолчанию); «ведущий» — только при явном male.
+export function voiceSignature(note: FeatureBriefNote, kind: FeatureBriefKind, name: string | null, nowMs: number, gender?: 'female' | 'male' | null): string {
+  const when = voiceWhenText(note, kind, nowMs);
+  if (!name) return [voiceRoleText(kind), when].filter(Boolean).join(' · ');
+  return [`— ${name}, ${gender === 'male' ? 'ведущий' : 'ведущая'}`, when].filter(Boolean).join(' · ');
+}
+
+// Строка сводки, когда заметки ведущего нет: имя ведущего не теряется вместе с чипом шапки.
+export function leadNoNoteText(name: string): string {
+  return `Ведёт ${name} · заметки пока нет`;
+}
+
 // ── Сторож перенесённых слов: слова модели (R-F8) ────────────────────────────────────
 // Все статические строки, которые модель может сказать в карточке. Их не должно быть в
 // коде блока (сторож — FeatureBriefBlock.test.ts): формулировка живёт здесь, блок только
@@ -762,8 +753,8 @@ export function voiceRoleText(kind: FeatureBriefKind): string {
 // односимвольные куски вроде 'с ' метод не покрывает.
 export const BRIEF_MODEL_WORDS: readonly string[] = [
   // «Сейчас» (briefNowText)
-  'Ждёт вашего согласия на мерж в master',
-  'Ждёт вашего ответа:',
+  'Нужно согласие на мерж в master',
+  'Нужен ответ:',
   'Исполнитель встал', // нет причины и неизвестный код — одна фраза (R-F17 п.5)
   'На паузе —', // оба варианта строки паузы
   'Ждёт своей очереди',
@@ -771,19 +762,20 @@ export const BRIEF_MODEL_WORDS: readonly string[] = [
   'Готовится: разрез/план',
   'Ничего не идёт',
   'Смержена в master',
-  'Закрыта',
   'шага ', // «Ревью шага 3 (бэк)» — часть running-строки
-  // Подстрока «Сейчас» (briefSubText); «фича закрыта» покрывает и «Ничего — фича закрыта»
-  'без вас фича стоит',
+  // Подстрока «Сейчас» (briefSubText); «фича закрыта» — «Ничего — фича закрыта» (briefNextText)
+  'фича стоит',
+  'ждёт ответа',
   'исполнители не запускаются',
   'фича закрыта',
+  'к мержу', // тег мерж-вопроса (BRIEF_MERGE_TAG)
   'ждёт ', // «ждёт N · без вас фича стоит»
   'на паузе ', // «на паузе N · исполнители не запускаются»
   // «Сделано» (briefDoneText)
   'шагов приняты',
   ' шагов', // «План готов · 0 из 4 шагов»
   'План готов',
-  'правок',
+  'возврат', // «· N возврат/возврата/возвратов» (Ш3): одна основа покрывает все формы
   // «в master» (F1, masterParts): пометка готовности и факта трекера; покрывает и
   // «Смержена в master» (она и так выше списком), и aria-label «N в master»
   'в master',
@@ -797,10 +789,10 @@ export const BRIEF_MODEL_WORDS: readonly string[] = [
   'Итог',
   'Срок',
   'Готовность',
-  'за вами',
+  'пока ждёт вас, срок стоит',
   'старт ≈',
   // Задачи в работе (briefActiveView, briefActiveTagLabel)
-  'ждёт вашего ответа',
+  'задаёт вопрос',
   'Ответить',
   'параллельно:',
   'линия:',
@@ -812,15 +804,13 @@ export const BRIEF_MODEL_WORDS: readonly string[] = [
   'другая задача',
   'другие задачи',
   'других задач',
-  'ждёт вас',
+  'нужен ответ',
   'по трекеру',
-  'Ещё не начато',
   'Осталось:',
   'следом · ',
   'сходится',
   'чем по истории',
   'после старта',
-  'после вашего',
   'снятия паузы', // «≈ N после снятия паузы»
   'идёт ',
   'шла ',
@@ -830,6 +820,9 @@ export const BRIEF_MODEL_WORDS: readonly string[] = [
   'до смены этапа',
   'ведёт фичу',
   'вела фичу',
+  'ведущая',
+  'ведущий',
+  'заметки пока нет',
   'только что',
   'мин назад',
   'ч назад',

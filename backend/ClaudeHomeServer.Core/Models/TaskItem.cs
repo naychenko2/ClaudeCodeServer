@@ -218,7 +218,7 @@ public record FeatureHold(string Reason, DateTime Since, string? BySessionId, bo
 // девятая категория, «Фильтр фич по состоянию», R-Б1/2); имя поля и
 // JSON-контракт прежние — голоса, записанные до B15, хранят СОСТОЯНИЕ («running», «paused»…), они
 // достраиваются до категории таблицей FeatureBrief.KindByState (fail-closed для неизвестного).
-// Estimate — оценка оркестратора (макет 2 сводки фичи): пишется только вместе с голосом, штамп
+// Estimate — срок и «что дальше» от оркестратора (макет 2 сводки фичи): пишется только вместе с голосом, штамп
 // At/StageAtWrite/StateAtWrite общий; записи без оценки читаются с Estimate = null.
 public record FeatureNote(string Text, DateTime At, string? BySessionId, bool ByUser,
     string StageAtWrite, string StateAtWrite, FeatureEstimate? Estimate = null)
@@ -226,14 +226,13 @@ public record FeatureNote(string Text, DateTime At, string? BySessionId, bool By
     public const int MaxTextLength = 600;
 }
 
-// Оценка оркестратора (FeatureNote.Estimate): Done/InProgress/Total — единицы работы (шаги плана плюс
-// стадии конвейера), Percent — когда шаги неравные по объёму (null — доля done/total), Remaining —
-// ещё не начатое (первый пункт — «дальше»), EtaMinutes — срок до готовности (null — не берётся
-// оценить), Why — почему срок заметно отличается от обычного. Ограничения — Validate.
-public record FeatureEstimate(int Done, int Total, int InProgress, int? Percent,
-    List<string>? Remaining, int? EtaMinutes, string? Why)
+// Оценка оркестратора (FeatureNote.Estimate): только срок и «что дальше». Процент готовности здесь не
+// живёт — он один, из run.stepProgress (FeatureStepAccounting). Remaining — ещё не начатое (первый
+// пункт — «дальше»), EtaMinutes — срок до готовности (null — не берётся оценить), Why — почему срок
+// заметно отличается от обычного. Старые записи с done/total/inProgress/percent читаются: лишние ключи
+// JSON игнорируются. Ограничения — Validate.
+public record FeatureEstimate(List<string>? Remaining, int? EtaMinutes, string? Why)
 {
-    public const int MaxTotal = 50;
     public const int MaxRemaining = 8;
     public const int MaxRemainingLength = 40;
     public const int MaxWhyLength = 160;
@@ -241,18 +240,19 @@ public record FeatureEstimate(int Done, int Total, int InProgress, int? Percent,
     // Текст отказа или null. Remaining/Why вызывающий нормализует Normalize до проверки.
     public string? Validate()
     {
-        if (Total is < 1 or > MaxTotal) return $"featureEstimate.total: от 1 до {MaxTotal}";
-        if (Done < 0 || Done > Total) return "featureEstimate.done: от 0 до total";
-        if (InProgress < 0 || InProgress > Total - Done) return "featureEstimate.inProgress: от 0 до total − done";
-        if (Percent is < 0 or > 100) return "featureEstimate.percent: от 0 до 100";
         var remaining = Remaining ?? [];
         if (remaining.Count > MaxRemaining) return $"featureEstimate.remaining: не больше {MaxRemaining} пунктов";
         if (remaining.Any(r => r.Length == 0 || r.Length > MaxRemainingLength))
             return $"featureEstimate.remaining: пункт непустой, не длиннее {MaxRemainingLength} символов";
         if (EtaMinutes is < 1) return "featureEstimate.etaMinutes: не меньше 1";
         if (Why is { Length: > MaxWhyLength }) return $"featureEstimate.why: не длиннее {MaxWhyLength} символов";
+        // Пустую оценку (ни срока, ни remaining) вызывающий отбрасывает через NullIfEmpty до Validate.
         return null;
     }
+
+    // Без срока и без «что дальше» (в т.ч. {} и одни старые done/total) оценка бессодержательна: её молча
+    // отбрасывают (null), а не отказывают — голос, с которым она пришла, при этом сохраняется. Вызывать после Normalize.
+    public FeatureEstimate? NullIfEmpty() => EtaMinutes is null && (Remaining ?? []).Count == 0 ? null : this;
 
     // Trim пунктов и why; пустой why — null. Remaining null (ключа нет) — пустой список: после
     // Normalize Remaining не null.
@@ -300,6 +300,19 @@ public class PlannedStep
     public string StepRef { get; set; } = "";
     public string Title { get; set; } = "";
     public string? Lane { get; set; }
+
+    // Вид шага: строка, а не enum — откат кода с новым значением enum уносит стор в .corrupt
+    // (урок McpCatalogRef). null = step; в знаменатель прогресса идут только шаги (null/step).
+    public string? Kind { get; set; }
+
+    public const string KindStep = "step";
+    public const string KindReview = "review";
+    public const string KindQa = "qa";
+    public const string KindFinal = "final";
+    public static readonly string[] Kinds = [KindStep, KindReview, KindQa, KindFinal];
+
+    // Исполняемый шаг плана (учитывается в знаменателе): kind не задан или step.
+    public bool IsStep => Kind is null || string.Equals(Kind, KindStep, StringComparison.Ordinal);
 }
 
 public enum TaskItemStatus { Todo, InProgress, Done }

@@ -14,12 +14,17 @@ import { openChatById } from '../../lib/openChat';
 import { api, type FeatureSummaryResult } from '../../lib/api';
 import type { NavMarks } from '../../lib/featureNavMarks';
 import type { FeatureRun } from '../../types/featureRun';
-import { analysisLineState, type AnalysisBadge, type AnalysisLineState } from './FeatureAnalysisModel';
+import { analysisLineState, type AnalysisBadge, type AnalysisKey, type AnalysisLineState } from './FeatureAnalysisModel';
 import { FeatureAnalysisSummary } from './FeatureAnalysisSummary';
 
 const BADGE_ICON: Record<AnalysisBadge['icon'], typeof Clock> = {
   Clock, Bell, Moon, Check,
 };
+
+// Тревожные состояния («стоит», «молчит», «тихо», «остановлена», «ждёт вас») строки не
+// принадлежат (Ш4): их говорит одна тревога под тулбаром страницы (FeaturePageAlert), на
+// всех вкладках. В строке при них остаётся лишь «Анализ моделью» — без своей фразы и бейджа.
+const ALARM_KEYS: ReadonlySet<AnalysisKey> = new Set(['stuck', 'nudged', 'quiet', 'stopped', 'attention']);
 
 // Тон короба: фон и рамка по таблице спецификации (quiet — пунктир warning).
 function boxStyle(st: AnalysisLineState, isMobile: boolean) {
@@ -120,10 +125,11 @@ export function FeatureAnalysisLine({ run, marks, isMobile = false }: FeatureAna
   // Чат шага в архиве или пуст — действие «Открыть чат» снимается; «Анализ моделью»
   // снимается только когда резюме раскрыто и готово (спека: «когда резюме раскрыто —
   // кнопки в строке нет»).
+  const alarm = ALARM_KEYS.has(st.key);
   const actions = st.actions.filter(
     a => a.kind === 'analysis'
       ? !(openSummary && !summaryRunning)
-      : (a.sessionId && !marks?.chatArchived(a.sessionId)),
+      : (!alarm && a.sessionId && !marks?.chatArchived(a.sessionId)),
   );
 
   const open = (sessionId: string) => { void openChatById(sessionId); };
@@ -137,8 +143,11 @@ export function FeatureAnalysisLine({ run, marks, isMobile = false }: FeatureAna
 
   return (
     <>
-    <div data-testid="feature-analysis-line" style={boxStyle(st, isMobile)}>
-      {st.badge && BadgeIcon ? (
+    <div
+      data-testid="feature-analysis-line"
+      style={alarm ? { display: 'flex', justifyContent: isMobile ? 'stretch' : 'flex-end', marginBottom: SP.md } : boxStyle(st, isMobile)}
+    >
+      {alarm ? null : st.badge && BadgeIcon ? (
         <Badge tone={st.badge.tone} size="xs" icon={<BadgeIcon size={ICON_SIZE.xs} {...ICON_PROPS} />}>
           {st.badge.text}
         </Badge>
@@ -148,12 +157,14 @@ export function FeatureAnalysisLine({ run, marks, isMobile = false }: FeatureAna
         </span>
       )}
 
-      <span style={{ flex: 1, minWidth: 0, color: C.textPrimary }}>
-        {st.strong && <b style={{ color: C.textHeading }}>{st.strong}</b>}
-        {st.tail && (
-          <span style={{ color: C.textMuted }}> {st.tail}</span>
-        )}
-      </span>
+      {!alarm && (
+        <span style={{ flex: 1, minWidth: 0, color: C.textPrimary }}>
+          {st.strong && <b style={{ color: C.textHeading }}>{st.strong}</b>}
+          {st.tail && (
+            <span style={{ color: C.textMuted }}> {st.tail}</span>
+          )}
+        </span>
+      )}
 
       <div style={{ display: 'flex', gap: SP.xs + 2, ...(isMobile ? { flexBasis: '100%', flexDirection: 'column' as const } : {}) }}>
         {actions.map((a, i) => (

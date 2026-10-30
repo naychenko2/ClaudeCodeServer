@@ -34,6 +34,7 @@ import { FeatureBriefBlock } from './FeatureBriefBlock';
 import { briefEstimateText, briefNowText, briefReadinessText, briefSubText, BRIEF_MODEL_WORDS } from './FeatureBriefModel';
 import { featureRunStatusTag } from './FeatureStatusTag';
 import { stageLabel } from './FeatureStatsBits';
+import { formatDuration } from '../../lib/chatGroups';
 import { C, FONT } from '../../lib/design';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureBriefBlockProps } from './FeatureBriefBlock';
@@ -148,7 +149,9 @@ const CASES: Case[] = [
     over: { now: { stage: 'review', taskId: 't-rev', personaId: 'p-gleb', stepRef: '3', lane: 'back', since: at(25, 14, 5) } },
     tag: featureRunStatusTag('running', stageLabel('review')).label,
   },
-  { name: 'waiting_you (мерж)', kind: 'waiting_you', over: { reason: 'мерж' }, tag: featureRunStatusTag('waiting').label },
+  // Ш4: «ждёт вас» в сводке нет — тег мерж-вопроса «к мержу» из статуса фичи, прочего вопроса — «нужен ответ».
+  { name: 'waiting_you (мерж)', kind: 'waiting_you', over: { reason: 'мерж' }, tag: 'к мержу' },
+  { name: 'waiting_you (вопрос)', kind: 'waiting_you', over: { reason: 'уточни отступы' }, tag: 'нужен ответ' },
   { name: 'error', kind: 'error', over: { reason: 'сохранение журнала упало' }, tag: featureRunStatusTag('stopped').label },
   { name: 'paused', kind: 'paused', over: { reason: 'manual', now: { stage: '', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 13, 40) } }, tag: featureRunStatusTag('paused').label },
   { name: 'queued', kind: 'queued', tag: 'в очереди' },
@@ -166,8 +169,9 @@ describe('FeatureBriefBlock: девять kind', () => {
       const mergedAt = cs.mergedAt ?? null;
       const { c } = render({ brief: b, mergedAt, nameOf });
       const line = findNodeByAttr(c, 'data-testid', 'brief-now-line');
-      expect(line, 'строка «Сейчас»').not.toBeNull();
-      expect(textNodes(line!).join(''), 'строка расходится с выходом F2').toBe(briefNowText(b, { nameOf, mergedAt }));
+      const expectedLine = briefNowText(b, { nameOf, mergedAt });
+      if (expectedLine === null) expect(line, 'строки нет (f100335b)').toBeNull();
+      else expect(textNodes(line!).join(''), 'строка расходится с выходом F2').toBe(expectedLine);
       const tag = findNodeByAttr(c, 'data-testid', 'brief-tag');
       expect(tag, 'тег состояния').not.toBeNull();
       expect(textNodes(tag!).join(''), 'тег расходится с резолвером').toBe(cs.tag);
@@ -205,7 +209,7 @@ function note(est: Record<string, unknown> | null = {}, over: Partial<NonNullabl
   return {
     text: 'голос', at: at(25, 13, 56), byPersonaId: 'p-sofya', byUser: false, stageAtWrite: 'prod', stale: false,
     estimate: est === null ? null : {
-      done: 4, total: 9, percent: 45, inProgress: 3, remaining: ['проверка · Вера', 'финал'], etaMinutes: 160,
+      remaining: ['проверка · Вера', 'финал'], etaMinutes: 160,
       why: null, agreement: 'within', etaEndsAt: at(25, 16, 50), ...est,
     } as NonNullable<FeatureBrief['note']>['estimate'],
     ...over,
@@ -217,69 +221,74 @@ const styleOf = (c: ReturnType<typeof render>['c'], id: string): Record<string, 
   reactProps(findNodeByAttr(c, 'data-testid', id)!)!.style as Record<string, unknown>;
 
 describe('«Готовность | Срок»', () => {
-  it('«Готовность» в DOM равна выходам модели: подпись, подпись под полоской, факт трекера (слова модели, R-F5)', () => {
+  it('«Готовность» в DOM равна выходам модели даже при оценке: процент по трекеру, без «по оценке» (Ш3, R-F5)', () => {
     const b = brief({ estimate: HIST, note: note() });
     const { c } = render({ brief: b, nameOf });
     const v = briefReadinessText(b, { nameOf });
     expect(joined(c, 'brief-ready-caption')).toBe(v.caption.map(p => p.text).join(''));
-    expect(joined(c, 'brief-ready-caption')).toBe('4 готово · 3 в работе · из 9 · 45 %');
+    // note.estimate (4/9, 45 %) в DOM не попала: подпись — трекерные 2 из 5 (40 %).
+    expect(joined(c, 'brief-ready-caption')).toBe('2 из 5 шагов · 40 %');
     expect(joined(c, 'brief-ready-tracker')).toBe(v.tracker.map(p => p.text).join(''));
     expect(textNodes(findNodeByAttr(c, 'data-testid', 'brief-ready')!).join(' ')).toContain('Готовность');
   });
 
-  it('полоска — progressbar с aria-label и значением; заливка «готово» C.accent, штриховка «в работе» по inProgress', () => {
-    const { c } = render({ brief: brief({ note: note() }), nameOf });
-    const bar = findNodeByAttr(c, 'data-testid', 'brief-ready-bar')!;
-    expect(bar.attributes.role).toBe('progressbar');
-    expect(bar.attributes['aria-valuenow']).toBe('45');
-    expect(bar.attributes['aria-label']).toBe('Готовность 45 %');
-    expect(styleOf(c, 'brief-ready-fill').width).toBe('45%');
-    expect(styleOf(c, 'brief-ready-fill').background).toBe(C.accent);
-    expect(styleOf(c, 'brief-ready-hatch').width).toBe('33%');
-    expect(String(styleOf(c, 'brief-ready-hatch').background)).toContain('repeating-linear-gradient(135deg');
-  });
+  // Корзины трекера: 26 + 13 + 59 = 98 (сумма сегментов полосы = total); «в работе» пуста.
+  const SP98 = { planState: 'cut' as const, total: 98, accepted: 26, review: 13, work: 0, notCreated: 59, withdrawn: 0, unlinkedReworks: 0 };
+  const segFlex = (c: ReturnType<typeof render>['c'], key: string): number | null => {
+    const n = findNodeByAttr(c, 'data-testid', `feature-bar-${key}`);
+    return n ? (reactProps(n)!.style as Record<string, number>).flex : null;
+  };
 
-  it('устаревшая оценка — заливка C.accentMuted, штриховка accentMuted/progressTrack, метка у факта трекера', () => {
-    const { c } = render({ brief: brief({ note: note({}, { stale: true }) }), nameOf });
-    expect(styleOf(c, 'brief-ready-fill').background).toBe(C.accentMuted);
-    expect(String(styleOf(c, 'brief-ready-hatch').background)).toContain(C.progressTrack);
-    expect(joined(c, 'brief-ready-stale')).toBe('до смены этапа');
-  });
-
-  it('закрытая — заливка C.success, штриховки нет, вместо чипов «ничего — всё сделано»', () => {
-    const { c } = render({ brief: brief({ kind: 'closed', note: note({ done: 9, total: 9, percent: 100, remaining: [] }) }), mergedAt: at(24, 18, 5), nameOf });
-    expect(styleOf(c, 'brief-ready-fill').background).toBe(C.success);
+  it('полоса трекера (Ш5): сумма сегментов = stepProgress.total, пустые корзины скрыты, inMaster в сумму не входит', () => {
+    const { c } = render({ brief: brief(), stepProgress: SP98, inMaster: 4, nameOf });
+    const sum = ['accepted', 'review', 'work', 'notCreated'].reduce((a, k) => a + (segFlex(c, k) ?? 0), 0);
+    expect(sum).toBe(SP98.total);
+    expect(findNodeByAttr(c, 'data-testid', 'feature-bar-work'), 'пустая корзина скрыта').toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'brief-legend-work'), 'пустая корзина скрыта в легенде').toBeNull();
+    expect(joined(c, 'brief-legend-accepted')).toBe('26 принято');
+    expect(styleOf(c, 'feature-bar-accepted').background).toBe(C.success);
+    expect(findNodeByAttr(c, 'data-testid', 'brief-ready-bar')!.attributes['aria-label']).toBe('Готовность 27 %: 4 в master, 26 принято, 13 в ревью, 59 не заведено');
+    // старой полоски progressbar/штриховки нет
     expect(findNodeByAttr(c, 'data-testid', 'brief-ready-hatch')).toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'brief-ready-fill')).toBeNull();
+  });
+
+  it('оценка оркестратора полосу не красит: caption и полоса по stepProgress, не по note.estimate', () => {
+    const { c } = render({ brief: brief({ note: note({ inProgress: 3 }) }), stepProgress: SP98, nameOf });
+    // Подпись и полоса — один источник (stepProgress): 26 из 98 → 27 %, не 2 из 5 → 40 % из brief.done.
+    expect(joined(c, 'brief-ready-caption')).toBe('26 из 98 шагов · 27 %');
+    expect(segFlex(c, 'accepted')).toBe(26);
+  });
+
+  it('без stepProgress (старые ответы) полосы и легенды нет, подпись остаётся', () => {
+    const { c } = render({ brief: brief(), nameOf });
+    expect(findNodeByAttr(c, 'data-testid', 'brief-ready-bar')).toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'brief-ready-legend')).toBeNull();
+    expect(joined(c, 'brief-ready-caption')).toBe('2 из 5 шагов · 40 %');
+  });
+
+  it('закрытая — только «ничего — всё сделано», «Осталось:» и чипов из next нет (2b18fd89)', () => {
+    const { c } = render({ brief: brief({ kind: 'closed', next: [{ stage: 'qa', personaId: null }, { stage: 'merge', personaId: null }], note: note({ remaining: [] }) }), mergedAt: at(24, 18, 5), nameOf });
     expect(joined(c, 'brief-chip-empty')).toBe('ничего — всё сделано');
+    expect(allNodes(c, 'brief-chip')).toHaveLength(0);
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'brief-ready-left')!).join(' ')).not.toContain('Осталось');
   });
 
-  it('«в master» (F1): сегмент C.success в начале заливки, остаток готового — обычная краска; пометка одна — в подписи', () => {
+  it('«в master» (F1): пометка одна — в подписи; в строке трекера её нет', () => {
     const { c } = render({ brief: brief({ done: { stepsAccepted: 4, stepsTotal: 5, loops: 0, planState: 'cut' } }), inMaster: 3, nameOf });
-    expect(styleOf(c, 'brief-ready-fill-master').width).toBe('60%');
-    expect(styleOf(c, 'brief-ready-fill-master').background).toBe(C.success);
-    expect(styleOf(c, 'brief-ready-fill').width).toBe('20%');
-    expect(styleOf(c, 'brief-ready-fill').background).toBe(C.accent);
     expect(joined(c, 'brief-ready-caption')).toContain('3 в master');
-    // минор 3 ревью 07eee660: в строке трекера пометки нет (дубль убран)
-    expect(joined(c, 'brief-ready-tracker')).not.toContain('в master');
-    expect(findNodeByAttr(c, 'data-testid', 'brief-ready-bar')!.attributes['aria-label']).toBe('Готовность 80 %, 3 в master');
-  });
-
-  it('без inMaster (старые ответы) — сегмента нет, заливка целиком прежняя', () => {
-    const { c } = render({ brief: brief({ done: { stepsAccepted: 4, stepsTotal: 5, loops: 0, planState: 'cut' } }), nameOf });
-    expect(findNodeByAttr(c, 'data-testid', 'brief-ready-fill-master')).toBeNull();
-    expect(styleOf(c, 'brief-ready-fill').width).toBe('80%');
     expect(joined(c, 'brief-ready-tracker')).not.toContain('в master');
   });
 
-  it('чипы «ещё не начато»: первый «следом», «за вами» — на фоне C.infoBg', () => {
-    const { c } = render({ brief: brief({ note: note() }), nameOf });
+  it('чипы «осталось» из next (Ш3): первый «следом», мерж-чип — на фоне C.infoBg', () => {
+    // Чипы не берутся из estimate.remaining: фикстур с оценкой, но next даёт свою цепочку.
+    const { c } = render({ brief: brief({ note: note(), next: [{ stage: 'qa', personaId: 'p-vera' }] }), nameOf });
     const chips = [findNodeByAttr(c, 'data-testid', 'brief-chip')!];
     expect(textNodes(chips[0]).join('')).toBe('следом · проверка · Вера');
     expect((reactProps(chips[0])!.style as Record<string, unknown>).background).toBe(C.accentLight);
-    const w = render({ brief: brief({ kind: 'waiting_you', reason: 'мерж', note: note({ remaining: ['мерж'] }) }), nameOf }).c;
+    const w = render({ brief: brief({ kind: 'waiting_you', reason: 'мерж' }), nameOf }).c;
     const you = findNodeByAttr(w, 'data-testid', 'brief-chip')!;
-    expect(textNodes(you).join('')).toBe('мерж · за вами');
+    expect(textNodes(you).join('')).toBe('мерж');
     expect((reactProps(you)!.style as Record<string, unknown>).background).toBe(C.infoBg);
   });
 
@@ -321,7 +330,7 @@ describe('«Готовность | Срок»', () => {
   });
 
   it('closed — подпись «Итог»: «шла 6 ч 40 мин» и строка «на старте … обещала»', () => {
-    const b = brief({ kind: 'closed', elapsedMinutes: 400, initialEtaMinutes: 300, note: note({ done: 9, total: 9, percent: 100, remaining: [] }) });
+    const b = brief({ kind: 'closed', elapsedMinutes: 400, initialEtaMinutes: 300, note: note({ remaining: [] }) });
     const { c } = render({ brief: b, mergedAt: at(24, 18, 5), nameOf });
     const eta = joined(c, 'brief-eta');
     expect(eta).toContain('Итог');
@@ -344,9 +353,15 @@ describe('«Готовность | Срок»', () => {
     expect(joined(c2, 'mini-summary-row')).not.toContain('в очереди');
   });
 
-  it('строка итогов: «идёт N» из elapsedMinutes первым фактом', () => {
-    const { c } = render({ brief: brief({ elapsedMinutes: 70 }), stats: stats() });
-    expect(joined(c, 'mini-summary-row').startsWith('идёт 1 ч 10 мин')).toBe(true);
+  it('строка итогов (Ш5): «с начала» = totals.elapsedMinutes, «работа» = workWallMinutes — разные числа, обе подписи; «идёт N» и цены нет', () => {
+    const st = stats();
+    const { c } = render({ brief: brief({ elapsedMinutes: 70 }), stats: st });
+    const row = joined(c, 'mini-summary-row');
+    expect(row).toContain(`с начала ${formatDuration(st.timeline.totals.elapsedMinutes)}`);
+    expect(row).toContain(`работа ${formatDuration(st.timeline.totals.workWallMinutes)}`);
+    expect(st.timeline.totals.elapsedMinutes).not.toBe(st.timeline.totals.workWallMinutes);
+    expect(row).not.toContain('идёт');
+    expect(row).not.toContain('$');
   });
 });
 
@@ -454,13 +469,13 @@ describe('«обновлено …» (F15, дефект f2da9354)', () => {
 describe('Голос оркестратора', () => {
   const fresh = { text: 'Идём по плану', at: at(25, 13, 56), byPersonaId: 'p-sofya', byUser: false, stageAtWrite: 'review', stale: false };
 
-  it('свежий — плашка с текстом и подписью «Имя · ведёт фичу · N мин назад»', () => {
+  it('свежий — плашка с текстом и подписью «— Имя, ведущая · N мин назад»', () => {
     const { c } = render({ brief: brief({ note: fresh }), nameOf });
     const voice = findNodeByAttr(c, 'data-testid', 'brief-voice');
     expect(voice, 'плашка голоса').not.toBeNull();
     const all = textNodes(voice!).join(' ');
     expect(all).toContain('Идём по плану');
-    expect(all).toContain('Софья · ведёт фичу · 14 мин назад');
+    expect(all).toContain('— Софья, ведущая · 14 мин назад');
     expect(findNodeByAttr(c, 'data-testid', 'brief-voice-stale'), 'метки устаревшего нет').toBeNull();
   });
 
@@ -528,16 +543,19 @@ describe('Служебные состояния', () => {
 describe('Closedность карточки (R-F8)', () => {
   it('brief.kind = merged с mergedAt — карточка равна closed с тем же mergedAt: тег, строка «Сейчас», сводка, готовность, срок (Ф-1.1)', () => {
     const mergedAt = at(24, 18, 5);
-    const est = note({ done: 9, total: 9, percent: 100, remaining: [] });
+    const est = note({ remaining: [] });
     const closed = render({ brief: brief({ kind: 'closed', elapsedMinutes: 400, note: est }), stats: stats(), mergedAt, nameOf });
     const merged = render({ brief: brief({ kind: 'merged', elapsedMinutes: 400, note: est }), stats: stats(), mergedAt, nameOf });
-    for (const id of ['brief-tag', 'brief-glyph', 'brief-now-line', 'brief-now-sub', 'brief-facts', 'brief-totals']) {
+    for (const id of ['brief-tag', 'brief-glyph', 'brief-now-line', 'brief-facts', 'brief-totals']) {
       const a = findNodeByAttr(closed.c, 'data-testid', id);
       const b = findNodeByAttr(merged.c, 'data-testid', id);
       expect(a, `элемент ${id} у closed`).not.toBeNull();
       expect(b, `элемент ${id} у merged`).not.toBeNull();
       expect(textNodes(b!).join(' '), `текст ${id} у merged отличается от closed`).toBe(textNodes(a!).join(' '));
     }
+    // Подстроки «фича закрыта» у терминальных нет (f100335b): закрытие говорит один тег.
+    expect(findNodeByAttr(closed.c, 'data-testid', 'brief-now-sub')).toBeNull();
+    expect(findNodeByAttr(merged.c, 'data-testid', 'brief-now-sub')).toBeNull();
   });
 });
 
@@ -670,16 +688,16 @@ describe('Задачи в работе (макет 2, «Итерация 2»)', 
     expect(joined(c, 'brief-tag')).not.toContain('в работе');
   });
 
-  it('ждёт человека: заголовок про задачу, рамка C.info, «Ответить Кире» открывает чат; тег «ждёт вас · 1 из 3»', () => {
+  it('ждёт человека: заголовок про задачу, рамка C.info, «Ответить Кире» открывает чат; тег «нужен ответ · 1 из 3»', () => {
     const answered: string[] = [];
     const list = [A({ state: 'waiting_you', since: at(25, 14, 2) }), A({ taskId: 't2', personaId: 'p-gleb' }), A({ taskId: 't3', personaId: 'p-vera' })];
     for (const isMobile of [false, true]) {
       const { c } = render({ brief: brief({ kind: 'waiting_you', active: list }), nameOf, isMobile, onAnswer: id => answered.push(id) });
-      expect(joined(c, 'brief-now-line')).toBe('Кира ждёт вашего ответа по шагу 4');
-      expect(joined(c, 'brief-now-sub')).toBe('ждёт 8 мин · шаг 4 стоит, 2 другие задачи идут');
+      expect(joined(c, 'brief-now-line')).toBe('Кира задаёт вопрос по шагу 4');
+      expect(joined(c, 'brief-now-sub')).toBe('8 мин · шаг 4 стоит, 2 другие задачи идут');
       expect(styleOf(c, 'feature-brief-block').border).toBe(`1px solid ${C.info}`);
       expect(joined(c, 'brief-answer')).toBe('Ответить Кире');
-      expect(joined(c, 'brief-tag')).toBe('ждёт вас · 1 из 3');
+      expect(joined(c, 'brief-tag')).toBe('нужен ответ · 1 из 3');
       // Мерж-кнопки не конкурируют с «Ответить»: ждут не мерж.
       expect(findNodeByAttr(c, 'data-testid', 'brief-merge')).toBeNull();
       click(c, 'brief-answer');
@@ -703,7 +721,7 @@ describe('Задачи в работе (макет 2, «Итерация 2»)', 
     const six = Array.from({ length: 6 }, (_, i) => A({ taskId: `t${i}` }));
     const { c } = render({ brief: brief({ active: six }), nameOf, onOpenTasks: () => calls.push('tasks') });
     expect(allNodes(c, 'brief-active-row')).toHaveLength(4);
-    expect(joined(c, 'brief-active-tail')).toBe('ещё 2 в работе — во вкладке «Задачи» ›');
+    expect(joined(c, 'brief-active-tail')).toBe('ещё 2 в работе — во вкладке «Шаги» ›');
     click(c, 'brief-active-tail');
     expect(calls).toEqual(['tasks']);
   });

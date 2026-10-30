@@ -256,7 +256,7 @@ describe('карточка 2 — витки (к1, к2)', () => {
     const card = findNodeByAttr(container, 'data-testid', 'loss-card-2');
     expect(card, 'карточки 2 нет').toBeTruthy();
     const text = textOf(card);
-    expect(text).toContain('Больше всего витков');
+    expect(text).toContain('Больше всего возвратов');
     expect(text).toContain('ST-F7 · 2 возврата'); // plural: 2 — «возврата»
     expect(text).toContain('Выпилить блок · шёл 1 ч 05 мин');
     const rounds = findNodeByAttr(card!, 'data-testid', 'loss-rounds');

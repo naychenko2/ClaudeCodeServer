@@ -331,24 +331,40 @@ export interface FeatureDisplayState {
   status: string;
 }
 
-// Длительность в человекочитаемом виде: «25 мин», «2 ч 15 мин», «3 дн 6 ч».
-// Единый формат для статусов тревоги («стоит · … · 25 мин») и закрытых фич
-// («смержена … · 3 дн 6 ч»). Чистая функция — тестируется без React.
+// Длительность в человекочитаемом виде. Единственная реализация формата длительности
+// фичи (Ш1a): страница (FeatureStatsBits) реэкспортирует её, а не держит свою копию.
+// «45 мин» до часа, «1 ч 05 мин» после часа (минуты двумя цифрами — формат Майи),
+// ровные часы — «2 ч». Дни от 48 ч (решение Майи, ревью 1f31950f): до 48 ч интервал
+// считается часами («26 ч 43 мин»), от 48 ч — «N дн M ч», минуты отбрасываются,
+// ровные сутки — «N дн». Один формат для страницы и индекса. Нижняя граница «1 мин»: «0 мин назад»
+// не говорят (FeaturePage.test.ts:2108). Округление одно, до разделения: 59,6 → «1 ч»,
+// а не «60 мин»; 119,5 → «2 ч», а не «1 ч 60 мин».
+// Чистая функция — тестируется без React.
 export function formatDuration(minutes: number): string {
   if (!Number.isFinite(minutes) || minutes < 1) return '1 мин';
-  if (minutes < 60) return `${Math.round(minutes)} мин`;
-  const h = Math.floor(minutes / 60);
-  const m = Math.round(minutes % 60);
-  if (h < 24) return m ? `${h} ч ${m} мин` : `${h} ч`;
-  const d = Math.floor(h / 24);
-  const rh = h % 24;
-  return rh ? `${d} дн ${rh} ч` : `${d} дн`;
+  const total = Math.round(minutes);
+  if (total >= 48 * 60) {
+    // Ветка дней (порог 48 ч): минуты отбрасываются, ровные сутки — без часов.
+    const d = Math.floor(total / 1440);
+    const rh = Math.floor((total % 1440) / 60);
+    return rh ? `${d} дн ${rh} ч` : `${d} дн`;
+  }
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  if (h === 0) return `${total} мин`;
+  return m ? `${h} ч ${String(m).padStart(2, '0')} мин` : `${h} ч`;
 }
 
 // Единая формулировка состояния merge_pending (макет feature-banner-1): «ждёт согласия на мерж».
 // Используется в плашке фичи, шапке группы, карточке чата и теге страницы — одно место,
 // чтобы не разъезжалась (ревью фронта 1, major 1).
 export const MERGE_PENDING_STATUS = 'ждёт согласия на мерж';
+
+// Единая подпись закрытия фичи без мержа (Ш1d, замена дефекта dac211b4, решена с Майей):
+// строка индекса (featureDisplayState) и фолбэк страницы (featureStatusTag) — одна строка;
+// тег страницы (FeatureStatusTag.tsx:67) даёт побайтно ту же (тест FeatureStatusTag.test.ts).
+// Короткая строка индекса («закрыта», «Без мержа») — не аргумент: две подписи разъезжались.
+export const CLOSED_NO_MERGE_STATUS = 'закрыта без мержа';
 
 // Единая формулировка подписи очереди (макет feature-queue-1.md, «Тег и глиф»):
 // «в очереди · 2 из 3»; без queue (бэк ещё не отдал) — просто «в очереди», нулей не показываем.
@@ -477,10 +493,10 @@ export function featureDisplayState(
   const join = (base: string, w: string | null, d: string | null): string =>
     `${base}${w ? ` · ${w}` : ''}${d ? ` · ${d}` : ''}`;
 
-  // Закрыта: смержена (summary.mergedAt) или закрыта без мержа.
+  // Закрыта: смержена (summary.mergedAt) или закрыта без мержа — одна подпись (Ш1d).
   if (f.bucket === 'closed') {
     const merged = f.summary?.mergedAt != null;
-    return { kind: merged ? 'done' : 'closed', alarm: null, status: merged ? 'смержена' : 'закрыта' };
+    return { kind: merged ? 'done' : 'closed', alarm: null, status: merged ? 'смержена' : CLOSED_NO_MERGE_STATUS };
   }
   // Смержена, но ещё не закрыта (bucket=merged): ждёт закрытия.
   if (f.bucket === 'merged') return { kind: 'done', alarm: null, status: 'смержена, ждёт закрытия' };
@@ -523,9 +539,10 @@ export interface FeatureStatusTag { label: string; tone: FeatureStatusTone }
 
 export function featureStatusTag(f: FeatureIndexFeature): FeatureStatusTag {
   if (f.bucket === 'closed') {
+    // Одна подпись закрытия с индексом и тегом страницы (Ш1d): без мержа — CLOSED_NO_MERGE_STATUS.
     return f.summary?.mergedAt != null
       ? { label: 'Смержена', tone: 'merged' }
-      : { label: 'Без мержа', tone: 'closed' };
+      : { label: CLOSED_NO_MERGE_STATUS, tone: 'closed' };
   }
   if (f.bucket === 'merged') return { label: 'Смержена', tone: 'merged' };
   // Источник правды — f.state (бэк Б1a/Б1b): merge_pending → «К мержу», merging → «Идёт»,

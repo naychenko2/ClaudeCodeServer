@@ -55,7 +55,11 @@ export interface FeatureTask {
   // всего» для честного прогресса. На записи бэк допускает его только у role=plan
   // (валидация TaskManager); на выдаче по роли не фильтрует: null, если не заполнен.
   // Аддитивное: старые задачи поля не несут.
-  planSteps?: { stepRef: string; title: string; lane?: string | null }[] | null;
+  // kind (B2): тип пункта плана — step | review | qa | final; отсутствие или null —
+  // step (бэк: TaskItem.PlanStep.IsStep, TaskItem.cs:312, сравнение Ordinal). В
+  // знаменатель бэка идут только исполняемые пункты (FeatureStepAccounting.cs:123);
+  // «В очереди» фронта — подмножество ровно их же (FB2).
+  planSteps?: { stepRef: string; title: string; lane?: string | null; kind?: string | null }[] | null;
   // «Голос фичи» (бэк: `TaskItem.Note`, только у эпика): текст оркестратора/человека
   // с оценкой. На wire — без bySessionId (ее снимает FeatureNoteJsonConverter на границе
   // сериализации). Аддитивное: старый answers и эпик без голоса — undefined/null.
@@ -74,15 +78,9 @@ export interface FeatureTaskNote {
   estimate?: FeatureTaskEstimate | null;
 }
 
-// Оценка оркестратора (бэк: `FeatureEstimate`, `FeatureNote.Estimate`): единицы работы —
-// шаги плана плюс стадии конвейера. percent — когда шаги неравные по объёму (null — доля
-// done/total); etaMinutes — срок до готовности (null — не оценивался). Считает автор
-// оценки (оркестратор), фронт и бэк её не пересчитывают.
+// Оценка оркестратора (бэк: `FeatureEstimate`, `FeatureNote.Estimate`): срок до готовности (etaMinutes, null — не оценивался) и «что дальше». Процента в оценке
+// нет: готовность — только stepProgress. Считает автор оценки (оркестратор).
 export interface FeatureTaskEstimate {
-  done: number;
-  total: number;
-  inProgress: number;
-  percent: number | null;
   remaining?: string[] | null;
   etaMinutes?: number | null;
   why?: string | null;
@@ -331,6 +329,16 @@ export interface FeatureNow {
   staleAlertedAt?: string | null;
 }
 
+// Риск мержа (бэк: `FeatureMergeRisk`): только у тревоги kind == 'merge' — что
+// в трекере расходится с «финал принят» (Ш8). Фронт ничего не считает: печатает
+// список как пришёл (нули бэк не кладёт, порядок даёт бэк). Виды:
+// not_created — не заведено шагов; open — заведены, но не приняты;
+// tracker — трекер расходится.
+export interface FeatureMergeRisk {
+  kind: 'not_created' | 'open' | 'tracker';
+  count: number;
+}
+
 // Тревога фичи (бэк: `FeatureAttention`): один элемент либо null.
 // Приоритет: stopped → wait явный → wait «мерж».
 export interface FeatureAttention {
@@ -346,6 +354,9 @@ export interface FeatureAttention {
   personaId?: string | null;
   // Связанный чат исполнителя.
   linkedSessionId?: string | null;
+  // Риски мержа (бэк: `FeatureRun.MergeRisks`): только у kind == 'merge' (Ш8).
+  // Аддитивное: старые ответы поля не несут — UI обязан пережить отсутствие.
+  mergeRisks?: FeatureMergeRisk[];
 }
 
 // Итог смерженной фичи (бэк: `FeatureSummary`): только у закрытой, иначе null.
@@ -404,6 +415,13 @@ export interface FeatureRun {
   // Разрез (role=cut) и план (role=plan) фичи.
   cut?: FeatureTask[];
   plan?: FeatureTask[];
+  // Id действующих планов (бэк: `FeatureRun.ActivePlanIds`, FeatureRun.cs:44-46 — результат того
+  // же ActivePlans, что считает учёт шагов): не снятые и не вытесненные более поздним планом с
+  // пересекающимися ключами. План вне списка — снят или замещён: его шаги не входят ни в
+  // знаменатель, ни в «очередь» фронта. Пустой список — действующих планов нет (это НЕ то же
+  // самое, что отсутствие поля). Аддитивное: старые ответы поля не несут — UI обязан пережить
+  // отсутствие; своё правило вытеснения фронт не выводит (дефект 128fd73a).
+  activePlanIds?: string[];
   awaitingHumanSince?: string | null;
   awaitingHumanReason?: string | null;
   verdicts: FeatureVerdicts;
@@ -453,7 +471,7 @@ export interface FeatureRun {
   // Расхождения трекера с реальностью (TR-B1c, бэк: `FeatureRun.Tracker`, FeatureRun.cs:107):
   // единая точка правды — индекс несёт только Count, список здесь. Kind — словарь
   // FeatureTracker (unreviewed | returned_no_rework | dead_verdict | reported_open |
-  // epic_open_after_merge | orphans_in_closed); StepRef — ключ цепочки (у цепочечных
+  // epic_open_after_merge | orphans_in_closed | unplanned_step); StepRef — ключ цепочки (у цепочечных
   // видов), иначе null. Аддитивное: старые ответы поля не несут — UI обязан пережить отсутствие.
   tracker?: FeatureTrackerIssue[];
 }

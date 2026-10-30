@@ -3,14 +3,14 @@ import type { ReactNode } from 'react';
 import { AlertTriangle, Inbox, RotateCw } from 'lucide-react';
 import { C, R, FS, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { useFeaturePage, refetchFeaturePage, useFeaturePageTab, setFeaturePageTab } from '../../lib/featurePage';
+import { useFeaturePage, refetchFeaturePage, useFeaturePageTab, setFeaturePageTab, type FeatureBrief } from '../../lib/featurePage';
 import { useMe } from '../../lib/defaultPersona';
 import { buildNavMarks } from '../../lib/featureNavMarks';
 import { getBackNav, clearBackNav, registerFeaturePage, recordFeatureReturn } from '../../lib/featureBackNav';
 import { useFeaturesIndex } from '../../lib/featuresIndex';
 import { api } from '../../lib/api';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
-import { featureStatusTag, featureDisplayState, STAGE_NAME } from '../../lib/chatGroups';
+import { featureStatusTag, featureDisplayState } from '../../lib/chatGroups';
 import { openChatById } from '../../lib/openChat';
 import { openTaskInSection } from '../../lib/tasks';
 import { taskCounters } from './featurePageBody';
@@ -29,6 +29,7 @@ import { FeatureTasksTab, allFeatureTasks } from './FeatureTasksTab';
 import { FeatureEventsTab } from './FeatureEventsTab';
 import { FeatureStatsTab } from './FeatureStatsTab';
 import { FeatureBriefBlock, type FeatureBriefBlockProps } from './FeatureBriefBlock';
+import { stageLabel } from './FeatureStatsBits';
 import { type PersonaNameResolver } from './FeatureBriefModel';
 import { ensurePersonasLoaded, getPersonaById, usePersonasVersion } from '../../lib/personas';
 import {
@@ -92,10 +93,13 @@ if (typeof document !== 'undefined' && !document.getElementById('cc-feature-page
   document.head.appendChild(el);
 }
 
-// Имя активной стадии для тега «идёт · {этап}»: первая active-стадия run.
-function activeStageName(run: FeatureRun): string | null {
-  const stage = (run.stages ?? []).find(s => s.state === 'active');
-  return stage ? STAGE_NAME[stage.key] : null;
+// Имя активной стадии для тега «идёт · {этап}»: brief.now.stage — тот же источник,
+// что у сводки (FeatureBriefBlock.tsx:75), а не первая active-стадия run: тег тулбара
+// и сводка не должны показывать разные этапы (Ш2). Пустой/отсутствующий stage — null
+// (тега этапа нет); неизвестный ключ — как есть (stageLabel).
+function activeStageName(brief: FeatureBrief | null | undefined): string | null {
+  const stage = brief?.now?.stage;
+  return stage ? stageLabel(stage) : null;
 }
 
 // Блок «Сводка» + имена персон (волна 6, Ф6): getPersonaById сам по себе не реактивен
@@ -149,7 +153,7 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
   const glyph: GlyphKind = display ? display.kind : 'run';
   let tag: FeatureRunTag | null = null;
   if (page.status === 'ok' && page.page.run.state) {
-    tag = featureRunStatusTag(page.page.run.state, activeStageName(page.page.run), {
+    tag = featureRunStatusTag(page.page.run.state, activeStageName(page.page.brief), {
       holdReason: page.page.run.hold?.reason, queue: page.page.run.queue,
     });
   } else if (feature) {

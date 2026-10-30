@@ -2577,3 +2577,96 @@ describe('GC-F11R4: окно возврата и страница', () => {
     act(() => { root2.unmount(); });
   });
 });
+
+// === Ш2: тег этапа в тулбаре — из brief.now.stage (тот же источник, что сводка) ===
+// Раньше: первая active-стадия run (stages.find(state==='active')) — тег тулбара и сводка
+// (brief.now.stage, FeatureBriefBlock.tsx:75) могли показывать РАЗНЫЕ этапы. Теперь тег
+// берёт brief.now.stage; бэк и семантика FeatureStage.State не тронуты.
+// Мутации (в отчёте): (1) вернуть activeStageName на stages.find(active) → тест 1 краснеет
+// (тег стал бы «идёт · Разрез»); (2) убрать терпимость к отсутствию brief (brief!.now.stage)
+// → тест без brief падает.
+describe('Ш2: тег этапа в тулбаре — из brief.now.stage', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    pageTest.reset();
+    indexTest.reset();
+    backNavTest.reset();
+    personaMap.clear();
+    setAllFlags({ 'features-overview': true });
+    mockIndex.features = [feat()];
+    mockIndex.chats = {};
+    mockChats.clear();
+    openChatCalls.length = 0;
+    mockGetFeature.pending = false;
+    mockGetFeature.result = null;
+    mockGetFeature.error = null;
+    mockGetFeature.calls = [];
+    mockGetFeature.perCall = [];
+    mockMergeFeature.pending = false;
+    mockMergeFeature.result = null;
+    mockMergeFeature.error = null;
+    mockMergeFeature.calls = [];
+    toasts.length = 0;
+    indexTest.setIndex('p1', mockIndex as FeaturesIndex);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  // brief той же формы, что в F6-блоке выше (now null по умолчанию).
+  const brief = (over: Partial<FeatureBrief> = {}): FeatureBrief => ({
+    kind: 'running',
+    now: null,
+    reason: null,
+    done: { stepsAccepted: 2, stepsTotal: 5, loops: 1, planState: 'cut' },
+    next: [],
+    elapsedMinutes: null,
+    estimate: null,
+    queue: null,
+    note: null,
+    computedAt: '2026-10-19T11:50:00Z',
+    ...over,
+  });
+
+  // run идущей фичи с stages: cut — active, qa — pending. Если тег строился по stages,
+  // он показал бы «Разрез»; по brief.now.stage — «Проверка». Это и различает тесты.
+  const runningPage = (over: Partial<FeaturePageData> = {}) => {
+    const pd = pageData(over);
+    pd.run = { ...pd.run, state: 'running', stages: [
+      { key: 'cut', state: 'active', tone: 'run', passes: 1, taskIds: [], rounds: [], executors: [] },
+      { key: 'qa', state: 'pending', passes: 0, taskIds: [], rounds: [], executors: [] },
+    ] } as never;
+    mockGetFeature.result = pd;
+  };
+
+  const tagText = async (c: ReturnType<typeof render>) => {
+    await settle();
+    const tag = findNodeByAttr(c, 'data-testid', 'feature-page-status');
+    expect(tag, 'тег на месте').not.toBeNull();
+    return textNodes(tag!).join('');
+  };
+
+  it('stages=[cut active, qa pending] + brief.now.stage=qa → тег «идёт · Проверка»', async () => {
+    runningPage({ brief: brief({ now: { stage: 'qa', taskId: null, personaId: null, stepRef: null, lane: null, since: null } }) });
+    const t = await tagText(render({}));
+    expect(t, 'этап тега — из brief.now.stage (тот же источник, что сводка)').toContain('идёт · Проверка');
+    expect(t, 'этап тега — не из первой active-стадии run').not.toContain('Разрез');
+  });
+
+  it('brief есть, brief.now null → тег «идёт» без этапа, без падения', async () => {
+    runningPage({ brief: brief() });
+    const t = await tagText(render({}));
+    expect(t).toContain('идёт');
+    expect(t, 'этапа в теге нет').not.toContain('·');
+  });
+
+  it('brief нет вовсе (старый бэк) → тег «идёт» без этапа, без падения', async () => {
+    runningPage({});
+    const t = await tagText(render({}));
+    expect(t).toContain('идёт');
+    expect(t, 'этапа в теге нет').not.toContain('·');
+  });
+});

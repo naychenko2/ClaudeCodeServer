@@ -43,7 +43,12 @@ public sealed class NotesRecallContributor : IPromptSectionContributor
     public string Group => "recall";
 
     public bool IsEnabled(PromptSessionContext sessionContext) =>
-        sessionContext.HasNotesMcp && sessionContext.OwnerId is not null;
+        sessionContext.HasNotesMcp && sessionContext.OwnerId is not null
+        // S2a-4 (разрез И.3, решение 29.10): в узкой рамке общего проекта личный vault в подборку
+        // не идёт вовсе. Recall ищет по единому индексу заметок владельца (SearchAsync ключуется
+        // userId, personal/project разнятся только хитом) — разделить их на этом контрибьюторе
+        // нельзя, поэтому при Narrow он выключается целиком.
+        && sessionContext.Frame == ClaudeHomeServer.Services.Access.TurnFrameKind.Wide;
 
     public async Task<PromptSectionContribution?> BuildAsync(
         PromptSessionContext sessionContext, string? turnText)

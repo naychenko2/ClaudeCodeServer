@@ -5060,7 +5060,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             // ADR-031, шаг 2.1: каталоги плагинов для --plugin-dir (опционально) и проект
             // для проверки локальности (у локального проекта в MVP плагинов нет).
             PluginDirSource: _pluginDirSource,
-            Project: session.ProjectId is { } pluginProjectId ? _projects.GetById(pluginProjectId) : null));
+            // Рамка хода для подборки (S2a-4): вердикт читает сам ClaudeSession через этот шов
+            Project: session.ProjectId is { } pluginProjectId ? _projects.GetById(pluginProjectId) : null,
+            FrameSource: this));
         entry.Process = adapter;
         entry.RunId = runId;
 
@@ -6673,7 +6675,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 // ADR-031, шаг 2.1: каталоги плагинов для --plugin-dir (опционально);
                 // чат вне проекта — локальности нет (все включённые пакеты владельца).
                 PluginDirSource: _pluginDirSource,
-                Project: null);
+                Project: null,
+                FrameSource: this);
                 // Чат вне проекта: трейлер CCS-Session в подсказке досье (DossierTrailerContributor) пропускается
         }
         else
@@ -6765,7 +6768,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 // ADR-031, шаг 2.1: каталоги плагинов для --plugin-dir (опционально) и проект
                 // для проверки локальности (у локального проекта в MVP плагинов нет).
                 PluginDirSource: _pluginDirSource,
-                Project: project);
+                Project: project,
+                FrameSource: this);
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

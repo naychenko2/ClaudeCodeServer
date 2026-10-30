@@ -477,4 +477,10 @@ public sealed record LlmSessionContext(
     IPluginDirSource? PluginDirSource = null,
     // Проект чата (null — чат вне проекта): уходит в IPluginDirSource для проверки локальности
     // (у локального проекта в MVP плагинов нет, ADR-016/ADR-031 §5.8).
-    Project? Project = null);
+    Project? Project = null,
+    // Источник вердикта рамки хода (S2a-4): тот же шов ITurnFrameSource (S2a-1), которым
+    // рамку применяют платформенные тулсеты (S2a-3). ClaudeSession зовёт его на каждый ход
+    // и кладет вердикт в PromptSessionContext.Frame; вердикт — свойство проекта, а не хода:
+    // у живого процесса он постоялен и не двигает сигнатуру запуска. null (тесты без
+    // SessionManager) — рамка не применяется.
+    ClaudeHomeServer.Services.Access.ITurnFrameSource? FrameSource = null);

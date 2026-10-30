@@ -859,6 +859,9 @@ public class ClaudeSession : ILlmSessionAdapter
     // подписчика SubagentRunLog в SessionManager). null — тесты, шина не подана, события
     // просто не публикуются и поведение остаётся прежним.
     private readonly Turn.ITurnEventBus? _events;
+    // Источник вердикта рамки хода (S2a-4): ITurnFrameSource (S2a-1), тот же шов, что у
+    // платформенных тулсетов (S2a-3). Вердикт — свойство проекта (общий/личный), не хода.
+    private readonly ClaudeHomeServer.Services.Access.ITurnFrameSource? _frameSource;
     // Корень профиля CLI этого хода (CLAUDE_CONFIG_DIR) — для блока «слой CLI»
     private readonly string? _cliConfigRoot;
     // Id снимка текущего хода: пишет поток хода (RunTurnAsync), читает поток stdout-ридера,
@@ -1188,6 +1191,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _memoryMcp = context.MemoryMcp;
         _chatContextProvider = context.ChatContextProvider;
         _events = context.Events;
+        _frameSource = context.FrameSource;
         _cliConfigRoot = context.CliConfigRoot;
         _personasMcp = context.PersonasMcp;
         _workspaceMcp = context.WorkspaceMcp;
@@ -3606,6 +3610,16 @@ public class ClaudeSession : ILlmSessionAdapter
         // (снимок пишется уже после развилки same-process, когда известно, применён ли он)
         List<PromptSectionDto> sections = [];
 
+        // Рамка хода (S2a-4, разрез И.3 в ревизии 29.10): вердикт ITurnFrameSource (S2a-1) —
+        // Narrow в общем проекте при любом акторе, включая владельца, Wide в личном.
+        // Вердикт — свойство проекта, а не хода: у живого процесса он постоялен и не двигает
+        // сигнатуру запуска. Нет вердикта (нет источника — тестовые пути без SessionManager,
+        // или нет арендатора — чей приватный горизонт закрывать не определено) — Wide:
+        // существующие пути без владельца остаются как были.
+        var turnFrame = _frameSource is { } frameSource && _turnOwnerId is { } frameOwnerId
+            ? frameSource.Frame(Info.Id, frameOwnerId)
+            : ClaudeHomeServer.Services.Access.TurnFrameKind.Wide;
+
         // RecallInTurnText: нестабильные секции не идут в системный блок (он обязан быть
         // побайтово неизменным, иначе prefix cache движка рвёт кэш всей истории), а
         // копятся здесь и уезжают хвостом — вклейкой в текст хода. Признак берём от
@@ -3613,8 +3627,14 @@ public class ClaudeSession : ILlmSessionAdapter
         // Ручка провайдера действует и БЕЗ облегчённого контекста (персона с выключенным
         // LightContext на local-qwen: профиль null, а кэш движка рвётся так же —
         // LlmProviderRegistry.RecallInTurnTextFor).
+        // Общий проект — то же при любой ручке провайдера (S2a-4): подборка собирается на ход
+        // и на участника, а same-process ход системный промпт живого процесса НЕ обновляет
+        // (ниже по файлу) — в системном блоке замерла бы подборка того хода, что поднял
+        // процесс; стал бы проект общим посреди прогона — участник получил бы личную
+        // подборку владельца.
         var recallInTurnText = LightProfile is { RecallInTurnText: true }
-            || _providers?.RecallInTurnTextFor(EffectiveModel) == true;
+            || _providers?.RecallInTurnTextFor(EffectiveModel) == true
+            || turnFrame == ClaudeHomeServer.Services.Access.TurnFrameKind.Narrow;
         List<PromptSectionDto> turnRecallSections = [];
         // Секции PromptSection.InTurnTail: хвостом при любом провайдере, ближе всего к тексту хода
         List<PromptSectionDto> alwaysTailSections = [];
@@ -3636,6 +3656,9 @@ public class ClaudeSession : ILlmSessionAdapter
         // сохраняется в транскрипте сессии: не передать → инструкции (fal-ai/правило
         // Mermaid-схем, Dify, теги) пропадут. Same-process ход промпт живого процесса НЕ обновляет —
         // recall/подсказки на нём остаются со старта прогона (мягкая деградация).
+        // Для общего проекта эта деградация закрыта рамкой (S2a-4): личных секций при Narrow
+        // нет вовсе, а нестабильные всегда уезжают хвостом (выше по файлу) — системный блок
+        // процесса общего проекта личной подборки владельца не содержит никогда.
         {
             // Секции — единственный источник правды: из этого списка собирается и текст для
             // --append-system-prompt (TurnPromptAssembler.Combine), и снимок «что ушло модели»
@@ -3692,7 +3715,8 @@ public class ClaudeSession : ILlmSessionAdapter
                     HasAudioEditorMcp: _audioEditorMcp is not null && McpDelivered(McpEndpoints.AudioEditorName),
                     HasVideoEditorMcp: _videoEditorMcp is not null && McpDelivered(McpEndpoints.VideoEditorName),
                     Unattended: Turn.TurnAudience.IsUnattended(Info, _currentTurnAgentDepth),
-                    ConsumersHookActive: ConsumersHookDelivered);
+                    ConsumersHookActive: ConsumersHookDelivered,
+                    Frame: turnFrame);
                 var assembling = new Turn.PromptAssembling(
                     turn: CurrentTurnContext(), session: promptContext, turnText: text);
                 try

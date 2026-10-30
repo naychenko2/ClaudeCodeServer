@@ -1,6 +1,8 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Notes;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -39,5 +41,30 @@ public class NotesRecallTests
     public void BuildRecallBlock_ПустойСписок_Null()
     {
         NotesKnowledgeService.BuildRecallBlock([], minScore: 0.35, topK: 4).Should().BeNull();
+    }
+
+    // S2a-4 (разрез И.3, решение 29.10): в узкой рамке общего проекта личный vault в подборку
+    // не идёт — гейт реального контрибьютора IsEnabled при Narrow выключен, при Wide включён
+    // (шина зовёт BuildAsync только включённых — TurnEventBus.ApplyAsync).
+    [Fact]
+    public void IsEnabled_УзкаяРамкаВыключен_ШирокаяВключён()
+    {
+        var config = new ConfigurationBuilder().Build();
+        // Гейт читает только поля контекста хода и не трогает сервисы (их поведение —
+        // тесты выше и SearchAsync-тесты вертикали).
+        var notes = new NotesKnowledgeService(null!, null!, null!, config,
+            NullLogger<NotesKnowledgeService>.Instance);
+        var contributor = new NotesRecallContributor(notes, config,
+            NullLogger<NotesRecallContributor>.Instance);
+
+        var wide = new ClaudeHomeServer.Services.Turn.PromptSessionContext(
+            new Session(), "owner-1", null, null, HasNotesMcp: true);
+        var narrow = new ClaudeHomeServer.Services.Turn.PromptSessionContext(
+            new Session(), "owner-1", null, null, HasNotesMcp: true,
+            Frame: ClaudeHomeServer.Services.Access.TurnFrameKind.Narrow);
+
+        contributor.IsEnabled(wide).Should().BeTrue("в личном чате личный vault включён, как раньше");
+        contributor.IsEnabled(narrow).Should().BeFalse(
+            "в узкой рамке общего проекта личный vault в подборку хода не попадает");
     }
 }

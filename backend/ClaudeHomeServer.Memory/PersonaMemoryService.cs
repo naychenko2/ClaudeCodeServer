@@ -490,25 +490,31 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
     // в Text (см. комментарий записи выше); false (дефолт) — досье внутри общего блока.
     public async Task<PersonaRecallResult?> BuildRecallAsync(string ownerId, string personaId, string query,
         int topK, double minScore, Dossiers.DossierRecallRequest? dossierRequest = null,
-        bool splitDossier = false, string? sessionProjectId = null)
+        bool splitDossier = false, string? sessionProjectId = null,
+        // S2a-4 (разрез И.3, решение 29.10): false — узкая рамка общего хода. Личная часть блока
+        // (рабочий фокус, полка персоны, командная память и память сферы как часть блока «что
+        // персона помнит») не читается и не строится — остаётся только досье проекта.
+        bool personalMemory = true)
     {
         var persona = _personas.Get(personaId, ownerId);
         if (persona is null || !persona.MemoryEnabled) return null;
 
-        PersonaWorkingFocus? focus;
-        lock (_saveLock) focus = GetState(personaId).Focus;
+        PersonaWorkingFocus? focus = null;
+        IReadOnlyList<PersonaMemoryHit> hits = [];
+        if (personalMemory)
+        {
+            lock (_saveLock) focus = GetState(personaId).Focus;
 
-        IReadOnlyList<PersonaMemoryHit> hits;
-        // Пустой запрос Dify отбивает 400, длинный — тоже (потолок 250 символов)
-        var q = KnowledgeQueryUtilities.TrimQuery(query);
-        if (q.Length == 0) hits = [];
-        else
-            try { hits = await SearchAsync(ownerId, personaId, q, Math.Max(topK, 6)); }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Persona memory recall {Persona}", personaId);
-                hits = [];
-            }
+            // Пустой запрос Dify отбивает 400, длинный — тоже (потолок 250 символов)
+            var q = KnowledgeQueryUtilities.TrimQuery(query);
+            if (q.Length > 0)
+                try { hits = await SearchAsync(ownerId, personaId, q, Math.Max(topK, 6)); }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Persona memory recall {Persona}", personaId);
+                    hits = [];
+                }
+        }
 
         var top = hits.Where(h => h.Score >= minScore).Take(topK).ToList();
 
@@ -522,7 +528,7 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
                 && PersonaZone.VisibleIn(persona, sessionProjectId, _spheres)
                 ? sessionProjectId
                 : null);
-        if (_teamMemory is not null && teamProjectId is not null)
+        if (personalMemory && _teamMemory is not null && teamProjectId is not null)
         {
             try
             {
@@ -538,7 +544,7 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
         // включая глобальных, а персона сферы S1 в проекте сферы S2 не должна получить полку S1.
         string? sphereBlock = null;
         IReadOnlyList<TeamMemoryEntry> sphereHits = [];
-        if (_sphereMemory is not null && _spheres is not null && sessionProjectId is not null
+        if (personalMemory && _sphereMemory is not null && _spheres is not null && sessionProjectId is not null
             && _spheres.SphereOf(ownerId, sessionProjectId) is { } sphereId)
         {
             try

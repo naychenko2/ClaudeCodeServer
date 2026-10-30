@@ -235,9 +235,9 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
         }}
       >
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5, padding: '3px 0' }}>
-          {/* alignItems: center (дизайн-ревью F2, minor 6): по baseline строка прыгала
-              с 41 до 49 px, когда вместо «Сейчас» вставала кнопка тревоги 24. */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, minWidth: 0 }}>
+          {/* minHeight 24 в обоих состояниях (дизайн-ревью F2, п. 3): кнопка тревоги 24 выше
+              текста 16, без floor строка прыгала 41↔49 px при смене «идёт»/тревога. */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, minWidth: 0, minHeight: 24 }}>
             {model.alarm ? (
               <span
                 data-testid="feature-row-alarm"

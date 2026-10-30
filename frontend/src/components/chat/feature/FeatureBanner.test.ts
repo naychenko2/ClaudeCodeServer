@@ -224,4 +224,15 @@ describe('FeatureBanner: рендер строки В2', () => {
     expect(HOVER_CSS).toContain('@media (hover:hover)');
     expect(HOVER_CSS).toContain('.cc-feature-row-hover:hover{background:var(--c-bg-selected);}');
   });
+
+  it('верхняя строка: minHeight 24 в обоих состояниях — «идёт» и тревога с кнопкой (п. 3)', () => {
+    seedIndex(feat({ ...progress, state: 'running', nowPersonaIds: ['p-kira'] }));
+    expect(renderRow()).toContain('min-height:24px');
+    seedIndex(feat({
+      ...progress,
+      state: 'stopped',
+      attention: { kind: 'stopped', since: null, reason: 'auth_failed', personaId: 'p-gleb', sessionId: 's-other', taskId: 't-8' },
+    }));
+    expect(renderRow()).toContain('min-height:24px');
+  });
 });

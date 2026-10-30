@@ -3737,6 +3737,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         : next is null ? prev
         : ActorRank(next, tenantOwnerId) < ActorRank(prev, tenantOwnerId) ? next : prev;
 
+    // Человек-автор реплики для истории (StoredUserMessage.SenderUserId). Параметр подачи senderUserId —
+    // инициатор хода (актор), а не автор: у агентской реплики (глубина ≥ 1 или задана персона-отправитель)
+    // автора-человека нет, инициатор живёт в реестре актора (NoteTurnActor), в историю не пишется.
+    private static string? HumanAuthorOf(string? senderUserId, int agentDepth, string? senderPersonaId) =>
+        agentDepth >= 1 || senderPersonaId is not null ? null : senderUserId;
+
     private void NoteTurnActor(SessionEntry entry, string? actor, bool fromHuman)
     {
         var tenant = ResolveOwnerId(entry.Info);
@@ -5313,7 +5319,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 fromQueue && !auto ? DeviceWaitMessage.RouteUser : DeviceWaitMessage.RouteAuto,
                 DateTime.UtcNow, senderPersonaId, senderOrigin, agentDepth,
                 SuppressTasksExecute: suppressTasksExecute, StaffNote: staffNote,
-                AttachedPaths: attachedPaths.Count > 0 ? attachedPaths : null, Mode: mode));
+                AttachedPaths: attachedPaths.Count > 0 ? attachedPaths : null, Mode: mode,
+                SenderUserId: senderUserId));
             return;
         }
 
@@ -5439,7 +5446,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
         await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
 
-        entry.Accumulator?.OnUserMessage(text, attachedPaths, viaAgent: agentDepth >= 1, systemDirective: systemDirective, auto: auto, senderPersonaId: senderPersonaId, senderOrigin: senderOrigin, staffNote: staffNote, senderUserId: senderUserId);
+        entry.Accumulator?.OnUserMessage(text, attachedPaths, viaAgent: agentDepth >= 1, systemDirective: systemDirective, auto: auto, senderPersonaId: senderPersonaId, senderOrigin: senderOrigin, staffNote: staffNote,
+            senderUserId: HumanAuthorOf(senderUserId, agentDepth, senderPersonaId));
         // Сообщение пользователя = начало нового хода в основном дереве (зеркало
         // сброса skippingWorktreeTurn в SessionChangedPaths.Extract)
         entry.TurnInWorktree = false;
@@ -5843,7 +5851,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (DeviceWaitGate(entry) is { } deviceGate)
             return await ParkForDeviceAsync(sessionId, entry, deviceGate, new DeviceWaitMessage(
                 Guid.NewGuid().ToString("N"), text, DeviceWaitMessage.RouteAgent, DateTime.UtcNow,
-                senderPersonaId, senderOrigin, agentDepth, SenderChatName: senderChatName));
+                senderPersonaId, senderOrigin, agentDepth, SenderChatName: senderChatName,
+                SenderUserId: senderUserId));
 
         await EnsureProcessAsync(sessionId, entry);
         entry.Accumulator?.SetPersona(entry.Info.PersonaId);
@@ -5871,7 +5880,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
         await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
         entry.Accumulator?.OnUserMessage(text, [], viaAgent: agentDepth >= 1, senderPersonaId: senderPersonaId,
-            systemDirective: systemDirective, senderOrigin: senderOrigin, senderUserId: senderUserId);
+            systemDirective: systemDirective, senderOrigin: senderOrigin,
+            senderUserId: HumanAuthorOf(senderUserId, agentDepth, senderPersonaId));
         entry.TurnInWorktree = false; // сообщение = новый ход в основном дереве (зеркало Extract)
         entry.CurrentTurnSnapshot = null; // ход агента — по «Стоп» в композер не возвращается
         entry.TeamTurnFromHuman = false; // ход поднят агентом (chats_send), не человеком (M7)
@@ -6505,7 +6515,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 m.Id, m.Text, m.SenderPersonaId, m.SenderOrigin, m.AgentDepth, m.QueuedAt,
                 SuppressTasksExecute: m.SuppressTasksExecute, SenderChatName: m.SenderChatName,
                 Kind: m.Route == DeviceWaitMessage.RouteUser ? PendingKind.User : PendingKind.Agent,
-                AttachedPaths: m.AttachedPaths, Mode: m.Mode, StaffNote: m.StaffNote)));
+                AttachedPaths: m.AttachedPaths, Mode: m.Mode, StaffNote: m.StaffNote,
+                SenderUserId: m.SenderUserId)));
             dispatchNow = !entry.QueueFrozen
                 && entry.Info.Status is not (SessionStatus.Working or SessionStatus.Waiting)
                 && entry.Process?.OrchestrationActive != true;

@@ -303,7 +303,7 @@ internal sealed class TeamDecisionService
             // (раньше кнопка слала его обычным сообщением).
             var editTs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             await _history.AppendAsync(sessionId,
-                new StoredUserMessage(feedback.Trim(), timestamp: editTs),
+                new StoredUserMessage(feedback.Trim(), timestamp: editTs, senderUserId: userId),
                 new UserMessageMessage(feedback.Trim(), null, null, false, Timestamp: editTs));
 
             var nextVersion = team.PlanVersion + 1;

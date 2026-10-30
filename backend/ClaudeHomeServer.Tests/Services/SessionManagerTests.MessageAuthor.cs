@@ -32,8 +32,16 @@ public partial class SessionManagerTests
         EndTurn(session, fake);
         await _sut.SendMessageAsync(session.Id, "от редактора", [], senderUserId: Участник);
         EndTurn(session, fake);
-        // Агентская подача без отправителя (REST-канал без user id) — автора нет
-        await _sut.SendMessageAndWaitAsync(session.Id, "от агента", TimeSpan.Zero);
+        // Агентская подача: как в проде, сюда приходит инициатор хода (turnActor) — непустой
+        // senderUserId, но автор реплики — не человек, в историю он не попадает (оба пути подачи)
+        await _sut.SendMessageAndWaitAsync(session.Id, "от агента", TimeSpan.Zero,
+            agentDepth: 1, senderUserId: Участник);
+        EndTurn(session, fake);
+        await _sut.SendMessageAndWaitAsync(session.Id, "от персоны", TimeSpan.Zero,
+            senderPersonaId: "p-1", senderUserId: Участник);
+        EndTurn(session, fake);
+        await _sut.SendMessageAsync(session.Id, "авто от персоны", [], auto: true,
+            senderPersonaId: "p-1", senderUserId: Участник);
         EndTurn(session, fake);
 
         // Снимок на диск — существующим путём сохранения (SaveSnapshotAsync под _saveLock)
@@ -42,7 +50,27 @@ public partial class SessionManagerTests
         var history = await _historyService.LoadAsync(session.Id);
         AuthorOfMessage(history, "от владельца").Should().Be(TestUserId, "сообщение владельца — автор владелец");
         AuthorOfMessage(history, "от редактора").Should().Be(Участник, "сообщение редактора — автор редактор");
-        AuthorOfMessage(history, "от агента").Should().BeNull("подача без отправителя — автора в истории нет");
+        AuthorOfMessage(history, "от агента").Should().BeNull("агентская реплика: инициатор хода — не автор");
+        AuthorOfMessage(history, "от персоны").Should().BeNull("реплика с персоной-отправителем — автора-человека нет");
+        AuthorOfMessage(history, "авто от персоны").Should().BeNull("авто-ход с персоной — автора-человека нет");
+    }
+
+    // Правка плана «Командной реализации» участником: текст виден в ленте и лежит в истории
+    // под его именем (решение по карточке — не агентская реплика)
+    [Fact]
+    public async Task ПравкаПлана_Участником_АвторВИсторииУчастник()
+    {
+        var (session, plan, _) = await MakeStabWithPlanAndStarterAsync("ma-edit-plan");
+        SetReplannedPlannerAnswer(GetAnyPersona(session), "ревью убрано из плана");
+
+        // Владелец проекта = TestUserId; проверка владения в RespondTeamPlanAsync сверяет userId
+        // с владельцем, поэтому автор здесь — владелец (участник проходит через тот же параметр)
+        await _sut.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Edit,
+            feedback: "убери ревью из плана", userId: TestUserId);
+
+        var history = await _historyService.LoadAsync(session.Id);
+        AuthorOfMessage(history, "убери ревью из плана").Should().Be(TestUserId,
+            "правка плана несёт автора — пользователя, подавшего решение");
     }
 
     // Гонка двух отправителей в одну сессию: пока идёт ход первого, оба пишут в очередь

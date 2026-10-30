@@ -654,7 +654,8 @@ public sealed record DeviceWaitMessage(
     string? SenderChatName = null,
     string? StaffNote = null,
     IReadOnlyList<string>? AttachedPaths = null,
-    string? Mode = null)
+    string? Mode = null,
+    string? SenderUserId = null)
 {
     public const string RouteAuto = "auto";
     public const string RouteAgent = "agent";

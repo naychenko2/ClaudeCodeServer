@@ -16,28 +16,30 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// тем, что инструмент МОЛЧА исчезает у модели.
 /// </summary>
 [Trait("Category", "Host")]
-public class McpHttpTransportTests(TestWebApplicationFactory factory, McpHttpTransportTests.BoomHost boom,
-    McpHttpTransportTests.LogSinkHost logHost, McpHttpTransportTests.SlowHost slowHost)
-    : IClassFixture<TestWebApplicationFactory>,
-      IClassFixture<McpHttpTransportTests.BoomHost>,
-      IClassFixture<McpHttpTransportTests.LogSinkHost>,
+public class McpHttpTransportTests(McpHttpTransportTests.MainHost main,
+    McpHttpTransportTests.SlowHost slowHost)
+    : IClassFixture<McpHttpTransportTests.MainHost>,
       IClassFixture<McpHttpTransportTests.SlowHost>
 {
-    // Фикстуры-подклассы, по одной на каждую конфигурацию хоста: спец-хосты поднимаются
-    // на весь класс, а не на тест. Обычный хост — общий для всех остальных тестов класса.
-    /// <summary>Хост с тулсетом-«бомбой»: внутренний сбой диспетчера проверяется на нём.</summary>
-    public sealed class BoomHost : TestWebApplicationFactory
-    {
-        public BoomHost() => ExtraServices = services =>
-            services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset>(new ExplodingToolset());
-    }
-
-    /// <summary>Хост с коллектором лога: санитизация имени проверяется по его записям.</summary>
-    public sealed class LogSinkHost : TestWebApplicationFactory
+    // Два хоста на весь класс. По конфигурации DI отдельный хост нужен только SlowHost
+    // (свой McpStreamTiming). «Boom» и коллектор логов живут в основном хосте: реестр
+    // резолвит тулсет по ИМЕНИ (McpToolsetRegistry.Find) и при регистрации не перечисляет
+    // Tools — «boom» не мешает боевому «widgets»; коллектор — обычный ILoggerProvider,
+    // а тест логов смотрит только записи с «MCP» — записи других тестов класса короткие
+    // (имя в них санитизировано) и его утверждениям не противоречат.
+    /// <summary>
+    /// Основной хост класса: на нём проверяются и обычный транспорт, и внутренний сбой
+    /// диспетчера (тулсет-«бомба»), и санитизация имени в логе (по записям коллектора).
+    /// </summary>
+    public sealed class MainHost : TestWebApplicationFactory
     {
         internal readonly CollectingLogSink Sink = new();
 
-        public LogSinkHost() => ExtraServices = services => services.AddSingleton<ILoggerProvider>(Sink);
+        public MainHost() => ExtraServices = services =>
+        {
+            services.AddSingleton<ILoggerProvider>(Sink);
+            services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset>(new ExplodingToolset());
+        };
     }
 
     /// <summary>
@@ -59,10 +61,8 @@ public class McpHttpTransportTests(TestWebApplicationFactory factory, McpHttpTra
         }
     }
 
-    private readonly HttpClient _client = factory.CreateAuthenticatedClient();
-    private readonly TestWebApplicationFactory _factory = factory;
-    private readonly BoomHost _boom = boom;
-    private readonly LogSinkHost _log = logHost;
+    private readonly HttpClient _client = main.CreateAuthenticatedClient();
+    private readonly MainHost _main = main;
     private readonly SlowHost _slow = slowHost;
 
     private async Task<JsonElement> RpcAsync(string method, object? @params = null, int id = 1)
@@ -213,7 +213,7 @@ public class McpHttpTransportTests(TestWebApplicationFactory factory, McpHttpTra
     [Fact]
     public async Task БезТокена_Отказ401()
     {
-        using var anonymous = _factory.CreateClient();
+        using var anonymous = _main.CreateClient();
         var resp = await anonymous.PostAsync("/mcp/widgets",
             new StringContent("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""",
                 Encoding.UTF8, "application/json"));
@@ -234,7 +234,7 @@ public class McpHttpTransportTests(TestWebApplicationFactory factory, McpHttpTra
 
         var plain = Fingerprint((await RpcAsync("tools/list")).GetProperty("result").GetProperty("tools"));
 
-        using var withContext = _factory.CreateAuthenticatedClient();
+        using var withContext = _main.CreateAuthenticatedClient();
         withContext.DefaultRequestHeaders.Add("X-Caller-Session-Id", Guid.NewGuid().ToString());
         withContext.DefaultRequestHeaders.Add("X-Mcp-Tool", "widget_show");
         var resp = await withContext.PostAsJsonAsync("/mcp/widgets", new
@@ -344,7 +344,7 @@ public class McpHttpTransportTests(TestWebApplicationFactory factory, McpHttpTra
 
         // Журнал пишет только запросы хода (X-Caller-Session-Id лежит в конфиге хода) —
         // без него проверять нечего: строка из тела до McpCallLog не доходит вовсе
-        using var caller = _factory.CreateAuthenticatedClient();
+        using var caller = _main.CreateAuthenticatedClient();
         caller.DefaultRequestHeaders.Add("X-Caller-Session-Id", "evil-name-probe");
 
         var call = await caller.PostAsJsonAsync("/mcp/widgets", new
@@ -374,11 +374,13 @@ public class McpHttpTransportTests(TestWebApplicationFactory factory, McpHttpTra
     /// Настоящий внутренний сбой диспетчера (тулсет-«бомба») — протокольная -32603, а не
     /// голый HTTP 500: клиент MCP, получивший 500, снимает ВЕСЬ набор инструментов сервера
     /// до конца жизни процесса CLI — молчаливый отказ, против которого здесь fail-closed.
+    /// «Бомба» зарегистрирована в основном хосте: реестр резолвит её по имени на /mcp/boom,
+    /// состав /mcp/widgets она не меняет — хоста с одним тулсетом для этого не нужно.
     /// </summary>
     [Fact]
     public async Task ВнутреннийСбойТулсета_Отвечает32603_АНе500()
     {
-        var client = _boom.CreateAuthenticatedClient();
+        var client = _main.CreateAuthenticatedClient();
         var answer = await client.PostAsJsonAsync("/mcp/boom",
             new { jsonrpc = "2.0", id = 1, method = "tools/list" });
 
@@ -517,12 +519,15 @@ public class McpHttpTransportTests(TestWebApplicationFactory factory, McpHttpTra
     /// CRLF-вброс визуально неотличим от подлинных записей бэкенда (CWE-117). Имя печатает
     /// и контроллер (Warning об упавшем инструменте), и McpCallLogMiddleware (Debug/Warning
     /// по каждому запросу хода).
+    /// Коллектор — на основном хосте: записи остальных тестов класса тоже попадают в sink,
+    /// но имя в них проходит ту же форму (McpCallLog.Record) — короткие, без «X-Injected»,
+    /// утверждениям теста не противоречат ни в прямом, ни в обратном порядке.
     /// </summary>
     [Fact]
     public async Task ГигантскоеИмяСCRLF_НеПопадаетВЛогБэкенда()
     {
-        var sink = _log.Sink;
-        using var caller = _log.CreateAuthenticatedClient();
+        var sink = _main.Sink;
+        using var caller = _main.CreateAuthenticatedClient();
         caller.DefaultRequestHeaders.Add("X-Caller-Session-Id", "evil-log-probe");
         var call = await caller.PostAsJsonAsync("/mcp/widgets", new
         {

@@ -135,8 +135,9 @@ describe('Сейчас: строки восьми kind', () => {
       .toBe('Смержена в master 24.10 в 18:05');
   });
 
-  it('closed без даты — «Закрыта» (разрез п. 4)', () => {
-    expect(briefNowText(brief({ kind: 'closed' }), { nameOf })).toBe('Закрыта');
+  it('closed без даты — строки нет: закрытие говорит один тег (f100335b)', () => {
+    expect(briefNowText(brief({ kind: 'closed' }), { nameOf })).toBeNull();
+    expect(briefNowText(brief({ kind: 'merged' }), { nameOf })).toBeNull();
   });
 
   it('running без now — строки нет (макет: поля нет — строку не рисуем)', () => {
@@ -192,8 +193,15 @@ describe('Подстрока «Сейчас»', () => {
     expect(briefSubText(short, NOW)).toBe('фича стоит');
   });
 
-  it('closed — «фича закрыта»', () => {
-    expect(briefSubText(brief({ kind: 'closed' }), NOW)).toBe('фича закрыта');
+  it('waiting_you про мерж — «ждёт ответа», без «фича стоит» и без слов тревоги (e55194ed)', () => {
+    const since = { stage: '', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 13, 40) };
+    expect(briefSubText(brief({ kind: 'waiting_you', reason: 'мерж', now: since }), NOW)).toBe('30 мин · ждёт ответа');
+    expect(briefSubText(brief({ kind: 'waiting_you', reason: 'мерж' }), NOW)).toBeNull();
+  });
+
+  it('closed/merged — подстроки нет (f100335b)', () => {
+    expect(briefSubText(brief({ kind: 'closed' }), NOW)).toBeNull();
+    expect(briefSubText(brief({ kind: 'merged' }), NOW)).toBeNull();
   });
 
   it('нет since (running/waiting_you) и kinds без подстроки — null', () => {
@@ -558,6 +566,8 @@ describe('Готовность', () => {
     expect(v.closed).toBe(true);
     expect(v.chipsEmpty).toBe('ничего — всё сделано');
     expect(v.chips).toEqual([]);
+    const withNext = briefReadinessText(brief({ kind: 'merged', next: [{ stage: 'qa', personaId: null }, { stage: 'merge', personaId: null }] }), { nameOf });
+    expect(withNext.chips, 'next закрытой чипов не даёт (2b18fd89)').toEqual([]);
     expect(text(v.caption)).toBe('9 из 9 шагов · 100 %');
   });
 

@@ -138,11 +138,11 @@ export function briefNowText(brief: FeatureBrief, opts: BriefTextOptions = {}): 
     case 'closed':
     case 'merged': {
       // «Смержена в master 24.10 в 18:05» (макет) — дата мержа от вызывающего (run.summary);
-      // без даты — «Закрыта» (разрез п. 4). 'merged' (Ф-1.1) — та же строка, что 'closed':
-      // фича смержена, эпик ещё не закрыт (Б-1.1) — для свода ведётся так же, как 'closed'.
+      // без даты строки нет: закрытие говорит один тег (CLOSED_NO_MERGE_STATUS / «смержена»),
+      // «Закрыта» повторяла бы его (f100335b). 'merged' (Ф-1.1) — та же строка, что 'closed'.
       const at = opts.mergedAt;
       if (at) return `Смержена в master ${formatDate(at)} в ${formatClock(at)}`;
-      return 'Закрыта';
+      return null;
     }
   }
 }
@@ -170,6 +170,8 @@ export function briefSubText(brief: FeatureBrief, nowMs: number): string | null 
     case 'waiting_you': {
       if (!since) return null;
       const dur = shownDuration(since, nowMs);
+      // Мерж-вопрос: фича не стоит, она ждёт согласия — слов тревоги страницы не повторяем (e55194ed).
+      if (brief.reason === 'мерж' || brief.next[0]?.stage === 'merge') return dur ? `${dur} · ждёт ответа` : 'ждёт ответа';
       return dur ? `${dur} · фича стоит` : 'фича стоит';
     }
     case 'paused': {
@@ -177,9 +179,6 @@ export function briefSubText(brief: FeatureBrief, nowMs: number): string | null 
       const dur = shownDuration(since, nowMs);
       return dur ? `на паузе ${dur} · исполнители не запускаются` : 'исполнители не запускаются';
     }
-    case 'closed':
-    case 'merged':
-      return 'фича закрыта';
     default:
       return null;
   }
@@ -393,6 +392,9 @@ export function briefActiveTagLabel(brief: FeatureBrief): string | null {
 // страницы. Мерж-вопрос тега не получает (null) — там тег «к мержу», как у статуса фичи.
 export const BRIEF_WAIT_WORD = 'нужен ответ';
 
+// Тег мерж-вопроса: тревога страницы уже говорит «ждёт согласия на мерж» — тег короче (e55194ed).
+export const BRIEF_MERGE_TAG = 'к мержу';
+
 export function briefWaitTagLabel(brief: FeatureBrief): string | null {
   if (brief.reason === 'мерж' || brief.next[0]?.stage === 'merge') return null;
   return BRIEF_WAIT_WORD;
@@ -426,6 +428,7 @@ export interface BriefReadinessView {
   // Подпись чипов: «Осталось:» — единственная (Ш3: «Ещё не начато:» было подписью
   // estimate.remaining, его в готовности нет).
   chipsLabel: string;
+  // У закрытой/смерженной пусто: «Осталось» не рисуется вовсе (2b18fd89).
   chips: BriefChip[];
   // Вместо чипов (закрытая): «ничего — всё сделано».
   chipsEmpty: string | null;
@@ -479,7 +482,9 @@ export function briefReadinessText(brief: FeatureBrief, opts: BriefTextOptions =
     return name ? `${stageWord(n.stage)} · ${name}` : stageWord(n.stage);
   });
   let chips: BriefChip[];
-  if (mergeAsk) {
+  if (closed) {
+    chips = [];
+  } else if (mergeAsk) {
     chips = [{ text: MERGE_CHIP, tone: 'you' }];
   } else {
     chips = texts.map((t, i) => (i === 0 ? { text: `следом · ${t}`, tone: 'next' as const } : { text: t, tone: 'plain' as const }));
@@ -757,12 +762,13 @@ export const BRIEF_MODEL_WORDS: readonly string[] = [
   'Готовится: разрез/план',
   'Ничего не идёт',
   'Смержена в master',
-  'Закрыта',
   'шага ', // «Ревью шага 3 (бэк)» — часть running-строки
-  // Подстрока «Сейчас» (briefSubText); «фича закрыта» покрывает и «Ничего — фича закрыта»
+  // Подстрока «Сейчас» (briefSubText); «фича закрыта» — «Ничего — фича закрыта» (briefNextText)
   'фича стоит',
+  'ждёт ответа',
   'исполнители не запускаются',
   'фича закрыта',
+  'к мержу', // тег мерж-вопроса (BRIEF_MERGE_TAG)
   'ждёт ', // «ждёт N · без вас фича стоит»
   'на паузе ', // «на паузе N · исполнители не запускаются»
   // «Сделано» (briefDoneText)

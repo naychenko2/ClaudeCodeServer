@@ -150,7 +150,7 @@ const CASES: Case[] = [
     tag: featureRunStatusTag('running', stageLabel('review')).label,
   },
   // Ш4: «ждёт вас» в сводке нет — тег мерж-вопроса «к мержу» из статуса фичи, прочего вопроса — «нужен ответ».
-  { name: 'waiting_you (мерж)', kind: 'waiting_you', over: { reason: 'мерж' }, tag: featureRunStatusTag('merge_pending').label },
+  { name: 'waiting_you (мерж)', kind: 'waiting_you', over: { reason: 'мерж' }, tag: 'к мержу' },
   { name: 'waiting_you (вопрос)', kind: 'waiting_you', over: { reason: 'уточни отступы' }, tag: 'нужен ответ' },
   { name: 'error', kind: 'error', over: { reason: 'сохранение журнала упало' }, tag: featureRunStatusTag('stopped').label },
   { name: 'paused', kind: 'paused', over: { reason: 'manual', now: { stage: '', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 13, 40) } }, tag: featureRunStatusTag('paused').label },
@@ -169,8 +169,9 @@ describe('FeatureBriefBlock: девять kind', () => {
       const mergedAt = cs.mergedAt ?? null;
       const { c } = render({ brief: b, mergedAt, nameOf });
       const line = findNodeByAttr(c, 'data-testid', 'brief-now-line');
-      expect(line, 'строка «Сейчас»').not.toBeNull();
-      expect(textNodes(line!).join(''), 'строка расходится с выходом F2').toBe(briefNowText(b, { nameOf, mergedAt }));
+      const expectedLine = briefNowText(b, { nameOf, mergedAt });
+      if (expectedLine === null) expect(line, 'строки нет (f100335b)').toBeNull();
+      else expect(textNodes(line!).join(''), 'строка расходится с выходом F2').toBe(expectedLine);
       const tag = findNodeByAttr(c, 'data-testid', 'brief-tag');
       expect(tag, 'тег состояния').not.toBeNull();
       expect(textNodes(tag!).join(''), 'тег расходится с резолвером').toBe(cs.tag);
@@ -266,9 +267,11 @@ describe('«Готовность | Срок»', () => {
     expect(joined(c, 'brief-ready-caption')).toBe('2 из 5 шагов · 40 %');
   });
 
-  it('закрытая — вместо чипов «ничего — всё сделано»', () => {
-    const { c } = render({ brief: brief({ kind: 'closed', note: note({ remaining: [] }) }), mergedAt: at(24, 18, 5), nameOf });
+  it('закрытая — только «ничего — всё сделано», «Осталось:» и чипов из next нет (2b18fd89)', () => {
+    const { c } = render({ brief: brief({ kind: 'closed', next: [{ stage: 'qa', personaId: null }, { stage: 'merge', personaId: null }], note: note({ remaining: [] }) }), mergedAt: at(24, 18, 5), nameOf });
     expect(joined(c, 'brief-chip-empty')).toBe('ничего — всё сделано');
+    expect(allNodes(c, 'brief-chip')).toHaveLength(0);
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'brief-ready-left')!).join(' ')).not.toContain('Осталось');
   });
 
   it('«в master» (F1): пометка одна — в подписи; в строке трекера её нет', () => {
@@ -543,13 +546,16 @@ describe('Closedность карточки (R-F8)', () => {
     const est = note({ remaining: [] });
     const closed = render({ brief: brief({ kind: 'closed', elapsedMinutes: 400, note: est }), stats: stats(), mergedAt, nameOf });
     const merged = render({ brief: brief({ kind: 'merged', elapsedMinutes: 400, note: est }), stats: stats(), mergedAt, nameOf });
-    for (const id of ['brief-tag', 'brief-glyph', 'brief-now-line', 'brief-now-sub', 'brief-facts', 'brief-totals']) {
+    for (const id of ['brief-tag', 'brief-glyph', 'brief-now-line', 'brief-facts', 'brief-totals']) {
       const a = findNodeByAttr(closed.c, 'data-testid', id);
       const b = findNodeByAttr(merged.c, 'data-testid', id);
       expect(a, `элемент ${id} у closed`).not.toBeNull();
       expect(b, `элемент ${id} у merged`).not.toBeNull();
       expect(textNodes(b!).join(' '), `текст ${id} у merged отличается от closed`).toBe(textNodes(a!).join(' '));
     }
+    // Подстроки «фича закрыта» у терминальных нет (f100335b): закрытие говорит один тег.
+    expect(findNodeByAttr(closed.c, 'data-testid', 'brief-now-sub')).toBeNull();
+    expect(findNodeByAttr(merged.c, 'data-testid', 'brief-now-sub')).toBeNull();
   });
 });
 

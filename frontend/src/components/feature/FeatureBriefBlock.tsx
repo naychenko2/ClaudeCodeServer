@@ -20,7 +20,7 @@ import { ICON_STROKE } from '../ui/icons';
 import { showToast } from '../../lib/toast';
 import { StatusTag, featureRunStatusTag, type FeatureRunTag } from './FeatureStatusTag';
 import {
-  briefActiveTagLabel, briefActiveView, briefWaitTagLabel, briefElapsedFact, briefEstimateText, briefNowText, briefReadinessText, briefSubText, briefUpdatedText, leadNoNoteText, voiceSignature, voiceStaleLabel,
+  briefActiveTagLabel, briefActiveView, briefWaitTagLabel, BRIEF_MERGE_TAG, briefElapsedFact, briefEstimateText, briefNowText, briefReadinessText, briefSubText, briefUpdatedText, leadNoNoteText, voiceSignature, voiceStaleLabel,
   type BriefDonePart, type BriefEstimateView, type BriefReadinessView, type PersonaGenderResolver, type PersonaNameResolver,
 } from './FeatureBriefModel';
 import { ActiveList } from './FeatureBriefActive';
@@ -93,7 +93,7 @@ function briefTagBase(brief: FeatureBrief, mergedAt: string | null): FeatureRunT
       // (слово модели), при вопросе про мерж — «к мержу» статуса фичи.
       {
         const wait = briefWaitTagLabel(brief);
-        return wait ? { ...featureRunStatusTag('waiting'), label: wait } : featureRunStatusTag('merge_pending');
+        return wait ? { ...featureRunStatusTag('waiting'), label: wait } : { ...featureRunStatusTag('merge_pending'), label: BRIEF_MERGE_TAG };
       }
     case 'error':
       return featureRunStatusTag('stopped');
@@ -259,7 +259,7 @@ function ReadinessColumn({ view, stepProgress }: { view: BriefReadinessView; ste
       </div>
       {(view.chips.length > 0 || view.chipsEmpty) && (
         <div data-testid="brief-ready-left" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: SP.xs, marginTop: SP.sm }}>
-          <span style={{ fontSize: FS.xs, color: C.textMuted }}>{view.chipsLabel}</span>
+          {view.chips.length > 0 && <span style={{ fontSize: FS.xs, color: C.textMuted }}>{view.chipsLabel}</span>}
           {view.chips.map((c, i) => (
             <span key={i} data-testid="brief-chip" style={{
               fontSize: FS.xs, borderRadius: R.sm, padding: '1px 7px', maxWidth: '100%',

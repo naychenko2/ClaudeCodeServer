@@ -11,6 +11,9 @@ import { C } from '../../lib/design';
 import { getPersonaById } from '../../lib/personas';
 import { plural } from '../../lib/plural';
 import { executorStopVisual } from '../../lib/tasks';
+// Подпись закрытия без мержа — общий источник (chatGroups, Ш1e): строка анализа,
+// плашка чата и тег страницы берут её, а не свою копию литералом.
+import { CLOSED_NO_MERGE_STATUS } from '../../lib/chatGroups';
 import { formatClock, formatDateTime, formatDuration, minutesSince } from './FeatureStatsBits';
 // Тег статуса — общий модуль FeatureStatusTag (W5-F3a): модель не тянет шапку,
 // цикл FeaturePageHeader ⇄ FeatureAnalysisModel разомкнут.
@@ -89,7 +92,7 @@ export function analysisLineState(run: FeatureRun, nowMs: number): AnalysisLineS
   // 1. done — смержена или закрыта.
   if (run.state === 'merged' || run.state === 'closed') {
     const badge: AnalysisBadge = {
-      tone: 'success', icon: 'Check', text: run.state === 'merged' ? 'смержена' : 'закрыта',
+      tone: 'success', icon: 'Check', text: run.state === 'merged' ? 'смержена' : CLOSED_NO_MERGE_STATUS,
     };
     const s = run.summary;
     if (!s) return { key: 'done', tone: 'neutral', dashed: false, badge, strong: '', tail: '', actions: [ANALYSIS_ACTION] };

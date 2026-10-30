@@ -94,7 +94,7 @@ describe('featureRowModel: состояния строки', () => {
 
   it('смержена/закрыта: слово состояния из общего statusPhrase (без даты, как в пилюле)', () => {
     expect(featureRowModel(feat({ state: 'merged' }), null, false).statusWord).toBe('смержена');
-    expect(featureRowModel(feat({ state: 'closed' }), null, false).statusWord).toBe('закрыта');
+    expect(featureRowModel(feat({ state: 'closed' }), null, false).statusWord).toBe('закрыта без мержа');
   });
 
   it('пауза с очередью: «В очереди · 2 из 3» (общий queueLabelParts), не «Сейчас»', () => {

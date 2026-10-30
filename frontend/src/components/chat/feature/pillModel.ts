@@ -1,5 +1,5 @@
 import { getPersonaById } from '../../../lib/personas';
-import { MERGE_PENDING_STATUS, queueLabelParts } from '../../../lib/chatGroups';
+import { CLOSED_NO_MERGE_STATUS, MERGE_PENDING_STATUS, queueLabelParts } from '../../../lib/chatGroups';
 import { trackerPercent } from '../../../lib/featureProgress';
 import { alarmView, findChatChain, stepAlarmBy, stepStatusParts } from './featureTruthModel';
 import type { FeatureQueue, FeatureRun, FeatureState } from '../../../types/featureRun';
@@ -89,7 +89,8 @@ export function statusPhrase(
     case 'merge_pending': return { bold: 'Мерж', post: ' · ждёт согласия' };
     case 'merging': return { bold: 'Мерж', post: names.merging ? ` · идёт · ${names.merging}` : ' · идёт' };
     case 'merged': return { bold: 'смержена', post: '' };
-    case 'closed': return { bold: 'закрыта', post: '' };
+    // Одна подпись закрытия с «Анализом», тегом страницы и индексом (Ш1e) — общий источник.
+    case 'closed': return { bold: CLOSED_NO_MERGE_STATUS, post: '' };
   }
 }
 

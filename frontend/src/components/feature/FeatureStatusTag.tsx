@@ -19,7 +19,7 @@ import type { CSSProperties } from 'react';
 import { Pause } from 'lucide-react';
 import { C, R, SP, FS, FONT } from '../../lib/design';
 import { ICON_STROKE } from '../ui/icons';
-import { MERGE_PENDING_STATUS, queueLabel, type FeatureStatusTag } from '../../lib/chatGroups';
+import { CLOSED_NO_MERGE_STATUS, MERGE_PENDING_STATUS, queueLabel, type FeatureStatusTag } from '../../lib/chatGroups';
 import type { FeatureQueue, FeatureState } from '../../types/featureRun';
 
 export type FeatureRunTagTone = 'notStarted' | 'run' | 'wait' | 'stop' | 'merge' | 'loop' | 'merged' | 'closed' | 'hold' | 'draft';
@@ -64,7 +64,9 @@ export function featureRunStatusTag(state: FeatureState, stageName?: string | nu
     case 'merged':
       return { label: 'смержена', tone: 'merged' };
     case 'closed':
-      return { label: 'закрыта без мержа', tone: 'closed' };
+      // Одна подпись с индексом, «Анализом» и плашкой — общий CLOSED_NO_MERGE_STATUS (Ш1e),
+      // не литерал, совпадающий по случайности.
+      return { label: CLOSED_NO_MERGE_STATUS, tone: 'closed' };
     default:
       // Состояние вне словаря (бэк опередил фронт) — нейтральный тег, а не undefined.
       return UNKNOWN_RUN_TAG;

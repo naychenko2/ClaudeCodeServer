@@ -369,7 +369,8 @@ public class NotesWikiSourceTests : IDisposable
         public Task DeleteDatasetAsync(string datasetId) => No();
         public Task RenameDatasetAsync(string datasetId, string newName) => No();
         public Task<DifyDocumentInfo> IndexFileByTextAsync(string datasetId, string fileName,
-            string content, List<string>? tags = null) => No<DifyDocumentInfo>();
+            string content, List<string>? tags = null,
+            IReadOnlyDictionary<string, string>? metadata = null) => No<DifyDocumentInfo>();
         public Task<IReadOnlyList<DifyRetrieveChunk>> RetrieveAsync(string datasetId, string query,
             int topK = 8, IReadOnlyList<KnowledgeMetadataFilter>? filters = null) =>
             No<IReadOnlyList<DifyRetrieveChunk>>();

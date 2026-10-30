@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Notes.Wiki;
 
 namespace ClaudeHomeServer.Services.Notes;
 
@@ -57,6 +58,15 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
     }
+
+    // Внутренний шов к Хранителю для системной операции relink (ADR-035, решения 2 и 6):
+    // переименование или истечение заметки, на которую ссылаются страницы вики, правит не
+    // NotesService (у вики один писатель), а Хранитель — под блокировкой раздела и с записью
+    // в журнал. Наведён свойством, а не конструктором: WikiKeeper строится поверх NotesService,
+    // конструкторная зависимость замкнула бы цикл DI; ставит его регистрация вертикали
+    // (NotesSubsystem.Register, factory WikiKeeper). null — Хранителя нет: файл вики
+    // пропускается, как в S1a.
+    internal IWikiRelink? WikiRelink { get; set; }
 
     private Model GetModel(string userId)
     {
@@ -413,6 +423,25 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
             l.Add(n);
         }
 
+        // Алиасы страниц вики пополняют тот же индекс (ADR-035, решение 3): [[Алиас]] резолвится
+        // в страницу; при коллизии алиаса с заголовком Resolve предпочитает заголовок
+        // (см. Resolve). Шапка вики разбирается строгим парсером страницы — терпимый
+        // ParseFrontmatter aliases не отдаёт; нечитаемая шапка — просто нет алиасов,
+        // страница остаётся в индексе по заголовку.
+        foreach (var n in notes)
+        {
+            if (n.SourceKey != WikiKey) continue;
+            var aliases = WikiFrontmatter.Parse(n.Content).Model?.Aliases;
+            if (aliases is null) continue;
+            foreach (var alias in aliases)
+            {
+                var key = Norm(alias);
+                if (key.Length == 0) continue;
+                if (!byName.TryGetValue(key, out var l)) byName[key] = l = new();
+                if (!l.Contains(n)) l.Add(n); // алиас = собственный заголовок: уже индексирована
+            }
+        }
+
         var outLinks = new Dictionary<string, List<NoteLinkDto>>();
         var backlinks = new Dictionary<string, List<NoteBacklinkDto>>();
         var ghosts = new Dictionary<string, string>();
@@ -507,16 +536,40 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // Разрешение коллизий имён: 1 кандидат — берём; несколько — по namespace
     // (источник в записи [[Проект/Заметка]]), иначе предпочитаем тот же источник.
     // Разрешение [[Имя]] и [[Префикс/Имя]]. Префикс — источник («Проект»), папка
-    // внутри источника («Идеи/Черновики», как в Obsidian) или «Источник/Папка».
+    // внутри источника («Идеи/Черновики», как в Obsidian), «Источник/Папка» или
+    // раздел вики («Сферы/{id}», «Общее» — ADR-035, решение 1: резолв префикса раздела
+    // делает код; кандидат вне раздела не рассматривается, в разделе пусто — ссылка
+    // неразрешена). Коллизия алиаса с заголовком — в пользу заголовка (решение 3):
+    // кандидат, попавший в индекс только алиасом, не рассматривается, когда под ключом
+    // есть страница с этим заголовком; для чистых заголовков фильтр — no-op (ключ индекса
+    // и есть нормализованный заголовок).
     private static RawNote? Resolve(Dictionary<string, List<RawNote>> byName, string key, string? ns, RawNote? from)
     {
         if (!byName.TryGetValue(key, out var candidates) || candidates.Count == 0) return null;
-        if (candidates.Count == 1) return candidates[0];
+
+        List<RawNote> pool;
+        if (ns is not null && WikiSections.Parse(ns) is { } section)
+        {
+            // Префикс-раздел вики: цель — страница этого раздела. Префикс раздела —
+            // единственный смысл такого префикса: ни одна заметка под ним не резолвится.
+            pool = candidates.Where(c => c.SourceKey == WikiKey &&
+                WikiSections.Parse(c.RelPath) == section).ToList();
+        }
+        else
+        {
+            // «В пользу заголовка» — порядок предпочтения, а не отказ: алиас резолвится,
+            // пока под его ключом нет страницы с таким заголовком.
+            var byTitle = candidates.Where(c => Norm(c.Title) == key).ToList();
+            pool = byTitle.Count > 0 ? byTitle : candidates;
+        }
+
+        if (pool.Count == 0) return null;
+        if (pool.Count == 1) return pool[0];
 
         if (ns is not null)
         {
             var p = Norm(ns);
-            var byNs = candidates.FirstOrDefault(c =>
+            var byNs = pool.FirstOrDefault(c =>
             {
                 var dir = Norm(DirOf(c.RelPath));
                 var label = Norm(c.SourceLabel);
@@ -526,7 +579,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
             });
             if (byNs is not null) return byNs;
         }
-        var sameSource = from is null ? null : candidates.FirstOrDefault(c => c.SourceKey == from.SourceKey);
+        var sameSource = from is null ? null : pool.FirstOrDefault(c => c.SourceKey == from.SourceKey);
         return sameSource; // null → неоднозначно, считаем неразрешённой
     }
 
@@ -1060,11 +1113,14 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
             && model.Backlinks.TryGetValue(id, out var inbound))
         {
             var sources = inbound.Select(b => b.SourceId).Distinct();
+            var wikiInbound = false;
             foreach (var srcId in sources)
             {
                 if (srcId == id || !model.ById.TryGetValue(srcId, out var srcNote)) continue;
-                // Писатель побочный: файл под data/wiki/ не трогаем — его правит только Хранитель
-                if (WikiPaths.IsWikiPath(srcNote.FullPath, _dataDir)) continue;
+                // Писатель побочный: файл под data/wiki/ не трогаем — его правит только Хранитель.
+                // Вместо правки — системная операция relink Хранителя (ADR-035, решения 2 и 6):
+                // она меняет цель [[…]] под блокировкой раздела и с записью в журнал.
+                if (WikiPaths.IsWikiPath(srcNote.FullPath, _dataDir)) { wikiInbound = true; continue; }
                 try
                 {
                     var updated = RewriteLinks(File.ReadAllText(srcNote.FullPath, Encoding.UTF8), oldTitle, req.Title!);
@@ -1072,6 +1128,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
                 }
                 catch (Exception ex) { _logger.LogWarning(ex, "Обновление ссылок в {File}", srcNote.FullPath); }
             }
+            if (wikiInbound) RelinkWiki(userId, oldTitle, req.Title);
         }
 
         Invalidate(userId);
@@ -1084,7 +1141,9 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // Заменяет [[Старый]] / [[Старый|подпись]] / [[Старый#якорь]] / [[Папка/Старый]]
     // на [[Новый…]] с сохранением подписи и якоря; не-совпадающие ссылки и ссылки
     // внутри кода (`…`/```-блока) не трогает.
-    private static string RewriteLinks(string content, string oldTitle, string newTitle)
+    // internal static: та же операция нужна Хранителю для relink (ADR-035, решение 6) —
+    // второй реализации «замены цели ссылки» в вертикали быть не должно.
+    internal static string RewriteLinks(string content, string oldTitle, string newTitle)
     {
         var oldNorm = Norm(oldTitle);
         var mask = CodeMask(content);
@@ -1100,6 +1159,43 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
             var lastSeg = name.Split('/')[^1].Trim();
             return Norm(lastSeg) == oldNorm ? $"[[{newTitle}{rest}]]" : m.Value;
         });
+    }
+
+    // Есть ли в тексте ссылка на этот заголовок — тот же смысл совпадения, что у RewriteLinks
+    // (последний сегмент цели, нормализация, вне кода). internal: нужен Хранителю для
+    // отбора кандидатов relink до записи (тот же критерий, что у самой замены).
+    internal static bool HasWikiLinkTo(string content, string title)
+    {
+        var oldNorm = Norm(title);
+        var mask = CodeMask(content);
+        foreach (Match m in WikiLink.Matches(content))
+        {
+            if (InCode(mask, m.Index)) continue;
+            var inner = m.Groups[1].Value;
+            var cut = inner.Length;
+            var pipe = inner.IndexOf('|'); if (pipe >= 0) cut = Math.Min(cut, pipe);
+            var hash = inner.IndexOf('#'); if (hash >= 0) cut = Math.Min(cut, hash);
+            var name = inner[..cut];
+            if (Norm(name.Split('/')[^1].Trim()) == oldNorm) return true;
+        }
+        return false;
+    }
+
+    // [[TargetTitle]] → TargetTitle, [[TargetTitle|алиас]] → алиас; ссылки в коде
+    // (`…`/```-блок) не трогаем. Та же операция, что делал RemoveWikilinksTo in-line:
+    // вынесена, чтобы relink Хранителя (ADR-035, решение 6) разворачивал ссылку тем же
+    // кодом, а не второй реализацией.
+    internal static string UnlinkTo(string content, string targetTitle)
+    {
+        var mask = CodeMask(content);
+        return Regex.Replace(content,
+            @"\[\[" + Regex.Escape(targetTitle) + @"(\|[^\[\]]*?)?\]\]",
+            m => InCode(mask, m.Index)
+                ? m.Value
+                : m.Groups[1].Success
+                    ? m.Groups[1].Value.TrimStart('|')
+                    : targetTitle,
+            RegexOptions.IgnoreCase);
     }
 
     public bool Delete(string userId, string id)
@@ -1163,25 +1259,17 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         if (!model.Backlinks.TryGetValue(targetId, out var backlinks)) return;
 
         var sources = backlinks.Select(b => b.SourceId).Distinct();
+        var wikiInbound = false;
         foreach (var srcId in sources)
         {
             if (!model.ById.TryGetValue(srcId, out var srcNote)) continue;
-            // Писатель побочный: файл под data/wiki/ не трогаем — его правит только Хранитель
-            if (WikiPaths.IsWikiPath(srcNote.FullPath, _dataDir)) continue;
+            // Писатель побочный: файл под data/wiki/ не трогаем — его правит только Хранитель.
+            // Вместо правки — та же системная операция relink (ADR-035, решения 2 и 6):
+            // истёкшая цель — newTitle null, ссылка разворачивается в текст.
+            if (WikiPaths.IsWikiPath(srcNote.FullPath, _dataDir)) { wikiInbound = true; continue; }
             try
             {
-                var content = File.ReadAllText(srcNote.FullPath, Encoding.UTF8);
-                var mask = CodeMask(content);
-                // Заменяем [[TargetTitle]] → TargetTitle, [[TargetTitle|alias]] → alias;
-                // ссылки в коде (`…`/```-блок) не трогаем
-                var updated = Regex.Replace(content,
-                    @"\[\[" + Regex.Escape(targetTitle) + @"(\|[^\[\]]*?)?\]\]",
-                    m => InCode(mask, m.Index)
-                        ? m.Value
-                        : m.Groups[1].Success
-                            ? m.Groups[1].Value.TrimStart('|')
-                            : targetTitle,
-                    RegexOptions.IgnoreCase);
+                var updated = UnlinkTo(File.ReadAllText(srcNote.FullPath, Encoding.UTF8), targetTitle);
                 File.WriteAllText(srcNote.FullPath, updated, new UTF8Encoding(false));
             }
             catch (Exception ex)
@@ -1189,7 +1277,20 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
                 _logger.LogWarning(ex, "Удаление ссылок на {Title} в {File}", targetTitle, srcNote.FullPath);
             }
         }
+        if (wikiInbound) RelinkWiki(userId, targetTitle, null);
         Invalidate(userId);
+    }
+
+    // Системная relink Хранителя вместо побочной правки файла вики (ADR-035, решения 2 и 6).
+    // Sync-вызов из sync-путей заметок (Update/RemoveWikilinksTo): блокировка раздела —
+    // SemaphoreSlim, SyncContext у этих путей нет — зависания нет. Сбой relink не роняет
+    // правку заметки: ссылка в вики остаётся до следующего случая (тот же приём, что у
+    // RewriteLinks в цикле выше).
+    private void RelinkWiki(string userId, string oldTitle, string? newTitle)
+    {
+        if (WikiRelink is null) return;
+        try { WikiRelink.RelinkAsync(userId, oldTitle, newTitle).GetAwaiter().GetResult(); }
+        catch (Exception ex) { _logger.LogWarning(ex, "relink вики «{OldTitle}» → «{NewTitle}»", oldTitle, newTitle); }
     }
 
     // Вставляет поле expires в frontmatter (или создаёт новый frontmatter, если его нет).

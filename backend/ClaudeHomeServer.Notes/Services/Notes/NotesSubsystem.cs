@@ -85,7 +85,20 @@ public sealed class NotesSubsystem : IAppSubsystem
         // Хранитель — единственный писатель data/wiki/{ownerId}/pages/ (ADR-035, реш. 2):
         // зовётся применением пакетов (S2c) и REST (S2f); наружу его контракт не выходит —
         // vertical-внутренний тип, как остальные Services/Wiki.
-        services.AddSingleton<WikiKeeper>();
+        // Factory, а не type-activation: здесь же навешивается внутренний шов relink —
+        // NotesService вызывает Хранителя при переименовании/истечении заметки, на которую
+        // ссылаются страницы вики (ADR-035, решения 2 и 6). Конструкторной зависимостью это
+        // быть не может: WikiKeeper строится поверх NotesService, обратная — замкнула бы
+        // цикл DI. Порядок безопасен: резолв NotesService не трогает WikiKeeper, цикл
+        // был бы только у конструктора.
+        services.AddSingleton<WikiKeeper>(sp =>
+        {
+            var notes = sp.GetRequiredService<NotesService>();
+            var keeper = new WikiKeeper(notes, sp.GetRequiredService<IConfiguration>(),
+                sp.GetService<IProjectEventLogService>());
+            notes.WikiRelink = keeper;
+            return keeper;
+        });
         // Проверки и запись применения пакета (S4b-1/S4b-2): vertical-внутренний тип, как Хранитель.
         services.AddSingleton<WikiApplyService>();
         // Очередь заявок разбора: два прохода модели → проверки → пакет → применение (S6b-3).

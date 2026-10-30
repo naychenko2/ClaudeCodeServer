@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Knowledge;
+using ClaudeHomeServer.Services.Notes.Wiki;
 
 namespace ClaudeHomeServer.Services.Notes;
 
@@ -10,6 +11,9 @@ namespace ClaudeHomeServer.Services.Notes;
 // («{username}:notes», permission only_me). Синхронизация — полный дифф по хешам
 // содержимого (устойчив к переименованиям/массовым правкам), с дебаунсом на мутации.
 // Без настроенного Dify всё тихо выключено (graceful degradation).
+// Страницы вики — в отдельный датасет «{username}:wiki» с метаданными wiki_section
+// (ADR-035, решение 8; ADR-036, решение 6): в :notes вики не попадает, проекции _*
+// не индексируются нигде (предикат WikiPaths.IsProjection + пропуск Scan).
 public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant, INoteSemanticIndex
 {
     // userId → { datasetId, noteId → { difyDocId, contentHash } }
@@ -17,6 +21,10 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
     {
         public string? DatasetId { get; set; }
         public Dictionary<string, DocRef> Docs { get; set; } = new();
+        // Датасет вики и его документы (S2c): ключ записи — тот же noteId (id страницы
+        // графа). Аддитивно к прежней форме: в старых файлах полей нет → null/пусто.
+        public string? WikiDatasetId { get; set; }
+        public Dictionary<string, DocRef> WikiDocs { get; set; } = new();
     }
     private sealed class DocRef
     {
@@ -31,6 +39,7 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
     private readonly IUserStore _users;
     private readonly ILogger<NotesKnowledgeService> _logger;
     private readonly string _storePath;
+    private readonly string _dataDir;
     private readonly Dictionary<string, Entry> _store;
     private readonly Lock _saveLock = new();
     private readonly SemaphoreSlim _syncLock = new(1, 1);
@@ -46,6 +55,7 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
         var dataDir = Path.GetDirectoryName(
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))!;
         _storePath = Path.Combine(dataDir, "notes-knowledge.json");
+        _dataDir = dataDir; // каскад удаления владельца трогает data/wiki/{userId}/ (ADR-035, реш. 13)
         _store = JsonFileStore.Load<Dictionary<string, Entry>>(_storePath) ?? new();
     }
 
@@ -115,8 +125,14 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
 
             // Комментарии к документам в семантический индекс не попадают (шум: цитаты
             // дублируют сами документы); исчезнувшие из выборки чистятся штатной веткой ниже.
-            var summaries = _notes.GetSummaries(userId, null, null)
+            // Вики — не в :notes (ADR-035, решение 8): страницы и карточки источников
+            // идут в отдельный датасет :wiki ниже. Проекции _* исключены ещё Scan'ом
+            // графа (тот же предикат WikiPaths.IsProjection); двойной guard ниже — страховка
+            // контракта, а не второй путь фильтрации.
+            var all = _notes.GetSummaries(userId, null, null)
                 .Where(s => s.Annotation is null).ToList();
+            var summaries = all.Where(s => s.Source != NotesService.WikiKey).ToList();
+            var wikiSummaries = all.Where(s => s.Source == NotesService.WikiKey).ToList();
             var alive = new HashSet<string>(summaries.Select(s => s.Id));
             var changed = 0;
 
@@ -145,6 +161,56 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
                 catch (Exception ex) { _logger.LogDebug(ex, "Удаление документа исчезнувшей заметки"); }
                 entry.Docs.Remove(stale);
                 changed++;
+            }
+
+            // ─── Вики: отдельный датасет «{username}:wiki» (ADR-035, решение 8; ADR-036, решение 6) ───
+            // Датасет заводится лениво — по первой индексированной странице: пустой :wiki
+            // на каждого владельца не нужен; чистка исчезнувших страниц идёт и когда
+            // страниц уже нет (раздел удалён Хранителем) — иначе их документы осиротели бы
+            // в индексе. Ключ и значение wiki_section — из WikiSections.Parse: единственный
+            // разбор разделов; путь, не разбираемый в раздел, не индексируется (fail-closed,
+            // та же семантика, что у видимости ADR-036). Проекции _* — не страницы: не уходят
+            // ни в один датасет (Scan графа их уже исключил, этот guard — страхование контракта).
+            if (wikiSummaries.Count > 0 || !string.IsNullOrEmpty(entry.WikiDatasetId))
+            {
+                if (string.IsNullOrEmpty(entry.WikiDatasetId))
+                {
+                    var username = _users.GetById(userId)?.Username ?? userId;
+                    entry.WikiDatasetId = await _knowledge.CreateDatasetAsync($"{username}:wiki");
+                    Save();
+                }
+
+                var aliveWiki = new HashSet<string>();
+                foreach (var s in wikiSummaries)
+                {
+                    if (WikiPaths.IsProjection(s.Path)) continue;
+                    var section = WikiSections.Parse(s.Path);
+                    if (section is null) continue;
+                    var detail = _notes.GetDetail(userId, s.Id);
+                    if (detail is null) continue;
+                    aliveWiki.Add(s.Id);
+
+                    var hash = Hash($"{detail.Title}\n{detail.Content}\n{string.Join(',', detail.Tags)}");
+                    if (entry.WikiDocs.TryGetValue(s.Id, out var wdoc) && wdoc.Hash == hash) continue;
+
+                    if (wdoc is not null)
+                        try { await _knowledge.DeleteDocumentAsync(entry.WikiDatasetId!, wdoc.DocId); }
+                        catch (Exception ex) { _logger.LogDebug(ex, "Удаление старого документа вики {Page}", s.Id); }
+
+                    var info = await _knowledge.IndexFileByTextAsync(
+                        entry.WikiDatasetId!, detail.Title, detail.Content, detail.Tags.ToList(),
+                        metadata: new Dictionary<string, string> { ["wiki_section"] = section });
+                    entry.WikiDocs[s.Id] = new DocRef { DocId = info.Id, Hash = hash };
+                    changed++;
+                }
+
+                foreach (var stale in entry.WikiDocs.Keys.Where(k => !aliveWiki.Contains(k)).ToList())
+                {
+                    try { await _knowledge.DeleteDocumentAsync(entry.WikiDatasetId!, entry.WikiDocs[stale].DocId); }
+                    catch (Exception ex) { _logger.LogDebug(ex, "Удаление документа исчезнувшей страницы вики"); }
+                    entry.WikiDocs.Remove(stale);
+                    changed++;
+                }
             }
 
             if (changed > 0) Save();
@@ -240,14 +306,26 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
         finally { _syncLock.Release(); }
     }
 
-    // Уборка локальной записи индекса заметок пользователя — каскад удаления пользователя.
-    // Dify-датасет удаляет вызывающий (общий проход по префиксу имени датасета).
+    // Уборка локальной записи индекса заметок и вики пользователя — каскад удаления
+    // пользователя. Dify-датасеты (:notes и :wiki) удаляет вызывающий (общий проход по
+    // префиксу имени «{username}:» в UserKnowledgeCascade): :wiki назван тем же шаблоном,
+    // поэтому попадает в тот же проход без отдельного шага (ADR-035, решение 13).
+    // Каталог data/wiki/{userId}/ — здесь: он принадлежит вертикали Notes, и другой
+    // участник каскада про него не знает. Best-effort: сбой диска не роняет удаление
+    // учётной записи (тот же приём, что у шагов самого каскада).
     public void DeleteUser(string userId)
     {
         lock (_saveLock)
         {
-            if (_store.Remove(userId)) JsonFileStore.Save(_storePath, _store);
+            _store.Remove(userId);
+            JsonFileStore.Save(_storePath, _store);
         }
+        try
+        {
+            var wikiRoot = WikiPaths.Root(_dataDir, userId);
+            if (Directory.Exists(wikiRoot)) Directory.Delete(wikiRoot, recursive: true);
+        }
+        catch (Exception ex) { _logger.LogWarning(ex, "Каскад юзера {User}: каталог вики", userId); }
     }
 
     // Каскадное удаление знаний владельца через участник синка — обёртка над DeleteUser.

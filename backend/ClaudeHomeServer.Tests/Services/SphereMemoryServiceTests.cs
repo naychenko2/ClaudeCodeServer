@@ -237,7 +237,7 @@ public class SphereMemoryServiceTests : IDisposable
         public Task RenameDatasetAsync(string datasetId, string newName) => Task.CompletedTask;
 
         public Task<DifyDocumentInfo> IndexFileByTextAsync(string datasetId, string fileName, string content,
-            List<string>? tags = null)
+            List<string>? tags = null, IReadOnlyDictionary<string, string>? metadata = null)
         {
             Indexed.Add(content);
             return Task.FromResult(new DifyDocumentInfo("doc-" + Indexed.Count, fileName, "completed"));

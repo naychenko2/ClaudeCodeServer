@@ -52,9 +52,11 @@ public interface IKnowledgeIndex
     Task RenameDatasetAsync(string datasetId, string newName);
 
     // Индексирует текстовый документ: создаёт запись Dify, возвращает её описание.
-    // Используется заметками и памятью.
+    // Используется заметками и памятью. metadata — дополнительные поля метаданных документа
+    // (S2c: `wiki_section` у страниц датасета вики — ADR-036, решение 6); shape — та же,
+    // что у tags: строковое значение на имя поля.
     Task<DifyDocumentInfo> IndexFileByTextAsync(string datasetId, string fileName, string content,
-        List<string>? tags = null);
+        List<string>? tags = null, IReadOnlyDictionary<string, string>? metadata = null);
 
     // Семантический поиск по датасету: возвращает topK чанков с метаданными.
     // Notes использует для подсказок связей; memory — для recall.

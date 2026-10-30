@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
+using System.Text;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 
@@ -20,7 +21,7 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // Здесь — контракт записи и её последствия (манифест, проекции раздела, инвалидация кэша
 // графа, событие журнала). Пакеты, прообразы и _health.md — следующий шаг (S2c):
 // он же приведёт сюда op/actor применения и строки дрейфа в health.
-public sealed class WikiKeeper
+public sealed class WikiKeeper : IWikiRelink
 {
     private readonly string _dataDir;
     private readonly NotesService _notes;
@@ -149,6 +150,87 @@ public sealed class WikiKeeper
             if (File.Exists(manifest)) File.Delete(manifest);
             _notes.Invalidate(ownerId);
             return new WikiOpResult(WikiOpStatus.Applied, null);
+        });
+    }
+
+    /// <summary>relink — системная операция (ADR-035, решение 6): переименована (newTitle)
+    /// или истекла/удалена (newTitle null) заметка, на которую ссылаются страницы вики.
+    /// Смысловых правок нет: переименование меняет только цель [[…]] с сохранением подписи
+    /// и якоря (тот же код NotesService.RewriteLinks), истечение разворачивает ссылку в
+    /// текст (тот же UnlinkTo) — второго варианта «замены ссылки» в вертикали нет.
+    /// Идёт под блокировкой затронутых разделов (решение 10) и с записью в журнал
+    /// (op=relink, одна строка на раздел). Кандидаты отбираются чтением вне блокировки;
+    /// файл под блокировкой читается заново — запись пакета, вклинившаяся между отбором
+    /// и блокировкой, не потеряется и не будет затёрта. Страница в дрейфе не трогается:
+    /// системная операция чужую правку не затирает — решает человек (adopt/возврат), как у
+    /// любой записи. Возвращает число исправленных страниц.</summary>
+    public async Task<int> RelinkAsync(string ownerId, string oldTitle, string? newTitle)
+    {
+        var root = WikiPaths.Root(_dataDir, ownerId);
+        var pagesDir = Path.Combine(root, "pages");
+        if (!Directory.Exists(pagesDir)) return 0;
+
+        var candidates = new List<(string Section, string PageKey)>();
+        try
+        {
+            foreach (var full in Directory.EnumerateFiles(pagesDir, "*.md", SearchOption.AllDirectories))
+            {
+                var rel = Path.GetRelativePath(pagesDir, full).Replace('\\', '/');
+                if (WikiPaths.IsProjection(rel)) continue; // каталог/журнал — не страница
+                var section = WikiSections.Parse(rel);
+                if (section is null) continue; // путь вне разделов — не страница вики
+                string text;
+                try { text = File.ReadAllText(full, Encoding.UTF8); } catch { continue; }
+                if (NotesService.HasWikiLinkTo(text, oldTitle)) candidates.Add((section, rel));
+            }
+        }
+        catch (Exception) { return 0; } // каталог недоступен — нечего менять
+        if (candidates.Count == 0) return 0;
+
+        var sections = candidates.Select(c => c.Section).Distinct(StringComparer.Ordinal).ToList();
+        return await WithSectionsLockedAsync(ownerId, sections, async () =>
+        {
+            var changed = 0;
+            var touched = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            foreach (var (section, pageKey) in candidates)
+            {
+                var full = SafePath.JoinBelowRoot(root, "pages/" + pageKey);
+                string current;
+                try { current = File.ReadAllText(full, Encoding.UTF8); } catch { continue; }
+                var updated = newTitle is null
+                    ? NotesService.UnlinkTo(current, oldTitle)
+                    : NotesService.RewriteLinks(current, oldTitle, newTitle);
+                if (updated == current) continue; // под блокировкой совпадений нет — нечего менять
+
+                var manifest = WikiManifest.TryRead(root, section);
+                if (manifest.State == WikiManifestState.Invalid) continue;
+                var diskHash = Sha256OfBytes(File.ReadAllBytes(full));
+                var recorded = manifest.Manifest.TryGetValue(pageKey, out var known) ? known : null;
+                if (diskHash != recorded) continue; // дрейф: чужая правка на диске остаётся нетронутой
+
+                WikiFileWriter.Write(root, "pages/" + pageKey, updated);
+                // Хэш — байтов с диска, как у записи и adopt: следующая сверка сравнивает то,
+                // что реально лежит в файле.
+                WikiManifest.RecordApplied(root, section,
+                    new Dictionary<string, string> { [pageKey] = Sha256OfBytes(File.ReadAllBytes(full)) });
+                if (!touched.TryGetValue(section, out var pages)) touched[section] = pages = [];
+                pages.Add(pageKey);
+                changed++;
+            }
+            if (changed == 0) return 0;
+
+            foreach (var (section, pages) in touched)
+            {
+                // Строка журнала системной операции: policy null (меры политики нет — это не
+                // знание), actor «keeper» — исполнитель операции (тот же, что у apply).
+                WikiManifest.AppendLog(root, "relink", section, pages, null, "keeper");
+                // Журнал изменился → _log.md раздела перегенерируется (тот же блок, что у adopt).
+                WikiProjections.RegenerateSection(root, section);
+            }
+            // Граф обязан видеть исправленные ссылки сразу: после relink страница резолвится
+            // по новому заголовку, старый остаётся призраком только если на него больше никто не ссылается.
+            _notes.Invalidate(ownerId);
+            return changed;
         });
     }
 
@@ -302,3 +384,14 @@ public enum WikiOpStatus
 
 /// <summary>Результат операции Хранителя: статус + причина для вызывающего.</summary>
 public readonly record struct WikiOpResult(WikiOpStatus Status, string? Reason);
+
+/// <summary>Внутренний шов побочных писателей NotesService к Хранителю (ADR-035, решение 2):
+/// переименование или истечение заметки, на которую ссылаются страницы вики, — не правка
+/// файла NotesService, а системная операция relink Хранителя (решение 6). internal: шов
+/// вертикальный, наружу (REST/MCP) не выходит; реализация — WikiKeeper.</summary>
+internal interface IWikiRelink
+{
+    /// <summary>newTitle — новый заголовок (переименование); null — цель истекла/удалена,
+    /// ссылка разворачивается в текст. Возвращает число исправленных страниц.</summary>
+    Task<int> RelinkAsync(string ownerId, string oldTitle, string? newTitle);
+}

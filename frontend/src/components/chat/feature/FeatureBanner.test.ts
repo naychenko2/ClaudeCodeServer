@@ -8,7 +8,7 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import { FeatureBanner, featureRowModel } from './FeatureBanner';
+import { FeatureBanner, featureRowModel, HOVER_CSS } from './FeatureBanner';
 import { FeatureTruthBody } from './FeatureTruthBody';
 import { FLAGS, setFlagLocal } from '../../../lib/featureFlags';
 import { __test as indexStore } from '../../../lib/featuresIndex';
@@ -207,5 +207,21 @@ describe('FeatureBanner: рендер строки В2', () => {
   it('флаги выключены — строки нет вовсе (источник не зовётся, слот пустой)', () => {
     seedIndex(feat({ ...progress, state: 'running', nowPersonaIds: ['p-kira'] }), false);
     expect(renderRow()).toBe('');
+  });
+
+  // Дизайн-ревью F2, круг 2: hover — в классе с @media (hover:hover), без инлайнового
+  // фона; высота верхней строки одинакова в обоих состояниях; первым режется название.
+  const styleOf = (html: string, testId: string): string | undefined =>
+    new RegExp(`data-testid="${testId}"[^>]*style="([^"]*)"`).exec(html)?.[1];
+
+  it('шеврон: фон только в классе с @media (hover:hover); в inline-стиле его нет (п. 2)', () => {
+    seedIndex(feat({ ...progress, state: 'running', nowPersonaIds: ['p-kira'] }));
+    const html = renderRow();
+    const btn = /<button[^>]*data-testid="feature-row-expand"[^>]*>/.exec(html)?.[0] ?? '';
+    expect(btn).toContain('cc-feature-row-hover');
+    expect(btn).not.toContain('background');
+    expect(HOVER_CSS).toContain('.cc-feature-row-hover{background:transparent}');
+    expect(HOVER_CSS).toContain('@media (hover:hover)');
+    expect(HOVER_CSS).toContain('.cc-feature-row-hover:hover{background:var(--c-bg-selected);}');
   });
 });

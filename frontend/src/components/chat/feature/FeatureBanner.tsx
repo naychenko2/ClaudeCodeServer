@@ -48,10 +48,13 @@ const nameOfPersona: NameOf = (id) => getPersonaById(id)?.name ?? null;
 // не уходит, и после тапа у шеврона оставался фон bgSelected (снимок stop-m-light).
 // Паттерн FOCUS_CLASS (FeatureGroupHeader/SessionList): один <style>, класс на элементе.
 const HOVER_CLASS = 'cc-feature-row-hover';
+// Фон — только в классе: инлайновый background перебивал :hover (дизайн-ревью F2, п. 2).
+// @media (hover:hover) обязателен: на таче :hover после тапа залипнет без него.
+export const HOVER_CSS = `.${HOVER_CLASS}{background:transparent}@media (hover:hover){.${HOVER_CLASS}:hover{background:${C.bgSelected};}}`;
 if (typeof document !== 'undefined' && !document.getElementById('cc-feature-row-hover-style')) {
   const el = document.createElement('style');
   el.id = 'cc-feature-row-hover-style';
-  el.textContent = `.${HOVER_CLASS}:hover{background:${C.bgSelected};}`;
+  el.textContent = HOVER_CSS;
   (document.head ?? document.body).appendChild(el);
 }
 
@@ -317,7 +320,7 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
           style={{
             width: isMobile ? 40 : 28, height: isMobile ? 40 : 28, borderRadius: R.md,
             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            color: C.textMuted, border: 'none', background: 'transparent', cursor: 'pointer', flexShrink: 0, padding: 0,
+            color: C.textMuted, border: 'none', cursor: 'pointer', flexShrink: 0, padding: 0,
           }}
         >
           <span style={{ display: 'flex', transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform 150ms' }}>

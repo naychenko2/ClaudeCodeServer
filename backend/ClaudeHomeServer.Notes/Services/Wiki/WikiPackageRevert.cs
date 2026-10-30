@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace ClaudeHomeServer.Services.Notes.Wiki;
 
 // Откат применённого пакета (ADR-035, решение 12г, мера 4): кнопка «Откатить пакет» в журнале.
@@ -7,23 +9,37 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // перегенерируются. Никакого смыслового решения здесь не принимается: откатывается ровно то, что
 // записал этот пакет.
 //
-// Условие отката — согласованность страниц пакета с манифестом: хэш на диске каждой равен её записи.
-// Это та же «нет дрейфа», которую проверяет применение перед записью: если файл меняли мимо Хранителя,
-// откат стёр бы чужую правку вместе с пакетом — о такой правке решает человек, а не откат. Отказ
-// честный: перечень изменённых страниц, на диске не тронуто ничего.
+// Условие отката — согласованность страниц пакета с его собственной записью состояния применения
+// (keeper/applied/{pkgId}.json, её пишет шаг 6 применения; ревью S4b-3, MAJOR 1): хэш на диске
+// каждой равен тому, что записал этот пакет. Манифест для этого не годится: он описывает последнее
+// состояние страницы, а не состояние на момент этого применения, — откат по нему вернул бы прообраз
+// этого пакета поверх записи более позднего пакета, и та запись исчезла бы без следа. Инвариант:
+// откат возвращает ровно то, что записал этот пакет, и не трогает более поздние записи той же
+// страницы. Это та же «нет дрейфа», которую проверяет применение перед записью: если файл меняли
+// мимо Хранителя, откат стёр бы чужую правку вместе с пакетом — о такой правке решает человек, а не
+// откат. Отказ честный: перечень разошедшихся страниц, на диске не тронуто ничего. Пакета без его
+// записи (заведённого до этой меры) не откатывают вовсе: без состояния применения сверки нет, и
+// откат по манифесту был бы молчаливым допущением (fail-closed).
 //
-// Что эта сверка НЕ говорит: менял ли страницу другой пакет после этого — манифест описывает
-// последнее состояние, а не порядок. Откат цепочки пакетов — предмет откатa по источнику (retract,
-// мера 5), а не этого метода.
+// Что эта сверка НЕ говорит: КЕМ именно страница стала другой — более поздним пакетом или правкой
+// человека. Откат цепочки пакетов — предмет отката по источнику (retract, мера 5), а не этого
+// метода.
+//
+// Состояние пакета и его гейт — под блокировкой раздела: пакет перечитывается с диска внутри
+// блока (ревью S4b-3, MAJOR 2). Прочитанный до блока, он устаревает ровно там, где решается исход:
+// два отката одного пакета иначе прошли бы гейт вдвоём, и второй дописал бы в журнал вторую строку
+// op=revert, а Transition(«reverted»→«reverted») дал бы ложный «статус не записан».
 //
 // Статус откатанного пакета меняется через Transition стора: «applied» → «reverted» (решение
 // постановщика по S4b-3; статус конечный, из него переходов нет). Повторный откат «reverted»-пакета
 // отказан по статусу и не дописывает в журнал вторую строку: кнопка не повторяет уже сделанный откат.
-// Если Transition не удался ПОСЛЕ того, как файлы уже откатаны, состояние остаётся со следом:
-// файлы откатаны, строка журнала есть, исход назван вызывающему — следующий вызов отката проверку
-// пройдёт (файлы согласованы с манифестом) и доведёт статус. Обратный порядок — «заявка перехода,
-// затем откат» — необратим: «reverted» → «applied» в таблице нет, и неудачный откат оставил бы
-// «reverted»-пакет с неоткатанными файлами.
+// Если Transition не удался ПОСЛЕ того, как файлы уже откатаны, состояние остаётся со следом и
+// открыто для доводки: следующий вызов перечитывает статус (он ещё «applied»), видит страницы уже
+// в состоянии «до пакета» и доводит переход, не дописывая журнал второй раз — строка op=revert
+// одна на один фактический откат. Строка журнала не несёт id пакета: доводка узнаётся по тем полям,
+// которые откат и записывает — op, раздел, источник, автор и полный набор страниц этого пакета.
+// Обратный порядок — «заявка перехода, затем откат» — необратим: «reverted» → «applied» в таблице
+// нет, и неудачный откат оставил бы «reverted»-пакет с неоткатанными файлами.
 //
 // Порядок успешной фазы — порядок шага 6 применения: файлы, манифест, журнал, проекции (_log.md
 // раздела — производная от log.jsonl и без этой строки остался бы на полшага позади отката). Сбой
@@ -38,12 +54,19 @@ public sealed class WikiPackageRevert
     public const string CodeStatus = "wiki_revert_status";
     public const string CodeManifest = "wiki_revert_manifest";
     public const string CodeNoPreimages = "wiki_revert_no_preimages";
+    /// <summary>Нет записи состояния применения (пакет заведён до меры ревью S4b-3, или её файл
+    /// не читается): отката нет, и по текущему манифесту он не делается.</summary>
+    public const string CodeNoApplied = "wiki_revert_no_applied";
     public const string CodeChanged = "wiki_revert_changed";
     public const string CodeInternal = "wiki_revert_internal";
 
     // Значение поля op строки журнала (мера 6): та же форма, что op=apply у применения и op=adopt
     // у Хранителя; по нему «Журнал» отличает откат от прочих операций.
     private const string LogOpRevert = "revert";
+
+    // Тот же путь журнала, что у WikiManifest (его константа закрытая): строки отката ищутся там
+    // же, где они пишутся.
+    private const string LogRelPath = "keeper/log.jsonl";
 
     private readonly NotesService _notes;
     private readonly WikiKeeper _keeper;
@@ -69,10 +92,13 @@ public sealed class WikiPackageRevert
         IReadOnlyList<string> RestoredPages);
 
     /// <summary>Откатить пакет по его идентификатору: состояние читается с диска под id, а не со слов
-    /// вызывающего (урок S4b-1). Откатывается только пакет в «applied»: «applying» закрывает сторож
-    /// старта, «apply_failed» уже откатан, rejected/stale до диска не дошли, «reverted» отказан
-    /// повторным. Под блокировкой раздела (тот же замок, что у записи и у сторожа): откат не пишет
-    /// параллельно с применением этого раздела и не берёт второй блокировки того же ключа.</summary>
+    /// вызывающего (урок S4b-1). Здесь, до блока, читается только его раздел: без него нечем взять
+    /// замок раздела; статус и всё остальное состояние перечитываются ВНУТРИ блока — там, где
+    /// решается исход (ревью S4b-3, MAJOR 2). Откатывается только пакет в «applied»: «applying»
+    /// закрывает сторож старта, «apply_failed» уже откатан, rejected/stale до диска не дошли,
+    /// «reverted» отказан повторным. Под блокировкой раздела (тот же замок, что у записи и у
+    /// сторожа): откат не пишет параллельно с применением этого раздела и не берёт второй
+    /// блокировки того же ключа.</summary>
     public async Task<RevertResult> RevertAsync(string ownerId, string? packageId)
     {
         // Fail-closed входа (уроки S4a/S4b): отказ с причиной, не NRE.
@@ -89,6 +115,34 @@ public sealed class WikiPackageRevert
             return Fail(CodeClaim, "пакета нет на диске: откатывать нечего");
         if (read.State == WikiPackageFileState.Invalid)
             return Fail(CodeShape, "файл пакета не читается как пакет v:1");
+
+        return await _keeper.WithSectionsLockedAsync(ownerId, [read.Package!.Section],
+            () => Task.FromResult(RevertUnderLock(ownerId, root, packageId)));
+    }
+
+    private RevertResult RevertUnderLock(string ownerId, string root, string packageId)
+    {
+        try
+        {
+            return RevertBody(ownerId, root, packageId);
+        }
+        catch (Exception ex)
+        {
+            // Любой неожиданный сбой — результат-отказ с причиной, не исключение вызывающему
+            // (тот же контракт, что у применения).
+            return Fail(CodeInternal, $"внутренний сбой отката: {ex.Message}");
+        }
+    }
+
+    private RevertResult RevertBody(string ownerId, string root, string packageId)
+    {
+        // Состояние пакета — перечитанное под блоком (ревью S4b-3, MAJOR 2): прочитанное до него
+        // к моменту решения уже мог изменить другой откат этого же пакета.
+        var read = WikiPackageStore.TryRead(root, packageId);
+        if (read.State == WikiPackageFileState.Missing)
+            return Fail(CodeClaim, "пакета нет на диске: откатывать нечего");
+        if (read.State == WikiPackageFileState.Invalid)
+            return Fail(CodeShape, "файл пакета не читается как пакет v:1");
         var package = read.Package!;
 
         // Откатывают только применённый пакет: «applying» закрывает сторож старта, «apply_failed»
@@ -99,26 +153,6 @@ public sealed class WikiPackageRevert
         if (package.Status != WikiPackage.StatusApplied)
             return Fail(CodeStatus, $"пакет в «{package.Status}»: откатывают только применённый пакет");
 
-        return await _keeper.WithSectionsLockedAsync(ownerId, [package.Section],
-            () => Task.FromResult(RevertUnderLock(ownerId, root, package)));
-    }
-
-    private RevertResult RevertUnderLock(string ownerId, string root, WikiPackage package)
-    {
-        try
-        {
-            return RevertBody(ownerId, root, package);
-        }
-        catch (Exception ex)
-        {
-            // Любой неожиданный сбой — результат-отказ с причиной, не исключение вызывающему
-            // (тот же контракт, что у применения).
-            return Fail(CodeInternal, $"внутренний сбой отката: {ex.Message}");
-        }
-    }
-
-    private RevertResult RevertBody(string ownerId, string root, WikiPackage package)
-    {
         var preimagesDir = SafePath.Join(root, WikiApplyService.PreimagesRel(package.Id));
         if (!Directory.Exists(preimagesDir))
             return Fail(CodeNoPreimages, "прообразов пакета на диске нет: откатывать нечего");
@@ -134,14 +168,23 @@ public sealed class WikiPackageRevert
         if (pages.Count == 0)
             return Fail(CodeNoPreimages, "прообразы пакета пусты: откатывать нечего");
 
+        // Запись состояния применения этого пакета (ревью S4b-3, MAJOR 1): без неё сверки нет и
+        // отката нет — сверять с текущим манифестом значило бы молча допустить, что после этого
+        // пакета страницу никто не трогал.
+        var applied = TryReadAppliedRecord(root, package.Id);
+        if (applied is null)
+            return Fail(CodeNoApplied,
+                "нет записи состояния применения этого пакета: откат по текущему манифесту не делается — " +
+                "манифест описывает последнее состояние страницы, а не состояние на момент этого применения");
+
         var mres = WikiManifest.TryRead(root, package.Section);
         if (mres.State == WikiManifestState.Invalid)
             return Fail(CodeManifest, $"манифест раздела «{package.Section}» невалиден: сверку с диском провести нельзя");
-        var manifest = mres.Manifest;
 
         // Фаза 1 — только чтения: сверка хэшей и байты прообразов. На диске здесь не трогается
         // ничего: отказ на этой фазе — всегда отказ «на диске не тронуто ничего».
         var changed = new List<string>();
+        var already = new HashSet<string>(StringComparer.Ordinal);
         var preimageBytes = new Dictionary<string, byte[]>(pages.Count, StringComparer.Ordinal);
         foreach (var page in pages)
         {
@@ -156,18 +199,33 @@ public sealed class WikiPackageRevert
             {
                 return Fail(CodeInternal, $"не читается прообраз или страница «{page}»: {ex.Message}");
             }
-            // Тот же хэш, что у манифеста и применения (sha256 байтов). Страница, которой нет ни на
-            // диске, ни в манифесте, — согласована (её убрали вместе с записью: возвращать нечего);
-            // на диске без записи — изменённая: её состояние манифест не описывает.
+            if (!applied.TryGetValue(page, out var appliedHash))
+                return Fail(CodeNoApplied, $"запись состояния применения не полна: для страницы «{page}» записи нет");
+
+            // Тот же хэш, что у манифеста и применения (sha256 байтов), — им же записана и запись
+            // состояния применения. Равен ей — страница в том состоянии, которое оставил этот пакет,
+            // и она откатывается.
             var diskHash = disk is null ? null : WikiApplyService.Sha256OfBytes(disk);
-            var recorded = manifest.TryGetValue(page, out var h) ? h : null;
-            if (diskHash != recorded)
-                changed.Add(page);
+            if (diskHash == appliedHash)
+                continue;
+            // На диске уже стоит состояние «до пакета»: его вернул этот откат в витке, который не
+            // довел статус (или остановился на середине). Файл не перечитываем — возвращать нечего;
+            // доводятся статус и запись манифеста.
+            var beforeHash = preimageBytes[page].Length == 0 ? null : WikiApplyService.Sha256OfBytes(preimageBytes[page]);
+            if (diskHash == beforeHash)
+            {
+                already.Add(page);
+                continue;
+            }
+            // Ни применённого состояния, ни прежнего: страницу меняли после этого пакета — более
+            // поздний пакет или правка мимо Хранителя. Откат стёр бы её вместе с пакетом.
+            changed.Add(page);
         }
         if (changed.Count > 0)
             return new RevertResult(false, CodeChanged,
-                $"страницы изменены после применения (диск не совпадает с манифестом): {string.Join(", ", changed)}. " +
-                "Отказ: откат стёр бы чужую правку; на диске не тронуто ничего",
+                $"страницы изменены после применения этого пакета (диск не совпадает с его записью состояния применения): " +
+                $"{string.Join(", ", changed)}. Отказ: откат стёр бы чужую правку или запись более позднего пакета; " +
+                "на диске не тронуто ничего",
                 changed, []);
 
         // Фаза 2 — возврат. Байты — прообразов; пустой прообраз = страницы не было (create): её файл
@@ -185,6 +243,14 @@ public sealed class WikiPackageRevert
             {
                 var bytes = preimageBytes[page];
                 var full = SafePath.Join(root, "pages/" + page);
+                if (already.Contains(page))
+                {
+                    // Файл уже в состоянии «до пакета»: его не перечитываем (молчаливой перезаписи
+                    // нет), но его запись манифеста обязана быть тем же хэшем, что файл.
+                    restored.Add(page);
+                    rollback[page] = bytes.Length == 0 ? null : WikiApplyService.Sha256OfBytes(bytes);
+                    continue;
+                }
                 if (bytes.Length == 0)
                 {
                     // Файла нет и сейчас: этой записи до диска не дошло — возвращать нечего,
@@ -243,7 +309,11 @@ public sealed class WikiPackageRevert
         // Журнал — перед проекциями (порядок шага 6): _log.md — производная от log.jsonl.
         // Actor — «user»: откат — кнопка человека (тот же автор, что у ручного adopt); источник —
         // карточки источника пакета: по ним «Журнал» связывает пакет и источник (мера 5).
-        WikiManifest.AppendLog(root, LogOpRevert, package.Section, restored, SourceOf(package), "user");
+        // Ровно одна строка op=revert на один фактический откат (ревью S4b-3, MAJOR 2): виток,
+        // который не довел статус, журнал не дописывает — следующий вызов доводит статус и
+        // оставляет строку как есть.
+        if (!RevertAlreadyLogged(root, package, pages))
+            WikiManifest.AppendLog(root, LogOpRevert, package.Section, restored, SourceOf(package), "user");
         WikiProjections.RegenerateSection(root, package.Section);
 
         // Статус — через Transition стора, единственную дверь в статусы: «applied» → «reverted»,
@@ -256,10 +326,10 @@ public sealed class WikiPackageRevert
 
         if (!done.Ok)
             // Файлы откатаны и строка журнала записана, но статус не доведён: состояние со следом
-            // и открыто для доводки — следующий вызов отката пройдёт сверку (файлы согласованы с
-            // манифестом) и доведёт переход. Обратный порядок — «заявка перехода, затем откат» —
-            // необратим: «reverted» → «applied» в таблице нет. Исход назван вызывающему, а не
-            // молчание (минор 4, ревью S4b-1).
+            // и открыто для доводки — следующий вызов перечитает статус под блоком, увидит страницы
+            // в состоянии «до пакета» и доведёт переход, не дописывая журнал второй раз. Обратный
+            // порядок — «заявка перехода, затем откат» — необратим: «reverted» → «applied» в таблице
+            // нет. Исход назван вызывающему, а не молчание (минор 4, ревью S4b-1).
             return new RevertResult(false, CodeClaim,
                 $"файлы откатаны, статус «reverted» не записан: {done.Reason ?? done.Code}",
                 [], restored);
@@ -271,6 +341,74 @@ public sealed class WikiPackageRevert
     /// строки применения): по ним «Журнал» и откат по источнику (мера 5) связывают пакет и его чат.</summary>
     private static string SourceOf(WikiPackage package) =>
         string.Join(", ", package.Sources.Select(s => s.Ref));
+
+    /// <summary>Прочитать запись состояния применения пакета: страница → sha256 тех байтов, которые
+    /// записал этот пакет (пишет её шаг 6 применения — WikiApplyService.AppliedRecordRel). Нет
+    /// файла или не читается — null: отката нет (fail-closed), а не откат по манифесту.</summary>
+    private static IReadOnlyDictionary<string, string>? TryReadAppliedRecord(string root, string packageId)
+    {
+        var full = SafePath.Join(root, WikiApplyService.AppliedRecordRel(packageId));
+        if (!File.Exists(full))
+            return null;
+        try
+        {
+            var map = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(full));
+            if (map is not null)
+                return map;
+        }
+        catch (JsonException)
+        {
+            // Битая запись — тот же исход, что её отсутствие: состояние применения неизвестно.
+        }
+        return null;
+    }
+
+    /// <summary>Строка op=revert этого пакета в журнале уже есть (ревью S4b-3, MAJOR 2): виток,
+    /// не доведший статус, не дописывает её второй раз. Строка журнала не несёт id пакета — совпадение
+    /// по тем полям, которые откат и записывает: op, раздел, карточка источника, автор и полный
+    /// набор страниц этого пакета. Два разных пакета с идентичным источником и идентичным набором
+    /// страниц дают для человека идентичную строку: второй строки тот же откат не требует.</summary>
+    private static bool RevertAlreadyLogged(string root, WikiPackage package, IReadOnlyList<string> pages)
+    {
+        var full = SafePath.Join(root, LogRelPath);
+        if (!File.Exists(full))
+            return false;
+        var source = SourceOf(package);
+        try
+        {
+            foreach (var line in File.ReadLines(full))
+            {
+                if (line.Length == 0)
+                    continue;
+                JsonElement el;
+                try
+                {
+                    el = JsonDocument.Parse(line).RootElement;
+                }
+                catch (JsonException)
+                {
+                    continue; // битая строка журнала — не признак отката
+                }
+                if (Str(el, "op") != LogOpRevert || Str(el, "section") != package.Section
+                    || Str(el, "actor") != "user" || Str(el, "source") != source)
+                    continue;
+                if (!el.TryGetProperty("pages", out var logged) || logged.ValueKind != JsonValueKind.Array)
+                    continue;
+                var keys = new HashSet<string>(logged.EnumerateArray().Select(x => x.GetString() ?? ""), StringComparer.Ordinal);
+                if (pages.All(p => keys.Contains(p)))
+                    return true;
+            }
+        }
+        catch (IOException)
+        {
+            // Журнал не читается: считаем, что строки нет; её запись тогда тоже не удастся —
+            // тот же отказ с причиной, а не молчаливая потеря строки отката.
+        }
+        return false;
+    }
+
+    private static string? Str(JsonElement el, string name) =>
+        el.TryGetProperty(name, out var v) ? v.GetString() : null;
 
     /// <summary>Срок хранения прообразов: между бэкапами откат держат они (ADR-035, решение 13);
     /// после него — мусор, который чистит сторож старта.</summary>

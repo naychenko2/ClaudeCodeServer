@@ -256,6 +256,28 @@ public class WikiRevertTests : IDisposable
         return (read.Package!.Status, read.Package!.StatusReason);
     }
 
+    private string AppliedRecordOf(string packageId) =>
+        Path.Combine(WikiPaths.Keeper(_dir, User), "applied", packageId + ".json");
+
+    // Состояние после сорванного Transition: вернуть статусу его прежнее значение на диске —
+    // тем же форматом, каким его пишет стор (camelCase + relaxed escaping): иначе TryRead файл
+    // не прочитает и тест проверял бы не доводку, а нечитаемый файл пакета.
+    private void SetStatusOnDisk(string id, string status)
+    {
+        var read = WikiPackageStore.TryRead(Root, id);
+        read.State.Should().Be(WikiPackageFileState.Valid);
+        var pkg = read.Package!;
+        var opts = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        };
+        File.WriteAllText(
+            Path.Combine(WikiPaths.Keeper(_dir, User), "packages", id + ".json"),
+            JsonSerializer.Serialize(pkg with { Status = status }, opts),
+            new UTF8Encoding(false));
+    }
+
     // ─── 1. Откат без чужих правок: байт в байт, журнал, манифест, второй Prepare (c1) ───
 
     [Fact]
@@ -445,6 +467,157 @@ public class WikiRevertTests : IDisposable
         r3.Code.Should().Be(WikiPackageRevert.CodeClaim);
 
         SnapshotPages().Should().Equal(before, "отказ — это отказ: файлов не тронуто");
+    }
+
+    // ─── 4b. Ревью S4b-3, MAJOR 1: сверка — с состоянием на момент применения этого пакета,
+    //        а не с текущим манифестом (c1, c3) ────────────────────────────────────────────────
+
+    [Fact]
+    public async Task ОткатРаннегоПакетаПослеПозднегоНаТуЖеСтраницу_ОтказСПеречнем_ЗаписьПозднегоЦела()
+    {
+        // Мутация «сверка с текущим манифестом» (в фазе 1 вместо applied-записи пакета брать
+        // запись манифеста): после B диск == манифест (оба «после B») → отказа нет → на диск лёг
+        // бы прообраз A, правка B исчезла бы без следа: краснеют Reverted, Code и ChangedPages.
+        await WriteCardAndPage();
+        var a = CreateAccepted(Op(WikiPackage.OpAppend, PagePath, "Контенер собран на второй машине"));
+        var appliedA = await _sut.ApplyAsync(User, a, Ctx);
+        appliedA.Applied.Should().BeTrue(appliedA.Reason);
+        var afterA = File.ReadAllText(PageFull(PagePath));
+
+        var b = CreateAccepted(Op(WikiPackage.OpAppend, PagePath, "Решение: перенести сборку на Linux"));
+        var appliedB = await _sut.ApplyAsync(User, b, Ctx);
+        appliedB.Applied.Should().BeTrue(appliedB.Reason);
+        var afterB = SnapshotPages();
+        var contentAfterB = File.ReadAllText(PageFull(PagePath));
+
+        var r = await _revert.RevertAsync(User, a.Id);
+
+        r.Reverted.Should().BeFalse(r.Reason);
+        r.Code.Should().Be(WikiPackageRevert.CodeChanged);
+        r.ChangedPages.Should().Equal(new[] { PagePath }, "перечень — ровно страница, которую менял более поздний пакет");
+        r.Reason.Should().Contain(PagePath);
+
+        // Инвариант: откат раннего пакета не трогает более поздние записи той же страницы.
+        SnapshotPages().Should().Equal(afterB, "отказ — это отказ: на диске не тронуто ничего");
+        File.ReadAllText(PageFull(PagePath)).Should().Be(contentAfterB, "содержимое более позднего пакета цело");
+        LogLines().Should().NotContain(l => l.Contains("\"op\":\"revert\""));
+        ReadStatus(a.Id).Item1.Should().Be(WikiPackage.StatusApplied);
+
+        // Откат позднего пакета при этом возможен: его состояние применения — то, что на диске,
+        // и возвращается ровно то, что записал он.
+        var rb = await _revert.RevertAsync(User, b.Id);
+        rb.Reverted.Should().BeTrue(rb.Reason);
+        File.ReadAllText(PageFull(PagePath)).Should().Be(afterA, "откат возвращает ровно то, что записал этот пакет");
+    }
+
+    [Fact]
+    public async Task ОткатПакетаБезЗаписиСостоянияПрименения_ЧестныйОтказ_ДискНеТронут()
+    {
+        // Пакет, заведённый до меры ревью S4b-3: прообразы есть, записи состояния применения нет.
+        // Честный отказ (fail-closed), а не откат по манифесту: «похоже, после него никто не трогал»
+        // — молчаливое допущение, а не сверка.
+        await WriteCardAndPage();
+        var pkg = CreateAccepted(Op(WikiPackage.OpAppend, PagePath, "Контенер собран на второй машине"));
+        var applied = await _sut.ApplyAsync(User, pkg, Ctx);
+        applied.Applied.Should().BeTrue(applied.Reason);
+
+        // Запись состояния применения пишет применение, и она — о записанных байтах (c3).
+        var recordPath = AppliedRecordOf(pkg.Id);
+        File.Exists(recordPath).Should().BeTrue("применение записывает состояние применения рядом с прообразами");
+        var record = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(recordPath));
+        record![PagePath].Should().Be(Sha256Of(File.ReadAllBytes(PageFull(PagePath))),
+            "запись — хэш тех байтов, которые записал этот пакет");
+        File.Delete(recordPath);
+        var before = SnapshotPages();
+
+        var r = await _revert.RevertAsync(User, pkg.Id);
+
+        r.Reverted.Should().BeFalse();
+        r.Code.Should().Be(WikiPackageRevert.CodeNoApplied);
+        r.Reason.Should().Contain("состояния применения");
+        SnapshotPages().Should().Equal(before, "отказ — это отказ: файлов не тронуто");
+        LogLines().Should().NotContain(l => l.Contains("\"op\":\"revert\""));
+        ReadStatus(pkg.Id).Item1.Should().Be(WikiPackage.StatusApplied);
+    }
+
+    // ─── 4c. Ревью S4b-3, MAJOR 2: статус проверяется под блоком раздела; ровно одна строка
+    //        op=revert на один фактический откат (c2) ──────────────────────────────────────────
+
+    [Fact]
+    public async Task ДоводкаПослеСорванногоTransition_СтатусДоведён_СтрокаOpRevertОдна()
+    {
+        // Мутация «журнал дописывается всегда» (снять проверку RevertAlreadyLogged): второй вызов
+        // дописывает вторую строку op=revert — Should().Be(1) краснеет.
+        await WriteCardAndPage();
+        var pkg = CreateAccepted(Op(WikiPackage.OpAppend, PagePath, "Контенер собран на второй машине"));
+        var applied = await _sut.ApplyAsync(User, pkg, Ctx);
+        applied.Applied.Should().BeTrue(applied.Reason);
+
+        var first = await _revert.RevertAsync(User, pkg.Id);
+        first.Reverted.Should().BeTrue(first.Reason);
+        var rolled = SnapshotPages();
+        LogLines().Count(l => l.Contains("\"op\":\"revert\"")).Should().Be(1);
+
+        // Состояние после сорванного Transition: файлы откатаны и журнал записан, а статус не
+        // доведён — на диске он всё ещё «applied».
+        SetStatusOnDisk(pkg.Id, WikiPackage.StatusApplied);
+
+        var second = await _revert.RevertAsync(User, pkg.Id);
+
+        second.Reverted.Should().BeTrue(second.Reason);
+        ReadStatus(pkg.Id).Item1.Should().Be(WikiPackage.StatusReverted);
+        // Ровно одна строка op=revert на один фактический откат: доводка журнал не дописывает.
+        LogLines().Count(l => l.Contains("\"op\":\"revert\"")).Should().Be(1);
+        // Файлы и манифест — те же, что после первого витка: доводка трогает только статус.
+        SnapshotPages().Should().Equal(rolled);
+        WikiManifest.TryRead(Root, Section).Manifest[PagePath]
+            .Should().Be(Sha256Of(File.ReadAllBytes(PageFull(PagePath))), "манифест согласован с диском");
+    }
+
+    [Fact]
+    public async Task ДваПараллельныхОткатаОдногоПакета_ОднаСтрокаOpRevert_БезЛожногоОтказаПоСтатусу()
+    {
+        // Мутация «статус проверяется вне блока» (гейт статуса оставить в RevertAsync, в
+        // RevertBody пакет не перечитывать): оба вызова проходят его по «applied» до блока,
+        // второй доходит до Transition(«reverted»→«reverted») и даёт ложный «статус не записан» —
+        // краснеет проверка «ни один вызов не CodeClaim».
+        await WriteCardAndPage();
+        var pkg = CreateAccepted(Op(WikiPackage.OpAppend, PagePath, "Контенер собран на второй машине"));
+        var applied = await _sut.ApplyAsync(User, pkg, Ctx);
+        applied.Applied.Should().BeTrue(applied.Reason);
+
+        // Окно — держатель блокировки раздела тем же механизмом, что сама запись: оба вызова
+        // доходят до входа в неё и стоят там, пока тест её не откроет (Task.Delay в этом файле нет).
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holding = _keeper.WithSectionsLockedAsync(User, [Section], async () =>
+        {
+            started.SetResult();
+            await gate.Task;
+            return true;
+        });
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var first = Task.Run(() => _revert.RevertAsync(User, pkg.Id));
+        var second = Task.Run(() => _revert.RevertAsync(User, pkg.Id));
+        first.IsCompleted.Should().BeFalse("откат ждёт блокировку раздела, как запись");
+        second.IsCompleted.Should().BeFalse("оба вызова стоят на входе в блок — статус проверяется под ним");
+
+        gate.SetResult();
+        var r1 = await first.WaitAsync(TimeSpan.FromSeconds(30));
+        var r2 = await second.WaitAsync(TimeSpan.FromSeconds(30));
+        await holding;
+
+        // Ровно одна строка op=revert на один фактический откат.
+        LogLines().Count(l => l.Contains("\"op\":\"revert\"")).Should().Be(1);
+        // Один откатился, второй отказан по статусу — ни один не даёт ложного «статус не записан»
+        // (CodeClaim): под блоком второй видит уже записанный «reverted».
+        var results = new[] { r1, r2 };
+        results.Count(r => r.Reverted).Should().Be(1);
+        results.Single(r => !r.Reverted).Code.Should().Be(WikiPackageRevert.CodeStatus);
+        ReadStatus(pkg.Id).Item1.Should().Be(WikiPackage.StatusReverted);
+        // Файлы — состояние после единственного отката: байт в байт прообраз.
+        File.ReadAllBytes(PageFull(PagePath)).Should().Equal(File.ReadAllBytes(PreimageOf(pkg.Id, PagePath)));
     }
 
     // ─── 5. REST (c3): чужой пакет — 404, чужой раздел — 403, отказ по хэшам — 409 с перечнем ─

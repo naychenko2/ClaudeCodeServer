@@ -1468,6 +1468,15 @@ public class FeatureProjectorTests
         var pending = FeatureProjector.Build(openEpic, [openEpic, step, final]);
         pending.State.Should().Be(FeatureStates.MergePending);
         pending.Attention!.Kind.Should().Be("merge");
+
+        var mergeTask = new TaskItem
+        {
+            Id = "m1", FeatureId = epicId, Role = TaskRoles.Merge, Status = TaskItemStatus.Done,
+            CompletedAt = new DateTime(2026, 10, 18, 11, 0, 0),
+        };
+        var merged = FeatureProjector.Build(closedEpic, [closedEpic, step, final, mergeTask]);
+        merged.State.Should().Be(FeatureStates.Merged);
+        merged.Attention.Should().BeNull("у смерженной фичи тревоги нет");
     }
 
     // 5. эпик Done + merge Done БЕЗ принятого финала (как ghostcli) ⇒ merged.

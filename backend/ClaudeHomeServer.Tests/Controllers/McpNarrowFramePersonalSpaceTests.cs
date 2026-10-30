@@ -470,6 +470,80 @@ public class McpNarrowFramePersonalSpaceTests : IDisposable
     }
 
     [Fact]
+    public async Task PersonasBindingsSet_УзкаяРамка_ЛичнаяБазаИСфернаяЦель_Отказ_ЦелиПроектаПроходят()
+    {
+        // Дефект 67dcf4c2 (находка ревью R-S2a-5): рамка фильтровала только Global-цель вызова;
+        // SetBindingsAsync применял проектной персоне привязку к личной базе (id, известный из
+        // подсказки) и цели чужих проектов. Якорь — проект чата, тот же, что у knowledge_search
+        // выше: его база и его папка проходят, всё остальное — отказ фиксированным текстом без id
+        var f = await ArrangeAsync();
+        var s = await ArrangeSphereAsync(f);
+        GiveProjectDataset(f.SharedProject, "ds-project-1");
+        await GiveManageModuleAsync(f.ProjectPersona); // вызов обязан дойти до гейта рамки, а не до «модуль выключен»
+
+        // knowledge-цель личной базы
+        var (personal, errPersonal) = await CallAsync($"/mcp/personas/{f.SharedChat}", "personas_bindings_set",
+            new { id = f.ProjectPersona, bindings = new[] { new { type = "knowledge", target = "ds-personal-1" } } },
+            f.SharedChat);
+        errPersonal.Should().BeTrue(personal);
+        personal.Should().Contain("Привязки персоны в общем проекте — только к данным этого проекта");
+        f.AssertNoPersonal(personal);
+
+        // сферная цель: ProjectPersonas с path = id сферной персоны. Прежний путь отвергал её
+        // только валидацией цели («Персона не найдена в этом проекте»); теперь — отказом рамки
+        // с общим текстом (тот же класс, что чужие проекты и personal-цели)
+        var (sphere, errSphere) = await CallAsync($"/mcp/personas/{f.SharedChat}", "personas_bindings_set",
+            new { id = f.ProjectPersona, bindings = new[] { new { type = "projectPersonas", target = s.SharedInSphere, path = s.SpherePersona } } },
+            f.SharedChat);
+        errSphere.Should().BeTrue(sphere);
+        sphere.Should().Contain("не данные этого проекта");
+        f.AssertNoPersonal(sphere);
+
+        // цель вызова — сферная персона: тот же отказ, что у personas_get/bindings_list (дефект:
+        // прежняя проверка знала только Global)
+        var (target, errTarget) = await CallAsync($"/mcp/personas/{f.SharedChat}", "personas_bindings_set",
+            new { id = s.SpherePersona, bindings = Array.Empty<object>() }, f.SharedChat);
+        errTarget.Should().BeTrue(target);
+        target.Should().Contain("Персоны сферы");
+        f.AssertNoPersonal(target);
+
+        // проектные цели — база и папка этого чата проекта: проходят (путь валидации Wide не тронут)
+        var (ok, okErr) = await CallAsync($"/mcp/personas/{f.SharedChat}", "personas_bindings_set",
+            new { id = f.ProjectPersona, bindings = new[]
+            {
+                new { type = "knowledge", target = "ds-project-1", path = (string?)null },
+                new { type = "projectPath", target = f.SharedProject, path = (string?)"docs" },
+            } }, f.SharedChat);
+        okErr.Should().BeFalse(ok);
+        ok.Should().Contain("ds-project-1");
+    }
+
+    [Fact]
+    public async Task PersonasBindingsSet_ЛичныйПроект_ШирокаяРамка_ЛичнаяБазаПроходит()
+    {
+        // Анти-тест: та же цель в личном чате (широкая рамка) применяется — отказывала рамка,
+        // не валидация цели (Wide-путь не тронут)
+        var f = await ArrangeAsync();
+        var (ok, err) = await CallAsync($"/mcp/personas/{f.PersonalChat}", "personas_bindings_set",
+            new { id = f.GlobalPersona, bindings = new[] { new { type = "knowledge", target = "ds-personal-1" } } },
+            f.PersonalChat);
+        err.Should().BeFalse(ok);
+        ok.Should().Contain("ds-personal-1");
+    }
+
+    /// <summary>
+    /// Модуль manage проектной персоне — та же выдача, что делает человек в настройках
+    /// (tool:personas-manage через REST, вне рамки): без неё personas_bindings_set отклоняется
+    /// шагом «модуль manage выключен» и не доходит до гейта рамки.
+    /// </summary>
+    private async Task GiveManageModuleAsync(string personaId)
+    {
+        var resp = await _client.PutAsJsonAsync($"/api/personas/{personaId}/bindings",
+            new { bindings = new[] { new { type = "tool", target = "personas-manage" } } });
+        resp.EnsureSuccessStatusCode();
+    }
+
+    [Fact]
     public async Task PersonasKnowledgeSearch_УзкаяРамка_БазаПроектаОткрыта_ЛичнаяОбщаяИЧужаяРезаны()
     {
         // Ровно то, что шаг закрыл в DifyToolset: в общем чате доступна только база этого

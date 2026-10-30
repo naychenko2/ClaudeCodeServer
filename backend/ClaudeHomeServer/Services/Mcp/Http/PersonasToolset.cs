@@ -263,9 +263,25 @@ public sealed partial class PersonasToolset(
                 var id = StringArg(arguments, "id");
                 if (selfPersonaId is not null && id == selfPersonaId)
                     return Deny("Персона не может менять собственные привязки — попроси об этом пользователя.");
-                if (narrow && personas.Get(id, ownerId) is { } target && target.Scope == PersonaScope.Global)
-                    return Deny(NarrowGlobalText);
-                return Unwrap(await crud.SetBindingsAsync(ownerId, id, BindingRequests(arguments, "bindings")));
+                var bindingRequests = BindingRequests(arguments, "bindings");
+                if (narrow)
+                {
+                    // Цель вызова — те же точки отдачи персоны, что personas_get/bindings_list.
+                    // Прежняя проверка знала только Global (дефект 67dcf4c2, находка R-S2a-5):
+                    // привязки сферной персоны — её личная конфигурация, закрыта вместе с ней
+                    if (personas.Get(id, ownerId) is { } target)
+                    {
+                        if (target.Scope == PersonaScope.Global) return Deny(NarrowGlobalText);
+                        if (PersonaZone.IsSpherePersona(target)) return Deny(NarrowSpherePersonaText);
+                    }
+                    // Цели привязок — только принадлежащие проекту чата (тот же дефект): без проверки
+                    // SetBindingsAsync применял к проектной персоне привязку к личной базе
+                    // (id из подсказки) и другие чужие цели — личное пространство въезжало
+                    // в конфигурацию проектной персоны через дверь, оставленную открытой
+                    if (HasForeignBindingTarget(bindingRequests, session, ownerId))
+                        return Deny(NarrowBindingTargetsText);
+                }
+                return Unwrap(await crud.SetBindingsAsync(ownerId, id, bindingRequests));
             }
 
             case "personas_mcp_list":
@@ -579,6 +595,40 @@ public sealed partial class PersonasToolset(
             ? workspaceKnowledge.GetByPath(SessionManager.EffectiveRoot(session, project.RootPath))?.DifyDatasetId
             : null;
 
+    /// <summary>
+    /// Узкая рамка (дефект 67dcf4c2, находка ревью R-S2a-5): есть ли среди привязок цель,
+    /// не принадлежащая проекту чата. Якорь — тот же, что у knowledge_search выше: проектные
+    /// данные этого чата (файлы/заметки/задачи — его id; база — его Dify-датасет). Всё остальное
+    /// — чужие проекты и их команды, personal-хранилища (личная база Dify, личный vault),
+    /// скиллы/плагины владельца, Tool-ключи (в т.ч. «mcp:» личного реестра) — не цели этого чата.
+    /// Тип не разбирается здесь повторно: неизвестный тип и несуществующую цель уже отвергает
+    /// существующая валидация (PersonasCrudService.ParseBinding / ValidateAsync) — рамка не
+    /// плодит вторую диагностику на тот же случай.
+    /// </summary>
+    private bool HasForeignBindingTarget(List<PersonaBindingRequest> requests, Session session, string ownerId)
+    {
+        var projectDataset = ChatProjectDatasetId(session, ownerId);
+        foreach (var req in requests)
+        {
+            if (!Enum.TryParse<PersonaBindingType>(req.Type?.Trim() ?? "", ignoreCase: true, out var type))
+                continue;
+            var target = req.Target?.Trim() ?? "";
+            var belongsToChatProject = type switch
+            {
+                // Notes.Target — sourceKey: «personal» | projectId (Persona.cs:42-43) — чужой
+                // источник (личный vault) не цель этого чата
+                PersonaBindingType.Project or PersonaBindingType.ProjectPath or PersonaBindingType.ProjectTasks
+                    or PersonaBindingType.Notes => session.ProjectId is { } pid
+                    && string.Equals(target, pid, StringComparison.OrdinalIgnoreCase),
+                PersonaBindingType.Knowledge => projectDataset is { Length: > 0 } ds
+                    && string.Equals(target, ds, StringComparison.OrdinalIgnoreCase),
+                _ => false, // ProjectPersonas (чужие команды, сферные/глобальные персоны), Skill, Tool
+            };
+            if (!belongsToChatProject) return true;
+        }
+        return false;
+    }
+
     // --- Ответы ---
 
     // Тексты отказа узкой рамки — фиксированные, без id и названий из личных данных
@@ -602,6 +652,12 @@ public sealed partial class PersonasToolset(
         "Персоны сферы владельца закрыты в общем проекте: сфера — его личная группировка, "
         + "её полка памяти и память её персон — его личное пространство. Доступны персоны "
         + "этого проекта.";
+
+    private const string NarrowBindingTargetsText =
+        "Привязки персоны в общем проекте — только к данным этого проекта: его файлам и папкам, "
+        + "задачам, заметкам этого проекта и его базе знаний. Другие цели — чужие проекты и их "
+        + "команды, личные базы и vault, скиллы и плагины, ключи инструментов — не данные этого "
+        + "проекта: их ставит человек в своём чате.";
 
     private static McpToolCallResult Text(string text) => new(text);
 

@@ -897,6 +897,7 @@ public class WikiSourceCaptureTests : IDisposable
 
         // Файл карточки потерян, запись в манифесте — осталась.
         var cardFull = SafePath.Join(root, "pages/" + first.CardRelPath!);
+        var lostHash = Sha256OfBytes(File.ReadAllBytes(cardFull));
         File.Delete(cardFull);
         File.Exists(cardFull).Should().BeFalse();
 
@@ -926,6 +927,30 @@ public class WikiSourceCaptureTests : IDisposable
         var prepared = await _apply.PrepareAsync(User, pkg, new WikiApplyService.ApplyContext(
             Path.GetFileNameWithoutExtension(again.CardRelPath!), again.SourceText));
         prepared.Ready.Should().BeTrue($"код {prepared.Code}: {prepared.Reason}");
+
+        // Следующее состояние из вердикта (доработка 2, п.2): повторный захват оборвался
+        // между WikiFileWriter.Write и обновлением записи — «файл с новыми байтами + запись
+        // с хэшем потерянного файла». Состояние строится напрямую: запись возвращается к
+        // хэшу потерянного файла. Мутация «исключение своей карточки только в ветке „нет на
+        // диске“» (вернуть отказ по расхождению хэша без ourCardRel) краснит этот шаг:
+        // захват отказан; без обновления записи красен Prepare ниже (шаг 2 применения видит
+        // протухшую запись).
+        WikiManifest.RollbackTo(root, section, new Dictionary<string, string?> { [again.CardRelPath!] = lostHash });
+
+        var third = await _sut.CaptureNote(User, note.Id);
+        third.Ok.Should().BeTrue(third.Reason);
+        WikiManifest.TryRead(root, section).Manifest[again.CardRelPath!]
+            .Should().Be(Sha256OfBytes(File.ReadAllBytes(cardFull)),
+                "протухшая запись подставлена под байты диска");
+
+        // Второй Prepare — новым пакетом: первый оставил прежний в «applying» (состояние
+        // проверки), а проверяется здесь состояние раздела после обновления записи.
+        var pkg2 = CreateAccepted(section,
+            AppendOp(pageRel, "Мы решили открывать встречу в понедельник",
+                WikiManifest.TryRead(root, section).Manifest[pageRel]));
+        var preparedAgain = await _apply.PrepareAsync(User, pkg2, new WikiApplyService.ApplyContext(
+            Path.GetFileNameWithoutExtension(third.CardRelPath!), third.SourceText));
+        preparedAgain.Ready.Should().BeTrue($"код {preparedAgain.Code}: {preparedAgain.Reason}");
     }
 
     // Отсутствие файла ДРУГОЙ страницы из манифеста — по-прежнему дрейф: исключение
@@ -947,6 +972,44 @@ public class WikiSourceCaptureTests : IDisposable
         r.Reason.Should().Contain("отсутствует на диске");
         Directory.Exists(Path.Combine(WikiPaths.Pages(_dir, User), "Проекты", project.Id, "Источники"))
             .Should().BeFalse("отказ — на диске ничего не пишется");
+    }
+
+    // Исключение в ветке расхождения хэша — только своей карточки: ДРУГАЯ страница в том же
+    // состоянии остаётся дрейфом. Состояние: своя карточка на диске с протухшей записью
+    // (файл переписан, запись — прежних байтов) + чужая правка страницы мимо Хранителя →
+    // отказ с именем чужой страницы, протухшая запись не подставлена: до записи дело не дошло.
+    [Fact]
+    public async Task Захват_протухшаяЗаписьСвоейКарточкиИДрейфЧужойСтраницы_отказПоЧужойБезОбновления()
+    {
+        var project = NewProject("П22");
+        var section = "projects/" + project.Id;
+        var root = WikiPaths.Root(_dir, User);
+        await _keeper.EnsureInitializedAsync(User);
+        var pageRel = $"Проекты/{project.Id}/Страница.md";
+        var w = await _keeper.WritePageAsync(User, section, pageRel, TopicPage("Страница"));
+        w.Status.Should().Be(WikiOpStatus.Applied, w.Reason);
+
+        var note = _notes.Create(User, new CreateNoteRequest("Ритм встреч", "решили открывать в понедельник", project.Id));
+        var first = await _sut.CaptureNote(User, note.Id);
+        first.Ok.Should().BeTrue(first.Reason);
+        var cardFull = SafePath.Join(root, "pages/" + first.CardRelPath!);
+        var staleHash = Sha256OfBytes(File.ReadAllBytes(cardFull));
+
+        // Состояние п.2: файл карточки переписан (новые байты), запись — прежних.
+        File.Delete(cardFull);
+        var restored = await _sut.CaptureNote(User, note.Id);
+        restored.Ok.Should().BeTrue(restored.Reason);
+        WikiManifest.RollbackTo(root, section, new Dictionary<string, string?> { [first.CardRelPath!] = staleHash });
+
+        // И дрейф чужой страницы.
+        File.WriteAllText(SafePath.Join(root, "pages/" + pageRel), TopicPage("Страница") + "\nправка мимо Хранителя\n");
+
+        var r = await _sut.CaptureNote(User, note.Id);
+        r.Ok.Should().BeFalse();
+        r.Reason.Should().Contain("расходится с манифестом").And.Contain(pageRel,
+            "причина — чужая страница: исключение касается только своей карточки");
+        WikiManifest.TryRead(root, section).Manifest[first.CardRelPath!].Should().Be(staleHash,
+            "отказ — ничего не пишется: протухшая запись не подставлена");
     }
 
     private sealed class WikiFlagOn : ClaudeHomeServer.Services.Composition.IFeatureFlagGate

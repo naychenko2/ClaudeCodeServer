@@ -420,8 +420,10 @@ public sealed class WikiChatIngestService
     /// реплики — роли, текста и признаков, которые не дописываются потом. Поля, которые
     /// дописываются ПОСЛЕ создания записи (см. Protocol/StoredMessage.cs: PromptSnapshotId —
     /// при запуске хода, TurnAccumulator.cs:97; Model у текста — backfill'ом по result;
-    /// Result/IsError/… у tool_use — при tool_result; Resolved/Answers — при ответе
-    /// человека), меняют служебное состояние записи, а не то, что в ней сказано: живой чат,
+    /// Input у tool_use — финальным OnToolUse по дедупу ранней карточки из стрима,
+    /// TurnAccumulator.cs:138; Result/IsError/… у tool_use — при tool_result;
+    /// Resolved/Answers — при ответе человека), меняют служебное состояние записи, а не то,
+    /// что в ней сказано: живой чат,
     /// разобранный посреди хода, держал бы курсор на реплике, хэш которой изменился бы без
     /// всякой правки истории, — и следующий разбор видел бы «историю переписали» и звал бы
     /// модель заново на весь чат (дедup гасит повторы, но модель-то зовётся). Удаляются по
@@ -440,12 +442,12 @@ public sealed class WikiChatIngestService
     }
 
     // Служебные поля по типу записи — то, что дописывается после её создания (строки
-    // Protocol/StoredMessage.cs: 45, 117, 277-302, 311-313, 321-322, 325-327, 342-352, 361).
+    // Protocol/StoredMessage.cs: 45, 117, 273-302, 311-313, 321-322, 325-327, 342-352, 361).
     private static readonly Dictionary<string, string[]> ServiceFieldsByKind = new(StringComparer.Ordinal)
     {
         ["user_message"] = ["PromptSnapshotId"],
         ["text"] = ["Model"],
-        ["tool_use"] = ["Result", "IsError", "BgDone", "StartedAt", "FinishedAt", "Started", "Stages", "Totals"],
+        ["tool_use"] = ["Input", "Result", "IsError", "BgDone", "StartedAt", "FinishedAt", "Started", "Stages", "Totals"],
         ["workflow_progress"] = ["IsDone", "Aborted", "Agents"],
         ["ask_question"] = ["Resolved", "Answers"],
         ["plan_review"] = ["Resolved", "Approved", "Feedback"],

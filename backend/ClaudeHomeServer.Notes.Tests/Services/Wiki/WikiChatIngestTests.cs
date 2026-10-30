@@ -303,6 +303,42 @@ public class WikiChatIngestTests : IDisposable
         llm.Calls.Should().HaveCount(2, "модель заново не звалась");
     }
 
+    // Хвост живого чата — часто карточка tool_use: ранняя карточка из стрима (пустой Input)
+    // легла в history.json снапшотом посреди хода (SaveSnapshotAsync, TurnAccumulator.cs:731),
+    // а Input дописывает только финальный OnToolUse (дедуп по id, там же :138). Курсор стоит
+    // на этой записи: хэш не обязан видеть дописывание Input — иначе следующий разбор видел бы
+    // «историю переписали» и звал бы модель заново на весь чат (хвост ревью S6e-2, доработка 2,
+    // п.1). Мутация «Input не в ServiceFieldsByKind["tool_use"]» (убрать его из словаря) краснит
+    // этот тест: хэш меняется, курсор падает в 0, модель зовётся ещё дважды.
+    [Fact]
+    public async Task Курсор_ToolUseInputДописанПослеСнапшота_ПереразбораНет()
+    {
+        AddSession();
+        SetHistory(ChatId, [
+            new StoredSessionStartedMessage("claude", "default"),
+            new StoredUserMessage($"{Claim1}. Хронология: {Marker1}."),
+            new StoredTextMessage("Принято, готовлю план."),
+            new StoredToolUseMessage { Id = "tool-1", Name = "Bash" },
+        ]);
+
+        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1));
+        var sut = Sut(llm);
+
+        var first = await sut.AnalyzeAsync(User, ChatId);
+        first.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, first.Reason);
+        var entry = WikiChatTriageStore.Get(Root).Entries.Single();
+        entry.Cursor.Should().Be(4, "курсор на последней записи — карточке tool_use");
+
+        // Финальный OnToolUse: Input дописан ПОСЛЕ создания записи и после снапшота, лёгшего
+        // в историю. Это служебное состояние записи, а не то, что в ней сказано.
+        ((StoredToolUseMessage)_sessions.History[ChatId][3]).Input = new { command = "dotnet build" };
+
+        var again = await sut.AnalyzeAsync(User, ChatId);
+        again.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected, again.Reason);
+        again.Reason.Should().Contain("новых сообщений нет", "хэш тот же — курсор на месте, чат не переразобрывается");
+        llm.Calls.Should().HaveCount(2, "модель заново не звалась");
+    }
+
     // ── c3a: сбой при применении — курсор на месте, хроники нет ──
 
     [Fact]

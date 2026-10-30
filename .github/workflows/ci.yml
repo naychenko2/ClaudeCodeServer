@@ -258,14 +258,16 @@ jobs:
           # Монолит и «rest» — ставим всем: куда попадёт класс с ffmpeg (монолит) или проект Images.Tests («rest»),
           # решает раскладка по профилю прошлого прогона, до распаковки её не узнать. Пакеты скачала сборка
           # (артефакт ffmpeg-debs) — на шарде это dpkg -i без сети; --force-unsafe-io: раннер одноразовый, fsync
-          # на сотнях файлов только тормозит. Нет артефакта или dpkg не справился — запасной путь через apt
+          # на сотнях файлов только тормозит; --no-triggers: триггеры (man-db, кэши шрифтов и иконок) — самая долгая
+          # часть при 4 vCPU под конкуренцией с распаковкой (прогон 41048814510: 32–37 с против 9–18 с), нужен лишь
+          # ldconfig; что ffmpeg и ffprobe запускаются, проверяем сразу, иначе — запасной путь через apt. Нет артефакта или dpkg не справился — запасной путь через apt
           # (устаревший индекс образа лечит apt update).
           if [ "${{ matrix.kind }}" != llm ]; then
             setsid nohup bash -c 'start=$(date +%s)
               export DEBIAN_FRONTEND=noninteractive
               gh run download "$GITHUB_RUN_ID" -R "$GITHUB_REPOSITORY" -n ffmpeg-debs -D "$RUNNER_TEMP/dl-debs" || echo "артефакта ffmpeg-debs нет"
               debs=$(find "$RUNNER_TEMP/dl-debs" -name "*.deb" 2> /dev/null)
-              if [ -n "$debs" ] && sudo -E dpkg --force-unsafe-io -i $debs; then rc=0
+              if [ -n "$debs" ] && sudo -E dpkg --force-unsafe-io --no-triggers -i $debs && sudo ldconfig && ffmpeg -version > /dev/null && ffprobe -version > /dev/null; then rc=0
               else
                 echo "dpkg -i не вышел или .deb нет — ставим через apt"
                 sudo -E apt-get install -y -qq --no-install-recommends ffmpeg || { sudo -E apt-get update -qq && sudo -E apt-get install -y -qq --no-install-recommends ffmpeg; }

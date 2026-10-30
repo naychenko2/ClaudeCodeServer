@@ -62,6 +62,41 @@ public partial class SessionManagerTests
         AuthorOfMessage(history, "авто от персоны").Should().BeNull("авто-ход с персоной — автора-человека нет");
     }
 
+    // S2a-6d: автор едет и в живой ленте — той же правилом HumanAuthorOf, что и в истории.
+    [Fact]
+    public async Task ЖиваяЛента_СообщениеУчастника_НесётSenderUserId_АгентскаяРеплика_Нет()
+    {
+        var (session, fake) = await RunChatAsync("ma-live", SessionStatus.Active);
+        ClearSent();
+
+        await _sut.SendMessageAsync(session.Id, "живое от участника", [], senderUserId: Участник);
+        EndTurn(session, fake);
+        await _sut.SendMessageAsync(session.Id, "авто от персоны", [], auto: true,
+            senderPersonaId: "p-1", senderUserId: Участник);
+
+        var live = Sent<UserMessageMessage>();
+        live.Single(m => m.Text == "живое от участника").SenderUserId.Should().Be(Участник);
+        live.Single(m => m.Text == "авто от персоны").SenderUserId.Should().BeNull(
+            "реплика с персоной-отправителем — автора-человека нет");
+    }
+
+    [Fact]
+    public async Task Очередь_НесётSenderUserId_УПользовательскогоИНеУАгентского()
+    {
+        var (session, _) = await RunChatAsync("ma-pending", SessionStatus.Active);
+        await _sut.SendMessageAsync(session.Id, "первый ход", [], senderUserId: TestUserId);
+        session.Status = SessionStatus.Working;
+
+        await _sut.SendMessageAsync(session.Id, "в очередь от участника", [], senderUserId: Участник);
+        await _sut.SendMessageAndWaitAsync(session.Id, "в очередь от агента", TimeSpan.Zero,
+            agentDepth: 1, senderUserId: Участник);
+
+        var pending = _sut.GetVisiblePending(session.Id);
+        pending.Single(p => p.Text == "в очередь от участника").SenderUserId.Should().Be(Участник);
+        pending.Single(p => p.Text == "в очередь от агента").SenderUserId.Should().BeNull(
+            "агентская подача: инициатор хода — не автор");
+    }
+
     // Правка плана «Командной реализации» владельцем: текст виден в ленте и лежит в истории
     // под его именем (решение по карточке — не агентская реплика). Идём боевым путём — через
     // хаб: в проде RespondTeamPlanAsync зовёт только он, и передача автора хабом проверяется

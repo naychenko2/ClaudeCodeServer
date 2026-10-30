@@ -79,6 +79,20 @@ public class ProjectMembersControllerTests : IClassFixture<TestWebApplicationFac
     }
 
     [Fact]
+    public async Task ОтзывУчастника_ПападаетВFormerMembers_ВДанныхПроекта()
+    {
+        var owner = Owner(); await SetFlagAsync(owner, true); await SetFlagAsync(Second(), true);
+        var id = await CreateProjectAsync(owner);
+        var secondId = IdOf(TestWebApplicationFactory.SecondUsername);
+        (await AddAsync(owner, id, TestWebApplicationFactory.SecondUsername)).EnsureSuccessStatusCode();
+
+        (await owner.DeleteAsync($"/api/projects/{id}/members/{secondId}")).EnsureSuccessStatusCode();
+
+        var dto = JsonSerializer.Deserialize<JsonElement>(await (await owner.GetAsync($"/api/projects/{id}")).Content.ReadAsStringAsync());
+        dto.GetProperty("formerMembers").EnumerateArray().Should().ContainSingle(f => f.GetProperty("userId").GetString() == secondId);
+    }
+
+    [Fact]
     public async Task Отказ_UserNotFound()
     {
         var owner = Owner(); await SetFlagAsync(owner, true);

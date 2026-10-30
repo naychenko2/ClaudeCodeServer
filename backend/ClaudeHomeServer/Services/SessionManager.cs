@@ -5405,7 +5405,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (!systemDirective)
         {
             var userMsg = new UserMessageMessage(text, attachedPaths.Count > 0 ? attachedPaths : null,
-                senderPersonaId, auto, senderOrigin, StaffNote: staffNote);
+                senderPersonaId, auto, senderOrigin, StaffNote: staffNote,
+                SenderUserId: HumanAuthorOf(senderUserId, agentDepth, senderPersonaId));
             if (!auto && !fromQueue && senderConnectionId is not null)
                 await BroadcastExceptAsync(sessionId, senderConnectionId, userMsg);
             else
@@ -6448,11 +6449,13 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     m.Id, m.Text, m.SenderPersonaId, m.SenderOrigin, m.QueuedAt, m.SenderChatName,
                     m.Route == DeviceWaitMessage.RouteUser ? "user" : "agent",
                     m.AttachedPaths, m.Route == DeviceWaitMessage.RouteUser ? m.Mode : null,
-                    WaitingForDevice: true)),
+                    WaitingForDevice: true,
+                    SenderUserId: m.Route == DeviceWaitMessage.RouteUser ? m.SenderUserId : null)),
                 .. entry.Pending.Where(p => !p.Silent).Select(p => new PendingMessageDto(
                     p.Id, p.Text, p.SenderPersonaId, p.SenderOrigin, p.EnqueuedAt, p.SenderChatName,
                     p.Kind == PendingKind.User ? "user" : "agent",
-                    p.AttachedPaths, p.Kind == PendingKind.User ? p.Mode : null)),
+                    p.AttachedPaths, p.Kind == PendingKind.User ? p.Mode : null,
+                    SenderUserId: p.Kind == PendingKind.User ? p.SenderUserId : null)),
             ];
     }
 

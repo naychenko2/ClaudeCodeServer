@@ -36,9 +36,11 @@ public record TextDeltaMessage(string Text)
 // числом оно уходит в историю, поэтому живая лента и перезагрузка показывают одно и то же.
 // DelegationTaskId — доклад о завершении делегированной задачи (см.
 // StoredUserMessage.DelegationTaskId): связь с задачей структурная, не из текста.
+// SenderUserId — человек-автор реплики (как StoredUserMessage.SenderUserId); у агентских и серверных null.
 public record UserMessageMessage(string Text, IReadOnlyList<string>? AttachedPaths, string? SenderPersonaId, bool Auto,
     string? SenderOrigin = null, string? SenderChatName = null, string? StaffNote = null,
-    long? Timestamp = null, string? DelegationTaskId = null)
+    long? Timestamp = null, string? DelegationTaskId = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SenderUserId = null)
     : ServerMessage("user_message");
 
 // Очередь сообщений занятой сессии — полный снимок при каждом изменении (постановка,
@@ -53,12 +55,14 @@ public record PendingMessagesMessage(IReadOnlyList<PendingMessageDto> Items)
 // Kind — "user" (сообщение человека, ждёт в серверной очереди) или "agent" (chats_send);
 // AttachedPaths/Mode заполнены только у пользовательских — клиент рисует их на карточке
 // и (Mode) применяет при возврате в композер.
+// SenderUserId — человек-автор пользовательского сообщения (у агентских null, в JSON не пишется).
 // WaitingForDevice — сообщение ждёт устройство локального проекта (ADR-016, план §5): лежит
 // на сессии, уйдёт в работу при выходе устройства в онлайн.
 public record PendingMessageDto(string Id, string Text, string? SenderPersonaId,
     string? SenderOrigin, DateTime EnqueuedAt, string? SenderChatName = null,
     string Kind = "agent", IReadOnlyList<string>? AttachedPaths = null, string? Mode = null,
-    bool WaitingForDevice = false);
+    bool WaitingForDevice = false,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SenderUserId = null);
 
 // «Стоп» вернул текст в композер (фича «честная очередь»). Payload null — восстанавливать
 // нечего (прерван авто/агентский ход, пользовательских в очереди не было): клиент просто

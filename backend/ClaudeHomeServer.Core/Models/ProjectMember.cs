@@ -23,3 +23,14 @@ public sealed class ProjectMember
     /// <summary>Кто добавил: приглашает и отзывает только владелец (разрез §2.1) — его id.</summary>
     public string AddedBy { get; set; } = "";
 }
+
+/// <summary>
+/// Бывший участник общего проекта: след для подписи «больше не в проекте» над его сообщениями.
+/// Пишется при отзыве или уходе, имя — последнее известное на этот момент (учётку могут удалить).
+/// </summary>
+public sealed class FormerProjectMember
+{
+    public string UserId { get; set; } = "";
+    public string? DisplayName { get; set; }
+    public DateTime RemovedAt { get; set; } = DateTime.UtcNow;
+}

@@ -194,4 +194,14 @@ public class Project
         get => _members;
         set => _members = value is { Count: 0 } ? null : value;
     }
+
+    // Бывшие участники общего проекта (след отзыва/ухода). Как и Members: пусто — null,
+    // в projects.json не пишется; повторное приглашение убирает человека из списка.
+    private List<FormerProjectMember>? _formerMembers;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<FormerProjectMember>? FormerMembers
+    {
+        get => _formerMembers;
+        set => _formerMembers = value is { Count: 0 } ? null : value;
+    }
 }

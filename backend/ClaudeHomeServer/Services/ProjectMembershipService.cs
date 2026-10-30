@@ -94,6 +94,7 @@ public sealed class ProjectMembershipService(
             {
                 UserId = target.Id, Role = role, AddedAt = DateTime.UtcNow, AddedBy = callerId,
             });
+            project.FormerMembers = project.FormerMembers?.Where(f => f.UserId != target.Id).ToList();
             updated = projects.SetMembers(projectId, members);
         }
         // Список участников обновляется у владельца и существующих участников без перезагрузки
@@ -168,6 +169,14 @@ public sealed class ProjectMembershipService(
             var members = project.Members?.ToList() ?? [];
             if (members.RemoveAll(m => m.UserId == memberUserId) == 0)
                 return new(404, "not_member", "Этот человек не участвует в проекте.");
+            project.FormerMembers = [
+                .. (project.FormerMembers ?? []).Where(f => f.UserId != memberUserId),
+                new FormerProjectMember
+                {
+                    UserId = memberUserId, DisplayName = users.GetById(memberUserId)?.DisplayName,
+                    RemovedAt = DateTime.UtcNow,
+                },
+            ];
             updated = projects.SetMembers(projectId, members);
         }
         // Хаб-следствие отзыва (разрез §2.2): доступ теряется немедленно — без перезагрузки
@@ -253,15 +262,17 @@ public static class ProjectMembersView
     /// <summary>
     /// Сводка для DTO проекта: null у обычного проекта без участников, где вызывающий — владелец.
     /// </summary>
-    public static (object? Members, string? MyRole, string? OwnerUsername, string? OwnerDisplayName) Summary(
+    public static (object? Members, string? MyRole, string? OwnerUsername, string? OwnerDisplayName, object? FormerMembers) Summary(
         Project p, string callerId, UserStore users)
     {
         var role = ProjectAccess.Check(p, callerId);
+        var former = p.FormerMembers is { Count: > 0 } f
+            ? f.Select(m => new { userId = m.UserId, displayName = m.DisplayName }).ToList() : null;
         var shared = p.Members is { Count: > 0 } || role is not (null or ProjectRole.Owner);
-        if (!shared) return (null, null, null, null);
+        if (!shared) return (null, null, null, null, former);
         var owner = users.GetById(p.OwnerId!);
         var members = p.Members ?? [];
         return (new { count = members.Count, first = members.Take(3).Select(m => Person(users, m.UserId)) },
-            role is { } r ? RoleName(r) : null, owner?.Username, owner?.DisplayName);
+            role is { } r ? RoleName(r) : null, owner?.Username, owner?.DisplayName, former);
     }
 }

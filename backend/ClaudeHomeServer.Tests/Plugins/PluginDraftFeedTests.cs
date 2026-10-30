@@ -8,6 +8,7 @@ using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Mcp.Http;
 using ClaudeHomeServer.Services.Plugins;
 using ClaudeHomeServer.Services.Plugins.Mcp;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Moq;
@@ -72,7 +73,10 @@ public class PluginDraftFeedTests : IDisposable
             .Returns((string id) => id == ProjectId
                 ? new Project { Id = id, OwnerId = Owner, DeviceId = null }
                 : null);
-        return new PluginsToolset(accessor.Object, projects.Object, drafts ?? _drafts, flags, config, _feed);
+        // Шов рамки обязателен (fail-closed, R-S2a-3b): стаб с широкой рамкой сохраняет
+        // прежнее поведение этих тестов
+        return new PluginsToolset(accessor.Object, projects.Object, new WideTurnFrame(),
+            drafts ?? _drafts, flags, config, _feed);
     }
 
     private static McpToolCallContext Ctx(string owner = Owner, string? tail = ChatId) =>

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using ClaudeHomeServer.Services.Plugins.Mcp;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Xunit;
 
@@ -132,7 +133,8 @@ public class McpInstructionsLengthGuardTests
     {
         // Instructions — instance-свойство (интерфейс IMcpInstructionalToolset): экземпляр
         // создаём, обязательные зависимости не используем (null!)
-        var toolset = new PluginsToolset(null!, null!);
+        // Шов рамки обязателен (fail-closed, R-S2a-3b); здесь читается только instructions
+        var toolset = new PluginsToolset(null!, null!, new WideTurnFrame());
         var instructions = toolset.Instructions;
         instructions.Should().NotBeNull("справочник шима обязан быть в поле instructions");
         instructions!.Length.Should().BeLessOrEqualTo(MaxInstructionsLength,

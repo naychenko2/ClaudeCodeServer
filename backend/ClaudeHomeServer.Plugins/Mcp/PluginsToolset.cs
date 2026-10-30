@@ -52,19 +52,21 @@ public sealed partial class PluginsToolset : IMcpParameterizedToolset, IMcpInstr
     private readonly IChatFeed? _feed;
     private readonly ILogger<PluginsToolset>? _log;
     // Вердикт рамки хода (S2a-3b, шов из спины ClaudeHomeServer.Services.Access).
-    // Необязательный параметр по образцу _flags/_config: дешёвые юнит-тесты передают null
-    // и рамку не проверяют; на проде DI даёт ITurnFrameSource всегда.
-    private readonly ITurnFrameSource? _frames;
+    // Обязательный параметр, как в четырёх мэйновых тулсетах (R-S2a-3b): прежний nullable
+    // означал fail-open — собранный без шва тулсет молча выключал узкую рамку. Стоит до
+    // опциональных зависимостей (требовательный параметр после опциональных в C# запрещён);
+    // тестовые фабрики передают стаб с широкой рамкой
+    private readonly ITurnFrameSource _frames;
 
     public PluginsToolset(
         IMcpSessionAccessor sessions,
         IProjectManager projects,
+        ITurnFrameSource frames,
         PluginDraftService? drafts = null,
         IFeatureFlagGate? flags = null,
         IConfiguration? config = null,
         IChatFeed? feed = null,
-        ILogger<PluginsToolset>? log = null,
-        ITurnFrameSource? frames = null)
+        ILogger<PluginsToolset>? log = null)
     {
         _sessions = sessions;
         _projects = projects;
@@ -94,7 +96,7 @@ public sealed partial class PluginsToolset : IMcpParameterizedToolset, IMcpInstr
         // только его решения (шаг 4.3). Весь сервер черновиков закрыт в общем чате всем,
         // включая владельца. Отказ стоит ДО гейтов подсистемы и флагов: в общем проекте
         // причина отказа — рамка, а не конфигурация аккаунта.
-        var frame = _frames?.Frame(context.CallerSessionId, context.OwnerId);
+        var frame = _frames.Frame(context.CallerSessionId, context.OwnerId);
         if (frame == TurnFrameKind.Narrow)
             return Deny(
                 "Плагины закрыты в общем проекте: черновики, установка и права плагина — "

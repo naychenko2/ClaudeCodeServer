@@ -20,10 +20,10 @@ public sealed class HiggsfieldToolset : IMcpParameterizedToolset
     private readonly SessionManager sessions;
     private readonly Mcp.McpStatusStore? mcpStatus;
     private readonly ILogger<HiggsfieldToolset> log;
-    // Вердикт рамки хода (S2a-3b). Необязательный параметр по образцу mcpStatus: дешёвые
-    // юнит-тесты конструктора передают null и рамку не проверяют; на проде DI даёт
-    // ITurnFrameSource всегда (registration в Program.cs), и вызовы идут через рамку.
-    private readonly ClaudeHomeServer.Services.Access.ITurnFrameSource? frames;
+    // Вердикт рамки хода (S2a-3b). Обязательный шов, как в четырёх остальных тулсетах
+    // (R-S2a-3b): прежний nullable означал fail-open — собранный без шва тулсет молча
+    // выключал узкую рамку. Тестовые фабрики передают стаб с широкой рамкой
+    private readonly ClaudeHomeServer.Services.Access.ITurnFrameSource frames;
 
     public HiggsfieldToolset(
         HiggsfieldOAuthService higgsfield,
@@ -32,7 +32,7 @@ public sealed class HiggsfieldToolset : IMcpParameterizedToolset
         IConfiguration config,
         Mcp.McpStatusStore? mcpStatus,
         ILogger<HiggsfieldToolset> log,
-        ClaudeHomeServer.Services.Access.ITurnFrameSource? frames = null)
+        ClaudeHomeServer.Services.Access.ITurnFrameSource frames)
     {
         this.higgsfield = higgsfield;
         this.clientFactory = clientFactory;
@@ -226,7 +226,7 @@ public sealed class HiggsfieldToolset : IMcpParameterizedToolset
         // всем, включая владельца. Остаётся models_explore: публичный справочник моделей,
         // не читает аккаунт и не тратит деньги. Отказ стоит ДО проверки токена: в общем
         // проекте причина отказа — рамка, а не состояние подключения.
-        var frame = frames?.Frame(context.CallerSessionId, context.OwnerId);
+        var frame = frames.Frame(context.CallerSessionId, context.OwnerId);
         if (frame == ClaudeHomeServer.Services.Access.TurnFrameKind.Narrow
             && tool != "models_explore")
             return Deny(NarrowAccountText);

@@ -11,6 +11,7 @@ public partial class SessionManagerTests
 {
     private const string Участник = "u-participant";
     private const string ДругойУчастник = "u-participant-2";
+    private const string ТретийУчастник = "u-participant-3";
 
     private void NoteActor(string sessionId, string? actor, bool fromHuman)
     {
@@ -241,6 +242,49 @@ public partial class SessionManagerTests
         _sut.IsOwnerOrTurnAuthor(session.Id, Участник).Should().BeTrue("автор хода");
         _sut.IsOwnerOrTurnAuthor(session.Id, ДругойУчастник).Should().BeFalse("чужой ход не его");
         _sut.IsOwnerOrTurnAuthor("нет-такого", Участник).Should().BeFalse();
+    }
+
+    // Конкурентность (S2a-10b): две одновременные подачи от разных участников и попытка остановки
+    // третьим. Авторство читается из реестра под тем же PendingLock, под которым пишется подача
+    // (NoteTurnActor / GetTurnActor), — поэтому третий участник не становится автором чужого хода
+    // ни в один момент гонки, а автор идущего хода и владелец остаются. Без Task.Delay: подачи
+    // стартуют по одному сигналу TaskCompletionSource.
+    [Fact]
+    public async Task ГонкаДвухПодач_ОстановкаТретьимОтказана_АвторИВладелецПроходят()
+    {
+        var (session, _) = await RunChatAsync("ta-stop-race", SessionStatus.Active);
+        await _sut.SendMessageAsync(session.Id, "ход первого", [], senderUserId: Участник);
+        session.Status = SessionStatus.Working; // ход первого в полёте
+
+        var stopReading = 0;
+        var thirdWasAuthor = 0;
+        var third = Task.Run(() =>
+        {
+            while (Volatile.Read(ref stopReading) == 0)
+                if (_sut.IsOwnerOrTurnAuthor(session.Id, ТретийУчастник)) Interlocked.Increment(ref thirdWasAuthor);
+        });
+
+        var start = new TaskCompletionSource();
+        var senders = new[] { Участник, ДругойУчастник };
+        var sends = Enumerable.Range(0, 8).Select(i => Task.Run(async () =>
+        {
+            await start.Task;
+            await _sut.SendMessageAsync(session.Id, $"сообщение {i}", [], senderUserId: senders[i % 2]);
+        })).ToArray();
+        start.SetResult();
+        await Task.WhenAll(sends);
+        Volatile.Write(ref stopReading, 1);
+        await third;
+
+        thirdWasAuthor.Should().Be(0, "третий участник ни в один момент гонки не был автором чужого хода");
+
+        _sut.GetPending(session.Id).Should().HaveCount(8, "ни одна подача гонки не потеряна");
+        _sut.GetTurnActor(session.Id, TestUserId).Should().Be(Участник, "идущий ход остался за его автором");
+        _sut.IsOwnerOrTurnAuthor(session.Id, Участник).Should().BeTrue("автор идущего хода");
+        _sut.IsOwnerOrTurnAuthor(session.Id, ДругойУчастник).Should().BeFalse(
+            "сообщение в очереди не делает человека автором чужого хода");
+        _sut.IsOwnerOrTurnAuthor(session.Id, ТретийУчастник).Should().BeFalse("ни подачи, ни членства — отказ");
+        _sut.IsOwnerOrTurnAuthor(session.Id, TestUserId).Should().BeTrue("владелец останавливает любой ход");
     }
 
     [Fact]

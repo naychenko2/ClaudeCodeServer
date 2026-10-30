@@ -35,6 +35,16 @@
 # 0→8 — файл стал точкой доступа (ProjectScopeAttribute.ErrorCode в отказе), его id вызывающего — проверки
 # права на чат (DenyTurn*, GetAccessible, GetOwned), актор хода и отправитель очереди; ключ чата для
 # отправки берётся арендатором (ResolveOwnerId), а не вызывающим. Ключом хранилищ ничто не служит.
+# S2a-10b: TurnRightExtensions остаётся 6 — «автор или владелец» для перебоя и отказ по праву
+# владельца для настроек идут теми же тремя уровнями: id вызывающего входит только в GetAccessible
+# (404/403), IsOwnerOrTurnAuthor и GetWithRight, новых мест не появилось. SessionsController 8→9 —
+# смена модели и усилия чата общего проекта идёт тем же гейтом владельца, что режим прав и
+# провайдер (DenyOwnerTurn): id вызывающего
+# только в проверке права, ключом хранилищ не служит. SessionMessagesController — вне снимка:
+# отказ «not_sender» больше не цитирует ProjectScopeAttribute, и по маркеру сторожа файл перестаёт
+# точкой доступа (как ChatsController, который в ней никогда не был). Все его id вызывающего — те же
+# проверки права через TurnRightExtensions/SessionManager (в снимке); ключ хранилищ — ResolveOwnerId.
+# Расширять маркер на файлы, решающие право через эти helper'ы, — решение не этого шага.
 backend/ClaudeHomeServer.Architecture/Controllers/ArchitectureController.cs|2
 backend/ClaudeHomeServer.AudioEditor/Controllers/AudioEditScopeGate.cs|3
 backend/ClaudeHomeServer.ImageEditor/Controllers/ImageEditScopeGate.cs|3
@@ -51,8 +61,7 @@ backend/ClaudeHomeServer/Controllers/PreviewController.cs|12
 backend/ClaudeHomeServer/Controllers/ProjectMapController.cs|1
 backend/ClaudeHomeServer/Controllers/ProjectMembersController.cs|6
 backend/ClaudeHomeServer/Controllers/ProjectsController.cs|14
-backend/ClaudeHomeServer/Controllers/SessionMessagesController.cs|8
-backend/ClaudeHomeServer/Controllers/SessionsController.cs|8
+backend/ClaudeHomeServer/Controllers/SessionsController.cs|9
 backend/ClaudeHomeServer/Controllers/SkillsController.cs|10
 backend/ClaudeHomeServer/Controllers/TasksController.cs|81
 backend/ClaudeHomeServer/Controllers/TurnRightExtensions.cs|6

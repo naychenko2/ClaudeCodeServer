@@ -86,6 +86,13 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     {
         var session = sessions.GetById(sessionId);
         if (session == null || session.ProjectId != projectId) return NotFound();
+        // Модель и её настройки (effort) — выбор владельца чата (S2a-10b): тот же гейт, что у режима
+        // прав и провайдера (DenyOwnerTurn → 403 owner_settings), отдельного гейта «на модель» нет.
+        // Порядок до проверки авторства важен: запрос с моделью отвечает о более узком праве, чем
+        // запрос о переименовании. Явная очистка модели (null в теле) от отсутствия поля не
+        // различима в контракте — она остаётся на авторском отказе ниже.
+        if ((req.Model is not null || req.Effort is not null) && sessions.DenyOwnerTurn(sessionId, UserId) is { } denied)
+            return denied;
         if (sessions.GetOwned(sessionId, UserId) is null) return ChatAuthorGate.Denied();
         if (req.NotificationsMuted is bool muted) sessions.SetNotificationsMuted(sessionId, muted);
         // Хотя бы одно из двух — см. тот же блок в ChatsController.Update

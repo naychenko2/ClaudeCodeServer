@@ -275,18 +275,24 @@ public class SessionMessagesController(SessionManager sessions, SessionMessaging
         }));
     }
 
-    // DELETE /api/sessions/{sid}/pending/{messageId} — снять сообщение из очереди
+    // Машинный код «не отправитель» (S2a-10b): единственный адресат отказа «не доставлять».
+    private const string NotSenderCode = "not_sender";
+
+    // DELETE /api/sessions/{sid}/pending/{messageId} — «не доставлять» сообщение из очереди
     // (крестик на карточке-призраке). 404 — уже доставлено или отменено.
     [HttpDelete("pending/{messageId}")]
     public async Task<IActionResult> CancelPending(string sessionId, string messageId)
     {
-        // Снять сообщение из очереди — владелец или тот, кто его поставил (S2a-10): чужое сообщение
-        // участник не отменяет
-        if (sessions.DenyTurn(sessionId, UserId) is { } denied) return denied;
-        if (sessions.PendingSentBy(sessionId, messageId) is { } sender && sender != UserId
+        // «Не доставлять» — только тому, кто поставил сообщение, или владельцу чата (S2a-10b): чужое
+        // сообщение не снимает ни другой участник, ни читатель. 404 — чата не видно (существование
+        // не раскрываем), 403 not_sender — не автор и не владелец. Отправитель читается из очереди
+        // под её PendingLock (SessionManager.PendingSentBy) — под тем же замком, под которым
+        // сообщение в неё ставится.
+        if (sessions.GetAccessible(sessionId, UserId) is null) return NotFound();
+        if (sessions.PendingSentBy(sessionId, messageId) != UserId
             && sessions.GetWithRight(sessionId, UserId, Services.Access.ProjectRight.Configure) is null)
             return StatusCode(StatusCodes.Status403Forbidden,
-                new { error = "Чужое сообщение из очереди снимает только его автор или владелец", code = Services.Access.ProjectScopeAttribute.ErrorCode });
+                new { error = "Сообщение из очереди снимает только его автор или владелец", code = NotSenderCode });
         return await sessions.CancelPendingAsync(sessionId, messageId) ? NoContent() : NotFound();
     }
 

@@ -15,8 +15,12 @@ namespace ClaudeHomeServer.Tests.Integration;
 /// редактор, читатель, посторонний — против чтения, записи, настроек, хода и личных отметок чата.
 /// Правила S1: посторонний получает 404 на всё (существование не раскрываем); читатель и редактор
 /// читают, а запись проекта и настройки им закрыты — 403 (Write редактору откроют S2b/S2c; S2a-10 открыл только RunTurn);
-/// отправка в ход (RunTurn) — владельцу и редактору, читателю 403; управление ходом владельца — только владельцу;
-/// личные отметки (прочитано, закреплён) доступны всем, кто чат видит, и у каждого свои.
+/// отправка в ход (RunTurn) — владельцу и редактору, читателю 403; личные отметки (прочитано,
+/// закреплён) — всем, кто чат видит, и у каждого свои.
+/// Правила S2a-10b различаются машинным кодом отказа (строка DenyCode): перебой чужого хода —
+/// автору идущего хода или владельцу, прочему участнику not_chat_author; «не доставлять» сообщение
+/// из очереди — его отправителю или владельцу, прочему — not_sender; настройки чата (режим прав,
+/// цикл, штаб, модель, провайдер, продолжение) — только владельцу, участнику owner_settings.
 /// Каждая строка матрицы — отдельный случай теории: снятая проверка в одном эндпоинте
 /// красит только его строки.
 /// </summary>
@@ -31,6 +35,12 @@ public class SharedProjectRoleMatrixTests : IClassFixture<TestWebApplicationFact
     // (409 «нечего перезапускать», 400 «нет координатора» и т. п.) — для владельца важно только, что его не отшили правом
     private const int PassesGate = -1;
 
+    // Машинные коды отказа (строки контракта фронта): не автор чата, не отправитель сообщения
+    // из очереди, настройки чата принадлежат владельцу
+    private const string NotAuthor = "not_chat_author";
+    private const string NotSender = "not_sender";
+    private const string OwnerSettings = "owner_settings";
+
     private readonly TestWebApplicationFactory _factory;
 
     public SharedProjectRoleMatrixTests(TestWebApplicationFactory factory)
@@ -39,9 +49,15 @@ public class SharedProjectRoleMatrixTests : IClassFixture<TestWebApplicationFact
         _factory.ExtraConfig[SharedProjectsGate.SwitchKey] = "true";
     }
 
-    /// <summary>Эндпоинт матрицы: подпись, метод, путь ({p} — проект, {s} — чат), тело и коды по ролям.</summary>
+    /// <summary>
+    /// Эндпоинт матрицы: подпись, метод, путь ({p} — проект, {s} — чат), тело и коды по ролям.
+    /// DenyCode — машинный code, которым эндпоинт обязан ответить на свой 403: «не автор чата»,
+    /// «не отправитель сообщения» и «настройки чата выбирает владелец» различаются для фронта
+    /// (текст подсказки и выключенная строка меню), поэтому проверяются строкой матрицы, а не
+    /// догадкой по имени эндпоинта.
+    /// </summary>
     public sealed record Endpoint(string Name, string Method, string Path, object? Body,
-        int ForOwner, int ForEditor, int ForReader, int ForOutsider)
+        int ForOwner, int ForEditor, int ForReader, int ForOutsider, string? DenyCode = null)
     {
         public int For(string role) => role switch
         {
@@ -63,27 +79,33 @@ public class SharedProjectRoleMatrixTests : IClassFixture<TestWebApplicationFact
         // запись проекта: владельцу; участник — 403 (Write редактору S2a-10 не открывал), посторонний — 404
         new("задача: создание", "POST", "/api/projects/{p}/tasks", new { title = "Задача матрицы" }, Ok2xx, 403, 403, 404),
         new("память команды: запись", "POST", "/api/projects/{p}/team-memory", new { text = "Факт матрицы" }, Ok2xx, 403, 403, 404),
-        new("чат: удаление", "DELETE", "/api/projects/{p}/sessions/{s}", null, Ok2xx, 403, 403, 404),
-        new("чат: переименование", "PUT", "/api/projects/{p}/sessions/{s}", new { name = "Имя матрицы" }, Ok2xx, 403, 403, 404),
-        new("чат: архив", "PUT", "/api/chats/{s}/archived", new { archived = true }, Ok2xx, 403, 403, 404),
-        new("чат: удаление по /api/chats", "DELETE", "/api/chats/{s}", null, 404, 403, 403, 404),
-        new("чат: переименование по /api/chats", "PUT", "/api/chats/{s}", new { name = "Имя матрицы" }, 404, 403, 403, 404),
+        new("чат: удаление", "DELETE", "/api/projects/{p}/sessions/{s}", null, Ok2xx, 403, 403, 404, NotAuthor),
+        new("чат: переименование", "PUT", "/api/projects/{p}/sessions/{s}", new { name = "Имя матрицы" }, Ok2xx, 403, 403, 404, NotAuthor),
+        // модель и её настройки — не «автор чата», а «настройки владельца» (S2a-10b): тот же
+        // гейт, что у режима прав и провайдера
+        new("чат: смена модели", "PUT", "/api/projects/{p}/sessions/{s}", new { model = "sonnet" }, PassesGate, 403, 403, 404, OwnerSettings),
+        new("чат: архив", "PUT", "/api/chats/{s}/archived", new { archived = true }, Ok2xx, 403, 403, 404, NotAuthor),
+        new("чат: удаление по /api/chats", "DELETE", "/api/chats/{s}", null, 404, 403, 403, 404, NotAuthor),
+        new("чат: переименование по /api/chats", "PUT", "/api/chats/{s}", new { name = "Имя матрицы" }, 404, 403, 403, 404, NotAuthor),
         // настройки и удаление проекта — Configure, только владелец
         new("проект: настройки", "PUT", "/api/projects/{p}", new { name = "Имя матрицы" }, Ok2xx, 403, 403, 404),
         new("проект: удаление", "DELETE", "/api/projects/{p}", null, Ok2xx, 403, 403, 404),
-        // ход: отправка — владелец и редактор (RunTurn, S2a-10), читатель 403; управление ходом владельца
-        // (режим, цикл, штаб, провайдер, продолжение) и перебой чужого хода — только владельцу, редактору 403
-        new("ход: сообщение", "POST", "/api/sessions/{s}/messages", new { text = "привет", wait = "none" }, Ok2xx, Ok2xx, 403, 404),
-        new("ход: очередь, снять чужое", "DELETE", "/api/sessions/{s}/pending/nope", null, 404, 404, 403, 404),
-        new("ход: режим прав", "PUT", "/api/chats/{s}/mode", new { mode = "auto" }, Ok2xx, 403, 403, 404),
-        new("ход: цикл до готово", "PUT", "/api/chats/{s}/loop", new { enabled = false }, Ok2xx, 403, 403, 404),
-        new("ход: очередь, перебить", "POST", "/api/sessions/{s}/pending/preempt", null, 409, 403, 403, 404),
-        new("ход: штаб, остановить", "PUT", "/api/chats/{s}/team-implement/stop", null, PassesGate, 403, 403, 404),
-        new("ход: штаб, авто-волны", "PUT", "/api/chats/{s}/team-implement/auto", new { autoWaves = false }, PassesGate, 403, 403, 404),
-        new("ход: штаб, перезапуск волны", "POST", "/api/chats/{s}/team-wave/restart", null, PassesGate, 403, 403, 404),
-        new("ход: штаб, перезапуск хода", "POST", "/api/chats/{s}/team-wave/restart-turn", null, PassesGate, 403, 403, 404),
-        new("ход: смена провайдера", "POST", "/api/chats/{s}/migrate-provider", new { model = "sonnet" }, PassesGate, 403, 403, 404),
-        new("ход: продолжить в новом чате", "POST", "/api/chats/{s}/continue", null, PassesGate, 403, 403, 404),
+        // ход: отправка — владелец и редактор (RunTurn, S2a-10), читатель 403 как отказ права;
+        // перебой чужого хода (S2a-10b) — автору идущего хода или владельцу, прочему участнику
+        // not_chat_author; «не доставлять» сообщение из очереди — его отправителю или владельцу,
+        // прочему — not_sender; настройки хода (режим, цикл, штаб, модель, провайдер,
+        // продолжение) — только владельцу, участнику owner_settings
+        new("ход: сообщение", "POST", "/api/sessions/{s}/messages", new { text = "привет", wait = "none" }, Ok2xx, Ok2xx, 403, 404, "project_scope"),
+        new("ход: очередь, снять чужое", "DELETE", "/api/sessions/{s}/pending/nope", null, 404, 403, 403, 404, NotSender),
+        new("ход: очередь, перебить", "POST", "/api/sessions/{s}/pending/preempt", null, 409, 403, 403, 404, NotAuthor),
+        new("ход: режим прав", "PUT", "/api/chats/{s}/mode", new { mode = "auto" }, Ok2xx, 403, 403, 404, OwnerSettings),
+        new("ход: цикл до готово", "PUT", "/api/chats/{s}/loop", new { enabled = false }, Ok2xx, 403, 403, 404, OwnerSettings),
+        new("ход: штаб, остановить", "PUT", "/api/chats/{s}/team-implement/stop", null, PassesGate, 403, 403, 404, OwnerSettings),
+        new("ход: штаб, авто-волны", "PUT", "/api/chats/{s}/team-implement/auto", new { autoWaves = false }, PassesGate, 403, 403, 404, OwnerSettings),
+        new("ход: штаб, перезапуск волны", "POST", "/api/chats/{s}/team-wave/restart", null, PassesGate, 403, 403, 404, OwnerSettings),
+        new("ход: штаб, перезапуск хода", "POST", "/api/chats/{s}/team-wave/restart-turn", null, PassesGate, 403, 403, 404, OwnerSettings),
+        new("ход: смена провайдера", "POST", "/api/chats/{s}/migrate-provider", new { model = "sonnet" }, PassesGate, 403, 403, 404, OwnerSettings),
+        new("ход: продолжить в новом чате", "POST", "/api/chats/{s}/continue", null, PassesGate, 403, 403, 404, OwnerSettings),
         // личное состояние: у каждого своё, достаточно видеть чат
         new("личное: прочитано", "PUT", "/api/chats/{s}/read", null, Ok2xx, Ok2xx, Ok2xx, 404),
         new("личное: закрепить", "PUT", "/api/chats/{s}/user-state", new { pinned = true }, Ok2xx, Ok2xx, Ok2xx, 404),
@@ -144,9 +166,11 @@ public class SharedProjectRoleMatrixTests : IClassFixture<TestWebApplicationFact
         var response = await ClientOf(role).SendAsync(request);
 
         var expected = endpoint.For(role);
-        // Отказ автору-чата различается кодом, а не только статусом: общий project_scope не годится
-        if (expected == 403 && endpointName.StartsWith("чат: "))
-            (await response.Content.ReadAsStringAsync()).Should().Contain("not_chat_author", $"{role}: {endpointName}");
+        // Отказ различается машинным кодом, а не только статусом: «не автор чата», «не отправитель»
+        // и «настройки чата выбирает владелец» — не общий project_scope (S2a-10b): фронт по коду
+        // решает и текст подсказки, и выключенную строку меню
+        if (expected == 403 && endpoint.DenyCode is not null)
+            (await response.Content.ReadAsStringAsync()).Should().Contain(endpoint.DenyCode, $"{role}: {endpointName}");
         if (expected == Ok2xx)
             response.IsSuccessStatusCode.Should().BeTrue($"{role}: {endpointName} → {(int)response.StatusCode}");
         else if (expected == PassesGate)

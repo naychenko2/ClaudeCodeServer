@@ -15,6 +15,10 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// MCP из этого чата и текст, ушедший в ход, не несут личных маркеров владельца (образец —
 /// ParticipantTurnFrameGuardTests: сторож по всему tools/list держит полный состав, здесь — сквозная
 /// связка «REST-отправка редактора → актор → рамка → MCP»).
+/// Усиление S2a-10b: кроме «личного в ответе нет», D-инструменты трёх тулсетов, которые в узкой
+/// рамке остаются в составе и обязаны отказать на вызове (wsp search_unified, tasks
+/// list_projects/search, notes semantic_search), проверяются как отказ — ослабление сужения в любом
+/// из тулсетов красит этот тест (проведено мутациями в отчёте задачи).
 /// </summary>
 public class EditorTurnInSharedChatTests : IDisposable
 {
@@ -94,6 +98,53 @@ public class EditorTurnInSharedChatTests : IDisposable
             // id в аргументах вызова отказ может повторить сам — проверяем маркеры данных и id личного проекта в ответе
             body.Should().NotContain("PERSONAL", $"{server}/{tool}");
             if (tool != "tasks_get" && tool != "files_tree") body.Should().NotContain(personalId).And.NotContain(taskId);
+        }
+
+        // Сила сквозного теста (находка M ревью R-S2a-10a): «маркеров в ответе» мало — ослабление
+        // сужения в отдельном тулсете их не даёт. Проверяется конкретный отказ каждого тулсета в
+        // узкой рамке. Список — из манифеста ParticipantTurnFrameGuardTests (класс D: «отказывает
+        // в узкой рамке»), он живёт там, здесь только то, чем ловится сужение трёх тулсетов.
+        // Сначала состав tools/list этого чата: без него отказ был бы вакуумным — несуществующий
+        // инструмент тоже отвечает isError.
+        // Состав проверяется намеренно: часть D-инструментов в узкой рамке снимается из тулсета
+        // целиком (notes_graph, notes_daily, notes_resolve — их нет в tools/list, и их пометку
+        // держит состав ParticipantTurnFrameGuardTests, а не вызов). Здесь те, что остаются
+        // offered и обязаны отказать на вызове.
+        foreach (var (server, denied) in new (string, string[])[]
+        {
+            ("wsp", ["search_unified"]),
+            ("tasks", ["tasks_list_projects", "tasks_search"]),
+            ("notes", ["notes_semantic_search"]),
+        })
+        {
+            var list = await _owner.AsCaller(chatId).PostAsJsonAsync($"/mcp/{server}/{chatId}",
+                new { jsonrpc = "2.0", id = 1, method = "tools/list", @params = new { } });
+            list.EnsureSuccessStatusCode();
+            var offered = JsonDocument.Parse(await list.Content.ReadAsStringAsync()).RootElement
+                .GetProperty("result").GetProperty("tools").EnumerateArray()
+                .Select(t => t.GetProperty("name").GetString()!).ToHashSet();
+            foreach (var tool in denied)
+                offered.Should().Contain(tool,
+                    $"«{server}/{tool}» обязан быть в составе этого чата: иначе проверка отказа ниже вакуумна");
+        }
+
+        foreach (var (server, tool, args) in new (string, string, object)[]
+        {
+            ("wsp", "search_unified", new { query = tag }), // поиск по всему пространству владельца
+            ("tasks", "tasks_list_projects", new { }), // список проектов владельца
+            ("tasks", "tasks_search", new { query = tag }), // поиск по всем задачам владельца
+            ("notes", "notes_semantic_search", new { query = tag }), // поиск по всем источникам, включая личный vault
+        })
+        {
+            var mcp = await _owner.AsCaller(chatId).PostAsJsonAsync($"/mcp/{server}/{chatId}", new
+            {
+                jsonrpc = "2.0", id = 1, method = "tools/call", @params = new { name = tool, arguments = args },
+            });
+            mcp.EnsureSuccessStatusCode();
+            var result = JsonDocument.Parse(await mcp.Content.ReadAsStringAsync()).RootElement.GetProperty("result");
+            (result.TryGetProperty("isError", out var isError) && isError.GetBoolean()).Should().BeTrue(
+                $"[{server}/{tool}] обязан отказывать в узкой рамке (D-строка манифеста "
+                + $"ParticipantTurnFrameGuardTests); получил: {result.GetRawText()}");
         }
     }
 }

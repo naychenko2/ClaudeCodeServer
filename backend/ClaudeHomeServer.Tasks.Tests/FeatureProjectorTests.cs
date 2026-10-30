@@ -1440,6 +1440,36 @@ public class FeatureProjectorTests
         run.Summary!.MergedAt.Should().BeNull("closed без merge-задачи → MergedAt=null");
     }
 
+    // Ш9 (QA-1 a18999b3): закрытая без мержа фича (эпик Done, финал принят, merge-задачи нет)
+    // не показывает тревогу «мерж»; та же фича с открытым эпиком — merge_pending с тревогой.
+    // Мутация: убрать гейт Closed/Merged в проекторе — первый блок краснеет.
+    [Fact]
+    public void Build_ЗакрытаяБезМержа_ТревогиНет_МержПендингСТревогой()
+    {
+        const string epicId = "epic-closed-attn";
+        var step = new TaskItem { Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, Status = TaskItemStatus.Done };
+        var final = new TaskItem
+        {
+            Id = "f1", FeatureId = epicId, Role = TaskRoles.Final, Status = TaskItemStatus.Done,
+            CompletedAt = new DateTime(2026, 10, 17, 12, 0, 0),
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        };
+
+        var closedEpic = new TaskItem
+        {
+            Id = epicId, Role = TaskRoles.Feature,
+            Status = TaskItemStatus.Done, CompletedAt = new DateTime(2026, 10, 18, 12, 0, 0),
+        };
+        var closed = FeatureProjector.Build(closedEpic, [closedEpic, step, final]);
+        closed.State.Should().Be(FeatureStates.Closed);
+        closed.Attention.Should().BeNull("у закрытой фичи тревоги нет");
+
+        var openEpic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var pending = FeatureProjector.Build(openEpic, [openEpic, step, final]);
+        pending.State.Should().Be(FeatureStates.MergePending);
+        pending.Attention!.Kind.Should().Be("merge");
+    }
+
     // 5. эпик Done + merge Done БЕЗ принятого финала (как ghostcli) ⇒ merged.
     [Fact]
     public void Build_ЭпикDone_МержDone_БезФинала_Merged()

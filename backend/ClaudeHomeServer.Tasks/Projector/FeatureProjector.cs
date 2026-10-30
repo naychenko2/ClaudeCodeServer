@@ -260,6 +260,12 @@ public sealed class FeatureProjector(TaskManager tasks)
         // стоит выше), и упавший исполнитель разреза в черновике должен быть виден.
         if (featureState == FeatureStates.Paused) attention = null;
 
+        // Ш9 (QA-1 a18999b3): у терминальной фичи (closed/merged) тревоги нет вовсе — закрытая без
+        // мержа фича иначе показывала «Ждёт согласия на мерж» (финал принят, merge-задачи нет).
+        // Видов тревоги три (stopped/wait/merge), информационных среди них нет. merge_pending не
+        // трогаем: там тревога merge законна. Состояние — та же featureState, что идёт в run.state.
+        if (featureState is FeatureStates.Closed or FeatureStates.Merged) attention = null;
+
         // W4-HOLD-D: на паузе никто не идёт — «Сейчас» пустой. SetHold прервал исполнителей
         // (feature_held), но статус остаётся InProgress: без гашения строка показывала бы
         // «Сейчас: <исполнитель>», а Now0Of/NowPersonaIds отдавали бы прерванную задачу.

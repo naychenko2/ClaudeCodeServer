@@ -11,7 +11,8 @@
 // закрывает шаг — фронт этого не выводит заново: бэк уже учёл хвостовую доработку
 // (FeatureStepAccounting: IsAcceptance(lastVerdict) && !reworkOpen), карточка верит
 // chain.outcome, второй истины нет; (б) шаг плана без задачи (бэковый notCreated) —
-// синтетическая карточка state='queue', planned:true, в конце ленты, в порядке плана.
+// синтетическая карточка state='queue', planned:true, в конце ленты, в порядке плана и
+// только по ДЕЙСТВУЮЩИМ планам (run.activePlanIds, см. activePlansOf).
 
 // Источники (спецификация docs/mockups/features-overview-4-spec.md, точка 2):
 //   • «работа»      → chain.chatId (чат исполнителя первой задачи цепочки);
@@ -243,16 +244,33 @@ function planKey(stepRef: string): string {
   return stepRef.trim().toLowerCase();
 }
 
-// Шаги плана без цепочки — синтетические карточки «в очереди» (зеркало бэкового notCreated:
-// FeatureStepAccounting считает ключ плана, которого нет среди заведённых шагов). Пересечения
-// с заведёнными нет: ключ совпадает с бэковым; дубль stepRef в плане — первое вхождение;
-// пустой stepRef — не шаг. Карточка без старта: после всех цепочек, в порядке плана (тот же
-// порядок, что у бэковых линий: сначала заведённые шаги, затем notCreated).
+// Действующие планы — ровно те, чьи id назвал бэк (FeatureRun.cs:44-46: тот же ActivePlans,
+// что считает учёт шагов). Фронт верит списку и НЕ выводит своё правило «поздний вытесняет
+// ранний»: план вне списка не возвращается никакими рассуждениями. Поля нет (старый ответ) —
+// фильтра по id нет, но снятый план (verification.verdict 'withdrawn' — тот же признак, что на
+// бэке) не остаётся: его шагов в бэковом знаменателе нет (FeatureStepAccounting.cs:75).
+// Порядок — как в run.plan, без пересортировки.
+function activePlansOf(run: FeatureRun): FeatureTask[] {
+  const plans = (run.plan ?? []).filter((p): p is FeatureTask => !!p);
+  const ids = run.activePlanIds;
+  if (Array.isArray(ids)) {
+    const live = new Set(ids);
+    return plans.filter(p => live.has(p.id));
+  }
+  return plans.filter(p => p.verification?.verdict !== 'withdrawn');
+}
+
+// Шаги плана без цепочки — синтетические карточки «в очереди»: по тем же планам, по которым
+// бэк считает notCreated (действующие планы, activePlansOf; FeatureStepAccounting.cs:464 — id
+// ровно тех countedPlans, чьи шаги идут в знаменатель). Шаг из снятого или замещённого плана
+// в очередь не входит. Пересечений с заведёнными нет: ключ совпадает с бэковым; дубль stepRef
+// в плане — первое вхождение; пустой stepRef — не шаг. Карточка без старта: после всех
+// цепочек, в порядке плана (тот же порядок, что у бэковых линий: сначала заведённые шаги,
+// затем notCreated).
 function plannedCards(run: FeatureRun, chainKeys: Set<string>, startIndex: number): ProdCard[] {
   const out: ProdCard[] = [];
   const seen = new Set<string>();
-  for (const p of run.plan ?? []) {
-    if (!p) continue;
+  for (const p of activePlansOf(run)) {
     for (const ps of p.planSteps ?? []) {
       if (!ps || !ps.stepRef?.trim()) continue;
       const key = planKey(ps.stepRef);
@@ -285,8 +303,9 @@ function plannedCards(run: FeatureRun, chainKeys: Set<string>, startIndex: numbe
 }
 
 // Модель ленты «Производство»: карточки на шаг в порядке старта (без старта — в конце,
-// стабильно), после них — шаги плана без задачи в порядке плана. Ни цепочек, ни плана —
-// пустой список (рендер показывает существующее пустое состояние).
+// стабильно), после них — шаги плана без задачи действующих планов, в порядке плана. Ни
+// цепочек, ни действующих планов — пустой список (рендер показывает существующее пустое
+// состояние).
 export function buildProdCards(
   run: FeatureRun,
   personaName?: (id: string) => string | null,

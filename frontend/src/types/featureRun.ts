@@ -411,6 +411,13 @@ export interface FeatureRun {
   // Разрез (role=cut) и план (role=plan) фичи.
   cut?: FeatureTask[];
   plan?: FeatureTask[];
+  // Id действующих планов (бэк: `FeatureRun.ActivePlanIds`, FeatureRun.cs:44-46 — результат того
+  // же ActivePlans, что считает учёт шагов): не снятые и не вытесненные более поздним планом с
+  // пересекающимися ключами. План вне списка — снят или замещён: его шаги не входят ни в
+  // знаменатель, ни в «очередь» фронта. Пустой список — действующих планов нет (это НЕ то же
+  // самое, что отсутствие поля). Аддитивное: старые ответы поля не несут — UI обязан пережить
+  // отсутствие; своё правило вытеснения фронт не выводит (дефект 128fd73a).
+  activePlanIds?: string[];
   awaitingHumanSince?: string | null;
   awaitingHumanReason?: string | null;
   verdicts: FeatureVerdicts;

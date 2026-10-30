@@ -368,9 +368,111 @@ class WaitAllTests(unittest.TestCase):
         kill = "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"
         self.assertNotEqual(0, self._codes("pass", kill))
 
+    def test_убитый_сигналом_даёт_ровно_единицу_а_не_сам_отрицательный_код(self):
+        # max(failed) без фильтра c > 0 вернул бы -9: ассерт на конкретный код ловит эту мутацию
+        kill = "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"
+        self.assertEqual(1, self._codes(kill))
+        self.assertEqual(1, self._codes("pass", kill))
+        self.assertEqual(3, self._codes(kill, "raise SystemExit(3)"))
+
     def test_все_шарды_нулевые_дают_ноль_а_ненулевой_код_сохраняется(self):
         self.assertEqual(0, self._codes("pass", "pass"))
         self.assertEqual(3, self._codes("pass", "raise SystemExit(3)"))
+
+
+TRX_NS = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"
+ABORT = "import os, signal; os.kill(os.getpid(), signal.SIGABRT)"
+
+
+def write_trx(directory, name, results, stamp="20261030044024"):
+    """results: [(testName, outcome)] -> файл name_net10.0_stamp.trx в формате логгера VSTest."""
+    rows = "".join(f'<UnitTestResult testName="{n.replace(chr(34), "&quot;")}" outcome="{o}" />' for n, o in results)
+    path = os.path.join(directory, f"{name}_net10.0_{stamp}.trx")
+    with open(path, "w", encoding="utf-8-sig") as f:
+        f.write(f'<?xml version="1.0" encoding="utf-8"?><TestRun xmlns="{TRX_NS}"><Results>{rows}</Results></TestRun>')
+    return path
+
+
+class AbortAfterGreenTests(unittest.TestCase):
+    """Дефект 0f5bd660: testhost падает SIGABRT уже после полного зелёного прогона — но убитый посреди шард красный."""
+    EXPECTED = {"App.Tests.A.One", "App.Tests.A.Two", "App.Tests.B.Three"}
+    FULL = [("App.Tests.A.One", "Passed"), ('App.Tests.A.Two(x: 1, s: "a(b)")', "Passed"),
+            ("App.Tests.A.Two(x: 2, s: \"c\")", "Passed"), ("App.Tests.B.Three", "NotExecuted")]
+
+    def _wait(self, tmp, scripts, proofs):
+        procs = [(subprocess.Popen([sys.executable, "-c", c]), open(os.path.join(tmp, f"{i}.log"), "w"))
+                 for i, c in enumerate(scripts)]
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = ts.wait_all(procs, time.monotonic(), proofs)
+        return code, err.getvalue()
+
+    def _proof(self, tmp, results=None, expected=None, launched_at=0):
+        if results is not None:
+            write_trx(tmp, "shard1", results)
+        return lambda: ts.trx_proof(tmp, "shard1", self.EXPECTED if expected is None else expected, launched_at)
+
+    def test_сигнальный_код_и_полный_зелёный_trx_дают_зелёный_с_предупреждением(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, err = self._wait(tmp, ["pass", ABORT], [None, self._proof(tmp, self.FULL)])
+        self.assertEqual(0, code)
+        self.assertIn("аварийно завершился после зелёных тестов (код -6)", err)
+
+    def test_сигнальный_код_и_неполный_trx_красный(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, err = self._wait(tmp, [ABORT], [self._proof(tmp, self.FULL[:2])])
+        self.assertEqual(1, code)
+        self.assertIn("в TRX нет 1 из 3 тестов шарда", err)
+
+    def test_сигнальный_код_без_trx_красный(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, err = self._wait(tmp, [ABORT], [self._proof(tmp)])
+        self.assertEqual(1, code)
+        self.assertIn("свежего TRX шарда нет", err)
+
+    def test_сигнальный_код_и_упавший_тест_в_trx_красный(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bad = [(self.FULL[0][0], "Failed")] + self.FULL[1:]
+            code, _ = self._wait(tmp, [ABORT], [self._proof(tmp, bad)])
+        self.assertEqual(1, code)
+
+    def test_trx_прошлого_прогона_не_доказательство(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_trx(tmp, "shard1", self.FULL)
+            os.utime(path, (1, 1))
+            code, err = self._wait(tmp, [ABORT], [self._proof(tmp, launched_at=time.time() - 60)])
+        self.assertEqual(1, code)
+        self.assertIn("свежего TRX шарда нет", err)
+
+    def test_положительный_код_не_прощается_даже_при_полном_trx(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, _ = self._wait(tmp, ["raise SystemExit(3)"], [self._proof(tmp, self.FULL)])
+        self.assertEqual(3, code)
+
+    def test_шард_без_доказательства_rest_красный_по_сигналу(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, _ = self._wait(tmp, [ABORT, "pass"], [None, None])
+        self.assertEqual(1, code)
+
+    def test_доказательство_одного_шарда_не_спасает_соседний_убитый(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, _ = self._wait(tmp, [ABORT, ABORT], [self._proof(tmp, self.FULL), self._proof(tmp, expected=set())])
+        self.assertEqual(1, code)
+
+    def test_launch_shards_считает_ожидаемый_состав_по_классам_шарда(self):
+        tests = ["App.Tests.A.One", "App.Tests.A.Two", "App.Tests.B.Three", "App.Tests.C.Four"]
+        orig = ts.launch
+        ts.launch = lambda args, log: (object(), None)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                _, proofs = ts.launch_shards("p", [["App.Tests.A", "App.Tests.B"], ["App.Tests.C"]], tmp, "shard", None, tests)
+                write_trx(tmp, "shard1", self.FULL)
+                write_trx(tmp, "shard2", [("App.Tests.C.Four", "Passed")])
+                self.assertEqual([None, None], [p() for p in proofs])
+                os.remove([os.path.join(tmp, f) for f in os.listdir(tmp) if f.startswith("shard2")][0])
+                self.assertEqual("свежего TRX шарда нет", proofs[1]())
+        finally:
+            ts.launch = orig
 
 
 class RunFastTests(unittest.TestCase):
@@ -397,7 +499,7 @@ class RunFastTests(unittest.TestCase):
                     rest["text"] = f.read()
             return object(), None
         ts.launch = fake_launch
-        ts.wait_all = lambda procs, start: 0
+        ts.wait_all = lambda procs, start, proofs=None: 0
         if tamper:  # шард теряет класс: самопроверка обязана остановить прогон до запуска
             real = ts.layout
             ts.layout = lambda classes, n, t=None, f=None: [real(classes, n, t, f)[0][1:]] + real(classes, n, t, f)[1:]

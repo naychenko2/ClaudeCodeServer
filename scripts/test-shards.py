@@ -38,8 +38,11 @@ import subprocess
 import sys
 import threading
 import time
+import xml.etree.ElementTree as ET
 
 LIST_HEADER = "The following Tests are available:"
+# Зерно mtime файловой системы: файл, записанный сразу после запуска, не должен выглядеть старше него
+MTIME_SLACK = 1.0
 # Спецсимволы выражения фильтра VSTest, которые экранируются обратной косой
 FILTER_SPECIAL = set("\\()&|=!~")
 
@@ -350,20 +353,61 @@ def launch(args, log_path):
     return subprocess.Popen(["dotnet", "test"] + args, stdout=log, stderr=subprocess.STDOUT, env=dotnet_env()), log
 
 
-def launch_shards(project, shards, results, prefix, extra_filter):
-    procs = []
+def trx_proof(results, name, expected, launched_at):
+    """Строгое доказательство, что шард дошёл до конца и зелёный: None — доказано, иначе причина отказа.
+
+    Нужны ВСЕ условия: свежий (не старше запуска шарда) TRX шарда, в нём каждый тест шарда по списку
+    --list-tests, и ни одного результата кроме Passed/NotExecuted (пропуск). TRX логгер пишет в конце прогона,
+    поэтому убитый посреди шард его либо не оставляет, либо оставляет без части тестов."""
+    if not expected:
+        return "ожидаемый состав шарда пуст"
+    found = []
+    for f in os.listdir(results):
+        if f.startswith(name + "_") and f.endswith(".trx"):
+            path = os.path.join(results, f)
+            if os.path.getmtime(path) >= launched_at - MTIME_SLACK:
+                found.append(path)
+    if not found:
+        return "свежего TRX шарда нет"
+    try:
+        root = ET.parse(max(found, key=os.path.getmtime)).getroot()
+    except (ET.ParseError, OSError) as e:
+        return f"TRX не читается: {e}"
+    seen, bad = set(), 0
+    for r in root.findall(".//{*}UnitTestResult"):
+        seen.add(test_fqn(r.get("testName", "")))
+        if r.get("outcome") not in ("Passed", "NotExecuted"):
+            bad += 1
+    if bad:
+        return f"в TRX результатов не Passed/пропуск: {bad}"
+    missing = expected - seen
+    if missing:
+        return f"в TRX нет {len(missing)} из {len(expected)} тестов шарда"
+    return None
+
+
+def launch_shards(project, shards, results, prefix, extra_filter, tests):
+    """Запускает шарды; возвращает (процессы, доказательства): доказательство шарда — вызываемое без аргументов,
+    вердикт trx_proof, нужно wait_all только для сигнального кода выхода."""
+    procs, proofs = [], []
     for i, s in enumerate(shards):
         expr = f"({shard_filter(s)})" + (f"&({extra_filter})" if extra_filter else "")
         name = f"{prefix}{i + 1}"
+        expected = {t for t in tests if any(matches(c, t) for c in s)}
+        launched_at = time.time()
         procs.append(launch([project, "--no-build", "--filter", expr, "--logger", f"trx;LogFilePrefix={name}",
                              "--results-directory", results], os.path.join(results, f"{name}.log")))
-    return procs
+        proofs.append(lambda n=name, e=expected, t=launched_at: trx_proof(results, n, e, t))
+    return procs, proofs
 
 
-def wait_all(procs, start):
+def wait_all(procs, start, proofs=None):
     """Ждёт все процессы, меряя стену и пик RSS дерева; печатает итог, возвращает 0, только если все шарды вышли с 0.
 
-    Убитый сигналом шард (OOM-killer, -9) даёт отрицательный код: max() проглотил бы его нулём соседа."""
+    Убитый сигналом шард (OOM-killer, -9) даёт отрицательный код: max() проглотил бы его нулём соседа.
+    Единственное исключение — сигнальный код шарда, у которого есть доказательство из proofs (trx_proof):
+    хост testhost падал SIGABRT уже после полного зелёного прогона. Положительный код не прощается никогда,
+    шард без доказательства (rest-процесс, нет TRX, неполный TRX) остаётся красным."""
     peak = [0]
     done = threading.Event()
 
@@ -382,7 +426,19 @@ def wait_all(procs, start):
     done.set()
     sampler.join()
     print(f"Стена шардов: {wall:.1f} с; коды выхода: {codes}; пик RSS дерева: {peak[0] / 1024 / 1024:.2f} ГиБ")
-    failed = [c for c in codes if c != 0]
+    failed = []
+    for i, c in enumerate(codes):
+        if c == 0:
+            continue
+        proof = proofs[i] if proofs and i < len(proofs) else None
+        if c < 0 and proof is not None:
+            reason = proof()
+            if reason is None:
+                print(f"Шард {i + 1} аварийно завершился после зелёных тестов (код {c}): TRX полный, провалов нет — засчитан зелёным",
+                      file=sys.stderr)
+                continue
+            print(f"Шард {i + 1}: код {c}, доказательства зелёности нет ({reason}) — красный", file=sys.stderr)
+        failed.append(c)
     return max((c for c in failed if c > 0), default=1) if failed else 0
 
 
@@ -398,7 +454,8 @@ def run_shards(project, n, results, timings, extra_filter, fast=None):
     print(summary(tests, shards, timings, fast))
     os.makedirs(results, exist_ok=True)
     start = time.monotonic()
-    return wait_all(launch_shards(project, shards, results, "shard", extra_filter), start)
+    procs, proofs = launch_shards(project, shards, results, "shard", extra_filter, tests)
+    return wait_all(procs, start, proofs)
 
 
 def parse_split(text):
@@ -464,7 +521,7 @@ def run_fast(slnx, split, results, timings, extra_filter, fast=None):
         print(summary(listings[path], shards, timings, fast))
         layouts.append((path, shards))
     os.makedirs(results, exist_ok=True)
-    procs = []
+    procs, proofs = [], []
     rest_path = os.path.join(os.path.dirname(slnx), "ClaudeHomeServer.FastRest.slnx")
     try:
         if rest_projects:
@@ -473,13 +530,17 @@ def run_fast(slnx, split, results, timings, extra_filter, fast=None):
             procs.append(launch([rest_path, "--no-build"] + (["--filter", extra_filter] if extra_filter else [])
                                 + ["--logger", "trx;LogFilePrefix=fast-rest", "--results-directory", results],
                                 os.path.join(results, "rest.log")))
+            proofs.append(None)  # состав rest не листается — доказать полноту нечем, сигнальный код остаётся красным
         for path, shards in layouts:
             # Префикс fast: профиль этих TRX отдаёт секунды прохода Fast, и следующая раскладка
             # держит серийного гиганта (ClaudeSessionPromptSectionsOrderTests) в шарде с тем, что укладывается в его поток
-            procs += launch_shards(path, shards, results, "fast-" + os.path.basename(path.rstrip("/")) + "-", extra_filter)
+            ps, pf = launch_shards(path, shards, results, "fast-" + os.path.basename(path.rstrip("/")) + "-",
+                                   extra_filter, listings[path])
+            procs += ps
+            proofs += pf
         print(f"Подготовка до запуска: {time.monotonic() - start:.1f} с; процессов {len(procs)}")
         run_start = time.monotonic()
-        return wait_all(procs, run_start)
+        return wait_all(procs, run_start, proofs)
     finally:
         if os.path.exists(rest_path):
             os.remove(rest_path)

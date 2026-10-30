@@ -11,14 +11,21 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // B4 «Сфер»: персона сферы не ведёт чат и не становится собеседником в проекте вне своей сферы — 400.
 [Trait("Category", "Host")]
-public class SphereChatZoneTests : IDisposable
+public class SphereChatZoneTests : IClassFixture<SphereChatZoneTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new();
+    // Хост на КЛАСС, а не на тест. Сферу, проекты и персон каждый тест заводит свои (новая
+    // группа проектов с уникальным id), перечислений «всех» нет; флаг spheres владельца —
+    // единственное общее состояние, его выставляет ArrangeAsync в начале каждого теста
+    public sealed class Hosts : TestWebApplicationFactory;
+
+    private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
 
-    public SphereChatZoneTests() => _client = _factory.CreateAuthenticatedClient();
-
-    public void Dispose() => _factory.Dispose();
+    public SphereChatZoneTests(Hosts hosts)
+    {
+        _factory = hosts;
+        _client = _factory.CreateAuthenticatedClient();
+    }
 
     private T Svc<T>() where T : notnull => _factory.Services.GetRequiredService<T>();
 

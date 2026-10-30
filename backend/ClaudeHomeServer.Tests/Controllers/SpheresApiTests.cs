@@ -13,20 +13,26 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // A5 «Сфер»: членство проекта как выдача прав (400 на чужую/несуществующую сферу, MCP не
 // переносит проект, событие), удаление сферы с командой (409) и сводка сферы.
 [Trait("Category", "Host")]
-public class SpheresApiTests : IDisposable
+public class SpheresApiTests : IClassFixture<SpheresApiTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new();
+    // Хост на КЛАСС, а не на тест. Сферы, проекты и персон каждый тест заводит свои (уникальные
+    // id), перечислений «всех» нет. Единственное общее изменяемое — флаг spheres владельца:
+    // часть тестов зависит от «выключен», часть включает его сама, поэтому конструктор класса
+    // сбрасывает его перед каждым тестом
+    public sealed class Hosts : TestWebApplicationFactory;
+
+    private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
     private readonly HttpClient _stranger;
 
-    public SpheresApiTests()
+    public SpheresApiTests(Hosts hosts)
     {
+        _factory = hosts;
         _client = _factory.CreateAuthenticatedClient();
         _stranger = _factory.CreateAuthenticatedClient(
             TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+        _factory.Services.GetRequiredService<UserStore>().SetFeatureFlag(OwnerId, FeatureFlagKeys.Spheres, false);
     }
-
-    public void Dispose() => _factory.Dispose();
 
     private string OwnerId => _factory.Services.GetRequiredService<UserStore>()
         .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
@@ -71,10 +77,15 @@ public class SpheresApiTests : IDisposable
         var sphere = await CreateSphereAsync(_client, "для события");
         var projectId = await CreateProjectAsync(_client);
         var events = new List<SphereMembershipChanged>();
-        _factory.Services.GetRequiredService<ProjectManager>().OnSphereMembershipChanged += events.Add;
+        var projects = _factory.Services.GetRequiredService<ProjectManager>();
+        projects.OnSphereMembershipChanged += events.Add;
 
-        await _client.PutAsJsonAsync($"/api/projects/{projectId}", new { groupId = sphere });
-        await _client.PutAsJsonAsync($"/api/projects/{projectId}", new { name = "без смены" });
+        try
+        {
+            await _client.PutAsJsonAsync($"/api/projects/{projectId}", new { groupId = sphere });
+            await _client.PutAsJsonAsync($"/api/projects/{projectId}", new { name = "без смены" });
+        }
+        finally { projects.OnSphereMembershipChanged -= events.Add; }
 
         events.Should().ContainSingle().Which.Should().Be(
             new SphereMembershipChanged(OwnerId, projectId, null, sphere));

@@ -4829,6 +4829,16 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     }
 
 
+    // Глобальная персона не бывает собеседником чата общего проекта (S2a-8): рамка хода в
+    // общем проекте узкая для всех, включая арендатора (TurnFrame, решение 29.10), а
+    // глобальная персона — личное пространство арендатора: её характер и память утекали бы
+    // в общий чат. Отдельный тип, а не текст: контроллер отвечает code=global_persona_in_shared,
+    // фронт различает этот отказ среди прочих 400 (по образцу transcript_damaged).
+    public sealed class GlobalPersonaInSharedException(string message) : InvalidOperationException(message)
+    {
+        public const string Code = "global_persona_in_shared";
+    }
+
     // Назначить/сменить собеседника чату (единый селектор): персону (personaId) ИЛИ
     // стандартного .md-агента Claude (agentName) — взаимоисключающе. Оба пустые = снять.
     // Разрешено и ПО ХОДУ разговора: персона-слой строится на каждый ход, транскрипт
@@ -4847,6 +4857,14 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             persona = _personas.Get(personaId, ownerId)
                 ?? throw new KeyNotFoundException("Персона не найдена");
             EnsurePersonaVisible(persona, entry.Info.ProjectId);
+            // Глобальной персоне отказывает рамка, а не зона: VisibleIn для Global всегда
+            // открыт (PersonaZone.cs:24), поэтому единственная точка — GetTurnFrame: личный
+            // проект и чат вне проекта Wide (поведение прежнее), общий проект Narrow —
+            // включая случай самого арендатора (решение 29.10).
+            if (persona.Scope == PersonaScope.Global
+                && GetTurnFrame(sessionId, ownerId) == Access.TurnFrameKind.Narrow)
+                throw new GlobalPersonaInSharedException(
+                    $"Персона «{persona.Name}» — глобальная: в общем проекте она не может быть собеседником чата");
         }
 
         SwitchSpeaker(entry, persona, agentName);

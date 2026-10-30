@@ -121,6 +121,12 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
             var updated = sessions.SetPersona(sessionId, UserId, req.PersonaId, req.AgentName);
             return updated == null ? NotFound() : Ok(updated);
         }
+        // Глобальная персона чату общего проекта (S2a-8): 400 с машинным кодом, чтобы фронт
+        // различал этот отказ среди прочих 400 смены собеседника.
+        catch (SessionManager.GlobalPersonaInSharedException ex)
+        {
+            return BadRequest(new { error = ex.Message, code = SessionManager.GlobalPersonaInSharedException.Code });
+        }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
         catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
     }

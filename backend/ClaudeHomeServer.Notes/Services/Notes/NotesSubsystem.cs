@@ -90,6 +90,10 @@ public sealed class NotesSubsystem : IAppSubsystem
         services.AddSingleton<WikiApplyService>();
         // Очередь заявок разбора: два прохода модели → проверки → пакет → применение (S6b-3).
         services.AddSingleton<WikiIngestService>();
+        // Захват источников (S6h) и разбор чатов «сейчас» (S6e-2): vertical-внутренние типы,
+        // как Хранитель; захват раньше в DI не стоял — без него не резолвится его потребитель.
+        services.AddSingleton<WikiSourceCapture>();
+        services.AddSingleton<WikiChatIngestService>();
         // Сторож старта: пакеты, застрявшие в «applying» после падения процесса, откатывает по
         // прообразам (ADR-035, решение 4). Гейт по подсистеме и по Testing — общий хелпер.
         services.AddGatedHostedService<WikiApplyStartupGuard>(config, Key);

@@ -4,8 +4,8 @@ import { Info } from 'lucide-react';
 import { useFeatureStageFocus, clearFeatureStageFocus, focusFeatureStage } from '../../lib/featurePage';
 import { EMPTY_NAV_MARKS, buildNavMarks, type NavMarks } from '../../lib/featureNavMarks';
 import { C, R, FS, SP, FONT } from '../../lib/design';
-import { stepProgressFromRun, formatStepProgress } from '../../lib/featureProgress';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
+import { stepProgressFromRun } from '../../lib/featureProgress';
 import { Tooltip } from '../ui/Tooltip';
 import { Button } from '../ui/Button';
 import { getPersonaById } from '../../lib/personas';
@@ -108,22 +108,20 @@ function spanMinutes(from: string, to: string): number {
 // и возврат фокуса при закрытии).
 interface LanePick { stage: StageKey; index: number; el: HTMLElement | null }
 
-// Поясняющая строка (макет §5): Info 13, 11 textSecondary, bgCard, borderLight, R.md, поля 6 10.
+// Пояснение к этапам (Ш5): значок «i» справа, текст — в title (строки-плашки над лентой нет).
+export const TIMELINE_NOTE_TEXT = 'Порядок этапов, их состояние и кто работал — точные. Длительность со знаком «≈» — по задачам этапа. Ревью идёт по шагам, поэтому пересекается с производством.';
+
 function TimelineNote() {
   return (
-    <div
-      data-testid="timeline-note"
-      style={{
-        display: 'flex', gap: SP.sm, alignItems: 'flex-start',
-        background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.md,
-        padding: `${SP.xs}px ${SP.sm}px`, marginBottom: SP.md, fontFamily: FONT.sans,
-        fontSize: FS.xs, color: C.textSecondary, lineHeight: 1.45,
-      }}
-    >
-      <Info size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden style={{ flexShrink: 0, marginTop: SP.xxs }} />
-      <span>
-        Порядок этапов, их состояние и кто работал — точные. Длительность со знаком «≈» — по
-        задачам этапа. Ревью идёт по шагам, поэтому пересекается с производством.
+    <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: SP.xs }}>
+      <span
+        data-testid="timeline-note"
+        role="img"
+        aria-label={TIMELINE_NOTE_TEXT}
+        title={TIMELINE_NOTE_TEXT}
+        style={{ display: 'inline-flex', color: C.textMuted, cursor: 'help' }}
+      >
+        <Info size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden />
       </span>
     </div>
   );
@@ -1019,14 +1017,6 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false, st
       style={{ fontFamily: FONT.sans }}
     >
       <TimelineNote />
-      {progress && (
-        <div
-          data-testid="timeline-progress"
-          style={{ fontSize: FS.sm, color: C.textSecondary, marginBottom: SP.sm }}
-        >
-          {formatStepProgress(progress)}
-        </div>
-      )}
       {/* Ось времени над лентой: подписи встают ровно над дорожкой (отступы под колонки сетки) */}
       {hasLanes && axis && (
         <FeatureLaneAxis

@@ -22,6 +22,9 @@ import {
 } from './FeatureBriefModel';
 import { ActiveList } from './FeatureBriefActive';
 import { SummaryRow } from './FeatureBriefTimeline';
+import { FeatureTrackerBar, trackerBarAria } from '../chat/feature/FeatureTrackerBar';
+import { featureTruthBar } from '../chat/feature/featureTruthModel';
+import type { StepProgress } from '../../lib/featureProgress';
 import { stageLabel } from './FeatureStatsBits';
 import type { FeatureBrief, FeatureBriefKind } from '../../lib/featurePage';
 import type { FeatureStats } from '../../types/featureStats';
@@ -38,6 +41,9 @@ export interface FeatureBriefBlockProps {
   // Сколько шагов уже в master (F1: run.stepProgress.inMaster ответа страницы; в brief его
   // нет) — пометка на полоске готовности и в факте трекера. null/0 — отметки нет.
   inMaster?: number | null;
+  // Корзины трекера (run.stepProgress ответа страницы): из них строится полоса готовности.
+  // null/нет — полосы нет, остаётся подпись «N из M шагов · P %».
+  stepProgress?: StepProgress | null;
   // Резолвер имени персоны (usePersonas/getPersonaById); null — часть строки с именем опускается.
   nameOf?: PersonaNameResolver;
   isMobile?: boolean;
@@ -215,40 +221,31 @@ function parts(list: BriefDonePart[], monoColor: string): ReactNode[] {
   return list.map((p, i) => (p.mono ? <b key={i} style={{ ...MONO_STRONG, color: monoColor }}>{p.text}</b> : <span key={i}>{p.text}</span>));
 }
 
-function ReadinessColumn({ view }: { view: BriefReadinessView }) {
-  // Заливка: «готово» — accent, у закрытой — success, у устаревшей — тусклая; штриховка «в работе»
-  // той же краской (макет «Токены поимённо»). Анимации заполнения нет намеренно.
-  const fill = view.closed ? C.success : view.stale ? C.accentMuted : C.accent;
-  const hatch = view.stale
-    ? `repeating-linear-gradient(135deg, ${C.accentMuted} 0 3px, ${C.progressTrack} 3px 6px)`
-    : `repeating-linear-gradient(135deg, ${C.accent} 0 3px, ${C.accentMuted} 3px 6px)`;
-  // Сегмент «в master» (F1): начало залитой части — success («влито в master»), остаток
-  // готового — обычная краска заливки. Только когда полоска по шкале трекера (модель
-  // отдаёт 0 при оценке: на шкале оценки счётчик шагов не стоит). При закрытой фиче
-  // заливка и так success — сегмент не меняет вид, меняет только смысл в aria.
-  const master = view.inMasterPercent > 0 ? Math.min(view.inMasterPercent, view.percent) : 0;
+function ReadinessColumn({ view, stepProgress }: { view: BriefReadinessView; stepProgress: StepProgress | null }) {
+  // Полоса и легенда — тот же рендер, что у шапки чата (В2): корзины взаимоисключающие,
+  // сумма сегментов = stepProgress.total, «в master» в сумму не входит, пустые корзины скрыты.
+  const bar = featureTruthBar(stepProgress, view.inMaster);
   return (
     <div data-testid="brief-ready" style={{ minWidth: 0 }}>
       <div style={LABEL}>{view.label}</div>
       <div data-testid="brief-ready-caption" style={{ fontSize: FS.sm, color: C.textSecondary, margin: `${SP.xs}px 0` }}>
-        {/* Число — mono 600 textHeading, у устаревшей оценки — textSecondary. */}
-        {parts(view.caption, view.stale ? C.textSecondary : C.textHeading)}
+        {/* Число — mono 600 textHeading. */}
+        {parts(view.caption, C.textHeading)}
       </div>
-      <div
-        data-testid="brief-ready-bar"
-        role="progressbar"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={view.percent}
-        aria-label={view.ariaLabel}
-        style={{ display: 'flex', height: 8, borderRadius: R.max, overflow: 'hidden', background: C.progressTrack }}
-      >
-        {master > 0 && <div data-testid="brief-ready-fill-master" style={{ width: `${master}%`, background: C.success }} />}
-        <div data-testid="brief-ready-fill" style={{ width: `${Math.max(0, view.percent - master)}%`, background: fill }} />
-        {view.inProgressPercent > 0 && <div data-testid="brief-ready-hatch" style={{ width: `${view.inProgressPercent}%`, background: hatch }} />}
-      </div>
+      {bar && bar.segments.length > 0 && (
+        <>
+          <FeatureTrackerBar bar={bar} testId="brief-ready-bar" ariaLabel={trackerBarAria(bar)} />
+          <div data-testid="brief-ready-legend" style={{ display: 'flex', flexWrap: 'wrap', gap: `${SP.xxs}px ${SP.sm}px`, marginTop: SP.xs, fontSize: FS.xs, color: C.textSecondary }}>
+            {bar.segments.map(sg => (
+              <span key={sg.key} data-testid={`brief-legend-${sg.key}`} style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xxs }}>
+                <span aria-hidden style={{ width: 8, height: 8, borderRadius: R.max, background: sg.color, flexShrink: 0 }} />
+                <b style={{ ...MONO_STRONG, color: C.textHeading }}>{sg.count}</b> {sg.label}
+              </span>
+            ))}
+          </div>
+        </>
+      )}
       <div data-testid="brief-ready-tracker" style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: SP.xs }}>
-        {view.staleLabel && <span data-testid="brief-ready-stale" style={{ ...STALE_TAG, marginRight: SP.xs }}>{view.staleLabel}</span>}
         {parts(view.tracker, C.textPrimary)}
       </div>
       {(view.chips.length > 0 || view.chipsEmpty) && (
@@ -379,7 +376,7 @@ function BriefSkeleton({ isMobile }: { isMobile: boolean }) {
 
 // ── Карточка ─────────────────────────────────────────────────────────────────────────
 export function FeatureBriefBlock({
-  loading = false, brief, stats, mergedAt = null, inMaster = null, nameOf, isMobile = false,
+  loading = false, brief, stats, mergedAt = null, inMaster = null, stepProgress = null, nameOf, isMobile = false,
   onOpenStats, onRetry, onMerge, onOpenFinal, onOpenTask, onAnswer, onOpenTasks,
 }: FeatureBriefBlockProps) {
   // Одно «сейчас» на ответ (R-F8): относительные строки («ждёт N», «обновлено N назад»,
@@ -498,7 +495,7 @@ export function FeatureBriefBlock({
           marginTop: SP.md, paddingTop: SP.md, borderTop: `1px solid ${C.borderLight}`,
         }}
       >
-        <ReadinessColumn view={readiness} />
+        <ReadinessColumn view={readiness} stepProgress={stepProgress} />
         <EtaColumn view={eta} />
       </div>
 

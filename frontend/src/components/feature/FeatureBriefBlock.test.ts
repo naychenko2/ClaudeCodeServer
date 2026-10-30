@@ -34,6 +34,7 @@ import { FeatureBriefBlock } from './FeatureBriefBlock';
 import { briefEstimateText, briefNowText, briefReadinessText, briefSubText, BRIEF_MODEL_WORDS } from './FeatureBriefModel';
 import { featureRunStatusTag } from './FeatureStatusTag';
 import { stageLabel } from './FeatureStatsBits';
+import { formatDuration } from '../../lib/chatGroups';
 import { C, FONT } from '../../lib/design';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureBriefBlockProps } from './FeatureBriefBlock';
@@ -230,47 +231,48 @@ describe('«Готовность | Срок»', () => {
     expect(textNodes(findNodeByAttr(c, 'data-testid', 'brief-ready')!).join(' ')).toContain('Готовность');
   });
 
-  it('полоска — progressbar с трекерным значением; заливка «готово» C.accent, штриховки нет (Ш3)', () => {
-    const { c } = render({ brief: brief({ note: note({ inProgress: 3 }) }), nameOf });
-    const bar = findNodeByAttr(c, 'data-testid', 'brief-ready-bar')!;
-    expect(bar.attributes.role).toBe('progressbar');
-    expect(bar.attributes['aria-valuenow']).toBe('40');
-    expect(bar.attributes['aria-label']).toBe('Готовность 40 %');
-    expect(styleOf(c, 'brief-ready-fill').width).toBe('40%');
-    expect(styleOf(c, 'brief-ready-fill').background).toBe(C.accent);
-    expect(findNodeByAttr(c, 'data-testid', 'brief-ready-hatch'), 'штриховки «в работе» нет').toBeNull();
-  });
+  // Корзины трекера: 26 + 13 + 59 = 98 (сумма сегментов полосы = total); «в работе» пуста.
+  const SP98 = { planState: 'cut' as const, total: 98, accepted: 26, review: 13, work: 0, notCreated: 59, withdrawn: 0, unlinkedReworks: 0 };
+  const segFlex = (c: ReturnType<typeof render>['c'], key: string): number | null => {
+    const n = findNodeByAttr(c, 'data-testid', `feature-bar-${key}`);
+    return n ? (reactProps(n)!.style as Record<string, number>).flex : null;
+  };
 
-  it('устаревшая оценка не тускнит полосу и не даёт метки: полоска по живому трекеру (Ш3)', () => {
-    const { c } = render({ brief: brief({ note: note({}, { stale: true }) }), nameOf });
-    expect(styleOf(c, 'brief-ready-fill').background).toBe(C.accent);
+  it('полоса трекера (Ш5): сумма сегментов = stepProgress.total, пустые корзины скрыты, inMaster в сумму не входит', () => {
+    const { c } = render({ brief: brief(), stepProgress: SP98, inMaster: 4, nameOf });
+    const sum = ['accepted', 'review', 'work', 'notCreated'].reduce((a, k) => a + (segFlex(c, k) ?? 0), 0);
+    expect(sum).toBe(SP98.total);
+    expect(findNodeByAttr(c, 'data-testid', 'feature-bar-work'), 'пустая корзина скрыта').toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'brief-legend-work'), 'пустая корзина скрыта в легенде').toBeNull();
+    expect(joined(c, 'brief-legend-accepted')).toBe('26 принято');
+    expect(styleOf(c, 'feature-bar-accepted').background).toBe(C.success);
+    expect(findNodeByAttr(c, 'data-testid', 'brief-ready-bar')!.attributes['aria-label']).toBe('Готовность 27 %: 4 в master, 26 принято, 13 в ревью, 59 не заведено');
+    // старой полоски progressbar/штриховки нет
     expect(findNodeByAttr(c, 'data-testid', 'brief-ready-hatch')).toBeNull();
-    expect(findNodeByAttr(c, 'data-testid', 'brief-ready-stale'), 'метки устаревания нет').toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'brief-ready-fill')).toBeNull();
   });
 
-  it('закрытая — заливка C.success, штриховки нет, вместо чипов «ничего — всё сделано»', () => {
+  it('оценка оркестратора полосу не красит: caption и полоса по stepProgress, не по note.estimate', () => {
+    const { c } = render({ brief: brief({ note: note({ inProgress: 3 }) }), stepProgress: SP98, nameOf });
+    expect(joined(c, 'brief-ready-caption')).toBe('2 из 5 шагов · 40 %');
+    expect(segFlex(c, 'accepted')).toBe(26);
+  });
+
+  it('без stepProgress (старые ответы) полосы и легенды нет, подпись остаётся', () => {
+    const { c } = render({ brief: brief(), nameOf });
+    expect(findNodeByAttr(c, 'data-testid', 'brief-ready-bar')).toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'brief-ready-legend')).toBeNull();
+    expect(joined(c, 'brief-ready-caption')).toBe('2 из 5 шагов · 40 %');
+  });
+
+  it('закрытая — вместо чипов «ничего — всё сделано»', () => {
     const { c } = render({ brief: brief({ kind: 'closed', note: note({ remaining: [] }) }), mergedAt: at(24, 18, 5), nameOf });
-    expect(styleOf(c, 'brief-ready-fill').background).toBe(C.success);
-    expect(findNodeByAttr(c, 'data-testid', 'brief-ready-hatch')).toBeNull();
     expect(joined(c, 'brief-chip-empty')).toBe('ничего — всё сделано');
   });
 
-  it('«в master» (F1): сегмент C.success в начале заливки, остаток готового — обычная краска; пометка одна — в подписи', () => {
+  it('«в master» (F1): пометка одна — в подписи; в строке трекера её нет', () => {
     const { c } = render({ brief: brief({ done: { stepsAccepted: 4, stepsTotal: 5, loops: 0, planState: 'cut' } }), inMaster: 3, nameOf });
-    expect(styleOf(c, 'brief-ready-fill-master').width).toBe('60%');
-    expect(styleOf(c, 'brief-ready-fill-master').background).toBe(C.success);
-    expect(styleOf(c, 'brief-ready-fill').width).toBe('20%');
-    expect(styleOf(c, 'brief-ready-fill').background).toBe(C.accent);
     expect(joined(c, 'brief-ready-caption')).toContain('3 в master');
-    // минор 3 ревью 07eee660: в строке трекера пометки нет (дубль убран)
-    expect(joined(c, 'brief-ready-tracker')).not.toContain('в master');
-    expect(findNodeByAttr(c, 'data-testid', 'brief-ready-bar')!.attributes['aria-label']).toBe('Готовность 80 %, 3 в master');
-  });
-
-  it('без inMaster (старые ответы) — сегмента нет, заливка целиком прежняя', () => {
-    const { c } = render({ brief: brief({ done: { stepsAccepted: 4, stepsTotal: 5, loops: 0, planState: 'cut' } }), nameOf });
-    expect(findNodeByAttr(c, 'data-testid', 'brief-ready-fill-master')).toBeNull();
-    expect(styleOf(c, 'brief-ready-fill').width).toBe('80%');
     expect(joined(c, 'brief-ready-tracker')).not.toContain('в master');
   });
 
@@ -347,9 +349,15 @@ describe('«Готовность | Срок»', () => {
     expect(joined(c2, 'mini-summary-row')).not.toContain('в очереди');
   });
 
-  it('строка итогов: «идёт N» из elapsedMinutes первым фактом', () => {
-    const { c } = render({ brief: brief({ elapsedMinutes: 70 }), stats: stats() });
-    expect(joined(c, 'mini-summary-row').startsWith('идёт 1 ч 10 мин')).toBe(true);
+  it('строка итогов (Ш5): «с начала» = totals.elapsedMinutes, «работа» = workWallMinutes — разные числа, обе подписи; «идёт N» и цены нет', () => {
+    const st = stats();
+    const { c } = render({ brief: brief({ elapsedMinutes: 70 }), stats: st });
+    const row = joined(c, 'mini-summary-row');
+    expect(row).toContain(`с начала ${formatDuration(st.timeline.totals.elapsedMinutes)}`);
+    expect(row).toContain(`работа ${formatDuration(st.timeline.totals.workWallMinutes)}`);
+    expect(st.timeline.totals.elapsedMinutes).not.toBe(st.timeline.totals.workWallMinutes);
+    expect(row).not.toContain('идёт');
+    expect(row).not.toContain('$');
   });
 });
 

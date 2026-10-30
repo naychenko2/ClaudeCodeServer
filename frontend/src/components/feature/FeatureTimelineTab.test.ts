@@ -61,7 +61,7 @@ import { act } from 'react';
 import { createElement, StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { FeatureTimelineTab, laneAxisInsets, laneScaleWidth } from './FeatureTimelineTab';
+import { FeatureTimelineTab, laneAxisInsets, laneScaleWidth, TIMELINE_NOTE_TEXT } from './FeatureTimelineTab';
 import {
   stageName, stageStatusLabel, stageBoundsLabel, stageDurationLabel,
   stageDotStyle, stageLineStyle, buildTaskMap, minutesSince, executorStatus, stageStatusBadge,
@@ -547,6 +547,15 @@ describe('FeatureTimelineTab: рендер', () => {
     const c = renderTab(mkRun([]));
     expect(findNodeByAttr(c, 'data-testid', 'timeline-note')).not.toBeNull();
     expect(stageOrderInDom(c as never)).toEqual([]);
+  });
+
+  it('Ш5: строки formatStepProgress над лентой нет, пояснение — в title значка «i»', () => {
+    const run = { ...mkRun(fullStages()), stepProgress: { planState: 'partial' as const, total: 5, accepted: 3, review: 1, work: 1, notCreated: 0, withdrawn: 0, unlinkedReworks: 0 } };
+    const c = renderTab(run);
+    expect(findNodeByAttr(c, 'data-testid', 'timeline-progress'), 'строка прогресса убрана').toBeNull();
+    const note = findNodeByAttr(c, 'data-testid', 'timeline-note')!;
+    expect(note.attributes.title).toBe(TIMELINE_NOTE_TEXT);
+    expect(textNodes(c).join('')).not.toContain('Ревью идёт по шагам');
   });
 
   it('этап absent → «не было» (приглушённо)', () => {

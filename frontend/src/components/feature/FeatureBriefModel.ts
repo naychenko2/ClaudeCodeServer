@@ -13,7 +13,8 @@
 // Слова подстроки «Сейчас» и строки «Сделано» — тоже здесь (R-F5: единый источник
 // формулировки; блок только вызывает модель и красит числа моно).
 
-import { formatClock, formatDate, formatDuration, minutesSince, stageLabel } from './FeatureStatsBits';
+import { formatDuration } from '../../lib/chatGroups';
+import { formatClock, formatDate, minutesSince, stageLabel } from './FeatureStatsBits';
 import { trackerPercent } from '../../lib/featureProgress';
 import { laneWord } from '../../lib/roleLabel';
 import { knownStopVisual } from '../../lib/tasks';
@@ -415,18 +416,7 @@ export interface BriefReadinessView {
   ariaLabel: string;
   // F1: сколько шагов в master (0 — нет или данных нет; ортогональный счётчик бэка).
   inMaster: number;
-  // «в master»-сегмент полоски, % ширины полоски: доля шагов в master от знаменателя
-  // шкалы трекера. 0 — сегмента нет. Никогда не больше percent.
-  inMasterPercent: number;
-  // Место под Ш5: полоска по трекеру — штриховки «в работе» не из чего строить (корзину
-  // work brief не несёт), поле всегда 0; уходит вместе со старой полосой в Ш5.
-  inProgressPercent: number;
-  // Место под Ш5: полоска не по оценке — устаревшая оценка её не тускнит, всегда false.
-  stale: boolean;
   closed: boolean;
-  // Место под Ш5: всегда null — метка «до смены этапа»/«до паузы» принадлежит оценке и
-  // живёт в «Срок» (briefEstimateText.verdict), не на полоске трекера.
-  staleLabel: string | null;
   // Факт трекера: «по трекеру: 2 из 5 шагов приняты · 1 возврат».
   tracker: BriefDonePart[];
   // Подпись чипов: «Осталось:» — единственная (Ш3: «Ещё не начато:» было подписью
@@ -439,10 +429,6 @@ export interface BriefReadinessView {
 
 const MERGE_CHIP = 'мерж';
 const CHIP_CAP = 3;
-
-function clampPercent(n: number): number {
-  return Math.max(0, Math.min(100, Math.round(n)));
-}
 
 // Защита от битых чисел (тот же приём, что nonNeg в featureProgress): отрицательное/NaN — 0.
 function nonNeg(n: number | null | undefined): number {
@@ -476,15 +462,8 @@ export function briefReadinessText(brief: FeatureBrief, opts: BriefTextOptions =
     { text: `${stepsAccepted} из ${stepsTotal}`, mono: true }, { text: ' шагов · ', mono: false },
     { text: `${percent} %`, mono: true },
   ];
-  // Та же шкала, что у знаменателя полоски: доля шагов в master от total, не выше
-  // залитой части. Бэк НЕ гарантирует inMaster ≤ accepted: отсечка требует allDone
-  // цепочки, а не принятия (FeatureStepAccounting.cs:321-328), поэтому шаг «в master»
-  // без витка (корзина review) даёт inMaster > accepted. Это не битые числа, а правило
-  // полоски: «в master» — часть принятой части шкалы готовности, за неё сегмент не
-  // выходит; текст при этом честно называет факт (он ортогональный счётчик бэка),
-  // а расхождение говорит себе в «Трекер расходится» (вид unreviewed).
-  let inMasterPercent = 0;
-  if (inMaster > 0 && stepsTotal > 0) inMasterPercent = Math.min(clampPercent((inMaster / stepsTotal) * 100), percent);
+  // Бэк НЕ гарантирует inMaster ≤ accepted (FeatureStepAccounting.cs:321-328): текст честно
+  // называет факт (ортогональный счётчик бэка), расхождение говорит «Трекер расходится».
   caption.push(...masterParts(inMaster));
 
   // Чипы «осталось»: brief.next (до трёх стадий). estimate.remaining в готовности не
@@ -505,9 +484,7 @@ export function briefReadinessText(brief: FeatureBrief, opts: BriefTextOptions =
     label: 'Готовность · по трекеру',
     caption, percent,
     ariaLabel: inMaster > 0 ? `Готовность ${percent} %, ${inMaster} в master` : `Готовность ${percent} %`,
-    // Штриховки, тускнения и метки устаревания у полосы трекера нет: поля — место под Ш5.
-    inProgressPercent: 0, stale: false, closed, staleLabel: null, tracker,
-    inMaster, inMasterPercent,
+    closed, tracker, inMaster,
     chipsLabel: 'Осталось:',
     chips,
     chipsEmpty: closed ? 'ничего — всё сделано' : null,
@@ -667,16 +644,13 @@ function estimateView(brief: FeatureBrief, opts: BriefEstimateOptions): BriefEst
   return { ...base, main: NO_ESTIMATE, mainMuted: true, source: 'прошлых фич для сравнения мало' };
 }
 
-// Первый факт строки итогов: «идёт 1 ч 10 мин» по elapsedMinutes; у очереди — «в очереди N» по
-// queueWaitMinutes. «0 мин» — не факт (тот же порог round, что у formatDuration); у закрытой —
-// нет: её длительность уже в «Итог».
+// Первый факт строки итогов — только у очереди: «в очереди N» по queueWaitMinutes («0 мин» — не
+// факт, тот же порог round, что у formatDuration). «С начала» строка берёт сама из
+// totals.elapsedMinutes статов (Ш5), поэтому «идёт N» по brief.elapsedMinutes убрано (П3).
 export function briefElapsedFact(brief: FeatureBrief): { label: string; value: string } | null {
-  const pos = (m: number | null | undefined): m is number => m != null && Math.round(m) > 0;
-  if (brief.kind === 'closed' || brief.kind === 'merged') return null;
-  if (brief.kind === 'queued') {
-    return pos(brief.queueWaitMinutes) ? { label: 'в очереди', value: formatDuration(brief.queueWaitMinutes) } : null;
-  }
-  return pos(brief.elapsedMinutes) ? { label: 'идёт', value: formatDuration(brief.elapsedMinutes) } : null;
+  if (brief.kind !== 'queued') return null;
+  const m = brief.queueWaitMinutes;
+  return m != null && Math.round(m) > 0 ? { label: 'в очереди', value: formatDuration(m) } : null;
 }
 
 // ── «N мин/ч назад» ────────────────────────────────────────────────────────────────

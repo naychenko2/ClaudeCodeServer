@@ -3,7 +3,6 @@ import type { CSSProperties, FocusEvent, ReactNode } from 'react';
 import { ArrowRight, Check, GitBranch, ListChecks, MessageCircle, ListEnd, ListX, Pause, Play, RotateCcw, Zap } from 'lucide-react';
 import { C, R, SHADOW, FS, SP, FONT, MODAL_W } from '../../lib/design';
 import { refetchFeaturePage } from '../../lib/featurePage';
-import { stepProgressFromRun, type StepProgress } from '../../lib/featureProgress';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { ToolbarOverflowMenu, type OverflowItem } from '../ToolbarOverflowMenu';
 import { Button } from '../ui/Button';
@@ -21,7 +20,6 @@ import { showToast } from '../../lib/toast';
 import type { FeatureRun, FeatureState, FeatureAttention, FeatureNow, FeatureQueue, FeatureHold } from '../../types/featureRun';
 import { api } from '../../lib/api';
 import type { FeatureIndexFeature } from '../../types/featureIndex';
-import { taskCounters } from './featurePageBody';
 import { NavTargetButton } from './NavTargetButton';
 import { StatusTag, type FeatureRunTag } from './FeatureStatusTag';
 import { analysisLineState } from './FeatureAnalysisModel';
@@ -64,8 +62,8 @@ function attentionPersonaName(a: FeatureAttention | null | undefined): string | 
 
 // === Мета-строка под шапкой (макет §1) ===
 //
-// Тег (только 360: на 1280 он в шапке) · ветка (клик копирует, тост) · возраст ·
-// число задач. Поля 4 12, перенос; 12 textSecondary; ветка — mono 11 + GitBranch 12,
+// Тег (только 360: на 1280 он в шапке) · ветка (клик копирует, тост) · чип «ведёт».
+// Возраст, число задач и сегменты прогресса ушли в сводку (Ш5). Поля 4 12, перенос; 12 textSecondary; ветка — mono 11 + GitBranch 12,
 // наведение bgSelected, на 360 minHeight 40.
 export interface FeaturePageHeaderProps {
   // null — данных страницы ещё нет (loading): строится по индексу.
@@ -75,52 +73,6 @@ export interface FeaturePageHeaderProps {
   isMobile: boolean;
   // Тег страницы (считает FeaturePage: run.state, фолбэк — индекс).
   tag: FeatureRunTag | null;
-}
-
-// Сегмент честного прогресса (Ф-pr): число (mono, bold) + подпись. `always` — показывать
-// даже при 0 («общий»/«принято» — всегда видны).
-function Seg({ label, value, always = false }: { label: string; value: number; always?: boolean }) {
-  if (value === 0 && !always) return null;
-  return (
-    <span
-      data-testid={`feature-page-seg-${label}`}
-      style={{
-        display: 'inline-flex', alignItems: 'baseline', gap: 4,
-        fontSize: FS.xs, color: C.textSecondary,
-        background: C.bgSelected, borderRadius: R.sm, padding: `${SP.xxs}px ${SP.xs}px`,
-        whiteSpace: 'nowrap',
-      }}
-    >
-      <b style={{ color: C.textHeading, fontWeight: 700, fontFamily: FONT.mono }}>{value}</b>
-      <span style={{ fontFamily: FONT.sans }}>{label}</span>
-    </span>
-  );
-}
-
-// Честный прогресс в шапке (Ф-pr): 4 основных сегмента (общий/принято/на ревью/в работе)
-// + 2 вторичных (не заведено/снято).
-// Сегмент с 0 скрыт, кроме «общего» и «принято» (всегда).
-function StepProgressSegments({ p }: { p: StepProgress }) {
-  const hasSecondary = p.notCreated > 0 || p.withdrawn > 0;
-  return (
-    <div
-      data-testid="feature-page-steps"
-      style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs, minWidth: 0 }}
-    >
-      <div style={{ display: 'flex', gap: SP.xs, flexWrap: 'wrap' }}>
-        <Seg label="общий" value={p.total} always />
-        <Seg label="принято" value={p.accepted} always />
-        <Seg label="на ревью" value={p.review} />
-        <Seg label="в работе" value={p.work} />
-      </div>
-      {hasSecondary && (
-        <div style={{ display: 'flex', gap: SP.xs, flexWrap: 'wrap' }}>
-          <Seg label="не заведено" value={p.notCreated} />
-          <Seg label="снято" value={p.withdrawn} />
-        </div>
-      )}
-    </div>
-  );
 }
 
 // === Чип «ведёт ·» (макет pt1, W4-1F) ===
@@ -243,7 +195,7 @@ function LeadChip({ feature, isMobile }: { feature: FeatureIndexFeature; isMobil
   );
 }
 
-export function FeaturePageHeader({ run, feature, isMobile, tag }: FeaturePageHeaderProps) {
+export function FeaturePageHeader({ feature, isMobile, tag }: FeaturePageHeaderProps) {
   const branch = feature?.branch ?? null;
 
   // Копировать ветку: clipboard + тост (макет: «клик копирует, тост»).
@@ -257,42 +209,6 @@ export function FeaturePageHeader({ run, feature, isMobile, tag }: FeaturePageHe
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
-
-  // Возраст: смержена/закрыта — «шла {итог}» (summary.durationMinutes, бэк считает);
-  // не начата — «создана {N} назад»; иначе — «идёт {от создания до сейчас}».
-  const createdAt = feature?.createdAt ?? run?.epic?.createdAt ?? null;
-  let age: string | null = null;
-  if (createdAt) {
-    const created = new Date(createdAt).getTime();
-    if (Number.isFinite(created)) {
-      if (run?.state === 'merged' || run?.state === 'closed') {
-        const d = run?.summary?.durationMinutes;
-        age = d != null ? `шла ${formatDuration(d)}` : null;
-      } else if (run?.state === 'paused' || run?.state === 'draft') {
-        // Пауза/черновик: «идёт» — неправда, работа стоит по решению человека
-        // (feature-hold-1.md): возраст — от Hold.Since, не от создания.
-        const since = run?.hold?.since ? new Date(run.hold.since).getTime() : NaN;
-        age = Number.isFinite(since)
-          ? `${run.state === 'paused' ? 'на паузе' : 'черновик'} ${formatDuration(Math.max(1, Math.round((Date.now() - since) / 60000)))}`
-          : null;
-      } else if (run?.state === 'not_started' || run?.state === 'idle') {
-        age = `создана ${formatDuration(Math.max(1, Math.round((Date.now() - created) / 60000)))} назад`;
-      } else {
-        age = `идёт ${formatDuration(Math.max(1, Math.round((Date.now() - created) / 60000)))}`;
-      }
-    }
-  }
-
-  // «N задач» — ОДИН источник со строками вкладки «Задачи»: taskCounters(run).total
-  // (честное число из run, не taskCount из индекса — индекс может расходиться с run).
-  // run=null (loading) — прочерк: число из индекса (taskCount) показало бы значение,
-  // которое изменится, когда run придёт.
-  const total = run ? taskCounters(run).total : null;
-  const tasks = total != null
-    ? (total > 0 ? `${total} ${pluralTasks(total)}` : 'задач нет')
-    : '—';
-  // Честный прогресс (Ф-pr): из run.stepProgress; null — run нет (loading) или старые данные.
-  const progress = run ? stepProgressFromRun(run) : null;
 
   const branchBtn = branch && (
     <button
@@ -326,21 +242,10 @@ export function FeaturePageHeader({ run, feature, isMobile, tag }: FeaturePageHe
       >
         {isMobile && tag && <StatusTag tag={tag} testId="feature-page-status" />}
         {branchBtn}
-        {age && <span>{age}</span>}
-        <span data-testid="feature-page-taskcount">{tasks}</span>
         {feature && <LeadChip feature={feature} isMobile={isMobile} />}
       </div>
-      {progress && <StepProgressSegments p={progress} />}
     </div>
   );
-}
-
-// Склонение «задача/задачи/задач» (экспортируется для теста).
-export function pluralTasks(n: number): string {
-  const d = n % 10, h = n % 100;
-  if (d === 1 && h !== 11) return 'задача';
-  if (d >= 2 && d <= 4 && (h < 10 || h >= 20)) return 'задачи';
-  return 'задач';
 }
 
 // === Пауза и черновик (W4-HOLD-F2, макет feature-hold-1) ===

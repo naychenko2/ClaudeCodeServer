@@ -15,7 +15,7 @@ import { act, useSyncExternalStore } from 'react';
 import { createElement, StrictMode } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeaturePage, type FeaturePageBackTarget } from './FeaturePage';
-import { pluralTasks, featureRunStatusTag } from './FeaturePageHeader';
+import { featureRunStatusTag } from './FeaturePageHeader';
 import { __test as pageTest, setFeaturePageTab, refetchFeaturePage, type FeatureBrief } from '../../lib/featurePage';
 import { __test as indexTest } from '../../lib/featuresIndex';
 import { __test as backNavTest, recordBackNav, clearBackNav } from '../../lib/featureBackNav';
@@ -374,7 +374,9 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     expect(findNodeByAttr(c, 'data-testid', 'feature-page-alarm'), 'тревога (running, без attention — нет)').toBeNull();
     expect(findNodeByAttr(c, 'data-testid', 'feature-page-main-action'), 'главное действие (running, без attention — нет)').toBeNull();
     expect(findNodeByAttr(c, 'data-testid', 'feature-page-branch'), 'ветка в мета-строке (волна 3)').not.toBeNull();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-taskcount'), '«M задач» в мета-строке (волна 3)').not.toBeNull();
+    // Ш5: возраст, «M задач» и сегменты ушли из шапки в сводку — в DOM их нет.
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-taskcount'), '«M задач» в мета-строке убрано (Ш5)').toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-steps'), 'сегменты прогресса убраны (Ш5)').toBeNull();
     expect(findNodeByAttr(c, 'aria-label', 'Ещё'), 'меню ⋯ (волна 3) — триггер на месте').not.toBeNull();
     // Строки чатов/шагов/событий фичи — нет. («Мерж»-стадия конвейера — легитимна, не проверяем по тексту.)
     expect(findNodeByAttr(c, 'data-testid', 'feature-chat-chat-key'), 'строка чата на месте (as a file: убрана)').toBeNull();
@@ -1160,18 +1162,6 @@ describe('Esc: useEscapeClose (общий хук, CenterViewShell)', () => {
     act(() => { root.unmount(); });
     esc(win);
     expect(onBack, 'слушатель Esc не снят при размонтировании (stale listener)').not.toHaveBeenCalled();
-  });
-});
-
-// Минор 5: склонение «задача/задачи/задач» (FeaturePageHeader.pluralTasks).
-// Мутация (в отчёте): сломать любое правило (11→задача, 21→задачи) → red.
-describe('pluralTasks: склонение «задача/задачи/задач»', () => {
-  it('1 задача / 2 задачи / 5 задач / 11 задач / 21 задача', () => {
-    expect(pluralTasks(1)).toBe('задача');
-    expect(pluralTasks(2)).toBe('задачи');
-    expect(pluralTasks(5)).toBe('задач');
-    expect(pluralTasks(11)).toBe('задач');
-    expect(pluralTasks(21)).toBe('задача');
   });
 });
 

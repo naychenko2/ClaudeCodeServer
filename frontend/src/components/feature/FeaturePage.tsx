@@ -362,6 +362,7 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
                 stats={page.page.stats ?? null}
                 mergedAt={okRun.summary?.mergedAt ?? null}
                 inMaster={okRun.stepProgress?.inMaster ?? null}
+                stepProgress={okRun.stepProgress ?? null}
                 isMobile={isMobile}
                 onOpenStats={() => setFeaturePageTab('stats')}
                 onRetry={() => refetchFeaturePage(featureId)}

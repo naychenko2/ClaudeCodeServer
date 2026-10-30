@@ -7,13 +7,13 @@
 // «принято N из M» и «все готово» НЕ показываем (прогресс — строка «Сделано» карточки).
 
 import { C, FS, FONT } from '../../lib/design';
-import { formatDuration } from './FeatureStatsBits';
+import { formatDuration } from '../../lib/chatGroups';
 import { BRIEF_WAIT_WORD } from './FeatureBriefModel';
-import { formatTokens, formatUsd } from './FeatureStatsFormat';
+import { formatTokens } from './FeatureStatsFormat';
 import type { FeatureStats } from '../../types/featureStats';
 
-// Строка итогов: «идёт N · работа ≈ N · ждёт вас N» + токены + цена. lead — первый факт
-// («идёт N» / «в очереди N»), слова приходят из модели.
+// Строка итогов: «с начала N · работа ≈ N · ждёт вас N» + токены (цены нет — «Расход $» в «Статистике»).
+// lead — «в очереди N» у очереди, слова приходят из модели.
 export function SummaryRow({ stats, lead }: { stats: FeatureStats; lead?: { label: string; value: string } | null }) {
   const t = stats.timeline.totals;
   const isApprox = stats.source === 'approx';
@@ -40,11 +40,13 @@ export function SummaryRow({ stats, lead }: { stats: FeatureStats; lead?: { labe
     if (d) waitPart = `не работали ${isApprox ? '≈ ' : ''}${d}`;
   }
   const workDur = shown(t.workWallMinutes);
+  // «С начала» — стена от старта (totals.elapsedMinutes), «работа» — стена работы
+  // (workWallMinutes): два разных числа с двумя подписями (П3, Ш5).
+  const sinceStart = shown(t.elapsedMinutes);
 
   // Токены «вход+выход» (spend).
   const spend = stats.spend;
   const tokens = spend ? spend.inputTokens + spend.outputTokens : null;
-  const cost = spend && !spend.costPartial ? spend.costUsd : null;
 
   return (
     <div
@@ -59,6 +61,11 @@ export function SummaryRow({ stats, lead }: { stats: FeatureStats; lead?: { labe
           {lead.label} <b style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textHeading }}>{lead.value}</b>
         </span>
       )}
+      {sinceStart && (
+        <span>
+          с начала <b style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textHeading }}>{sinceStart}</b>
+        </span>
+      )}
       {workDur && (
         <span>
           работа <b style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textHeading }}>{isApprox ? '≈ ' : ''}{workDur}</b>
@@ -68,11 +75,6 @@ export function SummaryRow({ stats, lead }: { stats: FeatureStats; lead?: { labe
       {tokens != null && tokens > 0 && (
         <span>
           <b style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textHeading }}>{formatTokens(tokens)}</b> токенов
-        </span>
-      )}
-      {cost != null && (
-        <span>
-          <b style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textHeading }}>{formatUsd(cost)}</b>
         </span>
       )}
     </div>

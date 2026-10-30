@@ -190,6 +190,63 @@ public class McpNarrowFrameTests : IDisposable
         f.AssertNoPersonal(text);
     }
 
+    /// <summary>Личная задача владельца (ProjectId == null) с маркером PERSONAL в названии.</summary>
+    private async Task<string> CreateLoosePersonalTaskAsync(string tag)
+    {
+        var resp = await _client.PostAsJsonAsync("/api/tasks", new { title = $"PERSONAL-личная-{tag}" });
+        resp.EnsureSuccessStatusCode();
+        return IdOf(JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync()));
+    }
+
+    // Не-эхо: id из аргумента вызывающий и так знает, проверяем, что название задачи не утекло
+    [Theory]
+    [InlineData("tasks_get")]
+    [InlineData("tasks_update")]
+    [InlineData("tasks_delete")]
+    [InlineData("tasks_complete")]
+    [InlineData("tasks_add_subtask")]
+    [InlineData("tasks_toggle_subtask")]
+    [InlineData("tasks_run_executor")]
+    public async Task Tasks_УзкаяРамка_ЛичнаяЗадачаБезПроекта_ПоId_Отказ(string tool)
+    {
+        var f = await ArrangeAsync();
+        var looseId = await CreateLoosePersonalTaskAsync(f.Tag);
+        var (text, isError) = await CallAsync("tasks", f.SharedChat, tool,
+            new { id = looseId, taskId = looseId, title = "взлом", subtaskTitle = "x", isDone = true });
+        isError.Should().BeTrue($"{tool}: {text}");
+        text.Should().NotContain("PERSONAL");
+        // задача не тронута и доступна владельцу в личном чате
+        var (own, ownErr) = await CallAsync("tasks", f.PersonalChat, "tasks_get", new { id = looseId });
+        ownErr.Should().BeFalse(own);
+        own.Should().NotContain("взлом");
+    }
+
+    [Fact]
+    public async Task Tasks_УзкаяРамка_ПрефиксныйПоискGet_НеРаскрываетЛичныеЗадачи()
+    {
+        var f = await ArrangeAsync();
+        var looseId = await CreateLoosePersonalTaskAsync(f.Tag);
+        var (text, isError) = await CallAsync("tasks", f.SharedChat, "tasks_get", new { id = looseId[..8] });
+        isError.Should().BeTrue(text);
+        text.Should().NotContain("PERSONAL").And.NotContain(looseId).And.NotContain("Несколько");
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("чужой-проект")]
+    public async Task Tasks_УзкаяРамка_UpdateСПустымИЛишнимProjectId_Отказ_ЗадачаОстаётсяВПроекте(string target)
+    {
+        var f = await ArrangeAsync();
+        var (created, createErr) = await CallAsync("tasks", f.SharedChat, "tasks_create", new { title = "в общем" });
+        createErr.Should().BeFalse(created);
+        var taskId = IdOf(JsonSerializer.Deserialize<JsonElement>(created));
+        var (text, isError) = await CallAsync("tasks", f.SharedChat, "tasks_update",
+            new { id = taskId, projectId = target });
+        isError.Should().BeTrue(text);
+        var (after, _) = await CallAsync("tasks", f.SharedChat, "tasks_get", new { id = taskId });
+        after.Should().Contain(f.SharedProject);
+    }
+
     [Fact]
     public async Task Tasks_ЛичныйПроект_ScopeAll_РаботаетКакПрежде()
     {

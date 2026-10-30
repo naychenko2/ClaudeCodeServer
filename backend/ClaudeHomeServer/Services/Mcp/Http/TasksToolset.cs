@@ -107,7 +107,8 @@ public sealed class TasksToolset(
         // привязки персоны отбрасываем (зона = один проект), scope=all, список проектов и поиск по
         // всем задачам закрыты. Вердикт только читается; состав tools/list от него не зависит.
         var frame = frames.Frame(context.CallerSessionId, context.OwnerId);
-        if (frame == TurnFrameKind.Narrow)
+        var narrow = frame == TurnFrameKind.Narrow;
+        if (narrow)
         {
             if (NarrowDenied(tool, arguments, projectId)) return Deny(NarrowText);
             extraScopes = [];
@@ -150,7 +151,7 @@ public sealed class TasksToolset(
                     return BriefList(all.Where(t => t.ProjectId == explicitProject));
                 }
                 if (StringArg(arguments, "scope") == "all")
-                    return BriefList(all.Where(t => InScope(projectId, allowed, t)));
+                    return BriefList(all.Where(t => InScope(projectId, allowed, t, narrow)));
                 // scope=context (дефолт): проект чата, либо личные задачи владельца
                 var data = projectId is not null
                     ? all.Where(t => t.ProjectId == projectId)
@@ -167,13 +168,13 @@ public sealed class TasksToolset(
                         t.Title.Contains(q, StringComparison.OrdinalIgnoreCase)
                         || t.Description.Contains(q, StringComparison.OrdinalIgnoreCase)
                         || t.Labels.Any(l => l.Contains(q, StringComparison.OrdinalIgnoreCase)));
-                return Json(all.Where(t => InScope(projectId, allowed, t)).Select(Brief).ToList());
+                return Json(all.Where(t => InScope(projectId, allowed, t, narrow)).Select(Brief).ToList());
             }
 
             case "tasks_get":
             {
                 var id = StringArg(arguments, "id");
-                var (task, candidates) = GetForRead(context.OwnerId, projectId, allowed, id);
+                var (task, candidates) = GetForRead(context.OwnerId, projectId, allowed, id, narrow);
                 if (task is not null) return TaskJson(task, context.OwnerId);
                 // Неоднозначный префикс: краткий список кандидатов (id + title, до 5), чтобы модель выбрала
                 if (candidates is { Count: > 0 })
@@ -311,7 +312,7 @@ public sealed class TasksToolset(
                 var id = StringArg(arguments, "id");
                 if (tasks.GetById(id) is not { OwnerId: var taskOwner } existing || taskOwner != context.OwnerId)
                     return Deny($"Задача {id} не найдена.");
-                var denied = TaskDenied(projectId, allowed, existing);
+                var denied = TaskDenied(projectId, allowed, existing, narrow);
                 if (denied is not null) return Deny(denied);
 
                 // Смена фичи задачи (featureId или превращение в эпик ролью) — та же дверь, что у создания
@@ -519,7 +520,7 @@ public sealed class TasksToolset(
             case "tasks_complete":
             {
                 var id = StringArg(arguments, "id");
-                if (GetAccessible(context.OwnerId, projectId, allowed, id) is not { } task)
+                if (GetAccessible(context.OwnerId, projectId, allowed, id, narrow) is not { } task)
                     return Deny($"Задача {id} не найдена или недоступна в этом контексте.");
                 // Дефект: вердикт/исход. Автор вердикта берётся из сессии вызова (заголовок
                 // X-Caller-Session-Id на REST-пути, хвост-сессия здесь); null PersonaId у чата
@@ -604,7 +605,7 @@ public sealed class TasksToolset(
                 // Скоуп задачи: исполнитель стартует в рабочем каталоге её проекта — задача
                 // чужого (непривязанного) проекта запускаться не должна, как её не пустил бы
                 // tasks_update (усилитель блокера 2.1: у stdio этой проверки не было вовсе)
-                var scopeDenied = TaskDenied(projectId, allowed, task);
+                var scopeDenied = TaskDenied(projectId, allowed, task, narrow);
                 if (scopeDenied is not null)
                 {
                     DelegatedTurnGate.Refund(sessions, session.Id, context.OwnerId, gate);
@@ -661,7 +662,7 @@ public sealed class TasksToolset(
             case "tasks_delete":
             {
                 var id = StringArg(arguments, "id");
-                if (GetAccessible(context.OwnerId, projectId, allowed, id) is not { } task)
+                if (GetAccessible(context.OwnerId, projectId, allowed, id, narrow) is not { } task)
                     return Deny($"Задача {id} не найдена или недоступна в этом контексте.");
                 // W4-HOLD-N (хвост R-N п.3): та же страховка, что у REST-удаления: MCP-путь
                 // её обходил — удалённый на паузе эпик/шаг оставлял чат «вечным».
@@ -675,7 +676,7 @@ public sealed class TasksToolset(
             {
                 // Подзадачи обновляются списком целиком: читаем, добавляем, сохраняем
                 var taskId = StringArg(arguments, "taskId");
-                if (GetAccessible(context.OwnerId, projectId, allowed, taskId) is not { } task)
+                if (GetAccessible(context.OwnerId, projectId, allowed, taskId, narrow) is not { } task)
                     return Deny($"Задача {taskId} не найдена или недоступна в этом контексте.");
                 var subtasks = task.Subtasks
                     .Select(s => new UpdateSubtaskRequest(s.Id, s.Title, s.IsDone)).ToList();
@@ -700,7 +701,7 @@ public sealed class TasksToolset(
             case "tasks_toggle_subtask":
             {
                 var taskId = StringArg(arguments, "taskId");
-                if (GetAccessible(context.OwnerId, projectId, allowed, taskId) is not { } task)
+                if (GetAccessible(context.OwnerId, projectId, allowed, taskId, narrow) is not { } task)
                     return Deny($"Задача {taskId} не найдена или недоступна в этом контексте.");
                 var subtaskId = StringArg(arguments, "subtaskId");
                 var subtaskTitle = StringArg(arguments, "subtaskTitle");
@@ -829,7 +830,8 @@ public sealed class TasksToolset(
         projectId is null
         || tool is "tasks_list_projects" or "tasks_search"
         || (tool == "tasks_list" && StringArg(arguments, "scope") == "all")
-        || (OptionalArg(arguments, "projectId") is { } requested && requested != projectId);
+        // ContainsKey, а не OptionalArg: пустая строка в update значит «сделать личной» и рамку не проходит
+        || (arguments["projectId"] is not null && StringArg(arguments, "projectId") != projectId);
 
     private static IReadOnlyCollection<string> AllowedProjectIds(string? projectId,
         IReadOnlyList<(string ProjectId, bool ReadOnly)> extraScopes)
@@ -865,18 +867,20 @@ public sealed class TasksToolset(
 
     // Задача видна в контексте: без проекта чата — весь воркспейс владельца; личные задачи
     // (без проекта) видны из любого чата; проектные — только из доступных проектов
-    private static bool InScope(string? projectId, IReadOnlyCollection<string> allowed, TaskItem t)
+    // В узкой рамке (общий проект) личные задачи арендатора/владельца вне рамки: у чата есть проект
+    private static bool InScope(string? projectId, IReadOnlyCollection<string> allowed, TaskItem t, bool narrow = false)
     {
         if (projectId is null) return true;
-        if (t.ProjectId is null) return true;
+        if (t.ProjectId is null) return !narrow;
         return allowed.Contains(t.ProjectId);
     }
 
     // Задача по id: владение + видимость в контексте (закрывает доступ к чужим проектам по id)
-    private TaskItem? GetAccessible(string ownerId, string? projectId, IReadOnlyCollection<string> allowed, string id)
+    private TaskItem? GetAccessible(string ownerId, string? projectId, IReadOnlyCollection<string> allowed, string id, bool narrow = false)
     {
         var task = tasks.GetById(id);
         if (task is null || task.OwnerId != ownerId) return null;
+        if (narrow && task.ProjectId is null) return null;
         if (projectId is not null && task.ProjectId is not null && !allowed.Contains(task.ProjectId)) return null;
         return task;
     }
@@ -887,13 +891,13 @@ public sealed class TasksToolset(
     // Запись (update/complete/delete/сабтаски) идёт через GetAccessible — полным id: ошибка
     // в записи стоит дороже, чем в чтении, поэтому префикс туда не пускаем.
     private (TaskItem? Task, IReadOnlyList<TaskItem>? Candidates) GetForRead(
-        string ownerId, string? projectId, IReadOnlyCollection<string> allowed, string id)
+        string ownerId, string? projectId, IReadOnlyCollection<string> allowed, string id, bool narrow = false)
     {
-        if (GetAccessible(ownerId, projectId, allowed, id) is { } exact) return (exact, null);
+        if (GetAccessible(ownerId, projectId, allowed, id, narrow) is { } exact) return (exact, null);
         if (!LooksLikeIdPrefix(id)) return (null, null);
         // Того же владельца, видимые в контексте (InScope), id начинается с префикса (без учёта регистра)
         var candidates = tasks.GetByOwner(ownerId)
-            .Where(t => InScope(projectId, allowed, t) && t.Id.StartsWith(id, StringComparison.OrdinalIgnoreCase))
+            .Where(t => InScope(projectId, allowed, t, narrow) && t.Id.StartsWith(id, StringComparison.OrdinalIgnoreCase))
             .ToList();
         return candidates.Count switch
         {
@@ -908,8 +912,10 @@ public sealed class TasksToolset(
         id.Length >= 8 && id.All(c =>
             c == '-' || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'));
 
-    private static string? TaskDenied(string? projectId, IReadOnlyCollection<string> allowed, TaskItem task)
+    private static string? TaskDenied(string? projectId, IReadOnlyCollection<string> allowed, TaskItem task,
+        bool narrow = false)
     {
+        if (narrow && task.ProjectId is null) return NarrowText;
         if (projectId is null || task.ProjectId is null) return null;
         return allowed.Contains(task.ProjectId)
             ? null

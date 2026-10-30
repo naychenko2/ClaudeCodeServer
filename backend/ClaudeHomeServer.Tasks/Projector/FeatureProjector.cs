@@ -968,7 +968,7 @@ public sealed class FeatureProjector(TaskManager tasks)
     // Эпик (feature) в «Сейчас» не доходит: он контейнер фичи и исключён из Now, см. Build.)
 
     // Возвраты по источникам: для каждого источника (ревью/проверка/финал) — число возвратов
-    // (уникальные задачи с returned/accepted_with_remarks) и сколько из них открыто (их доработка
+    // (витки — задачи-носители вердикта returned/accepted_with_remarks) и сколько из них открыто (их доработка
     // ещё не done). «Доработка» — rework-задача, чей ReviewOf ссылается на задачу-источник.
     // Риски мержа из уже посчитанных учёта шагов и сверки трекера; порядок фиксирован, нули не кладём.
     internal static List<FeatureMergeRisk> BuildMergeRisks(FeatureStepProgress progress, int trackerCount)

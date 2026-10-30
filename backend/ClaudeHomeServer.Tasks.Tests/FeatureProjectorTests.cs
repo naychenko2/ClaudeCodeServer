@@ -473,6 +473,26 @@ public class FeatureProjectorTests
         run.Verdicts.Loops.Should().BeGreaterThan(0);
     }
 
+    // accepted_with_remarks — тоже виток: мутация IsReturn без него обязана покраснеть.
+    [Fact]
+    public void Build_ВозвратыПоИсточникам_AcceptedWithRemarksСчитаетсяВитком()
+    {
+        const string epicId = "epic-awr";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var step = new TaskItem { Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, Status = TaskItemStatus.Done };
+        var review = new TaskItem
+        {
+            Id = "r1", FeatureId = epicId, Role = TaskRoles.Review, Status = TaskItemStatus.Done,
+            ReviewOf = ["s1"],
+            Verification = new TaskVerification { Verdict = TaskVerdicts.AcceptedWithRemarks },
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, step, review]);
+
+        run.ReturnsBySource.Review.Count.Should().Be(1, "accepted_with_remarks — виток-возврат");
+        run.Verdicts.Loops.Should().Be(1);
+    }
+
     // Мутация (а): связь шага с ревью идёт ТОЛЬКО через пересечение ReviewOf.
     // Сломал: цепляем витки без пересечения (всегда true) → sc-r2 (только про sc-s3)
     // ошибочно попадает в цепочку Ш1. Без мутации тест зелёный.

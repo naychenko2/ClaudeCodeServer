@@ -105,6 +105,21 @@ public sealed class FeatureRun
     // TR-B1c: расхождения трекера с реальностью (сверка трекера, один вызов в проекторе).
     // Единая точка правды: индекс берёт Count отсюда, фронт и MCP не пересчитывают. Не null.
     public List<FeatureTrackerIssue> Tracker { get; init; } = [];
+    // Все закрытые мержи фичи (role=merge, Done с датой) по моменту закрытия — метки для ганта.
+    // Не обрезают график: ClosureAt смотрит только на State. Пусто — мержей не было.
+    public List<FeatureMergeMark> Merges { get; init; } = [];
+    // Волна после мержа: после последнего закрытого мержа заведён шаг/доработка (или к предыдущему
+    // мержу осталась открытая работа) — состояние merged снято до следующего мержа без неё.
+    public bool WaveAfterMerge { get; init; }
+}
+
+// Метка мержа на гантe: id задачи мержа, момент закрытия и шаги, попавшие в master по этому мержу
+// (шаг учитывается в первом подходящем мерже: StepChain.MergedAt == At).
+public sealed class FeatureMergeMark
+{
+    public string TaskId { get; init; } = "";
+    public DateTime At { get; init; }
+    public List<string> StepRefs { get; init; } = [];
 }
 
 // Расхождение трекера: TaskId — задача-источник (для цепочки — сданная задача или вернувший виток,
@@ -364,6 +379,11 @@ public sealed class FeatureStepChain
     public double DurationMinutes { get; init; }
     // Откуда родилась доработка: review | qa | final | null (связи ReviewOf нет — метки нет).
     public string? Source { get; init; }
+    // Шаг «в master»: все задачи цепочки сданы строго до закрытия какого-либо мержа (у мержа с
+    // reviewOf — только перечисленные шаги). Ортогонален корзине/Outcome: принятость от него не зависит.
+    public bool InMaster { get; init; }
+    // Момент мержа, в который шаг попал в master (первый подходящий); null — не в master.
+    public DateTime? MergedAt { get; init; }
     // Число витков с возвратом (returned/accepted_with_remarks) по этому шагу.
     public int Loops { get; init; }
     // Витки цепочки: ревью/проверки/финалы, связанные с ней через ReviewOf, в порядке времени.
@@ -429,6 +449,9 @@ public sealed class FeatureStepProgress
     public int NotCreated { get; init; }
     public int Withdrawn { get; init; }
     public int UnlinkedReworks { get; init; }
+    // Сколько шагов уже в master (FeatureStepChain.InMaster). Ортогональный счётчик: в Total и в
+    // сумму корзин не входит, процент им не считается.
+    public int InMaster { get; init; }
 }
 
 // Состояния фичи (FeatureRun.State) — единая точка правды: 11 значений, camelCase (как в JSON).

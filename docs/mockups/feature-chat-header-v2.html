@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Home · фича в шапке чата · 3 варианта (v2)</title>
+<!--
+  Макет v2: фича чата живёт В ШАПКЕ чата (композер не трогаем — v1 отклонён).
+  Шапка снята с ChatHeaderBar.tsx: десктоп — hero-остров (island, padding 12/18/10,
+  фото персоны 52, serif 28, мета-строка, правый кластер: кольцевая пилюля Ctx,
+  ghost-кнопки 32, «⋯»), мобила — Toolbar 56 («‹», имя serif 16 с шевроном
+  переключателя, иконка происхождения, пилюля, «⋯» 40).
+  Варианты: А «Пилюля фичи» (BadgeShell рядом с кольцевой), Б «Плашка в мета-строке +
+  кромка прогресса», В «Вторая строка шапки» (слот contextBar).
+  Предложение и спецификация — feature-chat-header-v2-proposal.md.
+  Привязка: задача da0036ba (role=design), featureId эпика d2d8c8a5; stepRef шагов фронта
+  назначит план после выбора варианта. Код продукта не правится. Данные выдуманы.
+  Сырые значения цветов — ТОЛЬКО в блоке токенов (копия theme.css); дальше — var(--c-*).
+-->
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css, семантика — C.* из design.ts ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4;
+  --c-progress-track:#D8CFBE; --c-track:#D8CFBE;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27;
+  --c-border:#3D3830; --c-border-light:#34302A;
+  --c-progress-track:#5C544A; --c-track:#453F37;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+}
+/* Шкалы design.ts: FS xxs10 xs11 sm12 base13 md14 lg16 · SP 2/4/8/12/16/24 · R sm6 md8 lg10 xl12 xxl14 max999 · TB 52/56, pad 16/14, gap 8, hit 32/40 */
+* { box-sizing:border-box; }
+html,body { margin:0; }
+body { background:var(--c-bg-panel); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.45; }
+button { font:inherit; color:inherit; border:0; background:none; margin:0; padding:0; cursor:pointer; text-align:left; }
+button:focus-visible { outline:none; box-shadow:var(--shadow-focus); border-radius:8px; }
+.mono { font-family:"JetBrains Mono","Courier New",monospace; }
+.serif { font-family:"PT Serif",Georgia,serif; }
+svg { flex-shrink:0; display:block; }
+
+/* ===== Обвязка макета (не часть продукта) ===== */
+.mk { position:sticky; top:0; z-index:50; display:flex; flex-wrap:wrap; gap:10px 20px; align-items:center;
+  padding:12px 16px; background:var(--c-bg-card); border-bottom:1px solid var(--c-border); }
+.mk h1 { font-family:"PT Serif",Georgia,serif; font-size:16px; margin:0 8px 0 0; color:var(--c-text-heading); }
+.grp { display:flex; align-items:center; gap:8px; }
+.lbl { font-size:11px; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.04em; }
+.pills { display:flex; gap:2px; background:var(--c-bg-inset); padding:2px; border-radius:9px; }
+.pills button { padding:4px 10px; border-radius:8px; font-size:12px; color:var(--c-text-secondary); }
+.pills button.on { background:var(--c-bg-card); color:var(--c-text-heading); font-weight:600; box-shadow:0 0 0 1px var(--c-border); }
+.note { max-width:1320px; margin:14px auto 0; padding:0 16px; font-size:12px; color:var(--c-text-secondary); }
+.note b { color:var(--c-text-heading); }
+.stage { display:flex; flex-wrap:wrap; gap:24px; justify-content:center; padding:14px 16px 48px; align-items:flex-start; }
+.cap { font-size:11px; color:var(--c-text-muted); margin:0 0 6px 4px; text-transform:uppercase; letter-spacing:.04em; }
+
+/* ===== Кадр: центральная зона чата на холсте ===== */
+.frame { position:relative; display:flex; flex-direction:column; overflow:hidden;
+  background:var(--c-bg-main); border:1px solid var(--c-border); border-radius:14px; box-shadow:var(--shadow-island); }
+.desk { width:900px; height:660px; }
+.mob  { width:360px; height:720px; }
+.feed { flex:1; min-height:0; overflow:hidden; padding:16px 18px; display:flex; flex-direction:column; gap:12px; }
+.mob .feed { padding:12px 14px; }
+.msg { max-width:78%; padding:8px 12px; border-radius:12px; background:var(--c-bg-card); border:1px solid var(--c-border-light); color:var(--c-text-primary); }
+.msg.me { align-self:flex-end; background:var(--c-accent-light); border-color:transparent; }
+.dock { flex-shrink:0; padding:0 18px 16px; }
+.mob .dock { padding:0 8px 8px; }
+.field { min-height:64px; padding:12px 16px; border:1px solid var(--c-border); background:var(--c-bg-white);
+  border-radius:14px; color:var(--c-text-muted); font-size:14px; box-shadow:var(--shadow-island); }
+
+/* ===== Шапка-остров (ChatHeaderBar, ветка island): как есть ===== */
+.hero { position:relative; flex-shrink:0; z-index:5; border-bottom:1px solid var(--c-border-light); }
+.hero-row { display:flex; align-items:center; flex-wrap:wrap; gap:8px; padding:12px 18px 10px; }
+.face { width:52px; height:52px; border-radius:12px; border:1px solid var(--c-border-light); flex-shrink:0;
+  display:flex; align-items:center; justify-content:center; font-family:"PT Serif",Georgia,serif; font-size:24px;
+  color:var(--c-on-accent); background:var(--c-accent); }
+.tblock { min-width:240px; flex:1; display:flex; align-items:center; gap:12px; }
+.ttl28 { font-family:"PT Serif",Georgia,serif; font-size:28px; font-weight:500; line-height:1.25; color:var(--c-accent);
+  letter-spacing:-.01em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.meta { display:flex; align-items:center; gap:6px; min-width:0; margin-top:3px; font-size:12px; }
+.meta .cn { color:var(--c-text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+.eff { font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-muted); white-space:nowrap; flex-shrink:0; }
+.rc { display:flex; align-items:center; gap:8px; margin-left:auto; min-width:0; flex-wrap:wrap; justify-content:flex-end; }
+.ghost { display:flex; align-items:center; gap:8px; opacity:.55; }
+.ib { width:32px; height:32px; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; color:var(--c-text-muted); flex-shrink:0; }
+.ib:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+.mob .ib { width:40px; height:40px; }
+
+/* Мобильная шапка: Toolbar 56 */
+.tbar { position:relative; flex-shrink:0; z-index:5; display:flex; align-items:center; gap:8px; min-height:56px; padding:8px 14px;
+  background:var(--c-bg-main); border-bottom:1px solid var(--c-border-light); }
+/* minWidth тач-зоны имени = TB.iconHitMobile − SP.sm + CHAT_SWITCHER_MIN_W (128): правый кластер не вправе её ужать */
+.mtitle { display:flex; align-items:center; flex:1; min-width:128px; }
+.mtitle .back { margin-left:-8px; }
+.sw { display:flex; align-items:center; gap:4px; min-width:0; flex:1; }
+.ttl16 { font-family:"PT Serif",Georgia,serif; font-size:16px; font-weight:600; color:var(--c-accent); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+.mob .meta { margin-top:1px; }
+.mrc { display:flex; align-items:center; gap:0; flex-shrink:0; min-width:0; }
+
+/* Бейдж происхождения (ChatOriginBadge compact): R.sm, 11/600, infoBg+info */
+.origin { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; line-height:1.5; color:var(--c-info);
+  background:var(--c-info-bg); border-radius:6px; padding:1px 6px; white-space:nowrap; flex-shrink:0; }
+.origin.io { padding:2px 4px; }
+
+/* ===== BadgeShell (кольцевая пилюля и её родня) ===== */
+.shell { position:relative; display:flex; flex-shrink:0; }
+.pill { display:flex; align-items:center; gap:4px; padding:3px 9px 3px 2px; border:1px solid var(--c-border); border-radius:999px;
+  background:var(--c-bg-white); font-family:"JetBrains Mono",monospace; font-size:12px; font-weight:700; color:var(--c-accent); white-space:nowrap; }
+.pill .ring { width:20px; height:0; display:flex; align-items:center; }
+.pill .sub { font-family:"Hanken Grotesk",sans-serif; font-weight:600; color:var(--c-text-muted); font-size:12px; }
+.pill.warn { background:var(--c-warning-bg); border-color:var(--c-warning); color:var(--c-warning-text); }
+.pill.danger { background:var(--c-danger-bg); border-color:var(--c-danger-border); color:var(--c-danger-text); }
+.pill.warn .sub, .pill.danger .sub { color:inherit; }
+.pulse { position:absolute; top:-3px; right:-3px; width:9px; height:9px; border-radius:50%; border:2px solid var(--c-bg-panel); pointer-events:none;
+  animation:pulsedot 1.2s ease-in-out infinite; }
+@keyframes pulsedot { 0%,100% { transform:scale(1); opacity:1; } 50% { transform:scale(.7); opacity:.6; } }
+@media (prefers-reduced-motion:reduce) { .pulse { animation:none; } }
+
+/* Badge (ui/Badge): R.max, FS.xs 600, пары тонов */
+.bdg { display:inline-flex; align-items:center; gap:4px; padding:1px 8px; border-radius:999px; font-size:11px; font-weight:600; line-height:1.4;
+  white-space:nowrap; overflow:hidden; min-width:0; max-width:100%; flex-shrink:1; }
+.bdg .tx { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+.bdg.neutral { background:var(--c-bg-inset); color:var(--c-text-muted); }
+.bdg.neutral b { color:var(--c-text-secondary); }
+.bdg.warning { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.bdg.danger { background:var(--c-danger-bg); color:var(--c-danger-text); }
+.bdg.sm { padding:3px 8px; }
+button.bdg[aria-expanded="true"] { box-shadow:0 0 0 1px var(--c-border); }
+
+/* Кнопки (ui/Button): primary xs/sm, ghost */
+.btn { display:inline-flex; align-items:center; gap:4px; height:24px; padding:0 10px; border-radius:8px; font-size:12px; font-weight:600;
+  background:var(--c-accent); color:var(--c-on-accent); white-space:nowrap; flex-shrink:0; }
+.btn.sm { height:28px; }
+.mob .btn.tap { height:32px; }
+.lnk { display:inline-flex; align-items:center; gap:4px; font-size:12px; font-weight:600; color:var(--c-accent); white-space:nowrap; flex-shrink:0; }
+
+/* Кромка прогресса (вариант Б): на месте нижней линии шапки */
+.edge { position:absolute; left:0; right:0; bottom:-1px; height:2px; display:flex; gap:2px; background:transparent; }
+.edge i { display:block; height:100%; }
+
+/* Вторая строка (вариант В): слот contextBar — padding 0 18 10 на острове, SP.xs/14 на тулбаре */
+.row2 { display:flex; align-items:center; gap:8px; min-width:0; height:32px; padding:0 18px 10px; box-sizing:content-box; }
+.mob .row2 { height:40px; padding:0 14px; border-bottom:1px solid var(--c-border-light); }
+.row2 .ph { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; color:var(--c-text-secondary); font-size:12px; }
+.row2 .ph b { color:var(--c-text-heading); }
+.row2 .pct { font-variant-numeric:tabular-nums; font-weight:700; font-size:12px; color:var(--c-text-heading); white-space:nowrap; flex-shrink:0; }
+.row2 .ft { font-weight:600; font-size:13px; color:var(--c-text-heading); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:60px; max-width:220px; }
+.t-warn { color:var(--c-warning-text) !important; font-weight:600; }
+.t-stop { color:var(--c-danger-text) !important; font-weight:600; }
+.chev { width:28px; height:28px; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; color:var(--c-text-muted); flex-shrink:0; }
+.chev:hover { background:var(--c-bg-selected); }
+.mob .chev { width:40px; height:40px; }
+
+/* ===== Поповер BadgeShell: bgWhite, border, R.lg, SHADOW.dropdown, 12/14 ===== */
+.pop { position:absolute; z-index:41; padding:12px 14px; background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:10px;
+  box-shadow:var(--shadow-dropdown); overflow-y:auto; }
+.pt { font-size:13px; font-weight:700; color:var(--c-text-heading); margin-bottom:8px; display:flex; align-items:baseline; gap:8px; }
+.pt .ttx { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+.pt .more { margin-left:auto; font-size:11px; font-weight:600; color:var(--c-text-muted); white-space:nowrap; }
+.sec { font-size:11px; font-weight:700; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.4px; margin:10px 0 4px; }
+.br { display:flex; justify-content:space-between; gap:12px; font-size:12px; color:var(--c-text-secondary); padding:2px 0; align-items:baseline; }
+.br .w { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.br .w b { color:var(--c-text-heading); font-weight:600; }
+.br .v { font-family:"JetBrains Mono",monospace; font-size:12px; font-weight:600; color:var(--c-text-muted); white-space:nowrap; flex-shrink:0; }
+.alarm { display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:8px; font-size:12px; margin-bottom:4px; }
+.alarm .tx { flex:1; min-width:0; }
+.alarm.warn { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.alarm.stop { background:var(--c-danger-bg); color:var(--c-danger-text); }
+.alarm b { font-weight:700; }
+.pair { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px; }
+.cell { padding:8px 10px; border-radius:10px; background:var(--c-bg-inset); min-width:0; }
+.cell .k { font-size:11px; color:var(--c-text-muted); }
+.cell .val { font-family:"JetBrains Mono",monospace; font-size:16px; font-weight:700; color:var(--c-text-heading); white-space:nowrap; }
+.cell .s { font-size:11px; color:var(--c-text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+/* MeterRow «По трекеру» */
+.meter { display:flex; gap:6px; padding:4px 0; margin-top:6px; }
+.meter .body { flex:1; min-width:0; }
+.meter .hd { display:flex; justify-content:space-between; align-items:baseline; gap:8px; }
+.meter .lb { font-size:13px; color:var(--c-text-secondary); }
+.meter .vl { font-family:"JetBrains Mono",monospace; font-size:12px; font-weight:700; color:var(--c-text-heading); }
+.bar { display:flex; gap:2px; height:4px; border-radius:999px; overflow:hidden; margin:4px 0 2px; }
+.bar i { display:block; height:100%; }
+.k-m { background:var(--c-success-text); } .k-a { background:var(--c-success); } .k-r { background:var(--c-info); }
+.k-w { background:var(--c-accent); } .k-n { background:var(--c-progress-track); }
+.leg { display:flex; flex-wrap:wrap; gap:2px 10px; font-size:11px; color:var(--c-text-muted); line-height:1.4; }
+.leg span { display:inline-flex; align-items:center; gap:4px; white-space:nowrap; }
+.leg i { width:7px; height:7px; border-radius:2px; display:inline-block; }
+.master { color:var(--c-success-text); font-weight:600; }
+.coll { display:flex; align-items:center; gap:4px; width:100%; margin-top:8px; font-size:11px; color:var(--c-warning-text); }
+.coll svg { transition:transform 120ms; }
+.coll[aria-expanded="true"] svg { transform:rotate(90deg); }
+.disc { margin:4px 0 0 16px; padding:0; list-style:none; font-size:11px; color:var(--c-text-secondary); line-height:1.5; }
+.foot { display:flex; align-items:center; gap:8px; margin-top:10px; padding-top:8px; border-top:1px solid var(--c-bg-inset); font-size:11px; color:var(--c-text-muted); }
+.foot .lnk { margin-left:auto; }
+.role { display:inline-flex; align-items:center; height:18px; padding:0 6px; border-radius:6px; background:var(--c-bg-inset); color:var(--c-text-secondary); font-weight:600; font-size:11px; }
+
+/* Раскрытие второй строки (В): внутри острова, вниз */
+.exp2 { border-top:1px solid var(--c-border-light); margin:0 18px 10px; padding-top:10px; display:grid; grid-template-columns:1fr 1fr; gap:4px 24px; }
+.exp2 .col { min-width:0; }
+.exp2 .foot { grid-column:1 / -1; }
+.mob .exp2 { margin:0; padding:10px 14px 12px; grid-template-columns:1fr; max-height:380px; overflow-y:auto; border-top:0; border-bottom:1px solid var(--c-border-light); background:var(--c-bg-main); }
+</style>
+</head>
+<body>
+
+<div class="mk" data-mk>
+  <h1>Фича в шапке чата · v2</h1>
+  <div class="grp"><span class="lbl">Вариант</span>
+    <div class="pills" data-ctl="v">
+      <button data-val="A" class="on">А · Пилюля</button><button data-val="B">Б · Мета + кромка</button><button data-val="C">В · Вторая строка</button>
+    </div></div>
+  <div class="grp"><span class="lbl">Состояние</span>
+    <div class="pills" data-ctl="st">
+      <button data-val="run" class="on">идёт</button><button data-val="wait">ждёт вас</button><button data-val="stop">стоит</button>
+    </div></div>
+  <div class="grp"><span class="lbl">Вид</span>
+    <div class="pills" data-ctl="open">
+      <button data-val="0" class="on">свёрнуто</button><button data-val="1">раскрыто</button>
+    </div></div>
+  <div class="grp"><span class="lbl">Тема</span>
+    <div class="pills" data-ctl="theme">
+      <button data-val="light" class="on">светлая</button><button data-val="dark">тёмная</button>
+    </div></div>
+</div>
+
+<div class="note" id="note"></div>
+
+<div class="stage">
+  <div><div class="cap">Десктоп · шапка-остров (центр, колонка CHAT_MAX_W)</div><div class="frame desk" id="desk"></div></div>
+  <div><div class="cap">Мобила · 360 CSS px · Toolbar 56</div><div class="frame mob" id="mob"></div></div>
+</div>
+
+<script>
+// ===== Иконки (геометрия lucide, stroke 2) =====
+const I = {
+  menu:'<path d="M4 6h16M4 12h16M4 18h16"/>',
+  chevL:'<path d="m15 18-6-6 6-6"/>', chevD:'<path d="m6 9 6 6 6-6"/>', chevU:'<path d="m18 15-6-6-6 6"/>', chevR:'<path d="m9 18 6-6-6-6"/>',
+  more:'<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
+  pencil:'<path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>',
+  list:'<path d="m3 17 2 2 4-4M3 7l2 2 4-4M13 6h8M13 12h8M13 18h8"/>',
+  hour:'<path d="M5 22h14M5 2h14M17 22v-4.17a2 2 0 0 0-.59-1.42L12 12l-4.41 4.41A2 2 0 0 0 7 17.83V22M7 2v4.17a2 2 0 0 0 .59 1.42L12 12l4.41-4.41A2 2 0 0 0 17 6.17V2"/>',
+  bell:'<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
+  task:'<rect x="3" y="5" width="6" height="6" rx="1"/><path d="m3 17 2 2 4-4M13 6h8M13 12h8M13 18h8"/>',
+  arrow:'<path d="M5 12h14M12 5l7 7-7 7"/>',
+};
+const ic = (k, s = 16) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[k]}</svg>`;
+
+// Кольцо RingIcon (viewBox 20, r=9, полоса 2, скруглённые концы). slots: [{pct, color}] снаружи внутрь
+function ring(slots, size = 20) {
+  const R = [9, 6, 3];
+  let g = '';
+  slots.forEach((s, i) => {
+    if (!s) return;
+    const r = R[i], L = 2 * Math.PI * r, arc = s.pct == null ? 0 : Math.max(L * s.pct / 100, 3);
+    g += `<circle cx="10" cy="10" r="${r}" fill="none" stroke-width="2" style="stroke:var(--c-progress-track)"/>`;
+    if (arc > 0) g += `<circle cx="10" cy="10" r="${r}" fill="none" stroke-width="2" stroke-linecap="round" stroke-dasharray="${Math.max(arc - 2, .01)} ${L}" style="stroke:${s.color}"/>`;
+  });
+  return `<svg width="${size}" height="${size}" viewBox="0 0 20 20" aria-hidden="true"><g transform="rotate(-90 10 10)">${g}</g></svg>`;
+}
+
+// ===== Данные фичи (с бэка: stepProgress + inMaster, brief.active/next/estimate, tracker) =====
+const F = {
+  title:'Правда о прогрессе фичи', pct:54, total:13,
+  buckets:[['m',3,'в master'],['a',4,'принято'],['r',2,'в ревью'],['w',2,'в работе'],['n',2,'не заведено']],
+  now:[['Полина','Ш8 · вёрстка шапки','24 мин'],['Тимур','Ш6 · проекция мержа','1 ч 10'],['Глеб','ревью Ш5','8 мин']],
+  next:[['Ш9','e2e шапки · Вера'],['Финал','приёмка · Александр']],
+  est:{ ready:'60 %', readyBy:'оценка Софьи · 18:02', eta:'≈ 2 ч 40', etaBy:'к 18:30 · с запасом' },
+  disc:['Ш4 снят в трекере, но остался в плане','Ш10 заведён без шага плана'],
+  role:'Ш8 · фронт', more:1,
+};
+const ST = {
+  run:  { tone:null, color:'var(--c-success)', short:'Сейчас <b>Полина</b> +2', pill:'≈ 18:30' },
+  wait: { tone:'warn', color:'var(--c-warning)', short:'Ждёт вас · Полина спрашивает про отступы', pill:'ждёт вас', act:'Ответить', alarm:'<b>Ждёт вас.</b> Полина спрашивает про отступы карточки — ответ нужен в этом чате.' },
+  stop: { tone:'stop', color:'var(--c-danger)', short:'Стоит · у Тимура упала сборка', pill:'стоит', act:'Чат Тимура', alarm:'<b>Стоит.</b> У Тимура упала сборка Ш6 · 14 мин назад.' },
+};
+
+const S = { v:'A', st:'run', open:false, theme:'light', disc:false };
+
+// ===== Общие кирпичики =====
+function bar() {
+  return `<div class="bar">${F.buckets.map(([k, n]) => `<i class="k-${k}" style="flex:${n}"></i>`).join('')}</div>`;
+}
+function legend() {
+  return `<div class="leg">${F.buckets.map(([k, n, l]) => `<span><i class="k-${k}"></i>${l} ${n}</span>`).join('')}</div>`;
+}
+function rows(list, timed) {
+  return list.map(r => `<div class="br"><span class="w"><b>${r[0]}</b> — ${r[1]}</span>${timed ? `<span class="v">${r[2]}</span>` : ''}</div>`).join('');
+}
+// Содержимое раскрытия, по приоритету. cols — две колонки (вариант В на десктопе)
+// noAlarm — тревога с действием уже стоит в самой строке (вариант В), второй раз её не повторяем
+function body(mob, cols, noAlarm) {
+  const st = ST[S.st];
+  const alarm = st.alarm && !noAlarm ? `<div class="alarm ${st.tone}"><span class="tx">${st.alarm}</span><button class="btn sm ${mob ? 'tap' : ''}" data-act>${st.act}</button></div>` : '';
+  const now = `<div class="sec">Сейчас · ${F.now.length}</div>${rows(F.now, true)}`;
+  const next = `<div class="sec">Дальше</div>${rows(F.next, false)}`;
+  const pair = `<div class="pair">
+      <div class="cell"><div class="k">Готовность</div><div class="val">${F.est.ready}</div><div class="s">${F.est.readyBy}</div></div>
+      <div class="cell"><div class="k">Срок</div><div class="val">${F.est.eta}</div><div class="s">${F.est.etaBy}</div></div></div>`;
+  const meter = `<div class="meter"><div class="body">
+      <div class="hd"><span class="lb">По трекеру</span><span class="vl">${F.pct} % · 7 из ${F.total}</span></div>
+      ${bar()}${legend()}</div></div>`;
+  const disc = `<button class="coll" data-disc aria-expanded="${S.disc}">${ic('chevR', 12)}Трекер расходится · ${F.disc.length}</button>
+      ${S.disc ? `<ul class="disc">${F.disc.map(d => `<li>${d}</li>`).join('')}</ul>` : ''}`;
+  const foot = `<div class="foot">этот чат — <span class="role">${F.role}</span><button class="lnk" data-page>Страница фичи ${ic('arrow', 12)}</button></div>`;
+  const head = cols ? '' : `<div class="pt"><span class="ttx">${F.title}</span><button class="more" data-more>· ещё ${F.more}</button></div>`;
+  if (cols) return `<div class="col">${alarm}${now}${next}</div><div class="col">${pair}${meter}${disc}</div>${foot}`;
+  return `${head}${alarm}${now}${next}${pair}${meter}${disc}${foot}`;
+}
+
+// Поповер BadgeShell: десктоп — absolute под чипом справа (min 280 у ring), мобила — fixed под тулбаром
+function pop(mob, anchor) {
+  if (!S.open) return '';
+  const geo = mob
+    ? 'top:62px; right:8px; width:min(340px, calc(100% - 16px)); max-height:calc(100% - 130px);'
+    : anchor === 'meta' ? 'top:calc(100% + 6px); left:82px; width:380px; max-height:540px;'
+    : 'top:calc(100% + 6px); right:120px; width:380px; max-height:540px;';
+  return `<div class="pop" role="dialog" aria-label="Фича этого чата" style="${geo}">${body(mob, false)}</div>`;
+}
+
+// ===== Вариант-зависимые куски шапки =====
+const ctxPill = mob => `<div class="shell"><button class="pill" title="Контекст и лимиты"><span class="ring">${ring([{pct:38,color:'var(--c-text-muted)'},{pct:22,color:'var(--c-text-muted)'},{pct:61,color:'var(--c-warning)'}])}</span>38%</button></div>`;
+
+// А: пилюля фичи — тот же BadgeShell ring, одно внешнее кольцо = процент по трекеру
+function featPill(mob) {
+  const st = ST[S.st];
+  const cls = st.tone === 'warn' ? 'warn' : st.tone === 'stop' ? 'danger' : '';
+  // На мобиле у пилюли только кольцо и процент: тревогу несут тон и пульс-точка, слово — в поповере
+  const sub = mob ? '' : `<span class="sub">${st.pill}</span>`;
+  return `<div class="shell" data-feature-chip>
+    <button class="pill ${cls}" aria-expanded="${S.open}" data-toggle title="Фича «${F.title}» · ${F.pct} % по трекеру">
+      <span class="ring">${ring([{pct:F.pct,color:st.color}])}</span>${F.pct}%${sub}</button>
+    ${st.tone ? `<span class="pulse" style="background:${st.color}"></span>` : ''}
+  </div>`;
+}
+
+// Б: плашка в мета-строке (ui/Badge с onClick) + действие тревоги рядом
+function metaBadge(mob) {
+  const st = ST[S.st];
+  const tone = st.tone === 'warn' ? 'warning' : st.tone === 'stop' ? 'danger' : 'neutral';
+  const text = st.tone
+    ? (mob ? st.pill[0].toUpperCase() + st.pill.slice(1) : st.short)
+    : (mob ? `<b>${F.pct} %</b> · Полина +2` : `<b>${F.pct} %</b> · Сейчас <b>Полина</b> +2`);
+  return `<button class="bdg ${tone} ${mob ? 'sm' : ''}" data-toggle data-feature-chip aria-expanded="${S.open}" aria-haspopup="dialog" title="Фича «${F.title}»" style="${mob ? 'min-height:24px' : ''}">
+      ${ring([{pct:F.pct,color:st.color}], 12)}<span class="tx">${text}</span>${ic(S.open ? 'chevU' : 'chevD', 12)}</button>
+    ${st.act && !mob ? `<button class="btn" data-act>${st.act}</button>` : ''}
+    ${!st.tone && !mob ? `<span class="eff">≈ 18:30</span>` : ''}`;
+}
+function edge() {
+  const st = ST[S.st];
+  if (st.tone) return `<div class="edge"><i style="flex:${F.pct};background:${st.color}"></i><i style="flex:${100 - F.pct};background:var(--c-border-light)"></i></div>`;
+  return `<div class="edge">${F.buckets.map(([k, n]) => `<i class="k-${k}" style="flex:${n}"></i>`).join('')}</div>`;
+}
+
+// В: вторая строка шапки (слот contextBar)
+function row2(mob) {
+  const st = ST[S.st];
+  const ph = st.tone
+    ? `<span class="ph ${st.tone === 'warn' ? 't-warn' : 't-stop'}">${mob ? st.pill[0].toUpperCase() + st.pill.slice(1) + (S.st === 'wait' ? ' · Полина' : ' · Тимур') : st.short}</span>`
+    : `<span class="ph">Сейчас <b>Полина</b> — Ш8 · вёрстка шапки +2</span>`;
+  const right = st.tone
+    ? `<button class="btn sm ${mob ? 'tap' : ''}" data-act style="margin-left:auto">${mob && S.st === 'stop' ? 'Чат' : st.act}</button>`
+    : `<span class="bdg neutral" style="margin-left:auto;flex-shrink:0"><span class="tx">${mob ? '≈ 18:30' : '≈ 2 ч 40 · к 18:30'}</span></span>`;
+  return `<div class="row2" data-feature-chip>
+      ${ring([{pct:F.pct,color:st.color}], 16)}<span class="pct">${F.pct} %</span>
+      ${mob ? '' : `<span class="ft" title="${F.title}">${F.title}</span><span class="eff">·</span>`}
+      ${ph}${right}
+      ${mob || S.open ? '' : `<button class="lnk" data-page>Страница фичи ${ic('arrow', 12)}</button>`}
+      <button class="chev" data-toggle aria-expanded="${S.open}" aria-label="${S.open ? 'Свернуть' : 'Подробнее о фиче'}">${ic(S.open ? 'chevU' : 'chevD', 16)}</button>
+    </div>
+    ${S.open ? `<div class="exp2">${mob ? body(true, false, true).replace(/<div class="pt">.*?<\/div>/, '') : body(false, true, true)}</div>` : ''}`;
+}
+
+// ===== Десктоп: шапка-остров =====
+function desk() {
+  const v = S.v;
+  const meta = `<div class="meta">
+      <span class="cn">Ш8 · вёрстка шапки</span>
+      <span class="origin">${ic('task', 11)}из задачи</span>
+      ${v === 'B' ? metaBadge(false) : ''}
+      ${v !== 'B' ? '<span class="eff">высокое усилие</span>' : ''}
+    </div>`;
+  const hero = `<div class="hero" style="${v === 'B' ? 'border-bottom-color:transparent' : ''}">
+    <div class="hero-row">
+      <button class="ib" title="Открыть панель">${ic('menu')}</button>
+      <div class="tblock"><div class="face">П</div>
+        <div style="min-width:0;flex:1"><div class="ttl28">Полина</div>${meta}</div></div>
+      <div class="rc">
+        ${v === 'A' ? featPill(false) : ''}
+        ${ctxPill(false)}
+        <div class="ghost"><button class="ib">${ic('pencil')}</button><button class="ib">${ic('list')}</button><button class="ib">${ic('hour')}</button><button class="ib">${ic('bell')}</button></div>
+        <button class="ib" title="Ещё">${ic('more')}</button>
+      </div>
+    </div>
+    ${v === 'C' ? row2(false) : ''}
+    ${v === 'B' ? edge() : ''}
+    ${v === 'A' ? pop(false, 'pill') : v === 'B' ? pop(false, 'meta') : ''}
+  </div>`;
+  return hero + feed(false) + `<div class="dock"><div class="field">Сообщение Полине…</div></div>`;
+}
+
+// ===== Мобила: Toolbar 56 =====
+function mob() {
+  const v = S.v;
+  const tb = `<div class="tbar">
+    <div class="mtitle">
+      <button class="ib back" title="Назад к списку">${ic('chevL', 20)}</button>
+      <div style="min-width:0;flex:1">
+        <div class="sw"><span class="ttl16">Полина</span><span style="color:var(--c-text-muted)">${ic('chevD', 14)}</span></div>
+        <div class="meta"><span class="origin io">${ic('task', 11)}</span>${v === 'B' ? metaBadge(true) : ''}</div>
+      </div>
+    </div>
+    <div class="mrc">
+      ${v === 'A' ? featPill(true) : ''}
+      <span style="width:${v === 'A' ? 6 : 0}px"></span>${ctxPill(true)}
+      <button class="ib" title="Ещё">${ic('more', 18)}</button>
+    </div>
+    ${v === 'B' ? edge() : ''}
+  </div>`;
+  return tb + (v === 'C' ? row2(true) : '') + (v !== 'C' ? pop(true) : '') + feed(true) + `<div class="dock"><div class="field">Сообщение…</div></div>`;
+}
+
+function feed(m) {
+  return `<div class="feed">
+    <div class="msg">Сверстала шапку: кольцо фичи стоит рядом с пилюлей контекста, поповер — тот же, что у неё.</div>
+    <div class="msg me">А на 360 не тесно?</div>
+    <div class="msg">${m ? 'На 360 у пилюли остаются кольцо и процент.' : 'На 360 у пилюли остаются кольцо и процент, срок уходит в поповер.'}</div>
+  </div>`;
+}
+
+const NOTES = {
+  A:'<b>А · Пилюля фичи.</b> Ещё одна пилюля BadgeShell рядом с кольцевой: одно кольцо — процент по трекеру, справа срок. Тревога — тон warn/danger пилюли и пульс-точка, как у workflow. Раскрытие — поповер BadgeShell (на мобиле fixed под тулбаром). Высота шапки +0.',
+  B:'<b>Б · Плашка в мета-строке + кромка.</b> Фича встаёт в мета-строку рядом с «из задачи» кликабельным Badge: процент и кто сейчас (название — в заголовке поповера). Нижняя линия шапки становится полосой прогресса по трекеру (5 корзин). Тревога — тон плашки и кнопка рядом. Высота шапки +0 (кромка 2 px на месте линии).',
+  C:'<b>В · Вторая строка шапки.</b> Строка в слоте contextBar под заголовком, внутри того же острова: кольцо, процент, название, «Сейчас», срок, «Страница фичи». Раскрытие идёт вниз внутри острова, на десктопе в две колонки. Высота шапки +42 (на мобиле +40).',
+};
+
+function render() {
+  document.documentElement.dataset.theme = S.theme;
+  document.getElementById('desk').innerHTML = desk();
+  document.getElementById('mob').innerHTML = mob();
+  document.getElementById('note').innerHTML = NOTES[S.v] + ' Точек этапов и списка этапов в чате нет: они живут на странице фичи («Хронология»).';
+  document.querySelectorAll('[data-ctl]').forEach(g => {
+    const cur = g.dataset.ctl === 'open' ? String(+S.open) : S[g.dataset.ctl];
+    g.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.val === cur));
+  });
+}
+document.querySelector('[data-mk]').addEventListener('click', e => {
+  const b = e.target.closest('button[data-val]'); if (!b) return;
+  const k = b.parentElement.dataset.ctl;
+  if (k === 'open') S.open = b.dataset.val === '1'; else S[k] = b.dataset.val;
+  render();
+});
+document.querySelector('.stage').addEventListener('click', e => {
+  if (e.target.closest('[data-toggle]')) { S.open = !S.open; render(); return; }
+  if (e.target.closest('[data-disc]')) { S.disc = !S.disc; render(); }
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && S.open) { S.open = false; render(); } });
+render();
+</script>
+</body>
+</html>

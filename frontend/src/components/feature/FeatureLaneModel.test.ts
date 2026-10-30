@@ -9,11 +9,15 @@
 // обрезка интервалов по границе окна (находка GC-R-B); закрытая фича — без live/stalled,
 // даже когда бэк держит prod active из-за хвостов.
 //
+// Метки мержей и волна после мержа (F1): mergeMarks из run.merges по времени, waveFrom —
+// только при waveAfterMerge и от последнего мержа; без мержей — пусто (старые ответы).
+//
 // Мутации (в отчёте): (1) timeFrac 1 → 0.86 у closed → краснеет «closed/merged: timeFrac 1»;
 // (2) не обрезать интервал по окну → краснеет «обрезка по окну»; (3) пустой словарь
 // считать approx → краснеет «пустой словарь — не approx»; (4) не искать стоящий этап по
 // attention.taskId (всегда текущий) → краснеет «стоит по taskId»; (5) вернуть пометку wait
-// по стадии (stage.key === waitKey) → краснеет «wait по задаче, а не по стадии».
+// по стадии (stage.key === waitKey) → краснеет «wait по задаче, а не по стадии»;
+// (6) waveFrom от первого мержа, не от последнего → краснеет «волна от последнего мержа».
 
 import { describe, it, expect } from 'vitest';
 import { buildStageLanes, axisFrac, asStageKey, planCounterText, type StageLanesModel, type StageLane } from './FeatureLaneModel';
@@ -582,5 +586,63 @@ describe('мелочи контракта', () => {
     const model = buildStageLanes(mkRun(), mkStats(), NOW);
     expect(Object.keys(model.lanes)).toEqual([]);
     expect(model.axis).not.toBeNull();
+  });
+});
+
+// === Метки мержей и волна после мержа (F1) ===
+
+describe('метки мержей и волна: данные run.merges/waveAfterMerge как есть, порядок по времени', () => {
+  const M1 = { taskId: 'm-1', at: '2026-10-20T08:00:00Z', stepRefs: ['Ш1', 'Ш2'] };
+  const M2 = { taskId: 'm-2', at: '2026-10-20T10:00:00Z', stepRefs: ['Ш3'] };
+
+  it('два мержа — две метки по времени; без waveAfterMerge волны нет', () => {
+    const model = buildStageLanes(mkRun({ stages: [mkStage('prod', 'done')], merges: [M1, M2] }), mkStats(), NOW);
+    expect(model.mergeMarks).toEqual([M1, M2]);
+    expect(model.waveFrom).toBeNull();
+  });
+
+  it('waveAfterMerge — волна от последнего мержа (не от первого)', () => {
+    const model = buildStageLanes(
+      mkRun({ stages: [mkStage('prod', 'active')], merges: [M1, M2], waveAfterMerge: true }),
+      mkStats(), NOW,
+    );
+    expect(model.waveFrom).toBe(M2.at);
+  });
+
+  it('нет мержей — меток нет; waveAfterMerge без мержей — противоречие контракта, волны нет', () => {
+    const plain = buildStageLanes(mkRun({ stages: [mkStage('prod', 'active')] }), mkStats(), NOW);
+    expect(plain.mergeMarks).toEqual([]);
+    expect(plain.waveFrom).toBeNull();
+    const noMerge = buildStageLanes(mkRun({ stages: [mkStage('prod', 'active')], waveAfterMerge: true }), mkStats(), NOW);
+    expect(noMerge.mergeMarks).toEqual([]);
+    expect(noMerge.waveFrom).toBeNull();
+  });
+
+  it('закрытая/смерженная фича: волны нет, даже когда бэк держит waveAfterMerge (минор 4 ревью 07eee660)', () => {
+    // Эпик Done перекрывает волну на бэке (TerminalState), но поле остаётся true;
+    // «новая волна» после закрытой фичи — ложь истории, гасим по finished.
+    const closed = buildStageLanes(
+      mkRun({ state: 'closed', closed: true, stages: [mkStage('prod', 'done')], merges: [M1, M2], waveAfterMerge: true }),
+      mkStats(), NOW,
+    );
+    expect(closed.waveFrom).toBeNull();
+    const merged = buildStageLanes(
+      mkRun({ state: 'merged', stages: [mkStage('prod', 'done')], merges: [M1, M2], waveAfterMerge: true }),
+      mkStats(), NOW,
+    );
+    expect(merged.waveFrom).toBeNull();
+  });
+
+  it('битая дата — не метка; порядок меток не зависит от порядка ответа', () => {
+    const model = buildStageLanes(
+      mkRun({
+        stages: [mkStage('prod', 'active')],
+        merges: [M2, { taskId: 'm-bad', at: 'не-дата', stepRefs: [] }, M1],
+        waveAfterMerge: true,
+      }),
+      mkStats(), NOW,
+    );
+    expect(model.mergeMarks.map(m => m.taskId)).toEqual(['m-1', 'm-2']);
+    expect(model.waveFrom).toBe(M2.at);
   });
 });

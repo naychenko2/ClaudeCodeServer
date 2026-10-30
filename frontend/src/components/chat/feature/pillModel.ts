@@ -1,5 +1,7 @@
 import { getPersonaById } from '../../../lib/personas';
-import { STAGE_NAME, MERGE_PENDING_STATUS, queueLabelParts } from '../../../lib/chatGroups';
+import { MERGE_PENDING_STATUS, queueLabelParts } from '../../../lib/chatGroups';
+import { trackerPercent } from '../../../lib/featureProgress';
+import { alarmView, findChatChain, stepAlarmBy, stepStatusParts } from './featureTruthModel';
 import type { FeatureQueue, FeatureRun, FeatureState } from '../../../types/featureRun';
 
 // Тон пилюли (макет turn-plan-feature-popup-1, S[state].pill[0]):
@@ -26,12 +28,6 @@ export interface PillModel {
   ariaExtra: string | null;
 }
 
-// Имя активной стадии (для «{этап} · …»); null — активной нет.
-function activeStageName(run: FeatureRun): string | null {
-  const stage = (run.stages ?? []).find(s => s.state === 'active');
-  return stage ? STAGE_NAME[stage.key] : null;
-}
-
 // Уникальные имена персон по id («Кира, Денис»); '' — никто/не резолвятся.
 // Единый источник для пилюли (идущие/упавший/мерж) и плашки фичи в чате.
 // id — string | null | undefined (опциональные поля FeatureNow.personaId и т.п.).
@@ -45,20 +41,9 @@ export function uniquePersonaNames(ids: (string | null | undefined)[]): string {
   return names.join(', ');
 }
 
-// Имена идущих (из now[], уникальные, «Кира, Денис»); '' — никто.
-function runningNames(run: FeatureRun): string {
-  return uniquePersonaNames((run.now ?? []).map(n => n.personaId));
-}
-
 // Имя упавшего исполнителя (из тревоги); '' — не известно.
 function stoppedName(run: FeatureRun): string {
   const id = run.attention?.personaId;
-  return (id ? getPersonaById(id)?.name : null) ?? '';
-}
-
-// Имя мержа (из merge-задачи); '' — не известно.
-function mergingName(run: FeatureRun): string {
-  const id = run.merge?.personaId;
   return (id ? getPersonaById(id)?.name : null) ?? '';
 }
 
@@ -108,66 +93,70 @@ export function statusPhrase(
   }
 }
 
-// Модель пилюли. null — фич нет и загрузка/ошибка не идёт (пилюля скрыта).
-// Текст и тон — строго по макету S[state].pill; 'loading'/'error' → «фича · …».
-export function buildPillModel(runs: FeatureRun[], loading: boolean, error: string | null): PillModel | null {
-  // Run ещё нет: загрузка/ошибка (режим фичи) — «фича · …».
+// Словарь коротких слов пилюли (словарь Майи, дизайн-ревью F2, п. 8): ключ — chain.outcome
+// (бэковый перечислимый), а НЕ текст chain.status — сокращение переживает смену формулировки
+// на бэке. Сокращение ТОЛЬКО в пилюле: карточка и цепочка печатают полное слово
+// (stepStatusParts). Неизвестный outcome (более новый бэк) — слово как есть, строка не теряется.
+const PILL_SHORT: Record<string, string> = {
+  accepted: 'принят',
+  returned: 'закрыт без ревью',
+  withdrawn: 'снят',
+  running: 'идёт',
+  pending: 'ждёт ревью',
+};
+
+// Модель пилюли (F2, макет v4 §П2 «Мой шаг»). null — фич нет и загрузка/ошибка не
+// идёт (пилюля скрыта). Три ветки:
+//   • чат ШАГА (цепочка найдена по задаче-владельцу чата) — «{Ш8} · {коротко} · {давность}»:
+//     stepRef обычный, статус — короткое слово по outcome (PILL_SHORT; тревога на этом
+//     шаге — «стоит»/«ждёт вас» из бэкового attention), время — суффиксом;
+//   • тревога фичи (waiting/merge_pending/stopped) — заменяет текст шага: «Ждёт вас ·
+//     {Имя}»/«Стоит · {Имя}» тоном (сигнал на пилюле не теряется; действие — в строке шапки);
+//     если тревога на ЭТОМ шаге — формат шага «{stepRef} · стоит/ждёт вас · {время}»
+//     (тот же тон, слова и время, что у карточки П2 — словарь п. 8);
+//   • чат БЕЗ шага (оркестратор, ревью) — «фича · {pct} %» (процент по трекеру, общий
+//     trackerPercent): П2 к такому чату неприменим, попап тогда сводка (П1).
+// 'loading'/'error' → «фича · …».
+export function buildPillModel(runs: FeatureRun[], chatTaskId: string | null | undefined, loading: boolean, error: string | null): PillModel | null {
   if (runs.length === 0) {
     if (!loading && error == null) return null;
     return { state: loading ? 'loading' : 'error', tone: 'neutral', pre: 'фича · …', bold: '', post: '', ariaExtra: null };
   }
   const run = runs[0];
-  const stage = activeStageName(run);
+  const chain = findChatChain(run, chatTaskId);
 
-  // Слова — из statusPhrase (общий источник с плашкой фичи в чате); тон/aria — по макету.
-  switch (run.state) {
-    case 'not_started': {
-      const p = statusPhrase('not_started', null, {});
-      return { state: 'not_started', tone: 'neutral', pre: '', bold: p.bold, post: p.post, ariaExtra: null };
+  if (run.state === 'waiting' || run.state === 'merge_pending' || run.state === 'stopped') {
+    const who = stoppedName(run);
+    const a = alarmView(run.state, run.attention?.reason ?? null, who || null, true);
+    const aria = run.state === 'stopped' ? 'исполнитель остановлен' : run.state === 'merge_pending' ? MERGE_PENDING_STATUS : 'фича ждёт вас';
+    const tone = a.tone === 'warn' ? 'wait' : 'stop';
+    // Тревога на ЭТОМ шаге: слово и время те же, что в карточке («стоит»/«ждёт вас» с
+    // attention.since), формат пилюли «{stepRef} · {коротко} · {время}» (словарь, п. 8).
+    const alarmBy = chain ? stepAlarmBy(run, chain) : null;
+    if (chain && alarmBy) {
+      const p = stepStatusParts(chain, Date.now(), alarmBy);
+      return { state: run.state, tone, pre: `${chain.stepRef} · `, bold: p.word, post: p.time ? `${p.sep}${p.time}` : '', ariaExtra: aria };
     }
-    case 'idle': {
-      const p = statusPhrase('idle', null, {});
-      return { state: 'idle', tone: 'neutral', pre: '', bold: p.bold, post: p.post, ariaExtra: null };
-    }
-    case 'paused': {
-      // Очередь фич (волна 6, feature-queue-1): пауза с причиной queue — те же слова,
-      // что у рельсы в чате (statusPhrase, общий источник). manual — как прежде
-      // (запасной путь ниже): задача про очередь подпись ручной паузы не меняет.
-      if (run.hold?.reason === 'queue') {
-        const p = statusPhrase('paused', null, {}, { holdReason: 'queue', queue: run.queue });
-        return { state: 'paused', tone: 'neutral', pre: 'фича · ', bold: p.bold, post: p.post, ariaExtra: null };
-      }
-      break;
-    }
-    case 'running': {
-      const p = statusPhrase('running', stage, { running: runningNames(run) });
-      return { state: 'running', tone: 'neutral', pre: 'фича · ', bold: p.bold, post: p.post, ariaExtra: null };
-    }
-    case 'waiting': {
-      const p = statusPhrase('waiting', stage, {});
-      return { state: 'waiting', tone: 'wait', pre: 'фича · ', bold: p.bold, post: p.post, ariaExtra: 'фича ждёт вас' };
-    }
-    case 'stopped': {
-      const p = statusPhrase('stopped', null, { stopped: stoppedName(run) });
-      return { state: 'stopped', tone: 'stop', pre: 'фича · ', bold: p.bold, post: p.post, ariaExtra: 'исполнитель остановлен' };
-    }
-    case 'merge_pending': {
-      const p = statusPhrase('merge_pending', null, {});
-      return { state: 'merge_pending', tone: 'wait', pre: 'фича · ', bold: p.bold, post: p.post, ariaExtra: MERGE_PENDING_STATUS };
-    }
-    case 'merging': {
-      const p = statusPhrase('merging', null, { merging: mergingName(run) });
-      return { state: 'merging', tone: 'neutral', pre: 'фича · ', bold: p.bold, post: p.post, ariaExtra: null };
-    }
-    case 'merged': {
-      const p = statusPhrase('merged', null, {});
-      return { state: 'merged', tone: 'ok', pre: 'фича · ', bold: p.bold, post: p.post, ariaExtra: null };
-    }
-    case 'closed': {
-      const p = statusPhrase('closed', null, {});
-      return { state: 'closed', tone: 'neutral', pre: 'фича · ', bold: p.bold, post: p.post, ariaExtra: null };
-    }
+    // Тревога не этого шага (или чат без шага): текст тревоги фичи — сигнал на пилюле не теряется.
+    return { state: run.state, tone, pre: a.text, bold: '', post: '', ariaExtra: aria };
   }
-  // Запасной путь: state не пришёл (старые данные/кеш) — нейтральная «Не начата».
-  return { state: 'not_started', tone: 'neutral', pre: '', bold: 'Не начата', post: '', ariaExtra: null };
+
+  if (chain) {
+    // Статус шага — короткое слово по outcome (PILL_SHORT); неизвестный outcome —
+    // бэковое слово как есть. Время — общее с карточкой (stepStatusParts).
+    const p = stepStatusParts(chain, Date.now());
+    return {
+      state: run.state,
+      tone: 'neutral',
+      pre: `${chain.stepRef} · `,
+      bold: PILL_SHORT[chain.outcome] ?? p.word,
+      post: p.time ? `${p.sep}${p.time}` : '',
+      ariaExtra: null,
+    };
+  }
+
+  // Чат без шага: «фича · {pct} %». Нет stepProgress (старые данные) — без числа.
+  const sp = run.stepProgress;
+  const pct = sp ? trackerPercent(sp.accepted, sp.total) : null;
+  return { state: run.state, tone: 'neutral', pre: 'фича · ', bold: pct != null ? `${pct} %` : '', post: '', ariaExtra: null };
 }

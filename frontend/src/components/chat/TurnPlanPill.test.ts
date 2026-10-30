@@ -89,22 +89,19 @@ describe('TurnPlanPill: F9 (сигнал «открыть меню»)', () => {
   });
 });
 
-// R2 minor 4: проводка chatTaskId (ChatPanel → TurnPlanPill → FeatureModeBody → FeatureRunView → Meta).
-// Мутация: chatTaskId={null} в ChatPanel.tsx → роль «этот чат — …» исчезает из меты.
-describe('TurnPlanPill: проводка chatTaskId → мета «этот чат — …»', () => {
-  it('chatTaskId совпадает с taskId исполнителя → мета показывает роль', () => {
-    const stages: FeatureStage[] = [
-      { key: 'prod', state: 'active', tone: 'run', passes: 1, taskIds: [], rounds: [],
-        executors: [{ personaId: null, taskId: 'task-front', taskRole: 'step', stepRef: 'Ш2', lane: 'front', status: 'running', chatId: null, chatArchived: false, modelLabel: null, modelFull: null }] },
-    ];
+// R2 minor 4 / F2: проводка chatTaskId (ChatPanel → TurnPlanPill → FeatureModeBody →
+// FeatureStepView → подвал «этот чат — …»). Мутация: chatTaskId={null} в ChatPanel.tsx →
+// роль исчезает из подвала.
+describe('TurnPlanPill: проводка chatTaskId → подвал «этот чат — …»', () => {
+  it('chatTaskId совпадает с задачей шага → подвал показывает роль', () => {
     const r: FeatureRun = {
       featureId: 'epic-1',
       epic: task({ id: 'epic-1', title: 'Пульт куратора', worktreeBranch: 'feat/curator' }),
-      steps: [], reviews: [], qa: [], final: null, merge: null,
+      steps: [task({ id: 'task-front', title: 'Ш2', role: 'step', stepRef: 'Ш2', lane: 'front', status: 'inProgress' })], reviews: [], qa: [], final: null, merge: null,
       state: 'running',
       verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
       progress: 0, ready: false,
-      stages,
+      stepChains: [{ stepRef: 'Ш2', title: 'Ш2', taskIds: ['task-front'], outcome: 'running', status: 'идёт', durationMinutes: 5, rounds: [], chatId: null, lane: 'front' }],
     } as FeatureRun;
     __test.reset();
     __test.setRuns('s-chatid', [r]);
@@ -116,10 +113,11 @@ describe('TurnPlanPill: проводка chatTaskId → мета «этот ча
     const btn = findNodeByAttr(container, 'aria-label', 'Показать исполнение фичи');
     expect(btn, 'кнопка-пилюля фичи').not.toBeNull();
     act(() => (reactProps(btn!)!.onClick as (e: unknown) => void)({ currentTarget: { getBoundingClientRect: () => zeroRect } }));
-    // Мета в теле (body-портал меню): «этот чат — Ш2 · фронт».
+    // Подвал в теле (body-портал меню): «этот чат —» + чип роли «Ш2 · фронт» (два узла).
     const body = (globalThis as { document: { body: Parameters<typeof findNodeByAttr>[0] } }).document.body;
-    const allText = textNodes(body).join('');
-    expect(allText, 'мета «этот чат — Ш2 · фронт»').toContain('этот чат — Ш2 · фронт');
+    const allText = textNodes(body).join(' ');
+    expect(allText, 'подвал «этот чат —» + роль').toContain('этот чат —');
+    expect(allText, 'роль «Ш2 · фронт»').toContain('Ш2 · фронт');
     root.unmount();
   });
 });
@@ -168,75 +166,57 @@ function now(stage: string, personaId: string | null): FeatureNow {
 }
 
 // Рендер кнопки-пилюли в режиме фичи (runs в сторе + явный режим feature).
-function renderFeaturePill(runs: FeatureRun[], sessionId: string): string {
+function renderFeaturePill(runs: FeatureRun[], sessionId: string, chatTaskId: string | null = null): string {
   __test.reset();
   __test.setRuns(sessionId, runs);
   setTurnPlanMode(sessionId, 'feature');
-  return renderToStaticMarkup(createElement(TurnPlanPill, { todos: [], runs, sessionId }));
+  return renderToStaticMarkup(createElement(TurnPlanPill, { todos: [], runs, sessionId, chatTaskId }));
 }
 
-describe('TurnPlanPill: режим фичи — текст по state (макет S[state].pill)', () => {
+// F2 (макет v4 §П2 «Мой шаг»): пилюля в режиме фичи говорит про ШАГ ЭТОГО ЧАТА, а не
+// пересказывает фичу (её показывает строка шапки В2). Чат без шага — «фича · {pct} %».
+describe('TurnPlanPill: режим фичи — П2 «Мой шаг» (F2)', () => {
   beforeEach(() => { personaMap.clear(); });
 
-  it('running: «фича · <b>Производство</b> · Кира, Денис» (жирная часть + имена)', () => {
-    personaMap.set('kira', 'Кира');
-    personaMap.set('denis', 'Денис');
+  it('чат шага: «Ш8 · <b>идёт</b> · 24 мин» (stepRef + бэковый статус + давность)', () => {
     const html = renderFeaturePill([run({
-      state: 'running', stages: [activeStage('prod')], now: [now('prod', 'kira'), now('prod', 'denis')],
-    })], 's-run');
-    expect(html).toContain('фича · ');
+      stepChains: [{ stepRef: 'Ш8', title: 'Вёрстка шапки', taskIds: ['t-8'], outcome: 'running', status: 'идёт', durationMinutes: 24, rounds: [], chatId: null } as never],
+    })], 's-step', 't-8');
+    expect(html).toContain('Ш8 · ');
     expect(html).toContain('<b');
-    expect(html).toContain('Производство');
-    expect(html).toContain(' · Кира, Денис');
+    expect(html).toContain('идёт');
+    expect(html).toContain(' · 24 мин');
   });
 
-  it('waiting: «фича · <b>{этап}</b> · ждёт вас»', () => {
-    const html = renderFeaturePill([run({ state: 'waiting', stages: [activeStage('prod')] })], 's-wait');
-    expect(html).toContain('Производство');
-    expect(html).toContain(' · ждёт вас');
+  it('чат без шага: «фича · 56 %» (процент по трекеру)', () => {
+    const html = renderFeaturePill([run({
+      stepProgress: { planState: 'cut', total: 9, accepted: 5, review: 1, work: 2, notCreated: 1, withdrawn: 0, unlinkedReworks: 0 },
+    })], 's-orch', 't-куратора');
+    expect(html).toContain('фича · ');
+    expect(html).toContain('56 %');
   });
 
-  it('stopped: «фича · <b>стоит</b> · {имя}»', () => {
+  it('waiting: «Ждёт вас · Кира» тоном warn (текст перекрашен)', () => {
+    personaMap.set('kira', 'Кира');
+    const html = renderFeaturePill([run({
+      state: 'waiting', attention: { kind: 'wait', personaId: 'kira', reason: null },
+    })], 's-wait', 't-1');
+    expect(html).toContain('Ждёт вас · Кира');
+    expect(html).toContain('var(--c-warning-text)');
+  });
+
+  it('stopped: «Стоит · Денис» тоном danger', () => {
     personaMap.set('denis', 'Денис');
     const html = renderFeaturePill([run({
       state: 'stopped', attention: { kind: 'stopped', personaId: 'denis', reason: 'таймаут' },
-    })], 's-stop');
-    expect(html).toContain('стоит');
-    expect(html).toContain(' · Денис');
+    })], 's-stop', 't-2');
+    expect(html).toContain('Стоит · Денис');
+    expect(html).toContain('var(--c-danger-text)');
   });
 
-  it('merge_pending: «фича · <b>Мерж</b> · ждёт согласия»', () => {
-    const html = renderFeaturePill([run({ state: 'merge_pending' })], 's-mergep');
-    expect(html).toContain('Мерж');
-    expect(html).toContain(' · ждёт согласия');
-  });
-
-  it('merging: «фича · <b>Мерж</b> · идёт · {имя}»', () => {
-    personaMap.set('mark', 'Марк');
-    const html = renderFeaturePill([run({ state: 'merging', merge: task({ id: 'm1', personaId: 'mark' }) })], 's-merging');
-    expect(html).toContain('Мерж');
-    expect(html).toContain(' · идёт · Марк');
-  });
-
-  it('merged: «фича · <b>смержена</b>»', () => {
-    const html = renderFeaturePill([run({ state: 'merged' })], 's-merged');
-    expect(html).toContain('смержена');
-  });
-
-  it('closed: «фича · <b>закрыта</b>»', () => {
-    const html = renderFeaturePill([run({ state: 'closed' })], 's-closed');
-    expect(html).toContain('закрыта');
-  });
-
-  it('not_started: «<b>Не начата</b>» (без префикса «фича · »)', () => {
-    const html = renderFeaturePill([run({ state: 'not_started' })], 's-notstart');
-    expect(html).toContain('Не начата');
-    expect(html).not.toContain('фича · Не начата');
-  });
-
-  it('idle: «<b>Простаивает</b>»', () => {
-    const html = renderFeaturePill([run({ state: 'idle' })], 's-idle');
-    expect(html).toContain('Простаивает');
+  it('merge_pending: «Ждёт согласия на мерж»', () => {
+    const html = renderFeaturePill([run({ state: 'merge_pending' })], 's-mergep', null);
+    expect(html).toContain('Ждёт согласия на мерж');
   });
 });
 
@@ -261,19 +241,18 @@ describe('TurnPlanPill: режим фичи — загрузка/ошибка и
     expect(html).toContain('фича · …');
   });
 
-  // Старый вид пилюли: счётчик шагов (8/9) + ↺ + +N + отдельное слово «фича».
-  // Мутации: верни счётчик/↺ в рендер → краснеет.
-  it('нет старых строк: счётчика шагов, ↺, +N', () => {
-    personaMap.set('denis', 'Денис');
+  // Старый вид пилюли: счётчик шагов (8/9) + ↺. Мутации: верни счётчик/↺ в рендер → краснеет.
+  it('нет старых строк: счётчика шагов, ↺', () => {
     const r = run({
-      state: 'running', stages: [activeStage('prod')], now: [now('prod', 'denis')],
+      state: 'running',
+      stepChains: [{ stepRef: 'Ш8', title: 'Вёрстка', taskIds: ['t-8'], outcome: 'running', status: 'идёт', durationMinutes: 24, rounds: [], chatId: null } as never],
       stepsAccepted: 8, stepsTotal: 9,
       verdicts: { accepted: 8, acceptedWithRemarks: 0, returned: 1, withdrawn: 0, loops: 3 },
     });
-    const html = renderFeaturePill([r], 's-nocounter');
+    const html = renderFeaturePill([r], 's-nocounter', 't-8');
     expect(html).not.toContain('8/9');   // счётчик шагов убран
     expect(html).not.toContain('↺');      // возвраты убраны
-    expect(html).toContain('Производство');
-    expect(html).toContain(' · Денис');
+    expect(html).toContain('Ш8 · ');
+    expect(html).toContain('идёт');
   });
 });

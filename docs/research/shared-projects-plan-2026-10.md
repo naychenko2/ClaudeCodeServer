@@ -420,13 +420,17 @@ flowchart TD
 - Зависит от: S1-2, сверка А2. Остальной S1 реестру не нужен, поэтому он стартует параллельно с хвостом S1.
 
 **S2a-2 · back · Денис · М.** Чистая функция рамки.
+- **Ред. 30.10 по решению 29.10 (разрез И.3, ревизия 29.10):** в чате общего проекта личное владельца
+  не подмешивается всем, включая владельца.
 - Файлы:
-  - `backend/ClaudeHomeServer.Core/Services/Access/TurnFrame.cs` (новый): `Resolve(project, tenantOwnerId, actorUserId) → Wide|Narrow`;
+  - `backend/ClaudeHomeServer.Core/Services/Access/TurnFrame.cs` (новый):
+    `Resolve(project, session, tenantOwnerId, actorUserId) → Wide|Narrow` (`session` — под признак
+    приватности из `S2d-1`; сейчас его нет, «не приватный» по умолчанию);
   - тест.
 - Критерии:
-  1. `~TurnFrameTests`: актор = арендатор → `Wide`; актор ≠ арендатор → `Narrow`; актор `null` в общем проекте → `Narrow`
-     (fail-closed); актор `null` в личном проекте → `Wide`.
-  2. Мутация: `null` → `Wide` в общем проекте → красный; откат → зелёный.
+  1. `~TurnFrameTests`: общий проект → `Narrow` при любом акторе (участник, **владелец**, `null`);
+     личный проект → `Wide`.
+  2. Мутация: вернуть `Wide` владельцу в общем проекте → красный; откат → зелёный.
 - Зависит от: S1-1.
 
 **S2a-3 · back · Тимур · М.** Рамка в платформенном MCP.
@@ -476,6 +480,8 @@ flowchart TD
 - Зависит от: S2a-1.
 
 **S2a-6b · back · Кузьма · М.** Расход по участникам.
+- **Пометка (разбор S2a-2):** Role==Owner в Spend.Badge — владелец проекта, а не автор чата; расход
+  чата участника в S2 видит владелец проекта, автор — нет: решить.
 - Файлы:
   - `backend/ClaudeHomeServer.Core/Models/SpendRecord.cs` (`ActorUserId`);
   - `backend/ClaudeHomeServer/Services/SpendMapping.cs`;
@@ -522,6 +528,10 @@ flowchart TD
 
 **S2a-10 · back · Тимур · М.** Редактор запускает ходы.
 - Право `Write` на отправку в хабе и REST, очередь хранит отправителя.
+- **Пометка (разбор S2a-2):** Право Write участнику закрыто в ДВУХ местах: матрица
+  `ProjectAccess.RoleHasRight` и отдельный запрет Write в `ProjectAccessService`. Открывать оба;
+  открыть одно — без эффекта. Матрица ролей обязана получить строки на открываемые записи, а сторож
+  `DirectProjectAccess` остаться без новых строк.
 - Критерии:
   1. Матрица `S1-7` дополнена: редактор отправляет (200), читатель — 403.
   2. Тест очереди: второе сообщение другого участника — `Queued` с `senderUserId`.
@@ -572,6 +582,11 @@ flowchart TD
 
 ### S2b. Задачи
 
+> **Пометка (разбор S2a-2), ко всем карточям S2b:** Право Write участнику закрыто в ДВУХ местах:
+> матрица `ProjectAccess.RoleHasRight` и отдельный запрет Write в `ProjectAccessService`. Открывать
+> оба; открыть одно — без эффекта. Матрица ролей обязана получить строки на открываемые записи, а
+> сторож `DirectProjectAccess` остаться без новых строк.
+
 **S2b-1 · back · Кузьма · М.** Поля задачи.
 - Файлы: `backend/ClaudeHomeServer.Core/Models/TaskItem.cs` (`AssigneeUserId`, `CreatedByUserId`), `backend/ClaudeHomeServer.Tasks/TaskManager.cs`
   (чтение `Me`), тест.
@@ -620,6 +635,11 @@ flowchart TD
 - Зависит от: S2b-1.
 
 ### S2c. Конфликт 409 для правок человека
+
+> **Пометка (разбор S2a-2), ко всем карточям S2c:** Право Write участнику закрыто в ДВУХ местах:
+> матрица `ProjectAccess.RoleHasRight` и отдельный запрет Write в `ProjectAccessService`. Открывать
+> оба; открыть одно — без эффекта. Матрица ролей обязана получить строки на открываемые записи, а
+> сторож `DirectProjectAccess` остаться без новых строк.
 
 **S2c-0 · back · Тимур.** Проверка OnlyOffice: есть ли собственное соредактирование и где в нашем подключении точка записи.
 - Результат: раздел в карте `S0-3`.
@@ -675,6 +695,9 @@ Office и двоичные — карточки версий; мобила — `
 - Зависит от: —.
 
 **S2d-1 · back · Денис · М.** Модель и правило видимости.
+- **Пометка (разбор S2a-2):** ImageThreadChanged, AudioThreadChanged, ChatContextChanged перевести с
+  ToProjectOrOwner на ToChatAudience до появления первого приватного чата в общем проекте; добавить
+  тест или сторож: посессионное событие не уходит адресатом уровня проекта.
 - Файлы:
   - `backend/ClaudeHomeServer.Core/Models/Session.cs` (`PrivateToUserId`);
   - `backend/ClaudeHomeServer.Core/Services/Access/SessionAccess.cs` (правило И.2);
@@ -686,6 +709,9 @@ Office и двоичные — карточки версий; мобила — `
 - Зависит от: S2a-3, S2a-4, S2a-5: без рамки приватность фиктивна. `S2a-10` для этого шага не нужен.
 
 **S2d-2 · back · Тимур · М.** Адресация `ToChatAudience`.
+- **Пометка (разбор S2a-2):** ImageThreadChanged, AudioThreadChanged, ChatContextChanged перевести с
+  ToProjectOrOwner на ToChatAudience до появления первого приватного чата в общем проекте; добавить
+  тест или сторож: посессионное событие не уходит адресатом уровня проекта.
 - Новая функция, перевод 5 рассылок (`SessionManager.cs:2371, 6925, 9916, 11019, 11043` на ревизии разреза) и адресата уведомлений
   «ход завершён» / «нужен ответ».
 - Критерии:

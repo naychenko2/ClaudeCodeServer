@@ -5,9 +5,8 @@ using FluentAssertions;
 namespace ClaudeHomeServer.Tests.Services.Access;
 
 /// <summary>
-/// Рамка хода участника (S2a-2, разрез §И.3): чистая функция вердикта Wide/Narrow.
-/// Широкая рамка — только когда инициатор достоверно арендатор; в общем проекте без
-/// инициатора — узкая (fail-closed); в личном проекте без инициатора — широкая.
+/// Рамка хода (S2a-2, разрез §И.3 в редакции решения 29.10): в общем проекте — узкая при любом
+/// акторе, включая самого владельца и отсутствующего; широкая — только в личном проекте.
 /// </summary>
 public class TurnFrameTests
 {
@@ -25,36 +24,29 @@ public class TurnFrameTests
         return project;
     }
 
-    // --- актор достоверно арендатор → Wide
+    private static Session SharedChat() => new() { ProjectId = "p", OwnerId = TenantId };
+
+    // --- общий проект: узкая рамка всем, включая владельца (решение 29.10)
 
     [Fact]
-    public void АкторРавенАрендатору_РамкаШирокая()
+    public void ВладелецВОбщемПроекте_РамкаУзкая_Решение29_10()
     {
-        TurnFrame.Resolve(PersonalProject(), TenantId, TenantId).Should().Be(TurnFrameKind.Wide);
-        TurnFrame.Resolve(SharedProject((EditorId, ProjectRole.Editor), (ReaderId, ProjectRole.Reader)), TenantId, TenantId)
-            .Should().Be(TurnFrameKind.Wide);
+        // Раньше здесь был Wide («инициатор достоверно владелец»). Решение 29.10: личное
+        // пространство владельца не подмешивается и в его собственный чат общего проекта.
+        var project = SharedProject((EditorId, ProjectRole.Editor), (ReaderId, ProjectRole.Reader));
+        TurnFrame.Resolve(project, null, TenantId, TenantId).Should().Be(TurnFrameKind.Narrow);
     }
-
-    // --- актор есть, но он не арендатор → Narrow (роль участника не важна)
 
     [Theory]
     [InlineData(EditorId)]
     [InlineData(ReaderId)]
     [InlineData(OtherId)]
-    public void АкторНеАрендатор_РамкаУзкая(string actorId)
+    public void УчастникОбщегоПроекта_РамкаУзкая(string actorId)
     {
+        // Роль участника не важна: в узкой рамке нет широкой ни для кого.
         var project = SharedProject((EditorId, ProjectRole.Editor), (ReaderId, ProjectRole.Reader));
-        TurnFrame.Resolve(project, TenantId, actorId).Should().Be(TurnFrameKind.Narrow);
+        TurnFrame.Resolve(project, null, TenantId, actorId).Should().Be(TurnFrameKind.Narrow);
     }
-
-    [Fact]
-    public void АкторНеАрендаторВЛичномПроекте_РамкаУзкая()
-    {
-        // Чужой актор и в личном проекте не получает личное пространство арендатора
-        TurnFrame.Resolve(PersonalProject(), TenantId, OtherId).Should().Be(TurnFrameKind.Narrow);
-    }
-
-    // --- актора нет: в общем проекте — узкая (fail-closed), в личном — широкая
 
     [Theory]
     [InlineData(null)]
@@ -62,41 +54,57 @@ public class TurnFrameTests
     public void БезАктораВОбщемПроекте_РамкаУзкая_FailClosed(string? actorId)
     {
         var project = SharedProject((ReaderId, ProjectRole.Reader));
-        TurnFrame.Resolve(project, TenantId, actorId).Should().Be(TurnFrameKind.Narrow);
+        TurnFrame.Resolve(project, null, TenantId, actorId).Should().Be(TurnFrameKind.Narrow);
     }
 
     [Theory]
     [InlineData(null)]
     [InlineData("")]
-    public void БезАктораВЛичномПроекте_РамкаШирокая(string? actorId)
+    public void БезАрендатораВОбщемПроекте_РамкаУзкая_FailClosed(string? tenantId)
     {
-        // Защищать не от кого: всё пространство и так принадлежит арендатору
-        TurnFrame.Resolve(PersonalProject(), TenantId, actorId).Should().Be(TurnFrameKind.Wide);
+        // Чьё пространство закрывать — неизвестно; в общем проекте вердикт не зависит от этого.
+        var project = SharedProject((ReaderId, ProjectRole.Reader));
+        TurnFrame.Resolve(project, null, tenantId, ReaderId).Should().Be(TurnFrameKind.Narrow);
+    }
+
+    // --- признака приватности в модели ещё нет (его введёт S2d-1): чат вердикт общего проекта не меняет
+
+    [Fact]
+    public void ЧатОбщегоПроектаБезПризнакаПриватности_РамкаУзкая()
+    {
+        // session участвует в сигнатуре под признак S2d-1; сейчас «не приватный» по умолчанию.
+        var project = SharedProject((EditorId, ProjectRole.Editor));
+        TurnFrame.Resolve(project, SharedChat(), TenantId, TenantId).Should().Be(TurnFrameKind.Narrow);
+        TurnFrame.Resolve(project, SharedChat(), TenantId, EditorId).Should().Be(TurnFrameKind.Narrow);
+    }
+
+    // --- личный проект: широкая рамка — защищать не от чего
+
+    [Theory]
+    [InlineData(TenantId)]
+    [InlineData(OtherId)]
+    [InlineData(null)]
+    [InlineData("")]
+    public void ЛичныйПроект_РамкаШирокая(string? actorId)
+    {
+        // Чужого актора в личном проекте не бывает: доступ к нему даёт только владение
+        // (ProjectAccess.Check). Второго guard'а рамка не добавляет: пространство — своё.
+        TurnFrame.Resolve(PersonalProject(), null, TenantId, actorId).Should().Be(TurnFrameKind.Wide);
     }
 
     [Fact]
     public void БезАктораБезПроекта_РамкаШирокая_ЛичноеНеОбщийПроект()
     {
         // null-проект общим быть не может (общий всегда с участниками) — это личное пространство
-        TurnFrame.Resolve(null, TenantId, null).Should().Be(TurnFrameKind.Wide);
+        TurnFrame.Resolve(null, null, TenantId, null).Should().Be(TurnFrameKind.Wide);
     }
 
     [Fact]
-    public void ПустойСписокУчастников_ПроектЛичный_БезАктораШирокая()
+    public void ПустойСписокУчастников_ПроектЛичный_РамкаШирокая()
     {
         // Members нормализован в null (Project.Members): пустой список — не общий проект
         var project = PersonalProject();
         project.Members = [];
-        TurnFrame.Resolve(project, TenantId, null).Should().Be(TurnFrameKind.Wide);
-    }
-
-    // --- арендатора нет при известном акторе → Narrow: что актор не чужой, нечем установить
-
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    public void БезАрендатораПриИзвестномАкторе_РамкаУзкая_FailClosed(string? tenantId)
-    {
-        TurnFrame.Resolve(PersonalProject(), tenantId, OtherId).Should().Be(TurnFrameKind.Narrow);
+        TurnFrame.Resolve(project, null, TenantId, null).Should().Be(TurnFrameKind.Wide);
     }
 }

@@ -650,6 +650,96 @@ public class FeatureProjectorTests
         run.Attention!.TaskId.Should().Be("w1", "ждущий дольше всех — самый ранний AwaitingHumanSince");
     }
 
+    // Ш2c: runningSince считается по идущим задачам стадии при любом State (pending тоже),
+    // held исключены; предикат общий с run.now. Мутация: вернуть `state == "active" ? … : null`
+    // (или голый Status == InProgress без !IsHeld) в FeatureProjector.cs → тесты ниже краснеют.
+    private static (TaskItem epic, List<TaskItem> all) RunningSinceFixture(
+        string epicId, TaskItem stepTask)
+    {
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var plan = new TaskItem
+        {
+            Id = "pl", FeatureId = epicId, Role = TaskRoles.Plan, Status = TaskItemStatus.Todo,
+        };
+        stepTask.FeatureId = epicId;
+        return (epic, [epic, plan, stepTask]);
+    }
+
+    [Fact]
+    public void Build_СтадияPendingСИдущейЗадачей_RunningSinceЕсть_StateПрежний()
+    {
+        var t = new DateTime(2026, 10, 30, 10, 0, 0);
+        var (epic, all) = RunningSinceFixture("epic-rs1", new TaskItem
+        {
+            Id = "s1", Role = TaskRoles.Step, StepRef = "Ш1", Status = TaskItemStatus.InProgress,
+            PersonaId = "Тимур", ClaudeStartedAt = t,
+        });
+
+        var run = FeatureProjector.Build(epic, all);
+
+        var stage = run.Stages.Single(s => s.Key == "prod");
+        stage.State.Should().Be("pending", "активна ранняя стадия — State не трогаем");
+        stage.RunningSince.Should().Be(t);
+    }
+
+    [Fact]
+    public void Build_ВСтадииТолькоHeld_RunningSinceNull()
+    {
+        var t = new DateTime(2026, 10, 30, 10, 0, 0);
+        var (epic, all) = RunningSinceFixture("epic-rs2", new TaskItem
+        {
+            Id = "s1", Role = TaskRoles.Step, StepRef = "Ш1", Status = TaskItemStatus.InProgress,
+            PersonaId = "Тимур", ClaudeStartedAt = t,
+            AwaitingHumanSince = t.AddMinutes(5), AwaitingHumanReason = "ждём подтверждения",
+        });
+
+        var run = FeatureProjector.Build(epic, all);
+
+        run.Stages.Single(s => s.Key == "prod").RunningSince.Should().BeNull();
+    }
+
+    [Fact]
+    public void Build_АктивнаяСтадияСИдущей_RunningSinceПрежнее()
+    {
+        var t = new DateTime(2026, 10, 30, 10, 0, 0);
+        var epic = new TaskItem { Id = "epic-rs3", Role = TaskRoles.Feature };
+        var step = new TaskItem
+        {
+            Id = "s1", FeatureId = "epic-rs3", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, PersonaId = "Тимур", ClaudeStartedAt = t,
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, step]);
+
+        var stage = run.Stages.Single(s => s.Key == "prod");
+        stage.State.Should().Be("active");
+        stage.RunningSince.Should().Be(t);
+    }
+
+    [Fact]
+    public void Build_RunNowИRunningSince_Согласованы()
+    {
+        var t = new DateTime(2026, 10, 30, 10, 0, 0);
+        var epic = new TaskItem { Id = "epic-rs4", Role = TaskRoles.Feature };
+        var plan = new TaskItem { Id = "pl", FeatureId = "epic-rs4", Role = TaskRoles.Plan, Status = TaskItemStatus.Todo };
+        var held = new TaskItem
+        {
+            Id = "h1", FeatureId = "epic-rs4", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, ClaudeStartedAt = t,
+            AwaitingHumanSince = t.AddMinutes(1), AwaitingHumanReason = "ждём",
+        };
+        var running = new TaskItem
+        {
+            Id = "r1", FeatureId = "epic-rs4", Role = TaskRoles.Step, StepRef = "Ш2",
+            Status = TaskItemStatus.InProgress, ClaudeStartedAt = t.AddHours(1),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, plan, held, running]);
+
+        run.Now.Select(n => n.TaskId).Should().Equal("r1");
+        run.Stages.Single(s => s.Key == "prod").RunningSince.Should().Be(run.Now[0].StartedAt);
+    }
+
     // c2: свежая остановленная — не в Now (тревога stopped); устаревшая пометка
     // (ExecutorStoppedAt < ClaudeStartedAt) — в Now, тревоги stopped нет. Мутация: снять
     // stale-guard в IsHeld (оставить голый ExecutorStoppedAt) → в (б) Now станет пустым и

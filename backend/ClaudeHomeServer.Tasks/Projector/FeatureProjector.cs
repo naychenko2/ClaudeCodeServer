@@ -223,7 +223,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         // InProgress). Вынесено до цикла стадий: nowCount нужен для ComputeState, а state —
         // для гашения тревоги при паузе (R-HOLD-B1).
         var nowList = featureTasks
-            .Where(t => t.Status == TaskItemStatus.InProgress && !ReferenceEquals(t, epic) && !IsHeld(t))
+            .Where(t => !ReferenceEquals(t, epic) && IsRunning(t))
             .OrderByDescending(t => t.ClaudeStartedAt ?? t.CreatedAt)
             .Select(t => new FeatureNow
             {
@@ -418,10 +418,9 @@ public sealed class FeatureProjector(TaskManager tasks)
                     break;
             }
 
-            // RunningSince: ClaudeStartedAt идущей (InProgress) задачи стадии.
-            DateTime? runningSince = state == "active"
-                ? tasks.FirstOrDefault(t => t.Status == TaskItemStatus.InProgress)?.ClaudeStartedAt
-                : null;
+            // RunningSince: ClaudeStartedAt идущей задачи стадии при любом State (тот же
+            // предикат IsRunning, что у run.now); держащиеся (held) в расчёт не входят.
+            DateTime? runningSince = tasks.FirstOrDefault(IsRunning)?.ClaudeStartedAt;
 
             // Витки стадии: у qa/final каждая задача стадии — виток (формат как у цепочки шагов).
             // У review — шаг с наибольшим числом витков (строка «дольше всех D1c»).
@@ -1218,6 +1217,10 @@ public sealed class FeatureProjector(TaskManager tasks)
     // правила нигде нет.
     internal static bool IsHeld(TaskItem t)
         => t.AwaitingHumanSince is not null || HasValidStopMark(t);
+
+    // «Задача идёт»: InProgress и не held. Единая точка правды для run.now и stage.runningSince.
+    private static bool IsRunning(TaskItem t)
+        => t.Status == TaskItemStatus.InProgress && !IsHeld(t);
 
     // Б2: статус исполнителя из полей задачи. Приоритет: running (ход идёт сейчас —
     // IsTurnRunning) → stopped (валидная пометка остановки) → waiting (AwaitingHumanSince)

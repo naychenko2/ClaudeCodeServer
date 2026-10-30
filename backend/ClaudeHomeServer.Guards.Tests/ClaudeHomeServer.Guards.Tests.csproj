@@ -39,6 +39,9 @@
       исходники — нужна явная ссылка (тот же приём, что в монолите ClaudeHomeServer.Tests.csproj).
     -->
     <ProjectReference Include="..\ClaudeHomeServer.Notes\ClaudeHomeServer.Notes.csproj" />
+    <!-- ParticipantTurnFrameGuardTests (S2a-5, ревью R-S2a-5 M1): строка memory/dossier_get
+         обязана быть реальным вызовом — фикстура засевает паспорт в DossierStore. -->
+    <ProjectReference Include="..\ClaudeHomeServer.Dossiers\ClaudeHomeServer.Dossiers.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Spend\ClaudeHomeServer.Spend.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.ImageEditor\ClaudeHomeServer.ImageEditor.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.AudioEditor\ClaudeHomeServer.AudioEditor.csproj" />

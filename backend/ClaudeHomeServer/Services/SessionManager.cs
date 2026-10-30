@@ -4673,12 +4673,13 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             : [];
 
     // Серверы личного реестра владельца в ход. Решение принимается ТОЛЬКО по
-    // owner/project/persona — состав tools/list не смеет зависеть от свойств хода
+    // owner/project/persona и вердикту рамки хода (свойство сессии/проекта, S2a-7) —
+    // состав tools/list не смеет зависеть от свойств хода
     // (иначе сигнатура запуска мерцает и процесс CLI перезапускается со всеми MCP).
     // Провайдер, а не готовое значение: правка реестра применяется со следующего хода
     // без пересоздания адаптера. Секреты разворачиваются здесь и живут только во
     // временном конфиге хода.
-    private Func<ExternalMcpContext?>? BuildExternalMcpProvider(string? ownerId, string? projectId, Persona? persona)
+    private Func<ExternalMcpContext?>? BuildExternalMcpProvider(string? ownerId, string? projectId, Persona? persona, string? sessionId)
     {
         if (ownerId is null || _mcpRegistry is null || _mcpSecrets is null) return null;
         // Профиль «Только чтение»: имён инструментов чужого сервера мы не знаем, а гасить их
@@ -4700,6 +4701,14 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 var project = projectId is null ? null : _projects.GetById(projectId);
                 var onInProject = project?.McpServersOn;     // allow-модель доступа
                 var isProjectChat = projectId is not null;
+                // Рамка хода (S2a-7): тот же вердикт GetTurnFrame/ITurnFrameSource, что входит
+                // в сигнатуру запуска (ClaudeSession). Его читаем по живому состоянию
+                // сессии/проекта, а не по ходу: общий проект — Narrow любому актору включая
+                // владельца (решение 29.10), личный и внепроектный — Wide. Добавление или
+                // снятие участников меняет рамку вместе с сигнатурой — следующий ход стартует
+                // новым процессом с новым составом реестра, состав доживающего процесса
+                // при этом неизменен.
+                var frame = GetTurnFrame(sessionId, ownerId);
                 foreach (var record in registry.GetByOwner(ownerId))
                 {
                     if (!record.Enabled) continue;
@@ -4714,11 +4723,14 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     if (Mcp.McpRegistry.IntegrationKeys.Contains(record.Key, StringComparer.OrdinalIgnoreCase)) continue;
                     // allow-модель: сервер едет, если включён «здесь» (проект этого чата
                     // по McpServersOn либо, вне проектов, AllowOutsideProjects записи) ИЛИ
-                    // выдан персоне (McpServerGranted). Чистое условие — McpDelivery.ShouldDeliver,
+                    // выдан персоне (McpServerGranted). В узкой рамке обе личные оси
+                    // не смотрятся вовсе — единственный путь реестрового сервера в общий
+                    // проект это явная пометка SharedWithMembers (S2a-7, решение 29.10).
+                    // Чистое условие — McpDelivery.ShouldDeliver,
                     // его OR-матрицу гоняем юнитами без SessionManager. Все входы — свойства
-                    // owner/project/persona/записи, ни один не смотрит на ход.
+                    // owner/project/persona/записи и вердикт рамки, ни один не смотрит на ход.
                     var granted = _bindings.McpServerGranted(persona, "mcp:" + record.Key);
-                    if (!Mcp.McpDelivery.ShouldDeliver(record, onInProject, isProjectChat, granted, readOnly))
+                    if (!Mcp.McpDelivery.ShouldDeliver(record, onInProject, isProjectChat, granted, readOnly, frame))
                         continue;
                     var stdio = record.Transport == McpTransport.Stdio;
                     // OAuth: токен, доживающий последние секунды, обновляем ДО сборки конфига —
@@ -5043,7 +5055,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             BrowserEnabled: BrowserEnabled(ownerId, persona.Persona),
             SystemPromptViaFile: SystemPromptViaFile,
             CliConfigRoot: ConfigRootFor(ownerId, session.Provider),
-            ExternalMcpProvider: BuildExternalMcpProvider(ownerId, session.ProjectId, persona.Persona),
+            ExternalMcpProvider: BuildExternalMcpProvider(ownerId, session.ProjectId, persona.Persona, session.Id),
             PersistSessions: SaveSessions,
             EnqueueBypass: BuildEnqueueBypass(session.Id),
             OrchestrationDone: BuildOrchestrationDone(session.Id),
@@ -6669,7 +6681,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 BrowserEnabled: BrowserEnabled(entry.Info.OwnerId, persona.Persona),
                 SystemPromptViaFile: SystemPromptViaFile,
                 CliConfigRoot: ConfigRootFor(entry.Info.OwnerId, entry.Info.Provider),
-                ExternalMcpProvider: BuildExternalMcpProvider(entry.Info.OwnerId, null, persona.Persona),
+                ExternalMcpProvider: BuildExternalMcpProvider(entry.Info.OwnerId, null, persona.Persona, entry.Info.Id),
                 PersistSessions: SaveSessions,
                 EnqueueBypass: BuildEnqueueBypass(sessionId),
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
@@ -6754,7 +6766,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 BrowserEnabled: BrowserEnabled(project.OwnerId, persona.Persona),
                 SystemPromptViaFile: SystemPromptViaFile,
                 CliConfigRoot: ConfigRootFor(project.OwnerId, entry.Info.Provider),
-                ExternalMcpProvider: BuildExternalMcpProvider(project.OwnerId, project.Id, persona.Persona),
+                ExternalMcpProvider: BuildExternalMcpProvider(project.OwnerId, project.Id, persona.Persona, entry.Info.Id),
                 PersistSessions: SaveSessions,
                 EnqueueBypass: BuildEnqueueBypass(sessionId),
                 OrchestrationDone: BuildOrchestrationDone(sessionId),

@@ -1182,14 +1182,12 @@ public sealed class TasksToolset(
             ReturnReason = OptionalArg(ver, "returnReason"),
         };
 
-    // Оценка оркестратора: null — ключа нет или не объект; поля как в схеме featureEstimate. Нечисловые
-    // done/total/inProgress дают -1: Validate отклонит (молча подставлять 0 нельзя).
+    // Оценка оркестратора: null — ключа нет или не объект; поля как в схеме featureEstimate. Старые
+    // done/total/inProgress/percent принимаются и отбрасываются: процент — только из run.stepProgress.
     private static FeatureEstimate? FeatureEstimateArg(JsonObject arguments)
     {
         if (arguments["featureEstimate"] is not JsonObject est) return null;
-        int Required(string name) => NullableIntArg(est, name) ?? -1;
         return new FeatureEstimate(
-            Required("done"), Required("total"), Required("inProgress"), NullableIntArg(est, "percent"),
             LabelsArg(est, "remaining") ?? [], NullableIntArg(est, "etaMinutes"), OptionalArg(est, "why")).Normalize();
     }
 
@@ -1797,13 +1795,9 @@ public sealed class TasksToolset(
     private static JsonObject FeatureEstimateSchema() => new()
     {
         ["type"] = "object",
-        ["description"] = "Оценка оркестратора, только с featureNote, в каждом ходе, где фича сдвинулась; why — причина расхождения срока.",
+        ["description"] = "Срок и «что дальше», только с featureNote, в каждом ходе, где фича сдвинулась; why — причина расхождения срока. Процент не пишется: его берёт трекер.",
         ["properties"] = new JsonObject
         {
-            ["done"] = new JsonObject { ["type"] = "integer", ["description"] = "Готово единиц: 0..total (шаги плана плюс стадии конвейера)" },
-            ["inProgress"] = new JsonObject { ["type"] = "integer", ["description"] = "В работе сейчас: 0..total−done" },
-            ["total"] = new JsonObject { ["type"] = "integer", ["description"] = "Всего единиц: 1..50" },
-            ["percent"] = new JsonObject { ["type"] = "integer", ["description"] = "Готовность 0..100; опусти — done/total" },
             ["remaining"] = new JsonObject
             {
                 ["type"] = "array",
@@ -1813,7 +1807,6 @@ public sealed class TasksToolset(
             ["etaMinutes"] = new JsonObject { ["type"] = "integer", ["description"] = "Минут до готовности по самой длинной цепочке, ≥1; нет оценки — не указывай" },
             ["why"] = new JsonObject { ["type"] = "string", ["description"] = "Почему срок заметно отличается от обычного, ≤160; только при расхождении" },
         },
-        ["required"] = new JsonArray("done", "inProgress", "total"),
     };
 
     private static JsonObject PlanStepsSchema() => new()

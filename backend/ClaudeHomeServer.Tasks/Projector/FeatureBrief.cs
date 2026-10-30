@@ -78,13 +78,12 @@ public static class FeatureBrief
         string Text, DateTime At, string? ByPersonaId, bool ByUser, string StageAtWrite, bool Stale,
         BriefNoteEstimate? Estimate = null);
 
-    // Оценка оркестратора наружу (макет 2, «Данные» таблицы 1–3): percent бэк отдаёт всегда
-    // (досчитанный из done/total, когда оркестратор его не задал); agreement — within/above/below
+    // Оценка оркестратора наружу (макет 2, «Данные» таблицы 1–3): только срок и «что дальше», процент
+    // фичи — один, из run.stepProgress; agreement — within/above/below
     // против истории (null — сравнивать не с чем); etaEndsAt — At + etaMinutes (null на паузе, в
     // очереди, в «ждёт вас» и без срока).
     public sealed record BriefNoteEstimate(
-        int Done, int Total, int InProgress, int Percent, List<string> Remaining, int? EtaMinutes,
-        string? Why, string? Agreement, DateTime? EtaEndsAt);
+        List<string> Remaining, int? EtaMinutes, string? Why, string? Agreement, DateTime? EtaEndsAt);
 
     // Метки согласия (brief.note.estimate.agreement).
     public static class Agreements
@@ -445,17 +444,16 @@ public static class FeatureBrief
     }
 
     // Оценка оркестратора (макет 2): устаревание — то же StaleOf, что у голоса (отдельной логики нет:
-    // фронт берёт brief.note.stale). Percent — заданный или round(done/total·100).
+    // фронт берёт brief.note.stale).
     // etaEndsAt = note.At + etaMinutes от момента записи, а не от «сейчас» (срок не «уползает» с
     // каждым обновлением страницы); на паузе, в очереди и в «ждёт вас» не отдаётся.
     private static BriefNoteEstimate? EstimateOfNote(FeatureNote note, string kind, BriefEstimate? history)
     {
         if (note.Estimate is not { } e) return null;
-        var percent = e.Percent ?? (int)Math.Round(100.0 * e.Done / e.Total, MidpointRounding.AwayFromZero);
         DateTime? endsAt = e.EtaMinutes is { } eta && kind is not (Kinds.Paused or Kinds.Queued or Kinds.WaitingYou)
             ? note.At.AddMinutes(eta)
             : null;
-        return new BriefNoteEstimate(e.Done, e.Total, e.InProgress, percent, (e.Remaining ?? []).ToList(),
+        return new BriefNoteEstimate((e.Remaining ?? []).ToList(),
             e.EtaMinutes, e.Why, AgreementOf(e.EtaMinutes, history), endsAt);
     }
 

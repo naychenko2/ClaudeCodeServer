@@ -3065,12 +3065,12 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var response = await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new
         {
             text = "идём",
-            featureEstimate = new { done = 2, total = 8, inProgress = 1, remaining = new[] { "ревью" }, etaMinutes = 90 },
+            featureEstimate = new { remaining = new[] { "ревью" }, etaMinutes = 90 },
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var est = _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.Note!.Estimate!;
-        (est.Done, est.Total, est.InProgress, est.EtaMinutes).Should().Be((2, 8, 1, 90));
+        est.EtaMinutes.Should().Be(90);
         est.Remaining.Should().Equal("ревью");
     }
 
@@ -3081,7 +3081,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
 
         var response = await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new
         {
-            text = "", featureEstimate = new { done = 2, total = 8, inProgress = 0 },
+            text = "", featureEstimate = new { etaMinutes = 60 },
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
@@ -3089,17 +3089,34 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     }
 
     [Fact]
-    public async Task PutNote_ОценкаНарушаетОграничения_400()
+    public async Task PutNote_ОценкаСрокМеньшеМинуты_400()
     {
         var epicId = await CreateFeatureEpicAsync();
 
         var response = await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new
         {
-            text = "г", featureEstimate = new { done = 9, total = 8, inProgress = 0 },
+            text = "г", featureEstimate = new { etaMinutes = 0 },
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.Note.Should().BeNull();
+    }
+
+    // Старые поля процента (done > total и прочие) не отказ: принимаются и отбрасываются, срок сохраняется.
+    [Fact]
+    public async Task PutNote_СтарыеПоляПроцента_ПринятыИОтброшены()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+
+        var response = await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new
+        {
+            text = "г", featureEstimate = new { done = 9, total = 8, inProgress = 0, percent = 150, etaMinutes = 45 },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var est = _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.Note!.Estimate!;
+        est.EtaMinutes.Should().Be(45);
+        System.Text.Json.JsonSerializer.Serialize(est).Should().NotContain("Total").And.NotContain("Percent");
     }
 
     // B14 (возврат FIN 74722f13): голос, записанный у фичи БЕЗ идущих задач (шаг в todo — Now пуст),

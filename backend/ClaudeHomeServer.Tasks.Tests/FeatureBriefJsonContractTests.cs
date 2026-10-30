@@ -43,7 +43,7 @@ public class FeatureBriefJsonContractTests
         new FeatureBrief.BriefQueue(2, 5),
         25,
         new FeatureBrief.BriefNote("ревью началось", NOW.AddHours(-2), "gleb", true, "review", false,
-            new FeatureBrief.BriefNoteEstimate(2, 6, 1, 33, ["ревью"], 120, "дольше всех — фронт", "above", NOW.AddHours(2))),
+            new FeatureBrief.BriefNoteEstimate(["ревью"], 120, "дольше всех — фронт", "above", NOW.AddHours(2))),
         300,
         NOW.AddHours(-3),
         [new FeatureBrief.BriefActive("t1", "prod", "B2", "back", "timur", "working", NOW.AddMinutes(-12), null)],
@@ -80,6 +80,6 @@ public class FeatureBriefJsonContractTests
             "taskId", "stage", "stepRef", "lane", "personaId", "state", "since", "reason");
         AssertKeys(root["note"], "brief.note", "text", "at", "byPersonaId", "byUser", "stageAtWrite", "stale", "estimate");
         AssertKeys(root["note"]!["estimate"], "brief.note.estimate",
-            "done", "total", "inProgress", "percent", "remaining", "etaMinutes", "why", "agreement", "etaEndsAt");
+            "remaining", "etaMinutes", "why", "agreement", "etaEndsAt");
     }
 }

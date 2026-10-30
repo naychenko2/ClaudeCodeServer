@@ -383,7 +383,8 @@ public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFact
             props.ContainsKey("featureEstimate").Should().BeTrue($"{label}: featureEstimate в tools/list всегда");
             var est = (JsonObject)props["featureEstimate"]!;
             ((JsonObject)est["properties"]!).Select(p => p.Key).Should()
-                .BeEquivalentTo("done", "inProgress", "total", "percent", "remaining", "etaMinutes", "why");
+                .BeEquivalentTo("remaining", "etaMinutes", "why");
+            est.ContainsKey("required").Should().BeFalse($"{label}: обязательных полей у оценки нет");
             est["description"]!.GetValue<string>().Should().Contain("в каждом ходе").And.Contain("why");
             props["featureNote"]!["description"]!.GetValue<string>().Should().Contain("в каждом ходе");
         }
@@ -398,15 +399,15 @@ public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFact
         var (text, isError) = await CallToolAsync(curatorId, "tasks_update", new
         {
             id = epicId, featureNote = "идём",
-            featureEstimate = new { done = 1, total = 6, inProgress = 2, remaining = new[] { " ревью ", "финал" }, etaMinutes = 150, why = " фронт " },
+            featureEstimate = new { remaining = new[] { " ревью ", "финал" }, etaMinutes = 150, why = " фронт " },
         });
         isError.Should().BeFalse(text);
 
         var est = Tasks.GetById(epicId)!.Note!.Estimate!;
-        (est.Done, est.Total, est.InProgress, est.Percent, est.EtaMinutes, est.Why).Should().Be((1, 6, 2, null, 150, "фронт"));
+        (est.EtaMinutes, est.Why).Should().Be((150, "фронт"));
         est.Remaining.Should().Equal("ревью", "финал");
         JsonSerializer.Deserialize<JsonElement>(text).GetProperty("note").GetProperty("estimate")
-            .GetProperty("total").GetInt32().Should().Be(6);
+            .GetProperty("etaMinutes").GetInt32().Should().Be(150);
 
         // Новый вызов без оценки заменяет голос целиком: оценка не «залипает».
         (await CallToolAsync(curatorId, "tasks_update", new { id = epicId, featureNote = "без оценки" }))
@@ -414,12 +415,32 @@ public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFact
         Tasks.GetById(epicId)!.Note!.Estimate.Should().BeNull();
     }
 
+    // Старые клиенты шлют done/total/inProgress/percent: принимаются и отбрасываются, срок сохраняется.
+    [Fact]
+    public async Task FeatureEstimate_СтарыеПоляПроцента_ПринимаютсяИОтбрасываются()
+    {
+        var (projectId, _) = await CreateProjectWithSessionAsync("estlegacy");
+        var (curatorId, epicId, _) = await CreateFeatureFromCuratorAsync(projectId, "estlegacy");
+
+        var (text, isError) = await CallToolAsync(curatorId, "tasks_update", new
+        {
+            id = epicId, featureNote = "идём",
+            featureEstimate = new { done = 4, total = 9, inProgress = 3, percent = 60, etaMinutes = 160 },
+        });
+        isError.Should().BeFalse(text);
+
+        var est = JsonSerializer.Serialize(Tasks.GetById(epicId)!.Note!.Estimate);
+        est.Should().Contain("\"EtaMinutes\":160");
+        foreach (var dropped in new[] { "Done", "Total", "InProgress", "Percent" })
+            est.Should().NotContain($"\"{dropped}\"");
+    }
+
     [Fact]
     public async Task FeatureEstimate_БезГолоса_Отказ()
     {
         var (projectId, _) = await CreateProjectWithSessionAsync("estnonote");
         var (curatorId, epicId, _) = await CreateFeatureFromCuratorAsync(projectId, "estnonote");
-        var est = new { done = 1, total = 6, inProgress = 0 };
+        var est = new { etaMinutes = 60 };
 
         var (noNote, err1) = await CallToolAsync(curatorId, "tasks_update", new { id = epicId, featureEstimate = est });
         err1.Should().BeTrue();
@@ -430,29 +451,19 @@ public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFact
         Tasks.GetById(epicId)!.Note.Should().BeNull();
     }
 
-    [Theory]
-    [InlineData(0, 0, 0, null, null, "total")]      // total < 1
-    [InlineData(0, 51, 0, null, null, "total")]     // total > 50
-    [InlineData(4, 3, 0, null, null, "done")]       // done > total
-    [InlineData(-1, 3, 0, null, null, "done")]      // done < 0
-    [InlineData(1, 3, 3, null, null, "inProgress")] // inProgress > total − done
-    [InlineData(1, 3, 0, 101, null, "percent")]
-    [InlineData(1, 3, 0, -1, null, "percent")]
-    [InlineData(1, 3, 0, null, 0, "etaMinutes")]    // etaMinutes < 1
-    public async Task FeatureEstimate_НарушениеОграничений_Отказ(
-        int done, int total, int inProgress, int? percent, int? eta, string field)
+    [Fact]
+    public async Task FeatureEstimate_СрокМеньшеМинуты_Отказ()
     {
-        var (projectId, _) = await CreateProjectWithSessionAsync("estbad" + field);
-        var (curatorId, epicId, _) = await CreateFeatureFromCuratorAsync(projectId, "estbad" + field);
+        var (projectId, _) = await CreateProjectWithSessionAsync("estbadeta");
+        var (curatorId, epicId, _) = await CreateFeatureFromCuratorAsync(projectId, "estbadeta");
 
         var (text, isError) = await CallToolAsync(curatorId, "tasks_update", new
         {
-            id = epicId, featureNote = "г",
-            featureEstimate = new { done, total, inProgress, percent, etaMinutes = eta },
+            id = epicId, featureNote = "г", featureEstimate = new { etaMinutes = 0 },
         });
 
         isError.Should().BeTrue();
-        text.Should().Contain("featureEstimate." + field);
+        text.Should().Contain("featureEstimate.etaMinutes");
         Tasks.GetById(epicId)!.Note.Should().BeNull("отказ — голос тоже не записан");
     }
 
@@ -465,19 +476,19 @@ public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFact
         var (t1, e1) = await CallToolAsync(curatorId, "tasks_update", new
         {
             id = epicId, featureNote = "г",
-            featureEstimate = new { done = 0, total = 3, inProgress = 0, remaining = new[] { new string('я', 41) } },
+            featureEstimate = new { remaining = new[] { new string('я', 41) } },
         });
         e1.Should().BeTrue(); t1.Should().Contain("remaining");
         var (t2, e2) = await CallToolAsync(curatorId, "tasks_update", new
         {
             id = epicId, featureNote = "г",
-            featureEstimate = new { done = 0, total = 3, inProgress = 0, remaining = Enumerable.Repeat("п", 9).ToArray() },
+            featureEstimate = new { remaining = Enumerable.Repeat("п", 9).ToArray() },
         });
         e2.Should().BeTrue(); t2.Should().Contain("remaining");
         var (t3, e3) = await CallToolAsync(curatorId, "tasks_update", new
         {
             id = epicId, featureNote = "г",
-            featureEstimate = new { done = 0, total = 3, inProgress = 0, why = new string('я', 161) },
+            featureEstimate = new { why = new string('я', 161) },
         });
         e3.Should().BeTrue(); t3.Should().Contain("why");
         // Ровно на границе — принимается.
@@ -486,7 +497,7 @@ public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFact
             id = epicId, featureNote = "г",
             featureEstimate = new
             {
-                done = 3, total = 3, inProgress = 0, why = new string('я', 160),
+                why = new string('я', 160),
                 remaining = Enumerable.Repeat(new string('п', 40), 8).ToArray(),
             },
         });
@@ -503,7 +514,7 @@ public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFact
 
         var (text, isError) = await CallToolAsync(execChat.Id, "tasks_update", new
         {
-            id = epicId, featureNote = "г", featureEstimate = new { done = 0, total = 3, inProgress = 0 },
+            id = epicId, featureNote = "г", featureEstimate = new { etaMinutes = 60 },
         });
 
         isError.Should().BeTrue();

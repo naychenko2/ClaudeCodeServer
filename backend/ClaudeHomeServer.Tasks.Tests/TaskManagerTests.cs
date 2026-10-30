@@ -2039,7 +2039,7 @@ public class TaskManagerTests : IDisposable
         note.StateAtWrite.Should().Be("running");
     }
 
-    private static FeatureEstimate Estimate(int? eta = 120) => new(2, 8, 1, null, ["ревью"], eta, null);
+    private static FeatureEstimate Estimate(int? eta = 120) => new(["ревью"], eta, null);
 
     // Оценка пишется вместе с голосом и снимается вместе с ним.
     [Fact]

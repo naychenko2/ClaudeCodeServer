@@ -99,6 +99,14 @@ public sealed class WikiApplyStartupGuard : IHostedService
                 }
             }
 
+            // Прообразы старше срока хранения (90 дней) чистятся здесь: между бэкапами откат держат
+            // они (решение 13), после него — мусор. После откатов «applying» — их прообразы тоже
+            // подпадают под срок.
+            var purged = WikiPackageRevert.PurgeOldPreimages(root, DateTimeOffset.UtcNow);
+            if (purged > 0)
+                _log.LogInformation("сторож старта вики: прообразов старше {Days} дней удалено: {Count}",
+                    (int)WikiPackageRevert.PreimageRetention.TotalDays, purged);
+
             // Файлы раздела изменены — модель per-owner не должна остаться о них осведомлённой.
             // На старте кэша обычно нет; держится тот же инвариант, что у Хранителя, а не «на всякий случай».
             if (changed)

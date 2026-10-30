@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Spheres;
 
@@ -39,6 +40,13 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 //    auto|inbox, источник, список изменённых страниц) → проекции раздела → статус «applied»
 //    через Transition → инвалидация кэша графа → событие проекта (WikiChanged, только для
 //    раздела проекта: у «Общего» и «Личного» нет адресата — тот же порядок, что у Хранителя).
+//
+// Запись состояния применения (ревью S4b-3, MAJOR 1) — перед манифестом: keeper/applied/{pkgId}.json,
+// карта страница → sha256 записанных байтов. Её держит откат: манифест описывает последнее состояние
+// страницы, а не состояние на момент этого применения, и откат по манифесту вернул бы прообраз этого
+// пакета поверх записи более позднего. Рядом с прообразами, но вне их каталога: тот каталог обходят
+// откат и сторож старта как список страниц — служебный файл внутри него стал бы страницей
+// «applied.json». Пакет без этой записи (до этой меры) откат не принимает: см. WikiPackageRevert.
 //
 // Порядок шага 6 — не дословный список ADR: журнал перед проекциями, иначе _log.md раздела
 // не донесёт строку этого применения (проекции — производные от log.jsonl). Диффа в строке
@@ -91,6 +99,13 @@ public sealed class WikiApplyService
     // Значение поля op строки журнала для применения пакета (шаг 6, мера 6): та же форма, что
     // у op=adopt у Хранителя; по нему «Журнал» отличает применение от системных операций.
     private const string LogOpApply = "apply";
+
+    // Форма записи состояния применения: ключи-пути по-русски читаются человеком в файле, который
+    // он открывает при отказе отката (тот же приём, что у манифеста и журнала).
+    private static readonly JsonSerializerOptions AppliedRecordJsonOpts = new()
+    {
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
 
     private readonly NotesService _notes;
     private readonly WikiKeeper _keeper;
@@ -295,6 +310,12 @@ public sealed class WikiApplyService
         var applied = new Dictionary<string, string>(written.Count, StringComparer.Ordinal);
         foreach (var p in written)
             applied[p] = Sha256OfBytes(File.ReadAllBytes(SafePath.JoinBelowRoot(root, "pages/" + p)));
+
+        // Запись состояния применения (ревью S4b-3, MAJOR 1) — до манифеста: она описывает ровно то,
+        // что записал этот пакет, и не зависит от того, что станет со страницей позже. Её сбой — тот
+        // же путь, что у любого сбоя шага 6: откат записанного по прообразам и «apply_failed».
+        WriteBytesAtomic(root, AppliedRecordRel(packageId), AppliedRecordBytes(applied));
+
         WikiManifest.RecordApplied(root, section, applied);
 
         // Строка журнала (мера 6): политика пакета, его источник, изменённые страницы.
@@ -439,9 +460,29 @@ public sealed class WikiApplyService
     }
 
     // Тот же относительный путь, что у страницы под pages/: прообраз читается рядом с тем,
-    // что он описывает, и не требует обратного разбора имени.
-    private static string PreimageRel(string packageId, string pageKey) =>
-        $"keeper/preimages/{packageId}/{pageKey}";
+    // что он описывает, и не требует обратного разбора имени. internal: та же форма нужна
+    // откату пакета (WikiPackageRevert): местоположение прообразов определено в одном месте.
+    internal static string PreimagesRel(string packageId) =>
+        $"keeper/preimages/{packageId}";
+
+    internal static string PreimageRel(string packageId, string pageKey) =>
+        $"{PreimagesRel(packageId)}/{pageKey}";
+
+    /// <summary>Запись состояния применения пакета: страница → sha256 тех байтов, которые записал
+    /// этот пакет. internal: её читает откат (WikiPackageRevert) — местоположение и форма
+    /// определены здесь, в одном месте, как прообразы.</summary>
+    internal static string AppliedRecordRel(string packageId) =>
+        $"keeper/applied/{packageId}.json";
+
+    // Порядок ключей фиксированный (как у манифеста): файл — данные, его diff между применениями
+    // должен читаться, а не зависеть от обхода словаря.
+    private static byte[] AppliedRecordBytes(IReadOnlyDictionary<string, string> applied)
+    {
+        var sorted = new Dictionary<string, string>(applied.Count, StringComparer.Ordinal);
+        foreach (var kv in applied.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+            sorted[kv.Key] = kv.Value;
+        return JsonSerializer.SerializeToUtf8Bytes(sorted, AppliedRecordJsonOpts);
+    }
 
     /// <summary>Записать байты атомарно и с fsync: temp в той же папке → Flush(true) → Move.
     /// Для прообразов и их возврата: это то, что держит откат после падения процесса, и его

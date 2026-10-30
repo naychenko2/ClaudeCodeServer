@@ -33,8 +33,12 @@ public static class WikiManifest
     // показывает «само» или «Входящие»). null для системных операций (adopt): у них нет
     // политики, есть только автор. Пустым полем не заменяется: «не указано» и «auto» — разные
     // утверждения.
+    // Packages — id откатанных пакетов строки op=retract (мера 5, S4f-1): «Журнал» по ним
+    // связывает строку откат по источнику с откатанными пакетами. Для прочих операций — null:
+    // поле пустым не заменяется, «не указано» и «пустой список» — разные утверждения.
     private sealed record LogLine(
-        DateTimeOffset Ts, string Op, string Section, IReadOnlyList<string> Pages, string? Source, string Actor, string? Policy);
+        DateTimeOffset Ts, string Op, string Section, IReadOnlyList<string> Pages, string? Source, string Actor, string? Policy,
+        IReadOnlyList<string>? Packages);
 
     /// <summary>Безопасная форма ключа раздела для имени файла манифеста: «/» в ключе —
     /// разделитель ключа, не папка: манифесты всех разделов лежат в одной директории.
@@ -122,15 +126,16 @@ public static class WikiManifest
 
     /// <summary>Дописать строку журнала. Строки не переписываются: append, не перезапись
     /// файла. ts — время сервера (ISO-8601, UTC). policy — «auto» | «inbox» для строки
-    /// применения (мера 6); для системных операций — null.</summary>
+    /// применения (мера 6); для системных операций — null. packages — id откатанных пакетов
+    /// строки op=retract (мера 5); для прочих операций — null.</summary>
     public static void AppendLog(
         string root, string op, string section, IReadOnlyList<string> pages, string? source, string actor,
-        string? policy = null)
+        string? policy = null, IReadOnlyList<string>? packages = null)
     {
         var full = SafePath.Join(root, LogRelPath);
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         var line = JsonSerializer.Serialize(
-            new LogLine(DateTimeOffset.UtcNow, op, section, pages, source, actor, policy), JsonOpts);
+            new LogLine(DateTimeOffset.UtcNow, op, section, pages, source, actor, policy, packages), JsonOpts);
         File.AppendAllText(full, line + "\n");
     }
 

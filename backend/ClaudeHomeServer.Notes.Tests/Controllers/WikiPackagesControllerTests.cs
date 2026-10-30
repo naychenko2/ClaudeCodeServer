@@ -29,6 +29,9 @@ public class WikiPackagesControllerTests : IDisposable
     private readonly string _dir;
     private readonly IConfiguration _config;
     private readonly ProjectManager _projects;
+    // С4b-3: конструктор контроллера теперь требует сервис отката. Эти тесты откат не вызывают —
+    // экземпляр нужен только чтобы резолвился конструктор; свой сценарий отката — в WikiRevertTests.
+    private readonly WikiPackageRevert _revert;
 
     public WikiPackagesControllerTests()
     {
@@ -39,6 +42,8 @@ public class WikiPackagesControllerTests : IDisposable
             .Build();
         var users = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         _projects = new ProjectManager(_config, users, new AppSettingsService(_config));
+        var notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance);
+        _revert = new WikiPackageRevert(notes, new WikiKeeper(notes, _config), _config);
     }
 
     public void Dispose()
@@ -219,7 +224,7 @@ public class WikiPackagesControllerTests : IDisposable
     {
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, user)], "test"));
-        return new WikiPackagesController(_projects, _config)
+        return new WikiPackagesController(_projects, _config, _revert)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
@@ -228,7 +233,7 @@ public class WikiPackagesControllerTests : IDisposable
     private WikiPackagesController AnonymousController()
     {
         var http = new DefaultHttpContext(); // User без идентичности — путь боя без токена
-        return new WikiPackagesController(_projects, _config)
+        return new WikiPackagesController(_projects, _config, _revert)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };

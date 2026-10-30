@@ -13,8 +13,9 @@ namespace ClaudeHomeServer.Notes.Controllers;
 // только из токена, чужой раздел — 403, коды отказов — контракт для фронта (S7a).
 //
 // Здесь человек решает только то, что ушло во «Входящие»: операция с решением политики
-// `auto` через REST не решается (409). Пакеты здесь только читаются и решаются: их никто
-// не создаёт (их строит Хранитель) и не применяет (применение — S4b).
+// `auto` через REST не решается (409). Пакеты здесь читаются, решаются и откатываются (S4b-3):
+// их никто не создаёт (их строит Хранитель) и не применяет (применение — S4b); откат применённого
+// пакета — только кнопкой человека (мера 4), MCP-инструмента нет (решение 5).
 //
 // Пакеты лежат в data/wiki/{владельца}/keeper/packages/, поэтому чужой пакет в свой список
 // не попадает по построению; остаётся вторая граница — раздел пакета, называющий чужой
@@ -25,11 +26,13 @@ namespace ClaudeHomeServer.Notes.Controllers;
 public class WikiPackagesController : ControllerBase
 {
     private readonly IProjectManager _projects;
+    private readonly WikiPackageRevert _revert;
     private readonly string _dataDir;
 
-    public WikiPackagesController(IProjectManager projects, IConfiguration config)
+    public WikiPackagesController(IProjectManager projects, IConfiguration config, WikiPackageRevert revert)
     {
         _projects = projects;
+        _revert = revert;
         // Каталог данных — как у всех сервисов (DataPath указывает на projects.json в dataDir).
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
@@ -101,6 +104,25 @@ public class WikiPackagesController : ControllerBase
         if (userId is null) return Unauthorized();
         if (Owned(userId, id, out var root) is { } refusal) return refusal;
         return Store(WikiPackageStore.AcceptAllContested(root, id));
+    }
+
+    /// <summary>POST /api/wiki/packages/{id}/revert — «Откатить пакет» (кнопка журнала,
+    /// решение 12г, мера 4). Только действие человека: ни у агента, ни у персоны такого инструмента
+    /// нет (решение 5). 404 — пакета нет; 403 — чужой раздел; 409 — пакет не применён, уже откатан,
+    /// или страницы изменены после применения (перечень таких страниц — в теле: человек видит, на что
+    /// смотреть перед повторной попыткой). Успех — тело со списком возвращённых страниц; статус
+    /// пакета после успеха — «reverted», повторный откат того же пакета — 409.</summary>
+    [HttpPost("{id}/revert")]
+    public async Task<IActionResult> Revert(string id)
+    {
+        var userId = OwnerOrNull();
+        if (userId is null) return Unauthorized();
+        if (Owned(userId, id, out _) is { } refusal) return refusal;
+
+        var r = await _revert.RevertAsync(userId, id).ConfigureAwait(false);
+        if (r.Reverted)
+            return Ok(new WikiRevertDto(r.RestoredPages));
+        return StatusCode(409, new { code = r.Code, message = r.Reason, pages = r.ChangedPages });
     }
 
     // ─── Помощники ──────────────────────────────────────────────────────────
@@ -182,3 +204,8 @@ public sealed record WikiPackageOperationDto(
 
 /// <summary>Решение по одной спорной операции. accept=false требует reason.</summary>
 public sealed record WikiDecideRequest(int? Index, bool? Accept, string? Reason);
+
+/// <summary>Результат отката: страницы, возвращённые к состоянию до применения («Журнал» обновляет
+/// их и дифф строки op=revert). Отказ — в теле 409: code + message + pages (pages — изменённые
+/// страницы, на которые человеку смотреть перед повторной попыткой).</summary>
+public sealed record WikiRevertDto(IReadOnlyList<string> RestoredPages);

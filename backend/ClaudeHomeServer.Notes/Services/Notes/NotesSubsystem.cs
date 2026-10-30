@@ -94,6 +94,12 @@ public sealed class NotesSubsystem : IAppSubsystem
         // как Хранитель; захват раньше в DI не стоял — без него не резолвится его потребитель.
         services.AddSingleton<WikiSourceCapture>();
         services.AddSingleton<WikiChatIngestService>();
+        // Откат применённого пакета по прообразам (S4b-3, решение 12г мера 4): вызывается только
+        // REST-контроллером («Журнал», кнопка человека); наружу его контракт не выходит.
+        services.AddSingleton<WikiPackageRevert>();
+        // Откат по источнику — «Откатить всё из этого чата» (S4f-1, решение 12г мера 5): системная
+        // операция поверх откатов пакетов; вызывается только REST, наружу его контракт не выходит.
+        services.AddSingleton<WikiRetractService>();
         // Сторож старта: пакеты, застрявшие в «applying» после падения процесса, откатывает по
         // прообразам (ADR-035, решение 4). Гейт по подсистеме и по Testing — общий хелпер.
         services.AddGatedHostedService<WikiApplyStartupGuard>(config, Key);

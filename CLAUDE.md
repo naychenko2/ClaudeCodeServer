@@ -493,7 +493,7 @@ Dark launch: фича коммитится выключенной и включ�
 - **ВАЖНО: CI гоняет тесты на Linux** (`ubuntu-latest`), а разработка идёт на Windows — тесты
   обязаны быть платформонезависимыми: пути от `Path.GetTempPath()` + `Path.Combine`, ожидание
   **события** через `TaskCompletionSource`, а не `Task.Delay`. На итеративную правку —
-  `dotnet test --filter "FullyQualifiedName~<Набор>"`, полный прогон перед коммитом/PR.
+  `dotnet test --filter "FullyQualifiedName~<Набор>"`, полный прогон — CI и гейт мержа (`docs/operations/testing.md`).
 - **Тесты — наборы и шарды:** Fast = исключение категорий `Host`/`Slow`/`Integration`/`Node`/`Bench`;
   класс с `TestWebApplicationFactory` — `[Trait("Category","Host")]` (сторож), медленный метод без
   хоста — `Slow`; монолит режется по классам (CI, `run_tests` с `TestRuns:MonolithShards`), коллекции

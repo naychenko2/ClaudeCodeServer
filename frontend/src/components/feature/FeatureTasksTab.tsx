@@ -75,8 +75,11 @@ export interface StepRow {
   // «В master» — ортогональный признак цепочки; в корзины не входит.
   inMaster: boolean;
   chain: FeatureStepChain | null;
-  // Первая задача цепочки (шапка шага): цель кнопки «задача»; у шага плана без задачи — null.
+  // Задача, в которую ведёт кнопка «задача»: идущая в работе задача цепочки (доработка важнее
+  // головы), иначе первая; у шага плана без задачи — null.
   headTask: FeatureTask | null;
+  // Чат для кнопки «чат»: у идущей задачи — её сессия, иначе чат шага.
+  chatId: string | null;
   // Исполнитель шага ждёт ответа человека (awaitingHumanSince у идущей задачи цепочки).
   needsAnswer: boolean;
 }
@@ -98,12 +101,14 @@ export function buildStepsTab(run: FeatureRun): StepsTabModel {
   const steps: StepRow[] = buildProdCards(run).map(card => {
     const chain = chainByRef.get(card.stepRef) ?? null;
     const own = chain ? chain.taskIds.map(id => taskById.get(id)).filter((t): t is FeatureTask => !!t) : [];
+    const current = own.find(t => t.status === 'inProgress') ?? own[0] ?? null;
     return {
       card,
       bucket: cardBucket(card),
       inMaster: chain?.inMaster === true,
       chain,
-      headTask: own[0] ?? null,
+      headTask: current,
+      chatId: (current && current !== own[0] ? current.linkedSessionId : null) ?? card.chatId,
       needsAnswer: own.some(t => t.status === 'inProgress' && !!t.awaitingHumanSince),
     };
   });
@@ -430,7 +435,7 @@ export function FeatureTasksTab({ run, featureId, marks: marksProp, isMobile = f
                   tags={tags}
                   meta={minutes > 0 ? formatDuration(minutes) : null}
                   task={r.headTask}
-                  chatId={r.card.chatId}
+                  chatId={r.chatId}
                   featureId={featureId}
                   featureTitle={featureTitle}
                   marks={marks}

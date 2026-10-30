@@ -301,7 +301,7 @@ export interface BriefActiveView {
   // Кнопка «Ответить Кире»: открывает чат задачи, которая ждёт человека.
   answer: { taskId: string; label: string } | null;
   rows: BriefActiveRow[];
-  // «ещё N в работе — во вкладке «Задачи» ›»; null — все строки на виду.
+  // «ещё N в работе — во вкладке «Шаги» ›»; null — все строки на виду.
   tail: string | null;
 }
 
@@ -356,7 +356,7 @@ export function briefActiveView(brief: FeatureBrief, opts: BriefTextOptions & { 
       ariaLabel: `${title}${who ? ` — ${who}` : ''}, открыть задачу`,
     };
   });
-  const tail = rows.length && n > ACTIVE_ROWS_MAX ? `ещё ${n - ACTIVE_ROWS_MAX} в работе — во вкладке «Задачи» ›` : null;
+  const tail = rows.length && n > ACTIVE_ROWS_MAX ? `ещё ${n - ACTIVE_ROWS_MAX} в работе — во вкладке «Шаги» ›` : null;
 
   if (waiting) {
     const name = nameOf(waiting);

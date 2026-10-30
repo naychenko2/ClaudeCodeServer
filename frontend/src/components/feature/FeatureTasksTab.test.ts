@@ -176,6 +176,16 @@ describe('Модель вкладки «Шаги»', () => {
     expect(m.steps.filter(r => r.inMaster)).toHaveLength(run.stepProgress!.inMaster!);
   });
 
+  it('план с шагом kind=review (R9): строки по корзинам = total, «не заведено» = notCreated', () => {
+    const run = fullRun();
+    (run.plan[0] as unknown as { planSteps: unknown[] }).planSteps.push({ stepRef: 'R9', title: 'Ревью', kind: 'review' });
+    const m = buildStepsTab(run);
+    const by = (b: string) => m.steps.filter(r => r.bucket === b).length;
+    expect(by('work') + by('review') + by('accepted') + by('notCreated')).toBe(run.stepProgress!.total);
+    expect(by('notCreated')).toBe(run.stepProgress!.notCreated);
+    expect(m.steps.some(r => r.card.stepRef === 'R9')).toBe(false);
+  });
+
   it('служебные: эпик, план, ревью — вне цепочек; задачи шагов в них не попадают', () => {
     const m = buildStepsTab(fullRun());
     expect(m.service.map(t => t.id).sort()).toEqual(['epic', 'plan1', 'rv1']);
@@ -318,6 +328,17 @@ describe('Навигация «чат · задача»', () => {
     expect(mockOpenTask.calls).toEqual([{ id: 'r1' }]);
     await act(async () => { (reactProps(findNodeByAttr(row, 'data-testid', 'nav-target-chat')!)!.onClick as () => void)(); });
     expect(mockOpenChat.calls).toEqual(['c-r1']);
+  });
+
+  it('шаг с доработкой в работе: «задача» и «чат» ведут в доработку, а не в голову', async () => {
+    const run = fullRun();
+    run.steps = [...run.steps, stepTask('rw1', { status: 'inProgress', role: 'rework', linkedSessionId: 'c-rw1' })];
+    run.stepChains = run.stepChains!.map(c => (c.stepRef === 'V1' ? { ...c, taskIds: ['v1', 'rw1'] } : c));
+    const row = findNodeByAttr(render({ run }), 'data-testid', 'step-row-V1')!;
+    await act(async () => { (reactProps(findNodeByAttr(row, 'data-testid', 'nav-target-task')!)!.onClick as () => void)(); });
+    expect(mockOpenTask.calls).toEqual([{ id: 'rw1' }]);
+    await act(async () => { (reactProps(findNodeByAttr(row, 'data-testid', 'nav-target-chat')!)!.onClick as () => void)(); });
+    expect(mockOpenChat.calls).toEqual(['c-rw1']);
   });
 
   it('закрытая задача шага — «закрыта» на кнопке задачи', () => {

@@ -797,11 +797,11 @@ describe('Задачи в работе: briefActiveView', () => {
     expect(v.rows[1].stopped).toBeNull();
   });
 
-  it('больше четырёх — видно 4, хвост «ещё N в работе — во вкладке «Задачи» ›»', () => {
+  it('больше четырёх — видно 4, хвост «ещё N в работе — во вкладке «Шаги» ›»', () => {
     const six = Array.from({ length: 6 }, (_, i) => act({ taskId: `t${i}` }));
     const v = briefActiveView(brief({ active: six }), AOPTS)!;
     expect(v.rows).toHaveLength(4);
-    expect(v.tail).toBe('ещё 2 в работе — во вкладке «Задачи» ›');
+    expect(v.tail).toBe('ещё 2 в работе — во вкладке «Шаги» ›');
     expect(v.heading).toBe('6 задач в работе');
   });
 

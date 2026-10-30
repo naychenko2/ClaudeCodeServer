@@ -715,7 +715,7 @@ describe('Задачи в работе (макет 2, «Итерация 2»)', 
     const six = Array.from({ length: 6 }, (_, i) => A({ taskId: `t${i}` }));
     const { c } = render({ brief: brief({ active: six }), nameOf, onOpenTasks: () => calls.push('tasks') });
     expect(allNodes(c, 'brief-active-row')).toHaveLength(4);
-    expect(joined(c, 'brief-active-tail')).toBe('ещё 2 в работе — во вкладке «Задачи» ›');
+    expect(joined(c, 'brief-active-tail')).toBe('ещё 2 в работе — во вкладке «Шаги» ›');
     click(c, 'brief-active-tail');
     expect(calls).toEqual(['tasks']);
   });

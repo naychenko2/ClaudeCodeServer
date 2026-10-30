@@ -7,6 +7,7 @@
 
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { readFileSync } from 'node:fs';
 import { describe, it, expect, vi } from 'vitest';
 import { FeaturePageAlert } from './FeaturePageHeader';
 import { alarmView } from '../chat/feature/featureTruthModel';
@@ -122,5 +123,37 @@ describe('FeaturePageAlert: «молчит/стоит/тихо» сторожа 
 
   it('не начата — нейтральный блок, не тревога', () => {
     expect(tone(html(mkRun({ state: 'not_started' })))).toBe('neutral');
+  });
+});
+
+// ── Ш9a: кнопка главного действия в тревоге на 360 читаема в обеих темах ────────────
+describe('FeaturePageAlert 360: контраст кнопки главного действия', () => {
+  const css = readFileSync(new URL('../../lib/theme.css', import.meta.url), 'utf8');
+  const block = (head: string) => css.slice(css.indexOf(head), css.indexOf('}', css.indexOf(head)));
+  const tokenOf = (b: string, name: string) => new RegExp(`--${name}:\\s*(#[0-9A-Fa-f]{6})`).exec(b)![1];
+  const lum = (hex: string) => {
+    const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map(v => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const ratio = (a: string, b: string) => {
+    const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p);
+    return (x + 0.05) / (y + 0.05);
+  };
+
+  it('кнопка берёт пару фон/текст из токенов (не accent-фон с bgWhite-перебивкой)', () => {
+    const h = html(mkRun({ state: 'waiting', attention: att('wait') }), true);
+    const btn = /<button[^>]*>/.exec(h)![0];
+    const style = /style="([^"]*)"/.exec(btn)![1];
+    expect(style).toContain('background:var(--c-bg-white)');
+    expect(style).toContain('color:var(--c-text-secondary)');
+    expect(style).not.toContain('--c-on-accent');
+  });
+
+  it('пара bgWhite/textSecondary: контраст ≥ 4.5 в светлой и тёмной теме', () => {
+    for (const head of [':root {', ':root[data-theme="dark"] {']) {
+      const b = block(head);
+      expect(ratio(tokenOf(b, 'c-bg-white'), tokenOf(b, 'c-text-secondary')), head).toBeGreaterThanOrEqual(4.5);
+    }
   });
 });

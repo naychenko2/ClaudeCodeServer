@@ -848,3 +848,24 @@ describe('featureRunStatusTag: подпись очереди (Q5A)', () => {
     expect(tag).toEqual({ label: 'на паузе', tone: 'hold' });
   });
 });
+
+// ═══ Ш9a: 360 — тег не вытесняет название ═══════════════════════════════════════
+describe('Ш9a: тег статуса на 360', () => {
+  it('360: тег в обёртке с потолком ширины и клипом; на 1280 обёртка прозрачна', async () => {
+    mockGetFeature.result = pageData({ state: 'waiting' });
+    for (const isMobile of [true, false]) {
+      const c = render({ isMobile });
+      await settle();
+      const tag = findNodeByAttr(c, 'data-testid', 'feature-page-status');
+      expect(tag).not.toBeNull();
+      const wrap = reactProps(tag!.parentNode as never) as { style?: Record<string, unknown> };
+      if (isMobile) {
+        expect(wrap.style?.maxWidth).toBeLessThanOrEqual(96);
+        expect(wrap.style?.overflow).toBe('hidden');
+        expect(wrap.style?.flexShrink).toBe(0);
+      } else {
+        expect(wrap.style?.display).toBe('contents');
+      }
+    }
+  });
+});

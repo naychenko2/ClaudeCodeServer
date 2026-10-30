@@ -647,7 +647,17 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
 
   return (
     <>
-      {tag && <StatusTag tag={tag} testId="feature-page-status" />}
+      {tag && (
+        // На 360 тег не должен вытеснять название: потолок ширины, хвост подписи клипается
+        // (полный текст — в title). Расчёт: 360 − поля 24 − «К списку» ~72 − глиф 14 − ⋯ 36 −
+        // зазоры 24 − тег 88 ≈ 100 px названию (≈ 2 слова). На десктопе — без изменений.
+        <span
+          title={isMobile ? tag.label : undefined}
+          style={isMobile ? { display: 'inline-flex', flexShrink: 0, maxWidth: 88, overflow: 'hidden' } : { display: 'contents' }}
+        >
+          <StatusTag tag={tag} testId="feature-page-status" />
+        </span>
+      )}
       {canPause && !isMobile && (
         <span data-testid="feature-page-pause-wrap" style={{ display: 'inline-flex', flexShrink: 0 }}>
           <Button
@@ -988,8 +998,8 @@ export function FeaturePageAlert({ run, feature, isMobile, onMerge, marks: marks
       <Button
         key="primary"
         size="xs"
-        variant="primary"
-        style={{ background: C.bgWhite, minHeight: 40 }}
+        variant="ghostFilled"
+        style={{ minHeight: 40 }}
         onClick={() => {
           if (effectivePrimary.kind === 'chat' && effectivePrimary.chatId) {
             recordFeatureReturn(fid, { kind: 'chat', id: effectivePrimary.chatId }, featureTitle);

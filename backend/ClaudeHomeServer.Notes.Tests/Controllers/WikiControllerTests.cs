@@ -187,6 +187,82 @@ public class WikiControllerTests : IDisposable
         ((IStatusCodeActionResult)Controller().Page(key, "Проекты/" + p.Id + "/Нет.md")).StatusCode.Should().Be(404);
     }
 
+    // ─── 6. Дрейф страницы доходит до UI (дефект ревью S5b) ────────────────
+
+    [Fact]
+    public async Task Дрейф_ПравкаМимоХранителя_ВКаталогеИСтранице_AdoptСнимаетБезПерезаписиФайла()
+    {
+        var p = CreateServerProject("Проект");
+        var key = "projects/" + p.Id;
+        var pageKey = $"Проекты/{p.Id}/Знание.md";
+        var file = Path.Combine(_pages, "Проекты", p.Id, "Знание.md");
+        await _keeper.EnsureInitializedAsync(User);
+        (await _keeper.WritePageAsync(User, key, pageKey, "---\ntype: topic\nstatus: active\n---\n# Знание\n\nтекст."))
+            .Status.Should().Be(WikiOpStatus.Applied);
+
+        // Чистая страница, записанная Хранителем: файл равен своей записи — дрейфа нет
+        var clean = CatalogOf(Controller(), key);
+        clean.ManifestState.Should().Be("ok");
+        clean.Pages.Single(x => x.PageKey == pageKey).Drift.Should().BeFalse("файл равен записи манифеста");
+        PageJson(Controller(), key, pageKey).GetProperty("drift").GetBoolean().Should().BeFalse();
+
+        // Правка человека мимо Хранителя: файл ≠ запись — это дрейф, и он виден и в каталоге,
+        // и на странице: иначе плашка и «Принять как есть» недостижимы до 409 применения.
+        File.WriteAllText(file, File.ReadAllText(file) + "\nчужая строка.", new UTF8Encoding(false));
+        CatalogOf(Controller(), key).Pages.Single(x => x.PageKey == pageKey).Drift
+            .Should().BeTrue("правка мимо Хранителя доходит до UI до adopt");
+        var drifted = PageJson(Controller(), key, pageKey);
+        drifted.GetProperty("drift").GetBoolean().Should().BeTrue();
+        drifted.GetProperty("manifestState").GetString().Should().Be("ok");
+
+        // Вторая половина инварианта: файл на диске БЕЗ записи в валидном манифесте — тоже
+        // дрейф (та же мера, что сверка применения), а не «неизвестная страница».
+        File.WriteAllText(Path.Combine(_pages, "Проекты", p.Id, "Своя.md"), "# Своя\n\nзаведена человеком.", new UTF8Encoding(false));
+        CatalogOf(Controller(), key).Pages.Single(x => x.PageKey == $"Проекты/{p.Id}/Своя.md").Drift
+            .Should().BeTrue("файл есть, а записи нет — дрейф, как у применения");
+
+        // adopt («Принять как есть»): дрейф снимается, файл и его шапка не тронуты
+        var bytes = File.ReadAllText(file);
+        ((OkObjectResult)await Controller().Adopt(new WikiAdoptRequest(key, pageKey))).StatusCode.Should().Be(200);
+        File.ReadAllText(file).Should().Be(bytes, "adopt принимает диск как есть, ничего не перезаписывая");
+        CatalogOf(Controller(), key).Pages.Single(x => x.PageKey == pageKey).Drift.Should().BeFalse("после adopt дрейфа нет");
+        PageJson(Controller(), key, pageKey).GetProperty("drift").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public void РазделБезМанифеста_ДрейфаНет_ManifestStateЧестный_ЧужойРаздел_БезУтечки()
+    {
+        var p = CreateServerProject("Проект");
+        var key = "projects/" + p.Id;
+        var pageKey = $"Проекты/{p.Id}/Знание.md";
+        var dir = Path.Combine(_pages, "Проекты", p.Id);
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "Знание.md"), "# Знание\n\nзаведено человеком.", new UTF8Encoding(false));
+
+        // Манифеста нет вовсе (норма до первого применения): страница НЕ дрейф — иначе на
+        // разделе без манифеста рисовалась бы ложная плашка; состояние отдаётся честно.
+        var catalog = CatalogOf(Controller(), key);
+        catalog.ManifestState.Should().Be("missing");
+        catalog.Pages.Single(x => x.PageKey == pageKey).Drift.Should().BeFalse("без манифеста ложного дрейфа нет");
+        var page = PageJson(Controller(), key, pageKey);
+        page.GetProperty("drift").GetBoolean().Should().BeFalse();
+        page.GetProperty("manifestState").GetString().Should().Be("missing");
+
+        // Битый манифест — то же: не исключение из GET, не дрейф; видно состояние «invalid».
+        Directory.CreateDirectory(Path.GetDirectoryName(ManifestFile(key))!);
+        File.WriteAllText(ManifestFile(key), "{ не json", new UTF8Encoding(false));
+        CatalogOf(Controller(), key).ManifestState.Should().Be("invalid");
+        CatalogOf(Controller(), key).Pages.Single(x => x.PageKey == pageKey).Drift.Should().BeFalse();
+        PageJson(Controller(), key, pageKey).GetProperty("manifestState").GetString().Should().Be("invalid");
+
+        // Чужой раздел — 403 как раньше, и отказ не раскрывает чужого содержимого: ни страниц,
+        // ни их дрейфа (отказ выносится до чтения диска — ResolveSection).
+        var foreign = CreateServerProject("Чужой проект", owner: "u2");
+        var res = Controller().Section("projects/" + foreign.Id);
+        AssertCode(res, 403, "wiki_foreign");
+        JsonSerializer.Serialize(((ObjectResult)res).Value).Should().NotContain("pages");
+    }
+
     // ─── Помощники ─────────────────────────────────────────────────────────
 
     private Project CreateServerProject(string name, string owner = User)
@@ -201,6 +277,13 @@ public class WikiControllerTests : IDisposable
 
     private static WikiTreeDto TreeOf(WikiController ctl) =>
         ((OkObjectResult)ctl.Tree().Result!).Value.Should().BeAssignableTo<WikiTreeDto>().Which;
+
+    private static WikiCatalogDto CatalogOf(WikiController ctl, string section) =>
+        ((OkObjectResult)ctl.Section(section)).Value.Should().BeAssignableTo<WikiCatalogDto>().Which;
+
+    // Ответ страницы читается как JSON: это то, что видит фронт (контракт поля, а не тип).
+    private static JsonElement PageJson(WikiController ctl, string section, string page) =>
+        JsonDocument.Parse(JsonSerializer.Serialize(((OkObjectResult)ctl.Page(section, page)).Value)).RootElement;
 
     private static void AssertCode(IActionResult result, int status, string code)
     {

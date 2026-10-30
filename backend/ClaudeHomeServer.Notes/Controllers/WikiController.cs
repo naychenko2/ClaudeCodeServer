@@ -55,6 +55,15 @@ public class WikiController : ControllerBase
     private const string CodeProjectMissing = "wiki_project_missing";
     private const string CodeNotOrphan = "wiki_not_orphan";
 
+    // Состояния манифеста раздела в контракте (WikiCatalogDto.ManifestState / ответ
+    // GET page): закрытый перечень — три состояния WikiManifestState без внутреннего имени.
+    // Значения совпадают с union WikiManifestState фронта (frontend/src/lib/wiki.ts):
+    // «ok» — норма, «missing»/«invalid» — «манифест не прочитан», и того и другого хватает,
+    // чтобы не рисовать плашку дрейфа на разделе без манифеста.
+    private const string ManifestStateOk = "ok";
+    private const string ManifestStateMissing = "missing";
+    private const string ManifestStateInvalid = "invalid";
+
     // ─── Дерево разделов ────────────────────────────────────────────────────
 
     // GET /api/wiki/tree — дерево разделов своей вики: живые имена проектов и сфер,
@@ -98,8 +107,15 @@ public class WikiController : ControllerBase
         var (key, refusal) = ResolveSection(userId, section);
         if (refusal is not null) return refusal;
 
+        var root = WikiPaths.Root(_dataDir, userId);
         var pagesRoot = WikiPaths.Pages(_dataDir, userId);
         var dir = Path.Combine(pagesRoot, WikiSections.Folder(key!)!);
+        // Признак дрейфа каждой страницы: файл сверяется с манифестом раздела той же мерой,
+        // что шаг 2 применения (WikiApplyService.IsPageDrifted) — второй копии меры нет. UI
+        // получает плашку «Расходится с журналом Хранителя» и «Принять как есть» ДО adopt,
+        // а не после 409 от применения. Только чтение: блокировки раздела здесь нет — GET
+        // ничего не пишет и не держит применение (ревью S5b).
+        var manifest = ReadManifestQuietly(root, key!);
         var pages = new List<WikiPageInfoDto>();
         if (Directory.Exists(dir))
         {
@@ -113,10 +129,12 @@ public class WikiController : ControllerBase
                     try { text = System.IO.File.ReadAllText(full); }
                     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
                     var fm = WikiFrontmatter.Parse(text).Model;
+                    var pageKey = Path.GetRelativePath(pagesRoot, full).Replace('\\', '/');
                     pages.Add(new WikiPageInfoDto(
-                        Path.GetRelativePath(pagesRoot, full).Replace('\\', '/'),
+                        pageKey,
                         TitleOf(text, name), fm?.Summary, fm?.Type, fm?.Status,
-                        fm?.Sources.Count ?? 0, fm?.Updated));
+                        fm?.Sources.Count ?? 0, fm?.Updated,
+                        IsDrifted(root, pageKey, manifest)));
                 }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -126,7 +144,7 @@ public class WikiController : ControllerBase
         }
         pages.Sort((a, b) => string.CompareOrdinal(a.PageKey, b.PageKey));
         return Ok(new WikiCatalogDto(key!, LiveNameOrNull(userId, key!),
-            WikiSections.IsOrphan(key!, userId, _spheres, _projects), pages));
+            WikiSections.IsOrphan(key!, userId, _spheres, _projects), pages, ManifestStateOf(manifest.State)));
     }
 
     // ─── Страница ───────────────────────────────────────────────────────────
@@ -144,9 +162,19 @@ public class WikiController : ControllerBase
         if (string.IsNullOrWhiteSpace(page) || WikiPaths.IsProjection(page) || WikiSections.Parse(page) != key)
             return BadRequest(new { code = CodePageKey, message = "страница должна принадлежать разделу" });
 
-        var full = SafePath.JoinBelowRoot(WikiPaths.Root(_dataDir, userId), "pages/" + page);
+        var root = WikiPaths.Root(_dataDir, userId);
+        var full = SafePath.JoinBelowRoot(root, "pages/" + page);
         if (!System.IO.File.Exists(full)) return NotFound();
-        return Ok(new { pageKey = page, content = System.IO.File.ReadAllText(full) });
+        // Дрейф этой страницы (файл против её записи в манифесте) и состояние манифеста —
+        // то, чем UI рисует плашку и «Принять как есть»: до adopt человек видит их, а не 409.
+        var manifest = ReadManifestQuietly(root, key!);
+        return Ok(new
+        {
+            pageKey = page,
+            content = System.IO.File.ReadAllText(full),
+            drift = IsDrifted(root, page!, manifest),
+            manifestState = ManifestStateOf(manifest.State),
+        });
     }
 
     // ─── «Завести вики» ─────────────────────────────────────────────────────
@@ -302,6 +330,46 @@ public class WikiController : ControllerBase
         return Path.GetFileNameWithoutExtension(fileName);
     }
 
+    // Манифест раздела для показа — то же чтение, что у Хранителя и применения, но без
+    // исключения наружу: нечитаемый файл манифеста не роняет GET (урок S4b). Его состояние
+    // при этом не «Valid» ни при каком чтении: ни применения, ни плашки дрейфа (IsDrifted).
+    private static WikiManifestReadResult ReadManifestQuietly(string root, string sectionKey)
+    {
+        try
+        {
+            return WikiManifest.TryRead(root, sectionKey);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return new WikiManifestReadResult(WikiManifestState.Invalid, new Dictionary<string, string>());
+        }
+    }
+
+    // Дрейф страницы для показа — та же мера, что шаг 2 применения (WikiApplyService.IsPageDrifted):
+    // файл ≠ его запись в манифесте, файла нет, а запись есть, либо файл есть, а записи нет.
+    // Манифест Missing/Invalid — НЕ дрейф: на разделе без манифеста плашка была бы ложной,
+    // UI решает по manifestState (решение Софьи). Не подтверждённый дрейф (файл не читается,
+    // в манифесте чужой путь) — тоже не дрейф: страница остаётся обычной, её чинит Хранитель.
+    private static bool IsDrifted(string root, string pageKey, WikiManifestReadResult manifest)
+    {
+        if (manifest.State != WikiManifestState.Valid) return false;
+        try
+        {
+            return WikiApplyService.IsPageDrifted(root, pageKey, manifest.Manifest);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static string ManifestStateOf(WikiManifestState state) => state switch
+    {
+        WikiManifestState.Valid => ManifestStateOk,
+        WikiManifestState.Missing => ManifestStateMissing,
+        _ => ManifestStateInvalid,
+    };
+
     private IActionResult OpResult(WikiOpResult res) => res.Status switch
     {
         WikiOpStatus.Applied => Ok(new { status = "applied" }),
@@ -323,12 +391,18 @@ public sealed record WikiSectionDto(
 public sealed record WikiTreeDto(bool Initialized, IReadOnlyList<WikiSectionDto> Sections);
 
 /// <summary>Страница в каталоге раздела: summary/type/status — из шапки (null, если шапка
-/// не разобрана — страница остаётся видимой); sourcesCount — число источников из шапки.</summary>
+/// не разобрана — страница остаётся видимой); sourcesCount — число источников из шапки;
+/// drift — файл страницы разошёлся с её записью в манифесте раздела (правка мимо Хранителя):
+/// UI рисует плашку и «Принять как есть». Ложного дрейфа нет: раздел без манифеста или с
+/// невалидным манифестом — drift=false, состояние видно в catalog.manifestState.</summary>
 public sealed record WikiPageInfoDto(
-    string PageKey, string Title, string? Summary, string? Type, string? Status, int SourcesCount, string? Updated);
+    string PageKey, string Title, string? Summary, string? Type, string? Status, int SourcesCount, string? Updated,
+    bool Drift);
 
-/// <summary>Каталог страниц раздела.</summary>
-public sealed record WikiCatalogDto(string Key, string? Name, bool Orphan, IReadOnlyList<WikiPageInfoDto> Pages);
+/// <summary>Каталог страниц раздела. manifestState — состояние манифеста раздела:
+/// «ok» | «missing» | «invalid» (закрытый перечень; «missing» — норма до первого
+/// применения). Дрейф страниц считается только при «ok».</summary>
+public sealed record WikiCatalogDto(string Key, string? Name, bool Orphan, IReadOnlyList<WikiPageInfoDto> Pages, string ManifestState);
 
 /// <summary>«Завести вики». Section — необязательный адресат кнопки (ключ раздела проекта);
 /// по нему проверяется способность. Сам раздел не заводится — его заводит первая

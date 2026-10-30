@@ -664,13 +664,14 @@ public sealed class WikiApplyService
     // контракт, что у Хранителя); нечитаемый файл — тоже дрейф: его байты не подтвердить.
     private static string? CheckSectionAgainstDisk(string root, string section, IReadOnlyDictionary<string, string> manifest)
     {
-        foreach (var (page, hash) in manifest)
+        foreach (var page in manifest.Keys)
         {
+            if (!IsPageDrifted(root, page, manifest)) continue;
+            // Причина — за ней уже решившая её мера (IsPageDrifted): здесь только форма строки.
             var full = SafePath.JoinBelowRoot(root, "pages/" + page);
-            if (!File.Exists(full))
-                return $"файл «{page}» из манифеста раздела отсутствует на диске";
-            if (Sha256OfBytes(File.ReadAllBytes(full)) != hash)
-                return $"файл «{page}» расходится с манифестом раздела (правка мимо Хранителя)";
+            return File.Exists(full)
+                ? $"файл «{page}» расходится с манифестом раздела (правка мимо Хранителя)"
+                : $"файл «{page}» из манифеста раздела отсутствует на диске";
         }
 
         var folder = WikiSections.Folder(section);
@@ -690,6 +691,20 @@ public sealed class WikiApplyService
                 return $"файл «{pageKey}» на диске, но не в манифесте раздела (записан не Хранителем)";
         }
         return null;
+    }
+
+    /// <summary>Равенство ОДНОЙ страницы её записи в манифесте — та же мера, что вся сверка
+    /// выше: хэш байтов файла ≠ записи, файла нет, а запись есть, либо файл есть, а записи
+    /// нет. Ни файла, ни записи — страницы нет: не дрейф. Служебные «_*» сюда не приходят
+    /// (не страницы). internal — ту же меру читает контроллер вики: признак дрейфа страницы
+    /// для UI (плашка «Расходится с журналом Хранителя» и «Принять как есть» — до adopt,
+    /// а не после 409); второй копии меры в проекте нет.</summary>
+    internal static bool IsPageDrifted(string root, string pageKey, IReadOnlyDictionary<string, string> manifest)
+    {
+        var full = SafePath.JoinBelowRoot(root, "pages/" + pageKey);
+        var hasRecord = manifest.TryGetValue(pageKey, out var recorded);
+        if (!File.Exists(full)) return hasRecord; // записи нет и файла нет — не страница
+        return !hasRecord || Sha256OfBytes(File.ReadAllBytes(full)) != recorded;
     }
 
     // Карточка источника — страница type: source с этим заголовком (та же нормализация,

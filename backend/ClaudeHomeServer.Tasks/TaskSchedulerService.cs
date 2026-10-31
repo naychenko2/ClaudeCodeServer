@@ -19,6 +19,7 @@ public class TaskSchedulerService(
 {
     // Подписчик ходов фичи (Б8c) больше НЕ побочный эффект этого hosted-сервиса: он
     // регистрируется явным AddGatedHostedService в TasksSubsystem.Register (Tasks, не Main).
+    private readonly object _reminderLock = new();
     private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(30);
     // Автозапуск только для сроков, наступивших недавно: защита от лавины сессий
     // по старым просроченным задачам при включении флага или долгом простое сервера
@@ -148,9 +149,14 @@ public class TaskSchedulerService(
 
     private async Task ProcessReminderAsync(TaskItem task, TimeZoneInfo tz, DateTime nowUtc)
     {
-        if (!ShouldRemind(task, tz, nowUtc)) return;
-
-        var updated = tasks.MarkReminderSent(task.Id, nowUtc);
+        // Проверка и отметка — одна критическая секция: два тика (ручной вызов и таймер)
+        // не должны оба пройти ShouldRemind до того, как первый выставит ReminderSentAt.
+        TaskItem? updated;
+        lock (_reminderLock)
+        {
+            if (!ShouldRemind(task, tz, nowUtc)) return;
+            updated = tasks.MarkReminderSent(task.Id, nowUtc);
+        }
         if (updated is null) return; // задача удалена между чтением и отметкой
 
         var dueText = task.DueTime is null ? task.DueDate : $"{task.DueDate} {task.DueTime}";
@@ -165,10 +171,13 @@ public class TaskSchedulerService(
         log.LogInformation("Напоминание отправлено: задача {TaskId} «{Title}»", updated.Id, updated.Title);
     }
 
-    // Тост + сторадж + web push через единый NotificationService
+    // Тост + сторадж + web push через единый NotificationService. Адресат — человек-исполнитель
+    // (общий проект: участник; личные и Claude-задачи — владелец, как раньше). Один адресат —
+    // одно уведомление: владельцу параллельно не дублируем.
     private async Task SendNotificationAsync(TaskItem task, NotificationMessage message)
     {
-        await notif.SendNotificationMessageAsync(task.OwnerId!, message, sendPush: true);
+        var recipient = TaskManager.ResolveMeUserId(task) ?? task.OwnerId!;
+        await notif.SendNotificationMessageAsync(recipient, message, sendPush: true);
     }
 
     // Hash-диплинк на задачу вынесен в Core (`Services/TaskUrl.Of`) — Этап 5, вынос Tasks.

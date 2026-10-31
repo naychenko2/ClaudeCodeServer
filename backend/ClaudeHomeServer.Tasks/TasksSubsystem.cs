@@ -65,6 +65,7 @@ public sealed class TasksSubsystem : IAppSubsystem
         // отмирает (см. DuplicateSingletonRegistrationTests).
         services.AddSingleton<ITaskStatusReader>(sp => sp.GetRequiredService<TaskManager>());
         services.AddSingleton<TaskAiService>();
+        services.AddSingleton<MyTasksQuery>();
         services.AddSingleton<BoardService>();
         // Агрегат фичи (режим «Исполнение фичи»): чистая проекция TaskItem'ов в FeatureRun.
         // Зависимость только на TaskManager (тот же singleton, что выше) — нового шва нет.

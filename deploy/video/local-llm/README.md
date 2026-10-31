@@ -74,5 +74,5 @@ sudo systemctl daemon-reload && sudo systemctl enable --now local-llm gpu-arbite
   панели «Локальные модели», «Gemma 4»), `Actions`, `FallbackRoute` (`direct:MiniMax-M3.1-Flash`),
   `NumCtx` (32 768), `MetricsUrl` (`:18030/metrics`), `ReadyUrl` и `StateUrl` (`:18031`).
 - `LlmProviders:local-video-gemma` — `AnthropicBaseUrl`, `IsLocal`, `MaxConcurrentTurns` 2 (два слота
-  остаются местам), модель `gemma-4-26b-a4b` с `ContextWindow` 131 072. Пока модель уступила карту,
+  остаются местам), модель `gemma-4-26b-a4b` с `ContextWindow` 262 144 (пул KV сервера — 384K в q8_0). Пока модель уступила карту,
   проба видит её Down, и ход чата получает «локальная модель не запущена».

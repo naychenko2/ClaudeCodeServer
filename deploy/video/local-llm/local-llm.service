@@ -15,16 +15,17 @@ Environment=CUDA_VISIBLE_DEVICES=0
 # enable_thinking, а Gemma без него думает на каждый вопрос. Места CCS шлют то же значение сами.
 Environment='LLAMA_ARG_CHAT_TEMPLATE_KWARGS={"enable_thinking":false}'
 # Сэмплинг — дефолты сервера; CCS шлёт temperature 0 в каждом запросе места.
-# Gemma 4 26B-A4B UD-IQ4_XS (unsloth): 13,6 ГБ весов. -c 262144 -np 4 -kvu: общий пул KV на всё
-# окно модели, 4 слота делят его; ≈ 20,6 ГБ VRAM. Рядом с кэшем ComfyUI не живёт — арбитр в режиме
+# Gemma 4 26B-A4B UD-IQ4_XS (unsloth): 13,6 ГБ весов. -c 393216 -np 4 -kvu -ctk/-ctv q8_0: общий пул KV
+# 384K (q8_0 вдвое меньше fp16), 4 слота делят его, слот ≤ 262 144 (окно модели): один чат на 240K +
+# второй на ~150K или два по ~190K, плюс места; ≈ 20,8 ГБ VRAM. Рядом с кэшем ComfyUI не живёт — арбитр в режиме
 # exclusive выгружает кэш (/free) перед возвратом (порог ARBITER_VRAM_NEEDED_MB = 22 000).
-# Места CCS режет NumCtx движка (32 768), чаты провайдера — ContextWindow каталога (131 072).
+# Места CCS режет NumCtx движка (32 768), чаты провайдера — ContextWindow каталога (262 144).
 # Один алиас = id каталога CCS: проба LocalEndpointProbe ищет модель в /v1/models по полю id.
 ExecStart=/home/an/local-llm/bin/cuda133/llama-server \
   -m /home/an/local-llm/models/gemma-4-26B-A4B-it-UD-IQ4_XS.gguf \
   -a gemma-4-26b-a4b \
   --host 0.0.0.0 --port 18030 \
-  -ngl 99 -fa on -c 262144 -np 4 -kvu -b 2048 -ub 512 \
+  -ngl 99 -fa on -c 393216 -np 4 -kvu -ctk q8_0 -ctv q8_0 -b 2048 -ub 512 \
   --reasoning auto \
   --temp 0.7 --top-p 0.8 --top-k 20 --min-p 0 --presence-penalty 1.5 --repeat-penalty 1.0 --repeat-last-n 64 \
   --cache-ram 2048 \

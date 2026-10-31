@@ -33,6 +33,9 @@ export function wikiErrorText(e: WikiError): string {
     case 'wiki_refused': return 'Правку нельзя применить к этому состоянию страницы';
     case 'wiki_drift': return 'Страницу изменили мимо Хранителя — сначала разберите дрейф';
     case 'wiki_not_orphan': return 'Удалить можно только раздел удалённого проекта';
+    // Журнал (S7c-2): origin-фильтр вне закрытого перечня (400); источник отката не найден или чужой (404)
+    case 'wiki_origin_key': return 'Источник не из списка';
+    case 'wiki_retract_source': return 'Такого источника в твоей вики нет';
   }
   if (e.status === 401 || e.status === 403) return 'Нет доступа';
   if (e.status === 404) return 'Не найдено';

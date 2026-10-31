@@ -18,6 +18,7 @@ import { EmptyState } from '../../../components/ui/EmptyState';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { WikiHealth } from './WikiHealth';
 import { WikiInbox } from './WikiInbox';
+import { WikiJournal } from './WikiJournal';
 
 export type WikiSubTabId = 'pages' | 'inbox' | 'journal' | 'health' | 'settings';
 
@@ -37,7 +38,8 @@ export const WIKI_SUBTABS: WikiSubTab[] = [
   { id: 'pages', label: 'Страницы', icon: BookOpen },
   // «Входящие» — свои с S7a: только спорные пакеты, у каждой операции причина
   { id: 'inbox', label: 'Входящие', icon: ArrowDownToLine, component: WikiInbox },
-  { id: 'journal', label: 'Журнал', icon: History, stubNote: 'Придёт с шагом «Журнал»: там откат пакета и откат всего чата.' }, // S7a/S7b
+  // «Журнал» — своё с S7c-1/S7c-2: хронология событий своей вики и откат всего источника
+  { id: 'journal', label: 'Журнал', icon: History, component: WikiJournal },
   // «Здоровье» — своё с S5f: отчёт последней проверки выбранного раздела и запуск проверки
   { id: 'health', label: 'Здоровье', icon: Activity, component: WikiHealth },
   { id: 'settings', label: 'Настройки', icon: Settings, stubNote: 'Придёт с шагом «Настройки»: ночной разбор, применение и отбор чатов.' }, // S7c/S7d

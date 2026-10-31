@@ -126,7 +126,7 @@ export type WikiErrorCode =
   | 'wiki_pkg_already_decided'
   | 'wiki_pkg_reason_required'
   | 'wiki_pkg_nothing_to_decide'
-  // Отказ отката пакета и отката по источнику (S4b-3/S4f) — читаются в «Журнале» (S7c-1)
+  // Отказ отката пакета и отката по источнику (S4b-3/S4f) — читаются вызывающими эти операции
   | 'wiki_revert_shape'
   | 'wiki_revert_off'
   | 'wiki_revert_claim'
@@ -139,6 +139,11 @@ export type WikiErrorCode =
   | 'wiki_retract_shape'
   | 'wiki_retract_off'
   | 'wiki_retract_internal'
+  // Источник отката не найден или чужой (404 «такого источника в твоей вики нет»,
+  // WikiPackagesController.cs:61) — читается в «Журнале» (S7c-2)
+  | 'wiki_retract_source'
+  // origin-фильтр журнала вне закрытого перечня (400, WikiController.cs:77) — «Журнал» (S7c-2)
+  | 'wiki_origin_key'
   // Отказы прогона линта (S3-3): функция выключена / прогон владельца уже идёт.
   // Читаются в «Здоровье» (S5f)
   | 'wiki_llm_wiki_off'
@@ -153,7 +158,8 @@ const WIKI_ERROR_CODES: ReadonlySet<string> = new Set<string>([
   'wiki_revert_shape', 'wiki_revert_off', 'wiki_revert_claim', 'wiki_revert_status',
   'wiki_revert_manifest', 'wiki_revert_no_preimages', 'wiki_revert_no_applied',
   'wiki_revert_changed', 'wiki_revert_internal',
-  'wiki_retract_shape', 'wiki_retract_off', 'wiki_retract_internal',
+  'wiki_retract_shape', 'wiki_retract_off', 'wiki_retract_internal', 'wiki_retract_source',
+  'wiki_origin_key',
   'wiki_llm_wiki_off', 'wiki_lint_running',
 ]);
 
@@ -476,12 +482,45 @@ export async function acceptAllWikiPackage(id: string): Promise<WikiDecisionDto>
   return res;
 }
 
-// ─── «Журнал»: журнал состояний, откат пакета и откат по источнику (S7c-1; контракт S4b-3/S4f) ───
-// Отдельной ручки журнала у бэка нет: GET с фильтрами из макета — пункт 5 «Нужно от бэка»
-// (llm-wiki-v2-proposal). До её появления журнал строится из GET /api/wiki/packages без inbox —
-// это «журнал состояний» из контракта самой ручки (applied / rejected_by_checks / reverted).
-// Когда бэк отдаст свою ручку — источник данных экрана переключится на неё; методы отката
-// от этого не зависят (откат и retract — существующие ручки).
+// ─── «Журнал»: чтение log.jsonl со склейкой по пакетам (S7c-2; GET /api/wiki/journal, S7c-0) ───
+// Записи — события журнала (apply/revert/retract/relink/adopt), «новые сверху»: строки log — единственные
+// носители событий, их порядок и есть хронология. status/policy/classes — из склейки с пакетом: status
+// null, когда пакетов несколько (их id в packages), classes пуст, когда пакета нет (relink, adopt).
+// sourceName — имя чата этого владельца или заголовок заметки; чужой или несуществующий чат — без имени
+// (по ответу нельзя отличить «нет» от «не твой»). Окно — последние `take` строк (по умолчанию 200,
+// потолок 1000; фактическое окно — в ответе); фильтры сужают прочитанный хвост, а не ищут за его краем.
+// Нечитаемые строки отдаются числом (invalidLines): их видно как сломанные, они не притворяются записями.
+
+export interface WikiJournalEntryDto {
+  ts: string;
+  op: string;
+  section: string;
+  actor: string;
+  source: string | null;
+  origin: string | null;
+  sourceName: string | null;
+  pages: string[];
+  packages: string[];
+  status: string | null;
+  policy: string | null;
+  classes: string[];
+}
+
+export interface WikiJournalDto { entries: WikiJournalEntryDto[]; take: number; linesRead: number; invalidLines: number }
+
+// Фильтры окна: section — ключ из дерева своей вики, origin — значение из закрытого перечня
+// (тот же, что фильтр источников экрана), class — пара «origin × op». Пустое — без фильтра.
+// take не передаём: экран живёт в окне по умолчанию (200), потолок (1000) — дело бэка.
+export interface WikiJournalQuery { section?: string | null; origin?: string | null; class?: string | null }
+
+export async function loadWikiJournal(q: WikiJournalQuery = {}): Promise<WikiJournalDto> {
+  const params = new URLSearchParams();
+  if (q.section) params.set('section', q.section);
+  if (q.origin) params.set('origin', q.origin);
+  if (q.class) params.set('class', q.class);
+  const qs = params.toString();
+  return wikiHttp<WikiJournalDto>(`/api/wiki/journal${qs ? `?${qs}` : ''}`);
+}
 
 export interface WikiRevertDto { restoredPages: string[] }
 
@@ -509,10 +548,6 @@ export class WikiRevertError extends WikiError {
     this.name = 'WikiRevertError';
     this.pages = pages;
   }
-}
-
-export async function listWikiJournal(): Promise<WikiPackagesDto> {
-  return wikiHttp<WikiPackagesDto>('/api/wiki/packages');
 }
 
 // «Откатить пакет» (мера 4): только действие человека. Отказ — WikiRevertError с перечнем

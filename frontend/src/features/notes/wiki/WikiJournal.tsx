@@ -1,24 +1,24 @@
-// «Журнал» (S7c-1, макет llm-wiki-v2 §6): проекция применённых пакетов своей вики — когда,
-// какой раздел, какой источник, политика («само» / «через Входящие»), что изменилось — и обе
-// кнопки отката (меры 4–5 ADR-035 §12г).
+// «Журнал» (S7c-1/S7c-2, макет llm-wiki-v2 §6): хронология своей вики из GET /api/wiki/journal
+// (S7c-0): когда, какой раздел, какой источник (с именем), что случилось (apply/revert/retract/
+// relink/adopt), политика («само» / «через Входящие»), какие страницы — и откат всего источника
+// (мера 5 ADR-035 §12г).
 //
-// Данные: GET /api/wiki/packages без inbox — «журнал состояний» из контракта самой ручки.
-// Отдельной ручки журнала у бэка нет (пункт 5 «Нужно от бэка» макета) — когда она придёт,
-// источник данных переключится на неё; откат и retract от этого не зависят. Поэтому здесь
-// показаны состояния пакетов: applied, rejected_by_checks («отбит проверками»), reverted
-// («откат»). proposed живёт в «Входящих»; rejected/apply_failed/stale — не факты изменения
-// вики, их история — на экране пакета.
+// Данные — строки log.jsonl, склеенные с пакетами (контракт ручки, WikiJournalReader.cs):
+// status/policy/classes — из склейки, а где события пакета нет (relink, adopt) — их нет вовсе:
+// пустое поле честнее выдумки. Имя источника — данные, не разметка: чужой или несуществующий
+// чат приходит без имени, строка тогда показывает карточку.
 //
-// «Что изменилось» — намерения операций как «предполагаемое изменение» через общий DiffView:
-// отрендеренного результата в DTO пакета нет, обещания результата не даём.
+// «Откатить пакет» (мера 4) на экране нет: запись журнала применённого пакета не несёт его id
+// (дефект ead65823, бэку запрошено) — откат всего источника здесь и закрывает возврат источника. «Предполагаемое изменение» (версия S7c-1 из операций пакета) ушло вместе со старым
+// источником: журнал не несёт текстов операций, запись показывает список затронутых страниц.
 //
-// Порядок запросов — тот же инвариант, что у «Входящих» (урок S5b/S5e): ответ кладётся,
-// только если его поколение последнее. Кнопки действий заблокированы на время запроса.
-// Недоверенный контент (тексты операций, ссылки источников, причины) — только текстом.
-// Отказ бэка показывается как есть, с перечнем изменённых страниц (wiki_revert_changed).
+// Порядок запросов — тот же инвариант, что у «Входящих» (урок S5b/S5e): ответ кладётся, только
+// если его поколение последнее. Фильтры живут в запросе (бэк сужает окно сам): ответ прежнего
+// фильтра не затеряет новый. Кнопки действий заблокированы на время запроса. Недоверенный
+// контент (имена источников, карточки, страницы) — только текстом. Отказ бэка показывается как есть.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, History, Undo2 } from 'lucide-react';
+import { AlertTriangle, History } from 'lucide-react';
 import { C, FONT, FS, R, SHADOW, SP } from '../../../lib/design';
 import { Badge } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
@@ -27,63 +27,54 @@ import { EmptyState } from '../../../components/ui/EmptyState';
 import { Notice } from '../../../components/ui/Notice';
 import { Select } from '../../../components/ui/Select';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
-import { DiffView } from '../../../components/DiffView';
 import { useIsMobile } from '../../../lib/breakpoints';
 import { openChatById } from '../../../lib/openChat';
 import { showToast } from '../../../lib/toast';
 import {
   WikiError,
-  WikiRevertError,
-  listWikiJournal,
-  revertWikiPackage,
+  loadWikiJournal,
   retractWikiSource,
   useWikiTree,
-  type WikiPackageDto,
-  type WikiPackageOperationDto,
-  type WikiPackageSourceDto,
+  type WikiJournalDto,
+  type WikiJournalEntryDto,
 } from '../../../lib/wiki';
 import { ORIGIN_META } from './WikiInbox';
 import { sectionPrefix, wikiErrorText } from './wikiLabels';
 
 // ─── Словари подписей ───
 
-// Что из журнала состояний показывать в «Журнале» (см. шапку файла).
-const JOURNAL_STATUSES = new Set(['applied', 'rejected_by_checks', 'reverted']);
-
-// Метки операций — чем они были для страницы (намерение, не результат).
-const OP_LABEL: Record<string, string> = {
-  create: 'новая страница', append: 'дописано', supersede: 'замещено',
-  conflict: 'противоречие', link: 'связь',
+// Событие журнала — что случилось (op — значения, которые бэк пишет в log.jsonl:
+// WikiApplyService / WikiPackageRevert / WikiRetractService / WikiKeeper). Неизвестный op
+// показан как есть: словарь не выдумывает смысл незнакомому слову.
+const OP_TEXT: Record<string, string> = {
+  apply: 'применено',
+  revert: 'откатано',
+  retract: 'откат по источнику',
+  relink: 'перелинкованы связи',
+  adopt: 'принято как есть',
 };
 
-// Политика пакета — по его операциям (решение 12г): через «Входящие» шло то, где был человек.
-type Policy = 'auto' | 'inbox' | 'checks' | 'reverted';
-function packagePolicy(p: WikiPackageDto): Policy {
-  if (p.status === 'rejected_by_checks') return 'checks';
-  if (p.status === 'reverted') return 'reverted';
-  return p.operations.some(o => o.decision === 'inbox') ? 'inbox' : 'auto';
+// Бейдж статуса/политики говорит только то, чего не говорит слово события: для применённой
+// записи — политику («через Входящие» — там был человек); откатанный после применения пакет
+// виден на записи применения; «отбит проверками» — отдельный исход. Для записей
+// revert/retract/relink/adopt событие уже названо op — бейдж только повторил бы его.
+function entryBadge(e: WikiJournalEntryDto): { tone: 'success' | 'warning' | 'danger' | 'neutral'; text: string } | null {
+  if (e.op !== 'apply') return null;
+  if (e.status === 'applied') {
+    return e.policy === 'inbox'
+      ? { tone: 'warning', text: 'через Входящие' }
+      : { tone: 'success', text: 'применилось само' };
+  }
+  if (e.status === 'rejected_by_checks') return { tone: 'danger', text: 'отбит проверками' };
+  if (e.status === 'reverted') return { tone: 'neutral', text: 'откатано' };
+  return null;
 }
 
-const POLICY_BADGE: Record<Policy, { tone: 'success' | 'warning' | 'danger' | 'neutral'; text: string }> = {
-  auto: { tone: 'success', text: 'применилось само' },
-  inbox: { tone: 'warning', text: 'через Входящие' },
-  checks: { tone: 'danger', text: 'отбит проверками' },
-  reverted: { tone: 'neutral', text: 'откат' },
-};
-
-// Отказы отката — русским текстом по коду бэка (тот же приём, что pkgErrorText для «Входящих»).
+// Отказы отката по источнику — русским текстом по коду бэка (тот же приём, что pkgErrorText для
+// «Входящих»). 'wiki_retract_source' здесь нет: его текст — в wikiErrorText (общий словарь, S7c-2).
 // Формулировки — черновые, тексты фичи за Софьей.
-function revertErrorText(e: WikiError): string {
+function retractErrorText(e: WikiError): string {
   switch (e.code) {
-    case 'wiki_revert_changed': return 'Страницу меняли после этого пакета — по прообразам её не вернуть';
-    case 'wiki_revert_status': return 'В своём состоянии пакет не откатывается';
-    case 'wiki_revert_no_applied': return 'Состояния применения не записано — откатывать нечего';
-    case 'wiki_revert_no_preimages': return 'Прообразы страниц не сохранились — откат невозможен';
-    case 'wiki_revert_claim': return 'Откат уже выполняется';
-    case 'wiki_revert_manifest': return 'Манифест раздела не прочитан';
-    case 'wiki_revert_off': return 'Откат для этой вики недоступен';
-    case 'wiki_revert_shape': return 'Не удалось отправить запрос отката';
-    case 'wiki_revert_internal': return 'Внутренний сбой отката';
     case 'wiki_retract_off': return 'Откат по источнику для этой вики недоступен';
     case 'wiki_retract_shape': return 'Не удалось отправить запрос отката';
     case 'wiki_retract_internal': return 'Внутренний сбой отката по источнику';
@@ -115,39 +106,37 @@ function timeText(iso: string): string {
 
 const uniq = (xs: string[]) => [...new Set(xs)];
 
-// Источник пакета для отката по нему — форма SourceRef бэка «{origin}:{id}» БЕЗ диапазона
+// Источник записи для отката по нему — форма SourceRef бэка «{origin}:{id}» БЕЗ диапазона
 // окна: Ref окна храненияется с диапазоном («session:{id}#m1-9», захват в WikiChatIngestService),
-// а бэк по карточке без диапазона накрывает все пакеты источника в любой его части (RefMatches,
-// WikiRetractService.cs). Здесь — зеркало бэковых OriginOf/IdPartOf: префикс по origin,
-// карточка — до первого «#». Для note:/file: без диапазона в ref ничего не меняется.
-// По этой же нормальной форме модалка считает применённые пакеты источника: сравнение
-// целых ref дало бы 1 вместо реального числа окон одного чата.
-function sourceRefOf(s: WikiPackageSourceDto): string {
-  const raw = s.ref.startsWith(`${s.origin}:`) ? s.ref.slice(s.origin.length + 1) : s.ref;
-  const hash = raw.indexOf('#');
-  return `${s.origin}:${hash < 0 ? raw : raw.slice(0, hash)}`;
+// а бэк по карточке без диапазона накрывает все пакеты источника в любой части диапазона
+// (RefMatches, WikiRetractService.cs). Здесь — зеркало бэковых OriginOf/IdPartOf. По этой же
+// нормальной форме модалка считает применённые записи источника: сравнение целых ref дало бы
+// 1 вместо реального числа окон одного чата. Строка может нести несколько карточек через «, »
+// (так их пишет SourceOf пакета) — берётся первая, тот же приём, что бэкового FirstSourcePart:
+// отдельного поля под множество стрика не несёт.
+function entrySourceRef(e: WikiJournalEntryDto): string | null {
+  if (!e.source || !e.origin) return null;
+  const first = e.source.split(', ')[0];
+  const rest = first.startsWith(`${e.origin}:`) ? first.slice(e.origin.length + 1) : first;
+  const hash = rest.indexOf('#');
+  return `${e.origin}:${hash < 0 ? rest : rest.slice(0, hash)}`;
 }
 
 // Id чата для перехода: та же граница, что у бэкового IdPartOf (без суффикса диапазона).
-function sessionChatId(s: WikiPackageSourceDto): string {
-  return s.ref.replace(/^session:/, '').split('#')[0];
+function entryChatId(e: WikiJournalEntryDto): string | null {
+  if (e.origin !== 'session') return null;
+  const id = entrySourceRef(e)?.slice('session:'.length) ?? '';
+  return id || null;
 }
 
-function primarySource(p: WikiPackageDto): WikiPackageSourceDto | null {
-  return p.sources[0] ?? null;
-}
+const originMeta = (e: WikiJournalEntryDto) => (e.origin ? ORIGIN_META[e.origin] : undefined);
+const opText = (e: WikiJournalEntryDto) => OP_TEXT[e.op] ?? e.op;
 
-// «Предполагаемое изменение» страницы — намерения её операций как unified-diff:
-// замещаемое — «-», добавляемое — «+». Отрендеренного результата нет — DiffView рисует
-// то, что Хранитель собирался сделать, а не то, что получилось.
-function expectedDiffFor(ops: WikiPackageOperationDto[]): string {
-  const lines: string[] = [];
-  for (const o of ops) {
-    if (o.op === 'supersede' && o.target) lines.push(`- ${o.target}`);
-    if (o.text) lines.push(`+ ${o.text}`);
-    else if (o.target) lines.push(`+ ${o.target}`);
-  }
-  return lines.join('\n');
+// Название записи: имя источника (название чата, заголовок заметки) — то, что человек узнаёт;
+// без имени (чужой или несуществующий чат, origin без имени) — карточка; записи без источника
+// (relink, adopt) — само событие.
+function entryTitle(e: WikiJournalEntryDto): string {
+  return e.sourceName ?? e.source ?? opText(e);
 }
 
 function LoadingSkeleton() {
@@ -159,15 +148,13 @@ function LoadingSkeleton() {
 
 // ─── Строка списка ───
 
-function JournalRow({ pkg, onOpen }: { pkg: WikiPackageDto; onOpen: () => void }) {
+function JournalRow({ entry, onOpen }: { entry: WikiJournalEntryDto; onOpen: () => void }) {
   const isMobile = useIsMobile();
   const tree = useWikiTree();
-  const src = primarySource(pkg);
-  const meta = src ? ORIGIN_META[src.origin] : undefined;
+  const meta = originMeta(entry);
   const Icon = meta?.icon ?? History;
-  const section = tree?.sections.find(s => s.key === pkg.section);
-  const pol = POLICY_BADGE[packagePolicy(pkg)];
-  const pages = uniq(pkg.operations.map(o => o.page));
+  const section = tree?.sections.find(s => s.key === entry.section);
+  const badge = entryBadge(entry);
   return (
     <button
       type="button"
@@ -182,18 +169,18 @@ function JournalRow({ pkg, onOpen }: { pkg: WikiPackageDto; onOpen: () => void }
       <span style={{ flexShrink: 0, color: C.textMuted, paddingTop: 2 }}><Icon size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /></span>
       <span style={{ minWidth: 0, flex: 1 }}>
         <span style={{ display: 'block', fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono }}>
-          {section ? sectionPrefix(section) : pkg.section} · {meta?.label ?? src?.origin ?? 'источник'}
+          {section ? sectionPrefix(section) : entry.section}{meta ? ` · ${meta.label}` : ''}
         </span>
         <span style={{ display: 'block', fontSize: FS.base, fontWeight: 500, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {src?.ref ?? 'Без источника'}
+          {entryTitle(entry)}
         </span>
         <span style={{ display: 'block', fontSize: FS.sm, color: C.textMuted, marginTop: 2 }}>
-          {pkg.operations.length} операций · {pages.length} стр.
+          {opText(entry)} · {entry.pages.length} стр.
         </span>
-        <span style={{ display: 'block', marginTop: 3 }}><Badge tone={pol.tone}>{pol.text}</Badge></span>
+        {badge && <span style={{ display: 'block', marginTop: 3 }}><Badge tone={badge.tone}>{badge.text}</Badge></span>}
       </span>
       {!isMobile && (
-        <span style={{ flexShrink: 0, fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono }}>{timeText(pkg.updatedAt)}</span>
+        <span style={{ flexShrink: 0, fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono }}>{timeText(entry.ts)}</span>
       )}
     </button>
   );
@@ -202,82 +189,57 @@ function JournalRow({ pkg, onOpen }: { pkg: WikiPackageDto; onOpen: () => void }
 // ─── Запись журнала ───
 
 function JournalEntry({
-  pkg, busy, actionError, onBack, onRevert, onRetract,
+  entry, busy, actionError, onBack, onRetract,
 }: {
-  pkg: WikiPackageDto;
+  entry: WikiJournalEntryDto;
   busy: boolean;
-  actionError: { text: string; pages: string[] } | null;
+  actionError: string | null;
   onBack: () => void;
-  onRevert: () => void;
   onRetract: () => void;
 }) {
   const tree = useWikiTree();
-  const src = primarySource(pkg);
-  const meta = src ? ORIGIN_META[src.origin] : undefined;
-  const pol = POLICY_BADGE[packagePolicy(pkg)];
-  const section = tree?.sections.find(s => s.key === pkg.section);
-  const pages = uniq(pkg.operations.map(o => o.page));
-  const byPage = new Map<string, WikiPackageOperationDto[]>();
-  for (const o of pkg.operations) {
-    const arr = byPage.get(o.page) ?? [];
-    arr.push(o);
-    byPage.set(o.page, arr);
-  }
-  const chatId = src && src.origin === 'session' ? sessionChatId(src) : null;
+  const meta = originMeta(entry);
+  const badge = entryBadge(entry);
+  const section = tree?.sections.find(s => s.key === entry.section);
+  const sourceRef = entrySourceRef(entry);
+  const chatId = entryChatId(entry);
   return (
     <div style={{ padding: `0 ${SP.md}px ${SP.md}px` }}>
       <Button variant="ghost" size="sm" dataTestId="wiki-journal-back" ariaLabel="Вернуться к списку «Журнала»" onClick={onBack}>Назад</Button>
       <div style={{ fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono, marginTop: SP.sm }}>
-        Журнал · {timeText(pkg.updatedAt)}
+        Журнал · {timeText(entry.ts)}
       </div>
       <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: 2 }}>
-        {section ? sectionPrefix(section) : pkg.section}
+        {section ? sectionPrefix(section) : entry.section}
       </div>
       <h2 style={{ margin: `${SP.xs}px 0 0`, fontFamily: FONT.serif, fontSize: FS.lg, color: C.textHeading, overflowWrap: 'break-word' }}>
-        {src?.ref ?? 'Без источника'}
+        {entryTitle(entry)}
       </h2>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm, alignItems: 'center', marginTop: SP.sm }}>
-        <Badge tone={pol.tone}>{pol.text}</Badge>
-        {src && <span style={{ fontSize: FS.xs, fontFamily: FONT.mono, color: C.textMuted, overflowWrap: 'anywhere' }}>{sourceRefOf(src)}</span>}
-        <span style={{ fontSize: FS.xs, color: C.textMuted }}>{pkg.operations.length} операций · {pages.length} стр.</span>
+        {badge && <Badge tone={badge.tone}>{badge.text}</Badge>}
+        <span style={{ fontSize: FS.sm, color: C.textSecondary }}>{opText(entry)}</span>
+        {sourceRef && <span style={{ fontSize: FS.xs, fontFamily: FONT.mono, color: C.textMuted, overflowWrap: 'anywhere' }}>{sourceRef}</span>}
+        <span style={{ fontSize: FS.xs, color: C.textMuted }}>{entry.pages.length} стр.</span>
       </div>
-      {pkg.status === 'rejected_by_checks' && (
-        <div style={{ marginTop: SP.md }}>
-          <Notice tone="danger" icon={AlertTriangle} title="Отбит проверками кода — в вики ничего не записано">
-            {pkg.statusReason ?? 'Такие правки не применяются и во «Входящие» не идут: показывать нечего.'}
-          </Notice>
+      {entry.classes.length > 0 && (
+        <div style={{ fontSize: FS.xs, fontFamily: FONT.mono, color: C.textMuted, marginTop: SP.xs, overflowWrap: 'anywhere' }}>
+          класс: {entry.classes.join(', ')}
         </div>
       )}
-      {pkg.status === 'reverted' && (
+      {entry.status === 'rejected_by_checks' && (
         <div style={{ marginTop: SP.md }}>
-          <Notice tone="info" icon={Undo2} title="Пакет откатан">
-            {pkg.statusReason ?? 'Страницы возвращены к состоянию до пакета.'}
+          <Notice tone="danger" icon={AlertTriangle} title="Отбит проверками кода — в вики ничего не записано">
+            Такие правки не применяются и во «Входящие» не идут: показывать нечего.
           </Notice>
         </div>
       )}
       {actionError && (
         <div style={{ marginTop: SP.md }}>
-          <Notice tone="danger" icon={AlertTriangle} title={actionError.text}>
-            {actionError.pages.length > 0 && (
-              <>
-                <span>Изменённые страницы:</span>
-                <ul style={{ margin: `${SP.xs}px 0 0`, paddingLeft: SP.lg }}>
-                  {actionError.pages.map(p => (
-                    <li key={p} style={{ fontFamily: FONT.mono, fontSize: FS.sm, overflowWrap: 'anywhere' }}>{p}</li>
-                  ))}
-                </ul>
-              </>
-            )}
-          </Notice>
+          <Notice tone="danger" icon={AlertTriangle} title={actionError} />
         </div>
       )}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm, marginTop: SP.md }}>
-        {pkg.status === 'applied' && (
-          <Button variant="ghost" size="sm" dataTestId="wiki-journal-revert" disabled={busy} onClick={onRevert}>
-            Откатить пакет
-          </Button>
-        )}
-        {src && (
+        {sourceRef && (
           <Button variant="ghost" size="sm" dataTestId="wiki-journal-retract" disabled={busy} onClick={onRetract}>
             Откатить всё из этого {meta?.label ?? 'источника'}
           </Button>
@@ -288,23 +250,21 @@ function JournalEntry({
           </Button>
         )}
       </div>
-      {pkg.status !== 'rejected_by_checks' && byPage.size > 0 && (
+      {entry.pages.length > 0 && (
         <>
-          <h3 style={{ margin: `${SP.lg}px 0 ${SP.sm}px`, fontSize: FS.md, color: C.textHeading }}>Предполагаемое изменение</h3>
+          <h3 style={{ margin: `${SP.lg}px 0 ${SP.sm}px`, fontSize: FS.md, color: C.textHeading }}>Изменённые страницы</h3>
           <div style={{ fontSize: FS.sm, color: C.textMuted, marginBottom: SP.sm }}>
-            Так Хранитель собирался изменить страницы; итоговый результат может отличаться.
+            Что затронуло это событие; содержимое страниц — в каталоге раздела.
           </div>
-          {[...byPage.entries()].map(([page, ops]) => (
-            <div
-              key={page}
-              style={{ border: `1px solid ${C.border}`, borderRadius: R.md, padding: SP.sm, marginBottom: SP.sm, background: C.bgPanel, boxShadow: SHADOW.card }}
-            >
-              <div style={{ fontSize: FS.sm, fontFamily: FONT.mono, color: C.textSecondary, overflowWrap: 'anywhere' }}>
-                {page} · {uniq(ops.map(o => OP_LABEL[o.op] ?? o.op)).join(', ')}
-              </div>
-              <DiffView diff={expectedDiffFor(ops)} />
-            </div>
-          ))}
+          <div
+            style={{ border: `1px solid ${C.border}`, borderRadius: R.md, padding: SP.sm, marginBottom: SP.sm, background: C.bgPanel, boxShadow: SHADOW.card }}
+          >
+            <ul style={{ margin: 0, paddingLeft: SP.lg }}>
+              {entry.pages.map(p => (
+                <li key={p} style={{ fontFamily: FONT.mono, fontSize: FS.sm, overflowWrap: 'anywhere' }}>{p}</li>
+              ))}
+            </ul>
+          </div>
         </>
       )}
     </div>
@@ -315,82 +275,51 @@ function JournalEntry({
 
 export function WikiJournal() {
   const tree = useWikiTree();
-  const [data, setData] = useState<{ packages: WikiPackageDto[]; invalidCount: number } | null>(null);
+  const [data, setData] = useState<WikiJournalDto | null>(null);
   const [loadError, setLoadError] = useState<unknown>(null);
   // '' — все разделы / все источники (пункт-заглушка Select)
   const [sectionFilter, setSectionFilter] = useState('');
   const [originFilter, setOriginFilter] = useState('');
-  const [openedId, setOpenedId] = useState<string | null>(null);
-  const [confirm, setConfirm] = useState<{ kind: 'revert' | 'retract'; pkg: WikiPackageDto } | null>(null);
-  const [actionError, setActionError] = useState<{ text: string; pages: string[] } | null>(null);
+  const [opened, setOpened] = useState<WikiJournalEntryDto | null>(null);
+  const [confirm, setConfirm] = useState<WikiJournalEntryDto | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // Поколение загрузок (урок S5b/S5e, образец — loadSeq в WikiInbox): только последний
-  // запрос пишет список; поздний ответ прежней загрузки его не затрёт
+  // Поколение загрузок (урок S5b/S5e, образец — loadSeq в WikiInbox): только последний запрос
+  // пишет список; filters живут в запросе — поздний ответ прежнего фильтра не затеряет новый
   const loadSeq = useRef(0);
 
   const load = useCallback(() => {
     const mine = ++loadSeq.current;
     setLoadError(null);
-    listWikiJournal()
+    loadWikiJournal({ section: sectionFilter || null, origin: originFilter || null })
       .then(d => { if (loadSeq.current === mine) setData(d); })
       .catch(e => { if (loadSeq.current === mine) setLoadError(e); });
-  }, []);
+  }, [sectionFilter, originFilter]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- старт загрузки при монтировании подвкладки: другого места старта нет, список живёт в компоненте
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- старт загрузки при монтировании подвкладки и при смене фильтра: другого места старта нет, список живёт в компоненте
     load();
   }, [load]);
 
-  const visible = (data?.packages ?? [])
-    .filter(p => JOURNAL_STATUSES.has(p.status))
-    .filter(p => !sectionFilter || p.section === sectionFilter)
-    .filter(p => !originFilter || p.sources.some(s => s.origin === originFilter))
-    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+  const entries = data?.entries ?? [];
 
-  const opened = openedId ? visible.find(p => p.id === openedId) ?? null : null;
-
-  const open = (pkg: WikiPackageDto) => {
+  const open = (entry: WikiJournalEntryDto) => {
     setActionError(null);
-    setOpenedId(pkg.id);
+    setOpened(entry);
   };
 
   const back = () => {
-    setOpenedId(null);
+    setOpened(null);
     setActionError(null);
     load();
   };
 
-  const failAction = (e: unknown, fallback: string) => {
-    const we = e instanceof WikiError ? e : null;
-    setActionError({
-      text: we ? revertErrorText(we) : fallback,
-      pages: e instanceof WikiRevertError ? e.pages : [],
-    });
-  };
-
-  const doRevert = async (pkg: WikiPackageDto) => {
-    if (busy) return;
+  const doRetract = async (entry: WikiJournalEntryDto) => {
+    const sourceRef = entrySourceRef(entry);
+    if (!sourceRef || busy) return;
     setBusy(true);
     try {
-      const res = await revertWikiPackage(pkg.id);
-      setConfirm(null);
-      showToast('Пакет откатан', `Страницы возвращены к состоянию до пакета: ${res.restoredPages.length} стр.`, 'success');
-      setOpenedId(null);
-      load();
-    } catch (e) {
-      setConfirm(null);
-      failAction(e, 'Не удалось откатить пакет');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const doRetract = async (pkg: WikiPackageDto) => {
-    const src = primarySource(pkg);
-    if (!src || busy) return;
-    setBusy(true);
-    try {
-      const r = await retractWikiSource(sourceRefOf(src));
+      const r = await retractWikiSource(sourceRef);
       setConfirm(null);
       const parts = [
         r.revertedPackages.length ? `${r.revertedPackages.length} пакетов откатано` : '',
@@ -402,11 +331,11 @@ export function WikiJournal() {
       const failed = r.failed.length ? ` Частично: ${r.failed.join('; ')}` : '';
       // ToastKind не имеет «warning»: частичный исход — это «error» с текстом частичности
       showToast('Откат по источнику', `${parts.join(', ') || 'ничего не изменилось'}.${failed}`, r.failed.length ? 'error' : 'success');
-      setOpenedId(null);
+      setOpened(null);
       load();
     } catch (e) {
       setConfirm(null);
-      failAction(e, 'Не удалось откатить всё из этого источника');
+      setActionError(e instanceof WikiError ? retractErrorText(e) : 'Не удалось откатить всё из этого источника');
     } finally {
       setBusy(false);
     }
@@ -414,41 +343,20 @@ export function WikiJournal() {
 
   // Что снимется при откате по источнику — из того, что видно в журнале сейчас: точный
   // исход (что по прообразам, что останется из-за другого источника) знает только бэк.
-  const retractSrc = confirm?.kind === 'retract' ? primarySource(confirm.pkg) : null;
-  const retractRelated = confirm?.kind === 'retract' && retractSrc
-    ? visible.filter(p => p.status === 'applied' && p.sources.some(s => sourceRefOf(s) === sourceRefOf(retractSrc)))
-    : [];
-  const retractPages = uniq(retractRelated.flatMap(p => p.operations.map(o => o.page)));
-  const revertPages = confirm?.kind === 'revert' ? uniq(confirm.pkg.operations.map(o => o.page)) : [];
-  // Модалка подтверждения — в обеих ветках (списка и записи): кнопки отката живут в записи
-  const confirmModal = !confirm ? null : confirm.kind === 'revert' ? (
+  // Число — по нормальной форме источника: окна одного чата считаются все (урок c1 S7c-1).
+  const confirmRef = confirm ? entrySourceRef(confirm) : null;
+  const related = confirmRef ? entries.filter(e => e.status === 'applied' && entrySourceRef(e) === confirmRef) : [];
+  const relatedPages = uniq(related.flatMap(e => e.pages));
+  const confirmMeta = confirm ? originMeta(confirm) : undefined;
+  const confirmModal = !confirm ? null : (
     <ConfirmDialog
-      title="Откатить пакет?"
-      subtitle={
-        <>
-          <div>Страницы вернутся к состоянию до этого пакета:</div>
-          <ul style={{ margin: `${SP.xs}px 0 0`, paddingLeft: SP.lg }}>
-            {revertPages.map(p => (
-              <li key={p} style={{ fontFamily: FONT.mono, fontSize: FS.sm, overflowWrap: 'anywhere' }}>{p}</li>
-            ))}
-          </ul>
-          <div style={{ marginTop: SP.xs }}>Если страницу меняли после пакета — бэк не даст откатить и покажет, какие именно.</div>
-        </>
-      }
-      confirmLabel="Откатить"
-      confirmVariant="danger"
-      onConfirm={() => doRevert(confirm.pkg)}
-      onCancel={() => setConfirm(null)}
-    />
-  ) : (
-    <ConfirmDialog
-      title={`Откатить всё из этого ${retractSrc ? ORIGIN_META[retractSrc.origin]?.label ?? 'источника' : 'источника'}?`}
+      title={`Откатить всё из этого ${confirmMeta?.label ?? 'источника'}?`}
       subtitle={
         <>
           <div>Снимется то, что Хранитель взял из этого источника за всё время. Знание из других источников останется.</div>
           <ul style={{ margin: `${SP.xs}px 0 0`, paddingLeft: SP.lg }}>
-            <li>В журнале с этим источником: {retractRelated.length} применённых пакетов, {retractPages.length} стр.</li>
-            {retractSrc?.origin === 'session' && (
+            <li>В журнале с этим источником: {related.length} применённых записей, {relatedPages.length} стр.</li>
+            {confirm.origin === 'session' && (
               <li>Источник получит пометку «не разбирать» — иначе следующая ночь разберёт его заново.</li>
             )}
           </ul>
@@ -460,7 +368,7 @@ export function WikiJournal() {
       }
       confirmLabel="Откатить всё"
       confirmVariant="danger"
-      onConfirm={() => doRetract(confirm.pkg)}
+      onConfirm={() => doRetract(confirm)}
       onCancel={() => setConfirm(null)}
     />
   );
@@ -473,71 +381,75 @@ export function WikiJournal() {
       </div>
     );
   }
-  if (!data) return <LoadingSkeleton />;
+  const sectionOptions = (tree?.sections ?? []).map(s => ({ value: s.key, label: sectionPrefix(s) }));
+  const originOptions = Object.entries(ORIGIN_META).map(([value, m]) => ({ value, label: m.label }));
+  // Фильтры на экране и во время первой загрузки: сменить фильтр «во время загрузки» —
+  // ровно тот сценарий, ради которого держится поколение запросов
+  const filterRow = (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm, padding: `${SP.sm}px ${SP.md}px 0` }}>
+      <Select value={sectionFilter} onChange={setSectionFilter} placeholder="Все разделы" options={sectionOptions} />
+      <Select value={originFilter} onChange={setOriginFilter} placeholder="Все источники" options={originOptions} />
+    </div>
+  );
+
+  if (!data) return <>{filterRow}<LoadingSkeleton /></>;
 
   if (opened) {
     return (
       <>
         <JournalEntry
-          pkg={opened}
+          entry={opened}
           busy={busy}
           actionError={actionError}
           onBack={back}
-          onRevert={() => setConfirm({ kind: 'revert', pkg: opened })}
-          onRetract={() => setConfirm({ kind: 'retract', pkg: opened })}
+          onRetract={() => setConfirm(opened)}
         />
         {confirmModal}
       </>
     );
   }
 
-  const sectionOptions = (tree?.sections ?? []).map(s => ({ value: s.key, label: sectionPrefix(s) }));
-  const originOptions = Object.entries(ORIGIN_META).map(([value, m]) => ({ value, label: m.label }));
-
   let lastDay: string | null = null;
   return (
     <div style={{ padding: `0 0 ${SP.md}px` }}>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm, padding: `${SP.sm}px ${SP.md}px 0` }}>
-        <Select value={sectionFilter} onChange={setSectionFilter} placeholder="Все разделы" options={sectionOptions} />
-        <Select value={originFilter} onChange={setOriginFilter} placeholder="Все источники" options={originOptions} />
-      </div>
-      {data.invalidCount > 0 && (
+      {filterRow}
+      {data.invalidLines > 0 && (
         <div style={{ padding: `${SP.sm}px ${SP.md}px 0` }}>
-          <Notice tone="warning" icon={AlertTriangle} title={`Нечитаемых файлов пакета: ${data.invalidCount}`}>
+          <Notice tone="warning" icon={AlertTriangle} title={`Нечитаемых строк журнала: ${data.invalidLines}`}>
             Они видны как сломанные и в журнал не берутся.
           </Notice>
         </div>
       )}
-      {visible.length === 0 ? (
+      {entries.length === 0 ? (
         <EmptyState
           icon={<History size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
           title="Журнал пустой"
           subtitle={
             <span style={{ maxWidth: 360 }}>
-              Здесь появятся применённые правки вики — каждая с откатом по пакету
-              и по источнику. {sectionFilter || originFilter ? 'Под выбранный фильтр ничего нет.' : ''}
+              Здесь появятся события вашей вики: применения, откаты, системные операции.
+              {' '}{sectionFilter || originFilter ? 'Под выбранный фильтр ничего нет.' : ''}
             </span>
           }
         />
       ) : (
         <>
-          {visible.map(p => {
-            const day = dayKey(p.updatedAt);
+          {entries.map((e, i) => {
+            const day = dayKey(e.ts);
             const header = day !== lastDay ? dayTitle(day) : null;
             lastDay = day;
             return (
-              <div key={p.id}>
+              <div key={`${e.ts}|${e.section}|${e.op}|${i}`}>
                 {header && (
                   <div style={{ padding: `${SP.md}px ${SP.md}px ${SP.xs}px`, fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono }}>
                     {header}
                   </div>
                 )}
-                <JournalRow pkg={p} onOpen={() => open(p)} />
+                <JournalRow entry={e} onOpen={() => open(e)} />
               </div>
             );
           })}
           <div style={{ padding: `${SP.md}px ${SP.md}px 0`, fontSize: FS.xs, color: C.textMuted }}>
-            Откат по пакету и по источнику — 90 дней, дальше прообразы стираются.
+            Окно журнала — последние события; откат — 90 дней, дальше прообразы стираются.
           </div>
         </>
       )}

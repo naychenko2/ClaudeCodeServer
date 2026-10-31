@@ -304,7 +304,7 @@ internal sealed class TeamDecisionService
             var editTs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             await _history.AppendAsync(sessionId,
                 new StoredUserMessage(feedback.Trim(), timestamp: editTs, senderUserId: userId),
-                new UserMessageMessage(feedback.Trim(), null, null, false, Timestamp: editTs));
+                new UserMessageMessage(feedback.Trim(), null, null, false, Timestamp: editTs, SenderUserId: userId));
 
             var nextVersion = team.PlanVersion + 1;
             _run.WithTeamState(sessionId, t =>

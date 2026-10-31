@@ -197,6 +197,7 @@ public class Project
 
     // Бывшие участники общего проекта (след отзыва/ухода). Как и Members: пусто — null,
     // в projects.json не пишется; повторное приглашение убирает человека из списка.
+    // Старые записи без поля читаются штатно: миграции нет, BackupSchema.Version не двигается.
     private List<FormerProjectMember>? _formerMembers;
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<FormerProjectMember>? FormerMembers

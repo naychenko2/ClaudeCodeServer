@@ -155,6 +155,15 @@ public class ProjectAccessTests
     }
 
     [Fact]
+    public void Стор_СтараяЗаписьБезFormerMembers_ЧитаетсяШтатно()
+    {
+        var json = JsonSerializer.Serialize(OwnedProject());
+        json.Should().NotContain("FormerMembers");
+        var restored = JsonSerializer.Deserialize<Project>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        restored!.FormerMembers.Should().BeNull();
+    }
+
+    [Fact]
     public void Стор_СУчастниками_РондТриПолный()
     {
         var json = JsonSerializer.Serialize(SharedProject((ReaderId, ProjectRole.Reader)));

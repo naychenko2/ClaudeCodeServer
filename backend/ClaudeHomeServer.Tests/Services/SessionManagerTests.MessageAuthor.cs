@@ -117,6 +117,22 @@ public partial class SessionManagerTests
             "хаб обязан передать автора правки в историю: без userId строка ляжет с null-автором");
     }
 
+    // Живая лента и история одного сообщения несут одного автора: правка плана уходит
+    // в ленту с SenderUserId решающего, а не безымянной.
+    [Fact]
+    public async Task ПравкаПлана_Владельцем_АвторВЖивойЛентеВладелец()
+    {
+        var (session, plan, _) = await MakeStabWithPlanAndStarterAsync("ma-edit-plan-live");
+        SetReplannedPlannerAnswer(GetAnyPersona(session), "ревью убрано из плана");
+
+        var hub = MakeHubFor(TestUserId);
+        await hub.RespondTeamPlan(session.Id, plan.Id, "edit", feedback: "убери ревью из плана live");
+
+        var live = Sent<UserMessageMessage>().Single(m => m.Text == "убери ревью из плана live");
+        live.SenderUserId.Should().Be(TestUserId,
+            "живое сообщение правки обязано нести того же автора, что и история");
+    }
+
     // Хаб с соединением конкретного пользователя (тот же образец, что в SessionHubLeaveTests):
     // UserId хаба читает sub из ClaimsPrincipal соединения. FileWatcherService/ConnectionDiagnostics/
     // DevServerService нужны другим методам хаба — RespondTeamPlan их не трогает; IProjectAccess

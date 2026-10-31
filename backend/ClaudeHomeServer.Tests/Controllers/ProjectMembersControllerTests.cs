@@ -93,6 +93,38 @@ public class ProjectMembersControllerTests : IClassFixture<TestWebApplicationFac
     }
 
     [Fact]
+    public async Task ПовторноеПриглашение_СнимаетЧеловекаИзFormerMembers()
+    {
+        var owner = Owner(); await SetFlagAsync(owner, true); await SetFlagAsync(Second(), true);
+        var id = await CreateProjectAsync(owner);
+        var secondId = IdOf(TestWebApplicationFactory.SecondUsername);
+        (await AddAsync(owner, id, TestWebApplicationFactory.SecondUsername)).EnsureSuccessStatusCode();
+        (await owner.DeleteAsync($"/api/projects/{id}/members/{secondId}")).EnsureSuccessStatusCode();
+        _factory.Services.GetRequiredService<ProjectManager>().GetById(id)!.FormerMembers.Should().NotBeNull();
+
+        (await AddAsync(owner, id, TestWebApplicationFactory.SecondUsername)).EnsureSuccessStatusCode();
+
+        var project = _factory.Services.GetRequiredService<ProjectManager>().GetById(id)!;
+        project.FormerMembers.Should().BeNull("вернувшийся участник больше не «бывший»");
+        project.Members.Should().ContainSingle(m => m.UserId == secondId);
+    }
+
+    [Fact]
+    public async Task УходУчастника_ПападаетВFormerMembers()
+    {
+        var owner = Owner(); await SetFlagAsync(owner, true); await SetFlagAsync(Second(), true);
+        var id = await CreateProjectAsync(owner);
+        var secondId = IdOf(TestWebApplicationFactory.SecondUsername);
+        (await AddAsync(owner, id, TestWebApplicationFactory.SecondUsername)).EnsureSuccessStatusCode();
+
+        (await Second().DeleteAsync($"/api/projects/{id}/members/me")).EnsureSuccessStatusCode();
+
+        var project = _factory.Services.GetRequiredService<ProjectManager>().GetById(id)!;
+        project.Members.Should().BeNullOrEmpty();
+        project.FormerMembers.Should().ContainSingle(f => f.UserId == secondId);
+    }
+
+    [Fact]
     public async Task FormerMembers_ПосторонникуНет404_ЛичныйПроектБезПоля()
     {
         var owner = Owner(); await SetFlagAsync(owner, true); await SetFlagAsync(Second(), true);

@@ -115,9 +115,17 @@ function timeText(iso: string): string {
 
 const uniq = (xs: string[]) => [...new Set(xs)];
 
-// Источник пакета для отката по нему: Ref — голый id, форма SourceRef бэка — «{origin}:{ref}».
+// Источник пакета для отката по нему — форма SourceRef бэка «{origin}:{id}» БЕЗ диапазона
+// окна: Ref окна храненияется с диапазоном («session:{id}#m1-9», захват в WikiChatIngestService),
+// а бэк по карточке без диапазона накрывает все пакеты источника в любой его части (RefMatches,
+// WikiRetractService.cs). Здесь — зеркало бэковых OriginOf/IdPartOf: префикс по origin,
+// карточка — до первого «#». Для note:/file: без диапазона в ref ничего не меняется.
+// По этой же нормальной форме модалка считает применённые пакеты источника: сравнение
+// целых ref дало бы 1 вместо реального числа окон одного чата.
 function sourceRefOf(s: WikiPackageSourceDto): string {
-  return s.ref.startsWith(`${s.origin}:`) ? s.ref : `${s.origin}:${s.ref}`;
+  const raw = s.ref.startsWith(`${s.origin}:`) ? s.ref.slice(s.origin.length + 1) : s.ref;
+  const hash = raw.indexOf('#');
+  return `${s.origin}:${hash < 0 ? raw : raw.slice(0, hash)}`;
 }
 
 // Id чата для перехода: та же граница, что у бэкового IdPartOf (без суффикса диапазона).

@@ -12,7 +12,7 @@
 // правку заметок и правку вики мог сделать один прогон Хранителя по пакету. Если бэк
 // добавит поле `wiki` следующим — оно принимается как есть, реакция не изменится.
 
-import { useSyncExternalStore } from 'react';
+import { useCallback, useSyncExternalStore } from 'react';
 import { readStoredUserId, request } from './offline';
 import { joinUser, onMessage, onReconnected } from './signalr';
 
@@ -222,6 +222,11 @@ let _tree: WikiTreeDto | null = null;
 const _catalogs = new Map<string, WikiCatalogDto>();
 // Последняя прочитанная страница (экран показывает одну за раз; кэша всех страниц нет)
 let _page: { cacheKey: string; value: WikiPageDto } | null = null;
+// Открытые сейчас страницы: счётчик подписок useWikiPage по ключу. «Открытая» для
+// перечитки после отката — та, чей экран сейчас подписан: _page остаётся и после
+// закрытия страницы, перечитывать по нему — тот хвост «перечитка закрытой поднимает
+// поколение и выкидывает ответ только что открытой» (хвост перечитки после adopt)
+const _openPages = new Map<string, number>();
 let _loaded = false;
 let _treeLoading: Promise<WikiTreeDto> | null = null;
 const _listeners = new Set<() => void>();
@@ -243,6 +248,24 @@ function joinUserGroup() {
 
 const sectionQuery = (key: string) => `section=${encodeURIComponent(key)}`;
 const pageCacheKey = (sectionKey: string, pageKey: string) => `${sectionKey}\n${pageKey}`;
+// Разбор ключа страницы — обратный pageCacheKey: ключ раздела и ключ страницы '\n' не
+// содержат — бэковый разбор пути страницы отвергает управляющие символы (WikiSections.cs)
+function splitPageCacheKey(key: string): { sectionKey: string; pageKey: string } | null {
+  const i = key.indexOf('\n');
+  return i < 0 ? null : { sectionKey: key.slice(0, i), pageKey: key.slice(i + 1) };
+}
+
+// Перечитать открытую страницу после мутации, меняющей содержимое страниц (откат
+// пакета, откат по источнику): витрина под открытым экраном не должна показывать
+// состояние до отката. Только пока страница остаётся открытой (счётчик подписок) —
+// сбой перечитки не роняет мутацию (тот же порядок, что в adopt).
+async function reReadOpenPage(): Promise<void> {
+  const page = _page;
+  if (!page || !(_openPages.get(page.cacheKey) ?? 0)) return;
+  const parts = splitPageCacheKey(page.cacheKey);
+  if (!parts) return;
+  await loadWikiPage(parts.sectionKey, parts.pageKey).catch(() => undefined);
+}
 
 // ─── Чтение ───
 
@@ -493,13 +516,15 @@ export async function listWikiJournal(): Promise<WikiPackagesDto> {
 }
 
 // «Откатить пакет» (мера 4): только действие человека. Отказ — WikiRevertError с перечнем
-// изменённых страниц. Успех — перечитываем дерево и открытые каталоги: страницы возвращены
-// к состоянию до применения (тот же порядок, что у decide с применённым).
+// изменённых страниц. Успех — перечитываем дерево и открытые каталоги и открытую страницу
+// (порядок adopt): страницы возвращены к состоянию до применения, витрина под открытым
+// экраном — после отката, а не до него.
 export async function revertWikiPackage(id: string): Promise<WikiRevertDto> {
   try {
     const res = await request<WikiRevertDto>(`/api/wiki/packages/${encodeURIComponent(id)}/revert`, {
       method: 'POST',
     });
+    await reReadOpenPage();
     await refreshWiki();
     return res;
   } catch (e) {
@@ -513,14 +538,16 @@ export async function revertWikiPackage(id: string): Promise<WikiRevertDto> {
   }
 }
 
-// «Откатить всё из этого источника» (мера 5): sourceRef — форма «{origin}:{ref}» (тот же
-// разбор, что у бэкового OriginOf/IdPartOf; Ref пакета — голый id, префикс добавляем здесь).
-// Успех — перечитываем: страницы и каталоги изменились снятием/откатом.
+// «Откатить всё из этого источника» (мера 5): sourceRef — форма «{origin}:{id}» (тот же
+// разбор, что у бэкового OriginOf/IdPartOf): карточка без диапазона окна — бэк по ней
+// накрывает все пакеты источника в любой части диапазона.
+// Успех — перечитываем открытую страницу, страницы и каталоги: они изменились снятием/откатом.
 export async function retractWikiSource(sourceRef: string): Promise<WikiRetractDto> {
   const res = await wikiHttp<WikiRetractDto>('/api/wiki/packages/retract', {
     method: 'POST',
     body: JSON.stringify({ sourceRef }),
   });
+  await reReadOpenPage();
   await refreshWiki();
   return res;
 }
@@ -577,11 +604,22 @@ export function useWikiCatalog(sectionKey: string): WikiCatalogDto | null {
 
 export function useWikiPage(sectionKey: string, pageKey: string): WikiPageDto | null {
   const key = pageCacheKey(sectionKey, pageKey);
-  return useSyncExternalStore(
-    subscribe,
-    () => (_page && _page.cacheKey === key ? _page.value : null),
-    () => (_page && _page.cacheKey === key ? _page.value : null),
-  );
+  const open = sectionKey !== '' && pageKey !== '';
+  // Счётчик открытых страниц — по подписке экрана: стабильна на всё время открытой
+  // страницы (идентичность useCallback по ключу), при закрытии/смене страницы —
+  // снятие подписки снимает и счётчик
+  const subscribeOpen = useCallback((fn: () => void) => {
+    const off = subscribe(fn);
+    if (!open) return off;
+    _openPages.set(key, (_openPages.get(key) ?? 0) + 1);
+    return () => {
+      const n = (_openPages.get(key) ?? 1) - 1;
+      if (n <= 0) _openPages.delete(key); else _openPages.set(key, n);
+      off();
+    };
+  }, [key, open]);
+  const snapshot = () => (_page && _page.cacheKey === key ? _page.value : null);
+  return useSyncExternalStore(subscribeOpen, snapshot, snapshot);
 }
 
 // Дерево загружено (отличить «ещё не грузили» от «пустой каталог»)
@@ -597,6 +635,7 @@ export const __test = {
     _tree = null;
     _catalogs.clear();
     _page = null;
+    _openPages.clear();
     _loaded = false;
     _treeLoading = null;
     _realtimeWired = false;

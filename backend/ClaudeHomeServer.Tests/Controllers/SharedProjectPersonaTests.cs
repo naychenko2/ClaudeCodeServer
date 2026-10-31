@@ -1,7 +1,9 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using Microsoft.Extensions.DependencyInjection;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 
@@ -162,6 +164,37 @@ public class SharedProjectPersonaTests : IClassFixture<TestWebApplicationFactory
             .Should().Be(SessionManager.GlobalPersonaInSharedException.Code);
         (await ProjectChatIdsAsync(Owner(), projectId)).Should().BeEquivalentTo(before,
             "отказ не оставил в проекте нового чата");
+    }
+
+    [Fact]
+    public async Task СозданиеЧатаОбщегоПроектаСНеизвестнойПерсоной_404ИЧатНеСоздан()
+    {
+        var (projectId, _) = await ProjectWithChatAsync("editor");
+        var before = await ProjectChatIdsAsync(Owner(), projectId);
+
+        var r = await Owner().PostAsJsonAsync($"/api/projects/{projectId}/sessions",
+            new { mode = "auto", personaId = "нет-такой-" + Guid.NewGuid().ToString("N")[..6] });
+
+        r.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await ProjectChatIdsAsync(Owner(), projectId)).Should().BeEquivalentTo(before);
+    }
+
+    [Fact]
+    public async Task ПродолжениеЛегасиЧатаОбщегоПроектаСГлобальнойПерсоной_400СКодомДоПлатногоХода()
+    {
+        var (projectId, _) = await ProjectWithChatAsync("editor");
+        var personaId = await CreatePersonaAsync(Owner(), "Глобальная-" + Guid.NewGuid().ToString("N")[..6], "global");
+        // Легаси-чат: CreateAsync рамку не проверяет, глобальная персона села в общий проект до запрета
+        var sessions = _factory.Services.GetRequiredService<SessionManager>();
+        var legacy = await sessions.CreateAsync(projectId, ClaudeMode.AcceptEdits, personaId: personaId);
+        var before = await ProjectChatIdsAsync(Owner(), projectId);
+
+        var r = await Owner().PostAsJsonAsync($"/api/chats/{legacy.Id}/continue", new { });
+
+        r.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await BodyAsync(r)).GetProperty("code").GetString().Should().Be(SessionManager.GlobalPersonaInSharedException.Code);
+        (await ProjectChatIdsAsync(Owner(), projectId)).Should().BeEquivalentTo(before,
+            "отказ не оставил нового чата");
     }
 
     [Fact]

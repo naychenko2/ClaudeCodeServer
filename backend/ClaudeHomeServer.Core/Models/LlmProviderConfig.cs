@@ -279,4 +279,7 @@ public class LlmProviderStatsConfig
     public string? Model { get; set; }
     public string? EngineLabel { get; set; }
     public string? Topology { get; set; }
+    // Title — короткое название модели на вкладке панели «Локальные модели» (например «Flash-Next»);
+    // пусто — «Основная».
+    public string? Title { get; set; }
 }

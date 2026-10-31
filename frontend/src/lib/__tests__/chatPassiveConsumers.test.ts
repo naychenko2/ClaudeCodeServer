@@ -96,7 +96,7 @@ describe('по-чатовые потребители: что в по-чатов�
 
     await api.localModel.engines();
     await api.localModel.stats('15m');
-    await api.localModel.stats('5m', 1700000000000, 'bonsai');
+    await api.localModel.stats('5m', 1700000000000, 'gemma');
     await flushPassiveWrites();
 
     // Ни один ответ панели не лёг в какой бы то ни было класс кэша
@@ -113,7 +113,7 @@ describe('по-чатовые потребители: что в по-чатов�
     // В сторе лежит старый снимок — для live-запроса он не читается вовсе
     mocks.idbGet.mockResolvedValue({ data: { status: 'working' }, savedAt: 1, usedAt: 1 });
 
-    await expect(api.localModel.stats('15m', undefined, 'bonsai')).rejects.toBeInstanceOf(OfflineError);
+    await expect(api.localModel.stats('15m', undefined, 'gemma')).rejects.toBeInstanceOf(OfflineError);
     await expect(api.localModel.engines()).rejects.toBeInstanceOf(OfflineError);
 
     // Подстановки не было: кэш по этим URL не читался ни разу

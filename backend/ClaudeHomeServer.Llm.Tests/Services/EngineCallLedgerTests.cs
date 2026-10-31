@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // («локальная модель дописывает вызов только в одну цепочку»).
 public class EngineCallLedgerTests
 {
-    private const string Engine = "bonsai";
+    private const string Engine = "gemma";
 
     // T0 — ровно минутная граница: клетки индексируются unix-минутами, тест окна
     // не должен зависеть от внутри минутного сдвига.
@@ -39,8 +39,8 @@ public class EngineCallLedgerTests
     {
         public bool Enabled => true;
         public string BaseUrl => "http://engine";
-        public string Model => "bonsai-9b";
-        public string TextModel => "bonsai-9b";
+        public string Model => "gemma-4-26b-a4b";
+        public string TextModel => "gemma-4-26b-a4b";
         public string ProviderKey => LocalLlmOptions.LlamaServer;
 
         public Task<string?> ChatJsonAsync(string systemPrompt, string userPrompt, object jsonFormat,
@@ -69,8 +69,8 @@ public class EngineCallLedgerTests
 
         public bool Enabled => true;
         public string BaseUrl => "http://engine";
-        public string Model => "bonsai-9b";
-        public string TextModel => "bonsai-9b";
+        public string Model => "gemma-4-26b-a4b";
+        public string TextModel => "gemma-4-26b-a4b";
         public string ProviderKey => LocalLlmOptions.LlamaServer;
 
         public Task<string?> ChatJsonAsync(string systemPrompt, string userPrompt, object jsonFormat,
@@ -112,8 +112,8 @@ public class EngineCallLedgerTests
 
         public bool Enabled => true;
         public string BaseUrl => "http://engine";
-        public string Model => "bonsai-9b";
-        public string TextModel => "bonsai-9b";
+        public string Model => "gemma-4-26b-a4b";
+        public string TextModel => "gemma-4-26b-a4b";
         public string ProviderKey => LocalLlmOptions.LlamaServer;
 
         public Task<string?> ChatJsonAsync(string systemPrompt, string userPrompt, object jsonFormat,
@@ -146,8 +146,8 @@ public class EngineCallLedgerTests
 
         public bool Enabled => true;
         public string BaseUrl => "http://engine";
-        public string Model => "bonsai-9b";
-        public string TextModel => "bonsai-9b";
+        public string Model => "gemma-4-26b-a4b";
+        public string TextModel => "gemma-4-26b-a4b";
         public string ProviderKey => LocalLlmOptions.LlamaServer;
 
         public Task<string?> ChatJsonAsync(string systemPrompt, string userPrompt, object jsonFormat,
@@ -272,9 +272,9 @@ public class EngineCallLedgerTests
         return new Harness { Runner = runner, Ledger = ledger, Time = time, Store = store };
     }
 
-    private static void AssertBaskets(EngineAnswerCounts a, int bonsai, int insurance, int claude, int missed)
+    private static void AssertBaskets(EngineAnswerCounts a, int gemma, int insurance, int claude, int missed)
     {
-        Assert.Equal(bonsai, a.Bonsai);
+        Assert.Equal(gemma, a.Engine);
         Assert.Equal(insurance, a.Insurance);
         Assert.Equal(claude, a.Claude);
         Assert.Equal(missed, a.Missed);
@@ -283,7 +283,7 @@ public class EngineCallLedgerTests
     // === RunChainAsync (RunAsync / RunLocalOrChosenAsync): 4 корзины ===
 
     [Fact]
-    public async Task RunChain_EngineAnswers_BasketBonsai()
+    public async Task RunChain_EngineAnswers_BasketEngine()
     {
         var h = Make(Engines("заголовок от движка", "direct:nvidia/nemotron:free"));
         var text = await h.Runner.RunAsync(LocalActionCatalog.ChatTitle, "prompt", fallbackModel: "haiku");
@@ -335,7 +335,7 @@ public class EngineCallLedgerTests
     // === RunDetailedAsync: те же 4 корзины (мутация-проверка «двух цепочек») ===
 
     [Fact]
-    public async Task RunDetailed_EngineAnswers_BasketBonsai()
+    public async Task RunDetailed_EngineAnswers_BasketEngine()
     {
         var h = Make(Engines("{\"ok\":true}", "direct:nvidia/nemotron:free"));
         var result = await h.Runner.RunDetailedAsync(LocalActionCatalog.ChatTitle, "prompt",
@@ -435,7 +435,7 @@ public class EngineCallLedgerTests
         Assert.Empty(h.Ledger.CallsNow(Engine));
         AssertBaskets(h.Ledger.AnswersLastHour(Engine), 0, 1, 0, 0);
         // Повторный End — no-op: двойного сента нет.
-        call.End(EngineCallOutcome.Bonsai);
+        call.End(EngineCallOutcome.Engine);
         AssertBaskets(h.Ledger.AnswersLastHour(Engine), 0, 1, 0, 0);
     }
 
@@ -468,8 +468,8 @@ public class EngineCallLedgerTests
         var texts = await Task.WhenAll(tasks);
         Assert.All(texts, t => Assert.Equal("ответ движка", t));
         var a = h.Ledger.AnswersLastHour(Engine);
-        Assert.Equal(calls, a.Bonsai + a.Insurance + a.Claude + a.Missed); // сумма корзин — число вызовов
-        Assert.Equal(calls, a.Bonsai);                                    // все ответы — в корзине движка
+        Assert.Equal(calls, a.Engine + a.Insurance + a.Claude + a.Missed); // сумма корзин — число вызовов
+        Assert.Equal(calls, a.Engine);                                    // все ответы — в корзине движка
         Assert.Empty(h.Ledger.CallsNow(Engine));                        // открытых вызовов не осталось
     }
 

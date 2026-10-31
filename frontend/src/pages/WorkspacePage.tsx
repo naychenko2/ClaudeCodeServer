@@ -37,7 +37,7 @@ import { PillSwitch } from '../components/Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from '../components/ToolbarOverflowMenu';
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
-import { getLocalModelBonsai, useLocalModelWatcher } from '../features/localModel/useLocalModelWatcher';
+import { getLocalModelEngineStats, useLocalModelWatcher } from '../features/localModel/useLocalModelWatcher';
 import { menuStatus, triggerDot, triggerTitleFor } from '../features/localModel/format';
 import { PluginFrame, PluginPanelsSwitcher, useHasInstalledPlugins, useInstalledPlugins, panelDisplayName, pluginIconFor } from '../features/plugins';
 import { BackButton, Button, IconButton, Modal } from '../components/ui';
@@ -411,16 +411,16 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   // «меню «⋯»»): тот же снимок лёгкого опроса и тот же standDot-тон, что у точки
   // рельса — два индикатора не могут разойтись. У не-админа снимка нет (он не
   // опрашивает вторую дорожку) — статуса нет, как и точки.
-  const localModelMenu = localModelVisible ? menuStatus(getLocalModelBonsai()) : null;
+  const localModelMenu = localModelVisible ? menuStatus(getLocalModelEngineStats()) : null;
   // Точка на самой кнопке «⋯» (Ф9, макет renderPhone): тот же снимок и тот же тон, что у
   // точки рельса и статуса пункта (triggerDot = tone у menuStatus = standDot) — сигнал
   // виден до открытия меню. Гейт как у точки рельса: видимый пункт (флаг+admin+configured)
   // и снимок (его опрос живёт только у админа с флагом) — в норме и без данных точки нет.
-  const localModelTriggerDot = localModelVisible ? triggerDot(getLocalModelBonsai()) : null;
+  const localModelTriggerDot = localModelVisible ? triggerDot(getLocalModelEngineStats()) : null;
   // Имя кнопки (title/aria) называет то же состояние, что точка (Ф9, доработка по
   // ревью): на мобиле панель — только в этом меню, состояние читалось бы одним
   // цветом 8-px точки. В норме и без снимка — прежнее «Ещё».
-  const localModelTriggerTitle = localModelVisible ? triggerTitleFor(getLocalModelBonsai()) : 'Ещё';
+  const localModelTriggerTitle = localModelVisible ? triggerTitleFor(getLocalModelEngineStats()) : 'Ещё';
 
   // Восстанавливаем состояние окна для этого проекта (компонент перемонтируется при входе в проект)
   const [leftTab, setLeftTab] = useState<LeftTab>(() => {

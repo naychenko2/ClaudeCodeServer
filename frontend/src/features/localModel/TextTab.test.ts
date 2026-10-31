@@ -4,7 +4,7 @@
 // вкладки — со стендом, с карточкой сбоя и со скелетоном, дефект b129c182),
 // сокрытие полей из `unsupported` (не заглушки, а ничего), состояние 'yielded'
 // (нейтральный тон, не нули), карточка Video и «места сервера» вместо чатов, блок
-// «Дежурство» (только у выбранного Bonsai; без duty — пустого: блок сам
+// «Дежурство» (только у выбранного второй движок; без duty — пустого: блок сам
 // возвращает null; без арбитра — строка «Арбитр не подключён»).
 // Рендер — через linkedom (как tasks/acceptanceBlock.test.ts); ResizeObserver
 // стабится: ThroughputChart меряет им свою ширину.
@@ -37,11 +37,11 @@ const { act, createElement } = await import('react');
 const { createRoot } = await import('react-dom/client');
 const { TextTab } = await import('./TextTab');
 const { notReportedText, standDot, standHint, statusPill } = await import('./format');
-const { mockBonsaiStats, mockLocalModelStats } = await import('./localModel.fixtures');
+const { mockEngineStats, mockLocalModelStats } = await import('./localModel.fixtures');
 const { dutyWhoRows } = await import('./dutyFormat');
 const ENGINES_BOTH = [
   { name: 'main' as const, title: 'Основная', configured: true },
-  { name: 'bonsai' as const, title: 'Bonsai', configured: true },
+  { name: 'gemma' as const, title: 'Gemma 4', configured: true },
 ];
 
 const TAB_DEFAULTS = {
@@ -77,8 +77,8 @@ function clickSegment(host: ReturnType<typeof mountTab>['host'], label: string):
   act(() => { btn.click(); });
 }
 
-// История с кэш-содержанием и вытеснениями: на ней видно и разницу main/bonsai —
-// у main поля рисуются, у bonsai (unsupported из фикстуры) — скрыты целиком.
+// История с кэш-содержанием и вытеснениями: на ней видно и разницу main/gemma —
+// у main поля рисуются, у gemma (unsupported из фикстуры) — скрыты целиком.
 const T0 = Date.now();
 function historyWithKv() {
   const h = [];
@@ -116,20 +116,20 @@ describe('statusPill — точные подписи статуса (макет 
     expect(statusPill({ configured: true, status: 'notConnected' })).toEqual({ label: 'Не подключена', tone: 'muted' });
   });
   it('yielded с причиной — «Уступила карту», нейтральный тон (не авария)', () => {
-    const p = statusPill(mockBonsaiStats('yielded'));
+    const p = statusPill(mockEngineStats('yielded'));
     expect(p).toEqual({ label: 'Уступила карту', tone: 'muted' });
   });
   it('yielded без причин, с остатком паузы — «Ждёт возврата»', () => {
-    const d = mockBonsaiStats('yielded');
+    const d = mockEngineStats('yielded');
     d.duty = { ...d.duty!, arbiter: { ...d.duty!.arbiter!, reasons: [], quietLeftS: 160 } };
     expect(statusPill(d)).toEqual({ label: 'Ждёт возврата', tone: 'muted' });
   });
   it('starting — «Загружается», waiting-vram — «Ждёт память карты» (warning: память сама не освободится)', () => {
-    expect(statusPill(mockBonsaiStats('starting'))).toEqual({ label: 'Загружается', tone: 'muted' });
-    expect(statusPill(mockBonsaiStats('waiting-vram'))).toEqual({ label: 'Ждёт память карты', tone: 'warning' });
+    expect(statusPill(mockEngineStats('starting'))).toEqual({ label: 'Загружается', tone: 'muted' });
+    expect(statusPill(mockEngineStats('waiting-vram'))).toEqual({ label: 'Ждёт память карты', tone: 'warning' });
   });
   it('без арбитра/без причин — групповая подпись (Б3b: без арбитра yielded не ставится)', () => {
-    const d = mockBonsaiStats('yielded');
+    const d = mockEngineStats('yielded');
     d.duty = { ...d.duty!, arbiter: null };
     expect(statusPill(d).label).toBe('Уступила карту');
     expect(statusPill({ configured: true, status: 'yielded' }).label).toBe('Уступила карту');
@@ -138,40 +138,40 @@ describe('statusPill — точные подписи статуса (макет 
 
 describe('standDot / standHint — тон точки и подсказка (макет §4)', () => {
   it('уступка — muted; память и молчание стенда — warning; работа — точки нет', () => {
-    expect(standDot(mockBonsaiStats('yielded'))).toBe('muted');
-    expect(standDot(mockBonsaiStats('starting'))).toBe('muted');
-    expect(standDot(mockBonsaiStats('waiting-vram'))).toBe('warning');
-    expect(standDot(mockBonsaiStats('unknown'))).toBe('warning');
-    expect(standDot(mockBonsaiStats('ready'))).toBeNull();
+    expect(standDot(mockEngineStats('yielded'))).toBe('muted');
+    expect(standDot(mockEngineStats('starting'))).toBe('muted');
+    expect(standDot(mockEngineStats('waiting-vram'))).toBe('warning');
+    expect(standDot(mockEngineStats('unknown'))).toBe('warning');
+    expect(standDot(mockEngineStats('ready'))).toBeNull();
   });
   it('подсказки — по состоянию; у работающего стенда их нет', () => {
     // фикстура 'yielded' имеет reasons=[comfy video] — короткая форма «видео» (таблица KINDS макета)
-    expect(standHint(mockBonsaiStats('yielded'))).toBe('Bonsai уступила карту: видео');
-    expect(standHint(mockBonsaiStats('returning'))).toBe('Bonsai вернётся через 2:40');
-    const zero = mockBonsaiStats('returning');
+    expect(standHint(mockEngineStats('yielded'))).toBe('Модель уступила карту: видео');
+    expect(standHint(mockEngineStats('returning'))).toBe('Модель вернётся через 2:40');
+    const zero = mockEngineStats('returning');
     zero.duty = { ...zero.duty!, arbiter: { ...zero.duty!.arbiter!, quietLeftS: 0 } };
-    expect(standHint(zero)).toBe('Bonsai вот-вот вернётся');
-    expect(standHint(mockBonsaiStats('starting'))).toBe('Bonsai загружается');
-    expect(standHint(mockBonsaiStats('waiting-vram'))).toBe('Bonsai ждёт память карты');
-    expect(standHint(mockBonsaiStats('unknown'))).toBe('Bonsai недоступна');
-    expect(standHint(mockBonsaiStats('ready'))).toBeNull();
+    expect(standHint(zero)).toBe('Модель вот-вот вернётся');
+    expect(standHint(mockEngineStats('starting'))).toBe('Модель загружается');
+    expect(standHint(mockEngineStats('waiting-vram'))).toBe('Модель ждёт память карты');
+    expect(standHint(mockEngineStats('unknown'))).toBe('Модель недоступна');
+    expect(standHint(mockEngineStats('ready'))).toBeNull();
   });
 });
 
-describe('переключатель «Основная · Bonsai» (c1)', () => {
+describe('переключатель «Основная · второй движок» (c1)', () => {
   const data = mockLocalModelStats('working');
   it('два движка — переключатель есть, выбранный сегмент aria-pressed', () => {
     const html = renderTab({ data, engines: ENGINES_BOTH, engine: 'main', onEngineChange: () => {} });
     expect(html).toContain('Основная');
-    expect(html).toContain('Bonsai');
+    expect(html).toContain('Gemma 4');
     expect(html).toContain('aria-pressed="true"');
   });
-  // Сегменты переключателя подписаны titles из /engines («Основная», «Bonsai»);
+  // Сегменты переключателя подписаны titles из /engines («Основная», «второй движок»);
   // ни одного из этих слов в стенде нет — их отсутствие и есть «переключателя нет»
   it('один движок — переключателя нет (ни одного сегмента)', () => {
     const html = renderTab({ data, engines: [ENGINES_BOTH[0]], engine: 'main', onEngineChange: () => {} });
     expect(html).not.toContain('Основная');
-    expect(html).not.toContain('Bonsai');
+    expect(html).not.toContain('Gemma 4');
   });
   it('второй движок не настроен — переключателя нет', () => {
     const html = renderTab({
@@ -179,33 +179,33 @@ describe('переключатель «Основная · Bonsai» (c1)', () =>
       engines: [ENGINES_BOTH[0], { ...ENGINES_BOTH[1], configured: false }],
     });
     expect(html).not.toContain('Основная');
-    expect(html).not.toContain('Bonsai');
+    expect(html).not.toContain('Gemma 4');
   });
   // Точка и подсказка — по снимку ВЫБРАННОГО движка: data — снимок текущего стенда,
-  // состояние Bonsai с основного стенда неизвестно (Ф6 — из useLocalModelWatcher).
-  // Раньше тест подставлял невозможную пару (main + снимок Bonsai); теперь — реальные.
-  it('основной стенд со своим снимком (down) — на сегменте «Bonsai» нет точки и подсказки', () => {
+  // состояние второй движок с основного стенда неизвестно (Ф6 — из useLocalModelWatcher).
+  // Раньше тест подставлял невозможную пару (main + снимок второй движок); теперь — реальные.
+  it('основной стенд со своим снимком (down) — на сегменте «второй движок» нет точки и подсказки', () => {
     const html = renderTab({
       data: mockLocalModelStats('down'), engines: ENGINES_BOTH, engine: 'main', onEngineChange: () => {},
     });
     // сегмент есть, но пустой: ни title-подсказки, ни 6-пиксельной точки
-    expect(html).toContain('Bonsai');
-    expect(html).not.toContain('Bonsai —');
+    expect(html).toContain('Gemma 4');
+    expect(html).not.toContain('Gemma 4 —');
     expect(html).not.toContain('width:6px');
   });
-  it('выбран «Bonsai» и его снимок (yielded) — точка и подсказка на сегменте', () => {
+  it('выбран «второй движок» и его снимок (yielded) — точка и подсказка на сегменте', () => {
     const html = renderTab({
-      data: mockBonsaiStats('yielded'), engines: ENGINES_BOTH, engine: 'bonsai', onEngineChange: () => {},
+      data: mockEngineStats('yielded'), engines: ENGINES_BOTH, engine: 'gemma', onEngineChange: () => {},
     });
-    expect(html).toContain('Bonsai — уступила карту');
+    expect(html).toContain('Gemma 4 — уступила карту');
     expect(html).toContain('width:6px');
   });
 });
 
 describe('подстрока под статусом (макет §3, .html:414)', () => {
-  it('Bonsai — «llama-server · Video · обновлено …», без «карта/карт, TP=»', () => {
+  it('второй движок — «llama-server · Video · обновлено …», без «карта/карт, TP=»', () => {
     const html = renderTab({
-      data: { ...mockBonsaiStats('ready'), history: historyWithKv() }, engine: 'bonsai',
+      data: { ...mockEngineStats('ready'), history: historyWithKv() }, engine: 'gemma',
     });
     expect(html).toContain('llama-server · Video ·');
     expect(html).toContain('обновлено');
@@ -240,9 +240,9 @@ describe('поля из unsupported не рендерятся (c2)', () => {
     expect(html).toContain('Куда уходит время агентов');
     expect(html).not.toContain('ступеньками');
   });
-  it('фикстура Bonsai с той же историей — 0 блоков KV/RAM-тира/вытеснений; карточка «Нагрузка» с подписью про ступеньки', () => {
+  it('фикстура второй движок с той же историей — 0 блоков KV/RAM-тира/вытеснений; карточка «Нагрузка» с подписью про ступеньки', () => {
     const html = renderTab({
-      data: { ...mockBonsaiStats('ready'), history: historyWithKv() }, engine: 'bonsai',
+      data: { ...mockEngineStats('ready'), history: historyWithKv() }, engine: 'gemma',
     });
     expect(html).not.toContain('Кэш, %');
     expect(html).not.toContain('Вытеснения');
@@ -270,9 +270,9 @@ describe('поля из unsupported не рендерятся (c2)', () => {
 
 describe('состояние «уступила карту» (макет §4)', () => {
   it('нейтральный баннер и спокойные «Сейчас»/«Скорость» — не нули и не красное', () => {
-    const html = renderTab({ data: mockBonsaiStats('yielded'), engine: 'bonsai' });
+    const html = renderTab({ data: mockEngineStats('yielded'), engine: 'gemma' });
     expect(html).toContain('Уступила карту');
-    expect(html).toContain('Bonsai уступила карту — это по плану.');
+    expect(html).toContain('Модель уступила карту — это по плану.');
     expect(html).toContain('Модель выгружена — запросов к ней нет.');
     expect(html).toContain('Нет данных, пока модель выгружена.');
     expect(html).not.toContain('запросов идёт');
@@ -280,28 +280,28 @@ describe('состояние «уступила карту» (макет §4)', 
     expect(html).not.toContain('grayscale');
   });
   it('«Ждёт память карты» — свой тон и свой текст баннера', () => {
-    const html = renderTab({ data: mockBonsaiStats('waiting-vram'), engine: 'bonsai' });
+    const html = renderTab({ data: mockEngineStats('waiting-vram'), engine: 'gemma' });
     expect(html).toContain('Ждёт память карты');
-    expect(html).toContain('Bonsai ждёт память карты.');
+    expect(html).toContain('Модель ждёт память карты.');
   });
   it('авария без выгрузки (unknown → down) — текст про аварию, не про уступку', () => {
-    const html = renderTab({ data: mockBonsaiStats('unknown'), engine: 'bonsai' });
-    expect(html).toContain('Bonsai не отвечает');
+    const html = renderTab({ data: mockEngineStats('unknown'), engine: 'gemma' });
+    expect(html).toContain('Модель не отвечает');
     expect(html).toContain('а арбитр её не выгружал');
     expect(html).toContain('Это авария, не уступка');
   });
 });
 
-describe('карточка Video и «места сервера» (стенд Bonsai)', () => {
+describe('карточка Video и «места сервера» (стенд второй движок)', () => {
   it('«Видеокарта · Video» с чипом «общая с ComfyUI», полоса памяти и KPI', () => {
-    const html = renderTab({ data: mockBonsaiStats('ready'), engine: 'bonsai' });
+    const html = renderTab({ data: mockEngineStats('ready'), engine: 'gemma' });
     expect(html).toContain('Видеокарта · Video');
     expect(html).toContain('общая с ComfyUI');
     expect(html).toContain('8/24 ГБ');
     expect(html).not.toContain('Железо');
   });
   it('«Кто сейчас» — места со звеном и длительностью; строки не кнопки', () => {
-    const html = renderTab({ data: mockBonsaiStats('yielded'), engine: 'bonsai' });
+    const html = renderTab({ data: mockEngineStats('yielded'), engine: 'gemma' });
     expect(html).toContain('Классификация задачи');
     expect(html).toContain('MiniMax · страховка');
     expect(html).toContain('2,1 с');
@@ -322,8 +322,8 @@ describe('подпись «Скорость» (макет §3)', () => {
     const html = renderTab({ data: mockLocalModelStats('working') });
     expect(html).toContain('чтение промпта с ожиданием');
   });
-  it('Bonsai — без «с ожиданием» (у llama-server это чистое время чтения)', () => {
-    const html = renderTab({ data: mockBonsaiStats('ready'), engine: 'bonsai' });
+  it('второй движок — без «с ожиданием» (у llama-server это чистое время чтения)', () => {
+    const html = renderTab({ data: mockEngineStats('ready'), engine: 'gemma' });
     expect(html).toContain('чтение промпта, ток/с');
     expect(html).not.toContain('с ожиданием');
   });
@@ -341,27 +341,27 @@ describe('блок «Дежурство» в стенде (интеграция,
     // В реальном API main duty не приносит — пара искусственная ровно затем, чтобы
     // проверить условие движка: без него блок появился бы на любом снимке с duty
     const html = renderTab({
-      data: { ...mockLocalModelStats('working'), duty: mockBonsaiStats('yielded').duty },
+      data: { ...mockLocalModelStats('working'), duty: mockEngineStats('yielded').duty },
       engines: ENGINES_BOTH, engine: 'main', onEngineChange: () => {},
     });
     expect(html).not.toContain('>Дежурство</h3>');
     expect(html).not.toContain('Цепочка');
   });
-  it('Bonsai без duty — блока нет (контракт DutyBlock: при duty === null он null)', () => {
-    const d = { ...mockBonsaiStats('ready') };
+  it('второй движок без duty — блока нет (контракт DutyBlock: при duty === null он null)', () => {
+    const d = { ...mockEngineStats('ready') };
     delete d.duty;
-    const html = renderTab({ data: d, engine: 'bonsai' });
+    const html = renderTab({ data: d, engine: 'gemma' });
     expect(html).not.toContain('Дежурство');
   });
-  it('Bonsai без арбитра — блок с «Арбитр не подключён» (строка самого блока)', () => {
+  it('второй движок без арбитра — блок с «Арбитр не подключён» (строка самого блока)', () => {
     // Состояние 'no-arbiter' было покрыто только API-тестом (statusPill); здесь —
     // строка самого блока: движок без StateUrl остаётся видимым, но без причин и возврата
-    const html = renderTab({ data: mockBonsaiStats('no-arbiter'), engine: 'bonsai' });
+    const html = renderTab({ data: mockEngineStats('no-arbiter'), engine: 'gemma' });
     expect(html).toContain('>Дежурство</h3>');
     expect(html).toContain('Арбитр не подключён: почему уступила карта и когда модель вернётся — неизвестно.');
   });
-  it('Bonsai с duty — «Дежурство» есть и стоит последним блоком', () => {
-    const html = renderTab({ data: mockBonsaiStats('yielded'), engine: 'bonsai' });
+  it('второй движок с duty — «Дежурство» есть и стоит последним блоком', () => {
+    const html = renderTab({ data: mockEngineStats('yielded'), engine: 'gemma' });
     // заголовок именно карточки (h3): слово «Дежурство» есть и в тексте баннера
     // уступки выше — по одному ему наличие блока не проверить
     expect(html).toContain('>Дежурство</h3>');
@@ -418,13 +418,13 @@ describe('нет данных при сбое — объяснение вмес�
 });
 
 // Дефект b129c182 (повторная проверка Веры): карточка сбоя занимала всю вкладку, и
-// вместе с ней исчезал переключатель «Основная · Bonsai» — при упавшем одном стенде
+// вместе с ней исчезал переключатель «Основная · второй движок» — при упавшем одном стенде
 // уйти на другой можно было только через F5. Список движков живёт своим опросом
 // (useLocalModelEngines) и не зависит от снимка статистики, поэтому переключатель
 // рисётся НАД карточкой сбоя и НАД скелетоном.
 // Мутация «вернуть engineSwitch за ранние return» краснит первый тест.
 describe('переключатель над состоянием без данных (дефект b129c182)', () => {
-  it('сбой и два движка — переключатель над карточкой и работает: клик по «Bonsai» зовёт onEngineChange', () => {
+  it('сбой и два движка — переключатель над карточкой и работает: клик по «второй движок» зовёт onEngineChange', () => {
     const chosen: string[] = [];
     const { host, root } = mountTab({
       data: null, loading: false, error: 'offline',
@@ -433,12 +433,12 @@ describe('переключатель над состоянием без данн
     const html = host.innerHTML;
     expect(html).toContain('Нет связи с сервером');
     expect(html).toContain('Основная');
-    expect(html).toContain('Bonsai');
+    expect(html).toContain('Gemma 4');
     expect(html).toContain('aria-pressed="true"'); // выбранный сегмент помечен
     // порядок: переключатель — первой строкой вкладки, карточка под ним
     expect(html.indexOf('Основная')).toBeLessThan(html.indexOf('Нет связи с сервером'));
-    clickSegment(host, 'Bonsai');
-    expect(chosen).toEqual(['bonsai']);
+    clickSegment(host, 'Gemma 4');
+    expect(chosen).toEqual(['gemma']);
     act(() => { root.unmount(); });
     host.remove();
   });
@@ -447,7 +447,7 @@ describe('переключатель над состоянием без данн
       data: null, loading: true, engines: ENGINES_BOTH, engine: 'main', onEngineChange: () => {},
     });
     expect(html).toContain('Основная');
-    expect(html).toContain('Bonsai');
+    expect(html).toContain('Gemma 4');
     expect(html).toContain('ccs-lm-skeleton'); // скелетон на месте
     expect(html).not.toContain('Нет связи с сервером');
     expect(html.indexOf('Основная')).toBeLessThan(html.indexOf('ccs-lm-skeleton'));
@@ -461,17 +461,17 @@ describe('переключатель над состоянием без данн
     for (const s of states) {
       const html = renderTab({ ...s, engines: [ENGINES_BOTH[0]], engine: 'main', onEngineChange: () => {} });
       expect(html).not.toContain('Основная');
-      expect(html).not.toContain('Bonsai');
+      expect(html).not.toContain('Gemma 4');
     }
   });
   // Точки и подсказки на сегментах без снимка нет: состояние другого стенда по
   // чужому снимку не знать (тот же инвариант Ф6), выдумывать его нечем.
   it('без данных — на сегментах нет точки и подсказки', () => {
     const html = renderTab({
-      data: null, loading: false, error: 'failed', engines: ENGINES_BOTH, engine: 'bonsai', onEngineChange: () => {},
+      data: null, loading: false, error: 'failed', engines: ENGINES_BOTH, engine: 'gemma', onEngineChange: () => {},
     });
-    expect(html).toContain('Bonsai'); // сам переключатель есть
+    expect(html).toContain('Gemma 4'); // сам переключатель есть
     expect(html).not.toContain('width:6px');
-    expect(html).not.toContain('Bonsai —');
+    expect(html).not.toContain('Gemma 4 —');
   });
 });

@@ -34,43 +34,53 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
     {
         // Без LocalEngines и без правок конфига
         public StatsHost Plain { get; } = new();
-        // Второй стенд bonsai: BaseUrl/Model/StateUrl/FallbackRoute/MetricsUrl из конфига
-        public StatsHost Bonsai { get; } = new(BonsaiConfig(metrics: true));
-        public StatsHost BonsaiNoMetrics { get; } = new(BonsaiConfig(metrics: false));
+        // Второй стенд gemma: BaseUrl/Model/StateUrl/FallbackRoute/MetricsUrl из конфига
+        public StatsHost Engine { get; } = new(EngineConfig(metrics: true));
+        public StatsHost EngineNoMetrics { get; } = new(EngineConfig(metrics: false));
         // Images выключена: IComfyStats нет вовсе (GetService → null)
-        public StatsHost BonsaiImagesOff { get; } = new(comfy: false,
-            config: [.. BonsaiConfig(metrics: true), ("Subsystems:images:Enabled", "false")]);
+        public StatsHost EngineImagesOff { get; } = new(comfy: false,
+            config: [.. EngineConfig(metrics: true), ("Subsystems:images:Enabled", "false")]);
         public StatsHost LabelsSet { get; } = new(
             ("LlmProviders:local-qwen:Stats:Model", "Qwen3.8-Flash-Next IQ3_XXS"),
             ("LlmProviders:local-qwen:Stats:EngineLabel", " Strata 0.2.7 "),
             ("LlmProviders:local-qwen:Stats:Topology", "разрез слоёв 26/22"));
         public StatsHost LabelsBlank { get; } = new(("LlmProviders:local-qwen:Stats:Model", "  "));
         public StatsHost MediaOff { get; } = new(("LocalModelStats:MediaForUsers", "false"));
+        // Подписи вкладок из конфига + локальный провайдер БЕЗ Stats, который по алфавиту идёт
+        // раньше local-qwen (01.11.2026 такой провайдер прятал панель: брался первый IsLocal).
+        public StatsHost TitlesSet { get; } = new(config: [.. EngineConfig(metrics: true),
+            ("LocalEngines:gemma:Title", "Gemma 4"),
+            ("LlmProviders:local-qwen:Stats:Title", "Flash-Next"),
+            ("LlmProviders:local-aaa-chat:DisplayName", "Локальный чат без статистики"),
+            ("LlmProviders:local-aaa-chat:AnthropicBaseUrl", "http://127.0.0.1:1"),
+            ("LlmProviders:local-aaa-chat:IsLocal", "true"),
+            ("LlmProviders:local-aaa-chat:Models:0:Id", "aaa-chat-model")]);
         // Вертикаль Llm выключена: сервисов вертикали в контейнере нет, подмен тоже
         public LlmOffHost LlmOff { get; } = new();
 
         public void Dispose()
         {
             Plain.Dispose();
-            Bonsai.Dispose();
-            BonsaiNoMetrics.Dispose();
-            BonsaiImagesOff.Dispose();
+            Engine.Dispose();
+            EngineNoMetrics.Dispose();
+            EngineImagesOff.Dispose();
             LabelsSet.Dispose();
             LabelsBlank.Dispose();
             MediaOff.Dispose();
+            TitlesSet.Dispose();
             LlmOff.Dispose();
         }
 
-        private static (string Key, string Value)[] BonsaiConfig(bool metrics)
+        private static (string Key, string Value)[] EngineConfig(bool metrics)
         {
             var config = new List<(string Key, string Value)>
             {
-                ("LocalEngines:bonsai:BaseUrl", "http://127.0.0.1:18030"),
-                ("LocalEngines:bonsai:Model", "bonsai2-27b"),
-                ("LocalEngines:bonsai:StateUrl", "http://127.0.0.1:8090/state"),
-                ("LocalEngines:bonsai:FallbackRoute", "direct:minimax"),
+                ("LocalEngines:gemma:BaseUrl", "http://127.0.0.1:18030"),
+                ("LocalEngines:gemma:Model", "gemma-4-26b-a4b"),
+                ("LocalEngines:gemma:StateUrl", "http://127.0.0.1:8090/state"),
+                ("LocalEngines:gemma:FallbackRoute", "direct:minimax"),
             };
-            if (metrics) config.Add(("LocalEngines:bonsai:MetricsUrl", "http://127.0.0.1:18030/metrics"));
+            if (metrics) config.Add(("LocalEngines:gemma:MetricsUrl", "http://127.0.0.1:18030/metrics"));
             return [.. config];
         }
     }
@@ -135,7 +145,7 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
         }
 
         // Второй стенд: читатель главного — по просьбе, дорожки и арбитр — фейки, флаг — по просьбе
-        public StatsHost UseBonsai(
+        public StatsHost UseEngine(
             FakeDirectory dir, FakeArbiterReader? arbiter = null, IComfyStats? comfy = null,
             bool mainConfigured = false, bool flag = true)
         {
@@ -1175,7 +1185,7 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
     [Fact]
     public async Task Engines_НеАдмин_403()
     {
-        var factory = _hosts.Bonsai.UseBonsai(new FakeDirectory());
+        var factory = _hosts.Engine.UseEngine(new FakeDirectory());
         using var user = factory.CreateAuthenticatedClient(
             TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
         (await user.GetAsync("/api/local-model/engines")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
@@ -1186,33 +1196,52 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
     [Fact]
     public async Task Engines_БезФлага_404()
     {
-        var factory = _hosts.Bonsai.UseBonsai(new FakeDirectory(), flag: false);
+        var factory = _hosts.Engine.UseEngine(new FakeDirectory(), flag: false);
         using var admin = factory.CreateAuthenticatedClient();
         (await admin.GetAsync("/api/local-model/engines")).StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     // Список для переключателя: main — всегда первым; известный движок с дорожкой — configured.
-    // «Bonsai без vLLM тоже configured» (Ф6): main не настроен, bonsai — настроен.
+    // «Engine без vLLM тоже configured» (Ф6): main не настроен, gemma — настроен.
     // Мутация: не отдавать title/main — первые assert'ы краснеют.
     [Fact]
-    public async Task Engines_СписокДвижков_MainИBonsai()
+    public async Task Engines_СписокДвижков_MainИEngine()
     {
         var dir = new FakeDirectory();
         dir.Currents["main"] = new LocalModelStatsCurrent { Configured = false, Status = "notConnected" };
-        dir.Currents["bonsai"] = new LocalModelStatsCurrent { Configured = true, Engine = "llama-server", Status = "working" };
-        var factory = _hosts.Bonsai.UseBonsai(dir, mainConfigured: false);
+        dir.Currents["gemma"] = new LocalModelStatsCurrent { Configured = true, Engine = "llama-server", Status = "working" };
+        var factory = _hosts.Engine.UseEngine(dir, mainConfigured: false);
         using var admin = factory.CreateAuthenticatedClient();
 
         var body = await (await admin.GetAsync("/api/local-model/engines")).Content.ReadFromJsonAsync<JsonElement>();
         var list = body.EnumerateArray().ToList();
-        list.Count.Should().Be(2, "main + известный bonsai");
+        list.Count.Should().Be(2, "main + известный gemma");
 
         list[0].GetProperty("name").GetString().Should().Be("main");
         list[0].GetProperty("title").GetString().Should().Be("Основная");
         list[0].GetProperty("configured").GetBoolean().Should().BeFalse("vLLM не настроен");
-        list[1].GetProperty("name").GetString().Should().Be("bonsai");
-        list[1].GetProperty("title").GetString().Should().Be("Bonsai", "подпись сегмента — ключ с заглавной");
-        list[1].GetProperty("configured").GetBoolean().Should().BeTrue("Bonsai без vLLM тоже configured");
+        list[1].GetProperty("name").GetString().Should().Be("gemma");
+        list[1].GetProperty("title").GetString().Should().Be("Gemma", "подпись сегмента без Title — ключ с заглавной");
+        list[1].GetProperty("configured").GetBoolean().Should().BeTrue("Engine без vLLM тоже configured");
+    }
+
+    // Подписи вкладок — короткие названия моделей из конфига: Stats:Title основного локального
+    // провайдера и LocalEngines:<имя>:Title. Основной провайдер — первый IsLocal СО Stats, даже если
+    // раньше по алфавиту стоит локальный провайдер без Stats. Мутация: брать первый IsLocal —
+    // main получит «Основная», первый assert краснеет; не читать Title движка — краснеет второй.
+    [Fact]
+    public async Task Engines_ПодписиИзКонфига_ИПровайдерСоStats()
+    {
+        var dir = new FakeDirectory();
+        dir.Currents["main"] = new LocalModelStatsCurrent { Configured = true, Status = "working" };
+        dir.Currents["gemma"] = new LocalModelStatsCurrent { Configured = true, Engine = "llama-server", Status = "working" };
+        var factory = _hosts.TitlesSet.UseEngine(dir, mainConfigured: true);
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var body = await (await admin.GetAsync("/api/local-model/engines")).Content.ReadFromJsonAsync<JsonElement>();
+        var list = body.EnumerateArray().ToList();
+        list[0].GetProperty("title").GetString().Should().Be("Flash-Next", "Stats:Title провайдера со Stats, а не первого IsLocal");
+        list[1].GetProperty("title").GetString().Should().Be("Gemma 4", "LocalEngines:gemma:Title");
     }
 
     // Условие ревью 1 (R-F1, «Хвосты»): известный, но не настроенный движок — запись с
@@ -1224,13 +1253,13 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
     {
         var dir = new FakeDirectory();
         dir.Currents["main"] = new LocalModelStatsCurrent { Configured = true, Status = "working" };
-        var factory = _hosts.BonsaiNoMetrics.UseBonsai(dir, mainConfigured: true);
+        var factory = _hosts.EngineNoMetrics.UseEngine(dir, mainConfigured: true);
         using var admin = factory.CreateAuthenticatedClient();
 
         var body = await (await admin.GetAsync("/api/local-model/engines")).Content.ReadFromJsonAsync<JsonElement>();
         var list = body.EnumerateArray().ToList();
         list.Count.Should().Be(2);
-        list[1].GetProperty("name").GetString().Should().Be("bonsai");
+        list[1].GetProperty("name").GetString().Should().Be("gemma");
         list[1].GetProperty("configured").GetBoolean().Should().BeFalse("нет дорожки статистики — не настроен");
     }
 
@@ -1239,7 +1268,7 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
     [Fact]
     public async Task Engines_НичегоНеНастроено_НеПустойСписок()
     {
-        var factory = _hosts.Plain.UseBonsai(new FakeDirectory());
+        var factory = _hosts.Plain.UseEngine(new FakeDirectory());
         using var admin = factory.CreateAuthenticatedClient();
 
         var body = await (await admin.GetAsync("/api/local-model/engines")).Content.ReadFromJsonAsync<JsonElement>();
@@ -1273,11 +1302,11 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
     public async Task StatsEngine_НеАдмин_403()
     {
         var dir = new FakeDirectory();
-        dir.Currents["bonsai"] = new LocalModelStatsCurrent { Configured = true, Engine = "llama-server", Status = "working" };
-        var factory = _hosts.Bonsai.UseBonsai(dir);
+        dir.Currents["gemma"] = new LocalModelStatsCurrent { Configured = true, Engine = "llama-server", Status = "working" };
+        var factory = _hosts.Engine.UseEngine(dir);
         using var user = factory.CreateAuthenticatedClient(
             TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
-        (await user.GetAsync("/api/local-model/stats?engine=bonsai")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await user.GetAsync("/api/local-model/stats?engine=gemma")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
     }
 
     // Флаг для новой формы ручки: без него 404. Без engine флаг не проверялся и не проверяется
@@ -1285,16 +1314,16 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
     [Fact]
     public async Task StatsEngine_БезФлага_404()
     {
-        var factory = _hosts.Bonsai.UseBonsai(new FakeDirectory(), flag: false);
+        var factory = _hosts.Engine.UseEngine(new FakeDirectory(), flag: false);
         using var admin = factory.CreateAuthenticatedClient();
-        (await admin.GetAsync("/api/local-model/stats?engine=bonsai")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await admin.GetAsync("/api/local-model/stats?engine=gemma")).StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     // Неизвестный движок — 200 {configured:false, status:notConnected}, не 404/500; блока duty нет.
     [Fact]
     public async Task StatsEngine_НеизвестныйДвижок_ConfiguredFalse()
     {
-        var factory = _hosts.Bonsai.UseBonsai(new FakeDirectory());
+        var factory = _hosts.Engine.UseEngine(new FakeDirectory());
         using var admin = factory.CreateAuthenticatedClient();
 
         var resp = await admin.GetAsync("/api/local-model/stats?engine=nope");
@@ -1313,7 +1342,7 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
         SetFlag(factory, true);
         using var admin = factory.CreateAuthenticatedClient();
 
-        var resp = await admin.GetAsync("/api/local-model/stats?engine=bonsai");
+        var resp = await admin.GetAsync("/api/local-model/stats?engine=gemma");
         resp.StatusCode.Should().Be(HttpStatusCode.OK, "выключенная Llm — 200, не 500");
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
         body.GetProperty("configured").GetBoolean().Should().BeFalse();
@@ -1326,42 +1355,42 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
     // FallbackRoute), арбитр из клиента, причины разбиты на kind/raw, «comfy» — вид по шву
     // Images с known=true, ответы часа — из реального журнала вызовов мест.
     [Fact]
-    public async Task StatsEngine_Bonsai_СтенСБлокомДежурство()
+    public async Task StatsEngine_Engine_СтенСБлокомДежурство()
     {
         var t0 = new DateTimeOffset(2026, 10, 28, 11, 0, 0, TimeSpan.Zero);
         var dir = new FakeDirectory();
-        dir.Currents["bonsai"] = new LocalModelStatsCurrent
+        dir.Currents["gemma"] = new LocalModelStatsCurrent
         {
-            Configured = true, Engine = "llama-server", Model = "bonsai2-27b", Status = "busy",
+            Configured = true, Engine = "llama-server", Model = "gemma-4-26b-a4b", Status = "busy",
             Running = 1, Waiting = 0,
             Kv = new LocalModelStatsKv { GenPerStream = 21.0, PrefillPerStream = 640.0 },
             Unsupported = ["KvUsagePerc", "Preemptions"],
         };
-        dir.BonsaiPoints.Add(new LocalModelStatsPoint { Timestamp = t0, GenThroughput = 21.0, Running = 1, Waiting = 0 });
+        dir.EnginePoints.Add(new LocalModelStatsPoint { Timestamp = t0, GenThroughput = 21.0, Running = 1, Waiting = 0 });
 
         var arbiter = new FakeArbiterReader();
-        arbiter.Snapshots["bonsai"] = new EngineArbiterSnapshot(
-            Reachable: true, Bonsai: "yielded",
+        arbiter.Snapshots["gemma"] = new EngineArbiterSnapshot(
+            Reachable: true, State: "yielded",
             Reasons: ["comfy:a1b2c3d4", "lease:съёмка хода", "gpu:4217:llama-server --metrics"],
             SinceAt: t0, Yields: 14, Returns: 13, LastYieldS: 0.2, LastReturnS: 6.1,
             Mode: "shared", QuietLeftS: null,
             Leases: [new EngineArbiterLease("съёмка хода", 37.5)],
             SeenAt: t0);
 
-        var factory = _hosts.Bonsai.UseBonsai(dir, arbiter, new KindComfyStats());
+        var factory = _hosts.Engine.UseEngine(dir, arbiter, new KindComfyStats());
         var ledger = factory.Services.GetRequiredService<EngineCallLedger>();
-        var done = ledger.Begin("bonsai", "chat-retitle")!;
+        var done = ledger.Begin("gemma", "chat-retitle")!;
         done.Step(EngineCallLink.Insurance);
         done.End(EngineCallOutcome.Insurance); // закрыт: ушёл из «сейчас» в корзину часа
 
         using var admin = factory.CreateAuthenticatedClient();
-        var resp = await admin.GetAsync($"/api/local-model/stats?engine=bonsai&since={(long)t0.AddSeconds(-60).ToUnixTimeMilliseconds()}");
+        var resp = await admin.GetAsync($"/api/local-model/stats?engine=gemma&since={(long)t0.AddSeconds(-60).ToUnixTimeMilliseconds()}");
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
 
         body.GetProperty("configured").GetBoolean().Should().BeTrue();
         body.GetProperty("engine").GetString().Should().Be("llama-server", "engine — тип движка, не имя стенда");
-        body.GetProperty("model").GetString().Should().Be("bonsai2-27b");
+        body.GetProperty("model").GetString().Should().Be("gemma-4-26b-a4b");
         body.GetProperty("status").GetString().Should().Be("busy");
         body.GetProperty("running").GetInt32().Should().Be(1);
         // Счётчик хода не видит вызовов мест (они мимо шлюза): «прочие» — всё, что сообщает движок.
@@ -1379,7 +1408,7 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
 
         var duty = body.GetProperty("duty");
         duty.GetProperty("chain").EnumerateArray().Select(s => s.GetString()!)
-            .Should().Equal(new[] { "bonsai", "insurance", "claude" }, "цепочка типичная: own → страховка (есть FallbackRoute) → облако");
+            .Should().Equal(new[] { "engine", "insurance", "claude" }, "цепочка типичная: own → страховка (есть FallbackRoute) → облако");
 
         var ar = duty.GetProperty("arbiter");
         ar.GetProperty("reachable").GetBoolean().Should().BeTrue();
@@ -1410,7 +1439,7 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
 
         var answers = duty.GetProperty("answersLastHour");
         answers.GetProperty("insurance").GetInt32().Should().Be(1);
-        answers.GetProperty("bonsai").GetInt32().Should().Be(0);
+        answers.GetProperty("engine").GetInt32().Should().Be(0);
         answers.GetProperty("missed").GetInt32().Should().Be(0);
         answers.GetProperty("sinceAt").GetInt64().Should().BeGreaterThan(0, "знаменатель доли — max(now−1ч, старт процесса)");
     }
@@ -1420,19 +1449,19 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
     // отсутствие поля и не строка. Б5 заводит записи без звена до первого Step.
     // Мутация: отдать вместо null "queued" — второй assert краснеет.
     [Fact]
-    public async Task StatsEngine_Bonsai_CallsNow_LinkNullЖдётВОчереди()
+    public async Task StatsEngine_Engine_CallsNow_LinkNullЖдётВОчереди()
     {
         var dir = new FakeDirectory();
-        dir.Currents["bonsai"] = new LocalModelStatsCurrent { Configured = true, Engine = "llama-server", Status = "working" };
-        var factory = _hosts.Bonsai.UseBonsai(dir, new FakeArbiterReader());
+        dir.Currents["gemma"] = new LocalModelStatsCurrent { Configured = true, Engine = "llama-server", Status = "working" };
+        var factory = _hosts.Engine.UseEngine(dir, new FakeArbiterReader());
 
         var ledger = factory.Services.GetRequiredService<EngineCallLedger>();
-        ledger.Begin("bonsai", "chat-retitle"); // без Step: ждёт пробы готовности/слота
-        var onLink = ledger.Begin("bonsai", "note-toc")!;
-        onLink.Step(EngineCallLink.Bonsai);
+        ledger.Begin("gemma", "chat-retitle"); // без Step: ждёт пробы готовности/слота
+        var onLink = ledger.Begin("gemma", "note-toc")!;
+        onLink.Step(EngineCallLink.Engine);
 
         using var admin = factory.CreateAuthenticatedClient();
-        var body = await (await admin.GetAsync("/api/local-model/stats?engine=bonsai")).Content.ReadFromJsonAsync<JsonElement>();
+        var body = await (await admin.GetAsync("/api/local-model/stats?engine=gemma")).Content.ReadFromJsonAsync<JsonElement>();
 
         var calls = body.GetProperty("duty").GetProperty("callsNow").EnumerateArray().ToList();
         calls.Count.Should().Be(2, "открытые вызовы — оба");
@@ -1441,30 +1470,30 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
         waiting.TryGetProperty("link", out var link).Should().BeTrue("link обязан присутствовать — явно null");
         link.ValueKind.Should().Be(JsonValueKind.Null, "null = «ждёт в очереди» (контракт фронта)");
         waiting.GetProperty("durationS").GetDouble().Should().BeGreaterThanOrEqualTo(0);
-        calls.Should().Contain(c => c.GetProperty("link").GetString() == "bonsai", "войдящий в цепочку — со звеном");
+        calls.Should().Contain(c => c.GetProperty("link").GetString() == "engine", "войдящий в цепочку — со звеном");
     }
 
     // c3: в сериализованном JSON нет ни id аренд (их создал аноним, их снимает клиент), ни
     // маркера вида "gpu:" (разбит на kind/raw). Аренда — ровно reason/leftS.
     // Мутация: отдать в LeaseDto id — EnumerateObject краснеет; не разбивать префикс — NotContain краснеет.
     [Fact]
-    public async Task StatsEngine_Bonsai_НетIdАрендИПрефиксаGpu()
+    public async Task StatsEngine_Engine_НетIdАрендИПрефиксаGpu()
     {
         var t0 = new DateTimeOffset(2026, 10, 28, 11, 0, 0, TimeSpan.Zero);
         var dir = new FakeDirectory();
-        dir.Currents["bonsai"] = new LocalModelStatsCurrent { Configured = true, Engine = "llama-server", Status = "working" };
+        dir.Currents["gemma"] = new LocalModelStatsCurrent { Configured = true, Engine = "llama-server", Status = "working" };
         var arbiter = new FakeArbiterReader();
-        arbiter.Snapshots["bonsai"] = new EngineArbiterSnapshot(
-            Reachable: true, Bonsai: "ready",
+        arbiter.Snapshots["gemma"] = new EngineArbiterSnapshot(
+            Reachable: true, State: "ready",
             Reasons: ["gpu:4217:llama-server --metrics"],
             SinceAt: t0, Yields: 0, Returns: 0, LastYieldS: null, LastReturnS: null,
             Mode: null, QuietLeftS: null,
             Leases: [new EngineArbiterLease("съёмка хода", 37.5)],
             SeenAt: t0);
-        var factory = _hosts.Bonsai.UseBonsai(dir, arbiter);
+        var factory = _hosts.Engine.UseEngine(dir, arbiter);
         using var admin = factory.CreateAuthenticatedClient();
 
-        var raw = await (await admin.GetAsync("/api/local-model/stats?engine=bonsai")).Content.ReadAsStringAsync();
+        var raw = await (await admin.GetAsync("/api/local-model/stats?engine=gemma")).Content.ReadAsStringAsync();
         raw.Should().NotContain("gpu:", "префикс вида наружу не отдаётся");
         raw.Should().NotContain("lease:", "префикс вида наружу не отдаётся");
 
@@ -1476,20 +1505,20 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
     // c1: выключенная Images → у именованного стенда нет Gpus и jobKind (шва нет — вид не
     // утверждаем; known остаётся null). Мутация: звать IComfyStats без null-проверки — 500, краснеет.
     [Fact]
-    public async Task StatsEngine_Bonsai_ImagesВыключена_GpusNull_JobKindNull()
+    public async Task StatsEngine_Engine_ImagesВыключена_GpusNull_JobKindNull()
     {
         var t0 = new DateTimeOffset(2026, 10, 28, 11, 0, 0, TimeSpan.Zero);
         var dir = new FakeDirectory();
-        dir.Currents["bonsai"] = new LocalModelStatsCurrent { Configured = true, Engine = "llama-server", Status = "working" };
+        dir.Currents["gemma"] = new LocalModelStatsCurrent { Configured = true, Engine = "llama-server", Status = "working" };
         var arbiter = new FakeArbiterReader();
-        arbiter.Snapshots["bonsai"] = new EngineArbiterSnapshot(
-            Reachable: true, Bonsai: "waiting-vram", Reasons: ["comfy:a1b2c3d4"],
+        arbiter.Snapshots["gemma"] = new EngineArbiterSnapshot(
+            Reachable: true, State: "waiting-vram", Reasons: ["comfy:a1b2c3d4"],
             SinceAt: t0, Yields: 1, Returns: 0, LastYieldS: 0.2, LastReturnS: null,
             Mode: "shared", QuietLeftS: null, Leases: null, SeenAt: t0);
-        var factory = _hosts.BonsaiImagesOff.UseBonsai(dir, arbiter);
+        var factory = _hosts.EngineImagesOff.UseEngine(dir, arbiter);
 
         using var admin = factory.CreateAuthenticatedClient();
-        var resp = await admin.GetAsync("/api/local-model/stats?engine=bonsai");
+        var resp = await admin.GetAsync("/api/local-model/stats?engine=gemma");
         resp.StatusCode.Should().Be(HttpStatusCode.OK, "выключенная Images — 200, не 500");
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
 
@@ -1503,18 +1532,18 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
     // Статус "yielded" (Б3b) проходит как есть: выгруженная под арбитром модель — не авария,
     // downSince null. Мутация: подменить "yielded" на "down" в контроллере — тест краснеет.
     [Fact]
-    public async Task StatsEngine_Bonsai_StatusYieldedБезDownSince()
+    public async Task StatsEngine_Engine_StatusYieldedБезDownSince()
     {
         var dir = new FakeDirectory();
-        dir.Currents["bonsai"] = new LocalModelStatsCurrent
+        dir.Currents["gemma"] = new LocalModelStatsCurrent
         {
             Configured = true, Engine = "llama-server", Status = "yielded", DownSince = null,
             Running = 0, Waiting = 0,
         };
-        var factory = _hosts.Bonsai.UseBonsai(dir, new FakeArbiterReader());
+        var factory = _hosts.Engine.UseEngine(dir, new FakeArbiterReader());
         using var admin = factory.CreateAuthenticatedClient();
 
-        var body = await (await admin.GetAsync("/api/local-model/stats?engine=bonsai")).Content.ReadFromJsonAsync<JsonElement>();
+        var body = await (await admin.GetAsync("/api/local-model/stats?engine=gemma")).Content.ReadFromJsonAsync<JsonElement>();
         body.GetProperty("status").GetString().Should().Be("yielded");
         body.GetProperty("downSince").ValueKind.Should().Be(JsonValueKind.Null, "уступка — не сбой");
     }
@@ -1578,11 +1607,11 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
     }
 
     // Фейковый справочник дорожек (Б3c): тест задаёт снимки дорожек по именам; HistoryOf —
-    // фиксированные точки для "bonsai", пусто для остальных.
+    // фиксированные точки для "gemma", пусто для остальных.
     public sealed class FakeDirectory : ILocalEngineStatsDirectory
     {
         public Dictionary<string, LocalModelStatsCurrent> Currents { get; } = new(StringComparer.Ordinal);
-        public List<LocalModelStatsPoint> BonsaiPoints { get; } = [];
+        public List<LocalModelStatsPoint> EnginePoints { get; } = [];
 
         public IReadOnlyList<string> Names => [.. Currents.Keys];
 
@@ -1590,7 +1619,7 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
             Currents.TryGetValue(name, out var c) ? c : null;
 
         public IReadOnlyList<LocalModelStatsPoint> HistoryOf(string name, TimeSpan window, long? sinceUnixMs = null) =>
-            name == "bonsai" ? BonsaiPoints : [];
+            name == "gemma" ? EnginePoints : [];
     }
 
     // Фейковый читатель состояния арбитра: подготовленный снимок по имени движка;

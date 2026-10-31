@@ -218,7 +218,7 @@ public sealed class EngineStatsTrack
             _log.LogDebug(ex, "Поллер метрик локального стенда: сбой состояния арбитра");
             return false;
         }
-        return s is { Reachable: true } && s.Bonsai
+        return s is { Reachable: true } && s.State
             is EngineArbiterSnapshot.StateYielded
             or EngineArbiterSnapshot.StateStarting
             or EngineArbiterSnapshot.StateWaitingVram;

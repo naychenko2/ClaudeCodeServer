@@ -1,4 +1,4 @@
-// «Дежурство» — последний блок стенда второй модели (Bonsai): почему уступила карту,
+// «Дежурство» — последний блок стенда второй модели (второй движок): почему уступила карту,
 // когда вернётся, куда идут места прямо сейчас и доля ответов за час (макет
 // docs/mockups/bonsai-toolbar.md, раздел 5). Данные — duty из stats?engine= (контракт Ф0);
 // нет поля или null — блока нет. Все подписи строит dutyFormat.ts (тесты — там же).
@@ -89,7 +89,7 @@ function MediaLink({ onOpen }: { onOpen: () => void }) {
   );
 }
 
-// === Цепочка «Bonsai → страховка → облако» ===
+// === Цепочка «локальная → страховка → облако» ===
 // Текущее звено — куда пойдёт СЛЕДУЮЩИЙ вызов места (currentChainLink): фон accentLight,
 // рамка accent, текст textHeading 700; пройденные — textMuted; следующие — textSecondary.
 // На узкой ширине (мобильная раскладка) плашки идут в столбик, стрелка поворачивается.
@@ -136,7 +136,7 @@ function ChainBlock({ status, isMobile }: { status: LocalModelStats['status']; i
 
 // === Ответы мест за час ===
 const SEG_COLOR: Record<AnswersSegment['key'], string> = {
-  bonsai: C.success, insurance: C.info, claude: C.accent, missed: C.danger,
+  engine: C.success, insurance: C.info, claude: C.accent, missed: C.danger,
 };
 
 // nowMs — момент получения снимка (якорь DutyBlock), не плавающее «сейчас»:
@@ -293,8 +293,8 @@ export function DutyBlock({ data, isMobile, onOpenMedia }: {
         )}
         {notYieldedByArbiter && (
           <>
-            <Row k="Арбитр" v="Bonsai не выгружал" />
-            <Hint>Смотрите журнал bonsai.service на Video.</Hint>
+            <Row k="Арбитр" v="модель не выгружалась" />
+            <Hint>Смотрите журнал local-llm.service на Video.</Hint>
           </>
         )}
         {hasTopRows && <div style={SEPR} />}
@@ -316,7 +316,7 @@ export function DutyBlock({ data, isMobile, onOpenMedia }: {
   );
 }
 
-// === «Кто сейчас на модели» для Bonsai: строки из duty.callsNow ===
+// === «Кто сейчас на модели» для второй движок: строки из duty.callsNow ===
 // Это журнал вызовов мест, а не чаты: строка — div, не кнопка (36/44), клика и перехода
 // нет (макет §3, §6). Для основного движка остаётся WhoCard из TextTab.
 export function DutyCallsCard({ data, isMobile }: { data: LocalModelStats; isMobile: boolean }) {

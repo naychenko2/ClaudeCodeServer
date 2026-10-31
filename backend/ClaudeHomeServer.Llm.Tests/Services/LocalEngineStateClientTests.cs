@@ -15,7 +15,7 @@ namespace ClaudeHomeServer.Tests.Services;
 [Collection(LlmTestCollections.TimingSensitive)]
 public class LocalEngineStateClientTests
 {
-    private const string Engine = "bonsai";
+    private const string Engine = "gemma";
 
     private sealed class PlainHttpFactory : IHttpClientFactory
     {
@@ -106,16 +106,16 @@ public class LocalEngineStateClientTests
     {
         var engines = new NamedLocalEngines(new PlainHttpFactory(), Config(new()
         {
-            ["LocalEngines:bonsai:BaseUrl"] = "http://127.0.0.1:1",
-            ["LocalEngines:bonsai:Model"] = "bonsai-9b",
-            ["LocalEngines:bonsai:StateUrl"] = withStateUrl ? stub.Url + "/state" : null,
+            ["LocalEngines:gemma:BaseUrl"] = "http://127.0.0.1:1",
+            ["LocalEngines:gemma:Model"] = "gemma-4-26b-a4b",
+            ["LocalEngines:gemma:StateUrl"] = withStateUrl ? stub.Url + "/state" : null,
         }), NullLoggerFactory.Instance);
         return new LocalEngineStateClient(engines, new PlainHttpFactory());
     }
 
     // Тело как у живого арбитра (gpu-arbiter.py, do_GET /state): ts/since — его часы.
     private static string GoodBody(long ts = 1_700_000_000, long since = 1_699_999_900) =>
-        "{\"bonsai\":\"yielded\",\"reasons\":[\"lease:lora-train\"],\"since\":" + since +
+        "{\"engine\":\"yielded\",\"reasons\":[\"lease:lora-train\"],\"since\":" + since +
         ",\"yields\":3,\"returns\":2,\"last_yield_s\":0.4,\"last_return_s\":1.2," +
         "\"mode\":\"exclusive\",\"quiet_left_s\":null," +
         "\"leases\":{\"id1\":{\"reason\":\"lora-train\",\"left_s\":120.5}},\"ts\":" + ts + "}";
@@ -166,7 +166,7 @@ public class LocalEngineStateClientTests
         var second = await client.GetAsync(Engine);
 
         Assert.Equal(1, stub.RequestCount);
-        Assert.Equal(EngineArbiterSnapshot.StateYielded, first!.Bonsai);
+        Assert.Equal(EngineArbiterSnapshot.StateYielded, first!.State);
         Assert.Same(first, second);
     }
 
@@ -179,7 +179,7 @@ public class LocalEngineStateClientTests
 
         Assert.NotNull(s);
         Assert.False(s.Reachable);
-        Assert.Null(s.Bonsai);
+        Assert.Null(s.State);
         Assert.Null(s.Reasons);
         Assert.Null(s.SinceAt);
         Assert.Null(s.Yields);
@@ -202,7 +202,7 @@ public class LocalEngineStateClientTests
         Assert.True(good!.Reachable);
         Assert.False(bad!.Reachable);
         Assert.Equal(2, stub.RequestCount);
-        Assert.Equal(EngineArbiterSnapshot.StateYielded, bad.Bonsai);
+        Assert.Equal(EngineArbiterSnapshot.StateYielded, bad.State);
         Assert.Equal(3, bad.Yields);
         Assert.Equal(good.SeenAt, bad.SeenAt);
         Assert.Equal(good.SinceAt, bad.SinceAt);
@@ -231,8 +231,8 @@ public class LocalEngineStateClientTests
     public async Task AbsurdClocks_ZeroOnlySinceAt_SnapshotKept()
     {
         var nowUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        var future = "{\"bonsai\":\"yielded\",\"yields\":7,\"ts\":" + nowUnix + ",\"since\":" + (nowUnix + 600) + "}";
-        var huge = "{\"bonsai\":\"yielded\",\"yields\":8,\"ts\":1e18,\"since\":1699999990}";
+        var future = "{\"engine\":\"yielded\",\"yields\":7,\"ts\":" + nowUnix + ",\"since\":" + (nowUnix + 600) + "}";
+        var huge = "{\"engine\":\"yielded\",\"yields\":8,\"ts\":1e18,\"since\":1699999990}";
         using var stub = new Stub(n => (200, n == 1 ? future : huge, 0));
         var client = ClientFor(stub);
 
@@ -240,7 +240,7 @@ public class LocalEngineStateClientTests
         Assert.NotNull(a);
         Assert.True(a.Reachable);
         Assert.Null(a.SinceAt);
-        Assert.Equal(EngineArbiterSnapshot.StateYielded, a.Bonsai);
+        Assert.Equal(EngineArbiterSnapshot.StateYielded, a.State);
         Assert.Equal(7, a.Yields);
 
         await Task.Delay(1100); // окно кэша истекло — будет второй запрос
@@ -251,18 +251,33 @@ public class LocalEngineStateClientTests
         Assert.Equal(8, b.Yields);
     }
 
+    // Арбитр до 01.11.2026 отдавал состояние полем "bonsai": новый клиент читает его как запасное,
+    // а поле "engine" приоритетнее. Мутация: убрать запасное чтение — первый assert краснеет;
+    // поменять приоритет — второй.
+    [Fact]
+    public async Task LegacyBonsaiField_ReadAsFallback()
+    {
+        var legacy = "{\"bonsai\":\"yielded\",\"ts\":1700000000,\"since\":1699999990}";
+        using (var stub = new Stub(_ => (200, legacy, 0)))
+            Assert.Equal(EngineArbiterSnapshot.StateYielded, (await ClientFor(stub).GetAsync(Engine))!.State);
+
+        var both = "{\"engine\":\"ready\",\"bonsai\":\"yielded\",\"ts\":1700000000,\"since\":1699999990}";
+        using (var stub = new Stub(_ => (200, both, 0)))
+            Assert.Equal(EngineArbiterSnapshot.StateReady, (await ClientFor(stub).GetAsync(Engine))!.State);
+    }
+
     // c3: неверный тип поля обнуляет только это поле, остальные читаются.
     [Fact]
     public async Task BadFieldType_ZeroesOnlyThatField()
     {
-        var body = "{\"bonsai\":\"ready\",\"reasons\":[\"lease:ok\"],\"yields\":\"oops\",\"returns\":2," +
+        var body = "{\"engine\":\"ready\",\"reasons\":[\"lease:ok\"],\"yields\":\"oops\",\"returns\":2," +
             "\"mode\":5,\"quiet_left_s\":\"soon\",\"last_yield_s\":0.4,\"ts\":1700000000,\"since\":1699999990}";
         using var stub = new Stub(_ => (200, body, 0));
         var s = await ClientFor(stub).GetAsync(Engine);
 
         Assert.NotNull(s);
         Assert.True(s.Reachable);
-        Assert.Equal(EngineArbiterSnapshot.StateReady, s.Bonsai);
+        Assert.Equal(EngineArbiterSnapshot.StateReady, s.State);
         Assert.Equal(["lease:ok"], s.Reasons);
         Assert.Null(s.Yields);        // строка вместо числа
         Assert.Equal(2, s.Returns);   // соседнее поле живое
@@ -281,7 +296,7 @@ public class LocalEngineStateClientTests
         var longLease = new string('x', 500);
         var gpuReason = "gpu:1234:/usr/bin/python some --long cmd " + new string('y', 100);
         var comfyReason = "comfy:" + new string('c', 200);
-        var body = "{\"bonsai\":\"yielded\",\"reasons\":[\"lease:" + longLease + "\",\"" + gpuReason +
+        var body = "{\"engine\":\"yielded\",\"reasons\":[\"lease:" + longLease + "\",\"" + gpuReason +
             "\",\"" + comfyReason + "\"]," +
             "\"leases\":{\"a\":{\"reason\":\"" + new string('r', 500) + "\",\"left_s\":120.5}}," +
             "\"ts\":1700000000,\"since\":1699999990}";
@@ -308,7 +323,7 @@ public class LocalEngineStateClientTests
     public async Task SurrogateAtTruncateBoundary_PairNotSplit_NoReplacementCharInJson()
     {
         var emoji = "\U0001F600"; // вне BMP: старший суррогат D83D + младший DE00
-        var body = "{\"bonsai\":\"yielded\",\"reasons\":[\"lease:" + new string('x', 57) + emoji +
+        var body = "{\"engine\":\"yielded\",\"reasons\":[\"lease:" + new string('x', 57) + emoji +
             "\",\"gpu:" + new string('y', 75) + emoji + "\"],\"ts\":1700000000,\"since\":1699999990}";
         using var stub = new Stub(_ => (200, body, 0));
         var s = await ClientFor(stub).GetAsync(Engine);
@@ -336,7 +351,7 @@ public class LocalEngineStateClientTests
     [Fact]
     public async Task NoPrefixReason_TruncatedAt80()
     {
-        var body = "{\"bonsai\":\"yielded\",\"reasons\":[\"" + new string('z', 100) +
+        var body = "{\"engine\":\"yielded\",\"reasons\":[\"" + new string('z', 100) +
             "\"],\"ts\":1700000000,\"since\":1699999990}";
         using var stub = new Stub(_ => (200, body, 0));
         var s = await ClientFor(stub).GetAsync(Engine);
@@ -351,7 +366,7 @@ public class LocalEngineStateClientTests
     [Fact]
     public async Task ShortReasons_UnderCaps_Unchanged()
     {
-        var body = "{\"bonsai\":\"yielded\",\"reasons\":[\"gpu:4321:/usr/bin/python serve.py --port 8080\"," +
+        var body = "{\"engine\":\"yielded\",\"reasons\":[\"gpu:4321:/usr/bin/python serve.py --port 8080\"," +
             "\"comfy:1a2b3c4d\",\"lease:ok\"],\"ts\":1700000000,\"since\":1699999990}";
         using var stub = new Stub(_ => (200, body, 0));
         var s = await ClientFor(stub).GetAsync(Engine);
@@ -366,13 +381,13 @@ public class LocalEngineStateClientTests
     [Fact]
     public async Task BodyOver64Kb_RefusedWithoutException()
     {
-        var body = "{\"bonsai\":\"ready\",\"junk\":\"" + new string('a', 100_000) + "\"}";
+        var body = "{\"engine\":\"ready\",\"junk\":\"" + new string('a', 100_000) + "\"}";
         using var stub = new Stub(_ => (200, body, 0));
         var s = await ClientFor(stub).GetAsync(Engine);
 
         Assert.NotNull(s);
         Assert.False(s.Reachable);
-        Assert.Null(s.Bonsai);
+        Assert.Null(s.State);
     }
 
     // MAJOR-1 (c1): тело 64 МБ — заведомо больше всех буферов этой машины (tcp_rmem max
@@ -385,7 +400,7 @@ public class LocalEngineStateClientTests
     [Fact]
     public async Task Body64Mb_TailNotRead_SnapshotRejected()
     {
-        var body = "{\"bonsai\":\"ready\",\"junk\":\"" + new string('a', 64_000_000) + "\"}";
+        var body = "{\"engine\":\"ready\",\"junk\":\"" + new string('a', 64_000_000) + "\"}";
         using var stub = new Stub(_ => (200, body, 0));
         var s = await ClientFor(stub).GetAsync(Engine);
 
@@ -408,7 +423,7 @@ public class LocalEngineStateClientTests
     [Fact]
     public async Task SlowBody_Budget800ms_CancelsRead_SnapshotRejected()
     {
-        var body = "{\"bonsai\":\"ready\",\"reasons\":[\"gpu:ok\"],\"ts\":1700000000,\"since\":1699999990}";
+        var body = "{\"engine\":\"ready\",\"reasons\":[\"gpu:ok\"],\"ts\":1700000000,\"since\":1699999990}";
         using var stub = new Stub(_ => (200, body, 1200)); // тело валидное, но позже бюджета
         var s = await ClientFor(stub).GetAsync(Engine);
 
@@ -423,7 +438,7 @@ public class LocalEngineStateClientTests
         var reasons = string.Join(",", Enumerable.Range(0, 40).Select(i => $"\"comfy:{i}\""));
         var leases = string.Join(",", Enumerable.Range(0, 40).Select(i => $"\"l{i}\":{{\"reason\":\"r{i}\",\"left_s\":1}}"));
         using var stub = new Stub(_ => (200,
-            "{\"bonsai\":\"yielded\",\"reasons\":[" + reasons + "],\"leases\":{" + leases + "}," +
+            "{\"engine\":\"yielded\",\"reasons\":[" + reasons + "],\"leases\":{" + leases + "}," +
             "\"ts\":1700000000,\"since\":1699999990}", 0));
         var s = await ClientFor(stub).GetAsync(Engine);
 
@@ -432,16 +447,16 @@ public class LocalEngineStateClientTests
         Assert.Equal(32, s.Leases!.Count);
     }
 
-    // Значение `bonsai` вне списка состояний → unknown; `mode` вне exclusive/shared → null.
+    // Значение `gemma` вне списка состояний → unknown; `mode` вне exclusive/shared → null.
     [Fact]
-    public async Task UnknownBonsai_BecomesUnknown_BadMode_Null()
+    public async Task UnknownEngine_BecomesUnknown_BadMode_Null()
     {
         using var stub = new Stub(_ => (200,
-            "{\"bonsai\":\"dancing\",\"mode\":\"turbo\",\"ts\":1700000000,\"since\":1699999990}", 0));
+            "{\"engine\":\"dancing\",\"mode\":\"turbo\",\"ts\":1700000000,\"since\":1699999990}", 0));
         var s = await ClientFor(stub).GetAsync(Engine);
 
         Assert.NotNull(s);
-        Assert.Equal(EngineArbiterSnapshot.StateUnknown, s.Bonsai);
+        Assert.Equal(EngineArbiterSnapshot.StateUnknown, s.State);
         Assert.Null(s.Mode);
     }
 
@@ -463,10 +478,10 @@ public class LocalEngineStateClientTests
     {
         var engines = new NamedLocalEngines(new PlainHttpFactory(), Config(new()
         {
-            ["LocalEngines:bonsai:BaseUrl"] = "http://192.168.7.107:18030",
-            ["LocalEngines:bonsai:Model"] = "bonsai-9b",
-            ["LocalEngines:bonsai:ReadyUrl"] = "http://192.168.7.107:18031/ready",
-            ["LocalEngines:bonsai:StateUrl"] = "http://192.168.7.107:18031/state",
+            ["LocalEngines:gemma:BaseUrl"] = "http://192.168.7.107:18030",
+            ["LocalEngines:gemma:Model"] = "gemma-4-26b-a4b",
+            ["LocalEngines:gemma:ReadyUrl"] = "http://192.168.7.107:18031/ready",
+            ["LocalEngines:gemma:StateUrl"] = "http://192.168.7.107:18031/state",
         }), NullLoggerFactory.Instance);
 
         Assert.Equal("http://192.168.7.107:18031/state", engines.Get(Engine)!.Spec.StateUrl);

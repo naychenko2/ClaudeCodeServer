@@ -36,7 +36,7 @@ export interface GlyphCandidate {
 // чата, его владелец). Время — unix-мс; kv — доли 0..1 (не проценты и не ГиБ);
 // phase — строка; чужие чаты анонимны (own=false, без sessionId/projectId).
 
-// Снимок панели: GET /api/local-model/stats?window=1m|5m|15m|1h&since=<unix ms>&engine=main|bonsai.
+// Снимок панели: GET /api/local-model/stats?window=1m|5m|15m|1h&since=<unix ms>&engine=main|<имя движка>.
 // configured=false — локальный провайдер не настроен (панель и значок скрыты);
 // status: working | busy | down | notConnected | yielded.
 // 'yielded' — только у движка с StateUrl: метрики молчат, но арбитр сказал, что модель
@@ -122,25 +122,26 @@ export interface LocalModelStats {
   // Сводка «Железо» (только админ): для строки-ссылки «Видеокарты» и точки на вкладке.
   hardware?: import('../features/localModel/hardwareTypes').HardwareBrief;
   unsupported?: string[];
-  // Блок «Дежурство» (типы — ниже): только у движка с StateUrl (Bonsai). Нет поля
+  // Блок «Дежурство» (типы — ниже): только у движка с StateUrl (второй движок). Нет поля
   // или null — блока нет (основной стенд); arbiter:null — StateUrl у движка нет.
   duty?: LocalModelDuty | null;
 }
 
-// === Стенд второй модели (Bonsai): GET /api/local-model/engines, stats?engine= (разрез v2, §5) ===
+// === Стенд второй модели (второй движок): GET /api/local-model/engines, stats?engine= (разрез v2, §5) ===
 //
-// Ключ словаря движков: 'main' — основной стенд (то, что было до фичи), 'bonsai' —
+// Ключ словаря движков: 'main' — основной стенд (то, что было до фичи), имя движка LocalEngines (например 'gemma') —
 // llama-server на Video. Ключ — только ключ: URL из него не строится никогда.
 // Обе ручки: админ (иначе 403), флаг local-model-stats на сервере (иначе 404);
 // неизвестный движок или выключенная Llm → configured:false, 200; 500 — нигде.
 
-export type LocalModelEngineName = 'main' | 'bonsai';
+// 'main' — основной стенд; любое другое — имя движка LocalEngines из конфига сервера (например 'gemma').
+export type LocalModelEngineName = string;
 
-// Ответ GET /api/local-model/engines: список для переключателя «Основная / Bonsai».
+// Ответ GET /api/local-model/engines: список для переключателя вкладок моделей.
 // configured=false — движок не настроен: его сегмента нет; с одним движком переключателя нет.
 export interface LocalModelEngine {
   name: LocalModelEngineName;
-  // подпись сегмента («Основная», «Bonsai»): имена моделей в сегмент не ставим (макет §2)
+  // подпись сегмента («Flash-Next», «Gemma 4»): имена моделей в сегмент не ставим (макет §2)
   title: string;
   configured: boolean;
 }
@@ -153,7 +154,7 @@ export type LocalModelArbiterMode = 'exclusive' | 'shared';
 // Звено цепочки «модель → страховка → облако» (EngineCallLedger.Step, разрез v2, §4).
 // Третье звено — финальный облачный шаг (модель места или слота, обычно claude);
 // на фронте подписано «облако» (макет §5).
-export type LocalModelChainLink = 'bonsai' | 'insurance' | 'claude';
+export type LocalModelChainLink = 'engine' | 'insurance' | 'claude';
 // Вид задания ComfyUI по шву IComfyStats.DescribePromptKind (image|video|audio|train→lora);
 // не опознано — null. Таблица соответствия живёт на бэкенде, фронт её не повторяет (разрез §1).
 export type LocalModelJobKind = 'image' | 'video' | 'audio' | 'lora';
@@ -209,14 +210,14 @@ export interface LocalModelDutyArbiter {
 // ответило; missed — цепочка вернула пусто. sinceAt = max(now − 1 ч, старт процесса):
 // честный знаменатель доли. Нули — не «нет данных»: нет данных — весь блок null.
 export interface LocalModelDutyAnswers {
-  bonsai: number;
+  engine: number;
   insurance: number;
   claude: number;
   missed: number;
   sinceAt: number;
 }
 
-// Вызов места прямо сейчас («Кто сейчас на модели» у Bonsai). Это журнал вызовов мест,
+// Вызов места прямо сейчас («Кто сейчас на модели» у второй движок). Это журнал вызовов мест,
 // а не чаты: строка не кликабельна, владельца и промпта нет (разрез v2, §4).
 // place — название места из каталога; link — текущее звено цепочки; null — «ждёт в
 // очереди»: вызов уже в журнале, но ещё не вошёл ни в одно звено (макет §4, строка
@@ -1079,20 +1080,20 @@ export const api = {
   // (настройка глобальная), итог последнего хода чата — его владелец. DTO — записи
   // LocalModelStatsController / SessionLocalModelController (типы выше).
   localModel: {
-    // GET /api/local-model/engines: список движков для переключателя «Основная / Bonsai»
+    // GET /api/local-model/engines: список движков для переключателя вкладок моделей
     // (макет §2). Один configured — переключателя нет, стенд того движка открывается сразу.
     // live: true — тот же класс, что у /video/* и статуса выкатки: список запрашивается
     // при каждом открытии панели (useLocalModelEngines — один вызов, без таймера;
     // 2 с — опрос /stats внутри вкладки, 15 с — опрос значка в рельсе), и подставленный
-    // из IndexedDB список сказал бы «Bonsai есть» про движок, который уже выключили
+    // из IndexedDB список сказал бы «второй движок есть» про движок, который уже выключили
     // (или наоборот).
     engines: () => request<LocalModelEngine[]>('/local-model/engines', { live: true }),
-    // GET /api/local-model/stats?window=1m|5m|15m|1h&since=<unix ms>&engine=main|bonsai.
+    // GET /api/local-model/stats?window=1m|5m|15m|1h&since=<unix ms>&engine=main|<имя движка>.
     // Без engine — основной стенд, URL и ответ прежние (обратная совместимость, разрез v2, §5).
-    // engine — только ключ словаря ('main'|'bonsai'), не имя модели и не URL.
+    // engine — только ключ словаря ('main' или имя движка LocalEngines), не имя модели и не URL.
     // live: true — снимок стенда отвечает за «что происходит СЕЙЧАС»: ключ кэша зависит от
     // window/since/engine, поэтому опрос ещё и копил бы по записи на каждый тик, а при обрыве
-    // связи подставлял бы СТАРОЕ состояние Bonsai как текущее — ровно то вранье, на котором
+    // связи подставлял бы СТАРОЕ состояние второй движок как текущее — ровно то вранье, на котором
     // держится вся панель.
     stats: (window: '1m' | '5m' | '15m' | '1h' = '15m', since?: number, engine?: LocalModelEngineName) => {
       const qs = new URLSearchParams({ window });

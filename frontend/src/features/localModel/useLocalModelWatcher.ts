@@ -5,7 +5,7 @@
 // configured/роль: isAvailable панели — геттер, который читается в рендере
 // страницы, и без подписки смена configured не перерисовала бы рельс.
 // Без флага или не-админу — ни одного запроса к /api/local-model/*.
-// С Ф6 здесь же живёт состояние второй модели (Bonsai) для точки на значке
+// С Ф6 здесь же живёт состояние второй модели (движок на Video) для точки на значке
 // рельса: лёгкий 15-с опрос (макет §6) ТОЛЬКО админа с флагом — не-админ /stats
 // не спрашивает, состояние неизвестно, точка врал бы.
 
@@ -15,46 +15,61 @@ import {
   getLocalModelConfigured, setLocalModelAdmin, configuredSource, useLocalModelAdmin,
   useLocalModelConfigured, useLocalModelConfiguredPolling,
 } from './useLocalModelStats';
-import { fetchLocalModelStats, type LocalModelStats } from './api';
+import {
+  fetchLocalModelEngines, fetchLocalModelStats,
+  type LocalModelEngine, type LocalModelEngineName, type LocalModelStats,
+} from './api';
 
-// === Стор состояния Bonsai для точки рельса (Ф6) ===
-// Последний снимок второй модели из лёгкого опроса; null — опрос ещё не ответил
-// (точки нет: состояния не знает никто, выдумывать нечем). Источник — лёгкий опрос,
-// а не тяжёл поллер панели: точка горит и при закрытой панели, а тяжёл опрос живёт
-// только пока она открыта (ревью Ф2, MAJOR 2).
-let _bonsai: LocalModelStats | null = null;
-const _bonsaiSubs = new Set<() => void>();
-export function getLocalModelBonsai(): LocalModelStats | null { return _bonsai; }
-export function setLocalModelBonsai(v: LocalModelStats | null): void {
-  if (_bonsai === v) return;
-  _bonsai = v;
-  _bonsaiSubs.forEach(fn => fn());
+// === Стор состояния второго движка для точки рельса (Ф6) ===
+// Последний снимок именованного движка (LocalEngines, например Gemma на Video) из лёгкого
+// опроса; null — опрос ещё не ответил или второго движка нет (точки нет: состояния не знает
+// никто, выдумывать нечем). Источник — лёгкий опрос, а не тяжёлый поллер панели: точка горит
+// и при закрытой панели, а тяжёлый опрос живёт только пока она открыта (ревью Ф2, MAJOR 2).
+let _engineStats: LocalModelStats | null = null;
+const _engineSubs = new Set<() => void>();
+export function getLocalModelEngineStats(): LocalModelStats | null { return _engineStats; }
+export function setLocalModelEngineStats(v: LocalModelStats | null): void {
+  if (_engineStats === v) return;
+  _engineStats = v;
+  _engineSubs.forEach(fn => fn());
 }
-function subscribeLocalModelBonsai(fn: () => void): () => void {
-  _bonsaiSubs.add(fn);
-  return () => { _bonsaiSubs.delete(fn); };
+function subscribeLocalModelEngineStats(fn: () => void): () => void {
+  _engineSubs.add(fn);
+  return () => { _engineSubs.delete(fn); };
 }
 // Одно выражение «настроен ли» для значка (isAvailable) и самой панели: основной/медиа
-// configured ИЛИ последний снимок второй дорожки («Bonsai без vLLM тоже configured»,
+// configured ИЛИ последний снимок второй дорожки («движок без vLLM тоже configured»,
 // макет §8.6). Две разные формулы дали бы значок без панели (пустая карточка).
 export function isLocalModelConfiguredAny(): boolean {
-  return getLocalModelConfigured() === true || getLocalModelBonsai()?.configured === true;
+  return getLocalModelConfigured() === true || getLocalModelEngineStats()?.configured === true;
+}
+
+// Второй движок — первый НАСТРОЕННЫЙ не-main из списка /engines: имя задаёт конфиг сервера
+// (LocalEngines:<имя>), фронт его не знает. Нет такого — null.
+export function pickNamedEngine(engines: LocalModelEngine[]): LocalModelEngineName | null {
+  return engines.find(e => e.name !== 'main' && e.configured)?.name ?? null;
 }
 
 // Чистый запуск лёгкого опроса второй модели (15 с, макет §6): первый запрос сразу,
-// затем по таймеру. Возвращает остановку. Сбой не критичен: прежнее значение остаётся
-// (одиночная неудача не гасит и не зажигает точку). window '1m' — самый лёгкий из
-// допустимых: точке нужны status и duty, а не история.
-export function startBonsaiStatePolling(
+// затем по таймеру. Каждый тик сначала спрашивает список движков (имя второго — из конфига
+// сервера), затем его снимок. Возвращает остановку. Сбой не критичен: прежнее значение
+// остаётся (одиночная неудача не гасит и не зажигает точку). Второго движка нет — снимок
+// сбрасывается в null. window '1m' — самый лёгкий из допустимых: точке нужны status и duty.
+export function startEngineStatePolling(
   intervalMs = 15_000,
-  fetch: () => Promise<LocalModelStats> = () => fetchLocalModelStats('1m', undefined, 'bonsai'),
+  fetchEngines: () => Promise<LocalModelEngine[]> = fetchLocalModelEngines,
+  fetchStats: (engine: LocalModelEngineName) => Promise<LocalModelStats> = (engine) => fetchLocalModelStats('1m', undefined, engine),
   setTimer: (fn: () => void, ms: number) => unknown = (fn, ms) => window.setInterval(fn, ms),
   clearTimer: (id: unknown) => void = (id) => window.clearInterval(id as number),
 ): () => void {
   let cancelled = false;
   const tick = () => {
-    void fetch()
-      .then(d => { if (!cancelled) setLocalModelBonsai(d); })
+    void fetchEngines()
+      .then(list => {
+        const name = pickNamedEngine(list);
+        if (name === null) { if (!cancelled) setLocalModelEngineStats(null); return; }
+        return fetchStats(name).then(d => { if (!cancelled) setLocalModelEngineStats(d); });
+      })
       .catch(() => { /* прежнее значение */ });
   };
   tick();
@@ -70,11 +85,11 @@ export function useLocalModelWatcher(isAdmin: boolean): void {
   // Состояние второй модели — только админу с флагом: точка на значке тоже только для них
   useEffect(() => {
     if (!isAdmin || !flag) return;
-    return startBonsaiStatePolling();
+    return startEngineStatePolling();
   }, [isAdmin, flag]);
   // Подписка страницы на сторы (значение не нужно — нужен ререндер, чтобы рельса
-  // перечитала геттеры): configured, роль и состояние Bonsai
+  // перечитала геттеры): configured, роль и состояние второй движок
   useLocalModelConfigured();
   useLocalModelAdmin();
-  useSyncExternalStore(subscribeLocalModelBonsai, getLocalModelBonsai, getLocalModelBonsai);
+  useSyncExternalStore(subscribeLocalModelEngineStats, getLocalModelEngineStats, getLocalModelEngineStats);
 }

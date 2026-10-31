@@ -8,16 +8,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { FLAGS, setFlagLocal } from '../../lib/featureFlags';
 import { setLocalModelAdmin, setLocalModelConfigured } from './useLocalModelStats';
-import { getLocalModelBonsai, setLocalModelBonsai, startBonsaiStatePolling } from './useLocalModelWatcher';
-import { mockBonsaiStats } from './localModel.fixtures';
+import { getLocalModelEngineStats, setLocalModelEngineStats, startEngineStatePolling } from './useLocalModelWatcher';
+import { mockEngineStats } from './localModel.fixtures';
 import type { WorkspacePanelDefApi, WorkspacePanelDefCtx } from '../../lib/subsystems/registryCore';
 
 // Дефолтный fetch лёгкого опроса (engine/window) проверяется через подмену api:
 // тест видит, К КАКОЙ дорожке идёт запрос, не подставляя свой fetch.
-const apiSpy = vi.hoisted(() => ({ stats: vi.fn() }));
+const apiSpy = vi.hoisted(() => ({ stats: vi.fn(), engines: vi.fn() }));
 vi.mock('./api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./api')>()),
-  fetchLocalModelStats: (...args: unknown[]) => { apiSpy.stats(...args); return Promise.resolve(mockBonsaiStats('ready')); },
+  fetchLocalModelStats: (...args: unknown[]) => { apiSpy.stats(...args); return Promise.resolve(mockEngineStats('ready')); },
+  fetchLocalModelEngines: () => { apiSpy.engines(); return Promise.resolve([
+    { name: 'main', title: 'Flash-Next', configured: true }, { name: 'gemma', title: 'Gemma 4', configured: true }]); },
 }));
 
 // Компонент, который «suspend»ит: бросает never-resolving проми. vi.hoisted — фабрика
@@ -50,13 +52,13 @@ describe('localModel/manifest: Suspense вокруг ленивной панел
 // тест ставит сторы сам — каждый свой, и обнуляет после (сторы живут на файл).
 const panelAction = () => manifest.slots?.['workspace-panel-def']?.[0]?.action as unknown as WorkspacePanelDefApi;
 
-describe('localModel/manifest: значок при «Bonsai без vLLM» (макет §8.6)', () => {
-  beforeEach(() => { setFlagLocal(FLAGS.localModelStats, true); setLocalModelAdmin(true); setLocalModelConfigured(null); setLocalModelBonsai(null); });
-  afterEach(() => { setFlagLocal(FLAGS.localModelStats, false); setLocalModelAdmin(false); setLocalModelConfigured(null); setLocalModelBonsai(null); });
+describe('localModel/manifest: значок при «второй движок без vLLM» (макет §8.6)', () => {
+  beforeEach(() => { setFlagLocal(FLAGS.localModelStats, true); setLocalModelAdmin(true); setLocalModelConfigured(null); setLocalModelEngineStats(null); });
+  afterEach(() => { setFlagLocal(FLAGS.localModelStats, false); setLocalModelAdmin(false); setLocalModelConfigured(null); setLocalModelEngineStats(null); });
 
-  it('только Bonsai (main не настроен) — значок есть: configured читает и вторую дорожку', () => {
+  it('только второй движок (main не настроен) — значок есть: configured читает и вторую дорожку', () => {
     setLocalModelConfigured(false);
-    setLocalModelBonsai(mockBonsaiStats('ready'));
+    setLocalModelEngineStats(mockEngineStats('ready'));
     expect(panelAction().isAvailable?.('p1')).toBe(true);
   });
 
@@ -64,26 +66,26 @@ describe('localModel/manifest: значок при «Bonsai без vLLM» (ма�
     expect(panelAction().isAvailable?.('p1')).toBe(false);
   });
 
-  it('админ без флага — значка нет, даже когда Bonsai настроена', () => {
+  it('админ без флага — значка нет, даже когда второй движок настроена', () => {
     setFlagLocal(FLAGS.localModelStats, false);
-    setLocalModelBonsai(mockBonsaiStats('ready'));
+    setLocalModelEngineStats(mockEngineStats('ready'));
     expect(panelAction().isAvailable?.('p1')).toBe(false);
   });
 });
 
 describe('localModel/manifest: точка индикатора на значке (Ф6)', () => {
-  beforeEach(() => { setFlagLocal(FLAGS.localModelStats, true); setLocalModelAdmin(true); setLocalModelConfigured(true); setLocalModelBonsai(null); });
-  afterEach(() => { setFlagLocal(FLAGS.localModelStats, false); setLocalModelAdmin(false); setLocalModelConfigured(null); setLocalModelBonsai(null); });
+  beforeEach(() => { setFlagLocal(FLAGS.localModelStats, true); setLocalModelAdmin(true); setLocalModelConfigured(true); setLocalModelEngineStats(null); });
+  afterEach(() => { setFlagLocal(FLAGS.localModelStats, false); setLocalModelAdmin(false); setLocalModelConfigured(null); setLocalModelEngineStats(null); });
 
   it('без флага — точки нет (состояние не опрашивается)', () => {
     setFlagLocal(FLAGS.localModelStats, false);
-    setLocalModelBonsai(mockBonsaiStats('yielded'));
+    setLocalModelEngineStats(mockEngineStats('yielded'));
     expect(panelAction().indicator?.()).toBeNull();
   });
 
   it('не-админ — точки нет, даже когда панель видима (состояние известно только админу)', () => {
     setLocalModelAdmin(false);
-    setLocalModelBonsai(mockBonsaiStats('yielded'));
+    setLocalModelEngineStats(mockEngineStats('yielded'));
     expect(panelAction().isAvailable?.(null)).toBe(true);
     expect(panelAction().indicator?.()).toBeNull();
   });
@@ -92,65 +94,77 @@ describe('localModel/manifest: точка индикатора на значке
     expect(panelAction().indicator?.()).toBeNull();
   });
 
-  it('Bonsai работает, арбитр отвечает — точки нет', () => {
-    setLocalModelBonsai(mockBonsaiStats('ready'));
+  it('Модель работает, арбитр отвечает — точки нет', () => {
+    setLocalModelEngineStats(mockEngineStats('ready'));
     expect(panelAction().indicator?.()).toBeNull();
   });
 
   it('уступка по плану — muted-точка и подсказка с короткой причиной (макет §4)', () => {
     // фикстура 'yielded' имеет reasons=[comfy video] — короткая форма «видео» (KINDS макета)
-    setLocalModelBonsai(mockBonsaiStats('yielded'));
-    expect(panelAction().indicator?.()).toEqual({ dot: 'muted', hint: 'Bonsai уступила карту: видео' });
+    setLocalModelEngineStats(mockEngineStats('yielded'));
+    expect(panelAction().indicator?.()).toEqual({ dot: 'muted', hint: 'Модель уступила карту: видео' });
   });
 
-  it('ожидание возврата — muted-точка и «Bonsai вернётся через 2:40» (макет §4)', () => {
-    setLocalModelBonsai(mockBonsaiStats('returning'));
-    expect(panelAction().indicator?.()).toEqual({ dot: 'muted', hint: 'Bonsai вернётся через 2:40' });
+  it('ожидание возврата — muted-точка и «Модель вернётся через 2:40» (макет §4)', () => {
+    setLocalModelEngineStats(mockEngineStats('returning'));
+    expect(panelAction().indicator?.()).toEqual({ dot: 'muted', hint: 'Модель вернётся через 2:40' });
   });
 
   it('ждёт память карты — warning и «ждёт память карты»', () => {
-    setLocalModelBonsai(mockBonsaiStats('waiting-vram'));
-    expect(panelAction().indicator?.()).toEqual({ dot: 'warning', hint: 'Bonsai ждёт память карты' });
+    setLocalModelEngineStats(mockEngineStats('waiting-vram'));
+    expect(panelAction().indicator?.()).toEqual({ dot: 'warning', hint: 'Модель ждёт память карты' });
   });
 
-  it('авария — warning и «Bonsai недоступна»', () => {
-    setLocalModelBonsai(mockBonsaiStats('unknown'));
-    expect(panelAction().indicator?.()).toEqual({ dot: 'warning', hint: 'Bonsai недоступна' });
+  it('авария — warning и «Модель недоступна»', () => {
+    setLocalModelEngineStats(mockEngineStats('unknown'));
+    expect(panelAction().indicator?.()).toEqual({ dot: 'warning', hint: 'Модель недоступна' });
   });
 
   it('арбитр недоступен (метрики отвечают, /state молчит) — warning и «арбитр не отвечает» (хвост ревью Ф2 4)', () => {
-    const ready = mockBonsaiStats('ready');
-    setLocalModelBonsai({ ...ready, duty: { ...ready.duty!, arbiter: { ...ready.duty!.arbiter!, reachable: false } } });
-    expect(panelAction().indicator?.()).toEqual({ dot: 'warning', hint: 'Bonsai: арбитр не отвечает' });
+    const ready = mockEngineStats('ready');
+    setLocalModelEngineStats({ ...ready, duty: { ...ready.duty!, arbiter: { ...ready.duty!.arbiter!, reachable: false } } });
+    expect(panelAction().indicator?.()).toEqual({ dot: 'warning', hint: 'Модель: арбитр не отвечает' });
   });
 });
 
-describe('startBonsaiStatePolling: лёгкий 15-с опрос второй дорожки (Ф6)', () => {
-  beforeEach(() => { vi.useFakeTimers(); setLocalModelBonsai(null); apiSpy.stats.mockClear(); });
-  afterEach(() => { vi.useRealTimers(); setLocalModelBonsai(null); });
+describe('startEngineStatePolling: лёгкий 15-с опрос второй дорожки (Ф6)', () => {
+  beforeEach(() => { vi.useFakeTimers(); setLocalModelEngineStats(null); apiSpy.stats.mockClear(); apiSpy.engines.mockClear(); });
+  afterEach(() => { vi.useRealTimers(); setLocalModelEngineStats(null); });
+  const timers = [(fn: () => void, ms: number) => setInterval(fn, ms), (id: unknown) => clearInterval(id as ReturnType<typeof setInterval>)] as const;
 
-  it('дефолтный запрос — вторая дорожка: window лёгкий, engine=bonsai (не основной стенд)', async () => {
-    const stop = startBonsaiStatePolling(15_000, undefined, (fn, ms) => setInterval(fn, ms), (id) => clearInterval(id as ReturnType<typeof setInterval>));
+  it('дефолтный запрос — вторая дорожка: имя движка из /engines (не main), window лёгкий', async () => {
+    const stop = startEngineStatePolling(15_000, undefined, undefined, ...timers);
     await vi.advanceTimersByTimeAsync(0);
-    expect(apiSpy.stats).toHaveBeenCalledWith('1m', undefined, 'bonsai');
-    expect(getLocalModelBonsai()?.status).toBeTruthy();
+    expect(apiSpy.engines).toHaveBeenCalled();
+    expect(apiSpy.stats).toHaveBeenCalledWith('1m', undefined, 'gemma');
+    expect(getLocalModelEngineStats()?.status).toBeTruthy();
+    stop();
+  });
+
+  it('второго движка нет (только main) — снимок null, /stats не спрашивается', async () => {
+    setLocalModelEngineStats(mockEngineStats('ready'));
+    const stats = vi.fn();
+    const stop = startEngineStatePolling(15_000, async () => [{ name: 'main', title: 'Flash-Next', configured: true }], stats, ...timers);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stats).not.toHaveBeenCalled();
+    expect(getLocalModelEngineStats()).toBeNull();
     stop();
   });
 
   it('первый ответ кладёт снимок; сбой сохраняет прежний; остановка гасит таймер', async () => {
-    const s1 = mockBonsaiStats('ready');
+    const s1 = mockEngineStats('ready');
     let n = 0;
-    const stop = startBonsaiStatePolling(
+    const stop = startEngineStatePolling(
       15_000,
+      async () => [{ name: 'main', title: 'Flash-Next', configured: true }, { name: 'gemma', title: 'Gemma 4', configured: true }],
       async () => { if (++n === 1) return s1; throw new Error('сбой'); },
-      (fn, ms) => setInterval(fn, ms),
-      (id) => clearInterval(id as ReturnType<typeof setInterval>),
+      ...timers,
     );
-    expect(n).toBe(1);
     await vi.advanceTimersByTimeAsync(0);
-    expect(getLocalModelBonsai()).toBe(s1);
+    expect(n).toBe(1);
+    expect(getLocalModelEngineStats()).toBe(s1);
     await vi.advanceTimersByTimeAsync(15_000); // второй тик — сбой: прежнее значение
-    expect(getLocalModelBonsai()).toBe(s1);
+    expect(getLocalModelEngineStats()).toBe(s1);
     stop();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(n).toBe(2); // после остановки новых запросов нет

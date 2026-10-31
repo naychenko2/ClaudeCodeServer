@@ -74,6 +74,10 @@ describe('resolveCreatorName / formatCreatedDate', () => {
     expect(resolveCreatorName('u-x', VIEW, PROJECT)).toBe('Участник');
     expect(resolveCreatorName(null, VIEW, PROJECT)).toBeNull();
     expect(resolveCreatorName('u-m', null, PROJECT)).toBeNull(); // список не пришёл — без «Участник»
+    // три состояния: имя из кэша сразу; null без списка и без имени; «Участник» — список пришёл, человека нет
+    expect(resolveCreatorName('u-old', null, PROJECT)).toBe('Олег');
+    expect(resolveCreatorName('u-x', null, PROJECT)).toBeNull();
+    expect(resolveCreatorName('u-x', VIEW, PROJECT)).toBe('Участник');
   });
   it('дата без точки: «12 окт»', () => {
     expect(formatCreatedDate('2026-10-12T10:00:00Z')).toBe('12 окт');
@@ -105,6 +109,10 @@ describe('рендер', () => {
     expect(noBtn).not.toContain('Назначить');
     const withBtn = await render(createElement(FormerAssigneeLine, { projectId: 'p1', assigneeUserId: 'u-old', onAssign: () => {} }));
     expect(withBtn).toContain('Назначить');
+    // MAJOR: инлайн all/box-shadow/outline перебивает :focus-visible из класса — кольца фокуса не будет
+    const btnStyle = (withBtn.match(/<button[^>]*>/)?.[0]) ?? '';
+    expect(btnStyle).toContain('cc-task-assign-link');
+    for (const prop of ['all:', 'box-shadow', 'outline']) expect(btnStyle, `инлайн ${prop}`).not.toContain(prop);
     const unknown = await render(createElement(FormerAssigneeLine, { projectId: 'p1', assigneeUserId: 'u-x' }));
     expect(unknown).toBe(''); // неизвестный → строки нет
   });

@@ -45,16 +45,18 @@ export function resolveTaskAssignee(
   return former ? { state: 'none', formerName: nameOf(former) } : { state: 'none' };
 }
 
-// Имя того, кто поставил задачу; запасное — «Участник» (бывший тоже показываем по имени);
-// список участников не пришёл → null, чтобы не мигнуть «Участник» на загрузке
+// Имя того, кто поставил задачу. Имя из кэша formerMembers — сразу; списка нет и имени в кэше нет →
+// null (не мигаем «Участник» на загрузке); «Участник» — когда список пришёл, а человека в нём нет
 export function resolveCreatorName(
   userId: string | null | undefined,
   view: Pick<ProjectMembersView, 'members' | 'owner'> | null | undefined,
   project: Pick<Project, 'formerMembers'> | null | undefined,
 ): string | null {
-  if (!userId || !view) return null;
+  if (!userId) return null;
+  const former = project?.formerMembers?.find(x => x.userId === userId);
+  if (!view) return former ? nameOf(former) : null;
   if (view.owner.userId === userId) return nameOf(view.owner);
-  return nameOf(view.members.find(x => x.userId === userId) ?? project?.formerMembers?.find(x => x.userId === userId));
+  return nameOf(view.members.find(x => x.userId === userId) ?? former);
 }
 
 // «12 окт» — без точки после сокращения месяца
@@ -138,7 +140,9 @@ export function FormerAssigneeLine({ projectId, assigneeUserId, onAssign }: Prop
         <>
           {' · '}
           <button type="button" className={ASSIGN_CLASS} onClick={onAssign} style={{
-            all: 'unset', cursor: 'pointer', color: C.accent, fontWeight: 600,
+            // Без all/box-shadow/outline: инлайн перебил бы кольцо :focus-visible из класса
+            appearance: 'none', border: 0, background: 'none', padding: 0, margin: 0,
+            font: 'inherit', cursor: 'pointer', color: C.accent, fontWeight: 600,
           }}>Назначить</button>
         </>
       )}

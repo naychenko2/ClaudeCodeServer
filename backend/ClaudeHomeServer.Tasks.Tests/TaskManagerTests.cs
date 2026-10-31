@@ -384,6 +384,80 @@ public class TaskManagerTests : IDisposable
         updated.Assignee.Should().Be(TaskItemAssignee.Claude); // явно не сбрасываем — задача уже была на Claude
     }
 
+    // ─── Чтение «Me» и автор задачи (S2b-1, общие проекты) ────────────────────
+
+    // Старая задача (без AssigneeUserId) остаётся на владельце: «Me» = владелец задачи.
+    // Мутация (c2): убрать фолбэк «?? task.OwnerId» в ResolveMeUserId — тест красный
+    // (null вместо «owner-1»); вернуть — зелёный.
+    [Fact]
+    public void Me_СтараяЗадачаБезAssigneeUserId_ИсполнительВладелец()
+    {
+        var task = _sut.Create("proj-1", "owner-1", new CreateTaskRequest("старая задача"));
+
+        TaskManager.ResolveMeUserId(task).Should().Be("owner-1");
+    }
+
+    [Fact]
+    public void Me_СAssigneeUserIdУчастника_ИсполнительУчастник()
+    {
+        var task = _sut.Create("proj-1", "owner-1", new CreateTaskRequest("задача на участника"));
+        // Путь записи поля (MCP assignee=username) — S2b-2; здесь поле выставлено напрямую.
+        task.AssigneeUserId = "member-1";
+
+        TaskManager.ResolveMeUserId(task).Should().Be("member-1");
+    }
+
+    // Assignee=null (старая запись без значения) читается как Me — прежний дефолт Create;
+    // Claude-задача и задача с персоной (инвариант ⇒ Claude) — человека-исполнителя нет.
+    [Fact]
+    public void Me_ЗначениеНеЗадано_РезолвитсяКакMe_АClaudeБезЧеловека()
+    {
+        var legacy = _sut.Create(null, "u", new CreateTaskRequest("без значения"));
+        legacy.Assignee = null;
+        var claude = _sut.Create(null, "u", new CreateTaskRequest("t", Assignee: TaskItemAssignee.Claude));
+        var persona = _sut.Create(null, "u", new CreateTaskRequest("t", PersonaId: "prs-1"));
+
+        TaskManager.ResolveMeUserId(legacy).Should().Be("u");
+        TaskManager.ResolveMeUserId(claude).Should().BeNull();
+        TaskManager.ResolveMeUserId(persona).Should().BeNull();
+    }
+
+    // Автор задачи: человек (UI/API, заметка — ни персоны-постановщика, ни чата-источника)
+    // пишет id создающего (сегодня это владелец — Write участника закрыт); агентский путь
+    // (персона или чат — маркеры TasksToolset) — null.
+    [Fact]
+    public void CreatedByUserId_ЧеловекПишетСоздателя_АгентNull()
+    {
+        var human = _sut.Create("proj-1", "user-1", new CreateTaskRequest("из UI"));
+        var byPersona = _sut.Create("proj-1", "user-1", new CreateTaskRequest("от персоны",
+            CreatedByPersonaId: "prs-delegator"));
+        var bySession = _sut.Create("proj-1", "user-1", new CreateTaskRequest("из чата",
+            SourceSessionId: "sess-1"));
+
+        human.CreatedByUserId.Should().Be("user-1");
+        byPersona.CreatedByUserId.Should().BeNull();
+        bySession.CreatedByUserId.Should().BeNull();
+    }
+
+    // Регулярная серия: человек-автор и человек-исполнитель — устойчивые атрибуты
+    // (как CreatedByPersonaId/PersonaId): без переноса следующий экземпляр молча
+    // терял бы автора, а «Me» падал бы с участника на владельца.
+    [Fact]
+    public void SpawnNext_ПереноситАвтораИЧеловекаИсполнителя_КакАтрибутыСерии()
+    {
+        var task = _sut.Create("proj-1", "owner-1", new CreateTaskRequest("регулярная",
+            DueDate: "2026-11-01",
+            Recurrence: new TaskRecurrence { Type = TaskRecurrenceType.Daily }));
+        task.AssigneeUserId = "member-1";
+
+        var next = _sut.SpawnNextOccurrence(task);
+
+        next.Should().NotBeNull();
+        next!.CreatedByUserId.Should().Be("owner-1");
+        next.AssigneeUserId.Should().Be("member-1");
+        TaskManager.ResolveMeUserId(next).Should().Be("member-1");
+    }
+
     // ─── Отметки планировщика и исполнителя ──────────────────────────────────
 
     [Fact]

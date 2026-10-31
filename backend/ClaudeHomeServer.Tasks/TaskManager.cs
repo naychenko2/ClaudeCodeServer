@@ -364,6 +364,11 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
 
         // Персона-исполнитель: assignee=Claude выставляется автоматом, если модель забыла
         var hasPersona = !string.IsNullOrEmpty(req.PersonaId);
+        // Автор задачи (S2b-1): происхождение создания — персона или чат (те же маркеры, что
+        // CreatedByPersonaId/SourceSessionId; в коде их ставит только агентский путь —
+        // TasksToolset.cs:277, TeamWaveService.cs:323). Ни того, ни другого — человек
+        // (UI/API, промут заметки).
+        var agentCreated = !string.IsNullOrEmpty(req.CreatedByPersonaId) || !string.IsNullOrEmpty(req.SourceSessionId);
         var task = new TaskItem
         {
             Id = id,
@@ -402,6 +407,10 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             SourceNoteLine = req.SourceNoteLine,
             CreatedByPersonaId = string.IsNullOrEmpty(req.CreatedByPersonaId) ? null : req.CreatedByPersonaId,
             SourceSessionId = string.IsNullOrEmpty(req.SourceSessionId) ? null : req.SourceSessionId,
+            // Кто поставил задачу (S2b-1): человек — id создающего пользователя; агент — null.
+            // В текущем пути записи создающий человек и есть владелец: Write участника
+            // в общем проекте закрыт (пометка плана S2b), ключ хранилищ — владелец.
+            CreatedByUserId = agentCreated ? null : ownerId,
             ReportToSessionId = string.IsNullOrEmpty(req.ReportToSessionId) ? null : req.ReportToSessionId,
             DelegationDepth = ComputeDelegationDepth(req.SourceSessionId),
             Order = NextOrder(ownerId),
@@ -493,6 +502,16 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     {
         if (task.PersonaId is not null) task.Assignee = TaskItemAssignee.Claude;
     }
+
+    // Чтение «Me» (S2b-1, общие проекты): человек-исполнитель задачи — AssigneeUserId,
+    // если задан; задачи без него (старые и личные проекты) — владельца (арендатора)
+    // проекта: в общем проекте старые задачи мог создать только владелец (Write
+    // участника закрыт, пометка плана S2b). Assignee=null читается как Me — прежний
+    // дефолт Create. Assignee=Claude — человека-исполнителя нет (null); инвариант
+    // «персона ⇒ Claude» (NormalizePersonaAssignee) не трогает: задача с персоной
+    // в человеческую ветку не попадает.
+    public static string? ResolveMeUserId(TaskItem task) =>
+        task.Assignee == TaskItemAssignee.Claude ? null : task.AssigneeUserId ?? task.OwnerId;
 
     // Инвариант: worktree — дерево репы ПРОЕКТА. У личной задачи (и у задачи, которую сделали
     // личной) хранить путь незачем — исполнитель всё равно стартует в чате вне проекта.
@@ -1144,6 +1163,12 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             // экземпляра терялось бы уведомление постановщика. SourceSessionId НЕ переносим —
             // конкретная сессия (как LinkedSessionId) у нового экземпляра начинается заново
             CreatedByPersonaId = completed.CreatedByPersonaId,
+            // Человек-исполнитель и автор-человек (S2b-1) — устойчивые атрибуты серии
+            // (как PersonaId/CreatedByPersonaId): регулярная задача, поставленная человеком
+            // или назначенная участнику, не теряла бы их со 2-го экземпляра — без переноса
+            // исполнитель молча падал бы на владельца (чтение Me, ResolveMeUserId).
+            AssigneeUserId = completed.AssigneeUserId,
+            CreatedByUserId = completed.CreatedByUserId,
             // Глубина делегирования — устойчивый атрибут серии (как CreatedByPersonaId):
             // без переноса регулярная делегированная задача «сбрасывала» бы гард на 2-м экземпляре
             DelegationDepth = completed.DelegationDepth,

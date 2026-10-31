@@ -80,6 +80,60 @@ public class TaskStoreWriteTests : IDisposable
         reloaded.GetById(epic.Id)!.Note!.Text.Should().Be("жив");
     }
 
+    // ─── S2b-1: автор и исполнитель (совместимость формата) ───────────────────
+
+    // Старый JSON без новых полей читается как null (мутация: сделать поля обязательными
+    // или переименовать — старый файл не читается, тест красный).
+    [Fact]
+    public void ПоляИсполнителя_СтарыйJsonБезНих_ЧитаетсяКакNull()
+    {
+        var back = JsonSerializer.Deserialize<TaskItem>("{\"title\":\"старая\"}", Web)!;
+
+        back.AssigneeUserId.Should().BeNull();
+        back.CreatedByUserId.Should().BeNull();
+    }
+
+    // WhenWritingNull: null-поля не входят в файл стора — агентская задача (ни автора,
+    // ни исполнителя) пишется ровно как до правки.
+    [Fact]
+    public void ПоляИсполнителя_Null_ВФайлНеПишутся()
+    {
+        var sut = NewManager();
+        sut.Create("proj-1", "user-1", new CreateTaskRequest("агентская", SourceSessionId: "sess-1"));
+
+        var json = File.ReadAllText(StorePath);
+
+        json.Should().NotContain("AssigneeUserId").And.NotContain("CreatedByUserId");
+    }
+
+    // Автор человеческой записи переживает перезагрузку стора.
+    [Fact]
+    public void CreatedByUserId_ПереживаетПерезагрузкуСтора()
+    {
+        var sut = NewManager();
+        var task = sut.Create("proj-1", "user-1", new CreateTaskRequest("из UI"));
+
+        var reloaded = NewManager();
+
+        reloaded.GetById(task.Id)!.CreatedByUserId.Should().Be("user-1");
+    }
+
+    // Старый файл на диске (без новых ключей) читается штатно, «Me» в нём резолвится
+    // владельцу: старые задачи исполнителя не меняют.
+    [Fact]
+    public void СтарыйФайлБезНовыхПолей_ЧитаетсяMeРезолвитсяВладельцем()
+    {
+        File.WriteAllText(StorePath,
+            """[{"Id":"legacy-1","OwnerId":"owner-1","ProjectId":"proj-1","Title":"старая","Assignee":0}]""");
+
+        var sut = NewManager();
+
+        var task = sut.GetById("legacy-1");
+        task.Should().NotBeNull();
+        task!.CreatedByUserId.Should().BeNull("старая запись без автора — поле остаётся null");
+        TaskManager.ResolveMeUserId(task).Should().Be("owner-1");
+    }
+
     // ─── Формат записи ───────────────────────────────────────────────────────
 
     [Fact]

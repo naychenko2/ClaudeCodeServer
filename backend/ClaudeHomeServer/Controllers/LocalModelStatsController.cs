@@ -136,7 +136,7 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
         // только ходы, прошедшие через шлюз): max(0, running + waiting − живых чатов).
         var othersCount = Math.Max(0, (current.Running ?? 0) + (current.Waiting ?? 0) - active.Count);
 
-        var labels = _providers?.All.FirstOrDefault(p => p.IsLocal)?.Stats;
+        var labels = MainLocalProvider()?.Stats;
 
         return Ok(new LocalModelStatsResponse
         {
@@ -178,15 +178,15 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
         });
     }
 
-    // GET /api/local-model/engines — список движков для переключателя «Основная / Bonsai»
+    // GET /api/local-model/engines — список движков для переключателя вкладок («Flash-Next / Gemma 4»)
     // (макет §2). ТОЛЬКО admin (роль на действии, как у /stats) плюс серверный флаг
     // local-model-stats (без него 404, как у hardware).
     // Список НИКОГДА не пуст: "main" присутствует всегда, известные из конфига движки добавляются
     // к нему; без дорожки статистики — с configured:false. Пустой список фронт читает как «ещё не
     // загружен» и держит сохранённый выбор вечно (R-F1, задача e4103736), поэтому «ничего не
     // настроено» обязано отдавать {main, configured:false}, а не [].
-    // Title: "main" — «Основная»; именованный движок — его ключ с заглавной первой буквой
-    // (подпись сегмента по макету; имена моделей в сегмент не ставим).
+    // Title — короткое название модели из конфига: у "main" — Stats:Title локального провайдера,
+    // у именованного движка — LocalEngines:<имя>:Title. Не задано — «Основная» / ключ с заглавной буквы.
     [Authorize(Roles = "admin")]
     [HttpGet("engines")]
     public IActionResult Engines([FromServices] FeatureFlagService flags)
@@ -196,7 +196,7 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
 
         var list = new List<EngineEntryDto>
         {
-            new() { Name = LocalModelStatsPoller.MainTrackName, Title = "Основная", Configured = _reader?.Current.Configured == true },
+            new() { Name = LocalModelStatsPoller.MainTrackName, Title = Label(MainLocalProvider()?.Stats?.Title) ?? "Основная", Configured = _reader?.Current.Configured == true },
         };
         if (_namedEngines is { } known)
             foreach (var e in known.Engines)
@@ -207,7 +207,7 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
                 list.Add(new()
                 {
                     Name = e.Name,
-                    Title = TitleOf(e.Name),
+                    Title = Label(e.Spec.Title) ?? TitleOf(e.Name),
                     // configured — есть дорожка статистики (её снимок настроен); без MetricsUrl
                     // движок известен, но не настроен: сегмента переключателя у него нет.
                     Configured = _tracks?.CurrentOf(e.Name)?.Configured == true,
@@ -216,9 +216,14 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
         return Ok(list);
     }
 
-    // Подпись сегмента из ключа словаря: заглавная первая буква ("bonsai" → "Bonsai").
+    // Подпись сегмента из ключа словаря, если Title не задан: заглавная первая буква ("gemma" → "Gemma").
     private static string TitleOf(string name) =>
         name.Length == 0 ? name : char.ToUpperInvariant(name[0]) + name[1..];
+
+    // Основной локальный провайдер панели — первый IsLocal СО секцией Stats: реестр идёт по алфавиту
+    // ключей, и локальный провайдер без Stats (например, чатовый на Video) не должен прятать панель.
+    private LlmProviderConfig? MainLocalProvider() =>
+        _providers?.All.Where(p => p.IsLocal).OrderBy(p => p.Stats is null).FirstOrDefault();
 
     // Подпись из конфига: пустая или из пробелов — как не заданная.
     private static string? Label(string? value) =>
@@ -314,11 +319,11 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
     }
 
     // Типичная цепочка движка (не гарантированный путь, разрез v1 §2): собственное звено →
-    // страховка (если у движка задан FallbackRoute) → облако. Имя "bonsai" общее для всех
+    // страховка (если у движка задан FallbackRoute) → облако. Имя "engine" общее для всех
     // LocalEngines:* — фронт не знает имени движка (контракт LocalModelChainLink).
     private List<string> ChainFor(string name)
     {
-        var chain = new List<string> { "bonsai" };
+        var chain = new List<string> { "engine" };
         if (!string.IsNullOrWhiteSpace(_namedEngines?.Get(name)?.Spec.FallbackRoute))
             chain.Add("insurance");
         chain.Add("claude");
@@ -333,7 +338,7 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
         {
             Reachable = s.Reachable,
             LastSeenAt = s.SeenAt?.ToUnixTimeMilliseconds(),
-            State = s.Bonsai,
+            State = s.State,
             Mode = s.Mode,
             QuietLeftS = s.QuietLeftS,
             SinceAt = s.SinceAt?.ToUnixTimeMilliseconds(),
@@ -371,7 +376,7 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
 
     private static AnswersDto MapAnswers(EngineAnswerCounts a) => new()
     {
-        Bonsai = a.Bonsai,
+        Engine = a.Engine,
         Insurance = a.Insurance,
         Claude = a.Claude,
         Missed = a.Missed,
@@ -386,7 +391,7 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
         Place = c.Place,
         Link = c.Link switch
         {
-            EngineCallLink.Bonsai => "bonsai",
+            EngineCallLink.Engine => "engine",
             EngineCallLink.Insurance => "insurance",
             EngineCallLink.Claude => "claude",
             _ => null,
@@ -975,13 +980,13 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
 
     // ─── DTO второго стенда (B3c): GET /api/local-model/engines и блок duty ───────────
 
-    // Одна строка списка движков для переключателя «Основная / Bonsai» (макет §2).
+    // Одна строка списка движков для переключателя вкладок (макет §2).
     public sealed record EngineEntryDto
     {
         // Ключ словаря: "main" или имя движка LocalEngines. URL из него не строится никогда.
         public string Name { get; init; } = "";
 
-        // Подпись сегмента переключателя («Основная», «Bonsai»); имена моделей не ставятся.
+        // Подпись сегмента переключателя — короткое название модели из конфига («Flash-Next», «Gemma 4»).
         public string Title { get; init; } = "";
 
         // false — движок известен, но не настроен (нет дорожки статистики): сегмента у него нет.
@@ -994,7 +999,7 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
         // null — у движка нет StateUrl: «Дежурство» показывает «арбитр не подключён».
         public ArbiterDto? Arbiter { get; init; }
 
-        // Типичная цепочка: "bonsai" → "insurance" (если у движка FallbackRoute) → "claude".
+        // Типичная цепочка: "engine" → "insurance" (если у движка FallbackRoute) → "claude".
         public string[] Chain { get; init; } = [];
 
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -1070,7 +1075,7 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
     // весь блок отсутствует.
     public sealed record AnswersDto
     {
-        public int Bonsai { get; init; }
+        public int Engine { get; init; }
         public int Insurance { get; init; }
         public int Claude { get; init; }
         public int Missed { get; init; }
@@ -1086,7 +1091,7 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
         // Название места из каталога.
         public string Place { get; init; } = "";
 
-        // Текущее звено: bonsai | insurance | claude. null — «ждёт в очереди»: вызов уже в
+        // Текущее звено: engine | insurance | claude. null — «ждёт в очереди»: вызов уже в
         // журнале, но в цепочку ещё не вошёл (проба готовности или слот допуска). Контракт
         // зафиксирован фронтом (Ф0): именно null, не отсутствие поля и не строка.
         public string? Link { get; init; }

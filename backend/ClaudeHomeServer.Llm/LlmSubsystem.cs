@@ -204,7 +204,7 @@ public sealed class LlmSubsystem : IAppSubsystem
                 Consequence: "Ход на локальной модели завершится сразу «локальная модель не запущена»."));
 
         // Именованные локальные движки (LocalEngines:*) — дежурные llama-server рядом с
-        // основным LocalLlm (например, Bonsai 2 на машине «Video» под арбитром GPU). Проба
+        // основным LocalLlm (например, Gemma 4 на машине «Video» под арбитром GPU). Проба
         // готовности — тихий клиент: движок выгружен штатно, а не сломан.
         services.AddSingleton<NamedLocalEngines>();
         services.AddQuietHttpClient(

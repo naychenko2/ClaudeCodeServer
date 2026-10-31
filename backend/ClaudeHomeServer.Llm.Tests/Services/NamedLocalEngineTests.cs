@@ -11,7 +11,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // не тратит время на таймаут (проба готовности), а выбор админа важнее конфига движка.
 public class NamedLocalEngineTests
 {
-    private const string Engine = "bonsai";
+    private const string Engine = "gemma";
 
     private sealed class NullHttpFactory : IHttpClientFactory
     {
@@ -24,8 +24,8 @@ public class NamedLocalEngineTests
         public int Calls;
         public bool Enabled => enabled;
         public string BaseUrl => "http://engine";
-        public string Model => "bonsai-9b";
-        public string TextModel => "bonsai-9b";
+        public string Model => "gemma-4-26b-a4b";
+        public string TextModel => "gemma-4-26b-a4b";
         public string ProviderKey => LocalLlmOptions.LlamaServer;
 
         public Task<string?> ChatJsonAsync(string systemPrompt, string userPrompt, object jsonFormat,
@@ -101,7 +101,7 @@ public class NamedLocalEngineTests
         Assert.Equal(RouteSource.Config, route.Source);
         Assert.True(router.UsesLocal(LocalActionCatalog.ChatTitle));
         Assert.True(runner.HasFreeRoute(LocalActionCatalog.ChatTitle));
-        Assert.Equal("local:bonsai", runner.DescribeRoute(LocalActionCatalog.ChatTitle, null));
+        Assert.Equal("local:gemma", runner.DescribeRoute(LocalActionCatalog.ChatTitle, null));
         // Место вне Actions движка идёт своим прежним маршрутом (основная локаль выключена → слот).
         Assert.Null(router.Resolve(LocalActionCatalog.NotesTags).Engine);
     }
@@ -182,13 +182,13 @@ public class NamedLocalEngineTests
     {
         var config = Config(new()
         {
-            ["LocalEngines:bonsai:BaseUrl"] = "http://192.168.7.107:18030",
-            ["LocalEngines:bonsai:Model"] = "bonsai-9b",
-            ["LocalEngines:bonsai:ReadyUrl"] = "http://192.168.7.107:18031/ready",
-            ["LocalEngines:bonsai:FallbackRoute"] = "direct:MiniMax-M3.1-Flash",
-            ["LocalEngines:bonsai:NumCtx"] = "8192",
-            ["LocalEngines:bonsai:Actions:0"] = LocalActionCatalog.ChatTitle,
-            ["LocalEngines:bonsai:Actions:1"] = "no-such-action",
+            ["LocalEngines:gemma:BaseUrl"] = "http://192.168.7.107:18030",
+            ["LocalEngines:gemma:Model"] = "gemma-4-26b-a4b",
+            ["LocalEngines:gemma:ReadyUrl"] = "http://192.168.7.107:18031/ready",
+            ["LocalEngines:gemma:FallbackRoute"] = "direct:MiniMax-M3.1-Flash",
+            ["LocalEngines:gemma:NumCtx"] = "8192",
+            ["LocalEngines:gemma:Actions:0"] = LocalActionCatalog.ChatTitle,
+            ["LocalEngines:gemma:Actions:1"] = "no-such-action",
             // Движок без модели — пропускается целиком.
             ["LocalEngines:broken:BaseUrl"] = "http://x",
             ["LocalEngines:broken:Actions:0"] = LocalActionCatalog.NotesTags,
@@ -199,15 +199,15 @@ public class NamedLocalEngineTests
             ["LocalEngines:plain:Actions:0"] = LocalActionCatalog.TaskClassify,
         });
         var engines = new NamedLocalEngines(new NullHttpFactory(), config, NullLoggerFactory.Instance);
-        Assert.Equal("bonsai", engines.EngineFor(LocalActionCatalog.ChatTitle));
+        Assert.Equal("gemma", engines.EngineFor(LocalActionCatalog.ChatTitle));
         Assert.Null(engines.EngineFor("no-such-action"));
         Assert.Null(engines.EngineFor(LocalActionCatalog.NotesTags));
         Assert.Null(engines.Get("broken"));
-        var bonsai = engines.Get("bonsai")!;
-        Assert.True(bonsai.Enabled);
-        Assert.Equal("direct:MiniMax-M3.1-Flash", bonsai.Spec.FallbackRoute);
-        Assert.Equal(8192, bonsai.Spec.NumCtx);
-        Assert.Equal("http://192.168.7.107:18030", bonsai.Client.BaseUrl);
+        var gemma = engines.Get("gemma")!;
+        Assert.True(gemma.Enabled);
+        Assert.Equal("direct:MiniMax-M3.1-Flash", gemma.Spec.FallbackRoute);
+        Assert.Equal(8192, gemma.Spec.NumCtx);
+        Assert.Equal("http://192.168.7.107:18030", gemma.Client.BaseUrl);
         Assert.Null(engines.Get("plain")!.Spec.FallbackRoute);
         Assert.Equal("plain", engines.EngineFor(LocalActionCatalog.TaskClassify));
     }

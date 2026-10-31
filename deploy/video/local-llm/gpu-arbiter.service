@@ -1,0 +1,20 @@
+[Unit]
+Description=GPU arbiter on RTX 3090 — дежурная LLM уступает карту медиазадачам и возвращается
+After=network-online.target comfyui-h3.service
+
+[Service]
+# root: нужен systemctl stop/start local-llm.service; сам арбитр GPU не трогает.
+User=root
+ExecStart=/usr/bin/python3 -I /home/an/local-llm/gpu-arbiter.py
+Environment=ARBITER_PORT=18031
+Environment=ARBITER_ENGINE_UNIT=local-llm.service
+Environment=ARBITER_MODE=exclusive
+Environment=ARBITER_RETURN_QUIET_S=10
+Environment=ARBITER_RETURN_QUIET_AFTER_COMFY_S=180
+# Gemma 4 с пулом KV на 262K занимает ≈ 20,6 ГБ — перед возвратом нужно столько свободных + запас.
+Environment=ARBITER_VRAM_NEEDED_MB=22000
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

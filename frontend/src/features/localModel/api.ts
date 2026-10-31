@@ -21,7 +21,7 @@ import {
   type MediaSteps,
 } from '../../lib/api';
 
-// Тип ответа /api/local-model/stats?window=15m|1h&since=<unix ms>&engine=main|bonsai.
+// Тип ответа /api/local-model/stats?window=15m|1h&since=<unix ms>&engine=main|<имя движка>.
 // Источник истины — DTO бэкенда (LocalModelStatsController.cs): время — unix-мс,
 // kv — доли 0..1 (не проценты и не ГиБ), chats — projectId (не имя проекта).
 // duty — блок «Дежурство» стенда второй модели (нет поля или null — блок не рисуется).
@@ -53,7 +53,7 @@ export type { LocalModelMedia, MediaGpu, MediaSteps, MediaRunning, MediaQueue, M
 // true — панель и значок на моках (localModel.fixtures.ts) — режим витрины.
 export const USE_MOCK = false;
 
-// Список движков для переключателя «Основная / Bonsai» (макет §2): по нему решается,
+// Список движков для переключателя вкладок моделей (макет §2): по нему решается,
 // показывать ли переключатель и какой стенд открыть по умолчанию.
 export function fetchLocalModelEngines(): Promise<LocalModelEngine[]> {
   return api.localModel.engines();
@@ -62,7 +62,7 @@ export function fetchLocalModelEngines(): Promise<LocalModelEngine[]> {
 // Тонкая обёртка вызова: панель и значок знают только эту функцию,
 // а не транспорт. Дефолт 5m — как DEFAULT_WINDOW в ThroughputChart (дублируем
 // литералом, чтобы тонкая обёртка не тянула модуль графика).
-// Без engine — основной стенд (прежний URL и ответ); 'bonsai' — стенд второй модели
+// Без engine — основной стенд (прежний URL и ответ); имя движка LocalEngines (например 'gemma') — стенд второй модели
 // с блоком duty. Активный стенд опрашивается раз в 2 с, неактивный — нет (макет §6).
 export function fetchLocalModelStats(
   window: '1m' | '5m' | '15m' | '1h' = '5m',

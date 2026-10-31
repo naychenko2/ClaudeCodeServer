@@ -114,7 +114,7 @@ public class LocalModelStatsPollerTests
         }
     }
 
-    // Снимок арбитра для тестов Б3b: значимы Reachable и Bonsai, остальное не нужно дорожке.
+    // Снимок арбитра для тестов Б3b: значимы Reachable и Engine, остальное не нужно дорожке.
     private static EngineArbiterSnapshot ArbiterState(string state, bool reachable = true) =>
         new(reachable, state, null, null, null, null, null, null, null, null, null, null);
 
@@ -1067,29 +1067,29 @@ public class LocalModelStatsPollerTests
         var good = new FakeSource();
         good.Snapshots.Enqueue(new EngineSnapshot { Running = 2 });
         var broken = MakeTrack(h, "broken", () => throw new InvalidOperationException("сбой дорожки"));
-        var bonsaiTrack = MakeTrack(h, "bonsai", () => (good, "llama-server", "bonsai", null, true));
+        var gemmaTrack = MakeTrack(h, "gemma", () => (good, "llama-server", "gemma", null, true));
         h.Poller.AddTrack(broken);
-        h.Poller.AddTrack(bonsaiTrack);
+        h.Poller.AddTrack(gemmaTrack);
         h.Source.Snapshots.Enqueue(new EngineSnapshot { Running = 1 });
 
         await h.Poller.PollTrackAsync(broken); // сбой не вышел наружу
         await h.Poller.PollOnceAsync();
-        await h.Poller.PollTrackAsync(bonsaiTrack);
+        await h.Poller.PollTrackAsync(gemmaTrack);
 
         h.Poller.CurrentOf("main")!.Running.Should().Be(1);
-        h.Poller.CurrentOf("bonsai")!.Running.Should().Be(2, "дорожка после упавшей опросилась");
+        h.Poller.CurrentOf("gemma")!.Running.Should().Be(2, "дорожка после упавшей опросилась");
     }
 
     [Fact]
     public async Task Directory_ReportsTracks_MainFirst_AndMainIsTheReaderTrack()
     {
         var h = new Harness();
-        h.Poller.AddTrack(MakeTrack(h, "bonsai", () => (new FakeSource(), null, null, null, false)));
+        h.Poller.AddTrack(MakeTrack(h, "gemma", () => (new FakeSource(), null, null, null, false)));
         h.Source.Snapshots.Enqueue(new EngineSnapshot { Running = 0 });
 
         await h.Poller.PollOnceAsync();
 
-        h.Poller.Names.Should().Equal("main", "bonsai");
+        h.Poller.Names.Should().Equal("main", "gemma");
         h.Poller.CurrentOf("main").Should().BeSameAs(h.Poller.Current);
         h.Poller.HistoryOf("main", TimeSpan.FromHours(1)).Should().HaveCount(1);
         h.Poller.CurrentOf("nope").Should().BeNull();
@@ -1114,7 +1114,7 @@ public class LocalModelStatsPollerTests
         foreach (var (name, metricsUrl, stateUrl) in engines)
         {
             dict[$"LocalEngines:{name}:BaseUrl"] = "http://127.0.0.1:18030";
-            dict[$"LocalEngines:{name}:Model"] = "bonsai2-27b";
+            dict[$"LocalEngines:{name}:Model"] = "gemma-4-26b-a4b";
             if (metricsUrl is not null)
                 dict[$"LocalEngines:{name}:MetricsUrl"] = metricsUrl;
             if (stateUrl is not null)
@@ -1133,12 +1133,12 @@ public class LocalModelStatsPollerTests
     public void EngineWithMetricsUrl_GetsTrack_WithoutMetricsUrl_DoesNot()
     {
         var engines = EnginesFromConfig(
-            ("bonsai", "http://127.0.0.1:18030/metrics", null),
+            ("gemma", "http://127.0.0.1:18030/metrics", null),
             ("no-metrics", null, null));
         var h = new Harness(engines: engines);
 
         // main — первой, затем движок с MetricsUrl; без MetricsUrl — дорожки нет.
-        h.Poller.Names.Should().Equal("main", "bonsai");
+        h.Poller.Names.Should().Equal("main", "gemma");
         h.Poller.Names.Should().NotContain("no-metrics");
     }
 
@@ -1151,10 +1151,10 @@ public class LocalModelStatsPollerTests
         var log = new CapturingLogger<LocalModelStatsPoller>();
         var engines = EnginesFromConfig(
             ("main", "http://127.0.0.1:18030/metrics", null),
-            ("bonsai", "http://127.0.0.1:18031/metrics", null));
+            ("gemma", "http://127.0.0.1:18031/metrics", null));
         var h = new Harness(engines: engines, log: log);
 
-        h.Poller.Names.Should().Equal(["main", "bonsai"], "движок с именем main пропущен — дорожка main одна");
+        h.Poller.Names.Should().Equal(["main", "gemma"], "движок с именем main пропущен — дорожка main одна");
         log.Entries.Should().ContainSingle(e => e.Level == LogLevel.Debug && e.Message.Contains("main"),
             "пропуск движка виден в логе (Debug)");
     }
@@ -1166,23 +1166,23 @@ public class LocalModelStatsPollerTests
     public async Task EngineTrack_RestartBreaksWindow_NoNegativeSpeed()
     {
         var h = new Harness();
-        var bonsai = new FakeSource();
-        var bonsaiTrack = MakeTrack(h, "bonsai", () => (bonsai, "llama-server", "bonsai2-27b", null, true));
-        h.Poller.AddTrack(bonsaiTrack);
+        var gemma = new FakeSource();
+        var gemmaTrack = MakeTrack(h, "gemma", () => (gemma, "llama-server", "gemma-4-26b-a4b", null, true));
+        h.Poller.AddTrack(gemmaTrack);
 
         // t=0: живой движок.
-        bonsai.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 1000, PromptTokens = 5000, InterTokenLatencySum = 10, Running = 1 });
-        await h.Poller.PollTrackAsync(bonsaiTrack);
+        gemma.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 1000, PromptTokens = 5000, InterTokenLatencySum = 10, Running = 1 });
+        await h.Poller.PollTrackAsync(gemmaTrack);
         h.Time.Advance(TimeSpan.FromSeconds(5));
         // t=5: обычный интервал: +500 токенов.
-        bonsai.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 1500, PromptTokens = 6000, InterTokenLatencySum = 15, Running = 1 });
-        await h.Poller.PollTrackAsync(bonsaiTrack);
+        gemma.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 1500, PromptTokens = 6000, InterTokenLatencySum = 15, Running = 1 });
+        await h.Poller.PollTrackAsync(gemmaTrack);
         h.Time.Advance(TimeSpan.FromSeconds(5));
-        // t=10: рестарт Bonsai — счётчики упали (GenerationTokens 1500→100, PromptTokens 6000→200).
-        bonsai.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 100, PromptTokens = 200, InterTokenLatencySum = 1, Running = 0 });
-        await h.Poller.PollTrackAsync(bonsaiTrack);
+        // t=10: рестарт Engine — счётчики упали (GenerationTokens 1500→100, PromptTokens 6000→200).
+        gemma.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 100, PromptTokens = 200, InterTokenLatencySum = 1, Running = 0 });
+        await h.Poller.PollTrackAsync(gemmaTrack);
 
-        var history = h.Poller.HistoryOf("bonsai", TimeSpan.FromHours(1));
+        var history = h.Poller.HistoryOf("gemma", TimeSpan.FromHours(1));
         history.Should().HaveCount(3);
         history[1].GenThroughput.Should().Be(100.0, "(1500 − 1000)/5 = 100 ток/с");
         history[2].GenThroughput.Should().BeNull("рестарт (счётчик упал) → разрыв окна, а не отрицательная скорость");
@@ -1190,13 +1190,13 @@ public class LocalModelStatsPollerTests
         history.Should().NotContain(p => p.GenThroughput < 0, "отрицательных скоростей в кольце не бывает");
 
         // После разрыва буфера окно не продолжается: базовой точки нет → оконная скорость null.
-        h.Poller.CurrentOf("bonsai")!.Kv!.GenPerStream.Should().BeNull("разрыв обрывает буфер — окна нет");
+        h.Poller.CurrentOf("gemma")!.Kv!.GenPerStream.Should().BeNull("разрыв обрывает буфер — окна нет");
     }
 
-    // (42) M1/H1: опрос висящей дорожки не задерживает соседние: main и bonsai опрашиваются,
+    // (42) M1/H1: опрос висящей дорожки не задерживает соседние: main и gemma опрашиваются,
     // пока «slow» висит в сети — тик чужой дорожки не ждёт.
     // Мутация: сделать опросы последовательными (сначала `await PollTrackAsync(slowTrack)`) —
-    // main/bonsai не опросились бы, пока slow висит: краснеет на Running=1/2.
+    // main/gemma не опросились бы, пока slow висит: краснеет на Running=1/2.
     [Fact]
     public async Task PollTrack_HangingTrackDoesNotDelayNeighbours()
     {
@@ -1205,17 +1205,17 @@ public class LocalModelStatsPollerTests
         good.Snapshots.Enqueue(new EngineSnapshot { Running = 2 });
         var slow = new BlockingSource();
         var slowTrack = MakeTrack(h, "slow", () => (slow, "llama-server", "m", null, true));
-        var bonsaiTrack = MakeTrack(h, "bonsai", () => (good, "llama-server", "bonsai", null, true));
+        var gemmaTrack = MakeTrack(h, "gemma", () => (good, "llama-server", "gemma", null, true));
         h.Poller.AddTrack(slowTrack);
-        h.Poller.AddTrack(bonsaiTrack);
+        h.Poller.AddTrack(gemmaTrack);
         h.Source.Snapshots.Enqueue(new EngineSnapshot { Running = 1 });
 
         var slowPoll = h.Poller.PollTrackAsync(slowTrack); // не ждём: медленная дорожка ещё «в сети»
         await h.Poller.PollOnceAsync();
-        await h.Poller.PollTrackAsync(bonsaiTrack);
+        await h.Poller.PollTrackAsync(gemmaTrack);
 
         h.Poller.CurrentOf("main")!.Running.Should().Be(1, "main опросился, не дожидаясь висящей дорожки");
-        h.Poller.CurrentOf("bonsai")!.Running.Should().Be(2, "соседняя дорожка опросилась, пока медленная в сети");
+        h.Poller.CurrentOf("gemma")!.Running.Should().Be(2, "соседняя дорожка опросилась, пока медленная в сети");
         h.Poller.CurrentOf("slow")!.Status.Should().Be("notConnected", "медленная ещё не ответила");
 
         slow.Release();
@@ -1358,21 +1358,21 @@ public class LocalModelStatsPollerTests
     public async Task EngineTrack_MetricsDownArbiterHolds_StatusYieldedNoDownSince(string state)
     {
         var h = new Harness(engines: EnginesFromConfig(
-            ("bonsai", "http://127.0.0.1:18030/metrics", "http://127.0.0.1:19000/state")));
+            ("gemma", "http://127.0.0.1:18030/metrics", "http://127.0.0.1:19000/state")));
         h.Arbiter.Results.Enqueue(ArbiterState(state));
-        var track = h.Poller.Find("bonsai");
+        var track = h.Poller.Find("gemma");
         track.Should().NotBeNull("движок с MetricsUrl получил дорожку из конструктора поллера");
 
         var interval = await h.Poller.PollTrackAsync(track!);
 
-        var cur = h.Poller.CurrentOf("bonsai")!;
+        var cur = h.Poller.CurrentOf("gemma")!;
         cur.Status.Should().Be("yielded");
         cur.DownSince.Should().BeNull("движок не мёртв: он под арбитром");
         cur.Configured.Should().BeTrue();
         cur.Engine.Should().Be("llama-server");
-        cur.Model.Should().Be("bonsai2-27b");
+        cur.Model.Should().Be("gemma-4-26b-a4b");
         h.Arbiter.CalledFor.Should().HaveCount(1, "один отказ /metrics — один запрос к арбитру");
-        h.Arbiter.CalledFor[0].Should().Be("bonsai", "дорожка спросила арбитра под именем своего движка");
+        h.Arbiter.CalledFor[0].Should().Be("gemma", "дорожка спросила арбитра под именем своего движка");
         interval.Should().Be(h.Options.CurrentValue.DownPollInterval,
             "молчащий /metrics опрашивается с интервалом down");
     }
@@ -1403,7 +1403,7 @@ public class LocalModelStatsPollerTests
     {
         var h = new Harness(engines: EnginesFromConfig(
             ("main", "http://127.0.0.1:18030/metrics", "http://127.0.0.1:19000/state"),
-            ("bonsai", "http://127.0.0.1:18031/metrics", "http://127.0.0.1:19001/state")));
+            ("gemma", "http://127.0.0.1:18031/metrics", "http://127.0.0.1:19001/state")));
         // main-метрики отказывают: SourceFactoryOverride → пустая очередь → null.
 
         await h.Poller.PollOnceAsync();
@@ -1422,13 +1422,13 @@ public class LocalModelStatsPollerTests
     public async Task EngineTrack_ArbiterNotConfirming_StatusDownWithDownSince(bool reachable, string state)
     {
         var h = new Harness(engines: EnginesFromConfig(
-            ("bonsai", "http://127.0.0.1:18030/metrics", "http://127.0.0.1:19000/state")));
+            ("gemma", "http://127.0.0.1:18030/metrics", "http://127.0.0.1:19000/state")));
         h.Arbiter.Results.Enqueue(ArbiterState(state, reachable));
-        var track = h.Poller.Find("bonsai")!;
+        var track = h.Poller.Find("gemma")!;
 
         await h.Poller.PollTrackAsync(track);
 
-        var cur = h.Poller.CurrentOf("bonsai")!;
+        var cur = h.Poller.CurrentOf("gemma")!;
         cur.Status.Should().Be("down");
         cur.DownSince.Should().Be(h.Time.GetUtcNow());
     }
@@ -1441,20 +1441,20 @@ public class LocalModelStatsPollerTests
     public async Task EngineTrack_DownThenArbiterHolds_ClearsDownSince()
     {
         var h = new Harness(engines: EnginesFromConfig(
-            ("bonsai", "http://127.0.0.1:18030/metrics", "http://127.0.0.1:19000/state")));
-        var track = h.Poller.Find("bonsai")!;
+            ("gemma", "http://127.0.0.1:18030/metrics", "http://127.0.0.1:19000/state")));
+        var track = h.Poller.Find("gemma")!;
 
         h.Arbiter.Results.Enqueue(null); // в этот раз арбитр не ответил
         await h.Poller.PollTrackAsync(track);
-        h.Poller.CurrentOf("bonsai")!.Status.Should().Be("down");
-        h.Poller.CurrentOf("bonsai")!.DownSince.Should().NotBeNull();
+        h.Poller.CurrentOf("gemma")!.Status.Should().Be("down");
+        h.Poller.CurrentOf("gemma")!.DownSince.Should().NotBeNull();
 
         h.Time.Advance(TimeSpan.FromSeconds(15));
         h.Arbiter.Results.Enqueue(ArbiterState(EngineArbiterSnapshot.StateYielded));
         await h.Poller.PollTrackAsync(track);
 
-        h.Poller.CurrentOf("bonsai")!.Status.Should().Be("yielded");
-        h.Poller.CurrentOf("bonsai")!.DownSince.Should().BeNull("движок не мёртв — «момент сбоя» из снимка уходит");
+        h.Poller.CurrentOf("gemma")!.Status.Should().Be("yielded");
+        h.Poller.CurrentOf("gemma")!.DownSince.Should().BeNull("движок не мёртв — «момент сбоя» из снимка уходит");
     }
 
     // Источник, который висит в сети, пока тест не разрешит (медленный движок).

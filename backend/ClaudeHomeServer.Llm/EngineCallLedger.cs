@@ -1,18 +1,18 @@
 namespace ClaudeHomeServer.Services.Llm;
 
 // Звено цепочки вызова места к именованному движку (контракт фронта LocalModelChainLink).
-// `Bonsai` — собственное звено движка: имя взято из контракта и общее для всех
+// `Engine` — собственное звено движка: имя взято из контракта и общее для всех
 // LocalEngines:*, фронт не знает имени движка (разрез v2, §4).
-public enum EngineCallLink { Bonsai, Insurance, Claude }
+public enum EngineCallLink { Engine, Insurance, Claude }
 
 // Итог цепочки: какое звено ответило. Missed — ответа нет: цепочка вернула пусто или
 // бросила (внешняя отмена тоже: вызов состоялся, ответа не дал).
-public enum EngineCallOutcome { Bonsai, Insurance, Claude, Missed }
+public enum EngineCallOutcome { Engine, Insurance, Claude, Missed }
 
 // Ответы мест за последний час одного движка (контракт фронта answersLastHour).
 // sinceAt = max(now − 1 ч, старт процесса): честный знаменатель доли — процессу
 // пять минут, и знаменатель не «пустой час».
-public sealed record EngineAnswerCounts(int Bonsai, int Insurance, int Claude, int Missed,
+public sealed record EngineAnswerCounts(int Engine, int Insurance, int Claude, int Missed,
     DateTimeOffset SinceAt);
 
 // Вызов места прямо сейчас (контракт фронта callsNow): место, звено, длительность.
@@ -74,20 +74,20 @@ public sealed class EngineCallLedger
         {
             var now = _time.GetUtcNow();
             var nowMinute = now.ToUnixTimeSeconds() / 60;
-            int bonsai = 0, insurance = 0, claude = 0, missed = 0;
+            int engine = 0, insurance = 0, claude = 0, missed = 0;
             if (_byEngine.TryGetValue(engineName, out var owner))
                 for (var i = 0; i < Cells; i++)
                 {
                     var m = owner.CellMinute[i];
                     if (m < nowMinute - Cells + 1 || m > nowMinute) continue;
-                    bonsai += owner.Counts[i, (int)EngineCallOutcome.Bonsai];
+                    engine += owner.Counts[i, (int)EngineCallOutcome.Engine];
                     insurance += owner.Counts[i, (int)EngineCallOutcome.Insurance];
                     claude += owner.Counts[i, (int)EngineCallOutcome.Claude];
                     missed += owner.Counts[i, (int)EngineCallOutcome.Missed];
                 }
             var hourAgo = now - TimeSpan.FromHours(1);
             var sinceAt = hourAgo > _startedAt ? hourAgo : _startedAt;
-            return new EngineAnswerCounts(bonsai, insurance, claude, missed, sinceAt);
+            return new EngineAnswerCounts(engine, insurance, claude, missed, sinceAt);
         }
     }
 

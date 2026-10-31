@@ -206,7 +206,7 @@ public sealed class CheapTextRunner(
                 var viaEngine = await RunEngineAsync(engine, actionKey, prompt, jsonFormat, ownerId, ct, call);
                 if (!string.IsNullOrWhiteSpace(viaEngine))
                 {
-                    call?.End(EngineCallOutcome.Bonsai);
+                    call?.End(EngineCallOutcome.Engine);
                     return viaEngine;
                 }
                 // Страховка движка — облако: в режиме «без облака» (RunLocalOrChosenAsync) её нет.
@@ -378,7 +378,7 @@ public sealed class CheapTextRunner(
         if (engine.Spec.NumCtx is { } cap && cap < spec.NumCtx) spec = spec with { NumCtx = cap };
         // Вызов вошёл в звено движка: проба готовности позади, запрос уходит сейчас
         // (в журнале — строка «кто сейчас на модели» со звеном, а не «ждёт в очереди»).
-        call?.Step(EngineCallLink.Bonsai);
+        call?.Step(EngineCallLink.Engine);
         var text = await RunOnClientAsync(engine.Client, actionKey, prompt, jsonFormat, ownerId, spec, ct);
         if (string.IsNullOrWhiteSpace(text))
             log.LogDebug("cheap-runner: действие {Action} — движок {Engine} не ответил, иду дальше по цепочке",
@@ -454,7 +454,7 @@ public sealed class CheapTextRunner(
                 var viaEngine = await RunEngineAsync(engine, actionKey, prompt, jsonFormat, ownerId, ct, call);
                 if (!string.IsNullOrWhiteSpace(viaEngine))
                 {
-                    call?.End(EngineCallOutcome.Bonsai);
+                    call?.End(EngineCallOutcome.Engine);
                     return new OneShotResult(viaEngine, null, 0);
                 }
                 if (engine.Spec.FallbackRoute is { } insurance)

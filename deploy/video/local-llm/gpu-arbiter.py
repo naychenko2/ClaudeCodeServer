@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Арбитр GPU на «Video»: Bonsai (bonsai.service) уступает карту тяжёлым задачам и возвращается.
+"""Арбитр GPU на «Video»: дежурная LLM (local-llm.service) уступает карту тяжёлым задачам и возвращается.
 
 Правила (режим «9B рядом с кэшем ComfyUI»):
   уступить — если (а) есть аренда от CCS (LoRA, WhisperX…), (б) на GPU чужой процесс
-  (не ComfyUI и не Bonsai), (в) в очереди ComfyUI задание с тяжёлым графом (видео H3 и т.п.);
+  (не ComfyUI и не llama-server), (в) в очереди ComfyUI задание с тяжёлым графом (видео H3 и т.п.);
   вернуть — когда ни одного основания нет подряд RETURN_QUIET_S секунд.
 
 HTTP (порт 18031):
-  GET  /state                 → {"bonsai": "ready|yielded|starting", "reasons": [...], ...}
+  GET  /state                 → {"engine": "ready|yielded|starting|waiting-vram", "reasons": [...], ...}
+                                (до 01.11.2026 поле называлось "bonsai"; CCS читает оба)
   POST /lease  {"ttl_s": N, "reason": "..."} → {"id": ...}; продление — повторный POST с тем же id
   DELETE /lease/<id>
 """
@@ -23,15 +24,15 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 COMFY = os.environ.get("ARBITER_COMFY_URL", "http://127.0.0.1:8188")
-BONSAI_UNIT = os.environ.get("ARBITER_BONSAI_UNIT", "bonsai.service")
-BONSAI_HEALTH = os.environ.get("ARBITER_BONSAI_HEALTH", "http://127.0.0.1:18030/health")
+ENGINE_UNIT = os.environ.get("ARBITER_ENGINE_UNIT", "local-llm.service")
+ENGINE_HEALTH = os.environ.get("ARBITER_ENGINE_HEALTH", "http://127.0.0.1:18030/health")
 PORT = int(os.environ.get("ARBITER_PORT", "18031"))
 POLL_S = float(os.environ.get("ARBITER_POLL_S", "0.5"))
 RETURN_QUIET_S = float(os.environ.get("ARBITER_RETURN_QUIET_S", "10"))
 # Пауза возврата после заданий ComfyUI — больше обычной: серия картинок идёт с перерывами на
 # просмотр, и возврат LLM между кадрами заставил бы ComfyUI грузить модели заново на каждом.
 RETURN_QUIET_AFTER_COMFY_S = float(os.environ.get("ARBITER_RETURN_QUIET_AFTER_COMFY_S", "180"))
-# exclusive — Bonsai не делит карту с ComfyUI: уступает любому заданию, перед возвратом выгружает
+# exclusive — LLM не делит карту с ComfyUI: уступает любому заданию, перед возвратом выгружает
 # кэш моделей ComfyUI (/free) и ждёт VRAM_NEEDED_MB свободных. shared — уступает только тяжёлым
 # графам (маркеры ниже), кэш ComfyUI не трогает (режим для 9B рядом с кэшем).
 MODE = os.environ.get("ARBITER_MODE", "exclusive")
@@ -56,7 +57,7 @@ def _warn_once(key: str, msg: str):
 
 _lock = threading.Lock()
 _leases: dict[str, dict] = {}
-_state = {"bonsai": "unknown", "reasons": [], "since": time.time(), "yields": 0, "returns": 0,
+_state = {"engine": "unknown", "reasons": [], "since": time.time(), "yields": 0, "returns": 0,
           "last_yield_s": None, "last_return_s": None, "mode": MODE, "quiet_left_s": None}
 
 
@@ -146,7 +147,7 @@ def comfy_free():
         return False
 
 
-def vram_room_for_bonsai() -> bool:
+def vram_room_for_engine() -> bool:
     used, total = vram_used_total_mb()
     return used is None or total is None or total - used >= VRAM_NEEDED_MB
 
@@ -155,13 +156,13 @@ def systemctl(*args) -> bool:
     return subprocess.run(["systemctl", *args], capture_output=True, timeout=30).returncode == 0
 
 
-def bonsai_active() -> bool:
-    return subprocess.run(["systemctl", "is-active", "--quiet", BONSAI_UNIT], timeout=5).returncode == 0
+def engine_active() -> bool:
+    return subprocess.run(["systemctl", "is-active", "--quiet", ENGINE_UNIT], timeout=5).returncode == 0
 
 
-def bonsai_healthy() -> bool:
+def engine_healthy() -> bool:
     try:
-        with urllib.request.urlopen(BONSAI_HEALTH, timeout=1.0) as r:
+        with urllib.request.urlopen(ENGINE_HEALTH, timeout=1.0) as r:
             return r.status == 200
     except Exception:
         return False
@@ -174,18 +175,18 @@ def loop():
         reasons = [f"lease:{r}" for r in active_leases()]
         reasons += [f"gpu:{p}" for p in gpu_foreign_procs()]
         reasons += [f"comfy:{j}" for j in comfy_heavy_jobs()]
-        active = bonsai_active()
+        active = engine_active()
         if reasons:
             quiet_since = None
             last_reason_comfy = any(r.startswith("comfy:") for r in reasons)
             _state["quiet_left_s"] = None
             if active:
                 t0 = time.time()
-                systemctl("stop", BONSAI_UNIT)
+                systemctl("stop", ENGINE_UNIT)
                 _state["last_yield_s"] = round(time.time() - t0, 2)
                 _state["yields"] += 1
                 _state["since"] = time.time()
-            _state["bonsai"] = "yielded"
+            _state["engine"] = "yielded"
         else:
             quiet_since = quiet_since or time.time()
             need_quiet = RETURN_QUIET_AFTER_COMFY_S if last_reason_comfy else RETURN_QUIET_S
@@ -194,27 +195,27 @@ def loop():
             if not active and left <= 0:
                 t0 = time.time()
                 # exclusive: освободить кэш моделей ComfyUI и убедиться, что место есть
-                if MODE == "exclusive" and not vram_room_for_bonsai():
+                if MODE == "exclusive" and not vram_room_for_engine():
                     comfy_free()
                     for _ in range(20):
-                        if vram_room_for_bonsai():
+                        if vram_room_for_engine():
                             break
                         time.sleep(0.25)
-                if not vram_room_for_bonsai():
-                    _warn_once("vram", f"для Bonsai нет {VRAM_NEEDED_MB} МБ VRAM даже после /free — жду")
-                    _state["bonsai"] = "waiting-vram"
+                if not vram_room_for_engine():
+                    _warn_once("vram", f"для LLM нет {VRAM_NEEDED_MB} МБ VRAM даже после /free — жду")
+                    _state["engine"] = "waiting-vram"
                     time.sleep(POLL_S)
                     continue
                 last_reason_comfy = False
-                systemctl("start", BONSAI_UNIT)
+                systemctl("start", ENGINE_UNIT)
                 _state["returns"] += 1
                 _state["since"] = time.time()
-                _state["bonsai"] = "starting"
+                _state["engine"] = "starting"
                 # ждём готовности, но не дольше 60 с — иначе юнит сам перезапустится
-                while time.time() - t0 < 60 and not bonsai_healthy():
+                while time.time() - t0 < 60 and not engine_healthy():
                     time.sleep(0.25)
                 _state["last_return_s"] = round(time.time() - t0, 2)
-            _state["bonsai"] = "ready" if active or bonsai_healthy() else ("starting" if bonsai_active() else "yielded")
+            _state["engine"] = "ready" if active or engine_healthy() else ("starting" if engine_active() else "yielded")
         _state["reasons"] = reasons
         time.sleep(POLL_S)
 
@@ -232,10 +233,10 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        # /ready — для CCS перед вызовом: 200 = Bonsai отвечает, 503 = выгружен/стартует.
+        # /ready — для CCS перед вызовом: 200 = LLM отвечает, 503 = выгружен/стартует.
         if self.path == "/ready":
-            ok = _state["bonsai"] == "ready" and bonsai_healthy()
-            return self._send(200 if ok else 503, {"ready": ok, "bonsai": _state["bonsai"], "reasons": _state["reasons"]})
+            ok = _state["engine"] == "ready" and engine_healthy()
+            return self._send(200 if ok else 503, {"ready": ok, "engine": _state["engine"], "reasons": _state["reasons"]})
         if self.path == "/state":
             with _lock:
                 leases = {k: {"reason": v["reason"], "left_s": round(v["until"] - time.time(), 1)} for k, v in _leases.items()}

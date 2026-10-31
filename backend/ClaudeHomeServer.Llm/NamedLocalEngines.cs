@@ -2,7 +2,7 @@ namespace ClaudeHomeServer.Services.Llm;
 
 // Именованные локальные движки для фоновых мест — ВТОРОЙ и далее llama-server рядом с основным
 // `LocalLlm` (тот один на инстанс и делит GPU с ходами исполнителя). Зачем отдельно: дежурная
-// модель на другой машине (Bonsai 2 на «Video») живёт под арбитром GPU и в любой момент может
+// модель на другой машине (Gemma 4 на «Video») живёт под арбитром GPU и в любой момент может
 // быть выгружена ради медиазадачи — место обязано узнать об этом мгновенно (проба готовности),
 // а не 20-секундным таймаутом, и уйти по своей цепочке дальше.
 //
@@ -16,6 +16,7 @@ namespace ClaudeHomeServer.Services.Llm;
 //                       пусто — движок в панели «Локальные модели» не показывается;
 //   • `FallbackRoute` — шаг после неудачи движка, перед финальным claude: `direct:<model>`
 //                       (прямой адаптер, например MiniMax) — других значений нет;
+//   • `Title`         — короткое название модели на вкладке панели «Локальные модели»;
 //   • `NumCtx`        — потолок контекста движка (окно слота llama-server): профиль места
 //                       с большим NumCtx режется до него при обрезке промпта;
 //   • `Actions`       — массив ключей мест каталога, которые идут на этот движок, пока админ не
@@ -38,6 +39,10 @@ public sealed record LocalEngineSpec(
 
     // Имя модели для снимка дорожки (Model из конфига движка); на отображение, не для запроса.
     public string? Model { get; init; }
+
+    // Короткое название модели на вкладке панели «Локальные модели» (LocalEngines:<имя>:Title);
+    // пусто — ключ движка с заглавной буквы.
+    public string? Title { get; init; }
 }
 
 public sealed class LocalEngine(LocalEngineSpec spec, ILocalLlmClient client,
@@ -135,7 +140,7 @@ public sealed class NamedLocalEngines
                     }
                 };
             }
-            spec = spec with { Model = options.TextModel };
+            spec = spec with { Model = options.TextModel, Title = section["Title"]?.Trim() };
             Add(new LocalEngine(spec, client, probe));
             log.LogInformation("LocalEngines:{Name} — {Url}, модель {Model}, мест {Count}, страховка {Fallback}",
                 name, options.BaseUrl, options.TextModel, actions.Count, fallback ?? "нет");

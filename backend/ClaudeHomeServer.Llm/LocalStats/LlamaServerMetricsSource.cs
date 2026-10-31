@@ -151,7 +151,7 @@ public sealed class LlamaServerMetricsSource : IEngineMetricsSource
             PrefillTimeSum = promptSeconds,
             // Расхождение с §2 (решение Софьи): prompt_tokens_total по HELP метрики — токены
             // без кэшированных, то есть ровно «новые KV-токены, вычисленные в prefill».
-            // Без этого маппинга чтение промпта у Bonsai было бы мёртвым.
+            // Без этого маппинга чтение промпта у движка на Video было бы мёртвым.
             PrefillKvComputedTokens = Finite(prompt),
             Unsupported = unsupported,
         };

@@ -1,4 +1,4 @@
-// Форматирование блока «Дежурство» (DutyBlock) и строк «Кто сейчас» для движка Bonsai:
+// Форматирование блока «Дежурство» (DutyBlock) и строк «Кто сейчас» для движка второй движок:
 // чистые функции, тесты без React и DOM (как format.ts). Все подписи — по макету
 // docs/mockups/bonsai-toolbar.md (раздел 5) и контракту §5 (типы — lib/api.ts).
 // Строки арбитра (lease, gpu-команда, неизвестный kind) — недоверенные: их возвращаем
@@ -95,31 +95,31 @@ export function dutyReasonsSummary(reasons?: LocalModelDutyReason[] | null): { m
   return { main: dutyReasonLine(list[0]), more: list.length - 1 };
 }
 
-// === Цепочка «Bonsai → страховка → облако» ===
+// === Цепочка «локальная → страховка → облако» ===
 
 // Цепочка — ТИПИЧНЫЙ путь (контракт): состав плашек фиксирован макетом. Третье звено
 // подписано «облако»: это не обязательно claude (разрез §2), title объясняет.
-export const CHAIN_ORDER: LocalModelChainLink[] = ['bonsai', 'insurance', 'claude'];
+export const CHAIN_ORDER: LocalModelChainLink[] = ['engine', 'insurance', 'claude'];
 export const CHAIN_LABEL: Record<LocalModelChainLink, string> = {
-  bonsai: 'Bonsai',
+  engine: 'локальная',
   insurance: 'MiniMax',
   claude: 'облако',
 };
 export const CHAIN_SUFFIX: Record<LocalModelChainLink, string> = {
-  bonsai: '',
+  engine: '',
   insurance: ' · страховка',
   claude: '',
 };
 export const CHAIN_LAST_TITLE = 'Финальный шаг: модель места или слота, обычно claude';
 
 // «Звено сейчас» — куда пойдёт СЛЕДУЮЩИЙ вызов места (живого знания о последнем
-// ответе нет, макет §4): модель активна → bonsai; уступила/недоступна → страховка.
+// ответе нет, макет §4): модель активна → engine; уступила/недоступна → страховка.
 export function currentChainLink(status: LocalModelStats['status']): LocalModelChainLink {
-  return status === 'working' || status === 'busy' ? 'bonsai' : 'insurance';
+  return status === 'working' || status === 'busy' ? 'engine' : 'insurance';
 }
 
 export function nextChainHint(link: LocalModelChainLink): string {
-  return link === 'bonsai' ? 'Следующий вызов места пойдёт на Bonsai' : 'Следующий вызов места пойдёт на MiniMax';
+  return link === 'engine' ? 'Следующий вызов места пойдёт на локальную модель' : 'Следующий вызов места пойдёт на MiniMax';
 }
 
 // === Ответы мест за час ===
@@ -127,7 +127,7 @@ export function nextChainHint(link: LocalModelChainLink): string {
 const HOUR_MS = 60 * 60_000;
 
 export type AnswersSegment = {
-  key: 'bonsai' | 'insurance' | 'claude' | 'missed';
+  key: 'engine' | 'insurance' | 'claude' | 'missed';
   label: string;
   // цвет берёт компонент: success / info / accent / danger
   count: number;
@@ -140,11 +140,11 @@ export type AnswersSegment = {
 // не «нет данных» (нет данных — весь блок null): это работа без ответов, и доля при
 // нулевом знаменателе — «—», а не NaN.
 export function answersSummary(a: LocalModelDutyAnswers | null): { total: number; segments: AnswersSegment[] } {
-  const src = a ?? { bonsai: 0, insurance: 0, claude: 0, missed: 0, sinceAt: 0 };
-  const nums = [src.bonsai, src.insurance, src.claude, src.missed].map(n => (Number.isFinite(n) ? Math.max(0, n) : 0));
+  const src = a ?? { engine: 0, insurance: 0, claude: 0, missed: 0, sinceAt: 0 };
+  const nums = [src.engine, src.insurance, src.claude, src.missed].map(n => (Number.isFinite(n) ? Math.max(0, n) : 0));
   const total = nums[0] + nums[1] + nums[2] + nums[3];
-  const labels = ['Bonsai', 'MiniMax', 'облако', 'без ответа'];
-  const keys: AnswersSegment['key'][] = ['bonsai', 'insurance', 'claude', 'missed'];
+  const labels = ['локально', 'MiniMax', 'облако', 'без ответа'];
+  const keys: AnswersSegment['key'][] = ['engine', 'insurance', 'claude', 'missed'];
   const segments = keys.map((key, i) => ({
     key,
     label: labels[i],
@@ -204,14 +204,14 @@ export const DUTY_MODE_CHIP: Record<LocalModelArbiterMode, string> = {
   shared: 'рядом с ComfyUI',
 };
 
-// === «Кто сейчас» для Bonsai: строки из callsNow ===
+// === «Кто сейчас» для второй движок: строки из callsNow ===
 
 // Это журнал вызовов мест, а не чаты: строка не кликабельна, владельца и промпта нет
 // (разрез v2, §4). link:null — «ждёт в очереди»: вызов уже в журнале, звена ещё нет.
 export type DutyCallRow = {
   key: string;
   place: string;
-  // «Bonsai» / «MiniMax · страховка» / «облако»; для queued — «ждёт в очереди»
+  // «локальная» / «MiniMax · страховка» / «облако»; для queued — «ждёт в очереди»
   linkText: string;
   queued: boolean;
   // «2,1 с»; '' — длительности нет (вызов ещё не начался): значения не показываем

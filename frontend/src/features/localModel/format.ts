@@ -147,7 +147,7 @@ function arbiterUnreachable(data: LocalModelStats): boolean {
   return (data.status === 'working' || data.status === 'busy') && data.duty?.arbiter?.reachable === false;
 }
 
-// Тон точки на сегменте «Bonsai» и на значке рельса (тот же, Ф6): идущая уступка —
+// Тон точки на сегменте второго движка и на значке рельса (тот же, Ф6): идущая уступка —
 // muted, то, что само не рассосётся (память, молчание стенда или арбитра) — warning (макет §4:
 // «accent закреплён за „что-то идёт прямо сейчас“», жёлтый — за неотсашивающееся).
 export function standDot(data: LocalModelStats): 'muted' | 'warning' | null {
@@ -194,7 +194,7 @@ function clockLeft(s: number): string {
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
 }
 
-// Подсказка сегмента «Bonsai» (title/aria-label) — та же строка, что подсказка рельса
+// Подсказка сегмента «второй движок» (title/aria-label) — та же строка, что подсказка рельса
 // (макет §2): «вернётся через м:сс» — остаток из последнего снимка, тот же, что в
 // «Дежурстве»; живого тиканья между опросами нет — следующий опрос рельса (Ф6)
 // принесёт новое значение. null — подсказки нет (стенд работает).
@@ -202,22 +202,22 @@ export function standHint(data: LocalModelStats): string | null {
   switch (data.status) {
     case 'yielded': {
       switch (yieldPhase(data)) {
-        case 'starting': return 'Bonsai загружается';
-        case 'waiting-vram': return 'Bonsai ждёт память карты';
+        case 'starting': return 'Модель загружается';
+        case 'waiting-vram': return 'Модель ждёт память карты';
         case 'waiting-return': {
           const left = data.duty?.arbiter?.quietLeftS ?? 0;
-          return left > 0 ? `Bonsai вернётся через ${clockLeft(left)}` : 'Bonsai вот-вот вернётся';
+          return left > 0 ? `Модель вернётся через ${clockLeft(left)}` : 'Модель вот-вот вернётся';
         }
         default: {
           const short = reasonShort(data.duty?.arbiter?.reasons?.[0]);
-          return short ? `Bonsai уступила карту: ${short}` : 'Bonsai уступила карту';
+          return short ? `Модель уступила карту: ${short}` : 'Модель уступила карту';
         }
       }
     }
-    case 'down': return 'Bonsai недоступна';
+    case 'down': return 'Модель недоступна';
     default:
       // Та же таблица макета §4, что у standDot: подсказка «арбитр не отвечает»
-      return arbiterUnreachable(data) ? 'Bonsai: арбитр не отвечает' : null;
+      return arbiterUnreachable(data) ? 'Модель: арбитр не отвечает' : null;
   }
 }
 
@@ -253,7 +253,7 @@ export function menuStatus(data: LocalModelStats | null): MenuStatus | null {
 }
 
 // Тон точки на САМОЙ кнопке «⋯» мобильной шапки (Ф9, макет bonsai-toolbar, renderPhone:
-// точка на кнопке «Ещё» — тот же bonsaiDot/dotColor, что у рельса). Кнопка и её пункт —
+// точка на кнопке «Ещё» — тот же standDot/dotColor, что у рельса). Кнопка и её пункт —
 // один сигнал одного состояния: тон и наличие берутся ровно оттуда же, откуда статус
 // пункта (menuStatus), а он — из standDot; три индикатора не могут разойтись. null —
 // точки нет: состояние в норме или не известно (снимка нет).

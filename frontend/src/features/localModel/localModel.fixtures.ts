@@ -229,7 +229,7 @@ export function mockLocalModelMediaSelf(state: LocalModelMediaMockState = 'run')
   };
 }
 
-// === Стенд второй модели (Bonsai): состояния дежурства (разрез v2, §5; макет §4) ===
+// === Стенд второй модели (второй движок): состояния дежурства (разрез v2, §5; макет §4) ===
 //
 // Пять состояний арбитра + «ждёт возврата» (yielded без причин с остатком паузы —
 // производное состояние фронта, не состояние арбитра) + «арбитр не подключён» (у движка нет
@@ -240,25 +240,25 @@ export function mockLocalModelMediaSelf(state: LocalModelMediaMockState = 'run')
 // метрики отвечают → 'working'/'busy' по очереди (состояние 'ready'); метрики молчат и
 // арбитр сказал 'yielded'/'starting'/'waiting-vram' → 'yielded', DownSince НЕ ставится;
 // метрики молчат и арбитр сказал 'unknown' (или его вовсе нет) → 'down', как у основной.
-export type BonsaiMockState = 'unknown' | 'ready' | 'yielded' | 'returning' | 'starting' | 'waiting-vram' | 'no-arbiter';
+export type EngineMockState = 'unknown' | 'ready' | 'yielded' | 'returning' | 'starting' | 'waiting-vram' | 'no-arbiter';
 
 // Блоки, которых llama-server не отдаёт никогда: имена полей снимка, их добавляет
 // LlamaServerMetricsSource.UnsupportedBlocks (backend/…/Llm/LocalStats/). По этому списку
 // фронт прячет «Кэш, %», «Вытеснения» и «Куда уходит время агентов» (макет §3).
-export const BONSAI_UNSUPPORTED = [
+export const ENGINE_UNSUPPORTED = [
   'KvUsagePerc', 'RamTierPerc', 'RamTierHits', 'RamTierQueries',
   'Preemptions', 'QueueTimeSum', 'PrefillKvComputedTokens', 'DecodeTimeSum',
 ];
 
-export function mockBonsaiStats(state: BonsaiMockState = 'yielded'): LocalModelStats {
+export function mockEngineStats(state: EngineMockState = 'yielded'): LocalModelStats {
   const now = Date.now();
   // Карта одна на Video и общая с ComfyUI: данные о ней — с узла ComfyUI (разрез v2, §3)
   const base: LocalModelStats = {
     configured: true,
     // engine — ТИП движка, а не имя стенда: бэкенд кладёт 'vllm' | 'llama-server' | 'ollama'
-    // (LocalModelStatsPoller.cs:11-12). Имя стенда ('bonsai') здесь быть не должно.
+    // (LocalModelStatsPoller.cs:11-12). Имя стенда ('gemma') здесь быть не должно.
     engine: 'llama-server',
-    model: 'bonsai-27b',
+    model: 'gemma-27b',
     status: 'working',
     running: 1,
     waiting: 0,
@@ -268,17 +268,17 @@ export function mockBonsaiStats(state: BonsaiMockState = 'yielded'): LocalModelS
       { index: 0, name: 'RTX 3090', utilPerc: 34, memUsedMb: 8192, memTotalMb: 24576, tempC: 52, powerW: 88, powerLimitW: 350 },
     ],
     history: [],
-    // У Bonsai нет чатов: «кто сейчас на модели» — места сервера, их несёт duty.callsNow
+    // У второй движок нет чатов: «кто сейчас на модели» — места сервера, их несёт duty.callsNow
     chats: [],
-    unsupported: [...BONSAI_UNSUPPORTED],
+    unsupported: [...ENGINE_UNSUPPORTED],
   };
   // Счётчики и цепочка не зависят от состояния арбитра: они из журнала вызовов мест
   // (EngineCallLedger). Числа — из макета («Ответы мест за час» 212/31/2/1, «14 · 14», 0,2 с / 6,1 с).
   const duty = (arbiter: LocalModelDutyArbiter | null): LocalModelDuty => ({
     arbiter,
-    chain: ['bonsai', 'insurance', 'claude'],
-    answersLastHour: { bonsai: 212, insurance: 31, claude: 2, missed: 1, sinceAt: now - 60 * 60_000 },
-    callsNow: [{ place: 'Заголовок чата', link: 'bonsai', durationS: 1.4 }],
+    chain: ['engine', 'insurance', 'claude'],
+    answersLastHour: { engine: 212, insurance: 31, claude: 2, missed: 1, sinceAt: now - 60 * 60_000 },
+    callsNow: [{ place: 'Заголовок чата', link: 'engine', durationS: 1.4 }],
   });
   // Арбитр жив и отвечает: режим «карта целиком», счётчики с запуска арбитра (40 мин)
   const alive = (state: LocalModelArbiterState): LocalModelDutyArbiter => ({

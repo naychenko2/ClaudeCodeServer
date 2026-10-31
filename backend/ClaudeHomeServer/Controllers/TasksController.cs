@@ -435,6 +435,46 @@ public class TasksController(
         else if (task.ColumnId is not null && targetProject?.BoardColumns is { } currentColumns)
             effectiveColumn = currentColumns.FirstOrDefault(c => c.Id == task.ColumnId);
 
+        // Человек-исполнитель (S2b-2a): id участника проекта задачи. Членство и роль знает
+        // только проект — их проверяет дверь (TaskManager проекта не видит; ту же пару
+        // проверок для MCP-двери поставит S2b-2b). Отказ — 400 с машинным кодом контракта
+        // (assignee_not_member / reader_not_assignable): по коду фронт решает подсказку.
+        // access резолвит УЧАСТНИКА, а не вызывающего: право на это действие у вызывающего
+        // уже проверено выше (чужой — 403), здесь вопрос «можно ли этого человека исполнителем».
+        // id владельца проекта — не отказ: TaskManager сбрасывает поле (владелец — исполнитель
+        // по умолчанию). Личная задача: чужой id — тот же отказ (ей нечего быть участником),
+        // свой id допустим и равен «снять» (для правки задачи вызывающий и есть её владелец).
+        var tenantOwnerId = targetProject?.OwnerId;
+        var assigneeUserId = string.IsNullOrWhiteSpace(req.AssigneeUserId) ? null : req.AssigneeUserId.Trim();
+        if (assigneeUserId is not null)
+        {
+            if (targetProjectId is null)
+            {
+                if (assigneeUserId != UserId)
+                    return BadRequest(new
+                    {
+                        error = "Личной задаче нельзя назначить исполнителя: у неё нет проекта",
+                        code = TaskManager.AssigneeNotMemberCode,
+                    });
+            }
+            else
+            {
+                var assigneeRole = access?.Resolve(assigneeUserId, targetProjectId, ProjectRight.Read)?.Role;
+                if (assigneeRole is null)
+                    return BadRequest(new
+                    {
+                        error = $"«{assigneeUserId}» не участник проекта задачи",
+                        code = TaskManager.AssigneeNotMemberCode,
+                    });
+                if (assigneeRole == ProjectRole.Reader)
+                    return BadRequest(new
+                    {
+                        error = "Читателя нельзя назначить исполнителем: он только смотрит",
+                        code = TaskManager.ReaderNotAssignableCode,
+                    });
+            }
+        }
+
         // Персона-исполнитель: "" = убрать (валидировать нечего), непустая — проверяем.
         // Валидация по целевому проекту: проектная персона прежнего проекта в новом недействительна,
         // если не имеет кросс-проектной ProjectTasks-привязки с полным доступом.
@@ -505,9 +545,15 @@ public class TasksController(
                 () => !DelegatedTurnGate.Decide(
                     sessions, UserId, callerSessionHeader, "Закрытие/возобновление фичи",
                     alsoWhenExecutorSuppressed: false, allowInTeamImplement: false).Allowed);
+            // Арендатор целевого проекта — ключ записи и «владелец» для назначения на владельца
             updated = tasks.Update(taskId, req, effectiveColumn, isAgentCall, callerIsExecutor,
-                denyFeatureClose: denyFeature, denyFeatureReopen: denyFeature)
+                denyFeatureClose: denyFeature, denyFeatureReopen: denyFeature, tenantOwnerId: tenantOwnerId)
                 ?? throw new InvalidOperationException("Задача не найдена");
+        }
+        catch (TaskManager.TaskAssigneeDeniedException ex)
+        {
+            // Отказ назначения — 400 с машинным кодом (тот же словарь, что у проверок двери выше)
+            return BadRequest(new { error = ex.Message, code = ex.Code });
         }
         catch (TaskManager.FeatureCloseDeniedException ex)
         {

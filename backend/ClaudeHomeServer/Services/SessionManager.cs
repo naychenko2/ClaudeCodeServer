@@ -10470,7 +10470,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                         entry is not null ? Llm.Claude.TranscriptProbe.LastRecordUuid(FindResumeTranscript(entry)) : null,
                         m.PromptCache);
                     if (entry is not null) entry.LoopTurnFailed = m.Subtype == "error";
-                    SpendMapping.RecordTurnSpend(_spend, _llmProviders, ResolveOwnerId, _log, entry?.Info, m);
+                    // Актор читается здесь, пока ход жив: переход статуса по result и снятие
+                    // актора идут ниже по методу (ApplyStatusQueuedAsync) — потребитель после
+                    // конца хода получил бы null (урок R-S2a-6c).
+                    SpendMapping.RecordTurnSpend(_spend, _llmProviders, ResolveOwnerId, _log, entry?.Info, m, this);
                     break;
                 case ProviderSwitchedMessage m:
                     // Пометка автоподмены модели в историю — после F5/рестарта человек видит,

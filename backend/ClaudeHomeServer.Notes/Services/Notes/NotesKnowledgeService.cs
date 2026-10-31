@@ -267,7 +267,12 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
         var hits = new List<NoteSemanticHit>();
         if (!string.IsNullOrEmpty(entry.DatasetId))
         {
-            var chunks = await _knowledge.RetrieveAsync(entry.DatasetId!, query, topK);
+            // Запрос к :notes — тоже с запасом ×3: пост-фильтр так же режет :notes-хиты
+            // (их дом — источник), и без запаса топ-k, целиком состоящий из отбрасываемых
+            // домов, даёт пустую выдачу при релевантных заметках P ниже по выдаче
+            // (ADR-036, решение 6 — запас у обоих фильтруемых датасетов; усечение
+            // выдачи до topK — ниже, после пост-фильтра).
+            var chunks = await _knowledge.RetrieveAsync(entry.DatasetId!, query, topK * 3);
             hits.AddRange(MapHits(chunks, entry.Docs, summaries));
         }
         if (!string.IsNullOrEmpty(entry.WikiDatasetId))
@@ -334,8 +339,10 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
     //   - карточка источника — ссылка в шапке: origin «note» + ref «note:{id}» (форма —
     //     WikiSourceCapture.CaptureNote);
     //   - страница — сносками на карточки (цель сноска — заголовок карточки,
-    //     WikiPlanValidator.RenderApply); карточка того же владельца ищется по заголовку
-    //     среди страниц, её ref даёт id заметки.
+    //     WikiPlanValidator.RenderApply); карточка того же раздела, что и страница, ищется
+    //     по заголовку среди её страниц, её ref даёт id заметки (одноимённая карточка
+    //     чужого раздела — другая карточка: цель сноски — голая ссылка, она
+    //     внутрираздельная (ADR-035, решение 1).
     // Чтение — по графу NotesService (GetDetail/GetSummaries), без нового состояния.
     public IReadOnlyList<string> CitedNoteIds(string userId, NoteSemanticHit wikiHit)
     {
@@ -359,11 +366,18 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
         if (cardTitles.Count == 0) return [];
 
         var ids = new List<string>();
+        // Карточка ищется в том же разделе, что и страница: цель сноски — голая
+        // внутрираздельная ссылка (ADR-035, решение 1), а одноимённая карточка чужого
+        // раздела — другая карточка; выбор по заголовку среди всех разделов подставил бы
+        // id чужого раздела и в cited попала бы заметка вне набора (MINOR 5, ревью R-S6g-1).
+        var pageSection = WikiSections.Parse(detail.Path);
+        if (pageSection is null) return [];   // страница вне раздела: «того же раздела» нет — цитаты нет
         var cards = _notes.GetSummaries(userId, NotesService.WikiKey, null);
         foreach (var title in cardTitles)
         {
-            var card = cards.FirstOrDefault(c => c.Title == title);
-            if (card is null) continue;   // карточки в графе нет — цитаты нет
+            var card = cards.FirstOrDefault(c => c.Title == title
+                && WikiSections.Parse(c.Path) == pageSection);
+            if (card is null) continue;   // карточки этого раздела в графе нет — цитаты нет
             var cardFm = _notes.GetDetail(userId, card.Id) is { } cd
                 ? WikiFrontmatter.Parse(cd.Content).Model : null;
             if (cardFm is null || cardFm.Type != WikiFrontmatter.TypeSource

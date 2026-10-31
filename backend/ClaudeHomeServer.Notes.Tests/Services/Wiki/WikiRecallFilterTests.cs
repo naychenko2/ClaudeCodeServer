@@ -1,3 +1,4 @@
+using System.Text;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
@@ -26,6 +27,7 @@ public class WikiRecallFilterTests : IDisposable
 
     private readonly string _dir;
     private readonly IConfiguration _config;
+    private readonly UserStore _users;
     private readonly FakeProjects _projects = new();
     // Сфер нет вовсе: набор проектного хода fail-closed — «projects/p1 + common»
     // (ADR-036, решение 2). Личный раздел и соседний проект в него не входят.
@@ -47,13 +49,13 @@ public class WikiRecallFilterTests : IDisposable
             })
             .Build();
 
-        var users = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        _users = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         AddProject("p1");
         AddProject("q"); // тот же владелец, вне сферы p1 (сфер нет) — соседний проект
 
         _notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance,
             flags: new WikiFlagOn());
-        _kb = new NotesKnowledgeService(_index, _notes, users, _config,
+        _kb = new NotesKnowledgeService(_index, _notes, _users, _config,
             NullLogger<NotesKnowledgeService>.Instance, _spheres, _projects);
     }
 
@@ -186,6 +188,160 @@ public class WikiRecallFilterTests : IDisposable
         hits.Select(h => h.Title).Should().Equal("Соседняя", "Личная");
     }
 
+    // ─── c1 (доработка R-S6g-1): поведение при включённых сферах, как в ADR-036 §2 ───
+
+    // Решение Софьи по вилке вердикта R-S6g-1: ADR-036 §2 (принят Андреем 2026-10-27) даёт
+    // проекту p1 сферы s1 набор projects/p1, projects/q (все q из сферы), spheres/s1, common —
+    // соседи той же сферы ВИДНЫ. Здесь поведение фиксируется тестом как есть; правки recall
+    // для соседей нет. Прежние тесты строили только NoSpheres — конфигурация «Q в сфере P»
+    // не была покрыта ни одним тестом (MAJOR ревью).
+    [Fact]
+    public async Task СферныйХод_ВидитСоседейПоСфереИРазделСферы_ПроектыВнеСферыИЛичноеОтброшены()
+    {
+        var spheres = new SpheresOn(); // s1: p1 и q; проект r вне сфер
+        var kb = new NotesKnowledgeService(_index, _notes, _users, _config,
+            NullLogger<NotesKnowledgeService>.Instance, spheres, _projects);
+        AddProject("r");
+
+        // Все заметки и страницы — одной темы, чтобы подменённый Dify вернул их в одной выдаче.
+        WriteFile(Path.Combine(_dir, "notes", User, "Личная.md"), "# Личная\n\nСборка на linux лично.");
+        WriteFile(Path.Combine(_dir, "projects", "r", "notes", "Чужая.md"), "# Чужая\n\nСборка на linux в проекте r.");
+        WriteFile(Path.Combine(_dir, "projects", "q", "notes", "Соседняя.md"), "# Соседняя\n\nСборка на linux в проекте q.");
+        WriteFile(Path.Combine(_dir, "projects", "p1", "notes", "Своя.md"), "# Своя\n\nСборка на linux в проекте p1.");
+        InitWiki();
+        WriteWiki("Сферы/s1/Сферное.md", Page("Сферное"));   // раздел сферы — в наборе
+        WriteWiki("Проекты/p1/Знание.md", Page("Знание"));
+        WriteWiki("Общее/Общее.md", Page("Общее"));          // common — в наборе
+
+        (await kb.SyncAllAsync(User)).Should().Be(7); // 4 заметки + 3 страницы
+
+        var notesDs = DatasetIdOf(":notes");
+        var wikiDs = DatasetIdOf(":wiki");
+        _index.Response[notesDs] = [
+            ChunkWithDoc("Соседняя", 0.9), ChunkWithDoc("Своя", 0.85),
+            ChunkWithDoc("Чужая", 0.7), ChunkWithDoc("Личная", 0.6),
+        ];
+        _index.Response[wikiDs] = [
+            ChunkWithDoc("Сферное", 0.95), ChunkWithDoc("Знание", 0.8), ChunkWithDoc("Общее", 0.75),
+        ];
+
+        var hits = await kb.SearchAsync(User, "сборка на linux", 8,
+            new WikiVisibility.CallContext("p1", null));
+
+        // Выживают: своё, сосед по сфере, раздел сферы, common (по убыванию score).
+        // Отброшены: проект r вне сферы и личное (личного в проектном ходе нет — правило таблицы).
+        // Мутация «набор без проектов сферы» (убрать соседний цикл в WikiVisibility.SectionsFor)
+        // краснит этот assert на «Соседняя»; мутация «набор включает R» (добавить все проекты
+        // владельца) краснит его на «Чужая».
+        hits.Select(h => h.Title).Should().Equal("Сферное", "Соседняя", "Своя", "Знание", "Общее");
+        hits.Should().NotContain(h => h.Source == "r");
+        hits.Should().NotContain(h => h.Source == "personal");
+    }
+
+    // ─── c2 (MINOR 1, R-S6g-1): хит с неопределяемым домом отбрасывается, а не становится common ───
+
+    [Fact]
+    public async Task ХитСНеопределяемымДомом_ОтброшенАНеПризнанCommon()
+    {
+        // Достижимый вариант null-дома в SectionKeyOf — невалидный id источника: заметка
+        // проекта, чей id не является id раздела (WikiSections.IsValidId). Два других
+        // сценария вердикта отсечены раньше и до пост-фильтра не доходят: :notes-хит без
+        // summary не рождается вовсе (MapHits), wiki-страница с неразобранным путём не
+        // индексируется (SyncAll) — они проверены здесь как поведение, но мутация
+        // «?? common» до них не дотягивает и краснеет именно на этом, достижимом.
+        AddProject("q 1"); // пробел в id — не id раздела
+
+        WriteFile(Path.Combine(_dir, "projects", "p1", "notes", "Своя.md"), "# Своя\n\nСборка на linux в проекте p1.");
+        WriteFile(Path.Combine(_dir, "projects", "q 1", "notes", "Чужая.md"), "# Чужая\n\nСборка на linux в проекте q 1.");
+        WriteFile(Path.Combine(_dir, "projects", "p1", "notes", "Удалённая.md"), "# Удалённая\n\nСборка на linux, затем удалена.");
+        InitWiki();
+        WriteWiki("Служебное/Неразобранный.md", Page("Неразобранный")); // путь ни в один раздел
+        WriteWiki("Проекты/p1/Знание.md", Page("Знание"));
+        (await _kb.SyncAllAsync(User)).Should().Be(4); // Своя, Чужая, Удалённая, Знание; «Неразобранный» — нет
+        _index.Indexed.Should().NotContain(i => i.Title == "Неразобранный");
+
+        // Состояние живого индекса: заметку удалили с диска, документ в Dify ещё жив
+        // (реконсик асинхронен) — старый docId остаётся в маппинге.
+        File.Delete(Path.Combine(_dir, "projects", "p1", "notes", "Удалённая.md"));
+        _notes.Invalidate(User);
+
+        var notesDs = DatasetIdOf(":notes");
+        var wikiDs = DatasetIdOf(":wiki");
+        _index.Response[notesDs] = [
+            ChunkWithDoc("Чужая", 0.9),        // дом не определяется → отброшен (не common)
+            ChunkWithDoc("Удалённая", 0.85),   // summary нет → хит не рождается
+            ChunkWithDoc("Своя", 0.8),
+        ];
+        _index.Response[wikiDs] = [ChunkWithDoc("Знание", 0.7)];
+
+        var hits = await ScopedSearch("p1");
+
+        // Мутация «h => SectionKeyOf(h, summaries) ?? WikiSections.Common» краснит этот
+        // assert: «Чужая» стала бы «common», а common — в наборе проектного хода.
+        hits.Select(h => h.Title).Should().Equal("Своя", "Знание");
+    }
+
+    // ─── c3 (MINOR 2, R-S6g-1): запрос к :notes идёт с запасом ×3, как :wiki ───
+
+    [Fact]
+    public async Task ЗапасTopKДляNotes_ТопKИзОтбрасываемыхДомовНеДаётПустогоВыдачи()
+    {
+        // Проект q: 10 заметок выше по выдаче, в p1 — одна ниже. Топ-8 без запаса состоял бы
+        // целиком из отбрасываемых домов и пост-фильтр дал бы пустую выдачу, хотя релевантная
+        // заметка P есть ниже (MINOR 2, R-S6g-1; усечение до topK — после пост-фильтра).
+        for (var i = 1; i <= 10; i++)
+            WriteFile(Path.Combine(_dir, "projects", "q", "notes", $"Чужая{i:00}.md"),
+                $"# Чужая{i:00}\n\nСборка на linux в проекте q.");
+        WriteFile(Path.Combine(_dir, "projects", "p1", "notes", "Своя.md"), "# Своя\n\nСборка на linux в проекте p1.");
+        (await _kb.SyncAllAsync(User)).Should().Be(11);
+
+        var notesDs = DatasetIdOf(":notes");
+        _index.Response[notesDs] = Enumerable.Range(1, 10)
+            .Select(i => ChunkWithDoc($"Чужая{i:00}", 0.9 - i * 0.01))
+            .Append(ChunkWithDoc("Своя", 0.3))
+            .ToList();
+
+        var hits = await ScopedSearch("p1");
+
+        // Без запаса (мутация «topK*3 → topK») запрос взял бы 8 чанков — все чужие, выдача
+        // пустая, и этот assert краснеет.
+        var notesReq = _index.Requests.Last(r => r.DatasetId == notesDs);
+        notesReq.TopK.Should().Be(24, "запрос к :notes берёт top-k с тем же запасом ×3, что и :wiki");
+        hits.Select(h => h.Title).Should().Equal("Своя");
+    }
+
+    // ─── c4 (MINOR 5, R-S6g-1): цитируемая карточка — того же раздела, что и страница ───
+
+    [Fact]
+    public void CitedNoteIds_БерётКарточкуТогоЖеРаздела_ЧтоСтраница()
+    {
+        // Две одноимённые карточки в разных разделах: «Карточка» p1 (ref — заметка p1) и
+        // «Карточка» q (ref — заметка q). Карточка q новее: GetSummaries сортирует по
+        // UpdatedAt desc, и прежний поиск по заголовку среди всех разделов взял бы её —
+        // этот assert на прежнем коде краснеет (вернулся бы id заметки q).
+        var p1NoteId = NoteIdOf("p1", "Заметка-p1.md");
+        var qNoteId = NoteIdOf("q", "Заметка-q.md");
+
+        WriteFile(Path.Combine(_dir, "projects", "p1", "notes", "Заметка-p1.md"), "# Заметка-p1\n\nЦитата из заметки p1.");
+        WriteFile(Path.Combine(_dir, "projects", "q", "notes", "Заметка-q.md"), "# Заметка-q\n\nЦитата из заметки q.");
+
+        InitWiki();
+        WriteWiki("Проекты/p1/Источники/Карточка.md", Card(p1NoteId));
+        WriteWiki("Проекты/q/Источники/Карточка.md", Card(qNoteId));
+        var cardQ = Path.Combine(WikiPaths.Pages(_dir, User), "Проекты", "q", "Источники", "Карточка.md");
+        File.SetLastWriteTimeUtc(cardQ, DateTime.UtcNow.AddMinutes(1)); // q-карточка — первая в сортировке
+
+        WriteWiki("Проекты/p1/Знание.md",
+            "---\ntype: topic\nsummary: тест\nstatus: active\n---\n\n# Знание\n\n" +
+            "## Сводка\n\n- Сборка — на Linux.[^s1]\n\n## Хронология\n\n## Противоречия\n\n## История\n\n" +
+            "[^s1]: [[Карточка]] — «Цитата из заметки p1.»\n");
+
+        var cited = _kb.CitedNoteIds(User, new NoteSemanticHit(
+            WikiIdOf("Проекты/p1/Знание.md"), "Знание", "wiki", "Вики", 0.9, ""));
+
+        cited.Should().Equal(p1NoteId);
+    }
+
     // ─── обвязка Dify и горизонталей ───
 
     private DifyRetrieveChunk ChunkWithDoc(string title, double score) =>
@@ -195,12 +351,40 @@ public class WikiRecallFilterTests : IDisposable
         "---\ntype: topic\nsummary: тест\nstatus: active\n---\n\n# " + title +
         "\n\n## Сводка\n\n## Хронология\n\n## Противоречия\n\n## История\n";
 
+    // Карточка источника с ref на заметку — та же форма, что пишет WikiSourceCapture.
+    private static string Card(string refNoteId) =>
+        "---\ntype: source\nsummary: карточка\norigin: note\nref: note:" + refNoteId +
+        "\nhash: h1\ncaptured: 2026-10-30\nstatus: active\n---\n\n# Карточка\n\n> цитата из карточки.\n";
+
+    // Id заметки/страницы детерминированный (base64url(sourceKey|relPath), NotesService.EncodeId):
+    // его можно построить до первого чтения графа.
+    private static string NoteIdOf(string sourceKey, string relPath) =>
+        Convert.ToBase64String(Encoding.UTF8.GetBytes(sourceKey + "|" + relPath))
+            .Replace('+', '-').Replace('/', '_').TrimEnd('=');
+
+    private static string WikiIdOf(string relUnderPages) => NoteIdOf("wiki", relUnderPages);
+
     private sealed class NoSpheres : ISphereDirectory
     {
         public bool Enabled(string ownerId) => false;
         public string? SphereOf(string ownerId, string projectId) => null;
         public IReadOnlyList<string> ProjectsOf(string ownerId, string sphereId) => [];
         public string? SphereName(string ownerId, string sphereId) => null;
+        public string? CharterOf(string ownerId, string sphereId) => null;
+    }
+
+    // Сферы включены: сфера s1 с проектами p1 и q (тот же владелец); проект r вне сфер.
+    // Форма справочника — как FakeDir в WikiVisibilityTests.
+    private sealed class SpheresOn : ISphereDirectory
+    {
+        public readonly Dictionary<string, List<string>> Spheres = new() { ["s1"] = ["p1", "q"] };
+
+        public bool Enabled(string ownerId) => true;
+        public string? SphereOf(string ownerId, string projectId) =>
+            Spheres.Keys.FirstOrDefault(s => Spheres[s].Contains(projectId));
+        public IReadOnlyList<string> ProjectsOf(string ownerId, string sphereId) =>
+            Spheres.TryGetValue(sphereId, out var list) ? list.ToList() : [];
+        public string? SphereName(string ownerId, string sphereId) => Spheres.ContainsKey(sphereId) ? "Сфера" : null;
         public string? CharterOf(string ownerId, string sphereId) => null;
     }
 
@@ -258,7 +442,10 @@ public class WikiRecallFilterTests : IDisposable
             Requests.Add((datasetId, topK, filters, logic));
             IReadOnlyList<DifyRetrieveChunk> r =
                 Response.TryGetValue(datasetId, out var prepared) ? prepared : new List<DifyRetrieveChunk>();
-            return Task.FromResult(r);
+            // Настоящий Dify не отдаёт больше чанков, чем запрошено: без этого усечения
+            // запас ×3 в коде нельзя проверить мутацией (подменённый Dify вернул бы весь
+            // список при любом top-k).
+            return Task.FromResult<IReadOnlyList<DifyRetrieveChunk>>(r.Take(topK).ToList());
         }
     }
 }

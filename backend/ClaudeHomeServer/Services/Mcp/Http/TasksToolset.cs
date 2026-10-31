@@ -398,8 +398,12 @@ public sealed class TasksToolset(
                         AssignedPersonaScopes(context.OwnerId, personaId), spheres) is { } personaError)
                     return Deny(personaError);
 
-                // Человек-исполнитель (S2b-2b): «me»/«claude» — прежний путь (enum). Любое
-                // другое непустое значение assignee — username участника проекта задачи:
+                // Человек-исполнитель (S2b-2b): «me»/«claude» — прежний путь (enum), но они
+                // сняют прежнего исполнителя-участника, а не оставят его в записи (M1 ревью
+                // e9f308b0): без AssigneeUserId блок TaskManager «if (req.AssigneeUserId is
+                // not null)» не срабатывает, участник остаётся, а ResolveMeUserId после
+                // «участник → me» вернул бы участника, а не владельца.
+                // Любое другое непустое значение assignee — username участника проекта задачи:
                 // резолв только среди участников (владелец + члены — та же точка доступа, что
                 // у REST-двери), иначе отказ тем же типом и тем же словарём кодов TaskManager
                 // (своих строк кодов здесь не заводим). Персонную задачу отклоняет сам
@@ -417,6 +421,21 @@ public sealed class TasksToolset(
                         if (assigneeDenied is not null) return Deny(AssigneeDeniedText(assigneeDenied));
                         assigneeUserId = assigneeId;
                     }
+                }
+                else if (assigneeEnum == TaskItemAssignee.Me)
+                {
+                    // «me» = исполнитель — владелец: id владельца проекта задачи TaskManager
+                    // трактует как снятие (AssigneeUserId=null, Assignee=Me) — тот же смысл,
+                    // что у REST-двери (TasksController: «id владельца — не отказ, поле
+                    // сбрасывается»). Без смены проекта targetProject — проект задачи, поэтому
+                    // id совпадает с тем, чем TaskManager меряет «на владельца» (tenantOwnerId).
+                    assigneeUserId = targetProject?.OwnerId ?? context.OwnerId;
+                }
+                else if (assigneeEnum == TaskItemAssignee.Claude)
+                {
+                    // «claude» — человека-исполнителя нет: "" снимает поле (та же семантика
+                    // строковых полей UpdateTaskRequest, что у personaId/labels выше).
+                    assigneeUserId = "";
                 }
 
                 // Дефект: вердикт. VerifiedAt/PersonaId подставляет сервер из сессии вызова —
@@ -453,8 +472,9 @@ public sealed class TasksToolset(
                     DueTime: arguments.ContainsKey("dueTime") ? StringArg(arguments, "dueTime") : null,
                     ReminderMinutes: NullableIntArg(arguments, "reminderMinutes"),
                     Assignee: assigneeEnum,
-                    // id участника из резолва username выше (null = не менять, как у других
-                    // полей): применение — в TaskManager, там же «на владельца» равно «снять»
+                    // id участника из резолва username, id владельца для «me», "" для «claude»
+                    // (null = не менять, как у других полей): применение — в TaskManager, там
+                    // же «на владельца» и "" равны «снять» — прежний участник не остаётся в записи
                     AssigneeUserId: assigneeUserId,
                     Recurrence: arguments.ContainsKey("recurrence") ? RecurrenceArg(arguments) : null,
                     PersonaId: arguments.ContainsKey("personaId") ? personaId : null,

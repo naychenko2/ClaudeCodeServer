@@ -19,9 +19,11 @@ namespace ClaudeHomeServer.Tests.Services;
 /// отказа TaskAssigneeDeniedException и тот же словарь кодов TaskManager — не участник →
 /// assignee_not_member, читатель → reader_not_assignable, персонная задача →
 /// person_task_not_assignable (её отказывает сам TaskManager, здесь только текст с кодом).
-/// При отказе запись не меняется: отказ до первой мутации. «me»/«claude» — прежний путь,
-/// резолва не касается. Запись идёт только через TaskManager: два одновременных назначения
-/// дают ровно одно из двух значений целиком.
+/// При отказе запись не меняется: отказ до первой мутации. «me»/«claude» — прежний путь
+/// enum, резолва не касается, но они сняют прежнего исполнителя-участника (M1 ревью
+/// e9f308b0): «me» отдаёт в AssigneeUserId id владельца проекта задачи (TaskManager трактует
+/// его как снятие), «claude» — "". Запись идёт только через TaskManager: два одновременных
+/// назначения дают ровно одно из двух значений целиком.
 ///
 /// Мутации (каждая — красный названный тест, откат — зелёный):
 /// • ResolveAssigneeUsername: пропустить отказ по членству (scope is null → не отказ) —
@@ -29,7 +31,9 @@ namespace ClaudeHomeServer.Tests.Services;
 /// • убрать проверку роли Reader — «НазначитьЧитателя» краснеет;
 /// • убрать catch TaskAssigneeDeniedException в case "tasks_update" — «ЗадачаСПерсоной»
 ///   краснеет: текст отказа доходит без кода;
-/// • убрать AssigneeUserId из UpdateTaskRequest — «НазначитьУчастникаПоUsername» краснеет.
+/// • убрать AssigneeUserId из UpdateTaskRequest — «НазначитьУчастникаПоUsername» краснеет;
+/// • вернуть прежнюю ветку enum (для «me»/«claude» AssigneeUserId не ставить) —
+///   «УчастникЗатемMe» и «УчастникЗатемClaude» краснеют: участник остаётся в записи.
 /// </summary>
 [Trait("Category", "Integration")]
 public class TasksToolsetAssigneeTests : IClassFixture<TestWebApplicationFactory>
@@ -179,7 +183,8 @@ public class TasksToolsetAssigneeTests : IClassFixture<TestWebApplicationFactory
         stored.AssigneeUserId.Should().BeNull();
     }
 
-    // «me»/«claude» — прежний путь enum: резолв username их не касается, поле не поставлено
+    // «me»/«claude» — прежний путь enum: резолв username их не касается; в записи поле
+    // пустое («me» — id владельца = снятие, «claude» — ""), участника не остаётся
     [Fact]
     public async Task MeIClaude_ПрежниеЗначения_РезолваНет()
     {
@@ -197,6 +202,70 @@ public class TasksToolsetAssigneeTests : IClassFixture<TestWebApplicationFactory
         var stored = Tasks.GetById(taskId)!;
         stored.Assignee.Should().Be(TaskItemAssignee.Me);
         stored.AssigneeUserId.Should().BeNull("«me» — это владелец, а не id участника");
+    }
+
+    // M1 ревью e9f308b0: «me» снимает прежнего участника. Последовательность: назначить
+    // участника → tasks_update assignee=me → исполнитель снова владелец (id владельца в
+    // TaskManager = снятие), поле пустое, Assignee=Me
+    [Fact]
+    public async Task УчастникЗатемMe_ИсполнительСноваВладелец()
+    {
+        var (_, sessionId, taskId) = await SharedProjectWithTaskAsync("editor");
+
+        var (assignText, assignError) = await CallToolAsync(sessionId, "tasks_update",
+            new { id = taskId, assignee = TestWebApplicationFactory.SecondUsername });
+        assignError.Should().BeFalse(assignText);
+        TaskManager.ResolveMeUserId(Tasks.GetById(taskId)!).Should().Be(MemberId,
+            "до «me» исполнитель — участник: иначе тест проверяет не снятие, а дефолт");
+
+        var (meText, meError) = await CallToolAsync(sessionId, "tasks_update", new { id = taskId, assignee = "me" });
+        meError.Should().BeFalse(meText);
+
+        var stored = Tasks.GetById(taskId)!;
+        stored.AssigneeUserId.Should().BeNull("«me» = id владельца = снятие, а не «не менять»");
+        stored.Assignee.Should().Be(TaskItemAssignee.Me);
+        TaskManager.ResolveMeUserId(stored).Should().Be(OwnerId, "c1: после «участник → me» — id владельца");
+    }
+
+    // M1 ревью e9f308b0: «claude» снимает прежнего участника: после «участник → claude»
+    // AssigneeUserId в записи пуст, человека-исполнителя нет (ResolveMeUserId → null)
+    [Fact]
+    public async Task УчастникЗатемClaude_ЧеловекаИсполнителяВЗаписиНет()
+    {
+        var (_, sessionId, taskId) = await SharedProjectWithTaskAsync("editor");
+
+        var (assignText, assignError) = await CallToolAsync(sessionId, "tasks_update",
+            new { id = taskId, assignee = TestWebApplicationFactory.SecondUsername });
+        assignError.Should().BeFalse(assignText);
+        Tasks.GetById(taskId)!.AssigneeUserId.Should().Be(MemberId, "до «claude» поле поставлено");
+
+        var (claudeText, claudeError) = await CallToolAsync(sessionId, "tasks_update",
+            new { id = taskId, assignee = "claude" });
+        claudeError.Should().BeFalse(claudeText);
+
+        var stored = Tasks.GetById(taskId)!;
+        stored.AssigneeUserId.Should().BeNull("«claude» = человека нет: поле снято, а не оставлено");
+        stored.Assignee.Should().Be(TaskItemAssignee.Claude);
+        TaskManager.ResolveMeUserId(stored).Should().BeNull();
+    }
+
+    // Снятие на личной задаче (ветка «нет проекта → id вызывающего»): «me» не меняет запись —
+    // исполнитель остаётся владельцем
+    [Fact]
+    public async Task ЛичнаяЗадачаMe_ИсполнительВладелецБезИзменений()
+    {
+        var chat = await Sessions.CreateChatAsync(OwnerId, ClaudeMode.AcceptEdits, name: "Личный чат me");
+        var (createdText, createdError) = await CallToolAsync(chat.Id, "tasks_create", new { title = "Личная задача me" });
+        createdError.Should().BeFalse(createdText);
+        var taskId = IdOf(createdText);
+
+        var (meText, meError) = await CallToolAsync(chat.Id, "tasks_update", new { id = taskId, assignee = "me" });
+        meError.Should().BeFalse(meText);
+
+        var stored = Tasks.GetById(taskId)!;
+        stored.AssigneeUserId.Should().BeNull();
+        stored.Assignee.Should().Be(TaskItemAssignee.Me);
+        TaskManager.ResolveMeUserId(stored).Should().Be(OwnerId);
     }
 
     // Личная задача: чужого круга нет (ей нечего быть участником) — тот же отказ, что у REST;

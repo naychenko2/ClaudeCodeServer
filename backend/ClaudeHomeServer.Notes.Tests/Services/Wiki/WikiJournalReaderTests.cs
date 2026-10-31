@@ -7,6 +7,7 @@ using ClaudeHomeServer.Notes.Controllers;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Notes.Wiki;
 using ClaudeHomeServer.Services.Spheres;
@@ -366,7 +367,8 @@ public class WikiJournalReaderTests : IDisposable
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, User)], "test"));
         var keeper = new WikiKeeper(_notes, _config);
         var lint = new WikiLintService(_notes, keeper, new NoSpheres(), _config, NullLogger<WikiLintService>.Instance);
-        return new WikiController(keeper, _projects, new NoSpheres(), lint, _reader, flags ?? new FlagOn(), _config)
+        var (capture, ingest) = IngestGraph(keeper);
+        return new WikiController(keeper, _projects, new NoSpheres(), lint, _reader, flags ?? new FlagOn(), _config, capture, ingest)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
@@ -377,10 +379,43 @@ public class WikiJournalReaderTests : IDisposable
         var http = new DefaultHttpContext(); // User без идентичности — путь боя без токена
         var keeper = new WikiKeeper(_notes, _config);
         var lint = new WikiLintService(_notes, keeper, new NoSpheres(), _config, NullLogger<WikiLintService>.Instance);
-        return new WikiController(keeper, _projects, new NoSpheres(), lint, _reader, new FlagOn(), _config)
+        var (capture, ingest) = IngestGraph(keeper);
+        return new WikiController(keeper, _projects, new NoSpheres(), lint, _reader, new FlagOn(), _config, capture, ingest)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
+    }
+
+    // S7b0b: конструктор контроллера держит захват и очередь разбора. Эти тесты их не зовут
+    // (свои сценарии разбора — в WikiIngestNoteTests); экземпляры нужны, чтобы резолвился
+    // конструктор. Модель — отказная: если что-то позвал — пусть будет видно.
+    private (WikiSourceCapture, WikiIngestService) IngestGraph(WikiKeeper keeper)
+    {
+        var apply = new WikiApplyService(_notes, keeper, new NoSpheres(), _config);
+        return (
+            new WikiSourceCapture(_notes, _projects, _sessions, _config, keeper),
+            new WikiIngestService(new NoopCheapRunner(), new NoSpheres(), apply, _config));
+    }
+
+    private sealed class NoopCheapRunner : ICheapTextRunner
+    {
+        private static Task<T> Throw<T>(string actionKey) =>
+            Task.FromException<T>(new InvalidOperationException("ИИ-действие не ожидалось: " + actionKey));
+
+        public bool UsesLocal(string actionKey) => false;
+        public bool HasFreeRoute(string actionKey) => false;
+        public bool HasRoute(string actionKey) => false;
+        public string DescribeRoute(string actionKey, string? fallbackModel) => "none";
+        public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default) =>
+            Throw<string>(actionKey);
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default) =>
+            Throw<string?>(actionKey);
+        public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
+            string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
+            int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default) =>
+            Throw<OneShotResult>(actionKey);
     }
 
     private sealed class FlagOn : IFeatureFlagGate

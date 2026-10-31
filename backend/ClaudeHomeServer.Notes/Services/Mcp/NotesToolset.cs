@@ -802,7 +802,7 @@ public sealed class NotesToolset(
                     return Deny("Файл по пути принимается только в чате проекта; вне проекта — id заметки или ссылка чата.");
                 var cap = await wikiCapture.CaptureFile(ownerId, projectId, source);
                 return cap.Ok
-                    ? await IngestFromCardAsync(cap, root!, ownerId, ct)
+                    ? IngestAnswer(await WikiCardIngest.RunAsync(wikiIngest, cap, root!, ownerId, ct))
                     : Deny(cap.Reason ?? "файл не захвачен");
             }
 
@@ -812,7 +812,7 @@ public sealed class NotesToolset(
 
             var noteCap = await wikiCapture.CaptureNote(ownerId, source, target);
             return noteCap.Ok
-                ? await IngestFromCardAsync(noteCap, root!, ownerId, ct)
+                ? IngestAnswer(await WikiCardIngest.RunAsync(wikiIngest, noteCap, root!, ownerId, ct))
                 : Deny(noteCap.Reason ?? "заметка не захвачена");
         }
         catch (Exception e)
@@ -862,54 +862,35 @@ public sealed class NotesToolset(
         return Deny("Ссылка на чат не разбирается: форма session:{id}#m{a}-{b} или session:{id}.");
     }
 
-    /// <summary>Заявка по уже захваченной карточке. origin и ref — с самой карточки: их
-    /// поставил захват (S6h), вторая формула здесь обязана бы когда-нибудь разойтись с
-    /// первой. Дом — по месту карточки: его тоже выбрал захват.</summary>
-    private async Task<McpToolCallResult> IngestFromCardAsync(
-        WikiSourceCapture.Result cap, string root, string ownerId, CancellationToken ct)
-    {
-        if (WikiFileWriter.Read(root, "pages/" + cap.CardRelPath!) is not { } cardText
-            || WikiFrontmatter.Parse(cardText).Model is not { } card
-            || card.Origin is not { Length: > 0 } origin
-            || card.Ref is not { Length: > 0 } sourceRef)
-            return Deny("карточка источника не читается — заявки нет");
-        if (HomeOfCard(cap.CardRelPath!) is not { } home)
-            return Deny("карточка источника встала вне раздела вики — заявки нет");
-
-        return await RunIngestAsync(new WikiIngestService.Request(
-            origin, sourceRef, cap.CardRelPath!, cap.SourceText!, home.Home, home.Target), ownerId, ct);
-    }
-
-    /// <summary>Дом источника для заявки — по разделу, где легла карточка. В «Общее»
-    /// карточка могла лечь только как явный target личного источника (ADR-036, решение 3),
-    /// поэтому target восстанавливается вместе с домом.</summary>
-    private static (string Home, string? Target)? HomeOfCard(string cardRel) => WikiSections.Parse(cardRel) switch
-    {
-        { } key when key.StartsWith(WikiSections.ProjectsPrefix, StringComparison.Ordinal) => (key, null),
-        WikiSections.Common => (WikiSections.Personal, WikiSections.Common),
-        WikiSections.Personal => (WikiSections.Personal, null),
-        _ => null,
-    };
+    // Заявка по уже захваченной карточке (заметка, файл проекта) идёт через общий код
+    // S7b0b — WikiCardIngest: та же склейка «карточка → заявка», что у REST
+    // POST api/wiki/ingest/note. Здесь остаётся только отображение исхода на ответ
+    // инструмента; путь выдержки чата (IngestChatAsync) ставит заявку сам: её дом знает
+    // чат, а не карточка (ADR-036, решение 3).
 
     private async Task<McpToolCallResult> RunIngestAsync(
         WikiIngestService.Request request, string ownerId, CancellationToken ct)
     {
         if (wikiIngest is not { } ingest)
             return Deny("Горизонталь вики не собрана (подсистема Notes отключена).");
-        var res = await ingest.IngestAsync(ownerId, request, ct);
-        return res.Outcome switch
-        {
-            WikiIngestService.OutcomeApplied => Json(new { outcome = res.Outcome, packageId = res.PackageId }),
-            WikiIngestService.OutcomeAwaitingHuman => Json(new
-            {
-                outcome = res.Outcome,
-                packageId = res.PackageId,
-                note = "пакет со спорными операциями ждёт решения человека в «Входящих»",
-            }),
-            WikiIngestService.OutcomeNothingNew => Text("нечего добавить: " + (res.Reason ?? "без причины")),
-            _ => Deny(res.Reason ?? "заявка отклонена"),
-        };
+        return IngestAnswer(await ingest.IngestAsync(ownerId, request, ct));
     }
+
+    /// <summary>Исход заявки — ответ инструмента: applied/awaiting_human — JSON с id пакета,
+    /// nothing_new и отказ — текст с причиной. Одна формула для обоих путей постановки
+    /// заявки: через карточку (WikiCardIngest) и через выдержку чата.</summary>
+    private static McpToolCallResult IngestAnswer(WikiIngestService.IngestResult res) => res.Outcome switch
+    {
+        WikiIngestService.OutcomeApplied => Json(new { outcome = res.Outcome, packageId = res.PackageId }),
+        WikiIngestService.OutcomeAwaitingHuman => Json(new
+        {
+            outcome = res.Outcome,
+            packageId = res.PackageId,
+            note = "пакет со спорными операциями ждёт решения человека в «Входящих»",
+        }),
+        WikiIngestService.OutcomeNothingNew => Text("нечего добавить: " + (res.Reason ?? "без причины")),
+        _ => Deny(res.Reason ?? "заявка отклонена"),
+    };
 
     private async Task<McpToolCallResult> WikiAddFactCallAsync(
         JsonObject arguments, string ownerId, Session chat, CancellationToken ct)

@@ -5,6 +5,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Notes.Controllers;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Notes.Wiki;
 using ClaudeHomeServer.Services.Spheres;
@@ -371,10 +372,36 @@ public class WikiLintServiceTests : IDisposable
         // экземпляр нужен, чтобы резолвился конструктор (свои сценарии журнала — в
         // WikiJournalReaderTests).
         var journal = new WikiJournalReader(_notes, new NoSessions(), _config);
-        return new WikiController(_keeper, _projects, _spheres, _sut, journal, _flags, _config)
+        // S7b0b: то же про захват и очередь разбора — эти тесты их не зовут, экземпляры
+        // нужны, чтобы резолвился конструктор (свои сценарии — в WikiIngestNoteTests).
+        var apply = new WikiApplyService(_notes, _keeper, _spheres, _config);
+        var capture = new WikiSourceCapture(_notes, _projects, new NoSessions(), _config, _keeper);
+        var ingest = new WikiIngestService(new NoopCheapRunner(), _spheres, apply, _config);
+        return new WikiController(_keeper, _projects, _spheres, _sut, journal, _flags, _config, capture, ingest)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
+    }
+
+    private sealed class NoopCheapRunner : ICheapTextRunner
+    {
+        private static Task<T> Throw<T>(string actionKey) =>
+            Task.FromException<T>(new InvalidOperationException("ИИ-действие не ожидалось: " + actionKey));
+
+        public bool UsesLocal(string actionKey) => false;
+        public bool HasFreeRoute(string actionKey) => false;
+        public bool HasRoute(string actionKey) => false;
+        public string DescribeRoute(string actionKey, string? fallbackModel) => "none";
+        public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default) =>
+            Throw<string>(actionKey);
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default) =>
+            Throw<string?>(actionKey);
+        public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
+            string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
+            int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default) =>
+            Throw<OneShotResult>(actionKey);
     }
 
     // Каталог чатов пуст: эти тесты не зовут чтения журнала.

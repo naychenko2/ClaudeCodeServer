@@ -13,7 +13,8 @@ namespace ClaudeHomeServer.Notes.Controllers;
 
 // REST вики владельца (S2f, ADR-035/ADR-036): дерево разделов, каталог страниц раздела,
 // страница, «Завести», adopt, удаление раздела-сироты; здоровье раздела и запуск линта
-// по кнопке (S3-3); журнал своей вики (S7c-0, ADR-035 §12г меры 4–6). Образец — NotesController.
+// по кнопке (S3-3); журнал своей вики (S7c-0, ADR-035 §12г меры 4–6); «Разобрать заметку
+// в базу» (S7b0b). Образец — NotesController.
 //
 // Владелец — только из токена (claim sub), как во всей вертикали. Раздел — ключ,
 // составленный из проекта/сферы пользователя (WikiSections), а не путь из тела запроса:
@@ -34,11 +35,16 @@ public class WikiController : ControllerBase
     private readonly ISphereDirectory _spheres;
     private readonly WikiLintService _lint;
     private readonly WikiJournalReader _journal;
+    // S7b0b: «Разобрать заметку в базу» — тот же захват и та же очередь разбора, что у
+    // инструмента wiki_ingest (NotesToolset); регистрация — NotesSubsystem (Singleton).
+    private readonly WikiSourceCapture _capture;
+    private readonly WikiIngestService _ingest;
     private readonly IFeatureFlagGate? _flags;
     private readonly string _dataDir;
 
     public WikiController(WikiKeeper keeper, IProjectManager projects, ISphereDirectory spheres,
-        WikiLintService lint, WikiJournalReader journal, IFeatureFlagGate? flags, IConfiguration config)
+        WikiLintService lint, WikiJournalReader journal, IFeatureFlagGate? flags, IConfiguration config,
+        WikiSourceCapture capture, WikiIngestService ingest)
     {
         _keeper = keeper;
         _projects = projects;
@@ -46,6 +52,8 @@ public class WikiController : ControllerBase
         _lint = lint;
         _journal = journal;
         _flags = flags;
+        _capture = capture;
+        _ingest = ingest;
         // Каталог данных — как у всех сервисов (DataPath указывает на projects.json в dataDir).
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
@@ -68,6 +76,12 @@ public class WikiController : ControllerBase
     private const string CodeLlmWikiOff = "wiki_llm_wiki_off";
     private const string CodeOriginKey = "wiki_origin_key";
     private const string CodeClassKey = "wiki_class_key";
+    // S7b0b «Разобрать заметку в базу»: состояния вики — 409 с кодом (тот же смысл, что у
+    // отказа инструмента wiki_ingest), заметка, не ставшая источником, — 404 not_found.
+    private const string CodeNotInitialized = "wiki_not_initialized";
+    private const string CodePackagesLimit = "packages_limit";
+    private const string CodeNotFound = "not_found";
+    private const string CodeNoteId = "wiki_note_id";
 
     // Состояния манифеста раздела в контракте (WikiCatalogDto.ManifestState / ответ
     // GET page): закрытый перечень — три состояния WikiManifestState без внутреннего имени.
@@ -262,6 +276,41 @@ public class WikiController : ControllerBase
         var res = await _keeper.DeleteSectionAsync(userId, key!);
         if (res.Status != WikiOpStatus.Applied) return OpResult(res);
         return Ok(new { deleted = true });
+    }
+
+    // ─── «Разобрать заметку в базу» (S7b0b) ─────────────────────────────────
+
+    /// <summary>POST /api/wiki/ingest/note {noteId, target?}: та же склейка «захват →
+    /// карточка → заявка», что у инструмента wiki_ingest (WikiCardIngest, S7b0b): два
+    /// входа — одна логика. Заметка попадает в разбор только по заявке владельца и только
+    /// своя: владельца проверяет CaptureNote (тот же путь, что у MCP). Порядок отказов —
+    /// как у инструмента: не заведённая вика и лимит открытых пакетов проверяются ДО
+    /// захвата (21-я заявка не ставится, ADR-035, решение 4). Отказ захвата — 404
+    /// {code:"not_found"}: для вызывающего заметка не стала источником (чужой, нет такой,
+    /// не источник), причина — в message. Исход заявки — 200 с outcome: её решает очередь
+    /// разбора (WikiIngestService), не эта ручка; исключений наружу нет.</summary>
+    [HttpPost("ingest/note")]
+    public async Task<IActionResult> IngestNote([FromBody] WikiIngestNoteRequest? req)
+    {
+        var userId = OwnerOrNull();
+        if (userId is null) return Unauthorized();
+        if (req is null || string.IsNullOrWhiteSpace(req.NoteId))
+            return BadRequest(new { code = CodeNoteId, message = "нужен id заметки" });
+
+        var root = WikiPaths.Root(_dataDir, userId);
+        if (!WikiPaths.IsInitialized(_dataDir, userId))
+            return StatusCode(409, new { code = CodeNotInitialized,
+                message = "вики этого владельца не заведена: её разбор работает только с заведённой" });
+        if (WikiPackageStore.CountOpen(root) >= WikiPackage.MaxOpenPackages)
+            return StatusCode(409, new { code = CodePackagesLimit,
+                message = $"открытых пакетов уже {WikiPackage.MaxOpenPackages}: разберите Входящие, потом повторяй заявку." });
+
+        var cap = await _capture.CaptureNote(userId, req.NoteId, req.Target);
+        if (!cap.Ok)
+            return NotFound(new { code = CodeNotFound, message = cap.Reason ?? "заметка не найдена" });
+
+        var res = await WikiCardIngest.RunAsync(_ingest, cap, root, userId, HttpContext.RequestAborted);
+        return Ok(new { outcome = res.Outcome, packageId = res.PackageId, reason = res.Reason });
     }
 
     // ─── Здоровье раздела (S3-3) ─────────────────────────────────────────────
@@ -518,6 +567,12 @@ public sealed record WikiInitRequest(string? Section);
 
 /// <summary>«Принять как есть» для страницы раздела.</summary>
 public sealed record WikiAdoptRequest(string Section, string Page);
+
+/// <summary>«Разобрать заметку в базу» (S7b0b). NoteId — id заметки: только своей, это
+/// проверяет захват. Target — необязательный явный выбор «common» для источника вне
+/// проекта (ADR-036, решение 3): его проверяет захват (WikiSourceHome), второй таблицы
+/// допустимых target здесь нет.</summary>
+public sealed record WikiIngestNoteRequest(string? NoteId, string? Target = null);
 
 /// <summary>Запись журнала (S7c-0): событие строки log.jsonl и то, что о нём сказал пакет.
 /// ts/op/section/actor/source/pages — из строки журнала как они записаны; origin — префикс

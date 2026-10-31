@@ -5,6 +5,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Notes.Controllers;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Notes.Wiki;
 using ClaudeHomeServer.Services.Spheres;
@@ -33,6 +34,10 @@ public class WikiControllerTests : IDisposable
     // Тесты этого файла про журнал ничего не проверяют — экземпляр нужен, чтобы резолвился
     // конструктор; свои сценарии журнала — в WikiJournalReaderTests.
     private readonly WikiJournalReader _journal;
+    // S7b0b: то же про захват и очередь разбора (их зовёт POST /api/wiki/ingest/note):
+    // экземпляры нужны для конструктора, сценарии разбора — в WikiIngestNoteTests.
+    private readonly WikiSourceCapture _capture;
+    private readonly WikiIngestService _ingest;
     private readonly NoSpheres _spheres = new();
     private readonly NoSessions _sessions = new();
 
@@ -51,6 +56,9 @@ public class WikiControllerTests : IDisposable
         // S3-3: контроллер держит службу линта (её же зовёт кнопка POST /api/wiki/lint).
         _lint = new WikiLintService(notes, _keeper, _spheres, _config, NullLogger<WikiLintService>.Instance);
         _journal = new WikiJournalReader(notes, _sessions, _config);
+        var apply = new WikiApplyService(notes, _keeper, _spheres, _config);
+        _ingest = new WikiIngestService(new NoopCheapRunner(), _spheres, apply, _config);
+        _capture = new WikiSourceCapture(notes, _projects, _sessions, _config, _keeper);
     }
 
     public void Dispose()
@@ -308,7 +316,7 @@ public class WikiControllerTests : IDisposable
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", user)], "test"));
         // Флаг llm-wiki этим тестам не нужен: ни одно из них не зовёт ручку, которая его читает.
-        return new WikiController(_keeper, _projects, _spheres, _lint, _journal, null, _config)
+        return new WikiController(_keeper, _projects, _spheres, _lint, _journal, null, _config, _capture, _ingest)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
@@ -317,7 +325,7 @@ public class WikiControllerTests : IDisposable
     private WikiController AnonymousController()
     {
         var http = new DefaultHttpContext(); // User без идентичности — путь боя без токена
-        return new WikiController(_keeper, _projects, _spheres, _lint, _journal, null, _config)
+        return new WikiController(_keeper, _projects, _spheres, _lint, _journal, null, _config, _capture, _ingest)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
@@ -342,5 +350,28 @@ public class WikiControllerTests : IDisposable
         public Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId) =>
             Task.FromResult<IReadOnlyList<StoredMessage>>([]);
         public bool SetWikiMark(string sessionId, string? mark) => false;
+    }
+
+    // Модель в этих тестах не зовётся ни разу (разбор — сценарии WikiIngestNoteTests);
+    // если что-то позвал — пусть будет видно. Тот же отказной раннер, что в соседних файлах.
+    private sealed class NoopCheapRunner : ICheapTextRunner
+    {
+        private static Task<T> Throw<T>(string actionKey) =>
+            Task.FromException<T>(new InvalidOperationException("ИИ-действие не ожидалось: " + actionKey));
+
+        public bool UsesLocal(string actionKey) => false;
+        public bool HasFreeRoute(string actionKey) => false;
+        public bool HasRoute(string actionKey) => false;
+        public string DescribeRoute(string actionKey, string? fallbackModel) => "none";
+        public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default) =>
+            Throw<string>(actionKey);
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default) =>
+            Throw<string?>(actionKey);
+        public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
+            string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
+            int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default) =>
+            Throw<OneShotResult>(actionKey);
     }
 }

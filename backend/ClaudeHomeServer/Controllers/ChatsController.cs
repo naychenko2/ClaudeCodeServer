@@ -640,6 +640,8 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
             return Ok(new { newSessionId = result.NewSessionId, handoffNoteId = result.HandoffNoteId });
         }
         catch (KeyNotFoundException) { return NotFound(); }
+        catch (SessionManager.GlobalPersonaInSharedException ex)
+        { return BadRequest(new { error = ex.Message, code = SessionManager.GlobalPersonaInSharedException.Code }); }
         catch (ChatContinueNotSupportedException ex) { return BadRequest(new { error = ex.Message }); }
         catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
     }

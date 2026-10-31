@@ -1482,6 +1482,18 @@ public sealed partial class WorkspaceToolset(
                         // Персона: явная → она; иначе руководитель проекта, иначе провижн
                         // ассистента — правило «персона контекста», то же что в
                         // SessionsController.Create (stdio-ветка получала его через REST)
+                        // Явная персона (R-S2a-8): глобальная чату общего проекта не назначается —
+                        // CreateAsync рамку не проверяет, поэтому та же проверка, что в REST. Код
+                        // отказа едет в JSON-теле: агент различает его, а не разбирает текст
+                        if (personaId is not null)
+                        {
+                            try { sessions.EnsurePersonasVisibleInFrame(p.Id, new[] { personas.Get(personaId, context.OwnerId) }); }
+                            catch (SessionManager.GlobalPersonaInSharedException ex)
+                            {
+                                return Deny(JsonSerializer.Serialize(
+                                    new { error = ex.Message, code = SessionManager.GlobalPersonaInSharedException.Code }, JsonOpts));
+                            }
+                        }
                         personaId ??= await ResolveNewChatPersona(context.OwnerId, p.Id, default);
                         if (personaId is null)
                             return Deny("Новый чат создаётся только с персоной: укажите personaId");

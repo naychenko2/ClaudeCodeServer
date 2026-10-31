@@ -143,6 +143,28 @@ public class SharedProjectPersonaTests : IClassFixture<TestWebApplicationFactory
     }
 
     [Fact]
+    public async Task McpChatsCreateВОбщемПроектеСГлобальнойПерсоной_ОтказСКодомИЧатНеСоздан()
+    {
+        var (projectId, callerChatId) = await ProjectWithChatAsync("editor");
+        var personaId = await CreatePersonaAsync(Owner(), "Глобальная-" + Guid.NewGuid().ToString("N")[..6], "global");
+        var before = await ProjectChatIdsAsync(Owner(), projectId);
+
+        var resp = await Owner().AsCaller(callerChatId).PostAsJsonAsync($"/mcp/wsp/{callerChatId}", new
+        {
+            jsonrpc = "2.0", id = 1, method = "tools/call",
+            @params = new { name = "chats_create", arguments = new { projectId, personaId } },
+        });
+        resp.EnsureSuccessStatusCode();
+        var result = (await BodyAsync(resp)).GetProperty("result");
+        result.GetProperty("isError").GetBoolean().Should().BeTrue();
+        var text = result.GetProperty("content")[0].GetProperty("text").GetString()!;
+        JsonSerializer.Deserialize<JsonElement>(text).GetProperty("code").GetString()
+            .Should().Be(SessionManager.GlobalPersonaInSharedException.Code);
+        (await ProjectChatIdsAsync(Owner(), projectId)).Should().BeEquivalentTo(before,
+            "отказ не оставил в проекте нового чата");
+    }
+
+    [Fact]
     public async Task ГрупповойЧатОбщегоПроектаСГлобальнымУчастником_400СКодомИЧатНеСоздан()
     {
         var (projectId, _) = await ProjectWithChatAsync("editor");

@@ -99,6 +99,8 @@ public sealed class ChatContinueService(
         if (source.TeamImplement is not null)
             throw new ChatContinueNotSupportedException(
                 "Чат в режиме «Командная реализация» нельзя продолжить в новом: состояние волн живёт в чате");
+        // Глобальная персона в общем проекте: отказ до платного хода (R-S2a-8)
+        sessions.EnsureContinuationPersonaAllowed(source, ownerId);
         // Повторное продолжение: ссылка уже стоит — третий чат не создаём (иначе затирали бы
         // ContinuedInSessionId). Дешёвая проверка, до платного хода
         if (source.ContinuedInSessionId is { } continuedId)

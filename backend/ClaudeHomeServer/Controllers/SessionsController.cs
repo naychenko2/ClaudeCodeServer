@@ -78,6 +78,7 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
             {
                 var assigned = personas.Get(req.PersonaId, UserId)
                     ?? (projects.GetById(projectId)?.OwnerId is { } tenantId ? personas.Get(req.PersonaId, tenantId) : null);
+                if (assigned is null) return NotFound(new { error = "Персона не найдена" });
                 sessions.EnsurePersonasVisibleInFrame(projectId, new[] { assigned });
             }
             var mode = Enum.TryParse<ClaudeMode>(req.Mode, true, out var m) ? m : ClaudeMode.AcceptEdits;

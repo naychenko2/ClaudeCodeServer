@@ -6,6 +6,7 @@ import { requestWakeLock, releaseWakeLock } from '../lib/wakeLock';
 import { api } from '../lib/api';
 import { applyHistoryReply, cursorQuery, type HistoryCursor } from '../lib/historyTail';
 import { applyServerMessage, normalizeHistory, serverHistoryNewer, resolveCardsFromHistory, initialChatState, consumeComposerRestore, teamImplementSnapshot, turnAlreadyEnded, type ChatState, type PendingChatMessage, type ComposerRestore } from '../lib/chatReducer';
+import { denialCodeOf, denialTextOf } from '../features/projects/members/participantGate';
 
 // --- Модульный персистентный стор ---
 // Состояние живёт на уровне модуля и переживает переключение между сессиями.
@@ -595,7 +596,12 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
   const cancelPending = useCallback(async (messageId: string) => {
     if (!sessionId) return;
     try { await api.sessions.cancelPending(sessionId, messageId); }
-    catch { /* уже доставлено или сеть — снимок от сервера всё поправит */ }
+    catch (e) {
+      // Отказ по коду (not_sender — чужое сообщение): поднимается выше — строка очереди
+      // обязана вернуться в живое состояние и назвать причину (её отметка «отменяем» была
+      // оптимистичной). Сеть и «уже доставлено» — как раньше, молча: снимок от сервера поправит.
+      if (denialCodeOf(e)) throw e;
+    }
   }, [sessionId]);
 
   // Прервать идущий ход и доставить ждущее сейчас (кнопка на карточке очереди). Элемент
@@ -779,22 +785,33 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     }
   }, [sessionId]);
 
-  const interrupt = useCallback(() => {
+  const interrupt = useCallback(async () => {
     if (!sessionId) return;
-    interruptSession(sessionId);
     // Оптимистично помечаем ход как остановленный пользователем; подсказка прерванного хода неактуальна.
     // Время пометки — момент обрыва для «прервано · M:SS» (toolLiveness.abortedAt): без него
     // длительность держалась бы только в состоянии карточки и терялась при перемонтировании
     // Закончившийся ход не помечаем: сервер пишет ту же отметку в историю только на идущем
     // ходу, и лишний персистентный элемент в ленте навсегда перевесил бы историю при сверке
-    setState(sessionId, prev => ({
-      ...prev,
-      isWaiting: false,
-      promptSuggestion: null,
-      items: turnAlreadyEnded(prev.items)
-        ? prev.items
-        : [...prev.items, { kind: 'interrupted', ts: Date.now() }],
-    }));
+    let added = false;
+    setState(sessionId, prev => {
+      const base = { ...prev, isWaiting: false, promptSuggestion: null };
+      if (turnAlreadyEnded(prev.items)) return base;
+      added = true;
+      return { ...base, items: [...prev.items, { kind: 'interrupted', ts: Date.now() }] };
+    });
+    try { await interruptSession(sessionId); }
+    catch (e) {
+      // Отказ по коду (S2a-10c «not_chat_author: …»): сервер ход не остановил — наша отметка
+      // нечестна, снимаем её (только если хвост всё ещё наш) и ставим причину в ленту.
+      // Прочие ошибки (сеть) неотличимы от живого прерывания — как в preemptForPending:
+      // отметка и молчание остаются, живой остановленный ход пришлёт свою отметку историей.
+      const denial = denialTextOf(e);
+      if (!denial || !added) return;
+      setState(sessionId, prev =>
+        prev.items[prev.items.length - 1]?.kind === 'interrupted'
+          ? { ...prev, items: [...prev.items.slice(0, -1), { kind: 'error' as const, text: denial, canRetry: false }] }
+          : prev);
+    }
   }, [sessionId]);
 
   // Ответ на уточняющий вопрос Claude (AskUserQuestion)

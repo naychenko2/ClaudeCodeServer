@@ -22,6 +22,8 @@ import { MarkdownContent } from './MarkdownContent';
 import { MessageOriginChip } from '../MessageOriginChip';
 import { getPersonaById, ensurePersonasLoaded, personaLabel } from '../../lib/personas';
 import { useAgentsRunning } from '../../lib/agentsPresence';
+import { showToast } from '../../lib/toast';
+import { denialTextOf } from '../../features/projects/members/participantGate';
 import type { PendingChatMessage } from '../../lib/chatReducer';
 
 // Длительность ухода строки после доставки/отмены — столько же держим её в DOM
@@ -57,7 +59,8 @@ function waitedFor(iso: string): string {
 interface RowProps {
   item: PendingChatMessage;
   // Отмена доставки; undefined — нет связи, вместо крестика показываем причину
-  onCancel?: (id: string) => void;
+  // Возвращает Promise: отказ по коду поднимается наверх — строка откатит отметку (useSession)
+  onCancel?: (id: string) => void | Promise<unknown>;
   // false — отменять нельзя по роли (чужое в общем проекте): кнопки нет вовсе, а не «нет связи»
   cancelAllowed?: boolean;
   // Прервать идущий ход и доставить это сейчас; undefined — нет связи или ход уже кончился
@@ -102,7 +105,14 @@ function PendingMessageRow({ item, onCancel, cancelAllowed = true, onPreempt, is
   const cancel = () => {
     if (!onCancel || cancelling) return;
     setCancelling(true);
-    onCancel(item.id);
+    // Отметка «отменяем» оптимистична. Отказ по коду (not_sender — чужое сообщение, S2a-10b):
+    // строка возвращается в живое состояние (сообщение всё ещё в очереди), причина — тостом,
+    // по коду текстом клиента. Случай сети сюда не доходит: useSession глотает его молча,
+    // снимок от сервера поправит.
+    void Promise.resolve(onCancel(item.id)).catch((e: unknown) => {
+      setCancelling(false);
+      showToast('Очередь', denialTextOf(e) ?? 'Не удалось отменить сообщение');
+    });
   };
 
   return (
@@ -289,7 +299,8 @@ function PendingMessageRow({ item, onCancel, cancelAllowed = true, onPreempt, is
 
 interface Props {
   items: PendingChatMessage[];
-  onCancel?: (id: string) => void;
+  // Возвращает Promise: отказ по коду поднимается наверх — строка откатит отметку (useSession)
+  onCancel?: (id: string) => void | Promise<unknown>;
   // Можно ли отменять именно это сообщение (отправитель или владелец проекта); не задано — можно
   canCancelItem?: (item: PendingChatMessage) => boolean;
   // Прервать ход ради очереди; undefined — нет связи или ход уже не идёт

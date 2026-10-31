@@ -59,10 +59,39 @@ export function accessRevokedOwnerLine(ownerDisplayName?: string | null): string
   return name ? `${name} закрыл вам доступ к проекту.` : null;
 }
 
-// Бэк мог всё же отказать (устаревшая роль на клиенте): 403 с code not_chat_author
+// Серверные коды отказа (S2a-10b) и их человеческие тексты на клиенте. Код приходит
+// из двух мест: REST — поле body.code (lib/offline прикрепляет тело ошибки целиком к
+// err.body), хаб — префикс сообщения «not_chat_author: <текст>» (S2a-10c: у Interrupt и
+// AnswerQuestion тела нет, только текст HubException). Незнакомый код и отказ без кода —
+// null: вызывающий держит прежний свой текст.
+const DENIAL_TEXTS = {
+  not_chat_author: 'Только автор хода или владелец проекта',
+  owner_settings: 'Это решает владелец проекта',
+  not_sender: 'Это сообщение отправил другой участник',
+} as const;
+
+export type DenialCode = keyof typeof DENIAL_TEXTS;
+
+export function denialCodeOf(e: unknown): DenialCode | null {
+  const rest = e as { status?: number; body?: { code?: string } } | null;
+  if (rest?.status === 403 && rest.body?.code && rest.body.code in DENIAL_TEXTS) return rest.body.code as DenialCode;
+  const msg = e instanceof Error ? e.message : typeof e === 'string' ? e : '';
+  for (const code of Object.keys(DENIAL_TEXTS) as DenialCode[]) {
+    if (msg.startsWith(`${code}:`)) return code;
+  }
+  return null;
+}
+
+// Текст отказа для человека; null — кода нет (вызывающий держит свой прежний текст)
+export function denialTextOf(e: unknown): string | null {
+  const code = denialCodeOf(e);
+  return code ? DENIAL_TEXTS[code] : null;
+}
+
+// Бэк мог всё же отказать (устаревшая роль на клиенте): 403 с code not_chat_author.
+// Разбор — общий с остальными кодами; смысл для вызывающих не изменился
 export function isNotChatAuthorError(e: unknown): boolean {
-  const body = (e as { status?: number; body?: { code?: string } } | null);
-  return body?.status === 403 && body.body?.code === 'not_chat_author';
+  return denialCodeOf(e) === 'not_chat_author';
 }
 
 // Создавать чаты в проекте читателю нельзя: входы создания скрыты

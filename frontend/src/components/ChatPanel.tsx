@@ -11,7 +11,7 @@ import { isZoneRefusal } from '../lib/personaZone';
 import { buildBranchAnchors, branchAnchorText as branchAnchorTextOf, BRANCH_BEFORE_PROMPT } from '../lib/branchAnchors';
 import { findConsultedPersona } from './chat/PersonaTaskView';
 import { showToast } from '../lib/toast';
-import { guardTurnAction, ownerDecisionDeniedReason, turnDeniedReason } from '../features/projects/members/participantGate';
+import { denialTextOf, guardTurnAction, ownerDecisionDeniedReason, turnDeniedReason } from '../features/projects/members/participantGate';
 import { isArchivedChat } from '../lib/chatFilters';
 import { archiveApi } from '../api/chats';
 import { projectMainColor } from '../features/projects/projectUtil';
@@ -1458,7 +1458,9 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
           : await api.chats.update(session.id, payload);
       onSessionUpdated?.(updated);
     } catch (err) {
-      showToast('Модель', err instanceof Error ? err.message : 'Не удалось сменить модель');
+      // Отказ по машинному коду (S2a-10b): «настройки выбирает владелец» — текстом клиента,
+      // короткую серверную строку человек не обязан понимать сам. Незнакомый отказ — как раньше.
+      showToast('Модель', denialTextOf(err) ?? (err instanceof Error ? err.message : 'Не удалось сменить модель'));
     }
   }, [session.id, session.model, session.projectId, session.claudeSessionId, onSessionUpdated]);
 

@@ -1,10 +1,12 @@
-// Доработка S2b-F5 (вердикт ревью 136d1069, п.2): бросок карточки на дорожку участника
-// ('u:<id>') до S2b-2 отключён — бэк (TaskManager.UpdateTaskRequest) не принимает поле
-// AssigneeUserId, и карточка возвращалась бы на прежнее место. Логика назначения
-// сохранена за константой SHARED_ASSIGN_ENABLED=false. Проверка — настоящий onDragEnd
-// TaskBoard: onDragEnd DndContext перехвачен шпионом (остальной dnd-kit — настоящий),
-// запрос/оптимистичное движение/тост — шпионы на границах. Контроль: бросок на дорожку
-// AI работает по-прежнему (иначе тест не отличал бы блок от поломки всей логики).
+// S2b-F6: бэк принял AssigneeUserId (6824ba720, S2b-2a принят) — бросок на дорожку участника
+// включён. Контракт (TasksController + TaskManager.Update): id = назначить (бэк ставит и
+// Assignee=Me), "" = снять (обратно к владельцу), не слать = не менять. Отказ двери (не участник /
+// читатель / личная задача) — обычный путь ошибки: тост с серверным текстом + reloadTasks, это
+// и есть откат оптимистичного движения. Броски на 'me'/'claude' (личная доска/хаб) теперь тоже
+// шлют "": иначе прежний участник остаётся в записи — карточка на дорожке AI показывала бы чип
+// человека вместо значка Claude. Проверка — настоящий onDragEnd TaskBoard: onDragEnd DndContext
+// перехвачен шпионом (остальной dnd-kit — настоящий), запрос/движение/тост/reload — шпионы на
+// границах. Контроль: броски прочих групп (priority) не изменились.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
@@ -16,6 +18,7 @@ const m = vi.hoisted(() => ({
   update: vi.fn<(id: string, dto: unknown) => Promise<void>>(async () => {}),
   upsert: vi.fn(),
   toast: vi.fn(),
+  reload: vi.fn(),
   onDragEnd: undefined as ((e: unknown) => void) | undefined,
   view: {
     owner: { userId: 'u-own', displayName: 'Андрей' },
@@ -34,14 +37,15 @@ vi.mock('@dnd-kit/core', async (importOriginal) => {
   };
   return { ...orig, DndContext: Spy };
 });
-// Границы стора: движение карточки (upsertTaskLocal) и запрос (updateTask) — шпионы,
-// остальная логика lib/tasks (дорожки, порядок, колонки) — настоящая
+// Границы стора: движение карточки (upsertTaskLocal), запрос (updateTask) и откат (reloadTasks)
+// — шпионы, остальная логика lib/tasks (дорожки, порядок, колонки) — настоящая
 vi.mock('../../../lib/tasks', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../../lib/tasks')>();
   return {
     ...orig,
-    updateTask: (id: string, dto: unknown) => { m.update(id, dto); return Promise.resolve(); },
+    updateTask: (id: string, dto: unknown) => m.update(id, dto),
     upsertTaskLocal: (t: Task) => { m.upsert(t); },
+    reloadTasks: () => { m.reload(); },
   };
 });
 vi.mock('../../../lib/toast', () => ({ showToast: (...a: unknown[]) => m.toast(...a) }));
@@ -84,9 +88,9 @@ const { TaskBoard } = await import('./TaskBoard');
 const { DEFAULT_BOARD_COLUMNS } = await import('../../../lib/tasks');
 const { setAssigneeFilter, setGroupBy } = await import('../../../lib/boardControls');
 
-// === Фикстуры общего проекта: мои задачи (у владельца) — на своей дорожке, у Марии —
-// на её, AI-задача — на дорожке AI (дорошки строит настоящий boardLanes по списку участников)
-
+// === Фикстуры: задачи общего проекта — у владельца (свои), у Марии (assigneeUserId), AI.
+// В хабе те же задачи разложены по прежним дорожкам 'me'/'claude' (по assignee) — в хабе
+// карточка участника стоит на 'me', отдельной дорожки участника там нет.
 function mk(over: Partial<Task>): Task {
   return {
     id: 't', title: 'Т', description: '', status: 'todo', priority: 'medium',
@@ -98,17 +102,19 @@ function mk(over: Partial<Task>): Task {
 const tMine = mk({ id: 't-mine', title: 'Моя', assignee: 'me', assigneeUserId: 'u-own' });
 const tMary = mk({ id: 't-mary', title: 'Мариина', assignee: 'me', assigneeUserId: 'u-mary' });
 const tAi = mk({ id: 't-ai', title: 'AI-задача', assignee: 'claude' });
+const tUrgent = mk({ id: 't-urgent', title: 'Срочная', assignee: 'me', assigneeUserId: 'u-own', priority: 'urgent' });
 const P_SHARED = { id: 'p1', name: 'Общий', myRole: 'owner', members: { count: 2 } } as unknown as Project;
 
-async function mountBoard() {
+async function mountBoard(tasks: Task[] = [tMine, tMary, tAi], scope: 'hub' | 'project' = 'project') {
   m.onDragEnd = undefined;
   const root = createRoot(doc.getElementById('root') as unknown as HTMLElement);
   await act(async () => {
     root.render(createElement(TaskBoard, {
-      tasks: [tMine, tMary, tAi], columns: DEFAULT_BOARD_COLUMNS,
+      tasks, columns: DEFAULT_BOARD_COLUMNS,
       projectsById: new Map([[P_SHARED.id, P_SHARED]]),
       onOpenTask: () => {}, isMobile: true,
-      quickAddProjectId: 'p1', scope: 'project', inlineToolbar: false,
+      quickAddProjectId: scope === 'project' ? 'p1' : undefined,
+      scope, inlineToolbar: false,
     }));
     await Promise.resolve(); // список участников (useProjectPeople) приходит асинхронно
   });
@@ -116,25 +122,72 @@ async function mountBoard() {
   return root;
 }
 
-describe('Бросок на дорожку участника отключён до S2b-2 (вердикт 136d1069, п.2)', () => {
-  beforeEach(() => { setGroupBy('assignee'); setAssigneeFilter('all'); });
+describe('S2b-F6: бросок на дорожку участника включён', () => {
+  beforeEach(() => {
+    m.update.mockReset(); m.update.mockImplementation(async () => {});
+    m.upsert.mockReset(); m.toast.mockReset(); m.reload.mockReset();
+    setGroupBy('assignee'); setAssigneeFilter('all');
+  });
   afterEach(() => { setGroupBy('none'); setAssigneeFilter('all'); });
 
-  it('бросок на дорожку «Мария»: ни запроса, ни движения карточки; только тихая подсказка', async () => {
+  it('бросок на дорожку «Мария»: шлёт assignee:me + assigneeUserId:id и двигает карточку оптимистично', async () => {
     const root = await mountBoard();
     await act(async () => { m.onDragEnd!({ active: { id: 't-mine' }, over: { id: 'u:u-mary::todo' } } as never); });
-    expect(m.update, 'запроса на сервер нет').toHaveBeenCalledTimes(0);
-    expect(m.upsert, 'карточка не двигается: оптимистичного движения нет').toHaveBeenCalledTimes(0);
-    expect(m.toast, 'подсказка показана').toHaveBeenCalledWith(
-      'Назначение участникам появится позже', 'Карточка осталась на своей дорожке', 'info');
+    expect(m.update, 'назначения на участника').toHaveBeenCalledWith(
+      't-mine', expect.objectContaining({ assignee: 'me', assigneeUserId: 'u-mary' }));
+    expect(m.upsert, 'карточка двигается сразу, до ответа сервера').toHaveBeenCalledWith(
+      expect.objectContaining({ id: 't-mine', assignee: 'me', assigneeUserId: 'u-mary' }));
+    expect(m.toast, 'никакой подсказки — бросок работает').not.toHaveBeenCalled();
     await act(async () => { root.unmount(); });
   });
 
-  it('контроль: бросок на дорожку AI работает — это именно блок, а не сломанный drag-to-change', async () => {
+  it('бросок участник→AI: шлёт assignee:claude + assigneeUserId:"" и оптимистично снимает участника', async () => {
     const root = await mountBoard();
-    await act(async () => { m.onDragEnd!({ active: { id: 't-mine' }, over: { id: 'claude::todo' } } as never); });
-    expect(m.update, 'AI-дорожка принимает карточку запросом').toHaveBeenCalledWith(
-      't-mine', expect.objectContaining({ assignee: 'claude' }));
+    await act(async () => { m.onDragEnd!({ active: { id: 't-mary' }, over: { id: 'claude::todo' } } as never); });
+    expect(m.update, 'снятие участника вместе со сменой на AI').toHaveBeenCalledWith(
+      't-mary', expect.objectContaining({ assignee: 'claude', assigneeUserId: '' }));
+    expect(m.upsert, 'чип участника с карточки снимается сразу').toHaveBeenCalledWith(
+      expect.objectContaining({ id: 't-mary', assignee: 'claude', assigneeUserId: '' }));
+    await act(async () => { root.unmount(); });
+  });
+
+  it('бросок на me/claude в хабе: шлёт assigneeUserId:"" (иначе участник остаётся в записи)', async () => {
+    // Хаб: карточки общего проекта разложены по прежним дорожкам 'me'/'claude' — здесь
+    // обе 'me'/'claude'-ветки достижимы настоящим броском
+    const root = await mountBoard([tMine, tMary, tAi], 'hub');
+    await act(async () => { m.onDragEnd!({ active: { id: 't-mary' }, over: { id: 'claude::todo' } } as never); });
+    expect(m.update, 'участник → AI').toHaveBeenCalledWith(
+      't-mary', expect.objectContaining({ assignee: 'claude', assigneeUserId: '' }));
+    await act(async () => { m.onDragEnd!({ active: { id: 't-ai' }, over: { id: 'me::todo' } } as never); });
+    // у AI-задачи участника нет: "" для бэка — снятие несуществующего поля (no-op), безопасно
+    expect(m.update, 'AI → человек: тот же dto с ""').toHaveBeenCalledWith(
+      't-ai', expect.objectContaining({ assignee: 'me', assigneeUserId: '' }));
+    await act(async () => { root.unmount(); });
+  });
+
+  it('отказ сервера: тост с его текстом и reloadTasks (откат), карточка двигалась оптимистично', async () => {
+    m.update.mockImplementationOnce(() => Promise.reject(new Error('«u-mary» не участник проекта задачи')));
+    const root = await mountBoard();
+    await act(async () => {
+      m.onDragEnd!({ active: { id: 't-mine' }, over: { id: 'u:u-mary::todo' } } as never);
+      await Promise.resolve(); await Promise.resolve(); // прогнать отказ через очередь микротaskов до проверок
+    });
+    expect(m.upsert, 'оптимистичное движение было до отказа').toHaveBeenCalledTimes(1);
+    expect(m.toast, 'текст сервера показывается как есть').toHaveBeenCalledWith(
+      'Не удалось переместить карточку', '«u-mary» не участник проекта задачи', 'error');
+    expect(m.reload, 'перезагрузка стора откатывает движение').toHaveBeenCalledTimes(1);
+    await act(async () => { root.unmount(); });
+  });
+
+  it('контроль: бросок по приоритету не изменился — ни assignee-, ни assigneeUserId-полей', async () => {
+    setGroupBy('priority');
+    const root = await mountBoard([tMine, tMary, tAi, tUrgent]);
+    await act(async () => { m.onDragEnd!({ active: { id: 't-mine' }, over: { id: 'urgent::todo' } } as never); });
+    expect(m.update, 'смена приоритета').toHaveBeenCalledWith(
+      't-mine', expect.objectContaining({ priority: 'urgent' }));
+    const dto = m.update.mock.calls[0][1] as Record<string, unknown>;
+    expect(dto, 'приоритетный бросок не трогает исполнителя').not.toHaveProperty('assignee');
+    expect(dto).not.toHaveProperty('assigneeUserId');
     await act(async () => { root.unmount(); });
   });
 });

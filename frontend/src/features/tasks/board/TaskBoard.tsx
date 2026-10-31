@@ -40,12 +40,6 @@ import { BoardToolbar, useDefectsOnly } from './BoardToolbar';
 const MOUSE_SENSOR_OPTIONS = { activationConstraint: DRAG_MOUSE_ACTIVATION };
 const TOUCH_SENSOR_OPTIONS = { activationConstraint: DRAG_TOUCH_ACTIVATION };
 
-// Назначение участников броском на дорожку 'u:<id>' включается после S2b-2: бэк
-// (TaskManager.UpdateTaskRequest) пока НЕ принимает поле AssigneeUserId — бросок
-// возвращал бы карточку на прежнее место (путь записи — шаг S2b-2, Денис). До этого
-// бросок на дорожку участника заблокирован: карточка остаётся на месте, тихая подсказка.
-const SHARED_ASSIGN_ENABLED = false;
-
 const BOARD_GAP = 14;
 const BOARD_PAD_RIGHT = 12;
 const COL_MIN = 200;
@@ -242,15 +236,18 @@ export function TaskBoard({
     if (sourceLaneKey && destLaneKey !== sourceLaneKey) {
       if (groupBy === 'priority') dto.priority = destLaneKey as TaskPriority;
       else if (groupBy === 'assignee') {
-        if (destLaneKey === 'me' || destLaneKey === 'claude') dto.assignee = destLaneKey as TaskAssignee;
-        // Дорожка участника ('u:<id>', S2b-F5): бросок назначает человека (К9: 'me' + id).
-        // До S2b-2 (бэк не принимает assigneeUserId) — заблокирован: ни запроса,
-        // ни оптимистичного движения — карточка остаётся на месте, только тихая подсказка.
+        // 'me'/'claude' (личная доска, хаб): смена исполнителя на человека/AI снимает и
+        // человека-исполнителя (assigneeUserId:'' по контракту бэка, S2b-2a): иначе прежний
+        // участник остаётся в записи — карточка на дорожке AI показывала бы чип человека
+        // вместо значка Claude, а в общем проекте «снятие» означает владельца.
+        if (destLaneKey === 'me' || destLaneKey === 'claude') {
+          dto.assignee = destLaneKey as TaskAssignee;
+          dto.assigneeUserId = '';
+        }
+        // Дорожка участника ('u:<id>', S2b-F6): бросок назначает человека (К9: 'me' + id).
+        // Отказ двери (не участник / читатель / личная задача) — обычный путь ошибки ниже:
+        // тост с серверным текстом и reloadTasks, это откатывает оптимистичное движение.
         else if (destLaneKey.startsWith('u:')) {
-          if (!SHARED_ASSIGN_ENABLED) {
-            showToast('Назначение участникам появится позже', 'Карточка осталась на своей дорожке', 'info');
-            return;
-          }
           dto.assignee = 'me';
           dto.assigneeUserId = destLaneKey.slice(2);
         }
@@ -263,6 +260,8 @@ export function TaskBoard({
     if (isProjectBoard) optimistic.columnId = destColId;
     if (dto.priority) optimistic.priority = dto.priority;
     if (dto.assignee) optimistic.assignee = dto.assignee;
+    // assigneeUserId едет и как id (назначить), и как '' (снять) — '' опустим в UI
+    // (чипа участника нет, значок Claude на месте), поэтому очищаем поле карточки вместе
     if (dto.assigneeUserId !== undefined) optimistic.assigneeUserId = dto.assigneeUserId;
     upsertTaskLocal(optimistic);
 

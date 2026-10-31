@@ -519,7 +519,7 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
         {task.assigneeUserId && (
           <>
             <HeaderChip><TaskUserBadge projectId={task.projectId} assigneeUserId={task.assigneeUserId} size={18} /></HeaderChip>
-            <FormerAssigneeLine projectId={task.projectId} assigneeUserId={task.assigneeUserId} />
+            <FormerAssigneeLine projectId={task.projectId} assigneeUserId={task.assigneeUserId} onAssign={() => setEditing(true)} />
           </>
         )}
         {task.assignee && !task.assigneeUserId && (

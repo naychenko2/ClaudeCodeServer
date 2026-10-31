@@ -3,8 +3,8 @@
 // (общий кэш подписи автора в чате) + formerMembers проекта. У задач без этих полей
 // (личный проект, старый бэк) ничего не рендерим и ничего не грузим.
 
-import { useEffect, useState } from 'react';
-import { C, FONT, FS, SP } from '../../lib/design';
+import { useEffect, useState, type ReactNode } from 'react';
+import { C, FONT, FS, SHADOW, SP } from '../../lib/design';
 import { Badge } from '../../components/ui';
 import { UserAvatar } from '../../components/ui/UserAvatar';
 import { onProjectMembersChanged } from '../../lib/signalr';
@@ -13,6 +13,13 @@ import { loadView } from '../projects/members/MessageAuthorLine';
 import type { Project, ProjectMembersView } from '../../types';
 
 export const UNASSIGNED_LABEL = 'Без исполнителя';
+const ASSIGN_CLASS = 'cc-task-assign-link';
+if (typeof document !== 'undefined' && !document.getElementById('cc-task-assign-style')) {
+  const el = document.createElement('style');
+  el.id = 'cc-task-assign-style';
+  el.textContent = `.${ASSIGN_CLASS}:focus-visible{outline:none;box-shadow:${SHADOW.focus};border-radius:4px;}`;
+  document.head?.appendChild(el);
+}
 const UNKNOWN_NAME = 'Участник';
 
 type NameSrc = { displayName?: string | null; username?: string | null } | undefined;
@@ -38,15 +45,16 @@ export function resolveTaskAssignee(
   return former ? { state: 'none', formerName: nameOf(former) } : { state: 'none' };
 }
 
-// Имя того, кто поставил задачу; запасное — «Участник» (бывший тоже показываем по имени)
+// Имя того, кто поставил задачу; запасное — «Участник» (бывший тоже показываем по имени);
+// список участников не пришёл → null, чтобы не мигнуть «Участник» на загрузке
 export function resolveCreatorName(
   userId: string | null | undefined,
   view: Pick<ProjectMembersView, 'members' | 'owner'> | null | undefined,
   project: Pick<Project, 'formerMembers'> | null | undefined,
 ): string | null {
-  if (!userId) return null;
-  if (view?.owner.userId === userId) return nameOf(view.owner);
-  return nameOf(view?.members.find(x => x.userId === userId) ?? project?.formerMembers?.find(x => x.userId === userId));
+  if (!userId || !view) return null;
+  if (view.owner.userId === userId) return nameOf(view.owner);
+  return nameOf(view.members.find(x => x.userId === userId) ?? project?.formerMembers?.find(x => x.userId === userId));
 }
 
 // «12 окт» — без точки после сокращения месяца
@@ -79,12 +87,14 @@ interface Props {
   size?: 18 | 20;
   // Действие «Назначить» у строки бывшего исполнителя; нет — строка без кнопки
   onAssign?: () => void;
+  // Что показать, пока список участников не загрузился (иначе исполнитель пропадает на секунду)
+  fallback?: ReactNode;
 }
 
-function Inner({ projectId, assigneeUserId, size = 20 }: Props) {
+function Inner({ projectId, assigneeUserId, size = 20, fallback }: Props) {
   const { view, project } = useProjectPeople(projectId, true);
   const a = resolveTaskAssignee(assigneeUserId, view, project);
-  if (!a) return null;
+  if (!a) return <>{fallback ?? null}</>;
   if (a.state === 'none') {
     return (
       <Badge tone="warning" size="xs" title={a.formerName ? `Была на ${a.formerName} — больше не в проекте` : UNASSIGNED_LABEL}>
@@ -127,7 +137,7 @@ export function FormerAssigneeLine({ projectId, assigneeUserId, onAssign }: Prop
       {onAssign && (
         <>
           {' · '}
-          <button type="button" onClick={onAssign} style={{
+          <button type="button" className={ASSIGN_CLASS} onClick={onAssign} style={{
             all: 'unset', cursor: 'pointer', color: C.accent, fontWeight: 600,
           }}>Назначить</button>
         </>
@@ -143,6 +153,7 @@ export function CreatedByLine({ projectId, createdByUserId, createdAt }: {
   const { view, project } = useProjectPeople(projectId, !!createdByUserId);
   if (!createdByUserId) return null;
   const name = resolveCreatorName(createdByUserId, view, project);
+  if (!name) return null;
   const date = formatCreatedDate(createdAt);
   return (
     <div data-testid="created-by" style={{ fontFamily: FONT.sans, fontSize: FS.xs, color: C.textMuted, marginTop: 6 }}>

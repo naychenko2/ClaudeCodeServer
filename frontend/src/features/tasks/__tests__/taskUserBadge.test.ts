@@ -73,6 +73,7 @@ describe('resolveCreatorName / formatCreatedDate', () => {
     expect(resolveCreatorName('u-old', VIEW, PROJECT)).toBe('Олег');
     expect(resolveCreatorName('u-x', VIEW, PROJECT)).toBe('Участник');
     expect(resolveCreatorName(null, VIEW, PROJECT)).toBeNull();
+    expect(resolveCreatorName('u-m', null, PROJECT)).toBeNull(); // список не пришёл — без «Участник»
   });
   it('дата без точки: «12 окт»', () => {
     expect(formatCreatedDate('2026-10-12T10:00:00Z')).toBe('12 окт');
@@ -114,6 +115,14 @@ describe('рендер', () => {
     expect(html).toContain('Поставил Андрей · 12 окт');
     const none = await render(createElement(CreatedByLine, { projectId: 'p1', createdAt: '2026-10-12T10:00:00Z' }));
     expect(none).toBe('');
+  });
+
+  it('участники не загружены: «Поставил» не мигает, исполнитель показывает запасной вид', async () => {
+    m.view = null; m.project = PROJECT;
+    const by = await render(createElement(CreatedByLine, { projectId: 'p1', createdByUserId: 'u-m' }));
+    expect(by).toBe('');
+    const fb = await render(createElement(TaskUserBadge, { projectId: 'p1', assigneeUserId: 'u-m', fallback: createElement('i', null, 'ЗАПАС') }));
+    expect(fb).toContain('ЗАПАС');
   });
 
   it('личный проект / задача без assigneeUserId → пусто и список не грузится', async () => {

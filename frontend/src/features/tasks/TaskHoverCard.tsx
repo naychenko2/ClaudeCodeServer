@@ -100,7 +100,7 @@ export function HoverCard({ anchor, onKeepAlive, onLeave, onClose }: {
           {task.title}
         </span>
         {task.assigneeUserId
-          ? <TaskUserBadge projectId={task.projectId} assigneeUserId={task.assigneeUserId} />
+          ? <TaskUserBadge projectId={task.projectId} assigneeUserId={task.assigneeUserId} fallback={<AssigneeBadge assignee={task.assignee} />} />
           : <AssigneeBadge assignee={task.assignee} />}
       </div>
 

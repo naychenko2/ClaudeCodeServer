@@ -51,7 +51,8 @@ public sealed class VideoAssembleIsolationTests(ITestOutputHelper output) : IDis
         Directory.CreateDirectory(_dir);
         const string slice = "ccs-isotest.slice";
         var prev = IsolationOptions.Instance;
-        IsolationOptions.Instance = new IsolationOptions { Enabled = true, Slice = slice, MemoryMax = "4G" };
+        var options = new IsolationOptions { Enabled = true, Slice = slice, MemoryMax = "4G" };
+        IsolationOptions.Instance = options;
         try
         {
             // Проба продукта (результат кэшируется, боевой Start его переиспользует) не ОК — обёртки не будет
@@ -68,7 +69,7 @@ public sealed class VideoAssembleIsolationTests(ITestOutputHelper output) : IDis
 
             var gate = new BuildConcurrencyGate(1);
             var started = new TaskCompletionSource();
-            var launchers = new RecordingLaunchers(gate, started);
+            var launchers = new RecordingLaunchers(gate, started, options);
             var dsp = new FfmpegVideoDsp(new ConfigurationBuilder().Build(), NullLogger<FfmpegVideoDsp>.Instance, launchers, gate);
             Skip.IfNot(dsp.Available, "ffmpeg недоступен");
 
@@ -167,12 +168,13 @@ public sealed class VideoAssembleIsolationTests(ITestOutputHelper output) : IDis
         p.ExitCode.Should().Be(0, err.Result);
     }
 
-    private sealed class RecordingLaunchers(BuildConcurrencyGate gate, TaskCompletionSource started) : ILauncherFactory
+    private sealed class RecordingLaunchers(BuildConcurrencyGate gate, TaskCompletionSource started, IsolationOptions options) : ILauncherFactory
     {
         // Параметры первичного конструктора видны только телу самого класса — вложенному Recording
         // нужны явные поля.
         private readonly BuildConcurrencyGate _gate = gate;
         private readonly TaskCompletionSource _started = started;
+        private readonly IsolationOptions _options = options;
 
         public int? Pid { get; private set; }
         public ProcessSpec? Spec { get; private set; }
@@ -193,6 +195,13 @@ public sealed class VideoAssembleIsolationTests(ITestOutputHelper output) : IDis
             public string? McpApiUrlOverride => Real.McpApiUrlOverride;
             public Process Start(ProcessSpec spec)
             {
+                // IsolationOptions.Instance — процесс-глобальный, а Program.cs каждого WebApplicationFactory-хоста
+                // (классы с хостом идут в других коллекциях, параллельно) перезаписывает его конфигом хоста
+                // (Enabled=false). Между установкой в начале теста и Start лежит генерация исходника на десятки
+                // секунд под нагрузкой — чужой хост успевал подменить опции, и ffmpeg стартовал без systemd-run
+                // (доказано: /proc/<pid>/cmdline = ffmpeg…, Instance.Enabled=false в момент Start). Продукт тут
+                // прав — он читает глобальные опции. Закрепляем свои непосредственно перед Start.
+                IsolationOptions.Instance = owner._options;
                 var process = Real.Start(spec);
                 owner.Spec = spec;
                 owner.Pid = process.Id;

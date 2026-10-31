@@ -13,14 +13,21 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // B3 «Сфер»: персона сферы видит задачи и файлы ВСЕХ проектов сферы и ни одного вне её;
 // состав зоны считается на каждый вызов — выход проекта из сферы снимает доступ сразу.
 [Trait("Category", "Host")]
-public class SphereZoneWorkspaceTests : IDisposable
+public class SphereZoneWorkspaceTests : IClassFixture<SphereZoneWorkspaceTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new();
+    // Хост на КЛАСС, а не на тест. Сферу, проекты и персон каждый тест заводит свои (новая
+    // группа проектов с уникальным id), перечислений «всех» нет; флаг spheres владельца —
+    // единственное общее состояние, его выставляет ArrangeAsync в начале каждого теста
+    public sealed class Hosts : TestWebApplicationFactory;
+
+    private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
 
-    public SphereZoneWorkspaceTests() => _client = _factory.CreateAuthenticatedClient();
-
-    public void Dispose() => _factory.Dispose();
+    public SphereZoneWorkspaceTests(Hosts hosts)
+    {
+        _factory = hosts;
+        _client = _factory.CreateAuthenticatedClient();
+    }
 
     private T Svc<T>() where T : notnull => _factory.Services.GetRequiredService<T>();
 

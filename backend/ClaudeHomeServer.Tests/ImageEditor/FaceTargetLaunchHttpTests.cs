@@ -20,7 +20,7 @@ namespace ClaudeHomeServer.Tests.ImageEditor;
 // faces_changed → 409, feature_disabled → 404, busy → 503, provider_unavailable → 409,
 // version_not_found → 404, invalid_request → 400.
 [Trait("Category", "Host")]
-public class FaceTargetLaunchHttpTests : IDisposable
+public class FaceTargetLaunchHttpTests : IClassFixture<FaceTargetLaunchHttpTests.Hosts>
 {
     private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
@@ -31,49 +31,92 @@ public class FaceTargetLaunchHttpTests : IDisposable
     private readonly string _threadId;
     private readonly string _facesKey;
     private readonly string _charSlug;
+    private readonly Hosts _hosts;
 
-    public FaceTargetLaunchHttpTests()
+    // Хост на КОНФИГУРАЦИЮ (шов детекции лиц), а не на тест: хосты поднимаются лениво и гасятся
+    // вместе с фикстурой. Состояние (проект, персонаж, чат, нить, файл) каждый тест заводит
+    // сам в своём каталоге через Prepare; флаг персонажей выставляет сам тест
+    public sealed class Hosts : IDisposable
     {
-        _factory = new TestWebApplicationFactory { UseFrontend = false };
-        _factory.ExtraServices = services =>
+        // Одно годное лицо
+        public MediaHost Ok { get; } = new(new OkMedia()) { UseFrontend = false };
+        // Два лица, второе мелкое
+        public MediaHost SmallSecond { get; } = new(new SmallSecondFaceMedia()) { UseFrontend = false };
+        // Детекция занята
+        public MediaHost Busy { get; } = new(new BusyMedia()) { UseFrontend = false };
+        // Детекция вернула ошибку
+        public MediaHost Error { get; } = new(new ErrorMedia()) { UseFrontend = false };
+
+        public void Dispose()
         {
-            services.AddSingleton<IImageEditor>(new FakeImageEditor("local", models: FakeImageEditor.Model("m")));
-            services.RemoveAll<ILocalImageMedia>();
-            services.AddSingleton<ILocalImageMedia>(new OkMedia());
-            services.AddSingleton<IImageEditJobs>(new FakeQuoteJobs());
-        };
-
-        _ownerId = _factory.Services.GetRequiredService<UserStore>()
-            .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
-        _projectId = CreateProject(_factory, TestWebApplicationFactory.TestUsername);
-        _root = _factory.Services.GetRequiredService<ProjectManager>().GetById(_projectId)!.RootPath;
-        _client = _factory.CreateAuthenticatedClient();
-
-        // Персонаж: 3 фото (валидные JPEG)
-        var photos = new List<CharacterPhotoUpload>();
-        for (var i = 1; i <= 3; i++)
-            photos.Add(new CharacterPhotoUpload(TestImages.Jpeg((byte)i)));
-        var created = CharacterStore.Create(_root,
-            new CharacterDraft("Боря", null, photos), DateTime.UtcNow);
-        created.Error.Should().BeNull();
-        _charSlug = created.Value!.Manifest.Slug;
-
-        // Чат + нить + версия
-        var sessions = _factory.Services.GetRequiredService<SessionManager>();
-        var chat = sessions.CreateAsync(_projectId, ClaudeMode.AcceptEdits, name: "Чат").GetAwaiter().GetResult();
-        _chatId = chat.Id;
-        File.WriteAllBytes(System.IO.Path.Combine(_root, "test.png"),
-            new byte[] { 0x89, 0x50, 0x4E, 0x47 });
-        var store = _factory.Services.GetRequiredService<ImageThreadStore>();
-        var thread = store.Open(_ownerId, _chatId, "test.png", null, store.Get(_ownerId, _chatId).Revision);
-        _threadId = thread.Thread!.Id;
-        _facesKey = FaceDetectionCache.FacesKey(File.ReadAllBytes(System.IO.Path.Combine(_root, "test.png")));
+            Ok.Dispose();
+            SmallSecond.Dispose();
+            Busy.Dispose();
+            Error.Dispose();
+        }
     }
 
-    public void Dispose()
+    public sealed class MediaHost : TestWebApplicationFactory
     {
-        _factory.Dispose();
-        GC.SuppressFinalize(this);
+        public MediaHost(ILocalImageMedia media)
+        {
+            ExtraServices = services =>
+            {
+                services.AddSingleton<IImageEditor>(new FakeImageEditor("local", models: FakeImageEditor.Model("m")));
+                services.RemoveAll<ILocalImageMedia>();
+                services.AddSingleton(media);
+                services.AddSingleton<IImageEditJobs>(new FakeQuoteJobs());
+            };
+        }
+    }
+
+    // Чат + нить + файл исходника в новом проекте хоста; персонаж «Боря» — по запросу
+    private sealed record Scene(string OwnerId, string ProjectId, string Root, string ChatId, string ThreadId,
+        string FacesKey, string? CharSlug);
+
+    private static Scene Prepare(TestWebApplicationFactory factory, bool withCharacter = true)
+    {
+        var ownerId = factory.Services.GetRequiredService<UserStore>()
+            .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+        var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
+        var root = factory.Services.GetRequiredService<ProjectManager>().GetById(projectId)!.RootPath;
+
+        string? slug = null;
+        if (withCharacter)
+        {
+            // Персонаж: 3 фото (валидные JPEG)
+            var photos = new List<CharacterPhotoUpload>();
+            for (var i = 1; i <= 3; i++)
+                photos.Add(new CharacterPhotoUpload(TestImages.Jpeg((byte)i)));
+            var created = CharacterStore.Create(root,
+                new CharacterDraft("Боря", null, photos), DateTime.UtcNow);
+            created.Error.Should().BeNull();
+            slug = created.Value!.Manifest.Slug;
+        }
+
+        var sessions = factory.Services.GetRequiredService<SessionManager>();
+        var chat = sessions.CreateAsync(projectId, ClaudeMode.AcceptEdits, name: "Чат").GetAwaiter().GetResult();
+        File.WriteAllBytes(System.IO.Path.Combine(root, "test.png"),
+            new byte[] { 0x89, 0x50, 0x4E, 0x47 });
+        var store = factory.Services.GetRequiredService<ImageThreadStore>();
+        var thread = store.Open(ownerId, chat.Id, "test.png", null, store.Get(ownerId, chat.Id).Revision);
+        var facesKey = FaceDetectionCache.FacesKey(File.ReadAllBytes(System.IO.Path.Combine(root, "test.png")));
+        return new Scene(ownerId, projectId, root, chat.Id, thread.Thread!.Id, facesKey, slug);
+    }
+
+    public FaceTargetLaunchHttpTests(Hosts hosts)
+    {
+        _hosts = hosts;
+        _factory = hosts.Ok;
+        var scene = Prepare(_factory);
+        _ownerId = scene.OwnerId;
+        _projectId = scene.ProjectId;
+        _root = scene.Root;
+        _chatId = scene.ChatId;
+        _threadId = scene.ThreadId;
+        _facesKey = scene.FacesKey;
+        _charSlug = scene.CharSlug!;
+        _client = _factory.CreateAuthenticatedClient();
     }
 
     private static string CreateProject(TestWebApplicationFactory factory, string username)
@@ -86,9 +129,28 @@ public class FaceTargetLaunchHttpTests : IDisposable
             .Create("ft-" + Guid.NewGuid().ToString("N")[..6], dir, user.Id, username).Id;
     }
 
-    private void SetFlag(bool on) =>
-        _factory.Services.GetRequiredService<UserStore>()
-            .SetFeatureFlag(_ownerId, FeatureFlagKeys.CharacterFaceSwap, on);
+    private void SetFlag(bool on) => SetFlag(_factory, _ownerId, on);
+
+    private static void SetFlag(TestWebApplicationFactory factory, string ownerId, bool on) =>
+        factory.Services.GetRequiredService<UserStore>()
+            .SetFeatureFlag(ownerId, FeatureFlagKeys.CharacterFaceSwap, on);
+
+    // Форма запуска с faceTarget в нити сцены
+    private static MultipartFormDataContent JobForm(Scene scene, string faceTargetJson)
+    {
+        var form = new MultipartFormDataContent
+        {
+            { new StringContent("q1"), "quoteId" },
+            { new StringContent("тест"), "prompt" },
+            { new StringContent(faceTargetJson), "faceTarget" },
+            { new StringContent(scene.ChatId), "sessionId" },
+            { new StringContent(scene.ThreadId), "threadId" },
+        };
+        var png = new ByteArrayContent([0x89, 0x50, 0x4E, 0x47]);
+        png.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png");
+        form.Add(png, "source", "test.png");
+        return form;
+    }
 
     private static async Task<JsonElement> Json(HttpResponseMessage resp) =>
         JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
@@ -347,43 +409,13 @@ public class FaceTargetLaunchHttpTests : IDisposable
     [Fact]
     public async Task Отказ_по_лицу_2_несёт_face_2()
     {
-        var factory = new TestWebApplicationFactory { UseFrontend = false };
-        factory.ExtraServices = services =>
-        {
-            services.AddSingleton<IImageEditor>(new FakeImageEditor("local", models: FakeImageEditor.Model("m")));
-            services.RemoveAll<ILocalImageMedia>();
-            services.AddSingleton<ILocalImageMedia>(new SmallSecondFaceMedia());
-            services.AddSingleton<IImageEditJobs>(new FakeQuoteJobs());
-        };
+        var factory = _hosts.SmallSecond;
         var client = factory.CreateAuthenticatedClient();
-        var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
-        var root = factory.Services.GetRequiredService<ProjectManager>().GetById(projectId)!.RootPath;
-        var ownerId = factory.Services.GetRequiredService<UserStore>()
-            .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
-        var slug = CharacterStore.Create(root, new CharacterDraft("Боря", null,
-            [.. Enumerable.Range(1, 3).Select(i => new CharacterPhotoUpload(TestImages.Jpeg((byte)i)))]),
-            DateTime.UtcNow).Value!.Manifest.Slug;
-        var chat = await factory.Services.GetRequiredService<SessionManager>()
-            .CreateAsync(projectId, ClaudeMode.AcceptEdits, name: "Чат");
-        File.WriteAllBytes(System.IO.Path.Combine(root, "test.png"), new byte[] { 0x89, 0x50, 0x4E, 0x47 });
-        var store = factory.Services.GetRequiredService<ImageThreadStore>();
-        var thread = store.Open(ownerId, chat.Id, "test.png", null, store.Get(ownerId, chat.Id).Revision);
-        var facesKey = FaceDetectionCache.FacesKey(File.ReadAllBytes(System.IO.Path.Combine(root, "test.png")));
-        factory.Services.GetRequiredService<UserStore>()
-            .SetFeatureFlag(ownerId, FeatureFlagKeys.CharacterFaceSwap, true);
+        var scene = Prepare(factory);
+        SetFlag(factory, scene.OwnerId, true);
 
-        var form = new MultipartFormDataContent
-        {
-            { new StringContent("q1"), "quoteId" },
-            { new StringContent("тест"), "prompt" },
-            { new StringContent(FaceTargetJson(facesKey, 2, slug)), "faceTarget" },
-            { new StringContent(chat.Id), "sessionId" },
-            { new StringContent(thread.Thread!.Id), "threadId" },
-        };
-        var png = new ByteArrayContent([0x89, 0x50, 0x4E, 0x47]);
-        png.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png");
-        form.Add(png, "source", "test.png");
-        var resp = await client.PostAsync($"/api/projects/{projectId}/image-editor/jobs", form);
+        var resp = await client.PostAsync($"/api/projects/{scene.ProjectId}/image-editor/jobs",
+            JobForm(scene, FaceTargetJson(scene.FacesKey, 2, scene.CharSlug!)));
 
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest, await resp.Content.ReadAsStringAsync());
         var body = await Json(resp);
@@ -392,7 +424,6 @@ public class FaceTargetLaunchHttpTests : IDisposable
         body.GetProperty("code").GetString().Should().Be(ImageEditErrorCodes.InvalidRequest);
         body.GetProperty("error").GetString().Should().Contain("мелкое");
         body.EnumerateObject().Select(p => p.Name).Should().BeEquivalentTo(["error", "code", "face"]);
-        factory.Dispose();
     }
 
     // «Лицо 3 не найдено» (лицо 3 нет в списке): отказ привязан к запрошенному лицу — тело
@@ -415,47 +446,19 @@ public class FaceTargetLaunchHttpTests : IDisposable
     [Fact]
     public async Task Персонаж_не_найден_несёт_face()
     {
-        var factory = new TestWebApplicationFactory { UseFrontend = false };
-        factory.ExtraServices = services =>
-        {
-            services.AddSingleton<IImageEditor>(new FakeImageEditor("local", models: FakeImageEditor.Model("m")));
-            services.RemoveAll<ILocalImageMedia>();
-            services.AddSingleton<ILocalImageMedia>(new OkMedia());
-            services.AddSingleton<IImageEditJobs>(new FakeQuoteJobs());
-        };
+        var factory = _hosts.Ok;
         var client = factory.CreateAuthenticatedClient();
-        var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
-        var root = factory.Services.GetRequiredService<ProjectManager>().GetById(projectId)!.RootPath;
-        var ownerId = factory.Services.GetRequiredService<UserStore>()
-            .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
-        var chat = await factory.Services.GetRequiredService<SessionManager>()
-            .CreateAsync(projectId, ClaudeMode.AcceptEdits, name: "Чат");
-        File.WriteAllBytes(System.IO.Path.Combine(root, "test.png"), new byte[] { 0x89, 0x50, 0x4E, 0x47 });
-        var store = factory.Services.GetRequiredService<ImageThreadStore>();
-        var thread = store.Open(ownerId, chat.Id, "test.png", null, store.Get(ownerId, chat.Id).Revision);
-        var facesKey = FaceDetectionCache.FacesKey(File.ReadAllBytes(System.IO.Path.Combine(root, "test.png")));
-        factory.Services.GetRequiredService<UserStore>()
-            .SetFeatureFlag(ownerId, FeatureFlagKeys.CharacterFaceSwap, true);
+        var scene = Prepare(factory, withCharacter: false);
+        SetFlag(factory, scene.OwnerId, true);
 
-        var form = new MultipartFormDataContent
-        {
-            { new StringContent("q1"), "quoteId" },
-            { new StringContent("тест"), "prompt" },
-            { new StringContent(FaceTargetJson(facesKey, 1, "no-such-char")), "faceTarget" },
-            { new StringContent(chat.Id), "sessionId" },
-            { new StringContent(thread.Thread!.Id), "threadId" },
-        };
-        var png = new ByteArrayContent([0x89, 0x50, 0x4E, 0x47]);
-        png.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png");
-        form.Add(png, "source", "test.png");
-        var resp = await client.PostAsync($"/api/projects/{projectId}/image-editor/jobs", form);
+        var resp = await client.PostAsync($"/api/projects/{scene.ProjectId}/image-editor/jobs",
+            JobForm(scene, FaceTargetJson(scene.FacesKey, 1, "no-such-char")));
 
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest, await resp.Content.ReadAsStringAsync());
         var body = await Json(resp);
         body.GetProperty("face").GetInt32().Should().Be(1);
         body.GetProperty("code").GetString().Should().Be(ImageEditErrorCodes.InvalidRequest);
         body.GetProperty("error").GetString().Should().Be("Персонаж «no-such-char» не найден");
-        factory.Dispose();
     }
 
     // ── busy → 503 ───────────────────────────────────────────────────────────────
@@ -463,56 +466,17 @@ public class FaceTargetLaunchHttpTests : IDisposable
     [Fact]
     public async Task Busy_503()
     {
-        // Пересобираем фабрику с BusyMedia
-        var factory = new TestWebApplicationFactory { UseFrontend = false };
-        factory.ExtraServices = services =>
-        {
-            services.AddSingleton<IImageEditor>(new FakeImageEditor("local", models: FakeImageEditor.Model("m")));
-            services.RemoveAll<ILocalImageMedia>();
-            services.AddSingleton<ILocalImageMedia>(new BusyMedia());
-            services.AddSingleton<IImageEditJobs>(new FakeQuoteJobs());
-        };
-        var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
-        var root = factory.Services.GetRequiredService<ProjectManager>().GetById(projectId)!.RootPath;
-        var ownerId = factory.Services.GetRequiredService<UserStore>()
-            .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+        var factory = _hosts.Busy;
         var client = factory.CreateAuthenticatedClient();
+        var scene = Prepare(factory);
+        SetFlag(factory, scene.OwnerId, true);
 
-        var photos = new List<CharacterPhotoUpload>();
-        for (var i = 1; i <= 3; i++)
-            photos.Add(new CharacterPhotoUpload(TestImages.Jpeg((byte)i)));
-        var created = CharacterStore.Create(root,
-            new CharacterDraft("Боря", null, photos), DateTime.UtcNow);
-        var slug = created.Value!.Manifest.Slug;
-
-        var sessions = factory.Services.GetRequiredService<SessionManager>();
-        var chat = await sessions.CreateAsync(projectId, ClaudeMode.AcceptEdits, name: "Чат");
-        File.WriteAllBytes(System.IO.Path.Combine(root, "test.png"),
-            new byte[] { 0x89, 0x50, 0x4E, 0x47 });
-        var store = factory.Services.GetRequiredService<ImageThreadStore>();
-        var thread = store.Open(ownerId, chat.Id, "test.png", null, store.Get(ownerId, chat.Id).Revision);
-        var facesKey = FaceDetectionCache.FacesKey(File.ReadAllBytes(System.IO.Path.Combine(root, "test.png")));
-
-        factory.Services.GetRequiredService<UserStore>()
-            .SetFeatureFlag(ownerId, FeatureFlagKeys.CharacterFaceSwap, true);
-
-        var form = new MultipartFormDataContent
-        {
-            { new StringContent("q1"), "quoteId" },
-            { new StringContent("тест"), "prompt" },
-        };
-        var png = new ByteArrayContent([0x89, 0x50, 0x4E, 0x47]);
-        png.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png");
-        form.Add(png, "source", "test.png");
         // Верхнего characterSlug нет: персонаж — в faceTarget.faces (иначе новый отказ «двусмысленный вход»)
-        form.Add(new StringContent(FaceTargetJson(facesKey, 1, slug)), "faceTarget");
-        form.Add(new StringContent(chat.Id), "sessionId");
-        form.Add(new StringContent(thread.Thread!.Id), "threadId");
+        var resp = await client.PostAsync($"/api/projects/{scene.ProjectId}/image-editor/jobs",
+            JobForm(scene, FaceTargetJson(scene.FacesKey, 1, scene.CharSlug!)));
 
-        var resp = await client.PostAsync($"/api/projects/{projectId}/image-editor/jobs", form);
         resp.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable, await resp.Content.ReadAsStringAsync());
         (await Code(resp)).Should().Be(ImageEditErrorCodes.Busy);
-        factory.Dispose();
     }
 
     // ── provider_unavailable → 409 ────────────────────────────────────────────────
@@ -520,60 +484,22 @@ public class FaceTargetLaunchHttpTests : IDisposable
     [Fact]
     public async Task Error_409_provider_unavailable()
     {
-        var factory = new TestWebApplicationFactory { UseFrontend = false };
-        factory.ExtraServices = services =>
-        {
-            services.AddSingleton<IImageEditor>(new FakeImageEditor("local", models: FakeImageEditor.Model("m")));
-            services.RemoveAll<ILocalImageMedia>();
-            services.AddSingleton<ILocalImageMedia>(new ErrorMedia());
-            services.AddSingleton<IImageEditJobs>(new FakeQuoteJobs());
-        };
-        var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
-        var root = factory.Services.GetRequiredService<ProjectManager>().GetById(projectId)!.RootPath;
-        var ownerId = factory.Services.GetRequiredService<UserStore>()
-            .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+        var factory = _hosts.Error;
         var client = factory.CreateAuthenticatedClient();
+        var scene = Prepare(factory);
+        SetFlag(factory, scene.OwnerId, true);
 
-        var photos = new List<CharacterPhotoUpload>();
-        for (var i = 1; i <= 3; i++)
-            photos.Add(new CharacterPhotoUpload(TestImages.Jpeg((byte)i)));
-        var created = CharacterStore.Create(root,
-            new CharacterDraft("Боря", null, photos), DateTime.UtcNow);
-        var slug = created.Value!.Manifest.Slug;
-
-        var sessions = factory.Services.GetRequiredService<SessionManager>();
-        var chat = await sessions.CreateAsync(projectId, ClaudeMode.AcceptEdits, name: "Чат");
-        File.WriteAllBytes(System.IO.Path.Combine(root, "test.png"),
-            new byte[] { 0x89, 0x50, 0x4E, 0x47 });
-        var store = factory.Services.GetRequiredService<ImageThreadStore>();
-        var thread = store.Open(ownerId, chat.Id, "test.png", null, store.Get(ownerId, chat.Id).Revision);
-        var facesKey = FaceDetectionCache.FacesKey(File.ReadAllBytes(System.IO.Path.Combine(root, "test.png")));
-
-        factory.Services.GetRequiredService<UserStore>()
-            .SetFeatureFlag(ownerId, FeatureFlagKeys.CharacterFaceSwap, true);
-
-        var form = new MultipartFormDataContent
-        {
-            { new StringContent("q1"), "quoteId" },
-            { new StringContent("тест"), "prompt" },
-        };
-        var png = new ByteArrayContent([0x89, 0x50, 0x4E, 0x47]);
-        png.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png");
-        form.Add(png, "source", "test.png");
         // Верхнего characterSlug нет: персонаж — в faceTarget.faces (иначе новый отказ «двусмысленный вход»)
-        form.Add(new StringContent(FaceTargetJson(facesKey, 1, slug)), "faceTarget");
-        form.Add(new StringContent(chat.Id), "sessionId");
-        form.Add(new StringContent(thread.Thread!.Id), "threadId");
+        var resp = await client.PostAsync($"/api/projects/{scene.ProjectId}/image-editor/jobs",
+            JobForm(scene, FaceTargetJson(scene.FacesKey, 1, scene.CharSlug!)));
 
-        var resp = await client.PostAsync($"/api/projects/{projectId}/image-editor/jobs", form);
         resp.StatusCode.Should().Be(HttpStatusCode.Conflict, await resp.Content.ReadAsStringAsync());
         (await Code(resp)).Should().Be(ImageEditErrorCodes.ProviderUnavailable);
-        factory.Dispose();
     }
 
     // ── Фейки ILocalImageMedia ─────────────────────────────────────────────────────
 
-    private sealed class OkMedia : ILocalImageMedia
+    public sealed class OkMedia : ILocalImageMedia
     {
         public bool Configured => true;
         public bool Available => true;
@@ -593,7 +519,7 @@ public class FaceTargetLaunchHttpTests : IDisposable
     }
 
     // Два лица: первое годное, второе мелкое (Small) — отказ «слишком мелкое» по лицу 2
-    private sealed class SmallSecondFaceMedia : ILocalImageMedia
+    public sealed class SmallSecondFaceMedia : ILocalImageMedia
     {
         public bool Configured => true;
         public bool Available => true;
@@ -613,7 +539,7 @@ public class FaceTargetLaunchHttpTests : IDisposable
         public Task<bool> CancelAsync(string ticket, CancellationToken ct) => throw new NotSupportedException();
     }
 
-    private sealed class BusyMedia : ILocalImageMedia
+    public sealed class BusyMedia : ILocalImageMedia
     {
         public bool Configured => true;
         public bool Available => true;
@@ -632,7 +558,7 @@ public class FaceTargetLaunchHttpTests : IDisposable
         public Task<bool> CancelAsync(string ticket, CancellationToken ct) => throw new NotSupportedException();
     }
 
-    private sealed class ErrorMedia : ILocalImageMedia
+    public sealed class ErrorMedia : ILocalImageMedia
     {
         public bool Configured => true;
         public bool Available => true;
@@ -652,7 +578,7 @@ public class FaceTargetLaunchHttpTests : IDisposable
 
     // Котировка "q1" с провайдером "local" — для AssembleFaceTargetAsync; QuoteAsync отвечает
     // валидной котировкой, чтобы ручка quote с faceTarget прошла (200)
-    private sealed class FakeQuoteJobs : IImageEditJobs
+    public sealed class FakeQuoteJobs : IImageEditJobs
     {
         public Task<ImageEditCallResult<ImageEditQuoteDto>> QuoteAsync(
             string ownerId, string projectId, ImageEditQuoteRequest request, CancellationToken ct) =>

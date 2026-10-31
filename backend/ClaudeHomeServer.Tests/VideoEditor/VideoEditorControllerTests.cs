@@ -20,33 +20,37 @@ namespace ClaudeHomeServer.Tests.VideoEditor;
 // video/, личный чат без local и без проектных путей, локальный проект отказывает до диска.
 // Поставщик — фейк в памяти поверх настоящего исполнителя съёмки.
 [Trait("Category", "Host")]
-public class VideoEditorControllerTests : IDisposable
+public class VideoEditorControllerTests : IClassFixture<VideoEditorControllerTests.Host>
 {
-    private readonly TestWebApplicationFactory _factory = new();
+    // Хост на КЛАСС (раньше — фабрика на каждый тест). Общего изменяемого состояния тесты не оставляют:
+    // проект, каталог и чат заводятся свои на тест (Guid), нити и очередь съёмок ключуются по чату.
+    public sealed class Host : TestWebApplicationFactory
+    {
+        public Host()
+        {
+            ExtraServices = services =>
+            {
+                services.AddSingleton<IVideoEngine>(new FakeEngine());
+                // Настоящий local-драйвер модуля с «живым» швом: в личном чате он обязан отказать
+                services.AddSingleton<ILocalVideoMedia>(new FakeLocalMedia());
+            };
+        }
+    }
+
+    private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
     private readonly string _ownerId;
     private readonly string _projectId;
     private readonly string _projectRoot;
     private static readonly byte[] Clip = [.. Enumerable.Range(0, 64).Select(i => (byte)i)];
 
-    public VideoEditorControllerTests()
+    public VideoEditorControllerTests(Host factory)
     {
-        _factory.ExtraServices = services =>
-        {
-            services.AddSingleton<IVideoEngine>(new FakeEngine());
-            // Настоящий local-драйвер модуля с «живым» швом: в личном чате он обязан отказать
-            services.AddSingleton<ILocalVideoMedia>(new FakeLocalMedia());
-        };
+        _factory = factory;
         var users = _factory.Services.GetRequiredService<UserStore>();
         _ownerId = users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
         (_projectId, _projectRoot) = CreateProject(TestWebApplicationFactory.TestUsername);
         _client = _factory.CreateAuthenticatedClient();
-    }
-
-    public void Dispose()
-    {
-        _factory.Dispose();
-        GC.SuppressFinalize(this);
     }
 
     private sealed class FakeLocalMedia : ILocalVideoMedia

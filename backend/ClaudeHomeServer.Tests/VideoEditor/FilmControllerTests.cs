@@ -18,18 +18,28 @@ namespace ClaudeHomeServer.Tests.VideoEditor;
 // состоянии, правка под ревизией (409 со свежим состоянием), границы записи (video/**, ссылки наружу), личный чат —
 // personal_scope_no_films, чужое неотличимо от несуществующего. Съёмка — фейковый поставщик в памяти.
 [Trait("Category", "Host")]
-public class FilmControllerTests : IDisposable
+public class FilmControllerTests : IClassFixture<FilmControllerTests.Host>
 {
-    private readonly TestWebApplicationFactory _factory = new();
+    // Хост на КЛАСС (раньше — фабрика на каждый тест). Общего изменяемого состояния тесты не оставляют:
+    // проект, каталог и чат заводятся свои на тест (Guid), нити и очередь съёмок ключуются по чату.
+    public sealed class Host : TestWebApplicationFactory
+    {
+        public Host()
+        {
+            ExtraServices = services => services.AddSingleton<IVideoEngine>(new FakeEngine());
+        }
+    }
+
+    private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
     private readonly string _ownerId;
     private readonly string _projectId;
     private readonly string _projectRoot;
     private static readonly byte[] Clip = [.. Enumerable.Range(0, 64).Select(i => (byte)i)];
 
-    public FilmControllerTests()
+    public FilmControllerTests(Host factory)
     {
-        _factory.ExtraServices = services => services.AddSingleton<IVideoEngine>(new FakeEngine());
+        _factory = factory;
         var users = _factory.Services.GetRequiredService<UserStore>();
         _ownerId = users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
         var dir = Path.Combine(_factory.TempDir, "film_" + Guid.NewGuid().ToString("N")[..8]);
@@ -38,12 +48,6 @@ public class FilmControllerTests : IDisposable
         _projectId = _factory.Services.GetRequiredService<ProjectManager>()
             .Create("film-" + Guid.NewGuid().ToString("N")[..6], dir, _ownerId, TestWebApplicationFactory.TestUsername).Id;
         _client = _factory.CreateAuthenticatedClient();
-    }
-
-    public void Dispose()
-    {
-        _factory.Dispose();
-        GC.SuppressFinalize(this);
     }
 
     private sealed class FakeEngine : IVideoEngine

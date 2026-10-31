@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.Versioning;
 using ClaudeHomeServer.Services.Execution;
 using FluentAssertions;
@@ -29,6 +30,19 @@ public class LocalProcessRunnerIsolationTests
             Env = env,
             RawArguments = raw,
         };
+
+    // IsolationOptions.Instance — процесс-глобальный, его читают и хост-тесты из других коллекций
+    // (git init через LocalProcessRunner). Держать подмену весь тест нельзя: чужой Start подхватит
+    // наши опции (фейковый systemd-run, который тест потом удаляет — «cannot open …/systemd-run»).
+    // Раннер читает опции только внутри Start, поэтому ставим их ровно на этот вызов и всегда
+    // возвращаем прежние.
+    private static Process StartPinned(IsolationOptions options, ProcessSpec spec)
+    {
+        var prev = IsolationOptions.Instance;
+        IsolationOptions.Instance = options;
+        try { return LocalProcessRunner.Instance.Start(spec); }
+        finally { IsolationOptions.Instance = prev; }
+    }
 
     private static IsolationOptions On(string? memHigh = null, string? memMax = null, bool reuse = true) => new()
     {
@@ -713,39 +727,30 @@ public class LocalProcessRunnerIsolationTests
         if (LocalProcessRunner.FindSystemdRun(Environment.GetEnvironmentVariable("PATH")) is null) return;
 
         const string slice = "ccs-isotest.slice";
-        var prev = IsolationOptions.Instance;
-        IsolationOptions.Instance = new IsolationOptions { Enabled = true, Slice = slice, MemoryMax = "256M" };
+        var process = StartPinned(new IsolationOptions { Enabled = true, Slice = slice, MemoryMax = "256M" }, new ProcessSpec
+        {
+            FileName = "sh",
+            Args = ["-c", "echo изоляция-ок; exec sleep 30"],
+            RedirectStdin = false,
+            Track = false,
+        });
         try
         {
-            var process = LocalProcessRunner.Instance.Start(new ProcessSpec
-            {
-                FileName = "sh",
-                Args = ["-c", "echo изоляция-ок; exec sleep 30"],
-                RedirectStdin = false,
-                Track = false,
-            });
-            try
-            {
-                var line = await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10));
-                line.Should().Be("изоляция-ок");
+            var line = await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            line.Should().Be("изоляция-ок");
 
-                // Строка вывода пришла от команды — значит, systemd-run уже переложил процесс в scope
-                var cgroup = await File.ReadAllTextAsync($"/proc/{process.Id}/cgroup");
-                cgroup.Should().Contain(slice).And.Contain(".scope");
+            // Строка вывода пришла от команды — значит, systemd-run уже переложил процесс в scope
+            var cgroup = await File.ReadAllTextAsync($"/proc/{process.Id}/cgroup");
+            cgroup.Should().Contain(slice).And.Contain(".scope");
 
-                LocalProcessRunner.Instance.Kill(process);
-                await Task.WhenAny(process.WaitForExitAsync(), Task.Delay(TimeSpan.FromSeconds(10)));
-                process.HasExited.Should().BeTrue("Kill обязан завершить процесс в scope");
-            }
-            finally
-            {
-                if (!process.HasExited) process.Kill(entireProcessTree: true);
-                process.Dispose();
-            }
+            LocalProcessRunner.Instance.Kill(process);
+            await Task.WhenAny(process.WaitForExitAsync(), Task.Delay(TimeSpan.FromSeconds(10)));
+            process.HasExited.Should().BeTrue("Kill обязан завершить процесс в scope");
         }
         finally
         {
-            IsolationOptions.Instance = prev;
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            process.Dispose();
         }
     }
     // Поддельный systemd-run: отбрасывает флаги обёртки до «--» и exec-ает команду.
@@ -785,12 +790,10 @@ public class LocalProcessRunnerIsolationTests
         var (dir, fake) = FakeSystemdRun();
 
         using var _ = Bus(present: true);
-        var prevOptions = IsolationOptions.Instance;
         var prevStop = LocalProcessRunner.StopScope;
         var calls = new List<(string Systemctl, string Unit)>();
         var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         string? ourUnit = null;
-        IsolationOptions.Instance = new IsolationOptions { Enabled = true, SystemdRunPath = fake };
         LocalProcessRunner.StopScope = (systemctl, unit) =>
         {
             lock (calls)
@@ -801,7 +804,7 @@ public class LocalProcessRunnerIsolationTests
         };
         try
         {
-            using var process = LocalProcessRunner.Instance.Start(new ProcessSpec
+            using var process = StartPinned(new IsolationOptions { Enabled = true, SystemdRunPath = fake }, new ProcessSpec
             {
                 FileName = "sh",
                 Args = ["-c", "echo готово"],
@@ -832,7 +835,6 @@ public class LocalProcessRunnerIsolationTests
         finally
         {
             LocalProcessRunner.StopScope = prevStop;
-            IsolationOptions.Instance = prevOptions;
             try { Directory.Delete(dir, recursive: true); } catch { /* best-effort */ }
         }
     }
@@ -842,14 +844,12 @@ public class LocalProcessRunnerIsolationTests
     {
         if (OperatingSystem.IsWindows()) return;
 
-        var prevOptions = IsolationOptions.Instance;
         var prevStop = LocalProcessRunner.StopScope;
         var calls = 0;
-        IsolationOptions.Instance = new IsolationOptions { Enabled = false };
         LocalProcessRunner.StopScope = (_, _) => Interlocked.Increment(ref calls);
         try
         {
-            using var process = LocalProcessRunner.Instance.Start(new ProcessSpec
+            using var process = StartPinned(new IsolationOptions { Enabled = false }, new ProcessSpec
             {
                 FileName = "sh",
                 Args = ["-c", "true"],
@@ -863,7 +863,6 @@ public class LocalProcessRunnerIsolationTests
         finally
         {
             LocalProcessRunner.StopScope = prevStop;
-            IsolationOptions.Instance = prevOptions;
         }
     }
 
@@ -877,13 +876,11 @@ public class LocalProcessRunnerIsolationTests
 
         var (dir, fake) = FakeSystemdRun();
         using var _ = Bus(present: true);
-        var prevOptions = IsolationOptions.Instance;
         var prevStop = LocalProcessRunner.StopScope;
         var atStart = new List<string>();
         var atExit = new List<string>();
         var stoppedAtStart = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         string? ourUnit = null;
-        IsolationOptions.Instance = new IsolationOptions { Enabled = true, SystemdRunPath = fake };
         LocalProcessRunner.StopScope = (_, unit) =>
         {
             lock (atStart)
@@ -895,7 +892,7 @@ public class LocalProcessRunnerIsolationTests
         try
         {
             // Оболочка ждёт stdin: выход наступает только после подмены шва
-            using var process = LocalProcessRunner.Instance.Start(new ProcessSpec
+            using var process = StartPinned(new IsolationOptions { Enabled = true, SystemdRunPath = fake }, new ProcessSpec
             {
                 FileName = "sh",
                 Args = ["-c", "echo готово; read _"],
@@ -921,7 +918,6 @@ public class LocalProcessRunnerIsolationTests
         finally
         {
             LocalProcessRunner.StopScope = prevStop;
-            IsolationOptions.Instance = prevOptions;
             try { Directory.Delete(dir, recursive: true); } catch { /* best-effort */ }
         }
     }
@@ -944,52 +940,43 @@ public class LocalProcessRunnerIsolationTests
         if (LocalProcessRunner.FindSystemdRun(Environment.GetEnvironmentVariable("PATH")) is null) return;
 
         const string slice = "ccs-isotest.slice";
-        var prev = IsolationOptions.Instance;
-        IsolationOptions.Instance = new IsolationOptions { Enabled = true, Slice = slice, MemoryMax = "256M" };
-        try
+        using var process = StartPinned(new IsolationOptions { Enabled = true, Slice = slice, MemoryMax = "256M" }, new ProcessSpec
         {
-            using var process = LocalProcessRunner.Instance.Start(new ProcessSpec
-            {
-                FileName = "sh",
-                // Хвост отвязан от наших труб, иначе чтение stdout ждало бы и его. Выход
-                // оболочки держим на stdin: по выходу раннер гасит scope, и хвост погибает
-                // раньше, чем тест успевает прочесть его cgroup (плавающий DirectoryNotFound на CI)
-                Args = ["-c", "sleep 300 </dev/null >/dev/null 2>&1 & echo $!; read _"],
-                Track = false,
-            });
-            var tailPid = int.Parse((await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)))!);
-            // Оболочка ждёт stdin — scope жив, хвост в нём тоже: cgroup читается без гонки
-            var cgroupLine = (await File.ReadAllTextAsync($"/proc/{tailPid}/cgroup")).Trim();
-            var unit = cgroupLine.Split('/').Last();
-            unit.Should().StartWith("ccs-run-").And.EndWith(".scope");
-            // Путь cgroup сохраняем сразу: после гашения читать его будет неоткуда
-            var cgroupDir = "/sys/fs/cgroup" + cgroupLine[(cgroupLine.IndexOf("::", StringComparison.Ordinal) + 2)..];
-            process.StandardInput.Close();
-            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            FileName = "sh",
+            // Хвост отвязан от наших труб, иначе чтение stdout ждало бы и его. Выход
+            // оболочки держим на stdin: по выходу раннер гасит scope, и хвост погибает
+            // раньше, чем тест успевает прочесть его cgroup (плавающий DirectoryNotFound на CI)
+            Args = ["-c", "sleep 300 </dev/null >/dev/null 2>&1 & echo $!; read _"],
+            Track = false,
+        });
+        var tailPid = int.Parse((await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)))!);
+        // Оболочка ждёт stdin — scope жив, хвост в нём тоже: cgroup читается без гонки
+        var cgroupLine = (await File.ReadAllTextAsync($"/proc/{tailPid}/cgroup")).Trim();
+        var unit = cgroupLine.Split('/').Last();
+        unit.Should().StartWith("ccs-run-").And.EndWith(".scope");
+        // Путь cgroup сохраняем сразу: после гашения читать его будет неоткуда
+        var cgroupDir = "/sys/fs/cgroup" + cgroupLine[(cgroupLine.IndexOf("::", StringComparison.Ordinal) + 2)..];
+        process.StandardInput.Close();
+        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
 
-            // Остановка асинхронная (stop --no-block), а под нагрузкой SIGTERM и уборка
-            // занимают секунды. Ждём именно инвариант: хвост мёртв и в cgroup никого нет
-            var deadline = DateTime.UtcNow.AddSeconds(90);
-            while ((Directory.Exists($"/proc/{tailPid}") || AliveInScope(cgroupDir) is not 0)
-                   && DateTime.UtcNow < deadline)
-                await Task.Delay(100);
-            Directory.Exists($"/proc/{tailPid}").Should().BeFalse("остановка scope добивает хвост");
-            AliveInScope(cgroupDir).Should().Be(0, "в scope не осталось живых процессов");
+        // Остановка асинхронная (stop --no-block), а под нагрузкой SIGTERM и уборка
+        // занимают секунды. Ждём именно инвариант: хвост мёртв и в cgroup никого нет
+        var deadline = DateTime.UtcNow.AddSeconds(90);
+        while ((Directory.Exists($"/proc/{tailPid}") || AliveInScope(cgroupDir) is not 0)
+               && DateTime.UtcNow < deadline)
+            await Task.Delay(100);
+        Directory.Exists($"/proc/{tailPid}").Should().BeFalse("остановка scope добивает хвост");
+        AliveInScope(cgroupDir).Should().Be(0, "в scope не осталось живых процессов");
 
-            // И новые там не заводятся: узлы сборки не должны перезапускаться в мёртвом scope
-            await Task.Delay(1000);
-            AliveInScope(cgroupDir).Should().Be(0, "в погашенном scope не появляются новые процессы");
+        // И новые там не заводятся: узлы сборки не должны перезапускаться в мёртвом scope
+        await Task.Delay(1000);
+        AliveInScope(cgroupDir).Should().Be(0, "в погашенном scope не появляются новые процессы");
 
-            // Состояние юнита — вторично: --collect выгрузит его сам, но собственный
-            // TimeoutStopSec systemd досчитывает уже после опустевшей cgroup
-            var state = await UnitStateAsync(unit);
-            IsAcceptable(state).Should().BeTrue(
-                $"юнит остановлен, останавливается или уже выгружен; состояние: {state}");
-        }
-        finally
-        {
-            IsolationOptions.Instance = prev;
-        }
+        // Состояние юнита — вторично: --collect выгрузит его сам, но собственный
+        // TimeoutStopSec systemd досчитывает уже после опустевшей cgroup
+        var state = await UnitStateAsync(unit);
+        IsAcceptable(state).Should().BeTrue(
+            $"юнит остановлен, останавливается или уже выгружен; состояние: {state}");
 
         // Сколько процессов в cgroup scope. Каталога нет — systemd его уже собрал, это ноль.
         static int AliveInScope(string cgroupDir)

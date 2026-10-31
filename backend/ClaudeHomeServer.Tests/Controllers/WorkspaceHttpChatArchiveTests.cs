@@ -23,11 +23,12 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// не архивируется (та же формула владения, что у соседей по тулсету).
 /// </summary>
 [Trait("Category", "Host")]
-public class WorkspaceHttpChatArchiveTests : IDisposable
+public class WorkspaceHttpChatArchiveTests : IClassFixture<TestWebApplicationFactory>
 {
-    private readonly TestWebApplicationFactory _factory = new();
+    // Хост на класс; чаты и архивация каждый тест заводит сам
+    private readonly TestWebApplicationFactory _factory;
 
-    public void Dispose() => _factory.Dispose();
+    public WorkspaceHttpChatArchiveTests(TestWebApplicationFactory factory) => _factory = factory;
 
     private HttpClient Client => _factory.CreateAuthenticatedClient();
 

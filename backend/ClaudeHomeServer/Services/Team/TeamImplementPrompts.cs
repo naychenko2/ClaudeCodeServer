@@ -578,14 +578,17 @@ public static class TeamImplementPrompts
 
         // Шаг 5.3 фичи «Модульные тесты»: отвязать от монолита и разнести по вертикалям.
         // На итерации — только затронутые тест-проекты (scripts/tests-affected.sh, шаг 5.1),
-        // полный slnx — перед мержем, агентские сборки — с `-v q -clp:ErrorsOnly`.
+        // полный прогон — CI и гейт мержа, агентские сборки — с `-v q -clp:ErrorsOnly`.
         // Имя скрипта синхронизировано с docs/processes/executor-task-template.md.
         sb.AppendLine();
         sb.AppendLine("## Тестирование");
         sb.AppendLine("На итерации запускай **только** затронутые тест-проекты. " +
                       "Определить их: `bash scripts/tests-affected.sh` (по `git diff` + графу " +
-                      "`ProjectReference`). Полный прогон `dotnet test backend/ClaudeHomeServer.slnx` " +
-                      "— только перед мержем в master. Агентские сборки: " +
+                      "`ProjectReference`). Полный прогон решения не запускай: его делают CI и гейт мержа. " +
+                      "Монолит без `filter` `run_tests` сам режет на шарды. Новый класс с " +
+                      "`TestWebApplicationFactory` помечай `[Trait(\"Category\",\"Host\")]` на классе. " +
+                      "Метку `Slow` ставь только на метод без хоста и только с замером в сообщении коммита " +
+                      "(`testing.md`, «Правило новой метки»). Агентские сборки: " +
                       "`dotnet build -v q -clp:ErrorsOnly` (минимум шума, максимум сигнала).");
         sb.AppendLine();
         sb.AppendLine("## Сверка числа тестов");

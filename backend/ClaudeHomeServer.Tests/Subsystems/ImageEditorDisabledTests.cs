@@ -16,22 +16,34 @@ namespace ClaudeHomeServer.Tests.Subsystems;
 // шапке NotesDisabledTests. Ключ модуля совпадает с ключом подсистемы (imageeditor), поэтому
 // ModuleLoader читает ровно эту секцию: ключи конфигурации без учёта регистра.
 [Trait("Category", "Host")]
-public class ImageEditorDisabledTests : IDisposable
+public class ImageEditorDisabledTests : IClassFixture<ImageEditorDisabledTests.Hosts>
 {
-    private readonly DisabledFactory _disabled = new();
+    private readonly Hosts _hosts;
 
-    // Контрольный хост: без оверрайда модуль грузится — значит пустота ниже от гейта,
-    // а не от опечатки в маршруте
-    private readonly TestWebApplicationFactory _enabled = new();
+    public ImageEditorDisabledTests(Hosts hosts) => _hosts = hosts;
 
-    public void Dispose()
+    private DisabledFactory _disabled => _hosts.Disabled;
+    private TestWebApplicationFactory _enabled => _hosts.Enabled;
+
+    // Два хоста на КЛАСС, а не на тест: поднимаются лениво и гасятся вместе с фикстурой
+    public sealed class Hosts : IDisposable
     {
-        _disabled.Dispose();
-        _enabled.Dispose();
-        GC.SuppressFinalize(this);
+        public DisabledFactory Disabled { get; } = new();
+
+        // Контрольный хост: без оверрайда модуль грузится — значит пустота ниже от гейта,
+        // а не от опечатки в маршруте
+        public EnabledFactory Enabled { get; } = new();
+
+        public void Dispose()
+        {
+            Disabled.Dispose();
+            Enabled.Dispose();
+        }
     }
 
-    private sealed class DisabledFactory : TestWebApplicationFactory
+    public sealed class EnabledFactory : TestWebApplicationFactory;
+
+    public sealed class DisabledFactory : TestWebApplicationFactory
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {

@@ -14,21 +14,28 @@ namespace ClaudeHomeServer.Tests.ImageEditor.Threads;
 // UpdatedAt, получает маркер MigratedAt, повторный прогон ничего не меняет, чат, который человек
 // вернул из архива, повторно не архивируется, обычные чаты не трогаются, схема бэкапа та же.
 [Trait("Category", "Host")]
-public class ImageChatV3MigrationTests : IDisposable
+public class ImageChatV3MigrationTests : IClassFixture<ImageChatV3MigrationTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new();
+    /// <summary>
+    /// Хост на весь класс (IClassFixture), а не на тест: приложение собирается один раз.
+    /// SessionManager и sessions.json общие на класс, но тесты изолированы проектом:
+    /// каждый тест-экземпляр заводит СВОЙ проект (уникальный GUID), а миграция считает
+    /// только image-чаты без маркера — свои чаты каждый тест помечает своим прогоном
+    /// (SessionManager.ArchiveLegacyImageChats), поэтому счётчики «1» и «0» не зависят
+    /// от порядка тестов. Часы ManualTime — на каждый тест-экземпляр свои.
+    /// </summary>
+    public sealed class Hosts : TestWebApplicationFactory
+    {
+    }
+
+    private readonly TestWebApplicationFactory _factory;
     private readonly string _projectId;
     private readonly ManualTime _time = new(new DateTimeOffset(2026, 9, 27, 12, 0, 0, TimeSpan.Zero));
 
-    public ImageChatV3MigrationTests()
+    public ImageChatV3MigrationTests(Hosts hosts)
     {
+        _factory = hosts;
         (_projectId, _) = CharacterEndpointsTests.CreateProject(_factory, TestWebApplicationFactory.TestUsername);
-    }
-
-    public void Dispose()
-    {
-        _factory.Dispose();
-        GC.SuppressFinalize(this);
     }
 
     private SessionManager Sessions => _factory.Services.GetRequiredService<SessionManager>();

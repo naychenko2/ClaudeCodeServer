@@ -125,7 +125,17 @@ public class RunTurnGateTests : IClassFixture<RunTurnGateTests.Fixture>, IAsyncL
 
         string? denied = null;
         try { await conn.InvokeCoreAsync(method, args); }
-        catch (HubException ex) { if (ex.Message.Contains("Доступ запрещён")) denied = ex.Message; }
+        // Отказ права выглядит по-разному с S2a-10c: общий «Доступ запрещён» (подписка, чужой
+        // ресурс) или код правила в начале серверного текста (Interrupt/AnswerQuestion →
+        // not_chat_author, методы на Configure → owner_settings). Для матрицы ролей это один и
+        // тот же «отказан», а клиент ставит поверх серверного текста свою обёртку — поэтому
+        // поиск подстрокой, а не с начала строки.
+        catch (HubException ex)
+        {
+            if (ex.Message.Contains("Доступ запрещён") || ex.Message.Contains("not_chat_author:")
+                || ex.Message.Contains("owner_settings:"))
+                denied = ex.Message;
+        }
         catch (Exception) { /* прошёл гейт и упал позже на заглушечных аргументах — не отказ доступа */ }
 
         if (role == ProjectRole.Owner || (role == ProjectRole.Editor && EditorMayCall.Contains(method)))

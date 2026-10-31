@@ -64,8 +64,10 @@ public class SessionHub : Hub
     private RequestScope? ScopeOfProject(string projectId, ProjectRight right = ProjectRight.Read) =>
         _access.Resolve(UserId, projectId, right);
 
-    // Текст «Доступ запрещён» — контракт фронта. Отказ логируется: sub соединения и владелец
-    // ресурса сразу показывают рассинхрон аккаунта (токен/query-строку не пишем никогда).
+    // Текст «Доступ запрещён» — контракт фронта для отказов без правила (подписка, чужой ресурс,
+    // чат не виден). Отказ логируется: sub соединения и владелец ресурса сразу показывают
+    // рассинхрон аккаунта (токен/query-строку не пишем никогда). Отказы правила «автор или
+    // владелец» и права Configure несут код — ниже, в DeniedTurnAuthor/DeniedOwnerSettings.
     private HubException DeniedSession(string sessionId, [CallerMemberName] string method = "")
     {
         var info = _sessions.GetById(sessionId);
@@ -80,12 +82,45 @@ public class SessionHub : Hub
     private HubException DeniedUser(string userId, [CallerMemberName] string method = "") =>
         LogDenied(method, "user", userId, userId);
 
-    private HubException LogDenied(string method, string resource, string resourceId, string? ownerId)
+    // Отказ правила «владелец или автор идущего хода» (S2a-10c) и права Configure (настройки чата):
+    // тому, кому чат ВИДЕН (тот же Read-гейт точки доступа, что решает в REST 403 вместо 404),
+    // отказ несёт машинный код префиксом — тот же, что в REST body.code: DenyTurnAuthor →
+    // ChatAuthorGate.not_chat_author, DenyOwnerTurn → OwnerSettingsGate.owner_settings. Фронт по коду
+    // различает «не автор хода» и «настройки — владельцу» вместо общего отказа. Чужому чат не виден
+    // → прежний «Доступ запрещён» без кода (существование чата не раскрываем, как 404 в REST).
+    // Текст называет то правило, которое отработало: здесь — авторство идущего хода (у этого же
+    // кода в REST есть и другой случай — авторские действия над чатом, там свой текст).
+    private HubException DeniedTurnAuthor(string sessionId, [CallerMemberName] string method = "") =>
+        DeniedByRight(sessionId, ChatAuthorGate.ErrorCode, "Только автор хода или владелец проекта", method);
+
+    // Текст — тот же, что у REST-ответа этого же кода (OwnerSettingsGate.Denied): одному коду
+    // соответствует одна человеческая строка, где бы она ни пришла.
+    private HubException DeniedOwnerSettings(string sessionId, [CallerMemberName] string method = "") =>
+        DeniedByRight(sessionId, OwnerSettingsGate.ErrorCode, "Настройки чата выбирает владелец", method);
+
+    private HubException DeniedByRight(string sessionId, string code, string reason, string method)
+    {
+        var info = _sessions.GetById(sessionId);
+        var visible = ScopeOfSession(sessionId) is not null;
+        return LogDenied(method, "session", sessionId, info is null ? null : _sessions.ResolveOwnerId(info),
+            visible ? code : null, visible ? reason : null);
+    }
+
+    private HubException LogDenied(string method, string resource, string resourceId, string? ownerId,
+        string? code = null, string? reason = null)
     {
         _logger.LogWarning(
-            "Хаб отказал в доступе: метод={Method} ресурс={Resource} id={ResourceId} sub={UserId} владелец={OwnerId} соединение={ConnectionId}",
-            method, resource, resourceId, UserId, ownerId, Context.ConnectionId);
-        return new HubException("Доступ запрещён");
+            "Хаб отказал в доступе: метод={Method} ресурс={Resource} id={ResourceId} sub={UserId} владелец={OwnerId} соединение={ConnectionId} код={Code}",
+            method, resource, resourceId, UserId, ownerId, Context.ConnectionId, code);
+        // SignalR доносит до клиента только строку error: @microsoft/signalr собирает из неё
+        // Error(invocationEvent.error) и errorData клиента не читает (в dist/esm/HubConnection.js нет
+        // обращения к errorData), поэтому код — часть текста. Форма стабильная: «код: пояснение»,
+        // код равен REST body.code. Префикс выбран не для красоты: по нему отказ опознает фронт
+        // (participantGate.denialCodeOf), а прежнему «Доступ запрещён» остался путь прочих
+        // отказов — он и дальше приходит без кода.
+        return code is null
+            ? new HubException("Доступ запрещён")
+            : new HubException($"{code}: {reason}");
     }
 
     // «Чат не найден» отдельно от «Доступ запрещён»: на «не найден» фронт сбрасывает
@@ -265,7 +300,7 @@ public class SessionHub : Hub
 
     public void RespondPermission(string sessionId, string requestId, string behavior)
     {
-        if (ScopeOfSession(sessionId, ProjectRight.Configure) is null) throw DeniedSession(sessionId);
+        if (ScopeOfSession(sessionId, ProjectRight.Configure) is null) throw DeniedOwnerSettings(sessionId);
         _sessions.RespondPermission(sessionId, requestId, behavior);
     }
 
@@ -273,14 +308,14 @@ public class SessionHub : Hub
     // не дожидаясь следующего сообщения.
     public void SetMode(string sessionId, string mode)
     {
-        if (ScopeOfSession(sessionId, ProjectRight.Configure) is null) throw DeniedSession(sessionId);
+        if (ScopeOfSession(sessionId, ProjectRight.Configure) is null) throw DeniedOwnerSettings(sessionId);
         _sessions.SetMode(sessionId, mode);
     }
 
     // executions — из DI параметром метода (сервис хабу нужен только здесь, конструктор не трогаем)
     public async Task Interrupt(string sessionId, TaskExecutionService executions)
     {
-        if (!OwnerOrTurnAuthor(sessionId)) throw DeniedSession(sessionId);
+        if (!OwnerOrTurnAuthor(sessionId)) throw DeniedTurnAuthor(sessionId);
         _sessions.Interrupt(sessionId);
         // «Стоп» в чате исполнителя задачи: прерванный ход result не пришлёт — фиксируем
         // остановку сами, как на доске агентов (BoardController.InterruptAgent)
@@ -290,19 +325,19 @@ public class SessionHub : Hub
     // Ручное сворачивание контекста сессии (/compact)
     public async Task CompactSession(string sessionId)
     {
-        if (ScopeOfSession(sessionId, ProjectRight.Configure) is null) throw DeniedSession(sessionId);
+        if (ScopeOfSession(sessionId, ProjectRight.Configure) is null) throw DeniedOwnerSettings(sessionId);
         await _sessions.CompactAsync(sessionId);
     }
 
     public void AnswerQuestion(string sessionId, string toolUseId, string answerText)
     {
-        if (!OwnerOrTurnAuthor(sessionId)) throw DeniedSession(sessionId);
+        if (!OwnerOrTurnAuthor(sessionId)) throw DeniedTurnAuthor(sessionId);
         _sessions.AnswerQuestion(sessionId, toolUseId, answerText);
     }
 
     public void RespondPlan(string sessionId, string requestId, bool approve, string? feedback = null)
     {
-        if (ScopeOfSession(sessionId, ProjectRight.Configure) is null) throw DeniedSession(sessionId);
+        if (ScopeOfSession(sessionId, ProjectRight.Configure) is null) throw DeniedOwnerSettings(sessionId);
         _sessions.RespondPlan(sessionId, requestId, approve, feedback);
     }
 
@@ -314,7 +349,7 @@ public class SessionHub : Hub
     public async Task RespondTeamPlan(string sessionId, string planId, string decision,
         string? subtaskId = null, string? executorPersonaId = null, string? feedback = null)
     {
-        if (ScopeOfSession(sessionId, ProjectRight.Configure) is null) throw DeniedSession(sessionId);
+        if (ScopeOfSession(sessionId, ProjectRight.Configure) is null) throw DeniedOwnerSettings(sessionId);
         var parsed = decision?.ToLowerInvariant() switch
         {
             "run" => TeamPlanDecision.Run,
@@ -336,7 +371,7 @@ public class SessionHub : Hub
     public async Task RespondTeamEscalation(string sessionId, string escalationId,
         string? actionId = null, string? comment = null)
     {
-        if (ScopeOfSession(sessionId, ProjectRight.Configure) is null) throw DeniedSession(sessionId);
+        if (ScopeOfSession(sessionId, ProjectRight.Configure) is null) throw DeniedOwnerSettings(sessionId);
         await _sessions.RespondTeamEscalationAsync(sessionId, escalationId, actionId, comment,
             actorUserId: UserId);
     }

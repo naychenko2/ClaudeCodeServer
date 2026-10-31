@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Notes.Controllers;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Notes.Wiki;
@@ -366,10 +367,25 @@ public class WikiLintServiceTests : IDisposable
     {
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", user)], "test"));
-        return new WikiController(_keeper, _projects, _spheres, _sut, _config)
+        // S7c-0: конструктор контроллера держит читателя журнала — эти тесты его не зовут,
+        // экземпляр нужен, чтобы резолвился конструктор (свои сценарии журнала — в
+        // WikiJournalReaderTests).
+        var journal = new WikiJournalReader(_notes, new NoSessions(), _config);
+        return new WikiController(_keeper, _projects, _spheres, _sut, journal, _flags, _config)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
+    }
+
+    // Каталог чатов пуст: эти тесты не зовут чтения журнала.
+    private sealed class NoSessions : ISessionDirectory
+    {
+        public Session? GetById(string id) => null;
+        public IReadOnlyCollection<Session> GetAll() => [];
+        public string? ResolveOwnerId(Session s) => s.OwnerId;
+        public Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId) =>
+            Task.FromResult<IReadOnlyList<StoredMessage>>([]);
+        public bool SetWikiMark(string sessionId, string? mark) => false;
     }
 
     private sealed class NoSpheres : ISphereDirectory

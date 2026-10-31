@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Notes.Controllers;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Notes.Wiki;
@@ -28,7 +29,12 @@ public class WikiControllerTests : IDisposable
     private readonly ProjectManager _projects;
     private readonly WikiKeeper _keeper;
     private readonly WikiLintService _lint;
+    // S7c-0: конструктор контроллера держит читателя журнала (его зовёт GET /api/wiki/journal).
+    // Тесты этого файла про журнал ничего не проверяют — экземпляр нужен, чтобы резолвился
+    // конструктор; свои сценарии журнала — в WikiJournalReaderTests.
+    private readonly WikiJournalReader _journal;
     private readonly NoSpheres _spheres = new();
+    private readonly NoSessions _sessions = new();
 
     public WikiControllerTests()
     {
@@ -44,6 +50,7 @@ public class WikiControllerTests : IDisposable
         _keeper = new WikiKeeper(notes, _config);
         // S3-3: контроллер держит службу линта (её же зовёт кнопка POST /api/wiki/lint).
         _lint = new WikiLintService(notes, _keeper, _spheres, _config, NullLogger<WikiLintService>.Instance);
+        _journal = new WikiJournalReader(notes, _sessions, _config);
     }
 
     public void Dispose()
@@ -300,7 +307,8 @@ public class WikiControllerTests : IDisposable
     {
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", user)], "test"));
-        return new WikiController(_keeper, _projects, _spheres, _lint, _config)
+        // Флаг llm-wiki этим тестам не нужен: ни одно из них не зовёт ручку, которая его читает.
+        return new WikiController(_keeper, _projects, _spheres, _lint, _journal, null, _config)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
@@ -309,7 +317,7 @@ public class WikiControllerTests : IDisposable
     private WikiController AnonymousController()
     {
         var http = new DefaultHttpContext(); // User без идентичности — путь боя без токена
-        return new WikiController(_keeper, _projects, _spheres, _lint, _config)
+        return new WikiController(_keeper, _projects, _spheres, _lint, _journal, null, _config)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
@@ -323,5 +331,16 @@ public class WikiControllerTests : IDisposable
         public bool Enabled(string ownerId) => false;
         public string? SphereName(string ownerId, string sphereId) => null;
         public string? CharterOf(string ownerId, string sphereId) => null;
+    }
+
+    // Каталог чатов пуст: эти тесты не зовут чтения журнала.
+    private sealed class NoSessions : ISessionDirectory
+    {
+        public Session? GetById(string id) => null;
+        public IReadOnlyCollection<Session> GetAll() => [];
+        public string? ResolveOwnerId(Session s) => s.OwnerId;
+        public Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId) =>
+            Task.FromResult<IReadOnlyList<StoredMessage>>([]);
+        public bool SetWikiMark(string sessionId, string? mark) => false;
     }
 }

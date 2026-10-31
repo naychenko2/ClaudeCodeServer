@@ -115,6 +115,8 @@ public sealed class NotesSubsystem : IAppSubsystem
         services.AddSingleton<WikiRetractService>();
         // Здоровье классов и настройки применения (S4c, §12г меры 7–8): vertical-внутренний тип; settings.json пишет он и ручка настроек.
         services.AddSingleton<WikiClassHealth>();
+        // Чтение журнала для человека (S7c-0, §12г меры 4–6): vertical-внутренний тип, только читает; зовёт его REST.
+        services.AddSingleton<WikiJournalReader>();
         // Линт вики (S3-3): ночное окно + запуск по кнопке. Singleton + hosted с него же:
         // REST-кнопка (WikiController) вызывает ТУ ЖЕ службу — второй экземпляр дал бы
         // вторые слоты прогона, и «уже идёт» не берег бы от двойной записи файлов.

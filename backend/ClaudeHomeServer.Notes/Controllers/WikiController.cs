@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Notes.Wiki;
 using ClaudeHomeServer.Services.Spheres;
@@ -12,7 +13,7 @@ namespace ClaudeHomeServer.Notes.Controllers;
 
 // REST вики владельца (S2f, ADR-035/ADR-036): дерево разделов, каталог страниц раздела,
 // страница, «Завести», adopt, удаление раздела-сироты; здоровье раздела и запуск линта
-// по кнопке (S3-3). Образец — NotesController.
+// по кнопке (S3-3); журнал своей вики (S7c-0, ADR-035 §12г меры 4–6). Образец — NotesController.
 //
 // Владелец — только из токена (claim sub), как во всей вертикали. Раздел — ключ,
 // составленный из проекта/сферы пользователя (WikiSections), а не путь из тела запроса:
@@ -21,7 +22,8 @@ namespace ClaudeHomeServer.Notes.Controllers;
 // (ADR-036, решение 2, «Человек в UI видит всю вики») — здесь она не применяется.
 //
 // Страницы этот контроллер не пишет: «Завести», adopt и удаление раздела идут через
-// WikiKeeper — единственный писатель pages/ (ADR-035, решение 2).
+// WikiKeeper — единственный писатель pages/ (ADR-035, решение 2). Журнал — тоже только
+// чтение: он читает log.jsonl и пакеты, ничего не меняя (S7c-0).
 [ApiController]
 [Authorize]
 [Route("api/wiki")]
@@ -31,15 +33,19 @@ public class WikiController : ControllerBase
     private readonly IProjectManager _projects;
     private readonly ISphereDirectory _spheres;
     private readonly WikiLintService _lint;
+    private readonly WikiJournalReader _journal;
+    private readonly IFeatureFlagGate? _flags;
     private readonly string _dataDir;
 
     public WikiController(WikiKeeper keeper, IProjectManager projects, ISphereDirectory spheres,
-        WikiLintService lint, IConfiguration config)
+        WikiLintService lint, WikiJournalReader journal, IFeatureFlagGate? flags, IConfiguration config)
     {
         _keeper = keeper;
         _projects = projects;
         _spheres = spheres;
         _lint = lint;
+        _journal = journal;
+        _flags = flags;
         // Каталог данных — как у всех сервисов (DataPath указывает на projects.json в dataDir).
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
@@ -60,6 +66,8 @@ public class WikiController : ControllerBase
     private const string CodeNotOrphan = "wiki_not_orphan";
     private const string CodeLintRunning = "wiki_lint_running";
     private const string CodeLlmWikiOff = "wiki_llm_wiki_off";
+    private const string CodeOriginKey = "wiki_origin_key";
+    private const string CodeClassKey = "wiki_class_key";
 
     // Состояния манифеста раздела в контракте (WikiCatalogDto.ManifestState / ответ
     // GET page): закрытый перечень — три состояния WikiManifestState без внутреннего имени.
@@ -307,6 +315,48 @@ public class WikiController : ControllerBase
         return Ok(new { ran = true, sectionsOk = res.SectionsOk, sectionsFailed = res.SectionsFailed });
     }
 
+    // ─── Журнал ─────────────────────────────────────────────────────────────
+
+    /// <summary>GET /api/wiki/journal?section=&amp;origin=&amp;class=&amp;take= — журнал своей вики:
+    /// записи log.jsonl, склеенные с пакетами (статус, политика «само / через Входящие», класс
+    /// origin × op, страницы), с именем источника (чат — название его владельца, заметка —
+    /// заголовок). Новые сверху. Только чтение: ручка ничего не пишет (S7c-0, ADR-035 §12г
+    /// меры 4–6; пункт 5 «Нужно от бэка»).
+    /// Окно — последние `take` строк (DefaultTake, потолка MaxTake; выше — урезается, фактическое
+    /// окно видно в ответе): filters сужают прочитанный хвост, а не ищут за его краем.
+    /// Отказы: 403 — раздел называет чужой проект (тот же ResolveSection, что у раздела и
+    /// страницы), 400 — не ключ / значение фильтра вне закрытого перечня, 409 — функция
+    /// выключена (тот же код, что у линта и настроек). Несуществующий раздел — не отказ:
+    /// журнал пустой (раздел мог не иметь ни одной операции).</summary>
+    [HttpGet("journal")]
+    public IActionResult Journal(
+        [FromQuery] string? section, [FromQuery] string? origin, [FromQuery] string? @class, [FromQuery] int? take)
+    {
+        var userId = OwnerOrNull();
+        if (userId is null) return Unauthorized();
+        if (_flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) != true)
+            return StatusCode(409, new { code = CodeLlmWikiOff, message = "журнал не прочитан: функция выключена" });
+
+        string? key = null;
+        if (!string.IsNullOrWhiteSpace(section))
+        {
+            var (resolved, refusal) = ResolveSection(userId, section);
+            if (refusal is not null) return refusal;
+            key = resolved;
+        }
+        if (origin is not null && !WikiGate.OriginValues.Contains(origin))
+            return BadRequest(new { code = CodeOriginKey, message = $"источник «{origin}» не из закрытого перечня" });
+        if (@class is not null && !WikiSettingsStore.IsValidClassKey(@class))
+            return BadRequest(new { code = CodeClassKey, message = $"класс «{@class}» не пары «источник × операция»" });
+
+        var res = _journal.Read(userId, new WikiJournalReader.Query(key, origin, @class, take));
+        return Ok(new WikiJournalDto(
+            [.. res.Entries.Select(e => new WikiJournalEntryDto(
+                e.Ts, e.Op, e.Section, e.Actor, e.Source, e.Origin, e.SourceName, e.Pages, e.Packages,
+                e.Status, e.Policy, e.Classes))],
+            res.Take, res.LinesRead, res.InvalidLines));
+    }
+
     // ─── Помощники ──────────────────────────────────────────────────────────
 
     // Раздел — ключ из проекта/сферы владельца (ADR-036, решение 1), не путь из тела:
@@ -468,3 +518,25 @@ public sealed record WikiInitRequest(string? Section);
 
 /// <summary>«Принять как есть» для страницы раздела.</summary>
 public sealed record WikiAdoptRequest(string Section, string Page);
+
+/// <summary>Запись журнала (S7c-0): событие строки log.jsonl и то, что о нём сказал пакет.
+/// ts/op/section/actor/source/pages — из строки журнала как они записаны; origin — префикс
+/// источника (первый, если их несколько: строка несёт их списком, отдельного поля под множество
+/// нет); sourceName — имя чата этого владельца или заголовок заметка, иначе null (чужой и
+/// несуществующий чат — без имени, не отказ; имя — данные, без разметки, до 120 символов);
+/// status/policy/classes — из склейки с пакетом: status null, когда пакетов несколько (их id в
+/// packages), classes пуст, когда пакета нет (relink, adopt). policy «auto» | «inbox» — из
+/// строки применения, иначе по пакету; packages — id, названные строкой retract. Формат добавляет
+/// поля к тому, что фронт строит на GET /api/wiki/packages, и ничего не меняет (S7c-2).</summary>
+public sealed record WikiJournalEntryDto(
+    DateTimeOffset Ts, string Op, string Section, string Actor,
+    string? Source, string? Origin, string? SourceName,
+    IReadOnlyList<string> Pages, IReadOnlyList<string> Packages,
+    string? Status, string? Policy, IReadOnlyList<string> Classes);
+
+/// <summary>Окно журнала. take — фактическое окно после обрезки (запрошенное выше потолка
+/// урезается); linesRead — сколько строк журнала реально прочитано (мера того, что хвост
+/// ограничен, а не весь файл); invalidLines — нечитаемые строки хвоста: их видно числом, они не
+/// притворяются записями.</summary>
+public sealed record WikiJournalDto(
+    IReadOnlyList<WikiJournalEntryDto> Entries, int Take, int LinesRead, int InvalidLines);

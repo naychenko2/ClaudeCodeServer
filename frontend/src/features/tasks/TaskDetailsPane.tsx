@@ -32,6 +32,7 @@ import { TaskEditForm } from './TaskEditForm';
 import { AcceptanceBlock } from './AcceptanceBlock';
 import { PregateLine } from './PregateLine';
 import { TaskPersonaBadge } from './TaskPersonaBadge';
+import { CreatedByLine, FormerAssigneeLine, TaskUserBadge } from './TaskUserBadge';
 import { ensurePersonasLoaded, getPersonaById, personaLabel } from '../../lib/personas';
 
 interface Props {
@@ -515,7 +516,13 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
             {recurrenceLabel(task.recurrence)}
           </HeaderChip>
         )}
-        {task.assignee && (
+        {task.assigneeUserId && (
+          <>
+            <HeaderChip><TaskUserBadge projectId={task.projectId} assigneeUserId={task.assigneeUserId} size={18} /></HeaderChip>
+            <FormerAssigneeLine projectId={task.projectId} assigneeUserId={task.assigneeUserId} />
+          </>
+        )}
+        {task.assignee && !task.assigneeUserId && (
           <HeaderChip>
             {task.assignee === 'claude' ? <ClaudeBadge size={17} /> : <MeBadge size={17} />}
             {task.assignee === 'claude' ? 'AI' : 'Я'}
@@ -528,6 +535,7 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
           </HeaderChip>
         )}
       </div>
+      <CreatedByLine projectId={task.projectId} createdByUserId={task.createdByUserId} createdAt={task.createdAt} />
 
       {/* Описание */}
       {task.description && (

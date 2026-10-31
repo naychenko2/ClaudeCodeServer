@@ -19,7 +19,7 @@ const viewCache = new Map<string, Promise<ProjectMembersView>>();
 // Свежие загрузки в полёте: N подписей на одно project_members_changed делят один запрос
 const freshInflight = new Map<string, Promise<ProjectMembersView>>();
 
-function loadView(projectId: string, fresh = false): Promise<ProjectMembersView> {
+export function loadView(projectId: string, fresh = false): Promise<ProjectMembersView> {
   if (fresh) {
     const running = freshInflight.get(projectId);
     if (running) return running;

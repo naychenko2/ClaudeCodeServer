@@ -720,6 +720,10 @@ export interface Task {
   reminderMinutes?: number;  // офсет напоминания до срока в минутах (0 = в момент срока)
   reminderSentAt?: string;   // UTC-отметка отправленного напоминания
   assignee?: TaskAssignee;
+  // Общий проект: человек-исполнитель и кто поставил задачу (S2b-1). Нет у задач личного
+  // проекта и у старого бэка — тогда вид карточки прежний
+  assigneeUserId?: string | null;
+  createdByUserId?: string | null;
   recurrence?: TaskRecurrence;
   seriesId?: string;         // общий id серии регулярной задачи
   linkedSessionId?: string;

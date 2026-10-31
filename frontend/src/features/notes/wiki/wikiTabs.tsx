@@ -2,8 +2,8 @@
 // «Здоровье» и «Настройки»). Здесь — только порядок, подписи и заглушки: WikiTab.tsx рисует
 // переключатель по этому списку и для строки без component ставит заглушку.
 //
-// Дальше по фиче: S7a («Входящие», «Журнал»), S5f («Здоровье»), S7c/S7d («Настройки») —
-// добавляют свой импорт в этом файле и подставляют его в component своей строки.
+// Дальше по фиче: S7c/S7d («Настройки») — добавляют свой импорт в этом файле и подставляют
+// его в component своей строки (так же, что S7a для «Входящих» и S5f для «Здоровья»).
 // WikiTab.tsx они не трогают: он читает только этот список.
 //
 // component — компонент (не функция, вызываемая из WikiTab): WikiTab рендерит его элементом
@@ -16,6 +16,7 @@ import type { LucideIcon } from 'lucide-react';
 import { Activity, ArrowDownToLine, BookOpen, History, Settings } from 'lucide-react';
 import { EmptyState } from '../../../components/ui/EmptyState';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
+import { WikiHealth } from './WikiHealth';
 import { WikiInbox } from './WikiInbox';
 
 export type WikiSubTabId = 'pages' | 'inbox' | 'journal' | 'health' | 'settings';
@@ -37,7 +38,8 @@ export const WIKI_SUBTABS: WikiSubTab[] = [
   // «Входящие» — свои с S7a: только спорные пакеты, у каждой операции причина
   { id: 'inbox', label: 'Входящие', icon: ArrowDownToLine, component: WikiInbox },
   { id: 'journal', label: 'Журнал', icon: History, stubNote: 'Придёт с шагом «Журнал»: там откат пакета и откат всего чата.' }, // S7a/S7b
-  { id: 'health', label: 'Здоровье', icon: Activity, stubNote: 'Придёт с шагом «Здоровье»: метрики вики и то, что просится наверх.' }, // S5f
+  // «Здоровье» — своё с S5f: отчёт последней проверки выбранного раздела и запуск проверки
+  { id: 'health', label: 'Здоровье', icon: Activity, component: WikiHealth },
   { id: 'settings', label: 'Настройки', icon: Settings, stubNote: 'Придёт с шагом «Настройки»: ночной разбор, применение и отбор чатов.' }, // S7c/S7d
 ];
 

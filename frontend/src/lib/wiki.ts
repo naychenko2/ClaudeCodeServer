@@ -138,7 +138,11 @@ export type WikiErrorCode =
   | 'wiki_revert_internal'
   | 'wiki_retract_shape'
   | 'wiki_retract_off'
-  | 'wiki_retract_internal';
+  | 'wiki_retract_internal'
+  // Отказы прогона линта (S3-3): функция выключена / прогон владельца уже идёт.
+  // Читаются в «Здоровье» (S5f)
+  | 'wiki_llm_wiki_off'
+  | 'wiki_lint_running';
 
 const WIKI_ERROR_CODES: ReadonlySet<string> = new Set<string>([
   'wiki_foreign', 'wiki_section_key', 'wiki_page_key', 'wiki_project_missing', 'wiki_section_off',
@@ -150,6 +154,7 @@ const WIKI_ERROR_CODES: ReadonlySet<string> = new Set<string>([
   'wiki_revert_manifest', 'wiki_revert_no_preimages', 'wiki_revert_no_applied',
   'wiki_revert_changed', 'wiki_revert_internal',
   'wiki_retract_shape', 'wiki_retract_off', 'wiki_retract_internal',
+  'wiki_llm_wiki_off', 'wiki_lint_running',
 ]);
 
 export class WikiError extends Error {
@@ -518,6 +523,35 @@ export async function retractWikiSource(sourceRef: string): Promise<WikiRetractD
   });
   await refreshWiki();
   return res;
+}
+
+// ─── «Здоровье»: отчёт последней проверки и запуск линта (S5f; контракт S3-3) ───
+// GET /api/wiki/health/{section} отдаёт _health.md раздела КАК ЕСТЬ: своего DTO у бэка нет
+// (WikiController.cs:261-288), строки находок пишет бэковый RenderHealth (WikiLintService.cs:434),
+// и разбор на фронте — зеркало той же формы (WikiHealth.tsx). Придумывать за бэка структурированный
+// ответ нельзя: content — строка файла, недоверенный текст.
+// 404 — отчёта нет вовсе: раздел ещё не проверялся, его нет на диске или при выключенном llm-wiki
+// свежих отчётов не пишется. Это «нет данных», а не «здорово».
+// POST /api/wiki/lint — прогон по ВСЕМ разделам своей вики: своей ручки на один раздел нет, а
+// параллельный прогон того же владельца бэк отказывает 409 — чтобы не было двух записей
+// _health.md и метрик подряд (WikiController.cs:292-307). Метрики прогона (keeper/metrics.jsonl)
+// отдельной ручкой не читаются — их здесь нет, и выдумывать их из health-файла нельзя.
+
+export interface WikiHealthDto { section: string; content: string }
+export interface WikiLintRunDto { ran: boolean; sectionsOk: number; sectionsFailed: number }
+
+// Ключ раздела в health — путь URL (health/{**section}, catch-all): «/» остаётся разделителем,
+// кодируются сегменты — «projects/p1» не должен превратиться в %2F
+const healthPath = (key: string) => key.split('/').map(encodeURIComponent).join('/');
+
+export async function getWikiHealth(sectionKey: string): Promise<WikiHealthDto> {
+  return wikiHttp<WikiHealthDto>(`/api/wiki/health/${healthPath(sectionKey)}`);
+}
+
+// Запуск проверки. 409 wiki_llm_wiki_off / wiki_lint_running — WikiError по коду;
+// состояния экрана (текст отказа, «повторить») — за вызывающим.
+export async function runWikiLint(): Promise<WikiLintRunDto> {
+  return wikiHttp<WikiLintRunDto>('/api/wiki/lint', { method: 'POST' });
 }
 
 // ─── Снимки и подписки ───

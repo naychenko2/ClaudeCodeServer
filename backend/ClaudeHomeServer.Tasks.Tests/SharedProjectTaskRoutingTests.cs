@@ -53,17 +53,22 @@ public class SharedProjectTaskRoutingTests : IDisposable
         return t;
     }
 
-    private MyTasksQuery Query()
+    private IProjectAccess Access()
     {
-        var projects = new Mock<IProjectManager>();
-        projects.Setup(p => p.GetAll()).Returns([_shared]);
         var access = new Mock<IProjectAccess>();
         access.Setup(a => a.Resolve(It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<ProjectRight>()))
             .Returns((string? user, string? pid, ProjectRight right) =>
                 pid == _shared.Id && ProjectAccess.Can(_shared, user, right) && ProjectAccess.Check(_shared, user) is { } role
                     ? new RequestScope(user!, _shared.OwnerId!, role)
                     : null);
-        return new MyTasksQuery(_tasks, projects.Object, access.Object);
+        return access.Object;
+    }
+
+    private MyTasksQuery Query()
+    {
+        var projects = new Mock<IProjectManager>();
+        projects.Setup(p => p.GetAll()).Returns([_shared]);
+        return new MyTasksQuery(_tasks, projects.Object, Access());
     }
 
     // ─── Календарь / «мои задачи» ───────────────────────────────────────────
@@ -120,18 +125,24 @@ public class SharedProjectTaskRoutingTests : IDisposable
 
     // ─── Напоминания ────────────────────────────────────────────────────────
 
-    private static (TaskSchedulerService Svc, List<string> Sent) Scheduler(
-        TaskManager tasks, params string[] users)
+    private (TaskSchedulerService Svc, List<string> Sent) Scheduler(
+        TaskManager tasks, params string[] users) =>
+        Scheduler(tasks, users.Select(id => new User { Id = id, Username = id }).ToList());
+
+    private (TaskSchedulerService Svc, List<string> Sent) Scheduler(
+        TaskManager tasks, List<User> userList)
     {
         var sent = new List<string>();
         var userStore = new Mock<IUserStore>();
-        userStore.Setup(u => u.GetAll()).Returns(users.Select(id => new User { Id = id, Username = id }).ToList());
+        userStore.Setup(u => u.GetAll()).Returns(userList);
+        userStore.Setup(u => u.GetById(It.IsAny<string>())).Returns((string id) => userList.FirstOrDefault(u => u.Id == id));
         var notif = new Mock<ITaskNotificationDispatcher>();
         notif.Setup(n => n.SendNotificationMessageAsync(It.IsAny<string>(), It.IsAny<NotificationMessage>(), It.IsAny<bool>()))
             .Returns((string uid, NotificationMessage _, bool _) => { lock (sent) sent.Add(uid); return Task.CompletedTask; });
         var svc = new TaskSchedulerService(tasks, userStore.Object, new Mock<ISessionBroadcaster>().Object,
             new Mock<ITaskExecutor>().Object, new Mock<IDailyBriefingRunner>().Object,
-            new Mock<IPersonaAutomationRunner>().Object, notif.Object, NullLogger<TaskSchedulerService>.Instance);
+            new Mock<IPersonaAutomationRunner>().Object, notif.Object, NullLogger<TaskSchedulerService>.Instance,
+            Access());
         return (svc, sent);
     }
 
@@ -144,6 +155,41 @@ public class SharedProjectTaskRoutingTests : IDisposable
         await svc.TickAsync(Now);
 
         sent.Should().Equal(Editor);
+    }
+
+    // Срок считается в таймзоне АДРЕСАТА. Владелец UTC+3, участник UTC+0, срок 12:00:
+    // по участнику напоминание наступает в 12:00 UTC (по владельцу — в 09:00 UTC).
+    // Мутация: в ProcessReminderAsync убрать подмену tz на таймзону адресата — тест на 11:59 UTC краснеет.
+    [Fact]
+    public async Task Напоминание_СрокВТаймзонеАдресата()
+    {
+        NewTask("участнику", _shared.Id, Editor, reminder: true);
+        var (svc, sent) = Scheduler(_tasks,
+        [
+            new User { Id = Owner, Username = Owner, TimeZone = "Etc/GMT-3" },
+            new User { Id = Editor, Username = Editor, TimeZone = "UTC" },
+        ]);
+
+        await svc.TickAsync(Now.AddMinutes(-1)); // 11:59 UTC — по участнику ещё рано
+        sent.Should().BeEmpty();
+
+        await svc.TickAsync(Now); // 12:00 UTC
+        sent.Should().Equal(Editor);
+    }
+
+    // Единая политика отзыва: назначение отозванного участника не даёт напоминаний
+    // (адресат — владелец) и выдачи (см. ForUser_БывшийУчастник_НичегоНеВидит).
+    // Мутация: вернуть в ResolveRecipient голый ResolveMeUserId — тест краснеет.
+    [Fact]
+    public async Task Напоминание_ОтозванныйУчастник_УходитВладельцу()
+    {
+        NewTask("бывшему", _shared.Id, Editor, reminder: true);
+        _shared.Members = [new() { UserId = Reader, Role = ProjectRole.Reader }];
+        var (svc, sent) = Scheduler(_tasks, Owner);
+
+        await svc.TickAsync(Now);
+
+        sent.Should().Equal(Owner);
     }
 
     [Fact]

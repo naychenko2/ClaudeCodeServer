@@ -92,6 +92,42 @@ public class SharedProjectAssignTests : IClassFixture<TestWebApplicationFactory>
         return IdOf(await response.Content.ReadAsStringAsync());
     }
 
+    // ─── боевая выдача GET /api/tasks (S2b-3a, доработка): MyTasksQuery на пути эндпоинта ───
+
+    private static async Task<List<string>> ListIdsAsync(HttpClient client)
+    {
+        var response = await client.GetAsync("/api/tasks");
+        response.EnsureSuccessStatusCode();
+        var items = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        return items.EnumerateArray().Select(t => t.GetProperty("id").GetString()!).ToList();
+    }
+
+    // Мутация: в TasksController.GetAll вернуть tasks.GetByOwner(UserId) вместо
+    // myTasks.ForUser(UserId) — участник перестаёт видеть назначенную ему задачу, тест краснеет.
+    [Fact]
+    public async Task Выдача_УчастникВидитНазначенноеЕмуНеВидитЧужое()
+    {
+        var (projectId, taskId) = await SharedProjectAsync("editor");
+        var other = await Owner().PostAsJsonAsync($"/api/projects/{projectId}/tasks", new { title = "Чужая" });
+        var otherId = IdOf(await other.Content.ReadAsStringAsync());
+        (await AssignAsync(Owner(), taskId, MemberId)).Status.Should().Be(HttpStatusCode.OK);
+
+        var ids = await ListIdsAsync(Member());
+
+        ids.Should().Contain(taskId);
+        ids.Should().NotContain(otherId);
+    }
+
+    [Fact]
+    public async Task Выдача_Посторонний_НеВидитНазначенногоЕмуВОбщемПроекте()
+    {
+        var (_, taskId) = await SharedProjectAsync(null);
+        var task = Tasks.GetById(taskId)!;
+        task.AssigneeUserId = MemberId; // назначение в обход двери: участником он не является
+
+        (await ListIdsAsync(Member())).Should().NotContain(taskId);
+    }
+
     // ─── назначение участника с правом записи ─────────────────────────────────
 
     [Fact]

@@ -152,7 +152,10 @@ public class TasksController(
     FeatureQueueService? queue = null,
     // Явный резолв доступа к проекту из тела/запроса ([ProjectScope] такого id не видит);
     // null — fail-closed (проект недоступен)
-    IProjectAccess? access = null) : ControllerBase
+    IProjectAccess? access = null,
+    // Выдача «моих задач» (S2b-3a): личные и свои + назначенные мне в общих проектах.
+    // null — подсистема Tasks выключена: фолбэк на собственные задачи (GetByOwner).
+    MyTasksQuery? myTasks = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -347,7 +350,7 @@ public class TasksController(
         [FromQuery] string? projectId = null, [FromQuery] bool personal = false,
         [FromQuery] string? personaId = null, [FromQuery] int? doneDays = null)
     {
-        var result = tasks.GetByOwner(UserId).AsEnumerable();
+        var result = (myTasks?.ForUser(UserId) ?? tasks.GetByOwner(UserId)).AsEnumerable();
         // doneDays задан — закрытые только за N дней по CompletedAt (границу включаем); не задан — все
         if (doneDays is { } dd)
         {

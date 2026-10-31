@@ -18,8 +18,7 @@ public sealed class MyTasksQuery(TaskManager tasks, IProjectManager projects, IP
         foreach (var project in projects.GetAll())
         {
             if (project.OwnerId == userId) continue; // свои проекты уже в GetByOwner
-            if (project.Members?.Any(m => m.UserId == userId) != true) continue;
-            if (access.Resolve(userId, project.Id, ProjectRight.Read) is null) continue;
+            if (access.Resolve(userId, project.Id, ProjectRight.Read) is null) continue; // не участник / отозван
 
             result.AddRange(tasks.GetByProject(project.Id)
                 .Where(t => t.OwnerId == project.OwnerId

@@ -1,5 +1,6 @@
 ﻿using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.Tasks;
@@ -15,7 +16,11 @@ public class TaskSchedulerService(
     IDailyBriefingRunner briefing,
     IPersonaAutomationRunner automation,
     ITaskNotificationDispatcher notif,
-    ILogger<TaskSchedulerService> log) : BackgroundService
+    ILogger<TaskSchedulerService> log,
+    // Нужен, чтобы адресат напоминания был действующим участником проекта (отозванный
+    // участник уведомлений не получает). null — проверка недоступна, адресат — владелец
+    // (fail-closed: без резолва доступа чужому человеку не пишем).
+    IProjectAccess? access = null) : BackgroundService
 {
     // Подписчик ходов фичи (Б8c) больше НЕ побочный эффект этого hosted-сервиса: он
     // регистрируется явным AddGatedHostedService в TasksSubsystem.Register (Tasks, не Main).
@@ -151,6 +156,12 @@ public class TaskSchedulerService(
     {
         // Проверка и отметка — одна критическая секция: два тика (ручной вызов и таймер)
         // не должны оба пройти ShouldRemind до того, как первый выставит ReminderSentAt.
+        // Срок считаем в таймзоне АДРЕСАТА (исполнителя), а не владельца; нет данных — владельца.
+        var recipient = ResolveRecipient(task);
+        if (recipient != task.OwnerId
+            && users.GetById(recipient)?.TimeZone is { } recipientZone)
+            tz = TaskDueCalculator.ResolveTimeZone(recipientZone);
+
         TaskItem? updated;
         lock (_reminderLock)
         {
@@ -160,7 +171,7 @@ public class TaskSchedulerService(
         if (updated is null) return; // задача удалена между чтением и отметкой
 
         var dueText = task.DueTime is null ? task.DueDate : $"{task.DueDate} {task.DueTime}";
-        await SendNotificationAsync(updated, new NotificationMessage(
+        await SendNotificationAsync(recipient, new NotificationMessage(
             Title: "Напоминание о задаче",
             Body: $"{updated.Title} — срок {dueText}",
             Url: TaskUrl.Of(updated),
@@ -171,12 +182,23 @@ public class TaskSchedulerService(
         log.LogInformation("Напоминание отправлено: задача {TaskId} «{Title}»", updated.Id, updated.Title);
     }
 
+    // Адресат напоминания: исполнитель-человек, пока он ДЕЙСТВУЮЩИЙ участник проекта задачи;
+    // отозванный участник (как и личная/Claude-задача) — владелец. Та же политика доступа
+    // (IProjectAccess.Resolve), что у MyTasksQuery: назначение отозванного не даёт ни напоминаний, ни выдачи.
+    private string ResolveRecipient(TaskItem task)
+    {
+        var owner = task.OwnerId!;
+        var assignee = TaskManager.ResolveMeUserId(task);
+        if (assignee is null || assignee == owner) return owner;
+        if (task.ProjectId is null) return owner;
+        return access?.Resolve(assignee, task.ProjectId, ProjectRight.Read) is null ? owner : assignee;
+    }
+
     // Тост + сторадж + web push через единый NotificationService. Адресат — человек-исполнитель
     // (общий проект: участник; личные и Claude-задачи — владелец, как раньше). Один адресат —
     // одно уведомление: владельцу параллельно не дублируем.
-    private async Task SendNotificationAsync(TaskItem task, NotificationMessage message)
+    private async Task SendNotificationAsync(string recipient, NotificationMessage message)
     {
-        var recipient = TaskManager.ResolveMeUserId(task) ?? task.OwnerId!;
         await notif.SendNotificationMessageAsync(recipient, message, sendPush: true);
     }
 

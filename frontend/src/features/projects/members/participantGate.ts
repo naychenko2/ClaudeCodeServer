@@ -60,13 +60,17 @@ export function accessRevokedOwnerLine(ownerDisplayName?: string | null): string
 }
 
 // Серверные коды отказа (S2a-10b) и их человеческие тексты на клиенте. Код приходит
-// из двух мест: REST — поле body.code (lib/offline прикрепляет тело ошибки целиком к
-// err.body), хаб — префикс сообщения «not_chat_author: <текст>» (S2a-10c: у Interrupt и
-// AnswerQuestion тела нет, только текст HubException). Незнакомый код и отказ без кода —
-// null: вызывающий держит прежний свой текст.
+// из трёх мест: REST — поле body.code (lib/offline прикрепляет тело ошибки целиком к
+// err.body); хаб — префикс сообщения «not_chat_author: <текст>» (S2a-10c: у Interrupt и
+// AnswerQuestion тела нет, только текст HubException); и та же строка, обёрнутая клиентом
+// SignalR: «An unexpected error occurred invoking '<метод>' on the server. HubException:
+// <код>: <текст>» — @microsoft/signalr собирает Error из error-строки хаба, поэтому код
+// там НЕ префикс (R-S2a-10c). Тексты равны серверным (SessionHub/OwnerSettingsGate):
+// одному коду — одна строка. Незнакомый код и отказ без кода — null: вызывающий держит
+// прежний свой текст.
 const DENIAL_TEXTS = {
   not_chat_author: 'Только автор хода или владелец проекта',
-  owner_settings: 'Это решает владелец проекта',
+  owner_settings: 'Настройки чата выбирает владелец',
   not_sender: 'Это сообщение отправил другой участник',
 } as const;
 
@@ -76,8 +80,11 @@ export function denialCodeOf(e: unknown): DenialCode | null {
   const rest = e as { status?: number; body?: { code?: string } } | null;
   if (rest?.status === 403 && rest.body?.code && rest.body.code in DENIAL_TEXTS) return rest.body.code as DenialCode;
   const msg = e instanceof Error ? e.message : typeof e === 'string' ? e : '';
+  // Две формы хба-текста: голый префикс «<код>: …» (S2a-10c) и обёртка клиента SignalR
+  // «… invoking '<метод>' on the server. HubException: <код>: …» — в ней код не префикс,
+  // маркер один и тот же: «HubException: <код>:». Обе несёт один код, ищем обе.
   for (const code of Object.keys(DENIAL_TEXTS) as DenialCode[]) {
-    if (msg.startsWith(`${code}:`)) return code;
+    if (msg.startsWith(`${code}:`) || msg.includes(`HubException: ${code}:`)) return code;
   }
   return null;
 }

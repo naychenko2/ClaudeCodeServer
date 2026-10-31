@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 
 namespace ClaudeHomeServer.Services.Composition;
@@ -74,7 +75,13 @@ public static class SessionBroadcasterExtensions
             await broadcaster.ToOwner(ownerId, message);
             return;
         }
-        await broadcaster.ToProject(projectId, message);
+        // Группе проекта — облегчённая копия (как список в REST: без Description/ResultMarkdown),
+        // иначе участник получил бы по WS то, чего REST ему не отдаёт. Исходный TaskItem не
+        // правится (копия), владелец получает полную карточку.
+        var forProject = message is TaskChangedMessage { Task: { } task } tc
+            ? tc with { Task = TaskListItem.From(task) }
+            : message;
+        await broadcaster.ToProject(projectId, forProject);
         await broadcaster.ToOwner(ownerId, message);
     }
 }

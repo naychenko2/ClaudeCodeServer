@@ -41,6 +41,35 @@ public class ProjectBroadcastRoutingTests
         spy.Calls.Should().Equal(("owner", "owner-1"), ("owner", "owner-1"));
     }
 
+    private sealed class Capture : ISessionBroadcaster
+    {
+        public ServerMessage? ToProjectMsg, ToOwnerMsg;
+        public Task ToSession(string sessionId, ServerMessage message) => Task.CompletedTask;
+        public Task ToSessionExcept(string sessionId, string exceptConnectionId, ServerMessage message) => Task.CompletedTask;
+        public Task ToOwner(string ownerId, ServerMessage message) { ToOwnerMsg = message; return Task.CompletedTask; }
+        public Task ToProject(string projectId, ServerMessage message) { ToProjectMsg = message; return Task.CompletedTask; }
+        public Task ToPreviewLog(string projectId, string serviceId, ServerMessage message) => Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task ToTaskBoard_ГруппеПроектаОблегчённаяКопия_ВладельцуПолная_ИсходникНеМутирует()
+    {
+        var cap = new Capture();
+        var task = new TaskItem { Id = "t1", Title = "T", Description = "секрет-описание", ResultMarkdown = "секрет-итог" };
+
+        await cap.ToTaskBoard("owner-1", "proj-1", new TaskChangedMessage("updated", task));
+
+        var forProject = ((TaskChangedMessage)cap.ToProjectMsg!).Task;
+        forProject.Description.Should().BeEmpty();
+        forProject.ResultMarkdown.Should().BeNull();
+        forProject.Title.Should().Be("T");
+        var forOwner = ((TaskChangedMessage)cap.ToOwnerMsg!).Task;
+        forOwner.Should().BeSameAs(task);
+        forOwner.Description.Should().Be("секрет-описание");
+        forOwner.ResultMarkdown.Should().Be("секрет-итог");
+        task.Description.Should().Be("секрет-описание", "облегчается копия, а не исходная карточка");
+    }
+
     [Fact]
     public async Task ToProjectOrOwner_СПроектом_ТолькоГруппеПроекта_БезПроекта_Владельцу()
     {

@@ -129,6 +129,35 @@ public class TaskBoardMemberDeliveryTests : IClassFixture<TestWebApplicationFact
         (await sink.FirstTitle.Task.WaitAsync(Wait)).Should().Be("Задача доски");
     }
 
+    [Theory]
+    [InlineData("editor")]
+    [InlineData("reader")]
+    public async Task Участник_СобытиеДоски_БезОписанияИИтога_ВладельцуПолное(string role)
+    {
+        var projectId = await CreateProjectAsync(role);
+        var conn = await ConnectSecondAsync();
+        var received = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        conn.On<JsonElement>("message", m =>
+        {
+            if (m.TryGetProperty("type", out var t) && t.GetString() == "task_changed")
+                received.TrySetResult(m.Clone());
+        });
+        await conn.InvokeAsync("JoinProject", projectId);
+
+        (await Owner().PostAsJsonAsync($"/api/projects/{projectId}/tasks",
+            new { title = "Тяжёлая", description = "длинное описание" })).EnsureSuccessStatusCode();
+
+        var task = (await received.Task.WaitAsync(Wait)).GetProperty("task");
+        task.GetProperty("title").GetString().Should().Be("Тяжёлая");
+        task.GetProperty("description").GetString().Should().BeNullOrEmpty("участник не получает по WS то, чего REST ему не отдаёт");
+        (task.TryGetProperty("resultMarkdown", out var res) ? res.ValueKind : JsonValueKind.Null)
+            .Should().Be(JsonValueKind.Null);
+
+        // Владелец в БД/REST видит полную карточку
+        var list = await Owner().GetFromJsonAsync<JsonElement>($"/api/tasks/{task.GetProperty("id").GetString()}");
+        list.GetProperty("description").GetString().Should().Be("длинное описание");
+    }
+
     [Fact]
     public async Task Посторонний_НеМожетПодписатьсяНаДоскуПроекта()
     {

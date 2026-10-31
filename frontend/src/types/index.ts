@@ -917,6 +917,9 @@ export interface UpdateTaskDto {
   // Отрицательное значение = убрать напоминание, undefined = не менять
   reminderMinutes?: number;
   assignee?: TaskAssignee;
+  // Человек-исполнитель общего проекта (S2b-1): undefined = не менять, null = снять,
+  // guid участника = назначить
+  assigneeUserId?: string | null;
   // type 'none' = убрать повторение, undefined = не менять
   recurrence?: TaskRecurrence;
   linkedSessionId?: string;

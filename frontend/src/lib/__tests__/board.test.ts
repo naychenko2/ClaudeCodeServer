@@ -77,6 +77,41 @@ describe('boardLanes', () => {
     expect(lanes.map(l => l.key)).toEqual(['claude', 'me', 'none']);
   });
 
+  // S2b-F5: в общем проекте (assigneePeople задан) дорожки разведены по assigneeUserId
+  const people = { names: new Map([['u-owner', 'Андрей'], ['u-m', 'Мария']]), ownerUserId: 'u-owner' };
+
+  it('assignee + общий проект — дорожки по assigneeUserId, старый «me» — к владельцу', () => {
+    const lanes = boardLanes([
+      mk({ assignee: 'me' as TaskAssignee, assigneeUserId: 'u-m' }),
+      mk({ assignee: 'me' as TaskAssignee }),               // старый 'me' без id → владелец (К9)
+      mk({ assignee: 'claude' as TaskAssignee }),
+    ], 'assignee', projects, people);
+    expect(lanes.map(l => l.key)).toEqual(['claude', 'u:u-owner', 'u:u-m']);
+    expect(lanes.map(l => l.label)).toEqual(['AI', 'Андрей', 'Мария']);
+    expect(lanes.find(l => l.key === 'u:u-m')!.tasks).toHaveLength(1);
+  });
+
+  it('assignee + общий проект — ушедший/неизвестный и без исполнителя → «Без исполнителя»', () => {
+    // 'me' без id — это задача владельца (К9), проверено выше; без исполнителя —
+    // задачи вообще без assignee/assigneeUserId и с id, которого нет в names
+    const lanes = boardLanes([
+      mk({ assignee: 'me' as TaskAssignee, assigneeUserId: 'u-old' }), // нет в names (ушёл)
+      mk({ assigneeUserId: null }),                                   // исполнитель снят
+      mk(),                                                         // никогда не была назначена
+    ], 'assignee', projects, people);
+    expect(lanes.map(l => l.key)).toEqual(['none']);
+    expect(lanes[0].label).toBe('Без исполнителя');
+    expect(lanes[0].tasks).toHaveLength(3);
+  });
+
+  it('assignee + общий проект — без контекста (личный/хаб) дорожки прежние', () => {
+    const lanes = boardLanes(
+      [mk({ assignee: 'me' as TaskAssignee, assigneeUserId: 'u-m' }), mk()],
+      'assignee', projects,
+    );
+    expect(lanes.map(l => l.key)).toEqual(['me', 'none']);
+  });
+
   it('project — личные (none) первыми', () => {
     const lanes = boardLanes(
       [mk({ projectId: 'p1' }), mk()],

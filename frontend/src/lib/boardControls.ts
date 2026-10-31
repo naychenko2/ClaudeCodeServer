@@ -10,11 +10,16 @@ import type { BoardGroupBy } from './tasks';
 const GROUP_KEY = 'cc_board_group';
 const WIP_KEY = 'cc_board_wip';
 
+// 'member' — фильтр по человеку-исполнителю общего проекта (S2b-F5); появляется
+// только в тулбаре общего проекта. assigneeUserId — выбранный участник; null — любой человек.
+export type BoardAssigneeFilter = 'all' | 'me' | 'claude' | 'member';
+
 export interface BoardControls {
   groupBy: BoardGroupBy;
   search: string;
   priorities: TaskPriority[];
-  assignee: 'all' | 'me' | 'claude';
+  assignee: BoardAssigneeFilter;
+  assigneeUserId: string | null;
   wip: Record<string, number>;   // лимит по id колонки
 }
 
@@ -27,7 +32,7 @@ function loadWip(): Record<string, number> {
 }
 
 let _state: BoardControls = {
-  groupBy: loadGroup(), search: '', priorities: [], assignee: 'all', wip: loadWip(),
+  groupBy: loadGroup(), search: '', priorities: [], assignee: 'all', assigneeUserId: null, wip: loadWip(),
 };
 const _listeners = new Set<() => void>();
 function emit() { _listeners.forEach(fn => fn()); }
@@ -40,7 +45,11 @@ export function togglePriorityFilter(p: TaskPriority) {
   const cur = _state.priorities;
   patch({ priorities: cur.includes(p) ? cur.filter(x => x !== p) : [...cur, p] });
 }
-export function setAssigneeFilter(a: 'all' | 'me' | 'claude') { patch({ assignee: a }); }
+// Любой переход по сегменту сбрасывает выбранного участника; «Участники» без id —
+// любой человек (дальше выбор — чипом участника)
+export function setAssigneeFilter(a: BoardAssigneeFilter, userId?: string | null) {
+  patch({ assignee: a, assigneeUserId: a === 'member' ? (userId ?? null) : null });
+}
 export function setWip(columnId: string, v?: number) {
   const wip = { ..._state.wip };
   if (v) wip[columnId] = v; else delete wip[columnId];

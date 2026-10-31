@@ -18,11 +18,17 @@ import {
 } from '../../../lib/tasks';
 import { api } from '../../../lib/api';
 import { showToast } from '../../../lib/toast';
-import { useBoardControls, setGroupBy } from '../../../lib/boardControls';
+import { useBoardControls, setAssigneeFilter, setGroupBy } from '../../../lib/boardControls';
 import { DRAG_MOUSE_ACTIVATION, DRAG_TOUCH_ACTIVATION } from '../../../lib/dnd';
 import { OfflineError } from '../../../lib/offline';
 import { useWindowWidth, TABLET_MAX } from '../../../lib/breakpoints';
+import { useMe } from '../../../lib/defaultPersona';
 import { TaskCard } from '../TaskCard';
+import { useProjectPeople } from '../TaskUserBadge';
+import {
+  isOwnerProjectView, isSharedProjectView, matchTaskAssignee, memberOptionName,
+  type AssigneePersonOption,
+} from '../TasksListFilter';
 import { BoardCell, ColumnHeader } from './BoardColumn';
 import { BoardToolbar, useDefectsOnly } from './BoardToolbar';
 
@@ -76,7 +82,7 @@ export function TaskBoard({
   tasks, columns, projectsById, onOpenTask,
   quickAddProjectId = null, scope = 'hub', inlineToolbar = true, onEditColumns,
 }: Props) {
-  const { groupBy, search, priorities, assignee, wip } = useBoardControls();
+  const { groupBy, search, priorities, assignee, assigneeUserId, wip } = useBoardControls();
   const defectsOnly = useDefectsOnly();
   const [activeId, setActiveId] = useState<string | null>(null);
 
@@ -86,6 +92,35 @@ export function TaskBoard({
     ? ['none', 'priority', 'assignee', 'due']
     : ['none', 'priority', 'assignee', 'project', 'due'];
   useEffect(() => { if (isProjectBoard && groupBy === 'project') setGroupBy('none'); }, [isProjectBoard, groupBy]);
+
+  // Общий проект (S2b-F5): «Участники» в фильтре и дорожки по assigneeUserId — только
+  // на проектной доске общего проекта. В хаб-доске «участников» быть не может (проекта
+  // нет) — оставшийся от проектной доски фильтр сбрасываем, как и «по проекту» выше.
+  const boardProject = isProjectBoard && quickAddProjectId ? projectsById.get(quickAddProjectId) : undefined;
+  const shared = boardProject ? isSharedProjectView(boardProject) : false;
+  useEffect(() => { if (!isProjectBoard && assignee === 'member') setAssigneeFilter('all'); }, [isProjectBoard, assignee]);
+  const me = useMe();
+  const { view } = useProjectPeople(quickAddProjectId ?? undefined, shared);
+  const people = useMemo<AssigneePersonOption[]>(
+    () => view ? view.members.map(m => ({ userId: m.userId, name: memberOptionName(m) })) : [],
+    [view],
+  );
+  // Контекст «Я» для фильтра/дорожек: в личном проекте и хабе — его нет, поведение прежнее
+  const matchCtx = useMemo(
+    () => boardProject
+      ? { currentUserId: me.userId, isOwner: isOwnerProjectView(boardProject, me.userId) }
+      : undefined,
+    [boardProject, me.userId],
+  );
+  // Имена дорожек «по исполнителю»: владелец первым, затем участники; ушедший/неизвестный
+  // в именах не числится — попадёт в «Без исполнителя»
+  const assigneePeople = useMemo(() => {
+    if (!shared || !view) return undefined;
+    const names = new Map<string, string>();
+    if (view.owner) names.set(view.owner.userId, memberOptionName(view.owner));
+    view.members.forEach(m => names.set(m.userId, memberOptionName(m)));
+    return { names, ownerUserId: view.owner?.userId ?? boardProject?.ownerId ?? null };
+  }, [shared, view, boardProject]);
 
   const sensors = useSensors(
     useSensor(MouseSensor, MOUSE_SENSOR_OPTIONS),
@@ -113,7 +148,7 @@ export function TaskBoard({
     return tasks.filter(t => {
       if (t.virtual) return false;
       if (priorities.length && !priorities.includes(t.priority)) return false;
-      if (assignee !== 'all' && t.assignee !== assignee) return false;
+      if (!matchTaskAssignee(t, assignee, assigneeUserId, matchCtx)) return false;
       // «Только дефекты» показывает открытые карточки-дефекты: kind=defect и status≠done.
       // Закрытые дефекты сюда не попадают — для них есть фильтр по колонке.
       if (defectsOnly && !isOpenDefect(t)) return false;
@@ -125,9 +160,12 @@ export function TaskBoard({
       }
       return true;
     });
-  }, [tasks, search, priorities, assignee, defectsOnly, descMatches]);
+  }, [tasks, search, priorities, assignee, assigneeUserId, matchCtx, defectsOnly, descMatches]);
 
-  const lanes = useMemo(() => boardLanes(filtered, groupBy, projectsById), [filtered, groupBy, projectsById]);
+  const lanes = useMemo(
+    () => boardLanes(filtered, groupBy, projectsById, assigneePeople),
+    [filtered, groupBy, projectsById, assigneePeople],
+  );
 
   // Структуры доски: ячейка(lane::column)→карточки, карточка→ячейка, тоталы по колонкам
   const { cellCards, cellByCard, columnTotals, taskById } = useMemo(() => {
@@ -193,7 +231,14 @@ export function TaskBoard({
     // Перенос между дорожками меняет поле — только priority/assignee (drag-to-change)
     if (sourceLaneKey && destLaneKey !== sourceLaneKey) {
       if (groupBy === 'priority') dto.priority = destLaneKey as TaskPriority;
-      else if (groupBy === 'assignee' && destLaneKey !== 'none') dto.assignee = destLaneKey as TaskAssignee;
+      else if (groupBy === 'assignee') {
+        if (destLaneKey === 'me' || destLaneKey === 'claude') dto.assignee = destLaneKey as TaskAssignee;
+        // Дорожка участника ('u:<id>', S2b-F5): бросок назначает человека (К9: 'me' + id)
+        else if (destLaneKey.startsWith('u:')) {
+          dto.assignee = 'me';
+          dto.assigneeUserId = destLaneKey.slice(2);
+        }
+      }
     }
 
     // Оптимистично двигаем карточку в сторе сразу — иначе оверлей «отлетает» назад
@@ -202,6 +247,7 @@ export function TaskBoard({
     if (isProjectBoard) optimistic.columnId = destColId;
     if (dto.priority) optimistic.priority = dto.priority;
     if (dto.assignee) optimistic.assignee = dto.assignee;
+    if (dto.assigneeUserId !== undefined) optimistic.assigneeUserId = dto.assigneeUserId;
     upsertTaskLocal(optimistic);
 
     // Откат drag только на реальной ошибке. При офлайне (OfflineError / выключенный
@@ -276,7 +322,7 @@ export function TaskBoard({
 
   return (
     <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={onDragStart} onDragEnd={onDragEnd}>
-      {inlineToolbar && <BoardToolbar layout="inline" groupOptions={groupOptions} onEditColumns={onEditColumns} />}
+      {inlineToolbar && <BoardToolbar layout="inline" groupOptions={groupOptions} onEditColumns={onEditColumns} people={people} />}
 
       {/* Скролл-контейнер доски. Класс `cc-hide-scrollbar` снят (QA Fold 8): на планшете
           минимум колонки 240, и три колонки влезают без скролла; при переполнении (4+

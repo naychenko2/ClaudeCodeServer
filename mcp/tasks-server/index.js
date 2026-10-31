@@ -604,7 +604,9 @@ const TOOLS = [
         dueTime: { type: 'string', description: 'HH:MM или "" чтобы убрать время' },
         reminderMinutes: REMINDER_MINUTES_SCHEMA,
         recurrence: RECURRENCE_SCHEMA,
-        assignee: { type: 'string', enum: ENUMS.assignee },
+        // S2b-2b: значением может быть username участника проекта задачи — фиксированного
+        // enum здесь быть не может (списка username'ов в схеме нет); «me»/«claude» — прежние
+        assignee: { type: 'string', description: 'Исполнитель: "me" (пользователь), "claude" или username участника проекта задачи — назначить его (не участник и читатель — отказ)' },
         personaId: PERSONA_ID_SCHEMA,
         modelTier: MODEL_TIER_SCHEMA,
         worktreePath: WORKTREE_PATH_SCHEMA,

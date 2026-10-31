@@ -52,6 +52,12 @@ public sealed class TasksToolset(
     // пропускается (см. использование ниже, паритет с TasksController).
     ClaudeHomeServer.Services.Spheres.ISphereDirectory spheres,
     ITurnFrameSource frames,
+    // S2b-2b (назначение человека-исполнителя по username): UserStore — та же точка
+    // резолва username→id, что у приглашения участника (ProjectMembershipService);
+    // IProjectAccess — единственная точка решения о членстве и роли, та же, что у
+    // REST-двери TasksController.Update: две двери не должны решать по-разному
+    UserStore users,
+    IProjectAccess access,
     INoteTaskSync? noteSync = null) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/tasks/{sessionId}. Константа —
@@ -392,6 +398,27 @@ public sealed class TasksToolset(
                         AssignedPersonaScopes(context.OwnerId, personaId), spheres) is { } personaError)
                     return Deny(personaError);
 
+                // Человек-исполнитель (S2b-2b): «me»/«claude» — прежний путь (enum). Любое
+                // другое непустое значение assignee — username участника проекта задачи:
+                // резолв только среди участников (владелец + члены — та же точка доступа, что
+                // у REST-двери), иначе отказ тем же типом и тем же словарём кодов TaskManager
+                // (своих строк кодов здесь не заводим). Персонную задачу отклоняет сам
+                // TaskManager (person_task_not_assignable) — здесь её не предугадываем.
+                // Отказ — до первой мутации: при отказе запись не меняется.
+                var assigneeEnum = ParseEnum<TaskItemAssignee>(arguments, "assignee");
+                string? assigneeUserId = null;
+                if (assigneeEnum is null && arguments.ContainsKey("assignee"))
+                {
+                    var assigneeName = StringArg(arguments, "assignee").Trim();
+                    if (assigneeName.Length > 0)
+                    {
+                        var (assigneeId, assigneeDenied) = ResolveAssigneeUsername(
+                            targetProjectId, context.OwnerId, assigneeName);
+                        if (assigneeDenied is not null) return Deny(AssigneeDeniedText(assigneeDenied));
+                        assigneeUserId = assigneeId;
+                    }
+                }
+
                 // Дефект: вердикт. VerifiedAt/PersonaId подставляет сервер из сессии вызова —
                 // хвост-сессия уже изолирована по владельцу, её PersonaId даёт автора вердикта.
                 // null-сессия/персона (чат без персоны) → проверка человеком (PersonaId == null).
@@ -425,7 +452,10 @@ public sealed class TasksToolset(
                     DueDate: arguments.ContainsKey("dueDate") ? StringArg(arguments, "dueDate") : null,
                     DueTime: arguments.ContainsKey("dueTime") ? StringArg(arguments, "dueTime") : null,
                     ReminderMinutes: NullableIntArg(arguments, "reminderMinutes"),
-                    Assignee: ParseEnum<TaskItemAssignee>(arguments, "assignee"),
+                    Assignee: assigneeEnum,
+                    // id участника из резолва username выше (null = не менять, как у других
+                    // полей): применение — в TaskManager, там же «на владельца» равно «снять»
+                    AssigneeUserId: assigneeUserId,
                     Recurrence: arguments.ContainsKey("recurrence") ? RecurrenceArg(arguments) : null,
                     PersonaId: arguments.ContainsKey("personaId") ? personaId : null,
                     ResultMarkdown: arguments.ContainsKey("resultMarkdown") ? StringArg(arguments, "resultMarkdown") : null,
@@ -471,8 +501,17 @@ public sealed class TasksToolset(
                     bool denyFeature = DenyFeatureClose(session, context.OwnerId);
                     updated = tasks.Update(id, req, effectiveColumn, isAgentCall: true,
                         callerIsExecutor: session.TaskId == id,
-                        denyFeatureClose: denyFeature, denyFeatureReopen: denyFeature)
+                        denyFeatureClose: denyFeature, denyFeatureReopen: denyFeature,
+                        // Арендатор проекта задачи — из проекта (тот же источник, что у REST PUT):
+                        // «назначение на владельца» и ключ записи меряются им, а не OwnerId записи
+                        tenantOwnerId: targetProject?.OwnerId)
                         ?? throw new InvalidOperationException($"Задача {id} не найдена");
+                }
+                catch (TaskManager.TaskAssigneeDeniedException ex)
+                {
+                    // Отказ TaskManager назначить человека (персонная задача): тип и словарь
+                    // кодов — его; к тексту добавляю код ветки, чтобы вызывающий различал отказы
+                    return Deny(AssigneeDeniedText(ex));
                 }
                 catch (InvalidOperationException ex)
                 {
@@ -865,6 +904,36 @@ public sealed class TasksToolset(
             ? $"Доступ к проекту {target} только для чтения (привязка ProjectTasks с readonly) — создавать/менять задачи нельзя."
             : null;
     }
+
+    // Резолв username → id человека-исполнителя (S2b-2b). Круг — участники проекта задачи:
+    // id владельца плюс строки Members, через IProjectAccess — ту же точку решения, что
+    // держит REST-дверь TasksController.Update: две двери на один вход отвечают одинаково
+    // (вне круга и для участника с выключенным флагом — тот же отказ). Личной задаче чужого
+    // круга нет: у неё нет проекта, чьим участником можно быть; её владелец — сам вызывающий,
+    // и его id дальше равен «снять» (TaskManager: id арендатора = сброс поля).
+    private (string? UserId, TaskManager.TaskAssigneeDeniedException? Denied) ResolveAssigneeUsername(
+        string? targetProjectId, string callerUserId, string username)
+    {
+        var user = users.FindByUsername(username);
+        if (user is null) return (null, NotMember());
+        if (targetProjectId is null)
+            return user.Id == callerUserId ? (user.Id, null) : (null, NotMember());
+        var scope = access.Resolve(user.Id, targetProjectId, ProjectRight.Read);
+        if (scope is null) return (null, NotMember());
+        if (scope.Role == ProjectRole.Reader)
+            return (null, new TaskManager.TaskAssigneeDeniedException(TaskManager.ReaderNotAssignableCode,
+                "Читателя назначить исполнителем нельзя: он только смотрит задачи"));
+        return (user.Id, null);
+
+        TaskManager.TaskAssigneeDeniedException NotMember() =>
+            new(TaskManager.AssigneeNotMemberCode,
+                $"«{username}» не участник проекта задачи: исполнителем можно назначить её владельца или участника");
+    }
+
+    // Текст отказа назначения: сообщение + машинный код из словаря TaskManager (тот же, что
+    // несёт ответ 400 REST-двери) — по коду вызывающий видит, какую ветку править
+    private static string AssigneeDeniedText(TaskManager.TaskAssigneeDeniedException ex) =>
+        $"{ex.Message} ({ex.Code})";
 
     // Задача видна в контексте: без проекта чата — весь воркспейс владельца; личные задачи
     // (без проекта) видны из любого чата; проектные — только из доступных проектов
@@ -1423,9 +1492,13 @@ public sealed class TasksToolset(
                     },
                     ["reminderMinutes"] = ReminderMinutesSchema(),
                     ["recurrence"] = RecurrenceSchema(),
+                    // S2b-2b: значением может быть username участника проекта задачи — фиксированного
+                    // enum здесь быть не может (списка username'ов в схеме нет); «me»/«claude» — прежние.
+                    // Парность со stdio-веткой держит TasksToolsetParityTests (index.js правится парой)
                     ["assignee"] = new JsonObject
                     {
-                        ["type"] = "string", ["enum"] = new JsonArray { "me", "claude" },
+                        ["type"] = "string",
+                        ["description"] = "Исполнитель: \"me\" (пользователь), \"claude\" или username участника проекта задачи — назначить его (не участник и читатель — отказ)",
                     },
                     ["personaId"] = PersonaIdSchema(),
                     ["modelTier"] = ModelTierSchema(),

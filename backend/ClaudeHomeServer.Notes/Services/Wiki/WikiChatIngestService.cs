@@ -62,16 +62,39 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 //   цикл «прочитал→изменил→записал» уже там); хроника пишется через WikiKeeper.WritePageAsync
 //   (манифест и проекции раздела — его транзакция; запись в drifting-файл будет отказана,
 //   и это тоже сбой разбора с причиной).
+//
+// REST-вход (S7b0a): контроллер зовёт только AnalyzeAsync/IsRunning/GetLast. Отличительная
+// часть контракта — машинный код отказа (ChatResult.Code), текст причины — человеку и модели.
+// Последний исход на чат (ключ owner|session, потолок 200, с временем окончания) и признак
+// «разбор идёт» живут в памяти этого экземпляра (single-flight — singleton DI): записываются
+// под тем же блоком, что и снятие in-flight, исход — раньше снятия: «не идёт» обязано
+// означать «last свежий». Формула пути хроники — одна здесь (ChroniclePath): список чатов
+// берёт её отсюда, а не копированием построения.
 public sealed class WikiChatIngestService
 {
     /// <summary>Исходы разбора чата — те же четыре, что у заявки разбора (S6b-3):
     /// applied — есть применённый пакет; awaiting_human — пакеты есть, ни один не
     /// применён (ждут человека); nothing_new — штатное «нечего добавить»;
-    /// rejected — отказ с причиной (ступень 0, вход, сбой окна, сбой применения).</summary>
+    /// rejected — отказ с причиной (ступень 0, вход, сбой окна, сбой применения).
+    /// Плюс up_to_date (S7b0a): курсор на конце истории, разбирать нечего — состояние,
+    /// а не отказ: REST-контракт различает их, фронт показывает «нечего разобрать».</summary>
     public const string OutcomeApplied = "applied";
     public const string OutcomeAwaitingHuman = "awaiting_human";
     public const string OutcomeNothingNew = "nothing_new";
     public const string OutcomeRejected = "rejected";
+    public const string OutcomeUpToDate = "up_to_date";
+
+    /// <summary>Машинные коды отказа (S7b0a): вызывающий различает отказы по коду, а не
+    /// подстрокой причины (текст причины — человеку и модели). not_found — чужой и
+    /// несуществующий чат неразличимы вызывающим: per-owner, без утечки существования
+    /// чужого. Остальные — ступень 0 и незаведённая вики. Кодов, не названных контрактом,
+    /// service не выдумывает: прочие отказы остаются без кода (вызывающий различает их
+    /// по исходу rejected).</summary>
+    public const string CodeNotFound = "not_found";
+    public const string CodeTaskExecution = "task_execution";
+    public const string CodeMarkedSkip = "marked_skip";
+    public const string CodePersonalSection = "personal_section";
+    public const string CodeWikiNotInitialized = "wiki_not_initialized";
 
     /// <summary>Зона стора для исхода «нечего добавить» (ADR-035:269).</summary>
     public const string ZoneNothingNew = "nothing_new";
@@ -80,8 +103,14 @@ public sealed class WikiChatIngestService
     public const string ChronicleDirName = "Хроники";
 
     /// <summary>Результат разбора: исход + причина (для отказа и для nothing_new —
-    /// причина модели) + id применённых пакетов (для applied).</summary>
-    public readonly record struct ChatResult(string Outcome, string? Reason, IReadOnlyList<string> PackageIds);
+    /// причина модели) + id применённых пакетов (для applied) + машинный код отказа
+    /// (S7b0a: только для состояний, названных REST-контрактом; null для прочих).</summary>
+    public readonly record struct ChatResult(
+        string Outcome, string? Reason, IReadOnlyList<string> PackageIds, string? Code = null);
+
+    /// <summary>Последний исход разбора чата с временем окончания (S7b0a, чтение
+    /// analyze-status и списка).</summary>
+    public sealed record LastAnalysis(ChatResult Result, DateTimeOffset FinishedAt);
 
     private readonly WikiSourceCapture _capture;
     private readonly WikiIngestService _ingest;
@@ -91,6 +120,13 @@ public sealed class WikiChatIngestService
 
     private readonly object _inFlightLock = new();
     private readonly Dictionary<string, Task<ChatResult>> _inFlight = new();
+
+    /// <summary>Последний исход на чат: ключ owner|session — без дома: статус спрашивают
+    /// про чат, а не про раздел разбора; чужой владелец ключа не видит. Потолок 200 записей:
+    /// это память, не диск; при переполнении снимается самый старый по времени окончания —
+    /// статусу нужен последний, а не история.</summary>
+    private readonly Dictionary<string, LastAnalysis> _last = new();
+    private const int LastCap = 200;
 
     public WikiChatIngestService(WikiSourceCapture capture, WikiIngestService ingest,
         ISessionDirectory sessions, WikiKeeper keeper, IConfiguration config)
@@ -110,26 +146,29 @@ public sealed class WikiChatIngestService
     public Task<ChatResult> AnalyzeAsync(string ownerId, string sessionId, CancellationToken ct = default)
     {
         // Fail-closed входа: кривая заявка не доходит ни до очереди, ни до модели.
+        // Кодов у этих отказов нет: REST-контракт называет коды только для состояний,
+        // которые различает фронт (not_found, ступень 0, незаведённая вики); ошибка
+        // вызова — не состояние, она остаётся rejected без кода.
         if (string.IsNullOrWhiteSpace(ownerId))
-            return Task.FromResult(Refused("владелец пустой"));
+            return Task.FromResult(Refused(null, "владелец пустой"));
         if (string.IsNullOrWhiteSpace(sessionId))
-            return Task.FromResult(Refused("id чата пустой"));
+            return Task.FromResult(Refused(null, "id чата пустой"));
         // Id чата должен быть представим в ref источника (тот же класс, что проверяет
         // захват): id с спецсимволами не даст ни карточки, ни курсора в сторе.
         if (!IsSessionIdSafe(sessionId))
-            return Task.FromResult(Refused($"id чата '{sessionId}' не представим в ссылке источника"));
+            return Task.FromResult(Refused(null, $"id чата '{sessionId}' не представим в ссылке источника"));
 
         var session = _sessions.GetById(sessionId);
         if (session is null)
-            return Task.FromResult(Refused("чат не существует"));
+            return Task.FromResult(Refused(CodeNotFound, "чат не существует"));
         if (_sessions.ResolveOwnerId(session) != ownerId)
-            return Task.FromResult(Refused("чат принадлежит другому владельцу: разбор — per-owner"));
+            return Task.FromResult(Refused(CodeNotFound, "чат принадлежит другому владельцу: разбор — per-owner"));
 
         // Ступень 0 (ADR-035 §12а) — исключения кода до обращения к модели.
         if (session.TaskExecution)
-            return Task.FromResult(Refused("чаты исполнения задач не разбираются: их итоги уже источники"));
+            return Task.FromResult(Refused(CodeTaskExecution, "чаты исполнения задач не разбираются: их итоги уже источники"));
         if (session.WikiMark == WikiMarks.Skip)
-            return Task.FromResult(Refused("чат помечен человеком «не разбирать»"));
+            return Task.FromResult(Refused(CodeMarkedSkip, "чат помечен человеком «не разбирать»"));
 
         // Раздел назначения — дом чата (ADR-036, решение 3). Личный раздел закрыт до Ф2 —
         // тот же отказ, что у очереди заявок (S6b-3), только до чтения истории.
@@ -137,7 +176,7 @@ public sealed class WikiChatIngestService
             ? WikiSections.ProjectsPrefix + projectId
             : WikiSections.Personal;
         if (home == WikiSections.Personal)
-            return Task.FromResult(Refused("личный раздел — с Ф2"));
+            return Task.FromResult(Refused(CodePersonalSection, "личный раздел — с Ф2"));
 
         var key = ownerId + "|" + sessionId + "|" + home;
         // Заявка регистрируется ДО начала прогона и сам прогон идёт вне вызывающего
@@ -160,12 +199,60 @@ public sealed class WikiChatIngestService
             // опоздавшая заявка присоединялась к уже завершённой задаче.
             lock (_inFlightLock)
             {
+                // Исход пишется раньше снятия in-flight (S7b0a): analyze-status не должен
+                // показать «не идёт» со старым last — законченный разбор фиксируется до
+                // того, как чат станет «не идущим».
+                _last[ownerId + "|" + sessionId] = new LastAnalysis(result, DateTimeOffset.UtcNow);
+                TrimLastLocked();
                 if (_inFlight.TryGetValue(key, out var current) && ReferenceEquals(current, tcs.Task))
                     _inFlight.Remove(key);
             }
             tcs.TrySetResult(result);
         });
         return tcs.Task;
+    }
+
+    /// <summary>Идёт ли сейчас разбор этого чата (S7b0a: поле running списка и analyze-status).
+    /// Ключ — owner|session: чужой владелец не видит чужой чат, даже по признаку «его
+    /// разбирают». In-flight-ключ содержит дом, поэтому проверка — по префиксу owner|session|.</summary>
+    public bool IsRunning(string ownerId, string sessionId)
+    {
+        if (string.IsNullOrEmpty(ownerId) || string.IsNullOrEmpty(sessionId))
+            return false;
+        var prefix = ownerId + "|" + sessionId + "|";
+        lock (_inFlightLock)
+        {
+            foreach (var key in _inFlight.Keys)
+                if (key.StartsWith(prefix, StringComparison.Ordinal))
+                    return true;
+            return false;
+        }
+    }
+
+    /// <summary>Последний исход разбора этого чата с временем окончания (S7b0a,
+    /// analyze-status). null — разбора не было; чужой владелец — тоже null (ключ с владельцем).</summary>
+    public LastAnalysis? GetLast(string ownerId, string sessionId)
+    {
+        if (string.IsNullOrEmpty(ownerId) || string.IsNullOrEmpty(sessionId))
+            return null;
+        lock (_inFlightLock)
+            return _last.TryGetValue(ownerId + "|" + sessionId, out var last) ? last : null;
+    }
+
+    private void TrimLastLocked()
+    {
+        while (_last.Count > LastCap)
+        {
+            string oldestKey = "";
+            DateTimeOffset oldest = DateTimeOffset.MaxValue;
+            foreach (var (k, v) in _last)
+                if (v.FinishedAt < oldest)
+                {
+                    oldest = v.FinishedAt;
+                    oldestKey = k;
+                }
+            _last.Remove(oldestKey);
+        }
     }
 
     private async Task<ChatResult> RunProtectedAsync(string ownerId, string sessionId, string home, Session session)
@@ -178,7 +265,7 @@ public sealed class WikiChatIngestService
         {
             // Любой неожиданный сбой — исход с причиной: ни исключения вызывающему,
             // ни «половины разбора» на диске без объяснения.
-            return Refused($"внутренний сбой разбора чата: {e.Message}");
+            return Refused(null, $"внутренний сбой разбора чата: {e.Message}");
         }
     }
 
@@ -186,23 +273,23 @@ public sealed class WikiChatIngestService
     {
         var root = WikiPaths.Root(_dataDir, ownerId);
         if (!WikiPaths.IsInitialized(_dataDir, ownerId))
-            return Refused("вики этого владельца не заведена");
+            return Refused(CodeWikiNotInitialized, "вики этого владельца не заведена");
 
         var history = await _sessions.GetHistoryAsync(sessionId);
         if (history is null || history.Count == 0)
-            return Refused("у чата нет истории");
+            return Refused(null, "у чата нет истории");
 
         // Ступень 0: чат без единой реплики человека. Мера «реплики человека» — та же,
         // что у отбора и у цитируемого текста (фильтр слайсера): auto, директивы,
         // через агента, плашки штаба, записка-передача — не реплики.
         if (!WikiChatSlicer.Lines(history, 1, history.Count).Any(l => l.IsHuman))
-            return Refused("в чате нет ни одной реплики человека");
+            return Refused(null, "в чате нет ни одной реплики человека");
 
         // Курсор из стора (S6e-1). Нечитаемый стор — не «нулевой курсор»: начать с нуля
         // значило бы молча переразобрать всё, что уже разобрано.
         var read = WikiChatTriageStore.Get(root);
         if (read.State == WikiTriageFileState.Invalid)
-            return Refused("стор разбора чатов нечитается: разбор не начинается с неизвестного курсора");
+            return Refused(null, "стор разбора чатов нечитается: разбор не начинается с неизвестного курсора");
         var entry = read.Entries.FirstOrDefault(e => e.SessionId == sessionId);
 
         var cursor = entry?.Cursor ?? 0;
@@ -214,11 +301,14 @@ public sealed class WikiChatIngestService
             cursor = 0;
         }
         if (cursor >= history.Count)
-            return Refused("чат разобран до конца: новых сообщений нет");
+            // Курсор на конце истории — не отказ, а состояние (S7b0a): REST показывает его
+            // исходом up_to_date («нечего разобрать»), MCP-путь — отказом с той же причиной
+            // (ветка `_` в IngestChatAsync).
+            return new ChatResult(OutcomeUpToDate, "чат разобран до конца: новых сообщений нет", []);
 
         var windows = WikiChatSlicer.Windows(history, cursor + 1, history.Count);
         if (windows.Count == 0)
-            return Refused("в дельте нечего цитировать: всё её содержимое — служебные записи");
+            return Refused(null, "в дельте нечего цитировать: всё её содержимое — служебные записи");
 
         var applied = new List<(string PackageId, string CardTitle)>();
         var awaiting = 0;
@@ -233,7 +323,7 @@ public sealed class WikiChatIngestService
             // проверяет он, здесь это не дублируется.
             var cap = await _capture.CaptureSession(ownerId, home, sessionId, from, to);
             if (!cap.Ok)
-                return Refused($"захват источника m{from}-m{to} не удался: {cap.Reason}");
+                return Refused(null, $"захват источника m{from}-m{to} не удался: {cap.Reason}");
 
             var ing = await _ingest.IngestAsync(ownerId, new WikiIngestService.Request(
                 WikiGate.OriginSession, $"session:{sessionId}#m{from}-{to}",
@@ -242,7 +332,7 @@ public sealed class WikiChatIngestService
             {
                 case WikiIngestService.OutcomeApplied:
                     if (ing.PackageId is not { Length: > 0 } packageId)
-                        return Refused($"исход «applied» окна m{from}-m{to} без id пакета");
+                        return Refused(null, $"исход «applied» окна m{from}-m{to} без id пакета");
                     // Заголовок карточки — имя её файла (WriteCard, S6h): цель сносок хроники.
                     applied.Add((packageId, Path.GetFileNameWithoutExtension(cap.CardRelPath!)));
                     break;
@@ -255,7 +345,7 @@ public sealed class WikiChatIngestService
                 default:
                     // Сбой любого окна — отказ всего разбора: курсор не двигается,
                     // хроника не начинается («зависшей» половины хроники не остаётся).
-                    return Refused($"разбор окна m{from}-m{to} не удался: {ing.Reason}");
+                    return Refused(null, $"разбор окна m{from}-m{to} не удался: {ing.Reason}");
             }
         }
 
@@ -267,7 +357,7 @@ public sealed class WikiChatIngestService
                 sessionId, history.Count, HashOfRecord(history[^1]),
                 ZoneNothingNew, nothingReason, (entry?.NothingNewStreak ?? 0) + 1, default));
             if (!up.Ok)
-                return Refused($"исход разбора не записан: {up.Reason}");
+                return Refused(null, $"исход разбора не записан: {up.Reason}");
             return new ChatResult(OutcomeNothingNew, nothingReason, []);
         }
 
@@ -282,7 +372,7 @@ public sealed class WikiChatIngestService
 
         var (chronicleOk, chronicleReason) = await AppendChronicleAsync(ownerId, home, session, sessionId, applied);
         if (!chronicleOk)
-            return Refused(chronicleReason ?? "хроника чата не записана");
+            return Refused(null, chronicleReason ?? "хроника чата не записана");
 
         // Курсор после применения — на конец дельты, с хэшем последней записи.
         // Зона/причина исхода обнуляются: они принадлежат разбору и отражают его
@@ -294,12 +384,22 @@ public sealed class WikiChatIngestService
             sessionId, history.Count, HashOfRecord(history[^1]),
             null, null, 0, default));
         if (!upApplied.Ok)
-            return Refused($"курсор разбора не записан: {upApplied.Reason}");
+            return Refused(null, $"курсор разбора не записан: {upApplied.Reason}");
 
         return new ChatResult(OutcomeApplied, null, applied.Select(a => a.PackageId).ToList());
     }
 
     // ── хроника чата ───────────────────────────────────────────────────────────────
+
+    /// <summary>Путь хроники чата под pages/ — та же формула, которой разбор её пишет
+    /// (AppendChronicleAsync ниже): один источник пути на весь продукт — список чатов и
+    /// фронт берут её отсюда, а не копированием построения (S7b0a). null — хроники здесь
+    /// быть не может: не-проектный дом (личный — с Ф2, сфера — следующая фича) или id,
+    /// не представимый в пути (тот же guard, что у AnalyzeAsync).</summary>
+    public static string? ChroniclePath(string home, string sessionId) =>
+        WikiSections.TryProjectId(home, out _) && IsSessionIdSafe(sessionId)
+            ? WikiSections.Folder(home) + ChronicleDirName + "/" + sessionId + ".md"
+            : null;
 
     /// <summary>Дописать хронику чата утверждениями применённых пакетов. Первой
     /// успешный разбор создаёт страницу, следующий — дописывает «Что выяснили».
@@ -310,7 +410,9 @@ public sealed class WikiChatIngestService
         IReadOnlyList<(string PackageId, string CardTitle)> applied)
     {
         var root = WikiPaths.Root(_dataDir, ownerId);
-        var pageKey = WikiSections.Folder(home)! + ChronicleDirName + "/" + sessionId + ".md";
+        // Дом и id проверены самим путём разбора (AnalyzeAsync: ступень 0 и guard id) —
+        // для проектного дома формула полна.
+        var pageKey = ChroniclePath(home, sessionId)!;
         var full = SafePath.JoinBelowRoot(root, "pages/" + pageKey);
 
         WikiPage? page = null;
@@ -463,5 +565,5 @@ public sealed class WikiChatIngestService
     private static bool IsSessionIdSafe(string sessionId) =>
         sessionId.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
 
-    private static ChatResult Refused(string reason) => new(OutcomeRejected, reason, []);
+    private static ChatResult Refused(string? code, string reason) => new(OutcomeRejected, reason, [], code);
 }

@@ -10,10 +10,13 @@ namespace ClaudeHomeServer.Notes.Controllers;
 
 // «Отбор чатов» вики (S6f, ADR-035, решение 12а): список «разбирается / серая зона /
 // пропущено / нечего добавить» по каждому чату с причиной (балл и главные сигналы либо
-// правило ступени 0) и пересчёт по кнопке. ТЕНЕВОЙ РЕЖИМ шага: список и пересчёт ничего
-// не запускают — ни ступени 2 (дешёвой модели), ни разбора: разбор остаётся кнопкой в Ф1,
-// пометки в меню чата — Ф2. Поэтому у контроллера нет зависимости ни от ICheapTextRunner,
-// ни от WikiChatIngestService: он не может позвать модель, даже если бы хотел.
+// правило ступени 0) и пересчёт по кнопке. Список и пересчёт ничего не запускают:
+// пересчёт пишет только свои поля. Разбор запускает только POST analyze (S7b0a) —
+// единственный запрос этого контроллера, который доходит до модели: кнопка человека
+// «разобрать этот чат»; analyze-status — его статус после 202. Поля списка running,
+// cursor, chroniclePath (S7b0a) — текущее состояние чата для фронта: running и last —
+// из сервиса, cursor — из стора, путь хроники — из формулы сервиса (ChroniclePath),
+// не копированием построения.
 //
 // Образец — WikiPackagesController: [Authorize], владелец только из токена, коды отказов —
 // контракт для фронта. Состояние читается из стора keeper/chat-triage.json (S6e): список
@@ -28,11 +31,13 @@ namespace ClaudeHomeServer.Notes.Controllers;
 public class WikiChatsController : ControllerBase
 {
     private readonly ISessionDirectory _sessions;
+    private readonly WikiChatIngestService _chat;
     private readonly string _dataDir;
 
-    public WikiChatsController(ISessionDirectory sessions, IConfiguration config)
+    public WikiChatsController(ISessionDirectory sessions, WikiChatIngestService chat, IConfiguration config)
     {
         _sessions = sessions;
+        _chat = chat;
         // Каталог данных — как у всех сервисов (DataPath указывает на projects.json в dataDir).
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
@@ -91,9 +96,16 @@ public class WikiChatsController : ControllerBase
                 continue;
             var zone = ShownZone(e);
             counts[zone] = counts.TryGetValue(zone, out var c) ? c + 1 : 1;
+            // Дом чата — та же формула, что у разбора (AnalyzeAsync): в записи стора дома нет,
+            // он выводится из чата. Путь хроники — из формулы сервиса, не отсюда.
+            var home = session.ProjectId is { Length: > 0 } projectId
+                ? WikiSections.ProjectsPrefix + projectId
+                : WikiSections.Personal;
             items.Add(new WikiChatTriageDto(
                 e.SessionId, session.Name, zone, e.Score, e.Signals, ShownReason(e),
-                e.NothingNewStreak, e.TriagedAt));
+                e.NothingNewStreak, e.TriagedAt,
+                _chat.IsRunning(userId, e.SessionId), e.Cursor,
+                WikiChatIngestService.ChroniclePath(home, e.SessionId)));
         }
 
         items = items
@@ -150,6 +162,75 @@ public class WikiChatsController : ControllerBase
         }
         return Ok(new WikiChatsRecalcDto(counted, counts));
     }
+
+    /// <summary>POST /api/wiki/chats/{sessionId}/analyze — «разобрать этот чат сейчас» (S7b0a,
+    /// кнопка в чате; единственный запрос контроллера, доходящий до модели). Ждёт исход до
+    /// AnalyzeWaitSeconds; не дождался — 202 {running:true}: разбор продолжается на стороне
+    /// сервиса, его получают analyze-status. ct заявителя в прогон не идёт: отвалившийся
+    /// клиент не гасит разбор (тот же порядок, что у заявки очереди, S6b-3). Отказ с машинным
+    /// кодом — 404/409 {code,message}; без кода — 200 rejected: исключения наружу нет.</summary>
+    private const int AnalyzeWaitSeconds = 10;
+
+    [HttpPost("{sessionId}/analyze")]
+    public Task<IActionResult> Analyze(string sessionId) => AnalyzeCore(sessionId, TimeSpan.FromSeconds(AnalyzeWaitSeconds));
+
+    /// <summary>Тестовый шов: ожидание — параметр, тест не ждёт реальные 10 с.</summary>
+    internal async Task<IActionResult> AnalyzeCore(string sessionId, TimeSpan wait)
+    {
+        var userId = OwnerOrNull();
+        if (userId is null) return Unauthorized();
+
+        var task = _chat.AnalyzeAsync(userId, sessionId); // ct заявителя в прогон не идёт
+        try
+        {
+            return MapAnalysis(await task.WaitAsync(wait));
+        }
+        catch (TimeoutException)
+        {
+            // Разбор идёт (этой или чужой заявки): исход — через analyze-status.
+            return StatusCode(202, new { running = true });
+        }
+    }
+
+    private IActionResult MapAnalysis(WikiChatIngestService.ChatResult res)
+    {
+        if (res.Outcome == WikiChatIngestService.OutcomeRejected && res.Code is { Length: > 0 } code)
+            return code == WikiChatIngestService.CodeNotFound
+                ? NotFound(new { code, message = res.Reason ?? "чат не найден" })
+                : StatusCode(409, new { code, message = res.Reason ?? "разбор отклонён" });
+        // applied / awaiting_human / nothing_new / up_to_date и rejected без кода —
+        // исход проходит как есть: сам исход и есть контракт.
+        return Ok(new { outcome = res.Outcome, reason = res.Reason, packageIds = res.PackageIds });
+    }
+
+    /// <summary>GET /api/wiki/chats/{sessionId}/analyze-status — идёт ли разбор и каков его
+    /// последний исход (опрос после 202; поле running списка — тот же источник). Чужой и
+    /// несуществующий чат — один и тот же 404: per-owner, без утечки существования чужого.</summary>
+    [HttpGet("{sessionId}/analyze-status")]
+    public IActionResult AnalyzeStatus(string sessionId)
+    {
+        var userId = OwnerOrNull();
+        if (userId is null) return Unauthorized();
+        var session = _sessions.GetById(sessionId);
+        if (session is null || _sessions.ResolveOwnerId(session) != userId)
+            return NotFound(new { code = WikiChatIngestService.CodeNotFound, message = "чат не существует" });
+
+        var running = _chat.IsRunning(userId, sessionId);
+        var last = _chat.GetLast(userId, sessionId);
+        return Ok(new
+        {
+            running,
+            last = last is null
+                ? null
+                : (object)new
+                {
+                    outcome = last.Result.Outcome,
+                    reason = last.Result.Reason,
+                    packageIds = last.Result.PackageIds,
+                    finishedAt = last.FinishedAt,
+                },
+        });
+    }
 }
 
 /// <summary>Список отбора: записи по чатам (порядок — по зонам, внутри зоны — по баллу) и
@@ -158,11 +239,15 @@ public sealed record WikiChatsListDto(IReadOnlyList<WikiChatTriageDto> Items, IR
 
 /// <summary>Строка списка: чат, его ПОКАЗАННАЯ зона (исход разбора либо зона ступени 1 —
 /// ShownZone), балл и сигналы (null — балла ещё нет), причина для человека этой зоны,
-/// счётчик «нечего добавить».</summary>
+/// счётчик «нечего добавить»; running — разбор идёт сейчас (S7b0a, тот же источник, что у
+/// analyze-status), cursor — курсор разбора из стора (0 — ещё не разбирали), chroniclePath —
+/// путь хроники под pages/ по формуле сервиса (null: не-проектный дом или id, не представимый
+/// в пути; существования файла не обещает — хронику создаёт применённый разбор).</summary>
 public sealed record WikiChatTriageDto(
     string SessionId, string? Name, string Zone, int? Score,
     IReadOnlyList<WikiTriageSignal>? Signals, string? Reason,
-    int NothingNewStreak, DateTimeOffset TriagedAt);
+    int NothingNewStreak, DateTimeOffset TriagedAt,
+    bool Running, int Cursor, string? ChroniclePath);
 
 /// <summary>Итог пересчёта: сколько чатов посчитано и counts по зонам.</summary>
 public sealed record WikiChatsRecalcDto(int Counted, IReadOnlyDictionary<string, int> Counts);

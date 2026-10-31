@@ -1,0 +1,384 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text.Json;
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Notes.Controllers;
+using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Notes.Wiki;
+using ClaudeHomeServer.Services.Prompts;
+using ClaudeHomeServer.Services.Spheres;
+using ClaudeHomeServer.Tests.Helpers;
+using FluentAssertions;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Infrastructure;
+using Xunit;
+
+namespace ClaudeHomeServer.Tests.Controllers;
+
+// S7b0a: REST-вход к разбору чата по требованию. Контроллер — напрямую (образец
+// WikiPackagesControllerTests: тестируется контракт действия, не транспорт); цепка разбора
+// настоящая, модель — подменённый ICheapTextRunner (образец WikiChatIngestTests).
+// Ожидание passedётся через тестовый шов AnalyzeCore(sessionId, wait): реальные 10 с
+// производственного ожидания в тесте не ждём; «медленный» прогон — gate в проходе A.
+//
+// Контракт: 200 {outcome, reason?, packageIds[]} — applied / awaiting_human / nothing_new /
+// up_to_date и rejected без кода; 202 {running:true} — ожидание истекло, разбор продолжается;
+// 404 {code:"not_found"} — чужой и несуществующий неразличимы; 409 {code,message} —
+// task_execution, marked_skip, personal_section, wiki_not_initialized.
+// analyze-status: 200 {running, last?{outcome,reason,packageIds,finishedAt}}, чужой чат — 404.
+// Список: строка чата несёт running, cursor, chroniclePath (путь — по формуле сервиса).
+public class WikiChatsControllerTests : IDisposable
+{
+    private const string User = "u1";
+    private const string Foreign = "u2";
+    private const string ChatId = "chat-1";
+    private const string PageTitle = "Сущность";
+    private const string PagePath = "Проекты/p1/Сущность.md";
+
+    private const string Claim1 = "Решение: перенести сборку на Linux";
+    private const string Marker1 = "первый сбой был 12 октября";
+
+    private static string Claims(string claim) =>
+        $$"""{"claims":[{"text":"{{claim}}","quote":"{{claim}}"}]}""";
+
+    private static readonly string Plan1 = $$"""
+        {"chronicle":{"about":0,"decided":[0],"learned":[],"open_questions":[]},
+        "operations":[{"op":"append","page":"{{PageTitle}}","claim":0}]}
+        """;
+
+    private static readonly string PageBase = $$"""
+        ---
+        type: topic
+        aliases: []
+        owns: []
+        sources: []
+        status: active
+        ---
+
+        # {{PageTitle}}
+
+        ## Сводка
+
+        ## Хронология
+
+        ## Противоречия
+
+        ## История
+        """;
+
+    private readonly string _dir;
+    private readonly IConfiguration _config;
+    private readonly ProjectManager _projects;
+    private readonly NotesService _notes;
+    private readonly WikiKeeper _keeper;
+    private readonly FakeSessions _sessions = new();
+    // Модель одна на стенд: скрипт и gate тест выставляет перед своим прогоном.
+    private readonly FakeLlm _llm = new();
+    private readonly WikiChatIngestService _chat;
+
+    public WikiChatsControllerTests()
+    {
+        _dir = Path.Combine(Path.GetTempPath(), "wiki_chats_rest_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_dir);
+        _config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = Path.Combine(_dir, "projects.json") })
+            .Build();
+        var users = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        _projects = new ProjectManager(_config, users, new AppSettingsService(_config));
+        _notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, null, new WikiFlagOn());
+        _keeper = new WikiKeeper(_notes, _config);
+        var apply = new WikiApplyService(_notes, _keeper, new NoSpheres(), _config);
+        _chat = new WikiChatIngestService(
+            new WikiSourceCapture(_notes, _projects, _sessions, _config, _keeper),
+            new WikiIngestService(_llm, new NoSpheres(), apply, _config),
+            _sessions, _keeper, _config);
+        _keeper.EnsureInitializedAsync(User).GetAwaiter().GetResult();
+        // Страница знаний, которую план разбора пополняет: без неё применённый исход
+        // невозможен (цепка та же, что в WikiChatIngestTests).
+        var r = _keeper.WritePageAsync(User, "projects/p1", PagePath, PageBase).GetAwaiter().GetResult();
+        r.Status.Should().Be(WikiOpStatus.Applied, r.Reason);
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_dir)) Directory.Delete(_dir, recursive: true);
+    }
+
+    // ─── 1. Чужой и несуществующий чат: один 404 на двоих ────────────────────
+
+    [Fact]
+    public async Task Analyze_ЧужойИлиНесуществующийЧат_404_ОдинКод()
+    {
+        AddSession();
+        SetShortHistory();
+        _sessions.All.Single(s => s.Id == ChatId).OwnerId = Foreign;
+
+        var foreign = await Controller().AnalyzeCore(ChatId, Wait);
+        AssertBody(foreign, 404, WikiChatIngestService.CodeNotFound);
+
+        var missing = await Controller().AnalyzeCore("no-such-chat", Wait);
+        AssertBody(missing, 404, WikiChatIngestService.CodeNotFound);
+
+        // Мутация «убрать проверку владельца» (ResolveOwnerId в AnalyzeAsync): чужой чат
+        // разбирается и доходит до модели — вместо 404 был бы 200, тест красный.
+        _llm.Calls.Should().BeEmpty("отказ per-owner — до обращения к модели");
+    }
+
+    // ─── 2. Ступень 0 и незаведённая вики: 409 с точным кодом ────────────────
+
+    [Fact]
+    public async Task Analyze_Ступень0_И_НезаведённаяВики_409_СТочнымКодом()
+    {
+        AddSession("s-task", taskExecution: true);
+        AssertBody(await Controller().AnalyzeCore("s-task", Wait), 409, WikiChatIngestService.CodeTaskExecution);
+
+        AddSession("s-skip", wikiMark: WikiMarks.Skip);
+        AssertBody(await Controller().AnalyzeCore("s-skip", Wait), 409, WikiChatIngestService.CodeMarkedSkip);
+
+        AddSession("s-personal", projectId: null);
+        AssertBody(await Controller().AnalyzeCore("s-personal", Wait), 409, WikiChatIngestService.CodePersonalSection);
+
+        // Свой чат владельца с незаведённой вики: u2 не инициализирован в этом стенде.
+        AddSession("s-nowiki", projectId: "p1");
+        _sessions.All.Single(s => s.Id == "s-nowiki").OwnerId = Foreign;
+        AssertBody(await Controller(Foreign).AnalyzeCore("s-nowiki", Wait), 409, WikiChatIngestService.CodeWikiNotInitialized);
+
+        _llm.Calls.Should().BeEmpty("все четыре отказа — до обращения к модели");
+    }
+
+    // ─── 3. Применённый и up_to_date: 200 с исходом (не отказ) ───────────────
+
+    [Fact]
+    public async Task Analyze_РазобранныйДоКонца_200_up_to_date_АНеОтказ()
+    {
+        AddSession();
+        SetShortHistory();
+        _llm.Script(("A", Claims(Claim1)), ("B", Plan1));
+
+        var first = await Controller().AnalyzeCore(ChatId, Wait);
+        ((IStatusCodeActionResult)first).StatusCode.Should().Be(200);
+        var b1 = Body(first);
+        b1.GetProperty("outcome").GetString().Should().Be(WikiChatIngestService.OutcomeApplied);
+        b1.GetProperty("packageIds").GetArrayLength().Should().Be(1);
+
+        var again = await Controller().AnalyzeCore(ChatId, Wait);
+        ((IStatusCodeActionResult)again).StatusCode.Should().Be(200,
+            "закрытый курсор — состояние up_to_date, а не 409 и не 404");
+        var b2 = Body(again);
+        b2.GetProperty("outcome").GetString().Should().Be(WikiChatIngestService.OutcomeUpToDate);
+        b2.GetProperty("reason").GetString().Should().Contain("новых сообщений нет");
+        _llm.Calls.Should().HaveCount(2, "вторая заявка модель не звала");
+    }
+
+    // ─── 4. Медленный прогон: 202, затем analyze-status от него ──────────────
+
+    [Fact]
+    public async Task Analyze_МедленныйПрогон_202_ЗатемStatusRunningПотомИсход()
+    {
+        AddSession();
+        SetShortHistory();
+        var gate = new TaskCompletionSource();
+        _llm.Script(("A", Claims(Claim1)), ("B", Plan1));
+        _llm.GateA = gate;
+
+        // Ожидание короче прогона: 202 с running — и прогон после отказа клиента не гасится
+        // (ct заявителя в него не идёт — в AnalyzeCore его нет вовсе).
+        var slow = await Controller().AnalyzeCore(ChatId, TimeSpan.FromMilliseconds(200));
+        ((IStatusCodeActionResult)slow).StatusCode.Should().Be(202);
+        Body(slow).GetProperty("running").GetBoolean().Should().BeTrue();
+
+        var mid = (OkObjectResult)Controller().AnalyzeStatus(ChatId);
+        mid.StatusCode.Should().Be(200);
+        var bm = Body(mid);
+        bm.GetProperty("running").GetBoolean().Should().BeTrue("разбор продолжается на стороне сервиса");
+        bm.GetProperty("last").ValueKind.Should().Be(JsonValueKind.Null, "пока идёт — исхода ещё нет");
+
+        gate.SetResult();
+        // Ждем окончания прогона по факту записи last (TaskCompletionSource-гейт + опрос
+        // признака), не по паузе.
+        SpinWait.SpinUntil(() => _chat.GetLast(User, ChatId) is not null, 10_000).Should().BeTrue();
+
+        var done = (OkObjectResult)Controller().AnalyzeStatus(ChatId);
+        done.StatusCode.Should().Be(200);
+        var bd = Body(done);
+        bd.GetProperty("running").GetBoolean().Should().BeFalse();
+        var last = bd.GetProperty("last");
+        last.GetProperty("outcome").GetString().Should().Be(WikiChatIngestService.OutcomeApplied);
+        last.GetProperty("packageIds").GetArrayLength().Should().Be(1);
+        last.GetProperty("finishedAt").GetDateTimeOffset().Should().NotBe(default);
+    }
+
+    // ─── 5. analyze-status: чужой 404, свой без разбора — пустой статус ──────
+
+    [Fact]
+    public void AnalyzeStatus_ЧужойИлиНесуществующий_404_СвойБезРазбора_ПустойСтатус()
+    {
+        AddSession("s-foreign");
+        _sessions.All.Single(s => s.Id == "s-foreign").OwnerId = Foreign;
+        AssertBody(Controller().AnalyzeStatus("s-foreign"), 404, WikiChatIngestService.CodeNotFound);
+        AssertBody(Controller().AnalyzeStatus("no-such-chat"), 404, WikiChatIngestService.CodeNotFound);
+
+        AddSession();
+        var ok = (OkObjectResult)Controller().AnalyzeStatus(ChatId);
+        ok.StatusCode.Should().Be(200);
+        var body = Body(ok);
+        body.GetProperty("running").GetBoolean().Should().BeFalse();
+        body.GetProperty("last").ValueKind.Should().Be(JsonValueKind.Null, "разбора не было — last пустой");
+    }
+
+    // ─── 6. Список несёт running, cursor, chroniclePath ──────────────────────
+
+    [Fact]
+    public async Task Список_Несёт_running_cursor_chroniclePath()
+    {
+        AddSession();
+        AddSession("s-personal", projectId: null);
+        // Стор заполняем пересчётом: он не разбирает и курсора не ставит — ровно то,
+        // что нужно, чтобы видеть нулевые значения новых полей.
+        ((IStatusCodeActionResult)await Controller().Recalculate()).StatusCode.Should().Be(200);
+
+        var list = (WikiChatsListDto)((OkObjectResult)Controller().List()).Value!;
+
+        var own = list.Items.Single(i => i.SessionId == ChatId);
+        own.Running.Should().BeFalse("никто не разбирал");
+        own.Cursor.Should().Be(0, "пересчёт курсора не касается (разведение владения S6f)");
+        own.ChroniclePath.Should().Be("Проекты/p1/Хроники/chat-1.md",
+            "путь — по формуле сервиса (AppendChronicle/ChroniclePath), не от контроллера");
+
+        var personal = list.Items.Single(i => i.SessionId == "s-personal");
+        personal.ChroniclePath.Should().BeNull("в личном разделе хроник не бывает (личный закрыт до Ф2)");
+    }
+
+    // ─── обвязка ──────────────────────────────────────────────────────────────
+
+    // Реальное производственное ожидание (10 с) в тесте не ждём: быстрый прогон проходит
+    // за доли секунды, «медленный» ловится коротким wait.
+    private static readonly TimeSpan Wait = TimeSpan.FromSeconds(5);
+
+    private void AddSession(string id = ChatId, string? projectId = "p1",
+        bool taskExecution = false, string? wikiMark = null)
+    {
+        _sessions.All.Add(new Session
+        {
+            Id = id,
+            OwnerId = User,
+            ProjectId = projectId,
+            Name = "Чат про сборку",
+            TaskExecution = taskExecution,
+            WikiMark = wikiMark,
+        });
+    }
+
+    private void SetShortHistory(string id = ChatId) => _sessions.History[id] =
+    [
+        new StoredSessionStartedMessage("claude", "default"),
+        new StoredUserMessage($"{Claim1}. Хронология: {Marker1}."),
+        new StoredTextMessage("Принято, готовлю план."),
+        new StoredUserMessage("Давай."),
+        new StoredTextMessage("Готово."),
+    ];
+
+    private WikiChatsController Controller(string user = User)
+    {
+        var http = new DefaultHttpContext();
+        http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, user)], "test"));
+        return new WikiChatsController(_sessions, _chat, _config)
+        {
+            ControllerContext = new ControllerContext { HttpContext = http },
+        };
+    }
+
+    private static JsonElement Body(IActionResult result) =>
+        JsonDocument.Parse(JsonSerializer.Serialize(((ObjectResult)result).Value!)).RootElement;
+
+    private static void AssertBody(IActionResult result, int status, string code)
+    {
+        var obj = result.Should().BeAssignableTo<ObjectResult>($"{status} с телом отказа").Which;
+        obj.StatusCode.Should().Be(status);
+        Body(obj).GetProperty("code").GetString().Should().Be(code);
+    }
+
+    // Подменённая модель того же образца, что в WikiChatIngestTests: проходы по директивам
+    // промпта, gate первого прохода A; скрипт и gate тест выставляет перед своим прогоном.
+    private sealed class FakeLlm : ICheapTextRunner
+    {
+        public List<(string ActionKey, string Prompt, string Pass)> Calls { get; } = [];
+        public TaskCompletionSource? GateA;
+
+        private readonly Dictionary<string, Queue<string>> _answers = new();
+
+        public void Script(params (string Pass, string Answer)[] answers)
+        {
+            _answers.Clear();
+            Calls.Clear();
+            GateA = null;
+            foreach (var (pass, answer) in answers)
+                (_answers.TryGetValue(pass, out var q) ? q : _answers[pass] = new Queue<string>()).Enqueue(answer);
+        }
+
+        public bool UsesLocal(string actionKey) => false;
+        public bool HasFreeRoute(string actionKey) => true;
+        public bool HasRoute(string actionKey) => true;
+        public string DescribeRoute(string actionKey, string? fallbackModel) => "fake";
+
+        public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default) =>
+            Task.FromResult(Answer(actionKey, prompt, ct));
+
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default) =>
+            Task.FromResult<string?>(Answer(actionKey, prompt, ct));
+
+        public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
+            string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
+            int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default) =>
+            Task.FromResult(new OneShotResult(
+                Answer(actionKey, prompt, ct), new OneShotUsage(10, 0, 0, 5, 0.0, "fake"), 1));
+
+        private string Answer(string actionKey, string prompt, CancellationToken ct)
+        {
+            var pass = prompt.Contains("YOUR PREVIOUS PLAN WAS REJECTED") ? "R"
+                : prompt.Contains("extract durable") ? "A"
+                : prompt.Contains("turn the claims") ? "B"
+                : "?";
+            Calls.Add((actionKey, prompt, pass));
+            actionKey.Should().Be(LocalActionCatalog.WikiIngest, "место разбора — wiki-ingest");
+            if (pass == "A" && GateA is not null && Calls.Count(c => c.Pass == "A") == 1)
+                GateA.Task.WaitAsync(ct).GetAwaiter().GetResult();
+            var queue = _answers.TryGetValue(pass, out var q) ? q : null;
+            return queue is { Count: > 0 } ? queue.Dequeue() : "нет ответа для прохода " + pass;
+        }
+    }
+
+    private sealed class FakeSessions : ISessionDirectory
+    {
+        public readonly List<Session> All = [];
+        public readonly Dictionary<string, List<StoredMessage>> History = [];
+
+        public Session? GetById(string id) => All.FirstOrDefault(s => s.Id == id);
+        public IReadOnlyCollection<Session> GetAll() => All;
+        public string? ResolveOwnerId(Session s) => s.OwnerId;
+        public Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId) =>
+            Task.FromResult<IReadOnlyList<StoredMessage>>(
+                History.TryGetValue(sessionId, out var h) ? h : new List<StoredMessage>());
+        public bool SetWikiMark(string sessionId, string? mark) => true;
+    }
+
+    private sealed class WikiFlagOn : ClaudeHomeServer.Services.Composition.IFeatureFlagGate
+    {
+        public bool IsEnabled(string userId, string key) => key == FeatureFlagKeys.LlmWiki;
+    }
+
+    private sealed class NoSpheres : ISphereDirectory
+    {
+        public string? SphereOf(string ownerId, string projectId) => null;
+        public IReadOnlyList<string> ProjectsOf(string ownerId, string sphereId) => [];
+        public bool Enabled(string ownerId) => false;
+        public string? SphereName(string ownerId, string sphereId) => null;
+        public string? CharterOf(string ownerId, string sphereId) => null;
+    }
+}

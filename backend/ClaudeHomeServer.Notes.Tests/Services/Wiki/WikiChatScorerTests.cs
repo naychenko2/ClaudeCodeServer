@@ -9,6 +9,8 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Notes.Wiki;
+using ClaudeHomeServer.Services.Spheres;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -33,6 +35,10 @@ public class WikiChatScorerTests : IDisposable
     private readonly string _dir;
     private readonly IConfiguration _config;
     private readonly SessionsStub _sessions = new();
+    // S7b0a: конструктор контроллера требует сервис разбора чатов. Теневые тесты его не
+    // зовут: список и пересчёт ничего не разбирают (running в списке — false на пустом
+    // in-flight). Экземпляр настоящий, модель — Noop: он не вызывается ни разу.
+    private readonly WikiChatIngestService _chat;
 
     public WikiChatScorerTests()
     {
@@ -41,6 +47,15 @@ public class WikiChatScorerTests : IDisposable
         _config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = Path.Combine(_dir, "projects.json") })
             .Build();
+        var users = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        var projects = new ProjectManager(_config, users, new AppSettingsService(_config));
+        var notes = new NotesService(projects, _config, NullLogger<NotesService>.Instance, null, new WikiFlagOn());
+        var keeper = new WikiKeeper(notes, _config);
+        _chat = new WikiChatIngestService(
+            new WikiSourceCapture(notes, projects, _sessions, _config, keeper),
+            new WikiIngestService(new NoopCheapRunner(), new NoSpheres(),
+                new WikiApplyService(notes, keeper, new NoSpheres(), _config), _config),
+            _sessions, keeper, _config);
     }
 
     public void Dispose()
@@ -326,15 +341,18 @@ public class WikiChatScorerTests : IDisposable
     [Fact]
     public async Task СписокИПересчётНеЗапускаютРазбор_МодельНеПозванаИХроникаНеСоздана()
     {
-        // Структурная гарантия: у контроллера нет зависимости ни от дешёвой модели
-        // (ICheapTextRunner), ни от сервиса разбора — он не может их позвать (число вызовов
-        // ICheapTextRunner после пересчёта — 0 по построению).
+        // Структурная гарантия (S7b0a поправила тень S6f): у контроллера нет прямой зависимости
+        // от дешёвой модели — разбор достижим только через сервис разбора (он в ctor и есть,
+        // звать его может только POST analyze). Список и пересчёт его не зовут — это
+        // поведенческая половина ниже: после пересчёта ни хроник, ни пакетов.
         var ctor = typeof(WikiChatsController).GetConstructors().Single();
         var deps = ctor.GetParameters().Select(p => p.ParameterType).ToList();
-        deps.Should().NotContain(t => t == typeof(ICheapTextRunner));
-        deps.Should().NotContain(t => t == typeof(WikiChatIngestService));
+        deps.Should().NotContain(t => t == typeof(ICheapTextRunner),
+            "модель не достижима из контроллера напрямую — только через сервис разбора");
+        deps.Should().Contain(t => t == typeof(WikiChatIngestService),
+            "analyze идёт через сервис (S7b0a)");
         typeof(WikiChatsController).GetFields(BindingFlags.Instance | BindingFlags.NonPublic)
-            .Select(f => f.FieldType).Should().NotContain(t => t == typeof(ICheapTextRunner) || t == typeof(WikiChatIngestService));
+            .Select(f => f.FieldType).Should().NotContain(t => t == typeof(ICheapTextRunner));
 
         SeedChats();
         var res = await Controller().Recalculate();
@@ -546,7 +564,7 @@ public class WikiChatScorerTests : IDisposable
     {
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, user)], "test"));
-        return new WikiChatsController(_sessions, _config)
+        return new WikiChatsController(_sessions, _chat, _config)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
@@ -562,5 +580,40 @@ public class WikiChatScorerTests : IDisposable
         public Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId) =>
             Task.FromResult<IReadOnlyList<StoredMessage>>(History.TryGetValue(sessionId, out var h) ? h : []);
         public bool SetWikiMark(string sessionId, string? mark) => Known.ContainsKey(sessionId);
+    }
+
+    // Стабы для сборки настоящего сервиса разбора (он в теневых тестах не вызывается):
+    // модель, которая обязана не вызываться, и пустые справочники с включённым флагом вики.
+    private sealed class NoopCheapRunner : ICheapTextRunner
+    {
+        public bool UsesLocal(string actionKey) => false;
+        public bool HasFreeRoute(string actionKey) => false;
+        public bool HasRoute(string actionKey) => false;
+        public string DescribeRoute(string actionKey, string? fallbackModel) => "none";
+        public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default) =>
+            Throw<string>(actionKey);
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default) => Throw<string?>(actionKey);
+        public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
+            string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
+            int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default) =>
+            Throw<OneShotResult>(actionKey);
+        private static Task<T> Throw<T>(string actionKey) =>
+            Task.FromException<T>(new InvalidOperationException($"ИИ-действие {actionKey} здесь не ожидается"));
+    }
+
+    private sealed class NoSpheres : ISphereDirectory
+    {
+        public string? SphereOf(string ownerId, string projectId) => null;
+        public IReadOnlyList<string> ProjectsOf(string ownerId, string sphereId) => [];
+        public bool Enabled(string ownerId) => false;
+        public string? SphereName(string ownerId, string sphereId) => null;
+        public string? CharterOf(string ownerId, string sphereId) => null;
+    }
+
+    private sealed class WikiFlagOn : ClaudeHomeServer.Services.Composition.IFeatureFlagGate
+    {
+        public bool IsEnabled(string userId, string key) => key == FeatureFlagKeys.LlmWiki;
     }
 }

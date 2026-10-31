@@ -298,6 +298,26 @@ public class NotesToolsetWikiTests : IDisposable
         AssertDenied(res, "разберите Входящие");
     }
 
+    // ── S7b0a: «разобрать этот чат» (session:{id} без диапазона) — только свой чат ──
+    // Путь идёт через WikiChatIngestService.AnalyzeAsync (тот же, что у REST analyze).
+    // Инвариант «разбор только по требованию владельца и только своих чатов» держится на
+    // обоих входах: REST — WikiChatsControllerTests, MCP — здесь. Отказ per-owner — до
+    // обращения к модели; чужой и несуществующий неразличимы кодом.
+
+    [Fact]
+    public void С7b0a_РазборЧата_ЧужойЧат_ОтказДоМодели()
+    {
+        var (toolset, ctx) = McpEnv("p1");
+        _sessions.All.Add(new Session { Id = "s-foreign", OwnerId = "u2", ProjectId = "p1", Name = "Чужой чат" });
+
+        var res = Call(toolset, ctx, "wiki_ingest", Args(("source", "session:s-foreign")));
+        AssertDenied(res, "принадлежит другому владельцу");
+
+        // Несуществующий — тот же путь и та же форма отказа: вызывающий не различает их.
+        var missing = Call(toolset, ctx, "wiki_ingest", Args(("source", "session:s-none")));
+        AssertDenied(missing, "чат не существует");
+    }
+
     private void AddOpenPackages(int count)
     {
         for (var i = 0; i < count; i++)

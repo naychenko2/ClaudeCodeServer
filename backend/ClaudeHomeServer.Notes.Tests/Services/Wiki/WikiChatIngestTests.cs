@@ -307,7 +307,7 @@ public class WikiChatIngestTests : IDisposable
         ((StoredUserMessage)_sessions.History[ChatId][3]).PromptSnapshotId = "1700000000000-abcd";
 
         var again = await sut.AnalyzeAsync(User, ChatId);
-        again.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected, again.Reason);
+        again.Outcome.Should().Be(WikiChatIngestService.OutcomeUpToDate, again.Reason);
         again.Reason.Should().Contain("новых сообщений нет", "хэш тот же — курсор на месте, чат не переразобрывается");
         llm.Calls.Should().HaveCount(2, "модель заново не звалась");
     }
@@ -343,7 +343,7 @@ public class WikiChatIngestTests : IDisposable
         ((StoredToolUseMessage)_sessions.History[ChatId][3]).Input = new { command = "dotnet build" };
 
         var again = await sut.AnalyzeAsync(User, ChatId);
-        again.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected, again.Reason);
+        again.Outcome.Should().Be(WikiChatIngestService.OutcomeUpToDate, again.Reason);
         again.Reason.Should().Contain("новых сообщений нет", "хэш тот же — курсор на месте, чат не переразобрывается");
         llm.Calls.Should().HaveCount(2, "модель заново не звалась");
     }
@@ -400,12 +400,12 @@ public class WikiChatIngestTests : IDisposable
         ChronicleFiles().Should().BeEmpty("при штатном исходе хроника не создаётся");
         WikiPackageStore.List(Root).Packages.Should().BeEmpty();
 
-        // Курсор действительно сдвинулся: повторная заявка на том же чате отказана
-        // как не имеющая дельты — а не разбирает его заново.
+        // Курсор действительно сдвинулся: повторная заявка на том же чате получает up_to_date
+        // («разобран до конца», S7b0a) — а не разбирает его заново и не считается отказом.
         var again = await sut.AnalyzeAsync(User, ChatId);
-        again.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected);
+        again.Outcome.Should().Be(WikiChatIngestService.OutcomeUpToDate);
         again.Reason.Should().Contain("новых сообщений нет");
-        llm.Calls.Should().HaveCount(2, "отказ по пустой дельте — без обращения к модели");
+        llm.Calls.Should().HaveCount(2, "пустая дельта — без обращения к модели");
     }
 
     // ── c3c (доработка S6f, круг 2): применённый разбор снимает свой nothing_new ──
@@ -507,6 +507,156 @@ public class WikiChatIngestTests : IDisposable
         ChronicleFiles().Should().BeEmpty();
     }
 
+    // ── S7b0a: машинные коды отказа (вызывающий различает их по коду, не подстрокой) ──
+
+    [Fact]
+    public async Task КодыОтказа_Ступень0_Чат_И_НезаведённаяВики()
+    {
+        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1));
+        var sut = Sut(llm);
+
+        AddSession("s-task", taskExecution: true);
+        SetHistory("s-task", [new StoredUserMessage("что-то")]);
+        var exec = await sut.AnalyzeAsync(User, "s-task");
+        exec.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected);
+        exec.Code.Should().Be(WikiChatIngestService.CodeTaskExecution, "отказ ступени 0 различается кодом");
+
+        AddSession("s-skip", wikiMark: WikiMarks.Skip);
+        SetHistory("s-skip", [new StoredUserMessage("реплика есть, но чат помечен")]);
+        var skip = await sut.AnalyzeAsync(User, "s-skip");
+        skip.Code.Should().Be(WikiChatIngestService.CodeMarkedSkip);
+
+        AddSession("s-personal", projectId: null);
+        var personal = await sut.AnalyzeAsync(User, "s-personal");
+        personal.Code.Should().Be(WikiChatIngestService.CodePersonalSection);
+
+        // Чужой и несуществующий чат — один код на двоих: per-owner, без утечки существования.
+        var none = await sut.AnalyzeAsync(User, "no-such-chat");
+        none.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected);
+        none.Code.Should().Be(WikiChatIngestService.CodeNotFound);
+
+        AddSession("s-foreign");
+        _sessions.All.Single(s => s.Id == "s-foreign").OwnerId = "u2";
+        SetHistory("s-foreign", [new StoredUserMessage("чужой чат")]);
+        var foreign = await sut.AnalyzeAsync(User, "s-foreign");
+        foreign.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected);
+        foreign.Code.Should().Be(WikiChatIngestService.CodeNotFound,
+            "для вызывающего чужой и несуществующий неразличимы");
+
+        // Свой чат владельца с незаведённой вики — отказ в начале прогона.
+        AddSession("s-nowiki", projectId: "p1");
+        _sessions.All.Single(s => s.Id == "s-nowiki").OwnerId = "u3";
+        var nowiki = await sut.AnalyzeAsync("u3", "s-nowiki");
+        nowiki.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected);
+        nowiki.Code.Should().Be(WikiChatIngestService.CodeWikiNotInitialized);
+
+        // Отказ, не названный контрактом, остаётся без кода: service кодов не выдумывает
+        // (мутация «выдумать код у отказа без истории» — красное на этом же утверждении).
+        AddSession("s-nohistory", projectId: "p1");
+        var nohistory = await sut.AnalyzeAsync(User, "s-nohistory");
+        nohistory.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected);
+        nohistory.Reason.Should().Be("у чата нет истории");
+        nohistory.Code.Should().BeNull();
+
+        llm.Calls.Should().BeEmpty("все отказы — до обращения к модели");
+    }
+
+    // ── S7b0a: up_to_date — курсор на конце истории это состояние, а не отказ ──
+
+    [Fact]
+    public async Task UpToDate_РазобранныйДоКонца_НеОтказ_И_БезВызоваМодели()
+    {
+        AddSession();
+        SetShortHistory();
+
+        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1));
+        var sut = Sut(llm);
+
+        var first = await sut.AnalyzeAsync(User, ChatId);
+        first.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, first.Reason);
+
+        var again = await sut.AnalyzeAsync(User, ChatId);
+        again.Outcome.Should().Be(WikiChatIngestService.OutcomeUpToDate,
+            "курсор на конце истории: разбирать нечего — состояние, а не отказ");
+        again.Reason.Should().Contain("новых сообщений нет");
+        again.Code.Should().BeNull("up_to_date — не отказ, кода у него нет");
+        llm.Calls.Should().HaveCount(2, "повторная заявка по закрытому курсору модель не зовёт");
+    }
+
+    // ── S7b0a: IsRunning и последний исход (чтение analyze-status) ──
+
+    [Fact]
+    public async Task IsRunning_ТолькоВоВремяПрогона_И_ТолькоСвоегоВладельца()
+    {
+        AddSession();
+        SetShortHistory();
+
+        var gate = new TaskCompletionSource();
+        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1)) { GateA = gate };
+        var sut = Sut(llm);
+
+        var t = Task.Run(() => sut.AnalyzeAsync(User, ChatId));
+        SpinWait.SpinUntil(() => llm.Calls.Count > 0, 5000).Should().BeTrue("заявка реально в прогоне");
+        sut.IsRunning(User, ChatId).Should().BeTrue("во время прогона — true");
+        sut.IsRunning("u2", ChatId).Should().BeFalse("чужой владелец не видит чужой чат даже по признаку разбора");
+        sut.GetLast(User, ChatId).Should().BeNull("пока прогон идёт, исхода ещё нет");
+
+        gate.SetResult();
+        var res = await t;
+        res.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, res.Reason);
+
+        // Исход записан до снятия in-flight: «не идёт» означает «last свежий», а не «исход потерян».
+        sut.IsRunning(User, ChatId).Should().BeFalse("после окончания — не идёт");
+        var last = sut.GetLast(User, ChatId);
+        last.Should().NotBeNull("законченный разбор зафиксирован");
+        last!.Result.Outcome.Should().Be(res.Outcome);
+        last.Result.PackageIds.Should().Equal(res.PackageIds);
+        last.FinishedAt.Should().NotBe(default);
+        sut.GetLast("u2", ChatId).Should().BeNull("ключ last — с владельцем");
+    }
+
+    // Last перечитывается следующим исходом: статус показывает последний, а не первый.
+    [Fact]
+    public async Task Last_ПеречитываетсяСледующимИсходом()
+    {
+        AddSession();
+        SetShortHistory();
+
+        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1));
+        var sut = Sut(llm);
+
+        var first = await sut.AnalyzeAsync(User, ChatId);
+        first.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, first.Reason);
+        sut.GetLast(User, ChatId)!.Result.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied);
+
+        var again = await sut.AnalyzeAsync(User, ChatId);
+        again.Outcome.Should().Be(WikiChatIngestService.OutcomeUpToDate);
+        var last = sut.GetLast(User, ChatId)!;
+        last.Result.Outcome.Should().Be(WikiChatIngestService.OutcomeUpToDate,
+            "последний исход — последний по времени, applied первого разбора не остаётся");
+    }
+
+    // Потолок 200 записей: при переполнении снимается самый старый по времени окончания.
+    [Fact]
+    public async Task Last_Потолок200_СнимаетсяСтарейший()
+    {
+        var llm = new FakeLlm(); // ответов нет ни для какого отказа — и не нужно
+        var sut = Sut(llm);
+
+        // 201 свой чат без истории: каждый даёт быстрый отказ и запись last.
+        for (var i = 0; i < 201; i++)
+            AddSession($"s-{i:D3}", projectId: "p1");
+        for (var i = 0; i < 201; i++)
+        {
+            var res = await sut.AnalyzeAsync(User, $"s-{i:D3}");
+            res.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected);
+        }
+
+        sut.GetLast(User, "s-000").Should().BeNull("самый старый вытеснен");
+        sut.GetLast(User, "s-001").Should().NotBeNull("держатся newest 200");
+        sut.GetLast(User, "s-200").Should().NotBeNull("последний — точно есть");
+    }
+
     // ── гонка (хвост ревью S6b-3): две заявки одного чата — один разбор ──
 
     [Fact]
@@ -538,6 +688,33 @@ public class WikiChatIngestTests : IDisposable
         results[0].PackageIds.Should().Equal(results[1].PackageIds);
         WikiPackageStore.List(Root).Packages.Should().HaveCount(1, "двух пакетов на один чат нет");
         ChronicleFiles().Should().HaveCount(1, "хронику пишет один разбор, а не два");
+    }
+
+    // S7b0a: та же гонка строгче — вторая заявка получает ТУ ЖЕ задачу (присоединение по
+    // in-flight под lock), а не начинает свою. Мутация «убрать TryGetValue» в AnalyzeAsync:
+    // инстансы разные и прогон второй (A+B дважды) — тест красный.
+    [Fact]
+    public async Task Analyze_Parallel_RunsOnce()
+    {
+        AddSession();
+        SetShortHistory();
+
+        var gate = new TaskCompletionSource();
+        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1)) { GateA = gate };
+        var sut = Sut(llm);
+
+        var t1 = sut.AnalyzeAsync(User, ChatId);
+        SpinWait.SpinUntil(() => llm.Calls.Count > 0, 5000).Should().BeTrue("первая заявка в прогоне");
+        var t2 = sut.AnalyzeAsync(User, ChatId);
+        ReferenceEquals(t1, t2).Should().BeTrue("та же задача, не второй разбор");
+
+        gate.SetResult();
+        var r1 = await t1;
+        var r2 = await t2;
+        r1.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, r1.Reason);
+        r2.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, r2.Reason);
+        llm.Calls.Should().HaveCount(2, "один разбор: проходы модели A+B ровно по одному разу");
+        r1.PackageIds.Should().Equal(r2.PackageIds);
     }
 
     // ── отмена заявителя не гасит чужую заявку (хвост ревью S6b-3) ──
@@ -636,12 +813,14 @@ public class WikiChatIngestTests : IDisposable
     // ── подменённый ICheapTextRunner: проходы по промптам, gate и побочные эффекты ──
 
     // Контроллер списка отбора — на тех же подставных сессиях и конфиге: проверка показа
-    // (ShownZone) после применённого разбора — без своей копии цепки разбора.
+    // (ShownZone) после применённого разбора — без своей копии цепки разбора. Сервис
+    // разбора — отдельный свежий экземпляр (S7b0a: конструктор контроллера его требует):
+    // разбора он не начинал, его running/last пусты — список показывает состояние стора.
     private WikiChatsController Controller()
     {
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, User)], "test"));
-        return new WikiChatsController(_sessions, _config)
+        return new WikiChatsController(_sessions, Sut(new FakeLlm()), _config)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };

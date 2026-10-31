@@ -138,6 +138,35 @@ public class NotesGraphSnapshotTests : IDisposable
         snapshot.Nodes.Should().NotContain(n => n.Title == "Добавленная");
     }
 
+    // ─── M1/M2 ревью S3-1: коллекции снимка — копии, а не заморозка ────────────
+
+    // Снимок не обещает неизменяемых контейнеров (NotesGraphSnapshot.cs: «копии, а не
+    // заморозка»): под IReadOnlyList/IReadOnlyDictionary лежат массив и словарь. Проверяем
+    // то, что действительно должно держаться: правка коллекции выданного снимка не трогает
+    // модель и следующий снимок. Мутация «отдать model.Backlinks / model.Ghosts без копии»
+    // краснит этот тест.
+    [Fact]
+    public void ПравкаКоллекцийВыданногоСнимка_НеТрагаетсяСледующийСнимок()
+    {
+        SeedGraph();
+        var first = _sut.GetGraphSnapshot(User);
+        var targetId = first.Nodes.Single(n => n.Title == "Заметка два").Id;
+        var ghostId = first.Ghosts.Keys.First(k => first.Ghosts[k] == "Призрак альфа");
+
+        var backlinks = (NoteBacklinkDto[])first.Backlinks[targetId];
+        backlinks[0] = backlinks[0] with { SourceTitle = "Правка в копии" };
+        var ghosts = (Dictionary<string, string>)first.Ghosts;
+        ghosts[ghostId] = "Правка в копии";
+
+        var second = _sut.GetGraphSnapshot(User);
+
+        second.Backlinks[targetId].Select(b => b.SourceTitle).Should().NotContain("Правка в копии",
+            "обратные ссылки модели не могут быть поправлены читателем графа");
+        second.Ghosts[ghostId].Should().Be("Призрак альфа", "имя призрака — данные модели, не общий контейнер");
+        first.Backlinks[targetId].Should().Contain(b => b.SourceTitle == "Правка в копии",
+            "контейнер снимка изменяем: правка остаётся в этом снимке (М2 — «копии», а не заморозка)");
+    }
+
     // ─── изоляция per-owner ────────────────────────────────────────────────────
 
     [Fact]

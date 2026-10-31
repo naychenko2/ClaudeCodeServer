@@ -18,8 +18,11 @@ internal sealed record NotesGraphSnapshotEdge(string Source, string Target);
 
 // Снимок целиком: все узлы (реальные + призраки), все рёбра, призраки и обратные ссылки.
 // В отличие от публичного GetGraph ничего не фильтрует: линтеру нужен полный граф,
-// комментарии к документам — такие же узлы. Коллекции заморожены: словари и списки
-// скопированы на выдаче, элементы — неизменяемые record-ы (NoteBacklinkDto).
+// комментарии к документам — такие же узлы. Коллекции — копии на выдаче, а не заморозка:
+// словари и списки собраны заново (под интерфейсами IReadOnlyList/IReadOnlyDictionary лежат
+// List и Dictionary), элементы — неизменяемые record-ы (NoteBacklinkDto). Поэтому правка
+// самой коллекции выданного снимка остаётся правкой этого снимка: модель и следующий снимок
+// её не видят — это проверяет тест «ПравкаКоллекцийВыданногоСнимка» (S3-2, M1/M2 ревью S3-1).
 internal sealed record NotesGraphSnapshot(
     IReadOnlyList<NotesGraphSnapshotNode> Nodes,
     IReadOnlyList<NotesGraphSnapshotEdge> Edges,

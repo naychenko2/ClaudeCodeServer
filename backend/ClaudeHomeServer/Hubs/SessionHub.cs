@@ -67,7 +67,8 @@ public class SessionHub : Hub
     // Текст «Доступ запрещён» — контракт фронта для отказов без правила (подписка, чужой ресурс,
     // чат не виден). Отказ логируется: sub соединения и владелец ресурса сразу показывают
     // рассинхрон аккаунта (токен/query-строку не пишем никогда). Отказы правила «автор или
-    // владелец» и права Configure несут код — ниже, в DeniedTurnAuthor/DeniedOwnerSettings.
+    // владелец» (для тех, у кого есть право вести ход) и права Configure несут код — ниже,
+    // в DeniedTurnAuthor/DeniedOwnerSettings.
     private HubException DeniedSession(string sessionId, [CallerMemberName] string method = "")
     {
         var info = _sessions.GetById(sessionId);
@@ -90,13 +91,26 @@ public class SessionHub : Hub
     // → прежний «Доступ запрещён» без кода (существование чата не раскрываем, как 404 в REST).
     // Текст называет то правило, которое отработало: здесь — авторство идущего хода (у этого же
     // кода в REST есть и другой случай — авторские действия над чатом, там свой текст).
+    // Читатель (права RunTurn нет вовсе) — не «не автор хода»: он не может вести ход, и ему —
+    // прежний общий отказ без кода (п. 2 вердикта R-S2a-10c). not_chat_author несёт только тот,
+    // кто ход в этом чате вести может, но не является автором этого хода и не владелец.
     private HubException DeniedTurnAuthor(string sessionId, [CallerMemberName] string method = "") =>
-        DeniedByRight(sessionId, ChatAuthorGate.ErrorCode, "Только автор хода или владелец проекта", method);
+        ScopeOfSession(sessionId, ProjectRight.RunTurn) is null
+            ? DeniedSession(sessionId, method)
+            : DeniedByRight(sessionId, ChatAuthorGate.ErrorCode, "Только автор хода или владелец проекта", method);
 
     // Текст — тот же, что у REST-ответа этого же кода (OwnerSettingsGate.Denied): одному коду
     // соответствует одна человеческая строка, где бы она ни пришла.
     private HubException DeniedOwnerSettings(string sessionId, [CallerMemberName] string method = "") =>
         DeniedByRight(sessionId, OwnerSettingsGate.ErrorCode, "Настройки чата выбирает владелец", method);
+
+    // Клиент опознаёт код по маркеру «HubException: <код>:» — SignalR оборачивает текст:
+    // DefaultHubDispatcher и ErrorMessageHelper отдают клиенту
+    // «An unexpected error occurred invoking '<метод>' on the server. HubException: <код>: <текст>»,
+    // поэтому код доходит не началом строки, а после маркера. Разбор фронта (S2a-F7) ищет ровно
+    // это: подстроку «HubException: <код>:» или «<код>:» в начале строки (последнее — только для
+    // REST body.code, там обёртки нет).
+    public const string DenialMarker = "HubException: ";
 
     private HubException DeniedByRight(string sessionId, string code, string reason, string method)
     {
@@ -109,14 +123,18 @@ public class SessionHub : Hub
     private HubException LogDenied(string method, string resource, string resourceId, string? ownerId,
         string? code = null, string? reason = null)
     {
+        // Отказ без кода пишется с кодом=- : строка журнала читается одинаково во всех ветках
+        // («код=<что-то>» — отказ правила, «код=-» — общий), пустое значение делало её похожей
+        // на оборванную запись (п. 3 вердикта R-S2a-10c)
         _logger.LogWarning(
             "Хаб отказал в доступе: метод={Method} ресурс={Resource} id={ResourceId} sub={UserId} владелец={OwnerId} соединение={ConnectionId} код={Code}",
-            method, resource, resourceId, UserId, ownerId, Context.ConnectionId, code);
-        // SignalR доносит до клиента только строку error: @microsoft/signalr собирает из неё
+            method, resource, resourceId, UserId, ownerId, Context.ConnectionId, code ?? "-");
+        // SignalR доносит до клиента только строку error и притом оборачивает текст HubException
+        // в свою обёртку (см. DenialMarker): @microsoft/signalr собирает из этой строки
         // Error(invocationEvent.error) и errorData клиента не читает (в dist/esm/HubConnection.js нет
         // обращения к errorData), поэтому код — часть текста. Форма стабильная: «код: пояснение»,
-        // код равен REST body.code. Префикс выбран не для красоты: по нему отказ опознает фронт
-        // (participantGate.denialCodeOf), а прежнему «Доступ запрещён» остался путь прочих
+        // код равен REST body.code. По маркеру «HubException: <код>:» отказ опознаёт фронт
+        // (participantGate.denialCodeOf, S2a-F7), а прежнему «Доступ запрещён» остался путь прочих
         // отказов — он и дальше приходит без кода.
         return code is null
             ? new HubException("Доступ запрещён")

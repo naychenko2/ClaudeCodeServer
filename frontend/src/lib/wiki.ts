@@ -206,7 +206,9 @@ function toWikiError(e: unknown): WikiError | null {
   return new WikiError(status, code, message);
 }
 
-async function wikiHttp<T>(url: string, init?: RequestInit): Promise<T> {
+// init.live доходит до request() как есть: офлайн-кэш ВРЕДЕН отдельным чтениям —
+// loadWikiChatAnalyzeStatus (доработка H2), по той же причине, что статусы в api.ts.
+async function wikiHttp<T>(url: string, init?: RequestInit & { live?: boolean }): Promise<T> {
   try {
     return await request<T>(url, init);
   } catch (e) {
@@ -698,8 +700,11 @@ export async function analyzeWikiChat(sessionId: string): Promise<WikiChatAnalyz
 // Опрос после 202: идёт ли разбор и каков его последний исход. Чужой или несуществующий
 // чат — 404 not_found (per-owner, без утечки существования чужого).
 export async function loadWikiChatAnalyzeStatus(sessionId: string): Promise<WikiChatAnalyzeStatusDto> {
+  // live: true (доработка H2): значение этого ответа — не только содержимое, но и сам факт
+  // «сервер сейчас отвечает». Подставленный из IndexedDB прошлый running:false при обрыве
+  // сети превращает идущий разбор в завершившийся (тот же смысл, что у статусов в api.ts).
   const res = await wikiHttp<{ running?: unknown; last?: unknown }>(
-    `/api/wiki/chats/${encodeURIComponent(sessionId)}/analyze-status`);
+    `/api/wiki/chats/${encodeURIComponent(sessionId)}/analyze-status`, { live: true });
   const raw = res?.last as { finishedAt?: unknown } | null;
   const ok = analyzeOk(res?.last);
   return {
@@ -734,6 +739,43 @@ export async function ingestWikiNote(noteId: string, target?: string | null): Pr
     packageId: typeof res.packageId === 'string' ? res.packageId : null,
     reason: typeof res.reason === 'string' ? res.reason : null,
   };
+}
+
+// ─── Список отбора чатов (S6e/S6f; GET /api/wiki/chats, WikiChatsController.List) ───
+// Запись на каждый существующий свой чат: ПОКАЗАННАЯ зона (исход разбора nothing_new
+// приоритетен, иначе зона ступени 1 — ShownZone на бэке) с причиной и сигналами. Нужен
+// экрану отбора (S7b): кнопка «открыть хронику» — по chroniclePath, статус «идёт» —
+// по running. Порядок — бэковый (по зонам, внутри зоны — по баллу), фронт его не меняет.
+// Зоны сегодня: 'triage' | 'gray' | 'skipped' | 'nothing_new' | 'excluded'
+// (WikiChatScorer.cs:39-42, WikiChatIngestService.cs:100); тип — string: неизвестная зона
+// будущего шага — запись списка, а не отказ разбора (как на бэке, ZoneRank ведёт её в конец).
+// chroniclePath — формула бэка (WikiChatIngestService.ChroniclePath): для проектного дома
+// «Проекты/{id}/Хроники/{sessionId}.md», null для не-проектного дома (личный — с Ф2);
+// существования файла не обещает — хронику создаёт применённый разбор.
+// counts (числа по показанной зоне) — часть ответа бэка; эта функция их не отдаёт
+// (не заявлена задачей; при нужности экрана — отдельным пунктом).
+
+export interface WikiTriageSignalDto { name: string; weight: number }
+
+export interface WikiChatTriage {
+  sessionId: string;
+  name: string | null;
+  zone: string;
+  score: number | null;
+  signals: WikiTriageSignalDto[] | null;
+  reason: string | null;
+  nothingNewStreak: number;
+  triagedAt: string;
+  running: boolean;
+  cursor: number;
+  chroniclePath: string | null;
+}
+
+interface WikiChatsListDto { items: WikiChatTriage[]; counts: Record<string, number> }
+
+export async function loadWikiChats(): Promise<WikiChatTriage[]> {
+  const res = await wikiHttp<WikiChatsListDto>('/api/wiki/chats');
+  return Array.isArray(res?.items) ? res.items : [];
 }
 
 // ─── Снимки и подписки ───

@@ -6,7 +6,8 @@
 // ответ прежнего (доработка M2). Разбор по требованию (S7b-0): адрес/метод/тело запроса,
 // разбор 200/202 в типизированный результат и отказ по каждому коду; тексты новых кодов —
 // в тесте фичи (features/notes/wiki/__tests__/wikiLabels.test.ts): дизайн-линт запрещает
-// прямой импорт внутренних модулей фичи отсюда.
+// прямой импорт внутренних модулей фичи отсюда. Доработка S7b-0: analyze-status идёт live
+// (офлайн-кэш ему вреден), список отбора чатов — адрес и разбор полей записи списка.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../signalr', () => ({
@@ -38,6 +39,7 @@ import {
   ingestWikiNote,
   loadWikiCatalog,
   loadWikiChatAnalyzeStatus,
+  loadWikiChats,
   loadWikiPage,
   loadWikiTree,
   parseSectionKey,
@@ -391,7 +393,7 @@ describe('стор вики: операции', () => {
   });
 });
 
-// ─── Разбор по требованию: чат и заметка (S7b-0) ───
+// ─── Разбор по требованию: чат и заметка (S7b-0) и список отбора чатов (доработка H3) ───
 // Транспорт чистый: адрес/метод/тело запроса, разбор 200/202 в типизированный результат,
 // отказ по каждому коду контракта. Мутация «202 трактуется как 200» (убрать ветку running
 // в analyzeWikiChat) краснит тест «202 — отдельный результат»: тело {running:true} не
@@ -465,6 +467,15 @@ describe('вики: разбор чата по требованию (S7b-0)', ()
     });
   });
 
+  it('analyze-status уходит с live: true — офлайн-кэш ему ВРЕДЕН (доработка H2)', async () => {
+    // под обрывом сети кэшированный GET вернул бы прошлый running:false при живом разборе;
+    // live исключает запрос из кэша IndexedDB (offline.ts: useOfflineCache = isGet && !live)
+    serve({ [`GET ${STATUS_URL}`]: { running: false, last: null } });
+    await loadWikiChatAnalyzeStatus('s1');
+    expect(req.mock.calls[0][0]).toBe(STATUS_URL);
+    expect((req.mock.calls[0][1] as { live?: boolean } | undefined)?.live).toBe(true);
+  });
+
   it('analyze-status 404 not_found — WikiError с кодом', async () => {
     serve({ [`GET ${STATUS_URL}`]: httpError(404, { code: 'not_found', message: 'чат не существует' }) });
     const e = await rejection(() => loadWikiChatAnalyzeStatus('s1'));
@@ -503,5 +514,46 @@ describe('вики: «разобрать заметку» (S7b-0)', () => {
       expect(e.status).toBe(status);
       expect(e.code).toBe(code);
     }
+  });
+});
+
+describe('вики: список отбора чатов (доработка H3)', () => {
+  it('loadWikiChats идёт по адресу GET /api/wiki/chats и отдаёт записи как есть', async () => {
+    // запись списка — WikiChatTriageDto (WikiChatsController.cs:246-250): поле за полем
+    const ITEM_PROJECT = {
+      sessionId: 's1', name: 'Чат про релизы', zone: 'triage', score: 42,
+      signals: [{ name: 'mentions_plan', weight: 12 }], reason: 'активная работа',
+      nothingNewStreak: 0, triagedAt: '2026-10-31T12:00:00+00:00',
+      running: true, cursor: 7,
+      chroniclePath: `Проекты/${PROJECT_ID}/Хроники/s1.md`,
+    };
+    serve({ 'GET /api/wiki/chats': { items: [ITEM_PROJECT], counts: { triage: 1 } } });
+    const items = await loadWikiChats();
+    expect(req.mock.calls[0][0]).toBe('/api/wiki/chats');
+    // порядок бэка сохраняется как есть, поля доходят до вызывающего без потерь
+    expect(items).toEqual([ITEM_PROJECT]);
+  });
+
+  it('не-проектный дом: chroniclePath=null остаётся null, name/signals/score — тоже', async () => {
+    // бэк отдаёт null для личного дома (ChroniclePath: не-проектный дом) и для записей
+    // без балла — фронт не превращает null в пустую строку/ноль
+    serve({
+      'GET /api/wiki/chats': {
+        items: [{
+          sessionId: 's2', name: null, zone: 'nothing_new', score: null, signals: null,
+          reason: 'нечего добавить', nothingNewStreak: 3, triagedAt: '2026-10-31T12:01:00+00:00',
+          running: false, cursor: 4, chroniclePath: null,
+        }],
+        counts: { nothing_new: 1 },
+      },
+    });
+    const [item] = await loadWikiChats();
+    expect(item.chroniclePath).toBeNull();
+    expect(item.name).toBeNull();
+    expect(item.signals).toBeNull();
+    expect(item.score).toBeNull();
+    expect(item.running).toBe(false);
+    expect(item.cursor).toBe(4);
+    expect(item.nothingNewStreak).toBe(3);
   });
 });

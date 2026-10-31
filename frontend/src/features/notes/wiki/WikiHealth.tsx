@@ -267,9 +267,14 @@ export function WikiHealth({ selectedKey }: { selectedKey: string | null }) {
 
   const load = useCallback(() => {
     const mine = ++seq.current;
+    // Отчёт чужого раздела уходит сразу при смене ключа (доработка S5f, major):
+    // под шапкой «B» не должно быть находок A — ни при загрузке B, ни при её отказе.
+    // Прежний отчёт здесь остаётся только в run() («Проверить сейчас» своего раздела),
+    // где он свой и отказ прогона его не затирает.
+    setReport(null);
     setLoadError(null);
     setNoReport(false);
-    if (!selectedKey) { setReport(null); return; }
+    if (!selectedKey) return;
     getWikiHealth(selectedKey)
       .then(d => { if (seq.current === mine) setReport(parseHealth(d.content)); })
       .catch(e => {

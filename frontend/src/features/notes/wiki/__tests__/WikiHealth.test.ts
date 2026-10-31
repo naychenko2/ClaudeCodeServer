@@ -4,7 +4,9 @@
 // отчёта; «нет данных» при 404, а не пустой экран; отказ прогона — русским текстом по коду,
 // прежние находки при этом не затираются «Находки (0)»; кнопка блокируется на время запроса;
 // запоздалый ответ прежней загрузки не затирает свежий отчёт; предложение повышения — только
-// подсказка, кнопки «Повысить» нет (Ф2).
+// подсказка, кнопки «Повысить» нет (Ф2). Доработка S5f (major): при смене раздела A→B отчёт A
+// уходит сразу — ни строк A при загрузке B, ни строк A при отказе B; запоздалый ответ A после
+// переключения не возвращается (поколение запросов остаётся).
 //
 // Мокан только транспорт (offline.request) и signalr — тот же приём, что в WikiInbox.test.
 //
@@ -14,7 +16,8 @@
 //  (2) делить строку находки по « · » целиком (не снимать хвост с конца) →
 //      «сообщение с точками внутри себя» краснеет;
 //  (3) снять проверку seq в загрузке → «запоздалый ответ» краснеет;
-//  (4) снять disabled={busy} у кнопки → «блокировка на время запроса» краснеет.
+//  (4) снять disabled={busy} у кнопки → «блокировка на время запроса» краснеет;
+//  (5) не сбрасывать report в начале load (доработка S5f) → «при смене раздела A→B…» краснеет.
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -66,11 +69,22 @@ const HEALTH = [
 
 const roots: Root[] = [];
 
-function render(): Cont {
+function mountAt(key: string | null): { root: Root; container: Cont } {
   installFakeDom();
-  const { root, container } = mount(createElement(WikiHealth, { selectedKey: 'projects/p1' }));
+  const { root, container } = mount(createElement(WikiHealth, { selectedKey: key }));
   roots.push(root);
-  return container;
+  return { root, container };
+}
+
+function render(): Cont {
+  return mountAt('projects/p1').container;
+}
+
+// Смена раздела на том же экземпляре: wikiTabs рендерит подвкладку без key (wikiTabs.tsx:42),
+// значит при смене selectedKey React обновляет props, а состояние компонента остаётся —
+// ровно тот путь, на котором живёт дефект доработки S5f
+function selectSection(root: Root, key: string) {
+  act(() => { root.render(createElement(WikiHealth, { selectedKey: key })); });
 }
 
 async function settle(times = 10) {
@@ -269,6 +283,58 @@ describe('«Здоровье» раздела (S5f)', () => {
     await settle();
     expect(has(c, 'СВЕЖИЙ-ОТЧЕТ')).toBe(true);
     expect(has(c, 'ссылка ведёт в пустоту')).toBe(false);
+  });
+
+  it('смена раздела A→B: при загрузке B находок A нет; при отказе B (500) — находок A нет, ошибка показана (доработка S5f)', async () => {
+    let rejectB: (e: unknown) => void = () => {};
+    req.mockImplementation((url: string) => {
+      if (url.includes('/api/wiki/health/projects/p1')) return Promise.resolve({ section: 'projects/p1', content: HEALTH });
+      // ответ B намеренно висит: проверяем экран ДО него и ПОСЛЕ его отказа
+      if (url.includes('/api/wiki/health/projects/p2')) return new Promise<unknown>((_res, rej) => { rejectB = rej; });
+      return Promise.resolve(null);
+    });
+    const { root, container: c } = mountAt('projects/p1');
+    await settle();
+    // отчёт раздела A на экране — именно он обязан уйти при переключении
+    expect(rows(c)).toHaveLength(10);
+    expect(has(c, 'ссылка ведёт в пустоту')).toBe(true);
+    // переключаем раздел на том же экземпляре (так же, что делает wikiTabs): ответ B ещё в пути
+    selectSection(root, 'projects/p2');
+    await settle();
+    // пока ответа B нет — ни одной строки находок A: под шапкой B не должно быть чужого отчёта
+    expect(rows(c)).toHaveLength(0);
+    expect(has(c, 'ссылка ведёт в пустоту')).toBe(false);
+    expect(has(c, 'Не удалось выполнить действие')).toBe(false);
+    // B отвечает отказом 500: показана ошибка, а не прежнее молчание и не находки A
+    rejectB({ status: 500, body: undefined });
+    await settle();
+    expect(rows(c)).toHaveLength(0);
+    expect(has(c, 'ссылка ведёт в пустоту')).toBe(false);
+    expect(has(c, 'Не удалось выполнить действие')).toBe(true);
+  });
+
+  it('запоздалый ответ раздела A после переключения на B не появляется на экране (поколение остаётся)', async () => {
+    let resolveA: (v: unknown) => void = () => {};
+    req.mockImplementation((url: string) => {
+      if (url.includes('/api/wiki/health/projects/p1')) return new Promise(res => { resolveA = res; });
+      if (url.includes('/api/wiki/health/projects/p2')) {
+        return Promise.resolve({ section: 'projects/p2', content: HEALTH.replace('ссылка ведёт в пустоту', 'ОТВЕТ-B') });
+      }
+      return Promise.resolve(null);
+    });
+    const { root, container: c } = mountAt('projects/p1');
+    await settle();
+    // ответ A ещё висит — экрана с находками A не было
+    expect(rows(c)).toHaveLength(0);
+    selectSection(root, 'projects/p2');
+    await settle();
+    // ответ B пришёл — его отчёт на экране
+    expect(has(c, 'ОТВЕТ-B')).toBe(true);
+    // ответ A приходит ПОСЛЕ переключения: не должен вернуться под шапку B
+    resolveA({ section: 'projects/p1', content: HEALTH });
+    await settle();
+    expect(has(c, 'ссылка ведёт в пустоту')).toBe(false);
+    expect(has(c, 'ОТВЕТ-B')).toBe(true);
   });
 
   it('«## Отказ» прогона — названный отказ, а не «Находок нет»', async () => {

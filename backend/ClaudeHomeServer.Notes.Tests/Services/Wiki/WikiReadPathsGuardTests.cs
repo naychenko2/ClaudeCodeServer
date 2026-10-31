@@ -29,7 +29,8 @@ namespace ClaudeHomeServer.Tests.Services;
 ///
 /// Пути: recall (NotesRecallContributor), notes_semantic_search, notes_list, notes_search,
 /// notes_read (и ссылки на страницы вне набора в ОБЫЧНЫХ заметках), notes_backlinks,
-/// notes_graph, notes_resolve, notes_thread, notes_suggest_title, wiki_query, wiki_status.
+/// notes_graph, notes_resolve, notes_thread (корень-страница и обычный корень),
+/// notes_suggest_title, wiki_query, wiki_status.
 /// Полнота перебора — сама тест здесь (СторожПеречисляетВсеИнструментыТулсета, доработка
 /// S6g-2: прежний список заявлял полноту ложно): каждый Tool(...) тулсета либо покрыт,
 /// либо пишущий (запись в вики отбивается), либо пропуск с названной причиной. Пути, которых
@@ -547,7 +548,7 @@ public class WikiReadPathsGuardTests : IDisposable
         AssertNoForeignSections(res.Text);
     }
 
-    // ─── путь 11: notes_thread (доработка S6g-2, M2) ───
+    // ─── путь 11: notes_thread (доработка S6g-2, M2; доработка 2 — обычный корень) ───
 
     [Fact]
     public void НотесТредКорневойСтраницыВнеНабора_ТотЖеОтказЧтоУРед()
@@ -569,6 +570,36 @@ public class WikiReadPathsGuardTests : IDisposable
         var neighbor = Call(toolset, ctx, "notes_thread", Args(("id", PageId("Проекты/q1/Сущность-соседа.md"))));
         neighbor.IsError.Should().BeFalse(neighbor.Text);
         neighbor.Text.Should().Contain("Сущность-соседа");
+    }
+
+    [Fact]
+    public void НотесТредОбычногоКорня_СсылкиНаВикиВнеНабораБезИмениИTargetId()
+    {
+        // Ревью S6g-2, доработка 2, M3: обычный корень возвращался как есть — его Links
+        // содержали настоящие targetId/targetTitle скрытых страниц, а по targetId дальше
+        // достижимы notes_promote_task и memory_from_note. Мутация «не редактировать обычный
+        // корень» краснит этот тест: targetId/targetTitle вернулись бы настоящими.
+        SeedWiki();
+        var noteId = SeedOrdinaryWithWikiLinks();
+        var foreignId = PageId("Проекты/r/Сущность-чужой-сферы.md");
+        var personalId = PageId("Личное/Личный-факт.md");
+        var (toolset, ctx) = McpEnv("p1");
+
+        var res = Call(toolset, ctx, "notes_thread", Args(("id", noteId)));
+
+        res.IsError.Should().BeFalse(res.Text);
+        res.Text.Should().NotContain(foreignId, "id скрытой страницы не отдаётся: по ней достижима вся страница")
+            .And.NotContain(personalId);
+        var root = JsonNode.Parse(res.Text)!["root"]!.AsObject();
+        var links = root["links"]!.AsArray();
+        links.Should().HaveCount(2, "факт связи сохраняется: запись есть, закрыты её имя и id");
+        foreach (var l in links)
+        {
+            l!["targetId"]!.GetValue<string>().Should().BeEmpty();
+            l!["targetTitle"]!.GetValue<string>().Should().Be("[скрыто]");
+        }
+        // Текст самой заметки — текст пользователя, он не сужается (решение 6): остаётся как есть.
+        root["content"]!.GetValue<string>().Should().Contain("[[Проекты/r/Сущность-чужой-сферы]]");
     }
 
     // ─── путь 12: ссылки на страницы вне набора в обычных заметках (доработка S6g-2, M3) ───

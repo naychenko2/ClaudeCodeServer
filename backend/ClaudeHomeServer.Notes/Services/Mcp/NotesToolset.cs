@@ -342,12 +342,25 @@ public sealed class NotesToolset(
                     // вне набора — отказ тем же текстом, что и отсутствующая (решение 2). replies —
                     // комментарии, их правило про страниц не касается (решение 6).
                     var root = notesSvc.GetDetail(context.OwnerId, id);
-                    if (root is { } rootDetail && rootDetail.Source == NotesService.WikiKey)
+                    if (root is { } rootDetail)
                     {
                         var visible = VisibleSet(context.OwnerId, session, persona);
-                        if (WikiSections.Parse(rootDetail.Path) is not { } key || !visible.Contains(key))
-                            return Deny($"Комментарий {id} не найден.");
-                        root = RedactWikiDetail(notesSvc, context.OwnerId, rootDetail, visible);
+                        if (rootDetail.Source == NotesService.WikiKey)
+                        {
+                            if (WikiSections.Parse(rootDetail.Path) is not { } key || !visible.Contains(key))
+                                return Deny($"Комментарий {id} не найден.");
+                            root = RedactWikiDetail(notesSvc, context.OwnerId, rootDetail, visible);
+                        }
+                        else
+                        {
+                            // Ревью S6g-2, доработка 2, M3: обычный корень возвращался как есть —
+                            // его Links/Backlinks содержали настоящие targetId/targetTitle скрытых
+                            // страниц (та же утечка, что у notes_read:160-168: по targetId достижимы
+                            // notes_promote_task и memory_from_note). Ссылки — тот же
+                            // RedactHiddenWikiLinks, что в notes_read и notes_resolve; текст самой
+                            // заметки — текст пользователя, его не трогаем (решение 6).
+                            root = RedactHiddenWikiLinks(rootDetail, IndexByIds(notesSvc, context.OwnerId), visible);
+                        }
                     }
                     return Json(new
                     {

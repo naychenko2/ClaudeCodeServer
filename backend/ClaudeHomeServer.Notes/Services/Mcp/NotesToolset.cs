@@ -157,12 +157,28 @@ public sealed class NotesToolset(
                         return Deny($"Заметка {id} не найдена.");
                     detail = RedactWikiDetail(notesSvc, context.OwnerId, detail, visible);
                 }
+                else
+                {
+                    // Ревью S6g-2, M3: сама обычная заметка не сужается (решение 6), но её Links/Backlinks —
+                    // системная проекция страниц-целей: targetId/targetTitle чужого раздела отдавались
+                    // как есть, а по targetId доставалась вся скрытая страница (M1/M2). Ссылки на страницы
+                    // вне набора заменяются [скрыто] тем же HiddenWikiRef; текст самой заметки — текст
+                    // пользователя, его не трогаем.
+                    detail = RedactHiddenWikiLinks(detail, IndexByIds(notesSvc, context.OwnerId), visible);
+                }
                 return Json(detail);
             }
 
             case "notes_suggest_title":
             {
                 var id = StringArg(arguments, "id");
+                // Ревью S6g-2, M3: SuggestTitleAsync отправляет Truncate(Content, 2000) в промпт модели —
+                // текст страницы вики вне набора уходить туда не должен: отказ ДО вызова сервиса,
+                // неотличимый от несуществующей (ADR-036, решение 2). Признак — по индексу суммариев,
+                // содержимое страницы ради отказа не читается.
+                if (HiddenWikiRef(id, IndexByIds(notesSvc, context.OwnerId),
+                        VisibleSet(context.OwnerId, session, persona)))
+                    return Deny($"Заметка {id} не найдена.");
                 try
                 {
                     var title = await aiSvc.SuggestTitleAsync(context.OwnerId, id, ct);
@@ -322,9 +338,20 @@ public sealed class NotesToolset(
                 var id = StringArg(arguments, "id");
                 try
                 {
+                    // Ревью S6g-2, M2: корень треда — та же проверка, что у notes_read: страница вики
+                    // вне набора — отказ тем же текстом, что и отсутствующая (решение 2). replies —
+                    // комментарии, их правило про страниц не касается (решение 6).
+                    var root = notesSvc.GetDetail(context.OwnerId, id);
+                    if (root is { } rootDetail && rootDetail.Source == NotesService.WikiKey)
+                    {
+                        var visible = VisibleSet(context.OwnerId, session, persona);
+                        if (WikiSections.Parse(rootDetail.Path) is not { } key || !visible.Contains(key))
+                            return Deny($"Комментарий {id} не найден.");
+                        root = RedactWikiDetail(notesSvc, context.OwnerId, rootDetail, visible);
+                    }
                     return Json(new
                     {
-                        root = notesSvc.GetDetail(context.OwnerId, id),
+                        root,
                         replies = notesSvc.GetReplies(context.OwnerId, id),
                     });
                 }
@@ -388,9 +415,31 @@ public sealed class NotesToolset(
             {
                 var name = StringArg(arguments, "name");
                 if (name.Length == 0) return Deny("Не задано имя");
-                return notesSvc.ResolveByName(context.OwnerId, name, OptionalArg(arguments, "anchor")) is { } r
-                    ? Json(new { note = r.Note, fragment = r.Fragment })
-                    : Deny($"Заметка «{name}» не найдена.");
+                if (notesSvc.ResolveByName(context.OwnerId, name, OptionalArg(arguments, "anchor")) is not { } r)
+                    return Deny($"Заметка «{name}» не найдена.");
+                // Ревью S6g-2, M1: пул резолва глобален (NotesService.Resolve) — страница вне набора
+                // достижима и по префиксу раздела, и по голому имени. Для источника wiki — та же
+                // проверка visible, что у notes_read: раздел вне набора неотличим от несуществующего.
+                var visible = VisibleSet(context.OwnerId, session, persona);
+                if (r.Note.Source == NotesService.WikiKey)
+                {
+                    if (WikiSections.Parse(r.Note.Path) is not { } key || !visible.Contains(key))
+                        return Deny($"Заметка «{name}» не найдена.");
+                    // Видимая страница отдаётся как в notes_read (RedactWikiDetail); фрагмент — часть
+                    // текста страницы, тот же RedactLinks.
+                    return Json(new
+                    {
+                        note = RedactWikiDetail(notesSvc, context.OwnerId, r.Note, visible),
+                        fragment = r.Fragment is { } f ? WikiVisibility.RedactLinks(f, visible) : null,
+                    });
+                }
+                // Обычная заметка не сужается (решение 6), но её структурные ссылки на страницы —
+                // тот же HiddenWikiRef, что в notes_read (M3); фрагмент — текст самой заметки, не трогаем.
+                return Json(new
+                {
+                    note = RedactHiddenWikiLinks(r.Note, IndexByIds(notesSvc, context.OwnerId), visible),
+                    fragment = r.Fragment,
+                });
             }
 
             case "notes_promote_task":
@@ -604,12 +653,28 @@ public sealed class NotesToolset(
     private NoteDetail RedactWikiDetail(NotesService notesSvc, string ownerId, NoteDetail d, HashSet<string> visible)
     {
         var index = IndexByIds(notesSvc, ownerId);
+        return RedactHiddenWikiLinks(
+            d with
+            {
+                Path = DisplayPathFor(ownerId, d.Path) ?? d.Path,
+                Content = WikiVisibility.RedactLinks(d.Content, visible),
+            },
+            index, visible);
+    }
+
+    /// <summary>Структурные ссылки записи на страницы вики (ревью S6g-2, M3): цель вне набора —
+    /// [скрыто] без имени и targetId, факт связи остаётся. Применяется и к видимой странице
+    /// (RedactWikiDetail), и к обычной заметке: сама обычная заметка не сужается (решение 6),
+    /// но её Links/Backlinks — системная проекция страниц-целей, и по targetId скрытой страницы
+    /// доставалась вся её страница (пути M1/M2). Текст самой записи здесь не меняется: он текст
+    /// пользователя или своего раздела — не текст чужой страницы.</summary>
+    private static NoteDetail RedactHiddenWikiLinks(
+        NoteDetail d, Dictionary<string, NoteSummary> index, HashSet<string> visible)
+    {
         var hiddenLink = new NoteLinkDto("", HiddenMark, false);
         var hiddenBacklink = new NoteBacklinkDto("", HiddenMark, "", "", "");
         return d with
         {
-            Path = DisplayPathFor(ownerId, d.Path) ?? d.Path,
-            Content = WikiVisibility.RedactLinks(d.Content, visible),
             Links = d.Links.Select(l => HiddenWikiRef(l.TargetId, index, visible) ? hiddenLink : l).ToList(),
             Backlinks = d.Backlinks.Select(b => HiddenWikiRef(b.SourceId, index, visible) ? hiddenBacklink : b).ToList(),
             UnlinkedMentions = d.UnlinkedMentions

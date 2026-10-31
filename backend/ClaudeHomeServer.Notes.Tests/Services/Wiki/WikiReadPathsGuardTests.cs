@@ -28,8 +28,12 @@ namespace ClaudeHomeServer.Tests.Services;
 /// различие в выдаче — от набора, а не от текста.
 ///
 /// Пути: recall (NotesRecallContributor), notes_semantic_search, notes_list, notes_search,
-/// notes_read, notes_backlinks, notes_graph, wiki_query, wiki_status. Пути, которых нет
-/// в коде, — в итоге задачи, не здесь.
+/// notes_read (и ссылки на страницы вне набора в ОБЫЧНЫХ заметках), notes_backlinks,
+/// notes_graph, notes_resolve, notes_thread, notes_suggest_title, wiki_query, wiki_status.
+/// Полнота перебора — сама тест здесь (СторожПеречисляетВсеИнструментыТулсета, доработка
+/// S6g-2: прежний список заявлял полноту ложно): каждый Tool(...) тулсета либо покрыт,
+/// либо пишущий (запись в вики отбивается), либо пропуск с названной причиной. Пути, которых
+/// нет в коде, — в итоге задачи, не здесь.
 /// </summary>
 public class WikiReadPathsGuardTests : IDisposable
 {
@@ -493,6 +497,201 @@ public class WikiReadPathsGuardTests : IDisposable
         });
         r.Ok.Should().BeTrue(r.Reason ?? "пакет обязан быть записан");
         return id;
+    }
+
+    // ─── путь 10: notes_resolve (доработка S6g-2, M1) ───
+
+    [Fact]
+    public void НотесРезолвСтраницыВнеНабора_ОтказПоПрефиксуИГоломуИмени()
+    {
+        // Пул резолва глобален (NotesService.Resolve): страница вне набора достижима и по
+        // префиксу раздела, и по голому имени — оба пути дают отказ, неотличимый от
+        // несуществующей. Мутация «убрать фильтр visible в notes_resolve» красит этот тест:
+        // чужая и личная страницы вернулись бы с полным содержимым (пробы ревью S6g-2).
+        SeedWiki();
+        var (toolset, ctx) = McpEnv("p1");
+
+        var byPrefix = Call(toolset, ctx, "notes_resolve", Args(("name", "Проекты/r/Сущность-чужой-сферы")));
+        byPrefix.IsError.Should().BeTrue(byPrefix.Text);
+        byPrefix.Text.Should().NotContain(ForeignText, "текст страницы вне набора не отдаётся")
+            .And.NotContain(PageId("Проекты/r/Сущность-чужой-сферы.md"), "и её id");
+
+        var byBareName = Call(toolset, ctx, "notes_resolve", Args(("name", "Сущность-чужой-сферы")));
+        byBareName.IsError.Should().BeTrue(byBareName.Text);
+        byBareName.Text.Should().NotContain(ForeignText);
+
+        var personal = Call(toolset, ctx, "notes_resolve", Args(("name", "Личный-факт")));
+        personal.IsError.Should().BeTrue(personal.Text);
+        personal.Text.Should().NotContain(PersonalText, "личный раздел в проектном ходе не виден никогда (ADR-036 §2)");
+
+        // Сосед по сфере — резолвится и читается (решение по сферам: соседи видны).
+        var neighbor = Call(toolset, ctx, "notes_resolve", Args(("name", "Сущность-соседа")));
+        neighbor.IsError.Should().BeFalse(neighbor.Text);
+        neighbor.Text.Should().Contain("Сущность-соседа");
+    }
+
+    [Fact]
+    public void НотесРезолвВидимойСтраницы_СсылкиВнеНабораСкрытыБезИмениИИд()
+    {
+        // Видимая страница отдаётся как в notes_read: RedactWikiDetail, и id скрытых целей
+        // не остаётся в выдаче (по нему доставалась вся чужая страница).
+        SeedWiki();
+        var (toolset, ctx) = McpEnv("p1");
+
+        var res = Call(toolset, ctx, "notes_resolve", Args(("name", "Сущность-сборки")));
+
+        res.IsError.Should().BeFalse(res.Text);
+        res.Text.Should().Contain("[скрыто]");
+        res.Text.Should().NotContain(PageId("Проекты/r/Сущность-чужой-сферы.md"))
+            .And.NotContain(PageId("Личное/Личный-факт.md"));
+        AssertNoForeignSections(res.Text);
+    }
+
+    // ─── путь 11: notes_thread (доработка S6g-2, M2) ───
+
+    [Fact]
+    public void НотесТредКорневойСтраницыВнеНабора_ТотЖеОтказЧтоУРед()
+    {
+        // Мутация «убрать фильтр в notes_thread» красит этот тест: root вернулся бы с полным
+        // содержимым чужой страницы (GetReplies для страницы — пустой список, не ошибка).
+        SeedWiki();
+        var (toolset, ctx) = McpEnv("p1");
+
+        var foreign = Call(toolset, ctx, "notes_thread", Args(("id", PageId("Проекты/r/Сущность-чужой-сферы.md"))));
+        foreign.IsError.Should().BeTrue(foreign.Text);
+        foreign.Text.Should().NotContain(ForeignText, "текст страницы вне набора не отдаётся").And.NotContain(ForeignTitle);
+
+        var personal = Call(toolset, ctx, "notes_thread", Args(("id", PageId("Личное/Личный-факт.md"))));
+        personal.IsError.Should().BeTrue(personal.Text);
+        personal.Text.Should().NotContain(PersonalText);
+
+        // Корень-страница видимого соседа — читается (replies — пустой список).
+        var neighbor = Call(toolset, ctx, "notes_thread", Args(("id", PageId("Проекты/q1/Сущность-соседа.md"))));
+        neighbor.IsError.Should().BeFalse(neighbor.Text);
+        neighbor.Text.Should().Contain("Сущность-соседа");
+    }
+
+    // ─── путь 12: ссылки на страницы вне набора в обычных заметках (доработка S6g-2, M3) ───
+
+    /// <summary>Обычная заметка своего проекта со ссылками на чужой проектный и личный разделы
+    /// (префиксные — так их пишет код и человек между разделами, ADR-035, решение 1).</summary>
+    private string SeedOrdinaryWithWikiLinks() =>
+        _notes.Create(User, new CreateNoteRequest(
+            Title: "Своя-обычная-со-ссылками",
+            Content: "Работа с [[Проекты/r/Сущность-чужой-сферы]] и [[Личное/Личный-факт]]: сборка на linux.",
+            Source: "p1")).Id;
+
+    [Fact]
+    public void ОбычнаяЗаметкаРед_СсылкиНаВикиВнеНабораБезИмениИTargetId()
+    {
+        // Сама обычная заметка не сужается (решение 6), но её Links — системная проекция
+        // страниц-целей: targetTitle/targetId чужого раздела давали имя и id, по которому
+        // доставалась вся скрытая страница (M1/M2). Мутация «не редактировать ссылки в обычной
+        // заметке» красит этот тест: targetId/targetTitle вернулись бы настоящими.
+        SeedWiki();
+        var noteId = SeedOrdinaryWithWikiLinks();
+        var foreignId = PageId("Проекты/r/Сущность-чужой-сферы.md");
+        var personalId = PageId("Личное/Личный-факт.md");
+        var (toolset, ctx) = McpEnv("p1");
+
+        var res = Call(toolset, ctx, "notes_read", Args(("id", noteId)));
+
+        res.IsError.Should().BeFalse(res.Text);
+        res.Text.Should().NotContain(foreignId, "id скрытой страницы не отдаётся: по нему доставалась вся страница")
+            .And.NotContain(personalId);
+        var links = JsonNode.Parse(res.Text)!["links"]!.AsArray();
+        links.Should().HaveCount(2, "факт связи сохраняется: запись есть, закрыты её имя и id");
+        foreach (var l in links)
+        {
+            l!["targetId"]!.GetValue<string>().Should().BeEmpty();
+            l!["targetTitle"]!.GetValue<string>().Should().Be("[скрыто]");
+        }
+        // Текст самой заметки — текст пользователя, он не сужается (решение 6): остаётся как есть.
+        JsonNode.Parse(res.Text)!["content"]!.GetValue<string>().Should().Contain("[[Проекты/r/Сущность-чужой-сферы]]");
+    }
+
+    [Fact]
+    public void НотесСёрчЛистОбычнойЗаметки_ЗаметкаВиднаНоИдСкрытыхСтраницВВыдачеНет()
+    {
+        // Список/поиск обычной заметки не сужаются (решение 6); их выдача — brief без ссылок,
+        // и id скрытых страниц в ней появиться не может ни одним путём.
+        SeedWiki();
+        var noteId = SeedOrdinaryWithWikiLinks();
+        var (toolset, ctx) = McpEnv("p1");
+
+        var search = Call(toolset, ctx, "notes_search", Args(("query", "linux")));
+        search.IsError.Should().BeFalse(search.Text);
+        JsonNode.Parse(search.Text)!.AsArray().Should().Contain(
+            e => e!["id"]!.GetValue<string>() == noteId, "обычная заметка не сужается");
+        AssertNoForeignSections(search.Text);
+
+        var list = Call(toolset, ctx, "notes_list", Args());
+        list.IsError.Should().BeFalse(list.Text);
+        AssertNoForeignSections(list.Text);
+    }
+
+    // ─── путь 13: notes_suggest_title (доработка S6g-2, M3) ───
+
+    [Fact]
+    public void НотесСаджестТитлВикиВнеНабора_ОтказДоВызоваСервиса()
+    {
+        // SuggestTitleAsync отправляет Truncate(Content, 2000) в промпт LLM. NoopCheapRunner
+        // бросает именованную ошибку: если бы код дошёл до сервиса, отказ назвал бы её.
+        SeedWiki();
+        var (toolset, ctx) = McpEnv("p1");
+
+        var foreign = Call(toolset, ctx, "notes_suggest_title", Args(("id", PageId("Проекты/r/Сущность-чужой-сферы.md"))));
+        foreign.IsError.Should().BeTrue(foreign.Text);
+        foreign.Text.Should().Contain("не найдена", "неотличима от несуществующей (ADR-036, решение 2)");
+        foreign.Text.Should().NotContain("ИИ-действие", "сервис не вызван: текст чужой страницы не ушёл в промпт модели")
+            .And.NotContain(ForeignTitle);
+
+        // Видимая страница — доходит до сервиса: фильтр не ломает обычный путь.
+        var neighbor = Call(toolset, ctx, "notes_suggest_title", Args(("id", PageId("Проекты/q1/Сущность-соседа.md"))));
+        neighbor.IsError.Should().BeTrue(neighbor.Text);
+        neighbor.Text.Should().Contain("ИИ-действие", "до сервиса дошло: текст видимой страницы может идти в модель");
+    }
+
+    // ─── путь 14: полнота перебора (доработка S6g-2: «сторож заявляет полноту ложно») ───
+
+    /// <summary>Инструменты, не читающие страниц вики для модели, — с названной причиной.</summary>
+    private static readonly Dictionary<string, string> SkippedWithReason = new(StringComparer.Ordinal)
+    {
+        ["notes_daily"] = "дневниковая заметка личного vault — обычная заметка, не страница вики; не сужается (решение 6)",
+        ["notes_annotations"] = "документ — файл проекта или личного vault; пути вики (data/wiki/) не область документа: страница недостижима",
+        ["notes_promote_task"] = "id скрытой страницы недостижим из покрытых путей; текст чекбокса становится текстом созданной задачи, а не чтением заметки",
+        ["wiki_ingest"] = "заявка в очередь: текст источника уходит в захват и Хранителю, в выдачу модели не возвращается",
+        ["wiki_add_fact"] = "то же: выдержка и факт идут в заявку, модель получает только исход",
+    };
+
+    /// <summary>Пишущие: запись в вики отбивается WikiReadOnlyException (EnsureNotWiki),
+    /// содержимое страниц не отдают.</summary>
+    private static readonly string[] WritingTools =
+    [
+        "notes_create", "notes_update", "notes_move", "notes_delete",
+        "notes_annotate", "notes_reply", "notes_set_status",
+    ];
+
+    /// <summary>Читающие — каждый покрыт тестом этого файла.</summary>
+    private static readonly string[] CoveredReadTools =
+    [
+        "notes_list", "notes_search", "notes_read", "notes_semantic_search",
+        "notes_backlinks", "notes_graph", "notes_resolve", "notes_thread",
+        "notes_suggest_title", "wiki_query", "wiki_status",
+    ];
+
+    [Fact]
+    public void СторожПеречисляетВсеИнструментыТулсета()
+    {
+        var all = NotesToolset.CoreTools.Concat(NotesToolset.WikiTools).Concat(NotesToolset.AnnotationTools)
+            .Select(t => t.Name).ToList();
+
+        all.Should().OnlyContain(n => CoveredReadTools.Contains(n, StringComparer.Ordinal)
+            || WritingTools.Contains(n, StringComparer.Ordinal)
+            || SkippedWithReason.ContainsKey(n),
+            "новый инструмент без записи в списке — красный тест (Ревью S6g-2: прежнее перечисление заявляло полноту ложно)");
+        all.Should().HaveCount(CoveredReadTools.Length + WritingTools.Length + SkippedWithReason.Count,
+            "списки не должны устаревать: убранный инструмент — тоже находка");
     }
 
     // ─── обвязка швов ───

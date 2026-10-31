@@ -3509,6 +3509,9 @@ export interface SpendCardRow {
   // Ценовой класс модели строки (free|cheap|expensive). Заполнен для разрезов
   // «модель» и «провайдер», у прочих — null: класса у них нет
   tier?: string | null;
+  // Разрез «пользователь» у владельца общего проекта: сколько приватных чатов участника
+  // вошло в его расход. Бэк пока не отдаёт (оживёт после S2d-4): нет поля — нет подстроки
+  privateChats?: number | null;
 }
 
 export interface SpendOverviewResponse {

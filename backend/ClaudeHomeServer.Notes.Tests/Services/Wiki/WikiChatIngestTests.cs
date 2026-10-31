@@ -33,7 +33,9 @@ namespace ClaudeHomeServer.Tests.Services;
 // человека / WikiMark=skip) → отказ с причиной, 0 вызовов модели. Плюс уроки ревью
 // S6b-3: гонка двух заявок одного чата — один разбор (настоящий параллельный, через
 // TaskCompletionSource); отмена ct заявителя не гасит чужую заявку; сбой посреди окон
-// не двигает курсор и не оставляет половины хроники.
+// не двигает курсор и не оставляет половины хроники. Плюс доработка S4c (ревью d857da6c):
+// этот путь не решает «само / Входящие» сам — он получает настройки владельца через
+// тот же WikiIngestService: выключенный класс оставляет пакет в «Входящих».
 //
 // Утверждение модели — дословная цитата реплики (text == quote): в финальном пакете
 // op.Text — подтверждённая цитата (WikiIngestService.cs:335 VerifiedQuote), дедup меры 2
@@ -598,6 +600,37 @@ public class WikiChatIngestTests : IDisposable
         llm.CountOf("A").Should().Be(2, "первое окно разобрано, второе — отказано");
         WikiChatTriageStore.Get(Root).Entries.Should().BeEmpty("сбой посреди окон курсор не двигает");
         ChronicleFiles().Should().BeEmpty("хроника не начинается половиной разбора");
+    }
+
+    // ── доработка S4c (ревью d857da6c): чат-разбор — та же проводка настроек владельца ──
+    // Отдельного решения «само / Входящие» у этого пути нет: он зовёт WikiIngestService
+    // (WikiChatIngestService.cs:238), а тот читает settings.json владельца (мера 7).
+    // Тест подтверждает: выключенный класс доходит и до чат-разбора — пакет ждёт человека.
+
+    [Fact]
+    public async Task S4c_ЧатРазбор_КлассВыключен_ПакетЖдётЧеловека_СтраницаНеТронута()
+    {
+        AddSession();
+        SetShortHistory();
+        WikiSettingsStore.Mutate(_dir, User, s => s with
+        {
+            Classes = [new WikiSettingsStore.ClassState(
+                WikiPackage.ClassKey("session", WikiPackage.OpAppend), true,
+                "класс выключен человеком", DateTimeOffset.UtcNow, null)],
+        });
+
+        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1));
+        var res = await Sut(llm).AnalyzeAsync(User, ChatId);
+
+        res.Outcome.Should().Be(WikiChatIngestService.OutcomeAwaitingHuman, res.Reason);
+        var pkg = WikiPackageStore.List(Root).Packages.Single();
+        pkg.Status.Should().Be(WikiPackage.StatusProposed);
+        pkg.Operations.Should().NotBeEmpty();
+        pkg.Operations.Should().OnlyContain(o => o.Decision == WikiPackage.DecisionInbox);
+        foreach (var op in pkg.Operations)
+            op.Reason.Should().Contain("выключен", "Входящие приходят с объяснением");
+        File.ReadAllText(PathOf(PagePath)).Should().NotContain(Claim1,
+            "выключенный класс на страницу не пишется: решает человек");
     }
 
     // ── подменённый ICheapTextRunner: проходы по промптам, gate и побочные эффекты ──

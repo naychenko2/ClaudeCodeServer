@@ -271,8 +271,15 @@ public sealed class WikiIngestService
             // раздела (уже лежит на страницах): план от него не зависит, модель его не чинит —
             // лишний вызов за него не платят (ревью S6b-3, M2).
             var source = new WikiPlanValidator.Source(request.Origin, cardTitle, request.SourceText);
+            // Настройки владельца доходят до политики в бою (мера 7, ADR-035 §12г): без этого
+            // «выключить класс» и общий выключатель «Применять без ревью» в бою ничего не меняют.
+            // Снимок один на заявку. Отсутствующий или битый settings.json — умолчания (их даёт
+            // стор), и чтение настроек разбор не роняет: стор не бросает исключений наружу.
+            var settings = WikiSettingsStore.Read(root).Settings;
             var policy = new WikiApplyPolicy.ApplyContext
             {
+                AutoApplyEnabled = settings.AutoApplyEnabled,
+                DisabledClasses = settings.DisabledClasses,
                 // «личное в Общем» — решение о видимости принимает человек (ADR-036, решение 3).
                 SourceHomeIsPersonal = request.Home == WikiSections.Personal,
             };

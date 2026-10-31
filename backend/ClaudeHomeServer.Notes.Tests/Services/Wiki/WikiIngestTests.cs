@@ -28,7 +28,9 @@ namespace ClaudeHomeServer.Tests.Services;
 // Плюс доработка ревью S6b-3: M1 — пересказ в text и дословная цитата в quote (нетривиальная
 // фикстура): в пакет и на страницу идёт подтверждённая цитата, сноска — она; M2 — нарушения
 // состояния раздела (битая ссылка на чужой странице) не зовут ремонт и не решают исход,
-// они называются в причине.
+// они называются в причине. Плюс доработка S4c (ревью d857da6c): настройки владельца (общий
+// выключатель, выключенные классы) читаются в бою и решают «само / Входящие»; битый
+// settings.json — умолчания, не падение разбора.
 public class WikiIngestTests : IDisposable
 {
     private const string User = "u1";
@@ -365,6 +367,80 @@ public class WikiIngestTests : IDisposable
         res.Reason.Should().Contain("проход A");
         llm.Calls.Should().HaveCount(1, "после отказа прохода A дальше не идут");
         PackagesOnDisk().Should().BeEmpty();
+    }
+
+    // ── доработка S4c (ревью d857da6c): настройки владельца доходят до боевой политики ──
+    // Мера 7 (ADR-035 §12г): «выключенный класс идёт во Входящие», «общий выключатель выключен
+    // — всё идёт во Входящие». Боевой ApplyContext (WikiIngestService.cs) знал только дом
+    // источника: settings.json в бою не читался, и обе настройки ничего не меняли.
+
+    [Fact]
+    public async Task S4c_КлассВыключенВНастройках_ОперацияВОходящих_СПричиной()
+    {
+        var pageHashBefore = Sha256Of(Path.Combine(Root, "pages/" + PagePath));
+        // Та же запись, что делает ручка настроек: реальный settings.json на диске.
+        WikiSettingsStore.Mutate(_dir, User, s => s with
+        {
+            Classes = [new WikiSettingsStore.ClassState(
+                WikiPackage.ClassKey("session", WikiPackage.OpAppend), true,
+                "класс выключен человеком", DateTimeOffset.UtcNow, null)],
+        });
+
+        var llm = new FakeLlm(claims: ClaimsJson, plan: PlanJson);
+        var res = await Sut(llm).IngestAsync(User, Req());
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeAwaitingHuman, res.Reason);
+        llm.Calls.Should().HaveCount(2, "выключенный класс — не вина плана: ремонта модели нет");
+
+        var read = WikiPackageStore.TryRead(Root, res.PackageId!);
+        read.State.Should().Be(WikiPackageFileState.Valid);
+        read.Package!.Status.Should().Be(WikiPackage.StatusProposed, "пакет со спорными операциями не принимается сам");
+        read.Package!.Operations.Should().NotBeEmpty();
+        read.Package!.Operations.Should().OnlyContain(o => o.Decision == WikiPackage.DecisionInbox);
+        read.Package!.Operations.Should().Contain(o => o.Class == "session×append", "класс операции — пары источника × операции");
+        foreach (var op in read.Package!.Operations)
+            op.Reason.Should().Contain("выключен", "Входящие приходят с объяснением");
+
+        Sha256Of(Path.Combine(Root, "pages/" + PagePath)).Should().Be(pageHashBefore,
+            "на диске страниц не тронуто: выключенный класс применяет только человек");
+    }
+
+    [Fact]
+    public async Task S4c_ОбщийВыключательВыключен_ВесьПакетВОходящих()
+    {
+        var pageHashBefore = Sha256Of(Path.Combine(Root, "pages/" + PagePath));
+        WikiSettingsStore.Mutate(_dir, User, s => s with { AutoApplyEnabled = false });
+
+        var llm = new FakeLlm(claims: ClaimsJson, plan: PlanJson);
+        var res = await Sut(llm).IngestAsync(User, Req());
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeAwaitingHuman, res.Reason);
+        var read = WikiPackageStore.TryRead(Root, res.PackageId!);
+        read.Package!.Status.Should().Be(WikiPackage.StatusProposed);
+        read.Package!.Operations.Should().NotBeEmpty();
+        read.Package!.Operations.Should().OnlyContain(o => o.Decision == WikiPackage.DecisionInbox,
+            "общий выключатель выключен — каждая правка идёт через «Входящие»");
+        foreach (var op in read.Package!.Operations)
+            op.Reason.Should().Contain("Применять без ревью", "причина — общий выключатель");
+
+        Sha256Of(Path.Combine(Root, "pages/" + PagePath)).Should().Be(pageHashBefore);
+    }
+
+    [Fact]
+    public async Task S4c_БитыйSettingsJson_Умолчания_АвтоРаботает()
+    {
+        // Файл настроек испорчен руками: стор даёт умолчания («Применять без ревью» включён,
+        // выключенных классов нет) и не бросает наружу — разбор не роняется на битом файле.
+        var settingsPath = Path.Combine(Root, "keeper", "settings.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
+        File.WriteAllText(settingsPath, "{ это не json");
+
+        var llm = new FakeLlm(claims: ClaimsJson, plan: PlanJson);
+        var res = await Sut(llm).IngestAsync(User, Req());
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeApplied, res.Reason);
+        var page = File.ReadAllText(Path.Combine(Root, "pages/" + PagePath));
+        page.Should().Contain(ClaimQuote, "при умолчаниях неспорное применяется само, как раньше");
     }
 
     // ── подменённый ICheapTextRunner: классифицирует вызов по промпту, помечает всё ──

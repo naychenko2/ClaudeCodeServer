@@ -35,8 +35,10 @@ public sealed class NoteTaskSyncService(
     }
 
     // Промоут чекбокса в настоящую задачу. Повторный промоут той же строки — no-op
-    // (возвращает существующую задачу).
-    public async Task<NoteTaskRef> PromoteAsync(string userId, string noteId, int line)
+    // (возвращает существующую задачу). createdByHuman — обязательный явный признак пути:
+    // true только у ручного промута человеком (NotesController), агентный вызов и любая
+    // серверная синхронизация передают false ⇒ автора у задачи нет.
+    public async Task<NoteTaskRef> PromoteAsync(string userId, string noteId, int line, bool createdByHuman)
     {
         var note = notes.GetDetail(userId, noteId)
             ?? throw new KeyNotFoundException("Заметка не найдена");
@@ -59,7 +61,8 @@ public sealed class NoteTaskSyncService(
             SourceNoteLine: line,
             Recurrence: parsed.Recurrence is null
                 ? null
-                : new NoteTaskRecurrence(parsed.Recurrence.Type.ToString().ToLowerInvariant())));
+                : new NoteTaskRecurrence(parsed.Recurrence.Type.ToString().ToLowerInvariant()),
+            CreatedByHuman: createdByHuman));
 
         await notifier.BroadcastTaskChangedAsync(userId, "created", created.Id, created.ProjectId);
         log.LogInformation("Чекбокс заметки {NoteId}:{Line} промоутнут в задачу {TaskId}", noteId, line, created.Id);

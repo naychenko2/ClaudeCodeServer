@@ -341,7 +341,7 @@ public sealed class NotesToolset(
                                 + string.Join(", ", matches.Select(m => m.Line)) + ")");
                         line = matches[0].Line;
                     }
-                    return Json(await noteTasksSvc.PromoteAsync(context.OwnerId, id, line.Value));
+                    return Json(await noteTasksSvc.PromoteAsync(context.OwnerId, id, line.Value, createdByHuman: false));
                 }
                 catch (KeyNotFoundException) { return Deny($"Заметка {id} не найдена."); }
                 catch (UnauthorizedAccessException) { return Deny("Нет доступа к заметке."); }

@@ -41,7 +41,11 @@ public record NoteTaskCreateRequest(
     NoteTaskStatus Status,
     string SourceNoteId,
     int SourceNoteLine,
-    NoteTaskRecurrence? Recurrence);
+    NoteTaskRecurrence? Recurrence,
+    // Автор — человек (S2b-1, доработка 2): явный признак пути вызова, не вывод из косвенных
+    // признаков. Ставит только человеческий путь (ручной промут из UI); агентные и серверные
+    // синхронизации заметок оставляют false ⇒ у задачи CreatedByUserId = null (fail-closed).
+    bool CreatedByHuman = false);
 
 // Параметры апдейта задачи. Status — для тоггла чекбокса (см. ToggleAsync:153-155);
 // DueDate — для срока 📅 (SetDueAsync), null = не менять, "" = очистить. Поле Kind

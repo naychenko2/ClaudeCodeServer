@@ -321,7 +321,7 @@ public class NotesController : ControllerBase
     [HttpPost("{id}/tasks/promote")]
     public async Task<ActionResult> PromoteTask(string id, [FromBody] PromoteTaskRequest req)
     {
-        try { return Ok(await _noteTasks.PromoteAsync(UserId, id, req.Line)); }
+        try { return Ok(await _noteTasks.PromoteAsync(UserId, id, req.Line, createdByHuman: true)); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return Forbid(); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }

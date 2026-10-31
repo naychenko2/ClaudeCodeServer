@@ -97,6 +97,24 @@ public class NotesTaskSyncIntegrationTests : IClassFixture<TestWebApplicationFac
         all.EnumerateArray().Should().Contain(t => t.GetProperty("id").GetString() == taskId);
     }
 
+    // Автор (S2b-1, доработка 2): ручной промут человеком из UI — человеческий путь, автор —
+    // тот, кто промоутил. Мутация: убрать createdByHuman: true в NotesController.PromoteTask
+    // (или не передать признак в TaskBridge) — createdByUserId станет null, тест краснеет.
+    [Fact]
+    public async Task Promote_ЧеловекИзUI_АвторомСтановитсяПромоутер()
+    {
+        var id = await CreateNoteAsync("Дела автор", "- [ ] Полить цветы");
+        var line = (await NoteTasksAsync(id))[0].GetProperty("line").GetInt32();
+        var me = await _client.GetFromJsonAsync<JsonElement>("/api/auth/me");
+
+        var taskId = await PromoteAsync(id, line);
+
+        // null в ответе не сериализуется — отсутствие свойства и есть «автора нет»
+        var task = await GetTaskAsync(taskId);
+        (task.TryGetProperty("createdByUserId", out var author) ? author.GetString() : null)
+            .Should().Be(me.GetProperty("userId").GetString());
+    }
+
     [Fact]
     public async Task Promote_Повторно_ВозвращаетТуЖеЗадачу_БезДубля()
     {

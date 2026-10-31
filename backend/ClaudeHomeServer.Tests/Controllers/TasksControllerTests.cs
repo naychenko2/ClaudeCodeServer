@@ -55,6 +55,33 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         return await response.Content.ReadFromJsonAsync<JsonElement>();
     }
 
+    // Автор (S2b-1, доработка 2): оба человеческих пути TasksController (проектная и личная
+    // ветки Create) ставят CreatedByHuman = true сами — признак не едет из тела запроса.
+    // Мутация: убрать `req with { CreatedByHuman = true }` в строке 98 или 329 — createdByUserId
+    // станет null, соответствующий тест краснеет.
+    [Fact]
+    public async Task Create_ПроектнаяВетка_АвторЧеловек()
+    {
+        var projectId = CreateProject("author-project");
+        var me = await _client.GetFromJsonAsync<JsonElement>("/api/auth/me");
+
+        var task = await CreateProjectTaskAsync(projectId, new { title = "Проектная с автором" });
+
+        (task.TryGetProperty("createdByUserId", out var author) ? author.GetString() : null)
+            .Should().Be(me.GetProperty("userId").GetString());
+    }
+
+    [Fact]
+    public async Task Create_ЛичнаяВетка_АвторЧеловек()
+    {
+        var me = await _client.GetFromJsonAsync<JsonElement>("/api/auth/me");
+
+        var task = await CreateTaskAsync(new { title = "Личная с автором" });
+
+        (task.TryGetProperty("createdByUserId", out var author) ? author.GetString() : null)
+            .Should().Be(me.GetProperty("userId").GetString());
+    }
+
     // ─── Персона-исполнитель ─────────────────────────────────────────────────
 
     private async Task<string> CreatePersonaAsync(HttpClient client, object body)

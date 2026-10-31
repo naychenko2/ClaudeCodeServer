@@ -48,6 +48,12 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     private readonly ConcurrentDictionary<string, (Model Model, DateTime At)> _cache = new();
     private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(2);
 
+    // Счётчик построений модели (S3-1): точка — сам Build, считается любое настоящее
+    // построение (из кэш-пути GetModel и мимо кэша, через BuildFresh). Нужен тесту
+    // «два снимка при живом кэше → одно построение». internal: виден только тестам.
+    private long _modelBuilds;
+    internal long ModelBuildCount => System.Threading.Volatile.Read(ref _modelBuilds);
+
     public NotesService(IProjectManager projects, IConfiguration config, ILogger<NotesService> logger,
         IProjectEventLogService? events = null, Composition.IFeatureFlagGate? flags = null)
     {
@@ -406,6 +412,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
 
     private Model Build(string userId)
     {
+        System.Threading.Interlocked.Increment(ref _modelBuilds);
         var now = DateTime.UtcNow;
         var notes = Scan(userId);
         // Истёкшие заметки исключаем из модели — они не видны в списке/графе,
@@ -769,6 +776,34 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
 
         var edges = edgesRaw.Select(e => new NoteGraphEdge(e.Item1, e.Item2)).ToList();
         return new NoteGraph(nodes, edges);
+    }
+
+    // Внутренний снимок графа (S3-1): берёт УЖЕ построенную модель из кэша — тот же
+    // GetModel, что у списка/детали/графа; при живом кэше граф заново не строится.
+    // Данные заморожены копированием: мутация графа после выдачи (запись → Invalidate →
+    // перестроение) выданный снимок не меняет; элементы — неизменяемые record-ы.
+    // Потокобезопасно: читается запись кэша, новых общих состояний не заводим.
+    // В отличие от GetGraph ничего не фильтрует (полный граф, включая комментарии):
+    // это шов линтера (S3-2), публичного контракта у снимка нет — для UI остаёт GetGraph.
+    internal NotesGraphSnapshot GetGraphSnapshot(string ownerId)
+    {
+        var model = GetModel(ownerId);
+
+        var nodes = new List<NotesGraphSnapshotNode>(model.Notes.Count + model.Ghosts.Count);
+        foreach (var n in model.Notes)
+            nodes.Add(new NotesGraphSnapshotNode(n.Id, n.Title, n.SourceKey, n.SourceLabel, false));
+        foreach (var (gid, name) in model.Ghosts)
+            nodes.Add(new NotesGraphSnapshotNode(gid, name, "", "", true));
+
+        var edges = new List<NotesGraphSnapshotEdge>(model.Edges.Count);
+        foreach (var (s, t) in model.Edges)
+            edges.Add(new NotesGraphSnapshotEdge(s, t));
+
+        var backlinks = new Dictionary<string, IReadOnlyList<NoteBacklinkDto>>(model.Backlinks.Count);
+        foreach (var (id, bl) in model.Backlinks)
+            backlinks[id] = bl.ToArray(); // NoteBacklinkDto — record: копия элементов не нужна
+
+        return new NotesGraphSnapshot(nodes, edges, new Dictionary<string, string>(model.Ghosts), backlinks);
     }
 
     // Папка внутри источника: сегменты чистятся по одному, traversal исключён.

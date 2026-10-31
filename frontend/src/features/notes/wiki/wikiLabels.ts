@@ -36,6 +36,15 @@ export function wikiErrorText(e: WikiError): string {
     // Журнал (S7c-2): origin-фильтр вне закрытого перечня (400); источник отката не найден или чужой (404)
     case 'wiki_origin_key': return 'Источник не из списка';
     case 'wiki_retract_source': return 'Такого источника в твоей вики нет';
+    // Разбор по требованию (S7b-0): чат (analyze / analyze-status) и заметка (ingest/note).
+    // Точную причину бэкенд несёт в message отказа; здесь — понятный текст по коду.
+    case 'not_found': return 'Ничего не нашлось';
+    case 'task_execution': return 'Чаты исполнения задач не разбираются: их итоги уже источники';
+    case 'marked_skip': return 'Чат помечен «не разбирать» — сними пометку';
+    case 'personal_section': return 'Личный раздел — следующее (Ф2)';
+    case 'wiki_not_initialized': return 'Твоя вики ещё не заведена';
+    case 'packages_limit': return 'Открытых пакетов слишком много: разберите «Входящие», потом повторяй заявку';
+    case 'wiki_note_id': return 'Нужен id заметки';
   }
   if (e.status === 401 || e.status === 403) return 'Нет доступа';
   if (e.status === 404) return 'Не найдено';

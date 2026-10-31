@@ -147,7 +147,17 @@ export type WikiErrorCode =
   // Отказы прогона линта (S3-3): функция выключена / прогон владельца уже идёт.
   // Читаются в «Здоровье» (S5f)
   | 'wiki_llm_wiki_off'
-  | 'wiki_lint_running';
+  | 'wiki_lint_running'
+  // Разбор по требованию (S7b-0): analyze / analyze-status (WikiChatsController) и ingest/note
+  // (WikiController). Коды здесь ГОЛЫЕ, без префикса 'wiki_' — как константы бэка
+  // (WikiChatIngestService.cs:93-97, WikiController.cs:81-84): контракт по ним, не по нашей косметике.
+  | 'not_found'
+  | 'task_execution'
+  | 'marked_skip'
+  | 'personal_section'
+  | 'wiki_not_initialized'
+  | 'packages_limit'
+  | 'wiki_note_id';
 
 const WIKI_ERROR_CODES: ReadonlySet<string> = new Set<string>([
   'wiki_foreign', 'wiki_section_key', 'wiki_page_key', 'wiki_project_missing', 'wiki_section_off',
@@ -161,6 +171,8 @@ const WIKI_ERROR_CODES: ReadonlySet<string> = new Set<string>([
   'wiki_retract_shape', 'wiki_retract_off', 'wiki_retract_internal', 'wiki_retract_source',
   'wiki_origin_key',
   'wiki_llm_wiki_off', 'wiki_lint_running',
+  'not_found', 'task_execution', 'marked_skip', 'personal_section', 'wiki_not_initialized',
+  'packages_limit', 'wiki_note_id',
 ]);
 
 export class WikiError extends Error {
@@ -614,6 +626,114 @@ export async function getWikiHealth(sectionKey: string): Promise<WikiHealthDto> 
 // состояния экрана (текст отказа, «повторить») — за вызывающим.
 export async function runWikiLint(): Promise<WikiLintRunDto> {
   return wikiHttp<WikiLintRunDto>('/api/wiki/lint', { method: 'POST' });
+}
+
+// ─── Разбор по требованию: чат и заметка (S7b-0; контракт S7b0a/S7b0b) ───
+// Эти функции — чистый транспорт: состояния стора не трогают, ничего не перечитывают —
+// опрос, гард поколений и состояния UI за вызывающим (S7b). Бэкенд: analyze ждёт исход
+// сам (≤10 с, WikiChatsController.cs:172); не дождался — 202 {running:true}, разбор
+// продолжается на стороне сервиса.
+
+// Исходы разбора чата (WikiChatIngestService.cs:81-85). 'rejected' на 200 — отказ без
+// машинного кода: кодовые отказы уходят 404/409 и в этот результат не попадают
+// (MapAnalysis, WikiChatsController.cs:195-204). Неизвестный исход — будущее значение
+// контракта: проходит как есть, ветку default держит вызывающий — придумывать значение
+// здесь нечем.
+export type WikiChatAnalyzeOutcome = 'applied' | 'awaiting_human' | 'nothing_new' | 'up_to_date' | 'rejected';
+
+export interface WikiChatAnalyzeOk {
+  outcome: WikiChatAnalyzeOutcome;
+  reason: string | null;
+  packageIds: string[];
+}
+
+// 202 {running:true}: заявка не отменена, её исход — через loadWikiChatAnalyzeStatus.
+// Отдельный результат, а не Ok с пустыми полями.
+export interface WikiChatAnalyzeRunning { running: true }
+
+export type WikiChatAnalyzeResult = WikiChatAnalyzeOk | WikiChatAnalyzeRunning;
+
+// Последний исход разбора чата (analyze-status → GetLast, WikiChatsController.cs:206-233).
+// finishedAt бэкенд ставит всегда; null — только оборонительный разбор сломанного поля.
+export interface WikiAnalyzeLastDto {
+  outcome: WikiChatAnalyzeOutcome;
+  reason: string | null;
+  packageIds: string[];
+  finishedAt: string | null;
+}
+
+export interface WikiChatAnalyzeStatusDto { running: boolean; last: WikiAnalyzeLastDto | null }
+
+// Заявленная форма результата должна дойти до вызывающего как объявлена: null вместо
+// отсутствующего поля, [] вместо undefined. null — когда тело не подходит под форму 200
+// вовсе (нет строкового outcome).
+function analyzeOk(body: unknown): WikiChatAnalyzeOk | null {
+  const b = body as { outcome?: unknown; reason?: unknown; packageIds?: unknown } | null;
+  if (typeof b?.outcome !== 'string') return null;
+  return {
+    outcome: b.outcome as WikiChatAnalyzeOutcome,
+    reason: typeof b.reason === 'string' ? b.reason : null,
+    packageIds: Array.isArray(b.packageIds)
+      ? b.packageIds.filter((p): p is string => typeof p === 'string')
+      : [],
+  };
+}
+
+// «Разобрать этот чат сейчас» (S7b0a): единственный запрос, доходящий до модели. 200 и 202 —
+// для request() оба успешные тела (offline.ts:1649), различаем по форме: у 200 всегда есть
+// строковый outcome, у 202 — только running:true. Отказы: 404 not_found, 409 task_execution |
+// marked_skip | personal_section | wiki_not_initialized — WikiError с кодом.
+export async function analyzeWikiChat(sessionId: string): Promise<WikiChatAnalyzeResult> {
+  const body = await wikiHttp<unknown>(
+    `/api/wiki/chats/${encodeURIComponent(sessionId)}/analyze`, { method: 'POST' });
+  if ((body as { running?: unknown } | null)?.running === true) return { running: true };
+  const ok = analyzeOk(body);
+  // Ни одна из двух форм 200: это не HTTP-отказ (status 0 — не реальный статус, wikiErrorText
+  // даст общий «Не удалось выполнить действие») — ответ не подошёл под контракт, вызывающий
+  // видит ошибку, а не тихий пустой результат.
+  if (!ok) throw new WikiError(0, null, 'неожиданный ответ разбора чата');
+  return ok;
+}
+
+// Опрос после 202: идёт ли разбор и каков его последний исход. Чужой или несуществующий
+// чат — 404 not_found (per-owner, без утечки существования чужого).
+export async function loadWikiChatAnalyzeStatus(sessionId: string): Promise<WikiChatAnalyzeStatusDto> {
+  const res = await wikiHttp<{ running?: unknown; last?: unknown }>(
+    `/api/wiki/chats/${encodeURIComponent(sessionId)}/analyze-status`);
+  const raw = res?.last as { finishedAt?: unknown } | null;
+  const ok = analyzeOk(res?.last);
+  return {
+    running: res?.running === true,
+    last: ok ? { ...ok, finishedAt: typeof raw?.finishedAt === 'string' ? raw.finishedAt : null } : null,
+  };
+}
+
+// Исходы заявки заметки (WikiIngestService.cs:64-67): их решает очередь разбора, ручка
+// только ставит заявку (WikiController.cs:283-314). packageId — id созданного пакета
+// ('applied'/'awaiting_human', WikiIngestService.cs:358,371); когда пакета нет — null.
+export type WikiNoteIngestOutcome = 'applied' | 'awaiting_human' | 'nothing_new' | 'rejected';
+
+export interface WikiNoteIngestDto {
+  outcome: WikiNoteIngestOutcome;
+  packageId: string | null;
+  reason: string | null;
+}
+
+// «Разобрать заметку в базу» (S7b0b): target — явный «common» для источника вне проекта
+// (ADR-036, решение 3), его проверяет захват. Отказы: 400 wiki_note_id (нет id),
+// 409 wiki_not_initialized | packages_limit (до захвата), 404 not_found (заметка не стала
+// источником: чужая, нет такой).
+export async function ingestWikiNote(noteId: string, target?: string | null): Promise<WikiNoteIngestDto> {
+  const res = await wikiHttp<{ outcome?: unknown; packageId?: unknown; reason?: unknown }>(
+    '/api/wiki/ingest/note',
+    { method: 'POST', body: JSON.stringify({ noteId, target: target ?? null }) },
+  );
+  if (typeof res?.outcome !== 'string') throw new WikiError(0, null, 'неожиданный ответ заявки заметки');
+  return {
+    outcome: res.outcome as WikiNoteIngestOutcome,
+    packageId: typeof res.packageId === 'string' ? res.packageId : null,
+    reason: typeof res.reason === 'string' ? res.reason : null,
+  };
 }
 
 // ─── Снимки и подписки ───

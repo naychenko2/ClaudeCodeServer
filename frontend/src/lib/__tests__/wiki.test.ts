@@ -3,7 +3,10 @@
 // контракта различаются по статусу (401/404 без кода) и по коду (409 {code,message});
 // мутации идут по адресам контракта и перечитывают открытое; последний запрос побеждает
 // на всех трёх слотах (доработка M1); смена владельца очищает снимок и не принимает
-// ответ прежнего (доработка M2).
+// ответ прежнего (доработка M2). Разбор по требованию (S7b-0): адрес/метод/тело запроса,
+// разбор 200/202 в типизированный результат и отказ по каждому коду; тексты новых кодов —
+// в тесте фичи (features/notes/wiki/__tests__/wikiLabels.test.ts): дизайн-линт запрещает
+// прямой импорт внутренних модулей фичи отсюда.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../signalr', () => ({
@@ -24,6 +27,7 @@ import {
   WikiError,
   __test,
   adoptWikiPage,
+  analyzeWikiChat,
   deleteWikiSection,
   ensureWikiLoaded,
   getWikiCatalogSnapshot,
@@ -31,7 +35,9 @@ import {
   getWikiTreeSnapshot,
   groupSectionsByKind,
   initializeWiki,
+  ingestWikiNote,
   loadWikiCatalog,
+  loadWikiChatAnalyzeStatus,
   loadWikiPage,
   loadWikiTree,
   parseSectionKey,
@@ -382,5 +388,120 @@ describe('стор вики: операции', () => {
     );
     expect(del).toBeTruthy();
     expect(getWikiCatalogSnapshot(ORPHAN_KEY)).toBeUndefined();
+  });
+});
+
+// ─── Разбор по требованию: чат и заметка (S7b-0) ───
+// Транспорт чистый: адрес/метод/тело запроса, разбор 200/202 в типизированный результат,
+// отказ по каждому коду контракта. Мутация «202 трактуется как 200» (убрать ветку running
+// в analyzeWikiChat) краснит тест «202 — отдельный результат»: тело {running:true} не
+// подходит под форму 200, функция бросает вместо возврата результата.
+
+const ANALYZE_URL = '/api/wiki/chats/s1/analyze';
+const STATUS_URL = '/api/wiki/chats/s1/analyze-status';
+
+describe('вики: разбор чата по требованию (S7b-0)', () => {
+  it('analyze идёт по адресу и методу контракта; 200 отдаёт результат как есть', async () => {
+    serve({ [`POST ${ANALYZE_URL}`]: { outcome: 'awaiting_human', reason: 'есть спорные', packageIds: ['p1', 'p2'] } });
+    const res = await analyzeWikiChat('s1');
+    expect(res).toEqual({ outcome: 'awaiting_human', reason: 'есть спорные', packageIds: ['p1', 'p2'] });
+    expect(req.mock.calls[0][0]).toBe(ANALYZE_URL);
+    expect((req.mock.calls[0][1] as RequestInit).method).toBe('POST');
+  });
+
+  it('202 {running:true} — отдельный результат, не Ok-результат', async () => {
+    serve({ [`POST ${ANALYZE_URL}`]: { running: true } });
+    const res = await analyzeWikiChat('s1');
+    expect(res).toEqual({ running: true });
+    // полей Ok в результате нет: вызывающий выбирает ветку по их наличию
+    expect('outcome' in res).toBe(false);
+    expect('packageIds' in res).toBe(false);
+  });
+
+  it('200 с null или пропущенными полями нормализуется в заявленную форму', async () => {
+    serve({
+      [`POST ${ANALYZE_URL}`]: { outcome: 'applied', reason: null, packageIds: [] },
+      'POST /api/wiki/chats/s2/analyze': { outcome: 'up_to_date' },
+      'POST /api/wiki/chats/s3/analyze': { outcome: 'nothing_new', reason: 'нечего добавить', packageIds: null },
+      'POST /api/wiki/chats/s4/analyze': { outcome: 'rejected' },
+    });
+    expect(await analyzeWikiChat('s1')).toEqual({ outcome: 'applied', reason: null, packageIds: [] });
+    expect(await analyzeWikiChat('s2')).toEqual({ outcome: 'up_to_date', reason: null, packageIds: [] });
+    expect(await analyzeWikiChat('s3')).toEqual({ outcome: 'nothing_new', reason: 'нечего добавить', packageIds: [] });
+    expect(await analyzeWikiChat('s4')).toEqual({ outcome: 'rejected', reason: null, packageIds: [] });
+  });
+
+  it('отказы analyze: 404 not_found и 409 по каждому коду — WikiError с кодом', async () => {
+    const cases: Array<[number, string]> = [
+      [404, 'not_found'],
+      [409, 'task_execution'],
+      [409, 'marked_skip'],
+      [409, 'personal_section'],
+      [409, 'wiki_not_initialized'],
+    ];
+    for (const [status, code] of cases) {
+      serve({ [`POST ${ANALYZE_URL}`]: httpError(status, { code, message: 'отказ по контракту' }) });
+      const e = await rejection(() => analyzeWikiChat('s1'));
+      expect(e).toBeInstanceOf(WikiError);
+      expect(e.status).toBe(status);
+      expect(e.code).toBe(code);
+      expect(e.message).toBe('отказ по контракту');
+    }
+  });
+
+  it('analyze-status: running и last как есть; last=null остаётся null', async () => {
+    serve({ [`GET ${STATUS_URL}`]: { running: true, last: null } });
+    expect(await loadWikiChatAnalyzeStatus('s1')).toEqual({ running: true, last: null });
+
+    serve({
+      [`GET ${STATUS_URL}`]: {
+        running: false,
+        last: { outcome: 'nothing_new', reason: 'чат разобран до конца', packageIds: [], finishedAt: '2026-10-31T12:00:00+00:00' },
+      },
+    });
+    expect(await loadWikiChatAnalyzeStatus('s1')).toEqual({
+      running: false,
+      last: { outcome: 'nothing_new', reason: 'чат разобран до конца', packageIds: [], finishedAt: '2026-10-31T12:00:00+00:00' },
+    });
+  });
+
+  it('analyze-status 404 not_found — WikiError с кодом', async () => {
+    serve({ [`GET ${STATUS_URL}`]: httpError(404, { code: 'not_found', message: 'чат не существует' }) });
+    const e = await rejection(() => loadWikiChatAnalyzeStatus('s1'));
+    expect(e).toBeInstanceOf(WikiError);
+    expect(e.status).toBe(404);
+    expect(e.code).toBe('not_found');
+  });
+});
+
+describe('вики: «разобрать заметку» (S7b-0)', () => {
+  it('ingestWikiNote идёт по адресу, методу и телу; 200 отдаёт результат как есть', async () => {
+    serve({ 'POST /api/wiki/ingest/note': { outcome: 'awaiting_human', packageId: 'p1', reason: 'есть спорные' } });
+    const res = await ingestWikiNote('n1');
+    expect(res).toEqual({ outcome: 'awaiting_human', packageId: 'p1', reason: 'есть спорные' });
+    expect(req.mock.calls[0][0]).toBe('/api/wiki/ingest/note');
+    expect((req.mock.calls[0][1] as RequestInit).method).toBe('POST');
+    // без адресата — явный null: модель бэка {NoteId, Target?} (WikiController.cs:575)
+    expect(sentBody(0)).toEqual({ noteId: 'n1', target: null });
+
+    serve({ 'POST /api/wiki/ingest/note': { outcome: 'applied', packageId: 'p2', reason: null } });
+    expect(await ingestWikiNote('n1', 'common')).toEqual({ outcome: 'applied', packageId: 'p2', reason: null });
+    expect(sentBody(1)).toEqual({ noteId: 'n1', target: 'common' });
+  });
+
+  it('отказы ingest: 400 wiki_note_id, 409 по каждому коду, 404 not_found', async () => {
+    const cases: Array<[number, string]> = [
+      [400, 'wiki_note_id'],
+      [409, 'wiki_not_initialized'],
+      [409, 'packages_limit'],
+      [404, 'not_found'],
+    ];
+    for (const [status, code] of cases) {
+      serve({ 'POST /api/wiki/ingest/note': httpError(status, { code, message: 'отказ по контракту' }) });
+      const e = await rejection(() => ingestWikiNote('n1'));
+      expect(e).toBeInstanceOf(WikiError);
+      expect(e.status).toBe(status);
+      expect(e.code).toBe(code);
+    }
   });
 });

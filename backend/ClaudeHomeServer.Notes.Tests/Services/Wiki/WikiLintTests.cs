@@ -125,17 +125,20 @@ public class WikiLintTests
         f.Run().Findings.Should().BeEmpty();
     }
 
+    // Источник страницы — сноска `[^sN]: [[Карточка]]` её текста (ADR-035 §3), а не поле шапки
+    // sources: его не заполняет ни один писатель страниц, и по нему каждая страница знаний
+    // была бы без источников.
     [Fact]
-    public void СтраницаЗнанийБезИсточников_РовноОднаНаходка()
+    public void СтраницаБезСнокНаКарточку_РовноОднаНаходка_ТриСноски_НеНаходка()
     {
         var f = new Fixture()
-            .Page(P1, "Порядок работ", sources: [])
-            .Page(P2, "Состав команды", sources: ["Источники/Источник-работ"])
+            .Page(P1, "Состав команды", footnotes: ["Карточка-одна", "Карточка-две", "Карточка-три"])
+            .Page(P2, "Порядок работ", footnotes: [])
             .Link(P1, P2)
             .Link(P2, P1);
 
         var finding = Single(f.Run(), WikiFindingKind.MissingSources);
-        finding.PageRelPath.Should().Be(P1);
+        finding.PageRelPath.Should().Be(P2, "без единой сноски — находка; три сноски — нет");
     }
 
     [Fact]
@@ -148,6 +151,24 @@ public class WikiLintTests
         var finding = Single(f.Run(), WikiFindingKind.OwnsConflict);
         finding.Value.Should().Be("порядок работ");
         finding.Related.Should().Equal(P1, P2);
+    }
+
+    // Уникальность owns — в объединении раздела и его цепочки вверх (ADR-036 §4): страница
+    // проекта и страница его сферы не могут владеть одной сущностью. Обход обеих страниц
+    // не должен давать двух находок об одном и том же owns.
+    [Fact]
+    public void ОдинOwnsУСтраницыПроектаИСтраницыЕгоСферы_РовноОднаНаходкаБезДублей()
+    {
+        var spherePage = "Сферы/s7/Порядок-дома.md";
+        var f = Background()
+            .Page(spherePage, "Порядок дома", owns: ["дом"])
+            .Owns(P1, "дом")
+            .Reach("spheres/s7");
+
+        var finding = Single(f.Run(), WikiFindingKind.OwnsConflict);
+        finding.Value.Should().Be("дом");
+        finding.Related.Should().Equal(new[] { P1, spherePage },
+            "одна находка на owns, а не по одной на каждую из двух страниц");
     }
 
     [Fact]
@@ -187,6 +208,21 @@ public class WikiLintTests
         var f = Background().Updated(P1, Now.AddDays(-89));
 
         f.Run().Findings.Should().BeEmpty();
+    }
+
+    // Даты нет вовсе (ни в шапке, ни с mtime — дата с диска приходит фактом вызывающего,
+    // см. WikiLintServiceTests): возраст такой страницы не проверялся, и это не тихий пропуск,
+    // а счётчик метрики — иначе «ноль находок Stale» читалось бы как «всё свежее».
+    [Fact]
+    public void СтраницаБезДатыВовсе_НаходкиStaleНет_НоОнаСочтенаБезДаты()
+    {
+        var f = Background().NoDate(P1);
+
+        var report = f.Run();
+
+        report.Findings.Should().BeEmpty("без даты возраст не проверяется: находки Stale нет");
+        report.Metrics.PagesWithoutDate.Should().Be(1,
+            "молчание о возрасте страницы — не «всё свежее»: без даты это отдельный счётчик");
     }
 
     // ─── c1: смена сферы и предложение повышения (ADR-036, решения 4 и 5) ──────
@@ -240,6 +276,24 @@ public class WikiLintTests
             .InSphere(Sec2);
 
         Single(f.Run(), WikiFindingKind.PromoteSuggestion).Value.Should().Be("порядок работ");
+    }
+
+    // Сигнал повышения — и тот же owns в двух проектах сферы (ADR-036 §5: «заголовок или
+    // aliases после нормализации, либо owns»): разные заголовки не мешают, owns — самостоятельный
+    // признак, не смешивается с заголовком.
+    [Fact]
+    public void ДваПроектаСферыСОдинаковымOwnsРазнымиЗаголовками_ПредложениеПовышения()
+    {
+        var other = "Проекты/p2/Дом-новый.md";
+        var f = Background()
+            .Page(other, "Дом (новый)", owns: ["дом"])
+            .Owns(P1, "дом")
+            .Link(other, P2)
+            .InSphere(Sec2);
+
+        var finding = Single(f.Run(), WikiFindingKind.PromoteSuggestion);
+        finding.Value.Should().Be("дом");
+        finding.Related.Should().Equal(P1, other);
     }
 
     [Fact]
@@ -333,8 +387,8 @@ public class WikiLintTests
     {
         var dirty = "Сущность | [[Другая]] #тег `код`";
         var f = new Fixture()
-            .Page(P1, dirty, sources: [])
-            .Page(P2, "Состав команды", sources: ["Источники/Источник-работ"])
+            .Page(P1, dirty, footnotes: [])
+            .Page(P2, "Состав команды")
             .Link(P1, P2)
             .Link(P2, P1);
 
@@ -402,7 +456,8 @@ public class WikiLintTests
                 snapshot, Sec,
                 new WikiManifestReadResult(WikiManifestState.Valid, new Dictionary<string, string> { [rel] = "sha" }),
                 Now, new WikiLintContext([Sec], [], [],
-                    [new WikiPageFacts(rel, "Порядок-работ", WikiFrontmatter.TypeTopic, [], [], [], Now, null, "Текст.")]));
+                    // Снок у страницы нет ни одной — отсюда и ожидаемая находка MissingSources.
+                    [new WikiPageFacts(rel, "Порядок-работ", WikiFrontmatter.TypeTopic, [], [], [], [], Now, null, "Текст.")]));
 
             // Линтер опознаёт страницу по своему разбору id: не совпало бы с кодировкой
             // NotesService — не нашёл бы ни одной страницы и не нашёл бы ничего вовсе.
@@ -470,15 +525,19 @@ public class WikiLintTests
             string[]? aliases = null,
             string[]? owns = null,
             string[]? sources = null,
+            string[]? footnotes = null,
             DateTimeOffset? updated = null,
             string? hash = null,
             string? text = null)
         {
             // Текст по умолчанию намеренно без заголовка своей страницы: иначе каждая
             // фикстура давала бы «упоминание без ссылки» там, где его быть не должно.
+            // Сноска по умолчанию одна: источник страницы — сноска на карточку (ADR-035 §3),
+            // и фон, который сам по себе не даёт находок, не может быть «без источников».
             Nodes.Add(new NotesGraphSnapshotNode(IdOf(relPath), title, "wiki", "Вики", false));
             Facts.Add(new WikiPageFacts(
                 relPath, title, type, aliases ?? [], owns ?? [], sources ?? ["Источники/Источник-работ"],
+                footnotes ?? ["Источник работ"],
                 updated ?? Now.AddDays(-1), hash, text ?? "Содержимое страницы без упоминаний других."));
             Manifest[relPath] = "sha-" + relPath;
             return this;
@@ -523,6 +582,21 @@ public class WikiLintTests
         {
             var index = Facts.FindIndex(f => f.RelPath == relPath);
             Facts[index] = Facts[index] with { Owns = [owns] };
+            return this;
+        }
+
+        // Сноски страницы — её источники (цели `[^sN]: [[…]]`, как их разбирает вызывающий).
+        public Fixture Footnotes(string relPath, params string[] targets)
+        {
+            var index = Facts.FindIndex(f => f.RelPath == relPath);
+            Facts[index] = Facts[index] with { Footnotes = targets };
+            return this;
+        }
+
+        public Fixture NoDate(string relPath)
+        {
+            var index = Facts.FindIndex(f => f.RelPath == relPath);
+            Facts[index] = Facts[index] with { Updated = null };
             return this;
         }
 

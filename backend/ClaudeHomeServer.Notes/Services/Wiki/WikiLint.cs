@@ -7,14 +7,22 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // Чистая функция: ни диска, ни модели, ни DateTime.UtcNow — время приходит параметром.
 //
 // Сигнатура — снимок + раздел + статус манифеста + время + контекст вызывающего. Пятый параметр
-// нужен потому, что снимок графа этих данных не несёт: в нём нет шапки страниц (owns/updated/
-// sources — см. WikiFrontmatter), нет текстов (упоминания без ссылки) и нет текущей сферы
+// нужен потому, что снимок графа этих данных не несёт: в нём нет шапки страниц (owns/updated —
+// см. WikiFrontmatter), нет текстов (упоминания без ссылки) и нет текущей сферы
 // проекта (UpChain требует ISphereDirectory — WikiSections.cs:78). Context — только данные,
 // которые собрал вызывающий (он читает диск и разбирает шапки): внутри линтера I/O нет.
 //
+// Источники страницы — цели её сносок (WikiPageFacts.Footnotes), а не поле шапки sources: в
+// WikiFrontmatter его заполняет только Parse (WikiFrontmatter.cs:189), а ни один писатель
+// страниц не задаёт — и находка на таком поле была бы ложной, как и «без изменений» на пустом
+// updated. Дату вызывающий берёт из шапки, а когда
+// её нет — из mtime файла: дата с диска — факт вызывающего, линтер диска не читает
+// (решение по ревью S3-2).
+//
 // Область находок — страницы вики заданного раздела (ADR-035:325 — строки идут в _health.md
 // этого раздела): человеческие заметки не дают ни одной находки, но входят в метрики, которые
-// считаются по всей базе и сравниваются с базовой линией S0b-2.
+// считаются по всей базе и сравниваются с базовой линией S0b-2. Одно исключение по области:
+// уникальность owns — по объединению раздела и его цепочки вверх (ADR-036 §4).
 //
 // Аннотации и узлы-комментарии (frontmatter annotates) линтер НЕ учитывает: синтезируемых
 // рёбер «комментарий → документ» в снимке нет вовсе — их строит только публичный GetGraph
@@ -210,7 +218,7 @@ internal static class WikiLint
             UnlinkedMentions(pages, findings);
             NearDuplicates(pages, findings);
             MissingSources(pages, findings);
-            OwnsConflicts(pages, findings);
+            OwnsConflicts(reachable, findings);
             Drifts(pages, manifest, findings);
             Stale(pages, now, findings);
             OutOfReach(pages, reachable, findings);
@@ -307,23 +315,31 @@ internal static class WikiLint
 
         // 5. Страница без источников: карточка источника — и есть источник (ADR-035, решение 3);
         // у страницы знаний их не может не быть: утверждение без цитаты не применяется.
+        // Источник — сноска текста `[^sN]: [[Карточка]] — «цитата»` (так живут цитаты, ADR-035 §3),
+        // т. е. список Footnotes: поле шапки sources не ведёт ни один писатель страниц, и по нему
+        // каждая страница знаний была бы без источников.
         private void MissingSources(List<(PageRef, WikiPageFacts)> pages, List<WikiFinding> findings)
         {
             foreach (var (node, facts) in pages)
-                if (facts.Type != WikiFrontmatter.TypeSource && facts.SourceRefs.Count == 0)
+                if (facts.Type != WikiFrontmatter.TypeSource && facts.Footnotes.Count == 0)
                     findings.Add(new WikiFinding(
                         WikiFindingKind.MissingSources, node.RelPath, [], null, 0,
-                        "у страницы нет ни одного источника"));
+                        "у страницы нет ни одной сноски на карточку источника"));
         }
 
-        // 6. Один owns у двух страниц: уникальность owns — по разделу и цепочке вверх
-        // (ADR-035, решение 3); здесь — по страницам этого раздела, одна находка на owns.
-        private void OwnsConflicts(List<(PageRef, WikiPageFacts)> pages, List<WikiFinding> findings)
+        // 6. Один owns у двух страниц: уникальность owns — в объединении раздела и его цепочки
+        // вверх (ADR-035 §3, ADR-036 §4: «проверяют гейт и lint»), одна находка на owns.
+        // Цепочка — разделы из ReachableSections (свой линтер добавляет сам): их страницы уже
+        // в снимке и в фактах вызывающего, отдельного списка для них в контексте нет. Соседний
+        // проект в объединение не входит: та же сущность в двух соседних проектах допустима и
+        // служит сигналом к повышению (решение 5), а не конфликтом.
+        private void OwnsConflicts(HashSet<string> reachable, List<WikiFinding> findings)
         {
             var byOwns = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-            foreach (var (_, facts) in pages)
-                foreach (var owns in facts.Owns)
-                    Add(byOwns, owns, facts.RelPath);
+            foreach (var section in reachable)
+                foreach (var (_, facts) in SectionPages(section))
+                    foreach (var owns in facts.Owns)
+                        Add(byOwns, owns, facts.RelPath);
             foreach (var (owns, paths) in byOwns)
             {
                 var distinct = Distinct(paths);
@@ -350,6 +366,10 @@ internal static class WikiLint
         }
 
         // 8. Без изменений ≥ 90 дней. Полуприкрытый интервал: ровно 90 — находка.
+        // Дату даёт вызывающий: из шапки, а когда её там нет — из mtime файла (WikiLintService).
+        // Страницы без даты вовсе — не тихий пропуск: их сочтено в метрике PagesWithoutDate
+        // (без неё «нет ни одной находки Stale» читалось бы как «всё свежее», хотя возраст
+        // таких страниц не проверялся).
         private void Stale(List<(PageRef, WikiPageFacts)> pages, DateTimeOffset now, List<WikiFinding> findings)
         {
             foreach (var (node, facts) in pages)
@@ -459,12 +479,19 @@ internal static class WikiLint
             return findings;
         }
 
+        // Ключи сущности страницы: заголовок и алиасы после нормализации ИЛИ owns
+        // (ADR-036 §5). owns — самостоятельный признак, не смешиваем с заголовком: два проекта
+        // с разными заголовками и одним owns — ровно тот сигнал, который решение 5 зовёт.
         private IEnumerable<string> EntityKeys(PageRef page)
         {
             yield return Norm(page.Title);
             if (_facts.TryGetValue(page.RelPath, out var facts))
+            {
                 foreach (var alias in facts.Aliases)
                     yield return Norm(alias);
+                foreach (var owns in facts.Owns)
+                    yield return Norm(owns);
+            }
         }
 
         // Хэш карточки источника (поле hash шапки type: source, ADR-035, решение 3): у
@@ -514,6 +541,17 @@ internal static class WikiLint
                 }
             }
 
+            // Страницы знаний без источников — по сноскам (та же мера, что у находки
+            // MissingSources): карточки источника снок не несут по форме страницы (ADR-035 §3 —
+            // «карточка… данных, не рассказ»), поэтому вне счёта, как и раньше по type.
+            var withoutSources = measured.Count(
+                p => p.Facts.Type != WikiFrontmatter.TypeSource && p.Facts.Footnotes.Count == 0);
+            // Страницы знаний без даты вовсе — ни в шапке, ни с mtime (дата с диска — тоже
+            // факт вызывающего): их возраст нигде не проверялся, и ноль находок Stale при
+            // таких страницах — не «всё свежее», а «ничего не известно».
+            var withoutDate = measured.Count(
+                p => p.Facts.Type != WikiFrontmatter.TypeSource && p.Facts.Updated is null);
+
             return new WikiMetrics(
                 _baseNotes.Count,
                 links,
@@ -525,8 +563,9 @@ internal static class WikiLint
                 orphansOutsideJournal,
                 Share(orphansOutsideJournal, outsideJournal.Count),
                 wikiPages.Count,
-                measured.Count(p => p.Facts.Type != WikiFrontmatter.TypeSource && p.Facts.SourceRefs.Count == 0),
-                unlinked);
+                withoutSources,
+                unlinked,
+                withoutDate);
         }
     }
 
@@ -623,7 +662,11 @@ public readonly record struct WikiLintContext(
     IReadOnlyList<WikiPageFacts> Pages);
 
 /// <summary>Факты страницы, разобранные вызывающим из её шапки (WikiFrontmatter) и текста.
-/// Только данные: Type/Owns/SourceRefs/Updated — поля шапки, Text — содержимое файла.
+/// Только данные: Type/Owns/SourceRefs — поля шапки; Footnotes — явный список источников
+/// страницы, цели её сносок `[^sN]: [[Карточка]]` в порядке определения (счётчик Footnotes.Count
+/// и есть число источников: по ADR-035 §3 живёт цитата, а поле шапки sources не заполняет ни
+/// один писатель страниц); Updated — дата шапки, а когда её в шапке нет — mtime файла
+/// (дата с диска — факт вызывающего, не вывод линтера); Text — содержимое файла.
 /// Hash значим только у карточки источника (type: source) — это хэш её источника.</summary>
 public readonly record struct WikiPageFacts(
     string RelPath,
@@ -632,6 +675,7 @@ public readonly record struct WikiPageFacts(
     IReadOnlyList<string> Aliases,
     IReadOnlyList<string> Owns,
     IReadOnlyList<string> SourceRefs,
+    IReadOnlyList<string> Footnotes,
     DateTimeOffset? Updated,
     string? Hash,
     string Text);
@@ -673,9 +717,9 @@ public enum WikiFindingKind
     UnlinkedMention,
     /// <summary>Заголовки двух страниц раздела на расстоянии Левенштейна ≤ 2.</summary>
     NearDuplicate,
-    /// <summary>У страницы знаний нет ни одного источника.</summary>
+    /// <summary>У страницы знаний нет ни одного источника — ни одной сноски на карточку.</summary>
     MissingSources,
-    /// <summary>Один owns у двух страниц раздела.</summary>
+    /// <summary>Один owns у двух страниц раздела или его цепочки вверх (ADR-036 §4).</summary>
     OwnsConflict,
     /// <summary>Страницы нет в манифеста / манифест нечитается (ADR-035, решение 2).</summary>
     Drift,
@@ -690,8 +734,9 @@ public enum WikiFindingKind
 /// <summary>Метрики по всей базе — те же определения, что в базовой линии S0b-2
 /// (docs/research/llm-wiki-baseline-2026-10.md, таблица «Что именно считается»). Доли — 0 при
 /// пустом знаменателе. Аннотации в знаменатель не входят (M3); призраки — все узлы снимка,
-/// включая тех, у кого нет рёбер (M4). Последние три строки — про страницы вики: они считаются
-/// по тем страницам, чьи факты дал вызывающий, и без его чтения полны не будут.</summary>
+/// включая тех, у кого нет рёбер (M4). Последние четыре строки — про страницы вики: они считаются
+/// по тем страницам, чьи факты дал вызывающий, и без его чтения полны не будут; аналогов в
+/// базовой линии нет — такой половины базы она не считала.</summary>
 public readonly record struct WikiMetrics(
     int NoteCount,
     int LinkCount,
@@ -704,5 +749,8 @@ public readonly record struct WikiMetrics(
     int OrphanCountExcludingJournal,
     double OrphanShareExcludingJournal,
     int WikiPageCount,
+    // Страницы знаний без ни одной сноски на карточку (та же мера, что у находки MissingSources).
     int WikiPagesWithoutSources,
-    int UnlinkedMentionPairs);
+    int UnlinkedMentionPairs,
+    // Страницы знаний, чей возраст не проверялся: даты нет ни в шапке, ни с mtime файла.
+    int PagesWithoutDate);

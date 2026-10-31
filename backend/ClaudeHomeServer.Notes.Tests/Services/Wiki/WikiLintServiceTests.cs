@@ -250,6 +250,38 @@ public class WikiLintServiceTests : IDisposable
             "оба расхождения — и правка, и удаление — сочтены");
     }
 
+    // ─── MAJOR 2 вердикта (доработка S3-2): дата «без изменений» берётся с mtime файла ──
+
+    [Fact]
+    public async Task ДатаШапкиПустая_СтрокаБезИзмененийПоMtimeФайла_СноскаСчитаетсяИсточником()
+    {
+        var p = CreateProject("Возраст");
+        var rel = "Проекты/" + p.Id + "/Знание.md";
+        await _keeper.EnsureInitializedAsync(User);
+        await WriteGoodPage(p.Id, "Знание", "текст. [^s1]\n\n[^s1]: [[Карточка-источника]] — «Выдержка из источника.»");
+        var page = Path.Combine(_pages, "Проекты", p.Id, "Знание.md");
+        var healthPath = "без изменений · страница `" + rel + "`";
+
+        // Шапка без updated: возраст свежей страницы не должен давать находки — mtime сейчас,
+        // не порог. И наоборот: та же страница с older mtime обязана дать строку — иначе
+        // пустая дата шапки глушит находку, как в дефекте.
+        File.SetLastWriteTimeUtc(page, DateTime.UtcNow.AddDays(-89));
+        (await _sut.TryRunOwnerAsync(User)).SectionsOk.Should().Be(1);
+        File.ReadAllText(HealthOf(p.Id)).Should().NotContain("без изменений ·",
+            "90 дней по часам файла: 89 — ещё не находка");
+
+        File.SetLastWriteTimeUtc(page, DateTime.UtcNow.AddDays(-91));
+        (await _sut.TryRunOwnerAsync(User)).SectionsOk.Should().Be(1);
+        File.ReadAllText(HealthOf(p.Id)).Should().Contain(healthPath,
+            "даты в шапке нет — возраст берётся с диска (дата факта, не вывод лентера)");
+
+        var m = MetricsLines().Last();
+        m.GetProperty("pagesWithoutDate").GetInt32().Should().Be(0,
+            "дата с диска есть — страницы без даты нет; без этого счётчика ноль находок Stale читался бы как «всё свежее»");
+        m.GetProperty("wikiPagesWithoutSources").GetInt32().Should().Be(0,
+            "цель сноски текста — источник: её считает служба, а не поле шапки sources");
+    }
+
     // ─── Минор 3 вердикта: единицы и имена метрик — базовая линия S0b-2 ──────────────
 
     [Fact]
@@ -259,7 +291,10 @@ public class WikiLintServiceTests : IDisposable
         await _keeper.EnsureInitializedAsync(User);
         // Фикстура с известными долями: 3 страницы раздела; 2 ссылки — одна разрешённая
         // (Страница-а → Страница-б), одна в призрака; сироты — Страница-а и Страница-в.
-        await WriteGoodPage(p.Id, "Страница-а", "[[Страница-б]] и [[Призрак икс]].");
+        // Сноска Страницы-а — на ту же цель, что её же ссылка: ребро одно (декуп по цели
+        // в пределах страницы), доли не меняются; но именно она делает Страницу-у страницей
+        // с источником — см. wikiPagesWithoutSources ниже.
+        await WriteGoodPage(p.Id, "Страница-а", "[[Страница-б]] и [[Призрак икс]]. [^s1]\n\n[^s1]: [[Страница-б]] — «Точная цитата из источника.»");
         await WriteGoodPage(p.Id, "Страница-б", "Текст.");
         await WriteGoodPage(p.Id, "Страница-в", "Текст.");
 
@@ -279,7 +314,11 @@ public class WikiLintServiceTests : IDisposable
         m.GetProperty("driftCount").GetInt32().Should().Be(0, "всё записано Хранителем: дрейфа нет");
         // Полей без аналога в базовой линии три — они остались под своими именами.
         m.GetProperty("wikiPages").GetInt32().Should().Be(3);
-        m.GetProperty("wikiPagesWithoutSources").GetInt32().Should().Be(0);
+        // Источники — сносики текста, а не поле шапки sources (его ни один писатель страниц
+        // не заполняет): без снок здесь две страницы, «Страница-б» и «Страница-в».
+        m.GetProperty("wikiPagesWithoutSources").GetInt32().Should().Be(2);
+        m.GetProperty("pagesWithoutDate").GetInt32().Should().Be(0,
+            "дата есть с mtime файла: страниц, чей возраст не проверялся, нет");
         // Старых имён строки S3-3 в формате нет: их замена — предмет этой правки.
         m.TryGetProperty("orphansShare", out _).Should().BeFalse("имя базовой линии — orphansShareAll");
         m.TryGetProperty("danglingLinks", out _).Should().BeFalse("имя базовой линии — ghosts");

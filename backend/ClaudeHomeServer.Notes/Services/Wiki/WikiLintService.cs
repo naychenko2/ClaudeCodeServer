@@ -223,6 +223,9 @@ public sealed class WikiLintService : BackgroundService
                         snapshot, section, manifest, now,
                         new WikiLintContext(
                             // Свой раздел лентер добавляет сам (WikiLint.cs:205-206) — здесь только цепочка вверх.
+                            // По ней же лентер сверяет уникальность owns (ADR-036 §4): страницы
+                            // цепочки у него уже есть — снимок общий, факты всех разделов идут
+                            // в allFacts, отдельного списка страниц для цепочки не нужно.
                             WikiSections.UpChain(section, ownerId, _spheres),
                             // Лентер сам дописывает свой раздел и дедуплицирует (WikiLint.cs:399).
                             SphereProjectSections(ownerId, section),
@@ -290,11 +293,17 @@ public sealed class WikiLintService : BackgroundService
             var parsed = WikiFrontmatter.Parse(text);
             if (parsed.Model is null)
                 throw new InvalidDataException($"шапка страницы «{rel}» не разобрана: {parsed.Errors[0]}");
+            // Дата «без изменений»: из шапки, а когда её в шапке нет — mtime файла
+            // (решение по ревью S3-2: на пустом updated находка молчала о каждой странице).
+            // Метка — UTC, как у строк журнала; линтер диска не видит, дата приходит фактом.
+            var updated = ParseUpdated(parsed.Model.Updated)
+                ?? new DateTimeOffset(File.GetLastWriteTimeUtc(full), TimeSpan.Zero);
             facts.Add(new WikiPageFacts(
                 rel,
                 TitleOf(text, parsed.CloseLineIndex, Path.GetFileNameWithoutExtension(full)),
                 parsed.Model.Type, parsed.Model.Aliases, parsed.Model.Owns, parsed.Model.Sources,
-                ParseUpdated(parsed.Model.Updated), parsed.Model.Hash, text));
+                FootnoteTargets(text),
+                updated, parsed.Model.Hash, text));
         }
         facts.Sort((a, b) => string.CompareOrdinal(a.RelPath, b.RelPath));
         return facts;
@@ -311,9 +320,35 @@ public sealed class WikiLintService : BackgroundService
     }
 
     // updated из шапки: дата или null (строгий парсер проверяет форму поля, не календарь;
-    // «без изменений» считается только по читаемой дате).
+    // «без изменений» считается только по читаемой дате — иначе берётся mtime файла выше).
     private static DateTimeOffset? ParseUpdated(string? raw) =>
         DateTimeOffset.TryParse(raw, CultureInfo.InvariantCulture, DateTimeStyles.None, out var v) ? v : null;
+
+    // Цели сносок страницы — источники по ADR-035 §3: строки определения
+    // `[^sN]: [[Карточка]] — «цитата»` (UI рендерит блок «Источники» из них же). Здесь нужен
+    // только счёт целей: строгость формы держит гейт при записи, whole-page разбор
+    // (WikiPage.Parse) строже тела страницы и сделал бы целый раздел «отказом» там, где
+    // достаточно сносок.
+    private static List<string> FootnoteTargets(string text)
+    {
+        var targets = new List<string>();
+        foreach (var line in WikiFrontmatter.SplitLines(text))
+        {
+            if (!line.StartsWith("[^", StringComparison.Ordinal))
+                continue;
+            var sep = line.IndexOf("]: ", StringComparison.Ordinal);
+            if (sep < 2)
+                continue;
+            var rest = line[(sep + 3)..];
+            if (!rest.StartsWith("[[", StringComparison.Ordinal))
+                continue;
+            var end = rest.IndexOf("]]", StringComparison.Ordinal);
+            if (end <= 2)
+                continue;
+            targets.Add(rest[2..end]);
+        }
+        return targets;
+    }
 
     private List<string> SphereProjectSections(string ownerId, string section)
     {
@@ -474,16 +509,16 @@ public sealed class WikiLintService : BackgroundService
     // OrphanCountExcludingJournal→orphansNoJournal, OrphanShareExcludingJournal→
     // orphansShareNoJournal, UnlinkedMentionPairs→unlinkedMentions (тот же смысл — упоминание
     // без ссылки; область — страницы вики, их базовая линия по человеку не считала).
-    // Полей без аналога в базовой линии три, они остались под своими именами: wikiPages и
-    // wikiPagesWithoutSources (по страницам вики — такой половины базы в базовой линии нет) и
-    // driftCount (байтовая сверка манифеста — предмета вики). ts/section/codeVersion — конверт
-    // строки, не метрика: его формат не меняется.
+    // Полей без аналога в базовой линии четыре, они остались под своими именами: wikiPages,
+    // wikiPagesWithoutSources и pagesWithoutDate (по страницам вики — такой половины базы в
+    // базовой линии нет) и driftCount (байтовая сверка манифеста — предмета вики).
+    // ts/section/codeVersion — конверт строки, не метрика: его формат не меняется.
     private sealed record MetricsLine(
         DateTimeOffset Ts, string Section, string CodeVersion,
         int Notes, int Links, int Ghosts, double GhostsShare, int DistinctGhostTargets,
         int Orphans, double OrphansShareAll, int OrphansNoJournal, double OrphansShareNoJournal,
         int DriftCount,
-        int WikiPages, int WikiPagesWithoutSources, int UnlinkedMentions);
+        int WikiPages, int WikiPagesWithoutSources, int UnlinkedMentions, int PagesWithoutDate);
 
     // Доля → процент с одним знаком — ровно формула базовой линии; пустой знаменатель даёт 0
     // (его уже даёт Share() линтера).
@@ -498,7 +533,7 @@ public sealed class WikiLintService : BackgroundService
             m.OrphanCount, Pct(m.OrphanShare), m.OrphanCountExcludingJournal, Pct(m.OrphanShareExcludingJournal),
             // Счётчик дрейфа раздела — все его находки дрейфа: и членство (линт), и байты (служба).
             report.Findings.Count(f => f.Kind == WikiFindingKind.Drift),
-            m.WikiPageCount, m.WikiPagesWithoutSources, m.UnlinkedMentionPairs), JsonOpts);
+            m.WikiPageCount, m.WikiPagesWithoutSources, m.UnlinkedMentionPairs, m.PagesWithoutDate), JsonOpts);
     }
 }
 

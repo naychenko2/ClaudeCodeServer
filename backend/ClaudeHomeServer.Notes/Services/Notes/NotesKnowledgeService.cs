@@ -285,7 +285,12 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
             hits.AddRange(MapHits(chunks, entry.WikiDocs, summaries));
         }
 
-        var kept = WikiVisibility.Filter(hits, visible, h => SectionKeyOf(h, summaries));
+        // Сниппет видимой страницы может содержать ссылку на раздел вне набора (чанк Dify
+        // берётся из содержимого): её заголовок — тоже текст, и он заменяется [скрыто] тем же
+        // правилом, что в выдаче инструментов (ADR-036, решение 2). Ссылка, рассечённая
+        // усечением чанка, — предел метода: не ловится.
+        var kept = WikiVisibility.Filter(hits, visible, h => SectionKeyOf(h, summaries))
+            .Select(h => h with { Snippet = WikiVisibility.RedactLinks(h.Snippet, visible) });
         return kept
             .OrderByDescending(h => h.Score)
             .ThenBy(h => h.Id, StringComparer.Ordinal)   // равный score — детерминированный порядок

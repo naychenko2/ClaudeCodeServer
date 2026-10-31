@@ -113,8 +113,16 @@ public sealed class NotesToolset(
         switch (tool)
         {
             case "notes_list":
+            {
+                // Чтение источника wiki — только в наборе хода (ADR-036, решение 2); обычные
+                // заметки не сужаются (решение 6): «посмотри мою заметку X» из чата проекта —
+                // живой сценарий.
+                var visible = VisibleSet(context.OwnerId, session, persona);
                 return Json(notesSvc.GetSummaries(context.OwnerId, OptionalArg(arguments, "source"), null)
-                    .Select(Brief).ToList());
+                    .Where(n => WikiReadAllowed(n.Source, n.Path, visible))
+                    .Select(n => Brief(n, WikiDisplayPath(context.OwnerId, n)))
+                    .ToList());
+            }
 
             case "notes_search":
             {
@@ -122,19 +130,35 @@ public sealed class NotesToolset(
                 var q = StringArg(arguments, "query");
                 var status = StringArg(arguments, "status");
                 var query = status.Length > 0 ? $"status:{status} {q}".Trim() : q;
+                var visible = VisibleSet(context.OwnerId, session, persona);
                 return Json(notesSvc.GetSummaries(context.OwnerId, null, query.Length > 0 ? query : null)
-                    .Select(n => n.Annotation is null ? Brief(n) : new
-                    {
-                        n.Id, n.Title, n.Source, n.SourceLabel, n.Tags, n.UpdatedAt,
-                        annotation = n.Annotation,
-                    })
+                    .Where(n => WikiReadAllowed(n.Source, n.Path, visible))
+                    .Select(n => n.Annotation is null
+                        ? Brief(n, WikiDisplayPath(context.OwnerId, n))
+                        : new
+                        {
+                            n.Id, n.Title, n.Source, n.SourceLabel, n.Tags, n.UpdatedAt,
+                            annotation = n.Annotation,
+                        })
                     .ToList());
             }
 
             case "notes_read":
-                return notesSvc.GetDetail(context.OwnerId, StringArg(arguments, "id")) is { } detail
-                    ? Json(detail)
-                    : Deny($"Заметка {StringArg(arguments, "id")} не найдена.");
+            {
+                var id = StringArg(arguments, "id");
+                if (notesSvc.GetDetail(context.OwnerId, id) is not { } detail)
+                    return Deny($"Заметка {id} не найдена.");
+                var visible = VisibleSet(context.OwnerId, session, persona);
+                if (detail.Source == NotesService.WikiKey)
+                {
+                    // Страница раздела вне набора хода — не отличима от несуществующей
+                    // (ADR-036, решение 2): отказ не называет того, чего нет.
+                    if (WikiSections.Parse(detail.Path) is not { } key || !visible.Contains(key))
+                        return Deny($"Заметка {id} не найдена.");
+                    detail = RedactWikiDetail(notesSvc, context.OwnerId, detail, visible);
+                }
+                return Json(detail);
+            }
 
             case "notes_suggest_title":
             {
@@ -193,10 +217,39 @@ public sealed class NotesToolset(
             }
 
             case "notes_backlinks":
-                return Json(notesSvc.GetBacklinks(context.OwnerId, StringArg(arguments, "id")));
+            {
+                var id = StringArg(arguments, "id");
+                var visible = VisibleSet(context.OwnerId, session, persona);
+                var index = IndexByIds(notesSvc, context.OwnerId);
+                // Чтение страницы раздела вне набора — тот же отказ, что у notes_read: список
+                // обратных ссылок — тоже чтение этой страницы (ADR-036, решение 2).
+                if (index.TryGetValue(id, out var self) && self.Source == NotesService.WikiKey
+                    && (WikiSections.Parse(self.Path) is not { } selfKey || !visible.Contains(selfKey)))
+                    return Deny($"Заметка {id} не найдена.");
+                // Обратная ссылка со страницы вне набора остаётся фактом связи, но без имени
+                // и текста: заголовок чужого раздела — тоже текст (решение 2).
+                return Json(notesSvc.GetBacklinks(context.OwnerId, id)
+                    .Select(b => HiddenWikiRef(b.SourceId, index, visible)
+                        ? new NoteBacklinkDto("", HiddenMark, "", "", "")
+                        : b)
+                    .ToList());
+            }
 
             case "notes_graph":
-                return Json(notesSvc.GetGraph(context.OwnerId, includeAnnotations: false));
+            {
+                var graph = notesSvc.GetGraph(context.OwnerId, includeAnnotations: false);
+                var visible = VisibleSet(context.OwnerId, session, persona);
+                var index = IndexByIds(notesSvc, context.OwnerId);
+                // Узлы страниц вне набора и их рёбра выпадают; обычные заметки в графе не
+                // сужаются (решение 6), «призрачные» узлы не принадлежат разделам.
+                var hidden = graph.Nodes
+                    .Where(n => HiddenWikiRef(n.Id, index, visible))
+                    .Select(n => n.Id)
+                    .ToHashSet(StringComparer.Ordinal);
+                return Json(new NoteGraph(
+                    graph.Nodes.Where(n => !hidden.Contains(n.Id)).ToList(),
+                    graph.Edges.Where(e => !hidden.Contains(e.Source) && !hidden.Contains(e.Target)).ToList()));
+            }
 
             case "notes_delete":
             {
@@ -373,6 +426,11 @@ public sealed class NotesToolset(
                 var query = StringArg(arguments, "query");
                 if (!kbSvc.Available)
                     return Text("Семантический поиск не настроен (нет Dify) — используй notes_search.");
+                // Несобранная горизонталь — отказ с причиной, а не пустой список: модель не
+                // может отличить «нет результатов» от «поиска не было» (ревью S6g-1; та же
+                // формулировка, что у wiki_query).
+                if (spheres is null || projects is null)
+                    return Deny("Горизонталь вики не собрана (подсистема Notes отключена).");
                 var topK = 8;
                 if (arguments["topK"] is JsonValue tv && tv.TryGetValue<int>(out var k)) topK = k;
                 try
@@ -401,7 +459,7 @@ public sealed class NotesToolset(
                 return WikiQueryCall(arguments, context.OwnerId, session, persona);
 
             case "wiki_status":
-                return WikiStatusCall(arguments, context.OwnerId);
+                return WikiStatusCall(arguments, context.OwnerId, session, persona);
 
             default:
                 throw new ArgumentException($"Неизвестный инструмент: {tool}", nameof(tool));
@@ -471,11 +529,93 @@ public sealed class NotesToolset(
         await broadcaster.ToOwner(ownerId, new NotesChangedMessage(action, noteId));
     }
 
-    // Компактное представление заметки для списков — как brief у stdio-ветки
-    private static object Brief(NoteSummary n) => new
+    // Компактное представление заметки для списков — как brief у stdio-ветки. Для страницы
+    // вики — дополнительно путь с префиксом раздела и живым именем (ADR-036, решение 6):
+    // агент не должен принять чужой раздел за свой.
+    private static object Brief(NoteSummary n, string? wikiPath = null) => wikiPath is null
+        ? (object)new { n.Id, n.Title, n.Source, n.SourceLabel, n.Tags, n.UpdatedAt }
+        : new { n.Id, n.Title, n.Source, n.SourceLabel, n.Tags, n.UpdatedAt, path = wikiPath };
+
+    // --- Видимость источника wiki при чтении через notes_* (S6g-2; ADR-036, решения 2 и 6).
+    // Набор считает только WikiVisibility.SectionsFor — та же единая точка правды, что у
+    // wiki_query и recall (решение 2: ни recall, ни инструменты набор не собирают сами).
+    // Обычные заметки не сужаются (решение 6, подтверждено Андреем): правило про страницы
+    // разделов, не про заметки.
+
+    private const string HiddenMark = "[скрыто]";
+
+    /// <summary>Набор видимых разделов хода. Несобранная горизонталь — пустое множество:
+    /// страница вики не видна нигде (fail-closed), обычные заметки как обычно. В живой
+    /// композиции этого не бывает: горизонтали регистрируются тем же рубильником, что notes.</summary>
+    private HashSet<string> VisibleSet(string ownerId, Session session, Persona? persona) =>
+        spheres is null || projects is null
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : new HashSet<string>(WikiVisibility.SectionsFor(ownerId,
+                new WikiVisibility.CallContext(session.ProjectId, persona), spheres, projects),
+                StringComparer.Ordinal);
+
+    /// <summary>Видна ли запись в списке: обычная заметка — всегда (не сужается); страница
+    /// вики — только в наборе; страница с неразобранным путём не принадлежит ни одному
+    /// разделу и не видна нигде (fail-closed).</summary>
+    private static bool WikiReadAllowed(string source, string path, HashSet<string> visible) =>
+        source != NotesService.WikiKey
+        || (WikiSections.Parse(path) is { } key && visible.Contains(key));
+
+    /// <summary>Является ли запись по id страницей раздела вне набора (или страницей с
+    /// неразобранным путём): её имя и текст в выдаче заменяются [скрыто]. Обычная заметка
+    /// страницей раздела не является — не закрывается (правило про страницы разделов).</summary>
+    private static bool HiddenWikiRef(string noteId, Dictionary<string, NoteSummary> index, HashSet<string> visible) =>
+        index.TryGetValue(noteId, out var s) && s.Source == NotesService.WikiKey
+        && (WikiSections.Parse(s.Path) is not { } key || !visible.Contains(key));
+
+    private static Dictionary<string, NoteSummary> IndexByIds(NotesService notesSvc, string ownerId)
     {
-        n.Id, n.Title, n.Source, n.SourceLabel, n.Tags, n.UpdatedAt,
-    };
+        var index = new Dictionary<string, NoteSummary>(StringComparer.Ordinal);
+        foreach (var s in notesSvc.GetSummaries(ownerId, null, null))
+            index[s.Id] = s;
+        return index;
+    }
+
+    /// <summary>Префикс раздела с живым именем для страницы вики в выдаче (ADR-036, решение 6):
+    /// id папки раздела в пути заменяется живым именем проекта/сферы, остальная часть пути —
+    /// как есть; «Общее»/«Личное» — свои имена папок без id. Имя не разрешается — id (сирота
+    /// уже вне набора видимости, это запасной путь). null — не страница вики.</summary>
+    private string? WikiDisplayPath(string ownerId, NoteSummary n) =>
+        n.Source == NotesService.WikiKey ? DisplayPathFor(ownerId, n.Path) : null;
+
+    private string? DisplayPathFor(string ownerId, string relPath)
+    {
+        if (WikiSections.Parse(relPath) is not { } key || WikiSections.Folder(key) is not { } folder)
+            return null;
+        var head = folder[..folder.IndexOf('/')]; // «Проекты» | «Сферы» | «Общее» | «Личное»
+        var name =
+            WikiSections.TryProjectId(key, out var projectId) ? projects?.GetById(projectId)?.Name ?? projectId :
+            WikiSections.TrySphereId(key, out var sphereId) ? spheres?.SphereName(ownerId, sphereId) ?? sphereId :
+            "";
+        if (name.Length > 0) head += "/" + name;
+        var rest = relPath.Length > folder.Length ? relPath[folder.Length..] : "";
+        return rest.Length > 0 ? head + "/" + rest : head;
+    }
+
+    /// <summary>Отдача видимой страницы вики (ADR-036, решение 2): содержимое — RedactLinks
+    /// (ссылка на страницу вне набора — [скрыто]); структурные списки — тем же правилом:
+    /// цель чужого раздела — маркер без имени и текста (заголовок страницы чужого раздела —
+    /// тоже текст). Путь — с префиксом раздела (решение 6).</summary>
+    private NoteDetail RedactWikiDetail(NotesService notesSvc, string ownerId, NoteDetail d, HashSet<string> visible)
+    {
+        var index = IndexByIds(notesSvc, ownerId);
+        var hiddenLink = new NoteLinkDto("", HiddenMark, false);
+        var hiddenBacklink = new NoteBacklinkDto("", HiddenMark, "", "", "");
+        return d with
+        {
+            Path = DisplayPathFor(ownerId, d.Path) ?? d.Path,
+            Content = WikiVisibility.RedactLinks(d.Content, visible),
+            Links = d.Links.Select(l => HiddenWikiRef(l.TargetId, index, visible) ? hiddenLink : l).ToList(),
+            Backlinks = d.Backlinks.Select(b => HiddenWikiRef(b.SourceId, index, visible) ? hiddenBacklink : b).ToList(),
+            UnlinkedMentions = d.UnlinkedMentions
+                .Select(b => HiddenWikiRef(b.SourceId, index, visible) ? hiddenBacklink : b).ToList(),
+        };
+    }
 
     private static McpToolCallResult Text(string text) => new(text);
 
@@ -833,17 +973,22 @@ public sealed class NotesToolset(
         return score;
     }
 
-    private McpToolCallResult WikiStatusCall(JsonObject arguments, string ownerId)
+    private McpToolCallResult WikiStatusCall(JsonObject arguments, string ownerId, Session session, Persona? persona)
     {
         try
         {
             if (WikiRootOrRefusal(ownerId, out var root) is { } notReady) return Deny(notReady);
+            // Пакеты раздела вне набора хода не называются: ни их id, ни их раздел
+            // (ADR-036, решение 2). open/limit — состояние всей вики: лимит заявок
+            // тоже по всей вике (OpenPackagesRefusal), число обязано совпадать с отказом.
+            var visible = VisibleSet(ownerId, session, persona);
             if (OptionalArg(arguments, "packageId") is { } id)
             {
                 if (!WikiPackage.IsSafeId(id)) return Deny("id пакета некорректен");
                 var read = WikiPackageStore.TryRead(root!, id);
                 if (read.State != WikiPackageFileState.Valid || read.Package is not { } one)
                     return Deny("пакета с таким id нет");
+                if (!visible.Contains(one.Section)) return Deny("пакета с таким id нет");
                 return Json(BriefPackage(one));
             }
             var list = WikiPackageStore.List(root!);
@@ -851,7 +996,9 @@ public sealed class NotesToolset(
             {
                 open = WikiPackageStore.CountOpen(root!),
                 limit = WikiPackage.MaxOpenPackages,
-                packages = list.Packages.Where(p => WikiPackage.IsOpen(p.Status)).Select(BriefPackage).ToList(),
+                packages = list.Packages
+                    .Where(p => WikiPackage.IsOpen(p.Status) && visible.Contains(p.Section))
+                    .Select(BriefPackage).ToList(),
                 unreadableFiles = list.InvalidFiles,
             });
         }

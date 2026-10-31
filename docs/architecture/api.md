@@ -385,8 +385,8 @@ GET  /api/local-model/hardware     ?window=1m|5m|15m|1h   (только admin: �
                   hotspotTempC?, fanPerc?, clockMhz?, clockMaxMhz?, memClockMhz?, powerW?, powerLimitW?,
                   throttle: { powerCap, thermal }, pstate?, pcie: { gen?, width? }, busId, level,
                   levels: { mem, core, hotspot: ok|warn|danger|none } }],
-         nodes: [{ key, kind: gpu|cpu|vrm|chipset|disk|ram, name, tempC?, sensor: ok|none|nodata, level: ok|warn|danger|none,
-                   warnC?, dangerC?, detail: { ccdC?, fanRpm?, role?: system|kv, temp2C?, critC?, usedGb?, totalGb? },
+         nodes: [{ key, kind: gpu|cpu|vrm|chipset|water|disk|ram, name, tempC?, sensor: ok|none|nodata, level: ok|warn|danger|none,
+                   warnC?, dangerC?, detail: { ccdC?, fanRpm?, role?: system|kv, temp2C?, critC?, usedGb?, totalGb?, usedPerc? },
                    spark15m: (number|null)[90] }],
          caseFans: [{ label, rpm }], series: [{ key, family: mem|core|hotspot|cpu|chipset|disk, gpuIndex?, label, points: (number|null)[] }],
          stepMs }

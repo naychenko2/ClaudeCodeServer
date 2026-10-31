@@ -59,6 +59,7 @@ public class WikiController : ControllerBase
     private const string CodeProjectMissing = "wiki_project_missing";
     private const string CodeNotOrphan = "wiki_not_orphan";
     private const string CodeLintRunning = "wiki_lint_running";
+    private const string CodeLlmWikiOff = "wiki_llm_wiki_off";
 
     // Состояния манифеста раздела в контракте (WikiCatalogDto.ManifestState / ответ
     // GET page): закрытый перечень — три состояния WikiManifestState без внутреннего имени.
@@ -259,7 +260,9 @@ public class WikiController : ControllerBase
 
     /// <summary>GET /api/wiki/health/{section} — _health.md раздела как есть: это отчёт
     /// последнего прогона линта (текст Хранителя), а не производный DTO. Файла нет — 404:
-    /// раздел ещё не линтовался (или его вовсе нет на диске). Чужой владелец — 403 той же
+    /// раздел ещё не линтовался (или его вовсе нет на диске), и при выключенном llm-wiki
+    /// свежих отчётов нет вовсе: прогон такой вики не пишется (WikiLintService), поэтому её
+    /// health — 404 «нет данных», а не «здорово». Чужой владелец — 403 той же
     /// ResolveSection, что у каталога. Section — ключ с «/» (projects/{id}), поэтому
     /// параметр catch-all.</summary>
     [HttpGet("health/{**section}")]
@@ -286,15 +289,19 @@ public class WikiController : ControllerBase
 
     // ─── Прогон линта по кнопке (S3-3) ───────────────────────────────────────
 
-    /// <summary>POST /api/wiki/lint — прогон линта по всем разделам своей вики. Уже
-    /// идёт — 409 с кодом: второй прогон того же владельца дал бы двойную запись
-    /// _health.md и metrics.jsonl (конкурентность шага S3-3).</summary>
+    /// <summary>POST /api/wiki/lint — прогон линта по всем разделам своей вики. Функция
+    /// выключена — 409 с причиной: прогон такой вики не выполняется вовсе, и её «Находки (0)»
+    /// были бы ложью (решение по ревью S3-3). Уже идёт — 409 с кодом: второй прогон того же
+    /// владельца дал бы двойную запись _health.md и metrics.jsonl (конкурентность шага
+    /// S3-3).</summary>
     [HttpPost("lint")]
     public async Task<IActionResult> Lint()
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
         var res = await _lint.TryRunOwnerAsync(userId);
+        if (res.Outcome == WikiLintRunOutcome.FeatureOff)
+            return StatusCode(409, new { code = CodeLlmWikiOff, message = "проверка не выполнена: функция выключена" });
         if (!res.Started)
             return StatusCode(409, new { code = CodeLintRunning, message = "линт владельца уже идёт" });
         return Ok(new { ran = true, sectionsOk = res.SectionsOk, sectionsFailed = res.SectionsFailed });

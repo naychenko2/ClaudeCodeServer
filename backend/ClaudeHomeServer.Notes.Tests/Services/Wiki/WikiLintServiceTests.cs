@@ -18,7 +18,11 @@ namespace ClaudeHomeServer.Tests.Services;
 // отказ одного раздела не роняет остальных и не выходит из службы (c1); прогон по всем
 // разделам оставляет health и ровно одну строку метрик на раздел (c2); health чужого
 // владельца — 403/404 (c3); кнопка и ночное окно не делают двойной запись (конкурентность).
-// Окно (его часы) здесь не проверяется: прогон вызывается напрямую, как его зовёт REST.
+// Доработка по вердикту ревью S3-3: выключенный флаг llm-wiki — прогон пропускается целиком
+// (ни health, ни метрик, кнопка отказана с причиной); сверка манифеста с диском по байтам даёт
+// строки дрейфа в health и его счётчик в метриках; строка метрик — в единицах и именах
+// базовой линии S0b-2 (проценты с одним знаком). Окно (его часы) здесь не проверяется:
+// прогон вызывается напрямую, как его зовёт REST.
 // Образец построения — WikiControllerTests: temp-дир + боевые ProjectManager/NotesService +
 // страница пишется Хранителем (тот же путь, что у применения).
 public class WikiLintServiceTests : IDisposable
@@ -32,6 +36,9 @@ public class WikiLintServiceTests : IDisposable
     private readonly WikiKeeper _keeper;
     private readonly WikiLintService _sut;
     private readonly NoSpheres _spheres = new();
+    // Флаг llm-wiki — часть фикстуры: выключенный флаг теперь означает «прогона нет», и
+    // проверить это можно только переключив его на живой фикстуре.
+    private readonly WikiFlagGate _flags = new();
 
     public WikiLintServiceTests()
     {
@@ -42,11 +49,12 @@ public class WikiLintServiceTests : IDisposable
             .Build();
         var users = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         _projects = new ProjectManager(_config, users, new AppSettingsService(_config));
-        // Флаг llm-wiki включён: иначе граф не несёт страниц вики и лентеру нечего видеть
-        // (тот же приём, что в WikiLintTests/NotesWikiSourceTests).
-        _notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, flags: new WikiFlagGate());
+        // Флаг llm-wiki включён по умолчанию: иначе граф не несёт страниц вики и лентеру
+        // нечего видеть (тот же приём, что в WikiLintTests/NotesWikiSourceTests). Тот же
+        // экземпляр шва — у службы: состояние флага она читает сама (решение по ревью S3-3).
+        _notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, flags: _flags);
         _keeper = new WikiKeeper(_notes, _config);
-        _sut = new WikiLintService(_notes, _keeper, _spheres, _config, NullLogger<WikiLintService>.Instance);
+        _sut = new WikiLintService(_notes, _keeper, _spheres, _config, NullLogger<WikiLintService>.Instance, _flags);
         _pages = WikiPaths.Pages(_dir, User);
     }
 
@@ -183,6 +191,100 @@ public class WikiLintServiceTests : IDisposable
         ran.GetProperty("ran").GetBoolean().Should().BeTrue();
     }
 
+    // ─── MAJOR 1 вердикта (доработка S3-3): выключенный флаг — не «чисто», а пропуск ──
+
+    [Fact]
+    public async Task ФлагВыключен_ПрогонПропущен_НиHealthНиМетрик_КнопкаОтказанаСПричиной()
+    {
+        var p = CreateProject("Выключен");
+        await _keeper.EnsureInitializedAsync(User);
+        await WriteGoodPage(p.Id, "Знание"); // сирота: на страницу нет ни одной ссылки
+
+        _flags.On = false;
+        var res = await _sut.TryRunOwnerAsync(User);
+
+        res.Outcome.Should().Be(WikiLintRunOutcome.FeatureOff);
+        File.Exists(HealthOf(p.Id)).Should().BeFalse(
+            "при выключенном флаге граф не несёт страниц вики: «Находки (0)» был бы ложью");
+        File.Exists(MetricsFile()).Should().BeFalse(
+            "нулевые метрики невыполненной проверки не входят в сравнение с базовой линией");
+
+        // Отказ кнопки — с причиной, а не «уже идёт» и не «ran».
+        AssertCode(await Controller().Lint(), 409, "wiki_llm_wiki_off")
+            .GetProperty("message").GetString().Should().Contain("функция выключена");
+
+        // Фикстура нетривиальна: при включённом флаге та же страница даёт находку сироты —
+        // значит молчание выше было про флаг, а не про пустой раздел.
+        _flags.On = true;
+        (await _sut.TryRunOwnerAsync(User)).Started.Should().BeTrue();
+        File.ReadAllText(HealthOf(p.Id)).Should().Contain("сирота");
+    }
+
+    // ─── MAJOR 2 вердикта (доработка S3-3): сверка манифеста с диском по байтам ──────
+
+    [Fact]
+    public async Task ПравкаМимоХранителяИУдалениеФайла_СтрокиОДрейфеВЗдоровье_СчётчикДрейфаВМетриках()
+    {
+        var p = CreateProject("Дрейф");
+        await _keeper.EnsureInitializedAsync(User);
+        await WriteGoodPage(p.Id, "Знание-а");
+        await WriteGoodPage(p.Id, "Знание-б");
+
+        // Правка мимо Хранителя: байты файла другие, запись в манифесте — та же. Членство не
+        // изменилось: по одному членству (сверка линтера) расхождения нет.
+        File.AppendAllText(Path.Combine(_pages, "Проекты", p.Id, "Знание-а.md"),
+            "\n\nправка мимо Хранителя.", new UTF8Encoding(false));
+        // Удаление мимо Хранителя: файла нет, запись в манифесте осталась.
+        File.Delete(Path.Combine(_pages, "Проекты", p.Id, "Знание-б.md"));
+
+        var res = await _sut.TryRunOwnerAsync(User);
+        res.SectionsOk.Should().Be(1, "расхождение — находка, а не отказ раздела");
+
+        var health = File.ReadAllText(HealthOf(p.Id));
+        health.Should().Contain("дрейф · страница `Проекты/" + p.Id + "/Знание-а.md`");
+        health.Should().Contain("файл расходится с записью манифеста");
+        health.Should().Contain("дрейф · страница `Проекты/" + p.Id + "/Знание-б.md`");
+        health.Should().Contain("файла из записи манифеста нет на диске");
+
+        MetricsLines().Single().GetProperty("driftCount").GetInt32().Should().Be(2,
+            "оба расхождения — и правка, и удаление — сочтены");
+    }
+
+    // ─── Минор 3 вердикта: единицы и имена метрик — базовая линия S0b-2 ──────────────
+
+    [Fact]
+    public async Task МетрикиВЕдиницахБазовойЛинии_ПроцентыСОднимЗнаком_ИменаПолейЕеИмени()
+    {
+        var p = CreateProject("Метрики");
+        await _keeper.EnsureInitializedAsync(User);
+        // Фикстура с известными долями: 3 страницы раздела; 2 ссылки — одна разрешённая
+        // (Страница-а → Страница-б), одна в призрака; сироты — Страница-а и Страница-в.
+        await WriteGoodPage(p.Id, "Страница-а", "[[Страница-б]] и [[Призрак икс]].");
+        await WriteGoodPage(p.Id, "Страница-б", "Текст.");
+        await WriteGoodPage(p.Id, "Страница-в", "Текст.");
+
+        (await _sut.TryRunOwnerAsync(User)).SectionsOk.Should().Be(1);
+
+        var m = MetricsLines().Single();
+        m.GetProperty("notes").GetInt32().Should().Be(3);
+        m.GetProperty("links").GetInt32().Should().Be(2);
+        m.GetProperty("ghosts").GetInt32().Should().Be(1);
+        m.GetProperty("ghostsShare").GetDouble().Should().Be(50.0, "процент с одним знаком, не доля 0..1");
+        m.GetProperty("distinctGhostTargets").GetInt32().Should().Be(1);
+        m.GetProperty("orphans").GetInt32().Should().Be(2);
+        m.GetProperty("orphansShareAll").GetDouble().Should().Be(66.7);
+        m.GetProperty("orphansNoJournal").GetInt32().Should().Be(2);
+        m.GetProperty("orphansShareNoJournal").GetDouble().Should().Be(66.7);
+        m.GetProperty("unlinkedMentions").GetInt32().Should().Be(0);
+        m.GetProperty("driftCount").GetInt32().Should().Be(0, "всё записано Хранителем: дрейфа нет");
+        // Полей без аналога в базовой линии три — они остались под своими именами.
+        m.GetProperty("wikiPages").GetInt32().Should().Be(3);
+        m.GetProperty("wikiPagesWithoutSources").GetInt32().Should().Be(0);
+        // Старых имён строки S3-3 в формате нет: их замена — предмет этой правки.
+        m.TryGetProperty("orphansShare", out _).Should().BeFalse("имя базовой линии — orphansShareAll");
+        m.TryGetProperty("danglingLinks", out _).Should().BeFalse("имя базовой линии — ghosts");
+    }
+
     // ─── Помощники ───────────────────────────────────────────────────────────────
 
     private Project CreateProject(string name, string owner = User)
@@ -194,10 +296,11 @@ public class WikiLintServiceTests : IDisposable
 
     // Страница раздела — записанная Хранителем (тот же путь, что у применения пакета):
     // папка раздела, файл и его запись в манифесте появляются вместе.
-    private async Task WriteGoodPage(string projectId, string title)
+    // Тело страницы — необязательное: метрики и находки зависят от ссылок в тексте.
+    private async Task WriteGoodPage(string projectId, string title, string body = "текст. [[Чат 1]]")
     {
         (await _keeper.WritePageAsync(User, "projects/" + projectId, $"Проекты/{projectId}/{title}.md",
-            "---\ntype: topic\nsources: [Чат 1]\n---\n# " + title + "\n\nтекст. [[Чат 1]]"))
+            "---\ntype: topic\nsources: [Чат 1]\n---\n# " + title + "\n\n" + body))
             .Status.Should().Be(WikiOpStatus.Applied);
     }
 
@@ -210,12 +313,14 @@ public class WikiLintServiceTests : IDisposable
             ? [.. File.ReadAllLines(MetricsFile()).Where(l => l.Length > 0).Select(l => JsonDocument.Parse(l).RootElement)]
             : [];
 
-    private static void AssertCode(IActionResult result, int status, string code)
+    // Тело отказа возвращается: отказ обязан быть понятным человеку, а не только кодом.
+    private static JsonElement AssertCode(IActionResult result, int status, string code)
     {
         var obj = result.Should().BeAssignableTo<ObjectResult>($"{status} с телом отказа").Which;
         obj.StatusCode.Should().Be(status);
-        JsonDocument.Parse(JsonSerializer.Serialize(obj.Value)).RootElement
-            .GetProperty("code").GetString().Should().Be(code);
+        var body = JsonDocument.Parse(JsonSerializer.Serialize(obj.Value)).RootElement;
+        body.GetProperty("code").GetString().Should().Be(code);
+        return body;
     }
 
     private WikiController Controller(string user = User)
@@ -237,8 +342,11 @@ public class WikiLintServiceTests : IDisposable
         public string? CharterOf(string ownerId, string sphereId) => null;
     }
 
+    // On — состояние флага владельца: по умолчанию включён (иначе фикстура невидима графу);
+    // выключен — предмет проверки «прогон при выключенном флаге пропускается».
     private sealed class WikiFlagGate : ClaudeHomeServer.Services.Composition.IFeatureFlagGate
     {
-        public bool IsEnabled(string userId, string key) => key == FeatureFlagKeys.LlmWiki;
+        public bool On = true;
+        public bool IsEnabled(string userId, string key) => On && key == FeatureFlagKeys.LlmWiki;
     }
 }

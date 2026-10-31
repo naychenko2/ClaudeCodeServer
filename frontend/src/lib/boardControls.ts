@@ -50,6 +50,22 @@ export function togglePriorityFilter(p: TaskPriority) {
 export function setAssigneeFilter(a: BoardAssigneeFilter, userId?: string | null) {
   patch({ assignee: a, assigneeUserId: a === 'member' ? (userId ?? null) : null });
 }
+// Доработка S2b-F5 (вердикт ревью 136d1069, п.1): стор общий для хаб-доски и всех
+// проектных досок, а 'member' живёт только на доске общего проекта и относится к его
+// участникам. TaskBoard сообщает сюда контекст своей доски (projectKey — id проекта,
+// null — хаб; shared — общий ли он): вне общего проекта (хаб, личный проект) и при смене
+// проекта — даже между двумя общими (id участника принадлежит прежнему) — 'member'
+// сбрасывается на 'all'. Иначе фильтр остаётся активным и невидимым: ни одна кнопка
+// тулбара не подсвечена, а matchTaskAssignee отсекает все задачи — доска пустая.
+let _boardScope: { key: string; shared: boolean } | null = null;
+export function reportBoardScope(projectKey: string | null, shared: boolean) {
+  const key = projectKey ?? '';
+  const prev = _boardScope;
+  _boardScope = { key, shared };
+  const changed = prev !== null && (prev.key !== key || prev.shared !== shared);
+  if (_state.assignee === 'member' && (!shared || changed)) setAssigneeFilter('all');
+}
+
 export function setWip(columnId: string, v?: number) {
   const wip = { ..._state.wip };
   if (v) wip[columnId] = v; else delete wip[columnId];

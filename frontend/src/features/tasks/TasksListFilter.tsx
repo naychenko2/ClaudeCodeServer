@@ -80,10 +80,13 @@ export function matchTaskAssignee(
   if (assignee === 'all') return true;
   if (assignee === 'claude') return t.assignee === 'claude';
   if (assignee === 'member') return assigneeUserId ? t.assigneeUserId === assigneeUserId : !!t.assigneeUserId;
-  // 'me'
+  // 'me'. С контекстом (доска/список проекта) — как бэк (TaskManager.ResolveMeUserId):
+  // любая человеческая задача без id — владельца; это и старый 'me' без id (К9), и задача
+  // вообще без assignee (прежний дефолт Create). Без контекста (хаб) — прежнее поведение master.
   if (!ctx) return t.assignee === 'me';
+  if (t.assignee === 'claude') return false;
   if (t.assigneeUserId) return t.assigneeUserId === (ctx.currentUserId ?? null);
-  return t.assignee === 'me' && ctx.isOwner === true;
+  return ctx.isOwner === true;
 }
 
 // Число активных ГРУПП фильтров — его показывает бейдж на кнопке Funnel

@@ -1008,11 +1008,13 @@ export function boardLanes(
   if (groupBy === 'assignee') {
     if (assigneePeople) {
       // Общий проект (S2b-F5): дорожки разведены по assigneeUserId. AI — 'claude';
-      // участник — дорожка с его именем; старый 'me' без id — дорожка владельца (К9);
-      // ушедший/неизвестный исполнитель и без исполнителя — 'none' («Без исполнителя»)
+      // участник — дорожка с его именем; любая человеческая задача без id — дорожка
+      // владельца: и старый 'me' без id (К9), и задача вообще без assignee — бэк
+      // (TaskManager.ResolveMeUserId) читает Assignee=null как Me без id, т.е. владельца;
+      // 'none' («Без исполнителя») остаётся для id, которого нет в names (ушедший/неизвестный)
       tasks.forEach(t => {
         if (t.assignee === 'claude') { push('claude', t); return; }
-        const uid = t.assigneeUserId ?? (t.assignee === 'me' ? assigneePeople.ownerUserId ?? undefined : undefined);
+        const uid = t.assigneeUserId ?? assigneePeople.ownerUserId ?? undefined;
         const name = uid ? assigneePeople.names.get(uid) : undefined;
         push(name ? 'u:' + uid : 'none', t);
       });

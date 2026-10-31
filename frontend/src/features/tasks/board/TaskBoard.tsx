@@ -18,7 +18,7 @@ import {
 } from '../../../lib/tasks';
 import { api } from '../../../lib/api';
 import { showToast } from '../../../lib/toast';
-import { useBoardControls, setAssigneeFilter, setGroupBy } from '../../../lib/boardControls';
+import { reportBoardScope, useBoardControls, setGroupBy } from '../../../lib/boardControls';
 import { DRAG_MOUSE_ACTIVATION, DRAG_TOUCH_ACTIVATION } from '../../../lib/dnd';
 import { OfflineError } from '../../../lib/offline';
 import { useWindowWidth, TABLET_MAX } from '../../../lib/breakpoints';
@@ -39,6 +39,12 @@ import { BoardToolbar, useDefectsOnly } from './BoardToolbar';
 // dnd-kit, меняет его внутренний контекст и перерисовывает все карточки (memo не спасает)
 const MOUSE_SENSOR_OPTIONS = { activationConstraint: DRAG_MOUSE_ACTIVATION };
 const TOUCH_SENSOR_OPTIONS = { activationConstraint: DRAG_TOUCH_ACTIVATION };
+
+// Назначение участников броском на дорожку 'u:<id>' включается после S2b-2: бэк
+// (TaskManager.UpdateTaskRequest) пока НЕ принимает поле AssigneeUserId — бросок
+// возвращал бы карточку на прежнее место (путь записи — шаг S2b-2, Денис). До этого
+// бросок на дорожку участника заблокирован: карточка остаётся на месте, тихая подсказка.
+const SHARED_ASSIGN_ENABLED = false;
 
 const BOARD_GAP = 14;
 const BOARD_PAD_RIGHT = 12;
@@ -94,11 +100,15 @@ export function TaskBoard({
   useEffect(() => { if (isProjectBoard && groupBy === 'project') setGroupBy('none'); }, [isProjectBoard, groupBy]);
 
   // Общий проект (S2b-F5): «Участники» в фильтре и дорожки по assigneeUserId — только
-  // на проектной доске общего проекта. В хаб-доске «участников» быть не может (проекта
-  // нет) — оставшийся от проектной доски фильтр сбрасываем, как и «по проекту» выше.
+  // на проектной доске общего проекта. Доработка вердикта 136d1069 (п.1): стор общий
+  // для всех досок, поэтому сообщаем стору контекст ЭТОЙ доски: вне общего проекта
+  // (хаб, личный проект) и при смене проекта — даже между двумя общими — 'member'
+  // сбрасывается в самом сторе (reportBoardScope), а не только при выходе в хаб.
   const boardProject = isProjectBoard && quickAddProjectId ? projectsById.get(quickAddProjectId) : undefined;
   const shared = boardProject ? isSharedProjectView(boardProject) : false;
-  useEffect(() => { if (!isProjectBoard && assignee === 'member') setAssigneeFilter('all'); }, [isProjectBoard, assignee]);
+  useEffect(() => {
+    reportBoardScope(isProjectBoard ? (quickAddProjectId ?? null) : null, shared);
+  }, [isProjectBoard, quickAddProjectId, shared]);
   const me = useMe();
   const { view } = useProjectPeople(quickAddProjectId ?? undefined, shared);
   const people = useMemo<AssigneePersonOption[]>(
@@ -233,8 +243,14 @@ export function TaskBoard({
       if (groupBy === 'priority') dto.priority = destLaneKey as TaskPriority;
       else if (groupBy === 'assignee') {
         if (destLaneKey === 'me' || destLaneKey === 'claude') dto.assignee = destLaneKey as TaskAssignee;
-        // Дорожка участника ('u:<id>', S2b-F5): бросок назначает человека (К9: 'me' + id)
+        // Дорожка участника ('u:<id>', S2b-F5): бросок назначает человека (К9: 'me' + id).
+        // До S2b-2 (бэк не принимает assigneeUserId) — заблокирован: ни запроса,
+        // ни оптимистичного движения — карточка остаётся на месте, только тихая подсказка.
         else if (destLaneKey.startsWith('u:')) {
+          if (!SHARED_ASSIGN_ENABLED) {
+            showToast('Назначение участникам появится позже', 'Карточка осталась на своей дорожке', 'info');
+            return;
+          }
           dto.assignee = 'me';
           dto.assigneeUserId = destLaneKey.slice(2);
         }

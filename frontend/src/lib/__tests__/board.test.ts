@@ -91,17 +91,21 @@ describe('boardLanes', () => {
     expect(lanes.find(l => l.key === 'u:u-m')!.tasks).toHaveLength(1);
   });
 
-  it('assignee + общий проект — ушедший/неизвестный и без исполнителя → «Без исполнителя»', () => {
-    // 'me' без id — это задача владельца (К9), проверено выше; без исполнителя —
-    // задачи вообще без assignee/assigneeUserId и с id, которого нет в names
+  it('assignee + общий проект — без id и без исполнителя → дорожка владельца (как бэк); ушедший id → «Без исполнителя»', () => {
+    // Доработка вердикта 136d1069 (п.3): бэк (TaskManager.ResolveMeUserId) читает
+    // Assignee=null как Me без id, т.е. задачу владельца: и старый 'me' без id (К9),
+    // и задача вообще без assignee (прежний дефолт Create). 'none' остаётся только для
+    // id, которого нет в names (ушедший/неизвестный исполнитель)
     const lanes = boardLanes([
       mk({ assignee: 'me' as TaskAssignee, assigneeUserId: 'u-old' }), // нет в names (ушёл)
-      mk({ assigneeUserId: null }),                                   // исполнитель снят
-      mk(),                                                         // никогда не была назначена
+      mk({ assigneeUserId: null }),                                   // исполнитель снят → задача владельца
+      mk(),                                                         // никогда не была назначена → задача владельца
     ], 'assignee', projects, people);
-    expect(lanes.map(l => l.key)).toEqual(['none']);
-    expect(lanes[0].label).toBe('Без исполнителя');
-    expect(lanes[0].tasks).toHaveLength(3);
+    expect(lanes.map(l => l.key)).toEqual(['u:u-owner', 'none']);
+    expect(lanes[0].label).toBe('Андрей');
+    expect(lanes[0].tasks).toHaveLength(2);
+    expect(lanes[1].label).toBe('Без исполнителя');
+    expect(lanes[1].tasks).toHaveLength(1);
   });
 
   it('assignee + общий проект — без контекста (личный/хаб) дорожки прежние', () => {

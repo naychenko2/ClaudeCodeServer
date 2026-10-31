@@ -30,7 +30,8 @@ function mk(p: Partial<Task> = {}): Task {
 
 const ME = 'u-me';
 const MARY = 'u-mary';
-// своя новая (по id) / своя старая (Me без id — владельца) / чужая человеческая / AI / без исполнителя
+// своя новая (по id) / своя старая (Me без id — владельца) / чужая человеческая / AI /
+// без исполнителя — по бэку (ResolveMeUserId) это тоже задача владельца
 const mineNew = mk({ assignee: 'me' as TaskAssignee, assigneeUserId: ME });
 const mineOld = mk({ assignee: 'me' as TaskAssignee });
 const theirs = mk({ assignee: 'me' as TaskAssignee, assigneeUserId: MARY });
@@ -44,9 +45,11 @@ const memberCtx = { currentUserId: MARY, isOwner: false };
 const ids = (ts: Task[]) => ts.map(t => t.id);
 
 describe('Фильтр «Исполнитель» общего проекта: логика (applyTaskFilters)', () => {
-  it('Я у владельца — свои по id и старые Me без id; чужие и AI выпадают', () => {
+  it('Я у владельца — свои по id, старые Me без id и задачи вообще без исполнителя (бэк: это задачи владельца); чужие и AI выпадают', () => {
+    // Доработка вердикта 136d1069 (п.3): matchTaskAssignee совпадает с бэком
+    // (TaskManager.ResolveMeUserId): человеческая задача без id — владельца
     const got = applyTaskFilters(ALL, { ...EMPTY_TASK_FILTERS, assignee: 'me' }, ownerCtx);
-    expect(ids(got)).toEqual([mineNew.id, mineOld.id]);
+    expect(ids(got)).toEqual([mineNew.id, mineOld.id, none.id]);
   });
 
   it('Я у участника — только свои по id; старый Me (это задача владельца) не моё', () => {

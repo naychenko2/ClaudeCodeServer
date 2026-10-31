@@ -156,4 +156,39 @@ public class SpendActorSliceTests : IDisposable
         analytics.Slices(new DateOnly(2026, 7, 1), new DateOnly(2026, 7, 1), new SpendFilter(Me: "u-a"))
             .Should().ContainSingle().Which.ActorUserId.Should().Be("u-a");
     }
+
+    // MAJOR вердикта efa973f5: ключ свёртки дневных проходов (MergeByKey) обязан включать актора,
+    // как и Aggregate. Иначе часовой ReclassifyLocalAsFree, поменявший Source строкам свёрнутого
+    // дня, сливает строки двух участников одного чата/модели/дня в одну: расход переатрибутируется,
+    // второй участник теряет свой срез.
+    [Fact]
+    public void Reclassify_СвёрнутыйДень_НеСливаетУчастников_КаждыйСоСвоейСтрокой()
+    {
+        var store = NewStore();
+        var old = new DateTime(2026, 7, 1, 12, 0, 0, DateTimeKind.Utc);
+        // Два участника одного чата/модели/дня на локальном движке под ключом арендатора
+        store.Record(new SpendRecord { OwnerId = "owner", ProjectId = "p-shared", SessionId = "s-shared",
+            ActorUserId = "u-a", Provider = "local-qwen", Model = "qwen3.8-27b",
+            InputTokens = 100, OutputTokens = 5, Timestamp = old });
+        store.Record(new SpendRecord { OwnerId = "owner", ProjectId = "p-shared", SessionId = "s-shared",
+            ActorUserId = "u-b", Provider = "local-qwen", Model = "qwen3.8-27b",
+            InputTokens = 200, OutputTokens = 7, Timestamp = old });
+
+        store.RollupOlderThan(new DateOnly(2026, 7, 10)); // Aggregate: две строки, каждая со своим актором
+
+        store.ReclassifyLocalAsFree(p => p == "local-qwen").Should().Be(2); // часовых проход по daily.json
+
+        var rows = store.DailyBetween(new DateOnly(2026, 7, 1), new DateOnly(2026, 7, 1));
+        rows.Should().HaveCount(2, "актор в ключе свёртки: строки с разными акторами не сливаются никогда");
+        rows.Should().OnlyContain(r => r.Source == SpendSources.Free);
+        rows.Single(r => r.ActorUserId == "u-a").InputTokens.Should().Be(100);
+        rows.Single(r => r.ActorUserId == "u-b").InputTokens.Should().Be(200);
+
+        // Срез чтения: каждый участник за пределами детального окна видит только своё
+        var analytics = NewAnalytics(store);
+        analytics.Slices(new DateOnly(2026, 7, 1), new DateOnly(2026, 7, 1), new SpendFilter(Me: "u-a"))
+            .Should().ContainSingle().Which.Input.Should().Be(100);
+        analytics.Slices(new DateOnly(2026, 7, 1), new DateOnly(2026, 7, 1), new SpendFilter(Me: "u-b"))
+            .Should().ContainSingle().Which.Input.Should().Be(200);
+    }
 }

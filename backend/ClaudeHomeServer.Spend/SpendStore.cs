@@ -189,13 +189,23 @@ public sealed class SpendStore : ISpendCollector, ISpendDetailReader
         _log?.LogInformation("spend: свёрнуто дней в агрегаты: {Count}", victims.Count);
     }
 
+    // Составной ключ свёртки разрезов (S2a-6b): единственное определение для обоих путей
+    // свёртки — Aggregate (детали → daily) и MergeByKey (слияние строк внутри дневных
+    // проходов). Актор входит в ключ: две строки с разными акторами не сливаются никогда —
+    // иначе после часового Reclassify записи двух участников одного чата/модели/дня схлопываются
+    // в одну, расход переатрибутируется, второй участник теряет срез (вердикт efa973f5, MAJOR).
+    private static (string, string?, string?, string?, string?, string?, string, string?, string) SliceKey(
+        string ownerId, string? projectId, string? sessionId, string? taskId, string? personaId,
+        string? actorUserId, string provider, string? model, string source) =>
+        (ownerId, projectId, sessionId, taskId, personaId, actorUserId, provider, model, source);
+
     // Свёртка записей дня по полному составному ключу разрезов
     internal static List<DailySpendRow> Aggregate(string date, IEnumerable<SpendRecord> records)
     {
         var map = new Dictionary<(string, string?, string?, string?, string?, string?, string, string?, string), DailySpendRow>();
         foreach (var r in records)
         {
-            var key = (r.OwnerId, r.ProjectId, r.SessionId, r.TaskId, r.PersonaId, r.ActorUserId, r.Provider, r.Model, r.Source);
+            var key = SliceKey(r.OwnerId, r.ProjectId, r.SessionId, r.TaskId, r.PersonaId, r.ActorUserId, r.Provider, r.Model, r.Source);
             if (!map.TryGetValue(key, out var row))
                 map[key] = row = new DailySpendRow
                 {
@@ -318,12 +328,14 @@ public sealed class SpendStore : ISpendCollector, ISpendDetailReader
         return flipped;
     }
 
+    // Слияние дневных строк по тому же ключу, что и свёртка (SliceKey): актор в ключе,
+    // строки двух участников одного чата/модели/дня не сливаются ни при каком проходе.
     private static List<DailySpendRow> MergeByKey(List<DailySpendRow> rows)
     {
-        var map = new Dictionary<(string, string?, string?, string?, string?, string, string?, string), DailySpendRow>();
+        var map = new Dictionary<(string, string?, string?, string?, string?, string?, string, string?, string), DailySpendRow>();
         foreach (var r in rows)
         {
-            var key = (r.OwnerId, r.ProjectId, r.SessionId, r.TaskId, r.PersonaId, r.Provider, r.Model, r.Source);
+            var key = SliceKey(r.OwnerId, r.ProjectId, r.SessionId, r.TaskId, r.PersonaId, r.ActorUserId, r.Provider, r.Model, r.Source);
             if (map.TryGetValue(key, out var acc))
             {
                 acc.InputTokens += r.InputTokens;

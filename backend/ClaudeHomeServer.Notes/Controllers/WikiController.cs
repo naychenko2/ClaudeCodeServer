@@ -11,7 +11,8 @@ using Microsoft.AspNetCore.Mvc;
 namespace ClaudeHomeServer.Notes.Controllers;
 
 // REST вики владельца (S2f, ADR-035/ADR-036): дерево разделов, каталог страниц раздела,
-// страница, «Завести», adopt, удаление раздела-сироты. Образец — NotesController.
+// страница, «Завести», adopt, удаление раздела-сироты; здоровье раздела и запуск линта
+// по кнопке (S3-3). Образец — NotesController.
 //
 // Владелец — только из токена (claim sub), как во всей вертикали. Раздел — ключ,
 // составленный из проекта/сферы пользователя (WikiSections), а не путь из тела запроса:
@@ -29,13 +30,16 @@ public class WikiController : ControllerBase
     private readonly WikiKeeper _keeper;
     private readonly IProjectManager _projects;
     private readonly ISphereDirectory _spheres;
+    private readonly WikiLintService _lint;
     private readonly string _dataDir;
 
-    public WikiController(WikiKeeper keeper, IProjectManager projects, ISphereDirectory spheres, IConfiguration config)
+    public WikiController(WikiKeeper keeper, IProjectManager projects, ISphereDirectory spheres,
+        WikiLintService lint, IConfiguration config)
     {
         _keeper = keeper;
         _projects = projects;
         _spheres = spheres;
+        _lint = lint;
         // Каталог данных — как у всех сервисов (DataPath указывает на projects.json в dataDir).
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
@@ -54,6 +58,7 @@ public class WikiController : ControllerBase
     private const string CodeSphereReserved = "wiki_sphere_reserved";
     private const string CodeProjectMissing = "wiki_project_missing";
     private const string CodeNotOrphan = "wiki_not_orphan";
+    private const string CodeLintRunning = "wiki_lint_running";
 
     // Состояния манифеста раздела в контракте (WikiCatalogDto.ManifestState / ответ
     // GET page): закрытый перечень — три состояния WikiManifestState без внутреннего имени.
@@ -248,6 +253,51 @@ public class WikiController : ControllerBase
         var res = await _keeper.DeleteSectionAsync(userId, key!);
         if (res.Status != WikiOpStatus.Applied) return OpResult(res);
         return Ok(new { deleted = true });
+    }
+
+    // ─── Здоровье раздела (S3-3) ─────────────────────────────────────────────
+
+    /// <summary>GET /api/wiki/health/{section} — _health.md раздела как есть: это отчёт
+    /// последнего прогона линта (текст Хранителя), а не производный DTO. Файла нет — 404:
+    /// раздел ещё не линтовался (или его вовсе нет на диске). Чужой владелец — 403 той же
+    /// ResolveSection, что у каталога. Section — ключ с «/» (projects/{id}), поэтому
+    /// параметр catch-all.</summary>
+    [HttpGet("health/{**section}")]
+    public IActionResult Health(string? section)
+    {
+        var userId = OwnerOrNull();
+        if (userId is null) return Unauthorized();
+        var (key, refusal) = ResolveSection(userId, section);
+        if (refusal is not null) return refusal;
+
+        var full = SafePath.JoinBelowRoot(WikiPaths.Root(_dataDir, userId!),
+            "pages/" + WikiSections.Folder(key!) + WikiKeeper.HealthFileName);
+        if (!System.IO.File.Exists(full)) return NotFound();
+        try
+        {
+            return Ok(new { section = key, content = System.IO.File.ReadAllText(full) });
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Файл есть, но не читается — тот же ответ, что «файла нет»: health нет.
+            return NotFound();
+        }
+    }
+
+    // ─── Прогон линта по кнопке (S3-3) ───────────────────────────────────────
+
+    /// <summary>POST /api/wiki/lint — прогон линта по всем разделам своей вики. Уже
+    /// идёт — 409 с кодом: второй прогон того же владельца дал бы двойную запись
+    /// _health.md и metrics.jsonl (конкурентность шага S3-3).</summary>
+    [HttpPost("lint")]
+    public async Task<IActionResult> Lint()
+    {
+        var userId = OwnerOrNull();
+        if (userId is null) return Unauthorized();
+        var res = await _lint.TryRunOwnerAsync(userId);
+        if (!res.Started)
+            return StatusCode(409, new { code = CodeLintRunning, message = "линт владельца уже идёт" });
+        return Ok(new { ran = true, sectionsOk = res.SectionsOk, sectionsFailed = res.SectionsFailed });
     }
 
     // ─── Помощники ──────────────────────────────────────────────────────────

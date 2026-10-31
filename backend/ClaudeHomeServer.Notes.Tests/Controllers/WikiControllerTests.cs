@@ -27,6 +27,7 @@ public class WikiControllerTests : IDisposable
     private readonly IConfiguration _config;
     private readonly ProjectManager _projects;
     private readonly WikiKeeper _keeper;
+    private readonly WikiLintService _lint;
     private readonly NoSpheres _spheres = new();
 
     public WikiControllerTests()
@@ -41,6 +42,8 @@ public class WikiControllerTests : IDisposable
         _pages = WikiPaths.Pages(_dir, User);
         var notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance);
         _keeper = new WikiKeeper(notes, _config);
+        // S3-3: контроллер держит службу линта (её же зовёт кнопка POST /api/wiki/lint).
+        _lint = new WikiLintService(notes, _keeper, _spheres, _config, NullLogger<WikiLintService>.Instance);
     }
 
     public void Dispose()
@@ -297,7 +300,7 @@ public class WikiControllerTests : IDisposable
     {
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", user)], "test"));
-        return new WikiController(_keeper, _projects, _spheres, _config)
+        return new WikiController(_keeper, _projects, _spheres, _lint, _config)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
@@ -306,7 +309,7 @@ public class WikiControllerTests : IDisposable
     private WikiController AnonymousController()
     {
         var http = new DefaultHttpContext(); // User без идентичности — путь боя без токена
-        return new WikiController(_keeper, _projects, _spheres, _config)
+        return new WikiController(_keeper, _projects, _spheres, _lint, _config)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };

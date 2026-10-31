@@ -113,6 +113,11 @@ public sealed class NotesSubsystem : IAppSubsystem
         // Откат по источнику — «Откатить всё из этого чата» (S4f-1, решение 12г мера 5): системная
         // операция поверх откатов пакетов; вызывается только REST, наружу его контракт не выходит.
         services.AddSingleton<WikiRetractService>();
+        // Линт вики (S3-3): ночное окно + запуск по кнопке. Singleton + hosted с него же:
+        // REST-кнопка (WikiController) вызывает ТУ ЖЕ службу — второй экземпляр дал бы
+        // вторые слоты прогона, и «уже идёт» не берег бы от двойной записи файлов.
+        services.AddSingleton<WikiLintService>();
+        services.AddGatedHostedFrom<WikiLintService>(config, sp => sp.GetRequiredService<WikiLintService>(), Key);
         // Сторож старта: пакеты, застрявшие в «applying» после падения процесса, откатывает по
         // прообразам (ADR-035, решение 4). Гейт по подсистеме и по Testing — общий хелпер.
         services.AddGatedHostedService<WikiApplyStartupGuard>(config, Key);

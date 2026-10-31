@@ -359,6 +359,34 @@ public sealed class WikiKeeper : IWikiRelink
             new Dictionary<string, string> { [pageKey] = Sha256OfBytes(File.ReadAllBytes(full)) });
     }
 
+    /// <summary>Служебный файл здоровья раздела (S3-3): пишется только Хранителем — как
+    /// любой файл под pages/. Это не проекция журнала: его содержимое — отчёт линта,
+    /// готовит его вызывающий; Хранитель даёт блокировку раздела и саму запись.</summary>
+    public const string HealthFileName = "_health.md";
+
+    /// <summary>Здоровье раздела и строка метрик (S3-3): под одной блокировкой раздела —
+    /// health прогона и его метрики не разъезжаются, а дописывание metrics.jsonl атомарно
+    /// и не рвёт строку (append, не перезапись файла — тот же приём, что у log.jsonl).
+    /// Вызывается только внутренней службой линта вертикали. metricsLine null — пишется
+    /// только health: у незавершённого прогона раздела метрик нет.</summary>
+    internal async Task WriteSectionHealthAndMetricsAsync(string ownerId, string sectionKey, string healthContent, string? metricsLine)
+    {
+        await WithSectionsLockedAsync(ownerId, [sectionKey], async () =>
+        {
+            var root = WikiPaths.Root(_dataDir, ownerId);
+            var folder = WikiSections.Folder(sectionKey)
+                ?? throw new ArgumentException($"health пишется в раздел, а «{sectionKey}» — не ключ раздела", nameof(sectionKey));
+            WikiFileWriter.Write(root, "pages/" + folder + HealthFileName, healthContent);
+            if (metricsLine is not null)
+            {
+                var full = SafePath.Join(root, "keeper/metrics.jsonl");
+                Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+                File.AppendAllText(full, metricsLine + "\n", new UTF8Encoding(false));
+            }
+            return 0;
+        });
+    }
+
     private void AppendEvent(string ownerId, string sectionKey, string pageKey, string actor, string summary)
     {
         if (WikiSections.TryProjectId(sectionKey, out var projectId))

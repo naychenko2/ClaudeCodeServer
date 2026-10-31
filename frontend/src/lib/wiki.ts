@@ -125,7 +125,20 @@ export type WikiErrorCode =
   | 'wiki_pkg_op_index'
   | 'wiki_pkg_already_decided'
   | 'wiki_pkg_reason_required'
-  | 'wiki_pkg_nothing_to_decide';
+  | 'wiki_pkg_nothing_to_decide'
+  // Отказ отката пакета и отката по источнику (S4b-3/S4f) — читаются в «Журнале» (S7c-1)
+  | 'wiki_revert_shape'
+  | 'wiki_revert_off'
+  | 'wiki_revert_claim'
+  | 'wiki_revert_status'
+  | 'wiki_revert_manifest'
+  | 'wiki_revert_no_preimages'
+  | 'wiki_revert_no_applied'
+  | 'wiki_revert_changed'
+  | 'wiki_revert_internal'
+  | 'wiki_retract_shape'
+  | 'wiki_retract_off'
+  | 'wiki_retract_internal';
 
 const WIKI_ERROR_CODES: ReadonlySet<string> = new Set<string>([
   'wiki_foreign', 'wiki_section_key', 'wiki_page_key', 'wiki_project_missing', 'wiki_section_off',
@@ -133,6 +146,10 @@ const WIKI_ERROR_CODES: ReadonlySet<string> = new Set<string>([
   'wiki_pkg_request', 'wiki_pkg_not_found', 'wiki_pkg_invalid', 'wiki_pkg_not_decidable',
   'wiki_pkg_auto', 'wiki_pkg_op_index', 'wiki_pkg_already_decided', 'wiki_pkg_reason_required',
   'wiki_pkg_nothing_to_decide',
+  'wiki_revert_shape', 'wiki_revert_off', 'wiki_revert_claim', 'wiki_revert_status',
+  'wiki_revert_manifest', 'wiki_revert_no_preimages', 'wiki_revert_no_applied',
+  'wiki_revert_changed', 'wiki_revert_internal',
+  'wiki_retract_shape', 'wiki_retract_off', 'wiki_retract_internal',
 ]);
 
 export class WikiError extends Error {
@@ -428,6 +445,78 @@ export async function acceptAllWikiPackage(id: string): Promise<WikiDecisionDto>
     method: 'POST',
   });
   if (res.apply?.applied) await refreshWiki();
+  return res;
+}
+
+// ─── «Журнал»: журнал состояний, откат пакета и откат по источнику (S7c-1; контракт S4b-3/S4f) ───
+// Отдельной ручки журнала у бэка нет: GET с фильтрами из макета — пункт 5 «Нужно от бэка»
+// (llm-wiki-v2-proposal). До её появления журнал строится из GET /api/wiki/packages без inbox —
+// это «журнал состояний» из контракта самой ручки (applied / rejected_by_checks / reverted).
+// Когда бэк отдаст свою ручку — источник данных экрана переключится на неё; методы отката
+// от этого не зависят (откат и retract — существующие ручки).
+
+export interface WikiRevertDto { restoredPages: string[] }
+
+// Исход отката по источнику (мера 5): revertedPackages — откатанные по прообразам;
+// unlinkedPackages — обработанные снятием сносок; remainingPackages — «остались» (есть другой
+// источник); removedChronicles — снятые целиком хроники; failed — названные проблемы
+// частичного исхода; markedSkip — чату поставлена пометка «не разбирать».
+export interface WikiRetractDto {
+  revertedPackages: string[];
+  unlinkedPackages: string[];
+  remainingPackages: string[];
+  removedChronicles: string[];
+  failed: string[];
+  markedSkip: boolean;
+}
+
+// Отказ отката пакета несёт в теле перечень страниц: wiki_revert_changed — страницы,
+// изменённые после применения, то, на что человеку смотреть перед повторной попыткой
+// (контракт S4b-3). У обычного WikiError этого перечня нет — он здесь.
+export class WikiRevertError extends WikiError {
+  readonly pages: string[];
+
+  constructor(status: number, code: WikiErrorCode | null, message: string, pages: string[]) {
+    super(status, code, message);
+    this.name = 'WikiRevertError';
+    this.pages = pages;
+  }
+}
+
+export async function listWikiJournal(): Promise<WikiPackagesDto> {
+  return wikiHttp<WikiPackagesDto>('/api/wiki/packages');
+}
+
+// «Откатить пакет» (мера 4): только действие человека. Отказ — WikiRevertError с перечнем
+// изменённых страниц. Успех — перечитываем дерево и открытые каталоги: страницы возвращены
+// к состоянию до применения (тот же порядок, что у decide с применённым).
+export async function revertWikiPackage(id: string): Promise<WikiRevertDto> {
+  try {
+    const res = await request<WikiRevertDto>(`/api/wiki/packages/${encodeURIComponent(id)}/revert`, {
+      method: 'POST',
+    });
+    await refreshWiki();
+    return res;
+  } catch (e) {
+    const we = toWikiError(e);
+    if (!we) throw e;
+    const body = (e as { body?: { pages?: unknown } }).body;
+    const pages = Array.isArray(body?.pages)
+      ? (body.pages as unknown[]).filter((p): p is string => typeof p === 'string')
+      : [];
+    throw new WikiRevertError(we.status, we.code, we.message, pages);
+  }
+}
+
+// «Откатить всё из этого источника» (мера 5): sourceRef — форма «{origin}:{ref}» (тот же
+// разбор, что у бэкового OriginOf/IdPartOf; Ref пакета — голый id, префикс добавляем здесь).
+// Успех — перечитываем: страницы и каталоги изменились снятием/откатом.
+export async function retractWikiSource(sourceRef: string): Promise<WikiRetractDto> {
+  const res = await wikiHttp<WikiRetractDto>('/api/wiki/packages/retract', {
+    method: 'POST',
+    body: JSON.stringify({ sourceRef }),
+  });
+  await refreshWiki();
   return res;
 }
 

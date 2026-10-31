@@ -3513,8 +3513,8 @@ export interface SpendCardRow {
   // «модель» и «провайдер», у прочих — null: класса у них нет
   tier?: string | null;
   // Разрез «пользователь» у владельца общего проекта: сколько приватных чатов участника
-  // вошло в его расход. Бэк пока не отдаёт (оживёт после S2d-4): нет поля — нет подстроки
-  privateChats?: number | null;
+  // вошло в его расход и сколько токенов (контракт К7). Бэк пока не отдаёт: нет поля — нет подстроки
+  privateChats?: { count: number; tokens: number } | null;
 }
 
 export interface SpendOverviewResponse {

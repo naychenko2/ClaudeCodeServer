@@ -7,7 +7,7 @@ import { act } from 'react';
 import { api } from 'aihome_shell/kit';
 import { SpendScreen } from '../SpendScreen';
 import type { SpendCardRow, SpendOverviewResponse } from '../../../types';
-import { mount, installFakeDom, uninstallFakeDom, textNodes } from '../../../components/chat/__tests__/fakeDom';
+import { mount, installFakeDom, uninstallFakeDom, textNodes, reactProps } from '../../../components/chat/__tests__/fakeDom';
 
 const tok = (n: number) => ({ input: n, output: 0, cacheRead: 0, cacheCreation: 0, total: n });
 const row = (key: string, name: string, n: number, extra: Partial<SpendCardRow> = {}): SpendCardRow =>
@@ -34,7 +34,7 @@ async function render(props: { isAdmin?: boolean; sharedOwner?: boolean; sharedM
 beforeEach(() => { installFakeDom(); });
 afterEach(() => { vi.restoreAllMocks(); uninstallFakeDom(); });
 
-const USERS = [row('u-1', 'anna', 600, { privateChats: 2 }), row('u-2', 'boris', 300)];
+const USERS = [row('u-1', 'anna', 600, { privateChats: { count: 2, tokens: 400000 } }), row('u-2', 'boris', 300)];
 
 describe('расход по участникам', () => {
   it('владелец общего проекта: карточка «Участники» с авторами ходов, переключателя «Мои/Все» нет', async () => {
@@ -62,7 +62,8 @@ describe('расход по участникам', () => {
 
   it('privateChats пришло — подстрока «из них приватные чаты (2)», у строки без поля её нет', async () => {
     const { texts } = await render({ sharedOwner: true }, USERS);
-    expect(texts).toContain('из них приватные чаты (2)');
+    expect(texts).toContain('из них приватные чаты (2) — 400k');
+    expect(texts).not.toContain('[object Object]');
     expect(texts.match(/из них приватные чаты/g)).toHaveLength(1);
   });
 
@@ -70,5 +71,45 @@ describe('расход по участникам', () => {
     const { texts } = await render({ sharedOwner: true }, [row('u-1', 'anna', 600)]);
     expect(texts).toContain('anna');
     expect(texts).not.toContain('приватные чаты');
+  });
+});
+
+// Клик по первому узлу с текстом: поднимаемся до ближайшего предка с onClick
+async function clickText(container: Parameters<typeof textNodes>[0], text: string) {
+  let hit: any = null;
+  const walk = (n: any) => { if (hit) return; if (n.nodeType === 3 && n.nodeValue === text) { hit = n; return; } n.childNodes.forEach(walk); };
+  walk(container);
+  for (let n = hit?.parentNode; n; n = n.parentNode) {
+    const h = reactProps(n)?.onClick as (() => void) | undefined;
+    if (h) { await act(async () => { h(); for (let i = 0; i < 5; i++) await Promise.resolve(); }); return; }
+  }
+}
+const userFilterCalls = (spies: Array<{ mock: { calls: unknown[][] } }>) =>
+  spies.flatMap(s => s.mock.calls.map(c => String(c[0]))).filter(q => /[?&]user=/.test(q));
+
+describe('участники: фильтра по чужому user у владельца нет', () => {
+  async function renderOwner() {
+    const ov = vi.spyOn(api.spend, 'overview').mockResolvedValue(overview());
+    const pivot = vi.spyOn(api.spend, 'pivot').mockResolvedValue({ nodes: USERS.map(u => ({ ...u, hasDetail: true })) });
+    const turns = vi.spyOn(api.spend, 'turns').mockResolvedValue({ items: [], total: 0 } as never);
+    const { container } = mount(createElement(SpendScreen, { ctx: {}, isAdmin: false, onClose: () => {}, embedded: true, sharedOwner: true }));
+    await act(async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); });
+    return { container, spies: [ov, pivot, turns] };
+  }
+
+  it('клик по строке карточки «Участники» — анализ без user=<id>, группировка по пользователю', async () => {
+    const { container, spies } = await renderOwner();
+    await clickText(container, 'anna');
+    expect(userFilterCalls(spies)).toEqual([]);
+    expect(spies[1].mock.calls.some(c => String(c[0]).includes('groupBy=user'))).toBe(true);
+  });
+
+  it('клик по узлу уровня «пользователь» в дереве не строит фильтр user', async () => {
+    const { container, spies } = await renderOwner();
+    await clickText(container, 'anna');
+    const before = spies.flatMap(s => s.mock.calls).length;
+    await clickText(container, 'anna');
+    expect(userFilterCalls(spies)).toEqual([]);
+    expect(spies.flatMap(s => s.mock.calls).length).toBe(before);
   });
 });

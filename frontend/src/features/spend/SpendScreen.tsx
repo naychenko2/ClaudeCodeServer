@@ -164,6 +164,11 @@ export function SpendScreen({ ctx, isAdmin, sharedOwner = false, sharedMember = 
   }) => {
     setSt(prev => {
       const next: SpendState = { ...prev, screen: 'analysis', selKey: null };
+      // У не-админа уровень «пользователь» только чтение: бэк режет user != текущий (403),
+      // поэтому клик по участнику открывает анализ с группировкой по пользователю без фильтра
+      if (patchCtx.filter?.dim === 'user' && !isAdmin) {
+        patchCtx = { ...patchCtx, filter: undefined, pivotDim: 'user' };
+      }
       if (patchCtx.filter) {
         next.filters = [...prev.filters.filter(f => f.dim !== patchCtx.filter!.dim), patchCtx.filter];
       }
@@ -176,7 +181,7 @@ export function SpendScreen({ ctx, isAdmin, sharedOwner = false, sharedMember = 
       if (patchCtx.turnId) next.selKey = `turn:${patchCtx.turnId}`;
       return next;
     });
-  }, [showUsers]);
+  }, [showUsers, isAdmin]);
 
   const titleEl = (
     <span style={{ fontFamily: FONT.serif, fontSize: isMobile ? 16 : 17, fontWeight: 700, color: C.textHeading, whiteSpace: 'nowrap' }}>
@@ -286,7 +291,7 @@ export function SpendScreen({ ctx, isAdmin, sharedOwner = false, sharedMember = 
           : <SkelBlock />)
     : (
       <SpendAnalysis
-        st={st} patch={patch} range={range} showUsers={showUsers} isMobile={isMobile} isTablet={isTablet} emptyKind={emptyKind}
+        st={st} patch={patch} range={range} showUsers={showUsers} userReadOnly={ownerView} isMobile={isMobile} isTablet={isTablet} emptyKind={emptyKind}
         overview={overview} overviewError={ovError} onRetryOverview={() => setOvTick(t => t + 1)}
         onCloseScreen={onClose}
       />

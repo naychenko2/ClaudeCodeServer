@@ -92,7 +92,10 @@ public class ProjectTasksController(
         TaskItem task;
         try
         {
-            task = tasks.Create(projectId, UserId, req, targetColumn);
+            // Явный признак происхождения (S2b-1, доработка): этот эндпоинт — человеческий
+            // путь (UI/API), признак ставит сервер, а не тело запроса: агентские и серверные
+            // пути (тулсет задач, волна, merge, сборка архитектора) зовут TaskManager напрямую.
+            task = tasks.Create(projectId, UserId, req with { CreatedByHuman = true }, targetColumn);
         }
         catch (InvalidOperationException ex)
         {
@@ -321,7 +324,9 @@ public class TasksController(
             // TeamWaveService) могут слать personal-карточки в review-колонку своих
             // проектов через bodyProjectId — это не «личная» задача в смысле обхода,
             // обычный кейс гейта.
-            task = tasks.Create(null, UserId, req, targetColumn);
+            // Явный признак происхождения (S2b-1, доработка): человеческий путь (UI/API),
+            // как в проектной ветке Create выше.
+            task = tasks.Create(null, UserId, req with { CreatedByHuman = true }, targetColumn);
         }
         catch (InvalidOperationException ex)
         {

@@ -364,11 +364,6 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
 
         // Персона-исполнитель: assignee=Claude выставляется автоматом, если модель забыла
         var hasPersona = !string.IsNullOrEmpty(req.PersonaId);
-        // Автор задачи (S2b-1): происхождение создания — персона или чат (те же маркеры, что
-        // CreatedByPersonaId/SourceSessionId; в коде их ставит только агентский путь —
-        // TasksToolset.cs:277, TeamWaveService.cs:323). Ни того, ни другого — человек
-        // (UI/API, промут заметки).
-        var agentCreated = !string.IsNullOrEmpty(req.CreatedByPersonaId) || !string.IsNullOrEmpty(req.SourceSessionId);
         var task = new TaskItem
         {
             Id = id,
@@ -407,10 +402,15 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             SourceNoteLine = req.SourceNoteLine,
             CreatedByPersonaId = string.IsNullOrEmpty(req.CreatedByPersonaId) ? null : req.CreatedByPersonaId,
             SourceSessionId = string.IsNullOrEmpty(req.SourceSessionId) ? null : req.SourceSessionId,
-            // Кто поставил задачу (S2b-1): человек — id создающего пользователя; агент — null.
-            // В текущем пути записи создающий человек и есть владелец: Write участника
-            // в общем проекте закрыт (пометка плана S2b), ключ хранилищ — владелец.
-            CreatedByUserId = agentCreated ? null : ownerId,
+            // Кто поставил задачу (S2b-1, доработка): явный признак req.CreatedByHuman — его
+            // проставляют только человеческие пути (UI/API в TasksController). Fail-closed:
+            // любой серверный/агентский путь — null; происхождение НЕ выводится из отсутствия
+            // маркеров (CreatedByPersonaId/SourceSessionId): серверный вызов без маркеров
+            // (merge-задача TasksController, сборка архитектора ArchitectureAgentLauncherAdapter)
+            // неотличим от человеческого и автора не получает. В текущем пути записи
+            // создающий человек и есть владелец: Write участника в общем проекте закрыт
+            // (пометка плана S2b), ключ хранилищ — владелец.
+            CreatedByUserId = req.CreatedByHuman ? ownerId : null,
             ReportToSessionId = string.IsNullOrEmpty(req.ReportToSessionId) ? null : req.ReportToSessionId,
             DelegationDepth = ComputeDelegationDepth(req.SourceSessionId),
             Order = NextOrder(ownerId),
@@ -1849,6 +1849,12 @@ public record CreateTaskRequest(
     // хода; UI/API их не шлют — null). См. TaskItem.CreatedByPersonaId/SourceSessionId.
     string? CreatedByPersonaId = null,
     string? SourceSessionId = null,
+    // Явный признак происхождения (S2b-1, доработка): запись создана человеком. Проставляет
+    // вызывающий: только человеческие пути (UI/API в TasksController). Дефолт false —
+    // CreatedByUserId=null (fail-closed): merge-задача, сборка архитектора, тулсет задач и
+    // волна автора не получают; происхождение не выводится из отсутствия маркеров выше.
+    // См. TaskItem.CreatedByUserId.
+    bool CreatedByHuman = false,
     // Дерево для чата-исполнителя (см. TaskItem.WorktreePath): путь СУЩЕСТВУЮЩЕГО worktree
     // проекта и его ветка. У личной задачи игнорируются.
     string? WorktreePath = null,

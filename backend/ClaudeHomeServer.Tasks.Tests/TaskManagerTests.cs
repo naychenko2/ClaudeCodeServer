@@ -422,13 +422,13 @@ public class TaskManagerTests : IDisposable
         TaskManager.ResolveMeUserId(persona).Should().BeNull();
     }
 
-    // Автор задачи: человек (UI/API, заметка — ни персоны-постановщика, ни чата-источника)
-    // пишет id создающего (сегодня это владелец — Write участника закрыт); агентский путь
-    // (персона или чат — маркеры TasksToolset) — null.
+    // Автор задачи (S2b-1, доработка): явный признак CreatedByHuman — его ставят только
+    // человеческие пути (UI/API в TasksController); дефолт — null. Маркерный агентский путь
+    // (персона или чат — маркеры TasksToolset) автора не получает и без признака.
     [Fact]
-    public void CreatedByUserId_ЧеловекПишетСоздателя_АгентNull()
+    public void CreatedByUserId_ЯвныйПризнакЧеловека_ИначеNull()
     {
-        var human = _sut.Create("proj-1", "user-1", new CreateTaskRequest("из UI"));
+        var human = _sut.Create("proj-1", "user-1", new CreateTaskRequest("из UI", CreatedByHuman: true));
         var byPersona = _sut.Create("proj-1", "user-1", new CreateTaskRequest("от персоны",
             CreatedByPersonaId: "prs-delegator"));
         var bySession = _sut.Create("proj-1", "user-1", new CreateTaskRequest("из чата",
@@ -439,6 +439,31 @@ public class TaskManagerTests : IDisposable
         bySession.CreatedByUserId.Should().BeNull();
     }
 
+    // MAJOR ревью S2b-1: серверный путь БЕЗ маркеров до доработки получал автора-человека
+    // по выводу «нет маркеров — значит человек». Форма — exact вызов
+    // ArchitectureAgentLauncherAdapter.LaunchAsync (personaId+Claude+strong, маркеров нет);
+    // merge-задача TasksController — та же форма без признака. Теперь — null.
+    [Fact]
+    public void CreatedByUserId_СерверныйПутьБезМаркеров_Null()
+    {
+        var archBuild = _sut.Create("proj-1", "user-1", new CreateTaskRequest("Сборка архитектуры",
+            Assignee: TaskItemAssignee.Claude, PersonaId: "prs-architect", ModelTier: "strong"));
+        var serverPlain = _sut.Create("proj-1", "user-1", new CreateTaskRequest("Серверная карточка"));
+
+        archBuild.CreatedByUserId.Should().BeNull();
+        serverPlain.CreatedByUserId.Should().BeNull();
+    }
+
+    // Fail-closed: новый («забытый») вызывающий, не проставивший признак, — null по
+    // умолчанию, а не автор-владелец: дефолт не должен молча становиться человеком.
+    [Fact]
+    public void CreatedByUserId_ЗабытыйПутьБезПризнака_Null()
+    {
+        var forgotten = _sut.Create(null, "user-1", new CreateTaskRequest("новая обходная ветка"));
+
+        forgotten.CreatedByUserId.Should().BeNull();
+    }
+
     // Регулярная серия: человек-автор и человек-исполнитель — устойчивые атрибуты
     // (как CreatedByPersonaId/PersonaId): без переноса следующий экземпляр молча
     // терял бы автора, а «Me» падал бы с участника на владельца.
@@ -446,6 +471,7 @@ public class TaskManagerTests : IDisposable
     public void SpawnNext_ПереноситАвтораИЧеловекаИсполнителя_КакАтрибутыСерии()
     {
         var task = _sut.Create("proj-1", "owner-1", new CreateTaskRequest("регулярная",
+            CreatedByHuman: true, // человек-автор серии (S2b-1, доработка): признак явный
             DueDate: "2026-11-01",
             Recurrence: new TaskRecurrence { Type = TaskRecurrenceType.Daily }));
         task.AssigneeUserId = "member-1";

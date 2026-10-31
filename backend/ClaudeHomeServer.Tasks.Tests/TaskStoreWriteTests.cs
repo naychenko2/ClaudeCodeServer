@@ -111,7 +111,7 @@ public class TaskStoreWriteTests : IDisposable
     public void CreatedByUserId_ПереживаетПерезагрузкуСтора()
     {
         var sut = NewManager();
-        var task = sut.Create("proj-1", "user-1", new CreateTaskRequest("из UI"));
+        var task = sut.Create("proj-1", "user-1", new CreateTaskRequest("из UI", CreatedByHuman: true));
 
         var reloaded = NewManager();
 

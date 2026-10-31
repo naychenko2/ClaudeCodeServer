@@ -50,7 +50,7 @@ public class SpendController(SpendAnalyticsService analytics, ISessionDirectory 
         if (!SpendAnalyticsService.PivotLevels.Contains(groupBy))
             return BadRequest(new { error = $"Неизвестный разрез: {groupBy}" });
         var res = SpendAccess.Resolve(IsAdmin, CurrentUserId, scope,
-            user, project, chat, task, persona, provider, model, source, groupBy);
+            user, project, chat, task, persona, provider, model, source);
         if (res.Error is not null) return Forbidden(res.Error);
         var (f, t) = Period(from, to);
         return Ok(new { nodes = analytics.Pivot(groupBy, f, t, res.Filter) });

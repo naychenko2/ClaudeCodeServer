@@ -192,10 +192,10 @@ public sealed class SpendStore : ISpendCollector, ISpendDetailReader
     // Свёртка записей дня по полному составному ключу разрезов
     internal static List<DailySpendRow> Aggregate(string date, IEnumerable<SpendRecord> records)
     {
-        var map = new Dictionary<(string, string?, string?, string?, string?, string, string?, string), DailySpendRow>();
+        var map = new Dictionary<(string, string?, string?, string?, string?, string?, string, string?, string), DailySpendRow>();
         foreach (var r in records)
         {
-            var key = (r.OwnerId, r.ProjectId, r.SessionId, r.TaskId, r.PersonaId, r.Provider, r.Model, r.Source);
+            var key = (r.OwnerId, r.ProjectId, r.SessionId, r.TaskId, r.PersonaId, r.ActorUserId, r.Provider, r.Model, r.Source);
             if (!map.TryGetValue(key, out var row))
                 map[key] = row = new DailySpendRow
                 {
@@ -205,6 +205,7 @@ public sealed class SpendStore : ISpendCollector, ISpendDetailReader
                     SessionId = r.SessionId,
                     TaskId = r.TaskId,
                     PersonaId = r.PersonaId,
+                    ActorUserId = r.ActorUserId,
                     Provider = r.Provider,
                     Model = r.Model,
                     Source = r.Source,

@@ -232,16 +232,18 @@ public class SpendControllerTests : IDisposable
         or.StatusCode.Should().Be(403);
     }
 
+    // S2a-6b: разрез «user» не-админу открыт — в его срезе (Me принудителен) это разбивка
+    // по участникам его общих проектов; чужих данных она не даёт.
     [Fact]
-    public void Gate_НеАдмин_GroupByUser_Pivot_403()
+    public void Gate_НеАдмин_GroupByUser_Pivot_200()
     {
         var store = NewStore("gate_gb");
+        store.Record(Rec(DateTime.UtcNow, "u1"));
         var ctl = NewController(store, "u1", admin: false);
 
         var result = ctl.Pivot(groupBy: "user");
 
-        var or = result.Should().BeOfType<ObjectResult>().Which;
-        or.StatusCode.Should().Be(403);
+        result.Should().BeOfType<OkObjectResult>();
     }
 
     [Fact]

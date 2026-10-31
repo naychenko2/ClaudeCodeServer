@@ -137,15 +137,17 @@ public class TaskBoardMemberDeliveryTests : IClassFixture<TestWebApplicationFact
         var projectId = await CreateProjectAsync(role);
         var conn = await ConnectSecondAsync();
         var received = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var updated = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
         conn.On<JsonElement>("message", m =>
         {
-            if (m.TryGetProperty("type", out var t) && t.GetString() == "task_changed")
-                received.TrySetResult(m.Clone());
+            if (!m.TryGetProperty("type", out var t) || t.GetString() != "task_changed") return;
+            if (m.GetProperty("action").GetString() == "updated") updated.TrySetResult(m.Clone());
+            else received.TrySetResult(m.Clone());
         });
         await conn.InvokeAsync("JoinProject", projectId);
 
         (await Owner().PostAsJsonAsync($"/api/projects/{projectId}/tasks",
-            new { title = "Тяжёлая", description = "длинное описание" })).EnsureSuccessStatusCode();
+            new { title = "Тяжёлая", description = new string('д', 250) })).EnsureSuccessStatusCode();
 
         var task = (await received.Task.WaitAsync(Wait)).GetProperty("task");
         task.GetProperty("title").GetString().Should().Be("Тяжёлая");
@@ -153,9 +155,23 @@ public class TaskBoardMemberDeliveryTests : IClassFixture<TestWebApplicationFact
         (task.TryGetProperty("resultMarkdown", out var res) ? res.ValueKind : JsonValueKind.Null)
             .Should().Be(JsonValueKind.Null);
 
+        // Паритет с REST-элементом списка: поля облегчённого элемента едут в payload
+        task.GetProperty("listItem").GetBoolean().Should().BeTrue();
+        task.GetProperty("hasDescription").GetBoolean().Should().BeTrue();
+        task.GetProperty("hasResult").GetBoolean().Should().BeFalse();
+        task.GetProperty("descriptionPreview").GetString().Should().Be(new string('д', 200) + "…");
+
+        // С заполненным итогом превью-событие несёт hasResult=true, сам итог не едет
+        (await Owner().PutAsJsonAsync($"/api/tasks/{task.GetProperty("id").GetString()}",
+            new { resultMarkdown = "итог работы" })).EnsureSuccessStatusCode();
+        var upd = (await updated.Task.WaitAsync(Wait)).GetProperty("task");
+        upd.GetProperty("hasResult").GetBoolean().Should().BeTrue();
+        (upd.TryGetProperty("resultMarkdown", out var res2) ? res2.ValueKind : JsonValueKind.Null)
+            .Should().Be(JsonValueKind.Null);
+
         // Владелец в БД/REST видит полную карточку
         var list = await Owner().GetFromJsonAsync<JsonElement>($"/api/tasks/{task.GetProperty("id").GetString()}");
-        list.GetProperty("description").GetString().Should().Be("длинное описание");
+        list.GetProperty("description").GetString().Should().Be(new string('д', 250));
     }
 
     [Fact]

@@ -5,6 +5,9 @@ namespace ClaudeHomeServer.Models;
 
 // Задача пользователя; может быть привязана к проекту или быть личной (ProjectId == null).
 // Хранение — data/tasks.json (TaskManager).
+// Полиморфная сериализация (без дискриминатора) нужна, чтобы поле, объявленное как TaskItem
+// (TaskChangedMessage.Task), несло поля облегчённого TaskListItem; чтение всегда даёт TaskItem.
+[JsonDerivedType(typeof(TaskListItem))]
 public class TaskItem
 {
     public string Id { get; init; } = Guid.NewGuid().ToString();

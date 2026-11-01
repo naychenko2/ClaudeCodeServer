@@ -4,7 +4,7 @@
 // словари: ни компонентов, ни стора. Их читают каталог (WikiTab), страница (WikiPageView),
 // «Входящие» (WikiInbox) и карточка пакета (WikiPackageView).
 import { type BadgeTone } from '../../../components/ui/Badge';
-import { parseSectionKey, type WikiError, type WikiSectionDto } from '../../../lib/wiki';
+import { parseSectionKey, type WikiError, type WikiSectionDto } from 'aihome_shell/kit';
 
 // Статусы страницы — их считает код, не модель (ADR-035 §3, WikiFrontmatter.StatusValues)
 export const PAGE_STATUS: Record<string, { tone: BadgeTone; text: string; title: string }> = {

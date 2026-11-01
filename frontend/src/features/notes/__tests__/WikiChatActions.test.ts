@@ -42,45 +42,24 @@ import { manifest as notesManifest } from '../manifest';
 import { ChatHeaderBar } from '../../../components/chat/ChatHeaderBar';
 import { registerSubsystem, type ChatHeaderSummaryCtx } from '../../../lib/subsystems/registryCore';
 
-// Тот же приём, что в WikiJournal.test: мокан только транспорт. Имена — по фактическим
-// импортам графа (signalr зовут и useLocalModelLive; offline — api.ts: cachedToken и др.).
-vi.mock('../../../lib/signalr', () => ({
+// Тот же приём, что в WikiJournal.test: мокан только транспорт. Мок с сохранением
+// остальных экспортов: компонент берёт эти модули через кит хоста, а цепочка кита шире
+// собственных импортов теста (onFilesChanged, RequestTimeoutError…) — full-replacement
+// мок рвётся на первом недостающем имени. Паттерн — как в NotesPage.test.ts.
+vi.mock('../../../lib/signalr', async (orig) => ({
+  ...await orig<typeof import('../../../lib/signalr')>(),
   onMessage: vi.fn(() => () => {}),
   onReconnected: vi.fn(() => () => {}),
   joinUser: vi.fn(() => Promise.resolve()),
   joinProject: vi.fn(() => Promise.resolve()),
   onLocalModelMessage: vi.fn(() => () => {}),
 }));
-vi.mock('../../../lib/offline', () => {
-  // класс внутри фактории: vi.mock поднят выше импортов файла, внешний class в TDZ был бы
-  // ReferenceError при первом импорте моканного модуля
-  class OfflineErrorMock extends Error {}
-  return {
+vi.mock('../../../lib/offline', async (orig) => ({
+  ...await orig<typeof import('../../../lib/offline')>(),
+  // по делу в этих тестах работает только request: транспорт запросов вики
   request: vi.fn(),
   readStoredUserId: () => 'u1',
-  readStoredToken: () => null,
-  cachedToken: () => null,
-  writeStoredToken: () => {},
-  // имена дальше по графу (api.ts, sync.ts через ConnectionStatus — его onPassiveEvict
-  // зовётся на импорте, taskOutbox и др.): заглушки по сигнатуре, чтобы граф загружался;
-  // по делу в этих тестах работает только request
-  OfflineError: OfflineErrorMock,
-  isOnline: () => true,
-  subscribeOnline: () => () => {},
-  setConnectionState: () => {},
-  confirmOffline: () => false,
-  isLegacyPassiveKey: () => false,
-  passiveCacheKey: () => 'test:passive',
-  fileContentCachePrefix: () => 'test:fc:',
-  flushFileEviction: async () => {},
-  onPassiveEvict: () => () => {},
-  parseFileContentCacheKey: () => null,
-  setKeptFilePaths: () => {},
-  keepFilePath: () => {},
-  unkeepFilePath: () => {},
-  writePassiveRangeEntry: async () => {},
-  };
-});
+}));
 // useAccountUsage — useSyncExternalStore БЕЗ server-снимка: в SSR он падает сам по себе;
 // аккаунт-бейдж к ряду действий отношения не имеет
 vi.mock('../../../lib/accountUsage', () => ({

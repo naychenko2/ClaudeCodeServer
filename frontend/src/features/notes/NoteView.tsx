@@ -11,12 +11,12 @@ import {
   showToast, openChatById, beginAiBusy, endAiBusy,
   registerCopyDoc, copyMarkdown, copyRenderedHtml,
   ensurePersonasLoaded, personaLabel, usePersonas, NO_AUTOFILL,
+  FLAGS, useFeature,
 } from 'aihome_shell/kit';
 import type { NoteSource } from '../../types';
 import { NoteConnections } from './NoteConnections';
 import { NoteTasksSection } from './NoteTasksSection';
 import { useSphereOf } from '../../lib/useSphereOf';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { requestNoteIngest } from './WikiChatActions';
 import { DocCommentedMarkdown, PersonaAssignMenu, filterAssignablePersonas } from './DocComments';
 import {

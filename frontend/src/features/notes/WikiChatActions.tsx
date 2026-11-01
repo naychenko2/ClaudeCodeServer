@@ -22,15 +22,14 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { BookOpen, ScrollText, Undo2 } from 'lucide-react';
-import { C, FS, SP } from '../../lib/design';
+import {
+  C, FS, SP, FLAGS, useFeature,
+  analyzeWikiChat, ingestWikiNote, loadWikiChatAnalyzeStatus, loadWikiChats, retractWikiSource,
+  WikiError, type WikiChatAnalyzeOk, type WikiNoteIngestDto, type WikiRetractDto,
+} from 'aihome_shell/kit';
 import { Button } from '../../components/ui/Button';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
-import {
-  analyzeWikiChat, ingestWikiNote, loadWikiChatAnalyzeStatus, loadWikiChats, retractWikiSource,
-  WikiError, type WikiChatAnalyzeOk, type WikiNoteIngestDto, type WikiRetractDto,
-} from '../../lib/wiki';
 import { wikiErrorText } from './wiki/wikiLabels';
 import type { ChatHeaderSummaryCtx } from '../../lib/subsystems/registryCore';
 

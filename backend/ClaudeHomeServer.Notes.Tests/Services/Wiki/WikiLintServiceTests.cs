@@ -566,6 +566,28 @@ public class WikiLintServiceTests : IDisposable
         raw.Should().OnlyContain(l => IsValidJson(l));
     }
 
+    // c2: упоминание без ссылки считается одинаково в линтере и в графе (общие CodeMask и
+    // FindWord): сумма несвязанных упоминаний страниц вики в графе равна метрике unlinkedMentions.
+    [Fact]
+    public async Task УпоминаниеБезСсылки_ВЛинтереИВГрафеСчитаетсяОдинаково()
+    {
+        var p = CreateProject("Единый разбор");
+        await _keeper.EnsureInitializedAsync(User);
+        await WriteGoodPage(p.Id, "Порядок встреч", "Целевая страница.");
+        await WriteGoodPage(p.Id, "Знание-б", "Обсудили Порядок встреч без ссылки.");
+        await WriteGoodPage(p.Id, "Знание-в", "Пример:\n\n~~~\nПорядок встреч\n~~~\n\nи `Порядок встреч` в коде.");
+
+        (await _sut.TryRunOwnerAsync(User)).SectionsOk.Should().Be(1);
+
+        var wikiIds = _notes.GetGraphSnapshot(User).Nodes.Where(n => !n.Ghost && n.SourceKey == "wiki").Select(n => n.Id).ToList();
+        wikiIds.Should().HaveCount(3);
+        var inGraph = wikiIds.Sum(id => _notes.GetDetail(User, id)!.UnlinkedMentions.Count);
+
+        inGraph.Should().Be(1, "граф: считается только упоминание вне кода");
+        MetricsLines().Single().GetProperty("unlinkedMentions").GetInt32().Should().Be(inGraph,
+            "линтер и граф читают код одной маской и ищут слово одной функцией");
+    }
+
     private static bool IsValidJson(string line)
     {
         try { JsonDocument.Parse(line).Dispose(); return true; }

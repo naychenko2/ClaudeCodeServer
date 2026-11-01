@@ -283,7 +283,7 @@ internal static class WikiLint
                     if (other.Id == node.Id)
                         continue;
                     var title = Norm(other.Title);
-                    if (title.Length < 3 || FindWord(lower, title, mask) < 0)
+                    if (title.Length < 3 || NotesService.FindWord(lower, title, mask) < 0)
                         continue;
                     if (linked.Contains(other.Id))
                         continue;
@@ -533,7 +533,7 @@ internal static class WikiLint
                     if (other.Id == page.Id)
                         continue;
                     var title = Norm(other.Title);
-                    if (title.Length < 3 || FindWord(lower, title, mask) < 0)
+                    if (title.Length < 3 || NotesService.FindWord(lower, title, mask) < 0)
                         continue;
                     if (linked.Contains(other.Id))
                         continue;
@@ -574,26 +574,6 @@ internal static class WikiLint
     }
 
     // ─── Помощники разбора текста и расстояния ───────────────────────────────────
-
-    // Индекс вхождения needle как отдельного слова (границы — не буквы/цифры), иначе -1.
-    // Маска — общая (NotesService.CodeMask): расхождение разборов кода давало разные числа
-    // упоминаний в линтере и в графе. FindWord в NotesService private: его вынос в internal
-    // — отдельная правка NotesService.cs (вне файлов этого шага).
-    private static int FindWord(string haystack, string needle, bool[] mask)
-    {
-        var from = 0;
-        while (true)
-        {
-            var i = haystack.IndexOf(needle, from, StringComparison.Ordinal);
-            if (i < 0) return -1;
-            if (NotesService.InCode(mask, i)) { from = i + 1; continue; }
-            var before = i == 0 || !char.IsLetterOrDigit(haystack[i - 1]);
-            var afterIdx = i + needle.Length;
-            var after = afterIdx >= haystack.Length || !char.IsLetterOrDigit(haystack[afterIdx]);
-            if (before && after) return i;
-            from = i + 1;
-        }
-    }
 
     private static int Levenshtein(string a, string b)
     {

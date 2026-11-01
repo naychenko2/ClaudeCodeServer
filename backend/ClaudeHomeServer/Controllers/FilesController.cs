@@ -369,8 +369,9 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             // «сравнить и записать» под замком на полный путь: без замка два сохранения
             // проверяются по одним и тем же старым байтам и проходят оба.
             // Доживка S2c-1 (дефект найден на S2c-F2a): обе ветки — под одним и тем же замком:
-            // 200-ответ обязан нести новый ETag (SetContentETagAfterWrite), а хеш — считаться
-            // сразу после нашей записи, без чужой версии файла между записью и хешем.
+            // 200-ответ обязан нести новый ETag (SetContentETagAfterWrite). Доработка по ревью
+            // 00f9451e: хеш — по тексту запроса, не по перечитанному файлу: замок сериализует
+            // только SaveContent, и писатель мимо замка не должен менять тег нашего ответа.
             var ifMatch = RequestIfMatch();
             var abs = FileService.SafeJoinPublic(root, path);
             var sem = LockFor(abs);
@@ -380,7 +381,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
                 if (ifMatch is null)
                 {
                     files.WriteFile(root, path, req.Content);
-                    SetContentETagAfterWrite(root, path, abs);
+                    SetContentETagAfterWrite(root, path, abs, req.Content);
                     return Ok();
                 }
 
@@ -391,7 +392,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
                 if (current != ifMatch)
                     return Conflict(FileConflictBodyFor(root, path, abs, current));
                 WriteAtomic(root, path, abs, req.Content);
-                SetContentETagAfterWrite(root, path, abs);
+                SetContentETagAfterWrite(root, path, abs, req.Content);
                 return Ok();
             }
             finally { sem.Release(); }
@@ -437,32 +438,47 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         && files.GetDocumentInfo(path) is null
         && !files.IsBinaryFile(root, path);
 
-    // «Канонические байты» файла для ETag — ОДНА функция на выдачу тега в GET и на сверку
-    // If-Match в PUT (доработка S2c-1 п.4). Это те же байты, что реально отдаёт GET текстового
-    // файла: текст, декодированный как в FileService.ReadFile (UTF-8, BOM отброшен), заново
-    // закодированный UTF-8 без BOM. Хеш сырых байт диска не годился: файл с BOM дал бы тег,
-    // которого нет ни в content из GET, ни в теле, которое вернёт PUT, — unchanged-файл
-    // отвечал 409 на собственный же тег. Запись API пишет UTF-8 без BOM, поэтому после
-    // первой же правки тег = хеш содержимого без BOM и цикл GET→PUT сходится.
+    // «Канонический хеш текста» — ОДНА функция над СТРОКОЙ: снять BOM-преамбулу (U+FEFF в
+    // начале) → UTF-8 без BOM → SHA-256. Её зовут: GET и сверка If-Match (через обёртку ниже,
+    // по декодированному содержимому файла) и тег ответа PUT — по тексту запроса (доработка
+    // 00f9451e). BOM снимается и у текста запроса: запись пишет U+FEFF как EF BB BF, GET при
+    // декоде его срезает — без снятия тег ответа расходился бы с тегом последующего GET и
+    // давал ложный 409 на цепочке. Снимается ровно одна преамбула: физический BOM уже срезан
+    // декодером, оставшийся в строке U+FEFF — это следующий физический BOM после записи.
+    private static string CanonicalSha256OfText(string text)
+    {
+        // U+FEFF явным кодом точки: экранированный литерал BOM нечитаем в диффе и тонет в редакторах
+        if (text.Length > 0 && text[0] == (char)0xFEFF) text = text[1..];
+        var canonical = System.Text.Encoding.UTF8.GetBytes(text);
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(canonical)).ToLowerInvariant();
+    }
+
+    // Канонический хеш ФАЙЛА — для GET и сверки If-Match: тот же декод, что у FileService.ReadFile
+    // (UTF-8, физический BOM срезается при декоде), и тот же хелпер над строкой. Хеш сырых байт
+    // диска не годился: файл с BOM дал бы тег, которого нет ни в content из GET, ни в теле,
+    // которое вернёт PUT, — unchanged-файл отвечал 409 на собственный же тег.
     private static string CanonicalSha256OfTextFile(string absPath)
     {
         using var reader = new System.IO.StreamReader(
             System.IO.File.OpenRead(absPath), System.Text.Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-        var canonical = System.Text.Encoding.UTF8.GetBytes(reader.ReadToEnd());
-        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(canonical)).ToLowerInvariant();
+        return CanonicalSha256OfText(reader.ReadToEnd());
     }
 
     // Доживка S2c-1 (дефект найден на S2c-F2a): 200-ответ сохранения обязан нести новый ETag —
     // по образцу PUT заметок (NotesController.cs:504). Без него следующая сохранка клиента идёт
-    // по старому тегу и получает 409 на собственную правку (ложный конфликт). Тот же признак и
-    // та же функция, что у GET (IsEtaggableText + CanonicalSha256OfTextFile) — второго способа
-    // нет; зовётся под тем же замком на путь сразу после нашей записи: в файле наш текст, а не
-    // чужая версия, и тег ответа равен тегу последующего GET. Для не-etaggable (бинарные/
-    // документы/сверх потолка) заголовка нет — как у GET.
-    private void SetContentETagAfterWrite(string root, string path, string abs)
+    // по старому тегу и получает 409 на собственную правку (ложный конфликт). Доработка по
+    // ревью 00f9451e: тег — канонический хеш ТЕКСТА ЗАПРОСА (тот же CanonicalSha256OfText,
+    // что даёт тег GET после декода файла), а не перечитанного файла: замок на путь
+    // сериализует только SaveContent, и писатель мимо замка (revert/upload/офис/агент) может
+    // вклиниться между нашей записью и ответом — перечитывание выдало бы тег ЧУЖОЙ версии,
+    // и следующий PUT по нему молча затёр бы чужую правку без 409. По тексту запроса тег
+    // ответа — всегда хеш нашей версии: если на диске уже чужая запись, следующий PUT по
+    // этому тегу даёт настоящий 409. Признак etaggable — по файлу, как у GET: для
+    // не-etaggable (бинарные/документы/сверх потолка) заголовка нет.
+    private void SetContentETagAfterWrite(string root, string path, string abs, string content)
     {
         if (IsEtaggableText(root, path, abs))
-            HttpContext.Response.Headers.ETag = $"\"{CanonicalSha256OfTextFile(abs)}\"";
+            HttpContext.Response.Headers.ETag = $"\"{CanonicalSha256OfText(content)}\"";
     }
 
     // Запись через временный файл в том же каталоге и перемещение (File.Move overwrite),

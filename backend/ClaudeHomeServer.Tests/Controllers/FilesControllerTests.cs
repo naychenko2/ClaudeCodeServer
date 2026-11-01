@@ -1150,6 +1150,74 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
             "бинарный файл не etaggable — заголовка нет, как у GET");
     }
 
+    // ---------- доработка по ревью 00f9451e: тег ответа — хеш текста запроса, не файла ----------
+
+    // П.1 (major, contract): замок на путь сериализует только SaveContent — писатель мимо замка
+    // (revert/upload/офис/агент — реальные точки записи) может вклиниться между нашей записью
+    // и ответом. Окно симулировано публичным швом: FileService.WriteFile и WriteAtomic зовут
+    // NotifyMutated синхронно внутри записи (FileService.cs:427, FilesController.cs:504), подписчик пишет чужую версию
+    // на диск до SetContentETagAfterWrite. Тег ответа — хеш ОТПРАВЛЕННОГО текста (не чужой
+    // версии файла), и следующий PUT по нему — настоящий 409, а не тихая перезапись чужой правки.
+    [Fact]
+    public async Task SaveContent_ResponseETagIsOurText_ForeignWriteInWindow_NextPut409()
+    {
+        var (id, dir) = await SetupProjectWithFileAsync("window.txt", "v1");
+        var filesSvc = _factory.Services.GetRequiredService<FileService>();
+        Action<string, string, FileMutationKind, string?> interloper = (root, rel, _, _) =>
+        {
+            if (rel == "window.txt") File.WriteAllText(Path.Combine(root, rel), "чужая правка");
+        };
+        filesSvc.OnMutated += interloper;
+        string etagRaw;
+        try
+        {
+            var (etag1, _) = await GetContentETagAsync(id, "window.txt");
+            var put = await PutWithIfMatchAsync(id, "window.txt", "v2", etag1);
+            put.StatusCode.Should().Be(HttpStatusCode.OK);
+
+            var values = put.Headers.GetValues("ETag").ToList();
+            values.Should().HaveCount(1, "ETag по К8 — один сильный заголовок");
+            etagRaw = values[0];
+            etagRaw.Trim('"').Should().Be(Sha256Hex("v2"),
+                "тег ответа — хеш отправленного контента, даже если на диске уже чужая запись");
+        }
+        finally { filesSvc.OnMutated -= interloper; }
+
+        File.ReadAllText(Path.Combine(dir, "window.txt")).Should().Be("чужая правка",
+            "окно настоящее: на момент ответа файл уже чужой");
+        var put2 = await PutWithIfMatchAsync(id, "window.txt", "v3", etagRaw);
+        put2.StatusCode.Should().Be(HttpStatusCode.Conflict,
+            "цепочка по нашему тегу не затирает чужую правку молча — настоящий 409");
+        var body = JsonSerializer.Deserialize<JsonElement>(await put2.Content.ReadAsStringAsync());
+        body.GetProperty("code").GetString().Should().Be("file_changed");
+        body.GetProperty("content").GetString().Should().Be("чужая правка");
+    }
+
+    // П.1, граница BOM: контент, начинающийся с U+FEFF. Запись пишет его как есть (EF BB BF),
+    // GET срезает преамбулу при декоде — тег ответа обязан быть хешем БЕЗ преамбулы и равен
+    // ETag последующего GET, иначе цепочка дала бы ложный 409. Без снятия BOM у текста запроса
+    // этот тест красный. U+FEFF — явным кодом точки: литерал тонет в диффе.
+    [Fact]
+    public async Task SaveContent_ContentStartsBom_ResponseETagEqualsSubsequentGet_NoFalse409()
+    {
+        var (id, _) = await SetupProjectWithFileAsync("bom_put.txt", "old");
+        var content = (char)0xFEFF + "новая запись с BOM";
+        var put = await _client.PutAsJsonAsync(
+            $"/api/projects/{id}/files/content?path=bom_put.txt", new { content });
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var raw = put.Headers.GetValues("ETag").Single();
+        raw.Trim('"').Should().Be(Sha256Hex("новая запись с BOM"),
+            "тег — хеш без BOM-преамбулы: та же канонизация, что у GET после декода");
+
+        var (etag2, _) = await GetContentETagAsync(id, "bom_put.txt");
+        etag2.Should().Be(raw, "тег ответа PUT равен ETag последующего GET");
+
+        var put2 = await PutWithIfMatchAsync(id, "bom_put.txt", "v2", raw);
+        put2.StatusCode.Should().Be(HttpStatusCode.OK,
+            "цепочка по возвращённому тегу не даёт ложного 409 на BOM-преамбулу");
+    }
+
     // П.2 доработки S2c-1: служебный файл атомарной записи («.имя.<guid>.tmp») не правка
     // пользователя — до filesChanged он не доходит (тот же накопленный список уходит в
     // QueueSync синка знаний, FilesWatcherService.cs:535). Проверка на наблюдателе в

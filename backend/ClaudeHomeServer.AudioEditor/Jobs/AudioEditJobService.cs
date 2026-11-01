@@ -62,6 +62,7 @@ public sealed class AudioEditJobService : IDisposable
     private readonly AudioPrefsService? _prefs;
     private readonly ISpendCollector? _spend;
     private readonly ISessionBroadcaster? _broadcaster;
+    private readonly ISessionDirectory? _sessions;
     private readonly Voices.VoiceLibrary? _voices;
     private readonly ChatContext.AudioContextLaunch? _context;
     private readonly ILogger<AudioEditJobService> _log;
@@ -82,8 +83,10 @@ public sealed class AudioEditJobService : IDisposable
         ISessionBroadcaster? broadcaster = null,
         TimeProvider? time = null,
         Voices.VoiceLibrary? voices = null,
-        ChatContext.AudioContextLaunch? context = null)
+        ChatContext.AudioContextLaunch? context = null,
+        ISessionDirectory? sessions = null)
     {
+        _sessions = sessions;
         _context = context;
         _engines = engines;
         _workspace = workspace;
@@ -627,7 +630,7 @@ public sealed class AudioEditJobService : IDisposable
         if (job is { ChatSessionId: { } sessionId, ThreadId: { } threadId })
             await _threads!.OnFinishedAsync(job.OwnerId, job.Scope.Key, sessionId, threadId, job.Id,
                 AudioEditJobStatus.Completed, variants, partialError);
-        await Broadcast(job.OwnerId, AudioEditScope.ProjectIdOf(job.Scope.Key), new AudioEditCompletedMessage(job.Id, job.Scope.Key, [.. variants.Select(v => v.Variant)],
+        await Broadcast(job.OwnerId, AudioEditScope.ProjectIdOf(job.Scope.Key), job.ChatSessionId, new AudioEditCompletedMessage(job.Id, job.Scope.Key, [.. variants.Select(v => v.Variant)],
             cost, partialError, job.ChatSessionId, job.ThreadId, job.Initiator));
     }
 
@@ -662,7 +665,7 @@ public sealed class AudioEditJobService : IDisposable
         if (job is { ChatSessionId: { } sessionId, ThreadId: { } threadId })
             await _threads!.OnFinishedAsync(job.OwnerId, job.Scope.Key, sessionId, threadId, job.Id,
                 cancelled ? AudioEditJobStatus.Cancelled : AudioEditJobStatus.Failed, variants, result.Error);
-        await Broadcast(job.OwnerId, AudioEditScope.ProjectIdOf(job.Scope.Key), new AudioEditFailedMessage(job.Id, job.Scope.Key, result.Outcome, charged, result.Error,
+        await Broadcast(job.OwnerId, AudioEditScope.ProjectIdOf(job.Scope.Key), job.ChatSessionId, new AudioEditFailedMessage(job.Id, job.Scope.Key, result.Outcome, charged, result.Error,
             retry, job.ChatSessionId, job.ThreadId, job.Initiator));
     }
 
@@ -842,18 +845,18 @@ public sealed class AudioEditJobService : IDisposable
                 job.EtaSeconds = value.EtaSeconds;
                 job.Gpu = value.Gpu;
             }
-            _ = owner.Broadcast(job.OwnerId, AudioEditScope.ProjectIdOf(job.Scope.Key), new AudioEditProgressMessage(job.Id, job.Scope.Key, value.Stage,
+            _ = owner.Broadcast(job.OwnerId, AudioEditScope.ProjectIdOf(job.Scope.Key), job.ChatSessionId, new AudioEditProgressMessage(job.Id, job.Scope.Key, value.Stage,
                 value.QueuePosition, value.EtaSeconds, variant, job.Quote.Count, job.ChatSessionId, job.ThreadId, job.Initiator,
                 Gpu: value.Gpu));
         }
     }
 
-    private async Task Broadcast(string ownerId, string? projectId, ServerMessage message)
+    private async Task Broadcast(string ownerId, string? projectId, string? chatSessionId, ServerMessage message)
     {
         if (_broadcaster is null) return;
         try
         {
-            await _broadcaster.ToProjectOrOwner(ownerId, projectId, message);
+            await _broadcaster.ToChatAudience(_sessions, ownerId, projectId, chatSessionId, message);
         }
         catch (Exception ex)
         {

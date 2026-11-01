@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, lazy, Suspense } from 'react';
-import { Check, Copy, FileText, MessageCircle, Undo2, X } from 'lucide-react';
+import { BookOpen, Check, Copy, FileText, MessageCircle, Undo2, X } from 'lucide-react';
 import type { NoteDetail, NoteReply, Persona } from '../../types';
 import {
   api, bumpNotes, useNotesVersion, isFavorite, withFavoriteTag, withoutFavoriteTag,
@@ -16,6 +16,8 @@ import type { NoteSource } from '../../types';
 import { NoteConnections } from './NoteConnections';
 import { NoteTasksSection } from './NoteTasksSection';
 import { useSphereOf } from '../../lib/useSphereOf';
+import { FLAGS, useFeature } from '../../lib/featureFlags';
+import { requestNoteIngest } from './WikiChatActions';
 import { DocCommentedMarkdown, PersonaAssignMenu, filterAssignablePersonas } from './DocComments';
 import {
   SourceBadge,
@@ -52,6 +54,10 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
 }) {
   const version = useNotesVersion();
   const online = useOnline();
+  // «Разобрать в базу» (S7b) — за флагом llm-wiki; requestNoteIngest никогда не бросает,
+  // поэтому экрану нужен только busy для кнопки и текст для тоста
+  const wikiOn = useFeature(FLAGS.llmWiki);
+  const [ingestBusy, setIngestBusy] = useState(false);
   // Контейнер панели комментариев (портал из DocCommentedMarkdown). Плавающий сайдбар
   // связей справа от текста заметки — как у документов (см. docSide в FileViewer):
   // aside с float:right внутри обёртки display:flow-root. Свёрнутые секции связей
@@ -96,6 +102,16 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
       ? await copyRenderedHtml(rendered)
       : await copyMarkdown(noteRef.current.content);
     if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1500); }
+  };
+
+  // Заявка «Разобрать в базу» (S7b0b): исход и любой отказ (409 packages_limit, 404)
+  // становятся текстом тоста — экран не падает; повторный клик пока идёт — игнорируется
+  const runIngest = async () => {
+    if (ingestBusy) return;
+    setIngestBusy(true);
+    const text = await requestNoteIngest(noteId);
+    showToast('Разобрать в базу', text, 'info');
+    setIngestBusy(false);
   };
 
   useEffect(() => {
@@ -506,6 +522,11 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
               <IconButton title={copied ? 'Скопировано' : 'Скопировать Markdown (Shift — с форматированием)'} onClick={copyNote}>
                 {copied ? <Check size={ICON_SIZE.sm} color={C.success} strokeWidth={2.5} /> : <Copy size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
               </IconButton>
+              {wikiOn && (
+                <IconButton title="Разобрать в базу: Хранитель соберёт пакет правок вики" disabled={!online || ingestBusy} onClick={() => { void runIngest(); }}>
+                  <BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+                </IconButton>
+              )}
               <IconButton title={online ? 'Переместить…' : 'Перенос недоступен офлайн'} onClick={openMove} disabled={!online}><IconFolderMove /></IconButton>
               <IconButton title="Удалить" tone="danger" onClick={del}><IconTrash /></IconButton>
               <button onClick={startEdit} style={{ ...tbBtnPrimary, marginLeft: 6 }}>Править</button>

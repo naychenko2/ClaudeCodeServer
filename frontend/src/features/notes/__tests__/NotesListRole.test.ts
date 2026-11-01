@@ -11,6 +11,11 @@
 //     вызывающий без колбэков — как раньше.
 // Мутации: «снять гейт note.delete» красит тест читателя (меню заметки); «снять гейт
 // note.folder» — тест читателя (меню папки и draggable строки папки).
+// Ветка БЕЗ sourceFilter (NotesPage) — единственная, где рисуется шапка источника с её
+// контекстным меню (kind:'source', NotesList.tsx:671); с sourceFilter (панель воркспейса)
+// шапок нет вовсе (:656). Её пункты «Новая заметка» (:746) и «Новая папка» (:747) загейтированы
+// теми же дверями — последние два теста проверяют именно эту ветку; мутация «снять оба
+// гейта» (:746/:747) красит их.
 //
 // Окружение — по образцу NoteViewSaveConflict.test.ts: node + fakeDom + мок signalr.
 // Список заметок передаётся пропом (стор заметок здесь не грузится); папка «docs»
@@ -71,16 +76,20 @@ function teardown() {
 // → api.projects.list). projects — состав кэша для этого теста; [] — «проект не найден».
 // withCallbacks — пропы родителя (создание заметки): без них пунктов «Новая заметка»
 // нет ни у какой роли — это поведение родителя (S2c-F4h), не гейт.
-async function mountList(projects: Project[], opts: { source?: string; withCallbacks?: boolean } = {}) {
+// noSourceFilter — ветка без sourceFilter (NotesPage): единственная с шапкой источника;
+// компонент запросит в ней лейблы источников (NotesList.tsx:128) — метка берётся из
+// sourceLabel заметки, мок — чтобы эффект не ходил в сеть.
+async function mountList(projects: Project[], opts: { source?: string; withCallbacks?: boolean; noSourceFilter?: boolean } = {}) {
   const source = opts.source ?? 'p1';
   installFakeDom();
   vi.spyOn(api.projects, 'list').mockResolvedValue(projects);
+  if (opts.noSourceFilter) vi.spyOn(api.notes, 'sources').mockResolvedValue([]);
   invalidateProjectsCache();
   const r = mount(createElement(NotesList, {
     notes: [source === 'p1' ? NOTE : { ...NOTE, source: 'personal', sourceLabel: 'Личный' }],
     selectedId: null,
     onSelect: () => {},
-    sourceFilter: source,
+    ...(opts.noSourceFilter ? {} : { sourceFilter: source }),
     ...(opts.withCallbacks ? { onCreateInFolder: () => {}, onMoved: () => {}, onDeleted: () => {}, onIdsRemapped: () => {} } : {}),
   }));
   root = r.root; container = r.container;
@@ -120,6 +129,21 @@ async function hoverOn(text: string) {
 }
 
 const icon = (label: string) => findNodeByAttr(container, 'aria-label', label);
+
+// Контейнер контекстного меню: единственный узел с пропом onMouseDown (NotesList.tsx:694).
+// Меню шапки с закрытыми дверями существует, но пустое — «0 узлов» проверяется числом его
+// элементных детей, а не только отсутствием текста
+const menuEl = () => {
+  let hit: any = null;
+  const walk = (n: any): void => {
+    if (hit) return;
+    if (n.nodeType === 1 && (reactProps(n) ?? {}).onMouseDown) { hit = n; return; }
+    for (const c of n.childNodes ?? []) walk(c);
+  };
+  walk(container);
+  return hit;
+};
+const menuItems = (el: any): number => (el.childNodes ?? []).filter((c: any) => c.nodeType === 1).length;
 
 describe('NotesList: контролы записи по роли (S2c-F4d)', () => {
   beforeEach(setupMocks);
@@ -224,5 +248,29 @@ describe('NotesList: контролы записи по роли (S2c-F4d)', () 
     await openCtx('docs');
     expect(hasText('Новая заметка'), 'пункта «Новая заметка» нет').toBe(false);
     expect(hasText('Новая папка'), 'свои двери редактора при этом открыты').toBe(true);
+  });
+
+  // Ветка без sourceFilter (NotesPage): единственный путь, где есть контекстное меню шапки
+  // источника (kind:'source'). Пункты :746/:747 загейтированы ролевыми дверями — с закрытой
+  // дверью меню открывается пустым (0 узлов). Мутация «снять оба гейта» красит этот тест.
+  it('без sourceFilter: читателю в меню шапки источника — 0 узлов', async () => {
+    await mountList([projectWith('reader')], { noSourceFilter: true, withCallbacks: true });
+    expect(hasText('Заметка'), 'заметка в дереве').toBe(true);
+    expect(hasText('Проект'), 'шапка источника на месте').toBe(true);
+    await openCtx('Проект');
+    const menu = menuEl();
+    expect(menu, 'меню шапки открыто').not.toBeNull();
+    expect(menuItems(menu), 'закрытые двери: ни одного пункта').toBe(0);
+    expect(hasText('Новая заметка'), 'пункта «Новая заметка» нет').toBe(false);
+    expect(hasText('Новая папка'), 'пункта «Новая папка» нет').toBe(false);
+  });
+
+  it('без sourceFilter: редактору в меню шапки источника — «Новая заметка» и «Новая папка» есть', async () => {
+    await mountList([projectWith('editor')], { noSourceFilter: true, withCallbacks: true });
+    expect(hasText('Проект'), 'шапка источника на месте').toBe(true);
+    await openCtx('Проект');
+    expect(menuEl(), 'меню шапки открыто').not.toBeNull();
+    expect(hasText('Новая заметка'), 'пункт «Новая заметка» есть').toBe(true);
+    expect(hasText('Новая папка'), 'пункт «Новая папка» есть').toBe(true);
   });
 });

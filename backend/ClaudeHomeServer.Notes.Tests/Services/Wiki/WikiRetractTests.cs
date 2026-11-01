@@ -16,8 +16,9 @@ namespace ClaudeHomeServer.Tests.Services;
 // снятие хроники чата целиком, пометка «не разбирать» через шов S6i и строка op=retract в журнале.
 //
 // Окна ставятся дисковым состоянием, а не гонкой: чужая правка кладется между применением и
-// откатом явно; Task.Delay в этом файле нет. Встречная блокировка двух разделов держится гейтом-
-// держателем тех же замков, что берёт операция.
+// откатом явно; Task.Delay и пауз-спинов в этом файле нет. Встречная блокировка двух разделов
+// держится гейтом-держателем тех же замков, что берёт операция, а окно «операция стоит на
+// замке» — сигналом хука Хранителя (SectionLockRequestedHook), не временем.
 public class WikiRetractTests : IDisposable
 {
     private const string User = "u1";
@@ -334,19 +335,29 @@ public class WikiRetractTests : IDisposable
         File.ReadAllText(PageFull("Общее/_log.md")).Should().Contain("retract");
     }
 
-    // ─── 4. c3: встречный откат двух разделов не встаёт в взаимной блокировке (за 5 с) ───────
+    // ─── 4. c3: встречный откат двух разделов не встаёт в взаимной блокировке ────────────────
+
+    // Потолок ожидания — опция класса с прежним дефолтом (5 с). Это страховка зависания теста
+    // (событие не пришёл), а не способ ждать: тест ждёт события — сигнал «операция подошла к
+    // замку» (хук Хранителя) и завершение откатов. Ожидание реальное: под загрузкой параллельного
+    // быстрого набора (load 16) тест стоит 6,7 с (TRX 23:47 01.11), прежняя форма с паузой-спином
+    // краснела под той же загрузкой (дефект af499f3f, прогон 01.11); на спокойной машине весь
+    // класс стоит 1,9 с — тест вне Fast.
+    private static readonly TimeSpan WaitCeiling = TimeSpan.FromSeconds(5);
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task RetractДвухРазделовВстречный_ЗавершаетсяЗа5Секунд()
     {
         // Свойство, которое держит тест: встречный откат не держит второй раздел, пока ждёт
-        // первый. Тест держатель «common»; оба встречных отката стоят на входе в него; встречная
-        // попытка взять «projects/…» свободна — ни один из откатов его не держит. Свободна она и
-        // при правильном порядке — откат дождёт и завершится за 5 с.
+        // первый. Тест держатель «common»; окно проверки ставится сигналом: тест ждёт, пока
+        // ОБА встречных отката не подойдут к «common», и только тогда берёт встречную попытку
+        // «projects/…» — при каноническом порядке замок свободен (оба отката стоят на «common»
+        // и ничего не держат), сигнал приходит синхронно, и ни один откат «projects/…» не просил.
         // Мутация «блокировки в порядке аргументов» (снять OrderBy в WithSectionsLockedAsync,
-        // прогон только этого теста): X берёт «projects/…» первым и стоит на «common» — встречная
-        // попытка не получает замок за 2 с, WaitAsync падает TimeoutException'ом, тест красный
-        // по таймауту.
+        // прогон только этого теста): X берёт свободный «projects/…» и встаёт на «common» рядом с
+        // Y — сигнал обоих приходит, но встречная попытка теста стоит за X: её сигнала нет,
+        // WaitAsync падает TimeoutException'ом, тест красный по потолку; на спокойной машине — за ~5 с.
         await WriteCardAndPage();
         var project = CreateServerProject("Проект X");
         var projSection = WikiSections.ProjectsPrefix + project.Id;
@@ -368,35 +379,52 @@ public class WikiRetractTests : IDisposable
         await Applied(projSection, "session:chat-Y", Op(WikiPackage.OpAppend, yProj, ClaimB));
         await Applied(WikiSections.Common, "session:chat-Y", Op(WikiPackage.OpAppend, yCommon, ClaimB));
 
-        // Держатель «common» — тем же механизмом, что сама операция (Task.Delay в этом файле нет).
+        // Держатель «common» — тем же механизмом, что сама операция, и берётся ДО откатов: пока
+        // тест ждёт сигнала, встречные операции гарантированно стоят на тестовом «common».
         var gateC = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var startedC = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var holdingCommon = _keeper.WithSectionsLockedAsync(User, [WikiSections.Common],
-            async () => { startedC.SetResult(); await gateC.Task; return true; });
-        await startedC.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            async () => { await gateC.Task; return new WikiOpResult(WikiOpStatus.Applied, null); });
+
+        // Сигнал навешен после держателя и до откатов: в списке только их просьбы (сетап и
+        // держатель уже прошли). Список и хук — на экземпляре теста (свой _keeper на каждый
+        // тест), общих статиков нет.
+        var requested = new List<string>();
+        var atCommonLock = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _keeper.SectionLockRequestedHook = (_, key) =>
+        {
+            lock (requested)
+            {
+                requested.Add(key);
+                if (key == WikiSections.Common && requested.Count(k => k == WikiSections.Common) >= 2)
+                    atCommonLock.TrySetResult();
+            }
+        };
 
         var rx = Task.Run(() => _sut.RetractAsync(User, "session:chat-X"));
         var ry = Task.Run(() => _sut.RetractAsync(User, "session:chat-Y"));
 
-        // Дать обоим поискам дойти до входа в замок: это НЕ ожидание результата (результат
-        // ждётся WaitAsync) — спин на процессоре, чтобы встречная попытка ниже проверяла
-        // держателя, а не гонку «кто раньше успел».
-        Thread.SpinWait(5_000_000);
+        // Ожидание события, не паузы и не опроса: оба встречных отката подошли к «common».
+        // Хук после сигнала снимается: просьбы самой попытки ниже — не просьбы откатов.
+        await atCommonLock.Task.WaitAsync(WaitCeiling);
+        _keeper.SectionLockRequestedHook = null;
 
-        // Встречная попытка «projects/…»: при каноническом порядке замок свободен (оба отката
-        // ждут «common», ничего не держат). При порядке аргументов его держит X — таймаут 2 с.
-        var gateP = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Встречная попытка «projects/…» — держатель теста: при каноническом порядке замок
+        // свободен (оба отката стоят на «common» и ничего не держат) — сигнал приходит синхронно.
+        // При порядке аргументов «projects/…» держит X — попытка стоит за ним и сигнала не даёт.
         var startedP = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gateP = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var holdingProj = _keeper.WithSectionsLockedAsync(User, [projSection],
-            async () => { startedP.SetResult(); await gateP.Task; return true; });
-        await startedP.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            async () => { startedP.SetResult(); await gateP.Task; return new WikiOpResult(WikiOpStatus.Applied, null); });
+        await startedP.Task.WaitAsync(WaitCeiling);
+        requested.Should().NotContain(projSection,
+            "ни один встречный откат не просил второй замок, стоя на первом");
 
         gateC.SetResult();
         gateP.SetResult();
-        var resX = await rx.WaitAsync(TimeSpan.FromSeconds(5));
-        var resY = await ry.WaitAsync(TimeSpan.FromSeconds(5));
-        await holdingCommon;
-        await holdingProj;
+        var resX = await rx.WaitAsync(WaitCeiling);
+        var resY = await ry.WaitAsync(WaitCeiling);
+        (await holdingCommon).Status.Should().Be(WikiOpStatus.Applied);
+        (await holdingProj).Status.Should().Be(WikiOpStatus.Applied);
 
         resX.Ok.Should().BeTrue(resX.Reason);
         resY.Ok.Should().BeTrue(resY.Reason);

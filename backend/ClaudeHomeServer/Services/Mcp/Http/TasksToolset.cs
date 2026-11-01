@@ -182,11 +182,8 @@ public sealed class TasksToolset(
                 var id = StringArg(arguments, "id");
                 var (task, candidates) = GetForRead(context.OwnerId, projectId, allowed, id, narrow);
                 // S2c-9: актор-участник — та же проекция TaskView, что в REST (одна точка правды).
-                // Актор — из реестра идущего хода (GetTurnActor), не из заголовка: токен арендатора,
-                // а ход принадлежит участнику; актор неизвестен (фон) — права арендатора (разрез §2).
                 if (task is not null)
-                    return TaskJson(TaskView.ForActor(task, context.OwnerId,
-                        sessions.GetTurnActor(session.Id, context.OwnerId)), context.OwnerId);
+                    return TaskJson(ForCaller(task, session, context.OwnerId), context.OwnerId);
                 // Неоднозначный префикс: краткий список кандидатов (id + title, до 5), чтобы модель выбрала
                 if (candidates is { Count: > 0 })
                     return Deny($"Несколько задач начинаются с «{id}» — уточните id: " +
@@ -578,7 +575,7 @@ public sealed class TasksToolset(
                 // которого не было.
                 FireResolveBlockerByTask(updated, session.Id,
                     "штаб переписал задачу — блокер снят");
-                return Json(updated);
+                return Json(ForCaller(updated, session, context.OwnerId));
             }
 
             case "tasks_complete":
@@ -639,7 +636,7 @@ public sealed class TasksToolset(
                 // гасит карточку «штаб закрыл задачу», приписанного действия нет
                 FireResolveBlockerByTask(updated, session.Id,
                     "штаб закрыл задачу — блокер снят");
-                return CompleteResponse(updated);
+                return CompleteResponse(ForCaller(updated, session, context.OwnerId));
             }
 
             case "tasks_run_executor":
@@ -759,7 +756,7 @@ public sealed class TasksToolset(
                 }
                 if (updated is null) return Deny($"Задача {taskId} не найдена.");
                 await broadcaster.ToTaskBoard(context.OwnerId, updated.ProjectId, new TaskChangedMessage("updated", updated));
-                return Json(updated);
+                return Json(ForCaller(updated, session, context.OwnerId));
             }
 
             case "tasks_toggle_subtask":
@@ -789,7 +786,7 @@ public sealed class TasksToolset(
                 }
                 if (updated is null) return Deny($"Задача {taskId} не найдена.");
                 await broadcaster.ToTaskBoard(context.OwnerId, updated.ProjectId, new TaskChangedMessage("updated", updated));
-                return Json(updated);
+                return Json(ForCaller(updated, session, context.OwnerId));
             }
 
             case "tasks_find_duplicate":
@@ -1127,6 +1124,14 @@ public sealed class TasksToolset(
 
     private static McpToolCallResult Json<T>(T value) =>
         new(JsonSerializer.Serialize(value, JsonOpts));
+
+    // S2c-9 (доработка ревью): ответ любого инструмента, возвращающего карточку, проходит одну
+    // точку проекции: актор идущего хода не арендатор — вид участника (TaskView), как в REST и в
+    // tasks_get. Актор — из реестра хода (GetTurnActor), не из заголовка: токен арендатора, а ход
+    // принадлежит участнику; актор неизвестен (фон) — права арендатора (разрез §2). Проецируется
+    // только ответ: запись задачи и гейты инструментов здесь не меняются (гейт актора — S2c-6).
+    private TaskItem ForCaller(TaskItem task, Session session, string ownerId) =>
+        TaskView.ForActor(task, ownerId, sessions.GetTurnActor(session.Id, ownerId));
 
     // Ответ tasks_get: JSON задачи и — только у эпика фичи — дописанный блок «Сверка трекера».
     // Расхождения не пересчитываем: тот же проектор и та же функция, что у REST-страницы фичи

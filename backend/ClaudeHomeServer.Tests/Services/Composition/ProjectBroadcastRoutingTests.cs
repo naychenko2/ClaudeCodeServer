@@ -1,3 +1,4 @@
+using System.Text;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Composition;
@@ -68,6 +69,50 @@ public class ProjectBroadcastRoutingTests
         forOwner.Description.Should().Be("секрет-описание");
         forOwner.ResultMarkdown.Should().Be("секрет-итог");
         task.Description.Should().Be("секрет-описание", "облегчается копия, а не исходная карточка");
+    }
+
+    // Тот же формат id заметки, что кодирует NotesService.EncodeId: base64url «source|путь».
+    private static string NoteIdOf(string sourceKey, string relPath) =>
+        Convert.ToBase64String(Encoding.UTF8.GetBytes($"{sourceKey}|{relPath}"))
+            .Replace('+', '-').Replace('/', '_').TrimEnd('=');
+
+    /// <summary>S2c-9 доработка (п.1 вердикта): WS-копия для группы проекта идёт той же проекцией,
+    /// что список REST (TaskView.ForMemberListItem): id заметки личного vault закрыт (он раскрывает
+    /// участнику путь и название личной заметки владельца), заметка этого проекта остаётся, поля
+    /// облегчённого элемента сохранены. Владельцу — исходное сообщение, хранимая карточка не правится.</summary>
+    [Fact]
+    public async Task ToTaskBoard_ГруппеПроектаЗакрытSourceNoteIdЧужогоVaultа_ЗаметкаПроектаОстаётся()
+    {
+        var personalNote = NoteIdOf("personal", "Личная/заметка.md");
+        var projectNote = NoteIdOf("proj-1", "заметка-проекта.md");
+
+        var cap = new Capture();
+        var task = new TaskItem
+        {
+            Id = "t1", Title = "T", ProjectId = "proj-1",
+            Description = "секрет-описание", ResultMarkdown = "секрет-итог",
+            SourceNoteId = personalNote,
+        };
+        await cap.ToTaskBoard("owner-1", "proj-1", new TaskChangedMessage("updated", task));
+
+        var forProject = ((TaskChangedMessage)cap.ToProjectMsg!).Task.Should().BeOfType<TaskListItem>().Subject;
+        // поля элемента списка на месте: фронт по listItem догружает карточку, маркеры и превью — она же
+        forProject.ListItem.Should().BeTrue();
+        forProject.HasDescription.Should().BeTrue();
+        forProject.HasResult.Should().BeTrue();
+        forProject.DescriptionPreview.Should().Be("секрет-описание");
+        forProject.SourceNoteId.Should().BeNull(
+            "id личного vault раскрывает участнику путь и название личной заметки владельца");
+
+        var forOwner = ((TaskChangedMessage)cap.ToOwnerMsg!).Task;
+        forOwner.SourceNoteId.Should().Be(personalNote, "владельцу уходит исходное сообщение без изменений");
+        task.SourceNoteId.Should().Be(personalNote, "маска правит копию, а не хранимую карточку");
+
+        // своя заметка этого проекта: участник читает заметки проекта и так — маска бьёт только чужой источник
+        var capOwn = new Capture();
+        await capOwn.ToTaskBoard("owner-1", "proj-1", new TaskChangedMessage("updated",
+            new TaskItem { Id = "t2", Title = "T", ProjectId = "proj-1", SourceNoteId = projectNote }));
+        ((TaskChangedMessage)capOwn.ToProjectMsg!).Task.SourceNoteId.Should().Be(projectNote);
     }
 
     [Fact]

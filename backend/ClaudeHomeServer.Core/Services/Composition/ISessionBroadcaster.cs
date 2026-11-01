@@ -75,11 +75,13 @@ public static class SessionBroadcasterExtensions
             await broadcaster.ToOwner(ownerId, message);
             return;
         }
-        // Группе проекта — облегчённая копия (как список в REST: без Description/ResultMarkdown),
-        // иначе участник получил бы по WS то, чего REST ему не отдаёт. Исходный TaskItem не
-        // правится (копия), владелец получает полную карточку.
+        // Группе проекта — та же проекция, что список в REST (TaskView.ForMemberListItem): без
+        // Description/ResultMarkdown и без id чужой заметки-источника (SourceNoteId личного vault
+        // раскрывает участнику путь и название личной заметки владельца). Иначе участник получил бы
+        // по WS то, чего REST ему не отдаёт. Исходный TaskItem не правится (копия), владелец
+        // получает полную карточку.
         var forProject = message is TaskChangedMessage { Task: { } task } tc
-            ? tc with { Task = TaskListItem.From(task) }
+            ? tc with { Task = TaskView.ForMemberListItem(task) }
             : message;
         await broadcaster.ToProject(projectId, forProject);
         await broadcaster.ToOwner(ownerId, message);

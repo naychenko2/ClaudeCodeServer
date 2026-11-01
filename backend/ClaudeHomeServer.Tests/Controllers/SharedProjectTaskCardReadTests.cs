@@ -223,16 +223,36 @@ public class SharedProjectTaskCardReadTests : IClassFixture<TestWebApplicationFa
             .TryGetProperty("sourceNoteId", out _).Should().BeTrue();
     }
 
-    [Fact]
-    public async Task SourceNoteIdЗаметкиЭтогоПроекта_УчастникуОстаётся()
+    /// <summary>Маска бьёт только чужой источник — и в карточке, и в обоих списках (п.3 вердикта):
+    /// рядом с задачей этого проекта стоит задача с id заметки личного vault, её id участнику не
+    /// уходит. Мутация «маска списка безусловная» (TaskView.ForMemberListItem: обнулять всегда) —
+    /// этот тест красный: заметка своего проекта пропала бы из списка, оставшись в карточке.</summary>
+    [Theory]
+    [InlineData("editor")]
+    [InlineData("reader")]
+    public async Task SourceNoteIdЗаметкиЭтогоПроекта_УчастникуОстаётся_ЧужогоVaultаНетВСписках(string role)
     {
-        var projectId = await ProjectWithMemberAsync("reader");
-        var taskId = SeedTaskAsync(projectId, NoteId(projectId, "заметка-проекта.md"));
+        var projectId = await ProjectWithMemberAsync(role);
+        var noteId = NoteId(projectId, "заметка-проекта.md");
+        var taskId = SeedTaskAsync(projectId, noteId);
+        // рядом — задача того же проекта с id заметки личного vault: её маска и должна бить
+        var foreignId = SeedTaskAsync(projectId, NoteId("personal", "Личная/заметка.md"));
 
         var card = await GetCardAsync(Member(), taskId);
 
-        card.GetProperty("sourceNoteId").GetString().Should().Be(NoteId(projectId, "заметка-проекта.md"),
+        card.GetProperty("sourceNoteId").GetString().Should().Be(noteId,
             "заметки этого проекта участник читает и так: маска бьёт только чужой источник");
+
+        // оба списка идут той же проекцией, что карточка: своя заметка видна, чужой vault закрыт
+        foreach (var url in new[] { $"/api/projects/{projectId}/tasks", "/api/tasks" })
+        {
+            var list = await GetJsonAsync(Member(), url);
+            list.EnumerateArray().Single(t => t.GetProperty("id").GetString() == taskId)
+                .GetProperty("sourceNoteId").GetString().Should().Be(noteId,
+                    $"{url}: список — та же проекция, что карточка");
+            NoValue(list.EnumerateArray().Single(t => t.GetProperty("id").GetString() == foreignId), "sourceNoteId")
+                .Should().BeTrue($"{url}: id личного vault закрыт и в списке");
+        }
     }
 
     [Fact]
@@ -370,6 +390,58 @@ public class SharedProjectTaskCardReadTests : IClassFixture<TestWebApplicationFa
         // хода нет: актор неизвестен — права арендатора (разрез §2), проекция не применяется
 
         var (text, isError) = await McpCallAsync(Owner(), chatId, "tasks_get", new { id = taskId });
+
+        isError.Should().BeFalse(text);
+        JsonSerializer.Deserialize<JsonElement>(text)
+            .GetProperty("sourceNoteId").GetString().Should().Be(NoteId("personal", "Личная/заметка.md"));
+    }
+
+    /// <summary>S2c-9 доработка (п.2 вердикта): ответ записи — та же проекция, что tasks_get и REST.
+    /// Актор-участник не получает в ответе ни одного из четырёх пишущих инструментов id заметки
+    /// личного vault. Запись и гейты не меняются: после всех четырёх вызовов карточка владельца
+    /// остаётся с sourceNoteId — проецируется ответ, не хранимая задача.</summary>
+    [Fact]
+    public async Task АгентУчастника_ОтветыЗаписи_БезSourceNoteIdЛичногоVaultа_ЗаписьНеМеняется()
+    {
+        var (_, taskId, chatId) = await SharedProjectWithChatAndTaskAsync();
+        // ход редактора активен: актор пишется в реестр хода (тот же путь, что у теста tasks_get выше)
+        (await Member().PostAsJsonAsync($"/api/sessions/{chatId}/messages",
+            new { text = "вопрос редактора", wait = "none" })).EnsureSuccessStatusCode();
+        var sessions = _factory.Services.GetRequiredService<SessionManager>();
+        var ownerUserId = _factory.Services.GetRequiredService<UserStore>()
+            .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+        sessions.GetTurnActor(chatId, ownerUserId).Should().Be(MemberId(), "актор идущего хода — редактор");
+
+        var calls = new (string Tool, object Args)[]
+        {
+            ("tasks_add_subtask", new { taskId, title = "подзадача редактора" }),
+            ("tasks_toggle_subtask", new { taskId, subtaskTitle = "подзадача редактора", isDone = true }),
+            ("tasks_update", new { id = taskId, title = "переписал редактор" }),
+            ("tasks_complete", new { id = taskId, resultMarkdown = ResultText }),
+        };
+        foreach (var (tool, args) in calls)
+        {
+            var (text, isError) = await McpCallAsync(Owner(), chatId, tool, args);
+            isError.Should().BeFalse($"{tool}: {text}");
+            var json = JsonSerializer.Deserialize<JsonElement>(text);
+            json.GetProperty("id").GetString().Should().Be(taskId, $"{tool}: ответ — карточка задачи");
+            NoValue(json, "sourceNoteId").Should().BeTrue(
+                $"{tool}: ответ записи идёт той же проекцией, что tasks_get");
+        }
+
+        // хранимая карточка не правилась: своя заметка остаётся у владельца и в карточке, и в списке
+        (await GetCardAsync(Owner(), taskId)).GetProperty("sourceNoteId").GetString()
+            .Should().Be(NoteId("personal", "Личная/заметка.md"), "проецируется ответ, не запись");
+    }
+
+    /// <summary>Без хода участника (актор неизвестен — фон) ответы записи остаются полными:
+    /// права арендатора, как до правки (разрез §2).</summary>
+    [Fact]
+    public async Task БезХодаУчастника_ОтветыЗаписи_ПраваАрендатора_SourceNoteIdВиден()
+    {
+        var (_, taskId, chatId) = await SharedProjectWithChatAndTaskAsync();
+
+        var (text, isError) = await McpCallAsync(Owner(), chatId, "tasks_update", new { id = taskId, title = "переписал штаб" });
 
         isError.Should().BeFalse(text);
         JsonSerializer.Deserialize<JsonElement>(text)

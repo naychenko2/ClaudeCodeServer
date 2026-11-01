@@ -1051,6 +1051,105 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
         sha2.Should().Be(Sha256Hex("правка по ETag из GET"), "после записи тег — хеш нового содержимого");
     }
 
+    // ---------- S2c-1 доживка (дефект найден на S2c-F2a): 200-ответ PUT несёт новый ETag ----------
+
+    // Названный тест мутации (дозивка S2c-1): убрать SetContentETagAfterWrite в If-Match-ветке
+    // SaveContent — этот тест красный. ETag ответа PUT = канонический хеш записанного
+    // содержимого (файл с BOM) и равен ETag последующего GET.
+    [Fact]
+    public async Task SaveContent_IfMatch_ResponseETagEqualsSubsequentGet_FileWithBom()
+    {
+        const string text = "содержимое с BOM";
+        var (id, dir) = await SetupProjectWithFileAsync("etag_put_bom.txt", text);
+        File.WriteAllText(Path.Combine(dir, "etag_put_bom.txt"), text, new UTF8Encoding(true));
+
+        var (etag1, _) = await GetContentETagAsync(id, "etag_put_bom.txt");
+        var put = await PutWithIfMatchAsync(id, "etag_put_bom.txt", "правка по ETag", etag1);
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var values = put.Headers.GetValues("ETag").ToList();
+        values.Should().HaveCount(1, "ETag по К8 — один сильный заголовок");
+        var raw2 = values[0];
+        raw2.StartsWith('"').Should().BeTrue("сильный ETag отдаётся в кавычках");
+        raw2.Trim('"').Should().Be(Sha256Hex("правка по ETag"),
+            "тег ответа — хеш записанного содержимого, той же канонической функцией, что у GET");
+
+        var (etag2, _) = await GetContentETagAsync(id, "etag_put_bom.txt");
+        etag2.Should().Be(raw2, "тег ответа PUT равен ETag последующего GET");
+    }
+
+    // Конкурентность: цепочка клиента GET→PUT(If-Match=etag1)→etag2 из ответа→PUT(If-Match=etag2)
+    // проходит 200 без ложного 409 на собственную правку.
+    [Fact]
+    public async Task SaveContent_IfMatch_ChainByResponseETag_NoFalse409()
+    {
+        var (id, _) = await SetupProjectWithFileAsync("chain.txt", "v1");
+        var (etag1, _) = await GetContentETagAsync(id, "chain.txt");
+
+        var put1 = await PutWithIfMatchAsync(id, "chain.txt", "v2", etag1);
+        put1.StatusCode.Should().Be(HttpStatusCode.OK);
+        var etag2 = put1.Headers.GetValues("ETag").Single();
+        etag2.Trim('"').Should().Be(Sha256Hex("v2"));
+
+        var put2 = await PutWithIfMatchAsync(id, "chain.txt", "v3", etag2);
+        put2.StatusCode.Should().Be(HttpStatusCode.OK,
+            "следующая сохранка по возвращённому тегу — не 409 на собственную правку");
+        var (etag3, sha3) = await GetContentETagAsync(id, "chain.txt");
+        sha3.Should().Be(Sha256Hex("v3"));
+    }
+
+    // Чужая запись между сохранками: вторая сохранка с etag2 — настоящий конфликт, 409
+    // (тег протух не из-за сервера, а из-за чужой правки).
+    [Fact]
+    public async Task SaveContent_IfMatch_ForeignWriteBetweenSaves_SecondSaveWithOldTag409()
+    {
+        var (id, _) = await SetupProjectWithFileAsync("interloper.txt", "v1");
+        var (etag1, _) = await GetContentETagAsync(id, "interloper.txt");
+
+        var put1 = await PutWithIfMatchAsync(id, "interloper.txt", "v2", etag1);
+        put1.StatusCode.Should().Be(HttpStatusCode.OK);
+        var etag2 = put1.Headers.GetValues("ETag").Single();
+
+        // Чужая запись между сохранками клиента (правка мимо If-Match)
+        var foreign = await _client.PutAsJsonAsync(
+            $"/api/projects/{id}/files/content?path=interloper.txt", new { content = "чужая правка" });
+        foreign.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var put2 = await PutWithIfMatchAsync(id, "interloper.txt", "v3", etag2);
+        put2.StatusCode.Should().Be(HttpStatusCode.Conflict, "тег протух из-за чужой записи — настоящий 409");
+        var body = JsonSerializer.Deserialize<JsonElement>(await put2.Content.ReadAsStringAsync());
+        body.GetProperty("code").GetString().Should().Be("file_changed");
+        body.GetProperty("content").GetString().Should().Be("чужая правка");
+    }
+
+    // Путь без If-Match тоже отдаёт ETag: клиент, начавший с тега, получает тег.
+    [Fact]
+    public async Task SaveContent_NoIfMatch_ResponseCarriesETagOfWrittenContent()
+    {
+        var (id, _) = await SetupProjectWithFileAsync("plain_etag.txt", "old");
+        var response = await _client.PutAsJsonAsync(
+            $"/api/projects/{id}/files/content?path=plain_etag.txt", new { content = "новая запись" });
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var raw = response.Headers.GetValues("ETag").Single();
+        raw.Trim('"').Should().Be(Sha256Hex("новая запись"));
+        var (etag2, _) = await GetContentETagAsync(id, "plain_etag.txt");
+        etag2.Should().Be(raw, "тег ответа PUT равен ETag последующего GET");
+    }
+
+    // Не-etaggable: 200-ответ сохранения без заголовка — как GET такого файла (бинарный по
+    // расширению остаётся бинарным и после записи).
+    [Fact]
+    public async Task SaveContent_BinaryFile_ResponseHasNoETag()
+    {
+        var id = await SetupProjectWithBinaryAsync("clip_put.mp4", new byte[] { 0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70 });
+        var response = await _client.PutAsJsonAsync(
+            $"/api/projects/{id}/files/content?path=clip_put.mp4", new { content = "текст в mp4" });
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.Headers.Contains("ETag").Should().BeFalse(
+            "бинарный файл не etaggable — заголовка нет, как у GET");
+    }
+
     // П.2 доработки S2c-1: служебный файл атомарной записи («.имя.<guid>.tmp») не правка
     // пользователя — до filesChanged он не доходит (тот же накопленный список уходит в
     // QueueSync синка знаний, FilesWatcherService.cs:535). Проверка на наблюдателе в

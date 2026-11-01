@@ -368,18 +368,22 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             // S2c-1 (К8): без If-Match — ровно как раньше (обратная совместимость). С If-Match —
             // «сравнить и записать» под замком на полный путь: без замка два сохранения
             // проверяются по одним и тем же старым байтам и проходят оба.
+            // Доживка S2c-1 (дефект найден на S2c-F2a): обе ветки — под одним и тем же замком:
+            // 200-ответ обязан нести новый ETag (SetContentETagAfterWrite), а хеш — считаться
+            // сразу после нашей записи, без чужой версии файла между записью и хешем.
             var ifMatch = RequestIfMatch();
-            if (ifMatch is null)
-            {
-                files.WriteFile(root, path, req.Content);
-                return Ok();
-            }
-
             var abs = FileService.SafeJoinPublic(root, path);
             var sem = LockFor(abs);
             await sem.WaitAsync();
             try
             {
+                if (ifMatch is null)
+                {
+                    files.WriteFile(root, path, req.Content);
+                    SetContentETagAfterWrite(root, path, abs);
+                    return Ok();
+                }
+
                 // Тот же канонический хеш, что выдаёт GET (доработка S2c-1 п.4): сверяем то,
                 // что клиент действительно видел. Нетекстовому/сверх потолка тега нет ни у
                 // клиента, ни здесь — If-Match для него не может совпасть.
@@ -387,6 +391,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
                 if (current != ifMatch)
                     return Conflict(FileConflictBodyFor(root, path, abs, current));
                 WriteAtomic(root, path, abs, req.Content);
+                SetContentETagAfterWrite(root, path, abs);
                 return Ok();
             }
             finally { sem.Release(); }
@@ -445,6 +450,19 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             System.IO.File.OpenRead(absPath), System.Text.Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
         var canonical = System.Text.Encoding.UTF8.GetBytes(reader.ReadToEnd());
         return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(canonical)).ToLowerInvariant();
+    }
+
+    // Доживка S2c-1 (дефект найден на S2c-F2a): 200-ответ сохранения обязан нести новый ETag —
+    // по образцу PUT заметок (NotesController.cs:504). Без него следующая сохранка клиента идёт
+    // по старому тегу и получает 409 на собственную правку (ложный конфликт). Тот же признак и
+    // та же функция, что у GET (IsEtaggableText + CanonicalSha256OfTextFile) — второго способа
+    // нет; зовётся под тем же замком на путь сразу после нашей записи: в файле наш текст, а не
+    // чужая версия, и тег ответа равен тегу последующего GET. Для не-etaggable (бинарные/
+    // документы/сверх потолка) заголовка нет — как у GET.
+    private void SetContentETagAfterWrite(string root, string path, string abs)
+    {
+        if (IsEtaggableText(root, path, abs))
+            HttpContext.Response.Headers.ETag = $"\"{CanonicalSha256OfTextFile(abs)}\"";
     }
 
     // Запись через временный файл в том же каталоге и перемещение (File.Move overwrite),

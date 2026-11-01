@@ -166,6 +166,25 @@ public class SharedProjectNotesHttpTests : IClassFixture<TestWebApplicationFacto
         await NoteIntactAsync(noteId);
     }
 
+    /// <summary>Двери снимка (toc/translate) — тоже двери записи содержимого: поток доходит
+    /// до notes.Update → ResolveRoot(WriteContent) → UnauthorizedAccessException
+    /// (NotesService.cs:1398); без catch в действии это был 500 через UnhandledExceptionHandler.
+    /// Раннер в тестовом хосте — заглушка TestWebApplicationFactory ("[]"), поэтому до Update
+    /// поток доходит без живого LLM; заметка не меняется — Update бросает до записи файла.</summary>
+    [Fact]
+    public async Task Читатель_OglavlenieIPerevod_403_И_ЗаметкаНеМеняется()
+    {
+        await SetMemberAsync("reader");
+        var noteId = _noteId!;
+
+        (await Member().PostAsync($"/api/notes/{noteId}/toc", null))
+            .StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await Member().PostAsync($"/api/notes/{noteId}/translate", null))
+            .StatusCode.Should().Be(HttpStatusCode.Forbidden);
+
+        await NoteIntactAsync(noteId);
+    }
+
     // ── запись редактора (S2c-7): 200/204, файл — в notes/ проекта (арендатора) ────
 
     [Fact]

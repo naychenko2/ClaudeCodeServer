@@ -297,6 +297,7 @@ public class NotesController : ControllerBase
             return Ok(note);
         }
         catch (KeyNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return Forbid(); }
         catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
     }
 
@@ -311,6 +312,7 @@ public class NotesController : ControllerBase
             return Ok(note);
         }
         catch (KeyNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return Forbid(); }
         catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
     }
 

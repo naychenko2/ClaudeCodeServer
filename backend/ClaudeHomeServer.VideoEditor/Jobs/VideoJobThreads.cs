@@ -191,7 +191,7 @@ public sealed class VideoJobThreads(
         if (broadcaster is null) return;
         try
         {
-            await broadcaster.ToProjectOrOwner(ownerId, VideoEditScope.ProjectIdOf(scopeKey),
+            await broadcaster.ToChatAudience(directory, ownerId, VideoEditScope.ProjectIdOf(scopeKey), sessionId,
                 new VideoThreadChangedMessage(scopeKey, state.Revision, Dto(ownerId, sessionId, state)) { SessionId = sessionId });
         }
         catch (Exception ex)

@@ -87,7 +87,17 @@ public class SharedProjectNotesHttpTests : IClassFixture<TestWebApplicationFacto
     }
 
     /// <summary>Состав проекта перед тестом: участник в заданной роли (null — участника нет,
-    /// второй пользователь посторонний).</summary>
+    /// второй пользователь посторонний).
+    ///
+    /// После любой смены состава — «резканье» участника (его личная запись): модель
+    /// заметок per-owner (TTL 2 с, NotesService.cs:52-53) не снимается ни сменой участности,
+    /// ни чужими записями (InvalidateWrite покрывает вызывающего и арендатора,
+    /// NotesService.cs:128-134), и прогретая прежним тестом модель вернула бы участнику
+    /// снимок старого состава — не по проверяемой причине, а по свежести кэша (F-8:
+    /// тест «Посторонний читает комментарии» оставил модель участника без проекта, и
+    /// следующий читатель получал бы 404 вместо 403). Своя операция участника снимает
+    /// его ключ (NotesService.cs:130) — тот же приём, что «Резканье владельца» в тесте
+    /// редактора, только через личный источник: проектную запись участник сделать не может.</summary>
     private async Task SetMemberAsync(string? role)
     {
         var projectId = await SharedProjectIdAsync();
@@ -95,25 +105,30 @@ public class SharedProjectNotesHttpTests : IClassFixture<TestWebApplicationFacto
 
         if (_memberId is null)
         {
-            if (role is null) return;
-            var added = await owner.PostAsJsonAsync($"/api/projects/{projectId}/members",
-                new { username = TestWebApplicationFactory.SecondUsername, role });
-            added.EnsureSuccessStatusCode();
-            _memberId = JsonSerializer.Deserialize<JsonElement>(await added.Content.ReadAsStringAsync())
-                .GetProperty("members").EnumerateArray()
-                .First(m => m.GetProperty("username").GetString() == TestWebApplicationFactory.SecondUsername)
-                .GetProperty("userId").GetString()!;
-            return;
+            if (role is not null)
+            {
+                var added = await owner.PostAsJsonAsync($"/api/projects/{projectId}/members",
+                    new { username = TestWebApplicationFactory.SecondUsername, role });
+                added.EnsureSuccessStatusCode();
+                _memberId = JsonSerializer.Deserialize<JsonElement>(await added.Content.ReadAsStringAsync())
+                    .GetProperty("members").EnumerateArray()
+                    .First(m => m.GetProperty("username").GetString() == TestWebApplicationFactory.SecondUsername)
+                    .GetProperty("userId").GetString()!;
+            }
         }
-
-        if (role is null)
+        else if (role is null)
         {
             (await owner.DeleteAsync($"/api/projects/{projectId}/members/{_memberId}")).EnsureSuccessStatusCode();
             _memberId = null;
-            return;
+        }
+        else
+        {
+            (await owner.PutAsJsonAsync($"/api/projects/{projectId}/members/{_memberId}", new { role }))
+                .EnsureSuccessStatusCode();
         }
 
-        (await owner.PutAsJsonAsync($"/api/projects/{projectId}/members/{_memberId}", new { role }))
+        (await Member().PostAsJsonAsync("/api/notes",
+            new { title = $"Резканье {Guid.NewGuid():N}", content = "резканье", source = "personal" }))
             .EnsureSuccessStatusCode();
     }
 
@@ -290,6 +305,167 @@ public class SharedProjectNotesHttpTests : IClassFixture<TestWebApplicationFacto
         detail.EnsureSuccessStatusCode();
         JsonSerializer.Deserialize<JsonElement>(await detail.Content.ReadAsStringAsync())
             .GetProperty("content").GetString().Should().Contain("Текст проектной заметки.");
+    }
+
+    // ── F-8: чтение комментариев участником (решение Андрея 01.11) ───────────────────
+
+    /// <summary>F-8: читатель общего проекта видит комментарии к видимой ему заметке.
+    /// До F-8 GET /api/notes/annotations давал читателю 403: ResolveDoc требовал
+    /// WriteContent и для чтения документа (NotesService.Annotations.cs, S2c-7).</summary>
+    [Theory]
+    [InlineData("editor")]
+    [InlineData("reader")]
+    public async Task Участник_ЧитаетПроектныеКомментарии_200(string role)
+    {
+        var projectId = await SharedProjectIdAsync();
+
+        // Порядок важен: состояние создаёт владелец ДО состава и его резкана (SetMemberAsync).
+        // Резканье заканчивается GetDetail созданной заметки — Build модели на этот момент;
+        // если комментарий владельца создан раньше, он в прогретой модели есть, и чтение
+        // участника не зависит от TTL кэша (2 с).
+        var docTitle = $"Документ для чтения комментариев {role}";
+        await OwnNoteAsync(docTitle);
+        var annotated = await Owner().PostAsJsonAsync("/api/notes/annotate", new
+        {
+            doc = new { scope = projectId, path = $"notes/{docTitle}.md" },
+            selection = new { start = 0, end = 0, text = "Упоминание ЦелеваяТема" },
+            comment = $"Комментарий для {role}",
+        });
+        annotated.EnsureSuccessStatusCode();
+        var commentId = IdOf(await annotated.Content.ReadAsStringAsync());
+
+        (await Owner().PostAsJsonAsync($"/api/notes/{commentId}/reply", new { comment = "Ответ владельца" }))
+            .EnsureSuccessStatusCode();
+
+        await SetMemberAsync(role);
+        var member = Member();
+
+        var annotations = await member.GetAsync(
+            $"/api/notes/annotations?scope={projectId}&path={Uri.EscapeDataString($"notes/{docTitle}.md")}");
+        annotations.EnsureSuccessStatusCode();
+        var rows = JsonSerializer.Deserialize<JsonElement>(await annotations.Content.ReadAsStringAsync());
+        rows.EnumerateArray().Select(a => a.GetProperty("noteId").GetString()).Should().Contain(commentId);
+        // Привязка резолвится у участника так же: ^id, записанный владельцем, виден и статус exact
+        rows.EnumerateArray().Single(a => a.GetProperty("noteId").GetString() == commentId)
+            .GetProperty("state").GetString().Should().Be("exact");
+
+        var replies = await member.GetAsync($"/api/notes/{commentId}/replies");
+        replies.EnsureSuccessStatusCode();
+        JsonSerializer.Deserialize<JsonElement>(await replies.Content.ReadAsStringAsync())
+            .EnumerateArray().Select(r => r.GetProperty("title").GetString())
+            .Should().Contain("Ответ владельца");
+    }
+
+    /// <summary>F-8: запись комментариев остаётся закрытой читателю: annotate/repin/reply/status
+    /// — 403 (ResolveDoc: WriteContent по умолчанию; SetAnnotationStatusCore — ResolveRoot с
+    /// WriteContent). Модель читателя прогревается здесь только резканьем SetMemberAsync —
+    /// ПОСЛЕ комментария владельца, поэтому repin/reply (они ищут комментарий в модели
+    /// per-owner) находят его и дают проверяемые 403, а не 404 прежнего состава.
+    ///
+    /// Свой документ для попытки читателя — свежий, без ^id: Annotate держит ДВЕ двери
+    /// (ResolveDoc и CreateCore→ResolveRoot(WriteContent), NotesService.cs:826), и проверка
+    /// на документе с уже готовым якорем не различила бы, какая из них отказала: ошибочный
+    /// Read на ResolveDoc в Annotate пропустил бы читателя к записи ^id в файл проекта
+    /// перед 403 второй двери. На свежем документе это видно по содержанию: отказ обязан
+    /// прийти ДО любой записи — файл остаётся ровно таким, каким был создан.</summary>
+    [Fact]
+    public async Task Читатель_АннотируетОтвечаетЗакрываетКомментарий_403_И_КомментарийНеМеняется()
+    {
+        var projectId = await SharedProjectIdAsync();
+
+        // Тот же порядок, что в тесте 200: комментарий владельца — ДО состава и его резкана,
+        // чтобы прогреваемая резканьем модель читателя содержала его (repin/reply ищут
+        // комментарий в модели per-owner: без него — 404 вместо проверяемых 403).
+        var docTitle = "Документ для отказа комментариев";
+        await OwnNoteAsync(docTitle);
+        var annotated = await Owner().PostAsJsonAsync("/api/notes/annotate", new
+        {
+            doc = new { scope = projectId, path = $"notes/{docTitle}.md" },
+            selection = new { start = 0, end = 0, text = "Упоминание ЦелеваяТема" },
+            comment = "Комментарий владельца для отказа",
+        });
+        annotated.EnsureSuccessStatusCode();
+        var commentId = IdOf(await annotated.Content.ReadAsStringAsync());
+
+        // Свежий документ (без ^id) — именно на нём читатель пытается аннотировать.
+        var freshTitle = "Документ для отказа без якоря";
+        var freshId = await OwnNoteAsync(freshTitle);
+
+        await SetMemberAsync("reader");
+        var member = Member();
+
+        (await member.PostAsJsonAsync("/api/notes/annotate", new
+        {
+            doc = new { scope = projectId, path = $"notes/{freshTitle}.md" },
+            selection = new { start = 0, end = 0, text = "Упоминание ЦелеваяТема" },
+            comment = "Комментарий читателя",
+        })).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await member.PostAsJsonAsync($"/api/notes/{commentId}/repin",
+            new { start = 0, end = 0, text = "Упоминание ЦелеваяТема" }))
+            .StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await member.PostAsJsonAsync($"/api/notes/{commentId}/reply", new { comment = "Ответ читателя" }))
+            .StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await member.PostAsJsonAsync($"/api/notes/{commentId}/status", new { status = "resolved" }))
+            .StatusCode.Should().Be(HttpStatusCode.Forbidden);
+
+        // Резканье владельца перед проверками: его модель per-owner прогрета его Create-ами
+        // ДО попыток читателя, а отказавший читатель не инвалидирует её (CreateCore бросает
+        // до InvalidateWrite). Без резкана проверки ниже читали бы снимок файлов до попыток —
+        // ложно-зелёный при любой правке, которую читатель всё-таки успел сделать.
+        // Тот же приём, что «Резканье владельца» в тесте редактора.
+        await OwnNoteAsync("Резканье владельца F-8 отказ");
+
+        // Отказы не тронули комментарий: статус open, тред пуст
+        var detail = await Owner().GetAsync($"/api/notes/{commentId}");
+        detail.EnsureSuccessStatusCode();
+        JsonSerializer.Deserialize<JsonElement>(await detail.Content.ReadAsStringAsync())
+            .GetProperty("annotation").GetProperty("status").GetString().Should().Be("open");
+        var replies = await Owner().GetAsync($"/api/notes/{commentId}/replies");
+        replies.EnsureSuccessStatusCode();
+        JsonSerializer.Deserialize<JsonElement>(await replies.Content.ReadAsStringAsync())
+            .EnumerateArray().Should().BeEmpty();
+
+        // Отказ предшествовал любой записи: свежий документ не тронут ни ^id, ни чем иным
+        // (мутация «Read на ResolveDoc в Annotate» записала бы ^id до 403 второй двери —
+        // это сравнение краснеет).
+        var fresh = await Owner().GetAsync($"/api/notes/{freshId}");
+        fresh.EnsureSuccessStatusCode();
+        JsonSerializer.Deserialize<JsonElement>(await fresh.Content.ReadAsStringAsync())
+            .GetProperty("content").GetString().Should().Be(NoteContent);
+    }
+
+    /// <summary>F-8: посторонний читает проектные комментарии — 404: нет права Read →
+    /// KeyNotFoundException (ResolveDoc), «чужое» и «несуществующее» не различаем.
+    /// GetReplies сначала ищет комментарий в модели per-owner — резканье в SetMemberAsync
+    /// снимает модель, прогретую пока участник ещё был участником, и Build для постороннего
+    /// проекта не видит.</summary>
+    [Fact]
+    public async Task Посторонний_ЧитаетПроектныеКомментарии_404()
+    {
+        var projectId = await SharedProjectIdAsync();
+
+        var docTitle = "Документ для постороннего";
+        await OwnNoteAsync(docTitle);
+        var annotated = await Owner().PostAsJsonAsync("/api/notes/annotate", new
+        {
+            doc = new { scope = projectId, path = $"notes/{docTitle}.md" },
+            selection = new { start = 0, end = 0, text = "Упоминание ЦелеваяТема" },
+            comment = "Комментарий для постороннего",
+        });
+        annotated.EnsureSuccessStatusCode();
+        var commentId = IdOf(await annotated.Content.ReadAsStringAsync());
+
+        // Состав снимаются после создания состояния: резканье внутри SetMemberAsync греет
+        // модель уже БЕЗ проекта — GET replies резолвится по этой модели и не находит
+        // комментарий (404), GET annotations отбивается на ResolveDoc до всякой модели.
+        await SetMemberAsync(role: null);
+        var member = Member();
+
+        (await member.GetAsync(
+            $"/api/notes/annotations?scope={projectId}&path={Uri.EscapeDataString($"notes/{docTitle}.md")}"))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await member.GetAsync($"/api/notes/{commentId}/replies"))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     // ── владелец: прежний путь не изменился ─────────────────────────────────────────

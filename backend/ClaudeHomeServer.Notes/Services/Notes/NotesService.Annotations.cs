@@ -34,7 +34,8 @@ public sealed partial class NotesService
     // `private`: зовётся только внутри самого NotesService (аннотации). Был `internal`
     // до выноса вертикали — снаружи не вызывался ни разу, проверено по репозиторию
     // (ревью 2026-09-08). Лишняя видимость требовала InternalsVisibleTo без нужды.
-    private (string FullPath, bool CanWriteBlockId) ResolveDoc(string userId, string scope, string relPath)
+    private (string FullPath, bool CanWriteBlockId) ResolveDoc(string userId, string scope, string relPath,
+        ProjectRight right = ProjectRight.WriteContent)
     {
         var rel = NormalizeRel(relPath);
         if (!rel.EndsWith(".md", StringComparison.OrdinalIgnoreCase) &&
@@ -46,11 +47,16 @@ public sealed partial class NotesService
 
         // S2c-7: документ общего проекта открыт тому, кто может писать комментарии этого
         // проекта (WriteContent), а не только владельцу: комментарий — заметка в notes/
-        // проекта, ^id — в тот же notes/. Тот же разбор, что у ResolveRoot: нет доступа —
-        // 404 («чужое» и «несуществующее» не различаем), есть чтение без записи — 403.
+        // проекта, ^id — в тот же notes/.
+        // F-8 (решение Андрея 01.11): требуемое право передаётся явным параметром, форма
+        // одна с ResolveRoot (NotesService.cs:1515): ЧТЕНИЕ документа (список комментариев,
+        // сиротский статус, DocMissing модели) открыт Read — читатель общего проекта видит
+        // комментарии к видимой ему заметке; ЗАПИСЬ комментария (Annotate/Repin) остаётся
+        // на WriteContent (значение по умолчанию). Отказ тот же, что у ResolveRoot: нет
+        // доступа — 404 («чужое» и «несуществующее» не различаем), есть чтение без записи — 403.
         if (ProjectScope(userId, scope, ProjectRight.Read) is null)
             throw new KeyNotFoundException($"Проект {scope} не найден");
-        if (ProjectScope(userId, scope, ProjectRight.WriteContent) is null)
+        if (right != ProjectRight.Read && ProjectScope(userId, scope, right) is null)
             throw new UnauthorizedAccessException("Нет права на это действие в проекте");
 
         var project = _projects.GetById(scope)
@@ -291,7 +297,10 @@ public sealed partial class NotesService
             var isReply = annPaths.ContainsKey(key);
             if (!docExists.TryGetValue(key, out var exists))
             {
-                try { exists = File.Exists(ResolveDoc(userId, a.DocScope, a.DocPath).FullPath); }
+                // F-8: derived-состояние модели — чтение: чужой проект без права чтения
+                // тот же отказ, что раньше (KeyNotFound → «нет документа»); с правом чтения
+                // модель участника больше не считает живой документ «удалённым».
+                try { exists = File.Exists(ResolveDoc(userId, a.DocScope, a.DocPath, ProjectRight.Read).FullPath); }
                 catch { exists = false; }
                 docExists[key] = exists;
             }
@@ -433,7 +442,8 @@ public sealed partial class NotesService
         string? doc = null;
         try
         {
-            var (docFull, _) = ResolveDoc(userId, scope, rel);
+            // F-8: список комментариев документа — ручка ЧТЕНИЯ: право Read
+            var (docFull, _) = ResolveDoc(userId, scope, rel, ProjectRight.Read);
             if (File.Exists(docFull)) doc = File.ReadAllText(docFull, Encoding.UTF8);
         }
         catch (ArgumentException) { /* не-markdown — комментариев нет */ }
@@ -522,7 +532,8 @@ public sealed partial class NotesService
         string? doc = null;
         try
         {
-            var (full, _) = ResolveDoc(userId, a.DocScope, a.DocPath);
+            // F-8: сиротский статус — часть списка заметок (чтение): право Read
+            var (full, _) = ResolveDoc(userId, a.DocScope, a.DocPath, ProjectRight.Read);
             if (File.Exists(full)) doc = File.ReadAllText(full, Encoding.UTF8);
         }
         catch { /* область недоступна → сирота */ }

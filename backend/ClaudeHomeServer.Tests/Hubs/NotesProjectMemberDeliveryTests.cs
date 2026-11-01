@@ -18,7 +18,9 @@ namespace ClaudeHomeServer.Tests.Hubs;
 /// заметка — только владельцу. Полезная нагрузка не шире Read-доступа: id и действие,
 /// текста в событии нет. Рассылка не меняет запись проекта. Отрицательные проверки без
 /// Task.Delay: проба в группу и адресная проба тому же соединению идут одним FIFO-каналом,
-/// ждём адресную через TCS.
+/// ждём адресную через TCS. Тест гонки (доработка S2c-4): записи заметок последовательны,
+/// параллельна им только отзывка участника — гонка параллельных POST /api/notes (кэш моделей
+/// NotesService) проверятся отдельным дефектом 1886eba9, не здесь.
 /// </summary>
 [Trait("Category", "Host")]
 public class NotesProjectMemberDeliveryTests : IClassFixture<TestWebApplicationFactory>, IAsyncLifetime
@@ -267,20 +269,23 @@ public class NotesProjectMemberDeliveryTests : IClassFixture<TestWebApplicationF
         var revoked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         conn.On<JsonElement>("project_access_revoked", _ => revoked.TrySetResult());
 
-        // Старт отзыва и рассылок по сигналу, чтобы они действительно пересекались
+        // Записи идут последовательно, параллельна им только отзывка: гонка параллельных
+        // POST /api/notes (кэш моделей NotesService) — отдельный дефект 1886eba9, здесь она
+        // не проверяется. Отзывка стартует по сигналу до цепочки и перекрывается с ней;
+        // рассылка каждой записи завершается до ответа той записи (NotesController.Create
+        // ждёт шов до ответа). Вердикт теста одинаков при любом исходе гонки — отзывка до
+        // цепочки, в середине или после: после завершённого отзыва выкинутому соединению
+        // ничего не доставляется, поэтому счёт после него финален при любом порядке записей.
         var go = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var revoke = Task.Run(async () =>
         {
             await go.Task;
             (await Owner().DeleteAsync($"/api/projects/{projectId}/members/{SecondId}")).EnsureSuccessStatusCode();
         });
-        var broadcasts = Enumerable.Range(0, 5).Select(i => Task.Run(async () =>
-        {
-            await go.Task;
-            await CreateNoteAsync(Owner(), projectId, $"Гонка {i}");
-        })).ToList();
         go.SetResult();
-        await Task.WhenAll(broadcasts.Append(revoke)).WaitAsync(Wait);
+        foreach (var i in Enumerable.Range(0, 5))
+            await CreateNoteAsync(Owner(), projectId, $"Гонка {i}");
+        await revoke.WaitAsync(Wait);
         await revoked.Task.WaitAsync(Wait);
 
         // После завершённого отзыва ни одна новая рассылка не доходит

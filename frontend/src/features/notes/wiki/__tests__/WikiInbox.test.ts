@@ -52,7 +52,7 @@ const op = (over: Record<string, unknown>) => ({
   ...over,
 });
 
-// Пакет как его отдаёт GET /api/wiki/packages: спорная + неспорная (auto) операции
+// Пакет как его отдаёт GET /wiki/packages: спорная + неспорная (auto) операции
 const PKG = {
   id: '11111111-2222-3333-4444-555555555501',
   section: 'projects/p1', status: 'proposed', statusReason: null,
@@ -81,7 +81,7 @@ const roots: Root[] = [];
 
 function seedList(data: { packages: unknown[]; invalidCount: number }) {
   req.mockImplementation((url: string) => {
-    if (url.startsWith('/api/wiki/packages')) return Promise.resolve(data);
+    if (url.startsWith('/wiki/packages')) return Promise.resolve(data);
     return Promise.resolve(null);
   });
 }
@@ -139,7 +139,7 @@ function openPackage(c: Cont) {
 function mockDecide(result: () => Promise<unknown>) {
   req.mockImplementation((url: string, init?: { method?: string }) => {
     if (init?.method === 'POST') return result();
-    if (url.startsWith('/api/wiki/packages')) return Promise.resolve(LIST);
+    if (url.startsWith('/wiki/packages')) return Promise.resolve(LIST);
     return Promise.resolve(null);
   });
 }
@@ -346,7 +346,7 @@ describe('«Входящие» (S7a)', () => {
     let resolveB: (v: unknown) => void = () => {};
     let n = 0;
     req.mockImplementation((url: string) => {
-      if (url.startsWith('/api/wiki/packages')) {
+      if (url.startsWith('/wiki/packages')) {
         n++;
         if (n === 1) return Promise.resolve({ packages: [A], invalidCount: 0 });
         if (n === 2) return new Promise(res => { resolveB = res; });

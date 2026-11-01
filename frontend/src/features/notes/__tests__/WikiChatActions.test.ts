@@ -131,7 +131,7 @@ function serve(opts: {
       counts.analyze++;
       return Promise.resolve(val(opts.analyze ?? { outcome: 'nothing_new', reason: null, packageIds: [] }));
     }
-    if (method === 'GET' && u === '/api/wiki/chats') {
+    if (method === 'GET' && u === '/wiki/chats') {
       counts.chats++;
       // val и здесь: список может меняться от вызова к вызову (хроника появляется после
       // применённого разбора — тест «со ссылкой»)
@@ -228,7 +228,7 @@ describe('Действия «Вики» в чате (S7b)', () => {
     await settle();
     expect(buttonByTestId(c, 'wiki-chat-analyze')).toBeNull();
     expect(buttonByTestId(c, 'wiki-chat-retract')).toBeNull();
-    expect(req.mock.calls.filter(([u]) => String(u).startsWith('/api/wiki'))).toHaveLength(0);
+    expect(req.mock.calls.filter(([u]) => String(u).startsWith('/wiki'))).toHaveLength(0);
   });
 
   it('флаг включён — «Разобрать этот чат» и «Откатить всё из этого чата»; без chroniclePath «Открыть хронику» нет', async () => {
@@ -406,7 +406,7 @@ describe('Действия «Вики» в чате (S7b)', () => {
 describe('«Разобрать в базу» у заметки (S7b, логика NoteView)', () => {
   it('POST ingest/note на нужный noteId; исход — текстом', async () => {
     req.mockImplementation((url: string) => {
-      if (String(url) === '/api/wiki/ingest/note') {
+      if (String(url) === '/wiki/ingest/note') {
         return Promise.resolve({ outcome: 'awaiting_human', packageId: 'pkg-9', reason: null });
       }
       return Promise.resolve(null);
@@ -414,7 +414,7 @@ describe('«Разобрать в базу» у заметки (S7b, логик�
     const text = await requestNoteIngest('note-1');
     const calls = postCalls('/ingest/note');
     expect(calls).toHaveLength(1);
-    expect(String(calls[0][0])).toBe('/api/wiki/ingest/note');
+    expect(String(calls[0][0])).toBe('/wiki/ingest/note');
     expect(JSON.parse(String((calls[0][1] as { body: string }).body)).noteId).toBe('note-1');
     expect(text).toBe('пакет во «Входящих»: ждёт твоего решения');
   });
@@ -478,7 +478,7 @@ describe('Опрос после 202: ссылка на хронику и гар�
         if (n === 2) return new Promise<unknown>(res => { release = res; }); // опрос A — в полёте
         return Promise.resolve({ running: false, last: null }); // проверка при монтировании B
       }
-      if (m === 'GET' && u === '/api/wiki/chats') return Promise.resolve({ items: [], counts: {} });
+      if (m === 'GET' && u === '/wiki/chats') return Promise.resolve({ items: [], counts: {} });
       return Promise.resolve(null);
     });
     installFakeDom();

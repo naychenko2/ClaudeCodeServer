@@ -52,6 +52,16 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     private readonly ConcurrentDictionary<string, (Model Model, DateTime At)> _cache = new();
     private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(2);
 
+    // Поколение инвалидации per-owner — guard против гонки check-then-act на кэше моделей (дефект S2c-4):
+    // модель, собранная сканом, кладётся в кэш только если за скан поколение не сдвинулось — т.е. ни
+    // одна запись не пришла, пока список источников перечислялся. Без guard'а скан, начатый до чужой
+    // записи, кладёт устаревшую модель поверх свежей: её запись попадает в окно между чужим Invalidate
+    // и чужим TryGetValue (в Create это время _events.Append), пострадавший читает чужую модель,
+    // не видит свою только что записанную заметку и Create падает 500 «Заметка создана, но не
+    // читается». Воспроизведение — NotesConcurrentCreateTests. Себе вернутую модель guard не
+    // отменяет: скан всегда идёт после своей записи, своя заметка в модели есть всегда.
+    private readonly ConcurrentDictionary<string, long> _generation = new();
+
     // Замок на id заметки для «сравнить и записать» (S2c-2, К8): проверка If-Match, запись файла
     // и инвалидация кэша сводок — в одной критической секции, окно между проверкой и записью не
     // остаётся: два параллельных сохранения с одним If-Match не проходят проверку оба.
@@ -83,12 +93,21 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     {
         if (_cache.TryGetValue(userId, out var e) && DateTime.UtcNow - e.At < CacheTtl)
             return e.Model;
+        var gen = _generation.TryGetValue(userId, out var g) ? g : 0L;
         var model = Build(userId);
-        _cache[userId] = (model, DateTime.UtcNow);
+        // Скан шёл без чужих записей (поколение не сдвинулось) — модель свежая, кладём её в кэш.
+        // Сдвинулось — она собрана до чужой записи и в кэше перетёрла бы свежую; себе возвращаем
+        // как есть: своя заметка в ней есть всегда — скан начался после своей записи.
+        if ((_generation.TryGetValue(userId, out var cur) ? cur : 0L) == gen)
+            _cache[userId] = (model, DateTime.UtcNow);
         return model;
     }
 
-    private void Invalidate(string userId) => _cache.TryRemove(userId, out _);
+    private void Invalidate(string userId)
+    {
+        _cache.TryRemove(userId, out _);
+        _generation.AddOrUpdate(userId, 1, (_, v) => v + 1);
+    }
 
     // --- Источники смотрящего ---
 

@@ -92,7 +92,7 @@ internal sealed class WindowsJobProcess : TurnProcess
         if (Interlocked.Exchange(ref _killed, 1) == 1) return;
         var terminated = !_job.IsClosed && TerminateJobObject(_job, 1);
         // Запасной путь: job не сработал либо часть дерева успела родиться до посадки в job
-        if (!terminated || !Process.HasExited) KillTreeFallback();
+        if (!terminated || !LeaderAlive()) KillTreeFallback();
     }
 
     public override void Dispose()

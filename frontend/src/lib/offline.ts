@@ -1575,9 +1575,17 @@ async function evictChatClassOnce(owner: string, known?: { key: string; savedAt:
 // сам факт «сервер сейчас отвечает». Пример — статус выкатки: продукт на время публикации
 // гаснет, и подставленный из кэша прошлый ответ превращает «сервер лежит, значит выкатка идёт»
 // в «сервер отвечает, ничего не происходит». Окно выкатки на этом различии и построено.
-export async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number; parse?: 'json'; live?: boolean; chatScope?: string }): Promise<T>;
+
+// ETag успешного ответа вызывающему (S2c-F2a, К8): mutable sink — request() заполняет его,
+// когда сервер прислал заголовок ETag. Тип возврата T не тронут: тег нужен только тем,
+// кто его просил (сохранение файла по If-Match). На ошибках заголовок уже в
+// error.responseHeaders; офлайн-доставка из кэша тега не имеет — sink остаётся пустым,
+// и это верно: версии, по которой можно сохранить по If-Match, без сервера нет.
+export interface EtagRef { etag?: string }
+
+export async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number; parse?: 'json'; live?: boolean; chatScope?: string; etagRef?: EtagRef }): Promise<T>;
 export async function request(url: string, options: RequestInit & { timeoutMs?: number; parse: 'blob'; live?: boolean; chatScope?: string }): Promise<Blob>;
-export async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number; parse?: 'json' | 'blob'; live?: boolean; chatScope?: string }): Promise<T | Blob> {
+export async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number; parse?: 'json' | 'blob'; live?: boolean; chatScope?: string; etagRef?: EtagRef }): Promise<T | Blob> {
   const method = (options?.method ?? 'GET').toUpperCase();
   const isGet = method === 'GET';
 
@@ -1592,7 +1600,7 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
   // AbortController для таймаута: если сеть «зависла» (пакеты идут, но ответа нет),
   // мы не ждём браузерного TCP-таймаута (может быть минуты).
   // timeoutMs — оверрайд для заведомо долгих запросов (AI-генерация и т.п.)
-  const { timeoutMs, parse, live, chatScope, signal: callerSignal, ...fetchOptions } = options ?? {};
+  const { timeoutMs, parse, live, chatScope, signal: callerSignal, etagRef, ...fetchOptions } = options ?? {};
   // Кэшируем и достаём из кэша только те GET, которым это на пользу (см. комментарий к live)
   const useOfflineCache = isGet && !live;
   const controller = new AbortController();
@@ -1660,6 +1668,13 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
       httpErr.responseHeaders = res.headers;
       httpErr.body = err;
       throw httpErr;
+    }
+
+    // Успешный ответ: ETag вызывающему, если он просил (K8 — сохранение файла по If-Match).
+    // Только по сетевому ответу: офлайн-доставка из кэша идёт ниже по своей ветке, тега в ней нет.
+    if (etagRef) {
+      const etag = res.headers.get('ETag');
+      if (etag) etagRef.etag = etag;
     }
 
     // Бинарный ответ (mp3 озвучки): без JSON.parse и без кэша IndexedDB

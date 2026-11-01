@@ -168,10 +168,11 @@ public class NotesControllerTests : IClassFixture<TestWebApplicationFactory>
         body.GetProperty("content").GetString().Should().Contain("первая правка");
         body.GetProperty("changedAt").GetString().Should().NotBeNullOrEmpty();
 
-        // Автор правки — из серверного состояния (sub токена), не из тела запроса
-        var me = await (await _client.GetAsync("/api/auth/me")).Content.ReadFromJsonAsync<JsonElement>();
-        body.GetProperty("author").GetProperty("userId").GetString()
-            .Should().Be(me.GetProperty("userId").GetString());
+        // author — null: сервер не знает автора победившей правки (его источник — буфер
+        // коммиттера, S3-3); id вызывающего в author не попадает — он мог проиграть гонку
+        // (доработка S2c-2, как в S2c-1 для файлов)
+        body.GetProperty("author").ValueKind.Should().Be(JsonValueKind.Null,
+            "author в теле 409 — null, пока нет серверного источника (S3-3)");
     }
 
     [Fact]

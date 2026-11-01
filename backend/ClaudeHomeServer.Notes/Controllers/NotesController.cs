@@ -507,16 +507,17 @@ public class NotesController : ControllerBase
         }
         catch (NoteConflictException ex)
         {
-            // Тело по К8: актуальный хеш и содержимое. Автор правки — из серверного состояния
-            // (sub и имя из токена), не из тела запроса: до S3-1/S3-3 (авторство в git) единственный,
-            // кто может писать эту заметку, — аутентифицированный владелец, он же автор победившей
-            // правки. За REST-сохранением нет чата — source null.
+            // Тело по К8: актуальный хеш и содержимое, время правки (состояние сервера).
+            // author — из серверного состояния: его источник (буфер коммиттера) появляется в
+            // S3-3; здесь сервер автора победившей правки не знает — null (авторство из тела
+            // запроса не принимается: вызывающий мог проиграть гонку, и показать его автором
+            // чужой правки — ложь). За REST-сохранением нет чата — source null.
             return Conflict(new
             {
                 code = "note_changed",
                 content = ex.Content,
                 sha256 = ex.Sha256,
-                author = new { userId = UserId, displayName = User.FindFirstValue(ClaimTypes.Name) ?? UserId },
+                author = (object?)null,
                 changedAt = ex.ChangedAt,
                 source = (string?)null,
             });

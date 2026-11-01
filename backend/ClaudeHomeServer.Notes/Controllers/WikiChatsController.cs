@@ -1,6 +1,8 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Notes.Wiki;
 using Microsoft.AspNetCore.Authorization;
@@ -35,11 +37,14 @@ public class WikiChatsController : ControllerBase
     private readonly ISessionDirectory _sessions;
     private readonly WikiChatIngestService _chat;
     private readonly string _dataDir;
+    private readonly IFeatureFlagGate? _flags;
 
-    public WikiChatsController(ISessionDirectory sessions, WikiChatIngestService chat, IConfiguration config)
+    public WikiChatsController(ISessionDirectory sessions, WikiChatIngestService chat, IConfiguration config,
+        IFeatureFlagGate? flags = null)
     {
         _sessions = sessions;
         _chat = chat;
+        _flags = flags;
         // Каталог данных — как у всех сервисов (DataPath указывает на projects.json в dataDir).
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
@@ -191,6 +196,10 @@ public class WikiChatsController : ControllerBase
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
+        // Разбор тратит модель: при выключенном llm-wiki не стартует. Флаг может смениться
+        // между этой проверкой и ходом модели — допустимо; уже идущий разбор не прерывается.
+        if (_flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) != true)
+            return StatusCode(409, new { code = "wiki_llm_wiki_off", message = "разбор не запущен: функция выключена" });
 
         var task = _chat.AnalyzeAsync(userId, sessionId); // ct заявителя в прогон не идёт
         try

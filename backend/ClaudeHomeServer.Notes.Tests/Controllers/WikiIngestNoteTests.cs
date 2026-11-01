@@ -136,6 +136,15 @@ public class WikiIngestNoteTests : IDisposable
     }
 
     [Fact]
+    public async Task IngestNote_FlagOff_409_ДоВсехОстальныхПроверок()
+    {
+        // Флаг выключен: отказ раньше проверки заведённости (u3 без вики) и id заметки;
+        // мутация «убрать проверку флага» даёт wiki_not_initialized — тест красный.
+        AssertCode(await Controller("u3", flagsOn: false).IngestNote(new WikiIngestNoteRequest("любой-id")), 409, "wiki_llm_wiki_off");
+        AssertCode(await Controller(flagsOn: false).IngestNote(null), 409, "wiki_llm_wiki_off");
+    }
+
+    [Fact]
     public async Task IngestNote_PackagesLimit_409()
     {
         var project = NewProject("П1");
@@ -218,14 +227,19 @@ public class WikiIngestNoteTests : IDisposable
             .GetProperty("code").GetString().Should().Be(code);
     }
 
-    private WikiController Controller(string user = User)
+    private WikiController Controller(string user = User, bool flagsOn = true)
     {
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", user)], "test"));
-        return new WikiController(_keeper, _projects, _spheres, _lint, _journal, null, _config, _capture, _ingest)
+        return new WikiController(_keeper, _projects, _spheres, _lint, _journal, flagsOn ? new WikiFlagOn() : null, _config, _capture, _ingest)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
+    }
+
+    private sealed class WikiFlagOn : ClaudeHomeServer.Services.Composition.IFeatureFlagGate
+    {
+        public bool IsEnabled(string userId, string key) => key == FeatureFlagKeys.LlmWiki;
     }
 
     // Модель подменена: ответ — штатное «нечего добавить» (тот же контракт, что NothingLlm

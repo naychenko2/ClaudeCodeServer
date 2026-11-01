@@ -129,6 +129,14 @@ public class WikiChatsControllerTests : IDisposable
         _llm.Calls.Should().BeEmpty("отказ per-owner — до обращения к модели");
     }
 
+    [Fact]
+    public async Task Analyze_ФлагВыключен_409_МодельНеЗовётся()
+    {
+        AssertBody(await Controller(flagsOn: false).AnalyzeCore(ChatId, Wait), 409, "wiki_llm_wiki_off");
+        // Мутация «убрать проверку флага в AnalyzeCore»: разбор доходит до модели — тест красный.
+        _llm.Calls.Should().BeEmpty("при выключенном флаге разбор не стартует");
+    }
+
     // ─── 2. Ступень 0 и незаведённая вики: 409 с точным кодом ────────────────
 
     [Fact]
@@ -352,11 +360,11 @@ public class WikiChatsControllerTests : IDisposable
         ],
     }.Render();
 
-    private WikiChatsController Controller(string user = User)
+    private WikiChatsController Controller(string user = User, bool flagsOn = true)
     {
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, user)], "test"));
-        return new WikiChatsController(_sessions, _chat, _config)
+        return new WikiChatsController(_sessions, _chat, _config, flagsOn ? new WikiFlagOn() : null)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };

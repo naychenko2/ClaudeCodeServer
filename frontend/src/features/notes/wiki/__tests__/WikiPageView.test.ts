@@ -31,12 +31,17 @@ import {
 import { WikiPageView } from '../WikiPageView';
 import { __test as wikiStore, loadWikiPage, type WikiPageDto } from '../../../../lib/wiki';
 
-vi.mock('../../../../lib/signalr', () => ({
+// Мок с сохранением остальных экспортов: компонент берёт эти модули через кит хоста,
+// а цепочка кита шире собственных импортов теста — full-replacement мок рвётся на
+// первом недостающем имени. Паттерн — как в NotesPage.test.ts.
+vi.mock('../../../../lib/signalr', async (orig) => ({
+  ...await orig<typeof import('../../../../lib/signalr')>(),
   onMessage: vi.fn(() => () => {}),
   onReconnected: vi.fn(() => () => {}),
   joinUser: vi.fn(() => Promise.resolve()),
 }));
-vi.mock('../../../../lib/offline', () => ({
+vi.mock('../../../../lib/offline', async (orig) => ({
+  ...await orig<typeof import('../../../../lib/offline')>(),
   request: vi.fn(),
   readStoredUserId: vi.fn(() => 'u1'),
 }));

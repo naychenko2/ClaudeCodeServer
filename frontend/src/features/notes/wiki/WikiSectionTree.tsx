@@ -10,12 +10,10 @@
 import { Fragment, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { Folder, Globe, Lock, Monitor } from 'lucide-react';
-import { C, FONT, FS, R, SP } from '../../../lib/design';
+import { C, FONT, FS, R, SP, useIsMobile, groupSectionsByKind, type WikiSectionDto } from 'aihome_shell/kit';
 import { Badge, type BadgeTone } from '../../../components/ui/Badge';
 import { SidebarSection } from '../../../components/ui/SidebarSection';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
-import { useIsMobile } from '../../../lib/breakpoints';
-import { groupSectionsByKind, type WikiSectionDto } from '../../../lib/wiki';
 
 // Строка дерева: 32 на десктопе, 44 на тач (макет .trow / .app.m .trow)
 const ROW_H = 32;

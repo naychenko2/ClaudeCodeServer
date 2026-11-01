@@ -26,18 +26,25 @@ import { WIKI_SUBTABS } from '../wikiTabs';
 import { useState } from 'react';
 import { __test as wikiStore } from '../../../../lib/wiki';
 
-vi.mock('../../../../lib/signalr', () => ({
+// Мок с сохранением остальных экспортов: компонент берёт эти модули через кит хоста,
+// а цепочка кита шире собственных импортов теста (registryCore → subscribeFlags,
+// sync → onPassiveEvict) — full-replacement мок рвётся на первом недостающем имени.
+// Паттерн — как в NotesPage.test.ts.
+vi.mock('../../../../lib/signalr', async (orig) => ({
+  ...await orig<typeof import('../../../../lib/signalr')>(),
   onMessage: vi.fn(() => () => {}),
   onReconnected: vi.fn(() => () => {}),
   joinUser: vi.fn(() => Promise.resolve()),
 }));
-vi.mock('../../../../lib/offline', () => ({
+vi.mock('../../../../lib/offline', async (orig) => ({
+  ...await orig<typeof import('../../../../lib/offline')>(),
   request: vi.fn(),
   readStoredUserId: vi.fn(() => 'u1'),
 }));
 // Флаг фичи — управляемый: тест 6 проверяет, что без него вкладки нет вовсе
 const flag = vi.hoisted(() => ({ on: true }));
-vi.mock('../../../../lib/featureFlags', () => ({
+vi.mock('../../../../lib/featureFlags', async (orig) => ({
+  ...await orig<typeof import('../../../../lib/featureFlags')>(),
   useFeature: () => flag.on,
   FLAGS: { llmWiki: 'llm-wiki' },
 }));

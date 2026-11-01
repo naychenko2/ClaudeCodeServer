@@ -26,13 +26,11 @@
 import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { AlertTriangle, ChevronLeft, Lock, Quote, ScrollText } from 'lucide-react';
-import { C, FONT, FS, R, SP } from '../../../lib/design';
+import { C, FONT, FS, R, SP, useIsMobile, WikiError, adoptWikiPage, useWikiPage, type WikiSectionDto } from 'aihome_shell/kit';
 import { Badge } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
 import { Notice } from '../../../components/ui/Notice';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
-import { useIsMobile } from '../../../lib/breakpoints';
-import { WikiError, adoptWikiPage, useWikiPage, type WikiSectionDto } from '../../../lib/wiki';
 import { PAGE_STATUS, PAGE_TYPE, sectionPrefix, wikiErrorText } from './wikiLabels';
 
 // ─── Разбор страницы (зеркало бэкового WikiPage.Parse, терпимый) ───

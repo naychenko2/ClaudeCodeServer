@@ -26,12 +26,17 @@ import {
 } from '../../../../components/chat/__tests__/fakeDom';
 import { WikiInbox } from '../WikiInbox';
 
-vi.mock('../../../../lib/signalr', () => ({
+// Мок с сохранением остальных экспортов: цепочка мокованного доходит до кита хоста
+// (WikiInbox → ./WikiTab → kit) — full-replacement мок рвётся на первом недостающем
+// имени. Паттерн — как в NotesPage.test.ts.
+vi.mock('../../../../lib/signalr', async (orig) => ({
+  ...await orig<typeof import('../../../../lib/signalr')>(),
   onMessage: vi.fn(() => () => {}),
   onReconnected: vi.fn(() => () => {}),
   joinUser: vi.fn(() => Promise.resolve()),
 }));
-vi.mock('../../../../lib/offline', () => ({
+vi.mock('../../../../lib/offline', async (orig) => ({
+  ...await orig<typeof import('../../../../lib/offline')>(),
   request: vi.fn(),
   readStoredUserId: vi.fn(() => 'u1'),
 }));

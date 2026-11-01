@@ -31,6 +31,25 @@ export {
   getNoteForView, saveNoteOffline, createNoteOffline, deleteNoteOffline, offlineResolve,
 } from '../notesOffline';
 
+// ─── wiki (LLM-wiki: стор + операции) ────────────────────────────────────────
+// Единственный стор — хостовый: MF-модуль «Заметки» берёт стор вики, флаги и WikiError
+// через кит — своя копия относительных импортов дублировала бы состояние стора и давала
+// отдельный экземпляр WikiError (QA P1, дефект B1).
+export {
+  parseSectionKey, groupSectionsByKind, WikiError,
+  ensureWikiLoaded, loadWikiCatalog, loadWikiPage,
+  initializeWiki, adoptWikiPage, deleteWikiSection,
+  listWikiPackages, decideWikiPackage, acceptAllWikiPackage,
+  loadWikiJournal, retractWikiSource, getWikiHealth, runWikiLint,
+  analyzeWikiChat, loadWikiChatAnalyzeStatus, loadWikiChats, ingestWikiNote,
+  useWikiTree, useWikiCatalog, useWikiPage,
+} from '../wiki';
+export type {
+  WikiSectionDto, WikiPageInfoDto, WikiPackageDto, WikiPackageOperationDto,
+  WikiApplyOutcomeDto, WikiDecisionDto, WikiJournalDto, WikiJournalEntryDto,
+  WikiRetractDto, WikiChatAnalyzeOk, WikiNoteIngestDto,
+} from '../wiki';
+
 // ─── subsystems ──────────────────────────────────────────────────────────────
 export { useSubsystem, isSubsystemEnabled } from '../subsystems';
 

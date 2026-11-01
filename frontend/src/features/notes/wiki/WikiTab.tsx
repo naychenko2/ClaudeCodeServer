@@ -15,7 +15,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { AlertTriangle, BookOpen, Check, ChevronLeft, ChevronRight, Folder, Lock, Monitor, Shield, Trash2 } from 'lucide-react';
-import { C, FONT, FS, R, SP } from '../../../lib/design';
+import {
+  C, FONT, FS, R, SP, useIsMobile, FLAGS, useFeature,
+  WikiError, ensureWikiLoaded, deleteWikiSection, groupSectionsByKind, initializeWiki,
+  loadWikiCatalog, loadWikiPage, useWikiCatalog, useWikiPage, useWikiTree,
+  type WikiPageInfoDto, type WikiSectionDto,
+} from 'aihome_shell/kit';
 import { Badge } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
 import { ConfirmDialog } from '../../../components/ui/ConfirmDialog';
@@ -23,22 +28,6 @@ import { EmptyState } from '../../../components/ui/EmptyState';
 import { Notice } from '../../../components/ui/Notice';
 import { PillSwitch } from '../../../components/ui/PillSwitch';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
-import { useIsMobile } from '../../../lib/breakpoints';
-import { FLAGS, useFeature } from '../../../lib/featureFlags';
-import {
-  WikiError,
-  ensureWikiLoaded,
-  deleteWikiSection,
-  groupSectionsByKind,
-  initializeWiki,
-  loadWikiCatalog,
-  loadWikiPage,
-  useWikiCatalog,
-  useWikiPage,
-  useWikiTree,
-  type WikiPageInfoDto,
-  type WikiSectionDto,
-} from '../../../lib/wiki';
 import { WikiPageView } from './WikiPageView';
 import { WikiSectionTree } from './WikiSectionTree';
 import { WIKI_SUBTABS, wikiSubTabIcon, WikiSubTabStub, type WikiSubTabId } from './wikiTabs';

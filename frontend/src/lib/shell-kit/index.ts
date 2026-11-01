@@ -43,11 +43,12 @@ export {
   loadWikiJournal, retractWikiSource, getWikiHealth, runWikiLint,
   analyzeWikiChat, loadWikiChatAnalyzeStatus, loadWikiChats, ingestWikiNote,
   useWikiTree, useWikiCatalog, useWikiPage,
+  requestOpenWikiPage, consumeOpenWikiPage, useWikiOpenRequest,
 } from '../wiki';
 export type {
   WikiSectionDto, WikiPageInfoDto, WikiPackageDto, WikiPackageOperationDto,
   WikiApplyOutcomeDto, WikiDecisionDto, WikiJournalDto, WikiJournalEntryDto,
-  WikiRetractDto, WikiChatAnalyzeOk, WikiNoteIngestDto,
+  WikiRetractDto, WikiChatAnalyzeOk, WikiNoteIngestDto, WikiOpenRequest,
 } from '../wiki';
 
 // ─── subsystems ──────────────────────────────────────────────────────────────

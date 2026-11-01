@@ -13,6 +13,8 @@ import type { NoteDetail, NoteSummary } from '../../types';
 import { NotesPage } from './NotesPage';
 import { findNodeByAttr, installFakeDom, mount, reactProps, uninstallFakeDom } from '../../components/chat/__tests__/fakeDom';
 import { setAllFlags } from '../../lib/featureFlags';
+// очередь запроса «открыть страницу» — настоящая (не моканная): тестам прямой импорт разрешён
+import { __test as wikiStore, consumeOpenWikiPage, requestOpenWikiPage } from '../../lib/wiki';
 
 // fakeDom не экспортирует FNode — тип узла берём из сигнатуры reactProps.
 type AnyNode = {
@@ -65,18 +67,22 @@ vi.mock('../../lib/signalr', async (importOriginal) => {
 });
 // S5d: стор вики мокан на уровне хуков — настоящий поток «ответ REST → стор → экран» проверен
 // в WikiTab.test; здесь проверяется связь вкладки со страницей заметок, а не стор.
-const { wikiMock } = vi.hoisted(() => ({ wikiMock: { tree: null as unknown, catalog: null as unknown } }));
+// OPEN-1 не мокан: очередь запроса (requestOpenWikiPage/consumeOpenWikiPage/useWikiOpenRequest)
+// настоящая — через spread orig; её контракт — в lib/__tests__/wiki.test.ts
+const { wikiMock } = vi.hoisted(() => ({ wikiMock: { tree: null as unknown, catalog: null as unknown, page: null as unknown } }));
 vi.mock('../../lib/wiki', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../lib/wiki')>();
   return {
     ...orig,
     ensureWikiLoaded: async () => {},
     loadWikiCatalog: async () => {},
+    loadWikiPage: async () => wikiMock.page,
     // S7a: «Входящие» — свои, экран списка зовёт listWikiPackages; здесь он пустой:
     // тест проверяет смену подвкладки, а не список пакетов
     listWikiPackages: async () => ({ packages: [], invalidCount: 0 }),
     useWikiTree: () => wikiMock.tree,
     useWikiCatalog: () => wikiMock.catalog,
+    useWikiPage: () => wikiMock.page,
   };
 });
 // S5d-доработка: NoteView читает заметку через офлайн-слой (getNoteForView) — подменяем
@@ -462,6 +468,62 @@ describe('NotesPage: десктоп, «Вики» и выбор заметки (
     clickNode(findNodeByAttr(container, 'aria-label', 'Вики')!);
     await settle();
     expect(hasText(container, 'Тестовая страница вики'), '«Вики» открылась снова').toBe(true);
+    root.unmount();
+  });
+});
+
+// ─── OPEN-1: запрос «Открыть хронику» из шапки чата ───
+// Запрос — в настоящем сторе вики (моканы только читающие хуки). Задача страницы:
+// переключить на «Вики» при монтировании с необработанным запросом — без единого клика;
+// при выключенном флаге — снять запрос, не включая режим. Открытие самой страницы —
+// в WikiTab.test; здесь — связь запроса с режимом страницы.
+
+const CHRONICLE_PATH = 'Проекты/aaa11111/Хроники/chat-x.md';
+const CHRONICLE_PAGE = {
+  pageKey: CHRONICLE_PATH,
+  content: '---\ntype: chronicle\nstatus: active\nupdated: 2026-10-30\n---\n\n# Хроника chat-x\n\n## Сводка\n- Содержание хроники chat-x.\n',
+  drift: false,
+};
+
+describe('NotesPage: запрос «Открыть хронику» (OPEN-1)', () => {
+  beforeEach(() => {
+    prepareEnv();
+    notesMock.length = 0;
+    // запрос — модульное состояние стора: каждый тест начинает с чистого
+    wikiStore.reset();
+    wikiMock.tree = WIKI_TREE;
+    wikiMock.catalog = WIKI_CATALOG;
+    wikiMock.page = CHRONICLE_PAGE;
+  });
+  afterEach(() => {
+    setAllFlags({});
+    wikiMock.tree = null;
+    wikiMock.catalog = null;
+    wikiMock.page = null;
+    notesMock.length = 0;
+    vi.unstubAllGlobals();
+    uninstallFakeDom();
+  });
+
+  it('флаг включён: страница сама переключается на «Вики» и открывает запрошенную страницу; запрос забран', async () => {
+    setAllFlags({ 'llm-wiki': true });
+    act(() => { requestOpenWikiPage({ section: 'projects/aaa11111', path: CHRONICLE_PATH }); });
+    const { root, container } = mountNotes();
+    await settle();
+    // ни одного клика: режим включил запрос, страницу открыл WikiTab
+    expect(hasText(container, 'Содержание хроники chat-x'), 'запрошенная страница открыта').toBe(true);
+    expect(consumeOpenWikiPage()).toBeNull(); // запрос забран, не остался на следующий вход
+    root.unmount();
+  });
+
+  it('флаг выключен: запрос снят, страница в «Вики» не переходит', async () => {
+    setAllFlags({});
+    act(() => { requestOpenWikiPage({ section: 'projects/aaa11111', path: CHRONICLE_PATH }); });
+    const { root, container } = mountNotes();
+    await settle();
+    expect(consumeOpenWikiPage()).toBeNull(); // снят страницей с выключенным флагом — не дождётся включения
+    expect(hasText(container, 'Содержание хроники chat-x')).toBe(false);
+    expect(findButtonByText(container, 'Вики'), 'переключателя «Вики» нет, как и без запроса').toBeNull();
     root.unmount();
   });
 });

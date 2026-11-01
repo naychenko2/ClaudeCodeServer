@@ -8,6 +8,8 @@
 // /api/wiki/page не читаются — 400 wiki_page_key, хвост ревью S2f Н1).
 // Открытие страницы из каталога (S5b) — здесь одна точка: строка каталога зовёт openPage,
 // центр вместо каталога рисует WikiPageView; смена или удаление раздела закрывают страницу.
+// Запрос «Открыть хронику» из шапки чата (OPEN-1) — тоже здесь: из стора вики выбирается
+// раздел и открывается страница, запрос после обработки берётся (он ждёт загрузки дерева).
 // Подключение к странице заметок (переключатель «Заметки | Вики») — на стороне NotesPage (S5d).
 // На мобили дерево — отдельный экран «Разделы» (кнопка «Раздел ▸» в каталоге): макет 360,
 // хвост ревью S5c — каталог не должен схлопываться в нулевую высоту под деревом.
@@ -19,6 +21,7 @@ import {
   C, FONT, FS, R, SP, useIsMobile, FLAGS, useFeature,
   WikiError, ensureWikiLoaded, deleteWikiSection, groupSectionsByKind, initializeWiki,
   loadWikiCatalog, loadWikiPage, useWikiCatalog, useWikiPage, useWikiTree,
+  consumeOpenWikiPage, useWikiOpenRequest,
   type WikiPageInfoDto, type WikiSectionDto,
 } from 'aihome_shell/kit';
 import { Badge } from '../../../components/ui/Badge';
@@ -223,6 +226,8 @@ export function WikiTab() {
   const enabled = useFeature(FLAGS.llmWiki);
   const isMobile = useIsMobile();
   const tree = useWikiTree();
+  // Запрос «Открыть хронику» из шапки чата (OPEN-1) — в сторе вики до нашего монтирования
+  const openReq = useWikiOpenRequest();
   const [tab, setTab] = useState<WikiSubTabId>('pages');
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<unknown>(null);
@@ -243,6 +248,30 @@ export function WikiTab() {
     setSelectedKey(key);
     setOpenPage(null);
   }, []);
+
+  // Открытие страницы — одна точка подключения (S5b): текст читает стор
+  // (поколение и владелец — в нём). Отказ загрузки — возврат к каталогу с названным
+  // отказом: пустой экран страницы хуже строки, из которой её открыли.
+  // Отказ актуален только для последнего открытия (доработка S5b M3): поздний отказ A,
+  // пока открыта B, не закрывает B и не показывает свою ошибку — иначе пользователь
+  // вылетает из уже прочитанной страницы с чужой ошибкой.
+  // sectionKey — явный параметр (OPEN-1): запрос из шапки чата открывает страницу своего
+  // раздела, а selectedKey в момент того эффекта ещё прежний (выбор и открытие — в одном
+  // коммите). Вызывающий из каталога передаёт только страницу. useCallback — чтобы
+  // эффект запроса (хук до раннего return) мог держать на ней зависимость; поведение
+  // прежнее.
+  const openPage = useCallback((pageKey: string, sectionKey: string | null = selectedKey) => {
+    if (!sectionKey) return;
+    const mine = { gen: openSeq.current.gen + 1, pageKey };
+    openSeq.current = mine;
+    setOpenPage(pageKey);
+    setActionError(null);
+    loadWikiPage(sectionKey, pageKey).catch(e => {
+      if (openSeq.current.gen !== mine.gen || openSeq.current.pageKey !== pageKey) return;
+      setOpenPage(null);
+      setActionError(e);
+    });
+  }, [selectedKey]);
 
   const load = useCallback(() => {
     setLoadError(null);
@@ -270,6 +299,24 @@ export function WikiTab() {
     selectSection(defaultSectionKey(tree.sections));
   }, [tree, selectedKey, selectSection]);
 
+  // Запрос открыть страницу из шапки чата (OPEN-1): выбрать названный раздел и открыть
+  // названную страницу. Ждём дерево: пока оно грузится, запрос остаётся в сторе — эффект
+  // вернётся к нему, когда дерево придёт (стор уведомляет подпиской). После прочитанного
+  // дерева запрос берётся в любом случае: дальше ждать нечего, а «Вики не заведена» —
+  // состояние экрана, а не запроса. Чужой или несуществующий раздел экран не роняет:
+  // эффект дефолтного выбора вернёт на живой раздел, а отказ страницы покажется текстом
+  // (поведение openPage). Повторный запрос на ту же страницу работает снова: запрос —
+  // новый объект, и после закрытой страницы страница открывается заново (не залипает).
+  // Порядок после эффекта дефолтного выбора — свой выбор идёт последним и побеждает.
+  useEffect(() => {
+    if (!openReq || !tree) return;
+    if (tree.initialized) {
+      selectSection(openReq.section);
+      openPage(openReq.path, openReq.section);
+    }
+    consumeOpenWikiPage();
+  }, [openReq, tree, selectSection, openPage]);
+
   // Каталог выбранного раздела. Для локального проекта его нет вовсе (409 wiki_section_off).
   // Зависимость — ключ, а не объект selected: объект новый на каждый рендер, эффект
   // перечитывал бы каталог в каждом.
@@ -287,27 +334,6 @@ export function WikiTab() {
     void fn()
       .catch(e => setActionError(e))
       .finally(() => setBusy(false));
-  };
-
-  // Открытие страницы из каталога — одна точка подключения (S5b): текст читает стор
-  // (поколение и владелец — в нём). Отказ загрузки — возврат к каталогу с названным
-  // отказом: пустой экран страницы хуже строки, из которой её открыли.
-  // Отказ актуален только для последнего открытия (доработка S5b M3): поздний отказ A,
-  // пока открыта B, не закрывает B и не показывает свою ошибку — иначе пользователь
-  // вылетает из уже прочитанной страницы с чужой ошибкой.
-  // Обычная функция, не useCallback: она ниже раннего return (условный хук — rules-of-hooks),
-  // порядок — как у runAction рядом
-  const openPage = (pageKey: string) => {
-    if (!selectedKey) return;
-    const mine = { gen: openSeq.current.gen + 1, pageKey };
-    openSeq.current = mine;
-    setOpenPage(pageKey);
-    setActionError(null);
-    loadWikiPage(selectedKey, pageKey).catch(e => {
-      if (openSeq.current.gen !== mine.gen || openSeq.current.pageKey !== pageKey) return;
-      setOpenPage(null);
-      setActionError(e);
-    });
   };
 
   const commonKey = groupSectionsByKind(sections).common[0]?.key ?? null;

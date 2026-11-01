@@ -8,6 +8,8 @@
 // в тесте фичи (features/notes/wiki/__tests__/wikiLabels.test.ts): дизайн-линт запрещает
 // прямой импорт внутренних модулей фичи отсюда. Доработка S7b-0: analyze-status идёт live
 // (офлайн-кэш ему вреден), список отбора чатов — адрес и разбор полей записи списка.
+// OPEN-1: запрос открыть страницу — контракт очереди (живёт до взятия, последний побеждает);
+// реакция смонтированных экранов — в рендер-тестах WikiTab.test и NotesPage.test.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../signalr', () => ({
@@ -29,6 +31,7 @@ import {
   __test,
   adoptWikiPage,
   analyzeWikiChat,
+  consumeOpenWikiPage,
   deleteWikiSection,
   ensureWikiLoaded,
   getWikiCatalogSnapshot,
@@ -43,6 +46,7 @@ import {
   loadWikiPage,
   loadWikiTree,
   parseSectionKey,
+  requestOpenWikiPage,
 } from '../wiki';
 
 type MockFn = ReturnType<typeof vi.fn>;
@@ -555,5 +559,31 @@ describe('вики: список отбора чатов (доработка H3)
     expect(item.running).toBe(false);
     expect(item.cursor).toBe(4);
     expect(item.nothingNewStreak).toBe(3);
+  });
+});
+
+// ─── OPEN-1: запрос открыть страницу извне (шапка чата → экран вики) ───
+// Стор — единственное место этого состояния: запрос живёт до того, как его возьмут,
+// второй замещает первый. Реакция смонтированных экранов — в рендер-тестах
+// (WikiTab.test, NotesPage.test); здесь — контракт самой очереди.
+
+describe('вики: запрос открыть страницу (OPEN-1)', () => {
+  it('запрос живёт до взятия; взятие очищает; повторного взятия нет', () => {
+    requestOpenWikiPage({ section: 'projects/p1', path: 'Проекты/p1/Хроники/c1.md' });
+    expect(consumeOpenWikiPage()).toEqual({ section: 'projects/p1', path: 'Проекты/p1/Хроники/c1.md' });
+    expect(consumeOpenWikiPage()).toBeNull();
+  });
+
+  it('двойной клик — один запрос: последний замещает первый, дублей нет', () => {
+    requestOpenWikiPage({ section: 'projects/p1', path: 'Проекты/p1/Хроники/c1.md' });
+    requestOpenWikiPage({ section: 'projects/p2', path: 'Проекты/p2/Хроники/c2.md' });
+    expect(consumeOpenWikiPage()).toEqual({ section: 'projects/p2', path: 'Проекты/p2/Хроники/c2.md' });
+    expect(consumeOpenWikiPage()).toBeNull();
+  });
+
+  it('сброс стора снимает и незабранный запрос (тестовый шов не оставляет состояния)', () => {
+    requestOpenWikiPage({ section: 'projects/p1', path: 'a' });
+    __test.reset();
+    expect(consumeOpenWikiPage()).toBeNull();
   });
 });

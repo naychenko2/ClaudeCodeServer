@@ -9,7 +9,7 @@ import {
   parseHash, navPush, navReplace, getNav,
   Button, IslandScaffold, ConfirmDialog, PageCanvas, ICON_SIZE, Chip,
   PanelZone, notesPanels, zoneOf, NOTES_KEYS, useIsMobile, useWindowWidth, useListAutoFocus,
-  FLAGS, useFeature,
+  FLAGS, useFeature, useWikiOpenRequest, consumeOpenWikiPage,
 } from 'aihome_shell/kit';
 import type { NavSnapshot } from 'aihome_shell/kit';
 import type { HubTabValue } from 'aihome_shell/kit';
@@ -298,12 +298,25 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   // (PillSwitch: value вне options не подсвечивает ничего — честная картина, «Заметки»
   // не выглядят выбранными при открытом графе)
   const switcherValue: Mode = isMobile ? mobileMode : graphPanelOpen ? 'graph' : wikiOn ? 'wiki' : 'notes';
-  const switchMode = (v: Mode) => {
+  const switchMode = useCallback((v: Mode) => {
     if (isMobile) { setMobileMode(v); return; }
     setWikiOn(v === 'wiki');
     // Центр показывает одно: вход в «Вики» или возврат к «Заметкам» закрывает панель графа
     closePanel('notesGraph');
-  };
+  }, [isMobile, closePanel]);
+
+  // Запрос «Открыть хронику» из шапки чата (OPEN-1): страницу открывает сам WikiTab —
+  // запрос живёт в сторе вики до его монтирования. Задача страницы — переключить на
+  // «Вики»: при монтировании и по появлению запроса (тот же switchMode, что у клика по
+  // сегменту: на десктопе он ещё и закрывает панель графа — центр показывает одно).
+  // При выключенном флаге запрос снимается: вики на странице нет, и запрос не должен
+  // остаться, когда флаг включится позже.
+  const openWikiReq = useWikiOpenRequest();
+  useEffect(() => {
+    if (!openWikiReq) return;
+    if (!wikiEnabled) { consumeOpenWikiPage(); return; }
+    switchMode('wiki');
+  }, [openWikiReq, wikiEnabled, switchMode]);
   const sidebarControls = ({ withModeSwitch, listMode }: { withModeSwitch: boolean; listMode: boolean }) => (
     <div style={{ padding: '10px 10px 9px', borderBottom: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column', gap: 8, flex: 'none' }}>
       {withModeSwitch && (

@@ -829,6 +829,40 @@ export function useWikiLoaded(): boolean {
   return useSyncExternalStore(subscribe, () => _loaded, () => _loaded);
 }
 
+// ─── Запрос открыть страницу извне (OPEN-1) ───
+// Одноразовое намерение: вызывающий (кнопка «Открыть хронику» в шапке чата) кладёт его
+// сюда, смонтированный экран вики забирает. Событие 'cc-open-wiki-page' слушателя не имело:
+// из шапки чата раздел «Заметки» не смонтирован — запрос уходил в пустоту. Здесь запрос
+// живёт до того, как его возьмут, — в том числе пока дерево ещё грузится — и второй запрос
+// замещает первый (последний клик побеждает, дублей нет). Единственное место этого состояния.
+// section — ключ раздела из дерева ('projects/{id}' — тот же формат, что parseSectionKey),
+// path — ключ страницы из каталога (полный путь относительно pages/, как его отдаёт бэк:
+// 'Проекты/{id}/Хроники/{sessionId}.md' — та же форма, что chroniclePath из GET /api/wiki/chats).
+
+export interface WikiOpenRequest { section: string; path: string }
+
+let _openReq: WikiOpenRequest | null = null;
+
+export function requestOpenWikiPage(req: WikiOpenRequest): void {
+  _openReq = req;
+  emit();
+}
+
+// Забирает запрос и очищает его: null — когда запроса нет. Берёт тот, кто открывает
+// страницу (WikiTab); экран, которого интересует только появление, подписан на
+// useWikiOpenRequest.
+export function consumeOpenWikiPage(): WikiOpenRequest | null {
+  const r = _openReq;
+  if (!r) return null;
+  _openReq = null;
+  emit();
+  return r;
+}
+
+export function useWikiOpenRequest(): WikiOpenRequest | null {
+  return useSyncExternalStore(subscribe, () => _openReq, () => _openReq);
+}
+
 // Тестовый шов: сброс модульного состояния (каждый тест начинает с чистого стора,
 // realtime подписывается заново). Швы такого рода в проекте — объектом __test
 // (образец — featureFlags.ts).
@@ -838,6 +872,7 @@ export const __test = {
     _catalogs.clear();
     _page = null;
     _openPages.clear();
+    _openReq = null;
     _loaded = false;
     _treeLoading = null;
     _realtimeWired = false;

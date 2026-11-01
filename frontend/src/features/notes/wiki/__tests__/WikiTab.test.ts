@@ -11,6 +11,9 @@
 //  (2) не ставить пометку сироте (badge → undefined) → «сирота помечена» краснеет;
 //  (3) initialized: true в фиксированном дереве → «пустая вики» краснеет;
 //  (4) показать сырой код отказа вместо wikiErrorText → «отказ русским текстом» краснеет.
+// OPEN-1 (этот прогон): (5) не звать consumeOpenWikiPage в обработчике запроса →
+// «берёт запрос» краснеет; (6) не звать selectSection → «открывает названный раздел»
+// краснеет (страница чужого раздела не показывается).
 // Все четыре прогнаны (вывод — в отчёте задачи); тест про флаг llmWiki — отдельный,
 // он проверяет gate сам: при выключенном флаге дерево не рисуется.
 
@@ -24,7 +27,9 @@ import {
 import { WikiTab } from '../WikiTab';
 import { WIKI_SUBTABS } from '../wikiTabs';
 import { useState } from 'react';
-import { __test as wikiStore } from '../../../../lib/wiki';
+// Стор — настоящий (тот же экземпляр, что у компонента через кит): запрос проверяется
+// в самом сторе; тестам прямой импорт разрешён (notesStoreImportGuard)
+import { __test as wikiStore, consumeOpenWikiPage, requestOpenWikiPage } from '../../../../lib/wiki';
 
 // Мок с сохранением остальных экспортов: компонент берёт эти модули через кит хоста,
 // а цепочка кита шире собственных импортов теста (registryCore → subscribeFlags,
@@ -392,6 +397,121 @@ describe('Вкладка «Вики»: ошибки и подвкладки (д�
       inbox.component = saved;
       delete (globalThis as { requestAnimationFrame?: unknown }).requestAnimationFrame;
     }
+  });
+});
+
+// ─── OPEN-1: запрос открыть страницу из шапки чата ───
+// Путь страницы — та же форма, что chroniclePath из GET /api/wiki/chats и pageKey из
+// каталога: полный путь относительно pages/ («Проекты/{id}/Хроники/{sessionId}.md»).
+// Запрошенный раздел — НЕ дефолтный (defaultSectionKey берёт первый живой проект «AI
+// Home»): отсутствие selectSection открыло бы страницу в чужом разделе — она не показалась бы.
+
+const SECOND_ID = '41424344-4546-4748-49ab-1c1d1e1f1000';
+const CHRONICLE_PATH = `Проекты/${SECOND_ID}/Хроники/chat-x.md`;
+const TREE2 = { ...TREE, sections: [...TREE.sections, sec(`projects/${SECOND_ID}`, { name: 'Вторая вики', pageCount: 2 })] };
+const CATALOG_SECOND = {
+  key: `projects/${SECOND_ID}`, name: 'Вторая вики', orphan: false,
+  pages: [{ pageKey: CHRONICLE_PATH, title: 'Хроника chat-x', summary: null, type: 'chronicle', status: 'active', sourcesCount: 2, updated: null }],
+};
+const CATALOG_EMPTY = { key: 'common', name: 'Общее', orphan: false, pages: [] };
+const PAGE_CHRONICLE = {
+  pageKey: CHRONICLE_PATH,
+  content: '---\ntype: chronicle\nstatus: active\nupdated: 2026-10-30\n---\n\n# Хроника chat-x\n\n## Сводка\n- Содержание хроники chat-x.\n',
+  drift: false,
+};
+
+// Роутинг: страница существует только в запрошенном разделе; прочие страницы — 404
+function routeOpen(tree: typeof TREE) {
+  req.mockImplementation((url: string) => {
+    if (url.startsWith('/wiki/tree')) return Promise.resolve(tree);
+    if (url.startsWith('/wiki/section')) {
+      if (url.includes(`section=projects/${SECOND_ID}`)) return Promise.resolve(CATALOG_SECOND);
+      if (url.includes('section=common')) return Promise.resolve(CATALOG_EMPTY);
+      return Promise.resolve(CATALOG);
+    }
+    if (url.startsWith('/wiki/page?')) {
+      if (url.includes(`page=${encodeURIComponent(CHRONICLE_PATH)}`)) return Promise.resolve(PAGE_CHRONICLE);
+      return Promise.reject({ status: 404 });
+    }
+    return Promise.resolve(null);
+  });
+}
+
+// render() перечислил бы mockImplementation своим route() — здесь свой роутинг и свой маунт
+function mountOpen(tree: typeof TREE): Cont {
+  routeOpen(tree);
+  installFakeDom();
+  const { root, container } = mount(createElement(WikiTab));
+  roots.push(root);
+  return container;
+}
+
+describe('Вкладка «Вики»: запрос открыть страницу из шапки чата (OPEN-1)', () => {
+  it('смонтированная вкладка с запросом: открывает названный раздел и страницу и берёт запрос', async () => {
+    const c = mountOpen(TREE2);
+    await settle();
+    // запрос приходит уже смонтированной вкладке — тот же порядок, что клик в шапке чата
+    act(() => { requestOpenWikiPage({ section: `projects/${SECOND_ID}`, path: CHRONICLE_PATH }); });
+    await settle();
+    expect(has(c, 'Содержание хроники chat-x')).toBe(true); // открыт названный раздел и его страница
+    expect(consumeOpenWikiPage()).toBeNull(); // запрос забран, не остался
+  });
+
+  it('повторный запрос на ту же страницу открывает её снова (не залипает)', async () => {
+    const c = mountOpen(TREE2);
+    await settle();
+    act(() => { requestOpenWikiPage({ section: `projects/${SECOND_ID}`, path: CHRONICLE_PATH }); });
+    await settle();
+    expect(has(c, 'Содержание хроники chat-x')).toBe(true);
+    // пользователь ушёл со страницы: выбрал в дереве «Общее»
+    clickSectionRow(c, 'Общее');
+    await settle();
+    expect(has(c, 'Содержание хроники chat-x')).toBe(false);
+    // тот же запрос снова — страница открывается заново
+    act(() => { requestOpenWikiPage({ section: `projects/${SECOND_ID}`, path: CHRONICLE_PATH }); });
+    await settle();
+    expect(has(c, 'Содержание хроники chat-x')).toBe(true);
+    expect(consumeOpenWikiPage()).toBeNull();
+  });
+
+  it('запрос, пришедший пока дерево грузится, ждёт загрузки (не теряется)', async () => {
+    let releaseTree: (v: unknown) => void = () => {};
+    req.mockImplementation((url: string) => {
+      if (url.startsWith('/wiki/tree')) return new Promise<unknown>((res) => { releaseTree = res; });
+      if (url.startsWith('/wiki/section')) {
+        if (url.includes(`section=projects/${SECOND_ID}`)) return Promise.resolve(CATALOG_SECOND);
+        if (url.includes('section=common')) return Promise.resolve(CATALOG_EMPTY);
+        return Promise.resolve(CATALOG);
+      }
+      if (url.startsWith('/wiki/page?')) {
+        if (url.includes(`page=${encodeURIComponent(CHRONICLE_PATH)}`)) return Promise.resolve(PAGE_CHRONICLE);
+        return Promise.reject({ status: 404 });
+      }
+      return Promise.resolve(null);
+    });
+    installFakeDom();
+    const { root, container } = mount(createElement(WikiTab));
+    roots.push(root);
+    await settle();
+    act(() => { requestOpenWikiPage({ section: `projects/${SECOND_ID}`, path: CHRONICLE_PATH }); });
+    await settle();
+    // дерево ещё не прочитано — страница не открыта, но и запрос не потерян
+    expect(has(container, 'Содержание хроники chat-x')).toBe(false);
+    releaseTree(TREE2);
+    await settle();
+    expect(has(container, 'Содержание хроники chat-x')).toBe(true); // дождался дерева и открыл
+    expect(consumeOpenWikiPage()).toBeNull();
+  });
+
+  it('чужий раздел: экран не роняется — текст отказа и живой раздел; запрос не остаётся', async () => {
+    const c = mountOpen(TREE); // в этом дереве запрошенного раздела нет
+    await settle();
+    act(() => { requestOpenWikiPage({ section: 'projects/нет-такого', path: 'Проекты/нет-такого/Хроники/x.md' }); });
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-error')).not.toBeNull();
+    expect(has(c, 'Не найдено')).toBe(true); // отказ — текстом (wikiErrorText 404), не кодом
+    expect(has(c, 'Ревью фронта')).toBe(true); // дефолтный выбор вернул на живой раздел: экран жив
+    expect(consumeOpenWikiPage()).toBeNull();
   });
 });
 

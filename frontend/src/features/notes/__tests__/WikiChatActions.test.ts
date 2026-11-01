@@ -8,6 +8,10 @@
 // sourceRef без диапазона окна, итог — согласованный по числу («1 пакет откатан»,
 // «2 пакета откатано», «5 пакетов откатано»); requestNoteIngest — POST ingest/note с noteId,
 // 409 packages_limit, 404 и 400 wiki_note_id — текстом, не бросает.
+// «Открыть хронику» (OPEN-1): клик — запрос в стор вики (section — 'projects/{projectId}'
+// из session.projectId, path — chroniclePath из списка) + переход в «Заметки» каналом
+// 'cc-open-note'; без projectId чата — ни запроса, ни перехода. Открытие самой страницы —
+// в WikiTab.test (там же и «запрос ждёт загрузки дерева»).
 // Плюс достижимость из UI: РЕАЛЬНАЯ шапка чата (ChatHeaderBar) с РЕАЛЬНЫМ манифестом «Заметок»
 // рисует вклад wiki-chat-actions в ряду действий (десктоп и мобильная ветка); при выключенном
 // флаге — нет (п.1 вердикта ревью 98278913).
@@ -27,6 +31,9 @@
 // (7) убрать гард seq в poll .then → «гард опроса» краснеет;
 // (8) не перечитывать chroniclePath после завершенного опроса → «со ссылкой» краснеет;
 // (9) вернуть несклонённые формы в retractResultText → «склонение» краснеет.
+// OPEN-1 (этот прогон): (10) не класть запрос в стор (убрать requestOpenWikiPage) и
+// (11) не диспатчить 'cc-open-note' → оба краснят «200 applied — … клик — запрос в сторе
+// и переход»; (12) снять гейт session.projectId → «без projectId» краснеет.
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -41,6 +48,9 @@ import { WikiChatActions, requestNoteIngest, retractResultText } from '../WikiCh
 import { manifest as notesManifest } from '../manifest';
 import { ChatHeaderBar } from '../../../components/chat/ChatHeaderBar';
 import { registerSubsystem, type ChatHeaderSummaryCtx } from '../../../lib/subsystems/registryCore';
+// Стор вики — настоящий (тот же экземпляр, что у компонента через кит): запрос «Открыть
+// хронику» проверяется в самом сторе; тестам прямой импорт разрешён (notesStoreImportGuard)
+import { __test as wikiStore, consumeOpenWikiPage } from '../../../lib/wiki';
 
 // Тот же приём, что в WikiJournal.test: мокан только транспорт. Мок с сохранением
 // остальных экспортов: компонент берёт эти модули через кит хоста, а цепочка кита шире
@@ -81,8 +91,10 @@ type AnyNode = Cont;
 
 const CHAT_A = 'chat-aaaaaaaa-0000-0000-0000-000000000001';
 const CHAT_B = 'chat-bbbbbbbb-0000-0000-0000-000000000002';
-const sessionA = { id: CHAT_A } as unknown as ChatHeaderSummaryCtx['session'];
-const sessionB = { id: CHAT_B } as unknown as ChatHeaderSummaryCtx['session'];
+// проектный чат: хроника бывает только у проектного дома, и раздел запроса берётся из
+// projectId — без него кнопка не шлёт запроса (проверяется отдельным тестом OPEN-1)
+const sessionA = { id: CHAT_A, projectId: 'p1' } as unknown as ChatHeaderSummaryCtx['session'];
+const sessionB = { id: CHAT_B, projectId: 'p1' } as unknown as ChatHeaderSummaryCtx['session'];
 
 const RETRACT_OK = {
   revertedPackages: ['pkg-1'], unlinkedPackages: [], remainingPackages: [],
@@ -189,6 +201,8 @@ const CHATRECORD = {
 beforeEach(() => {
   req.mockReset();
   req.mockImplementation(() => Promise.resolve(null));
+  // запрос «Открыть хронику» — модульное состояние стора: каждый тест начинает с чистого
+  wikiStore.reset();
   setAllFlags({ 'llm-wiki': true });
 });
 
@@ -219,7 +233,7 @@ describe('Действия «Вики» в чате (S7b)', () => {
     expect(buttonByTestId(c, 'wiki-chat-chronicle')).toBeNull();
   });
 
-  it('200 applied — «готово»; после применённого хроника из списка даёт кнопку «Открыть хронику» с path', async () => {
+  it('200 applied — «готово»; хроника из списка даёт кнопку «Открыть хронику»: клик — запрос в сторе и переход', async () => {
     serve({
       analyze: { outcome: 'applied', reason: null, packageIds: ['pkg-1'] },
       chats: { items: [CHATRECORD], counts: {} },
@@ -231,12 +245,16 @@ describe('Действия «Вики» в чате (S7b)', () => {
     expect(has(c, 'готово')).toBe(true);
     const chron = buttonByTestId(c, 'wiki-chat-chronicle');
     expect(chron).not.toBeNull();
-    let detail: unknown = null;
-    const onOpen = (e: { detail?: unknown }) => { detail = e.detail; };
-    (globalThis as { window: { addEventListener: Function } }).window.addEventListener('cc-open-wiki-page', onOpen);
+    // (а) OPEN-1: клик — запрос в сторе (раздел из projectId чата, путь из списка) и
+    // переход в «Заметки» существующим каналом 'cc-open-note' (слушатель App, App.tsx:357)
+    let opens = 0;
+    const onOpen = () => { opens++; };
+    const w = globalThis as { window: { addEventListener: Function; removeEventListener: Function } };
+    w.window.addEventListener('cc-open-note', onOpen);
     click(chron, 'хроника');
-    (globalThis as { window: { removeEventListener: Function } }).window.removeEventListener('cc-open-wiki-page', onOpen);
-    expect(detail).toEqual({ path: `Проекты/p1/Хроники/${CHAT_A}.md` });
+    w.window.removeEventListener('cc-open-note', onOpen);
+    expect(consumeOpenWikiPage()).toEqual({ section: 'projects/p1', path: `Проекты/p1/Хроники/${CHAT_A}.md` });
+    expect(opens).toBe(1);
   });
 
   it('409 task_execution и marked_skip — текст отказа по коду, не сырой код', async () => {
@@ -436,12 +454,36 @@ describe('Опрос после 202: ссылка на хронику и гар�
     expect(has(c, 'готово')).toBe(true);
     const chron = buttonByTestId(c, 'wiki-chat-chronicle');
     expect(chron).not.toBeNull(); // та же монтированная панель, без remount
-    let detail: unknown = null;
-    const onOpen = (e: { detail?: unknown }) => { detail = e.detail; };
-    (globalThis as { window: { addEventListener: Function } }).window.addEventListener('cc-open-wiki-page', onOpen);
+    let opens = 0;
+    const onOpen = () => { opens++; };
+    const w = globalThis as { window: { addEventListener: Function; removeEventListener: Function } };
+    w.window.addEventListener('cc-open-note', onOpen);
     click(chron, 'хроника');
-    (globalThis as { window: { removeEventListener: Function } }).window.removeEventListener('cc-open-wiki-page', onOpen);
-    expect(detail).toEqual({ path: `Проекты/p1/Хроники/${CHAT_A}.md` });
+    w.window.removeEventListener('cc-open-note', onOpen);
+    expect(consumeOpenWikiPage()).toEqual({ section: 'projects/p1', path: `Проекты/p1/Хроники/${CHAT_A}.md` });
+    expect(opens).toBe(1);
+  });
+
+  // OPEN-1: внепроективный чат (хроника бывает только у проектного дома) — даже с путём
+  // из списка кнопка не шлёт запроса без раздела и не будит переход
+  it('без projectId чата — ни запроса в сторе, ни перехода (раздел взять не из чего)', async () => {
+    serve({
+      analyze: { outcome: 'applied', reason: null, packageIds: ['pkg-1'] },
+      chats: { items: [CHATRECORD], counts: {} },
+    });
+    const sessionNoProject = { id: CHAT_A } as unknown as ChatHeaderSummaryCtx['session'];
+    const c = render(sessionNoProject);
+    await settle();
+    const chron = buttonByTestId(c, 'wiki-chat-chronicle');
+    expect(chron).not.toBeNull(); // ссылка есть — кнопка есть
+    let opens = 0;
+    const onOpen = () => { opens++; };
+    const w = globalThis as { window: { addEventListener: Function; removeEventListener: Function } };
+    w.window.addEventListener('cc-open-note', onOpen);
+    click(chron, 'хроника');
+    w.window.removeEventListener('cc-open-note', onOpen);
+    expect(consumeOpenWikiPage()).toBeNull();
+    expect(opens).toBe(0);
   });
 
   it('гард опроса: ответ статуса прежнего чата не попадает на экран нового', async () => {

@@ -7,8 +7,8 @@
 // loadWikiChatAnalyzeStatus (live, без офлайн-кэша) до running:false, показывать last.outcome.
 // При монтировании — analyze-status: восстановить «идёт» после перезагрузки; loadWikiChats —
 // только за ссылкой хроники (для «идёт» доверяем analyze-status, не списку). «Открыть хронику»
-// — событие 'cc-open-wiki-page' с path: слушатель (открытие страницы в вкладке «Вики») —
-// следующий шаг, сегодня его нет; без chroniclePath кнопки нет вовсе.
+// (OPEN-1) — запрос в стор (requestOpenWikiPage: раздел из session.projectId, путь из списка)
+// + переход в «Заметки» существующим каналом 'cc-open-note'; без chroniclePath кнопки нет вовсе.
 // «Откатить всё из этого чата» — ConfirmDialog («чат получит пометку „не разбирать“»), REST
 // только после подтверждения; sourceRef — нормальная форма «session:{id}» БЕЗ диапазона окна
 // (та же, что entrySourceRef в «Журнале»: бэк по карточке накрывает все окна — RefMatches).
@@ -24,7 +24,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { BookOpen, ScrollText, Undo2 } from 'lucide-react';
 import {
   C, FS, SP, FLAGS, useFeature,
-  analyzeWikiChat, ingestWikiNote, loadWikiChatAnalyzeStatus, loadWikiChats, retractWikiSource,
+  analyzeWikiChat, ingestWikiNote, loadWikiChatAnalyzeStatus, loadWikiChats, requestOpenWikiPage, retractWikiSource,
   WikiError, type WikiChatAnalyzeOk, type WikiNoteIngestDto, type WikiRetractDto,
 } from 'aihome_shell/kit';
 import { Button } from '../../components/ui/Button';
@@ -194,10 +194,15 @@ export function WikiChatActions({ session, hasMessages, online }: ChatHeaderSumm
   };
 
   const openChronicle = () => {
-    if (!chroniclePath) return;
-    // Именованный контракт для слушателя (открытие страницы вики по пути в вкладке «Вики») —
-    // слушателя заводит следующий шаг; здесь — только сигнал с путём из списка
-    window.dispatchEvent(new CustomEvent('cc-open-wiki-page', { detail: { path: chroniclePath } }));
+    // Хроника бывает только у проектного дома (ChroniclePath null для внепроективного),
+    // поэтому раздел берётся прямо из projectId чата — путь на фронте не разбираем
+    if (!chroniclePath || !session.projectId) return;
+    // Запрос — в стор вики (единственное место состояния, OPEN-1): смонтированный WikiTab
+    // откроет раздел и страницу. Переход в «Заметки» — существующим приёмом: слушатель
+    // App на 'cc-open-note' (App.tsx:357) ставит вкладку и пишет адрес #/notes; сам
+    // navPush экрана не переключает — экран выбирается по hubTab, а его меняет только App.
+    requestOpenWikiPage({ section: `projects/${session.projectId}`, path: chroniclePath });
+    window.dispatchEvent(new Event('cc-open-note'));
   };
 
   const doRetract = () => {

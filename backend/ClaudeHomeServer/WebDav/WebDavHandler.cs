@@ -893,7 +893,30 @@ public static class WebDavHandler
         // «docs/A.txt» и «docs/a.txt» — один файл, на Linux — разные. Несуществующий источник
         // здесь не проверяется: для него, как прежде, 404 от files.Rename.
         var comparison = SafePath.ComparisonFor(OperatingSystem.IsWindows());
-        if ((File.Exists(srcAbs) || Directory.Exists(srcAbs)) && dstAbs.Equals(srcAbs, comparison))
+
+        // Сравнение — по РАЗЫМЕНОВАННЫМ путям, не по текстовым: одно и то же имя через
+        // симлинк-каталог — тот же ресурс на диске (link → docs: «link/a.txt» и «docs/a.txt»
+        // — один файл). Текстовое сравнение здесь молчит: existed=true, Overwrite:T сносит
+        // реальный источник (File.Delete по пути через ссылку сносит цель ссылки), а
+        // files.Rename следом падает FileNotFoundException → 404, файл потерян (вердикт
+        // ac807e61, доработка W3-0c; проба Глеба: srcAlive=False). Разыменование —
+        // SafePath.Canonical, тот же сегментный обход, что у гейта вики. Разобрать не
+        // удалось (цикл ссылок, бюджет) — fail-closed 403: отказ возможного переноса
+        // безопаснее потери файла; диск при этом не тронут. Canonical нормализует
+        // разделители в «/» — префикс «внутри» строится тем же разделителем, не
+        // хостовым (на Windows Path.DirectorySeparatorChar это «\»).
+        var srcCanonical = SafePath.Canonical(srcAbs);
+        var dstCanonical = SafePath.Canonical(dstAbs);
+        if (srcCanonical is null || dstCanonical is null)
+        {
+            ctx.Response.StatusCode = 403; // путь неразрешим (цикл ссылок, бюджет): следа на диске нет
+            return;
+        }
+        // Корневая форма Canonical отдаёт с завершающим разделителем — нормализуем,
+        // чтобы равенство и префикс его не сдваивали.
+        srcCanonical = srcCanonical.TrimEnd('/');
+
+        if ((File.Exists(srcAbs) || Directory.Exists(srcAbs)) && dstCanonical.TrimEnd('/').Equals(srcCanonical, comparison))
         {
             ctx.Response.StatusCode = 403; // источник и цель — один ресурс: файл цел, следа на диске нет
             return;
@@ -901,9 +924,11 @@ public static class WebDavHandler
 
         // Перенос каталога внутрь самого себя — явного запрета в RFC 4918 нет, но операция
         // невозможна: rename каталога в его собственный потомок падает на уровне ФС (EINVAL
-        // на Linux), а снос существующей цели до rename снёс бы поддеревo источника
-        // рекурсивно. Отказ 403 до сноса — как в случае выше.
-        if (Directory.Exists(srcAbs) && dstAbs.StartsWith(srcAbs + Path.DirectorySeparatorChar, comparison))
+        // на Linux), а снос существующей цели до rename снёс бы поддерево источника
+        // рекурсивно. Отказ 403 до сноса — как в случае выше. «Внутри» — тоже по
+        // разыменованным путям: симлинк «other» на «docs» — тот же каталог, и «other/x»
+        // внутри «docs».
+        if (Directory.Exists(srcAbs) && dstCanonical.StartsWith(srcCanonical + "/", comparison))
         {
             ctx.Response.StatusCode = 403; // цель внутри источника-каталога: каталог цел
             return;

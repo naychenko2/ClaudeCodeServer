@@ -191,7 +191,7 @@ public class WebDavMoveRootTests : IDisposable
 
     // Та же граница для каталога: перенос каталога в себя и внутрь самого себя — явного
     // запрета в RFC 4918 нет, но операция невозможна на уровне ФС. Без правки снос
-    // существующей цели сносил поддеревo источника («docs/inner» терялся с файлом), а
+    // существующей цели сносил поддерево источника («docs/inner» терялся с файлом), а
     // Directory.Move всё равно падал (rename каталога в его собственный потомок).
     [Theory]
     [InlineData("docs")]         // каталог в себя
@@ -248,5 +248,83 @@ public class WebDavMoveRootTests : IDisposable
             File.ReadAllText(dst).Should().Be("обычный файл");
             File.Exists(src).Should().BeFalse();
         }
+    }
+
+    // Вердикт ac807e61 (доработка W3-0c), MAJOR: цель названа через симлинк-каталог на
+    // источник — «link» → «docs», «link/a.txt» и «docs/a.txt» — ОДИН файл на диске, но
+    // текстово разные пути. Без разыменования проверки молчат: existed=true, Overwrite:T
+    // сносит реальный источник (File.Delete по пути через ссылку сносит цель ссылки),
+    // files.Rename падает FileNotFoundException → 404, файл потерян (проба Глеба:
+    // srcAlive=False). Теперь — 403 по разыменованному пути, как текстовое самопереносное
+    // сравнение выше: файл цел, следа на диске нет. На текстовом сравнении этот тест
+    // красный — он же мутация c3.
+    [Fact]
+    public void Move_ЦельЧерезСимлинКаталогНаИсточник_403_ФайлНаМесте()
+    {
+        if (OperatingSystem.IsWindows()) return; // ссылка на каталог требует привилегий; CI и дев-машины — Linux
+        var src = Path.Combine(_root, "docs", "a.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(src)!);
+        File.WriteAllText(src, "обычный файл");
+        Directory.CreateSymbolicLink(Path.Combine(_root, "link"), "docs"); // относительная цель — от каталога ссылки
+
+        var ctx = Ctx();
+        SetMoveDestination(ctx, "link/a.txt");
+        ctx.Request.Headers["Overwrite"] = "T";
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs/a.txt", Project);
+
+        ctx.Response.StatusCode.Should().Be(403);
+        File.Exists(src).Should().BeTrue(); // источник цел: отказ до любого следа на диске
+        File.ReadAllText(src).Should().Be("обычный файл");
+        Directory.Exists(Path.Combine(_root, "link")).Should().BeTrue(); // и сама ссылка цела
+    }
+
+    // Та же граница для каталога через ссылку: «other» → симлинк на «docs». MOVE docs →
+    // other/x — перенос каталога в самого себя через ссылку: текстово «other/x» не внутри
+    // «docs», проверка молчала; на ФС это rename в собственный потомок (EINVAL), а снос
+    // существующей цели снёс бы поддерево источника. Отказ 403 по разыменованному пути,
+    // каталог цел.
+    [Fact]
+    public void Move_КаталогВнутрьСебяЧерезСимлин_403_КаталогЦел()
+    {
+        if (OperatingSystem.IsWindows()) return; // см. предыдущий тест
+        var srcDir = Path.Combine(_root, "docs");
+        Directory.CreateDirectory(srcDir);
+        var file = Path.Combine(srcDir, "a.txt");
+        File.WriteAllText(file, "обычный файл");
+        Directory.CreateSymbolicLink(Path.Combine(_root, "other"), "docs");
+
+        var ctx = Ctx();
+        SetMoveDestination(ctx, "other/x");
+        ctx.Request.Headers["Overwrite"] = "T";
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs", Project);
+
+        ctx.Response.StatusCode.Should().Be(403);
+        Directory.Exists(srcDir).Should().BeTrue(); // каталог цел: отказ до любого следа на диске
+        File.Exists(file).Should().BeTrue();
+    }
+
+    // Цикл симлинков в цели («a» → «b», «b» → «a»): путь неразрешим (бюджет разыменования).
+    // Fail-closed 403 — не 500 и не 404 с снесённым источником. Первая линия обороны здесь
+    // гейт вики (IsWikiPath fail-closed на неразрешимом пути), каноническая проверка —
+    // вторая, она работает и когда гейт молчит (нет конфигурации). Тест утверждает
+    // видимый контракт, а не конкретную строку.
+    [Fact]
+    public void Move_ЦиклСимлинковВЦели_403_ИсточникНаМесте()
+    {
+        if (OperatingSystem.IsWindows()) return; // см. предыдущий тест
+        var src = Path.Combine(_root, "docs", "a.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(src)!);
+        File.WriteAllText(src, "обычный файл");
+        Directory.CreateSymbolicLink(Path.Combine(_root, "a"), "b");
+        Directory.CreateSymbolicLink(Path.Combine(_root, "b"), "a");
+
+        var ctx = Ctx();
+        SetMoveDestination(ctx, "a/x");
+        ctx.Request.Headers["Overwrite"] = "T";
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs/a.txt", Project);
+
+        ctx.Response.StatusCode.Should().Be(403);
+        File.Exists(src).Should().BeTrue();
+        File.ReadAllText(src).Should().Be("обычный файл");
     }
 }

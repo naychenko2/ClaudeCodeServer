@@ -42,6 +42,10 @@ public sealed class NoteTaskSyncService(
     {
         var note = notes.GetDetail(userId, noteId)
             ?? throw new KeyNotFoundException("Заметка не найдена");
+        // S2c-5 (а): мост «чекбокс → задача» — путь владельца, проверка ЯВНАЯ здесь, а не
+        // через право notes.Update: после S2c-7 заметку будет писать редактор (WriteContent),
+        // а задача из чекбокса редактора в общем проекте создана быть не должна.
+        notes.EnsureSourceWrite(userId, note.Source);
         var parsed = NoteTaskParser.Parse(note.Content).FirstOrDefault(l => l.Line == line)
             ?? throw new InvalidOperationException("На этой строке нет задачи-чекбокса");
 
@@ -74,13 +78,19 @@ public sealed class NoteTaskSyncService(
     {
         var note = notes.GetDetail(userId, noteId)
             ?? throw new KeyNotFoundException("Заметка не найдена");
+        // S2c-5 (а): тоггл чекбокса проектной заметки — тоже owner-Write, явная проверка
+        // (после S2c-7 notes.Update будет на WriteContent и сама этот путь не закроет)
+        notes.EnsureSourceWrite(userId, note.Source);
         var updatedContent = NoteTaskParser.SetChecked(note.Content, line, done)
             ?? throw new InvalidOperationException("На этой строке нет задачи-чекбокса");
 
         var saved = notes.Update(userId, noteId, new UpdateNoteRequest(Content: updatedContent))
             ?? throw new InvalidOperationException("Заметка не обновилась");
         kb.QueueSync(userId);
-        await notifier.BroadcastNotesChangedAsync(userId, "updated", noteId);
+        // S2c-5 (д, дефект 540f8158): источник заметки = id проекта → событие уходит
+        // в группу проекта; личный vault — null, только владельцу (то же правило, что
+        // в NotesController.Broadcast)
+        await notifier.BroadcastNotesChangedAsync(userId, "updated", noteId, ProjectOf(saved.Source));
 
         var linked = tasks.GetBySourceNote(userId, noteId).FirstOrDefault(t => t.SourceNoteLine == line);
         if (linked is not null)
@@ -96,13 +106,16 @@ public sealed class NoteTaskSyncService(
     {
         var note = notes.GetDetail(userId, noteId)
             ?? throw new KeyNotFoundException("Заметка не найдена");
+        // S2c-5 (а): срок на чекбоксе проектной заметки — тот же owner-Write путь
+        notes.EnsureSourceWrite(userId, note.Source);
         var updatedContent = NoteTaskParser.SetDue(note.Content, line, due)
             ?? throw new InvalidOperationException("На этой строке нет задачи-чекбокса");
 
         var saved = notes.Update(userId, noteId, new UpdateNoteRequest(Content: updatedContent))
             ?? throw new InvalidOperationException("Заметка не обновилась");
         kb.QueueSync(userId);
-        await notifier.BroadcastNotesChangedAsync(userId, "updated", noteId);
+        // S2c-5 (д, дефект 540f8158): событие — в группу проекта (см. ToggleAsync)
+        await notifier.BroadcastNotesChangedAsync(userId, "updated", noteId, ProjectOf(saved.Source));
 
         // Синхронизируем срок связанной задачи (пусто → очистить).
         var linked = tasks.GetBySourceNote(userId, noteId).FirstOrDefault(t => t.SourceNoteLine == line);
@@ -139,7 +152,9 @@ public sealed class NoteTaskSyncService(
         {
             if (notes.Update(userId, task.SourceNoteId, new UpdateNoteRequest(Content: updatedContent)) is null) return;
             kb.QueueSync(userId);
-            await notifier.BroadcastNotesChangedAsync(userId, "updated", task.SourceNoteId);
+            // S2c-5 (д, дефект 540f8158): источник заметки известен из самой заметки —
+            // событие проектной заметки уходит в группу проекта
+            await notifier.BroadcastNotesChangedAsync(userId, "updated", task.SourceNoteId, ProjectOf(note.Source));
         }
         catch (Exception ex)
         {
@@ -147,6 +162,11 @@ public sealed class NoteTaskSyncService(
                 task.SourceNoteId, task.Id);
         }
     }
+
+    // S2c-5 (д, дефект 540f8158): id проекта-источника заметки для события. Источник
+    // проектной заметки — это и есть id проекта (EncodeId в NotesService); личный vault
+    // («personal») — null: событие только владельцу, как раньше.
+    private static string? ProjectOf(string source) => source != "personal" ? source : null;
 
     // Перевод связанной задачи в done/todo напрямую через bridge (не через контроллер —
     // чтобы не зациклить обратную запись). Регулярная задача при завершении спавнит следующую.

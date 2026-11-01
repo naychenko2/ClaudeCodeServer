@@ -886,6 +886,15 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
 
         // Целевой источник: пусто = текущий; владение проверяет ResolveRoot
         var newSource = string.IsNullOrWhiteSpace(targetSource) ? sourceKey : targetSource!;
+        // S2c-5: перенос МЕЖДУ источниками — решение владельца: обе стороны проверяются
+        // owner-Write. Когда основная дверь Move внутри источника перейдёт на WriteContent
+        // (S2c-7), эта проверка останется на Write: редактор не вынесет заметку проекта
+        // в свой vault и не внесёт свою в чужой проект.
+        if (newSource != sourceKey)
+        {
+            EnsureSourceWrite(userId, sourceKey);
+            ResolveRoot(userId, newSource, ProjectRight.Write);
+        }
         var newRootDir = ResolveRoot(userId, newSource);
 
         var fileName = Path.GetFileName(relPath);
@@ -1104,6 +1113,9 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
             foreach (var srcId in sources)
             {
                 if (srcId == id || !model.ById.TryGetValue(srcId, out var srcNote)) continue;
+                // S2c-5: авто-обновление ссылок при переименовании — тот же фильтр каскада:
+                // только источники с WriteContent у вызывающего
+                if (!CanWriteContentIn(userId, srcNote.SourceKey)) continue;
                 try
                 {
                     var updated = RewriteLinks(File.ReadAllText(srcNote.FullPath, Encoding.UTF8), oldTitle, req.Title!);
@@ -1141,7 +1153,17 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         });
     }
 
+    // S2c-5 (Конкурентность): удаление — под тем же замком на id заметки, что и Update (S2c-2).
+    // Без него фоновая уборка истёкших и запись той же заметки переплетаются: правка
+    // возрождает уже удалённый файл (File.Delete прошёл, WriteAllText создал заново).
     public bool Delete(string userId, string id)
+    {
+        var gate = _writeGates.GetOrAdd(id, _ => new object());
+        lock (gate)
+            return DeleteCore(userId, id);
+    }
+
+    private bool DeleteCore(string userId, string id)
     {
         var (sourceKey, relPath) = DecodeId(id);
         var rootDir = ResolveRoot(userId, sourceKey);
@@ -1208,6 +1230,9 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         foreach (var srcId in sources)
         {
             if (!model.ById.TryGetValue(srcId, out var srcNote)) continue;
+            // S2c-5: каскад правит только те источники, где у вызывающего есть WriteContent;
+            // read-only проект (участник-читатель) остаётся нетронутым
+            if (!CanWriteContentIn(userId, srcNote.SourceKey)) continue;
             try
             {
                 var content = File.ReadAllText(srcNote.FullPath, Encoding.UTF8);
@@ -1321,6 +1346,22 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         if (own is null || own.OwnerId != userId) return null;
         return new RequestScope(userId, own.OwnerId!, ProjectRole.Owner);
     }
+
+    /// <summary>
+    /// S2c-5: боковые пути записи заметок (мост «чекбокс → задача», перенос между источниками)
+    /// проверяются owner-Write ЯВНО, здесь, а не через право основной двери заметки: когда S2c-7
+    /// переведёт Create/Update/Delete/Move на WriteContent, эти пути обязаны остаться закрытыми
+    /// для не-владельца. Отказ тот же, что у ResolveRoot: чужой проект без права записи —
+    /// UnauthorizedAccessException → 403.
+    /// </summary>
+    public void EnsureSourceWrite(string userId, string sourceKey) => _ = ResolveRoot(userId, sourceKey, ProjectRight.Write);
+
+    // S2c-5: каскад ссылок (удаление/переименование заметки) пишет только в источниках, где у
+    // вызывающего есть WriteContent: его личный vault и проекты, где он владелец или редактор.
+    // Read-only источник пропускается: каскад не правит чужой проект руками того, кто удаляет
+    // или переименоывает свою заметку.
+    private bool CanWriteContentIn(string userId, string sourceKey) =>
+        sourceKey == PersonalKey || ProjectScope(userId, sourceKey, ProjectRight.WriteContent) is not null;
 
     /// <summary>
     /// Корень источника заметок. Личный vault — папка самого вызывающего (личное ключается

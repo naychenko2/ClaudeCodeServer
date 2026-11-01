@@ -31,10 +31,13 @@ public sealed class ProjectAccessService(
         if (string.IsNullOrEmpty(callerUserId) || string.IsNullOrEmpty(sessionId)) return null;
         var session = sessions.GetById(sessionId);
         if (session is null) return null;
-        // Проектный чат — доступ через проект (с правом), чат вне проекта — владение самим чатом
-        if (session.ProjectId is not null) return Resolve(callerUserId, session.ProjectId, right);
-        return SessionAccess.CanSee(session, null, callerUserId)
-            ? new RequestScope(callerUserId, session.OwnerId!, ProjectRole.Owner)
-            : null;
+        // Видимость чата — одна точка SessionAccess (S2d-1): приватный проектный чат не проходит
+        // и для владельца проекта. Дальше для проектного чата — право и рубильник через Resolve;
+        // для чата вне проекта — владение самим чатом (поведение прежнее).
+        var project = session.ProjectId is not null ? projects.GetById(session.ProjectId) : null;
+        if (!SessionAccess.CanSee(session, project, callerUserId)) return null;
+        return session.ProjectId is not null
+            ? Resolve(callerUserId, session.ProjectId, right)
+            : new RequestScope(callerUserId, session.OwnerId!, ProjectRole.Owner);
     }
 }

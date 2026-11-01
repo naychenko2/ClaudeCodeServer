@@ -102,10 +102,10 @@ public class SharedProjectAssignTests : IClassFixture<TestWebApplicationFactory>
         return items.EnumerateArray().Select(t => t.GetProperty("id").GetString()!).ToList();
     }
 
-    // Мутация: в TasksController.GetAll вернуть tasks.GetByOwner(UserId) вместо
-    // myTasks.ForUser(UserId) — участник перестаёт видеть назначенную ему задачу, тест краснеет.
+    // Мутация: в MyTasksQuery вернуть фильтр «назначено мне» (ResolveMeUserId(t) == userId) —
+    // участник перестаёт видеть чужую задачу проекта, тест краснеет.
     [Fact]
-    public async Task Выдача_УчастникВидитНазначенноеЕмуНеВидитЧужое()
+    public async Task Выдача_УчастникВидитВсеЗадачиПроекта_ИНазначенное()
     {
         var (projectId, taskId) = await SharedProjectAsync("editor");
         var other = await Owner().PostAsJsonAsync($"/api/projects/{projectId}/tasks", new { title = "Чужая" });
@@ -114,8 +114,39 @@ public class SharedProjectAssignTests : IClassFixture<TestWebApplicationFactory>
 
         var ids = await ListIdsAsync(Member());
 
-        ids.Should().Contain(taskId);
-        ids.Should().NotContain(otherId);
+        ids.Should().Contain([taskId, otherId]);
+    }
+
+    [Fact]
+    public async Task Выдача_Читатель_ВидитЗадачиПроекта_БезОписанияИИтога()
+    {
+        var (projectId, _) = await SharedProjectAsync("reader");
+        var created = await Owner().PostAsJsonAsync($"/api/projects/{projectId}/tasks",
+            new { title = "С описанием", description = "секретное описание" });
+        var id = IdOf(await created.Content.ReadAsStringAsync());
+
+        var response = await Member().GetAsync("/api/tasks");
+        response.EnsureSuccessStatusCode();
+        var item = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync()).EnumerateArray()
+            .Single(t => t.GetProperty("id").GetString() == id);
+
+        // та же облегчённая карточка, что у GET /api/projects/{p}/tasks: полный текст не едет
+        item.GetProperty("description").GetString().Should().BeEmpty();
+        (!item.TryGetProperty("resultMarkdown", out var result) || result.ValueKind == JsonValueKind.Null)
+            .Should().BeTrue();
+        item.GetProperty("listItem").GetBoolean().Should().BeTrue();
+        item.GetProperty("hasDescription").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Выдача_ОтозванныйУчастник_НеВидитЗадачПроекта()
+    {
+        var (projectId, taskId) = await SharedProjectAsync("editor");
+        (await ListIdsAsync(Member())).Should().Contain(taskId);
+
+        (await Owner().DeleteAsync($"/api/projects/{projectId}/members/{MemberId}")).EnsureSuccessStatusCode();
+
+        (await ListIdsAsync(Member())).Should().NotContain(taskId);
     }
 
     [Fact]

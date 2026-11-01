@@ -73,8 +73,10 @@ public class SharedProjectTaskRoutingTests : IDisposable
 
     // ─── Календарь / «мои задачи» ───────────────────────────────────────────
 
+    // Мутация: в MyTasksQuery вернуть фильтр `&& TaskManager.ResolveMeUserId(t) == userId` —
+    // тест краснеет (чужая задача проекта пропадает).
     [Fact]
-    public void ForUser_УчастникВидитНазначенноеЕмуИСвоёЛичное_ЧужоеНет()
+    public void ForUser_УчастникВидитЗадачиПроектаИСвоёЛичное_ЛичноеВладельцаНет()
     {
         var mine = NewTask("мне", _shared.Id, Editor);
         var ownerOwn = NewTask("владельца", _shared.Id); // исполнитель — владелец
@@ -84,25 +86,53 @@ public class SharedProjectTaskRoutingTests : IDisposable
 
         var ids = Query().ForUser(Editor).Select(t => t.Id).ToList();
 
-        ids.Should().BeEquivalentTo([mine.Id, editorPersonal.Id]);
-        ids.Should().NotContain([ownerOwn.Id, claudeTask.Id, personalOfOwner.Id]);
+        ids.Should().BeEquivalentTo([mine.Id, ownerOwn.Id, claudeTask.Id, editorPersonal.Id]);
+        ids.Should().NotContain(personalOfOwner.Id);
     }
 
     [Fact]
     public void ForUser_Посторонний_НичегоИзОбщегоПроекта()
     {
         NewTask("мне?", _shared.Id, Stranger);
+        NewTask("общая", _shared.Id);
 
         Query().ForUser(Stranger).Should().BeEmpty();
     }
 
     [Fact]
-    public void ForUser_ЧитательСНазначением_ВидитТолькоСвоё()
+    public void ForUser_ЧитательБезНазначения_ВидитЗадачиПроекта()
     {
-        var mine = NewTask("читателю", _shared.Id, Reader);
-        NewTask("редактору", _shared.Id, Editor);
+        var a = NewTask("читателю", _shared.Id, Reader);
+        var b = NewTask("редактору", _shared.Id, Editor);
+        var c = NewTask("владельцу", _shared.Id);
 
-        Query().ForUser(Reader).Select(t => t.Id).Should().BeEquivalentTo([mine.Id]);
+        Query().ForUser(Reader).Select(t => t.Id).Should().BeEquivalentTo([a.Id, b.Id, c.Id]);
+    }
+
+    // Выдача только читает: одновременное назначение не роняет её и не теряет задачи.
+    [Fact]
+    public async Task ForUser_ОдновременноеНазначение_НеТеряетЗадачи()
+    {
+        var items = Enumerable.Range(0, 20).Select(i => NewTask("з" + i, _shared.Id)).ToList();
+        var query = Query();
+        var start = new TaskCompletionSource();
+        var assigner = Task.Run(async () =>
+        {
+            await start.Task;
+            foreach (var t in items) t.AssigneeUserId = Editor;
+        });
+        var readers = Enumerable.Range(0, 4).Select(_ => Task.Run(async () =>
+        {
+            await start.Task;
+            return query.ForUser(Editor).Count;
+        })).ToList();
+
+        start.SetResult();
+        await assigner;
+        var counts = await Task.WhenAll(readers);
+
+        counts.Should().AllSatisfy(c => c.Should().Be(items.Count));
+        query.ForUser(Editor).Should().HaveCount(items.Count);
     }
 
     [Fact]

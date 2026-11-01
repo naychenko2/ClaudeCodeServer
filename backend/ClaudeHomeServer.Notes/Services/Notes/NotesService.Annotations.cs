@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Access;
 
 namespace ClaudeHomeServer.Services.Notes;
 
@@ -43,10 +44,17 @@ public sealed partial class NotesService
         if (scope == PersonalKey)
             return (SafePath.Join(Path.Combine(_dataDir, "notes", userId), rel), true);
 
+        // S2c-7: документ общего проекта открыт тому, кто может писать комментарии этого
+        // проекта (WriteContent), а не только владельцу: комментарий — заметка в notes/
+        // проекта, ^id — в тот же notes/. Тот же разбор, что у ResolveRoot: нет доступа —
+        // 404 («чужое» и «несуществующее» не различаем), есть чтение без записи — 403.
+        if (ProjectScope(userId, scope, ProjectRight.Read) is null)
+            throw new KeyNotFoundException($"Проект {scope} не найден");
+        if (ProjectScope(userId, scope, ProjectRight.WriteContent) is null)
+            throw new UnauthorizedAccessException("Нет права на это действие в проекте");
+
         var project = _projects.GetById(scope)
             ?? throw new KeyNotFoundException($"Проект {scope} не найден");
-        if (project.OwnerId != userId)
-            throw new UnauthorizedAccessException("Проект не принадлежит пользователю");
         if (string.IsNullOrWhiteSpace(project.RootPath))
             throw new InvalidOperationException("У проекта нет корневой папки");
         var canWrite = rel.StartsWith("notes/", StringComparison.OrdinalIgnoreCase);
@@ -446,7 +454,8 @@ public sealed partial class NotesService
             throw new ArgumentException("Статус должен быть open или resolved");
 
         var (sourceKey, relPath) = DecodeId(id);
-        var rootDir = ResolveRoot(userId, sourceKey);
+        // S2c-7: статус комментария — правка заметки, дверь WriteContent
+        var rootDir = ResolveRoot(userId, sourceKey, ProjectRight.WriteContent);
         var full = SafePath.Join(rootDir, relPath);
         if (!File.Exists(full)) return null;
 

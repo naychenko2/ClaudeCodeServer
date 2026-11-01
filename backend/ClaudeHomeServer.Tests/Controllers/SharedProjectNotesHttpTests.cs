@@ -15,7 +15,8 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// 1292), и на HTTP это один и тот же 404: «чужое» и «несуществующее» не различаем. До доработки
 /// PUT/DELETE/Move/LinkMention/SetStatus не ловили этот отказ в NotesController и отдавали 500
 /// через UnhandledExceptionHandler — регрессия против прежнего 403. Право чтения без права
-/// записи (участник в S1) — 403; чтение — 200; путь владельца не меняется.
+/// записи (читатель) — 403; чтение — 200; путь владельца не меняется. С S2c-7 редактор
+/// общего проекта получает WriteContent и пишет те же ручки — 200/204, файл в notes/ проекта.
 ///
 /// Проект и основная заметка — ОДНИ на весь класс: кэш модели NotesService ключуется по id
 /// пользователя с TTL 2 с (NotesService.cs:51-52), и новый проект на каждый тест попадал бы
@@ -34,6 +35,7 @@ public class SharedProjectNotesHttpTests : IClassFixture<TestWebApplicationFacto
     // пусты для каждого теста, и каждый создавал бы свой проект с тем же именем (400).
     private static readonly SemaphoreSlim InitLock = new(1, 1);
     private static string? _projectId;
+    private static string? _projectDir;
     private static string? _noteId;
     private static string? _memberId;
 
@@ -68,6 +70,7 @@ public class SharedProjectNotesHttpTests : IClassFixture<TestWebApplicationFacto
             await SetFlagAsync(Member(), true);
             var dir = Path.Combine(_factory.TempDir, "s13b_notes");
             Directory.CreateDirectory(dir);
+            _projectDir = dir;
 
             var project = await owner.PostAsJsonAsync("/api/projects",
                 new { name = "Заметки общего проекта", rootPath = dir });
@@ -150,19 +153,59 @@ public class SharedProjectNotesHttpTests : IClassFixture<TestWebApplicationFacto
         content.Should().Be(NoteContent);
     }
 
-    // ── отказ записи: 403 участнику, 404 невидимому ────────────────────────────────
+    // ── отказ записи: 403 читателю, 404 невидимому; редактор пишет (S2c-7, ниже) ───
 
-    [Theory]
-    [InlineData("editor")]
-    [InlineData("reader")]
-    public async Task Участник_ПишетПроектнуюЗаметку_403_И_ЗаметкаНеМеняется(string role)
+    [Fact]
+    public async Task Читатель_ПишетПроектнуюЗаметку_403_И_ЗаметкаНеМеняется()
     {
-        await SetMemberAsync(role);
+        await SetMemberAsync("reader");
         var noteId = _noteId!;
 
         await WritesAreAsync(Member(), noteId, HttpStatusCode.Forbidden);
 
         await NoteIntactAsync(noteId);
+    }
+
+    // ── запись редактора (S2c-7): 200/204, файл — в notes/ проекта (арендатора) ────
+
+    [Fact]
+    public async Task Редактор_ПишетПроектнуюЗаметку_200_И_ФайлВПапкеПроекта()
+    {
+        await SetMemberAsync("editor");
+        var projectId = await SharedProjectIdAsync();
+        var member = Member();
+
+        var create = await member.PostAsJsonAsync("/api/notes",
+            new { title = "Заметка редактора", content = "Текст редактора", source = projectId });
+        create.StatusCode.Should().Be(HttpStatusCode.OK);
+        var newId = IdOf(await create.Content.ReadAsStringAsync());
+
+        // Хранилище — арендатор: файл лежит в notes/ проекта (несмежение vault'ов
+        // проверяется на уровне сервиса, SharedProjectNotesWriteContentTests)
+        File.Exists(Path.Combine(_projectDir!, "notes", "Заметка редактора.md")).Should().BeTrue();
+
+        var put = await member.PutAsJsonAsync($"/api/notes/{newId}", new { content = "Правка редактора" });
+        put.EnsureSuccessStatusCode();
+
+        // Владелец видит ту же заметку с той же правкой: корень один на всех.
+        // Кэш модели per-owner живёт 2 с и чужая запись его не снимает (NotesService.cs:106),
+        // поэтому резканье владельца инициирует его собственняя операция — как в реальном
+        // клиенте после hub-события: следующий скан видит состояние после правки редактора.
+        await OwnNoteAsync("Резканье владельца");
+        var ownerView = await Owner().GetAsync($"/api/notes/{newId}");
+        ownerView.EnsureSuccessStatusCode();
+        JsonSerializer.Deserialize<JsonElement>(await ownerView.Content.ReadAsStringAsync())
+            .GetProperty("content").GetString().Should().Be("Правка редактора");
+
+        // Перенос внутри проекта — тоже открыт (та же дверь содержимого)
+        var moved = await member.PostAsJsonAsync($"/api/notes/{newId}/move", new { folder = "Архив" });
+        moved.EnsureSuccessStatusCode();
+        var movedId = IdOf(await moved.Content.ReadAsStringAsync());
+        File.Exists(Path.Combine(_projectDir!, "notes", "Архив", "Заметка редактора.md")).Should().BeTrue();
+
+        (await member.DeleteAsync($"/api/notes/{movedId}"))
+            .StatusCode.Should().Be(HttpStatusCode.NoContent);
+        File.Exists(Path.Combine(_projectDir!, "notes", "Архив", "Заметка редактора.md")).Should().BeFalse();
     }
 
     [Fact]

@@ -753,7 +753,9 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     public NoteDetail Create(string userId, CreateNoteRequest req)
     {
         var sourceKey = string.IsNullOrWhiteSpace(req.Source) ? PersonalKey : req.Source!;
-        var rootDir = ResolveRoot(userId, sourceKey);
+        // S2c-7: дверь заметки — на WriteContent: редактор общего проекта создаёт заметку
+        // в notes/ проекта; читатель — 403, посторонний — 404 (тот же разбор, что у ResolveRoot)
+        var rootDir = ResolveRoot(userId, sourceKey, ProjectRight.WriteContent);
 
         var baseName = SanitizeFileName(req.Title);
         if (baseName.Length == 0) baseName = "Без названия";
@@ -849,11 +851,11 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // в [[…]]; при отличии регистра исходный текст сохраняется как алиас.
     public NoteDetail? LinkMention(string userId, string id, string targetTitle)
     {
-        // Право записи — как в Move/Update: ResolveRoot с правым Write. В S1 участник
-        // общего проекта только читает: без этой проверки «связать» переписывало файл
-        // проекта, видимого участнику лишь на чтение (отказ ловит NotesController → 403).
+        // Право записи — как в Move/Update: ResolveRoot с правым WriteContent (S2c-7).
+        // Без этой проверки «связать» переписывало файл проекта, видимого читателю лишь
+        // на чтение (отказ ловит NotesController → 403).
         var (sourceKey, _) = DecodeId(id);
-        ResolveRoot(userId, sourceKey);
+        ResolveRoot(userId, sourceKey, ProjectRight.WriteContent);
 
         var model = GetModel(userId);
         if (!model.ById.TryGetValue(id, out var note)) return null;
@@ -880,22 +882,26 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     public NoteDetail? Move(string userId, string id, string? folder, string? targetSource = null)
     {
         var (sourceKey, relPath) = DecodeId(id);
-        var rootDir = ResolveRoot(userId, sourceKey);
+        // S2c-7: перенос ВНУТРИ источника — обычная дверь заметки, WriteContent: редактор
+        // перекладывает свои заметки по папкам проекта
+        var rootDir = ResolveRoot(userId, sourceKey, ProjectRight.WriteContent);
         var full = SafePath.Join(rootDir, relPath);
         if (!File.Exists(full)) return null;
 
-        // Целевой источник: пусто = текущий; владение проверяет ResolveRoot
+        // Целевой источник: пусто = текущий
         var newSource = string.IsNullOrWhiteSpace(targetSource) ? sourceKey : targetSource!;
         // S2c-5: перенос МЕЖДУ источниками — решение владельца: обе стороны проверяются
-        // owner-Write. Когда основная дверь Move внутри источника перейдёт на WriteContent
-        // (S2c-7), эта проверка останется на Write: редактор не вынесет заметку проекта
-        // в свой vault и не внесёт свою в чужой проект.
+        // owner-Write. Дверь Move внутри источника (выше и ниже) — на WriteContent (S2c-7),
+        // эта проверка остаётся на Write: редактор не вынесет заметку проекта в свой vault
+        // и не внесёт свою в чужой проект.
         if (newSource != sourceKey)
         {
             EnsureSourceWrite(userId, sourceKey);
             ResolveRoot(userId, newSource, ProjectRight.Write);
         }
-        var newRootDir = ResolveRoot(userId, newSource);
+        var newRootDir = newSource == sourceKey
+            ? rootDir
+            : ResolveRoot(userId, newSource, ProjectRight.Write);
 
         var fileName = Path.GetFileName(relPath);
         var target = SanitizeFolder(folder);
@@ -927,7 +933,8 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // Возвращает маппинг id заметок старый → новый (id содержит путь).
     public IReadOnlyList<MovedNoteId> MoveFolder(string userId, string sourceKey, string path, string newPath)
     {
-        var rootDir = ResolveRoot(userId, sourceKey);
+        // S2c-7: перенос папки — дверь содержимого заметок проекта, WriteContent
+        var rootDir = ResolveRoot(userId, sourceKey, ProjectRight.WriteContent);
         var oldFolder = SanitizeFolder(path);
         var newFolder = SanitizeFolder(newPath);
         if (oldFolder.Length == 0) throw new ArgumentException("Не задана папка");
@@ -994,7 +1001,8 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // Создать физическую папку (идемпотентно — дубликат не ошибка).
     public NoteFolderDto CreateFolder(string userId, string sourceKey, string path)
     {
-        var rootDir = ResolveRoot(userId, sourceKey);   // право на запись проверяет ResolveRoot
+        // S2c-7: папка — структура содержимого заметок проекта, дверь на WriteContent
+        var rootDir = ResolveRoot(userId, sourceKey, ProjectRight.WriteContent);
         var folder = SanitizeFolder(path);
         if (folder.Length == 0) throw new ArgumentException("Не задана папка");
         var full = SafePath.Join(rootDir, folder);
@@ -1009,7 +1017,8 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // Возвращает число удалённых .md-заметок.
     public int DeleteFolder(string userId, string sourceKey, string path)
     {
-        var rootDir = ResolveRoot(userId, sourceKey);   // право на запись проверяет ResolveRoot
+        // S2c-7: та же дверь, что у CreateFolder: WriteContent
+        var rootDir = ResolveRoot(userId, sourceKey, ProjectRight.WriteContent);
         var folder = SanitizeFolder(path);
         if (folder.Length == 0) throw new ArgumentException("Не задана папка");
         var full = SafePath.Join(rootDir, folder);
@@ -1035,7 +1044,8 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     private NoteDetail? UpdateCore(string userId, string id, UpdateNoteRequest req, string? ifMatch)
     {
         var (sourceKey, relPath) = DecodeId(id);
-        var rootDir = ResolveRoot(userId, sourceKey);
+        // S2c-7: правка содержимого заметки — дверь WriteContent (редактор общего проекта)
+        var rootDir = ResolveRoot(userId, sourceKey, ProjectRight.WriteContent);
         var full = SafePath.Join(rootDir, relPath);
         if (!File.Exists(full)) return null;
 
@@ -1166,7 +1176,8 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     private bool DeleteCore(string userId, string id)
     {
         var (sourceKey, relPath) = DecodeId(id);
-        var rootDir = ResolveRoot(userId, sourceKey);
+        // S2c-7: удаление заметки — дверь WriteContent
+        var rootDir = ResolveRoot(userId, sourceKey, ProjectRight.WriteContent);
         var full = SafePath.Join(rootDir, relPath);
         if (!File.Exists(full)) return false;
         File.Delete(full);
@@ -1349,10 +1360,10 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
 
     /// <summary>
     /// S2c-5: боковые пути записи заметок (мост «чекбокс → задача», перенос между источниками)
-    /// проверяются owner-Write ЯВНО, здесь, а не через право основной двери заметки: когда S2c-7
-    /// переведёт Create/Update/Delete/Move на WriteContent, эти пути обязаны остаться закрытыми
-    /// для не-владельца. Отказ тот же, что у ResolveRoot: чужой проект без права записи —
-    /// UnauthorizedAccessException → 403.
+    /// проверяются owner-Write ЯВНО, здесь, а не через право основной двери заметки: двери
+    /// Create/Update/Delete/Move внутри источника переведены на WriteContent (S2c-7), а эти пути
+    /// остались закрытыми для не-владельца. Отказ тот же, что у ResolveRoot: чужой проект без
+    /// права записи — UnauthorizedAccessException → 403.
     /// </summary>
     public void EnsureSourceWrite(string userId, string sourceKey) => _ = ResolveRoot(userId, sourceKey, ProjectRight.Write);
 
@@ -1372,7 +1383,8 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     /// об одном проекте.
     /// Отказы: нет права чтения (посторонний, выключенный флаг или рубильник, проекта нет) —
     /// KeyNotFoundException → 404, «чужое» и «несуществующее» не различаем, как в IProjectAccess;
-    /// право чтения есть, а нужного права нет (в S1 участник только читает) —
+    /// право чтения есть, а нужного права нет (читатель не пишет; с S2c-7 редактор пишет
+    /// содержимое через WriteContent, а owner-двери вроде переноса между источниками ему закрыты) —
     /// UnauthorizedAccessException → 403.
     /// </summary>
     private string ResolveRoot(string userId, string sourceKey, ProjectRight right = ProjectRight.Write)

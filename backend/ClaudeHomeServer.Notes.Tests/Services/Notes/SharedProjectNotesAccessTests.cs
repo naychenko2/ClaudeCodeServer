@@ -141,14 +141,12 @@ public class SharedProjectNotesAccessTests : IDisposable
         sut.GetSources(memberId).Should().Contain(s => s.Key == _projectId);
     }
 
-    // --- Запись участника: 403 ---
+    // --- Запись читателя: 403 (редактор с S2c-7 пишет — SharedProjectNotesWriteContentTests) ---
 
-    [Theory]
-    [InlineData("reader")]
-    [InlineData("editor")]
-    public void Участник_ПишетВПроект_Отказ403(string role)
+    [Fact]
+    public void Читатель_ПишетВПроект_Отказ403()
     {
-        var memberId = AddMember(role);
+        var memberId = AddMember("reader");
         var sut = Service();
         var id = ProjectNoteId();
 
@@ -156,7 +154,7 @@ public class SharedProjectNotesAccessTests : IDisposable
         Action update = () => sut.Update(memberId, id, new UpdateNoteRequest(Content: "правка участника"));
         Action delete = () => sut.Delete(memberId, id);
 
-        // «Пишет» = право Write: в S1 его нет ни у читателя, ни у редактора (ProjectAccessService.cs:24)
+        // «Пишет» = право WriteContent: у читателя его нет (ProjectAccess.cs:89 — Reader только Read)
         create.Should().Throw<UnauthorizedAccessException>();
         update.Should().Throw<UnauthorizedAccessException>();
         delete.Should().Throw<UnauthorizedAccessException>();

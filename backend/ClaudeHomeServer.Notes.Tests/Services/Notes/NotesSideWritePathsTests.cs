@@ -16,7 +16,8 @@ namespace ClaudeHomeServer.Tests.Services;
 /// открыта быть не должна:
 /// (а) мост «чекбокс → задача» (promote/toggle/set-due) — owner-Write, проверка явная в мосту;
 /// (б) уборка истёкших не берёт общие проекты не-владельца;
-/// (в) Move между источниками — решение владельца (перенос внутри источника — отдельная дверь);
+/// (в) Move между источниками — решение владельца (перенос внутри источника — дверь
+///     содержимого, с S2c-7 на WriteContent, см. «Редактор_ПереносВнутриПроекта_Допустим»);
 /// (г) каскад ссылок (удаление/переименование) пишет только в источниках с WriteContent у вызывающего;
 /// (д) события чекбокса проектной заметки уходят в группу проекта (дефект 540f8158);
 /// конкурентность: Delete (примитив уборки) и Update одной заметки — под одним замком _writeGates (S2c-2).
@@ -251,15 +252,18 @@ public class NotesSideWritePathsTests : IDisposable
     }
 
     [Fact]
-    public void Редактор_ПереносВнутриПроекта_ЗакрытДоС2c7()
+    public void Редактор_ПереносВнутриПроекта_Допустим_S2c7()
     {
         AddMember(_projects, _p1, _editorId, ProjectRole.Editor);
         var sut = Service();
         var id = NoteId(sut, _ownerId, _p1, TargetNote);
 
-        // Право записи участнику в этом шаге не открывается (S2c-7): основная дверь Move — на Write
-        Action act = () => sut.Move(_editorId, id, "Архив");
-        act.Should().Throw<UnauthorizedAccessException>();
+        // S2c-7: перенос ВНУТРИ источника — обычная дверь содержимого заметки (WriteContent);
+        // перенос между источниками остаётся на Write (тесты выше — «ОтказФайлНаМесте»)
+        var moved = sut.Move(_editorId, id, "Архив");
+
+        moved.Should().NotBeNull();
+        File.Exists(Path.Combine(_p1Root, "notes", "Архив", TargetNote + ".md")).Should().BeTrue();
     }
 
     // --- (г) каскад ссылок: только источники с WriteContent у вызывающего ---

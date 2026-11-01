@@ -1,5 +1,8 @@
 using System.Net;
+using System.Net.Http;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -89,5 +92,151 @@ public class NotesControllerTests : IClassFixture<TestWebApplicationFactory>
         var list = await (await _client.GetAsync("/api/notes")).Content.ReadFromJsonAsync<JsonElement>();
         list.EnumerateArray().Should()
             .Contain(n => n.GetProperty("title").GetString() == "Заметка в списке");
+    }
+
+    // ─── S2c-2 · хеш содержимого и 409 при сохранении (К8) ───────────────────
+
+    // То же правило хеша, что на сервере: SHA-256 по UTF-8-байтам текста.
+    private static string Sha256Hex(string s) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(s))).ToLowerInvariant();
+
+    private async Task<(string Etag, JsonElement Body)> GetNoteAsync(string id)
+    {
+        var resp = await _client.GetAsync(Url(id));
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        var etag = resp.Headers.TryGetValues("ETag", out var values) ? values.FirstOrDefault() : null;
+        return (etag!, body);
+    }
+
+    private async Task<HttpResponseMessage> PutWithMatchAsync(string id, string? etag, string content)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Put, Url(id))
+        {
+            Content = new StringContent(JsonSerializer.Serialize(new { content }), Encoding.UTF8, "application/json"),
+        };
+        if (etag is not null) req.Headers.TryAddWithoutValidation("If-Match", etag);
+        return await _client.SendAsync(req);
+    }
+
+    [Fact]
+    public async Task Get_ОтдаётETagХешСодержимого()
+    {
+        var id = await CreateNoteAsync("Хеш GET", "тело заметки");
+
+        var (etag, body) = await GetNoteAsync(id);
+        var content = body.GetProperty("content").GetString()!;
+        etag.Should().NotBeNull("GET заметки обязан отдавать ETag (К8)");
+        etag.Should().Be($"\"{Sha256Hex(content)}\"", "ETag — quoted SHA-256 от отдаваемого содержимого");
+    }
+
+    [Fact]
+    public async Task Put_СовпадающийIfMatch_Записывает()
+    {
+        var id = await CreateNoteAsync("If-Match совпал", "исходное тело");
+        var (etag, _) = await GetNoteAsync(id);
+
+        var resp = await PutWithMatchAsync(id, etag, "записано по ETag");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var (_, after) = await GetNoteAsync(id);
+        after.GetProperty("content").GetString().Should().Contain("записано по ETag");
+    }
+
+    [Fact]
+    public async Task Put_НесовпадающийIfMatch_409NoteChanged_ЗаметкаНеМеняется()
+    {
+        var id = await CreateNoteAsync("If-Match расшёлся", "исходное тело");
+        var (etag1, _) = await GetNoteAsync(id);
+
+        // Первая запись по актуальному ETag проходит
+        (await PutWithMatchAsync(id, etag1, "первая правка")).StatusCode
+            .Should().Be(HttpStatusCode.OK);
+
+        // Вторая — по устаревшему: 409 с актуальным состоянием, заметка не тронута
+        var conflict = await PutWithMatchAsync(id, etag1, "вторая правка");
+        conflict.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await conflict.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("code").GetString().Should().Be("note_changed");
+
+        var (etag2, after) = await GetNoteAsync(id);
+        after.GetProperty("content").GetString().Should()
+            .Contain("первая правка").And.NotContain("вторая правка");
+
+        // Тело по К8: актуальный хеш и содержимое, время правки
+        body.GetProperty("sha256").GetString().Should().Be(etag2.Trim('"'));
+        body.GetProperty("content").GetString().Should().Contain("первая правка");
+        body.GetProperty("changedAt").GetString().Should().NotBeNullOrEmpty();
+
+        // Автор правки — из серверного состояния (sub токена), не из тела запроса
+        var me = await (await _client.GetAsync("/api/auth/me")).Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("author").GetProperty("userId").GetString()
+            .Should().Be(me.GetProperty("userId").GetString());
+    }
+
+    [Fact]
+    public async Task Put_БезIfMatch_ПрежнееПоведение()
+    {
+        var id = await CreateNoteAsync("Без If-Match", "исходное тело");
+
+        // Без заголовка проверка не делается — запись проходит, как до S2c-2
+        (await PutWithMatchAsync(id, null, "записано без проверки")).StatusCode
+            .Should().Be(HttpStatusCode.OK);
+
+        var (_, after) = await GetNoteAsync(id);
+        after.GetProperty("content").GetString().Should().Contain("записано без проверки");
+    }
+
+    [Fact]
+    public async Task ХешМеняетсяПослеЗаписи()
+    {
+        var id = await CreateNoteAsync("Хеш после записи", "первое тело");
+        var (etag1, _) = await GetNoteAsync(id);
+
+        (await PutWithMatchAsync(id, etag1, "второе тело")).StatusCode
+            .Should().Be(HttpStatusCode.OK);
+
+        var (etag2, _) = await GetNoteAsync(id);
+        etag2.Should().NotBe(etag1, "после записи содержимое другое — и хеш другой");
+    }
+
+    [Fact]
+    public async Task Гонка_ДваСохраненияСОднимIfMatch_ПроходитРовноОдно()
+    {
+        var id = await CreateNoteAsync("Гонка", "исходное тело");
+        var (etag, _) = await GetNoteAsync(id);
+
+        // Оба сохранения стартуют одновременно (TCS-барьер, без Task.Delay): если между
+        // проверкой хеша и записью есть окно, оба прочтут старый хеш и оба запишут.
+        var start = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<(HttpStatusCode Status, JsonElement Body)> Put(string marker)
+        {
+            await start.Task;
+            var resp = await PutWithMatchAsync(id, etag, $"тело {marker}");
+            return (resp.StatusCode, await resp.Content.ReadFromJsonAsync<JsonElement>());
+        }
+        var t1 = Task.Run(() => Put("A"));
+        var t2 = Task.Run(() => Put("B"));
+        start.SetResult(true);
+        var (r1, r2) = (await t1, await t2);
+
+        new[] { r1, r2 }.Count(r => r.Status == HttpStatusCode.OK).Should()
+            .Be(1, "два сохранения с одним If-Match: ровно одно проходит проверку");
+        new[] { r1, r2 }.Count(r => r.Status == HttpStatusCode.Conflict).Should().Be(1);
+
+        var (winner, loser) = r1.Status == HttpStatusCode.OK ? (r1, r2) : (r2, r1);
+        var winnerBody = winner.Body.GetProperty("content").GetString()!;
+        var winnerMarker = winnerBody.Contains("тело A") ? "тело A" : "тело B";
+        var loserMarker = winnerMarker == "тело A" ? "тело B" : "тело A";
+
+        // Заметка содержит запись победителя
+        var (etagAfter, current) = await GetNoteAsync(id);
+        current.GetProperty("content").GetString().Should()
+            .Contain(winnerMarker).And.NotContain(loserMarker);
+
+        // Проигравший получил актуальное состояние
+        loser.Body.GetProperty("code").GetString().Should().Be("note_changed");
+        loser.Body.GetProperty("content").GetString().Should().Contain(winnerMarker);
+        loser.Body.GetProperty("sha256").GetString().Should().Be(etagAfter.Trim('"'));
     }
 }

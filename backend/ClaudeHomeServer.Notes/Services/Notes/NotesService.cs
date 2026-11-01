@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
@@ -50,6 +51,13 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // подхватятся быстро; свои мутации инвалидируют кэш явно.
     private readonly ConcurrentDictionary<string, (Model Model, DateTime At)> _cache = new();
     private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(2);
+
+    // Замок на id заметки для «сравнить и записать» (S2c-2, К8): проверка If-Match, запись файла
+    // и инвалидация кэша сводок — в одной критической секции, окно между проверкой и записью не
+    // остаётся: два параллельных сохранения с одним If-Match не проходят проверку оба.
+    // Замок живёт, пока сервис: заметок немного; после переименования старый ключ остаётся
+    // безвредным остатком (сам id исчезает вместе со старым файлом).
+    private readonly ConcurrentDictionary<string, object> _writeGates = new();
 
     public NotesService(IProjectManager projects, IConfiguration config, ILogger<NotesService> logger,
         IProjectEventLogService? events = null, IServiceProvider? services = null)
@@ -986,12 +994,35 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         return mdCount;
     }
 
-    public NoteDetail? Update(string userId, string id, UpdateNoteRequest req)
+    // S2c-2 (К8): сохранение с If-Match — оптимистичная конкурентность. «Сравнить и записать»
+    // целиком под замком на id заметки (вместе с инвалидацией кэша сводок в UpdateCore): окно
+    // между проверкой хеша и записью не остаётся. Без If-Match — как раньше.
+    public NoteDetail? Update(string userId, string id, UpdateNoteRequest req, string? ifMatch = null)
+    {
+        var gate = _writeGates.GetOrAdd(id, _ => new object());
+        lock (gate)
+            return UpdateCore(userId, id, req, ifMatch);
+    }
+
+    private NoteDetail? UpdateCore(string userId, string id, UpdateNoteRequest req, string? ifMatch)
     {
         var (sourceKey, relPath) = DecodeId(id);
         var rootDir = ResolveRoot(userId, sourceKey);
         var full = SafePath.Join(rootDir, relPath);
         if (!File.Exists(full)) return null;
+
+        // If-Match сверяется с фактическим хешом содержимого до любой правки (в т.ч. до
+        // переименования файла): расхождение — NoteConflictException, заметка на диске не тронута.
+        // Принимается quoted/слабая форма ETag (RFC 9110); «*» — «если существует» (существование
+        // файла только что проверено). Без If-Match — прежнее поведение.
+        if (ifMatch is { Length: > 0 } raw)
+        {
+            var token = UnquoteETag(raw);
+            var currentText = File.ReadAllText(full, Encoding.UTF8);
+            var currentHash = ContentSha256(currentText);
+            if (token != "*" && !string.Equals(token, currentHash, StringComparison.OrdinalIgnoreCase))
+                throw new NoteConflictException(currentText, currentHash, SafeTime(() => File.GetLastWriteTimeUtc(full)));
+        }
 
         // Заголовок, по которому на заметку ссылаются сейчас (для авто-обновления ссылок)
         var model = GetModel(userId);
@@ -1338,5 +1369,37 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     private static string SafeTime(Func<DateTime> f)
     {
         try { return f().ToString("o"); } catch { return DateTime.UtcNow.ToString("o"); }
+    }
+
+    // Хеш содержимого заметки (К8): SHA-256 по UTF-8-байтам текста так, как его видит сервис
+    // (File.ReadAllText). Одно и то же правило служит ETag в GET/PUT и сравнению в If-Match —
+    // второго определения хеша нет. Заметки пишутся без BOM (UTF8Encoding(false)), поэтому
+    // хеш по строке совпадает с хешом байтов файла на диске.
+    internal static string ContentSha256(string content) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content))).ToLowerInvariant();
+
+    // Токен If-Match: снять кавычки и маркер слабого ETag «W/» (RFC 9110).
+    private static string UnquoteETag(string value)
+    {
+        var v = value.Trim();
+        if (v.StartsWith("W/", StringComparison.OrdinalIgnoreCase)) v = v[2..];
+        return v.Trim('"').Trim();
+    }
+}
+
+// Расхождение If-Match и фактического хеша содержимого (S2c-2, К8): заметка на диске не тронута,
+// контроллер отвечает 409 note_changed с актуальным состоянием (хеш, содержимое, время правки).
+public sealed class NoteConflictException : Exception
+{
+    public string Content { get; }     // фактическое содержимое на диске
+    public string Sha256 { get; }      // его хеш
+    public string ChangedAt { get; }   // время последней записи файла (ISO 8601)
+
+    public NoteConflictException(string content, string sha256, string changedAt)
+        : base("Заметка изменилась с момента чтения")
+    {
+        Content = content;
+        Sha256 = sha256;
+        ChangedAt = changedAt;
     }
 }

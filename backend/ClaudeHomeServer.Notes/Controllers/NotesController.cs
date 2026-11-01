@@ -439,11 +439,15 @@ public class NotesController : ControllerBase
         catch (ArgumentException) { return BadRequest("Некорректный id заметки"); }
     }
 
+    // GET отдаёт заметку и заголовок ETag — хеш её содержимого (К8): по нему следующий PUT
+    // проверяет, что копия клиента ещё актуальна.
     [HttpGet("{id}")]
     public ActionResult<NoteDetail> Get(string id)
     {
         var note = _notes.GetDetail(UserId, id);
-        return note is null ? NotFound() : Ok(note);
+        if (note is null) return NotFound();
+        Response.Headers.ETag = $"\"{NotesService.ContentSha256(note.Content)}\"";
+        return Ok(note);
     }
 
     [HttpGet("{id}/backlinks")]
@@ -465,15 +469,37 @@ public class NotesController : ControllerBase
         catch (KeyNotFoundException) { return NotFound(); }
     }
 
+    // PUT с If-Match (К8): сохранение только поверх актуальной копии. Совпадает — запись;
+    // не совпадает — 409 note_changed с актуальным состоянием, заметка не тронута.
+    // Без If-Match — как раньше.
     [HttpPut("{id}")]
     public async Task<ActionResult<NoteDetail>> Update(string id, [FromBody] UpdateNoteRequest req)
     {
+        var ifMatch = Request.Headers.IfMatch.ToString();
         try
         {
-            var note = _notes.Update(UserId, id, req);
+            var note = _notes.Update(UserId, id, req, string.IsNullOrWhiteSpace(ifMatch) ? null : ifMatch);
             if (note is null) return NotFound();
+            // Новое состояние — новый ETag: следующая правка этого клиента идёт по нему
+            Response.Headers.ETag = $"\"{NotesService.ContentSha256(note.Content)}\"";
             await Broadcast("updated", note.Id);
             return Ok(note);
+        }
+        catch (NoteConflictException ex)
+        {
+            // Тело по К8: актуальный хеш и содержимое. Автор правки — из серверного состояния
+            // (sub и имя из токена), не из тела запроса: до S3-1/S3-3 (авторство в git) единственный,
+            // кто может писать эту заметку, — аутентифицированный владелец, он же автор победившей
+            // правки. За REST-сохранением нет чата — source null.
+            return Conflict(new
+            {
+                code = "note_changed",
+                content = ex.Content,
+                sha256 = ex.Sha256,
+                author = new { userId = UserId, displayName = User.FindFirstValue(ClaimTypes.Name) ?? UserId },
+                changedAt = ex.ChangedAt,
+                source = (string?)null,
+            });
         }
         catch (UnauthorizedAccessException) { return Forbid(); }
         // «Источник не мой/не существует» = «несуществующее»: 404, как в Create

@@ -393,8 +393,8 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     }
 
     // If-Match по К8: сильный ETag в кавычках. Нет заголовка или "*" — предусловия нет
-    // («как сейчас»); несколько значений — первое (фронт шлёт одно). Слабый W/ не specially
-    // не разбираем: с кавычками он не совпадёт с хешем — отказ, как требует RFC для If-Match.
+    // («как сейчас»); несколько значений — первое (фронт шлёт одно). Слабый W/ отдельно
+    // не разбираем: с префиксом он не совпадёт с хешем — отказ, как требует RFC для If-Match.
     private string? RequestIfMatch()
     {
         var raw = Request.Headers["If-Match"].ToString();

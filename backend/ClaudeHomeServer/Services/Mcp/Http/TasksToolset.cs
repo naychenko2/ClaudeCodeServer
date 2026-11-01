@@ -181,7 +181,12 @@ public sealed class TasksToolset(
             {
                 var id = StringArg(arguments, "id");
                 var (task, candidates) = GetForRead(context.OwnerId, projectId, allowed, id, narrow);
-                if (task is not null) return TaskJson(task, context.OwnerId);
+                // S2c-9: актор-участник — та же проекция TaskView, что в REST (одна точка правды).
+                // Актор — из реестра идущего хода (GetTurnActor), не из заголовка: токен арендатора,
+                // а ход принадлежит участнику; актор неизвестен (фон) — права арендатора (разрез §2).
+                if (task is not null)
+                    return TaskJson(TaskView.ForActor(task, context.OwnerId,
+                        sessions.GetTurnActor(session.Id, context.OwnerId)), context.OwnerId);
                 // Неоднозначный префикс: краткий список кандидатов (id + title, до 5), чтобы модель выбрала
                 if (candidates is { Count: > 0 })
                     return Deny($"Несколько задач начинаются с «{id}» — уточните id: " +

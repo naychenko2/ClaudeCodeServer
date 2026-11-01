@@ -48,6 +48,11 @@
 # R-S2a-8: SessionsController 9→10 — проверка явной personaId при создании чата (personas.Get(req.PersonaId,
 # UserId)): id вызывающего только резолвит персону для проверки рамки EnsurePersonasVisibleInFrame, ключом
 # проектных хранилищ не служит (чужой id резолвится арендатором проекта, не вызывающим).
+# S2c-9: TasksController 81→82 — GET /api/tasks/{id} карточка чужой задачи участнику: id вызывающего
+# входит только в IProjectAccess.Resolve (запрошенное право Read для карточки участника); ключом
+# хранилищ ничто не стало: задача по-прежнему читается по id у арендатора, в списке проекта
+# «владелец или участник» берётся из RequestScope ([ProjectScope]), в календаре — из уже отобранного
+# MyTasksQuery, новых вызовов с id вызывающего эти ветки не добавили.
 backend/ClaudeHomeServer.Architecture/Controllers/ArchitectureController.cs|2
 backend/ClaudeHomeServer.AudioEditor/Controllers/AudioEditScopeGate.cs|3
 backend/ClaudeHomeServer.ImageEditor/Controllers/ImageEditScopeGate.cs|3
@@ -66,7 +71,7 @@ backend/ClaudeHomeServer/Controllers/ProjectMembersController.cs|6
 backend/ClaudeHomeServer/Controllers/ProjectsController.cs|14
 backend/ClaudeHomeServer/Controllers/SessionsController.cs|10
 backend/ClaudeHomeServer/Controllers/SkillsController.cs|10
-backend/ClaudeHomeServer/Controllers/TasksController.cs|81
+backend/ClaudeHomeServer/Controllers/TasksController.cs|82
 backend/ClaudeHomeServer/Controllers/TurnRightExtensions.cs|6
 backend/ClaudeHomeServer/Hubs/SessionHub.cs|7
 backend/ClaudeHomeServer/Hubs/TerminalHub.cs|1

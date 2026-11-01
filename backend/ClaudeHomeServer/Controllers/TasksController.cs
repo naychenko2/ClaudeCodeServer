@@ -43,8 +43,14 @@ public class ProjectTasksController(
     public IActionResult GetAll(string projectId)
     {
         if (OwnProject(projectId) is null) return NotFound();
-        // Список — облегчённый (без Description/ResultMarkdown); полная карточка — GET /api/tasks/{id}
-        return Ok(tasks.GetByProject(projectId).Select(TaskListItem.From).ToList());
+        // Список — облегчённый (без Description/ResultMarkdown); полная карточка — GET /api/tasks/{id}.
+        // S2c-9: задачи проекта, вызываемые не владельцем, — через единую проекцию участника TaskView
+        // (те же поля, что в его карточке, минус тяжёлый текст). «Владелец или участник» берётся из
+        // RequestScope, который [ProjectScope] разрешил до действия: новой сверки id вызывающего
+        // в контроллере нет.
+        var asMember = HttpContext.GetRequestScope().Role != ProjectRole.Owner;
+        return Ok(tasks.GetByProject(projectId)
+            .Select(t => asMember ? TaskView.ForMemberListItem(t) : TaskListItem.From(t)).ToList());
     }
 
     [HttpPost]
@@ -382,14 +388,29 @@ public class TasksController(
         // Фильтры (в т.ч. q по полному описанию) отработали на полных задачах; наружу уходит
         // облегчённый элемент: без Description/ResultMarkdown (на проде это ~80% веса ответа).
         // Полная карточка — GET /api/tasks/{taskId}.
-        return Ok(result.Select(TaskListItem.From).ToList());
+        // S2c-9: задачи общих проектов, не принадлежащие вызывающему, — через единую проекцию
+        // участника TaskView (те же поля, что в его карточке, минус тяжёлый текст; id личной заметки
+        // владельца закрыт). MyTasksQuery уже отобрал их по праву Read — сверка «своя ли задача»
+        // выбирает форму ответа, ключом хранилищ не служит.
+        return Ok(result.Select(t => t.OwnerId == UserId ? TaskListItem.From(t) : TaskView.ForMemberListItem(t)).ToList());
     }
 
     [HttpGet("{taskId}")]
     public IActionResult GetById(string taskId)
     {
         var task = tasks.GetById(taskId);
-        return task is null || task.OwnerId != UserId ? NotFound() : Ok(task);
+        if (task is null) return NotFound();
+        // Владелец (арендатор) — полная карточка, как раньше.
+        if (task.OwnerId == UserId) return Ok(task);
+        // S2c-9 (решение Андрея 01.11): участник общего проекта с правом Read (редактор и читатель)
+        // читает полную карточку через единую проекцию TaskView (тот же состав полей, что в списке,
+        // плюс Description/ResultMarkdown). Членство и флаг «Общие проекты» решает только
+        // IProjectAccess.Resolve; ключ хранилища не меняется — задача лежит у арендатора.
+        if (task.ProjectId is { } pid && access?.Resolve(UserId, pid, ProjectRight.Read) is not null)
+            return Ok(TaskView.ForMember(task));
+        // Посторонний, отозванный, выключенный флаг, личная задача владельца — всегда 404:
+        // «нет» и «чужое» не различаем.
+        return NotFound();
     }
 
     [HttpPut("{taskId}")]

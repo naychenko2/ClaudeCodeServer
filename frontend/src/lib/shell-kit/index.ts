@@ -206,6 +206,19 @@ export { HubHeader } from '../../components/HubHeader';
 // ─── components/chat/contexts ────────────────────────────────────────────────
 export { ChatProjectContext } from '../../components/chat/contexts';
 
+// ─── components/LocalGpuQueueLine ──────────────────────────────────────────────
+// Строка ожидания локальной GPU-очереди в карточках трёх редакторов (ADR-029 §8):
+// относительный импорт из features/ собрал бы вторую копию компонента в remote.
+export { LocalGpuQueueLine } from '../../components/LocalGpuQueueLine';
+
+// ─── cloudRescue ───────────────────────────────────────────────────────────────
+// Общая логика «Сделать в облаке» трёх редакторов (ADR-029 §8): guard двойного клика,
+// «стенд лежит», выбор облачного исполнителя, текст диалога и подпись кнопки.
+export {
+  makeLaunchGuard, isStandDown, cloudCandidate,
+  CLOUD_DIALOG_TITLE, cloudDialogSubtitle, cloudButtonLabel,
+} from '../cloudRescue';
+
 // ─── features/personas/PersonaAvatar ─────────────────────────────────────────
 export { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 

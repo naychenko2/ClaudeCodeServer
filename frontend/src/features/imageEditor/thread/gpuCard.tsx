@@ -7,25 +7,26 @@
 
 import { useMemo, useRef, useState } from 'react';
 import { Cloud } from 'lucide-react';
-import { Button, ConfirmDialog, C, FS, SP, ICON_SIZE, ICON_STROKE, showToast } from 'aihome_shell/kit';
+import {
+  Button, ConfirmDialog, C, FS, SP, ICON_SIZE, ICON_STROKE, showToast,
+  LocalGpuQueueLine, makeLaunchGuard, isStandDown, CLOUD_DIALOG_TITLE, cloudDialogSubtitle, cloudButtonLabel,
+} from 'aihome_shell/kit';
 import { imageEditorApi, AUTO_MODEL, type ImageEditCatalog, type ImageEditOp, type ImageEditProvider, type ImageEditQuote, type ImageEditQuoteRequest } from '../api';
 import { isFreeUnit, isRemovalPrompt, priceSum } from '../format';
 import { useQuote } from '../useQuote';
 import { useCatalog } from './catalog';
-import { LocalGpuQueueLine } from '../../../components/LocalGpuQueueLine';
 import { useBoxWidth } from '../../videoEditor/useBoxWidth';
 import type { LocalGpuQueueInfo } from '../../../types/localGpuQueue';
 import type { ImageThread, ImageThreadLaunch } from './threadsApi';
 import type { JobStatus } from './useJobStatus';
 import { launchThread, threadHasMask } from './useThreadLaunch';
-import { makeLaunchGuard, isStandDown, CLOUD_DIALOG_TITLE, cloudDialogSubtitle, cloudButtonLabel } from '../../../lib/cloudRescue';
 
 const ic = (I: typeof Cloud, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
 
 // ── Чистая логика видимости (тестится отдельно) ──
 
-// isStandDown — общий модуль cloudRescue (экспортируется для тестов)
-export { isStandDown } from '../../../lib/cloudRescue';
+// isStandDown — общий модуль cloudRescue через кит (экспортируется для тестов)
+export { isStandDown } from 'aihome_shell/kit';
 
 // Облачный исполнитель «Автоматически»: умолчание админа, но только если оно НЕ локальные
 // модели, доступно и умеет операцию. Нет каталога, умолчание локальное, недоступен
@@ -80,8 +81,8 @@ export function cloudQuoteRequest(
   };
 }
 
-// makeLaunchGuard — общий модуль cloudRescue (экспортируется для тестов)
-export { makeLaunchGuard } from '../../../lib/cloudRescue';
+// makeLaunchGuard — общий модуль cloudRescue через кит (экспортируется для тестов)
+export { makeLaunchGuard } from 'aihome_shell/kit';
 
 // Ищет промпт и операцию исходной задачи (pendingJobId) в нити.
 // Возвращает null, если промпт пуст/отсутствует — тогда кнопку не показываем

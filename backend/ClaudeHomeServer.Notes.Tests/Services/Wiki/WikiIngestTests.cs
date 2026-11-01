@@ -443,6 +443,85 @@ public class WikiIngestTests : IDisposable
         page.Should().Contain(ClaimQuote, "при умолчаниях неспорное применяется само, как раньше");
     }
 
+    // ── W3-1: авто-путь без исключения, «applying» не висит ────────────────────────────
+    // Сбой вне контракта ApplyResult на авто-пути (исключение из WithSectionsLockedAsync
+    // или Root — единственные места вне собственных обхватов сервиса) — результат-отказ с
+    // причиной и кодом, тот же, что у пути решения человека (AfterDecision/CrashedApply).
+
+    [Fact]
+    public async Task АвтоПуть_ИсключениеИзApply_ПакетНеВApplying_БезИсключенияНаружу()
+    {
+        // Сбой здесь — формат владельца: Root бросает ArgumentException до заявки, тот же
+        // случай, что ИсключениеИзПрименения в контролере. Исход — отказ с причиной и кодом,
+        // а не исключение вызывающему; пакет не двинут в «applying» (сбой до заявки его не
+        // открывает). Мутация «снять try/catch» в ApplyAutoAsync: тест падает с исключением,
+        // а не с исходом.
+        var id = PackageOnDisk(WikiPackage.StatusAccepted);
+        var card = WikiPackageStore.TryRead(Root, id).Package!;
+
+        var res = await Sut(new FakeLlm(claims: ClaimsJson, plan: PlanJson)).ApplyAutoAsync(
+            "..", Root, card, new WikiApplyService.ApplyContext(CardTitle, SourceText));
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeRejected);
+        res.Reason.Should().Contain("внутренний сбой применения")
+            .And.Contain(WikiApplyService.CodeInternal, "отказ называет код");
+        var after = WikiPackageStore.TryRead(Root, id);
+        after.State.Should().Be(WikiPackageFileState.Valid);
+        after.Package!.Status.Should().NotBe(WikiPackage.StatusApplying,
+            "сбой до заявки не открывает «applying»");
+    }
+
+    [Fact]
+    public void СбойПослеЗаявкиНаАвтоПути_ПакетЗакрытApplyFailed_АНеЗависаетВApplying()
+    {
+        // Тот же приём, что СбойПослеЗаявки в контролере: файловый сбой ПОСЛЕ заявки
+        // детерминированно в живой поток не поставить, поэтому закрытие «applying»
+        // проверяется на диске с нужным статусом (W3-1). Мутация «не закрывать переходом»
+        // (убрать Transition в CrashedApply): статус на диске краснеет — пакет остался бы
+        // в «applying» до сторожа старта.
+        var id = PackageOnDisk(WikiPackage.StatusApplying);
+
+        var reason = WikiIngestService.CrashedApply(Root, id, new IOException("диск отказал"));
+
+        reason.Should().Contain("внутренний сбой применения").And.Contain(WikiApplyService.CodeInternal);
+        var after = WikiPackageStore.TryRead(Root, id);
+        after.State.Should().Be(WikiPackageFileState.Valid);
+        after.Package!.Status.Should().Be(WikiPackage.StatusApplyFailed);
+        after.Package.StatusReason.Should().Contain("внутренний сбой применения",
+            "причина сбоя читается в карточке пакета");
+    }
+
+    // Пакет в своём корне, доведён до статуса разрешёнными переходами стора: форма отказа
+    // авто-пути проверяется на диске с настоящим статусом пакета (W3-1).
+    private string PackageOnDisk(string status)
+    {
+        var pkg = new WikiPackage
+        {
+            Id = WikiPackageStore.NewId(),
+            Section = Section,
+            Sources = [new WikiPackage.SourceRef("session", "session:s1#m1-9")],
+            Operations = [new WikiPackage.Operation
+            {
+                Op = WikiPackage.OpAppend,
+                Page = PagePath,
+                Text = ClaimQuote,
+                Target = "прежнее утверждение",
+                Class = WikiPackage.ClassKey("session", WikiPackage.OpAppend),
+                Decision = WikiPackage.DecisionAuto,
+                BaseHashes = new Dictionary<string, string>
+                    { [PagePath] = Sha256Of(Path.Combine(Root, "pages/" + PagePath)) },
+            }],
+            Status = WikiPackage.StatusChecking,
+        };
+        WikiPackageStore.Create(Root, pkg).Ok.Should().BeTrue();
+        var steps = status == WikiPackage.StatusAccepted
+            ? new[] { WikiPackage.StatusProposed, WikiPackage.StatusAccepted }
+            : new[] { WikiPackage.StatusProposed, WikiPackage.StatusApplying };
+        foreach (var step in steps)
+            WikiPackageStore.Transition(Root, pkg.Id, step).Ok.Should().BeTrue($"{status}: {step}");
+        return pkg.Id;
+    }
+
     // ── подменённый ICheapTextRunner: классифицирует вызов по промпту, помечает всё ──
 
     private sealed class FakeLlm : ICheapTextRunner

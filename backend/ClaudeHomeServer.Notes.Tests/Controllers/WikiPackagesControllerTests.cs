@@ -700,6 +700,88 @@ public class WikiPackagesControllerTests : IDisposable
         LogLines("apply").Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task ПакетИсчезПослеПрименения_AppliedTrueИMissing()
+    {
+        // Гонка «применение удалось → файл пакета исчез»: применение дошло — статус «applied»
+        // и страница на диске — и файл снесён между применением и перечитыванием AfterDecision.
+        // Крюк — проект-событие: применение зовёт его после записи статуса (AppendEvent в
+        // WikiApplyService.WriteBody) — это ровно момент гонки. Ответ 200 с результатом
+        // применения, и статус в нём реальный: «applied» — «accepted» из памяти вызывающего
+        // рядом с applied=true читался бы как «ждёт применения» о пакете, который применился
+        // и был удалён (W3-1). Мутация «брать статус из памяти» (Dto(decided) без with):
+        // Status краснеет.
+        var project = CreateServerProject("Проект гонки");
+        var section = "projects/" + project.Id;
+        var pageRel = $"Проекты/{project.Id}/X.md";
+        var cardRel = $"Проекты/{project.Id}/Карточка-чата.md";
+        var root = WikiPaths.Root(_dir, User);
+        await _keeper.EnsureInitializedAsync(User);
+        await WriteViaKeeper(section, cardRel, SourceCardFile);
+        await WriteViaKeeper(section, pageRel, BasePage);
+        var pkg = new WikiPackage
+        {
+            Id = WikiPackageStore.NewId(),
+            Section = section,
+            Sources = [new WikiPackage.SourceRef("session", "session:chat-1#m1-9")],
+            Operations = [RealOp(page: pageRel, basePage: pageRel)],
+            Status = WikiPackage.StatusChecking,
+        };
+        WikiPackageStore.Create(root, pkg).Ok.Should().BeTrue();
+        WikiPackageStore.Transition(root, pkg.Id, WikiPackage.StatusProposed).Ok.Should().BeTrue();
+        var decided = WikiPackageStore.DecideOperation(root, pkg.Id, 0, true, "подтверждаю");
+        decided.Ok.Should().BeTrue(decided.Reason);
+
+        var applyRace = new WikiApplyService(_notes, _keeper, new NoSpheres(), _config,
+            new DropPackageOnEvent(Path.Combine(WikiPaths.Keeper(_dir, User), "packages", pkg.Id + ".json")));
+        var dto = ((OkObjectResult)await ControllerWith(applyRace).AfterDecision(User, root, decided.Package!))
+            .Value.Should().BeAssignableTo<WikiDecisionDto>().Which;
+
+        dto.Apply!.Applied.Should().BeTrue("применение удалось до сноса: страница на диске");
+        File.ReadAllText(Path.Combine(WikiPaths.Pages(_dir, User), pageRel)).Should().Contain(Claim);
+        File.Exists(Path.Combine(WikiPaths.Keeper(_dir, User), "packages", pkg.Id + ".json")).Should().BeFalse();
+        dto.Package.Id.Should().Be(pkg.Id);
+        dto.Package.Status.Should().Be(WikiPackage.StatusApplied,
+            "реальный статус применения, а не «accepted» из памяти рядом с applied=true");
+    }
+
+    [Fact]
+    public async Task Гонка_ДваПараллельныхПримененияОдногоПакета_ОдинApply_ВторойОтказ()
+    {
+        // Два вызова одного пакета одновременно — через два экземпляра двери и сервиса
+        // применения: блокировки не по экземпляру (заявка пакета — по id в сторе, замок
+        // раздела — в Хранителе). Ровно одно применение; второй — отказ: по гейту статуса
+        // («уже в applying» / «в конечном applied» — зависит от порядка) или по заявке
+        // («переход в applying недопустим») — в любом случае результат-отказ, не 500 (W3-1).
+        // Ровно одна запись: строка журнала и прообраз на двоих вызовы один.
+        var id = await NewRealPackage([RealOp()]);
+        var root = WikiPaths.Root(_dir, User);
+        var decided = WikiPackageStore.DecideOperation(root, id, 0, true, "подтверждаю");
+        decided.Ok.Should().BeTrue(decided.Reason);
+
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var a = Task.Run(async () => { await gate.Task; return await Controller().AfterDecision(User, root, decided.Package!); });
+        var b = Task.Run(async () =>
+        {
+            await gate.Task;
+            return await ControllerWith(new WikiApplyService(_notes, _keeper, new NoSpheres(), _config))
+                .AfterDecision(User, root, decided.Package!);
+        });
+        gate.SetResult();
+        var results = await Task.WhenAll(a, b);
+
+        var dtos = results.Select(r => ((OkObjectResult)r).Value).Cast<WikiDecisionDto>().ToList();
+        dtos.Should().HaveCount(2, "сбой применения — ответ с результатом, не 500/404");
+        dtos.Count(d => d.Apply!.Applied).Should().Be(1, "ровно одно применение одного пакета");
+        var refused = dtos.Single(d => !d.Apply!.Applied);
+        refused.Apply!.Code.Should().BeOneOf(WikiApplyService.CodeStatus, WikiApplyService.CodeClaim,
+            "второй отказан по статусу или по заявке — оба законные отказы, не 500");
+        LogLines("apply").Should().HaveCount(1);
+        Directory.GetFiles(Path.Combine(WikiPaths.Keeper(_dir, User), "preimages", id), "*", SearchOption.AllDirectories)
+            .Should().HaveCount(1);
+        StatusOnDisk(id).Should().Be(WikiPackage.StatusApplied);
+    }
+
     // Пакет боевой пробы: карточка и страница записаны Хранителем (манифест согласован —
     // применения без дрейфа нет), сам в proposed с одной спорной операцией. sourceRef —
     // карточка, которую называет пакет: с другой на диске это «нет карточки источника».
@@ -840,6 +922,33 @@ public class WikiPackagesControllerTests : IDisposable
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
+    }
+
+    // Дверь со своим экземпляром сервиса применения: гонки проверяют, что блокировки не по
+    // экземпляру (W3-1), и тестам с крюком в глубине применения нужен свой _apply.
+    private WikiPackagesController ControllerWith(WikiApplyService apply)
+    {
+        var http = new DefaultHttpContext();
+        http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, User)], "test"));
+        return new WikiPackagesController(_projects, _config, apply, _revert, _retract, _sessions)
+        {
+            ControllerContext = new ControllerContext { HttpContext = http },
+        };
+    }
+
+    // Крюк гонки «применение удалось → файл исчез»: применение зовёт проект-событие после
+    // записи статуса «applied» (AppendEvent в WriteBody) — снос файла здесь и есть «после
+    // ApplyAsync, до перечитывания AfterDecision».
+    private sealed class DropPackageOnEvent : IProjectEventLogService
+    {
+        private readonly string _packageFile;
+        public DropPackageOnEvent(string packageFile) => _packageFile = packageFile;
+        public ProjectEvent? Append(string projectId, string ownerId, string type, string actor,
+            string summary, string? entityRef = null)
+        {
+            File.Delete(_packageFile);
+            return null;
+        }
     }
 
     // ─── Стабы для отката по источнику (S4f-2) ─────────────────────────────

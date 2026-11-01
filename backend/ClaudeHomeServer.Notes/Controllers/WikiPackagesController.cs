@@ -219,7 +219,8 @@ public class WikiPackagesController : ControllerBase
     /// его сбой — результат-отказ с причиной, а не исключение и не «зависший applying»:
     /// решения записаны до применения и остаются на диске. Итоговый статус — прочитанный с
     /// диска после применения, а не предположение: «applied»/«apply_failed»/«stale» или
-    /// прежний, если применять было нечего.
+    /// прежний, если применять было нечего; если применение удалось, а файла уже нет —
+    /// «applied», а не «accepted» из памяти вызывающего (W3-1).
     ///
     /// internal — граница после применения: тест ставит диск в состояние «файла пакета уже
     /// нет» и в состояние «исключение из ApplyAsync» и видит форму ответа, а не гонку
@@ -232,9 +233,14 @@ public class WikiPackagesController : ControllerBase
         var after = WikiPackageStore.TryRead(root, decided.Id);
         // Файла пакета уже нет на перечитывании (гонка с удалением): не 404 — человек видел бы
         // пустой отказ там, где он только что вынес решение и где есть его исход. Ответ несёт
-        // результат применения и последнюю прочитанную карточку (ревью S4g, M2).
+        // результат применения и последнюю прочитанную карточку (ревью S4g, M2). Но если
+        // применение удалось и файл исчез после него — статус в ответе реальный: «applied»,
+        // «accepted» из памяти рядом с applied=true читался бы как «ждёт применения» о пакете,
+        // который применился и был удалён (W3-1).
         if (after.State == WikiPackageFileState.Missing)
-            return Ok(new WikiDecisionDto(Dto(decided), apply));
+            return Ok(new WikiDecisionDto(
+                apply?.Applied == true ? Dto(decided with { Status = WikiPackage.StatusApplied }) : Dto(decided),
+                apply));
         if (after.State != WikiPackageFileState.Valid || after.Package is null)
             return StatusCode(409, new { code = WikiPackageStore.CodeInvalid, message = "файл пакета не читается" });
         return Ok(new WikiDecisionDto(Dto(after.Package), apply));

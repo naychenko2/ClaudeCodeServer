@@ -6,6 +6,8 @@ import {
   ICON_SIZE, ConfirmDialog, IconButton, NO_AUTOFILL,
 } from 'aihome_shell/kit';
 import { CollapseGroup, SourceDot, IconFolder, IconFolderMove, IconPencil, IconPlus, IconStar, IconTrash } from './shared';
+import { useAllProjects } from '../projects/useAllProjects';
+import { canWriteContent, type ContentDoor } from '../projects/members/contentRights';
 // Форматирует остаток времени от ISO-строки expiresAt
 const expiryTimeLeft = (expiresAt?: string): { label: string; urgent: boolean } | null => {
   if (!expiresAt) return null;
@@ -115,6 +117,12 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
   const folders = useMemo(
     () => sourceFilter ? allFolders.filter(f => f.source === sourceFilter) : allFolders,
     [allFolders, sourceFilter]);
+  // Проект источника по его роли (S2c-F4d): право записи решается по source каждой группы.
+  // 'personal' проекта не имеет — все двери открыты; проекта нет в кэше (ещё не загружен) —
+  // как раньше: бэк ответит 403, если права нет. Закрытая дверь ПРЯЧЕТ (0 узлов), не отключена.
+  const allProjects = useAllProjects();
+  const canNote = (source: string, door: ContentDoor): boolean =>
+    canWriteContent(source === 'personal' ? undefined : allProjects.find(p => p.id === source), door);
   const [srcLabels, setSrcLabels] = useState<Record<string, string>>({});
   useEffect(() => {
     if (sourceFilter) return;   // шапки источников скрыты — лейблы не нужны
@@ -321,6 +329,12 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
     const hovered = hoveredKey === n.id;
     const exp = expiryTimeLeft(n.expiresAt);
     const fav = isFavorite(n.tags);
+    // Гейты записи по роли источника (S2c-F4d): перенос — 'note.move', избранное
+    // (правка тега в тексте) — 'note.edit', удаление — 'note.delete'. Закрытое: draggable
+    // не ставится вовсе, hover-иконок нет.
+    const canMove = canNote(n.source, 'note.move');
+    const canFav = canNote(n.source, 'note.edit');
+    const canDel = canNote(n.source, 'note.delete');
     return (
       <div
         key={n.id}
@@ -330,12 +344,14 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
         onMouseEnter={() => setHoveredKey(n.id)}
         onMouseLeave={() => setHoveredKey(prev => prev === n.id ? null : prev)}
         title={n.title}
-        draggable
-        onDragStart={e => {
-          e.dataTransfer.setData('application/x-note-id', n.id);
-          e.dataTransfer.setData('application/x-note-source', n.source);
-          e.dataTransfer.effectAllowed = 'move';
-        }}
+        {...(canMove ? {
+          draggable: true,
+          onDragStart: (e: React.DragEvent) => {
+            e.dataTransfer.setData('application/x-note-id', n.id);
+            e.dataTransfer.setData('application/x-note-source', n.source);
+            e.dataTransfer.effectAllowed = 'move';
+          },
+        } : {})}
         style={{
           display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer',
           minHeight: 26, boxSizing: 'border-box',
@@ -377,15 +393,16 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
                 <FileText size={11} strokeWidth={2.5} />
               </span>
         )}
-        {/* Избранное: у отмеченной звезда видна всегда, у прочих — при ховере */}
-        {(fav || (!isMobile && hovered)) && (
+        {/* Избранное: у отмеченной звезда видна всегда, у прочих — при ховере; правка
+            тега — запись, закрытая дверь прячет и индикатор (S2c-F4d) */}
+        {canFav && (fav || (!isMobile && hovered)) && (
           <IconButton size="xs" tone={fav ? 'accent' : 'muted'} title={fav ? 'Убрать из избранного' : 'В избранное'}
             onClick={e => { e.stopPropagation(); void toggleFavorite(n.id); }}>
             <IconStar filled={fav} />
           </IconButton>
         )}
         {/* Действия — только при ховере на десктопе (на мобиле — long-press меню) */}
-        {!isMobile && hovered && (
+        {!isMobile && hovered && canDel && (
           <IconButton size="xs" tone="danger" title="Удалить заметку"
             onClick={e => { e.stopPropagation(); deleteNote(n); }}>
             <IconTrash />
@@ -443,6 +460,10 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
     const isDrop = dropTarget === key;
     const isRenaming = renaming === key;
     const hovered = hoveredKey === key;
+    // Гейт папок (S2c-F4d): переименование/перенос/удаление папки и создание папки —
+    // одна дверь 'note.folder'. Закрытая: draggable строки не ставится, hover-иконок нет.
+    const canFolder = canNote(source, 'note.folder');
+    const canCreate = canNote(source, 'note.create');
     return (
       <div key={key}>
         {isRenaming ? (
@@ -473,12 +494,14 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
           {...longPress((x, y) => setCtxMenu({ x, y, kind: 'folder', source, node }))}
           onMouseEnter={() => setHoveredKey(key)}
           onMouseLeave={() => setHoveredKey(prev => prev === key ? null : prev)}
-          draggable
-          onDragStart={e => {
-            e.dataTransfer.setData('application/x-folder-path', node.path);
-            e.dataTransfer.setData('application/x-note-source', source);
-            e.dataTransfer.effectAllowed = 'move';
-          }}
+          {...(canFolder ? {
+            draggable: true,
+            onDragStart: (e: React.DragEvent) => {
+              e.dataTransfer.setData('application/x-folder-path', node.path);
+              e.dataTransfer.setData('application/x-note-source', source);
+              e.dataTransfer.effectAllowed = 'move';
+            },
+          } : {})}
           {...dropProps(source, node.path)}
           style={{
             cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6,
@@ -494,16 +517,20 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
           <span style={{ color: C.accent, display: 'flex' }}><IconFolder /></span>
           <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{node.name}</span>
           {/* Действия — только при ховере на десктопе; иначе счётчик (на мобиле — long-press) */}
-          {!isMobile && hovered ? (
+          {!isMobile && (hovered && (canCreate || canFolder)) ? (
             <span style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
-              {onCreateInFolder && (
+              {onCreateInFolder && canCreate && (
                 <IconButton size="xs" tone="accent" title="Новая заметка в папке"
                   onClick={e => { e.stopPropagation(); onCreateInFolder(source, node.path); }}><IconPlus /></IconButton>
               )}
-              <IconButton size="xs" title="Переименовать/перенести папку"
-                onClick={e => { e.stopPropagation(); setRenaming(key); setRenameValue(node.path); }}><IconPencil /></IconButton>
-              <IconButton size="xs" tone="danger" title="Удалить папку"
-                onClick={e => { e.stopPropagation(); void deleteFolder(source, node); }}><IconTrash /></IconButton>
+              {canFolder && (
+                <IconButton size="xs" title="Переименовать/перенести папку"
+                  onClick={e => { e.stopPropagation(); setRenaming(key); setRenameValue(node.path); }}><IconPencil /></IconButton>
+              )}
+              {canFolder && (
+                <IconButton size="xs" tone="danger" title="Удалить папку"
+                  onClick={e => { e.stopPropagation(); void deleteFolder(source, node); }}><IconTrash /></IconButton>
+              )}
             </span>
           ) : (
             <span style={{ fontSize: 10, color: C.textMuted }}>{countNotes(node)}</span>
@@ -716,8 +743,8 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
               {(ctxMenu.kind === 'note' || ctxMenu.kind === 'folder') && menuDivider}
               {ctxMenu.kind === 'source' ? (
                 <>
-                  {onCreateInFolder && menuItem(<IconPlus />, 'Новая заметка', () => onCreateInFolder(ctxMenu.source, ''))}
-                  {menuItem(<IconFolderPlus />, 'Новая папка', () => {
+                  {onCreateInFolder && canNote(ctxMenu.source, 'note.create') && menuItem(<IconPlus />, 'Новая заметка', () => onCreateInFolder(ctxMenu.source, ''))}
+                  {canNote(ctxMenu.source, 'note.folder') && menuItem(<IconFolderPlus />, 'Новая папка', () => {
                     const k = `${ctxMenu.source}|`;
                     setCollapsedNow(prev => { const n = new Set(prev); n.delete(k); return n; });
                     setCreatingFolder(k); setNewFolderValue('');
@@ -726,17 +753,19 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
               ) : ctxMenu.kind === 'note' ? (
                 <>
                   {menuItem(<IconPencil />, 'Открыть', () => onSelect(ctxMenu.note.id))}
-                  {/* На мобиле ховера нет — избранное переключается только отсюда */}
-                  {menuItem(<IconStar filled={isFavorite(ctxMenu.note.tags)} />,
+                  {/* На мобиле ховера нет — избранное переключается только отсюда; правка
+                      тега — запись, её закрытая дверь прячет пункт (S2c-F4d) */}
+                  {canNote(ctxMenu.source, 'note.edit') && menuItem(<IconStar filled={isFavorite(ctxMenu.note.tags)} />,
                     isFavorite(ctxMenu.note.tags) ? 'Убрать из избранного' : 'В избранное',
                     () => { void toggleFavorite(ctxMenu.note.id); })}
-                  {menuItem(<IconFolderMove />, 'Переместить в...', () => setCtxMenu({ ...ctxMenu, move: true }))}
-                  {menuDivider}
-                  {menuItem(<IconTrash />, 'Удалить', () => deleteNote(ctxMenu.note), true)}
+                  {canNote(ctxMenu.source, 'note.move') && menuItem(<IconFolderMove />, 'Переместить в...', () => setCtxMenu({ ...ctxMenu, move: true }))}
+                  {canNote(ctxMenu.source, 'note.delete') && <>{menuDivider}
+                  {menuItem(<IconTrash />, 'Удалить', () => deleteNote(ctxMenu.note), true)}</>}
                 </>
               ) : (
                 <>
-                  {onCreateInFolder && menuItem(<IconPlus />, 'Новая заметка', () => onCreateInFolder(ctxMenu.source, ctxMenu.node.path))}
+                  {onCreateInFolder && canNote(ctxMenu.source, 'note.create') && menuItem(<IconPlus />, 'Новая заметка', () => onCreateInFolder(ctxMenu.source, ctxMenu.node.path))}
+                  {canNote(ctxMenu.source, 'note.folder') && <>
                   {menuItem(<IconFolderPlus />, 'Новая папка', () => {
                     const k = `${ctxMenu.source}|${ctxMenu.node.path}`;
                     setCollapsedNow(prev => { const n = new Set(prev); n.delete(k); return n; });   // раскрыть, чтобы ввод был виден
@@ -745,7 +774,7 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
                   {menuItem(<IconPencil />, 'Переименовать', () => { setRenaming(`${ctxMenu.source}|${ctxMenu.node.path}`); setRenameValue(ctxMenu.node.path); })}
                   {menuItem(<IconFolderMove />, 'Переместить в...', () => setCtxMenu({ ...ctxMenu, move: true }))}
                   {menuDivider}
-                  {menuItem(<IconTrash />, 'Удалить папку', () => deleteFolder(ctxMenu.source, ctxMenu.node), true)}
+                  {menuItem(<IconTrash />, 'Удалить папку', () => deleteFolder(ctxMenu.source, ctxMenu.node), true)}</>}
                 </>
               )}
             </>

@@ -293,6 +293,19 @@ public class WikiLintServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task СноскаТолькоВCodeFence_НеГлушитМетрикуБезИсточников()
+    {
+        var p = CreateProject("Пример в коде");
+        await _keeper.EnsureInitializedAsync(User);
+        await WriteGoodPage(p.Id, "Знание", "текст.\n\n```\n[^s1]: [[Карточка]] — «пример синтаксиса»\n```");
+
+        (await _sut.TryRunOwnerAsync(User)).SectionsOk.Should().Be(1);
+
+        MetricsLines().Single().GetProperty("wikiPagesWithoutSources").GetInt32().Should().Be(1,
+            "сноска внутри code fence — не источник: страница остаётся без источников");
+    }
+
+    [Fact]
     public void ReadMtime_ОшибкаЧтения_ДатаНеизвестна_ИначеМетка()
     {
         WikiLintService.MtimeOrNull("x", _ => throw new IOException("нет доступа")).Should().BeNull();

@@ -300,6 +300,23 @@ public class TaskPregateServiceTests : IDisposable
             "эскалация серверная: ещё и призыв исполнителю звать её — эскалация в двух точках");
     }
 
+    // Неприменимость («нет файла в этом дереве») — не красное: серия не растёт, эскалации нет
+    [Fact]
+    public async Task НетФайлаВДереве_NotRunНеРаститКраснуюСерию()
+    {
+        _pregate.Checks = [new PregateCheckResult("tsc", PregateStatus.Red, "error TS2322")];
+        await Run();
+        _tasks.GetById(_task.Id)!.Pregate!.RedStreak.Should().Be(1);
+
+        _pregate.Checks = [new PregateCheckResult("быстрые тесты", PregateStatus.NotRun, "нет файла scripts/test-shards.py в этом дереве")];
+        var outcome = await Run();
+
+        outcome.Status.Should().Be(TaskPregateStatus.NotRun);
+        outcome.Text.Should().Contain("нет файла scripts/test-shards.py");
+        outcome.Text.Should().NotContain("Второй красный подряд");
+        _tasks.GetById(_task.Id)!.Pregate!.RedStreak.Should().Be(1, "NotRun не записывается и не доводит серию до MaxRedStreak");
+    }
+
     [Fact]
     public async Task ЧастьПроверокПропущенаАЧастьЗелёная_ЗелёныйЗаписывается()
     {

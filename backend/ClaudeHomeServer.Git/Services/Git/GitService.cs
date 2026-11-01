@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Files;
@@ -890,7 +891,14 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         return lines;
     }
 
-    public async Task<string> CommitAsync(string? ownerId, string root, string message, bool amend = false, CancellationToken ct = default)
+    // author (S3-1) — человек-автор коммита: тогда git берёт автора из env GIT_AUTHOR_*,
+    // а коммиттер остаётся прежний (конфиг репозитория — GIT_COMMITTER_* не ставим). Без автора
+    // — ровно как раньше: ни env, ни трейлера. Параметр после ct сознательно: все существующие
+    // вызовы должны оставаться валидными без правки, включая позиционный
+    // (DeviceAgent/Composition/LocalApi.cs передаёт amend и ct позиционно).
+    public async Task<string> CommitAsync(
+        string? ownerId, string root, string message, bool amend = false,
+        CancellationToken ct = default, GitCommitAuthor? author = null)
     {
         var sem = LockFor(root);
         await sem.WaitAsync(ct);
@@ -899,12 +907,37 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
             // Сообщение — через stdin (-F -), не в argv: избегаем экранирования кавычек/переводов строк
             var args = new List<string> { "commit", "-F", "-" };
             if (amend) args.Add("--amend");
-            await RunOkAsync(ownerId, root, args, stdin: message, ct: ct);
+            var body = message;
+            IReadOnlyDictionary<string, string>? authorEnv = null;
+            if (author is not null)
+            {
+                // Идентичность автора — env-подменой на вызов, по образцу WriteSnapshotAsync:
+                // без этого конфигурационный user.name/user.email репозитория ушёл бы в
+                // коммит, и человек в истории коммитов не появился бы.
+                authorEnv = new Dictionary<string, string>
+                {
+                    ["GIT_AUTHOR_NAME"] = author.DisplayName,
+                    ["GIT_AUTHOR_EMAIL"] = $"{author.Username}@users.invalid",
+                };
+                body = WithUserTrailer(message, author.UserId);
+            }
+            await RunOkAsync(ownerId, root, args, stdin: body, env: authorEnv, ct: ct);
             var head = await RunAsync(ownerId, root, ["rev-parse", "HEAD"], ct: ct);
             return head.Stdout.Trim();
         }
         finally { sem.Release(); }
     }
+
+    // Строка `CCS-User:` в начале строки — тот же формат, что читает разбор чужих трейлеров
+    // (CommitTrailers: `^CCS-Session:`), поэтому и проверка дубля — по началу строки, а не
+    // по вхождению в текст: «CCS-User:» внутри абзаца трейлером не является.
+    private static readonly Regex UserTrailerLineRx = new(@"(?m)^CCS-User:", RegexOptions.Compiled);
+
+    // Трейлер автора — в конец тела, той же склейкой, что дописывает CCS-Session/CCS-Task
+    // (GitController.AppendDossierTrailer). Если в сообщении уже есть строка `CCS-User:`,
+    // не добавляем: источник правды о человеке — существующий трейлер, ровно один.
+    private static string WithUserTrailer(string message, string userId) =>
+        UserTrailerLineRx.IsMatch(message) ? message : message.TrimEnd() + $"\n\nCCS-User: {userId}";
 
     public Task CheckoutAsync(string? ownerId, string root, string branch, CancellationToken ct = default)
     {

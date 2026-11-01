@@ -225,6 +225,38 @@ public class WikiLintTests
             "молчание о возрасте страницы — не «всё свежее»: без даты это отдельный счётчик");
     }
 
+    // Общий разбор кода (NotesService.CodeMask, ограда через MarkdownFence): забор ~~~ —
+    // код, упоминание внутри него не считается ни находкой, ни метрикой. Своя копия маски
+    // знала только ```-заборы и расходилась с графом.
+    [Fact]
+    public void УпоминаниеВТильдовомЗаборе_НеНаходкаИНеМетрика()
+    {
+        var f = Background()
+            .Page("Проекты/p1/Порядок-встреч.md", "Порядок встреч")
+            .Link(P2, "Проекты/p1/Порядок-встреч.md")
+            .Text(P1, "Пример:\n\n~~~\nПорядок встреч\n~~~\n");
+
+        var report = f.Run();
+
+        report.Findings.Should().BeEmpty();
+        report.Metrics.UnlinkedMentionPairs.Should().Be(0, "метрика и находка читают код одной маской");
+    }
+
+    // Страница без фактов вызывающего не попадает ни в MissingSources, ни в Stale — и это не
+    // молчание: число выпавших видно в метриках.
+    [Fact]
+    public void СтраницаБезФактов_ВыпадаетИзНаходок_НоСочтена()
+    {
+        var f = Background();
+        f.Facts.RemoveAll(x => x.RelPath == P1);
+
+        var report = f.Run();
+
+        report.Findings.Should().NotContain(x => x.Kind == WikiFindingKind.MissingSources || x.Kind == WikiFindingKind.Stale);
+        report.Metrics.PagesWithoutFacts.Should().Be(1, "выпавшая страница сочтена");
+        report.Metrics.WikiPageCount.Should().Be(3, "счёт страниц — по графу, факты ни при чём");
+    }
+
     // ─── c1: смена сферы и предложение повышения (ADR-036, решения 4 и 5) ──────
 
     [Fact]

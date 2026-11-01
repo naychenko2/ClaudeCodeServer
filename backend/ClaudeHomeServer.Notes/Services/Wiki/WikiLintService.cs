@@ -490,6 +490,9 @@ public sealed class WikiLintService : BackgroundService
         sb.Append("\n## Находки (").Append(report.Findings.Count).Append(")\n");
         foreach (var f in report.Findings)
             sb.Append(FindingLine(f)).Append('\n');
+        if (report.Metrics.PagesWithoutFacts > 0)
+            sb.Append("\n## Не проверено\n- страниц без фактов (находки «нет источников» и «без изменений» их не видят): ")
+                .Append(report.Metrics.PagesWithoutFacts).Append('\n');
         return sb.ToString();
     }
 
@@ -569,28 +572,38 @@ public sealed class WikiLintService : BackgroundService
     // Полей без аналога в базовой линии четыре, они остались под своими именами: wikiPages,
     // wikiPagesWithoutSources и pagesWithoutDate (по страницам вики — такой половины базы в
     // базовой линии нет) и driftCount (байтовая сверка манифеста — предмета вики).
+    // Область чисел: ВСЕ метрики строки посчитаны по всей базе владельца (граф и страницы всех
+    // разделов вики), а не по разделу из поля section — оно говорит лишь, к какому разделу
+    // относится проход. Честный признак — scope = "all": строка не должна читаться как «по
+    // разделу». pagesWithoutFacts — страницы вики, выпавшие из MissingSources/Stale (фактов нет).
     // ts/section/codeVersion — конверт строки, не метрика: его формат не меняется.
     private sealed record MetricsLine(
-        DateTimeOffset Ts, string Section, string CodeVersion,
+        DateTimeOffset Ts, string Section, string CodeVersion, string Scope,
         int Notes, int Links, int Ghosts, double GhostsShare, int DistinctGhostTargets,
         int Orphans, double OrphansShareAll, int OrphansNoJournal, double OrphansShareNoJournal,
         int DriftCount,
-        int WikiPages, int WikiPagesWithoutSources, int UnlinkedMentions, int PagesWithoutDate);
+        int WikiPages, int WikiPagesWithoutSources, int UnlinkedMentions, int PagesWithoutDate,
+        int PagesWithoutFacts);
 
     // Доля → процент с одним знаком — ровно формула базовой линии; пустой знаменатель даёт 0
     // (его уже даёт Share() линтера).
+    internal const string MetricsScopeAll = "all";
+
     private static double Pct(double share) => Math.Round(100.0 * share, 1);
 
     private static string MetricsLineJson(WikiLintReport report, DateTimeOffset now)
     {
         var m = report.Metrics;
         return JsonSerializer.Serialize(new MetricsLine(
-            now, report.Section, CodeVersion,
+            now, report.Section, CodeVersion, MetricsScopeAll,
             m.NoteCount, m.LinkCount, m.DanglingLinkCount, Pct(m.DanglingLinkShare), m.DanglingTargetCount,
             m.OrphanCount, Pct(m.OrphanShare), m.OrphanCountExcludingJournal, Pct(m.OrphanShareExcludingJournal),
-            // Счётчик дрейфа раздела — все его находки дрейфа: и членство (линт), и байты (служба).
-            report.Findings.Count(f => f.Kind == WikiFindingKind.Drift),
-            m.WikiPageCount, m.WikiPagesWithoutSources, m.UnlinkedMentionPairs, m.PagesWithoutDate), JsonOpts);
+            // Счётчик дрейфа раздела — находки дрейфа ПО СТРАНИЦАМ: и членство (линт), и байты
+            // (служба). Строка «манифест нечитаем» (без страницы) — состояние раздела, а не
+            // дрейф: при нечитаемом манифесте метрика 0.
+            report.Findings.Count(f => f.Kind == WikiFindingKind.Drift && f.PageRelPath is not null),
+            m.WikiPageCount, m.WikiPagesWithoutSources, m.UnlinkedMentionPairs, m.PagesWithoutDate,
+            m.PagesWithoutFacts), JsonOpts);
     }
 }
 

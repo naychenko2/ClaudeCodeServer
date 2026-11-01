@@ -504,6 +504,74 @@ public class WikiLintServiceTests : IDisposable
         m.TryGetProperty("danglingLinks", out _).Should().BeFalse("имя базовой линии — ghosts");
     }
 
+    [Fact]
+    public async Task СтрокаМетрик_ЧестныйПризнакОбласти_ИСчётВыпавшихСтраниц()
+    {
+        var p = CreateProject("Область");
+        await _keeper.EnsureInitializedAsync(User);
+        await WriteGoodPage(p.Id, "Знание");
+
+        (await _sut.TryRunOwnerAsync(User)).SectionsOk.Should().Be(1);
+
+        var m = MetricsLines().Single();
+        m.GetProperty("scope").GetString().Should().Be("all", "числа строки — по всей базе, а не по разделу из поля section");
+        m.GetProperty("pagesWithoutFacts").GetInt32().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task МанифестНечитаем_СтрокаЛентераНеДрейф_СчётчикДрейфаНоль()
+    {
+        var p = CreateProject("Битый манифест");
+        await _keeper.EnsureInitializedAsync(User);
+        await WriteGoodPage(p.Id, "Знание");
+        var manifest = Path.Combine(WikiPaths.Keeper(_dir, User), "manifest", WikiManifest.SafeFileName("projects/" + p.Id) + ".json");
+        File.Exists(manifest).Should().BeTrue("фикстура: манифест раздела записан Хранителем");
+        File.WriteAllText(manifest, "{ не json");
+
+        (await _sut.TryRunOwnerAsync(User)).SectionsOk.Should().Be(1);
+
+        File.ReadAllText(HealthOf(p.Id)).Should().Contain("манифест раздела нечитаем",
+            "строка лентера в отчёте остаётся");
+        MetricsLines().Single().GetProperty("driftCount").GetInt32().Should().Be(0,
+            "нечитаемый манифест — состояние раздела, а не дрейф страниц");
+    }
+
+    // Ночной тик и кнопка сходятся: из параллельных прогонов одного владельца идёт ровно один
+    // (слот), метрики пишутся одной строкой под замком раздела — файл цел, каждая строка JSON.
+    [Fact]
+    public async Task ПараллельныеПрогоныОдногоВладельца_ОдинПрогон_СтрокиМетрикЦелы()
+    {
+        var p = CreateProject("Параллель");
+        await _keeper.EnsureInitializedAsync(User);
+        await WriteGoodPage(p.Id, "Знание");
+
+        // Первый прогон берёт слот синхронно (до первого await) и встаёт на записи, пока держится
+        // замок раздела; остальные приходят в это окно — результат не зависит от скорости потоков.
+        var key = "projects/" + p.Id;
+        var tcs = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var held = _keeper.WithSectionsLockedAsync(User, [key], () => tcs.Task);
+        var first = _sut.TryRunOwnerAsync(User);
+        var others = Enumerable.Range(0, 7).Select(_ => Task.Run(() => _sut.TryRunOwnerAsync(User))).ToList();
+        // Чужие вызовы отвергаются сразу (Wait(0)) — их ждём до отпускания замка; при сломанном
+        // слоте они встали бы на замке, поэтому замок отпускаем после короткой паузы.
+        await Task.WhenAny(Task.WhenAll(others), Task.Delay(300));
+        tcs.SetResult(0);
+        await held;
+        var results = (await Task.WhenAll(others.Append(first))).ToList();
+
+        results.Count(r => r.Outcome == WikiLintRunOutcome.Ran).Should().Be(1, "второй вызов отвергается слотом владельца");
+        results.Count(r => r.Outcome == WikiLintRunOutcome.AlreadyRunning).Should().Be(7);
+        var raw = File.ReadAllLines(MetricsFile()).Where(l => l.Length > 0).ToList();
+        raw.Should().HaveCount(1, "одна строка на раздел за единственный прогон");
+        raw.Should().OnlyContain(l => IsValidJson(l));
+    }
+
+    private static bool IsValidJson(string line)
+    {
+        try { JsonDocument.Parse(line).Dispose(); return true; }
+        catch (JsonException) { return false; }
+    }
+
     // ─── Помощники ───────────────────────────────────────────────────────────────
 
     private Project CreateProject(string name, string owner = User)

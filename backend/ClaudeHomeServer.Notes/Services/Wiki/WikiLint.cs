@@ -277,7 +277,7 @@ internal static class WikiLint
             {
                 var linked = new HashSet<string>(Outgoing(node.Id), StringComparer.Ordinal);
                 var lower = facts.Text.ToLowerInvariant();
-                var mask = CodeMask(lower);
+                var mask = NotesService.CodeMask(lower);
                 foreach (var other in _titleIndex)
                 {
                     if (other.Id == node.Id)
@@ -527,7 +527,7 @@ internal static class WikiLint
             {
                 var linked = new HashSet<string>(Outgoing(page.Id), StringComparer.Ordinal);
                 var lower = facts.Text.ToLowerInvariant();
-                var mask = CodeMask(lower);
+                var mask = NotesService.CodeMask(lower);
                 foreach (var other in _titleIndex)
                 {
                     if (other.Id == page.Id)
@@ -549,6 +549,9 @@ internal static class WikiLint
             // Страницы знаний без даты вовсе — ни в шапке, ни с mtime (дата с диска — тоже
             // факт вызывающего): их возраст нигде не проверялся, и ноль находок Stale при
             // таких страницах — не «всё свежее», а «ничего не известно».
+            // Страницы раздела вики без фактов вызывающего: из находок MissingSources/Stale
+            // они выпадают молча (SectionPages их пропускает) — их число видно здесь.
+            var withoutFacts = wikiPages.Count - measured.Count;
             var withoutDate = measured.Count(
                 p => p.Facts.Type != WikiFrontmatter.TypeSource && p.Facts.Updated is null);
 
@@ -565,48 +568,17 @@ internal static class WikiLint
                 wikiPages.Count,
                 withoutSources,
                 unlinked,
-                withoutDate);
+                withoutDate,
+                withoutFacts);
         }
     }
 
     // ─── Помощники разбора текста и расстояния ───────────────────────────────────
 
-    // Маска «внутри кода»: ```-блоки и inline-`…`. Та же роль, что у CodeMask в NotesService:
-    // пример синтаксиса в коде — не упоминание и не связь (дефект 7928ce94).
-    private static bool[] CodeMask(string lower)
-    {
-        var mask = new bool[lower.Length];
-        var fence = false;
-        for (var i = 0; i < lower.Length; i++)
-        {
-            if (i + 2 < lower.Length && lower[i] == '`' && lower[i + 1] == '`' && lower[i + 2] == '`')
-            {
-                mask[i] = mask[i + 1] = mask[i + 2] = true;
-                fence = !fence;
-                i += 2;
-                continue;
-            }
-            if (fence)
-            {
-                mask[i] = true;
-                continue;
-            }
-            if (lower[i] == '`')
-            {
-                var end = lower.IndexOf('`', i + 1);
-                if (end > i)
-                {
-                    for (var k = i; k <= end; k++)
-                        mask[k] = true;
-                    i = end;
-                    continue;
-                }
-            }
-        }
-        return mask;
-    }
-
     // Индекс вхождения needle как отдельного слова (границы — не буквы/цифры), иначе -1.
+    // Маска — общая (NotesService.CodeMask): расхождение разборов кода давало разные числа
+    // упоминаний в линтере и в графе. FindWord в NotesService private: его вынос в internal
+    // — отдельная правка NotesService.cs (вне файлов этого шага).
     private static int FindWord(string haystack, string needle, bool[] mask)
     {
         var from = 0;
@@ -614,7 +586,7 @@ internal static class WikiLint
         {
             var i = haystack.IndexOf(needle, from, StringComparison.Ordinal);
             if (i < 0) return -1;
-            if (mask[i]) { from = i + 1; continue; }
+            if (NotesService.InCode(mask, i)) { from = i + 1; continue; }
             var before = i == 0 || !char.IsLetterOrDigit(haystack[i - 1]);
             var afterIdx = i + needle.Length;
             var after = afterIdx >= haystack.Length || !char.IsLetterOrDigit(haystack[afterIdx]);
@@ -753,4 +725,6 @@ public readonly record struct WikiMetrics(
     int WikiPagesWithoutSources,
     int UnlinkedMentionPairs,
     // Страницы знаний, чей возраст не проверялся: даты нет ни в шапке, ни с mtime файла.
-    int PagesWithoutDate);
+    int PagesWithoutDate,
+    // Страницы вики, чьих фактов вызывающий не дал: MissingSources и Stale их не видят.
+    int PagesWithoutFacts);

@@ -20,9 +20,13 @@ Environment='LLAMA_ARG_CHAT_TEMPLATE_KWARGS={"enable_thinking":false}'
 # второй на ~150K или два по ~190K, плюс места; ≈ 20,8 ГБ VRAM. Рядом с кэшем ComfyUI не живёт — арбитр в режиме
 # exclusive выгружает кэш (/free) перед возвратом (порог ARBITER_VRAM_NEEDED_MB = 22 000).
 # Места CCS режет NumCtx движка (32 768), чаты провайдера — ContextWindow каталога (262 144).
+# Зрение: проектор mmproj F16 (unsloth, 1,2 ГБ) на CPU (--no-mmproj-offload) — на карте места нет;
+# картинка кодируется процессором за секунды, текст генерирует GPU. Включается ПАРОЙ с
+# SupportsImages провайдера в CCS: флаг без проектора = тихая галлюцинация по заглушке.
 # Один алиас = id каталога CCS: проба LocalEndpointProbe ищет модель в /v1/models по полю id.
 ExecStart=/home/an/local-llm/bin/cuda133/llama-server \
   -m /home/an/local-llm/models/gemma-4-26B-A4B-it-UD-IQ4_XS.gguf \
+  --mmproj /home/an/local-llm/models/mmproj-gemma-4-26B-A4B-it-F16.gguf --no-mmproj-offload \
   -a gemma-4-26b-a4b \
   --host 0.0.0.0 --port 18030 \
   -ngl 99 -fa on -c 393216 -np 4 -kvu -ctk q8_0 -ctv q8_0 -b 2048 -ub 512 \

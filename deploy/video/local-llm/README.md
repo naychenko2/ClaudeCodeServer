@@ -7,7 +7,8 @@ UD-IQ4_XS 13,6 ГБ, llama-server из форка PrismML) в двух роля�
 - **движок мест** CCS (`LocalEngines:gemma`): одношаговые места — заголовки, теги, классификация,
   нормализация задач, сводки, сообщения коммитов, решения памяти (18 мест);
 - **локальный провайдер чатов** (`LlmProviders:local-video-gemma`, модель `gemma-4-26b-a4b` в каталоге):
-  лёгкие разговорные роли через Claude CLI (Anthropic API llama-server).
+  лёгкие разговорные роли через Claude CLI (Anthropic API llama-server); видит картинки — проектор
+  `mmproj-gemma-4-26B-A4B-it-F16.gguf` на CPU, у провайдера `SupportsImages: true` (включать только парой).
 
 Карту не делит: **gpu-arbiter** в режиме `exclusive` останавливает модель при любом задании
 ComfyUI, аренде от CCS или чужом GPU-процессе и возвращает после тишины, предварительно выгрузив

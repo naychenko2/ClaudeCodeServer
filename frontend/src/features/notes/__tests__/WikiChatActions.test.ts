@@ -24,6 +24,9 @@
 // отката — подписью пункта «Откатить»; «Откатить» — цветом C.dangerText (тон ItemRow по
 // флагу danger); подтверждение — та же ConfirmDialog. Ряд на 360 в разметке нет — он и
 // был дефект.
+// Сигнал на триггере (доработка M-1, пункт ревью 6570f3d0): при результате разбора или
+// отката на триггере ЗАКРЫТОГО меню — точка цвета статуса (контракт ToolbarOverflowMenu:
+// indicator ReactNode «как есть», правка nodeIndicator); без сообщения — точки нет.
 //
 // Стор вики и флаги — настоящие; мокан только транспорт (offline.request) и signalr —
 // тот же приём, что в WikiJournal.test. Модалка ConfirmDialog — портал в document.body.
@@ -47,6 +50,10 @@
 // (isCompactHeader → false) → «шапка на 360: … трёх кнопок в разметке нет» и
 // «на 360 ряда из трёх кнопок нет…» краснеют; (14) снять флаг danger у пункта «Откатить»
 // → «цветом C.dangerText» краснеет.
+// M-1 доработка (вердикт 6570f3d0, этот прогон): (15) не рендерить ReactNode-индикатор
+// в ToolbarOverflowMenu (nodeIndicator → всегда null) → «сигнал на триггере…» краснеет;
+// (16) не брать в indicator исход отката (убрать retractText из условия) → «после отката»
+// краснеет.
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -659,6 +666,16 @@ describe('Компактная раскладка (M-1, дефект ecec968a)',
     return allNodes(root).find(n => n.nodeName === 'BUTTON' && textNodes(n).join('').includes(needle)) ?? null;
   }
 
+  // Точка-сигнал на триггере: span с absolute-позиционированием (msgDot из компонента).
+  // До правки ToolbarOverflowMenu рендерил индикатор только как number/true — ReactNode
+  // молча отбрасывался, и на закрытом меню сигнала о результате не было (пункт ревью 6570f3d0)
+  function triggerDot(root: AnyNode): AnyNode | null {
+    const trigger = findNodeByAttr(root, 'title', TRIGGER_TITLE);
+    if (!trigger) throw new Error('нет кнопки-триггера «Вики»');
+    return allNodes(trigger).find(n => n.nodeName === 'SPAN'
+      && (n as { style?: Record<string, string> }).style?.position === 'absolute') ?? null;
+  }
+
   async function mountAt360(session: ChatHeaderSummaryCtx['session']): Promise<Cont> {
     // installFakeDom ПОСЛЕ предыдущего uninstall создаёт новый объект window —
     // innerWidth ставим на нём, иначе компонент читает пустую ширину (дефолт — десктоп)
@@ -735,5 +752,34 @@ describe('Компактная раскладка (M-1, дефект ecec968a)',
     await settle();
     expect(has(docBody(), 'Открыть хронику')).toBe(false);
     expect(has(docBody(), 'Разобрать этот чат')).toBe(true);
+  });
+
+  it('сигнал на триггере: после разбора — точка цвета статуса; без результата — точки нет', async () => {
+    serve({ analyze: { outcome: 'applied', reason: null, packageIds: [] } });
+    const c = await mountAt360(sessionA);
+    expect(triggerDot(c)).toBeNull(); // idle — сигнала на триггере нет
+    click(findNodeByAttr(c, 'title', TRIGGER_TITLE), 'триггер');
+    await settle();
+    click(buttonContaining(docBody(), 'Разобрать этот чат'), 'анализ из меню');
+    await settle(); // обычный пункт закрыл меню — сигнал обязан быть на ЗАКРЫТОМ триггере
+    const dot = triggerDot(c);
+    expect(dot).not.toBeNull();
+    // цвет точки — цвет статуса (msgDot): applied → C.success
+    expect((dot as { style?: Record<string, string> }).style?.background).toBe(C.success);
+  });
+
+  it('сигнал на триггере после отката: приглушённая точка (без статуса разбора)', async () => {
+    serve(); // retract — RETRACT_OK
+    const c = await mountAt360(sessionA);
+    click(findNodeByAttr(c, 'title', TRIGGER_TITLE), 'триггер');
+    await settle();
+    click(buttonByExactText(docBody(), 'Откатить всё из этого чата'), 'откат из меню');
+    await settle();
+    click(buttonByExactText(docBody(), 'Откатить всё'), 'подтвердить откат');
+    await settle();
+    const dot = triggerDot(c);
+    expect(dot).not.toBeNull();
+    // статуса разбора после отката нет (state → idle) — приглушённый C.textMuted
+    expect((dot as { style?: Record<string, string> }).style?.background).toBe(C.textMuted);
   });
 });

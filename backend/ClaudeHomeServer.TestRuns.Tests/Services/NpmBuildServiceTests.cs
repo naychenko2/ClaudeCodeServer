@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.TestRuns;
@@ -18,7 +19,11 @@ namespace ClaudeHomeServer.Tests.Services.TestRuns;
 /// </summary>
 public class NpmBuildServiceTests : IDisposable
 {
-    private static readonly TimeSpan Wait = TimeSpan.FromSeconds(20);
+    // Страховка от потерянного события, а не ожидание: цепь запуска сборки (prepare в пуле, старт
+    // процесса, гашение по TurnId) под нагрузкой параллельного набора идёт 5 с при загрузке только
+    // CPU и >20 с на пике быстрого гейта (TRX прогона 22:41 01.11) — прежние 20 с оказались ниже
+    // худшего случая живой цепи. Тест по-прежнему ждёт события, а не времени.
+    private static readonly TimeSpan Wait = TimeSpan.FromSeconds(60);
 
     // Строка `build` нашего frontend/package.json
     private const string FrontendBuild = "tsc -b && vite build && npm run build:notes && npm run build:spend "
@@ -51,9 +56,13 @@ public class NpmBuildServiceTests : IDisposable
     private NpmBuildRequest Request(string? target = "frontend", string script = "build") =>
         new(NewProject(), _root, "sess-1", target, script);
 
+    // Свой шаг прогресса, пауза выхода и потолок подготовки (30 с через существующую опцию):
+    // сценарий класса — «стоп во время сборки», а не контракт подготовки продукта (её дефолт 5 с
+    // не тронут): под загрузкой набора короткий потолок отказал бы сборку до начала сценария.
     private NpmBuildService Service(DotnetBuildServiceTests.FakeLauncher launcher, BuildConcurrencyGate? gate = null) =>
         new(launcher, new TestRunsOptions { MemoryDirectory = MemoryDir },
-            new PhasePipeline(gate ?? new BuildConcurrencyGate(1), TimeSpan.FromSeconds(5)), TimeSpan.FromMilliseconds(5));
+            new PhasePipeline(gate ?? new BuildConcurrencyGate(1), TimeSpan.FromSeconds(5)), TimeSpan.FromMilliseconds(5),
+            prepareTimeout: TimeSpan.FromSeconds(30));
 
     private DotnetBuildServiceTests.FakeLauncher Launcher(string? output, int exit = 0, bool sleep = false) =>
         new(_processes, output, exit, sleep);
@@ -166,22 +175,43 @@ public class NpmBuildServiceTests : IDisposable
     // двумя способами — 2^40 шагов бэктрекинга (ReDoS, ревью этапа 3)
     private static readonly string FlagsStage = "npm run" + string.Concat(Enumerable.Repeat(" --a", 40));
 
+    // Интервал линейности разбора: опция класса с прежним дефолтом (100 мс).
+    private static readonly TimeSpan LinearCeiling = TimeSpan.FromMilliseconds(100);
+
+    // Единственный сигнал ReDoS-сторожа — время: код ограничивает каждый матч RegexTimeoutMs (200 мс),
+    // и взорванный этап функционально идентичен годному (тот же null), отличается только длительностью.
+    // Поэтому тест ждёт событие завершения работы в интервале, а не мерит стену. Это реальное ожидание:
+    // под загрузкой быстрого гейта даже линейная работа стоит 103–521 мс (TRX прогонов 29.10–01.11),
+    // на спокойной машине — 15 мс. Жёсткое окно не для параллельного быстрого набора — вне Fast.
     [Fact]
-    public void Разбор_ЭтапыАтакующейФормы_ЛинейныйИБыстрый()
+    [Trait("Category", "Slow")]
+    public async Task Разбор_ЭтапыАтакующейФормы_ЛинейныйИБыстрый()
     {
         var vites = string.Concat(Enumerable.Repeat("vite ", 8000));
-        var watch = Stopwatch.StartNew();
+        var done = new TaskCompletionSource<ExceptionDispatchInfo?>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        NpmBuildProgress.NestedScript(FlagsStage).Should().BeNull("имени скрипта нет — одни флаги");
-        NpmBuildProgress.IsViteBuild(vites).Should().BeFalse("этап длиннее MaxStageLength с маркерами не сверяется");
-        var progress = new NpmBuildProgress(["tsc -b", FlagsStage, vites, "vite build"], previous: null);
-        progress.Feed("> x@1.0.0 y", TimeSpan.FromSeconds(1)).Should().BeFalse();
-        progress.Feed("> " + new string('@', 8000) + " y", TimeSpan.FromSeconds(1)).Should().BeFalse();
-        progress.Feed("vite v8.0.16 building client environment for production...", TimeSpan.FromSeconds(2))
-            .Should().BeTrue();
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                NpmBuildProgress.NestedScript(FlagsStage).Should().BeNull("имени скрипта нет — одни флаги");
+                NpmBuildProgress.IsViteBuild(vites).Should().BeFalse("этап длиннее MaxStageLength с маркерами не сверяется");
+                var progress = new NpmBuildProgress(["tsc -b", FlagsStage, vites, "vite build"], previous: null);
+                progress.Feed("> x@1.0.0 y", TimeSpan.FromSeconds(1)).Should().BeFalse();
+                progress.Feed("> " + new string('@', 8000) + " y", TimeSpan.FromSeconds(1)).Should().BeFalse();
+                progress.Feed("vite v8.0.16 building client environment for production...", TimeSpan.FromSeconds(2))
+                    .Should().BeTrue();
+                progress.Label().Should().Be("vite build · этап 4 из 4");
+                done.TrySetResult(null);
+            }
+            catch (Exception e)
+            {
+                done.TrySetResult(ExceptionDispatchInfo.Capture(e));
+            }
+        });
 
-        watch.Elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(100));
-        progress.Label().Should().Be("vite build · этап 4 из 4");
+        var failure = await done.Task.WaitAsync(LinearCeiling); // не уложилась в интервал — шаблон стал экспоненциальным
+        failure?.Throw(); // исключение из работы — красный тест со своим текстом
     }
 
     [Theory]

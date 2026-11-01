@@ -13,8 +13,17 @@
 // 'cc-open-note'; без projectId чата — ни запроса, ни перехода. Открытие самой страницы —
 // в WikiTab.test (там же и «запрос ждёт загрузки дерева»).
 // Плюс достижимость из UI: РЕАЛЬНАЯ шапка чата (ChatHeaderBar) с РЕАЛЬНЫМ манифестом «Заметок»
-// рисует вклад wiki-chat-actions в ряду действий (десктоп и мобильная ветка); при выключенном
-// флаге — нет (п.1 вердикта ревью 98278913).
+// рисует вклад wiki-chat-actions в ряду действий (десктоп); при выключенном флаге — нет
+// (п.1 вердикта ревью 98278913).
+//
+// Компактная раскладка (дефект ecec968a): на ширине < TABLET_WIDE_MIN — тот же порог,
+// который читает сама шапка (isCompact = isMobile || isTablet, ChatHeaderBar:1357), —
+// ряд не переносится и три текстовые кнопки переполняют его (замер QA-П1b: на 360 правый
+// край «Откатить» 565). Там компонент рисует ОДНУ кнопку-меню (ToolbarOverflowMenu):
+// те же действия, гарды и тексты; статус разбора — значением пункта «Разобрать», итог
+// отката — подписью пункта «Откатить»; «Откатить» — цветом C.dangerText (тон ItemRow по
+// флагу danger); подтверждение — та же ConfirmDialog. Ряд на 360 в разметке нет — он и
+// был дефект.
 //
 // Стор вики и флаги — настоящие; мокан только транспорт (offline.request) и signalr —
 // тот же приём, что в WikiJournal.test. Модалка ConfirmDialog — портал в document.body.
@@ -34,6 +43,10 @@
 // OPEN-1 (этот прогон): (10) не класть запрос в стор (убрать requestOpenWikiPage) и
 // (11) не диспатчить 'cc-open-note' → оба краснят «200 applied — … клик — запрос в сторе
 // и переход»; (12) снять гейт session.projectId → «без projectId» краснеет.
+// M-1 (этот прогон): (13) вернуть единый nowrap-ряд без меню на компакте
+// (isCompactHeader → false) → «шапка на 360: … трёх кнопок в разметке нет» и
+// «на 360 ряда из трёх кнопок нет…» краснеют; (14) снять флаг danger у пункта «Откатить»
+// → «цветом C.dangerText» краснеет.
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -42,6 +55,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps,
 } from '../../../components/chat/__tests__/fakeDom';
+import { C } from '../../../lib/design';
 import { setAllFlags } from '../../../lib/featureFlags';
 import { setAllSubsystems } from '../../../lib/subsystems';
 import { WikiChatActions, requestNoteIngest, retractResultText } from '../WikiChatActions';
@@ -209,6 +223,9 @@ beforeEach(() => {
 afterEach(() => {
   for (const r of roots) act(() => r.unmount());
   roots.length = 0;
+  // ширина окна — только внутри mountAt360: вне неё следующий тест монтируется
+  // в десктопной раскладке (innerWidth undefined → сравнение ложно)
+  delete ((globalThis as { window?: Record<string, unknown> }).window ?? {} as Record<string, unknown>).innerWidth;
   vi.useRealTimers();
   uninstallFakeDom();
 });
@@ -550,15 +567,16 @@ describe('Склонение итога отката (доработка S7b, п
   });
 });
 
-describe('Достижимость из шапки чата (доработка S7b, п.1 вердикта)', () => {
-  // Окружение для SSR-рендера реальной шапки: window с шириной (useWindowWidth),
-  // localStorage (useActionVisibility/notify), Notification (isNotifySupported).
-  // Эффекты в SSR не работают — запросов нет вовсе; проверяется ровно состав ряда действий.
-  function withBrowserStub<T>(fn: () => T): T {
+describe('Достижимость из шапки чата (доработка S7b, п.1 вердикта; M-1 — раскладка по ширине)', () => {
+  // Окружение для SSR-рендера реальной шапки: window с шириной (useWindowWidth — тот же
+  // источник, по которому сама шапка решает isCompact), localStorage (useActionVisibility/
+  // notify), Notification (isNotifySupported). Эффекты в SSR не работают — запросов нет
+  // вовсе; проверяется ровно состав ряда действий.
+  function withBrowserStub<T>(width: number, fn: () => T): T {
     const g = globalThis as Record<string, unknown>;
     const saved = { window: g.window, localStorage: g.localStorage, Notification: g.Notification };
     g.window = Object.assign(new EventTarget(), {
-      innerWidth: 1440, innerHeight: 900,
+      innerWidth: width, innerHeight: 900,
       matchMedia: () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }),
       dispatchEvent: () => true,
     });
@@ -593,25 +611,129 @@ describe('Достижимость из шапки чата (доработка 
     } as never));
   }
 
-  it('ряд шапки рисует вклад wiki-chat-actions: десктоп и мобильная раскладка', () => {
+  it('ряд шапки (десктоп 1440) рисует вклад wiki-chat-actions тремя кнопками — прежние data-testid', () => {
     // read-time гейт getSlotContributions: неактивная подсистема не отдаёт ни один вклад.
     // «Заметки» активны — как их делает хост сетом ключей от /auth/me
     setAllSubsystems(['notes']);
     setAllFlags({ 'llm-wiki': true });
-    for (const isMobile of [false, true]) {
-      const html = withBrowserStub(() => headerHtml(isMobile));
-      expect(html, `isMobile=${isMobile}`).toContain('data-testid="wiki-chat-analyze"');
-      expect(html, `isMobile=${isMobile}`).toContain('Разобрать этот чат');
-      expect(html, `isMobile=${isMobile}`).toContain('Откатить всё из этого чата');
-    }
+    const html = withBrowserStub(1440, () => headerHtml(false));
+    expect(html).toContain('data-testid="wiki-chat-analyze"');
+    expect(html).toContain('data-testid="wiki-chat-retract"');
+    expect(html).toContain('Разобрать этот чат');
+    expect(html).toContain('Откатить всё из этого чата');
+  });
+
+  // M-1 (дефект ecec968a): на 360 ряд из трёх кнопок и был дефект — его срезала шапка.
+  // Вклад остаётся достижимым: одна кнопка-меню вместо ряда, содержимое — только в меню
+  it('шапка на 360: вместо ряда «Вики» — одна кнопка-меню, трёх кнопок в разметке нет', () => {
+    setAllSubsystems(['notes']);
+    setAllFlags({ 'llm-wiki': true });
+    const html = withBrowserStub(360, () => headerHtml(true));
+    expect(html).toContain('Действия «Вики» в этом чате'); // title кнопки-триггера
+    expect(html).not.toContain('wiki-chat-analyze');
+    expect(html).not.toContain('wiki-chat-retract');
+    expect(html).not.toContain('Разобрать этот чат');
+    expect(html).not.toContain('Откатить всё из этого чата');
   });
 
   it('флаг llm-wiki выключен — в шапке нет действий «Вики»', () => {
     setAllSubsystems(['notes']); // подсистема активна — нет именно из-за выключенного флага
     setAllFlags({});
-    const html = withBrowserStub(() => headerHtml(false));
+    const html = withBrowserStub(1440, () => headerHtml(false));
     expect(html).not.toContain('wiki-chat-analyze');
     expect(html).not.toContain('Разобрать этот чат');
     expect(html).not.toContain('Откатить всё из этого чата');
+    const html360 = withBrowserStub(360, () => headerHtml(true));
+    expect(html360).not.toContain('Действия «Вики» в этом чате');
+  });
+});
+
+describe('Компактная раскладка (M-1, дефект ecec968a)', () => {
+  // Раскладка выбирается по ширине окна — тот же источник, что у isCompact самой шапки
+  // (ChatHeaderBar:1357). Ширина ставится до монтирования и снимается после (afterEach)
+  const TRIGGER_TITLE = 'Действия «Вики» в этом чате';
+
+  // Пункт меню с подписью: у строки два текстовых блока (label + sublabel), поэтому
+  // поиск по вхождению, а не по точному тексту (exact — только для кнопок без подписи)
+  function buttonContaining(root: AnyNode, needle: string): AnyNode | null {
+    return allNodes(root).find(n => n.nodeName === 'BUTTON' && textNodes(n).join('').includes(needle)) ?? null;
+  }
+
+  async function mountAt360(session: ChatHeaderSummaryCtx['session']): Promise<Cont> {
+    // installFakeDom ПОСЛЕ предыдущего uninstall создаёт новый объект window —
+    // innerWidth ставим на нём, иначе компонент читает пустую ширину (дефолт — десктоп)
+    installFakeDom();
+    const w = (globalThis as { window: Record<string, unknown> }).window;
+    w.innerWidth = 360;
+    // открытый ToolbarOverflowMenu ищет прокручиваемых предков через getComputedStyle —
+    // в node он заглушен (тот же приём, что workspaceOpenFileSession.test.ts:434)
+    const g = globalThis as Record<string, unknown>;
+    if (!g.getComputedStyle) g.getComputedStyle = () => ({ overflowY: 'visible' });
+    const { root, container } = mount(createElement(WikiChatActions, { session, hasMessages: true, online: true }));
+    roots.push(root);
+    await settle();
+    return container;
+  }
+
+  it('на 360 ряда из трёх кнопок нет; есть одна кнопка-меню', async () => {
+    serve({ chats: { items: [CHATRECORD], counts: {} } });
+    const c = await mountAt360(sessionA);
+    expect(buttonByTestId(c, 'wiki-chat-analyze')).toBeNull();
+    expect(buttonByTestId(c, 'wiki-chat-retract')).toBeNull();
+    expect(findNodeByAttr(c, 'title', TRIGGER_TITLE)).not.toBeNull();
+  });
+
+  it('открытое меню: все три действия, «Откатить» — цветом C.dangerText', async () => {
+    serve({ chats: { items: [CHATRECORD], counts: {} } });
+    const c = await mountAt360(sessionA);
+    click(findNodeByAttr(c, 'title', TRIGGER_TITLE), 'триггер');
+    await settle();
+    const body = docBody();
+    expect(has(body, 'Разобрать этот чат')).toBe(true);
+    expect(has(body, 'Открыть хронику')).toBe(true); // ссылка есть (chats serve) — пункт есть
+    const retract = buttonByExactText(body, 'Откатить всё из этого чата');
+    expect(retract).not.toBeNull();
+    // тон опасного действия даёт ItemRow по флагу danger — ровно цвет макета (§13)
+    expect((retract as { style?: { color?: string } }).style?.color).toBe(C.dangerText);
+  });
+
+  it('«Разобрать» из меню — тот же POST; исход — значением пункта при повторном открытии', async () => {
+    const counts = serve({ analyze: { outcome: 'nothing_new', reason: null, packageIds: [] } });
+    const c = await mountAt360(sessionA);
+    click(findNodeByAttr(c, 'title', TRIGGER_TITLE), 'триггер');
+    await settle();
+    click(buttonContaining(docBody(), 'Разобрать этот чат'), 'анализ из меню');
+    await settle();
+    expect(counts.analyze).toBe(1);
+    // исход живёт в состоянии компонента, а не в ряду: повторное открытие показывает его
+    click(findNodeByAttr(c, 'title', TRIGGER_TITLE), 'триггер повторно');
+    await settle();
+    expect(has(docBody(), 'нечего добавить')).toBe(true);
+  });
+
+  it('откат из меню: сначала та же ConfirmDialog (0 запросов), после подтверждения — REST без диапазона', async () => {
+    const counts = serve();
+    const c = await mountAt360(sessionA);
+    click(findNodeByAttr(c, 'title', TRIGGER_TITLE), 'триггер');
+    await settle();
+    click(buttonByExactText(docBody(), 'Откатить всё из этого чата'), 'откат из меню');
+    await settle();
+    expect(counts.retract).toBe(0);
+    expect(has(docBody(), 'Чат получит пометку «не разбирать»')).toBe(true);
+    click(buttonByExactText(docBody(), 'Откатить всё'), 'подтвердить откат');
+    await settle();
+    expect(counts.retract).toBe(1);
+    const body = JSON.parse(String((postCalls('/retract')[0][1] as { body: string }).body));
+    expect(body.sourceRef).toBe(`session:${CHAT_A}`);
+    expect(String(body.sourceRef)).not.toContain('#m');
+  });
+
+  it('без chroniclePath пункта «Открыть хронику» нет (тот же гейт, что у кнопки ряда)', async () => {
+    serve(); // chats пустой
+    const c = await mountAt360(sessionA);
+    click(findNodeByAttr(c, 'title', TRIGGER_TITLE), 'триггер');
+    await settle();
+    expect(has(docBody(), 'Открыть хронику')).toBe(false);
+    expect(has(docBody(), 'Разобрать этот чат')).toBe(true);
   });
 });

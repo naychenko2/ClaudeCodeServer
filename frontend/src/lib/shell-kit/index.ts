@@ -113,7 +113,7 @@ export { showToast } from '../toast';
 export { ensurePersonasLoaded, usePersonas, personaLabel } from '../personas';
 
 // ─── breakpoints ─────────────────────────────────────────────────────────────
-export { useIsMobile, useWindowWidth, MOBILE_MAX, TABLET_MAX } from '../breakpoints';
+export { useIsMobile, useWindowWidth, MOBILE_MAX, TABLET_MAX, TABLET_WIDE_MIN } from '../breakpoints';
 
 // ─── noAutofill ──────────────────────────────────────────────────────────────
 export { NO_AUTOFILL } from '../noAutofill';

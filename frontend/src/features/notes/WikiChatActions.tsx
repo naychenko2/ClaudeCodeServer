@@ -19,16 +19,27 @@
 //
 // Заявка заметки «Разобрать в базу» — логика здесь (requestNoteIngest), кнопка на NoteView:
 // функция никогда не бросает — любой отказ становится текстом, экран не падает.
+//
+// Раскладка (дефект ecec968a): на компактной ширине шапки ряд действий не переносится
+// (ChatHeaderBar: isCompact = isMobile || isTablet ⇔ ширина < TABLET_WIDE_MIN), и три
+// текстовые кнопки «Вики» переполняют его: на 360 правый край «Откатить всё…» — 565,
+// шапка срезает (overflow-x:hidden). Там действия — ОДНА кнопка-меню (ToolbarOverflowMenu:
+// боттом-шит/дропдаун по якорю — тот же путь, что у шапкиного «⋯»); логика, статусы,
+// тексты и подтверждение — прежние, меняется только оболочка. Статус разбора — значением
+// пункта «Разобрать», итог отката — подписью пункта «Откатить»; сигнал, что в меню есть
+// сообщение, — точкой на триггере (приём шапкиного «⋯» с точкой срока). При
+// ≥ TABLET_WIDE_MIN — прежний ряд.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { BookOpen, ScrollText, Undo2 } from 'lucide-react';
 import {
-  C, FS, SP, FLAGS, useFeature,
+  C, FS, SP, FLAGS, useFeature, useWindowWidth, TABLET_WIDE_MIN,
   analyzeWikiChat, ingestWikiNote, loadWikiChatAnalyzeStatus, loadWikiChats, requestOpenWikiPage, retractWikiSource,
   WikiError, type WikiChatAnalyzeOk, type WikiNoteIngestDto, type WikiRetractDto,
 } from 'aihome_shell/kit';
 import { Button } from '../../components/ui/Button';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
+import { ToolbarOverflowMenu, type OverflowItem } from '../../components/ToolbarOverflowMenu';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { personalSectionRefusalText, wikiErrorText } from './wiki/wikiLabels';
 import type { ChatHeaderSummaryCtx } from '../../lib/subsystems/registryCore';
@@ -114,8 +125,21 @@ export function retractResultText(r: WikiRetractDto): string {
   return `${parts.join(', ') || 'ничего не изменилось'}.${failed}`;
 }
 
+// Точка на триггере, когда в меню есть сообщение (приём шапкиного «⋯» с точкой срока):
+// цвет — цвет статуса; для итога отката — приглушённый. Сама сообщение — внутри пункта
+function msgDot(color: string): CSSProperties {
+  return {
+    position: 'absolute', top: 0, right: 0, width: 8, height: 8, borderRadius: '50%',
+    background: color, border: `2px solid ${C.bgPanel}`, pointerEvents: 'none',
+  };
+}
+
 export function WikiChatActions({ session, hasMessages, online }: ChatHeaderSummaryCtx) {
   const enabled = useFeature(FLAGS.llmWiki);
+  // Тот же порог, что читает сама шапка (ChatHeaderBar:1357 isCompact = isMobile || isTablet
+  // ⇔ ширина < TABLET_WIDE_MIN): ниже — ряд действий не переносится, три кнопки «Вики»
+  // переполняют его (дефект ecec968a) — оболочка одна кнопка-меню
+  const isCompactHeader = useWindowWidth() < TABLET_WIDE_MIN;
   const [state, setState] = useState<AnalyzeState>({ kind: 'idle' });
   const [chroniclePath, setChroniclePath] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -250,6 +274,71 @@ export function WikiChatActions({ session, hasMessages, online }: ChatHeaderSumm
         ? { text: state.text, color: C.dangerText }
         : null;
 
+  // Подтверждение отката — одно и то же в обеих раскладках (модалка — портал в body)
+  const confirm = confirmOpen && (
+    <ConfirmDialog
+      title="Откатить всё из этого чата?"
+      subtitle={(
+        <>
+          <div>Снимется всё, что Хранитель взял из этого чата: хроника и знания. Знание из других источников останется.</div>
+          <div style={{ marginTop: SP.xs }}>Чат получит пометку «не разбирать» — иначе следующая ночь разберёт его заново.</div>
+        </>
+      )}
+      confirmLabel="Откатить всё"
+      confirmVariant="danger"
+      onConfirm={doRetract}
+      onCancel={() => setConfirmOpen(false)}
+    />
+  );
+
+  if (isCompactHeader) {
+    // Одна кнопка-меню вместо трёх (макет llm-wiki-v2 §13: действия «Вики» в Menu,
+    // «Откатить…» цветом C.dangerText — тон даёт ItemRow по флагу danger). Пункты несут
+    // те же гарды и тексты, что ряд; статус разбора — значением пункта «Разобрать»,
+    // итог отката — подписью пункта «Откатить»; без сообщения точка на триггере не нужна
+    const items: OverflowItem[] = [
+      {
+        key: 'analyze',
+        icon: <BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+        label: 'Разобрать этот чат',
+        sublabel: 'сейчас, не дожидаясь ночи',
+        value: status ? <span style={{ color: status.color }}>{status.text}</span> : undefined,
+        disabled: !online || !hasMessages || state.kind === 'running',
+        onClick: analyze,
+      },
+      ...(chroniclePath ? [{
+        key: 'chronicle',
+        icon: <ScrollText size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+        label: 'Открыть хронику',
+        onClick: openChronicle,
+      }] : []),
+      {
+        key: 'retract',
+        icon: <Undo2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+        label: 'Откатить всё из этого чата',
+        sublabel: retractText ?? undefined,
+        separator: true,
+        danger: true,
+        disabled: !online || retractBusy,
+        onClick: () => setConfirmOpen(true),
+      },
+    ];
+    return (
+      <>
+        <ToolbarOverflowMenu
+          isMobile
+          title="Вики"
+          triggerLabel="Вики"
+          triggerIcon={<BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+          triggerTitle="Действия «Вики» в этом чате"
+          indicator={status || retractText ? <span style={msgDot(status ? status.color : C.textMuted)} /> : undefined}
+          items={items}
+        />
+        {confirm}
+      </>
+    );
+  }
+
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap' }}>
       <Button
@@ -290,21 +379,7 @@ export function WikiChatActions({ session, hasMessages, online }: ChatHeaderSumm
           {retractText}
         </span>
       )}
-      {confirmOpen && (
-        <ConfirmDialog
-          title="Откатить всё из этого чата?"
-          subtitle={(
-            <>
-              <div>Снимется всё, что Хранитель взял из этого чата: хроника и знания. Знание из других источников останется.</div>
-              <div style={{ marginTop: SP.xs }}>Чат получит пометку «не разбирать» — иначе следующая ночь разберёт его заново.</div>
-            </>
-          )}
-          confirmLabel="Откатить всё"
-          confirmVariant="danger"
-          onConfirm={doRetract}
-          onCancel={() => setConfirmOpen(false)}
-        />
-      )}
+      {confirm}
     </div>
   );
 }

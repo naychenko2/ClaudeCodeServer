@@ -1,5 +1,7 @@
 ﻿using System.Net;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using ClaudeHomeServer.Models;
@@ -844,6 +846,117 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
         var response = await _client.GetAsync($"/api/projects/{id}/files/content?path=roundtrip.txt");
         var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
         body.GetProperty("content").GetString().Should().Be("new content");
+    }
+
+    // ---------- S2c-1 · ETag и 409 при сохранении (К8) ----------
+
+    private static string Sha256Hex(string content) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content))).ToLowerInvariant();
+
+    // GET content → ETag-заголовок: (сырое значение с кавычками — как его вернёт клиент,
+    // хеш без кавычек). К8: `ETag: "<sha256>"`.
+    private async Task<(string ETagRaw, string Sha256)> GetContentETagAsync(string projectId, string path)
+    {
+        var response = await _client.GetAsync($"/api/projects/{projectId}/files/content?path={Uri.EscapeDataString(path)}");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var values = response.Headers.GetValues("ETag").ToList();
+        values.Should().HaveCount(1, "ETag по К8 — один сильный заголовок");
+        var raw = values[0];
+        raw.StartsWith('"').Should().BeTrue("сильный ETag отдаётся в кавычках");
+        return (raw, raw.Trim('"'));
+    }
+
+    private async Task<HttpResponseMessage> PutWithIfMatchAsync(
+        string projectId, string path, string content, string ifMatchRaw)
+    {
+        var request = new HttpRequestMessage(
+            HttpMethod.Put, $"/api/projects/{projectId}/files/content?path={Uri.EscapeDataString(path)}");
+        request.Headers.TryAddWithoutValidation("If-Match", ifMatchRaw);
+        request.Content = new StringContent(JsonSerializer.Serialize(new { content }), Encoding.UTF8, "application/json");
+        return await _client.SendAsync(request);
+    }
+
+    [Fact]
+    public async Task GetContent_ReturnsETagSha256OfContent()
+    {
+        var (id, _) = await SetupProjectWithFileAsync("etag.txt", "hello content");
+        var (_, sha) = await GetContentETagAsync(id, "etag.txt");
+        // Хеш байтов файла на диске, а не «вида» текста: LOWERCASE hex SHA-256
+        sha.Should().Be(Sha256Hex("hello content"));
+    }
+
+    [Fact]
+    public async Task ETag_ChangesAfterSave()
+    {
+        var (id, _) = await SetupProjectWithFileAsync("round.txt", "v1 content");
+        var (etag1, _) = await GetContentETagAsync(id, "round.txt");
+
+        var put = await PutWithIfMatchAsync(id, "round.txt", "v2 content", etag1);
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var (etag2, sha2) = await GetContentETagAsync(id, "round.txt");
+        etag2.Should().NotBe(etag1, "после записи хеш обязан смениться");
+        sha2.Should().Be(Sha256Hex("v2 content"));
+    }
+
+    [Fact]
+    public async Task SaveContent_IfMatchMatches_WritesFile()
+    {
+        var (id, dir) = await SetupProjectWithFileAsync("match.txt", "original");
+        var (etag, _) = await GetContentETagAsync(id, "match.txt");
+
+        var put = await PutWithIfMatchAsync(id, "match.txt", "new content", etag);
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+        File.ReadAllText(Path.Combine(dir, "match.txt")).Should().Be("new content");
+    }
+
+    // Названный тест мутации (S2c-1): убрать сравнение хеша в SaveContent — этот тест красный.
+    [Fact]
+    public async Task SaveContent_IfMatchMismatch_Returns409FileChanged_FileUnchanged()
+    {
+        var (id, dir) = await SetupProjectWithFileAsync("stale.txt", "stale content");
+        var put = await PutWithIfMatchAsync(id, "stale.txt", "my edit", "\"0000000000000000000000000000000000000000000000000000000000000000\"");
+        put.StatusCode.Should().Be(HttpStatusCode.Conflict);
+
+        var body = JsonSerializer.Deserialize<JsonElement>(await put.Content.ReadAsStringAsync());
+        body.GetProperty("code").GetString().Should().Be("file_changed");
+        // Тело по К8 — актуальное состояние: хеш и содержимое на диске, а не присланное
+        body.GetProperty("sha256").GetString().Should().Be(Sha256Hex("stale content"));
+        body.GetProperty("content").GetString().Should().Be("stale content");
+        body.GetProperty("changedAt").ValueKind.Should().NotBe(JsonValueKind.Null, "mtime — серверное состояние");
+        // Автор — из серверного состояния (буфер коммиттера, S3-3); здесь его нет, и из тела
+        // запроса он не принимается
+        body.GetProperty("author").ValueKind.Should().Be(JsonValueKind.Null);
+
+        File.ReadAllText(Path.Combine(dir, "stale.txt")).Should().Be("stale content", "отказ не трогает файл");
+    }
+
+    [Fact]
+    public async Task SaveContent_Race_TwoParallelWithSameIfMatch_ExactlyOneWins()
+    {
+        var (id, dir) = await SetupProjectWithFileAsync("race.txt", "base");
+        var (etag, _) = await GetContentETagAsync(id, "race.txt");
+        var racePath = Path.Combine(dir, "race.txt");
+
+        // Гонка без таймеров: обе записи стоят на одном gate и стартуют одновременно
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var t1 = Task.Run(async () => { await gate.Task; return await PutWithIfMatchAsync(id, "race.txt", "win A", etag); });
+        var t2 = Task.Run(async() => { await gate.Task; return await PutWithIfMatchAsync(id, "race.txt", "win B", etag); });
+        gate.SetResult();
+        var responses = await Task.WhenAll(t1, t2);
+
+        var statuses = responses.Select(r => r.StatusCode).ToList();
+        statuses.Count(s => s == HttpStatusCode.OK).Should().Be(1, "под замком проходит ровно одна запись");
+        statuses.Count(s => s == HttpStatusCode.Conflict).Should().Be(1);
+
+        var winner = responses[0].StatusCode == HttpStatusCode.OK ? "win A" : "win B";
+        var loser = responses[0].StatusCode == HttpStatusCode.OK ? responses[1] : responses[0];
+        File.ReadAllText(racePath).Should().Be(winner, "файл содержит запись победителя");
+        // Проигравший получает актуальное состояние — уже запись победителя
+        var body = JsonSerializer.Deserialize<JsonElement>(await loser.Content.ReadAsStringAsync());
+        body.GetProperty("code").GetString().Should().Be("file_changed");
+        body.GetProperty("content").GetString().Should().Be(winner);
+        body.GetProperty("sha256").GetString().Should().Be(Sha256Hex(winner));
     }
 
     [Fact]

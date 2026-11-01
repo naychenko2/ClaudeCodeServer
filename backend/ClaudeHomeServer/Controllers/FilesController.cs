@@ -144,6 +144,12 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
 
             if (IsDirectoryPath(root, path)) return NotFound();
 
+            // S2c-1 (К8): ETag — SHA-256 байтов файла на диске. Хеш именно байтов (не текста
+            // вида), чтобы сравнение с If-Match при записи было тем же, что и состояние диска.
+            // Хеш до вида: отдача идёт стримингом (video/audio — PhysicalFile, тот же файл),
+            // второе чтение — только потоковое, без буфера на весь файл.
+            HttpContext.Response.Headers.ETag = $"\"{Sha256OfFile(FileService.SafeJoinPublic(root, path))}\"";
+
             // Вид файла и способ отдачи — общий с агентом устройства (вертикаль Files):
             // документ base64 для клиентского рендера, картинка, видео/аудио потоком, текст.
             var view = FileContentReader.Read(files, root, path);
@@ -349,18 +355,104 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
 
     [HttpPut("content")]
     [ProjectScope(Right = ProjectRight.Write)]
-    public IActionResult SaveContent(string projectId, [FromQuery] string path, [FromBody] SaveContentRequest req)
+    public async Task<IActionResult> SaveContent(string projectId, [FromQuery] string path, [FromBody] SaveContentRequest req)
     {
         try
         {
             var root = GetRoot(projectId);
             if (IsDirectoryPath(root, path)) return NotFound();
-            files.WriteFile(root, path, req.Content);
-            return Ok();
+
+            // S2c-1 (К8): без If-Match — ровно как раньше (обратная совместимость). С If-Match —
+            // «сравнить и записать» под замком на полный путь: без замка два сохранения
+            // проверяются по одним и тем же старым байтам и проходят оба.
+            var ifMatch = RequestIfMatch();
+            if (ifMatch is null)
+            {
+                files.WriteFile(root, path, req.Content);
+                return Ok();
+            }
+
+            var abs = FileService.SafeJoinPublic(root, path);
+            var sem = LockFor(abs);
+            await sem.WaitAsync();
+            try
+            {
+                var current = System.IO.File.Exists(abs) ? Sha256OfFile(abs) : null;
+                if (current != ifMatch)
+                    return Conflict(FileConflictBodyFor(root, path, abs, current));
+                WriteAtomic(root, path, abs, req.Content);
+                return Ok();
+            }
+            finally { sem.Release(); }
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (DirectoryNotFoundException) { return NotFound(); }
+        // Файл исчез между сверкой хеша и телом 409 (правка агента мимо замка допустима)
+        catch (FileNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return StatusCode(403); }
+    }
+
+    // If-Match по К8: сильный ETag в кавычках. Нет заголовка или "*" — предусловия нет
+    // («как сейчас»); несколько значений — первое (фронт шлёт одно). Слабый W/ не specially
+    // не разбираем: с кавычками он не совпадёт с хешем — отказ, как требует RFC для If-Match.
+    private string? RequestIfMatch()
+    {
+        var raw = Request.Headers["If-Match"].ToString();
+        if (string.IsNullOrWhiteSpace(raw) || raw.Trim() == "*") return null;
+        var value = raw.Split(',')[0].Trim();
+        if (value.Length >= 2 && value[0] == '"' && value[^1] == '"') value = value[1..^1];
+        return value;
+    }
+
+    // Замок на полный путь файла на процесс (S2c-1): один SemaphoreSlim на нормализованный
+    // путь. Ключ — PathNormalizer (нижний регистр): на Windows это то же самое файл-имя
+    // в разном регистре, на Linux — лишняя сериализация разных файлов, не ошибка.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> _pathLocks = new();
+    private static SemaphoreSlim LockFor(string absPath) =>
+        _pathLocks.GetOrAdd(PathNormalizer.NormalizePath(absPath), _ => new SemaphoreSlim(1, 1));
+
+    private static string Sha256OfFile(string absPath)
+    {
+        using var stream = System.IO.File.OpenRead(absPath);
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(stream)).ToLowerInvariant();
+    }
+
+    // Запись через временный файл в том же каталоге и перемещение (File.Move overwrite),
+    // а не на месте: читатель не видит недозаписанный файл, а «сравнить и записать»
+    // атомарны на пути. Кодировка та же, что у FileService.WriteFile (UTF-8 без BOM).
+    // Уведомление подписчиков — явное, как в Upload/SaveFromUrl (запись мимо FileService.Write*).
+    private void WriteAtomic(string root, string path, string abs, string content)
+    {
+        var tmp = Path.Combine(Path.GetDirectoryName(abs)!, "." + Path.GetFileName(abs) + "." + Guid.NewGuid().ToString("N") + ".tmp");
+        try
+        {
+            System.IO.File.WriteAllText(tmp, content, new System.Text.UTF8Encoding(false));
+            System.IO.File.Move(tmp, abs, overwrite: true);
+        }
+        catch { try { System.IO.File.Delete(tmp); } catch { /* временный файл best-effort */ } throw; }
+        files.NotifyMutated(root, path, FileMutationKind.Write);
+    }
+
+    // Тело 409 по К8: актуальное состояние файла на момент отказа — хеш, содержимое
+    // (текст — та же граница «текстовый», что у FileContentReader; двоичные и документы — null),
+    // время последней правки (mtime — серверное состояние).
+    // author — из серверного состояния: его источник (буфер коммиттера «путь → кто, когда»)
+    // появляется в S3-3; здесь сервер автора не знает — null (авторство из тела запроса
+    // не принимается — по разрез §2). source — форма ChatRef (К5) в коде ещё нет (S2d-4),
+    // индекса «последний правивший чат» нет — null.
+    private FileConflictResponse FileConflictBodyFor(string root, string path, string abs, string? currentSha)
+    {
+        var isText = currentSha is not null && files.GetDocumentInfo(path) is null && !files.IsBinaryFile(root, path);
+        var mtime = System.IO.File.Exists(abs)
+            ? new DateTimeOffset(DateTime.SpecifyKind(System.IO.File.GetLastWriteTimeUtc(abs), DateTimeKind.Utc))
+            : (DateTimeOffset?)null;
+        return new FileConflictResponse(
+            "file_changed",
+            isText ? files.ReadFile(root, path) : null,
+            currentSha,
+            Author: null,
+            ChangedAt: mtime,
+            Source: null);
     }
 
     [HttpGet("diff")]
@@ -901,6 +993,18 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
 }
 
 public record ChangedByRequest(List<string>? Paths);
+
+// Контракт тела 409 по К8 (docs/research/shared-projects-plan-v2-2026-10.md, §3).
+// author — { userId?, displayName }: заполняется из буфера коммиттера (S3-3), сейчас null.
+// source — ChatRef (К5): форма ещё не в коде (S2d-4), сейчас null.
+public record FileConflictResponse(
+    string Code,
+    string? Content,
+    string? Sha256,
+    FileAuthorRef? Author,
+    DateTimeOffset? ChangedAt,
+    object? Source);
+public record FileAuthorRef(string? UserId, string DisplayName);
 public record LocateRequest(List<string>? Paths, string? SessionId);
 public record SaveFromUrlRequest(string Url, string Path);
 public record ToMarkdownRequest(string Path, string? TargetDir = null, bool Enhance = false);

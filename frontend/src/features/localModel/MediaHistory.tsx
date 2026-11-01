@@ -12,6 +12,7 @@ import { Button, Chip, EmptyState, IconButton, IconSegmented, WaitingIndicator }
 import { useMe } from '../../lib/defaultPersona';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import type { LocalModelMedia, MediaHistoryRecord } from './api';
+import { HistoryThumb } from './HistoryThumb';
 import { HistoryFilterMenuPopup } from './MediaHistoryFilters';
 import { MediaHistoryCard, historyFileUrl } from './MediaHistoryCard';
 import {
@@ -83,13 +84,16 @@ function HistoryRow({ record, isMobile, selected, meUsername, hideOwner, onOpen 
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           color: C.textSecondary,
         }}>
-          {thumb
-            ? <img src={thumb} alt="" loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
-            : record.kind === 'audio'
+          {(() => {
+            const tile = record.kind === 'audio'
               ? <AudioLines size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
               : record.kind === 'video'
                 ? <Clapperboard size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-                : <ImageIcon size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+                : <ImageIcon size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />;
+            return thumb
+              ? <HistoryThumb src={thumb} fallback={tile} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+              : tile;
+          })()}
         </span>
 
         {/* Тело: 3 строки */}

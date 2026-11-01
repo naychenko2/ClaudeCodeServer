@@ -278,6 +278,54 @@ public class WikiPackagesControllerTests : IDisposable
         LogLines("retract").Should().HaveCount(1);
     }
 
+    [Fact]
+    public async Task Retract_ВладениеДляВсехOrigin_404ЧужойИНесуществующий_400ФормаРаньшеВладения()
+    {
+        // Мутации: «владение только для session» (вернуть условие == "session" вокруг проверки):
+        // «note:не-мой» даст 200 — 404 краснеет. «форма после владения»: «session:» без id даст 404 —
+        // AssertCode(400) краснеет. «SourceKnown по любому пакету» вместо своего корня здесь не
+        // проверяется: чужой корень по построению недоступен.
+        await _keeper.EnsureInitializedAsync(User);
+        var noteOp = new WikiPackage.Operation
+        {
+            Op = WikiPackage.OpAppend,
+            Page = Page,
+            Text = "утверждение из заметки",
+            Class = WikiPackage.ClassKey("note", WikiPackage.OpAppend),
+            Decision = WikiPackage.DecisionAuto,
+            BaseHashes = new Dictionary<string, string> { [Page] = Hash },
+        };
+        var pkg = new WikiPackage
+        {
+            Id = WikiPackageStore.NewId(),
+            Section = "common",
+            Sources = [new WikiPackage.SourceRef("note", "n1")],
+            Operations = [noteOp],
+            Status = WikiPackage.StatusChecking,
+        };
+        var created = WikiPackageStore.Create(WikiPaths.Root(_dir, User), pkg);
+        created.Ok.Should().BeTrue(created.Reason);
+        foreach (var step in new[] { WikiPackage.StatusProposed, WikiPackage.StatusApplying, WikiPackage.StatusApplied })
+            WikiPackageStore.Transition(WikiPaths.Root(_dir, User), pkg.Id, step).Ok.Should().BeTrue();
+
+        // Источника нет в вики владельца (чужой неотличим от несуществующего) — один 404.
+        AssertCode(await Controller().Retract(new WikiRetractRequest("note:не-мой")), 404, "wiki_retract_source");
+        AssertCode(await Controller().Retract(new WikiRetractRequest("url:https-нет")), 404, "wiki_retract_source");
+        // Невалидная форма — 400 и для session без id, и для неизвестного origin, и для «..».
+        AssertCode(await Controller().Retract(new WikiRetractRequest("session:")), 400, "wiki_retract_shape");
+        AssertCode(await Controller().Retract(new WikiRetractRequest("ftp:x")), 400, "wiki_retract_shape");
+        AssertCode(await Controller().Retract(new WikiRetractRequest("note:../x")), 400, "wiki_retract_shape");
+
+        // Свой источник: 200, пакет обработан (путь без побайтного отката — снятие сносок).
+        var dto = ((OkObjectResult)await Controller().Retract(new WikiRetractRequest("note:n1"))).Value
+            .Should().BeAssignableTo<WikiRetractDto>().Which;
+        (dto.RevertedPackages.Count + dto.UnlinkedPackages.Count + dto.RemainingPackages.Count)
+            .Should().BeGreaterThan(0, "пакет источника учтён исходом");
+        // Источник известен и после обработки (пакет «reverted» остаётся его следом): повтор — 200.
+        ((IStatusCodeActionResult)await Controller().Retract(new WikiRetractRequest("note:n1")))
+            .StatusCode.Should().Be(200);
+    }
+
     // ─── 7–12. S4g: решение человека замыкается применением (ADR-035 §5) ─────────
     //
     // Боевой фикстур: карточка источника и страница записаны Хранителем (манифест согласован —

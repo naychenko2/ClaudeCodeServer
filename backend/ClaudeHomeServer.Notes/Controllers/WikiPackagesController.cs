@@ -152,13 +152,14 @@ public class WikiPackagesController : ControllerBase
     /// <summary>POST /api/wiki/packages/retract — {sourceRef}: «Откатить всё из этого источника»
     /// (кнопка у хроники, у карточки источника и в «Журнале», мера 5; S4f-2). Только действие
     /// человека: ни у агента, ни у персоны такого инструмента нет (решение 5, как у отката пакета).
-    /// 400 — форма sourceRef (тот же разбор, что у сервиса); 404 — чата нет или он чужой: один
-    /// ответ на оба случая, он не выдаёт наружу, существует ли источник (свой/чужой проверяется
-    /// по каталогу чатов — единственному имени здесь; для прочих origin граница — per-owner:
-    /// чужого в своём корне нет по построению, и их карточки этот путь не зовёт). 409 — вики не
-    /// заведена или внутренний сбой операции (с причиной). 200 — исход: списки пакетов
-    /// откатанных / снятых (сноски сняты) / оставшихся, снятые хроники, названные проблемы
-    /// частичного исхода и признак пометки «не разбирать».</summary>
+    /// 400 — форма sourceRef (тот же разбор, что у сервиса; проверяется ПЕРВОЙ, до владения);
+    /// 404 — источника нет или он чужой: один ответ на оба случая, он не выдаёт наружу,
+    /// существует ли источник. Владение проверяется для КАЖДОГО origin: чат — по каталогу чатов
+    /// (свой/чужой), прочие origin — наличием в вики владельца пакета с этим источником (чужого
+    /// в его корне нет по построению). 409 — вики не заведена или внутренний сбой операции (с
+    /// причиной). 200 — исход: списки пакетов откатанных / снятых (сноски сняты) / оставшихся,
+    /// снятые хроники, названные проблемы частичного исхода и признак пометки «не разбирать».
+    /// Снятие сносок нормализует файл страницы через WikiPage.Render() (весь файл, не только сноска).</summary>
     [HttpPost("retract")]
     public async Task<IActionResult> Retract([FromBody] WikiRetractRequest? req)
     {
@@ -166,13 +167,18 @@ public class WikiPackagesController : ControllerBase
         if (userId is null) return Unauthorized();
         if (string.IsNullOrWhiteSpace(req?.SourceRef))
             return BadRequest(new { code = WikiRetractService.CodeShape, message = "нужен sourceRef" });
+        // Форма — раньше владения: «session:» без id это 400, а не 404.
+        var shape = WikiRetractService.SourceShapeError(req.SourceRef);
+        if (shape is not null)
+            return BadRequest(new { code = WikiRetractService.CodeShape, message = shape });
 
-        if (WikiRetractService.OriginOf(req.SourceRef) == "session")
-        {
-            var session = _sessions.GetById(WikiRetractService.IdPartOf(req.SourceRef));
-            if (session is null || _sessions.ResolveOwnerId(session) != userId)
-                return NotFound(new { code = CodeSource, message = "такого источника в твоей вики нет" });
-        }
+        // Чужой и несуществующий источник — один 404. Вики не заведена — не «нет источника», а
+        // 409 сервиса: сначала его отказ, потому что проверять наличие пакетов негде.
+        var owned = WikiRetractService.OriginOf(req.SourceRef) == "session"
+            ? SessionOwnedBy(userId, req.SourceRef)
+            : !WikiPaths.IsInitialized(_dataDir, userId) || _retract.SourceKnown(userId, req.SourceRef);
+        if (!owned)
+            return NotFound(new { code = CodeSource, message = "такого источника в твоей вики нет" });
 
         var r = await _retract.RetractAsync(userId, req.SourceRef).ConfigureAwait(false);
         if (!r.Ok)
@@ -186,10 +192,18 @@ public class WikiPackagesController : ControllerBase
             [.. r.NeedsUnlink.Select(o => o.PackageId)],
             [.. r.RemovedChronicles],
             [.. r.Failed],
-            r.MarkedSkip));
+            r.MarkedSkip,
+            [.. r.Outcomes.Where(o => o.Reverted).SelectMany(o => o.AlreadyPages ?? [])
+                .Distinct(StringComparer.Ordinal)]));
     }
 
     // ─── Помощники ──────────────────────────────────────────────────────────
+
+    private bool SessionOwnedBy(string userId, string sourceRef)
+    {
+        var session = _sessions.GetById(WikiRetractService.IdPartOf(sourceRef));
+        return session is not null && _sessions.ResolveOwnerId(session) == userId;
+    }
 
     // Пакет читается из своего корня — чужого по построению нет; остаётся раздел: он не
     // должен называть чужой проект (тот же контракт, что ResolveSection у WikiController).
@@ -376,11 +390,14 @@ public sealed record WikiRetractRequest(string? SourceRef);
 /// unlinkedPackages — обработанные снятием сносок (страницы этих пакетов больше не несут
 /// ссылок на источник); remainingPackages — «остались»: пакеты, чьи страницы не удалось обработать
 /// (причины — в failed); removedChronicles — страницы хроники, снятые целиком; failed —
-/// названные проблемы частичного исхода; markedSkip — чату поставлена пометка «не разбирать».</summary>
+/// названные проблемы частичного исхода; markedSkip — чату поставлена пометка «не разбирать»;
+/// alreadyPages — страницы откатанных пакетов, которые уже стояли в состоянии «до пакета» к
+/// началу отката (этот вызов их файлом не трогал; подмножество восстановленных, W3-3).</summary>
 public sealed record WikiRetractDto(
     IReadOnlyList<string> RevertedPackages,
     IReadOnlyList<string> UnlinkedPackages,
     IReadOnlyList<string> RemainingPackages,
     IReadOnlyList<string> RemovedChronicles,
     IReadOnlyList<string> Failed,
-    bool MarkedSkip);
+    bool MarkedSkip,
+    IReadOnlyList<string>? AlreadyPages = null);

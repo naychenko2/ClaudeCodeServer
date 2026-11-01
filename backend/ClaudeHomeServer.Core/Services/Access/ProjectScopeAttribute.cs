@@ -81,8 +81,9 @@ public sealed class ProjectScopeAttribute : Attribute, IAsyncActionFilter, IOrde
         if (scope is null)
         {
             // Проект виден, но права на запись нет (читатель; в S1 и редактор) — 403, а не 404:
-            // существование ему и так известно
-            if (From == ScopeSource.Project && Right is ProjectRight.Write or ProjectRight.Configure
+            // существование ему и так известно. WriteContent — то же «нет права на запись» для
+            // читателя (S2c-8): отказ различается правом, а не статусом
+            if (From == ScopeSource.Project && Right is ProjectRight.Write or ProjectRight.Configure or ProjectRight.WriteContent
                 && access.Resolve(caller, id, ProjectRight.Read) is not null)
             {
                 context.Result = Fail(StatusCodes.Status403Forbidden,

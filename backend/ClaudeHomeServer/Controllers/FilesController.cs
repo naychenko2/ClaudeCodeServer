@@ -305,8 +305,10 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     // Трансформация ЛЮБОГО файла в Markdown с СОХРАНЕНИЕМ (markitdown, без модели).
     // targetDir (относительно корня проекта) — куда положить .md; пусто → рядом с исходником.
     // Возвращает { savedPath, markdown }.
+    // S2c-8: дверь на WriteContent — редактор общего проекта конвертирует и сохраняет Markdown
+    // в проекте арендатора (ключ хранилищ — корень проекта, право — по вызывающему).
     [HttpPost("document/to-markdown")]
-    [ProjectScope(Right = ProjectRight.Write)]
+    [ProjectScope(Right = ProjectRight.WriteContent)]
     public async Task<IActionResult> ToMarkdown(string projectId, [FromBody] ToMarkdownRequest req, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(req.Path))
@@ -356,8 +358,15 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         catch (KeyNotFoundException) { return NotFound(); }
     }
 
+    // S2c-8 (разрез f899602f §6/§7): двери записи содержимого переведены поимённо с Write на
+    // WriteContent — редактор общего проекта пишет файлы проекта арендатора. Ключ хранилищ —
+    // корень проекта (GetRoot/Annotate/файловые вызовы идут от него, не от id вызывающего),
+    // право — по вызывающему через [ProjectScope], автор — только из sub JWT контроллера.
+    // На Write остаются: Revert, SaveFromUrl, office-config/discard/force-save, office-callback
+    // и удаление папки — всё прочее закрыто default-deny; снимок дверей держит
+    // WriteContentDoorsGuardTests.
     [HttpPut("content")]
-    [ProjectScope(Right = ProjectRight.Write)]
+    [ProjectScope(Right = ProjectRight.WriteContent)]
     public async Task<IActionResult> SaveContent(string projectId, [FromQuery] string path, [FromBody] SaveContentRequest req)
     {
         try
@@ -420,8 +429,20 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     // путь. Ключ — PathNormalizer (нижний регистр): на Windows это то же самое файл-имя
     // в разном регистре, на Linux — лишняя сериализация разных файлов, не ошибка.
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> _pathLocks = new();
-    private static SemaphoreSlim LockFor(string absPath) =>
-        _pathLocks.GetOrAdd(PathNormalizer.NormalizePath(absPath), _ => new SemaphoreSlim(1, 1));
+    private static SemaphoreSlim LockFor(string absPath) => LockByKey(PathNormalizer.NormalizePath(absPath));
+    private static SemaphoreSlim LockByKey(string normalizedKey) =>
+        _pathLocks.GetOrAdd(normalizedKey, _ => new SemaphoreSlim(1, 1));
+
+    // Два пути одной операции (rename) к замкам в одном порядке: все многозамковые двери берут
+    // их сортируя по ключу — цикл между ними невозможен (одна пара путей даёт одну и ту же
+    // очередь независимо от направления rename). Равные ключи складываются в один:
+    // self-rename не самоблокируется.
+    private static (string First, string Second) OrderedLockKeys(string a, string b)
+    {
+        var x = PathNormalizer.NormalizePath(a);
+        var y = PathNormalizer.NormalizePath(b);
+        return string.CompareOrdinal(x, y) <= 0 ? (x, y) : (y, x);
+    }
 
     // Потолок размера текста для ETag (доработка S2c-1 п.3): выше потолка полный хеш файла
     // не считаем — тег нужен для правки, а не для архива; PUT таких файлов идёт без If-Match,
@@ -594,8 +615,9 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         catch (KeyNotFoundException) { return NotFound(); }
     }
 
+    // S2c-8: на WriteContent (см. правило у SaveContent).
     [HttpPost("create")]
-    [ProjectScope(Right = ProjectRight.Write)]
+    [ProjectScope(Right = ProjectRight.WriteContent)]
     public IActionResult CreateFile(string projectId, [FromBody] CreateFileRequest req)
     {
         try { files.CreateFile(GetRoot(projectId), req.Path, req.Content ?? ""); return Ok(); }
@@ -605,8 +627,10 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         catch (InvalidOperationException) { return Conflict(new { error = "exists" }); }
     }
 
+    // S2c-8: на WriteContent — редактору открыто создание папок (удаление папки остаётся на Write,
+    // см. Delete).
     [HttpPost("mkdir")]
-    [ProjectScope(Right = ProjectRight.Write)]
+    [ProjectScope(Right = ProjectRight.WriteContent)]
     public IActionResult CreateDir(string projectId, [FromBody] PathRequest req)
     {
         try { files.CreateDirectory(GetRoot(projectId), req.Path); return Ok(); }
@@ -614,41 +638,111 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         catch (UnauthorizedAccessException) { return StatusCode(403); }
     }
 
+    // S2c-8: на WriteContent (см. правило у SaveContent). Rename берёт тот же замок пути, что
+    // SaveContent (S2c-1): операция касается двух путей — оба замка берутся в нормализованном
+    // порядке, и две перестановки одних путей получают тот же порядок — цикла нет. Без замка
+    // гонка rename↔save молча дала бы два файла (или перенос уже записанной версии) — data loss.
+    // If-Match — тот же контракт, что у SaveContent: назван клиентом версии — переименовываем
+    // только её; параллельная запись того же пути проигрывает по хешу (409), а не затирает.
     [HttpPost("rename")]
-    [ProjectScope(Right = ProjectRight.Write)]
-    public IActionResult Rename(string projectId, [FromBody] RenameRequest req)
+    [ProjectScope(Right = ProjectRight.WriteContent)]
+    public async Task<IActionResult> Rename(string projectId, [FromBody] RenameRequest req)
     {
         try
         {
-            files.Rename(GetRoot(projectId), req.OldPath, req.NewPath);
-            // Комментарии к переименованному/перенесённому документу (или документам
-            // внутри папки) следуют за новым путём — привязка не сиротеет
-            if (notes is not null)
+            var root = GetRoot(projectId);
+            var absOld = FileService.SafeJoinPublic(root, req.OldPath);
+            var absNew = FileService.SafeJoinPublic(root, req.NewPath);
+            var (firstKey, secondKey) = OrderedLockKeys(absOld, absNew);
+            var semFirst = LockByKey(firstKey);
+            await semFirst.WaitAsync();
+            SemaphoreSlim? semSecond = null;
+            try
             {
-                try { notes.RewriteAnnotationTargets(TenantId, projectId, req.OldPath, projectId, req.NewPath, prefix: true); }
-                catch (Exception ex) { logger.LogWarning(ex, "Перепись привязок комментариев при rename {Old}", req.OldPath); }
+                if (secondKey != firstKey)
+                {
+                    semSecond = LockByKey(secondKey);
+                    await semSecond.WaitAsync();
+                }
+                if (!System.IO.File.Exists(absOld) && !Directory.Exists(absOld)) return NotFound();
+                var ifMatch = RequestIfMatch();
+                if (ifMatch is not null)
+                {
+                    // Тот же канонический хеш, что у GET/SaveContent; папке тег не выдавался —
+                    // If-Match на папку не может совпасть, это 409, а не тихий перенос
+                    var current = IsEtaggableText(root, req.OldPath, absOld) ? CanonicalSha256OfTextFile(absOld) : null;
+                    if (current != ifMatch) return Conflict(FileConflictBodyFor(root, req.OldPath, absOld, current));
+                }
+                files.Rename(root, req.OldPath, req.NewPath);
+                // Комментарии к переименованному/перенесённому документу (или документам
+                // внутри папки) следуют за новым путём — привязка не сиротеет
+                if (notes is not null)
+                {
+                    try { notes.RewriteAnnotationTargets(TenantId, projectId, req.OldPath, projectId, req.NewPath, prefix: true); }
+                    catch (Exception ex) { logger.LogWarning(ex, "Перепись привязок комментариев при rename {Old}", req.OldPath); }
+                }
+                return Ok();
             }
-            return Ok();
+            finally
+            {
+                semSecond?.Release();
+                semFirst.Release();
+            }
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return StatusCode(403); }
     }
 
+    // S2c-8: дверь открыта редактору только для файла (WriteContent). Папка остаётся на Write:
+    // ветка папки — явная проверка права вызывающего (редактору 403, владельцу как раньше).
+    // Файловая ветка — под тем же замком пути, что SaveContent (S2c-1), с If-Match там, где
+    // клиент назвал версию. До S3-3 (буфера коммиттера) удаление незакоммиченного файла
+    // редактором необратимо — откат через Revert остаётся на Write, у редактора его нет.
     [HttpDelete]
-    [ProjectScope(Right = ProjectRight.Write)]
+    [ProjectScope(Right = ProjectRight.WriteContent)]
     // Секция destructive: на делегированном ходу агент не удаляет данные (раньше — срезанием
     // секции из состава инструментов wsp, что перезапускало процесс CLI со всеми MCP)
     [DenyOnDelegatedTurn("Удаление файлов")]
-    public IActionResult Delete(string projectId, [FromQuery] string path)
+    public async Task<IActionResult> Delete(string projectId, [FromQuery] string path)
     {
-        try { files.Delete(GetRoot(projectId), path); return NoContent(); }
+        try
+        {
+            var root = GetRoot(projectId);
+            if (IsDirectoryPath(root, path))
+                return access.Resolve(UserId, projectId, ProjectRight.Write) is null
+                    ? StatusCode(403, new { error = "Удаление папки — только владелец проекта", code = ProjectScopeAttribute.ErrorCode })
+                    : await DeleteUnderLockAsync(root, path, ifMatch: null);
+            return await DeleteUnderLockAsync(root, path, RequestIfMatch());
+        }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (FileNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return StatusCode(403); }
     }
 
+    // Файловая ветка Delete под замком пути (S2c-8): If-Match — тот же контракт, что у SaveContent;
+    // папка удаляется без сверки версии — тега папке сервер не выдавал.
+    private async Task<IActionResult> DeleteUnderLockAsync(string root, string path, string? ifMatch)
+    {
+        var abs = FileService.SafeJoinPublic(root, path);
+        var sem = LockFor(abs);
+        await sem.WaitAsync();
+        try
+        {
+            if (ifMatch is not null)
+            {
+                if (!System.IO.File.Exists(abs)) return NotFound();
+                var current = IsEtaggableText(root, path, abs) ? CanonicalSha256OfTextFile(abs) : null;
+                if (current != ifMatch) return Conflict(FileConflictBodyFor(root, path, abs, current));
+            }
+            files.Delete(root, path);
+            return NoContent();
+        }
+        finally { sem.Release(); }
+    }
+
+    // S2c-8: на WriteContent (см. правило у SaveContent).
     [HttpPost("upload")]
-    [ProjectScope(Right = ProjectRight.Write)]
+    [ProjectScope(Right = ProjectRight.WriteContent)]
     [RequestSizeLimit(100 * 1024 * 1024)] // 100 МБ
     public async Task<IActionResult> Upload(string projectId, [FromQuery] string path = "", IFormFile? file = null)
     {

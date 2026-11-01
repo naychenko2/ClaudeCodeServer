@@ -13,6 +13,7 @@ using ClaudeHomeServer.Tests.Helpers;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
+using Microsoft.Extensions.Logging; // ThrowingLogger: ILogger/EventId (GlobalUsings держит только Abstractions)
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -23,13 +24,17 @@ namespace ClaudeHomeServer.Tests.Services;
 // Доработка по вердикту ревью S3-3: выключенный флаг llm-wiki — прогон пропускается целиком
 // (ни health, ни метрик, кнопка отказана с причиной); сверка манифеста с диском по байтам даёт
 // строки дрейфа в health и его счётчик в метриках; строка метрик — в единицах и именах
-// базовой линии S0b-2 (проценты с одним знаком). Окно (его часы) здесь не проверяется:
-// прогон вызывается напрямую, как его зовёт REST.
+// базовой линии S0b-2 (проценты с одним знаком). W3-4a: тело ночного тика проверяется
+// напрямую (RunNightTickAsync): дата прохода ставится только после прохода, где все владельцы
+// завершились; исключение в тике не выходит из службы; тик и кнопка одного владельца — один
+// прогон. Календарное окно здесь не проверяется: тику даётся время в окне, а прогон
+// вызывается напрямую, как его зовёт REST.
 // Образец построения — WikiControllerTests: temp-дир + боевые ProjectManager/NotesService +
 // страница пишется Хранителем (тот же путь, что у применения).
 public class WikiLintServiceTests : IDisposable
 {
     private const string User = "u1";
+    private const string Foreign = "u2"; // второй владелец: тесты ночного тика проверяют отказ одного
     private readonly string _dir;
     private readonly string _pages;
     private readonly IConfiguration _config;
@@ -162,6 +167,84 @@ public class WikiLintServiceTests : IDisposable
         await held;
 
         // Двойной записи нет: ровно одна строка метрик и один health на раздел.
+        MetricsLines().Should().HaveCount(1);
+        File.Exists(HealthOf(p.Id)).Should().BeTrue();
+    }
+
+    // ─── W3-4a: ночной тик — дата после успеха, исключение не выходит, тик и кнопка ──
+
+    [Fact]
+    public async Task Тик_ОтказНаОдномВладельце_ОстальныеПрошли_ДатаПроходаНеСтоитДоУспеха()
+    {
+        var mine = CreateProject("Целый");
+        var other = CreateProject("Сбойный", owner: Foreign);
+        await _keeper.EnsureInitializedAsync(User);
+        await _keeper.EnsureInitializedAsync(Foreign);
+        await WriteGoodPage(mine.Id, "Знание");
+        await WriteGoodPage(other.Id, "Знание", user: Foreign);
+
+        // Отказ одного владельца: проверка флага бросает для u2 — исключение за пределами
+        // раздела-изоляции, его закрывает охрана владельца (так тест моделирует отказ прохода).
+        _flags.ThrowFor = Foreign;
+        await _sut.RunNightTickAsync(NightNow());
+
+        // Отказ одного владельца не срывает остальных: целый получил обычный health,
+        // отказавший — не писан вовсе.
+        File.Exists(HealthOf(mine.Id)).Should().BeTrue("отказ другого владельца не останавливает проход");
+        File.Exists(HealthOf(other.Id, Foreign)).Should().BeFalse("отказавший владелец не записан");
+
+        // Отказавший проход не двинул дату: следующий тик тех же суток пробует снова —
+        // отказавший получают в этом же окне, а не на следующих сутки.
+        _flags.ThrowFor = null;
+        await _sut.RunNightTickAsync(NightNow());
+        File.Exists(HealthOf(other.Id, Foreign)).Should().BeTrue(
+            "дата ставится только после успешного прохода: отказавший пробуют в том же окне");
+    }
+
+    [Fact]
+    public async Task Тик_Исключение_НеВыходитИзExecuteAsync()
+    {
+        var p = CreateProject("Сбой");
+        await _keeper.EnsureInitializedAsync(User);
+        await WriteGoodPage(p.Id, "Знание");
+
+        // Две неудачи сразу: проверка флага бросает для владельца (её закрывает охрана владельца),
+        // и логирование самой охраны бросает — исключение за пределами охраны владельца,
+        // и catch тика — последняя оборона службы.
+        var sut = new WikiLintService(_notes, _keeper, _spheres, _config,
+            new ThrowingLogger("Ночной линт вики"), _flags);
+        _flags.ThrowFor = User;
+        Func<Task> act = () => sut.RunNightTickAsync(NightNow());
+        await act.Should().NotThrowAsync(
+            "исключение внутри тика не должно доходить до ExecuteAsync: иначе BackgroundService гасит хост");
+    }
+
+    [Fact]
+    public async Task ТикИРучнойПрогонОдногоВладельца_ОдинПрогон_ВторойУжеИдёт_БезДвойнойЗаписи()
+    {
+        var p = CreateProject("Гонка с тиком");
+        var key = "projects/" + p.Id;
+        await _keeper.EnsureInitializedAsync(User);
+        await WriteGoodPage(p.Id, "Знание");
+
+        var tcs = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Держим блокировку раздела: тик встанет на записи и не успеет закончиться до ручного
+        // вызова — ровно та ситуация, когда ночное окно и кнопка сходятся.
+        var held = _keeper.WithSectionsLockedAsync(User, [key], () => tcs.Task);
+
+        // Тело тика выполняется на вызывающем потоке до первого реального await (запись под
+        // блокировкой раздела): к моменту возврата слот владельца занят тиком — ручной вызов
+        // отвергается детерминированно (TryRunOwnerAsync не менялся).
+        var tick = _sut.RunNightTickAsync(NightNow());
+        var manual = _sut.TryRunOwnerAsync(User);
+
+        tcs.SetResult(0);
+        await Task.WhenAll(tick, manual);
+        await held;
+
+        var manualRes = await manual; // завершён на отвержении: await не блокирует
+        manualRes.Started.Should().BeFalse("тик и кнопка на одного владельца — один прогон");
+        // Двойной записи нет: ровно одна строка метрик и один health.
         MetricsLines().Should().HaveCount(1);
         File.Exists(HealthOf(p.Id)).Should().BeTrue();
     }
@@ -338,14 +421,20 @@ public class WikiLintServiceTests : IDisposable
     // Страница раздела — записанная Хранителем (тот же путь, что у применения пакета):
     // папка раздела, файл и его запись в манифесте появляются вместе.
     // Тело страницы — необязательное: метрики и находки зависят от ссылок в тексте.
-    private async Task WriteGoodPage(string projectId, string title, string body = "текст. [[Чат 1]]")
+    // user — владелец страницы: тесты ночного тика заводят вики двух владельцев.
+    private async Task WriteGoodPage(string projectId, string title, string body = "текст. [[Чат 1]]", string user = User)
     {
-        (await _keeper.WritePageAsync(User, "projects/" + projectId, $"Проекты/{projectId}/{title}.md",
+        (await _keeper.WritePageAsync(user, "projects/" + projectId, $"Проекты/{projectId}/{title}.md",
             "---\ntype: topic\nsources: [Чат 1]\n---\n# " + title + "\n\n" + body))
             .Status.Should().Be(WikiOpStatus.Applied);
     }
 
-    private string HealthOf(string projectId) => Path.Combine(_pages, "Проекты", projectId, WikiKeeper.HealthFileName);
+    private string HealthOf(string projectId, string user = User) =>
+        Path.Combine(WikiPaths.Pages(_dir, user), "Проекты", projectId, WikiKeeper.HealthFileName);
+
+    // Время в окне (03:30 локальное, умолчание 03–4): тело тика проверяется тестом
+    // напрямую, с той же проверкой окна, что у службы, — без ожидания ночи.
+    private static DateTimeOffset NightNow() => new(DateTime.Today.AddHours(3).AddMinutes(30));
 
     private string MetricsFile() => Path.Combine(WikiPaths.Keeper(_dir, User), "metrics.jsonl");
 
@@ -426,9 +515,32 @@ public class WikiLintServiceTests : IDisposable
 
     // On — состояние флага владельца: по умолчанию включён (иначе фикстура невидима графу);
     // выключен — предмет проверки «прогон при выключенном флаге пропускается».
+    // ThrowFor — владелец, для которого проверка бросает: моделирует отказ обработки
+    // владельца в ночном тике (тесты даты прохода и обороны тика).
     private sealed class WikiFlagGate : ClaudeHomeServer.Services.Composition.IFeatureFlagGate
     {
         public bool On = true;
-        public bool IsEnabled(string userId, string key) => On && key == FeatureFlagKeys.LlmWiki;
+        public string? ThrowFor;
+        public bool IsEnabled(string userId, string key)
+        {
+            if (userId == ThrowFor) throw new InvalidOperationException("проверка флага бросает: " + userId);
+            return On && key == FeatureFlagKeys.LlmWiki;
+        }
+    }
+
+    // Логгер, бросящий на записи с указанным текстом: моделирует неудачу самого охранителя
+    // (его лог) — исключение за пределами охраны владельца, которое должен погасить catch тика.
+    private sealed class ThrowingLogger : ILogger<WikiLintService>
+    {
+        private readonly string _message;
+        public ThrowingLogger(string message) => _message = message;
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (formatter(state, exception).Contains(_message, StringComparison.Ordinal))
+                throw new InvalidOperationException("запись журнала не удалась: " + _message);
+        }
     }
 }

@@ -30,12 +30,13 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // metrics.jsonl подряд.
 //
 // Флаг llm-wiki гейтит прогон (вердикт ревью S3-3): для владельца с выключенным флагом
-// прогон пропускается целиком — ни _health.md, ни строки метрик. Раньше служба знала только
-// заведённость вики (признак _schema.md) и при выключенном флаге писала «Находки (0)» с
-// нулевыми метриками: флаг прячет страницы вики из графа (NotesService.cs:128), и «чисто»
-// по невидимой вики — ложь, а не мера: отчёт говорил бы «чисто» там, где проверка не
-// выполнялась. Одна проверка флага, в одной точке: и ночное окно, и кнопка идут через
-// TryRunOwnerAsync; шов — тот же IFeatureFlagGate, что у источника графа, не ключ конфига.
+// прогон пропускается целиком — ни _health.md, ни строки метрик (в TryRunOwnerAsync исход
+// FeatureOff возвращается до любой записи). Причина — в фактах кода: флаг убирает источник
+// вики из графа (NotesService.cs:128-129), а тексты страниц лентер читает с диска независимо
+// от флага (ReadSectionFacts) — при выключенном флаге прогон мерил бы страницы по графу,
+// который вики не несёт, и «Находки (0)» с нулевыми метриками читались бы как завершённая
+// проверка, которой не было. Одна проверка флага, в одной точке: и ночное окно, и кнопка идут
+// через TryRunOwnerAsync; шов — тот же IFeatureFlagGate, что у источника графа, не ключ конфига.
 //
 // Дрейф по байтам (ADR-035 §2: «Манифест раздела сверяется с диском при каждом lint…
 // расхождение даёт статус drift, строку в _health.md»): перед линтом служба сверяет каждую
@@ -58,6 +59,8 @@ public sealed class WikiLintService : BackgroundService
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _ownerSlots = new();
 
     // Дата последней ночной проходки (локальная): одна на календарные сутки в окне.
+    // Ставится только после прохода, где все владельцы завершились (RunNightTickAsync):
+    // отказавший проход — не успех, следующий тик того же окна пробует снова.
     private DateTime _lastPassDate = DateTime.MinValue;
 
     // Версия кода в строке метрик: базовая линия S0b-2 штампована ревизией кода
@@ -114,21 +117,32 @@ public sealed class WikiLintService : BackgroundService
         {
             try { await Task.Delay(CheckInterval, ct); }
             catch (OperationCanceledException) { break; }
+            // Всё тело тика — в RunNightTickAsync, под своим catch: здесь служба только ждёт
+            // следующий тик; наружу из ExecuteAsync исключение не выходит (тот же образец,
+            // что тик под catch в PersonaMemoryConsolidationService).
+            await RunNightTickAsync(DateTimeOffset.Now); // «ночь» владельца — локальное время сервера
+        }
+    }
 
-            // Всё тело тика под catch: отказ за пределами раздела-изоляции не должен
-            // гасить службу (тот же образец, что PersonaMemoryConsolidationService).
-            try
-            {
-                var now = DateTimeOffset.Now; // «ночь» владельца — локальное время сервера
-                if (!InWindow(now.Hour) || _lastPassDate == now.Date) continue;
-                _lastPassDate = now.Date;
-                foreach (var ownerId in EnumerateWikiOwners())
-                    await RunOwnerGuardedAsync(ownerId);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                _log.LogWarning(ex, "Ночное окно линта вики");
-            }
+    // Тело ночного тика — отдельный internal-метод под одним catch: невыловленное исключение
+    // за пределами раздела-изоляции гасило бы весь хост, а не только проход (тот же образец,
+    // что PersonaMemoryConsolidationService). Дата ставится только после прохода, где все
+    // владельцы завершились: отказ на одном владельце не срывает остальных до следующих суток —
+    // они обработаны этим же тиком, а отказавший пробуются следующим тиком того же окна.
+    // Дата прохода приходит параметром: тест проверяет тик временем в окне, не дожидаясь ночи.
+    internal async Task RunNightTickAsync(DateTimeOffset now)
+    {
+        try
+        {
+            if (!InWindow(now.Hour) || _lastPassDate == now.Date) return;
+            var allOk = true;
+            foreach (var ownerId in EnumerateWikiOwners())
+                allOk &= await RunOwnerGuardedAsync(ownerId);
+            if (allOk) _lastPassDate = now.Date;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.LogWarning(ex, "Ночное окно линта вики");
         }
     }
 
@@ -167,11 +181,13 @@ public sealed class WikiLintService : BackgroundService
     }
 
     // Ночная проходка одного владельца: исключение не выходит наружу — оно закрывает
-    // этого владельца, не остальных и не службу.
-    private async Task RunOwnerGuardedAsync(string ownerId)
+    // этого владельца, не остальных и не службу. false — проход владельца не завершился:
+    // дата прохода после него не ставится. «Уже идёт» и «функция выключена» — не отказ:
+    // владелец обрабатывается сейчас / делать нечего.
+    private async Task<bool> RunOwnerGuardedAsync(string ownerId)
     {
-        try { await TryRunOwnerAsync(ownerId); }
-        catch (Exception ex) { _log.LogWarning(ex, "Ночной линт вики {Owner}", ownerId); }
+        try { await TryRunOwnerAsync(ownerId); return true; }
+        catch (Exception ex) { _log.LogWarning(ex, "Ночной линт вики {Owner}", ownerId); return false; }
     }
 
     // ─── Прогон владельца ─────────────────────────────────────────────────────
@@ -493,6 +509,13 @@ public sealed class WikiLintService : BackgroundService
     }
 
     // ─── metrics.jsonl ────────────────────────────────────────────────────────
+    //
+    // Дыры при отказе раздела: отказавший раздел метрик не пишет (проход передаёт в
+    // WriteHealthQuietlyAsync null — строка об отказе живёт только в _health.md раздела),
+    // и в metrics.jsonl этого раздела за эти сутки нет. Это не пропуск и не ноль: строка
+    // нулей незавершённой проверки читалась бы как измерение и врала бы сравнение с
+    // базовой линией — тот же смысл, по которому прогон при выключенном флаге не пишет
+    // метрик. Отсутствие строки видно в файле отсутствием строки и объяснено здесь.
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {

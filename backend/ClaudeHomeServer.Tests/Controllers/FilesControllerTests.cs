@@ -4,12 +4,23 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using ClaudeHomeServer.Controllers;
+using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.CodeGraph;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Files;
 using ClaudeHomeServer.Services.Git;
+using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Configuration;
+using Moq;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
@@ -957,6 +968,170 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
         body.GetProperty("code").GetString().Should().Be("file_changed");
         body.GetProperty("content").GetString().Should().Be(winner);
         body.GetProperty("sha256").GetString().Should().Be(Sha256Hex(winner));
+    }
+
+    // П.1 доработки S2c-1: атомарная замена (WriteAtomic) несёт права не цели, а временного
+    // файла: без переноса 0600 с битом исполнения становился 0644. Явный Skip на Windows —
+    // unix-битов там нет, тест не должен молчать на другой ОС.
+    [SkippableFact]
+    public async Task SaveContent_IfMatch_PreservesUnixModeAndExecBit()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "unix-права (0600 + бит исполнения) — вне Windows");
+        var (id, dir) = await SetupProjectWithFileAsync("keep_mode.sh", "#!/bin/sh\necho old");
+        var abs = Path.Combine(dir, "keep_mode.sh");
+        var mode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute; // 0700
+        File.SetUnixFileMode(abs, mode);
+
+        var (etag, _) = await GetContentETagAsync(id, "keep_mode.sh");
+        var put = await PutWithIfMatchAsync(id, "keep_mode.sh", "#!/bin/sh\necho new", etag);
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        File.ReadAllText(abs).Should().Be("#!/bin/sh\necho new");
+        File.GetUnixFileMode(abs).Should().Be(mode,
+            "подмена через временный файл не меняет прав исходного файла");
+    }
+
+    // П.3 доработки S2c-1: видео/аудио/документы раньше не читались вовсе — полный хеш на
+    // каждый GET стоил чтения всего файла. Тег для них не отдаётся, ответ не ломается.
+    [Fact]
+    public async Task GetContent_VideoFile_HasNoETag_AndResponseIsOk()
+    {
+        var id = await SetupProjectWithBinaryAsync("clip.mp4", new byte[] { 0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70 });
+        var response = await _client.GetAsync($"/api/projects/{id}/files/content?path=clip.mp4");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("isVideo").GetBoolean().Should().BeTrue("видео отдаётся как раньше");
+        response.Headers.Contains("ETag").Should().BeFalse(
+            "нередактируемый файл не перечитывается целиком ради тега");
+    }
+
+    // П.3: текст выше потолка (MaxEtagTextBytes) — без тега; PUT таких файлов остаётся
+    // без If-Match, как до S2c-1.
+    [Fact]
+    public async Task GetContent_TextAboveEtagCap_HasNoETag_AndContentIsFull()
+    {
+        var big = new string('a', (int)FilesController.MaxEtagTextBytes + 1);
+        var (id, _) = await SetupProjectWithFileAsync("big.txt", big);
+        var response = await _client.GetAsync($"/api/projects/{id}/files/content?path=big.txt");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("content").GetString()!.Length.Should().Be((int)FilesController.MaxEtagTextBytes + 1);
+        response.Headers.Contains("ETag").Should().BeFalse(
+            "файл сверх потолка не хешируется целиком на каждый GET");
+    }
+
+    // П.4 доработки S2c-1: хеш — по каноническим байтам (тем же, что отдаёт GET), а не по
+    // сырым байтам диска. Файл с BOM: content из GET без BOM, ETag = его хеш, и PUT с этим
+    // тегом проходит (раньше unchanged-файл отвечал 409 на собственный же тег).
+    [Fact]
+    public async Task GetContent_FileWithBom_ETagMatchesReturnedContent_PutWithThatETagPasses()
+    {
+        const string text = "содержимое с BOM";
+        var (id, dir) = await SetupProjectWithFileAsync("bom.txt", text);
+        var abs = Path.Combine(dir, "bom.txt");
+        File.WriteAllText(abs, text, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+
+        var response = await _client.GetAsync($"/api/projects/{id}/files/content?path=bom.txt");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        var content = body.GetProperty("content").GetString()!;
+        content.Should().Be(text, "GET отдаёт декодированный текст без BOM");
+
+        var etagRaw = response.Headers.GetValues("ETag").Single();
+        etagRaw.Trim('"').Should().Be(Sha256Hex(text),
+            "тег — по тем же байтам, что отдаёт GET, а не по сырым байтам с BOM");
+
+        var put = await PutWithIfMatchAsync(id, "bom.txt", "правка по ETag из GET", etagRaw);
+        put.StatusCode.Should().Be(HttpStatusCode.OK, "unchanged-файл принимает собственный тег");
+
+        var after = File.ReadAllBytes(abs);
+        (after.Length >= 3 && after[0] == 0xEF && after[1] == 0xBB && after[2] == 0xBF)
+            .Should().BeFalse("запись API пишет UTF-8 без BOM");
+        var (_, sha2) = await GetContentETagAsync(id, "bom.txt");
+        sha2.Should().Be(Sha256Hex("правка по ETag из GET"), "после записи тег — хеш нового содержимого");
+    }
+
+    // П.2 доработки S2c-1: служебный файл атомарной записи («.имя.<guid>.tmp») не правка
+    // пользователя — до filesChanged он не доходит (тот же накопленный список уходит в
+    // QueueSync синка знаний, FilesWatcherService.cs:535). Проверка на наблюдателе в
+    // polling-режиме: IsExcluded общий у событий (inotify) и у снапшот-диффа, а дифф
+    // детерминирован на любой ОС — тест про признак, а не про inotify.
+    [Fact]
+    public async Task FileWatcher_AtomicTempFileIsNotSent_TargetFileIsSent()
+    {
+        var root = Path.Combine(_tempDir, "watch_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(root);
+        var sent = new List<JsonElement>();
+        var (svc, projectId) = BuildWatcherService(root, sent);
+        try
+        {
+            svc.Watch(projectId, "conn-atomic").Should().BeTrue("наблюдатель поднят впервые");
+            var tmpName = TreeExcludes.AtomicTempName("target.txt");
+            File.WriteAllText(Path.Combine(root, tmpName), "недозаписанный");
+            File.WriteAllText(Path.Combine(root, "target.txt"), "правка пользователя");
+
+            var paths = await WaitSentPaths(sent, "target.txt", TimeSpan.FromSeconds(20));
+            paths.Should().Contain("target.txt", "правка целевого файла доходит до клиента");
+            paths.Should().NotContain(tmpName, "служебный файл атомарной записи — не правка пользователя");
+        }
+        finally { svc.Dispose(); }
+    }
+
+    // Наблюдатель с проектом на заданном корне (по образцу FileWatcherSubscriptionTests),
+    // в polling-режиме и с коротким интервалом: снапшот-дифф даёт событие без inotify.
+    private (FileWatcherService Svc, string ProjectId) BuildWatcherService(string root, List<JsonElement> sent)
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_tempDir, "watcher_projects.json"),
+            ["FileWatcher:UsePolling"] = "true",
+            ["FileWatcher:PollIntervalMs"] = "200",
+        }).Build();
+        var userStore = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        var owner = userStore.Add("fw-" + Guid.NewGuid().ToString("N")[..8], "pw-123456", "user");
+        var projects = new ProjectManager(config, userStore, new AppSettingsService(config));
+        var project = projects.Create("fw-" + Guid.NewGuid().ToString("N")[..8], root, owner.Id, owner.Username);
+
+        // Dify не настроен → QueueSync — тихий no-op: тест про фильтр путей, не про синк.
+        var wkStore = new WorkspaceKnowledgeStore(config);
+        var knowledge = new KnowledgeService(new Mock<IHttpClientFactory>().Object,
+            Options.Create(new DifyOptions()), wkStore);
+        var knowledgeSync = new ProjectKnowledgeSyncService(knowledge, wkStore, projects,
+            new ProjectFileGateway(new FileService()), new RecordingHubNotifier(), new NullDifyMetrics(),
+            NullLogger<ProjectKnowledgeSyncService>.Instance);
+        var graphs = new CodeGraphService(NullLogger<CodeGraphService>.Instance, new ProjectRootLookup(projects),
+            new GraphPersistence(_tempDir, NullLogger<GraphPersistence>.Instance), config);
+
+        var proxy = new Mock<IClientProxy>();
+        proxy.Setup(p => p.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
+            .Callback<string, object[], CancellationToken>((_, args, _) =>
+            {
+                lock (sent) sent.Add(JsonSerializer.SerializeToElement(args[0]));
+            })
+            .Returns(Task.CompletedTask);
+        var clients = new Mock<IHubClients>();
+        clients.Setup(c => c.Group(It.IsAny<string>())).Returns(proxy.Object);
+        var hub = new Mock<IHubContext<SessionHub>>();
+        hub.Setup(h => h.Clients).Returns(clients.Object);
+
+        return (new FileWatcherService(projects, hub.Object, knowledgeSync, graphs, config), project.Id);
+    }
+
+    // Собирает пути из всех событий filesChanged, пока не появится ожидаемый.
+    private static async Task<List<string>> WaitSentPaths(List<JsonElement> sent, string expected, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (true)
+        {
+            var paths = new List<string>();
+            lock (sent)
+                foreach (var payload in sent)
+                    paths.AddRange(payload.GetProperty("paths").EnumerateArray().Select(p => p.GetString()!));
+            if (paths.Contains(expected)) return paths;
+            if (DateTime.UtcNow > deadline)
+                throw new TimeoutException($"событие по {expected} не доехало до клиента: [{string.Join(", ", paths)}]");
+            await Task.Delay(100);
+        }
     }
 
     [Fact]

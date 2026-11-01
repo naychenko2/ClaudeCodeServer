@@ -144,11 +144,14 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
 
             if (IsDirectoryPath(root, path)) return NotFound();
 
-            // S2c-1 (К8): ETag — SHA-256 байтов файла на диске. Хеш именно байтов (не текста
-            // вида), чтобы сравнение с If-Match при записи было тем же, что и состояние диска.
-            // Хеш до вида: отдача идёт стримингом (video/audio — PhysicalFile, тот же файл),
-            // второе чтение — только потоковое, без буфера на весь файл.
-            HttpContext.Response.Headers.ETag = $"\"{Sha256OfFile(FileService.SafeJoinPublic(root, path))}\"";
+            // S2c-1 (К8, доработка по ревью): ETag — только для текстовых файлов, которые
+            // PUT content действительно может записать (не документ, не бинарный, не выше
+            // MaxEtagTextBytes). Видео/аудио/документы и крупные тексты раньше не читались
+            // вовсе, а полный хеш на каждый GET стоил чтения всего файла. Без тега такая
+            // правка остаётся ровно как до S2c-1: PUT без If-Match.
+            var absPath = FileService.SafeJoinPublic(root, path);
+            if (IsEtaggableText(root, path, absPath))
+                HttpContext.Response.Headers.ETag = $"\"{CanonicalSha256OfTextFile(absPath)}\"";
 
             // Вид файла и способ отдачи — общий с агентом устройства (вертикаль Files):
             // документ base64 для клиентского рендера, картинка, видео/аудио потоком, текст.
@@ -377,7 +380,10 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             await sem.WaitAsync();
             try
             {
-                var current = System.IO.File.Exists(abs) ? Sha256OfFile(abs) : null;
+                // Тот же канонический хеш, что выдаёт GET (доработка S2c-1 п.4): сверяем то,
+                // что клиент действительно видел. Нетекстовому/сверх потолка тега нет ни у
+                // клиента, ни здесь — If-Match для него не может совпасть.
+                var current = IsEtaggableText(root, path, abs) ? CanonicalSha256OfTextFile(abs) : null;
                 if (current != ifMatch)
                     return Conflict(FileConflictBodyFor(root, path, abs, current));
                 WriteAtomic(root, path, abs, req.Content);
@@ -411,26 +417,78 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     private static SemaphoreSlim LockFor(string absPath) =>
         _pathLocks.GetOrAdd(PathNormalizer.NormalizePath(absPath), _ => new SemaphoreSlim(1, 1));
 
-    private static string Sha256OfFile(string absPath)
+    // Потолок размера текста для ETag (доработка S2c-1 п.3): выше потолка полный хеш файла
+    // не считаем — тег нужен для правки, а не для архива; PUT таких файлов идёт без If-Match,
+    // как до S2c-1. internal — чтобы тест писал тот же потолок, что и код.
+    internal const long MaxEtagTextBytes = 10 * 1024 * 1024;
+
+    // «Текстовый для ETag» — ровно то, что отдаёт текстом FileContentReader.Read и что может
+    // записать PUT content: не документ (GetDocumentInfo), не бинарный (IsBinaryFile), не выше
+    // потолка. Один признак на выдачу тега (GET) и на сверку (PUT): If-Match клиенту доступен
+    // только для файлов, которые действительно сохраняются по нему.
+    private bool IsEtaggableText(string root, string path, string abs) =>
+        System.IO.File.Exists(abs)
+        && new System.IO.FileInfo(abs).Length <= MaxEtagTextBytes
+        && files.GetDocumentInfo(path) is null
+        && !files.IsBinaryFile(root, path);
+
+    // «Канонические байты» файла для ETag — ОДНА функция на выдачу тега в GET и на сверку
+    // If-Match в PUT (доработка S2c-1 п.4). Это те же байты, что реально отдаёт GET текстового
+    // файла: текст, декодированный как в FileService.ReadFile (UTF-8, BOM отброшен), заново
+    // закодированный UTF-8 без BOM. Хеш сырых байт диска не годился: файл с BOM дал бы тег,
+    // которого нет ни в content из GET, ни в теле, которое вернёт PUT, — unchanged-файл
+    // отвечал 409 на собственный же тег. Запись API пишет UTF-8 без BOM, поэтому после
+    // первой же правки тег = хеш содержимого без BOM и цикл GET→PUT сходится.
+    private static string CanonicalSha256OfTextFile(string absPath)
     {
-        using var stream = System.IO.File.OpenRead(absPath);
-        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(stream)).ToLowerInvariant();
+        using var reader = new System.IO.StreamReader(
+            System.IO.File.OpenRead(absPath), System.Text.Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        var canonical = System.Text.Encoding.UTF8.GetBytes(reader.ReadToEnd());
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(canonical)).ToLowerInvariant();
     }
 
     // Запись через временный файл в том же каталоге и перемещение (File.Move overwrite),
     // а не на месте: читатель не видит недозаписанный файл, а «сравнить и записать»
     // атомарны на пути. Кодировка та же, что у FileService.WriteFile (UTF-8 без BOM).
-    // Уведомление подписчиков — явное, как в Upload/SaveFromUrl (запись мимо FileService.Write*).
+    // Имя временного файла — TreeExcludes.AtomicTempName: наблюдатель глушит его события
+    // тем же признаком (доработка S2c-1 п.2). Уведомление подписчиков — явное, как в
+    // Upload/SaveFromUrl (запись мимо FileService.Write*).
     private void WriteAtomic(string root, string path, string abs, string content)
     {
-        var tmp = Path.Combine(Path.GetDirectoryName(abs)!, "." + Path.GetFileName(abs) + "." + Guid.NewGuid().ToString("N") + ".tmp");
+        var tmp = Path.Combine(Path.GetDirectoryName(abs)!, TreeExcludes.AtomicTempName(Path.GetFileName(abs)));
         try
         {
             System.IO.File.WriteAllText(tmp, content, new System.Text.UTF8Encoding(false));
+            // После подмены права файла достаются временному: Move сохраняет их от tmp, а не от
+            // цели. Без переноса 0600 становилось 0644, бит исполнения пропадал, read-only и
+            // hidden на Windows становились обычным файлом (доработка S2c-1 п.1). Если цели
+            // нет, ничего не переносим: новый файл получает дефолт ОС.
+            CopyFileAttributesToTemp(abs, tmp);
             System.IO.File.Move(tmp, abs, overwrite: true);
         }
         catch { try { System.IO.File.Delete(tmp); } catch { /* временный файл best-effort */ } throw; }
         files.NotifyMutated(root, path, FileMutationKind.Write);
+    }
+
+    // Перенос прав и атрибутов существующей цели на временный файл: перед подменой, но после
+    // записи содержимого — файл с правами 0400 сам не открылся бы на запись. Unix-права
+    // читаются на Unix (на Windows GetUnixFileMode бросает PlatformNotSupportedException),
+    // атрибуты NTFS (read-only, hidden) — на Windows. Отказ (цель исчезла между проверкой и
+    // chmod) запись не роняет: файл важнее режима, но отказ не молчит — он в логе.
+    private void CopyFileAttributesToTemp(string abs, string tmp)
+    {
+        if (!System.IO.File.Exists(abs)) return;
+        try
+        {
+            if (OperatingSystem.IsWindows())
+                System.IO.File.SetAttributes(tmp, System.IO.File.GetAttributes(abs));
+            else
+                System.IO.File.SetUnixFileMode(tmp, System.IO.File.GetUnixFileMode(abs));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            logger.LogDebug(ex, "Не перенесли права файла при атомарной записи {Path}", abs);
+        }
     }
 
     // Тело 409 по К8: актуальное состояние файла на момент отказа — хеш, содержимое

@@ -480,9 +480,14 @@ public class FileWatcherService : IDisposable
     // Любой сегмент пути в списке исключений → игнорируем
     private static bool IsExcluded(string rel)
     {
-        foreach (var seg in rel.Split('/'))
+        var segments = rel.Split('/');
+        foreach (var seg in segments)
             if (TreeExcludes.WatchContains(seg)) return true;
-        return false;
+        // Служебный файл атомарной записи (".имя.<guid>.tmp", FilesController.WriteAtomic):
+        // его создание и подмена — не правка пользователя: в filesChanged и в синк знаний он
+        // не идёт, там ему место только шумом (доработка S2c-1 п.2). Признак — общий с
+        // построением имени, поэтому фильтр и запись не разъезжаются.
+        return TreeExcludes.IsAtomicTempWrite(segments[^1]);
     }
 
     // Каталоги, которые граф кода не обходит: их перенос структуру графа не меняет.

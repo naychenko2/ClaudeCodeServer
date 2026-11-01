@@ -882,6 +882,33 @@ public static class WebDavHandler
             return;
         }
 
+        // MOVE «сам в себя»: RFC 4918 §9.9.4 для случая «source and destination resources
+        // are the same» рекомендует 403 (не MUST, но это и образец соседних отказов этой
+        // ручки — корень, вики; диск при этом не тронут, т.е. no-op). Без этой проверки URI-
+        // нормализация делает из «docs/../docs/a.txt» тот же путь, что источник: existed=true,
+        // Overwrite:T сносит цель, то есть сам источник, files.Rename следом падает
+        // FileNotFoundException → 404, файл потерян (дефект 0e766a8a, ревью W3-0b). Проверка
+        // — по разрешённым абсолютным путям, до любого сноса; сравнение — по правилам регистра
+        // ФС хоста, тем же ComparisonFor, что в SafePath (SafePath.cs:54): на Windows
+        // «docs/A.txt» и «docs/a.txt» — один файл, на Linux — разные. Несуществующий источник
+        // здесь не проверяется: для него, как прежде, 404 от files.Rename.
+        var comparison = SafePath.ComparisonFor(OperatingSystem.IsWindows());
+        if ((File.Exists(srcAbs) || Directory.Exists(srcAbs)) && dstAbs.Equals(srcAbs, comparison))
+        {
+            ctx.Response.StatusCode = 403; // источник и цель — один ресурс: файл цел, следа на диске нет
+            return;
+        }
+
+        // Перенос каталога внутрь самого себя — явного запрета в RFC 4918 нет, но операция
+        // невозможна: rename каталога в его собственный потомок падает на уровне ФС (EINVAL
+        // на Linux), а снос существующей цели до rename снёс бы поддеревo источника
+        // рекурсивно. Отказ 403 до сноса — как в случае выше.
+        if (Directory.Exists(srcAbs) && dstAbs.StartsWith(srcAbs + Path.DirectorySeparatorChar, comparison))
+        {
+            ctx.Response.StatusCode = 403; // цель внутри источника-каталога: каталог цел
+            return;
+        }
+
         var existed = File.Exists(dstAbs) || Directory.Exists(dstAbs);
 
         var overwrite = !string.Equals(ctx.Request.Headers["Overwrite"].ToString(), "F", StringComparison.OrdinalIgnoreCase);

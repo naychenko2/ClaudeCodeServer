@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Files;
 using ClaudeHomeServer.WebDav;
 using FluentAssertions;
@@ -156,5 +157,96 @@ public class WebDavMoveRootTests : IDisposable
         Directory.Exists(_root).Should().BeTrue();
         File.Exists(dst).Should().BeTrue(); // цель не снесена
         File.ReadAllText(dst).Should().Be("обычный файл");
+    }
+
+    // Дефект 0e766a8a (ревью W3-0b): Destination, резолвящийся в сам источник. URI-
+    // нормализация («docs/../docs/a.txt» → «docs/a.txt») делает цель тем же путём, что
+    // источник: existed=true, Overwrite:T сносил цель, то есть сам источник, files.Rename
+    // следом падал FileNotFoundException → 404, файл потерян. Теперь — 403: RFC 4918 §9.9.4
+    // рекомендует этот статус для «source and destination resources are the same», файл цел:
+    // проверка стоит по разрешённым путям, до любого сноса. Без правки этот тест красный
+    // (404 и удалённый файл) — он же мутация c3.
+    [Theory]
+    [InlineData("docs/a.txt")]          // буквальный самоперенос
+    [InlineData("docs/../docs/a.txt")]  // через точечные сегменты: Uri нормализует в источник
+    [InlineData("docs/sub/../a.txt")]   // то же через несуществующий сегмент
+    public void Move_ЦельРезолвитсяВТотЖеФайл_Overwrite_403_ФайлНаМесте(string destTail)
+    {
+        var src = Path.Combine(_root, "docs", "a.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(src)!);
+        File.WriteAllText(src, "обычный файл");
+        var keep = Path.Combine(_root, "keep.txt");
+        File.WriteAllText(keep, "файл проекта");
+
+        var ctx = Ctx();
+        SetMoveDestination(ctx, destTail);
+        ctx.Request.Headers["Overwrite"] = "T";
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs/a.txt", Project);
+
+        ctx.Response.StatusCode.Should().Be(403);
+        File.Exists(src).Should().BeTrue();  // источник не тронут: отказ до любого следа на диске
+        File.ReadAllText(src).Should().Be("обычный файл");
+        File.Exists(keep).Should().BeTrue();
+    }
+
+    // Та же граница для каталога: перенос каталога в себя и внутрь самого себя — явного
+    // запрета в RFC 4918 нет, но операция невозможна на уровне ФС. Без правки снос
+    // существующей цели сносил поддеревo источника («docs/inner» терялся с файлом), а
+    // Directory.Move всё равно падал (rename каталога в его собственный потомок).
+    [Theory]
+    [InlineData("docs")]         // каталог в себя
+    [InlineData("docs/inner")]   // в существующий потомок
+    [InlineData("docs/new")]     // в несуществующий потомок — тот же отказ, каталог цел
+    public void Move_КаталогВнутрьСамогоСебя_403_КаталогЦел(string destTail)
+    {
+        var srcDir = Path.Combine(_root, "docs");
+        Directory.CreateDirectory(srcDir);
+        var file = Path.Combine(srcDir, "a.txt");
+        File.WriteAllText(file, "обычный файл");
+        var inner = Path.Combine(srcDir, "inner");
+        Directory.CreateDirectory(inner);
+        var innerFile = Path.Combine(inner, "b.txt");
+        File.WriteAllText(innerFile, "файл внутри");
+
+        var ctx = Ctx();
+        SetMoveDestination(ctx, destTail);
+        ctx.Request.Headers["Overwrite"] = "T";
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs", Project);
+
+        ctx.Response.StatusCode.Should().Be(403);
+        Directory.Exists(srcDir).Should().BeTrue(); // каталог цел: отказ до любого следа на диске
+        File.Exists(file).Should().BeTrue();
+        Directory.Exists(inner).Should().BeTrue();
+        File.Exists(innerFile).Should().BeTrue();
+    }
+
+    // Сравнение «сам в себя» — по правилам регистра ФС хоста, не по строгости строк: тот же
+    // ComparisonFor, что в SafePath (SafePath.cs:54). На Windows ФС регистронезависима:
+    // «docs/A.TXT» — тот же файл, самоперенос → 403. На Linux это разные файлы: обычный
+    // перенос → 201. Тест утверждает поведение каждой ОС — замена компаратора на фиксированный
+    // красит его на другой платформе (CI — Linux, разработка — Windows).
+    [Fact]
+    public void Move_РегистрЦели_КакПравилаФСХоста_СамопереносТолькоТамГдеФСНеЧувствительна()
+    {
+        var src = Path.Combine(_root, "docs", "a.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(src)!);
+        File.WriteAllText(src, "обычный файл");
+        var dst = Path.Combine(_root, "docs", "A.TXT");
+
+        var ctx = Ctx();
+        SetMoveDestination(ctx, "docs/A.TXT");
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs/a.txt", Project);
+
+        if ("a.txt".Equals("A.TXT", SafePath.ComparisonFor(OperatingSystem.IsWindows())))
+        {
+            ctx.Response.StatusCode.Should().Be(403); // Windows: цель — тот же файл, самоперенос
+            File.ReadAllText(src).Should().Be("обычный файл");
+        }
+        else
+        {
+            ctx.Response.StatusCode.Should().Be(201); // Linux: разные файлы — обычный перенос
+            File.ReadAllText(dst).Should().Be("обычный файл");
+            File.Exists(src).Should().BeFalse();
+        }
     }
 }

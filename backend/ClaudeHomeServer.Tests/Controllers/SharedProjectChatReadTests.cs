@@ -12,9 +12,10 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// <summary>
 /// Чаты общего проекта для участника (shared-projects, S1-3a2). В S1 участник ТОЛЬКО ЧИТАЕТ:
 /// список чатов проекта (включая созданные ДО приглашения), карточку чата и историю — 200;
-/// создание, переименование, клон, продолжение, передача и значок —
+/// переименование, клон, продолжение, передача и значок —
 /// 403/404 (отправка сообщения редактору открыта в S2a-10, читателю 403) (а чат владельца при этом не меняется). Посторонний, выключенный флаг и выключенный
 /// рубильник — 404: существование не раскрываем. Владелец идёт прежним путём.
+/// Создание чата — право редактора с S2d-1c, здесь не проверяется: см. SharedProjectChatCreateTests.
 /// </summary>
 public class SharedProjectChatReadTests : IClassFixture<TestWebApplicationFactory>
 {
@@ -123,14 +124,14 @@ public class SharedProjectChatReadTests : IClassFixture<TestWebApplicationFactor
     [Theory]
     [InlineData("editor")]
     [InlineData("reader")]
-    public async Task Участник_НеСоздаётНеПереименовываетНеКлонируетНеПродолжаетНеПишет(string role)
+    public async Task Участник_НеПереименовываетНеКлонируетНеПродолжаетНеПишет(string role)
     {
         var (projectId, sessionId) = await SharedChatAsync(role);
         var member = Member();
         var before = await ChatIdsAsync(Owner(), projectId);
 
-        ShouldBeRefused(await member.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "auto" }),
-            "создание чата");
+        // Создание чата здесь нет: с S2d-1c редактор создаёт (и становится автором), читатель — 403;
+        // обе ветки проверяет SharedProjectChatCreateTests.
         ShouldBeRefused(await member.PutAsJsonAsync($"/api/projects/{projectId}/sessions/{sessionId}",
             new { name = "Перебил участник" }), "переименование");
         ShouldBeRefused(await member.PostAsync($"/api/projects/{projectId}/sessions/icon-batch", null),

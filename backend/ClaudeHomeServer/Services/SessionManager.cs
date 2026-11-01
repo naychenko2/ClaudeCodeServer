@@ -3913,7 +3913,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public async Task<Session> CreateAsync(string projectId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? agentName = null,
         string? effort = null, string? personaId = null, bool taskExecution = false, string? taskId = null,
-        string? onboardingKind = null)
+        string? onboardingKind = null, string? createdByUserId = null)
     {
         var project = _projects.GetById(projectId)
             ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
@@ -3937,6 +3937,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             TaskId = taskId,
             // Онбординг-сессия: задаётся ДО старта — BuildPersonaLayer читает поле при сборке слоя
             OnboardingKind = onboardingKind,
+            // Автор чата — кто его создал (S2d-1c): id вызывающего из JWT контроллера. На видимость
+            // не влияет (S2d-1); ключом хранилищ по-прежнему служит владелец проекта, не автор.
+            CreatedByUserId = string.IsNullOrWhiteSpace(createdByUserId) ? null : createdByUserId.Trim(),
         };
 
         await StartNewSessionAsync(session, project.RootPath, project.SystemPrompt,

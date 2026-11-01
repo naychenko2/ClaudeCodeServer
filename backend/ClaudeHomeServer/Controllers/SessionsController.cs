@@ -35,8 +35,11 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         return new ETagJsonResult(sessions.GetByProject(projectId).ToList());
     }
 
+    // Создание чата — действие хода (S2d-1c): редактор общего проекта создаёт чат и становится
+    // его автором (CreatedByUserId — только из sub вызывающего, не из тела); читателю 403,
+    // постороннему 404. Автор на видимость чата не влияет (S2d-1).
     [HttpPost]
-    [ProjectScope(Right = ProjectRight.Write)]
+    [ProjectScope(Right = ProjectRight.RunTurn)]
     public async Task<IActionResult> Create(string projectId, [FromBody] CreateSessionRequest req)
     {
         string? personaId = req.PersonaId;
@@ -83,7 +86,7 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
             }
             var mode = Enum.TryParse<ClaudeMode>(req.Mode, true, out var m) ? m : ClaudeMode.AcceptEdits;
             var session = await sessions.CreateAsync(projectId, mode, req.ResumeSessionId, req.Name,
-                req.Model, req.AgentName, req.Effort, personaId: personaId);
+                req.Model, req.AgentName, req.Effort, personaId: personaId, createdByUserId: UserId);
             return CreatedAtAction(nameof(GetAll), new { projectId }, session);
         }
         catch (KeyNotFoundException ex) { return NotFound(new { error = ex.Message }); }

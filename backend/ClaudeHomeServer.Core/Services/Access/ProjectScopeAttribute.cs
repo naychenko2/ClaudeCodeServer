@@ -80,14 +80,20 @@ public sealed class ProjectScopeAttribute : Attribute, IAsyncActionFilter, IOrde
             : access.Resolve(caller, id, Right);
         if (scope is null)
         {
-            // Проект виден, но права на запись нет (читатель; в S1 и редактор) — 403, а не 404:
+            // Проект виден, но права нет (читатель; в S1 и редактор) — 403, а не 404:
             // существование ему и так известно. WriteContent — то же «нет права на запись» для
-            // читателя (S2c-8): отказ различается правом, а не статусом
-            if (From == ScopeSource.Project && Right is ProjectRight.Write or ProjectRight.Configure or ProjectRight.WriteContent
+            // читателя (S2c-8); RunTurn — то же «нет» для читателя на действии хода: создании чата
+            // (S2d-1c): отказ различается правом, а не статусом
+            if (From == ScopeSource.Project && Right is ProjectRight.Write or ProjectRight.Configure
+                    or ProjectRight.WriteContent or ProjectRight.RunTurn
                 && access.Resolve(caller, id, ProjectRight.Read) is not null)
             {
-                context.Result = Fail(StatusCodes.Status403Forbidden,
-                    Right == ProjectRight.Configure ? "Только владелец проекта" : "Нет права на запись");
+                context.Result = Fail(StatusCodes.Status403Forbidden, Right switch
+                {
+                    ProjectRight.Configure => "Только владелец проекта",
+                    ProjectRight.RunTurn => "Нет права вести ход",
+                    _ => "Нет права на запись",
+                });
                 return;
             }
             context.Result = Fail(StatusCodes.Status404NotFound, "Не найдено");

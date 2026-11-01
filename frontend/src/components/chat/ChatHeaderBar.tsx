@@ -1822,7 +1822,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // На узких раскладках артефакты и настройки — плотная пара справа (gap 0 вместо
   // TB.gap), читаются как единая группа действий чата; на десктопе — как раньше, врозь.
   const summaryBtn = summaryAction?.render?.({ session, hasMessages, online });
-  const wikiActionsBtn = wikiActions?.render?.({ session, hasMessages, online });
+  const wikiActionsBtn = wikiActions?.render?.({ session, hasMessages, online, compact: isCompact || compact });
   const extractBtn = <ExtractTasksButton session={session} hasMessages={hasMessages} online={online} />;
   const retitleBtn = <RetitleButton session={session} hasMessages={hasMessages} online={online} />;
 

@@ -150,7 +150,7 @@ export const manifest: SubsystemManifest = {
       {
         name: 'wiki-chat-actions', order: 30,
         render: (ctx: ChatHeaderSummaryCtx) => (
-          <WikiChatActions session={ctx.session} hasMessages={ctx.hasMessages} online={ctx.online} />
+          <WikiChatActions session={ctx.session} hasMessages={ctx.hasMessages} online={ctx.online} compact={ctx.compact} />
         ),
       },
     ],

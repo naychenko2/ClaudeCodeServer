@@ -166,6 +166,8 @@ export interface ChatHeaderSummaryCtx {
   session: Session;
   hasMessages: boolean;
   online: boolean;
+  // Шапка узкая (мобила/планшет или колонка «Стены»): вклад сворачивает ряд кнопок в меню
+  compact?: boolean;
 }
 export interface ChatHeaderMenuItemCtx { run: () => void }
 

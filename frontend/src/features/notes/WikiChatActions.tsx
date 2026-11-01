@@ -134,12 +134,15 @@ function msgDot(color: string): CSSProperties {
   };
 }
 
-export function WikiChatActions({ session, hasMessages, online }: ChatHeaderSummaryCtx) {
+export function WikiChatActions({ session, hasMessages, online, compact }: ChatHeaderSummaryCtx) {
   const enabled = useFeature(FLAGS.llmWiki);
   // Тот же порог, что читает сама шапка (ChatHeaderBar:1357 isCompact = isMobile || isTablet
   // ⇔ ширина < TABLET_WIDE_MIN): ниже — ряд действий не переносится, три кнопки «Вики»
   // переполняют его (дефект ecec968a) — оболочка одна кнопка-меню
-  const isCompactHeader = useWindowWidth() < TABLET_WIDE_MIN;
+  // Шапка сама знает, что она сжата (в т.ч. узкая колонка «Стены» при широком окне) — её признак
+  // главнее ширины окна; без него (прямой вызов) — по окну
+  const windowCompact = useWindowWidth() < TABLET_WIDE_MIN;
+  const isCompactHeader = compact ?? windowCompact;
   const [state, setState] = useState<AnalyzeState>({ kind: 'idle' });
   const [chroniclePath, setChroniclePath] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);

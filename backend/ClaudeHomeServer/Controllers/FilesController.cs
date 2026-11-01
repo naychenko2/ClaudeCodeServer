@@ -336,7 +336,28 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
 
             // Целевая папка может не существовать (пользователь указал новую) — создаём
             if (!string.IsNullOrEmpty(dir)) files.CreateDirectory(root, dir);
-            files.WriteFile(root, targetRel, md);
+
+            // S2c-10 (хвост ревью R-S2c-8, карточка 1ac0075a п.1): запись целевого .md — под тем же
+            // замком пути, что SaveContent/Rename/Delete, и по тому же контракту If-Match: без них
+            // ToMarkdown молча затирал параллельную правку того же .md — ни хеша, ни 409. Конвертация
+            // — вне замка: сериализовать нужно запись, а не работу конвертера (соседняя правка не
+            // обязана ждать markitdown). Без If-Match — прежнее поведение (перезапись), но под замком.
+            var absTarget = FileService.SafeJoinPublic(root, targetRel);
+            var ifMatch = RequestIfMatch();
+            var sem = LockFor(absTarget);
+            await sem.WaitAsync();
+            try
+            {
+                if (ifMatch is not null)
+                {
+                    // Тот же канонический хеш, что у GET/SaveContent: назван клиентом версии —
+                    // пишем только её; параллельная правка того же .md проигрывает по хешу (409)
+                    var current = IsEtaggableText(root, targetRel, absTarget) ? CanonicalSha256OfTextFile(absTarget) : null;
+                    if (current != ifMatch) return Conflict(FileConflictBodyFor(root, targetRel, absTarget, current));
+                }
+                WriteAtomic(root, targetRel, absTarget, md);
+            }
+            finally { sem.Release(); }
             return Ok(new { savedPath = targetRel, markdown = md });
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -429,7 +450,10 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     // путь. Ключ — PathNormalizer (нижний регистр): на Windows это то же самое файл-имя
     // в разном регистре, на Linux — лишняя сериализация разных файлов, не ошибка.
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> _pathLocks = new();
-    private static SemaphoreSlim LockFor(string absPath) => LockByKey(PathNormalizer.NormalizePath(absPath));
+    // internal — чтобы тест мог читать состояние ИМЕННО этого замка (тот же приём, что у
+    // internal MaxEtagTextBytes ниже): «запись держит замок пути» проверяется состоянием замка
+    // в момент, когда запись доказанно внутри своей критической секции, а не гаданием по таймерам.
+    internal static SemaphoreSlim LockFor(string absPath) => LockByKey(PathNormalizer.NormalizePath(absPath));
     private static SemaphoreSlim LockByKey(string normalizedKey) =>
         _pathLocks.GetOrAdd(normalizedKey, _ => new SemaphoreSlim(1, 1));
 
@@ -544,6 +568,24 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         {
             logger.LogDebug(ex, "Не перенесли права файла при атомарной записи {Path}", abs);
         }
+    }
+
+    // Атомарная запись загрузки (S2c-10): тот же порядок, что WriteAtomic (содержимое → перенос
+    // прав → подмена), но стримингом, а не строкой: Upload даёт до 100 МБ, буферизовать их в
+    // памяти нельзя. Тот же временный файл (TreeExcludes) — наблюдатель глушит его события.
+    private async Task WriteAtomicFromFileAsync(string root, string path, string abs, IFormFile file)
+    {
+        var tmp = Path.Combine(Path.GetDirectoryName(abs)!, TreeExcludes.AtomicTempName(Path.GetFileName(abs)));
+        try
+        {
+            await using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true))
+                await file.CopyToAsync(fs);
+            CopyFileAttributesToTemp(abs, tmp);
+            System.IO.File.Move(tmp, abs, overwrite: true);
+        }
+        catch { try { System.IO.File.Delete(tmp); } catch { /* временный файл best-effort */ } throw; }
+        // Запись мимо FileService.Write* — уведомляем подписчиков (синк знаний) явно
+        files.NotifyMutated(root, path, FileMutationKind.Write);
     }
 
     // Тело 409 по К8: актуальное состояние файла на момент отказа — хеш, содержимое
@@ -759,13 +801,25 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
 
             var relativePath = string.IsNullOrEmpty(path) ? safeName : $"{path}/{safeName}";
 
-            // Стриминг на диск вместо буферизации всего файла в памяти
+            // S2c-10 (хвост ревью R-S2c-8, карточка 1ac0075a п.1): та же дверь, что у SaveContent:
+            // замок на путь, If-Match по тому же контракту, запись через временный файл. Без замка
+            // FileMode.Create на месте молча затирал параллельную правку того же пути — ни хеша,
+            // ни 409. Без If-Match — прежнее поведение (перезапись), но под замком.
             var safePath = FileService.SafeJoinPublic(root, relativePath);
             Directory.CreateDirectory(Path.GetDirectoryName(safePath)!);
-            await using (var fs = new FileStream(safePath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true))
-                await file.CopyToAsync(fs);
-            // Запись мимо FileService.Write* — уведомляем подписчиков (синк знаний) явно
-            files.NotifyMutated(root, relativePath, FileMutationKind.Write);
+            var ifMatch = RequestIfMatch();
+            var sem = LockFor(safePath);
+            await sem.WaitAsync();
+            try
+            {
+                if (ifMatch is not null)
+                {
+                    var current = IsEtaggableText(root, relativePath, safePath) ? CanonicalSha256OfTextFile(safePath) : null;
+                    if (current != ifMatch) return Conflict(FileConflictBodyFor(root, relativePath, safePath, current));
+                }
+                await WriteAtomicFromFileAsync(root, relativePath, safePath, file);
+            }
+            finally { sem.Release(); }
             return Ok();
         }
         catch (KeyNotFoundException) { return NotFound(); }

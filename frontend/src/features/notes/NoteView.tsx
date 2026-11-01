@@ -13,6 +13,12 @@ import {
   ensurePersonasLoaded, personaLabel, usePersonas, NO_AUTOFILL,
 } from 'aihome_shell/kit';
 import type { NoteSource } from '../../types';
+// Конфликт сохранения (S2c-F3, п.28): типизированный 409 заметки и тот же диалог с тем же
+// диффом, что у файлов (S2c-F2b) — своих текстов и своей формы здесь нет
+import { NoteConflictError } from '../../lib/api';
+import { conflictCopyName } from '../../lib/conflictCopyName';
+import { lineDiff } from '../../lib/lineDiff';
+import { SaveConflictDialog } from '../../components/SaveConflictDialog';
 import { NoteConnections } from './NoteConnections';
 import { NoteTasksSection } from './NoteTasksSection';
 import { useSphereOf } from '../../lib/useSphereOf';
@@ -24,6 +30,19 @@ import {
 
 // CodeMirror тяжёлый — редактор грузим лениво, только при входе в правку
 const NoteEditor = lazy(() => import('./NoteEditor').then(m => ({ default: m.NoteEditor })));
+
+// Конфликт сохранения заметки (S2c-F3, п.28): тело последнего 409 note_changed и свой текст
+// на момент попытки — та же форма, что в FileViewer (S2c-F2b). again — заметку изменили ещё
+// раз после «Заменить своей»; copyError — копия не создалась (диалог остаётся); mineAt —
+// время своей версии для варианта без диффа (оно одно: момент попытки сохранения).
+interface SaveConflictState {
+  error: NoteConflictError;
+  mine: string;
+  again: boolean;
+  copyError: boolean;
+  busy: boolean;
+  mineAt: string;
+}
 
 // Просмотр и правка одной заметки; связи (backlinks/исходящие/упоминания/граф) —
 // в правом сайдбаре на десктопе, снизу на мобильном.
@@ -65,8 +84,15 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   const [draftTitle, setDraftTitle] = useState('');
   const [draftBody, setDraftBody] = useState('');
   const [saving, setSaving] = useState(false);
+  const [saveConflict, setSaveConflict] = useState<SaveConflictState | null>(null);
   const editingRef = useRef(false);
   useEffect(() => { editingRef.current = editing; }, [editing]);
+  // Два тега (К8/S2c-F3): noteEtag — прочитанной версии (та, что показана сейчас),
+  // draftEtag — той версии, на которой стоит черновик редактора. Сохранение идёт по
+  // второму: если заметку изменили под нами, черновик честно упрётся в 409, а не ляжет
+  // поверх чужой правки молча.
+  const noteEtag = useRef<string | null>(null);
+  const draftEtag = useRef<string | null>(null);
   // Живые часы для бейджа срока истечения: Date.now() в рендере нечистый (purity),
   // а без тика отсчёт замирал до случайного перерендера. Интервал нужен только
   // когда бейдж реально виден.
@@ -104,14 +130,28 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     setLoading(true);
     // Читаем через офлайн-слой (черновик/кэш офлайн, сеть онлайн)
     getNoteForView(noteId)
-      .then(n => { if (alive) { setNote(n); if (!editingRef.current) { setDraftTitle(n.title); setDraftBody(n.content); } } })
+      .then(n => {
+        if (!alive) return;
+        setNote(n);
+        noteEtag.current = n.etag ?? null;
+        // Вне правки показанная версия и есть база следующей правки. В режиме правки базу
+        // черновика НЕ двигаем: событие notes_changed обновляет просмотр, но не текст,
+        // который человек правит, и не версию, против которой он пишет (п.28)
+        if (!editingRef.current) { setDraftTitle(n.title); setDraftBody(n.content); draftEtag.current = n.etag ?? null; }
+      })
       .catch(() => { if (alive) setNote(null); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
     // Перечитываем при смене заметки и при realtime-изменении (version)
   }, [noteId, version]);
 
-  const startEdit = () => { if (note) { setDraftTitle(note.title); setDraftBody(note.content); setEditing(true); } };
+  // Черновик начинается с показанной версии — её тег и становится базой сохранения
+  const startEdit = () => {
+    if (!note) return;
+    setDraftTitle(note.title); setDraftBody(note.content);
+    draftEtag.current = noteEtag.current;
+    setEditing(true);
+  };
 
   // Открыть чат, из которого создана заметка: проектный уедет в воркспейс своего
   // проекта, чат вне проектов — в раздел «Чаты» (решает общий хелпер)
@@ -329,18 +369,27 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     if (!note) return;
     setSaving(true);
     try {
+      // If-Match — только когда известна версия, на которой стоит черновик. Без него запрос
+      // ровно прежний: сервер 409 по конфликту не отдаёт вовсе, диалога нет (п.28).
       const updated = await api.notes.update(note.id, {
         // Переименование — только онлайн (офлайн title не меняем)
         title: draftTitle !== note.title ? draftTitle : undefined,
         content: draftBody,
-      });
+      }, draftEtag.current ?? undefined);
+      // 200 принёс новый ETag (NotesController.Update): следующая правка идёт по нему
+      noteEtag.current = updated.etag ?? null;
+      draftEtag.current = updated.etag ?? null;
       setEditing(false);
       bumpNotes();
       // id мог смениться при переименовании — переключаемся на новый
       if (updated.id !== note.id) onSelectNote(updated.id);
       else setNote(updated);
     } catch (e) {
+      // Из правки не выходим: несохранённые правки должны остаться (как в FileViewer)
+      if (e instanceof NoteConflictError) { openSaveConflict(e, draftBody); return; }
       if (e instanceof OfflineError) {
+        // Офлайн: правка остаётся локальной и в очереди несёт свою базу — при синхронизации
+        // она пишется обычным путём по If-Match, а не поверх чужой правки молча (notesOffline)
         await saveNoteOffline(note.id, { content: draftBody });
         setEditing(false);
         setNote({ ...note, content: draftBody });
@@ -349,6 +398,88 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     } finally {
       setSaving(false);
     }
+  };
+
+  // ——— Конфликт сохранения (S2c-F3, п.28) ———
+  // Вид и тексты держит SaveConflictDialog (S2c-F1); здесь — данные конфликта и три действия.
+  // Диалог закрывается, когда выбор исполнен; при повторном 409 «Заменить своей» он остаётся.
+  // По событию notes_changed диалог НЕ открывается: человек мог ещё не закончить правку.
+
+  // Имя автора копии — то же, чем приложение называет пользователя (App держит cc_display_name
+  // по ответу /auth/me). Имени нет — суффикс «без имени» (conflictCopyName).
+  const copyAuthorName = () => {
+    try { return localStorage.getItem('cc_display_name') || ''; } catch { return ''; }
+  };
+
+  const openSaveConflict = (e: NoteConflictError, mine: string) => {
+    setSaveConflict({
+      error: e, mine, again: false, copyError: false, busy: false,
+      // Другой даты у своей версии нет: это тот текст, который только что не записался
+      mineAt: relTime(new Date().toISOString()),
+    });
+  };
+
+  // «Сохранить мою копией» (primary): заметка-копия рядом в том же источнике и папке,
+  // оригинал не тронут. Заметка — всегда текст, поэтому дифф читается (без варианта draw.io)
+  const conflictSaveCopy = async () => {
+    const c = saveConflict;
+    if (!c || c.busy || !note) return;
+    setSaveConflict({ ...c, busy: true, copyError: false });
+    try {
+      await api.notes.create({
+        title: conflictCopyName(note.title, copyAuthorName()),
+        content: c.mine,
+        source: note.source,
+        folder: note.path.includes('/') ? note.path.slice(0, note.path.lastIndexOf('/')) : '',
+      });
+      setSaveConflict(null);
+      bumpNotes();
+    } catch {
+      // Копия не создалась — диалог остаётся, свой текст в редакторе (Notice copyError)
+      setSaveConflict({ ...c, busy: false, copyError: true });
+    }
+  };
+
+  // «Заменить своей»: повторная запись по актуальному состоянию — If-Match = sha256 из тела 409
+  const conflictReplace = async () => {
+    const c = saveConflict;
+    if (!c || c.busy || !note) return;
+    setSaveConflict({ ...c, busy: true });
+    try {
+      const updated = await api.notes.update(note.id, { content: c.mine }, c.error.sha256 ?? undefined);
+      noteEtag.current = updated.etag ?? null;
+      draftEtag.current = updated.etag ?? null;
+      setSaveConflict(null);
+      setEditing(false);
+      bumpNotes();
+      if (updated.id !== note.id) onSelectNote(updated.id);
+      else setNote(updated);
+    } catch (e) {
+      if (e instanceof NoteConflictError) {
+        // Заметку изменили ещё раз: диалог остаётся, с новым телом 409 и again (Notice над диффом)
+        setSaveConflict({ ...c, error: e, again: true, busy: false, mineAt: relTime(new Date().toISOString()) });
+        return;
+      }
+      // Прочий сбой (офлайн и т.п.) — обычный фидбек; свой текст остаётся в редакторе
+      setSaveConflict(null);
+      showToast('Заметка', e instanceof OfflineError ? 'Действие недоступно офлайн' : 'Не удалось сохранить заметку', 'error');
+    }
+  };
+
+  // «Взять чужую версию»: редактор и база — чужный текст и чужой тег; правка продолжается
+  // от актуальной копии, а не от проигравшей
+  const conflictTakeTheirs = () => {
+    const c = saveConflict;
+    if (!c) return;
+    setSaveConflict(null);
+    const theirs = c.error.content;
+    // Текста в 409 нет — брать нечего, но и терять нечего
+    if (theirs == null) return;
+    setNote(prev => prev ? { ...prev, content: theirs } : prev);
+    setDraftBody(theirs);
+    setEditing(true);
+    noteEtag.current = c.error.sha256 ?? null;
+    draftEtag.current = c.error.sha256 ?? null;
   };
 
   // Удаление в два шага: запрос подтверждения (диалог) → само удаление
@@ -490,7 +621,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
           {editing ? (
             /* В правке — «Отмена» + «Сохранить» в тулбаре, как у файлов */
             <>
-              <button onClick={() => { setEditing(false); setDraftBody(note.content); setDraftTitle(note.title); }} style={tbBtnGhost}>Отмена</button>
+              <button onClick={() => { setEditing(false); setDraftBody(note.content); setDraftTitle(note.title); draftEtag.current = noteEtag.current; }} style={tbBtnGhost}>Отмена</button>
               <button onClick={save} disabled={saving}
                 style={{ ...tbBtnPrimary, marginLeft: 6, ...(saving ? { opacity: 0.6, cursor: 'default' } : {}) }}>
                 {saving ? 'Сохранение…' : 'Сохранить'}
@@ -816,6 +947,41 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
           onClose={() => setShowMove(false)}
         />
       )}
+
+      {/* Конфликт сохранения (S2c-F3, п.28): 409 note_changed на запись по If-Match. Вид и
+          тексты — целиком SaveConflictDialog (S2c-F1), своих здесь нет. Заметка — всегда
+          текст, поэтому дифф обычный; выше потолка строк lineDiff — тот же вариант без диффа */}
+      {saveConflict && note && (() => {
+        const e = saveConflict.error;
+        const theirs = e.content;
+        const noText = theirs === null;
+        const diff = noText ? null : lineDiff(theirs, saveConflict.mine);
+        return (
+          <SaveConflictDialog
+            conflict={{
+              code: 'note_changed',
+              sha256: e.sha256 ?? '',
+              // author и source бэк заполнит с S3-3, сейчас всегда null — диалог сам
+              // подставит «Другой участник» и не подпишет источник
+              author: e.author ? { userId: e.author.userId, displayName: e.author.displayName ?? '' } : undefined,
+              changedAt: e.changedAt ?? undefined,
+              source: e.source ?? undefined,
+            }}
+            fileName={note.title}
+            copyName={conflictCopyName(note.title, copyAuthorName())}
+            diff={diff ?? undefined}
+            noDiff={noText || diff === null}
+            mineAt={saveConflict.mineAt}
+            again={saveConflict.again}
+            copyError={saveConflict.copyError}
+            busy={saveConflict.busy}
+            onSaveCopy={() => { void conflictSaveCopy(); }}
+            onReplace={() => { void conflictReplace(); }}
+            onTakeTheirs={conflictTakeTheirs}
+            onClose={() => setSaveConflict(null)}
+          />
+        );
+      })()}
 
       {deleteConfirm && (
         <ConfirmDialog

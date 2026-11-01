@@ -45,21 +45,24 @@ public class AudioEditorController(
 
     [HttpPost("quote")]
     public async Task<IActionResult> Quote(string projectId, [FromBody] AudioQuoteRequest? req, CancellationToken ct) =>
-        Gate(projectId, out var scope, out var denied) ? await QuoteIn(scope, req, ct) : denied;
+        Gate(projectId, out var scope, out var denied) && gate.TryOptionalChat(UserId, projectId, req?.SessionId, out denied)
+            ? await QuoteIn(scope, req, ct) : denied;
 
     [HttpPost("jobs")]
     [RequestSizeLimit(MaxJobBodyBytes)]
     [RequestFormLimits(MultipartBodyLengthLimit = MaxJobBodyBytes)]
     public async Task<IActionResult> Start(string projectId, [FromForm] AudioStartJobForm form, CancellationToken ct) =>
-        Gate(projectId, out var scope, out var denied) ? await StartIn(scope, form, ct) : denied;
+        Gate(projectId, out var scope, out var denied) && gate.TryOptionalChat(UserId, projectId, form.SessionId, out denied)
+            ? await StartIn(scope, form, ct) : denied;
 
     [HttpGet("jobs/{jobId}")]
     public IActionResult GetJob(string projectId, string jobId) =>
-        Gate(projectId, out var scope, out var denied) ? JobIn(scope, jobId) : denied;
+        Gate(projectId, out var scope, out var denied) ? (JobVisible(scope, jobId) ? JobIn(scope, jobId) : JobNotFound()) : denied;
 
     [HttpDelete("jobs/{jobId}")]
     public async Task<IActionResult> Cancel(string projectId, string jobId, CancellationToken ct) =>
-        Gate(projectId, out var scope, out var denied) ? await CancelIn(scope, jobId, ct) : denied;
+        Gate(projectId, out var scope, out var denied)
+            ? (JobVisible(scope, jobId) ? await CancelIn(scope, jobId, ct) : JobNotFound()) : denied;
 
     // ── Чат проекта: состояние, нити, файлы версий, сохранение ─────────────────────
 
@@ -162,6 +165,13 @@ public class AudioEditorController(
         await _threads.OnSavedAsync(Owner(scope), scope.Key, sessionId, threadId, result.Path,
             result.HasAudio ? null : result.Name);
         return Ok(result);
+    }
+
+    // Задача по id (находка 4.3): привязка к чату проекта — зритель обязан его видеть
+    private bool JobVisible(AudioEditScope scope, string jobId)
+    {
+        var chat = jobs.Get(Owner(scope), scope.Key, jobId)?.ChatSessionId;
+        return gate.TryArtifactChat(UserId, scope.Key, chat);
     }
 
     private bool Gate(string projectId, [NotNullWhen(true)] out AudioEditScope? scope,

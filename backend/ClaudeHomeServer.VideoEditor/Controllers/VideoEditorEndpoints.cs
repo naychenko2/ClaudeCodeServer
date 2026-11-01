@@ -231,7 +231,7 @@ public abstract class VideoEditorEndpoints(
     protected IActionResult VersionNotFound() =>
         Error(StatusCodes.Status404NotFound, VideoEditorErrors.VersionNotFound, "Версии нет в этой сцене");
 
-    private IActionResult JobNotFound() =>
+    protected IActionResult JobNotFound() =>
         Error(StatusCodes.Status404NotFound, VideoEditorErrors.JobNotFound, "Задача не найдена");
 
     protected IActionResult Map<T>(VideoEditCallResult<T> result, Func<T, IActionResult> ok)

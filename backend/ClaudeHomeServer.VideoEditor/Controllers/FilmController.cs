@@ -54,7 +54,7 @@ public class FilmController(
     [HttpPatch(VideoEditorRoutes.FilmPatchRoute)]
     public async Task<IActionResult> Patch(string projectId, [FromQuery] string? path, [FromBody] FilmPatch? patch,
         CancellationToken ct, [FromQuery] string? sessionId = null) =>
-        Gate(projectId, out var scope, out var denied)
+        Gate(projectId, out var scope, out var denied) && gate.TryOptionalChat(UserId, projectId, sessionId, out denied)
             ? FilmHttp.Map(await films.PatchAsync(Tenant(scope), scope, path, patch, VideoInitiators.Human, ct, sessionId), state => Ok(state))
             : denied;
 
@@ -63,6 +63,7 @@ public class FilmController(
         [FromQuery] long? contextRevision = null)
     {
         if (!Gate(projectId, out var scope, out var denied)) return denied;
+        if (!gate.TryOptionalChat(UserId, projectId, sessionId, out denied)) return denied;
         // Ревизия контекста (ADR-023 §Д2.1): основной объект обязан быть этим фильмом, иначе 409/400 до сборки
         if (contextRevision is { } revision && ContextRefusal(scope, path, sessionId, revision) is { } refusal)
             return refusal;

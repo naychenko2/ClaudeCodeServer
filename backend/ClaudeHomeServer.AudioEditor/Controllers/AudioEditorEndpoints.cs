@@ -484,7 +484,7 @@ public abstract class AudioEditorEndpoints(
     protected IActionResult VersionNotFound() =>
         Error(StatusCodes.Status404NotFound, AudioEditErrorCodes.VersionNotFound, "Версии нет в этом звуке");
 
-    private IActionResult JobNotFound() =>
+    protected IActionResult JobNotFound() =>
         Error(StatusCodes.Status404NotFound, AudioEditErrorCodes.JobNotFound, "Задача не найдена");
 
     private IActionResult NoProjectFiles() =>

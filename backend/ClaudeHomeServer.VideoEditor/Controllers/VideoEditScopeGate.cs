@@ -48,6 +48,21 @@ public sealed class VideoEditScopeGate(IProjectManager projects, ISessionDirecto
         return true;
     }
 
+    // sessionId из тела/query ручки проекта: пустой — «чата нет», непустой проходит ту же проверку
+    // приватности, что и sessionId в маршруте (находка 4.1 ревью R-S2d-1d)
+    public bool TryOptionalChat(string userId, string projectId, string? sessionId,
+        [NotNullWhen(false)] out IActionResult? denied)
+    {
+        denied = null;
+        return string.IsNullOrWhiteSpace(sessionId)
+               || TryProjectChat(userId, projectId, sessionId.Trim(), out _, out denied);
+    }
+
+    // Задача по id привязана к чату — зритель обязан его видеть; чата уже нет — как чужой (fail-closed)
+    public bool TryArtifactChat(string userId, string projectId, string? chatSessionId) =>
+        string.IsNullOrWhiteSpace(chatSessionId)
+        || TryProjectChat(userId, projectId, chatSessionId.Trim(), out _, out _);
+
     // Ручки личного чата вне проекта: владение проверяется напрямую. Без условия ProjectId is null личная
     // ручка открыла бы нити чата проекта мимо гейта проекта
     public bool TryPersonalChat(string userId, string sessionId,

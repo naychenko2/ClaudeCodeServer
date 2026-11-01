@@ -41,27 +41,32 @@ public class VideoEditorController(
 
     [HttpPost(VideoEditorRoutes.Quote)]
     public async Task<IActionResult> Quote(string projectId, [FromBody] VideoQuoteRequest? req, CancellationToken ct) =>
-        Gate(projectId, out var scope, out var denied) ? await QuoteIn(scope, req, ct) : denied;
+        Gate(projectId, out var scope, out var denied) && gate.TryOptionalChat(UserId, projectId, req?.SessionId, out denied)
+            ? await QuoteIn(scope, req, ct) : denied;
 
     [HttpPost(VideoEditorRoutes.Jobs)]
     public async Task<IActionResult> Start(string projectId, [FromBody] VideoLaunchRequest? req, CancellationToken ct) =>
-        Gate(projectId, out var scope, out var denied) ? await StartIn(scope, req, ct) : denied;
+        Gate(projectId, out var scope, out var denied) && gate.TryOptionalChat(UserId, projectId, req?.SessionId, out denied)
+            ? await StartIn(scope, req, ct) : denied;
 
     [HttpGet(VideoEditorRoutes.Job)]
     public IActionResult GetJob(string projectId, string jobId) =>
-        Gate(projectId, out var scope, out var denied) ? JobIn(scope, jobId) : denied;
+        Gate(projectId, out var scope, out var denied) ? (JobVisible(scope, jobId) ? JobIn(scope, jobId) : JobNotFound()) : denied;
 
     [HttpDelete(VideoEditorRoutes.Job)]
     public async Task<IActionResult> Cancel(string projectId, string jobId, CancellationToken ct) =>
-        Gate(projectId, out var scope, out var denied) ? await CancelIn(scope, jobId, ct) : denied;
+        Gate(projectId, out var scope, out var denied)
+            ? (JobVisible(scope, jobId) ? await CancelIn(scope, jobId, ct) : JobNotFound()) : denied;
 
     [HttpDelete(VideoEditorRoutes.JobUpscale)]
     public async Task<IActionResult> CancelUpscale(string projectId, string jobId, CancellationToken ct) =>
-        Gate(projectId, out var scope, out var denied) ? await CancelUpscaleIn(scope, jobId, ct) : denied;
+        Gate(projectId, out var scope, out var denied)
+            ? (JobVisible(scope, jobId) ? await CancelUpscaleIn(scope, jobId, ct) : JobNotFound()) : denied;
 
     [HttpPost(VideoEditorRoutes.FramesPreview)]
     public async Task<IActionResult> FramesPreview(string projectId, [FromBody] VideoFramesPreviewRequest? req, CancellationToken ct) =>
-        Gate(projectId, out var scope, out var denied) ? await FramesPreviewIn(scope, req, ct) : denied;
+        Gate(projectId, out var scope, out var denied) && gate.TryOptionalChat(UserId, projectId, req?.SessionId, out denied)
+            ? await FramesPreviewIn(scope, req, ct) : denied;
 
     // ── Чат проекта: состояние, сцены, файлы версий ───────────────────────────────
 
@@ -105,6 +110,13 @@ public class VideoEditorController(
     public IActionResult VersionFile(string projectId, string sessionId, string sceneId, string versionId,
         [FromQuery] bool download) =>
         ChatGate(projectId, sessionId, out var scope, out var denied) ? VersionFileIn(scope, sessionId, sceneId, versionId, download) : denied;
+
+    // Задача по id (находка 4.3): привязка к чату проекта — зритель обязан его видеть
+    private bool JobVisible(VideoEditScope scope, string jobId)
+    {
+        var chat = jobs.Get(Tenant(scope), scope.Key, jobId)?.ChatSessionId;
+        return gate.TryArtifactChat(UserId, scope.Key, chat);
+    }
 
     private bool Gate(string projectId, [NotNullWhen(true)] out VideoEditScope? scope,
         [NotNullWhen(false)] out IActionResult? denied) =>

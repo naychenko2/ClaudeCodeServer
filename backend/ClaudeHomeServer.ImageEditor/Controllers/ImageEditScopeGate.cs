@@ -48,6 +48,22 @@ public sealed class ImageEditScopeGate(IProjectManager projects, ISessionDirecto
         return true;
     }
 
+    // sessionId из тела/query/формы ручки проекта: пустой — «чата нет», непустой проходит ту же
+    // проверку приватности, что и sessionId в маршруте (находка 4.1 ревью R-S2d-1d)
+    public bool TryOptionalChat(string userId, string projectId, string? sessionId,
+        [NotNullWhen(false)] out IActionResult? denied)
+    {
+        denied = null;
+        return string.IsNullOrWhiteSpace(sessionId)
+               || TryProjectChat(userId, projectId, sessionId.Trim(), out _, out denied);
+    }
+
+    // Артефакт по id (задача, вариант, шаг): привязан к чату — зритель обязан его видеть (находка 4.3).
+    // Без привязки — не гейтим; чат, которого уже нет, неотличим от чужого приватного (fail-closed)
+    public bool TryArtifactChat(string userId, string projectId, string? chatSessionId) =>
+        string.IsNullOrWhiteSpace(chatSessionId)
+        || TryProjectChat(userId, projectId, chatSessionId.Trim(), out _, out _);
+
     // Ручки личного чата вне проекта: владение проверяется напрямую. Без условия ProjectId is null
     // личная ручка открыла бы нити чата проекта мимо гейта проекта (ADR-016, FileBound)
     public bool TryPersonalChat(string userId, string sessionId,

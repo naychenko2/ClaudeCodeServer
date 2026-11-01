@@ -8,6 +8,8 @@
 # вердиктом в дифе; стереть — когда место переведено на TenantOwnerId.
 # S2a-1 (доработка): TasksController +3 — UserId уходит в ExecuteAsync как актор хода исполнителя
 # (ActorUserId), а не ключ хранилищ: задача и её чат уже резолвлены по TenantOwnerId.
+# S2d-1e: в трёх шлюзах редакторов +2 (TryOptionalChat, TryArtifactChat) — id вызывающего уходит только в
+# проверку видимости чата (SessionAccess.CanSee), ключом хранилищ не служит: sessionId из тела/query и чат артефакта.
 # S1-3c: точка доступа вертикали Architecture — id вызывающего входит только в IProjectAccess
 # (запрошенное право, затем чтение, чтобы различить 403 и 404); ключом хранилищ здесь ничего
 # не стало: модель проекта берётся по id из маршрута, автор записи — человек-вызывающий.
@@ -63,11 +65,11 @@
 # S2d-1d: у трёх гейтов редакторов 3→4 — id вызывающего второй раз входит только в SessionAccess.CanSee
 # (видимость приватного чата); ключом хранилищ он не служит, арендатор — Project.OwnerId.
 backend/ClaudeHomeServer.Architecture/Controllers/ArchitectureController.cs|2
-backend/ClaudeHomeServer.AudioEditor/Controllers/AudioEditScopeGate.cs|4
-backend/ClaudeHomeServer.ImageEditor/Controllers/ImageEditScopeGate.cs|4
+backend/ClaudeHomeServer.AudioEditor/Controllers/AudioEditScopeGate.cs|6
+backend/ClaudeHomeServer.ImageEditor/Controllers/ImageEditScopeGate.cs|6
 backend/ClaudeHomeServer.Plugins/Controllers/PluginBridgeController.cs|5
 backend/ClaudeHomeServer.Spend/Controllers/SpendController.cs|8
-backend/ClaudeHomeServer.VideoEditor/Controllers/VideoEditScopeGate.cs|4
+backend/ClaudeHomeServer.VideoEditor/Controllers/VideoEditScopeGate.cs|6
 # S2c-6 (доработка 2): в словарь добавлено имя `actor` (локальная переменная тулсетов). WorkspaceToolset|1 —
 # access.ResolveSession(actor, sid): id актора входит только в проверку права на чат-адресат, не ключ хранилищ.
 # ProjectsController 14→15 — GetEvents: `actor` здесь необязательный query-фильтр ленты событий, а не id

@@ -51,13 +51,15 @@ public class ImageEditorController(
 
     [HttpPost("quote")]
     public async Task<IActionResult> Quote(string projectId, [FromBody] ImageEditQuoteRequest req, CancellationToken ct) =>
-        Gate(projectId, out var scope, out var denied) ? await QuoteIn(scope, req, ct) : denied;
+        Gate(projectId, out var scope, out var denied) && gate.TryOptionalChat(UserId, projectId, req.SessionId, out denied)
+            ? await QuoteIn(scope, req, ct) : denied;
 
     [HttpPost("jobs")]
     [RequestSizeLimit(MaxJobBodyBytes)]
     [RequestFormLimits(MultipartBodyLengthLimit = MaxJobBodyBytes)]
     public async Task<IActionResult> Start(string projectId, [FromForm] StartJobForm form, CancellationToken ct) =>
-        Gate(projectId, out var scope, out var denied) ? await StartIn(scope, form, ct) : denied;
+        Gate(projectId, out var scope, out var denied) && gate.TryOptionalChat(UserId, projectId, form.SessionId, out denied)
+            ? await StartIn(scope, form, ct) : denied;
 
     // Образец с диска человека в рабочую папку модуля (ADR-023 §2.3): дальше — attachRef({kind: 'image', ref: {upload}})
     [HttpPost("uploads")]
@@ -68,32 +70,41 @@ public class ImageEditorController(
 
     [HttpGet("jobs/{jobId}")]
     public IActionResult GetJob(string projectId, string jobId) =>
-        Gate(projectId, out var scope, out var denied) ? JobIn(scope, jobId) : denied;
+        Gate(projectId, out var scope, out var denied) ? (JobVisible(scope, jobId) ? JobIn(scope, jobId) : JobNotFound()) : denied;
 
     [HttpDelete("jobs/{jobId}")]
     public async Task<IActionResult> Cancel(string projectId, string jobId, CancellationToken ct) =>
-        Gate(projectId, out var scope, out var denied) ? await CancelIn(scope, jobId, ct) : denied;
+        Gate(projectId, out var scope, out var denied)
+            ? (JobVisible(scope, jobId) ? await CancelIn(scope, jobId, ct) : JobNotFound()) : denied;
 
     [HttpGet("jobs/{jobId}/variants/{variant:int}")]
     public IActionResult Variant(string projectId, string jobId, int variant) =>
-        Gate(projectId, out var scope, out var denied) ? VariantIn(scope, jobId, variant) : denied;
+        Gate(projectId, out var scope, out var denied)
+            ? (JobVisible(scope, jobId) ? VariantIn(scope, jobId, variant) : JobNotFound()) : denied;
 
     // ── Правки без ИИ и шаги истории (ADR-018 §9) ──────────────────────────────────
 
     [HttpPost("transform")]
     public async Task<IActionResult> Transform(string projectId, [FromBody] ImageTransformRequest req,
         [FromQuery] bool dryRun, CancellationToken ct) =>
-        Gate(projectId, out var scope, out var denied) ? await TransformIn(scope, req, dryRun, ct) : denied;
+        Gate(projectId, out var scope, out var denied)
+            ? (BaseVisible(scope, req.Base) ? await TransformIn(scope, req, dryRun, ct)
+                : Error(StatusCodes.Status404NotFound, ImageEditErrorCodes.JobNotFound, "Задача не найдена"))
+            : denied;
 
     // Картинка шага истории — для холста и миниатюр; токен через ?access_token=, как у вариантов
     [HttpGet("steps/{stepId}")]
     public IActionResult Step(string projectId, string stepId) =>
-        Gate(projectId, out var scope, out var denied) ? StepIn(scope, stepId) : denied;
+        Gate(projectId, out var scope, out var denied)
+            ? (StepVisible(scope, stepId) ? StepIn(scope, stepId)
+                : Error(StatusCodes.Status404NotFound, ImageEditErrorCodes.StepNotFound, "Шаг истории не найден"))
+            : denied;
 
     [HttpPost("save")]
     public async Task<IActionResult> Save(string projectId, [FromBody] ImageEditSaveRequest req)
     {
         if (!ProjectGate(projectId, out var project, out var denied)) return denied;
+        if (!gate.TryOptionalChat(UserId, projectId, req.SessionId, out denied)) return denied;
         if (saver is null) return JobsUnavailable();
         if (Raster is null) return RasterUnavailable();
 
@@ -122,6 +133,8 @@ public class ImageEditorController(
         if (hasStep)
         {
             if (Steps is null) return JobsUnavailable();
+            if (!StepVisible(ImageEditScope.Of(project), req.StepId!.Trim()))
+                return Error(StatusCodes.Status404NotFound, ImageEditErrorCodes.StepNotFound, "Шаг истории не найден");
             image = Steps.Open(ImageEditScope.TenantOf(project), projectId, req.StepId!.Trim())?.Image;
             if (image is null)
                 return Error(StatusCodes.Status404NotFound, ImageEditErrorCodes.StepNotFound, "Шаг истории не найден");
@@ -129,6 +142,7 @@ public class ImageEditorController(
         else
         {
             if (Jobs is null) return JobsUnavailable();
+            if (!JobVisible(ImageEditScope.Of(project), req.JobId!.Trim())) return JobNotFound();
             image = Jobs.OpenVariant(ImageEditScope.TenantOf(project), projectId, req.JobId!.Trim(), req.Variant);
             if (image is null) return JobNotFound();
         }
@@ -380,6 +394,22 @@ public class ImageEditorController(
     private bool ProjectGate(string projectId, [NotNullWhen(true)] out Project? project,
         [NotNullWhen(false)] out IActionResult? denied) =>
         gate.TryProject(UserId, projectId, out project, out denied);
+
+    // Артефакты по id (находка 4.3): привязка к чату проекта — зритель обязан его видеть. Задачи нет —
+    // true: «не найдена» ответит сама ручка
+    private bool JobVisible(ImageEditScope scope, string jobId)
+    {
+        var chat = Jobs?.Get(scope.Tenant, scope.Key, jobId)?.ChatSessionId;
+        return gate.TryArtifactChat(UserId, scope.Key, chat);
+    }
+
+    private bool StepVisible(ImageEditScope scope, string stepId) =>
+        Steps?.Open(scope.Tenant, scope.Key, stepId) is not { Step.JobId: { } jobId } || JobVisible(scope, jobId);
+
+    private bool BaseVisible(ImageEditScope scope, ImageTransformBase? b) =>
+        b is null
+        || (string.IsNullOrWhiteSpace(b.JobId) || JobVisible(scope, b.JobId.Trim()))
+        && (string.IsNullOrWhiteSpace(b.StepId) || StepVisible(scope, b.StepId.Trim()));
 
     private IActionResult CharacterNotFound() =>
         Error(StatusCodes.Status404NotFound, ImageEditErrorCodes.CharacterNotFound, "Персонаж не найден");

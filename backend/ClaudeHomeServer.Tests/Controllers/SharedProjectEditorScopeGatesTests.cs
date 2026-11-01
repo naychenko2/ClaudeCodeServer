@@ -136,6 +136,54 @@ public sealed class SharedProjectEditorScopeGatesTests : IDisposable
         Gate(_ownerId, "open").Should().BeTrue($"{name}: общий чат проходит как раньше");
     }
 
+    // S2d-1e: sessionId из тела/query/формы (TryOptionalChat) и чат, к которому привязан артефакт по id
+    // (TryArtifactChat), проходят ту же видимость, что и sessionId в маршруте
+    [Theory]
+    [InlineData("image")]
+    [InlineData("audio")]
+    [InlineData("video")]
+    public void SessionIdИзТелаИАртефакт_ПроходятПроверкуПриватностиЧата(string name)
+    {
+        var priv = new Session { Id = "priv", ProjectId = _projectId, PrivateToUserId = _editorId };
+        var open = new Session { Id = "open", ProjectId = _projectId };
+        var foreign = new Session { Id = "foreign", ProjectId = "other-project" };
+        var dir = new WithSessions(priv, open, foreign);
+        var access = Access();
+
+        (bool Optional, IActionResult? Denied) Optional(string? s)
+        {
+            IActionResult? d;
+            var ok = name switch
+            {
+                "image" => new ImageEditScopeGate(_projects, dir, access).TryOptionalChat(_ownerId, _projectId, s, out d),
+                "audio" => new AudioEditScopeGate(_projects, dir, access).TryOptionalChat(_ownerId, _projectId, s, out d),
+                _ => new VideoEditScopeGate(_projects, dir, access).TryOptionalChat(_ownerId, _projectId, s, out d),
+            };
+            return (ok, d);
+        }
+
+        bool Artifact(string? s) => name switch
+        {
+            "image" => new ImageEditScopeGate(_projects, dir, access).TryArtifactChat(_ownerId, _projectId, s),
+            "audio" => new AudioEditScopeGate(_projects, dir, access).TryArtifactChat(_ownerId, _projectId, s),
+            _ => new VideoEditScopeGate(_projects, dir, access).TryArtifactChat(_ownerId, _projectId, s),
+        };
+
+        Optional(null).Optional.Should().BeTrue($"{name}: чата в запросе нет — гейтить нечего");
+        Optional(" ").Optional.Should().BeTrue(name);
+        Optional("open").Optional.Should().BeTrue($"{name}: общий чат проходит");
+        var (okPriv, deniedPriv) = Optional("priv");
+        okPriv.Should().BeFalse($"{name}: чужой приватный чат из тела закрыт");
+        deniedPriv.Should().BeOfType<ObjectResult>().Which.StatusCode.Should().Be(404);
+        Optional("foreign").Optional.Should().BeFalse($"{name}: чат другого проекта из тела закрыт");
+        Optional("missing").Optional.Should().BeFalse($"{name}: несуществующий чат — 404");
+
+        Artifact(null).Should().BeTrue($"{name}: артефакт без чата не гейтим");
+        Artifact("open").Should().BeTrue(name);
+        Artifact("priv").Should().BeFalse($"{name}: артефакт чужого приватного чата скрыт");
+        Artifact("missing").Should().BeFalse($"{name}: чата уже нет — fail-closed");
+    }
+
     private sealed class WithSessions(params Session[] sessions) : ISessionDirectory
     {
         public Session? GetById(string id) => sessions.FirstOrDefault(s => s.Id == id);

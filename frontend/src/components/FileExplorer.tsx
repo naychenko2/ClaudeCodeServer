@@ -42,6 +42,7 @@ import { useGitState, ensureGit } from '../lib/git';
 import { useOnline } from '../hooks/useOnline';
 import { useContextButton } from '../features/chatContext/useContextButton';
 import { useFileContextMenu } from '../features/chatContext/useFileContextMenu';
+import { canWriteContent } from '../features/projects/members/contentRights';
 import { EmptyState } from './EmptyState';
 import { DeviceAgentGate } from './DeviceAgentGate';
 import { CapabilityUnavailable } from './CapabilityGate';
@@ -743,12 +744,18 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
   // Контрол записи рисуется, только если у проекта сейчас есть его маршрут: у агента — не все,
   // с другого устройства (ретранслятор) — ни одного. Список маршрутов — deviceAgentRoutes.ts
   const { can } = useProjectRoutes(project);
-  const canUpload = can('POST files/upload');
-  const canToMarkdown = can('POST files/document/to-markdown');
-  const canCreateFile = can('POST files/create');
-  const canMkdir = can('POST files/mkdir');
-  const canRename = can('POST files/rename');
-  const canDelete = can('DELETE files');
+  // Маршрут + право записи по роли (S2c-F4b): контрол записи есть, только если у проекта
+  // есть маршрут И роль умеет эту дверь контента (contentRights.ts). Закрытый — ПРЯЧЕТ,
+  // не отключён: решение живёт в одном месте, а не по каждому контролу.
+  const canUpload = can('POST files/upload') && canWriteContent(project, 'file.upload');
+  const canToMarkdown = can('POST files/document/to-markdown') && canWriteContent(project, 'file.toMarkdown');
+  const canCreateFile = can('POST files/create') && canWriteContent(project, 'file.create');
+  const canMkdir = can('POST files/mkdir') && canWriteContent(project, 'file.mkdir');
+  const canRename = can('POST files/rename') && canWriteContent(project, 'file.rename');
+  const canDelete = can('DELETE files') && canWriteContent(project, 'file.delete');
+  // Удаление папки — отдельная дверь ('dir.delete'): редактору закрыта на бэке, закрыта
+  // и здесь. Удаление файла ('file.delete') — не удаление папки.
+  const canDeleteDir = can('DELETE files') && canWriteContent(project, 'dir.delete');
   const canCreate = canCreateFile || canMkdir || canUpload;
   const hasPanelHeader = useHasPanelHeader();
   const marks = useSyncMarks(project.id);
@@ -2180,15 +2187,17 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
         add(!entry.isDirectory && !inNotesVault(entry.path) && newNoteDialogC,
           <MenuItem key="note-about" icon={<MI_NotePlus />} label="Заметка о файле" onClick={() => { close(); setNoteDialog({ file: entry.path }); }} />);
 
-        // «Заметки» (vault) не переименовываем/не удаляем — сломается база знаний
-        if (!isNotesRoot(entry) && online && (canRename || canDelete)) {
+        // «Заметки» (vault) не переименовываем/не удаляем — сломается база знаний.
+        // Удаление — по типу записи: у папки своя дверь 'dir.delete', у файла 'file.delete'
+        const canDeleteEntry = entry.isDirectory ? canDeleteDir : canDelete;
+        if (!isNotesRoot(entry) && online && (canRename || canDeleteEntry)) {
           sep('sep-1');
           if (canRename) {
             items.push(<MenuItem key="rename" icon={<MI_Rename />} label="Переименовать" onClick={() => startRename(entry)} />);
             items.push(<MenuItem key="move" icon={<MI_Move />} label="Переместить в…" onClick={() => { close(); setMovingEntry(entry); setShowMoveModal(true); }} />);
           }
-          if (canRename && canDelete) sep('sep-2');
-          if (canDelete)
+          if (canRename && canDeleteEntry) sep('sep-2');
+          if (canDeleteEntry)
             items.push(<MenuItem key="delete" icon={<MI_Trash />} label="Удалить" danger onClick={() => { close(); setDeleteConfirm(entry); }} />);
         }
 

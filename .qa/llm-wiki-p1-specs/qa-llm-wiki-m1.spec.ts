@@ -93,11 +93,13 @@ test('п.1 — 360 и 320: одна кнопка «Вики», шапка без
     await page.waitForTimeout(2500);
 
     const trig = wikiTrigger(page);
+    expect(await trig.count(), `на ${label} должен быть ровно один триггер «Вики»`).toBe(1);
     console.log(`[${label}] триггеров «Вики» в шапке:`, await trig.count());
     console.log(`[${label}] кнопок ряда wiki-chat-* (desktop-ряд):`, await page.locator('[data-testid^="wiki-chat-"]').count());
 
     const box = await trig.boundingBox();
     console.log(`[${label}] триггер:`, JSON.stringify(box));
+    expect(box!.height, `цель касания триггера на ${label} (≥40px)`).toBeGreaterThanOrEqual(40);
 
     // Горизонтальный скролл документа и шапки
     const overflow = await page.evaluate(() => {
@@ -123,6 +125,8 @@ test('п.1 — 360 и 320: одна кнопка «Вики», шапка без
       };
     });
     console.log(`[${label}] переполнение:`, JSON.stringify(overflow));
+    expect(overflow.docScrollW, `на ${label} документ не должен скроллиться по горизонтали`).toBe(overflow.docClientW);
+    expect(overflow.headerScrollW, `на ${label} шапка не должна переполняться`).toBe(overflow.headerClientW);
 
     // Все интерактивные элементы верхних 140px — в пределах экрана?
     const escapes = await page.evaluate((vw: number) => {
@@ -138,6 +142,7 @@ test('п.1 — 360 и 320: одна кнопка «Вики», шапка без
       return out;
     }, vp.width);
     console.log(`[${label}] вылезающие за экран элементы шапки:`, JSON.stringify(escapes));
+    expect(escapes, `на ${label} ни один элемент шапки не должен выходить за экран`).toEqual([]);
 
     await shot(page, `m1-header-${label}.png`);
   }
@@ -161,12 +166,14 @@ test('п.2 — меню на 360: боттом-шит, три пункта, от
 
   const items = page.locator('[role="dialog"] [role="menuitem"]');
   const n = await items.count();
+  expect(n, 'в меню должно быть три пункта').toBe(3);
   console.log('[меню] пунктов:', n);
   for (let i = 0; i < n; i++) {
     const it = items.nth(i);
     const b = await it.boundingBox();
     const color = await it.evaluate(el => getComputedStyle(el).color);
     console.log(`[меню] пункт ${i}: «${(await it.innerText()).trim()}» высота=${b?.height} цвет=${color}`);
+    expect(b!.height, `пункт меню ${i} (цель ≥44px)`).toBeGreaterThanOrEqual(44);
   }
   console.log('[меню] тексты:', JSON.stringify(await items.allInnerTexts()));
   const dangerColor = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--c-danger-text'));
@@ -182,6 +189,7 @@ test('п.2 — меню на 360: боттом-шит, три пункта, от
   console.log('[откат] заголовок подтверждения найден:', confirmText);
   console.log('[откат] текст подтверждения:', JSON.stringify(confirmBody.slice(0, 400)));
   const confirmBtn = page.getByRole('button', { name: 'Откатить всё', exact: true }).first();
+  expect(await confirmBtn.count(), 'кнопка подтверждения «Откатить всё» должна быть').toBe(1);
   console.log('[откат] кнопка подтверждения:', await confirmBtn.count());
   await confirmBtn.click();
   await page.waitForTimeout(4000);
@@ -244,12 +252,15 @@ test('п.3 — точка-сигнал на закрытом триггере: �
     if (colors.some(c => c === 'rgb(94, 139, 78)')) break;
   }
   console.log('[точка] на закрытом триггере после разбора:', JSON.stringify(dotAfterAnalyze));
+  expect((dotAfterAnalyze as { count: number }).count, 'на закрытом триггере после разбора должна быть точка').toBeGreaterThanOrEqual(1);
   await shot(page, 'm1-dot-after-analyze-360.png');
 
   // Reload: статус восстанавливается → точка есть
   await page.reload();
   await page.waitForTimeout(8000);
-  console.log('[точка] после reload страницы:', JSON.stringify(await dotInfo(page)));
+  const dotReload = await dotInfo(page);
+  console.log('[точка] после reload страницы:', JSON.stringify(dotReload));
+  expect(dotReload.count, 'после reload восстановленный статус должен давать точку').toBeGreaterThanOrEqual(1);
   await shot(page, 'm1-dot-after-reload-360.png');
 
   // Откат на чате с применённым пакетом (откат-E, пакет applied, не откатан) → точка приглушённая
@@ -262,7 +273,9 @@ test('п.3 — точка-сигнал на закрытом триггере: �
   await page.waitForTimeout(4000);
   await page.keyboard.press('Escape');
   await page.waitForTimeout(1200);
-  console.log('[точка] после отката:', JSON.stringify(await dotInfo(page)));
+  const dotRetract = await dotInfo(page);
+  console.log('[точка] после отката:', JSON.stringify(dotRetract));
+  expect(dotRetract.count, 'после отката на триггере должна быть приглушённая точка').toBeGreaterThanOrEqual(1);
   await shot(page, 'm1-dot-after-retract-360.png');
 });
 
@@ -341,6 +354,7 @@ test('п.4 — 1280: прежний ряд из трёх кнопок, те же
   await page.setViewportSize(D);
   await openChat(page, CHAT_DONE, 'QA-M1-точка-A');
   const btns = page.locator('[data-testid^="wiki-chat-"]');
+  expect(await btns.count(), 'на 1280 должен остаться ряд из трёх кнопок').toBe(3);
   console.log('[1280] кнопок вики в шапке:', await btns.count());
   console.log('[1280] подписи:', JSON.stringify(await btns.allInnerTexts()));
   for (const b of await btns.all()) {
@@ -465,6 +479,8 @@ test('п.5 — флаг llm-wiki выключен: ни кнопки, ни за�
 
   await page.setViewportSize(D);
   await openChat(page, CHAT_DONE, 'QA-M1-точка-A');
+  expect(await page.locator('[data-testid^="wiki-chat-"]').count(), 'при флаге выкл. кнопок быть не должно').toBe(0);
+  expect(await wikiTrigger(page).count(), 'при флаге выкл. триггера быть не должно').toBe(0);
   console.log('[флаг] кнопок wiki-chat-* при флаге выкл:', await page.locator('[data-testid^="wiki-chat-"]').count());
   console.log('[флаг] триггеров «Вики» при флаге выкл:', await wikiTrigger(page).count());
   await shot(page, 'm1-flagoff-chat-1280.png');
@@ -475,6 +491,7 @@ test('п.5 — флаг llm-wiki выключен: ни кнопки, ни за�
   console.log('[флаг] на 360 триггеров при выкл:', await wikiTrigger(page).count());
   await shot(page, 'm1-flagoff-chat-360.png');
   console.log('[флаг] запросы /api/wiki за сеанс:', JSON.stringify(reqs));
+  expect(reqs, 'при флаге выкл. запросов /api/wiki быть не должно').toEqual([]);
 
   // Возвращаем флаг
   const put2 = await fetch(`${baseURL}/api/feature-flags/llm-wiki`, {

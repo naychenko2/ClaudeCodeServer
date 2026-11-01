@@ -325,7 +325,7 @@ public class WikiControllerTests : IDisposable
     {
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", user)], "test"));
-        return new WikiController(_keeper, _projects, _spheres, _lint, _journal, flagsOn ? new WikiFlagOn() : null, _config, _capture, _ingest)
+        return new WikiController(_keeper, _projects, _spheres, _lint, _journal, flagsOn ? new WikiFlagOn() : new WikiFlagOff(), _config, _capture, _ingest)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
@@ -343,6 +343,12 @@ public class WikiControllerTests : IDisposable
     private sealed class WikiFlagOn : ClaudeHomeServer.Services.Composition.IFeatureFlagGate
     {
         public bool IsEnabled(string userId, string key) => key == FeatureFlagKeys.LlmWiki;
+    }
+
+    // Боевой шлюз флагов не бывает null: «флаг выключен» — это шлюз, отвечающий «нет» на ключ llm-wiki.
+    private sealed class WikiFlagOff : ClaudeHomeServer.Services.Composition.IFeatureFlagGate
+    {
+        public bool IsEnabled(string userId, string key) => key != FeatureFlagKeys.LlmWiki;
     }
 
     // Сфер нет: предмет этих тестов — проектные разделы и сироты.

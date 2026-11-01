@@ -364,7 +364,7 @@ public class WikiChatsControllerTests : IDisposable
     {
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, user)], "test"));
-        return new WikiChatsController(_sessions, _chat, _config, flagsOn ? new WikiFlagOn() : null)
+        return new WikiChatsController(_sessions, _chat, _config, flagsOn ? new WikiFlagOn() : new WikiFlagOff())
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
@@ -449,6 +449,12 @@ public class WikiChatsControllerTests : IDisposable
     private sealed class WikiFlagOn : ClaudeHomeServer.Services.Composition.IFeatureFlagGate
     {
         public bool IsEnabled(string userId, string key) => key == FeatureFlagKeys.LlmWiki;
+    }
+
+    // Боевой шлюз флагов не бывает null: «флаг выключен» — это шлюз, отвечающий «нет» на ключ llm-wiki.
+    private sealed class WikiFlagOff : ClaudeHomeServer.Services.Composition.IFeatureFlagGate
+    {
+        public bool IsEnabled(string userId, string key) => key != FeatureFlagKeys.LlmWiki;
     }
 
     private sealed class NoSpheres : ISphereDirectory

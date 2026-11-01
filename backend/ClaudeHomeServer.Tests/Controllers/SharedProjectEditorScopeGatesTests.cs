@@ -6,7 +6,15 @@ using ClaudeHomeServer.Services.AudioEditor.Controllers;
 using ClaudeHomeServer.Services.ImageEditor.Controllers;
 using ClaudeHomeServer.Services.VideoEditor.Controllers;
 using FluentAssertions;
+using System.Security.Claims;
+using ClaudeHomeServer.Services.AudioEditor;
+using ClaudeHomeServer.Services.ImageEditor;
+using ClaudeHomeServer.Services.AudioEditor.Jobs;
+using ClaudeHomeServer.Services.VideoEditor;
+using ClaudeHomeServer.Services.VideoEditor.Contracts;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Moq;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -182,6 +190,74 @@ public sealed class SharedProjectEditorScopeGatesTests : IDisposable
         Artifact("open").Should().BeTrue(name);
         Artifact("priv").Should().BeFalse($"{name}: артефакт чужого приватного чата скрыт");
         Artifact("missing").Should().BeFalse($"{name}: чата уже нет — fail-closed");
+    }
+
+    // S2d-1e: настоящие контроллеры. Владелец проекта шлёт sessionId чужого приватного чата в теле/форме/query —
+    // каждая ручка отвечает 404 до тела ручки (зависимости тела — null!: до них дело не доходит)
+    private static ControllerContext AsUser(string userId) => new()
+    {
+        HttpContext = new DefaultHttpContext { User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", userId)])) },
+    };
+
+    private (ISessionDirectory Dir, ProjectAccessService Access) PrivateChat() =>
+        (new WithSessions(new Session { Id = "priv", ProjectId = _projectId, PrivateToUserId = _editorId }), Access());
+
+    // 404 именно от гейта чата (а не «котировка не найдена» и т.п. из тела ручки)
+    private static void Denied404(IActionResult? result, string what, string code = "chat_not_found")
+    {
+        var obj = result.Should().BeOfType<ObjectResult>(what).Subject;
+        obj.StatusCode.Should().Be(404, what);
+        System.Text.Json.JsonSerializer.Serialize(obj.Value).Should().Contain(code, what);
+    }
+
+    [Fact]
+    public async Task ImageEditor_SessionIdВТелеИАртефакты_ЧужойПриватныйЧат404()
+    {
+        var (dir, access) = PrivateChat();
+        var gate = new ImageEditScopeGate(_projects, dir, access);
+        var jobs = new Mock<ClaudeHomeServer.Services.ImageEditor.IImageEditJobs>();
+        jobs.Setup(j => j.Get(It.IsAny<string>(), It.IsAny<string>(), "job-priv"))
+            .Returns(new ImageEditJobDto("job-priv", _projectId, default, "p", "m", [1], null, null, null, null, null,
+                DateTime.UtcNow, "priv"));
+        jobs.Setup(j => j.Get(It.IsAny<string>(), It.IsAny<string>(), "job-open"))
+            .Returns(new ImageEditJobDto("job-open", _projectId, default, "p", "m", [1], null, null, null, null, null,
+                DateTime.UtcNow));
+        var c = new ImageEditorController(gate, [], null!, jobs: jobs.Object, saver: Mock.Of<IImageEditSaver>())
+            { ControllerContext = AsUser(_ownerId) };
+
+        Denied404(await c.Quote(_projectId, new ImageEditQuoteRequest("p", "m", default, default, 1, false, SessionId: "priv"), default), "quote");
+        Denied404(await c.Start(_projectId, new ImageEditorEndpoints.StartJobForm { SessionId = "priv" }, default), "jobs");
+        Denied404(await c.Save(_projectId, new ImageEditSaveRequest("j", 0, null, null, null, SessionId: "priv")), "save");
+        Denied404(c.GetJob(_projectId, "job-priv"), "GET job (артефакт)", "job_not_found");
+        Denied404(await c.Cancel(_projectId, "job-priv", default), "DELETE job (артефакт)", "job_not_found");
+        Denied404(c.Variant(_projectId, "job-priv", 1), "variant (артефакт)", "job_not_found");
+        c.GetJob(_projectId, "job-open").Should().BeOfType<OkObjectResult>("задача без чата не гейтится");
+    }
+
+    [Fact]
+    public async Task AudioEditor_SessionIdВТелеИФорме_ЧужойПриватныйЧат404()
+    {
+        var (dir, access) = PrivateChat();
+        var c = new AudioEditorController(new AudioEditScopeGate(_projects, dir, access), [], null!, null!, null!, null!, null!, null!)
+            { ControllerContext = AsUser(_ownerId) };
+
+        Denied404(await c.Quote(_projectId, new AudioQuoteRequest("voice", SessionId: "priv"), default), "quote");
+        Denied404(await c.Start(_projectId, new AudioStartJobForm { SessionId = "priv" }, default), "jobs");
+    }
+
+    [Fact]
+    public async Task VideoEditor_SessionIdВТелеИQuery_ЧужойПриватныйЧат404()
+    {
+        var (dir, access) = PrivateChat();
+        var gate = new VideoEditScopeGate(_projects, dir, access);
+        var c = new VideoEditorController(gate, [], null!, null!, null!, null!, null!) { ControllerContext = AsUser(_ownerId) };
+        var films = new FilmController(gate, null!, null!, null!, null!) { ControllerContext = AsUser(_ownerId) };
+
+        Denied404(await c.Quote(_projectId, new VideoQuoteRequest("priv", "s", null, null, null, null, null, null), default), "quote");
+        Denied404(await c.Start(_projectId, new VideoLaunchRequest("q", "priv", "s"), default), "jobs");
+        Denied404(await c.FramesPreview(_projectId, new VideoFramesPreviewRequest("priv", "s"), default), "frames/preview");
+        Denied404(await films.Patch(_projectId, "films/a.film", new FilmPatch("r", []), default, "priv"), "PATCH films?sessionId=");
+        Denied404(films.Build(_projectId, "films/a.film", "priv"), "POST films/build?sessionId=");
     }
 
     private sealed class WithSessions(params Session[] sessions) : ISessionDirectory

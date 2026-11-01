@@ -110,6 +110,38 @@ public sealed class SharedProjectEditorScopeGatesTests : IDisposable
                 allowed.Should().BeTrue($"{name}: владелец проекта пишет всегда (рубильник {instanceEnabled})");
     }
 
+    // S2d-1d: приватный чат проекта виден только автору — владелец проекта с Write получает тот же 404,
+    // что и «нет такого чата»; общий чат проходит как раньше
+    [Fact]
+    public void ПриватныйЧатПроекта_ВидитТолькоАвтор_Остальным404()
+    {
+        var priv = new Session { Id = "priv", ProjectId = _projectId, PrivateToUserId = _editorId };
+        var own = new Session { Id = "own", ProjectId = _projectId, PrivateToUserId = _ownerId };
+        var open = new Session { Id = "open", ProjectId = _projectId };
+        var dir = new WithSessions(priv, own, open);
+        var access = Access();
+
+        bool Image(string u, string s) => new ImageEditScopeGate(_projects, dir, access).TryProjectChat(u, _projectId, s, out _, out _);
+        bool Audio(string u, string s) => new AudioEditScopeGate(_projects, dir, access).TryProjectChat(u, _projectId, s, out _, out _);
+        bool Video(string u, string s) => new VideoEditScopeGate(_projects, dir, access).TryProjectChat(u, _projectId, s, out _, out _);
+
+        foreach (var (name, gate) in new (string, Func<string, string, bool>)[] { ("image", Image), ("audio", Audio), ("video", Video) })
+        {
+            gate(_ownerId, "priv").Should().BeFalse($"{name}: владелец проекта не видит чужой приватный чат");
+            gate(_ownerId, "own").Should().BeTrue($"{name}: автор приватного чата проходит");
+            gate(_ownerId, "open").Should().BeTrue($"{name}: общий чат проходит как раньше");
+        }
+    }
+
+    private sealed class WithSessions(params Session[] sessions) : ISessionDirectory
+    {
+        public Session? GetById(string id) => sessions.FirstOrDefault(s => s.Id == id);
+        public IReadOnlyCollection<Session> GetAll() => sessions;
+        public string? ResolveOwnerId(Session s) => null;
+        public Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId) =>
+            Task.FromResult<IReadOnlyList<StoredMessage>>([]);
+    }
+
     private sealed class NoSessions : ISessionDirectory
     {
         public Session? GetById(string id) => null;

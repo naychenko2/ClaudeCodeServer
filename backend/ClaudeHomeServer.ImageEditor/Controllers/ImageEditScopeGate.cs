@@ -36,7 +36,10 @@ public sealed class ImageEditScopeGate(IProjectManager projects, ISessionDirecto
     {
         scope = null;
         if (!TryProject(userId, projectId, out var project, out denied)) return false;
-        if (directory.GetById(sessionId) is not { } session || session.ProjectId != project.Id)
+        // Приватный чат (PrivateToUserId) виден только автору: отказ неотличим от «нет такого чата».
+        // Рубильник общих проектов решает Resolve в TryProject, CanSee — только видимость по модели
+        if (directory.GetById(sessionId) is not { } session || session.ProjectId != project.Id
+            || !SessionAccess.CanSee(session, project, userId))
         {
             denied = ChatNotFound();
             return false;

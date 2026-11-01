@@ -36,7 +36,10 @@ public sealed class VideoEditScopeGate(IProjectManager projects, ISessionDirecto
         [NotNullWhen(true)] out VideoEditScope? scope, [NotNullWhen(false)] out IActionResult? denied)
     {
         if (!TryProject(userId, projectId, out scope, out denied)) return false;
-        if (directory.GetById(sessionId) is not { } session || session.ProjectId != scope.Project!.Id)
+        // Приватный чат (PrivateToUserId) виден только автору: отказ неотличим от «нет такого чата».
+        // Рубильник общих проектов решает Resolve в TryProject, CanSee — только видимость по модели
+        if (directory.GetById(sessionId) is not { } session || session.ProjectId != scope.Project!.Id
+            || !SessionAccess.CanSee(session, scope.Project, userId))
         {
             scope = null;
             denied = ChatNotFound();

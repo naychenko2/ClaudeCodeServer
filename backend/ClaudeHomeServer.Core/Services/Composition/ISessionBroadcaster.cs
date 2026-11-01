@@ -74,8 +74,9 @@ public static class SessionBroadcasterExtensions
     {
         if (session.ProjectId is not string pid || string.IsNullOrEmpty(pid))
             return string.IsNullOrEmpty(session.OwnerId) ? Task.CompletedTask : broadcaster.ToOwner(session.OwnerId, message);
+        // null — общий чат; пустая строка — «не видит никто» (fail-closed, как SessionAccess.CanSee): уйдёт в user_ без адресата
         var author = session.PrivateToUserId;
-        return string.IsNullOrEmpty(author) ? broadcaster.ToProject(pid, message) : broadcaster.ToOwner(author, message);
+        return author is null ? broadcaster.ToProject(pid, message) : broadcaster.ToOwner(author, message);
     }
 
     // То же по id чата: сессия читается из каталога В МОМЕНТ отправки (приватность не кэшируется).

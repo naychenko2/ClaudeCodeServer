@@ -66,6 +66,10 @@ backend/ClaudeHomeServer.ImageEditor/Controllers/ImageEditScopeGate.cs|3
 backend/ClaudeHomeServer.Plugins/Controllers/PluginBridgeController.cs|5
 backend/ClaudeHomeServer.Spend/Controllers/SpendController.cs|8
 backend/ClaudeHomeServer.VideoEditor/Controllers/VideoEditScopeGate.cs|3
+# S2c-6 (доработка 2): в словарь добавлено имя `actor` (локальная переменная тулсетов). WorkspaceToolset|1 —
+# access.ResolveSession(actor, sid): id актора входит только в проверку права на чат-адресат, не ключ хранилищ.
+# ProjectsController 14→15 — GetEvents: `actor` здесь необязательный query-фильтр ленты событий, а не id
+# вызывающего; ключ хранилища в той же строке — TenantId, фильтр лишь сужает выборку.
 backend/ClaudeHomeServer/Controllers/CodeGraphController.cs|1
 backend/ClaudeHomeServer/Controllers/DossiersController.cs|4
 backend/ClaudeHomeServer/Controllers/FilesController.cs|5
@@ -75,10 +79,11 @@ backend/ClaudeHomeServer/Controllers/PersonasController.cs|110
 backend/ClaudeHomeServer/Controllers/PreviewController.cs|12
 backend/ClaudeHomeServer/Controllers/ProjectMapController.cs|1
 backend/ClaudeHomeServer/Controllers/ProjectMembersController.cs|6
-backend/ClaudeHomeServer/Controllers/ProjectsController.cs|14
+backend/ClaudeHomeServer/Controllers/ProjectsController.cs|15
 backend/ClaudeHomeServer/Controllers/SessionsController.cs|10
 backend/ClaudeHomeServer/Controllers/SkillsController.cs|10
 backend/ClaudeHomeServer/Controllers/TasksController.cs|82
 backend/ClaudeHomeServer/Controllers/TurnRightExtensions.cs|6
 backend/ClaudeHomeServer/Hubs/SessionHub.cs|7
 backend/ClaudeHomeServer/Hubs/TerminalHub.cs|1
+backend/ClaudeHomeServer/Services/Mcp/Http/WorkspaceToolset.cs|1

@@ -7,7 +7,7 @@ namespace ClaudeHomeServer.Tests.Services;
 /// <c>Controllers</c>/<c>Hubs</c>, в файлах с <c>[ProjectScope]</c> или <c>IProjectAccess</c>,
 /// id ВЫЗЫВАЮЩЕГО (<c>UserId</c>/<c>userId</c>/<c>CallerUserId</c>/<c>CurrentUserId</c>) не должен
 /// появляться аргументом вызова сверх снимка. С S2c-6 в словарь входят и id АКТОРА хода
-/// (<c>actorUserId</c>/<c>ActorUserId</c>/<c>authorUserId</c>), а область включает платформенные
+/// (<c>actorUserId</c>/<c>ActorUserId</c>/<c>authorUserId</c>/<c>actor</c> — локальная переменная тулсетов), а область включает платформенные
 /// MCP-тулсеты (<c>Services/Mcp/Http/*Toolset*.cs</c>, <c>NotesToolset</c>). В общем проекте по такому ключу хранилища
 /// (задачи, заметки, память, досье) молча развели бы данные участника и владельца; ключ
 /// проектных действий — только <c>TenantOwnerId</c> из <c>RequestScope</c>.
@@ -24,7 +24,7 @@ public class ProjectActionCallerKeyGuardTests
 
     // id вызывающего целым аргументом: «(UserId)», «(x, UserId, y)», «(UserId, …)»
     private static readonly Regex CallerAsArgument = new(
-        @"[(,]\s*(UserId|userId|CallerUserId|callerUserId|CurrentUserId|actorUserId|ActorUserId|authorUserId)\s*[,)]", RegexOptions.Compiled);
+        @"[(,]\s*(UserId|userId|CallerUserId|callerUserId|CurrentUserId|actorUserId|ActorUserId|authorUserId|actor)\s*[,)]", RegexOptions.Compiled);
 
     private static readonly Regex ScopeMarker = new(@"ProjectScope|IProjectAccess", RegexOptions.Compiled);
 

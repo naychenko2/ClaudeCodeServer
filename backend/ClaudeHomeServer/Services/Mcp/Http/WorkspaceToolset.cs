@@ -79,6 +79,7 @@ public sealed partial class WorkspaceToolset(
     IProjectAccess access,
     ITurnFrameSource frames,
     ITurnActorRegistry turnActors,
+    IActorRightGate actorGate,
     INoteAccessor? notes = null,
     ChatContinueService? continuation = null) : IMcpParameterizedToolset
 {
@@ -402,6 +403,12 @@ public sealed partial class WorkspaceToolset(
                     : [own],
             };
         }
+
+        // Право актора хода (S2c-6): токен хода — арендатора, поэтому агент участника проверяется по
+        // АКТОРУ реестра хода в проекте чата; таблица — default-deny. Только читает, запись не меняет.
+        if (actorGate.Denied(ActorToolRights.Workspace, tool, context.CallerSessionId, context.OwnerId,
+                session.ProjectId) is { } actorDenied)
+            return Deny(actorDenied);
 
         return section switch
         {

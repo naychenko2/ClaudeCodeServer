@@ -53,6 +53,13 @@
 # хранилищ ничто не стало: задача по-прежнему читается по id у арендатора, в списке проекта
 # «владелец или участник» берётся из RequestScope ([ProjectScope]), в календаре — из уже отобранного
 # MyTasksQuery, новых вызовов с id вызывающего эти ветки не добавили.
+# S2c-6: словарь сторожа расширен на actorUserId|ActorUserId|authorUserId, область — на платформенные
+# MCP-тулсеты (Services/Mcp/Http/*Toolset*.cs, ClaudeHomeServer.Notes/Services/Mcp/NotesToolset.cs).
+# Вердикт по каждой новой строке: новых совпадений нет — id актора в тулсеты приходит только значением
+# локальной переменной `actor` внутрь IActorRightGate.Denied → IProjectAccess.Resolve и в
+# IProjectAccess.ResolveSession (чат-адресат); ключом хранилищ он не служит (ключ — context.OwnerId из
+# токена арендатора), поэтому счётчики файлов не растут. Мутация проверена: id актора аргументом
+# вызова хранилища в TasksToolset.cs → сторож красный.
 backend/ClaudeHomeServer.Architecture/Controllers/ArchitectureController.cs|2
 backend/ClaudeHomeServer.AudioEditor/Controllers/AudioEditScopeGate.cs|3
 backend/ClaudeHomeServer.ImageEditor/Controllers/ImageEditScopeGate.cs|3

@@ -6,7 +6,9 @@ namespace ClaudeHomeServer.Tests.Services;
 /// Сторож ключа хранилищ в точках доступа (хвост M-11 карточки 0576ba2b, S1-3a): в
 /// <c>Controllers</c>/<c>Hubs</c>, в файлах с <c>[ProjectScope]</c> или <c>IProjectAccess</c>,
 /// id ВЫЗЫВАЮЩЕГО (<c>UserId</c>/<c>userId</c>/<c>CallerUserId</c>/<c>CurrentUserId</c>) не должен
-/// появляться аргументом вызова сверх снимка. В общем проекте по такому ключу хранилища
+/// появляться аргументом вызова сверх снимка. С S2c-6 в словарь входят и id АКТОРА хода
+/// (<c>actorUserId</c>/<c>ActorUserId</c>/<c>authorUserId</c>), а область включает платформенные
+/// MCP-тулсеты (<c>Services/Mcp/Http/*Toolset*.cs</c>, <c>NotesToolset</c>). В общем проекте по такому ключу хранилища
 /// (задачи, заметки, память, досье) молча развели бы данные участника и владельца; ключ
 /// проектных действий — только <c>TenantOwnerId</c> из <c>RequestScope</c>.
 ///
@@ -22,7 +24,7 @@ public class ProjectActionCallerKeyGuardTests
 
     // id вызывающего целым аргументом: «(UserId)», «(x, UserId, y)», «(UserId, …)»
     private static readonly Regex CallerAsArgument = new(
-        @"[(,]\s*(UserId|userId|CallerUserId|callerUserId|CurrentUserId)\s*[,)]", RegexOptions.Compiled);
+        @"[(,]\s*(UserId|userId|CallerUserId|callerUserId|CurrentUserId|actorUserId|ActorUserId|authorUserId)\s*[,)]", RegexOptions.Compiled);
 
     private static readonly Regex ScopeMarker = new(@"ProjectScope|IProjectAccess", RegexOptions.Compiled);
 
@@ -58,6 +60,11 @@ public class ProjectActionCallerKeyGuardTests
         stale.Should().BeEmpty("место переведено на TenantOwnerId — уменьшите счётчик снимка:\n" + string.Join("\n", stale));
     }
 
+    // Платформенные MCP-тулсеты: Services/Mcp/Http/*Toolset*.cs и тулсет заметок вертикали Notes
+    private static bool IsMcpToolset(string rel) =>
+        (rel.Contains("/Services/Mcp/Http/") && Path.GetFileName(rel).Contains("Toolset"))
+        || rel.EndsWith("ClaudeHomeServer.Notes/Services/Mcp/NotesToolset.cs", StringComparison.Ordinal);
+
     // путь от корня репозитория → число строк с id вызывающего аргументом
     private static Dictionary<string, int> ScanCode(string root)
     {
@@ -66,10 +73,13 @@ public class ProjectActionCallerKeyGuardTests
         {
             var rel = Path.GetRelativePath(root, file).Replace('\\', '/');
             if (rel.Contains("Tests") || rel.Contains("/obj/") || rel.Contains("/bin/")) continue;
-            if (!rel.Contains("/Controllers/") && !rel.Contains("/Hubs/")) continue;
+            var isMcpToolset = IsMcpToolset(rel);
+            if (!isMcpToolset && !rel.Contains("/Controllers/") && !rel.Contains("/Hubs/")) continue;
 
             var lines = File.ReadAllLines(file).Select(l => Regex.Replace(l, @"//.*$", "")).ToList();
-            if (!lines.Any(l => ScopeMarker.IsMatch(l))) continue;
+            // MCP-тулсеты (S2c-6) сканируются целиком: они ходят с токеном арендатора, и id актора
+            // там тоже не должен стать ключом хранилищ; маркер области для них не требуется
+            if (!isMcpToolset && !lines.Any(l => ScopeMarker.IsMatch(l))) continue;
             var count = lines.Count(l => CallerAsArgument.IsMatch(l));
             if (count > 0) result[rel] = count;
         }

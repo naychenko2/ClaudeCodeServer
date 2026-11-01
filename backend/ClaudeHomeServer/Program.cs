@@ -782,6 +782,8 @@ builder.Services.AddSingleton<SessionManager>();
 // Актор и рамка хода (S2a-1): читает только шов, пишет ядро сессий в двух точках подачи
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Access.ITurnActorRegistry>(sp => sp.GetRequiredService<SessionManager>());
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Access.ITurnFrameSource>(sp => sp.GetRequiredService<SessionManager>());
+// Право актора в пишущих MCP-инструментах (S2c-6): таблица «инструмент → право», default-deny
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Access.IActorRightGate, ClaudeHomeServer.Services.Access.ActorRightGate>();
 // Серверные сторожа чатов: стор + цикл опроса. Запуск poll-команд — через
 // ILauncherFactory (среда владельца); цикл — hosted, в Testing-среде не поднимается
 // (см. AddHosted), юниты гоняют TickAsync напрямую

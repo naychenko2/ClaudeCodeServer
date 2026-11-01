@@ -31,6 +31,7 @@ public sealed class NotesToolset(
     IMcpSessionAccessor sessions,
     INotesHubNotifier hubNotifier,
     ITurnFrameSource frames,
+    IActorRightGate actorGate,
     NotesService? notes = null,
     // Все четыре — синглтоны одной отключаемой вертикали (NotesSubsystem.Register),
     // гейтятся ОДНИМ рубильником Subsystems:Notes:Enabled: либо все null, либо все не null.
@@ -88,6 +89,11 @@ public sealed class NotesToolset(
         var narrow = frame == TurnFrameKind.Narrow;
         if (narrow && NarrowDenied(tool, arguments, projectId) is { } narrowDenied)
             return Deny(narrowDenied);
+
+        // Право актора хода (S2c-6): запись заметок агентом участника — по WriteContent в проекте чата
+        if (actorGate.Denied(ActorToolRights.Notes, tool, context.CallerSessionId, context.OwnerId, projectId)
+            is { } actorDenied)
+            return Deny(actorDenied);
 
         switch (tool)
         {

@@ -58,6 +58,7 @@ public sealed class TasksToolset(
     // REST-двери TasksController.Update: две двери не должны решать по-разному
     UserStore users,
     IProjectAccess access,
+    IActorRightGate actorGate,
     INoteTaskSync? noteSync = null) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/tasks/{sessionId}. Константа —
@@ -119,6 +120,11 @@ public sealed class TasksToolset(
             if (NarrowDenied(tool, arguments, projectId)) return Deny(NarrowText);
             extraScopes = [];
         }
+        // Право актора хода (S2c-6): tasks_* агента редактора открыты явной строкой таблицы (Q1),
+        // остальное — default-deny по актору реестра хода
+        if (actorGate.Denied(ActorToolRights.Tasks, tool, context.CallerSessionId, context.OwnerId, projectId)
+            is { } actorDenied)
+            return Deny(actorDenied);
         var allowed = AllowedProjectIds(projectId, extraScopes);
         var extraReadOnly = extraScopes.Where(s => s.ReadOnly).Select(s => s.ProjectId)
             .ToHashSet(StringComparer.Ordinal);

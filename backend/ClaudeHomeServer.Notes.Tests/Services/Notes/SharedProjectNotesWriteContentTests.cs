@@ -290,6 +290,99 @@ public class SharedProjectNotesWriteContentTests : IDisposable
         File.Exists(Path.Combine(_dir, "notes", _editorId, ProjectNote + ".md")).Should().BeFalse();
     }
 
+    // --- Конкурентность (S2c-11): перенос редактора против удаления той же заметки владельцем ---
+
+    /// <summary>
+    /// S2c-11: перенос редактора против удаления той же заметки владельцем. Без замка на id
+    /// перемещаемой заметки их критические секции переплетаются: удаление проверило файл,
+    /// перенос его унёс, File.Delete на исчезнувшем не бросает — Delete говорит «true», а файл
+    /// стоит в целевом месте («воскресшая» заметка); либо наоборот — File.Move по уже удалённому
+    /// исходному, и это исключение.
+    ///
+    /// Окно переноса расширяется целевой папкой в N уровней: Directory.CreateDirectory обходит
+    /// их все и держит Move между «исходный файл есть» и File.Move — этого окна хватает, чтобы
+    /// вторая сторона успела проверить и удалить. Повторов несколько: без замка переплетение
+    /// зависит от того, сойдутся ли два потока в этом окне, с замком — не зависит ни разу.
+    /// Барьер — одно событие старта на обе стороны; ни Task.Delay, ни Thread.Sleep.
+    /// </summary>
+    [Fact]
+    public async Task Гонка_ПереносРедактораПротивУдаленияВладельца_ФайлНеВоскресаетЯ()
+    {
+        AddMember(_editorId, ProjectRole.Editor);
+        var sut = Service();
+        const int attempts = 5, depth = 300;
+
+        for (var i = 0; i < attempts; i++)
+        {
+            var title = $"Заметка гонки {i}";
+            var body = $"# {title}\n\nТело гонки {i}.\n";
+            var created = sut.Create(_ownerId, new CreateNoteRequest(title, body, _projectId));
+            var original = ProjectFile(title + ".md");
+            var folder = string.Join('/', Enumerable.Range(1, depth).Select(n => $"у{n}"));
+            var target = ProjectFile($"{folder}/{title}.md");
+
+            var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var mv = Task.Run(async () => { await start.Task; return sut.Move(_editorId, created.Id, folder); });
+            var del = Task.Run(async () => { await start.Task; return sut.Delete(_ownerId, created.Id); });
+            start.SetResult();
+            var moved = await mv;
+            var deleted = await del;
+
+            // Исход ровно один: исходного места нет ни при каком переплетении — заметка либо
+            // удалена совсем, либо целиком перенесена.
+            File.Exists(original).Should().BeFalse($"«{title}»: перенос или удаление — исходного места не остаётся");
+
+            if (deleted)
+            {
+                // Выиграло удаление: проигравший перенос не создаёт целевой файл и не возрождает заметку
+                moved.Should().BeNull($"«{title}»: заметка удалена, перенос проиграл гонку");
+                File.Exists(target).Should().BeFalse($"«{title}»: удалённая заметка не воскресает в целевом месте");
+            }
+            else
+            {
+                // Выиграл перенос: заметка целиком в целевом месте; удаление проиграло — исходного
+                // файла к его проверке уже не было
+                moved.Should().NotBeNull($"«{title}»: перенос выиграл гонку");
+                File.ReadAllText(target).Should().Be(body);
+            }
+        }
+    }
+
+    // --- Кэш модели (S2c-11): каждая запись редактора сбрасывает модель владельца-арендатора ---
+
+    [Fact]
+    public void ЗаписьРедактора_СбрасываетКэшМоделиВладельца_ТотЖеЭкземплярОтвечаетСвежим()
+    {
+        AddMember(_editorId, ProjectRole.Editor);
+        var sut = Service();
+
+        // Модель владельца прогрета до чужих записей (первый GetSummaries её кэширует): без
+        // сброса его ключа каждая проверка ниже читала бы кэш (TTL 2 с) и не видела бы запись
+        // редактора. Один и тот же экземпляр сервиса во всех шагах — «свежий экземпляр», на
+        // котором держались прежние проверки здесь и не должно быть.
+        var id = ProjectNoteId(sut);
+        sut.GetDetail(_ownerId, id)!.Content.Should().Contain("Текст проектной заметки.");
+
+        // Правка
+        sut.Update(_editorId, id, new UpdateNoteRequest(Content: "# Заметка проекта\n\nПравка редактора."));
+        sut.GetDetail(_ownerId, id)!.Content.Should().Contain("Правка редактора.");
+
+        // Создание
+        var created = sut.Create(_editorId, new CreateNoteRequest("Заметка редактора", "Текст редактора", _projectId));
+        sut.GetSummaries(_ownerId, _projectId, null).Should().Contain(n => n.Id == created.Id);
+
+        // Перенос: владелец видит новый id, а не прежний
+        var moved = sut.Move(_editorId, created.Id, "Архив");
+        moved.Should().NotBeNull();
+        var newId = moved!.Id;
+        var asOwner = sut.GetSummaries(_ownerId, _projectId, null).Single(n => n.Title == "Заметка редактора");
+        asOwner.Id.Should().Be(newId);
+
+        // Удаление
+        sut.Delete(_editorId, newId).Should().BeTrue();
+        sut.GetSummaries(_ownerId, _projectId, null).Should().NotContain(n => n.Id == newId);
+    }
+
     private sealed class NoSessions : ISessionDirectory
     {
         public Session? GetById(string id) => null;

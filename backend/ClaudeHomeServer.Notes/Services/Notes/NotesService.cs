@@ -62,11 +62,13 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // отменяет: скан всегда идёт после своей записи, своя заметка в модели есть всегда.
     private readonly ConcurrentDictionary<string, long> _generation = new();
 
-    // Замок на id заметки для «сравнить и записать» (S2c-2, К8): проверка If-Match, запись файла
-    // и инвалидация кэша сводок — в одной критической секции, окно между проверкой и записью не
-    // остаётся: два параллельных сохранения с одним If-Match не проходят проверку оба.
-    // Замок живёт, пока сервис: заметок немного; после переименования старый ключ остаётся
-    // безвредным остатком (сам id исчезает вместе со старым файлом).
+    // Замок записи заметок — ОДНА система на весь сервис (S2c-2 К8 → S2c-5 → S2c-11). Ключ —
+    // id заметки (Update/Delete — «сравнить и записать»; Move — ещё и на id перемещаемой: гонка
+    // переноса с удалением той же заметки) или ключ источника (Create — коллизия имени файла;
+    // MoveFolder/CreateFolder/DeleteFolder — структура папок источника). Многоключевые операции
+    // берут замки в фиксированном порядке — по возрастанию ключа (WithWriteGates): две операции
+    // не разойдутся по кругу. Замок живёт, пока сервис: заметок немного; после переименования
+    // старый ключ остаётся безвредным остатком (сам id исчезает вместе со старым файлом).
     private readonly ConcurrentDictionary<string, object> _writeGates = new();
 
     public NotesService(IProjectManager projects, IConfiguration config, ILogger<NotesService> logger,
@@ -108,6 +110,47 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         _cache.TryRemove(userId, out _);
         _generation.AddOrUpdate(userId, 1, (_, v) => v + 1);
     }
+
+    /// <summary>
+    /// Инвалидация после записи в источник (S2c-11): свой ключ — как раньше, плюс ключ
+    /// владельца-арендатора проекта (RequestScope.TenantOwnerId, не вызывающий): файлы notes/
+    /// проекта читает и владелец, и без его ключа его модель per-user (TTL 2 с) держала бы
+    /// снимок ДО правки редактора — владелец видел бы чужую запись с задержкой до TTL.
+    /// Личный vault — только свой ключ: чужого арендатора у него нет.
+    /// </summary>
+    private void InvalidateWrite(string userId, string sourceKey)
+    {
+        Invalidate(userId);
+        if (sourceKey == PersonalKey) return;
+        var tenant = ProjectScope(userId, sourceKey, ProjectRight.Read)?.TenantOwnerId;
+        if (!string.IsNullOrEmpty(tenant)) Invalidate(tenant!);
+    }
+
+    /// <summary>
+    /// Критическая секция записи под замками _writeGates по названным ключам (id заметки /
+    /// ключ источника). Многоключевые операции берут их в фиксированном порядке — по возрастанию
+    /// ключа: если две операции спорят за одну пару ключей, обе идут к ней в одном порядке,
+    /// цикла ожидания нет. Тело выполняется под всеми взятыми замками; исключение тела
+    /// отпускает замки как обычно.
+    /// </summary>
+    private T WithWriteGates<T>(Func<T> body, params string[] keys)
+    {
+        var ordered = keys.Distinct(StringComparer.Ordinal).OrderBy(k => k, StringComparer.Ordinal).ToArray();
+        return Take(0);
+
+        T Take(int i)
+        {
+            if (i == ordered.Length) return body();
+            var gate = _writeGates.GetOrAdd(ordered[i], _ => new object());
+            lock (gate) { return Take(i + 1); }
+        }
+    }
+
+    // Ключ замка источника: проект — его id (тот же ключ, что в id его заметок), личный vault —
+    // id владельца: «personal» один на всех, а личное ключается личным id (как корень в
+    // ResolveRoot) — чужая личная папка не должна ждать чужой записи.
+    private static string SourceGateKey(string userId, string sourceKey) =>
+        sourceKey == PersonalKey ? userId : sourceKey;
 
     // --- Источники смотрящего ---
 
@@ -753,6 +796,24 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     public NoteDetail Create(string userId, CreateNoteRequest req)
     {
         var sourceKey = string.IsNullOrWhiteSpace(req.Source) ? PersonalKey : req.Source!;
+        // S2c-11: создание — под замком источника: окно «проверить коллизию имени → записать
+        // файл» не остаётся открытым для чужой записи того же файла. Журнал событий и чтение
+        // созданной заметки — ЗА замком: Append — чужой код, способный стоять на внешнем
+        // барьере (в тесте гонки — подменный журнал), а под замком такой стоп не держат:
+        // барьер и замок на одном источнике дают цикл ожидания.
+        var id = WithWriteGates(() => CreateCore(userId, req, sourceKey), SourceGateKey(userId, sourceKey));
+        // P1-4: лог note_changed в проектный лог (только для заметок проекта, не личных)
+        if (sourceKey != PersonalKey)
+            _events?.Append(sourceKey, userId, ProjectEventTypes.NoteChanged, "user",
+                $"Создана заметка «{req.Title}»", id);
+        return GetDetail(userId, id)
+            ?? throw new InvalidOperationException("Заметка создана, но не читается");
+    }
+
+    // Файловая часть создания под замком источника: коллизия имени, запись, инвалидация.
+    // Возвращает id созданной заметки.
+    private string CreateCore(string userId, CreateNoteRequest req, string sourceKey)
+    {
         // S2c-7: дверь заметки — на WriteContent: редактор общего проекта создаёт заметку
         // в notes/ проекта; читатель — 403, посторонний — 404 (тот же разбор, что у ResolveRoot)
         var rootDir = ResolveRoot(userId, sourceKey, ProjectRight.WriteContent);
@@ -787,14 +848,8 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
             content = InjectFileField(content, NormalizeRel(req.File!.Trim()));
         File.WriteAllText(full, content, new UTF8Encoding(false));
 
-        Invalidate(userId);
-        var id = EncodeId(sourceKey, NormalizeRel(relPath));
-        // P1-4: лог note_changed в проектный лог (только для заметок проекта, не личных)
-        if (sourceKey != PersonalKey)
-            _events?.Append(sourceKey, userId, ProjectEventTypes.NoteChanged, "user",
-                $"Создана заметка «{req.Title}»", id);
-        return GetDetail(userId, id)
-            ?? throw new InvalidOperationException("Заметка создана, но не читается");
+        InvalidateWrite(userId, sourceKey);
+        return EncodeId(sourceKey, NormalizeRel(relPath));
     }
 
     // --- Шаблоны и daily notes ---
@@ -872,7 +927,8 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         content = content[..at] + replacement + content[(at + targetTitle.Length)..];
         File.WriteAllText(note.FullPath, content, new UTF8Encoding(false));
 
-        Invalidate(userId);
+        // S2c-11: это правка содержимого чужой заметки — сбрасывает и модель арендатора
+        InvalidateWrite(userId, sourceKey);
         return GetDetail(userId, id);
     }
 
@@ -880,6 +936,21 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // Ссылки [[…]] не трогаем — они резолвятся по заголовку и переезд переживают;
     // меняется только id (источник + путь).
     public NoteDetail? Move(string userId, string id, string? folder, string? targetSource = null)
+    {
+        var (sourceKey, _) = DecodeId(id);
+        // S2c-11: замок на id перемещаемой заметки — тот же ключ, что у Update/Delete: гонка
+        // переноса редактора с удалением той же заметки сериализована, полуреального состояния
+        // («исходный файл удалён, целевой создан») нет. Плюс замок на затронутые источники:
+        // целевое место и структура папок. Ключи берутся в фиксированном порядке по возрастанию
+        // (WithWriteGates) — две многоключевые операции не разойдутся по кругу.
+        var newSource = string.IsNullOrWhiteSpace(targetSource) ? sourceKey : targetSource!;
+        var keys = newSource == sourceKey
+            ? new[] { id, SourceGateKey(userId, sourceKey) }
+            : new[] { id, SourceGateKey(userId, sourceKey), SourceGateKey(userId, newSource) };
+        return WithWriteGates(() => MoveCore(userId, id, folder, targetSource), keys);
+    }
+
+    private NoteDetail? MoveCore(string userId, string id, string? folder, string? targetSource)
     {
         var (sourceKey, relPath) = DecodeId(id);
         // S2c-7: перенос ВНУТРИ источника — обычная дверь заметки, WriteContent: редактор
@@ -921,7 +992,10 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
             File.Delete(full);
         }
 
-        Invalidate(userId);
+        // S2c-11: переезд между источниками — запись для обоих арендаторов: сбрасываются
+        // исходный и целевой источники (свой ключ + ключ арендатора каждого)
+        InvalidateWrite(userId, sourceKey);
+        if (newSource != sourceKey) InvalidateWrite(userId, newSource);
         // Комментарии, привязанные к перенесённой заметке-документу, переезжают вместе с ней
         RewriteAnnotationTargets(userId, sourceKey, DocPathOf(sourceKey, NormalizeRel(relPath)),
             newSource, DocPathOf(newSource, newRel));
@@ -932,6 +1006,13 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // переезжают вместе). Ссылки [[…]] не трогаем (резолв по заголовку).
     // Возвращает маппинг id заметок старый → новый (id содержит путь).
     public IReadOnlyList<MovedNoteId> MoveFolder(string userId, string sourceKey, string path, string newPath)
+    {
+        // S2c-11: перенос папки меняет id всех её заметок — под замком источника: гонка с
+        // переносом отдельной заметки или созданием файла в той же папке сериализована
+        return WithWriteGates(() => MoveFolderCore(userId, sourceKey, path, newPath), SourceGateKey(userId, sourceKey));
+    }
+
+    private IReadOnlyList<MovedNoteId> MoveFolderCore(string userId, string sourceKey, string path, string newPath)
     {
         // S2c-7: перенос папки — дверь содержимого заметок проекта, WriteContent
         var rootDir = ResolveRoot(userId, sourceKey, ProjectRight.WriteContent);
@@ -958,7 +1039,8 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
 
         Directory.CreateDirectory(Path.GetDirectoryName(newFull)!);
         Directory.Move(oldFull, newFull);
-        Invalidate(userId);
+        // S2c-11: содержимое папки переезжает — модель арендатора источника обязана быть сброшена
+        InvalidateWrite(userId, sourceKey);
         // Привязки комментариев к документам внутри перенесённой папки — по префиксу
         RewriteAnnotationTargets(userId, sourceKey, DocPathOf(sourceKey, oldFolder),
             sourceKey, DocPathOf(sourceKey, newFolder), prefix: true);
@@ -1001,6 +1083,13 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // Создать физическую папку (идемпотентно — дубликат не ошибка).
     public NoteFolderDto CreateFolder(string userId, string sourceKey, string path)
     {
+        // S2c-11: папка — структура содержимого источника: под замком источника вместе с
+        // созданием/переносом его заметок
+        return WithWriteGates(() => CreateFolderCore(userId, sourceKey, path), SourceGateKey(userId, sourceKey));
+    }
+
+    private NoteFolderDto CreateFolderCore(string userId, string sourceKey, string path)
+    {
         // S2c-7: папка — структура содержимого заметок проекта, дверь на WriteContent
         var rootDir = ResolveRoot(userId, sourceKey, ProjectRight.WriteContent);
         var folder = SanitizeFolder(path);
@@ -1009,13 +1098,19 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         if (File.Exists(full))
             throw new InvalidOperationException($"«{folder}» — уже файл, не папка");
         Directory.CreateDirectory(full);
-        Invalidate(userId);
+        InvalidateWrite(userId, sourceKey);
         return new NoteFolderDto(sourceKey, folder);
     }
 
     // Удалить физическую папку рекурсивно (пустую или с заметками/вложениями).
     // Возвращает число удалённых .md-заметок.
     public int DeleteFolder(string userId, string sourceKey, string path)
+    {
+        // S2c-11: та же дверь и тот же замок источника, что у CreateFolder
+        return WithWriteGates(() => DeleteFolderCore(userId, sourceKey, path), SourceGateKey(userId, sourceKey));
+    }
+
+    private int DeleteFolderCore(string userId, string sourceKey, string path)
     {
         // S2c-7: та же дверь, что у CreateFolder: WriteContent
         var rootDir = ResolveRoot(userId, sourceKey, ProjectRight.WriteContent);
@@ -1027,19 +1122,16 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         try { mdCount = Directory.EnumerateFiles(full, "*.md", SearchOption.AllDirectories).Count(); }
         catch { mdCount = 0; }
         Directory.Delete(full, recursive: true);
-        Invalidate(userId);
+        // S2c-11: вместе с папкой удалены её заметки — модель арендатора обязана быть сброшена
+        InvalidateWrite(userId, sourceKey);
         return mdCount;
     }
 
     // S2c-2 (К8): сохранение с If-Match — оптимистичная конкурентность. «Сравнить и записать»
     // целиком под замком на id заметки (вместе с инвалидацией кэша сводок в UpdateCore): окно
     // между проверкой хеша и записью не остаётся. Без If-Match — как раньше.
-    public NoteDetail? Update(string userId, string id, UpdateNoteRequest req, string? ifMatch = null)
-    {
-        var gate = _writeGates.GetOrAdd(id, _ => new object());
-        lock (gate)
-            return UpdateCore(userId, id, req, ifMatch);
-    }
+    public NoteDetail? Update(string userId, string id, UpdateNoteRequest req, string? ifMatch = null) =>
+        WithWriteGates(() => UpdateCore(userId, id, req, ifMatch), id);
 
     private NoteDetail? UpdateCore(string userId, string id, UpdateNoteRequest req, string? ifMatch)
     {
@@ -1135,7 +1227,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
             }
         }
 
-        Invalidate(userId);
+        InvalidateWrite(userId, sourceKey);
         if (sourceKey != PersonalKey)
             _events?.Append(sourceKey, userId, ProjectEventTypes.NoteChanged, "user",
                 $"Изменена заметка «{req.Title ?? oldTitle}»", effectiveId);
@@ -1166,12 +1258,8 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // S2c-5 (Конкурентность): удаление — под тем же замком на id заметки, что и Update (S2c-2).
     // Без него фоновая уборка истёкших и запись той же заметки переплетаются: правка
     // возрождает уже удалённый файл (File.Delete прошёл, WriteAllText создал заново).
-    public bool Delete(string userId, string id)
-    {
-        var gate = _writeGates.GetOrAdd(id, _ => new object());
-        lock (gate)
-            return DeleteCore(userId, id);
-    }
+    public bool Delete(string userId, string id) =>
+        WithWriteGates(() => DeleteCore(userId, id), id);
 
     private bool DeleteCore(string userId, string id)
     {
@@ -1181,7 +1269,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         var full = SafePath.Join(rootDir, relPath);
         if (!File.Exists(full)) return false;
         File.Delete(full);
-        Invalidate(userId);
+        InvalidateWrite(userId, sourceKey);
         if (sourceKey != PersonalKey)
             _events?.Append(sourceKey, userId, ProjectEventTypes.NoteChanged, "user",
                 $"Удалена заметка «{Path.GetFileNameWithoutExtension(relPath)}»", id);

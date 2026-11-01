@@ -109,12 +109,6 @@ public sealed class WikiRetractService
     // пакета (op=revert) и прочих операций.
     private const string LogOpRetract = "retract";
 
-    // Папка хроники чата (ADR-035, решение 12б): «Хроника разговора — страница вики type:
-    // chronicle … папка Хроники/». Признак страницы этого чата в S4f-1 — путь под этой папкой у
-    // create-операции пакета с этим источником: сама хронику строит разбор (S6), здесь она только
-    // снимается целиком.
-    private const string ChronicleFolder = "Хроники";
-
     // Потолок длины карточки источника: карточнее любой реальной ссылки (путь файла с id
     // проекта), но не бесконечный вход из строки запроса.
     private const int MaxSourceLength = 512;
@@ -456,7 +450,7 @@ public sealed class WikiRetractService
         var folder = WikiSections.Folder(section);
         if (folder is null)
             return [];
-        var dir = SafePath.Join(root, "pages/" + folder + ChronicleFolder);
+        var dir = SafePath.Join(root, "pages/" + folder + WikiChatIngestService.ChronicleDirName);
         if (!Directory.Exists(dir))
             return [];
         var wanted = WikiChatIngestService.ContinuationLinkPrefix + "[[" + title + "]]";
@@ -474,7 +468,8 @@ public sealed class WikiRetractService
         {
             // Ключ страницы — относительно pages/ всего раздела: relative здесь — от папки
             // хроник, к ней добавляется префикс раздела и сам сегмент «Хроники».
-            var page = folder + ChronicleFolder + "/" + Path.GetRelativePath(dir, f).Replace('\\', '/');
+            var page = folder + WikiChatIngestService.ChronicleDirName + "/" +
+                Path.GetRelativePath(dir, f).Replace('\\', '/');
             if (WikiPaths.IsProjection(page))
                 continue;
             string text;
@@ -944,9 +939,12 @@ public sealed class WikiRetractService
         return hash < 0 ? rest : rest[..hash];
     }
 
-    /// <summary>Путь хроники: сегмент «Хроники» под папкой раздела (решение 12б).</summary>
+    /// <summary>Путь хроники: сегмент папки хроник под папкой раздела (ADR-035, решение 12б).
+    /// Единственный литерал сегмента — у разбора (WikiChatIngestService.ChronicleDirName):
+    /// хронику строит разбор (S6), здесь она только снимается целиком; признак страницы
+    /// этого чата в S4f-1 — путь под этой папкой у create-операции пакета с этим источником.</summary>
     private static bool IsChroniclePath(string pageKey) =>
-        pageKey.Split('/').Contains(ChronicleFolder, StringComparer.Ordinal);
+        pageKey.Split('/').Contains(WikiChatIngestService.ChronicleDirName, StringComparer.Ordinal);
 
     /// <summary>Раздел страницы по пути — через единственный разбор (WikiSections.Parse);
     /// неразобранный путь (не должен случиться: страницы из операций валидных пакетов) — пустой

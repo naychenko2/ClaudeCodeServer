@@ -17,7 +17,7 @@ import { Badge, Menu, MenuItem } from '../../components/ui';
 import { useLongPress } from '../../hooks/useLongPress';
 import { deviceWaitDuration, executorStopVisual, isDeviceWaiting, isTerminalStop, projectColor } from '../../lib/tasks';
 import { useContextButton } from '../chatContext/useContextButton';
-import { AssigneeBadge, DueChip, LabelChip, PriorityFlag, SubtaskCheck } from './bits';
+import { AssigneeBadge, DueChip, LabelChip, PriorityFlag, SharedTaskChip, SubtaskCheck } from './bits';
 import { TaskPersonaBadge } from './TaskPersonaBadge';
 import { TaskUserBadge } from './TaskUserBadge';
 
@@ -29,6 +29,8 @@ interface Props {
   compact?: boolean;
   // Имя проекта — показывается в кросс-проектных контекстах (календарь)
   projectName?: string;
+  // Задача чужого общего проекта — чип «Общие» (календарь)
+  shared?: boolean;
   // Имя устройства локального проекта — в плашке «ждёт устройство» (ADR-016)
   deviceName?: string;
 }
@@ -56,7 +58,7 @@ function StateChip({
   );
 }
 
-function TaskCardImpl({ task, selected, onClick, compact, projectName, deviceName }: Props) {
+function TaskCardImpl({ task, selected, onClick, compact, projectName, shared, deviceName }: Props) {
   const color = projectColor(task.projectId);
   const done = task.status === 'done';
   const doneSubs = task.subtasks.filter(s => s.isDone).length;
@@ -140,8 +142,9 @@ function TaskCardImpl({ task, selected, onClick, compact, projectName, deviceNam
 
         {/* Нижняя строка: чипы + доп. плашка «Закрыт без проверки» для дефектов,
             снятых по Outcome=closedWithoutCheck (без отдельного Verification) */}
-        {(task.personaId || task.assigneeUserId || task.dueDate || closedWithoutCheck || deviceWaiting || deviceWaitExpired || executorStopped || (!compact && (task.subtasks.length > 0 || task.labels.length > 0)) || projectName) && (
+        {(task.personaId || task.assigneeUserId || task.dueDate || closedWithoutCheck || deviceWaiting || deviceWaitExpired || executorStopped || (!compact && (task.subtasks.length > 0 || task.labels.length > 0)) || projectName || shared) && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+            {shared && <SharedTaskChip />}
             {task.personaId && <TaskPersonaBadge personaId={task.personaId} />}
             {task.assigneeUserId && <TaskUserBadge projectId={task.projectId} assigneeUserId={task.assigneeUserId} />}
             {deviceWaiting && (

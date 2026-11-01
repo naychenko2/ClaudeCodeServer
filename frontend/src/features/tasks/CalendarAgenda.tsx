@@ -5,7 +5,7 @@ import { useMemo } from 'react';
 import type { Project, Task } from '../../types';
 import { C, FONT, SHADOW } from '../../lib/design';
 import { NO_PROJECT_LABEL, daysFromToday, projectColor } from '../../lib/tasks';
-import { AssigneeBadge, RepeatIcon } from './bits';
+import { AssigneeBadge, RepeatIcon, SharedTaskChip, isSharedTask } from './bits';
 import { useTaskHover } from './useTaskHover';
 
 interface Props {
@@ -96,6 +96,7 @@ export function CalendarAgenda({ tasks, projectsById, onOpenTask, isMobile }: Pr
             {nameOf(t)}
           </div>
         </div>
+        {isSharedTask(t, projectsById) && <SharedTaskChip />}
         {t.assignee === 'claude' && <AssigneeBadge assignee="claude" size={22} />}
       </div>
     );

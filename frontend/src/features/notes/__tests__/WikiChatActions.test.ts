@@ -676,6 +676,15 @@ describe('Компактная раскладка (M-1, дефект ecec968a)',
       && (n as { style?: Record<string, string> }).style?.position === 'absolute') ?? null;
   }
 
+  // Сколько точек-индикаторов на триггере: слияние с master (bc5a023a2) научило иконочный
+  // триггер рисовать ReactNode само — вторая строка в той же ветке нарисовала бы точку дважды
+  function triggerDotCount(root: AnyNode): number {
+    const trigger = findNodeByAttr(root, 'title', TRIGGER_TITLE);
+    if (!trigger) throw new Error('нет кнопки-триггера «Вики»');
+    return allNodes(trigger).filter(n => n.nodeName === 'SPAN'
+      && (n as { style?: Record<string, string> }).style?.position === 'absolute').length;
+  }
+
   async function mountAt360(session: ChatHeaderSummaryCtx['session']): Promise<Cont> {
     // installFakeDom ПОСЛЕ предыдущего uninstall создаёт новый объект window —
     // innerWidth ставим на нём, иначе компонент читает пустую ширину (дефолт — десктоп)
@@ -764,6 +773,7 @@ describe('Компактная раскладка (M-1, дефект ecec968a)',
     await settle(); // обычный пункт закрыл меню — сигнал обязан быть на ЗАКРЫТОМ триггере
     const dot = triggerDot(c);
     expect(dot).not.toBeNull();
+    expect(triggerDotCount(c)).toBe(1); // индикатор рисуется ровно один раз
     // цвет точки — цвет статуса (msgDot): applied → C.success
     expect((dot as { style?: Record<string, string> }).style?.background).toBe(C.success);
   });

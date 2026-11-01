@@ -45,6 +45,7 @@ public class FeatureVoiceReminderContributorTests : IDisposable
         public string? ResolveOwnerId(Session s) => Owner;
         public Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId) =>
             Task.FromResult<IReadOnlyList<StoredMessage>>([]);
+        public bool SetWikiMark(string sessionId, string? mark) => false;
     }
 
     public FeatureVoiceReminderContributorTests()

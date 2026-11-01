@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.Runtime.ExceptionServices;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.TestRuns;
@@ -22,7 +21,9 @@ public class NpmBuildServiceTests : IDisposable
     // Страховка от потерянного события, а не ожидание: цепь запуска сборки (prepare в пуле, старт
     // процесса, гашение по TurnId) под нагрузкой параллельного набора идёт 5 с при загрузке только
     // CPU и >20 с на пике быстрого гейта (TRX прогона 22:41 01.11) — прежние 20 с оказались ниже
-    // худшего случая живой цепи. Тест по-прежнему ждёт события, а не времени.
+    // худшего случая живой цепи. Тест падает по неверному результату; этот потолок срабатывает
+    // только на зависании, а не на медленной машине. ReDoS-страж ниже его не использует: его сигнал —
+    // отсутствие таймаута регулярки продукта (комментарий к FlagsStage).
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(60);
 
     // Строка `build` нашего frontend/package.json
@@ -175,43 +176,31 @@ public class NpmBuildServiceTests : IDisposable
     // двумя способами — 2^40 шагов бэктрекинга (ReDoS, ревью этапа 3)
     private static readonly string FlagsStage = "npm run" + string.Concat(Enumerable.Repeat(" --a", 40));
 
-    // Интервал линейности разбора: опция класса с прежним дефолтом (100 мс).
-    private static readonly TimeSpan LinearCeiling = TimeSpan.FromMilliseconds(100);
-
-    // Единственный сигнал ReDoS-сторожа — время: код ограничивает каждый матч RegexTimeoutMs (200 мс),
-    // и взорванный этап функционально идентичен годному (тот же null), отличается только длительностью.
-    // Поэтому тест ждёт событие завершения работы в интервале, а не мерит стену. Это реальное ожидание:
-    // под загрузкой быстрого гейта даже линейная работа стоит 103–521 мс (TRX прогонов 29.10–01.11),
-    // на спокойной машине — 15 мс. Жёсткое окно не для параллельного быстрого набора — вне Fast.
+    // Сигнал ReDoS-стража — не время, а собственный таймаут регулярки продукта. У линейного
+    // шаблона флаг имеет ровно один разбор (см. комментарий к NestedScriptCommand), его матч по
+    // FlagsStage — линейный проход и под нагрузкой не достигает потолка RegexTimeoutMs (200 мс):
+    // шесть прогонов быстрого гейта зелёные (02.11). Прежний шаблон с 2^40 путями бьёт в этот
+    // потолок на любой машине — такое число шагов в 200 мс не укладывается. Внутри NestedScript
+    // таймаут глушится в null: взорванный этап функционально идентичен годному, поэтому страж
+    // сверяет этап с шаблоном напрямую (NpmBuildProgress.NestedScriptCommand) и утверждает
+    // отсутствие RegexMatchTimeoutException. Сигнал не зависит от загрузки: откат шаблона краснит
+    // тест и на спокойной, и на нагруженной машине; в тесте нет ни одного предела времени.
     [Fact]
-    [Trait("Category", "Slow")]
-    public async Task Разбор_ЭтапыАтакующейФормы_ЛинейныйИБыстрый()
+    public void Разбор_ЭтапыАтакующейФормы_ШаблонНеВзрывается()
     {
         var vites = string.Concat(Enumerable.Repeat("vite ", 8000));
-        var done = new TaskCompletionSource<ExceptionDispatchInfo?>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        _ = Task.Run(() =>
-        {
-            try
-            {
-                NpmBuildProgress.NestedScript(FlagsStage).Should().BeNull("имени скрипта нет — одни флаги");
-                NpmBuildProgress.IsViteBuild(vites).Should().BeFalse("этап длиннее MaxStageLength с маркерами не сверяется");
-                var progress = new NpmBuildProgress(["tsc -b", FlagsStage, vites, "vite build"], previous: null);
-                progress.Feed("> x@1.0.0 y", TimeSpan.FromSeconds(1)).Should().BeFalse();
-                progress.Feed("> " + new string('@', 8000) + " y", TimeSpan.FromSeconds(1)).Should().BeFalse();
-                progress.Feed("vite v8.0.16 building client environment for production...", TimeSpan.FromSeconds(2))
-                    .Should().BeTrue();
-                progress.Label().Should().Be("vite build · этап 4 из 4");
-                done.TrySetResult(null);
-            }
-            catch (Exception e)
-            {
-                done.TrySetResult(ExceptionDispatchInfo.Capture(e));
-            }
-        });
+        FluentActions.Invoking(() => NpmBuildProgress.NestedScriptCommand().Match(FlagsStage)).Should()
+            .NotThrow("у линейного шаблона флаг имеет ровно один разбор: упор в потолок RegexTimeoutMs значит, что шаблон флагов снова стал экспоненциальным");
 
-        var failure = await done.Task.WaitAsync(LinearCeiling); // не уложилась в интервал — шаблон стал экспоненциальным
-        failure?.Throw(); // исключение из работы — красный тест со своим текстом
+        NpmBuildProgress.NestedScript(FlagsStage).Should().BeNull("имени скрипта нет — одни флаги");
+        NpmBuildProgress.IsViteBuild(vites).Should().BeFalse("этап длиннее MaxStageLength с маркерами не сверяется");
+        var progress = new NpmBuildProgress(["tsc -b", FlagsStage, vites, "vite build"], previous: null);
+        progress.Feed("> x@1.0.0 y", TimeSpan.FromSeconds(1)).Should().BeFalse();
+        progress.Feed("> " + new string('@', 8000) + " y", TimeSpan.FromSeconds(1)).Should().BeFalse();
+        progress.Feed("vite v8.0.16 building client environment for production...", TimeSpan.FromSeconds(2))
+            .Should().BeTrue();
+        progress.Label().Should().Be("vite build · этап 4 из 4");
     }
 
     [Theory]

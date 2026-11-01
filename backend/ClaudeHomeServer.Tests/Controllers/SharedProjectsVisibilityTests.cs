@@ -11,8 +11,9 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ClaudeHomeServer.Tests.Controllers;
 
 // Чтение участником общего проекта (shared-projects, S1-3a): список, «Домой», файлы (чтение),
-// WebDAV, роли на запись. Участник видит проект только при рубильнике И флаге; в S1 пишет
-// только владелец (читатель и редактор получают 403).
+// WebDAV, роли на запись. Участник видит проект только при рубильнике И флаге; читатель
+// пишет 403; редактор пишет содержимое с S2c-8 (WriteContent, матрица дверей —
+// FilesControllerWriteContentTests).
 public class SharedProjectsVisibilityTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;
@@ -117,12 +118,15 @@ public class SharedProjectsVisibilityTests : IClassFixture<TestWebApplicationFac
     }
 
     [Fact]
-    public async Task Редактор_ВS1_ПишетСОтказом403()
+    public async Task РедакторПишетСодержимоеФайла_200()
     {
         var (id, _) = await SharedProjectAsync("editor");
 
-        (await Second().PutAsJsonAsync($"/api/projects/{id}/files/content?path=a.txt", new { content = "x" }))
-            .StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        // S2c-8 (3b0ad9bd3) перевёл дверь записи содержимого на WriteContent: редактор пишет
+        // под корнем арендатора; полная матрица дверей — FilesControllerWriteContentTests.
+        var r = await Second().PutAsJsonAsync($"/api/projects/{id}/files/content?path=a.txt", new { content = "x" });
+        r.StatusCode.Should().Be(HttpStatusCode.OK,
+            "дверь WriteContent открыта редактору с S2c-8: старый отказ S1 здесь больше не держится");
     }
 
     [Fact]

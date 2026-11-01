@@ -848,6 +848,18 @@ public static class WebDavHandler
             return;
         }
 
+        // Пустая сторона — корень проекта: Destination = /projects/{name}/ резолвился в корень,
+        // existed=true и снос цели сносил весь проект, а files.Rename падал
+        // FileNotFoundException → 404 (дефект e69f9de1, ревью W3-0). Корень не переносится
+        // и не сносится — по образцу DELETE/LOCK (403), раньше SafeJoin и любого следа
+        // на диске. Гейт вики здесь не помощник: корень проекта — предок вики только в
+        // раскладке «проект = домашний каталог с data/», в обычной — нет.
+        if (string.IsNullOrEmpty(destRel) || string.IsNullOrEmpty(relPath))
+        {
+            ctx.Response.StatusCode = 403;
+            return;
+        }
+
         var srcAbs = FileService.SafeJoinPublic(root, relPath);
         var dstAbs = FileService.SafeJoinPublic(root, destRel);
 

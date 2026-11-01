@@ -62,13 +62,20 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // отменяет: скан всегда идёт после своей записи, своя заметка в модели есть всегда.
     private readonly ConcurrentDictionary<string, long> _generation = new();
 
-    // Замок записи заметок — ОДНА система на весь сервис (S2c-2 К8 → S2c-5 → S2c-11). Ключ —
-    // id заметки (Update/Delete — «сравнить и записать»; Move — ещё и на id перемещаемой: гонка
-    // переноса с удалением той же заметки) или ключ источника (Create — коллизия имени файла;
-    // MoveFolder/CreateFolder/DeleteFolder — структура папок источника). Многоключевые операции
-    // берут замки в фиксированном порядке — по возрастанию ключа (WithWriteGates): две операции
-    // не разойдутся по кругу. Замок живёт, пока сервис: заметок немного; после переименования
-    // старый ключ остаётся безвредным остатком (сам id исчезает вместе со старым файлом).
+    // Замок записи заметок — ОДНА система на весь сервис (S2c-2 К8 → S2c-5 → S2c-11 → S2c-12).
+    // Ключ — id заметки (Update/Delete — «сравнить и записать»; Move — ещё и на id перемещаемой:
+    // гонка переноса с удалением той же заметки; LinkMention/SetAnnotationStatus/Repin — правка
+    // той же заметки; Annotate/Repin — ещё на id заметки-документа, куда пишется ^id) или ключ
+    // источника (Create — коллизия имени файла; MoveFolder/CreateFolder/DeleteFolder — структура
+    // папок источника). Многозаметочные каскады (RemoveWikilinksTo, RewriteAnnotationTargets)
+    // берут по замку на каждую правимую заметку, ключи — по возрастанию, одним вызовом
+    // (WithWriteGates): две операции не разойдутся по кругу. Вложенного WithWriteGates нет нигде:
+    // внутренний вызов каскада из-под чужого замка (Update/Move/MoveFolder →
+    // RewriteAnnotationTargets) идёт нелocking-ядром под уже взятым замком вызывающего.
+    // Единственная запись заметочного файла мимо замка — GetOrCreateDaily: дневниковая заметка
+    // личного vault (get-or-create своего файла, чужого писателя у него нет). Замок живёт, пока
+    // сервис: заметок немного; после переименования старый ключ остаётся безвредным остатком
+    // (сам id исчезает вместе со старым файлом).
     private readonly ConcurrentDictionary<string, object> _writeGates = new();
 
     public NotesService(IProjectManager projects, IConfiguration config, ILogger<NotesService> logger,
@@ -904,7 +911,12 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
 
     // «Связать» несвязанное упоминание: обернуть первое словесное вхождение заголовка
     // в [[…]]; при отличии регистра исходный текст сохраняется как алиас.
-    public NoteDetail? LinkMention(string userId, string id, string targetTitle)
+    // S2c-12: это правка содержимого заметки — под тем же замком на её id, что Update/Delete:
+    // гонка «связать» с правкой той же заметки сериализована, потерянной правки нет.
+    public NoteDetail? LinkMention(string userId, string id, string targetTitle) =>
+        WithWriteGates(() => LinkMentionCore(userId, id, targetTitle), id);
+
+    private NoteDetail? LinkMentionCore(string userId, string id, string targetTitle)
     {
         // Право записи — как в Move/Update: ResolveRoot с правым WriteContent (S2c-7).
         // Без этой проверки «связать» переписывало файл проекта, видимого читателю лишь
@@ -996,8 +1008,10 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         // исходный и целевой источники (свой ключ + ключ арендатора каждого)
         InvalidateWrite(userId, sourceKey);
         if (newSource != sourceKey) InvalidateWrite(userId, newSource);
-        // Комментарии, привязанные к перенесённой заметке-документу, переезжают вместе с ней
-        RewriteAnnotationTargets(userId, sourceKey, DocPathOf(sourceKey, NormalizeRel(relPath)),
+        // Комментарии, привязанные к перенесённой заметке-документу, переезжают вместе с ней.
+        // S2c-12: Inner — без своего замка: он был бы вложенным в только что взятый замок
+        // переноса и сломал общий порядок ключей; правка комментариев идёт под ним.
+        RewriteAnnotationTargetsInner(userId, sourceKey, DocPathOf(sourceKey, NormalizeRel(relPath)),
             newSource, DocPathOf(newSource, newRel));
         return GetDetail(userId, EncodeId(newSource, newRel));
     }
@@ -1041,8 +1055,9 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         Directory.Move(oldFull, newFull);
         // S2c-11: содержимое папки переезжает — модель арендатора источника обязана быть сброшена
         InvalidateWrite(userId, sourceKey);
-        // Привязки комментариев к документам внутри перенесённой папки — по префиксу
-        RewriteAnnotationTargets(userId, sourceKey, DocPathOf(sourceKey, oldFolder),
+        // Привязки комментариев к документам внутри перенесённой папки — по префиксу.
+        // S2c-12: Inner — без своего замка (вложенный сломал бы порядок), под замком источника.
+        RewriteAnnotationTargetsInner(userId, sourceKey, DocPathOf(sourceKey, oldFolder),
             sourceKey, DocPathOf(sourceKey, newFolder), prefix: true);
 
         return before.Select(rel =>
@@ -1174,8 +1189,10 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
                     File.Move(full, newFull);
                     full = newFull;
                     effectiveId = EncodeId(sourceKey, newRel);
-                    // Комментарии на переименованную заметку-документ следуют за ней
-                    RewriteAnnotationTargets(userId, sourceKey, DocPathOf(sourceKey, NormalizeRel(relPath)),
+                    // Комментарии на переименованную заметку-документ следуют за ней.
+                    // S2c-12: Inner — без своего замка (вложенный сломал бы порядок), под
+                    // замком переименовываемой заметки.
+                    RewriteAnnotationTargetsInner(userId, sourceKey, DocPathOf(sourceKey, NormalizeRel(relPath)),
                         sourceKey, DocPathOf(sourceKey, newRel));
                 }
             }
@@ -1318,20 +1335,38 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     }
 
     // Убирает [[wikilinks]] из всех заметок пользователя, указывающие на заданный заголовок.
-    // [[Заголовок]] → Заголовок, [[Заголовок|алиас]] → алиас
+    // [[Заголовок]] → Заголовок, [[Заголовок|алиас]] → алиас.
+    // S2c-12: каскад правит сразу много заметок — по замку на каждую правимую, ключи
+    // WithWriteGates берёт по возрастанию (как в Move): две чистки или чистка с правкой той же
+    // заметки не разойдутся по кругу и не переплетутся в полуреальном состоянии. Модель
+    // снимается ДО замка (поиск целей — только чтение), под замком — запись файлов и
+    // InvalidateWrite по затронутым источникам (сбрасывает и модель арендатора).
     public void RemoveWikilinksTo(string userId, string targetTitle, string targetId)
     {
         // Перестраиваем модель, чтобы получить входящие ссылки на цель
         var model = GetModel(userId);
         if (!model.Backlinks.TryGetValue(targetId, out var backlinks)) return;
 
-        var sources = backlinks.Select(b => b.SourceId).Distinct();
-        foreach (var srcId in sources)
+        // S2c-5: каскад правит только те источники, где у вызывающего есть WriteContent;
+        // read-only проект (участник-читатель) остаётся нетронутым
+        var targets = new List<string>();
+        foreach (var srcId in backlinks.Select(b => b.SourceId).Distinct())
+        {
+            if (model.ById.TryGetValue(srcId, out var n) && CanWriteContentIn(userId, n.SourceKey))
+                targets.Add(srcId);
+        }
+        if (targets.Count == 0) return;
+
+        var ids = targets.ToArray();
+        WithWriteGates(() => RemoveWikilinksCore(model, userId, targetTitle, ids), ids);
+    }
+
+    private int RemoveWikilinksCore(Model model, string userId, string targetTitle, string[] targetIds)
+    {
+        var touched = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var srcId in targetIds)
         {
             if (!model.ById.TryGetValue(srcId, out var srcNote)) continue;
-            // S2c-5: каскад правит только те источники, где у вызывающего есть WriteContent;
-            // read-only проект (участник-читатель) остаётся нетронутым
-            if (!CanWriteContentIn(userId, srcNote.SourceKey)) continue;
             try
             {
                 var content = File.ReadAllText(srcNote.FullPath, Encoding.UTF8);
@@ -1347,13 +1382,15 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
                             : targetTitle,
                     RegexOptions.IgnoreCase);
                 File.WriteAllText(srcNote.FullPath, updated, new UTF8Encoding(false));
+                touched.Add(srcNote.SourceKey);
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Удаление ссылок на {Title} в {File}", targetTitle, srcNote.FullPath);
             }
         }
-        Invalidate(userId);
+        foreach (var sourceKey in touched) InvalidateWrite(userId, sourceKey);
+        return touched.Count;
     }
 
     // Вставляет поле expires в frontmatter (или создаёт новый frontmatter, если его нет).

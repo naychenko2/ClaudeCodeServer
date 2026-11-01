@@ -383,6 +383,128 @@ public class SharedProjectNotesWriteContentTests : IDisposable
         sut.GetSummaries(_ownerId, _projectId, null).Should().NotContain(n => n.Id == newId);
     }
 
+    // --- Конкурентность (S2c-12): комментарий редактора против правки владельца той же заметки ---
+
+    /// <summary>
+    /// S2c-12: «закрыть комментарий» редактора против правки того же комментария владельцем.
+    /// Без замка на id комментария их критические секции переплетаются: Update перечисляет
+    /// файл ДО статуса и пишет его поверх — статус редактора потерян молча (или наоборот:
+    /// правка владельца). Окно гонки расширяет большое тело комментария: обе стороны
+    /// читают/пишут ~мегабайты, без замка переплетение происходит в каждой попытке.
+    /// С замком (тот же _writeGates, что у Update/Delete) порядок сериализован и при любом
+    /// порядке сохраняются ОБЕ правки: merge-защита Update возвращает системные поля
+    /// комментария из только что перечитанного файла, статус редактора остаётся на месте.
+    /// Барьер — одно событие старта на обе стороны; ни Task.Delay, ни Thread.Sleep.
+    /// </summary>
+    [Fact]
+    public async Task Гонка_СтатусРедактораПротивПравкиВладельца_ОбеПравкиСохранены()
+    {
+        AddMember(_editorId, ProjectRole.Editor);
+        const int attempts = 3;
+
+        for (var i = 0; i < attempts; i++)
+        {
+            // Свежий экземпляр на попытку — та же причина, что у теста репина
+            var sut = Service();
+            var title = $"Статус-гонка {i}";
+            var comment = sut.Annotate(_ownerId, AnnotateOnProjectNote(title, new string('к', 2_000_000)));
+            var full = ProjectFile("Комментарии/" + title + ".md");
+            var newBody = "# " + title + "\n\n" + new string('б', 2_000_000) + "\n";
+
+            var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var st = Task.Run(async () => { await start.Task; return sut.SetAnnotationStatus(_editorId, comment.Id, "resolved"); });
+            var up = Task.Run(async () => { await start.Task; return sut.Update(_ownerId, comment.Id, new UpdateNoteRequest(Content: newBody)); });
+            start.SetResult();
+            await st;
+            await up;
+
+            // Файл целый и ни одна правка не потеряна: содержимое владельца записано,
+            // статус редактора — на месте. Мутация «SetAnnotationStatus без замка» бьёт
+            // здесь: Update пишет поверх статуса, статус=open.
+            File.Exists(full).Should().BeTrue();
+            File.ReadAllText(full).Should().Contain("ббб", "правка владельца записана");
+
+            var asOwner = Service().GetDocAnnotations(_ownerId, _projectId, "notes/" + ProjectNote + ".md");
+            asOwner.Should().ContainSingle(a => a.NoteId == comment.Id)
+                .Which.Status.Should().Be("resolved", "статус редактора не теряется под правкой владельца");
+        }
+    }
+
+    /// <summary>
+    /// S2c-12: repin редактора (перепривязка к другому выделению) против правки того же
+    /// комментария владельцем. Тот же замок на id комментария: без него новый якорь или
+    /// содержимое владельца теряются молча; с ним — сохраняются оба.
+    /// </summary>
+    [Fact]
+    public async Task Гонка_РепинРедактораПротивПравкиВладельца_ОбеПравкиСохранены()
+    {
+        AddMember(_editorId, ProjectRole.Editor);
+        const int attempts = 3;
+
+        for (var i = 0; i < attempts; i++)
+        {
+            // Свежий экземпляр на попытку: кэш модели per-owner живёт 2 с, и на общем
+            // экземпляре следующая попытка читала бы снимок до чужой записи (запись
+            // владельца-арендатора инвалидирует владельца и арендатора, не не-арендатора)
+            var sut = Service();
+            var title = $"Репин-гонка {i}";
+            var comment = sut.Annotate(_ownerId, AnnotateOnProjectNote(title, new string('к', 2_000_000)));
+            var full = ProjectFile("Комментарии/" + title + ".md");
+            var newBody = "# " + title + "\n\n" + new string('р', 2_000_000) + "\n";
+
+            // Модель редактора прогрета ДО гонки (в UI заметка открыта): иначе её первый
+            // скан столкнулся бы с 2MB-записью владельца — File.ReadAllText дал бы sharing
+            // violation, файл был бы пропущен и repin ответил бы ложным «не найдена»
+            // (фрагильность скана вне замка — тот же класс, что и потерянная правка;
+            // здесь она не предмет теста).
+            sut.GetDetail(_editorId, comment.Id).Should().NotBeNull();
+
+            var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var rp = Task.Run(async () =>
+            {
+                await start.Task;
+                return sut.RepinAnnotation(_editorId, comment.Id, new AnnotateSelection(0, 0, "Упоминание ЦелеваяТема"));
+            });
+            var up = Task.Run(async () => { await start.Task; return sut.Update(_ownerId, comment.Id, new UpdateNoteRequest(Content: newBody)); });
+            start.SetResult();
+            await rp;
+            await up;
+
+            // Перепривязка (новый якорь) и содержимое владельца — оба в файле.
+            var text = File.ReadAllText(full);
+            text.Should().Contain("ррр", "правка владельца записана");
+            text.Should().Contain("Упоминание ЦелеваяТема", "якорь перепривязки не потерян под правкой");
+        }
+    }
+
+    // --- Кэш модели (S2c-12): смена статуса комментария редактором видна владельцу сразу ---
+
+    [Fact]
+    public void СтатусРедактора_ТотЖеЭкземплярОтвечаетВладельцуСвежим()
+    {
+        AddMember(_editorId, ProjectRole.Editor);
+        var sut = Service();
+
+        var comment = sut.Annotate(_ownerId, AnnotateOnProjectNote("Статус-кэш", "тело"));
+
+        // Модель владельца прогрета ДО чужой записи (GetDetail её кэширует): без сброса его
+        // ключа следующая проверка читала бы кэш (TTL 2 с) и не видела бы статус редактора.
+        sut.GetDetail(_ownerId, comment.Id)!.Annotation!.Status.Should().Be("open");
+
+        sut.SetAnnotationStatus(_editorId, comment.Id, "resolved").Should().NotBeNull();
+
+        // Тот же экземпляр, сразу после записи: свежее состояние, а не снимок до неё
+        var asOwner = sut.GetDetail(_ownerId, comment.Id);
+        asOwner.Should().NotBeNull();
+        asOwner!.Annotation!.Status.Should().Be("resolved");
+    }
+
+    // Комментарий к проектной заметке с явным заголовком и телом (для тестов гонки — большое
+    // тело: оно расширяет критическую секцию обеих сторон)
+    private AnnotateRequest AnnotateOnProjectNote(string title, string body) =>
+        new(new AnnotateDocRef(_projectId, "notes/" + ProjectNote + ".md"),
+            new AnnotateSelection(0, 0, "Текст проектной заметки"), Comment: body, Title: title);
+
     private sealed class NoSessions : ISessionDirectory
     {
         public Session? GetById(string id) => null;

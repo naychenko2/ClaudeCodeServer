@@ -183,12 +183,15 @@ public sealed class StreamSentenceBuffer
     }
 }
 
-// Срезать из текста блок <think>…</think> целиком. Страховка для моделей в стиле qwen,
-// которые иногда всё равно выдают размышления, несмотря на enable_thinking:false.
+// Срезать из текста блок размышлений целиком. Страховка для моделей, которые выдают его
+// несмотря на enable_thinking:false: qwen — <think>…</think>; Gemma 4 при
+// reasoning_format:none кладёт в content пустой канал «<|channel>thought\n<channel|>»
+// (01.11.2026: маркер доезжал до заголовков чатов, коммитов и сводок).
 public static class ThinkingStripper
 {
     private static readonly System.Text.RegularExpressions.Regex Pattern =
-        new(@"<think>[\s\S]*?</think>\s*", System.Text.RegularExpressions.RegexOptions.Compiled);
+        new(@"(<think>[\s\S]*?</think>|<\|channel>[\s\S]*?<channel\|>)\s*",
+            System.Text.RegularExpressions.RegexOptions.Compiled);
 
     public static string Strip(string text) =>
         string.IsNullOrEmpty(text) ? text : Pattern.Replace(text, "");

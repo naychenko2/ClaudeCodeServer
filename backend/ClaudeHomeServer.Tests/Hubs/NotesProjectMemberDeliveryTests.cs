@@ -216,6 +216,9 @@ public class NotesProjectMemberDeliveryTests : IClassFixture<TestWebApplicationF
         var sink = new Sink();
         sink.Attach(conn);
         await conn.InvokeAsync("JoinProject", projectId);
+        // project_access_revoked шлётся в группу user_{id} (ProjectMembershipService) —
+        // своё соединение нужно, чтобы дождаться сигнала завершённого выкидывания.
+        await conn.InvokeAsync("JoinUser", SecondId);
         var revoked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         conn.On<JsonElement>("project_access_revoked", _ => revoked.TrySetResult());
 
@@ -260,6 +263,7 @@ public class NotesProjectMemberDeliveryTests : IClassFixture<TestWebApplicationF
         var sink = new Sink();
         sink.Attach(conn);
         await conn.InvokeAsync("JoinProject", projectId);
+        await conn.InvokeAsync("JoinUser", SecondId); // сигнал отзыва живёт в группе user_{id}
         var revoked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         conn.On<JsonElement>("project_access_revoked", _ => revoked.TrySetResult());
 

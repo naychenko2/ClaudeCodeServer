@@ -10,6 +10,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // Своя картинка иконки проекта (ревизия ADR-009 от 01.10.2026): загрузка, отдача,
 // переключение режима, права владельца и проверка формата по байтам.
+[Trait("Category", "Host")]
 public class ProjectIconImageControllerTests(TestWebApplicationFactory factory)
     : IClassFixture<TestWebApplicationFactory>
 {

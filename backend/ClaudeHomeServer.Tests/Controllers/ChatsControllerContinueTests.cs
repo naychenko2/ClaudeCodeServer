@@ -14,6 +14,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // ChatContinueServiceTests; здесь контракт эндпоинта: 200 {newSessionId, handoffNoteId},
 // 400 (нечего передавать), 404 (чужой/несуществующий), 409 (чат занят). Настоящую отправку
 // (процесс CLI) подменяет шов ChatContinueService.SendOverride.
+[Trait("Category", "Host")]
 public class ChatsControllerContinueTests(TestWebApplicationFactory factory)
     : IClassFixture<TestWebApplicationFactory>
 {

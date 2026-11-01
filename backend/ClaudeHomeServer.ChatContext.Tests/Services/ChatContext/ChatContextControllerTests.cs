@@ -18,16 +18,27 @@ namespace ClaudeHomeServer.Tests.Services.ChatContext;
 // Ручки контекста чата (ADR-023 §2.1) на собранном приложении: пять ручек и saved-files, 409 со
 // свежим DTO, 404 на чужую сессию, засев из фокусов вертикалей без записи на диск, двойная запись
 // фокуса и проекция фокуса в DTO вертикали, событие в хаб.
-public class ChatContextControllerTests : IDisposable
+[Trait("Category", "Host")]
+public class ChatContextControllerTests : IClassFixture<ChatContextControllerTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new();
+    // Хост на класс: каждый тест заводит свой проект в уникальном каталоге и свой чат, поэтому
+    // состояние хоста между тестами не пересекается
+    public sealed class Hosts : IDisposable
+    {
+        public TestWebApplicationFactory Factory { get; } = new();
+
+        public void Dispose() => Factory.Dispose();
+    }
+
+    private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
     private readonly string _ownerId;
     private readonly string _projectId;
     private readonly string _projectRoot;
 
-    public ChatContextControllerTests()
+    public ChatContextControllerTests(Hosts hosts)
     {
+        _factory = hosts.Factory;
         var users = _factory.Services.GetRequiredService<UserStore>();
         _ownerId = users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
         _projectRoot = Path.Combine(_factory.TempDir, "ctx_" + Guid.NewGuid().ToString("N")[..8]);
@@ -35,12 +46,6 @@ public class ChatContextControllerTests : IDisposable
         _projectId = _factory.Services.GetRequiredService<ProjectManager>()
             .Create("ctx", _projectRoot, _ownerId, TestWebApplicationFactory.TestUsername).Id;
         _client = _factory.CreateAuthenticatedClient();
-    }
-
-    public void Dispose()
-    {
-        _factory.Dispose();
-        GC.SuppressFinalize(this);
     }
 
     private SessionManager Sessions => _factory.Services.GetRequiredService<SessionManager>();

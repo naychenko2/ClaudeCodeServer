@@ -11,6 +11,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // Облегчённый список задач: GET /api/tasks и GET /api/projects/{id}/tasks не отдают
 // Description/ResultMarkdown, полная карточка — GET /api/tasks/{id}.
+[Trait("Category", "Host")]
 public class TaskListItemTests : IClassFixture<TestWebApplicationFactory>
 {
     private static readonly string[] HeavyAndListOnly =

@@ -25,6 +25,7 @@ namespace ClaudeHomeServer.Tests.Services.Mcp.Http;
 //   4. Полный контейнер через TestWebApplicationFactory: HiggsfieldToolset резолвится
 //      напрямую, попадает в реестр, hosted в Testing не зарегистрирован (это объясняет,
 //      почему существующие тесты блокер не ловили).
+[Trait("Category", "Host")]
 public class HiggsfieldRegistrationTests
 {
     // Полный контейнер: HiggsfieldToolset резолвится по собственному типу и попадает в

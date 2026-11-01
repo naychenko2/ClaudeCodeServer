@@ -12,6 +12,7 @@ public class DeviceHarnessPolicyTests
     private sealed class FakeHostCli(string? version) : IHostCliVersion
     {
         public string? Current => version;
+        public event Action? Changed { add { } remove { } }
     }
 
     private static IConfiguration Config(string? pin) => new ConfigurationBuilder()

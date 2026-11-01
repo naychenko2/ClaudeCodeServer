@@ -15,7 +15,9 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 //   reported_open         — исполнитель отчитался (ClaudeResult != null), задача InProgress,
 //                           чат исполнителя не в работе, старше порога;
 //   epic_open_after_merge — мерж Done, все дочерние Done, эпик открыт;
-//   orphans_in_closed     — эпик Done, в нём остались не-Done задачи.
+//   orphans_in_closed     — эпик Done, в нём остались не-Done задачи;
+//   unplanned_step        — цепочка шага со stepRef, которого нет в действующем плане (InPlan, B3),
+//                           не снята, план нарезан (cut/partial), старше порога.
 internal static class FeatureTracker
 {
     // Порог (минуты): меньше него после сдачи/возврата расхождения ещё нет — оркестратор мог
@@ -33,9 +35,15 @@ internal static class FeatureTracker
     internal const string ReportedOpen = "reported_open";
     internal const string EpicOpenAfterMerge = "epic_open_after_merge";
     internal const string OrphansInClosed = "orphans_in_closed";
+    internal const string UnplannedStep = "unplanned_step";
 
     // Значение FeatureStepChain.Outcome «снят» (FeatureRun.cs): отдельный вердикт, не TaskVerdicts.
     private const string ChainWithdrawn = "withdrawn";
+
+    // Значение FeatureStepProgress.PlanState «план нарезан»: FeatureStepAccounting.PlanCut приватен
+    // (его потребление вне класса отвернуто ревью B2b), а сам файл правится в B3b — не трогаем.
+    // Значение сверено с единственным определением: FeatureStepAccounting.cs:46.
+    private const string PlanStateCut = "cut";
 
     // epic/children — те же задачи, из которых построен run; accounting — результат учёта шагов
     // по этим задачам (тот же проход, вызывающий передаёт его как есть). sessions — снимок сессий
@@ -55,6 +63,12 @@ internal static class FeatureTracker
 
         var byId = new Dictionary<string, TaskItem>(StringComparer.Ordinal);
         foreach (var t in children) byId.TryAdd(t.Id, t);
+
+        // «План нарезан» для unplanned_step: PlanState ∈ {cut, partial}. При pending плана нет —
+        // и «вне плана» нет (сравнивать не с чем); при done все цепочки приняты и план закрыт —
+        // расхождения чинить нечем. Значение — из Progress, второго вычисления плана нет.
+        var planDecomposed = accounting.Progress.PlanState
+            is FeatureStepAccounting.PlanPartial or PlanStateCut;
         // Цепочка по id любой её задачи: доработка, привязанная через reviewOf (без stepRef), живёт
         // в цепочке шага — по KeyOf(доработки) её бы не нашли.
         var chainByTaskId = new Dictionary<string, FeatureStepChain>(StringComparer.Ordinal);
@@ -98,6 +112,26 @@ internal static class FeatureTracker
                         && FeatureProjector.TaskStart(t) > lastRound.CompletedAt.Value))
                 {
                     issues.Add(new FeatureTrackerIssue(ReturnedNoRework, lastRound.ReviewTaskId, chain.StepRef, lastRound.CompletedAt));
+                }
+            }
+
+            // unplanned_step: цепочка жива (снятая пропущена выше), её шаг со stepRef нет в
+            // действующем плане (InPlan — тот же проход, B3; второго счётчика нет), план нарезан,
+            // а с появления шага (его старта, как в returned_no_rework) прошло больше порога:
+            // оркестратор мог как раз обновлять план. Шаг без stepRef (старые данные) не отмечается:
+            // его «код» — id задачи, в плане такого быть не может, а строка с guid — шум.
+            if (planDecomposed && !facts.InPlan)
+            {
+                // Голова цепочки — та же, что в учёте: первый role=step в порядке старта.
+                // Вне children её быть не может (цепочку породили те же задачи), но null — молчание.
+                var head = chain.TaskIds
+                    .Select(id => byId.GetValueOrDefault(id))
+                    .FirstOrDefault(t => t?.Role == TaskRoles.Step);
+                if (head is not null && !string.IsNullOrWhiteSpace(head.StepRef))
+                {
+                    var since = FeatureProjector.TaskStart(head);
+                    if (nowUtc - since > grace)
+                        issues.Add(new FeatureTrackerIssue(UnplannedStep, head.Id, chain.StepRef, since));
                 }
             }
         }

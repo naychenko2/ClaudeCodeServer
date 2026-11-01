@@ -3,17 +3,18 @@ using ClaudeHomeServer.Services.Tasks.Projector;
 
 namespace ClaudeHomeServer.Tasks.Tests;
 
-// TR-B1a+TR-B1b: «Сверка трекера» (разрез Александра 26.10) — FeatureTracker.Build: список
-// расхождений на том же проходе, что учёт шагов. Шесть видов: unreviewed, returned_no_rework,
-// dead_verdict, reported_open, epic_open_after_merge, orphans_in_closed. Эталон каждого теста —
-// условие таблицы разреза, а не вывод реализации.
+// TR-B1a+TR-B1b+B4: «Сверка трекера» (разрез Александра 26.10) — FeatureTracker.Build: список
+// расхождений на том же проходе, что учёт шагов. Семь видов: unreviewed, returned_no_rework,
+// dead_verdict, reported_open, epic_open_after_merge, orphans_in_closed, unplanned_step.
+// Эталон каждого теста — условие таблицы разреза, а не вывод реализации.
 //
 // Мутации: TrackerGraceMinutes = 0 — тест порога красный (сданная 29 мин назад тоже попадает);
 // убрать ветку «виток ещё открыт» — тест «открытое пачечное ревью покрывает шаг» красный;
 // убрать метку из исключения — тест метки красный; убрать проверку статуса эпика в orphans —
 // тест «открытый эпик» красный; заменить `> t.CompletedAt` на `!= null` в dead_verdict —
 // тест «ревью по свежей доработке» красный; убрать требование merge-задачи в epic_open_after_merge — тест «без мержа» красный; опустить трим/регистр в метке — тест метки красный; убрать проверку chatBusy в
-// reported_open — тест «чат занят» красный.
+// reported_open — тест «чат занят» красный; убрать условие PlanState в unplanned_step —
+// тест «план pending» красный; убрать выдержку unplanned_step — тест «моложе выдержки» красный.
 public class FeatureTrackerTests
 {
     private const string Epic = "ep";
@@ -63,6 +64,15 @@ public class FeatureTrackerTests
     {
         Id = "m", FeatureId = Epic, Role = TaskRoles.Merge, Status = TaskItemStatus.Done,
         CreatedAt = T0.AddMinutes(minute), CompletedAt = T0.AddMinutes(minute + 1),
+    };
+
+    // Задача-план: stepRefs — коды шагов плана. Без кодов (PlanSteps null) — PlanState pending:
+    // плана нет. Один план с кодами — cut; с кодами вместе с планом без кодов — partial.
+    private static TaskItem Plan(string id, int minute, params string[] stepRefs) => new()
+    {
+        Id = id, FeatureId = Epic, Role = TaskRoles.Plan, Status = TaskItemStatus.Done,
+        CreatedAt = T0.AddMinutes(minute), CompletedAt = T0.AddMinutes(minute + 1),
+        PlanSteps = stepRefs.Length == 0 ? null : stepRefs.Select(x => new PlannedStep { StepRef = x, Title = x }).ToList(),
     };
 
     // Тот же набор задач, что берёт FeatureProjector.BuildCore, и тот же проход учёта.
@@ -391,5 +401,104 @@ public class FeatureTrackerTests
         var issues = Track(Feature(), Step("s", "Ш1", 1, TaskItemStatus.InProgress));
 
         OfKind(issues, FeatureTracker.OrphansInClosed).Should().BeEmpty();
+    }
+
+    // ─── unplanned_step (B4) ────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void UnplannedStep_ДваШагаВнеПлана_ОбаРасхождения()
+    {
+        // План нарезан ([S0-4]), шаги S0-4a/S0-4b в него не входят и старше выдержки — по записи
+        // на цепочку, со stepRef и с момента появления шага (его старта).
+        var issues = Track(Feature(), Plan("p", 0, "S0-4"), Step("s1", "S0-4a", 1), Step("s2", "S0-4b", 2));
+
+        var up = OfKind(issues, FeatureTracker.UnplannedStep);
+        up.Should().HaveCount(2);
+        up[0].TaskId.Should().Be("s1");
+        up[0].StepRef.Should().Be("S0-4a");
+        up[0].Since.Should().Be(T0 + TimeSpan.FromMinutes(1), "since — момент появления шага");
+        up[1].TaskId.Should().Be("s2");
+        up[1].StepRef.Should().Be("S0-4b");
+    }
+
+    [Fact]
+    public void UnplannedStep_ПланPending_Ничего()
+    {
+        // Плана нет (ни задачи-плана) — «вне плана» нет, с чем сравнивать.
+        // Мутация «убрать условие PlanState» краснит этот тест.
+        var issues = Track(Feature(), Step("s", "S0-4a", 1));
+
+        OfKind(issues, FeatureTracker.UnplannedStep).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void UnplannedStep_МоложеВыдержки_Ничего()
+    {
+        // Шаг появился 1 мин назад: оркестратор мог как раз обновлять план.
+        // Мутация «убрать выдержку» краснит этот тест.
+        var issues = Track(Feature(), Plan("p", 0, "S0-4"), Step("s", "S0-4a", 119));
+
+        OfKind(issues, FeatureTracker.UnplannedStep).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void UnplannedStep_Порог29Нет31ДаГраница30Нет()
+    {
+        // Та же граница, что у соседей: «старше порога» строго. Возраст = 120 − minute.
+        var issues = Track(Feature(), Plan("p", 0, "S0-4"),
+            Step("s29", "A", 91), Step("s31", "B", 89), Step("s30", "C", 90));
+
+        var up = OfKind(issues, FeatureTracker.UnplannedStep);
+        up.Should().HaveCount(1);
+        up[0].TaskId.Should().Be("s31");
+    }
+
+    [Fact]
+    public void UnplannedStep_ШагИзПлана_Ничего()
+    {
+        // InPlan=true (тот же ключ, что у KeyOf/плана): шаг на своём месте, расхождения нет.
+        var issues = Track(Feature(), Plan("p", 0, "S0-4"), Step("s", "S0-4", 1));
+
+        OfKind(issues, FeatureTracker.UnplannedStep).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void UnplannedStep_ПланPartial_Записывает()
+    {
+        // partial (план с кодами + план без кодов) — план существует, «вне плана» применимо.
+        var issues = Track(Feature(), Plan("p1", 0, "S0-4"), Plan("p2", 1), Step("s", "S0-4a", 2));
+
+        OfKind(issues, FeatureTracker.UnplannedStep).Should().HaveCount(1);
+    }
+
+    [Fact]
+    public void UnplannedStep_СнятаяЦепочка_Ничего()
+    {
+        // Снятая цепочка пропускается целиком, как у соседних видов: её вынесли намеренно.
+        var issues = Track(Feature(), Plan("p", 0, "S0-4"), Step("s", "S0-4a", 1),
+            Verdict("r", TaskRoles.Review, TaskVerdicts.Withdrawn, 5, "s"));
+
+        OfKind(issues, FeatureTracker.UnplannedStep).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void UnplannedStep_ШагБезStepRef_Ничего()
+    {
+        // Старые данные: шаг без stepRef (ключ = id задачи) — в плане такого быть не может,
+        // строка с guid — шум, а не расхождение.
+        var issues = Track(Feature(), Plan("p", 0, "S0-4"), Step("s", "", 1));
+
+        OfKind(issues, FeatureTracker.UnplannedStep).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void UnplannedStep_ФичаПолностьюПринята_Ничего()
+    {
+        // PlanState done (все цепочки приняты, план закрыт) — чинить нечем: {cut, partial} не включает done.
+        var issues = Track(Feature(), Plan("p", 0, "S0-4"),
+            Step("s1", "S0-4", 1), Verdict("r1", TaskRoles.Review, TaskVerdicts.Accepted, 5, "s1"),
+            Step("s2", "S0-4a", 2), Verdict("r2", TaskRoles.Review, TaskVerdicts.Accepted, 6, "s2"));
+
+        OfKind(issues, FeatureTracker.UnplannedStep).Should().BeEmpty();
     }
 }

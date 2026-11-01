@@ -32,6 +32,9 @@ export const GROUPS: Record<DeployGroup, { title: string; done: string; run: str
 // Карта известных шагов агента: сырое имя → человеческая подпись и группа.
 // Шага здесь нет — строка всё равно рисуется, сырым именем (см. buildStepRows).
 export const STEP_LABELS: Record<string, { ru: string; group: DeployGroup }> = {
+  // Агент Linux (deploy-linux.sh) пишет сборку одним шагом build; дробные шаги ниже — от
+  // прежнего агента, их оставляем: журнал старых выкаток читается той же картой
+  'build': { ru: 'сборка', group: 'building' },
   'frontend': { ru: 'фронтенд', group: 'building' },
   'staging-clean': { ru: 'чищу staging', group: 'building' },
   'publish-backend': { ru: 'бэкенд', group: 'building' },
@@ -44,6 +47,7 @@ export const STEP_LABELS: Record<string, { ru: string; group: DeployGroup }> = {
   'sandbox-image': { ru: 'образ песочницы', group: 'building' },
   'data-backup': { ru: 'резервная копия данных', group: 'switching' },
   'stop': { ru: 'останавливаю прод', group: 'switching' },
+  'stop-sandbox': { ru: 'останавливаю песочницу', group: 'switching' },
   'snapshot': { ru: 'снимок текущего релиза', group: 'switching' },
   'swap': { ru: 'подменяю сборку', group: 'switching' },
   'sandbox-container': { ru: 'пересоздаю песочницу', group: 'switching' },
@@ -171,7 +175,8 @@ export function buildPlan(history: DeployJournalRecord[] | null | undefined): De
 
 // === Шаги записи ===
 
-export type StepStatus = 'done' | 'fail' | 'run' | 'wait';
+// skip — агент шаг записал, но пропустил (образ песочницы без пересборки и т.п.)
+export type StepStatus = 'done' | 'skip' | 'fail' | 'run' | 'wait';
 
 export interface StepRow {
   name: string;                 // сырое имя шага — по нему человек ищет шаг в логе агента
@@ -187,12 +192,15 @@ function mapStepStatus(raw: string | null | undefined): StepStatus {
   const s = (raw ?? '').toLowerCase();
   if (s === 'fail' || s === 'failed' || s === 'error') return 'fail';
   if (s === 'run' || s === 'running' || s === 'start' || s === 'started') return 'run';
+  if (s === 'skip' || s === 'skipped') return 'skip';
   return 'done';
 }
 
 // Строки шагов: фактические из записи + ожидаемые из плана, которых ещё не было.
 // Незнакомый шаг наследует группу предыдущего известного — так он не теряется
 // и не сбивает раскладку.
+// Агент пишет шаг в журнал ПО ЗАВЕРШЕНИИ (switch-release.sh: `step data-backup ok`), строки
+// «идёт» в журнале нет: идущим считаем первый ожидаемый шаг текущей фазы.
 export function buildStepRows(
   rec: DeployJournalRecord | null,
   plan: DeployPlan | null,
@@ -232,6 +240,14 @@ export function buildStepRows(
       ms: null,
     });
     prevGroup = known?.group ?? prevGroup;
+  }
+
+  // Только шаг ТЕКУЩЕЙ фазы: в плане его нет (агент делает что-то новое) — честнее «—»,
+  // чем приписать работу шагу следующей фазы
+  if (rec && running && rec.phase !== 'queued' && !rows.some(r => r.status === 'run')) {
+    const group = phaseGroup(rec.phase);
+    const next = rows.find(r => r.status === 'wait' && r.group === group);
+    if (next) next.status = 'run';
   }
   return rows;
 }

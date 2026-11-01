@@ -16,34 +16,45 @@ namespace ClaudeHomeServer.Tests.AudioEditor;
 // (чужое неотличимо от несуществующего), ревизия нитей — 409, отдача файла версии с Range, сохранение
 // в проект новыми файлами с версионированием имени и папкой стемов, отказ путям вне проекта, личный
 // чат без сохранения в проект. Поставщик — фейк в памяти поверх настоящего исполнителя задач.
-public class AudioEditorControllerTests : IDisposable
+[Trait("Category", "Host")]
+public class AudioEditorControllerTests : IClassFixture<AudioEditorControllerTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new();
-    private readonly HttpClient _client;
-    private readonly string _ownerId;
-    private readonly string _projectId;
-    private readonly string _projectRoot;
-
     // Байты результатов: по ним проверяются Range и содержимое сохранённых файлов
     private static readonly byte[] Mp3 = [.. Enumerable.Range(0, 64).Select(i => (byte)i)];
     private static readonly byte[] Abc = "X:1\nK:C\nCDEF|"u8.ToArray();
     private static readonly byte[] Vocals = [1, 1, 1, 1];
     private static readonly byte[] Drums = [2, 2, 2, 2];
 
-    public AudioEditorControllerTests()
+    private readonly Hosts _hosts;
+
+    public AudioEditorControllerTests(Hosts hosts) => _hosts = hosts;
+
+    // Хост на КЛАСС: конфигурация одна — FakeEngine как IAudioEngine. Проект, чат, нить и файлы
+    // каждый тест заводит сам в Start(): свой каталог в TempDir, свой клиент, своя запись
+    public sealed class Hosts : IDisposable
     {
-        _factory.ExtraServices = services => services.AddSingleton<IAudioEngine>(new FakeEngine());
+        public EngineHost Engine { get; } = new();
+
+        public void Dispose() => Engine.Dispose();
+    }
+
+    public sealed class EngineHost : TestWebApplicationFactory
+    {
+        public EngineHost() => ExtraServices = services => services.AddSingleton<IAudioEngine>(new FakeEngine());
+    }
+
+    private TestWebApplicationFactory _factory = null!;
+    private HttpClient _client = null!;
+    private string _ownerId = "", _projectId = "", _projectRoot = "";
+
+    private void Start()
+    {
+        _factory = _hosts.Engine;
         var users = _factory.Services.GetRequiredService<UserStore>();
         _ownerId = users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
         (_projectId, _projectRoot) = CreateProject(TestWebApplicationFactory.TestUsername);
         File.WriteAllBytes(Path.Combine(_projectRoot, "intro.mp3"), [9, 9, 9]);
         _client = _factory.CreateAuthenticatedClient();
-    }
-
-    public void Dispose()
-    {
-        _factory.Dispose();
-        GC.SuppressFinalize(this);
     }
 
     // Озвучка даёт звук и партитуру, разбор на дорожки — два стема; область не отвергает
@@ -140,6 +151,7 @@ public class AudioEditorControllerTests : IDisposable
     [Fact]
     public async Task Без_токена_401()
     {
+        Start();
         var anonymous = _factory.CreateClient();
         (await anonymous.GetAsync($"{Root}/catalog")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
         (await anonymous.GetAsync("/api/audio-editor/chats/any/state")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
@@ -148,6 +160,7 @@ public class AudioEditorControllerTests : IDisposable
     [Fact]
     public async Task Чужой_проект_чат_нить_и_файл_неотличимы_от_несуществующих()
     {
+        Start();
         var (chatUrl, threadId, versionId) = await ProjectVersion();
         var second = _factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
 
@@ -184,6 +197,7 @@ public class AudioEditorControllerTests : IDisposable
     [Fact]
     public async Task Чужая_нить_в_запуске_404_до_исполнителя()
     {
+        Start();
         var chatA = await ProjectChat();
         var threadA = await OpenFile(Chat(chatA));
         var chatB = await ProjectChat();
@@ -207,6 +221,7 @@ public class AudioEditorControllerTests : IDisposable
     [Fact]
     public async Task Устаревшая_ревизия_409_с_актуальным_состоянием()
     {
+        Start();
         var chatUrl = Chat(await ProjectChat());
         var threadId = await OpenFile(chatUrl);
         var actual = await Revision(chatUrl);
@@ -230,6 +245,7 @@ public class AudioEditorControllerTests : IDisposable
     [Fact]
     public async Task Состояние_несёт_нити_каталог_и_префы()
     {
+        Start();
         var chatUrl = Chat(await ProjectChat());
         await OpenFile(chatUrl);
         (await _client.PutAsJsonAsync($"{Root}/prefs/music", new { operation = "song", count = 2 })).StatusCode
@@ -251,6 +267,7 @@ public class AudioEditorControllerTests : IDisposable
     [Fact]
     public async Task Входы_операции_сохраняются_в_нити_и_префах_с_проверкой()
     {
+        Start();
         var chatUrl = Chat(await ProjectChat());
         var threadId = await OpenFile(chatUrl);
         var inputs = new { language = "ru", referencePath = "intro.mp3", startSec = 1.5, voice = "voice:anya" };
@@ -285,6 +302,7 @@ public class AudioEditorControllerTests : IDisposable
     [Fact]
     public async Task Файл_версии_отдаётся_с_Range_и_Content_Type()
     {
+        Start();
         var (chatUrl, threadId, versionId) = await ProjectVersion();
         var url = $"{chatUrl}/threads/{threadId}/versions/{versionId}/files/main";
 
@@ -312,6 +330,7 @@ public class AudioEditorControllerTests : IDisposable
     [Fact]
     public async Task Следующая_версия_пишется_рядом_с_исходником_всеми_файлами_и_не_затирает()
     {
+        Start();
         var (chatUrl, threadId, versionId) = await ProjectVersion();
 
         var first = await _client.PostAsJsonAsync($"{chatUrl}/threads/{threadId}/save", new { versionId });
@@ -330,6 +349,7 @@ public class AudioEditorControllerTests : IDisposable
     [Fact]
     public async Task Стемы_сохраняются_папкой()
     {
+        Start();
         var (chatUrl, threadId, versionId) = await ProjectVersion("process", "separate");
 
         var resp = await _client.PostAsJsonAsync($"{chatUrl}/threads/{threadId}/save", new { versionId });
@@ -346,6 +366,7 @@ public class AudioEditorControllerTests : IDisposable
     [Fact]
     public async Task Сохранить_как_со_стемами_не_перепривязывает_нить_к_папке()
     {
+        Start();
         var (chatUrl, threadId, versionId) = await ProjectVersion("process", "separate");
 
         var resp = await _client.PostAsJsonAsync($"{chatUrl}/threads/{threadId}/save",
@@ -373,6 +394,7 @@ public class AudioEditorControllerTests : IDisposable
     [InlineData("theme.mp3")]
     public async Task Сохранить_как_с_чужим_расширением_берёт_расширение_версии(string fileName)
     {
+        Start();
         var (chatUrl, threadId, versionId) = await ProjectVersion();
 
         var resp = await _client.PostAsJsonAsync($"{chatUrl}/threads/{threadId}/save",
@@ -388,6 +410,7 @@ public class AudioEditorControllerTests : IDisposable
     [Fact]
     public async Task После_сохранения_нить_идёт_за_файлом_проекта()
     {
+        Start();
         var (chatUrl, threadId, versionId) = await ProjectVersion();
 
         var resp = await _client.PostAsJsonAsync($"{chatUrl}/threads/{threadId}/save", new { versionId });
@@ -410,6 +433,7 @@ public class AudioEditorControllerTests : IDisposable
     [Fact]
     public async Task Сохранить_как_на_занятое_имя_409_с_подсказкой()
     {
+        Start();
         var (chatUrl, threadId, versionId) = await ProjectVersion();
         File.WriteAllBytes(Path.Combine(_projectRoot, "theme.abc"), [7]);
 
@@ -434,6 +458,7 @@ public class AudioEditorControllerTests : IDisposable
     [InlineData(null, "../evil.mp3")]
     public async Task Путь_вне_проекта_отказ_до_записи(string? folder, string? fileName)
     {
+        Start();
         var (chatUrl, threadId, versionId) = await ProjectVersion();
         // Папка снаружи существует и доступна на запись: отказ обязан прийти от границы проекта,
         // а не от «папка не найдена»
@@ -453,6 +478,7 @@ public class AudioEditorControllerTests : IDisposable
     [Fact]
     public async Task Путь_через_ссылку_и_вне_проекта_в_нити_и_запуске_отказ()
     {
+        Start();
         var chatUrl = Chat(await ProjectChat());
         var outside = Path.Combine(_factory.TempDir, "secret.mp3");
         File.WriteAllBytes(outside, [6]);
@@ -480,6 +506,7 @@ public class AudioEditorControllerTests : IDisposable
     [Fact]
     public async Task Личный_чат_генерирует_и_отдаёт_файл_но_не_сохраняет_в_проект()
     {
+        Start();
         var chat = await Sessions.CreateChatAsync(_ownerId, ClaudeMode.AcceptEdits, name: "Личный");
         var personal = $"/api/audio-editor/chats/{chat.Id}";
 
@@ -513,6 +540,7 @@ public class AudioEditorControllerTests : IDisposable
     [Fact]
     public async Task Личная_ручка_не_открывает_чат_проекта_и_чужой_личный_чат()
     {
+        Start();
         var projectChat = await ProjectChat();
         (await _client.GetAsync($"/api/audio-editor/chats/{projectChat}/state")).StatusCode.Should().Be(HttpStatusCode.NotFound);
 

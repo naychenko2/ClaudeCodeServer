@@ -13,7 +13,7 @@
 // C.track, вместо графика подложка.
 
 import type { ComponentType } from 'react';
-import { Gpu, Cpu, Zap, CircuitBoard, HardDrive, MemoryStick, Fan } from 'lucide-react';
+import { Gpu, Cpu, Zap, CircuitBoard, Droplet, HardDrive, MemoryStick, Fan } from 'lucide-react';
 import { C, FONT, FS, R, SP } from 'aihome_shell/kit';
 import type { HwTileView } from './hardwareFormat';
 import { ruNum } from './hardwareFormat';
@@ -21,7 +21,7 @@ import { Sparkline, SparklinePlaceholder } from './Sparkline';
 
 // kind → иконка lucide (имя из hardwareFormat.hwIcon).
 const ICONS: Record<string, ComponentType<{ size?: number; strokeWidth?: number; color?: string; style?: React.CSSProperties; className?: string }>> = {
-  Gpu, Cpu, Zap, CircuitBoard, HardDrive, MemoryStick, Fan,
+  Gpu, Cpu, Zap, CircuitBoard, Droplet, HardDrive, MemoryStick, Fan,
 };
 
 // Тон плитки по level: фон/рамка/точка/цвет значения. stale — данные устарели:
@@ -71,7 +71,7 @@ export function HwTile({ view, stale }: { view: HwTileView; stale?: boolean }) {
           fontSize: FS.sm, fontWeight: 600, lineHeight: 1.3, margin: '2px 0 0',
           color: C.textMuted, fontStyle: 'italic',
         }}>
-          {view.sensor === 'none' ? 'датчика нет' : 'нет данных'}
+          {view.sensor === 'none' && view.unit === '°C' ? 'датчика нет' : 'нет данных'}
         </div>
       ) : (
         <div style={{
@@ -79,7 +79,7 @@ export function HwTile({ view, stale }: { view: HwTileView; stale?: boolean }) {
           fontSize: 20, fontWeight: 600, lineHeight: 1.2, margin: '2px 0 0', whiteSpace: 'nowrap',
           color: t.value,
         }}>
-          {`${view.dec ? ruNum(view.value!) : Math.round(view.value!)} °C`}
+          {`${view.dec ? ruNum(view.value!) : Math.round(view.value!)} ${view.unit}`}
         </div>
       )}
       {/* Подпись датчика */}

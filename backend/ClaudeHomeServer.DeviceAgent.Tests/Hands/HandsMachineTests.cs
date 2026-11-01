@@ -157,6 +157,7 @@ public class HandsHelloTests : IDisposable
         public List<DeviceHello> Hellos { get; } = [];
         public event Func<DeviceExecOpenCommand, Task>? ExecOpen { add { } remove { } }
         public event Func<Task>? Reconnected { add { } remove { } }
+        public event Func<Task>? HelloRequested { add { } remove { } }
 
         public Task<DeviceHelloAck> HelloAsync(DeviceHello hello, CancellationToken ct)
         {

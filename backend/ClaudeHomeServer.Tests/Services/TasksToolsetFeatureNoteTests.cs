@@ -28,6 +28,7 @@ namespace ClaudeHomeServer.Tests.Services;
 //   «БезИдущихЗадачей» краснеет (B14 возврат FIN: штамп — FeatureBrief.ActiveStageOf,
 //   та же база, что у StaleOf; R-B4 минор 2 закрыт).
 [Trait("Category", "Integration")]
+[Trait("Category", "Host")]
 public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;
@@ -370,5 +371,180 @@ public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFact
         var brief = FeatureBrief.Build(run, null, null, DateTime.UtcNow);
         brief.Kind.Should().Be("queued", "фикстура: удержание с причиной queue");
         brief.Note!.Stale.Should().BeFalse("голос записан только что в очереди — категория не менялась");
+    }
+
+    // ─── оценка оркестратора (featureEstimate): пишется вместе с голосом ───────────────────────
+
+    [Fact]
+    public void ToolsList_FeatureEstimate_СтатичныйПараметрСОписанием()
+    {
+        foreach (var (label, tools) in new[] { ("project", TasksToolset.ProjectChatTools), ("personal", TasksToolset.PersonalTools) })
+        {
+            var props = (JsonObject)tools.Single(t => t.Name == "tasks_update").InputSchema["properties"]!;
+            props.ContainsKey("featureEstimate").Should().BeTrue($"{label}: featureEstimate в tools/list всегда");
+            var est = (JsonObject)props["featureEstimate"]!;
+            ((JsonObject)est["properties"]!).Select(p => p.Key).Should()
+                .BeEquivalentTo("remaining", "etaMinutes", "why");
+            est.ContainsKey("required").Should().BeFalse($"{label}: обязательных полей у оценки нет");
+            est["description"]!.GetValue<string>().Should().Contain("в каждом ходе").And.Contain("why");
+            props["featureNote"]!["description"]!.GetValue<string>().Should().Contain("в каждом ходе");
+        }
+    }
+
+    [Fact]
+    public async Task FeatureEstimate_Curator_ПишетсяВместеСГолосомИИнициальныйСрокОдинРаз()
+    {
+        var (projectId, _) = await CreateProjectWithSessionAsync("est");
+        var (curatorId, epicId, _) = await CreateFeatureFromCuratorAsync(projectId, "est");
+
+        var (text, isError) = await CallToolAsync(curatorId, "tasks_update", new
+        {
+            id = epicId, featureNote = "идём",
+            featureEstimate = new { remaining = new[] { " ревью ", "финал" }, etaMinutes = 150, why = " фронт " },
+        });
+        isError.Should().BeFalse(text);
+
+        var est = Tasks.GetById(epicId)!.Note!.Estimate!;
+        (est.EtaMinutes, est.Why).Should().Be((150, "фронт"));
+        est.Remaining.Should().Equal("ревью", "финал");
+        JsonSerializer.Deserialize<JsonElement>(text).GetProperty("note").GetProperty("estimate")
+            .GetProperty("etaMinutes").GetInt32().Should().Be(150);
+
+        // Новый вызов без оценки заменяет голос целиком: оценка не «залипает».
+        (await CallToolAsync(curatorId, "tasks_update", new { id = epicId, featureNote = "без оценки" }))
+            .IsError.Should().BeFalse();
+        Tasks.GetById(epicId)!.Note!.Estimate.Should().BeNull();
+    }
+
+    // Старые клиенты шлют done/total/inProgress/percent: принимаются и отбрасываются, срок сохраняется.
+    [Fact]
+    public async Task FeatureEstimate_СтарыеПоляПроцента_ПринимаютсяИОтбрасываются()
+    {
+        var (projectId, _) = await CreateProjectWithSessionAsync("estlegacy");
+        var (curatorId, epicId, _) = await CreateFeatureFromCuratorAsync(projectId, "estlegacy");
+
+        var (text, isError) = await CallToolAsync(curatorId, "tasks_update", new
+        {
+            id = epicId, featureNote = "идём",
+            featureEstimate = new { done = 4, total = 9, inProgress = 3, percent = 60, etaMinutes = 160 },
+        });
+        isError.Should().BeFalse(text);
+
+        var est = JsonSerializer.Serialize(Tasks.GetById(epicId)!.Note!.Estimate);
+        est.Should().Contain("\"EtaMinutes\":160");
+        foreach (var dropped in new[] { "Done", "Total", "InProgress", "Percent" })
+            est.Should().NotContain($"\"{dropped}\"");
+    }
+
+    // Оценка без срока и без remaining (пустая, одни старые done/total) молча отбрасывается: голос
+    // пишется, ошибки нет, пустая оценка не сохраняется; срок или remaining — принимаются.
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task FeatureEstimate_СрокИлиЧтоДальше(bool onlyLegacy, bool withRemaining)
+    {
+        var (projectId, _) = await CreateProjectWithSessionAsync("estempty");
+        var (curatorId, epicId, _) = await CreateFeatureFromCuratorAsync(projectId, "estempty");
+
+        object est = onlyLegacy ? new { done = 4, total = 9 }
+            : withRemaining ? new { remaining = new[] { "x" } }
+            : new { };
+        var (text, isError) = await CallToolAsync(curatorId, "tasks_update", new { id = epicId, featureNote = "г", featureEstimate = est });
+        isError.Should().BeFalse(text);
+        var note = Tasks.GetById(epicId)!.Note!;
+        note.Text.Should().Be("г", "голос сохранён");
+        if (withRemaining) note.Estimate.Should().NotBeNull();
+        else note.Estimate.Should().BeNull("пустая оценка отброшена");
+
+        var (_, eta) = await CallToolAsync(curatorId, "tasks_update", new { id = epicId, featureNote = "г2", featureEstimate = new { etaMinutes = 160 } });
+        eta.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task FeatureEstimate_БезГолоса_Отказ()
+    {
+        var (projectId, _) = await CreateProjectWithSessionAsync("estnonote");
+        var (curatorId, epicId, _) = await CreateFeatureFromCuratorAsync(projectId, "estnonote");
+        var est = new { etaMinutes = 60 };
+
+        var (noNote, err1) = await CallToolAsync(curatorId, "tasks_update", new { id = epicId, featureEstimate = est });
+        err1.Should().BeTrue();
+        noNote.Should().Contain("вместе с голосом");
+        var (emptyNote, err2) = await CallToolAsync(curatorId, "tasks_update", new { id = epicId, featureNote = "", featureEstimate = est });
+        err2.Should().BeTrue();
+        emptyNote.Should().Contain("вместе с голосом");
+        Tasks.GetById(epicId)!.Note.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task FeatureEstimate_СрокМеньшеМинуты_Отказ()
+    {
+        var (projectId, _) = await CreateProjectWithSessionAsync("estbadeta");
+        var (curatorId, epicId, _) = await CreateFeatureFromCuratorAsync(projectId, "estbadeta");
+
+        var (text, isError) = await CallToolAsync(curatorId, "tasks_update", new
+        {
+            id = epicId, featureNote = "г", featureEstimate = new { etaMinutes = 0 },
+        });
+
+        isError.Should().BeTrue();
+        text.Should().Contain("featureEstimate.etaMinutes");
+        Tasks.GetById(epicId)!.Note.Should().BeNull("отказ — голос тоже не записан");
+    }
+
+    [Fact]
+    public async Task FeatureEstimate_ДлинныеRemainingИWhy_Отказ()
+    {
+        var (projectId, _) = await CreateProjectWithSessionAsync("estlong");
+        var (curatorId, epicId, _) = await CreateFeatureFromCuratorAsync(projectId, "estlong");
+
+        var (t1, e1) = await CallToolAsync(curatorId, "tasks_update", new
+        {
+            id = epicId, featureNote = "г",
+            featureEstimate = new { remaining = new[] { new string('я', 41) } },
+        });
+        e1.Should().BeTrue(); t1.Should().Contain("remaining");
+        var (t2, e2) = await CallToolAsync(curatorId, "tasks_update", new
+        {
+            id = epicId, featureNote = "г",
+            featureEstimate = new { remaining = Enumerable.Repeat("п", 9).ToArray() },
+        });
+        e2.Should().BeTrue(); t2.Should().Contain("remaining");
+        var (t3, e3) = await CallToolAsync(curatorId, "tasks_update", new
+        {
+            id = epicId, featureNote = "г",
+            featureEstimate = new { etaMinutes = 60, why = new string('я', 161) },
+        });
+        e3.Should().BeTrue(); t3.Should().Contain("why");
+        // Ровно на границе — принимается.
+        var (_, ok) = await CallToolAsync(curatorId, "tasks_update", new
+        {
+            id = epicId, featureNote = "г",
+            featureEstimate = new
+            {
+                why = new string('я', 160),
+                remaining = Enumerable.Repeat(new string('п', 40), 8).ToArray(),
+            },
+        });
+        ok.Should().BeFalse();
+    }
+
+    // Права те же, что у голоса: исполнитель шага оценку не пишет.
+    [Fact]
+    public async Task FeatureEstimate_СессияИсполнителя_Отказ()
+    {
+        var (projectId, _) = await CreateProjectWithSessionAsync("estexec");
+        var (_, epicId, stepId) = await CreateFeatureFromCuratorAsync(projectId, "estexec");
+        var execChat = await Sessions.CreateChatAsync(OwnerId, ClaudeMode.AcceptEdits, name: "exec", taskId: stepId);
+
+        var (text, isError) = await CallToolAsync(execChat.Id, "tasks_update", new
+        {
+            id = epicId, featureNote = "г", featureEstimate = new { etaMinutes = 60 },
+        });
+
+        isError.Should().BeTrue();
+        text.Should().Contain("Голос фичи пишет оркестратор или человек");
+        Tasks.GetById(epicId)!.Note.Should().BeNull();
     }
 }

@@ -145,7 +145,7 @@ public class LocalEngineGateTests
         Assert.Equal("localllm", TrackedLocalLlmClient.ReadEngineKey(Cfg(null)));
         Assert.Equal("localllm", TrackedLocalLlmClient.ReadEngineKey(Cfg("  ")));
         // дефолтный путь не расходится с ключом реестра по регистру (реестр держит ключи в нижнем)
-        Assert.Equal(TrackedLocalLlmClient.DefaultEngineKey.ToLowerInvariant(), TrackedLocalLlmClient.DefaultEngineKey);
+        Assert.Equal(TrackedLocalLlmClient.DefaultEngineKey, TrackedLocalLlmClient.DefaultEngineKey.ToLowerInvariant());
     }
 
     [Fact]
@@ -185,6 +185,7 @@ public class LocalEngineGateTests
 
 // Полный хост: коллекция Inotify, как у соседних тестов с TestWebApplicationFactory
 [Collection(TestCollections.Inotify)]
+[Trait("Category", "Host")]
 public class LocalEngineGateDiTests
 {
     // Регистрация ILocalLlmClient в LlmSubsystem обёрнута слотом общего счётчика: снятие обёртки

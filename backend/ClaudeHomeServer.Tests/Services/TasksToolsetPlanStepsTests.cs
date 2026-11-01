@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // • Major 4: знаменатель не молчит — не-массив (объект), не-объект в массиве (строки),
 //   смесь → явный isError, а не «задача создана без шагов, isError нет».
 [Trait("Category", "Integration")]
+[Trait("Category", "Host")]
 public class TasksToolsetPlanStepsTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly HttpClient _client;
@@ -138,6 +139,44 @@ public class TasksToolsetPlanStepsTests : IClassFixture<TestWebApplicationFactor
         isError.Should().BeFalse($"корректный planSteps не должен отказывать: {text}");
         var created = JsonSerializer.Deserialize<JsonElement>(text);
         created.GetProperty("planSteps").EnumerateArray().Count(_ => true).Should().Be(2);
+    }
+
+    // ─── B2: kind у шага плана (ревью не шаг плана) ──────────────────────────────────────
+
+    [Theory]
+    [InlineData("R-W1", null, true)]
+    [InlineData("R-W1", "step", true)]
+    [InlineData("QA", null, true)]
+    [InlineData("R-W1", "review", false)]
+    [InlineData("FINAL", "final", false)]
+    [InlineData("B1", "bogus", true)]
+    public async Task Create_PlanStepsKind_ОтказИлиУспех(string stepRef, string? kind, bool expectError)
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var (text, isError) = await CallToolAsync(sessionId, "tasks_create", new
+        {
+            title = "план",
+            projectId,
+            role = "plan",
+            planSteps = new[] { new { stepRef, title = "t", lane = "бэк", kind } },
+        });
+        isError.Should().Be(expectError, text);
+        if (expectError && kind != "bogus") text.Should().Contain("ревью не шаг плана");
+    }
+
+    [Fact]
+    public async Task ToolsList_PlanStepsKind_ЕстьВСхеме()
+    {
+        var (_, sessionId) = await CreateProjectWithSessionAsync();
+        var resp = await _client.PostAsync($"/mcp/tasks/{sessionId}",
+            new StringContent("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""",
+                System.Text.Encoding.UTF8, "application/json"));
+        var body = await resp.Content.ReadAsStringAsync();
+        var tools = JsonNode.Parse(body)!["result"]!["tools"]!.AsArray();
+        var kind = tools.Single(t => t!["name"]!.GetValue<string>() == "tasks_create")!
+            ["inputSchema"]!["properties"]!["planSteps"]!["items"]!["properties"]!["kind"]!;
+        kind["enum"]!.AsArray().Select(x => x!.GetValue<string>())
+            .Should().Equal("step", "review", "qa", "final");
     }
 
     // ─── Контракт (Б-pr2-д, решение 4): tasks_get отдаёт planSteps (camelCase) ──────────

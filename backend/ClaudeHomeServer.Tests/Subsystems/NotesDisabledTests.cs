@@ -68,24 +68,39 @@ namespace ClaudeHomeServer.Tests.Subsystems;
 /// закрытом гейте, контроль при открытом; такое утверждение не зависит от окружения и
 /// переживёт починку `db09722c`, после которой нынешние 404 станут проверять фолбэк.
 /// </summary>
-public class NotesDisabledTests : IDisposable
+[Trait("Category", "Host")]
+public class NotesDisabledTests : IClassFixture<NotesDisabledTests.Hosts>
 {
+    private readonly Hosts _hosts;
+
+    public NotesDisabledTests(Hosts hosts) => _hosts = hosts;
+
     // Хост с выключенной вертикалью заметок.
-    private readonly DisabledNotesFactory _disabled = new();
+    private DisabledNotesFactory _disabled => _hosts.Disabled;
 
     // Контрольный хост: та же фабрика без оверрайда — подсистема включена (дефолт true).
     // Нужен именно рядом: он доказывает, что все «пусто/404» ниже вызваны ИМЕННО гейтом,
     // а не тем, что проверка написана мимо (мимо маршрута, мимо имени тулсета, мимо ключа).
-    private readonly TestWebApplicationFactory _enabled = new();
+    private TestWebApplicationFactory _enabled => _hosts.Enabled;
 
-    public void Dispose()
+    // Два хоста на КЛАСС, а не на тест: поднимаются лениво и гасятся вместе с фикстурой.
+    // Состояние хоста тесты не меняют; сток ошибок читается со сдвигом «до/после» (Skip(count)),
+    // поэтому накопленные другими тестами записи ему не мешают
+    public sealed class Hosts : IDisposable
     {
-        _disabled.Dispose();
-        _enabled.Dispose();
-        GC.SuppressFinalize(this);
+        public DisabledNotesFactory Disabled { get; } = new();
+        public EnabledFactory Enabled { get; } = new();
+
+        public void Dispose()
+        {
+            Disabled.Dispose();
+            Enabled.Dispose();
+        }
     }
 
-    private sealed class DisabledNotesFactory : TestWebApplicationFactory
+    public sealed class EnabledFactory : TestWebApplicationFactory;
+
+    public sealed class DisabledNotesFactory : TestWebApplicationFactory
     {
         // Записи лога уровня Error поднятого хоста: ими проверяется, что отказ брифа ушёл
         // границей контроллера, а не через UnhandledExceptionHandler (тот пишет LogError

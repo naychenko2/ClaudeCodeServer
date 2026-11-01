@@ -19,7 +19,7 @@ import type { CSSProperties } from 'react';
 import { Pause } from 'lucide-react';
 import { C, R, SP, FS, FONT } from '../../lib/design';
 import { ICON_STROKE } from '../ui/icons';
-import { MERGE_PENDING_STATUS, queueLabel, type FeatureStatusTag } from '../../lib/chatGroups';
+import { CLOSED_NO_MERGE_STATUS, MERGE_PENDING_STATUS, queueLabel, type FeatureStatusTag } from '../../lib/chatGroups';
 import type { FeatureQueue, FeatureState } from '../../types/featureRun';
 
 export type FeatureRunTagTone = 'notStarted' | 'run' | 'wait' | 'stop' | 'merge' | 'loop' | 'merged' | 'closed' | 'hold' | 'draft';
@@ -37,6 +37,14 @@ export const UNKNOWN_RUN_TAG: FeatureRunTag = { label: 'статус неизв�
 export interface FeatureHoldInfo {
   holdReason?: string | null;
   queue?: FeatureQueue | null;
+}
+
+// Тег шапки страницы фичи: слово «ждёт вас» говорит одна тревога страницы (Ш4), поэтому при
+// waiting тег называет стадию (или нейтральное «в работе»). Остальные потребители тега
+// (индекс, рельса, сводка, герой статистики) зовут featureRunStatusTag как раньше.
+export function featurePageStatusTag(state: FeatureState, stageName?: string | null, hold?: FeatureHoldInfo): FeatureRunTag {
+  const tag = featureRunStatusTag(state, stageName, hold);
+  return state === 'waiting' ? { ...tag, label: stageName ? `в работе · ${stageName}` : 'в работе' } : tag;
 }
 
 export function featureRunStatusTag(state: FeatureState, stageName?: string | null, hold?: FeatureHoldInfo): FeatureRunTag {
@@ -64,11 +72,27 @@ export function featureRunStatusTag(state: FeatureState, stageName?: string | nu
     case 'merged':
       return { label: 'смержена', tone: 'merged' };
     case 'closed':
-      return { label: 'закрыта без мержа', tone: 'closed' };
+      // Одна подпись с индексом, «Анализом» и плашкой — общий CLOSED_NO_MERGE_STATUS (Ш1e),
+      // не литерал, совпадающий по случайности.
+      return { label: CLOSED_NO_MERGE_STATUS, tone: 'closed' };
     default:
       // Состояние вне словаря (бэк опередил фронт) — нейтральный тег, а не undefined.
       return UNKNOWN_RUN_TAG;
   }
+}
+
+// Короткая подпись тега для узкой шапки (360): одно слово, а не срез по « · » — у «закрыта без
+// мержа» и «ждёт согласия на мерж» разделителя нет, и обрезок получался в 2–4 символа. Полный
+// текст остаётся в title обёртки. «в работе» и «в очереди» — устоявшиеся пары, исключения из «слова».
+export function shortRunTagLabel(label: string): string {
+  if (label === CLOSED_NO_MERGE_STATUS) return 'закрыта';
+  if (label === MERGE_PENDING_STATUS || label === 'ждёт вас') return 'ждёт';
+  if (label === UNKNOWN_RUN_TAG.label) return 'неясно';
+  if (label === 'не начата') return 'новая';
+  if (label === 'на паузе') return 'пауза';
+  if (label.startsWith('в работе')) return 'в работе';
+  if (label.startsWith('в очереди')) return 'в очереди';
+  return label.split(' · ')[0];
 }
 
 // Старый тег индекса (featureStatusTag, 7 тонов) → тег страницы: тоны совпадают
@@ -116,13 +140,14 @@ function QueueGlyph() {
 // Тег: 11/600, поля 1 7, R.sm, строка 16 (макет §1). Точка — у «ждёт вас»/«к мержу».
 // «На паузе» — глиф «‖» 10 px currentColor перед подписью (макет feature-hold-1);
 // «черновик» — поля 0 6: пунктирная рамка занимает место, её компенсируют полем.
-export function StatusTag({ tag, testId }: { tag: FeatureRunTag; testId?: string }) {
+export function StatusTag({ tag, testId, clip }: { tag: FeatureRunTag; testId?: string; clip?: boolean }) {
   const queue = tag.tone === 'hold' ? QUEUE_LABEL.exec(tag.label) : null;
   return (
     <span
       data-testid={testId}
       style={{
-        display: 'inline-flex', alignItems: 'center', gap: SP.xs, flexShrink: 0,
+        display: 'inline-flex', alignItems: 'center', gap: SP.xs, flexShrink: clip ? 1 : 0,
+        ...(clip ? { minWidth: 0, maxWidth: '100%', overflow: 'hidden' } : {}),
         fontSize: FS.xs, fontWeight: 600, fontFamily: FONT.sans, lineHeight: '16px',
         ...(tag.tone === 'draft' ? { padding: `0 6px` } : { padding: `${SP.xxs}px ${SP.xs}px` }),
         borderRadius: R.sm, whiteSpace: 'nowrap',
@@ -144,6 +169,9 @@ export function StatusTag({ tag, testId }: { tag: FeatureRunTag; testId?: string
           {tag.label.slice(0, -queue[1].length)}
           <span data-testid="queue-nums" style={{ fontFamily: FONT.mono }}>{queue[1]}</span>
         </>
+      ) : clip ? (
+        // обрезка по слову с многоточием, а не посреди слова
+        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{tag.label}</span>
       ) : tag.label}
     </span>
   );

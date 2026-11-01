@@ -28,6 +28,7 @@ export function hwIcon(kind: HardwareNode['kind']): string {
     case 'cpu': return 'Cpu';
     case 'vrm': return 'Zap';
     case 'chipset': return 'CircuitBoard';
+    case 'water': return 'Droplet';
     case 'disk': return 'HardDrive';
     case 'ram': return 'MemoryStick';
     default: return 'Cpu';
@@ -42,6 +43,8 @@ export interface HwTileView {
   icon: string;
   name: string;
   value: number | null;
+  // Единица значения: температура или занятость (RAM, диск кэша).
+  unit: '°C' | '%';
   dec: boolean;
   level: HwLevel;
   sensor: 'ok' | 'none' | 'nodata';
@@ -58,6 +61,7 @@ export function hwTileView(report: HardwareReport): HwTileView[] {
     let sensorLabel = '';
     let detail = '';
     let dec = false;
+    const usage = node.kind === 'ram' || (node.kind === 'disk' && node.detail.role === 'kv');
     if (node.kind === 'gpu') {
       const g = report.gpus.find(x => x.index === parseInt(node.key.slice(3), 10));
       const memOk = g?.memTempC != null;
@@ -75,23 +79,21 @@ export function hwTileView(report: HardwareReport): HwTileView[] {
       // Неразрывный пробел: «3859 об/мин» — неделимое, перенос (если не
       // помещается) — перед «вентилятор», не внутри единицы «об/мин».
       if (node.detail.fanRpm != null) detail = `вентилятор ${node.detail.fanRpm} об/мин`;
+    } else if (node.kind === 'water') {
+      sensorLabel = 'в резервуаре';
     } else if (node.kind === 'disk') {
-      dec = true;
+      dec = !usage;
       if (node.detail.role === 'kv') {
-        sensorLabel = 'самый горячий датчик';
-        const crit = node.detail.critC;
-        if (crit != null && node.tempC != null) {
-          const margin = crit - node.tempC;
-          const used = node.detail.usedGb != null && node.detail.totalGb != null
-            ? ` · занято ${node.detail.usedGb} из ${node.detail.totalGb} ГБ` : '';
-          detail = `до предела ${ruNum(margin)} °C${used}`;
-        } else if (node.detail.usedGb != null && node.detail.totalGb != null) {
+        // Температуру диска кэша бэкенд не отдаёт (датчики врут) — только заполненность.
+        sensorLabel = 'занято';
+        if (node.detail.usedGb != null && node.detail.totalGb != null) {
           detail = `занято ${node.detail.usedGb} из ${node.detail.totalGb} ГБ`;
         }
       } else if (node.detail.critC == null) {
         detail = 'предел не сообщает — пороги 70 / 80';
       }
     } else if (node.kind === 'ram') {
+      sensorLabel = 'занято';
       if (node.detail.usedGb != null && node.detail.totalGb != null) {
         detail = `занято ${node.detail.usedGb} из ${node.detail.totalGb} ГБ`;
       }
@@ -100,7 +102,8 @@ export function hwTileView(report: HardwareReport): HwTileView[] {
       key: node.key,
       icon: hwIcon(node.kind),
       name: node.name,
-      value: node.tempC,
+      value: usage ? (node.detail.usedPerc ?? null) : node.tempC,
+      unit: usage ? '%' : '°C',
       dec,
       level: node.level,
       sensor: node.sensor,

@@ -142,14 +142,42 @@ public sealed class ReviewTreePool
         return new ReviewTreeLease(slotPath, sha, snapshot.DirtyPaths);
     }
 
-    // Идемпотентно: неизвестная задача и повторный вызов — no-op
+    // Идемпотентно: неизвестная задача и повторный вызов — no-op. Освобождённый слот чистится от
+    // артефактов сборки (bin/obj ~0,5 ГБ на тест-проект, 7–15 ГБ на слот): иначе диск забивается за часы.
+    // Цена — холодная сборка при следующем ревью в этом слоте.
     public void Release(string taskId)
     {
+        var freed = new List<string>();
         lock (_gate)
         {
             foreach (var slot in _leases.Where(kv => kv.Value == taskId).Select(kv => kv.Key).ToList())
+            {
                 _leases.Remove(slot);
+                // Путь закрыт от Reserve до конца уборки: новая аренда не должна собирать под рукой у rm
+                if (_removing.Add(slot)) freed.Add(slot);
+            }
         }
+        if (freed.Count == 0) return;
+        foreach (var slot in freed)
+        {
+            try { PurgeBuildArtifacts(slot); }
+            catch (Exception ex) { _log.LogWarning(ex, "Артефакты слота ревью {Slot} не очищены", slot); }
+            finally { lock (_gate) _removing.Remove(slot); }
+        }
+    }
+
+    // Только слоты пула (с маркером): bin/ и obj/ проектов под backend/. Исходники и git не трогаем
+    internal static void PurgeBuildArtifacts(string slotPath)
+    {
+        if (!File.Exists(MarkerPath(slotPath))) return;
+        var backend = Path.Combine(slotPath, "backend");
+        if (!Directory.Exists(backend)) return;
+        foreach (var project in Directory.EnumerateDirectories(backend))
+            foreach (var name in new[] { "bin", "obj" })
+            {
+                var dir = Path.Combine(project, name);
+                if (Directory.Exists(dir) && new DirectoryInfo(dir).LinkTarget is null) Directory.Delete(dir, recursive: true);
+            }
     }
 
     // Снимает аренду одного пути, если она у этой задачи: остальные слоты задачи не трогаем

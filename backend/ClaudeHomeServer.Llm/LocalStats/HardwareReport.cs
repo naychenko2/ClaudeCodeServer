@@ -12,6 +12,8 @@ public static class HardwareThresholds
     public static readonly (int? Warn, int Danger) Cpu = (85, 95);
     public static readonly (int? Warn, int Danger) Vrm = (90, 105);
     public static readonly (int? Warn, int Danger) Chipset = (85, 95);
+    // Вода СЖО: обычно 44–45 °C; предел акрила и ПВХ — около 60 °C.
+    public static readonly (int? Warn, int Danger) Water = (50, 55);
     // Диск без известного предела.
     public static readonly (int? Warn, int Danger) DiskNoLimit = (70, 80);
     // Диск с пределом: предупреждение за 10 °C до него, опасность за 3 °C.
@@ -72,6 +74,8 @@ public sealed record HardwareNodeDetailDto
     public int? CritC { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public long? UsedGb { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public long? TotalGb { get; init; }
+    // Занято, % (RAM и диск кэша: плитка показывает его вместо температуры, spark15m — тоже %).
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public int? UsedPerc { get; init; }
 }
 
 public sealed record HardwareNodeDto(
@@ -170,7 +174,7 @@ public sealed class HardwareReportService(IHardwareSampler sampler) : IHardwareR
         return result;
     }
 
-    // ─── Узлы (порядок фиксирован: карты, CPU, VRM, чипсет, диски, RAM) ──────────
+    // ─── Узлы (порядок фиксирован: карты, CPU, VRM, чипсет, вода, диски, RAM) ────
 
     private static HardwareNodeDto[] BuildNodes(HardwareSample? cur, List<GpuView> gpus, bool stale)
     {
@@ -207,12 +211,26 @@ public sealed class HardwareReportService(IHardwareSampler sampler) : IHardwareR
                 new HardwareNodeDetailDto { FanRpm = c.ChipsetFanRpm }, empty));
         }
 
+        if (cur?.Water is { } water)
+        {
+            var tw = HardwareThresholds.Water;
+            nodes.Add(new HardwareNodeDto("water", "water", "Вода СЖО", water,
+                "ok", Lvl(water, tw), tw.Warn, tw.Danger, new HardwareNodeDetailDto(), empty));
+        }
+
         // Диски: сначала кэша (kv), затем системные.
         foreach (var d in (cur?.Disks ?? []).OrderBy(x => x.Role == "kv" ? 0 : 1).ThenBy(x => x.Controller))
         {
+            // У диска кэша датчики врут (Sensor 2 на 25 °C выше Composite) — только заполненность.
+            if (d.Role == "kv")
+            {
+                nodes.Add(new HardwareNodeDto($"disk-{d.Controller}", "disk", "Диск кэша", null, "none", "none", null, null,
+                    new HardwareNodeDetailDto { Role = d.Role, UsedGb = d.UsedGb, TotalGb = d.TotalGb, UsedPerc = Perc(d.UsedGb, d.TotalGb) }, empty));
+                continue;
+            }
             var t = HardwareThresholds.Disk(d.CritC);
             nodes.Add(new HardwareNodeDto(
-                $"disk-{d.Controller}", "disk", d.Role == "kv" ? "Диск кэша" : "Системный диск", d.TempC,
+                $"disk-{d.Controller}", "disk", "Системный диск", d.TempC,
                 d.TempC is null ? "nodata" : "ok", Lvl(d.TempC, t), t.Warn, t.Danger,
                 new HardwareNodeDetailDto
                 {
@@ -224,14 +242,17 @@ public sealed class HardwareReportService(IHardwareSampler sampler) : IHardwareR
         if (cur?.RamTotalGb is not null)
         {
             nodes.Add(new HardwareNodeDto("ram", "ram", "Оперативная память", null, "none", "none", null, null,
-                new HardwareNodeDetailDto { UsedGb = cur.RamUsedGb, TotalGb = cur.RamTotalGb }, empty));
+                new HardwareNodeDetailDto { UsedGb = cur.RamUsedGb, TotalGb = cur.RamTotalGb, UsedPerc = Perc(cur.RamUsedGb, cur.RamTotalGb) }, empty));
         }
         return nodes.ToArray();
     }
 
     // ─── Ряды ───────────────────────────────────────────────────────────────────
 
-    // Селектор значения узла по ключу (для spark15m).
+    private static int? Perc(long? used, long? total) =>
+        used is { } u && total is { } t && t > 0 ? (int)Math.Round(100.0 * u / t) : null;
+
+    // Селектор значения узла по ключу (для spark15m): температура; у RAM и диска кэша — занято, %.
     private static Func<HardwareSample, int?>? SelectorFor(string key)
     {
         if (key.StartsWith("gpu") && int.TryParse(key[3..], out var gi))
@@ -241,7 +262,11 @@ public sealed class HardwareReportService(IHardwareSampler sampler) : IHardwareR
             "cpu" => s => s.Cpu?.Tctl,
             "vrm" => s => s.Vrm,
             "chipset" => s => s.Chipset,
-            _ when key.StartsWith("disk-") => s => s.Disks?.FirstOrDefault(d => "disk-" + d.Controller == key)?.TempC,
+            "water" => s => s.Water,
+            "ram" => s => Perc(s.RamUsedGb, s.RamTotalGb),
+            _ when key.StartsWith("disk-") => s => s.Disks?.FirstOrDefault(d => "disk-" + d.Controller == key) is { } d
+                ? (d.Role == "kv" ? Perc(d.UsedGb, d.TotalGb) : d.TempC)
+                : null,
             _ => null,
         };
     }
@@ -272,10 +297,12 @@ public sealed class HardwareReportService(IHardwareSampler sampler) : IHardwareR
             list.Add(new HardwareSeriesDto("cpu", "cpu", null, "Процессор", Pts(s => s.Cpu?.Tctl)));
         if (cur?.Chipset is not null)
             list.Add(new HardwareSeriesDto("chipset", "chipset", null, "Чипсет", Pts(s => s.Chipset)));
-        foreach (var d in (cur?.Disks ?? []).OrderBy(x => x.Role == "kv" ? 0 : 1).ThenBy(x => x.Controller))
+        if (cur?.Water is not null)
+            list.Add(new HardwareSeriesDto("water", "water", null, "Вода СЖО", Pts(s => s.Water)));
+        foreach (var d in (cur?.Disks ?? []).Where(x => x.Role != "kv").OrderBy(x => x.Controller))
         {
             var key = "disk-" + d.Controller;
-            list.Add(new HardwareSeriesDto(key, "disk", null, d.Role == "kv" ? "Диск кэша" : "Системный диск",
+            list.Add(new HardwareSeriesDto(key, "disk", null, "Системный диск",
                 Pts(s => s.Disks?.FirstOrDefault(x => x.Controller == d.Controller)?.TempC)));
         }
         return list.ToArray();

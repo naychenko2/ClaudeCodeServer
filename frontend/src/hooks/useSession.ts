@@ -5,7 +5,7 @@ import { setRecallManifest } from '../lib/recallManifest';
 import { requestWakeLock, releaseWakeLock } from '../lib/wakeLock';
 import { api } from '../lib/api';
 import { applyHistoryReply, cursorQuery, type HistoryCursor } from '../lib/historyTail';
-import { applyServerMessage, normalizeHistory, serverHistoryNewer, resolveCardsFromHistory, initialChatState, consumeComposerRestore, teamImplementSnapshot, turnAlreadyEnded, type ChatState, type PendingChatMessage, type ComposerRestore } from '../lib/chatReducer';
+import { applyServerMessage, normalizeHistory, serverHistoryNewer, resolveCardsFromHistory, adoptServerHistory, historyTurnFinished, initialChatState, consumeComposerRestore, teamImplementSnapshot, turnAlreadyEnded, type ChatState, type PendingChatMessage, type ComposerRestore } from '../lib/chatReducer';
 
 // --- Модульный персистентный стор ---
 // Состояние живёт на уровне модуля и переживает переключение между сессиями.
@@ -21,26 +21,51 @@ interface SessionState extends ChatState {
   // Групповой чат (participants > 1): в normalizeHistory включается derive
   // разделителей «Теперь отвечает…» по смене personaId между репликами
   isGroup?: boolean;
+  // Верхняя оценка веса ленты чата в сторе, байты: накопленный receivedBytes курсора
+  // последней загрузки (lib/historyTail). Это НЕ точный вес items: байты отброшенного
+  // при склейке хвоста остаются в счётчике. Живёт ровно вместе с лентой: пишется в
+  // loadHistory, уходит с состоянием при выселении (инвариант «вес ⇔ лента»). У «оболочки»
+  // (isShell ниже) — 0: ленты нет, считать нечего.
+  historyBytes: number;
+  // «Оболочка» ленты, оставленной без зрителя посреди идущего хода (F3-S3b, см. evictColdSessions):
+  // запись в сторе остаётся (группа SignalR живёт, ход продолжается), но items, курсор,
+  // отметка прогрева и вес сняты; СТАТУСНЫЕ поля (isWaiting, isJoined, статус хода) живые.
+  // Пока зрителя нет, items по live-событиям не растут — дельты не копятся и не теряются:
+  // сервер — источник истины, полная лента придёт при возврате (курсора нет → after=-1).
+  isShell?: boolean;
+  // Ход этой записи оборвался аварийно ('exited'), а отметить его в ленте нечем (F3-S3d,
+  // дефект 3e22fbeb): у «оболочки» items пусты по построению, а сервер свой маркер в
+  // историю не пишет ('session_ended' не персистится — см. PERSISTED_KINDS). Факт держится
+  // здесь; маркер допишется в хвост восстановленной ленты при возврате (см.
+  // withPendingEndMarker) и будет снят ровно один раз.
+  pendingEndMarker?: boolean;
 }
 
 const _store = new Map<string, SessionState>();
 const _listeners = new Map<string, Set<() => void>>();
 const _joining = new Map<string, Promise<void>>();
-const _lastSeen = new Map<string, number>(); // LRU: sid → ts последней мутации состояния
+// LRU: sid → порядковый номер последнего действия зрителя (не wall-clock, см. markSeen)
+const _lastSeen = new Map<string, number>();
+// Монотонный счётчик меток LRU: две действия в одну миллисекунду получают разные метки,
+// а порядок выселения задаётся фактическим порядком действий, а не порядком вставки в _store
+let _lruSeq = 0;
 
 // Потолок LRU-кэша холодных сессий (см. evictColdSessions). Открытые/активные не считаются.
 const MAX_CACHED_SESSIONS = 8;
 
-// Потолок курсоров докачки (B5) для холодных чатов: сырая история (raw) — вторая копия
-// ленты, поэтому держать её стоит только для открытых/видимых + не более MAX_TAIL_CURSORS
-// самых свежих по LRU. У остальных курсор выбрасывается — при возврате чат грузится
-// полностью (after=-1), как до B5.
-const MAX_TAIL_CURSORS = 5;
+// Бюджет веса холодных лент, байты: сумма historyBytes холодных сессий в сторе (см.
+// evictColdSessions). historyBytes — ВЕРХНЯЯ ОЦЕНКА сырой истории сервера (байты
+// отброшенного при склейке хвоста остаются в счётчике), поэтому бюджет считает ту же
+// оценку, а не точный вес лент: фактическая память холодных не больше оценённой, а переход
+// бюджета возможен только весом «последней покинутой». Число меняется одной строкой.
+const COLD_BUDGET_BYTES = 24 * 1024 * 1024;
 
 // Курсоры докачки истории (перф-2 B5): sid → сырая история прошлой загрузки + якорь сервера.
 // Со вторым открытием чата просим у сервера только хвост после якоря, а не всю историю
-// целиком (до 2,5 МБ). Склейка и сброс — lib/historyTail. Живёт ровно столько же, сколько
-// лента чата в сторе: выселили сессию (evictColdSessions) — курсор уходит вместе с ней.
+// целиком (до 2,5 МБ). Склейка и сброс — lib/historyTail.
+// Инвариант «курсор ⇔ лента»: курсор существует ровно пока в сторе есть лента этого чата —
+// отдельного штучного потолка у курсоров нет. Выселили сессию (evictColdSessions) — курсор
+// уходит вместе с ней; осиротевших курсоров (без ленты) быть не может.
 const _cursors = new Map<string, HistoryCursor>();
 
 // История чата: у проектной сессии — через /projects/{id}/sessions, у чата вне проекта — через /chats.
@@ -56,12 +81,27 @@ async function loadHistory(sid: string, projectId?: string): Promise<unknown[]> 
 
   const prev = _cursors.get(sid);
   const q = cursorQuery(prev);
+  // Вес ответа мерит api по телу ответа (та же мера, что у офлайн-кэша, F3-S1a) —
+  // обязательный аргумент applyHistoryReply с F3-S2a
+  let replyBytes = 0;
+  const onBytes = (n: number) => { replyBytes = n; };
   const reply = await (projectId
-    ? api.sessions.getHistoryTail(projectId, sid, q)
-    : api.chats.getHistoryTail(sid, q));
-  const applied = applyHistoryReply(prev, q, reply);
+    ? api.sessions.getHistoryTail(projectId, sid, q, onBytes)
+    : api.chats.getHistoryTail(sid, q, onBytes));
+  const applied = applyHistoryReply(prev, q, reply, replyBytes);
   if (applied.cursor) _cursors.set(sid, applied.cursor);
   else _cursors.delete(sid);
+  // Вес ленты в сторе: счётчик полученного из курсора (верхняя оценка — байты отброшенного
+  // при склейке хвоста в нём остаются). Живёт вместе с состоянием: при выселении сессии
+  // уходит с ним — инвариант «вес ⇔ лента» держится той же точкой, что и «курсор ⇔ лента».
+  // Писание без уведомления подписчиков: поле служебное (учёт OOM), лента при этом та же.
+  // Дозагрузка, летевшая ДО сброса до «оболочки» (F3-S3b) и вернувшаяся после него:
+  // снимок в руках и вызывающий выпишет из него ленту — оболочка снимается, запись живёт
+  // полной. Оставить оболочку с курсором и весом нельзя: «курсор ⇔ лента» и «вес оболочки
+  // = 0» (п.2) тогда разъехались бы; следующая вычистка возьмёт её по новому кругу.
+  let st = getState(sid);
+  if (st.isShell) { st = { ...st, isShell: false }; touch(sid, st); }
+  if (st.historyBytes !== applied.receivedBytes) touch(sid, { ...st, historyBytes: applied.receivedBytes });
   return applied.raw;
 }
 
@@ -90,19 +130,6 @@ function loadHistoryOnce(sid: string, projectId?: string, fresh = false): Promis
 const normalizeFor = (sid: string, raw: unknown[]) =>
   normalizeHistory(raw, { deriveSpeakers: getState(sid).isGroup });
 
-// Ход завершён, если последний содержательный элемент истории — result или error.
-// fal_cost дописывается асинхронно уже после конца хода, на признак не влияет.
-// Пока ход идёт, хвостом истории всегда что-то из хода (user_message пишется в
-// аккумулятор сразу при отправке) — ложного «завершён» это не даёт.
-function historyTurnFinished(items: ChatItem[]): boolean {
-  for (let i = items.length - 1; i >= 0; i--) {
-    const kind = items[i].kind;
-    if (kind === 'fal_cost') continue;
-    return kind === 'result' || kind === 'error';
-  }
-  return false;
-}
-
 // Перезагрузка истории с сервера с применением, если она новее живой ленты
 // (сервер — источник истины, сверка — serverHistoryNewer). Заодно лечит залипший
 // isWaiting: у завершённого хвоста ход точно кончился, даже если событие result
@@ -112,20 +139,31 @@ async function reloadHistory(sid: string, projectId?: string, fresh = false) {
     const raw = await loadHistoryOnce(sid, projectId, fresh);
     const items = normalizeFor(sid, raw);
     setState(sid, prev => {
+      // Приход истории — конец и «возврата из оболочки»: здесь гасится isHistoryLoading,
+      // поставленный при её снятии (F3-S3d, дефект dd0c5df3), и дописывается маркер
+      // аварийного конца хода, снятого вместе с лентой (withPendingEndMarker). Флаг гасим
+      // только если он был: фоновые перезагрузки не должны будить подписчиков без изменения
+      const settled = (next: SessionState) => withPendingEndMarker(
+        prev.isHistoryLoading ? { ...next, isHistoryLoading: false } : next);
       if (serverHistoryNewer(items, prev.items))
-        return { ...prev, items, isWaiting: historyTurnFinished(items) ? false : prev.isWaiting };
+        // Карточки разрешения, реплеянные хабом, в истории нет — переносим (adoptServerHistory)
+        return settled({ ...prev, items: adoptServerHistory(items, prev.items), isWaiting: historyTurnFinished(items) ? false : prev.isWaiting });
       // Ленту сервер не обгоняет, но в его истории может быть карточка, погашенная
       // ответом с другого устройства: событие interaction_resolved могло пройти мимо
       // (разрыв WS в момент ответа), а сверка длин такой ответ не видит — он элемента
       // не добавляет. Гасим точечно; подменять ленту нельзя, она несёт live-only
       // элементы, которых в истории нет (permission_request не персистится).
       const patched = resolveCardsFromHistory(items, prev.items);
-      return patched ? { ...prev, items: patched } : prev;
+      return settled(patched ? { ...prev, items: patched } : prev);
     });
     // Фоновая перезагрузка кладёт сессию в стор: если холодных стало больше потолка,
     // выселяем старейшие (иначе куча растёт на каждый фоновый ход)
     evictColdSessions();
-  } catch { /* история недоступна — не блокируем */ }
+  } catch {
+    // История недоступна — не блокируем; но спиннер возврата из оболочки обязан погаситься
+    // и здесь, иначе висел бы до следующей удачной загрузки (F3-S3d)
+    if (getState(sid).isHistoryLoading) setState(sid, prev => ({ ...prev, isHistoryLoading: false }));
+  }
 }
 
 // Авторитетное состояние режима «Командная реализация» с сервера (M10/M12).
@@ -141,16 +179,26 @@ async function refreshTeamImplement(sid: string) {
 }
 
 function getState(sid: string): SessionState {
-  if (!_store.has(sid)) _store.set(sid, { ...initialChatState(), isJoined: false, isHistoryLoading: true });
+  if (!_store.has(sid)) _store.set(sid, { ...initialChatState(), isJoined: false, isHistoryLoading: true, historyBytes: 0 });
   return _store.get(sid)!;
 }
 
-// Единственная точка мутации _store: любая запись освежает LRU-метку. getState
-// при lazy-init метку НЕ ставит намеренно — LRU считаем по мутациям, не по чтениям
-// (иначе фоновый onMessage от project-групп держал бы чужие сессии вечно горячими).
+// Метка LRU: монотонный порядковый номер действия (см. _lruSeq), не wall-clock:
+// метки уникальны, порядок выселения при «одновременных» закрытиях детерминирован
+function markSeen(sid: string) {
+  _lastSeen.set(sid, ++_lruSeq);
+}
+
+// Единственная точка мутации _store. LRU-метку двигает только действие в ленте СО ЗРИТЕЛЕМ
+// (isWatched): фоновое событие у ленты, которую никто не смотрит (сброс isWaiting при
+// реконнекте, status_changed, дельты от project-групп), обновляет состояние, но не метку —
+// иначе «последняя покинутая» доставалась бы ленте, получившей событие, а не той,
+// которую зритель реально оставил последней. Уход зрителя метку ставит явно (markSeen
+// в cleanup): к тому моменту подписчиков уже нет. getState при lazy-init метку НЕ ставит
+// намеренно — LRU считаем по действиям зрителя, не по чтениям и не по фоновым мутациям.
 function touch(sid: string, next: SessionState) {
   _store.set(sid, next);
-  _lastSeen.set(sid, Date.now());
+  if (isWatched(sid)) markSeen(sid);
   // Poll реконсиляции живёт ровно пока есть занятый открытый чат (см. syncWaitPoll)
   syncWaitPoll();
 }
@@ -160,39 +208,67 @@ function setState(sid: string, updater: (prev: SessionState) => SessionState) {
   _listeners.get(sid)?.forEach(fn => fn());
 }
 
-// LRU-потолок: держим не более MAX_CACHED_SESSIONS холодных сессий. Холодная =
-// никто не смотрит (нет подписчиков), ход не идёт (isWaiting) и мы вышли из её
-// SignalR-группы (isJoined). Открытые/активные не считаем и не выселяем. Ленты
-// выселенных освобождаются; история восстановится через loadHistory при повторном
+// LRU-потолок: держим холодные ленты в двух пределах — не более MAX_CACHED_SESSIONS
+// штук с лентой и суммой не более COLD_BUDGET_BYTES по весу. Холодная = никто не смотрит
+// (нет подписчиков). Открытые/активные (есть зрители) не считаем и не трогаем (их вес в
+// бюджет не входит). Лента с идущим ходом (isWaiting/isJoined) без зрителя НЕ исключается
+// из рассмотрения (F3-S3b): сервер держит её группу, пока ход идёт, лента по live-событиям
+// растёт сколько угодно — такая запись сбрасывается до «оболочки» (isShell): items, курсор,
+// отметка прогрева и вес сняты, статусные поля живые, группа не покидается, ход продолжается.
+// Мёртвая оболочка (ход кончился) — пустая холодная запись: выметается на общих основаниях.
+// Ленты выселенных освобождаются; история восстановится через loadHistory при повторном
 // открытии. Зовётся из cleanup при закрытии последнего зрителя сессии.
 function evictColdSessions() {
-  const cold: Array<[string, number]> = [];
+  // Вес берём из стора (s.historyBytes): его пишет loadHistory через touch БЕЗ
+  // уведомления подписчиков (R-F3-S2a, п.4) — из рендера хука он не виден.
+  const cold: Array<[string, number, number]> = []; // sid, _lastSeen, вес ленты
+  let coldBytes = 0;
+  let coldTapes = 0; // штучный предел считает записи с лентой: оболочка — не лента
   for (const [sid, s] of _store) {
     const watched = (_listeners.get(sid)?.size ?? 0) > 0;
-    if (watched || s.isWaiting || s.isJoined) continue;
-    cold.push([sid, _lastSeen.get(sid) ?? 0]);
+    if (watched) continue;
+    cold.push([sid, _lastSeen.get(sid) ?? 0, s.historyBytes]);
+    coldBytes += s.historyBytes; // оболочка весит 0: в сумму она не входит
+    if (!s.isShell) coldTapes++;
   }
   if (cold.length === 0) return;
   cold.sort((a, b) => a[1] - b[1]); // старые первыми
 
-  // 1. Выселение сессий: держим не более MAX_CACHED_SESSIONS холодных лент в сторе
-  if (cold.length > MAX_CACHED_SESSIONS) {
-    for (const [sid] of cold.slice(0, cold.length - MAX_CACHED_SESSIONS)) {
-      _store.delete(sid);
-      _lastSeen.delete(sid);
-      _cursors.delete(sid); // сырая история курсора — второй экземпляр ленты, держать её без ленты незачем
-      // Выселенную сессию разрешаем греть заново: её ленты в сторе больше нет
-      _warmed.delete(sid);
+  // Обработка: старейшие первыми, пока хоть один предел переходён (штучный —
+  // MAX_CACHED_SESSIONS лент, весовой — сумма coldBytes > COLD_BUDGET_BYTES).
+  // «Последняя покинутая» (самая свежая по _lastSeen, последняя в сортировке) не
+  // трогается ни одним пределом, даже если одна тяжелее бюджета: возврат «назад»
+  // в только что закрытый чат остаётся мгновенным.
+  // Курсор снимается вместе с лентой (инвариант «курсор ⇔ лента», см. _cursors):
+  // осиротевших курсоров после обработки не остаётся.
+  // Защита «последней покинутой» — по позиции последней в сортировке (она не меняется
+  // при обработке), а не по последней из оставшихся: иначе вычистка веса доедала бы
+  // ленту перед ней и берегла бы её вместо самой свежей.
+  let keep = coldTapes;
+  for (let i = 0; i < cold.length - 1 && (keep > MAX_CACHED_SESSIONS || coldBytes > COLD_BUDGET_BYTES); i++) {
+    const [sid, , bytes] = cold[i];
+    const s = _store.get(sid)!;
+    const live = s.isWaiting || s.isJoined;
+    if (live && s.isShell) continue; // живая оболочка брать нечего: вес уже 0, лента уже снята
+    if (live) {
+      // Сброс до «оболочки» (F3-S3b): запись остаётся в сторе и в группе SignalR — ход
+      // продолжает идти и капать в фоне; сняты только лента и всё, что с ней живёт
+      // (items, курсор, вес, отметка прогрева). Статусные поля (isWaiting, isJoined,
+      // статус хода, название) не трогаем.
+      touch(sid, { ...s, items: [], isShell: true, historyBytes: 0 });
+      _cursors.delete(sid); // сырая история курсора — второй экземпляр ленты, без ленты он осиротел
+      _warmed.delete(sid); // греть оболочку нечем: при возврате лента придёт полной, after=-1
+      coldBytes -= bytes; // вес оболочки 0 — из суммы она выпадает
+      keep--;
+      continue;
     }
-  }
-
-  // 2. Выселение курсоров: даже если сессия осталась в сторе, сырая история (raw)
-  //    — дорогая вторая копия. Держим курсоры только для MAX_TAIL_CURSORS самых свежих
-  //    холодных чатов; у остальных — при возврате полная загрузка (after=-1).
-  if (cold.length > MAX_TAIL_CURSORS) {
-    for (const [sid] of cold.slice(0, cold.length - MAX_TAIL_CURSORS)) {
-      _cursors.delete(sid);
-    }
+    _store.delete(sid);
+    _lastSeen.delete(sid);
+    _cursors.delete(sid); // сырая история курсора — второй экземпляр ленты, держать её без ленты незачем
+    // Выселенную сессию разрешаем греть заново: её ленты в сторе больше нет
+    _warmed.delete(sid);
+    coldBytes -= bytes;
+    if (!s.isShell) keep--; // мёртвая оболочка в штучный предел не входила — и не снимает его
   }
 }
 
@@ -354,7 +430,8 @@ function ensureHandler() {
                 // Разрыв — ровно тот случай, когда ответ с другого устройства прошёл мимо:
                 // историей не обгоняет (ответ элемента не добавляет), поэтому гасим точечно
                 items: serverHistoryNewer(items, prev.items)
-                  ? items
+                  // Карточки разрешения, реплеянные при повторном join, в истории нет — переносим
+                  ? adoptServerHistory(items, prev.items)
                   : (resolveCardsFromHistory(items, prev.items) ?? prev.items),
               }));
             }
@@ -386,7 +463,9 @@ function ensureHandler() {
     // покажется как «Прервано» — обмануть мягко лучше, чем пугать регулярной ложной аварией.
     if (msg.type === 'exited' && (_sending.has(sid) || _preempted.has(sid))) {
       const s = getState(sid);
-      if (s.isWaiting && !turnAlreadyEnded(s.items))
+      // Оболочку не размечаем: её items пустые по построению, а сервер пишет маркер
+      // 'interrupted' в историю — при возврате он придёт с лентой
+      if (s.isWaiting && !s.isShell && !turnAlreadyEnded(s.items))
         touch(sid, { ...s, items: [...s.items, { kind: 'interrupted', ts: Date.now() }] });
     }
     // Ход, который прерывали, закончился — флаг отработал. Гасим и на result: если перебой
@@ -399,7 +478,20 @@ function ensureHandler() {
     const prev = getState(sid);
     const next = applyServerMessage(prev, msg);
     if (next !== prev) {
-      touch(sid, next);
+      // «Оболочка» (F3-S3b): по live-событиям items не растут — лента снята специально,
+      // дельты не копятся и не теряются: полная придёт с сервера при возврате (after=-1).
+      // Статусные поля (isWaiting, статус хода, rateLimits, очередь) применяются обычно:
+      // запись обязана знать, что её ход кончился, — иначе живая оболочка никогда бы
+      // не стала мёртвой и не выметалась
+      // Аварийный конец хода у «оболочки» (F3-S3d, дефект 3e22fbeb): тот же признак, что
+      // у редьюсера (ждали ответ), плюс второй его проверки здесь нет намеренно — лента
+      // оболочки пуста по построению, «уже отмеченный конец» в ней быть не может.
+      // Ставить маркер некуда, а сервер его в историю не пишет: факт держим полем,
+      // маркер допишется при возврате (withPendingEndMarker)
+      const shellAbnormalEnd = prev.isShell && msg.type === 'exited' && prev.isWaiting;
+      touch(sid, prev.isShell
+        ? { ...next, items: prev.items, ...(shellAbnormalEnd ? { pendingEndMarker: true } : {}) }
+        : next);
       _listeners.get(sid)?.forEach(fn => fn());
     }
 
@@ -431,6 +523,22 @@ function ensureHandler() {
   }
 }
 
+
+// Маркер аварийного конца хода для ленты, восстановленной из «оболочки» (F3-S3d, дефект
+// 3e22fbeb): при 'exited' лента была пуста и ставить маркер было некуда — факт держался
+// статусным полем (SessionState.pendingEndMarker). Здесь он дописывается в хвост и флаг
+// гасится в этой же точке — второго раза не будет. Не добавляем, если:
+// — сервер записал конец сам: turnAlreadyEnded — общий предикат конца хода
+//   (result / error / interrupted / session_ended), дубля поверх него не ставим;
+// — ход продолжается (isWaiting): после обрыва начался новый, вешать старый маркер
+//   поверх него нельзя;
+// — лента пуста: отмечать нечего.
+function withPendingEndMarker(next: SessionState): SessionState {
+  if (!next.pendingEndMarker) return next;
+  const cleared: SessionState = { ...next, pendingEndMarker: false };
+  if (!cleared.items.length || cleared.isWaiting || turnAlreadyEnded(cleared.items)) return cleared;
+  return { ...cleared, items: [...cleared.items, { kind: 'session_ended' }] };
+}
 
 // Присоединяемся к сессии один раз и остаёмся — даже при переключении между сессиями
 function ensureJoined(sid: string, projectId?: string) {
@@ -466,11 +574,17 @@ async function joinAndLoadHistory(sid: string, projectId?: string) {
       // Сервер — источник истины: используем его данные, если история новее
       // (сверка без live-only элементов — см. serverHistoryNewer). Иначе оставляем
       // живые сообщения от стриминга (race condition при активном ходе).
-      if (!serverHistoryNewer(items, prev.items)) return { ...prev, isHistoryLoading: false };
-      return {
-        ...prev, items, isHistoryLoading: false,
+      // Приход истории — конец и «возврата из оболочки»: здесь гасится поставленный при
+      // её снятии isHistoryLoading (F3-S3d, дефект dd0c5df3) и дописывается снятый вместе
+      // с лентой маркер аварийного конца хода (withPendingEndMarker)
+      const settled = (next: SessionState) => withPendingEndMarker({ ...next, isHistoryLoading: false });
+      if (!serverHistoryNewer(items, prev.items)) return settled(prev);
+      return settled({
+        // Реплей permission_request из JoinSession пришёл ДО истории — без переноса
+        // подмена унесла бы карточку (дефект «карточка разрешения пропадает после F5»)
+        ...prev, items: adoptServerHistory(items, prev.items),
         isWaiting: historyTurnFinished(items) ? false : prev.isWaiting,
-      };
+      });
     });
   } catch {
     // История недоступна — не блокируем работу
@@ -513,7 +627,8 @@ export function warmSession(sid: string, projectId?: string, isGroup?: boolean) 
       const items = normalizeFor(sid, raw);
       setState(sid, prev => {
         if (!serverHistoryNewer(items, prev.items)) return { ...prev, isHistoryLoading: false };
-        return { ...prev, items, isHistoryLoading: false };
+        // Та же подмена, что и в остальных ветках: нерешённые карточки разрешения переносим
+        return { ...prev, items: adoptServerHistory(items, prev.items), isHistoryLoading: false };
       });
       _warmed.add(sid);
       // Прогрев кладёт сессию в стор: если холодных стало больше потолка, выселяем
@@ -554,6 +669,18 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     _listeners.set(sessionId, listeners);
     const notify = () => setTick(n => n + 1);
     listeners.add(notify);
+    // Открытие/подписка — действие зрителя: лента становится свежайшей в LRU.
+    // Дальнейшие мутации этой ленты двигают метку через touch (зритель здесь есть)
+    markSeen(sessionId);
+
+    // Возврат зрителя снимает «оболочку» (F3-S3b): с этого момента items снова живут
+    // (join-replay карточек разрешения, стрим идущего хода), а полную ленту принесёт
+    // ensureJoined → joinAndLoadHistory: курсора нет → after=-1, сервер — источник истины.
+    // Снимать оболочку без признака загрузки — значит показать пустую ленту без спиннера
+    // на всё время ответа (дефект dd0c5df3): флаг ставится здесь и гасится приходом
+    // истории (joinAndLoadHistory / reloadHistory), как при обычном первом открытии чата
+    if (getState(sessionId).isShell)
+      setState(sessionId, prev => ({ ...prev, isShell: false, isHistoryLoading: true }));
 
     // Признак группового чата — до загрузки истории (влияет на normalizeHistory).
     // Только от потребителя, который его знает: useSessionArtifacts зовёт хук без
@@ -590,6 +717,9 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
       // этом выводит СЕРВЕР и только если ход не идёт (SessionHub.LeaveSession): события
       // незавершённого хода продолжают капать сюда в фоне, иначе лента останется с обрывком.
       if ((_listeners.get(sessionId)?.size ?? 0) === 0) {
+        // Уход зрителя — действие зрителя: метка этой ленты должна быть свежайшей
+        // среди холодных — защита «последней покинутой» в evictColdSessions считает от неё
+        markSeen(sessionId);
         leaveSession(sessionId);
         setState(sessionId, prev => ({ ...prev, isJoined: false }));
         evictColdSessions();
@@ -597,7 +727,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     };
   }, [sessionId, projectId, isGroup]);
 
-  const state = sessionId ? getState(sessionId) : { items: [] as ChatItem[], isWaiting: false, isJoined: false, isHistoryLoading: false, rateLimits: {} as Record<string, RateLimitInfo>, isCompacting: false, compactNote: undefined as string | undefined, workLoop: undefined as WorkLoopState | undefined, teamImplement: undefined as TeamImplementState | undefined, teamPlanning: undefined as { startedAt: number; personaId?: string | null } | null | undefined, teamWavePulse: undefined as TeamWavePulse | undefined, promptSuggestion: null as string | null, pending: [] as PendingChatMessage[], composerRestore: null as ComposerRestore | null };
+  const state = sessionId ? getState(sessionId) : { items: [] as ChatItem[], isWaiting: false, isJoined: false, isHistoryLoading: false, rateLimits: {} as Record<string, RateLimitInfo>, isCompacting: false, compactNote: undefined as string | undefined, workLoop: undefined as WorkLoopState | undefined, teamImplement: undefined as TeamImplementState | undefined, teamPlanning: undefined as { startedAt: number; personaId?: string | null } | null | undefined, teamWavePulse: undefined as TeamWavePulse | undefined, promptSuggestion: null as string | null, pending: [] as PendingChatMessage[], composerRestore: null as ComposerRestore | null, historyBytes: 0 };
 
   // Снять сообщение из очереди (крестик на карточке-призраке). Ответ сервера придёт
   // событием pending_messages — локально состояние не правим, чтобы не разъехалось.
@@ -902,4 +1032,4 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
 }
 
 // Экспорт для тестов: доступ к модульному стору и константам
-export const __test = { _store, _cursors, _lastSeen, MAX_CACHED_SESSIONS, MAX_TAIL_CURSORS };
+export const __test = { _store, _cursors, _lastSeen, _warmed, MAX_CACHED_SESSIONS, COLD_BUDGET_BYTES };

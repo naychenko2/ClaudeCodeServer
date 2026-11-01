@@ -19,6 +19,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // DossierAutoExportTests — здесь транспорт: каждая ситуация доводится до своей
 // wire-строки.
 [Trait("Category", "Slow")]
+[Trait("Category", "Host")]
 public class DossierExportStatusAutoExportTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

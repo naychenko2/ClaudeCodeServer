@@ -15,14 +15,30 @@ namespace ClaudeHomeServer.Tests.ImageEditor;
 // Ручка правок без ИИ POST …/image-editor/transform и шаги истории (ADR-018 §9): флаг гейтит
 // её так же, как остальные; путь базы — только внутри проекта и не через ссылку; в проект она
 // не пишет никогда; dryRun шага не создаёт; шаги складываются в ленту с родителем.
-public class ImageEditorTransformTests : IDisposable
+[Trait("Category", "Host")]
+public class ImageEditorTransformTests : IClassFixture<ImageEditorTransformTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new();
-
-    public void Dispose()
+    /// <summary>
+    /// Хост на весь класс (IClassFixture), а не на тест: приложение собирается один раз.
+    /// Шаги истории — общее изменяемое состояние хоста: они живут в рабочей папке
+    /// {TempDir}/image-editor (ImageEditWorkspace.FromConfig — рядом с DataPath), поэтому
+    /// накапливаются между тестами класса. Перед каждым тестом конструктор тест-класса
+    /// сносит эту папку целиком: «StepFiles() пуст» тогда значит поведение этого теста,
+    /// а не порядок прогона. Проект каждый тест-экземпляр заводит сам (уникальные GUID).
+    /// </summary>
+    public sealed class Hosts : TestWebApplicationFactory
     {
-        _factory.Dispose();
-        GC.SuppressFinalize(this);
+    }
+
+    private readonly TestWebApplicationFactory _factory;
+
+    public ImageEditorTransformTests(Hosts hosts)
+    {
+        _factory = hosts;
+        // Шаги предыдущих тестов в общем workspace — изменяемое состояние класса:
+        // сносим их, чтобы тест не зависел от того, что оставил предыдущий
+        var root = _factory.Services.GetRequiredService<ImageEditWorkspace>().Root;
+        if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
     }
 
     private string Root(string projectId) => $"/api/projects/{projectId}/image-editor";

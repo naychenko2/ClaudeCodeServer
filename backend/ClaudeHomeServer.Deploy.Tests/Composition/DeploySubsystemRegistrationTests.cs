@@ -22,6 +22,7 @@ namespace ClaudeHomeServer.Tests.Composition;
 // `DeployReportService` (hosted) зависит от `SessionManager`/`NotificationService`/`BuildIdProvider`,
 // `DeployHost` — от `GitService` + `ILauncherFactory`. Полный резолв потребует поднимать всю
 // эту цепочку, что не задача стража регистрации Deploy.
+[Trait("Category", "Host")]
 public class DeploySubsystemRegistrationTests
 {
     private static IConfiguration BuildConfig() =>

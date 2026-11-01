@@ -240,6 +240,7 @@ public class ImageThreadFaceTargetsTests : IDisposable
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    [Trait("Category", "Slow")]
     public async Task Версия_на_одно_лицо_хранит_сходство(bool launchAfterFinish)
     {
         var launch = await RunFacesAsync(1, failPass2: false, launchAfterFinish);

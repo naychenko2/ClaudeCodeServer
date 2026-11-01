@@ -12,23 +12,58 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // GET /api/sessions/{id}/local-model (фича local-model-stats, шаг 19): итог последнего
 // хода на локальной модели для владельца чата. Чужая/неизвестная сессия — 404 (существование
 // не раскрываем), аноним — 401.
-public class SessionLocalModelControllerTests : IClassFixture<TestWebApplicationFactory>
+[Trait("Category", "Host")]
+public class SessionLocalModelControllerTests : IClassFixture<SessionLocalModelControllerTests.Hosts>
 {
+    private static readonly LocalModelTurnSummary MeterSummary = new()
+    {
+        OutTokens = 128,
+        GenTps = 42.5,
+        TtftMs = 300,
+        QueueMsApprox = 1500,
+        CacheHitPerc = 0.8,
+    };
+
+    // Хост на КОНФИГУРАЦИЮ, а не на тест: обычный и с подменённым счётчиком хода. Проект и чат
+    // каждый тест заводит сам в своём каталоге
+    public sealed class Hosts : IDisposable
+    {
+        public TestWebApplicationFactory Plain { get; } = new();
+        public MeterHost Metered { get; } = new();
+
+        public void Dispose()
+        {
+            Plain.Dispose();
+            Metered.Dispose();
+        }
+    }
+
+    public sealed class MeterHost : TestWebApplicationFactory
+    {
+        public MeterHost()
+        {
+            ExtraServices = services =>
+                services.AddSingleton<ILocalModelTurnMeter>(new FakeMeter(MeterSummary));
+        }
+    }
+
     private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
     private readonly HttpClient _second;
+    private readonly Hosts _hosts;
 
-    public SessionLocalModelControllerTests(TestWebApplicationFactory factory)
+    public SessionLocalModelControllerTests(Hosts hosts)
     {
-        _factory = factory;
-        _client = factory.CreateAuthenticatedClient();
-        _second = factory.CreateAuthenticatedClient(
+        _hosts = hosts;
+        _factory = hosts.Plain;
+        _client = _factory.CreateAuthenticatedClient();
+        _second = _factory.CreateAuthenticatedClient(
             TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
     }
 
-    private async Task<string> CreateSessionAsync(HttpClient client)
+    private async Task<string> CreateSessionAsync(HttpClient client, TestWebApplicationFactory? host = null)
     {
-        var dir = Path.Combine(_factory.TempDir, "lm_" + Guid.NewGuid().ToString("N")[..8]);
+        var dir = Path.Combine((host ?? _factory).TempDir, "lm_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         var proj = await client.PostAsJsonAsync("/api/projects", new { name = "LM", rootPath = dir });
         proj.EnsureSuccessStatusCode();
@@ -79,32 +114,18 @@ public class SessionLocalModelControllerTests : IClassFixture<TestWebApplication
     [Fact]
     public async Task Владелец_ИтогХода_Передан()
     {
-        var summary = new LocalModelTurnSummary
-        {
-            OutTokens = 128,
-            GenTps = 42.5,
-            TtftMs = 300,
-            QueueMsApprox = 1500,
-            CacheHitPerc = 0.8,
-        };
-        var factory = new TestWebApplicationFactory();
-        factory.ExtraServices = services =>
-            services.AddSingleton<ILocalModelTurnMeter>(new FakeMeter(summary));
-        using (factory)
-        using (var client = factory.CreateAuthenticatedClient())
-        {
-            var sessionId = await CreateSessionAsync(client);
-            var resp = await client.GetAsync($"/api/sessions/{sessionId}/local-model");
-            resp.StatusCode.Should().Be(HttpStatusCode.OK);
-            var last = await resp.Content.ReadFromJsonAsync<JsonElement>();
-            var turn = last.GetProperty("lastTurn");
-            turn.GetProperty("genTps").GetDouble().Should().Be(42.5);
-            turn.GetProperty("prefillTps").ValueKind.Should().Be(JsonValueKind.Null);
-            turn.GetProperty("ttftMs").GetInt32().Should().Be(300);
-            turn.GetProperty("queueMsApprox").GetInt32().Should().Be(1500);
-            turn.GetProperty("cacheHitPerc").GetDouble().Should().Be(0.8);
-            turn.GetProperty("outTokens").GetInt32().Should().Be(128);
-        }
+        using var client = _hosts.Metered.CreateAuthenticatedClient();
+        var sessionId = await CreateSessionAsync(client, _hosts.Metered);
+        var resp = await client.GetAsync($"/api/sessions/{sessionId}/local-model");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var last = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        var turn = last.GetProperty("lastTurn");
+        turn.GetProperty("genTps").GetDouble().Should().Be(42.5);
+        turn.GetProperty("prefillTps").ValueKind.Should().Be(JsonValueKind.Null);
+        turn.GetProperty("ttftMs").GetInt32().Should().Be(300);
+        turn.GetProperty("queueMsApprox").GetInt32().Should().Be(1500);
+        turn.GetProperty("cacheHitPerc").GetDouble().Should().Be(0.8);
+        turn.GetProperty("outTokens").GetInt32().Should().Be(128);
     }
 
     // Фейковый счётчик хода: один и тот же итог на любой сессии.

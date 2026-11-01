@@ -267,6 +267,7 @@ public class RecursiveDirectoryWatcherTests : IDisposable
     [SkippableTheory]
     [InlineData(true)]
     [InlineData(false)]
+    [Trait("Category", "Slow")]
     public async Task СозданиеИУдалениеКаталога_ОтдаётсяТолькоВРежимеIncludeDirectories(bool includeDirectories)
     {
         Skip.IfNot(OperatingSystem.IsLinux(), "события каталогов по перечню слежек — только Linux");
@@ -357,6 +358,7 @@ public class RecursiveDirectoryWatcherTests : IDisposable
     // Очередь переполняется по-настоящему: потребитель держит поток чтения, а событий
     // создаётся больше, чем помещается в очередь ядра.
     [SkippableFact]
+    [Trait("Category", "Slow")]
     public async Task ПереполнениеОчереди_ПересинхронизируетПодписки()
     {
         Skip.IfNot(OperatingSystem.IsLinux(), "переполнение очереди inotify — только Linux");

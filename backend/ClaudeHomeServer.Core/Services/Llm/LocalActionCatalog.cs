@@ -222,7 +222,7 @@ public static class LocalActionCatalog
         // не сверялась бы QuoteMatcher-ом в отсечённой части. Слот weak — явный (ADR-035 §7).
         new(WikiFact, "Факт для вики", "Заметки", CheapProfile.Text,
             DefaultLocal: true, Tier: ModelTier.Weak),
-        new(ChatTitle, "Заговолок чата", "Чаты", CheapProfile.Small, DefaultLocal: true),
+        new(ChatTitle, "Заголовок чата", "Чаты", CheapProfile.Small, DefaultLocal: true),
         new(ChatRetitle, "Обновление названия чата", "Чаты", CheapProfile.Text, DefaultLocal: true),
         new(ChatExtractTasks, "Извлечение задач из чата", "Задачи", CheapProfile.Large, DefaultLocal: true),
         // Разбор промпта хода («что тут лишнее»): вызывается человеком по кнопке, не фоном.

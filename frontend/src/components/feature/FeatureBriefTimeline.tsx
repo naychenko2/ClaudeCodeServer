@@ -1,86 +1,20 @@
-// Таймлайн-элементы карточки «Сводка» (FeatureBriefBlock): тонкая лента (8 px, без подписей) +
-// ось «создана…/сейчас…» + строка итогов (работа ≈ · ждёт/не работали · токены · цена).
-//
-// Вынесены из FeatureMiniSummary (F7): его корень — отдельная мини-сводка — после F6 (волна 6
-// «Сводка состояния фичи») не рендерился нигде, карточка заменила его; живы только эти экспорты.
+// Строка итогов карточки «Сводка» (FeatureBriefBlock): идёт · работа ≈ · ждёт/не работали ·
+// токены (цены нет — «Расход $» во вкладке «Статистика»). Полоска, ось и легенда «Жизни фичи» убраны из сводки (макет feature-summary-2):
+// они живут на вкладке «Статистика».
 //
 // Данные — ТЕ ЖЕ stats (features/{id}), что во вкладке «Статистика»; фронт не пересчитывает.
 // Честность: stats === null → строки нет (без нулей); «≈» при source=approx;
 // «принято N из M» и «все готово» НЕ показываем (прогресс — строка «Сделано» карточки).
 
-import { C, R, FS, SP, FONT } from '../../lib/design';
-import { formatDuration, formatDateTime, formatClock, buildTimelineModel, kindBackground } from './FeatureStatsBits';
-import { formatTokens, formatUsd } from './FeatureStatsFormat';
+import { C, FS, FONT } from '../../lib/design';
+import { formatDuration } from '../../lib/chatGroups';
+import { BRIEF_WAIT_WORD } from './FeatureBriefModel';
+import { formatTokens } from './FeatureStatsFormat';
 import type { FeatureStats } from '../../types/featureStats';
 
-// Тонкая лента (8 px): сегменты в масштабе, без подписей. Closed — из общей модели
-// состояния (блок передаёт по brief.kind), не эвристика по current == null (R-F8).
-export function MiniTimeline({ stats, closed }: { stats: FeatureStats; closed: boolean }) {
-  const model = buildTimelineModel(stats.timeline, stats.source, stats.truncated, closed);
-  if (!model.hasData) return null;
-
-  return (
-    <div
-      data-testid="mini-timeline"
-      style={{
-        display: 'flex', gap: 1, height: 8, borderRadius: R.max, overflow: 'hidden',
-        marginBottom: SP.xs,
-      }}
-    >
-      {model.blocks.map((b, i) => {
-        const w = b.type === 'break' ? 40 : Math.max(2, b.minutes);
-        if (b.type === 'break') {
-          return (
-            <div
-              key={`brk-${i}`}
-              style={{
-                flex: w, minWidth: 0,
-                background: `repeating-linear-gradient(90deg, ${C.bgSelected} 0 3px, transparent 3px 6px)`,
-              }}
-            />
-          );
-        }
-        return (
-          <div key={`stg-${i}`} style={{ flex: w, minWidth: 0, display: 'flex', gap: 1 }}>
-            {b.segments.map((seg, j) => (
-              <div
-                key={j}
-                style={{
-                  flex: Math.max(1, seg.minutes), minWidth: 0,
-                  background: kindBackground(seg.kind),
-                }}
-              />
-            ))}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-// Ось под полоской: «создана … / сейчас …», у закрытой — «закрыта …». Closed — как в
-// ленте: из общей модели состояния, переданная блоком (R-F8), а не из сырого current.
-export function MiniTimelineAxis({ stats, closed }: { stats: FeatureStats; closed: boolean }) {
-  const tl = stats.timeline;
-  const from = formatDateTime(tl.from);
-  const to = closed ? formatDateTime(tl.to) : formatClock(tl.to);
-  if (!from && !to) return null;
-  return (
-    <div
-      data-testid="mini-timeline-axis"
-      style={{
-        display: 'flex', justifyContent: 'space-between', gap: SP.sm,
-        fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.sans, marginBottom: SP.xs,
-      }}
-    >
-      <span>{from && `создана ${from}`}</span>
-      <span>{to && `${closed ? 'закрыта' : 'сейчас'} ${to}`}</span>
-    </div>
-  );
-}
-
-// Строка итогов: «работа ≈ N · ждёт вас N» + токены + цена.
-export function SummaryRow({ stats }: { stats: FeatureStats }) {
+// Строка итогов: «с начала N · работа ≈ N · ждёт вас N» + токены (цены нет — «Расход $» в «Статистике»).
+// lead — «в очереди N» у очереди, слова приходят из модели.
+export function SummaryRow({ stats, lead }: { stats: FeatureStats; lead?: { label: string; value: string } | null }) {
   const t = stats.timeline.totals;
   const isApprox = stats.source === 'approx';
 
@@ -92,7 +26,7 @@ export function SummaryRow({ stats }: { stats: FeatureStats }) {
 
   // «Ждёт вас» / «не работали» — только из данных бэка (фронт не пересчитывает):
   //   journal + waitingMinutes != null → «ждала вас N» (N = totals.waitingMinutes);
-  //   current.kind === 'waiting' → «ждёт вас» (длительность текущего ожидания — не поле
+  //   current.kind === 'waiting' → «нужен ответ» (длительность текущего ожидания — не поле
   //     бэка: `current` несёт только `since`, без минут — число не вычисляем, минор);
   //   иначе → «не работали ≈ N» (N = totals.notWorkingMinutes).
   let waitPart: string | null = null;
@@ -100,17 +34,19 @@ export function SummaryRow({ stats }: { stats: FeatureStats }) {
     const d = shown(t.waitingMinutes);
     if (d) waitPart = `ждала вас ${d}`;
   } else if (stats.timeline.current?.kind === 'waiting') {
-    waitPart = 'ждёт вас';
+    waitPart = BRIEF_WAIT_WORD;
   } else {
     const d = shown(t.notWorkingMinutes);
     if (d) waitPart = `не работали ${isApprox ? '≈ ' : ''}${d}`;
   }
   const workDur = shown(t.workWallMinutes);
+  // «С начала» — стена от старта (totals.elapsedMinutes), «работа» — стена работы
+  // (workWallMinutes): два разных числа с двумя подписями (П3, Ш5).
+  const sinceStart = shown(t.elapsedMinutes);
 
   // Токены «вход+выход» (spend).
   const spend = stats.spend;
   const tokens = spend ? spend.inputTokens + spend.outputTokens : null;
-  const cost = spend && !spend.costPartial ? spend.costUsd : null;
 
   return (
     <div
@@ -120,6 +56,16 @@ export function SummaryRow({ stats }: { stats: FeatureStats }) {
         fontSize: FS.sm, color: C.textSecondary, fontFamily: FONT.sans,
       }}
     >
+      {lead && (
+        <span>
+          {lead.label} <b style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textHeading }}>{lead.value}</b>
+        </span>
+      )}
+      {sinceStart && (
+        <span>
+          с начала <b style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textHeading }}>{sinceStart}</b>
+        </span>
+      )}
       {workDur && (
         <span>
           работа <b style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textHeading }}>{isApprox ? '≈ ' : ''}{workDur}</b>
@@ -129,11 +75,6 @@ export function SummaryRow({ stats }: { stats: FeatureStats }) {
       {tokens != null && tokens > 0 && (
         <span>
           <b style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textHeading }}>{formatTokens(tokens)}</b> токенов
-        </span>
-      )}
-      {cost != null && (
-        <span>
-          <b style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textHeading }}>{formatUsd(cost)}</b>
         </span>
       )}
     </div>

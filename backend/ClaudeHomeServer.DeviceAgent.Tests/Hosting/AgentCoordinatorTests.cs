@@ -21,6 +21,7 @@ public class AgentCoordinatorTests
 
         public event Func<DeviceExecOpenCommand, Task>? ExecOpen;
         public event Func<Task>? Reconnected;
+        public event Func<Task>? HelloRequested;
 
         public Task<DeviceHelloAck> HelloAsync(DeviceHello hello, CancellationToken ct)
         {
@@ -40,6 +41,7 @@ public class AgentCoordinatorTests
 
         public Task RaiseExecOpen(DeviceExecOpenCommand c) => ExecOpen!.Invoke(c);
         public Task RaiseReconnected() => Reconnected!.Invoke();
+        public Task RaiseHelloRequested() => HelloRequested!.Invoke();
     }
 
     private sealed class FakeHarness : IHarness
@@ -113,6 +115,22 @@ public class AgentCoordinatorTests
         await control.RaiseReconnected();
 
         control.Hellos.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task Просьба_сервера_повторяет_hello_принудительно_и_берёт_новую_версию_из_ack()
+    {
+        var control = new FakeControl();
+        var harness = new FakeHarness { ActiveVersion = "2.1.0" };
+        await using var coordinator = Create(control, harness);
+        await coordinator.HelloAsync();
+
+        control.RequiredCli = "2.1.1";
+        await control.RaiseHelloRequested();
+
+        // Состав hello не менялся: без force второй hello не ушёл бы
+        control.Hellos.Should().HaveCount(2);
+        harness.Required.Should().Equal("2.1.0", "2.1.1");
     }
 
     [Fact]

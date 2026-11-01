@@ -2,6 +2,8 @@ namespace ClaudeHomeServer.Services.Llm;
 
 // Снимок состояния локального движка для панели «Локальные модели» (контроллер — шаг 11).
 // Status: "working" (нет запросов) | "busy" (running>0 или waiting>0) | "down" (HTTP-сбой)
+// | "yielded" (дежурная модель под арбитром: /metrics молчит, арбитр отвечает
+// yielded/starting/waiting-vram; DownSince при этом не ставится — Б3b)
 // | "notConnected" (нет локального провайдера/Stats).
 public sealed record LocalModelStatsCurrent
 {

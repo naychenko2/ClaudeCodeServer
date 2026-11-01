@@ -182,6 +182,7 @@ public class PregateServiceTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task СуммаПроверокДлиннееПотолка_ОдинПотолокНаПрогон_RefusedСВыполненными()
     {
         // Потолок 4 с, каждая проверка 1,5 с: первая укладывается с запасом 2,5 с даже под нагрузкой, а четыре вместе

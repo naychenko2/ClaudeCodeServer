@@ -19,11 +19,11 @@ namespace ClaudeHomeServer.Tests.Services.Devices;
 // ТОЛЬКО токен устройства с отпечатком — пользовательский JWT и сервисный JWT владельца
 // отвергаются; несовместимая версия протокола — явный отказ до апгрейда; кадры
 // подтверждаются, неподтверждённое досылается после реконнекта, дубли не доходят дважды.
-public class DeviceExecEndpointTests : IDisposable
+[Trait("Category", "Host")]
+public class DeviceExecEndpointTests : IClassFixture<DeviceExecEndpointTests.Hosts>
 {
-    private const string Conn = "exec-conn-1";
 
-    private sealed class CapturingOpener : IDeviceExecOpenSender
+    public sealed class CapturingOpener : IDeviceExecOpenSender
     {
         public readonly Channel<DeviceExecOpenCommand> Opened = Channel.CreateUnbounded<DeviceExecOpenCommand>();
 
@@ -34,33 +34,52 @@ public class DeviceExecEndpointTests : IDisposable
         }
     }
 
+    // Хост на класс. Устройство, отпечаток и идентификатор соединения каждый тест заводит свои,
+    // поэтому состояние реестров между тестами не пересекается; очередь открытий опенера
+    // сбрасывается в начале теста
+    public sealed class Hosts : IDisposable
+    {
+        public CapturingOpener Opener { get; } = new();
+        public TestWebApplicationFactory Factory { get; }
+
+        public Hosts()
+        {
+            Factory = new TestWebApplicationFactory
+            {
+                ExtraServices = services =>
+                {
+                    services.RemoveAll<IDeviceExecOpenSender>();
+                    services.AddSingleton<IDeviceExecOpenSender>(Opener);
+                }
+            };
+            Factory.ExtraConfig[DeviceHarnessPolicy.CliVersionKey] = "2.1.281";
+        }
+
+        public void Dispose() => Factory.Dispose();
+    }
+
     private readonly TestWebApplicationFactory _factory;
-    private readonly CapturingOpener _opener = new();
+    private readonly CapturingOpener _opener;
     private readonly string _ownerId;
     private readonly string _deviceId;
     private readonly string _deviceToken;
-    private readonly string _fingerprint = MachineFingerprint.Of("exec-test-machine");
+    private readonly string _conn = "exec-conn-" + Guid.NewGuid().ToString("N")[..8];
+    private readonly string _fingerprint;
 
-    public DeviceExecEndpointTests()
+    public DeviceExecEndpointTests(Hosts hosts)
     {
-        _factory = new TestWebApplicationFactory
-        {
-            ExtraServices = services =>
-            {
-                services.RemoveAll<IDeviceExecOpenSender>();
-                services.AddSingleton<IDeviceExecOpenSender>(_opener);
-            }
-        };
-        _factory.ExtraConfig[DeviceHarnessPolicy.CliVersionKey] = "2.1.281";
+        _factory = hosts.Factory;
+        _opener = hosts.Opener;
+        while (_opener.Opened.Reader.TryRead(out _)) { }
 
+        var machine = "exec-test-machine-" + Guid.NewGuid().ToString("N")[..8];
+        _fingerprint = MachineFingerprint.Of(machine);
         var sp = _factory.Services;
         _ownerId = sp.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
-        var (device, token) = sp.GetRequiredService<DeviceRegistry>().Register(_ownerId, "home", _fingerprint);
+        var (device, token) = sp.GetRequiredService<DeviceRegistry>().Register(_ownerId, machine, _fingerprint);
         _deviceId = device.Id;
         _deviceToken = token;
     }
-
-    public void Dispose() => _factory.Dispose();
 
     private HttpRequestMessage ExecRequest(string? version = "1", string execId = "none")
     {
@@ -188,8 +207,8 @@ public class DeviceExecEndpointTests : IDisposable
     {
         var channel = _factory.Services.GetRequiredService<DeviceExecChannel>();
         var router = _factory.Services.GetRequiredService<DeviceConnectionRegistry>();
-        router.RegisterConnection(Conn, _ownerId, _deviceId);
-        await channel.HelloAsync(Conn, _ownerId, _deviceId,
+        router.RegisterConnection(_conn, _ownerId, _deviceId);
+        await channel.HelloAsync(_conn, _ownerId, _deviceId,
             new DeviceHello(DesktopProtocol.Version, null, null, "linux-x64", DeviceAgentCompatibility.MinVersion, "2.1.281", [DeviceCapabilities.Exec]));
 
         var opening = channel.OpenAsync(_ownerId, _deviceId);

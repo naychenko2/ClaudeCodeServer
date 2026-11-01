@@ -48,9 +48,10 @@ function makeReport(over: Partial<HardwareReport> = {}): HardwareReport {
       { key: 'cpu', kind: 'cpu', name: 'Процессор', tempC: 75, sensor: 'ok', level: 'ok', warnC: 85, dangerC: 95, detail: { ccdC: [71, 58] }, spark15m: spark(90, 75) },
       { key: 'vrm', kind: 'vrm', name: 'Питание процессора', tempC: 53, sensor: 'ok', level: 'ok', warnC: 90, dangerC: 105, detail: {}, spark15m: spark(90, 53) },
       { key: 'chipset', kind: 'chipset', name: 'Чипсет платы', tempC: 78, sensor: 'ok', level: 'ok', warnC: 85, dangerC: 95, detail: { fanRpm: 3846 }, spark15m: spark(90, 78) },
-      { key: 'disk-0', kind: 'disk', name: 'Диск кэша', tempC: 82.8, sensor: 'ok', level: 'danger', warnC: 74, dangerC: 81, detail: { role: 'kv', critC: 84, usedGb: 370, totalGb: 492 }, spark15m: spark(90, 82) },
+      { key: 'water', kind: 'water', name: 'Вода СЖО', tempC: 51, sensor: 'ok', level: 'warn', warnC: 50, dangerC: 55, detail: {}, spark15m: spark(90, 51) },
+      { key: 'disk-0', kind: 'disk', name: 'Диск кэша', tempC: null, sensor: 'none', level: 'none', warnC: null, dangerC: null, detail: { role: 'kv', critC: null, usedGb: 370, totalGb: 492, usedPerc: 75 }, spark15m: spark(90, 75) },
       { key: 'disk-1', kind: 'disk', name: 'Системный диск', tempC: 59.9, sensor: 'ok', level: 'ok', warnC: 70, dangerC: 80, detail: { role: 'system', critC: null }, spark15m: spark(90, 59) },
-      { key: 'ram', kind: 'ram', name: 'Оперативная память', tempC: null, sensor: 'none', level: 'none', warnC: null, dangerC: null, detail: { usedGb: 83, totalGb: 121 }, spark15m: [] },
+      { key: 'ram', kind: 'ram', name: 'Оперативная память', tempC: null, sensor: 'none', level: 'none', warnC: null, dangerC: null, detail: { usedGb: 83, totalGb: 121, usedPerc: 69 }, spark15m: spark(90, 69) },
     ],
     caseFans: [{ label: 'fan1', rpm: 1159 }, { label: 'fan2', rpm: 4821 }],
     series: [
@@ -60,7 +61,7 @@ function makeReport(over: Partial<HardwareReport> = {}): HardwareReport {
       { key: 'core-1', family: 'core', gpuIndex: 1, label: 'Ядро · карта 2', points: spark(90, 64) },
       { key: 'cpu', family: 'cpu', label: 'Процессор', points: spark(90, 75) },
       { key: 'chipset', family: 'chipset', label: 'Чипсет', points: spark(90, 78) },
-      { key: 'disk-0', family: 'disk', label: 'Диск кэша', points: spark(90, 82) },
+      { key: 'water', family: 'water', label: 'Вода СЖО', points: spark(90, 51) },
       { key: 'disk-1', family: 'disk', label: 'Системный диск', points: spark(90, 59) },
     ],
     stepMs: 10000,
@@ -134,7 +135,7 @@ describe('createHardwarePoller — опрос только при активно
 describe('HwTile — окраска по level', () => {
   function tileHtml(level: HwLevel, tempC: number | null, sensor: 'ok' | 'none' | 'nodata' = 'ok'): string {
     const view: HwTileView = {
-      key: 'x', icon: 'Cpu', name: 'Процессор', value: tempC, dec: false,
+      key: 'x', icon: 'Cpu', name: 'Процессор', value: tempC, unit: '°C', dec: false,
       level, sensor, sensorLabel: 'общая', detail: '', spark: spark(90, 70), thresholdTitle: '',
     };
     return renderToStaticMarkup(createElement(HwTile, { view }));
@@ -183,7 +184,7 @@ describe('Sparkline — null рвёт линию', () => {
 describe('HwTile — «датчика нет» (sensor=none) без графика', () => {
   it('показывает «датчика нет» курсивом и подложку, не sparkline', () => {
     const view: HwTileView = {
-      key: 'ram', icon: 'MemoryStick', name: 'Оперативная память', value: null, dec: false,
+      key: 'ram', icon: 'MemoryStick', name: 'Оперативная память', value: null, unit: '°C', dec: false,
       level: 'none', sensor: 'none', sensorLabel: '',
       detail: 'занято 83 из 121 ГБ', spark: [], thresholdTitle: '',
     };
@@ -195,7 +196,7 @@ describe('HwTile — «датчика нет» (sensor=none) без график
   });
   it('sensor=nodata (tempC=null) — «нет данных»', () => {
     const view: HwTileView = {
-      key: 'g', icon: 'Gpu', name: 'Карта 1', value: null, dec: false,
+      key: 'g', icon: 'Gpu', name: 'Карта 1', value: null, unit: '°C', dec: false,
       level: 'none', sensor: 'nodata', sensorLabel: 'ядро · память: нет данных',
       detail: '', spark: [], thresholdTitle: '',
     };
@@ -278,7 +279,7 @@ describe('stale — сводка и приглушение', () => {
     expect(s).toMatch(/^Горячее всех — /);
   });
   it('hwSummary: danger → «Ближе всех к пределу …, опасно с …»', () => {
-    const nodes = makeReport().nodes.map(n => n.key === 'disk-0' ? { ...n, level: 'danger' as HwLevel } : n);
+    const nodes = makeReport().nodes.map(n => n.key === 'water' ? { ...n, level: 'danger' as HwLevel } : n);
     const s = hwSummary({ level: 'danger', status: 'ok', nodes });
     expect(s).toContain('Ближе всех к пределу');
     expect(s).toContain('опасно с');
@@ -286,8 +287,8 @@ describe('stale — сводка и приглушение', () => {
   it('hwClosest — худший уровень, при равенстве меньший запас', () => {
     const nodes = makeReport().nodes;
     const c = hwClosest(nodes);
-    // Диск кэша (82.8, danger) — худший
-    expect(c?.key).toBe('disk-0');
+    // Вода (51, warn) — худшая; диск кэша без температуры не участвует
+    expect(c?.key).toBe('water');
   });
   it('hwLevelLabel — плашки', () => {
     expect(hwLevelLabel('ok')).toBe('всё в норме');
@@ -299,9 +300,9 @@ describe('stale — сводка и приглушение', () => {
 // === hwTileView: порядок, подписи, детали ===
 
 describe('hwTileView — модели плиток', () => {
-  it('порядок узлов фиксированный (gpu, gpu, cpu, vrm, chipset, disk, disk, ram)', () => {
+  it('порядок узлов фиксированный (gpu, gpu, cpu, vrm, chipset, water, disk, disk, ram)', () => {
     const views = hwTileView(makeReport());
-    expect(views.map(v => v.key)).toEqual(['gpu0', 'gpu1', 'cpu', 'vrm', 'chipset', 'disk-0', 'disk-1', 'ram']);
+    expect(views.map(v => v.key)).toEqual(['gpu0', 'gpu1', 'cpu', 'vrm', 'chipset', 'water', 'disk-0', 'disk-1', 'ram']);
   });
   it('gpu: подпись «память», деталь «ядро N · гор. точка M»', () => {
     const v = hwTileView(makeReport())[0];
@@ -317,9 +318,18 @@ describe('hwTileView — модели плиток', () => {
     //   — неразрывный пробел между числом и «об/мин»: перенос не рвёт единицу
     expect(v.detail).toBe('вентилятор 3846 об/мин');
   });
-  it('disk kv: «до предела 1,2 °C · занято 370 из 492 ГБ»', () => {
+  it('disk kv: вместо температуры «75 %», деталь «занято 370 из 492 ГБ»', () => {
     const v = hwTileView(makeReport()).find(x => x.key === 'disk-0')!;
-    expect(v.detail).toBe('до предела 1,2 °C · занято 370 из 492 ГБ');
+    expect(v.value).toBe(75);
+    expect(v.unit).toBe('%');
+    expect(v.dec).toBe(false);
+    expect(v.detail).toBe('занято 370 из 492 ГБ');
+  });
+  it('water: подпись «в резервуаре», иконка Droplet', () => {
+    const v = hwTileView(makeReport()).find(x => x.key === 'water')!;
+    expect(v.sensorLabel).toBe('в резервуаре');
+    expect(v.icon).toBe('Droplet');
+    expect(v.value).toBe(51);
   });
   it('disk system (critC=null): «предел не сообщает — пороги 70 / 80»', () => {
     const v = hwTileView(makeReport()).find(x => x.key === 'disk-1')!;
@@ -328,6 +338,8 @@ describe('hwTileView — модели плиток', () => {
   it('ram: «занято 83 из 121 ГБ»', () => {
     const v = hwTileView(makeReport()).find(x => x.key === 'ram')!;
     expect(v.detail).toBe('занято 83 из 121 ГБ');
+    expect(v.value).toBe(69);
+    expect(v.unit).toBe('%');
   });
 });
 

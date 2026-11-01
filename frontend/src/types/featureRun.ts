@@ -55,7 +55,35 @@ export interface FeatureTask {
   // всего» для честного прогресса. На записи бэк допускает его только у role=plan
   // (валидация TaskManager); на выдаче по роли не фильтрует: null, если не заполнен.
   // Аддитивное: старые задачи поля не несут.
-  planSteps?: { stepRef: string; title: string; lane?: string | null }[] | null;
+  // kind (B2): тип пункта плана — step | review | qa | final; отсутствие или null —
+  // step (бэк: TaskItem.PlanStep.IsStep, TaskItem.cs:312, сравнение Ordinal). В
+  // знаменатель бэка идут только исполняемые пункты (FeatureStepAccounting.cs:123);
+  // «В очереди» фронта — подмножество ровно их же (FB2).
+  planSteps?: { stepRef: string; title: string; lane?: string | null; kind?: string | null }[] | null;
+  // «Голос фичи» (бэк: `TaskItem.Note`, только у эпика): текст оркестратора/человека
+  // с оценкой. На wire — без bySessionId (ее снимает FeatureNoteJsonConverter на границе
+  // сериализации). Аддитивное: старый answers и эпик без голоса — undefined/null.
+  note?: FeatureTaskNote | null;
+}
+
+// Голос фичи на wire (зеркало бэкового `FeatureNote`, camelCase; bySessionId наружу
+// не отдаётся — FeatureNoteJsonConverter). stageAtWrite/stateAtWrite — штамп момента
+// записи; оценка — ниже.
+export interface FeatureTaskNote {
+  text: string;
+  at: string;
+  byUser: boolean;
+  stageAtWrite: string;
+  stateAtWrite: string;
+  estimate?: FeatureTaskEstimate | null;
+}
+
+// Оценка оркестратора (бэк: `FeatureEstimate`, `FeatureNote.Estimate`): срок до готовности (etaMinutes, null — не оценивался) и «что дальше». Процента в оценке
+// нет: готовность — только stepProgress. Считает автор оценки (оркестратор).
+export interface FeatureTaskEstimate {
+  remaining?: string[] | null;
+  etaMinutes?: number | null;
+  why?: string | null;
 }
 
 // Исход витка: строго пять значений (бэк: `FeatureRound.Verdict`).
@@ -234,6 +262,22 @@ export interface FeatureStepChain {
   // лента показывает только слово состояния без времени.
   waitingSince?: string | null;
   acceptedAt?: string | null;
+  // Шаг «в master» (P1/F1, бэк: `FeatureStepChain.InMaster`, FeatureRun.cs:384): все задачи
+  // цепочки сданы строго до закрытия мержа (у мержа с reviewOf — только перечисленные).
+  // Ортогонален Outcome: принятость от него не зависит. Аддитивное: старые ответы не несут.
+  inMaster?: boolean;
+  // Момент мержа, в который шаг попал в master (первый подходящий; бэк: `MergedAt`,
+  // FeatureRun.cs:386); null — не в master.
+  mergedAt?: string | null;
+}
+
+// Метка мержа для ганта (P1/F1, бэк: `FeatureMergeMark`, FeatureRun.cs:118-123): id задачи
+// мержа, момент закрытия и шаги, попавшие в master по этому мержу (шаг — в первом
+// подходящем мерже: `FeatureStepChain.mergedAt == at`).
+export interface FeatureMergeMark {
+  taskId: string;
+  at: string;
+  stepRefs: string[];
 }
 
 // Возвраты одного источника (ревью/проверка/финал) (бэк: `FeatureSourceReturns`).
@@ -285,6 +329,16 @@ export interface FeatureNow {
   staleAlertedAt?: string | null;
 }
 
+// Риск мержа (бэк: `FeatureMergeRisk`): только у тревоги kind == 'merge' — что
+// в трекере расходится с «финал принят» (Ш8). Фронт ничего не считает: печатает
+// список как пришёл (нули бэк не кладёт, порядок даёт бэк). Виды:
+// not_created — не заведено шагов; open — заведены, но не приняты;
+// tracker — трекер расходится.
+export interface FeatureMergeRisk {
+  kind: 'not_created' | 'open' | 'tracker';
+  count: number;
+}
+
 // Тревога фичи (бэк: `FeatureAttention`): один элемент либо null.
 // Приоритет: stopped → wait явный → wait «мерж».
 export interface FeatureAttention {
@@ -300,6 +354,9 @@ export interface FeatureAttention {
   personaId?: string | null;
   // Связанный чат исполнителя.
   linkedSessionId?: string | null;
+  // Риски мержа (бэк: `FeatureRun.MergeRisks`): только у kind == 'merge' (Ш8).
+  // Аддитивное: старые ответы поля не несут — UI обязан пережить отсутствие.
+  mergeRisks?: FeatureMergeRisk[];
 }
 
 // Итог смерженной фичи (бэк: `FeatureSummary`): только у закрытой, иначе null.
@@ -358,6 +415,13 @@ export interface FeatureRun {
   // Разрез (role=cut) и план (role=plan) фичи.
   cut?: FeatureTask[];
   plan?: FeatureTask[];
+  // Id действующих планов (бэк: `FeatureRun.ActivePlanIds`, FeatureRun.cs:44-46 — результат того
+  // же ActivePlans, что считает учёт шагов): не снятые и не вытесненные более поздним планом с
+  // пересекающимися ключами. План вне списка — снят или замещён: его шаги не входят ни в
+  // знаменатель, ни в «очередь» фронта. Пустой список — действующих планов нет (это НЕ то же
+  // самое, что отсутствие поля). Аддитивное: старые ответы поля не несут — UI обязан пережить
+  // отсутствие; своё правило вытеснения фронт не выводит (дефект 128fd73a).
+  activePlanIds?: string[];
   awaitingHumanSince?: string | null;
   awaitingHumanReason?: string | null;
   verdicts: FeatureVerdicts;
@@ -396,4 +460,26 @@ export interface FeatureRun {
   // отдельной строкой. У недоведённой до терминального состояния фичи — пустой список.
   // Аддитивное: старые ответы поля не несут — UI обязан пережить отсутствие.
   postMergeTails?: string[];
+  // Все закрытые мержи фичи (P1/F1, бэк: `FeatureRun.Merges`, FeatureRun.cs:110): метки для
+  // ганта, по моменту закрытия. Не обрезают график: ClosureAt смотрит только на State.
+  // Пусто/отсутствует — мержей не было (старые ответы).
+  merges?: FeatureMergeMark[];
+  // Волна после мержа (P1/F1, бэк: `FeatureRun.WaveAfterMerge`, FeatureRun.cs:113): после
+  // последнего закрытого мержа заведён шаг/доработка (или к предыдущему мержу осталась
+  // открытая работа) — на ганте это новая волна после последней метки мержа.
+  waveAfterMerge?: boolean;
+  // Расхождения трекера с реальностью (TR-B1c, бэк: `FeatureRun.Tracker`, FeatureRun.cs:107):
+  // единая точка правды — индекс несёт только Count, список здесь. Kind — словарь
+  // FeatureTracker (unreviewed | returned_no_rework | dead_verdict | reported_open |
+  // epic_open_after_merge | orphans_in_closed | unplanned_step); StepRef — ключ цепочки (у цепочечных
+  // видов), иначе null. Аддитивное: старые ответы поля не несут — UI обязан пережить отсутствие.
+  tracker?: FeatureTrackerIssue[];
+}
+
+// Одно расхождение трекера (бэк: `FeatureTrackerIssue`).
+export interface FeatureTrackerIssue {
+  kind: string;
+  taskId?: string | null;
+  stepRef?: string | null;
+  since?: string | null;
 }

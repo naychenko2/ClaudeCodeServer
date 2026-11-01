@@ -7,6 +7,7 @@ using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
+[Trait("Category", "Host")]
 public class AuthControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

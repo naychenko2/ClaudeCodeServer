@@ -108,6 +108,27 @@ public class ReviewTreePoolTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
+    public async Task Release_Чистит_Bin_И_Obj_Проектов_Слота_Исходники_Не_Трогает()
+    {
+        var pool = NewPool();
+        var lease = await pool.TryAcquireAsync(null, _project, _wave, "t1");
+        var obj = Path.Combine(lease!.SlotPath, "backend", "Proj.Tests", "obj", "a.bin");
+        var bin = Path.Combine(lease.SlotPath, "backend", "Proj.Tests", "bin", "b.dll");
+        var src = Path.Combine(lease.SlotPath, "backend", "Proj.Tests", "Code.cs");
+        foreach (var f in new[] { obj, bin, src })
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(f)!);
+            await File.WriteAllTextAsync(f, "x");
+        }
+
+        pool.Release("t1");
+
+        File.Exists(obj).Should().BeFalse();
+        File.Exists(bin).Should().BeFalse();
+        File.Exists(src).Should().BeTrue();
+    }
+
+    [Fact]
     public async Task Acquire_Повторный_Захват_Сбрасывает_Слот_На_Актуальный_Коммит_И_Хранит_Игнорируемое()
     {
         var pool = NewPool();

@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// Умолчание режима прав у нового чата: чат с персоной — AcceptEdits (без серверного классификатора
 /// «Авто» на каждый вызов инструмента), явный режим уважается, чат без персоны — прежнее Auto.
 /// </summary>
+[Trait("Category", "Host")]
 public class ChatDefaultModeTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

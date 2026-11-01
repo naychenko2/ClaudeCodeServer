@@ -11,19 +11,27 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ClaudeHomeServer.Tests.ImageEditor.Characters;
 
 // Метки фото в API персонажа (ADR-027 §1, §10): DTO и PUT photoLabels гейтятся флагом character-smart-photos
-public class CharacterLabelsEndpointsTests : IDisposable
+[Trait("Category", "Host")]
+public class CharacterLabelsEndpointsTests : IClassFixture<CharacterLabelsEndpointsTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new()
+    /// <summary>
+    /// Хост на весь класс (IClassFixture), а не на тест: приложение собирается один раз.
+    /// Фейк IImageEditor неизменяемый (доступность и модели заданы в конструкторе, журнала
+    /// вызовов нет) — сбрасывать нечего. Флаг CharacterSmartPhotos изменяемый на общем
+    /// пользователе, но каждый тест ставит его сам перед чтением: оставленный предыдущим
+    /// тестом флаг не читается. Проект и персонаж — на каждый тест-экземпляр свой
+    /// (CreateProject — уникальные GUID).
+    /// </summary>
+    public sealed class Hosts : TestWebApplicationFactory
     {
-        ExtraServices = services =>
-            services.AddSingleton<IImageEditor>(new FakeImageEditor("fal", models: FakeImageEditor.Model("m"))),
-    };
-
-    public void Dispose()
-    {
-        _factory.Dispose();
-        GC.SuppressFinalize(this);
+        public Hosts() =>
+            ExtraServices = services =>
+                services.AddSingleton<IImageEditor>(new FakeImageEditor("fal", models: FakeImageEditor.Model("m")));
     }
+
+    private readonly TestWebApplicationFactory _factory;
+
+    public CharacterLabelsEndpointsTests(Hosts hosts) => _factory = hosts;
 
     private string UserId =>
         _factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;

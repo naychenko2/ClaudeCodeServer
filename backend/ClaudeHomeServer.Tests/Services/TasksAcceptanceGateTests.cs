@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Services;
 
 // Критерии приёмки: один гейт в TaskManager, одинаковый отказ через MCP (Deny) и REST (400).
 [Trait("Category", "Integration")]
+[Trait("Category", "Host")]
 public class TasksAcceptanceGateTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

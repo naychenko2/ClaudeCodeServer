@@ -10,6 +10,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // personaId/resumeSessionId провижнит ассистента и продолжает с ним, 400 остаётся
 // только на невозможный провижн. Заготовку заводит стартовый проход провижна
 // (Program.cs) — отдельная подготовка тестам не нужна.
+[Trait("Category", "Host")]
 public class ChatCreationPersonaGateTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

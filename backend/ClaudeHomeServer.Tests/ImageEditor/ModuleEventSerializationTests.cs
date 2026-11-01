@@ -13,6 +13,7 @@ namespace ClaudeHomeServer.Tests.ImageEditor;
 // видит и отдаёт в SendAsync("message", object). Поля доезжают до фронта, только если протокол
 // хаба сериализует аргумент по ФАКТИЧЕСКОМУ типу, а не по объявленному ServerMessage. Тест
 // берёт протокол из собранного хоста — с его конвертером enum'ов — и смотрит на байты.
+[Trait("Category", "Host")]
 public class ModuleEventSerializationTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

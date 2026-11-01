@@ -35,11 +35,13 @@ internal sealed class HubControlConnection : IControlConnection, IAgentTicketInt
             .Build();
 
         _connection.On<DeviceExecOpenCommand>("ExecOpen", command => ExecOpen?.Invoke(command) ?? Task.CompletedTask);
+        _connection.On("RequestHello", () => HelloRequested?.Invoke() ?? Task.CompletedTask);
         _connection.Reconnected += _ => Reconnected?.Invoke() ?? Task.CompletedTask;
     }
 
     public event Func<DeviceExecOpenCommand, Task>? ExecOpen;
     public event Func<Task>? Reconnected;
+    public event Func<Task>? HelloRequested;
 
     /// <summary>Подключается, повторяя до успеха: сервер мог быть ещё не поднят.</summary>
     public async Task ConnectAsync(CancellationToken ct)

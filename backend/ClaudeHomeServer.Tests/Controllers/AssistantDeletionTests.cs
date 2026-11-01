@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // и дефолт обнуляется вместе с ней. Своя фабрика НА КАЖДЫЙ тест (не IClassFixture): иначе
 // факт, переключивший личный дефолт на другую персону, ломает допущение «дефолт == заготовка»
 // у соседнего факта в том же классе (общий UserStore синглтона, порядок не гарантирован).
+[Trait("Category", "Host")]
 public class AssistantDeletionTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

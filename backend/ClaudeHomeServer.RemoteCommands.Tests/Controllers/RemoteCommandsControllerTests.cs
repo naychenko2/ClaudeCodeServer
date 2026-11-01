@@ -13,6 +13,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // Замки пульта на уровне HTTP. Фича по умолчанию выключена конфигом — ровно в этом состоянии
 // код приезжает на чужую машину: пункта меню нет, мутирующие эндпоинты отвечают 404, а GET
 // всё равно 200 (его зовёт шапка при монтировании, и 404 шумел бы ошибкой в консоли).
+[Trait("Category", "Host")]
 public class RemoteCommandsControllerTests(TestWebApplicationFactory factory)
     : IClassFixture<TestWebApplicationFactory>
 {
@@ -87,6 +88,7 @@ public class RemoteCommandsControllerTests(TestWebApplicationFactory factory)
 
 // Тот же контроллер, но на включённом пульте: реестр действий приходит из конфигурации,
 // шелл подменён фейком — настоящие команды в тестах не исполняются.
+[Trait("Category", "Host")]
 public class RemoteCommandsControllerEnabledTests : IDisposable
 {
     private readonly FakeShellCommandRunner _runner = new();

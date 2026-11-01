@@ -3,7 +3,9 @@
 // на чаты витков, счётчик циклов, текущий узел, причину возврата.
 // Тесты: обычный цикл, возврат+доработка, два возврата, активная задача,
 // «сейчас»-строка (текущая карточка), краевые (не начат, старые данные без rounds),
-// закрытие «принял с замечаниями» и хвостовая доработка (GC-F3), шаг плана без задачи (GC-F3).
+// закрытие «принял с замечаниями» и хвостовая доработка (GC-F3), шаг плана без задачи (GC-F3),
+// «В очереди» только по действующим планам (activePlanIds, FB3 / дефект 128fd73a),
+// «В очереди» только по пунктам плана вида step (kind, FB2).
 
 import { describe, it, expect } from 'vitest';
 import { buildProdCards } from './FeatureProdCards';
@@ -533,5 +535,123 @@ describe('шаг плана без задачи (GC-F3)', () => {
     const cards = buildProdCards(r);
     expect(cards.map(c => [c.stepRef, c.state, c.planned])).toEqual([['Ш1', 'run', false], ['Ш2', 'queue', true], ['Ш3', 'queue', true]]);
     expect(cards.map(c => c.order)).toEqual([0, 1, 2]);
+  });
+});
+
+// ── «В очереди» только по действующим планам (activePlanIds, FB3 / дефект 128fd73a) ──────────
+// Бэк считает знаменатель по ActivePlans (FeatureStepAccounting) и отдаёт их id
+// (FeatureRun.cs:44-46). Фронт верит списку и своё правило «поздний вытесняет ранний» не
+// выводит; без списка (старый ответ) снятый план всё равно не остаётся — тот же признак,
+// что на бэке (verification.verdict 'withdrawn').
+
+describe('«В очереди» по действующим планам (activePlanIds)', () => {
+  const planTask = (id: string, steps: { stepRef: string; title: string }[], over: Partial<FeatureTask> = {}): FeatureTask =>
+    task({ id, role: 'plan', planSteps: steps, ...over });
+
+  it('activePlanIds=[p2]: карточки только шагов действующего плана (C из p1 нет)', () => {
+    // У p1 нет метки withdrawn: его исключает только список id — так бэк отдаёт замещённый
+    // план. Фронт не досуживает вытеснение сам и не возвращает C ни каким другим путём.
+    const r = run({
+      plan: [
+        planTask('p1', [{ stepRef: 'A', title: 'ранний A' }, { stepRef: 'B', title: 'ранний B' }, { stepRef: 'C', title: 'ранний C' }]),
+        planTask('p2', [{ stepRef: 'A', title: 'A' }, { stepRef: 'B', title: 'B' }]),
+      ],
+      activePlanIds: ['p2'],
+    });
+    const cards = buildProdCards(r);
+    expect(cards.map(c => c.stepRef)).toEqual(['A', 'B']);
+    expect(cards.map(c => c.title)).toEqual(['A', 'B']);
+    expect(cards.map(c => c.planned)).toEqual([true, true]);
+  });
+
+  it('activePlanIds=[] — действующих планов нет: карточек нет (пусто ≠ отсутствие поля)', () => {
+    const r = run({
+      plan: [planTask('p1', [{ stepRef: 'A', title: 'A' }])],
+      activePlanIds: [],
+    });
+    expect(buildProdCards(r)).toEqual([]);
+  });
+
+  it('activePlanIds нет (старый ответ): прежнее поведение — все планы, без падения', () => {
+    const r = run({
+      plan: [
+        planTask('p1', [{ stepRef: 'A', title: 'A' }, { stepRef: 'C', title: 'C' }]),
+        planTask('p2', [{ stepRef: 'B', title: 'B' }]),
+      ],
+    });
+    const cards = buildProdCards(r);
+    expect(cards.map(c => c.stepRef)).toEqual(['A', 'C', 'B']);
+    expect(cards.map(c => c.state)).toEqual(['queue', 'queue', 'queue']);
+  });
+
+  it('activePlanIds нет, но снятый план (withdrawn) карточек не даёт', () => {
+    const r = run({
+      plan: [
+        planTask('p1', [{ stepRef: 'A', title: 'A' }, { stepRef: 'C', title: 'C' }], { verification: { verdict: 'withdrawn' } }),
+        planTask('p2', [{ stepRef: 'B', title: 'B' }]),
+      ],
+    });
+    expect(buildProdCards(r).map(c => c.stepRef)).toEqual(['B']);
+  });
+
+  it('фильтр по планам не трогает заведённые цепочки: их карточки остаются как были', () => {
+    const r = run({
+      plan: [
+        planTask('p1', [{ stepRef: 'A', title: 'A' }, { stepRef: 'C', title: 'снятый' }], { verification: { verdict: 'withdrawn' } }),
+        planTask('p2', [{ stepRef: 'A', title: 'A' }, { stepRef: 'B', title: 'B' }]),
+      ],
+      activePlanIds: ['p2'],
+      steps: [task({ id: 's1', status: 'inProgress', stepRef: 'A', claudeStartedAt: '2026-10-20T10:00:00Z' })],
+      stepChains: [chain({ stepRef: 'A', title: 'A', taskIds: ['s1'], status: 'идёт', outcome: 'running' })],
+    });
+    const cards = buildProdCards(r);
+    expect(cards.map(c => [c.stepRef, c.state, c.planned])).toEqual([['A', 'run', false], ['B', 'queue', true]]);
+  });
+});
+
+// ── «В очереди» только по пунктам плана вида step (FB2, хвост ревью FB3) ─────────────────
+// B2 принят: у пункта плана на wire есть kind (step | review | qa | final; отсутствие или
+// null = step). В знаменатель бэка идёт только step (FeatureStepAccounting.cs:123,
+// TaskItem.PlanStep.IsStep = TaskItem.cs:312, сравнение Ordinal). Инвариант: карточка
+// «В очереди» — подмножество ровно тех пунктов, что вошли в знаменатель.
+
+describe('«В очереди» только по пунктам вида step (FB2)', () => {
+  type PlanStepFixture = { stepRef: string; title: string; kind?: string | null };
+  const planTask = (id: string, steps: PlanStepFixture[]): FeatureTask =>
+    task({ id, role: 'plan', planSteps: steps });
+
+  it('review/qa/final — карточки нет; отсутствие kind, kind=null и kind=step — есть', () => {
+    const r = run({
+      plan: [planTask('p1', [
+        { stepRef: 'A', title: 'без kind' },
+        { stepRef: 'B', title: 'kind null', kind: null },
+        { stepRef: 'C', title: 'kind step', kind: 'step' },
+        { stepRef: 'R1', title: 'ревью', kind: 'review' },
+        { stepRef: 'Q1', title: 'проверка', kind: 'qa' },
+        { stepRef: 'F1', title: 'финал', kind: 'final' },
+      ])],
+    });
+    const cards = buildProdCards(r);
+    expect(cards.map(c => c.stepRef)).toEqual(['A', 'B', 'C']);
+    expect(cards.map(c => c.planned)).toEqual([true, true, true]);
+    expect(cards.map(c => c.state)).toEqual(['queue', 'queue', 'queue']);
+  });
+
+  it('не-шаг не резервирует свой ключ: «R1» review и «R1» step — одна карточка шага', () => {
+    // Порядок тот же, что на бэке: IsStep (:123) раньше TryAdd (:127). Пункт review не должен
+    // «занять» ключ R1 — иначе шаг R1 из того же плана потерял бы карточку.
+    const r = run({
+      plan: [planTask('p1', [
+        { stepRef: 'R1', title: 'ревью-пункт', kind: 'review' },
+        { stepRef: 'R1', title: 'шаг', kind: 'step' },
+      ])],
+    });
+    const cards = buildProdCards(r);
+    expect(cards.map(c => [c.stepRef, c.title])).toEqual([['R1', 'шаг']]);
+  });
+
+  it('kind «Step» с заглавной — не шаг: сравнение Ordinal, как на бэке (TaskItem.cs:312)', () => {
+    const r = run({ plan: [planTask('p1', [{ stepRef: 'A', title: 'A', kind: 'Step' }])] });
+    expect(buildProdCards(r)).toEqual([]);
   });
 });

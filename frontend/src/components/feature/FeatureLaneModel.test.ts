@@ -3,17 +3,25 @@
 // Покрытие: ось и timeFrac (живая 0.86 / closed и merged 1), axisFrac (доли, clamp по окну);
 // интервалы (порядок, паузы, totalMinutes, lastOutcome); состояния (done/live/wait/stalled;
 // wait — по задаче из current.waiting, а не по стадии, замечание GC-R-F2 m3);
+// слово состояния стадии (lane.status — из единого источника stageStatusLabel:
+// тон wait/stopped > runningSince > state, доработка Ш2b по ревью c51cd49c);
 // зона «стоит» (только из attention.stopped; поиск этапа по taskId; фолбэк на текущий);
 // approx и пустой словарь — разные состояния (замечание GC-R-F1); skipped; план «N/M»
 // (prod/review из stepProgress, прочие из executors.status); возвраты (только prod);
 // обрезка интервалов по границе окна (находка GC-R-B); закрытая фича — без live/stalled,
 // даже когда бэк держит prod active из-за хвостов.
 //
+// Метки мержей и волна после мержа (F1): mergeMarks из run.merges по времени, waveFrom —
+// только при waveAfterMerge и от последнего мержа; без мержей — пусто (старые ответы).
+//
 // Мутации (в отчёте): (1) timeFrac 1 → 0.86 у closed → краснеет «closed/merged: timeFrac 1»;
 // (2) не обрезать интервал по окну → краснеет «обрезка по окну»; (3) пустой словарь
 // считать approx → краснеет «пустой словарь — не approx»; (4) не искать стоящий этап по
 // attention.taskId (всегда текущий) → краснеет «стоит по taskId»; (5) вернуть пометку wait
-// по стадии (stage.key === waitKey) → краснеет «wait по задаче, а не по стадии».
+// по стадии (stage.key === waitKey) → краснеет «wait по задаче, а не по стадии»;
+// (6) waveFrom от первого мержа, не от последнего → краснеет «волна от последнего мержа»;
+// (7) не звать stageStatusLabel в buildStageLanes (status всегда null) → краснеет первый
+//     тест блока «слово состояния стадии» (доработка Ш2b).
 
 import { describe, it, expect } from 'vitest';
 import { buildStageLanes, axisFrac, asStageKey, planCounterText, type StageLanesModel, type StageLane } from './FeatureLaneModel';
@@ -57,6 +65,7 @@ function mkStage(key: StageKey, state: StageState, over: Partial<FeatureStage> =
     approxMinutes: 0,
     overlapsActive: false,
     executors: [],
+    runningSince: null,
     ...over,
   };
 }
@@ -505,6 +514,60 @@ describe('planCounterText: текст счётчика «N/M» (GC-F12R)', () =>
   });
 });
 
+// === Слово состояния стадии: из единого источника stageStatusLabel (доработка Ш2b) ===
+//
+// Модель не выводит слово сама: она зовёт единый источник по стадии и несёт его пару
+// (текст + тон) в lane.status. Здесь — все сочетания state × tone × runningSince:
+// порядок «tone wait/stopped > runningSince > state» (решение по ревью c51cd49c:
+// ждущая ответа или вставшая стадия не «идёт», даже когда по ней есть живой ход;
+// факт идущей задачи — «идёт» при любом state, П2).
+
+describe('слово состояния стадии: тон важнее «идёт», runningSince важнее state (доработка Ш2b)', () => {
+  // Мутация 7: не звать stageStatusLabel в buildStageLanes (status всегда null) →
+  // краснеет первый тест; заменить слово в stageStatusLabel литералом → краснеют все.
+  const statusOf = (key: StageKey, state: StageState, over: Partial<FeatureStage> = {}) =>
+    laneOf(buildStageLanes(mkRun({ stages: [mkStage(key, state, over)] }), mkStats(), NOW), key).status;
+
+  it('pending с runningSince — «идёт» (П2: по стадии работают, хотя по конвейеру она ещё не активна)', () => {
+    expect(statusOf('qa', 'pending', { runningSince: '2026-10-20T11:00:00Z' })).toEqual({ text: 'идёт', tone: 'muted' });
+  });
+
+  it('active с runningSince — «идёт»', () => {
+    expect(statusOf('prod', 'active', { runningSince: '2026-10-20T10:00:00Z' })).toEqual({ text: 'идёт', tone: 'muted' });
+  });
+
+  it('wait с runningSince — «нужен ответ» (info), НЕ «идёт»: ждущая ответа стадия не идёт', () => {
+    expect(statusOf('qa', 'active', { tone: 'wait', runningSince: '2026-10-20T11:00:00Z' })).toEqual({ text: 'нужен ответ', tone: 'info' });
+  });
+
+  it('stopped с runningSince — «стоит» (danger), НЕ «идёт»', () => {
+    expect(statusOf('qa', 'active', { tone: 'stopped', runningSince: '2026-10-20T11:00:00Z' })).toEqual({ text: 'стоит', tone: 'danger' });
+  });
+
+  it('wait без runningSince (задача held — бэковый IsRunning её исключает) — «нужен ответ»', () => {
+    expect(statusOf('qa', 'active', { tone: 'wait' })).toEqual({ text: 'нужен ответ', tone: 'info' });
+  });
+
+  it('stopped без runningSince — «стоит»', () => {
+    expect(statusOf('qa', 'active', { tone: 'stopped' })).toEqual({ text: 'стоит', tone: 'danger' });
+  });
+
+  it('без тона и без runningSince — по state: active — «идёт», pending — «впереди», skipped — «не было»', () => {
+    expect(statusOf('prod', 'active')).toEqual({ text: 'идёт', tone: 'muted' });
+    expect(statusOf('merge', 'pending')).toEqual({ text: 'впереди', tone: 'muted' });
+    expect(statusOf('final', 'skipped')).toEqual({ text: 'не было', tone: 'muted' });
+  });
+
+  it('overlapsActive без тона и без живого хода — «идёт параллельно»; с живым ходом — «идёт» (runningSince важнее state)', () => {
+    expect(statusOf('review', 'active', { overlapsActive: true })).toEqual({ text: 'идёт параллельно', tone: 'muted' });
+    expect(statusOf('review', 'active', { overlapsActive: true, runningSince: '2026-10-20T11:00:00Z' })).toEqual({ text: 'идёт', tone: 'muted' });
+  });
+
+  it('done — слова нет (null), даже с мусорным runningSince', () => {
+    expect(statusOf('merge', 'done', { runningSince: '2026-10-20T11:00:00Z' })).toBeNull();
+  });
+});
+
 // === Возвраты: только «Производство» ===
 
 describe('возвраты: флажки только на дорожке «Производства»', () => {
@@ -582,5 +645,63 @@ describe('мелочи контракта', () => {
     const model = buildStageLanes(mkRun(), mkStats(), NOW);
     expect(Object.keys(model.lanes)).toEqual([]);
     expect(model.axis).not.toBeNull();
+  });
+});
+
+// === Метки мержей и волна после мержа (F1) ===
+
+describe('метки мержей и волна: данные run.merges/waveAfterMerge как есть, порядок по времени', () => {
+  const M1 = { taskId: 'm-1', at: '2026-10-20T08:00:00Z', stepRefs: ['Ш1', 'Ш2'] };
+  const M2 = { taskId: 'm-2', at: '2026-10-20T10:00:00Z', stepRefs: ['Ш3'] };
+
+  it('два мержа — две метки по времени; без waveAfterMerge волны нет', () => {
+    const model = buildStageLanes(mkRun({ stages: [mkStage('prod', 'done')], merges: [M1, M2] }), mkStats(), NOW);
+    expect(model.mergeMarks).toEqual([M1, M2]);
+    expect(model.waveFrom).toBeNull();
+  });
+
+  it('waveAfterMerge — волна от последнего мержа (не от первого)', () => {
+    const model = buildStageLanes(
+      mkRun({ stages: [mkStage('prod', 'active')], merges: [M1, M2], waveAfterMerge: true }),
+      mkStats(), NOW,
+    );
+    expect(model.waveFrom).toBe(M2.at);
+  });
+
+  it('нет мержей — меток нет; waveAfterMerge без мержей — противоречие контракта, волны нет', () => {
+    const plain = buildStageLanes(mkRun({ stages: [mkStage('prod', 'active')] }), mkStats(), NOW);
+    expect(plain.mergeMarks).toEqual([]);
+    expect(plain.waveFrom).toBeNull();
+    const noMerge = buildStageLanes(mkRun({ stages: [mkStage('prod', 'active')], waveAfterMerge: true }), mkStats(), NOW);
+    expect(noMerge.mergeMarks).toEqual([]);
+    expect(noMerge.waveFrom).toBeNull();
+  });
+
+  it('закрытая/смерженная фича: волны нет, даже когда бэк держит waveAfterMerge (минор 4 ревью 07eee660)', () => {
+    // Эпик Done перекрывает волну на бэке (TerminalState), но поле остаётся true;
+    // «новая волна» после закрытой фичи — ложь истории, гасим по finished.
+    const closed = buildStageLanes(
+      mkRun({ state: 'closed', closed: true, stages: [mkStage('prod', 'done')], merges: [M1, M2], waveAfterMerge: true }),
+      mkStats(), NOW,
+    );
+    expect(closed.waveFrom).toBeNull();
+    const merged = buildStageLanes(
+      mkRun({ state: 'merged', stages: [mkStage('prod', 'done')], merges: [M1, M2], waveAfterMerge: true }),
+      mkStats(), NOW,
+    );
+    expect(merged.waveFrom).toBeNull();
+  });
+
+  it('битая дата — не метка; порядок меток не зависит от порядка ответа', () => {
+    const model = buildStageLanes(
+      mkRun({
+        stages: [mkStage('prod', 'active')],
+        merges: [M2, { taskId: 'm-bad', at: 'не-дата', stepRefs: [] }, M1],
+        waveAfterMerge: true,
+      }),
+      mkStats(), NOW,
+    );
+    expect(model.mergeMarks.map(m => m.taskId)).toEqual(['m-1', 'm-2']);
+    expect(model.waveFrom).toBe(M2.at);
   });
 });

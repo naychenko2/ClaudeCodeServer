@@ -1,5 +1,5 @@
 import { Sparkles, Gem, Brain, Feather, Lock, Zap, Cpu } from 'lucide-react';
-import { useModels, modelProvider, providerLabel, modelLabel, useDefaultModelOption,
+import { useModels, modelProvider, providerLabel, providerCapsByKey, modelLabel, useDefaultModelOption,
   modelFamily, versionHint,
   USAGE, type UsageKey } from '../lib/models';
 import { effortLabel } from '../lib/effort';
@@ -63,6 +63,15 @@ export function ModelIcon({ value, size = 14 }: { value?: string | null; size?: 
   return <Cpu {...props} />;                                              // нейтральная
 }
 
+// Ключ группы композера: все локальные провайдеры — одна группа, остальные — по провайдеру
+const LOCAL_GROUP = '__local';
+function groupKeyOf(provider: string): string {
+  return providerCapsByKey(provider).isLocal ? LOCAL_GROUP : provider;
+}
+function groupLabel(key: string): string {
+  return key === LOCAL_GROUP ? 'Локальные' : providerLabel(key);
+}
+
 export function ComposerModelPicker({ value, onChange, started, isMobile, compact,
   usage = USAGE.chatNew, showFreezeNote, effort, onEffortChange, showEffortLabel = true,
   maxTriggerWidth }: Props) {
@@ -78,19 +87,22 @@ export function ComposerModelPicker({ value, onChange, started, isMobile, compac
   const current = value ?? '';
   const currentProvider = modelProvider(current);
 
-  // Группировка по провайдеру, Claude первой, остальные по алфавиту подписи.
+  // Группировка по провайдеру, Claude первой, остальные по алфавиту подписи. Локальные
+  // провайдеры (isLocal с бэка: свои движки на наших машинах) сведены в одну группу
+  // «Локальные» — их несколько (Flash-Next на ai, Gemma на Video), а для выбора важно
+  // «своя или облачная», а не чей это эндпоинт.
   // Пункт «По умолчанию» (value '') из групп исключён — он стоит НАД ними отдельной
   // строкой: настройка может указывать на модель любого провайдера, и место внутри
   // Claude — артефакт того, что этот пункт приходит из каталога CLI.
   const byProvider = new Map<string, typeof selectable>();
   for (const m of selectable) {
     if (!m.value) continue;
-    const key = m.provider ?? 'claude';
+    const key = groupKeyOf(m.provider ?? 'claude');
     if (!byProvider.has(key)) byProvider.set(key, []);
     byProvider.get(key)!.push(m);
   }
   const providerKeys = [...byProvider.keys()].sort((a, b) =>
-    a === 'claude' ? -1 : b === 'claude' ? 1 : providerLabel(a).localeCompare(providerLabel(b)));
+    a === 'claude' ? -1 : b === 'claude' ? 1 : groupLabel(a).localeCompare(groupLabel(b)));
   // Заголовки групп нужны, только когда провайдеров больше одного
   const showHeaders = providerKeys.length > 1;
 
@@ -114,10 +126,11 @@ export function ComposerModelPicker({ value, onChange, started, isMobile, compac
 
   const groups: ComposerMenuGroup[] = providerKeys.map(pk => ({
     key: pk,
-    label: showHeaders ? providerLabel(pk) : undefined,
-    // Перенос чата: другой провайдер И разговор уже начат
-    note: started && pk !== currentProvider
-      ? `Перенесёт чат к ${providerLabel(pk)} — контекст сохранится`
+    label: showHeaders ? groupLabel(pk) : undefined,
+    // Перенос чата: другой провайдер И разговор уже начат. В группе «Локальные» провайдеров
+    // несколько — перенос, если хоть одна её модель у другого провайдера, чем текущий чат.
+    note: started && byProvider.get(pk)!.some(m => (m.provider ?? 'claude') !== currentProvider)
+      ? `Перенесёт чат к ${pk === LOCAL_GROUP ? 'другой модели' : providerLabel(pk)} — контекст сохранится`
       : undefined,
     items: byProvider.get(pk)!.map(m => ({
       value: m.value,

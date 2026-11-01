@@ -311,6 +311,59 @@ describe('buildStepRows', () => {
     expect(rows.map(r => r.status)).toEqual(['done', 'run']);
   });
 
+  // Журнал Linux-агента 29.10: шаги пишутся по завершении, статусы ok/skipped, своего
+  // «идёт» нет. Раньше карточка показывала «Сейчас: —» и пропуск как пройденный шаг.
+  const linuxPlan: DeployPlan = {
+    steps: [
+      { name: 'build', ms: 200_000 }, { name: 'sandbox-image', ms: 0 },
+      { name: 'data-backup', ms: 900_000 }, { name: 'stop', ms: 20_000 },
+      { name: 'stop-sandbox', ms: 0 }, { name: 'health', ms: 5_000 },
+    ],
+    totalMs: 1_125_000, deadMs: 20_000,
+  };
+
+  it('Linux-агент: build и stop-sandbox — известные шаги с подписями', () => {
+    const rows = buildStepRows(record([step('build', 210_000, 'ok')], 'building'), linuxPlan, true);
+    expect(rows.find(r => r.name === 'build')).toMatchObject({ label: 'сборка', group: 'building' });
+    expect(rows.find(r => r.name === 'stop-sandbox')).toMatchObject({ label: 'останавливаю песочницу', group: 'switching' });
+  });
+
+  it('пропущенный шаг — skip, а не пройденный', () => {
+    const rows = buildStepRows(record([step('build', 1_000, 'ok'), step('sandbox-image', 0, 'skipped')]), null, false);
+    expect(rows.map(r => r.status)).toEqual(['done', 'skip']);
+  });
+
+  it('шаг пишется по завершении: идущим считается первый ожидаемый шаг текущей фазы', () => {
+    const rec = { ...record([step('build', 210_000, 'ok'), step('sandbox-image', 0, 'skipped')], 'switching'), result: null };
+    const rows = buildStepRows(rec, linuxPlan, true);
+    expect(rows.find(r => r.status === 'run')?.name).toBe('data-backup');
+    expect(rows.filter(r => r.status === 'run')).toHaveLength(1);
+    // У идущего шага длительности нет
+    expect(rows.find(r => r.name === 'data-backup')!.ms).toBeNull();
+  });
+
+  it('ожидаемый шаг следующей фазы идущим не становится', () => {
+    // Фаза building, а в плане следом только health (verifying) — «Сейчас: —»
+    const rec = { ...record([step('build', 210_000, 'ok')], 'building'), result: null };
+    const plan: DeployPlan = { steps: [{ name: 'build', ms: 1 }, { name: 'health', ms: 1 }], totalMs: 2, deadMs: 0 };
+    expect(buildStepRows(rec, plan, true).some(r => r.status === 'run')).toBe(false);
+  });
+
+  it('ожидаемый шаг из более ранней фазы идущим не становится', () => {
+    // В журнале фаза уже switching, а sandbox-image агент не записал вовсе (переименовал)
+    const rec = { ...record([step('build', 210_000, 'ok')], 'switching'), result: null };
+    const rows = buildStepRows(rec, linuxPlan, true);
+    expect(rows.find(r => r.name === 'sandbox-image')!.status).toBe('wait');
+    expect(rows.find(r => r.status === 'run')?.name).toBe('data-backup');
+  });
+
+  it('в очереди и в завершённой выкатке идущего шага нет', () => {
+    const queued = buildStepRows({ ...record([], 'queued'), result: null }, linuxPlan, true);
+    expect(queued.some(r => r.status === 'run')).toBe(false);
+    const done = buildStepRows(record([step('build', 1_000, 'ok')]), linuxPlan, false);
+    expect(done.some(r => r.status === 'run')).toBe(false);
+  });
+
   it('в завершённой выкатке шаги без статуса — пройденные', () => {
     const rows = buildStepRows(record([step('frontend', 1_000), step('health', 900)]), null, false);
     expect(rows.map(r => r.status)).toEqual(['done', 'done']);

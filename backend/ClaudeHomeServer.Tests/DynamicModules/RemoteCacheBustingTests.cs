@@ -10,6 +10,7 @@ namespace ClaudeHomeServer.Tests.DynamicModules;
 // Сброс кэша MF-remote после выкатки: ?v= в URL remoteEntry.js — хеш содержимого файла
 // (версия манифеста у модулей годами «1.0.0»), а сам remoteEntry.js раздаётся с no-cache,
 // хешированные чанки remote — immutable.
+[Trait("Category", "Host")]
 public class RemoteCacheBustingTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "ccs_remote_cache_" + Guid.NewGuid().ToString("N"));

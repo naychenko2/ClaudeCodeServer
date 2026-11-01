@@ -43,6 +43,7 @@ public sealed record HardwareSample
     public int? Vrm { get; init; }
     public int? Chipset { get; init; }
     public int? ChipsetFanRpm { get; init; }
+    public int? Water { get; init; }
     public HwmonDisk[]? Disks { get; init; }
     public HwmonFan[]? CaseFans { get; init; }
     public long? RamUsedGb { get; init; }
@@ -225,6 +226,7 @@ public sealed class HardwareSampler : BackgroundService, IHardwareSampler
             Vrm = hw?.Board?.Vrm,
             Chipset = hw?.Board?.Chipset,
             ChipsetFanRpm = hw?.Board?.ChipsetFanRpm,
+            Water = hw?.Board?.Water,
             Disks = hw?.Disks,
             CaseFans = hw?.CaseFans,
             RamUsedGb = mem?.UsedGb,

@@ -236,6 +236,18 @@ describe('потолок пассивного кэша на пути запис�
   });
 });
 
+describe('приоритетный проект не вытесняется первым', () => {
+  it('листинги приоритетного проекта выживают, вытесняются листинги более старого неприоритетного проекта', async () => {
+    // Приоритетный p1 обходится первым; без защиты его листинги — самые старые по usedAt
+    await sync.runOfflineSnapshot('p1');
+
+    const has = (id: string) => ownKeys().filter(k => k.startsWith(`offline:A:/projects/${id}/files?path=`)).length;
+    expect(has('p1')).toBe(DIRS + 1);
+    expect(has('p2')).toBeLessThan(DIRS + 1);
+    expect(ownKeys().length).toBeLessThanOrEqual(offline.PASSIVE_CACHE_MAX);
+  });
+});
+
 describe('пик залпа', () => {
   // Залп НЕ кратен EVICT_AFTER_WRITES (100): иначе периодический проход попадает
   // ровно на потолок и проверка ничего не говорит о счётчике.

@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { genPanelKeys as dismissedKeys } from '../../lib/genPanelDismissed';
 import { toGenPanelKey } from '../../lib/genPanelKeys';
 import {
-  CHAT_RIGHT_KEYS, PANEL_HOME, PANEL_KEYS, PANEL_META, WORKSPACE_KEYS, genPanelKeys, migrateLegacyKey,
+  CHAT_RIGHT_KEYS, PANEL_HOME, PANEL_KEYS, PANEL_META, WORKSPACE_KEYS, chatPanelDefAllowed, genPanelKeys, migrateLegacyKey,
 } from './panelCatalog';
 import { migrateZones, sanitizeLayout, sanitizeZones, zoneOf, type PanelZones } from './panelStackState';
 
@@ -50,6 +50,25 @@ describe('набор панелей генерации', () => {
   it('старый вызов с ключом упразднённой панели ведёт в chatContext', () => {
     for (const k of REMOVED) expect(toGenPanelKey(k)).toBe('chatContext');
     expect(toGenPanelKey('files')).toBe('files');
+  });
+});
+
+// ── «Локальные модели» в личном чате (Ф6, доработка 2 по ревью) ────────────────
+// Панель остаётся в правой зоне чата (ключ в наборе), но вклад подсистемы проходит
+// через chatPanelDefAllowed: у не-админа нового значка в своей рельсе быть не должно.
+describe('правая зона личного чата: «Локальные модели» только админу', () => {
+  it('ключ localModel живёт в наборе правой зоны (панель из чата не убрана)', () => {
+    expect(CHAT_RIGHT_KEYS).toContain('localModel');
+  });
+
+  it('не-админ: «Локальных моделей» в его чате нет, остальные вклады — по своей isAvailable', () => {
+    expect(chatPanelDefAllowed('localModel', false)).toBe(false);
+    expect(chatPanelDefAllowed('chatContext', false)).toBe(true);
+    expect(chatPanelDefAllowed('plan', false)).toBe(true);
+  });
+
+  it('админ: этого ограничения нет', () => {
+    expect(chatPanelDefAllowed('localModel', true)).toBe(true);
   });
 });
 

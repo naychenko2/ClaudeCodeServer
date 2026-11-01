@@ -460,6 +460,39 @@ public class FeatureProjectorTests
         run.ReturnsBySource.Final.Open.Should().Be(0);
     }
 
+    // Одна база возвратов: Count источника — витки (задача-ревью/проверка/финал несёт ровно один
+    // вердикт), сумма по источникам обязана равняться verdicts.loops (Ш6).
+    [Fact]
+    public void Build_ВозвратыПоИсточникам_СуммаРавнаВиткам()
+    {
+        var (epic, tasks) = LoadChains();
+        var run = FeatureProjector.Build(epic, tasks);
+
+        var rb = run.ReturnsBySource;
+        (rb.Review.Count + rb.Qa.Count + rb.Final.Count).Should().Be(run.Verdicts.Loops);
+        run.Verdicts.Loops.Should().BeGreaterThan(0);
+    }
+
+    // accepted_with_remarks — тоже виток: мутация IsReturn без него обязана покраснеть.
+    [Fact]
+    public void Build_ВозвратыПоИсточникам_AcceptedWithRemarksСчитаетсяВитком()
+    {
+        const string epicId = "epic-awr";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var step = new TaskItem { Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, Status = TaskItemStatus.Done };
+        var review = new TaskItem
+        {
+            Id = "r1", FeatureId = epicId, Role = TaskRoles.Review, Status = TaskItemStatus.Done,
+            ReviewOf = ["s1"],
+            Verification = new TaskVerification { Verdict = TaskVerdicts.AcceptedWithRemarks },
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, step, review]);
+
+        run.ReturnsBySource.Review.Count.Should().Be(1, "accepted_with_remarks — виток-возврат");
+        run.Verdicts.Loops.Should().Be(1);
+    }
+
     // Мутация (а): связь шага с ревью идёт ТОЛЬКО через пересечение ReviewOf.
     // Сломал: цепляем витки без пересечения (всегда true) → sc-r2 (только про sc-s3)
     // ошибочно попадает в цепочку Ш1. Без мутации тест зелёный.
@@ -648,6 +681,96 @@ public class FeatureProjectorTests
         run.State.Should().Be(FeatureStates.Waiting, "ждущие ловит ветка Waiting — featureState не меняется");
         run.Attention!.Kind.Should().Be("wait");
         run.Attention!.TaskId.Should().Be("w1", "ждущий дольше всех — самый ранний AwaitingHumanSince");
+    }
+
+    // Ш2c: runningSince считается по идущим задачам стадии при любом State (pending тоже),
+    // held исключены; предикат общий с run.now. Мутация: вернуть `state == "active" ? … : null`
+    // (или голый Status == InProgress без !IsHeld) в FeatureProjector.cs → тесты ниже краснеют.
+    private static (TaskItem epic, List<TaskItem> all) RunningSinceFixture(
+        string epicId, TaskItem stepTask)
+    {
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var plan = new TaskItem
+        {
+            Id = "pl", FeatureId = epicId, Role = TaskRoles.Plan, Status = TaskItemStatus.Todo,
+        };
+        stepTask.FeatureId = epicId;
+        return (epic, [epic, plan, stepTask]);
+    }
+
+    [Fact]
+    public void Build_СтадияPendingСИдущейЗадачей_RunningSinceЕсть_StateПрежний()
+    {
+        var t = new DateTime(2026, 10, 30, 10, 0, 0);
+        var (epic, all) = RunningSinceFixture("epic-rs1", new TaskItem
+        {
+            Id = "s1", Role = TaskRoles.Step, StepRef = "Ш1", Status = TaskItemStatus.InProgress,
+            PersonaId = "Тимур", ClaudeStartedAt = t,
+        });
+
+        var run = FeatureProjector.Build(epic, all);
+
+        var stage = run.Stages.Single(s => s.Key == "prod");
+        stage.State.Should().Be("pending", "активна ранняя стадия — State не трогаем");
+        stage.RunningSince.Should().Be(t);
+    }
+
+    [Fact]
+    public void Build_ВСтадииТолькоHeld_RunningSinceNull()
+    {
+        var t = new DateTime(2026, 10, 30, 10, 0, 0);
+        var (epic, all) = RunningSinceFixture("epic-rs2", new TaskItem
+        {
+            Id = "s1", Role = TaskRoles.Step, StepRef = "Ш1", Status = TaskItemStatus.InProgress,
+            PersonaId = "Тимур", ClaudeStartedAt = t,
+            AwaitingHumanSince = t.AddMinutes(5), AwaitingHumanReason = "ждём подтверждения",
+        });
+
+        var run = FeatureProjector.Build(epic, all);
+
+        run.Stages.Single(s => s.Key == "prod").RunningSince.Should().BeNull();
+    }
+
+    [Fact]
+    public void Build_АктивнаяСтадияСИдущей_RunningSinceПрежнее()
+    {
+        var t = new DateTime(2026, 10, 30, 10, 0, 0);
+        var epic = new TaskItem { Id = "epic-rs3", Role = TaskRoles.Feature };
+        var step = new TaskItem
+        {
+            Id = "s1", FeatureId = "epic-rs3", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, PersonaId = "Тимур", ClaudeStartedAt = t,
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, step]);
+
+        var stage = run.Stages.Single(s => s.Key == "prod");
+        stage.State.Should().Be("active");
+        stage.RunningSince.Should().Be(t);
+    }
+
+    [Fact]
+    public void Build_RunNowИRunningSince_Согласованы()
+    {
+        var t = new DateTime(2026, 10, 30, 10, 0, 0);
+        var epic = new TaskItem { Id = "epic-rs4", Role = TaskRoles.Feature };
+        var plan = new TaskItem { Id = "pl", FeatureId = "epic-rs4", Role = TaskRoles.Plan, Status = TaskItemStatus.Todo };
+        var held = new TaskItem
+        {
+            Id = "h1", FeatureId = "epic-rs4", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, ClaudeStartedAt = t,
+            AwaitingHumanSince = t.AddMinutes(1), AwaitingHumanReason = "ждём",
+        };
+        var running = new TaskItem
+        {
+            Id = "r1", FeatureId = "epic-rs4", Role = TaskRoles.Step, StepRef = "Ш2",
+            Status = TaskItemStatus.InProgress, ClaudeStartedAt = t.AddHours(1),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, plan, held, running]);
+
+        run.Now.Select(n => n.TaskId).Should().Equal("r1");
+        run.Stages.Single(s => s.Key == "prod").RunningSince.Should().Be(run.Now[0].StartedAt);
     }
 
     // c2: свежая остановленная — не в Now (тревога stopped); устаревшая пометка
@@ -1315,6 +1438,45 @@ public class FeatureProjectorTests
         run.State.Should().Be(FeatureStates.Closed, "эпик Done, мержа нет → closed");
         run.Closed.Should().BeTrue();
         run.Summary!.MergedAt.Should().BeNull("closed без merge-задачи → MergedAt=null");
+    }
+
+    // Ш9 (QA-1 a18999b3): закрытая без мержа фича (эпик Done, финал принят, merge-задачи нет)
+    // не показывает тревогу «мерж»; та же фича с открытым эпиком — merge_pending с тревогой.
+    // Мутация: убрать гейт Closed/Merged в проекторе — первый блок краснеет.
+    [Fact]
+    public void Build_ЗакрытаяБезМержа_ТревогиНет_МержПендингСТревогой()
+    {
+        const string epicId = "epic-closed-attn";
+        var step = new TaskItem { Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, Status = TaskItemStatus.Done };
+        var final = new TaskItem
+        {
+            Id = "f1", FeatureId = epicId, Role = TaskRoles.Final, Status = TaskItemStatus.Done,
+            CompletedAt = new DateTime(2026, 10, 17, 12, 0, 0),
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        };
+
+        var closedEpic = new TaskItem
+        {
+            Id = epicId, Role = TaskRoles.Feature,
+            Status = TaskItemStatus.Done, CompletedAt = new DateTime(2026, 10, 18, 12, 0, 0),
+        };
+        var closed = FeatureProjector.Build(closedEpic, [closedEpic, step, final]);
+        closed.State.Should().Be(FeatureStates.Closed);
+        closed.Attention.Should().BeNull("у закрытой фичи тревоги нет");
+
+        var openEpic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var pending = FeatureProjector.Build(openEpic, [openEpic, step, final]);
+        pending.State.Should().Be(FeatureStates.MergePending);
+        pending.Attention!.Kind.Should().Be("merge");
+
+        var mergeTask = new TaskItem
+        {
+            Id = "m1", FeatureId = epicId, Role = TaskRoles.Merge, Status = TaskItemStatus.Done,
+            CompletedAt = new DateTime(2026, 10, 18, 11, 0, 0),
+        };
+        var merged = FeatureProjector.Build(closedEpic, [closedEpic, step, final, mergeTask]);
+        merged.State.Should().Be(FeatureStates.Merged);
+        merged.Attention.Should().BeNull("у смерженной фичи тревоги нет");
     }
 
     // 5. эпик Done + merge Done БЕЗ принятого финала (как ghostcli) ⇒ merged.
@@ -3926,5 +4088,85 @@ public class FeatureProjectorTests
         run.StepChains.Single(c => c.StepRef == "Ш1").ProjectId.Should().Be("proj-other",
             "карточка шага несёт проект задачи-шага, а не эпика");
         run.StepChains.Single(c => c.StepRef == "Ш2").ProjectId.Should().BeNull("личная задача — null");
+    }
+
+    // Ш8: риски мержа — из учёта шагов и сверки трекера, порядок not_created → open → tracker, нули не кладутся.
+    [Fact]
+    public void BuildMergeRisks_ТриВида_ВФиксированномПорядке()
+    {
+        var progress = new FeatureStepProgress { NotCreated = 59, Review = 13, Work = 0 };
+
+        var risks = FeatureProjector.BuildMergeRisks(progress, trackerCount: 1);
+
+        risks.Should().Equal(
+            new FeatureMergeRisk("not_created", 59),
+            new FeatureMergeRisk("open", 13),
+            new FeatureMergeRisk("tracker", 1));
+    }
+
+    [Fact]
+    public void BuildMergeRisks_ОткрытоЭтоРаботаПлюсРевью_НулиНеКладутся()
+    {
+        FeatureProjector.BuildMergeRisks(new FeatureStepProgress { Work = 2, Review = 3 }, 0)
+            .Should().Equal(new FeatureMergeRisk("open", 5));
+        FeatureProjector.BuildMergeRisks(new FeatureStepProgress(), 0).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Build_МержСНезаведённымиШагами_AttentionНесётMergeRisks()
+    {
+        const string epicId = "epic-merge-risks";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var plan = new TaskItem
+        {
+            Id = "p1", FeatureId = epicId, Role = TaskRoles.Plan, Status = TaskItemStatus.Done,
+            PlanSteps = [new() { StepRef = "a" }, new() { StepRef = "b" }, new() { StepRef = "c" }],
+        };
+        var step = new TaskItem { Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "a", Status = TaskItemStatus.InProgress };
+        var final = new TaskItem
+        {
+            Id = "f1", FeatureId = epicId, Role = TaskRoles.Final, Status = TaskItemStatus.Done,
+            CompletedAt = new DateTime(2026, 10, 17, 12, 0, 0),
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, plan, step, final]);
+
+        run.Attention!.Kind.Should().Be("merge");
+        run.Attention.MergeRisks.Should().StartWith(new FeatureMergeRisk("not_created", 2));
+        run.Attention.MergeRisks.Should().Contain(new FeatureMergeRisk("open", 1));
+        var json = System.Text.Json.JsonSerializer.Serialize(run.Attention,
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+        json.Should().Contain("\"mergeRisks\":[{\"kind\":\"not_created\",\"count\":2}");
+    }
+
+    [Fact]
+    public void Build_ЧистыйМерж_MergeRisksПуст()
+    {
+        const string epicId = "epic-merge-clean";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var final = new TaskItem
+        {
+            Id = "f1", FeatureId = epicId, Role = TaskRoles.Final, Status = TaskItemStatus.Done,
+            CompletedAt = new DateTime(2026, 10, 17, 12, 0, 0),
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, final]);
+
+        run.Attention!.Kind.Should().Be("merge");
+        run.Attention.MergeRisks.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Build_НеМерж_MergeRisksПуст()
+    {
+        const string epicId = "epic-wait-risks";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature, AwaitingHumanSince = new DateTime(2026, 10, 17), AwaitingHumanReason = "x" };
+
+        var run = FeatureProjector.Build(epic, [epic]);
+
+        run.Attention!.Kind.Should().Be("wait");
+        run.Attention.MergeRisks.Should().BeEmpty();
     }
 }

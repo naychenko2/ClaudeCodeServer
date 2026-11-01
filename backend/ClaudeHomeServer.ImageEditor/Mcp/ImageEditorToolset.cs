@@ -67,6 +67,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
     private readonly IFeatureFlagGate? _flags;
     private readonly Faces.FaceDetectionCache? _faces;
     private readonly ILocalImageMedia? _localMedia;
+    private readonly ClaudeHomeServer.Services.Llm.IMediaGpuYieldGate? _gpuGate;
     private readonly bool _agentLaunch;
 
     // Запуски агентом в текущем ходу: sessionId → число. Сброс — TurnCompleted этой сессии
@@ -92,7 +93,8 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         ChatContext.ImageContextLaunch? context = null,
         IFeatureFlagGate? flags = null,
         Faces.FaceDetectionCache? faces = null,
-        ILocalImageMedia? localMedia = null)
+        ILocalImageMedia? localMedia = null,
+        ClaudeHomeServer.Services.Llm.IMediaGpuYieldGate? gpuGate = null)
     {
         _sessions = sessions;
         _projects = projects;
@@ -108,6 +110,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         _flags = flags;
         _faces = faces;
         _localMedia = localMedia;
+        _gpuGate = gpuGate;
         _agentLaunch = config?.GetValue(AgentLaunchKey, true) ?? true;
         events?.OnNotification<TurnCompleted>(OnTurnCompleted, "ImageEditorToolset.ResetLaunches");
     }
@@ -607,9 +610,19 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             quote = new { q.Provider, q.Model, q.Estimate, q.ExpectedSeconds, format = q.Format },
             note = "Генерация идёт отдельно от хода: остановка разговора её не отменяет, отмена — image_cancel. "
                 + "Каждый вариант станет новой версией картинки внизу ленты; "
-                + (scope.IsPersonal ? "скачать её может только человек." : "сохранить в проект может только человек."),
+                + (scope.IsPersonal ? "скачать её может только человек." : "сохранить в проект может только человек.")
+                + DeferredNote(q.Provider),
         });
     }
+
+    // Локальная LLM чата делит видеокарту с ComfyUI (IMediaGpuYieldGate): задание ждёт конца её хода. Модель
+    // должна закончить ответ, а не ждать картинку внутри хода — иначе ход и задание ждали бы друг друга
+    // до срока шлюза. Пусто — ждать нечего.
+    private string DeferredNote(string? provider) =>
+        provider == LocalImageEditor.ProviderKey && _gpuGate is { HasActiveTurns: true }
+            ? " Сейчас идёт ход локальной модели, которая делит видеокарту с генерацией: картинка стартует "
+              + "сразу после конца хода. Не жди её в этом ходе — заверши ответ, она придёт в ленту сама."
+            : "";
 
     // Запуск «подставить персонажа на лицо» (ADR-028, этап 2): та же котировка и тот же
     // ImageEditLaunchAssembler, что у обычного image_generate, но входы явные — версия, лицо,

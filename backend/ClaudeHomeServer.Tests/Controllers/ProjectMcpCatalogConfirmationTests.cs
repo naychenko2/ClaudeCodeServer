@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // Второе подтверждение (план «Каталог MCP-серверов», шаг 6, решение владельца
 // от 28.08.2026): включение каталожного stdio-сервера в проект — единственный
 // момент, когда чужой код впервые едет в ходы. Гейт на сервере, не в диалоге.
+[Trait("Category", "Host")]
 public class ProjectMcpCatalogConfirmationTests(TestWebApplicationFactory factory)
     : IClassFixture<TestWebApplicationFactory>
 {

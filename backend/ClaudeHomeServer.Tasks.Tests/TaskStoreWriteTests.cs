@@ -67,6 +67,37 @@ public class TaskStoreWriteTests : IDisposable
         back.Note.Should().Be(note);
     }
 
+    // Оценка оркестратора в голосе: круговая сериализация; запись старого формата (без estimate) читается
+    // с Estimate = null — стор и бэкап не мигрируем.
+    [Fact]
+    public void Note_ОценкаКруговаяСериализацияИСтарыйФорматБезОценки()
+    {
+        var at = new DateTime(2026, 10, 25, 12, 0, 0, DateTimeKind.Utc);
+        var estimate = new FeatureEstimate(["ревью", "финал"], 90, "дольше всех — фронт");
+        var item = new TaskItem
+        {
+            Title = "эпик", Role = TaskRoles.Feature, InitialEtaMinutes = 240,
+            Note = new FeatureNote("голос", at, "sess", false, "review", "running", estimate),
+        };
+
+        var back = JsonSerializer.Deserialize<TaskItem>(JsonSerializer.Serialize(item, Web), Web)!;
+
+        back.Note!.Estimate.Should().BeEquivalentTo(estimate);
+        back.InitialEtaMinutes.Should().Be(240);
+
+        const string old = """{"title":"эпик","role":"feature","note":{"text":"голос","at":"2026-10-25T12:00:00Z","bySessionId":"s","byUser":false,"stageAtWrite":"review","stateAtWrite":"running"}}""";
+        var legacy = JsonSerializer.Deserialize<TaskItem>(old, Web)!;
+        legacy.Note!.Text.Should().Be("голос");
+        legacy.Note.Estimate.Should().BeNull();
+        legacy.InitialEtaMinutes.Should().BeNull();
+
+        // Запись с оценкой старого формата (done/total/…): читается без исключения, срок сохраняется.
+        const string oldEstimate = """{"title":"эпик","role":"feature","note":{"text":"голос","at":"2026-10-25T12:00:00Z","bySessionId":"s","byUser":false,"stageAtWrite":"review","stateAtWrite":"running","estimate":{"done":4,"total":9,"inProgress":3,"percent":60,"remaining":["финал"],"etaMinutes":160,"why":null}}}""";
+        var withOld = JsonSerializer.Deserialize<TaskItem>(oldEstimate, Web)!;
+        withOld.Note!.Estimate!.EtaMinutes.Should().Be(160);
+        withOld.Note.Estimate.Remaining.Should().Equal("финал");
+    }
+
     // Голос переживает перезагрузку стора с диска.
     [Fact]
     public void Note_ПереживаетПерезагрузкуСтора()

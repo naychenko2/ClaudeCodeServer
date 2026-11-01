@@ -112,6 +112,8 @@ public class HardwareTests : IDisposable
         Put(board, "temp1_input", "78000"); Put(board, "temp1_label", "Chipset");
         Put(board, "temp5_input", "53000"); Put(board, "temp5_label", "VRM");
         Put(board, "fan2_input", "1159"); Put(board, "fan2_label", "Chipset");
+        Put(board, "temp4_input", "45000"); Put(board, "temp4_label", "T_Sensor");
+        Put(board, "temp6_input", "-40000"); Put(board, "temp6_label", "Water_In");
 
         var nct = Dir("hwmon", "hwmon1");
         Put(nct, "name", "nct6798\n");
@@ -137,6 +139,7 @@ public class HardwareTests : IDisposable
         snap.Board!.Vrm.Should().Be(53);
         snap.Board.Chipset.Should().Be(78);
         snap.Board.ChipsetFanRpm.Should().Be(1159);
+        snap.Board.Water.Should().Be(45, "вода СЖО — T_Sensor, а не Water_In");
 
         var kv = snap.Disks!.Single(d => d.Role == "kv");
         kv.Controller.Should().Be("nvme1");
@@ -149,6 +152,18 @@ public class HardwareTests : IDisposable
 
         // Вентиляторы корпуса: только подключённые (rpm > 0); температуры nct6798 (AUXTIN 127/96) не читаются вовсе.
         snap.CaseFans!.Select(f => f.Rpm).Should().BeEquivalentTo(new[] { 1159, 4821 });
+    }
+
+    [Fact]
+    public void Hwmon_WaterProbeDisconnected_Minus40_IsNull()
+    {
+        var hw = Dir("hwW");
+        var board = Dir("hwW", "hwmon4");
+        Put(board, "name", "asusec\n");
+        Put(board, "temp1_input", "73000"); Put(board, "temp1_label", "Chipset");
+        Put(board, "temp4_input", "-40000"); Put(board, "temp4_label", "T_Sensor");
+        var snap = new HwmonReader(hw, Dir("blockW"), Path.Combine(_root, "miW")).Read()!;
+        snap.Board!.Water.Should().BeNull("−40 °C у asusec — датчик не подключён");
     }
 
     [Fact]
@@ -391,6 +406,55 @@ public class HardwareTests : IDisposable
         report.Level.Should().Be("ok", "при stale уровни не красятся");
         report.Gpus.Single().Level.Should().Be("ok");
         report.Nodes.Single(n => n.Kind == "gpu").Level.Should().Be("ok");
+    }
+
+    private sealed class FixedSampler(HardwareSample cur) : IHardwareSampler
+    {
+        public HardwareSample? Current => cur;
+        public string Status => "ok";
+        public long? StaleSince => null;
+        public IReadOnlyList<(long t, int? value)> Aggregate(Func<HardwareSample, int?> selector, TimeSpan window, TimeSpan step) =>
+            [(0, selector(cur))];
+    }
+
+    [Fact]
+    public void Report_Water_Node_And_Series_KvDisk_WithoutTemperature()
+    {
+        var sample = new HardwareSample
+        {
+            At = DateTimeOffset.UtcNow,
+            Water = 52,
+            RamUsedGb = 32, RamTotalGb = 64,
+            Disks =
+            [
+                new HwmonDisk { Controller = "nvme1", Role = "kv", TempC = 83, Temp2C = 57, CritC = 84, UsedGb = 370, TotalGb = 492 },
+                new HwmonDisk { Controller = "nvme0", Role = "system", TempC = 59 },
+            ],
+        };
+        var report = new HardwareReportService(new FixedSampler(sample)).Build(TimeSpan.FromMinutes(15));
+
+        var water = report.Nodes.Single(n => n.Key == "water");
+        water.TempC.Should().Be(52);
+        water.Level.Should().Be("warn", "предупреждение с 50 °C");
+        water.DangerC.Should().Be(55);
+        report.Series.Should().Contain(x => x.Key == "water" && x.Family == "water");
+
+        var kv = report.Nodes.Single(n => n.Detail.Role == "kv");
+        kv.TempC.Should().BeNull("датчики диска кэша врут — температуру не показываем");
+        kv.Level.Should().Be("none");
+        kv.DangerC.Should().BeNull();
+        kv.Detail.Temp2C.Should().BeNull();
+        kv.Detail.UsedGb.Should().Be(370);
+        kv.Detail.UsedPerc.Should().Be(75, "370 из 492 ГБ");
+        kv.Spark15m.Should().Equal([75], "мини-график диска кэша — занято, %");
+        report.Series.Should().NotContain(x => x.Key == "disk-nvme1");
+        report.Series.Should().Contain(x => x.Key == "disk-nvme0");
+        report.Level.Should().Be("warn", "уровень стенда — по воде, диск кэша не участвует");
+
+        var ram = report.Nodes.Single(n => n.Key == "ram");
+        ram.Detail.UsedPerc.Should().Be(50);
+        ram.Spark15m.Should().Equal([50], "мини-график RAM — занято, %");
+        ram.Level.Should().Be("none");
     }
 
     [Fact]

@@ -1,64 +1,42 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { ArrowRight } from 'lucide-react';
-import { C, FS, SHADOW, TB, Z } from '../../../lib/design';
-import { openTaskInSection } from '../../../lib/tasks';
+import { useEffect, useRef, type ReactNode } from 'react';
+import { C, FS, R, SP, Z } from '../../../lib/design';
 import type { FeatureRun } from '../../../types/featureRun';
 import type { TodoItem } from '../../../hooks/useSessionArtifacts';
 import { useTurnPlanMode, useSelectedFeatureId, setTurnPlanMode, setSelectedFeatureId, useFeatureStepFocus, useFeatureRunsLoading, useFeatureRunsError, refetchFeatureRuns } from '../../../lib/featureRuns';
 import { ModeSwitcher } from './ModeSwitcher';
 import { FeaturePicker } from './FeaturePicker';
-import { FeatureRunView } from './FeatureRunView';
+import { FeatureStepView } from './FeatureStepView';
+import { FeatureTruthBody } from './FeatureTruthBody';
+import { chatRoleFromRun, findChatChain } from './featureTruthModel';
 import { TodoList } from '../TodoList';
 
-// F-pop-a: заглушка FeatureRun для состояния загрузки/ошибки (run ещё не пришёл):
-// тело рисует скелет/ошибку, run не читается.
-const EMPTY_RUN: FeatureRun = {
-  featureId: '',
-  state: 'not_started',
-  steps: [], reviews: [], qa: [], final: null, merge: null,
-  verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
-  progress: 0, ready: false,
-};
-
-// Общее ТЕЛО режима «План хода / Исполнение фичи» — одно и то же в двух поверхностях:
-// в меню пилюли (TurnPlanPill) и в карточке плана в ленте (TodoPlanView). Как TodoList
-// сейчас общий у меню и карточки: шапка (переключатель + счётчик) + выбор фичи + тело
-// (FeatureRunView в режиме фичи, TodoList в режиме плана). Поверхности не расходятся
-// в трактовке состояний.
+// Общее ТЕЛО режима «План хода / Исполнение фичи» — в меню пилюли (TurnPlanPill):
+// шапка (переключатель режима) + выбор фичи + тело (в режиме фичи — П2 «Мой шаг» для
+// чата шага или П1-сводка для чата без шага; в режиме плана — TodoList).
+//
+// F2 (макет v4): FeatureRunView с аккордеоном этапов удалён — фича в чате живёт в трёх
+// неповторяющихся поверхностях: плашка С1 сравнивает фичи, шапка В2 показывает фичу
+// этого чата, пилюля и этот попап — шаг этого чата.
 //
 // Режим и выбранная фича — из стора Ф1 (useTurnPlanMode/useSelectedFeatureId per sessionId),
 // не из локального useState: выбор, сделанный в карточке, виден в меню пилюли и наоборот.
 //
-// variant:
-//   'pill' — в меню: шапка (переключатель + счётчик) ЛИПКА (position: sticky, top 0),
-//     тело (выбор фичи + FeatureRunView/TodoList) скроллится внутри меню;
-//   'pipeline' — в панели А (FeatureBanner, «Исполнение ▾»): обычная колонка, шапка —
-//     часть карточки (не липкая), в режиме фичи внизу футер «Задачи фичи в трекере →»
-//     (стиль футера TaskCreatedView). (Ревью фронта 2, minor 2: было 'card' — после
-//     Ф-card в ленте живёт короткая строка, а не это тело, имя ввело в заблуждение.)
-//
-// title — опциональная заставка перед переключателем в шапке: у карточки это
-// SquareCheck + «План хода» (всегда), у пилюли — «План хода» только без фич
+// title — опциональная заставка перед переключателем в шапке: «План хода» только без фич
 // (с фичами заголовок заменяет переключатель).
-//
-// Счётчик в шапке считает САМ по variant: у пилюли — доля решённых витков (%),
-// у карточки — шаги принято/всего (stepsAccepted/stepsTotal); ↺ — из verdicts.loops.
-// headerPad/bodyPad/headerBorder — геометрия шапки и тела: у пилюли и карточки
-// отступы разные (9px 12px 11px против 10px 13px / 7px 13px 10px).
-export function FeatureModeBody({ sessionId, todos, runs, isMobile, title, variant, headerPad, bodyPad, headerBorder, chatTaskId, onClose }: {
+// headerPad/bodyPad/headerBorder — геометрия шапки и тела (9px 12px 11px).
+export function FeatureModeBody({ sessionId, todos, runs, isMobile, title, headerPad, bodyPad, headerBorder, chatTaskId, onClose }: {
   sessionId: string | null;
   todos: TodoItem[];
   runs: FeatureRun[];
   isMobile: boolean;
   title?: ReactNode;
-  variant: 'pill' | 'pipeline';
   headerPad?: string;
   bodyPad?: string;
   headerBorder?: string;
-  // Задача текущего чата (Session.TaskId): по ней роль чата в мете (F-pop-a).
+  // Задача текущего чата (Session.TaskId): по ней роль чата в мете и цепочка его шага.
   chatTaskId?: string | null;
   // R2 major 3: переход (чат/задача) в теле закрывает попап; передаёт вызывающий
-  // (попап пилюли). В панели А (карточка) onClose не передан — закрытия не нужно.
+  // (попап пилюли).
   onClose?: () => void;
 }) {
   const mode = useTurnPlanMode(sessionId);
@@ -100,31 +78,53 @@ export function FeatureModeBody({ sessionId, todos, runs, isMobile, title, varia
   // «Повторить» (ошибка запроса): явный перезапрос фич чата.
   const onRetry = () => { if (sessionId) refetchFeatureRuns(sessionId); };
 
+  // Тело режима фичи (F2, макет v4): чат ШАГА — П2 «Мой шаг» (FeatureStepView: карточка
+  // шага, его цепочка, одна строка фичи); чат БЕЗ шага (оркестратор, ревью, свободный) —
+  // П1-сводка (FeatureTruthBody: «Сейчас», оценка, трекер, расхождения). Аккордеона
+  // этапов нет нигде: этапы — на странице фичи («Хронология»), туда ведёт подвал.
+  const chain = run ? findChatChain(run, chatTaskId) : null;
   const body = featureMode && run
     ? (
       <>
-        <FeaturePicker runs={runs} selected={sel} isMobile={isMobile} inMenu={variant === 'pill'} onSelect={i => {
+        <FeaturePicker runs={runs} selected={sel} isMobile={isMobile} inMenu onSelect={i => {
           const r = runs[i];
           if (r && sessionId) setSelectedFeatureId(sessionId, r.featureId);
         }} />
-        <FeatureRunView
-          run={run}
-          chatTaskId={chatTaskId}
-          onOpenPage={onOpenPage}
-          onClose={onClose}
-        />
+        {chain ? (
+          <FeatureStepView
+            run={run}
+            chain={chain}
+            sessionId={sessionId}
+            chatTaskId={chatTaskId}
+            isMobile={isMobile}
+            onOpenPage={onOpenPage}
+            onClose={onClose ?? (() => {})}
+          />
+        ) : (
+          <FeatureTruthBody
+            run={run}
+            sessionId={sessionId}
+            isMobile={isMobile}
+            roleText={chatRoleFromRun(run, chatTaskId)}
+            onOpenPage={onOpenPage}
+          />
+        )}
       </>
     )
     : featureMode
     ? (
-      // Загрузка/ошибка без готового run: скелет или «Повторить» (тело режима фичи).
-      <FeatureRunView
-        run={runs[0] ?? EMPTY_RUN}
-        chatTaskId={chatTaskId}
-        loading={loading}
-        error={error}
-        onRetry={onRetry}
-      />
+      // Загрузка/ошибка без готового run: скелет 3 строк или «Повторить» (состояния
+      // режима — здесь, тела их не дублируют; EMPTY_RUN не читается).
+      loading ? (
+        <div data-testid="feature-mode-skeleton" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, padding: '2px 0' }}>
+          {[0, 1, 2].map(i => <div key={i} style={{ height: 14, borderRadius: R.sm, background: C.bgInset }} />)}
+        </div>
+      ) : (
+        <div data-testid="feature-mode-error" style={{ display: 'flex', alignItems: 'center', gap: SP.sm, fontSize: FS.sm, color: C.textSecondary, padding: '2px 0' }}>
+          Не загрузилось
+          <button type="button" onClick={onRetry} style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontFamily: 'inherit', fontSize: FS.sm, fontWeight: 600, color: C.accent, padding: 0 }}>Повторить</button>
+        </div>
+      )
     )
     : <TodoList todos={todos} />;
 
@@ -146,66 +146,19 @@ export function FeatureModeBody({ sessionId, todos, runs, isMobile, title, varia
     </div>
   );
 
-  if (variant === 'pill') {
-    // В меню: шапка (переключатель + счётчик) ЛИПКА (position: sticky, top 0) — прямой
-    // потомок скролл-контейнера (карточки Menu, overflow: auto + maxHeight), тело под ней
-    // прокручивается. Колонка без фиксированной высоты: высота = контенту, потолок — maxHeight.
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column' }}>
-        <div style={{ position: 'sticky', top: 0, background: C.bgWhite, zIndex: Z.dropdown }}>
-          {controls}
-        </div>
-        <div style={{ padding: bodyPad }}>
-          {body}
-        </div>
-      </div>
-    );
-  }
-
-  // Карточка панели А («Исполнение ▾», FeatureBanner): обычная колонка, шапка —
-  // часть карточки (не липкая). В режиме фичи внизу футер «Задачи фичи в трекере →»
-  // (стиль футера TaskCreatedView).
+  // В меню: шапка (переключатель) ЛИПКА (position: sticky, top 0) — прямой
+  // потомок скролл-контейнера (карточки Menu, overflow: auto + maxHeight), тело под ней
+  // прокручивается. Колонка без фиксированной высоты: высота = контенту, потолок — maxHeight.
+  // (Второй поверхности — «карточки панели А» — больше нет: F2 убрал её вместе со старой
+  // плашкой; variant и футер «Задачи фичи в трекере →» сняты как мёртвый код.)
   return (
     <div style={{ display: 'flex', flexDirection: 'column' }}>
-      {controls}
+      <div style={{ position: 'sticky', top: 0, background: C.bgWhite, zIndex: Z.dropdown }}>
+        {controls}
+      </div>
       <div style={{ padding: bodyPad }}>
         {body}
       </div>
-      {featureMode && run && <FeatureCardFooter run={run} isMobile={isMobile} />}
     </div>
-  );
-}
-
-// Футер карточки в режиме фичи: «Задачи фичи в трекере →» — стиль футера TaskCreatedView
-// (12/600 C.accent, ArrowRight 13, верхняя граница 1px C.divider, фокус SHADOW.focus).
-// Действие — openTaskInSection на эпик фичи (фильтр трекера по фиче — новый экран, за волной).
-function FeatureCardFooter({ run, isMobile }: { run: FeatureRun; isMobile: boolean }) {
-  const [hovered, setHovered] = useState(false);
-  const [focused, setFocused] = useState(false);
-  // п.32: epic nullable-терпимо — без эпика действие недоступно (guard, не каст).
-  const open = () => { if (!run.epic) return; openTaskInSection({ id: run.epic.id, projectId: run.epic.projectId ?? undefined }); };
-  return (
-    <button
-      onClick={open}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      onFocus={() => setFocused(true)}
-      onBlur={() => setFocused(false)}
-      title="Задачи фичи в трекере"
-      style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 5,
-        width: '100%', border: 'none', borderTop: `1px solid ${C.divider}`,
-        // M-7: на 360 тач-цель 40 (TB.iconHitMobile); отступы 8px 13px не трогаем.
-        minHeight: isMobile ? TB.iconHitMobile : undefined,
-        padding: '8px 13px', background: 'transparent', cursor: 'pointer',
-        fontSize: FS.sm, fontWeight: 600, color: C.accent, fontFamily: 'inherit',
-        boxShadow: focused ? SHADOW.focus : 'none',
-      }}
-    >
-      Задачи фичи в трекере
-      <span style={{ display: 'flex', transform: hovered ? 'translateX(3px)' : 'none', transition: 'transform 0.15s' }}>
-        <ArrowRight size={13} strokeWidth={2} />
-      </span>
-    </button>
   );
 }

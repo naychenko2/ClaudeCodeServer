@@ -12,6 +12,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
+[Trait("Category", "Host")]
 public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly HttpClient _client;

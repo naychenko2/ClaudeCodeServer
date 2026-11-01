@@ -1209,6 +1209,7 @@ public class TaskExecutionServiceHoldTests : IDisposable
     // Мутация: убрать expired++ в catch марки — карточка теряет «1 шаг не продолжен» и
     // «перезапустить», последние два Verify краснеют.
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task ResumeFeatureTurnsAfterHold_MarkSaveFails_SecondStepContinuesAndCardSent()
     {
         var user = _userStore.Add("hold-mark-save-fail", "password123", "user");

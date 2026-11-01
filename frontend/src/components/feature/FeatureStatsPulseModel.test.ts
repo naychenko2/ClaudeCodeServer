@@ -1,27 +1,20 @@
 // Модель «Пульса» вкладки «Статистика» (ST-F3). Чистые функции — в node, без DOM.
 //
-// Покрытие: четыре состояния героя (running/waiting/merged/few) и приоритет
-// (merged выше всех, waiting выше few); порог few — ровно FEW_DATA_MIN (30 мин —
-// уже не few); состав времени: порядок строк, проценты от elapsed, null-поля не
-// дают строки; очередь (Q5F): с queuedMinutes — строка «в очереди» после простого,
-// без неё (null/0/нет поля) — прежнее; проценты округляются по частям — сумма может
-// дать 99 или 101; плитки: 3 без spend,
-// 4 со spend, токены — сумма всех четырёх видов; потери: карточка 1 из longestWait
+// Покрытие: словарь видов времени; плитки: 3 без spend, 4 со spend, токены — сумма
+// всех четырёх видов, «Возвраты» — сумма разбивки по источникам (Ш6); потери: карточка 1 из longestWait
 // (live при attention.kind='wait'),
 // карточка 2 — цепочка с максимальным loops (loops=0 — её нет), карточка 3 —
 // longestNow, у закрытой — этап с максимальным approxMinutes; пустая модель —
 // empty=true.
 //
-// Мутации (в отчёте): (1) «<» на «<=» в пороге few — краснеет тест «30 мин —
-// уже не few»; (2) заменить `v != null && v > 0` в compositionRows на `v >= 0` —
-// краснеет «null-поле — строки нет» (null >= 0 — true); просто снять `v != null`
-// НЕ краснит (null > 0 — false); (3) `ch.loops > 0` без условия — краснеет
+// Мутации (в отчёте): (1) returnsTotal вернуть `verdicts.loops` — краснеет «Возвраты =
+// сумма разбивки»; (3) `ch.loops > 0` без условия — краснеет
 // «loops=0 — карточки нет»; (4) longestWaitMinutes в живой карточке 1 — краснеет
 // тест «текущее 3 мин → 3».
 
 import { describe, it, expect } from 'vitest';
 import {
-  FEW_DATA_MIN, pickHeroState, compositionRows, tilesModel, roundMarks, lossesModel, COMP_LABEL,
+  tilesModel, roundMarks, lossesModel, COMP_LABEL,
 } from './FeatureStatsPulseModel';
 import type { FeatureRun, FeatureStage, FeatureStepChain } from '../../types/featureRun';
 import type { FeatureStats, FeatureTimeline } from '../../types/featureStats';
@@ -58,7 +51,7 @@ function mkTotals(over: Partial<FeatureTimeline['totals']> = {}): FeatureTimelin
   };
 }
 
-// Сегменты одного-двух этапов для pickHeroState: «два этапа» = данные есть.
+// Сегменты одного-двух этапов для таймлайна фикстуры.
 function mkTimeline(stages: string[], totals: FeatureTimeline['totals']): FeatureTimeline {
   return {
     from: '2026-10-20T10:00:00Z',
@@ -93,133 +86,11 @@ const ATTENTION = { kind: 'wait' as const, since: '2026-10-20T15:00:00Z', reason
 // «Сейчас» для живой карточки: NOW — на 3 минуты позже attention.since.
 const NOW = Date.parse('2026-10-20T15:03:00Z');
 
-describe('FEW_DATA_MIN', () => {
-  it('экспортирован и равен 30', () => {
-    expect(FEW_DATA_MIN).toBe(30);
-  });
-});
-
-describe('pickHeroState', () => {
-  it('running — идёт, данные есть', () => {
-    expect(pickHeroState(mkRun(), mkStats())).toBe('running');
-  });
-
-  it('waiting — attention.kind=wait', () => {
-    expect(pickHeroState(mkRun({ attention: ATTENTION }), mkStats())).toBe('waiting');
-  });
-
-  it('merged — state merged или closed', () => {
-    expect(pickHeroState(mkRun({ state: 'merged' }), mkStats())).toBe('merged');
-    expect(pickHeroState(mkRun({ state: 'closed' }), mkStats())).toBe('merged');
-  });
-
-  it('few — сегменты только у одного этапа', () => {
-    expect(pickHeroState(mkRun(), mkStats({}, ['cut']))).toBe('few');
-  });
-
-  it('few — нет ни одного сегмента', () => {
-    expect(pickHeroState(mkRun(), mkStats({}, []))).toBe('few');
-  });
-
-  it('few — прошло меньше FEW_DATA_MIN', () => {
-    const stats = mkStats({ timeline: mkTimeline(['cut', 'prod'], mkTotals({ elapsedMinutes: 29, workWallMinutes: 29 })) });
-    expect(pickHeroState(mkRun(), stats)).toBe('few');
-  });
-
-  it('граница: ровно 30 минут — уже не few', () => {
-    const stats = mkStats({ timeline: mkTimeline(['cut', 'prod'], mkTotals({ elapsedMinutes: 30, workWallMinutes: 30 })) });
-    expect(pickHeroState(mkRun(), stats)).toBe('running');
-  });
-
-  it('приоритет: merged выше few и waiting', () => {
-    const stats = mkStats({}, ['cut']);
-    expect(pickHeroState(mkRun({ state: 'merged', attention: ATTENTION }), stats)).toBe('merged');
-  });
-
-  it('приоритет: waiting выше few — действие читателя важнее', () => {
-    expect(pickHeroState(mkRun({ attention: ATTENTION }), mkStats({}, ['cut']))).toBe('waiting');
-  });
-
-  it('attention.kind=merge — не ожидание человека: running', () => {
-    expect(pickHeroState(mkRun({ attention: { ...ATTENTION, kind: 'merge' } }), mkStats())).toBe('running');
-  });
-});
-
-describe('compositionRows', () => {
-  it('фикстура постановки: 4 строки с минутами и процентами 63/16/18/4', () => {
-    const r = compositionRows(mkTotals({
-      elapsedMinutes: 400, workWallMinutes: 250, waitingMinutes: 65, idleMinutes: 70, errorMinutes: 15,
-    }));
-    expect(r.length).toBe(4);
-    expect(r.map(x => x.minutes)).toEqual([250, 65, 70, 15]);
-    expect(r.map(x => x.percent)).toEqual([63, 16, 18, 4]);
-    expect(r.map(x => x.percentText)).toEqual(['63 %', '16 %', '18 %', '4 %']);
-    expect(r.map(x => x.label)).toEqual(['работа', 'ждали вас', 'простой', 'ошибки']);
-    expect(r.map(x => x.kind)).toEqual(['work', 'waiting', 'idle', 'error']);
-  });
-
-  it('поле null — строки нет', () => {
-    const r = compositionRows(mkTotals({ elapsedMinutes: 400, workWallMinutes: 250 }));
-    expect(r.length).toBe(1);
-    expect(r[0]!.kind).toBe('work');
-  });
-
-  it('ноль — строки нет', () => {
-    const r = compositionRows(mkTotals({ elapsedMinutes: 400, workWallMinutes: 0, waitingMinutes: 0 }));
-    expect(r.length).toBe(0);
-  });
-
-  it('elapsed 0 — пустой список', () => {
-    expect(compositionRows(mkTotals({ workWallMinutes: 10 })).length).toBe(0);
-  });
-
-  // Q5F: очередь — самостоятельный пятый вид разряды (R-Q3B-2, коммит 6c659e527, ADR-031
-  // §«Время в очереди (queued)»): строка после простого; сумма видов = elapsed (контракт
-  // TimelineTotals) — минуты, не проценты.
-  it('очередь есть: строка «в очереди» после простого', () => {
-    const r = compositionRows(mkTotals({
-      elapsedMinutes: 400, workWallMinutes: 240, waitingMinutes: 60, idleMinutes: 60, errorMinutes: 20, queuedMinutes: 20,
-    }));
-    expect(r.map(x => x.kind)).toEqual(['work', 'waiting', 'idle', 'queued', 'error']);
-    // Метка очереди — из источника, не литералом: смена слова в COMP_LABEL меняет ожидание
-    // здесь и в тестах «Подробнее»/мини-сводки (они привязаны к тому же COMP_LABEL, Q5H-3).
-    expect(r.map(x => x.label)).toEqual(['работа', 'ждали вас', 'простой', COMP_LABEL.queued, 'ошибки']);
-    expect(r.map(x => x.minutes)).toEqual([240, 60, 60, 20, 20]);
-    expect(r.map(x => x.percent)).toEqual([60, 15, 15, 5, 5]);
-    expect(r.map(x => x.percentText)).toEqual(['60 %', '15 %', '15 %', '5 %', '5 %']);
-  });
-
-  // Q5H-3 (R-Q5H-1, находка 1): слово вида «очередь» — единый источник слов видов
-  // состава (в т.ч. слова очереди). Значение закреплено здесь (лексика согласована:
-  // макет docs/mockups/feature-queue-1.md, §«Подпись „в очереди · N из M“», «Состояния») —
-  // смена слова в COMP_LABEL красит этот тест, т. е. становится осознанным решением; при этом
-  // все места меняются вместе: состав героя (ниже), «Подробнее» (FeatureStatsTab.test) и
-  // мини-сводка (FeatureMiniSummary.test) сравнивают с тем же COMP_LABEL, а не с литералом.
+describe('COMP_LABEL', () => {
+  // Q5H-3: слово вида «очередь» — единый источник; значение закреплено (лексика согласована:
+  // макет docs/mockups/feature-queue-1.md). «Подробнее» и мини-сводка сравнивают с тем же COMP_LABEL.
   it('сторож: слово очереди — единый источник, значение закреплено (Q5H-3)', () => {
     expect(COMP_LABEL.queued).toBe('в очереди');
-    // Строка состава героя строится из него же (потребители в FeatureStatsTab/MiniSummary —
-    // в своих тестах, привязанных к той же константе).
-    const r = compositionRows(mkTotals({ elapsedMinutes: 100, queuedMinutes: 100 }));
-    expect(r.map(x => x.label)).toEqual([COMP_LABEL.queued]);
-  });
-
-  // Округление по частям — поведение старое (не регресс Q5F): сумма процентов может дать
-  // 101 % (17+17+33+17+17); ширина сегментов в StatsHero мерится минутами, не процентами.
-  it('проценты округляются по частям: сумма 101 % допустима', () => {
-    const r = compositionRows(mkTotals({
-      elapsedMinutes: 6, workWallMinutes: 1, waitingMinutes: 1, idleMinutes: 2, errorMinutes: 1, queuedMinutes: 1,
-    }));
-    expect(r.map(x => x.percent)).toEqual([17, 17, 33, 17, 17]);
-    expect(r.reduce((a, x) => a + x.percent, 0)).toBe(101);
-  });
-
-  it('очереди нет (null / 0 / поля нет): строки и проценты — прежние', () => {
-    const base = { elapsedMinutes: 400, workWallMinutes: 240, waitingMinutes: 60, idleMinutes: 60, errorMinutes: 20 };
-    for (const over of [{ queuedMinutes: null }, { queuedMinutes: 0 }, {}]) {
-      const r = compositionRows(mkTotals({ ...base, ...over }));
-      expect(r.map(x => x.kind)).toEqual(['work', 'waiting', 'idle', 'error']);
-      expect(r.map(x => x.percent)).toEqual([60, 15, 15, 5]);
-    }
   });
 });
 
@@ -247,6 +118,35 @@ describe('tilesModel', () => {
       expect(spend.costUsd).toBe(21.8);
       expect(spend.tokens).toBe(1650);
     }
+  });
+
+  // Ш6: крупное число «Возвратов» = сумма разбивки returnsBySource, а не отдельное поле.
+  it('«Возвраты» = сумма разбивки по источникам (одна база с хвостом плитки)', () => {
+    const run = mkRun({
+      verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
+      returnsBySource: { review: { count: 3, open: 1 }, qa: { count: 2, open: 0 }, final: { count: 1, open: 0 } },
+    });
+    const loops = tilesModel(run, mkStats()).find(t => t.key === 'loops')!;
+    if (loops.key === 'loops') expect(loops.loops).toBe(6);
+  });
+
+  it('«Возвраты» без разбивки (старый ответ) — verdicts.loops', () => {
+    const run = mkRun({ verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 4, withdrawn: 0, loops: 4 } });
+    const loops = tilesModel(run, mkStats()).find(t => t.key === 'loops')!;
+    if (loops.key === 'loops') expect(loops.loops).toBe(4);
+  });
+
+  // Ш6: токены «Расхода» — только поля stats.spend; breakdown (иная база) в них не входит.
+  it('токены «Расхода» — из stats.spend, а не из breakdown', () => {
+    const stats = mkStats({
+      breakdown: { personas: [{ key: 'p', minutes: 1, tokens: 999999, costUsd: 1, chatIds: [] }], models: [], roles: [] },
+      spend: {
+        inputTokens: 10, outputTokens: 20, cacheReadTokens: 30, cacheCreationTokens: 40,
+        costUsd: 1, costPartial: false, hiddenCostModels: [], from: '2026-10-20T10:00:00Z', shared: null,
+      },
+    });
+    const spend = tilesModel(mkRun(), stats).find(t => t.key === 'spend')!;
+    if (spend.key === 'spend') expect(spend.tokens).toBe(100);
   });
 
   it('ряд витков: returned — ↩, принятые — ✓; withdrawn и running не показываются', () => {

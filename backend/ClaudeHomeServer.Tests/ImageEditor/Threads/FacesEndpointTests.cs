@@ -20,8 +20,31 @@ namespace ClaudeHomeServer.Tests.ImageEditor.Threads;
 // Флаг character-face-swap гейтит ручку (выключен — 404 feature_disabled), 200 — список лиц + facesKey,
 // повторный запрос на те же байты берётся из кэша (детектор один раз), Busy — 503, Error — 409, оба не кэшируются,
 // версии нет — 404 version_not_found, чужая нить — 404 thread_not_found, личная область — 404 (маршрута нет).
-public class FacesEndpointTests : IDisposable
+[Trait("Category", "Host")]
+public class FacesEndpointTests : IClassFixture<FacesEndpointTests.Host>
 {
+    /// <summary>
+    /// Хост на весь класс (IClassFixture), а не на тест: заглушки редактора и локальной меди
+    /// зарегистрированы один раз. Состояние фейка (счётчик детекций, делегат результата)
+    /// поднимает заново конструктор класса перед каждым тестом — xUnit создаёт экземпляр
+    /// класса на каждый тест. Кэш лиц живёт в хосте весь класс и ключён по байтам картинки,
+    /// поэтому каждый тест заводит СВОЙ файл со СВОИМИ байтами и не бьёт в чужую запись кэша.
+    /// </summary>
+    public sealed class Host : TestWebApplicationFactory
+    {
+        internal readonly FakeLocalMedia Media = new();
+
+        public Host()
+        {
+            ExtraServices = services =>
+            {
+                services.AddSingleton<IImageEditor>(new FakeImageEditor("fal", models: FakeImageEditor.Model("m")));
+                services.RemoveAll<ILocalImageMedia>();
+                services.AddSingleton<ILocalImageMedia>(Media);
+            };
+        }
+    }
+
     private readonly TestWebApplicationFactory _factory;
     private readonly FakeLocalMedia _media;
     private readonly HttpClient _client;
@@ -29,35 +52,38 @@ public class FacesEndpointTests : IDisposable
     private readonly string _projectId;
     private readonly string _root;
 
-    public FacesEndpointTests()
+    // Номер теста в прогоне: даёт своим байтам PNG на каждый тест-экземпляр
+    private static int _seedCounter;
+
+    public FacesEndpointTests(Host host)
     {
-        _media = new FakeLocalMedia();
-        _factory = new TestWebApplicationFactory();
-        _factory.ExtraServices = services =>
-        {
-            services.AddSingleton<IImageEditor>(new FakeImageEditor("fal", models: FakeImageEditor.Model("m")));
-            services.RemoveAll<ILocalImageMedia>();
-            services.AddSingleton<ILocalImageMedia>(_media);
-        };
+        _factory = host;
+        _media = host.Media;
+        _media.Reset();
         (_projectId, _root) = CharacterEndpointsTests.CreateProject(_factory, TestWebApplicationFactory.TestUsername);
         _ownerId = _factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
         _client = _factory.CreateAuthenticatedClient();
         Directory.CreateDirectory(Path.Combine(_root, "images"));
-        File.WriteAllBytes(Path.Combine(_root, "images", "hero.png"), Png(40, 20));
-        File.WriteAllBytes(Path.Combine(_root, "images", "other.png"), Png(30, 30));
-    }
-
-    public void Dispose()
-    {
-        _factory.Dispose();
-        GC.SuppressFinalize(this);
+        var seed = Interlocked.Increment(ref _seedCounter) * 2;
+        File.WriteAllBytes(Path.Combine(_root, "images", "hero.png"), Png(40, 20, seed));
+        File.WriteAllBytes(Path.Combine(_root, "images", "other.png"), Png(30, 30, seed + 1));
     }
 
     // Фейк ILocalImageMedia: DetectFacesAsync возвращает результат из делегата, считает вызовы
-    private sealed class FakeLocalMedia : ILocalImageMedia
+    internal sealed class FakeLocalMedia : ILocalImageMedia
     {
         public int DetectCalls;
-        public Func<byte[], LocalFaceDetectResult> Result = _ =>
+        public Func<byte[], LocalFaceDetectResult> Result = DefaultResult;
+
+        // Сброс перед каждым тестом: общий хост помнит счётчик и последний делегат (Busy/Error),
+        // а тесты проверяют абсолютные числа детекций
+        public void Reset()
+        {
+            DetectCalls = 0;
+            Result = DefaultResult;
+        }
+
+        private static LocalFaceDetectResult DefaultResult(byte[] _) =>
             new(100, 100, [new LocalDetectedFace(1, 10, 10, 50, 50, 0.9, false)]);
 
         public bool Configured => true;
@@ -254,10 +280,14 @@ public class FacesEndpointTests : IDisposable
         faces.StatusCode.Should().Be(HttpStatusCode.NotFound, "в личной области маршрута faces нет");
     }
 
-    private static byte[] Png(int width, int height)
+    // PNG с узором от seed: разные seed дают разные байты — кэш лиц (ключ — sha256 байт)
+    // не смешивает тесты между собой; внутри теста файл один, байты его стабильны
+    private static byte[] Png(int width, int height, int seed)
     {
         using var bitmap = new SKBitmap(width, height);
-        bitmap.Erase(SKColors.CornflowerBlue);
+        for (var y = 0; y < height; y++)
+            for (var x = 0; x < width; x++)
+                bitmap.SetPixel(x, y, new SKColor((byte)(seed & 0xFF), (byte)(x ^ (seed >> 8)), (byte)(y * 7 + seed)));
         using var image = SKImage.FromBitmap(bitmap);
         using var data = image.Encode(SKEncodedImageFormat.Png, 100);
         return data.ToArray();

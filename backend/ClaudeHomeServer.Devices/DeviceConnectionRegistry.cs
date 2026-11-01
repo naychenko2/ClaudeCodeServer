@@ -100,6 +100,10 @@ public sealed class DeviceConnectionRegistry
         _connections.Values.FirstOrDefault(c =>
             c.Ready && c.OwnerId == ownerId && c.DeviceId == deviceId);
 
+    /// <summary>Все готовые к работе соединения (снимок).</summary>
+    public IReadOnlyList<DeviceConnection> ReadyConnections() =>
+        _connections.Values.Where(c => c.Ready).ToList();
+
     public bool IsOnline(string ownerId, string deviceId) => Find(ownerId, deviceId) is not null;
 
     private async Task NotifyAsync(Func<IDeviceConnectionObserver, Task> action)

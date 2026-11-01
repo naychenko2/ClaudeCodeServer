@@ -361,9 +361,13 @@ export const DeployProgressCard = memo(function DeployProgressCard({ item, sessi
                 {stepInProgress ? (stepInProgress.label ?? stepInProgress.name) : '—'}
               </b>
             </div>
-            {state === 'building' && (
+            {/* Резервная копия данных идёт в фазе переключения, но до остановки прода
+                и длится минутами — всё это время прод отвечает */}
+            {(state === 'building' || (state === 'switching' && stepInProgress?.name === 'data-backup')) && (
               <div style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.5 }}>
-                Прод пока работает — остановлю только на переключении.
+                {state === 'building'
+                  ? 'Прод пока работает — остановлю только на переключении.'
+                  : 'Прод пока работает — остановлю после резервной копии.'}
               </div>
             )}
           </>
@@ -603,7 +607,7 @@ function PhaseRows({ curGroup, state, rows, isMobile, elapsed, groupElapsed }: {
         // Счётчик шагов внутри фазы — только когда сервер жив и журнал читается:
         // в мёртвом окне мы этого не знаем, и рисовать нечего
         const inGroup = rows.filter(r => r.group === key);
-        const passed = inGroup.filter(r => r.status === 'done' || r.status === 'fail').length;
+        const passed = inGroup.filter(r => r.status === 'done' || r.status === 'skip' || r.status === 'fail').length;
         const showCount = run && state === 'building' && inGroup.length > 0;
         const dur = done
           ? durLabel(groupMs(rows, key))
@@ -661,13 +665,15 @@ function StepRowView({ row, isMobile }: { row: StepRow; isMobile: boolean }) {
             ? <span style={{ color: C.danger, display: 'flex' }}><X size={12} strokeWidth={2.5} /></span>
             : row.status === 'run'
               ? <span className="tool-spinner" style={{ width: 9, height: 9 }} />
-              : <span style={{ width: 7, height: 7, borderRadius: R.full, background: C.border, display: 'block' }} />}
+              : row.status === 'skip'
+                ? <span style={{ width: 8, height: 2, borderRadius: R.full, background: C.textMuted, display: 'block' }} />
+                : <span style={{ width: 7, height: 7, borderRadius: R.full, background: C.border, display: 'block' }} />}
       </span>
       <span style={{
         flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         fontFamily: known ? undefined : FONT.mono,
         color: row.status === 'fail' ? C.dangerText : row.status === 'run' ? C.textPrimary
-          : row.status === 'wait' ? C.textMuted : C.textSecondary,
+          : row.status === 'wait' || row.status === 'skip' ? C.textMuted : C.textSecondary,
         fontWeight: row.status === 'fail' || row.status === 'run' ? 600 : 400,
       }}>
         {row.label ?? row.name}
@@ -685,7 +691,7 @@ function StepRowView({ row, isMobile }: { row: StepRow; isMobile: boolean }) {
         fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted,
         minWidth: 38, textAlign: 'right', flexShrink: 0,
       }}>
-        {durLabel(row.ms)}
+        {row.status === 'skip' ? 'пропущен' : durLabel(row.ms)}
       </span>
     </div>
   );

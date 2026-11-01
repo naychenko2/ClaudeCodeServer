@@ -16,6 +16,7 @@ import { useMemo, useSyncExternalStore } from 'react';
 import type { ComponentType, LazyExoticComponent, ReactNode } from 'react';
 import type { AuthState, ChatItem, NoteDetail, Persona, Session } from '../../types';
 import type { HubTabValue } from '../../components/hubTabsModel';
+import type { BadgeTone } from '../../components/ui/CountBadge';
 import { subscribeFlags } from '../featureFlags';
 import { noteReveal, openGenPanel } from '../genPanelOpen';
 import { CONTEXT_PANEL_KEY, toGenPanelKey } from '../genPanelKeys';
@@ -267,6 +268,14 @@ export interface WorkspacePanelDefApi {
   icon: ReactNode;
   // false — панели здесь нет (например, проектная панель в личном чате)
   isAvailable?: (projectId: string | null) => boolean;
+  // Точка-индикатор на значке панели в рельсе (Ф6): тон точки и подсказка в плашке.
+  // В отличие от числовых кружков («сколько чего-то») это состояние фичи «прямо сейчас»:
+  // 'muted' — штатный курс (уступка по плану), 'warning' — то, что само не рассосётся
+  // (память карты, молчание стенда или арбитра). null — точки нет (фича в норме или
+  // её состояние не известно). Как и isAvailable, вызывается из рендера страницы, вне
+  // React; перерисовку при смене состояния даёт сторож фичи, смонтированный на странице
+  // (для «Локальных моделей» — useLocalModelWatcher), а не этот геттер.
+  indicator?: () => { dot: BadgeTone; hint?: string } | null;
 }
 // Показать панель рабочей области извне (например, пунктирный чип «Персонаж» в полосе):
 // событие окна с detail = { key, tab? }; слушают страница проекта и раздел «Чаты»,

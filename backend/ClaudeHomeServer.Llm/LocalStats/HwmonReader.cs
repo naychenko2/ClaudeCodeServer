@@ -19,6 +19,8 @@ public sealed record HwmonBoard
     public int? Vrm { get; init; }
     // Вентилятор чипсета, об/мин; null — датчика нет.
     public int? ChipsetFanRpm { get; init; }
+    // Вода СЖО: датчик в резервуаре на разъёме T_SENSOR; null — не подключён.
+    public int? Water { get; init; }
 }
 
 // Диск (nvme, по контроллеру): самый горячий датчик + дополнительный + предел.
@@ -132,8 +134,12 @@ public sealed class HwmonReader
             Chipset = ReadTempByLabel(dir, "Chipset"),
             Vrm = ReadTempByLabel(dir, "VRM"),
             ChipsetFanRpm = ReadFanByLabel(dir, "Chipset"),
+            Water = ConnectedProbe(ReadTempByLabel(dir, "T_Sensor")),
         };
     }
+
+    // Неподключённый выносной датчик asusec отдаёт −40 °C — это «нет датчика», а не мороз.
+    private static int? ConnectedProbe(int? c) => c is > -30 ? c : null;
 
     // ─── Диски (nvme, по контроллеру): температура, датчики, предел, роль ───────────
 

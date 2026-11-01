@@ -9,6 +9,7 @@ namespace ClaudeHomeServer.Tests.Services;
 public class MemoryDifyDebouncerTests
 {
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task Dispose_ГаситЗапланированноеИОтклоняетНовыеРасписания()
     {
         var debounce = TimeSpan.FromMilliseconds(50);

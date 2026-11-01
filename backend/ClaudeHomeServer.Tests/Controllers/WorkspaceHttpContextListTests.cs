@@ -15,6 +15,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// (состав не зависит ни от хода, ни от содержимого контекста), читает закрепки ТОЛЬКО чата-
 /// вызывателя из хвоста маршрута, чужой чат отбивается.
 /// </summary>
+[Trait("Category", "Host")]
 public class WorkspaceHttpContextListTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

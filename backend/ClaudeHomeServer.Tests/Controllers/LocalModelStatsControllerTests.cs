@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using ClaudeHomeServer.Controllers;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Media;
 using ClaudeHomeServer.Tests.Helpers;
@@ -14,18 +15,199 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // REST-панель «Локальные модели» (вкладка «Текст»): авторизация (403/401),
 // валидация window (400), since (только хвост), выключенная вертикаль (configured:false),
 // unsupported из снимка.
-public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFactory>
+[Trait("Category", "Host")]
+public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsControllerTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory;
-    private readonly HttpClient _admin;
-    private readonly HttpClient _user;
+    private readonly Hosts _hosts;
 
-    public LocalModelStatsControllerTests(TestWebApplicationFactory factory)
+    public LocalModelStatsControllerTests(Hosts hosts) => _hosts = hosts;
+
+    // Клиенты базовых тестов берутся лениво: тесты второго стенда хост Plain не поднимают
+    private HttpClient _admin => _hosts.Plain.Use().CreateAuthenticatedClient();
+    private HttpClient _user => _hosts.Plain.Use().CreateAuthenticatedClient(
+        TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+
+    // Хост на КОНФИГУРАЦИЮ, а не на тест: конфиг и состав DI меняются только хостом, всё остальное
+    // (читатель, карты, счётчик хода, Comfy, дорожки, журнал вызовов, флаг) тест переключает сам
+    // через Use*. Хосты поднимаются лениво и гасятся вместе с фикстурой.
+    public sealed class Hosts : IDisposable
     {
-        _factory = factory;
-        _admin = factory.CreateAuthenticatedClient();
-        _user = factory.CreateAuthenticatedClient(
-            TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+        // Без LocalEngines и без правок конфига
+        public StatsHost Plain { get; } = new();
+        // Второй стенд gemma: BaseUrl/Model/StateUrl/FallbackRoute/MetricsUrl из конфига
+        public StatsHost Engine { get; } = new(EngineConfig(metrics: true));
+        public StatsHost EngineNoMetrics { get; } = new(EngineConfig(metrics: false));
+        // Images выключена: IComfyStats нет вовсе (GetService → null)
+        public StatsHost EngineImagesOff { get; } = new(comfy: false,
+            config: [.. EngineConfig(metrics: true), ("Subsystems:images:Enabled", "false")]);
+        public StatsHost LabelsSet { get; } = new(
+            ("LlmProviders:local-qwen:Stats:Model", "Qwen3.8-Flash-Next IQ3_XXS"),
+            ("LlmProviders:local-qwen:Stats:EngineLabel", " Strata 0.2.7 "),
+            ("LlmProviders:local-qwen:Stats:Topology", "разрез слоёв 26/22"));
+        public StatsHost LabelsBlank { get; } = new(("LlmProviders:local-qwen:Stats:Model", "  "));
+        public StatsHost MediaOff { get; } = new(("LocalModelStats:MediaForUsers", "false"));
+        // Подписи вкладок из конфига + локальный провайдер БЕЗ Stats, который по алфавиту идёт
+        // раньше local-qwen (01.11.2026 такой провайдер прятал панель: брался первый IsLocal).
+        public StatsHost TitlesSet { get; } = new(config: [.. EngineConfig(metrics: true),
+            ("LocalEngines:gemma:Title", "Gemma 4"),
+            ("LlmProviders:local-qwen:Stats:Title", "Flash-Next"),
+            ("LlmProviders:local-aaa-chat:DisplayName", "Локальный чат без статистики"),
+            ("LlmProviders:local-aaa-chat:AnthropicBaseUrl", "http://127.0.0.1:1"),
+            ("LlmProviders:local-aaa-chat:IsLocal", "true"),
+            ("LlmProviders:local-aaa-chat:Models:0:Id", "aaa-chat-model")]);
+        // Вертикаль Llm выключена: сервисов вертикали в контейнере нет, подмен тоже
+        public LlmOffHost LlmOff { get; } = new();
+
+        public void Dispose()
+        {
+            Plain.Dispose();
+            Engine.Dispose();
+            EngineNoMetrics.Dispose();
+            EngineImagesOff.Dispose();
+            LabelsSet.Dispose();
+            LabelsBlank.Dispose();
+            MediaOff.Dispose();
+            TitlesSet.Dispose();
+            LlmOff.Dispose();
+        }
+
+        private static (string Key, string Value)[] EngineConfig(bool metrics)
+        {
+            var config = new List<(string Key, string Value)>
+            {
+                ("LocalEngines:gemma:BaseUrl", "http://127.0.0.1:18030"),
+                ("LocalEngines:gemma:Model", "gemma-4-26b-a4b"),
+                ("LocalEngines:gemma:StateUrl", "http://127.0.0.1:8090/state"),
+                ("LocalEngines:gemma:FallbackRoute", "direct:minimax"),
+            };
+            if (metrics) config.Add(("LocalEngines:gemma:MetricsUrl", "http://127.0.0.1:18030/metrics"));
+            return [.. config];
+        }
+    }
+
+    public sealed class LlmOffHost : TestWebApplicationFactory
+    {
+        public LlmOffHost() => ExtraConfig["Subsystems:llm:Enabled"] = "false";
+    }
+
+    // Хост с переключаемыми заглушками: сервис в DI — прокси, цель которого тест подставляет
+    // на время теста (Use*). Прокси по умолчанию ведут на пустые фейки, поэтому «не подменено»
+    // равно «в этом тесте сервис ничего не сообщает»
+    public sealed class StatsHost : TestWebApplicationFactory
+    {
+        private readonly SwapReader _reader = new();
+        private readonly SwapGpu _gpu = new();
+        private readonly SwapMeter _meter = new();
+        private readonly SwapComfy _comfy = new();
+        private readonly SwapDirectory _directory = new();
+        private readonly SwapArbiter _arbiter = new();
+
+        // Журнал вызовов мест: у каждого теста свой (Use* заводит новый), сервис — transient
+        private EngineCallLedger _ledger = new();
+
+        public StatsHost(params (string Key, string Value)[] config) : this(true, config) { }
+
+        public StatsHost(bool comfy, params (string Key, string Value)[] config)
+        {
+            foreach (var (key, value) in config) ExtraConfig[key] = value;
+            ExtraServices = services =>
+            {
+                services.AddSingleton<ILocalModelStatsReader>(_reader);
+                services.AddSingleton<IGpuSampler>(_gpu);
+                services.AddSingleton<ILocalModelTurnMeter>(_meter);
+                services.AddSingleton<ILocalEngineStatsDirectory>(_directory);
+                services.AddSingleton<IEngineArbiterStateReader>(_arbiter);
+                services.AddTransient<EngineCallLedger>(_ => _ledger);
+                if (comfy) services.AddSingleton<IComfyStats>(_comfy);
+            };
+        }
+
+        // Чистое состояние: все цели — пустые фейки, флаг local-model-stats выключен
+        // (как у свежего пользователя), журнал вызовов новый
+        public StatsHost Use(FakeReader? reader = null, ILocalModelTurnMeter? meter = null, IGpuSampler? gpuSampler = null)
+        {
+            _reader.Target = reader ?? new FakeReader();
+            _gpu.Target = gpuSampler ?? new NoGpuSampler();
+            _meter.Target = meter ?? new FakeMeter();
+            _comfy.Target = new FakeComfyStats();
+            _directory.Target = new FakeDirectory();
+            _arbiter.Target = new FakeArbiterReader();
+            _ledger = new EngineCallLedger();
+            SetFlag(this, false);
+            return this;
+        }
+
+        public StatsHost UseComfy(IComfyStats comfy)
+        {
+            Use();
+            _comfy.Target = comfy;
+            return this;
+        }
+
+        // Второй стенд: читатель главного — по просьбе, дорожки и арбитр — фейки, флаг — по просьбе
+        public StatsHost UseEngine(
+            FakeDirectory dir, FakeArbiterReader? arbiter = null, IComfyStats? comfy = null,
+            bool mainConfigured = false, bool flag = true)
+        {
+            Use(new FakeReader
+            {
+                Current = new LocalModelStatsCurrent
+                {
+                    Configured = mainConfigured,
+                    Status = mainConfigured ? "working" : "notConnected",
+                },
+            });
+            _directory.Target = dir;
+            if (arbiter is not null) _arbiter.Target = arbiter;
+            if (comfy is not null) _comfy.Target = comfy;
+            SetFlag(this, flag);
+            return this;
+        }
+
+        private sealed class SwapReader : ILocalModelStatsReader
+        {
+            public ILocalModelStatsReader Target { get; set; } = new FakeReader();
+            public LocalModelStatsCurrent Current => Target.Current;
+            public double? TokensPerStep => Target.TokensPerStep;
+            public IReadOnlyList<LocalModelStatsPoint> GetHistory(TimeSpan window, long? sinceUnixMs = null) =>
+                Target.GetHistory(window, sinceUnixMs);
+        }
+
+        private sealed class SwapGpu : IGpuSampler
+        {
+            public IGpuSampler Target { get; set; } = new NoGpuSampler();
+            public Task<IReadOnlyList<GpuSample>> ReadAsync(CancellationToken ct = default) => Target.ReadAsync(ct);
+        }
+
+        private sealed class SwapMeter : ILocalModelTurnMeter
+        {
+            public ILocalModelTurnMeter Target { get; set; } = new FakeMeter();
+            public IReadOnlyList<TurnChatLive> ActiveChats() => Target.ActiveChats();
+            public LocalModelTurnSummary? GetLastTurn(string sessionId) => Target.GetLastTurn(sessionId);
+        }
+
+        private sealed class SwapComfy : IComfyStats
+        {
+            public IComfyStats Target { get; set; } = new FakeComfyStats();
+            public Task<ComfyMediaStatsSnapshot?> GetMediaAsync(CancellationToken ct) => Target.GetMediaAsync(ct);
+            public string? DescribePromptKind(string idPrefix) => Target.DescribePromptKind(idPrefix);
+        }
+
+        private sealed class SwapDirectory : ILocalEngineStatsDirectory
+        {
+            public ILocalEngineStatsDirectory Target { get; set; } = new FakeDirectory();
+            public IReadOnlyList<string> Names => Target.Names;
+            public LocalModelStatsCurrent? CurrentOf(string name) => Target.CurrentOf(name);
+            public IReadOnlyList<LocalModelStatsPoint> HistoryOf(string name, TimeSpan window, long? sinceUnixMs = null) =>
+                Target.HistoryOf(name, window, sinceUnixMs);
+        }
+
+        private sealed class SwapArbiter : IEngineArbiterStateReader
+        {
+            public IEngineArbiterStateReader Target { get; set; } = new FakeArbiterReader();
+            public Task<EngineArbiterSnapshot?> GetAsync(string engineName, CancellationToken ct = default) =>
+                Target.GetAsync(engineName, ct);
+        }
     }
 
     // ─── Авторизация ─────────────────────────────────────────────────────────────
@@ -42,7 +224,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     [Fact]
     public async Task Аноним_401()
     {
-        var anon = _factory.CreateClient();
+        var anon = _hosts.Plain.Use().CreateClient();
         var resp = await anon.GetAsync("/api/local-model/stats");
         resp.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
@@ -109,7 +291,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
             Current = new LocalModelStatsCurrent { Configured = true, Status = "working" },
             Points = points,
         };
-        var factory = BuildFactoryWithFakes(reader);
+        var factory = _hosts.Plain.Use(reader);
         using var client = factory.CreateAuthenticatedClient();
 
         var since = (long)t0.AddSeconds(10).ToUnixTimeMilliseconds();
@@ -143,7 +325,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
                 },
             ],
         };
-        var factory = BuildFactoryWithFakes(reader);
+        var factory = _hosts.Plain.Use(reader);
         using var client = factory.CreateAuthenticatedClient();
 
         var resp = await client.GetAsync("/api/local-model/stats");
@@ -184,7 +366,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
                 },
             ],
         };
-        var factory = BuildFactoryWithFakes(reader);
+        var factory = _hosts.Plain.Use(reader);
         using var client = factory.CreateAuthenticatedClient();
 
         var resp = await client.GetAsync("/api/local-model/stats");
@@ -222,7 +404,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
                 },
             ],
         };
-        var factory = BuildFactoryWithFakes(reader);
+        var factory = _hosts.Plain.Use(reader);
         using var client = factory.CreateAuthenticatedClient();
 
         var resp = await client.GetAsync("/api/local-model/stats");
@@ -259,7 +441,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         {
             Current = new LocalModelStatsCurrent { Configured = true, Status = "working", Running = 2, Waiting = 0 },
         };
-        var factory = BuildFactoryWithFakes(reader, meter);
+        var factory = _hosts.Plain.Use(reader, meter);
         using var admin = factory.CreateAuthenticatedClient();
 
         // OwnerId в grant — user.Id (sub в JWT), не username; id генерируется на фабрику,
@@ -305,7 +487,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         {
             Current = new LocalModelStatsCurrent { Configured = true, Status = "working" },
         };
-        var factory = BuildFactoryWithFakes(reader, meter);
+        var factory = _hosts.Plain.Use(reader, meter);
         using var admin = factory.CreateAuthenticatedClient();
 
         var resp = await admin.GetAsync("/api/local-model/stats");
@@ -327,7 +509,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         {
             Current = new LocalModelStatsCurrent { Configured = true, Status = "working", Running = 3, Waiting = 1 },
         };
-        var factory = BuildFactoryWithFakes(reader, meter);
+        var factory = _hosts.Plain.Use(reader, meter);
         using var admin = factory.CreateAuthenticatedClient();
 
         var resp = await admin.GetAsync("/api/local-model/stats");
@@ -340,10 +522,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     [Fact]
     public async Task Chats_СчётчикВыключен_Пусто()
     {
-        using var factory = new TestWebApplicationFactory
-        {
-            ExtraConfig = { ["Subsystems:llm:Enabled"] = "false" },
-        };
+        var factory = _hosts.LlmOff;
         using var admin = factory.CreateAuthenticatedClient();
         var resp = await admin.GetAsync("/api/local-model/stats");
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -366,7 +545,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
                 Unsupported = ["vllm:kv_cache_usage_perc", "vllm:ram_tier_hits"],
             },
         };
-        var factory = BuildFactoryWithFakes(reader);
+        var factory = _hosts.Plain.Use(reader);
         using var client = factory.CreateAuthenticatedClient();
 
         var resp = await client.GetAsync("/api/local-model/stats");
@@ -395,7 +574,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
                 new GpuSample { Index = 1, Uuid = "GPU-uuid-2", Name = "NVIDIA GeForce RTX 3090", Utilization = 100, MemoryUsed = 24100, MemoryTotal = 24576, Temperature = 72, PowerDraw = 340, PowerLimit = 350 },
             ],
         };
-        var factory = BuildFactoryWithFakes(reader, gpuSampler: gpus);
+        var factory = _hosts.Plain.Use(reader, gpuSampler: gpus);
         using var admin = factory.CreateAuthenticatedClient();
 
         var resp = await admin.GetAsync("/api/local-model/stats");
@@ -418,7 +597,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         {
             Current = new LocalModelStatsCurrent { Configured = true, Status = "working" },
         };
-        var factory = BuildFactoryWithFakes(reader, gpuSampler: new FakeGpuSampler { Samples = [] });
+        var factory = _hosts.Plain.Use(reader, gpuSampler: new FakeGpuSampler { Samples = [] });
         using var admin = factory.CreateAuthenticatedClient();
 
         var resp = await admin.GetAsync("/api/local-model/stats");
@@ -438,7 +617,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         {
             Current = new LocalModelStatsCurrent { Configured = true, Status = "working", TensorParallel = 2 },
         };
-        var factory = BuildFactoryWithFakes(reader);
+        var factory = _hosts.Plain.Use(reader);
         using var admin = factory.CreateAuthenticatedClient();
 
         var resp = await admin.GetAsync("/api/local-model/stats");
@@ -455,13 +634,57 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         {
             Current = new LocalModelStatsCurrent { Configured = true, Status = "working" },
         };
-        var factory = BuildFactoryWithFakes(reader);
+        var factory = _hosts.Plain.Use(reader);
         using var admin = factory.CreateAuthenticatedClient();
 
         var resp = await admin.GetAsync("/api/local-model/stats");
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
         body.GetProperty("tensorParallel").ValueKind.Should().Be(JsonValueKind.Null, "не задано → null, фронт покажет число карт");
+    }
+
+    // ─── Подписи основного стенда из Stats: Model/EngineLabel/Topology ──────────────────
+
+    // Подписи заданы → model из Stats:Model поверх идентификатора провайдера, engineLabel и
+    // topology в ответе, engine — прежний тип формата метрик (по нему выбран парсер).
+    // Мутация: не подставлять Stats:Model → в ответе останется "qwen3.8-27b", тест краснеет.
+    [Fact]
+    public async Task Labels_FromStats_OverrideModelAndAddEngineLabelAndTopology()
+    {
+        var reader = new FakeReader
+        {
+            Current = new LocalModelStatsCurrent { Configured = true, Status = "working", Engine = "vllm", Model = "qwen3.8-27b" },
+        };
+        var factory = _hosts.LabelsSet.Use(reader);
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var resp = await admin.GetAsync("/api/local-model/stats");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("model").GetString().Should().Be("Qwen3.8-Flash-Next IQ3_XXS");
+        body.GetProperty("engine").GetString().Should().Be("vllm", "тип формата метрик не подменяется");
+        body.GetProperty("engineLabel").GetString().Should().Be("Strata 0.2.7", "пробелы по краям срезаются");
+        body.GetProperty("topology").GetString().Should().Be("разрез слоёв 26/22");
+    }
+
+    // Подписи не заданы (пустая строка — как не задана) → model из снимка, полей engineLabel и
+    // topology в ответе нет вовсе (ответ побайтно прежний).
+    [Fact]
+    public async Task Labels_NotSet_ModelFromSnapshot_NoLabelFields()
+    {
+        var reader = new FakeReader
+        {
+            Current = new LocalModelStatsCurrent { Configured = true, Status = "working", Engine = "vllm", Model = "qwen3.8-27b" },
+        };
+        var factory = _hosts.LabelsBlank.Use(reader);
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var resp = await admin.GetAsync("/api/local-model/stats");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("model").GetString().Should().Be("qwen3.8-27b");
+        body.TryGetProperty("engineLabel", out _).Should().BeFalse();
+        body.TryGetProperty("topology", out _).Should().BeFalse();
     }
 
     // ─── Выключенная вертикаль Llm → configured:false, status:notConnected, 200 ───
@@ -471,10 +694,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     [Fact]
     public async Task ВертикальВыключена_ConfiguredFalse()
     {
-        using var factory = new TestWebApplicationFactory
-        {
-            ExtraConfig = { ["Subsystems:llm:Enabled"] = "false" },
-        };
+        var factory = _hosts.LlmOff;
         using var admin = factory.CreateAuthenticatedClient();
         var resp = await admin.GetAsync("/api/local-model/stats");
         resp.StatusCode.Should().Be(HttpStatusCode.OK, "выключенная вертикаль — 200, а не 500");
@@ -519,7 +739,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
                 LastHour: [],
                 Unsupported: []),
         };
-        var factory = BuildFactoryWithComfyStats(fake);
+        var factory = _hosts.Plain.UseComfy(fake);
         using var admin = factory.CreateAuthenticatedClient();
         var resp = await admin.GetAsync("/api/local-model/stats/media");
         resp.StatusCode.Should().Be(HttpStatusCode.OK, "не настроенный медиа-стенд — 200, а не 500");
@@ -535,7 +755,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     public async Task Media_АнонимизацияЧужих()
     {
         var fake = new FakeComfyStats();
-        var factory = BuildFactoryWithComfyStats(fake);
+        var factory = _hosts.Plain.UseComfy(fake);
         using var admin = factory.CreateAuthenticatedClient();
 
         // Ids из ТОЙ ЖЕ фабрики, что и запрос: sub в JWT генерируется на фабрику,
@@ -606,7 +826,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     public async Task Media_OwnerId_НеУтекает()
     {
         var fake = new FakeComfyStats();
-        var factory = BuildFactoryWithComfyStats(fake);
+        var factory = _hosts.Plain.UseComfy(fake);
         using var admin = factory.CreateAuthenticatedClient();
 
         var otherId = SubOf(factory.GetToken(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword));
@@ -649,7 +869,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     public async Task Media_Since_ФильтруетLastHour()
     {
         var fake = new FakeComfyStats();
-        var factory = BuildFactoryWithComfyStats(fake);
+        var factory = _hosts.Plain.UseComfy(fake);
         using var admin = factory.CreateAuthenticatedClient();
 
         var myId = SubOf(factory.GetToken(TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword));
@@ -687,7 +907,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     public async Task Media_Gpus_И_LoadedModels_Из_Узла()
     {
         var fake = new FakeComfyStats();
-        var factory = BuildFactoryWithComfyStats(fake);
+        var factory = _hosts.Plain.UseComfy(fake);
         using var admin = factory.CreateAuthenticatedClient();
 
         fake.Snapshot = new ComfyMediaStatsSnapshot(
@@ -730,7 +950,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     public async Task Media_БезДанных_Узла_GpusNull()
     {
         var fake = new FakeComfyStats();
-        var factory = BuildFactoryWithComfyStats(fake);
+        var factory = _hosts.Plain.UseComfy(fake);
         using var admin = factory.CreateAuthenticatedClient();
 
         fake.Snapshot = new ComfyMediaStatsSnapshot(
@@ -803,7 +1023,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     public async Task Media_НеАдмин_ТолькоСвоиСтроки()
     {
         var fake = new FakeComfyStats();
-        var factory = BuildFactoryWithComfyStats(fake);
+        var factory = _hosts.Plain.UseComfy(fake);
         using var nonAdmin = factory.CreateAuthenticatedClient(
             TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
 
@@ -841,7 +1061,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     public async Task Media_НеАдмин_GpusNull_И_QueueAhead()
     {
         var fake = new FakeComfyStats();
-        var factory = BuildFactoryWithComfyStats(fake);
+        var factory = _hosts.Plain.UseComfy(fake);
         using var nonAdmin = factory.CreateAuthenticatedClient(
             TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
 
@@ -868,7 +1088,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     public async Task Media_Админ_ScopeAll_ВсеСтроки()
     {
         var fake = new FakeComfyStats();
-        var factory = BuildFactoryWithComfyStats(fake);
+        var factory = _hosts.Plain.UseComfy(fake);
         using var admin = factory.CreateAuthenticatedClient();
 
         var myId = SubOf(factory.GetToken(TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword));
@@ -896,8 +1116,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     public async Task Media_MediaForUsersFalse_НеАдмин404_Админ200()
     {
         var fake = new FakeComfyStats();
-        var factory = BuildFactoryWithComfyStats(fake);
-        factory.ExtraConfig["LocalModelStats:MediaForUsers"] = "false";
+        var factory = _hosts.MediaOff.UseComfy(fake);
         using var nonAdmin = factory.CreateAuthenticatedClient(
             TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
         using var admin = factory.CreateAuthenticatedClient();
@@ -915,11 +1134,425 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         body.GetProperty("scope").GetString().Should().Be("all");
     }
 
+    // ─── Второй стенд (Б3c): регрессия основного ответа ─────────────────────────────────
+
+    // Снапшот снят на коде ДО Б3c (временным StatsSnapshotCapture, та же фикстура): ответ
+    // без engine не должен меняться ни байтом, когда появляются параметр engine и блок duty.
+    // Мутация: снять [JsonIgnore(WhenWritingNull)] с Duty в DTO — в JSON появится "duty":null,
+    // тест краснеет.
+    [Fact]
+    public async Task StatsБезEngine_СнапшотJSON()
+    {
+        var t0 = new DateTimeOffset(2026, 10, 28, 11, 0, 0, TimeSpan.Zero);
+        var reader = new FakeReader
+        {
+            Current = new LocalModelStatsCurrent
+            {
+                Configured = true, Engine = "vllm", Model = "qwen35-9b", Status = "busy",
+                DownSince = t0, Running = 2, Waiting = 1, SpeculativeSpeedup = 3.3, CleanStepMs = 58.0,
+                Kv = new LocalModelStatsKv
+                {
+                    UsagePerc = 0.61, RamTierPerc = 0.39, PrefixHitPerc = 0.87, RamTierHitPerc = 0.52,
+                    Preemptions = 7, GenPerStream = 38.0, PrefillPerStream = 640.0,
+                },
+                Unsupported = ["vllm:request_queue_time_seconds_sum"],
+                TensorParallel = 2,
+            },
+            Points =
+            [
+                new LocalModelStatsPoint
+                {
+                    Timestamp = t0, GenThroughput = 42.0, Running = 2, Waiting = 1, KvUsage = 0.61,
+                    PrefixHits = 1234, PrefixQueries = 5000, RamHits = 77, RamQueries = 900, Preemptions = 3,
+                    GenTokens = 600, ItlSeconds = 10.5, ItlCount = 120, PrefillSeconds = 2.5, QueueSeconds = 1.5, PromptTokens = 900,
+                },
+            ],
+        };
+        var factory = _hosts.Plain.Use(reader, gpuSampler: new FakeGpuSampler
+        {
+            Samples = [new GpuSample { Index = 0, Uuid = "GPU-1", Name = "NVIDIA GeForce RTX 3090", Utilization = 99, MemoryUsed = 24000, MemoryTotal = 24576, Temperature = 71, PowerDraw = 338, PowerLimit = 350 }],
+        });
+        using var admin = factory.CreateAuthenticatedClient();
+        var since = (long)t0.AddSeconds(-60).ToUnixTimeMilliseconds();
+        var body = await (await admin.GetAsync($"/api/local-model/stats?since={since}")).Content.ReadAsStringAsync();
+
+        body.Should().Be("""{"configured":true,"engine":"vllm","model":"qwen35-9b","tensorParallel":2,"status":"busy","downSince":1793185200000,"running":2,"waiting":1,"othersCount":3,"speed":{"genPerStream":38,"prefillPerStream":640,"speculativeSpeedup":3.3},"cleanStepMs":58,"kv":{"usagePerc":0.61,"ramTierPerc":0.39,"prefixHitPerc":0.87,"ramTierHitPerc":0.52,"preemptions15m":7},"gpus":[{"index":0,"name":"NVIDIA GeForce RTX 3090","utilPerc":99,"memUsedMb":24000,"memTotalMb":24576,"tempC":71,"powerW":338,"powerLimitW":350}],"history":[{"t":1793185200000,"genThroughput":42,"waiting":1,"running":2,"kvUsage":0.61,"prefixHits":1234,"prefixQueries":5000,"ramHits":77,"ramQueries":900,"preemptions":3,"genTokens":600,"itlSeconds":10.5,"itlCount":120,"cleanStepMs":58,"prefillSeconds":2.5,"queueSeconds":1.5,"promptTokens":900}],"chats":[],"unsupported":["vllm:request_queue_time_seconds_sum"],"hardware":{"level":"ok","gpus":[]}}""");
+    }
+
+    // ─── Второй стенд (Б3c): GET /api/local-model/engines ───────────────────────────────
+
+    // Роль на действии: не-админ → 403. Мутация: снять [Authorize(Roles="admin")] — 200, краснеет.
+    [Fact]
+    public async Task Engines_НеАдмин_403()
+    {
+        var factory = _hosts.Engine.UseEngine(new FakeDirectory());
+        using var user = factory.CreateAuthenticatedClient(
+            TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+        (await user.GetAsync("/api/local-model/engines")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    // Серверный флаг local-model-stats: без него 404 (образец — hardware), даже админу.
+    // Мутация: убрать проверку флага — 200, тест краснеет.
+    [Fact]
+    public async Task Engines_БезФлага_404()
+    {
+        var factory = _hosts.Engine.UseEngine(new FakeDirectory(), flag: false);
+        using var admin = factory.CreateAuthenticatedClient();
+        (await admin.GetAsync("/api/local-model/engines")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // Список для переключателя: main — всегда первым; известный движок с дорожкой — configured.
+    // «Engine без vLLM тоже configured» (Ф6): main не настроен, gemma — настроен.
+    // Мутация: не отдавать title/main — первые assert'ы краснеют.
+    [Fact]
+    public async Task Engines_СписокДвижков_MainИEngine()
+    {
+        var dir = new FakeDirectory();
+        dir.Currents["main"] = new LocalModelStatsCurrent { Configured = false, Status = "notConnected" };
+        dir.Currents["gemma"] = new LocalModelStatsCurrent { Configured = true, Engine = "llama-server", Status = "working" };
+        var factory = _hosts.Engine.UseEngine(dir, mainConfigured: false);
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var body = await (await admin.GetAsync("/api/local-model/engines")).Content.ReadFromJsonAsync<JsonElement>();
+        var list = body.EnumerateArray().ToList();
+        list.Count.Should().Be(2, "main + известный gemma");
+
+        list[0].GetProperty("name").GetString().Should().Be("main");
+        list[0].GetProperty("title").GetString().Should().Be("Основная");
+        list[0].GetProperty("configured").GetBoolean().Should().BeFalse("vLLM не настроен");
+        list[1].GetProperty("name").GetString().Should().Be("gemma");
+        list[1].GetProperty("title").GetString().Should().Be("Gemma", "подпись сегмента без Title — ключ с заглавной");
+        list[1].GetProperty("configured").GetBoolean().Should().BeTrue("Engine без vLLM тоже configured");
+    }
+
+    // Подписи вкладок — короткие названия моделей из конфига: Stats:Title основного локального
+    // провайдера и LocalEngines:<имя>:Title. Основной провайдер — первый IsLocal СО Stats, даже если
+    // раньше по алфавиту стоит локальный провайдер без Stats. Мутация: брать первый IsLocal —
+    // main получит «Основная», первый assert краснеет; не читать Title движка — краснеет второй.
+    [Fact]
+    public async Task Engines_ПодписиИзКонфига_ИПровайдерСоStats()
+    {
+        var dir = new FakeDirectory();
+        dir.Currents["main"] = new LocalModelStatsCurrent { Configured = true, Status = "working" };
+        dir.Currents["gemma"] = new LocalModelStatsCurrent { Configured = true, Engine = "llama-server", Status = "working" };
+        var factory = _hosts.TitlesSet.UseEngine(dir, mainConfigured: true);
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var body = await (await admin.GetAsync("/api/local-model/engines")).Content.ReadFromJsonAsync<JsonElement>();
+        var list = body.EnumerateArray().ToList();
+        list[0].GetProperty("title").GetString().Should().Be("Flash-Next", "Stats:Title провайдера со Stats, а не первого IsLocal");
+        list[1].GetProperty("title").GetString().Should().Be("Gemma 4", "LocalEngines:gemma:Title");
+    }
+
+    // Условие ревью 1 (R-F1, «Хвосты»): известный, но не настроенный движок — запись с
+    // configured:false, а не отсутствие в списке. Фронт трактует пустой список как «ещё не
+    // загружен» и держит сохранённый выбор вечно. Мутация: не включать бездорожный движок
+    // в список — list.Count 1, тест краснеет.
+    [Fact]
+    public async Task Engines_ИзвестныйБезДорожки_ConfiguredFalse()
+    {
+        var dir = new FakeDirectory();
+        dir.Currents["main"] = new LocalModelStatsCurrent { Configured = true, Status = "working" };
+        var factory = _hosts.EngineNoMetrics.UseEngine(dir, mainConfigured: true);
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var body = await (await admin.GetAsync("/api/local-model/engines")).Content.ReadFromJsonAsync<JsonElement>();
+        var list = body.EnumerateArray().ToList();
+        list.Count.Should().Be(2);
+        list[1].GetProperty("name").GetString().Should().Be("gemma");
+        list[1].GetProperty("configured").GetBoolean().Should().BeFalse("нет дорожки статистики — не настроен");
+    }
+
+    // «Ничего не настроено» — НЕ пустой список: {main, configured:false} (R-F1: пустой список
+    // фронт держит как «не загружен» навсегда). Мутация: отдавать [] при пустом словаре — краснеет.
+    [Fact]
+    public async Task Engines_НичегоНеНастроено_НеПустойСписок()
+    {
+        var factory = _hosts.Plain.UseEngine(new FakeDirectory());
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var body = await (await admin.GetAsync("/api/local-model/engines")).Content.ReadFromJsonAsync<JsonElement>();
+        var list = body.EnumerateArray().ToList();
+        list.Count.Should().Be(1, "main присутствует всегда");
+        list[0].GetProperty("name").GetString().Should().Be("main");
+        list[0].GetProperty("configured").GetBoolean().Should().BeFalse();
+    }
+
+    // Выключенная вертикаль Llm: engines отвечает без Llm-зависимостей — {main:false}, 200 (не 500).
+    [Fact]
+    public async Task Engines_LlmВыключена_НеПустойСписок()
+    {
+        var factory = _hosts.LlmOff;
+        SetFlag(factory, true);
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var resp = await admin.GetAsync("/api/local-model/engines");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, "выключенная Llm — 200, не 500");
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        var list = body.EnumerateArray().ToList();
+        list.Count.Should().Be(1);
+        list[0].GetProperty("name").GetString().Should().Be("main");
+        list[0].GetProperty("configured").GetBoolean().Should().BeFalse();
+    }
+
+    // ─── Второй стенд (Б3c): GET /api/local-model/stats?engine= ──────────────────────────
+
+    // Роль на действии, как у /stats без engine: не-админ → 403.
+    [Fact]
+    public async Task StatsEngine_НеАдмин_403()
+    {
+        var dir = new FakeDirectory();
+        dir.Currents["gemma"] = new LocalModelStatsCurrent { Configured = true, Engine = "llama-server", Status = "working" };
+        var factory = _hosts.Engine.UseEngine(dir);
+        using var user = factory.CreateAuthenticatedClient(
+            TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+        (await user.GetAsync("/api/local-model/stats?engine=gemma")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    // Флаг для новой формы ручки: без него 404. Без engine флаг не проверялся и не проверяется
+    // (регрессионная guard: Админ_200 выше работает без флага).
+    [Fact]
+    public async Task StatsEngine_БезФлага_404()
+    {
+        var factory = _hosts.Engine.UseEngine(new FakeDirectory(), flag: false);
+        using var admin = factory.CreateAuthenticatedClient();
+        (await admin.GetAsync("/api/local-model/stats?engine=gemma")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // Неизвестный движок — 200 {configured:false, status:notConnected}, не 404/500; блока duty нет.
+    [Fact]
+    public async Task StatsEngine_НеизвестныйДвижок_ConfiguredFalse()
+    {
+        var factory = _hosts.Engine.UseEngine(new FakeDirectory());
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var resp = await admin.GetAsync("/api/local-model/stats?engine=nope");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, "неизвестный движок — configured:false, не 500");
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("configured").GetBoolean().Should().BeFalse();
+        body.GetProperty("status").GetString().Should().Be("notConnected");
+        body.TryGetProperty("duty", out _).Should().BeFalse("нет дорожки — нет блока «Дежурство»");
+    }
+
+    // Выключенная Llm: тот же ответ, что для неизвестного движка (200, не 500).
+    [Fact]
+    public async Task StatsEngine_LlmВыключена_ConfiguredFalse()
+    {
+        var factory = _hosts.LlmOff;
+        SetFlag(factory, true);
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var resp = await admin.GetAsync("/api/local-model/stats?engine=gemma");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, "выключенная Llm — 200, не 500");
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("configured").GetBoolean().Should().BeFalse();
+        body.GetProperty("status").GetString().Should().Be("notConnected");
+    }
+
+    // Стенд именованного движка целиком: снимок дорожки (engine — тип движка, не имя стенда),
+    // карта Video из узла ComfyUI, чатов и hardware нет, unsupported — единый словарь (имена
+    // полей снимка) проходит как есть, блок «Дежурство» — цепочка с insurance (у движка есть
+    // FallbackRoute), арбитр из клиента, причины разбиты на kind/raw, «comfy» — вид по шву
+    // Images с known=true, ответы часа — из реального журнала вызовов мест.
+    [Fact]
+    public async Task StatsEngine_Engine_СтенСБлокомДежурство()
+    {
+        var t0 = new DateTimeOffset(2026, 10, 28, 11, 0, 0, TimeSpan.Zero);
+        var dir = new FakeDirectory();
+        dir.Currents["gemma"] = new LocalModelStatsCurrent
+        {
+            Configured = true, Engine = "llama-server", Model = "gemma-4-26b-a4b", Status = "busy",
+            Running = 1, Waiting = 0,
+            Kv = new LocalModelStatsKv { GenPerStream = 21.0, PrefillPerStream = 640.0 },
+            Unsupported = ["KvUsagePerc", "Preemptions"],
+        };
+        dir.EnginePoints.Add(new LocalModelStatsPoint { Timestamp = t0, GenThroughput = 21.0, Running = 1, Waiting = 0 });
+
+        var arbiter = new FakeArbiterReader();
+        arbiter.Snapshots["gemma"] = new EngineArbiterSnapshot(
+            Reachable: true, State: "yielded",
+            Reasons: ["comfy:a1b2c3d4", "lease:съёмка хода", "gpu:4217:llama-server --metrics"],
+            SinceAt: t0, Yields: 14, Returns: 13, LastYieldS: 0.2, LastReturnS: 6.1,
+            Mode: "shared", QuietLeftS: null,
+            Leases: [new EngineArbiterLease("съёмка хода", 37.5)],
+            SeenAt: t0);
+
+        var factory = _hosts.Engine.UseEngine(dir, arbiter, new KindComfyStats());
+        var ledger = factory.Services.GetRequiredService<EngineCallLedger>();
+        var done = ledger.Begin("gemma", "chat-retitle")!;
+        done.Step(EngineCallLink.Insurance);
+        done.End(EngineCallOutcome.Insurance); // закрыт: ушёл из «сейчас» в корзину часа
+
+        using var admin = factory.CreateAuthenticatedClient();
+        var resp = await admin.GetAsync($"/api/local-model/stats?engine=gemma&since={(long)t0.AddSeconds(-60).ToUnixTimeMilliseconds()}");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+
+        body.GetProperty("configured").GetBoolean().Should().BeTrue();
+        body.GetProperty("engine").GetString().Should().Be("llama-server", "engine — тип движка, не имя стенда");
+        body.GetProperty("model").GetString().Should().Be("gemma-4-26b-a4b");
+        body.GetProperty("status").GetString().Should().Be("busy");
+        body.GetProperty("running").GetInt32().Should().Be(1);
+        // Счётчик хода не видит вызовов мест (они мимо шлюза): «прочие» — всё, что сообщает движок.
+        body.GetProperty("othersCount").GetInt32().Should().Be(1);
+        body.GetProperty("chats").GetArrayLength().Should().Be(0, "у именованного движка нет чатов");
+        body.TryGetProperty("hardware", out _).Should().BeFalse("сводка «Видеокарты» хоста не относится к стенду Video");
+        body.GetProperty("unsupported").EnumerateArray().Select(s => s.GetString()!)
+            .Should().Equal(new[] { "KvUsagePerc", "Preemptions" }, "единый словарь сокрытия — имена полей снимка");
+
+        var gpu = body.GetProperty("gpus")[0];
+        gpu.GetProperty("index").GetInt32().Should().Be(0);
+        gpu.GetProperty("name").GetString().Should().Be("NVIDIA GeForce RTX 3090");
+        gpu.GetProperty("utilPerc").GetInt32().Should().Be(34);
+        gpu.GetProperty("memUsedMb").GetInt64().Should().Be(8192);
+
+        var duty = body.GetProperty("duty");
+        duty.GetProperty("chain").EnumerateArray().Select(s => s.GetString()!)
+            .Should().Equal(new[] { "engine", "insurance", "claude" }, "цепочка типичная: own → страховка (есть FallbackRoute) → облако");
+
+        var ar = duty.GetProperty("arbiter");
+        ar.GetProperty("reachable").GetBoolean().Should().BeTrue();
+        ar.GetProperty("state").GetString().Should().Be("yielded");
+        ar.GetProperty("mode").GetString().Should().Be("shared");
+        ar.GetProperty("yields").GetInt32().Should().Be(14);
+        ar.GetProperty("returns").GetInt32().Should().Be(13);
+        ar.GetProperty("lastYieldS").GetDouble().Should().Be(0.2);
+        ar.GetProperty("lastReturnS").GetDouble().Should().Be(6.1);
+        ar.GetProperty("sinceAt").GetInt64().Should().Be(t0.ToUnixTimeMilliseconds());
+        ar.GetProperty("lastSeenAt").GetInt64().Should().Be(t0.ToUnixTimeMilliseconds());
+
+        var reasons = ar.GetProperty("reasons").EnumerateArray().ToList();
+        reasons.Count.Should().Be(3);
+        reasons[0].GetProperty("kind").GetString().Should().Be("comfy");
+        reasons[0].GetProperty("raw").GetString().Should().Be("a1b2c3d4");
+        reasons[0].GetProperty("jobKind").GetString().Should().Be("video", "вид по шву IComfyStats, таблица на бэкенде");
+        reasons[0].GetProperty("known").GetBoolean().Should().BeTrue("prompt_id в реестре этого инстанса");
+        reasons[1].GetProperty("kind").GetString().Should().Be("lease");
+        reasons[1].GetProperty("raw").GetString().Should().Be("съёмка хода");
+        reasons[1].TryGetProperty("jobKind", out _).Should().BeFalse("вид — только у comfy");
+        reasons[2].GetProperty("kind").GetString().Should().Be("gpu");
+        reasons[2].GetProperty("raw").GetString().Should().Be("4217:llama-server --metrics", "raw — текст без префикса вида");
+
+        var lease = ar.GetProperty("leases")[0];
+        lease.GetProperty("reason").GetString().Should().Be("съёмка хода");
+        lease.GetProperty("leftS").GetDouble().Should().Be(37.5);
+
+        var answers = duty.GetProperty("answersLastHour");
+        answers.GetProperty("insurance").GetInt32().Should().Be(1);
+        answers.GetProperty("engine").GetInt32().Should().Be(0);
+        answers.GetProperty("missed").GetInt32().Should().Be(0);
+        answers.GetProperty("sinceAt").GetInt64().Should().BeGreaterThan(0, "знаменатель доли — max(now−1ч, старт процесса)");
+    }
+
+    // Условие ревью 2 (контракт зафиксирован фронтом в ревью Ф0): callsNow[].link — явно null
+    // для вызова, не вошедшего в цепочку («ждёт в очереди»): поле present и равно null, не
+    // отсутствие поля и не строка. Б5 заводит записи без звена до первого Step.
+    // Мутация: отдать вместо null "queued" — второй assert краснеет.
+    [Fact]
+    public async Task StatsEngine_Engine_CallsNow_LinkNullЖдётВОчереди()
+    {
+        var dir = new FakeDirectory();
+        dir.Currents["gemma"] = new LocalModelStatsCurrent { Configured = true, Engine = "llama-server", Status = "working" };
+        var factory = _hosts.Engine.UseEngine(dir, new FakeArbiterReader());
+
+        var ledger = factory.Services.GetRequiredService<EngineCallLedger>();
+        ledger.Begin("gemma", "chat-retitle"); // без Step: ждёт пробы готовности/слота
+        var onLink = ledger.Begin("gemma", "note-toc")!;
+        onLink.Step(EngineCallLink.Engine);
+
+        using var admin = factory.CreateAuthenticatedClient();
+        var body = await (await admin.GetAsync("/api/local-model/stats?engine=gemma")).Content.ReadFromJsonAsync<JsonElement>();
+
+        var calls = body.GetProperty("duty").GetProperty("callsNow").EnumerateArray().ToList();
+        calls.Count.Should().Be(2, "открытые вызовы — оба");
+        var waiting = calls.Single(c => c.GetProperty("link").ValueKind == JsonValueKind.Null);
+        waiting.GetProperty("place").GetString().Should().Be("Обновление названия чата", "название места из каталога");
+        waiting.TryGetProperty("link", out var link).Should().BeTrue("link обязан присутствовать — явно null");
+        link.ValueKind.Should().Be(JsonValueKind.Null, "null = «ждёт в очереди» (контракт фронта)");
+        waiting.GetProperty("durationS").GetDouble().Should().BeGreaterThanOrEqualTo(0);
+        calls.Should().Contain(c => c.GetProperty("link").GetString() == "engine", "войдящий в цепочку — со звеном");
+    }
+
+    // c3: в сериализованном JSON нет ни id аренд (их создал аноним, их снимает клиент), ни
+    // маркера вида "gpu:" (разбит на kind/raw). Аренда — ровно reason/leftS.
+    // Мутация: отдать в LeaseDto id — EnumerateObject краснеет; не разбивать префикс — NotContain краснеет.
+    [Fact]
+    public async Task StatsEngine_Engine_НетIdАрендИПрефиксаGpu()
+    {
+        var t0 = new DateTimeOffset(2026, 10, 28, 11, 0, 0, TimeSpan.Zero);
+        var dir = new FakeDirectory();
+        dir.Currents["gemma"] = new LocalModelStatsCurrent { Configured = true, Engine = "llama-server", Status = "working" };
+        var arbiter = new FakeArbiterReader();
+        arbiter.Snapshots["gemma"] = new EngineArbiterSnapshot(
+            Reachable: true, State: "ready",
+            Reasons: ["gpu:4217:llama-server --metrics"],
+            SinceAt: t0, Yields: 0, Returns: 0, LastYieldS: null, LastReturnS: null,
+            Mode: null, QuietLeftS: null,
+            Leases: [new EngineArbiterLease("съёмка хода", 37.5)],
+            SeenAt: t0);
+        var factory = _hosts.Engine.UseEngine(dir, arbiter);
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var raw = await (await admin.GetAsync("/api/local-model/stats?engine=gemma")).Content.ReadAsStringAsync();
+        raw.Should().NotContain("gpu:", "префикс вида наружу не отдаётся");
+        raw.Should().NotContain("lease:", "префикс вида наружу не отдаётся");
+
+        var body = JsonDocument.Parse(raw).RootElement;
+        var lease = body.GetProperty("duty").GetProperty("arbiter").GetProperty("leases")[0];
+        lease.EnumerateObject().Select(p => p.Name).Should().BeEquivalentTo(new[] { "reason", "leftS" }, "id аренды наружу не уходит");
+    }
+
+    // c1: выключенная Images → у именованного стенда нет Gpus и jobKind (шва нет — вид не
+    // утверждаем; known остаётся null). Мутация: звать IComfyStats без null-проверки — 500, краснеет.
+    [Fact]
+    public async Task StatsEngine_Engine_ImagesВыключена_GpusNull_JobKindNull()
+    {
+        var t0 = new DateTimeOffset(2026, 10, 28, 11, 0, 0, TimeSpan.Zero);
+        var dir = new FakeDirectory();
+        dir.Currents["gemma"] = new LocalModelStatsCurrent { Configured = true, Engine = "llama-server", Status = "working" };
+        var arbiter = new FakeArbiterReader();
+        arbiter.Snapshots["gemma"] = new EngineArbiterSnapshot(
+            Reachable: true, State: "waiting-vram", Reasons: ["comfy:a1b2c3d4"],
+            SinceAt: t0, Yields: 1, Returns: 0, LastYieldS: 0.2, LastReturnS: null,
+            Mode: "shared", QuietLeftS: null, Leases: null, SeenAt: t0);
+        var factory = _hosts.EngineImagesOff.UseEngine(dir, arbiter);
+
+        using var admin = factory.CreateAuthenticatedClient();
+        var resp = await admin.GetAsync("/api/local-model/stats?engine=gemma");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, "выключенная Images — 200, не 500");
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+
+        body.GetProperty("gpus").ValueKind.Should().Be(JsonValueKind.Null, "нет узла ComfyUI — нет данных о карте");
+        var reason = body.GetProperty("duty").GetProperty("arbiter").GetProperty("reasons")[0];
+        reason.GetProperty("kind").GetString().Should().Be("comfy");
+        reason.TryGetProperty("jobKind", out _).Should().BeFalse("шва Images нет — вид не утверждаем");
+        reason.TryGetProperty("known", out _).Should().BeFalse("unknown остаётся unknown");
+    }
+
+    // Статус "yielded" (Б3b) проходит как есть: выгруженная под арбитром модель — не авария,
+    // downSince null. Мутация: подменить "yielded" на "down" в контроллере — тест краснеет.
+    [Fact]
+    public async Task StatsEngine_Engine_StatusYieldedБезDownSince()
+    {
+        var dir = new FakeDirectory();
+        dir.Currents["gemma"] = new LocalModelStatsCurrent
+        {
+            Configured = true, Engine = "llama-server", Status = "yielded", DownSince = null,
+            Running = 0, Waiting = 0,
+        };
+        var factory = _hosts.Engine.UseEngine(dir, new FakeArbiterReader());
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var body = await (await admin.GetAsync("/api/local-model/stats?engine=gemma")).Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("status").GetString().Should().Be("yielded");
+        body.GetProperty("downSince").ValueKind.Should().Be(JsonValueKind.Null, "уступка — не сбой");
+    }
+
     // ─── Хелперы ─────────────────────────────────────────────────────────────────
 
     // Фейковый ILocalModelStatsReader: тест задаёт Current и Points;
     // GetHistory фильтрует по since.
-    private sealed class FakeReader : ILocalModelStatsReader
+    public sealed class FakeReader : ILocalModelStatsReader
     {
         public LocalModelStatsCurrent Current { get; init; } = new() { Status = "notConnected", Configured = false };
         public List<LocalModelStatsPoint> Points { get; init; } = [];
@@ -936,13 +1569,13 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
     }
 
     // Фейковый IGpuSampler: пустой список — нет nvidia-smi (блок не показывать).
-    private sealed class NoGpuSampler : IGpuSampler
+    public sealed class NoGpuSampler : IGpuSampler
     {
         public Task<IReadOnlyList<GpuSample>> ReadAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<GpuSample>>([]);
     }
 
     // Фейковый IGpuSampler с управляемым списком карт: тест задаёт, сколько карт «видит» nvidia-smi.
-    private sealed class FakeGpuSampler : IGpuSampler
+    public sealed class FakeGpuSampler : IGpuSampler
     {
         public IReadOnlyList<GpuSample> Samples { get; set; } = [];
         public Task<IReadOnlyList<GpuSample>> ReadAsync(CancellationToken ct = default) => Task.FromResult(Samples);
@@ -959,41 +1592,63 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
 
     // Фейковый ILocalModelTurnMeter: управляемый список живых чатов (settable — тест
     // заполняет его после старта фабрики, когда известен user.Id).
-    private sealed class FakeMeter : ILocalModelTurnMeter
+    public sealed class FakeMeter : ILocalModelTurnMeter
     {
         public List<TurnChatLive> Chats { get; set; } = [];
         public IReadOnlyList<TurnChatLive> ActiveChats() => Chats;
         public LocalModelTurnSummary? GetLastTurn(string sessionId) => null;
     }
 
-    // Фабрика с подменой ILocalModelStatsReader/IGpuSampler/ILocalModelTurnMeter на фейки
-    // (ExtraServices — после встроенных регистраций, перетирает forwarder подсистемы Llm).
-    private static TestWebApplicationFactory BuildFactoryWithFakes(FakeReader reader, ILocalModelTurnMeter? meter = null, IGpuSampler? gpuSampler = null)
-    {
-        var factory = new TestWebApplicationFactory();
-        factory.ExtraServices = services =>
-        {
-            services.AddSingleton<ILocalModelStatsReader>(reader);
-            services.AddSingleton<IGpuSampler>(gpuSampler ?? new NoGpuSampler());
-            if (meter is not null)
-                services.AddSingleton(meter);
-        };
-        return factory;
-    }
-
     // Фейковый IComfyStats: управляемый снимок (тест задаёт ComfyMediaStatsSnapshot).
-    private sealed class FakeComfyStats : IComfyStats
+    public sealed class FakeComfyStats : IComfyStats
     {
         public ComfyMediaStatsSnapshot? Snapshot { get; set; }
         public Task<ComfyMediaStatsSnapshot?> GetMediaAsync(CancellationToken ct) => Task.FromResult(Snapshot);
     }
 
-    // Фабрика с подменой IComfyStats на фейк: ExtraServices идёт после встроенных регистраций,
-    // поэтому перетирает ComfyStats подсистемы images (GetService<IComfyStats> → фейк).
-    private static TestWebApplicationFactory BuildFactoryWithComfyStats(FakeComfyStats comfy)
+    // Фейковый справочник дорожек (Б3c): тест задаёт снимки дорожек по именам; HistoryOf —
+    // фиксированные точки для "gemma", пусто для остальных.
+    public sealed class FakeDirectory : ILocalEngineStatsDirectory
     {
-        var factory = new TestWebApplicationFactory();
-        factory.ExtraServices = services => services.AddSingleton<IComfyStats>(comfy);
-        return factory;
+        public Dictionary<string, LocalModelStatsCurrent> Currents { get; } = new(StringComparer.Ordinal);
+        public List<LocalModelStatsPoint> EnginePoints { get; } = [];
+
+        public IReadOnlyList<string> Names => [.. Currents.Keys];
+
+        public LocalModelStatsCurrent? CurrentOf(string name) =>
+            Currents.TryGetValue(name, out var c) ? c : null;
+
+        public IReadOnlyList<LocalModelStatsPoint> HistoryOf(string name, TimeSpan window, long? sinceUnixMs = null) =>
+            name == "gemma" ? EnginePoints : [];
+    }
+
+    // Фейковый читатель состояния арбитра: подготовленный снимок по имени движка;
+    // null — у движка нет StateUrl (или движок неизвестен) — как настоящий клиент.
+    public sealed class FakeArbiterReader : IEngineArbiterStateReader
+    {
+        public Dictionary<string, EngineArbiterSnapshot?> Snapshots { get; } = new(StringComparer.Ordinal);
+
+        public Task<EngineArbiterSnapshot?> GetAsync(string engineName, CancellationToken ct = default) =>
+            Task.FromResult(Snapshots.TryGetValue(engineName, out var s) ? s : null);
+    }
+
+    // IComfyStats с реализованным швом вида задания (B4): "a1b2c3d4" → video; снимок — одна
+    // карта Video (общая с ComfyUI). Остальные методы — как FakeComfyStats.
+    public sealed class KindComfyStats : IComfyStats
+    {
+        public Task<ComfyMediaStatsSnapshot?> GetMediaAsync(CancellationToken ct) =>
+            Task.FromResult<ComfyMediaStatsSnapshot?>(new ComfyMediaStatsSnapshot(
+                Configured: true, Status: "working", DownSince: null, Version: "1.0",
+                Gpus: [new ComfyGpuInfo(0, "", "NVIDIA GeForce RTX 3090", 34, 8192, 24576, 52, 88, 350)],
+                LoadedModels: [], SlotsUsed: 0, SlotsLimit: 4, Running: [], Queue: [], LastHour: [], Unsupported: []));
+
+        public string? DescribePromptKind(string idPrefix) => idPrefix == "a1b2c3d4" ? "video" : null;
+    }
+
+    // Флаг per-user, как в HardwareEndpointTests: admin TestUsername.
+    private static void SetFlag(TestWebApplicationFactory factory, bool on)
+    {
+        var users = factory.Services.GetRequiredService<UserStore>();
+        users.SetFeatureFlag(users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id, "local-model-stats", on);
     }
 }

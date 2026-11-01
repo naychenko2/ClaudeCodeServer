@@ -66,6 +66,10 @@
     <None Include="..\ClaudeHomeServer.Tests\Fixtures\LocalStats\**"
           CopyToOutputDirectory="PreserveNewest"
           Link="Fixtures/LocalStats/%(RecursiveDir)%(Filename)%(Extension)" />
+    <!-- Новые фикстуры этой вертикали живут здесь (Fixtures/LocalStats), а не в монолите:
+         сборка вертикали — целевое место её тестовых активов (монолит чистится).
+         Путь в output тот же — Fixtures/LocalStats/… (LlamaServerMetricsSourceTests). -->
+    <None Include="Fixtures\LocalStats\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

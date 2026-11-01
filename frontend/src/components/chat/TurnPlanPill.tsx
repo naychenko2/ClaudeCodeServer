@@ -22,14 +22,17 @@ import { buildPillModel, type PillTone } from './feature/pillModel';
 // `runs` — агрегаты фич чата (из useFeatureRuns, бэковый FeatureRun); `todos` — план хода.
 // Пилюля показывается, когда есть хоть что-то: todos, фичи, или загрузка/ошибка фич.
 //
-// Режим фичи: текст — по run.state (9 состояний, макет S[state].pill): префикс + жирная
-// часть + суффикс, тон (wait/stop/ok/neutral) красит текст; значок — всегда Route.
+// F2 (макет v4 §П2 «Мой шаг»): в режиме фичи пилюля говорит про ШАГ ЭТОГО ЧАТА
+// («Ш8 · идёт · 24 мин») — фича целиком уже показана в строке шапки В2, повторять её
+// пилюля не должна. Чат без шага — «фича · {pct} %». Тревога фичи заменяет текст
+// («Ждёт вас · {Имя}» warn / «Стоит · {Имя}» danger) и ставит точку-сигнал у значка.
 // Загрузка/ошибка (run ещё нет) — «фича · …». Вся логика — в чистой функции
 // buildPillModel (feature/pillModel.ts): компонент только рисует модель.
 
-// Цвет текста по тону (макет .tpp .x.wait/.stop/.ok); null — нейтральный (цвет кнопки).
+// Цвет текста по тону — тоны В2: «ждёт вас» — warningText, «стоит» — dangerText
+// (синий C.info был языком старой плашки; в языке фичи «нужен ответ» — warn).
 function toneColor(tone: PillTone): string | null {
-  if (tone === 'wait') return C.info;
+  if (tone === 'wait') return C.warningText;
   if (tone === 'stop') return C.dangerText;
   if (tone === 'ok') return C.successText;
   return null;
@@ -87,7 +90,7 @@ export function TurnPlanPill({ todos, runs = [], sessionId, chatTaskId }: {
   // Кнопка-пилюля: всегда runs[0] (порядок отсортировал бэк), выбор в теле не слушает.
   // Режим фичи — когда есть фичи ИЛИ идёт загрузка/ошибка (скелет «фича · …»).
   const featureMode = (hasFeatures || loading || error != null) && mode === 'feature';
-  const model = buildPillModel(runs, loading, error);
+  const model = buildPillModel(runs, chatTaskId, loading, error);
 
   // Счётчик плана хода (done/total) — только в режиме «План хода»; в режиме фичи
   // счётчика нет (макет: пилюля — значок + текст состояния).
@@ -95,7 +98,7 @@ export function TurnPlanPill({ todos, runs = [], sessionId, chatTaskId }: {
 
   // Точка-сигнал: пилюля в режиме «План хода», а фича ждёт/упала — сигнал не теряется.
   const showDot = !featureMode && model != null && (model.tone === 'wait' || model.tone === 'stop');
-  const dotColor = model?.tone === 'stop' ? C.danger : C.info;
+  const dotColor = model?.tone === 'stop' ? C.danger : C.warning;
   const ariaLabel = (featureMode ? 'Показать исполнение фичи' : 'Показать план хода')
     + (showDot && model?.ariaExtra ? ` · ${model.ariaExtra}` : '');
   // Тон текста в режиме фичи (null — нейтральный, цвет кнопки).
@@ -177,8 +180,7 @@ export function TurnPlanPill({ todos, runs = [], sessionId, chatTaskId }: {
               todos={todos}
               runs={runs}
               isMobile={isMobile}
-              variant="pill"
-              // R2 major 5: роль «этот чат — …» в мете — по задаче-владельцу чата.
+              // R2 major 5: роль «этот чат — …» и цепочка шага — по задаче-владельцу чата.
               chatTaskId={chatTaskId}
               // R2 major 3: переход (чат/задача) в теле закрывает попап.
               onClose={() => setMenu(null)}

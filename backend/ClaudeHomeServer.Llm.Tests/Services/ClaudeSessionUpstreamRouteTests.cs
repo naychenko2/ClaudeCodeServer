@@ -27,7 +27,7 @@ namespace ClaudeHomeServer.Tests.Services;
 //
 // Мутация (c7): снятие ветки «stale сторонний → claude» (проверки GetByKey во второй ветке)
 // краснит строку ("sonnet", "minimax", "claude") теории ниже.
-public class ClaudeSessionUpstreamRouteTests
+public class ClaudeSessionUpstreamRouteTests : IDisposable
 {
     private static readonly Type CliRunType =
         typeof(ClaudeSession).GetNestedType("CliRun", BindingFlags.NonPublic)!;
@@ -42,7 +42,7 @@ public class ClaudeSessionUpstreamRouteTests
 
     public void Dispose()
     {
-        foreach (var p in _fakeProcesses) p.Dispose();
+        foreach (var p in _fakeProcesses) ProcessTestCleanup.SafeDispose(p); // Process.Close гонится с уборкой сессии
     }
 
     // Конфиг: сторонний облачный (minimax), локальный (localqwen) и ghostcli с общим префиксом
@@ -229,7 +229,7 @@ public class ClaudeSessionUpstreamRouteTests
                 FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
                 Args = OperatingSystem.IsWindows()
                     ? ["/c", $"type \"{resultFile}\" & ping -n 120 127.0.0.1 >nul"]
-                    : ["-c", $"cat '{resultFile}'; sleep 120"],
+                    : ["-c", $"cat '{resultFile}'; exec sleep 120"],
                 WorkingDirectory = spec.WorkingDirectory,
                 StdioEncoding = spec.StdioEncoding,
                 EnableRaisingEvents = spec.EnableRaisingEvents,
@@ -263,6 +263,7 @@ public class ClaudeSessionUpstreamRouteTests
     /// (ClaudeSession.cs) — в ResultMessage будет null.
     /// </summary>
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task РеальныйСтартПрогона_КлючПосчитанПриСтартеДоезжаетДоResultMessage()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "upstream_route_run_" + Guid.NewGuid().ToString("N"));

@@ -117,6 +117,7 @@ public class FileWatcherFullResyncTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task ПереполнениеЛимитаПутей_ШлётFullВместоТихойРезки()
     {
         var hub = new HubRecorder();

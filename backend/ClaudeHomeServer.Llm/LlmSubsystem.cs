@@ -204,7 +204,7 @@ public sealed class LlmSubsystem : IAppSubsystem
                 Consequence: "Ход на локальной модели завершится сразу «локальная модель не запущена»."));
 
         // Именованные локальные движки (LocalEngines:*) — дежурные llama-server рядом с
-        // основным LocalLlm (например, Bonsai 2 на машине «Video» под арбитром GPU). Проба
+        // основным LocalLlm (например, Gemma 4 на машине «Video» под арбитром GPU). Проба
         // готовности — тихий клиент: движок выгружен штатно, а не сломан.
         services.AddSingleton<NamedLocalEngines>();
         services.AddQuietHttpClient(
@@ -213,6 +213,22 @@ public sealed class LlmSubsystem : IAppSubsystem
                 Category: "ClaudeHomeServer.Llm.LocalEngines",
                 Subject: "арбитром именованного локального движка",
                 Consequence: "Место уйдёт дальше по своей цепочке (страховка или claude)."));
+        // /metrics именованных движков (дорожка статистики LocalModelStatsPoller, Б2b): тихий
+        // клиент со своей категорией — выгруженный арбитром стенд не должен spamить Error-ами
+        // каждый тик, и его тишина не глушит жалобы на основной стенд (и наоборот).
+        services.AddQuietHttpClient(
+            LocalModelStatsPoller.EngineMetricsHttpClientName,
+            new QuietHttpClientProfile(
+                Category: "ClaudeHomeServer.Llm.LocalEngineMetrics",
+                Subject: "метриками именованного локального движка (llama-server)",
+                Consequence: "Панель «Локальные модели» не обновит снимок движка до следующего опроса."));
+
+        // Клиент состояния арбитра GPU (/state) для движков с `StateUrl`: опрос по запросу,
+        // фонового цикла нет — его зовут дорожка статистики (статус «уступила») и блок «Дежурство».
+        services.AddSingleton<LocalEngineStateClient>();
+        // Читатель состояния для поллера дорожек (Б3b): ТОТ ЖЕ инстанс клиента —
+        // по образцу ILocalModelStatsReader → LocalModelStatsPoller.
+        services.AddSingleton<IEngineArbiterStateReader>(sp => sp.GetRequiredService<LocalEngineStateClient>());
 
         // Бесплатное ранжирование действий локальной Ollama для роутинга
         // через LocalActionRouter.
@@ -236,6 +252,11 @@ public sealed class LlmSubsystem : IAppSubsystem
 
         // Роутинг фоновых действий локаль(Ollama)/claude + единый «дешёвый»
         // текстовый раннер с фолбэком.
+        // Журнал вызовов мест к именованным движкам: «кто сейчас на модели» и ответы за час
+        // (блок «Дежурство», разрез v2 §4, шаг Б5). Синглтон в DI, живёт с контейнером;
+        // на диск ничего не пишется. Писатель один — CheapTextRunner, и только цепочек,
+        // где маршрут дал движок.
+        services.AddSingleton<EngineCallLedger>();
         services.AddSingleton<LocalActionOverridesStore>();
         services.AddSingleton<LocalActionRouter>();
         services.AddSingleton<ICheapTextRunner, CheapTextRunner>();
@@ -276,6 +297,11 @@ public sealed class LlmSubsystem : IAppSubsystem
             new LlmProviderRegistry(
                 sp.GetRequiredService<IConfiguration>(),
                 sp.GetRequiredService<ILocalEndpointProbe>()));
+
+        // Медиа-задание после хода локального провайдера, делящего GPU с ComfyUI (YieldsGpuToMedia):
+        // ждёт локальный драйвер картинок. Нет вертикали Llm — шлюза нет, драйвер шлёт задания сразу.
+        services.AddSingleton<IMediaGpuYieldGate>(sp => new MediaGpuYieldGate(
+            sp.GetRequiredService<LlmProviderRegistry>(), LocalEngineBusyTracker.Instance));
 
         // Этап 5, шаг 3 (шов IModelResolver): Core-интерфейс под единственный
         // метод `ResolveModelOrDefault`, который Spend дёргает у LlmProviderRegistry.
@@ -458,6 +484,7 @@ public sealed class LlmSubsystem : IAppSubsystem
         services.AddSingleton<LocalModelStatsPoller>();
         services.AddGatedHostedFrom(config, sp => sp.GetRequiredService<LocalModelStatsPoller>());
         services.AddSingleton<ILocalModelStatsReader>(sp => sp.GetRequiredService<LocalModelStatsPoller>());
+        services.AddSingleton<ILocalEngineStatsDirectory>(sp => sp.GetRequiredService<LocalModelStatsPoller>());
         // Сэмплер видеокарт (nvidia-smi на хосте): по запросу, не в фоне. Кэш на GpuCacheTtl.
         services.AddSingleton<IGpuSampler>(sp => new GpuSampler(
             sp.GetRequiredService<TimeProvider>(),

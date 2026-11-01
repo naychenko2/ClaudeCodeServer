@@ -14,6 +14,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // /api/chats/{id}/team-wave-snapshot — поповер бейджа «КР · волна N». Состояние волны
 // готовим серверными сервисами фабрики (план и раздача — не предмет этих тестов),
 // REST проверяет контракт ответа и изоляцию по владельцу.
+[Trait("Category", "Host")]
 public class TeamWaveSnapshotApiTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

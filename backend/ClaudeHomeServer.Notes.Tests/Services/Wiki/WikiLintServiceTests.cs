@@ -199,34 +199,106 @@ public class WikiLintServiceTests : IDisposable
         await _sut.RunNightTickAsync(NightNow());
         File.Exists(HealthOf(other.Id, Foreign)).Should().BeTrue(
             "дата ставится только после успешного прохода: отказавший пробуют в том же окне");
+        // Дата — на владельца: прошедший не перезапущен из-за отказа соседа (одна строка метрик).
+        MetricsLines().Should().HaveCount(1, "прошедшего владельца второй тик не повторяет");
     }
 
     [Fact]
-    public async Task Тик_Исключение_НеВыходитИзExecuteAsync()
+    public async Task Тик_ОтказПрохода_ИОтказЖурнала_ВсеВладельцыПопытаны()
     {
-        var mine = CreateProject("Целый");
-        var other = CreateProject("Сбойный", owner: Foreign);
+        var first = CreateProject("Сбойный первый", owner: User);
+        var second = CreateProject("Целый второй", owner: Foreign);
         await _keeper.EnsureInitializedAsync(User);
         await _keeper.EnsureInitializedAsync(Foreign);
-        await WriteGoodPage(mine.Id, "Знание");
-        await WriteGoodPage(other.Id, "Знание", user: Foreign);
+        await WriteGoodPage(first.Id, "Знание");
+        await WriteGoodPage(second.Id, "Знание", user: Foreign);
 
-        // Две неудачи сразу: проверка флага бросает для чужого владельца (её закрывает
-        // охрана владельца), и журнал бросает на любой записи — и лог об отказе охраны,
-        // и catch тика как последняя оборона. Логирование не может стать новым источником
-        // исключения: иначе хост гасится ночью, а остальных владельцев срывает.
+        // Две неудачи сразу: проверка флага бросает для первого владельца (его закрывает
+        // охрана владельца), и журнал бросает на любой записи — и лог об отказе охраны.
+        // Без LogSafe в охране исключение журнала выходит из неё и срывает второго владельца:
+        // обход упорядочен (u1 раньше u2), поэтому порядок не маскирует провал.
         var sut = new WikiLintService(_notes, _keeper, _spheres, _config,
             new ThrowingLogger(), _flags);
-        _flags.ThrowFor = Foreign;
-        Func<Task> act = () => sut.RunNightTickAsync(NightNow());
-        await act.Should().NotThrowAsync(
-            "исключение внутри тика не должно доходить до ExecuteAsync: иначе BackgroundService гасит хост");
+        _flags.ThrowFor = User;
+        await sut.RunNightTickAsync(NightNow());
 
-        // Целый владелец прошёл, несмотря на отказ прохода чужого и отказ журнала о нём:
-        // порядок обхода здесь не важен — отказ логирования ни на одном из порядков
-        // не должен срывать другого владельца.
-        File.Exists(HealthOf(mine.Id)).Should().BeTrue(
-            "отказ журнала на чужом владельце не срывает остальных");
+        // Тавтологию «не бросило» заменяет проверка по существу: о каждом владельце спросили.
+        _flags.Asked.Should().Contain([User, Foreign],
+            "отказ журнала на первом владельце не срывает попытку на втором");
+        File.Exists(HealthOf(second.Id, Foreign)).Should().BeTrue(
+            "второй владелец прошёл, несмотря на отказ первого и отказ журнала о нём");
+    }
+
+    [Fact]
+    public async Task Тик_УспехСтавитДатуВладельца_ВторогоПрогонаВТомЖеОкнеНет()
+    {
+        var p = CreateProject("Однажды");
+        await _keeper.EnsureInitializedAsync(User);
+        await WriteGoodPage(p.Id, "Знание");
+
+        await _sut.RunNightTickAsync(NightNow());
+        MetricsLines().Should().HaveCount(1);
+
+        // Тот же календарный день, окно то же: второй тик владельца не трогает.
+        await _sut.RunNightTickAsync(NightNow().AddMinutes(20));
+        MetricsLines().Should().HaveCount(1, "дата прохода владельца стоит: строки метрик не плодятся");
+    }
+
+    [Fact]
+    public async Task Тик_ПрогонУжеИдёт_ДатуНеСтавит_СледующийТикДелаетПрогон()
+    {
+        var p = CreateProject("Параллельный REST");
+        var key = "projects/" + p.Id;
+        await _keeper.EnsureInitializedAsync(User);
+        await WriteGoodPage(p.Id, "Знание");
+
+        var tcs = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var held = _keeper.WithSectionsLockedAsync(User, [key], () => tcs.Task);
+        // REST-прогон занял слот владельца; тик получает «уже идёт» и закончен сразу.
+        var manual = _sut.TryRunOwnerAsync(User);
+        await _sut.RunNightTickAsync(NightNow());
+
+        tcs.SetResult(0);
+        (await manual).Started.Should().BeTrue();
+        await held;
+        MetricsLines().Should().HaveCount(1, "строку написал ручной прогон, тик ничего не писал");
+
+        // «Уже идёт» не успех: даты нет, следующий тик окна выполняет проход сам.
+        await _sut.RunNightTickAsync(NightNow().AddMinutes(10));
+        MetricsLines().Should().HaveCount(2, "дата не ставилась на «уже идёт»");
+    }
+
+    [Fact]
+    public async Task Тик_ФункцияВыключена_ДатуНеСтавит_ПослеВключенияТикДелаетПрогон()
+    {
+        var p = CreateProject("Флаг позже");
+        await _keeper.EnsureInitializedAsync(User);
+        await WriteGoodPage(p.Id, "Знание");
+
+        _flags.On = false;
+        await _sut.RunNightTickAsync(NightNow());
+        MetricsLines().Should().BeEmpty("прогона не было");
+
+        _flags.On = true;
+        await _sut.RunNightTickAsync(NightNow().AddMinutes(10));
+        MetricsLines().Should().HaveCount(1, "«функция выключена» не считается успехом для даты");
+    }
+
+    [Fact]
+    public void ЦелиСносок_СтрокиВнутриFenced_НеСчитаются()
+    {
+        const string text = "тело\n\n```\n[^s1]: [[Пример]] — «в коде»\n```\n\n[^s2]: [[Настоящая]] — «цитата»\n";
+        WikiLintService.FootnoteTargets(text).Should().Equal(["Настоящая"],
+            "строка в code fence — пример синтаксиса, а не источник");
+    }
+
+    [Fact]
+    public void ReadMtime_ОшибкаЧтения_ДатаНеизвестна_ИначеМетка()
+    {
+        WikiLintService.MtimeOrNull("x", _ => throw new IOException("нет доступа")).Should().BeNull();
+        WikiLintService.MtimeOrNull("x", _ => throw new UnauthorizedAccessException()).Should().BeNull();
+        var t = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+        WikiLintService.MtimeOrNull("x", _ => t).Should().Be(new DateTimeOffset(t));
     }
 
     [Fact]
@@ -531,8 +603,11 @@ public class WikiLintServiceTests : IDisposable
     {
         public bool On = true;
         public string? ThrowFor;
+        // О каких владельцах спрашивали (по порядку): тест обороны требует обоих.
+        public readonly System.Collections.Concurrent.ConcurrentQueue<string> Asked = new();
         public bool IsEnabled(string userId, string key)
         {
+            if (key == FeatureFlagKeys.LlmWiki) Asked.Enqueue(userId);
             if (userId == ThrowFor) throw new InvalidOperationException("проверка флага бросает: " + userId);
             return On && key == FeatureFlagKeys.LlmWiki;
         }

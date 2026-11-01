@@ -463,7 +463,9 @@ describe('FileViewer: гард fromRoot внутри обработчиков з
   it('контроль: файл из корня — все три обработчика доходят до API', async () => {
     const spies = writeSpies();
     const { onClose } = await runWrite(null, {}, async h => { await h.save(); await h.del(); await h.revert(); });
-    expect(spies.save, 'запись из корня проходит').toHaveBeenCalledWith('p1', 'docs/readme.txt', 'hello world');
+    // Без etag (mock getContent его не отдаёт) — If-Match нет (4-й аргумент undefined),
+    // etagOut — пустой sink: запрос ровно прежний (S2c-F2b)
+    expect(spies.save, 'запись из корня проходит').toHaveBeenCalledWith('p1', 'docs/readme.txt', 'hello world', undefined, {});
     expect(spies.del, 'удаление из корня проходит').toHaveBeenCalledWith('p1', 'docs/readme.txt');
     expect(spies.revert, 'откат из корня проходит').toHaveBeenCalledWith('p1', 'docs/readme.txt');
     expect(onClose, 'удаление закрыло файл').toHaveBeenCalled();

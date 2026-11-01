@@ -360,6 +360,16 @@ export function applyUpdateLocally(task: Task, dto: UpdateTaskDto): Task {
     next.personaId = dto.personaId === '' ? undefined : dto.personaId;
     if (next.personaId) next.assignee = 'claude';
   }
+  // Человек-исполнитель общего проекта (S2b-F7, зеркало TaskManager.Update): id — назначить и
+  // поставить assignee='me' (смысл поля — «этот человек исполняет»; явное назначение человека
+  // сильнее присланного Assignee); '' или null — снять (обратно к владельцу); не слать — не менять.
+  // id владельца бэк трактует как снятие — здесь он не различается: фронт на дорожку владельца
+  // просит снятие прямо (TaskBoard), отдельного значения «на себя» в записи нет.
+  if (dto.assigneeUserId !== undefined) {
+    const uid = dto.assigneeUserId === '' || dto.assigneeUserId === null ? undefined : dto.assigneeUserId;
+    next.assigneeUserId = uid;
+    if (uid) next.assignee = 'me';
+  }
   // Уровень модели исполнителя: '' — сбросить (семантика строковых полей на бэке)
   if (dto.modelTier !== undefined) next.modelTier = dto.modelTier === '' ? undefined : dto.modelTier;
   if (dto.recurrence !== undefined) {

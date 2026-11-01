@@ -103,4 +103,18 @@ describe('applyUpdateLocally — зеркало семантики TaskManager.U
     const r = applyUpdateLocally(withRec, { recurrence: { type: 'none', interval: 1 } });
     expect(r.recurrence).toBeUndefined();
   });
+
+  // S2b-F7: человек-исполнитель (контракт бэка: id — назначить, "" — снять, не слать — не менять).
+  // Без этого офлайн-пересборка (mergePending → applyUpdateLocally) теряла назначение участника.
+  it('assigneeUserId: id назначается и переживает последующие правки, "" снимает, не слать — не менять', () => {
+    const assigned = applyUpdateLocally(base, { assigneeUserId: 'u-m' });
+    expect(assigned.assigneeUserId).toBe('u-m');
+    expect(assigned.assignee, 'назначение человека ставит assignee me (TaskManager)').toBe('me');
+    const kept = applyUpdateLocally(assigned, { title: 'rename' });
+    expect(kept.assigneeUserId, 'пересборка по следующей очереди не теряет назначение').toBe('u-m');
+    const cleared = applyUpdateLocally(assigned, { assigneeUserId: '' });
+    expect(cleared.assigneeUserId, '"" = снять (обратно к владельцу)').toBeUndefined();
+    expect(cleared.assignee, 'снятие не трогает assignee').toBe('me');
+    expect(applyUpdateLocally(assigned, {}).assigneeUserId, 'без поля — не менять').toBe('u-m');
+  });
 });

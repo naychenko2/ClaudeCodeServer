@@ -7,6 +7,8 @@
 // человека вместо значка Claude. Проверка — настоящий onDragEnd TaskBoard: onDragEnd DndContext
 // перехвачен шпионом (остальной dnd-kit — настоящий), запрос/движение/тост/reload — шпионы на
 // границах. Контроль: броски прочих групп (priority) не изменились.
+// S2b-F7 (хвосты ревью R-S2b-F6): здесь же бросок на 'none' (снять человека) и бросок на
+// дорожку владельца ('' вместо его id — бэк id владельца трактует как снятие).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
@@ -103,6 +105,8 @@ const tMine = mk({ id: 't-mine', title: 'Моя', assignee: 'me', assigneeUserId
 const tMary = mk({ id: 't-mary', title: 'Мариина', assignee: 'me', assigneeUserId: 'u-mary' });
 const tAi = mk({ id: 't-ai', title: 'AI-задача', assignee: 'claude' });
 const tUrgent = mk({ id: 't-urgent', title: 'Срочная', assignee: 'me', assigneeUserId: 'u-own', priority: 'urgent' });
+// id участника, которого нет в names (ушедший) — на нём в общем проекте стоит дорожка 'none'
+const tGone = mk({ id: 't-gone', title: 'Ушедший', assignee: 'me', assigneeUserId: 'u-gone' });
 const P_SHARED = { id: 'p1', name: 'Общий', myRole: 'owner', members: { count: 2 } } as unknown as Project;
 
 async function mountBoard(tasks: Task[] = [tMine, tMary, tAi], scope: 'hub' | 'project' = 'project') {
@@ -162,6 +166,36 @@ describe('S2b-F6: бросок на дорожку участника включ
     // у AI-задачи участника нет: "" для бэка — снятие несуществующего поля (no-op), безопасно
     expect(m.update, 'AI → человек: тот же dto с ""').toHaveBeenCalledWith(
       't-ai', expect.objectContaining({ assignee: 'me', assigneeUserId: '' }));
+    await act(async () => { root.unmount(); });
+  });
+
+  // S2b-F7, п.2: дорожка 'none' («Без исполнителя») в общем проекте — задачи с id участника,
+  // которого нет в names. Смысл броска на неё — снять человека (''), Assignee не трогаем:
+  // «Me без id» бэк и дорожка читают как владельца.
+  it('бросок на «Без исполнителя»: шлёт assigneeUserId:"" и не трогает assignee', async () => {
+    const root = await mountBoard([tMine, tMary, tAi, tGone]);
+    await act(async () => { m.onDragEnd!({ active: { id: 't-mary' }, over: { id: 'none::todo' } } as never); });
+    expect(m.update, 'снятие человека — тот же "", что для me/claude').toHaveBeenCalledWith(
+      't-mary', expect.objectContaining({ assigneeUserId: '' }));
+    const dto = m.update.mock.calls[0][1] as Record<string, unknown>;
+    expect(dto, 'assignee остаётся прежним: «Me без id» и есть владелец').not.toHaveProperty('assignee');
+    expect(m.upsert, 'чип участника с карточки снимается сразу').toHaveBeenCalledWith(
+      expect.objectContaining({ id: 't-mary', assigneeUserId: '' }));
+    await act(async () => { root.unmount(); });
+  });
+
+  // S2b-F7, п.3: бэк трактует id владельца как снятие (TaskManager.Update: «Me» без id и есть
+  // владелец), поэтому просим снятие прямо: до ответа сервера карточка без чипа, а не с чипом
+  // владельца.
+  it('бросок на дорожку владельца: шлёт "" вместо его id и не показывает чип владельца', async () => {
+    const root = await mountBoard();
+    await act(async () => { m.onDragEnd!({ active: { id: 't-mary' }, over: { id: 'u:u-own::todo' } } as never); });
+    expect(m.update, 'просим снятие, а не id владельца').toHaveBeenCalledWith(
+      't-mary', expect.objectContaining({ assignee: 'me', assigneeUserId: '' }));
+    const dto = m.update.mock.calls[0][1] as Record<string, unknown>;
+    expect(dto.assigneeUserId, 'id владельца в запросе не бывает').toBe('');
+    expect(m.upsert, 'до ответа сервера карточка с пустым полем, без чипа').toHaveBeenCalledWith(
+      expect.objectContaining({ id: 't-mary', assigneeUserId: '' }));
     await act(async () => { root.unmount(); });
   });
 

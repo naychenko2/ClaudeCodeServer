@@ -24,7 +24,7 @@ public sealed class ChatContextBroadcaster(
             if (sessions.GetById(sessionId) is not { } session) return;
             var project = session.ProjectId is { } pid ? projects.GetById(pid) : null;
             var dto = ChatContextDtoBuilder.Build(registry, new ContextScope(ownerId, session, project), state);
-            await broadcaster.ToProjectOrOwner(ownerId, session.ProjectId, new ChatContextChangedMessage(dto) { SessionId = sessionId });
+            await broadcaster.ToChatAudience(session, new ChatContextChangedMessage(dto) { SessionId = sessionId });
         }
         catch (Exception ex)
         {

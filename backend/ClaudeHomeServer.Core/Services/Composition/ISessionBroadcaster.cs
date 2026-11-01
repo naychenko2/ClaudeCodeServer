@@ -78,6 +78,19 @@ public static class SessionBroadcasterExtensions
         return string.IsNullOrEmpty(author) ? broadcaster.ToProject(pid, message) : broadcaster.ToOwner(author, message);
     }
 
+    // То же по id чата: сессия читается из каталога В МОМЕНТ отправки (приватность не кэшируется).
+    // Чата нет в запросе — событие не про чат (старое проектное/личное поведение); id указан, а чата
+    // уже нет (удалён) — только владельцу, группе проекта состав приватного чата не раскрываем.
+    public static Task ToChatAudience(this ISessionBroadcaster broadcaster, ISessionDirectory? sessions,
+        string ownerId, string? projectId, string? sessionId, ServerMessage message)
+    {
+        if (string.IsNullOrEmpty(sessionId) || sessions is null)
+            return broadcaster.ToProjectOrOwner(ownerId, projectId, message);
+        return sessions.GetById(sessionId) is { } session
+            ? broadcaster.ToChatAudience(session, message)
+            : broadcaster.ToOwner(ownerId, message);
+    }
+
     // Событие доски: у задачи проекта — участникам группы проекта и дополнительно владельцу
     // карточки, потому что общий стор задач (календарь, список вне проекта) подписан только
     // на user_{id} и без второй адресации не увидел бы собственных проектных задач.

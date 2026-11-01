@@ -10,9 +10,12 @@ namespace ClaudeHomeServer.Tests.Services;
 
 // Гейт «в вики пишет только Хранитель» на PUT, COPY и MOVE (ревью S1b, MAJOR 1): все три
 // пишут или сносят на диск мимо FileService (FileStream + File.Move / File.Copy; MOVE сносит
-// цель до files.Rename) и раньше дотянулись до data/wiki/ напрямую. data-корень — тот же резолв от DataPath, что у FileService; корень проекта здесь
-// НАД data-корнем, чтобы относительный путь имел форму боя «data/wiki/…» («проект на весь
-// домашний каталог»). Отказ — 403 и пустой диск: ни файла, ни каталога, ни временного файла.
+// цель до files.Rename) и раньше дотянулись до data/wiki/ напрямую. data-корень — тот же
+// резолв от DataPath, что у FileService; корень проекта здесь НАД data-корнем, чтобы
+// относительный путь имел форму боя «data/wiki/…» («проект на весь домашний каталог»).
+// Отказ — 403 и пустой диск: ни файла, ни каталога, ни временного файла. Для MOVE предикат
+// шире, как GuardNotWikiSubtree в FileService: путь под вики и путь-предок вики (data/,
+// корень) — рекурсивный снос предка снёс бы вику целиком, обойдя IsWikiPath.
 public class WebDavWikiGateTests : IDisposable
 {
     private const string Project = "p1";
@@ -202,6 +205,68 @@ public class WebDavWikiGateTests : IDisposable
         ctx.Response.StatusCode.Should().Be(403);
         File.Exists(dst).Should().BeTrue();  // обычный файл не снесён
         File.Exists(page).Should().BeTrue(); // страница вики на месте
+    }
+
+    // Тот же дефект с предком вики в ЦЕЛИ (хвост ревью S1b, W3-0): до широкого гейта MOVE на
+    // data проходил IsUnderDataWiki (он видит только путь под вики), снос цели был
+    // рекурсивным — data/wiki сносился целиком, а 403 приходил уже из files.Rename, после
+    // потери данных. Теперь 403 и целый диск.
+    [Fact]
+    public void Move_ЦельПредокВики_Overwrite_403_ИКаталогНаМесте()
+    {
+        var src = Path.Combine(_root, "notes", "x.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(src)!);
+        File.WriteAllText(src, "обычный файл");
+        var page = WriteWikiPage("Страница.md", "# Страница");
+
+        var ctx = Ctx();
+        SetMoveDestination(ctx, "data"); // Overwrite не шлётся — по умолчанию «да»: снос существующей цели
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "notes/x.md", Project);
+
+        ctx.Response.StatusCode.Should().Be(403);
+        Directory.Exists(_dataDir).Should().BeTrue(); // data не снесён: отказ до любого следа на диске
+        Directory.Exists(Path.Combine(_dataDir, "wiki")).Should().BeTrue(); // вики цела
+        File.Exists(page).Should().BeTrue();
+        File.Exists(src).Should().BeTrue();           // источник не тронут
+    }
+
+    // Та же граница с другой стороны: источник — предок вики (data/). Снос существующей цели
+    // (обычного файла) случался до отказа files.Rename — файл терялся зря.
+    [Fact]
+    public void Move_ИсточникПредокВики_403_ЦельНаМесте()
+    {
+        var dst = Path.Combine(_root, "docs", "x.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
+        File.WriteAllText(dst, "обычный файл");
+        WriteWikiPage("Страница.md", "# Страница");
+
+        var ctx = Ctx();
+        SetMoveDestination(ctx, "docs/x.md");
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "data", Project);
+
+        ctx.Response.StatusCode.Should().Be(403);
+        File.Exists(dst).Should().BeTrue();           // цель не снесена
+        Directory.Exists(_dataDir).Should().BeTrue(); // data цел
+    }
+
+    // под data/, но мимо вики: заметки — не вики и не предок вики (data/notes не предок
+    // data/wiki), широкий гейт MOVE их не цепляет — перенос работает как прежде
+    [Fact]
+    public void Move_ЗаметкиПодData_РаботаютКакПрежде()
+    {
+        var src = Path.Combine(_root, "docs", "a.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(src)!);
+        File.WriteAllText(src, "переносимое");
+        var dstDir = Path.Combine(_dataDir, "notes");
+        Directory.CreateDirectory(dstDir); // папка заметок есть на диске, как после первой заметки
+
+        var ctx = Ctx();
+        SetMoveDestination(ctx, "data/notes/Заметка.md");
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs/a.txt", Project);
+
+        ctx.Response.StatusCode.Should().Be(201);
+        File.ReadAllText(Path.Combine(dstDir, "Заметка.md")).Should().Be("переносимое");
+        File.Exists(src).Should().BeFalse();
     }
 
     [Fact]

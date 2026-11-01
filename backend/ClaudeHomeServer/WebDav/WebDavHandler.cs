@@ -599,17 +599,32 @@ public static class WebDavHandler
 
     // Гейт «в вики пишет только Хранитель» для PUT, COPY и MOVE: они пишут или сносят на диск
     // мимо FileService (FileStream + File.Move / File.Copy; MOVE сносит существующую цель до
-    // files.Rename), поэтому путь проверяют сами — тем же предикатом и тем же data-корнем из
-    // конфига, что у FileService и FilesController (ADR-035, решение 2; ревью S1b, MAJOR 1).
-    // Отказ — 403 здесь же, до любого следа на диске. Для MOVE это обязано быть явным гейтом:
-    // отказ exception'ом из files.Rename пришёл бы уже после сноса существующей цели — данные
-    // были бы потеряны (хвост ревью S1b). У DELETE/MKCOL (снос идёт целиком через files.*) тот
-    // же отказ приходит exception'ом и переводится в 403 диспетчером. Без конфига data-корня нет
-    // и проверить нечем — тот же контракт, что у GuardNotWiki.
+    // files.Rename), поэтому путь проверяют сами — тем же data-корнем из конфига, что у
+    // FileService и FilesController (ADR-035, решение 2; ревью S1b, MAJOR 1). Предикат — по
+    // операции: одиночная запись (PUT/COPY) проверяется IsWikiPath; рекурсивный снос (MOVE:
+    // снос цели + Directory.Move в files.Rename) — обоими направлениями, как GuardNotWikiSubtree
+    // в FileService (хвост ревью S1b). Отказ — 403 здесь же, до любого следа на диске: для
+    // MOVE это обязано быть явным гейтом — отказ exception'ом из files.Rename пришёл бы уже
+    // после сноса существующей цели, и данные были бы потеряны. У DELETE/MKCOL (снос идёт
+    // целиком через files.*) тот же отказ приходит exception'ом и переводится в 403
+    // диспетчером. Без конфига data-корня нет и проверить нечем — тот же контракт, что у
+    // GuardNotWiki.
     private static bool IsUnderDataWiki(HttpContext ctx, string absPath)
     {
         var config = ctx.RequestServices.GetService<IConfiguration>();
         return config is not null && WikiPaths.IsWikiPath(absPath, SubsystemHostingExtensions.ResolveDataDir(config));
+    }
+
+    // Предикат MOVE — как GuardNotWikiSubtree в FileService.Rename: операция действует над
+    // поддеревом (снос цели рекурсивный, Directory.Move в files.Rename), поэтому на каждой
+    // стороне проверяются оба направления: путь под вики и путь-предок вики (data/, корень).
+    // Снос предка снёс бы вику целиком, обойдя IsWikiPath (хвост ревью S1b).
+    private static bool IsDataWikiOrAncestor(HttpContext ctx, string absPath)
+    {
+        var config = ctx.RequestServices.GetService<IConfiguration>();
+        if (config is null) return false;
+        var dataDir = SubsystemHostingExtensions.ResolveDataDir(config);
+        return WikiPaths.IsWikiPath(absPath, dataDir) || WikiPaths.IsWikiAncestor(absPath, dataDir);
     }
 
     internal static async Task HandlePutAsync(HttpContext ctx, string root, string relPath)
@@ -836,10 +851,12 @@ public static class WebDavHandler
         var srcAbs = FileService.SafeJoinPublic(root, relPath);
         var dstAbs = FileService.SafeJoinPublic(root, destRel);
 
-        // MOVE сносит существующую цель до files.Rename (ниже) — поэтому обе стороны проверяются
-        // здесь, до любого следа на диске: иначе отказ от files.Rename пришёл бы уже после сноса
-        // цели и данные были бы потеряны (хвост ревью S1b)
-        if (IsUnderDataWiki(ctx, srcAbs) || IsUnderDataWiki(ctx, dstAbs))
+        // MOVE сносит существующую цель до files.Rename (ниже) — поэтому обе стороны
+        // проверяются здесь, до любого следа на диске и обоими направлениями, как
+        // GuardNotWikiSubtree в files.Rename: путь под вики и путь-предок вики (data/,
+        // корень). Иначе отказ от files.Rename пришёл бы уже после сноса цели: MOVE на data
+        // сносил data/wiki целиком до 403 (хвост ревью S1b).
+        if (IsDataWikiOrAncestor(ctx, srcAbs) || IsDataWikiOrAncestor(ctx, dstAbs))
         {
             ctx.Response.StatusCode = 403; // в вики пишет только Хранитель
             return;

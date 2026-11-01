@@ -44,7 +44,7 @@ public class NotesController : ControllerBase
 
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
-    private Task Broadcast(string action, string? noteId = null)
+    private Task Broadcast(string action, string? noteId = null, string? source = null)
     {
         // Любая мутация — отложенная синхронизация семантического индекса (дифф по хешам)
         _kb.QueueSync(UserId);
@@ -52,7 +52,27 @@ public class NotesController : ControllerBase
         // события уровня папки (`folder_created`, `folder_deleted`, `updated` без
         // конкретной заметки) шлём с пустым id — клиент различает действия по полю
         // `Action`, а не по наличию `NoteId`.
-        return _hubNotifier.BroadcastNotesChangedAsync(UserId, action, noteId ?? string.Empty);
+        // S2c-4: источник передаём шву — проектная заметка уходит группе проекта
+        // (участники получают «заметка изменилась») и моим вкладкам; личный vault
+        // ("personal") — null, только владельцу, как раньше.
+        var projectId = source is not null && source != "personal" ? source : null;
+        return _hubNotifier.BroadcastNotesChangedAsync(UserId, action, noteId ?? string.Empty, projectId);
+    }
+
+    // Источник заметки из её id (base64url(sourceKey|relPath)) — нужен только Delete:
+    // остальные операции знают источник из возвращённой заметки или из запроса.
+    // null — id не разобрался (событие пойдёт только владельцу, как раньше).
+    private static string? SourceOfId(string id)
+    {
+        try
+        {
+            var b64 = id.Replace('-', '+').Replace('_', '/');
+            switch (b64.Length % 4) { case 2: b64 += "=="; break; case 3: b64 += "="; break; }
+            var raw = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(b64));
+            var sep = raw.IndexOf('|');
+            return sep < 0 ? null : raw[..sep];
+        }
+        catch (FormatException) { return null; }
     }
 
     // Список заметок владельца (все источники). source — фильтр по источнику, q — поиск.
@@ -116,7 +136,7 @@ public class NotesController : ControllerBase
         try
         {
             var note = _notes.Annotate(UserId, req);
-            await Broadcast("created", note.Id);
+            await Broadcast("created", note.Id, note.Source);
             return Ok(note);
         }
         catch (AnnotationConflictException ex) { return Conflict(new { error = ex.Message }); }
@@ -146,7 +166,7 @@ public class NotesController : ControllerBase
         try
         {
             var note = _notes.RepinAnnotation(UserId, id, selection);
-            await Broadcast("updated", id);
+            await Broadcast("updated", id, note.Source);
             return Ok(note);
         }
         catch (AnnotationConflictException ex) { return Conflict(new { error = ex.Message }); }
@@ -163,7 +183,7 @@ public class NotesController : ControllerBase
         try
         {
             var note = _notes.Reply(UserId, id, req);
-            await Broadcast("created", note.Id);
+            await Broadcast("created", note.Id, note.Source);
             return Ok(note);
         }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
@@ -189,7 +209,7 @@ public class NotesController : ControllerBase
         {
             var note = _notes.SetAnnotationStatus(UserId, id, req.Status);
             if (note is null) return NotFound();
-            await Broadcast("updated", id);
+            await Broadcast("updated", id, note.Source);
             return Ok(note);
         }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
@@ -235,7 +255,7 @@ public class NotesController : ControllerBase
     public async Task<ActionResult<NoteDetail>> Daily([FromBody] DailyNoteRequest req)
     {
         var note = _notes.GetOrCreateDaily(UserId, req.Date);
-        await Broadcast("updated", note.Id);
+        await Broadcast("updated", note.Id, note.Source);
         return Ok(note);
     }
 
@@ -273,7 +293,7 @@ public class NotesController : ControllerBase
         try
         {
             var note = await _ai.SuggestTocAsync(UserId, id, ct);
-            await Broadcast("updated", note.Id);
+            await Broadcast("updated", note.Id, note.Source);
             return Ok(note);
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -287,7 +307,7 @@ public class NotesController : ControllerBase
         try
         {
             var note = await _ai.TranslateAsync(UserId, id, ct);
-            await Broadcast("updated", note.Id);
+            await Broadcast("updated", note.Id, note.Source);
             return Ok(note);
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -301,7 +321,7 @@ public class NotesController : ControllerBase
         try
         {
             var note = await _ai.DailySummaryAsync(UserId, req.Date, ct);
-            await Broadcast("updated", note.Id);
+            await Broadcast("updated", note.Id, note.Source);
             return Ok(note);
         }
         catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
@@ -357,7 +377,7 @@ public class NotesController : ControllerBase
         try
         {
             var moved = _notes.MoveFolder(UserId, req.Source, req.Path, req.NewPath);
-            await Broadcast("updated");
+            await Broadcast("updated", null, req.Source);
             return Ok(new { notes = moved });
         }
         catch (UnauthorizedAccessException) { return Forbid(); }
@@ -378,7 +398,7 @@ public class NotesController : ControllerBase
         try
         {
             var folder = _notes.CreateFolder(UserId, req.Source, req.Path);
-            await Broadcast("folder_created");
+            await Broadcast("folder_created", null, req.Source);
             return Ok(folder);
         }
         catch (UnauthorizedAccessException) { return Forbid(); }
@@ -394,7 +414,7 @@ public class NotesController : ControllerBase
         try
         {
             var removed = _notes.DeleteFolder(UserId, source, path);
-            await Broadcast("folder_deleted");
+            await Broadcast("folder_deleted", null, source);
             return Ok(new { removed });
         }
         catch (UnauthorizedAccessException) { return Forbid(); }
@@ -410,7 +430,7 @@ public class NotesController : ControllerBase
         {
             var note = _notes.Move(UserId, id, req.Folder, req.TargetSource);
             if (note is null) return NotFound();
-            await Broadcast("updated", note.Id);
+            await Broadcast("updated", note.Id, note.Source);
             return Ok(note);
         }
         catch (UnauthorizedAccessException) { return Forbid(); }
@@ -430,7 +450,7 @@ public class NotesController : ControllerBase
         {
             var note = _notes.LinkMention(UserId, id, req.TargetTitle);
             if (note is null) return NotFound();
-            await Broadcast("updated", note.Id);
+            await Broadcast("updated", note.Id, note.Source);
             return Ok(note);
         }
         catch (UnauthorizedAccessException) { return Forbid(); }
@@ -462,7 +482,7 @@ public class NotesController : ControllerBase
         try
         {
             var note = _notes.Create(UserId, req);
-            await Broadcast("created", note.Id);
+            await Broadcast("created", note.Id, note.Source);
             return Ok(note);
         }
         catch (UnauthorizedAccessException) { return Forbid(); }
@@ -482,7 +502,7 @@ public class NotesController : ControllerBase
             if (note is null) return NotFound();
             // Новое состояние — новый ETag: следующая правка этого клиента идёт по нему
             Response.Headers.ETag = $"\"{NotesService.ContentSha256(note.Content)}\"";
-            await Broadcast("updated", note.Id);
+            await Broadcast("updated", note.Id, note.Source);
             return Ok(note);
         }
         catch (NoteConflictException ex)
@@ -513,7 +533,7 @@ public class NotesController : ControllerBase
         try
         {
             if (!_notes.Delete(UserId, id)) return NotFound();
-            await Broadcast("deleted", id);
+            await Broadcast("deleted", id, SourceOfId(id));
             return NoContent();
         }
         catch (UnauthorizedAccessException) { return Forbid(); }

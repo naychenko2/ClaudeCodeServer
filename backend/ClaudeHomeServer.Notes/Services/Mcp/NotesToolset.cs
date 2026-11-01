@@ -2,10 +2,8 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
-using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Access;
-using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Notes;
 
 namespace ClaudeHomeServer.Services.Mcp.Http;
@@ -31,7 +29,7 @@ public sealed class NotesToolset(
     IPersonaResolver personas,
     IMcpPersonaBindings bindings,
     IMcpSessionAccessor sessions,
-    ISessionBroadcaster broadcaster,
+    INotesHubNotifier hubNotifier,
     ITurnFrameSource frames,
     NotesService? notes = null,
     // Все четыре — синглтоны одной отключаемой вертикали (NotesSubsystem.Register),
@@ -478,12 +476,16 @@ public sealed class NotesToolset(
         return true;
     }
 
-    // Любая мутация — отложенная синхронизация семантического индекса + событие ленты
-    // (как Broadcast контроллера: панель «Заметки» обновляется и при MCP-записи)
+    // Любая мутация — отложенная синхронизация семантического индекса + событие ленты.
+    // Адресация — тем же швом, что у контроллера (INotesHubNotifier, S2c-4): проектная
+    // заметка уходит группе проекта + вкладкам вызывающего, личная — только владельцу.
+    // Источник зашит в самом id (SourceOfId): personal → null.
     private async Task BroadcastAsync(string ownerId, string action, string? noteId)
     {
         kb?.QueueSync(ownerId);
-        await broadcaster.ToOwner(ownerId, new NotesChangedMessage(action, noteId));
+        var source = noteId is null ? null : SourceOfId(noteId);
+        await hubNotifier.BroadcastNotesChangedAsync(ownerId, action, noteId ?? string.Empty,
+            source is not null && source != "personal" ? source : null);
     }
 
     // Компактное представление заметки для списков — как brief у stdio-ветки

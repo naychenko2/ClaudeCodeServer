@@ -96,7 +96,7 @@ public class NoteTaskSyncAuthorTests : IDisposable
 
     private sealed class NoopNotifier : INotesHubNotifier
     {
-        public Task BroadcastNotesChangedAsync(string userId, string action, string noteId) => Task.CompletedTask;
+        public Task BroadcastNotesChangedAsync(string userId, string action, string noteId, string? projectId = null) => Task.CompletedTask;
         public Task BroadcastTaskChangedAsync(string userId, string action, string taskId, string? projectId = null) => Task.CompletedTask;
     }
 

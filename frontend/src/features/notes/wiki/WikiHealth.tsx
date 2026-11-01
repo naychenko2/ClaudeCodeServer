@@ -15,14 +15,15 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, ArrowUpCircle, HeartPulse, RefreshCw } from 'lucide-react';
-import { C, FONT, FS, R, SP } from '../../../lib/design';
+import {
+  C, FONT, FS, R, SP, useIsMobile,
+  WikiError, getWikiHealth, runWikiLint, useWikiTree,
+} from 'aihome_shell/kit';
 import { Badge, type BadgeTone } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
 import { EmptyState } from '../../../components/ui/EmptyState';
 import { Notice } from '../../../components/ui/Notice';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
-import { useIsMobile } from '../../../lib/breakpoints';
-import { WikiError, getWikiHealth, runWikiLint, useWikiTree } from '../../../lib/wiki';
 import { sectionPrefix, wikiErrorText } from './wikiLabels';
 
 // ─── Разбор _health.md (зеркало бэкового RenderHealth/FindingLine) ───

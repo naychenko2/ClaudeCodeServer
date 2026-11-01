@@ -15,19 +15,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Brain, FileText, GitCommit, Inbox, Link2, ListChecks, MessageSquare, StickyNote } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { C, FONT, FS, R, SP } from '../../../lib/design';
+import {
+  C, FONT, FS, R, SP, useIsMobile,
+  WikiError, listWikiPackages, useWikiTree,
+  type WikiPackageDto, type WikiPackageOperationDto,
+} from 'aihome_shell/kit';
 import { Button } from '../../../components/ui/Button';
 import { EmptyState } from '../../../components/ui/EmptyState';
 import { Notice } from '../../../components/ui/Notice';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
-import { useIsMobile } from '../../../lib/breakpoints';
-import {
-  WikiError,
-  listWikiPackages,
-  useWikiTree,
-  type WikiPackageDto,
-  type WikiPackageOperationDto,
-} from '../../../lib/wiki';
 import { sectionPrefix, wikiErrorText } from './WikiTab';
 import { WikiPackageView } from './WikiPackageView';
 

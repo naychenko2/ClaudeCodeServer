@@ -17,24 +17,18 @@
 
 import { useState } from 'react';
 import { AlertTriangle, Check, ChevronLeft, Inbox } from 'lucide-react';
-import { C, FONT, FS, R, SP } from '../../../lib/design';
+import {
+  C, FONT, FS, R, SP, useIsMobile,
+  acceptAllWikiPackage, decideWikiPackage, useWikiTree, WikiError,
+  type WikiApplyOutcomeDto, type WikiDecisionDto,
+  type WikiPackageDto, type WikiPackageOperationDto,
+} from 'aihome_shell/kit';
 import { Badge, type BadgeTone } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
 import { TextArea } from '../../../components/ui/Field';
 import { Notice } from '../../../components/ui/Notice';
 import { DiffView } from '../../../components/DiffView';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
-import { useIsMobile } from '../../../lib/breakpoints';
-import {
-  acceptAllWikiPackage,
-  decideWikiPackage,
-  useWikiTree,
-  WikiError,
-  type WikiApplyOutcomeDto,
-  type WikiDecisionDto,
-  type WikiPackageDto,
-  type WikiPackageOperationDto,
-} from '../../../lib/wiki';
 // Цикл импорта WikiInbox ↔ WikiPackageView: словари читаются в рендере, не при сборке
 // модуля, — к тому времени оба уже вычислены
 import { ORIGIN_META, pendingContested, pkgErrorText } from './WikiInbox';

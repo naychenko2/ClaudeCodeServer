@@ -19,7 +19,11 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, History } from 'lucide-react';
-import { C, FONT, FS, R, SHADOW, SP } from '../../../lib/design';
+import {
+  C, FONT, FS, R, SHADOW, SP, useIsMobile, openChatById, showToast,
+  WikiError, loadWikiJournal, retractWikiSource, useWikiTree,
+  type WikiJournalDto, type WikiJournalEntryDto,
+} from 'aihome_shell/kit';
 import { Badge } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
 import { ConfirmDialog } from '../../../components/ui/ConfirmDialog';
@@ -27,17 +31,6 @@ import { EmptyState } from '../../../components/ui/EmptyState';
 import { Notice } from '../../../components/ui/Notice';
 import { Select } from '../../../components/ui/Select';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
-import { useIsMobile } from '../../../lib/breakpoints';
-import { openChatById } from '../../../lib/openChat';
-import { showToast } from '../../../lib/toast';
-import {
-  WikiError,
-  loadWikiJournal,
-  retractWikiSource,
-  useWikiTree,
-  type WikiJournalDto,
-  type WikiJournalEntryDto,
-} from '../../../lib/wiki';
 import { ORIGIN_META } from './WikiInbox';
 import { sectionPrefix, wikiErrorText } from './wikiLabels';
 

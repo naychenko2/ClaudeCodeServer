@@ -27,7 +27,7 @@ import {
 import { WikiInbox } from '../WikiInbox';
 
 // Мок с сохранением остальных экспортов: цепочка мокованного доходит до кита хоста
-// (WikiInbox → ./WikiTab → kit) — full-replacement мок рвётся на первом недостающем
+// (WikiInbox → kit) — full-replacement мок рвётся на первом недостающем
 // имени. Паттерн — как в NotesPage.test.ts.
 vi.mock('../../../../lib/signalr', async (orig) => ({
   ...await orig<typeof import('../../../../lib/signalr')>(),

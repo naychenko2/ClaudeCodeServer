@@ -30,7 +30,7 @@ import { WikiJournal } from '../WikiJournal';
 import { WIKI_SUBTABS } from '../wikiTabs';
 
 // Мок с сохранением остальных экспортов: цепочка мокованного доходит до кита хоста
-// (WikiJournal → ./WikiInbox → ./WikiTab → kit) — full-replacement мок рвётся на
+// (WikiJournal → ./WikiInbox → kit) — full-replacement мок рвётся на
 // первом недостающем имени. Паттерн — как в NotesPage.test.ts.
 vi.mock('../../../../lib/signalr', async (orig) => ({
   ...await orig<typeof import('../../../../lib/signalr')>(),

@@ -37,6 +37,11 @@ namespace ClaudeHomeServer.Tests.Services;
 // этот путь не решает «само / Входящие» сам — он получает настройки владельца через
 // тот же WikiIngestService: выключенный класс оставляет пакет в «Входящих».
 //
+// Плюс хвосты ревью W3-6: чужой и несуществующий чат — один message на двоих и он же в
+// last (F1/F3); исключение вне защищённого прогона — in-flight снимается, заявка живая,
+// не вечный 202 (F2); две заявки одного чата — один прогон (мера — чтения истории на
+// уровне чата: модель одна и без single-flight'а чата, её экономит in-flight очереди).
+//
 // Утверждение модели — дословная цитата реплики (text == quote): в финальном пакете
 // op.Text — подтверждённая цитата (WikiIngestService.cs:335 VerifiedQuote), дедup меры 2
 // (WikiDedup.IsDuplicateStatement → HasSameText) опознаёт повтор именно по тексту
@@ -717,6 +722,138 @@ public class WikiChatIngestTests : IDisposable
         r1.PackageIds.Should().Equal(r2.PackageIds);
     }
 
+    // ── W3-6 F1: чужой и несуществующий чат — один message на двоих ──
+
+    [Fact]
+    public async Task Analyze_ЧужойИНесуществующийЧат_ОдинаковыйMessage()
+    {
+        var llm = new FakeLlm();
+        var sut = Sut(llm);
+
+        var missing = await sut.AnalyzeAsync(User, "no-such-chat");
+        missing.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected);
+
+        AddSession("s-foreign");
+        _sessions.All.Single(s => s.Id == "s-foreign").OwnerId = "u2";
+        var foreign = await sut.AnalyzeAsync(User, "s-foreign");
+
+        // Тот же код и тот же текст: «принадлежит другому владельцу» выдавало бы
+        // существование чужого чата — per-owner утечку, которой здесь нет.
+        foreign.Code.Should().Be(WikiChatIngestService.CodeNotFound).And.Be(missing.Code);
+        foreign.Reason.Should().Be("чат не существует").And.Be(missing.Reason);
+
+        // F3: предпрогонный отказ записан в last как реговой — analyze-status показывает
+        // последний исход для обоих.
+        sut.GetLast(User, "no-such-chat")!.Result.Reason.Should().Be("чат не существует");
+        sut.GetLast(User, "s-foreign")!.Result.Reason.Should().Be("чат не существует");
+
+        llm.Calls.Should().BeEmpty("оба отказа — до обращения к модели");
+    }
+
+    // ── W3-6 F3: предпрогонный отказ — последний исход, он записан как реговой ──
+
+    [Fact]
+    public async Task Last_ПредпрогонныйОтказЗаписан_КакИРеговой()
+    {
+        var llm = new FakeLlm();
+        var sut = Sut(llm);
+
+        AddSession("s-task", taskExecution: true);
+        SetHistory("s-task", [new StoredUserMessage("что-то")]);
+        var exec = await sut.AnalyzeAsync(User, "s-task");
+        exec.Code.Should().Be(WikiChatIngestService.CodeTaskExecution);
+        var lastExec = sut.GetLast(User, "s-task");
+        lastExec.Should().NotBeNull("отказ ступени 0 — последний исход этого чата (мутация: снять RecordLast)");
+        lastExec!.Result.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected);
+        lastExec.Result.Code.Should().Be(WikiChatIngestService.CodeTaskExecution);
+
+        // Реговой отказ (wiki_not_initialized) — то же правило, он и прежде был таким:
+        // различия «один пишется, другой нет» больше нет.
+        AddSession("s-nowiki", projectId: "p1");
+        _sessions.All.Single(s => s.Id == "s-nowiki").OwnerId = "u3";
+        var nowiki = await sut.AnalyzeAsync("u3", "s-nowiki");
+        nowiki.Code.Should().Be(WikiChatIngestService.CodeWikiNotInitialized);
+        sut.GetLast("u3", "s-nowiki")!.Result.Code.Should().Be(WikiChatIngestService.CodeWikiNotInitialized);
+
+        // Без владельца ключа нет: входной отказ не записывается (его и спросить нечем).
+        (await sut.AnalyzeAsync("", "s-task")).Outcome.Should().Be(WikiChatIngestService.OutcomeRejected);
+        sut.GetLast("", "s-task").Should().BeNull();
+
+        llm.Calls.Should().BeEmpty();
+    }
+
+    // ── W3-6 F2: исключение вне защищённого прогона — заявка живая, не вечный 202 ──
+
+    [Fact]
+    public async Task Analyze_ИсключениеПослеЗапуска_СледующаяЗаявкаНеВисиР2()
+    {
+        AddSession();
+        SetShortHistory();
+        // Модель не дошла: чтение истории кидает исключение, причина которого сама
+        // не читается — guard RunProtectedAsync спотыкается на e.Message и исключение
+        // выходит за защищённый прогон (тот самый интервал F2).
+        _sessions.ThrowOnRead = n => n == 1 ? new BrokenMessageException() : null;
+
+        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1));
+        var sut = Sut(llm);
+
+        // Мутация «убрать finally» (снять сняние и выдачу из finally): запись остаётся,
+        // первая заявка не выдаётся никогда — обе строки ниже краснеют по таймауту.
+        var first = await sut.AnalyzeAsync(User, ChatId).WaitAsync(TimeSpan.FromSeconds(10));
+        first.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected, first.Reason);
+        first.Reason.Should().Be("разбор чата не завершился", "сбой guard'а — отказ, а не висящая заявка");
+        sut.IsRunning(User, ChatId).Should().BeFalse("неудачный прогон снимает in-flight: чат не «разбирается» вечно");
+        sut.GetLast(User, ChatId)!.Result.Reason.Should().Be("разбор чата не завершился",
+            "неудачный прогон — тоже последний исход (F3)");
+
+        var second = await sut.AnalyzeAsync(User, ChatId).WaitAsync(TimeSpan.FromSeconds(10));
+        second.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied,
+            "следующая заявка начинает свой разбор, а не виснет на мёртвой");
+
+        // Неудачный разбор не двинул курсор: второй прогон видит весь чат и доходит до модели.
+        llm.Calls.Should().HaveCount(2, "первая заявка не дошла до модели; второй разбор — A+B");
+        llm.PromptOf("A", 1).Should().Contain(Marker1, "дельта от нуля: курсор после сбоя не двигался");
+
+        sut.GetLast(User, ChatId)!.Result.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied,
+            "последний исход — успешный второй разбор, неудачный его перечитывает");
+    }
+
+    // ── W3-6, конкурентность: две заявки одного чата — один прогон модели (мера — число вызовов) ──
+
+    [Fact]
+    public async Task Analyze_ДваПараллельныхЗапроса_ОдинПрогонМодели()
+    {
+        AddSession();
+        SetShortHistory();
+
+        var gate = new TaskCompletionSource();
+        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1)) { GateA = gate };
+        var sut = Sut(llm);
+
+        var t1 = sut.AnalyzeAsync(User, ChatId);
+        SpinWait.SpinUntil(() => llm.Calls.Count > 0, 5000).Should().BeTrue("первая заявка реально в прогоне");
+        var t2 = sut.AnalyzeAsync(User, ChatId);
+        gate.SetResult();
+        var results = await Task.WhenAll(t1, t2);
+
+        // Инвариант — одна прогон модели на две заявки. Мера single-flight'а чата —
+        // чтения истории: без него (мутация «снять ветку TryGetValue» в AnalyzeAsync)
+        // вторая заявка начинает СВОЙ разбор: свой ReadAsync + свой CaptureSession,
+        // итого 4 вместо 2 — красное. Модель при этом может остаться вызванной один раз
+        // (in-flight очереди заявок S6b-3 склеивает её внутренние заявки по тому же ref):
+        // именно поэтому мера — уровень чата, а не только число вызовов модели.
+        llm.Calls.Should().HaveCount(2, "две заявки — один разбор: модель A и B ровно по одному разу");
+        _sessions.HistoryReads.Should().Be(2, "один разбор: история прочитана его ReadAsync и захватом; вторая заявка своего разбора не начинает");
+        results.Should().OnlyContain(r => r.Outcome == WikiChatIngestService.OutcomeApplied);
+        results[0].PackageIds.Should().Equal(results[1].PackageIds);
+
+        // И хроннику пишет один разбор: второй (свой) дописал бы те же утверждения вторично.
+        var chronicles = ChronicleFiles();
+        chronicles.Should().HaveCount(1);
+        StatementLines(File.ReadAllText(chronicles[0], System.Text.Encoding.UTF8), Claim1)
+            .Should().Be(1, "хроннику дописывает один разбор, не каждая присоединившаяся заявка");
+    }
+
     // ── отмена заявителя не гасит чужую заявку (хвост ревью S6b-3) ──
 
     [Fact]
@@ -895,17 +1032,29 @@ public class WikiChatIngestTests : IDisposable
         // Сколько раз историю реально читали: маркер «присоединилась заявка или
         // начала свой разбор» — модель одна и та же при обеих реализациях очереди.
         public int HistoryReads;
+        // Тестовый шов F2: исключение на N-м чтении (1-based) — сбой внутри защищённого
+        // прогона, до обращения к модели.
+        public Func<int, Exception?>? ThrowOnRead;
 
         public Session? GetById(string id) => All.FirstOrDefault(s => s.Id == id);
         public IReadOnlyCollection<Session> GetAll() => All;
         public string? ResolveOwnerId(Session s) => s.OwnerId;
         public Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId)
         {
-            Interlocked.Increment(ref HistoryReads);
+            var n = Interlocked.Increment(ref HistoryReads);
+            if (ThrowOnRead?.Invoke(n) is { } err) throw err;
             return Task.FromResult<IReadOnlyList<StoredMessage>>(
                 History.TryGetValue(sessionId, out var h) ? h : new List<StoredMessage>());
         }
         public bool SetWikiMark(string sessionId, string? mark) => true;
+    }
+
+    // Исключение, причина которого сама не читается: guard RunProtectedAsync спотыкается
+    // на e.Message и исключение выходит за защищённый прогон — ровно тот случай, который
+    // держит finally в AnalyzeAsync (F2).
+    private sealed class BrokenMessageException : Exception
+    {
+        public override string Message => throw new InvalidOperationException("причина не читается");
     }
 
     private sealed class WikiFlagOn : ClaudeHomeServer.Services.Composition.IFeatureFlagGate

@@ -216,8 +216,11 @@ public class WikiChatsController : ControllerBase
     private IActionResult MapAnalysis(WikiChatIngestService.ChatResult res)
     {
         if (res.Outcome == WikiChatIngestService.OutcomeRejected && res.Code is { Length: > 0 } code)
+            // fallback — та же формулировка, что у service'а (F1): и в 404 чужого/несуществующего
+            // одна строка на весь контракт — service её и так отдаёт; запасной текст не должен
+            // отличаться от неё.
             return code == WikiChatIngestService.CodeNotFound
-                ? NotFound(new { code, message = res.Reason ?? "чат не найден" })
+                ? NotFound(new { code, message = res.Reason ?? "чат не существует" })
                 : StatusCode(409, new { code, message = res.Reason ?? "разбор отклонён" });
         // applied / awaiting_human / nothing_new / up_to_date и rejected без кода —
         // исход проходит как есть: сам исход и есть контракт.

@@ -25,6 +25,9 @@ namespace ClaudeHomeServer.Tests.Services;
 // 3) Изоляция по владельцу прежнего чата (хвост ревью S6e-3, п.1): чужой чат не раскрывается
 //    ссылкой в хронике продолжения — закреплена проверка владельца (WikiChatIngestService.cs:530),
 //    мутация «снять ResolveOwnerId(prev) != ownerId» краснит Продолжение_ПрежнийЧатЧужогоВладельца_...
+// 4) Смена заголовка прежней хроники (W3-6, dc2b724a п.4): строка «Продолжение чата: [[T]]»
+//    заменяется по префиксу ContinuationLinkPrefix, а не дописывается вторым рядом —
+//    мутация «дописывать по Contains» (прежний код) краснит Продолжение_СменилсяЗаголовок….
 // Цепка настоящая (захват → очередь → применение → хроника), модель — подменённый
 // ICheapTextRunner, как в WikiChatIngestTests.
 public class WikiChatBranchTests : IDisposable
@@ -46,6 +49,11 @@ public class WikiChatBranchTests : IDisposable
     private const string BranchClaim = "Договорились: ветка правит Dockerfile";
     private const string ContClaim = "Продолжаем: собрал на Linux, тесты 44 из 44";
     private const string HandoffText = "Предыдущий чат: обсуждали сборку и решили перенести её на Linux";
+    // Для теста смены заголовка (dc2b724a п.4): новое имя прежнего чата и новые утверждения
+    // для открытых дельт — дедup не должен погасить переразбор.
+    private const string RenewedName = "Собрал на Linux, итог";
+    private const string RenewedClaim = "Итог: собрал на Linux";
+    private const string ContClaim2 = "Продолжаем дальше: фиксация в хронике";
 
     private static string Claims(string claim) =>
         $$"""{"claims":[{"text":"{{claim}}","quote":"{{claim}}"}]}""";
@@ -313,6 +321,84 @@ public class WikiChatBranchTests : IDisposable
             "прежний чат другого владельца — ссылка не формируется");
         contText.Should().NotContain($"[[{parentPage.Model!.Title}]]",
             "хроника чужого чата не раскрывается ссылкой");
+    }
+
+    // ── c4 (dc2b724a п.4): заголовок прежней хроники сменился — строка заменяется, не дублируется ──
+
+    [Fact]
+    public async Task Продолжение_СменилсяЗаголовокПрежнейХроники_СтрокаОдна()
+    {
+        AddSession(ParentId);
+        AddSession(ContId, continuedFrom: ParentId);
+
+        SetHistory(ParentId,
+        [
+            new StoredSessionStartedMessage("claude", "default"),
+            new StoredUserMessage($"{PrefixClaim}. {PrefixMarker}."),
+            new StoredTextMessage("Принято, готовлю план."),
+        ]);
+        SetHistory(ContId,
+        [
+            new StoredSessionStartedMessage("claude", "default"),
+            new StoredUserMessage(HandoffText),
+            new StoredUserMessage(ContClaim),
+            new StoredTextMessage("Продолжаю по договорённому."),
+        ]);
+
+        var llm = new FakeLlm(
+            ("A", Claims(PrefixClaim)), ("B", Plan1),   // разбор прежнего → хроника с заголовком T1
+            ("A", Claims(ContClaim)), ("B", Plan1),     // разбор продолжения → строка со ссылкой на T1
+            ("A", Claims(RenewedClaim)), ("B", Plan1),  // прежний после смены имени → хроника с T2
+            ("A", Claims(ContClaim2)), ("B", Plan1));   // открытая дельта продолжения → перечитывание «О чём»
+        var sut = Sut(llm);
+
+        (await sut.AnalyzeAsync(User, ParentId)).Outcome.Should().Be(WikiChatIngestService.OutcomeApplied);
+        (await sut.AnalyzeAsync(User, ContId)).Outcome.Should().Be(WikiChatIngestService.OutcomeApplied);
+
+        var parentKey = WikiChatIngestService.ChroniclePath(Section, ParentId)!;
+        var contKey = WikiChatIngestService.ChroniclePath(Section, ContId)!;
+        var titleOld = WikiPage.Parse(File.ReadAllText(PathOf(parentKey), Encoding.UTF8)).Model!.Title;
+        var contText1 = File.ReadAllText(PathOf(contKey), Encoding.UTF8);
+        CountOf(contText1, WikiChatIngestService.ContinuationLinkPrefix).Should().Be(1);
+        contText1.Should().Contain($"[[{titleOld}]]", "первая строка — на тогдашний заголовок");
+
+        // Состояние после отката по источнику и смены имени чата: хроники прежнего нет на
+        // диске И в манифесте — ровно то, что делает откат (WikiRetractService.cs:389-391:
+        // файл, запись манифеста, проекции; захват отказывает раздел с потерянным файлом).
+        // Имя чата — новое. Переразбор прежнего создаёт хронику с новым заголовком (T2).
+        File.Delete(PathOf(parentKey));
+        WikiManifest.RollbackTo(Root, Section, new Dictionary<string, string?> { [parentKey] = null });
+        WikiProjections.RegenerateSection(Root, Section);
+        _sessions.GetById(ParentId)!.Name = RenewedName;
+        _sessions.History[ParentId].Add(new StoredUserMessage($"{RenewedClaim}. Итог подведён."));
+        _sessions.History[ParentId].Add(new StoredTextMessage("Готово."));
+        var reanalyze = await sut.AnalyzeAsync(User, ParentId);
+        reanalyze.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, reanalyze.Reason);
+        var titleNew = WikiPage.Parse(File.ReadAllText(PathOf(parentKey), Encoding.UTF8)).Model!.Title;
+        titleNew.Should().NotBe(titleOld, "новая хроника создаётся с новым именем чата");
+
+        // Продолжение переразбирается по открытой дельте: его «О чём» перечитывается.
+        _sessions.History[ContId].Add(new StoredUserMessage($"{ContClaim2}. Фиксирую."));
+        _sessions.History[ContId].Add(new StoredTextMessage("Записал."));
+        (await sut.AnalyzeAsync(User, ContId)).Outcome.Should().Be(WikiChatIngestService.OutcomeApplied);
+
+        // Строка одна и она на новый заголовок: старая заменена по префиксу
+        // ContinuationLinkPrefix, а не оставлена рядом с новой (мутация «дописывать по
+        // Contains» — прежний код — две строки и старая цель, красное).
+        var contText2 = File.ReadAllText(PathOf(contKey), Encoding.UTF8);
+        CountOf(contText2, WikiChatIngestService.ContinuationLinkPrefix).Should().Be(1,
+            "одна ссылка на прежний чат, дубля по смене заголовка нет");
+        contText2.Should().Contain($"[[{titleNew}]]", "строка указывает на существующий заголовок");
+        contText2.Should().NotContain($"[[{titleOld}]]", "прежняя формулировка ссылки не остаётся");
+    }
+
+    private static int CountOf(string haystack, string needle)
+    {
+        var n = 0;
+        for (var i = haystack.IndexOf(needle, StringComparison.Ordinal);
+             i >= 0; i = haystack.IndexOf(needle, i + 1, StringComparison.Ordinal))
+            n++;
+        return n;
     }
 
     // ── подменённая модель и подставные сессии (тот же состав, что в WikiChatIngestTests) ──

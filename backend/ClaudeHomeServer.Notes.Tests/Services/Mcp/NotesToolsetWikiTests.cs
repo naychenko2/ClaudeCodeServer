@@ -311,9 +311,10 @@ public class NotesToolsetWikiTests : IDisposable
         _sessions.All.Add(new Session { Id = "s-foreign", OwnerId = "u2", ProjectId = "p1", Name = "Чужой чат" });
 
         var res = Call(toolset, ctx, "wiki_ingest", Args(("source", "session:s-foreign")));
-        AssertDenied(res, "принадлежит другому владельцу");
+        AssertDenied(res, "чат не существует");
 
-        // Несуществующий — тот же путь и та же форма отказа: вызывающий не различает их.
+        // Несуществующий — тот же путь и та же форма отказа, одним и тем же сообщением
+        // (W3-6 F1): «принадлежит другому владельцу» выдавало бы существование чужого.
         var missing = Call(toolset, ctx, "wiki_ingest", Args(("source", "session:s-none")));
         AssertDenied(missing, "чат не существует");
     }

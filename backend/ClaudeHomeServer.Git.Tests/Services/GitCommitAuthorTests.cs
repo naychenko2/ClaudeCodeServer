@@ -67,6 +67,16 @@ public class GitCommitAuthorTests : IAsyncLifetime, IDisposable
         await _git.StageAsync(null, _repo, name);
     }
 
+    // Трейлерный блок так, как его видит git: строки `Ключ: значение` из последнего абзаца.
+    // Пустой вывод — пустой массив.
+    private async Task<string[]> GitTrailers()
+    {
+        var r = await _git.RunAsync(null, _repo, ["log", "-1", "--format=%(trailers:only=true,unfold=true)"]);
+        r.Ok.Should().BeTrue();
+        var s = r.Stdout.Trim();
+        return s.Length == 0 ? Array.Empty<string>() : s.Split('\n');
+    }
+
     [Fact]
     public async Task Автор_СтавитсяЧерезEnv_ИТрейлерВДоле()
     {
@@ -100,6 +110,51 @@ public class GitCommitAuthorTests : IAsyncLifetime, IDisposable
         UserTrailerLine.Matches(body).Count.Should().Be(1);
         body.Should().Contain("CCS-User: user-7");
         body.Should().NotContain("user-42");
+    }
+
+    [Fact]
+    public async Task ТрейлерыВызывающего_НеВыпадаютИзБлока()
+    {
+        // Тело уже заканчивается блоком Co-Authored-By/CCS-Session: CCS-User обязан встать
+        // в него одной строкой. Отдельный абзац вывел бы существующие трейлеры из блока —
+        // git читает трейлеры только в последнем абзаце (пункт вердикта ревью 0ff5aee9).
+        await StageChange("f4.txt");
+        await _git.CommitAsync(null, _repo,
+            "feat: правка\n\nCo-Authored-By: X <x@y>\nCCS-Session: s1",
+            author: new GitCommitAuthor("user-42", "Мария", "maria"));
+
+        var trailers = await GitTrailers();
+        trailers.Should().HaveCount(3);
+        trailers.Should().Contain(l => l.StartsWith("Co-Authored-By: X <x@y>"));
+        trailers.Should().Contain(l => l.StartsWith("CCS-Session: s1"));
+        trailers.Should().Contain(l => l.StartsWith("CCS-User: user-42"));
+    }
+
+    [Fact]
+    public async Task ТелоБезТрейлеров_АбзацемЧерезПустуюСтроку()
+    {
+        // Блока нет — прежняя склейка через пустую строку: трейлер — единственный абзац.
+        await StageChange("f5.txt");
+        await _git.CommitAsync(null, _repo, "feat: правка b",
+            author: new GitCommitAuthor("user-42", "Мария", "maria"));
+
+        var (_, _, _, _, body) = await HeadOf();
+        body.Should().EndWith("\n\nCCS-User: user-42");
+        (await GitTrailers()).Should().Equal("CCS-User: user-42");
+    }
+
+    [Fact]
+    public async Task ТелоИзОдногоЗаголовка_АбзацемЧерезПустуюСтроку()
+    {
+        // Одноабзацное сообщение git блока трейлеров не видит (проба на git 2.53: без
+        // пустой строки перед блоком — пусто), поэтому здесь обязана пустая строка.
+        await StageChange("f6.txt");
+        await _git.CommitAsync(null, _repo, "feat: только заголовок",
+            author: new GitCommitAuthor("user-42", "Мария", "maria"));
+
+        var (_, _, _, _, body) = await HeadOf();
+        body.Should().Be("feat: только заголовок\n\nCCS-User: user-42");
+        (await GitTrailers()).Should().Equal("CCS-User: user-42");
     }
 
     [Fact]

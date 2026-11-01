@@ -933,11 +933,44 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     // по вхождению в текст: «CCS-User:» внутри абзаца трейлером не является.
     private static readonly Regex UserTrailerLineRx = new(@"(?m)^CCS-User:", RegexOptions.Compiled);
 
-    // Трейлер автора — в конец тела, той же склейкой, что дописывает CCS-Session/CCS-Task
-    // (GitController.AppendDossierTrailer). Если в сообщении уже есть строка `CCS-User:`,
-    // не добавляем: источник правды о человеке — существующий трейлер, ровно один.
-    private static string WithUserTrailer(string message, string userId) =>
-        UserTrailerLineRx.IsMatch(message) ? message : message.TrimEnd() + $"\n\nCCS-User: {userId}";
+    // Строка git-трейлера: `Токен: значение`. Токен — латинские буквы, цифры и дефис;
+    // пробел после двоеточия не обязателен. Так же, как определяет git (пробы
+    // `git interpret-trailers --parse` на git 2.53: «Key:value» — трейлер, «Key:» — трейлер).
+    private static readonly Regex TrailerLineRx = new(@"^[A-Za-z0-9-]+:.*$", RegexOptions.Compiled);
+
+    // Трейлер автора — в конец тела. Если тело уже заканчивается блоком трейлеров, дописываем
+    // в него одной строкой: отдельный абзац вывел бы существующие трейлеры (Co-Authored-By,
+    // CCS-Session, CCS-Task) из блока — git читает трейлеры только в последнем абзаце.
+    // Блока нет — новый абзац через пустую строку. Если в сообщении уже есть строка
+    // `CCS-User:`, не добавляем: источник правды о человеке — существующий трейлер, ровно один.
+    private static string WithUserTrailer(string message, string userId)
+    {
+        if (UserTrailerLineRx.IsMatch(message)) return message;
+        var trimmed = message.TrimEnd();
+        return EndsInTrailerBlock(trimmed)
+            ? trimmed + $"\nCCS-User: {userId}"
+            : trimmed + $"\n\nCCS-User: {userId}";
+    }
+
+    // Блок трейлеров — непустой абзац после последней пустой строки, целиком из строк-
+    // трейлеров. Пустая строка обязательна: одноабзацное сообщение (даже из одних
+    // `Токен: значение`) git блока не видит — проба p2 на git 2.53. Пустые строки —
+    // и состоящие из пробелов/табов: git разделяет абзацы и ими (пробы w1/w2).
+    private static bool EndsInTrailerBlock(string message)
+    {
+        var lines = message.Split('\n');
+        var start = -1;
+        for (var i = lines.Length - 1; i >= 0; i--)
+        {
+            if (string.IsNullOrWhiteSpace(lines[i])) { start = i + 1; break; }
+        }
+        if (start < 0 || start >= lines.Length) return false;
+        for (var i = start; i < lines.Length; i++)
+        {
+            if (!TrailerLineRx.IsMatch(lines[i])) return false;
+        }
+        return true;
+    }
 
     public Task CheckoutAsync(string? ownerId, string root, string branch, CancellationToken ct = default)
     {

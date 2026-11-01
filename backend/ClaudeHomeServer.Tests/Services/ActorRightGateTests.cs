@@ -110,6 +110,31 @@ public class ActorRightGateUnitTests
         gate.Denied(server, tool, "chat", Owner, project.Id).Should().Be(ActorRightGate.DeniedText);
     }
 
+    [Theory]
+    [InlineData("watch", "watch_start")]
+    [InlineData("memory", "memory_remember")]
+    [InlineData("memory", "team_memory_remember")]
+    [InlineData("memory", "memory_to_note")]
+    [InlineData("dify", "create_document_by_text")]
+    [InlineData("architecture", "arch_create_element")]
+    [InlineData("local-media", "local_generate_image")]
+    [InlineData("dev", "build")]
+    [InlineData("tests", "run_tests")]
+    [InlineData("wsp", "chats_send")]
+    [InlineData("personas", "personas_update")]
+    [InlineData("higgsfield", "generate_video")]
+    public void ЛюбойУчастник_ПишущееИИсполняющееДругихСерверов_Отказ(string server, string tool)
+    {
+        var (gate, actors, project) = Arrange();
+        foreach (var who in new[] { Editor, Reader })
+        {
+            actors.Map["chat"] = who;
+            gate.Denied(server, tool, "chat", Owner, project.Id).Should().Be(ActorRightGate.DeniedText, $"{who}: {server}/{tool}");
+        }
+        actors.Map["chat"] = Owner;
+        gate.Denied(server, tool, "chat", Owner, project.Id).Should().BeNull("арендатор");
+    }
+
     [Fact]
     public void ЧитательЧитает_Проходит()
     {
@@ -174,7 +199,8 @@ public class ActorRightGateUnitTests
 
         live.Except(ActorToolRights.All.Keys).Should().BeEmpty(
             "у каждого инструмента должна быть строка таблицы прав актора (default-deny отказал бы участнику)");
-        ActorToolRights.All.Keys.Except(live).Should().BeEmpty("в таблице нет мёртвых строк");
+        ActorToolRights.All.Keys.Where(k => k.StartsWith("wsp/") || k.StartsWith("tasks/") || k.StartsWith("notes/"))
+            .Except(live).Should().BeEmpty("в таблице нет мёртвых строк");
     }
 }
 
@@ -313,6 +339,48 @@ public class ActorRightMcpWiringTests : IDisposable
             nErr.Should().BeFalse(n);
             var (git, _) = await CallAsync("wsp", chat, "git_stage", new { projectId, path = "a.txt" });
             git.Should().NotBe(ActorRightGate.DeniedText, "актор неизвестен или арендатор — права арендатора");
+        }
+    }
+
+    // Пишущие и исполняющие инструменты ДРУГИХ серверов: единая точка в McpTransportController отказывает
+    // и редактору, и читателю с тем же текстом (проверка идёт до тулсета, хвост маршрута не важен)
+    public static IEnumerable<object[]> ЗакрытыеУчастнику() =>
+    [
+        ["watch", "watch_start"],
+        ["memory", "memory_remember"],
+        ["memory", "team_memory_remember"],
+        ["dify", "create_document_by_text"],
+        ["architecture", "arch_create_element"],
+        ["local-media", "local_generate_image"],
+        ["dev", "build"],
+        ["tests", "run_tests"],
+        ["turn-context", "context_attach"],
+    ];
+
+    [Theory]
+    [MemberData(nameof(ЗакрытыеУчастнику))]
+    public async Task РедакторИЧитатель_ПишущееДругихСерверов_Отказ(string server, string tool)
+    {
+        foreach (var role in new[] { "editor", "reader" })
+        {
+            var (_, chat) = await ArrangeAsync(role);
+            _actors.Map[chat] = MemberId;
+            var (text, isError) = await CallAsync(server, chat, tool, new { });
+            isError.Should().BeTrue($"{role}: {server}/{tool}: {text}");
+            text.Should().Be(ActorRightGate.DeniedText, $"{role}: {server}/{tool}");
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(ЗакрытыеУчастнику))]
+    public async Task ВладелецИФон_ПишущееДругихСерверов_ГейтНеОтказывает(string server, string tool)
+    {
+        var (_, chat) = await ArrangeAsync("editor");
+        foreach (var actor in new string?[] { OwnerId, null })
+        {
+            _actors.Map[chat] = actor;
+            var (text, _) = await CallAsync(server, chat, tool, new { });
+            text.Should().NotBe(ActorRightGate.DeniedText, $"{actor ?? "фон"}: {server}/{tool}");
         }
     }
 

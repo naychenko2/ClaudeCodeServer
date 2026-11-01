@@ -84,8 +84,10 @@ public class HandsTurnExecutorTests : IDisposable
         _fx.WithBridge();
         var sink = new RecordingSink();
         var hands = _fx.Runtime(sink: sink);
-        // Обычный конец хода ждёт подтверждения 300 мс — «Стоп» обязан ждать связи дольше
-        await using var h = NewHarness(hands, drainTimeout: TimeSpan.FromMilliseconds(300));
+        // Обычный конец хода ждёт подтверждения 100 мс — «Стоп» обязан ждать связи дольше.
+        // Первая попытка переподключения — не раньше 200 мс (ExecLink.ReconnectAsync), поэтому
+        // событие «агент стучится» всегда приходит после того, как обычное окно уже истекло
+        await using var h = NewHarness(hands, drainTimeout: TimeSpan.FromMilliseconds(100));
 
         await h.StartAsync(HandsSpawn(h), turnId: "turn-offline");
         await h.WaitStdoutAsync("\"init\"", new StringBuilder(), Wait);
@@ -101,8 +103,9 @@ public class HandsTurnExecutorTests : IDisposable
         await sink.WaitAsync(r => r.State == HandsChatStates.Stopped, Wait);
         hands.Registry.Active.Should().BeEmpty("трей не показывает руки занятыми, пока агент ждёт сервер");
 
-        // Связи нет дольше обычного ожидания подтверждения — кадр конца хода не брошен
-        await Task.Delay(TimeSpan.FromMilliseconds(1500));
+        // Связи нет дольше обычного ожидания подтверждения — кадр конца хода не брошен:
+        // агент уже стучится в дверь (событие, а не пауза), а ход всё ещё открыт
+        await h.Server.ReconnectAttempted.Task.WaitAsync(Wait);
         h.Run!.IsCompleted.Should().BeFalse("ход, погашенный человеком, ждёт связи, чтобы донести причину");
 
         h.Server.ReconnectGate.SetResult();

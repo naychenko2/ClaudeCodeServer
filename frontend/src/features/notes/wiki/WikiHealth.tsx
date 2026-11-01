@@ -58,9 +58,28 @@ const KIND_ORDER: HealthKind[] = [
 ];
 
 // Метка → вид. Ключи — строки бэка, менять их здесь нельзя
-const KIND_BY_LABEL: Record<string, HealthKind> = Object.fromEntries(
+// Map, а не объект: метка из файла — недоверенная строка, «constructor» или «toString» в
+// объекте нашли бы прототип вместо вида
+const KIND_BY_LABEL = new Map<string, HealthKind>(
   (Object.keys(KIND_META) as Exclude<HealthKind, 'unknown'>[]).map(k => [KIND_META[k].label, k]),
 );
+
+// «Счёт» находки — разный по виду (WikiFinding.Count): для призрака и общего owns/повышения —
+// число страниц, для дубля — расстояние между заголовками, для «без изменений» — дни. У
+// «упоминания без ссылки» и «ссылки вне раздела» он всегда 1 и ничего не добавляет — скрыт.
+// Незнакомый вид: число показано без пояснения, смысл не выдумываем.
+function countText(kind: HealthKind, n: number): string | null {
+  switch (kind) {
+    case 'dangling': return `ссылаются страниц: ${n}`;
+    case 'nearDuplicate': return `различий в заголовках: ${n}`;
+    case 'stale': return `дней без изменений: ${n}`;
+    case 'ownsConflict':
+    case 'promote': return `страниц: ${n}`;
+    case 'unlinkedMention':
+    case 'outOfReach': return null;
+    default: return `счёт: ${n}`;
+  }
+}
 
 export interface HealthFinding {
   kind: HealthKind;
@@ -82,6 +101,8 @@ export interface HealthReport {
   findings: HealthFinding[];
   /** «## Отказ» — прогон этого раздела не завершился (RenderFailureHealth) */
   failure: string | null;
+  /** «## Не проверено»: страниц без фактов — «нет источников» и «без изменений» их не видят */
+  unchecked: number | null;
 }
 
 // Бэк экранирует недоверенное (Escape): backtick → «\`». Обратно — здесь, иначе человек
@@ -97,7 +118,7 @@ function parseFinding(line: string): HealthFinding {
   // быть « · »: Escape его не убирает), поэтому хвост снимается с конца, а не делением
   const parts = line.split(' · ');
   const kindLabel = parts[0].trim();
-  const kind = KIND_BY_LABEL[kindLabel] ?? 'unknown';
+  const kind = KIND_BY_LABEL.get(kindLabel) ?? 'unknown';
   let from = 1;
   let page: string | null = null;
   const head = parts[1] ?? '';
@@ -130,8 +151,8 @@ function parseFinding(line: string): HealthFinding {
 }
 
 export function parseHealth(content: string): HealthReport {
-  const out: HealthReport = { checkedAt: null, total: null, findings: [], failure: null };
-  let where: 'none' | 'findings' | 'failure' = 'none';
+  const out: HealthReport = { checkedAt: null, total: null, findings: [], failure: null, unchecked: null };
+  let where: 'none' | 'findings' | 'failure' | 'unchecked' = 'none';
   const failure: string[] = [];
   for (const raw of content.split(/\r?\n/)) {
     const line = raw.trim();
@@ -143,6 +164,8 @@ export function parseHealth(content: string): HealthReport {
         if (n) out.total = Number(n[1]);
       } else if (head === 'Отказ') {
         where = 'failure';
+      } else if (head === 'Не проверено') {
+        where = 'unchecked';
       } else {
         where = 'none';
       }
@@ -159,6 +182,11 @@ export function parseHealth(content: string): HealthReport {
     if (!body) continue;
     if (where === 'findings') out.findings.push(parseFinding(body));
     else if (where === 'failure') failure.push(unescape(body));
+    else if (where === 'unchecked') {
+      // «- страниц без фактов (…): N» — число в конце строки (RenderHealth)
+      const m = body.match(/:\s*(\d+)\s*$/);
+      if (m) out.unchecked = Number(m[1]);
+    }
   }
   if (failure.length) out.failure = failure.join(' ');
   return out;
@@ -211,6 +239,7 @@ export function healthErrorText(e: WikiError): string {
 
 function FindingRow({ f }: { f: HealthFinding }) {
   const meta = f.kind === 'unknown' ? null : KIND_META[f.kind];
+  const countLabel = f.count !== null ? countText(f.kind, f.count) : null;
   return (
     <div
       data-testid="wiki-health-row"
@@ -237,8 +266,8 @@ function FindingRow({ f }: { f: HealthFinding }) {
           ключ: {f.key}
         </span>
       )}
-      {f.count !== null && (
-        <span style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textMuted }}>счёт: {f.count}</span>
+      {countLabel && (
+        <span style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textMuted }}>{countLabel}</span>
       )}
       {meta?.title && !f.message && <span style={{ fontSize: FS.sm, color: C.textMuted }}>{meta.title}</span>}
     </div>
@@ -297,13 +326,18 @@ export function WikiHealth({ selectedKey }: { selectedKey: string | null }) {
     setBusy(true);
     setActionError(null);
     void (async () => {
+      let ranOk = false;
       try {
         await runWikiLint();
+        ranOk = true;
         if (seq.current !== mine) return;
         const d = await getWikiHealth(selectedKey);
         if (seq.current === mine) { setNoReport(false); setReport(parseHealth(d.content)); }
       } catch (e) {
-        if (seq.current === mine) setActionError(e);
+        if (seq.current !== mine) return;
+        // прогон прошёл, но отчёта этого раздела нет (404): это «нет данных», а не отказ проверки
+        if (e instanceof WikiError && e.status === 404 && ranOk) { setNoReport(true); setReport(null); return; }
+        setActionError(e);
       } finally {
         setBusy(false);
       }
@@ -344,6 +378,13 @@ export function WikiHealth({ selectedKey }: { selectedKey: string | null }) {
   const plain = groups.filter(g => g.kind !== 'promote');
   const checked = checkedText(report?.checkedAt ?? null);
   const nothingFound = !!report && report.findings.length === 0 && !report.failure;
+  const unchecked = report?.unchecked ?? 0;
+  // Шапка «Находки (N)» и число строк пишет один код: расхождение — обрезанный или
+  // повреждённый файл, и «N находок» в шапке не должно молча стать M строк на экране
+  const totalMismatch = !!report && report.total !== null && report.total !== report.findings.length;
+  // Счётчики и «динамика» имеют смысл только при находках: у отказа прогона и пустого отчёта
+  // сетка из нулей — шум
+  const hasFindings = !!report && report.findings.length > 0;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, paddingBottom: SP.md }}>
@@ -380,7 +421,7 @@ export function WikiHealth({ selectedKey }: { selectedKey: string | null }) {
         <EmptyState
           icon={<HeartPulse size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
           title="Нет данных"
-          subtitle={<span style={{ maxWidth: 360 }}>Этот раздел ещё не проверялся. Нажмите «Проверить сейчас» — здесь появятся находки и счётчики.</span>}
+          subtitle={<span style={{ maxWidth: 360 }}>Отчёта по этому разделу ещё нет. «Проверить сейчас» проверяет всю вики: здесь появятся находки раздела и счётчики.</span>}
         />
       )}
 
@@ -396,13 +437,33 @@ export function WikiHealth({ selectedKey }: { selectedKey: string | null }) {
             </div>
           )}
 
+          {totalMismatch && (
+            <div data-testid="wiki-health-mismatch" style={{ padding: `0 ${SP.md}px` }}>
+              <Notice tone="warning" icon={AlertTriangle} title="Отчёт не сходится сам с собой">
+                {`В шапке отчёта указано находок: ${report!.total}, в списке строк: ${report!.findings.length}. Запустите проверку заново.`}
+              </Notice>
+            </div>
+          )}
+
+          {unchecked > 0 && (
+            <div data-testid="wiki-health-unchecked" style={{ padding: `0 ${SP.md}px` }}>
+              <Notice tone="info" icon={AlertTriangle} title={`Не проверено страниц без фактов: ${unchecked}`}>
+                Находки «нет источников» и «без изменений» эти страницы не видят — отсутствие находок о них ничего не значит.
+              </Notice>
+            </div>
+          )}
+
           {nothingFound ? (
             <EmptyState
               icon={<HeartPulse size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
-              title="Находок нет"
-              subtitle={<span style={{ maxWidth: 360 }}>Последняя проверка ничего не нашла. Следующая — по кнопке выше.</span>}
+              title={unchecked > 0 ? 'Среди проверенных страниц находок нет' : 'Находок нет'}
+              subtitle={<span style={{ maxWidth: 360 }}>
+                {unchecked > 0
+                  ? 'Непроверенные страницы названы выше. Следующая проверка — по кнопке выше.'
+                  : 'Последняя проверка ничего не нашла. Следующая — по кнопке выше.'}
+              </span>}
             />
-          ) : (
+          ) : hasFindings && (
             <>
               {/* Счётчики последнего отчёта — по видам, которых он действительно касается.
                   Метрик прогона здесь нет: их отдельной ручкой бэк не отдаёт */}

@@ -35,13 +35,13 @@ import { BookOpen, ScrollText, Undo2 } from 'lucide-react';
 import {
   C, FS, SP, FLAGS, useFeature, useWindowWidth, TABLET_WIDE_MIN,
   analyzeWikiChat, ingestWikiNote, loadWikiChatAnalyzeStatus, loadWikiChats, requestOpenWikiPage, retractWikiSource,
-  WikiError, type WikiChatAnalyzeOk, type WikiNoteIngestDto, type WikiRetractDto,
+  WikiError, type WikiChatAnalyzeOk, type WikiNoteIngestDto,
 } from 'aihome_shell/kit';
 import { Button } from '../../components/ui/Button';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { ToolbarOverflowMenu, type OverflowItem } from '../../components/ToolbarOverflowMenu';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import { countWord, isOne, personalSectionRefusalText, wikiErrorText } from './wiki/wikiLabels';
+import { personalSectionRefusalText, retractResultText, wikiErrorText } from './wiki/wikiLabels';
 import type { ChatHeaderSummaryCtx } from '../../lib/subsystems/registryCore';
 
 // Пауза между опросами analyze-status: analyze ждёт исход сам ≤10 с (WikiChatsController),
@@ -95,24 +95,6 @@ export async function requestNoteIngest(noteId: string): Promise<string> {
   } catch (e) {
     return e instanceof WikiError ? wikiErrorText(e) : 'Не удалось разобрать заметку';
   }
-}
-
-// countWord и isOne переехали в wikiLabels (W4-3): тот же согласователь нужен «Журналу»,
-// второй копии помощника в фиче нет. Re-export ниже — фасад прежнего пути для «Журнала»
-// (import '../WikiChatActions'): перевод потребителей на новый дом — отдельный шаг (W4-4).
-export { countWord } from './wiki/wikiLabels';
-
-// Итог отката по источнику — текстом, как в «Журнале» (та же форма частей)
-export function retractResultText(r: WikiRetractDto): string {
-  const parts = [
-    r.revertedPackages.length ? `${countWord(r.revertedPackages.length, 'пакет', 'пакета', 'пакетов')} ${isOne(r.revertedPackages.length) ? 'откатан' : 'откатано'}` : '',
-    r.unlinkedPackages.length ? `${r.unlinkedPackages.length} стр. ${isOne(r.unlinkedPackages.length) ? 'очищена' : 'очищено'} от сносок` : '',
-    r.removedChronicles.length ? `${countWord(r.removedChronicles.length, 'хроника', 'хроники', 'хроник')} ${isOne(r.removedChronicles.length) ? 'снята' : 'снято'}` : '',
-    r.remainingPackages.length ? `${countWord(r.remainingPackages.length, 'пакет', 'пакета', 'пакетов')} ${isOne(r.remainingPackages.length) ? 'остался' : 'осталось'} (другой источник)` : '',
-    r.markedSkip ? 'чат помечен «не разбирать»' : '',
-  ].filter(Boolean);
-  const failed = r.failed.length ? ` Частично: ${r.failed.join('; ')}` : '';
-  return `${parts.join(', ') || 'ничего не изменилось'}.${failed}`;
 }
 
 // Точка на триггере, когда в меню есть сообщение (приём шапкиного «⋯» с точкой срока):
@@ -241,7 +223,7 @@ export function WikiChatActions({ session, hasMessages, online, compact }: ChatH
       .then(r => {
         setConfirmOpen(false);
         if (seq.current !== mine) return;
-        setRetractText(retractResultText(r));
+        setRetractText(retractResultText(r, 'чат'));
         setState({ kind: 'idle' });
         setChroniclePath(null);
       })

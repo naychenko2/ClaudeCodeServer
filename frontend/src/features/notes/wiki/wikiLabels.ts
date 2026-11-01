@@ -1,17 +1,16 @@
 // Подписи фичи «Вики»: словари статуса и типа страницы, подписи источников, согласование
 // по числу, тексты отказов контракта, префикс раздела. Раньше они жили в WikiTab (а страница
 // импортировала их оттуда при том, что WikiTab рендерит страницу, — импортный цикл, хвост
-// ревью S5b); countWord — в WikiChatActions, ORIGIN_META — в WikiInbox: тот же согласователь
+// ревью S5b); countWord жил в WikiChatActions, ORIGIN_META — в WikiInbox: тот же согласователь
 // и те же подписи нужны «Журналу», второй копии помощника в фиче не нужно (W4-3, хвосты
 // R-T-1 H3/H4, R-S7c-1 (5)). Здесь только словари и чистые функции: ни компонентов, ни
 // стора, ни импорта чего-либо из фичи. Их читают каталог (WikiTab), страница (WikiPageView),
 // «Входящие» (WikiInbox), карточка пакета (WikiPackageView), «Журнал» и действия чата
-// (WikiChatActions) — часть по прежним путям, через реэкспорт старых мест; их перевод
-// на этот файл — отдельный шаг (W4-4).
+// (WikiChatActions) — все напрямую отсюда, реэкспортов старых мест нет (W4-4).
 import { type BadgeTone } from '../../../components/ui/Badge';
 import { Brain, FileText, GitCommit, Link2, ListChecks, MessageSquare, StickyNote } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { parseSectionKey, type WikiError, type WikiSectionDto } from 'aihome_shell/kit';
+import { parseSectionKey, type WikiError, type WikiRetractDto, type WikiSectionDto } from 'aihome_shell/kit';
 
 // Статусы страницы — их считает код, не модель (ADR-035 §3, WikiFrontmatter.StatusValues)
 export const PAGE_STATUS: Record<string, { tone: BadgeTone; text: string; title: string }> = {
@@ -44,6 +43,24 @@ export function countWord(n: number, one: string, few: string, many: string): st
   const m10 = n % 10, m100 = n % 100;
   const w = (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) ? few : many;
   return `${n} ${isOne(n) ? one : w}`;
+}
+
+// Итог отката по источнику — текстом; один на «Журнал» (тост) и действия чата. Контракт
+// WikiRetractDto (WikiPackagesController.cs): revertedPackages — id побайтно откатанных
+// пакетов; unlinkedPackages — id пакетов, обработанных снятием сносок; remainingPackages —
+// id пакетов, чьи страницы не удалось обработать (причины — в failed); removedChronicles —
+// снятые страницы хроники. Всё, кроме пометки, — пакеты и хроники, не страницы: счёт ведётся
+// ими. subject — кому поставлена пометка «не разбирать» («чат» / «источник»).
+export function retractResultText(r: WikiRetractDto, subject = 'источник'): string {
+  const parts = [
+    r.revertedPackages.length ? `${countWord(r.revertedPackages.length, 'пакет', 'пакета', 'пакетов')} ${isOne(r.revertedPackages.length) ? 'откатан' : 'откатано'}` : '',
+    r.unlinkedPackages.length ? `${countWord(r.unlinkedPackages.length, 'пакет', 'пакета', 'пакетов')} ${isOne(r.unlinkedPackages.length) ? 'очищен' : 'очищено'} от сносок` : '',
+    r.removedChronicles.length ? `${countWord(r.removedChronicles.length, 'хроника', 'хроники', 'хроник')} ${isOne(r.removedChronicles.length) ? 'снята' : 'снято'}` : '',
+    r.remainingPackages.length ? `${countWord(r.remainingPackages.length, 'пакет', 'пакета', 'пакетов')} ${isOne(r.remainingPackages.length) ? 'остался' : 'осталось'} с необработанными страницами` : '',
+    r.markedSkip ? `${subject} помечен «не разбирать»` : '',
+  ].filter(Boolean);
+  const failed = r.failed.length ? ` Частично: ${r.failed.join('; ')}` : '';
+  return `${parts.join(', ') || 'ничего не изменилось'}.${failed}`;
 }
 
 // ─── Подписи источников ───
@@ -110,6 +127,8 @@ export function wikiErrorText(e: WikiError, ctx?: NotFoundContext): string {
     // свой текст прогона (healthErrorText) — он точнее для кнопки линта и остаётся там.
     case 'wiki_llm_wiki_off': return 'Вики выключена в настройках';
     case 'wiki_class_key': return 'Неизвестный класс';
+    // Список чатов разбора (GET /wiki/chats): файл разбора чатов не читается (R-W4-1)
+    case 'wiki_triage_invalid': return 'Файл разбора чатов не читается';
   }
   if (e.status === 401 || e.status === 403) return 'Нет доступа';
   if (e.status === 404) return 'Не найдено';

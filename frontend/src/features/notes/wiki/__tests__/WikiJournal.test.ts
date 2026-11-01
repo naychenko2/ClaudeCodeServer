@@ -22,7 +22,11 @@
 // (7) подставить label вместо genitive в кнопку/заголовок модалки → «падеж кнопки и модалки» и
 //     «откат по источнику» краснеют (доработка H4);
 // (8) убрать countWord (всегда «N применённых записей») → «1 применённая запись» и
-//     «2 применённые записи» краснеют (согласование чисел).
+//     «2 применённые записи» краснеют (согласование чисел);
+// (9) тост отката — прежний текст («N стр. очищено», «остались (другой источник)») → «тост отката:
+//     согласование и контракт unlinked/remaining» краснеет (W4-4);
+// (10) opText — вернуть сырой e.op для неизвестного кода → «неизвестный op» краснеет (W4-4);
+// (11) убрать строку окна (take/linesRead) → «окно журнала» краснеет (W4-4).
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -32,6 +36,13 @@ import {
 } from '../../../../components/chat/__tests__/fakeDom';
 import { WikiJournal } from '../WikiJournal';
 import { WIKI_SUBTABS } from '../wikiTabs';
+
+// Тост отката уходит событием 'cc-local-toast' (lib/toast): шпион на showToast читает, что
+// именно сказано человеку
+const toast = vi.hoisted(() => ({ calls: [] as Array<[string, string, string | undefined]> }));
+vi.mock('../../../../lib/toast', () => ({
+  showToast: (title: string, body: string, kind?: string) => { toast.calls.push([title, body, kind]); },
+}));
 
 // Мок с сохранением остальных экспортов: цепочка мокованного доходит до кита хоста
 // (WikiJournal → ./WikiInbox → kit) — full-replacement мок рвётся на
@@ -114,7 +125,7 @@ const RETRACT_OK = {
 };
 
 // Транспорт для тестов отката: журнал, ответ отката и страница — по адресу запроса;
-// неоговорённый запрос — падение теста (образец serve в lib/__tests__/wiki.test.ts).
+// неоговорённый запрос отвечает null (он не роняет тест сам: проверки — в утверждениях).
 // Страница отдаёт «до отката», а после POST-отката — «после отката»: бэк после отката отдаёт
 // возвращённое состояние, и перечитка обязана его принести
 function serveJournal(pageResponses: Record<string, unknown>) {
@@ -219,6 +230,7 @@ beforeEach(() => {
   req.mockReset();
   req.mockImplementation(() => Promise.resolve(null));
   sel.value = '';
+  toast.calls.length = 0;
   // стор вики — модульный (тот же транспорт, что мокается здесь): каждый тест с чистого
   // состояния, открытые страницы и поколения — из прошлого теста не переносятся
   wikiStore.reset();
@@ -439,6 +451,67 @@ describe('«Журнал» (S7c-2)', () => {
     await settle();
     expect(has(docBody(), '5 применённых записей')).toBe(true);
     expect(has(docBody(), '5 применённые записи')).toBe(false);
+  });
+
+  // Откат по источнику с заданным исходом: открыть запись, подтвердить, вернуть текст тоста
+  async function retractToast(result: unknown): Promise<[string, string, string | undefined]> {
+    seedJournal(RESP);
+    const c = render();
+    await settle();
+    openEntry(c);
+    await settle();
+    click(buttonByTestId(c, 'wiki-journal-retract'), 'Откатить всё из этого чата');
+    await settle();
+    req.mockImplementation((url: string, init?: { method?: string }) => {
+      if (init?.method === 'POST') return Promise.resolve(result);
+      if (url.startsWith('/wiki/journal')) return Promise.resolve(RESP);
+      return Promise.resolve(null);
+    });
+    click(buttonByExactText(docBody(), 'Откатить всё'), 'подтверждение отката');
+    await settle();
+    expect(toast.calls).toHaveLength(1);
+    return toast.calls[0];
+  }
+
+  it('тост отката: числа согласованы, а unlinked/remaining — это пакеты, не страницы и не «другой источник»', async () => {
+    const [title, body, kind] = await retractToast({
+      revertedPackages: ['a'], unlinkedPackages: ['b'], remainingPackages: ['c'],
+      removedChronicles: ['h'], failed: [], markedSkip: false,
+    });
+    expect(title).toBe('Откат по источнику');
+    expect(body).toBe('1 пакет откатан, 1 пакет очищен от сносок, 1 хроника снята, 1 пакет остался с необработанными страницами.');
+    expect(kind).toBe('success');
+  });
+
+  it('тост отката: «2 — осталось/очищено», «5 — откатано», пометка и частичный исход', async () => {
+    const [, body, kind] = await retractToast({
+      revertedPackages: ['a', 'b', 'c', 'd', 'e'], unlinkedPackages: ['f', 'g'], remainingPackages: ['h', 'i'],
+      removedChronicles: [], failed: ['страница x не обработана'], markedSkip: true,
+    });
+    expect(body).toBe(
+      '5 пакетов откатано, 2 пакета очищено от сносок, 2 пакета осталось с необработанными страницами, '
+      + 'источник помечен «не разбирать». Частично: страница x не обработана',
+    );
+    expect(kind).toBe('error');
+    expect(body).not.toContain('стр.');
+    expect(body).not.toContain('другой источник');
+  });
+
+  it('неизвестный op получает нейтральную подпись, а не сырое слово бэка', async () => {
+    const FUTURE = { ...ENTRY_RELINK, op: 'future_op_x' };
+    seedJournal({ ...RESP, entries: [FUTURE] });
+    const c = render();
+    await settle();
+    expect(has(c, 'другое событие')).toBe(true);
+    expect(has(c, 'future_op_x')).toBe(false);
+  });
+
+  it('окно журнала видно: take и linesRead; нечитаемые строки — по всему окну, не по фильтру', async () => {
+    seedJournal({ ...RESP, take: 200, linesRead: 7, invalidLines: 2 });
+    const c = render();
+    await settle();
+    expect(has(c, 'последние 200 строк, прочитано 7; показано записей: 5')).toBe(true);
+    expect(has(c, 'по всему прочитанному окну (7 строк)')).toBe(true);
   });
 
   it('пока откат в пути, кнопка записи заблокирована', async () => {

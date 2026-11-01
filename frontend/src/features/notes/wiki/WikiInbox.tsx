@@ -27,13 +27,6 @@ import { sectionPrefix, wikiErrorText } from './WikiTab';
 import { ORIGIN_META } from './wikiLabels';
 import { WikiPackageView } from './WikiPackageView';
 
-// ─── Словари подписей ───
-
-// ORIGIN_META переехал в wikiLabels (W4-3): те же подписи origin нужны «Журналу», второй
-// копии словаря в фиче нет. Re-export — фасад прежнего пути для «Журнала» и карточки пакета
-// (import './WikiInbox'): перевод потребителей на новый дом — отдельный шаг (W4-4).
-export { ORIGIN_META } from './wikiLabels';
-
 // Отказы «Входящих» — русским текстом по коду бэка (тот же порядок, что wikiErrorText для
 // страниц; здесь свои коды, их в словаре страниц нет). Формулировки — черновые, тексты
 // фичи за Софьей.

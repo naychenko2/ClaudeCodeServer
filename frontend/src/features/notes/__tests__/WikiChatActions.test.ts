@@ -65,7 +65,8 @@ import {
 import { C } from '../../../lib/design';
 import { setAllFlags } from '../../../lib/featureFlags';
 import { setAllSubsystems } from '../../../lib/subsystems';
-import { WikiChatActions, requestNoteIngest, retractResultText } from '../WikiChatActions';
+import { WikiChatActions, requestNoteIngest } from '../WikiChatActions';
+import { retractResultText } from '../wiki/wikiLabels';
 import { manifest as notesManifest } from '../manifest';
 import { ChatHeaderBar } from '../../../components/chat/ChatHeaderBar';
 import { registerSubsystem, type ChatHeaderSummaryCtx } from '../../../lib/subsystems/registryCore';
@@ -566,11 +567,11 @@ describe('Склонение итога отката (доработка S7b, п
     expect(retractResultText(mk(11))).toBe('11 пакетов откатано, 11 хроник снято.');
     expect(retractResultText(mk(21))).toBe('21 пакет откатан, 21 хроника снята.');
   });
-  it('страницы и «осталось (другой источник)» — тоже по числу', () => {
-    expect(retractResultText({ ...mk(0), unlinkedPackages: ['a'] })).toBe('1 стр. очищена от сносок.');
-    expect(retractResultText({ ...mk(0), unlinkedPackages: ['a', 'b', 'c'] })).toBe('3 стр. очищено от сносок.');
-    expect(retractResultText({ ...mk(0), remainingPackages: ['a', 'b'] })).toBe('2 пакета осталось (другой источник).');
-    expect(retractResultText({ ...mk(0), remainingPackages: ['a', 'b', 'c', 'd', 'e'] })).toBe('5 пакетов осталось (другой источник).');
+  it('очищенные и оставшиеся пакеты (контракт: id пакетов, не страницы) — тоже по числу', () => {
+    expect(retractResultText({ ...mk(0), unlinkedPackages: ['a'] })).toBe('1 пакет очищен от сносок.');
+    expect(retractResultText({ ...mk(0), unlinkedPackages: ['a', 'b', 'c'] })).toBe('3 пакета очищено от сносок.');
+    expect(retractResultText({ ...mk(0), remainingPackages: ['a', 'b'] })).toBe('2 пакета осталось с необработанными страницами.');
+    expect(retractResultText({ ...mk(0), remainingPackages: ['a', 'b', 'c', 'd', 'e'] })).toBe('5 пакетов осталось с необработанными страницами.');
   });
 });
 

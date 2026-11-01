@@ -15,7 +15,7 @@ describe('тексты кодов разбора по требованию (S7b-
       'not_found', 'task_execution', 'marked_skip', 'personal_section',
       'wiki_not_initialized', 'packages_limit', 'wiki_note_id',
       // хвост ревью R-S7c-2: общий словарь должен покрывать и эти коды
-      'wiki_llm_wiki_off', 'wiki_class_key',
+      'wiki_llm_wiki_off', 'wiki_class_key', 'wiki_triage_invalid',
     ];
     const texts = codes.map(code => wikiErrorText(new WikiError(409, code as WikiErrorCode, 'x')));
     codes.forEach((code, i) => {
@@ -59,5 +59,12 @@ describe('согласование по числу (countWord, W4-3)', () => {
     for (const [n, want] of cases) {
       expect(countWord(n, 'пакет', 'пакета', 'пакетов')).toBe(want);
     }
+  });
+});
+
+describe('текст wiki_triage_invalid (R-W4-1)', () => {
+  it('файл разбора чатов не читается — русским текстом, не общим fallback', () => {
+    const t = wikiErrorText(new WikiError(409, 'wiki_triage_invalid', 'x'));
+    expect(t).toBe('Файл разбора чатов не читается');
   });
 });

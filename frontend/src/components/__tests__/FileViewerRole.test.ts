@@ -6,11 +6,13 @@
 //   • редактор — «Править» и «Удалить» есть, «Откатить изменения» — нет
 //     (дверь 'file.revert' закрыта на бэке — закрыта и здесь);
 //   • владелец и контроль без myRole (обычный проект/старый бэк) — всё как раньше.
-// Остальные точки записи вьювера (сохранение и диалог конфликта, автосейв draw.io,
-// office-правок, стейдж ханки, «Вернуть эту версию») рисуются только из-под этих гейтов —
-// отдельного гейта не требуют (перечень — в отчёте шага).
+// Двери не переносимы: у каждой точки записи свой гейт по СВОЕЙ двери. Сохранение и автосейв
+// draw.io живут в ветке редактирования под canEdit, office-правок — под canOfficeEdit, стейдж
+// ханки и «Вернуть эту версию» — своими строками, «Сохранить мою копией» в диалоге конфликта —
+// под canCopyOnConflict ('file.create': копия создаёт файл, 'file.save' её не гейтит).
 // Мутации: «снять && canWriteContent у canEdit» красит читателя; «у canRevert» —
-// отсутствие ↺ у читателя и редактора; «у canDelete» — отсутствие «Удалить» у читателя.
+// отсутствие ↺ у читателя и редактора; «у canDelete» — отсутствие «Удалить» у читателя;
+// «у canCopyOnConflict» — кнопку «Сохранить мою копией» у читателя (диалог конфликта).
 //
 // Окружение — как FileViewerSaveConflict.test.ts (тот же монтаж .txt-файла): node +
 // fakeDom + spyOn на api.files. diff в mocked getDiff ненулевой: кнопка «Откатить
@@ -21,8 +23,8 @@
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { FileViewer } from '../FileViewer';
-import { api } from '../../lib/api';
+import { FileViewer, __test } from '../FileViewer';
+import { api, FileConflictError } from '../../lib/api';
 import type { Project, ProjectRoleView } from '../../types';
 import { installFakeDom, uninstallFakeDom, mount, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 
@@ -103,6 +105,52 @@ const hasInlineControl = (container: unknown, title: string) => findNodeByAttr(c
 // Пункт меню «Ещё» — по подписи строки в портале body
 const hasMenuItem = (label: string) => textNodes((globalThis as any).document.body as never).includes(label);
 
+// ——— Диалог конфликта и «копия» (доработка по ревью d90f7171) ———
+// «Сохранить мою копией» — создание файла: свой маршрут 'POST files/create' и своя дверь
+// 'file.create'. Роль с закрытой 'file.create' (читатель) имеет закрытую и 'file.save':
+// «Править» ей нет, а значит через UI к 409 она не доходит — диалог конфликта в этой роли
+// НЕДОСТИЖИМ. Состояние «диалог открыт, дверь копии закрыта» получаем тестовым хуком
+// __test.writeHooks.save() — тем же паттерном, что FileViewerSaveConflict.test.ts (хук держит
+// замыкание handleSave последнего рендера; из UI его никто не зовёт). Проверяем рендер
+// диалога, а не путь к нему: путь появится, если дверь 'file.create' когда-нибудь закроют
+// роли, которая писать может.
+const CONFLICT_BODY = { sha256: 'sha-other', content: 'their text', author: null, changedAt: '2026-11-01T09:00:00Z', source: null };
+
+async function openConflictAs(role?: ProjectRoleView) {
+  (globalThis as any).localStorage.setItem('cc_display_name', 'Мария');
+  vi.spyOn(api.files, 'saveContent').mockImplementation(() => { throw new FileConflictError(CONFLICT_BODY); });
+  const container = await mountViewer(role);
+  const hooks = __test.writeHooks.current;
+  expect(hooks, 'тестовый хук сохранения не установлен').not.toBeNull();
+  await act(async () => { await hooks!.save(); await vi.advanceTimersByTimeAsync(100); });
+  return container;
+}
+
+// Диалог — портал в document.body
+const bodyEl = () => (globalThis as any).document.body as never;
+const bodyText = () => textNodes(bodyEl()).join('\n');
+const dialogActions = () => findNodeByAttr(bodyEl(), 'data-testid', 'conflict-actions');
+
+// Кнопка диалога по подписи: текстовый узел → ближайший предок с onClick (ui/Button)
+function clickDialogAction(label: string): (() => void) | null {
+  let hit: (() => void) | null = null;
+  const walk = (n: any): void => {
+    if (hit) return;
+    if (n.nodeType === 3 && n.nodeValue === label) {
+      let p = n.parentNode;
+      while (p) {
+        const props = reactProps(p) as { onClick?: unknown } | null;
+        if (props && typeof props.onClick === 'function') { hit = props.onClick as () => void; return; }
+        p = p.parentNode;
+      }
+      return;
+    }
+    for (const c of n.childNodes ?? []) walk(c);
+  };
+  walk(bodyEl());
+  return hit;
+}
+
 describe('FileViewer: контролы записи по роли (S2c-F4c)', () => {
   beforeEach(setupMocks);
   afterEach(teardown);
@@ -144,5 +192,34 @@ describe('FileViewer: контролы записи по роли (S2c-F4c)', ()
     await openOverflowMenu(container);
     expect(hasMenuItem('Откатить изменения'), 'откат есть').toBe(true);
     expect(hasMenuItem('Удалить'), 'удаление есть').toBe(true);
+  });
+
+  // ——— «Сохранить мою копией» в диалоге конфликта: за своей дверью 'file.create' ———
+  it('конфликт у читателя: диалог открыт, кнопки копии — 0 узлов, подписи имени копии нет', async () => {
+    await openConflictAs('reader');
+    const text = bodyText();
+    expect(dialogActions(), 'диалог конфликта открыт').not.toBeNull();
+    expect(text).toContain('Файл изменили, пока вы правили');
+    expect(text, 'кнопка «копия» скрыта целиком, не отключена').not.toContain('Сохранить мою копией');
+    expect(text, 'подписи имени копии нет').not.toContain('readme (копия, Мария).txt');
+    expect(text, 'остальные действия диалога на месте').toContain('Заменить своей');
+    expect(text).toContain('Взять чужую версию');
+  });
+
+  it('конфликт у редактора: копия на месте (дверь file.create редактору открыта)', async () => {
+    await openConflictAs('editor');
+    expect(bodyText(), 'кнопка «копия» есть').toContain('Сохранить мою копией');
+    expect(bodyText(), 'имя копии подписано').toContain('readme (копия, Мария).txt');
+  });
+
+  it('конфликт у владельца: копия работает как раньше — создаёт файл-копию и закрывает диалог', async () => {
+    const create = vi.spyOn(api.files, 'createFile').mockResolvedValue(undefined);
+    await openConflictAs('owner');
+    const btn = clickDialogAction('Сохранить мою копией');
+    expect(btn, 'кнопка «копия» в диалоге').not.toBeNull();
+    await act(async () => { btn!(); await vi.advanceTimersByTimeAsync(100); });
+    expect(create, 'копия — новый файл с моим текстом, оригинал не тронут')
+      .toHaveBeenCalledWith('p1', 'docs/readme (копия, Мария).txt', 'hello world');
+    expect(dialogActions(), 'конфликт закрыт').toBeNull();
   });
 });

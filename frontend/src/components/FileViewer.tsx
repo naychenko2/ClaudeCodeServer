@@ -548,9 +548,12 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   }, [filePath, fromRoot]);
   // Маршрут + право записи по роли (S2c-F4c): контрол записи есть, только если у проекта
   // есть маршрут И роль умеет эту дверь контента (contentRights.ts). Закрытый — ПРЯЧЕТ,
-  // не отключён: решение живёт в одном месте, а не по каждому контролу. Остальные точки
-  // записи (сохранение/конфликт, автосейв draw.io, office-правок, стейдж, вернуть версию)
-  // рисуются только из-под этих гейтов — отдельного гейта не требуют.
+  // не отключён: решение живёт в одном месте, а не по каждому контролу. Двери не переносимы:
+  // под чужой дверью точка записи получила бы отказ бэка, поэтому у каждой точки — свой гейт.
+  // Сохранение и автосейв draw.io — только в ветке редактирования под canEdit (главное
+  // действие режима: «Сохранить», «Редактировать» draw.io); office-правок — под canOfficeEdit;
+  // стейдж ханки и «вернуть версию» — своими строками ниже; «Сохранить мою копией» в диалоге
+  // конфликта — под canCopyOnConflict: копия СОЗДАЁТ файл, её гейтит 'file.create', не 'file.save'.
   const canEdit = can('PUT files/content') && fromRoot && canWriteContent(project, 'file.save');
   const canDelete = can('DELETE files') && fromRoot && canWriteContent(project, 'file.delete');
   const canRevert = can('POST files/revert') && fromRoot && canWriteContent(project, 'file.revert');
@@ -558,6 +561,10 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const canRestoreVersion = can('POST git/commits/{sha}/restore-file') && canWriteContent(project, 'git.restoreVersion');
   const canToMarkdown = can('POST files/document/to-markdown') && canWriteContent(project, 'file.toMarkdown');
   const canOfficeEdit = canEdit && can('POST files/office-force-save') && can('POST files/office-discard') && canWriteContent(project, 'file.office');
+  // «Сохранить мою копией» в диалоге конфликта создаёт НОВЫЙ файл рядом с оригиналом, а не
+  // пишет его: тот же состав, что у «Создать файл» в дереве (FileExplorer.canCreateFile).
+  // Под canEdit её вести нельзя: canEdit гейтит 'file.save' и fromRoot, а не 'file.create'.
+  const canCopyOnConflict = can('POST files/create') && canWriteContent(project, 'file.create');
   const media = useMediaStream(project.id, filePath, viaAgent,
     !isHostMode && tab === 'file' && !!(fileContent?.isVideo || fileContent?.isAudio));
   // Картинки markdown у локального проекта: билет на каждый путь приходит асинхронно, до
@@ -2755,7 +2762,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
             again={saveConflict.again}
             copyError={saveConflict.copyError}
             busy={saveConflict.busy}
-            onSaveCopy={() => { void conflictSaveCopy(); }}
+            onSaveCopy={canCopyOnConflict ? () => { void conflictSaveCopy(); } : undefined}
             onReplace={() => { void conflictReplace(); }}
             onTakeTheirs={conflictTakeTheirs}
             onClose={() => setSaveConflict(null)}

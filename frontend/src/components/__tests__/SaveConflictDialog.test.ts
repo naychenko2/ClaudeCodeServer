@@ -104,6 +104,19 @@ describe('SaveConflictDialog', () => {
     expect(render()).toContain('menu (копия, Мария).md');
   });
 
+  // Доработка по ревью d90f7171: копия — за своей дверью ('file.create'). Вызывающий без
+  // этого права не передаёт onSaveCopy — и копии нет ни в ряду, ни в подписи (0 узлов).
+  it('без onSaveCopy: кнопки копии и подписи имени нет; «заменить» и «взять чужое» — на месте', () => {
+    for (const mobile of [false, true]) {
+      mobileFlag.value = mobile;
+      const html = render({ onSaveCopy: undefined });
+      expect(html, 'кнопки копии нет').not.toContain(COPY);
+      expect(html, 'подписи имени копии нет').not.toContain('menu (копия, Мария).md');
+      expect(html, '«заменить» остался').toContain(REPLACE);
+      expect(html, '«взять чужое» остался').toContain(TAKE);
+    }
+  });
+
   it('Office/draw.io: без диффа — две строки версий', () => {
     const html = render({ noDiff: true, diff: undefined, mineAt: '14:02' });
     expect(html).not.toContain('conflict-diff');

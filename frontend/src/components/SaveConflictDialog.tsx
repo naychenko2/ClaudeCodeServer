@@ -41,7 +41,9 @@ interface Props {
   again?: boolean;                                 // повторный конфликт
   copyError?: boolean;
   busy?: boolean;
-  onSaveCopy: () => void;
+  // Нет = дверь 'file.create' закрыта (роль не создаёт файлы): кнопки копии и её подписи в
+  // диалоге нет вовсе — ПРЯЧЕТ, не «отключена» (о праве решает вызывающий).
+  onSaveCopy?: () => void;
   onReplace: () => void;
   onTakeTheirs: () => void;
   onClose: () => void;
@@ -51,6 +53,8 @@ const DIFF_MAX_H = 260;
 
 // Диалог конфликта сохранения. Главное действие — «Сохранить мою копией»: ничего не теряется.
 // Десктоп: взять чужое · заменить · копия (primary справа). Мобила: столбиком, копия первой.
+// Без onSaveCopy (вызывающий не имеет права создавать файл) копия выпадает и из ряда, и из
+// подписи имени: остаются «взять чужое» и «заменить».
 export function SaveConflictDialog({
   conflict, fileName, copyName, diff, diffLoading, noDiff, mineAt, again, copyError, busy,
   onSaveCopy, onReplace, onTakeTheirs, onClose,
@@ -63,7 +67,11 @@ export function SaveConflictDialog({
   const title = conflict.code === 'note_changed' ? 'Заметку изменили, пока вы правили' : 'Файл изменили, пока вы правили';
   const what = conflict.code === 'note_changed' ? 'заметку' : 'файл';
 
-  const copy = <Button variant="primary" size="md" fullWidth disabled={busy} onClick={onSaveCopy}>Сохранить мою копией</Button>;
+  // Без права на копию её нет в диалоге вообще (0 узлов), а не «задизейблена»: человек не
+  // видит действия, которое бэк всё равно отказал бы
+  const copy = onSaveCopy
+    ? <Button variant="primary" size="md" fullWidth disabled={busy} onClick={onSaveCopy}>Сохранить мою копией</Button>
+    : null;
   const replace = <Button variant="secondary" size="md" fullWidth disabled={busy} onClick={onReplace}>Заменить своей</Button>;
   const take = <Button variant="ghost" size="md" fullWidth disabled={busy} onClick={onTakeTheirs}>Взять чужую версию</Button>;
 
@@ -75,9 +83,11 @@ export function SaveConflictDialog({
       >
         {isMobile ? <>{copy}{replace}{take}</> : <>{take}{replace}{copy}</>}
       </div>
-      <div style={{ fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.sans }}>
-        Копия: <span style={{ fontFamily: FONT.mono, color: C.textSecondary, overflowWrap: 'anywhere' }}>{copyName}</span>
-      </div>
+      {copy && (
+        <div style={{ fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.sans }}>
+          Копия: <span style={{ fontFamily: FONT.mono, color: C.textSecondary, overflowWrap: 'anywhere' }}>{copyName}</span>
+        </div>
+      )}
     </div>
   );
 

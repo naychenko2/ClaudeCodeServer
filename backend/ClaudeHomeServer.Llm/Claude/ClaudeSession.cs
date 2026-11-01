@@ -4381,6 +4381,14 @@ public class ClaudeSession : ILlmSessionAdapter
         if (_lastBareModeApplied)
             envOverrides["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1";
 
+        // Приватный чат общего проекта (S2d-5c): авто-память CLI пишет факты в общую папку
+        // ~/.claude/projects/<папка>/memory, откуда их прочтёт чат любого участника. Выключаем
+        // для чатов с PrivateToUserId. Только значение "1" (0 включило бы принудительно).
+        // Признак — свойство СЕССИИ, не хода: сигнатура запуска стабильна; «Сделать общим»
+        // меняет env и перезапускает процесс один раз.
+        if (Info.PrivateToUserId is not null)
+            envOverrides["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1";
+
         // План хода (TaskCreate/TaskUpdate): с CLI 2.1.281 (24.09) план-тулы в -p отдаются
         // лишь части моделей, остальным — только по этой переменной (гейт найден в бинарнике
         // 2.1.292; замер: без неё у Fable 5.1 и Sonnet 5.5 их нет). Ставим всегда:

@@ -38,6 +38,9 @@ const NoteEditor = lazy(() => import('./NoteEditor').then(m => ({ default: m.Not
 interface SaveConflictState {
   error: NoteConflictError;
   mine: string;
+  // Заголовок черновика на момент попытки (доработка S2c-F3): «Заменить своей» пишет его по
+  // тому же правилу, что save(), — то, что человек набрал, не теряется ни на одном действии диалога.
+  draftTitle: string;
   again: boolean;
   copyError: boolean;
   busy: boolean;
@@ -386,7 +389,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
       else setNote(updated);
     } catch (e) {
       // Из правки не выходим: несохранённые правки должны остаться (как в FileViewer)
-      if (e instanceof NoteConflictError) { openSaveConflict(e, draftBody); return; }
+      if (e instanceof NoteConflictError) { openSaveConflict(e, draftBody, draftTitle); return; }
       if (e instanceof OfflineError) {
         // Офлайн: правка остаётся локальной и в очереди несёт свою базу — при синхронизации
         // она пишется обычным путём по If-Match, а не поверх чужой правки молча (notesOffline)
@@ -411,9 +414,9 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     try { return localStorage.getItem('cc_display_name') || ''; } catch { return ''; }
   };
 
-  const openSaveConflict = (e: NoteConflictError, mine: string) => {
+  const openSaveConflict = (e: NoteConflictError, mine: string, title: string) => {
     setSaveConflict({
-      error: e, mine, again: false, copyError: false, busy: false,
+      error: e, mine, draftTitle: title, again: false, copyError: false, busy: false,
       // Другой даты у своей версии нет: это тот текст, который только что не записался
       mineAt: relTime(new Date().toISOString()),
     });
@@ -446,7 +449,12 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     if (!c || c.busy || !note) return;
     setSaveConflict({ ...c, busy: true });
     try {
-      const updated = await api.notes.update(note.id, { content: c.mine }, c.error.sha256 ?? undefined);
+      const updated = await api.notes.update(note.id, {
+        // Переименование черновика — по тому же правилу, что save(): только если отличается от
+        // заголовка прочитанной версии. Без него «Заменить своей» молча теряло переименование.
+        title: c.draftTitle !== note.title ? c.draftTitle : undefined,
+        content: c.mine,
+      }, c.error.sha256 ?? undefined);
       noteEtag.current = updated.etag ?? null;
       draftEtag.current = updated.etag ?? null;
       setSaveConflict(null);

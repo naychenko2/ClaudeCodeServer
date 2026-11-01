@@ -159,6 +159,23 @@ function clickIn(from: any, label: string): (() => void) | null {
 const clickToolbar = (label: string) => clickIn(container, label);
 const clickDialog = (label: string) => clickIn((globalThis as any).document.body, label);
 
+// Поле заголовка в тулбаре правки (NoteView.tsx:564): input, чей value — черновик заголовка.
+// Ищем по точному значению черновика, а не по первому input: поля модалок (перенос, теги)
+// тоже input'ы — их на этом экране нет только потому, что модалки закрыты.
+function titleInput(currentValue: string) {
+  let hit: any = null;
+  const walk = (n: any): void => {
+    if (hit) return;
+    if (n.nodeType === 1 && n.nodeName === 'INPUT') {
+      const p = reactProps(n) as { value?: unknown; onChange?: unknown } | null;
+      if (p && p.value === currentValue && typeof p.onChange === 'function') { hit = n; return; }
+    }
+    for (const c of n.childNodes ?? []) walk(c);
+  };
+  walk(container);
+  return hit;
+}
+
 // Войти в правку и нажать «Сохранить» — тот путь, которым это делает человек.
 // Возвращает замыкание последнего нажатия, чтобы менять его поведение в тесте.
 async function startSaving(type?: string) {
@@ -287,6 +304,42 @@ describe('NoteView: диалог конфликта сохранения (S2c-F3
     expect(btn, 'кнопка «заменить» в диалоге').not.toBeNull();
     await act(async () => { btn!(); await flush(); });
     expect(upd.mock.calls[0][1].content, 'пишется моя версия').toBe('my text');
+    expect(upd.mock.calls[0][2], 'If-Match — sha256 из тела 409').toBe('sha-other');
+    expect(dialogActions(), 'конфликт закрыт').toBeNull();
+  });
+
+  it('переименование черновика не теряется при «Заменить своей»: title по тому же правилу, что save()', async () => {
+    // Сценарий вердикта ревью: переименовал заметку и поправил текст, под ней её изменил
+    // другой → 409. Обычное сохранение несло новый заголовок; «Заменить своей» обязана
+    // нести его тоже — то, что человек набрал, не теряется ни на одном действии диалога.
+    vi.spyOn(api.notes, 'get').mockResolvedValue(NOTE({ etag: 'etag-1' }) as never);
+    const upd = vi.spyOn(api.notes, 'update').mockImplementation(() => { throw conflictError(); });
+    mountView();
+    await flush();
+    const edit = clickToolbar('Править');
+    expect(edit, 'кнопка «Править» в тулбаре').not.toBeNull();
+    await act(async () => { edit!(); await flush(); });
+    // Переименование — полем заголовка в тулбаре правки, текст — редактором: как это делает человек
+    const titleEl = titleInput('Заметка');
+    expect(titleEl, 'поле заголовка в режиме правки').not.toBeNull();
+    const onTitle = (reactProps(titleEl) as { onChange: (e: { target: { value: string } }) => void }).onChange;
+    await act(async () => { onTitle({ target: { value: 'Новая заметка' } }); await flush(); });
+    expect(editorHooks.current, 'заглушка редактора не отдала onChange').not.toBeNull();
+    await act(async () => { editorHooks.current!('my edited text'); await flush(); });
+    const save = clickToolbar('Сохранить');
+    expect(save, 'кнопка «Сохранить» в тулбаре правки').not.toBeNull();
+    await act(async () => { await save!(); });
+    await flush();
+    expect(upd.mock.calls[0][1].title, 'первое сохранение несло новый заголовок').toBe('Новая заметка');
+    expect(dialogActions(), 'диалог конфликта открыт').not.toBeNull();
+    // «Заменить своей»: повторная запись по актуальному состоянию — тот же текст и тот же заголовок
+    upd.mockReset();
+    upd.mockResolvedValue(NOTE({ id: 'n-new', title: 'Новая заметка', etag: 'sha-other' }) as never);
+    const btn = clickDialog('Заменить своей');
+    expect(btn, 'кнопка «заменить» в диалоге').not.toBeNull();
+    await act(async () => { btn!(); await flush(); });
+    expect(upd.mock.calls[0][1].content, 'пишется моя версия').toBe('my edited text');
+    expect(upd.mock.calls[0][1].title, 'переименование не потерялось').toBe('Новая заметка');
     expect(upd.mock.calls[0][2], 'If-Match — sha256 из тела 409').toBe('sha-other');
     expect(dialogActions(), 'конфликт закрыт').toBeNull();
   });

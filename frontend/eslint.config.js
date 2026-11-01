@@ -5,6 +5,7 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 import noRawColor from './eslint-rules/no-raw-color.js'
+import { LEGACY_ALLOWED, NOTES_MODULE_GUARD, NOTES_WIKI_GUARD } from './modules/notes/guardLists.mjs'
 
 // Файлы, которым сырой hex положен по природе (см. docs/design/guidelines.md,
 // раздел «Железные правила» — там же перечислены легальные исключения):
@@ -107,49 +108,44 @@ export const videoEditorImportGuard = {
   },
 }
 
-// Сторож MF-модуля «Заметки» (LLM-wiki, QA B1 critical): сторы ядра хоста — относительный импорт
-// из вики-части модуля (src/features/notes/wiki/**, WikiChatActions.tsx) соберётся ВТОРОЙ копией
-// внутрь remote: флаги пусты, realtime мёртв, `instanceof WikiError` не проходит. Весь
-// src/features/notes/** закрыть как у image-editor нельзя: легаси «Заметок» (useSphereOf,
-// personaZone, registryCore) тянет lib напрямую — это вне задачи LLM-wiki. Поэтому два правила:
-// узкое на весь модуль (только сторы ядра) и широкое на вики-часть (сторы ядра + design/breakpoints:
-// они в ките и другим remote запрещены — следуем их правилу). Подключается дважды: здесь и в
-// eslint.remote.config.js — блокирующий шаг CI; второй независимый барьер — плагин сборки
-// (modules/notes/vite.config.ts). Типы бандл не несут, `import type` разрешён (как у других сторожей).
-export const notesStoreImportGuard = {
-  files: ['src/features/notes/**/*.{ts,tsx}'],
-  // Тесты в бандл remote не попадают, вторую копию стора они не соберут — им можно в ядро напрямую
-  ignores: ['**/__tests__/**', '**/*.test.{ts,tsx}'],
+// Сторож MF-модуля «Заметки» (LLM-wiki, QA B1 critical; доработка ревью 0c1052e1): сторы ядра
+// хоста — относительный импорт из модуля соберётся ВТОРОЙ копией внутрь remote: флаги пусты,
+// realtime мёртв, `instanceof WikiError` не проходит. Весь src/features/notes/** закрыть как у
+// image-editor нельзя: легаси «Заметок» (useSphereOf, personaZone, registryCore) тянет lib
+// напрямую, но не сторы ядра — поэтому два правила: узкое на весь модуль (только сторы ядра)
+// и широкое на вики-часть (сторы ядра + design/breakpoints: они в ките и другим remote
+// запрещены — следуем их правилу). Списки запретных модулей и области importer'ов здесь НЕ
+// вторая правда: они в modules/notes/guardLists.mjs, из которого те же данные строит и плагин
+// сборки (modules/notes/vite.config.ts) — для любой пары (импортёр, модуль) вердикты барьеров
+// совпадают. Подключается дважды: здесь и в eslint.remote.config.js — блокирующий шаг CI;
+// второй независимый барьер — плагин сборки. Типы бандл не несут, `import type` разрешён
+// (как у других сторожей).
+const notesImportGuard = (area) => ({
+  files: [`${area.dir}/**/*.{ts,tsx}`, ...(area.extraFiles ?? [])],
+  // Тесты в бандл remote не попадают, вторую копию стора они не соберут — им можно в ядро
+  // напрямую; поимённые легаси-исключения («легаси, вне LLM-wiki») — LEGACY_ALLOWED там же,
+  // сейчас пуст.
+  ignores: ['**/__tests__/**', '**/*.test.{ts,tsx}', ...LEGACY_ALLOWED],
   rules: {
     'no-restricted-imports': ['error', {
       patterns: [{
-        group: ['**/lib/featureFlags', '**/lib/wiki', '**/lib/offline', '**/lib/signalr', '**/lib/toast'],
+        group: area.forbidden.map((m) => `**/lib/${m}`),
         allowTypeImports: true,
-        message: 'Модуль «Заметки» берёт сторы ядра (featureFlags, wiki, offline, signalr, toast) только из aihome_shell/kit: прямой импорт соберёт вторую копию в remote.',
+        message: area.name === 'notes-wiki'
+          ? `Вики-часть модуля «Заметки» берёт ядро только из aihome_shell/kit (${area.forbidden.join(', ')}): прямой импорт соберёт вторую копию в remote (флаги пусты, realtime мёртв, отдельный экземпляр WikiError).`
+          : `Модуль «Заметки» берёт сторы ядра (${area.forbidden.join(', ')}) только из aihome_shell/kit: прямой импорт соберёт вторую копию в remote.`,
       }],
     }],
   },
-}
+})
 
-// Широкое правило для вики-части модуля: тот же набор плюс design/breakpoints (в ките, другим remote
-// запрещены). Идёт ПОСЛЕ notesStoreImportGuard: для вики-файлов его no-restricted-imports заменяет
-// узкий список на широкий, для остального «Заметок» остаётся узкий.
-// Allow-list легаси-файлов пуст: прямые импорты сторов остались только в тестах (проверено grep
-// по features/notes/**, 01.11.2026). Новые легаси-наружения вне LLM-wiki — исключать здесь с
-// комментарием, не чинить массово.
-export const notesWikiImportGuard = {
-  files: ['src/features/notes/wiki/**/*.{ts,tsx}', 'src/features/notes/WikiChatActions.tsx'],
-  ignores: ['**/__tests__/**', '**/*.test.{ts,tsx}'],
-  rules: {
-    'no-restricted-imports': ['error', {
-      patterns: [{
-        group: ['**/lib/featureFlags', '**/lib/wiki', '**/lib/offline', '**/lib/signalr', '**/lib/toast', '**/lib/design', '**/lib/breakpoints'],
-        allowTypeImports: true,
-        message: 'Вики-часть модуля «Заметки» берёт ядро только из aihome_shell/kit: прямой импорт соберёт вторую копию в remote (флаги пусты, realtime мёртв, отдельный экземпляр WikiError).',
-      }],
-    }],
-  },
-}
+// Узкое правило: весь модуль, только сторы ядра.
+export const notesStoreImportGuard = notesImportGuard(NOTES_MODULE_GUARD)
+
+// Широкое правило для вики-части. Идёт ПОСЛЕ notesStoreImportGuard: для вики-файлов его
+// no-restricted-imports заменяет узкий список на широкий, для остального «Заметок»
+// остаётся узкий (тот же порядок областей и в плагине сборки — GUARD_AREAS).
+export const notesWikiImportGuard = notesImportGuard(NOTES_WIKI_GUARD)
 
 // Сторож хостов контекста хода (ADR-023 §Д6, «единственный владелец действий вида»): строка контекста,
 // чипы действий и панель «Контекст» рисуют по контракту ContextKindApi и не знают вертикалей. Ни

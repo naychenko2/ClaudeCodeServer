@@ -12,19 +12,28 @@ import path from 'node:path';
 import react from '@vitejs/plugin-react';
 import { federation } from '@module-federation/vite';
 import { hostReactShared } from '../hostReactShared';
+import { GUARD_AREAS, LEGACY_ALLOWED } from './guardLists.mjs';
 
-// Сторож графа сборки remote «Заметки» (LLM-wiki, QA B1 critical): сторы ядра хоста
-// (featureFlags, offline, signalr, toast, wiki) не должны попасть в remote ВТОРОЙ копией через
-// прямой относительный импорт из вики-части модуля — вторая копия стора означает пустые флаги,
+// Сторож графа сборки remote «Заметки» (LLM-wiki, QA B1 critical; доработка ревью 0c1052e1):
+// сторы ядра хоста (featureFlags, offline, signalr, toast, wiki) не должны попасть в remote
+// ВТОРОЙ копией через прямой относительный импорт — вторая копия стора означает пустые флаги,
 // мёртвый realtime и отдельный экземпляр WikiError (`instanceof` не проходит). Это второй
 // независимый барьер после ESLint-сторожа (notesStoreImportGuard/notesWikiImportGuard в
 // eslint.config.js): ошибка падает на сборке, а не на ревью.
-// Запрет — по импортеру, как в ESLint-страже: вики-часть (src/features/notes/wiki/**,
-// WikiChatActions.tsx, кроме тестов) — запрещена; легаси остального модуля (useSphereOf,
-// personaZone, registryCore) — вне задачи LLM-wiki и не трогается. Импорт через 'aihome_shell/kit'
-// не относительный и не помечается: MF резолвит его в кит хоста, второй копии нет.
-const FORBIDDEN_STORE = /(^|\/)src\/lib\/(featureFlags|offline|signalr|toast|wiki)(\.ts)?$/;
-const GUARDED_IMPORTER = /src\/features\/notes\/(wiki\/.+\.[cm]?[jt]sx?|WikiChatActions\.tsx)$/;
+// Области импортёров и списки запретных здесь НЕ вторая правда: они читаются из guardLists.mjs
+// (тот же модуль, что строит ESLint-правила) — для любой пары (импортёр, модуль) вердикты
+// барьеров совпадают. Раньше плагин смотрел только вики-часть, а ESLint — весь модуль; теперь
+// области одинаковые: весь модуль (узкий список) и его вики-часть (широкий). Поимённые
+// легаси-исключения — LEGACY_ALLOWED там же. Импорт через 'aihome_shell/kit' не относительный
+// и не помечается: MF резолвит его в кит хоста, второй копии нет. Транзитивные импорты
+// (components/ui/* → lib/design) не помечаются: смотрим только прямые импорты файлов области —
+// как ESLint-страж.
+const AREA_MATCHERS = GUARD_AREAS.map((area) => ({
+  // запретные резолвим из тех же имён, из которых ESLint строит group-паттерны
+  forbiddenRe: new RegExp(`(^|\\/)src\\/lib\\/(${area.forbidden.join('|')})(\\.ts)?$`),
+  // область — по префиксу каталога или поименованному файлу
+  inArea: (p: string) => p.includes(`/${area.dir}/`) || (area.extraFiles ?? []).some((f) => p.includes(`/${f}`)),
+}));
 
 function toPosix(p: string) {
   return p.split(path.sep).join('/');
@@ -46,25 +55,30 @@ function notesStoreGraphGuard(): Plugin {
       if (!importer) return null;
       const importerPath = toPosix(importer);
       if (
-        !GUARDED_IMPORTER.test(importerPath) ||
         importerPath.includes('/__tests__/') ||
-        /\.test\.[cm]?[jt]sx?$/.test(importerPath)
+        /\.test\.[cm]?[jt]sx?$/.test(importerPath) ||
+        LEGACY_ALLOWED.some((f) => importerPath.includes(`/${f}`))
       ) return null;
+      // Последний совпавший выигрывает: узкая область идёт в GUARD_AREAS после общей —
+      // та же семантика, что у идущего позже блока в ESLint (для вики-файлов широкий
+      // список заменяет собой узкий).
+      const areaMatcher = AREA_MATCHERS.filter((m) => m.inArea(importerPath)).at(-1);
+      if (!areaMatcher) return null;
       // Относительный импорт резолвим относительно импортера; прочие ('aihome_shell/kit',
       // пакеты) — не относительные, второй копии стора они не собирают.
       const resolved = toPosix(source.startsWith('.') ? path.resolve(path.dirname(importer), source) : source);
-      const m = FORBIDDEN_STORE.exec(resolved);
-      if (!m) return null;
+      const hit = areaMatcher.forbiddenRe.exec(resolved);
+      if (!hit) return null;
       const rel = importerPath.slice(Math.max(importerPath.indexOf('/src/'), 0) + 1);
-      violations.add(`${rel} → src/lib/${m[2]}.ts`);
+      violations.add(`${rel} → src/lib/${hit[2]}.ts`);
       return null;
     },
     buildEnd() {
       if (violations.size === 0) return;
       this.error(
-        `Remote «Заметки» собирает вторую копию стора ядра через прямой импорт из вики-части:\n` +
+        `Remote «Заметки» собирает вторую копию стора ядра через прямой импорт:\n` +
         [...violations].map(v => `  - ${v}`).join('\n') +
-        `\nИмпортируй из 'aihome_shell/kit' (та же граница закрыта ESLint-сторожем notesStoreImportGuard/notesWikiImportGuard).`,
+        `\nИмпортируй из 'aihome_shell/kit' (та же граница закрыта ESLint-сторожем notesStoreImportGuard/notesWikiImportGuard; списки и области — modules/notes/guardLists.mjs).`,
       );
     },
   };

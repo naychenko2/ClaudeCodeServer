@@ -187,6 +187,34 @@ public class PregateServiceTests : IDisposable
         launcher.Specs.Should().ContainSingle();
     }
 
+    [Theory]
+    [InlineData("https://example.com/lint")]
+    [InlineData("/opt/ci/lint.sh")]
+    [InlineData("echo a/b c")]
+    public async Task ProcessCheckArgIsNotRelativePath_Runs(string arg)
+    {
+        var launcher = Launcher(_ => ("", 0));
+        var service = Service(launcher, Check("проверка", "python3", [arg]));
+
+        var verdict = await service.RunAsync(Request(), CancellationToken.None);
+
+        verdict.Checks.Should().ContainSingle().Which.Status.Should().NotBe(PregateStatus.NotRun);
+        launcher.Specs.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ProcessCheckArgIsExistingDirectory_Runs()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "scripts", "sub"));
+        var launcher = Launcher(_ => ("", 0));
+        var service = Service(launcher, Check("проверка", "python3", ["scripts/sub"]));
+
+        var verdict = await service.RunAsync(Request(), CancellationToken.None);
+
+        verdict.Checks.Should().ContainSingle().Which.Status.Should().Be(PregateStatus.Green);
+        launcher.Specs.Should().ContainSingle();
+    }
+
     [Fact]
     public async Task NoChecksConfigured_GreenWithoutLaunching()
     {

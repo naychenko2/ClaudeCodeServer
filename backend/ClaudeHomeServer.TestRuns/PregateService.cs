@@ -313,20 +313,29 @@ public sealed class PregateService : ITaskPregate
         }
     }
 
-    // Первый аргумент-путь: не опция и с разделителем каталога («scripts/test-shards.py»); «build», «tsc» — не пути
-    private static string? FirstPathArg(IEnumerable<string> args) =>
-        args.FirstOrDefault(a => !a.StartsWith('-') && (a.Contains('/') || a.Contains('\\')));
+    // Первый аргумент-путь: не опция и с разделителем каталога («scripts/test-shards.py»); «build», «tsc» — не пути.
+    // Не-путь (URL, shell-текст, абсолютный путь) проверке не подлежит: процесс стартует как прежде
+    private static string? FirstPathArg(IEnumerable<string> args)
+    {
+        var candidate = args.FirstOrDefault(a => !a.StartsWith('-') && (a.Contains('/') || a.Contains('\\')));
+        return candidate is not null && IsPlainRelativePath(candidate) ? candidate : null;
+    }
+
+    // Однозначный относительный путь: не rooted, без «:» (диск, схема URL), пробелов и «//»
+    private static bool IsPlainRelativePath(string a) =>
+        !a.Contains(' ') && !a.Contains(':') && !a.Contains("//") && !a.Contains("\\\\")
+        && !a.StartsWith('/') && !a.StartsWith('\\') && !Path.IsPathRooted(a);
 
     private static bool PathExists(string workDir, string path)
     {
         try
         {
-            var full = SafePath.Join(workDir, path);
+            var full = SafePath.Join(workDir, path.Replace('\\', Path.DirectorySeparatorChar));
             return File.Exists(full) || Directory.Exists(full);
         }
-        catch (UnauthorizedAccessException)
+        catch (Exception e) when (e is UnauthorizedAccessException or ArgumentException or IOException or NotSupportedException)
         {
-            return true; // выход за дерево не наш случай — пусть решает сам процесс
+            return true; // выход за дерево или негодный путь — не наш случай, пусть решает сам процесс
         }
     }
 

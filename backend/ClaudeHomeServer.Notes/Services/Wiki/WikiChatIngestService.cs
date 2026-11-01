@@ -19,7 +19,11 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // до единого обращения к модели. «Важный» (WikiMark=important) здесь не special-case:
 // минуя ступени 1–2, он проходит ступень 0 так же (это правило отбора ночи, S6f).
 // Ветки и продолжения (BranchedFromSessionId/ContinuedFromSessionId) в этом шаге —
-// обычный чат: префикс ветки и записку-передачи уже вырезает слайсер (S6j).
+// обычный чат: префикс ветки и записку-передачи уже вырезает слайсер (S6j), поэтому
+// префикс родителя в разбор ветки не попадает и заново не разбирается (S6e-3,
+// «родитель отвечает за префикс»). Хроника продолжения дополнительно несёт ссылку на
+// хронику прежнего чата (§12б этап 3): цель — её заголовок на диске, путь к прежней
+// хронике — только ChroniclePath (ContinuationLinkLine).
 //
 // Курсор (§12б этап 1): из записи стора «разобрано до m{N}» + хэш записи N. Хэш не
 // сошёлся (история переписана) — курсор в 0, повторные утверждения гасит дедup (S4d),
@@ -172,9 +176,7 @@ public sealed class WikiChatIngestService
 
         // Раздел назначения — дом чата (ADR-036, решение 3). Личный раздел закрыт до Ф2 —
         // тот же отказ, что у очереди заявок (S6b-3), только до чтения истории.
-        var home = session.ProjectId is { Length: > 0 } projectId
-            ? WikiSections.ProjectsPrefix + projectId
-            : WikiSections.Personal;
+        var home = HomeOf(session);
         if (home == WikiSections.Personal)
             return Task.FromResult(Refused(CodePersonalSection, "личный раздел — с Ф2"));
 
@@ -403,8 +405,9 @@ public sealed class WikiChatIngestService
 
     /// <summary>Дописать хронику чата утверждениями применённых пакетов. Первой
     /// успешный разбор создаёт страницу, следующий — дописывает «Что выяснили».
-    /// Существующая нечитаемая хроника — отказ: её строки уже написанное, перезаписывать
-    /// молча нельзя.</summary>
+    /// Хроника продолжения несёт строку-ссылку на хронику прежнего чата в «О чём»
+    /// (ContinuationLinkLine). Существующая нечитаемая хроника — отказ: её строки уже
+    /// написанное, перезаписывать молча нельзя.</summary>
     private async Task<(bool Ok, string? Reason)> AppendChronicleAsync(
         string ownerId, string home, Session session, string sessionId,
         IReadOnlyList<(string PackageId, string CardTitle)> applied)
@@ -450,6 +453,8 @@ public sealed class WikiChatIngestService
         if (statements.Count == 0)
             return (true, null); // применённых утверждений нет — хронику трогать нечем.
 
+        var linkLine = ContinuationLinkLine(ownerId, home, session);
+
         if (page is null)
         {
             page = new WikiPage
@@ -458,7 +463,7 @@ public sealed class WikiChatIngestService
                 Frontmatter = new WikiFrontmatter { Type = WikiFrontmatter.TypeChronicle },
                 Sections =
                 [
-                    new() { Name = "О чём", Lines = [] },
+                    new() { Name = "О чём", Lines = linkLine is not null ? [linkLine] : [] },
                     new() { Name = "Что решили", Lines = [] },
                     new() { Name = "Что выяснили", Lines = statements },
                     new() { Name = "Открытые вопросы", Lines = [] },
@@ -470,9 +475,21 @@ public sealed class WikiChatIngestService
         {
             var sections = new List<WikiPage.Section>();
             foreach (var s in page.Sections)
-                sections.Add(s.Name == "Что выяснили"
-                    ? new() { Name = s.Name, Lines = [.. s.Lines, .. statements] }
-                    : s);
+            {
+                if (s.Name == "Что выяснили")
+                {
+                    sections.Add(new() { Name = s.Name, Lines = [.. s.Lines, .. statements] });
+                    continue;
+                }
+                // Ссылка прежней хроники дописывается идемпотентно: она уже в «О чём» —
+                // строка та же, дубль не плодится.
+                if (s.Name == "О чём" && linkLine is not null && !s.Lines.Contains(linkLine))
+                {
+                    sections.Add(new() { Name = s.Name, Lines = [.. s.Lines, linkLine] });
+                    continue;
+                }
+                sections.Add(s);
+            }
             if (sections.TrueForAll(s => s.Name != "Что выяснили"))
                 sections.Add(new() { Name = "Что выяснили", Lines = statements });
             page = new WikiPage
@@ -488,6 +505,42 @@ public sealed class WikiChatIngestService
         return write.Status == WikiOpStatus.Applied
             ? (true, null)
             : (false, $"хроника чата не записана: {write.Reason ?? write.Status.ToString()}");
+    }
+
+    /// <summary>Дом чата — раздел назначения (ADR-036, решение 3): проект → его раздел,
+    /// иначе личный. Одна формула на весь сервис: её же спрашивает ссылка хроники
+    /// продолжения (ContinuationLinkLine), чтобы не второй рубеж разбора дома.</summary>
+    private static string HomeOf(Session session) =>
+        session.ProjectId is { Length: > 0 } projectId
+            ? WikiSections.ProjectsPrefix + projectId
+            : WikiSections.Personal;
+
+    /// <summary>Строка-ссылка хроники продолжения на хронику прежнего чата (§12б этап 3:
+    /// «хроника нового чата ссылается на хронику прежнего»). Путь к прежней хронике —
+    /// только ChroniclePath (единственная точка правды); цель ссылки — её заголовок на
+    /// диске (ссылка резолвится по заголовку, WikiGate.cs:320). Только свой раздел:
+    /// ссылка вбок — нарушение ADR-036, решение 4. Прежнего чата нет, он чужого
+    /// владельца, его хроника не написана или не читается — ссылки нет: битая ссылка
+    /// хуже отсутствующей, и её отсутствие — не отказ разбора.</summary>
+    private string? ContinuationLinkLine(string ownerId, string home, Session session)
+    {
+        if (session.ContinuedFromSessionId is not { Length: > 0 } prevId)
+            return null;
+        var prev = _sessions.GetById(prevId);
+        if (prev is null || _sessions.ResolveOwnerId(prev) != ownerId)
+            return null;
+        var prevHome = HomeOf(prev);
+        if (prevHome != home)
+            return null;
+        if (ChroniclePath(prevHome, prevId) is not { Length: > 0 } prevKey)
+            return null;
+        var prevFull = SafePath.JoinBelowRoot(WikiPaths.Root(_dataDir, ownerId), "pages/" + prevKey);
+        if (!File.Exists(prevFull))
+            return null;
+        var parsed = WikiPage.Parse(File.ReadAllText(prevFull, Encoding.UTF8));
+        if (parsed.Model is null || parsed.Model.Frontmatter.Type != WikiFrontmatter.TypeChronicle)
+            return null;
+        return $"Продолжение чата: [[{parsed.Model.Title}]]";
     }
 
     /// <summary>Заголовок хроники — имя чата плюс дата его начала (ADR-035:273). Имя

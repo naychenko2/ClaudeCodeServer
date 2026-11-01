@@ -55,7 +55,7 @@ const sec = (key: string, over: Record<string, unknown> = {}) => ({
   key, name: null, orphan: false, local: false, sphereReserved: false, pageCount: 0, ...over,
 });
 
-// Дерево как его отдаёт GET /api/wiki/tree: постоянные разделы всегда, сирота — name = null
+// Дерево как его отдаёт GET /wiki/tree: постоянные разделы всегда, сирота — name = null
 const TREE = {
   initialized: true,
   sections: [
@@ -80,9 +80,9 @@ const CATALOG = {
 
 function route(tree: typeof TREE) {
   req.mockImplementation((url: string) => {
-    if (url.startsWith('/api/wiki/tree')) return Promise.resolve(tree);
-    if (url.startsWith('/api/wiki/section')) return Promise.resolve(CATALOG);
-    if (url.startsWith('/api/wiki/initialize')) return Promise.resolve({ initialized: true });
+    if (url.startsWith('/wiki/tree')) return Promise.resolve(tree);
+    if (url.startsWith('/wiki/section')) return Promise.resolve(CATALOG);
+    if (url.startsWith('/wiki/initialize')) return Promise.resolve({ initialized: true });
     return Promise.resolve(null);
   });
 }
@@ -167,9 +167,9 @@ describe('Вкладка «Вики» (S5c)', () => {
   it('отказ контракта показан русским текстом, а не сырым кодом', async () => {
     route(EMPTY_TREE);
     req.mockImplementation((url: string) => {
-      if (url.startsWith('/api/wiki/tree')) return Promise.resolve(EMPTY_TREE);
+      if (url.startsWith('/wiki/tree')) return Promise.resolve(EMPTY_TREE);
       // 409 {code,message} — форма отказа S2f (не 401/404, у них тело пустое)
-      if (url.startsWith('/api/wiki/initialize')) {
+      if (url.startsWith('/wiki/initialize')) {
         return Promise.reject({ status: 409, body: { code: 'wiki_section_off', message: 'локальный проект' } });
       }
       return Promise.resolve(null);
@@ -241,8 +241,8 @@ const deleteCalls = () => req.mock.calls.filter(
 function routeWithDelete(del: () => Promise<unknown>) {
   req.mockImplementation((url: string, init?: { method?: string }) => {
     if (init?.method === 'DELETE') return del();
-    if (url.startsWith('/api/wiki/tree')) return Promise.resolve(TREE);
-    if (url.startsWith('/api/wiki/section')) return Promise.resolve(CATALOG);
+    if (url.startsWith('/wiki/tree')) return Promise.resolve(TREE);
+    if (url.startsWith('/wiki/section')) return Promise.resolve(CATALOG);
     return Promise.resolve(null);
   });
 }
@@ -279,7 +279,7 @@ describe('Вкладка «Вики»: удаление сироты (дораб
     click(confirmBtn, 'подтвердить');
     await settle();
     expect(deleteCalls()).toHaveLength(1);
-    expect(String(deleteCalls()[0][0])).toContain('/api/wiki/section');
+    expect(String(deleteCalls()[0][0])).toContain('/wiki/section');
   });
 
   it('у не-сироты кнопки «Удалить раздел» нет', async () => {
@@ -324,8 +324,8 @@ function StubInbox({ selectedKey }: { selectedKey: string | null }) {
 describe('Вкладка «Вики»: ошибки и подвкладки (доработка S5c)', () => {
   it('у ошибки действия — «Закрыть» (сбрасывает), «Повторить» нет', async () => {
     req.mockImplementation((url: string) => {
-      if (url.startsWith('/api/wiki/tree')) return Promise.resolve(EMPTY_TREE);
-      if (url.startsWith('/api/wiki/initialize')) {
+      if (url.startsWith('/wiki/tree')) return Promise.resolve(EMPTY_TREE);
+      if (url.startsWith('/wiki/initialize')) {
         return Promise.reject({ status: 409, body: { code: 'wiki_section_off', message: 'x' } });
       }
       return Promise.resolve(null);
@@ -346,7 +346,7 @@ describe('Вкладка «Вики»: ошибки и подвкладки (д�
   it('у ошибки загрузки «Повторить» перечитывает дерево', async () => {
     let fail = true;
     req.mockImplementation((url: string) => {
-      if (url.startsWith('/api/wiki/tree')) {
+      if (url.startsWith('/wiki/tree')) {
         return fail ? Promise.reject({ status: 500, body: null }) : Promise.resolve(TREE);
       }
       return Promise.resolve(CATALOG);
@@ -430,12 +430,12 @@ describe('Вкладка «Вики»: гонка открытия страни�
     let rejectA: (e: unknown) => void = () => {};
     const pendingA = new Promise<unknown>((_, rej) => { rejectA = rej; });
     req.mockImplementation((url: string) => {
-      if (url.startsWith('/api/wiki/tree')) return Promise.resolve(TREE);
-      if (url.startsWith('/api/wiki/page?')) {
+      if (url.startsWith('/wiki/tree')) return Promise.resolve(TREE);
+      if (url.startsWith('/wiki/page?')) {
         if (url.includes('page=page-a')) return pendingA;
         return Promise.resolve({ pageKey: 'page-b', content: PAGE_B_TEXT, drift: false });
       }
-      if (url.startsWith('/api/wiki/section')) {
+      if (url.startsWith('/wiki/section')) {
         return Promise.resolve(url.includes('section=common') ? CATALOG_COMMON : CATALOG_A);
       }
       return Promise.resolve(null);

@@ -1,4 +1,4 @@
-// Рендер-тест «Журнала» (S7c-2): данные — GET /api/wiki/journal (S7c-0), фильтры — параметры
+// Рендер-тест «Журнала» (S7c-2): данные — GET /wiki/journal (S7c-0), фильтры — параметры
 // запроса; политика по status/policy записи («применилось само» / «через Входящие»); имя источника
 // вместо сырой карточки; invalidLines — числом; отказы 400/403/404 — текстом, не кодом; подвкладка
 // «Журнал» в реестре ведёт на этот экран; откат по источнику — только после подтверждения модалкой,
@@ -59,7 +59,7 @@ const CHAT_ID = '7f3a2c11-2222-3333-4444-555555555555';
 // Реальная форма ref бэка: захват окна пишет карточку с диапазоном — «session:{id}#m{from}-{to}»
 const refWindow = (from: number, to: number) => `session:${CHAT_ID}#m${from}-${to}`;
 
-// Записи журнала — как их отдаёт GET /api/wiki/journal (контракт S7c-0): применённое «само»,
+// Записи журнала — как их отдаёт GET /wiki/journal (контракт S7c-0): применённое «само»,
 // применённое «через Входящие», retract (id пакетов в поле packages), отбитый проверками и
 // системный relink без источника. Порядок — «новые сверху», как их отдаёт бэк.
 const ENTRY_AUTO = {
@@ -119,8 +119,8 @@ function serveJournal(pageResponses: Record<string, unknown>) {
       }
       return Promise.resolve(null);
     }
-    if (url.startsWith('/api/wiki/journal')) return Promise.resolve(RESP);
-    if (url.startsWith('/api/wiki/page')) {
+    if (url.startsWith('/wiki/journal')) return Promise.resolve(RESP);
+    if (url.startsWith('/wiki/page')) {
       const m = /[?&]page=([^&]+)/.exec(url);
       const key = m ? decodeURIComponent(m[1]) : '';
       if (key in pageResponses) {
@@ -135,7 +135,7 @@ const roots: Root[] = [];
 
 function seedJournal(data: unknown) {
   req.mockImplementation((url: string) => {
-    if (url.startsWith('/api/wiki/journal')) return Promise.resolve(data);
+    if (url.startsWith('/wiki/journal')) return Promise.resolve(data);
     return Promise.resolve(null);
   });
 }
@@ -229,28 +229,28 @@ describe('«Журнал» (S7c-2)', () => {
     expect(journal.component).toBe(WikiJournal);
   });
 
-  it('данные — GET /api/wiki/journal; смена фильтра — новый запрос с параметром', async () => {
+  it('данные — GET /wiki/journal; смена фильтра — новый запрос с параметром', async () => {
     seedJournal(RESP);
     const c = render();
     await settle();
-    const first = getCalls('/api/wiki/journal');
+    const first = getCalls('/wiki/journal');
     expect(first).toHaveLength(1);
-    expect(String(first[0][0])).toBe('/api/wiki/journal');
+    expect(String(first[0][0])).toBe('/wiki/journal');
     // фильтр источника — значение из закрытого перечня (бэк сужает окно сам, не фронт по списку)
     sel.value = 'note';
     click(buttonByTestId(c, 'mock-select-Все источники'), 'фильтр источника');
     await settle();
-    const after = getCalls('/api/wiki/journal');
+    const after = getCalls('/wiki/journal');
     expect(after).toHaveLength(2);
-    expect(String(after[1][0])).toBe('/api/wiki/journal?origin=note');
+    expect(String(after[1][0])).toBe('/wiki/journal?origin=note');
     // фильтры накапливаются: второй добавляется к первому, а не заменяет его;
     // порядок параметров — детерминированный порядок loadWikiJournal (section, origin)
     sel.value = 'projects/p1';
     click(buttonByTestId(c, 'mock-select-Все разделы'), 'фильтр раздела');
     await settle();
-    const third = getCalls('/api/wiki/journal');
+    const third = getCalls('/wiki/journal');
     expect(third).toHaveLength(3);
-    expect(String(third[2][0])).toBe('/api/wiki/journal?section=projects%2Fp1&origin=note');
+    expect(String(third[2][0])).toBe('/wiki/journal?section=projects%2Fp1&origin=note');
   });
 
   it('политика по записи: applied+auto — «применилось само», applied+inbox — «через Входящие»; системный relink показан событием без источника', async () => {
@@ -327,7 +327,7 @@ describe('«Журнал» (S7c-2)', () => {
       if (init?.method === 'POST') {
         return Promise.reject({ status: 404, body: { code: 'wiki_retract_source', message: 'такого источника в твоей вики нет' } });
       }
-      if (url.startsWith('/api/wiki/journal')) return Promise.resolve(RESP);
+      if (url.startsWith('/wiki/journal')) return Promise.resolve(RESP);
       return Promise.resolve(null);
     });
     click(buttonByExactText(docBody(), 'Откатить всё'), 'подтверждение отката');
@@ -355,7 +355,7 @@ describe('«Журнал» (S7c-2)', () => {
     await settle();
     const posts = postCalls();
     expect(posts).toHaveLength(1);
-    expect(String(posts[0][0])).toContain('/api/wiki/packages/retract');
+    expect(String(posts[0][0])).toContain('/wiki/packages/retract');
     // range «#m1-9» из ref бэка снят — бэк по карточке накрывает все окна чата
     expect(JSON.parse((posts[0][1] as { body: string }).body)).toMatchObject({
       sourceRef: `session:${CHAT_ID}`,
@@ -392,7 +392,7 @@ describe('«Журнал» (S7c-2)', () => {
     let resolvePost: (v: unknown) => void = () => {};
     req.mockImplementation((url: string, init?: { method?: string }) => {
       if (init?.method === 'POST') return new Promise<unknown>(res => { resolvePost = res; });
-      if (url.startsWith('/api/wiki/journal')) return Promise.resolve(RESP);
+      if (url.startsWith('/wiki/journal')) return Promise.resolve(RESP);
       return Promise.resolve(null);
     });
     click(buttonByTestId(c, 'wiki-journal-retract'), 'Откатить всё из этого чата');
@@ -420,7 +420,7 @@ describe('«Журнал» (S7c-2)', () => {
     let resolveLate: (v: unknown) => void = () => {};
     let n = 0;
     req.mockImplementation((url: string) => {
-      if (url.startsWith('/api/wiki/journal')) {
+      if (url.startsWith('/wiki/journal')) {
         n++;
         // первый (без фильтра) — задержан; второй (после смены фильтра) — отвечает сразу
         if (n === 1) return new Promise(res => { resolveLate = res; });
@@ -481,7 +481,7 @@ describe('«Журнал»: открытая страница после отк�
     expect(retracts).toHaveLength(1);
     // страница под открытым экраном перечитана и отдаёт состояние после отката
     expect(getWikiPageSnapshot(SECTION, PAGE)?.content).toBe('после отката');
-    expect(getCalls('/api/wiki/page').length).toBeGreaterThanOrEqual(2);
+    expect(getCalls('/wiki/page').length).toBeGreaterThanOrEqual(2);
     expect(probeText(page.probe)).toBe('после отката');
   });
 
@@ -498,7 +498,7 @@ describe('«Журнал»: открытая страница после отк�
     await settle();
     // пока страница открыта — она перечитана
     expect(getWikiPageSnapshot(SECTION, PAGE)?.content).toBe('после отката');
-    const readsWhileOpen = getCalls('/api/wiki/page').length;
+    const readsWhileOpen = getCalls('/wiki/page').length;
     expect(readsWhileOpen).toBeGreaterThanOrEqual(2);
 
     // закрыли экран — откат больше не перечитывает закрытую (хвост «перечитка подняла
@@ -512,6 +512,6 @@ describe('«Журнал»: открытая страница после отк�
     click(buttonByExactText(docBody(), 'Откатить всё'), 'подтверждение отката');
     await settle();
     expect(postCalls().filter(p => String(p[0]).includes('/retract'))).toHaveLength(2);
-    expect(getCalls('/api/wiki/page').length).toBe(readsWhileOpen);
+    expect(getCalls('/wiki/page').length).toBe(readsWhileOpen);
   });
 });

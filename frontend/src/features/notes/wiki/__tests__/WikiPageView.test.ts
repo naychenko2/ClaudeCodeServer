@@ -12,7 +12,7 @@
 // Стор S5a НЕ мокан: мокан только его транспорт (offline.request) и signalr — загрузка
 // страницы и adopt идут по настоящему пути lib/wiki → request (тот же приём, что в
 // WikiTab.test). Экран читает слот «последней прочитанной страницы» (доработка S5b M2),
-// поэтому тест начинает с настоящей загрузки: моканный GET /api/wiki/page → стор → экран.
+// поэтому тест начинает с настоящей загрузки: моканный GET /wiki/page → стор → экран.
 //
 // Мутации этого прогона (вывод — в отчёте задачи):
 //  (1) сортировать секции по каноническому порядку → «порядок секций» краснеет;
@@ -195,8 +195,8 @@ async function seedPage(
   req.mockImplementation((url: string, init?: { method?: string }) => {
     const viaExtra = extra?.(url, init);
     if (viaExtra !== undefined) return viaExtra as Promise<unknown>;
-    if (url.startsWith('/api/wiki/page')) return Promise.resolve(dto);
-    if (url.startsWith('/api/wiki/tree')) return Promise.resolve({ initialized: true, sections: [] });
+    if (url.startsWith('/wiki/page')) return Promise.resolve(dto);
+    if (url.startsWith('/wiki/tree')) return Promise.resolve({ initialized: true, sections: [] });
     return Promise.resolve(null);
   });
   await act(async () => { await loadWikiPage(sectionKey, pageKey); });
@@ -210,7 +210,7 @@ function renderPage(section = SECTION, pageKey = PAGE_KEY, onBack = () => {}): C
 }
 
 // Было ли перечитывание страницы — видно по числу её GET-запросов
-const pageGets = () => req.mock.calls.filter(([u]) => String(u).startsWith('/api/wiki/page'));
+const pageGets = () => req.mock.calls.filter(([u]) => String(u).startsWith('/wiki/page'));
 
 async function settle(times = 10) {
   for (let i = 0; i < times; i++) await act(async () => { await Promise.resolve(); });
@@ -378,7 +378,7 @@ describe('Страница вики (S5b)', () => {
       (url, init) => {
         if (init?.method === 'POST') return adopt;
         // После принятого бэк отдаёт ту же страницу без дрейфа: файл == манифест
-        if (accepted && url.startsWith('/api/wiki/page')) {
+        if (accepted && url.startsWith('/wiki/page')) {
           return Promise.resolve({ pageKey: PAGE_KEY, content: PAGE_PLAIN, drift: false });
         }
         return undefined;
@@ -398,7 +398,7 @@ describe('Страница вики (S5b)', () => {
     await settle(16);
     const postCalls = req.mock.calls.filter(([, init]) => (init as { method?: string } | undefined)?.method === 'POST');
     expect(postCalls).toHaveLength(1);
-    expect(String(postCalls[0][0])).toContain('/api/wiki/adopt');
+    expect(String(postCalls[0][0])).toContain('/wiki/adopt');
     // Страницу перечитали вторым GET: без перечитывания плашка осталась бы на принятой
     // странице, а «Назад» → открыть снова показал бы дрейф (ревью S5b M2)
     expect(pageGets()).toHaveLength(2);

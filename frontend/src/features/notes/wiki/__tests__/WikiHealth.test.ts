@@ -130,7 +130,7 @@ function buttonsText(container: Cont): string[] {
 
 function mockHealth(content: string) {
   req.mockImplementation((url: string) => {
-    if (url.startsWith('/api/wiki/health/')) return Promise.resolve({ section: 'projects/p1', content });
+    if (url.startsWith('/wiki/health/')) return Promise.resolve({ section: 'projects/p1', content });
     return Promise.resolve(null);
   });
 }
@@ -205,7 +205,7 @@ describe('«Здоровье» раздела (S5f)', () => {
 
   it('отчёта нет (404) — «Нет данных» с подсказкой прогнать проверку, а не пустой экран', async () => {
     req.mockImplementation((url: string) => {
-      if (url.startsWith('/api/wiki/health/')) return Promise.reject({ status: 404, body: undefined });
+      if (url.startsWith('/wiki/health/')) return Promise.reject({ status: 404, body: undefined });
       return Promise.resolve(null);
     });
     const c = render();
@@ -224,7 +224,7 @@ describe('«Здоровье» раздела (S5f)', () => {
       if (init?.method === 'POST') {
         return Promise.reject({ status: 409, body: { code: 'wiki_llm_wiki_off', message: 'проверка не выполнена: функция выключена' } });
       }
-      if (url.startsWith('/api/wiki/health/')) return Promise.resolve({ section: 'projects/p1', content: HEALTH });
+      if (url.startsWith('/wiki/health/')) return Promise.resolve({ section: 'projects/p1', content: HEALTH });
       return Promise.resolve(null);
     });
     clickButton(c, 'wiki-health-run');
@@ -243,7 +243,7 @@ describe('«Здоровье» раздела (S5f)', () => {
     let resolvePost: (v: unknown) => void = () => {};
     req.mockImplementation((url: string, init?: { method?: string }) => {
       if (init?.method === 'POST') return new Promise<unknown>(res => { resolvePost = res; });
-      if (url.startsWith('/api/wiki/health/')) return Promise.resolve({ section: 'projects/p1', content: HEALTH });
+      if (url.startsWith('/wiki/health/')) return Promise.resolve({ section: 'projects/p1', content: HEALTH });
       return Promise.resolve(null);
     });
     clickButton(c, 'wiki-health-run');
@@ -264,7 +264,7 @@ describe('«Здоровье» раздела (S5f)', () => {
     let n = 0;
     req.mockImplementation((url: string, init?: { method?: string }) => {
       if (init?.method === 'POST') return Promise.resolve({ ran: true, sectionsOk: 1, sectionsFailed: 0 });
-      if (url.startsWith('/api/wiki/health/')) {
+      if (url.startsWith('/wiki/health/')) {
         n++;
         // первый GET (при открытии) висит; второй (после прогона) отвечает сразу и свежо
         if (n === 1) return new Promise(res => { resolveOld = res; });
@@ -288,9 +288,9 @@ describe('«Здоровье» раздела (S5f)', () => {
   it('смена раздела A→B: при загрузке B находок A нет; при отказе B (500) — находок A нет, ошибка показана (доработка S5f)', async () => {
     let rejectB: (e: unknown) => void = () => {};
     req.mockImplementation((url: string) => {
-      if (url.includes('/api/wiki/health/projects/p1')) return Promise.resolve({ section: 'projects/p1', content: HEALTH });
+      if (url.includes('/wiki/health/projects/p1')) return Promise.resolve({ section: 'projects/p1', content: HEALTH });
       // ответ B намеренно висит: проверяем экран ДО него и ПОСЛЕ его отказа
-      if (url.includes('/api/wiki/health/projects/p2')) return new Promise<unknown>((_res, rej) => { rejectB = rej; });
+      if (url.includes('/wiki/health/projects/p2')) return new Promise<unknown>((_res, rej) => { rejectB = rej; });
       return Promise.resolve(null);
     });
     const { root, container: c } = mountAt('projects/p1');
@@ -316,8 +316,8 @@ describe('«Здоровье» раздела (S5f)', () => {
   it('запоздалый ответ раздела A после переключения на B не появляется на экране (поколение остаётся)', async () => {
     let resolveA: (v: unknown) => void = () => {};
     req.mockImplementation((url: string) => {
-      if (url.includes('/api/wiki/health/projects/p1')) return new Promise(res => { resolveA = res; });
-      if (url.includes('/api/wiki/health/projects/p2')) {
+      if (url.includes('/wiki/health/projects/p1')) return new Promise(res => { resolveA = res; });
+      if (url.includes('/wiki/health/projects/p2')) {
         return Promise.resolve({ section: 'projects/p2', content: HEALTH.replace('ссылка ведёт в пустоту', 'ОТВЕТ-B') });
       }
       return Promise.resolve(null);

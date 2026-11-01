@@ -7,7 +7,7 @@ vi.mock('../../../lib/signalr', () => ({
   joinUser: async () => {}, onMessage: () => () => {}, onReconnected: () => () => {}, onProjectMembersChanged: () => () => {},
 }));
 
-const { filterCalendarTasks, hasSharedProjects, SHARED_FILTER_KEY } = await import('../calendarFilter');
+const { filterCalendarTasks, hasSharedTasks, SHARED_FILTER_KEY } = await import('../calendarFilter');
 
 const t = (id: string, projectId?: string) => ({ id, projectId } as Task);
 const projects = new Map<string, Project>([
@@ -20,9 +20,10 @@ describe('Календарь: фильтр «Общие»', () => {
   it('оставляет только задачи чужих общих проектов', () => {
     expect(filterCalendarTasks(all, SHARED_FILTER_KEY, projects).map(x => x.id)).toEqual(['a']);
   });
-  it('чип виден только при наличии общих проектов', () => {
-    expect(hasSharedProjects([...projects.values()])).toBe(true);
-    expect(hasSharedProjects([projects.get('p-own')!])).toBe(false);
+  it('чип виден только при наличии задач в общих проектах', () => {
+    expect(hasSharedTasks(all, projects)).toBe(true);
+    expect(hasSharedTasks([t('b', 'p-own'), t('c')], projects)).toBe(false);
+    expect(hasSharedTasks([], projects)).toBe(false);
   });
   it('«Все» и группы работают как прежде', () => {
     expect(filterCalendarTasks(all, 'all', projects)).toHaveLength(3);

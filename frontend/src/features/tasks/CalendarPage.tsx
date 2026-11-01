@@ -22,7 +22,7 @@ import { CalendarWeek } from './CalendarWeek';
 import { CalendarAgenda } from './CalendarAgenda';
 import { TaskBoard } from './board/TaskBoard';
 import { NewTaskDialog } from './NewTaskDialog';
-import { filterCalendarTasks, hasSharedProjects, SHARED_FILTER_KEY } from './calendarFilter';
+import { filterCalendarTasks, hasSharedTasks, SHARED_FILTER_KEY } from './calendarFilter';
 
 interface Props {
   auth: AuthState;
@@ -106,7 +106,8 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
   const [navDate, setNavDate] = useState(todayIso());
   const [projects, setProjects] = useState<Project[]>([]);
   const [groups, setGroups] = useState<ProjectGroup[]>([]);
-  const [groupFilter, setGroupFilter] = useState<string>('all');   // 'all' | groupId | 'none'
+  // Один активный фильтр (radio): 'all' | groupId | 'none' | 'shared' — выбор «Общие» снимает группу и наоборот
+  const [groupFilter, setGroupFilter] = useState<string>('all');
   // Диалог создания: null — закрыт; date — предзаполненный срок (быстрое создание на день)
   const [createDialog, setCreateDialog] = useState<null | { date?: string }>(null);
   // Личная задача, открытая в модале (id — чтобы карточка жила и обновлялась из стора)
@@ -138,8 +139,8 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
 
   const tasks = useMemo(() => filterCalendarTasks(allTasks, groupFilter, projectsById), [allTasks, groupFilter, projectsById]);
 
-  // Чип «Общие» виден, только если есть общие проекты, где я участник
-  const hasShared = hasSharedProjects(projects);
+  // Чип «Общие» виден, только если есть мои задачи в чужих общих проектах
+  const hasShared = hasSharedTasks(allTasks, projectsById);
 
   const hasUngrouped = projects.some(p => !p.groupId);
 

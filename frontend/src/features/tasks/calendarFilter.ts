@@ -1,7 +1,6 @@
 // Фильтры календаря: чистые функции без UI.
 import type { Project, Task } from '../../types';
 import { isSharedTask } from './bits';
-import { isParticipant } from '../projects/members/participantGate';
 
 // Ключ фильтра-чипа «Общие» (группы проектов — их id, 'none' — без группы)
 export const SHARED_FILTER_KEY = 'shared';
@@ -19,7 +18,8 @@ export function filterCalendarTasks(allTasks: Task[], filter: string, projectsBy
   });
 }
 
-// Чип «Общие» показываем, только если есть чужие общие проекты (я — участник)
-export function hasSharedProjects(projects: Project[]): boolean {
-  return projects.some(p => isParticipant(p));
+// Чип «Общие» показываем, только если есть хотя бы одна задача чужого общего проекта:
+// иначе он вёл бы в пустой календарь
+export function hasSharedTasks(allTasks: Task[], projectsById: Map<string, Project>): boolean {
+  return allTasks.some(t => isSharedTask(t, projectsById));
 }

@@ -30,7 +30,7 @@ namespace ClaudeHomeServer.Tests.Services;
 /// Пути: recall (NotesRecallContributor), notes_semantic_search, notes_list, notes_search,
 /// notes_read (и ссылки на страницы вне набора в ОБЫЧНЫХ заметках), notes_backlinks,
 /// notes_graph, notes_resolve, notes_thread (корень-страница и обычный корень),
-/// notes_suggest_title, wiki_query, wiki_status.
+/// notes_suggest_title, notes_daily (ссылки дневника), wiki_query, wiki_status.
 /// Полнота перебора — сама тест здесь (СторожПеречисляетВсеИнструментыТулсета, доработка
 /// S6g-2: прежний список заявлял полноту ложно): каждый Tool(...) тулсета либо покрыт,
 /// либо пишущий (запись в вики отбивается), либо пропуск с названной причиной. Пути, которых
@@ -694,6 +694,35 @@ public class WikiReadPathsGuardTests : IDisposable
         AssertNoForeignSections(list.Text);
     }
 
+    [Fact]
+    public void NotesDaily_ЯвноСкрываетСсылкуНаСкрытуюСтраницу()
+    {
+        // c1 (W3-7): текст дневника — обычная заметка, не сужается (решение 6); но его Links —
+        // системная проекция страниц-целей: тот же RedactHiddenWikiLinks, что в notes_read/
+        // notes_resolve. Мутация «убрать вызов RedactHiddenWikiLinks в notes_daily» краснит
+        // этот тест: targetId/targetTitle скрытых страниц вернулись бы настоящими.
+        SeedWiki();
+        var (toolset, ctx) = McpEnv("p1");
+
+        var res = Call(toolset, ctx, "notes_daily",
+            Args(("content", "Работа с [[Проекты/r/Сущность-чужой-сферы]] и [[Личное/Личный-факт]].")));
+
+        res.IsError.Should().BeFalse(res.Text);
+        var foreignId = PageId("Проекты/r/Сущность-чужой-сферы.md");
+        var personalId = PageId("Личное/Личный-факт.md");
+        res.Text.Should().NotContain(foreignId, "id скрытой страницы не отдаётся: по нему доставалась вся страница")
+            .And.NotContain(personalId);
+        var links = JsonNode.Parse(res.Text)!["links"]!.AsArray();
+        links.Should().HaveCount(2, "факт связи сохраняется: запись есть, закрыты её имя и id");
+        foreach (var l in links)
+        {
+            l!["targetId"]!.GetValue<string>().Should().BeEmpty();
+            l!["targetTitle"]!.GetValue<string>().Should().Be("[скрыто]");
+        }
+        // Текст дневника — текст пользователя, он не сужается (решение 6): остаётся как есть.
+        JsonNode.Parse(res.Text)!["content"]!.GetValue<string>().Should().Contain("[[Проекты/r/Сущность-чужой-сферы]]");
+    }
+
     // ─── путь 13: notes_suggest_title (доработка S6g-2, M3) ───
 
     [Fact]
@@ -721,9 +750,6 @@ public class WikiReadPathsGuardTests : IDisposable
     /// <summary>Инструменты, не читающие страниц вики для модели, — с названной причиной.</summary>
     private static readonly Dictionary<string, string> SkippedWithReason = new(StringComparer.Ordinal)
     {
-        ["notes_daily"] = "обычная заметка личного vault, не страница вики; её текст не сужается (решение 6). "
-            + "Её ссылки код не редактирует: targetId/targetTitle скрытых страниц доходят до модели "
-            + "(NotesToolset.cs:409-425) — известный пропуск, не покрытие; ждёт решения (W3-7)",
         ["notes_annotations"] = "документ — файл проекта или личного vault; пути вики (data/wiki/) не область документа: страница недостижима",
         ["notes_promote_task"] = "id скрытой страницы недостижим из покрытых путей; текст чекбокса становится текстом созданной задачи, а не чтением заметки",
         ["wiki_ingest"] = "заявка в очередь: текст источника уходит в захват и Хранителю, в выдачу модели не возвращается",
@@ -743,7 +769,7 @@ public class WikiReadPathsGuardTests : IDisposable
     [
         "notes_list", "notes_search", "notes_read", "notes_semantic_search",
         "notes_backlinks", "notes_graph", "notes_resolve", "notes_thread",
-        "notes_suggest_title", "wiki_query", "wiki_status",
+        "notes_suggest_title", "notes_daily", "wiki_query", "wiki_status",
     ];
 
     [Fact]

@@ -410,6 +410,12 @@ public sealed class NotesToolset(
             {
                 var date = notesSvc.GetOrCreateDaily(context.OwnerId, OptionalArg(arguments, "date"));
                 await BroadcastAsync(context.OwnerId, "updated", date.Id);
+                // Текст дневника — обычная заметка, он не сужается (решение 6); но его структурные
+                // ссылки на страницы — системная проекция целей: тот же RedactHiddenWikiLinks, что в
+                // notes_read/notes_resolve (M3; W3-7): по targetId скрытой страницы доставалась вся
+                // её страница, а targetTitle называл заголовок невидимого раздела.
+                var visible = VisibleSet(context.OwnerId, session, persona);
+                var index = IndexByIds(notesSvc, context.OwnerId);
                 // Дописывание не поддержано эндпоинтом — делаем сами (как stdio): читаем
                 // текущий текст и PUT-им склейку
                 var append = StringArg(arguments, "content");
@@ -419,9 +425,9 @@ public sealed class NotesToolset(
                         ? date.Content.TrimEnd() + "\n\n" + append
                         : append;
                     var updated = notesSvc.Update(context.OwnerId, date.Id, new UpdateNoteRequest(Content: merged));
-                    if (updated is not null) return Json(updated);
+                    if (updated is not null) return Json(RedactHiddenWikiLinks(updated, index, visible));
                 }
-                return Json(date);
+                return Json(RedactHiddenWikiLinks(date, index, visible));
             }
 
             case "notes_resolve":

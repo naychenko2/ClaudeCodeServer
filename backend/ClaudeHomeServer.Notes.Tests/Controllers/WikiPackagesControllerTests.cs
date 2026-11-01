@@ -782,6 +782,39 @@ public class WikiPackagesControllerTests : IDisposable
         StatusOnDisk(id).Should().Be(WikiPackage.StatusApplied);
     }
 
+    // ─── 12. Откат через REST: «уже в состоянии «до пакета»» — отдельное поле ответа (W3-3) ─────
+
+    [Fact]
+    public async Task ОткатСнесённойВнеХранителяСтраницы_УжеВозвращённое_ОтдельнымПолем()
+    {
+        // Мутация «не заполнять поле» (Ok(new WikiRevertDto(r.RestoredPages)) — AlreadyPages
+        // остаётся null): NotBeNull и Equal краснеют — человек видел бы «успех, страницы
+        // возвращены» о файле, который к этому вызову уже был снят не им.
+        const string newPage = "Общее/Новое-знание.md";
+        var full = Path.Combine(WikiPaths.Pages(_dir, User), newPage);
+        var id = await NewRealPackage([CreateOp(newPage)]);
+
+        var decided = ((OkObjectResult)await Controller().Decide(id, new WikiDecideRequest(0, true, "подтверждаю")))
+            .Value.Should().BeAssignableTo<WikiDecisionDto>().Which;
+        decided.Apply!.Applied.Should().BeTrue(decided.Apply.Reason);
+        File.Exists(full).Should().BeTrue("create-операция записала страницу");
+
+        // Снесли мимо Хранителя: файла нет, запись манифеста осталась — так это и выглядит на диске.
+        File.Delete(full);
+        WikiManifest.TryRead(WikiPaths.Root(_dir, User), "common").Manifest.Should().ContainKey(newPage);
+
+        var dto = (WikiRevertDto)((OkObjectResult)await Controller().Revert(id)).Value!;
+
+        // Пакет закрывается (его состояние «до применения» уже наступил), но исход назван по частям:
+        // эту страницу этот вызов не трогал — она в AlreadyPages, а не в «возвращённых этим откатом».
+        dto.AlreadyPages.Should().NotBeNull("исход «уже в состоянии «до пакета>» доходит до API, а не умирает в DTO");
+        dto.AlreadyPages.Should().Equal([newPage], "снесённая вне Хранителя create-страница — названный исход");
+        dto.RestoredPages.Should().Contain(newPage, "эффект операции над разделом: страница из него снята");
+
+        StatusOnDisk(id).Should().Be(WikiPackage.StatusReverted);
+        LogLines("revert").Should().HaveCount(1, "один фактический откат — одна строка журнала");
+    }
+
     // Пакет боевой пробы: карточка и страница записаны Хранителем (манифест согласован —
     // применения без дрейфа нет), сам в proposed с одной спорной операцией. sourceRef —
     // карточка, которую называет пакет: с другой на диске это «нет карточки источника».
@@ -824,6 +857,18 @@ public class WikiPackagesControllerTests : IDisposable
         Decision = WikiPackage.DecisionInbox,
         Reason = "замещает действующее утверждение",
         BaseHashes = new Dictionary<string, string> { [basePage] = Hash },
+    };
+
+    // Спорная create-операция на новой странице: base-хэшей нет — страницы до применения нет.
+    private static WikiPackage.Operation CreateOp(string page) => new()
+    {
+        Op = WikiPackage.OpCreate,
+        Page = page,
+        Text = Claim,
+        Class = WikiPackage.ClassKey("session", WikiPackage.OpCreate),
+        Decision = WikiPackage.DecisionInbox,
+        Reason = "новая страница знаний из источника",
+        BaseHashes = new Dictionary<string, string>(),
     };
 
     private WikiPackage.Operation ReadOp(string id)

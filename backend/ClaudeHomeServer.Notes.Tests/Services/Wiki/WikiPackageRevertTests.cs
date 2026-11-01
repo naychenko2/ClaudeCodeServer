@@ -273,9 +273,11 @@ public class WikiPackageRevertTests : IDisposable
         var lines = RevertLines();
         lines.Should().HaveCount(2, "два фактических отката — две строки журнала");
         // Каждая строка называет свой пакет: идентичные источник и страницы не делают второй
-        // откат уже сделанным.
-        lines.SelectMany(LinePackageIds).OrderBy(x => x, StringComparer.Ordinal).ToList()
-            .Should().Equal(a.Id, b.Id);
+        // откат уже сделанным. Порядок строк — порядок откатов (B, затем A), id случайные
+        // (WikiPackageStore.NewId): сорированный факт против несорированной пары совпадает с
+        // вероятностью 1 из 2 — прежняя форма падала примерно на половине прогонов (по замеру
+        // Глеба — 3 из 4). Сравнение без порядка.
+        lines.SelectMany(LinePackageIds).ToList().Should().BeEquivalentTo(new[] { a.Id, b.Id });
 
         // Цепочка возвращена целиком: страница — то, что было до раннего пакета.
         File.ReadAllBytes(PageFull(PagePath)).Should().Equal(beforeChain);
@@ -331,8 +333,11 @@ public class WikiPackageRevertTests : IDisposable
     [Fact]
     public async Task Revert_БитыйAppliedJson_CodeNoApplied()
     {
-        // Мутация «битую запись читать как пустую» (вернуть new Dictionary() вместо null):
-        // CodeNoApplied краснеет (отказ стал бы CodeNoApplied-без-причины или откатом по пустой сверке).
+        // Мутация «битую запись читать как пустой словарь» (вернуть new Dictionary() вместо null):
+        // код у обоих случаев один (CodeNoApplied), поэтому краснеет проверка текста причины:
+        // вместо «нет записи состояния применения этого пакета» был бы «запись состояния
+        // применения не полна» — то есть исход назван как «не полна», хотя записи нет вовсе.
+        // Без этой проверки мутация была бы невидна: код на неё не реагирует.
         await WriteCardAndPage();
         var pkg = CreateAccepted(Op(WikiPackage.OpAppend, PagePath, "Контенер собран на второй машине"));
         var applied = await _sut.ApplyAsync(User, pkg, Ctx);
@@ -346,7 +351,10 @@ public class WikiPackageRevertTests : IDisposable
 
         r.Reverted.Should().BeFalse();
         r.Code.Should().Be(WikiPackageRevert.CodeNoApplied, "битая запись — тот же исход, что её отсутствие (fail-closed)");
-        r.Reason.Should().Contain("состояния применения");
+        // Причина называет именно «записи состояния применения нет», а не «запись не полна»:
+        // для битой записи её нет, и это тот же отказ, что для отсутствующего файла.
+        r.Reason.Should().Contain("нет записи состояния применения этого пакета",
+            "битая запись — «записи нет», а не «не полна»: иначе мутация «пустой словарь вместо null» осталась бы невидной");
         r.AlreadyPages.Should().BeEmpty("отказа «already» нет: до фазы возврата не дошло");
 
         // Отказ — это отказ: на диске не тронуто ничего, журнал пуст, статус прежний.
@@ -453,5 +461,47 @@ public class WikiPackageRevertTests : IDisposable
             "второй видит под блоком уже записанный «reverted» — это «уже откатано», а не второй откат");
         ReadStatus(pkg.Id).Item1.Should().Be(WikiPackage.StatusReverted);
         File.ReadAllBytes(PageFull(PagePath)).Should().Equal(File.ReadAllBytes(PreimageOf(pkg.Id, PagePath)));
+    }
+
+    // ─── 7. Строка прежнего круга (без id) другого пакета не глушит строку этого отката ────────
+
+    [Fact]
+    public async Task Revert_LegacyСтрокаБезIdЧужогоПакета_ЭтотОткатПишетСвоюСтроку()
+    {
+        // Мутация «сверка по содержимому безусловно» (снять меру «этот вызов ничего не
+        // восстанавливал сам»): чужая строка прежнего формата — тот же источник и те же страницы —
+        // читается как «этот откат уже записан»: HaveCount(2) и BeEquivalentTo краснеют, у B нет
+        // своей строки, и инвариант «на каждый фактический откат — своя строка» нарушен.
+        await WriteCardAndPage();
+        var a = CreateAccepted(Op(WikiPackage.OpAppend, PagePath, "Контенер собран на второй машине"));
+        var appliedA = await _sut.ApplyAsync(User, a, Ctx);
+        appliedA.Applied.Should().BeTrue(appliedA.Reason);
+        var afterA = File.ReadAllBytes(PageFull(PagePath));
+
+        var b = CreateAccepted(Op(WikiPackage.OpAppend, PagePath, "Решение: перенести сборку на Linux"));
+        var appliedB = await _sut.ApplyAsync(User, b, Ctx);
+        appliedB.Applied.Should().BeTrue(appliedB.Reason);
+
+        // Подложена строка прежнего круга — та же мера записи (WikiManifest.AppendLog), но без id:
+        // так выглядит журнал, записанный до меры W3-3. Её содержимое — от другого пакета: та же
+        // карточка источника (SourceOf пакета = SourceRef.Ref, «chat-1») и те же страницы, поэтому
+        // по содержимому она неотличима от строки B.
+        WikiManifest.AppendLog(Root, "revert", Section, [PagePath], "chat-1", "user");
+        RevertLines().Should().HaveCount(1, "подложенная строка прежнего формата");
+
+        var rb = await _revert.RevertAsync(User, b.Id);
+
+        // Этот вызов вернул страницу сам (на диске было применённое состояние B, а не «до пакета») —
+        // значит, чужая строка прежнего формата не про него: своя строка обязательна.
+        rb.Reverted.Should().BeTrue(rb.Reason);
+        rb.RestoredPages.Should().Equal([PagePath], "страницу вернул этот вызов, а не прежний виток");
+        var lines = RevertLines();
+        lines.Should().HaveCount(2, "фактический откат B записан своей строкой, даже когда в журнале есть идентичная по виду");
+        lines.SelectMany(LinePackageIds).ToList().Should().BeEquivalentTo(new[] { b.Id },
+            "признак строки — её id; подложенная строка его не несёт и чужому откату не принадлежит");
+
+        // Эффект операции над разделом на месте: цепочка B снята, состояние после A осталось.
+        File.ReadAllBytes(PageFull(PagePath)).Should().Equal(afterA);
+        ReadStatus(b.Id).Item1.Should().Be(WikiPackage.StatusReverted);
     }
 }

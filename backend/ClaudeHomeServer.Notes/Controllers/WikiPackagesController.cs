@@ -131,8 +131,11 @@ public class WikiPackagesController : ControllerBase
     /// решение 12г, мера 4). Только действие человека: ни у агента, ни у персоны такого инструмента
     /// нет (решение 5). 404 — пакета нет; 403 — чужой раздел; 409 — пакет не применён, уже откатан,
     /// или страницы изменены после применения (перечень таких страниц — в теле: человек видит, на что
-    /// смотреть перед повторной попыткой). Успех — тело со списком возвращённых страниц; статус
-    /// пакета после успеха — «reverted», повторный откат того же пакета — 409.</summary>
+    /// смотреть перед повторной попыткой). Успех — тело со списком возвращённых страниц и, отдельно,
+    /// списком тех, что уже стояли в состоянии «до пакета» к началу этого вызова (W3-3: их вернул
+    /// прежний виток или их снесли мимо Хранителя — этот вызов их файлом не трогал, и в одном списке
+    /// с возвращёнными это читалось бы как «я их вернул»); статус пакета после успеха — «reverted»,
+    /// повторный откат того же пакета — 409.</summary>
     [HttpPost("{id}/revert")]
     public async Task<IActionResult> Revert(string id)
     {
@@ -142,7 +145,7 @@ public class WikiPackagesController : ControllerBase
 
         var r = await _revert.RevertAsync(userId, id).ConfigureAwait(false);
         if (r.Reverted)
-            return Ok(new WikiRevertDto(r.RestoredPages));
+            return Ok(new WikiRevertDto(r.RestoredPages, r.AlreadyPages));
         return StatusCode(409, new { code = r.Code, message = r.Reason, pages = r.ChangedPages });
     }
 
@@ -356,10 +359,14 @@ public sealed record WikiApplyOutcomeDto(
     string? Reason,
     IReadOnlyList<string> Violations);
 
-/// <summary>Результат отката: страницы, возвращённые к состоянию до применения («Журнал» обновляет
-/// их и дифф строки op=revert). Отказ — в теле 409: code + message + pages (pages — изменённые
-/// страницы, на которые человеку смотреть перед повторной попыткой).</summary>
-public sealed record WikiRevertDto(IReadOnlyList<string> RestoredPages);
+/// <summary>Результат отката: RestoredPages — страницы, возвращённые к состоянию до применения
+/// («Журнал» обновляет их и дифф строки op=revert). AlreadyPages — подмножество RestoredPages:
+/// страницы, которые уже стояли в состоянии «до пакета» к началу этого вызова (их вернул прежний
+/// виток этого же отката или их снесли/вернули мимо Хранителя): этот вызов их файлом не трогал, и
+/// молчать об этом значило бы «успех, страницы возвращены» о файле, которого он не касался (W3-3).
+/// Поле опционально для текущих потребителей. Отказ — в теле 409: code + message + pages (pages —
+/// изменённые страницы, на которые человеку смотреть перед повторной попыткой).</summary>
+public sealed record WikiRevertDto(IReadOnlyList<string> RestoredPages, IReadOnlyList<string>? AlreadyPages = null);
 
 /// <summary>Запрос «Откатить всё из этого источника»: карточка источника
 /// («{origin}:…» — та же форма, что в пакетах и журнале).</summary>

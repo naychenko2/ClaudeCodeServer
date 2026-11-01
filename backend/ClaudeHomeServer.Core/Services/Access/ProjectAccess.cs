@@ -39,6 +39,12 @@ public enum ProjectRight
     /// (ревью S1-2, S2a-10).
     /// </summary>
     Configure,
+    /// <summary>
+    /// Запись контента проекта участником (S2c-3): заменяет собой закрытый для участника
+    /// <see cref="Write"/> там, где двери переведут поимённо (S2c-7/S2c-8). Владелец и редактор —
+    /// да, читатель — нет. Пока ни одна дверь это право не использует; всё, что не переведено, закрыто.
+    /// </summary>
+    WriteContent,
 }
 
 /// <summary>
@@ -80,7 +86,7 @@ public static class ProjectAccess
         role switch
         {
             ProjectRole.Owner => true,
-            ProjectRole.Editor => right is ProjectRight.Read or ProjectRight.Write or ProjectRight.RunTurn,
+            ProjectRole.Editor => right is ProjectRight.Read or ProjectRight.Write or ProjectRight.RunTurn or ProjectRight.WriteContent,
             ProjectRole.Reader => right == ProjectRight.Read,
             _ => false,
         };

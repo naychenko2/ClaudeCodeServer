@@ -30,7 +30,8 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // 404 {code:"not_found"} — чужой и несуществующий неразличимы; 409 {code,message} —
 // task_execution, marked_skip, personal_section, wiki_not_initialized.
 // analyze-status: 200 {running, last?{outcome,reason,packageIds,finishedAt}}, чужой чат — 404.
-// Список: строка чата несёт running, cursor, chroniclePath (путь — по формуле сервиса).
+// Список: строка чата несёт running, cursor, chroniclePath (путь — по формуле сервиса,
+// и только если файл хроники есть на диске — N1, дефект 58ad40a5: после отката — null).
 public class WikiChatsControllerTests : IDisposable
 {
     private const string User = "u1";
@@ -240,6 +241,11 @@ public class WikiChatsControllerTests : IDisposable
         // Стор заполняем пересчётом: он не разбирает и курсора не ставит — ровно то,
         // что нужно, чтобы видеть нулевые значения новых полей.
         ((IStatusCodeActionResult)await Controller().Recalculate()).StatusCode.Should().Be(200);
+        // Ожидание N1 (дефект 58ad40a5): путь без файла больше не отдаётся — хроника на диске.
+        // Ставим её тем же методом, которым её пишет разбор (WritePageAsync — ровно тот, что
+        // зовёт AppendChronicleAsync, образец H2-1): тест держит дисковое состояние, не формат.
+        var w = await _keeper.WritePageAsync(User, "projects/p1", "Проекты/p1/Хроники/chat-1.md", ChronicleStub());
+        w.Status.Should().Be(WikiOpStatus.Applied, w.Reason);
 
         var list = (WikiChatsListDto)((OkObjectResult)Controller().List()).Value!;
 
@@ -251,6 +257,55 @@ public class WikiChatsControllerTests : IDisposable
 
         var personal = list.Items.Single(i => i.SessionId == "s-personal");
         personal.ChroniclePath.Should().BeNull("в личном разделе хроник не бывает (личный закрыт до Ф2)");
+    }
+
+    // ─── 7. Запись стора есть, файла хроники нет — пути нет (N1) ──────────────
+
+    [Fact]
+    public async Task Список_ЧатБезФайлаХроники_ChroniclePathNull()
+    {
+        AddSession();
+        // Запись стора есть (её поставил пересчёт), хроники никогда не было: путь по формуле
+        // выводится, но открыть его нечем — «Открыть хронику» вела бы на мёртвую страницу.
+        ((IStatusCodeActionResult)await Controller().Recalculate()).StatusCode.Should().Be(200);
+
+        var list = (WikiChatsListDto)((OkObjectResult)Controller().List()).Value!;
+        list.Items.Single(i => i.SessionId == ChatId).ChroniclePath.Should().BeNull(
+            "файла хроники нет — пути нет (N1: фронт ведёт на «Не найдено»)");
+
+        // Мутация «убрать проверку существования файла» (ChroniclePathIfExists): путь вернулся
+        // бы по одной формуле — тест красный.
+    }
+
+    // ─── 8. Откат хроники: тот же запрос списка — null (дефект N1) ────────────
+
+    [Fact]
+    public async Task Список_ХроникаСнятаОткатом_ChroniclePathNull()
+    {
+        AddSession();
+        SetShortHistory();
+        _llm.Script(("A", Claims(Claim1)), ("B", Plan1));
+        var first = await Controller().AnalyzeCore(ChatId, Wait);
+        ((IStatusCodeActionResult)first).StatusCode.Should().Be(200);
+        Body(first).GetProperty("outcome").GetString().Should().Be(WikiChatIngestService.OutcomeApplied);
+
+        // Разбор написал хронику (AppendChronicleAsync) — путь отдаётся.
+        var withFile = (WikiChatsListDto)((OkObjectResult)Controller().List()).Value!;
+        withFile.Items.Single(i => i.SessionId == ChatId).ChroniclePath
+            .Should().Be("Проекты/p1/Хроники/chat-1.md", "хроника на диске — путь есть");
+
+        // Откат по источнику снимает хронику целиком (WikiRetractService, мера 5); запись
+        // стора остаётся — список продолжает показывать чат, но без пути.
+        var retract = new WikiRetractService(_notes, _keeper, new WikiPackageRevert(_notes, _keeper, _config),
+            _sessions, new NoSpheres(), _config);
+        var res = await retract.RetractAsync(User, "session:" + ChatId);
+        res.Ok.Should().BeTrue(res.Reason);
+        res.Failed.Should().BeEmpty();
+        res.RemovedChronicles.Should().Contain("Проекты/p1/Хроники/chat-1.md");
+
+        var after = (WikiChatsListDto)((OkObjectResult)Controller().List()).Value!;
+        after.Items.Single(i => i.SessionId == ChatId).ChroniclePath.Should().BeNull(
+            "файл хроники откатан — тот же запрос даёт null (N1: «Не найдено», а не мёртвый путь)");
     }
 
     // ─── обвязка ──────────────────────────────────────────────────────────────
@@ -281,6 +336,21 @@ public class WikiChatsControllerTests : IDisposable
         new StoredUserMessage("Давай."),
         new StoredTextMessage("Готово."),
     ];
+
+    // Заглушка хроники на диске — рендер того же кода, что рендерит разбор (WikiPage.Render),
+    // без сносок: тесту нужно существование файла, а не содержание утверждений.
+    private static string ChronicleStub() => new WikiPage
+    {
+        Title = "Хроника чата-1",
+        Frontmatter = new WikiFrontmatter { Type = WikiFrontmatter.TypeChronicle },
+        Sections =
+        [
+            new() { Name = "О чём", Lines = [] },
+            new() { Name = "Что решили", Lines = [] },
+            new() { Name = "Что выяснили", Lines = [] },
+            new() { Name = "Открытые вопросы", Lines = [] },
+        ],
+    }.Render();
 
     private WikiChatsController Controller(string user = User)
     {

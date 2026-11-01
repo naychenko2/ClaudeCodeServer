@@ -15,8 +15,10 @@ namespace ClaudeHomeServer.Notes.Controllers;
 // единственный запрос этого контроллера, который доходит до модели: кнопка человека
 // «разобрать этот чат»; analyze-status — его статус после 202. Поля списка running,
 // cursor, chroniclePath (S7b0a) — текущее состояние чата для фронта: running и last —
-// из сервиса, cursor — из стора, путь хроники — из формулы сервиса (ChroniclePath),
-// не копированием построения.
+// из сервиса, cursor — из стора, дом и путь хроники — из формул сервиса (HomeOf,
+// ChroniclePath), не копированием построения. С N1 (дефект 58ad40a5) chroniclePath —
+// null, если файла хроники нет: после отката фронт должен вести на «Не найдено»,
+// а не на мёртвый путь.
 //
 // Образец — WikiPackagesController: [Authorize], владелец только из токена, коды отказов —
 // контракт для фронта. Состояние читается из стора keeper/chat-triage.json (S6e): список
@@ -72,6 +74,19 @@ public class WikiChatsController : ControllerBase
     private static string? ShownReason(WikiChatTriageEntry e) =>
         e.Zone == WikiChatIngestService.ZoneNothingNew ? e.Reason : e.Stage1Reason ?? e.Reason;
 
+    // Путь хроники отдаётся только когда файл хроники есть на диске (N1, дефект 58ad40a5):
+    // откат по источнику снимает хронику целиком (WikiRetractService, мера 5), и со старым
+    // путём фронт открывал мёртвую страницу. Проверка и отдача не атомарны: GET только
+    // читает, файл может исчезнуть между ними — безвредно, 404 страницы — тот же
+    // контракт для фронта, что был.
+    private string? ChroniclePathIfExists(string home, string sessionId, string userId)
+    {
+        var path = WikiChatIngestService.ChroniclePath(home, sessionId);
+        if (path is null) return null;
+        var full = SafePath.JoinBelowRoot(WikiPaths.Root(_dataDir, userId), "pages/" + path);
+        return System.IO.File.Exists(full) ? path : null;
+    }
+
     /// <summary>GET /api/wiki/chats — список отбора по своей вики: запись стора на каждый
     /// существующий свой чат, с причиной и сигналами; counts — число чатов по каждой
     /// ПОКАЗАННОЙ зоне (ShownZone). Записи несуществующего или уже чужого чата из списка
@@ -97,15 +112,12 @@ public class WikiChatsController : ControllerBase
             var zone = ShownZone(e);
             counts[zone] = counts.TryGetValue(zone, out var c) ? c + 1 : 1;
             // Дом чата — та же формула, что у разбора (AnalyzeAsync): в записи стора дома нет,
-            // он выводится из чата. Путь хроники — из формулы сервиса, не отсюда.
-            var home = session.ProjectId is { Length: > 0 } projectId
-                ? WikiSections.ProjectsPrefix + projectId
-                : WikiSections.Personal;
+            // он выводится из чата. Дом и путь — из формул сервиса, не отсюда.
             items.Add(new WikiChatTriageDto(
                 e.SessionId, session.Name, zone, e.Score, e.Signals, ShownReason(e),
                 e.NothingNewStreak, e.TriagedAt,
                 _chat.IsRunning(userId, e.SessionId), e.Cursor,
-                WikiChatIngestService.ChroniclePath(home, e.SessionId)));
+                ChroniclePathIfExists(WikiChatIngestService.HomeOf(session), e.SessionId, userId)));
         }
 
         items = items
@@ -241,8 +253,9 @@ public sealed record WikiChatsListDto(IReadOnlyList<WikiChatTriageDto> Items, IR
 /// ShownZone), балл и сигналы (null — балла ещё нет), причина для человека этой зоны,
 /// счётчик «нечего добавить»; running — разбор идёт сейчас (S7b0a, тот же источник, что у
 /// analyze-status), cursor — курсор разбора из стора (0 — ещё не разбирали), chroniclePath —
-/// путь хроники под pages/ по формуле сервиса (null: не-проектный дом или id, не представимый
-/// в пути; существования файла не обещает — хронику создаёт применённый разбор).</summary>
+/// путь хроники под pages/ по формуле сервиса, только если файл хроники есть на диске
+/// (null: не-проектный дом, id, не представимый в пути, или файла нет — хронику создаёт
+/// применённый разбор и снимает откат по источнику).</summary>
 public sealed record WikiChatTriageDto(
     string SessionId, string? Name, string Zone, int? Score,
     IReadOnlyList<WikiTriageSignal>? Signals, string? Reason,

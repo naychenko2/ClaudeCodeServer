@@ -508,9 +508,10 @@ public sealed class WikiChatIngestService
     }
 
     /// <summary>Дом чата — раздел назначения (ADR-036, решение 3): проект → его раздел,
-    /// иначе личный. Одна формула на весь сервис: её же спрашивает ссылка хроники
-    /// продолжения (ContinuationLinkLine), чтобы не второй рубеж разбора дома.</summary>
-    private static string HomeOf(Session session) =>
+    /// иначе личный. Одна формула на весь продукт: её же спрашивают ссылка хроники
+    /// продолжения (ContinuationLinkLine) и список чатов (WikiChatsController.List),
+    /// чтобы не второго рубежа построения дома (N1).</summary>
+    public static string HomeOf(Session session) =>
         session.ProjectId is { Length: > 0 } projectId
             ? WikiSections.ProjectsPrefix + projectId
             : WikiSections.Personal;

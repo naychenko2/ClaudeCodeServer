@@ -15,7 +15,17 @@ export interface SaveConflict {
   sha256: string;                                  // актуальный хеш версии в проекте
   author?: { userId?: string; displayName: string };
   changedAt?: string;                              // ISO
-  sourceLabel?: string;                            // «чат „Меню на зиму“» / «приватный чат»; не пришёл — не показываем
+  source?: SaveConflictSource | null;              // К8: ChatRef | null; нет или null — подпись источника не показываем
+}
+
+// Фронтовая форма ChatRef из К8: название чата, из которого пришла правка, либо признак приватного чата.
+export interface SaveConflictSource { chatTitle?: string; private?: boolean }
+
+// «чат „Меню на зиму“» / «приватный чат»; пустой источник — подписи нет
+function sourceCaption(source: SaveConflict['source']): string {
+  if (!source) return '';
+  if (source.private) return 'приватный чат';
+  return source.chatTitle ? `чат „${source.chatTitle}“` : '';
 }
 
 interface Props {
@@ -49,6 +59,7 @@ export function SaveConflictDialog({
   const [expanded, setExpanded] = useState(false);
   const author = conflict.author?.displayName || 'Другой участник';
   const when = conflict.changedAt ? relTime(conflict.changedAt) : '';
+  const caption = sourceCaption(conflict.source);
   const title = conflict.code === 'note_changed' ? 'Заметку изменили, пока вы правили' : 'Файл изменили, пока вы правили';
   const what = conflict.code === 'note_changed' ? 'заметку' : 'файл';
 
@@ -80,7 +91,7 @@ export function SaveConflictDialog({
           <span style={{ minWidth: 0 }}>
             <b style={{ color: C.textPrimary }}>{author}</b>
             {when && ` · ${when}`}
-            {conflict.sourceLabel && ` · ${conflict.sourceLabel}`}
+            {caption && ` · ${caption}`}
             {' — '}{what}{' '}
             <span style={{ fontFamily: FONT.mono, overflowWrap: 'anywhere' }}>{fileName}</span>
           </span>

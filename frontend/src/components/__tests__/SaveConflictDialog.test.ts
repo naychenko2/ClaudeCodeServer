@@ -75,6 +75,24 @@ describe('SaveConflictDialog', () => {
     expect(html).not.toContain('Показать разницу');
   });
 
+  it('главное действие — primary: «копия» на accent-фоне, остальные нет', () => {
+    const btn = (html: string, label: string) => html.match(new RegExp(`<button[^>]*>(?:(?!</button>).)*${label}`))?.[0] ?? '';
+    for (const mobile of [false, true]) {
+      mobileFlag.value = mobile;
+      const html = render();
+      expect(btn(html, COPY)).toContain('background:var(--c-accent)');
+      expect(btn(html, REPLACE)).not.toContain('background:var(--c-accent)');
+      expect(btn(html, TAKE)).not.toContain('background:var(--c-accent)');
+    }
+  });
+
+  it('source с чатом — подпись в шапке; приватный — своя; null/нет — подписи нет', () => {
+    expect(render({ conflict: { ...conflict, source: { chatTitle: 'Меню на зиму' } } })).toContain('чат „Меню на зиму“');
+    expect(render({ conflict: { ...conflict, source: { private: true } } })).toContain('приватный чат');
+    expect(render({ conflict: { ...conflict, source: null } })).not.toMatch(/чат/);
+    expect(render()).not.toMatch(/чат/);
+  });
+
   it('тач-цели: все три кнопки не ниже 40 px', () => {
     const html = render();
     const heights = [...html.matchAll(/min-height:(\d+)px/g)].map(m => Number(m[1]));

@@ -142,7 +142,7 @@ public sealed class WikiLintService : BackgroundService
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _log.LogWarning(ex, "Ночное окно линта вики");
+            LogSafe(ex, "Ночное окно линта вики");
         }
     }
 
@@ -187,7 +187,20 @@ public sealed class WikiLintService : BackgroundService
     private async Task<bool> RunOwnerGuardedAsync(string ownerId)
     {
         try { await TryRunOwnerAsync(ownerId); return true; }
-        catch (Exception ex) { _log.LogWarning(ex, "Ночной линт вики {Owner}", ownerId); return false; }
+        catch (Exception ex) { LogSafe(ex, "Ночной линт вики {Owner}", ownerId); return false; }
+    }
+
+    // Безопасное логирование внутри оборон тика и охраны: логирование не может становиться
+    // новым источником исключения — отказ записи (отказ sink'а, диск полон) вышел бы из
+    // охраны в цикл тика и срвал остальных владельцев, а из catch тика — наружу
+    // ExecuteAsync, и BackgroundService с дефолтом StopHost погасил бы весь хост ночью.
+    // Сообщить об отказе журнала тем же журналом — тот же отказ: молчание здесь —
+    // единственный исход. В ночном пути все остальные записи журнала стоят в catch'ах
+    // прогона и при отказе доходят до охраны владельца — её лог защищён здесь же.
+    private void LogSafe(Exception ex, string messageTemplate, params object?[] args)
+    {
+        try { _log.LogWarning(ex, messageTemplate, args); }
+        catch { /* журнал не пишет: сообщить об этом нечем */ }
     }
 
     // ─── Прогон владельца ─────────────────────────────────────────────────────

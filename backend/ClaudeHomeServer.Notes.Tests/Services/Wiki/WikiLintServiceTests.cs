@@ -204,19 +204,29 @@ public class WikiLintServiceTests : IDisposable
     [Fact]
     public async Task Тик_Исключение_НеВыходитИзExecuteAsync()
     {
-        var p = CreateProject("Сбой");
+        var mine = CreateProject("Целый");
+        var other = CreateProject("Сбойный", owner: Foreign);
         await _keeper.EnsureInitializedAsync(User);
-        await WriteGoodPage(p.Id, "Знание");
+        await _keeper.EnsureInitializedAsync(Foreign);
+        await WriteGoodPage(mine.Id, "Знание");
+        await WriteGoodPage(other.Id, "Знание", user: Foreign);
 
-        // Две неудачи сразу: проверка флага бросает для владельца (её закрывает охрана владельца),
-        // и логирование самой охраны бросает — исключение за пределами охраны владельца,
-        // и catch тика — последняя оборона службы.
+        // Две неудачи сразу: проверка флага бросает для чужого владельца (её закрывает
+        // охрана владельца), и журнал бросает на любой записи — и лог об отказе охраны,
+        // и catch тика как последняя оборона. Логирование не может стать новым источником
+        // исключения: иначе хост гасится ночью, а остальных владельцев срывает.
         var sut = new WikiLintService(_notes, _keeper, _spheres, _config,
-            new ThrowingLogger("Ночной линт вики"), _flags);
-        _flags.ThrowFor = User;
+            new ThrowingLogger(), _flags);
+        _flags.ThrowFor = Foreign;
         Func<Task> act = () => sut.RunNightTickAsync(NightNow());
         await act.Should().NotThrowAsync(
             "исключение внутри тика не должно доходить до ExecuteAsync: иначе BackgroundService гасит хост");
+
+        // Целый владелец прошёл, несмотря на отказ прохода чужого и отказ журнала о нём:
+        // порядок обхода здесь не важен — отказ логирования ни на одном из порядков
+        // не должен срывать другого владельца.
+        File.Exists(HealthOf(mine.Id)).Should().BeTrue(
+            "отказ журнала на чужом владельце не срывает остальных");
     }
 
     [Fact]
@@ -528,19 +538,17 @@ public class WikiLintServiceTests : IDisposable
         }
     }
 
-    // Логгер, бросящий на записи с указанным текстом: моделирует неудачу самого охранителя
-    // (его лог) — исключение за пределами охраны владельца, которое должен погасить catch тика.
+    // Логгер, бросящий на любой записи: моделирует отказ самого журнала (отказ sink'а,
+    // диск полон) — логирование в оборонах не должно становиться новым источником
+    // исключения: ни для хоста (catch тика), ни для остальных владельцев (catch охраны).
     private sealed class ThrowingLogger : ILogger<WikiLintService>
     {
-        private readonly string _message;
-        public ThrowingLogger(string message) => _message = message;
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
         public bool IsEnabled(LogLevel logLevel) => true;
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
             Func<TState, Exception?, string> formatter)
         {
-            if (formatter(state, exception).Contains(_message, StringComparison.Ordinal))
-                throw new InvalidOperationException("запись журнала не удалась: " + _message);
+            throw new InvalidOperationException("запись журнала не удалась: " + formatter(state, exception));
         }
     }
 }

@@ -11,10 +11,12 @@ backend/ClaudeHomeServer/Services/ProjectMembershipService.cs|4
 backend/ClaudeHomeServer/Services/ProjectManager.cs|1
 backend/ClaudeHomeServer/WebDav/WebDavHandler.cs|1
 # Личный чат вне проекта (ProjectId проверен в условии выше): владение самим чатом, проект не участвует —
-# вердикт FINAL-1: это не решение о доступе к проекту, роль и рубильник общих проектов тут неприменимы
-backend/ClaudeHomeServer.AudioEditor/Controllers/AudioEditScopeGate.cs|1
-backend/ClaudeHomeServer.ImageEditor/Controllers/ImageEditScopeGate.cs|1
-backend/ClaudeHomeServer.VideoEditor/Controllers/VideoEditScopeGate.cs|1
+# вердикт FINAL-1: это не решение о доступе к проекту, роль и рубильник общих проектов тут неприменимы.
+# S2d-1d: второй вызов — SessionAccess.CanSee (видимость приватного чата проекта автору); id вызывающего входит
+# только в него, ключом хранилищ не служит, арендатор берётся по Project.OwnerId (см. S1-3a выше)
+backend/ClaudeHomeServer.AudioEditor/Controllers/AudioEditScopeGate.cs|2
+backend/ClaudeHomeServer.ImageEditor/Controllers/ImageEditScopeGate.cs|2
+backend/ClaudeHomeServer.VideoEditor/Controllers/VideoEditScopeGate.cs|2
 # Выбор оверлея личного состояния: нужна лишь классификация роли Editor/Reader; доступ к чату уже решён
 # контроллером/конвертером через IProjectAccess, сама проверка ничего не открывает (вердикт FINAL-1)
 backend/ClaudeHomeServer/Services/ChatUserStateService.cs|1

@@ -60,12 +60,14 @@
 # IProjectAccess.ResolveSession (чат-адресат); ключом хранилищ он не служит (ключ — context.OwnerId из
 # токена арендатора), поэтому счётчики файлов не растут. Мутация проверена: id актора аргументом
 # вызова хранилища в TasksToolset.cs → сторож красный.
+# S2d-1d: у трёх гейтов редакторов 3→4 — id вызывающего второй раз входит только в SessionAccess.CanSee
+# (видимость приватного чата); ключом хранилищ он не служит, арендатор — Project.OwnerId.
 backend/ClaudeHomeServer.Architecture/Controllers/ArchitectureController.cs|2
-backend/ClaudeHomeServer.AudioEditor/Controllers/AudioEditScopeGate.cs|3
-backend/ClaudeHomeServer.ImageEditor/Controllers/ImageEditScopeGate.cs|3
+backend/ClaudeHomeServer.AudioEditor/Controllers/AudioEditScopeGate.cs|4
+backend/ClaudeHomeServer.ImageEditor/Controllers/ImageEditScopeGate.cs|4
 backend/ClaudeHomeServer.Plugins/Controllers/PluginBridgeController.cs|5
 backend/ClaudeHomeServer.Spend/Controllers/SpendController.cs|8
-backend/ClaudeHomeServer.VideoEditor/Controllers/VideoEditScopeGate.cs|3
+backend/ClaudeHomeServer.VideoEditor/Controllers/VideoEditScopeGate.cs|4
 # S2c-6 (доработка 2): в словарь добавлено имя `actor` (локальная переменная тулсетов). WorkspaceToolset|1 —
 # access.ResolveSession(actor, sid): id актора входит только в проверку права на чат-адресат, не ключ хранилищ.
 # ProjectsController 14→15 — GetEvents: `actor` здесь необязательный query-фильтр ленты событий, а не id

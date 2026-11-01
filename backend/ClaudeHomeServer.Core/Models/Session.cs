@@ -374,7 +374,7 @@ public class Session
     // ТОЛЬКО автору — ни другим участникам, ни владельцу проекта (решение 28.10). null — чат
     // общий (виден по доступу к проекту). Отдельное поле, а не OwnerId: владельца проектного
     // чата резолвит проект, а приватность — ограничение видимости, не владения. Ставится
-    // в точке создания (S2d-7a, тумблер visibility); читает её SessionAccess.CanSee. Аддитивное nullable-поле:
+    // тумблером видимости (S2d-7a, PUT /api/chats/{id}/visibility); читает её SessionAccess.CanSee. Аддитивное nullable-поле:
     // старые записи sessions.json читаются с null, BackupSchema.Version не двигается
     // (добавление поля с дефолтом формат не ломает — тот же приём, что у CommittedFilePaths).
     public string? PrivateToUserId { get; set; }

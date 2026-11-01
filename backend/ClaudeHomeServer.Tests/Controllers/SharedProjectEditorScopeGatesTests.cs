@@ -112,8 +112,11 @@ public sealed class SharedProjectEditorScopeGatesTests : IDisposable
 
     // S2d-1d: приватный чат проекта виден только автору — владелец проекта с Write получает тот же 404,
     // что и «нет такого чата»; общий чат проходит как раньше
-    [Fact]
-    public void ПриватныйЧатПроекта_ВидитТолькоАвтор_Остальным404()
+    [Theory]
+    [InlineData("image")]
+    [InlineData("audio")]
+    [InlineData("video")]
+    public void ПриватныйЧатПроекта_ВидитТолькоАвтор_Остальным404(string name)
     {
         var priv = new Session { Id = "priv", ProjectId = _projectId, PrivateToUserId = _editorId };
         var own = new Session { Id = "own", ProjectId = _projectId, PrivateToUserId = _ownerId };
@@ -121,16 +124,16 @@ public sealed class SharedProjectEditorScopeGatesTests : IDisposable
         var dir = new WithSessions(priv, own, open);
         var access = Access();
 
-        bool Image(string u, string s) => new ImageEditScopeGate(_projects, dir, access).TryProjectChat(u, _projectId, s, out _, out _);
-        bool Audio(string u, string s) => new AudioEditScopeGate(_projects, dir, access).TryProjectChat(u, _projectId, s, out _, out _);
-        bool Video(string u, string s) => new VideoEditScopeGate(_projects, dir, access).TryProjectChat(u, _projectId, s, out _, out _);
-
-        foreach (var (name, gate) in new (string, Func<string, string, bool>)[] { ("image", Image), ("audio", Audio), ("video", Video) })
+        bool Gate(string u, string s) => name switch
         {
-            gate(_ownerId, "priv").Should().BeFalse($"{name}: владелец проекта не видит чужой приватный чат");
-            gate(_ownerId, "own").Should().BeTrue($"{name}: автор приватного чата проходит");
-            gate(_ownerId, "open").Should().BeTrue($"{name}: общий чат проходит как раньше");
-        }
+            "image" => new ImageEditScopeGate(_projects, dir, access).TryProjectChat(u, _projectId, s, out _, out _),
+            "audio" => new AudioEditScopeGate(_projects, dir, access).TryProjectChat(u, _projectId, s, out _, out _),
+            _ => new VideoEditScopeGate(_projects, dir, access).TryProjectChat(u, _projectId, s, out _, out _),
+        };
+
+        Gate(_ownerId, "priv").Should().BeFalse($"{name}: владелец проекта не видит чужой приватный чат");
+        Gate(_ownerId, "own").Should().BeTrue($"{name}: автор приватного чата проходит");
+        Gate(_ownerId, "open").Should().BeTrue($"{name}: общий чат проходит как раньше");
     }
 
     private sealed class WithSessions(params Session[] sessions) : ISessionDirectory

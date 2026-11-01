@@ -148,7 +148,8 @@ export function TaskDetailsPane(props: Props) {
 function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, onClose, onOpenSession, onOpenFile, onDeleted }: Props) {
   // Участник общего проекта (редактор/читатель): карточка задачи только для чтения —
   // задачу меняет владелец (S2c-F4j). Проект не под рукой (карточка с стены/календаря) —
-  // берём из общего кэша; личного проекта в кэше нет → обычный режим.
+  // берём из общего кэша (он включает и собственные проекты владельца): у своего проекта
+  // владелец не участник по другой причине — myRole не editor/reader → isParticipant=false.
   const ro = isParticipant(project ?? (task.projectId ? getCachedProject(task.projectId) : undefined));
   // startInEdit у участника игнорируется: форма правки не открывается ни сразу,
   // ни от скрытых здесь действий
@@ -213,6 +214,8 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
   };
 
   const toggleSubtask = (subtaskId: string) => {
+    // Участник (ro): чекбокс виден, но не кликается — бэк отказал бы 403 (ревью 47fd9dd9)
+    if (ro) return;
     void updateTask(task.id, {
       subtasks: task.subtasks.map(s => s.id === subtaskId ? { ...s, isDone: !s.isDone } : s),
     }).catch(e => {
@@ -538,7 +541,8 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
         {task.assigneeUserId && (
           <>
             <HeaderChip><TaskUserBadge projectId={task.projectId} assigneeUserId={task.assigneeUserId} size={18} /></HeaderChip>
-            <FormerAssigneeLine projectId={task.projectId} assigneeUserId={task.assigneeUserId} onAssign={() => setEditing(true)} />
+            {/* Участнику (ro) onAssign не отдаём: «Назначить» не рендерится, форма правки не откроется */}
+            <FormerAssigneeLine projectId={task.projectId} assigneeUserId={task.assigneeUserId} onAssign={ro ? undefined : () => setEditing(true)} />
           </>
         )}
         {task.assignee && !task.assigneeUserId && (
@@ -586,7 +590,7 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
                 onClick={() => toggleSubtask(s.id)}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 11,
-                  padding: '12px 15px', cursor: 'pointer',
+                  padding: '12px 15px', cursor: ro ? 'default' : 'pointer',
                   borderBottom: i < task.subtasks.length - 1 ? `1px solid ${C.borderLight}` : 'none',
                 }}
               >

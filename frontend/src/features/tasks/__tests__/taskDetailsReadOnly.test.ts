@@ -1,6 +1,7 @@
 // S2c-F4j: карточка задачи для участника общего проекта только для чтения: «Изменить»,
 // корзина, «Выполнить с AI» — 0 узлов в DOM, сегмент статуса выключен с подсказкой про
-// владельца, startInEdit и AI-действия панели игнорируются. Рендерим настоящую
+// владельца, startInEdit и AI-действия панели игнорируются; строки подзадач и «Назначить»
+// участнику не кликаются (ревью 47fd9dd9). Рендерим настоящую
 // TaskDetailsPane поверх linkedom; ширину панели задаём явно (getter clientWidth):
 // 500px < порога 720 — узкая раскладка (случай модалки: сегмент статуса под шапкой),
 // 900px — широкая (рельс «Статус» справа). Форму правки подменяем маркером.
@@ -10,7 +11,7 @@ import { createRoot } from 'react-dom/client';
 import { parseHTML } from 'linkedom';
 import type { Task } from '../../../types';
 
-const m = vi.hoisted(() => ({ project: undefined as unknown, width: 500 }));
+const m = vi.hoisted(() => ({ project: undefined as unknown, view: null as unknown, width: 500 }));
 const apiSpy = vi.hoisted(() => ({
   tasks: {
     execute: vi.fn(async () => ({})),
@@ -23,7 +24,7 @@ const apiSpy = vi.hoisted(() => ({
 }));
 
 vi.mock('../../projects/useAllProjects', () => ({ getCachedProject: () => m.project }));
-vi.mock('../../projects/members/MessageAuthorLine', () => ({ loadView: () => Promise.resolve(null) }));
+vi.mock('../../projects/members/MessageAuthorLine', () => ({ loadView: () => Promise.resolve(m.view) }));
 vi.mock('../../../lib/signalr', () => ({
   onProjectMembersChanged: () => () => {}, onMessage: () => () => {}, onReconnected: () => () => {},
   joinUser: async () => {},
@@ -93,6 +94,25 @@ const dispatchAi = async (action: string) => {
   });
 };
 
+const clickEl = async (el: Element) => {
+  await act(async () => { el.dispatchEvent(new win.Event('click', { bubbles: true })); });
+};
+
+// Строка подзадачи — div-обёртка вокруг span с её названием
+const SUBTASK_TITLE = 'Подшаг один';
+const subtaskRow = (host: Element) => {
+  const span = Array.from(host.querySelectorAll('span')).find(s => (s.textContent ?? '').trim() === SUBTASK_TITLE);
+  return span?.parentElement ?? null;
+};
+
+// Список участников: бывший исполнитель u-old — только в formerMembers проекта
+const VIEW = {
+  owner: { userId: 'u-owner', username: 'andrey', displayName: 'Андрей' },
+  members: [{ userId: 'u-m', role: 'editor', displayName: 'Мария' }],
+  myRole: 'owner',
+};
+const FORMER = [{ userId: 'u-old', displayName: 'Олег' }];
+
 describe('панель деталей: участник только для чтения', () => {
   it.each(['editor', 'reader'] as const)('участник (%s): нет «Изменить», корзины, «Выполнить с AI»; статус выключен с подсказкой владельца', async (role) => {
     m.project = { myRole: role }; m.width = 500;
@@ -156,5 +176,40 @@ describe('панель деталей: участник только для чт
     apiSpy.tasks.execute.mockClear();
     await dispatchAi('task.execute');
     expect(apiSpy.tasks.execute).toHaveBeenCalledTimes(1);
+  });
+
+  // Ревью 47fd9dd9 (п.1): строки подзадач видны, но у участника клик не идёт в updateTask
+  // (бэк отказал бы 403 «Нет права на запись» с тостом при выключенном статусе)
+  it.each(['editor', 'reader'] as const)('участник (%s): клик по строке подзадачи не зовёт api.tasks.update', async (role) => {
+    m.project = { myRole: role }; m.width = 500;
+    const host = await mount({ subtasks: [{ id: 's1', title: SUBTASK_TITLE, isDone: false }] });
+    const row = subtaskRow(host);
+    expect(row).not.toBeNull(); // чекбокс и строка остаются видимыми
+    apiSpy.tasks.update.mockClear();
+    await clickEl(row!);
+    expect(apiSpy.tasks.update).not.toHaveBeenCalled();
+  });
+
+  // Ревью 47fd9dd9 (п.2): участнику onAssign не отдаём — «Назначить» нет в DOM, форма правки не откроется
+  it.each(['editor', 'reader'] as const)('участник (%s): «была на…» без кнопки «Назначить», формы правки нет', async (role) => {
+    m.project = { myRole: role, formerMembers: FORMER }; m.view = VIEW; m.width = 500;
+    const host = await mount({ assigneeUserId: 'u-old' });
+    expect(host.querySelector('[data-testid="former-assignee"]')).not.toBeNull(); // строка видна
+    expect(buttonsByText(host, 'Назначить')).toHaveLength(0);
+    expect(host.querySelector('[data-testid="edit-form"]')).toBeNull();
+  });
+
+  it('владелец: подзадача кликается (update один раз), «Назначить» на месте и открывает форму правки', async () => {
+    m.project = { myRole: 'owner', formerMembers: FORMER }; m.view = VIEW; m.width = 500;
+    const host = await mount({ subtasks: [{ id: 's1', title: SUBTASK_TITLE, isDone: false }], assigneeUserId: 'u-old' });
+    const row = subtaskRow(host);
+    expect(row).not.toBeNull();
+    apiSpy.tasks.update.mockClear();
+    await clickEl(row!);
+    expect(apiSpy.tasks.update).toHaveBeenCalledTimes(1);
+    const btn = buttonsByText(host, 'Назначить');
+    expect(btn).toHaveLength(1);
+    await clickEl(btn[0]);
+    expect(host.querySelector('[data-testid="edit-form"]')).not.toBeNull();
   });
 });

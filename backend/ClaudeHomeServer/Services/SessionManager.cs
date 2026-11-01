@@ -7,6 +7,7 @@ using ClaudeHomeServer.Core.Telemetry;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.ChatSubjects;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Prompts;
@@ -2374,10 +2375,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     {
         var msg = new ChatArchivedMessage(archived) with { SessionId = sessionId };
         var tasks = new List<Task> { _broadcaster.ToSession(sessionId, msg) };
-        if (info.ProjectId is string pid)
-            tasks.Add(_broadcaster.ToProject(pid, msg));
-        else if (info.OwnerId is string oid)
-            tasks.Add(_broadcaster.ToOwner(oid, msg));
+        tasks.Add(_broadcaster.ToChatAudience(info, msg));
         await Task.WhenAll(tasks);
     }
 
@@ -7119,10 +7117,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     {
         var msg = new ChatRenamedMessage(name, info.Topic) with { SessionId = sessionId };
         var tasks = new List<Task> { _broadcaster.ToSession(sessionId, msg) };
-        if (info.ProjectId is string pid)
-            tasks.Add(_broadcaster.ToProject(pid, msg));
-        else if (info.OwnerId is string oid)
-            tasks.Add(_broadcaster.ToOwner(oid, msg));
+        tasks.Add(_broadcaster.ToChatAudience(info, msg));
         await Task.WhenAll(tasks);
     }
 
@@ -10111,10 +10106,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     {
         var msg = new ChatDeletedMessage() with { SessionId = sessionId };
         var tasks = new List<Task> { _broadcaster.ToSession(sessionId, msg) };
-        if (info.ProjectId is string pid)
-            tasks.Add(_broadcaster.ToProject(pid, msg));
-        else if (info.OwnerId is string oid)
-            tasks.Add(_broadcaster.ToOwner(oid, msg));
+        tasks.Add(_broadcaster.ToChatAudience(info, msg));
         await Task.WhenAll(tasks);
     }
 
@@ -11217,10 +11209,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
         var wired = msg with { SessionId = sessionId };
         var tasks = new List<Task> { _broadcaster.ToSession(sessionId, wired) };
-        if (entry.Info.ProjectId is string pid)
-            tasks.Add(_broadcaster.ToProject(pid, wired));
-        else if (entry.Info.OwnerId is string oid)
-            tasks.Add(_broadcaster.ToOwner(oid, wired));
+        tasks.Add(_broadcaster.ToChatAudience(entry.Info, wired));
         await Task.WhenAll(tasks);
     }
 
@@ -11268,10 +11257,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var statusMsg = new StatusChangedMessage(status.ToString().ToLower(), lastMessage, messageCount)
             with { SessionId = sessionId };
         var tasks = new List<Task> { _broadcaster.ToSession(sessionId, statusMsg) };
-        if (info.ProjectId is string pid)
-            tasks.Add(_broadcaster.ToProject(pid, statusMsg));
-        else if (info.OwnerId is string oid)
-            tasks.Add(_broadcaster.ToOwner(oid, statusMsg));
+        tasks.Add(_broadcaster.ToChatAudience(info, statusMsg));
         await Task.WhenAll(tasks);
     }
 }

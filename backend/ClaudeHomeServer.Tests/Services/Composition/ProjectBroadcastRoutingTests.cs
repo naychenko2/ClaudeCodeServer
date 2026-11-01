@@ -125,4 +125,41 @@ public class ProjectBroadcastRoutingTests
 
         spy.Calls.Should().Equal(("project", "proj-1"), ("owner", "owner-1"));
     }
+
+    // S2d-2a: адресация событий чата
+
+    [Fact]
+    public async Task ToChatAudience_ОбщийЧатПроекта_ГруппеПроекта()
+    {
+        var spy = new Spy();
+        await spy.ToChatAudience(new Session { ProjectId = "proj-1", OwnerId = "o1" }, Msg);
+        spy.Calls.Should().Equal(("project", "proj-1"));
+    }
+
+    [Fact]
+    public async Task ToChatAudience_ПриватныйЧат_ТолькоАвтору()
+    {
+        var spy = new Spy();
+        await spy.ToChatAudience(new Session { ProjectId = "proj-1", OwnerId = "o1", PrivateToUserId = "author" }, Msg);
+        spy.Calls.Should().Equal(("owner", "author"));
+    }
+
+    [Fact]
+    public async Task ToChatAudience_ЧатВнеПроекта_Владельцу()
+    {
+        var spy = new Spy();
+        await spy.ToChatAudience(new Session { OwnerId = "o1" }, Msg);
+        spy.Calls.Should().Equal(("owner", "o1"));
+    }
+
+    [Fact]
+    public async Task ToChatAudience_ПриватностьЧитаетсяВМоментОтправки_ПослеСделатьОбщимИдётГруппе()
+    {
+        var spy = new Spy();
+        var s = new Session { ProjectId = "proj-1", OwnerId = "o1", PrivateToUserId = "author" };
+        await spy.ToChatAudience(s, Msg);
+        s.PrivateToUserId = null;
+        await spy.ToChatAudience(s, Msg);
+        spy.Calls.Should().Equal(("owner", "author"), ("project", "proj-1"));
+    }
 }

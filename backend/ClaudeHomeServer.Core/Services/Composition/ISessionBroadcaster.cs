@@ -65,6 +65,19 @@ public static class SessionBroadcasterExtensions
             ? broadcaster.ToOwner(ownerId, message)
             : broadcaster.ToProject(projectId, message);
 
+    // Событие чата (статус, имя, архив, удаление, внеходовое сообщение), уходящее за пределы session-группы:
+    // общий чат проекта — группе project_{id}; приватный (PrivateToUserId) — только автору, иначе название,
+    // последнее сообщение и статус утекли бы остальным участникам; чат вне проекта — владельцу.
+    // PrivateToUserId читается В МОМЕНТ вызова (синхронно, до первого await): после «сделать общим» событие
+    // уйдёт группе проекта, обратное направление безопасно — лишнего не утечёт.
+    public static Task ToChatAudience(this ISessionBroadcaster broadcaster, Session session, ServerMessage message)
+    {
+        if (session.ProjectId is not string pid || string.IsNullOrEmpty(pid))
+            return string.IsNullOrEmpty(session.OwnerId) ? Task.CompletedTask : broadcaster.ToOwner(session.OwnerId, message);
+        var author = session.PrivateToUserId;
+        return string.IsNullOrEmpty(author) ? broadcaster.ToProject(pid, message) : broadcaster.ToOwner(author, message);
+    }
+
     // Событие доски: у задачи проекта — участникам группы проекта и дополнительно владельцу
     // карточки, потому что общий стор задач (календарь, список вне проекта) подписан только
     // на user_{id} и без второй адресации не увидел бы собственных проектных задач.

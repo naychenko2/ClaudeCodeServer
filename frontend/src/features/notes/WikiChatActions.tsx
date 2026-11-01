@@ -41,7 +41,7 @@ import { Button } from '../../components/ui/Button';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { ToolbarOverflowMenu, type OverflowItem } from '../../components/ToolbarOverflowMenu';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import { personalSectionRefusalText, wikiErrorText } from './wiki/wikiLabels';
+import { countWord, isOne, personalSectionRefusalText, wikiErrorText } from './wiki/wikiLabels';
 import type { ChatHeaderSummaryCtx } from '../../lib/subsystems/registryCore';
 
 // Пауза между опросами analyze-status: analyze ждёт исход сам ≤10 с (WikiChatsController),
@@ -97,20 +97,10 @@ export async function requestNoteIngest(noteId: string): Promise<string> {
   }
 }
 
-// Согласование по числу (тот же приём, что stepWord в FeatureProdCardsView):
-// 1 / 2–4 / 5+; 11–14 — как 5+. Коротое причастие при «1» согласуется с существительным,
-// при остальних — средний род: так оно читается с числительным-подметом.
-function isOne(n: number): boolean {
-  const m10 = n % 10, m100 = n % 100;
-  return m10 === 1 && m100 !== 11;
-}
-// экспортирован: тот же согласователь нужен «Журналу» (форма «1 применённая запись» в
-// модалке отката, доработка H5-чисел) — второй копии помощника в фиче нет
-export function countWord(n: number, one: string, few: string, many: string): string {
-  const m10 = n % 10, m100 = n % 100;
-  const w = (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) ? few : many;
-  return `${n} ${isOne(n) ? one : w}`;
-}
+// countWord и isOne переехали в wikiLabels (W4-3): тот же согласователь нужен «Журналу»,
+// второй копии помощника в фиче нет. Re-export ниже — фасад прежнего пути для «Журнала»
+// (import '../WikiChatActions'): перевод потребителей на новый дом — отдельный шаг (W4-4).
+export { countWord } from './wiki/wikiLabels';
 
 // Итог отката по источнику — текстом, как в «Журнале» (та же форма частей)
 export function retractResultText(r: WikiRetractDto): string {

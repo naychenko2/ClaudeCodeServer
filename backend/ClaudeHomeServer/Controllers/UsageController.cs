@@ -141,7 +141,8 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
             {
                 var route = localRouter.Resolve(a.Key);
                 return new OllamaActionInfo(a.Key, a.Title, a.Group,
-                    RoutedToOllama: route.Kind == RouteKind.Local && enabled,
+                    // Именованный движок (Gemma на Video) доступен независимо от основного LocalLlm
+                    RoutedToOllama: route.Engine is null ? route.Kind == RouteKind.Local && enabled : localRouter.UsesLocal(a.Key),
                     Source: route.Source.ToString().ToLowerInvariant(),
                     Route: route.Kind switch
                     {
@@ -157,7 +158,8 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
                     FacePose: a.FacePose,
                     // Та же логика, что в LocalActionsAdminController.Describe — без дубля:
                     // preset раскрывается по сырому значению стора и общим пресетам.
-                    Preset: LocalActionsAdminController.DescribePreset(localActions.TryGet(a.Key), globalPresets));
+                    Preset: LocalActionsAdminController.DescribePreset(localActions.TryGet(a.Key), globalPresets),
+                    Engine: localRouter.EngineLabel(route));
             })
             .ToList();
         return new OllamaUsageInfo(enabled, enabled ? localRouter.LocalModel : null,

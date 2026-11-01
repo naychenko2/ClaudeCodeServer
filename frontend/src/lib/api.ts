@@ -1064,10 +1064,10 @@ export const api = {
   // ollama ответа /usage.
   localActions: {
     setRoute: (key: string, route: string) =>
-      request<{ key: string; route: string; source: string; preset?: PlacePresetRef | null }>(`/admin/local-actions/${key}`,
+      request<{ key: string; route: string; source: string; preset?: PlacePresetRef | null; engine?: string | null }>(`/admin/local-actions/${key}`,
         { method: 'PUT', body: JSON.stringify({ route }) }),
     reset: (key: string) =>
-      request<{ key: string; route: string; source: string; preset?: PlacePresetRef | null }>(`/admin/local-actions/${key}`,
+      request<{ key: string; route: string; source: string; preset?: PlacePresetRef | null; engine?: string | null }>(`/admin/local-actions/${key}`,
         { method: 'DELETE' }),
     // Массовый автоподбор исполнителя всем действиям по пресету; актуальные маршруты фронт
     // затем перечитывает из /usage. preset: 'tiers' | 'tiers-local'.

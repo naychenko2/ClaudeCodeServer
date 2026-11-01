@@ -146,6 +146,11 @@ public sealed class LocalActionRouter
     public LocalEngine? EngineOf(ActionRoute route) =>
         route.Kind == RouteKind.Local ? _engines?.Get(route.Engine) : null;
 
+    // Подпись именованного движка маршрута для UI (Title, иначе модель, иначе имя); null — основной
+    // LocalLlm или не локаль. Без неё настройки показывали бы модель основного движка.
+    public string? EngineLabel(ActionRoute route) =>
+        EngineOf(route)?.Spec is { } s ? (s.Title ?? s.Model ?? s.Name) : null;
+
     // Модель голосового хода (место chat-voice) по ЯВНОМУ выбору админа: слот →
     // UserModelTierResolver.ModelFor (единственная точка разворачивания уровня), конкретная
     // модель → как есть. «Локальная» (свой быстрый HTTP-путь), «по умолчанию» (модель чата),

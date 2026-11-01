@@ -215,10 +215,11 @@ export function routeTier(route: string | null | undefined): TierKey | null {
 // Человекочитаемая подпись маршрута. У слота показываем и его имя, и модель
 // за ним — иначе «Сильная» ничего не говорит о том, что реально поедет.
 export function routeLabel(route: string | null | undefined, ollamaModel?: string,
-  tierModels?: Record<TierKey, string>): string {
+  tierModels?: Record<TierKey, string>, engine?: string | null): string {
   const r = route ?? '';
   if (!r) return 'не задан';
-  if (r === 'local') return `Локальная${ollamaModel ? ` · ${ollamaModel}` : ''}`;
+  // Именованный движок места (Gemma на Video) важнее модели основного: иначе подпись врёт
+  if (r === 'local') return `Локальная${engine ? ` · ${engine}` : ollamaModel ? ` · ${ollamaModel}` : ''}`;
   const tier = routeTier(r);
   if (tier) {
     const m = tierModels?.[tier] ?? '';

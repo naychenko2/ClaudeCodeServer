@@ -82,10 +82,10 @@ export function ApplyTab({ isAdmin, data, models, tierModels, savingScope, onSav
 
   async function pick(a: OllamaActionInfo, route: string) {
     setBusy(a.key); setError(null);
-    patch({ ...a, route, preset: null, routedToOllama: route === 'local', source: 'admin' });
+    patch({ ...a, route, preset: null, engine: null, routedToOllama: route === 'local', source: 'admin' });
     try {
       const res = await api.localActions.setRoute(a.key, route);
-      patch({ ...a, route: res.route, preset: res.preset ?? null, routedToOllama: res.route === 'local',
+      patch({ ...a, route: res.route, preset: res.preset ?? null, engine: res.engine ?? null, routedToOllama: res.route === 'local',
         source: res.source as OllamaActionInfo['source'] });
       void loadModels();
       // Кэш effective-line ключуется по actionKey и сам по себе не видит смену маршрута —
@@ -99,7 +99,7 @@ export function ApplyTab({ isAdmin, data, models, tierModels, savingScope, onSav
     setBusy(a.key); setError(null);
     try {
       const res = await api.localActions.reset(a.key);
-      patch({ ...a, route: res.route, preset: res.preset ?? null, routedToOllama: res.route === 'local',
+      patch({ ...a, route: res.route, preset: res.preset ?? null, engine: res.engine ?? null, routedToOllama: res.route === 'local',
         source: res.source as OllamaActionInfo['source'] });
       invalidateEffectiveLines();
     } catch (e) { setError(e instanceof Error ? e.message : 'Не удалось сбросить'); }
@@ -243,7 +243,7 @@ function ActionRow({ action: a, first, busy, tierModels, ollamaModel, ollamaProv
 
   const triggerLabel = brokenPreset
     ? 'Цепочка удалена — по умолчанию'
-    : preset ? `${preset.name} · ${stepsWord(preset.steps.length)}` : routeLabel(route, ollamaModel, tierModels);
+    : preset ? `${preset.name} · ${stepsWord(preset.steps.length)}` : routeLabel(route, ollamaModel, tierModels, a.engine);
 
   return (
     <div className="cc-mprov-row" style={{

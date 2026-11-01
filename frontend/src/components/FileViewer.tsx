@@ -40,6 +40,7 @@ import { getLanguage } from '../lib/getLanguage';
 import { MarkdownViewer } from './MarkdownViewer';
 import { DocPropsPanel } from '../features/docs/DocPropsPanel';
 import { useDocProps } from '../features/docs/useDocProps';
+import { canWriteContent } from '../features/projects/members/contentRights';
 import { showToast } from '../lib/toast';
 import { beginAiBusy, endAiBusy } from '../lib/ai/busy';
 import { setFileContext, clearFileContext } from '../lib/ai/fileContext';
@@ -545,13 +546,18 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     setFileContext(filePath, fromRoot);
     return () => clearFileContext(filePath);
   }, [filePath, fromRoot]);
-  const canEdit = can('PUT files/content') && fromRoot;
-  const canDelete = can('DELETE files') && fromRoot;
-  const canRevert = can('POST files/revert') && fromRoot;
-  const canStageHunk = can('POST git/stage-hunk');
-  const canRestoreVersion = can('POST git/commits/{sha}/restore-file');
-  const canToMarkdown = can('POST files/document/to-markdown');
-  const canOfficeEdit = canEdit && can('POST files/office-force-save') && can('POST files/office-discard');
+  // Маршрут + право записи по роли (S2c-F4c): контрол записи есть, только если у проекта
+  // есть маршрут И роль умеет эту дверь контента (contentRights.ts). Закрытый — ПРЯЧЕТ,
+  // не отключён: решение живёт в одном месте, а не по каждому контролу. Остальные точки
+  // записи (сохранение/конфликт, автосейв draw.io, office-правок, стейдж, вернуть версию)
+  // рисуются только из-под этих гейтов — отдельного гейта не требуют.
+  const canEdit = can('PUT files/content') && fromRoot && canWriteContent(project, 'file.save');
+  const canDelete = can('DELETE files') && fromRoot && canWriteContent(project, 'file.delete');
+  const canRevert = can('POST files/revert') && fromRoot && canWriteContent(project, 'file.revert');
+  const canStageHunk = can('POST git/stage-hunk') && canWriteContent(project, 'git.stageHunk');
+  const canRestoreVersion = can('POST git/commits/{sha}/restore-file') && canWriteContent(project, 'git.restoreVersion');
+  const canToMarkdown = can('POST files/document/to-markdown') && canWriteContent(project, 'file.toMarkdown');
+  const canOfficeEdit = canEdit && can('POST files/office-force-save') && can('POST files/office-discard') && canWriteContent(project, 'file.office');
   const media = useMediaStream(project.id, filePath, viaAgent,
     !isHostMode && tab === 'file' && !!(fileContent?.isVideo || fileContent?.isAudio));
   // Картинки markdown у локального проекта: билет на каждый путь приходит асинхронно, до

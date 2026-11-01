@@ -202,7 +202,7 @@ jobs:
       # жёсткий гейт отдельным конфигом: в общем линте выше он тонул бы в легаси-долге
       # Видео — ADR-022, хосты контекста хода — ADR-023 §Д6
       - name: Lint remote guard (image-editor, audio-editor, video-editor, хосты контекста)
-        run: npx eslint --config eslint.remote.config.js src/features/imageEditor src/features/audioEditor src/features/videoEditor src/components/chat src/components/generation
+        run: npx eslint --config eslint.remote.config.js src/features/imageEditor src/features/audioEditor src/features/videoEditor src/components/chat src/components/generation src/features/notes
       - name: Build (tsc -b + vite)
         run: npm run build
       - name: Test

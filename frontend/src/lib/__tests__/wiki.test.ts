@@ -8,8 +8,13 @@
 // в тесте фичи (features/notes/wiki/__tests__/wikiLabels.test.ts): дизайн-линт запрещает
 // прямой импорт внутренних модулей фичи отсюда. Доработка S7b-0: analyze-status идёт live
 // (офлайн-кэш ему вреден), список отбора чатов — адрес и разбор полей записи списка.
-// OPEN-1: запрос открыть страницу — контракт очереди (живёт до взятия, последний побеждает);
-// реакция смонтированных экранов — в рендер-тестах WikiTab.test и NotesPage.test.
+// W4-1: перечитка после мутации — только про открытую страницу (счётчик подписки,
+// тестовый шов __test.openPage): 404 перечитки снимает страницу из стора и не выходит
+// наружу; закрытая страница не поднимает поколение и не отбрасывает ответ новой;
+// неформный 200 списка чатов — ошибка, а не тихая пустота, и код wiki_triage_invalid
+// узнаётся. OPEN-1: запрос открыть страницу — контракт очереди (живёт до взятия,
+// последний побеждает); реакция смонтированных экранов — в рендер-тестах
+// WikiTab.test и NotesPage.test.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../signalr', () => ({
@@ -47,6 +52,7 @@ import {
   loadWikiTree,
   parseSectionKey,
   requestOpenWikiPage,
+  retractWikiSource,
 } from '../wiki';
 
 type MockFn = ReturnType<typeof vi.fn>;
@@ -397,6 +403,84 @@ describe('стор вики: операции', () => {
   });
 });
 
+// ─── Перечитка открытой страницы после мутации (W4-1) ───
+// Открытой страницу делает счётчик подписки экрана — в тесте его поднимает шов
+// __test.openPage (те же операции, что у useWikiPage). Свойства:
+// — 404 перечитки (страницу снес откат) снимает страницу из стора и не выходит
+//   необработанным исключением наружу;
+// — закрытая за время мутации страница не перечитывается: её перечитка подняла бы
+//   поколение слота и отбросила ответ только что открытой другой страницы.
+// Мутации (вывод — в отчёте задачи):
+// (1) вернуть в reReadOpenPage тихий .catch (без снятия по ключу) →
+//     «reReadOpenPage404_ЧиститСтраницуВСторе» краснеет (снимок остаётся прежним);
+// (2) снять в adoptWikiPage сверку открытого ключа (перечитывать безусловно) →
+//     «Adopt_ПользовательОткрылДругуюСтраницу_ЕёОтветНеОтброшен» краснеет
+//     (запрос-исключение всё равно поднимает _pageGen, ответ B отбрасывается).
+
+const RETRACT_W41_OK = {
+  revertedPackages: [], unlinkedPackages: [], remainingPackages: [],
+  removedChronicles: [], failed: [], markedSkip: false,
+};
+
+describe('стор вики: перечитка открытой страницы после мутации (W4-1)', () => {
+  it('reReadOpenPage404_ЧиститСтраницуВСторе', async () => {
+    serve({
+      'GET /wiki/tree': TREE,
+      'GET /wiki/page?section=common&page=A.md': PAGE_A,
+    });
+    await ensureWikiLoaded();
+    await loadWikiPage('common', 'A.md');
+    __test.openPage('common', 'A.md'); // экран страницы подписан — она открыта
+    expect(getWikiPageSnapshot('common', 'A.md')).toEqual(PAGE_A);
+
+    // откат по источнику снес страницу: её перечитка даёт 404
+    serve({
+      'POST /wiki/packages/retract': RETRACT_W41_OK,
+      'GET /wiki/page?section=common&page=A.md': httpError(404),
+      'GET /wiki/tree': TREE,
+    });
+    // 404 перечитки — не необработанное исключение наружу: откат отдаёт свой результат
+    const res = await retractWikiSource('note:n1');
+    expect(res).toEqual(RETRACT_W41_OK);
+    // содержимое до отката под открытым экраном не остаётся: страница снята по ключу
+    expect(getWikiPageSnapshot('common', 'A.md')).toBeNull();
+  });
+
+  it('Adopt_ПользовательОткрылДругуюСтраницу_ЕёОтветНеОтброшен', async () => {
+    serve({
+      'GET /wiki/tree': TREE,
+      'GET /wiki/page?section=common&page=A.md': PAGE_A,
+    });
+    await ensureWikiLoaded();
+    await loadWikiPage('common', 'A.md');
+    const closeA = __test.openPage('common', 'A.md');
+
+    const adopt = deferred<{ status: string }>();
+    const pageB = deferred<typeof PAGE_B>();
+    serve({
+      'POST /wiki/adopt': adopt.promise,
+      'GET /wiki/page?section=common&page=B.md': pageB.promise,
+      'GET /wiki/tree': TREE,
+    });
+    const pAdopt = adoptWikiPage('common', 'A.md');
+
+    // за время POST человек закрыл A и открыл B: запрос B — последний в слоте страниц
+    closeA();
+    const pB = loadWikiPage('common', 'B.md');
+
+    adopt.resolve({ status: 'applied' });
+    await pAdopt;
+    // перечитки закрытой A не было: ни одного нового запроса её страницы
+    expect(req.mock.calls.filter((c: unknown[]) => c[0] === '/wiki/page?section=common&page=A.md')).toHaveLength(1);
+    pageB.resolve(PAGE_B);
+    await pB;
+    // ответ B не отброшен как устаревший и не висит на спиннере: стор на B
+    expect(getWikiPageSnapshot('common', 'B.md')).toEqual(PAGE_B);
+    // ответ перечитки A после её закрытия в стор не пишет — прежняя страница не возвращается
+    expect(getWikiPageSnapshot('common', 'A.md')).toBeNull();
+  });
+});
+
 // ─── Разбор по требованию: чат и заметка (S7b-0) и список отбора чатов (доработка H3) ───
 // Транспорт чистый: адрес/метод/тело запроса, разбор 200/202 в типизированный результат,
 // отказ по каждому коду контракта. Мутация «202 трактуется как 200» (убрать ветку running
@@ -559,6 +643,29 @@ describe('вики: список отбора чатов (доработка H3)
     expect(item.running).toBe(false);
     expect(item.cursor).toBe(4);
     expect(item.nothingNewStreak).toBe(3);
+  });
+
+  it('loadWikiChats_КодWikiTriageInvalid_ЭтоWikiErrorСКодом', async () => {
+    // 409 «файл разбора чатов не читается» (WikiChatsController.cs:108,152) — код контракта
+    // узнаётся: экран отбора может назвать причину, а не общий отказ
+    serve({ 'GET /wiki/chats': httpError(409, { code: 'wiki_triage_invalid', message: 'файл разбора чатов не читается' }) });
+    const e = await rejection(() => loadWikiChats());
+    expect(e).toBeInstanceOf(WikiError);
+    expect(e.status).toBe(409);
+    expect(e.code).toBe('wiki_triage_invalid');
+  });
+
+  it('loadWikiChats_Неформный200_Бросает', async () => {
+    // Неформный 200 — не тихая пустота экрана отбора: пустой список бэк говорит items:[]
+    // (List контроллера отдаёт пустой массив — WikiChatsController.cs:110,133), а тело
+    // вне формы — ответ вне контракта, как в analyzeWikiChat
+    for (const body of [{}, { items: null }, null]) {
+      serve({ 'GET /wiki/chats': body });
+      const e = await rejection(() => loadWikiChats());
+      expect(e).toBeInstanceOf(WikiError);
+      expect(e.status).toBe(0);
+      expect(e.message).toContain('неожиданный ответ');
+    }
   });
 });
 

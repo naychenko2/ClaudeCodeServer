@@ -5,9 +5,13 @@ using FluentAssertions;
 namespace ClaudeHomeServer.Tests.Services.Access;
 
 /// <summary>
-/// Рамка хода (S2a-2, разрез §И.3 в редакции решения 29.10): в общем проекте — узкая при любом
-/// акторе, включая самого владельца и отсутствующего; широкая — только в личном проекте
-/// и только при известном арендаторе (иначе — Narrow, fail-closed).
+/// Рамка хода (S2a-2, разрез §И.3 в редакции решений 29.10 и S2d-1b): в общем проекте — узкая при любом
+/// акторе (общий чат владельца, участники, неизвестный актор), Wide — только приватному чату владельца
+/// при акторе-владельце; в личном проекте — широкая и только при известном арендаторе
+/// (иначе — Narrow, fail-closed).
+/// Таблица приёмки S2d-1b: личный проект — Wide; общий чат владельца — Narrow; приватный чат
+/// владельца с актором-владельцем — Wide; приватный чат редактора — Narrow; приватный чат
+/// владельца при неизвестном акторе — Narrow.
 /// </summary>
 public class TurnFrameTests
 {
@@ -26,6 +30,10 @@ public class TurnFrameTests
     }
 
     private static Session SharedChat() => new() { ProjectId = "p", OwnerId = TenantId };
+
+    /// <summary>Приватный чат общего проекта с указанным автором (S2d-1: Session.PrivateToUserId).</summary>
+    private static Session PrivateChat(string authorId) =>
+        new() { ProjectId = "p", OwnerId = TenantId, PrivateToUserId = authorId };
 
     // --- общий проект: узкая рамка всем, включая владельца (решение 29.10)
 
@@ -68,15 +76,50 @@ public class TurnFrameTests
         TurnFrame.Resolve(project, null, tenantId, ReaderId).Should().Be(TurnFrameKind.Narrow);
     }
 
-    // --- признака приватности в модели ещё нет (его введёт S2d-1): чат вердикт общего проекта не меняет
+    // --- строка 2 таблицы: общий чат (без признака приватности) — Narrow и при акторе-владельце (29.10)
 
     [Fact]
-    public void ЧатОбщегоПроектаБезПризнакаПриватности_РамкаУзкая()
+    public void ОбщийЧатВладельца_РамкаУзкая_Решение29_10()
     {
-        // session участвует в сигнатуре под признак S2d-1; сейчас «не приватный» по умолчанию.
+        // Чат без признака приватности (PrivateToUserId null) — общий: вердикт тот же, что без чата.
         var project = SharedProject((EditorId, ProjectRole.Editor));
         TurnFrame.Resolve(project, SharedChat(), TenantId, TenantId).Should().Be(TurnFrameKind.Narrow);
         TurnFrame.Resolve(project, SharedChat(), TenantId, EditorId).Should().Be(TurnFrameKind.Narrow);
+    }
+
+    // --- строки 3–5 таблицы: приватный чат общего проекта (S2d-1b) — Wide только владельцу в своём приватном
+
+    [Fact]
+    public void ПриватныйЧатВладельцаСАкторомВладельцем_РамкаШирокая()
+    {
+        // Рамка открывает личное пространство арендатора — в его собственном приватном чате
+        // оно своё: Wide (правило S2d-1b: PrivateToUserId == tenant && actor == tenant).
+        var project = SharedProject((EditorId, ProjectRole.Editor), (ReaderId, ProjectRole.Reader));
+        TurnFrame.Resolve(project, PrivateChat(TenantId), TenantId, TenantId).Should().Be(TurnFrameKind.Wide);
+    }
+
+    [Theory]
+    [InlineData(EditorId)]
+    [InlineData(TenantId)]
+    public void ПриватныйЧатРедактора_РамкаУзкая(string actorId)
+    {
+        // Рамка открывает личное пространство арендатора (владельца), не редактора: в его приватном
+        // чате она отдала бы ему всё личное владельца. Личное пространство редактора под токеном
+        // арендатора недостижимо — Narrow (ограничение, в плашку). И при акторе-владельце:
+        // чужой приватный он не видит (S2d-1), и рамка его не открывает.
+        var project = SharedProject((EditorId, ProjectRole.Editor));
+        TurnFrame.Resolve(project, PrivateChat(EditorId), TenantId, actorId).Should().Be(TurnFrameKind.Narrow);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void ПриватныйЧатВладельцаПриНеизвестномАкторе_РамкаУзкая_FailClosed(string? actorId)
+    {
+        // Фоновое действие или исполнитель без инициатора не получает личное пространство владельца
+        // и в его собственном приватном чате (fail-closed).
+        var project = SharedProject((ReaderId, ProjectRole.Reader));
+        TurnFrame.Resolve(project, PrivateChat(TenantId), TenantId, actorId).Should().Be(TurnFrameKind.Narrow);
     }
 
     // --- личный проект: широкая рамка — защищать не от чего

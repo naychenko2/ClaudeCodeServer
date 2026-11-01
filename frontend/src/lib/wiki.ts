@@ -144,6 +144,9 @@ export type WikiErrorCode =
   | 'wiki_retract_source'
   // origin-фильтр журнала вне закрытого перечня (400, WikiController.cs:77) — «Журнал» (S7c-2)
   | 'wiki_origin_key'
+  // класс операции вне пары «источник × операция» (400, параметр class журнала и настроек,
+  // WikiController.cs:78 / WikiSettingsController.cs:51) — хвост ревью R-S7c-2
+  | 'wiki_class_key'
   // Отказы прогона линта (S3-3): функция выключена / прогон владельца уже идёт.
   // Читаются в «Здоровье» (S5f)
   | 'wiki_llm_wiki_off'
@@ -169,7 +172,7 @@ const WIKI_ERROR_CODES: ReadonlySet<string> = new Set<string>([
   'wiki_revert_manifest', 'wiki_revert_no_preimages', 'wiki_revert_no_applied',
   'wiki_revert_changed', 'wiki_revert_internal',
   'wiki_retract_shape', 'wiki_retract_off', 'wiki_retract_internal', 'wiki_retract_source',
-  'wiki_origin_key',
+  'wiki_origin_key', 'wiki_class_key',
   'wiki_llm_wiki_off', 'wiki_lint_running',
   'not_found', 'task_execution', 'marked_skip', 'personal_section', 'wiki_not_initialized',
   'packages_limit', 'wiki_note_id',

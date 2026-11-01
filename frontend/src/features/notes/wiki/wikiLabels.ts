@@ -20,6 +20,12 @@ export const PAGE_TYPE: Record<string, string> = {
   decision: 'Решение', chronicle: 'Хроника', source: 'Источник',
 };
 
+// Отказ разбора личной заметки (доработка H5): бэкенд отвечает «личный раздел — с Ф2» —
+// 409 personal_section (разбор чата) или 200 {outcome:'rejected', reason:…} (заявка
+// заметки, noteIngestText в WikiChatActions). Оба показывают этот текст: внутренняя ссылка
+// бэка на Ф2 без пути решения человеку не говорит ничего.
+export const personalSectionRefusalText = 'Личный раздел пока не разбирается — разбор доступен для заметок проекта.';
+
 // Отказы контракта (WikiErrorCode, S2f) — понятным русским текстом; 401/404 приходят без
 // тела и без кода, их отличаем по статусу. Формулировки — черновые (тексты фичи ведёт Софья).
 export function wikiErrorText(e: WikiError): string {
@@ -41,10 +47,14 @@ export function wikiErrorText(e: WikiError): string {
     case 'not_found': return 'Ничего не нашлось';
     case 'task_execution': return 'Чаты исполнения задач не разбираются: их итоги уже источники';
     case 'marked_skip': return 'Чат помечен «не разбирать» — сними пометку';
-    case 'personal_section': return 'Личный раздел — следующее (Ф2)';
+    case 'personal_section': return personalSectionRefusalText;
     case 'wiki_not_initialized': return 'Твоя вики ещё не заведена';
     case 'packages_limit': return 'Открытых пакетов слишком много: разберите «Входящие», потом повторяй заявку';
     case 'wiki_note_id': return 'Нужен id заметки';
+    // Здоровье (S3-3) и класс операции (хвост R-S7c-2): общие тексты по коду. У «Здоровья»
+    // свой текст прогона (healthErrorText) — он точнее для кнопки линта и остаётся там.
+    case 'wiki_llm_wiki_off': return 'Вики выключена в настройках';
+    case 'wiki_class_key': return 'Неизвестный класс';
   }
   if (e.status === 401 || e.status === 403) return 'Нет доступа';
   if (e.status === 404) return 'Не найдено';

@@ -31,14 +31,17 @@ import { WikiPackageView } from './WikiPackageView';
 
 // origin источника — закрытый перечень бэка (WikiGate.OriginValues). Подпись и икона —
 // только для них; нераспознанный origin показывается как есть, не выдумывая тип.
-export const ORIGIN_META: Record<string, { label: string; icon: LucideIcon }> = {
-  session: { label: 'чат', icon: MessageSquare },
-  note: { label: 'заметка', icon: StickyNote },
-  file: { label: 'файл', icon: FileText },
-  url: { label: 'ссылка', icon: Link2 },
-  task: { label: 'задача', icon: ListChecks },
-  dossier: { label: 'досье', icon: GitCommit },
-  memory: { label: 'память', icon: Brain },
+// genitive — родительный падеж с указательным местоимением («из этого чата»): нужен там,
+// где фраза требует падежа, — «Откатить всё из …» в «Журнале» (доработка H4). Подстановка
+// именительного label в такую фразу даёт «из этого чат» — хвост ревью R-S7c-2.
+export const ORIGIN_META: Record<string, { label: string; genitive: string; icon: LucideIcon }> = {
+  session: { label: 'чат', genitive: 'из этого чата', icon: MessageSquare },
+  note: { label: 'заметка', genitive: 'из этой заметки', icon: StickyNote },
+  file: { label: 'файл', genitive: 'из этого файла', icon: FileText },
+  url: { label: 'ссылка', genitive: 'из этой ссылки', icon: Link2 },
+  task: { label: 'задача', genitive: 'из этой задачи', icon: ListChecks },
+  dossier: { label: 'досье', genitive: 'из этого досье', icon: GitCommit },
+  memory: { label: 'память', genitive: 'из этой памяти', icon: Brain },
 };
 
 // Отказы «Входящих» — русским текстом по коду бэка (тот же порядок, что wikiErrorText для

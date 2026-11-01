@@ -11,6 +11,8 @@ describe('тексты кодов разбора по требованию (S7b-
     const codes = [
       'not_found', 'task_execution', 'marked_skip', 'personal_section',
       'wiki_not_initialized', 'packages_limit', 'wiki_note_id',
+      // хвост ревью R-S7c-2: общий словарь должен покрывать и эти коды
+      'wiki_llm_wiki_off', 'wiki_class_key',
     ];
     const texts = codes.map(code => wikiErrorText(new WikiError(409, code as WikiErrorCode, 'x')));
     codes.forEach((code, i) => {

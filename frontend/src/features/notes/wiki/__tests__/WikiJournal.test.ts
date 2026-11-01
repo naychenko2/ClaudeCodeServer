@@ -18,7 +18,11 @@
 // (3) звать reReadOpenPage безусловно (без счётчика открытых) → «закрытая не перечитывается» краснеет;
 // (4) звать doRetract прямо из кнопки, минуя подтверждение → «0 вызовов до подтверждения» краснеет;
 // (5) не переводить отказ (показывать сырой код) → «400 показан текстом» краснеет;
-// (6) убрать проверку loadSeq в .then → «гонка поколений» краснеет.
+// (6) убрать проверку loadSeq в .then → «гонка поколений» краснеет;
+// (7) подставить label вместо genitive в кнопку/заголовок модалки → «падеж кнопки и модалки» и
+//     «откат по источнику» краснеют (доработка H4);
+// (8) убрать countWord (всегда «N применённых записей») → «1 применённая запись» и
+//     «2 применённые записи» краснеют (согласование чисел).
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -350,12 +354,16 @@ describe('«Журнал» (S7c-2)', () => {
     await settle();
     openEntry(c);
     await settle();
+    // кнопка — родительный падеж источника (хвост ревью H4): не «из этого чат»
+    expect(textNodes(buttonByTestId(c, 'wiki-journal-retract')!).join('').trim()).toBe('Откатить всё из этого чата');
     click(buttonByTestId(c, 'wiki-journal-retract'), 'Откатить всё из этого чата');
     await settle();
+    // заголовок модалки — тот же падеж
+    expect(has(docBody(), 'Откатить всё из этого чата?')).toBe(true);
     // подтверждение спросили, бэка ещё не звали
     expect(postCalls()).toHaveLength(0);
     expect(has(docBody(), 'Снимется то, что Хранитель взял из этого источника')).toBe(true);
-    expect(has(docBody(), '1 применённых записей')).toBe(true);
+    expect(has(docBody(), '1 применённая запись')).toBe(true);
     click(buttonByExactText(docBody(), 'Откатить всё'), 'подтверждение отката');
     await settle();
     const posts = postCalls();
@@ -376,9 +384,10 @@ describe('«Журнал» (S7c-2)', () => {
     await settle();
     click(buttonByTestId(c, 'wiki-journal-retract'), 'Откатить всё из этого чата');
     await settle();
-    // сравнение по нормальной форме источника, а не целым ref: два окна — «2», не «1»
-    expect(has(docBody(), '2 применённых записей')).toBe(true);
-    expect(has(docBody(), '1 применённых записей')).toBe(false);
+    // сравнение по нормальной форме источника, а не целым ref: два окна — «2», не «1»;
+    // с «2» согласование «применённые записи» (согласование чисел, хвост ревью)
+    expect(has(docBody(), '2 применённые записи')).toBe(true);
+    expect(has(docBody(), '1 применённая запись')).toBe(false);
     click(buttonByExactText(docBody(), 'Откатить всё'), 'подтверждение отката');
     await settle();
     const posts = postCalls();
@@ -386,6 +395,50 @@ describe('«Журнал» (S7c-2)', () => {
     expect(JSON.parse((posts[0][1] as { body: string }).body)).toMatchObject({
       sourceRef: `session:${CHAT_ID}`,
     });
+  });
+
+  it('падеж кнопки и модалки по типу источника: «из этой заметки», «из этого файла» (хвост ревью H4)', async () => {
+    const NOTE = { ...ENTRY_AUTO, ts: '2026-10-30T06:10:00Z', origin: 'note', source: 'note:note-1', sourceName: 'Заметка о правке' };
+    const FILE = { ...ENTRY_AUTO, ts: '2026-10-30T06:00:00Z', origin: 'file', source: 'file:frontend/src/app.ts', sourceName: null };
+    seedJournal({ ...RESP, entries: [NOTE, FILE] });
+    const c = render();
+    await settle();
+    openEntry(c, 0);
+    await settle();
+    expect(textNodes(buttonByTestId(c, 'wiki-journal-retract')!).join('').trim()).toBe('Откатить всё из этой заметки');
+    click(buttonByTestId(c, 'wiki-journal-retract'), 'откат по заметке');
+    await settle();
+    expect(has(docBody(), 'Откатить всё из этой заметки?')).toBe(true);
+    click(buttonByExactText(docBody(), 'Отмена'), 'закрыть модалку');
+    await settle();
+    click(buttonByTestId(c, 'wiki-journal-back'), 'назад к списку');
+    await settle();
+    openEntry(c, 1);
+    await settle();
+    expect(textNodes(buttonByTestId(c, 'wiki-journal-retract')!).join('').trim()).toBe('Откатить всё из этого файла');
+    click(buttonByTestId(c, 'wiki-journal-retract'), 'откат по файлу');
+    await settle();
+    expect(has(docBody(), 'Откатить всё из этого файла?')).toBe(true);
+  });
+
+  it('согласование чисел в модалке: пять применённых записей — «5 применённых записей»', async () => {
+    // пять окон одного чата — все применённые: форма «5+» той же согласованной цепочки
+    const windowEntry = (from: number, to: number, i: number) => ({
+      ...ENTRY_AUTO, ts: `2026-10-30T03:${20 - i}:00Z`, source: refWindow(from, to),
+      pages: [`projects/p1/page-w${i}`],
+    });
+    seedJournal({
+      entries: [windowEntry(9, 10, 1), windowEntry(7, 8, 2), windowEntry(5, 6, 3), windowEntry(3, 4, 4), windowEntry(1, 2, 5)],
+      take: 200, linesRead: 5, invalidLines: 0,
+    });
+    const c = render();
+    await settle();
+    openEntry(c, 0);
+    await settle();
+    click(buttonByTestId(c, 'wiki-journal-retract'), 'откат по чату');
+    await settle();
+    expect(has(docBody(), '5 применённых записей')).toBe(true);
+    expect(has(docBody(), '5 применённые записи')).toBe(false);
   });
 
   it('пока откат в пути, кнопка записи заблокирована', async () => {

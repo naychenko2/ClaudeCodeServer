@@ -30,7 +30,7 @@ import {
 import { Button } from '../../components/ui/Button';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import { wikiErrorText } from './wiki/wikiLabels';
+import { personalSectionRefusalText, wikiErrorText } from './wiki/wikiLabels';
 import type { ChatHeaderSummaryCtx } from '../../lib/subsystems/registryCore';
 
 // Пауза между опросами analyze-status: analyze ждёт исход сам ≤10 с (WikiChatsController),
@@ -42,6 +42,11 @@ type AnalyzeState =
   | { kind: 'running' }
   | { kind: 'done'; result: WikiChatAnalyzeOk }
   | { kind: 'error'; text: string };
+
+// «личный раздел — с Ф2» — строка бэка (WikiIngestService.cs:180), не код: заявка заметки
+// отдаёт 200 с outcome:'rejected' и reason. Её показывали как есть — внутренняя ссылка бэка
+// на Ф2 ничего не говорит человеку (доработка H5); её текст — в wikiLabels.
+const PERSONAL_SECTION_REASON = 'личный раздел — с Ф2';
 
 // Текст результата разбора — по исходу. Кодовые отказы (task_execution, marked_skip, …)
 // в этот результат не попадают: они WikiError, их текст — wikiErrorText. Неизвестный исход
@@ -57,12 +62,16 @@ export function analyzeResultText(r: WikiChatAnalyzeOk): string {
 }
 
 // Исход заявки заметки — текстом. packageId в текст не идёт: человек идёт в «Входящие».
+// Причина отказа — строка бэка: известные внутренние причины заменяются понятным текстом
+// из wikiLabels (личный раздел — H5), чужая строка остаётся как есть: смысла не выдумываем.
 function noteIngestText(r: WikiNoteIngestDto): string {
   switch (r.outcome) {
     case 'applied': return 'пакет собран и применён';
     case 'awaiting_human': return 'пакет во «Входящих»: ждёт твоего решения';
     case 'nothing_new': return 'нечего добавить';
-    default: return r.reason ? `отказ: ${r.reason}` : 'отказ';
+    default:
+      if (r.reason === PERSONAL_SECTION_REASON) return personalSectionRefusalText;
+      return r.reason ? `отказ: ${r.reason}` : 'отказ';
   }
 }
 
@@ -84,7 +93,9 @@ function isOne(n: number): boolean {
   const m10 = n % 10, m100 = n % 100;
   return m10 === 1 && m100 !== 11;
 }
-function countWord(n: number, one: string, few: string, many: string): string {
+// экспортирован: тот же согласователь нужен «Журналу» (форма «1 применённая запись» в
+// модалке отката, доработка H5-чисел) — второй копии помощника в фиче нет
+export function countWord(n: number, one: string, few: string, many: string): string {
   const m10 = n % 10, m100 = n % 100;
   const w = (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) ? few : many;
   return `${n} ${isOne(n) ? one : w}`;

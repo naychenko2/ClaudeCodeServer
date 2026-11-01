@@ -428,6 +428,16 @@ describe('«Разобрать в базу» у заметки (S7b, логик�
     req.mockImplementation(() => Promise.reject({ status: 400, body: { code: 'wiki_note_id', message: 'note id required' } }));
     expect(await requestNoteIngest('note-1')).toBe('Нужен id заметки');
   });
+
+  it('личная заметка: 200 rejected «личный раздел — с Ф2» — понятный текст, не строка бэка (доработка H5)', async () => {
+    // бэкенд не менялся: заявка личной заметки — 200 {outcome:'rejected', reason:…}
+    // (WikiIngestService.cs:180); фронту нужен текст с путём решения, а не внутренняя ссылка на Ф2
+    req.mockImplementation(() => Promise.resolve({ outcome: 'rejected', packageId: null, reason: 'личный раздел — с Ф2' }));
+    expect(await requestNoteIngest('note-1')).toBe('Личный раздел пока не разбирается — разбор доступен для заметок проекта.');
+    // чужая причина остаётся как есть: её смысла не выдумываем
+    req.mockImplementation(() => Promise.resolve({ outcome: 'rejected', packageId: null, reason: 'карточки источника нет на диске' }));
+    expect(await requestNoteIngest('note-1')).toBe('отказ: карточки источника нет на диске');
+  });
 });
 
 describe('Опрос после 202: ссылка на хронику и гард поколения (доработка S7b, п.2 и п.4)', () => {

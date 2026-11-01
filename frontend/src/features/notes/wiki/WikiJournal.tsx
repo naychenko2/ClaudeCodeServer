@@ -31,6 +31,7 @@ import { EmptyState } from '../../../components/ui/EmptyState';
 import { Notice } from '../../../components/ui/Notice';
 import { Select } from '../../../components/ui/Select';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
+import { countWord } from '../WikiChatActions';
 import { ORIGIN_META } from './WikiInbox';
 import { sectionPrefix, wikiErrorText } from './wikiLabels';
 
@@ -234,7 +235,7 @@ function JournalEntry({
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm, marginTop: SP.md }}>
         {sourceRef && (
           <Button variant="ghost" size="sm" dataTestId="wiki-journal-retract" disabled={busy} onClick={onRetract}>
-            Откатить всё из этого {meta?.label ?? 'источника'}
+            Откатить всё {meta?.genitive ?? 'из этого источника'}
           </Button>
         )}
         {chatId && (
@@ -343,12 +344,12 @@ export function WikiJournal() {
   const confirmMeta = confirm ? originMeta(confirm) : undefined;
   const confirmModal = !confirm ? null : (
     <ConfirmDialog
-      title={`Откатить всё из этого ${confirmMeta?.label ?? 'источника'}?`}
+      title={`Откатить всё ${confirmMeta?.genitive ?? 'из этого источника'}?`}
       subtitle={
         <>
           <div>Снимется то, что Хранитель взял из этого источника за всё время. Знание из других источников останется.</div>
           <ul style={{ margin: `${SP.xs}px 0 0`, paddingLeft: SP.lg }}>
-            <li>В журнале с этим источником: {related.length} применённых записей, {relatedPages.length} стр.</li>
+            <li>В журнале с этим источником: {countWord(related.length, 'применённая запись', 'применённые записи', 'применённых записей')}, {relatedPages.length} стр.</li>
             {confirm.origin === 'session' && (
               <li>Источник получит пометку «не разбирать» — иначе следующая ночь разберёт его заново.</li>
             )}

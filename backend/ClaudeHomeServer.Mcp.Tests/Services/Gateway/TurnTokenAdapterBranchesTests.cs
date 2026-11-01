@@ -62,12 +62,20 @@ public class TurnTokenAdapterBranchesTests
 
     private readonly TurnEventBus _bus = new();
     private readonly List<TurnCompleted> _completed = [];
+    // turn/completed публикуется fire-and-forget из finally оркестрации (FallbackLlmSessionAdapter.cs:1360),
+    // а сама оркестрация живёт в фоновом Task.Run (:331): момент готовности события тесту
+    // не известен синхронно с подачей хода. Прежнее ожидание стеной (5 с, опрос раз в 10 мс)
+    // флакало под параллелью быстрого гейта: фоновое продолжение при starvation пула
+    // потоков наступало позже срока. Теперь тест ждёт само событие; Wait — страховка от
+    // потерянного события, а не ожидание.
+    private readonly TaskCompletionSource _turnCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private static readonly TimeSpan Wait = TimeSpan.FromSeconds(20);
 
     private (FallbackLlmSessionAdapter Sut, FakeInner Inner, TurnTokenService Tokens) BuildSut(
         Func<int>? contextEstimate = null)
     {
         var tokens = new TurnTokenService(_bus);
-        _bus.OnNotification<TurnCompleted>(e => { lock (_completed) _completed.Add(e); return Task.CompletedTask; });
+        _bus.OnNotification<TurnCompleted>(e => { lock (_completed) _completed.Add(e); _turnCompleted.TrySetResult(); return Task.CompletedTask; });
         var session = new Session { Model = "sonnet", Provider = "acc-a", OwnerId = "owner-1" };
         var inner = new FakeInner(session);
         var pool = new ClaudeSubscriptionPool(new ConfigurationBuilder()
@@ -85,20 +93,12 @@ public class TurnTokenAdapterBranchesTests
         return (sut, inner, tokens);
     }
 
-    private static async Task WaitForAsync(Func<bool> condition, string what)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (DateTime.UtcNow < deadline)
-        {
-            if (condition()) return;
-            await Task.Delay(10);
-        }
-        throw new TimeoutException($"не дождались: {what}");
-    }
-
     private async Task AssertRevokedByTurnCompletedAsync(TurnTokenService tokens, IssuedTurnToken t, string outcome)
     {
-        await WaitForAsync(() => { lock (_completed) return _completed.Count > 0; }, "turn/completed");
+        // Подписка отзывающего сервиса зарегистрирована раньше тестовой (TurnTokenService.cs:71, BuildSut),
+        // шина ждёт подписчиков по порядку регистрации (TurnEventBus.cs:57-61): к моменту, когда
+        // тестовый обработчик ставит метку, токен уже отозван — проверка после метки детерминирована.
+        await _turnCompleted.Task.WaitAsync(Wait);
         lock (_completed) _completed.Should().ContainSingle().Which.Outcome.Should().Be(outcome);
         tokens.Validate(t.Grant.TurnId, t.Token).Should().BeNull($"ход закончился ({outcome}) — токен обязан умереть");
     }
@@ -120,12 +120,12 @@ public class TurnTokenAdapterBranchesTests
     {
         var (sut, inner, tokens) = BuildSut();
         var t = tokens.Issue("owner-1", inner.Info.Id);
-        var sent = new TaskCompletionSource();
+        var sent = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         inner.OnSend = () => sent.TrySetResult();
         inner.OnInterrupt = () => inner.Emit(new ExitedMessage());
 
         await sut.SendMessageAsync("ход");
-        await sent.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await sent.Task.WaitAsync(Wait);
         tokens.Validate(t.Grant.TurnId, t.Token).Should().NotBeNull("ход ещё идёт");
         sut.Interrupt();
 
@@ -137,11 +137,11 @@ public class TurnTokenAdapterBranchesTests
     {
         var (sut, inner, tokens) = BuildSut();
         var t = tokens.Issue("owner-1", inner.Info.Id);
-        var sent = new TaskCompletionSource();
+        var sent = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         inner.OnSend = () => sent.TrySetResult();
 
         await sut.SendMessageAsync("ход");
-        await sent.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await sent.Task.WaitAsync(Wait);
         await sut.DisposeAsync();
 
         await AssertRevokedByTurnCompletedAsync(tokens, t, "cancelled");

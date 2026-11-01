@@ -318,9 +318,10 @@ public class WikiChatsControllerTests : IDisposable
 
     // ─── обвязка ──────────────────────────────────────────────────────────────
 
-    // Реальное производственное ожидание (10 с) в тесте не ждём: быстрый прогон проходит
-    // за доли секунды, «медленный» ловится коротким wait.
-    private static readonly TimeSpan Wait = TimeSpan.FromSeconds(5);
+    // WaitAsync возвращается сразу по завершению разбора, поэтому большой потолок не удлиняет
+    // зелёный прогон — он лишь страхует от зависания. Малый потолок (5 с) под нагрузкой полного
+    // прогона отдавал 202 вместо 200. «Медленный» прогон ловит свой короткий wait (тест 4).
+    private static readonly TimeSpan Wait = TimeSpan.FromMinutes(2);
 
     private void AddSession(string id = ChatId, string? projectId = "p1",
         bool taskExecution = false, string? wikiMark = null)

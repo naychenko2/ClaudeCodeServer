@@ -22,11 +22,15 @@ namespace ClaudeHomeServer.Tests.Services;
 //    уровне AnalyzeAsync, а не только слайсера); хроника продолжения ссылается на
 //    хронику прежнего чата — путь к ней строит только ChroniclePath (мутация «убрать
 //    ссылку» краснит Продолжение_...).
+// 3) Изоляция по владельцу прежнего чата (хвост ревью S6e-3, п.1): чужой чат не раскрывается
+//    ссылкой в хронике продолжения — закреплена проверка владельца (WikiChatIngestService.cs:530),
+//    мутация «снять ResolveOwnerId(prev) != ownerId» краснит Продолжение_ПрежнийЧатЧужогоВладельца_...
 // Цепка настоящая (захват → очередь → применение → хроника), модель — подменённый
 // ICheapTextRunner, как в WikiChatIngestTests.
 public class WikiChatBranchTests : IDisposable
 {
     private const string User = "u1";
+    private const string OtherOwner = "u2";
     private const string Section = "projects/p1";
     private const string ParentId = "chat-parent";
     private const string BranchId = "chat-branch";
@@ -253,6 +257,62 @@ public class WikiChatBranchTests : IDisposable
         contText.Should().Contain($"[[{parentPage.Model!.Title}]]",
             "хроника продолжения ссылается на хронику прежнего чата");
         contText.Should().Contain("Продолжение чата:", "ссылка подписана для человека");
+    }
+
+    // ── c3: прежний чат другого владельца — ссылки на его хронику нет (хвост ревью S6e-3, п.1) ──
+
+    [Fact]
+    public async Task Продолжение_ПрежнийЧатЧужогоВладельца_СсылкиНаЕгоХроникуНет()
+    {
+        AddSession(ParentId);
+        AddSession(ContId, continuedFrom: ParentId);
+
+        SetHistory(ParentId,
+        [
+            new StoredSessionStartedMessage("claude", "default"),
+            new StoredUserMessage($"{PrefixClaim}. {PrefixMarker}."),
+            new StoredTextMessage("Принято, готовлю план."),
+        ]);
+        SetHistory(ContId,
+        [
+            new StoredSessionStartedMessage("claude", "default"),
+            new StoredUserMessage(HandoffText),
+            new StoredUserMessage(ContClaim),
+            new StoredTextMessage("Продолжаю по договорённому."),
+        ]);
+
+        var llm = new FakeLlm(
+            ("A", Claims(PrefixClaim)), ("B", Plan1),
+            ("A", Claims(ContClaim)), ("B", Plan1));
+        var sut = Sut(llm);
+
+        // Пока прежний чат принадлежит u1, его разбор пишет хронику на диск u1.
+        var parent = await sut.AnalyzeAsync(User, ParentId);
+        parent.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, parent.Reason);
+
+        // Прежний чат становится чатом u2: хроника остаётся на диске u1 — ровно то состояние,
+        // где единственный рубеж ссылки — проверка владельца (WikiChatIngestService.cs:530).
+        // Без неё ссылка бы образовалась (дом тот, файл на диске, тип хроники) — это и краснеет
+        // в мутации «снять ResolveOwnerId(prev) != ownerId».
+        _sessions.GetById(ParentId)!.OwnerId = OtherOwner;
+
+        var cont = await sut.AnalyzeAsync(User, ContId);
+        cont.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, cont.Reason);
+
+        // Прежняя хроника на диске и читается: отсутствие ссылки — не из-за битой цели.
+        var parentKey = WikiChatIngestService.ChroniclePath(Section, ParentId);
+        parentKey.Should().NotBeNull();
+        var parentPage = WikiPage.Parse(File.ReadAllText(PathOf(parentKey!), Encoding.UTF8));
+        parentPage.Model.Should().NotBeNull("хроника прежнего чата осталась на диске u1");
+
+        // Чужой чат не раскрывается ссылкой: ни подписанной строки, ни самой цели.
+        var contKey = WikiChatIngestService.ChroniclePath(Section, ContId);
+        contKey.Should().NotBeNull();
+        var contText = File.ReadAllText(PathOf(contKey!), Encoding.UTF8);
+        contText.Should().NotContain("Продолжение чата:",
+            "прежний чат другого владельца — ссылка не формируется");
+        contText.Should().NotContain($"[[{parentPage.Model!.Title}]]",
+            "хроника чужого чата не раскрывается ссылкой");
     }
 
     // ── подменённая модель и подставные сессии (тот же состав, что в WikiChatIngestTests) ──

@@ -72,7 +72,10 @@ public record OllamaUsageInfo(bool Enabled, string? Model, string? BaseUrl,
 // Agentic — агентное место (группа «Чаты и персоны»): локаль и direct:-модели недоступны.
 public record OllamaActionInfo(string Key, string Title, string Group, bool RoutedToOllama,
     string Source = "default", string Route = "claude", bool RequiresStrong = false,
-    bool Agentic = false, object? Preset = null, string Input = "text", bool FacePose = false);
+    bool Agentic = false, object? Preset = null, string Input = "text", bool FacePose = false,
+    // Engine — подпись именованного локального движка (LocalEngines:<имя>:Title, иначе модель), когда
+    // Route="local" ведёт на него, а не на основной LocalLlm; null — основной движок или не локаль.
+    string? Engine = null);
 
 // Utilisation одной подписки: снимки + опциональное имя + статус роутинга.
 // InRotation — берёт ли пул этот аккаунт для новых чатов; Utilization — эффективная

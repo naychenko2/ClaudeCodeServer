@@ -582,6 +582,31 @@ class ReportTests(unittest.TestCase):
         finally:
             ts.list_tests, ts.launch, ts.wait_all = orig
 
+    def test_run_shards_отдаёт_wait_all_отчёты_шардов(self):
+        seen = {}
+        orig = (ts.list_tests, ts.launch, ts.wait_all)
+        ts.list_tests = lambda path, flt: ([f"App.Tests.C{i}.T" for i in range(4)], None)
+        ts.launch = lambda args, log: (object(), None)
+
+        def fake_wait(procs, start, proofs=None, reports=None):
+            seen["n"], seen["reports"] = len(procs), reports
+            return 0
+        ts.wait_all = fake_wait
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                results = os.path.join(tmp, "r")
+                os.makedirs(results)
+                write_trx(results, "shard1", self.GREEN)
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    code = ts.run_shards("b/App.Tests", 2, results, {}, "F")
+                self.assertEqual(0, code)
+                self.assertEqual(2, seen["n"])
+                self.assertIsNotNone(seen["reports"])
+                self.assertEqual(seen["n"], len(seen["reports"]))
+                self.assertEqual(3, seen["reports"][0]()["total"])
+        finally:
+            ts.list_tests, ts.launch, ts.wait_all = orig
+
 
 class RunFastTests(unittest.TestCase):
     """Fast предгейта: проекты --split шардами, остальные — rest-slnx; процессы подменены."""

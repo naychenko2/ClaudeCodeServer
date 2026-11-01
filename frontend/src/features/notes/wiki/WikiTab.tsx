@@ -240,21 +240,40 @@ export function WikiTab() {
   // Открытая страница (S5b): pageKey открытой страницы выбранного раздела; null — каталог.
   // Смена или удаление раздела закрывает её (страница принадлежит разделу) — selectSection
   const [openedPage, setOpenPage] = useState<string | null>(null);
-  // Поколение последнего открытия (доработка S5b M3, образец — _pageGen в lib/wiki):
-  // отказ прежнего запроса не должен закрывать уже открытую свежую страницу
+  // Поколение последнего открытия или осознанного закрытия (доработка S5b M3, S5b-дельта W4-2;
+  // образец — _pageGen в lib/wiki): отказ прежнего запроса не должен закрывать уже открытую
+  // свежую страницу и не должен писаться в каталог, к которому перешли после закрытия
   const openSeq = useRef({ gen: 0, pageKey: '' });
 
-  const selectSection = useCallback((key: string | null) => {
-    setSelectedKey(key);
+  // Осознанное закрытие страницы: «Назад» страницы (S5b-дельта, W4-2). Поднимает поколение —
+  // та же сверка, что в openPage: без этого отказ запроса страницы, закрытой во время чтения,
+  // проходит сверку (gen и pageKey прежние) и пишет свою ошибку над новым состоянием.
+  // Отказ текущей страницы (catch openPage) сюда не идёт: он относится к открытому
+  // состоянию и показывается.
+  const closePage = useCallback(() => {
+    openSeq.current = { ...openSeq.current, gen: openSeq.current.gen + 1 };
     setOpenPage(null);
   }, []);
+
+  // Смена раздела: страница закрывается всегда (страница принадлежит разделу).
+  // intentional=true — действие пользователя (строка дерева или экрана «Разделы», «Открыть
+  // «Общее»», удаление раздела): закрыть страницу осознанно, поднять поколение, как closePage:
+  // отказ страницы, закрытой во время чтения, не пишется в каталог нового раздела
+  // (S5b-дельта, W4-2). Автоматические вызовы — дефолтный выбор и OPEN-1 — не поднимают:
+  // там отказ запрошенной страницы относится к действию пользователя и показывается
+  // (тест «чужий раздел», S5b).
+  const selectSection = useCallback((key: string | null, intentional = false) => {
+    setSelectedKey(key);
+    if (intentional) closePage(); else setOpenPage(null);
+  }, [closePage]);
 
   // Открытие страницы — одна точка подключения (S5b): текст читает стор
   // (поколение и владелец — в нём). Отказ загрузки — возврат к каталогу с названным
   // отказом: пустой экран страницы хуже строки, из которой её открыли.
-  // Отказ актуален только для последнего открытия (доработка S5b M3): поздний отказ A,
-  // пока открыта B, не закрывает B и не показывает свою ошибку — иначе пользователь
-  // вылетает из уже прочитанной страницы с чужой ошибкой.
+  // Отказ актуален только для последнего открытия (доработка S5b M3) и пока страница не
+  // закрыта осознанно (closePage/selectSection поднимают поколение): поздний отказ A,
+  // пока открыта B или уже закрыта, не закрывает B и не показывает свою ошибку — иначе
+  // пользователь вылетает из уже прочитанной страницы с чужой ошибкой.
   // sectionKey — явный параметр (OPEN-1): запрос из шапки чата открывает страницу своего
   // раздела, а selectedKey в момент того эффекта ещё прежний (выбор и открытие — в одном
   // коммите). Вызывающий из каталога передаёт только страницу. useCallback — чтобы
@@ -380,7 +399,7 @@ export function WikiTab() {
         />
       );
     }
-    if (selected.local) return <LocalSection onOpenCommon={commonKey ? () => selectSection(commonKey) : undefined} />;
+    if (selected.local) return <LocalSection onOpenCommon={commonKey ? () => selectSection(commonKey, true) : undefined} />;
 
     // Открытая страница (S5b) — вместо каталога; текст и дрейф читает сам экран из стора
     // (доработка S5b M2), здесь остаётся только порог: пока страницы нет — спиннер.
@@ -392,7 +411,7 @@ export function WikiTab() {
           key={`${selectedKey}\n${openedPage}`}
           section={selected}
           pageKey={openedPage}
-          onBack={() => setOpenPage(null)}
+          onBack={closePage}
         />
       ) : <LoadingSkeleton />;
     }
@@ -441,7 +460,7 @@ export function WikiTab() {
             «Разделы», который открывает кнопка «Раздел ▸» внутри каталога */}
         {!isMobile && (
           <div style={{ width: TREE_W, flexShrink: 0 }}>
-            <WikiSectionTree sections={sections} selectedKey={selectedKey} onSelect={selectSection} />
+            <WikiSectionTree sections={sections} selectedKey={selectedKey} onSelect={(k) => selectSection(k, true)} />
           </div>
         )}
         <div style={{ flex: 1, minWidth: 0, overflow: 'auto' }}>
@@ -457,8 +476,9 @@ export function WikiTab() {
                 // в историю не пишется — аппаратный «назад» остаётся как есть
                 ? <>
                     <div style={{ padding: `${SP.sm}px ${SP.sm}px 0` }}>
+                      {/* size="md": тач-цель ≥40 px (S5d-дельта, W4-2): sm — 32 px, ниже цели */}
                       <Button
-                        variant="ghost" size="sm"
+                        variant="ghost" size="md"
                         dataTestId="wiki-sections-back"
                         ariaLabel="Вернуться к каталогу раздела"
                         leftIcon={<ChevronLeft size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
@@ -469,7 +489,7 @@ export function WikiTab() {
                     </div>
                     <WikiSectionTree
                       sections={sections} selectedKey={selectedKey}
-                      onSelect={k => { selectSection(k); setShowSections(false); }}
+                      onSelect={k => { selectSection(k, true); setShowSections(false); }}
                     />
                   </>
                 : <>
@@ -503,7 +523,7 @@ export function WikiTab() {
               return;
             }
             setConfirmDelete(null);
-            selectSection(null);
+            selectSection(null, true);
           }}
           onCancel={() => setConfirmDelete(null)}
         />

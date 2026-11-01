@@ -1,8 +1,8 @@
 // Раздел «Календарь» хаба: все задачи пользователя по всем проектам.
 // Виды Месяц / Неделя / Агенда, фильтр по группам проектов, «+ Задача».
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Plus } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Plus, Users } from 'lucide-react';
 import type { AuthState, Project, ProjectGroup, Task } from '../../types';
 import type { HubTabValue } from '../../components/HubTabs';
 import { navPush, navReplace, parseHash, type NavSnapshot } from '../../lib/nav';
@@ -15,13 +15,14 @@ import { PageCanvas } from '../../components/ui/PageCanvas';
 import { api } from '../../lib/api';
 import { addDaysIso, DEFAULT_BOARD_COLUMNS, ensureTasksLoaded, expandRecurringTasks, todayIso, toIsoDate, useTasks } from '../../lib/tasks';
 import { useIsMobile } from '../../lib/breakpoints';
-import { AgendaIcon, BoardIcon, IconViewSwitcher, MonthIcon, WeekIcon } from './bits';
+import { AgendaIcon, BoardIcon, IconViewSwitcher, MonthIcon, SHARED_TASK_LABEL, WeekIcon } from './bits';
 import { TaskDetailsModal } from './TaskDetailsModal';
 import { CalendarMonth } from './CalendarMonth';
 import { CalendarWeek } from './CalendarWeek';
 import { CalendarAgenda } from './CalendarAgenda';
 import { TaskBoard } from './board/TaskBoard';
 import { NewTaskDialog } from './NewTaskDialog';
+import { filterCalendarTasks, hasSharedProjects, SHARED_FILTER_KEY } from './calendarFilter';
 
 interface Props {
   auth: AuthState;
@@ -135,16 +136,10 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
 
   const projectsById = useMemo(() => new Map(projects.map(p => [p.id, p])), [projects]);
 
-  // Фильтр по группе проектов; личные задачи (без проекта) — в «Все» и «Без группы»
-  const tasks = useMemo(() => {
-    if (groupFilter === 'all') return allTasks;
-    return allTasks.filter(t => {
-      if (!t.projectId) return groupFilter === 'none';
-      const p = projectsById.get(t.projectId);
-      if (!p) return false;
-      return groupFilter === 'none' ? !p.groupId : p.groupId === groupFilter;
-    });
-  }, [allTasks, groupFilter, projectsById]);
+  const tasks = useMemo(() => filterCalendarTasks(allTasks, groupFilter, projectsById), [allTasks, groupFilter, projectsById]);
+
+  // Чип «Общие» виден, только если есть общие проекты, где я участник
+  const hasShared = hasSharedProjects(projects);
 
   const hasUngrouped = projects.some(p => !p.groupId);
 
@@ -189,7 +184,7 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
     ? allTasks.find(t => t.id === personalTaskId) ?? null
     : null;
 
-  const filterChip = (key: string, label: string, dot?: string) => {
+  const filterChip = (key: string, label: string, dot?: string, icon?: ReactNode) => {
     const active = groupFilter === key;
     return (
       <button
@@ -197,7 +192,7 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
         onClick={() => setGroupFilter(key)}
         style={{
           display: 'inline-flex', alignItems: 'center', gap: 7, flexShrink: 0,
-          padding: '6px 13px', cursor: 'pointer',
+          padding: '6px 13px', minHeight: 40, cursor: 'pointer',
           border: `1px solid ${active ? C.accent : C.border}`,
           borderRadius: 999,
           background: active ? C.accentLight : C.bgWhite,
@@ -206,7 +201,7 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
           transition: 'border-color 0.12s, background 0.12s',
         }}
       >
-        <span style={{ width: 8, height: 8, borderRadius: '50%', background: dot ?? C.textMuted, flexShrink: 0 }} />
+        {icon ?? <span style={{ width: 8, height: 8, borderRadius: '50%', background: dot ?? C.textMuted, flexShrink: 0 }} />}
         {label}
       </button>
     );
@@ -228,6 +223,8 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
       {filterChip('all', 'Все')}
       {groups.map(g => filterChip(g.id, g.name, g.color))}
       {hasUngrouped && groups.length > 0 && filterChip('none', 'Без группы')}
+      {hasShared && filterChip(SHARED_FILTER_KEY, SHARED_TASK_LABEL, undefined,
+        <Users size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, color: C.info }} />)}
     </div>
   );
 

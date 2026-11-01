@@ -9,12 +9,14 @@ namespace ClaudeHomeServer.Tests.Services;
 
 // Дефект e69f9de1 (ревью W3-0): MOVE с Destination = URI корня проекта со завершающим слэшем
 // резолвил цель в корень, снос существующей цели сносил весь проект, а files.Rename падал
-// FileNotFoundException → 404. Отказ на пустой стороне (цель или источник — корень) стоит
-// раньше SafeJoin и любого сноса, по образцу DELETE/LOCK: 403, проект цел.
+// FileNotFoundException → 404. Вердикт dd6ec8ba (ревью W3-0b): в корень резолвится не только
+// пустой путь — "docs%2F.." после unescape даёт "docs/..", и SafeJoin даёт тот же корень.
+// Отказ стоит на разрешённом пути (JoinBelowRoot отвергает корень), а не на пустоте строки,
+// и стоит до любого следа на диске, по образцу DELETE/LOCK: 403, проект цел.
 //
 // Раскладка здесь — боевая: корень проекта ОТДЕЛЁН от data-корня (соседний каталог), поэтому
 // гейт вики о корне проекта молчит (он предок вики только в раскладке «проект = домашний
-// каталог с data/», как в WebDavWikiGateTests). Единственный стопор — проверка пустого пути:
+// каталог с data/», как в WebDavWikiGateTests). Единственный стопор — гейт корня в HandleMove:
 // в той, вики-гейтовой раскладке новый случай закрылся бы старым гейтом и мутация его не
 // покраснила бы.
 public class WebDavMoveRootTests : IDisposable
@@ -91,6 +93,64 @@ public class WebDavMoveRootTests : IDisposable
         var ctx = Ctx();
         SetMoveDestination(ctx, "docs/b.txt");
         WebDavHandler.HandleMove(ctx, new FileService(), _root, "", Project);
+
+        ctx.Response.StatusCode.Should().Be(403);
+        Directory.Exists(_root).Should().BeTrue();
+        File.Exists(dst).Should().BeTrue(); // цель не снесена
+        File.ReadAllText(dst).Should().Be("обычный файл");
+    }
+
+    // Вердикт dd6ec8ba (ревью W3-0b): в корень резолвится не только пустой путь.
+    // "docs%2F..": %2F для Uri — не разделитель, точечная нормализация его не трогает,
+    // после UnescapeDataString остаётся "docs/.." — непустая строка, которая SafeJoin
+    // резолвит в корень. В старом коде (проверка пустоты строки) этот вариант — красный:
+    // 404 и снесённый проект. Перебор записей — по образцу пробы Глеба: всё, что
+    // резолвится в корень, даёт 403, каталог проекта и все файлы целы, источник на месте.
+    // "%2E%2E" — не корень: Uri нормализует %2E%2E до ".." и снимает сегмент проекта,
+    // Destination оказывается за пределами проекта → 400 от ParseDestination (прежнее
+    // поведение чужих Destination, к гейту корня отношения не имеет).
+    [Theory]
+    [InlineData("", 403)]
+    [InlineData(".", 403)]
+    [InlineData("%2E", 403)]
+    [InlineData("%2E%2E", 400)] // после нормализации URI — чужая Destination, не корень
+    [InlineData("docs/..", 403)]
+    [InlineData("./", 403)]
+    [InlineData("%2F", 403)]
+    [InlineData("docs%2F..", 403)] // красный в старом коде: 404, проект снесён
+    public void Move_ЦельРезолвитсяВКорень_ЛюбаяЗаписьDestination_403_ПроектЦел_ИсточникНаМесте(string destTail, int expected)
+    {
+        var src = Path.Combine(_root, "docs", "a.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(src)!);
+        File.WriteAllText(src, "обычный файл");
+        var keep = Path.Combine(_root, "keep.txt"); // другой файл проекта: снос был рекурсивным
+        File.WriteAllText(keep, "файл проекта");
+
+        var ctx = Ctx();
+        SetMoveDestination(ctx, destTail);
+        ctx.Request.Headers["Overwrite"] = "T";
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs/a.txt", Project);
+
+        ctx.Response.StatusCode.Should().Be(expected);
+        Directory.Exists(_root).Should().BeTrue();  // проект цел: отказ до любого следа на диске
+        File.Exists(keep).Should().BeTrue();
+        File.Exists(src).Should().BeTrue();         // источник не тронут
+        File.ReadAllText(src).Should().Be("обычный файл");
+        Directory.Exists(_dataDir).Should().BeTrue();
+    }
+
+    // Та же граница с другой стороны, не пустая строка: relPath = "docs/.." — это тоже
+    // корень. Источник-корень не двигается, цель не снесена.
+    [Fact]
+    public void Move_ИсточникРезолвитсяВКорень_docsДвеТочки_403_ЦельНаМесте()
+    {
+        var dst = Path.Combine(_root, "docs", "b.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
+        File.WriteAllText(dst, "обычный файл");
+
+        var ctx = Ctx();
+        SetMoveDestination(ctx, "docs/b.txt");
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs/..", Project);
 
         ctx.Response.StatusCode.Should().Be(403);
         Directory.Exists(_root).Should().BeTrue();

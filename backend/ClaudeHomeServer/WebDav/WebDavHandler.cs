@@ -848,20 +848,28 @@ public static class WebDavHandler
             return;
         }
 
-        // Пустая сторона — корень проекта: Destination = /projects/{name}/ резолвился в корень,
-        // existed=true и снос цели сносил весь проект, а files.Rename падал
-        // FileNotFoundException → 404 (дефект e69f9de1, ревью W3-0). Корень не переносится
-        // и не сносится — по образцу DELETE/LOCK (403), раньше SafeJoin и любого следа
-        // на диске. Гейт вики здесь не помощник: корень проекта — предок вики только в
+        // Корень не переносится и не сносится ни при какой записи Destination — отказ стоит
+        // на разрешённом пути, а не на пустоте строки (вердикт dd6ec8ba, ревью W3-0b):
+        // "", ".", "%2E", "docs/.." — Uri сносит точечные сегменты и остаётся пустой путь;
+        // "docs%2F.." — %2F для Uri не разделитель, после UnescapeDataString остаётся
+        // "docs/.." — непустая строка, которую нормализация резолвит в корень. Снос такой
+        // цели сносил весь проект рекурсивно, а files.Rename падал FileNotFoundException
+        // → 404 (дефект e69f9de1, ревью W3-0). JoinBelowRoot отвергает корень и запределье
+        // — тот же примитив, что в FileService.GetDiffAsync/RevertFile; статус 403, как
+        // catch диспетчера для запредельных путей. Отказ — до любого следа на диске.
+        // Гейт вики здесь не помощник: корень проекта — предок вики только в
         // раскладке «проект = домашний каталог с data/», в обычной — нет.
-        if (string.IsNullOrEmpty(destRel) || string.IsNullOrEmpty(relPath))
+        string srcAbs, dstAbs;
+        try
+        {
+            srcAbs = SafePath.JoinBelowRoot(root, relPath);
+            dstAbs = SafePath.JoinBelowRoot(root, destRel);
+        }
+        catch (UnauthorizedAccessException)
         {
             ctx.Response.StatusCode = 403;
             return;
         }
-
-        var srcAbs = FileService.SafeJoinPublic(root, relPath);
-        var dstAbs = FileService.SafeJoinPublic(root, destRel);
 
         // MOVE сносит существующую цель до files.Rename (ниже) — поэтому обе стороны
         // проверяются здесь, до любого следа на диске и обоими направлениями, как

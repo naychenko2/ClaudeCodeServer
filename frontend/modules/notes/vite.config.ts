@@ -7,10 +7,68 @@
 // Dev-сервер запускается на порту 5174 (vite dev), хост проксирует /notes-remote/**
 // сюда. В прод remoteEntry.js сервиcится статически под /notes-remote/ в wwwroot.
 
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
+import path from 'node:path';
 import react from '@vitejs/plugin-react';
 import { federation } from '@module-federation/vite';
 import { hostReactShared } from '../hostReactShared';
+
+// Сторож графа сборки remote «Заметки» (LLM-wiki, QA B1 critical): сторы ядра хоста
+// (featureFlags, offline, signalr, toast, wiki) не должны попасть в remote ВТОРОЙ копией через
+// прямой относительный импорт из вики-части модуля — вторая копия стора означает пустые флаги,
+// мёртвый realtime и отдельный экземпляр WikiError (`instanceof` не проходит). Это второй
+// независимый барьер после ESLint-сторожа (notesStoreImportGuard/notesWikiImportGuard в
+// eslint.config.js): ошибка падает на сборке, а не на ревью.
+// Запрет — по импортеру, как в ESLint-страже: вики-часть (src/features/notes/wiki/**,
+// WikiChatActions.tsx, кроме тестов) — запрещена; легаси остального модуля (useSphereOf,
+// personaZone, registryCore) — вне задачи LLM-wiki и не трогается. Импорт через 'aihome_shell/kit'
+// не относительный и не помечается: MF резолвит его в кит хоста, второй копии нет.
+const FORBIDDEN_STORE = /(^|\/)src\/lib\/(featureFlags|offline|signalr|toast|wiki)(\.ts)?$/;
+const GUARDED_IMPORTER = /src\/features\/notes\/(wiki\/.+\.[cm]?[jt]sx?|WikiChatActions\.tsx)$/;
+
+function toPosix(p: string) {
+  return p.split(path.sep).join('/');
+}
+
+function notesStoreGraphGuard(): Plugin {
+  // Нарушения собираются в resolveId и сообщаются одним this.error() в buildEnd: так текст
+  // доходит до вывода целиком с именем плагина (проверено на живой сборке, 01.11.2026),
+  // а цепочка resolveId при этом не рвётся — в ошибке виден именно дефект, а не UNRESOLVED_IMPORT.
+  // Set, а не список: на один импорт resolveId в этой сборке вызывается дважды (наблюдено
+  // на живой сборке), нарушение должно быть в сообщении один раз
+  const violations = new Set<string>();
+  return {
+    name: 'aihome-notes-store-graph-guard',
+    // 'pre' — чтобы hook получил каждый импорт раньше, чем его разрешит другой плагин
+    // (в цепочке resolveId первый вернувший значение останавливает цепочку).
+    enforce: 'pre',
+    resolveId(source, importer) {
+      if (!importer) return null;
+      const importerPath = toPosix(importer);
+      if (
+        !GUARDED_IMPORTER.test(importerPath) ||
+        importerPath.includes('/__tests__/') ||
+        /\.test\.[cm]?[jt]sx?$/.test(importerPath)
+      ) return null;
+      // Относительный импорт резолвим относительно импортера; прочие ('aihome_shell/kit',
+      // пакеты) — не относительные, второй копии стора они не собирают.
+      const resolved = toPosix(source.startsWith('.') ? path.resolve(path.dirname(importer), source) : source);
+      const m = FORBIDDEN_STORE.exec(resolved);
+      if (!m) return null;
+      const rel = importerPath.slice(Math.max(importerPath.indexOf('/src/'), 0) + 1);
+      violations.add(`${rel} → src/lib/${m[2]}.ts`);
+      return null;
+    },
+    buildEnd() {
+      if (violations.size === 0) return;
+      this.error(
+        `Remote «Заметки» собирает вторую копию стора ядра через прямой импорт из вики-части:\n` +
+        [...violations].map(v => `  - ${v}`).join('\n') +
+        `\nИмпортируй из 'aihome_shell/kit' (та же граница закрыта ESLint-сторожем notesStoreImportGuard/notesWikiImportGuard).`,
+      );
+    },
+  };
+}
 
 export default defineConfig(({ mode }) => ({
   // Dev: префикс прокси хоста — MF-рантайм резолвит root-absolute импорты
@@ -18,6 +76,7 @@ export default defineConfig(({ mode }) => ({
   // Prod: относительный — remoteEntry.js сервиcится статически под /notes-remote/.
   base: mode === 'development' ? '/notes-remote/' : './',
   plugins: [
+    notesStoreGraphGuard(),
     react(),
     federation({
       name: 'aihome_notes',

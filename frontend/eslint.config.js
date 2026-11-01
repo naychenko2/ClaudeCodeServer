@@ -107,6 +107,50 @@ export const videoEditorImportGuard = {
   },
 }
 
+// Сторож MF-модуля «Заметки» (LLM-wiki, QA B1 critical): сторы ядра хоста — относительный импорт
+// из вики-части модуля (src/features/notes/wiki/**, WikiChatActions.tsx) соберётся ВТОРОЙ копией
+// внутрь remote: флаги пусты, realtime мёртв, `instanceof WikiError` не проходит. Весь
+// src/features/notes/** закрыть как у image-editor нельзя: легаси «Заметок» (useSphereOf,
+// personaZone, registryCore) тянет lib напрямую — это вне задачи LLM-wiki. Поэтому два правила:
+// узкое на весь модуль (только сторы ядра) и широкое на вики-часть (сторы ядра + design/breakpoints:
+// они в ките и другим remote запрещены — следуем их правилу). Подключается дважды: здесь и в
+// eslint.remote.config.js — блокирующий шаг CI; второй независимый барьер — плагин сборки
+// (modules/notes/vite.config.ts). Типы бандл не несут, `import type` разрешён (как у других сторожей).
+export const notesStoreImportGuard = {
+  files: ['src/features/notes/**/*.{ts,tsx}'],
+  // Тесты в бандл remote не попадают, вторую копию стора они не соберут — им можно в ядро напрямую
+  ignores: ['**/__tests__/**', '**/*.test.{ts,tsx}'],
+  rules: {
+    'no-restricted-imports': ['error', {
+      patterns: [{
+        group: ['**/lib/featureFlags', '**/lib/wiki', '**/lib/offline', '**/lib/signalr', '**/lib/toast'],
+        allowTypeImports: true,
+        message: 'Модуль «Заметки» берёт сторы ядра (featureFlags, wiki, offline, signalr, toast) только из aihome_shell/kit: прямой импорт соберёт вторую копию в remote.',
+      }],
+    }],
+  },
+}
+
+// Широкое правило для вики-части модуля: тот же набор плюс design/breakpoints (в ките, другим remote
+// запрещены). Идёт ПОСЛЕ notesStoreImportGuard: для вики-файлов его no-restricted-imports заменяет
+// узкий список на широкий, для остального «Заметок» остаётся узкий.
+// Allow-list легаси-файлов пуст: прямые импорты сторов остались только в тестах (проверено grep
+// по features/notes/**, 01.11.2026). Новые легаси-наружения вне LLM-wiki — исключать здесь с
+// комментарием, не чинить массово.
+export const notesWikiImportGuard = {
+  files: ['src/features/notes/wiki/**/*.{ts,tsx}', 'src/features/notes/WikiChatActions.tsx'],
+  ignores: ['**/__tests__/**', '**/*.test.{ts,tsx}'],
+  rules: {
+    'no-restricted-imports': ['error', {
+      patterns: [{
+        group: ['**/lib/featureFlags', '**/lib/wiki', '**/lib/offline', '**/lib/signalr', '**/lib/toast', '**/lib/design', '**/lib/breakpoints'],
+        allowTypeImports: true,
+        message: 'Вики-часть модуля «Заметки» берёт ядро только из aihome_shell/kit: прямой импорт соберёт вторую копию в remote (флаги пусты, realtime мёртв, отдельный экземпляр WikiError).',
+      }],
+    }],
+  },
+}
+
 // Сторож хостов контекста хода (ADR-023 §Д6, «единственный владелец действий вида»): строка контекста,
 // чипы действий и панель «Контекст» рисуют по контракту ContextKindApi и не знают вертикалей. Ни
 // ops.ts / panelOp.ts, ни форматтеров вида (всё это лежит в features/**) импортировать нельзя:
@@ -199,5 +243,7 @@ export default defineConfig([
   imageEditorImportGuard,
   audioEditorImportGuard,
   videoEditorImportGuard,
+  notesStoreImportGuard,
+  notesWikiImportGuard,
   contextHostImportGuard,
 ])

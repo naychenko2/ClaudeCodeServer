@@ -1,3 +1,5 @@
+import { rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { expect, type APIRequestContext, type Page } from '@playwright/test';
 
 // Общие хелперы QA-спеков (docs/operations/qa-stand.md). Учётка — только из окружения,
@@ -36,8 +38,11 @@ export type Api = ReturnType<typeof api>;
 // Засев: каждая функция возвращает id и кладёт его в `created` — afterAll чистит в обратном порядке.
 export function seed(client: Api) {
   const created: Array<() => Promise<unknown>> = [];
+  const dirs: string[] = [];
   return {
-    async project(name: string, rootPath: string): Promise<{ id: string; name: string }> {
+    // rootPath по умолчанию — каталог в os.tmpdir(); каталоги под tmpdir cleanup() сносит с диска
+    async project(name: string, rootPath = `${tmpdir()}/${name}`): Promise<{ id: string; name: string }> {
+      if (rootPath.startsWith(tmpdir() + '/')) dirs.push(rootPath);
       const p = await client.post<{ id: string; name: string }>('/api/projects', { name, rootPath, createDirectory: true });
       created.push(() => client.del(`/api/projects/${p.id}`));
       return p;
@@ -47,6 +52,8 @@ export function seed(client: Api) {
       created.push(() => client.del(`/api/projects/${projectId}/sessions/${s.id}`));
       return s;
     },
+    // projectId бэкенд игнорирует: POST /api/tasks создаёт личную задачу (TasksController.cs:310),
+    // к проекту её этим вызовом не привязать
     async task(title: string, projectId?: string): Promise<{ id: string; title: string }> {
       const t = await client.post<{ id: string; title: string }>('/api/tasks', { title, ...(projectId ? { projectId } : {}) });
       created.push(() => client.del(`/api/tasks/${t.id}`));
@@ -57,6 +64,7 @@ export function seed(client: Api) {
       for (const undo of created.splice(0).reverse()) {
         try { await undo(); } catch { /* уборка best-effort */ }
       }
+      for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
     },
   };
 }

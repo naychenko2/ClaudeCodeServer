@@ -6,6 +6,9 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: '.',
   testMatch: '**/*.qa.spec.ts',
+  // Шаблон не входит в прогон каталога, но явно названный файл запускается: testIgnore отсекает
+  // и явный файл, поэтому игнор снимается, когда шаблон назван в аргументах CLI
+  testIgnore: process.argv.some(a => a.includes('_template.qa.spec')) ? [] : ['**/_template.qa.spec.ts'],
   timeout: 90_000,
   expect: { timeout: 10_000 },
   fullyParallel: false,

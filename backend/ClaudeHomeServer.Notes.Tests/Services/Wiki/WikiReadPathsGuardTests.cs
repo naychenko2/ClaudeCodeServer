@@ -642,6 +642,39 @@ public class WikiReadPathsGuardTests : IDisposable
     }
 
     [Fact]
+    public void Редакция_ВидимаяСтраницаСоседа_ЦельНеСкрыта()
+    {
+        // Обратное направление редакции (W3-7): HiddenWikiRef (NotesToolset.cs:629-631)
+        // скрывает только цель вне набора. Ссылка обычной заметки на видимую страницу
+        // соседа по сфере — системная проекция видимой цели: её targetId/targetTitle
+        // настоящие. Мутация «закрывать любую вики-ссылку независимо от набора» (убрать
+        // в HiddenWikiRef проверку раздела целиком) краснит этот тест: цель стала бы
+        // [скрыто] с пустым id. Буквальное «убрать только !visible.Contains» оставляет
+        // is not { } key — оно закрывает только неразобранные пути, тест при нём зелёный.
+        SeedWiki();
+        var noteId = _notes.Create(User, new CreateNoteRequest(
+            Title: "Своя-обычная-на-соседа",
+            Content: "Работа с [[Проекты/q1/Сущность-соседа]]: сборка на linux.",
+            Source: "p1")).Id;
+        var neighborId = PageId("Проекты/q1/Сущность-соседа.md");
+        var (toolset, ctx) = McpEnv("p1");
+
+        var res = Call(toolset, ctx, "notes_read", Args(("id", noteId)));
+
+        res.IsError.Should().BeFalse(res.Text);
+        var links = JsonNode.Parse(res.Text)!["links"]!.AsArray();
+        links.Should().HaveCount(1);
+        var l = links[0]!;
+        l!["targetId"]!.GetValue<string>().Should().Be(neighborId,
+            "видимая цель остаётся достижимой: по её id читается страница соседа");
+        l!["targetTitle"]!.GetValue<string>().Should().Be("Сущность-соседа");
+
+        // «Не скрыта» проверяется и достижимостью цели этим же ходом.
+        var page = Call(toolset, ctx, "notes_read", Args(("id", neighborId)));
+        page.IsError.Should().BeFalse(page.Text);
+    }
+
+    [Fact]
     public void НотесСёрчЛистОбычнойЗаметки_ЗаметкаВиднаНоИдСкрытыхСтраницВВыдачеНет()
     {
         // Список/поиск обычной заметки не сужаются (решение 6); их выдача — brief без ссылок,
@@ -688,7 +721,9 @@ public class WikiReadPathsGuardTests : IDisposable
     /// <summary>Инструменты, не читающие страниц вики для модели, — с названной причиной.</summary>
     private static readonly Dictionary<string, string> SkippedWithReason = new(StringComparer.Ordinal)
     {
-        ["notes_daily"] = "дневниковая заметка личного vault — обычная заметка, не страница вики; не сужается (решение 6)",
+        ["notes_daily"] = "обычная заметка личного vault, не страница вики; её текст не сужается (решение 6). "
+            + "Её ссылки код не редактирует: targetId/targetTitle скрытых страниц доходят до модели "
+            + "(NotesToolset.cs:409-425) — известный пропуск, не покрытие; ждёт решения (W3-7)",
         ["notes_annotations"] = "документ — файл проекта или личного vault; пути вики (data/wiki/) не область документа: страница недостижима",
         ["notes_promote_task"] = "id скрытой страницы недостижим из покрытых путей; текст чекбокса становится текстом созданной задачи, а не чтением заметки",
         ["wiki_ingest"] = "заявка в очередь: текст источника уходит в захват и Хранителю, в выдачу модели не возвращается",

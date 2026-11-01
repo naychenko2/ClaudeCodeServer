@@ -61,9 +61,9 @@ const PROJECT_ID = '11121314-1516-1718-191a-1b1c1d1e1f10';
 const ORPHAN_ID = '21222324-2526-2728-292a-2b2c2d2e2f20';
 const SPHERE_ID = '31323334-3536-3738-393a-3b3c3d3e3f30';
 const ORPHAN_KEY = `projects/${ORPHAN_ID}`;
-const ORPHAN_SECTION_URL = `/api/wiki/section?section=${encodeURIComponent(ORPHAN_KEY)}`;
+const ORPHAN_SECTION_URL = `/wiki/section?section=${encodeURIComponent(ORPHAN_KEY)}`;
 
-// Дерево как его отдаёт GET /api/wiki/tree: живые имена своих разделов, сирота — с
+// Дерево как его отдаёт GET /wiki/tree: живые имена своих разделов, сирота — с
 // name=null и orphan=true, раздел сферы — sphereReserved (место зарезервировано).
 const TREE = {
   initialized: false,
@@ -145,7 +145,7 @@ afterEach(() => {
 
 describe('стор вики: дерево разделов', () => {
   it('разделы раскладываются по четырём видам; сирота помечена и остаётся в своей группе', async () => {
-    serve({ 'GET /api/wiki/tree': TREE });
+    serve({ 'GET /wiki/tree': TREE });
     await ensureWikiLoaded();
 
     const tree = getWikiTreeSnapshot();
@@ -186,7 +186,7 @@ describe('стор вики: дерево разделов', () => {
 
 describe('стор вики: realtime', () => {
   it('notes_changed перечитывает дерево и уже открытый каталог раздела', async () => {
-    serve({ 'GET /api/wiki/tree': TREE, 'GET /api/wiki/section?section=common': CATALOG_COMMON });
+    serve({ 'GET /wiki/tree': TREE, 'GET /wiki/section?section=common': CATALOG_COMMON });
     await ensureWikiLoaded();
     await loadWikiCatalog('common');
     const before = req.mock.calls.length;
@@ -197,14 +197,14 @@ describe('стор вики: realtime', () => {
     await vi.advanceTimersByTimeAsync(0);
 
     const urls = urlsFrom(before);
-    expect(urls).toContain('/api/wiki/tree');
-    expect(urls).toContain('/api/wiki/section?section=common');
+    expect(urls).toContain('/wiki/tree');
+    expect(urls).toContain('/wiki/section?section=common');
     // каталог, которого никто не открывал, сам себя не перечитывает
-    expect(urls.filter(u => u.startsWith('/api/wiki/section'))).toHaveLength(1);
+    expect(urls.filter(u => u.startsWith('/wiki/section'))).toHaveLength(1);
   });
 
   it('чужое событие (не notes_changed) вики не перечитывает', async () => {
-    serve({ 'GET /api/wiki/tree': TREE });
+    serve({ 'GET /wiki/tree': TREE });
     await ensureWikiLoaded();
     const before = req.mock.calls.length;
 
@@ -218,9 +218,9 @@ describe('стор вики: realtime', () => {
 describe('стор вики: порядок ответов (последний запрос побеждает)', () => {
   it('дерево: устаревший ответ, пришедший позже свежего, не затирает снимок', async () => {
     const stale = deferred();
-    serve({ 'GET /api/wiki/tree': stale.promise });
+    serve({ 'GET /wiki/tree': stale.promise });
     const p1 = loadWikiTree(); // первый запрос — резолвится позже второго
-    serve({ 'GET /api/wiki/tree': TREE_FRESH });
+    serve({ 'GET /wiki/tree': TREE_FRESH });
     await loadWikiTree(); // второй запрос — резолвится первым
     expect(getWikiTreeSnapshot()).toEqual(TREE_FRESH);
 
@@ -231,9 +231,9 @@ describe('стор вики: порядок ответов (последний �
 
   it('каталог раздела: устаревший ответ, пришедший позже свежего, не затирает снимок', async () => {
     const stale = deferred();
-    serve({ 'GET /api/wiki/section?section=common': stale.promise });
+    serve({ 'GET /wiki/section?section=common': stale.promise });
     const p1 = loadWikiCatalog('common');
-    serve({ 'GET /api/wiki/section?section=common': CATALOG_EMPTY });
+    serve({ 'GET /wiki/section?section=common': CATALOG_EMPTY });
     await loadWikiCatalog('common');
     expect(getWikiCatalogSnapshot('common')).toEqual(CATALOG_EMPTY);
 
@@ -245,9 +245,9 @@ describe('стор вики: порядок ответов (последний �
   it('страница: ответ ранее кликнутой страницы, пришедший позже, не вытесняет последнюю', async () => {
     // сценарий ревью: клик A, сразу клик B; ответ B приходит раньше — экран обязан остаться на B
     const stale = deferred();
-    serve({ 'GET /api/wiki/page?section=common&page=A.md': stale.promise });
+    serve({ 'GET /wiki/page?section=common&page=A.md': stale.promise });
     const p1 = loadWikiPage('common', 'A.md');
-    serve({ 'GET /api/wiki/page?section=common&page=B.md': PAGE_B });
+    serve({ 'GET /wiki/page?section=common&page=B.md': PAGE_B });
     await loadWikiPage('common', 'B.md');
     expect(getWikiPageSnapshot('common', 'B.md')).toEqual(PAGE_B);
 
@@ -260,9 +260,9 @@ describe('стор вики: порядок ответов (последний �
 describe('стор вики: привязка к владельцу', () => {
   it('смена владельца: снимок прежнего очищается и перечитывается; его ответ не оседает', async () => {
     serve({
-      'GET /api/wiki/tree': TREE,
-      'GET /api/wiki/section?section=common': CATALOG_COMMON,
-      'GET /api/wiki/page?section=common&page=A.md': PAGE_A,
+      'GET /wiki/tree': TREE,
+      'GET /wiki/section?section=common': CATALOG_COMMON,
+      'GET /wiki/page?section=common&page=A.md': PAGE_A,
     });
     await ensureWikiLoaded();
     await loadWikiCatalog('common');
@@ -270,11 +270,11 @@ describe('стор вики: привязка к владельцу', () => {
     expect(getWikiTreeSnapshot()).toEqual(TREE);
 
     const stale = deferred();
-    serve({ 'GET /api/wiki/tree': stale.promise });
+    serve({ 'GET /wiki/tree': stale.promise });
     const p1 = loadWikiTree(); // запрос прежнего владельца — резолвится после смены
 
     userId.mockReturnValue('u2'); // выход A, вход B в той же вкладке
-    serve({ 'GET /api/wiki/tree': TREE_FRESH });
+    serve({ 'GET /wiki/tree': TREE_FRESH });
     await ensureWikiLoaded();
     // на экране — вики того, кто вошёл; catalogs/page прежнего не переживают смену
     expect(getWikiTreeSnapshot()).toEqual(TREE_FRESH);
@@ -288,7 +288,7 @@ describe('стор вики: привязка к владельцу', () => {
 
   it('ответ запроса прежнего владельца без новой загрузки в чужой снимок не пишется', async () => {
     const stale = deferred();
-    serve({ 'GET /api/wiki/tree': stale.promise });
+    serve({ 'GET /wiki/tree': stale.promise });
     const p1 = loadWikiTree(); // запрос u1
 
     userId.mockReturnValue('u2'); // сменился владелец, новой загрузки этого слота нет
@@ -300,33 +300,33 @@ describe('стор вики: привязка к владельцу', () => {
 
 describe('стор вики: ошибки контракта', () => {
   it('404 и 401 — без кода (различаем по статусу), 409 — с кодом и сообщением из тела', async () => {
-    serve({ 'GET /api/wiki/page?section=common&page=x.md': httpError(404, { error: 'Not Found' }) });
+    serve({ 'GET /wiki/page?section=common&page=x.md': httpError(404, { error: 'Not Found' }) });
     const notFound = await rejection(() => loadWikiPage('common', 'x.md'));
     expect(notFound).toBeInstanceOf(WikiError);
     expect(notFound.status).toBe(404);
     expect(notFound.code).toBeNull();
 
-    serve({ 'DELETE /api/wiki/section?section=common': httpError(409, { code: 'wiki_not_orphan', message: 'удаляется только раздел-сирота' }) });
+    serve({ 'DELETE /wiki/section?section=common': httpError(409, { code: 'wiki_not_orphan', message: 'удаляется только раздел-сирота' }) });
     const notOrphan = await rejection(() => deleteWikiSection('common'));
     expect(notOrphan.status).toBe(409);
     expect(notOrphan.code).toBe('wiki_not_orphan');
     expect(notOrphan.message).toBe('удаляется только раздел-сирота');
 
-    serve({ 'GET /api/wiki/tree': httpError(401) });
+    serve({ 'GET /wiki/tree': httpError(401) });
     const unauthorized = await rejection(() => loadWikiTree());
     expect(unauthorized.status).toBe(401);
     expect(unauthorized.code).toBeNull();
   });
 
   it('отказ удаления не трогает состояние: каталог сироты остаётся', async () => {
-    serve({ 'GET /api/wiki/tree': TREE, [`GET ${ORPHAN_SECTION_URL}`]: CATALOG_ORPHAN });
+    serve({ 'GET /wiki/tree': TREE, [`GET ${ORPHAN_SECTION_URL}`]: CATALOG_ORPHAN });
     await ensureWikiLoaded();
     await loadWikiCatalog(ORPHAN_KEY);
     expect(getWikiCatalogSnapshot(ORPHAN_KEY)).toBeTruthy();
 
     req.mockImplementation(async (url: string, init?: RequestInit) => {
       const key = `${((init?.method ?? 'GET').toUpperCase())} ${url}`;
-      if (key === 'GET /api/wiki/tree') return TREE;
+      if (key === 'GET /wiki/tree') return TREE;
       throw httpError(409, { code: 'wiki_not_orphan', message: 'удаляется только раздел-сирота' });
     });
     const e = await rejection(() => deleteWikiSection(ORPHAN_KEY));
@@ -338,10 +338,10 @@ describe('стор вики: ошибки контракта', () => {
 describe('стор вики: операции', () => {
   it('«Завести» и «Принять» идут по адресам контракта и перечитывают открытое', async () => {
     serve({
-      'GET /api/wiki/tree': TREE,
-      'GET /api/wiki/section?section=common': CATALOG_COMMON,
-      'POST /api/wiki/initialize': { initialized: true },
-      'POST /api/wiki/adopt': { status: 'applied' },
+      'GET /wiki/tree': TREE,
+      'GET /wiki/section?section=common': CATALOG_COMMON,
+      'POST /wiki/initialize': { initialized: true },
+      'POST /wiki/adopt': { status: 'applied' },
     });
     await ensureWikiLoaded();
     await loadWikiCatalog('common');
@@ -356,24 +356,24 @@ describe('стор вики: операции', () => {
       body: (c[1] as RequestInit | undefined)?.body as string | undefined,
     }));
     const at = (url: string) => calls.findIndex(c => c.url === url);
-    expect(at('/api/wiki/initialize')).toBeGreaterThanOrEqual(0);
-    expect(calls[at('/api/wiki/initialize')].method).toBe('POST');
-    expect(JSON.parse(calls[at('/api/wiki/initialize')].body!)).toEqual({ section: `projects/${PROJECT_ID}` });
+    expect(at('/wiki/initialize')).toBeGreaterThanOrEqual(0);
+    expect(calls[at('/wiki/initialize')].method).toBe('POST');
+    expect(JSON.parse(calls[at('/wiki/initialize')].body!)).toEqual({ section: `projects/${PROJECT_ID}` });
 
-    expect(at('/api/wiki/adopt')).toBeGreaterThan(at('/api/wiki/initialize'));
-    expect(calls[at('/api/wiki/adopt')].method).toBe('POST');
-    expect(JSON.parse(calls[at('/api/wiki/adopt')].body!)).toEqual({ section: 'common', page: 'Общее/релизы.md' });
+    expect(at('/wiki/adopt')).toBeGreaterThan(at('/wiki/initialize'));
+    expect(calls[at('/wiki/adopt')].method).toBe('POST');
+    expect(JSON.parse(calls[at('/wiki/adopt')].body!)).toEqual({ section: 'common', page: 'Общее/релизы.md' });
 
     // после каждой мутации открытое перечитано: дерево + открытый каталог — по разу на мутацию
-    expect(calls.filter(c => c.url === '/api/wiki/tree')).toHaveLength(2);
-    expect(calls.filter(c => c.url === '/api/wiki/section?section=common')).toHaveLength(2);
+    expect(calls.filter(c => c.url === '/wiki/tree')).toHaveLength(2);
+    expect(calls.filter(c => c.url === '/wiki/section?section=common')).toHaveLength(2);
   });
 
   it('«Завести» без адресата — null в теле; удаление сироты — DELETE по ключу и сброс её каталога', async () => {
     serve({
-      'GET /api/wiki/tree': TREE,
+      'GET /wiki/tree': TREE,
       [`GET ${ORPHAN_SECTION_URL}`]: CATALOG_ORPHAN,
-      'POST /api/wiki/initialize': { initialized: true },
+      'POST /wiki/initialize': { initialized: true },
       [`DELETE ${ORPHAN_SECTION_URL}`]: { deleted: true },
     });
     await ensureWikiLoaded();
@@ -399,8 +399,8 @@ describe('стор вики: операции', () => {
 // в analyzeWikiChat) краснит тест «202 — отдельный результат»: тело {running:true} не
 // подходит под форму 200, функция бросает вместо возврата результата.
 
-const ANALYZE_URL = '/api/wiki/chats/s1/analyze';
-const STATUS_URL = '/api/wiki/chats/s1/analyze-status';
+const ANALYZE_URL = '/wiki/chats/s1/analyze';
+const STATUS_URL = '/wiki/chats/s1/analyze-status';
 
 describe('вики: разбор чата по требованию (S7b-0)', () => {
   it('analyze идёт по адресу и методу контракта; 200 отдаёт результат как есть', async () => {
@@ -423,9 +423,9 @@ describe('вики: разбор чата по требованию (S7b-0)', ()
   it('200 с null или пропущенными полями нормализуется в заявленную форму', async () => {
     serve({
       [`POST ${ANALYZE_URL}`]: { outcome: 'applied', reason: null, packageIds: [] },
-      'POST /api/wiki/chats/s2/analyze': { outcome: 'up_to_date' },
-      'POST /api/wiki/chats/s3/analyze': { outcome: 'nothing_new', reason: 'нечего добавить', packageIds: null },
-      'POST /api/wiki/chats/s4/analyze': { outcome: 'rejected' },
+      'POST /wiki/chats/s2/analyze': { outcome: 'up_to_date' },
+      'POST /wiki/chats/s3/analyze': { outcome: 'nothing_new', reason: 'нечего добавить', packageIds: null },
+      'POST /wiki/chats/s4/analyze': { outcome: 'rejected' },
     });
     expect(await analyzeWikiChat('s1')).toEqual({ outcome: 'applied', reason: null, packageIds: [] });
     expect(await analyzeWikiChat('s2')).toEqual({ outcome: 'up_to_date', reason: null, packageIds: [] });
@@ -487,15 +487,15 @@ describe('вики: разбор чата по требованию (S7b-0)', ()
 
 describe('вики: «разобрать заметку» (S7b-0)', () => {
   it('ingestWikiNote идёт по адресу, методу и телу; 200 отдаёт результат как есть', async () => {
-    serve({ 'POST /api/wiki/ingest/note': { outcome: 'awaiting_human', packageId: 'p1', reason: 'есть спорные' } });
+    serve({ 'POST /wiki/ingest/note': { outcome: 'awaiting_human', packageId: 'p1', reason: 'есть спорные' } });
     const res = await ingestWikiNote('n1');
     expect(res).toEqual({ outcome: 'awaiting_human', packageId: 'p1', reason: 'есть спорные' });
-    expect(req.mock.calls[0][0]).toBe('/api/wiki/ingest/note');
+    expect(req.mock.calls[0][0]).toBe('/wiki/ingest/note');
     expect((req.mock.calls[0][1] as RequestInit).method).toBe('POST');
     // без адресата — явный null: модель бэка {NoteId, Target?} (WikiController.cs:575)
     expect(sentBody(0)).toEqual({ noteId: 'n1', target: null });
 
-    serve({ 'POST /api/wiki/ingest/note': { outcome: 'applied', packageId: 'p2', reason: null } });
+    serve({ 'POST /wiki/ingest/note': { outcome: 'applied', packageId: 'p2', reason: null } });
     expect(await ingestWikiNote('n1', 'common')).toEqual({ outcome: 'applied', packageId: 'p2', reason: null });
     expect(sentBody(1)).toEqual({ noteId: 'n1', target: 'common' });
   });
@@ -508,7 +508,7 @@ describe('вики: «разобрать заметку» (S7b-0)', () => {
       [404, 'not_found'],
     ];
     for (const [status, code] of cases) {
-      serve({ 'POST /api/wiki/ingest/note': httpError(status, { code, message: 'отказ по контракту' }) });
+      serve({ 'POST /wiki/ingest/note': httpError(status, { code, message: 'отказ по контракту' }) });
       const e = await rejection(() => ingestWikiNote('n1'));
       expect(e).toBeInstanceOf(WikiError);
       expect(e.status).toBe(status);
@@ -518,7 +518,7 @@ describe('вики: «разобрать заметку» (S7b-0)', () => {
 });
 
 describe('вики: список отбора чатов (доработка H3)', () => {
-  it('loadWikiChats идёт по адресу GET /api/wiki/chats и отдаёт записи как есть', async () => {
+  it('loadWikiChats идёт по адресу GET /wiki/chats и отдаёт записи как есть', async () => {
     // запись списка — WikiChatTriageDto (WikiChatsController.cs:246-250): поле за полем
     const ITEM_PROJECT = {
       sessionId: 's1', name: 'Чат про релизы', zone: 'triage', score: 42,
@@ -527,9 +527,9 @@ describe('вики: список отбора чатов (доработка H3)
       running: true, cursor: 7,
       chroniclePath: `Проекты/${PROJECT_ID}/Хроники/s1.md`,
     };
-    serve({ 'GET /api/wiki/chats': { items: [ITEM_PROJECT], counts: { triage: 1 } } });
+    serve({ 'GET /wiki/chats': { items: [ITEM_PROJECT], counts: { triage: 1 } } });
     const items = await loadWikiChats();
-    expect(req.mock.calls[0][0]).toBe('/api/wiki/chats');
+    expect(req.mock.calls[0][0]).toBe('/wiki/chats');
     // порядок бэка сохраняется как есть, поля доходят до вызывающего без потерь
     expect(items).toEqual([ITEM_PROJECT]);
   });
@@ -538,7 +538,7 @@ describe('вики: список отбора чатов (доработка H3)
     // бэк отдаёт null для личного дома (ChroniclePath: не-проектный дом) и для записей
     // без балла — фронт не превращает null в пустую строку/ноль
     serve({
-      'GET /api/wiki/chats': {
+      'GET /wiki/chats': {
         items: [{
           sessionId: 's2', name: null, zone: 'nothing_new', score: null, signals: null,
           reason: 'нечего добавить', nothingNewStreak: 3, triagedAt: '2026-10-31T12:01:00+00:00',

@@ -206,6 +206,11 @@ function toWikiError(e: unknown): WikiError | null {
   return new WikiError(status, code, message);
 }
 
+// Путь: передаём в request() БЕЗ /api — request() префиксует их сам (offline.ts:31,
+// BASE='/api'), на прово это /api/wiki/… — маршрут бэка ([Route("api/wiki")],
+// WikiController.cs:30). «GET/POST /api/wiki/…» в комментариях ниже — запрос на прово,
+// а не литерал в коде: двойной префикс /api/api давал 404 на всех экранах (дефект B2,
+// QA P1); сторож реальных URL — lib/__tests__/wikiUrl.test.ts.
 // init.live доходит до request() как есть: офлайн-кэш ВРЕДЕН отдельным чтениям —
 // loadWikiChatAnalyzeStatus (доработка H2), по той же причине, что статусы в api.ts.
 async function wikiHttp<T>(url: string, init?: RequestInit & { live?: boolean }): Promise<T> {
@@ -292,7 +297,7 @@ async function reReadOpenPage(): Promise<void> {
 export async function loadWikiTree(): Promise<WikiTreeDto> {
   const gen = ++_treeGen;
   const owner = readStoredUserId();
-  const tree = await wikiHttp<WikiTreeDto>('/api/wiki/tree');
+  const tree = await wikiHttp<WikiTreeDto>('/wiki/tree');
   // Устаревший ответ или ответ чужого владельца в снимок не пишется (M1/M2);
   // вызывающий свой ответ получает как есть.
   if (gen === _treeGen && owner === readStoredUserId()) {
@@ -308,7 +313,7 @@ export async function loadWikiCatalog(sectionKey: string): Promise<WikiCatalogDt
   const gen = (_catalogGen.get(sectionKey) ?? 0) + 1;
   _catalogGen.set(sectionKey, gen);
   const owner = readStoredUserId();
-  const catalog = await wikiHttp<WikiCatalogDto>(`/api/wiki/section?${sectionQuery(sectionKey)}`);
+  const catalog = await wikiHttp<WikiCatalogDto>(`/wiki/section?${sectionQuery(sectionKey)}`);
   if (gen === _catalogGen.get(sectionKey) && owner === readStoredUserId()) {
     _catalogs.set(sectionKey, catalog);
     emit();
@@ -320,7 +325,7 @@ export async function loadWikiPage(sectionKey: string, pageKey: string): Promise
   const gen = ++_pageGen;
   const owner = readStoredUserId();
   const page = await wikiHttp<WikiPageDto>(
-    `/api/wiki/page?${sectionQuery(sectionKey)}&page=${encodeURIComponent(pageKey)}`,
+    `/wiki/page?${sectionQuery(sectionKey)}&page=${encodeURIComponent(pageKey)}`,
   );
   if (gen === _pageGen && owner === readStoredUserId()) {
     _page = { cacheKey: pageCacheKey(sectionKey, pageKey), value: page };
@@ -375,7 +380,7 @@ export async function ensureWikiLoaded(): Promise<void> {
 // бэк проверяет способность (для локального проекта — 409 wiki_section_off). Сам раздел не
 // заводится: его заводит первая применённая операция.
 export async function initializeWiki(section?: string | null): Promise<WikiInitResult> {
-  const res = await wikiHttp<WikiInitResult>('/api/wiki/initialize', {
+  const res = await wikiHttp<WikiInitResult>('/wiki/initialize', {
     method: 'POST',
     body: JSON.stringify({ section: section ?? null }),
   });
@@ -389,7 +394,7 @@ export async function initializeWiki(section?: string | null): Promise<WikiInitR
 // а не по локальному флагу «принято». Сбой перечитки не отменяет принятое: она
 // не роняет ответ и не затирает прежний снимок (тот же порядок, что в refreshWiki).
 export async function adoptWikiPage(sectionKey: string, pageKey: string): Promise<WikiAdoptResult> {
-  const res = await wikiHttp<WikiAdoptResult>('/api/wiki/adopt', {
+  const res = await wikiHttp<WikiAdoptResult>('/wiki/adopt', {
     method: 'POST',
     body: JSON.stringify({ section: sectionKey, page: pageKey }),
   });
@@ -403,7 +408,7 @@ export async function adoptWikiPage(sectionKey: string, pageKey: string): Promis
 // Удалить раздел-сироту (кнопкой). Не-сирота — 409 wiki_not_orphan; состояние не трогаем,
 // пока бэк не подтвердил удаление.
 export async function deleteWikiSection(sectionKey: string): Promise<WikiDeleteResult> {
-  const res = await wikiHttp<WikiDeleteResult>(`/api/wiki/section?${sectionQuery(sectionKey)}`, {
+  const res = await wikiHttp<WikiDeleteResult>(`/wiki/section?${sectionQuery(sectionKey)}`, {
     method: 'DELETE',
   });
   // Поднимаем поколение ключа: идущий ответ каталога удалённого раздела его не вернёт (M1)
@@ -471,7 +476,7 @@ export interface WikiDecisionDto { package: WikiPackageDto; apply: WikiApplyOutc
 export interface WikiPackagesDto { packages: WikiPackageDto[]; invalidCount: number }
 
 export async function listWikiPackages(): Promise<WikiPackagesDto> {
-  return wikiHttp<WikiPackagesDto>('/api/wiki/packages?inbox=true');
+  return wikiHttp<WikiPackagesDto>('/wiki/packages?inbox=true');
 }
 
 // Решение по одной спорной операции. accept=false требует reason (409 wiki_pkg_reason_required).
@@ -480,7 +485,7 @@ export async function listWikiPackages(): Promise<WikiPackagesDto> {
 export async function decideWikiPackage(
   id: string, index: number, accept: boolean, reason: string | null,
 ): Promise<WikiDecisionDto> {
-  const res = await wikiHttp<WikiDecisionDto>(`/api/wiki/packages/${encodeURIComponent(id)}/decide`, {
+  const res = await wikiHttp<WikiDecisionDto>(`/wiki/packages/${encodeURIComponent(id)}/decide`, {
     method: 'POST',
     body: JSON.stringify({ index, accept, reason: reason ?? null }),
   });
@@ -489,7 +494,7 @@ export async function decideWikiPackage(
 }
 
 export async function acceptAllWikiPackage(id: string): Promise<WikiDecisionDto> {
-  const res = await wikiHttp<WikiDecisionDto>(`/api/wiki/packages/${encodeURIComponent(id)}/accept-all`, {
+  const res = await wikiHttp<WikiDecisionDto>(`/wiki/packages/${encodeURIComponent(id)}/accept-all`, {
     method: 'POST',
   });
   if (res.apply?.applied) await refreshWiki();
@@ -533,7 +538,7 @@ export async function loadWikiJournal(q: WikiJournalQuery = {}): Promise<WikiJou
   if (q.origin) params.set('origin', q.origin);
   if (q.class) params.set('class', q.class);
   const qs = params.toString();
-  return wikiHttp<WikiJournalDto>(`/api/wiki/journal${qs ? `?${qs}` : ''}`);
+  return wikiHttp<WikiJournalDto>(`/wiki/journal${qs ? `?${qs}` : ''}`);
 }
 
 export interface WikiRevertDto { restoredPages: string[] }
@@ -570,7 +575,7 @@ export class WikiRevertError extends WikiError {
 // экраном — после отката, а не до него.
 export async function revertWikiPackage(id: string): Promise<WikiRevertDto> {
   try {
-    const res = await request<WikiRevertDto>(`/api/wiki/packages/${encodeURIComponent(id)}/revert`, {
+    const res = await request<WikiRevertDto>(`/wiki/packages/${encodeURIComponent(id)}/revert`, {
       method: 'POST',
     });
     await reReadOpenPage();
@@ -592,7 +597,7 @@ export async function revertWikiPackage(id: string): Promise<WikiRevertDto> {
 // накрывает все пакеты источника в любой части диапазона.
 // Успех — перечитываем открытую страницу, страницы и каталоги: они изменились снятием/откатом.
 export async function retractWikiSource(sourceRef: string): Promise<WikiRetractDto> {
-  const res = await wikiHttp<WikiRetractDto>('/api/wiki/packages/retract', {
+  const res = await wikiHttp<WikiRetractDto>('/wiki/packages/retract', {
     method: 'POST',
     body: JSON.stringify({ sourceRef }),
   });
@@ -621,13 +626,13 @@ export interface WikiLintRunDto { ran: boolean; sectionsOk: number; sectionsFail
 const healthPath = (key: string) => key.split('/').map(encodeURIComponent).join('/');
 
 export async function getWikiHealth(sectionKey: string): Promise<WikiHealthDto> {
-  return wikiHttp<WikiHealthDto>(`/api/wiki/health/${healthPath(sectionKey)}`);
+  return wikiHttp<WikiHealthDto>(`/wiki/health/${healthPath(sectionKey)}`);
 }
 
 // Запуск проверки. 409 wiki_llm_wiki_off / wiki_lint_running — WikiError по коду;
 // состояния экрана (текст отказа, «повторить») — за вызывающим.
 export async function runWikiLint(): Promise<WikiLintRunDto> {
-  return wikiHttp<WikiLintRunDto>('/api/wiki/lint', { method: 'POST' });
+  return wikiHttp<WikiLintRunDto>('/wiki/lint', { method: 'POST' });
 }
 
 // ─── Разбор по требованию: чат и заметка (S7b-0; контракт S7b0a/S7b0b) ───
@@ -687,7 +692,7 @@ function analyzeOk(body: unknown): WikiChatAnalyzeOk | null {
 // marked_skip | personal_section | wiki_not_initialized — WikiError с кодом.
 export async function analyzeWikiChat(sessionId: string): Promise<WikiChatAnalyzeResult> {
   const body = await wikiHttp<unknown>(
-    `/api/wiki/chats/${encodeURIComponent(sessionId)}/analyze`, { method: 'POST' });
+    `/wiki/chats/${encodeURIComponent(sessionId)}/analyze`, { method: 'POST' });
   if ((body as { running?: unknown } | null)?.running === true) return { running: true };
   const ok = analyzeOk(body);
   // Ни одна из двух форм 200: это не HTTP-отказ (status 0 — не реальный статус, wikiErrorText
@@ -704,7 +709,7 @@ export async function loadWikiChatAnalyzeStatus(sessionId: string): Promise<Wiki
   // «сервер сейчас отвечает». Подставленный из IndexedDB прошлый running:false при обрыве
   // сети превращает идущий разбор в завершившийся (тот же смысл, что у статусов в api.ts).
   const res = await wikiHttp<{ running?: unknown; last?: unknown }>(
-    `/api/wiki/chats/${encodeURIComponent(sessionId)}/analyze-status`, { live: true });
+    `/wiki/chats/${encodeURIComponent(sessionId)}/analyze-status`, { live: true });
   const raw = res?.last as { finishedAt?: unknown } | null;
   const ok = analyzeOk(res?.last);
   return {
@@ -730,7 +735,7 @@ export interface WikiNoteIngestDto {
 // источником: чужая, нет такой).
 export async function ingestWikiNote(noteId: string, target?: string | null): Promise<WikiNoteIngestDto> {
   const res = await wikiHttp<{ outcome?: unknown; packageId?: unknown; reason?: unknown }>(
-    '/api/wiki/ingest/note',
+    '/wiki/ingest/note',
     { method: 'POST', body: JSON.stringify({ noteId, target: target ?? null }) },
   );
   if (typeof res?.outcome !== 'string') throw new WikiError(0, null, 'неожиданный ответ заявки заметки');
@@ -774,7 +779,7 @@ export interface WikiChatTriage {
 interface WikiChatsListDto { items: WikiChatTriage[]; counts: Record<string, number> }
 
 export async function loadWikiChats(): Promise<WikiChatTriage[]> {
-  const res = await wikiHttp<WikiChatsListDto>('/api/wiki/chats');
+  const res = await wikiHttp<WikiChatsListDto>('/wiki/chats');
   return Array.isArray(res?.items) ? res.items : [];
 }
 

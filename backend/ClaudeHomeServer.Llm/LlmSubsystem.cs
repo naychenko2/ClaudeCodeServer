@@ -298,6 +298,11 @@ public sealed class LlmSubsystem : IAppSubsystem
                 sp.GetRequiredService<IConfiguration>(),
                 sp.GetRequiredService<ILocalEndpointProbe>()));
 
+        // Медиа-задание после хода локального провайдера, делящего GPU с ComfyUI (YieldsGpuToMedia):
+        // ждёт локальный драйвер картинок. Нет вертикали Llm — шлюза нет, драйвер шлёт задания сразу.
+        services.AddSingleton<IMediaGpuYieldGate>(sp => new MediaGpuYieldGate(
+            sp.GetRequiredService<LlmProviderRegistry>(), LocalEngineBusyTracker.Instance));
+
         // Этап 5, шаг 3 (шов IModelResolver): Core-интерфейс под единственный
         // метод `ResolveModelOrDefault`, который Spend дёргает у LlmProviderRegistry.
         // Адаптер лежит тут, в Main, рядом с LlmProviderRegistry — DI подтянет

@@ -995,4 +995,54 @@ public class LocalImageEditorTests : IDisposable
         result.Images.Should().ContainSingle().Which.Similarity.Should().Be(0.77);
         ready.Should().ContainSingle().Which.Similarity.Should().Be(0.77);
     }
+    // Шлюз IMediaGpuYieldGate: пока идёт ход локальной LLM, делящей видеокарту с ComfyUI (Gemma на
+    // Video), задание ждёт и в ComfyUI не уходит — иначе арбитр выгрузил бы модель посреди хода.
+    private sealed class FakeGpuGate : ClaudeHomeServer.Services.Llm.IMediaGpuYieldGate
+    {
+        public volatile bool Busy;
+        public int Waits;
+        public bool HasActiveTurns => Busy;
+        public async Task<bool> WaitForQuietAsync(TimeSpan maxWait, CancellationToken ct)
+        {
+            Interlocked.Increment(ref Waits);
+            while (Busy) await Task.Delay(5, ct);
+            return true;
+        }
+    }
+
+    // Мутация: убрать ожидание шлюза — задание уйдёт в ComfyUI сразу, первый assert краснеет.
+    [Fact]
+    public async Task ХодЛокальнойLlm_ЗаданиеЖдётКонцаХода()
+    {
+        var media = new FakeMedia();
+        var gate = new FakeGpuGate { Busy = true };
+        var editor = new LocalImageEditor(media, gate) { PollInterval = TimeSpan.FromMilliseconds(1) };
+        var req = new ImageEditRequest(ImageEditOp.Generate, "котик", null, null, [], 1, "1:1", null, LocalImageEditor.QwenImageTurbo, null);
+
+        var run = editor.RunAsync(req, new Progress<EditProgress>(), default);
+        await Task.Delay(100);
+        media.Submitted.Should().BeEmpty("пока идёт ход LLM на общей видеокарте, ComfyUI задание не получает");
+
+        gate.Busy = false;
+        var result = await run.WaitAsync(TimeSpan.FromSeconds(10));
+        result.Outcome.Should().Be(EditOutcome.Ok);
+        media.Submitted.Should().ContainSingle();
+        gate.Waits.Should().Be(1);
+    }
+
+    // Хода нет — задание уходит сразу, без ожидания (шлюз не опрашивается долго).
+    [Fact]
+    public async Task ХодаНет_ЗаданиеУходитСразу()
+    {
+        var media = new FakeMedia();
+        var gate = new FakeGpuGate();
+        var editor = new LocalImageEditor(media, gate) { PollInterval = TimeSpan.FromMilliseconds(1) };
+        var req = new ImageEditRequest(ImageEditOp.Generate, "котик", null, null, [], 1, "1:1", null, LocalImageEditor.QwenImageTurbo, null);
+
+        var result = await editor.RunAsync(req, new Progress<EditProgress>(), default);
+
+        result.Outcome.Should().Be(EditOutcome.Ok);
+        media.Submitted.Should().ContainSingle();
+        gate.Waits.Should().Be(0);
+    }
 }

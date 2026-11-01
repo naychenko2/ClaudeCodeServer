@@ -78,13 +78,26 @@ export async function requestNoteIngest(noteId: string): Promise<string> {
   }
 }
 
+// Согласование по числу (тот же приём, что stepWord в FeatureProdCardsView):
+// 1 / 2–4 / 5+; 11–14 — как 5+. Коротое причастие при «1» согласуется с существительным,
+// при остальних — средний род: так оно читается с числительным-подметом.
+function isOne(n: number): boolean {
+  const m10 = n % 10, m100 = n % 100;
+  return m10 === 1 && m100 !== 11;
+}
+function countWord(n: number, one: string, few: string, many: string): string {
+  const m10 = n % 10, m100 = n % 100;
+  const w = (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) ? few : many;
+  return `${n} ${isOne(n) ? one : w}`;
+}
+
 // Итог отката по источнику — текстом, как в «Журнале» (та же форма частей)
-function retractResultText(r: WikiRetractDto): string {
+export function retractResultText(r: WikiRetractDto): string {
   const parts = [
-    r.revertedPackages.length ? `${r.revertedPackages.length} пакетов откатано` : '',
-    r.unlinkedPackages.length ? `${r.unlinkedPackages.length} стр. очищено от сносок` : '',
-    r.removedChronicles.length ? `${r.removedChronicles.length} хроник снято` : '',
-    r.remainingPackages.length ? `${r.remainingPackages.length} пакетов остались (другой источник)` : '',
+    r.revertedPackages.length ? `${countWord(r.revertedPackages.length, 'пакет', 'пакета', 'пакетов')} ${isOne(r.revertedPackages.length) ? 'откатан' : 'откатано'}` : '',
+    r.unlinkedPackages.length ? `${r.unlinkedPackages.length} стр. ${isOne(r.unlinkedPackages.length) ? 'очищена' : 'очищено'} от сносок` : '',
+    r.removedChronicles.length ? `${countWord(r.removedChronicles.length, 'хроника', 'хроники', 'хроник')} ${isOne(r.removedChronicles.length) ? 'снята' : 'снято'}` : '',
+    r.remainingPackages.length ? `${countWord(r.remainingPackages.length, 'пакет', 'пакета', 'пакетов')} ${isOne(r.remainingPackages.length) ? 'остался' : 'осталось'} (другой источник)` : '',
     r.markedSkip ? 'чат помечен «не разбирать»' : '',
   ].filter(Boolean);
   const failed = r.failed.length ? ` Частично: ${r.failed.join('; ')}` : '';
@@ -109,22 +122,6 @@ export function WikiChatActions({ session, hasMessages, online }: ChatHeaderSumm
     timers.current = [];
   }, []);
 
-  // Опрос после 202: одна отложенная проверка за раз; running → следующая; не-running →
-  // последний исход на экран; размонтирование/смена чата снимают таймер (effect cleanup)
-  const poll = useCallback((sessionId: string, mine: number) => {
-    const t = setTimeout(() => {
-      if (seq.current !== mine) return;
-      loadWikiChatAnalyzeStatus(sessionId)
-        .then(st => {
-          if (seq.current !== mine) return;
-          if (st.running) { poll(sessionId, mine); return; }
-          setState(st.last ? { kind: 'done', result: st.last } : { kind: 'idle' });
-        })
-        .catch(() => { if (seq.current === mine) setState({ kind: 'error', text: 'Не удалось дождаться результата разбора' }); });
-    }, POLL_MS);
-    timers.current.push(t);
-  }, []);
-
   // Список чатов — только за chroniclePath своей записи (для «идёт» доверяем analyze-status)
   const fetchChronicle = useCallback((sessionId: string, mine: number) => {
     loadWikiChats()
@@ -135,6 +132,25 @@ export function WikiChatActions({ session, hasMessages, online }: ChatHeaderSumm
       })
       .catch(() => { /* ссылки нет — кнопки нет; это не ошибка экрана */ });
   }, []);
+
+  // Опрос после 202: одна отложенная проверка за раз; running → следующая; не-running →
+  // последний исход на экран; размонтирование/смена чата снимают таймер (effect cleanup)
+  const poll = useCallback((sessionId: string, mine: number) => {
+    const t = setTimeout(() => {
+      if (seq.current !== mine) return;
+      loadWikiChatAnalyzeStatus(sessionId)
+        .then(st => {
+          if (seq.current !== mine) return;
+          if (st.running) { poll(sessionId, mine); return; }
+          setState(st.last ? { kind: 'done', result: st.last } : { kind: 'idle' });
+          // Хронику создаёт применённый разбор: после 202→опроса путь появляется в списке
+          // только сейчас — перечитываем его, как при прямом 200 ниже (иначе «готово» без ссылки)
+          if (st.last?.packageIds.length) fetchChronicle(sessionId, mine);
+        })
+        .catch(() => { if (seq.current === mine) setState({ kind: 'error', text: 'Не удалось дождаться результата разбора' }); });
+    }, POLL_MS);
+    timers.current.push(t);
+  }, [fetchChronicle]);
 
   useEffect(() => {
     const mine = ++seq.current;

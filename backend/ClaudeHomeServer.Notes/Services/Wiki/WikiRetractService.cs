@@ -37,10 +37,17 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 //    пакет, чьи страницы остались в вики после отката, виден в NeedsUnlink — иначе страница
 //    навсегда остаётся со сноской на снятый источник, и S4f-2 её не увидит.
 // 5. Хроника чата снимается целиком (мера 5): в отличие от страницы знания, всё её содержание —
-//    этот чат. При целой цепочке её файл уже возвращён механизмом (create-операция имеет пустой
-//    прообраз — файл удаляется). Что осталось после оборванной цепочки, удаляется здесь: файл и
-//    его запись манифеста, проекции перегенерируются. Хронику нельзя оставить «со снятием сносок»:
-//    сноску снимать не с чего — страница целиком из этого источника.
+//    этот чат. Хроника пишется вне пакета (AppendChronicleAsync, S6e-2) — create-операции хроники
+//    в пакетах нет (дефект H2): набор снимаемых путей = create-операции пакетов ∪ путь хроники
+//    чата-источника, выведенный единственной точкой правды (WikiChatIngestService.ChroniclePath;
+//    null для не-проектного дома). При целой цепочке её файл уже возвращён механизмом (create-
+//    операция имеет пустой прообраз — файл удаляется). Что осталось после оборванной цепочки или
+//    написано ингестом, удаляется здесь: файл и его запись манифеста, проекции перегенерируются.
+//    Хронику нельзя оставить «со снятием сносок»: сноску снимать не с чего — страница целиком из
+//    этого источника. Перед удалением хроники читается её заголовок: в остальных хрониках того же
+//    раздела убирается строка «Продолжение чата: [[T]]» — после удаления цели гейт раздела отвергает
+//    любую следующую запись с ссылкой на несуществующую страницу (H2-1). Хроника, чей файл
+//    расходится с манифестом (дрейф), не перезаписывается: она названа в failed.
 // 6. Чат получает пометку «не разбирать» (шов S6i, ISessionDirectory.SetWikiMark → WikiMarks.Skip):
 //    иначе следующая ночь вернёт откатанное тем же разбором (решение 12а). Только своих чатов
 //    (ResolveOwnerId) и только когда с диска действительно что-то снято: пометка чату, из которого
@@ -75,8 +82,9 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 //    пакета — в журнал и проекции всё равно (п. 8): на диске изменённая страница всегда отражена
 //    в журнале. Хроника здесь не обрабатывается: она снимается целиком (п. 5).
 // 8. Журнал: строка op=retract на каждый раздел, где диск изменился, — по ФАКТИЧЕСКИ изменённым
-//    страницам (доработка ревью S4f-2, MAJOR 3): возвращённые побайтно, удалённые, снятые —
-//    независимо от того, доведён ли их пакет до «reverted»; id откатанных и правивших их пакетов. Строки
+//    страницам (доработка ревью S4f-2, MAJOR 3): возвращённые побайтно, удалённые, снятые,
+//    хроника с убранной строкой продолжения — независимо от того, доведён ли их пакет до
+//    «reverted»; id откатанных и правивших их пакетов. Строки
 //    op=revert по пакетам пишет механизм отката (S4b-3) и не заменяются: откат пакета и откат по
 //    источнику — разные факты, и «Журнал» (S7a) показывает оба. Проекции раздела перегенерируются
 //    после новой строки (тот же порядок, что у применения).
@@ -251,7 +259,9 @@ public sealed class WikiRetractService
         var first = Candidates(root, sourceRef!);
         if (first.Count == 0)
             // Нечего откатывать: не отказ, а пустой исход — на диске не тронуто ничего, пометки
-            // нет (из этого чата ничего не снималось).
+            // нет (из этого чата ничего не снималось). Открытый вопрос (H2-1, поведение не менять):
+            // если все пакеты чата уже откатаны по одному («reverted»), выборка пуста здесь и
+            // хроника чата остаётся на диске — до неё этот ранний выход не доходит.
             return new RetractResult(true, null, null, [], [], false);
 
         var body = await _keeper.WithSectionsLockedAsync(ownerId,
@@ -311,34 +321,53 @@ public sealed class WikiRetractService
 
         // П.5 шапки: хроника снимается целиком. Целая цепочка уже сняла её файл механизмом
         // (пустой прообраз create — удаление); здесь подбирается то, что осталось после
-        // оборванной цепочки. Файла нет — удалять нечего: повтор операции ничего не двоит.
+        // оборванной цепочки или написано ингестом вне пакетов (H2). Файла нет — удалять
+        // нечего: повтор операции ничего не двоит.
         // Failed — доработка ревью S4f-1: неснимаемая страница называется с причиной, пустой
         // catch её не глотает: человек видит, что осталось на диске.
         var removed = new List<string>();
+        var relinked = new List<string>();
         var failed = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var pkg in candidates)
         {
-            foreach (var op in pkg.Operations)
+            foreach (var page in ChroniclePathsOf(pkg, sourceRef))
             {
-                if (op.Op != WikiPackage.OpCreate || op.Page is null || !IsChroniclePath(op.Page))
+                // Тот же путь может прийти и как create-операция, и как выведенный: одна
+                // операция над ним — иначе RemovedChronicles и журнал двоили бы страницу.
+                if (!seen.Add(page))
                     continue;
-                var full = SafePath.Join(root, "pages/" + op.Page);
+                var full = SafePath.Join(root, "pages/" + page);
                 if (!File.Exists(full))
                     continue;
+                string? title = null;
                 try
                 {
+                    // Заголовок читается до удаления: по нему в остальных хрониках раздела
+                    // убирается строка ссылки на эту хронику (п.5 шапки). Неразобранная
+                    // страница всё равно снимается (её содержание — этот чат), но её заголовок
+                    // неизвестен — ссылки на неё не найти, и это названо, а не молчание.
+                    title = WikiPage.Parse(File.ReadAllText(full)).Model?.Title;
                     File.Delete(full);
                     // Манифест следует за файлами: записи удалённой страницы не остаётся.
-                    WikiManifest.RollbackTo(root, pkg.Section, new Dictionary<string, string?> { [op.Page] = null });
+                    WikiManifest.RollbackTo(root, pkg.Section, new Dictionary<string, string?> { [page] = null });
                     WikiProjections.RegenerateSection(root, pkg.Section);
-                    removed.Add(op.Page);
+                    removed.Add(page);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
                     // Одна неснимаемая страница не останавливает остальных — но она названа:
                     // «отсутствует в RemovedChronicles» без причины было бы молчанием.
-                    failed.Add($"хроника «{op.Page}» не снята: {ex.Message}");
+                    failed.Add($"хроника «{page}» не снята: {ex.Message}");
+                    continue;
                 }
+                if (title is null)
+                {
+                    failed.Add($"хроника «{page}» не разбирается: её заголовок неизвестен, " +
+                        "строки «Продолжение чата» на неё в разделе не сняты");
+                    continue;
+                }
+                relinked.AddRange(RemoveContinuationLinks(root, pkg.Section, title, failed));
             }
         }
 
@@ -350,7 +379,7 @@ public sealed class WikiRetractService
             // Страницы вики переписаны — модель per-owner не должна остаться о них осведомлённой.
             _notes.Invalidate(ownerId);
 
-        if (removed.Count > 0)
+        if (removed.Count > 0 || relinked.Count > 0)
             // Файлы вики изменены — модель per-owner не должна остаться о них осведомлённой
             // (тот же инвариант, что у применения и отката пакета).
             _notes.Invalidate(ownerId);
@@ -362,6 +391,7 @@ public sealed class WikiRetractService
         // обработанных пакетов. Пакет без реальных правок страниц строки не требует.
         foreach (var section in outcomes.Where(o => o.Reverted).Select(o => o.Section)
                      .Concat(removed.Select(SafeSection))
+                     .Concat(relinked.Select(SafeSection))
                      .Concat(unlinked.Where(u => u.Pages.Count > 0).Select(u => u.Section))
                      .Distinct(StringComparer.Ordinal)
                      .OrderBy(s => s, StringComparer.Ordinal))
@@ -369,6 +399,7 @@ public sealed class WikiRetractService
             var pages = outcomes.Where(o => o.Reverted && o.Section == section)
                 .SelectMany(o => o.RestoredPages)
                 .Concat(removed.Where(p => SafeSection(p) == section))
+                .Concat(relinked.Where(p => SafeSection(p) == section))
                 .Concat(unlinked.Where(u => u.Section == section).SelectMany(u => u.Pages))
                 .Distinct(StringComparer.Ordinal)
                 .OrderBy(p => p, StringComparer.Ordinal)
@@ -387,6 +418,129 @@ public sealed class WikiRetractService
         }
 
         return (true, null, null, outcomes, removed, unlinked, failed);
+    }
+
+    /// <summary>Пути хроник, относимых к источнику пакета (п.5 шапки): create-операции самого
+    /// пакета (путь, записанный пакетом — прежний поиск) ∪ путь хроники чата-источника: хроника
+    /// пишется вне пакета (AppendChronicleAsync, S6e-2), её create-операции в пакетах нет
+    /// (дефект H2). Путь выводится единственной точкой правды (WikiChatIngestService.ChroniclePath:
+    /// null для не-проектного дома и для id, не представимого в пути), а не копированием формулы.
+    /// Раздел — свойство пакета, уже под блокировкой этого метода; новых замков здесь нет.</summary>
+    private static List<string> ChroniclePathsOf(WikiPackage pkg, string sourceRef)
+    {
+        var paths = new List<string>();
+        foreach (var op in pkg.Operations)
+        {
+            if (op.Op == WikiPackage.OpCreate && op.Page is { Length: > 0 } page && IsChroniclePath(page))
+                paths.Add(page);
+        }
+        if (OriginOf(sourceRef) == "session" &&
+            WikiChatIngestService.ChroniclePath(pkg.Section, IdPartOf(sourceRef)) is { Length: > 0 } derived)
+            paths.Add(derived);
+        return [.. paths.Distinct(StringComparer.Ordinal)];
+    }
+
+    /// <summary>Хроника-продолжение не может остаться со ссылкой на снятую хронику: после
+    /// удаления цели любая следующая запись раздела отвергается гейтом как ссылка на
+    /// несуществующую страницу (п.5 шапки, H2-1). Убирается ровно строка
+    /// «Продолжение чата: [[T]]» из «О чём» (формат строки — одна копия:
+    /// WikiChatIngestService.ContinuationLinkPrefix); прочие строки страницы не тронуты.
+    /// Страница, чей файл расходится с записью манифеста (дрейф — чужая правка мимо
+    /// Хранителя), не перезаписывается: чужое состояние не прячется за этой записью, страница
+    /// названа в failed. Запись — как в UnlinkPageUnderLock: WikiFileWriter + RecordApplied
+    /// под уже взятым замком раздела; WritePageAsync здесь невозможен — это вложенный замок
+    /// того же раздела (зависание, WikiApplyService). Не-хроника и неразобранная страница
+    /// не тронуты: их «О чём» не принадлежит этой операции.</summary>
+    private static List<string> RemoveContinuationLinks(string root, string section, string title, List<string> failed)
+    {
+        var folder = WikiSections.Folder(section);
+        if (folder is null)
+            return [];
+        var dir = SafePath.Join(root, "pages/" + folder + ChronicleFolder);
+        if (!Directory.Exists(dir))
+            return [];
+        var wanted = WikiChatIngestService.ContinuationLinkPrefix + "[[" + title + "]]";
+        var read = WikiManifest.TryRead(root, section);
+        if (read.State == WikiManifestState.Invalid)
+        {
+            // В невалидный манифест запись невозможна (RecordApplied отказался бы): ни одна
+            // страница не перезаписывается согласованно — ссылки этого раздела названы.
+            failed.Add($"хроники раздела «{section}» не тронуты: манифест раздела невалиден, " +
+                "строки «Продолжение чата» не сняты");
+            return [];
+        }
+        var changed = new List<string>();
+        foreach (var f in Directory.EnumerateFiles(dir, "*.md", SearchOption.AllDirectories))
+        {
+            // Ключ страницы — относительно pages/ всего раздела: relative здесь — от папки
+            // хроник, к ней добавляется префикс раздела и сам сегмент «Хроники».
+            var page = folder + ChronicleFolder + "/" + Path.GetRelativePath(dir, f).Replace('\\', '/');
+            if (WikiPaths.IsProjection(page))
+                continue;
+            string text;
+            try
+            {
+                text = File.ReadAllText(f);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                failed.Add($"хроника «{page}» не читается: строка «Продолжение чата» не снята: {ex.Message}");
+                continue;
+            }
+            var parsed = WikiPage.Parse(text);
+            if (parsed.Model is null || parsed.Model.Frontmatter.Type != WikiFrontmatter.TypeChronicle)
+                continue;
+            if (!parsed.Model.Sections.Any(s => s.Name == "О чём" && s.Lines.Contains(wanted)))
+                continue;
+            var recorded = read.Manifest.TryGetValue(page, out var hash) ? hash : null;
+            if (recorded != WikiApplyService.Sha256OfBytes(File.ReadAllBytes(f)))
+            {
+                // Дрейф: файл не равен последней применённой версии — ни откатить молча, ни
+                // перезаписать (тот же контракт дрейфа, что у Хранителя): решает человек.
+                failed.Add($"хроника «{page}» расходится с манифестом раздела: строка " +
+                    "«Продолжение чата» не снята");
+                continue;
+            }
+            var sections = new List<WikiPage.Section>(parsed.Model.Sections.Count);
+            foreach (var s in parsed.Model.Sections)
+                sections.Add(s.Name == "О чём"
+                    ? new WikiPage.Section { Name = s.Name, Lines = [.. s.Lines.Where(l => l != wanted)] }
+                    : s);
+            var rebuilt = new WikiPage
+            {
+                Title = parsed.Model.Title,
+                Frontmatter = parsed.Model.Frontmatter,
+                Sections = sections,
+                Footnotes = parsed.Model.Footnotes,
+            };
+            // Самопроверка формы, как в UnlinkPageUnderLock: канонический рендер обязан
+            // читаться тем же парсером — иначе на диске осталась бы нечитаемая страница.
+            var reparsed = WikiPage.Parse(rebuilt.Render());
+            if (reparsed.Model is null)
+            {
+                failed.Add($"хроника «{page}» после снятия строки продолжения не разбирается: " +
+                    string.Join("; ", reparsed.Errors));
+                continue;
+            }
+            var finalText = reparsed.Model.Render();
+            try
+            {
+                WikiFileWriter.Write(root, "pages/" + page, finalText);
+                // Манифест — о последнем состоянии страницы: хэш с диска, а не из строки
+                // (тот же порядок, что у записи Хранителя и UnlinkPageUnderLock).
+                WikiManifest.RecordApplied(root, section, new Dictionary<string, string>
+                {
+                    [page] = WikiApplyService.Sha256OfBytes(File.ReadAllBytes(f)),
+                });
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                failed.Add($"хроника «{page}»: запись без строки продолжения не удалась: {ex.Message}");
+                continue;
+            }
+            changed.Add(page);
+        }
+        return changed;
     }
 
     /// <summary>П.7 шапки (мера 5, второй абзац, S4f-2): для каждого пакета из NeedsUnlink —

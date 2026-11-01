@@ -515,6 +515,11 @@ public sealed class WikiChatIngestService
             ? WikiSections.ProjectsPrefix + projectId
             : WikiSections.Personal;
 
+    /// <summary>Префикс строки-ссылки хроники продолжения на хронику прежнего чата. Одна
+    /// копия формата на весь продукт: её пишет ContinuationLinkLine, по ней же откат по
+    /// источнику убирает строку из хроник-продолжений (H2-1, WikiRetractService).</summary>
+    public const string ContinuationLinkPrefix = "Продолжение чата: ";
+
     /// <summary>Строка-ссылка хроники продолжения на хронику прежнего чата (§12б этап 3:
     /// «хроника нового чата ссылается на хронику прежнего»). Путь к прежней хронике —
     /// только ChroniclePath (единственная точка правды); цель ссылки — её заголовок на
@@ -540,7 +545,7 @@ public sealed class WikiChatIngestService
         var parsed = WikiPage.Parse(File.ReadAllText(prevFull, Encoding.UTF8));
         if (parsed.Model is null || parsed.Model.Frontmatter.Type != WikiFrontmatter.TypeChronicle)
             return null;
-        return $"Продолжение чата: [[{parsed.Model.Title}]]";
+        return $"{ContinuationLinkPrefix}[[{parsed.Model.Title}]]";
     }
 
     /// <summary>Заголовок хроники — имя чата плюс дата его начала (ADR-035:273). Имя

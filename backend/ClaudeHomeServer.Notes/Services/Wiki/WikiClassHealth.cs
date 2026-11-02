@@ -136,6 +136,9 @@ public sealed class WikiClassHealth
             // окна не смогла бы посчитать «5 откатов из 50 применённых»).
             if (pkg.Status is not (WikiPackage.StatusApplied or WikiPackage.StatusReverted))
                 continue;
+            // Пакеты человека политику не проходят — классы human×* автоматикой не оцениваются.
+            if (pkg.Author == WikiPackage.AuthorHuman)
+                continue;
             for (var i = 0; i < pkg.Operations.Count; i++)
             {
                 var op = pkg.Operations[i];

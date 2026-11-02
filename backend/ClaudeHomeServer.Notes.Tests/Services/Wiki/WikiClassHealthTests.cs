@@ -120,6 +120,21 @@ public class WikiClassHealthTests : IDisposable
         settings.IsClassDisabled("session×supersede").Should().BeFalse("откаты @human не размываются в классе замен ИИ");
     }
 
+    [Fact]
+    public async Task ТриОткатаСвоихПравокЧеловека_КлассHumanНеОцениваетсяИНеВыключается()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var recent = now - TimeSpan.FromDays(1);
+        for (var i = 0; i < 3; i++)
+            WritePackage(recent, retractedAt: recent, classKey: "human×append", author: WikiPackage.AuthorHuman);
+
+        var outcome = await _sut.EvaluateAsync(User);
+
+        outcome.Stats.Should().NotContain(s => s.Class.StartsWith("human×"));
+        ReadSettings().IsClassDisabled("human×append").Should().BeFalse();
+        _notifier.Sent.Should().BeEmpty();
+    }
+
     private const string SharedPage = "Общее/Моя-страница.md";
 
     private void WriteRestoreLine(string page, string actor = "user") =>
@@ -361,7 +376,7 @@ public class WikiClassHealthTests : IDisposable
     /// <summary>Пакет на диске: состояние, которое читает оценка (стор проверяет форму файла).
     /// retractedAt != null — статус «reverted» с временем отката в UpdatedAt (переход статуса
     /// ставит его в момент отката — та же форма, что в бою).</summary>
-    private string WritePackage(DateTimeOffset createdAt, DateTimeOffset? retractedAt = null, string classKey = ClassKey, string? page = null)
+    private string WritePackage(DateTimeOffset createdAt, DateTimeOffset? retractedAt = null, string classKey = ClassKey, string? page = null, string? author = null)
     {
         var id = Guid.NewGuid().ToString("N");
         var parts = classKey.Split('×');
@@ -369,6 +384,8 @@ public class WikiClassHealthTests : IDisposable
         {
             V = WikiPackage.ModelVersion,
             Id = id,
+            Author = author ?? WikiPackage.AuthorAi,
+            Action = author == WikiPackage.AuthorHuman ? WikiPackage.ActionEdit : null,
             Section = Section,
             Sources = [new WikiPackage.SourceRef(parts[0], SourceRef)],
             Operations = [new WikiPackage.Operation

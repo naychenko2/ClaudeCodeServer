@@ -62,6 +62,10 @@ const STATUS_RAIL_MIN_WIDTH = 720;
 // Подсказка выключенного статуса для участника общего проекта: задачу меняет владелец (S2c-F4j)
 const STATUS_OWNER_TITLE = 'Задачу меняет владелец проекта';
 
+// S2d-4b (К5): подпись маскированного чата — бэк отдаёт её в linkedChat.title
+// (ChatRef.PrivateFormTitle), показываем как есть; это — запасной текст для ответа без title
+const PRIVATE_CHAT_LABEL = 'Приватный чат участника';
+
 // Сегментированный переключатель статуса: мобила (закреплён снизу) и узкий
 // десктопный контейнер (полоса под шапкой) — одна и та же разметка; у участника сегменты
 // выключены и не кликаются (S2c-F4j)
@@ -706,8 +710,11 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
         </div>
       )}
 
-      {/* Связанная сессия (чат Claude-исполнителя) */}
-      {task.linkedSessionId && (
+      {/* Связанная сессия (чат Claude-исполнителя). S2d-4b (К5): чужой приватный чат бэк
+          маскирует — linkedSessionId null, рядом форма linkedChat: нейтральная подпись
+          без кнопки перехода и без id (тот же блок, что и карточка видимого чата, но
+          неактивный: bgPanel вместо bgWhite, без шеврона и курсора). */}
+      {task.linkedSessionId ? (
         <div style={{ marginBottom: 26 }}>
           <SectionLabel style={{ marginBottom: 10 }}>Связанная сессия</SectionLabel>
           <button
@@ -735,7 +742,28 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
             <ChevronRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />
           </button>
         </div>
-      )}
+      ) : task.linkedChat ? (
+        <div style={{ marginBottom: 26 }}>
+          <SectionLabel style={{ marginBottom: 10 }}>Связанная сессия</SectionLabel>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 11,
+            width: '100%', boxSizing: 'border-box',
+            padding: '11px 14px',
+            background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.xl,
+          }}>
+            <div style={{
+              width: 34, height: 34, borderRadius: R.lg, flexShrink: 0,
+              background: C.bgSelected,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <MessageCircle size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.textMuted} />
+            </div>
+            <div style={{ flex: 1, minWidth: 0, fontFamily: FONT.sans, fontSize: FS.base, fontWeight: 700, color: C.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {task.linkedChat.title || PRIVATE_CHAT_LABEL}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* Файлы (только у проектных задач) */}
       {project && task.linkedFiles.length > 0 && (

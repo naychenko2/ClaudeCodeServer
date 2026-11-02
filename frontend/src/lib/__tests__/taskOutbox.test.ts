@@ -104,6 +104,27 @@ describe('applyUpdateLocally — зеркало семантики TaskManager.U
     expect(r.recurrence).toBeUndefined();
   });
 
+  // S2d-F1 (маска S2d-4b): null в linkedSessionId — не значение (его присылает сервер как признак
+  // закрытого чата), локальная задача не должна принимать его как «чат задан» и терять прежнее
+  // значение. Зеркало TaskManager.Update: req.LinkedSessionId is not null — править, "" — очистить.
+  it('linkedSessionId: значение ставится, null — не менять, "" — очистить; null не входит в новую задачу', () => {
+    const withChat = applyUpdateLocally(base, { linkedSessionId: 'c-1' });
+    expect(withChat.linkedSessionId).toBe('c-1');
+    const kept = applyUpdateLocally(withChat, { linkedSessionId: null });
+    expect(kept.linkedSessionId, 'null — не менять (TaskManager.cs:986)').toBe('c-1');
+    const renamed = applyUpdateLocally(kept, { title: 'rename' });
+    expect(renamed.linkedSessionId, 'следующая правка очереди не теряет значение').toBe('c-1');
+    const cleared = applyUpdateLocally(kept, { linkedSessionId: '' });
+    expect(cleared.linkedSessionId, '"" = очистить (тот же путь, что раньше)').toBeUndefined();
+  });
+
+  it('buildLocalTask: null в CreateTaskDto — не «значение задано» (офлайн-создание не несёт null-чат)', () => {
+    const created = buildLocalTask('t2', null, { title: 'T', linkedSessionId: null }, 1001);
+    expect(created.linkedSessionId).toBeUndefined();
+    const withChat = buildLocalTask('t3', null, { title: 'T', linkedSessionId: 'c-2' }, 1002);
+    expect(withChat.linkedSessionId).toBe('c-2');
+  });
+
   // S2b-F7: человек-исполнитель (контракт бэка: id — назначить, "" — снять, не слать — не менять).
   // Без этого офлайн-пересборка (mergePending → applyUpdateLocally) теряла назначение участника.
   it('assigneeUserId: id назначается и переживает последующие правки, "" снимает, не слать — не менять', () => {

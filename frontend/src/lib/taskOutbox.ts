@@ -319,7 +319,8 @@ export function buildLocalTask(id: string, projectId: string | null, dto: Create
     personaId: dto.personaId || undefined,
     recurrence: dto.recurrence && dto.recurrence.type !== 'none' ? dto.recurrence : undefined,
     seriesId: dto.recurrence && dto.recurrence.type !== 'none' ? id : undefined,
-    linkedSessionId: dto.linkedSessionId,
+    // S2d-4b: null в DTO — не значение (маска бэка), локальная задача не должна нести его как «чат задан»
+    linkedSessionId: dto.linkedSessionId ?? undefined,
     linkedFiles: dto.linkedFiles ?? [],
     subtasks: (dto.subtasks ?? []).map(s => ({ id: crypto.randomUUID(), title: s.title, isDone: false })),
     labels: dto.labels ?? [],
@@ -376,7 +377,8 @@ export function applyUpdateLocally(task: Task, dto: UpdateTaskDto): Task {
     next.recurrence = dto.recurrence.type === 'none' ? undefined : dto.recurrence;
     if (next.recurrence && !next.seriesId) next.seriesId = next.id;
   }
-  if (dto.linkedSessionId !== undefined) next.linkedSessionId = dto.linkedSessionId === '' ? undefined : dto.linkedSessionId;
+  // S2d-4b: null — не менять (зеркало TaskManager.cs: req.LinkedSessionId is not null), '' — очистить
+  if (dto.linkedSessionId != null) next.linkedSessionId = dto.linkedSessionId === '' ? undefined : dto.linkedSessionId;
   if (dto.linkedFiles !== undefined) next.linkedFiles = dto.linkedFiles;
   if (dto.labels !== undefined) next.labels = dto.labels;
   if (dto.order !== undefined) next.order = dto.order;

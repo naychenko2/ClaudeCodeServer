@@ -697,6 +697,17 @@ export interface TaskSubtask {
   isDone: boolean;
 }
 
+// Форма ChatRef (бэк Models/ChatRef.cs, шаг S2d-4b, К5): ссылка на чат, связанный с задачей.
+// Видимый чат — id и название остаются в своих id-полях задачи (linkedSessionId и др.),
+// этой формы нет. Чужой приватный (не виден зрителю) — id-поле обнулено (null), рядом
+// стоит эта запись: sessionId нет, title — подпись вместо названия, private — признак.
+export interface ChatRef {
+  sessionId?: string | null;
+  title?: string | null;
+  private?: boolean;
+  authorUserId?: string | null;   // чей чат: id автора, не название и не id чата
+}
+
 export interface Task {
   id: string;
   // Отсутствует у личной задачи (вне проекта)
@@ -726,7 +737,8 @@ export interface Task {
   createdByUserId?: string | null;
   recurrence?: TaskRecurrence;
   seriesId?: string;         // общий id серии регулярной задачи
-  linkedSessionId?: string;
+  // S2d-4b (К5): чат, невидимый зрителю, приходит обнулённым (null), форма — в linkedChat
+  linkedSessionId?: string | null;
   // Режим «Исполнение фичи»: связь задачи с фичей (эпик) и кодом шага.
   // Аддитивно и nullable — старые задачи без разметки не несут этих полей.
   featureId?: string | null;   // id задачи-эпика
@@ -737,6 +749,12 @@ export interface Task {
   // Чат, породивший задачу (бэк TaskItem.SourceSessionId). Для фичи — связь эпика с чатом:
   // GET /api/tasks/features?sessionId= выбирает эпики по этому полю (и ExecutorLaunchedBySessionId).
   sourceSessionId?: string | null;
+  // Маска чужих приватных чатов (бэк TaskView.MaskForeignChats, S2d-4b): форма стоит рядом с
+  // обнулённым id-полем и приходит ТОЛЬКО когда чат не виден зрителю; для видимого чата её нет.
+  linkedChat?: ChatRef | null;
+  sourceChat?: ChatRef | null;
+  executorLaunchedByChat?: ChatRef | null;
+  reportToChat?: ChatRef | null;
   personaId?: string;        // исполнение от лица персоны (assignee=claude)
   // Уровень модели исполнителя (слот strong/medium/weak); отсутствует — не задан:
   // модель берётся от персоны-исполнителя и назначения места «Исполнитель задач»
@@ -838,7 +856,7 @@ export interface CreateTaskDto {
   reminderMinutes?: number;
   assignee?: TaskAssignee;
   recurrence?: TaskRecurrence;
-  linkedSessionId?: string;
+  linkedSessionId?: string | null;   // null — не задано (то же, что поле отсутствует)
   personaId?: string;        // исполнение от лица персоны
   // Уровень модели исполнителя; не указано — не задан (модель по персоне и месту)
   modelTier?: ModelTierValue;
@@ -906,7 +924,9 @@ export interface TaskVerification {
 // (NoteTaskSyncService / TeamWaveService). Прочие исходы придут следующими волнами
 export type DefectOutcome = 'closedWithoutCheck';
 
-// Пустая строка в dueDate/dueTime/linkedSessionId = очистить поле, undefined = не менять
+// Пустая строка в dueDate/dueTime/linkedSessionId = очистить поле, undefined = не менять;
+// null в linkedSessionId = не менять (зеркало бэка: TaskManager.Update правит поле только когда
+// req.LinkedSessionId not null; null приходит из маски S2d-4b, а не как значение от клиента)
 export interface UpdateTaskDto {
   title?: string;
   description?: string;
@@ -922,7 +942,8 @@ export interface UpdateTaskDto {
   assigneeUserId?: string | null;
   // type 'none' = убрать повторение, undefined = не менять
   recurrence?: TaskRecurrence;
-  linkedSessionId?: string;
+  // '' = очистить, null = не менять (маска S2d-4b), undefined = не менять
+  linkedSessionId?: string | null;
   // Персона-исполнитель: '' = убрать, undefined = не менять
   personaId?: string;
   // Уровень модели исполнителя: '' = сбросить, undefined = не менять

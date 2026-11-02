@@ -28,7 +28,8 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // Контракт: 200 {outcome, reason?, packageIds[]} — applied / awaiting_human / nothing_new /
 // up_to_date и rejected без кода; 202 {running:true} — ожидание истекло, разбор продолжается;
 // 404 {code:"not_found"} — чужой и несуществующий неразличимы; 409 {code,message} —
-// task_execution, marked_skip, personal_section, wiki_not_initialized.
+// task_execution, marked_skip, personal_section, wiki_not_initialized; нечитаемый стор
+// списка/пересчёта — wiki_triage_invalid с текстом «файл разбора чатов не читается».
 // analyze-status: 200 {running, last?{outcome,reason,packageIds,finishedAt}}, чужой чат — 404.
 // Список: строка чата несёт running, cursor, chroniclePath (путь — по формуле сервиса,
 // и только если файл хроники есть на диске — N1, дефект 58ad40a5: после отката — null).
@@ -314,6 +315,32 @@ public class WikiChatsControllerTests : IDisposable
         var after = (WikiChatsListDto)((OkObjectResult)Controller().List()).Value!;
         after.Items.Single(i => i.SessionId == ChatId).ChroniclePath.Should().BeNull(
             "файл хроники откатан — тот же запрос даёт null (N1: «Не найдено», а не мёртвый путь)");
+    }
+
+    // ─── 9. Нечитаемый стор: 409 с точным кодом и текстом контракта (NA-3) ───
+
+    [Fact]
+    public async Task СписокИПересчёт_НечитаемыйСтор_409_СТочнымКодомИТекстом()
+    {
+        // Фронт подписан на точные литералы (lib/wiki.ts, wikiLabels.ts): контракт 409 —
+        // не только статус, тело несёт код и строку для человека. Здесь проверяются
+        // литералы контракта, а не константа стора: подмена кода или текста на любой из
+        // двух ручек (List / recalculate) видна этим тестом. Контракт самой службы —
+        // WikiChatScorerTests.ПересчётСлужбыНаНечитаемомСторе.
+        var file = Path.Combine(WikiPaths.Root(_dir, User), "keeper", "chat-triage.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        File.WriteAllText(file, "{ не json");
+
+        var list = Controller().List();
+        AssertBody(list, 409, "wiki_triage_invalid");
+        Body(list).GetProperty("message").GetString().Should().Be("файл разбора чатов не читается");
+
+        var rec = await Controller().Recalculate();
+        AssertBody(rec, 409, "wiki_triage_invalid");
+        Body(rec).GetProperty("message").GetString().Should().Be("файл разбора чатов не читается");
+
+        // Мутация «подставить code="wiki_triage_bogus" в ветке отказа recalculate» или
+        // «в List» — этот тест красный: проверены литералы контракта, а не константа стора.
     }
 
     // ─── обвязка ──────────────────────────────────────────────────────────────

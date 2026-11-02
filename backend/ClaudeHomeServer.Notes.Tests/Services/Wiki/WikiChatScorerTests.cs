@@ -504,7 +504,11 @@ public class WikiChatScorerTests : IDisposable
 
         res.Ok.Should().BeFalse("нечитаемый стор — отказ, а не пустой пересчёт");
         res.Code.Should().Be(WikiChatTriageStore.CodeInvalid);
-        res.Reason.Should().NotBeNullOrWhiteSpace("отказ несёт строку для человека (прежний message 409)");
+        // Точная строка для фронта (прежний message 409): сторинный текст «…— запись в
+        // него невозможна» означал бы, что отказ пришёл не ранним провером, а с первой
+        // попытки записи — вызывающий (ночной разбор) получил бы другую формулировку.
+        res.Reason.Should().Be("файл разбора чатов не читается",
+            "ранний отказ несёт ровно прежний текст контракта");
         File.ReadAllBytes(file).Should().Equal(before, "пересчёт не перезаписывает нечитаемый файл молча");
     }
 

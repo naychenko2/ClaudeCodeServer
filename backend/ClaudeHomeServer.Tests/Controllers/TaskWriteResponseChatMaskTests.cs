@@ -1,218 +1,282 @@
-using System.Net;
-using System.Net.Http.Json;
+using System.Security.Claims;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
+using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
+using ClaudeHomeServer.Services.ChatContext;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Knowledge;
+using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
-using Microsoft.Extensions.DependencyInjection;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
+using Xunit;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
 /// <summary>
 /// S2d-4i (находка ревью R-S2d-4b, Глеб): write-ответы TasksController отдавали хранимый TaskItem
 /// без маски чужих приватных чатов, хотя GET той же задачи её ставил. Задача общего проекта лежит
-/// под владельцем-арендатором, а её чат-источник — приватный чат участника (его автор создал
-/// задачу из своего чата под токеном арендатора). Инвариант S2d: ни один путь не отдаёт чужой
-/// приватный чат (id, название, производные) никому, кроме автора — включая владельца проекта.
+/// под владельцем-арендатором (TaskManager), а её чат-источник — приватный чат участника, из
+/// которого её заводили: PUT/POST от владельца проекта не должны нести ни id, ни названия этого
+/// чата (инвариант S2d, разрез 4bc3d04f §1). Автор своего чата и общий чат проекта — как раньше.
 ///
-/// Правка — копия с маской (TaskView.CopyOf + MaskForeignChats, та же функция, что в GET); запись
-/// стора не тронута. Автор своего чата и общий чат проекта — как раньше: id в своём поле, формы нет.
+/// Ответ отдаёт копию (TaskView.CopyOf + MaskForeignChats, ChatAudience.Viewer(UserId)) — та же
+/// функция и тот же состав полей, что в GET; запись стора не правится.
 ///
-/// Мутация (критерий c2): в PUT вернуть WithWarning(updated) без MaskForeignChats →
-/// «ПравкаЗадачиУчастника…» красный: в JSON владельца снова стоит id и название чужого чата.
+/// Полный хост не нужен: контроллеры создаются напрямую с ClaimsPrincipal вызывающего и живым
+/// SessionManager без процессов (образцы — GetOwnedVisibleTests, SharedProjectEditorScopeGatesTests);
+/// сериализация ответа — теми же опциями, что MVC. Ветка мержа здесь не проверяется: она требует
+/// живого git-worktree и принятого финала (machinery TasksControllerTests, хост-набор).
+///
+/// Мутация (критерий c2): в Update вернуть WithWarning(updated) без MaskForeignChats →
+/// «ПравкаЗадачиУчастникаВладельцем…» и «Создание…», «СвойПриватныйИОбщий…» краснеют: в JSON
+/// владельца снова стоит id чужого приватного чата, а на своих чатах появляется форма-заглушка.
 /// </summary>
-[Trait("Category", "Host")]
-public class TaskWriteResponseChatMaskTests : IClassFixture<TestWebApplicationFactory>
+public sealed class TaskWriteResponseChatMaskTests : IDisposable
 {
-    private const string TaskTitle = "Задача из приватного чата участника";
-    private const string ChatTitle = "Рабочий разговор редактора";
+    // Сидированные чаты общего проекта: чужой приватный (автор — редактор), свой приватный
+    // (автор — владелец), общий проектный. Названия отличны от подписи-заглушки — иначе
+    // «в JSON нет названия» было бы тривиально зелёным.
+    private const string ForeignPrivateId = "priv-foreign";
+    private const string OwnPrivateId = "priv-own";
+    private const string OpenChatId = "open-chat";
+    private const string ForeignPrivateTitle = "Рабочий разговор редактора";
+    private const string OwnPrivateTitle = "Мой разговор владельца";
+    private const string OpenChatTitle = "Общий разговор проекта";
 
-    private readonly TestWebApplicationFactory _factory;
+    private readonly string _tempDir;
+    private readonly IConfiguration _config;
+    private readonly ProjectManager _projects;
+    private readonly TaskManager _tasks;
+    private readonly PersonaManager _personas;
+    private readonly SessionManager _sessions;
+    private readonly Capture _board = new();
+    private readonly string _ownerId;
+    private readonly string _editorId;
+    private readonly string _projectId;
 
-    public TaskWriteResponseChatMaskTests(TestWebApplicationFactory factory)
+    public TaskWriteResponseChatMaskTests()
     {
-        _factory = factory;
-        _factory.ExtraConfig[SharedProjectsGate.SwitchKey] = "true";
+        _tempDir = Path.Combine(Path.GetTempPath(), "task_write_mask_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_tempDir);
+
+        _config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
+            [SharedProjectsGate.SwitchKey] = "true",
+        }).Build();
+
+        var userStore = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        _ownerId = userStore.GetFirst()!.Id;
+        _editorId = userStore.Add("write-mask-editor", "pwd", "user").Id;
+        userStore.SetFeatureFlag(_editorId, FeatureFlagKeys.SharedProjects, true);
+
+        var appSettings = new AppSettingsService(_config);
+        var root = Directory.CreateDirectory(Path.Combine(_tempDir, "project")).FullName;
+        _projects = new ProjectManager(_config, userStore, appSettings);
+        _projectId = _projects.Create("Общий проект", root, _ownerId, userStore.GetFirst()!.Username).Id;
+        _projects.SetMembers(_projectId,
+            [new ProjectMember { UserId = _editorId, Role = ProjectRole.Editor, AddedBy = _ownerId }]);
+
+        // Стор чатов сидируется файлом (образец — GetOwnedVisibleTests): маска резолвит их
+        // через тот же SessionManager, что и боевой путь.
+        File.WriteAllText(Path.Combine(_tempDir, "sessions.json"), JsonSerializer.Serialize(new List<Session>
+        {
+            new() { Id = ForeignPrivateId, ProjectId = _projectId, PrivateToUserId = _editorId, Name = ForeignPrivateTitle, Status = SessionStatus.Finished },
+            new() { Id = OwnPrivateId, ProjectId = _projectId, PrivateToUserId = _ownerId, Name = OwnPrivateTitle, Status = SessionStatus.Finished },
+            new() { Id = OpenChatId, ProjectId = _projectId, Name = OpenChatTitle, Status = SessionStatus.Finished },
+        }));
+
+        _personas = new PersonaManager(_config);
+        _tasks = new TaskManager(_config);
+        _sessions = CreateSessionManager(userStore, appSettings, _personas);
     }
 
-    private HttpClient Owner() => _factory.CreateAuthenticatedClient();
-
-    private HttpClient Member() => _factory.CreateAuthenticatedClient(
-        TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
-
-    private string OwnerId() => UserOf(TestWebApplicationFactory.TestUsername).Id;
-    private string MemberId() => UserOf(TestWebApplicationFactory.SecondUsername).Id;
-
-    private User UserOf(string username) =>
-        _factory.Services.GetRequiredService<UserStore>().FindByUsername(username)!;
-
-    private TaskManager Tasks => _factory.Services.GetRequiredService<TaskManager>();
-    private SessionManager Sessions => _factory.Services.GetRequiredService<SessionManager>();
-
-    private static async Task SetFlagAsync(HttpClient client, bool on) =>
-        (await client.PutAsJsonAsync("/api/feature-flags/shared-projects", new { enabled = on }))
-            .EnsureSuccessStatusCode();
-
-    private static string IdOf(string json) =>
-        JsonSerializer.Deserialize<JsonElement>(json).GetProperty("id").GetString()!;
-
-    /// <summary>Проект владельца с участником-редактором: редактор — чтобы чат проекта можно было
-    /// сделать приватным (читатель видимость чата не меняет).</summary>
-    private async Task<string> ProjectWithEditorAsync()
+    public void Dispose()
     {
-        await SetFlagAsync(Owner(), true);
-        await SetFlagAsync(Member(), true);
-
-        var created = await Owner().PostAsJsonAsync("/api/projects",
-            new { name = "Записи" + Guid.NewGuid().ToString("N")[..6] });
-        created.EnsureSuccessStatusCode();
-        var projectId = IdOf(await created.Content.ReadAsStringAsync());
-
-        (await Owner().PostAsJsonAsync($"/api/projects/{projectId}/members",
-            new { username = TestWebApplicationFactory.SecondUsername, role = "editor" })).EnsureSuccessStatusCode();
-        return projectId;
+        _tasks.Dispose();
+        TestFs.DeleteDirectoryResilient(_tempDir);
     }
 
-    private async Task<string> CreateChatAsync(HttpClient client, string projectId)
+    // Состав — как в GetOwnedVisibleTests: живой SessionManager без процессов и LLM-вызовов.
+    private SessionManager CreateSessionManager(UserStore userStore, AppSettingsService appSettings, PersonaManager personas)
     {
-        var chat = await client.PostAsJsonAsync($"/api/projects/{projectId}/sessions",
-            new { mode = "auto", name = ChatTitle });
-        chat.EnsureSuccessStatusCode();
-        return IdOf(await chat.Content.ReadAsStringAsync());
+        var llmProviders = new LlmProviderRegistry(_config);
+        var subPool = new ClaudeSubscriptionPool(_config);
+        var adapters = new LlmSessionAdapterFactory(
+            _config, new AgentPromptSourceAdapter(new SkillsService()),
+            new WorkspaceDatasetLookup(new WorkspaceKnowledgeStore(_config)), llmProviders, subPool);
+        var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, _config);
+        var usage = new UsageService(_config);
+        var jwt = new JwtService(_config, userStore, NullLogger<JwtService>.Instance);
+        var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
+        server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
+        var wkStore = new WorkspaceKnowledgeStore(_config);
+        var knowledge = new KnowledgeService(new Mock<IHttpClientFactory>().Object,
+            Microsoft.Extensions.Options.Options.Create(new DifyOptions()), wkStore);
+        var flags = new FeatureFlagService(userStore);
+        var notesSvc = new NotesService(_projects, _config, NullLogger<NotesService>.Instance);
+        var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, _config,
+            NullLogger<NotesKnowledgeService>.Instance);
+        var bindings = new PersonaBindingsService(personas, _projects, wkStore, knowledge, new SkillsService(),
+            userStore, _config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
+        var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(_config,
+            NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
+        return new SessionManager(_projects, new ChatHistoryService(_config), _config, adapters, falCost, usage,
+            appSettings, userStore, jwt, server.Object, llmProviders, flags, personas, bindings, subPool,
+            NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, new TestSessionBroadcaster());
     }
 
-    /// <summary>Приватный чат автора в общем проекте — тот же путь, что в бою: автор создаёт чат
-    /// проекта и делает его приватным (PUT /api/chats/{id}/visibility).</summary>
-    private async Task<string> PrivateChatAsync(HttpClient author, string projectId)
+    // ─── вызывающий — владелец проекта (его JWT, без заголовка агента: путь UI) ───────────
+
+    private TasksController AsOwner() =>
+        new(_tasks, _board, null!, _projects, _personas, null!, null!, _sessions, null!)
+        { ControllerContext = AsUser(_ownerId) };
+
+    private ProjectTasksController AsProjectOwner() =>
+        new(_tasks, _projects, _personas, _board, null!, null!, _sessions)
+        { ControllerContext = AsUser(_ownerId) };
+
+    private static ControllerContext AsUser(string userId) => new()
     {
-        var chatId = await CreateChatAsync(author, projectId);
-        var priv = await author.PutAsJsonAsync($"/api/chats/{chatId}/visibility", new { @private = true });
-        priv.StatusCode.Should().Be(HttpStatusCode.OK, "приватность ставится её автору");
-        Sessions.GetById(chatId)!.Name.Should().Be(ChatTitle, "название чата в сторе: «в JSON нет названия» не тривиально");
-        return chatId;
+        HttpContext = new DefaultHttpContext { User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", userId)])) },
+    };
+
+    /// <summary>Задача общего проекта под арендатором с чатом-источником: тот же результат, что
+    /// MCP-путь участника (tasks_create под токеном арендатора, SourceSessionId — id его
+    /// приватного чата).</summary>
+    private string SeedTask(string title, string sourceSessionId) =>
+        _tasks.Create(_projectId, _ownerId, new CreateTaskRequest(title, SourceSessionId: sourceSessionId)).Id;
+
+    // Форма ответа как в MVC (camelCase, null не пишется) + relaxed-энкодер: без него кириллица
+    // ушла бы в \u-последовательности, и «в JSON нет названия» стало бы тривиально зелёным.
+    private static readonly JsonSerializerOptions WireOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
+    private static string WireOf(IActionResult result)
+    {
+        var ok = result.Should().BeOfType<OkObjectResult>().Subject;
+        return JsonSerializer.Serialize(ok.Value, WireOptions);
     }
 
-    /// <summary>Задача общего проекта под арендатором с чатом-источником участника — тот же
-    /// результат, что MCP-путь участника: tasks_create идёт под токеном арендатора, и TaskManager
-    /// кладёт OwnerId арендатора, оставив источником id чата, из которого задачу заводили.</summary>
-    private string SeedTaskAsync(string projectId, string sourceSessionId, bool forClaude = false) =>
-        Tasks.Create(projectId, OwnerId(), new CreateTaskRequest(TaskTitle,
-            SourceSessionId: sourceSessionId,
-            Assignee: forClaude ? TaskItemAssignee.Claude : null)).Id;
+    private static JsonObject NodeOf(string wire) => JsonNode.Parse(wire)!.AsObject();
 
-    private static async Task<JsonElement> OkBodyAsync(HttpResponseMessage resp)
+    /// <summary>Отпечаток маски в ответе: ни id, ни названия чужого приватного чата; рядом —
+    /// форма-заглушка с признаком и автором. Одна форма во всех write-ответах.</summary>
+    private void AssertMasked(string wire, string where)
     {
-        var text = await resp.Content.ReadAsStringAsync();
-        resp.StatusCode.Should().Be(HttpStatusCode.OK, text);
-        return JsonSerializer.Deserialize<JsonElement>(text);
+        wire.Should().NotContain(ForeignPrivateId, $"{where}: id чужого приватного чата не уходит владельцу проекта");
+        wire.Should().NotContain(ForeignPrivateTitle, $"{where}: название чужого приватного чата не уходит владельцу проекта");
+
+        var formNode = NodeOf(wire)["sourceChat"];
+        formNode.Should().NotBeNull($"{where}: маска ставит форму рядом с обнулённым id");
+        var form = formNode!.AsObject();
+        form["private"]!.GetValue<bool>().Should().BeTrue($"{where}: рядом форма-заглушка");
+        form["title"]!.GetValue<string>().Should().Be(ChatRef.PrivateFormTitle, $"{where}: форма не несёт названия чата");
+        form["authorUserId"]!.GetValue<string>().Should().Be(_editorId, $"{where}: форма говорит, чей чат");
     }
 
-    // Значения в поле нет: отсутствует или null (маска обнуляет значение, не меняя форму ответа:
-    // nullable-поля TaskItem сериализуются без null).
-    private static bool NoValue(JsonElement e, string name) =>
-        !e.TryGetProperty(name, out var v) || v.ValueKind == JsonValueKind.Null;
-
-    private void AssertNoForeignChat(JsonElement body, string chatId, string chatName, string where)
-    {
-        var json = body.ToString();
-        json.Should().NotContain(chatId, $"{where}: id чужого приватного чата не уходит владельцу проекта");
-        json.Should().NotContain(chatName, $"{where}: название чужого приватного чата не уходит владельцу проекта");
-        var form = body.GetProperty("sourceChat");
-        form.GetProperty("private").GetBoolean>().Should().BeTrue($"{where}: рядом форма-заглушка");
-        form.GetProperty("title").GetString().Should().Be(ChatRef.PrivateFormTitle, $"{where}: форма не несёт названия чата");
-        form.GetProperty("authorUserId").GetString().Should().Be(MemberId(), $"{where}: форма говорит, чей чат");
-    }
-
-    // ─── PUT /api/tasks/{id} — тот же вектор, что закрытый в GET ───────────────────────
+    // ─── PUT /api/tasks/{taskId} — тот же вектор, что закрытый в GET ──────────────────────
 
     [Fact]
     public async Task ПравкаЗадачиУчастникаВладельцем_ВJSONНетНиIdНиНазвания_ЗаписьНеМеняется()
     {
-        var projectId = await ProjectWithEditorAsync();
-        var chatId = await PrivateChatAsync(Member(), projectId);
-        var taskId = SeedTaskAsync(projectId, chatId);
+        var taskId = SeedTask("Задача из приватного чата участника", ForeignPrivateId);
 
-        // Предпосылка та же, что в бою: задача лежит у арендатора, её источник — чат участника.
-        Tasks.GetById(taskId)!.OwnerId.Should().Be(OwnerId());
-        Tasks.GetById(taskId)!.SourceSessionId.Should().Be(chatId);
+        var wire = WireOf(await AsOwner().Update(taskId, new UpdateTaskRequest(Title: "переписал владелец")));
 
-        var body = await OkBodyAsync(await Owner().PutAsJsonAsync($"/api/tasks/{taskId}", new { title = "переписал владелец" }));
-
-        AssertNoForeignChat(body, chatId, ChatTitle, "PUT");
+        AssertMasked(wire, "PUT /api/tasks/{id}");
         // Состав ответа не изменился ничем, кроме маски: та же карточка, правка применена.
-        body.GetProperty("id").GetString().Should().Be(taskId);
-        body.GetProperty("title").GetString().Should().Be("переписал владелец");
+        var node = NodeOf(wire);
+        node["id"]!.GetValue<string>().Should().Be(taskId);
+        node["title"]!.GetValue<string>().Should().Be("переписал владелец");
 
         // Проецируется копия ответа, не запись: хранимая задача осталась со своим источником.
-        Tasks.GetById(taskId)!.SourceSessionId.Should().Be(chatId);
+        _tasks.GetById(taskId)!.SourceSessionId.Should().Be(ForeignPrivateId);
     }
 
     [Theory]
-    [InlineData("ownPrivate")]
-    [InlineData("open")]
-    public async Task ПравкаЗадачиСвоимИлиОбщимЧатом_ИдНаМесте_ФормыНет(string kind)
+    [InlineData(OwnPrivateId)]
+    [InlineData(OpenChatId)]
+    public async Task ПравкаЗадачиСвоимИлиОбщимЧатом_ИдНаМесте_ФормыНет(string chatId)
     {
-        var projectId = await ProjectWithEditorAsync();
-        var chatId = kind == "open"
-            ? await CreateChatAsync(Owner(), projectId)
-            : await PrivateChatAsync(Owner(), projectId);
-        var taskId = SeedTaskAsync(projectId, chatId);
+        var taskId = SeedTask("Задача своего или общего чата", chatId);
 
-        var body = await OkBodyAsync(await Owner().PutAsJsonAsync($"/api/tasks/{taskId}", new { title = "переписал владелец" }));
+        var node = NodeOf(WireOf(await AsOwner().Update(taskId, new UpdateTaskRequest(Title: "переписал владелец"))));
 
-        body.GetProperty("sourceSessionId").GetString().Should().Be(chatId,
-            kind == "open" ? "общий чат проекта виден всем участникам" : "автор своего приватного чата видит его id");
-        NoValue(body, "sourceChat").Should().BeTrue("формы-заглушки нет там, где id на месте");
+        node["sourceSessionId"]!.GetValue<string>().Should().Be(chatId,
+            chatId == OpenChatId ? "общий чат проекта виден всем участникам" : "автор своего приватного чата видит его id");
+        node["sourceChat"].Should().BeNull("формы-заглушки нет там, где id на месте");
     }
 
-    // ─── POST создания задачи: тот же маска-ответ, что PUT и GET ───────────────────────
+    // ─── POST создания задачи: тот же маска-ответ, что PUT и GET ──────────────────────────
 
     [Fact]
     public async Task СозданиеПроектнойЗадачиСЧужимПриватнымЧатомВТеле_ОтветБезId_ЗаписьСId()
     {
-        var projectId = await ProjectWithEditorAsync();
-        var chatId = await PrivateChatAsync(Member(), projectId);
+        var wire = WireOf(await AsProjectOwner().Create(_projectId,
+            new CreateTaskRequest("задача проекта с чужим источником", SourceSessionId: ForeignPrivateId)));
 
-        var body = await OkBodyAsync(await Owner().PostAsJsonAsync($"/api/projects/{projectId}/tasks",
-            new { title = "задача проекта с чужим источником", sourceSessionId = chatId }));
-
-        AssertNoForeignChat(body, chatId, ChatTitle, "POST /api/projects/{id}/tasks");
-        Tasks.GetById(body.GetProperty("id").GetString()!)!.SourceSessionId
-            .Should().Be(chatId, "ответ проецируется, запись стора — нет");
+        AssertMasked(wire, "POST /api/projects/{id}/tasks");
+        _tasks.GetById(NodeOf(wire)["id"]!.GetValue<string>())!.SourceSessionId
+            .Should().Be(ForeignPrivateId, "ответ проецируется, запись стора — нет");
     }
 
+    /// <summary>Личная задача (вне проекта) с чужим приватным чатом-источником: приватность
+    /// держит автора чата, а не проект задачи. Тело — wire-форма, как её присылает клиент.</summary>
     [Fact]
-    public async Task СозданиеЛичнойЗадачиСЧужимПриватнымЧатомВТеле_ОтветБезId()
+    public async Task СозданиеЛичнойЗадачиСЧужимПриватнымЧатомВТеле_ОтветБезId_ЗаписьСId()
     {
-        var projectId = await ProjectWithEditorAsync();
-        var chatId = await PrivateChatAsync(Member(), projectId);
+        var body = JsonSerializer.SerializeToElement(
+            new { title = "личная задача с чужим источником", sourceSessionId = ForeignPrivateId });
 
-        var body = await OkBodyAsync(await Owner().PostAsJsonAsync("/api/tasks",
-            new { title = "личная задача с чужим источником", sourceSessionId = chatId }));
+        var wire = WireOf(await AsOwner().Create(body));
 
-        AssertNoForeignChat(body, chatId, ChatTitle, "POST /api/tasks");
-        Tasks.GetById(body.GetProperty("id").GetString()!)!.SourceSessionId
-            .Should().Be(chatId, "приватность держит автора, а не проект задачи");
+        AssertMasked(wire, "POST /api/tasks");
+        _tasks.GetById(NodeOf(wire)["id"]!.GetValue<string>())!.SourceSessionId
+            .Should().Be(ForeignPrivateId);
     }
 
-    // ─── POST /api/tasks/{id}/execute — ответом уходит хранимая задача после запуска ───
-
-    [Fact]
-    public async Task ЗапускИсполнителяНаЗадачеУчастника_ОтветБезIdЧужогоПриватногоЧата()
+    /// <summary>Маска бьёт только чужой приватный: своей чат в том же POST остаётся id, без
+    /// формы. Мутация «маска безусловная» (обнулять любой id) — этот тест красный.</summary>
+    [Theory]
+    [InlineData(OwnPrivateId)]
+    [InlineData(OpenChatId)]
+    public async Task СозданиеЗадачиСвоимИлиОбщимЧатом_ИдНаМесте_ФормыНет(string chatId)
     {
-        var projectId = await ProjectWithEditorAsync();
-        var chatId = await PrivateChatAsync(Member(), projectId);
-        var taskId = SeedTaskAsync(projectId, chatId, forClaude: true);
+        var wire = WireOf(await AsProjectOwner().Create(_projectId,
+            new CreateTaskRequest("задача со своим или общим чатом", SourceSessionId: chatId)));
 
-        var body = await OkBodyAsync(await Owner().PostAsync($"/api/tasks/{taskId}/execute", null));
+        var node = NodeOf(wire);
+        node["sourceSessionId"]!.GetValue<string>().Should().Be(chatId);
+        node["sourceChat"].Should().BeNull();
+    }
 
-        AssertNoForeignChat(body, chatId, ChatTitle, "POST /api/tasks/{id}/execute");
-        var stored = Tasks.GetById(taskId)!;
-        stored.ClaudeStartedAt.Should().NotBeNull("исполнитель реально стартовал — иначе проверяется не этот путь");
-        body.GetProperty("linkedSessionId").GetString().Should().Be(stored.LinkedSessionId,
-            "ответ — та же задача после запуска: свой чат исполнителя виден владельцу как раньше");
-        stored.SourceSessionId.Should().Be(chatId, "запуск не правит чат-источник задачи");
+    // Копия группы в событии доски и копия владельца — не этот шаг (S2d-4b закрыл их своим
+    // тестом); здесь проверяется, что контроллер не отдал в ответ хранимый объект.
+    private sealed class Capture : ISessionBroadcaster
+    {
+        public List<ServerMessage> ToOwnerMsgs = [];
+        public Task ToSession(string sessionId, ServerMessage message) => Task.CompletedTask;
+        public Task ToSessionExcept(string sessionId, string exceptConnectionId, ServerMessage message) => Task.CompletedTask;
+        public Task ToOwner(string ownerId, ServerMessage message) { ToOwnerMsgs.Add(message); return Task.CompletedTask; }
+        public Task ToProject(string projectId, ServerMessage message) => Task.CompletedTask;
+        public Task ToPreviewLog(string projectId, string serviceId, ServerMessage message) => Task.CompletedTask;
     }
 }

@@ -111,7 +111,7 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         // различима в контракте — она остаётся на авторском отказе ниже.
         if ((req.Model is not null || req.Effort is not null) && sessions.DenyOwnerTurn(sessionId, UserId) is { } denied)
             return denied;
-        if (sessions.GetOwned(sessionId, UserId) is null) return ChatAuthorGate.Denied();
+        if (sessions.GetOwnedVisible(sessionId, UserId) is null) return ChatAuthorGate.Denied();
         if (req.NotificationsMuted is bool muted) sessions.SetNotificationsMuted(sessionId, muted);
         // Хотя бы одно из двух — см. тот же блок в ChatsController.Update
         if (req.VoiceStyle is not null && !VoiceStyles.IsKnown(req.VoiceStyle))
@@ -216,7 +216,7 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         var session = sessions.GetById(sessionId);
         if (session == null) return NoContent(); // идемпотентное удаление
         if (session.ProjectId != projectId) return NotFound(); // чужая сессия — не удаляем
-        if (sessions.GetOwned(sessionId, UserId) is null) return ChatAuthorGate.Denied();
+        if (sessions.GetOwnedVisible(sessionId, UserId) is null) return ChatAuthorGate.Denied();
         await sessions.DeleteAsync(sessionId);
         return NoContent();
     }

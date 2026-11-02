@@ -11221,6 +11221,23 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         return s is not null && ResolveOwnerId(s) == ownerId ? s : null;
     }
 
+    // Сессия, принадлежащая человеку И видимая ему (S2d-3a): GetOwned + SessionAccess.CanSee.
+    // Приватный проектный чат не виден даже владельцу проекта (решение 28.10): на чужом
+    // приватном чате владелец получает отказ, неотличимый от «нет такого чата». GetOwned
+    // это не заменяет: машинные пути (тулсеты своей сессии-вызывателя, дайджест,
+    // продолжение, сторожа) законно работают с приватным чатом через арендатора — без них
+    // сломался бы сам приватный чат. CanSee зовётся напрямую, как у шлюзов редакторов
+    // (S2d-1d): арендатор здесь уже установлен GetOwned, проверка добавляет только
+    // приватность чата — это не решение о праве на проект (роль и рубильник неприменимы:
+    // вызывающий и есть арендатор).
+    public Session? GetOwnedVisible(string sessionId, string userId)
+    {
+        var s = GetOwned(sessionId, userId);
+        if (s is null) return null;
+        var project = s.ProjectId is not null ? _projects.GetById(s.ProjectId) : null;
+        return Access.SessionAccess.CanSee(s, project, userId) ? s : null;
+    }
+
     // Сессия, на которую у человека есть право right (S1-7): REST-входы хода (RunTurn) проверяют
     // его здесь, а не владением, чтобы открытие права редактору (S2a-10) было строкой матрицы
     // ProjectAccess, а не правкой каждого эндпоинта. Нет доступа — null (404, существование не раскрываем).

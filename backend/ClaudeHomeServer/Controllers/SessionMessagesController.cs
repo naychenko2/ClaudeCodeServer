@@ -23,9 +23,10 @@ public class SessionMessagesController(SessionManager sessions, SessionMessaging
     // internal — компактную историю рендерит и WorkspaceToolset (chats_history, ADR-012 волна 3)
     internal const int MaxTextLength = 2000;
 
-    // Сессия текущего пользователя: у проектной — владелец проекта, у чата — сама сессия.
-    // Чужая/несуществующая — как отсутствующая (404). Владелец резолвится в SessionManager.
-    private Models.Session? OwnedSession(string sessionId) => sessions.GetOwned(sessionId, UserId);
+    // Сессия текущего пользователя, видимая ему (S2d-3a): у проектной — владелец проекта,
+    // у чата — сама сессия; чужой приватный чат не виден даже владельцу. Чужая/несуществующая
+    // — как отсутствующая (404). Владелец резолвится в SessionManager.
+    private Models.Session? OwnedSession(string sessionId) => sessions.GetOwnedVisible(sessionId, UserId);
 
     // Чат, который человек ВИДИТ (в т.ч. участник общего проекта): только для чтения. Снимки
     // промпта, разбор, запись и очередь остаются на OwnedSession — в S1 участник чаты не пишет.

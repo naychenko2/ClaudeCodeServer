@@ -41,7 +41,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     // несуществующему — 404 (существование не раскрываем); владелец чата проекта на ручках
     // «только чат вне проекта» получает прежний 404
     private IActionResult NotAuthorOrNotFound(string id) =>
-        sessions.GetOwned(id, UserId) is null && sessions.GetAccessible(id, UserId) is { Session.ProjectId: not null }
+        sessions.GetOwnedVisible(id, UserId) is null && sessions.GetAccessible(id, UserId) is { Session.ProjectId: not null }
             ? ChatAuthorGate.Denied()
             : NotFound();
 
@@ -229,13 +229,13 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     // может только явное решение человека, и приходит оно сюда. Возвращает обновлённый чат:
     // фронт по нему перерисовывает выбранную модель, отдельного сигнала не нужно.
     // Как и MigrateProvider/SetArchived/SetWorkLoop, работает и для проектной сессии:
-    // фронт рисует ту же кнопку (ChatPanel без ветвления по проекту), а GetOwned резолвит
-    // владельца через проект — единственный разрез, где OwnedChat (только чаты вне проекта)
-    // был бы неправ.
+    // фронт рисует ту же кнопку (ChatPanel без ветвления по проекту), а GetOwnedVisible
+    // резолвит владельца через проект — единственный разрез, где OwnedChat (только чаты вне
+    // проекта) был бы неправ. На чужом приватном чате — 404, как на несуществующем (S2d-3a).
     [HttpPost("{id}/window-1m/drop")]
     public async Task<IActionResult> DropWindow1M(string id)
     {
-        if (sessions.GetOwned(id, UserId) is null) return NotFound();
+        if (sessions.GetOwnedVisible(id, UserId) is null) return NotFound();
         try
         {
             var updated = await sessions.DropWindow1MAsync(id, UserId);
@@ -306,7 +306,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpPut("{id}/archived")]
     public async Task<IActionResult> SetArchived(string id, [FromBody] SetArchivedRequest req)
     {
-        if (sessions.GetOwned(id, UserId) is null) return NotAuthorOrNotFound(id);
+        if (sessions.GetOwnedVisible(id, UserId) is null) return NotAuthorOrNotFound(id);
         try
         {
             var updated = await sessions.SetArchivedAsync(id, UserId, req.Archived);
@@ -324,7 +324,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpPost("{id}/digest")]
     public async Task<IActionResult> BuildDigest(string id, CancellationToken ct)
     {
-        if (sessions.GetOwned(id, UserId) is null) return NotFound();
+        if (sessions.GetOwnedVisible(id, UserId) is null) return NotFound();
         try
         {
             return Ok(await digest.BuildDigestAsync(UserId, id, ct));
@@ -467,7 +467,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     public async Task<IActionResult> RestartWaveTask(string id, string taskId)
     {
         if (sessions.DenyOwnerTurn(id, UserId) is { } denied) return denied;
-        if (sessions.GetOwned(id, UserId) is not { } session) return NotFound();
+        if (sessions.GetOwnedVisible(id, UserId) is not { } session) return NotFound();
         try
         {
             var result = await teamWaves.RestartWaveTaskAsync(session, taskId);
@@ -486,7 +486,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     public async Task<IActionResult> RestartWave(string id, [FromBody] TeamWaveRestartRequest? req)
     {
         if (sessions.DenyOwnerTurn(id, UserId) is { } denied) return denied;
-        if (sessions.GetOwned(id, UserId) is not { } session) return NotFound();
+        if (sessions.GetOwnedVisible(id, UserId) is not { } session) return NotFound();
         try
         {
             var result = await teamWaves.RestartWaveAsync(session, req?.Confirm == true);
@@ -540,7 +540,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpPut("{id}/worktree")]
     public async Task<IActionResult> SetWorktree(string id, [FromBody] SetWorktreeRequest req)
     {
-        if (sessions.GetOwned(id, UserId) is null) return NotFound();
+        if (sessions.GetOwnedVisible(id, UserId) is null) return NotFound();
         try
         {
             var updated = await sessions.SetWorktreeAsync(id, req.Enabled, req.Branch, req.Force);
@@ -733,12 +733,12 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
 
     // Загрузка вложения в рабочую папку чата (в подпапку .cc-attachments) → относительный путь.
     // Единый путь для обоих типов чата: у чата вне проекта папка — {дом}/Chats, у проектного —
-    // рабочая папка сессии (GetChatRoot), поэтому здесь GetOwned, а не OwnedChat.
+    // рабочая папка сессии (GetChatRoot), поэтому здесь GetOwnedVisible, а не OwnedChat.
     [HttpPost("{id}/files/upload")]
     [RequestSizeLimit(100 * 1024 * 1024)] // 100 МБ
     public async Task<IActionResult> Upload(string id, IFormFile? file = null)
     {
-        if (sessions.GetOwned(id, UserId) is not { } chat) return NotFound();
+        if (sessions.GetOwnedVisible(id, UserId) is not { } chat) return NotFound();
         // Вложения локального проекта принимает агент устройства, не сервер (ADR-016 §4)
         if (chat.ProjectId is { } pid && projects.GetById(pid) is { } project
             && ProjectCapabilityGuard.Refusal(project, ProjectCapabilityArea.FileBound) is { } refusal)

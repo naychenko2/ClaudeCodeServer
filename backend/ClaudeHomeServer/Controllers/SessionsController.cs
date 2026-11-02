@@ -32,7 +32,9 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         // сериализации (SessionJsonConverter) — здесь ничего подставлять не нужно.
         // Условный GET: фронт опрашивает список каждые несколько секунд, а меняется он редко;
         // тег считается по готовому телу, так что updatedAt в ответе всегда точный
-        return new ETagJsonResult(sessions.GetByProject(projectId).ToList());
+        // S2d-4a: список чатов проекта — человеческая ручка, видимая часть (GetVisibleByProject):
+        // чужой приватный чат не отдаётся ни id, ни названием; свой приватный и общий — как раньше.
+        return new ETagJsonResult(sessions.GetVisibleByProject(projectId, UserId));
     }
 
     // Создание чата — действие хода (S2d-1c): редактор общего проекта создаёт чат и становится

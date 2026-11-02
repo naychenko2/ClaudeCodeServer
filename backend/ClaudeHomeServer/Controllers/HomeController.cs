@@ -28,7 +28,8 @@ public class HomeController(SessionManager sessions, ProjectManager projects, IT
         // Имена доступных проектов (свои и общие, где участник): id → Name; чужие без членства не попадают
         var projectNames = projects.GetAccessible(UserId).ToDictionary(p => p.Id, p => p.Name);
 
-        var all = sessions.GetAllOwnedBy(UserId)
+        // Список человека (S2d-4a): чужой приватный чат в сводке не живёт — ни id, ни названием
+        var all = sessions.GetAllOwnedVisibleBy(UserId)
             .OrderByDescending(s => s.UpdatedAt)
             .ToList();
 

@@ -53,11 +53,13 @@ public class MyWallController(UserStore users, SessionManager sessions) : Contro
     // Кандидаты для пикера: чаты владельца (проектные и вне проектов), свежие сверху.
     // Потолок 200 — защита от стен текста у старых аккаунтов (у пикера есть поиск,
     // но фильтрует он то, что приехало; чат старше двух сотен на стену не позовут).
+    // S2d-4a: чужой приватный чат в кандидатах не живёт (GetAllOwnedVisibleBy) — пикер не может
+    // позвать на стену то, чего человек не видит; тот же фильтр, что у ResolveChats ниже.
     [HttpGet("candidates")]
     public IActionResult Candidates()
     {
         if (UserId is null) return Unauthorized();
-        return Ok(sessions.GetAllOwnedBy(UserId)
+        return Ok(sessions.GetAllOwnedVisibleBy(UserId)
             .Where(s => !s.IsArchived) // архивный чат на стену не зовут — он там и не встанет
                                        // (признак производный: активность возвращает чат сама)
             .OrderByDescending(s => s.UpdatedAt).Take(200).ToList());

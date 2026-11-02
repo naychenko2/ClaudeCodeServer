@@ -1917,13 +1917,26 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             .OrderByDescending(s => s.UpdatedAt)
             .ToList();
 
+    // Чаты проекта, видимые человеку (S2d-4a): GetByProject + VisibleTo — список человеческой
+    // ручки GET /api/projects/{id}/sessions. Чужой приватный чат не отдаётся никому, кроме
+    // автора (и автору он отдаётся как раньше: приватность — его поле, не чужой запрет).
+    // GetByProject остаётся машинной точкой: индекс файлов (ProjectFileSessionsIndex), уборка
+    // worktree при удалении проекта (ProjectsController), выкидывание групп хаба при отзыве
+    // участника (ProjectMembershipService), тулсеты (WorkspaceToolset), сторож тем
+    // (ChatSubjectSweeper).
+    public IReadOnlyList<Session> GetVisibleByProject(string projectId, string userId) =>
+        GetByProject(projectId).Where(s => VisibleTo(s, userId)).ToList();
+
     // Сессии владельца с ЖИВЫМИ фоновыми агентами — снимок для холодного старта списка чатов
     // (событие bg_agents_presence клиент мог пропустить, пока не вошёл в группы). Состояния
     // не держим: источник истины — сам прогон, HasPendingBg берёт свой лок на мгновение.
-    // Сначала фильтр по фону (живой фон — редкость), потом резолв владельца.
+    // Сначала фильтр по фону (живой фон — редкость), потом резолв владельца и видимость
+    // (S2d-4a): id чужого приватного чата в снимке человека нет — тот же фильтр, что у
+    // GetVisibleByProject и GetAllOwnedVisibleBy.
     public IReadOnlyList<string> GetSessionsWithLiveAgents(string ownerId) =>
         _sessions.Values
-            .Where(e => e.Process is { HasTrackedBg: true } && ResolveOwnerId(e.Info) == ownerId)
+            .Where(e => e.Process is { HasTrackedBg: true } && ResolveOwnerId(e.Info) == ownerId
+                && VisibleTo(e.Info, ownerId))
             .Select(e => e.Info.Id)
             .ToList();
 
@@ -1932,7 +1945,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // идти и агент, и дев-сервер), и клиенту нужны оба списка целиком.
     public IReadOnlyList<string> GetSessionsWithLiveBgCommands(string ownerId) =>
         _sessions.Values
-            .Where(e => e.Process is { HasTrackedCommandBg: true } && ResolveOwnerId(e.Info) == ownerId)
+            .Where(e => e.Process is { HasTrackedCommandBg: true } && ResolveOwnerId(e.Info) == ownerId
+                && VisibleTo(e.Info, ownerId))
             .Select(e => e.Info.Id)
             .ToList();
 
@@ -4165,11 +4179,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         return result;
     }
 
-    // Чаты владельца, ведущиеся от лица конкретной персоны (для раздела «Персоны»)
+    // Чаты владельца, ведущиеся от лица конкретной персоны (для раздела «Персоны») — список
+    // человеческой ручки (S2d-4a): плюс VisibleTo, чужой приватный чат в нём не живёт
     public IReadOnlyList<Session> GetPersonaChats(string ownerId, string personaId) =>
         _sessions.Values
             .Select(e => e.Info)
-            .Where(s => s.PersonaId == personaId && ResolveOwnerId(s) == ownerId)
+            .Where(s => s.PersonaId == personaId && ResolveOwnerId(s) == ownerId && VisibleTo(s, ownerId))
             .OrderByDescending(s => s.UpdatedAt)
             .ToList();
 
@@ -4179,16 +4194,35 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public string? ResolveOwnerId(Session s) =>
         s.ProjectId is not null ? _projects.GetById(s.ProjectId)?.OwnerId : s.OwnerId;
 
+    // Видимость сессии человеку — Core-точка SessionAccess.CanSee (та же, что у GetOwnedVisible
+    // и шлюзов редакторов S2d-1d): приватный проектный чат не виден даже владельцу проекта
+    // (решение 28.10). Проект резолвится по сессии: осиротевший проектный чат не виден
+    // (fail-closed по контракту CanSee).
+    private bool VisibleTo(Session s, string userId) =>
+        Access.SessionAccess.CanSee(s, s.ProjectId is not null ? _projects.GetById(s.ProjectId) : null, userId);
+
     // Есть ли у пользователя хоть одна сессия/чат — среда исполнения меняется только «начисто»
     // (корни проектов и профили сред различаются, resume привязан к путям старой среды)
     public bool HasSessionsOwnedBy(string ownerId) =>
         _sessions.Values.Any(e => ResolveOwnerId(e.Info) == ownerId);
 
-    // Все сессии пользователя (проектные + чаты) — для сводки дашборда «Домой»
+    // Все сессии пользователя (проектные + чаты) — МАШИННАЯ точка: индекс фич и гард
+    // (FeatureChatDoor), тулсеты. Чужой приватный чат здесь живёт законно: машинный потребитель
+    // работает с ним через арендатора. Человеческим спискам нужен GetAllOwnedVisibleBy (S2d-4a).
     public IReadOnlyCollection<Session> GetAllOwnedBy(string ownerId) =>
         _sessions.Values
             .Select(e => e.Info)
             .Where(s => ResolveOwnerId(s) == ownerId)
+            .ToList();
+
+    // Все видимые человеку сессии (проектные + чаты) — список для человеческих ручек (S2d-4a):
+    // GetAllOwnedBy + VisibleTo. Чужой приватный чат не отдаётся ни id, ни названием — он
+    // неотличим от несуществующего, как на одиночных ручках S2d-3. Владение не меняется:
+    // резолв тот же ResolveOwnerId, фильтр добавляет только приватность чата.
+    public IReadOnlyCollection<Session> GetAllOwnedVisibleBy(string userId) =>
+        _sessions.Values
+            .Select(e => e.Info)
+            .Where(s => ResolveOwnerId(s) == userId && VisibleTo(s, userId))
             .ToList();
 
     // Живая персона чата для цепочки фолбэка (ClaudeSession.EffectiveTurnChain →

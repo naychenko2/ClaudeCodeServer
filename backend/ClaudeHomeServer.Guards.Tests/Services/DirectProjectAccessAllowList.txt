@@ -25,3 +25,8 @@ backend/ClaudeHomeServer/Services/ChatUserStateService.cs|1
 # неприменимы — вызывающий и есть арендатор. Ключом хранилищ id не служит; GetOwned
 # (машинные пути) не затронут.
 backend/ClaudeHomeServer/Services/SessionManager.cs|1
+# S2d-4c: доска агентов — id вызывающего (зрителя доски) входит только в видимость чата:
+# невидимый чат теряет ссылку (SessionId/PermissionPending в BoardItem). Право на проект
+# здесь не решается (роль и рубильник неприменимы: это маска ссылки, не допуск к данным —
+# задача и её позиция на доске остаются), ключом хранилищ id не служит.
+backend/ClaudeHomeServer.Tasks/BoardService.cs|1

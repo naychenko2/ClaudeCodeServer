@@ -87,8 +87,10 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   // Право записи по роли в проекте источника (S2c-F4e): у 'personal' проекта нет — всё
   // разрешено; пока кэш проектов не загружен — тоже как раньше. Закрытое прячем, не отключаем.
   const allProjects = useAllProjects();
-  const can = (door: ContentDoor) =>
-    canWriteContent(!note || note.source === 'personal' ? undefined : allProjects.find(p => p.id === note.source), door);
+  // Проект-источник заметки ('personal' — проекта нет → undefined → все двери открыты);
+  // он же — проп права 'note.tasks' для NoteTasksSection (S2c-F4f)
+  const sourceProject = !note || note.source === 'personal' ? undefined : allProjects.find(p => p.id === note.source);
+  const can = (door: ContentDoor) => canWriteContent(sourceProject, door);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState('');
@@ -913,7 +915,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
               {/* Контейнер панели комментариев — портал из DocCommentedMarkdown; пока
                   комментариев нет, пуст и высоты не занимает */}
               <div ref={setPanelEl} />
-              <NoteTasksSection noteId={note.id} version={version} />
+              <NoteTasksSection noteId={note.id} version={version} project={sourceProject} />
               <NoteConnections note={note} onOpenNote={id => onSelectNote(id)}
                 onWikilink={onWikilink} onLinkMention={can('note.edit') ? linkMention : undefined} />
             </aside>
@@ -951,7 +953,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
         {/* Мобильный/планшет: задачи из заметки + связи снизу под контентом (сайдбару нет места) */}
         {(isMobile || connectionsBelow) && (
           <div style={{ marginTop: 20, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
-            <NoteTasksSection noteId={note.id} version={version} />
+            <NoteTasksSection noteId={note.id} version={version} project={sourceProject} />
             <NoteConnections note={note} onOpenNote={id => onSelectNote(id)}
               onWikilink={onWikilink} onLinkMention={can('note.edit') ? linkMention : undefined} />
           </div>

@@ -41,7 +41,7 @@ export {
   initializeWiki, adoptWikiPage, deleteWikiSection,
   listWikiPackages, decideWikiPackage, acceptAllWikiPackage,
   loadWikiJournal, retractWikiSource, getWikiHealth, runWikiLint,
-  analyzeWikiChat, loadWikiChatAnalyzeStatus, loadWikiChats, ingestWikiNote,
+  analyzeWikiChat, loadWikiChatAnalyzeStatus, loadWikiChats, setWikiChatMark, ingestWikiNote,
   useWikiTree, useWikiCatalog, useWikiPage, useWikiPageGone,
   requestOpenWikiPage, consumeOpenWikiPage, useWikiOpenRequest,
   loadWikiSettings, useWikiSettings, putWikiNightly, putWikiAutoApply, resumeWikiApplyClass,
@@ -50,6 +50,7 @@ export type {
   WikiSectionDto, WikiPageInfoDto, WikiPackageDto, WikiPackageOperationDto,
   WikiApplyOutcomeDto, WikiDecisionDto, WikiJournalDto, WikiJournalEntryDto,
   WikiRetractDto, WikiChatAnalyzeOk, WikiNoteIngestDto, WikiOpenRequest,
+  WikiChatTriage, WikiChatMark,
   WikiSettingsSnapshot, WikiApplyClassDto, WikiNightlySettings, WikiLastNight, WikiPutNightlyResult,
 } from '../wiki';
 

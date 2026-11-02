@@ -6,7 +6,9 @@
 // — «Чем разбирать» — только текст: ноль select/input/button внутри блока;
 // — клик по тумблеру: оптимистично до ответа и ровно один PUT {nightly:{enabled:true}};
 // — 400 сохранения: текст записки, и стор откатил оптимистичное (тумблер снова выключен);
-// — ошибки ввода (равные часы, выше потолка) — текст у поля, PUT'а нет.
+// — ошибки ввода (равные часы, выше потолка) — текст у поля, PUT'а нет;
+// — успешный путь: валидное число (пакеты за ночь/на раздел, бюджет) и смена часа окна —
+//   ровно один PUT, в теле только изменённые поля (окно — обе границы, как делает tryWindow).
 // Стор настоящий (тот же приём, что WikiApplySettings.test): блок только вызывает его,
 // тесты смотрят тело, реально ушедшее на прово.
 //
@@ -14,7 +16,8 @@
 // (1) в onChange тумблера не вызывать putWikiNightly → «ровно один PUT» краснеет;
 // (2) в LastNightBlock не показывать предупреждение open_limit → «Остановились:…» и
 //     «Больше 20 спорных…» краснеют;
-// (3) в completed не показывать строку «Разобрано всё отобранное.» → «completed» краснеет.
+// (3) в completed не показывать строку «Разобрано всё отобранное.» → «completed» краснеет;
+// (4) в commitNum не вызывать putWikiNightly → тесты валидных чисел краснеют (0 PUT'ов).
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -285,5 +288,67 @@ describe('блок «Ночной разбор» (F2)', () => {
     await settle();
     expect(putCalls().length).toBe(0);
     expect(getWikiSettingsSnapshot()!.nightly.maxPackagesPerNight).toBe(20);
+  });
+
+  it('валидное число «Пакетов за ночь» 12: ровно один PUT {nightly:{maxPackagesPerNight:12}}', async () => {
+    const c = render();
+    await settle();
+    const wrap = findNodeByAttr(c, 'data-testid', 'wiki-nightly-input-maxPackagesPerNight')!;
+    const input = wrap.querySelectorAll('input')[0];
+    callProp(input, 'onFocus');
+    callProp(input, 'onChange', { target: { value: '12' } });
+    await settle();
+    expect(putCalls().length).toBe(0); // посреди набора PUT нет: коммит на blur
+    callProp(input, 'onBlur');
+    await settle();
+    // мутация (4): без putWikiNightly в commitNum здесь 0 PUT'ов — тест красный
+    const puts = putCalls();
+    expect(puts.length).toBe(1);
+    expect(sentBody(puts[0])).toEqual({ nightly: { maxPackagesPerNight: 12 } });
+    // ответ подтверждён — новое значение в снимке (мок мержит названные поля, как бэк)
+    expect(getWikiSettingsSnapshot()!.nightly.maxPackagesPerNight).toBe(12);
+  });
+
+  it('валидное окно 03–06 → 03–08: ровно один PUT, в теле обе границы', async () => {
+    const c = render();
+    await settle();
+    const win = findNodeByAttr(c, 'data-testid', 'wiki-nightly-window')!;
+    const selects = win.querySelectorAll('select');
+    callProp(selects[1], 'onChange', { target: { value: '8' } });
+    await settle();
+    const puts = putCalls();
+    expect(puts.length).toBe(1);
+    // tryWindow всегда зовёт обе границы (WikiNightlyBlock.tsx:267) — зафиксировано как есть
+    expect(sentBody(puts[0])).toEqual({ nightly: { windowStartHour: 3, windowEndHour: 8 } });
+    expect(getWikiSettingsSnapshot()!.nightly.windowEndHour).toBe(8);
+  });
+
+  it('валидные бюджет и «Пакетов на раздел»: ровно один PUT на поле, только своё поле', async () => {
+    const c = render();
+    await settle();
+
+    const budgetInput = findNodeByAttr(c, 'data-testid', 'wiki-nightly-input-inputTokenBudget')!
+      .querySelectorAll('input')[0];
+    callProp(budgetInput, 'onFocus');
+    callProp(budgetInput, 'onChange', { target: { value: '500000' } });
+    await settle();
+    callProp(budgetInput, 'onBlur');
+    await settle();
+    let puts = putCalls();
+    expect(puts.length).toBe(1);
+    expect(sentBody(puts[0])).toEqual({ nightly: { inputTokenBudget: 500000 } });
+    expect(getWikiSettingsSnapshot()!.nightly.inputTokenBudget).toBe(500000);
+
+    const secInput = findNodeByAttr(c, 'data-testid', 'wiki-nightly-input-maxPackagesPerSection')!
+      .querySelectorAll('input')[0];
+    callProp(secInput, 'onFocus');
+    callProp(secInput, 'onChange', { target: { value: '8' } });
+    await settle();
+    callProp(secInput, 'onBlur');
+    await settle();
+    puts = putCalls();
+    expect(puts.length).toBe(2); // второе поле — второй PUT, первый не повторился
+    expect(sentBody(puts[1])).toEqual({ nightly: { maxPackagesPerSection: 8 } });
+    expect(getWikiSettingsSnapshot()!.nightly.maxPackagesPerSection).toBe(8);
   });
 });

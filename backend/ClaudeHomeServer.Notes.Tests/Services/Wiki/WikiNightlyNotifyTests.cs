@@ -19,7 +19,8 @@ namespace ClaudeHomeServer.Tests.Services;
 // доработка N7b): фикстуры те же, проверяется только конец прохода — сообщение владельцу.
 //
 // Контракт: ровно одно уведомление за проход с человеческим текстом «Ночной разбор: применено N,
-// во „Входящих“ M» и ссылкой на «Журнал»; при исходе, отличном от обычного, — причина простым
+// во „Входящих” M» и названием пути «Вики → Журнал» (Url ведёт во вкладку «Вики», обещания перехода
+// в тексте нет); при исходе, отличном от обычного, — причина простым
 // языком. Молчание: analyzed=0 и completed; флаг/Enabled выключен (там и итога нет). Сбой
 // доставки: предупреждение в журнале, итог ночи уже записан, исключение не выходит из службы.
 public class WikiNightlyNotifyTests : IDisposable
@@ -167,9 +168,11 @@ public class WikiNightlyNotifyTests : IDisposable
         var n = notifier.Sent[0];
         n.Title.Should().Contain("применено 3");
         n.Title.Should().Contain("во «Входящих» 1");
-        // Ссылка на «Журнал»: маршрут в Url и слово в тексте.
+        // Путь назван текстом, а не обещан переходом: Url ведёт во вкладку «Вики» (подкладка
+        // «Журнал» deep-link не имеет), текст — «во вкладке «Вики» → «Журнал»».
         n.Url.Should().Be("#/wiki");
-        n.Body.Should().Contain("«Журнале»");
+        n.Body.Should().Contain("во вкладке «Вики» → «Журнал»");
+        n.Body.Should().NotContain("в «Журнале»", "текст не обещает перехода, которого Url не делает");
         n.Kind.Should().Be("info", "обычный исход — не предупреждение");
     }
 
@@ -225,6 +228,26 @@ public class WikiNightlyNotifyTests : IDisposable
         n.Body.Should().Contain("«Входящие»", "причина называет, что делать");
     }
 
+    [Fact]
+    public async Task ОшибкаПрохода_ПричинаГоворитВСледующуюНочь_БезВнутреннегоЖаргона()
+    {
+        // Маршрута места нет → outcome=error. Текст причины — человеческий: «в следующую ночь»,
+        // а не «в следующий тик» (тик — внутренний жаргон службы).
+        Configure();
+        AddChat("c1");
+        _llm.Route = false;
+        var notifier = new Notifier();
+
+        await Tick(Sut(notifier: notifier));
+
+        Last().Outcome.Should().Be(WikiNightlyService.OutcomeError);
+        notifier.Sent.Should().HaveCount(1);
+        var n = notifier.Sent[0];
+        n.Kind.Should().Be("warning");
+        n.Body.Should().Contain("в следующую ночь");
+        n.Body.Should().NotContain("тик", "тик — внутренний жаргон, в тексте его быть не должно");
+    }
+
     // ─── c4: сбой доставки не рвёт службу и не отменяет итог ────────────────
 
     [Fact]
@@ -252,10 +275,11 @@ public class WikiNightlyNotifyTests : IDisposable
     private sealed class Llm : ICheapTextRunner
     {
         public readonly List<(string ActionKey, string Prompt)> Calls = [];
+        public bool Route = true;
 
         public bool UsesLocal(string actionKey) => false;
         public bool HasFreeRoute(string actionKey) => true;
-        public bool HasRoute(string actionKey) => true;
+        public bool HasRoute(string actionKey) => Route;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "fake";
 
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,

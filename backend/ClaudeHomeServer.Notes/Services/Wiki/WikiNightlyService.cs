@@ -28,6 +28,8 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 //   ступень 2 такой чат не вердиктит.
 // - skip побеждает балл: чат с пометкой «не разбирать» в очередь не попадает при любом балле.
 // - Отказ ступени 2 → серая зона: серый чат без «да» ночь не берёт, следующая ночь спросит снова.
+//   Вердикт «да» устаревает так же: ≥3 новых реплик человека — ступень 2 переспрашивается
+//   симметрично «нет», чат берётся только по новому «да».
 // - Сбой применения не двигает курсор: ночь курсор НЕ пишет вообще — только AnalyzeAsync; исключение
 //   или отказ разбора одного чата ничего не меняет в сторе, ночь идёт к следующему.
 // - Выключенный флаг llm-wiki / Enabled=false → пропуск без записи: проверка стоит первой, до
@@ -46,7 +48,7 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 //   окна пробует снова.
 //
 // Утреннее уведомление (N7c): после записи итога владелец получает итог ночи человеческими
-// словами — «Ночной разбор: применено N, во „Входящих“ M», со ссылкой на «Журнал». Молчание
+// словами — «Ночной разбор: применено N, во „Входящих” M» и названием пути к «Журналу». Молчание
 // ровно в двух случаях: диспетчера нет в этом составе (сборка/тест без шва — итог всё равно в
 // файле) и «ничего не разобрано, и ночь обычная» — сказать нечего. Любой иной исход называется
 // простым языком (причины — в OutcomeReason). Сбой доставки ничего не отменяет и не рвёт: итог
@@ -61,7 +63,9 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 //   граница). applied в итоге — число применённых пакетов, toInbox — число чатов с пакетами во
 //   «Входящих».
 // - Лимит пакетов за ночь, упёртый раньше времени, даёт outcome=budget; open_limit — только упор в
-//   лимит ОТКРЫТЫХ пакетов (WikiPackage.MaxOpenPackages).
+//   лимит ОТКРЫТЫХ пакетов (WikiPackage.MaxOpenPackages). Пакеты чата прибавляются пачкой: чат,
+//   давший пакеты сверх остатка (ночного или по разделу), — последний в ночи, его пакеты остаются
+//   в Хранителе (не откатывать); при остатке 0 чат не начинается.
 // - Облако: HasRoute-проверка до вызова не пускает ночь, когда локальный движок места недоступен
 //   (outcome=error, повтор следующим тиком). Падение локали ПОСРЕДИ вызова модели
 //   WikiIngestService/WikiChatStage2 (RunDetailedAsync) всё ещё может уйти в облако по цепочке
@@ -321,7 +325,7 @@ public sealed class WikiNightlyService : BackgroundService
             foreach (var c in queue)
             {
                 ct.ThrowIfCancellationRequested();
-                // Лимит пакетов за ночь.
+                // Лимит пакетов за ночь: при остатке 0 чат не начинается.
                 var (stop, cfgNow) = CheckStop(ownerId, root, date);
                 if (stop is not null) { outcome = stop; break; }
                 if (packagesNight >= cfgNow!.MaxPackagesPerNight) { outcome = OutcomeBudget; break; }
@@ -342,8 +346,11 @@ public sealed class WikiNightlyService : BackgroundService
                     var verdict = c.Entry.Stage2Zone;
                     var humanTotal = lines.Count(l => l.IsHuman);
                     var stale = humanTotal - (c.Entry.Stage2HistoryCount ?? 0) >= MinHumanDelta;
+                    // Свежий отказ — чат отложен до следующей ночи без переспроса. Неопрешённый
+                    // вердикт и устаревший (≥3 новых реплик человека) переспрашиваются одинаково —
+                    // «да» так же, как «нет»: чат берётся только по новому решению.
                     if (verdict == WikiChatScorer.ZoneSkipped && !stale) continue;
-                    if (verdict != WikiChatScorer.ZoneTriage)
+                    if (verdict != WikiChatScorer.ZoneTriage || stale)
                     {
                         var judged = await _stage2.JudgeAsync(ownerId, c.Session.Id, ct);
                         if (judged.Outcome != WikiChatStage2.Outcome.NotApplicable)
@@ -386,6 +393,13 @@ public sealed class WikiNightlyService : BackgroundService
                 else if (r.Outcome == WikiChatIngestService.OutcomeAwaitingHuman) toInbox++;
                 packagesNight += made;
                 packagesBySection[c.Home] = packagesBySection.GetValueOrDefault(c.Home) + made;
+                // Пакеты чата прибавляются пачкой и уже лежат в Хранителе — их не откатывать.
+                // Превышение остатка этим чатом допустимо, но он — последний в ночи: дальше не идти.
+                if (packagesNight > cfgNow.MaxPackagesPerNight || packagesBySection[c.Home] > cfgNow.MaxPackagesPerSection)
+                {
+                    outcome = OutcomeBudget;
+                    break;
+                }
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -489,7 +503,7 @@ public sealed class WikiNightlyService : BackgroundService
         OutcomeOpenLimit => "Уперлись в лимит открытых пакетов — разберите «Входящие».",
         OutcomeWindowClosed => "Окно закрылось.",
         OutcomeDisabledMidway => "Ночь прервана — отключили в настройках.",
-        OutcomeError => "Ошибка — повторим в следующий тик.",
+        OutcomeError => "Ошибка — повторим в следующую ночь.",
         _ => null,
     };
 
@@ -510,8 +524,10 @@ public sealed class WikiNightlyService : BackgroundService
                 Kind = result.Outcome == OutcomeCompleted ? "info" : "warning",
                 Type = "wiki_nightly",
                 Title = $"Ночной разбор: применено {result.Applied}, во «Входящих» {result.ToInbox}",
-                Body = (reason is not null ? reason + " " : "") + "Подробности — в «Журнале».",
-                // Ссылка — вкладка «Вики» → «Журнал» (тот же маршрут, что у сигнала здоровья классов).
+                Body = (reason is not null ? reason + " " : "") + "Подробности — во вкладке «Вики» → «Журнал».",
+                // Url открывает вкладку «Вики» на её подкладке по умолчанию («Страницы»): deep-link на
+                // подвкладку «Журнал» во фронте не предусмотрен (WikiTab держит подвкладку локально),
+                // поэтому текст называет путь, а не обещает переход.
                 Url = "#/wiki",
                 Source = "wiki",
             }).ConfigureAwait(false);

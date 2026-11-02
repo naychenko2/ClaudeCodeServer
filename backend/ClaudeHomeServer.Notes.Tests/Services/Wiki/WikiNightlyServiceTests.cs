@@ -339,6 +339,41 @@ public class WikiNightlyServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ЛимитПакетовЗаНочь_ЧатСПакетамиСверхОстатка_ОстанавливаетПроход()
+    {
+        // Пакеты чата прибавляются пачкой: при лимите 2 чат c1 даёт 3 — превышение допустимо на сам
+        // этот чат (пакеты уже в Хранителе, их не откатывать), но дальше ночь не идёт: c2 не
+        // разбирается вовсе, итог — budget. Мутация «проверять только до чата» — тест краснеет по
+        // тесту ниже (тот же сценарий на лимите раздела).
+        Configure(perNight: 2, perSection: 20, chatsPerSection: 20);
+        AddChat("c1", project: "p1", ageMinutes: 0);
+        AddChat("c2", project: "p2", ageMinutes: 1);
+
+        await Tick(Sut(Done(WikiChatIngestService.OutcomeApplied, packages: 3)));
+
+        _analyzed.Should().Equal(new[] { "c1" }, "после превышения следующий чат не берётся");
+        var last = Last();
+        last.Applied.Should().Be(3, "пакеты состоявшегося чата не откатываются");
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeBudget);
+    }
+
+    [Fact]
+    public async Task ЛимитПакетовНаРаздел_ЧатСПакетамиСверхОстатка_ОстанавливаетПроход()
+    {
+        // Тот же сценарий на лимите раздела: a1 даёт 3 пакета при лимите 2 — проход останавливается
+        // на нём. Мутация «вернуть проверку только до чата»: a2 был бы пропущен (continue), а итог
+        // вышел бы completed — тест краснеет.
+        Configure(perNight: 20, perSection: 2);
+        AddChat("a1", project: "p1", ageMinutes: 0);
+        AddChat("a2", project: "p1", ageMinutes: 1);
+
+        await Tick(Sut(Done(WikiChatIngestService.OutcomeApplied, packages: 3)));
+
+        _analyzed.Should().Equal("a1");
+        Last().Outcome.Should().Be(WikiNightlyService.OutcomeBudget);
+    }
+
+    [Fact]
     public async Task ЛимитЧатовНаРаздел_Десять()
     {
         Configure(chatsPerSection: 10);
@@ -483,6 +518,49 @@ public class WikiNightlyServiceTests : IDisposable
         _now = At(4, day: 3);
         await Tick(Sut());
         _analyzed.Should().NotContain("g1", "ступень 2 сказала «нет», реплик стало не на 3 больше");
+    }
+
+    [Fact]
+    public async Task СерыйЧат_УстаревшееДаСтупени2_ПереспрашиваетсяСимметричноНет()
+    {
+        Configure();
+        AddChat("g1", mark: null, history: GrayStale());
+        // Ночь 1: ступень 2 сказала «да» (historyCount=3) — вердикт записан, чат разобран.
+        _llm.Reply = a => a == LocalActionCatalog.WikiTriage
+            ? """{"hasKnowledge":true,"about":"a","reason":"r"}"""
+            : NothingJson;
+        await Tick();
+        _analyzed.Should().Equal("g1");
+        var verdict = WikiChatTriageStore.Get(Root()).Entries.Single(x => x.SessionId == "g1");
+        verdict.Stage2Zone.Should().Be(WikiChatScorer.ZoneTriage);
+        verdict.Stage2HistoryCount.Should().Be(3);
+
+        // Следующая ночь, реплик столько же: свежее «да» не переспрашивается, чат разобран.
+        _analyzed.Clear();
+        _llm.Calls.Clear();
+        _now = At(4, day: 3);
+        await Tick(Sut());
+        _llm.Calls.Should().NotContain(c => c.ActionKey == LocalActionCatalog.WikiTriage,
+            "свежий вердикт не тратит второй вызов модели");
+        _analyzed.Should().Equal("g1");
+
+        // +3 реплики человека (короткие: зона ступени 1 не меняется) — «да» устарело: ступень 2
+        // зовётся снова, как устаревшее «нет»; новый отказ откладывает чат до следующей ночи.
+        // Мутация «не переспрашивать «да»»: модель не позвана, _analyzed = [g1] — тест краснеет.
+        _sessions.History["g1"] = [.. GrayStale(), .. ShortHumans(3)];
+        WikiChatScorer.Score(ScorerInput(_sessions.GetById("g1")!)).Zone.Should().Be(WikiChatScorer.ZoneGray,
+            "фикстура остаётся серой: переспрос проверяется на сером чате");
+        _analyzed.Clear();
+        _llm.Calls.Clear();
+        _llm.Reply = _ => """{"hasKnowledge":false,"about":"a","reason":"r"}""";
+        _now = At(4, day: 4);
+        await Tick(Sut());
+        _llm.Calls.Should().Contain(c => c.ActionKey == LocalActionCatalog.WikiTriage,
+            "устаревшее «да» переспрашивается симметрично устаревшему «нет»");
+        _analyzed.Should().BeEmpty("новый отказ — чат отложен");
+        var after = WikiChatTriageStore.Get(Root()).Entries.Single(x => x.SessionId == "g1");
+        after.Stage2Zone.Should().Be(WikiChatScorer.ZoneSkipped);
+        after.Stage2HistoryCount.Should().Be(6, "переспрос меряет историю заново");
     }
 
     [Fact]
@@ -771,6 +849,34 @@ public class WikiNightlyServiceTests : IDisposable
         {
             h.Add(new StoredUserMessage($"Тут решили вариант {i}: " + new string('в', 600)));
             h.Add(new StoredTextMessage("Принято, делаю."));
+        }
+        return h;
+    }
+
+    // Серый чат под переспрос: балл 11 (3 реплики + 2 содержательные + оборот решения) — серая
+    // зона, и после трёх коротких реплик балл 14 < 15: зона не меняется, меняется лишь устаревание
+    // вердикта ступени 2.
+    private static List<StoredMessage> GrayStale()
+    {
+        var h = new List<StoredMessage>();
+        for (var i = 0; i < 2; i++)
+        {
+            h.Add(new StoredUserMessage($"Тут решили вариант {i}: " + new string('в', 800)));
+            h.Add(new StoredTextMessage("Принято, делаю."));
+        }
+        h.Add(new StoredUserMessage("Дальше."));
+        h.Add(new StoredTextMessage("Принято, делаю."));
+        return h;
+    }
+
+    // Короткие реплики человека: двигают счётчик устаревания, не балл зоны.
+    private static List<StoredMessage> ShortHumans(int n)
+    {
+        var h = new List<StoredMessage>();
+        for (var i = 0; i < n; i++)
+        {
+            h.Add(new StoredUserMessage("ок"));
+            h.Add(new StoredTextMessage("Принято."));
         }
         return h;
     }

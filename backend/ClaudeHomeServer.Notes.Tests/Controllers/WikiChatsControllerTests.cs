@@ -365,7 +365,7 @@ public class WikiChatsControllerTests : IDisposable
     {
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, user)], "test"));
-        return new WikiChatsController(_sessions, _chat, _config, flagsOn ? new WikiFlagOn() : new WikiFlagOff())
+        return new WikiChatsController(_sessions, _chat, new WikiChatRecalc(_sessions, _config), _config, flagsOn ? new WikiFlagOn() : new WikiFlagOff())
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };

@@ -486,6 +486,28 @@ public class WikiChatScorerTests : IDisposable
             "параллельные пересчёты не теряют и не дублируют записи (блок стора на корень)");
     }
 
+    // ─── NA-3: пересчёт как служба (прямой вызов, без контроллера) ──────────
+
+    [Fact]
+    public async Task ПересчётСлужбыНаНечитаемомСторе_ОтказСКодом_ФайлБайтВБайтНеТронут()
+    {
+        // Тот же контракт, что был у контрольной ручки: нечитаемый стор — отказ с машинным
+        // кодом и строкой для человека, а не «пустой пересчёт» и не молчаливая перезапись
+        // (fail-closed стора). Служба обязана держать его одна: её зовёт и ночной разбор.
+        SeedChats();
+        var file = Path.Combine(_wikiRoot, "keeper", "chat-triage.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        File.WriteAllText(file, "{ не json");
+        var before = File.ReadAllBytes(file);
+
+        var res = await new WikiChatRecalc(_sessions, _config).RecalculateAsync("u1");
+
+        res.Ok.Should().BeFalse("нечитаемый стор — отказ, а не пустой пересчёт");
+        res.Code.Should().Be(WikiChatTriageStore.CodeInvalid);
+        res.Reason.Should().NotBeNullOrWhiteSpace("отказ несёт строку для человека (прежний message 409)");
+        File.ReadAllBytes(file).Should().Equal(before, "пересчёт не перезаписывает нечитаемый файл молча");
+    }
+
     // ─── Помощники ──────────────────────────────────────────────────────────
 
     private string _wikiRoot => WikiPaths.Root(_dir, "u1");
@@ -564,7 +586,7 @@ public class WikiChatScorerTests : IDisposable
     {
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, user)], "test"));
-        return new WikiChatsController(_sessions, _chat, _config, new WikiFlagOn())
+        return new WikiChatsController(_sessions, _chat, new WikiChatRecalc(_sessions, _config), _config, new WikiFlagOn())
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };

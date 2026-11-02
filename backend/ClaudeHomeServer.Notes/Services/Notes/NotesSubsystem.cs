@@ -122,6 +122,11 @@ public sealed class NotesSubsystem : IAppSubsystem
         // вторые слоты прогона, и «уже идёт» не берег бы от двойной записи файлов.
         services.AddSingleton<WikiLintService>();
         services.AddGatedHostedFrom<WikiLintService>(config, sp => sp.GetRequiredService<WikiLintService>(), Key);
+        // Пересчёт ступени 1 отбора чатов (NA-3): тело прежнего WikiChatsController.Recalculate,
+        // вынесенное в службу без изменения логики, — тот же пересчёт зовут REST-кнопка
+        // («пересчитать») и ночной разбор (Ф2). Vertical-внутренний тип, как остальные Services/Wiki;
+        // запись — через UpdateScoring под блокировкой корня стора (конкурентность в сторе).
+        services.AddSingleton<WikiChatRecalc>();
         // Сторож старта: пакеты, застрявшие в «applying» после падения процесса, откатывает по
         // прообразам (ADR-035, решение 4). Гейт по подсистеме и по Testing — общий хелпер.
         services.AddGatedHostedService<WikiApplyStartupGuard>(config, Key);

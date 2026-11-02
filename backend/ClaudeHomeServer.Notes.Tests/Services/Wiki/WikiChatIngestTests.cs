@@ -1012,7 +1012,7 @@ public class WikiChatIngestTests : IDisposable
     {
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, User)], "test"));
-        return new WikiChatsController(_sessions, Sut(new FakeLlm()), _config, new WikiFlagOn())
+        return new WikiChatsController(_sessions, Sut(new FakeLlm()), new WikiChatRecalc(_sessions, _config), _config, new WikiFlagOn())
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };

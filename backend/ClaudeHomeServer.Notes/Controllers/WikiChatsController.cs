@@ -27,8 +27,10 @@ namespace ClaudeHomeServer.Notes.Controllers;
 // показывает то, что уже посчитано; несчитанные чаты в список не встают — их посчитает
 // пересчёт. Пересчёт обновляет только свои поля (UpdateScoring): балл и зону ступени 1;
 // курсор, зона и причина исхода, nothingNewStreak принадлежат разбору (разведение владения
-// по ревью S6f). Поэтому список СОБИРАЕТ показ: исход разбора nothing_new приоритетен,
-// пока его поставил разбор, иначе показывается зона ступени 1 (ShownZone).
+// по ревью S6f). Тело пересчёта — в службе WikiChatRecalc (NA-3), контроллер только
+// отображает её итог: тот же пересчёт зовёт и ночной разбор. Поэтому список СОБИРАЕТ
+// показ: исход разбора nothing_new приоритетен, пока его поставил разбор, иначе
+// показывается зона ступени 1 (ShownZone).
 [ApiController]
 [Authorize]
 [Route("api/wiki/chats")]
@@ -36,14 +38,16 @@ public class WikiChatsController : ControllerBase
 {
     private readonly ISessionDirectory _sessions;
     private readonly WikiChatIngestService _chat;
+    private readonly WikiChatRecalc _recalc;
     private readonly string _dataDir;
     private readonly IFeatureFlagGate? _flags;
 
-    public WikiChatsController(ISessionDirectory sessions, WikiChatIngestService chat, IConfiguration config,
-        IFeatureFlagGate? flags = null)
+    public WikiChatsController(ISessionDirectory sessions, WikiChatIngestService chat, WikiChatRecalc recalc,
+        IConfiguration config, IFeatureFlagGate? flags = null)
     {
         _sessions = sessions;
         _chat = chat;
+        _recalc = recalc;
         _flags = flags;
         // Каталог данных — как у всех сервисов (DataPath указывает на projects.json в dataDir).
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
@@ -139,45 +143,20 @@ public class WikiChatsController : ControllerBase
     /// nothingNewStreak существующих записей сохраняются: пересчёт пишет только свои поля
     /// (score/signals/stage1Zone/stage1Reason). 409 — нечитаемый стор (пересчёт его не
     /// перезапишет молча). Успех — число пересчитанных чатов и counts по зонам ступени 1
-    /// (их посчитал скорер; список показывает их с приоритетом исхода разбора — ShownZone).</summary>
+    /// (их посчитал скорер; список показывает их с приоритетом исхода разбора — ShownZone).
+    /// Тело пересчёта — в службе WikiChatRecalc (NA-3: его зовёт и ночной разбор); контроллер
+    /// резолвит владельца из токена и отображает итог службы в ответ (409 {code,message} /
+    /// WikiChatsRecalcDto) — прежние строки отказа проходят как есть.</summary>
     [HttpPost("recalculate")]
     public async Task<IActionResult> Recalculate()
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
 
-        var root = WikiPaths.Root(_dataDir, userId);
-        var read = WikiChatTriageStore.Get(root);
-        if (read.State == WikiTriageFileState.Invalid)
-            return StatusCode(409, new { code = WikiChatTriageStore.CodeInvalid, message = "файл разбора чатов не читается" });
-        var streaks = new Dictionary<string, int>();
-        foreach (var e in read.Entries)
-            streaks[e.SessionId] = e.NothingNewStreak;
-
-        // Все свои чаты, включая архивные: ADR-035 §12в считает бэклог «по всем чатам
-        // владельца»; архивность — способ хранения, не признак бессмысленности.
-        var counts = new Dictionary<string, int>();
-        int counted = 0;
-        foreach (var session in _sessions.GetAll().Where(s => _sessions.ResolveOwnerId(s) == userId))
-        {
-            var history = await _sessions.GetHistoryAsync(session.Id);
-            var res = WikiChatScorer.Score(new WikiChatScorer.WikiChatInput(
-                session.TaskExecution, session.WikiMark, session.IsPinned,
-                session.SummaryNoteId is not null,
-                session.ContinuedFromSessionId, session.BranchedFromSessionId,
-                session.CreatedAt, session.UpdatedAt,
-                streaks.TryGetValue(session.Id, out var st) ? st : 0,
-                history));
-            var up = WikiChatTriageStore.UpdateScoring(
-                root, session.Id, res.Score,
-                [.. res.Signals.Select(s => new WikiTriageSignal(s.Name, s.Weight))],
-                res.Zone, res.Reason);
-            if (!up.Ok)
-                return StatusCode(409, new { code = up.Code, message = up.Reason });
-            counts[res.Zone] = counts.TryGetValue(res.Zone, out var c) ? c + 1 : 1;
-            counted++;
-        }
-        return Ok(new WikiChatsRecalcDto(counted, counts));
+        var res = await _recalc.RecalculateAsync(userId);
+        if (!res.Ok)
+            return StatusCode(409, new { code = res.Code, message = res.Reason });
+        return Ok(new WikiChatsRecalcDto(res.Counted, res.Counts));
     }
 
     /// <summary>POST /api/wiki/chats/{sessionId}/analyze — «разобрать этот чат сейчас» (S7b0a,

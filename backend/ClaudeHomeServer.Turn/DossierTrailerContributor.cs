@@ -1,3 +1,5 @@
+using ClaudeHomeServer.Services.Access;
+
 namespace ClaudeHomeServer.Services.Turn;
 
 // Подсказка про трейлер CCS-Session/CCS-Task (ADR-004, «Паспорта изменений»): одна

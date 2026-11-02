@@ -670,6 +670,10 @@ updated: 2026-11-02
 [^s1]: [[Источники/Чат]] — «размер 864×480»
 [^s2]: [[Источники/Правка]] — «половинный размер»
 `;
+// Страница после «Вернуть мою»: формулировка человека на месте, утверждение ИИ ушло в «Историю»
+const PAGE_RESTORED = PAGE_OVR
+  .replace('- Для черновиков снимаем размер 864×480. [^s1]', '- Для черновиков снимаем половинный размер. [^s2]')
+  .replace('- Для черновиков снимаем половинный размер. [^s2]\n\n[^s1]', '- Для черновиков снимаем размер 864×480. [^s1]\n\n[^s1]');
 const OVR_REPLACED: WikiOverrideDto = {
   op: 'supersede', statement: 'Для черновиков снимаем размер 864×480.', previous: 'Для черновиков снимаем половинный размер.',
   at: '2026-11-02T05:48:00Z', packageId: 'pk1',
@@ -764,8 +768,11 @@ describe('Метки замен и «Вернуть мою» (F3b)', () => {
     unifiedOn();
     let restored = false;
     await seedPage(withOvr([OVR_REPLACED]), SECTION.key, PAGE_KEY, (url, init) => {
-      if (init?.method === 'POST') { restored = true; return Promise.resolve({ status: 'applied', hash: 'h2', content: PAGE_OVR }); }
-      if (restored && url.startsWith('/wiki/page')) return Promise.resolve(withOvr([], { hash: 'h2' }));
+      if (init?.method === 'POST') { restored = true; return Promise.resolve({ status: 'applied', hash: 'h2', content: PAGE_RESTORED }); }
+      // Реальный бэк после возврата override не убирает: пакет ИИ остаётся, previous становится null
+      if (restored && url.startsWith('/wiki/page')) {
+        return Promise.resolve(withOvr([{ ...OVR_REPLACED, previous: null }], { hash: 'h2', content: PAGE_RESTORED }));
+      }
       return undefined;
     });
     const c = renderPage();
@@ -780,6 +787,7 @@ describe('Метки замен и «Вернуть мою» (F3b)', () => {
     });
     expect(findNodeByAttr(c, 'data-testid', 'wiki-override-replaced')).toBeNull();
     expect(tag(c)).toHaveLength(0);
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-override-replaced')).toBeNull();
     expect(has(c, 'Вернули вашу формулировку. 7 дней ИИ не меняет ваше на этой странице сам.')).toBe(true);
   });
 
@@ -830,7 +838,7 @@ describe('Метки замен и «Вернуть мою» (F3b)', () => {
     expect(has(c, 'формулировка не человека')).toBe(true);
   });
 
-  it('точка C.info на «Журнале»: есть при замене в открытой странице, гаснет после перечитки без неё', async () => {
+  it('точка C.info на «Журнале»: есть при замене в открытой странице, гаснет после «Вернуть мою» (override остаётся, утверждение ИИ ушло в «Историю»)', async () => {
     unifiedOn();
     await seedPage(withOvr([OVR_REPLACED]));
     installFakeDom();
@@ -840,7 +848,7 @@ describe('Метки замен и «Вернуть мою» (F3b)', () => {
     const dot = findNodeByAttr(container, 'data-testid', 'wiki-replacement-dot');
     expect(dot).not.toBeNull();
     expect(styleOf(dot!).background).toBe('var(--c-info)');
-    req.mockImplementation(() => Promise.resolve(withOvr([])));
+    req.mockImplementation(() => Promise.resolve(withOvr([{ ...OVR_REPLACED, previous: null }], { hash: 'h2', content: PAGE_RESTORED })));
     await act(async () => { await loadWikiPage(SECTION.key, PAGE_KEY); });
     await settle();
     expect(findNodeByAttr(container, 'data-testid', 'wiki-replacement-dot')).toBeNull();

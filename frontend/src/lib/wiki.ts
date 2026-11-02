@@ -1450,18 +1450,44 @@ export interface WikiJournalEntryOverrideDto extends WikiJournalEntryDto {
 // Отказы «Вернуть мою» читаются по тем же кодам WikiError, что у правки: 409 wiki_page_changed
 // (свежая страница в .page), 409 wiki_unified_off, 400 wiki_edit_invalid (.message — причина).
 
-// Замены и споры страницы; чужие и неизвестные op фронт не рисует
-export function wikiOverridesOf(page: { overrides?: unknown } | null | undefined): WikiOverrideDto[] {
+// Как normStatement витрины: без маркера списка и сносок, пробелы схлопнуты, NFC
+function normOverrideLine(s: string): string {
+  return s.replace(/^[-*]\s+/, '').replace(/\s*\[\^[^\]\r\n]+\]/g, '').replace(/\s+/g, ' ').trim().normalize('NFC');
+}
+
+// Утверждения, действующие на странице: пункты вне секции «История» (прежние формулировки — там)
+function activeStatements(content: string): Set<string> {
+  const set = new Set<string>();
+  let inHistory = false;
+  for (const line of content.replace(/\r\n?/g, '\n').split('\n')) {
+    const h = /^## (.+)$/.exec(line);
+    if (h) { inHistory = h[1].trim() === 'История'; continue; }
+    if (!inHistory && /^[-*]\s+/.test(line)) set.add(normOverrideLine(line));
+  }
+  return set;
+}
+
+// Замены и споры страницы; чужие и неизвестные op фронт не рисует. Если в ответе есть текст
+// страницы, остаются только те, чьё утверждение ещё действует: после «Вернуть мою» бэк пакет ИИ
+// не убирает, но утверждение ИИ уходит в «Историю» — метка и точка гаснут
+export function wikiOverridesOf(page: { overrides?: unknown; content?: unknown } | null | undefined): WikiOverrideDto[] {
   const raw = page?.overrides;
   if (!Array.isArray(raw)) return [];
-  return raw.filter((o): o is WikiOverrideDto =>
+  const all = raw.filter((o): o is WikiOverrideDto =>
     !!o && ((o as WikiOverrideDto).op === 'supersede' || (o as WikiOverrideDto).op === 'conflict')
     && typeof (o as WikiOverrideDto).at === 'string' && typeof (o as WikiOverrideDto).packageId === 'string');
+  if (typeof page?.content !== 'string') return all;
+  const active = activeStatements(page.content);
+  return all.filter(o => {
+    // Замена — по утверждению ИИ; спор — по строке человека, что осталась на месте
+    const text = o.op === 'supersede' ? o.statement : (o.previous ?? o.statement);
+    return !!text && active.has(normOverrideLine(text));
+  });
 }
 
 // Состояние «есть замена, которую человек не вернул»: питает точку на «Журнале». Берётся из
 // открытой страницы стора; после «Вернуть мою» страница перечитывается, замены в ответе нет — точка гаснет.
-export function wikiHasReplacement(page: { overrides?: unknown } | null | undefined): boolean {
+export function wikiHasReplacement(page: { overrides?: unknown; content?: unknown } | null | undefined): boolean {
   return wikiOverridesOf(page).some(o => o.op === 'supersede');
 }
 

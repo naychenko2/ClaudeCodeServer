@@ -322,4 +322,37 @@ public sealed class PrivateChatListVisibilityTests : IDisposable
 
         ids.Should().Contain(ForeignPrivateId, "гарду привязки нужны все чаты владельца");
     }
+
+    // Настоящий проектор на сериализованной строке: фича с чужим приватным чатом (эпик начат из
+    // него, шаг привязан к нему по TaskId) и со своим общим чатом. Контроль: тот же проектор на
+    // машинном снимке id отдаёт — значит, тест различает снимки, а не пустую выдачу.
+    [Fact]
+    public void ПроекцииФич_ПроекторНаСнимкеВидимых_ЧужойПриватныйЧатНеВСтрокеОтвета_ОбщийЕсть()
+    {
+        var tasks = new ClaudeHomeServer.Services.Tasks.TaskManager(_config);
+        var epic = tasks.Create(_projectId, _ownerId, new CreateTaskRequest("Фича", Role: "feature",
+            SourceSessionId: ForeignPrivateId));
+        var foreignStep = tasks.Create(_projectId, _ownerId, new CreateTaskRequest("Шаг чужого", Role: "step",
+            FeatureId: epic.Id));
+        var openStep = tasks.Create(_projectId, _ownerId, new CreateTaskRequest("Шаг общего", Role: "step",
+            FeatureId: epic.Id));
+        _sessions.GetById(ForeignPrivateId)!.TaskId = foreignStep.Id;
+        _sessions.GetById(OwnerOpenId)!.TaskId = openStep.Id;
+        var projector = new ClaudeHomeServer.Services.Tasks.Projector.FeatureProjector(tasks);
+
+        string Serialize(List<ClaudeHomeServer.Services.Tasks.Projector.FeatureIndexSession> snap) =>
+            JsonSerializer.Serialize(new
+            {
+                full = projector.ProjectFull(epic.Id, _ownerId, snap),
+                list = projector.ProjectAll(_ownerId, snap),
+                index = projector.BuildIndex(_ownerId, snap),
+            });
+
+        var visible = Serialize(FeatureChatDoor.SnapshotVisible(_sessions, _ownerId));
+        var machine = Serialize(FeatureChatDoor.Snapshot(_sessions, _ownerId));
+
+        machine.Should().Contain(ForeignPrivateId, "контроль: без фильтра проектор отдаёт id чата");
+        visible.Should().NotContain(ForeignPrivateId);
+        visible.Should().Contain(OwnerOpenId, "общий чат проекта остаётся в проекциях как прежде");
+    }
 }

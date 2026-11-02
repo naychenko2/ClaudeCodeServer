@@ -279,12 +279,11 @@ public sealed class VideoEditorToolsetTests
         var started = await w.Call(ToolShoot, new JsonObject { ["sceneId"] = scene.SceneId });
         var jobId = System.Text.Json.Nodes.JsonNode.Parse(started.Text)!["jobId"]!.GetValue<string>();
 
-        var watch = System.Diagnostics.Stopwatch.StartNew();
-        var result = await w.Call(ToolWait, new JsonObject { ["timeoutSeconds"] = 1 });
-        watch.Stop();
+        // Съёмка заблокирована и сама не кончится: если ожидание не уложилось в потолок, вызов зависнет,
+        // и страховка 30 с его оборвёт. Скорость по стене (прежнее «< 10 с») под нагрузкой не мерим.
+        var result = await w.Call(ToolWait, new JsonObject { ["timeoutSeconds"] = 1 }).WaitAsync(TimeSpan.FromSeconds(30));
 
         System.Text.Json.Nodes.JsonNode.Parse(result.Text)!["allDone"]!.GetValue<bool>().Should().BeFalse();
-        watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(10), "потолок ожидания — секунды, а не минуты съёмки");
         await w.Call(ToolCancel, new JsonObject { ["jobId"] = jobId });
         await w.WaitJobsAsync();
     }

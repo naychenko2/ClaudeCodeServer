@@ -684,6 +684,112 @@ public class WikiRetractFootnoteTests : IDisposable
         pageText.Should().Contain(ClaimBOnly);
     }
 
+    // Страница человека БЕЗ строки в «Истории»: перенос туда должен сделать само применение
+    // `supersede@human`, а не ручная фикстура (B6, находка В3).
+    private static readonly string PageHumanNoHistory = $$"""
+        ---
+        type: topic
+        aliases: []
+        owns: []
+        sources: []
+        status: active
+        ---
+
+        # Сущность
+
+        ## Сводка
+        {{HumanClaim}} [^s1]
+
+        ## Хронология
+
+        ## Противоречия
+
+        ## История
+
+        [^s1]: [[{{HumanCardTitle}}]] — «{{HumanClaim}}»
+        """;
+
+    private async Task WriteHumanCardsAndPageNoHistory()
+    {
+        await WriteHumanCardsAndPage();
+        await WriteViaKeeper(WikiSections.Common, PagePath, PageHumanNoHistory);
+    }
+
+    [Fact]
+    public async Task Supersede_ЖивойПоток_ПрежняяФормулировкаЧеловекаУходитВИсториюДословно()
+    {
+        // Мутация «не писать в Историю» (убрать Add в WikiPlanValidator.RenderApply): в «Истории»
+        // пусто — Be(1) краснеет, а следом краснеет и возврат формулировки при retract.
+        await WriteHumanCardsAndPageNoHistory();
+        await Applied(RefA, CtxA, SupersedeHuman(ClaimAOnly));
+
+        var model = WikiPage.Parse(File.ReadAllText(PageFull(PagePath))).Model!;
+        model.Sections.Single(sec => sec.Name == "Сводка").Lines
+            .Should().Contain(l => l.StartsWith(ClaimAOnly)).And.NotContain(l => l.Contains(HumanClaim));
+        var history = model.Sections.Single(sec => sec.Name == "История").Lines;
+        history.Should().ContainSingle(l => l.StartsWith(HumanClaim), "прежняя строка — ровно одна, со своей сноской");
+        history.Single().Should().MatchRegex(@"\[\^s1\]$", "сноска на карточку человека не потеряна");
+
+        // Retract источника ИИ по живому потоку возвращает формулировку человека.
+        await Applied(RefB, CtxB, Op(WikiPackage.OpAppend, PagePath, ClaimBOnly)); // окно: побайтного отката нет
+        var r = await _sut.RetractAsync(User, RefA);
+        r.Ok.Should().BeTrue(r.Reason);
+        var after = WikiPage.Parse(File.ReadAllText(PageFull(PagePath))).Model!;
+        after.Sections.Single(sec => sec.Name == "Сводка").Lines
+            .Should().Contain(l => l.StartsWith(HumanClaim), "формулировка человека вернулась на место замены");
+        after.Sections.Single(sec => sec.Name == "История").Lines
+            .Should().NotContain(l => l.Contains(HumanClaim));
+    }
+
+    [Fact]
+    public async Task Supersede_ЖивойПоток_ВернутьМою_НаходитСтрокуВИстории()
+    {
+        // RenderRestore (путь «Вернуть мою») ищет формулировку в «Истории» по нормализованному
+        // тексту — без переноса из RenderApply он отвечает «в «Истории» нет такой формулировки».
+        await WriteHumanCardsAndPageNoHistory();
+        await Applied(RefA, CtxA, SupersedeHuman(ClaimAOnly));
+
+        var state = new List<WikiGate.Draft>
+        {
+            new(PagePath, File.ReadAllText(PageFull(PagePath))),
+            new(HumanCardPath, File.ReadAllText(PageFull(HumanCardPath))),
+            new(CardPathA, File.ReadAllText(PageFull(CardPathA))),
+        };
+        var restore = new WikiPackage
+        {
+            Id = WikiPackageStore.NewId(),
+            Section = WikiSections.Common,
+            Author = WikiPackage.AuthorHuman,
+            Action = WikiPackage.ActionRestore,
+            Sources = [new WikiPackage.SourceRef("human", "restore-1")],
+            Operations = [new WikiPackage.Operation
+            {
+                Op = WikiPackage.OpEdit, Page = PagePath, Text = HumanClaim, Target = ClaimAOnly,
+                Class = WikiPackage.ClassKey("human", WikiPackage.OpEdit),
+                Decision = WikiPackage.DecisionAuto, BaseHashes = new Dictionary<string, string>(),
+            }],
+            Status = WikiPackage.StatusChecking,
+        };
+
+        var res = WikiHumanRender.Render(state, restore);
+
+        res.Error.Should().BeNull();
+        res.Drafts.Single(d => d.Path == PagePath).Content.Should().Contain(HumanClaim + " [^s1]");
+    }
+
+    [Fact]
+    public void RenderApply_Supersede_СтрокаУжеВИстории_НеДублируется()
+    {
+        var state = new List<WikiGate.Draft> { new(PagePath, PageHumanBase) };
+        var op = SupersedeHuman(ClaimAOnly);
+
+        var draft = WikiPlanValidator.RenderApply(state, op, ClaimAOnly, CardTitleA);
+
+        draft.Should().NotBeNull();
+        var history = WikiPage.Parse(draft!.Value.Content).Model!.Sections.Single(sec => sec.Name == "История").Lines;
+        history.Count(l => l.StartsWith(HumanClaim)).Should().Be(1, "такая строка в «Истории» уже была");
+    }
+
     [Fact]
     public async Task Retract_ЗаменаОпираласьИНаДругойИсточник_ФормулировкаЧеловекаНеВозвращается()
     {

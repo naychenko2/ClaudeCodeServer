@@ -550,7 +550,9 @@ public static class WikiPlanValidator
             return new(null, -1);
         foreach (var section in page.Sections)
         {
-            if (!WikiPage.AssertionSectionNames.Contains(section.Name))
+            // «История» хранит заменённые утверждения — целью новой замены они не бывают
+            // (иначе вторая замена той же цели нашла бы копию в «Истории», а не отклонилась).
+            if (section.Name == "История" || !WikiPage.AssertionSectionNames.Contains(section.Name))
                 continue;
             for (var l = 0; l < section.Lines.Count; l++)
                 if (QuoteMatcher.ContainsVerbatim(section.Lines[l], target))
@@ -633,7 +635,16 @@ public static class WikiPlanValidator
         var link = op.Op == WikiPackage.OpLink ? $" [[{op.Target}]]" : "";
         var line = $"{op.Text}{link} [^s{page.Footnotes.Count + 1}]";
         if (op.Op == WikiPackage.OpSupersede)
+        {
+            var old = sections[targetIdx].Lines[hit.Line];
             sections[targetIdx].Lines[hit.Line] = line;
+            // Прежняя формулировка — дословно, со своими сносками, в «Историю» (ADR-035 §3,
+            // ADR-038 предохранитель 1): по ней retract находит пару и возвращает формулировку
+            // человека. Из самой «Истории» не переносим; такая же строка там уже есть — не дублируем.
+            var historyIdx = sections.FindIndex(s => s.Name == "История");
+            if (historyIdx >= 0 && historyIdx != targetIdx && !sections[historyIdx].Lines.Contains(old))
+                sections[historyIdx].Lines.Add(old);
+        }
         else
             sections[targetIdx].Lines.Add(line);
 

@@ -65,9 +65,15 @@ public class ProjectCapabilitiesGuardTests
         // (LlmProviderConfig.IsLocal), не «локальный проект» — чужой смысл того же слова.
         ["backend/ClaudeHomeServer.Llm/Gateway/LlmGatewayEndpoints.cs"] = (2, "LLM-провайдер"),
         // Поллер: источник метрик выбирается по провайдеру, помеченному IsLocal (LLM-провайдер).
-        ["backend/ClaudeHomeServer.Llm/LocalStats/LocalModelStatsPoller.cs"] = (2, "LLM-провайдер"),
+        // Три вхождения: код (p.IsLocal) плюс два упоминания в комментариях о выборе провайдера
+        // (комментарий 01.11.2026 добавил третье) — все про локальность провайдера, не проекта.
+        ["backend/ClaudeHomeServer.Llm/LocalStats/LocalModelStatsPoller.cs"] = (3, "LLM-провайдер"),
         // Подписи основного стенда панели «Локальные модели»: берутся из Stats первого провайдера с IsLocal (LLM-провайдер).
-        ["backend/ClaudeHomeServer/Controllers/LocalModelStatsController.cs"] = (1, "LLM-провайдер"),
+        // Два вхождения: код (p.IsLocal) плюс комментарий 01.11.2026 о выборе провайдера с Stats — оба про локальность провайдера, не проекта.
+        ["backend/ClaudeHomeServer/Controllers/LocalModelStatsController.cs"] = (2, "LLM-провайдер"),
+        // Очередь GPU: «какие провайдеры уступают GPU» отбираются по IsLocal провайдера
+        // (LlmProviderConfig.IsLocal), не по локальности проекта — чужой смысл того же слова.
+        ["backend/ClaudeHomeServer.Llm/MediaGpuYieldGate.cs"] = (1, "IsLocal провайдера GPU-очереди, не проекта"),
         // Расход: локальные LLM-провайдеры считаются бесплатными (1444df06e) — IsLocal везде про провайдера, не проект.
         ["backend/ClaudeHomeServer.Llm/LlmModelResolverAdapter.cs"] = (2, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/OneShotClaudeRunner.cs"] = (3, "LLM-провайдер"),
@@ -93,6 +99,9 @@ public class ProjectCapabilitiesGuardTests
         ["frontend/src/lib/models.ts"] = (1, "LLM-провайдер"),
         ["frontend/src/lib/spendSources.ts"] = (6, "LLM-провайдер"),
         ["frontend/src/features/modelsSpend/QuotasTab.tsx"] = (10, "LLM-провайдер"),
+        // Пикер модели в композере: группа «Локальные» собирается по isLocal провайдера
+        // (providerCapsByKey(...).isLocal) — локальность провайдера, не проекта.
+        ["frontend/src/components/ComposerModelPicker.tsx"] = (2, "LLM-провайдер"),
     };
 
     private static string RepoRoot()

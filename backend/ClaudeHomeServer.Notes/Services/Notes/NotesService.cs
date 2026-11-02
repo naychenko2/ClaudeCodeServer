@@ -524,7 +524,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
 
     // Индекс вхождения needle как отдельного слова (границы — не буквы/цифры), иначе -1.
     // Вхождения внутри кода (по маске) не считаются упоминанием.
-    private static int FindWord(string haystack, string needle, bool[] mask)
+    internal static int FindWord(string haystack, string needle, bool[] mask)
     {
         var from = 0;
         while (true)

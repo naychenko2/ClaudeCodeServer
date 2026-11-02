@@ -35,13 +35,13 @@ import { BookOpen, ScrollText, Undo2 } from 'lucide-react';
 import {
   C, FS, SP, FLAGS, useFeature, useWindowWidth, TABLET_WIDE_MIN,
   analyzeWikiChat, ingestWikiNote, loadWikiChatAnalyzeStatus, loadWikiChats, requestOpenWikiPage, retractWikiSource,
-  WikiError, type WikiChatAnalyzeOk, type WikiNoteIngestDto, type WikiRetractDto,
+  WikiError, type WikiChatAnalyzeOk, type WikiNoteIngestDto,
 } from 'aihome_shell/kit';
 import { Button } from '../../components/ui/Button';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { ToolbarOverflowMenu, type OverflowItem } from '../../components/ToolbarOverflowMenu';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import { personalSectionRefusalText, wikiErrorText } from './wiki/wikiLabels';
+import { personalSectionRefusalText, retractResultText, wikiErrorText } from './wiki/wikiLabels';
 import type { ChatHeaderSummaryCtx } from '../../lib/subsystems/registryCore';
 
 // Пауза между опросами analyze-status: analyze ждёт исход сам ≤10 с (WikiChatsController),
@@ -97,34 +97,6 @@ export async function requestNoteIngest(noteId: string): Promise<string> {
   }
 }
 
-// Согласование по числу (тот же приём, что stepWord в FeatureProdCardsView):
-// 1 / 2–4 / 5+; 11–14 — как 5+. Коротое причастие при «1» согласуется с существительным,
-// при остальних — средний род: так оно читается с числительным-подметом.
-function isOne(n: number): boolean {
-  const m10 = n % 10, m100 = n % 100;
-  return m10 === 1 && m100 !== 11;
-}
-// экспортирован: тот же согласователь нужен «Журналу» (форма «1 применённая запись» в
-// модалке отката, доработка H5-чисел) — второй копии помощника в фиче нет
-export function countWord(n: number, one: string, few: string, many: string): string {
-  const m10 = n % 10, m100 = n % 100;
-  const w = (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) ? few : many;
-  return `${n} ${isOne(n) ? one : w}`;
-}
-
-// Итог отката по источнику — текстом, как в «Журнале» (та же форма частей)
-export function retractResultText(r: WikiRetractDto): string {
-  const parts = [
-    r.revertedPackages.length ? `${countWord(r.revertedPackages.length, 'пакет', 'пакета', 'пакетов')} ${isOne(r.revertedPackages.length) ? 'откатан' : 'откатано'}` : '',
-    r.unlinkedPackages.length ? `${r.unlinkedPackages.length} стр. ${isOne(r.unlinkedPackages.length) ? 'очищена' : 'очищено'} от сносок` : '',
-    r.removedChronicles.length ? `${countWord(r.removedChronicles.length, 'хроника', 'хроники', 'хроник')} ${isOne(r.removedChronicles.length) ? 'снята' : 'снято'}` : '',
-    r.remainingPackages.length ? `${countWord(r.remainingPackages.length, 'пакет', 'пакета', 'пакетов')} ${isOne(r.remainingPackages.length) ? 'остался' : 'осталось'} (другой источник)` : '',
-    r.markedSkip ? 'чат помечен «не разбирать»' : '',
-  ].filter(Boolean);
-  const failed = r.failed.length ? ` Частично: ${r.failed.join('; ')}` : '';
-  return `${parts.join(', ') || 'ничего не изменилось'}.${failed}`;
-}
-
 // Точка на триггере, когда в меню есть сообщение (приём шапкиного «⋯» с точкой срока):
 // цвет — цвет статуса; для итога отката — приглушённый. Сама сообщение — внутри пункта
 function msgDot(color: string): CSSProperties {
@@ -134,12 +106,15 @@ function msgDot(color: string): CSSProperties {
   };
 }
 
-export function WikiChatActions({ session, hasMessages, online }: ChatHeaderSummaryCtx) {
+export function WikiChatActions({ session, hasMessages, online, compact }: ChatHeaderSummaryCtx) {
   const enabled = useFeature(FLAGS.llmWiki);
   // Тот же порог, что читает сама шапка (ChatHeaderBar:1357 isCompact = isMobile || isTablet
   // ⇔ ширина < TABLET_WIDE_MIN): ниже — ряд действий не переносится, три кнопки «Вики»
   // переполняют его (дефект ecec968a) — оболочка одна кнопка-меню
-  const isCompactHeader = useWindowWidth() < TABLET_WIDE_MIN;
+  // Шапка сама знает, что она сжата (в т.ч. узкая колонка «Стены» при широком окне) — её признак
+  // главнее ширины окна; без него (прямой вызов) — по окну
+  const windowCompact = useWindowWidth() < TABLET_WIDE_MIN;
+  const isCompactHeader = compact ?? windowCompact;
   const [state, setState] = useState<AnalyzeState>({ kind: 'idle' });
   const [chroniclePath, setChroniclePath] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -248,7 +223,7 @@ export function WikiChatActions({ session, hasMessages, online }: ChatHeaderSumm
       .then(r => {
         setConfirmOpen(false);
         if (seq.current !== mine) return;
-        setRetractText(retractResultText(r));
+        setRetractText(retractResultText(r, 'чат'));
         setState({ kind: 'idle' });
         setChroniclePath(null);
       })

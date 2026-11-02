@@ -30,12 +30,13 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // metrics.jsonl подряд.
 //
 // Флаг llm-wiki гейтит прогон (вердикт ревью S3-3): для владельца с выключенным флагом
-// прогон пропускается целиком — ни _health.md, ни строки метрик. Раньше служба знала только
-// заведённость вики (признак _schema.md) и при выключенном флаге писала «Находки (0)» с
-// нулевыми метриками: флаг прячет страницы вики из графа (NotesService.cs:128), и «чисто»
-// по невидимой вики — ложь, а не мера: отчёт говорил бы «чисто» там, где проверка не
-// выполнялась. Одна проверка флага, в одной точке: и ночное окно, и кнопка идут через
-// TryRunOwnerAsync; шов — тот же IFeatureFlagGate, что у источника графа, не ключ конфига.
+// прогон пропускается целиком — ни _health.md, ни строки метрик (в TryRunOwnerAsync исход
+// FeatureOff возвращается до любой записи). Причина — в фактах кода: флаг убирает источник
+// вики из графа (NotesService.cs:128-129), а тексты страниц лентер читает с диска независимо
+// от флага (ReadSectionFacts) — при выключенном флаге прогон мерил бы страницы по графу,
+// который вики не несёт, и «Находки (0)» с нулевыми метриками читались бы как завершённая
+// проверка, которой не было. Одна проверка флага, в одной точке: и ночное окно, и кнопка идут
+// через TryRunOwnerAsync; шов — тот же IFeatureFlagGate, что у источника графа, не ключ конфига.
 //
 // Дрейф по байтам (ADR-035 §2: «Манифест раздела сверяется с диском при каждом lint…
 // расхождение даёт статус drift, строку в _health.md»): перед линтом служба сверяет каждую
@@ -57,8 +58,13 @@ public sealed class WikiLintService : BackgroundService
     // сразу; очередь второго прогона дала бы вторую запись health+метрик подряд.
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _ownerSlots = new();
 
-    // Дата последней ночной проходки (локальная): одна на календарные сутки в окне.
-    private DateTime _lastPassDate = DateTime.MinValue;
+    // Дата последней ночной проходки (локальная) — НА ВЛАДЕЛЬЦА: одна на календарные сутки
+    // в окне. Ставится только после успешного прохода именно этого владельца
+    // (RunNightTickAsync): отказ одного не перезапускает остальных в окне и не плодит
+    // им повторные строки metrics.jsonl. Словарь потокобезопасный: тик идёт по владельцам
+    // последовательно, но REST-прогон параллелен ему — «уже идёт» и «функция выключена»
+    // даты не пишут (успехом считается только исход Ran).
+    private readonly ConcurrentDictionary<string, DateTime> _lastPassDates = new();
 
     // Версия кода в строке метрик: базовая линия S0b-2 штампована ревизией кода
     // (docs/research/llm-wiki-baseline-2026-10.md); сравнение метрик без штампа — не сравнение.
@@ -114,21 +120,33 @@ public sealed class WikiLintService : BackgroundService
         {
             try { await Task.Delay(CheckInterval, ct); }
             catch (OperationCanceledException) { break; }
+            // Всё тело тика — в RunNightTickAsync, под своим catch: здесь служба только ждёт
+            // следующий тик; наружу из ExecuteAsync исключение не выходит (тот же образец,
+            // что тик под catch в PersonaMemoryConsolidationService).
+            await RunNightTickAsync(DateTimeOffset.Now); // «ночь» владельца — локальное время сервера
+        }
+    }
 
-            // Всё тело тика под catch: отказ за пределами раздела-изоляции не должен
-            // гасить службу (тот же образец, что PersonaMemoryConsolidationService).
-            try
+    // Тело ночного тика — отдельный internal-метод под одним catch: невыловленное исключение
+    // за пределами раздела-изоляции гасило бы весь хост, а не только проход (тот же образец,
+    // что PersonaMemoryConsolidationService). Дата ставится на владельца и только после его
+    // успешного прохода: отказ одного не срывает остальных и не перезапускает уже прошедших
+    // в том же окне — отказавший пробуется следующим тиком, прошедшие пропускаются.
+    // Дата прохода приходит параметром: тест проверяет тик временем в окне, не дожидаясь ночи.
+    internal async Task RunNightTickAsync(DateTimeOffset now)
+    {
+        try
+        {
+            if (!InWindow(now.Hour)) return;
+            foreach (var ownerId in EnumerateWikiOwners())
             {
-                var now = DateTimeOffset.Now; // «ночь» владельца — локальное время сервера
-                if (!InWindow(now.Hour) || _lastPassDate == now.Date) continue;
-                _lastPassDate = now.Date;
-                foreach (var ownerId in EnumerateWikiOwners())
-                    await RunOwnerGuardedAsync(ownerId);
+                if (_lastPassDates.TryGetValue(ownerId, out var done) && done == now.Date) continue;
+                if (await RunOwnerGuardedAsync(ownerId)) _lastPassDates[ownerId] = now.Date;
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                _log.LogWarning(ex, "Ночное окно линта вики");
-            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            LogSafe(ex, "Ночное окно линта вики");
         }
     }
 
@@ -158,6 +176,9 @@ public sealed class WikiLintService : BackgroundService
             return Directory.EnumerateDirectories(wikiRoot)
                 .Select(d => Path.GetFileName(d))
                 .Where(id => !string.IsNullOrWhiteSpace(id) && WikiPaths.IsInitialized(_dataDir, id))
+                // Порядок обхода каталога зависит от ФС; сортировка делает ночной проход
+                // воспроизводимым (и тест обороны — детерминированным).
+                .OrderBy(id => id, StringComparer.Ordinal)
                 .ToList();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -167,11 +188,27 @@ public sealed class WikiLintService : BackgroundService
     }
 
     // Ночная проходка одного владельца: исключение не выходит наружу — оно закрывает
-    // этого владельца, не остальных и не службу.
-    private async Task RunOwnerGuardedAsync(string ownerId)
+    // этого владельца, не остальных и не службу. true — только исход Ran: проход владельца
+    // завершён, дату можно ставить. Отказ, «уже идёт» (его ведёт другой вызов, например
+    // REST) и «функция выключена» (прохода не было) — false: даты нет, следующий тик пробует
+    // снова.
+    private async Task<bool> RunOwnerGuardedAsync(string ownerId)
     {
-        try { await TryRunOwnerAsync(ownerId); }
-        catch (Exception ex) { _log.LogWarning(ex, "Ночной линт вики {Owner}", ownerId); }
+        try { return (await TryRunOwnerAsync(ownerId)).Outcome == WikiLintRunOutcome.Ran; }
+        catch (Exception ex) { LogSafe(ex, "Ночной линт вики {Owner}", ownerId); return false; }
+    }
+
+    // Безопасное логирование внутри оборон тика и охраны: логирование не может становиться
+    // новым источником исключения — отказ записи (отказ sink'а, диск полон) вышел бы из
+    // охраны в цикл тика и срвал остальных владельцев, а из catch тика — наружу
+    // ExecuteAsync, и BackgroundService с дефолтом StopHost погасил бы весь хост ночью.
+    // Сообщить об отказе журнала тем же журналом — тот же отказ: молчание здесь —
+    // единственный исход. В ночном пути все остальные записи журнала стоят в catch'ах
+    // прогона и при отказе доходят до охраны владельца — её лог защищён здесь же.
+    private void LogSafe(Exception ex, string messageTemplate, params object?[] args)
+    {
+        try { _log.LogWarning(ex, messageTemplate, args); }
+        catch { /* журнал не пишет: сообщить об этом нечем */ }
     }
 
     // ─── Прогон владельца ─────────────────────────────────────────────────────
@@ -296,8 +333,7 @@ public sealed class WikiLintService : BackgroundService
             // Дата «без изменений»: из шапки, а когда её в шапке нет — mtime файла
             // (решение по ревью S3-2: на пустом updated находка молчала о каждой странице).
             // Метка — UTC, как у строк журнала; линтер диска не видит, дата приходит фактом.
-            var updated = ParseUpdated(parsed.Model.Updated)
-                ?? new DateTimeOffset(File.GetLastWriteTimeUtc(full), TimeSpan.Zero);
+            var updated = ParseUpdated(parsed.Model.Updated) ?? MtimeOrNull(full);
             facts.Add(new WikiPageFacts(
                 rel,
                 TitleOf(text, parsed.CloseLineIndex, Path.GetFileNameWithoutExtension(full)),
@@ -324,16 +360,30 @@ public sealed class WikiLintService : BackgroundService
     private static DateTimeOffset? ParseUpdated(string? raw) =>
         DateTimeOffset.TryParse(raw, CultureInfo.InvariantCulture, DateTimeStyles.None, out var v) ? v : null;
 
+    // mtime файла как дата страницы. Сбой чтения метаданных не роняет раздел: даты нет —
+    // страница уходит в pagesWithoutDate (метрика её считает), а не в отказ всего раздела.
+    // read — шов для теста: на живой ФС чтение mtime у существующего файла не отказывает.
+    internal static DateTimeOffset? MtimeOrNull(string full, Func<string, DateTime>? read = null)
+    {
+        try { return new DateTimeOffset((read ?? File.GetLastWriteTimeUtc)(full), TimeSpan.Zero); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+    }
+
     // Цели сносок страницы — источники по ADR-035 §3: строки определения
     // `[^sN]: [[Карточка]] — «цитата»` (UI рендерит блок «Источники» из них же). Здесь нужен
     // только счёт целей: строгость формы держит гейт при записи, whole-page разбор
     // (WikiPage.Parse) строже тела страницы и сделал бы целый раздел «отказом» там, где
     // достаточно сносок.
-    private static List<string> FootnoteTargets(string text)
+    // Строки внутри ```-забора — пример синтаксиса, не источник: тот же MarkdownFence, что у
+    // NotesService.CodeMask (второй разбор заборов не заводим).
+    internal static List<string> FootnoteTargets(string text)
     {
         var targets = new List<string>();
+        var fence = new MarkdownFence();
         foreach (var line in WikiFrontmatter.SplitLines(text))
         {
+            if (fence.Consume(line) || fence.InFence)
+                continue;
             if (!line.StartsWith("[^", StringComparison.Ordinal))
                 continue;
             var sep = line.IndexOf("]: ", StringComparison.Ordinal);
@@ -440,6 +490,9 @@ public sealed class WikiLintService : BackgroundService
         sb.Append("\n## Находки (").Append(report.Findings.Count).Append(")\n");
         foreach (var f in report.Findings)
             sb.Append(FindingLine(f)).Append('\n');
+        if (report.Metrics.PagesWithoutFacts > 0)
+            sb.Append("\n## Не проверено\n- страниц без фактов (находки «нет источников» и «без изменений» их не видят): ")
+                .Append(report.Metrics.PagesWithoutFacts).Append('\n');
         return sb.ToString();
     }
 
@@ -493,6 +546,13 @@ public sealed class WikiLintService : BackgroundService
     }
 
     // ─── metrics.jsonl ────────────────────────────────────────────────────────
+    //
+    // Дыры при отказе раздела: отказавший раздел метрик не пишет (проход передаёт в
+    // WriteHealthQuietlyAsync null — строка об отказе живёт только в _health.md раздела),
+    // и строки по этому разделу за этот проход нет. Это не пропуск и не ноль: строка
+    // нулей незавершённой проверки читалась бы как измерение и врала бы сравнение с
+    // базовой линией — тот же смысл, по которому прогон при выключенном флаге не пишет
+    // метрик. Отсутствие строки видно в файле отсутствием строки и объяснено здесь.
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -512,28 +572,38 @@ public sealed class WikiLintService : BackgroundService
     // Полей без аналога в базовой линии четыре, они остались под своими именами: wikiPages,
     // wikiPagesWithoutSources и pagesWithoutDate (по страницам вики — такой половины базы в
     // базовой линии нет) и driftCount (байтовая сверка манифеста — предмета вики).
+    // Область чисел: ВСЕ метрики строки посчитаны по всей базе владельца (граф и страницы всех
+    // разделов вики), а не по разделу из поля section — оно говорит лишь, к какому разделу
+    // относится проход. Честный признак — scope = "all": строка не должна читаться как «по
+    // разделу». pagesWithoutFacts — страницы вики, выпавшие из MissingSources/Stale (фактов нет).
     // ts/section/codeVersion — конверт строки, не метрика: его формат не меняется.
     private sealed record MetricsLine(
-        DateTimeOffset Ts, string Section, string CodeVersion,
+        DateTimeOffset Ts, string Section, string CodeVersion, string Scope,
         int Notes, int Links, int Ghosts, double GhostsShare, int DistinctGhostTargets,
         int Orphans, double OrphansShareAll, int OrphansNoJournal, double OrphansShareNoJournal,
         int DriftCount,
-        int WikiPages, int WikiPagesWithoutSources, int UnlinkedMentions, int PagesWithoutDate);
+        int WikiPages, int WikiPagesWithoutSources, int UnlinkedMentions, int PagesWithoutDate,
+        int PagesWithoutFacts);
 
     // Доля → процент с одним знаком — ровно формула базовой линии; пустой знаменатель даёт 0
     // (его уже даёт Share() линтера).
+    internal const string MetricsScopeAll = "all";
+
     private static double Pct(double share) => Math.Round(100.0 * share, 1);
 
     private static string MetricsLineJson(WikiLintReport report, DateTimeOffset now)
     {
         var m = report.Metrics;
         return JsonSerializer.Serialize(new MetricsLine(
-            now, report.Section, CodeVersion,
+            now, report.Section, CodeVersion, MetricsScopeAll,
             m.NoteCount, m.LinkCount, m.DanglingLinkCount, Pct(m.DanglingLinkShare), m.DanglingTargetCount,
             m.OrphanCount, Pct(m.OrphanShare), m.OrphanCountExcludingJournal, Pct(m.OrphanShareExcludingJournal),
-            // Счётчик дрейфа раздела — все его находки дрейфа: и членство (линт), и байты (служба).
-            report.Findings.Count(f => f.Kind == WikiFindingKind.Drift),
-            m.WikiPageCount, m.WikiPagesWithoutSources, m.UnlinkedMentionPairs, m.PagesWithoutDate), JsonOpts);
+            // Счётчик дрейфа раздела — находки дрейфа ПО СТРАНИЦАМ: и членство (линт), и байты
+            // (служба). Строка «манифест нечитаем» (без страницы) — состояние раздела, а не
+            // дрейф: при нечитаемом манифесте метрика 0.
+            report.Findings.Count(f => f.Kind == WikiFindingKind.Drift && f.PageRelPath is not null),
+            m.WikiPageCount, m.WikiPagesWithoutSources, m.UnlinkedMentionPairs, m.PagesWithoutDate,
+            m.PagesWithoutFacts), JsonOpts);
     }
 }
 

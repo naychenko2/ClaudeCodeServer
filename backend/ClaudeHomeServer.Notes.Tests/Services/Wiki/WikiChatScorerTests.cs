@@ -564,7 +564,7 @@ public class WikiChatScorerTests : IDisposable
     {
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, user)], "test"));
-        return new WikiChatsController(_sessions, _chat, _config)
+        return new WikiChatsController(_sessions, _chat, _config, new WikiFlagOn())
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };

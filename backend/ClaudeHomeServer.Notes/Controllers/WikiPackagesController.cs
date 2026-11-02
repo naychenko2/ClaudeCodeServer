@@ -131,8 +131,11 @@ public class WikiPackagesController : ControllerBase
     /// решение 12г, мера 4). Только действие человека: ни у агента, ни у персоны такого инструмента
     /// нет (решение 5). 404 — пакета нет; 403 — чужой раздел; 409 — пакет не применён, уже откатан,
     /// или страницы изменены после применения (перечень таких страниц — в теле: человек видит, на что
-    /// смотреть перед повторной попыткой). Успех — тело со списком возвращённых страниц; статус
-    /// пакета после успеха — «reverted», повторный откат того же пакета — 409.</summary>
+    /// смотреть перед повторной попыткой). Успех — тело со списком возвращённых страниц и, отдельно,
+    /// списком тех, что уже стояли в состоянии «до пакета» к началу этого вызова (W3-3: их вернул
+    /// прежний виток или их снесли мимо Хранителя — этот вызов их файлом не трогал, и в одном списке
+    /// с возвращёнными это читалось бы как «я их вернул»); статус пакета после успеха — «reverted»,
+    /// повторный откат того же пакета — 409.</summary>
     [HttpPost("{id}/revert")]
     public async Task<IActionResult> Revert(string id)
     {
@@ -142,20 +145,21 @@ public class WikiPackagesController : ControllerBase
 
         var r = await _revert.RevertAsync(userId, id).ConfigureAwait(false);
         if (r.Reverted)
-            return Ok(new WikiRevertDto(r.RestoredPages));
+            return Ok(new WikiRevertDto(r.RestoredPages, r.AlreadyPages));
         return StatusCode(409, new { code = r.Code, message = r.Reason, pages = r.ChangedPages });
     }
 
     /// <summary>POST /api/wiki/packages/retract — {sourceRef}: «Откатить всё из этого источника»
     /// (кнопка у хроники, у карточки источника и в «Журнале», мера 5; S4f-2). Только действие
     /// человека: ни у агента, ни у персоны такого инструмента нет (решение 5, как у отката пакета).
-    /// 400 — форма sourceRef (тот же разбор, что у сервиса); 404 — чата нет или он чужой: один
-    /// ответ на оба случая, он не выдаёт наружу, существует ли источник (свой/чужой проверяется
-    /// по каталогу чатов — единственному имени здесь; для прочих origin граница — per-owner:
-    /// чужого в своём корне нет по построению, и их карточки этот путь не зовёт). 409 — вики не
-    /// заведена или внутренний сбой операции (с причиной). 200 — исход: списки пакетов
-    /// откатанных / снятых (сноски сняты) / оставшихся, снятые хроники, названные проблемы
-    /// частичного исхода и признак пометки «не разбирать».</summary>
+    /// 400 — форма sourceRef (тот же разбор, что у сервиса; проверяется ПЕРВОЙ, до владения);
+    /// 404 — источника нет или он чужой: один ответ на оба случая, он не выдаёт наружу,
+    /// существует ли источник. Владение проверяется для КАЖДОГО origin: чат — по каталогу чатов
+    /// (свой/чужой), прочие origin — наличием в вики владельца пакета с этим источником (чужого
+    /// в его корне нет по построению). 409 — вики не заведена или внутренний сбой операции (с
+    /// причиной). 200 — исход: списки пакетов откатанных / снятых (сноски сняты) / оставшихся,
+    /// снятые хроники, названные проблемы частичного исхода и признак пометки «не разбирать».
+    /// Снятие сносок нормализует файл страницы через WikiPage.Render() (весь файл, не только сноска).</summary>
     [HttpPost("retract")]
     public async Task<IActionResult> Retract([FromBody] WikiRetractRequest? req)
     {
@@ -163,13 +167,18 @@ public class WikiPackagesController : ControllerBase
         if (userId is null) return Unauthorized();
         if (string.IsNullOrWhiteSpace(req?.SourceRef))
             return BadRequest(new { code = WikiRetractService.CodeShape, message = "нужен sourceRef" });
+        // Форма — раньше владения: «session:» без id это 400, а не 404.
+        var shape = WikiRetractService.SourceShapeError(req.SourceRef);
+        if (shape is not null)
+            return BadRequest(new { code = WikiRetractService.CodeShape, message = shape });
 
-        if (WikiRetractService.OriginOf(req.SourceRef) == "session")
-        {
-            var session = _sessions.GetById(WikiRetractService.IdPartOf(req.SourceRef));
-            if (session is null || _sessions.ResolveOwnerId(session) != userId)
-                return NotFound(new { code = CodeSource, message = "такого источника в твоей вики нет" });
-        }
+        // Чужой и несуществующий источник — один 404. Вики не заведена — не «нет источника», а
+        // 409 сервиса: сначала его отказ, потому что проверять наличие пакетов негде.
+        var owned = WikiRetractService.OriginOf(req.SourceRef) == "session"
+            ? SessionOwnedBy(userId, req.SourceRef)
+            : !WikiPaths.IsInitialized(_dataDir, userId) || _retract.SourceKnown(userId, req.SourceRef);
+        if (!owned)
+            return NotFound(new { code = CodeSource, message = "такого источника в твоей вики нет" });
 
         var r = await _retract.RetractAsync(userId, req.SourceRef).ConfigureAwait(false);
         if (!r.Ok)
@@ -183,10 +192,18 @@ public class WikiPackagesController : ControllerBase
             [.. r.NeedsUnlink.Select(o => o.PackageId)],
             [.. r.RemovedChronicles],
             [.. r.Failed],
-            r.MarkedSkip));
+            r.MarkedSkip,
+            [.. r.Outcomes.Where(o => o.Reverted).SelectMany(o => o.AlreadyPages ?? [])
+                .Distinct(StringComparer.Ordinal)]));
     }
 
     // ─── Помощники ──────────────────────────────────────────────────────────
+
+    private bool SessionOwnedBy(string userId, string sourceRef)
+    {
+        var session = _sessions.GetById(WikiRetractService.IdPartOf(sourceRef));
+        return session is not null && _sessions.ResolveOwnerId(session) == userId;
+    }
 
     // Пакет читается из своего корня — чужого по построению нет; остаётся раздел: он не
     // должен называть чужой проект (тот же контракт, что ResolveSection у WikiController).
@@ -219,7 +236,8 @@ public class WikiPackagesController : ControllerBase
     /// его сбой — результат-отказ с причиной, а не исключение и не «зависший applying»:
     /// решения записаны до применения и остаются на диске. Итоговый статус — прочитанный с
     /// диска после применения, а не предположение: «applied»/«apply_failed»/«stale» или
-    /// прежний, если применять было нечего.
+    /// прежний, если применять было нечего; если применение удалось, а файла уже нет —
+    /// «applied», а не «accepted» из памяти вызывающего (W3-1).
     ///
     /// internal — граница после применения: тест ставит диск в состояние «файла пакета уже
     /// нет» и в состояние «исключение из ApplyAsync» и видит форму ответа, а не гонку
@@ -232,9 +250,14 @@ public class WikiPackagesController : ControllerBase
         var after = WikiPackageStore.TryRead(root, decided.Id);
         // Файла пакета уже нет на перечитывании (гонка с удалением): не 404 — человек видел бы
         // пустой отказ там, где он только что вынес решение и где есть его исход. Ответ несёт
-        // результат применения и последнюю прочитанную карточку (ревью S4g, M2).
+        // результат применения и последнюю прочитанную карточку (ревью S4g, M2). Но если
+        // применение удалось и файл исчез после него — статус в ответе реальный: «applied»,
+        // «accepted» из памяти рядом с applied=true читался бы как «ждёт применения» о пакете,
+        // который применился и был удалён (W3-1).
         if (after.State == WikiPackageFileState.Missing)
-            return Ok(new WikiDecisionDto(Dto(decided), apply));
+            return Ok(new WikiDecisionDto(
+                apply?.Applied == true ? Dto(decided with { Status = WikiPackage.StatusApplied }) : Dto(decided),
+                apply));
         if (after.State != WikiPackageFileState.Valid || after.Package is null)
             return StatusCode(409, new { code = WikiPackageStore.CodeInvalid, message = "файл пакета не читается" });
         return Ok(new WikiDecisionDto(Dto(after.Package), apply));
@@ -350,10 +373,14 @@ public sealed record WikiApplyOutcomeDto(
     string? Reason,
     IReadOnlyList<string> Violations);
 
-/// <summary>Результат отката: страницы, возвращённые к состоянию до применения («Журнал» обновляет
-/// их и дифф строки op=revert). Отказ — в теле 409: code + message + pages (pages — изменённые
-/// страницы, на которые человеку смотреть перед повторной попыткой).</summary>
-public sealed record WikiRevertDto(IReadOnlyList<string> RestoredPages);
+/// <summary>Результат отката: RestoredPages — страницы, возвращённые к состоянию до применения
+/// («Журнал» обновляет их и дифф строки op=revert). AlreadyPages — подмножество RestoredPages:
+/// страницы, которые уже стояли в состоянии «до пакета» к началу этого вызова (их вернул прежний
+/// виток этого же отката или их снесли/вернули мимо Хранителя): этот вызов их файлом не трогал, и
+/// молчать об этом значило бы «успех, страницы возвращены» о файле, которого он не касался (W3-3).
+/// Поле опционально для текущих потребителей. Отказ — в теле 409: code + message + pages (pages —
+/// изменённые страницы, на которые человеку смотреть перед повторной попыткой).</summary>
+public sealed record WikiRevertDto(IReadOnlyList<string> RestoredPages, IReadOnlyList<string>? AlreadyPages = null);
 
 /// <summary>Запрос «Откатить всё из этого источника»: карточка источника
 /// («{origin}:…» — та же форма, что в пакетах и журнале).</summary>
@@ -363,11 +390,14 @@ public sealed record WikiRetractRequest(string? SourceRef);
 /// unlinkedPackages — обработанные снятием сносок (страницы этих пакетов больше не несут
 /// ссылок на источник); remainingPackages — «остались»: пакеты, чьи страницы не удалось обработать
 /// (причины — в failed); removedChronicles — страницы хроники, снятые целиком; failed —
-/// названные проблемы частичного исхода; markedSkip — чату поставлена пометка «не разбирать».</summary>
+/// названные проблемы частичного исхода; markedSkip — чату поставлена пометка «не разбирать»;
+/// alreadyPages — страницы откатанных пакетов, которые уже стояли в состоянии «до пакета» к
+/// началу отката (этот вызов их файлом не трогал; подмножество восстановленных, W3-3).</summary>
 public sealed record WikiRetractDto(
     IReadOnlyList<string> RevertedPackages,
     IReadOnlyList<string> UnlinkedPackages,
     IReadOnlyList<string> RemainingPackages,
     IReadOnlyList<string> RemovedChronicles,
     IReadOnlyList<string> Failed,
-    bool MarkedSkip);
+    bool MarkedSkip,
+    IReadOnlyList<string>? AlreadyPages = null);

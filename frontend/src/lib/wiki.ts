@@ -160,7 +160,10 @@ export type WikiErrorCode =
   | 'personal_section'
   | 'wiki_not_initialized'
   | 'packages_limit'
-  | 'wiki_note_id';
+  | 'wiki_note_id'
+  // Отбор чатов (S6e/S6f): файл разбора не читается (409 — WikiChatsController.cs:108,152,
+  // код бэка WikiChatTriageStore.CodeInvalid) — читается экраном отбора (loadWikiChats)
+  | 'wiki_triage_invalid';
 
 const WIKI_ERROR_CODES: ReadonlySet<string> = new Set<string>([
   'wiki_foreign', 'wiki_section_key', 'wiki_page_key', 'wiki_project_missing', 'wiki_section_off',
@@ -175,7 +178,7 @@ const WIKI_ERROR_CODES: ReadonlySet<string> = new Set<string>([
   'wiki_origin_key', 'wiki_class_key',
   'wiki_llm_wiki_off', 'wiki_lint_running',
   'not_found', 'task_execution', 'marked_skip', 'personal_section', 'wiki_not_initialized',
-  'packages_limit', 'wiki_note_id',
+  'packages_limit', 'wiki_note_id', 'wiki_triage_invalid',
 ]);
 
 export class WikiError extends Error {
@@ -283,16 +286,38 @@ function splitPageCacheKey(key: string): { sectionKey: string; pageKey: string }
   return i < 0 ? null : { sectionKey: key.slice(0, i), pageKey: key.slice(i + 1) };
 }
 
+// Счётчик открытых страниц — одна пара операций для подписки экрана (useWikiPage) и для
+// тестового шва (__test.openPage): «открытая» для перечитки — именно этот счётчик, а не
+// содержимое стора (_page остаётся и после закрытия страницы).
+function retainOpenPage(key: string): void {
+  _openPages.set(key, (_openPages.get(key) ?? 0) + 1);
+}
+
+function releaseOpenPage(key: string): void {
+  const n = (_openPages.get(key) ?? 1) - 1;
+  if (n <= 0) _openPages.delete(key); else _openPages.set(key, n);
+}
+
 // Перечитать открытую страницу после мутации, меняющей содержимое страниц (откат
 // пакета, откат по источнику): витрина под открытым экраном не должна показывать
 // состояние до отката. Только пока страница остаётся открытой (счётчик подписок) —
 // сбой перечитки не роняет мутацию (тот же порядок, что в adopt).
+// 404 — страницу снес откат (retract снял хронику целиком): содержимое до отката
+// снимается по ключу (тот же порядок, что в deleteWikiSection); другие сбои snapshot
+// не трогают и наружу не выходят.
 async function reReadOpenPage(): Promise<void> {
   const page = _page;
   if (!page || !(_openPages.get(page.cacheKey) ?? 0)) return;
   const parts = splitPageCacheKey(page.cacheKey);
   if (!parts) return;
-  await loadWikiPage(parts.sectionKey, parts.pageKey).catch(() => undefined);
+  try {
+    await loadWikiPage(parts.sectionKey, parts.pageKey);
+  } catch (e) {
+    if (e instanceof WikiError && e.status === 404 && _page && _page.cacheKey === page.cacheKey) {
+      _page = null;
+      emit();
+    }
+  }
 }
 
 // ─── Чтение ───
@@ -396,12 +421,16 @@ export async function initializeWiki(section?: string | null): Promise<WikiInitR
 // сверка с манифестом уже даёт drift=false — витрина снимает плашку по ответу бэка,
 // а не по локальному флагу «принято». Сбой перечитки не отменяет принятое: она
 // не роняет ответ и не затирает прежний снимок (тот же порядок, что в refreshWiki).
+// Перечитка — только пока страница остаётся открытой у человека (счётчик _openPages,
+// не содержимое стора): если за POST он закрыл страницу и открыл другую, безусловная
+// перечитка подняла бы поколение слота страниц и отбросила ответ новой страницы как
+// устаревшую — она бы висела на спиннере (хвост W4-1).
 export async function adoptWikiPage(sectionKey: string, pageKey: string): Promise<WikiAdoptResult> {
   const res = await wikiHttp<WikiAdoptResult>('/wiki/adopt', {
     method: 'POST',
     body: JSON.stringify({ section: sectionKey, page: pageKey }),
   });
-  if (_page && _page.cacheKey === pageCacheKey(sectionKey, pageKey)) {
+  if ((_openPages.get(pageCacheKey(sectionKey, pageKey)) ?? 0) > 0) {
     await loadWikiPage(sectionKey, pageKey).catch(() => undefined);
   }
   await refreshWiki();
@@ -783,7 +812,12 @@ interface WikiChatsListDto { items: WikiChatTriage[]; counts: Record<string, num
 
 export async function loadWikiChats(): Promise<WikiChatTriage[]> {
   const res = await wikiHttp<WikiChatsListDto>('/wiki/chats');
-  return Array.isArray(res?.items) ? res.items : [];
+  // Неформный 200 — не пустой список: пустой бэк говорит items:[]. Тело, не подходящее
+  // под форму, — ответ вне контракта (тот же порядок, что в analyzeWikiChat): вызывающий
+  // видит ошибку, а не тихую пустоту экрана отбора. Отказ 409 «файл разбора не читается»
+  // доходит сюда как WikiError с кодом wiki_triage_invalid.
+  if (!Array.isArray(res?.items)) throw new WikiError(0, null, 'неожиданный ответ списка отбора чатов');
+  return res.items;
 }
 
 // ─── Снимки и подписки ───
@@ -816,12 +850,8 @@ export function useWikiPage(sectionKey: string, pageKey: string): WikiPageDto | 
   const subscribeOpen = useCallback((fn: () => void) => {
     const off = subscribe(fn);
     if (!open) return off;
-    _openPages.set(key, (_openPages.get(key) ?? 0) + 1);
-    return () => {
-      const n = (_openPages.get(key) ?? 1) - 1;
-      if (n <= 0) _openPages.delete(key); else _openPages.set(key, n);
-      off();
-    };
+    retainOpenPage(key);
+    return () => { releaseOpenPage(key); off(); };
   }, [key, open]);
   const snapshot = () => (_page && _page.cacheKey === key ? _page.value : null);
   return useSyncExternalStore(subscribeOpen, snapshot, snapshot);
@@ -883,5 +913,13 @@ export const __test = {
     _treeGen = 0;
     _pageGen = 0;
     _catalogGen.clear();
+  },
+  // Тестовый шов: подписка экрана на страницу. Открытой страницу делает счётчик, который
+  // экран поднимает через useWikiPage, — те же операции retainOpenPage/releaseOpenPage;
+  // тесту не нужен React-рендер, а перечитка после мутации — ровно про этот открытый ключ.
+  openPage(sectionKey: string, pageKey: string): () => void {
+    const key = pageCacheKey(sectionKey, pageKey);
+    retainOpenPage(key);
+    return () => { releaseOpenPage(key); };
   },
 };

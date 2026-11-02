@@ -662,6 +662,180 @@ public class WikiRetractTests : IDisposable
             .Should().Equal("p-changed", "p-noapplied", "p-nopreimages");
     }
 
+    // ─── 12. W3-2: конкурентность, точные причины, охват карточки, AlreadyPages ────────────────
+
+    [Fact]
+    public async Task Retract_ДваОдновременныхОткатаОдногоИсточника_ЖурналНеДвоится_ОбаOk()
+    {
+        // Мутация «тело не перечитывает пакеты под блоком» (взять candidates из первого чтения
+        // и передать в тело): второй откат повторно откатывает уже «reverted» пакет — отказ
+        // wiki_revert_status и/или вторая строка журнала: Outcomes и HaveCount(1) краснеют.
+        await WriteCardAndPage();
+        var pkg = await Applied(WikiSections.Common, Op(WikiPackage.OpAppend, PagePath, ClaimA));
+
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holding = _keeper.WithSectionsLockedAsync(User, [WikiSections.Common],
+            async () => { started.SetResult(); await gate.Task; return true; });
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Вызовы идут напрямую, не через Task.Run: первое чтение каждого выполняется синхронно до
+        // ожидания замка, поэтому оба заведомо видят пакет и оба встают в очередь за держателем.
+        var t1 = _sut.RetractAsync(User, SourceRef);
+        var t2 = _sut.RetractAsync(User, SourceRef);
+        t1.IsCompleted.Should().BeFalse("раздел держит гейт");
+        t2.IsCompleted.Should().BeFalse("раздел держит гейт");
+        gate.SetResult();
+        await holding;
+        var r1 = await t1.WaitAsync(TimeSpan.FromSeconds(10));
+        var r2 = await t2.WaitAsync(TimeSpan.FromSeconds(10));
+
+        r1.Ok.Should().BeTrue(r1.Reason);
+        r2.Ok.Should().BeTrue(r2.Reason);
+        new[] { r1, r2 }.Count(r => r.Outcomes.Count == 1 && r.Outcomes[0].Reverted).Should().Be(1,
+            "пакет откатан ровно одним из двух вызовов");
+        new[] { r1, r2 }.Count(r => r.Outcomes.Count == 0).Should().Be(1,
+            "второй под блоком не находит применённых пакетов — исход пустой, не отказ");
+        ReadStatus(pkg.Id).Item1.Should().Be(WikiPackage.StatusReverted);
+        LogLines("revert").Should().HaveCount(1);
+        LogLines("retract").Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task Retract_ПакетПоявилсяВНовомРазделеПослеПервогоЧтения_РазделНеПропущен_ЗамокВзят()
+    {
+        // Мутация «набор замков по первому чтению, тело не сверяет разделы» (убрать missing в
+        // RetractBody): личный раздел откатывается без замка, пока его держит гейт — откат
+        // завершается за окно ожидания, TimeoutException не случается: ThrowsAsync краснеет.
+        await WriteCardAndPage();
+        var knowledge = await Applied(WikiSections.Common, Op(WikiPackage.OpAppend, PagePath, ClaimA));
+
+        var gateC = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var startedC = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holdingCommon = _keeper.WithSectionsLockedAsync(User, [WikiSections.Common],
+            async () => { startedC.SetResult(); await gateC.Task; return true; });
+        await startedC.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Первое чтение — синхронно до ожидания замка: набор разделов на этот момент — только common.
+        var retract = _sut.RetractAsync(User, SourceRef);
+        retract.IsCompleted.Should().BeFalse();
+
+        // Пока откат ждёт common, источник получает пакет в личном разделе — набор вырос.
+        var chronicle = await Applied(WikiSections.Personal, Op(WikiPackage.OpCreate, ChroniclePath, ClaimB));
+        var gateP = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var startedP = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holdingPersonal = _keeper.WithSectionsLockedAsync(User, [WikiSections.Personal],
+            async () => { startedP.SetResult(); await gateP.Task; return true; });
+        await startedP.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        gateC.SetResult();
+        await holdingCommon;
+        // Откат обязан взять и личный раздел, а он занят: пока гейт держит, откат не завершается
+        // и ни один пакет (включая common) не откатан — тело при нехватке замка ничего не трогает.
+        await Assert.ThrowsAsync<TimeoutException>(() => retract.WaitAsync(TimeSpan.FromMilliseconds(300)));
+        ReadStatus(knowledge.Id).Item1.Should().Be(WikiPackage.StatusApplied);
+        ReadStatus(chronicle.Id).Item1.Should().Be(WikiPackage.StatusApplied);
+
+        gateP.SetResult();
+        await holdingPersonal;
+        var r = await retract.WaitAsync(TimeSpan.FromSeconds(10));
+
+        r.Ok.Should().BeTrue(r.Reason);
+        r.Outcomes.Select(o => o.PackageId).Should().BeEquivalentTo([knowledge.Id, chronicle.Id]);
+        r.Outcomes.Should().OnlyContain(o => o.Reverted);
+        File.Exists(PageFull(ChroniclePath)).Should().BeFalse("раздел не пропущен: хроника снята");
+    }
+
+    [Fact]
+    public async Task Retract_ОтказЗаписиПосередине_ЧастичныйИсходCompleteFalse_ИсключенияНаружуНет()
+    {
+        // Мутация «исключение записи не ловить» (убрать try/catch вокруг WriteBytesAtomic):
+        // сбой уходит в RetractUnderLock и весь исход превращается в Ok=false без Unlinked —
+        // Ok и Unlinked краснеют. Сбой записи ставит каталог на место файла «состояния до снятия».
+        const string page2 = "Общее/Сущность-2.md";
+        await WriteCardAndPage();
+        await WriteViaKeeper(WikiSections.Common, page2, PageBaseFor("Сущность-2"));
+        var pkg = await Applied(WikiSections.Common,
+            Op(WikiPackage.OpAppend, page2, ClaimA),
+            Op(WikiPackage.OpAppend, PagePath, ClaimB));
+        // Пакет «до меры S4b-3»: побайтного отката нет — путь снятия сносок.
+        File.Delete(AppliedRecordOf(pkg.Id));
+        Directory.CreateDirectory(RetractStateOf(pkg.Id, PagePath));
+        var blockedBefore = File.ReadAllBytes(PageFull(PagePath));
+
+        var r = await _sut.RetractAsync(User, SourceRef);
+
+        r.Ok.Should().BeTrue(r.Reason, "отказ записи — частичный исход, не отказ операции");
+        var u = r.Unlinked.Should().ContainSingle().Which;
+        u.Complete.Should().BeFalse("одна страница не обработана");
+        u.Pages.Should().Equal([page2], "фактически переписана только вторая страница");
+        r.Failed.Should().ContainSingle().Which.Should().Contain(pkg.Id).And.Contain(PagePath)
+            .And.Contain("запись страницы не удалась");
+        File.ReadAllBytes(PageFull(PagePath)).Should().Equal(blockedBefore, "необработанная страница не тронута");
+        ReadStatus(pkg.Id).Item1.Should().Be(WikiPackage.StatusApplied);
+        r.NeedsUnlink.Select(o => o.PackageId).Should().Equal(pkg.Id);
+        LogLines("retract").Should().ContainSingle().Which.Should().Contain(page2).And.NotContain(PagePath);
+    }
+
+    [Fact]
+    public async Task Retract_КарточкаСДиапазономДругойЧасти_ПакетХранитГолыйId_СноскаСнимается()
+    {
+        // Мутация «сверка карточки по голому id» (вернуть RefMatches(cardRef, IdPartOf(...)) без
+        // префикса origin): карточка «session:chat-A#m1-9» не совпадает с запросом «…#m3-5» —
+        // страница прошла бы как «след другого источника», сноска осталась бы: NotContain("[^") и
+        // Unlinked.Pages краснеют, пакет ушёл бы в reverted со сноской на снятый источник.
+        await WriteCardAndPage();
+        var pkg = await Applied(WikiSections.Common, ChatId, Op(WikiPackage.OpAppend, PagePath, ClaimA));
+        File.Delete(AppliedRecordOf(pkg.Id));
+
+        var r = await _sut.RetractAsync(User, SourceRef + "#m3-5");
+
+        r.Ok.Should().BeTrue(r.Reason);
+        r.Unlinked.Should().ContainSingle().Which.Pages.Should().Equal(PagePath);
+        File.ReadAllText(PageFull(PagePath)).Should().NotContain("[^");
+        ReadStatus(pkg.Id).Item1.Should().Be(WikiPackage.StatusReverted);
+    }
+
+    [Fact]
+    public async Task Retract_ЦельСноскиНеОпознана_ПричинаНазываетСноскуИЦель_ПакетОстаётсяApplied()
+    {
+        // Мутация «неопознанную сноску считать обработанной» ловит и соседний набор; здесь
+        // держится точная формулировка причины: «сноска с неопознанной целью: s1 → «…»».
+        await WriteCardAndPage();
+        var pkg = await Applied(WikiSections.Common, Op(WikiPackage.OpAppend, PagePath, ClaimA));
+        File.Delete(AppliedRecordOf(pkg.Id));
+        File.Delete(PageFull(CardPath));
+        var before = File.ReadAllBytes(PageFull(PagePath));
+
+        var r = await _sut.RetractAsync(User, SourceRef);
+
+        r.Ok.Should().BeTrue(r.Reason);
+        r.Failed.Should().ContainSingle().Which.Should()
+            .Contain("сноска с неопознанной целью: s1 → «" + CardTitle + "»").And.Contain("не опознан");
+        File.ReadAllBytes(PageFull(PagePath)).Should().Equal(before);
+        ReadStatus(pkg.Id).Item1.Should().Be(WikiPackage.StatusApplied);
+    }
+
+    [Fact]
+    public async Task Retract_СтраницуСнеслиВнеХранителя_УжеВозвращённое_ВAlreadyPagesИсхода()
+    {
+        // Мутация «не пробрасывать AlreadyPages» (не передавать r.AlreadyPages в PackageOutcome):
+        // Equal краснеет — исход назвал бы страницу возвращённой этим откатом (хвост R-W3-3).
+        const string newPage = "Общее/Новое-знание.md";
+        await WriteCardAndPage();
+        var pkg = await Applied(WikiSections.Common, Op(WikiPackage.OpCreate, newPage, ClaimB));
+        File.Delete(PageFull(newPage));
+
+        var r = await _sut.RetractAsync(User, SourceRef);
+
+        r.Ok.Should().BeTrue(r.Reason);
+        var o = r.Outcomes.Should().ContainSingle().Which;
+        o.Reverted.Should().BeTrue();
+        o.PackageId.Should().Be(pkg.Id);
+        o.AlreadyPages.Should().Equal([newPage]);
+        o.RestoredPages.Should().Contain(newPage);
+    }
+
     // ─── Помощники ────────────────────────────────────────────────────────────────────────────
 
     private string AppliedRecordOf(string packageId) =>

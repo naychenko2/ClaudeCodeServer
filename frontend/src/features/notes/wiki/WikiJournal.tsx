@@ -31,15 +31,14 @@ import { EmptyState } from '../../../components/ui/EmptyState';
 import { Notice } from '../../../components/ui/Notice';
 import { Select } from '../../../components/ui/Select';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
-import { countWord } from '../WikiChatActions';
-import { ORIGIN_META } from './WikiInbox';
-import { sectionPrefix, wikiErrorText } from './wikiLabels';
+import { ORIGIN_META, countWord, retractResultText, sectionPrefix, wikiErrorText } from './wikiLabels';
 
 // ─── Словари подписей ───
 
 // Событие журнала — что случилось (op — значения, которые бэк пишет в log.jsonl:
 // WikiApplyService / WikiPackageRevert / WikiRetractService / WikiKeeper). Неизвестный op
-// показан как есть: словарь не выдумывает смысл незнакомому слову.
+// получает нейтральную подпись: сырое слово бэка человеку ничего не говорит, а смысл
+// словарь незнакомому слову не выдумывает.
 const OP_TEXT: Record<string, string> = {
   apply: 'применено',
   revert: 'откатано',
@@ -47,6 +46,8 @@ const OP_TEXT: Record<string, string> = {
   relink: 'перелинкованы связи',
   adopt: 'принято как есть',
 };
+
+const UNKNOWN_OP_TEXT = 'другое событие';
 
 // Бейдж статуса/политики говорит только то, чего не говорит слово события: для применённой
 // записи — политику («через Входящие» — там был человек); откатанный после применения пакет
@@ -124,7 +125,7 @@ function entryChatId(e: WikiJournalEntryDto): string | null {
 }
 
 const originMeta = (e: WikiJournalEntryDto) => (e.origin ? ORIGIN_META[e.origin] : undefined);
-const opText = (e: WikiJournalEntryDto) => OP_TEXT[e.op] ?? e.op;
+const opText = (e: WikiJournalEntryDto) => OP_TEXT[e.op] ?? UNKNOWN_OP_TEXT;
 
 // Название записи: имя источника (название чата, заголовок заметки) — то, что человек узнаёт;
 // без имени (чужой или несуществующий чат, origin без имени) — карточка; записи без источника
@@ -315,16 +316,8 @@ export function WikiJournal() {
     try {
       const r = await retractWikiSource(sourceRef);
       setConfirm(null);
-      const parts = [
-        r.revertedPackages.length ? `${r.revertedPackages.length} пакетов откатано` : '',
-        r.unlinkedPackages.length ? `${r.unlinkedPackages.length} стр. очищено от сносок` : '',
-        r.removedChronicles.length ? `${r.removedChronicles.length} хроник снято` : '',
-        r.remainingPackages.length ? `${r.remainingPackages.length} пакетов остались (другой источник)` : '',
-        r.markedSkip ? 'источник помечен «не разбирать»' : '',
-      ].filter(Boolean);
-      const failed = r.failed.length ? ` Частично: ${r.failed.join('; ')}` : '';
       // ToastKind не имеет «warning»: частичный исход — это «error» с текстом частичности
-      showToast('Откат по источнику', `${parts.join(', ') || 'ничего не изменилось'}.${failed}`, r.failed.length ? 'error' : 'success');
+      showToast('Откат по источнику', retractResultText(r, 'источник'), r.failed.length ? 'error' : 'success');
       setOpened(null);
       load();
     } catch (e) {
@@ -410,7 +403,7 @@ export function WikiJournal() {
       {data.invalidLines > 0 && (
         <div style={{ padding: `${SP.sm}px ${SP.md}px 0` }}>
           <Notice tone="warning" icon={AlertTriangle} title={`Нечитаемых строк журнала: ${data.invalidLines}`}>
-            Они видны как сломанные и в журнал не берутся.
+            {`Число — по всему прочитанному окну (${data.linesRead} строк), а не по текущему фильтру. Такие строки в журнал не берутся.`}
           </Notice>
         </div>
       )}
@@ -442,11 +435,11 @@ export function WikiJournal() {
               </div>
             );
           })}
-          <div style={{ padding: `${SP.md}px ${SP.md}px 0`, fontSize: FS.xs, color: C.textMuted }}>
-            Окно журнала — последние события; откат — 90 дней, дальше прообразы стираются.
-          </div>
         </>
       )}
+      <div data-testid="wiki-journal-window" style={{ padding: `${SP.md}px ${SP.md}px 0`, fontSize: FS.xs, color: C.textMuted }}>
+        {`Окно журнала — последние ${data.take} строк, прочитано ${data.linesRead}; показано записей: ${entries.length}. Откат — 90 дней, дальше прообразы стираются.`}
+      </div>
       {confirmModal}
     </div>
   );

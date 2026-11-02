@@ -218,6 +218,8 @@ public class WikiController : ControllerBase
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
+        if (_flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) != true)
+            return StatusCode(409, new { code = CodeLlmWikiOff, message = "вики не заведена: функция выключена" });
 
         if (!string.IsNullOrWhiteSpace(req?.Section))
         {
@@ -294,6 +296,8 @@ public class WikiController : ControllerBase
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
+        if (_flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) != true)
+            return StatusCode(409, new { code = CodeLlmWikiOff, message = "заявка не принята: функция выключена" });
         if (req is null || string.IsNullOrWhiteSpace(req.NoteId))
             return BadRequest(new { code = CodeNoteId, message = "нужен id заметки" });
 

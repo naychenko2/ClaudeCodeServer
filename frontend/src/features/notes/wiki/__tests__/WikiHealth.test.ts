@@ -17,7 +17,13 @@
 //      «сообщение с точками внутри себя» краснеет;
 //  (3) снять проверку seq в загрузке → «запоздалый ответ» краснеет;
 //  (4) снять disabled={busy} у кнопки → «блокировка на время запроса» краснеет;
-//  (5) не сбрасывать report в начале load (доработка S5f) → «при смене раздела A→B…» краснеет.
+//  (5) не сбрасывать report в начале load (доработка S5f) → «при смене раздела A→B…» краснеет;
+//  (6) KIND_BY_LABEL — обычный объект с обращением по ключу (W4-4) → «чужая метка вида, в т. ч. имя
+//      из прототипа» краснеет;
+//  (7) 404 после прогона — в actionError (W4-4) → «404 после успешного прогона» краснеет;
+//  (8) не читать «## Не проверено» → «непроверенные страницы» краснеет;
+//  (9) убрать сверку total/строк → «Находки (N) не равны строкам» краснеет;
+//  (10) счёт без пояснения вида («счёт: N») → «счёт подписан по виду» краснеет.
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -168,7 +174,9 @@ describe('«Здоровье» раздела (S5f)', () => {
     expect(has(c, 'Проекты/p1/Тема.md')).toBe(true);
     expect(has(c, 'ссылка ведёт в пустоту')).toBe(true);
     expect(has(c, 'Проекты/p1/Другое.md')).toBe(true);
-    expect(has(c, 'счёт: 2')).toBe(true);
+    // счёт подписан по виду: у призрака это число ссылающихся страниц, не безымянное «2»
+    expect(has(c, 'ссылаются страниц: 2')).toBe(true);
+    expect(has(c, 'счёт: 2')).toBe(false);
     expect(has(c, 'ключ: owns/альфа')).toBe(true);
     // экранированный бэком backtick показывается как кавычка, а не как «\`»
     expect(has(c, 'имя `Альфа` названо без ссылки')).toBe(true);
@@ -216,7 +224,7 @@ describe('«Здоровье» раздела (S5f)', () => {
     const c = render();
     await settle();
     expect(has(c, 'Нет данных')).toBe(true);
-    expect(has(c, 'ещё не проверялся')).toBe(true);
+    expect(has(c, 'Отчёта по этому разделу ещё нет')).toBe(true);
     expect(rows(c)).toHaveLength(0);
     expect(nodeByTestId(c, 'wiki-health-run')).not.toBeNull();
   });
@@ -358,6 +366,144 @@ describe('«Здоровье» раздела (S5f)', () => {
     expect(has(c, 'Проверка этого раздела не завершилась')).toBe(true);
     expect(has(c, 'читатель раздела не ответил')).toBe(true);
     expect(has(c, 'Находок нет')).toBe(false);
+  });
+
+  it('чужая метка вида (в т. ч. имя из прототипа) — вид unknown, строка остаётся как есть', async () => {
+    const r = parseHealth([
+      '## Находки (3)',
+      '- constructor · страница `a.md` · странная',
+      '- toString · раздел · ещё',
+      '- ВидИзБудущего · страница `b.md` · новая',
+    ].join('\n'));
+    expect(r.findings.map(f => f.kind)).toEqual(['unknown', 'unknown', 'unknown']);
+    expect(r.findings.map(f => f.kindLabel)).toEqual(['constructor', 'toString', 'ВидИзБудущего']);
+    mockHealth(['## Находки (1)', '- constructor · страница `a.md` · странная'].join('\n'));
+    const c = render();
+    await settle();
+    expect(rows(c)).toHaveLength(1);
+    expect(has(c, 'constructor')).toBe(true);
+  });
+
+  it('«Находки (N)» не равны числу строк — предупреждение; равны — молчание', async () => {
+    mockHealth(HEALTH.replace('## Находки (10)', '## Находки (14)'));
+    const c = render();
+    await settle();
+    expect(nodeByTestId(c, 'wiki-health-mismatch')).not.toBeNull();
+    expect(has(c, 'указано находок: 14, в списке строк: 10')).toBe(true);
+  });
+
+  it('число в шапке сходится со строками — предупреждения нет', async () => {
+    mockHealth(HEALTH);
+    const c = render();
+    await settle();
+    expect(nodeByTestId(c, 'wiki-health-mismatch')).toBeNull();
+  });
+
+  it('счёт подписан по виду: дни у «без изменений», расстояние у дубля, у упоминания (всегда 1) — скрыт', () => {
+    const r = parseHealth([
+      '## Находки (3)',
+      '- без изменений · страница `a.md` · 120 дн. · счёт: 120',
+      '- почти дубль · раздел · близкие заголовки · связанные: `a.md`, `b.md` · счёт: 2',
+      '- упоминание без ссылки · страница `c.md` · м · связанные: `d.md` · ключ: `Д` · счёт: 1',
+    ].join('\n'));
+    expect(r.findings.map(f => f.count)).toEqual([120, 2, 1]);
+  });
+
+  it('счёт подписан по виду на экране', async () => {
+    mockHealth([
+      '## Находки (3)',
+      '- без изменений · страница `a.md` · давно · счёт: 120',
+      '- почти дубль · раздел · близко · счёт: 2',
+      '- упоминание без ссылки · страница `c.md` · м · счёт: 1',
+    ].join('\n'));
+    const c = render();
+    await settle();
+    expect(has(c, 'дней без изменений: 120')).toBe(true);
+    expect(has(c, 'различий в заголовках: 2')).toBe(true);
+    // у упоминания счёт всегда 1 — ничего не добавляет, не показан вовсе
+    expect(has(c, 'счёт: 1')).toBe(false);
+    expect(has(c, 'страниц: 1')).toBe(false);
+  });
+
+  it('404 после успешного прогона — «Нет данных», а не отказ проверки', async () => {
+    mockHealth(HEALTH);
+    const c = render();
+    await settle();
+    req.mockImplementation((url: string, init?: { method?: string }) => {
+      if (init?.method === 'POST') return Promise.resolve({ ran: true, sectionsOk: 1, sectionsFailed: 0 });
+      if (url.startsWith('/wiki/health/')) return Promise.reject({ status: 404, body: undefined });
+      return Promise.resolve(null);
+    });
+    clickButton(c, 'wiki-health-run');
+    await settle();
+    expect(has(c, 'Нет данных')).toBe(true);
+    expect(has(c, 'Не удалось начать проверку')).toBe(false);
+    expect(has(c, 'Не найдено')).toBe(false);
+    expect(rows(c)).toHaveLength(0);
+  });
+
+  it('404 самого прогона — по-прежнему отказ, прежний отчёт не затёрт', async () => {
+    mockHealth(HEALTH);
+    const c = render();
+    await settle();
+    req.mockImplementation((url: string, init?: { method?: string }) => {
+      if (init?.method === 'POST') return Promise.reject({ status: 404, body: undefined });
+      return Promise.resolve({ section: 'projects/p1', content: HEALTH });
+    });
+    clickButton(c, 'wiki-health-run');
+    await settle();
+    expect(has(c, 'Нет данных')).toBe(false);
+    expect(rows(c)).toHaveLength(10);
+  });
+
+  it('непроверенные страницы («## Не проверено») названы; «Находок нет» не пишется', async () => {
+    const content = [
+      '# Здоровье раздела «projects/p1»',
+      '',
+      'Проверено: 2026-10-31T03:00:00.0000000+00:00. Код: v1.',
+      '',
+      '## Находки (0)',
+      '',
+      '## Не проверено',
+      '- страниц без фактов (находки «нет источников» и «без изменений» их не видят): 7',
+    ].join('\n');
+    expect(parseHealth(content).unchecked).toBe(7);
+    mockHealth(content);
+    const c = render();
+    await settle();
+    expect(nodeByTestId(c, 'wiki-health-unchecked')).not.toBeNull();
+    expect(has(c, 'Не проверено страниц без фактов: 7')).toBe(true);
+    expect(has(c, 'Среди проверенных страниц находок нет')).toBe(true);
+    expect(has(c, 'ничего не нашла')).toBe(false);
+    expect(has(c, 'Находок нет')).toBe(false);
+  });
+
+  it('нет непроверенных страниц — прежнее «Находок нет»', async () => {
+    mockHealth('## Находки (0)\n');
+    const c = render();
+    await settle();
+    expect(parseHealth('## Находки (0)\n').unchecked).toBeNull();
+    expect(has(c, 'Находок нет')).toBe(true);
+    expect(nodeByTestId(c, 'wiki-health-unchecked')).toBeNull();
+  });
+
+  it('плашка отказа не тащит за собой пустые счётчики и «динамику»', async () => {
+    mockHealth(['## Находки (0)', '', '## Отказ', '- читатель раздела не ответил'].join('\n'));
+    const c = render();
+    await settle();
+    expect(has(c, 'Проверка этого раздела не завершилась')).toBe(true);
+    expect(nodeByTestId(c, 'wiki-health-counters')).toBeNull();
+    expect(has(c, 'Динамика метрик')).toBe(false);
+  });
+
+  it('«нет данных» говорит, что проверка идёт по всей вики', async () => {
+    req.mockImplementation((url: string) => {
+      if (url.startsWith('/wiki/health/')) return Promise.reject({ status: 404, body: undefined });
+      return Promise.resolve(null);
+    });
+    const c = render();
+    await settle();
+    expect(has(c, 'проверяет всю вики')).toBe(true);
   });
 
   it('разбор отчёта: строка «Проверено:» без хвоста «Код:», число из шапки, все строки находок', () => {

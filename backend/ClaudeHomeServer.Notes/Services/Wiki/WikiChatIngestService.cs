@@ -23,7 +23,9 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // префикс родителя в разбор ветки не попадает и заново не разбирается (S6e-3,
 // «родитель отвечает за префикс»). Хроника продолжения дополнительно несёт ссылку на
 // хронику прежнего чата (§12б этап 3): цель — её заголовок на диске, путь к прежней
-// хронике — только ChroniclePath (ContinuationLinkLine).
+// хронике — только ChroniclePath (ContinuationLinkLine). Досчёта ссылки нет (W3-6,
+// dc2b724a п.3): если продолжение разобрано раньше, чем у прежнего чата есть хроника,
+// ссылка в него не придёт — следующий разбор закрытой курсором дельты не делает.
 //
 // Курсор (§12б этап 1): из записи стора «разобрано до m{N}» + хэш записи N. Хэш не
 // сошёлся (история переписана) — курсор в 0, повторные утверждения гасит дедup (S4d),
@@ -70,9 +72,10 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // REST-вход (S7b0a): контроллер зовёт только AnalyzeAsync/IsRunning/GetLast. Отличительная
 // часть контракта — машинный код отказа (ChatResult.Code), текст причины — человеку и модели.
 // Последний исход на чат (ключ owner|session, потолок 200, с временем окончания) и признак
-// «разбор идёт» живут в памяти этого экземпляра (single-flight — singleton DI): записываются
-// под тем же блоком, что и снятие in-flight, исход — раньше снятия: «не идёт» обязано
-// означать «last свежий». Формула пути хроники — одна здесь (ChroniclePath): список чатов
+// «разбор идёт» живут в памяти этого экземпляра (single-flight — singleton DI): последний
+// исход записывается единообразно (F3) — предпрогонный отказ в момент отказа, исход прогона
+// под тем же блоком, что и снятие in-flight, раньше снятия: «не идёт» обязано означать
+// «last свежий». Формула пути хроники — одна здесь (ChroniclePath): список чатов
 // берёт её отсюда, а не копированием построения.
 public sealed class WikiChatIngestService
 {
@@ -126,9 +129,13 @@ public sealed class WikiChatIngestService
     private readonly Dictionary<string, Task<ChatResult>> _inFlight = new();
 
     /// <summary>Последний исход на чат: ключ owner|session — без дома: статус спрашивают
-    /// про чат, а не про раздел разбора; чужой владелец ключа не видит. Потолок 200 записей:
-    /// это память, не диск; при переполнении снимается самый старый по времени окончания —
-    /// статусу нужен последний, а не история.</summary>
+    /// про чат, а не про раздел разбора; чужой владелец ключа не видит. Записывается любой
+    /// исход заявки единообразно (F3, хвосты ревью): предпрогонный отказ (вход, ступень 0,
+    /// not_found) — в момент отказа, исход прогона — под тем же блоком, что и снятие
+    /// in-flight: «анализировать» и «last» описывают одно и то же состояние. Без владельца
+    /// или id ключа нет — такой отказ не записывается. Потолок 200 записей: это память,
+    /// не диск; при переполнении снимается самый старый по времени окончания — статусу
+    /// нужен последний, а не история.</summary>
     private readonly Dictionary<string, LastAnalysis> _last = new();
     private const int LastCap = 200;
 
@@ -149,37 +156,54 @@ public sealed class WikiChatIngestService
     /// передаётся общему прогону (см. шапку). Исключения наружу нет.</summary>
     public Task<ChatResult> AnalyzeAsync(string ownerId, string sessionId, CancellationToken ct = default)
     {
+        // F3 (хвосты ревью): отказ заявки — тоже последний исход, он записывается в тот же
+        // last, что и исход прогона: «анализировать» и «last» описывают одно состояние.
+        // Без владельца или id ключа нет — такой отказ не записывается (его и спросить нечем).
+        Task<ChatResult> RefusedRecorded(string? code, string reason)
+        {
+            var res = Refused(code, reason);
+            if (!string.IsNullOrEmpty(ownerId) && !string.IsNullOrEmpty(sessionId))
+                RecordLast(ownerId, sessionId, res);
+            return Task.FromResult(res);
+        }
+
         // Fail-closed входа: кривая заявка не доходит ни до очереди, ни до модели.
         // Кодов у этих отказов нет: REST-контракт называет коды только для состояний,
         // которые различает фронт (not_found, ступень 0, незаведённая вики); ошибка
         // вызова — не состояние, она остаётся rejected без кода.
         if (string.IsNullOrWhiteSpace(ownerId))
-            return Task.FromResult(Refused(null, "владелец пустой"));
+            return RefusedRecorded(null, "владелец пустой");
         if (string.IsNullOrWhiteSpace(sessionId))
-            return Task.FromResult(Refused(null, "id чата пустой"));
+            return RefusedRecorded(null, "id чата пустой");
         // Id чата должен быть представим в ref источника (тот же класс, что проверяет
         // захват): id с спецсимволами не даст ни карточки, ни курсора в сторе.
         if (!IsSessionIdSafe(sessionId))
-            return Task.FromResult(Refused(null, $"id чата '{sessionId}' не представим в ссылке источника"));
+            return RefusedRecorded(null, $"id чата '{sessionId}' не представим в ссылке источника");
 
+        // Чужой и несуществующий — одно слово на двоих (F1, хвосты ревью): формулировка
+        // «чужой» выдавала бы существование чужого чата — та самая утечка, которой здесь
+        // нет; различить их может только владелец (он их и не различает).
         var session = _sessions.GetById(sessionId);
-        if (session is null)
-            return Task.FromResult(Refused(CodeNotFound, "чат не существует"));
-        if (_sessions.ResolveOwnerId(session) != ownerId)
-            return Task.FromResult(Refused(CodeNotFound, "чат принадлежит другому владельцу: разбор — per-owner"));
+        if (session is null || _sessions.ResolveOwnerId(session) != ownerId)
+            return RefusedRecorded(CodeNotFound, "чат не существует");
 
         // Ступень 0 (ADR-035 §12а) — исключения кода до обращения к модели.
         if (session.TaskExecution)
-            return Task.FromResult(Refused(CodeTaskExecution, "чаты исполнения задач не разбираются: их итоги уже источники"));
+            return RefusedRecorded(CodeTaskExecution, "чаты исполнения задач не разбираются: их итоги уже источники");
         if (session.WikiMark == WikiMarks.Skip)
-            return Task.FromResult(Refused(CodeMarkedSkip, "чат помечен человеком «не разбирать»"));
+            return RefusedRecorded(CodeMarkedSkip, "чат помечен человеком «не разбирать»");
 
         // Раздел назначения — дом чата (ADR-036, решение 3). Личный раздел закрыт до Ф2 —
         // тот же отказ, что у очереди заявок (S6b-3), только до чтения истории.
         var home = HomeOf(session);
         if (home == WikiSections.Personal)
-            return Task.FromResult(Refused(CodePersonalSection, "личный раздел — с Ф2"));
+            return RefusedRecorded(CodePersonalSection, "личный раздел — с Ф2");
 
+        // F4 (хвосты ревью): разделитель ключа не экранируется — ни одна часть не содержит
+        // '|': sessionId проверяется guard'ом выше (IsSessionIdSafe), id пользователя и
+        // проекта генерируются Guid (Core/Models/User.cs:8, Core/Models/Project.cs:34),
+        // home построен формулой HomeOf по этим id. Коллизия ключа невозможна; префиксный
+        // обход IsRunning опирается на это же.
         var key = ownerId + "|" + sessionId + "|" + home;
         // Заявка регистрируется ДО начала прогона и сам прогон идёт вне вызывающего
         // (Task.Run): иначе опоздавшая заяка пришла бы в очередь до регистрации и
@@ -193,23 +217,44 @@ public sealed class WikiChatIngestService
         }
         _ = Task.Run(async () =>
         {
-            var result = await RunProtectedAsync(ownerId, sessionId, home, session);
-            // Снятие записи ПРЕДШЕСТВУЕТ выдаче результата: заявка, пришедшая сразу
-            // после завершения разбора, не должна получить его старый результат через
-            // неубранную запись — она начинает новый разбор (или слышит «новых сообщений
-            // нет»). Порядок «TrySetResult → сняние» давал это в полном прогоне тестов:
-            // опоздавшая заявка присоединялась к уже завершённой задаче.
-            lock (_inFlightLock)
+            ChatResult result;
+            try
+            {
+                result = await RunProtectedAsync(ownerId, sessionId, home, session);
+            }
+            catch (Exception)
+            {
+                // F2 (хвосты ревью): защищённый прогон не смог отдать исход — guard не
+                // справился сам (оформление причины). Исход — отказ без причины: заявка
+                // не висит, исключения наружу нет, e.Message вторично не оформляется.
+                result = Refused(null, "разбор чата не завершился");
+            }
+            try
             {
                 // Исход пишется раньше снятия in-flight (S7b0a): analyze-status не должен
                 // показать «не идёт» со старым last — законченный разбор фиксируется до
                 // того, как чат станет «не идущим».
-                _last[ownerId + "|" + sessionId] = new LastAnalysis(result, DateTimeOffset.UtcNow);
-                TrimLastLocked();
-                if (_inFlight.TryGetValue(key, out var current) && ReferenceEquals(current, tcs.Task))
-                    _inFlight.Remove(key);
+                lock (_inFlightLock)
+                {
+                    _last[ownerId + "|" + sessionId] = new LastAnalysis(result, DateTimeOffset.UtcNow);
+                    TrimLastLocked();
+                }
             }
-            tcs.TrySetResult(result);
+            finally
+            {
+                // F2: сняние — безусловно, в finally, и раньше выдачи результата:
+                // исключение между прогоном и снянием оставляло запись навсегда — все
+                // заявки по ключу висели на незавершённой задаче (вечный 202), а порядок
+                // «сняние → выдача» нужен, чтобы опоздавшая заявка начинала новый разбор,
+                // а не получала старый результат через неубранную запись (урок S6b-3).
+                // Проверка ReferenceEquals: чужая заявка (свой ключ) не снимается.
+                lock (_inFlightLock)
+                {
+                    if (_inFlight.TryGetValue(key, out var current) && ReferenceEquals(current, tcs.Task))
+                        _inFlight.Remove(key);
+                }
+                tcs.TrySetResult(result);
+            }
         });
         return tcs.Task;
     }
@@ -239,6 +284,17 @@ public sealed class WikiChatIngestService
             return null;
         lock (_inFlightLock)
             return _last.TryGetValue(ownerId + "|" + sessionId, out var last) ? last : null;
+    }
+
+    /// <summary>Записать последний исход вне прогона (предпрогонный отказ, F3): тот же
+    /// ключ и тот же потолок, что у записи прогона.</summary>
+    private void RecordLast(string ownerId, string sessionId, ChatResult result)
+    {
+        lock (_inFlightLock)
+        {
+            _last[ownerId + "|" + sessionId] = new LastAnalysis(result, DateTimeOffset.UtcNow);
+            TrimLastLocked();
+        }
     }
 
     private void TrimLastLocked()
@@ -481,11 +537,17 @@ public sealed class WikiChatIngestService
                     sections.Add(new() { Name = s.Name, Lines = [.. s.Lines, .. statements] });
                     continue;
                 }
-                // Ссылка прежней хроники дописывается идемпотентно: она уже в «О чём» —
-                // строка та же, дубль не плодится.
-                if (s.Name == "О чём" && linkLine is not null && !s.Lines.Contains(linkLine))
+                // Ссылка прежней хроники — одна (dc2b724a п.4): своей строкой заменяется
+                // любая прежняя строка-ссылка по префиксу ContinuationLinkPrefix — при
+                // переразборе строка остаётся одна, а при смене заголовка прежней хроники
+                // старая ссылка (тот же префикс, другая цель) заменяется, а не дописывается
+                // вторым рядом.
+                if (s.Name == "О чём" && linkLine is not null)
                 {
-                    sections.Add(new() { Name = s.Name, Lines = [.. s.Lines, linkLine] });
+                    var lines = s.Lines.Where(l => !l.StartsWith(ContinuationLinkPrefix, StringComparison.Ordinal)).ToList();
+                    if (!lines.Contains(linkLine))
+                        lines.Add(linkLine);
+                    sections.Add(new() { Name = s.Name, Lines = lines });
                     continue;
                 }
                 sections.Add(s);
@@ -508,9 +570,10 @@ public sealed class WikiChatIngestService
     }
 
     /// <summary>Дом чата — раздел назначения (ADR-036, решение 3): проект → его раздел,
-    /// иначе личный. Одна формула на весь сервис: её же спрашивает ссылка хроники
-    /// продолжения (ContinuationLinkLine), чтобы не второй рубеж разбора дома.</summary>
-    private static string HomeOf(Session session) =>
+    /// иначе личный. Одна формула на весь продукт: её же спрашивают ссылка хроники
+    /// продолжения (ContinuationLinkLine) и список чатов (WikiChatsController.List),
+    /// чтобы не второго рубежа построения дома (N1).</summary>
+    public static string HomeOf(Session session) =>
         session.ProjectId is { Length: > 0 } projectId
             ? WikiSections.ProjectsPrefix + projectId
             : WikiSections.Personal;
@@ -526,7 +589,10 @@ public sealed class WikiChatIngestService
     /// диске (ссылка резолвится по заголовку, WikiGate.cs:320). Только свой раздел:
     /// ссылка вбок — нарушение ADR-036, решение 4. Прежнего чата нет, он чужого
     /// владельца, его хроника не написана или не читается — ссылки нет: битая ссылка
-    /// хуже отсутствующей, и её отсутствие — не отказ разбора.</summary>
+    /// хуже отсутствующей, и её отсутствие — не отказ разбора. В хронике строка одна:
+    /// при смене заголовка прежней хроники старая строка заменяется по префиксу
+    /// ContinuationLinkPrefix (W3-6, dc2b724a п.4), а не дописывается второй раз —
+    /// одна ссылка на прежний чат, прежняя формулировка не остаётся.</summary>
     private string? ContinuationLinkLine(string ownerId, string home, Session session)
     {
         if (session.ContinuedFromSessionId is not { Length: > 0 } prevId)

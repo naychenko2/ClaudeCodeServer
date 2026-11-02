@@ -57,7 +57,9 @@ public sealed class NotesToolset(
     WikiChatIngestService? wikiChat = null,
     ISessionDirectory? sessionsDir = null,
     ISphereDirectory? spheres = null,
-    IProjectManager? projects = null) : IMcpParameterizedToolset
+    IProjectManager? projects = null,
+    // Шов флага llm-wiki — та же опциональная зависимость, что у WikiLintService: нет шва — выключено.
+    IFeatureFlagGate? flags = null) : IMcpParameterizedToolset
 {
     // Корень data — для признака заведённой вики (WikiPaths) и корня чтения её разделов.
     // Та же формула, что у всех сервисов вертикали (DataPath указывает на projects.json).
@@ -410,6 +412,12 @@ public sealed class NotesToolset(
             {
                 var date = notesSvc.GetOrCreateDaily(context.OwnerId, OptionalArg(arguments, "date"));
                 await BroadcastAsync(context.OwnerId, "updated", date.Id);
+                // Текст дневника — обычная заметка, он не сужается (решение 6); но его структурные
+                // ссылки на страницы — системная проекция целей: тот же RedactHiddenWikiLinks, что в
+                // notes_read/notes_resolve (M3; W3-7): по targetId скрытой страницы доставалась вся
+                // её страница, а targetTitle называл заголовок невидимого раздела.
+                var visible = VisibleSet(context.OwnerId, session, persona);
+                var index = IndexByIds(notesSvc, context.OwnerId);
                 // Дописывание не поддержано эндпоинтом — делаем сами (как stdio): читаем
                 // текущий текст и PUT-им склейку
                 var append = StringArg(arguments, "content");
@@ -419,9 +427,9 @@ public sealed class NotesToolset(
                         ? date.Content.TrimEnd() + "\n\n" + append
                         : append;
                     var updated = notesSvc.Update(context.OwnerId, date.Id, new UpdateNoteRequest(Content: merged));
-                    if (updated is not null) return Json(updated);
+                    if (updated is not null) return Json(RedactHiddenWikiLinks(updated, index, visible));
                 }
-                return Json(date);
+                return Json(RedactHiddenWikiLinks(date, index, visible));
             }
 
             case "notes_resolve":
@@ -765,11 +773,19 @@ public sealed class NotesToolset(
         && !value.Any(char.IsControl)
         && !value.Contains("..", StringComparison.Ordinal);
 
+    // Входы с расходом модели и записью заявки гейтятся флагом llm-wiki (читающие wiki_query/wiki_status — нет).
+    // Флаг читается в момент вызова; проверка идёт до любой записи. Состав tools/list не зависит от флага.
+    private bool IsLlmWikiOn(string ownerId) =>
+        flags?.IsEnabled(ownerId, FeatureFlagKeys.LlmWiki) == true;
+
+    private const string WikiFlagOffText = "Функция выключена: включите «LLM-вики» в экспериментальных функциях.";
+
     private async Task<McpToolCallResult> WikiIngestCallAsync(
         JsonObject arguments, string ownerId, Session chat, CancellationToken ct)
     {
         try
         {
+            if (!IsLlmWikiOn(ownerId)) return Deny(WikiFlagOffText);
             if (wikiIngest is null || wikiCapture is null || wikiChat is null)
                 return Deny("Горизонталь вики не собрана (подсистема Notes отключена).");
             if (WikiRootOrRefusal(ownerId, out var root) is { } notReady) return Deny(notReady);
@@ -897,6 +913,7 @@ public sealed class NotesToolset(
     {
         try
         {
+            if (!IsLlmWikiOn(ownerId)) return Deny(WikiFlagOffText);
             if (wikiIngest is null || wikiCapture is null)
                 return Deny("Горизонталь вики не собрана (подсистема Notes отключена).");
             if (WikiRootOrRefusal(ownerId, out var root) is { } notReady) return Deny(notReady);

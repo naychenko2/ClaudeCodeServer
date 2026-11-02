@@ -587,3 +587,88 @@ describe('Вкладка «Вики»: гонка открытия страни�
     expect(findNodeByAttr(container, 'data-testid', 'wiki-error')).toBeNull();
   });
 });
+
+// ─── S5b-дельта (W4-2): осознанное закрытие страницы ───
+// закрытие (смена раздела / «Назад» страницы) поднимает поколение openSeq: поздний отказ
+// запроса закрытой страницы не относится к новому состоянию и не пишет actionError.
+// Мутации этого прогона (вывод — в отчёте задачи):
+// (1) selectSection закрывает страницу без поднятия gen → «смена раздела» краснеет;
+// (2) «Назад» страницы зовёт setOpenPage мимо closePage → «Назад страницы» краснеет.
+
+const PAGE_A_TEXT = `---
+type: topic
+status: active
+updated: 2026-10-28
+---
+
+# Страница A
+
+## Сводка
+- Содержание страницы A.
+`;
+
+describe('Вкладка «Вики»: осознанное закрытие страницы (S5b-дельта, W4-2)', () => {
+  it('закрытие сменой раздела: поздний отказ закрытой страницы не пишет ошибку в каталог нового раздела', async () => {
+    let rejectA: (e: unknown) => void = () => {};
+    const pendingA = new Promise<unknown>((_, rej) => { rejectA = rej; });
+    req.mockImplementation((url: string) => {
+      if (url.startsWith('/wiki/tree')) return Promise.resolve(TREE);
+      if (url.startsWith('/wiki/page?')) return pendingA;
+      if (url.startsWith('/wiki/section')) {
+        return Promise.resolve(url.includes('section=common') ? CATALOG_COMMON : CATALOG_A);
+      }
+      return Promise.resolve(null);
+    });
+    installFakeDom();
+    const { root, container } = mount(createElement(WikiTab));
+    roots.push(root);
+    await settle();
+    // страница A открыта и ещё читается
+    clickPageRow(container, 'Страница A');
+    await settle();
+    // пользователь осознанно уходит в «Общее»: страница закрыта, её запрос ещё идёт
+    clickSectionRow(container, 'Общее');
+    await settle();
+    expect(has(container, 'Страница B')).toBe(true); // каталог нового раздела жив
+    // поздний отказ A: страница закрыта осознанно — отказ не относится к этому состоянию
+    rejectA({ status: 404 });
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-error')).toBeNull();
+    expect(has(container, 'Страница B')).toBe(true);
+  });
+
+  it('за кнопкой «Назад» страницы: поздний отказ перечитки не показывается над каталогом', async () => {
+    let rejectSecond: (e: unknown) => void = () => {};
+    let pageCalls = 0;
+    req.mockImplementation((url: string) => {
+      if (url.startsWith('/wiki/tree')) return Promise.resolve(TREE);
+      if (url.startsWith('/wiki/section')) return Promise.resolve(CATALOG_A);
+      if (url.startsWith('/wiki/page?')) {
+        pageCalls += 1;
+        if (pageCalls === 1) return Promise.resolve({ pageKey: 'page-a', content: PAGE_A_TEXT, drift: false });
+        return new Promise<unknown>((_, rej) => { rejectSecond = rej; });
+      }
+      return Promise.resolve(null);
+    });
+    installFakeDom();
+    const { root, container } = mount(createElement(WikiTab));
+    roots.push(root);
+    await settle();
+    clickPageRow(container, 'Страница A');
+    await settle();
+    expect(has(container, 'Содержание страницы A')).toBe(true); // страница открыта
+    clickTestId(container, 'wiki-page-back'); // «Назад» — осознанное закрытие, возврат к каталогу
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-page-back')).toBeNull();
+    // открытие заново: пока идёт перечитка, страница показана из снимка стора — запрос в пути
+    clickPageRow(container, 'Страница A');
+    await settle();
+    expect(has(container, 'Содержание страницы A')).toBe(true);
+    clickTestId(container, 'wiki-page-back'); // осознанно закрыть снова, пока запрос идёт
+    await settle();
+    rejectSecond({ status: 404 });
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-error')).toBeNull();
+    expect(has(container, 'Содержание страницы A')).toBe(false); // остались в каталоге
+  });
+});

@@ -31,8 +31,9 @@ import { DiffView } from '../../../components/DiffView';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 // Цикл импорта WikiInbox ↔ WikiPackageView: словари читаются в рендере, не при сборке
 // модуля, — к тому времени оба уже вычислены
-import { ORIGIN_META, pendingContested, pkgErrorText } from './WikiInbox';
+import { pendingContested, pkgErrorText } from './WikiInbox';
 import { sectionPrefix } from './WikiTab';
+import { ORIGIN_META } from './wikiLabels';
 
 // op — пять, удаления нет (WikiPackage.OpValues)
 const OP_META: Record<string, { text: string; tone: BadgeTone }> = {

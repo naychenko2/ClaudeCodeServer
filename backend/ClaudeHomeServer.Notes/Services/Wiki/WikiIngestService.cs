@@ -55,7 +55,10 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // - заявки одного раздела стоят в очереди (semaphore по ключу раздела): вторая читает
 //   состояние раздела после того, как первая завершила свой цикл, а не посреди её записи;
 // - применение под теми же блокировками, что у остальной вики (внутри ApplyAsync);
-// - необработанных исключений наружу нет: сбой внутри прогона — исход rejected с причиной.
+// - необработанных исключений наружу нет: сбой внутри прогона — исход rejected с причиной;
+// - сбой вне контракта ApplyAsync на авто-пути — тот же результат-отказ с кодом, и «applying»
+//   закрывается переходом в «apply_failed», а не висит до сторожа старта (W3-1, как CrashedApply
+//   пути решения человека).
 public sealed class WikiIngestService
 {
     /// <summary>Исходы заявки. applied — пакет применён; awaiting_human — пакет создан,
@@ -362,18 +365,61 @@ public sealed class WikiIngestService
             if (!accepted.Ok)
                 return Rejected($"пакет не переведён в «accepted»: {accepted.Reason ?? accepted.Code}");
 
-            var applied = await _apply.ApplyAsync(
-                ownerId, created.Package,
-                new WikiApplyService.ApplyContext(cardTitle, request.SourceText));
-            if (!applied.Applied)
-                return WithSectionIssues(
-                    Rejected($"применение пакета не удалось: {applied.Reason ?? applied.Code}"), verdict);
-            return WithSectionIssues(new IngestResult(OutcomeApplied, null, created.Package.Id), verdict);
+            return WithSectionIssues(
+                await ApplyAutoAsync(ownerId, root, created.Package,
+                    new WikiApplyService.ApplyContext(cardTitle, request.SourceText)), verdict);
         }
         finally
         {
             gate.Release();
         }
+    }
+
+    // ── применение на авто-пути ───────────────────────────────────────────────────────
+
+    /// <summary>Применить принятый пакет (все операции auto). Контракт — тот же, что у пути
+    /// решения человека (AfterDecision/CrashedApply в WikiPackagesController): сбой вне
+    /// контракта ApplyResult — исключение из WithSectionsLockedAsync или Root (единственные
+    /// места вне собственных обхватов сервиса) — результат-отказ с причиной и кодом, а не
+    /// исключение вызывающему; «applying» закрывается переходом там, где он ещё возможен
+    /// (сбой до заявки пакета не трогает). internal — граница для теста: файловый сбой после
+    /// заявки детерминированно в живой поток не поставить, поэтому обхват проверяется здесь
+    /// формой отказа, а закрытие «applying» — в CrashedApply на диске с нужным статусом
+    /// (тот же приём, что у ревью S4g, M3; W3-1).</summary>
+    internal async Task<IngestResult> ApplyAutoAsync(string ownerId, string root, WikiPackage package,
+        WikiApplyService.ApplyContext context)
+    {
+        WikiApplyService.ApplyResult applied;
+        try
+        {
+            applied = await _apply.ApplyAsync(ownerId, package, context).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            return Rejected(CrashedApply(root, package.Id, ex));
+        }
+        if (!applied.Applied)
+            return Rejected($"применение пакета не удалось: {applied.Reason ?? applied.Code}");
+        return new IngestResult(OutcomeApplied, null, package.Id);
+    }
+
+    /// <summary>Сбой применения вне контракта — та же форма, что у CrashedApply пути решения
+    /// человека: причина называет внутренний сбой и его код («applying» закрывается
+    /// «apply_failed» там, где он ещё возможен; другой статус на диске не трогать).
+    /// У IngestResult поля кода нет — код в тексте причины (тот же приём, что у
+    /// «applied.Reason ?? applied.Code»).</summary>
+    internal static string CrashedApply(string root, string packageId, Exception ex)
+    {
+        var reason = $"применение пакета не удалось: внутренний сбой применения: {ex.Message} "
+            + $"({WikiApplyService.CodeInternal})";
+        var onDisk = WikiPackageStore.TryRead(root, packageId);
+        if (onDisk.State == WikiPackageFileState.Valid && onDisk.Package!.Status == WikiPackage.StatusApplying)
+        {
+            var t = WikiPackageStore.Transition(root, packageId, WikiPackage.StatusApplyFailed, reason);
+            if (!t.Ok)
+                reason = $"{reason} (статус «apply_failed» не записан: {t.Reason ?? t.Code})";
+        }
+        return reason;
     }
 
     // ── состояние раздела и каталог ────────────────────────────────────────────────

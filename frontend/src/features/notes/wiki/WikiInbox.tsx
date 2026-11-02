@@ -13,8 +13,7 @@
 // мог уйти из «Входящих», и строка-«пропosed» не должна остаться в списке.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Brain, FileText, GitCommit, Inbox, Link2, ListChecks, MessageSquare, StickyNote } from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
+import { AlertTriangle, Inbox } from 'lucide-react';
 import {
   C, FONT, FS, R, SP, useIsMobile,
   WikiError, listWikiPackages, useWikiTree,
@@ -25,24 +24,8 @@ import { EmptyState } from '../../../components/ui/EmptyState';
 import { Notice } from '../../../components/ui/Notice';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { sectionPrefix, wikiErrorText } from './WikiTab';
+import { ORIGIN_META } from './wikiLabels';
 import { WikiPackageView } from './WikiPackageView';
-
-// ─── Словари подписей ───
-
-// origin источника — закрытый перечень бэка (WikiGate.OriginValues). Подпись и икона —
-// только для них; нераспознанный origin показывается как есть, не выдумывая тип.
-// genitive — родительный падеж с указательным местоимением («из этого чата»): нужен там,
-// где фраза требует падежа, — «Откатить всё из …» в «Журнале» (доработка H4). Подстановка
-// именительного label в такую фразу даёт «из этого чат» — хвост ревью R-S7c-2.
-export const ORIGIN_META: Record<string, { label: string; genitive: string; icon: LucideIcon }> = {
-  session: { label: 'чат', genitive: 'из этого чата', icon: MessageSquare },
-  note: { label: 'заметка', genitive: 'из этой заметки', icon: StickyNote },
-  file: { label: 'файл', genitive: 'из этого файла', icon: FileText },
-  url: { label: 'ссылка', genitive: 'из этой ссылки', icon: Link2 },
-  task: { label: 'задача', genitive: 'из этой задачи', icon: ListChecks },
-  dossier: { label: 'досье', genitive: 'из этого досье', icon: GitCommit },
-  memory: { label: 'память', genitive: 'из этой памяти', icon: Brain },
-};
 
 // Отказы «Входящих» — русским текстом по коду бэка (тот же порядок, что wikiErrorText для
 // страниц; здесь свои коды, их в словаре страниц нет). Формулировки — черновые, тексты

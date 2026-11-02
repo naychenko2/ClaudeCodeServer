@@ -19,7 +19,12 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 //    (WithSectionsLockedAsync): встречный откат на той же паре разделов иначе встаёт в взаимной
 //    блокировке. Порядок аргументов здесь — порядок пакетов (по времени применения); каноническим
 //    его делает хелпер, а не вызывающий. Состояние пакетов для решения перечитывается ПОД блоком:
-//    первое чтение выбирает только набор замков (урок S4b-3, MAJOR 2).
+//    первое чтение выбирает только набор замков (урок S4b-3, MAJOR 2). Набор замков тоже может
+//    устареть: пока операция ждала очередь, в новом разделе появляется применённый пакет того же
+//    источника. Тело под блоком сверяет разделы перечитанных пакетов с захваченными; чужой
+//    (незахваченный) раздел не трогается, а возвращается наружу — замки берутся заново с ним
+//    (MaxLockAttempts витков). Два одновременных отката одного источника: второй, получив замки,
+//    не находит применённых пакетов и журнал не двоит.
 // 3. Пакеты откатываются в обратном порядке применения (мера 5) — через тот же механизм, что
 //    «Откатить пакет» (WikiPackageRevert). Для пакета в «applied» его UpdatedAt есть время его
 //    перехода в «applied»: стор ставит его на каждый переход, а после «applied» пакет никто не
@@ -81,6 +86,8 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 //    назван в отчёте: о битой странице решает человек, не перезапись. Переписанные страницы такого
 //    пакета — в журнал и проекции всё равно (п. 8): на диске изменённая страница всегда отражена
 //    в журнале. Хроника здесь не обрабатывается: она снимается целиком (п. 5).
+//    Снятие нормализует файл страницы через WikiPage.Render(): правится не только сноска —
+//    весь файл приводится к каноническому виду.
 // 8. Журнал: строка op=retract на каждый раздел, где диск изменился, — по ФАКТИЧЕСКИ изменённым
 //    страницам (доработка ревью S4f-2, MAJOR 3): возвращённые побайтно, удалённые, снятые,
 //    хроника с убранной строкой продолжения — независимо от того, доведён ли их пакет до
@@ -109,11 +116,10 @@ public sealed class WikiRetractService
     // пакета (op=revert) и прочих операций.
     private const string LogOpRetract = "retract";
 
-    // Папка хроники чата (ADR-035, решение 12б): «Хроника разговора — страница вики type:
-    // chronicle … папка Хроники/». Признак страницы этого чата в S4f-1 — путь под этой папкой у
-    // create-операции пакета с этим источником: сама хронику строит разбор (S6), здесь она только
-    // снимается целиком.
-    private const string ChronicleFolder = "Хроники";
+    // Сколько раз операция берёт замки заново, если набор разделов источника вырос между первым
+    // чтением и блоком. Каждый виток добавляет хотя бы один раздел, разделов конечное число, но
+    // потолок нужен всё равно: операция не должна крутиться бесконечно при непрерывном потоке пакетов.
+    private const int MaxLockAttempts = 4;
 
     // Потолок длины карточки источника: карточнее любой реальной ссылки (путь файла с id
     // проекта), но не бесконечный вход из строки запроса.
@@ -147,11 +153,12 @@ public sealed class WikiRetractService
         _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
     }
 
-    /// <summary>Что сталося с одним найденным пакетом. Reverted — откатан механизмом S4b-3;
+    /// <summary>Что произошло с одним найденным пакетом. Reverted — откатан механизмом S4b-3;
     /// CodeChanged — «требует снятия сносок» (S4f-2): ChangedPages — те страницы. Code из списка
     /// NeedsUnlink — отказ, при котором страницы пакета остались на диске (см. NeedsUnlink).
     /// Прочие Code — отказ этого пакета (внутренний сбой, невалидный манифест): он назван,
-    /// а операция продолжается с остальными.</summary>
+    /// а операция продолжается с остальными. AlreadyPages — подмножество RestoredPages: страницы,
+    /// которые к началу отката уже стояли в состоянии «до пакета» (откат пакета их не трогал, W3-3).</summary>
     public readonly record struct PackageOutcome(
         string PackageId,
         string Section,
@@ -159,9 +166,10 @@ public sealed class WikiRetractService
         string? Code,
         string? Reason,
         IReadOnlyList<string> RestoredPages,
-        IReadOnlyList<string> ChangedPages);
+        IReadOnlyList<string> ChangedPages,
+        IReadOnlyList<string>? AlreadyPages = null);
 
-    /// <summary>Что сталося со страницами одного пакета при снятии сносок (S4f-2). Pages — только
+    /// <summary>Что произошло со страницами одного пакета при снятии сносок (S4f-2). Pages — только
         /// реально переписанные страницы; пустой список — следов источника на страницах пакета уже
         /// не было (ничего не писали). Complete — обработаны ли ВСЕ страницы пакета: у пакета с
         /// необработанной страницей записи тоже есть, и её Pages — фактически переписанное, а не
@@ -255,7 +263,7 @@ public sealed class WikiRetractService
 
         var root = WikiPaths.Root(_dataDir, ownerId);
         // Первое чтение — только чтобы узнать, какие разделы придётся держать: исход решается
-        // по переччитанному под блоком состоянию (урок S4b-3, MAJOR 2).
+        // по перечитанному под блоком состоянию (урок S4b-3, MAJOR 2).
         var first = Candidates(root, sourceRef!);
         if (first.Count == 0)
             // Нечего откатывать: не отказ, а пустой исход — на диске не тронуто ничего, пометки
@@ -264,12 +272,30 @@ public sealed class WikiRetractService
             // хроника чата остаётся на диске — до неё этот ранний выход не доходит.
             return new RetractResult(true, null, null, [], [], false);
 
-        var body = await _keeper.WithSectionsLockedAsync(ownerId,
-            // Порядок аргументов — порядок пакетов (обратный порядку применения): встречные
-            // откаты на одной паре разделов приходят к хелперу в зеркальных порядках, а замки
-            // он берёт канонически (решение 10) — иначе взаимная блокировка.
-            [.. first.Select(p => p.Section)],
-            () => Task.FromResult(RetractUnderLock(ownerId, root, sourceRef!)));
+        // Набор замков, взятых по первому чтению, может устареть к моменту, когда замки получены
+        // (пока операция ждала очереди, в новом разделе мог появиться применённый пакет этого
+        // источника). Набор перечитывается ПОД блоком: пакет из незахваченного раздела тело не
+        // трогает, а возвращает такой раздел наружу — замки берутся заново, уже с ним. Раздел не
+        // пропускается и не откатывается без замка. Порядок аргументов — порядок пакетов
+        // (обратный порядку применения): встречные откаты на одной паре разделов приходят к
+        // хелперу в зеркальных порядках, а замки он берёт канонически (решение 10).
+        var held = new HashSet<string>(first.Select(p => p.Section), StringComparer.Ordinal);
+        var order = new List<string>(first.Select(p => p.Section));
+        var body = new BodyResult();
+        for (var attempt = 0; attempt < MaxLockAttempts; attempt++)
+        {
+            var locked = new HashSet<string>(held, StringComparer.Ordinal);
+            body = await _keeper.WithSectionsLockedAsync(ownerId, [.. order],
+                () => Task.FromResult(RetractUnderLock(ownerId, root, sourceRef!, locked)));
+            if (body.Missing.Count == 0)
+                break;
+            foreach (var section in body.Missing)
+                if (held.Add(section))
+                    order.Add(section);
+        }
+        if (body.Missing.Count > 0)
+            return Fail(CodeInternal, "набор разделов источника менялся при каждой попытке блокировки: " +
+                "откат не начат, повторите операцию");
 
         if (!body.Ok)
             return new RetractResult(false, body.Code, body.Reason, [], [], false);
@@ -286,29 +312,41 @@ public sealed class WikiRetractService
             body.Unlinked, body.Failed);
     }
 
-    private (bool Ok, string? Code, string? Reason, List<PackageOutcome> Outcomes, List<string> RemovedChronicles,
-        List<UnlinkOutcome> Unlinked, List<string> Failed)
-        RetractUnderLock(string ownerId, string root, string sourceRef)
+    // Итог тела операции под замками. Missing — разделы пакетов источника, которых нет среди
+    // захваченных: тело при непустом Missing ничего не трогало, вызывающий берёт замки заново.
+    private readonly record struct BodyResult(
+        bool Ok, string? Code, string? Reason, List<PackageOutcome> Outcomes, List<string> RemovedChronicles,
+        List<UnlinkOutcome> Unlinked, List<string> Failed, List<string> Missing)
+    {
+        public BodyResult() : this(false, null, null, [], [], [], [], [])
+        {
+        }
+    }
+
+    private BodyResult RetractUnderLock(string ownerId, string root, string sourceRef, HashSet<string> locked)
     {
         try
         {
-            return RetractBody(ownerId, root, sourceRef);
+            return RetractBody(ownerId, root, sourceRef, locked);
         }
         catch (Exception ex)
         {
             // Любой неожиданный сбой — результат-отказ с причиной, не исключение вызывающему
             // (тот же контракт, что у применения и отката пакета).
-            return (false, CodeInternal, $"внутренний сбой отката по источнику: {ex.Message}", [], [], [], []);
+            return new BodyResult(false, CodeInternal, $"внутренний сбой отката по источнику: {ex.Message}",
+                [], [], [], [], []);
         }
     }
 
-    private (bool Ok, string? Code, string? Reason, List<PackageOutcome> Outcomes, List<string> RemovedChronicles,
-        List<UnlinkOutcome> Unlinked, List<string> Failed)
-        RetractBody(string ownerId, string root, string sourceRef)
+    private BodyResult RetractBody(string ownerId, string root, string sourceRef, HashSet<string> locked)
     {
         // Состояние пакетов — перечитанное под блоком: первым чтением выбран только набор
         // замков; кто «applied» и чей он источник — решается по диску сейчас (урок S4b-3, MAJOR 2).
         var candidates = Candidates(root, sourceRef);
+        var missing = candidates.Select(p => p.Section).Where(s => !locked.Contains(s))
+            .Distinct(StringComparer.Ordinal).ToList();
+        if (missing.Count > 0)
+            return new BodyResult(true, null, null, [], [], [], [], missing);
 
         // П.3 шапки: обратный порядок применения.
         var outcomes = new List<PackageOutcome>(candidates.Count);
@@ -316,7 +354,7 @@ public sealed class WikiRetractService
         {
             var r = _revert.RevertUnderLock(ownerId, root, pkg.Id);
             outcomes.Add(new PackageOutcome(pkg.Id, pkg.Section, r.Reverted, r.Code, r.Reason,
-                r.RestoredPages, r.ChangedPages));
+                r.RestoredPages, r.ChangedPages, r.AlreadyPages));
         }
 
         // П.5 шапки: хроника снимается целиком. Целая цепочка уже сняла её файл механизмом
@@ -417,7 +455,7 @@ public sealed class WikiRetractService
             WikiProjections.RegenerateSection(root, section);
         }
 
-        return (true, null, null, outcomes, removed, unlinked, failed);
+        return new BodyResult(true, null, null, outcomes, removed, unlinked, failed, []);
     }
 
     /// <summary>Пути хроник, относимых к источнику пакета (п.5 шапки): create-операции самого
@@ -456,7 +494,7 @@ public sealed class WikiRetractService
         var folder = WikiSections.Folder(section);
         if (folder is null)
             return [];
-        var dir = SafePath.Join(root, "pages/" + folder + ChronicleFolder);
+        var dir = SafePath.Join(root, "pages/" + folder + WikiChatIngestService.ChronicleDirName);
         if (!Directory.Exists(dir))
             return [];
         var wanted = WikiChatIngestService.ContinuationLinkPrefix + "[[" + title + "]]";
@@ -474,7 +512,8 @@ public sealed class WikiRetractService
         {
             // Ключ страницы — относительно pages/ всего раздела: relative здесь — от папки
             // хроник, к ней добавляется префикс раздела и сам сегмент «Хроники».
-            var page = folder + ChronicleFolder + "/" + Path.GetRelativePath(dir, f).Replace('\\', '/');
+            var page = folder + WikiChatIngestService.ChronicleDirName + "/" +
+                Path.GetRelativePath(dir, f).Replace('\\', '/');
             if (WikiPaths.IsProjection(page))
                 continue;
             string text;
@@ -570,14 +609,35 @@ public sealed class WikiRetractService
                 // статуса этот путь не меняет.
                 continue;
 
-            var state = states.TryGetValue(pkg.Section, out var cached) ? cached : BuildSectionState(root, ownerId, pkg.Section);
+            SectionState state;
+            try
+            {
+                state = states.TryGetValue(pkg.Section, out var cached) ? cached : BuildSectionState(root, ownerId, pkg.Section);
+            }
+            catch (Exception ex)
+            {
+                // Состояние раздела не прочитано — пакет не обработан (Complete=false), остальные
+                // пакеты идут дальше: исключение наружу из операции не выходит.
+                failed.Add($"пакет {pkg.Id}: состояние раздела «{pkg.Section}» не прочитано: {ex.Message}");
+                unlinked.Add(new UnlinkOutcome(pkg.Id, pkg.Section, [], false));
+                continue;
+            }
             states[pkg.Section] = state;
 
             var changed = new List<string>();
             var pkgFailed = 0;
             foreach (var page in pages)
             {
-                var (done, reason) = UnlinkPageUnderLock(root, pkg, page, sourceRef, state);
+                (bool done, string? reason) unlink;
+                try
+                {
+                    unlink = UnlinkPageUnderLock(root, pkg, page, sourceRef, state);
+                }
+                catch (Exception ex)
+                {
+                    unlink = (false, $"снятие сносок оборвалось: {ex.Message}");
+                }
+                var (done, reason) = unlink;
                 if (reason is not null)
                 {
                     // Одна необработанная страница не останавливает остальных: пакет остаётся
@@ -599,7 +659,7 @@ public sealed class WikiRetractService
                 // строку журнала не допишет.
                 continue;
 
-            var transitioned = WikiPackageStore.Transition(root, pkg.Id, WikiPackage.StatusReverted);
+            var transitioned = TryTransition(root, pkg.Id);
             if (!transitioned.Ok)
                 // Страницы обработаны, статус не доведён: следующий вызов перечитает пакет
                 // («applied»), не найдёт на его страницах сносок источника и доведёт переход,
@@ -608,6 +668,19 @@ public sealed class WikiRetractService
                     $"{transitioned.Reason ?? transitioned.Code}");
         }
         return unlinked;
+    }
+
+    private static (bool Ok, string? Reason, string? Code) TryTransition(string root, string packageId)
+    {
+        try
+        {
+            var t = WikiPackageStore.Transition(root, packageId, WikiPackage.StatusReverted);
+            return (t.Ok, t.Reason, t.Code);
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message, null);
+        }
     }
 
     /// <summary>Лист страниц пакета для снятия сносок: по прообразам — тот же комплект, чем
@@ -680,9 +753,9 @@ public sealed class WikiRetractService
                     dropped.Add(id);
                     break;
                 case Trace.Unknown:
-                    // Снять её нельзя: цель не опознана. Она остаётся как есть и называется.
-                    unknown.Add($"s{i + 1} → «{fn.Target.Text}»");
-                    kept.Add((id, fn));
+                    // Снять её нельзя: цель не опознана. Страница не пишется (ниже), поэтому в kept
+                    // сноска не нужна — она только называется.
+                    unknown.Add($"{id} → «{fn.Target.Text}»");
                     break;
                 default:
                     kept.Add((id, fn));
@@ -695,8 +768,9 @@ public sealed class WikiRetractService
         // не обработана и не тронута: она названа в отчёте, пакет остаётся «applied» и NeedsUnlink
         // — иначе сноска на снятый источник осталась бы навсегда.
         if (unknown.Count > 0)
-            return (false, $"сноски с неопознанной целью: {string.Join(", ", unknown)} — карточка " +
-                "этого источника на странице не найдена: след не опознан, страница не обработана");
+            return (false, $"сноска с неопознанной целью: {string.Join(", ", unknown)} — цель не " +
+                "резолвится ни в одну карточку источника в разделе страницы и его цепочке: след не опознан, " +
+                "страница не обработана");
         if (dropped.Count == 0)
             return (false, null); // на этой странице сносок этого источника уже нет: след снят раньше
 
@@ -861,7 +935,11 @@ public sealed class WikiRetractService
             if (RefMatches(cardRef, sourceRef))
                 return Trace.Source;
             var origin = OriginOf(sourceRef);
-            if (origin is not null && card.Frontmatter.Origin == origin && RefMatches(cardRef, IdPartOf(sourceRef)))
+            // Карточка хранит ref с префиксом origin и диапазоном («session:{id}#m{a}-{b}»), поэтому
+            // сверка по чату идёт по «origin:id», а не по голому id (тот же охват «в любой части
+            // диапазонов», что у поиска пакетов); голый id — старая форма хранения.
+            if (origin is not null && card.Frontmatter.Origin == origin &&
+                (RefMatches(cardRef, origin + ":" + IdPartOf(sourceRef)) || RefMatches(cardRef, IdPartOf(sourceRef))))
                 return Trace.Source;
             return Trace.Other; // карточка найдена — это другой источник
         }
@@ -907,13 +985,26 @@ public sealed class WikiRetractService
         return false;
     }
 
+    /// <summary>Есть ли у владельца в вики хоть один пакет (в любом статусе) с этим источником:
+    /// граница владения REST для origin без каталога (заметка, файл, ссылка, задача…) — чужого
+    /// в корне владельца нет по построению, а отсутствующий источник неотличим от чужого (один
+    /// ответ 404, W3-2). Вики не заведена — пакетов нет, ответ false.</summary>
+    internal bool SourceKnown(string ownerId, string sourceRef)
+    {
+        if (string.IsNullOrWhiteSpace(ownerId) || !WikiPaths.IsInitialized(_dataDir, ownerId))
+            return false;
+        return WikiPackageStore.List(WikiPaths.Root(_dataDir, ownerId)).Packages
+            .Any(p => SourceMatches(p, sourceRef));
+    }
+
     private static bool RefMatches(string stored, string wanted) =>
         wanted.Length > 0 && (string.Equals(stored, wanted, StringComparison.Ordinal)
             || stored.StartsWith(wanted + "#", StringComparison.Ordinal));
 
     /// <summary>Проверка формы карточки источника (ввод недоверен): длина, «..», управляющие
     /// символы, обязательный префикс known-origin и непустая карточка после него.</summary>
-    private static string? SourceShapeError(string? sourceRef)
+    // internal: тот же разбор формы нужен REST (400 раньше проверки владения, W3-2).
+    internal static string? SourceShapeError(string? sourceRef)
     {
         if (string.IsNullOrWhiteSpace(sourceRef))
             return "источник пустой";
@@ -944,9 +1035,12 @@ public sealed class WikiRetractService
         return hash < 0 ? rest : rest[..hash];
     }
 
-    /// <summary>Путь хроники: сегмент «Хроники» под папкой раздела (решение 12б).</summary>
+    /// <summary>Путь хроники: сегмент папки хроник под папкой раздела (ADR-035, решение 12б).
+    /// Единственный литерал сегмента — у разбора (WikiChatIngestService.ChronicleDirName):
+    /// хронику строит разбор (S6), здесь она только снимается целиком; признак страницы
+    /// этого чата в S4f-1 — путь под этой папкой у create-операции пакета с этим источником.</summary>
     private static bool IsChroniclePath(string pageKey) =>
-        pageKey.Split('/').Contains(ChronicleFolder, StringComparer.Ordinal);
+        pageKey.Split('/').Contains(WikiChatIngestService.ChronicleDirName, StringComparer.Ordinal);
 
     /// <summary>Раздел страницы по пути — через единственный разбор (WikiSections.Parse);
     /// неразобранный путь (не должен случиться: страницы из операций валидных пакетов) — пустой

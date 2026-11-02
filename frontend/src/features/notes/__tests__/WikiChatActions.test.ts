@@ -65,7 +65,8 @@ import {
 import { C } from '../../../lib/design';
 import { setAllFlags } from '../../../lib/featureFlags';
 import { setAllSubsystems } from '../../../lib/subsystems';
-import { WikiChatActions, requestNoteIngest, retractResultText } from '../WikiChatActions';
+import { WikiChatActions, requestNoteIngest } from '../WikiChatActions';
+import { retractResultText } from '../wiki/wikiLabels';
 import { manifest as notesManifest } from '../manifest';
 import { ChatHeaderBar } from '../../../components/chat/ChatHeaderBar';
 import { registerSubsystem, type ChatHeaderSummaryCtx } from '../../../lib/subsystems/registryCore';
@@ -566,11 +567,11 @@ describe('Склонение итога отката (доработка S7b, п
     expect(retractResultText(mk(11))).toBe('11 пакетов откатано, 11 хроник снято.');
     expect(retractResultText(mk(21))).toBe('21 пакет откатан, 21 хроника снята.');
   });
-  it('страницы и «осталось (другой источник)» — тоже по числу', () => {
-    expect(retractResultText({ ...mk(0), unlinkedPackages: ['a'] })).toBe('1 стр. очищена от сносок.');
-    expect(retractResultText({ ...mk(0), unlinkedPackages: ['a', 'b', 'c'] })).toBe('3 стр. очищено от сносок.');
-    expect(retractResultText({ ...mk(0), remainingPackages: ['a', 'b'] })).toBe('2 пакета осталось (другой источник).');
-    expect(retractResultText({ ...mk(0), remainingPackages: ['a', 'b', 'c', 'd', 'e'] })).toBe('5 пакетов осталось (другой источник).');
+  it('очищенные и оставшиеся пакеты (контракт: id пакетов, не страницы) — тоже по числу', () => {
+    expect(retractResultText({ ...mk(0), unlinkedPackages: ['a'] })).toBe('1 пакет очищен от сносок.');
+    expect(retractResultText({ ...mk(0), unlinkedPackages: ['a', 'b', 'c'] })).toBe('3 пакета очищено от сносок.');
+    expect(retractResultText({ ...mk(0), remainingPackages: ['a', 'b'] })).toBe('2 пакета осталось с необработанными страницами.');
+    expect(retractResultText({ ...mk(0), remainingPackages: ['a', 'b', 'c', 'd', 'e'] })).toBe('5 пакетов осталось с необработанными страницами.');
   });
 });
 
@@ -600,7 +601,7 @@ describe('Достижимость из шапки чата (доработка 
 
   // Минимальный, но честный набор props: без проекта, без острова, без контекст-строки —
   // ряд действий от этого не меняется
-  function headerHtml(isMobile: boolean): string {
+  function headerHtml(isMobile: boolean, compact = false): string {
     return renderToStaticMarkup(createElement(ChatHeaderBar, {
       session: { id: CHAT_A, name: 'Рефью звука' },
       project: null, hasMessages: true, online: true,
@@ -614,7 +615,7 @@ describe('Достижимость из шапки чата (доработка 
       // чата до первого хода, а не null
       ctxEstimate: { window: 200000, fresh: false, level: 'normal' }, isWaiting: false, items: [],
       persona: null, agent: null, participants: [],
-      island: false, compact: false, contextBar: null, scrolled: false,
+      island: false, compact, contextBar: null, scrolled: false,
     } as never));
   }
 
@@ -641,6 +642,17 @@ describe('Достижимость из шапки чата (доработка 
     expect(html).not.toContain('wiki-chat-retract');
     expect(html).not.toContain('Разобрать этот чат');
     expect(html).not.toContain('Откатить всё из этого чата');
+  });
+
+  // Проводка признака: колонка «Стены» (compact) → render вклада → меню. Окно широкое (1280),
+  // поэтому isCompact шапки false — меню может появиться только из-за compact
+  it('шапка с compact при широком окне: вместо ряда «Вики» — кнопка-меню', () => {
+    setAllSubsystems(['notes']);
+    setAllFlags({ 'llm-wiki': true });
+    const html = withBrowserStub(1280, () => headerHtml(false, true));
+    expect(html).toContain('title="Действия «Вики» в этом чате"');
+    expect(html).not.toContain('data-testid="wiki-chat-analyze"');
+    expect(html).not.toContain('data-testid="wiki-chat-retract"');
   });
 
   it('флаг llm-wiki выключен — в шапке нет действий «Вики»', () => {
@@ -707,6 +719,30 @@ describe('Компактная раскладка (M-1, дефект ecec968a)',
     expect(buttonByTestId(c, 'wiki-chat-analyze')).toBeNull();
     expect(buttonByTestId(c, 'wiki-chat-retract')).toBeNull();
     expect(findNodeByAttr(c, 'title', TRIGGER_TITLE)).not.toBeNull();
+  });
+
+  it('compact из шапки главнее ширины окна: колонка «Стены» при широком окне — меню, а не ряд', async () => {
+    serve({ chats: { items: [CHATRECORD], counts: {} } });
+    installFakeDom();
+    const w = (globalThis as { window: Record<string, unknown> }).window;
+    w.innerWidth = 1280;
+    const { root, container } = mount(createElement(WikiChatActions, { session: sessionA, hasMessages: true, online: true, compact: true }));
+    roots.push(root);
+    await settle();
+    expect(buttonByTestId(container, 'wiki-chat-analyze')).toBeNull();
+    expect(findNodeByAttr(container, 'title', TRIGGER_TITLE)).not.toBeNull();
+  });
+
+  it('compact=false при узком окне: ряд кнопок (признак шапки главнее окна)', async () => {
+    serve({ chats: { items: [CHATRECORD], counts: {} } });
+    installFakeDom();
+    const w = (globalThis as { window: Record<string, unknown> }).window;
+    w.innerWidth = 360;
+    const { root, container } = mount(createElement(WikiChatActions, { session: sessionA, hasMessages: true, online: true, compact: false }));
+    roots.push(root);
+    await settle();
+    expect(buttonByTestId(container, 'wiki-chat-analyze')).not.toBeNull();
+    expect(findNodeByAttr(container, 'title', TRIGGER_TITLE)).toBeNull();
   });
 
   it('открытое меню: все три действия, «Откатить» — цветом C.dangerText', async () => {

@@ -144,6 +144,16 @@ public class WikiControllerTests : IDisposable
         ((OkObjectResult)await ctl.Initialize(null)).StatusCode.Should().Be(200);
     }
 
+    // ─── 3а. Гейт флага llm-wiki на «Завести» (W1-3) ──────────────────────
+
+    [Fact]
+    public async Task Завести_ФлагВыключен_409_ВикаНеЗаводится()
+    {
+        AssertCode(await Controller(flagsOn: false).Initialize(null), 409, "wiki_llm_wiki_off");
+        // Мутация «убрать проверку флага в Initialize»: вики заводится — файл появляется, тест красный.
+        File.Exists(Path.Combine(_pages, WikiPaths.SchemaFileName)).Should().BeFalse("гейт — до создания состояния");
+    }
+
     // ─── 4. Удаление раздела: только сирота ────────────────────────────────
 
     [Fact]
@@ -311,12 +321,11 @@ public class WikiControllerTests : IDisposable
             .GetProperty("code").GetString().Should().Be(code);
     }
 
-    private WikiController Controller(string user = User)
+    private WikiController Controller(string user = User, bool flagsOn = true)
     {
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", user)], "test"));
-        // Флаг llm-wiki этим тестам не нужен: ни одно из них не зовёт ручку, которая его читает.
-        return new WikiController(_keeper, _projects, _spheres, _lint, _journal, null, _config, _capture, _ingest)
+        return new WikiController(_keeper, _projects, _spheres, _lint, _journal, flagsOn ? new WikiFlagOn() : new WikiFlagOff(), _config, _capture, _ingest)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
@@ -329,6 +338,17 @@ public class WikiControllerTests : IDisposable
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
+    }
+
+    private sealed class WikiFlagOn : ClaudeHomeServer.Services.Composition.IFeatureFlagGate
+    {
+        public bool IsEnabled(string userId, string key) => key == FeatureFlagKeys.LlmWiki;
+    }
+
+    // Боевой шлюз флагов не бывает null: «флаг выключен» — это шлюз, отвечающий «нет» на ключ llm-wiki.
+    private sealed class WikiFlagOff : ClaudeHomeServer.Services.Composition.IFeatureFlagGate
+    {
+        public bool IsEnabled(string userId, string key) => key != FeatureFlagKeys.LlmWiki;
     }
 
     // Сфер нет: предмет этих тестов — проектные разделы и сироты.

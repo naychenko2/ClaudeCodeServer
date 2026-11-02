@@ -1928,10 +1928,16 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // Чаты проекта, видимые человеку (S2d-4a): GetByProject + VisibleTo — список человеческой
     // ручки GET /api/projects/{id}/sessions. Чужой приватный чат не отдаётся никому, кроме
     // автора (и автору он отдаётся как раньше: приватность — его поле, не чужой запрет).
-    // GetByProject остаётся машинной точкой: индекс файлов (ProjectFileSessionsIndex), уборка
-    // worktree при удалении проекта (ProjectsController), выкидывание групп хаба при отзыве
-    // участника (ProjectMembershipService), тулсеты (WorkspaceToolset), сторож тем
-    // (ChatSubjectSweeper).
+    // GetByProject — сырая выборка проекта: нужен ли ей фильтр видимости, решает не тип
+    // вызывающего, а то, кому уходит результат (вердикт R-S2d-4a). Человеку она уходит через
+    // производный индекс файлов и там фильтруется на его границе: панель «Изменения»
+    // (ProjectFileSessionsIndex.GetForProjectAsync → FilesController.ChangedBy, IsVisibleTo на
+    // контроллере, доработка S2d-4a). Машинные потребители остаются на сырой выборке: сырые
+    // пути индекса (GetSessionPathsAsync → CommitAttributionService), уборка worktree при
+    // удалении проекта (ProjectsController), выкидывание групп хаба при отзыве участника
+    // (ProjectMembershipService), резолв worktree-корня по пути (CodeGraphController), тулсеты
+    // (WorkspaceToolset: chats_list, теги сессии), сторож тем (ChatSubjectSweeper — его выход
+    // за видимость чата уже отдельный дефект).
     public IReadOnlyList<Session> GetVisibleByProject(string projectId, string userId) =>
         GetByProject(projectId).Where(s => VisibleTo(s, userId)).ToList();
 
@@ -4263,6 +4269,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // (fail-closed по контракту CanSee).
     private bool VisibleTo(Session s, string userId) =>
         Access.SessionAccess.CanSee(s, s.ProjectId is not null ? _projects.GetById(s.ProjectId) : null, userId);
+
+    // Та же видимость по id чата — для человеческих границ, которые держат список чатов не сами,
+    // а через производный индекс (панель «Изменения»: FilesController.ChangedBy, доработка S2d-4a).
+    // Нет такого чата или он осиротел (проект удалён) — нет (fail-closed по контракту CanSee).
+    public bool IsVisibleTo(string sessionId, string? userId) =>
+        _sessions.TryGetValue(sessionId, out var entry) && userId is not null && VisibleTo(entry.Info, userId);
 
     // Есть ли у пользователя хоть одна сессия/чат — среда исполнения меняется только «начисто»
     // (корни проектов и профили сред различаются, resume привязан к путям старой среды)

@@ -632,13 +632,22 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     {
         try
         {
-            GetProject(projectId); // ownership-проверка (как у соседних экшенов)
+            GetProject(projectId); // существование проекта (для чужого и несуществующего — 404 решил [ProjectScope])
             var paths = req.Paths ?? [];
             var byNormalized = await fileSessions.GetForProjectAsync(projectId, paths.Select(Normalize).ToList());
             var response = new Dictionary<string, List<SessionRef>>();
             foreach (var raw in paths)
-                if (byNormalized.TryGetValue(Normalize(raw), out var sessions))
-                    response[raw] = sessions;
+            {
+                if (!byNormalized.TryGetValue(Normalize(raw), out var refs)) continue;
+                // Доработка S2d-4a (вердикт R-S2d-4a): выдача панели — человеческая, поэтому чата,
+                // которого вызывающий не видит, здесь нет ни id, ни названием — та же точка
+                // SessionManager.IsVisibleTo, что у GetVisibleByProject. Машинная сторона индекса
+                // (GetSessionPathsAsync → CommitAttributionService) работает с чужими приватными
+                // чатами законно и здесь не тронута. Путь, который меняли только невидимые чаты,
+                // остаётся без ключа: для фронта это то же «никто не менял», что и пустой список.
+                var visible = refs.Where(r => sessions.IsVisibleTo(r.SessionId, UserId)).ToList();
+                if (visible.Count > 0) response[raw] = visible;
+            }
             return Ok(new { files = response });
         }
         catch (KeyNotFoundException) { return NotFound(); }

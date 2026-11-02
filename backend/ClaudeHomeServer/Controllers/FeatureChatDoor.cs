@@ -31,6 +31,20 @@ public static class FeatureChatDoor
                 s.Status is SessionStatus.Starting or SessionStatus.Working or SessionStatus.Waiting))
             .ToList();
 
+    // Маска id чатов в самих задачах облегчённого run (Epic/Steps/Reviews/…: SourceSessionId,
+    // ExecutorLaunchedBySessionId, LinkedSessionId, ReportToSessionId) — та же TaskView.MaskForeignChats,
+    // что у /api/tasks. Правит КОПИИ из SlimRun/Build (живой store не трогает); для полного run нельзя.
+    public static FeatureRun MaskRunChats(FeatureRun run, SessionManager sessions, ProjectManager projects, string viewerId)
+    {
+        var audience = ChatAudience.Viewer(viewerId);
+        void Mask(TaskItem? t) { if (t is not null) TaskView.MaskForeignChats(t, sessions, projects, audience); }
+        void MaskAll(IEnumerable<TaskItem> ts) { foreach (var t in ts) Mask(t); }
+        Mask(run.Epic); Mask(run.Final); Mask(run.Merge);
+        MaskAll(run.Steps); MaskAll(run.Reviews); MaskAll(run.Qa);
+        MaskAll(run.Cut); MaskAll(run.Design); MaskAll(run.Plan); MaskAll(run.Unroled);
+        return run;
+    }
+
     // Фича, в которую попадает задача: её FeatureId либо она сама, если это эпик.
     public static string? TargetFeature(TaskItem task) =>
         task.FeatureId ?? (task.Role == TaskRoles.Feature ? task.Id : null);

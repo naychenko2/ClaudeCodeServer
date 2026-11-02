@@ -674,7 +674,7 @@ public class TasksController(
         var runs = sessionId is null
             ? features.ProjectAll(UserId, snapshot, resolver)
             : features.ProjectForSession(sessionId, UserId, snapshot, resolver);
-        return Ok(runs);
+        return Ok(runs.Select(r => FeatureChatDoor.MaskRunChats(r, sessions, projects, UserId)).ToList());
     }
 
     // Индекс «чат → фичи» (контракт С0, GET /api/tasks/features/index?projectId=…): [Authorize],
@@ -1002,7 +1002,7 @@ public class TasksController(
         // Б-mk-b: макеты фичи (вкладка «Планы и макеты»): mockups[] + mockupsUnavailable.
         // Порядок и fail-closed — в BuildMockups (ADR-031 «Макеты фичи»).
         var (mockups, mockupsUnavailable) = await BuildMockups(run, catalog);
-        return Ok(new { run = FeatureProjector.SlimRun(run), events, eventsTotal, chats, plans, stats,
+        return Ok(new { run = FeatureChatDoor.MaskRunChats(FeatureProjector.SlimRun(run), sessions, projects, UserId), events, eventsTotal, chats, plans, stats,
             brief, mockups, mockupsUnavailable });
     }
 

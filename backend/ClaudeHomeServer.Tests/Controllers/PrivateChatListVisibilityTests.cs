@@ -340,16 +340,22 @@ public sealed class PrivateChatListVisibilityTests : IDisposable
         _sessions.GetById(OwnerOpenId)!.TaskId = openStep.Id;
         var projector = new ClaudeHomeServer.Services.Tasks.Projector.FeatureProjector(tasks);
 
-        string Serialize(List<ClaudeHomeServer.Services.Tasks.Projector.FeatureIndexSession> snap) =>
-            JsonSerializer.Serialize(new
+        // Как в контроллере: снимок видимых + маска id чатов в самих задачах облегчённого run.
+        string Serialize(List<ClaudeHomeServer.Services.Tasks.Projector.FeatureIndexSession> snap, bool mask)
+        {
+            ClaudeHomeServer.Services.Tasks.Projector.FeatureRun M(ClaudeHomeServer.Services.Tasks.Projector.FeatureRun r) =>
+                mask ? FeatureChatDoor.MaskRunChats(r, _sessions, _projects, _ownerId) : r;
+            return JsonSerializer.Serialize(new
             {
-                full = projector.ProjectFull(epic.Id, _ownerId, snap),
-                list = projector.ProjectAll(_ownerId, snap),
+                full = M(ClaudeHomeServer.Services.Tasks.Projector.FeatureProjector.SlimRun(
+                    projector.ProjectFull(epic.Id, _ownerId, snap)!)),
+                list = projector.ProjectAll(_ownerId, snap).Select(M).ToList(),
                 index = projector.BuildIndex(_ownerId, snap),
             });
+        }
 
-        var visible = Serialize(FeatureChatDoor.SnapshotVisible(_sessions, _ownerId));
-        var machine = Serialize(FeatureChatDoor.Snapshot(_sessions, _ownerId));
+        var visible = Serialize(FeatureChatDoor.SnapshotVisible(_sessions, _ownerId), mask: true);
+        var machine = Serialize(FeatureChatDoor.Snapshot(_sessions, _ownerId), mask: false);
 
         machine.Should().Contain(ForeignPrivateId, "контроль: без фильтра проектор отдаёт id чата");
         visible.Should().NotContain(ForeignPrivateId);

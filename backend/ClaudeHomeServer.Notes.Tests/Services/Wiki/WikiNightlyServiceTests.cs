@@ -336,6 +336,7 @@ public class WikiNightlyServiceTests : IDisposable
 
         _analyzed.Count(c => c.StartsWith('a')).Should().Be(6);
         _analyzed.Should().Contain("b0");
+        Last().Outcome.Should().Be(WikiNightlyService.OutcomeCompleted, "упор раздела не рвёт ночь");
     }
 
     [Fact]
@@ -343,8 +344,8 @@ public class WikiNightlyServiceTests : IDisposable
     {
         // Пакеты чата прибавляются пачкой: при лимите 2 чат c1 даёт 3 — превышение допустимо на сам
         // этот чат (пакеты уже в Хранителе, их не откатывать), но дальше ночь не идёт: c2 не
-        // разбирается вовсе, итог — budget. Мутация «проверять только до чата» — тест краснеет по
-        // тесту ниже (тот же сценарий на лимите раздела).
+        // разбирается вовсе, итог — budget. Лимит раздела здесь ни при чём: он закрывает только
+        // свой раздел (тест ниже).
         Configure(perNight: 2, perSection: 20, chatsPerSection: 20);
         AddChat("c1", project: "p1", ageMinutes: 0);
         AddChat("c2", project: "p2", ageMinutes: 1);
@@ -358,19 +359,23 @@ public class WikiNightlyServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task ЛимитПакетовНаРаздел_ЧатСПакетамиСверхОстатка_ОстанавливаетПроход()
+    public async Task ЛимитПакетовНаРаздел_ЧатСПакетамиСверхОстатка_ЗакрываетТолькоРаздел()
     {
-        // Тот же сценарий на лимите раздела: a1 даёт 3 пакета при лимите 2 — проход останавливается
-        // на нём. Мутация «вернуть проверку только до чата»: a2 был бы пропущен (continue), а итог
-        // вышел бы completed — тест краснеет.
+        // Тот же сценарий на лимите раздела (решение 02.11): a1 даёт 3 пакета при лимите 2 — раздел
+        // закрыт, a2 из него не разбирается; b1 из другого раздела разбирается, итог — completed
+        // (ночь отработала по плану). Мутация «вернуть для раздела budget+break»: b1 не зовётся,
+        // итог — budget, тест краснеет.
         Configure(perNight: 20, perSection: 2);
         AddChat("a1", project: "p1", ageMinutes: 0);
         AddChat("a2", project: "p1", ageMinutes: 1);
+        AddChat("b1", project: "p2", ageMinutes: 2);
 
         await Tick(Sut(Done(WikiChatIngestService.OutcomeApplied, packages: 3)));
 
-        _analyzed.Should().Equal("a1");
-        Last().Outcome.Should().Be(WikiNightlyService.OutcomeBudget);
+        _analyzed.Should().Equal(new[] { "a1", "b1" }, "раздел закрыт, чужой раздел продолжает");
+        var last = Last();
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeCompleted);
+        last.Applied.Should().Be(6, "пакеты состоявшихся чатов (a1 и b1) не откатываются");
     }
 
     [Fact]

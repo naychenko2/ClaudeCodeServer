@@ -28,7 +28,7 @@ public class TestsMcpNodeTests : IDisposable
         foreach (var p in _processes)
         {
             try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { }
-            p.Dispose();
+            ProcessTestCleanup.SafeDispose(p);
         }
         foreach (var dir in _dirs)
             try { Directory.Delete(dir, recursive: true); } catch { }

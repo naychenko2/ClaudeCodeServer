@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Services.Access;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Services.Turn;
 
@@ -11,7 +12,7 @@ namespace ClaudeHomeServer.Services.Turn;
 // && session.ProjectId != null. Без ownerId владельца у DossierCaptureService нет
 // ключа; без ProjectId захватывать нечего.
 public sealed partial class DossierTrailerContributor(
-    IProjectManager projects, ITurnActorRegistry? actors = null) : IPromptSectionContributor
+    IProjectManager projects, IServiceProvider services) : IPromptSectionContributor
 {
     public string Key => "dossier-trailer";
     public string Title => "Трейлер истории решений";
@@ -52,8 +53,12 @@ public sealed partial class DossierTrailerContributor(
     private string ActorLine(PromptSessionContext ctx)
     {
         var session = ctx.Session;
-        if (actors is null || ctx.OwnerId is null || session.ProjectId is null) return "";
+        if (ctx.OwnerId is null || session.ProjectId is null) return "";
         if (projects.GetById(session.ProjectId) is not { Members.Count: > 0 }) return "";
+        // Реестр хода — это SessionManager, а он сам получает всех контрибьюторов в конструкторе:
+        // зависимость в конструкторе замкнула бы цикл DI и хост не поднялся бы. Резолвим лениво.
+        var actors = services.GetService<ITurnActorRegistry>();
+        if (actors is null) return "";
         var actor = actors.Actor(session.Id, ctx.OwnerId);
         return actor is not null && SafeUserId().IsMatch(actor) ? $"\nCCS-User: {actor}" : "";
     }

@@ -113,7 +113,8 @@ public partial class SessionManagerTests
         lock (lk)
         {
             send = Task.Run(() => _sut.SendMessageAsync(session.Id, "из соседней вкладки", [], senderUserId: TestUserId));
-            send.Wait(400).Should().BeFalse("отправка обязана ждать тот же замок, под которым ставится приватность");
+            Thread.Sleep(400);
+            send.IsCompleted.Should().BeFalse("отправка обязана ждать тот же замок, под которым ставится приватность");
             ProjectEventsOf(session.Id).Should().Be(0);
             toggled = _sut.SetChatVisibility(session.Id, TestUserId, makePrivate: true).Outcome;
         }

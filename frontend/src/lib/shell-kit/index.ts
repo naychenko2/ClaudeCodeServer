@@ -52,6 +52,7 @@ export type {
   WikiRetractDto, WikiChatAnalyzeOk, WikiNoteIngestDto, WikiOpenRequest,
   WikiChatTriage, WikiChatMark,
   WikiSettingsSnapshot, WikiApplyClassDto, WikiNightlySettings, WikiLastNight, WikiPutNightlyResult,
+  WikiNightlyPatch, WikiNightlyOutcome,
 } from '../wiki';
 
 // ─── subsystems ──────────────────────────────────────────────────────────────

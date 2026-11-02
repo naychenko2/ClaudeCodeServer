@@ -52,7 +52,7 @@ export type {
   WikiApplyOutcomeDto, WikiDecisionDto, WikiJournalDto, WikiJournalEntryDto,
   WikiRetractDto, WikiChatAnalyzeOk, WikiNoteIngestDto, WikiOpenRequest,
   WikiSettingsSnapshot, WikiApplyClassDto, WikiNightlySettings, WikiLastNight, WikiPutNightlyResult,
-  WikiAuthorship, WikiPageInfoAuthoredDto, WikiCatalogDto, WikiSourceCardInfo, WikiPageEditableDto,
+  WikiAuthorship, WikiPageInfoAuthoredDto, WikiCatalogDto, WikiSourceCardInfo, WikiPageEditableDto, WikiConflictPage, WikiFootnoteDto,
 } from '../wiki';
 
 // ─── subsystems ──────────────────────────────────────────────────────────────

@@ -888,6 +888,50 @@ describe('вики: настройки «Ночного разбора» (F1)', 
     expect(getWikiSettingsSnapshot()).toBeNull();
   });
 
+  it('loadWikiSettings_ДваВызоваПодряд_ОдинGET', async () => {
+    const slow = deferred();
+    serve({ 'GET /wiki/settings': slow.promise });
+    const p1 = loadWikiSettings();
+    const p2 = loadWikiSettings();
+    slow.resolve(SETTINGS);
+    const [a, b] = await Promise.all([p1, p2]);
+    expect(req.mock.calls.filter((c: unknown[]) => c[0] === '/wiki/settings')).toHaveLength(1);
+    expect(a).toBe(b);
+    // слот сбрасывается по завершении: следующий вызов — новый запрос
+    await loadWikiSettings();
+    expect(req.mock.calls.filter((c: unknown[]) => c[0] === '/wiki/settings')).toHaveLength(2);
+  });
+
+  it('loadWikiSettings_ОтказОбщегоGET_ВиденОбоимВызывающим_СлотСбрасывается', async () => {
+    serve({ 'GET /wiki/settings': httpError(500) });
+    const p1 = loadWikiSettings();
+    const p2 = loadWikiSettings();
+    const [e1, e2] = await Promise.all([rejection(() => p1), rejection(() => p2)]);
+    expect(e1).toBeInstanceOf(WikiError);
+    expect(e2).toBe(e1);
+    expect(req.mock.calls.filter((c: unknown[]) => c[0] === '/wiki/settings')).toHaveLength(1);
+    // после отказа повтор («Повторить») идёт новым запросом
+    serve({ 'GET /wiki/settings': SETTINGS });
+    await loadWikiSettings();
+    expect(getWikiSettingsSnapshot()).not.toBeNull();
+  });
+
+  it('loadWikiSettings_ПослеPUT_ВисящийGETНеПереиспользуетсяИНеЗатираетПравку', async () => {
+    serve({ 'GET /wiki/tree': TREE, 'GET /wiki/settings': SETTINGS });
+    await ensureWikiLoaded();
+    await loadWikiSettings();
+    const slow = deferred();
+    serve({ 'GET /wiki/settings': slow.promise, 'PUT /wiki/settings': SETTINGS_ON });
+    const p1 = loadWikiSettings();
+    await putWikiNightly({ enabled: true }); // поднимает поколение
+    serve({ 'GET /wiki/settings': SETTINGS_ON });
+    const p2 = loadWikiSettings(); // висящий GET до правки не делится
+    expect(p2).not.toBe(p1);
+    slow.resolve(SETTINGS); // старое чтение не затирает правку
+    await Promise.allSettled([p1, p2]);
+    expect(getWikiSettingsSnapshot()!.nightly.enabled).toBe(SETTINGS_ON.nightly.enabled);
+  });
+
   it('putWikiNightly_ОтветПрежнегоВладельцаПоPUT_ВЧужойСнимокНеПишется', async () => {
     const put = deferred();
     serve({ 'PUT /wiki/settings': put.promise });

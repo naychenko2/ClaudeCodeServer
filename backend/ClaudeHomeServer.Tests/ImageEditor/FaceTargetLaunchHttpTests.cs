@@ -23,18 +23,23 @@ namespace ClaudeHomeServer.Tests.ImageEditor;
 public class FaceTargetLaunchHttpTests : IClassFixture<FaceTargetLaunchHttpTests.Hosts>
 {
     private readonly TestWebApplicationFactory _factory;
-    private readonly HttpClient _client;
-    private readonly string _ownerId;
-    private readonly string _projectId;
-    private readonly string _root;
-    private readonly string _chatId;
-    private readonly string _threadId;
-    private readonly string _facesKey;
-    private readonly string _charSlug;
     private readonly Hosts _hosts;
 
-    // Хост на КОНФИГУРАЦИЮ (шов детекции лиц), а не на тест: хосты поднимаются лениво и гасятся
-    // вместе с фикстурой. Состояние (проект, персонаж, чат, нить, файл) каждый тест заводит
+    // Сцена базовых тестов на хосте Ok готовится при первом обращении: тесты на SmallSecond/Busy/Error
+    // и «без персонажа» заводят свои сцены сами, лишний проект/персонаж/чат им не нужен
+    private Scene? _scene;
+    private HttpClient? _clientLazy;
+    private Scene Base => _scene ??= Prepare(_factory);
+    private HttpClient _client => _clientLazy ??= _factory.CreateAuthenticatedClient();
+    private string _ownerId => Base.OwnerId;
+    private string _projectId => Base.ProjectId;
+    private string _chatId => Base.ChatId;
+    private string _threadId => Base.ThreadId;
+    private string _facesKey => Base.FacesKey;
+    private string _charSlug => Base.CharSlug!;
+
+    // Хост на КОНФИГУРАЦИЮ (шов детекции лиц), а не на тест: объекты фабрик создаются сразу, ASP.NET-хост
+    // внутри каждой стартует лениво; гасятся вместе с фикстурой. Состояние (проект, персонаж, чат, нить, файл) каждый тест заводит
     // сам в своём каталоге через Prepare; флаг персонажей выставляет сам тест
     public sealed class Hosts : IDisposable
     {
@@ -96,8 +101,10 @@ public class FaceTargetLaunchHttpTests : IClassFixture<FaceTargetLaunchHttpTests
 
         var sessions = factory.Services.GetRequiredService<SessionManager>();
         var chat = sessions.CreateAsync(projectId, ClaudeMode.AcceptEdits, name: "Чат").GetAwaiter().GetResult();
+        // Байты уникальны на сцену: кэш лиц хоста (FaceDetectionCache) — синглтон с ключом (владелец, sha256),
+        // при одинаковых байтах детектор звался бы один раз на класс, а остальные тесты брали бы кэш
         File.WriteAllBytes(System.IO.Path.Combine(root, "test.png"),
-            new byte[] { 0x89, 0x50, 0x4E, 0x47 });
+            [0x89, 0x50, 0x4E, 0x47, .. Guid.NewGuid().ToByteArray()]);
         var store = factory.Services.GetRequiredService<ImageThreadStore>();
         var thread = store.Open(ownerId, chat.Id, "test.png", null, store.Get(ownerId, chat.Id).Revision);
         var facesKey = FaceDetectionCache.FacesKey(File.ReadAllBytes(System.IO.Path.Combine(root, "test.png")));
@@ -108,15 +115,6 @@ public class FaceTargetLaunchHttpTests : IClassFixture<FaceTargetLaunchHttpTests
     {
         _hosts = hosts;
         _factory = hosts.Ok;
-        var scene = Prepare(_factory);
-        _ownerId = scene.OwnerId;
-        _projectId = scene.ProjectId;
-        _root = scene.Root;
-        _chatId = scene.ChatId;
-        _threadId = scene.ThreadId;
-        _facesKey = scene.FacesKey;
-        _charSlug = scene.CharSlug!;
-        _client = _factory.CreateAuthenticatedClient();
     }
 
     private static string CreateProject(TestWebApplicationFactory factory, string username)

@@ -88,6 +88,9 @@ internal sealed class RecordingBroadcaster : ISessionBroadcaster
 {
     public ConcurrentQueue<(string OwnerId, ServerMessage Message)> ToOwnerCalls { get; } = new();
 
+    // Сигнал для тестов: срабатывает после каждой записи в ToOwnerCalls — ожидание по событию вместо опроса
+    public event Action? OwnerMessageSent;
+
     public Task ToSession(string sessionId, ServerMessage message) => Task.CompletedTask;
     public Task ToSessionExcept(string sessionId, string exceptConnectionId, ServerMessage message) => Task.CompletedTask;
     public Task ToProject(string projectId, ServerMessage message) => Task.CompletedTask;
@@ -96,6 +99,7 @@ internal sealed class RecordingBroadcaster : ISessionBroadcaster
     public Task ToOwner(string ownerId, ServerMessage message)
     {
         ToOwnerCalls.Enqueue((ownerId, message));
+        OwnerMessageSent?.Invoke();
         return Task.CompletedTask;
     }
 }

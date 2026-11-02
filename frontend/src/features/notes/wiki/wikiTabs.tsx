@@ -2,8 +2,8 @@
 // «Здоровье» и «Настройки»). Здесь — только порядок, подписи и заглушки: WikiTab.tsx рисует
 // переключатель по этому списку и для строки без component ставит заглушку.
 //
-// Дальше по фиче: S7c/S7d («Настройки») — добавляют свой импорт в этом файле и подставляют
-// его в component своей строки (так же, что S7a для «Входящих» и S5f для «Здоровья»).
+// Дальше по фиче: новый шаг — добавляет свой импорт в этом файле и подставляет его в component
+// своей строки (так же, что S7a для «Входящих», S5f для «Здоровья», S7d-3 для «Настроек»).
 // WikiTab.tsx они не трогают: он читает только этот список.
 //
 // component — компонент (не функция, вызываемая из WikiTab): WikiTab рендерит его элементом
@@ -19,6 +19,7 @@ import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { WikiHealth } from './WikiHealth';
 import { WikiInbox } from './WikiInbox';
 import { WikiJournal } from './WikiJournal';
+import { WikiSettings } from './WikiSettings';
 
 export type WikiSubTabId = 'pages' | 'inbox' | 'journal' | 'health' | 'settings';
 
@@ -42,7 +43,9 @@ export const WIKI_SUBTABS: WikiSubTab[] = [
   { id: 'journal', label: 'Журнал', icon: History, component: WikiJournal },
   // «Здоровье» — своё с S5f: отчёт последней проверки выбранного раздела и запуск проверки
   { id: 'health', label: 'Здоровье', icon: Activity, component: WikiHealth },
-  { id: 'settings', label: 'Настройки', icon: Settings, stubNote: 'Придёт с шагом «Настройки»: ночной разбор, применение и отбор чатов.' }, // S7c/S7d
+  // «Настройки» — своё с S7d-3: контейнер блоков «Ночной разбор» (место — точка расширения,
+  // блок делает шаг F2), «Применение» (S7d-1) и «Отбор чатов» (S7d-2)
+  { id: 'settings', label: 'Настройки', icon: Settings, component: WikiSettings },
 ];
 
 export function wikiSubTabIcon(tab: WikiSubTab) {

@@ -10,9 +10,9 @@ namespace ClaudeHomeServer.Services.Tasks;
 // ходу, и в системном блоке он обнулял бы prefix cache всей истории (RecallInTurnText,
 // docs/architecture/llm-providers.md). Состав tools/list не трогаем — только текст.
 //
-// Условие: сессия — ключевой чат фичи (первое ЖИВОЕ звено FeatureKeyChain, как keySessionId
-// проектора), а голос эпика отсутствует или устарел (brief.note.stale — тот же StaleOf, второго
-// правила нет). Закрытые и смерженные фичи молчат.
+// Условие: сессия — ключевой чат фичи (FeatureKeyChain.FirstLive — первое живое звено с
+// переходом по продолжениям, как keySessionId проектора), а голос эпика отсутствует или устарел
+// (brief.note.stale — тот же StaleOf, второго правила нет). Закрытые и смерженные фичи молчат.
 //
 // P2 (фича «Правдивый процент и гант фич»): в том же хвосте — по одной строке на фичу о
 // расхождениях FeatureTracker: «В трекере фичи «X» N расхождений: <вид> ×k». Только виды и
@@ -73,9 +73,8 @@ public sealed class FeatureVoiceReminderContributor(
             if (shown >= MaxFeatures) break;
             var featureTasks = (byFeature.TryGetValue(epic.Id, out var linked) ? linked : []).Append(epic).ToList();
             var chain = FeatureKeyChain.Of(epic, featureTasks);
-            // Дешёвый отсев до проекции: сессии нет в цепочке — фича не наша
-            if (!chain.Contains(sessionId)) continue;
-            if (chain.FirstOrDefault(id => IsLive(sessions, id, ownerId)) != sessionId) continue;
+            // Дешёвый отсев до проекции: ключевой чат фичи — другой (правило — Core, FeatureKeyChain)
+            if (FeatureKeyChain.FirstLive(chain, sessions, ownerId) != sessionId) continue;
 
             var run = features.Project(epic.Id, ownerId, snapshot);
             if (run is null) continue;
@@ -128,10 +127,7 @@ public sealed class FeatureVoiceReminderContributor(
         sessions.GetAll()
             .Where(s => sessions.ResolveOwnerId(s) == ownerId)
             .Select(s => new FeatureIndexSession(s.Id, s.TaskId, s.ProjectId, s.IsArchived, s.Model, s.PersonaId,
-                s.Status is SessionStatus.Starting or SessionStatus.Working or SessionStatus.Waiting))
+                s.Status is SessionStatus.Starting or SessionStatus.Working or SessionStatus.Waiting,
+                s.ContinuedInSessionId))
             .ToList();
-
-    // Живое звено: сессия есть и принадлежит владельцу (чужая/удалённая пропускается, как в KeySession)
-    private static bool IsLive(ISessionDirectory sessions, string id, string ownerId) =>
-        sessions.GetById(id) is { } s && sessions.ResolveOwnerId(s) == ownerId;
 }

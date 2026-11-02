@@ -100,8 +100,9 @@ function ClassRow({ cls, busy, onResume }: { cls: WikiApplyClassDto; busy: boole
       )}
       {cls.disabled && (
         <div style={{ marginTop: SP.xs }}>
+          {/* size="md": тач-цель ≥40 px (xs — 24 px, ниже цели; дефект ed08c823) */}
           <Button
-            variant="secondary" size="xs"
+            variant="secondary" size="md"
             dataTestId={`wiki-apply-resume-${cls.class}`}
             ariaLabel={`Снова применять само: ${classLabel(cls.class)}`}
             disabled={busy}

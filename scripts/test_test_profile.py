@@ -245,8 +245,9 @@ public class C { [Fact] public void Outside() { } }""")
         host, known = tp.host_classes(self.src)
         report = tp.build_report(results, skipped, host, known, slow=tp.count_slow_tests(self._slow_src()))
         lines = report.splitlines()
-        self.assertEqual("Fast: 5 тестов в 3 классах (все переданные TRX)", lines[1])
-        self.assertEqual("Под Slow: 3 тестов (2 меток в исходниках; [Theory] — как один тест)", lines[2])
+        # fast-TRX нет — подпись не называет набор Fast
+        self.assertEqual("Все переданные TRX: 5 тестов в 3 классах (TRX с префиксом fast нет)", lines[1])
+        self.assertEqual("Под Slow: 3 теста (2 метки в исходниках; [Theory] — как один тест)", lines[2])
 
     def test_fast_строка_берёт_только_trx_с_префиксом_fast(self):
         d = os.path.join(self.tmp.name, "passes2")
@@ -261,7 +262,66 @@ public class C { [Fact] public void Outside() { } }""")
         self.assertEqual(0, code)
         self.assertIn("Тестов: 15 ", out)
         self.assertIn("Fast: 5 тестов в 3 классах (TRX с префиксом fast)", out)
-        self.assertIn("Под Slow: 3 тестов (2 меток", out)
+        self.assertIn("Под Slow: 3 теста (2 метки", out)
+
+    def test_plural_числительные_по_русским_правилам(self):
+        forms = ("тест", "теста", "тестов")
+        self.assertEqual(["тест", "теста", "тестов", "тестов", "тестов", "тестов", "тест", "теста"],
+                         [tp.plural(n, *forms) for n in (1, 2, 5, 11, 12, 14, 21, 24)])
+        self.assertEqual("тестов", tp.plural(0, *forms))
+        self.assertEqual("тестов", tp.plural(111, *forms))
+
+    def test_отчёт_единица_и_десятки_в_подписи(self):
+        line = tp.build_report([("A", "T", 0.1)], 0, set(), {"A"}, slow=(1, 1)).splitlines()
+        self.assertEqual("Все переданные TRX: 1 тест в 1 классе (TRX с префиксом fast нет)", line[1])
+        self.assertEqual("Под Slow: 1 тест (1 метка в исходниках; [Theory] — как один тест)", line[2])
+        many = [(f"C{i}", "T", 0.1) for i in range(21)]
+        line = tp.build_report(many, 0, set(), set(), fast_results=many, slow=(102, 3)).splitlines()
+        self.assertEqual("Fast: 21 тест в 21 классе (TRX с префиксом fast)", line[1])
+        self.assertEqual("Под Slow: 3 теста (102 метки в исходниках; [Theory] — как один тест)", line[2])
+
+    def _count(self, name, text):
+        d = os.path.join(self.tmp.name, name)
+        os.makedirs(d)
+        with open(os.path.join(d, "X.cs"), "w", encoding="utf-8") as f:
+            f.write(text)
+        return tp.count_slow_tests(d)
+
+    def test_метка_на_методе_внутри_класса_с_меткой_не_считает_тест_дважды(self):
+        # два [Fact] в классе под Slow; метка на втором — тот же тест, не третий
+        text = """[Trait("Category", "Slow")]
+public class B {
+    [Fact] public void One() { }
+    [Fact]
+    [Trait("Category", "Slow")]
+    public void Two() { }
+}
+public class C { [Fact] [Trait("Category", "Slow")] public void Alone() { } }"""
+        self.assertEqual((3, 3), self._count("dbl", text))
+
+    def test_вложенный_класс_с_меткой_внутри_класса_с_меткой_не_удваивает(self):
+        text = """[Trait("Category", "Slow")]
+public class Outer {
+    [Fact] public void A() { }
+    [Trait("Category", "Slow")]
+    public class Inner { [Fact] public void B() { } }
+}"""
+        self.assertEqual((2, 2), self._count("nested", text))
+
+    def test_граница_класса_не_сбивается_скобками_в_строках_символах_и_комментариях(self):
+        text = '[Trait("Category", "Slow")]\n' \
+               'public class B {\n' \
+               '    [Fact] public void One() { var s = "}"; var c = \'}\'; var v = @"a ""}"" b"; var r = """}"""; // }\n' \
+               '    }\n' \
+               '    [Fact] public void Two() { /* } */ var p = "\\\\"; }\n' \
+               '}\n' \
+               'public class After { [Fact] public void Outside() { } }'
+        # без разбора литералов класс «закрылся» бы на первой «}» в строке, и Two выпал бы из счёта
+        self.assertEqual((1, 2), self._count("lit", text))
+
+    def test_matching_brace_нет_пары_отдаёт_конец_текста(self):
+        text = "class A { void M() {"
+        self.assertEqual(len(text), tp.matching_brace(text, text.index("{")))
 
     def test_отчёт_slow_не_падает_по_числу_меток(self):
         # сторож роста — отчёт, не гейт: сколько бы ни было меток, код возврата 0

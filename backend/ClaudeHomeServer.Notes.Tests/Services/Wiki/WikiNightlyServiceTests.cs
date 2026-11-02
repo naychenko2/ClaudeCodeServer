@@ -119,9 +119,10 @@ public class WikiNightlyServiceTests : IDisposable
     }
 
     private WikiNightlyService Sut(Func<string, string, CancellationToken, Task<WikiChatIngestService.ChatResult>>? analyze = null,
-        ClaudeHomeServer.Services.Composition.IFeatureFlagGate? flags = null) =>
+        ClaudeHomeServer.Services.Composition.IFeatureFlagGate? flags = null,
+        ClaudeHomeServer.Services.Composition.INotificationSender? notifier = null) =>
         new(_sessions, new WikiChatRecalc(_sessions, _config), new WikiChatStage2(_llm, _sessions, _config),
-            analyze ?? Done(), _llm, _config, NullLogger<WikiNightlyService>.Instance, flags ?? _flag, () => _now);
+            analyze ?? Done(), _llm, _config, NullLogger<WikiNightlyService>.Instance, flags ?? _flag, () => _now, notifier);
 
     private Func<string, string, CancellationToken, Task<WikiChatIngestService.ChatResult>> Done(
         string outcome = WikiChatIngestService.OutcomeNothingNew, int packages = 0) =>
@@ -730,6 +731,53 @@ public class WikiNightlyServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ДваТикаБезМаршрута_ОдноУведомлениеНаДату_ДругаяДатаУведомляетСнова()
+    {
+        // Локальная модель недоступна всю ночь: каждый тик окна проходит её заново (error дату
+        // не закрывает), но предупреждение владелец получает один раз на дату. Мутация «убрать
+        // условие» (зовёт TryNotifyAsync без охраны errorAlreadyNotified) — второй тик шлёт
+        // второе уведомление, тест краснеет.
+        Configure();
+        AddChat("c1");
+        _llm.Route = false;
+        var notifier = new Notifier();
+        var sut = Sut(notifier: notifier);
+
+        await Tick(sut);
+        Last().Outcome.Should().Be(WikiNightlyService.OutcomeError);
+        notifier.Sent.Should().HaveCount(1, "первая неудача ночи названа");
+
+        await Tick(sut); // следующий тик того же окна: дата по-прежнему не закрыта, уведомление — нет
+        Last().Outcome.Should().Be(WikiNightlyService.OutcomeError, "error дату не закрывает");
+        notifier.Sent.Should().HaveCount(1, "уведомление об error — одно на дату");
+
+        // Следующая ночь: записанный error — другой (вчерашней) даты — уведомление уходит снова.
+        _now = At(4, day: 3);
+        await Tick(sut);
+        Last().Date.Should().Be("2026-11-03");
+        notifier.Sent.Should().HaveCount(2, "error другой даты назван снова");
+    }
+
+    [Fact]
+    public async Task ОшибкаПотомУспехВТуЖеДату_УспехСообщается()
+    {
+        // Мутация «убрать проверку исхода из охраны» (молчать при любом исходе после error этой
+        // даты) — второй тик не шлёт уведомление об успехе, тест краснеет.
+        Configure();
+        AddChat("c1");
+        File.WriteAllText(TriageFile(), "{ битый стор"); // пересчёт отказывает → проход error
+        await Tick();
+        Last().Outcome.Should().Be(WikiNightlyService.OutcomeError);
+
+        File.Delete(TriageFile());
+        var notifier = new Notifier();
+        await Tick(Sut(notifier: notifier));
+
+        Last().Outcome.Should().Be(WikiNightlyService.OutcomeCompleted);
+        notifier.Sent.Should().HaveCount(1, "успех после error той же даты сообщается");
+    }
+
+    [Fact]
     public async Task ПрерванныйПроход_ДатуНеЗакрывает()
     {
         Configure();
@@ -957,6 +1005,17 @@ public class WikiNightlyServiceTests : IDisposable
         {
             if (userId == ThrowFor) throw new InvalidOperationException("шов флага упал");
             return On && key == FeatureFlagKeys.LlmWiki;
+        }
+    }
+
+    private sealed class Notifier : ClaudeHomeServer.Services.Composition.INotificationSender
+    {
+        public List<CreateNotificationRequest> Sent { get; } = [];
+
+        public Task<string> SendAsync(string userId, CreateNotificationRequest req, bool sendPush = false)
+        {
+            Sent.Add(req);
+            return Task.FromResult("n-" + Sent.Count);
         }
     }
 

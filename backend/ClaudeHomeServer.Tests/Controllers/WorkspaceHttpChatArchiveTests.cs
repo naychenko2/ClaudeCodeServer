@@ -25,7 +25,8 @@ namespace ClaudeHomeServer.Tests.Controllers;
 [Trait("Category", "Host")]
 public class WorkspaceHttpChatArchiveTests : IClassFixture<TestWebApplicationFactory>
 {
-    // Хост на класс; чаты и архивация каждый тест заводит сам
+    // Хост на класс; чаты и архивация каждый тест заводит сам. Состояние НАКАПЛИВАЕТСЯ между тестами
+    // класса (чаты и архив владельца общие): проверять только собственные чаты по id, а не число записей
     private readonly TestWebApplicationFactory _factory;
 
     public WorkspaceHttpChatArchiveTests(TestWebApplicationFactory factory) => _factory = factory;

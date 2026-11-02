@@ -18,7 +18,8 @@ public static class FeatureChatDoor
     public static List<FeatureIndexSession> Snapshot(SessionManager sessions, string ownerId) =>
         sessions.GetAllOwnedBy(ownerId)
             .Select(s => new FeatureIndexSession(s.Id, s.TaskId, s.ProjectId, s.IsArchived, s.Model, s.PersonaId,
-                s.Status is SessionStatus.Starting or SessionStatus.Working or SessionStatus.Waiting))
+                s.Status is SessionStatus.Starting or SessionStatus.Working or SessionStatus.Waiting,
+                s.ContinuedInSessionId))
             .ToList();
 
     // Фича, в которую попадает задача: её FeatureId либо она сама, если это эпик.

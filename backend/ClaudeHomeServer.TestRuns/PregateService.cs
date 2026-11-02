@@ -131,6 +131,9 @@ public sealed record PregateCheckOptions
     public string Command { get; init; } = "";
     public List<string> Args { get; init; } = [];
     public string WorkingDirectory { get; init; } = ".";
+    // Переменные окружения процесса проверки поверх служебных. Так включается то, чего скрипт старого
+    // дерева не видит и на чём не падает его разбор аргументов (CCS_TEST_SHARDS_ADAPTIVE «быстрых тестов»)
+    public Dictionary<string, string> Env { get; init; } = [];
 
     // ui-probe: адрес стенда, маршрут, ширины (пусто — 360 и 1280), каталог с node_modules playwright
     public string Origin { get; init; } = "";
@@ -272,12 +275,7 @@ public sealed class PregateService : ITaskPregate
             FileName = check.Command,
             Args = check.Args,
             WorkingDirectory = TestRunService.UpperDriveLetter(workDir),
-            Env = new Dictionary<string, string>
-            {
-                // Разбору нужен английский вывод: «error CS…», «warning CS…»
-                ["DOTNET_CLI_UI_LANGUAGE"] = "en",
-                ["DOTNET_NOLOGO"] = "1",
-            },
+            Env = ProcessEnv(check),
             RedirectStdin = false,
             Heavy = true,
             PrivateBuildNodes = true,
@@ -311,6 +309,18 @@ public sealed class PregateService : ITaskPregate
             var head = outcome.ExitCode is { } code ? $"код выхода {code}" : "процесс не вернул код выхода";
             return new PregateCheckResult(check.Name, PregateStatus.Red, head + "\n" + string.Join('\n', lines));
         }
+    }
+
+    // Окружение процесса проверки: Env из конфига, служебные ключи поверх — разбор вывода на них держится
+    internal static Dictionary<string, string> ProcessEnv(PregateCheckOptions check)
+    {
+        var env = new Dictionary<string, string>(check.Env ?? [], StringComparer.Ordinal)
+        {
+            // Разбору нужен английский вывод: «error CS…», «warning CS…»
+            ["DOTNET_CLI_UI_LANGUAGE"] = "en",
+            ["DOTNET_NOLOGO"] = "1",
+        };
+        return env;
     }
 
     // Первый аргумент-путь: не опция и с разделителем каталога («scripts/test-shards.py»); «build», «tsc» — не пути.

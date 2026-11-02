@@ -31,16 +31,17 @@
 // ≥ TABLET_WIDE_MIN — прежний ряд.
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
-import { BookOpen, ScrollText, Undo2 } from 'lucide-react';
+import { BookOpen, Ban, Check, ScrollText, Star, Undo2 } from 'lucide-react';
 import {
   C, FS, SP, FLAGS, useFeature, useWindowWidth, TABLET_WIDE_MIN,
-  analyzeWikiChat, ingestWikiNote, loadWikiChatAnalyzeStatus, loadWikiChats, requestOpenWikiPage, retractWikiSource,
-  WikiError, type WikiChatAnalyzeOk, type WikiNoteIngestDto,
+  analyzeWikiChat, ingestWikiNote, loadWikiChatAnalyzeStatus, loadWikiChats, requestOpenWikiPage, retractWikiSource, setWikiChatMark,
+  WikiError, type WikiChatAnalyzeOk, type WikiChatMark, type WikiNoteIngestDto,
 } from 'aihome_shell/kit';
 import { Button } from '../../components/ui/Button';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { ToolbarOverflowMenu, type OverflowItem } from '../../components/ToolbarOverflowMenu';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
+import { TASK_HINT, isTaskChat } from './wiki/WikiChatTriageList';
 import { personalSectionRefusalText, retractResultText, wikiErrorText } from './wiki/wikiLabels';
 import type { ChatHeaderSummaryCtx } from '../../lib/subsystems/registryCore';
 
@@ -120,10 +121,19 @@ export function WikiChatActions({ session, hasMessages, online, compact }: ChatH
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [retractBusy, setRetractBusy] = useState(false);
   const [retractText, setRetractText] = useState<string | null>(null);
+  // Пометка чата («Важный» / «Не разбирать») берётся из списка отбора (поле mark), как и
+  // chroniclePath; у чата исполнения задач пометки не действуют (признак — isTaskChat списка)
+  const [mark, setMark] = useState<WikiChatMark | null>(null);
+  const [taskChat, setTaskChat] = useState(false);
+  const [markBusy, setMarkBusy] = useState(false);
+  const [markError, setMarkError] = useState<string | null>(null);
   // Поколение запросов (образец WikiHealth): ответ и опрос пишут состояние, только если их
   // поколение последнее; смена чата, «Разобрать» и откат поднимают новое — запоздалый ответ
   // прежнего чата нового не затрёт
   const seq = useRef(0);
+  // Поколение чата для пометки: «Разобрать»/откат поднимают seq, но пометка от них не зависит —
+  // отбрасывается только ответ чата, который уже сменился
+  const markGen = useRef(0);
   const timers = useRef<number[]>([]);
 
   const clearTimers = useCallback(() => {
@@ -138,6 +148,8 @@ export function WikiChatActions({ session, hasMessages, online, compact }: ChatH
         if (seq.current !== mine) return;
         const rec = items.find(i => i.sessionId === sessionId);
         setChroniclePath(rec?.chroniclePath ?? null);
+        setMark(rec?.mark === 'important' || rec?.mark === 'skip' ? rec.mark : null);
+        setTaskChat(rec ? isTaskChat(rec) : false);
       })
       .catch(() => { /* ссылки нет — кнопки нет; это не ошибка экрана */ });
   }, []);
@@ -167,6 +179,11 @@ export function WikiChatActions({ session, hasMessages, online, compact }: ChatH
     // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс и старт загрузки при смене session.id: другого места у них нет
     setState({ kind: 'idle' });
     setChroniclePath(null);
+    setMark(null);
+    setTaskChat(false);
+    setMarkError(null);
+    markGen.current += 1;
+    setMarkBusy(false);
     setConfirmOpen(false);
     setRetractText(null);
     clearTimers();
@@ -213,6 +230,22 @@ export function WikiChatActions({ session, hasMessages, online, compact }: ChatH
     // navPush экрана не переключает — экран выбирается по hubTab, а его меняет только App.
     requestOpenWikiPage({ section: `projects/${session.projectId}`, path: chroniclePath });
     window.dispatchEvent(new Event('cc-open-note'));
+  };
+
+  // Пометка чата: клик по уже отмеченному снимает (null), по другому — переключает (один cmark,
+  // взаимоисключающие). Состояние меняется только по ответу бэка; отказ — текстом, UI прежний
+  const toggleMark = (kind: WikiChatMark) => {
+    if (!online || markBusy || taskChat) return;
+    const mine = markGen.current;
+    setMarkBusy(true);
+    setMarkError(null);
+    setWikiChatMark(session.id, mark === kind ? null : kind)
+      .then(next => { if (markGen.current === mine) setMark(next); })
+      .catch(e => {
+        if (markGen.current !== mine) return;
+        setMarkError(e instanceof WikiError ? wikiErrorText(e, 'chat') : 'Не удалось сохранить пометку');
+      })
+      .finally(() => { if (markGen.current === mine) setMarkBusy(false); });
   };
 
   const doRetract = () => {
@@ -288,6 +321,27 @@ export function WikiChatActions({ session, hasMessages, online, compact }: ChatH
         onClick: openChronicle,
       }] : []),
       {
+        key: 'mark-important',
+        icon: <Star size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+        label: 'Важный',
+        sublabel: taskChat ? TASK_HINT : 'ночью — в первую очередь, минуя отбор',
+        value: mark === 'important' ? <Check size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> : undefined,
+        active: mark === 'important',
+        separator: true,
+        disabled: !online || markBusy || taskChat,
+        onClick: () => toggleMark('important'),
+      },
+      {
+        key: 'mark-skip',
+        icon: <Ban size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+        label: 'Не разбирать',
+        sublabel: markError ?? (taskChat ? TASK_HINT : 'ни ночью, ни кнопкой'),
+        value: mark === 'skip' ? <Check size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> : undefined,
+        active: mark === 'skip',
+        disabled: !online || markBusy || taskChat,
+        onClick: () => toggleMark('skip'),
+      },
+      {
         key: 'retract',
         icon: <Undo2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
         label: 'Откатить всё из этого чата',
@@ -306,7 +360,7 @@ export function WikiChatActions({ session, hasMessages, online, compact }: ChatH
           triggerLabel="Вики"
           triggerIcon={<BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
           triggerTitle="Действия «Вики» в этом чате"
-          indicator={status || retractText ? <span style={msgDot(status ? status.color : C.textMuted)} /> : undefined}
+          indicator={status || retractText || markError ? <span style={msgDot(status ? status.color : C.textMuted)} /> : undefined}
           items={items}
         />
         {confirm}
@@ -344,6 +398,23 @@ export function WikiChatActions({ session, hasMessages, online, compact }: ChatH
       >
         Откатить всё из этого чата
       </Button>
+      {(['important', 'skip'] as const).map(kind => (
+        <Button
+          key={kind} variant={mark === kind ? 'secondary' : 'ghost'} size="sm"
+          dataTestId={`wiki-chat-mark-${kind}`} ariaPressed={mark === kind}
+          title={taskChat ? TASK_HINT : kind === 'important' ? 'Ночью — в первую очередь, минуя отбор' : 'Ни ночью, ни кнопкой'}
+          disabled={!online || markBusy || taskChat}
+          leftIcon={kind === 'important' ? <Star size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> : <Ban size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+          onClick={() => toggleMark(kind)}
+        >
+          {kind === 'important' ? 'Важный' : 'Не разбирать'}
+        </Button>
+      ))}
+      {markError && (
+        <span data-testid="wiki-chat-mark-error" style={{ fontSize: FS.xs, color: C.dangerText, maxWidth: 360 }}>
+          {markError}
+        </span>
+      )}
       {status && (
         <span data-testid="wiki-chat-status" style={{ fontSize: FS.xs, color: status.color, maxWidth: 360 }}>
           {status.text}

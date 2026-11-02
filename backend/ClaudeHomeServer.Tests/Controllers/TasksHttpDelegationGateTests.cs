@@ -23,7 +23,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// (изолирована GetOwned по владельцу токена), а не по заголовку от клиента.
 /// </summary>
 [Trait("Category", "Host")]
-public class TasksHttpDelegationGateTests : IClassFixture<TasksHttpDelegationGateTests.Host>
+public class TasksHttpDelegationGateTests : IClassFixture<TasksHttpDelegationGateTests.Host>, IDisposable
 {
     // Фабрика адаптеров с настраиваемой глубиной хода: GetActiveTurnDelegation спрашивает
     // ЖИВОЙ адаптер (env и заголовки протухают), поэтому глубину меняем на лету — один
@@ -90,7 +90,11 @@ public class TasksHttpDelegationGateTests : IClassFixture<TasksHttpDelegationGat
         _adapters.SuppressTasksExecute = false;
     }
 
-    private HttpClient Client => _factory.CreateAuthenticatedClient();
+    // Один клиент на тест, гасится в Dispose (раньше свойство создавало нового на каждое обращение)
+    private HttpClient? _client;
+    private HttpClient Client => _client ??= _factory.CreateAuthenticatedClient();
+
+    public void Dispose() => _client?.Dispose();
 
     private async Task<(string ProjectId, string SessionId)> CreateProjectWithSessionAsync()
     {

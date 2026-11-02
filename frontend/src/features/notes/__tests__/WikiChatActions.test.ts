@@ -829,3 +829,112 @@ describe('Компактная раскладка (M-1, дефект ecec968a)',
     expect((dot as { style?: Record<string, string> }).style?.background).toBe(C.textMuted);
   });
 });
+
+// Пометки чата «Важный» / «Не разбирать» (F3, макет llm-wiki-v2 #chat&cut): отмечаемые,
+// взаимоисключающие (один cmark), состояние — из списка отбора (поле mark), клик ставит/снимает
+// через setWikiChatMark (PUT /wiki/chats/{id}/mark), у чата исполнения задач пункты неактивны,
+// отказ — текстом без смены состояния.
+// Мутации этого прогона: (17) убрать вызов setWikiChatMark из toggleMark → «ставит и снимает»
+// краснеет; (18) снять гард taskChat → «чат исполнения задач» краснеет; (19) менять mark до
+// ответа бэка → «отказ не меняет состояние» краснеет.
+describe('Пометки чата «Важный» / «Не разбирать» (F3)', () => {
+  const TASK_REASON = 'ступень 0: чат исполнения задачи';
+  type MarkItem = typeof CHATRECORD & { mark: string | null };
+
+  function serveMarks(item: Partial<MarkItem>, put?: (body: { mark: string | null }) => unknown) {
+    const puts: Array<string | null> = [];
+    req.mockImplementation((url: string, init?: { method?: string; body?: string }) => {
+      const u = String(url);
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (method === 'PUT' && u.endsWith('/mark')) {
+        const body = JSON.parse(init!.body!) as { mark: string | null };
+        puts.push(body.mark);
+        return put ? Promise.resolve().then(() => put(body)) : Promise.resolve({ mark: body.mark });
+      }
+      if (method === 'GET' && u === '/wiki/chats') {
+        return Promise.resolve({ items: [{ ...CHATRECORD, mark: null, ...item }], counts: {} });
+      }
+      if (method === 'GET' && u.includes('/analyze-status')) return Promise.resolve({ running: false, last: null });
+      return Promise.resolve(null);
+    });
+    return puts;
+  }
+
+  const pressed = (c: AnyNode, kind: string) =>
+    (reactProps(buttonByTestId(c, `wiki-chat-mark-${kind}`)!) as { 'aria-pressed'?: boolean })['aria-pressed'];
+  const disabled = (c: AnyNode, kind: string) =>
+    (reactProps(buttonByTestId(c, `wiki-chat-mark-${kind}`)!) as { disabled?: boolean }).disabled === true;
+
+  it('состояние берётся из списка отбора: у чата с mark=skip нажат «Не разбирать»', async () => {
+    serveMarks({ mark: 'skip' });
+    const c = render(sessionA);
+    await settle();
+    expect(pressed(c, 'skip')).toBe(true);
+    expect(pressed(c, 'important')).toBe(false);
+  });
+
+  it('«Не разбирать» ставит пометку ровно одним вызовом, повторный клик снимает (null)', async () => {
+    const puts = serveMarks({ mark: null });
+    const c = render(sessionA);
+    await settle();
+    click(buttonByTestId(c, 'wiki-chat-mark-skip'), 'не разбирать');
+    await settle();
+    expect(puts).toEqual(['skip']);
+    expect(pressed(c, 'skip')).toBe(true);
+    click(buttonByTestId(c, 'wiki-chat-mark-skip'), 'не разбирать повторно');
+    await settle();
+    expect(puts).toEqual(['skip', null]);
+    expect(pressed(c, 'skip')).toBe(false);
+  });
+
+  it('«Важный» и «Не разбирать» взаимоисключающие: ответ бэка переключает отметку', async () => {
+    const puts = serveMarks({ mark: 'important' });
+    const c = render(sessionA);
+    await settle();
+    expect(pressed(c, 'important')).toBe(true);
+    click(buttonByTestId(c, 'wiki-chat-mark-skip'), 'не разбирать');
+    await settle();
+    expect(puts).toEqual(['skip']);
+    expect(pressed(c, 'skip')).toBe(true);
+    expect(pressed(c, 'important')).toBe(false);
+  });
+
+  it('у чата исполнения задач пункты неактивны и запроса нет', async () => {
+    const puts = serveMarks({ reason: TASK_REASON });
+    const c = render(sessionA);
+    await settle();
+    expect(disabled(c, 'important')).toBe(true);
+    expect(disabled(c, 'skip')).toBe(true);
+    click(buttonByTestId(c, 'wiki-chat-mark-skip'), 'не разбирать');
+    await settle();
+    expect(puts).toEqual([]);
+  });
+
+  it('отказ (409 wiki_llm_wiki_off) — текстом, отметка не меняется', async () => {
+    const puts = serveMarks({ mark: 'important' }, () => Promise.reject({ status: 409, body: { code: 'wiki_llm_wiki_off', message: 'off' } }));
+    const c = render(sessionA);
+    await settle();
+    click(buttonByTestId(c, 'wiki-chat-mark-skip'), 'не разбирать');
+    await settle();
+    expect(puts).toEqual(['skip']);
+    expect(pressed(c, 'important')).toBe(true);
+    expect(pressed(c, 'skip')).toBe(false);
+    expect(has(c, 'Вики выключена в настройках')).toBe(true);
+  });
+
+  it('в компактном меню пункты «Важный» / «Не разбирать» отмечаемые и зовут стор', async () => {
+    const puts = serveMarks({ mark: null });
+    installFakeDom();
+    const g = globalThis as Record<string, unknown>;
+    if (!g.getComputedStyle) g.getComputedStyle = () => ({ overflowY: 'visible' });
+    const { root, container: c } = mount(createElement(WikiChatActions, { session: sessionA, hasMessages: true, online: true, compact: true }));
+    roots.push(root);
+    await settle();
+    click(findNodeByAttr(c, 'title', 'Действия «Вики» в этом чате'), 'триггер');
+    await settle();
+    const item = allNodes(docBody()).find(n => n.nodeName === 'BUTTON' && textNodes(n).join(' ').includes('Не разбирать'));
+    click(item ?? null, 'пункт «Не разбирать»');
+    await settle();
+    expect(puts).toEqual(['skip']);
+  });
+});

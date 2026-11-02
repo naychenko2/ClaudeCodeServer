@@ -201,6 +201,15 @@ describe('блок «Применение» (S7d-1)', () => {
     expect(has(c, 'session × create')).toBe(true);
   });
 
+  it('кнопка «Снова применять само» — цель касания не ниже 40 px', async () => {
+    const c = render();
+    await settle();
+    const btn = findNodeByAttr(c, 'data-testid', 'wiki-apply-resume-session×create')!;
+    const st = (reactProps(btn).style ?? {}) as { minHeight?: number; height?: number };
+    expect(st.minHeight).toBeGreaterThanOrEqual(40);
+    expect(st.height === undefined || st.height >= 40).toBe(true);
+  });
+
   it('нажатие «Снова применять само» — ровно один PUT с ключом класса; после ответа кнопки нет', async () => {
     const c = render();
     await settle();

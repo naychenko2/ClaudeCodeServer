@@ -50,22 +50,23 @@ public sealed class VideoAssembleIsolationTests(ITestOutputHelper output) : IDis
 
         Directory.CreateDirectory(_dir);
         const string slice = "ccs-isotest.slice";
-        var prev = IsolationOptions.Instance;
+        // Опции в процесс-глобал публикует только Start ланчера и только на время вызова
+        // (RecordingLaunchers): на генерацию исходника и опрос cgroup (десятки секунд) чужие хосты
+        // видели бы Enabled=true со слайсом ccs-isotest.slice
         var options = new IsolationOptions { Enabled = true, Slice = slice, MemoryMax = "4G" };
-        IsolationOptions.Instance = options;
         try
         {
             // Проба продукта (результат кэшируется, боевой Start его переиспользует) не ОК — обёртки не будет
             // ни у одного запуска: проверять тут нечего. Проба ОК ещё не значит, что процесс окажется
             // в scope (раннер GitHub) — это решает CgroupMoveWorks.
             LocalProcessRunner.ResetProbeForTests();
-            var probe = LocalProcessRunner.ProbeOnce(IsolationOptions.Instance, systemdRun!);
+            var probe = LocalProcessRunner.ProbeOnce(options, systemdRun!);
             Skip.If(probe is not { Ok: true }, "изоляция в этой среде не работает: " + (probe?.FailReason ?? "проба не выполнена"));
             var cgroupSkip = RunsOnCiRunner()
                 ? "раннер CI: переезд реальной сборки в scope не воспроизводится (проба и `systemd-run … cat /proc/self/cgroup` "
                   + "переезжают, а процесс реальной сборки 30 с остаётся в cgroup родителя) — cgroup-утверждение пропущено, "
                   + "слотовые проверены"
-                : CgroupMoveWorks(IsolationOptions.Instance, systemdRun!, slice);
+                : CgroupMoveWorks(options, systemdRun!, slice);
 
             var gate = new BuildConcurrencyGate(1);
             var started = new TaskCompletionSource();
@@ -117,7 +118,6 @@ public sealed class VideoAssembleIsolationTests(ITestOutputHelper output) : IDis
         }
         finally
         {
-            IsolationOptions.Instance = prev;
             // Свой результат пробы (со своим slice) не должен остаться следующему тесту:
             // кэш пробы — процесс-глобальное состояние, тот же приём, что у LocalProcessRunnerIsolationTests.
             LocalProcessRunner.ResetProbeForTests();
@@ -201,8 +201,9 @@ public sealed class VideoAssembleIsolationTests(ITestOutputHelper output) : IDis
                 // секунд под нагрузкой — чужой хост успевал подменить опции, и ffmpeg стартовал без systemd-run
                 // (доказано: /proc/<pid>/cmdline = ffmpeg…, Instance.Enabled=false в момент Start). Продукт тут
                 // прав — он читает глобальные опции. Закрепляем свои непосредственно перед Start.
-                IsolationOptions.Instance = owner._options;
-                var process = Real.Start(spec);
+                // Публикуем на время одного вызова; возврат — только если Instance всё ещё наш
+                Process process;
+                using (new IsolationOptionsScope(owner._options)) process = Real.Start(spec);
                 owner.Spec = spec;
                 owner.Pid = process.Id;
                 owner.SlotAtStart = owner._gate.Available;

@@ -141,6 +141,22 @@ public class AudioEditorDspControllerTests : IClassFixture<AudioEditorDspControl
         (await Json(stale)).GetProperty("code").GetString().Should().Be(AudioEditErrorCodes.RevisionConflict);
     }
 
+    [Fact]
+    public async Task Use_сбрасывает_состояние_фейка()
+    {
+        var fake = _hosts.Dsp.Fake;
+        await fake.PeaksAsync("DIRTY"u8.ToArray(), 1, CancellationToken.None);
+        await fake.ConcatAsync([[1]], [AudioJoint.Pause(1)], null, default, CancellationToken.None);
+        fake.PeaksInput.Should().Be("DIRTY");
+
+        _hosts.Dsp.Use();
+
+        fake.PeaksInput.Should().BeNull();
+        fake.ConcatPieces.Should().BeEmpty();
+        fake.Joints.Should().BeEmpty();
+        fake.Available.Should().BeTrue();
+    }
+
     public sealed class FakeDsp : IAudioDsp
     {
         public bool Available { get; set; } = true;

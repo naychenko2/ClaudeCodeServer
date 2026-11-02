@@ -16,8 +16,9 @@ public sealed class AudioSchemaEndpointTests : IClassFixture<AudioSchemaEndpoint
 
     public AudioSchemaEndpointTests(Hosts hosts) => _hosts = hosts;
 
-    // Хост на КЛАСС, один на каждую конфигурацию: поднимается лениво при первом обращении
-    // и гасится вместе с фикстурой. Тесты состояния хоста не меняют — только читают
+    // Хост на КЛАСС, один на каждую конфигурацию: объект фабрики создаётся вместе с фикстурой,
+    // а ASP.NET-хост внутри неё стартует лениво при первом обращении; гасится вместе с фикстурой.
+    // Тесты состояния хоста не меняют — только читают
     public sealed class Hosts : IDisposable
     {
         public PlainHost Plain { get; } = new();

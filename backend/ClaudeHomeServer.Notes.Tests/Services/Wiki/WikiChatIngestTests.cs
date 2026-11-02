@@ -273,6 +273,61 @@ public class WikiChatIngestTests : IDisposable
             "второй разбор дошёл до «нечего добавить», второго пакета нет");
     }
 
+    // ── Ф8 (дефект 603ae88a): версия окна чата — другой источник, заявки разведены ──
+    // Подмена записи N (тест выше) даёт ДРУГУЮ версию того же окна: карточка новой версии
+    // иная — её имя функция (ref, version) (WikiSourceCapture.cs:309). Пока очередь заявок
+    // опознавала источник по одной ссылке Ref, заявка новой версии получала чужой прогон:
+    // пакет тот же, модель под неё не звалась ни разу. В C2 этот путь был окном между концом
+    // прогона и снятием записи (снятие — продолжение на пуле, WikiIngestService.cs:143): под
+    // параллелью в завершённый прогон попадала заявка переписанного окна — отсюда флак.
+    // Здесь те же две версии одного окна: первая стоит в проходе A, вторая приходит, когда её
+    // заявка уже стоит в очереди. Гейт для этого асинхронный (GateAAsync, см. FakeLlm): с
+    // блокирующим GateA префикс прогона идёт на потоке вызова внутри lock очереди
+    // (WikiIngestService.cs:131), записи в очереди ещё нет, и исход теста зависел бы от гонки
+    // за этот lock — тот же флак, перенесённый в сам тест. Мутация «вернуть ключ без версии»
+    // краснит строку PackageId всегда, а не под нагрузкой.
+    [Fact]
+    public async Task ОдноОкноДвухВерсий_ЗаявкиНеСливаются_КаждаяРазбираетСвоёСодержание()
+    {
+        AddSession();
+        SetShortHistory();
+        var capture = new WikiSourceCapture(_notes, _projects, _sessions, _config, _keeper);
+        var v1 = await capture.CaptureSession(User, Section, ChatId, 1, 5);
+        v1.Ok.Should().BeTrue(v1.Reason);
+
+        const string secondTail = "Готово по-другому.";
+        _sessions.History[ChatId][4] = new StoredTextMessage(secondTail);
+        var v2 = await capture.CaptureSession(User, Section, ChatId, 1, 5);
+        v2.Ok.Should().BeTrue(v2.Reason);
+        v2.CardRelPath.Should().NotBe(v1.CardRelPath, "версия источника — в имени его карточки");
+
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var llm = new FakeLlm(
+            ("A", Claims(Claim1)), ("B", Plan1),
+            ("A", Claims(Claim1)), ("B", Plan1), ("R", NothingJson))
+        { GateAAsync = gate };
+        var ingest = new WikiIngestService(llm, new NoSpheres(), _apply, _config);
+        var req1 = new WikiIngestService.Request(WikiGate.OriginSession, "session:" + ChatId + "#m1-m5",
+            v1.CardRelPath!, "Пользователь:\n" + Claim1 + "\n\nАссистент:\nГотово.\n", Section, null);
+        var req2 = new WikiIngestService.Request(WikiGate.OriginSession, "session:" + ChatId + "#m1-m5",
+            v2.CardRelPath!, "Пользователь:\n" + Claim1 + "\n\nАссистент:\n" + secondTail + "\n", Section, null);
+
+        // Первая версия стоит в проходе A; вторая приходит в середину её прогона.
+        var t1 = Task.Run(() => ingest.IngestAsync(User, req1));
+        SpinWait.SpinUntil(() => llm.Calls.Count > 0, 5000).Should().BeTrue("первая заявка в прогоне");
+        var t2 = Task.Run(() => ingest.IngestAsync(User, req2));
+        gate.SetResult();
+        var first = await t1;
+        var again = await t2;
+
+        first.Outcome.Should().Be(WikiIngestService.OutcomeApplied, first.Reason);
+        // Мутация «вернуть ключ без версии»: again — тот же прогон (тот же пакет), один
+        // проход A на обе версии: красное здесь, без нагрузки и без повторов.
+        again.PackageId.Should().NotBe(first.PackageId, "версия окна — своя заявка, а не чужой прогон");
+        llm.CountOf("A").Should().Be(2, "каждая версия разбрана своим проходом A");
+        llm.PromptOf("A", 2).Should().Contain(secondTail, "вторая заявка разобрала своё содержание, а не чужое");
+    }
+
     // ── хэш курсора — по неизменяемому содержимому реплики (хвост ревью S6e-2, п.2) ──
 
     // Живой чат разбирают и посреди хода: реплика человека уже записана, а снимок промпта
@@ -829,7 +884,13 @@ public class WikiChatIngestTests : IDisposable
     private sealed class FakeLlm : ICheapTextRunner
     {
         public List<(string ActionKey, string Prompt, string Pass)> Calls { get; } = [];
-        public TaskCompletionSource? GateA; // первый проход A ждёт, пока gate не открыт
+        public TaskCompletionSource? GateA; // первый проход A ждёт, пока gate не открыт (на потоке вызова)
+        // Асинхронный вариант того же гейта: проход A отдаёт управление, прогон остаётся «в полёте».
+        // Нужен там, где проверяется очередь заявок: её вызывающий регистрирует заявку только
+        // после первого настоящего await прогона, а с блокирующим GateA весь префикс прогона
+        // идёт на потоке вызова внутри lock очереди — записи там нет, и приход второй заявки
+        // решался бы гонкой за этот lock.
+        public TaskCompletionSource? GateAAsync;
 
         private readonly Dictionary<string, Queue<string>> _answers = new();
         private readonly List<Action> _beforeNextCall = [];
@@ -860,11 +921,17 @@ public class WikiChatIngestTests : IDisposable
             object? jsonFormat = null, CancellationToken ct = default) =>
             Task.FromResult<string?>(Answer(actionKey, prompt, ct));
 
-        public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
+        public async Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
             string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
-            int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default) =>
-            Task.FromResult(new OneShotResult(
-                Answer(actionKey, prompt, ct), new OneShotUsage(10, 0, 0, 5, 0.0, "fake"), 1));
+            int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)
+        {
+            var text = Answer(actionKey, prompt, ct);
+            // Первый проход A стоит на асинхронном гейте: вызывающий (await CallModelAsync)
+            // отдаёт управление, и к этому моменту заявка уже стоит в очереди.
+            if (GateAAsync is not null && Calls[^1].Pass == "A" && CountOf("A") == 1)
+                await GateAAsync.Task.ConfigureAwait(false);
+            return new OneShotResult(text, new OneShotUsage(10, 0, 0, 5, 0.0, "fake"), 1);
+        }
 
         private string Answer(string actionKey, string prompt, CancellationToken ct)
         {

@@ -8,6 +8,11 @@
 // WikiJournal.test): «один вызов метода lib/wiki.ts с ключом класса» проверяется телом PUT,
 // которое реально ушло на прово.
 //
+// Класс-часть ответа — контракт бэка, а не полный список: PUT отвечает только классами с записью
+// в settings.json (её имеют когда-либо выключавшиеся) и с нулевым замером (BuildDto(next, [],
+// null), WikiSettingsController.cs:185). Снимок стора обязан сохранять все классы: и активный
+// без записи, и его замер — иначе смена окна ночи оставляла бы блок пустым до перечитки.
+//
 // Мутации этого прогона (вывод — в отчёте задачи):
 // (1) в ClassRow не показывать reason выключенного → «выключенный класс с причиной» краснеет;
 // (2) давать кнопку «Снова применять само» и включённому классу → «у включённого нет кнопки»
@@ -16,7 +21,9 @@
 //     ключом класса» краснеет (тело без ключа);
 // (4) убрать оптимистичную запись тумблера (стор) → «тумблер оптимистичен» краснеет;
 // (5) не откатывать при отказе PUT (стор) → «отказ откатывает» краснеет;
-// (6) не звать loadWikiSettings после успеха (стор) → «после ответа доли перечитаны» краснеет.
+// (6) не звать loadWikiSettings после успеха (стор) → «после ответа доли перечитаны» краснеет;
+// (7) в mergeClassStats брать множество классов из ответа (return next.map) → «смена окна ночи»
+//     и «между ответом и перечиткой» краснеют (активный класс выпадает из снимка).
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -39,7 +46,7 @@ vi.mock('../../../../lib/offline', async (orig) => ({
 }));
 
 import { request } from '../../../../lib/offline';
-import { __test as wikiStore, getWikiSettingsSnapshot } from '../../../../lib/wiki';
+import { __test as wikiStore, getWikiSettingsSnapshot, putWikiNightly } from '../../../../lib/wiki';
 
 type MockFn = ReturnType<typeof vi.fn>;
 const req = request as unknown as MockFn;
@@ -67,27 +74,24 @@ const CLS_OFF = {
   applied7: 0, retracted7: 3, share7: 0, applied30: 38, retracted30: 4, share30: 10.5,
 };
 const SETTINGS = { autoApplyEnabled: true, classes: [CLS_ON, CLS_OFF], nightly: NIGHTLY };
-// Ответ PUT: состояние настроек БЕЗ замера («Замер не возвращается», WikiSettingsController.cs:94)
-const PUT_RESUMED = {
-  autoApplyEnabled: true,
-  classes: [{ ...CLS_OFF, disabled: false, reason: null, disabledAt: null, resumedAt: '2026-11-02T10:00:00Z', applied7: 0, retracted7: 0, share7: 0, applied30: 0, retracted30: 0, share30: 0 }, CLS_ON],
-  nightly: NIGHTLY,
-};
-// Перечитка GET после действия: бэковая оценка — с новым ResumedAt-окном (мер 7): замера в
-// новом окне ещё нет
-const GET_AFTER = {
-  autoApplyEnabled: true,
-  classes: [{ ...CLS_OFF, disabled: false, reason: null, disabledAt: null, resumedAt: '2026-11-02T10:00:00Z', applied7: 0, retracted7: 0, share7: 0, applied30: 0, retracted30: 0, share30: 0 }, CLS_ON],
-  nightly: NIGHTLY,
-};
+// Нулевой замер — как бэк сериализует класс без строки оценки (WikiClassDto по умолчанию):
+// именно таким приходит каждый класс ответа PUT («Замер не возвращается», :94; BuildDto(next,
+// [], null), :185). Активного никогда не выключавшегося класса в ответе PUT нет вовсе: его
+// строки в settings.json не было (BuildDto строит класс-часть из settings.Classes, :206–214)
+const NO_STATS = { applied7: 0, retracted7: 0, share7: 0, applied30: 0, retracted30: 0, share30: 0 };
 
 const httpError = (status: number, body?: unknown): Error =>
   Object.assign(new Error(`HTTP ${status}`), { status, body });
 
-// Состояние «сервера» теста: PUT меняет его и отвечает БЕЗ замера (как бэк), следующий GET
-// — оценка: изменённое состояние с НОВЫМ замером (applied30=42 — отличается и от прежнего
-// снимка, и от нулей PUT: «доли перечитаны GET'ом» проверяется именно этим числом)
+// Состояние «сервера» теста: PUT меняет его и отвечает БЕЗ замера и только классами с записью
+// в settings.json — запись появляется у класса, который когда-либо выключали (оценкой —
+// WikiClassHealth.cs:295 — или человеком: Mutate, WikiSettingsController.cs:130–144), и больше
+// не снимается; активный никогда не выключавшийся класс в ответе не назван вовсе (:185).
+// Следующий GET — оценка: изменённое состояние с НОВЫМ замером
+// (applied30=42 — отличается и от прежнего снимка, и от нулей PUT: «доли перечитаны GET'ом»
+// проверяется именно этим числом)
 let server: Record<string, unknown> = SETTINGS;
+let withEntry = new Set<string>([CLS_OFF.class]);
 let putDone = false;
 function serveSettings(): void {
   req.mockImplementation(async (url: string, init?: RequestInit) => {
@@ -98,13 +102,33 @@ function serveSettings(): void {
       putDone = true;
       if (body.autoApplyEnabled !== undefined) server = { ...server, autoApplyEnabled: body.autoApplyEnabled };
       if (body.class !== undefined) {
+        // выключение/возврат — та же строка состояния, что ставит бэк (:135–143): возврат
+        // начинает окно класса заново (ResumedAt), выключение сохраняет его
+        withEntry.add(body.class as string);
+        const at = '2026-11-02T10:00:00Z';
         server = {
           ...server,
-          classes: (server.classes as Record<string, unknown>[]).map(c =>
-            (c.class === body.class ? { ...c, disabled: body.enable !== true, reason: null, share30: 0, share7: 0 } : c)),
+          classes: (server.classes as Record<string, unknown>[]).map(c => (c.class === body.class
+            ? (body.enable === true
+              ? { ...c, disabled: false, reason: null, disabledAt: null, resumedAt: at, ...NO_STATS }
+              : { ...c, disabled: true, reason: 'класс выключен человеком', disabledAt: at, ...NO_STATS })
+            : c)),
         };
       }
-      return server;
+      if (body.nightly !== undefined) {
+        // ночной блок: названное поле — менять, null — не менять (:146–168)
+        const patch = Object.fromEntries(
+          Object.entries(body.nightly as Record<string, unknown>).filter(([, v]) => v !== null));
+        server = { ...server, nightly: { ...(server.nightly as Record<string, unknown>), ...patch } };
+      }
+      // ответ PUT — формы реального бэка: BuildDto(next, [], null): только классы с записью,
+      // замер нулевой, активного класса без записи нет вовсе
+      return {
+        ...server,
+        classes: (server.classes as Record<string, unknown>[])
+          .filter(c => withEntry.has(c.class as string))
+          .map(c => ({ ...c, ...NO_STATS })),
+      };
     }
     if (putDone) {
       return {
@@ -203,6 +227,61 @@ describe('блок «Применение» (S7d-1)', () => {
     const cls = getWikiSettingsSnapshot()!.classes.find(cl => cl.class === 'session×append')!;
     // 42 — только из перечитки; без неё было бы 41 (прежний снимок) или 0 (нули PUT)
     expect(cls.applied30).toBe(42);
+  });
+
+  it('PUT, не касающийся классов (смена окна ночи), не меняет класс-часть снимка', async () => {
+    const c = render();
+    await settle();
+    expect(getWikiSettingsSnapshot()!.classes.length).toBe(2);
+    // Смена окна ночи — PUT без class: бэк отвечает только классами с записью и нулевым
+    // замером, активного класса в ответе нет вовсе (BuildDto(next, [], null))
+    let res: Awaited<ReturnType<typeof putWikiNightly>> | undefined;
+    await act(async () => { res = await putWikiNightly({ windowStartHour: 4 }); });
+    await settle();
+    expect(res!.ok).toBe(true);
+    const snap = getWikiSettingsSnapshot()!;
+    expect(snap.nightly.windowStartHour).toBe(4);
+    // оба класса живы в снимке: активный — со своим замером, выключенный — со своей причиной
+    // и долей: их вернул бы и следующий GET, но блок не имеет права пустеть между ними
+    const on = snap.classes.find(cl => cl.class === 'session×append')!;
+    expect(on.disabled).toBe(false);
+    expect(on.applied30).toBe(41);
+    const off = snap.classes.find(cl => cl.class === 'session×create')!;
+    expect(off.disabled).toBe(true);
+    expect(off.share30).toBe(10.5);
+    expect(has(c, 'Классов правок ещё нет')).toBe(false);
+    expect(has(c, 'session × append')).toBe(true);
+    expect(has(c, 'session × create')).toBe(true);
+  });
+
+  it('между ответом PUT и перечиткой GET снимок не пустеет: классы prev сохранены', async () => {
+    const c = render();
+    await settle();
+    // Перечитку GET после действия держим открытой: видим ровно тот снимок, что стор пишет из
+    // ответа PUT. Ответ — только возвращённый класс с нулевым замером (форма бэка); без union
+    // мерджа активный класс выпал бы из снимка до перечитки, и блок показал бы пустой список
+    req.mockImplementation((url: string, init?: RequestInit) => {
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (url !== '/wiki/settings') return Promise.resolve(null);
+      if (method === 'PUT') {
+        return Promise.resolve({
+          ...SETTINGS,
+          classes: [{ ...CLS_OFF, disabled: false, reason: null, disabledAt: null, resumedAt: '2026-11-02T10:00:00Z', ...NO_STATS }],
+        });
+      }
+      return new Promise<unknown>(() => { /* перечитки в этом тесте нет: она и есть проверяемое */ });
+    });
+    click(findNodeByAttr(c, 'data-testid', 'wiki-apply-resume-session×create')!, 'Снова применять само');
+    await settle();
+    const snap = getWikiSettingsSnapshot()!;
+    expect(snap.classes.length).toBe(2);
+    // ответ подтверждён по своему классу: он включён, а его замер — прежний (PUT его не несёт)
+    const off = snap.classes.find(cl => cl.class === 'session×create')!;
+    expect(off.disabled).toBe(false);
+    expect(off.applied30).toBe(38);
+    // и чужой, не тронутый PUT класс — на месте со своим замером
+    expect(snap.classes.find(cl => cl.class === 'session×append')!.applied30).toBe(41);
+    expect(has(c, 'Классов правок ещё нет')).toBe(false);
   });
 
   it('общий выключатель: оптимистичен до ответа и шлёт {autoApplyEnabled}', async () => {

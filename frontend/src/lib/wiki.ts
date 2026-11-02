@@ -969,19 +969,28 @@ function readApplyPart(body: unknown): Pick<WikiSettingsSnapshot, 'autoApplyEnab
 }
 
 // Ответ PUT несёт состояния классов БЕЗ замера («Замер не возвращается: он читается GET после
-// действия», WikiSettingsController.cs:94). Экран не должен терять измеренное: доли того же
-// класса сохраняются от последнего чтения — следующие их обновит перечитка GET.
+// действия», WikiSettingsController.cs:94) и НЕ все классы: его класс-часть строится из
+// settings.Classes, где запись есть только у когда-либо выключавшегося класса
+// (BuildDto(next, [], null), :185, :206–214), тогда как GET отдаёт union записей и замера
+// оценки (:215–222). Поэтому множество классов снимка — union ответа и последнего чтения:
+// строки ответа приоритетны для классов, которых PUT касается (без class классы не трогает,
+// :130–145), строки прежнего чтения — активные без записи — сохраняются как есть. Иначе правка,
+// не касающаяся классов (смена окна ночи), оставила бы блок «Применение» без активных классов
+// до следующей перечитки. Экран не должен терять и измеренное: доли того же класса сохраняются
+// от последнего чтения — следующие их обновит перечитка GET. Порядок — по ключу класса, как его
+// отдаёт бэк (OrderBy Ordinal, :226): между ответом и перечиткой список не переставляется.
 function mergeClassStats(
   next: WikiApplyClassDto[], prev: readonly WikiApplyClassDto[] | undefined,
 ): WikiApplyClassDto[] {
   if (!prev?.length) return next;
-  const byKey = new Map(prev.map(c => [c.class, c]));
-  return next.map(c => {
+  const byKey = new Map<string, WikiApplyClassDto>(prev.map(c => [c.class, c]));
+  for (const c of next) {
     const p = byKey.get(c.class);
-    return p
+    byKey.set(c.class, p
       ? { ...c, applied7: p.applied7, retracted7: p.retracted7, share7: p.share7, applied30: p.applied30, retracted30: p.retracted30, share30: p.share30 }
-      : c;
-  });
+      : c);
+  }
+  return [...byKey.values()].sort((a, b) => (a.class < b.class ? -1 : a.class > b.class ? 1 : 0));
 }
 
 export async function loadWikiSettings(): Promise<WikiSettingsSnapshot> {

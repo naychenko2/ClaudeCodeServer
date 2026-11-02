@@ -286,6 +286,98 @@ public class WikiIngestTests : IDisposable
             o.InputTokens == 20 && o.OutputTokens == 10);
     }
 
+    // ── N7d: анти-петля — откат человека за 7 дней запрещает автоприменение ──
+
+    private void LogLine(string ts, string op, string actor, params string[] pages)
+    {
+        var path = Path.Combine(Root, "keeper", "log.jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var arr = string.Join(",", pages.Select(p => "\"" + p + "\""));
+        File.AppendAllText(path,
+            $$"""{"ts":"{{ts}}","op":"{{op}}","section":"{{Section}}","pages":[{{arr}}],"actor":"{{actor}}"}""" + "\n");
+    }
+
+    private static string DaysAgo(int days) => DateTimeOffset.UtcNow.AddDays(-days).ToString("O");
+
+    [Theory]
+    [InlineData("revert")]
+    [InlineData("retract")]
+    public async Task N7d_ОткатЧеловекаВчера_ПакетВоВходящие_СПричинойИСтраницаНеТронута(string op)
+    {
+        LogLine(DaysAgo(1), op, "user", PagePath);
+        var hashBefore = Sha256Of(Path.Combine(Root, "pages/" + PagePath));
+
+        var res = await Sut(new FakeLlm(claims: ClaimsJson, plan: PlanJson)).IngestAsync(User, Req());
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeAwaitingHuman, res.Reason);
+        Sha256Of(Path.Combine(Root, "pages/" + PagePath)).Should().Be(hashBefore);
+        var reasons = PackagesOnDisk().Single().Operations.Select(o => o.Reason).ToList();
+        reasons.Should().ContainSingle().Which.Should().Contain("откатили вручную");
+    }
+
+    [Fact]
+    public async Task N7d_ОткатНеЧеловека_НеБлокирует()
+    {
+        // Сторож старта пишет строки с другим actor: анти-петлю они не включают.
+        LogLine(DaysAgo(1), "revert", "system", PagePath);
+
+        var res = await Sut(new FakeLlm(claims: ClaimsJson, plan: PlanJson)).IngestAsync(User, Req());
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeApplied, res.Reason);
+    }
+
+    private sealed class ShiftedTime(TimeSpan shift) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => DateTimeOffset.UtcNow + shift;
+    }
+
+    [Fact]
+    public async Task N7d_ПодменённыеЧасы_ТотЖеОткат_ЧерезВосемьДнейАвтоПрименён()
+    {
+        LogLine(DaysAgo(1), "revert", "user", PagePath);
+
+        var res = await new WikiIngestService(new FakeLlm(claims: ClaimsJson, plan: PlanJson),
+            new NoSpheres(), _apply, _config, new ShiftedTime(TimeSpan.FromDays(7))).IngestAsync(User, Req());
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeApplied, res.Reason);
+    }
+
+    [Fact]
+    public async Task N7d_ОткатВосемьДнейНазад_ОкноИстекло_ПрименяетсяСамо()
+    {
+        LogLine(DaysAgo(8), "revert", "user", PagePath);
+
+        var res = await Sut(new FakeLlm(claims: ClaimsJson, plan: PlanJson)).IngestAsync(User, Req());
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeApplied, res.Reason);
+    }
+
+    [Fact]
+    public async Task N7d_БитаяСтрокаЖурнала_ПропускБезИсключения()
+    {
+        var path = Path.Combine(Root, "keeper", "log.jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.AppendAllText(path, "{обрыв посреди записи\n[1,2]\n");
+
+        var res = await Sut(new FakeLlm(claims: ClaimsJson, plan: PlanJson)).IngestAsync(User, Req());
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeApplied, res.Reason);
+    }
+
+    [Fact]
+    public void N7d_ГраницаОкна_ОткатРовноНаГранице_НеСчитается_ПустойЖурнал_ПустоеМножество()
+    {
+        WikiJournalReader.ReadRecentHumanReverts(Root, DateTimeOffset.UtcNow.AddDays(-7))
+            .Should().BeEmpty("журнала ещё нет");
+
+        var ts = new DateTimeOffset(2026, 10, 25, 12, 0, 0, TimeSpan.Zero);
+        LogLine(ts.ToString("O"), "revert", "user", PagePath);
+
+        WikiJournalReader.ReadRecentHumanReverts(Root, ts).Should().BeEmpty("окно полуоткрытое: ts == since — вне");
+        WikiJournalReader.ReadRecentHumanReverts(Root, ts.AddMilliseconds(-1))
+            .Should().ContainKey(PagePath).WhoseValue.Should().Be(ts);
+    }
+
     // ── M1 (доработка ревью S6b-3): подтверждённая цитата доходит до пакета и сноски ──
     // Модель отвечает как просит промпт: пересказ в text, дословная выдержка в quote
     // (WikiKeeperPrompts.cs:126). В пакет идёт цитата: применение рендерит строку

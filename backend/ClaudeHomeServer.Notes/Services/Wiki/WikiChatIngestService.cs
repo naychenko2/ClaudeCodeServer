@@ -61,6 +61,9 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // Конкурентность (хвосты ревью S6b-3):
 // - две заявки одного чата — один разбор: ключ in-flight включает дом (owner|chat|home),
 //   вторая присоединяется к незавершённой задаче и получает её результат;
+// - ключ не включает место разбора (actionKey, N7a): кнопка и ночь по одному чату дают
+//   один прогон, движок — того, кто пришёл первым; присоединившаяся заявка получает его
+//   результат и своей моделью не оборачивается;
 // - ct заявителя не передаётся общему прогону: разбор — задача очереди, отмена одной
 //   заявки не гасит чужую;
 // - сбой внутри прогона — исход с причиной, исключения наружу нет;
@@ -153,8 +156,12 @@ public sealed class WikiChatIngestService
 
     /// <summary>Поставить разбор чата в очередь и дождаться его исхода. Две одновременные
     /// заявки одного чата — один разбор. ct участвует в сигнатуре заявителя, но не
-    /// передаётся общему прогону (см. шапку). Исключения наружу нет.</summary>
-    public Task<ChatResult> AnalyzeAsync(string ownerId, string sessionId, CancellationToken ct = default)
+    /// передаётся общему прогону (см. шапку). Исключения наружу нет.
+    /// actionKey (N7a) — место разбора для вызова модели: null — прежний wiki-ingest
+    /// (кнопка и путь MCP), ночь подаёт wiki-nightly. In-flight-ключ места не содержит:
+    /// присоединившаяся заявка получает движок того, кто пришёл первым (см. шапку).</summary>
+    public Task<ChatResult> AnalyzeAsync(string ownerId, string sessionId, CancellationToken ct = default,
+        string? actionKey = null)
     {
         // F3 (хвосты ревью): отказ заявки — тоже последний исход, он записывается в тот же
         // last, что и исход прогона: «анализировать» и «last» описывают одно состояние.
@@ -220,7 +227,7 @@ public sealed class WikiChatIngestService
             ChatResult result;
             try
             {
-                result = await RunProtectedAsync(ownerId, sessionId, home, session);
+                result = await RunProtectedAsync(ownerId, sessionId, home, session, actionKey);
             }
             catch (Exception)
             {
@@ -313,11 +320,12 @@ public sealed class WikiChatIngestService
         }
     }
 
-    private async Task<ChatResult> RunProtectedAsync(string ownerId, string sessionId, string home, Session session)
+    private async Task<ChatResult> RunProtectedAsync(string ownerId, string sessionId, string home, Session session,
+        string? actionKey)
     {
         try
         {
-            return await RunAsync(ownerId, sessionId, home, session);
+            return await RunAsync(ownerId, sessionId, home, session, actionKey);
         }
         catch (Exception e)
         {
@@ -327,7 +335,8 @@ public sealed class WikiChatIngestService
         }
     }
 
-    private async Task<ChatResult> RunAsync(string ownerId, string sessionId, string home, Session session)
+    private async Task<ChatResult> RunAsync(string ownerId, string sessionId, string home, Session session,
+        string? actionKey)
     {
         var root = WikiPaths.Root(_dataDir, ownerId);
         if (!WikiPaths.IsInitialized(_dataDir, ownerId))
@@ -385,7 +394,7 @@ public sealed class WikiChatIngestService
 
             var ing = await _ingest.IngestAsync(ownerId, new WikiIngestService.Request(
                 WikiGate.OriginSession, $"session:{sessionId}#m{from}-{to}",
-                cap.CardRelPath!, WindowText(window), home, null));
+                cap.CardRelPath!, WindowText(window), home, null), actionKey: actionKey);
             switch (ing.Outcome)
             {
                 case WikiIngestService.OutcomeApplied:

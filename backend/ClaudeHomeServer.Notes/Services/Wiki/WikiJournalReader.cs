@@ -140,6 +140,40 @@ public sealed class WikiJournalReader
         return new Result(shown, take, linesRead, invalidLines);
     }
 
+    /// <summary>Страницы, откатанные человеком позже since (строго): записи журнала op∈{revert,
+    /// retract} с actor="user", путь → самая поздняя дата. Actor обязателен: сторож старта
+    /// и прочая автоматика пишут не «user» и анти-петлю (N7d) не включают. Журнал читается без
+    /// записи и без блокировки: откат, дописанный посреди чтения, может не попасть в выборку —
+    /// пакет, разобранный в эту долю секунды, применится само (допустимо: следующий разбор уже
+    /// увидит строку). Битая строка и нечитаемый файл — пропуск без исключения.</summary>
+    public static IReadOnlyDictionary<string, DateTimeOffset> ReadRecentHumanReverts(string root, DateTimeOffset since)
+    {
+        var result = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        try
+        {
+            var path = SafePath.Join(root, LogRelPath);
+            if (!File.Exists(path))
+                return result;
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: false);
+            string? line;
+            while ((line = reader.ReadLine()) is not null)
+            {
+                var e = ParseLine(line);
+                if (e is null || e.Ts <= since || e.Actor != "user" || e.Op is not ("revert" or "retract"))
+                    continue;
+                foreach (var page in e.Pages)
+                    if (!result.TryGetValue(page, out var seen) || e.Ts > seen)
+                        result[page] = e.Ts;
+            }
+        }
+        catch (IOException)
+        {
+            // Нечитаемый журнал не роняет разбор: правило не сработает на этот проход.
+        }
+        return result;
+    }
+
     /// <summary>take вне окна — обрезается, а не отказ: окно журнала — мера выдачи, а не право
     /// вызова спорить с клиентом. Отсутствующий — DefaultTake.</summary>
     public static int ClampTake(int? take) => take switch

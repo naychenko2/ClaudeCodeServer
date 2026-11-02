@@ -1,6 +1,5 @@
-// Рендер-тест контейнера «Настройки» (S7d-3): на подвкладке блоки «Применение» и «Отбор чатов»
-// в порядке макета (сначала «Применение», затем «Отбор чатов»); «Ночной разбор» не встроен —
-// его место отмечает одна строка-точка расширения в коде контейнера (блок делает шаг F2).
+// Рендер-тест контейнера «Настройки» (S7d-3, F3): на подвкладке блоки в порядке макета —
+// «Ночной разбор» (F2), «Применение», «Отбор чатов».
 // Фикстура — та же, что у замера ui_probe: два класса правок, один выключен, список чатов.
 //
 // Мокан только транспорт (offline.request, signalr) — стор настоящий (тот же приём, что
@@ -13,8 +12,8 @@
 // Мутации этого прогона (вывод — в отчёте задачи):
 // (1) в WikiSettings переставить блоки («Отбор чатов» раньше «Применения») → «в порядке макета»
 //     краснеет;
-// (2) убрать строку-точку расширения из контейнера → «место — точка расширения» краснеет;
-// (3) встроить в контейнер текстовую заглушку «Ночного разбора» → «не встроен» краснеет;
+// (2) убрать <WikiNightlyBlock /> из контейнера → «встроен первым» краснеет;
+// (3) поставить его после «Применения» → «встроен первым» краснеет;
 // (4) в WIKI_SUBTABS подставить записи «settings» заглушку (stubNote) или другой component →
 //     тест проводки краснеет (доработка по ревью R-S7d-3).
 
@@ -156,25 +155,28 @@ describe('контейнер «Настройки» (S7d-3)', () => {
     // порядок — как в навигации настроек макета: «Применение» раньше «Отбора чатов»
     const joined = texts(c).join(' ');
     const iApply = joined.indexOf('Применение без ревью');
-    const iTriage = joined.indexOf('Отбор чатов');
+    const iTriage = joined.indexOf('Отбор чатов', iApply);
     expect(iApply).toBeGreaterThanOrEqual(0);
     expect(iTriage).toBeGreaterThanOrEqual(0);
     expect(iApply).toBeLessThan(iTriage);
   });
 
-  it('«Ночной разбор» не встроен: его место — одна строка-точка расширения в коде (шаг F2)', async () => {
+  it('«Ночной разбор» встроен первым: перед «Применением» и «Отбором чатов», точки расширения нет', async () => {
     const c = render();
     await settle();
-    // блока нет: ни шапки, ни его подписей (извинение — в коде и в отчёте, не в экране)
-    expect(has(c, 'Ночной разбор')).toBe(false);
-    expect(has(c, 'Ночного разбора')).toBe(false);
-    // место блока отмечает ровно одна строка контейнера — перед «Применением» (порядок макета)
+    // блок на месте: его шапка в DOM, и она раньше «Применения» и «Отбора чатов»
+    const joined = texts(c).join(' ');
+    const iNight = joined.indexOf('Ночной разбор');
+    expect(iNight).toBeGreaterThanOrEqual(0);
+    expect(iNight).toBeLessThan(joined.indexOf('Применение без ревью'));
+    expect(iNight).toBeLessThan(joined.indexOf('Отбор чатов', joined.indexOf('Применение без ревью')));
+    // в коде контейнера блок стоит первым, а строки-заглушки нет; поиск без закрытия тега —
+    // краснеет на уходе блока из файла, а не на форматной правке `<X />` → `<X/>`
     const src = readFileSync(fileURLToPath(new URL('../WikiSettings.tsx', import.meta.url)), 'utf8');
-    const marker = 'Точка расширения «Ночного разбора»';
-    const markerLines = src.split('\n').filter(l => l.includes(marker));
-    expect(markerLines.length).toBe(1);
-    // без закрытия тега: поиск краснеет только на уходе блока из файла, а не на форматной
-    // правке `<WikiApplySettings />` → `<WikiApplySettings/>` (доработка по ревью R-S7d-3)
-    expect(src.indexOf(marker)).toBeLessThan(src.indexOf('<WikiApplySettings'));
+    expect(src).not.toContain('Точка расширения «Ночного разбора»');
+    const iNightSrc = src.indexOf('<WikiNightlyBlock');
+    expect(iNightSrc).toBeGreaterThanOrEqual(0);
+    expect(iNightSrc).toBeLessThan(src.indexOf('<WikiApplySettings'));
+    expect(src.indexOf('<WikiApplySettings')).toBeLessThan(src.indexOf('<WikiChatTriageList'));
   });
 });

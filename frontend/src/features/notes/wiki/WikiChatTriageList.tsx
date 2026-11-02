@@ -59,9 +59,9 @@ const MARK_META: Record<WikiChatMark, RowMeta> = {
 // поля в DTO нет. Зеркало литерала, не догадка: если бэк сменит формулировку, кнопки останутся
 // активными (пометка примется, но на разбор не повлияет) — расхождение видно, а не молчит.
 const TASK_REASON = 'ступень 0: чат исполнения задачи';
-const TASK_HINT = 'Чат исполнителя задачи: пометки не действуют, знание приходит итогом задачи';
+export const TASK_HINT = 'Чат исполнителя задачи: пометки не действуют, знание приходит итогом задачи';
 
-const isTaskChat = (i: WikiChatTriage): boolean => i.reason === TASK_REASON;
+export const isTaskChat = (i: WikiChatTriage): boolean => i.reason === TASK_REASON;
 
 const rowMetaOf = (i: WikiChatTriage): RowMeta =>
   isTaskChat(i) ? ZONE_META.excluded

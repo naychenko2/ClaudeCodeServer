@@ -806,6 +806,10 @@ builder.Services.AddSingleton<TaskExecutionService>();
 // DELETE-ручка снимают удержание одним телом. Регистрация здесь, а не в AddFeatureQueue:
 // вертикаль Tasks не видит Main; сам исполнитель регистрируется unconditional — шов с ним рядом.
 builder.Services.AddSingleton<IFeatureHoldReleaser>(sp => sp.GetRequiredService<TaskExecutionService>());
+// Швы конвейера фич (Core → Main): карточка в ключевой чат — той же доставкой, что карточки снятия
+// паузы, и состав локальных исполнителей — для счётчика в хвосте хода и пинка простоя (Tasks).
+builder.Services.AddSingleton<IKeyChatCardSender>(sp => sp.GetRequiredService<TaskExecutionService>());
+builder.Services.AddSingleton<ILocalExecutorRoster, LocalExecutorRoster>();
 // Очередь фич (волна 6): регистрируется только при включённой подсистеме задач.
 builder.Services.AddFeatureQueue(builder.Configuration);
 // Запуск предгейта шага (NC-P1b): шов ITaskPregate опционален — вертикаль TestRuns отключаемая

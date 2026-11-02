@@ -7087,6 +7087,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var all = _sessions.Values
             .Where(e => ResolveOwnerId(e.Info) == userId && (projectId is null || e.Info.ProjectId == projectId))
             .Select(e => e.Info)
+            // S2d-3f (дефект 183333fb): чужой приватный чат не входит в пакетный прогон — та же
+            // видимость, что у GetOwnedVisible (S2d-3a): его транскрипт не уходит в модель
+            // арендатора, карточка не пишется, UpdatedAt не двигается. Свой приватный и общий — как раньше.
+            .Where(s => Access.SessionAccess.CanSee(s, s.ProjectId is not null ? _projects.GetById(s.ProjectId) : null, userId))
             .ToList();
         // Предфильтр: у кого значок уже есть — сразу в пропущенные, модель не зовём.
         // Архивные — туда же: у старых чатов Topic как раз пуст (значки появились позже),

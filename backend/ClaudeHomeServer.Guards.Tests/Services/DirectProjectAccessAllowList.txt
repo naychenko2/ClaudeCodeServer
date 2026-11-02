@@ -24,7 +24,11 @@ backend/ClaudeHomeServer/Services/ChatUserStateService.cs|1
 # арендатор уже установлен GetOwned (Project.OwnerId / Session.OwnerId), роль и рубильник
 # неприменимы — вызывающий и есть арендатор. Ключом хранилищ id не служит; GetOwned
 # (машинные пути) не затронут.
-backend/ClaudeHomeServer/Services/SessionManager.cs|1
+# S2d-3f (дефект 183333fb): SetChatIconsAsync — тот же второй вызов в том же файле: пакетный прогон
+# значков отбирает чаты фильтром арендатора (ResolveOwnerId), CanSee добавляет только приватность
+# чата (чужой приватный не отдаёт транскрипт в модель арендатора и не пишется в его карточку).
+# Роль и рубильник неприменимы: вызывающий и есть арендатор; ключом хранилищ id не служит.
+backend/ClaudeHomeServer/Services/SessionManager.cs|2
 # S2d-4c: доска агентов — id вызывающего (зрителя доски) входит только в видимость чата:
 # невидимый чат теряет ссылку (SessionId/PermissionPending в BoardItem). Право на проект
 # здесь не решается (роль и рубильник неприменимы: это маска ссылки, не допуск к данным —

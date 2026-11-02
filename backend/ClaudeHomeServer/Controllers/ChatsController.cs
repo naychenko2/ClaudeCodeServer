@@ -184,6 +184,11 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpPut("{id}/participants")]
     public IActionResult SetParticipants(string id, [FromBody] SetParticipantsRequest req)
     {
+        // S2d-3f (дефект f1e4666d): гейт GetOwnedVisible, тот же приём, что у /parent и /retitle:
+        // на чужом приватном чате — 404, неотличимый от «нет такого чата» (владелец проекта —
+        // не адресат чужого приватного, а сервис пропускал его через ResolveOwnerId проекта).
+        // Сверка арендатора внутри SetParticipants (GetOwned) остаётся как есть.
+        if (sessions.GetOwnedVisible(id, UserId) is null) return NotFound();
         try
         {
             var updated = sessions.SetParticipants(id, UserId, req.PersonaIds ?? []);

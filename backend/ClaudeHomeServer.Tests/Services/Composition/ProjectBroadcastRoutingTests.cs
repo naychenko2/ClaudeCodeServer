@@ -1,6 +1,7 @@
 using System.Text;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
 using FluentAssertions;
 
@@ -161,5 +162,55 @@ public class ProjectBroadcastRoutingTests
         s.PrivateToUserId = null;
         await spy.ToChatAudience(s, Msg);
         spy.Calls.Should().Equal(("owner", "author"), ("project", "proj-1"));
+    }
+
+    // S2d-3f (дефект b9a2601f): перегрузка ToChatAudience по id чата. В проде ISessionDirectory
+    // зарегистрирован (Program.cs) и живой утечки нет — но при каталоге, которого нет, прежний
+    // код откатывался к ToProjectOrOwner: событие с id приватного чата уходило группе проекта.
+    // Это ровно та утечка, что закрывали S2d-2a/2b/2c; правка — fail-closed в одном месте Core-шва.
+
+    private sealed class DirectoryStub : ISessionDirectory
+    {
+        private readonly Dictionary<string, Session> _map;
+        public DirectoryStub(params Session[] sessions) => _map = sessions.ToDictionary(s => s.Id, s => s);
+        public Session? GetById(string id) => _map.GetValueOrDefault(id);
+        public IReadOnlyCollection<Session> GetAll() => _map.Values;
+        public string? ResolveOwnerId(Session s) => s.OwnerId;
+        public Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId) =>
+            Task.FromResult<IReadOnlyList<StoredMessage>>([]);
+    }
+
+    [Fact]
+    public async Task ToChatAudience_ПоId_КаталогНеВнедрён_FailClosedВладельцу_НеГруппеПроекта()
+    {
+        var spy = new Spy();
+        await spy.ToChatAudience((ISessionDirectory?)null, "o1", "proj-1", "priv-1", Msg);
+        // событие с id чата при недоступном каталоге не уходит группе проекта: приватность не раскрываем
+        spy.Calls.Should().Equal(("owner", "o1"));
+    }
+
+    [Fact]
+    public async Task ToChatAudience_БезId_ПрежняяПроектнаяАдресация_СКаталогомИБезНего()
+    {
+        var spy = new Spy();
+        // id нет — событие не про чат: проектная/личная адресация прежняя (это не утечка приватности)
+        await spy.ToChatAudience((ISessionDirectory?)null, "o1", "proj-1", null, Msg);
+        await spy.ToChatAudience(new DirectoryStub(), "o1", "proj-1", "", Msg);
+        await spy.ToProjectOrOwner("o1", null, Msg);
+        spy.Calls.Should().Equal(("project", "proj-1"), ("project", "proj-1"), ("owner", "o1"));
+    }
+
+    [Fact]
+    public async Task ToChatAudience_ПоId_КаталогЕсть_ПриватныйАвтору_ОбщийГруппе_УдалённыйВладельцу()
+    {
+        var spy = new Spy();
+        var dir = new DirectoryStub(
+            new Session { Id = "priv-1", ProjectId = "proj-1", OwnerId = "o1", PrivateToUserId = "author" },
+            new Session { Id = "open-1", ProjectId = "proj-1", OwnerId = "o1" });
+        await spy.ToChatAudience(dir, "o1", "proj-1", "priv-1", Msg);
+        await spy.ToChatAudience(dir, "o1", "proj-1", "open-1", Msg);
+        // id указан, чата уже нет (удалён) — только владельцу: это поведение было fail-closed и до правки
+        await spy.ToChatAudience(dir, "o1", "proj-1", "gone-1", Msg);
+        spy.Calls.Should().Equal(("owner", "author"), ("project", "proj-1"), ("owner", "o1"));
     }
 }

@@ -40,6 +40,10 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// видимости GetAccessible (ResolveSession → CanSee), запись (parent/branch/retitle/persona,
 /// PUT context) — GetOwnedVisible. Read-ручки не переведены на GetOwned: автор своего
 /// приватного чата — не арендатор, а свою историю и свой контекст он читал и до шага.
+/// S2d-3f: две ручки вне закрытых шести — пакетный прогон значков (icon-batch: чужой приватный
+/// не входит в выборку, его транскрипт не уходит в модель арендатора) и состав участников
+/// (PUT participants: гейт GetOwnedVisible, как на /parent). Свой приватный, общий чат и
+/// чат вне проекта — прежнее поведение.
 /// Полный хост не нужен: контроллеры создаются напрямую с ClaimsPrincipal вызывающего
 /// (образец — SharedProjectEditorScopeGatesTests), стор сессий сидируется sessions.json
 /// (образец — SessionStatusTests). Для пути участника (read-ручки) в корень DI ставится
@@ -61,6 +65,9 @@ public sealed class GetOwnedVisibleTests : IDisposable
     private readonly ChatHistoryService _history;
     private readonly CountingCheapRunner _cheap = new();
     private readonly SessionManager _sessions;
+    // Персоны того же стора, что у SessionManager: нужны реальному составу участников
+    // в тесте SetParticipants (S2d-3f) — валидация состава резолвит их по владельцу
+    private readonly PersonaManager _personas;
     // Локатор без git: деградирует до корня проекта (fail-closed, ProjectTreeLocator:43-52) —
     // для доказательства пройденного гейта Files больше ничего не нужно
     private readonly ProjectTreeLocator _locator = new(TestLauncherFactory.Instance, NullLogger<ProjectTreeLocator>.Instance);
@@ -118,6 +125,7 @@ public sealed class GetOwnedVisibleTests : IDisposable
         ]);
 
         _history = new ChatHistoryService(_config);
+        _personas = new PersonaManager(_config);
         _sessions = CreateSessionManager(userStore, appSettings);
     }
 
@@ -145,7 +153,7 @@ public sealed class GetOwnedVisibleTests : IDisposable
         var notesSvc = new NotesService(_projects, _config, NullLogger<NotesService>.Instance);
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, _config,
             NullLogger<NotesKnowledgeService>.Instance);
-        var personas = new PersonaManager(_config);
+        var personas = _personas;
         var bindings = new PersonaBindingsService(personas, _projects, wkStore,
             knowledge, new SkillsService(), userStore, _config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(_config,
@@ -167,7 +175,8 @@ public sealed class GetOwnedVisibleTests : IDisposable
 
     // «Дешёвый» раннер со счётчиком вызовов: нужен одним — показать, что на отказанной ручке
     // модель не звалась вовсе (расход платит арендатор), и что счётчик не пустой: на пройденном
-    // входе он растёт
+    // входе он растёт. Ответ годен и для retitle (поле title), и для значка (iconName —
+    // валидное PascalCase-имя lucide-компонента, S2d-3f)
     private sealed class CountingCheapRunner : ClaudeHomeServer.Services.Llm.ICheapTextRunner
     {
         public int Calls;
@@ -181,7 +190,7 @@ public sealed class GetOwnedVisibleTests : IDisposable
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
         {
             Calls++;
-            return Task.FromResult("""{"title":"Новое название"}""");
+            return Task.FromResult("""{"title":"Новое название","iconName":"Book"}""");
         }
 
         public async Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
@@ -563,5 +572,101 @@ public sealed class GetOwnedVisibleTests : IDisposable
         (await c.Retitle(OwnPrivateId, default)).Should().BeOfType<OkObjectResult>();
         (await c.Retitle(OpenChatId, default)).Should().BeOfType<OkObjectResult>();
         _cheap.Calls.Should().Be(2);
+    }
+
+    // --- ручки S2d-3f: пакетный прогон значков и состав участников (дефекты 183333fb, f1e4666d) ---
+
+    // Пакетный прогон значков берёт чаты проекта фильтром по арендатору — для проектного чата
+    // это владелец проекта, и в выборку попадали чужие приватные чаты: их транскрипт уходил
+    // в модель арендатора, карточка получала значок и двигала UpdatedAt. Теперь — только
+    // видимые вызывающему (тот же CanSee, что у GetOwnedVisible); чужой приватный не входит
+    // в выборку вовсе: ни в processed, ни в skipped (его для вызывающего нет)
+    [Fact]
+    public async Task SessionsController_IconBatch_ЧужойПриватныйНеТронутБезВызоваМодели_СвойПриватныйИОбщийКакРаньше()
+    {
+        // Транскрипт есть у всех трёх: «дошёл до модели» отличается от «транскрипта нет»
+        await SeedHistory(ForeignPrivateId);
+        await SeedHistory(OwnPrivateId);
+        await SeedHistory(OpenChatId);
+
+        var res = (await SessionsAs(_ownerId).IconBatch(_projectId, default))
+            .Should().BeOfType<OkObjectResult>().Subject;
+        // Размечены ровно два видимых чата; чужой приватный не попал ни в processed, ни в skipped
+        ((SessionManager.IconBatchResult)res.Value!).Processed.Should().Be(2);
+        ((SessionManager.IconBatchResult)res.Value!).Skipped.Should().Be(0);
+        // Модель звалась дважды — по транскриптам своего приватного и общего; по чужому приватному — ни разу
+        _cheap.Calls.Should().Be(2);
+        // Карточка чужого приватного не написана: значка нет
+        _sessions.GetById(ForeignPrivateId)!.Topic.Should().BeNull();
+        // Свой приватный и общий — прежнее поведение: значок на месте
+        _sessions.GetById(OwnPrivateId)!.Topic.Should().Be("Book");
+        _sessions.GetById(OpenChatId)!.Topic.Should().Be("Book");
+
+        // Участник не арендатор: пакетный прогон его чатов не касался и до шага (фильтр по
+        // арендатору) — шаг это не меняет; чужой приватный по-прежнему не тронут
+        var asMember = (await SessionsAs(_otherId).IconBatch(_projectId, default))
+            .Should().BeOfType<OkObjectResult>().Subject;
+        ((SessionManager.IconBatchResult)asMember.Value!).Processed.Should().Be(0);
+        _cheap.Calls.Should().Be(2);
+        _sessions.GetById(ForeignPrivateId)!.Topic.Should().BeNull();
+    }
+
+    // Состав участников группового чата: сервис проверял только ResolveOwnerId — для проектного
+    // чата это владелец проекта, и он переписывал состав чужого приватного чата (и спикера).
+    // Гейт GetOwnedVisible в контроллере, тот же приём, что у /parent: чужой приватный — 404,
+    // неотличимый от «нет такого чата»; отказ не оставил следа в карточке.
+    [Fact]
+    public void ChatsController_SetParticipants_ЧужойПриватный404БезПравкиСостава_АвторКакРаньше()
+    {
+        // Тот же запрос, что в репро дефекта: владелец проекта с РЕАЛЬНЫМ составом своих персон
+        // на приватном чате участника — до правки это был 200 с записью состава и сменой спикера
+        var suffix = Guid.NewGuid().ToString("N")[..6];
+        var p1 = _personas.Create(_ownerId, $"Чужой-1-{suffix}", null, null, null, null, null,
+            PersonaScope.Project, _projectId, null, null, false).Id;
+        var p2 = _personas.Create(_ownerId, $"Чужой-2-{suffix}", null, null, null, null, null,
+            PersonaScope.Project, _projectId, null, null, false).Id;
+        var real = new SetParticipantsRequest([p1, p2]);
+        var c = ChatsAs(_ownerId);
+
+        c.SetParticipants(ForeignPrivateId, real).Should().BeOfType<NotFoundResult>(
+            "владелец проекта — не адресат чужого приватного: 404, неотличимо от несуществующего чата");
+        c.SetParticipants("no-such-chat", real).Should().BeOfType<NotFoundResult>();
+        // Автор-участник своего приватного: владение не изменилось (он не арендатор) — 404 как до шага
+        ChatsAs(_editorId).SetParticipants(ForeignPrivateId, real).Should().BeOfType<NotFoundResult>();
+        // Отказ не оставил следа: состав и спикер чужого приватного не тронуты
+        _sessions.GetById(ForeignPrivateId)!.Participants.Should().BeNullOrEmpty();
+        _sessions.GetById(ForeignPrivateId)!.PersonaId.Should().BeNull();
+
+        // За гейтом для своего приватного и общего — внутренний ValidateParticipants (пустой
+        // состав → 400): это доказательство пройденного входа, вход не изменился
+        var empty = new SetParticipantsRequest([]);
+        c.SetParticipants(OwnPrivateId, empty).Should().BeOfType<BadRequestObjectResult>();
+        c.SetParticipants(OpenChatId, empty).Should().BeOfType<BadRequestObjectResult>();
+    }
+
+    // Реальный состав на видимых чатах — прежнее поведение: владелец-арендатор меняет состав
+    // общего чата и своего приватного (проектные персоны своего проекта — не глобальные,
+    // рамка EnsurePersonasVisibleInFrame их пропускает)
+    [Fact]
+    public void ChatsController_SetParticipants_ОбщийЧатИСвойПриватныйМеняютСоставКакРаньше()
+    {
+        var suffix = Guid.NewGuid().ToString("N")[..6];
+        var p1 = _personas.Create(_ownerId, $"Участник-1-{suffix}", null, null, null, null, null,
+            PersonaScope.Project, _projectId, null, null, false).Id;
+        var p2 = _personas.Create(_ownerId, $"Участник-2-{suffix}", null, null, null, null, null,
+            PersonaScope.Project, _projectId, null, null, false).Id;
+        var c = ChatsAs(_ownerId);
+
+        var updated = c.SetParticipants(OpenChatId, new SetParticipantsRequest([p1, p2]))
+            .Should().BeOfType<OkObjectResult>().Subject;
+        ((Session)updated.Value!).Participants.Should().Equal(p1, p2);
+        _sessions.GetById(OpenChatId)!.Participants.Should().Equal(p1, p2);
+        // Спикер — первая из нового состава (прежнее правило SwitchSpeaker для чата без спикера)
+        _sessions.GetById(OpenChatId)!.PersonaId.Should().Be(p1);
+
+        // Свой приватный (автор — он же арендатор): тот же вход, тот же результат
+        c.SetParticipants(OwnPrivateId, new SetParticipantsRequest([p1, p2]))
+            .Should().BeOfType<OkObjectResult>();
+        _sessions.GetById(OwnPrivateId)!.Participants.Should().Equal(p1, p2);
     }
 }

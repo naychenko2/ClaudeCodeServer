@@ -81,12 +81,18 @@ public static class SessionBroadcasterExtensions
 
     // То же по id чата: сессия читается из каталога В МОМЕНТ отправки (приватность не кэшируется).
     // Чата нет в запросе — событие не про чат (старое проектное/личное поведение); id указан, а чата
-    // уже нет (удалён) — только владельцу, группе проекта состав приватного чата не раскрываем.
+    // уже нет (удалён) ИЛИ каталог не внедрён — только владельцу (fail-closed, S2d-3f): событие
+    // с id приватного чата не уходит группе проекта ни при каких настройках DI.
     public static Task ToChatAudience(this ISessionBroadcaster broadcaster, ISessionDirectory? sessions,
         string ownerId, string? projectId, string? sessionId, ServerMessage message)
     {
-        if (string.IsNullOrEmpty(sessionId) || sessions is null)
+        if (string.IsNullOrEmpty(sessionId))
             return broadcaster.ToProjectOrOwner(ownerId, projectId, message);
+        // S2d-3f (дефект b9a2601f): раньше при sessions == null откатывалось к ToProjectOrOwner —
+        // приватный чат утекал группе проекта. Живого дефекта в проде нет (ISessionDirectory
+        // зарегистрирован), но любая новая точка создания сервиса без шва возвращала бы утечку молча.
+        if (sessions is null)
+            return broadcaster.ToOwner(ownerId, message);
         return sessions.GetById(sessionId) is { } session
             ? broadcaster.ToChatAudience(session, message)
             : broadcaster.ToOwner(ownerId, message);

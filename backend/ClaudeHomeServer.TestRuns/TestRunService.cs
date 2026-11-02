@@ -74,9 +74,9 @@ public sealed partial class TestRunService
     // Общий конвейер фаз: блокировка дерева, гейт, потолок, процесс фазы
     private readonly PhasePipeline _pipeline;
     private readonly TimeSpan _progressInterval;
-    // Отпечатки исходников последних успешных сборок (только память процесса)
-    private readonly BuildFingerprintStore _fingerprints = new();
     private readonly Func<Uri, CancellationToken, Task<bool>> _standProbe;
+    // Снимок машины для числа шардов (AdaptiveShards); тесты подменяют чтение /proc
+    private readonly Func<MachineSnapshot?> _machine;
 
     public TestRunService(ILauncherFactory launchers, TestRunsOptions options)
         : this(launchers, options, new PhasePipeline()) { }
@@ -89,17 +89,28 @@ public sealed partial class TestRunService
     // свой шаг прогресса (по умолчанию — не чаще раза в секунду) и своя проверка стенда
     internal TestRunService(ILauncherFactory launchers, TestRunsOptions options,
         BuildConcurrencyGate? gate, TimeSpan exitGrace, TimeSpan? progressInterval = null,
-        Func<Uri, CancellationToken, Task<bool>>? standProbe = null)
-        : this(launchers, options, new PhasePipeline(gate, exitGrace), progressInterval, standProbe) { }
+        Func<Uri, CancellationToken, Task<bool>>? standProbe = null, Func<MachineSnapshot?>? machine = null)
+        : this(launchers, options, new PhasePipeline(gate, exitGrace), progressInterval, standProbe, machine) { }
 
-    private TestRunService(ILauncherFactory launchers, TestRunsOptions options, PhasePipeline pipeline,
-        TimeSpan? progressInterval, Func<Uri, CancellationToken, Task<bool>>? standProbe)
+    // Для тестов: общий конвейер с движком сборки (отпечатки сборок — его) и свой снимок машины
+    internal TestRunService(ILauncherFactory launchers, TestRunsOptions options, PhasePipeline pipeline,
+        TimeSpan? progressInterval, Func<Uri, CancellationToken, Task<bool>>? standProbe,
+        Func<MachineSnapshot?>? machine = null)
     {
         _launchers = launchers;
         _options = options;
         _pipeline = pipeline;
         _progressInterval = progressInterval ?? TimeSpan.FromSeconds(1);
         _standProbe = standProbe ?? ProbeStandAsync;
+        _machine = machine ?? (() => AdaptiveShards.Read());
+    }
+
+    // Число шардов монолита: по нагрузке машины под потолком MonolithShards или само MonolithShards
+    internal (int Shards, string? Reason) ShardCount()
+    {
+        if (!_options.AdaptiveShards) return (_options.MonolithShards, null);
+        var (n, reason) = AdaptiveShards.Choose(_machine(), _options.MonolithShards);
+        return (n, reason);
     }
 
     public TestRunsOptions Options => _options;
@@ -598,17 +609,21 @@ public sealed partial class TestRunService
 
         // Явный no_build — пропуск без проверки; иначе сверяем отпечаток исходников дерева с тем,
         // что был при последней успешной сборке: совпал — сборка была бы холостой
-        var tree = Path.GetFullPath(request.WorkingDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        // Отпечатки общие с инструментом build (PhasePipeline.Fingerprints): «build → run_tests»
+        // без правок не собирает дважды, сборка решения .slnx покрывает его проекты
+        var fingerprints = _pipeline.Fingerprints;
+        var tree = BuildFingerprintStore.TreeKey(request.WorkingDirectory);
         string? fingerprint = null;
         var skipBuild = request.NoBuild;
+        var skippedByFingerprint = false;
         if (request.NoBuild) timings.BuildSkipped = "no_build";
         else
         {
             fingerprint = BuildFingerprint.Compute(tree);
-            if (_fingerprints.Matches(tree, request.Target, fingerprint))
+            if (fingerprints.Covers(tree, request.Target, fingerprint) is { } reason)
             {
-                skipBuild = true;
-                timings.BuildSkipped = "дерево не менялось";
+                skipBuild = skippedByFingerprint = true;
+                timings.BuildSkipped = reason;
             }
         }
         // Подсчёт нужен ради процента всего прогона; при filter тестов единицы — лишний запуск хоста
@@ -644,18 +659,22 @@ public sealed partial class TestRunService
                 run.Total = list.ExitCode == 0 ? run.ListedCount : null;
                 // Самопроверка не сошлась или список пуст — одним процессом, как раньше
                 if (shardable && list.ExitCode == 0)
-                    shardFilters = TestShards.Plan(run.ListedNames(), _options.MonolithShards);
+                {
+                    var (n, why) = ShardCount();
+                    shardFilters = TestShards.Plan(run.ListedNames(), n);
+                    timings.ShardsReason = why;
+                }
             }
 
             var test = await TestAsync();
             // Сборку пропустили по отпечатку, а раннер её не нашёл или не загрузил — отпечаток соврал
             // (файл вне перечня расширений, сборка удалена): один повтор со сборкой
-            if (!test.Aborted && test.ExitCode != 0 && timings.BuildSkipped == "дерево не менялось"
-                && run.TakeStaleBuildSignal())
+            if (!test.Aborted && test.ExitCode != 0 && skippedByFingerprint && run.TakeStaleBuildSignal())
             {
-                _fingerprints.Forget(tree, request.Target);
+                fingerprints.Forget(tree, request.Target);
                 fingerprint = BuildFingerprint.Compute(tree);
                 timings.BuildSkipped = null;
+                skippedByFingerprint = false;
                 var failed = await BuildAsync();
                 if (failed is not null) return failed;
                 test = await TestAsync();
@@ -679,7 +698,7 @@ public sealed partial class TestRunService
                     BuildErrors = VsTestConsoleParser.BuildErrors(run.BuildErrorCandidates()),
                 });
             // Отпечаток снят ДО сборки: правка во время неё не должна сойти за собранную
-            _fingerprints.Remember(tree, request.Target, fingerprint!);
+            fingerprints.Remember(tree, request.Target, fingerprint!);
             return null;
         }
 

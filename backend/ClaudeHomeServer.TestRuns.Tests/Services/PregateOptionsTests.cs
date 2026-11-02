@@ -145,10 +145,10 @@ public class PregateOptionsTests
         var fast = options.Checks.Single(c => c.Name == "быстрые тесты");
         fast.Order.Should().Be(35);
         fast.WhenChanged.Should().Equal("backend/", "scripts/");
-        // Монолит и Llm.Tests идут шардами по классам (scripts/test-shards.py --run-fast), остальное — одним процессом
+        // Монолит (N по нагрузке, auto) и Llm.Tests (2) идут шардами по классам (scripts/test-shards.py --run-fast), остальное — одним процессом
         fast.Command.Should().Be("python3");
         fast.Args.Should().ContainInOrder("-I", "scripts/test-shards.py", "--run-fast", "backend/ClaudeHomeServer.slnx",
-            "--split", "backend/ClaudeHomeServer.Tests=3,backend/ClaudeHomeServer.Llm.Tests=2", "--filter",
+            "--split", "backend/ClaudeHomeServer.Tests=auto,backend/ClaudeHomeServer.Llm.Tests=2", "--filter",
             "Category!=Host&Category!=Slow&Category!=Integration&Category!=Node&Category!=Bench",
             "--results", ".cc-attachments/pregate-fast");
 

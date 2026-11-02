@@ -844,5 +844,91 @@ class RunFastTests(unittest.TestCase):
         self.assertEqual([], launched)
 
 
+# Те же строки — в backend/ClaudeHomeServer.TestRuns.Tests/Services/TestShardsTests.cs (AdaptiveRows):
+# (nproc, load1, MemAvailable ГиБ или None — снимка нет, потолок, ожидаемое N)
+ADAPTIVE_ROWS = [
+    (24, 7.2, 31, 6, 6),      # тихо — потолок
+    (24, 11.99, 31, 6, 6),    # под границей 0,5·nproc
+    (24, 12.0, 31, 6, 3),     # ровно 0,5·nproc — уже не потолок (мутация порога 0,5→0,6 краснит здесь)
+    (24, 14.0, 31, 6, 3),
+    (24, 35.99, 31, 6, 3),    # под границей 1,5·nproc
+    (24, 36.0, 31, 6, 2),     # ровно 1,5·nproc
+    (24, 50.0, 31, 6, 2),
+    (24, 2.0, 15.9, 6, 3),    # памяти меньше 16 ГиБ — не больше 3
+    (24, 2.0, 16.0, 6, 6),
+    (24, 2.0, 7.9, 6, 2),     # меньше 8 ГиБ — не больше 2
+    (24, 2.0, 8.0, 6, 3),
+    (24, 2.0, 31, 4, 4),      # потолок из настроек
+    (24, 2.0, 31, 1, 1),
+    (24, 50.0, 31, 1, 1),     # потолок ниже правила
+    (8, 3.9, 31, 6, 6),
+    (8, 4.0, 31, 6, 3),
+    (None, None, None, 6, 3),  # нет /proc — прежнее фиксированное
+    (None, None, None, 2, 2),
+]
+
+
+class AdaptiveShardsTests(unittest.TestCase):
+    def test_таблица_правила_общая_с_csharp(self):
+        for cpus, load1, mem, maximum, expected in ADAPTIVE_ROWS:
+            snapshot = None if cpus is None else (cpus, load1, int(mem * ts.GIB))
+            with self.subTest(cpus=cpus, load1=load1, mem=mem, maximum=maximum):
+                self.assertEqual(expected, ts.choose_shards(snapshot, maximum)[0])
+
+    def test_причина_для_сводки(self):
+        self.assertEqual((6, "load1 7,2 из 24, свободно 31 ГиБ"), ts.choose_shards((24, 7.2, 31 * ts.GIB + 5), 6))
+        self.assertEqual((3, "нет /proc — фиксированное значение"), ts.choose_shards(None, 6))
+
+    def test_снимок_без_proc_это_none_а_не_исключение(self):
+        orig = ts.open if hasattr(ts, "open") else None
+        ts.open = lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError("/proc/loadavg"))
+        try:
+            self.assertIsNone(ts.machine_snapshot())
+        finally:
+            if orig is None:
+                del ts.open
+            else:
+                ts.open = orig
+
+    def test_явное_число_и_auto(self):
+        self.assertEqual(3, ts.parse_n("3"))
+        self.assertEqual("auto", ts.parse_n("auto"))
+        with self.assertRaises(Exception):
+            ts.parse_n("0")
+        self.assertEqual(3, ts.resolve_n(3))
+        self.assertEqual([("a/B.Tests", "auto"), ("c/D.Tests", 2)], ts.parse_split("a/B.Tests=auto,c/D.Tests=2"))
+
+    def test_run_с_явным_n_не_зовёт_правило_а_auto_печатает_выбор_первой_строкой(self):
+        orig = ts.list_tests, ts.machine_snapshot
+        seen = []
+        ts.machine_snapshot = lambda: seen.append(1) or (24, 2.0, 31 * ts.GIB)
+        ts.list_tests = lambda project, extra: (None, "стоп после выбора N")
+        try:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(2, ts.main(["--run", "x", "-n", "3"]))
+            self.assertEqual([], seen)
+            self.assertEqual("", out.getvalue())
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                ts.main(["--run", "x"])
+            self.assertEqual("Шардов: 6 (load1 2,0 из 24, свободно 31 ГиБ)", out.getvalue().splitlines()[0])
+        finally:
+            ts.list_tests, ts.machine_snapshot = orig
+
+    def test_verify_с_auto_не_зависит_от_машины(self):
+        orig = ts.machine_snapshot
+        ts.machine_snapshot = lambda: self.fail("раскладка CI не должна читать нагрузку")
+        try:
+            with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as f:
+                f.write(LIST)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(0, ts.main(["--list", f.name, "--verify"]))
+            self.assertIn(f"из {ts.ADAPTIVE_FALLBACK} шардов", out.getvalue())
+        finally:
+            ts.machine_snapshot = orig
+            os.remove(f.name)
+
+
 if __name__ == "__main__":
     unittest.main()

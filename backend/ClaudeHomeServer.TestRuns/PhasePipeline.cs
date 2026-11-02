@@ -34,6 +34,10 @@ public sealed class PhasePipeline
         _exitGrace = exitGrace;
     }
 
+    // Отпечатки успешных сборок — один набор на процесс, как и блокировка дерева: их пишут и
+    // прогон тестов, и инструмент build, читает прогон тестов
+    public BuildFingerprintStore Fingerprints { get; } = new();
+
     // Гейт читается на каждый прогон: Configure со старта хоста подменяет Instance
     public BuildConcurrencyGate Gate => _gate ?? BuildConcurrencyGate.Instance;
 

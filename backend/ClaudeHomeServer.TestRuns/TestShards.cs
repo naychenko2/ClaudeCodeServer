@@ -14,7 +14,7 @@ public static class TestShards
 {
     // Потолок числа шардов: каждый — свой testhost с maxParallelThreads, пик RSS растёт с N
     // (замер 2026-10-29: N=1 — 5,5 ГиБ, N=3 — 9,5 ГиБ при лимите ccs-agents.slice 18 ГиБ)
-    public const int MaxShards = 6;
+    public const int MaxShards = AdaptiveShards.DefaultMax;
 
     // Потолок списка в памяти: монолит — ~7 тыс. имён, больше — не наш случай
     public const int MaxListedTests = 100_000;
@@ -109,5 +109,64 @@ public static class TestShards
         var shards = Layout(tests, n).Where(s => s.Count > 0).ToList();
         if (shards.Count < 2 || Verify(tests, shards).Count > 0) return null;
         return [.. shards.Select(Filter)];
+    }
+}
+
+// Снимок машины для выбора числа шардов: потоков, load1, MemAvailable в байтах
+public readonly record struct MachineSnapshot(int Cpus, double Load1, long MemAvailableBytes);
+
+// Число шардов монолита по текущей нагрузке машины (TestRuns:AdaptiveShards). Те же константы и то
+// же правило — в scripts/test-shards.py (choose_shards); табличные тесты обеих сторон идут по одним
+// строкам, правка порога — в обоих местах сразу. Статическая параллель упирается в CPU: днём (load
+// 30–50 на 24 потоках) больше трёх шардов не ускоряет, а в тихие окна три недогружают машину
+public static class AdaptiveShards
+{
+    public const int DefaultMax = 6;
+    // Нет /proc или он не прочитался — прежнее фиксированное значение
+    public const int Fallback = 3;
+    // load1 < 0,5·nproc — машина свободна: потолок; < 1,5·nproc — 3; иначе 2
+    public const double IdleLoad = 0.5;
+    public const double BusyLoad = 1.5;
+    public const int Mid = 3;
+    public const int Min = 2;
+    public const long GiB = 1024L * 1024 * 1024;
+    // MemAvailable меньше — не больше 3 (3 шарда монолита ≈ 9,5 ГиБ); меньше 8 ГиБ — не больше 2
+    public const long MemMid = 16 * GiB;
+    public const long MemLow = 8 * GiB;
+
+    // Чистая функция от снимка (null — снимка нет): число шардов и причина для сводки
+    public static (int Shards, string Reason) Choose(MachineSnapshot? snapshot, int max)
+    {
+        max = Math.Max(1, max);
+        if (snapshot is not { } s) return (Math.Min(Fallback, max), "нет /proc — фиксированное значение");
+        var n = s.Load1 < IdleLoad * s.Cpus ? max : s.Load1 < BusyLoad * s.Cpus ? Mid : Min;
+        if (s.MemAvailableBytes < MemLow) n = Math.Min(n, Min);
+        else if (s.MemAvailableBytes < MemMid) n = Math.Min(n, Mid);
+        var load = s.Load1.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture).Replace('.', ',');
+        return (Math.Min(n, max), $"load1 {load} из {s.Cpus}, свободно {s.MemAvailableBytes / GiB} ГиБ");
+    }
+
+    // Снимок из /proc; нет его (Windows, macOS) или не прочитался — null, без исключения
+    public static MachineSnapshot? Read(string procRoot = "/proc")
+    {
+        try
+        {
+            var loadavg = File.ReadAllText(Path.Combine(procRoot, "loadavg"));
+            var load1 = double.Parse(loadavg.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0],
+                System.Globalization.CultureInfo.InvariantCulture);
+            foreach (var line in File.ReadLines(Path.Combine(procRoot, "meminfo")))
+            {
+                if (!line.StartsWith("MemAvailable:", StringComparison.Ordinal)) continue;
+                var kb = long.Parse(line.Split(' ', StringSplitOptions.RemoveEmptyEntries)[1],
+                    System.Globalization.CultureInfo.InvariantCulture);
+                return new MachineSnapshot(Environment.ProcessorCount, load1, kb * 1024);
+            }
+            return null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or FormatException
+            or OverflowException or IndexOutOfRangeException)
+        {
+            return null;
+        }
     }
 }

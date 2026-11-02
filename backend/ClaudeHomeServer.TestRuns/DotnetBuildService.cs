@@ -120,6 +120,10 @@ public sealed class DotnetBuildService
 
         using (slot)
         {
+            // Отпечаток — ДО сборки и только под слотом: правка во время сборки не сойдёт за собранную.
+            // Успех пишется в общий с run_tests набор (PhasePipeline.Fingerprints)
+            var tree = BuildFingerprintStore.TreeKey(request.WorkingDirectory);
+            var fingerprint = BuildFingerprint.Compute(tree);
             run.Start(spec);
             progress?.Invoke(run.Snapshot());
             // Между строками `->` полоса ползёт по времени: тикер, а не только строки
@@ -140,6 +144,7 @@ public sealed class DotnetBuildService
             if (outcome.Aborted)
                 return result with { Cancelled = ct.IsCancellationRequested, TimedOut = !ct.IsCancellationRequested };
             if (outcome.ExitCode == 0 && memoryPath is not null) run.SaveMemory(memoryPath, previous);
+            if (outcome.ExitCode == 0) _pipeline.Fingerprints.Remember(tree, request.Target, fingerprint);
             return result;
         }
     }

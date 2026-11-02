@@ -63,8 +63,8 @@ Fast — **исключение категорий**, а не перечень �
 | Какие тестовые проекты задела правка | `scripts/tests-affected.sh` (по `git diff` и графу `ProjectReference`; только читает git) |
 | Один набор тестов | `dotnet test backend/ClaudeHomeServer.Tests --filter "FullyQualifiedName~Services.SessionManager"` |
 | Fast по решению | `dotnet test backend/ClaudeHomeServer.slnx --no-build --filter "Category!=Host&Category!=Slow&Category!=Integration&Category!=Node&Category!=Bench"` |
-| Монолит шардами локально | `python3 -I scripts/test-shards.py --run backend/ClaudeHomeServer.Tests -n 3 --results .cc-attachments/test-shards` |
-| Fast шардами (как в предгейте) | `python3 -I scripts/test-shards.py --run-fast backend/ClaudeHomeServer.slnx --split backend/ClaudeHomeServer.Tests=3,backend/ClaudeHomeServer.Llm.Tests=2 --filter "<фильтр Fast>" --results .cc-attachments/pregate-fast` |
+| Монолит шардами локально | `python3 -I scripts/test-shards.py --run backend/ClaudeHomeServer.Tests --results .cc-attachments/test-shards` (`-n auto` по умолчанию, явное `-n 3` — фиксированно) |
+| Fast шардами (как в предгейте) | `python3 -I scripts/test-shards.py --run-fast backend/ClaudeHomeServer.slnx --split backend/ClaudeHomeServer.Tests=auto,backend/ClaudeHomeServer.Llm.Tests=2 --filter "<фильтр Fast>" --results .cc-attachments/pregate-fast` |
 | Профиль прогона по TRX | `python3 -I scripts/test-profile.py <папка с TRX или .trx>` |
 | Профиль для раскладки (3 спокойных прогона) | см. «Профиль раскладки: как снимать» ниже |
 | Сторож длительности | `python3 -I scripts/test-profile.py <папка TRX набора Fast> --check` |
@@ -167,8 +167,18 @@ Fast — **исключение категорий**, а не перечень �
 Монолит без `filter` инструмент гоняет **несколькими процессами `dotnet test` параллельно**
 ([TestShards.cs](../../backend/ClaudeHomeServer.TestRuns/TestShards.cs)):
 
-- Настройка `TestRuns:MonolithShards` (по умолчанию 3, допустимо 1–6; 1 — прежний один процесс)
-  и `TestRuns:MonolithTarget` (`backend/ClaudeHomeServer.Tests`) в `appsettings.json`.
+- Настройка `TestRuns:MonolithShards` — **потолок** (по умолчанию 6, допустимо 1–6; 1 — прежний
+  один процесс) и `TestRuns:MonolithTarget` (`backend/ClaudeHomeServer.Tests`) в `appsettings.json`.
+- **N по нагрузке машины** (`TestRuns:AdaptiveShards`, по умолчанию `true`; правило —
+  `AdaptiveShards` в TestShards.cs и `choose_shards` в test-shards.py, одни константы и одна
+  таблица тестов на обеих сторонах): `load1 < 0,5·nproc` — потолок, `< 1,5·nproc` — 3, иначе 2;
+  `MemAvailable < 16 ГиБ` — не больше 3, `< 8 ГиБ` — 2; нет `/proc` (Windows, macOS) — 3. Зачем:
+  днём (load 30–50 на 24 потоках) статическая параллель упирается в CPU — тот же монолит тремя
+  шардами 123–132 с при load 5–11 и 176–218 с при load 30–50, — а в тихие окна три шарда
+  недогружают машину. Выбор и причина — в строке цены итога («шардов параллельно: 6 — load1 7,2
+  из 24, свободно 31 ГиБ»); у `test-shards.py --run`/`--run-fast` — первой строкой вывода.
+  `--verify`/`--shard`/`--slnx` (CI) от нагрузки не зависят: `auto` там значит 3. Откат без
+  пересборки: `AdaptiveShards=false` и `MonolithShards=3`.
 - Шарды включаются, только когда цель — монолит, `filter` не задан и подсчёт тестов
   (`--list-tests`) прошёл; иначе — один процесс, как раньше. Любой `filter` отключает шарды:
   дроби им прогон по-прежнему.
@@ -185,6 +195,17 @@ Fast — **исключение категорий**, а не перечень �
   N=3 — 9,5 ГиБ при лимите `ccs-agents.slice` 18 ГиБ. Упёрлись в память — снижай
   `MonolithShards`, а не лимит.
 
+### Общий отпечаток сборки
+
+`run_tests` пропускает сборку, если отпечаток исходников дерева (путь, mtime, размер `.cs`,
+`.csproj`, `.props`, `.targets`, `.json`, `.resx`) совпал с отпечатком последней **успешной**
+сборки той же цели. Набор отпечатков один на процесс (`PhasePipeline.Fingerprints`), пишут его и
+`run_tests`, и инструмент `build`: «build → run_tests» без правок собирает один раз. Сборка
+решения `.slnx` покрывает каждый его проект (причина пропуска — «дерево не менялось после сборки
+backend/X.slnx»); сборка проекта решение не покрывает. Отпечаток снимается ДО сборки, упавшая
+или прерванная сборка его не пишет; только память процесса — после рестарта первая сборка
+обязательна.
+
 ## Сторожа
 
 | Сторож | Что стережёт | Где |
@@ -196,7 +217,7 @@ Fast — **исключение категорий**, а не перечень �
 | `test-profile.py --check` | нехостовый тест без `Slow` дольше порога | CI (30 с), ручной `--check` на спокойной машине (5 с); в предгейт не входит |
 
 Предгейт шага (секция `Pregate` в `appsettings.json`) включает «быстрые тесты» (Order 35: Fast без
-пересборки, `test-shards.py --run-fast`: монолит 3 шарда и `Llm.Tests` 2 шарда по классам, остальные
+пересборки, `test-shards.py --run-fast`: монолит `auto` шардов (по нагрузке, см. ниже) и `Llm.Tests` 2 шарда по классам, остальные
 тестовые проекты — одним процессом на rest-slnx, всё параллельно; раскладка по профилю TRX прошлого
 прогона из той же папки, первый прогон — по хешу класса) после `build`; закрытие задачи она
 не блокирует, результат виден ревьюеру.

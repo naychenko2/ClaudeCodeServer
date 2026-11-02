@@ -48,7 +48,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
         foreach (var p in _processes)
         {
             try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { /* уже мёртв */ }
-            p.Dispose();
+            ProcessTestCleanup.SafeDispose(p); // Process.Close гонится с уборкой сессии
         }
         // Временные каталоги тестов чистим при выходе — иначе накапливаются в %TEMP%
         // (см. ревью 2026-09-05, L-7). ServerRoot общий для всех тестов класса

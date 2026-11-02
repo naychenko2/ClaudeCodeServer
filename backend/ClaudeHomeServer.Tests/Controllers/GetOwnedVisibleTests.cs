@@ -2,11 +2,13 @@ using System.Security.Claims;
 using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Skills;
+using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
@@ -24,6 +26,8 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// «нет такого чата». Первые три контроллера (Chats, Sessions, SessionMessages) проверяются
 /// на настоящих ручках; <c>GetOwned</c> не меняется — машинные пути законно работают с
 /// приватным чатом через арендатора. Общий чат и чат вне проекта — прежнее поведение.
+/// S2d-3b: тот же сдвиг в Board, ChatContext, McpSessionContext — ручки этих контроллеров
+/// ниже тем же сидированным набором чатов.
 /// Полный хост не нужен: контроллеры создаются напрямую с ClaimsPrincipal вызывающего
 /// (образец — SharedProjectEditorScopeGatesTests), стор сессий сидируется sessions.json
 /// (образец — SessionStatusTests).
@@ -182,5 +186,60 @@ public sealed class GetOwnedVisibleTests : IDisposable
         c.RemoveAutoAllow(ForeignPrivateId, null).Should().BeOfType<NotFoundResult>();
         c.RemoveAutoAllow(OwnPrivateId, null).Should().BeOfType<BadRequestObjectResult>();
         c.RemoveAutoAllow(OpenChatId, null).Should().BeOfType<BadRequestObjectResult>();
+    }
+
+    // --- ручки трёх контроллеров шага S2d-3b ---
+
+    [Fact]
+    public void BoardController_ЧужойПриватный404_КакНаНесуществующем_СвойПриватныйИОбщийПроходятГейт()
+    {
+        // board/executions за гейтом не тронуты: на Finished-сессии RespondPermission
+        // выходит на «протухшем ответе» (карточки нет) — NoContent и есть пройденный гейт
+        var c = new BoardController(null!, _sessions, null!) { ControllerContext = AsUser(_ownerId) };
+
+        c.AllowPermission(ForeignPrivateId, "r1").Should().BeOfType<NotFoundResult>();
+        c.AllowPermission("no-such-chat", "r1").Should().BeOfType<NotFoundResult>();
+        c.AllowPermission(OwnPrivateId, "r1").Should().BeOfType<NoContentResult>();
+        c.AllowPermission(OpenChatId, "r1").Should().BeOfType<NoContentResult>();
+        c.AllowPermission(OutsideChatId, "r1").Should().BeOfType<NoContentResult>();
+    }
+
+    [Fact]
+    public void ChatContextController_ЧужойПриватный404_КакНаНесуществующем_СвойПриватныйИОбщийПроходятГейт()
+    {
+        // Пустой стор и пустой реестр: за гейтом — пустой контекст (200),
+        // он и есть доказательство пройденного гейта
+        var registry = new ContextKindRegistry([]);
+        var store = new ChatContextStore(Path.Combine(_tempDir, "ctx"), registry);
+        var c = new ChatContextController(_sessions, _projects, registry, store, []) { ControllerContext = AsUser(_ownerId) };
+
+        c.Get(ForeignPrivateId).Should().BeOfType<NotFoundResult>();
+        c.Get("no-such-chat").Should().BeOfType<NotFoundResult>();
+        c.Get(OwnPrivateId).Should().BeOfType<OkObjectResult>();
+        c.Get(OpenChatId).Should().BeOfType<OkObjectResult>();
+    }
+
+    [Fact]
+    public void McpSessionContext_ЧужойПриватный403_КакНаЧужомЧате_СвойПриватныйИОбщийПроходятГейт()
+    {
+        // Сессия берётся из X-Caller-Session-Id (его ставит api() MCP-сервера), не из параметра
+        using var tasks = new TaskManager(_config);
+        var resolver = new SessionContextResolver(_projects, tasks);
+        IActionResult Call(string sessionId)
+        {
+            var http = new DefaultHttpContext
+            {
+                User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", _ownerId)])),
+            };
+            http.Request.Headers.Add(McpEndpoints.CallerSessionHeader, sessionId);
+            return new McpSessionContextController(_sessions, resolver)
+            { ControllerContext = new ControllerContext { HttpContext = http } }.Get();
+        }
+
+        // Форма отказа — та же, что на чужом чате (403), а не 404: гейт контроллера различает
+        // «нет сессии» и «чужая сессия»; чужой приватный теперь проходит по второй ветке
+        Call(ForeignPrivateId).Should().BeOfType<ObjectResult>().Subject.StatusCode.Should().Be(403);
+        Call(OwnPrivateId).Should().BeOfType<OkObjectResult>();
+        Call(OpenChatId).Should().BeOfType<OkObjectResult>();
     }
 }

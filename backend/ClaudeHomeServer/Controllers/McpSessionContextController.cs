@@ -33,9 +33,10 @@ public class McpSessionContextController(SessionManager sessions, SessionContext
         var session = sessions.GetById(sessionId);
         if (session == null) return NotFound(new { error = "Чат не найден" });
         // Владельца проектной сессии резолвит проект (Session.OwnerId у неё пуст) — берём
-        // единую точку SessionManager.GetOwned, а не сравниваем поле вручную
-        // S1: участнику общего проекта отказ (403): MCP-серверы вызывающего не едут в чат арендатора
-        if (sessions.GetOwned(sessionId, UserId) is null)
+        // единую точку SessionManager.GetOwnedVisible, а не сравниваем поле вручную
+        // S1: участнику общего проекта отказ (403): MCP-серверы вызывающего не едут в чат арендатора.
+        // S2d-3b: чужой приватный чат — тот же отказ (403) даже для владельца проекта
+        if (sessions.GetOwnedVisible(sessionId, UserId) is null)
             return StatusCode(StatusCodes.Status403Forbidden,
                 new { error = "Контекст чужого чата недоступен" });
 

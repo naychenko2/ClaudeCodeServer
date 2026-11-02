@@ -21,7 +21,8 @@ import { TextArea } from '../../../components/ui/Field';
 import { IconButton } from '../../../components/ui/IconButton';
 import { Notice } from '../../../components/ui/Notice';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
-import { EDIT_ISSUE_TITLE, EDIT_TEXT, stripViolationPrefix, wikiErrorText } from './wikiLabels';
+import { EDIT_ISSUE_TITLE, EDIT_TEXT, NOTES_TEXT, stripViolationPrefix, wikiErrorText } from './wikiLabels';
+import { extractNotes, WikiNotesEditor, withNotes } from './WikiNotesSection';
 import { WikiEditConflict, type Conflict } from './WikiEditConflict';
 
 // ─── Разбор текста для правки (зеркало разбора страницы: шапка → «# заголовок» → «## секции») ───
@@ -74,7 +75,8 @@ export function scanEditable(content: string): { lines: string[]; items: EditIte
     items.push({
       id: items.length, section: current, line: i, bullet, refs,
       text: line.slice(bullet.length).replace(REF_RX, '').trim(),
-      editable: current !== READONLY_SECTION,
+      // «Заметки» — не набор утверждений, а один свободный текст: правится отдельным полем
+      editable: current !== READONLY_SECTION && current !== NOTES_TEXT.section,
     });
   }
   return { lines, items };
@@ -82,7 +84,7 @@ export function scanEditable(content: string): { lines: string[]; items: EditIte
 
 // Полный новый текст страницы: нетронутые строки — как были (вместе со сносками), изменённые
 // — «маркер + новый текст» (сноску поставит сервер), убранные — выпадают из текста
-export function buildContent(content: string, edits: ReadonlyMap<number, EditEntry>): string {
+export function buildContent(content: string, edits: ReadonlyMap<number, EditEntry>, notes?: string): string {
   const { lines, items } = scanEditable(content);
   const out = lines.slice();
   const drop = new Set<number>();
@@ -92,7 +94,9 @@ export function buildContent(content: string, edits: ReadonlyMap<number, EditEnt
     if (e.gone) { drop.add(it.line); continue; }
     if (e.text !== undefined && e.text.trim() !== it.text) out[it.line] = `${it.bullet}${e.text.trim()}`;
   }
-  return out.filter((_, idx) => !drop.has(idx)).join('\n');
+  const built = out.filter((_, idx) => !drop.has(idx)).join('\n');
+  // Текст «Заметок» подменяем только если человек его менял: нетронутый уезжает как был
+  return notes !== undefined && notes.trim() !== (extractNotes(content) ?? '') ? withNotes(built, notes) : built;
 }
 
 // ─── Итог для родителя ───
@@ -158,6 +162,11 @@ export function WikiPageEditor({ section, pageKey, content, hash, footnotes, onD
   const humanRefs = new Set((footnotes ?? []).filter(f => f.origin === 'human').map(f => wikiFootnoteLabel(f.label)));
 
   const [edits, setEdits] = useState<ReadonlyMap<number, EditEntry>>(new Map());
+  // Текст «Заметок»: null — не трогали (следует за базой, в том числе после «Продолжить правку»)
+  const [notesEdit, setNotesEdit] = useState<string | null>(null);
+  const notesBase = extractNotes(base.content) ?? '';
+  const notesText = notesEdit ?? notesBase;
+  const notesChanged = notesText.trim() !== notesBase;
   const [ask, setAsk] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<Refusal | null>(null);
@@ -169,7 +178,7 @@ export function WikiPageEditor({ section, pageKey, content, hash, footnotes, onD
   const goneOf = (it: EditItem) => edits.get(it.id)?.gone === true;
 
   const blank = items.some(it => it.editable && !goneOf(it) && textOf(it).trim() === '');
-  const dirty = items.some(it => it.editable && (goneOf(it) || changed(it)));
+  const dirty = notesChanged || items.some(it => it.editable && (goneOf(it) || changed(it)));
 
   // Единственный путь отправки: замок и сверка ключа страницы общие для «Сохранить» и
   // «Взять мою версию поверх». baseHash — хэш текста, на который опирается отправляемое
@@ -207,7 +216,7 @@ export function WikiPageEditor({ section, pageKey, content, hash, footnotes, onD
 
   const save = () => {
     if (conflict || blank) return;
-    void submit(base.hash, buildContent(base.content, edits));
+    void submit(base.hash, buildContent(base.content, edits, notesEdit === null ? undefined : notesText));
   };
 
   // Только по явному клику: текст человека поверх свежей версии (baseHash — её хэш, не старый)
@@ -233,6 +242,7 @@ export function WikiPageEditor({ section, pageKey, content, hash, footnotes, onD
 
   const bySection: { name: string; items: EditItem[] }[] = [];
   for (const it of items) {
+    if (it.section === NOTES_TEXT.section) continue;
     const last = bySection[bySection.length - 1];
     if (last && last.name === it.section) last.items.push(it);
     else bySection.push({ name: it.section, items: [it] });
@@ -315,6 +325,8 @@ export function WikiPageEditor({ section, pageKey, content, hash, footnotes, onD
           </div>
         </section>
       ))}
+
+      <WikiNotesEditor value={notesText} disabled={busy} isMobile={isMobile} onChange={setNotesEdit} />
     </div>
   );
 }

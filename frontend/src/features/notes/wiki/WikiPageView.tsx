@@ -35,7 +35,8 @@ import { PressableArea } from '../../../components/ui/PressableArea';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { fmtDayMonth, WikiFootnotePopover, type FootnoteView } from './WikiFootnotePopover';
 import { WikiPageEditor, type EditDone } from './WikiPageEditor';
-import { EDIT_TEXT, OVERRIDE_TEXT, PAGE_STATUS, PAGE_TYPE, sectionPrefix, wikiErrorText } from './wikiLabels';
+import { EDIT_TEXT, NOTES_TEXT, OVERRIDE_TEXT, PAGE_STATUS, PAGE_TYPE, sectionPrefix, wikiErrorText } from './wikiLabels';
+import { extractNotes, WikiNotesSection } from './WikiNotesSection';
 import { useRestoreWikiStatement } from './useRestoreWikiStatement';
 
 // ─── Разбор страницы (зеркало бэкового WikiPage.Parse, терпимый) ───
@@ -365,7 +366,8 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
 
   // «О чём» — не секция-заголовок, а строка-описание под заголовком (макет «Хроника»)
   const aboutSection = isChronicle ? page.sections.find(s => s.name === 'О чём') : undefined;
-  const bodySections = isChronicle ? page.sections.filter(s => s.name !== 'О чём') : page.sections;
+  // С единым режимом «Заметки» — своя секция (последняя, со своими состояниями); без него — как все
+  const bodySections = page.sections.filter(s => !(isChronicle && s.name === 'О чём') && !(unified && s.name === NOTES_TEXT.section));
   const aboutText = aboutSection?.lines.map(l => l.replace(BULLET_RX, '')).join(' ') || page.summary;
 
   // Правка (F4a): состояние привязано к странице — со сменой страницы оно сбрасывается само
@@ -628,6 +630,15 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
       {bodySections.map(s => (
         <SectionBlock key={s.name} name={s.name} lines={s.lines} quotes={quotes} ui={footnoteUi} marks={marks} />
       ))}
+
+      {unified && !isChronicle && (
+        <WikiNotesSection
+          text={extractNotes(content) ?? ''}
+          canWrite={canEdit}
+          isMobile={isMobile}
+          onWrite={() => setEditUi({ id: pageId, editing: true, off: false, flash: null })}
+        />
+      )}
 
       {page.footnotes.length > 0 && <SourcesBlock footnotes={page.footnotes} />}
         </>

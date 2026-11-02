@@ -408,13 +408,20 @@ const now = () => { const d = new Date(); return String(d.getHours()).padStart(2
 let UID = 0; const uid = p => p + '-' + (++UID);
 const plural = (n, a, b, c) => { const m = n % 10, h = n % 100; return m === 1 && h !== 11 ? a : m >= 2 && m <= 4 && (h < 12 || h > 14) ? b : c; };
 
-/* Внешняя обвязка: тема, ширина, метки решений, секция «Заметки» — в адресе (диплинки) */
+/* Внешняя обвязка: тема, ширина, метки решений, секция «Заметки» — в памяти, копия в адресе (диплинки).
+   В srcdoc-песочнице без allow-same-origin (просмотр файла в продукте) replaceState бросает SecurityError —
+   там адрес молча не трогаем, состояние живёт только в памяти. */
 const S = { t:'light', w:'d', marks:1, n:0, s:'page' };
 function readHash() {
-  const h = new URLSearchParams(location.hash.slice(1));
-  for (const k of Object.keys(S)) if (h.has(k)) S[k] = typeof S[k] === 'number' ? +h.get(k) : h.get(k);
+  try {
+    const h = new URLSearchParams(location.hash.slice(1));
+    for (const k of Object.keys(S)) if (h.has(k)) S[k] = typeof S[k] === 'number' ? +h.get(k) : h.get(k);
+  } catch (e) { /* песочница: диплинка нет */ }
 }
-function writeHash() { history.replaceState(null, '', '#' + new URLSearchParams(Object.entries(S).map(([k, v]) => [k, String(v)])).toString()); }
+function writeHash() {
+  try { history.replaceState(null, '', '#' + new URLSearchParams(Object.entries(S).map(([k, v]) => [k, String(v)])).toString()); }
+  catch (e) { /* песочница: адрес недоступен, состояние остаётся в S */ }
+}
 
 /* ===== Данные раздела ===== */
 const FOLDERS = { aihome:'AI Home', dacha:'Дача', common:'Общее', personal:'Личное' };

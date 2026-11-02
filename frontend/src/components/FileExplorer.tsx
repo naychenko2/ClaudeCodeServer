@@ -756,6 +756,13 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
   // Удаление папки — отдельная дверь ('dir.delete'): редактору закрыта на бэке, закрыта
   // и здесь. Удаление файла ('file.delete') — не удаление папки.
   const canDeleteDir = can('DELETE files') && canWriteContent(project, 'dir.delete');
+  // Пункты заметок («Заметка»/«Новая заметка»/«Заметка о файле») — дверь 'note.create':
+  // читателю скрыты, редактору и владельцу есть (S2c-F4k).
+  const canNoteCreate = canWriteContent(project, 'note.create');
+  // Пункты картинок («Редактировать картинку»/«Нарисовать картинку») — дверь 'media.edit':
+  // шлюзы медиа-редакторов на бэке под полным Write на проект (ImageEditScopeGate),
+  // участник пишет через них 404 — скрыты и редактору, и читателю.
+  const canMediaEdit = canWriteContent(project, 'media.edit');
   const canCreate = canCreateFile || canMkdir || canUpload;
   const hasPanelHeader = useHasPanelHeader();
   const marks = useSyncMarks(project.id);
@@ -1672,8 +1679,9 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
     <Menu anchor={createMenu} minWidth={230} maxHeight={240} onClose={() => setCreateMenu(null)}>
       {/* В vault заметок первым пунктом идёт заметка: обычный файл там тоже можно
           создать, но .md через notes-API получает бэклинки и попадает в граф.
-          Подсистема выключена — заметки как формата не существует, пункт скрыт */}
-      {inNotes && notesOn && folderIconC && newNoteDialogC && (
+          Подсистема выключена — заметки как формата не существует, пункт скрыт.
+          Роль: читателю пункта нет ('note.create', canNoteCreate) */}
+      {inNotes && notesOn && canNoteCreate && folderIconC && newNoteDialogC && (
         <MenuItem
           icon={folderIconC.render?.({ size: 15 })}
           label="Заметка"
@@ -2148,7 +2156,7 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
         const add = (cond: unknown, node: ReactNode) => { if (cond) items.push(node); };
         const sep = (key: string) => items.push(<div key={key} style={{ height: 1, background: C.border, margin: '4px 6px' }} />);
 
-        add(entry.isDirectory && inNotesVault(entry.path) && newNoteDialogC,
+        add(entry.isDirectory && inNotesVault(entry.path) && canNoteCreate && newNoteDialogC,
           <MenuItem key="note" icon={<MI_NotePlus />} label="Новая заметка" onClick={() => { close(); setNoteDialog({ folder: noteFolderOf(entry.path) }); }} />);
         // Контекст чата — первым: он про «материал живёт у чата», вложение ниже —
         // про «уедет с ближайшим сообщением». В контексте пункт превращается
@@ -2157,10 +2165,12 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
         add(chatContextBtn.available && !fileCtx.on,
           <MenuItem key="chat-context" icon={chatContextBtn.inContext ? <MI_Check /> : <MI_Context />}
             label={chatContextBtn.title} onClick={() => { close(); chatContextBtn.toggle(); }} />);
-        add(imageEditorOn && online && !entry.isDirectory && !fileCtx.on && imageEditor?.isEditable(entry.path),
+        // Медиа-пункты — под дверью 'media.edit' (закрыта редактору и читателю: бэковый
+        // шлюз под полным Write), поэтому canMediaEdit здесь обязателен
+        add(imageEditorOn && online && canMediaEdit && !entry.isDirectory && !fileCtx.on && imageEditor?.isEditable(entry.path),
           <MenuItem key="image-edit" icon={<Pencil size={15} strokeWidth={ICON_STROKE} />} label="Редактировать картинку"
             onClick={() => { close(); openEditor({ kind: 'edit', path: entry.path }); }} />);
-        add(imageEditorOn && online && entry.isDirectory && !inNotesVault(entry.path),
+        add(imageEditorOn && online && canMediaEdit && entry.isDirectory && !inNotesVault(entry.path),
           <MenuItem key="image-create" icon={<Sparkles size={15} strokeWidth={ICON_STROKE} />} label="Нарисовать картинку"
             onClick={() => { close(); openEditor({ kind: 'create', folder: entry.path }); }} />);
         add(!entry.isDirectory && onAttachToChat,
@@ -2183,8 +2193,9 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
         add(!entry.isDirectory && onOpenDossiers,
           <MenuItem key="dossiers" icon={<MI_Dossiers />} label="Почему менялся этот файл" onClick={() => { close(); onOpenDossiers!(entry.path); }} />);
         // «Заметка о файле» — привязка frontmatter file:. Только вне vault: внутри
-        // notes/ уже есть «Новая заметка», а заметка о заметке не нужна
-        add(!entry.isDirectory && !inNotesVault(entry.path) && newNoteDialogC,
+        // notes/ уже есть «Новая заметка», а заметка о заметке не нужна.
+        // Роль: та же дверь 'note.create', что у прочих пунктов заметок
+        add(!entry.isDirectory && !inNotesVault(entry.path) && canNoteCreate && newNoteDialogC,
           <MenuItem key="note-about" icon={<MI_NotePlus />} label="Заметка о файле" onClick={() => { close(); setNoteDialog({ file: entry.path }); }} />);
 
         // «Заметки» (vault) не переименовываем/не удаляем — сломается база знаний.

@@ -302,4 +302,24 @@ public sealed class PrivateChatListVisibilityTests : IDisposable
         agents.Should().NotContain(ForeignPrivateId, "id чужого приватного чата человеку не отдаётся");
         commands.Should().NotContain(ForeignPrivateId);
     }
+
+    // ── снимок чатов для проекций фич (S2d-4j, дефект 2f8b7b73) ─────────────────────
+
+    [Fact]
+    public void СнимокФич_ДляЧеловека_ЧужойПриватныйНеВходит_СвойПриватныйИОбщиеВходят()
+    {
+        var ids = FeatureChatDoor.SnapshotVisible(_sessions, _ownerId).Select(s => s.Id).ToList();
+
+        ids.Should().NotContain(ForeignPrivateId, "id чужого приватного чата не уходит в ChatIds страницы и индекса фич");
+        ids.Should().NotContain(PersonaForeignId);
+        ids.Should().Contain([OwnPrivateId, MemberOpenId, OwnerOpenId, OutsideChatId]);
+    }
+
+    [Fact]
+    public void СнимокФич_МашинныйSnapshot_ДляГардаПривязкиНеМенялся_ЧужойПриватныйЕстьВНём()
+    {
+        var ids = FeatureChatDoor.Snapshot(_sessions, _ownerId).Select(s => s.Id).ToList();
+
+        ids.Should().Contain(ForeignPrivateId, "гарду привязки нужны все чаты владельца");
+    }
 }

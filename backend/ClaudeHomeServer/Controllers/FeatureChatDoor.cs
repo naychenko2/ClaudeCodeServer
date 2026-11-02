@@ -21,6 +21,16 @@ public static class FeatureChatDoor
                 s.Status is SessionStatus.Starting or SessionStatus.Working or SessionStatus.Waiting))
             .ToList();
 
+    // Тот же снимок для ЧЕЛОВЕЧЕСКИХ проекций (страница фичи, индекс, список фич: ChatIds, чаты,
+    // исполнители, шаги, счётчики «чаты фичи» считаются из него): чужой приватный чат не попадает
+    // ни id, ни полем (SessionAccess.CanSee через GetAllOwnedVisibleBy, S2d-4j). Гард привязки
+    // и MCP остаются на Snapshot: правилу нужны все чаты владельца.
+    public static List<FeatureIndexSession> SnapshotVisible(SessionManager sessions, string viewerId) =>
+        sessions.GetAllOwnedVisibleBy(viewerId)
+            .Select(s => new FeatureIndexSession(s.Id, s.TaskId, s.ProjectId, s.IsArchived, s.Model, s.PersonaId,
+                s.Status is SessionStatus.Starting or SessionStatus.Working or SessionStatus.Waiting))
+            .ToList();
+
     // Фича, в которую попадает задача: её FeatureId либо она сама, если это эпик.
     public static string? TargetFeature(TaskItem task) =>
         task.FeatureId ?? (task.Role == TaskRoles.Feature ? task.Id : null);

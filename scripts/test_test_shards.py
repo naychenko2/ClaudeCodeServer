@@ -238,6 +238,8 @@ class CostLayoutTests(unittest.TestCase):
             code, _, err = self._main_cli("--list", lst, "--verify", "--timings", f"{g1},{g2}")
             self.assertEqual(2, code)
             self.assertIn("Ни один из профилей", err)
+            self.assertIn(g1, err)
+            self.assertEqual(1, len(err.strip().splitlines()))  # одно сообщение об одной причине, не два
             # холодный кэш CI: единственный профиль отсутствует — предупреждение и раскладка по хешу
             code, _, err = self._main_cli("--list", lst, "--verify", "--timings", g1)
             self.assertEqual(0, code)
@@ -246,8 +248,14 @@ class CostLayoutTests(unittest.TestCase):
     def test_cli_PARALLEL_локальные_режимы_берут_LOCAL_PARALLEL_а_CI_режимы_пятёрку(self):
         seen = {}
         orig = (ts.PARALLEL, ts.run_fast, ts.run_shards)
-        ts.run_fast = lambda *a, **k: seen.setdefault("run_fast", ts.PARALLEL) and 0
-        ts.run_shards = lambda *a, **k: seen.setdefault("run", ts.PARALLEL) and 0
+
+        def stub(name):
+            def run(*a, **k):
+                seen.setdefault(name, ts.PARALLEL)  # запоминаем PARALLEL на момент вызова режима
+                return 0
+            return run
+        ts.run_fast = stub("run_fast")
+        ts.run_shards = stub("run")
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 lst = os.path.join(tmp, "list.txt")

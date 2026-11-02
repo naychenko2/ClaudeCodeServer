@@ -254,7 +254,8 @@ def load_profile(path):
     requested = split_profiles(path)
     files = [p for p in requested if os.path.exists(p)]
     missing = [p for p in requested if p not in files]
-    if missing:
+    # Пропали ВСЕ из нескольких заказанных — предупреждение молчит: причину и exit 2 называет main (одно сообщение, не два)
+    if missing and (files or len(requested) == 1):
         print(f"Предупреждение: профили не найдены: {', '.join(missing)}; "
               f"использовано {len(files)} из {len(requested)}", file=sys.stderr)
     if not files:
@@ -683,7 +684,7 @@ def main(argv=None):
     if timings is None and len(split_profiles(args.timings)) > 1:
         # один отсутствующий файл — штатно (холодный кэш CI, раскладка по хешу); несколько заказанных и ни
         # одного найденного — ошибка команды, а не отсутствие профиля
-        print("Ни один из профилей --timings не найден", file=sys.stderr)
+        print(f"Ни один из профилей --timings не найден: {', '.join(split_profiles(args.timings))}", file=sys.stderr)
         return 2
 
     if args.run_fast:

@@ -896,9 +896,12 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     // — ровно как раньше: ни env, ни трейлера. Параметр после ct сознательно: все существующие
     // вызовы должны оставаться валидными без правки, включая позиционный
     // (DeviceAgent/Composition/LocalApi.cs передаёт amend и ct позиционно).
+    // paths (S3-3) — коммит только этих путей (pathspec), StageAll не нужен; пустой результат —
+    // коммитить было нечего.
     public async Task<string> CommitAsync(
         string? ownerId, string root, string message, bool amend = false,
-        CancellationToken ct = default, GitCommitAuthor? author = null)
+        CancellationToken ct = default, GitCommitAuthor? author = null,
+        IReadOnlyList<string>? paths = null)
     {
         var sem = LockFor(root);
         await sem.WaitAsync(ct);
@@ -907,6 +910,27 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
             // Сообщение — через stdin (-F -), не в argv: избегаем экранирования кавычек/переводов строк
             var args = new List<string> { "commit", "-F", "-" };
             if (amend) args.Add("--amend");
+            if (paths is not null)
+            {
+                // Коммит ТОЛЬКО перечисленных путей (S3-3): сначала в индекс идут именно они
+                // (новые файлы без add в --only не попали бы), потом `commit --only -- пути`
+                // игнорирует всё остальное, что лежит в индексе (staged агента). Всё под
+                // одним замком репозитория; пути, где нечего коммитить (содержимое совпало с
+                // HEAD, создан и удалён до коммита), отсеиваются — иначе `add` по несовпавшему
+                // pathspec валит весь вызов. Нечего коммитить вовсе — пустая строка вместо sha.
+                var specs = new List<string>();
+                foreach (var p in paths)
+                {
+                    var spec = LiteralSpec(ValidateRel(root, p));
+                    var st = await RunAsync(ownerId, root, ["status", "--porcelain", "--", spec], ct: ct);
+                    if (st.Ok && !string.IsNullOrWhiteSpace(st.Stdout)) specs.Add(spec);
+                }
+                if (specs.Count == 0) return "";
+                await RunOkAsync(ownerId, root, ["add", "-A", "--", .. specs], ct: ct);
+                args.Add("--only");
+                args.Add("--");
+                args.AddRange(specs);
+            }
             var body = message;
             IReadOnlyDictionary<string, string>? authorEnv = null;
             if (author is not null)

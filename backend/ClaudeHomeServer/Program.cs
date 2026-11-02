@@ -616,6 +616,11 @@ builder.Services.AddSingleton<FileWatcherService>();
 // PersonaMemoryAutolearnService. Здесь, а не в GitSubsystem, потому что регистрации
 // реакторов — общая композиция спины, а не домена Git.
 builder.Services.AddGatedHostedService<GitAutoCommitService>(builder.Configuration);
+// Журнал правок человека в общем проекте (S3-3): дебаунс-коммит ТОЛЬКО записанных путей с
+// автором-человеком. Один экземпляр: шов IHumanEditJournal и hosted-сервис — тот же объект.
+builder.Services.AddSingleton<HumanEditCommitter>();
+builder.Services.AddSingleton<IHumanEditJournal>(sp => sp.GetRequiredService<HumanEditCommitter>());
+builder.Services.AddGatedHostedFrom(builder.Configuration, sp => sp.GetRequiredService<HumanEditCommitter>());
 // Детект коммита по сдвигу HEAD: помечает чатам зафиксированные пути
 // (Session.CommittedFilePaths), чтобы атрибуция файлов чатам не врала после коммита.
 // Аналогично GitAutoCommitService — реактор на горячем пути статуса, не домен Git.

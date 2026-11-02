@@ -1,0 +1,216 @@
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Execution;
+using ClaudeHomeServer.Services.Git;
+using ClaudeHomeServer.Tests.Helpers;
+using FluentAssertions;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
+using Xunit;
+
+namespace ClaudeHomeServer.Tests.Services;
+
+// S3-3: журнал правок человека коммитит ТОЛЬКО записанные пути с автором-человеком, после окна
+// дебаунса. Настоящий git во временной папке (по образцу GitAutoCommitAuthorTests); время —
+// управляемые часы, поэтому окно проверяется без Task.Delay.
+public class HumanEditCommitterTests : IDisposable
+{
+    private sealed class LocalOnlyFactory : ILauncherFactory
+    {
+        public IProcessLauncher Local => LocalProcessRunner.Instance;
+        public IProcessLauncher ForOwner(string? ownerId) => Local;
+        public IProcessLauncher ForProject(Project project) => Local;
+    }
+
+    private sealed class ManualClock : TimeProvider
+    {
+        private DateTimeOffset _now = new(2026, 11, 2, 12, 0, 0, TimeSpan.Zero);
+        public override DateTimeOffset GetUtcNow() => _now;
+        public void Advance(TimeSpan by) => _now += by;
+    }
+
+    private readonly string _dir;
+    private readonly string _repo;
+    private readonly UserStore _users;
+    private readonly ProjectManager _projects;
+    private readonly GitService _git = new(new LocalOnlyFactory());
+    private readonly ManualClock _clock = new();
+    private readonly HumanEditCommitter _sut;
+
+    public HumanEditCommitterTests()
+    {
+        _dir = Path.Combine(Path.GetTempPath(), "humanedit_" + Guid.NewGuid().ToString("N"));
+        _repo = Path.Combine(_dir, "repo");
+        Directory.CreateDirectory(_repo);
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(_dir, "projects.json"),
+                ["HumanEdit:DebounceSeconds"] = "20",
+            })
+            .Build();
+        _users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        _projects = new ProjectManager(config, _users, new AppSettingsService(config));
+        _sut = new HumanEditCommitter(_projects, _users, _git, config, NullLogger<HumanEditCommitter>.Instance, _clock);
+    }
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_dir, recursive: true); }
+        catch { /* git на Windows держит readonly-объекты — не роняем прогон */ }
+    }
+
+    // Репозиторий с базовым коммитом; shared=true — проекту добавлен участник. Возвращает проект
+    // и человека, который «правит» (участник общего проекта либо владелец личного).
+    private async Task<(Project Project, User Human)> SetupAsync(bool shared, bool initGit = true)
+    {
+        if (initGit)
+        {
+            await _git.InitAsync(null, _repo);
+            await _git.RunAsync(null, _repo, ["config", "user.email", "test@test"]);
+            await _git.RunAsync(null, _repo, ["config", "user.name", "Тест"]);
+            await File.WriteAllTextAsync(Path.Combine(_repo, "base.txt"), "база\n");
+            await _git.StageAllAsync(null, _repo);
+            await _git.CommitAsync(null, _repo, "начальный коммит");
+        }
+        var ownerId = _users.GetFirst()!.Id;
+        var project = _projects.Create("правка-" + Guid.NewGuid().ToString("N")[..6], _repo, ownerId, "testuser");
+        var human = _users.Add("human-" + Guid.NewGuid().ToString("N")[..6], "password", "user");
+        if (shared)
+            _projects.SetMembers(project.Id,
+                [new ProjectMember { UserId = human.Id, Role = ProjectRole.Editor, AddedBy = ownerId }]);
+        return (_projects.GetById(project.Id)!, human);
+    }
+
+    private async Task<string> LogAsync() =>
+        (await _git.RunAsync(null, _repo, ["log", "--format=%an|%s|%(trailers:key=CCS-User,valueonly)", "--no-merges"])).Stdout;
+
+    private async Task<string> CommitsCountAsync() =>
+        (await _git.RunAsync(null, _repo, ["rev-list", "--count", "HEAD"])).Stdout.Trim();
+
+    [Fact]
+    public async Task Flush_коммитит_только_записанный_путь_с_автором_человеком()
+    {
+        var (project, human) = await SetupAsync(shared: true);
+        await File.WriteAllTextAsync(Path.Combine(_repo, "mine.md"), "правка человека\n");
+        // «Работа агента» в том же дереве: и незакоммиченный файл, и staged — в коммит попасть не должны
+        await File.WriteAllTextAsync(Path.Combine(_repo, "agent.txt"), "агент\n");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "agent-staged.txt"), "агент в индексе\n");
+        await _git.StageAsync(null, _repo, "agent-staged.txt");
+
+        _sut.Record(project.Id, _repo, "mine.md", human.Id);
+        _clock.Advance(TimeSpan.FromSeconds(21));
+        await _sut.FlushAsync(all: false);
+
+        var files = (await _git.RunAsync(null, _repo, ["show", "--name-only", "--format=", "HEAD"])).Stdout.Trim();
+        files.Should().Be("mine.md");
+        var log = await LogAsync();
+        log.Should().Contain(human.DisplayName ?? human.Username).And.Contain(human.Id);
+        // Работа агента осталась на месте: файл не закоммичен, индекс не тронут
+        var status = (await _git.RunAsync(null, _repo, ["status", "--porcelain"])).Stdout;
+        status.Should().Contain("?? agent.txt").And.Contain("A  agent-staged.txt");
+    }
+
+    [Fact]
+    public async Task Flush_не_трогает_запись_до_конца_окна_и_PendingAuthor_её_показывает()
+    {
+        var (project, human) = await SetupAsync(shared: true);
+        await File.WriteAllTextAsync(Path.Combine(_repo, "mine.md"), "x\n");
+        var before = await CommitsCountAsync();
+
+        _sut.Record(project.Id, _repo, "mine.md", human.Id);
+        _clock.Advance(TimeSpan.FromSeconds(19));
+        await _sut.FlushAsync(all: false);
+
+        (await CommitsCountAsync()).Should().Be(before);
+        _sut.PendingAuthor(_repo, "mine.md")!.UserId.Should().Be(human.Id);
+
+        // Ровно на границе окна (>= debounce) — срабатывает
+        _clock.Advance(TimeSpan.FromSeconds(1));
+        await _sut.FlushAsync(all: false);
+        (await CommitsCountAsync()).Should().NotBe(before);
+        _sut.PendingAuthor(_repo, "mine.md").Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Новый_Record_сдвигает_окно_и_последний_записавший_становится_автором()
+    {
+        var (project, human) = await SetupAsync(shared: true);
+        var second = _users.Add("second-" + Guid.NewGuid().ToString("N")[..6], "password", "user");
+        _projects.SetMembers(project.Id,
+        [
+            new ProjectMember { UserId = human.Id, Role = ProjectRole.Editor, AddedBy = project.OwnerId! },
+            new ProjectMember { UserId = second.Id, Role = ProjectRole.Editor, AddedBy = project.OwnerId! },
+        ]);
+        await File.WriteAllTextAsync(Path.Combine(_repo, "mine.md"), "x\n");
+
+        _sut.Record(project.Id, _repo, "mine.md", human.Id);
+        _clock.Advance(TimeSpan.FromSeconds(15));
+        _sut.Record(project.Id, _repo, "mine.md", second.Id);
+        _clock.Advance(TimeSpan.FromSeconds(15));
+        await _sut.FlushAsync(all: false); // с первой записи прошло 30 с, со второй — 15
+
+        _sut.PendingAuthor(_repo, "mine.md")!.UserId.Should().Be(second.Id);
+        _clock.Advance(TimeSpan.FromSeconds(5));
+        await _sut.FlushAsync(all: false);
+        (await LogAsync()).Should().Contain(second.Id).And.NotContain(human.Id);
+    }
+
+    [Fact]
+    public async Task StopAsync_сбрасывает_буфер_не_дожидаясь_окна()
+    {
+        var (project, human) = await SetupAsync(shared: true);
+        await File.WriteAllTextAsync(Path.Combine(_repo, "mine.md"), "x\n");
+        _sut.Record(project.Id, _repo, "mine.md", human.Id);
+
+        await _sut.StopAsync(CancellationToken.None);
+
+        (await LogAsync()).Should().Contain(human.Id);
+        _sut.PendingAuthor(_repo, "mine.md").Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Личный_проект_и_не_репозиторий_молча_игнорируются()
+    {
+        var (personal, human) = await SetupAsync(shared: false);
+        await File.WriteAllTextAsync(Path.Combine(_repo, "mine.md"), "x\n");
+        var before = await CommitsCountAsync();
+
+        _sut.Record(personal.Id, _repo, "mine.md", human.Id);
+        _sut.PendingAuthor(_repo, "mine.md").Should().BeNull();
+        await _sut.StopAsync(CancellationToken.None);
+        (await CommitsCountAsync()).Should().Be(before);
+
+        // Общий проект, но каталог — не git-репозиторий
+        var plain = Path.Combine(_dir, "plain");
+        Directory.CreateDirectory(plain);
+        var shared = _projects.Create("без-git-" + Guid.NewGuid().ToString("N")[..6], plain, personal.OwnerId!, "testuser");
+        _projects.SetMembers(shared.Id, [new ProjectMember { UserId = human.Id, Role = ProjectRole.Editor, AddedBy = personal.OwnerId! }]);
+        var act = () => _sut.Record(shared.Id, plain, "f.md", human.Id);
+        act.Should().NotThrow();
+        _sut.PendingAuthor(plain, "f.md").Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Путь_вне_корня_не_попадает_в_буфер()
+    {
+        var (project, human) = await SetupAsync(shared: true);
+        _sut.Record(project.Id, _repo, "../outside.md", human.Id);
+        _sut.PendingAuthor(_repo, "../outside.md").Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Нечего_коммитить_если_содержимое_совпало_с_HEAD()
+    {
+        var (project, human) = await SetupAsync(shared: true);
+        var before = await CommitsCountAsync();
+        // base.txt записан теми же байтами — git не видит изменения
+        await File.WriteAllTextAsync(Path.Combine(_repo, "base.txt"), "база\n");
+        _sut.Record(project.Id, _repo, "base.txt", human.Id);
+
+        await _sut.StopAsync(CancellationToken.None);
+
+        (await CommitsCountAsync()).Should().Be(before);
+        _sut.PendingAuthor(_repo, "base.txt").Should().BeNull();
+    }
+}

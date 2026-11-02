@@ -547,13 +547,23 @@ public class WikiNightlyServiceTests : IDisposable
         AddChat("c1");
         var ingest = RealIngest();
         _llm.Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tickCalled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var sut = new WikiNightlyService(_sessions, new WikiChatRecalc(_sessions, _config), new WikiChatStage2(_llm, _sessions, _config),
-            (o, c, ct) => ingest.AnalyzeAsync(o, c, ct, LocalActionCatalog.WikiNightly),
+            (o, c, ct) =>
+            {
+                var run = ingest.AnalyzeAsync(o, c, ct, LocalActionCatalog.WikiNightly);
+                tickCalled.TrySetResult(); // после вызова: заявка тика уже села на чужой прогон (или начала свой)
+                return run;
+            },
             _llm, _config, NullLogger<WikiNightlyService>.Instance, _flag, () => _now);
 
         var button = ingest.AnalyzeAsync(User, "c1"); // кнопка пришла первой
         var tick = sut.RunNightTickAsync(_now);
-        await Task.Delay(100);
+        // Ждём события, а не таймер: модель вызвана кнопкой и тик уже обратился к разбору того же чата.
+        // Таймаут вместо зависания, если событие не наступит.
+        var both = Task.WhenAll(_llm.Entered.Task, tickCalled.Task);
+        var reached = await Task.WhenAny(both, Task.Delay(TimeSpan.FromSeconds(5)));
+        reached.Should().BeSameAs(both, "и кнопка дошла до модели, и тик обратился к разбору");
         _llm.Gate.SetResult();
         await Task.WhenAll(button, tick);
 
@@ -776,6 +786,8 @@ public class WikiNightlyServiceTests : IDisposable
         public bool Route = true;
         public Func<string, string>? Reply;
         public TaskCompletionSource? Gate;
+        // Модель вызвана и встала на гейте — событие вместо таймерного ожидания в тестах.
+        public readonly TaskCompletionSource Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public bool UsesLocal(string actionKey) => false;
         public bool HasFreeRoute(string actionKey) => true;
@@ -795,7 +807,11 @@ public class WikiNightlyServiceTests : IDisposable
             CancellationToken ct = default)
         {
             var text = Answer(actionKey, prompt);
-            if (Gate is not null && Calls.Count == 1) await Gate.Task.ConfigureAwait(false);
+            if (Gate is not null && Calls.Count == 1)
+            {
+                Entered.TrySetResult();
+                await Gate.Task.ConfigureAwait(false);
+            }
             return new OneShotResult(text, new OneShotUsage(10, 0, 0, 5, 0.0, "fake"), 1);
         }
 

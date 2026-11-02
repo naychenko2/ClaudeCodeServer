@@ -591,4 +591,51 @@ public class WikiApplyTests : IDisposable
         var again = await _sut.PrepareAsync(User, next, Ctx);
         again.Ready.Should().BeTrue(again.Reason);
     }
+
+    // ─── B4b (ADR-038, предохранитель 4): признак «ИИ поменял моё» в строке журнала ───
+
+    private static WikiPackage.Operation HumanTargetSupersede(string decision, string? human = null) =>
+        Op(WikiPackage.OpSupersede, PagePath, "Контенер собран на второй машине",
+            target: "Прежний план был остаться на Windows", decision: decision, human: human) with
+        {
+            Class = WikiPackage.ClassKey("session", WikiPackage.OpSupersede, humanTarget: true),
+        };
+
+    [Fact]
+    public async Task ИИСамЗаменилУтверждениеЧеловека_СтрокаApplyНесётOverrodeHuman()
+    {
+        // Мутация «не писать признак» (убрать overrodeHuman: в вызове AppendLog) — Contain краснеет.
+        await WriteCardAndPage();
+        var pkg = CreateAccepted(HumanTargetSupersede(WikiPackage.DecisionAuto));
+
+        var applied = await _sut.ApplyAsync(User, pkg, Ctx);
+
+        applied.Applied.Should().BeTrue(applied.Reason);
+        LogLines().Single(l => l.Contains("\"op\":\"apply\"")).Should().Contain("\"overrodeHuman\":true");
+    }
+
+    [Fact]
+    public async Task ОбычноеПрименение_ВСтрокеApplyПоляOverrodeHumanНет()
+    {
+        // Мутация «писать всегда» (overrodeHuman: true) краснеет здесь: поле только у замен по человеку.
+        await WriteCardAndPage();
+        var pkg = CreateAccepted(Op(WikiPackage.OpAppend, PagePath, "Контенер собран на второй машине"));
+
+        (await _sut.ApplyAsync(User, pkg, Ctx)).Applied.Should().BeTrue();
+
+        LogLines().Single(l => l.Contains("\"op\":\"apply\"")).Should().NotContain("overrodeHuman");
+    }
+
+    [Fact]
+    public async Task ЗаменуПоЧеловекуПринялЧеловекИзВходящих_ПризнакаНет()
+    {
+        // Решил человек — ИИ ничего не «переопределял»: признак только у decision=auto.
+        await WriteCardAndPage();
+        var pkg = CreateAccepted(HumanTargetSupersede(WikiPackage.DecisionInbox, WikiPackage.HumanAccepted));
+
+        var applied = await _sut.ApplyAsync(User, pkg, Ctx);
+
+        applied.Applied.Should().BeTrue(applied.Reason);
+        LogLines().Single(l => l.Contains("\"op\":\"apply\"")).Should().NotContain("overrodeHuman");
+    }
 }

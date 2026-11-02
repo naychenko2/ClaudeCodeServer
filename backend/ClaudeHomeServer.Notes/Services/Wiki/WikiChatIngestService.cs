@@ -114,9 +114,12 @@ public sealed class WikiChatIngestService
 
     /// <summary>Результат разбора: исход + причина (для отказа и для nothing_new —
     /// причина модели) + id применённых пакетов (для applied) + машинный код отказа
-    /// (S7b0a: только для состояний, названных REST-контрактом; null для прочих).</summary>
+    /// (S7b0a: только для состояний, названных REST-контрактом; null для прочих). OverrodeHuman —
+    /// сколько формулировок человека ИИ заменил в этом разборе сам; DisputedPages — страницы, где он
+    /// сам отметил противоречие (ADR-038, предохранитель 6: идут в одну строку утреннего уведомления).</summary>
     public readonly record struct ChatResult(
-        string Outcome, string? Reason, IReadOnlyList<string> PackageIds, string? Code = null);
+        string Outcome, string? Reason, IReadOnlyList<string> PackageIds, string? Code = null,
+        int OverrodeHuman = 0, IReadOnlyList<string>? DisputedPages = null);
 
     /// <summary>Последний исход разбора чата с временем окончания (S7b0a, чтение
     /// analyze-status и списка).</summary>
@@ -453,7 +456,21 @@ public sealed class WikiChatIngestService
         if (!upApplied.Ok)
             return Refused(null, $"курсор разбора не записан: {upApplied.Reason}");
 
-        return new ChatResult(OutcomeApplied, null, applied.Select(a => a.PackageId).ToList());
+        var overrodeHuman = 0;
+        var disputed = new List<string>();
+        foreach (var (packageId, _) in applied)
+        {
+            var stored = WikiPackageStore.TryRead(root, packageId);
+            if (stored.State != WikiPackageFileState.Valid || stored.Package is not { } pkg)
+                continue; // сводка — витрина: нечитаемый пакет число не искажает, а пропускается
+            var (replaced, pages) = pkg.NightSummary();
+            overrodeHuman += replaced;
+            foreach (var page in pages)
+                if (!disputed.Contains(page, StringComparer.Ordinal))
+                    disputed.Add(page);
+        }
+        return new ChatResult(OutcomeApplied, null, applied.Select(a => a.PackageId).ToList(),
+            OverrodeHuman: overrodeHuman, DisputedPages: disputed);
     }
 
     // ── хроника чата ───────────────────────────────────────────────────────────────

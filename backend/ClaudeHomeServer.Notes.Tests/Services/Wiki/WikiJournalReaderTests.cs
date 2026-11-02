@@ -447,4 +447,31 @@ public class WikiJournalReaderTests : IDisposable
             Task.FromResult<IReadOnlyList<StoredMessage>>([]);
         public bool SetWikiMark(string sessionId, string? mark) => Known.ContainsKey(sessionId);
     }
+
+    // ─── B4b (ADR-038, предохранитель 4): overrodeHuman читается и даёт фильтр «ИИ поменял моё» ───
+
+    [Fact]
+    public void OverrodeHuman_ПисьмоЧтениеИФильтр()
+    {
+        // Мутация «читатель не видит поле» (убрать разбор overrodeHuman в ParseLine): Be(true) и
+        // фильтр краснеют. Мутация «фильтр не фильтрует» — HaveCount(1) краснеет.
+        WikiManifest.AppendLog(Root(), "apply", "common", ["Общее/А.md"], "session:c1", "keeper", "auto", overrodeHuman: true);
+        WikiManifest.AppendLog(Root(), "apply", "common", ["Общее/Б.md"], "session:c2", "keeper", "auto");
+
+        var all = Read(Any());
+        all.Entries.Should().HaveCount(2);
+        all.Entries.Single(e => e.Pages.Contains("Общее/А.md")).OverrodeHuman.Should().BeTrue();
+        all.Entries.Single(e => e.Pages.Contains("Общее/Б.md")).OverrodeHuman.Should().BeFalse("поля нет — признака нет");
+
+        var filtered = Read(new WikiJournalReader.Query(null, null, null, null, OverrodeHuman: true));
+        filtered.Entries.Should().ContainSingle().Which.Pages.Should().Equal("Общее/А.md");
+    }
+
+    [Fact]
+    public void OverrodeHuman_НеTrue_ПризнакомНеСчитается()
+    {
+        WriteLog("""{"ts":"2026-10-01T00:00:00+00:00","op":"apply","section":"common","pages":["Общее/А.md"],"source":"session:c1","actor":"keeper","policy":"auto","packages":null,"overrodeHuman":false}""" + "\n");
+
+        Read(Any()).Entries.Single().OverrodeHuman.Should().BeFalse();
+    }
 }

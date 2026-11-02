@@ -51,7 +51,8 @@ public sealed class WikiJournalReader
 
     /// <summary>Фильтры окна: раздел (ключ, проверенный контроллером), источник (origin из
     /// закрытого перечня), класс пары «источник × операция». Пустое — без фильтра.</summary>
-    public readonly record struct Query(string? Section, string? Origin, string? Class, int? Take);
+    public readonly record struct Query(
+        string? Section, string? Origin, string? Class, int? Take, bool OverrodeHuman = false);
 
     /// <summary>Запись журнала: событие строки log.jsonl и то, что о нём известно по пакету.
     /// Status/Policy/Classes пустые там, где пакета нет (relink, adopt — системные операции
@@ -68,7 +69,8 @@ public sealed class WikiJournalReader
         IReadOnlyList<string> Packages,
         string? Status,
         string? Policy,
-        IReadOnlyList<string> Classes);
+        IReadOnlyList<string> Classes,
+        bool OverrodeHuman = false);
 
     /// <summary>Результат чтения. Take — фактическое окно после обрезки (клиентский take выше
     /// потолка урезается, и ответ должен показывать, какое окно читалось). LinesRead — сколько
@@ -135,6 +137,8 @@ public sealed class WikiJournalReader
             if (query.Section is not null && e.Section != query.Section) continue;
             if (query.Origin is not null && !OriginsOf(e.Source).Contains(query.Origin, StringComparer.Ordinal)) continue;
             if (query.Class is not null && !e.Classes.Contains(query.Class, StringComparer.Ordinal)) continue;
+            // «ИИ поменял моё» (ADR-038, предохранитель 4): строки, где ИИ сам заменил или оспорил утверждение человека.
+            if (query.OverrodeHuman && !e.OverrodeHuman) continue;
             shown.Add(e);
         }
         return new Result(shown, take, linesRead, invalidLines);
@@ -282,7 +286,8 @@ public sealed class WikiJournalReader
             return new Entry(
                 ts, op, section, actor, NullIfEmpty(source), OriginOf(source), null,
                 StrArray(obj, "pages"), StrArray(obj, "packages"),
-                null, NullIfEmpty(policy), []);
+                null, NullIfEmpty(policy), [],
+                obj.TryGetProperty("overrodeHuman", out var oh) && oh.ValueKind == JsonValueKind.True);
         }
         catch (JsonException)
         {

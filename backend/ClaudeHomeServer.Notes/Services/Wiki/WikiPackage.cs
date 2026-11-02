@@ -143,6 +143,27 @@ public sealed record WikiPackage
         return (parts[0], op, humanTarget);
     }
 
+    /// <summary>Операция ИИ, применённая САМА (decision=auto) поверх утверждения человека: замена
+    /// (`supersede`) или оспаривание (`conflict`) с классом `…@human`. Принятое человеком из
+    /// «Входящих» сюда не входит: там решил человек, ИИ ничего не «переопределял». Одно правило для
+    /// признака журнала `overrodeHuman` и для строк утреннего уведомления (ADR-038, предохранители 4 и 6).</summary>
+    public static bool IsAutoOverrideOfHuman(Operation op) =>
+        op.Decision == DecisionAuto && ParseClassKey(op.Class) is { HumanTarget: true };
+
+    /// <summary>Сколько формулировок человека заменил ИИ сам (`supersede@human`) и на каких страницах
+    /// он сам отметил противоречие (`conflict`, любая цель): пакет → вклад в сводку ночи.
+    /// Страницы — различные, в порядке операций.</summary>
+    public (int Replaced, IReadOnlyList<string> DisputedPages) NightSummary()
+    {
+        var replaced = Operations.Count(o => o.Op == OpSupersede && IsAutoOverrideOfHuman(o));
+        var pages = Operations
+            .Where(o => o.Op == OpConflict && o.Decision == DecisionAuto)
+            .Select(o => o.Page)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        return (replaced, pages);
+    }
+
     // Автор пакета (ADR-038): `ai` — пакет модели (ingest, ночной разбор, MCP), `human` — правка
     // владельца через REST под пользовательским JWT. Карточку origin: human и секцию «Заметки»
     // создаёт/меняет только `human` (WikiGate). Пакет без поля в JSON читается как `ai`.

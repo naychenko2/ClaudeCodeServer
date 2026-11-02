@@ -212,9 +212,11 @@ public static class WikiChatTriageStore
         });
     }
 
-    /// <summary>Записать вердикт ступени 2 (N1a): stage2Zone/stage2Reason/stage2HistoryCount.
-    /// stage2HistoryCount — число реплик человека на момент вердикта: по нему ночь переспросит
-    /// модель, когда реплик стало на 3 больше. Поля разбора, скорера и чужие не трогаются.
+    /// <summary>Записать вердикт ступени 2 (N1a): stage2Zone/stage2Reason/stage2HistoryCount
+    /// + дата сервера triagedAt — её ставит вердикт ступени 2 так же, как пересчёт
+    /// (UpdateScoring): время последней записи в стор двигает любой писатель вердикта.
+    /// Поля разбора, скорера и чужие не трогаются. stage2HistoryCount — число реплик человека
+    /// на момент вердикта: по нему ночь переспросит модель, когда реплик стало на 3 больше.
     /// Записи нет — новая с курсором 0. Тот же цикл под блоком корня и тот же fail-closed, что
     /// у Upsert: нечитаемый стор — CodeInvalid, вердикт не пишется.</summary>
     public static WikiTriageOpResult UpdateStage2(

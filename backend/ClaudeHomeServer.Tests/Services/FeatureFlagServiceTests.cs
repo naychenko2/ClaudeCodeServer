@@ -158,7 +158,7 @@ public class FeatureFlagServiceTests : IDisposable
             FeatureFlagCatalog.Exists(key).Should().BeFalse($"флаг {key} снят и не должен возвращаться в каталог");
 
         FeatureFlagCatalog.All.Select(f => f.Key).Should().BeEquivalentTo(
-            ["workspace-destructive", "spheres", "change-dossiers-recall", "character-smart-photos", "character-face-swap", "local-model-stats", "turn-plan-feature-mode", "plugins-mvp", "plugins-build-yourself", "features-overview", "turn-auto-resume", "prompt-cache", "llm-wiki"]);
+            ["workspace-destructive", "spheres", "change-dossiers-recall", "character-smart-photos", "character-face-swap", "local-model-stats", "turn-plan-feature-mode", "plugins-mvp", "plugins-build-yourself", "features-overview", "turn-auto-resume", "prompt-cache", "llm-wiki", "notes-wiki-unified"]);
     }
 
     // --- Режим «Исполнение фичи» (этап 2.5): ключ в каталоге + конвенция записи ---
@@ -171,6 +171,24 @@ public class FeatureFlagServiceTests : IDisposable
         var def = FeatureFlagCatalog.All
             .Should().Contain(f => f.Key == FeatureFlagKeys.TurnPlanFeatureMode,
                 "ключ turn-plan-feature-mode в каталоге — иначе тумблер и override не работают")
+            .Subject;
+
+        def.Title.Should().NotBeNullOrWhiteSpace("Title задан");
+        def.Description.Should().NotBeNullOrWhiteSpace("Description задан");
+        def.Stage.Should().BeOneOf("dev", "beta", "stable", "Stage — одна из трёх допустимых");
+        def.Default.Should().BeFalse("dark launch: по умолчанию выключено");
+    }
+
+    // --- «Заметки и вики вместе» (вложен в llm-wiki) ---
+
+    [Fact]
+    public void Каталог_СодержитNotesWikiUnified_СКонвенцией()
+    {
+        // Ключ в каталоге — иначе флаг не попадает ни в /api/feature-flags, ни в override,
+        // ни в UI-тумблер (GetEffective обходит только каталог).
+        var def = FeatureFlagCatalog.All
+            .Should().Contain(f => f.Key == FeatureFlagKeys.NotesWikiUnified,
+                "ключ notes-wiki-unified в каталоге — иначе тумблер и override не работают")
             .Subject;
 
         def.Title.Should().NotBeNullOrWhiteSpace("Title задан");

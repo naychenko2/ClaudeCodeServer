@@ -37,6 +37,9 @@ export const FLAGS = {
   // «Вики») и источник wiki от агентов; гейт записи в заведённую вику от него не зависит.
   // Dark launch, выключено по умолчанию. Ключ дублирует бэковый FeatureFlagCatalog.
   llmWiki: 'llm-wiki',
+  // «Заметки и вики вместе» (вложен в llm-wiki): один раздел для заметок и вики. Работает
+  // при включённом llm-wiki. Dark launch, выключено по умолчанию.
+  notesWikiUnified: 'notes-wiki-unified',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

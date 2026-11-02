@@ -40,9 +40,6 @@ public sealed class WikiChatStage2
     // Вердикт модели — недоверенный текст: about/reason режутся, прежде чем попасть в стор.
     private const int MaxVerdictTextChars = 300;
 
-    // Обороты-сигналы для окон: решения (общий словарь скорера) и просьбы «записать».
-    private static readonly string[] ExtraSignals = ["запиши", "поставь задачу"];
-
     public const string PromptHeader =
         "Ты отбираешь чаты для базы знаний. Ниже — отрывок рабочего чата (начало, места с решениями, конец). " +
         "Реши, есть ли в нём долговечное знание: решение, договорённость, факт о проекте, который стоит записать. " +
@@ -161,7 +158,9 @@ public sealed class WikiChatStage2
         // середины и не пересекается с уже взятыми.
         var lower = text.ToLowerInvariant();
         var hits = new SortedSet<int>();
-        foreach (var word in WikiChatScorer.DecisionWords.Concat(ExtraSignals))
+        // Сигналы для окон — общий словарь скорера: обороты решения и просьбы «запиши»/
+        // «поставь задачу» (тот же словарь, что сигнал «ушло в заметки и задачи»).
+        foreach (var word in WikiChatScorer.DecisionWords.Concat(WikiChatScorer.NoteTaskRequestPhrases))
         {
             var at = middleStart;
             while ((at = lower.IndexOf(word, at, middleEnd - at, StringComparison.Ordinal)) >= 0)

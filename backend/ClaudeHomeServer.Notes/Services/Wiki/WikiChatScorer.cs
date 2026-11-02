@@ -96,7 +96,7 @@ public static class WikiChatScorer
     internal static readonly string[] DecisionWords = ["решили", "договорились", "выбираем", "не делаем", "итог"];
     private static readonly string[] CorrectionStarts = ["нет", "не так", "стоп", "лучше", "наоборот"];
     private static readonly string[] NoteTaskToolSuffixes = ["notes_create", "notes_update", "tasks_create", "memory_remember"];
-    private static readonly string[] NoteTaskRequestPhrases = ["запиши", "поставь задачу"];
+    internal static readonly string[] NoteTaskRequestPhrases = ["запиши", "поставь задачу"];
     private static readonly string[] ReadToolNames = ["read", "files_read"];
     private static readonly string[] WriteToolNames = ["write", "edit", "multiedit", "files_write"];
     private static readonly string[] DocExtensions = [".md", ".docx", ".pdf", ".xlsx", ".pptx"];

@@ -944,6 +944,7 @@ export type WikiPutNightlyResult =
 // («не менять» на бэке — отсутствие поля; null здесь значил бы «ставить null»).
 export async function putWikiNightly(patch: WikiNightlyPatch): Promise<WikiPutNightlyResult> {
   const gen = ++_settingsGen;
+  const owner = readStoredUserId();
   const prev = _settings;
   // Оптимистично: новое значение видно сразу, ответ подтвердит или откатит. Снимка ещё нет
   // (экран не прочитал настройки) — оптимистичного нет, ждём ответ.
@@ -959,8 +960,9 @@ export async function putWikiNightly(patch: WikiNightlyPatch): Promise<WikiPutNi
     });
   } catch (e) {
     // Сервер не принял изменение — оптимистичное откатывается при любом отказе; чужая
-    // правка, начатая позже этой, не затирается (её поколение — последнее).
-    if (gen === _settingsGen) {
+    // правка, начатая позже этой, не затирается (её поколение — последнее). Откат прежнего
+    // владельца в чужой стор не возвращается: при смене аккаунта снимок уже очищен (M2).
+    if (gen === _settingsGen && owner === readStoredUserId()) {
       _settings = prev;
       emit();
     }
@@ -970,7 +972,7 @@ export async function putWikiNightly(patch: WikiNightlyPatch): Promise<WikiPutNi
   }
   const nightly = readNightly(body);
   if (!nightly) {
-    if (gen === _settingsGen) {
+    if (gen === _settingsGen && owner === readStoredUserId()) {
       _settings = prev;
       emit();
     }
@@ -982,7 +984,9 @@ export async function putWikiNightly(patch: WikiNightlyPatch): Promise<WikiPutNi
     // нечем — поле сохраняется от последнего чтения
     lastNight: readLastNight(body) ?? prev?.lastNight ?? null,
   };
-  if (gen === _settingsGen) {
+  // Устаревший ответ или ответ прежнего владельца в снимок не пишется (M1/M2);
+  // вызывающий свой ответ получает как есть.
+  if (gen === _settingsGen && owner === readStoredUserId()) {
     _settings = snap;
     emit();
   }

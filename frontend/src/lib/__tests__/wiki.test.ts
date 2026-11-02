@@ -756,7 +756,11 @@ describe('вики: список отбора чатов (доработка H3)
 //     (устаревший ответ затирает состояние);
 // (2) убрать оптимистичную запись в начале putWikiNightly → «ТумблерПрименяетсяОптимистично»
 //     краснеет (до ответа состояние прежнее);
-// (3) убрать откат в ветке отказа → «ОтказPUTОткатывает» краснеет (оптимистичное остаётся).
+// (3) убрать откат в ветке отказа → «ОтказPUTОткатывает» краснеет (оптимистичное остаётся);
+// (4) убрать сверку владельца в успехе putWikiNightly → «ОтветПрежнегоВладельцаПоPUT»
+//     краснеет (ответ чужого человека пишет чужой снимок);
+// (5) убрать сверку владельца в ветке отказа → «ОтказПрежнегоВладельца» краснеет
+//     (откат возвращает снимок прежнего в чужой стор).
 
 const SETTINGS = {
   autoApplyEnabled: false,
@@ -881,6 +885,37 @@ describe('вики: настройки «Ночного разбора» (F1)', 
     userId.mockReturnValue('u2');
     slow.resolve(SETTINGS);
     await p;
+    expect(getWikiSettingsSnapshot()).toBeNull();
+  });
+
+  it('putWikiNightly_ОтветПрежнегоВладельцаПоPUT_ВЧужойСнимокНеПишется', async () => {
+    const put = deferred();
+    serve({ 'PUT /wiki/settings': put.promise });
+    const p = putWikiNightly({ enabled: true }); // снимка нет — оптимистичной записи тоже нет
+    userId.mockReturnValue('u2'); // смена аккаунта: поколение не поднят, отличается только владелец
+    put.resolve(SETTINGS_ON);
+    const r = await p;
+    // вызывающий свой ответ получает как есть…
+    expect(r.ok).toBe(true);
+    // …но ответ прежнего владельца в чужой снимок не пишется (M2)
+    expect(getWikiSettingsSnapshot()).toBeNull();
+  });
+
+  it('putWikiNightly_ОтказПрежнегоВладельца_ЧужойСнимокНеВозвращает', async () => {
+    serve({ 'GET /wiki/tree': TREE, 'GET /wiki/settings': SETTINGS });
+    await ensureWikiLoaded();
+    await loadWikiSettings();
+    let rejectPut!: (e: unknown) => void;
+    serve({ 'PUT /wiki/settings': new Promise<unknown>((_, rej) => { rejectPut = rej; }) });
+    const p = putWikiNightly({ enabled: true }); // оптимистичная запись u1
+    userId.mockReturnValue('u2');
+    serve({ 'GET /wiki/tree': TREE_FRESH });
+    await ensureWikiLoaded(); // при смене аккаунта снимок u1 очищен (M2)
+    expect(getWikiSettingsSnapshot()).toBeNull();
+    rejectPut(httpError(409, { code: 'wiki_nightly', message: 'отказ по контракту' }));
+    const r = await p;
+    if (r.ok) throw new Error('ожидался отказ по контракту, а PUT прошёл');
+    // откат прежнего владельца не возвращает его снимок в стор нового
     expect(getWikiSettingsSnapshot()).toBeNull();
   });
 });

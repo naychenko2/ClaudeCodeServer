@@ -123,4 +123,9 @@ backend/ClaudeHomeServer/Controllers/TasksController.cs|86
 backend/ClaudeHomeServer/Controllers/TurnRightExtensions.cs|6
 backend/ClaudeHomeServer/Hubs/SessionHub.cs|7
 backend/ClaudeHomeServer/Hubs/TerminalHub.cs|1
+# S2d-4b2: TasksToolset 0→1 — id актора хода (`actor`, неизвестный → пустая строка) входит только в
+# ChatAudience.Viewer для маски чужих приватных чатов в ответе MCP (ForActorMasked → ChatRefs.For →
+# SessionAccess.CanSee). Ключом хранилищ он не служит: записей по нему нет, задача лежит у арендатора
+# (context.OwnerId из токена), тот же класс мест, что S2d-4b в TasksController.
+backend/ClaudeHomeServer/Services/Mcp/Http/TasksToolset.cs|1
 backend/ClaudeHomeServer/Services/Mcp/Http/WorkspaceToolset.cs|1

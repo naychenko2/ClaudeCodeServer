@@ -45,3 +45,8 @@ backend/ClaudeHomeServer.Tasks/BoardService.cs|1
 # маска ссылки, не допуск к данным (задача и её поля остаются); ключом хранилищ id не служит,
 # записи в ChatRefs нет (чистая функция над каталогом).
 backend/ClaudeHomeServer.Core/Models/ChatRef.cs|1
+# S2d-4b2: TaskExecutionService — SessionAccess.CanSee в NotifyDelegatorAsync: ссылка уведомления
+# на исходный чат строится, только если он виден владельцу задачи; иначе ссылка на задачу. Право на
+# проект здесь не решается (роль и рубильник неприменимы: это маска ссылки, не допуск к данным),
+# ключом хранилищ id не служит, записи нет.
+backend/ClaudeHomeServer/Services/TaskExecutionService.cs|1

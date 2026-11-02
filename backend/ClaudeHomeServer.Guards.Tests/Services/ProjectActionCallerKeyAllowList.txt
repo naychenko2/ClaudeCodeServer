@@ -55,6 +55,13 @@
 # хранилищ ничто не стало: задача по-прежнему читается по id у арендатора, в списке проекта
 # «владелец или участник» берётся из RequestScope ([ProjectScope]), в календаре — из уже отобранного
 # MyTasksQuery, новых вызовов с id вызывающего эти ветки не добавили.
+# S2d-4b: TasksController 82→86 — четыре входа UserId в ChatAudience.Viewer(UserId) (список проекта,
+# календарь, карточка — ветки владельца и участника). id вызывающего входит только в решение о
+# видимости ССЫЛКИ на чат (TaskView.MaskForeignChats → ChatRefs.For → SessionAccess.CanSee): ни одна
+# из этих веток не читает и не пишет по нему данных — задачи выбираются по ProjectId (GetByProject),
+# по арендатору (MyTasksQuery) и по роли из RequestScope, ключ хранилищ не менялся (задача лежит у
+# арендатора). Тот же класс мест, что S2c-9 выше и BoardService.cs в S2d-4c: маска ссылки, не допуск
+# к данным.
 # S2c-6: словарь сторожа расширен на actorUserId|ActorUserId|authorUserId, область — на платформенные
 # MCP-тулсеты (Services/Mcp/Http/*Toolset*.cs, ClaudeHomeServer.Notes/Services/Mcp/NotesToolset.cs).
 # Вердикт по каждой новой строке: новых совпадений нет — id актора в тулсеты приходит только значением
@@ -79,7 +86,11 @@ backend/ClaudeHomeServer/Controllers/DossiersController.cs|4
 # S2c-8: FilesController 5→6 — ветка папки Delete: id вызывающего входит только в явную проверку
 # права Write (папка остаётся на Write, файл переведён на WriteContent); ключом хранилищ ничто
 # не стало: файл и папка адресуются корнем проекта арендатора (GetRoot), как во всех соседних ветках.
-backend/ClaudeHomeServer/Controllers/FilesController.cs|6
+# S2d-4a (доработка 1): FilesController 6→7 — панель «Изменения» (changed-by): id вызывающего входит
+# только в видимость чата (SessionManager.IsVisibleTo → SessionAccess.CanSee), как в S2d-1d и S2d-4a.
+# Ключом хранилищ он не служит: индекс и его выдача адресуются projectId, записей по вызывающему нет,
+# машинная сторона индекса (GetSessionPathsAsync → CommitAttributionService) id вызывающего не видит.
+backend/ClaudeHomeServer/Controllers/FilesController.cs|7
 # S3-1b: GitController 1→3 — AuthorOfRequestUser: id вызывающего берётся из sub JWT и входит только
 # в чтение своей записи пользователя (UserStore.GetById) и в конструирование автора коммита
 # (GitCommitAuthor: имя/логин для git-автора). Ключом хранилищ ничто не стало: git-операции идут
@@ -102,7 +113,7 @@ backend/ClaudeHomeServer/Controllers/ProjectsController.cs|15
 # внутри SessionManager): список адресован projectId, ключом хранилищ id не служит, записи нет.
 backend/ClaudeHomeServer/Controllers/SessionsController.cs|15
 backend/ClaudeHomeServer/Controllers/SkillsController.cs|10
-backend/ClaudeHomeServer/Controllers/TasksController.cs|82
+backend/ClaudeHomeServer/Controllers/TasksController.cs|86
 backend/ClaudeHomeServer/Controllers/TurnRightExtensions.cs|6
 backend/ClaudeHomeServer/Hubs/SessionHub.cs|7
 backend/ClaudeHomeServer/Hubs/TerminalHub.cs|1

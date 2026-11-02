@@ -16,7 +16,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { AlertTriangle, BookOpen, Check, ChevronLeft, ChevronRight, Folder, Lock, Monitor, Shield, Trash2 } from 'lucide-react';
+import { AlertTriangle, BookOpen, Check, ChevronLeft, ChevronRight, Folder, FolderTree, Lock, Monitor, PanelRight, Shield, Trash2 } from 'lucide-react';
 import {
   C, FONT, FS, R, SP, useIsMobile, FLAGS, useFeature,
   WikiError, ensureWikiLoaded, deleteWikiSection, groupSectionsByKind, initializeWiki,
@@ -33,6 +33,7 @@ import { PillSwitch } from '../../../components/ui/PillSwitch';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { WikiPageView } from './WikiPageView';
 import { WikiSectionTree } from './WikiSectionTree';
+import { panelTabs, PanelHead, WikiDrawer, WikiPanelBody, WikiRail, WikiSidePanel } from './WikiUnifiedChrome';
 import { WIKI_SUBTABS, wikiSubTabIcon, WikiSubTabStub, type WikiSubTabId } from './wikiTabs';
 import { PAGE_STATUS, PAGE_TYPE, sectionPrefix, wikiErrorText } from './wikiLabels';
 
@@ -222,7 +223,10 @@ function PageRow({ page, onOpen }: { page: WikiPageInfoDto; onOpen: () => void }
 
 // ─── Вкладка ───
 
-export function WikiTab() {
+// unified — единая раскладка «Заметки + Вики» (ADR-038, F1; флаг notesWikiUnified держит
+// NotesPage): дерево слева, рельса с панелью справа, на 360 — две шторки; в центре только
+// документ. Без неё — прежние вкладки, поведение не меняется.
+export function WikiTab({ unified = false }: { unified?: boolean } = {}) {
   const enabled = useFeature(FLAGS.llmWiki);
   const isMobile = useIsMobile();
   const tree = useWikiTree();
@@ -237,6 +241,9 @@ export function WikiTab() {
   // Мобильный экран «Разделы» (S5d, хвост ревью S5c): true — вместо каталога показан
   // полноэкранный список разделов; выбор раздела возвращает к каталогу
   const [showSections, setShowSections] = useState(false);
+  // Единая раскладка: открытая панель рельсы (null — закрыта) и шторка на 360
+  const [panelTab, setPanelTab] = useState<WikiSubTabId | null>(null);
+  const [drawer, setDrawer] = useState<'tree' | 'panel' | null>(null);
   // Открытая страница (S5b): pageKey открытой страницы выбранного раздела; null — каталог.
   // Смена или удаление раздела закрывает её (страница принадлежит разделу) — selectSection
   const [openedPage, setOpenPage] = useState<string | null>(null);
@@ -452,6 +459,99 @@ export function WikiTab() {
     );
   };
 
+  const dialog = confirmDelete && (
+        <ConfirmDialog
+          title={confirmDelete.name
+            ? `Удалить раздел «${confirmDelete.name}»?`
+            : 'Удалить раздел удалённого проекта?'}
+          subtitle={`${confirmDelete.pageCount} стр. удалятся из вики и из поиска. Вернуть можно только из бэкапа данных.`}
+          confirmLabel="Удалить раздел"
+          confirmVariant="danger"
+          onConfirm={async () => {
+            // Отказ — тем же путём, что у действия в runAction: русским текстом в баннер.
+            // Без catch rejection ушёл бы в void result.finally() (ConfirmDialog) и
+            // пользователь не увидел бы ничего. Диалог закрываем при обоих исходах:
+            // отказ видно в баннере вкладки, а не за спиннером диалога.
+            try {
+              await deleteWikiSection(confirmDelete.key);
+            } catch (e) {
+              setActionError(e);
+              setConfirmDelete(null);
+              return;
+            }
+            setConfirmDelete(null);
+            selectSection(null, true);
+          }}
+          onCancel={() => setConfirmDelete(null)}
+        />
+      );
+
+  const errorBanner = actionError
+    ? <div style={{ padding: `0 ${SP.sm}px` }}><ErrorNotice e={actionError} onDismiss={() => setActionError(null)} /></div>
+    : null;
+
+  // Единая раскладка: навигации вики в центре нет — ни вкладок, ни «Назад», ни крошек
+  if (unified) {
+    const panelLabel = panelTabs().find(t => t.id === panelTab)?.label ?? 'Панель вики';
+    const tree = (onPick?: () => void) => (
+      <WikiSectionTree
+        sections={sections} selectedKey={selectedKey}
+        onSelect={k => { selectSection(k, true); onPick?.(); }}
+      />
+    );
+    const centerPane = (
+      <div data-testid="wiki-doc" style={{ flex: 1, minWidth: 0, overflow: 'auto' }}>{center()}</div>
+    );
+    if (isMobile) {
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, minHeight: 0, height: '100%' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, padding: `0 ${SP.sm}px` }}>
+            <Button variant="ghost" size="md" dataTestId="wiki-open-tree" ariaLabel="Дерево разделов" title="Дерево разделов"
+              leftIcon={<FolderTree size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />} onClick={() => setDrawer('tree')}>{null}</Button>
+            <span style={{ flex: 1 }} />
+            <Button variant="ghost" size="md" dataTestId="wiki-open-panel" ariaLabel="Входящие, журнал, здоровье, настройки"
+              title="Входящие, журнал, здоровье, настройки"
+              leftIcon={<PanelRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />} onClick={() => setDrawer('panel')}>{null}</Button>
+          </div>
+          {errorBanner}
+          {centerPane}
+          {drawer === 'tree' && (
+            <WikiDrawer side="left" label="Дерево разделов" onClose={() => setDrawer(null)}>
+              <PanelHead title="Разделы" onClose={() => setDrawer(null)} />
+              <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>{tree(() => setDrawer(null))}</div>
+            </WikiDrawer>
+          )}
+          {drawer === 'panel' && (
+            <WikiDrawer side="right" label="Панель вики" onClose={() => setDrawer(null)}>
+              <PanelHead title={panelTab ? panelLabel : 'Панель вики'} onClose={() => setDrawer(null)} />
+              <div style={{ display: 'flex', justifyContent: 'center', padding: SP.xs, borderBottom: `1px solid ${C.border}` }}>
+                <PillSwitch<WikiSubTabId>
+                  value={panelTab ?? panelTabs()[0].id} fill isMobile iconsOnly
+                  onChange={setPanelTab}
+                  options={panelTabs().map(t => ({ value: t.id, label: t.label, icon: wikiSubTabIcon(t), title: t.label }))}
+                />
+              </div>
+              <WikiPanelBody tab={panelTab ?? panelTabs()[0].id} selectedKey={selectedKey} />
+            </WikiDrawer>
+          )}
+          {dialog}
+        </div>
+      );
+    }
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, minHeight: 0, height: '100%' }}>
+        {errorBanner}
+        <div style={{ display: 'flex', gap: SP.md, flex: 1, minHeight: 0 }}>
+          <div style={{ width: TREE_W, flexShrink: 0, overflow: 'auto' }}>{tree()}</div>
+          {centerPane}
+          {panelTab && <WikiSidePanel tab={panelTab} selectedKey={selectedKey} onClose={() => setPanelTab(null)} />}
+          <WikiRail active={panelTab} onSelect={setPanelTab} />
+        </div>
+        {dialog}
+      </div>
+    );
+  }
+
   const subtab = WIKI_SUBTABS.find(t => t.id === tab) ?? WIKI_SUBTABS[0];
   const SubTabComp = subtab.component;
 
@@ -470,7 +570,7 @@ export function WikiTab() {
         />
       </div>
 
-      {actionError ? <div style={{ padding: `0 ${SP.sm}px` }}><ErrorNotice e={actionError} onDismiss={() => setActionError(null)} /></div> : null}
+      {errorBanner}
 
       <div style={{ display: 'flex', gap: SP.md, flex: 1, minHeight: 0 }}>
         {/* Дерево — колонка слева только на десктопе. На мобили оно не стоит над каталогом
@@ -520,32 +620,7 @@ export function WikiTab() {
         </div>
       </div>
 
-      {confirmDelete && (
-        <ConfirmDialog
-          title={confirmDelete.name
-            ? `Удалить раздел «${confirmDelete.name}»?`
-            : 'Удалить раздел удалённого проекта?'}
-          subtitle={`${confirmDelete.pageCount} стр. удалятся из вики и из поиска. Вернуть можно только из бэкапа данных.`}
-          confirmLabel="Удалить раздел"
-          confirmVariant="danger"
-          onConfirm={async () => {
-            // Отказ — тем же путём, что у действия в runAction: русским текстом в баннер.
-            // Без catch rejection ушёл бы в void result.finally() (ConfirmDialog) и
-            // пользователь не увидел бы ничего. Диалог закрываем при обоих исходах:
-            // отказ видно в баннере вкладки, а не за спиннером диалога.
-            try {
-              await deleteWikiSection(confirmDelete.key);
-            } catch (e) {
-              setActionError(e);
-              setConfirmDelete(null);
-              return;
-            }
-            setConfirmDelete(null);
-            selectSection(null, true);
-          }}
-          onCancel={() => setConfirmDelete(null)}
-        />
-      )}
+      {dialog}
     </div>
   );
 }

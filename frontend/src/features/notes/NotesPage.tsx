@@ -73,6 +73,9 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   // Вкладка «Вики» — только при флаге llmWiki (dark launch): при выключенном флаге
   // страница заметок ровно такая, какой была — ни вкладки, ни переключателя на десктопе
   const wikiEnabled = useFeature(FLAGS.llmWiki);
+  // Единая раскладка (ADR-038, F1): дерево слева, рельса и панель справа, шторки на 360;
+  // только вместе с вики — без флага остаются прежние вкладки
+  const wikiUnified = useFeature(FLAGS.notesWikiUnified) && wikiEnabled;
   // Теги всех заметок по частоте — чипы-фильтры списка (клик = оператор tag: в поиске).
   // Тег избранного среди них не показываем: у него свой чип над группой фильтров.
   const allTags = useMemo(() => {
@@ -518,7 +521,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   // десктопный режим вкладки
   const mode: Mode = isMobile ? mobileMode : (graphPanelOpen ? 'graph' : wikiOn ? 'wiki' : 'notes');
   const centerPane = mode === 'wiki'
-    ? <WikiTab />
+    ? <WikiTab unified={wikiUnified} />
     : mode === 'graph'
     ? <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden',
         ...(!isMobile ? { background: C.bgMain, border: `1px solid ${ISLAND.border}`, borderRadius: ISLAND.radius, boxShadow: ISLAND.shadow } : {}) }}>

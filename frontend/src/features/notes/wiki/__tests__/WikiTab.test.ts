@@ -800,3 +800,54 @@ describe('Вкладка «Вики»: возврат к каталогу, ко�
     expect(has(container, 'Содержание хроники chat-x')).toBe(true);
   });
 });
+
+// ─── F1: единая раскладка «Заметки + Вики» (ADR-038) ───
+// Мутации (вывод прогона — в отчёте задачи): (1) не рисовать WikiRail → «рельса» краснеет;
+// (2) вернуть PillSwitch подвкладок в unified → «в центре нет вкладок» краснеет;
+// (3) панель не закрывать повторным нажатием → «повторное нажатие закрывает» краснеет.
+describe('Единая раскладка (F1, unified)', () => {
+  function renderUnified(tree: typeof TREE) {
+    route(tree);
+    installFakeDom();
+    const { root, container } = mount(createElement(WikiTab, { unified: true }));
+    roots.push(root);
+    return container;
+  }
+
+  it('дерево слева, документ в центре, справа рельса из четырёх разделов; панель закрыта', async () => {
+    const c = renderUnified(TREE);
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-tree'), 'дерево слева').not.toBeNull();
+    expect(has(c, 'Ревью фронта'), 'в центре каталог выбранного раздела').toBe(true);
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-rail'), 'рельса').not.toBeNull();
+    for (const id of ['inbox', 'journal', 'health', 'settings']) {
+      expect(findNodeByAttr(c, 'data-testid', `wiki-rail-${id}`), `кнопка рельсы ${id}`).not.toBeNull();
+    }
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-panel'), 'панель закрыта, пока не выбрали раздел').toBeNull();
+  });
+
+  it('в центре нет вкладок и «Страниц»: подвкладки ушли в рельсу', async () => {
+    const c = renderUnified(TREE);
+    await settle();
+    const doc = findNodeByAttr(c, 'data-testid', 'wiki-doc')!;
+    expect(textNodes(doc).join(' ')).not.toContain('Страницы');
+    expect(textNodes(doc).join(' ')).not.toContain('Журнал');
+  });
+
+  it('кнопка рельсы открывает панель, повторное нажатие закрывает', async () => {
+    const c = renderUnified(TREE);
+    await settle();
+    clickTestId(c, 'wiki-rail-settings');
+    const panel = findNodeByAttr(c, 'data-testid', 'wiki-panel');
+    expect(panel, 'панель «Настройки» открыта').not.toBeNull();
+    expect(textNodes(panel!).join(' ')).toContain('Настройки');
+    clickTestId(c, 'wiki-rail-settings');
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-panel'), 'повторное нажатие закрывает').toBeNull();
+  });
+
+  it('без unified рельсы нет — прежняя раскладка с вкладками', async () => {
+    const c = render(TREE);
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-rail')).toBeNull();
+  });
+});

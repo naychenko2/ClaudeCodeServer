@@ -317,6 +317,36 @@ describe('NotesPage: вкладка «Вики» за флагом llmWiki (S5d)
     root.unmount();
   });
 
+  it('F1: notes-wiki-unified + llm-wiki на 360 — две кнопки шторок, дерево во шторке, «Раздел ▸» нет', async () => {
+    setAllFlags({ 'llm-wiki': true, 'notes-wiki-unified': true });
+    wikiMock.tree = WIKI_TREE;
+    wikiMock.catalog = WIKI_CATALOG;
+    const { root, container } = mountNotes();
+    clickNode(findButtonByText(container, 'Вики')!);
+    await settle();
+    expect(hasText(container, 'Тестовая страница вики'), 'в центре документ').toBe(true);
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-section-switch'), 'старой кнопки «Раздел ▸» нет').toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-open-panel'), 'кнопка панели в шапке').not.toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-drawer-left'), 'шторка закрыта').toBeNull();
+    clickNode(findNodeByAttr(container, 'data-testid', 'wiki-open-tree')!);
+    const drawer = findNodeByAttr(container, 'data-testid', 'wiki-drawer-left');
+    expect(drawer, 'шторка дерева открыта').not.toBeNull();
+    expect(findNodeByAttr(drawer!, 'data-testid', 'wiki-tree'), 'дерево во шторке').not.toBeNull();
+    root.unmount();
+  });
+
+  it('F1: без notes-wiki-unified раскладка прежняя — кнопки шторок нет', async () => {
+    setAllFlags({ 'llm-wiki': true });
+    wikiMock.tree = WIKI_TREE;
+    wikiMock.catalog = WIKI_CATALOG;
+    const { root, container } = mountNotes();
+    clickNode(findButtonByText(container, 'Вики')!);
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-open-tree')).toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-section-switch')).not.toBeNull();
+    root.unmount();
+  });
+
   it('флаг включён: «Вики» → каталог; «Раздел ▸» → экран «Разделы»; раздел → обратно каталог', async () => {
     setAllFlags({ 'llm-wiki': true });
     wikiMock.tree = WIKI_TREE;

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
@@ -19,8 +20,9 @@ public class CharacterLoraTrainEndpointsTests : IClassFixture<CharacterLoraTrain
 
     public CharacterLoraTrainEndpointsTests(Hosts hosts) => _hosts = hosts;
 
-    // Хост на КОНФИГУРАЦИЮ, а не на тест: хосты поднимаются лениво и гасятся вместе с фикстурой.
-    // Состояние каждый тест заводит сам: фейк тренера сбрасывает Use, проект с персонажем —
+    // Хост на КОНФИГУРАЦИЮ, а не на тест: объекты фабрик создаются сразу, ASP.NET-хост внутри каждой
+    // стартует лениво; гасятся вместе с фикстурой. Состояние каждый тест заводит сам: фейк тренера
+    // сбрасывает Use() хоста TrainerHost (в самом Hosts метода нет), проект с персонажем —
     // ProjectWithCharacter с уникальным именем и каталогом
     public sealed class Hosts : IDisposable
     {
@@ -88,7 +90,7 @@ public class CharacterLoraTrainEndpointsTests : IClassFixture<CharacterLoraTrain
         public LoraTrainBusy? BusyNow { get; set; }
         public LoraTrainStartResult StartResult { get; set; } = new("lm_job1", 0, 4850);
         public LoraCancelResult CancelResult { get; set; } = LoraCancelResult.Cancelled;
-        public List<LoraTrainStart> Starts { get; } = [];
+        public ConcurrentQueue<LoraTrainStart> Starts { get; } = new();
         public List<(string Owner, string Job, bool Admin)> Cancels { get; } = [];
 
         public LoraTrainBusy? Busy(string ownerId) =>
@@ -98,7 +100,7 @@ public class CharacterLoraTrainEndpointsTests : IClassFixture<CharacterLoraTrain
 
         public async Task<LoraTrainStartResult> StartAsync(LoraTrainStart request, CancellationToken ct)
         {
-            Starts.Add(request);
+            Starts.Enqueue(request);
             if (StartDelay > TimeSpan.Zero) await Task.Delay(StartDelay, ct);
             return StartResult;
         }

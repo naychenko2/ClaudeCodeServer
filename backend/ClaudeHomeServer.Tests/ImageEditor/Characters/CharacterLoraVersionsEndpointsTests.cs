@@ -20,8 +20,9 @@ public class CharacterLoraVersionsEndpointsTests : IClassFixture<CharacterLoraVe
 
     public CharacterLoraVersionsEndpointsTests(Hosts hosts) => _hosts = hosts;
 
-    // Хост на КОНФИГУРАЦИЮ, а не на тест: хосты поднимаются лениво и гасятся вместе с фикстурой.
-    // Состояние каждый тест заводит сам: список LoRA задаёт Use, проект, персонажа и версии —
+    // Хост на КОНФИГУРАЦИЮ, а не на тест: объекты фабрик создаются сразу, ASP.NET-хост внутри каждой
+    // стартует лениво; гасятся вместе с фикстурой. Состояние каждый тест заводит сам: список LoRA
+    // задаёт Use() хоста MediaHost (в самом Hosts метода нет), проект, персонажа и версии —
     // ProjectWithCharacter с уникальным именем и каталогом
     public sealed class Hosts : IDisposable
     {

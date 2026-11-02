@@ -113,7 +113,10 @@ public class ProjectTasksController(
             return BadRequest(new { error = ex.Message });
         }
         await broadcaster.ToTaskBoard(UserId, task.ProjectId, new TaskChangedMessage("created", task), sessions, projects);
-        return Ok(task);
+        // Ответ записи — копия с маской чужих приватных чатов (S2d-4i), та же форма, что в GET-пути.
+        // Проектная задача лежит под арендатором (TaskManager), а её чат-источник может быть
+        // приватным чатом участника: ни id, ни название этого чата в ответ не идут. Запись стора не правится.
+        return Ok(TaskView.MaskForeignChats(TaskView.CopyOf(task), sessions, projects, ChatAudience.Viewer(UserId)));
     }
 }
 
@@ -347,7 +350,9 @@ public class TasksController(
             return BadRequest(new { error = ex.Message });
         }
         await broadcaster.ToTaskBoard(UserId, task.ProjectId, new TaskChangedMessage("created", task), sessions, projects);
-        return Ok(task);
+        // Та же маска ответа записи, что в проектной ветке Create и в GET-путе (S2d-4i):
+        // чат-источник из тела — id чата, и он может быть приватным чатом другого человека.
+        return Ok(TaskView.MaskForeignChats(TaskView.CopyOf(task), sessions, projects, ChatAudience.Viewer(UserId)));
     }
 
     // Все задачи пользователя (календарь, MCP): диапазон по сроку, поиск и фильтры.
@@ -621,7 +626,10 @@ public class TasksController(
         // Мироринг MCP (TasksToolset.CompleteResponse): если ревью/проверку/финал фичи
         // закрыли без вердикта, ответ несёт мягкое предупреждение (отдельное поле warning,
         // не notes) — карточка фичи вердикт не покажет, а блокировать закрытие ради UI нельзя.
-        return WithWarning(updated);
+        // Копия с маской чужих приватных чатов (S2d-4i): PUT — тот же вектор утечки, что закрытый
+        // в GET (задача участника лежит у арендатора, её чат-источник — приватный чат участника).
+        // Warning считается по хранимым полям (Status/Role/Verification), маска их не трогает.
+        return WithWarning(TaskView.MaskForeignChats(TaskView.CopyOf(updated), sessions, projects, ChatAudience.Viewer(UserId)));
     }
 
     // Карточка + мягкое warning (FeatureVerdict.Warning), если условие сработало. Единый путь
@@ -1456,7 +1464,9 @@ public class TasksController(
                         return BadRequest(new { error = ex.Message });
                     }
                 }
-                return Ok(existing);
+                // Ответ — хранимая задача идемпотентной ветки: та же маска чужих приватных чатов
+                // в копии, что во всех write-ответах (S2d-4i).
+                return Ok(TaskView.MaskForeignChats(TaskView.CopyOf(existing), sessions, projects, ChatAudience.Viewer(UserId)));
             }
 
             // Создаём задачу merge: FeatureId, ProjectId, WorktreePath/WorktreeBranch — из эпика.
@@ -1496,7 +1506,8 @@ public class TasksController(
                 return BadRequest(new { error = ex.Message });
             }
 
-            return Ok(started);
+            // Та же маска в копии ответа, что в идемпотентной ветке выше (S2d-4i).
+            return Ok(TaskView.MaskForeignChats(TaskView.CopyOf(started), sessions, projects, ChatAudience.Viewer(UserId)));
         }
         finally
         {
@@ -1640,9 +1651,12 @@ public class TasksController(
                 && FeatureChatDoor.DenyReason(tasks, SessionSnapshot(), UserId, callerSession.Id,
                     FeatureChatDoor.TargetFeature(task)) is { } bound)
                 return Conflict(new { error = bound, code = FeatureChatDoor.DeniedCode });
-            return Ok(await executor.ExecuteAsync(task, auto: false,
+            var started = await executor.ExecuteAsync(task, auto: false,
                 new ExecutorLauncher(callerSession?.Id, callerSession?.PersonaId),
-                callerSession is null ? UserId : sessions.GetTurnActor(callerSession.Id, UserId)));
+                callerSession is null ? UserId : sessions.GetTurnActor(callerSession.Id, UserId));
+            // Кнопка «Выполнить с Claude» на задаче участника: в ответ уходит хранимая задача,
+            // её чат-источник — приватный чат участника. Копия с маской (S2d-4i), как в PUT/GET.
+            return Ok(TaskView.MaskForeignChats(TaskView.CopyOf(started), sessions, projects, ChatAudience.Viewer(UserId)));
         }
         catch (InvalidOperationException ex)
         {

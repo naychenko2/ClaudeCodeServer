@@ -119,7 +119,12 @@ backend/ClaudeHomeServer/Controllers/ProjectsController.cs|15
 # или участника эти ветки не добавили.
 backend/ClaudeHomeServer/Controllers/SessionsController.cs|17
 backend/ClaudeHomeServer/Controllers/SkillsController.cs|10
-backend/ClaudeHomeServer/Controllers/TasksController.cs|86
+# S2d-4i: TasksController 86→92 — шесть write-ответов (POST задачи проекта, POST личной задачи, PUT,
+# merge ×2, execute) отдают копию хранимой задачи с маской чужих приватных чатов: тот же класс мест,
+# что S2d-4b выше. id вызывающего входит только в решение о видимости ССЫЛКИ на чат
+# (TaskView.MaskForeignChats → ChatRefs.For → SessionAccess.CanSee); ключом хранилищ ничто не стало:
+# запись стора не правится (проецируется копия), задачи по-прежнему берутся по id и по арендатору.
+backend/ClaudeHomeServer/Controllers/TasksController.cs|92
 backend/ClaudeHomeServer/Controllers/TurnRightExtensions.cs|6
 backend/ClaudeHomeServer/Hubs/SessionHub.cs|7
 backend/ClaudeHomeServer/Hubs/TerminalHub.cs|1

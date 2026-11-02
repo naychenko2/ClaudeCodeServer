@@ -111,7 +111,13 @@ backend/ClaudeHomeServer/Controllers/ProjectsController.cs|15
 # S2d-4a: SessionsController 14→15 — один новый вход по id вызывающего: GetVisibleByProject
 # (список чатов проекта). id вызывающего входит только в видимость чата (SessionAccess.CanSee
 # внутри SessionManager): список адресован projectId, ключом хранилищ id не служит, записи нет.
-backend/ClaudeHomeServer/Controllers/SessionsController.cs|15
+# S2d-3f.1: SessionsController 15→17 — два новых входа по id вызывающего в решении о чате: GetAccessible
+# как гейт видимости в Update/Delete (развилка «постороннему — то же, что несуществующему» vs
+# «видимому участнику — 403»). id вызывающего входит только в IProjectAccess.ResolveSession /
+# SessionAccess.CanSee — это видимость, а не ключ хранилищ: переименование и удаление адресуются
+# id чата и остаются на авторе-арендаторе (ResolveOwnerId), новых вызовов с ключом владельца
+# или участника эти ветки не добавили.
+backend/ClaudeHomeServer/Controllers/SessionsController.cs|17
 backend/ClaudeHomeServer/Controllers/SkillsController.cs|10
 backend/ClaudeHomeServer/Controllers/TasksController.cs|86
 backend/ClaudeHomeServer/Controllers/TurnRightExtensions.cs|6

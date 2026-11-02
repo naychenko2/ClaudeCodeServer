@@ -70,6 +70,69 @@ public class FeatureKeyChainFirstLiveTests
         FeatureKeyChain.FirstLive([], Probe(new() { ["a"] = null })).Should().BeNull();
     }
 
+    // Порядок звеньев: запускающий дочерних → чат создания эпика → запустивший эпик.
+    // Мутация: вернуть SourceSessionId первым звеном — тест краснеет.
+    [Fact]
+    public void Of_ПорядокЗвеньев_ЗапускающийПотомСоздательЭпикаПотомЗапустившийЭпик()
+    {
+        var epic = new TaskItem { Id = "e", SourceSessionId = "architect", ExecutorLaunchedBySessionId = "launcher-epic" };
+        var s1 = new TaskItem { Id = "s1", ExecutorLaunchedBySessionId = "orchestrator" };
+        var s2 = new TaskItem { Id = "s2", ExecutorLaunchedBySessionId = "orchestrator" };
+        var s3 = new TaskItem { Id = "s3", ExecutorLaunchedBySessionId = "other" };
+
+        FeatureKeyChain.Of(epic, [epic, s1, s2, s3])
+            .Should().Equal("orchestrator", "architect", "launcher-epic");
+    }
+
+    // Эпик заведён в чате A, два шага запущены из B, третий — человеком из UI (без запускающего):
+    // ключевой чат — B для всех, включая третий. Мутация: SourceSessionId первым → тест краснеет.
+    [Fact]
+    public void KeySession_ЭпикВA_ШагиИзB_КлючевойЧатB()
+    {
+        var epic = new TaskItem { Id = "e", SourceSessionId = "A" };
+        var s1 = new TaskItem { Id = "s1", ExecutorLaunchedBySessionId = "B" };
+        var s2 = new TaskItem { Id = "s2", ExecutorLaunchedBySessionId = "B" };
+        var s3 = new TaskItem { Id = "s3" };
+        var sessions = new[]
+        {
+            new FeatureIndexSession("A", null, null, false),
+            new FeatureIndexSession("B", null, null, false),
+        };
+
+        FeatureProjector.KeySession(epic, [epic, s1, s2, s3], sessions).Should().Be("B");
+    }
+
+    // Запущенных дочерних нет — ключевой чат как раньше: чат создания эпика
+    [Fact]
+    public void KeySession_НетЗапущенныхДочерних_ЧатСозданияЭпика()
+    {
+        var epic = new TaskItem { Id = "e", SourceSessionId = "A" };
+        var step = new TaskItem { Id = "s1" };
+        var sessions = new[] { new FeatureIndexSession("A", null, null, false) };
+
+        FeatureProjector.KeySession(epic, [epic, step], sessions).Should().Be("A");
+    }
+
+    [Fact]
+    public void Of_ДублиСхлопываются_ПустыеЗвеньяПропускаются()
+    {
+        var epic = new TaskItem { Id = "e", SourceSessionId = "orchestrator", ExecutorLaunchedBySessionId = "orchestrator" };
+        var step = new TaskItem { Id = "s", ExecutorLaunchedBySessionId = "orchestrator" };
+
+        FeatureKeyChain.Of(epic, [epic, step]).Should().Equal("orchestrator");
+        FeatureKeyChain.Of(new TaskItem { Id = "e" }, []).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Of_РавенствоЧастот_МеньшийId()
+    {
+        var epic = new TaskItem { Id = "e", SourceSessionId = "z" };
+        var a = new TaskItem { Id = "a", ExecutorLaunchedBySessionId = "b-chat" };
+        var b = new TaskItem { Id = "b", ExecutorLaunchedBySessionId = "a-chat" };
+
+        FeatureKeyChain.Of(epic, [epic, a, b]).Should().Equal("a-chat", "z");
+    }
+
     // KeySession проектора ходит через ту же функцию: продолжение из снимка сессий владельца
     [Fact]
     public void KeySession_ПереходитКПродолжениюИзСнимка()

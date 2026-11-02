@@ -603,6 +603,16 @@ public class FileWatcherService : IDisposable
         if (_entries.TryGetValue(key, out var entry)) RecreateWatcher(key, entry);
     }
 
+    // internal для тестов (InternalsVisibleTo): немедленный полл-скан по ключу — тот же
+    // PollScan, что поднимает таймер. Порядок «запись файлов → скан» в тестах держится
+    // этим вызовом, а не паузой интервала (conventions.md, паттерн «интервал — опция,
+    // ожидание — событие»): с выключенным таймером (PollIntervalMs < 0) скан делает только тест.
+    internal void PollNow(string key)
+    {
+        if (_entries.TryGetValue(key, out var entry) && entry.Poll is not null)
+            PollScan(key, entry);
+    }
+
     // internal для тестов: запись по ключу (для сверки по ссылке) и поднят ли на ней watcher.
     internal (object Entry, bool Watching)? Inspect(string key)
     {

@@ -345,7 +345,7 @@ context_changed` со свежим DTO (панель перерисует сер
 | Один владелец вида | спина отказывает при старте, если два провайдера объявили один `Kind` | `ContextKindRegistryTests` (дубль → исключение при сборке реестра) |
 | Строка = хвост = панель | подписи считает только `Describe`/`DescribeExecutor` на бэкенде; фронт рисует `label` из DTO | `TurnContextParityTests`: для набора элементов текст хвоста содержит ровно `label` из DTO; фронтовый юнит — `ContextRow` не форматирует подписи (нет импорта форматтеров вертикалей) |
 | `UpdatedAt` не двигается | отдельный файл стора, не `sessions.json` | тест: `SetPrimary`/`AddRef`/`Clear` не меняют `Session.UpdatedAt` и `IsArchived` |
-| Prefix cache | `TurnContextContributor` — `InTurnTail: true`, системного блока не касается | `ClaudeSessionPromptSectionsOrderTests`: секция `turn-context` только в хвосте при любом `RecallInTurnText` |
+| Prefix cache | `TurnContextContributor` — `InTurnTail: true`, системного блока не касается | `ClaudeSessionPromptSectionsTailTests` (`TurnContext_ВсегдаХвостомХода_…`): секция `turn-context` только в хвосте при любом `RecallInTurnText` |
 | Отключаемость | выключенная вертикаль не регистрирует провайдера; её элементы — `Missing`, в хвост не идут, ручки контекста не 500 | `ChatContextDisabledVerticalTests` (`Subsystems:AudioEditor:Enabled=false` при элементе `audio` в файле) |
 | Делегированный ход | `context_attach`/`context_detach` — `[DenyOnDelegatedTurn]`, `DelegatedTurnGate` fail-closed | тест тулсета |
 | Пути | `project-file` и все `Ref` с путями — `ProjectLinkGuard.ResolveInside`; личный чат — отказ до `RootPath`; локальный проект — `ProjectCapabilities` | тесты `Validate` провайдеров |

@@ -122,7 +122,7 @@ public class ComfyQueueMonitorTests
 
     private sealed record Harness(QueueFake Fake, ComfyClient Client, ComfyPromptLedger Ledger, ComfyQueueMonitor Monitor, ManualTime Time);
 
-    private static Harness Build(bool enabled = true)
+    private static Harness Build(bool enabled = true, TimeSpan? activePoll = null)
     {
         var fake = new QueueFake();
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
@@ -133,7 +133,10 @@ public class ComfyQueueMonitorTests
         var time = new ManualTime();
         var ledger = new ComfyPromptLedger(time);
         var client = new ComfyClient(new FakeComfyFactory(fake), config);
-        var monitor = new ComfyQueueMonitor(client, ledger, config, NullLogger<ComfyQueueMonitor>.Instance, time);
+        var monitor = new ComfyQueueMonitor(client, ledger, config, NullLogger<ComfyQueueMonitor>.Instance, time)
+        {
+            ActivePoll = activePoll ?? TimeSpan.FromSeconds(2),
+        };
         return new Harness(fake, client, ledger, monitor, time);
     }
 
@@ -414,8 +417,10 @@ public class ComfyQueueMonitorTests
     [Fact]
     public async Task Touch_ВоВремяАктивнойПаузы_НеДаетЛишнегоТика()
     {
-        var h = Build();
-        h.Ledger.Register("p1", Origin(), 42);   // активная задача → активная пауза 2с
+        // Активная пауза растянута до 60 с: законный тик по её истечению не успевает в окно ожидания даже
+        // при голодании потока под нагрузкой — любой лишний тик в окне может быть только от Touch
+        var h = Build(activePoll: TimeSpan.FromSeconds(60));
+        h.Ledger.Register("p1", Origin(), 42);   // активная задача → активная пауза
         var cts = new CancellationTokenSource();
         await h.Monitor.StartAsync(cts.Token);
 
@@ -426,9 +431,10 @@ public class ComfyQueueMonitorTests
         var before = h.Fake.QueueCalls;
         h.Monitor.Touch();   // активная пауза → wake-токен НЕ отменяется
 
-        // ~200мс (<< 2с): если бы Touch будил из активной паузы, был бы лишний тик
-        await Task.Delay(200);
-        h.Fake.QueueCalls.Should().Be(before, "активная пауза 2с не прервана Touch — лишнего тика нет");
+        // Негативное окно 500 мс: проснувшийся от Touch монитор делает следующий тик за единицы
+        // миллисекунд (в фейке нет сетевых пауз), а законный тик по паузе — только через 60 с
+        await Task.Delay(500);
+        h.Fake.QueueCalls.Should().Be(before, "активная пауза не прервана Touch — лишнего тика нет");
 
         cts.Cancel();
         await h.Monitor.StopAsync(CancellationToken.None);
@@ -469,8 +475,8 @@ public class ComfyQueueMonitorTests
         await h.Monitor.StopAsync(CancellationToken.None);
     }
 
-    // Хелпер: ждать условие (реальное время, с потолком) — для асинхронного цикла монитора
-    private static async Task WaitUntil(Func<bool> cond, int timeoutMs = 2000)
+    // Хелпер: ждать условие (реальное время; потолок 30 с — страховка, обычно возврат сразу) — для асинхронного цикла монитора
+    private static async Task WaitUntil(Func<bool> cond, int timeoutMs = 30000)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         while (!cond() && sw.ElapsedMilliseconds < timeoutMs)

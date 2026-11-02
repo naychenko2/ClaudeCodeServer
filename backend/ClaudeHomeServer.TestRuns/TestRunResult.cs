@@ -96,4 +96,6 @@ public sealed class PhaseTimings
     public TimeSpan Test { get; set; }
     // Сколько процессов шло фазой прогона: >1 — монолит шардами (TestShards)
     public int Shards { get; set; } = 1;
+    // Почему столько шардов (AdaptiveShards: «load1 7,2 из 24, свободно 31 ГиБ»); null — N из настроек
+    public string? ShardsReason { get; set; }
 }

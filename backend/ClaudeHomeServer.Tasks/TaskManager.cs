@@ -332,6 +332,9 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     public IReadOnlyCollection<TaskItem> GetBySourceSession(string sourceSessionId) =>
         _tasks.Values.Where(t => t.SourceSessionId == sourceSessionId).ToList();
 
+    // Все задачи всех владельцев — для фоновых сверок (пинок простоя локальных исполнителей).
+    public IReadOnlyList<TaskItem> GetAll() => _tasks.Values.ToList();
+
     public IReadOnlyCollection<TaskItem> GetByOwner(string userId) =>
         _tasks.Values.Where(t => t.OwnerId == userId)
             .OrderBy(t => t.DueDate ?? "9999").ThenBy(t => t.CreatedAt).ToList();

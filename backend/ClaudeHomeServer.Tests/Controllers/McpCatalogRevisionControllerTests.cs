@@ -71,7 +71,7 @@ public class McpCatalogRevisionControllerTests : IClassFixture<McpCatalogRevisio
 
         protected override Task<string> FetchLatestAsync(string name, CancellationToken ct)
         {
-            Fetches++;
+            Interlocked.Increment(ref Fetches);
             return Task.FromResult(latestJson);
         }
     }
@@ -192,14 +192,16 @@ public class McpCatalogRevisionControllerTests : IClassFixture<McpCatalogRevisio
     {
         var factory = _hosts.Dead;
         var client = factory.CreateAuthenticatedClient();
-        await CreateCatalogServerAsync(client, "io.github.o/alive", "1.0.0");
+        var created = await CreateCatalogServerAsync(client, "io.github.o/alive", "1.0.0");
+        var key = created.GetProperty("key").GetString();
 
         var resp = await client.GetAsync("/api/mcp/servers");
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
         var list = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
-        list.GetArrayLength().Should().BeGreaterThan(0);
+        // хост общий на класс, записи накапливаются между тестами — ищем свою по ключу
+        var mine = list.EnumerateArray().Single(e => e.GetProperty("key").GetString() == key);
         // и запись видна с её catalogRef — ревизия тут не участвует вовсе
-        list[0].TryGetProperty("catalogRef", out _).Should().BeTrue();
+        mine.TryGetProperty("catalogRef", out _).Should().BeTrue();
     }
 
     // --- фильтрация по владельцу ---

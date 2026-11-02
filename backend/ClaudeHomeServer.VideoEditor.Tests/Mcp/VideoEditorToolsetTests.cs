@@ -272,21 +272,36 @@ public sealed class VideoEditorToolsetTests
     }
 
     [Fact]
-    public async Task Ожидание_идущей_съёмки_укладывается_в_потолок_и_даёт_allDone_false()
+    public async Task Ожидание_идущей_съёмки_завершается_и_даёт_allDone_false()
     {
         using var w = new AgentWorld(blocking: true);
         var scene = w.NewScene();
         var started = await w.Call(ToolShoot, new JsonObject { ["sceneId"] = scene.SceneId });
         var jobId = System.Text.Json.Nodes.JsonNode.Parse(started.Text)!["jobId"]!.GetValue<string>();
 
-        var watch = System.Diagnostics.Stopwatch.StartNew();
-        var result = await w.Call(ToolWait, new JsonObject { ["timeoutSeconds"] = 1 });
-        watch.Stop();
+        // Съёмка заблокирована и сама не кончится: вызов обязан вернуться по бюджету timeoutSeconds, а не зависнуть;
+        // страховка 30 с только оборвёт зависание. Скорость по стене не мерим; сам потолок — в тесте ниже.
+        var result = await w.Call(ToolWait, new JsonObject { ["timeoutSeconds"] = 1 }).WaitAsync(TimeSpan.FromSeconds(30));
 
         System.Text.Json.Nodes.JsonNode.Parse(result.Text)!["allDone"]!.GetValue<bool>().Should().BeFalse();
-        watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(10), "потолок ожидания — секунды, а не минуты съёмки");
         await w.Call(ToolCancel, new JsonObject { ["jobId"] = jobId });
         await w.WaitJobsAsync();
+    }
+
+    [Fact]
+    public void Потолок_ожидания_video_wait_совпадает_со_схемой_инструмента()
+    {
+        using var w = new AgentWorld();
+
+        var ceiling = (int)typeof(VideoEditorToolset)
+            .GetField("WaitMaxSeconds", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
+            .GetRawConstantValue()!;
+        var tool = w.Toolset.ToolsFor(w.Ctx()).Single(t => t.Name == ToolWait);
+        var timeout = tool.InputSchema["properties"]!["timeoutSeconds"]!;
+
+        ceiling.Should().Be(15);
+        timeout["maximum"]!.GetValue<int>().Should().Be(ceiling);
+        tool.Description.Should().Contain($"не больше {ceiling} с");
     }
 
     [Fact]

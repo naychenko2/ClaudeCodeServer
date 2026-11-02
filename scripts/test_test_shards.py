@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -190,8 +191,10 @@ class CostLayoutTests(unittest.TestCase):
                     json.dump({"classes": {"A": {"tests": 1, "seconds": sec, "fast": fast, "project": "P"}}}, f)
                 paths.append(p)
             self.assertEqual(({"A": 7.0}, {"A": "P"}, {"A": 6.0}), ts.load_profile(",".join(paths)))
-            # чётное число профилей — среднее двух средних значений
-            self.assertEqual(6.5, ts.load_profile(",".join([paths[0], paths[2]]))[0]["A"])
+            # чётное число профилей — нижняя медиана: выброс при двух файлах отсекается, а не усредняется
+            self.assertEqual(6.0, ts.load_profile(",".join([paths[0], paths[2]]))[0]["A"])
+            self.assertEqual(6.0, ts.load_profile(",".join([paths[0], paths[1]]))[0]["A"])
+            self.assertEqual(5.0, ts.load_profile(",".join([paths[0], paths[1]]))[2]["A"])
 
     def test_load_profile_класс_только_в_части_профилей_берётся_по_имеющимся(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -201,8 +204,28 @@ class CostLayoutTests(unittest.TestCase):
             with open(b, "w", encoding="utf-8") as f:
                 json.dump({"classes": {"A": {"tests": 1, "seconds": 4.0}}}, f)
             timings, _, fast = ts.load_profile(f"{a},{b}")
-            self.assertEqual({"A": 3.0, "B": 9.0}, timings)
+            self.assertEqual({"A": 2.0, "B": 9.0}, timings)  # A — нижняя медиана 2 и 4
             self.assertIsNone(fast)
+
+    def test_load_profile_смешанный_набор_секунды_и_fast_по_одним_и_тем_же_профилям(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = []
+            # старый профиль без «fast» (2 с) и два новых: секунды 4 и 8 с, Fast 1 и 3 с
+            for i, v in enumerate([{"tests": 1, "seconds": 2.0}, {"tests": 1, "seconds": 4.0, "fast": 1.0},
+                                   {"tests": 1, "seconds": 8.0, "fast": 3.0}]):
+                p = os.path.join(tmp, f"r{i}.json")
+                with open(p, "w", encoding="utf-8") as f:
+                    json.dump({"classes": {"A": v}}, f)
+                paths.append(p)
+            timings, _, fast = ts.load_profile(",".join(paths))
+            # секунды — по тем же двум профилям, что и Fast (нижняя медиана 4), а не по всем трём (медиана 4 случайно)
+            self.assertEqual({"A": 4.0}, timings)
+            self.assertEqual({"A": 1.0}, fast)
+            # старый профиль с выбросом не тянет секунды вниз/вверх мимо Fast
+            with open(paths[0], "w", encoding="utf-8") as f:
+                json.dump({"classes": {"A": {"tests": 1, "seconds": 1.0}}}, f)
+            timings, _, fast = ts.load_profile(",".join([paths[0], paths[2]]))
+            self.assertEqual(({"A": 8.0}, {"A": 3.0}), (timings, fast))
 
     def test_load_profile_пропавший_профиль_даёт_предупреждение_с_перечнем_и_числом_использованных(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -238,22 +261,56 @@ class CostLayoutTests(unittest.TestCase):
             code, _, err = self._main_cli("--list", lst, "--verify", "--timings", f"{g1},{g2}")
             self.assertEqual(2, code)
             self.assertIn("Ни один из профилей", err)
+            self.assertIn(g1, err)
+            self.assertEqual(1, len(err.strip().splitlines()))  # одно сообщение об одной причине, не два
             # холодный кэш CI: единственный профиль отсутствует — предупреждение и раскладка по хешу
             code, _, err = self._main_cli("--list", lst, "--verify", "--timings", g1)
             self.assertEqual(0, code)
             self.assertIn("использовано 0 из 1", err)
 
+    def test_cli_parallel_ноль_и_отрицательный_отказ_без_деления_на_ноль(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lst = os.path.join(tmp, "list.txt")
+            with open(lst, "w", encoding="utf-8") as f:
+                f.write(LIST)
+            for bad in ("0", "-1"):
+                with self.assertRaises(SystemExit) as ctx:
+                    self._main_cli("--list", lst, "--verify", "--parallel", bad)
+                self.assertEqual(2, ctx.exception.code)
+            self.assertEqual(0, self._main_cli("--list", lst, "--verify", "--parallel", "2")[0])
+
+    def test_main_возвращает_PARALLEL_модуля_после_выхода(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lst = os.path.join(tmp, "list.txt")
+            with open(lst, "w", encoding="utf-8") as f:
+                f.write(LIST)
+            ts.PARALLEL = 5.0
+            try:
+                self._main_cli("--list", lst, "--verify", "--parallel", "2")
+                self.assertEqual(5.0, ts.PARALLEL)
+            finally:
+                ts.PARALLEL = 5.0
+
     def test_cli_PARALLEL_локальные_режимы_берут_LOCAL_PARALLEL_а_CI_режимы_пятёрку(self):
         seen = {}
         orig = (ts.PARALLEL, ts.run_fast, ts.run_shards)
-        ts.run_fast = lambda *a, **k: seen.setdefault("run_fast", ts.PARALLEL) and 0
-        ts.run_shards = lambda *a, **k: seen.setdefault("run", ts.PARALLEL) and 0
+
+        def stub(name):
+            def run(*a, **k):
+                seen.setdefault(name, ts.PARALLEL)  # запоминаем PARALLEL на момент вызова режима
+                return 0
+            return run
+        ts.run_fast = stub("run_fast")
+        ts.run_shards = stub("run")
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 lst = os.path.join(tmp, "list.txt")
                 with open(lst, "w", encoding="utf-8") as f:
                     f.write(LIST)
-                for mode, argv in (("run_fast", ["--run-fast", "x.slnx"]), ("run", ["--run", "x.csproj"])):
+                slnx = os.path.join(tmp, "x.slnx")
+                with open(slnx, "w", encoding="utf-8") as f:
+                    f.write("<Solution />")
+                for mode, argv in (("run_fast", ["--run-fast", slnx]), ("run", ["--run", "x.csproj"])):
                     ts.PARALLEL = 5.0
                     self._main_cli(*argv)
                     self.assertEqual(ts.LOCAL_PARALLEL, seen[mode], mode)
@@ -444,6 +501,24 @@ class AbortAfterGreenTests(unittest.TestCase):
         self.assertEqual(1, code)
         self.assertIn("свежего TRX шарда нет", err)
 
+    def test_trx_чужого_префикса_не_доказательство(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write_trx(tmp, "shard10", self.FULL)  # shard1 не должен цеплять shard10
+            write_trx(tmp, "fast-rest", self.FULL)
+            self.assertEqual("свежего TRX шарда нет", ts.trx_proof(tmp, "shard1", self.EXPECTED, 0))
+            code, err = self._wait(tmp, [ABORT], [lambda: ts.trx_proof(tmp, "shard1", self.EXPECTED, 0)])
+        self.assertEqual(1, code)
+        self.assertIn("свежего TRX шарда нет", err)
+
+    def test_допуск_зерна_mtime_одна_секунда(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_trx(tmp, "shard1", self.FULL)
+            now = time.time()
+            os.utime(path, (now - 0.5, now - 0.5))  # записан на полсекунды «раньше» запуска — в допуске
+            self.assertIsNone(ts.trx_proof(tmp, "shard1", self.EXPECTED, now))
+            os.utime(path, (now - 5, now - 5))  # на пять секунд — нет
+            self.assertEqual("свежего TRX шарда нет", ts.trx_proof(tmp, "shard1", self.EXPECTED, now))
+
     def test_положительный_код_не_прощается_даже_при_полном_trx(self):
         with tempfile.TemporaryDirectory() as tmp:
             code, _ = self._wait(tmp, ["raise SystemExit(3)"], [self._proof(tmp, self.FULL)])
@@ -562,7 +637,13 @@ class ReportTests(unittest.TestCase):
         seen = {}
         orig = (ts.list_tests, ts.launch, ts.wait_all)
         ts.list_tests = lambda path, flt: ([f"App.Tests.C{i}.T" for i in range(4)], None)
-        ts.launch = lambda args, log: (object(), None)
+
+        def fake_launch(args, log):
+            # rest-процесс «пишет» TRX в папку прогона, которую ему передал run_fast
+            if "trx;LogFilePrefix=fast-rest" in args:
+                write_trx(args[args.index("--results-directory") + 1], "fast-rest", [("Other.Tests.X.Y", "Failed")])
+            return object(), None
+        ts.launch = fake_launch
 
         def fake_wait(procs, start, proofs=None, reports=None):
             seen["n"], seen["reports"] = len(procs), reports
@@ -574,7 +655,6 @@ class ReportTests(unittest.TestCase):
                 with open(slnx, "w", encoding="utf-8") as f:
                     f.write(RunFastTests.SLNX)
                 os.makedirs(os.path.join(tmp, "r"), exist_ok=True)
-                write_trx(os.path.join(tmp, "r"), "fast-rest", [("Other.Tests.X.Y", "Failed")])
                 with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                     ts.run_fast(slnx, [("b/App.Tests", 2)], os.path.join(tmp, "r"), {}, "F")
                 self.assertEqual(seen["n"], len(seen["reports"]))
@@ -648,6 +728,33 @@ class RunFastTests(unittest.TestCase):
             ts.list_tests, ts.launch, ts.wait_all, ts.layout = orig
         return code, launched, rest
 
+    def test_пик_делится_на_шарды_адаптивного_проекта_а_не_на_все_процессы(self):
+        orig = (ts.list_tests, ts.launch, ts.wait_all, ts.machine_snapshot)
+        listing = {"b/App.Tests": [f"App.Tests.C{i}.T{j}" for i in range(6) for j in range(2)],
+                   "b/Llm.Tests": [f"Llm.Tests.L{i}.T" for i in range(4)]}
+        ts.list_tests = lambda path, flt: (listing[path], None)
+        ts.launch = lambda args, log: (object(), None)
+        ts.machine_snapshot = lambda: (24, 2.0, 31 * ts.GIB, None)  # 24 потока в тишине — N = потолок 3
+
+        def fake_wait(procs, start, proofs=None, reports=None):
+            ts.LAST_PEAK_BYTES = 12 * ts.GIB  # дерево целиком: 3 шарда App, 2 шарда Llm, rest — 6 процессов
+            return 0
+
+        ts.wait_all = fake_wait
+        os.environ[ts.ADAPTIVE_ENV] = "b/App.Tests=3"
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                slnx = os.path.join(tmp, "x.slnx")
+                with open(slnx, "w", encoding="utf-8") as f:
+                    f.write(self.SLNX)
+                results = os.path.join(tmp, "r")
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(0, ts.run_fast(slnx, [("b/App.Tests", 3), ("b/Llm.Tests", 2)], results, {}, "F"))
+                self.assertEqual(4 * ts.GIB, ts.load_shard_peak(results), "12 ГиБ / 3 шарда App, а не / 6 процессов")
+        finally:
+            ts.list_tests, ts.launch, ts.wait_all, ts.machine_snapshot = orig
+            del os.environ[ts.ADAPTIVE_ENV]
+
     def test_parse_split(self):
         self.assertEqual([("a/B.Tests", 3), ("c/D.Tests", 2)], ts.parse_split("a/B.Tests=3,c/D.Tests=2"))
         with self.assertRaises(ValueError):
@@ -664,10 +771,388 @@ class RunFastTests(unittest.TestCase):
         self.assertNotIn("Llm.Tests", rest["text"])
         self.assertIn("App/App.csproj", rest["text"])
 
+    def test_run_fast_каталог_вместо_slnx_отказ_exit_2_без_traceback(self):
+        orig = ts.run_fast
+        ts.run_fast = lambda *a, **k: self.fail("run_fast не должен запускаться")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                for bad in (tmp, os.path.join(tmp, "нет.slnx")):
+                    out, err = io.StringIO(), io.StringIO()
+                    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                        code = ts.main(["--run-fast", bad, "--split", "a/B.Tests=2"])
+                    self.assertEqual(2, code)
+                    self.assertIn("файл решения", err.getvalue())
+                    self.assertIn(bad, err.getvalue())
+        finally:
+            ts.run_fast = orig
+
+    def test_префикс_trx_fast_и_фильтр_fast_уходят_и_в_шарды_и_в_rest(self):
+        # на префиксе «fast» держится fast-профиль test-profile.py; фильтр Fast обязан дойти до каждого процесса
+        code, launched, _ = self._run()
+        self.assertEqual(0, code)
+        self.assertEqual(6, len(launched))
+        for args in launched:
+            prefix = next(a for a in args if a.startswith("trx;LogFilePrefix="))
+            self.assertTrue(prefix[len("trx;LogFilePrefix="):].startswith("fast"), prefix)
+            flt = args[args.index("--filter") + 1]
+            self.assertTrue(flt == "F" or flt.endswith("&(F)"), flt)  # rest — фильтр как есть, шард — «(классы)&(F)»
+
+    def test_каждый_прогон_пишет_в_свою_подпапку_а_старые_чистятся(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            results = os.path.join(tmp, "r")
+            os.makedirs(results)
+            stamps = [f"2026110{d}-000000-{d}" for d in range(1, 8)]  # 7 старых прогонов
+            for i, st in enumerate(stamps):
+                path = os.path.join(results, st)
+                os.makedirs(path)
+                os.utime(path, (1000 + i, 1000 + i))
+            os.makedirs(os.path.join(results, "чужая-папка"))  # не прогон — чистка её не трогает
+            run = ts.new_run_dir(results)
+            self.assertTrue(os.path.isdir(run))
+            self.assertEqual(results, os.path.dirname(run))
+            left = sorted(d for d in os.listdir(results) if ts.RUN_DIR.match(d))
+            self.assertEqual(ts.RUN_DIRS_KEEP, len(left))
+            self.assertIn(os.path.basename(run), left)
+            self.assertNotIn(stamps[0], left)  # самый старый ушёл
+            self.assertIn("чужая-папка", os.listdir(results))
+
+    def test_calibrate_берёт_самую_свежую_подпапку_с_trx_а_не_смесь_прогонов(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old, new, empty = (os.path.join(tmp, d) for d in ("20261101-000000-1", "20261102-000000-2", "20261103-000000-3"))
+            for i, d in enumerate((old, new, empty)):
+                os.makedirs(d)
+            write_trx(old, "fast-x-1", self.GREEN_ONE)
+            write_trx(new, "fast-x-1", self.GREEN_ONE)
+            for d, t in ((old, 1000), (new, 2000), (empty, 3000)):  # пустая — самая свежая, но без TRX
+                os.utime(d, (t, t))
+            seen = []
+            orig = ts.subprocess.run
+            ts.subprocess.run = lambda cmd, **k: seen.append(cmd[3]) or type("R", (), {"returncode": 1, "stdout": ""})()
+            try:
+                ts.calibrate(tmp)
+                self.assertEqual([new], seen)
+                # подпапок нет вовсе — плоский каталог, как раньше
+                flat = os.path.join(tmp, "flat")
+                os.makedirs(flat)
+                seen.clear()
+                ts.calibrate(flat)
+                self.assertEqual([flat], seen)
+            finally:
+                ts.subprocess.run = orig
+
+    GREEN_ONE = [("App.Tests.A.One", "Passed")]
+
+    def test_run_fast_пишет_логи_и_trx_в_подпапку_прогона(self):
+        orig = (ts.list_tests, ts.launch, ts.wait_all)
+        ts.list_tests = lambda path, flt: ([f"App.Tests.C{i}.T" for i in range(4)], None)
+        paths = []
+        ts.launch = lambda args, log: paths.append((args[args.index("--results-directory") + 1], log)) or (object(), None)
+        ts.wait_all = lambda procs, start, proofs=None, reports=None: 0
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                slnx = os.path.join(tmp, "x.slnx")
+                with open(slnx, "w", encoding="utf-8") as f:
+                    f.write(self.SLNX)
+                results = os.path.join(tmp, "r")
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    ts.run_fast(slnx, [("b/App.Tests", 2)], results, {}, "F")
+        finally:
+            ts.list_tests, ts.launch, ts.wait_all = orig
+        self.assertTrue(paths)
+        dirs = {d for d, _ in paths}
+        self.assertEqual(1, len(dirs))
+        (run,) = dirs
+        self.assertEqual(results, os.path.dirname(run))
+        self.assertTrue(ts.RUN_DIR.match(os.path.basename(run)))
+        self.assertTrue(all(os.path.dirname(log) == run for _, log in paths))
+
     def test_шард_потерял_класс_самопроверка_краснеет_до_запуска(self):
         code, launched, _ = self._run(tamper=True)
         self.assertEqual(1, code)
         self.assertEqual([], launched)
+
+
+# Те же строки — в backend/ClaudeHomeServer.TestRuns.Tests/Services/TestShardsTests.cs (AdaptiveRows):
+# (nproc, load1, MemAvailable ГиБ или None — снимка нет, запас cgroup ГиБ или None — cgroup нет,
+#  пик на шард прошлого прогона ГиБ или None — записи нет, потолок, ожидаемое N)
+ADAPTIVE_ROWS = [
+    (24, 7.2, 31, None, None, 6, 6),      # тихо — потолок
+    (24, 11.99, 31, None, None, 6, 6),    # под границей 0,5·nproc
+    (24, 12.0, 31, None, None, 6, 3),     # ровно 0,5·nproc — уже не потолок (мутация порога 0,5→0,6 краснит здесь)
+    (24, 14.0, 31, None, None, 6, 3),
+    (24, 35.99, 31, None, None, 6, 3),    # под границей 1,5·nproc
+    (24, 36.0, 31, None, None, 6, 2),     # ровно 1,5·nproc
+    (24, 50.0, 31, None, None, 6, 2),
+    (24, 2.0, 14.0, None, None, 6, 4),    # 14 / 3,5 = 4 ровно (мутация 3,5→3 краснит строку ниже)
+    (24, 2.0, 13.99, None, None, 6, 3),
+    (24, 2.0, 7.0, None, None, 6, 2),
+    (24, 2.0, 6.99, None, None, 6, 1),
+    (24, 2.0, 0.5, None, None, 6, 1),     # не меньше 1
+    (24, 2.0, 28, 7.0, None, 6, 2),       # хост свободен, slice почти полон (02.11: 16,9 из 24) — N мал
+    (24, 2.0, 28, 1.5, None, 6, 1),
+    (24, 2.0, 28, 0, None, 6, 1),         # slice полон — всё равно 1, а не 0
+    (24, 2.0, 7.0, 20, None, 6, 2),       # cgroup свободен, хост нет — минимум двух
+    (24, 2.0, 31, 24, None, 6, 6),        # 24 / 3,5 = 6,86
+    (24, 50.0, 31, 24, None, 6, 2),       # нагрузка сильнее памяти
+    (24, 2.0, 31, 10, 2, 6, 4),           # прошлый пик 2 ГиБ на шард × 1,2 = 2,4; 10 / 2,4 = 4,2 (без 1,2 — 5)
+    (24, 2.0, 31, 10, 5, 6, 1),           # тяжёлый прошлый прогон: 5 × 1,2 = 6 на шард
+    (24, 2.0, 31, 3, 0.1, 6, 2),          # пик подозрительно мал — не ниже 1 ГиБ: 3 / 1,2 = 2,5
+    (24, 2.0, 31, None, None, 4, 4),      # потолок из настроек
+    (24, 2.0, 31, None, None, 1, 1),
+    (24, 50.0, 31, None, None, 1, 1),     # потолок ниже правила
+    (4, 0.5, 31, None, None, 6, 1),       # 4 потока в тишине — один процесс
+    (8, 1.0, 31, None, None, 6, 2),       # 8 потоков в тишине — 2
+    (12, 1.0, 31, None, None, 6, 3),      # 12 / 4 = 3 (мутация делителя ядер 4→3 краснит здесь: 4)
+    (8, 3.9, 31, None, None, 6, 2),       # тихо по load, но ядер на два шарда
+    (8, 4.0, 31, None, None, 6, 2),
+    (64, 2.0, 31, None, None, 6, 6),      # 64 потока в тишине — потолок из настроек, не больше
+    (64, 2.0, 31, None, None, 4, 4),
+    (None, None, None, None, None, 6, 3),  # нет /proc — прежнее фиксированное
+    (None, None, None, None, None, 2, 2),
+]
+
+
+class AdaptiveShardsTests(unittest.TestCase):
+    def test_таблица_правила_общая_с_csharp(self):
+        for cpus, load1, mem, cg, peak, maximum, expected in ADAPTIVE_ROWS:
+            snapshot = None if cpus is None else (
+                cpus, load1, int(mem * ts.GIB), None if cg is None else int(cg * ts.GIB))
+            per_shard = None if peak is None else int(peak * ts.GIB)
+            with self.subTest(cpus=cpus, load1=load1, mem=mem, cg=cg, peak=peak, maximum=maximum):
+                self.assertEqual(expected, ts.choose_shards(snapshot, maximum, per_shard)[0])
+
+    def test_причина_для_сводки(self):
+        self.assertEqual((6, "load1 7,2 из 24, свободно 31 ГиБ"), ts.choose_shards((24, 7.2, 31 * ts.GIB + 5, None), 6))
+        self.assertEqual((2, "load1 7,2 из 24, свободно 28 ГиБ, в cgroup 7 ГиБ"),
+                         ts.choose_shards((24, 7.2, 28 * ts.GIB, 7 * ts.GIB + 5), 6))
+        self.assertEqual((3, "нет /proc — фиксированное значение"), ts.choose_shards(None, 6))
+
+    def test_снимок_без_proc_это_none_а_не_исключение(self):
+        orig = ts.open if hasattr(ts, "open") else None
+        ts.open = lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError("/proc/loadavg"))
+        try:
+            self.assertIsNone(ts.machine_snapshot())
+        finally:
+            if orig is None:
+                del ts.open
+            else:
+                ts.open = orig
+
+    def test_явное_число_и_auto(self):
+        self.assertEqual(3, ts.parse_n("3"))
+        self.assertEqual("auto", ts.parse_n("auto"))
+        with self.assertRaises(Exception):
+            ts.parse_n("0")
+        self.assertEqual(3, ts.resolve_n(3))
+        self.assertEqual([("a/B.Tests", "auto"), ("c/D.Tests", 2)], ts.parse_split("a/B.Tests=auto,c/D.Tests=2"))
+
+    def test_run_с_явным_n_не_зовёт_правило_а_auto_печатает_выбор_первой_строкой(self):
+        orig = ts.list_tests, ts.machine_snapshot
+        seen = []
+        ts.machine_snapshot = lambda: seen.append(1) or (24, 2.0, 31 * ts.GIB, None)
+        ts.list_tests = lambda project, extra: (None, "стоп после выбора N")
+        try:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(2, ts.main(["--run", "x", "-n", "3"]))
+            self.assertEqual([], seen)
+            self.assertEqual("", out.getvalue())
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                ts.main(["--run", "x"])
+            self.assertEqual(f"Шардов: {ts.ADAPTIVE_MAX} (load1 2,0 из 24, свободно 31 ГиБ)", out.getvalue().splitlines()[0])
+        finally:
+            ts.list_tests, ts.machine_snapshot = orig
+
+    def test_verify_с_auto_не_зависит_от_машины(self):
+        orig = ts.machine_snapshot
+        ts.machine_snapshot = lambda: self.fail("раскладка CI не должна читать нагрузку")
+        try:
+            with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as f:
+                f.write(LIST)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(0, ts.main(["--list", f.name, "--verify"]))
+            self.assertIn(f"из {ts.ADAPTIVE_FALLBACK} шардов", out.getvalue())
+        finally:
+            ts.machine_snapshot = orig
+            os.remove(f.name)
+
+
+class CgroupFreeTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="ccs-cg-")
+        self.root = os.path.join(self.dir, "cg")
+        self.leaf = os.path.join(self.root, "a.slice", "a-b.slice", "run.scope")
+        os.makedirs(self.leaf)
+        self.cgfile = os.path.join(self.dir, "cgroup")
+        self.write(self.cgfile, "0::/a.slice/a-b.slice/run.scope\n")
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    @staticmethod
+    def write(path, text):
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def limit(self, rel, maximum, current):
+        node = os.path.join(self.root, rel)
+        self.write(os.path.join(node, "memory.max"), f"{maximum}\n")
+        self.write(os.path.join(node, "memory.current"), f"{current}\n")
+
+    def free(self):
+        return ts.cgroup_free(self.cgfile, self.root)
+
+    def test_нет_файла_cgroup_или_строки_v2_это_none(self):
+        self.assertIsNone(ts.cgroup_free(os.path.join(self.dir, "нет"), self.root))
+        self.write(self.cgfile, "12:memory:/x\n")
+        self.assertIsNone(self.free())
+
+    def test_везде_max_или_файлов_нет_это_none(self):
+        self.assertIsNone(self.free())
+        self.limit("a.slice/a-b.slice/run.scope", "max", 100)
+        self.limit("a.slice/a-b.slice", "max", 100)
+        self.assertIsNone(self.free())
+
+    def test_неразборчивое_значение_это_none_без_исключения(self):
+        self.limit("a.slice/a-b.slice", "мусор", 1)
+        self.assertIsNone(self.free())
+        self.limit("a.slice/a-b.slice", 100, "")
+        self.assertIsNone(self.free())
+
+    def test_минимум_по_цепочке_scope_и_slice(self):
+        self.limit("a.slice/a-b.slice/run.scope", 16 * ts.GIB, 1 * ts.GIB)
+        self.limit("a.slice/a-b.slice", 24 * ts.GIB, 17 * ts.GIB)
+        self.assertEqual(7 * ts.GIB, self.free(), "slice почти полон — он и ограничивает, хотя scope свободен")
+        self.limit("a.slice/a-b.slice", 24 * ts.GIB, 25 * ts.GIB)
+        self.assertEqual(0, self.free(), "перебор над max — ноль, а не минус")
+
+    def test_снимок_несёт_запас_cgroup(self):
+        orig = ts.cgroup_free
+        ts.cgroup_free = lambda: 5 * ts.GIB
+        try:
+            snap = ts.machine_snapshot()
+        finally:
+            ts.cgroup_free = orig
+        if snap is not None:  # на машине без /proc снимка нет вовсе
+            self.assertEqual(5 * ts.GIB, snap[3])
+
+
+class AdaptiveSplitTests(unittest.TestCase):
+    SPLIT = [("backend/ClaudeHomeServer.Tests", 3), ("backend/ClaudeHomeServer.Llm.Tests", 2)]
+
+    def test_без_переменной_split_как_есть(self):
+        self.assertEqual([("backend/ClaudeHomeServer.Tests", 3, ts.ADAPTIVE_MAX),
+                          ("backend/ClaudeHomeServer.Llm.Tests", 2, ts.ADAPTIVE_MAX)],
+                         ts.adaptive_split(self.SPLIT, None))
+
+    def test_переменная_делает_проект_auto_под_своим_потолком(self):
+        self.assertEqual([("backend/ClaudeHomeServer.Tests", "auto", 4),
+                          ("backend/ClaudeHomeServer.Llm.Tests", 2, ts.ADAPTIVE_MAX)],
+                         ts.adaptive_split(self.SPLIT, "backend/ClaudeHomeServer.Tests/=4"))
+
+    def test_неразборчивая_переменная_предупреждение_и_split_как_есть(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            out = ts.adaptive_split(self.SPLIT, "мусор")
+        self.assertEqual([3, 2], [n for _, n, _ in out])
+        self.assertIn(ts.ADAPTIVE_ENV, err.getvalue())
+
+    def test_run_fast_с_переменной_выбирает_n_по_правилу(self):
+        orig = ts.machine_snapshot, ts.calibrate
+        ts.machine_snapshot = lambda: (24, 2.0, 28 * ts.GIB, 7 * ts.GIB)
+        ts.calibrate = lambda results: (_ for _ in ()).throw(RuntimeError("стоп после выбора N"))
+        os.environ[ts.ADAPTIVE_ENV] = "backend/ClaudeHomeServer.Tests=4"
+        try:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), self.assertRaises(RuntimeError):
+                ts.run_fast("x.slnx", self.SPLIT, "r", None, None)
+            self.assertEqual("Шардов ClaudeHomeServer.Tests: 2 (load1 2,0 из 24, свободно 28 ГиБ, в cgroup 7 ГиБ)",
+                             out.getvalue().splitlines()[0])
+        finally:
+            ts.machine_snapshot, ts.calibrate = orig
+            del os.environ[ts.ADAPTIVE_ENV]
+
+
+class ShardPeakTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="ccs-peak-")
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def put(self, text):
+        with open(os.path.join(self.dir, ts.SHARD_PEAK_FILE), "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def test_записи_нет_или_мусор_это_none(self):
+        self.assertIsNone(ts.load_shard_peak(self.dir))
+        for text in ("мусор", "[]", '{"per_shard_bytes": "1"}', '{"per_shard_bytes": true}',
+                     '{"per_shard_bytes": 0}', '{"per_shard_bytes": 300000000000000}'):
+            self.put(text)
+            with self.subTest(text=text):
+                self.assertIsNone(ts.load_shard_peak(self.dir))
+
+    def test_запись_пика_на_шард_и_чтение(self):
+        ts.save_shard_peak(self.dir, 12 * ts.GIB, 4)
+        self.assertEqual(3 * ts.GIB, ts.load_shard_peak(self.dir))
+
+    def test_один_процесс_не_пишется(self):
+        ts.save_shard_peak(self.dir, 6 * ts.GIB, 1)
+        ts.save_shard_peak(self.dir, 0, 3)
+        self.assertFalse(os.path.exists(os.path.join(self.dir, ts.SHARD_PEAK_FILE)))
+
+    def test_память_на_шард_запасное_множитель_и_пол(self):
+        self.assertEqual(ts.ADAPTIVE_SHARD_MEM, ts.shard_mem(None))
+        self.assertEqual(int(2 * ts.GIB * 1.2), ts.shard_mem(2 * ts.GIB))
+        self.assertEqual(int(1 * ts.GIB * 1.2), ts.shard_mem(1))
+
+    def test_auto_берёт_прошлый_пик_из_results(self):
+        ts.save_shard_peak(self.dir, 10 * ts.GIB, 2)  # 5 ГиБ на шард × 1,2 = 6
+        orig = ts.machine_snapshot
+        ts.machine_snapshot = lambda: (24, 2.0, 31 * ts.GIB, 13 * ts.GIB)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(2, ts.resolve_n("auto", results=self.dir))
+                self.assertEqual(3, ts.resolve_n("auto"), "без записи — запасные 3,5 ГиБ: 13 / 3,5")
+        finally:
+            ts.machine_snapshot = orig
+
+    def test_run_shards_пишет_пик_после_прогона(self):
+        orig = ts.list_tests, ts.launch_shards, ts.wait_all
+        ts.list_tests = lambda project, extra: (["A.X.t1", "B.Y.t2", "C.Z.t3"], None)
+        ts.launch_shards = lambda project, shards, results, prefix, extra, tests: ([object()] * len(shards), [], [])
+
+        def fake_wait(procs, start, proofs=None, reports=None):
+            ts.LAST_PEAK_BYTES = 9 * ts.GIB
+            return 0
+
+        ts.wait_all = fake_wait
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(0, ts.run_shards("x", 3, self.dir, None, None))
+            self.assertEqual(3 * ts.GIB, ts.load_shard_peak(self.dir))
+        finally:
+            ts.list_tests, ts.launch_shards, ts.wait_all = orig
+
+
+class PregateConfigCompatTests(unittest.TestCase):
+    """Конфиг предгейта берётся с СЕРВЕРА, а скрипт — из дерева ветки: --split обязан остаться понятен скрипту
+    старых деревьев (только числа), адаптивность — переменной окружения, которую старый скрипт не видит."""
+
+    def check(self):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backend", "ClaudeHomeServer",
+                            "appsettings.json")
+        with open(path, encoding="utf-8-sig") as f:
+            return json.load(f)["Pregate"]["Checks"]["быстрые тесты"]
+
+    def test_split_только_числа_адаптивность_в_env(self):
+        check = self.check()
+        split = check["Args"][check["Args"].index("--split") + 1]
+        for item in split.split(","):
+            self.assertRegex(item, r"=\d+$", "старый parse_split бросает ValueError на всём, кроме числа")
+        self.assertIn("backend/ClaudeHomeServer.Tests=3", split.split(","), "старый скрипт — 3 шарда монолита")
+        self.assertEqual({ts.ADAPTIVE_ENV: "backend/ClaudeHomeServer.Tests=4"}, check["Env"])
 
 
 if __name__ == "__main__":

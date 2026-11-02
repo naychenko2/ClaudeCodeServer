@@ -21,19 +21,25 @@
   python3 -I scripts/test-shards.py --slnx backend/X.slnx --exclude A.Tests,B.Tests --shard 2/3 [--timings ...]
       печатает slnx шарда 2 из 3: все не тестовые проекты, плюс его долю тестовых проектов
       (без исключённых — их гоняют отдельные шарды по классам);
-  python3 -I scripts/test-shards.py --run backend/ClaudeHomeServer.Tests -n 3 --results DIR
+  python3 -I scripts/test-shards.py --run backend/ClaudeHomeServer.Tests [-n auto|3] --results DIR
       локально: список, N параллельных `dotnet test --no-build` по шардам, TRX всех шардов
       в одной папке (её и читает test-profile.py), стена и пик RSS дерева процессов.
-  python3 -I scripts/test-shards.py --run-fast backend/X.slnx --split backend/A.Tests=3,backend/B.Tests=2 \
-      --filter "<фильтр Fast>" --results DIR
+      `-n auto` (по умолчанию) — N по нагрузке машины (choose_shards), выбор — первой строкой вывода;
+  [CCS_TEST_SHARDS_ADAPTIVE=backend/A.Tests=4] python3 -I scripts/test-shards.py --run-fast backend/X.slnx \
+      --split backend/A.Tests=3,backend/B.Tests=2 --filter "<фильтр Fast>" --results DIR
       Fast предгейта: проекты из --split идут шардами по классам, остальные тестовые проекты решения —
-      одним процессом на «rest»-slnx; всё параллельно, TRX в одной папке, стена и пик RSS общие.
+      одним процессом на «rest»-slnx; всё параллельно, TRX и логи — в подпапке прогона DIR/<метка>-<pid>
+      (профиль следующего прогона берётся из самой свежей), стена и пик RSS общие. Проекты из
+      CCS_TEST_SHARDS_ADAPTIVE выбирают N по нагрузке под своим потолком; число в --split — прежнее
+      фиксированное (его понимает скрипт старых деревьев, переменную он не видит). «проект=auto» в --split
+      тоже принимается, но предгейт его не шлёт: старый скрипт на нём падает.
 """
 import argparse
 import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -45,6 +51,36 @@ LIST_HEADER = "The following Tests are available:"
 MTIME_SLACK = 1.0
 # Спецсимволы выражения фильтра VSTest, которые экранируются обратной косой
 FILTER_SPECIAL = set("\\()&|=!~")
+
+# Число шардов по нагрузке машины (`-n auto`, `--split проект=auto`). Те же константы и то же правило —
+# в backend/ClaudeHomeServer.TestRuns/TestShards.cs (AdaptiveShards); табличные тесты обеих сторон идут
+# по одним строкам, правка порога — в обоих местах сразу
+# Потолок по умолчанию (TestRuns:MonolithShards). 4, а не 6: пик RSS при N=6 не замерен (02.11 slice был
+# занят на 22 из 24 ГиБ при load1 71 — замер не влезал), поднимать после замера
+ADAPTIVE_MAX = 4
+ADAPTIVE_FALLBACK = 3       # нет /proc или он не прочитался — прежнее фиксированное значение
+ADAPTIVE_IDLE_LOAD = 0.5    # load1 < 0,5·nproc — машина свободна: потолок
+ADAPTIVE_BUSY_LOAD = 1.5    # load1 < 1,5·nproc — 3, иначе 2: больше процессов CPU уже не даст
+ADAPTIVE_MID = 3
+ADAPTIVE_MIN = 2
+GIB = 1024 ** 3
+# Память на шард: пик RSS на шард прошлого прогона (SHARD_PEAK_FILE в --results) × 1,2, но не ниже 1 ГиБ
+# (оборванный на старте прогон не должен сойти за лёгкий); нет записи — запасное 3,5 ГиБ (замер 2026-10-29:
+# N=3 дал пик 9,5 ГиБ, ≈3,2 на шард, запас уже внутри — множитель к нему не применяется).
+# N ≤ floor(запас / память на шард), не меньше 1; запас — минимум MemAvailable и memory.max − memory.current
+# по цепочке своего cgroup (scope и ccs-agents.slice): хост бывает свободен при почти полном slice
+ADAPTIVE_SHARD_MEM = int(3.5 * GIB)
+ADAPTIVE_PEAK_MARGIN = 1.2
+ADAPTIVE_PEAK_FLOOR = 1 * GIB
+# Пик на шард прошлого прогона: пишется, только когда процессов было ≥ 2 (один процесс несёт весь монолит,
+# и его пик как «на шард» навсегда прижал бы N к 1)
+SHARD_PEAK_FILE = "shard-peak.json"
+# Ядер на шард: N ≤ max(1, floor(nproc / 4)). У каждого шарда свой testhost с xunit maxParallelThreads=6;
+# меньше ~4 ядер на шард — процессы делят одни ядра и только мешают друг другу (24 потока — 6, 8 — 2, 4 — 1)
+ADAPTIVE_CORES_PER_SHARD = 4
+# Переменная окружения проверки предгейта: «проект=потолок,…» — проекты --split, которым N выбирать по
+# нагрузке. Сам --split держит число (3): его понимает и скрипт старых деревьев, который переменную не видит
+ADAPTIVE_ENV = "CCS_TEST_SHARDS_ADAPTIVE"
 
 
 def test_fqn(display):
@@ -235,9 +271,10 @@ def verify(tests, shards):
 
 
 def median(values):
+    """Нижняя медиана: при чётном числе значений — меньшее из двух средних. Среднее двух не отсекло бы
+    выброс при двух профилях (6 с и 78 с дали бы 42 с), нижняя берёт спокойный прогон."""
     v = sorted(values)
-    mid = len(v) // 2
-    return v[mid] if len(v) % 2 else (v[mid - 1] + v[mid]) / 2
+    return v[(len(v) - 1) // 2]
 
 
 def split_profiles(path):
@@ -249,28 +286,35 @@ def load_profile(path):
     (None, None, None). Профиль без разбивки на проходы даёт fast = None: раскладка тогда по сумме.
 
     path — один файл или несколько через запятую («run1.json,run2.json,run3.json»): секунды и Fast
-    класса — МЕДИАНА по профилям, где он есть. Один прогон под нагрузкой раздувает вес класса в разы
-    (R3: 78 с против 6 с в покое) и ломает раскладку, медиана трёх спокойных прогонов эту помеху отсекает."""
+    класса — МЕДИАНА (нижняя, см. median) по профилям, где он есть. Один прогон под нагрузкой раздувает вес класса
+    в разы (R3: 78 с против 6 с в покое) и ломает раскладку, медиана трёх спокойных прогонов эту помеху отсекает.
+    Секунды и Fast класса берутся по ОДНОМУ подмножеству профилей — тем, где есть разбивка Fast: на смешанном
+    наборе (часть профилей старого формата без «fast») иначе секунды шли бы по всем файлам, а Fast — по части,
+    и класс терял Fast-стоимость или получал Fast из чужого прогона."""
     requested = split_profiles(path)
     files = [p for p in requested if os.path.exists(p)]
     missing = [p for p in requested if p not in files]
-    if missing:
+    # Пропали ВСЕ из нескольких заказанных — предупреждение молчит: причину и exit 2 называет main (одно сообщение, не два)
+    if missing and (files or len(requested) == 1):
         print(f"Предупреждение: профили не найдены: {', '.join(missing)}; "
               f"использовано {len(files)} из {len(requested)}", file=sys.stderr)
     if not files:
         return None, None, None
-    seconds, fasts, projects = {}, {}, {}
+    rows, projects = {}, {}
     for p in files:
         with open(p, encoding="utf-8") as f:
             classes = json.load(f)["classes"]
         for c, v in classes.items():
-            seconds.setdefault(c, []).append(v["seconds"])
-            if "fast" in v:
-                fasts.setdefault(c, []).append(v["fast"])
+            rows.setdefault(c, []).append((v["seconds"], v.get("fast")))
             if v.get("project"):
                 projects.setdefault(c, v["project"])
-    fast = {c: median(v) for c, v in fasts.items()}
-    return {c: median(v) for c, v in seconds.items()}, projects, fast or None
+    seconds, fast = {}, {}
+    for c, r in rows.items():
+        with_fast = [x for x in r if x[1] is not None]
+        seconds[c] = median([x[0] for x in (with_fast or r)])
+        if with_fast:
+            fast[c] = median([x[1] for x in with_fast])
+    return seconds, projects, fast or None
 
 
 def load_timings(path):
@@ -470,6 +514,10 @@ def print_report(wall, codes, reports):
                 print(f"  … и ещё {len(names) - MAX_FAILED_SHOWN}")
 
 
+# Пик RSS дерева последнего wait_all, байты (0 — не мерялся): его пишет save_shard_peak
+LAST_PEAK_BYTES = 0
+
+
 def wait_all(procs, start, proofs=None, reports=None):
     """Ждёт все процессы, меряя стену и пик RSS дерева; печатает итог, возвращает 0, только если все шарды вышли с 0.
 
@@ -498,6 +546,8 @@ def wait_all(procs, start, proofs=None, reports=None):
     done.set()
     sampler.join()
     print(f"Стена шардов: {wall:.1f} с; коды выхода: {codes}; пик RSS дерева: {peak[0] / 1024 / 1024:.2f} ГиБ")
+    global LAST_PEAK_BYTES
+    LAST_PEAK_BYTES = peak[0] * 1024
     print_report(wall, codes, reports)
     failed = []
     for i, c in enumerate(codes):
@@ -515,7 +565,143 @@ def wait_all(procs, start, proofs=None, reports=None):
     return max((c for c in failed if c > 0), default=1) if failed else 0
 
 
+def cgroup_free(cgroup_file="/proc/self/cgroup", root="/sys/fs/cgroup"):
+    """Запас памяти своего cgroup v2: минимум memory.max − memory.current по цепочке от своего каталога до
+    корня (scope прогона со своим MemoryMax и ccs-agents.slice над ним — оба лимита). None — cgroup нет,
+    везде max или значение неразборчиво: тогда правило смотрит только MemAvailable."""
+    try:
+        with open(cgroup_file, encoding="ascii") as f:
+            path = next((line.strip()[3:] for line in f if line.startswith("0::")), None)
+        if not path or not path.startswith("/"):
+            return None
+        root = os.path.normpath(root)
+        node = os.path.normpath(root + path)
+        best = None
+        while True:
+            try:
+                with open(os.path.join(node, "memory.max"), encoding="ascii") as f:
+                    limit = f.read().strip()
+                if limit != "max":
+                    with open(os.path.join(node, "memory.current"), encoding="ascii") as f:
+                        free = max(0, int(limit) - int(f.read().strip()))
+                    best = free if best is None else min(best, free)
+            except FileNotFoundError:
+                pass
+            if node == root or len(node) <= len(root):
+                return best
+            node = os.path.dirname(node)
+    except (OSError, ValueError, StopIteration):
+        return None
+
+
+def machine_snapshot():
+    """(nproc, load1, MemAvailable в байтах, запас cgroup или None) из /proc или None: нет /proc (Windows,
+    macOS) или не прочитался."""
+    try:
+        with open("/proc/loadavg", encoding="ascii") as f:
+            load1 = float(f.read().split()[0])
+        mem = None
+        with open("/proc/meminfo", encoding="ascii") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    mem = int(line.split()[1]) * 1024
+                    break
+        cpus = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count()
+        if mem is None or not cpus:
+            return None
+        return cpus, load1, mem, cgroup_free()
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def shard_mem(peak_per_shard):
+    """Память на шард для правила: прошлый пик × 1,2 (не ниже 1 ГиБ) или запасные 3,5 ГиБ."""
+    if peak_per_shard is None:
+        return ADAPTIVE_SHARD_MEM
+    return int(max(peak_per_shard, ADAPTIVE_PEAK_FLOOR) * ADAPTIVE_PEAK_MARGIN)
+
+
+def load_shard_peak(results):
+    """Пик RSS на шард прошлого прогона из results/SHARD_PEAK_FILE; нет, битый, вне 1 байта..256 ГиБ — None."""
+    try:
+        with open(os.path.join(results, SHARD_PEAK_FILE), encoding="utf-8") as f:
+            value = json.load(f).get("per_shard_bytes")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 < value <= 256 * GIB:
+        return None
+    return value
+
+
+def save_shard_peak(results, peak_bytes, processes):
+    """Записать пик на шард (пик дерева / число процессов), если процессов было ≥ 2. Сбой записи не роняет прогон."""
+    if processes < 2 or peak_bytes <= 0:
+        return
+    try:
+        os.makedirs(results, exist_ok=True)
+        with open(os.path.join(results, SHARD_PEAK_FILE), "w", encoding="utf-8") as f:
+            json.dump({"per_shard_bytes": peak_bytes // processes, "processes": processes, "peak_bytes": peak_bytes}, f)
+    except OSError as e:
+        print(f"Пик на шард не записан: {e}", file=sys.stderr)
+
+
+def choose_shards(snapshot, maximum=ADAPTIVE_MAX, peak_per_shard=None):
+    """Число шардов и причина по снимку машины. Чистая функция: снимок и прошлый пик — аргументами (табличный тест)."""
+    maximum = max(1, maximum)
+    if snapshot is None:
+        return min(ADAPTIVE_FALLBACK, maximum), "нет /proc — фиксированное значение"
+    cpus, load1, mem, cg = snapshot
+    if load1 < ADAPTIVE_IDLE_LOAD * cpus:
+        n = maximum
+    elif load1 < ADAPTIVE_BUSY_LOAD * cpus:
+        n = ADAPTIVE_MID
+    else:
+        n = ADAPTIVE_MIN
+    n = min(n, max(1, cpus // ADAPTIVE_CORES_PER_SHARD))
+    headroom = mem if cg is None else min(mem, cg)
+    n = min(n, max(1, headroom // shard_mem(peak_per_shard)))
+    load = f"{load1:.1f}".replace(".", ",")
+    where = "" if cg is None else f", в cgroup {cg // GIB} ГиБ"
+    return min(n, maximum), f"load1 {load} из {cpus}, свободно {mem // GIB} ГиБ{where}"
+
+
+def parse_n(value):
+    """`-n`: число ≥ 1 или auto."""
+    if value == "auto":
+        return value
+    if not value.isdigit() or int(value) < 1:
+        raise argparse.ArgumentTypeError(f"ожидается число ≥ 1 или auto, получено «{value}»")
+    return int(value)
+
+
+def resolve_n(n, label="Шардов", maximum=ADAPTIVE_MAX, results=None):
+    """auto — по нагрузке машины с печатью выбора; явное число — как есть. results — где лежит прошлый пик."""
+    if n != "auto":
+        return n
+    n, reason = choose_shards(machine_snapshot(), maximum, load_shard_peak(results) if results else None)
+    print(f"{label}: {n} ({reason})", flush=True)
+    return n
+
+
+def adaptive_split(split, env_value):
+    """--split с учётом ADAPTIVE_ENV: перечисленные проекты — auto под своим потолком, остальные как есть.
+    [(проект, N или "auto", потолок)]. Неразборчивая переменная — предупреждение и --split без изменений:
+    предгейт не должен краснеть из-за опечатки в настройке ускорения."""
+    ceilings = {}
+    if env_value:
+        try:
+            ceilings = {os.path.normpath(p): n for p, n in parse_split(env_value) if n != "auto"}
+        except ValueError as e:
+            print(f"{ADAPTIVE_ENV}: {e} — шарды по --split", file=sys.stderr)
+    out = []
+    for path, n in split:
+        ceiling = ceilings.get(os.path.normpath(path))
+        out.append((path, "auto", ceiling) if ceiling else (path, n, ADAPTIVE_MAX))
+    return out
+
+
 def run_shards(project, n, results, timings, extra_filter, fast=None):
+    n = resolve_n(n, results=results)
     tests, err = list_tests(project, extra_filter)
     if tests is None:
         print(err, file=sys.stderr)
@@ -528,28 +714,58 @@ def run_shards(project, n, results, timings, extra_filter, fast=None):
     os.makedirs(results, exist_ok=True)
     start = time.monotonic()
     procs, proofs, reports = launch_shards(project, shards, results, "shard", extra_filter, tests)
-    return wait_all(procs, start, proofs, reports)
+    global LAST_PEAK_BYTES
+    LAST_PEAK_BYTES = 0
+    code = wait_all(procs, start, proofs, reports)
+    save_shard_peak(results, LAST_PEAK_BYTES, len(procs))
+    return code
 
 
 def parse_split(text):
-    """«путь=N,путь=N» -> [(проект, N)]; N ≥ 1."""
+    """«путь=N,путь=auto» -> [(проект, N или "auto")]; N ≥ 1."""
     out = []
     for item in (x for x in text.split(",") if x):
         path, _, n = item.rpartition("=")
-        if not path or not n.isdigit() or int(n) < 1:
-            raise ValueError(f"--split: ожидается «проект=N», получено «{item}»")
-        out.append((path, int(n)))
+        if not path or not (n == "auto" or n.isdigit() and int(n) >= 1):
+            raise ValueError(f"--split: ожидается «проект=N» или «проект=auto», получено «{item}»")
+        out.append((path, n if n == "auto" else int(n)))
     return out
 
 
+# Подпапка прогона run_fast в --results: «метка времени-pid». Хранятся последние RUN_DIRS_KEEP, остальные чистятся
+RUN_DIR = re.compile(r"^\d{8}-\d{6}-\d+$")
+RUN_DIRS_KEEP = 5
+
+
+def run_dirs(results):
+    """Подпапки прогонов run_fast в results, от старой к новой (по mtime)."""
+    found = [os.path.join(results, d) for d in os.listdir(results)
+             if RUN_DIR.match(d) and os.path.isdir(os.path.join(results, d))]
+    return sorted(found, key=os.path.getmtime)
+
+
+def new_run_dir(results):
+    """Создаёт подпапку прогона и чистит старые: TRX разных прогонов не смешиваются ни в профиле, ни в
+    доказательстве шарда (чужой TRX того же префикса из параллельного прогона не покрывает убитый шард)."""
+    path = os.path.join(results, f"{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}")
+    os.makedirs(path, exist_ok=True)
+    for old in run_dirs(results)[:-RUN_DIRS_KEEP]:
+        shutil.rmtree(old, ignore_errors=True)
+    return path
+
+
 def calibrate(results):
-    """Профиль прошлого прогона из TRX той же папки (предгейт пишет в одну и ту же): раскладка без него
-    идёт по хешу класса и сваливает серийных гигантов в один шард. Нет TRX или профиль не прочитался —
+    """Профиль прошлого прогона: раскладка без него идёт по хешу класса и сваливает серийных гигантов в один
+    шард. Берётся САМАЯ СВЕЖАЯ подпапка прогона с TRX (прогон пишет в свою — два прогона подряд не смешиваются);
+    подпапок нет — плоский каталог как раньше, с окном --latest-run. Недописанная подпапка параллельного прогона
+    даёт неполный профиль: классы вне него уходят в шард по хешу. Нет TRX или профиль не прочитался —
     (None, None, None), раскладка по хешу."""
     if not os.path.isdir(results):
         return None, None, None
+    source = next((d for d in reversed(run_dirs(results))
+                   if any(f.lower().endswith(".trx") for f in os.listdir(d))), results)
     done = subprocess.run([sys.executable, "-I", os.path.join(os.path.dirname(os.path.abspath(__file__)), "test-profile.py"),
-                           results, "--json", "--latest-run"], capture_output=True, text=True)
+                           source, "--json", "--latest-run"], capture_output=True, text=True)
     if done.returncode != 0:
         return None, None, None
     import tempfile
@@ -565,6 +781,10 @@ def run_fast(slnx, split, results, timings, extra_filter, fast=None):
     """Fast предгейта: проекты --split — шардами по классам, остальные тестовые проекты — одним процессом
     на rest-slnx. Каждый тест списка попадает ровно в один шард (иначе exit 1) — самопроверка до запуска."""
     start = time.monotonic()
+    planned = adaptive_split(split, os.environ.get(ADAPTIVE_ENV))
+    split = [(p, resolve_n(n, f"Шардов {os.path.basename(p.rstrip('/'))}", top, results)) for p, n, top in planned]
+    # шарды проектов, у которых N выбирается по нагрузке: на них и делится пик дерева
+    adaptive_shards = sum(n for (_, n), (_, raw, _) in zip(split, planned) if raw == "auto")
     if timings is None:
         timings, _, fast = calibrate(results)
         print("Раскладка по профилю прошлого прогона" if timings else "Профиля нет — раскладка по хешу класса")
@@ -594,6 +814,8 @@ def run_fast(slnx, split, results, timings, extra_filter, fast=None):
         print(summary(listings[path], shards, timings, fast))
         layouts.append((path, shards))
     os.makedirs(results, exist_ok=True)
+    peak_dir = results  # пик на шард — в корне --results: его читает выбор N следующего прогона
+    results = new_run_dir(results)  # дальше всё (TRX, логи, доказательства) — в подпапке этого прогона
     procs, proofs, reports = [], [], []
     rest_path = os.path.join(os.path.dirname(slnx), "ClaudeHomeServer.FastRest.slnx")
     try:
@@ -616,7 +838,13 @@ def run_fast(slnx, split, results, timings, extra_filter, fast=None):
             reports += pr
         print(f"Подготовка до запуска: {time.monotonic() - start:.1f} с; процессов {len(procs)}")
         run_start = time.monotonic()
-        return wait_all(procs, run_start, proofs, reports)
+        global LAST_PEAK_BYTES
+        LAST_PEAK_BYTES = 0
+        code = wait_all(procs, run_start, proofs, reports)
+        # пик ВСЕГО дерева (с rest и прочими шардами) на число адаптивных шардов: оценка сверху — безопасная
+        # сторона; деление на все процессы занизило бы тяжёлый шард монолита лёгкими соседями
+        save_shard_peak(peak_dir, LAST_PEAK_BYTES, adaptive_shards)
+        return code
     finally:
         if os.path.exists(rest_path):
             os.remove(rest_path)
@@ -658,6 +886,17 @@ def main_slnx(args, ap, timings, class_projects):
 
 
 def main(argv=None):
+    """Точка входа. PARALLEL — состояние модуля, которое main переопределяет под режим; после выхода оно
+    возвращается, иначе второй вызов main() в том же процессе (тесты, встраивание) унаследовал бы чужое."""
+    global PARALLEL
+    saved = PARALLEL
+    try:
+        return _main(argv)
+    finally:
+        PARALLEL = saved
+
+
+def _main(argv):
     global PARALLEL
     ap = argparse.ArgumentParser(description="Шарды тестов по классам с самопроверкой покрытия")
     ap.add_argument("--list", help="вывод `dotnet test --list-tests` (файл)")
@@ -667,15 +906,22 @@ def main(argv=None):
     ap.add_argument("--verify", action="store_true", help="только самопроверка и сводка")
     ap.add_argument("--run", metavar="PROJECT", help="локально: N параллельных dotnet test --no-build")
     ap.add_argument("--run-fast", metavar="SLNX", help="локально: Fast решения — проекты --split шардами, остальные одним процессом")
-    ap.add_argument("--split", default="", help="для --run-fast: «проект=N,проект=N»")
-    ap.add_argument("-n", type=int, default=3, help="число шардов (для --verify и --run)")
+    ap.add_argument("--split", default="", help=f"для --run-fast: «проект=N,проект=N»; N по нагрузке — {ADAPTIVE_ENV}=проект=потолок")
+    ap.add_argument("-n", type=parse_n, default="auto",
+                    help=f"число шардов или auto (по умолчанию): для --run — по нагрузке машины (load1, запас памяти хоста и cgroup), "
+                         f"для --verify/--shard/--slnx — {ADAPTIVE_FALLBACK}")
     ap.add_argument("--results", default=os.path.join(".cc-attachments", "test-shards"), help="папка TRX для --run")
     ap.add_argument("--parallel", type=float, help=f"во сколько раз сумма длительностей шарда больше его стены "
                     f"(CI-режимы {PARALLEL:g}, локальные --run/--run-fast {LOCAL_PARALLEL:g})")
     ap.add_argument("--timings", help="JSON профиля (test-profile.py --json), можно несколько через запятую — вес класса тогда медиана; нет файла — предупреждение, раскладка по доступным (все пропали при нескольких — exit 2; единственный — по хешу)")
     ap.add_argument("--filter", dest="extra_filter", help="дополнительный фильтр к каждому шарду (--run)")
     args = ap.parse_args(argv)
+    if args.n == "auto" and not args.run:
+        # раскладка CI и самопроверка не должны зависеть от нагрузки машины, где их считают
+        args.n = ADAPTIVE_FALLBACK
     if args.parallel is not None:
+        if args.parallel <= 0:
+            ap.error("--parallel: ожидается число больше нуля")
         PARALLEL = args.parallel
     elif args.run or args.run_fast:
         PARALLEL = LOCAL_PARALLEL
@@ -683,7 +929,7 @@ def main(argv=None):
     if timings is None and len(split_profiles(args.timings)) > 1:
         # один отсутствующий файл — штатно (холодный кэш CI, раскладка по хешу); несколько заказанных и ни
         # одного найденного — ошибка команды, а не отсутствие профиля
-        print("Ни один из профилей --timings не найден", file=sys.stderr)
+        print(f"Ни один из профилей --timings не найден: {', '.join(split_profiles(args.timings))}", file=sys.stderr)
         return 2
 
     if args.run_fast:
@@ -691,6 +937,11 @@ def main(argv=None):
             split = parse_split(args.split)
         except ValueError as e:
             ap.error(str(e))
+        if not os.path.isfile(args.run_fast):
+            # каталог или опечатка раньше читались как файл решения: IsADirectoryError / FileNotFoundError traceback-ом
+            print(f"--run-fast ждёт файл решения (.slnx), а не каталог и не несуществующий путь: {args.run_fast}",
+                  file=sys.stderr)
+            return 2
         return run_fast(args.run_fast, split, args.results, timings, args.extra_filter, fast)
     if args.run:
         return run_shards(args.run, args.n, args.results, timings, args.extra_filter, fast)

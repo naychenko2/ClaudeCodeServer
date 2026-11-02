@@ -175,5 +175,8 @@ data-qa/
 # Служебные вложения чатов (скриншоты, фикстуры прогонов): не коммитим
 .cc-attachments/
 
+# Временное решение быстрых тестов предгейта (scripts/test-shards.py --run-fast): убитый процесс оставляет файл
+backend/ClaudeHomeServer.FastRest.slnx
+
 # Сырые дампы QA-прогонов
 .qa/raw/

@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Mcp.Http;
 using ClaudeHomeServer.Services.ProjectServices;
@@ -42,7 +43,7 @@ public class DevToolsetTests : IDisposable
 
     private sealed record Env(DevToolset Toolset, McpToolCallContext Context, Session Session, Project Project,
         PersonaManager Personas, CountingLaunchers Launchers, DevServerService DevServer,
-        ProjectServiceDiscovery Discovery) : IDisposable
+        ProjectServiceDiscovery Discovery, TestSessionBroadcaster Statuses) : IDisposable
     {
         public void Dispose() => DevServer.Dispose();
     }
@@ -82,7 +83,9 @@ public class DevToolsetTests : IDisposable
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxPortRangeAdapter(
             new ClaudeHomeServer.Services.Execution.SandboxManager(config,
                 NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance));
-        var devServer = new DevServerService(projects, new TestSessionBroadcaster(),
+        // Рассылка статуса стенда видна тесту: по ней видно, какая ветка подъёма оборвалась
+        var statuses = new TestSessionBroadcaster();
+        var devServer = new DevServerService(projects, statuses,
             NullLogger<DevServerService>.Instance, TestLauncherFactory.Instance, sandbox,
             new DevServerPortMemory(config, NullLogger<DevServerPortMemory>.Instance));
         var discovery = new ProjectServiceDiscovery(new LaunchConfigService(NullLogger<LaunchConfigService>.Instance),
@@ -93,7 +96,7 @@ public class DevToolsetTests : IDisposable
                 devServer: devServer, discovery: discovery, options: options)
             : new DevToolset(sessions, projects, personas);
         var env = new Env(toolset, new McpToolCallContext(TestUserId, session.Id, session.Id), session, project,
-            personas, launchers, devServer, discovery);
+            personas, launchers, devServer, discovery, statuses);
         _owned.Add(env);
         return env;
     }
@@ -507,21 +510,44 @@ public class DevToolsetTests : IDisposable
     }
 
     [Fact]
-    [Trait("Category", "Slow")]
     public async Task StartStand_ПотолокВоВремяПробыHealth_ТекстПроПотолокНеПроСтоп()
     {
-        // Потолок 8 с: запуск занимает секунду, проба получает остаток бюджета и упирается в потолок
-        var env = Build(ceilingSeconds: 8);
+        // Потолок 1 с: порт стенда-заглушки держит listener теста, поэтому подъём занимает десятые
+        // доли секунды и остаток бюджета достётся пробе — она и упирается в потолок. Порог
+        // «остатка на запуск» опущен на этом экземпляре: с продуктовых 5 с самая короткая
+        // достижимая проба этой ветки была бы 5+ с, которые тест платил бы на каждом прогоне;
+        // дефолт держит тест ниже.
+        var env = Build(ceilingSeconds: 1);
+        env.Toolset.Stand.MinReadyBudget = TimeSpan.FromMilliseconds(200);
         var (svc, listener, port) = await SilentNpmStand(env);
         using var _ = listener;
         var watch = System.Diagnostics.Stopwatch.StartNew();
 
         var result = await Stand(env, new JsonObject { ["service"] = svc.Id, ["port"] = port, ["health_path"] = "/health" });
 
-        watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(15), "проба входит в бюджет потолка, а не ждёт свои 30 с");
+        // Какая именно ветка оборвалась — видно по рассылке статуса: «started» (порт принят,
+        // пошла проба) и ни одного «error» (иначе это подъём, оборванный на старте, — другая ветка).
+        // Граница замера: проба уперлась в потолок, а не выбрала свой HealthTimeout
+        env.Statuses.Owner.Select(m => m.Message).OfType<PreviewStatusMessage>().Select(m => m.Status)
+            .Should().Contain("started").And.NotContain("error");
+        watch.Elapsed.Should().BeLessThan(DevStand.HealthTimeout, "проба входит в бюджет потолка, а не ждёт свои 30 с");
         result.IsError.Should().BeTrue(result.Text);
-        result.Text.Should().NotContain("Стоп").And.Match(t => t.Contains("потолок") || t.Contains("не ответил"));
+        result.Text.Should().NotContain("Стоп").And.Contain("потолок");
         env.DevServer.GetRunning(env.Project.Id, TestUserId).Should().BeEmpty();
+    }
+
+    // Дефолты ожиданий подъёма: тест выше опускает порог «остатка на запуск» на своём экземпляре,
+    // продуктовые значения держит здесь — статический дефолт и инициализатор порога экземпляра
+    [Fact]
+    public void ДефолтыОжиданийСтенда_Прежние()
+    {
+        DevStand.DefaultMinReadyBudget.Should().Be(TimeSpan.FromSeconds(5));
+        DevStand.HealthTimeout.Should().Be(TimeSpan.FromSeconds(30));
+        // Инициализатор экземпляра отделён от статического дефолта: уедет от него — тест выше
+        // не заметит, он выставляет свой порог явно; проверяется на настоящом DevToolset
+        var env = Build();
+        env.Toolset.Stand.MinReadyBudget.Should().Be(DevStand.DefaultMinReadyBudget,
+            "порог экземпляра — дефолт продукта");
     }
 
     [Fact]

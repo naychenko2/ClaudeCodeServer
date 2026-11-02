@@ -27,6 +27,17 @@ CLASS_RE = re.compile(r"\b(?:class|record|struct)\s+([A-Za-z_]\w*)")
 SKIP_DIRS = {"bin", "obj", "node_modules", ".git"}
 SLOW_MARK_RE = re.compile(r'\[\s*Trait\(\s*"Category"\s*,\s*"Slow"\s*\)\s*\]')
 TEST_ATTR_RE = re.compile(r"\[\s*(?:Fact|Theory)\b")
+CHAR_LITERAL_RE = re.compile(r"'(?:\\.[^'\n]*|[^\\'\n])'")
+
+
+def plural(n, one, few, many):
+    """Русская форма существительного по числу: 1 тест, 2 теста, 5 тестов, 11 тестов, 21 тест."""
+    last, last2 = n % 10, n % 100
+    if last == 1 and last2 != 11:
+        return one
+    if 2 <= last <= 4 and not 12 <= last2 <= 14:
+        return few
+    return many
 
 
 def parse_duration(text):
@@ -132,12 +143,75 @@ def host_classes(src):
     return host, known
 
 
+def skip_string(text, i):
+    """Индекс сразу за строковым литералом C#, открывающая кавычка которого в позиции i: обычный, @-дословный
+    и «сырой» (три и более кавычек). Интерполяция с вложенными кавычками внутри {…} не разбирается."""
+    n = len(text)
+    run = 1
+    while i + run < n and text[i + run] == '"':
+        run += 1
+    if run >= 3:  # сырая строка: закрывает такая же серия кавычек
+        end = text.find('"' * run, i + run)
+        return n if end < 0 else end + run
+    if run == 2:  # пустая строка ""
+        return i + 2
+    j = i + 1
+    if i > 0 and text[i - 1] == "@" or i > 1 and text[i - 2:i] in ("@$", "$@"):  # дословная: "" — кавычка внутри
+        while j < n:
+            if text[j] == '"':
+                if text[j + 1:j + 2] == '"':
+                    j += 2
+                    continue
+                return j + 1
+            j += 1
+        return n
+    while j < n:
+        if text[j] == "\\":
+            j += 2
+        elif text[j] == '"':
+            return j + 1
+        elif text[j] == "\n":
+            return j  # незакрытая строка: не уходим за конец строки
+        else:
+            j += 1
+    return n
+
+
+def matching_brace(text, start):
+    """Индекс «}», закрывающей «{» в позиции start; нет пары — len(text). Скобки внутри строк,
+    символьных литералов ('{') и комментариев не считаются."""
+    depth, i, n = 0, start, len(text)
+    while i < n:
+        ch, nxt = text[i], text[i + 1:i + 2]
+        if ch == "/" and nxt == "/":
+            end = text.find("\n", i)
+            i = n if end < 0 else end
+        elif ch == "/" and nxt == "*":
+            end = text.find("*/", i + 2)
+            i = n if end < 0 else end + 2
+        elif ch == '"':
+            i = skip_string(text, i)
+        elif ch == "'":
+            m = CHAR_LITERAL_RE.match(text, i)
+            i = m.end() if m else i + 1
+        else:
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return i
+            i += 1
+    return n
+
+
 def count_slow_tests(src):
     """(меток Slow, тестов под ними) по исходникам: TRX категорий не несёт.
 
     Метка на классе покрывает все его [Fact]/[Theory], на методе — один; [Theory] считается
-    один раз (строки данных по исходникам не посчитать), так что это нижняя оценка. Границу
-    класса ищет по скобкам без учёта строк — для отчёта о росте точности хватает."""
+    один раз (строки данных по исходникам не посчитать), так что это нижняя оценка. Тест под
+    двумя метками (метка на методе внутри класса с меткой) считается один раз. Границу класса
+    ищет matching_brace — со строками, символьными литералами и комментариями."""
     marks = tests = 0
     for root, dirs, files in os.walk(src):
         dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
@@ -149,20 +223,19 @@ def count_slow_tests(src):
                     text = fh.read()
             except OSError:
                 continue
+            covered = []  # тела классов с меткой Slow в этом файле: тесты внутри уже посчитаны
             for m in SLOW_MARK_RE.finditer(text):
                 marks += 1
+                inside = any(a <= m.start() < b for a, b in covered)
                 brace = text.find("{", m.end())
                 head = text[m.end():brace] if brace >= 0 else ""
                 if not CLASS_RE.search(head):
-                    tests += 1  # метка на методе
+                    tests += 0 if inside else 1  # метка на методе
                     continue
-                depth, end = 0, brace
-                for i in range(brace, len(text)):
-                    depth += (text[i] == "{") - (text[i] == "}")
-                    if depth == 0:
-                        end = i
-                        break
-                tests += len(TEST_ATTR_RE.findall(text[brace:end]))
+                end = matching_brace(text, brace)
+                covered.append((brace, end))
+                if not inside:
+                    tests += len(TEST_ATTR_RE.findall(text[brace:end]))
     return marks, tests
 
 
@@ -190,10 +263,17 @@ def build_report(results, skipped, host, known, top_tests=25, top_classes=20,
     out = [f"Тестов: {len(results)} (из них не выполнено: {skipped}), "
            f"сумма длительностей тестов (не wall-clock): {fmt(total)} с"]
     fast = results if fast_results is None else fast_results
-    scope = "все переданные TRX" if fast_results is None else "TRX с префиксом fast"
-    out.append(f"Fast: {len(fast)} тестов в {len({c for c, _, _ in fast})} классах ({scope})")
+    n_fast, n_classes = len(fast), len({c for c, _, _ in fast})
+    counted = f"{n_fast} {plural(n_fast, 'тест', 'теста', 'тестов')} в {n_classes} {plural(n_classes, 'классе', 'классах', 'классах')}"
+    if fast_results is None:
+        # fast-TRX нет: набор Fast отдельно не выделить, считаем всё переданное — и подпись не называет это Fast
+        out.append(f"Все переданные TRX: {counted} (TRX с префиксом fast нет)")
+    else:
+        out.append(f"Fast: {counted} (TRX с префиксом fast)")
     if slow is not None:
-        out.append(f"Под Slow: {slow[1]} тестов ({slow[0]} меток в исходниках; [Theory] — как один тест)")
+        marks_n, tests_n = slow[0], slow[1]
+        out.append(f"Под Slow: {tests_n} {plural(tests_n, 'тест', 'теста', 'тестов')} "
+                   f"({marks_n} {plural(marks_n, 'метка', 'метки', 'меток')} в исходниках; [Theory] — как один тест)")
     out.append("")
 
     out.append("Гистограмма длительностей:")

@@ -21,7 +21,7 @@ namespace ClaudeHomeServer.Tests.ImageEditor.Threads;
 // повторный запрос на те же байты берётся из кэша (детектор один раз), Busy — 503, Error — 409, оба не кэшируются,
 // версии нет — 404 version_not_found, чужая нить — 404 thread_not_found, личная область — 404 (маршрута нет).
 [Trait("Category", "Host")]
-public class FacesEndpointTests : IClassFixture<FacesEndpointTests.Host>
+public class FacesEndpointTests : IClassFixture<FacesEndpointTests.Host>, IDisposable
 {
     /// <summary>
     /// Хост на весь класс (IClassFixture), а не на тест: заглушки редактора и локальной меди
@@ -68,6 +68,8 @@ public class FacesEndpointTests : IClassFixture<FacesEndpointTests.Host>
         File.WriteAllBytes(Path.Combine(_root, "images", "hero.png"), Png(40, 20, seed));
         File.WriteAllBytes(Path.Combine(_root, "images", "other.png"), Png(30, 30, seed + 1));
     }
+
+    public void Dispose() => _client.Dispose();
 
     // Фейк ILocalImageMedia: DetectFacesAsync возвращает результат из делегата, считает вызовы
     internal sealed class FakeLocalMedia : ILocalImageMedia
@@ -288,8 +290,20 @@ public class FacesEndpointTests : IClassFixture<FacesEndpointTests.Host>
         for (var y = 0; y < height; y++)
             for (var x = 0; x < width; x++)
                 bitmap.SetPixel(x, y, new SKColor((byte)(seed & 0xFF), (byte)(x ^ (seed >> 8)), (byte)(y * 7 + seed)));
+        // Полный 32-битный seed кладём в первые четыре пикселя: узор выше различает seed лишь по младшим битам
+        for (var i = 0; i < 4; i++)
+            bitmap.SetPixel(i, 0, new SKColor((byte)(seed >> (8 * i)), (byte)i, 0));
         using var image = SKImage.FromBitmap(bitmap);
         using var data = image.Encode(SKEncodedImageFormat.Png, 100);
         return data.ToArray();
+    }
+
+    // Seed, отличающиеся только старшими битами, дают разные байты (иначе общий кэш лиц хоста
+    // отдал бы второму тесту результат первого)
+    [Fact]
+    public void Png_полный_32_битный_seed_различает_байты()
+    {
+        Png(40, 20, 1).Should().NotEqual(Png(40, 20, 1 + (1 << 16)));
+        Png(40, 20, 2).Should().NotEqual(Png(40, 20, 2 + (1 << 24)));
     }
 }

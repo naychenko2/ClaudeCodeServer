@@ -1145,7 +1145,7 @@ const field = (label, ctl, hint) => `<div class="fld"><span class="flbl">${label
 function nightCut() {
   const eng = (place, val) => field(place, `<div class="ro" style="width:fit-content">${I(ic.lock,14)}<span><b>${val}</b></span></div>`);
   const kv = (sel, an, ap, inb) => `<div class="kv"><div><b>${sel}</b><span>чатов отобрано</span></div><div><b>${an}</b><span>разобрано</span></div>
-      <div><b>${ap}</b><span>правок применено само</span></div><div><b>${inb}</b><span>ждут вас во «Входящих»</span></div></div>`;
+      <div><b>${ap}</b><span>пакетов применено само</span></div><div><b>${inb}</b><span>ждут вас во «Входящих»</span></div></div>`;
   const tok = (pct, txt) => `<div style="display:flex;gap:10px;align-items:center;margin-top:12px;font-size:12px;color:var(--c-text-secondary)"><span style="flex:1"><span class="bar"><i style="width:${pct}%"></i></span></span><span class="mono">${txt}</span></div>`;
   const LN = {
     none: `<div class="card" style="margin-top:0"><div class="ct">Ночного разбора ещё не было</div>
@@ -1156,8 +1156,8 @@ function nightCut() {
       Разобрали 9 чатов из 14 отобранных. Остальные 5 разберём следующей ночью — сначала они. Если так каждую ночь, поднимите бюджет.</div></div>
       <div class="card" style="margin-top:0">${kv(14, 9, 13, 3)}${tok(100, '≈ 700 000 из 700 000')}
       <div class="hint" style="margin-top:6px">Остановилась в 04:38. <button class="lnk" data-go="journal" style="padding:0">Открыть «Журнал»</button></div></div>`,
-    open_limit: `<div class="ntc warning" style="margin-bottom:10px">${I(ic.inbox,16)}<div style="flex:1"><div class="nt">Остановились: во «Входящих» 20 правок ждут вашего решения</div>
-      Больше 20 спорных правок сразу Хранитель не копит — иначе их не разобрать. Решите часть, и следующая ночь продолжит с того же места.
+    open_limit: `<div class="ntc warning" style="margin-bottom:10px">${I(ic.inbox,16)}<div style="flex:1"><div class="nt">Остановились: во «Входящих» 20 пакетов ждут вашего решения</div>
+      Больше 20 спорных пакетов сразу Хранитель не копит — иначе их не разобрать. Решите часть, и следующая ночь продолжит с того же места.
       <div class="na">${btn('sec','sm','Открыть «Входящие»','','data-go="inbox"')}</div></div></div>
       <div class="card" style="margin-top:0">${kv(12, 4, 5, 6)}${tok(31, '≈ 218 000 из 700 000')}
       <div class="hint" style="margin-top:6px">Остановилась в 03:41. <button class="lnk" data-go="journal" style="padding:0">Открыть «Журнал»</button></div></div>`,
@@ -1169,7 +1169,7 @@ function nightCut() {
     <div class="grid2" style="${S.night ? '' : 'opacity:.6'}">
       ${field('Окно', `<div class="frow">${sel('03:00','sm')}<span class="muted">—</span>${sel('06:00','sm')}</div>`, 'Время сервера (MSK). У вас то же: 03:00–06:00. Не успели к концу окна — остальное следующей ночью.')}
       ${field('Бюджет за ночь', `<div class="frow"><span class="inp">700 000<span class="u">токенов</span></span></div>`, 'Примерно 20–30 длинных разговоров. Кончился — остальное следующей ночью.')}
-      ${field('Правок за ночь', `<div class="frow"><span class="inp">20<span class="u">на всю вики</span></span><span class="inp">6<span class="u">на раздел</span></span></div>`, 'Чтобы один шумный проект не занял всю ночь. Хроник — до 10 на раздел.')}
+      ${field('Пакетов за ночь', `<div class="frow"><span class="inp">20<span class="u">на всю вики</span></span><span class="inp">6<span class="u">на раздел</span></span></div>`, 'Чтобы один шумный проект не занял всю ночь. Чатов — до 10 на раздел, хроники в лимит не входят.')}
     </div>
     <h3 class="sh">Чем разбирать</h3>
     <div class="grid2" style="margin-top:4px">${eng('Разбор','Локальная модель · Qwen3.8-27B')}${eng('Отбор спорных чатов','Локальная модель · малая')}</div>

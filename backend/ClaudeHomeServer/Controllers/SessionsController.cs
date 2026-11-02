@@ -134,12 +134,15 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
-    // Назначить/сменить/снять собеседника (персону или .md-агента) у проектной сессии — в т.ч. по ходу разговора
+    // Назначить/сменить/снять собеседника (персону или .md-агента) у проектной сессии — в т.ч. по ходу разговора.
+    // Гейт — GetOwnedVisible (S2d-3e): чужой приватный чат неотличим от «нет такого» (решение 28.10).
+    // Запись остаётся на авторе-арендаторе (SetPersona внутри сверяет ResolveOwnerId): участник и до
+    // шага не менял собеседника проектной сессии — для него отказ тот же, 404.
     [HttpPost("{sessionId}/persona")]
     [ProjectScope(Right = ProjectRight.Write)]
     public IActionResult SetPersona(string projectId, string sessionId, [FromBody] SetPersonaRequest req)
     {
-        var session = sessions.GetById(sessionId);
+        var session = sessions.GetOwnedVisible(sessionId, UserId);
         if (session == null || session.ProjectId != projectId) return NotFound();
         try
         {
@@ -165,6 +168,10 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     // просит только записи после курсора; ответ — объект { reset, messages, anchorIndex,
     // anchorFp }: reset=false — messages = хвост (дописывается), reset=true — messages =
     // полная история (замена), anchor* — новый курсор для следующего запроса.
+    // Гейт (S2d-3e) — путь видимости GetAccessible (ResolveSession → SessionAccess.CanSee, тот же,
+    // через который ходит [ProjectScope]): чужой приватный чат неотличим от «нет такого», автору
+    // своего приватного и общему чату — как раньше. GetOwned здесь не годился бы: участник-автор
+    // своего приватного чата не арендатор, а историю своего чата он читал и до шага.
     [HttpGet("{sessionId}/history")]
     [ProjectScope]
     public async Task<IActionResult> GetHistory(
@@ -174,8 +181,9 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         [FromQuery] int? after = null,
         [FromQuery] string? fp = null)
     {
-        var session = sessions.GetById(sessionId);
-        if (session == null || session.ProjectId != projectId) return NotFound();
+        if (sessions.GetAccessible(sessionId, UserId) is not { } found || found.Session.ProjectId != projectId)
+            return NotFound();
+        var session = found.Session;
 
         var history = await sessions.GetHistoryAsync(sessionId);
 
@@ -231,26 +239,33 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     // SessionContextResolver: у неё же его берёт MCP-тул context_list, иначе фронт и тул
     // разошлись бы в оценке одной записи. Битая запись отдаётся с missing=true
     // (убрать/переуказать — решение клиента), молча не чистим: состав меняется только PUT.
+    // Гейт (S2d-3e) — тот же путь видимости, что у истории: GetAccessible (ResolveSession → CanSee).
+    // Состав контекста чужого приватного чата не отдаётся никому, кроме его автора; отказ
+    // неотличим от «нет такого чата».
     [HttpGet("{sessionId}/context")]
     [ProjectScope]
     public IActionResult GetContext(string projectId, string sessionId)
     {
-        var session = sessions.GetById(sessionId);
-        if (session == null || session.ProjectId != projectId) return NotFound();
+        if (sessions.GetAccessible(sessionId, UserId) is not { } found || found.Session.ProjectId != projectId)
+            return NotFound();
 
-        return Ok(contextResolver.Resolve(session, UserId));
+        return Ok(contextResolver.Resolve(found.Session, UserId));
     }
 
     // PUT — идемпотентная замена состава целиком. Валидация: Type из белого списка,
     // непустой Id, потолок 50. Записи с несуществующими адресами НЕ отбиваются —
     // «не найден» отображается (missing в GET), а PUT описывает желание человека,
     // а не состояние файловой системы.
+    // Гейт (S2d-3e) — запись, поэтому GetOwnedVisible (автор-арендатор + видимость), а не путь
+    // чтения: участнику запись в проект открыта только RunTurn (S2a-10), и до шага она здесь
+    // отбивалась фильтром Write — для него отказ тот же. Без этого GET контекста был бы закрыт
+    // на чужом приватном чате, а PUT — открыт.
     [HttpPut("{sessionId}/context")]
     [ProjectScope(Right = ProjectRight.Write)]
     public async Task<IActionResult> PutContext(string projectId, string sessionId,
         [FromBody] List<SessionContextItemRequest> req)
     {
-        var session = sessions.GetById(sessionId);
+        var session = sessions.GetOwnedVisible(sessionId, UserId);
         if (session == null || session.ProjectId != projectId) return NotFound();
 
         if (req.Count > MaxContextEntries)

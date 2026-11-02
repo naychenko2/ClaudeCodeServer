@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.ChatContext;
@@ -16,6 +17,7 @@ using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Xunit;
@@ -33,9 +35,16 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// S2d-3c: тот же сдвиг в Files (общий гейт GetOwnedSession content/stream/locate), Git
 /// (RootFor по ?sessionId=) и MyWall (состав стены): чужой приватный неотличим от
 /// несуществующего чата — 404 / мёртвый id; автор и общий чат — как раньше.
+/// S2d-3e: шесть ручек, решавших право на чат мимо SessionAccess.CanSee (находка §3 ревью
+/// R-S2d-3a, дефект d72e1b60): чтение (history/context проектной сессии) закрывается путём
+/// видимости GetAccessible (ResolveSession → CanSee), запись (parent/branch/retitle/persona,
+/// PUT context) — GetOwnedVisible. Read-ручки не переведены на GetOwned: автор своего
+/// приватного чата — не арендатор, а свою историю и свой контекст он читал и до шага.
 /// Полный хост не нужен: контроллеры создаются напрямую с ClaimsPrincipal вызывающего
 /// (образец — SharedProjectEditorScopeGatesTests), стор сессий сидируется sessions.json
-/// (образец — SessionStatusTests).
+/// (образец — SessionStatusTests). Для пути участника (read-ручки) в корень DI ставится
+/// настоящая точка доступа ProjectAccessService: без неё GetAccessible в SessionManager
+/// падает на «владение по ResolveOwnerId», и видимость участника не проверялась бы вовсе.
 /// </summary>
 public sealed class GetOwnedVisibleTests : IDisposable
 {
@@ -45,7 +54,12 @@ public sealed class GetOwnedVisibleTests : IDisposable
     private readonly UserStore _users;
     private readonly string _ownerId;
     private readonly string _editorId;
+    // Второй участник общего проекта: «участник на чужом приватном чате» — отдельный случай
+    // от владельца проекта (их отказ одинаков по форме, но решается разными ветками CanSee)
+    private readonly string _otherId;
     private readonly string _projectId;
+    private readonly ChatHistoryService _history;
+    private readonly CountingCheapRunner _cheap = new();
     private readonly SessionManager _sessions;
     // Локатор без git: деградирует до корня проекта (fail-closed, ProjectTreeLocator:43-52) —
     // для доказательства пройденного гейта Files больше ничего не нужно
@@ -68,12 +82,18 @@ public sealed class GetOwnedVisibleTests : IDisposable
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
+                // Read-ручки S2d-3e идут через IProjectAccess.ResolveSession: участнику нужен
+                // рубильник инстанса и личный флаг — как в проде
+                [SharedProjectsGate.SwitchKey] = "true",
             })
             .Build();
 
         var userStore = _users = new UserStore(_config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         _ownerId = userStore.GetFirst()!.Id;
         _editorId = userStore.Add("kuzma-editor", "pwd", "user").Id;
+        _otherId = userStore.Add("other-editor", "pwd", "user").Id;
+        foreach (var id in new[] { _editorId, _otherId })
+            userStore.SetFeatureFlag(id, FeatureFlagKeys.SharedProjects, true);
 
         var appSettings = new AppSettingsService(_config);
         var projectRoot = Directory.CreateDirectory(Path.Combine(_tempDir, "project")).FullName;
@@ -82,6 +102,13 @@ public sealed class GetOwnedVisibleTests : IDisposable
         File.WriteAllText(Path.Combine(projectRoot, "a.txt"), "один\n");
         _projects = new ProjectManager(_config, userStore, appSettings);
         _projectId = _projects.Create("Общий проект", projectRoot, _ownerId, userStore.GetFirst()!.Username).Id;
+        // Оба — участники общего проекта: на read-ручках автор своего приватного проходит,
+        // другой участник на чужом приватном — нет
+        _projects.SetMembers(_projectId,
+        [
+            new ProjectMember { UserId = _editorId, Role = ProjectRole.Editor, AddedBy = _ownerId },
+            new ProjectMember { UserId = _otherId, Role = ProjectRole.Editor, AddedBy = _ownerId },
+        ]);
 
         WriteSessions(sessionsJsonPath, [
             new Session { Id = ForeignPrivateId, ProjectId = _projectId, PrivateToUserId = _editorId, Status = SessionStatus.Finished },
@@ -90,6 +117,7 @@ public sealed class GetOwnedVisibleTests : IDisposable
             new Session { Id = OutsideChatId, OwnerId = _ownerId, Status = SessionStatus.Finished },
         ]);
 
+        _history = new ChatHistoryService(_config);
         _sessions = CreateSessionManager(userStore, appSettings);
     }
 
@@ -122,8 +150,62 @@ public sealed class GetOwnedVisibleTests : IDisposable
             knowledge, new SkillsService(), userStore, _config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(_config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
-        return new SessionManager(_projects, new ChatHistoryService(_config), _config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas, bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, new TestSessionBroadcaster());
+        return new SessionManager(_projects, _history, _config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas, bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, new TestSessionBroadcaster(),
+            cheap: _cheap, services: AccessProvider());
     }
+
+    // Корень DI с настоящей точкой доступа (тот же ленивый шов, что в проде: прямая зависимость
+    // замкнула бы цикл ProjectAccessService → ISessionDirectory → SessionManager). Лямбда
+    // читает _sessions позже — к первому GetService он уже собран.
+    private ServiceProvider AccessProvider()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IProjectAccess>(_ => new ProjectAccessService(
+            _projects, _sessions, new SharedProjectsGate(_config, new FeatureFlagService(_users))));
+        return services.BuildServiceProvider();
+    }
+
+    // «Дешёвый» раннер со счётчиком вызовов: нужен одним — показать, что на отказанной ручке
+    // модель не звалась вовсе (расход платит арендатор), и что счётчик не пустой: на пройденном
+    // входе он растёт
+    private sealed class CountingCheapRunner : ClaudeHomeServer.Services.Llm.ICheapTextRunner
+    {
+        public int Calls;
+
+        public bool UsesLocal(string actionKey) => false;
+        public bool HasFreeRoute(string actionKey) => false;
+        public bool HasRoute(string actionKey) => false;
+        public string DescribeRoute(string actionKey, string? fallbackModel) => "stub";
+
+        public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+        {
+            Calls++;
+            return Task.FromResult("""{"title":"Новое название"}""");
+        }
+
+        public async Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default) =>
+            await RunAsync(actionKey, prompt, null, ownerId, jsonFormat, ct);
+
+        public Task<ClaudeHomeServer.Services.Llm.OneShotResult> RunDetailedAsync(string actionKey,
+            string prompt, string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
+            int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default) =>
+            Task.FromResult(new ClaudeHomeServer.Services.Llm.OneShotResult("""{"title":"Новое название"}""", null, 0));
+    }
+
+    // История чата: ключ — HistoryKeyOf (у сидированных чатов ClaudeSessionId нет → id чата),
+    // та же точка, что у GetHistoryAsync. Нужна, чтобы «дошёл до транскрипта» отличался от
+    // «транскрипта нет»
+    private Task SeedHistory(string sessionId) =>
+        _history.SaveAsync(sessionId, [new StoredUserMessage("о чём был разговор")]);
+
+    private SessionsController SessionsAs(string userId) =>
+        new(_sessions, _projects, null!, null!, null!, null!) { ControllerContext = AsUser(userId) };
+
+    private ChatsController ChatsAs(string userId) =>
+        new(_sessions, _projects, null!, null!, null!, null!, null!, null!, null!, null!,
+            NullLogger<ChatsController>.Instance) { ControllerContext = AsUser(userId) };
 
     private static ControllerContext AsUser(string userId) => new()
     {
@@ -358,5 +440,128 @@ public sealed class GetOwnedVisibleTests : IDisposable
         // владение этим шагом не меняется.
         var own = c.Put(new PutWallRequest([OwnPrivateId])).Should().BeOfType<OkObjectResult>().Subject;
         ((WallDto)own.Value!).Chats.Select(s => s.Id).Should().Equal(OwnPrivateId);
+    }
+
+    // --- ручки S2d-3e: право на чат решалось мимо SessionAccess.CanSee (находка §3 R-S2d-3a) ---
+
+    // Чтение (history) — путь видимости: автор своего приватного чата не арендатор, а свою
+    // историю он читал и до шага; владелец проекта и другой участник на чужом приватном — 404,
+    // неотличимый от «нет такого чата»
+    [Fact]
+    public async Task SessionsController_GetHistory_ЧужойПриватныйКакНесуществующий_АвторИОбщийКакРаньше()
+    {
+        var asOwner = SessionsAs(_ownerId);
+        (await asOwner.GetHistory(_projectId, ForeignPrivateId)).Should().BeOfType<NotFoundResult>(
+            "до шага [ProjectScope] + GetById отдавал полную историю чужого приватного чата владельцу проекта");
+        (await asOwner.GetHistory(_projectId, "no-such-chat")).Should().BeOfType<NotFoundResult>();
+        // За гейтом — пустая история (200): это и есть доказательство пройденного входа
+        (await asOwner.GetHistory(_projectId, OwnPrivateId)).Should().BeOfType<OkObjectResult>();
+        (await asOwner.GetHistory(_projectId, OpenChatId)).Should().BeOfType<OkObjectResult>();
+
+        // Автор-участник своего приватного: на GetOwned он не прошёл бы (не арендатор) —
+        // путь видимости его пускает, как и раньше
+        (await SessionsAs(_editorId).GetHistory(_projectId, ForeignPrivateId)).Should().BeOfType<OkObjectResult>();
+        // Другой участник на чужом приватном — тот же 404; общий чат — как раньше
+        var asOther = SessionsAs(_otherId);
+        (await asOther.GetHistory(_projectId, ForeignPrivateId)).Should().BeOfType<NotFoundResult>();
+        (await asOther.GetHistory(_projectId, OpenChatId)).Should().BeOfType<OkObjectResult>();
+    }
+
+    // Состав контекста — чтение (GetAccessible); его запись (PUT) — GetOwnedVisible: без второй
+    // половины GET на чужом приватном был бы закрыт, а PUT — открыт
+    [Fact]
+    public async Task SessionsController_Context_ЧужойПриватныйКакНесуществующий_GetЧитаетАвтор_PutТолькоАвторАрендатор()
+    {
+        using var tasks = new TaskManager(_config);
+        var resolver = new SessionContextResolver(_projects, tasks);
+        // GetContext — синхронный (состав считается на месте), PutContext — async (меняет стор)
+        SessionsController As(string userId) => new(_sessions, _projects, null!, null!, resolver, null!)
+            { ControllerContext = AsUser(userId) };
+
+        As(_ownerId).GetContext(_projectId, ForeignPrivateId).Should().BeOfType<NotFoundResult>();
+        As(_ownerId).GetContext(_projectId, "no-such-chat").Should().BeOfType<NotFoundResult>();
+        As(_ownerId).GetContext(_projectId, OwnPrivateId).Should().BeOfType<OkObjectResult>();
+        As(_ownerId).GetContext(_projectId, OpenChatId).Should().BeOfType<OkObjectResult>();
+        // Автор своего приватного — читает; другой участник — нет
+        As(_editorId).GetContext(_projectId, ForeignPrivateId).Should().BeOfType<OkObjectResult>();
+        As(_otherId).GetContext(_projectId, ForeignPrivateId).Should().BeOfType<NotFoundResult>();
+
+        // PUT — запись: автор-арендатор проходит, чужой приватный — 404. Участника отбивал и до
+        // шага фильтр Write (запись в проект участнику не открыта) — для него отказ не изменился
+        (await As(_ownerId).PutContext(_projectId, ForeignPrivateId, []))
+            .Should().BeOfType<NotFoundResult>();
+        (await As(_ownerId).PutContext(_projectId, OpenChatId, []))
+            .Should().BeOfType<OkObjectResult>();
+        (await As(_editorId).PutContext(_projectId, OpenChatId, []))
+            .Should().BeOfType<NotFoundResult>();
+    }
+
+    // Собеседник чата — запись: автор-арендатор. Участник (в т.ч. автор своего приватного)
+    // не менял его проектной сессии и до шага: SetPersona внутри сверяет ResolveOwnerId
+    [Fact]
+    public void SessionsController_SetPersona_ЧужойПриватныйКакНесуществующий_АвторАрендаторПроходит()
+    {
+        var req = new SetPersonaRequest(null, null); // «снять собеседника» — без резолва персоны
+        var asOwner = SessionsAs(_ownerId);
+
+        asOwner.SetPersona(_projectId, ForeignPrivateId, req).Should().BeOfType<NotFoundResult>();
+        asOwner.SetPersona(_projectId, "no-such-chat", req).Should().BeOfType<NotFoundResult>();
+        asOwner.SetPersona(_projectId, OwnPrivateId, req).Should().BeOfType<OkObjectResult>();
+        asOwner.SetPersona(_projectId, OpenChatId, req).Should().BeOfType<OkObjectResult>();
+
+        SessionsAs(_editorId).SetPersona(_projectId, ForeignPrivateId, req).Should().BeOfType<NotFoundResult>(
+            "владение не изменилось: автор-участник своего приватного — не арендатор");
+    }
+
+    [Fact]
+    public void ChatsController_SetParent_ЧужойПриватныйКакНесуществующий_СвойПриватныйИОбщийПроходят()
+    {
+        var c = ChatsAs(_ownerId);
+        var req = new SetParentRequest(null); // вынести в корень списка
+
+        c.SetParent(ForeignPrivateId, req).Should().BeOfType<NotFoundResult>(
+            "до шага ParentOverrideId чужого приватного чата ставил кто угодно, кто ему писал");
+        c.SetParent("no-such-chat", req).Should().BeOfType<NotFoundResult>();
+        c.SetParent(OwnPrivateId, req).Should().BeOfType<OkObjectResult>();
+        c.SetParent(OpenChatId, req).Should().BeOfType<OkObjectResult>();
+    }
+
+    [Fact]
+    public async Task ChatsController_Branch_ЧужойПриватный404БезЧатаПреемника_СвойИОбщийПроходятГейт()
+    {
+        var c = ChatsAs(_ownerId);
+        var req = new BranchChatRequest(0, "текст якоря", "all");
+        var before = _sessions.GetByProject(_projectId).Count;
+
+        (await c.Branch(ForeignPrivateId, req)).Should().BeOfType<NotFoundResult>();
+        (await c.Branch("no-such-chat", req)).Should().BeOfType<NotFoundResult>();
+        // Отказ неотличим от «нет такого чата» и чат-преемник с содержимым приватного не создан:
+        // BranchAsync после гейта не позван вовсе
+        _sessions.GetByProject(_projectId).Count.Should().Be(before);
+
+        // За гейтом — свои гейты BranchAsync (у сидированного чата нет ClaudeSessionId → 409):
+        // это и есть доказательство пройденного входа
+        (await c.Branch(OwnPrivateId, req)).Should().BeOfType<ConflictObjectResult>();
+        (await c.Branch(OpenChatId, req)).Should().BeOfType<ConflictObjectResult>();
+    }
+
+    [Fact]
+    public async Task ChatsController_Retitle_ЧужойПриватный404БезВызоваМодели_СвойИОбщийПроходятГейт()
+    {
+        // Транскрипт есть у всех трёх: «дошёл до раннера» отличается от «транскрипта нет»
+        await SeedHistory(ForeignPrivateId);
+        await SeedHistory(OwnPrivateId);
+        await SeedHistory(OpenChatId);
+        var c = ChatsAs(_ownerId);
+
+        (await c.Retitle(ForeignPrivateId, default)).Should().BeOfType<NotFoundResult>();
+        (await c.Retitle("no-such-chat", default)).Should().BeOfType<NotFoundResult>();
+        // LLM по чужому транскрипту не звался: расход платит арендатор
+        _cheap.Calls.Should().Be(0);
+
+        // За гейтом раннер зовётся и имя меняется — счётчик не пустой
+        (await c.Retitle(OwnPrivateId, default)).Should().BeOfType<OkObjectResult>();
+        (await c.Retitle(OpenChatId, default)).Should().BeOfType<OkObjectResult>();
+        _cheap.Calls.Should().Be(2);
     }
 }

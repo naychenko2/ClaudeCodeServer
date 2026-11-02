@@ -246,11 +246,14 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     }
 
     // Ручная группировка чатов (drag-and-drop в списке): вложить чат в родительский либо
-    // вынести в корень (parentId == null). Один эндпоинт на оба списка — GetOwned внутри
-    // SetParent резолвит и проектную сессию (как /loop), поэтому дубля в SessionsController нет.
+    // вынести в корень (parentId == null). Один эндпоинт на оба списка — GetOwnedVisible здесь
+    // резолвит и проектную сессию (как /loop), поэтому дубля в SessionsController нет; внутри
+    // SetParent остаётся сверка автора-арендатора (GetOwned в сервисе). На чужом приватном
+    // чате — 404, как на несуществующем (S2d-3e).
     [HttpPut("{id}/parent")]
     public IActionResult SetParent(string id, [FromBody] SetParentRequest req)
     {
+        if (sessions.GetOwnedVisible(id, UserId) is null) return NotFound();
         try
         {
             var updated = sessions.SetParent(id, req.ParentId, UserId);
@@ -260,10 +263,12 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     }
 
     // Отметить чат прочитанным (синк непрочитанности между устройствами). Один эндпоинт
-    // на оба списка (как /parent и /loop) — GetOwned внутри MarkRead резолвит и проектную
-    // сессию. Отметка не двигает UpdatedAt и не поднимает чат в списке.
+    // на оба списка (как /parent и /loop): вход — GetAccessible (Read: видимость, не владение),
+    // поэтому дубля в SessionsController нет. Отметка не двигает UpdatedAt и не поднимает чат
+    // в списке.
     // Участник общего проекта отмечает СВОЮ прочитанность (оверлей ChatUserStateStore): у владельца
-    // и у других участников она не меняется. Видимость чата — GetAccessible (Read), не владение.
+    // и у других участников она не меняется. У владельца отметка идёт через MarkRead (внутри
+    // сервиса — GetOwned: автор-арендатор).
     [HttpPut("{id}/read")]
     public IActionResult MarkRead(string id)
     {
@@ -300,7 +305,8 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
 
     // Убрать чат в архив (archived=true) / вернуть (false) — шаг 2 плана «Архив чатов»:
     // архив ПРЯЧЕТ чат, а не удаляет, история и claudeSessionId целы. Как /parent и /loop,
-    // работает и для проектной сессии (GetOwned внутри резолвит владельца через проект).
+    // работает и для проектной сессии: гейт — GetOwnedVisible (резолвит владельца через проект
+    // и не пускает на чужой приватный чат, S2d-3a), внутри SetArchivedAsync — GetOwned.
     // 409 на живом ходе/фоновых агентах: архивация идущей работы рвала бы её (пре-мортем
     // №3 плана v4); текст ошибки — человекочитаемый («в чате идёт ход»).
     [HttpPut("{id}/archived")]
@@ -318,7 +324,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     // Сводка карточки архива (шаг 5 плана «Архив чатов»): кнопка «Собрать сводку» строит
     // 2–3 предложения о чём был разговор (место chat-digest) и кэширует их в чате — свежая
     // сводка отдаётся из кэша без обращения к модели. Как /archived, работает и для
-    // проектной сессии (GetOwned внутри сервиса резолвит владельца через проект).
+    // проектной сессии: гейт — GetOwnedVisible (S2d-3a), внутри сервиса — GetOwned.
     // Это НЕ «Итог сессии»: вынос в заметки — отдельная кнопка через существующий
     // POST /api/sessions/{id}/summary, его контракт здесь не участвует.
     [HttpPost("{id}/digest")]
@@ -352,7 +358,8 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     }
 
     // Цикл «до готово» (флаг work-loop): вкл/выкл автопродолжения хода до маркера
-    // завершения. Работает и для проектной сессии (GetOwned резолвит владельца через проект).
+    // завершения. Работает и для проектной сессии: гейт — DenyOwnerTurn (право Configure через
+    // IProjectAccess.ResolveSession, с видимостью чата: чужой приватный — 404, S2d-3a).
     [HttpPut("{id}/loop")]
     public async Task<IActionResult> SetWorkLoop(string id, [FromBody] SetWorkLoopRequest req)
     {
@@ -373,7 +380,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
 
     // Режим «Командная реализация»: вкл/выкл режима чата-штаба. При включении можно сразу
     // задать состав (пустой/null список исполнителей = вся команда проекта). Как loop,
-    // работает и для проектной сессии (GetOwned резолвит владельца).
+    // работает и для проектной сессии (тот же гейт DenyOwnerTurn).
     [HttpPut("{id}/team-implement")]
     public async Task<IActionResult> SetTeamImplement(string id, [FromBody] SetTeamImplementRequest req)
     {
@@ -411,7 +418,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     }
 
     // Переключение авто-волн на ходу (из бейджа режима): не трогает сам режим, только флаг.
-    // Как loop, работает и для проектной сессии (GetOwned резолвит владельца через проект).
+    // Как loop, работает и для проектной сессии (тот же гейт DenyOwnerTurn).
     [HttpPut("{id}/team-implement/auto")]
     public async Task<IActionResult> SetTeamImplementAuto(string id, [FromBody] SetTeamImplementAutoRequest req)
     {
@@ -536,7 +543,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     // Отдельное git worktree чата: вкл — сессия переезжает в изолированное дерево на новой
     // ветке (начатый чат — с переносом контекста), выкл — возврат в корень проекта.
     // Force подтверждает потерю несохранённых правок дерева. Как loop, работает и для
-    // проектной сессии (GetOwned резолвит владельца через проект).
+    // проектной сессии: гейт — GetOwnedVisible (S2d-3a).
     [HttpPut("{id}/worktree")]
     public async Task<IActionResult> SetWorktree(string id, [FromBody] SetWorktreeRequest req)
     {
@@ -594,8 +601,10 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     // сообщению историей и транскриптом CLI. Эндпоинт — тонкая обёртка: гейты §9,
     // резак транскрипта и наследование полей §11 живут целиком в
     // SessionManager.BranchAsync, здесь их не дублируем. Как migrate-provider, один
-    // эндпоинт покрывает и чаты вне проекта, и проектные сессии — GetOwned внутри
-    // BranchAsync резолвит владельца через проект.
+    // эндпоинт покрывает и чаты вне проекта, и проектные сессии — GetOwnedVisible здесь
+    // резолвит владельца через проект и не пускает на чужой приватный чат (404, S2d-3e):
+    // ветвление не копирует его транскрипт и не плодит чат-преемник. Внутри BranchAsync
+    // остаётся сверка автора-арендатора (GetOwned в сервисе).
     // Коды: 404 — чат не найден/чужой (KeyNotFoundException из BranchAsync).
     // 409 — ЛЮБОЙ отказ BranchAsync (InvalidOperationException → Conflict, конвенция
     // SetArchivedAsync). Известное ограничение: BranchAsync кидает один и тот же тип
@@ -608,6 +617,9 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpPost("{id}/branch")]
     public async Task<IActionResult> Branch(string id, [FromBody] BranchChatRequest req)
     {
+        // Гейт ДО BranchAsync: на чужом приватном чате не должно быть ни резака транскрипта,
+        // ни нового чата-преемника с его содержимым (S2d-3e)
+        if (sessions.GetOwnedVisible(id, UserId) is null) return NotFound();
         try
         {
             var result = await sessions.BranchAsync(
@@ -710,9 +722,12 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
 
     // Обновить название чата по текущей переписке (AI-хаб): в отличие от авто-имени по первому
     // сообщению — по всему транскрипту, с перезаписью. Как loop, работает и для проектной сессии.
+    // Гейт ДО RetitleAsync (S2d-3e): чужой приватный чат — 404, как на несуществующем, и LLM по
+    // его транскрипту не зовётся (расход платит арендатор). Внутри RetitleAsync остаётся GetOwned.
     [HttpPost("{id}/retitle")]
     public async Task<IActionResult> Retitle(string id, CancellationToken ct)
     {
+        if (sessions.GetOwnedVisible(id, UserId) is null) return NotFound();
         try
         {
             var updated = await sessions.RetitleAsync(UserId, id, ct);

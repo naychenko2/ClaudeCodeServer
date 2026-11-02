@@ -91,7 +91,13 @@ backend/ClaudeHomeServer/Controllers/PreviewController.cs|12
 backend/ClaudeHomeServer/Controllers/ProjectMapController.cs|1
 backend/ClaudeHomeServer/Controllers/ProjectMembersController.cs|6
 backend/ClaudeHomeServer/Controllers/ProjectsController.cs|15
-backend/ClaudeHomeServer/Controllers/SessionsController.cs|10
+# S2d-3e: SessionsController 10→14 — четыре новых входа по id вызывающего в решении о чате:
+# GetAccessible (чтение истории и состава контекста) и GetOwnedVisible (смена собеседника,
+# PUT контекста). id вызывающего входит только в IProjectAccess.ResolveSession /
+# SessionAccess.CanSee — это видимость и право на чат, а не ключ хранилищ: история и контекст
+# адресуются id чата, записывает их автор-арендатор (ResolveOwnerId), новых вызовов с ключом
+# владельца или участника эти ветки не добавили.
+backend/ClaudeHomeServer/Controllers/SessionsController.cs|14
 backend/ClaudeHomeServer/Controllers/SkillsController.cs|10
 backend/ClaudeHomeServer/Controllers/TasksController.cs|82
 backend/ClaudeHomeServer/Controllers/TurnRightExtensions.cs|6

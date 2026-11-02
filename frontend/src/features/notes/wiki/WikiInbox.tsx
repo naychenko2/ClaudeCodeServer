@@ -24,7 +24,7 @@ import { EmptyState } from '../../../components/ui/EmptyState';
 import { Notice } from '../../../components/ui/Notice';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { sectionPrefix, wikiErrorText } from './WikiTab';
-import { ORIGIN_META } from './wikiLabels';
+import { INBOX_TEXT, ORIGIN_META, isHumanTargetClass, wikiInboxReasonText } from './wikiLabels';
 import { WikiPackageView } from './WikiPackageView';
 
 // Отказы «Входящих» — русским текстом по коду бэка (тот же порядок, что wikiErrorText для
@@ -80,8 +80,15 @@ function PackageRow({ pkg, onOpen }: { pkg: WikiPackageDto; onOpen: () => void }
   const section = tree?.sections.find(s => s.key === pkg.section);
   // «Почему здесь» строки — причина первой ещё нерешённой спорной операции: у каждой
   // операции в «Входящих» причина есть по форме пакета (ShapeErrors), список показывает
-  // первую, остальные — на экране пакета
+  // первую, остальные — на экране пакета.
+  // Цель — утверждение человека, если class оканчивается на @human (ADR-038 «Входящие»):
+  // у такой причины — короткий текст пункта по коду (таблица ADR), нераспознанный код —
+  // запасной нейтральный текст, сырая строка бэка на экран не выходит. Прочие причины —
+  // как есть (их тексты — не таблица ADR).
   const first = pendingContested(pkg)[0];
+  const reasonShown = first
+    ? (isHumanTargetClass(first.class) ? wikiInboxReasonText(first.reason) : first.reason)
+    : null;
   return (
     <button
       type="button"
@@ -101,10 +108,10 @@ function PackageRow({ pkg, onOpen }: { pkg: WikiPackageDto; onOpen: () => void }
         <span style={{ display: 'block', fontSize: FS.base, fontWeight: 500, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {src?.ref ?? 'Без источника'}
         </span>
-        {first?.reason && (
+        {reasonShown && (
           <span style={{ display: 'block', fontSize: FS.sm, marginTop: 2 }}>
             <b style={{ color: C.textMuted, fontWeight: 600 }}>Почему здесь:</b>{' '}
-            <span style={{ color: C.textPrimary }}>{first.reason}</span>
+            <span style={{ color: C.textPrimary }}>{reasonShown}</span>
           </span>
         )}
         <span style={{ display: 'block', fontSize: FS.xs, color: C.textMuted, marginTop: 2 }}>
@@ -164,7 +171,7 @@ export function WikiInbox() {
     <div style={{ padding: `0 0 ${SP.md}px` }}>
       <div style={{ padding: `${SP.sm}px ${SP.md}px 0` }}>
         <Notice tone="info" icon={Inbox} title="Здесь только то, где нужен человек">
-          Неспорное применилось само — смотреть в «Журнале».
+          {INBOX_TEXT.caption}
         </Notice>
       </div>
       {data.invalidCount > 0 && (

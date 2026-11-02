@@ -1606,3 +1606,18 @@ export async function adoptWikiPageMine(sectionKey: string, pageKey: string): Pr
   }
   return { status: res.status, hash: typeof res.hash === 'string' ? res.hash : '' };
 }
+
+// ─── Коды причин «Входящих» (F6a; ADR-038 «Входящие»: причины правила замены) ───
+// Причина операции приходит текстом: отдельного кода в DTO нет (WikiPackageOperationDto,
+// ADR-038). Фронт узнаёт случай по устойчивому началу строки (таблица ADR — зеркало
+// WikiApplyPolicy.ReplacementBlocker и строк Decide) и присваивает свой код; нераспознанное
+// начало — null: экран показывает нейтральный текст, а не сырую строку. Тексты кодов —
+// в wikiLabels (словари фичи здесь не живут).
+
+export type WikiInboxReasonCode =
+  | 'source_time_unknown'
+  | 'source_older_than_edit'
+  | 'target_time_unknown'
+  | 'source_not_newer'
+  | 'recently_reverted'
+  | 'class_disabled';

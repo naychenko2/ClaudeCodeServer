@@ -10,7 +10,7 @@
 import { type BadgeTone } from '../../../components/ui/Badge';
 import { Brain, FileText, GitCommit, Link2, ListChecks, MessageSquare, StickyNote } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { parseSectionKey, type WikiError, type WikiRetractDto, type WikiSectionDto } from 'aihome_shell/kit';
+import { parseSectionKey, type WikiError, type WikiInboxReasonCode, type WikiRetractDto, type WikiSectionDto } from 'aihome_shell/kit';
 
 // Статусы страницы — их считает код, не модель (ADR-035 §3, WikiFrontmatter.StatusValues)
 export const PAGE_STATUS: Record<string, { tone: BadgeTone; text: string; title: string }> = {
@@ -223,6 +223,60 @@ export const OVERRIDE_TEXT = {
   failed: 'Не удалось вернуть формулировку. Страница осталась как есть — повторите.',
   dotTitle: 'ИИ заменил ваши формулировки',
 } as const;
+
+// ─── Причины «Входящих» (F6a; ADR-038 «Входящие»: причины правила замены») ───
+// Цель предложения — утверждение человека, если class операции оканчивается на @human
+// (ADR-038, раздел «Входящие»). Причина такой операции приходит текстом бэка; фронт узнаёт
+// случай по устойчивому началу строки (таблица ADR — зеркало строк WikiApplyPolicy) и
+// показывает короткий текст пункта дословно; нераспознанное начало — нейтральный текст,
+// сырая строка на экран не выходит. Причины операций не-человеческих целей показываются
+// как есть (их тексты — не таблица ADR).
+
+// Две «Неизвестно…» причины: длинный префикс стоит первым, первый записан с двоеточием,
+// как в таблице ADR. Каждой из этих мер по отдельности достаточно, чтобы их различить; без обеих
+// вторая причина показала бы текст первой — тест-таблица ADR на этом краснеет.
+const INBOX_REASON_PREFIXES: Array<[string, WikiInboxReasonCode]> = [
+  ['Неизвестно, когда написан источник утверждения', 'target_time_unknown'],
+  ['Неизвестно, когда написан источник:', 'source_time_unknown'],
+  ['Источник старше вашей правки', 'source_older_than_edit'],
+  ['Источник не новее заменяемого утверждения', 'source_not_newer'],
+  ['страницу откатили вручную', 'recently_reverted'],
+  ['класс правки', 'class_disabled'],
+];
+
+// Короткие тексты пунктов — правая колонка таблицы ADR-038, дословно.
+export const INBOX_REASON_TEXT: Record<WikiInboxReasonCode, string> = {
+  source_time_unknown: 'Неизвестно, когда написан источник',
+  source_older_than_edit: 'Источник старше вашей правки',
+  target_time_unknown: 'Неизвестно, когда написан источник утверждения',
+  source_not_newer: 'Источник не новее заменяемого утверждения',
+  recently_reverted: 'Вы недавно откатывали эту страницу',
+  class_disabled: 'Класс выключен',
+};
+
+export const INBOX_TEXT = {
+  // Подпись сверху списка — ADR-038 («Что поменять в макете», п. 4), дословно
+  caption: 'Остальное, включая замену ваших формулировок новыми источниками, ИИ применил сам — это видно в «Журнале».',
+  // Запасной текст для нераспознанного начала причины: нейтральный, без сырой строки
+  unknown: 'ИИ не смог применить это сам',
+} as const;
+
+export function isHumanTargetClass(classKey: string): boolean {
+  return classKey.endsWith('@human');
+}
+
+export function wikiInboxReasonCode(reason: string | null | undefined): WikiInboxReasonCode | null {
+  if (!reason) return null;
+  for (const [prefix, code] of INBOX_REASON_PREFIXES) {
+    if (reason.startsWith(prefix)) return code;
+  }
+  return null;
+}
+
+export function wikiInboxReasonText(reason: string | null | undefined): string {
+  const code = wikiInboxReasonCode(reason);
+  return code ? INBOX_REASON_TEXT[code] : INBOX_TEXT.unknown;
+}
 
 // ─── Секция «Заметки» страницы (F5a; подпись — макет и записка notes-wiki-unified-v1, §6) ───
 

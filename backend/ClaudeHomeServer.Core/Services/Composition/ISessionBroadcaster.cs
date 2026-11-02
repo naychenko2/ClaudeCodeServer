@@ -130,7 +130,7 @@ public static class SessionBroadcasterExtensions
         // Явно переданный резолвер главнее; иначе берём тот, что несёт сам вещатель.
         if (broadcaster is IChatVisibilitySource source)
         {
-            // ПРОБА ГЛЕБА: sessions ??= source.Sessions;  (шов не подставляет каталог)
+            sessions ??= source.Sessions;
             projects ??= source.Projects;
         }
         if (string.IsNullOrEmpty(projectId))

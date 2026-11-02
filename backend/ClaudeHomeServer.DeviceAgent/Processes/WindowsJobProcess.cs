@@ -91,9 +91,16 @@ internal sealed class WindowsJobProcess : TurnProcess
     {
         if (Interlocked.Exchange(ref _killed, 1) == 1) return;
         var terminated = !_job.IsClosed && TerminateJobObject(_job, 1);
-        // Запасной путь: job не сработал либо часть дерева успела родиться до посадки в job
-        if (!terminated || !LeaderAlive()) KillTreeFallback();
+        if (NeedKillTreeFallback(terminated, LeaderAlive())) KillTreeFallback();
     }
+
+    /// <summary>
+    /// Нужно ли запасное гашение: job не сработал либо часть дерева успела родиться до
+    /// посадки лидера в job. Потомки, рождённые до посадки, — не члены job, KILL_ON_JOB_CLOSE
+    /// их не берёт; они живы ровно пока жив лидер. Решение вынесено сюда, чтобы таблица
+    /// проверялась тестом без Windows (ветка Windows в CI на Linux пропущена).
+    /// </summary>
+    internal static bool NeedKillTreeFallback(bool terminated, bool leaderAlive) => !terminated || leaderAlive;
 
     public override void Dispose()
     {

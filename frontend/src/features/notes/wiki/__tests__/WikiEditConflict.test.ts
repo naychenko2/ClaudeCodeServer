@@ -149,7 +149,7 @@ describe('Сравнение «Моё / ИИ / Было»', () => {
     await intoConflict(c);
     const t = texts(byId(c, 'wiki-edit-conflict')!);
     expect(t).toContain('Страница изменилась, пока вы правили');
-    for (const s of ['Моё', 'ИИ', 'Было, когда вы начали', 'Взять мою версию поверх', 'Взять версию ИИ', 'Продолжить правку']) expect(t).toContain(s);
+    for (const s of ['Моё', 'ИИ', 'Было, когда вы начали', 'Оставить моё', 'Взять их', 'Слить вручную']) expect(t).toContain(s);
     expect(texts(byId(c, 'wiki-conflict-col-was')!)).toContain('Ведёт ревью.');
     expect(texts(byId(c, 'wiki-conflict-col-mine')!)).toContain('Моя правка');
     expect(texts(byId(c, 'wiki-conflict-col-ai')!)).toContain('ИИ: ведёт ревью кода.');
@@ -165,7 +165,44 @@ describe('Сравнение «Моё / ИИ / Было»', () => {
     expect(posts).toHaveLength(2);
     expect(posts[1].baseHash).toBe('h9');
     expect(String(posts[1].content)).toContain('Моя правка');
+    // правки ИИ в разделе, где человек не правил, не откатываются снимком на старой базе
+    expect(String(posts[1].content)).toContain('Почта и чат.');
     expect(onDone).toHaveBeenCalledWith({ kind: 'saved' });
+  });
+
+  it('правка во время сравнения: поля заблокированы, «Моё» и payload берут актуальные правки', async () => {
+    transport((_b, n) => (n === 1 ? refusal(409, conflictBody(AI1, 'h9')) : Promise.resolve({ status: 'applied', hash: 'h10', content: 'x' })));
+    const c = mountEditor();
+    await intoConflict(c);
+    const ta = allNodes(byId(c, 'wiki-edit-item-0')!).find(n => n.nodeName === 'TEXTAREA')!;
+    expect((reactProps(ta) as { disabled?: boolean }).disabled).toBe(true);
+    typeInto(c, 0, 'Правка во время сравнения');
+    expect(texts(byId(c, 'wiki-conflict-col-mine')!)).toContain('Правка во время сравнения');
+    click(byId(c, 'wiki-conflict-take-mine'), 'Взять мою');
+    await settle();
+    expect(String(posts[1].content)).toContain('Правка во время сравнения');
+    expect(String(posts[1].content)).not.toContain('Моя правка');
+  });
+
+  it('пустая колонка «Моё»: «вы убрали это утверждение»', async () => {
+    transport(() => refusal(409, conflictBody(TEXT.replace('- Почта.', '- ИИ.'), 'h9')));
+    const c = mountEditor();
+    const row = byId(c, 'wiki-edit-item-2')!;
+    const trash = findNodeByAttr(row, 'aria-label', 'Убрать утверждение');
+    click(trash, 'Убрать');
+    click(byId(c, 'wiki-edit-remove-ok-2'), 'Убрать ок');
+    click(byId(c, 'wiki-edit-save'), 'Сохранить');
+    await settle();
+    expect(texts(byId(c, 'wiki-conflict-col-mine')!)).toContain('вы убрали это утверждение');
+  });
+
+  it('пустая колонка ИИ: раздела у ИИ нет — «раздела здесь нет»', async () => {
+    transport(() => refusal(409, conflictBody(TEXT.replace('\n## Контакты\n- Почта.\n', ''), 'h9')));
+    const c = mountEditor();
+    typeInto(c, 2, 'Моя почта.');
+    click(byId(c, 'wiki-edit-save'), 'Сохранить');
+    await settle();
+    expect(texts(byId(c, 'wiki-conflict-col-ai')!)).toContain('раздела здесь нет');
   });
 
   it('«Взять версию ИИ»: выход из правки без записи', async () => {

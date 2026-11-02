@@ -170,12 +170,16 @@ export function WikiPageEditor({ section, pageKey, content, hash, footnotes, onD
   const [ask, setAsk] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<Refusal | null>(null);
-  const [conflict, setConflict] = useState<Conflict | null>(null);
+  // Хранится только свежая версия: «Моё» собирается из актуальных правок при каждом рендере
+  const [conflict, setConflict] = useState<{ theirs: Conflict['theirs'] } | null>(null);
 
   const patch = (id: number, e: EditEntry) => setEdits(prev => new Map(prev).set(id, { ...prev.get(id), ...e }));
   const textOf = (it: EditItem) => edits.get(it.id)?.text ?? it.text;
   const changed = (it: EditItem) => it.editable && textOf(it).trim() !== it.text;
   const goneOf = (it: EditItem) => edits.get(it.id)?.gone === true;
+
+  const notesArg = notesEdit === null ? undefined : notesText;
+  const locked = busy || conflict !== null;
 
   const blank = items.some(it => it.editable && !goneOf(it) && textOf(it).trim() === '');
   const dirty = notesChanged || items.some(it => it.editable && (goneOf(it) || changed(it)));
@@ -197,7 +201,8 @@ export function WikiPageEditor({ section, pageKey, content, hash, footnotes, onD
       if (idRef.current !== startId) return;
       if (e instanceof WikiError && e.code === 'wiki_page_changed') {
         // Пока шло сравнение, пришёл ещё пакет ИИ: ничего не записано, показываем новое сравнение
-        setConflict({ mine, theirs: e.page });
+        setConflict({ theirs: e.page });
+        setAsk(null);
       } else if (e instanceof WikiError && e.code === 'wiki_unified_off') {
         onDoneRef.current({ kind: 'off' });
       } else if (e instanceof WikiError && e.code === 'wiki_edit_invalid') {
@@ -216,13 +221,15 @@ export function WikiPageEditor({ section, pageKey, content, hash, footnotes, onD
 
   const save = () => {
     if (conflict || blank) return;
-    void submit(base.hash, buildContent(base.content, edits, notesEdit === null ? undefined : notesText));
+    void submit(base.hash, buildContent(base.content, edits, notesArg));
   };
 
-  // Только по явному клику: текст человека поверх свежей версии (baseHash — её хэш, не старый)
+  // Только по явному клику: правки человека переносятся на свежую версию (правки ИИ в
+  // незатронутых разделах остаются), baseHash — её хэш, не старый
   const takeMine = () => {
-    if (!conflict?.theirs) return;
-    void submit(conflict.theirs.hash, conflict.mine);
+    const t = conflict?.theirs;
+    if (!t) return;
+    void submit(t.hash, buildContent(t.content, rebaseEdits(base.content, t.content, edits), notesArg));
   };
 
   const takeAi = () => {
@@ -274,7 +281,7 @@ export function WikiPageEditor({ section, pageKey, content, hash, footnotes, onD
 
       {conflict && (
         <WikiEditConflict
-          conflict={conflict}
+          conflict={{ mine: buildContent(base.content, edits, notesArg), theirs: conflict.theirs }}
           was={base.content}
           busy={busy}
           onTakeMine={takeMine}
@@ -313,7 +320,7 @@ export function WikiPageEditor({ section, pageKey, content, hash, footnotes, onD
                 gone={goneOf(it)}
                 asking={ask === it.id}
                 aiWarn={isAi(it) && changed(it)}
-                disabled={busy}
+                disabled={locked}
                 isMobile={isMobile}
                 onText={v => patch(it.id, { text: v.replace(/\s*\n\s*/g, ' ') })}
                 onAsk={() => setAsk(it.id)}
@@ -326,7 +333,7 @@ export function WikiPageEditor({ section, pageKey, content, hash, footnotes, onD
         </section>
       ))}
 
-      <WikiNotesEditor value={notesText} disabled={busy} isMobile={isMobile} onChange={setNotesEdit} />
+      <WikiNotesEditor value={notesText} disabled={locked} isMobile={isMobile} onChange={setNotesEdit} />
     </div>
   );
 }
@@ -347,7 +354,7 @@ function EditRow({ it, text, gone, asking, aiWarn, disabled, isMobile, onText, o
     return (
       <div data-testid={tid} data-gone="true" style={{ display: 'flex', alignItems: 'center', gap: SP.sm, padding: SP.sm, background: C.bgInset, borderRadius: R.md }}>
         <span style={{ flex: 1, minWidth: 0, fontSize: FS.md, color: C.textMuted, textDecoration: 'line-through', overflowWrap: 'anywhere' }}>{it.text}</span>
-        <Button variant="ghost" size={isMobile ? 'md' : 'sm'} dataTestId={`wiki-edit-restore-${it.id}`} leftIcon={<Undo2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />} onClick={onBack}>
+        <Button variant="ghost" size={isMobile ? 'md' : 'sm'} disabled={disabled} dataTestId={`wiki-edit-restore-${it.id}`} leftIcon={<Undo2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />} onClick={onBack}>
           {EDIT_TEXT.restore}
         </Button>
       </div>

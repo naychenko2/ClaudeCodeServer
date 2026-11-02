@@ -58,11 +58,11 @@ const VERDICT_TEXT: Record<SectionVerdict, string> = {
   same: EDIT_TEXT.conflictSame,
 };
 
-function Column({ testId, label, lines, was, tint }: { testId: string; label: string; lines: string[]; was: string[]; tint?: boolean }) {
+function Column({ testId, label, lines, was, tint, empty }: { testId: string; label: string; lines: string[]; was: string[]; tint?: boolean; empty: string }) {
   return (
     <div data-testid={testId} style={{ minWidth: 0, padding: SP.sm, borderRadius: R.md, background: tint ? C.accentLight : C.bgInset }}>
       <div style={{ fontSize: FS.xs, fontWeight: 600, color: C.textMuted, marginBottom: SP.xs }}>{label}</div>
-      {lines.length === 0 && <div style={{ fontSize: FS.sm, color: C.textMuted }}>{EDIT_TEXT.conflictRemoved}</div>}
+      {lines.length === 0 && <div style={{ fontSize: FS.sm, color: C.textMuted }}>{empty}</div>}
       {lines.map((l, i) => (
         <div
           key={i}
@@ -128,9 +128,9 @@ export function WikiEditConflict({ conflict, was, busy, onTakeMine, onTakeAi, on
                 <span style={{ fontSize: FS.sm, color: C.warningText }}>{VERDICT_TEXT[r.verdict]}</span>
               </div>
               <div style={{ display: 'grid', gap: SP.sm, gridTemplateColumns: isMobile ? 'minmax(0,1fr)' : 'repeat(3, minmax(0,1fr))' }}>
-                <Column testId="wiki-conflict-col-mine" label={EDIT_TEXT.conflictMine} lines={r.mine} was={r.was} tint />
-                <Column testId="wiki-conflict-col-ai" label={EDIT_TEXT.conflictAi} lines={r.ai} was={r.was} />
-                <Column testId="wiki-conflict-col-was" label={EDIT_TEXT.conflictWas} lines={r.was} was={r.was} />
+                <Column testId="wiki-conflict-col-mine" label={EDIT_TEXT.conflictMine} lines={r.mine} was={r.was} tint empty={EDIT_TEXT.conflictMineRemoved} />
+                <Column testId="wiki-conflict-col-ai" label={EDIT_TEXT.conflictAi} lines={r.ai} was={r.was} empty={EDIT_TEXT.conflictRemoved} />
+                <Column testId="wiki-conflict-col-was" label={EDIT_TEXT.conflictWas} lines={r.was} was={r.was} empty={EDIT_TEXT.conflictRemoved} />
               </div>
             </div>
           ))}

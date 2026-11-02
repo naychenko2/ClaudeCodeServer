@@ -64,13 +64,14 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 //   «Входящих».
 // - Лимит пакетов за ночь, упёртый раньше времени, даёт outcome=budget; open_limit — только упор в
 //   лимит ОТКРЫТЫХ пакетов (WikiPackage.MaxOpenPackages). Пакеты чата прибавляются пачкой: чат,
-//   давший пакеты сверх остатка (ночного или по разделу), — последний в ночи, его пакеты остаются
-//   в Хранителе (не откатывать); при остатке 0 чат не начинается.
-// - Облако: HasRoute-проверка до вызова не пускает ночь, когда локальный движок места недоступен
-//   (outcome=error, повтор следующим тиком). Падение локали ПОСРЕДИ вызова модели
-//   WikiIngestService/WikiChatStage2 (RunDetailedAsync) всё ещё может уйти в облако по цепочке
-//   раннера — закрыть это значит перевести общие вызовы на RunLocalOrChosenAsync (теряется
-//   Usage), эту развилку шаг не решает (описана в отчёте).
+//   давший пакеты сверх остатка ночи, — последний в ночи, его пакеты остаются в Хранителе
+//   (не откатывать); превышение остатка раздела закрывает только его раздел — его последующие чаты
+//   пропускаются, ночь идёт по другим разделам (решение 02.11); при остатке 0 чат не начинается.
+// - Облако: ночной разбор и ступень 2 в облако не уходят (решение Андрея 02.11): WikiIngestService
+//   (ключ wiki-nightly) и WikiChatStage2 зовут модель через RunLocalOrChosenAsync, без финального
+//   claude-шага. Падение или недоступность локали — отказ вызова: окно разбора уходит в Rejected
+//   и курсор не двигается, ступень 2 оставляет чат серым. Расход по этим вызовам не учитывается.
+//   Кнопка «Разобрать» и агент wiki_ingest не затронуты — облако там допустимо.
 public sealed class WikiNightlyService : BackgroundService
 {
     public const string OutcomeCompleted = "completed";
@@ -394,12 +395,11 @@ public sealed class WikiNightlyService : BackgroundService
                 packagesNight += made;
                 packagesBySection[c.Home] = packagesBySection.GetValueOrDefault(c.Home) + made;
                 // Пакеты чата прибавляются пачкой и уже лежат в Хранителе — их не откатывать.
-                // Превышение остатка этим чатом допустимо, но он — последний в ночи: дальше не идти.
-                if (packagesNight > cfgNow.MaxPackagesPerNight || packagesBySection[c.Home] > cfgNow.MaxPackagesPerSection)
-                {
-                    outcome = OutcomeBudget;
-                    break;
-                }
+                // Превышение остатка этим чатом допустимо. Лимит ночи — конец ночи: outcome=budget,
+                // дальше не идти. Лимит раздела закрывает только его раздел: счётчик раздела уже
+                // выше лимита, его последующие чаты отсекает предпроверка (как раздел с нулевым
+                // остатком), ночь продолжает по другим разделам, итог остаётся completed.
+                if (packagesNight > cfgNow.MaxPackagesPerNight) { outcome = OutcomeBudget; break; }
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }

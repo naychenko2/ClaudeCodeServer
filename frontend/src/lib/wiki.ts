@@ -892,9 +892,29 @@ export interface WikiLastNight {
   outcome: WikiNightlyOutcome;
 }
 
-// Ночная часть настроек: состояние блока «Ночной разбор» на экране. autoApplyEnabled/classes —
-// блок «Применение» (S7d-1), их здесь нет.
+// Класс правок «origin×op» (ключ — форма бэкового WikiPackage.ClassKey, без пробелов) с
+// состоянием политики и замером оценки: Applied{N}/Retracted{N} — числа, Share{N} — уже
+// процент (WikiClassHealth.ClassStat: «доля, процент»). Замер несёт только GET-оценка;
+// PUT возвращает классы без него (нулями). reason — текст выключения человеческим языком
+// (автовыключение пишет оценка, ручное — «класс выключен человеком», WikiSettingsController.cs:139-143).
+export interface WikiApplyClassDto {
+  class: string;
+  disabled: boolean;
+  reason: string | null;
+  disabledAt: string | null;
+  resumedAt: string | null;
+  applied7: number;
+  retracted7: number;
+  share7: number;
+  applied30: number;
+  retracted30: number;
+  share30: number;
+}
+
+// Снимок настроек целиком: блок «Применение» (S7d-1) и блок «Ночной разбор» (Ф2) одной ручки.
 export interface WikiSettingsSnapshot {
+  autoApplyEnabled: boolean;
+  classes: WikiApplyClassDto[];
   nightly: WikiNightlySettings;
   lastNight: WikiLastNight | null;
 }
@@ -919,13 +939,67 @@ function readLastNight(body: unknown): WikiLastNight | null {
     : null;
 }
 
+const numOr0 = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+const strOrNull = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+
+function readApplyClass(raw: unknown): WikiApplyClassDto | null {
+  const c = raw as Record<string, unknown> | null;
+  if (typeof c?.class !== 'string' || !c.class) return null;
+  return {
+    class: c.class,
+    disabled: c.disabled === true,
+    reason: strOrNull(c.reason),
+    disabledAt: strOrNull(c.disabledAt),
+    resumedAt: strOrNull(c.resumedAt),
+    applied7: numOr0(c.applied7), retracted7: numOr0(c.retracted7), share7: numOr0(c.share7),
+    applied30: numOr0(c.applied30), retracted30: numOr0(c.retracted30), share30: numOr0(c.share30),
+  };
+}
+
+// Часть «Применение» ответа. Текущий бэк сериализует поля всегда (WikiSettingsDto), но
+// отсутствующее поле читается как «выключено»/«нет классов» — тот же приём, что отсутствующий
+// lastNight в Ф1 («итога не было»): старый бэк без полей не должен становиться ошибкой
+// всех настроек, а выключенное направление — безопасное (ничего само не применяется).
+function readApplyPart(body: unknown): Pick<WikiSettingsSnapshot, 'autoApplyEnabled' | 'classes'> {
+  const b = body as { autoApplyEnabled?: unknown; classes?: unknown } | null;
+  const classes = Array.isArray(b?.classes)
+    ? b.classes.map(readApplyClass).filter((c): c is WikiApplyClassDto => c !== null)
+    : [];
+  return { autoApplyEnabled: b?.autoApplyEnabled === true, classes };
+}
+
+// Ответ PUT несёт состояния классов БЕЗ замера («Замер не возвращается: он читается GET после
+// действия», WikiSettingsController.cs:94) и НЕ все классы: его класс-часть строится из
+// settings.Classes, где запись есть только у когда-либо выключавшегося класса
+// (BuildDto(next, [], null), :185, :206–214), тогда как GET отдаёт union записей и замера
+// оценки (:215–222). Поэтому множество классов снимка — union ответа и последнего чтения:
+// строки ответа приоритетны для классов, которых PUT касается (без class классы не трогает,
+// :130–145), строки прежнего чтения — активные без записи — сохраняются как есть. Иначе правка,
+// не касающаяся классов (смена окна ночи), оставила бы блок «Применение» без активных классов
+// до следующей перечитки. Экран не должен терять и измеренное: доли того же класса сохраняются
+// от последнего чтения — следующие их обновит перечитка GET. Порядок — по ключу класса, как его
+// отдаёт бэк (OrderBy Ordinal, :226): между ответом и перечиткой список не переставляется.
+function mergeClassStats(
+  next: WikiApplyClassDto[], prev: readonly WikiApplyClassDto[] | undefined,
+): WikiApplyClassDto[] {
+  if (!prev?.length) return next;
+  const byKey = new Map<string, WikiApplyClassDto>(prev.map(c => [c.class, c]));
+  for (const c of next) {
+    const p = byKey.get(c.class);
+    byKey.set(c.class, p
+      ? { ...c, applied7: p.applied7, retracted7: p.retracted7, share7: p.share7, applied30: p.applied30, retracted30: p.retracted30, share30: p.share30 }
+      : c);
+  }
+  return [...byKey.values()].sort((a, b) => (a.class < b.class ? -1 : a.class > b.class ? 1 : 0));
+}
+
 export async function loadWikiSettings(): Promise<WikiSettingsSnapshot> {
   const gen = ++_settingsGen;
   const owner = readStoredUserId();
   const body = await wikiHttp<unknown>('/wiki/settings');
   const nightly = readNightly(body);
   if (!nightly) throw new WikiError(0, null, 'неожиданный ответ настроек вики');
-  const snap: WikiSettingsSnapshot = { nightly, lastNight: readLastNight(body) };
+  const snap: WikiSettingsSnapshot = { ...readApplyPart(body), nightly, lastNight: readLastNight(body) };
   // Устаревший ответ или ответ чужого владельца в снимок не пишется (M1/M2)
   if (gen === _settingsGen && owner === readStoredUserId()) {
     _settings = snap;
@@ -978,7 +1052,12 @@ export async function putWikiNightly(patch: WikiNightlyPatch): Promise<WikiPutNi
     }
     return { ok: false, error: new WikiError(0, null, 'неожиданный ответ настроек вики') };
   }
+  const apply = readApplyPart(body);
   const snap: WikiSettingsSnapshot = {
+    ...apply,
+    // PUT не несёт замера классов (шапка mergeClassStats): ночная правка не должна обнулять
+    // доли блока «Применение» — они доживают до следующей перечитки GET
+    classes: mergeClassStats(apply.classes, prev?.classes),
     nightly,
     // lastNight — только из GET (N7c): ответ PUT его не несёт, и молча обнулять прочитанное
     // нечем — поле сохраняется от последнего чтения
@@ -991,6 +1070,87 @@ export async function putWikiNightly(patch: WikiNightlyPatch): Promise<WikiPutNi
     emit();
   }
   return { ok: true, snapshot: snap };
+}
+
+// ─── «Применение»: общий выключатель и возврат класса (S7d-1) ───
+// Те же ручки и тот же слот, что у ночной правки: оптимистичное изменение, ответ подтверждает,
+// отказ откатывает; поколение и привязка к владельцу — как у putWikiNightly. Отличие одно:
+// PUT не несёт замера классов, а блок «Применение» обязан показывать текущую долю (шапка
+// контроллера) — поэтому после подтверждённой правки настройки перечитываются GET'ом
+// («он читается GET после действия», WikiSettingsController.cs:94). Сбой перечитки не отменяет
+// действие: в сторе остаётся состояние ответа с долями последнего чтения.
+
+export type WikiPutSettingsResult = WikiPutNightlyResult;
+
+async function putApplySettings(
+  body: Record<string, unknown>,
+  optimistic: (prev: WikiSettingsSnapshot) => WikiSettingsSnapshot,
+): Promise<WikiPutSettingsResult> {
+  const gen = ++_settingsGen;
+  const owner = readStoredUserId();
+  const prev = _settings;
+  // Оптимистично, как тумблер ночи: значение видно сразу, ответ подтвердит или откатит
+  if (prev) {
+    _settings = optimistic(prev);
+    emit();
+  }
+  let resp: unknown;
+  try {
+    resp = await wikiHttp<unknown>('/wiki/settings', { method: 'PUT', body: JSON.stringify(body) });
+  } catch (e) {
+    if (gen === _settingsGen && owner === readStoredUserId()) {
+      _settings = prev;
+      emit();
+    }
+    const we = toWikiError(e);
+    if (!we) throw e; // сетевой сбой/таймаут — не отказ контракта: наружу как есть
+    return { ok: false, error: we };
+  }
+  const nightly = readNightly(resp);
+  if (!nightly) {
+    if (gen === _settingsGen && owner === readStoredUserId()) {
+      _settings = prev;
+      emit();
+    }
+    return { ok: false, error: new WikiError(0, null, 'неожиданный ответ настроек вики') };
+  }
+  const apply = readApplyPart(resp);
+  const snap: WikiSettingsSnapshot = {
+    ...apply,
+    classes: mergeClassStats(apply.classes, prev?.classes),
+    nightly,
+    lastNight: prev?.lastNight ?? null, // PUT итога не несёт (N7c) — сохраняется от последнего GET
+  };
+  if (gen === _settingsGen && owner === readStoredUserId()) {
+    _settings = snap;
+    emit();
+  }
+  // Свежий замер — из GET-оценки; её боковой эффект (оценка может выключить перешагнувший
+  // класс) — часть оценки, не это действие. Сбой перечитки молчит: состояние ответа уже записано.
+  await loadWikiSettings().catch(() => undefined);
+  return { ok: true, snapshot: snap };
+}
+
+// Общий выключатель «Применять без ревью» (макет M2): выключенный — всё, включая неспорное,
+// идёт во «Входящие» на решение человека.
+export function putWikiAutoApply(value: boolean): Promise<WikiPutSettingsResult> {
+  return putApplySettings(
+    { autoApplyEnabled: value },
+    prev => ({ ...prev, autoApplyEnabled: value }),
+  );
+}
+
+// «Снова применять само» по ключу класса ('origin×op' — как его отдаёт бэк): PUT с
+// Enable=true — бэк ставит ResumedAt, окно отсчёта класса начинается заново (мера 7).
+// Оптимистичное — то же направление: класс включён, причина снята; ответ подтверждает целым.
+export function resumeWikiApplyClass(classKey: string): Promise<WikiPutSettingsResult> {
+  return putApplySettings(
+    { class: classKey, enable: true },
+    prev => ({
+      ...prev,
+      classes: prev.classes.map(c => (c.class === classKey ? { ...c, disabled: false, reason: null } : c)),
+    }),
+  );
 }
 
 // «Пометить чат» / «снять пометку» (N1b): пометка живёт на чате (Session.WikiMark), не в сторе

@@ -121,12 +121,23 @@ public sealed class WikiChatStage2
             return Refused("в чате нет реплик");
 
         var prompt = PromptHeader + Slice(lines);
-        var result = await _llm.RunDetailedAsync(
-            LocalActionCatalog.WikiTriage, prompt,
-            fallbackModel: null, ownerId, jsonFormat: "json", ct: ct);
-        if (string.IsNullOrWhiteSpace(result.Text))
+        // Решение Андрея 02.11: ступень 2 не уходит в облако. RunLocalOrChosenAsync — цепочка
+        // без финального claude-шага при локальном маршруте; недоступность/сбой локали —
+        // отказ вызова, чат остаётся в серой зоне (stage2Zone не пишется). Расход не
+        // учитывается — решение допускает потерю. Отмена — не сбой, её пробрасываем.
+        string? text;
+        try
+        {
+            text = await _llm.RunLocalOrChosenAsync(
+                LocalActionCatalog.WikiTriage, prompt, ownerId, jsonFormat: "json", ct: ct);
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            return Refused($"модель не ответила: {e.Message}");
+        }
+        if (string.IsNullOrWhiteSpace(text))
             return Refused("модель дала пустой ответ");
-        if (!TryParseVerdict(result.Text, out var hasKnowledge, out var about, out var why))
+        if (!TryParseVerdict(text, out var hasKnowledge, out var about, out var why))
             return Refused("ответ модели не контракт {hasKnowledge, about, reason}");
 
         var zone = hasKnowledge ? WikiChatScorer.ZoneTriage : WikiChatScorer.ZoneSkipped;

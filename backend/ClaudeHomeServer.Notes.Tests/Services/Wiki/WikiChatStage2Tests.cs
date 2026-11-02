@@ -137,6 +137,25 @@ public class WikiChatStage2Tests : IDisposable
         WikiChatsController.ShownZone(e).Should().Be(WikiChatScorer.ZoneGray);
     }
 
+    // Решение Андрея 02.11: недоступность локали посреди вызова — отказ, облако не зовётся.
+    // Мутация «вернуть RunDetailedAsync» (WikiChatStage2.cs): CloudCalls > 0, чат получает вердикт
+    // «спасённый облаком» — тест красный.
+    [Fact]
+    public async Task Отказ_ЛокальУпала_ОблакоНеЗвано_ЧатСерый()
+    {
+        SeedGrayChat();
+        _llm.Throw = new InvalidOperationException("локальная модель недоступна");
+        _llm.CloudRescues = true;
+        _llm.Answer = """{"hasKnowledge":true,"about":"a","reason":"r"}""";
+
+        var res = await Judge();
+
+        res.Outcome.Should().Be(WikiChatStage2.Outcome.Refused, res.Detail);
+        _llm.CloudCalls.Should().Be(0, "ступень 2 в облако не уходит");
+        StoredEntry().Stage2Zone.Should().BeNull("вердикт не пишется");
+        WikiChatsController.ShownZone(StoredEntry()).Should().Be(WikiChatScorer.ZoneGray);
+    }
+
     // ─── 3. c4: живая пометка сильнее отстающей stage1Zone — модель не зовётся ─────────
 
     [Fact]
@@ -415,6 +434,10 @@ public class WikiChatStage2Tests : IDisposable
         public bool Route = true;
         public Exception? Throw;
         public Action? OnCall;
+        // Решение 02.11: облачные входы (RunDetailedAsync/RunAsync) не должны зваться.
+        public int CloudCalls;
+        // Облако «спасло бы»: облачные входы игнорируют Throw — видно, что до него не дошли.
+        public bool CloudRescues;
 
         public bool UsesLocal(string actionKey) => true;
         public bool HasFreeRoute(string actionKey) => Route;
@@ -423,7 +446,7 @@ public class WikiChatStage2Tests : IDisposable
 
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default) =>
-            Task.FromResult(Run(actionKey, prompt, ct));
+            Task.FromResult(RunCloud(actionKey, prompt, ct));
 
         public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
             object? jsonFormat = null, CancellationToken ct = default) =>
@@ -432,7 +455,15 @@ public class WikiChatStage2Tests : IDisposable
         public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
             string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
             int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default) =>
-            Task.FromResult(new OneShotResult(Run(actionKey, prompt, ct), null, 1));
+            Task.FromResult(new OneShotResult(RunCloud(actionKey, prompt, ct), null, 1));
+
+        private string RunCloud(string actionKey, string prompt, CancellationToken ct)
+        {
+            CloudCalls++;
+            if (!CloudRescues) return Run(actionKey, prompt, ct);
+            Calls.Add((actionKey, prompt));
+            return Answer;
+        }
 
         private string Run(string actionKey, string prompt, CancellationToken ct)
         {

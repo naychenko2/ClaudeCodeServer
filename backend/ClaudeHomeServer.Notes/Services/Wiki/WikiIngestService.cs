@@ -546,25 +546,43 @@ public sealed class WikiIngestService
     private async Task<ModelAnswer> CallModelAsync(string prompt, string ownerId, string passName,
         UsageAccumulator usage, CancellationToken ct, string? actionKey)
     {
-        OneShotResult result;
+        // Решение Андрея 02.11: ночной разбор не уходит в облако. Ночь идёт через
+        // RunLocalOrChosenAsync (цепочка без финального claude-шага при локальном маршруте):
+        // падение/недоступность локали посреди вызова — отказ вызова, а не уход в Tier/облако.
+        // Расход по этим вызовам не учитывается (usage шва нет) — решение допускает потерю.
+        // Кнопка «Разобрать» и агент wiki_ingest (actionKey не задан) — человеческие места,
+        // облако там допустимо: прежний путь с учётом расхода.
+        var noCloud = actionKey == LocalActionCatalog.WikiNightly;
+        string? text;
+        OneShotUsage? used = null;
         try
         {
-            result = await _llm.RunDetailedAsync(
-                actionKey ?? LocalActionCatalog.WikiIngest, prompt,
-                fallbackModel: null, ownerId, jsonFormat: "json", ct: ct);
+            if (noCloud)
+            {
+                text = await _llm.RunLocalOrChosenAsync(
+                    LocalActionCatalog.WikiNightly, prompt, ownerId, jsonFormat: "json", ct: ct);
+            }
+            else
+            {
+                var result = await _llm.RunDetailedAsync(
+                    actionKey ?? LocalActionCatalog.WikiIngest, prompt,
+                    fallbackModel: null, ownerId, jsonFormat: "json", ct: ct);
+                text = result.Text;
+                used = result.Usage;
+            }
         }
         catch (Exception e)
         {
             return new ModelAnswer(null, $"{passName}: модель не ответила: {e.Message}");
         }
-        if (string.IsNullOrWhiteSpace(result.Text))
+        if (string.IsNullOrWhiteSpace(text))
             return new ModelAnswer(null, $"{passName}: модель дала пустой ответ");
-        if (result.Usage is { } u)
+        if (used is { } u)
         {
             usage.InputTokens += u.TotalInputTokens;
             usage.OutputTokens += u.OutputTokens;
         }
-        return new ModelAnswer(result.Text, null);
+        return new ModelAnswer(text, null);
     }
 
     private sealed class UsageAccumulator

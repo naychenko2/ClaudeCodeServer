@@ -45,6 +45,8 @@ public class WikiIngestNoteTests : IDisposable
     private readonly WikiJournalReader _journal;
     private readonly WikiSourceCapture _capture;
     private readonly WikiIngestService _ingest;
+    private readonly WikiApplyService _apply;
+    private readonly WikiNoteTransfer _transfer;
     private readonly NoSpheres _spheres = new();
     private readonly NoSessions _sessions = new();
 
@@ -67,8 +69,9 @@ public class WikiIngestNoteTests : IDisposable
         // экземпляры держатся потому, что их держит конструктор контроллера.
         _lint = new WikiLintService(_notes, _keeper, _spheres, _config, NullLogger<WikiLintService>.Instance);
         _journal = new WikiJournalReader(_notes, _sessions, _config);
-        var apply = new WikiApplyService(_notes, _keeper, _spheres, _config);
-        _ingest = new WikiIngestService(new NothingModel(), _spheres, apply, _config);
+        _apply = new WikiApplyService(_notes, _keeper, _spheres, _config);
+        _ingest = new WikiIngestService(new NothingModel(), _spheres, _apply, _config);
+        _transfer = new WikiNoteTransfer(_notes, _apply, _projects);
         _capture = new WikiSourceCapture(_notes, _projects, _sessions, _config, _keeper);
         // Разбор работает только с заведённой викой (тот же отказ, что у инструмента),
         // поэтому вика владельца заведена: сценарии ниже проверяют путь дальше этого порога.
@@ -240,7 +243,7 @@ public class WikiIngestNoteTests : IDisposable
     {
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", user)], "test"));
-        return new WikiController(_keeper, _projects, _spheres, _lint, _journal, flagsOn ? new WikiFlagOn() : new WikiFlagOff(), _config, _capture, _ingest)
+        return new WikiController(_keeper, _projects, _spheres, _lint, _journal, flagsOn ? new WikiFlagOn() : new WikiFlagOff(), _config, _capture, _ingest, _apply, _transfer)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };

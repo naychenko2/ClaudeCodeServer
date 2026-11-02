@@ -407,7 +407,7 @@ public class WikiControllerPagesTests : IDisposable
 
     private JsonElement PageJson()
     {
-        var res = new WikiController(_keeper, _projects, new NoSpheres(), null!, null!, new Flags(true, true), _config, null!, null!)
+        var res = new WikiController(_keeper, _projects, new NoSpheres(), null!, null!, new Flags(true, true), _config, null!, null!, null!, null!)
         {
             ControllerContext = Ctx(),
         }.Page(_key, _pageKey);

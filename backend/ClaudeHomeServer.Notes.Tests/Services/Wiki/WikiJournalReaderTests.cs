@@ -368,7 +368,7 @@ public class WikiJournalReaderTests : IDisposable
         var keeper = new WikiKeeper(_notes, _config);
         var lint = new WikiLintService(_notes, keeper, new NoSpheres(), _config, NullLogger<WikiLintService>.Instance);
         var (capture, ingest) = IngestGraph(keeper);
-        return new WikiController(keeper, _projects, new NoSpheres(), lint, _reader, flags ?? new FlagOn(), _config, capture, ingest)
+        return new WikiController(keeper, _projects, new NoSpheres(), lint, _reader, flags ?? new FlagOn(), _config, capture, ingest, null!, null!)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
@@ -380,7 +380,7 @@ public class WikiJournalReaderTests : IDisposable
         var keeper = new WikiKeeper(_notes, _config);
         var lint = new WikiLintService(_notes, keeper, new NoSpheres(), _config, NullLogger<WikiLintService>.Instance);
         var (capture, ingest) = IngestGraph(keeper);
-        return new WikiController(keeper, _projects, new NoSpheres(), lint, _reader, new FlagOn(), _config, capture, ingest)
+        return new WikiController(keeper, _projects, new NoSpheres(), lint, _reader, new FlagOn(), _config, capture, ingest, null!, null!)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };

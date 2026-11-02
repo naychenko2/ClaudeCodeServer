@@ -222,7 +222,7 @@ public sealed class WikiKeeper : IWikiRelink
                 // Хэш — байтов с диска, как у записи и adopt: следующая сверка сравнивает то,
                 // что реально лежит в файле.
                 WikiManifest.RecordApplied(root, section,
-                    new Dictionary<string, string> { [pageKey] = Sha256OfBytes(File.ReadAllBytes(full)) });
+                    new Dictionary<string, string> { [pageKey] = WikiBaselines.Save(root, File.ReadAllBytes(full)) });
                 if (!touched.TryGetValue(section, out var pages)) touched[section] = pages = [];
                 pages.Add(pageKey);
                 changed++;
@@ -312,7 +312,7 @@ public sealed class WikiKeeper : IWikiRelink
         // Хэш в манифест — с диска, а не из строки аргумента: следующая сверка сравнивает
         // то, что реально лежит в файле (BOM или чужая кодировка — уже не «то же самое»).
         WikiManifest.RecordApplied(root, sectionKey,
-            new Dictionary<string, string> { [pageKey] = Sha256OfBytes(File.ReadAllBytes(full)) });
+            new Dictionary<string, string> { [pageKey] = WikiBaselines.Save(root, File.ReadAllBytes(full)) });
 
         // Проекции раздела — шаг 6 той же транзакции (решение 4): после записи страницы, под
         // этой же блокировкой раздела (вторая блокировка того же ключа — зависание). В манифест
@@ -340,7 +340,7 @@ public sealed class WikiKeeper : IWikiRelink
         // Тот же хэш байтов диска, что сверяет запись: adopt ровно закрывает дрейф,
         // ничего не переписывая.
         WikiManifest.RecordApplied(root, sectionKey,
-            new Dictionary<string, string> { [pageKey] = Sha256OfBytes(File.ReadAllBytes(full)) });
+            new Dictionary<string, string> { [pageKey] = WikiBaselines.Save(root, File.ReadAllBytes(full)) });
         // policy null: у системной операции нет решения политики — есть только автор (человек).
         WikiManifest.AppendLog(root, "adopt", sectionKey, [pageKey], null, "user", null);
         // Журнал изменился → _log.md раздела перегенерируется (тот же блок, что у adopt).

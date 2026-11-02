@@ -38,6 +38,8 @@ public class WikiControllerTests : IDisposable
     // экземпляры нужны для конструктора, сценарии разбора — в WikiIngestNoteTests.
     private readonly WikiSourceCapture _capture;
     private readonly WikiIngestService _ingest;
+    private readonly WikiApplyService _apply;
+    private readonly WikiNoteTransfer _transfer;
     private readonly NoSpheres _spheres = new();
     private readonly NoSessions _sessions = new();
 
@@ -56,8 +58,9 @@ public class WikiControllerTests : IDisposable
         // S3-3: контроллер держит службу линта (её же зовёт кнопка POST /api/wiki/lint).
         _lint = new WikiLintService(notes, _keeper, _spheres, _config, NullLogger<WikiLintService>.Instance);
         _journal = new WikiJournalReader(notes, _sessions, _config);
-        var apply = new WikiApplyService(notes, _keeper, _spheres, _config);
-        _ingest = new WikiIngestService(new NoopCheapRunner(), _spheres, apply, _config);
+        _apply = new WikiApplyService(notes, _keeper, _spheres, _config);
+        _ingest = new WikiIngestService(new NoopCheapRunner(), _spheres, _apply, _config);
+        _transfer = new WikiNoteTransfer(notes, _apply, _projects);
         _capture = new WikiSourceCapture(notes, _projects, _sessions, _config, _keeper);
     }
 
@@ -403,7 +406,7 @@ public class WikiControllerTests : IDisposable
         var claims = new List<Claim> { new("sub", user) };
         if (serviceToken) claims.Add(new("typ", "svc"));
         http.User = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"));
-        return new WikiController(_keeper, _projects, _spheres, _lint, _journal, flagsOn ? new WikiFlagOn() : new WikiFlagOff(), _config, _capture, _ingest)
+        return new WikiController(_keeper, _projects, _spheres, _lint, _journal, flagsOn ? new WikiFlagOn() : new WikiFlagOff(), _config, _capture, _ingest, _apply, _transfer)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
@@ -412,7 +415,7 @@ public class WikiControllerTests : IDisposable
     private WikiController AnonymousController()
     {
         var http = new DefaultHttpContext(); // User без идентичности — путь боя без токена
-        return new WikiController(_keeper, _projects, _spheres, _lint, _journal, null, _config, _capture, _ingest)
+        return new WikiController(_keeper, _projects, _spheres, _lint, _journal, null, _config, _capture, _ingest, _apply, _transfer)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };

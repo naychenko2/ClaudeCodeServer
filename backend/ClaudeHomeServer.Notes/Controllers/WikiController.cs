@@ -41,13 +41,18 @@ public class WikiController : ControllerBase
     // инструмента wiki_ingest (NotesToolset); регистрация — NotesSubsystem (Singleton).
     private readonly WikiSourceCapture _capture;
     private readonly WikiIngestService _ingest;
+    // B5: «Принять как мою правку» (пакет human из диффа) и «Перенести в вики» (заметка → страница).
+    private readonly WikiApplyService _apply;
+    private readonly WikiNoteTransfer _transfer;
     private readonly IFeatureFlagGate? _flags;
     private readonly string _dataDir;
 
     public WikiController(WikiKeeper keeper, IProjectManager projects, ISphereDirectory spheres,
         WikiLintService lint, WikiJournalReader journal, IFeatureFlagGate? flags, IConfiguration config,
-        WikiSourceCapture capture, WikiIngestService ingest)
+        WikiSourceCapture capture, WikiIngestService ingest, WikiApplyService apply, WikiNoteTransfer transfer)
     {
+        _apply = apply;
+        _transfer = transfer;
         _keeper = keeper;
         _projects = projects;
         _spheres = spheres;
@@ -95,6 +100,13 @@ public class WikiController : ControllerBase
     private const string CodePackagesLimit = "packages_limit";
     private const string CodeNotFound = "not_found";
     private const string CodeNoteId = "wiki_note_id";
+    // B5: режим adopt, серверный гейт совместной правки, исходы переноса заметки.
+    private const string CodeAdoptMode = "wiki_adopt_mode";
+    private const string CodeUnifiedOff = "wiki_unified_off";
+    private const string CodePageChanged = "wiki_page_changed";
+    private const string CodeEditInvalid = "wiki_edit_invalid";
+    private const string CodeNoteTransferred = "wiki_note_transferred";
+    private const string CodeTransferTarget = "wiki_transfer_target";
 
     // Состояния манифеста раздела в контракте (WikiCatalogDto.ManifestState / ответ
     // GET page): закрытый перечень — три состояния WikiManifestState без внутреннего имени.
@@ -261,7 +273,10 @@ public class WikiController : ControllerBase
     // ─── Adopt: «Принять как есть» ──────────────────────────────────────────
 
     /// <summary>Системная операция adopt (ADR-035, решение 6): текущий файл на диске
-    /// принимается в манифест раздела, дрейф снимается, файл не трогается.</summary>
+    /// принимается в манифест раздела, дрейф снимается, файл не трогается. Режимы (ADR-038, §6):
+    /// `as-is` (по умолчанию, без флага) — как выше; `mine` («Принять как мою правку») — дифф
+    /// «манифест → диск» собирается в пакет human, под флагами llm-wiki и notes-wiki-unified,
+    /// baseHash обязателен (sha256 файла, каким его видел человек).</summary>
     [HttpPost("adopt")]
     public async Task<IActionResult> Adopt([FromBody] WikiAdoptRequest? req)
     {
@@ -269,14 +284,45 @@ public class WikiController : ControllerBase
         if (userId is null) return Unauthorized();
         if (IsServiceToken) return ServiceTokenRefusal();
         if (req is null) return BadRequest(new { code = CodeSectionKey, message = "тело запроса не задано" });
+        var mine = req.Mode == "mine";
+        if (req.Mode is not (null or "as-is" or "mine"))
+            return BadRequest(new { code = CodeAdoptMode, message = "режим adopt: as-is или mine" });
+        if (mine && !UnifiedOn(userId)) return UnifiedOffRefusal();
 
         var (key, refusal) = ResolveSection(userId, req.Section);
         if (refusal is not null) return refusal;
         if (string.IsNullOrWhiteSpace(req.Page) || WikiPaths.IsProjection(req.Page) || WikiSections.Parse(req.Page) != key)
             return BadRequest(new { code = CodePageKey, message = "страница должна принадлежать разделу" });
 
-        return OpResult(await _keeper.AdoptAsync(userId, key!, req.Page));
+        if (!mine)
+            return OpResult(await _keeper.AdoptAsync(userId, key!, req.Page));
+        return MineResult(await _apply.AdoptMineAsync(userId, key!, req.Page, req.BaseHash), req.Page);
     }
+
+    // Гейт совместной правки: выключен любой из двух флагов — 409 (как в WikiPagesController).
+    private bool UnifiedOn(string userId) =>
+        _flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) == true
+        && _flags.IsEnabled(userId, FeatureFlagKeys.NotesWikiUnified);
+
+    private IActionResult UnifiedOffRefusal() =>
+        StatusCode(409, new { code = CodeUnifiedOff, message = "правка страниц выключена: функция недоступна" });
+
+    private IActionResult MineResult(WikiApplyService.HumanEditResult res, string page) => res.Outcome switch
+    {
+        WikiApplyService.HumanEditOutcome.Applied =>
+            Ok(new { status = "applied", packageId = res.PackageId, hash = res.Hash, content = res.Content }),
+        WikiApplyService.HumanEditOutcome.Unchanged => Ok(new { status = "unchanged", hash = res.Hash }),
+        WikiApplyService.HumanEditOutcome.Changed => StatusCode(409, new
+        {
+            code = CodePageChanged,
+            message = res.Reason,
+            page = res.Content is null && res.Hash is null ? null : new { pageKey = page, content = res.Content, hash = res.Hash },
+        }),
+        WikiApplyService.HumanEditOutcome.Drift => StatusCode(409, new { code = "wiki_drift", message = res.Reason }),
+        WikiApplyService.HumanEditOutcome.Invalid =>
+            BadRequest(new { code = CodeEditInvalid, message = res.Reason, violations = res.Violations }),
+        _ => StatusCode(409, new { code = "wiki_refused", message = res.Reason }),
+    };
 
     // ─── Удаление раздела-сироты ────────────────────────────────────────────
 
@@ -315,6 +361,9 @@ public class WikiController : ControllerBase
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
         if (IsServiceToken) return ServiceTokenRefusal();
+        // «Перенести в вики» (B5) — не заявка на разбор, а правка человека: свой гейт флагов.
+        if (req?.Transfer == true)
+            return await TransferNote(userId, req);
         if (_flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) != true)
             return StatusCode(409, new { code = CodeLlmWikiOff, message = "заявка не принята: функция выключена" });
         if (req is null || string.IsNullOrWhiteSpace(req.NoteId))
@@ -334,6 +383,36 @@ public class WikiController : ControllerBase
 
         var res = await WikiCardIngest.RunAsync(_ingest, cap, root, userId, HttpContext.RequestAborted);
         return Ok(new { outcome = res.Outcome, packageId = res.PackageId, reason = res.Reason });
+    }
+
+    // «Перенести в вики»: страница human в доме заметки + замена заметки ссылкой (WikiNoteTransfer).
+    private async Task<IActionResult> TransferNote(string userId, WikiIngestNoteRequest req)
+    {
+        if (!UnifiedOn(userId)) return UnifiedOffRefusal();
+        if (string.IsNullOrWhiteSpace(req.NoteId))
+            return BadRequest(new { code = CodeNoteId, message = "нужен id заметки" });
+        if (req.Target is not null)
+            return BadRequest(new { code = CodeTransferTarget, message = "перенос идёт в раздел заметки: target не задаётся" });
+        if (!WikiPaths.IsInitialized(_dataDir, userId))
+            return StatusCode(409, new { code = CodeNotInitialized,
+                message = "вики этого владельца не заведена: перенос работает только с заведённой" });
+
+        var res = await _transfer.TransferAsync(userId, req.NoteId);
+        return res.Outcome switch
+        {
+            WikiNoteTransfer.TransferOutcome.Transferred =>
+                Ok(new { outcome = "transferred", section = res.Section, page = res.Page, packageId = res.PackageId }),
+            WikiNoteTransfer.TransferOutcome.NotFound => NotFound(new { code = CodeNotFound, message = res.Reason }),
+            WikiNoteTransfer.TransferOutcome.AlreadyTransferred =>
+                StatusCode(409, new { code = CodeNoteTransferred, message = res.Reason }),
+            WikiNoteTransfer.TransferOutcome.Exists =>
+                StatusCode(409, new { code = CodePageChanged, message = res.Reason }),
+            WikiNoteTransfer.TransferOutcome.Invalid =>
+                BadRequest(new { code = CodeEditInvalid, message = res.Reason, violations = res.Violations }),
+            WikiNoteTransfer.TransferOutcome.NotTransferable =>
+                BadRequest(new { code = CodeNoteId, message = res.Reason }),
+            _ => StatusCode(409, new { code = "wiki_refused", message = res.Reason }),
+        };
     }
 
     // ─── Здоровье раздела (S3-3) ─────────────────────────────────────────────
@@ -590,13 +669,13 @@ public sealed record WikiCatalogDto(string Key, string? Name, bool Orphan, IRead
 public sealed record WikiInitRequest(string? Section);
 
 /// <summary>«Принять как есть» для страницы раздела.</summary>
-public sealed record WikiAdoptRequest(string Section, string Page);
+public sealed record WikiAdoptRequest(string Section, string Page, string? Mode = null, string? BaseHash = null);
 
 /// <summary>«Разобрать заметку в базу» (S7b0b). NoteId — id заметки: только своей, это
 /// проверяет захват. Target — необязательный явный выбор «common» для источника вне
 /// проекта (ADR-036, решение 3): его проверяет захват (WikiSourceHome), второй таблицы
 /// допустимых target здесь нет.</summary>
-public sealed record WikiIngestNoteRequest(string? NoteId, string? Target = null);
+public sealed record WikiIngestNoteRequest(string? NoteId, string? Target = null, bool Transfer = false);
 
 /// <summary>Запись журнала (S7c-0): событие строки log.jsonl и то, что о нём сказал пакет.
 /// ts/op/section/actor/source/pages — из строки журнала как они записаны; origin — префикс

@@ -106,6 +106,7 @@ public sealed class NotesSubsystem : IAppSubsystem
         // Захват источников (S6h) и разбор чатов «сейчас» (S6e-2): vertical-внутренние типы,
         // как Хранитель; захват раньше в DI не стоял — без него не резолвится его потребитель.
         services.AddSingleton<WikiSourceCapture>();
+        services.AddSingleton<WikiNoteTransfer>();
         services.AddSingleton<WikiChatIngestService>();
         // Откат применённого пакета по прообразам (S4b-3, решение 12г мера 4): вызывается только
         // REST-контроллером («Журнал», кнопка человека); наружу его контракт не выходит.

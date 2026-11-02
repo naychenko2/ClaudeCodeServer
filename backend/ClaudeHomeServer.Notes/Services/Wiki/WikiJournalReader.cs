@@ -179,11 +179,20 @@ public sealed class WikiJournalReader
     }
 
     /// <summary>Операции журнала, считающиеся правкой человека (ADR-038, решение 4): `edit` пакета
-    /// human и `restore` («Вернуть мою»). Режима «adopt как мою правку» в журнале пока нет — `adopt`
-    /// («Принять как есть») правкой не считается; когда режим появится, его op добавляется сюда.
+    /// human и `restore` («Вернуть мою»). `adopt` — только «как мою правку» (B5): его строка несёт
+    /// источник «human:{id пакета}», у «Принять как есть» источника нет и правкой он не считается
+    /// (см. IsHumanEdit).
     /// Откат (`revert`, `retract`) — другой механизм (N7d), его читает ReadRecentHumanReverts.</summary>
     internal static readonly IReadOnlySet<string> HumanEditOps =
         new HashSet<string>(StringComparer.Ordinal) { "edit", "restore" };
+
+    // Строка журнала — правка человека: actor=user и либо op из HumanEditOps, либо `adopt` «как
+    // мою» (источник «human:…» — карточка пакета). Голый `adopt` («Принять как есть») без
+    // источника — не правка: человек принял чужие байты, а не написал утверждения.
+    private static bool IsHumanEdit(Entry e) =>
+        e.Actor == "user"
+        && (HumanEditOps.Contains(e.Op)
+            || (e.Op == "adopt" && e.Source is { } src && src.StartsWith("human:", StringComparison.Ordinal)));
 
     /// <summary>Правка человека: путь страницы → время ПОСЛЕДНЕЙ его правки (ADR-038, решение 4,
     /// условие «источник новее правки»). Весь журнал, без окна: правка защищает формулировку,
@@ -206,7 +215,7 @@ public sealed class WikiJournalReader
             while ((line = reader.ReadLine()) is not null)
             {
                 var e = ParseLine(line);
-                if (e is null || e.Actor != "user" || !HumanEditOps.Contains(e.Op))
+                if (e is null || !IsHumanEdit(e))
                     continue;
                 foreach (var page in e.Pages)
                     if (!result.TryGetValue(page, out var seen) || e.Ts > seen)

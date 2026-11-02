@@ -41,6 +41,8 @@ public sealed record WikiPackage
     // Что сделал пакет автора human — это же значение op строки журнала (actor: user).
     public const string ActionEdit = "edit";
     public const string ActionRestore = "restore";
+    // «Принять как мою правку» (ADR-038, §6): дифф «манифест → диск», собранный в пакет human.
+    public const string ActionAdopt = "adopt";
 
     /// <summary>Решение политики применения: `auto` — применяет код после проверок,
     /// `inbox` — ждёт решения человека («Входящие»). Ставит код (S4d), не модель.</summary>
@@ -244,8 +246,8 @@ public sealed record WikiPackage
         if (p.Author is null || !AuthorValues.Contains(p.Author))
             errors.Add($"автор пакета «{p.Author ?? "null"}» не из перечня {string.Join(", ", AuthorValues)}");
         var isHuman = p.Author == AuthorHuman;
-        if (isHuman && p.Action is not (ActionEdit or ActionRestore))
-            errors.Add($"у пакета human действие «{p.Action ?? "null"}» не из перечня {ActionEdit}, {ActionRestore}");
+        if (isHuman && p.Action is not (ActionEdit or ActionRestore or ActionAdopt))
+            errors.Add($"у пакета human действие «{p.Action ?? "null"}» не из перечня {ActionEdit}, {ActionRestore}, {ActionAdopt}");
         if (!isHuman && p.Action is not null)
             errors.Add("действие (edit/restore) бывает только у пакета human");
         // Null в поле валидного JSON (восстановленный бэкап, ручная правка, частично

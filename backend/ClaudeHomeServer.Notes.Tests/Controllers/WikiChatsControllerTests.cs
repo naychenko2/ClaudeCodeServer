@@ -32,7 +32,13 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // списка/пересчёта — wiki_triage_invalid с текстом «файл разбора чатов не читается».
 // analyze-status: 200 {running, last?{outcome,reason,packageIds,finishedAt}}, чужой чат — 404.
 // Список: строка чата несёт running, cursor, chroniclePath (путь — по формуле сервиса,
-// и только если файл хроники есть на диске — N1, дефект 58ad40a5: после отката — null).
+// и только если файл хроники есть на диске — N1, дефект 58ad40a5: после отката — null)
+// и mark (N1b) — пометку с чата.
+// mark (N1b): 200 {mark} — пометка на чате (SetWikiMark), null — снять; чужой и
+// несуществующий — один 404 с одним текстом (тот же контракт, что у analyze-status);
+// неизвестное значение или пустое тело — 400 {code:"wiki_mark_invalid"}; выключенный
+// флаг — 409 {code:"wiki_llm_wiki_off"} и пометка не сменилась. Порядок проверок ручки:
+// токен → флаг → свой чат → значение.
 public class WikiChatsControllerTests : IDisposable
 {
     private const string User = "u1";
@@ -343,6 +349,102 @@ public class WikiChatsControllerTests : IDisposable
         // «в List» — этот тест красный: проверены литералы контракта, а не константа стора.
     }
 
+    // ─── 10. Пометка чата (N1b): PUT {sessionId}/mark ──────────────────────────
+
+    [Fact]
+    public void Пометка_СвойЧат_200_ПометкаСменилась_ИСнимаетсяNull()
+    {
+        AddSession();
+        var on = Controller().Mark(ChatId, new WikiChatMarkRequest { Mark = WikiMarks.Important });
+        ((IStatusCodeActionResult)on).StatusCode.Should().Be(200);
+        Body(on).GetProperty("mark").GetString().Should().Be(WikiMarks.Important);
+        _sessions.All.Single(s => s.Id == ChatId).WikiMark.Should().Be(WikiMarks.Important,
+            "пометка живёт на чате (SetWikiMark), а не в сторе отбора");
+
+        var off = Controller().Mark(ChatId, new WikiChatMarkRequest { Mark = null });
+        ((IStatusCodeActionResult)off).StatusCode.Should().Be(200);
+        Body(off).GetProperty("mark").ValueKind.Should().Be(JsonValueKind.Null);
+        _sessions.All.Single(s => s.Id == ChatId).WikiMark.Should().BeNull("null — снять пометку");
+    }
+
+    [Fact]
+    public void Пометка_ЧужойИлиНесуществующий_404_ОдинКодИОдинТекст()
+    {
+        AddSession("s-foreign");
+        _sessions.All.Single(s => s.Id == "s-foreign").OwnerId = Foreign;
+
+        var foreign = Controller().Mark("s-foreign", new WikiChatMarkRequest { Mark = WikiMarks.Important });
+        var missing = Controller().Mark("no-such-chat", new WikiChatMarkRequest { Mark = WikiMarks.Important });
+        AssertBody(foreign, 404, WikiChatIngestService.CodeNotFound);
+        AssertBody(missing, 404, WikiChatIngestService.CodeNotFound);
+        // Один 404 на двоих — и тело то же: по ответу нельзя узнать, что чат существует,
+        // но чужой (тот же контракт, что у analyze-status).
+        Body(foreign).ToString().Should().Be(Body(missing).ToString());
+        _sessions.All.Single(s => s.Id == "s-foreign").WikiMark.Should().BeNull(
+            "чужому чату пометка не ставится");
+        // Мутация «убрать проверку владельца» (ResolveOwnerId в Mark): чужой чат получил бы
+        // пометку и 200 — тест красный (c4).
+    }
+
+    [Fact]
+    public void Пометка_НеизвестноеЗначениеИлиПустоеТело_400_ПометкаНеСменилась()
+    {
+        AddSession();
+        AssertBody(Controller().Mark(ChatId, new WikiChatMarkRequest { Mark = "foo" }), 400, "wiki_mark_invalid");
+        AssertBody(Controller().Mark(ChatId, null), 400, "wiki_mark_invalid");
+        _sessions.All.Single(s => s.Id == ChatId).WikiMark.Should().BeNull("отказ — до записи");
+    }
+
+    [Fact]
+    public void Пометка_ФлагВыключен_409_ИПометкаНеСменилась()
+    {
+        AddSession();
+        AssertBody(Controller(flagsOn: false).Mark(ChatId, new WikiChatMarkRequest { Mark = WikiMarks.Skip }),
+            409, "wiki_llm_wiki_off");
+        _sessions.All.Single(s => s.Id == ChatId).WikiMark.Should().BeNull(
+            "при выключенной функции пометка не ставится: отказ раньше записи");
+    }
+
+    [Fact]
+    public async Task ПометкаSkip_ЗатемAnalyze_ОтказMarkedSkip_НольВызововМодели()
+    {
+        AddSession();
+        SetShortHistory();
+        ((IStatusCodeActionResult)Controller().Mark(ChatId, new WikiChatMarkRequest { Mark = WikiMarks.Skip }))
+            .StatusCode.Should().Be(200);
+        AssertBody(await Controller().AnalyzeCore(ChatId, Wait), 409, WikiChatIngestService.CodeMarkedSkip);
+        _llm.Calls.Should().BeEmpty("skip отвергает разбор до единого обращения к модели");
+    }
+
+    [Fact]
+    public void Пометка_НеДвигаетUpdatedAt()
+    {
+        AddSession();
+        var s = _sessions.All.Single(x => x.Id == ChatId);
+        var before = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        s.UpdatedAt = before;
+        ((IStatusCodeActionResult)Controller().Mark(ChatId, new WikiChatMarkRequest { Mark = WikiMarks.Important }))
+            .StatusCode.Should().Be(200);
+        s.UpdatedAt.Should().Be(before,
+            "пометка — настройка чата, не активность: по UpdatedAt идут сортировка и непрочитанность");
+    }
+
+    [Fact]
+    public async Task Список_Несёт_mark_по_помеченному_и_непомеченному_чату()
+    {
+        AddSession();
+        AddSession("s-skip");
+        // Записи стора ставит пересчёт: список — про посчитанные чаты.
+        ((IStatusCodeActionResult)await Controller().Recalculate()).StatusCode.Should().Be(200);
+        ((IStatusCodeActionResult)Controller().Mark("s-skip", new WikiChatMarkRequest { Mark = WikiMarks.Skip }))
+            .StatusCode.Should().Be(200);
+
+        var list = (WikiChatsListDto)((OkObjectResult)Controller().List()).Value!;
+        list.Items.Single(i => i.SessionId == ChatId).Mark.Should().BeNull("у чата пометки нет");
+        list.Items.Single(i => i.SessionId == "s-skip").Mark.Should().Be(WikiMarks.Skip,
+            "список показывает пометку для кнопок в строке (F3): её читает с чата, не со стора");
+    }
+
     // ─── обвязка ──────────────────────────────────────────────────────────────
 
     // WaitAsync возвращается сразу по завершению разбора, поэтому большой потолок не удлиняет
@@ -471,7 +573,17 @@ public class WikiChatsControllerTests : IDisposable
         public Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId) =>
             Task.FromResult<IReadOnlyList<StoredMessage>>(
                 History.TryGetValue(sessionId, out var h) ? h : new List<StoredMessage>());
-        public bool SetWikiMark(string sessionId, string? mark) => true;
+        // Копия поведения SessionManager.SetWikiMark (тест держит контракт шва, а не заглушку):
+        // валидация значения на входе, пометка на чате, UpdatedAt не трогается (настройка,
+        // не активность). false — чата нет или метка неизвестна.
+        public bool SetWikiMark(string sessionId, string? mark)
+        {
+            if (mark is not null && mark != WikiMarks.Important && mark != WikiMarks.Skip) return false;
+            var s = All.FirstOrDefault(x => x.Id == sessionId);
+            if (s is null) return false;
+            s.WikiMark = mark;
+            return true;
+        }
     }
 
     private sealed class WikiFlagOn : ClaudeHomeServer.Services.Composition.IFeatureFlagGate

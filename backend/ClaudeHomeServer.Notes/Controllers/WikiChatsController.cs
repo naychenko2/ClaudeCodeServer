@@ -20,7 +20,10 @@ namespace ClaudeHomeServer.Notes.Controllers;
 // из сервиса, cursor — из стора, дом и путь хроники — из формул сервиса (HomeOf,
 // ChroniclePath), не копированием построения. С N1 (дефект 58ad40a5) chroniclePath —
 // null, если файла хроники нет: после отката фронт должен вести на «Не найдено»,
-// а не на мёртвый путь.
+// а не на мёртвый путь. С N1b (Ф2) список несёт и поле mark — пометку человека с чата
+// (WikiMarks.Important/Skip, null — нет): её ставит PUT {sessionId}/mark этого же
+// контроллера или откат по источнику; живёт она на чате (Session.WikiMark), не в сторе,
+// и зон сама не меняет — ступени отбора и разбор читают её с чата.
 //
 // Образец — WikiPackagesController: [Authorize], владелец только из токена, коды отказов —
 // контракт для фронта. Состояние читается из стора keeper/chat-triage.json (S6e): список
@@ -133,7 +136,10 @@ public class WikiChatsController : ControllerBase
                 e.SessionId, session.Name, zone, e.Score, e.Signals, ShownReason(e),
                 e.NothingNewStreak, e.TriagedAt,
                 _chat.IsRunning(userId, e.SessionId), e.Cursor,
-                ChroniclePathIfExists(WikiChatIngestService.HomeOf(session), e.SessionId, userId)));
+                ChroniclePathIfExists(WikiChatIngestService.HomeOf(session), e.SessionId, userId),
+                // Пометка — свойство чата (его ставит PUT mark или откат по источнику),
+                // список показывает её для кнопок в строке: null — пометки нет.
+                session.WikiMark));
         }
 
         items = items
@@ -153,7 +159,10 @@ public class WikiChatsController : ControllerBase
     /// (их посчитал скорер; список показывает их с приоритетом исхода разбора — ShownZone).
     /// Тело пересчёта — в службе WikiChatRecalc (NA-3: его зовёт и ночной разбор); контроллер
     /// резолвит владельца из токена и отображает итог службы в ответ (409 {code,message} /
-    /// WikiChatsRecalcDto) — прежние строки отказа проходят как есть.</summary>
+    /// WikiChatsRecalcDto) — прежние строки отказа проходят как есть. С N1b (Ф2) тот же
+    /// контроллер обслуживает пометку чата (PUT {sessionId}/mark): «важный» / «не разбирать» /
+    /// снять — настройка на чате (Session.WikiMark), не в сторе; зон она сама не меняет,
+    /// она кормит ими ступени отбора и разбор.</summary>
     [HttpPost("recalculate")]
     public async Task<IActionResult> Recalculate()
     {
@@ -164,6 +173,48 @@ public class WikiChatsController : ControllerBase
         if (!res.Ok)
             return StatusCode(409, new { code = res.Code, message = res.Reason });
         return Ok(new WikiChatsRecalcDto(res.Counted, res.Counts));
+    }
+
+    private const string CodeLlmWikiOff = "wiki_llm_wiki_off";
+    private const string CodeMarkInvalid = "wiki_mark_invalid";
+
+    /// <summary>PUT /api/wiki/chats/{sessionId}/mark — пометка чата человеком (N1b, ADR-035 §12а):
+    /// «важный» (WikiMarks.Important — разбирается всегда, минуя ступени 1–2 отбора), «не
+    /// разбирать» (WikiMarks.Skip — никогда; ту же пометку ставит откат по источнику, §12г мера 5)
+    /// или null — снять. Тело — {mark: "important"|"skip"|null}; пустое тело — 400 (намерения нет).
+    /// Порядок проверок — как у analyze: токен → флаг llm-wiki (409, при отказе пометка не
+    /// меняется) → свой чат (чужой и несуществующий — один 404 с одним текстом, как у
+    /// analyze-status) → значение из WikiMarks (иначе 400). Пометка живёт на чате
+    /// (ISessionDirectory.SetWikiMark → Session.WikiMark), не в сторе: список показывает её
+    /// полем mark, ступени отбора и разбор читают её оттуда же.
+    /// Конкурентность: две смены пометки — последняя побеждает (поле одно, SetWikiMark атомарен
+    /// в SessionManager); пометка, поставленная во время идущего разбора, его не прерывает —
+    /// ничто в прогоне её не отменяет, а следующая заявка (и ночь) прочитает новую пометку
+    /// на своей проверке начала: skip будет отвергнут с marked_skip до обращения к модели. UpdatedAt
+    /// не двигается: пометка — настройка чата, а не активность (SessionManager.SetWikiMark).</summary>
+    [HttpPut("{sessionId}/mark")]
+    public IActionResult Mark(string sessionId, [FromBody] WikiChatMarkRequest? req)
+    {
+        var userId = OwnerOrNull();
+        if (userId is null) return Unauthorized();
+        if (_flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) != true)
+            return StatusCode(409, new { code = CodeLlmWikiOff, message = "пометка не сохранена: функция выключена" });
+
+        var session = _sessions.GetById(sessionId);
+        if (session is null || _sessions.ResolveOwnerId(session) != userId)
+            return NotFound(new { code = WikiChatIngestService.CodeNotFound, message = "чат не существует" });
+
+        if (req is null)
+            return BadRequest(new { code = CodeMarkInvalid, message = "нужно тело {mark: important, skip или null}" });
+        var mark = req.Mark;
+        if (mark is not null && mark != WikiMarks.Important && mark != WikiMarks.Skip)
+            return BadRequest(new { code = CodeMarkInvalid, message = "пометка: important, skip или null (снять)" });
+
+        if (!_sessions.SetWikiMark(sessionId, mark))
+            // Чат исчез между проверкой владельца и записью (гонка с удалением чата):
+            // тот же 404, что и выше; неизвестная метка сюда не доходит — она отвергнута выше.
+            return NotFound(new { code = WikiChatIngestService.CodeNotFound, message = "чат не существует" });
+        return Ok(new { mark });
     }
 
     /// <summary>POST /api/wiki/chats/{sessionId}/analyze — «разобрать этот чат сейчас» (S7b0a,
@@ -253,12 +304,21 @@ public sealed record WikiChatsListDto(IReadOnlyList<WikiChatTriageDto> Items, IR
 /// analyze-status), cursor — курсор разбора из стора (0 — ещё не разбирали), chroniclePath —
 /// путь хроники под pages/ по формуле сервиса, только если файл хроники есть на диске
 /// (null: не-проектный дом, id, не представимый в пути, или файла нет — хронику создаёт
-/// применённый разбор и снимает откат по источнику).</summary>
+/// применённый разбор и снимает откат по источнику); mark — пометка человека с чата
+/// (WikiMarks.Important/Skip, null — пометки нет; её ставит PUT mark или откат по
+/// источнику, поле нужно фронту для кнопок в строке списка).</summary>
 public sealed record WikiChatTriageDto(
     string SessionId, string? Name, string Zone, int? Score,
     IReadOnlyList<WikiTriageSignal>? Signals, string? Reason,
     int NothingNewStreak, DateTimeOffset TriagedAt,
-    bool Running, int Cursor, string? ChroniclePath);
+    bool Running, int Cursor, string? ChroniclePath, string? Mark);
 
 /// <summary>Итог пересчёта: сколько чатов посчитано и counts по зонам.</summary>
 public sealed record WikiChatsRecalcDto(int Counted, IReadOnlyDictionary<string, int> Counts);
+
+/// <summary>Тело PUT mark: mark — «important» / «skip» / null (снять пометку). Других
+/// полей нет; неизвестное значение — 400 (валидация до записи, как в SetWikiMark).</summary>
+public sealed class WikiChatMarkRequest
+{
+    public string? Mark { get; set; }
+}

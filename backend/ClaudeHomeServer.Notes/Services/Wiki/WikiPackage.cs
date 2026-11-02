@@ -153,13 +153,14 @@ public sealed record WikiPackage
         op.Decision == DecisionAuto && ParseClassKey(op.Class) is { HumanTarget: true };
 
     /// <summary>Сколько формулировок человека заменил ИИ сам (`supersede@human`) и на каких страницах
-    /// он сам отметил противоречие (`conflict`, любая цель): пакет → вклад в сводку ночи.
+    /// он сам оспорил утверждение человека (`conflict@human`): пакет → вклад в сводку ночи. Противоречие
+    /// между утверждениями ИИ сюда не входит (ADR-038, предохранители 2 и 6 — про формулировки человека).
     /// Страницы — различные, в порядке операций.</summary>
     public (int Replaced, IReadOnlyList<string> DisputedPages) NightSummary()
     {
         var replaced = Operations.Count(o => o.Op == OpSupersede && IsAutoOverrideOfHuman(o));
         var pages = Operations
-            .Where(o => o.Op == OpConflict && o.Decision == DecisionAuto)
+            .Where(o => o.Op == OpConflict && IsAutoOverrideOfHuman(o))
             .Select(o => o.Page)
             .Distinct(StringComparer.Ordinal)
             .ToList();

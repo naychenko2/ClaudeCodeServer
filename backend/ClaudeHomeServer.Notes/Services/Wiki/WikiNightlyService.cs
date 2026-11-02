@@ -92,7 +92,7 @@ public sealed class WikiNightlyService : BackgroundService
     /// (yyyy-MM-dd); Selected — чатов, прошедших отбор и дельту; Analyzed — разборов, вернувших
     /// исход; Applied — применённых пакетов; ToInbox — чатов с пакетами во «Входящих»; EstTokens —
     /// оценка расхода (см. шапку). OverrodeHuman — формулировок человека, которые ИИ заменил за ночь
-    /// сам; DisputedPages — страниц, где он сам отметил противоречие (ADR-038, предохранитель 6);
+    /// сам; DisputedPages — страниц, где он сам оспорил утверждение человека (conflict@human, ADR-038, предохранитель 6);
     /// в файле итога поля аддитивны: старый итог читается нулями.</summary>
     public sealed record NightResult(
         string Date, int Selected, int Analyzed, int Applied, int ToInbox, long EstTokens, string Outcome,

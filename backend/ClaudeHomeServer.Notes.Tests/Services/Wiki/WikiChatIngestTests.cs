@@ -1147,6 +1147,116 @@ public class WikiChatIngestTests : IDisposable
     // (ShownZone) после применённого разбора — без своей копии цепки разбора. Сервис
     // разбора — отдельный свежий экземпляр (S7b0a: конструктор контроллера его требует):
     // разбора он не начинал, его running/last пусты — список показывает состояние стора.
+    // ── B6 (находка В1): сводка ночи считается по настоящему пакету разбора чата ──────────────
+
+    private const string HumanCardTitle = "Моя правка";
+    private const string AiCardTitle = "Старый чат";
+    private const string HumanOld1 = "Тесты на фронте гоняем вручную перед релизом";
+    private const string HumanOld2 = "Деплой по пятницам запрещён";
+    private const string AiOld1 = "Сборка занимает около десяти минут";
+    private const string AiOld2 = "Релиз выходит раз в месяц";
+    private const string New1 = "Решено: тесты на фронте гоняет CI на каждый пуш";
+    private const string New2 = "Договорились: деплой по пятницам допустим с флагом";
+    private const string New3 = "Выяснили: сборка занимает около четырёх минут";
+    private const string New4 = "Решено: релиз выходит раз в две недели";
+
+    private static string SeedCard(string title, string origin, string refValue, string extra) => $$"""
+        ---
+        type: source
+        origin: {{origin}}
+        ref: {{refValue}}
+        hash: 0123456789012345678901234567890123456789012345678901234567890123
+        captured: 2026-10-01
+        {{extra}}aliases: []
+        owns: []
+        sources: []
+        status: active
+        ---
+
+        # {{title}}
+        """;
+
+    private static string SeedPage(string title, string claim, string cardTitle) => $$"""
+        ---
+        type: topic
+        aliases: []
+        owns: []
+        sources: []
+        status: active
+        ---
+
+        # {{title}}
+
+        ## Сводка
+        {{claim}} [^s1]
+
+        ## Хронология
+
+        ## Противоречия
+
+        ## История
+
+        [^s1]: [[{{cardTitle}}]] — «{{claim}}»
+        """;
+
+    private async Task SeedHumanAndAiTargets()
+    {
+        var dir = "Проекты/p1/" + WikiSourceCapture.SourceDirName + "/";
+        var humanCard = SeedCard(HumanCardTitle, "human", "human:edit-1", "");
+        // Карточка человека — прямой записью с записью в манифест (карточку human кладёт только пакет human).
+        Directory.CreateDirectory(Path.GetDirectoryName(PathOf(dir + HumanCardTitle + ".md"))!);
+        File.WriteAllText(PathOf(dir + HumanCardTitle + ".md"), humanCard, new System.Text.UTF8Encoding(false));
+        WikiManifest.RecordApplied(Root, Section,
+            new Dictionary<string, string> { [dir + HumanCardTitle + ".md"] = WikiManifest.Sha256Hex(humanCard) });
+        var aiCard = SeedCard(AiCardTitle, "session", "session:old#m1-9", "written: 2026-10-01T00:00:00.0000000+00:00\n");
+        (await _keeper.WritePageAsync(User, Section, dir + AiCardTitle + ".md", aiCard)).Status.Should().Be(WikiOpStatus.Applied);
+        foreach (var (title, claim, card) in new[]
+        {
+            ("Один", HumanOld1, HumanCardTitle), ("Два", HumanOld2, HumanCardTitle),
+            ("Три", AiOld1, AiCardTitle), ("Четыре", AiOld2, AiCardTitle),
+        })
+            (await _keeper.WritePageAsync(User, Section, $"Проекты/p1/{title}.md", SeedPage(title, claim, card)))
+                .Status.Should().Be(WikiOpStatus.Applied);
+    }
+
+    [Fact]
+    public async Task СводкаНочи_НастоящийРазбор_СчитаетТолькоАвтозаменыИОспариванияУтвержденийЧеловека()
+    {
+        // Четыре операции в одном пакете: supersede по утверждению человека (считается как замена),
+        // conflict по утверждению человека (считается как «отметил противоречие»), conflict и
+        // supersede по утверждениям ИИ (не считаются). Мутации по одной: «conflict@human как
+        // замена» (в NightSummary), «снять фильтр supersede@human», «ветка Valid в разборе чата
+        // всегда continue» — каждая краснит тест.
+        await SeedHumanAndAiTargets();
+        AddSession();
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        SetHistory(ChatId,
+        [
+            new StoredSessionStartedMessage("claude", "default"),
+            new StoredUserMessage($"{New1}. {New2}. {New3}. {New4}.", timestamp: nowMs),
+            new StoredTextMessage("Принято.", timestamp: nowMs),
+            new StoredUserMessage("Давай.", timestamp: nowMs),
+            new StoredTextMessage("Готово.", timestamp: nowMs),
+        ]);
+        static string C(string t) => $$"""{"text":"{{t}}","quote":"{{t}}"}""";
+        var claimsJson = $$"""{"claims":[{{C(New1)}},{{C(New2)}},{{C(New3)}},{{C(New4)}}]}""";
+        var plan = $$"""
+            {"chronicle":{"about":0,"decided":[0],"learned":[],"open_questions":[]},
+            "operations":[
+            {"op":"supersede","page":"Один","claim":0,"target":"{{HumanOld1}}"},
+            {"op":"conflict","page":"Два","claim":1,"target":"{{HumanOld2}}"},
+            {"op":"conflict","page":"Три","claim":2,"target":"{{AiOld1}}"},
+            {"op":"supersede","page":"Четыре","claim":3,"target":"{{AiOld2}}"}]}
+            """;
+
+        var result = await Sut(new FakeLlm(("A", claimsJson), ("B", plan))).AnalyzeAsync(User, ChatId);
+
+        result.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, result.Reason);
+        File.ReadAllText(PathOf("Проекты/p1/Один.md")).Should().Contain(New1, "замена по человеку применилась сама");
+        result.OverrodeHuman.Should().Be(1, "только supersede@human, применённый ИИ сам");
+        result.DisputedPages.Should().Equal(["Проекты/p1/Два.md"]);
+    }
+
     private WikiChatsController Controller()
     {
         var http = new DefaultHttpContext();

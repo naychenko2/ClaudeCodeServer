@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Mcp.Http;
 using FluentAssertions;

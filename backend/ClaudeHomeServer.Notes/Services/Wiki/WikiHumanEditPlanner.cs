@@ -160,7 +160,7 @@ public static class WikiHumanEditPlanner
     private static List<string> Statements(WikiPage.Section section) =>
         section.Lines.Select(Normalize).Where(t => t.Length > 0).ToList();
 
-    private static string Normalize(string line) =>
+    internal static string Normalize(string line) =>
         string.Join(' ', FootnoteRefRx.Replace(line, "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
     private static string NotesText(WikiPage.Section? notes) =>

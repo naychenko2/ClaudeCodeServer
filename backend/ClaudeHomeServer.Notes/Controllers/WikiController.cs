@@ -213,6 +213,8 @@ public class WikiController : ControllerBase
         {
             pageKey = page,
             content = System.IO.File.ReadAllText(full),
+            // sha256 байтов страницы — baseHash редактора (B3b): сохранение сверяет его под замком раздела.
+            hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.IO.File.ReadAllBytes(full))).ToLowerInvariant(),
             drift = IsDrifted(root, page!, manifest),
             manifestState = ManifestStateOf(manifest.State),
         });

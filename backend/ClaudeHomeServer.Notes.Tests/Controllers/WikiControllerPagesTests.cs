@@ -1,0 +1,442 @@
+using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Notes.Controllers;
+using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Notes.Wiki;
+using ClaudeHomeServer.Services.Spheres;
+using ClaudeHomeServer.Tests.Helpers;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Infrastructure;
+
+namespace ClaudeHomeServer.Tests.Controllers;
+
+// B3b (ADR-038): REST правки страницы человеком — POST /api/wiki/pages/edit и /restore.
+// Контракт: svc-токен — 403 до всего; любой из двух флагов выключен — 409 wiki_unified_off;
+// baseHash сверяется под замком раздела (гонка двух сохранений: один 200, один 409
+// wiki_page_changed со свежей страницей); журнал — op edit|restore, actor user; «Вернуть мою»
+// ссылается на исходную карточку и новой не создаёт. Контроллеры строятся напрямую
+// (контракт действия, не транспорт) — фабрики хоста нет, метка Host не нужна.
+public class WikiControllerPagesTests : IDisposable
+{
+    private const string User = "u1";
+    private const string Statement = "Сервер работает на порту пять тысяч.";
+    private const string AiCard = "Карточка ИИ";
+
+    private readonly string _dir;
+    private readonly string _pages;
+    private readonly IConfiguration _config;
+    private readonly ProjectManager _projects;
+    private readonly WikiKeeper _keeper;
+    private readonly WikiApplyService _apply;
+    private readonly string _key;
+    private readonly string _pageKey;
+
+    public WikiControllerPagesTests()
+    {
+        _dir = Path.Combine(Path.GetTempPath(), "wiki_pages_ctl_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_dir);
+        _config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = Path.Combine(_dir, "projects.json") })
+            .Build();
+        var users = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        _projects = new ProjectManager(_config, users, new AppSettingsService(_config));
+        _pages = WikiPaths.Pages(_dir, User);
+        var notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, null, new Flags(true, true));
+        _keeper = new WikiKeeper(notes, _config);
+        _apply = new WikiApplyService(notes, _keeper, new NoSpheres(), _config);
+
+        var root = Path.Combine(_dir, "repo", User, "Проект");
+        Directory.CreateDirectory(root);
+        var project = _projects.Create("Проект", root, User, User);
+        _key = "projects/" + project.Id;
+        _pageKey = $"Проекты/{project.Id}/Знание.md";
+        SeedAsync().GetAwaiter().GetResult();
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_dir)) Directory.Delete(_dir, recursive: true);
+    }
+
+    // ─── 1. svc-токен — 403 до всего ───────────────────────────────────────
+
+    [Fact]
+    public async Task СервисныйТокен_Edit_403_СтраницаИПакетыНеТронуты()
+    {
+        var before = PageBytes();
+        var res = await Controller(serviceToken: true).Edit(EditReq(Replace(PageText(), Statement, Statement + " Ещё.")));
+        ((IStatusCodeActionResult)res).StatusCode.Should().Be(403);
+        PageBytes().Should().Equal(before, "svc не доходит до записи");
+        PackageFiles().Should().BeEmpty("пакет human создаёт только человек");
+    }
+
+    [Fact]
+    public async Task СервисныйТокен_Restore_403_СтраницаИПакетыНеТронуты()
+    {
+        var before = PageBytes();
+        var res = await Controller(serviceToken: true).Restore(
+            new WikiPageRestoreRequest(_key, _pageKey, PageHash(), "что-то", "иное"));
+        ((IStatusCodeActionResult)res).StatusCode.Should().Be(403);
+        PageBytes().Should().Equal(before);
+        PackageFiles().Should().BeEmpty();
+    }
+
+    // ─── 2. Флаги: выключен любой из двух — 409 wiki_unified_off ───────────
+
+    [Theory]
+    [InlineData(true, false)]  // llm-wiki включён, notes-wiki-unified — нет
+    [InlineData(false, true)]  // notes-wiki-unified включён, llm-wiki — нет
+    [InlineData(false, false)]
+    public async Task Флаг_Выключен_Edit_409_wiki_unified_off(bool llmWiki, bool unified)
+    {
+        var before = PageBytes();
+        var res = await Controller(flags: new Flags(llmWiki, unified)).Edit(EditReq(Replace(PageText(), Statement, Statement + " Ещё.")));
+        AssertCode(res, 409, "wiki_unified_off");
+        PageBytes().Should().Equal(before);
+        PackageFiles().Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task Флаг_Выключен_Restore_409_wiki_unified_off(bool llmWiki, bool unified)
+    {
+        var res = await Controller(flags: new Flags(llmWiki, unified)).Restore(
+            new WikiPageRestoreRequest(_key, _pageKey, PageHash(), "что-то", "иное"));
+        AssertCode(res, 409, "wiki_unified_off");
+        PackageFiles().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task БезТокена_401_ЧужойРаздел_403()
+    {
+        ((IStatusCodeActionResult)await Controller(anonymous: true).Edit(EditReq("x"))).StatusCode.Should().Be(401);
+        Directory.CreateDirectory(Path.Combine(_dir, "repo", "u2"));
+        var foreign = _projects.Create("Чужой", Path.Combine(_dir, "repo", "u2"), "u2", "u2");
+        var res = await Controller().Edit(new WikiPageEditRequest(
+            "projects/" + foreign.Id, $"Проекты/{foreign.Id}/X.md", null, "x"));
+        AssertCode(res, 403, "wiki_foreign");
+    }
+
+    // ─── 3. Правка: пакет human, сноска на карточку, журнал ────────────────
+
+    [Fact]
+    public async Task Edit_ИзменённоеУтверждение_ПрежнееВИстории_НоваяСноскаНаКарточкуHuman_ЖурналEditUser()
+    {
+        var edited = Statement.Replace("тысяч.", "тысяч один.");
+        var res = await Controller().Edit(EditReq(Replace(PageText(), Statement, edited)));
+        var body = Json(res, 200);
+        body.GetProperty("status").GetString().Should().Be("applied");
+        body.GetProperty("hash").GetString().Should().Be(PageHash());
+
+        var page = WikiPage.Parse(PageText()).Model!;
+        page.Sections.Single(s => s.Name == "Сводка").Lines.Should().ContainSingle()
+            .Which.Should().Be(edited + " [^s2]");
+        page.Sections.Single(s => s.Name == "История").Lines.Should().ContainSingle()
+            .Which.Should().Be(Statement + " [^s1]", "прежняя формулировка дословно, со своей сноской");
+        var cardTitle = page.Footnotes[1].Target.Text;
+        page.Footnotes[1].Quote.Should().Be(edited);
+
+        // Карточка правки: origin human, лежит в Источниках раздела, неизменяема, в манифесте.
+        var cards = CardFiles();
+        cards.Should().HaveCount(2, "карточка ИИ и карточка правки");
+        var humanCard = WikiPage.Parse(File.ReadAllText(cards.Single(c => Path.GetFileNameWithoutExtension(c) == cardTitle))).Model!;
+        humanCard.Frontmatter.Origin.Should().Be("human");
+        humanCard.Frontmatter.Hash.Should().Be(WikiManifest.Sha256Hex(edited));
+
+        var line = LastJournalLine();
+        line.GetProperty("op").GetString().Should().Be("edit");
+        line.GetProperty("actor").GetString().Should().Be("user");
+        line.GetProperty("pages").EnumerateArray().Select(p => p.GetString())
+            .Should().Contain(_pageKey);
+
+        // Пакет — автор human, применён; файлы согласованы с манифестом (дрейфа нет).
+        var pkg = WikiPackageStore.List(WikiPaths.Root(_dir, User)).Packages.Single();
+        pkg.Author.Should().Be("human");
+        pkg.Action.Should().Be("edit");
+        pkg.Status.Should().Be(WikiPackage.StatusApplied);
+        PageJson().GetProperty("drift").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Edit_НовоеУтверждение_ДобавляетсяВСекциюСоСноскойНаКарточку()
+    {
+        var res = await Controller().Edit(EditReq(Replace(PageText(), "## Хронология\n", "## Хронология\nЗапустили в ноябре две тысячи двадцать шестого.\n")));
+        Json(res, 200).GetProperty("status").GetString().Should().Be("applied");
+        var page = WikiPage.Parse(PageText()).Model!;
+        page.Sections.Single(s => s.Name == "Хронология").Lines.Should().ContainSingle()
+            .Which.Should().Be("Запустили в ноябре две тысячи двадцать шестого. [^s2]");
+        page.Sections.Single(s => s.Name == "Сводка").Lines.Should().ContainSingle("прежнее не тронуто");
+        LastJournalLine().GetProperty("op").GetString().Should().Be("edit");
+    }
+
+    [Fact]
+    public async Task Edit_УбранноеУтверждение_ВИсториюСПричиной_СамоУтверждениеНеУдалено()
+    {
+        var res = await Controller().Edit(EditReq(Replace(PageText(), Statement + " [^s1]\n", "")));
+        Json(res, 200).GetProperty("status").GetString().Should().Be("applied");
+        var page = WikiPage.Parse(PageText()).Model!;
+        page.Sections.Single(s => s.Name == "Сводка").Lines.Should().BeEmpty();
+        page.Sections.Single(s => s.Name == "История").Lines.Should().ContainSingle()
+            .Which.Should().Be(Statement + " [^s1]");
+        CardFiles().Should().HaveCount(1, "человек ничего не написал — карточки правки нет");
+        var pkg = WikiPackageStore.List(WikiPaths.Root(_dir, User)).Packages.Single();
+        pkg.Operations.Single().Reason.Should().Be("снято человеком");
+    }
+
+    [Fact]
+    public async Task Edit_НовойСтраницы_БезBaseHash_Создаёт()
+    {
+        var newKey = _pageKey.Replace("Знание.md", "Новая.md");
+        var text = "---\ntype: topic\nsummary: про новое\naliases: []\nowns: []\nsources: []\nstatus: active\n---\n\n# Новая\n\n## Сводка\nНовая страница про порт пять тысяч.\n\n## Хронология\n\n## Противоречия\n\n## История\n";
+        var res = await Controller().Edit(new WikiPageEditRequest(_key, newKey, null, text));
+        Json(res, 200).GetProperty("status").GetString().Should().Be("applied");
+        var page = WikiPage.Parse(File.ReadAllText(Path.Combine(_pages, newKey.Replace('/', Path.DirectorySeparatorChar)))).Model!;
+        page.Frontmatter.Summary.Should().Be("про новое");
+        page.Sections.Single(s => s.Name == "Сводка").Lines.Should().ContainSingle()
+            .Which.Should().EndWith("[^s1]");
+        LastJournalLine().GetProperty("op").GetString().Should().Be("edit");
+
+        // Повторное создание той же страницы без baseHash — не перезапись: страница уже есть.
+        AssertCode(await Controller().Edit(new WikiPageEditRequest(_key, newKey, null, text)), 409, "wiki_page_changed");
+    }
+
+    [Fact]
+    public async Task Edit_БезИзменений_200Unchanged_ПакетаНет()
+    {
+        var res = await Controller().Edit(EditReq(PageText()));
+        var body = Json(res, 200);
+        body.GetProperty("status").GetString().Should().Be("unchanged");
+        PackageFiles().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Edit_НарушениеГейта_400СРусскойПричиной_СтраницаИПакетыНеТронуты()
+    {
+        var before = PageBytes();
+        var res = await Controller().Edit(EditReq(Replace(PageText(), Statement, Statement + " См. [[Несуществующая страница]].")));
+        var body = Json(res, 400);
+        body.GetProperty("code").GetString().Should().Be("wiki_edit_invalid");
+        body.GetProperty("message").GetString().Should().Contain("Несуществующая страница");
+        PageBytes().Should().Equal(before);
+        PackageFiles().Should().BeEmpty("сухой прогон до записи: отказанных пакетов нет");
+        CardFiles().Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task Edit_ПравкаКодовогоПоляШапки_400()
+    {
+        var res = await Controller().Edit(EditReq(Replace(PageText(), "status: active", "status: stale")));
+        var body = Json(res, 400);
+        body.GetProperty("message").GetString().Should().Contain("status");
+    }
+
+    // ─── 4. Конкурентность: baseHash под замком раздела ────────────────────
+
+    [Fact]
+    public async Task Edit_ДваСохраненияПоОдномуBaseHash_Параллельно_Один200_Один409()
+    {
+        var hash = PageHash();
+        var a = Replace(PageText(), Statement, Statement.Replace("тысяч.", "тысяч один."));
+        var b = Replace(PageText(), Statement, Statement.Replace("тысяч.", "тысяч два."));
+
+        var results = await Task.WhenAll(
+            Task.Run(() => Controller().Edit(new WikiPageEditRequest(_key, _pageKey, hash, a))),
+            Task.Run(() => Controller().Edit(new WikiPageEditRequest(_key, _pageKey, hash, b))));
+
+        var codes = results.Select(r => ((IStatusCodeActionResult)r).StatusCode).OrderBy(c => c).ToList();
+        codes.Should().Equal(new int?[] { 200, 409 }, "первое проходит под блокировкой раздела, второе видит чужую запись");
+        var loser = results.Single(r => ((IStatusCodeActionResult)r).StatusCode == 409);
+        var body = Json(loser, 409);
+        body.GetProperty("code").GetString().Should().Be("wiki_page_changed");
+        body.GetProperty("page").GetProperty("hash").GetString().Should().Be(PageHash(), "409 несёт свежую версию");
+        body.GetProperty("page").GetProperty("content").GetString().Should().Be(PageText());
+        WikiPackageStore.List(WikiPaths.Root(_dir, User)).Packages.Should().ContainSingle("проигравший пакета не создал");
+    }
+
+    [Fact]
+    public async Task Edit_ПакетИИПрименилсяПослеОткрытияРедактора_409СоСвежейВерсией()
+    {
+        var openedHash = PageHash();
+        var opened = PageText();
+        // «Пакет ИИ»: страница изменена Хранителем после открытия редактора.
+        var aiText = Replace(opened, "## Хронология\n", "## Хронология\nИИ дописал факт про порт.[^s1]\n");
+        (await _keeper.WritePageAsync(User, _key, _pageKey, aiText)).Status.Should().Be(WikiOpStatus.Applied);
+
+        var res = await Controller().Edit(new WikiPageEditRequest(
+            _key, _pageKey, openedHash, Replace(opened, Statement, Statement + " Ещё.")));
+        var body = Json(res, 409);
+        body.GetProperty("code").GetString().Should().Be("wiki_page_changed");
+        body.GetProperty("page").GetProperty("content").GetString().Should().Be(aiText);
+        PageText().Should().Be(aiText, "правка человека поверх чужой не записана");
+    }
+
+    // ─── 5. «Вернуть мою» ──────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Restore_ВозвращаетФормулировкуЧеловека_НаИсходнуюКарточку_НовойНеСоздаёт()
+    {
+        const string human = "Человек утверждает, что порт — пять тысяч.";
+        const string ai = "ИИ утверждает иное про порт.";
+        // Человек добавляет утверждение: появляется карточка правки.
+        Json(await Controller().Edit(EditReq(Replace(PageText(), "## Хронология\n", "## Хронология\n" + human + "\n"))), 200);
+        var humanPage = WikiPage.Parse(PageText()).Model!;
+        var humanCard = humanPage.Footnotes[1].Target.Text;
+        CardFiles().Should().HaveCount(2);
+
+        // ИИ заменяет формулировку человека: действующая — ИИ, человеческая — в «Истории» (как B4b).
+        var m = humanPage;
+        var aiPage = new WikiPage
+        {
+            Title = m.Title,
+            Frontmatter = m.Frontmatter,
+            Sections = m.Sections.Select(sec => sec.Name switch
+            {
+                "Хронология" => new WikiPage.Section { Name = sec.Name, Lines = [ai + " [^s3]"] },
+                "История" => new WikiPage.Section { Name = sec.Name, Lines = [human + " [^s2]"] },
+                _ => sec,
+            }).ToList(),
+            Footnotes = [.. m.Footnotes, new WikiPage.WikiFootnote(new WikiPage.Target(true, AiCard), "ИИ утверждает иное про порт в источнике")],
+        }.Render();
+        (await _keeper.WritePageAsync(User, _key, _pageKey, aiPage)).Status.Should().Be(WikiOpStatus.Applied);
+        var swapped = WikiPage.Parse(PageText()).Model!;
+        swapped.Sections.Single(s => s.Name == "Хронология").Lines.Should().ContainSingle().Which.Should().StartWith(ai);
+
+        var res = await Controller().Restore(new WikiPageRestoreRequest(_key, _pageKey, PageHash(), ai, human));
+        Json(res, 200).GetProperty("status").GetString().Should().Be("applied");
+
+        var restored = WikiPage.Parse(PageText()).Model!;
+        restored.Sections.Single(s => s.Name == "Хронология").Lines.Should().ContainSingle()
+            .Which.Should().Be(human + " [^s2]", "возвращена та же строка с прежней сноской на исходную карточку");
+        restored.Sections.Single(s => s.Name == "История").Lines.Should().Contain(ai + " [^s3]")
+            .And.NotContain(l => l.StartsWith(human));
+        restored.Footnotes.Should().HaveCount(swapped.Footnotes.Count, "новой сноски нет");
+        restored.Footnotes[1].Target.Text.Should().Be(humanCard);
+        CardFiles().Should().HaveCount(2, "новой карточки «Вернуть мою» не создаёт");
+
+        var line = LastJournalLine();
+        line.GetProperty("op").GetString().Should().Be("restore");
+        line.GetProperty("actor").GetString().Should().Be("user");
+        WikiPackageStore.List(WikiPaths.Root(_dir, User)).Packages
+            .Should().Contain(p => p.Action == "restore" && p.Author == "human");
+    }
+
+    [Fact]
+    public async Task Restore_ФормулировкаНеЧеловека_400_СтраницаНеТронута()
+    {
+        // В «Истории» утверждение ИИ (сноска на карточку ИИ): «Вернуть мою» возвращает только своё.
+        var text = Replace(PageText(), "## Хронология\n", "## Хронология\nАктуальное про порт. [^s2]\n");
+        text = Replace(text, "## История\n", $"## История\n{Statement} [^s1]\n");
+        text = text.TrimEnd() + $"\n[^s2]: [[{AiCard}]] — «Актуальное про порт в источнике»\n";
+        (await _keeper.WritePageAsync(User, _key, _pageKey, text)).Status.Should().Be(WikiOpStatus.Applied);
+        var before = PageBytes();
+
+        var res = await Controller().Restore(new WikiPageRestoreRequest(_key, _pageKey, PageHash(), "Актуальное про порт.", Statement));
+        var body = Json(res, 400);
+        body.GetProperty("message").GetString().Should().Contain("человека");
+        PageBytes().Should().Equal(before);
+        PackageFiles().Should().BeEmpty();
+    }
+
+    // ─── Помощники ─────────────────────────────────────────────────────────
+
+    private async Task SeedAsync()
+    {
+        await _keeper.EnsureInitializedAsync(User);
+        var card = $"---\ntype: source\norigin: note\nref: note:n1\nhash: abc\ncaptured: 2026-11-01T10:00:00.0000000+00:00\naliases: []\nowns: []\nsources: []\nstatus: active\n---\n\n# {AiCard}\n";
+        var cardKey = _pageKey.Replace("Знание.md", $"Источники/{AiCard}.md");
+        (await _keeper.WritePageAsync(User, _key, cardKey, card)).Status.Should().Be(WikiOpStatus.Applied);
+        var page = $"---\ntype: topic\naliases: []\nowns: []\nsources: []\nstatus: active\n---\n\n# Знание\n\n## Сводка\n{Statement} [^s1]\n\n## Хронология\n\n## Противоречия\n\n## История\n\n[^s1]: [[{AiCard}]] — «Сервер слушает порт пять тысяч в конфиге»\n";
+        (await _keeper.WritePageAsync(User, _key, _pageKey, page)).Status.Should().Be(WikiOpStatus.Applied);
+    }
+
+    private string PageFile => Path.Combine(_pages, _pageKey.Replace('/', Path.DirectorySeparatorChar));
+    private string PageText() => File.ReadAllText(PageFile);
+    private byte[] PageBytes() => File.ReadAllBytes(PageFile);
+    private string PageHash() => Convert.ToHexString(SHA256.HashData(PageBytes())).ToLowerInvariant();
+
+    private WikiPageEditRequest EditReq(string content) => new(_key, _pageKey, PageHash(), content);
+
+    private static string Replace(string text, string from, string to)
+    {
+        text.Should().Contain(from, "подстановка в тексте страницы теста");
+        return text.Replace(from, to);
+    }
+
+    private string[] PackageFiles()
+    {
+        var dir = Path.Combine(WikiPaths.Keeper(_dir, User), "packages");
+        return Directory.Exists(dir) ? Directory.GetFiles(dir, "*.json") : [];
+    }
+
+    private string[] CardFiles()
+    {
+        var dir = Path.Combine(Path.GetDirectoryName(PageFile)!, WikiSourceCapture.SourceDirName);
+        return Directory.GetFiles(dir, "*.md");
+    }
+
+    private JsonElement LastJournalLine()
+    {
+        var path = Path.Combine(WikiPaths.Keeper(_dir, User), "log.jsonl");
+        return JsonDocument.Parse(File.ReadAllLines(path).Last(l => l.Length > 0)).RootElement.Clone();
+    }
+
+    private JsonElement PageJson()
+    {
+        var res = new WikiController(_keeper, _projects, new NoSpheres(), null!, null!, new Flags(true, true), _config, null!, null!)
+        {
+            ControllerContext = Ctx(),
+        }.Page(_key, _pageKey);
+        return JsonDocument.Parse(JsonSerializer.Serialize(((OkObjectResult)res).Value)).RootElement.Clone();
+    }
+
+    private static JsonElement Json(IActionResult result, int status)
+    {
+        var obj = result.Should().BeAssignableTo<ObjectResult>().Which;
+        obj.StatusCode.Should().Be(status, JsonSerializer.Serialize(obj.Value));
+        return JsonDocument.Parse(JsonSerializer.Serialize(obj.Value)).RootElement.Clone();
+    }
+
+    private static void AssertCode(IActionResult result, int status, string code) =>
+        Json(result, status).GetProperty("code").GetString().Should().Be(code);
+
+    private static ControllerContext Ctx(bool serviceToken = false, bool anonymous = false)
+    {
+        var http = new DefaultHttpContext();
+        if (!anonymous)
+        {
+            var claims = new List<Claim> { new("sub", User) };
+            if (serviceToken) claims.Add(new("typ", "svc"));
+            http.User = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"));
+        }
+        return new ControllerContext { HttpContext = http };
+    }
+
+    private WikiPagesController Controller(bool serviceToken = false, Flags? flags = null, bool anonymous = false) =>
+        new(_apply, _projects, flags ?? new Flags(true, true))
+        {
+            ControllerContext = Ctx(serviceToken, anonymous),
+        };
+
+    // Два флага: llm-wiki и notes-wiki-unified; остальные ключи выключены.
+    private sealed class Flags(bool llmWiki, bool unified) : IFeatureFlagGate
+    {
+        public bool IsEnabled(string userId, string key) =>
+            (key == FeatureFlagKeys.LlmWiki && llmWiki) || (key == FeatureFlagKeys.NotesWikiUnified && unified);
+    }
+
+    private sealed class NoSpheres : ISphereDirectory
+    {
+        public string? SphereOf(string ownerId, string projectId) => null;
+        public IReadOnlyList<string> ProjectsOf(string ownerId, string sphereId) => [];
+        public bool Enabled(string ownerId) => false;
+        public string? SphereName(string ownerId, string sphereId) => null;
+        public string? CharterOf(string ownerId, string sphereId) => null;
+    }
+}

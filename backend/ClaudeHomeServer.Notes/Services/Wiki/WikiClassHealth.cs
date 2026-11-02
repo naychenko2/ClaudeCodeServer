@@ -54,6 +54,8 @@ public sealed class WikiClassHealth
     public static readonly TimeSpan ThirtyDays = TimeSpan.FromDays(30);
 
     private const string LogOpRetract = "retract";
+    private const string LogOpRestore = "restore";
+    private const string LogActorUser = "user";
 
     private readonly string _dataDir;
     private readonly Composition.IFeatureFlagGate? _flags;
@@ -220,7 +222,7 @@ public sealed class WikiClassHealth
     {
         var retracted = new Dictionary<OpRef.OpKey, DateTimeOffset>();
 
-        foreach (var line in ReadRetractLines(root))
+        foreach (var line in ReadLogRows(root, LogOpRetract))
         {
             if (line.Packages is null || line.Packages.Count == 0)
                 continue;
@@ -247,6 +249,40 @@ public sealed class WikiClassHealth
             {
                 if (WasApplied(pkg.Operations[i]))
                     retracted.TryAdd(new OpRef.OpKey(pkg.Id, i), pkg.UpdatedAt);
+            }
+        }
+
+        // «Вернуть мою» (ADR-038, «Стык с автовыключением классов»): человек отверг автозамену
+        // своей формулировки — откат ТОЛЬКО для операций класса с хвостом @human. Строка
+        // op=restore (actor user) пакетов не называет, только страницу: каждая строка снимает
+        // одну — последнюю не откатанную до неё — применённую операцию «…@human» на этой странице.
+        // Классы без хвоста (замены ИИ) и страницы без таких операций сигналом не задеваются.
+        var humanOps = new List<(OpRef.OpKey Key, string Page, DateTimeOffset CreatedAt)>();
+        foreach (var pkg in byId.Values)
+        {
+            if (pkg.Status is not (WikiPackage.StatusApplied or WikiPackage.StatusReverted))
+                continue;
+            for (var i = 0; i < pkg.Operations.Count; i++)
+            {
+                var op = pkg.Operations[i];
+                if (WasApplied(op) && WikiPackage.ParseClassKey(op.Class) is { HumanTarget: true })
+                    humanOps.Add((new OpRef.OpKey(pkg.Id, i), op.Page, pkg.CreatedAt));
+            }
+        }
+        if (humanOps.Count > 0)
+        {
+            foreach (var row in ReadLogRows(root, LogOpRestore).Where(r => r.Actor == LogActorUser).OrderBy(r => r.Ts))
+            {
+                foreach (var page in row.Pages ?? [])
+                {
+                    var hit = humanOps
+                        .Where(o => o.Page == page && o.CreatedAt <= row.Ts && !retracted.ContainsKey(o.Key))
+                        .OrderByDescending(o => o.CreatedAt)
+                        .Select(o => ((OpRef.OpKey Key, string Page, DateTimeOffset CreatedAt)?)o)
+                        .FirstOrDefault();
+                    if (hit is { } h)
+                        retracted[h.Key] = row.Ts;
+                }
             }
         }
 
@@ -335,17 +371,18 @@ public sealed class WikiClassHealth
     // ─── журнал ───────────────────────────────────────────────────────────────
 
     private sealed record LogRow(
-        DateTimeOffset Ts, string Op, IReadOnlyList<string>? Pages, IReadOnlyList<string>? Packages);
+        DateTimeOffset Ts, string Op, IReadOnlyList<string>? Pages, IReadOnlyList<string>? Packages,
+        string? Actor = null);
 
     private static readonly JsonSerializerOptions LogJsonOpts = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
 
-    /// <summary>Строки op=retract этого владельца (чужие песочницы не читаются — путь per-owner).
+    /// <summary>Строки журнала с заданным op этого владельца (чужие песочницы не читаются — путь per-owner).
     /// Нечитаемая строка пропускается: журнал append-only, половина строки после падения не
     /// должна останавливать измерение; целые строки от этого не меняются.</summary>
-    private static List<LogRow> ReadRetractLines(string root)
+    private static List<LogRow> ReadLogRows(string root, string op)
     {
         var full = SafePath.Join(root, "keeper/log.jsonl");
         if (!File.Exists(full))
@@ -362,7 +399,7 @@ public sealed class WikiClassHealth
                     parsed = JsonSerializer.Deserialize<LogRow>(line, LogJsonOpts);
                 }
                 catch (JsonException) { continue; }
-                if (parsed is { Op: LogOpRetract })
+                if (parsed is not null && parsed.Op == op)
                     rows.Add(parsed);
             }
         }

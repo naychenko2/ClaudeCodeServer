@@ -295,7 +295,7 @@ public sealed record WikiPackage
                     continue;
                 if (p.Sources is not null && !p.Sources.Any(s => s is not null
                     && (op.Class == ClassKey(s.Origin, op.Op)
-                        || (op.Class == ClassKey(s.Origin, op.Op, humanTarget: true) && ParseClassKey(op.Class) is not null))))
+                        || (op.Class == ClassKey(s.Origin, op.Op, humanTarget: true)))))
                     errors.Add($"класс «{op.Class}» не из источников пакета и не по op «{op.Op}»");
                 // supersede человека — «снято человеком»: утверждение убирают в «Историю», нового текста нет.
                 var textRequired = op.Op is OpCreate or OpAppend or OpEdit || (op.Op == OpSupersede && !isHuman);

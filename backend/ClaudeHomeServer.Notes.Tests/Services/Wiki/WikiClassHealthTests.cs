@@ -120,6 +120,53 @@ public class WikiClassHealthTests : IDisposable
         settings.IsClassDisabled("session×supersede").Should().BeFalse("откаты @human не размываются в классе замен ИИ");
     }
 
+    private const string SharedPage = "Общее/Моя-страница.md";
+
+    private void WriteRestoreLine(string page, string actor = "user") =>
+        WikiManifest.AppendLog(Root(), "restore", Section, [page], "human:x", actor);
+
+    [Fact]
+    public async Task ТриВернутьМоюЗаСемьДнейВыключаютКлассСХвостомHuman_КлассЗаменИИНе()
+    {
+        var old = DateTimeOffset.UtcNow - TimeSpan.FromDays(10);
+        for (var i = 0; i < 3; i++) WritePackage(old, classKey: HumanClassKey, page: SharedPage);
+        for (var i = 0; i < 3; i++) WritePackage(old, classKey: "session×supersede", page: SharedPage);
+        for (var i = 0; i < 3; i++) WriteRestoreLine(SharedPage);
+
+        await _sut.EvaluateAsync(User);
+
+        var settings = ReadSettings();
+        settings.IsClassDisabled(HumanClassKey).Should().BeTrue("«Вернуть мою» — откат для класса с хвостом @human");
+        settings.IsClassDisabled("session×supersede").Should().BeFalse("замены ИИ сигналом не задеваются");
+    }
+
+    [Fact]
+    public async Task ВернутьМоюНаСтраницеБезКлассаСХвостом_НеВыключаетНиОдинКласс()
+    {
+        var old = DateTimeOffset.UtcNow - TimeSpan.FromDays(10);
+        for (var i = 0; i < 3; i++) WritePackage(old, classKey: "session×supersede", page: SharedPage);
+        for (var i = 0; i < 3; i++) WriteRestoreLine(SharedPage);
+
+        await _sut.EvaluateAsync(User);
+
+        ReadSettings().IsClassDisabled("session×supersede").Should().BeFalse();
+        ReadSettings().Classes.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ДваВернутьМою_НеДостигаютПорогаИСтрокаНеОтПользователяНеСчитается()
+    {
+        var old = DateTimeOffset.UtcNow - TimeSpan.FromDays(10);
+        for (var i = 0; i < 60; i++) WritePackage(old, classKey: HumanClassKey, page: SharedPage);
+        WriteRestoreLine(SharedPage);
+        WriteRestoreLine(SharedPage);
+        WriteRestoreLine(SharedPage, actor: "keeper");
+
+        await _sut.EvaluateAsync(User);
+
+        ReadSettings().IsClassDisabled(HumanClassKey).Should().BeFalse("два откатов из 60 < порога, чужой actor не считается");
+    }
+
     [Theory]
     [InlineData("session×supersede@human", true)]
     [InlineData("note×conflict@human", true)]
@@ -314,7 +361,7 @@ public class WikiClassHealthTests : IDisposable
     /// <summary>Пакет на диске: состояние, которое читает оценка (стор проверяет форму файла).
     /// retractedAt != null — статус «reverted» с временем отката в UpdatedAt (переход статуса
     /// ставит его в момент отката — та же форма, что в бою).</summary>
-    private string WritePackage(DateTimeOffset createdAt, DateTimeOffset? retractedAt = null, string classKey = ClassKey)
+    private string WritePackage(DateTimeOffset createdAt, DateTimeOffset? retractedAt = null, string classKey = ClassKey, string? page = null)
     {
         var id = Guid.NewGuid().ToString("N");
         var parts = classKey.Split('×');
@@ -327,7 +374,7 @@ public class WikiClassHealthTests : IDisposable
             Operations = [new WikiPackage.Operation
             {
                 Op = parts[1].Replace(WikiPackage.HumanTargetSuffix, ""),
-                Page = PagePath(id),
+                Page = page ?? PagePath(id),
                 Text = "утверждение из чата",
                 Target = parts[1].StartsWith("supersede") || parts[1].StartsWith("conflict") ? "заменяемое утверждение" : null,
                 Class = classKey,

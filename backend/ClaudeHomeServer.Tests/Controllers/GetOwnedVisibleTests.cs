@@ -44,6 +44,10 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// не входит в выборку, его транскрипт не уходит в модель арендатора) и состав участников
 /// (PUT participants: гейт GetOwnedVisible, как на /parent). Свой приватный, общий чат и
 /// чат вне проекта — прежнее поведение.
+/// S2d-3f.1 (доработка по вердикту R-S2d-3f): Update/Delete — отказ на чужом приватном отличим
+/// от «не автор»: постороннему — то же, что несуществующему (404 / тот же идемпотентный 204),
+/// участнику, которому чат виден, — прежний 403. S2d-3f.2: источник отчёта «наверх» (POST report)
+/// резолвится GetOwnedVisible — Name и PersonaId чужого приватного не уносятся в карточку родителя.
 /// Полный хост не нужен: контроллеры создаются напрямую с ClaimsPrincipal вызывающего
 /// (образец — SharedProjectEditorScopeGatesTests), стор сессий сидируется sessions.json
 /// (образец — SessionStatusTests). Для пути участника (read-ручки) в корень DI ставится
@@ -266,18 +270,48 @@ public sealed class GetOwnedVisibleTests : IDisposable
         (await c.Upload(OutsideChatId, null)).Should().BeOfType<BadRequestObjectResult>();
     }
 
+    // S2d-3f.1 (R-S2d-3f §1): Update/Delete на чужом приватном — неотличимы от несуществующего:
+    // Update — 404, Delete — тот же 204, что и несуществующему (прежний контракт идемпотентного
+    // удаления, SessionsControllerTests.Delete_NonExistentSession_Returns204; сам чат не тронут).
+    // Участнику, которому чат виден (общий, свой приватный), — прежний 403 по контракту ChatAuthorGate.
     [Fact]
-    public async Task SessionsController_ЧужойПриватный_notChatAuthor403_СвойПриватныйИОбщийУдаляются()
+    public async Task SessionsController_UpdateDelete_ЧужойПриватныйКакНесуществующий_УчастникуВидимогоЧатаПрежний403()
     {
-        var c = new SessionsController(_sessions, _projects, null!, null!, null!, null!) { ControllerContext = AsUser(_ownerId) };
+        var asOwner = SessionsAs(_ownerId);
 
-        var denied = await c.Delete(_projectId, ForeignPrivateId);
-        var obj = denied.Should().BeOfType<ObjectResult>().Subject;
-        obj.StatusCode.Should().Be(403);
-        System.Text.Json.JsonSerializer.Serialize(obj.Value).Should().Contain("not_chat_author");
+        // Update: постороннему — неотличимо от несуществующего
+        (await asOwner.Update(_projectId, ForeignPrivateId, new UpdateSessionRequest(Name: "Перебито")))
+            .Should().BeOfType<NotFoundResult>();
+        (await asOwner.Update(_projectId, "no-such-chat", new UpdateSessionRequest(Name: "Перебито")))
+            .Should().BeOfType<NotFoundResult>();
+        // Отказ не оставил следа: чужой приватный не переименован
+        _sessions.GetById(ForeignPrivateId)!.Name.Should().BeNull();
 
-        (await c.Delete(_projectId, OwnPrivateId)).Should().BeOfType<NoContentResult>();
-        (await c.Delete(_projectId, OpenChatId)).Should().BeOfType<NoContentResult>();
+        // Delete: тот же 204, что несуществующему, — и сам чат цел
+        (await asOwner.Delete(_projectId, ForeignPrivateId)).Should().BeOfType<NoContentResult>();
+        (await asOwner.Delete(_projectId, "no-such-chat")).Should().BeOfType<NoContentResult>();
+        _sessions.GetById(ForeignPrivateId).Should().NotBeNull("204 постороннему не должен удалить чат");
+
+        // Участник, которому чат виден, но кто не арендатор: общий чат и свой приватный — прежний 403
+        // not_chat_author (контракт гейта: «участнику, которому чат виден, отвечаем 403…»)
+        async Task Assert403Async(SessionsController c, string sessionId)
+        {
+            var upd = (await c.Update(_projectId, sessionId, new UpdateSessionRequest(Name: "Перебил")))
+                .Should().BeOfType<ObjectResult>().Subject;
+            upd.StatusCode.Should().Be(403);
+            System.Text.Json.JsonSerializer.Serialize(upd.Value).Should().Contain("not_chat_author");
+            var del = (await c.Delete(_projectId, sessionId)).Should().BeOfType<ObjectResult>().Subject;
+            del.StatusCode.Should().Be(403);
+            System.Text.Json.JsonSerializer.Serialize(del.Value).Should().Contain("not_chat_author");
+        }
+
+        var asEditor = SessionsAs(_editorId);
+        await Assert403Async(asEditor, OpenChatId);
+        await Assert403Async(asEditor, ForeignPrivateId); // автор своего приватного: виден, но не арендатор
+
+        // Владелец-арендатор: свой приватный и общий удаляются, как раньше
+        (await asOwner.Delete(_projectId, OwnPrivateId)).Should().BeOfType<NoContentResult>();
+        (await asOwner.Delete(_projectId, OpenChatId)).Should().BeOfType<NoContentResult>();
     }
 
     [Fact]
@@ -668,5 +702,55 @@ public sealed class GetOwnedVisibleTests : IDisposable
         c.SetParticipants(OwnPrivateId, new SetParticipantsRequest([p1, p2]))
             .Should().BeOfType<OkObjectResult>();
         _sessions.GetById(OwnPrivateId)!.Participants.Should().Equal(p1, p2);
+    }
+
+    // --- S2d-3f.2 (R-S2d-3f §2): источник отчёта «наверх» — POST /api/sessions/{sid}/report ---
+
+    // ReportUpAsync резолвил источник через GetOwned: для проектного чата это владелец проекта,
+    // и он мог указать приватный чат участника — карточка в родителе уносила его Name и PersonaId.
+    // Гейт CanSee на входе ReportUpAsync: чужой приватный неотличим от «нет такого чата»,
+    // карточки в родителе нет вовсе. Автор-арендатор своего приватного и общий чат — как раньше
+    // (карточка с именем чата, тот же формат, что в SessionManagerTests.ReportUp_БезПерсоны_*).
+    [Fact]
+    public async Task SessionMessagesController_ReportUp_ЧужойПриватныйКакНесуществующийБезКарточки_СвойПриватныйИОбщийКакРаньше()
+    {
+        using var tasks = new TaskManager(_config);
+        var c = new SessionMessagesController(_sessions, new SessionMessagingService(_sessions, _projects, tasks),
+            null!, null!) { ControllerContext = AsUser(_ownerId) };
+
+        // Пара «родитель → дети»: родитель — общий чат владельца; чужой приватный — с лицом
+        // (проектная персона), свой приватный и общий ребёнок — без лица, как обычный исполнитель
+        var parent = await _sessions.CreateAsync(_projectId, ClaudeMode.Auto, name: "Родитель", createdByUserId: _ownerId);
+        parent.ClaudeSessionId = "cli-" + Guid.NewGuid().ToString("N");
+        var suffix = Guid.NewGuid().ToString("N")[..6];
+        var persona = _personas.Create(_ownerId, $"Персона-отчёт-{suffix}", null, null, null, null, null,
+            PersonaScope.Project, _projectId, null, null, false).Id;
+        var foreign = await _sessions.CreateAsync(_projectId, ClaudeMode.Auto, name: "Приватный чат участника",
+            personaId: persona, createdByUserId: _editorId);
+        _sessions.SetChatVisibility(foreign.Id, _editorId, true).Outcome.Should().Be(ChatVisibilityOutcome.Ok,
+            "автор, общий проект (есть участники), сообщений нет — тот же путь, что у тумблера S2d-7a");
+        var own = await _sessions.CreateAsync(_projectId, ClaudeMode.Auto, name: "Приватный чат владельца",
+            createdByUserId: _ownerId);
+        _sessions.SetChatVisibility(own.Id, _ownerId, true).Outcome.Should().Be(ChatVisibilityOutcome.Ok);
+        var open = await _sessions.CreateAsync(_projectId, ClaudeMode.Auto, name: "Общий чат-ребёнок",
+            createdByUserId: _ownerId);
+        // Связь — сервисным SetParent по арендатору: владелец проекта — арендатор всех трёх детей
+        _sessions.SetParent(foreign.Id, parent.Id, _ownerId).Should().NotBeNull();
+        _sessions.SetParent(own.Id, parent.Id, _ownerId).Should().NotBeNull();
+        _sessions.SetParent(open.Id, parent.Id, _ownerId).Should().NotBeNull();
+
+        // Чужой приватный: неотличим от несуществующего, и отказа нет в ленте родителя —
+        // ни карточки с именем, ни карточки с персоной
+        (await c.ReportUp(foreign.Id, new ReportUpRequest("готово наполовину"))).Should().BeOfType<NotFoundResult>();
+        (await c.ReportUp("no-such-chat", new ReportUpRequest("тот же текст"))).Should().BeOfType<NotFoundResult>();
+        (await _sessions.GetHistoryAsync(parent.Id)).Should().BeEmpty(
+            "отказанный отчёт не оставляет следа в ленте родителя: ни Name, ни PersonaId чужого приватного");
+
+        // Автор-арендатор своего приватного и общий ребёнок — прежнее поведение: карточка с именем чата
+        (await c.ReportUp(own.Id, new ReportUpRequest("свой отчёт"))).Should().BeOfType<OkObjectResult>();
+        (await c.ReportUp(open.Id, new ReportUpRequest("общий отчёт"))).Should().BeOfType<OkObjectResult>();
+        var history = await _sessions.GetHistoryAsync(parent.Id);
+        history.OfType<StoredUserMessage>().Select(m => m.SenderChatName).Should()
+            .Equal("Приватный чат владельца", "Общий чат-ребёнок");
     }
 }

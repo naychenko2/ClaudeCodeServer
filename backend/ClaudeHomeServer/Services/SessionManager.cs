@@ -6181,7 +6181,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public async Task<ReportUpResult> ReportUpAsync(string sessionId, string text, string ownerId,
         bool withTurn, string? reactionPrompt = null)
     {
-        if (GetOwned(sessionId, ownerId) is not { } chat) return ReportUpResult.NotFound;
+        // S2d-3f.2 (R-S2d-3f §2): источник отчёта — чат, видимый вызывающему: Name и PersonaId чужого
+        // приватного не уносятся в карточку родителя. Отказ тот же, что «чат не найден» (404 контроллера).
+        // GetOwned не заменён ничем иным: та же проверка арендатора плюс CanSee (S2d-3a). Машинные пути
+        // (чат-исполнитель, своя сессия вызывателя) не закрываются: их чаты не приватные, а автор своего
+        // приватного — не арендатор, он здесь не проходил и до правки.
+        if (GetOwnedVisible(sessionId, ownerId) is not { } chat) return ReportUpResult.NotFound;
         if (!_sessions.TryGetValue(sessionId, out var from)) return ReportUpResult.NotFound;
         if (SessionTaskLinks.ParentSessionId(chat, _taskLookup) is not { } parentId) return ReportUpResult.NoParent;
         if (GetOwned(parentId, ownerId) is null) return ReportUpResult.NoParent;

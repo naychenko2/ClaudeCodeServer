@@ -113,7 +113,12 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         // различима в контракте — она остаётся на авторском отказе ниже.
         if ((req.Model is not null || req.Effort is not null) && sessions.DenyOwnerTurn(sessionId, UserId) is { } denied)
             return denied;
-        if (sessions.GetOwnedVisible(sessionId, UserId) is null) return ChatAuthorGate.Denied();
+        // S2d-3f.1 (R-S2d-3f §1): постороннему (чат не виден по CanSee) — то же, что на несуществующем,
+        // существование не выдаётся кодом; участнику, которому чат виден, — прежний 403 по контракту
+        // ChatAuthorGate. Приём тот же, что у DenyTurnAuthor (TurnRightExtensions.cs:38-39): гейт
+        // видимости GetAccessible, авторский — после него.
+        if (sessions.GetOwnedVisible(sessionId, UserId) is null)
+            return sessions.GetAccessible(sessionId, UserId) is null ? NotFound() : ChatAuthorGate.Denied();
         if (req.NotificationsMuted is bool muted) sessions.SetNotificationsMuted(sessionId, muted);
         // Хотя бы одно из двух — см. тот же блок в ChatsController.Update
         if (req.VoiceStyle is not null && !VoiceStyles.IsKnown(req.VoiceStyle))
@@ -226,7 +231,11 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         var session = sessions.GetById(sessionId);
         if (session == null) return NoContent(); // идемпотентное удаление
         if (session.ProjectId != projectId) return NotFound(); // чужая сессия — не удаляем
-        if (sessions.GetOwnedVisible(sessionId, UserId) is null) return ChatAuthorGate.Denied();
+        // S2d-3f.1 (R-S2d-3f §1): постороннему (чат не виден по CanSee) — тот же 204, что и несуществующему:
+        // прежний контракт идемпотентного удаления (строка выше) сохранён, существование не выдаётся кодом,
+        // сам чат не тронут. Участнику, которому чат виден, — прежний 403 по контракту ChatAuthorGate.
+        if (sessions.GetOwnedVisible(sessionId, UserId) is null)
+            return sessions.GetAccessible(sessionId, UserId) is null ? NoContent() : ChatAuthorGate.Denied();
         await sessions.DeleteAsync(sessionId);
         return NoContent();
     }

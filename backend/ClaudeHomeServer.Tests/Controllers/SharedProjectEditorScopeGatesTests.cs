@@ -260,6 +260,47 @@ public sealed class SharedProjectEditorScopeGatesTests : IDisposable
         Denied404(films.Build(_projectId, "films/a.film", "priv"), "POST films/build?sessionId=");
     }
 
+    // films/music: sessionId в теле до гейта заводил нить звука в чужом приватном чате. Счётчик шва «Звука» —
+    // стор нитей: отказ обязан случиться ДО CreateDraftAsync
+    [Fact]
+    public async Task VideoEditor_FilmsMusic_SessionIdВТеле_ЧужойПриватныйЧат404БезНити()
+    {
+        var dir = new WithSessions(
+            new Session { Id = "priv", ProjectId = _projectId, PrivateToUserId = _editorId },
+            new Session { Id = "own", ProjectId = _projectId, PrivateToUserId = _ownerId },
+            new Session { Id = "open", ProjectId = _projectId });
+        var gate = new VideoEditScopeGate(_projects, dir, Access());
+        var audio = new CountingAudio();
+        var composer = new ClaudeHomeServer.Services.VideoEditor.Films.FilmMusicComposer(
+            null!, null!, null!, null!, NullLogger<ClaudeHomeServer.Services.VideoEditor.Films.FilmMusicComposer>.Instance, audio);
+        var films = new FilmController(gate, null!, null!, null!, composer) { ControllerContext = AsUser(_ownerId) };
+
+        Denied404(await films.ComposeMusic(_projectId, "video/a/a.film", new FilmMusicRequest("priv"), default), "POST films/music");
+        audio.Drafts.Should().Be(0, "нить звука в чужом приватном чате не заведена");
+
+        // автор приватного и общий чат гейт проходит: тело ручки достигнуто (зависимости composer — null, поэтому падает в теле)
+        foreach (var chat in new[] { "own", "open" })
+        {
+            var reached = false;
+            try { await films.ComposeMusic(_projectId, "video/a/a.film", new FilmMusicRequest(chat), default); reached = true; }
+            catch (NullReferenceException) { reached = true; }
+            reached.Should().BeTrue();
+        }
+    }
+
+    private sealed class CountingAudio : ClaudeHomeServer.Services.Media.IAudioTrackSource
+    {
+        public int Drafts;
+        public Task<ClaudeHomeServer.Services.Media.AudioTrackDraft?> CreateDraftAsync(string ownerId, string scopeKey,
+            string sessionId, string folder, CancellationToken ct)
+        {
+            Drafts++;
+            return Task.FromResult<ClaudeHomeServer.Services.Media.AudioTrackDraft?>(new("t"));
+        }
+        public Task<ClaudeHomeServer.Services.Media.AudioTrackFile?> GetMainFileAsync(string ownerId, string threadId,
+            string versionId, CancellationToken ct) => Task.FromResult<ClaudeHomeServer.Services.Media.AudioTrackFile?>(null);
+    }
+
     private sealed class WithSessions(params Session[] sessions) : ISessionDirectory
     {
         public Session? GetById(string id) => sessions.FirstOrDefault(s => s.Id == id);

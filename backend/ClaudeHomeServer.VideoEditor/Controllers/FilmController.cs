@@ -106,7 +106,7 @@ public class FilmController(
     [HttpPost(VideoEditorRoutes.FilmMusic)]
     public async Task<IActionResult> ComposeMusic(string projectId, [FromQuery] string? path,
         [FromBody] FilmMusicRequest? req, CancellationToken ct) =>
-        Gate(projectId, out var scope, out var denied)
+        Gate(projectId, out var scope, out var denied) && gate.TryOptionalChat(UserId, projectId, req?.SessionId, out denied)
             ? FilmHttp.Map(await music.CreateDraftAsync(Tenant(scope), scope, path, req, ct), draft => Ok(draft))
             : denied;
 

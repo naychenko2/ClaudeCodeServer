@@ -2,6 +2,7 @@
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Spend;
@@ -2197,6 +2198,13 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         var sourceSession = task.SourceSessionId is not null ? _sessions.GetById(task.SourceSessionId) : null;
         if (sourceSession is not null && _sessions.ResolveOwnerId(sourceSession) != task.OwnerId)
             sourceSession = null;
+        // S2d-4b2: уведомление несёт id исходного чата в ссылке — чужой приватный чат владельцу
+        // задачи не виден, ссылка на него невозможна (откат на TaskUrl).
+        // Резолвера проектов нет — решения нет, поведение прежнее (как в ChatRefs.For).
+        if (sourceSession is not null && _projects is not null
+            && !SessionAccess.CanSee(sourceSession,
+                sourceSession.ProjectId is { } srcPid ? _projects.GetById(srcPid) : null, task.OwnerId))
+            sourceSession = null;
         await NotifyAsync(task, BuildDelegatorNotification(task, ok, delegator, sourceSession));
         _log.LogInformation("L0 задачи {TaskId}: отправлено постановщику {PersonaId} (обычное уведомление подавлено)", task.Id, delegator.Id);
         return true;
@@ -2406,6 +2414,12 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         {
             var reportText = BuildDelegationReportText(task);
             var executorChatName = executorSession?.Name;
+            // S2d-4b2 (К5): название чата-исполнителя уходит в чат-адресат доклада — читателям
+            // ЭТОГО чата. Решает та же ChatRefs.For, что маска задачи: чужой приватный чат
+            // исполнителя для аудитории адресата закрыт, вместо названия — подпись формы.
+            if (_sessions.GetById(cardSessionId) is { } cardSession
+                && ChatRefs.For(_sessions, _projects, task.LinkedSessionId, ReportCardAudience(cardSession)) is { Private: true })
+                executorChatName = ChatRef.PrivateFormTitle;
             // Время доклада ставим один раз и кладём в оба слоя (история + живая лента) —
             // тот же приём, что у reportTs в ReportUpAsync: фронт дедупит призрачный повтор
             // (BroadcastSessionMessageAsync шлёт событие и в session-, и в project_/user_-группу)
@@ -2494,6 +2508,13 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         _log.LogInformation("Доклад Z задачи {TaskId}: отправлен (гостевая реплика + реакция{Deferred}) в чат {SessionId}",
             task.Id, deferred ? " отложена — чат занят" : "", targetSessionId);
     }
+
+    // Аудитория карточки доклада = читатели чата, куда она кладётся (S2d-4b2): общий чат проекта —
+    // вся группа проекта, приватный — только автор приватности, чат вне проекта — владелец.
+    internal static ChatAudience ReportCardAudience(Session target) =>
+        target.ProjectId is { } pid && target.PrivateToUserId is null
+            ? ChatAudience.Group(pid)
+            : ChatAudience.Viewer(target.PrivateToUserId ?? target.OwnerId);
 
     // Маркер гостевой реплики-доклада: контракт для фронта — по нему отличают доклад
     // делегированной задачи от обычной реплики персоны в ленте

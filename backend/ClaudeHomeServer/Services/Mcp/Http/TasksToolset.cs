@@ -318,7 +318,7 @@ public sealed class TasksToolset(
                     return Deny(ex.Message);
                 }
                 await broadcaster.ToTaskBoard(context.OwnerId, created.ProjectId, new TaskChangedMessage("created", created));
-                return Json(created);
+                return Json(ForCaller(created, session, context.OwnerId));
             }
 
             case "tasks_update":
@@ -699,12 +699,15 @@ public sealed class TasksToolset(
                     // исполнителя гасит карточку «штаб перезапустил исполнителя»
                     FireResolveBlockerByTask(task, session.Id,
                         "штаб перезапустил исполнителя — блокер снят");
+                    // S2d-4b2: чат исполнителя — через ту же маску, что карточка задачи
+                    var executedView = ForCaller(executed, session, context.OwnerId);
                     return Json(new
                     {
                         id = executed.Id,
                         title = executed.Title,
                         status = executed.Status,
-                        executorSessionId = executed.LinkedSessionId,
+                        executorSessionId = executedView.LinkedSessionId,
+                        executorChat = executedView.LinkedChat,
                         deviceWaitReason = executed.DeviceWaitReason,
                         // Устройство локального проекта офлайн (ADR-016, план §5): запуска не было
                         note = executed.DeviceWaitSince is not null
@@ -1136,8 +1139,22 @@ public sealed class TasksToolset(
     // tasks_get. Актор — из реестра хода (GetTurnActor), не из заголовка: токен арендатора, а ход
     // принадлежит участнику; актор неизвестен (фон) — права арендатора (разрез §2). Проецируется
     // только ответ: запись задачи и гейты инструментов здесь не меняются (гейт актора — S2c-6).
+    //
+    // S2d-4b2: плюс маска чужих приватных чатов задачи (ChatRefs.For, та же функция, что в REST) —
+    // для ВСЕХ ролей, включая арендатора. Зритель — актор хода; актор неизвестен — «не видит»
+    // (пустой id никому не даёт доступа, fail-closed), в отличие от прав на поля задачи выше.
     private TaskItem ForCaller(TaskItem task, Session session, string ownerId) =>
-        TaskView.ForActor(task, ownerId, sessions.GetTurnActor(session.Id, ownerId));
+        ForActorMasked(task, ownerId, sessions.GetTurnActor(session.Id, ownerId), sessions, projects);
+
+    // internal — для юнит-теста без хоста.
+    internal static TaskItem ForActorMasked(TaskItem task, string ownerId, string? actor,
+        ISessionDirectory chats, IProjectManager projectCatalog)
+    {
+        var view = TaskView.ForActor(task, ownerId, actor);
+        // Маска правит копию, а не запись стора: ForActor арендатору отдаёт сам объект.
+        if (ReferenceEquals(view, task)) view = TaskView.CopyOf(task);
+        return TaskView.MaskForeignChats(view, chats, projectCatalog, ChatAudience.Viewer(actor ?? ""));
+    }
 
     // Ответ tasks_get: JSON задачи и — только у эпика фичи — дописанный блок «Сверка трекера».
     // Расхождения не пересчитываем: тот же проектор и та же функция, что у REST-страницы фичи

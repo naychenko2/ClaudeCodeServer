@@ -55,6 +55,16 @@ public interface ISessionBroadcaster
     Task ToPreviewLog(string projectId, string serviceId, ServerMessage message);
 }
 
+// Опциональный шов вещателя (S2d-4b2): резолвер видимости чатов для маски в ToTaskBoard.
+// Вещатель, реализующий его, сам несёт каталог чатов и проектов, поэтому событие доски
+// маскирует чужие приватные чаты у ВСЕХ вызывающих (исполнитель задач, штаб, MCP, планировщик…),
+// а не только у тех, кто передал резолвер явно. null — резолвера нет, поведение прежнее.
+public interface IChatVisibilitySource
+{
+    ISessionDirectory? Sessions { get; }
+    IProjectManager? Projects { get; }
+}
+
 // Проектные рассылки общих проектов (S1-5): событие про проект идёт всем участникам группы
 // project_{id}, а не только владельцу. Условная форма нужна там, где сущность бывает личной.
 public static class SessionBroadcasterExtensions
@@ -103,11 +113,16 @@ public static class SessionBroadcasterExtensions
     // на user_{id} и без второй адресации не увидел бы собственных проектных задач.
     // sessions/projects — резолвер видимости чатов (S2d-4b): без них маска чужих приватных чатов
     // не применяется (решения нет — поведение прежнее). Подключённые точки — контроллеры задач;
-    // остальные вызывающие (TaskExecutionService, TeamWaveService, TasksToolset, WorkspaceToolset,
-    // NotesHubNotifier, ArchitectureAgentLauncherAdapter, TaskSchedulerService) — следующий шаг.
+    // остальные вызывающие получают резолвер от самого вещателя (IChatVisibilitySource, S2d-4b2).
     public static async Task ToTaskBoard(this ISessionBroadcaster broadcaster, string ownerId, string? projectId,
         ServerMessage message, ISessionDirectory? sessions = null, IProjectManager? projects = null)
     {
+        // Явно переданный резолвер главнее; иначе берём тот, что несёт сам вещатель.
+        if (broadcaster is IChatVisibilitySource source)
+        {
+            sessions ??= source.Sessions;
+            projects ??= source.Projects;
+        }
         if (string.IsNullOrEmpty(projectId))
         {
             await broadcaster.ToOwner(ownerId, ForOwner(message, ownerId, sessions, projects));

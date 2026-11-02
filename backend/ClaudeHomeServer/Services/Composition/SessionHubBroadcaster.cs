@@ -1,6 +1,7 @@
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Protocol;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Services.Composition;
 
@@ -22,8 +23,15 @@ namespace ClaudeHomeServer.Services.Composition;
 //
 // Регистрация — в Program.cs, рядом с другими форвардерами Core-швов
 // (NotesHubNotifier и т.п.).
-public sealed class SessionHubBroadcaster(IHubContext<SessionHub> hub) : ISessionBroadcaster
+public sealed class SessionHubBroadcaster(IHubContext<SessionHub> hub, IServiceProvider? services = null)
+    : ISessionBroadcaster, IChatVisibilitySource
 {
+    // Каталог чатов и проектов для маски чужих приватных чатов в событии доски (S2d-4b2).
+    // Резолвится лениво при вызове: SessionManager сам зависит от вещателя, прямая зависимость
+    // дала бы цикл в DI. Нет провайдера (юнит-тесты адаптера) — маски нет, поведение прежнее.
+    public ISessionDirectory? Sessions => services?.GetService<ISessionDirectory>();
+    public IProjectManager? Projects => services?.GetService<IProjectManager>();
+
     // Префиксы групп — единственный источник правды в коде. Совпадают с
     // SessionHub.JoinUser/JoinProject, которые добавляют соединение в группу.
     // Формат preview_<projectId>:<serviceId> зеркалится из DevServerService.LogGroup —

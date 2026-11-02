@@ -102,7 +102,9 @@ public sealed partial class TestRunService
         _pipeline = pipeline;
         _progressInterval = progressInterval ?? TimeSpan.FromSeconds(1);
         _standProbe = standProbe ?? ProbeStandAsync;
-        _machine = machine ?? (() => AdaptiveShards.Read());
+        // Шарды идут в scope под Execution:Isolation:Slice — его запас памяти и меряем, а не только хост
+        _machine = machine ?? (() => AdaptiveShards.Read(slice: IsolationOptions.Instance.Enabled
+            ? IsolationOptions.Instance.Slice : null));
     }
 
     // Число шардов монолита: по нагрузке машины под потолком MonolithShards или само MonolithShards

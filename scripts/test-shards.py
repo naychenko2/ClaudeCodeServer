@@ -25,11 +25,14 @@
       локально: список, N параллельных `dotnet test --no-build` по шардам, TRX всех шардов
       в одной папке (её и читает test-profile.py), стена и пик RSS дерева процессов.
       `-n auto` (по умолчанию) — N по нагрузке машины (choose_shards), выбор — первой строкой вывода;
-  python3 -I scripts/test-shards.py --run-fast backend/X.slnx --split backend/A.Tests=auto,backend/B.Tests=2 \
-      --filter "<фильтр Fast>" --results DIR
+  [CCS_TEST_SHARDS_ADAPTIVE=backend/A.Tests=4] python3 -I scripts/test-shards.py --run-fast backend/X.slnx \
+      --split backend/A.Tests=3,backend/B.Tests=2 --filter "<фильтр Fast>" --results DIR
       Fast предгейта: проекты из --split идут шардами по классам, остальные тестовые проекты решения —
       одним процессом на «rest»-slnx; всё параллельно, TRX и логи — в подпапке прогона DIR/<метка>-<pid>
-      (профиль следующего прогона берётся из самой свежей), стена и пик RSS общие.
+      (профиль следующего прогона берётся из самой свежей), стена и пик RSS общие. Проекты из
+      CCS_TEST_SHARDS_ADAPTIVE выбирают N по нагрузке под своим потолком; число в --split — прежнее
+      фиксированное (его понимает скрипт старых деревьев, переменную он не видит). «проект=auto» в --split
+      тоже принимается, но предгейт его не шлёт: старый скрипт на нём падает.
 """
 import argparse
 import hashlib
@@ -52,15 +55,22 @@ FILTER_SPECIAL = set("\\()&|=!~")
 # Число шардов по нагрузке машины (`-n auto`, `--split проект=auto`). Те же константы и то же правило —
 # в backend/ClaudeHomeServer.TestRuns/TestShards.cs (AdaptiveShards); табличные тесты обеих сторон идут
 # по одним строкам, правка порога — в обоих местах сразу
-ADAPTIVE_MAX = 6            # потолок по умолчанию (TestRuns:MonolithShards)
+# Потолок по умолчанию (TestRuns:MonolithShards). 4, а не 6: пик RSS при N=6 не замерен (02.11 slice был
+# занят на 22 из 24 ГиБ при load1 71 — замер не влезал), поднимать после замера
+ADAPTIVE_MAX = 4
 ADAPTIVE_FALLBACK = 3       # нет /proc или он не прочитался — прежнее фиксированное значение
 ADAPTIVE_IDLE_LOAD = 0.5    # load1 < 0,5·nproc — машина свободна: потолок
 ADAPTIVE_BUSY_LOAD = 1.5    # load1 < 1,5·nproc — 3, иначе 2: больше процессов CPU уже не даст
 ADAPTIVE_MID = 3
 ADAPTIVE_MIN = 2
 GIB = 1024 ** 3
-ADAPTIVE_MEM_MID = 16 * GIB  # MemAvailable меньше — не больше 3 (3 шарда монолита ≈ 9,5 ГиБ)
-ADAPTIVE_MEM_LOW = 8 * GIB   # меньше — не больше 2
+# Память на шард монолита: замер 2026-10-29 — N=3 дал пик 9,5 ГиБ (≈3,2 на шард), с запасом 3,5.
+# N ≤ floor(запас / 3,5 ГиБ), не меньше 1; запас — минимум MemAvailable и memory.max − memory.current
+# по цепочке своего cgroup (scope и ccs-agents.slice): хост бывает свободен при почти полном slice
+ADAPTIVE_SHARD_MEM = int(3.5 * GIB)
+# Переменная окружения проверки предгейта: «проект=потолок,…» — проекты --split, которым N выбирать по
+# нагрузке. Сам --split держит число (3): его понимает и скрипт старых деревьев, который переменную не видит
+ADAPTIVE_ENV = "CCS_TEST_SHARDS_ADAPTIVE"
 
 
 def test_fqn(display):
@@ -539,8 +549,38 @@ def wait_all(procs, start, proofs=None, reports=None):
     return max((c for c in failed if c > 0), default=1) if failed else 0
 
 
+def cgroup_free(cgroup_file="/proc/self/cgroup", root="/sys/fs/cgroup"):
+    """Запас памяти своего cgroup v2: минимум memory.max − memory.current по цепочке от своего каталога до
+    корня (scope прогона со своим MemoryMax и ccs-agents.slice над ним — оба лимита). None — cgroup нет,
+    везде max или значение неразборчиво: тогда правило смотрит только MemAvailable."""
+    try:
+        with open(cgroup_file, encoding="ascii") as f:
+            path = next((line.strip()[3:] for line in f if line.startswith("0::")), None)
+        if not path or not path.startswith("/"):
+            return None
+        root = os.path.normpath(root)
+        node = os.path.normpath(root + path)
+        best = None
+        while True:
+            try:
+                with open(os.path.join(node, "memory.max"), encoding="ascii") as f:
+                    limit = f.read().strip()
+                if limit != "max":
+                    with open(os.path.join(node, "memory.current"), encoding="ascii") as f:
+                        free = max(0, int(limit) - int(f.read().strip()))
+                    best = free if best is None else min(best, free)
+            except FileNotFoundError:
+                pass
+            if node == root or len(node) <= len(root):
+                return best
+            node = os.path.dirname(node)
+    except (OSError, ValueError, StopIteration):
+        return None
+
+
 def machine_snapshot():
-    """(nproc, load1, MemAvailable в байтах) из /proc или None: нет /proc (Windows, macOS) или не прочитался."""
+    """(nproc, load1, MemAvailable в байтах, запас cgroup или None) из /proc или None: нет /proc (Windows,
+    macOS) или не прочитался."""
     try:
         with open("/proc/loadavg", encoding="ascii") as f:
             load1 = float(f.read().split()[0])
@@ -553,7 +593,7 @@ def machine_snapshot():
         cpus = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count()
         if mem is None or not cpus:
             return None
-        return cpus, load1, mem
+        return cpus, load1, mem, cgroup_free()
     except (OSError, ValueError, IndexError):
         return None
 
@@ -563,19 +603,18 @@ def choose_shards(snapshot, maximum=ADAPTIVE_MAX):
     maximum = max(1, maximum)
     if snapshot is None:
         return min(ADAPTIVE_FALLBACK, maximum), "нет /proc — фиксированное значение"
-    cpus, load1, mem = snapshot
+    cpus, load1, mem, cg = snapshot
     if load1 < ADAPTIVE_IDLE_LOAD * cpus:
         n = maximum
     elif load1 < ADAPTIVE_BUSY_LOAD * cpus:
         n = ADAPTIVE_MID
     else:
         n = ADAPTIVE_MIN
-    if mem < ADAPTIVE_MEM_LOW:
-        n = min(n, ADAPTIVE_MIN)
-    elif mem < ADAPTIVE_MEM_MID:
-        n = min(n, ADAPTIVE_MID)
+    headroom = mem if cg is None else min(mem, cg)
+    n = min(n, max(1, headroom // ADAPTIVE_SHARD_MEM))
     load = f"{load1:.1f}".replace(".", ",")
-    return min(n, maximum), f"load1 {load} из {cpus}, свободно {mem // GIB} ГиБ"
+    where = "" if cg is None else f", в cgroup {cg // GIB} ГиБ"
+    return min(n, maximum), f"load1 {load} из {cpus}, свободно {mem // GIB} ГиБ{where}"
 
 
 def parse_n(value):
@@ -587,13 +626,30 @@ def parse_n(value):
     return int(value)
 
 
-def resolve_n(n, label="Шардов"):
+def resolve_n(n, label="Шардов", maximum=ADAPTIVE_MAX):
     """auto — по нагрузке машины с печатью выбора; явное число — как есть."""
     if n != "auto":
         return n
-    n, reason = choose_shards(machine_snapshot())
+    n, reason = choose_shards(machine_snapshot(), maximum)
     print(f"{label}: {n} ({reason})", flush=True)
     return n
+
+
+def adaptive_split(split, env_value):
+    """--split с учётом ADAPTIVE_ENV: перечисленные проекты — auto под своим потолком, остальные как есть.
+    [(проект, N или "auto", потолок)]. Неразборчивая переменная — предупреждение и --split без изменений:
+    предгейт не должен краснеть из-за опечатки в настройке ускорения."""
+    ceilings = {}
+    if env_value:
+        try:
+            ceilings = {os.path.normpath(p): n for p, n in parse_split(env_value) if n != "auto"}
+        except ValueError as e:
+            print(f"{ADAPTIVE_ENV}: {e} — шарды по --split", file=sys.stderr)
+    out = []
+    for path, n in split:
+        ceiling = ceilings.get(os.path.normpath(path))
+        out.append((path, "auto", ceiling) if ceiling else (path, n, ADAPTIVE_MAX))
+    return out
 
 
 def run_shards(project, n, results, timings, extra_filter, fast=None):
@@ -673,7 +729,8 @@ def run_fast(slnx, split, results, timings, extra_filter, fast=None):
     """Fast предгейта: проекты --split — шардами по классам, остальные тестовые проекты — одним процессом
     на rest-slnx. Каждый тест списка попадает ровно в один шард (иначе exit 1) — самопроверка до запуска."""
     start = time.monotonic()
-    split = [(p, resolve_n(n, f"Шардов {os.path.basename(p.rstrip('/'))}")) for p, n in split]
+    split = [(p, resolve_n(n, f"Шардов {os.path.basename(p.rstrip('/'))}", top))
+             for p, n, top in adaptive_split(split, os.environ.get(ADAPTIVE_ENV))]
     if timings is None:
         timings, _, fast = calibrate(results)
         print("Раскладка по профилю прошлого прогона" if timings else "Профиля нет — раскладка по хешу класса")
@@ -788,9 +845,9 @@ def _main(argv):
     ap.add_argument("--verify", action="store_true", help="только самопроверка и сводка")
     ap.add_argument("--run", metavar="PROJECT", help="локально: N параллельных dotnet test --no-build")
     ap.add_argument("--run-fast", metavar="SLNX", help="локально: Fast решения — проекты --split шардами, остальные одним процессом")
-    ap.add_argument("--split", default="", help="для --run-fast: «проект=N,проект=N»")
+    ap.add_argument("--split", default="", help=f"для --run-fast: «проект=N,проект=N»; N по нагрузке — {ADAPTIVE_ENV}=проект=потолок")
     ap.add_argument("-n", type=parse_n, default="auto",
-                    help=f"число шардов или auto (по умолчанию): для --run — по нагрузке машины (load1, MemAvailable), "
+                    help=f"число шардов или auto (по умолчанию): для --run — по нагрузке машины (load1, запас памяти хоста и cgroup), "
                          f"для --verify/--shard/--slnx — {ADAPTIVE_FALLBACK}")
     ap.add_argument("--results", default=os.path.join(".cc-attachments", "test-shards"), help="папка TRX для --run")
     ap.add_argument("--parallel", type=float, help=f"во сколько раз сумма длительностей шарда больше его стены "

@@ -72,29 +72,38 @@ public class TestShardsTests
         TestShards.IsMonolith(target, TestRunsOptions.DefaultMonolithTarget).Should().Be(expected);
 
     // Те же строки — в scripts/test_test_shards.py (ADAPTIVE_ROWS): nproc, load1, MemAvailable ГиБ
-    // (-1 — снимка нет), потолок, ожидаемое N. Мутация порога 0,5→0,6 краснит строку 12.0
+    // (-1 — снимка нет), запас cgroup ГиБ (-1 — cgroup нет), потолок, ожидаемое N. Мутация порога
+    // 0,5→0,6 краснит строку 12.0, памяти на шард 3,5→3 — строку 13.99, отказ от min со slice — строку 28/7
     [Theory]
-    [InlineData(24, 7.2, 31, 6, 6)]
-    [InlineData(24, 11.99, 31, 6, 6)]
-    [InlineData(24, 12.0, 31, 6, 3)]
-    [InlineData(24, 14.0, 31, 6, 3)]
-    [InlineData(24, 35.99, 31, 6, 3)]
-    [InlineData(24, 36.0, 31, 6, 2)]
-    [InlineData(24, 50.0, 31, 6, 2)]
-    [InlineData(24, 2.0, 15.9, 6, 3)]
-    [InlineData(24, 2.0, 16.0, 6, 6)]
-    [InlineData(24, 2.0, 7.9, 6, 2)]
-    [InlineData(24, 2.0, 8.0, 6, 3)]
-    [InlineData(24, 2.0, 31, 4, 4)]
-    [InlineData(24, 2.0, 31, 1, 1)]
-    [InlineData(24, 50.0, 31, 1, 1)]
-    [InlineData(8, 3.9, 31, 6, 6)]
-    [InlineData(8, 4.0, 31, 6, 3)]
-    [InlineData(-1, 0, 0, 6, 3)]
-    [InlineData(-1, 0, 0, 2, 2)]
-    public void Адаптивно_ТаблицаОбщаяСPython(int cpus, double load1, double memGiB, int max, int expected)
+    [InlineData(24, 7.2, 31, -1, 6, 6)]
+    [InlineData(24, 11.99, 31, -1, 6, 6)]
+    [InlineData(24, 12.0, 31, -1, 6, 3)]
+    [InlineData(24, 14.0, 31, -1, 6, 3)]
+    [InlineData(24, 35.99, 31, -1, 6, 3)]
+    [InlineData(24, 36.0, 31, -1, 6, 2)]
+    [InlineData(24, 50.0, 31, -1, 6, 2)]
+    [InlineData(24, 2.0, 14.0, -1, 6, 4)]
+    [InlineData(24, 2.0, 13.99, -1, 6, 3)]
+    [InlineData(24, 2.0, 7.0, -1, 6, 2)]
+    [InlineData(24, 2.0, 6.99, -1, 6, 1)]
+    [InlineData(24, 2.0, 0.5, -1, 6, 1)]
+    [InlineData(24, 2.0, 28, 7.0, 6, 2)]
+    [InlineData(24, 2.0, 28, 1.5, 6, 1)]
+    [InlineData(24, 2.0, 28, 0, 6, 1)]
+    [InlineData(24, 2.0, 7.0, 20, 6, 2)]
+    [InlineData(24, 2.0, 31, 24, 6, 6)]
+    [InlineData(24, 50.0, 31, 24, 6, 2)]
+    [InlineData(24, 2.0, 31, -1, 4, 4)]
+    [InlineData(24, 2.0, 31, -1, 1, 1)]
+    [InlineData(24, 50.0, 31, -1, 1, 1)]
+    [InlineData(8, 3.9, 31, -1, 6, 6)]
+    [InlineData(8, 4.0, 31, -1, 6, 3)]
+    [InlineData(-1, 0, 0, -1, 6, 3)]
+    [InlineData(-1, 0, 0, -1, 2, 2)]
+    public void Адаптивно_ТаблицаОбщаяСPython(int cpus, double load1, double memGiB, double cgGiB, int max, int expected)
     {
-        MachineSnapshot? snapshot = cpus < 0 ? null : new MachineSnapshot(cpus, load1, (long)(memGiB * AdaptiveShards.GiB));
+        MachineSnapshot? snapshot = cpus < 0 ? null : new MachineSnapshot(cpus, load1, (long)(memGiB * AdaptiveShards.GiB),
+            cgGiB < 0 ? null : (long)(cgGiB * AdaptiveShards.GiB));
         AdaptiveShards.Choose(snapshot, max).Shards.Should().Be(expected);
     }
 
@@ -103,6 +112,8 @@ public class TestShardsTests
     {
         AdaptiveShards.Choose(new MachineSnapshot(24, 7.2, 31 * AdaptiveShards.GiB + 5), 6)
             .Should().Be((6, "load1 7,2 из 24, свободно 31 ГиБ"));
+        AdaptiveShards.Choose(new MachineSnapshot(24, 7.2, 28 * AdaptiveShards.GiB, 7 * AdaptiveShards.GiB + 5), 6)
+            .Should().Be((2, "load1 7,2 из 24, свободно 28 ГиБ, в cgroup 7 ГиБ"));
         AdaptiveShards.Choose(null, 6).Should().Be((3, "нет /proc — фиксированное значение"));
     }
 
@@ -120,11 +131,94 @@ public class TestShardsTests
             File.WriteAllText(Path.Combine(dir, "loadavg"), "7.20 5.00 4.00 2/900 123\n");
             AdaptiveShards.Read(dir).Should().BeNull("MemAvailable нет");
             File.WriteAllText(Path.Combine(dir, "meminfo"), "MemTotal: 65000000 kB\nMemAvailable:   32505856 kB\n");
-            AdaptiveShards.Read(dir).Should().Be(new MachineSnapshot(Environment.ProcessorCount, 7.2, 32505856L * 1024));
+            AdaptiveShards.Read(dir, Path.Combine(dir, "нет-cgroupfs")).Should()
+                .Be(new MachineSnapshot(Environment.ProcessorCount, 7.2, 32505856L * 1024), "без cgroup — только MemAvailable");
         }
         finally
         {
             try { Directory.Delete(dir, recursive: true); } catch { /* занят */ }
         }
     }
+
+    // --- Запас памяти cgroup (AdaptiveShards.CgroupFree) ---
+
+    private sealed class CgroupTree : IDisposable
+    {
+        public string Dir { get; } = Path.Combine(Path.GetTempPath(), "ccs-cg-" + Guid.NewGuid().ToString("N"));
+        public string Root => Path.Combine(Dir, "cg");
+        public string File => Path.Combine(Dir, "cgroup");
+
+        // Сервер — в app.slice, шарды — в ccs.slice/ccs-agents.slice под тем же user@<uid>.service
+        public const string Server = "/user.slice/user-1000.slice/user@1000.service/app.slice/ccs.service";
+        public const string Slice = "user.slice/user-1000.slice/user@1000.service/ccs.slice/ccs-agents.slice";
+
+        public CgroupTree(string own = Server)
+        {
+            Directory.CreateDirectory(Path.Combine(Root, own.TrimStart('/')));
+            Directory.CreateDirectory(Path.Combine(Root, Slice));
+            System.IO.File.WriteAllText(File, "0::" + own + "\n");
+        }
+
+        public void Limit(string rel, string max, string current)
+        {
+            var node = Path.Combine(Root, rel);
+            Directory.CreateDirectory(node);
+            System.IO.File.WriteAllText(Path.Combine(node, "memory.max"), max + "\n");
+            System.IO.File.WriteAllText(Path.Combine(node, "memory.current"), current + "\n");
+        }
+
+        public long? Free(string? slice = "ccs-agents.slice") => AdaptiveShards.CgroupFree(File, Root, slice);
+
+        public void Dispose()
+        {
+            try { Directory.Delete(Dir, recursive: true); } catch { /* занят */ }
+        }
+    }
+
+    private static string G(long gib) => (gib * AdaptiveShards.GiB).ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    [Fact]
+    public void Cgroup_SliceИщетсяУПредковСвоегоCgroup_МинимумПоЦепочке()
+    {
+        using var t = new CgroupTree();
+        t.Limit(CgroupTree.Slice, G(24), G(17));
+        t.Limit("user.slice/user-1000.slice/user@1000.service/ccs.slice", "max", G(17));
+        t.Limit("user.slice/user-1000.slice/user@1000.service/app.slice/ccs.service", G(2), G(2));
+
+        t.Free().Should().Be(7 * AdaptiveShards.GiB, "лимит самого сервера (ccs.service) к шардам в slice не относится");
+        t.Free(slice: null).Should().Be(0, "без изоляции шарды живут в cgroup сервера");
+        t.Limit("user.slice", G(10), G(5));
+        t.Free().Should().Be(5 * AdaptiveShards.GiB, "предок slice с меньшим запасом — он и ограничивает");
+    }
+
+    [Fact]
+    public void Cgroup_НетФайлаИлиMaxИлиМусор_NullБезИсключения()
+    {
+        using var t = new CgroupTree();
+        AdaptiveShards.CgroupFree(Path.Combine(t.Dir, "нет"), t.Root, "ccs-agents.slice").Should().BeNull("нет /proc/self/cgroup");
+        t.Free().Should().BeNull("memory.max нигде нет");
+        t.Limit(CgroupTree.Slice, "max", G(17));
+        t.Free().Should().BeNull("везде max");
+        t.Free("другой.slice").Should().BeNull("slice не найден у предков");
+        t.Free("../etc.slice").Should().BeNull("не имя slice");
+        t.Limit(CgroupTree.Slice, "мусор", G(1));
+        t.Free().Should().BeNull();
+        t.Limit(CgroupTree.Slice, G(24), "");
+        t.Free().Should().BeNull();
+        t.Limit(CgroupTree.Slice, G(24), G(25));
+        t.Free().Should().Be(0, "перебор над max — ноль, а не минус");
+        System.IO.File.WriteAllText(t.File, "12:memory:/x\n");
+        t.Free().Should().BeNull("cgroup v1 — без v2-строки");
+    }
+
+    [Theory]
+    [InlineData("ccs-agents.slice", "ccs.slice/ccs-agents.slice")]
+    [InlineData("ccs.slice", "ccs.slice")]
+    [InlineData("a-b-c.slice", "a.slice/a-b.slice/a-b-c.slice")]
+    [InlineData("ccs-agents", null)]
+    [InlineData("-x.slice", null)]
+    [InlineData("a--b.slice", null)]
+    [InlineData("a/b.slice", null)]
+    public void Cgroup_ПутьSliceПоПравилуSystemd(string slice, string? expected) =>
+        AdaptiveShards.SlicePath(slice).Should().Be(expected);
 }

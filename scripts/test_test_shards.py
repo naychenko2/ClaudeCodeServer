@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -845,38 +846,48 @@ class RunFastTests(unittest.TestCase):
 
 
 # Те же строки — в backend/ClaudeHomeServer.TestRuns.Tests/Services/TestShardsTests.cs (AdaptiveRows):
-# (nproc, load1, MemAvailable ГиБ или None — снимка нет, потолок, ожидаемое N)
+# (nproc, load1, MemAvailable ГиБ или None — снимка нет, запас cgroup ГиБ или None — cgroup нет, потолок, ожидаемое N)
 ADAPTIVE_ROWS = [
-    (24, 7.2, 31, 6, 6),      # тихо — потолок
-    (24, 11.99, 31, 6, 6),    # под границей 0,5·nproc
-    (24, 12.0, 31, 6, 3),     # ровно 0,5·nproc — уже не потолок (мутация порога 0,5→0,6 краснит здесь)
-    (24, 14.0, 31, 6, 3),
-    (24, 35.99, 31, 6, 3),    # под границей 1,5·nproc
-    (24, 36.0, 31, 6, 2),     # ровно 1,5·nproc
-    (24, 50.0, 31, 6, 2),
-    (24, 2.0, 15.9, 6, 3),    # памяти меньше 16 ГиБ — не больше 3
-    (24, 2.0, 16.0, 6, 6),
-    (24, 2.0, 7.9, 6, 2),     # меньше 8 ГиБ — не больше 2
-    (24, 2.0, 8.0, 6, 3),
-    (24, 2.0, 31, 4, 4),      # потолок из настроек
-    (24, 2.0, 31, 1, 1),
-    (24, 50.0, 31, 1, 1),     # потолок ниже правила
-    (8, 3.9, 31, 6, 6),
-    (8, 4.0, 31, 6, 3),
-    (None, None, None, 6, 3),  # нет /proc — прежнее фиксированное
-    (None, None, None, 2, 2),
+    (24, 7.2, 31, None, 6, 6),      # тихо — потолок
+    (24, 11.99, 31, None, 6, 6),    # под границей 0,5·nproc
+    (24, 12.0, 31, None, 6, 3),     # ровно 0,5·nproc — уже не потолок (мутация порога 0,5→0,6 краснит здесь)
+    (24, 14.0, 31, None, 6, 3),
+    (24, 35.99, 31, None, 6, 3),    # под границей 1,5·nproc
+    (24, 36.0, 31, None, 6, 2),     # ровно 1,5·nproc
+    (24, 50.0, 31, None, 6, 2),
+    (24, 2.0, 14.0, None, 6, 4),    # 14 / 3,5 = 4 ровно (мутация 3,5→3 краснит строку ниже)
+    (24, 2.0, 13.99, None, 6, 3),
+    (24, 2.0, 7.0, None, 6, 2),
+    (24, 2.0, 6.99, None, 6, 1),
+    (24, 2.0, 0.5, None, 6, 1),     # не меньше 1
+    (24, 2.0, 28, 7.0, 6, 2),       # хост свободен, slice почти полон (02.11: 16,9 из 24) — N мал
+    (24, 2.0, 28, 1.5, 6, 1),
+    (24, 2.0, 28, 0, 6, 1),         # slice полон — всё равно 1, а не 0
+    (24, 2.0, 7.0, 20, 6, 2),       # cgroup свободен, хост нет — минимум двух
+    (24, 2.0, 31, 24, 6, 6),        # 24 / 3,5 = 6,86
+    (24, 50.0, 31, 24, 6, 2),       # нагрузка сильнее памяти
+    (24, 2.0, 31, None, 4, 4),      # потолок из настроек
+    (24, 2.0, 31, None, 1, 1),
+    (24, 50.0, 31, None, 1, 1),     # потолок ниже правила
+    (8, 3.9, 31, None, 6, 6),
+    (8, 4.0, 31, None, 6, 3),
+    (None, None, None, None, 6, 3),  # нет /proc — прежнее фиксированное
+    (None, None, None, None, 2, 2),
 ]
 
 
 class AdaptiveShardsTests(unittest.TestCase):
     def test_таблица_правила_общая_с_csharp(self):
-        for cpus, load1, mem, maximum, expected in ADAPTIVE_ROWS:
-            snapshot = None if cpus is None else (cpus, load1, int(mem * ts.GIB))
-            with self.subTest(cpus=cpus, load1=load1, mem=mem, maximum=maximum):
+        for cpus, load1, mem, cg, maximum, expected in ADAPTIVE_ROWS:
+            snapshot = None if cpus is None else (
+                cpus, load1, int(mem * ts.GIB), None if cg is None else int(cg * ts.GIB))
+            with self.subTest(cpus=cpus, load1=load1, mem=mem, cg=cg, maximum=maximum):
                 self.assertEqual(expected, ts.choose_shards(snapshot, maximum)[0])
 
     def test_причина_для_сводки(self):
-        self.assertEqual((6, "load1 7,2 из 24, свободно 31 ГиБ"), ts.choose_shards((24, 7.2, 31 * ts.GIB + 5), 6))
+        self.assertEqual((6, "load1 7,2 из 24, свободно 31 ГиБ"), ts.choose_shards((24, 7.2, 31 * ts.GIB + 5, None), 6))
+        self.assertEqual((2, "load1 7,2 из 24, свободно 28 ГиБ, в cgroup 7 ГиБ"),
+                         ts.choose_shards((24, 7.2, 28 * ts.GIB, 7 * ts.GIB + 5), 6))
         self.assertEqual((3, "нет /proc — фиксированное значение"), ts.choose_shards(None, 6))
 
     def test_снимок_без_proc_это_none_а_не_исключение(self):
@@ -901,7 +912,7 @@ class AdaptiveShardsTests(unittest.TestCase):
     def test_run_с_явным_n_не_зовёт_правило_а_auto_печатает_выбор_первой_строкой(self):
         orig = ts.list_tests, ts.machine_snapshot
         seen = []
-        ts.machine_snapshot = lambda: seen.append(1) or (24, 2.0, 31 * ts.GIB)
+        ts.machine_snapshot = lambda: seen.append(1) or (24, 2.0, 31 * ts.GIB, None)
         ts.list_tests = lambda project, extra: (None, "стоп после выбора N")
         try:
             out = io.StringIO()
@@ -911,7 +922,7 @@ class AdaptiveShardsTests(unittest.TestCase):
             self.assertEqual("", out.getvalue())
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
                 ts.main(["--run", "x"])
-            self.assertEqual("Шардов: 6 (load1 2,0 из 24, свободно 31 ГиБ)", out.getvalue().splitlines()[0])
+            self.assertEqual(f"Шардов: {ts.ADAPTIVE_MAX} (load1 2,0 из 24, свободно 31 ГиБ)", out.getvalue().splitlines()[0])
         finally:
             ts.list_tests, ts.machine_snapshot = orig
 
@@ -928,6 +939,121 @@ class AdaptiveShardsTests(unittest.TestCase):
         finally:
             ts.machine_snapshot = orig
             os.remove(f.name)
+
+
+class CgroupFreeTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="ccs-cg-")
+        self.root = os.path.join(self.dir, "cg")
+        self.leaf = os.path.join(self.root, "a.slice", "a-b.slice", "run.scope")
+        os.makedirs(self.leaf)
+        self.cgfile = os.path.join(self.dir, "cgroup")
+        self.write(self.cgfile, "0::/a.slice/a-b.slice/run.scope\n")
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    @staticmethod
+    def write(path, text):
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def limit(self, rel, maximum, current):
+        node = os.path.join(self.root, rel)
+        self.write(os.path.join(node, "memory.max"), f"{maximum}\n")
+        self.write(os.path.join(node, "memory.current"), f"{current}\n")
+
+    def free(self):
+        return ts.cgroup_free(self.cgfile, self.root)
+
+    def test_нет_файла_cgroup_или_строки_v2_это_none(self):
+        self.assertIsNone(ts.cgroup_free(os.path.join(self.dir, "нет"), self.root))
+        self.write(self.cgfile, "12:memory:/x\n")
+        self.assertIsNone(self.free())
+
+    def test_везде_max_или_файлов_нет_это_none(self):
+        self.assertIsNone(self.free())
+        self.limit("a.slice/a-b.slice/run.scope", "max", 100)
+        self.limit("a.slice/a-b.slice", "max", 100)
+        self.assertIsNone(self.free())
+
+    def test_неразборчивое_значение_это_none_без_исключения(self):
+        self.limit("a.slice/a-b.slice", "мусор", 1)
+        self.assertIsNone(self.free())
+        self.limit("a.slice/a-b.slice", 100, "")
+        self.assertIsNone(self.free())
+
+    def test_минимум_по_цепочке_scope_и_slice(self):
+        self.limit("a.slice/a-b.slice/run.scope", 16 * ts.GIB, 1 * ts.GIB)
+        self.limit("a.slice/a-b.slice", 24 * ts.GIB, 17 * ts.GIB)
+        self.assertEqual(7 * ts.GIB, self.free(), "slice почти полон — он и ограничивает, хотя scope свободен")
+        self.limit("a.slice/a-b.slice", 24 * ts.GIB, 25 * ts.GIB)
+        self.assertEqual(0, self.free(), "перебор над max — ноль, а не минус")
+
+    def test_снимок_несёт_запас_cgroup(self):
+        orig = ts.cgroup_free
+        ts.cgroup_free = lambda: 5 * ts.GIB
+        try:
+            snap = ts.machine_snapshot()
+        finally:
+            ts.cgroup_free = orig
+        if snap is not None:  # на машине без /proc снимка нет вовсе
+            self.assertEqual(5 * ts.GIB, snap[3])
+
+
+class AdaptiveSplitTests(unittest.TestCase):
+    SPLIT = [("backend/ClaudeHomeServer.Tests", 3), ("backend/ClaudeHomeServer.Llm.Tests", 2)]
+
+    def test_без_переменной_split_как_есть(self):
+        self.assertEqual([("backend/ClaudeHomeServer.Tests", 3, ts.ADAPTIVE_MAX),
+                          ("backend/ClaudeHomeServer.Llm.Tests", 2, ts.ADAPTIVE_MAX)],
+                         ts.adaptive_split(self.SPLIT, None))
+
+    def test_переменная_делает_проект_auto_под_своим_потолком(self):
+        self.assertEqual([("backend/ClaudeHomeServer.Tests", "auto", 4),
+                          ("backend/ClaudeHomeServer.Llm.Tests", 2, ts.ADAPTIVE_MAX)],
+                         ts.adaptive_split(self.SPLIT, "backend/ClaudeHomeServer.Tests/=4"))
+
+    def test_неразборчивая_переменная_предупреждение_и_split_как_есть(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            out = ts.adaptive_split(self.SPLIT, "мусор")
+        self.assertEqual([3, 2], [n for _, n, _ in out])
+        self.assertIn(ts.ADAPTIVE_ENV, err.getvalue())
+
+    def test_run_fast_с_переменной_выбирает_n_по_правилу(self):
+        orig = ts.machine_snapshot, ts.calibrate
+        ts.machine_snapshot = lambda: (24, 2.0, 28 * ts.GIB, 7 * ts.GIB)
+        ts.calibrate = lambda results: (_ for _ in ()).throw(RuntimeError("стоп после выбора N"))
+        os.environ[ts.ADAPTIVE_ENV] = "backend/ClaudeHomeServer.Tests=4"
+        try:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), self.assertRaises(RuntimeError):
+                ts.run_fast("x.slnx", self.SPLIT, "r", None, None)
+            self.assertEqual("Шардов ClaudeHomeServer.Tests: 2 (load1 2,0 из 24, свободно 28 ГиБ, в cgroup 7 ГиБ)",
+                             out.getvalue().splitlines()[0])
+        finally:
+            ts.machine_snapshot, ts.calibrate = orig
+            del os.environ[ts.ADAPTIVE_ENV]
+
+
+class PregateConfigCompatTests(unittest.TestCase):
+    """Конфиг предгейта берётся с СЕРВЕРА, а скрипт — из дерева ветки: --split обязан остаться понятен скрипту
+    старых деревьев (только числа), адаптивность — переменной окружения, которую старый скрипт не видит."""
+
+    def check(self):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backend", "ClaudeHomeServer",
+                            "appsettings.json")
+        with open(path, encoding="utf-8-sig") as f:
+            return json.load(f)["Pregate"]["Checks"]["быстрые тесты"]
+
+    def test_split_только_числа_адаптивность_в_env(self):
+        check = self.check()
+        split = check["Args"][check["Args"].index("--split") + 1]
+        for item in split.split(","):
+            self.assertRegex(item, r"=\d+$", "старый parse_split бросает ValueError на всём, кроме числа")
+        self.assertIn("backend/ClaudeHomeServer.Tests=3", split.split(","), "старый скрипт — 3 шарда монолита")
+        self.assertEqual({ts.ADAPTIVE_ENV: "backend/ClaudeHomeServer.Tests=4"}, check["Env"])
 
 
 if __name__ == "__main__":

@@ -1094,7 +1094,7 @@ public class TestRunServiceTests : IDisposable
 
         var result = await service.RunDotnetAsync(MonolithRequest(), null, CancellationToken.None).WaitAsync(Wait);
 
-        service.ShardCount().Should().Be((6, "load1 2,0 из 24, свободно 31 ГиБ"));
+        service.ShardCount().Should().Be((AdaptiveShards.DefaultMax, "load1 2,0 из 24, свободно 31 ГиБ"));
         result.Timings!.ShardsReason.Should().Be("load1 2,0 из 24, свободно 31 ГиБ");
         service.FormatResult(result).Should().Contain("шардов параллельно: 2 — load1 2,0 из 24, свободно 31 ГиБ");
     }
@@ -1139,7 +1139,8 @@ public class TestRunServiceTests : IDisposable
                 .AddInMemoryCollection(pairs.ToDictionary(p => p.Key, p => (string?)p.Value)).Build());
 
         From().AdaptiveShards.Should().BeTrue();
-        From().MonolithShards.Should().Be(6);
+        From().MonolithShards.Should().Be(4, "N=6 по RSS не замерен — потолок 4 до замера");
+        From(("TestRuns:MonolithShards", "6")).MonolithShards.Should().Be(6, "после замера поднимается конфигом");
         From(("TestRuns:AdaptiveShards", "false"), ("TestRuns:MonolithShards", "3")).Should()
             .Match<TestRunsOptions>(o => !o.AdaptiveShards && o.MonolithShards == 3);
     }

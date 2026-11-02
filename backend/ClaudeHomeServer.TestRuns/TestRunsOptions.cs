@@ -21,7 +21,7 @@ public sealed class TestRunsOptions
     public int TailLines { get; init; } = 40;
 
     // Монолит без filter идёт N процессами параллельно (TestShards); 1 — одним. При AdaptiveShards
-    // это ПОТОЛОК: N выбирает AdaptiveShards.Choose по load1 и MemAvailable на каждый прогон; без него —
+    // это ПОТОЛОК: N выбирает AdaptiveShards.Choose по load1 и запасу памяти (MemAvailable и slice) на каждый прогон; без него —
     // само N, как раньше. Слот BuildConcurrencyGate у прогона всё равно один: рост N — это рост пика RSS
     public const int DefaultMonolithShards = TestRuns.AdaptiveShards.DefaultMax;
     public int MonolithShards { get; init; } = DefaultMonolithShards;

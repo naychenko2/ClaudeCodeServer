@@ -102,6 +102,26 @@ public class PregateServiceTests : IDisposable
 
     private FakeLauncher Launcher(Func<ProcessSpec, (string, int)> behave) => new(_processes, _root, behave);
 
+    // Env проверки доезжает до процесса; служебные ключи разбора вывода конфиг не перебивает
+    [Fact]
+    public async Task Env_ИзКонфигаВПроцесс_СлужебныеКлючиПоверх()
+    {
+        var launcher = Launcher(_ => ("ok", 0));
+        var check = Check("быстрые тесты") with
+        {
+            Env = new() { ["CCS_TEST_SHARDS_ADAPTIVE"] = "backend/ClaudeHomeServer.Tests=4", ["DOTNET_CLI_UI_LANGUAGE"] = "ru" },
+        };
+
+        var verdict = await Service(launcher, check).RunAsync(Request(), CancellationToken.None);
+
+        verdict.IsGreen.Should().BeTrue();
+        var env = launcher.Specs.Single().Env!;
+        env["CCS_TEST_SHARDS_ADAPTIVE"].Should().Be("backend/ClaudeHomeServer.Tests=4");
+        env["DOTNET_CLI_UI_LANGUAGE"].Should().Be("en", "разбор «error CS…» держится на английском выводе");
+        env["DOTNET_NOLOGO"].Should().Be("1");
+        PregateService.ProcessEnv(Check("build")).Keys.Should().BeEquivalentTo(["DOTNET_CLI_UI_LANGUAGE", "DOTNET_NOLOGO"]);
+    }
+
     [Fact]
     public async Task AllChecksExitZero_VerdictGreen()
     {

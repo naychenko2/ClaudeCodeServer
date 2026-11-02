@@ -64,7 +64,7 @@ Fast — **исключение категорий**, а не перечень �
 | Один набор тестов | `dotnet test backend/ClaudeHomeServer.Tests --filter "FullyQualifiedName~Services.SessionManager"` |
 | Fast по решению | `dotnet test backend/ClaudeHomeServer.slnx --no-build --filter "Category!=Host&Category!=Slow&Category!=Integration&Category!=Node&Category!=Bench"` |
 | Монолит шардами локально | `python3 -I scripts/test-shards.py --run backend/ClaudeHomeServer.Tests --results .cc-attachments/test-shards` (`-n auto` по умолчанию, явное `-n 3` — фиксированно) |
-| Fast шардами (как в предгейте) | `python3 -I scripts/test-shards.py --run-fast backend/ClaudeHomeServer.slnx --split backend/ClaudeHomeServer.Tests=auto,backend/ClaudeHomeServer.Llm.Tests=2 --filter "<фильтр Fast>" --results .cc-attachments/pregate-fast` |
+| Fast шардами (как в предгейте) | `python3 -I scripts/test-shards.py --run-fast backend/ClaudeHomeServer.slnx --split backend/ClaudeHomeServer.Tests=3,backend/ClaudeHomeServer.Llm.Tests=2 --filter "<фильтр Fast>" --results .cc-attachments/pregate-fast` (с `CCS_TEST_SHARDS_ADAPTIVE=backend/ClaudeHomeServer.Tests=4` — N монолита по нагрузке) |
 | Профиль прогона по TRX | `python3 -I scripts/test-profile.py <папка с TRX или .trx>` |
 | Профиль для раскладки (3 спокойных прогона) | см. «Профиль раскладки: как снимать» ниже |
 | Сторож длительности | `python3 -I scripts/test-profile.py <папка TRX набора Fast> --check` |
@@ -167,16 +167,26 @@ Fast — **исключение категорий**, а не перечень �
 Монолит без `filter` инструмент гоняет **несколькими процессами `dotnet test` параллельно**
 ([TestShards.cs](../../backend/ClaudeHomeServer.TestRuns/TestShards.cs)):
 
-- Настройка `TestRuns:MonolithShards` — **потолок** (по умолчанию 6, допустимо 1–6; 1 — прежний
+- Настройка `TestRuns:MonolithShards` — **потолок** (по умолчанию 4, допустимо 1–6; 1 — прежний
   один процесс) и `TestRuns:MonolithTarget` (`backend/ClaudeHomeServer.Tests`) в `appsettings.json`.
 - **N по нагрузке машины** (`TestRuns:AdaptiveShards`, по умолчанию `true`; правило —
   `AdaptiveShards` в TestShards.cs и `choose_shards` в test-shards.py, одни константы и одна
   таблица тестов на обеих сторонах): `load1 < 0,5·nproc` — потолок, `< 1,5·nproc` — 3, иначе 2;
-  `MemAvailable < 16 ГиБ` — не больше 3, `< 8 ГиБ` — 2; нет `/proc` (Windows, macOS) — 3. Зачем:
+  по памяти `N ≤ floor(запас / 3,5 ГиБ)`, не меньше 1; нет `/proc` (Windows, macOS) — 3. **Запас —
+  минимум `MemAvailable` и `memory.max − memory.current` по цепочке cgroup**, в которой пойдут
+  шарды: у сервера — от `Execution:Isolation:Slice` (каталог slice ищется у предков своего cgroup по
+  правилу systemd `ccs-agents.slice` → `ccs.slice/ccs-agents.slice`, uid не зашит; без изоляции —
+  свой cgroup), у скрипта — от своего cgroup из `/proc/self/cgroup` (scope прогона со своим
+  `MemoryMax` и slice над ним). Нет cgroup, везде `max` или мусор — только `MemAvailable`. Почему
+  так: хост бывает свободен при почти полном slice (02.11 — 28 ГиБ на хосте при 16,9 из 24 в
+  slice), а OOM убивает по лимиту slice. 3,5 ГиБ на шард — замер 2026-10-29 (N=3 — пик 9,5 ГиБ) с
+  запасом. **Потолок 4, а не 6: пик RSS при N=6 не замерен** — 02.11 slice был занят на 22 из
+  24 ГиБ при load1 71, замер не влезал; поднимать `MonolithShards` (и потолок в Env предгейта)
+  только после замера `--run -n 6`. Зачем правило:
   днём (load 30–50 на 24 потоках) статическая параллель упирается в CPU — тот же монолит тремя
   шардами 123–132 с при load 5–11 и 176–218 с при load 30–50, — а в тихие окна три шарда
   недогружают машину. Выбор и причина — в строке цены итога («шардов параллельно: 6 — load1 7,2
-  из 24, свободно 31 ГиБ»); у `test-shards.py --run`/`--run-fast` — первой строкой вывода.
+  из 24, свободно 31 ГиБ, в cgroup 7 ГиБ»); у `test-shards.py --run`/`--run-fast` — первой строкой вывода.
   `--verify`/`--shard`/`--slnx` (CI) от нагрузки не зависят: `auto` там значит 3. Откат без
   пересборки: `AdaptiveShards=false` и `MonolithShards=3`.
 - Шарды включаются, только когда цель — монолит, `filter` не задан и подсчёт тестов
@@ -217,10 +227,16 @@ backend/X.slnx»); сборка проекта решение не покрыв�
 | `test-profile.py --check` | нехостовый тест без `Slow` дольше порога | CI (30 с), ручной `--check` на спокойной машине (5 с); в предгейт не входит |
 
 Предгейт шага (секция `Pregate` в `appsettings.json`) включает «быстрые тесты» (Order 35: Fast без
-пересборки, `test-shards.py --run-fast`: монолит `auto` шардов (по нагрузке, см. ниже) и `Llm.Tests` 2 шарда по классам, остальные
+пересборки, `test-shards.py --run-fast`: монолит шардами по нагрузке (см. ниже) и `Llm.Tests` 2 шарда по классам, остальные
 тестовые проекты — одним процессом на rest-slnx, всё параллельно; раскладка по профилю TRX прошлого
 прогона из той же папки, первый прогон — по хешу класса) после `build`; закрытие задачи она
-не блокирует, результат виден ревьюеру.
+не блокирует, результат виден ревьюеру. **Конфиг проверки серверный, а скрипт —
+из дерева ветки**, поэтому в `--split` только числа (`ClaudeHomeServer.Tests=3`): `parse_split`
+деревьев старше адаптивных шардов падает на `=auto`, и каждый их предгейт стал бы красным.
+Адаптивность включает `Env` проверки — `CCS_TEST_SHARDS_ADAPTIVE=backend/ClaudeHomeServer.Tests=4`
+(проект=потолок): старый скрипт переменную не видит и идёт прежними 3 шардами, новый выбирает N по
+правилу под этим потолком; число из `--split` для него — значение без переменной. `Env` у
+`PregateCheckOptions` — поверх него служебные `DOTNET_CLI_UI_LANGUAGE=en`, `DOTNET_NOLOGO=1`.
 
 Сканирующие сторожа `HostCategoryGuardTests` и `PooledHostGuardTests` делят один скан решения
 (`HostScan.Solution`), храповик берёт его только ради счётчика хостовых классов (≥ 100), а

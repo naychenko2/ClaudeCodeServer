@@ -13,8 +13,9 @@ namespace ClaudeHomeServer.Services.TestRuns;
 public static class TestShards
 {
     // Потолок числа шардов: каждый — свой testhost с maxParallelThreads, пик RSS растёт с N
-    // (замер 2026-10-29: N=1 — 5,5 ГиБ, N=3 — 9,5 ГиБ при лимите ccs-agents.slice 18 ГиБ)
-    public const int MaxShards = AdaptiveShards.DefaultMax;
+    // (замер 2026-10-29: N=1 — 5,5 ГиБ, N=3 — 9,5 ГиБ при лимите ccs-agents.slice 18 ГиБ).
+    // Жёсткий предел конфига; потолок по умолчанию ниже — AdaptiveShards.DefaultMax
+    public const int MaxShards = 6;
 
     // Потолок списка в памяти: монолит — ~7 тыс. имён, больше — не наш случай
     public const int MaxListedTests = 100_000;
@@ -112,8 +113,9 @@ public static class TestShards
     }
 }
 
-// Снимок машины для выбора числа шардов: потоков, load1, MemAvailable в байтах
-public readonly record struct MachineSnapshot(int Cpus, double Load1, long MemAvailableBytes);
+// Снимок машины для выбора числа шардов: потоков, load1, MemAvailable в байтах и запас cgroup
+// (минимум memory.max − memory.current по цепочке; null — cgroup нет или везде max)
+public readonly record struct MachineSnapshot(int Cpus, double Load1, long MemAvailableBytes, long? CgroupFreeBytes = null);
 
 // Число шардов монолита по текущей нагрузке машины (TestRuns:AdaptiveShards). Те же константы и то
 // же правило — в scripts/test-shards.py (choose_shards); табличные тесты обеих сторон идут по одним
@@ -121,7 +123,9 @@ public readonly record struct MachineSnapshot(int Cpus, double Load1, long MemAv
 // 30–50 на 24 потоках) больше трёх шардов не ускоряет, а в тихие окна три недогружают машину
 public static class AdaptiveShards
 {
-    public const int DefaultMax = 6;
+    // Потолок по умолчанию. 4, а не 6: пик RSS при N=6 не замерен (02.11 slice был занят на 22 из
+    // 24 ГиБ при load1 71 — замер не влезал), поднимать после замера
+    public const int DefaultMax = 4;
     // Нет /proc или он не прочитался — прежнее фиксированное значение
     public const int Fallback = 3;
     // load1 < 0,5·nproc — машина свободна: потолок; < 1,5·nproc — 3; иначе 2
@@ -130,9 +134,11 @@ public static class AdaptiveShards
     public const int Mid = 3;
     public const int Min = 2;
     public const long GiB = 1024L * 1024 * 1024;
-    // MemAvailable меньше — не больше 3 (3 шарда монолита ≈ 9,5 ГиБ); меньше 8 ГиБ — не больше 2
-    public const long MemMid = 16 * GiB;
-    public const long MemLow = 8 * GiB;
+    // Память на шард монолита: замер 2026-10-29 — N=3 дал пик 9,5 ГиБ (≈3,2 на шард), с запасом 3,5.
+    // N ≤ floor(запас / 3,5 ГиБ), не меньше 1; запас — минимум MemAvailable и запаса cgroup, в котором
+    // пойдут шарды (ccs-agents.slice): хост бывает свободен при почти полном slice (02.11: 28 ГиБ на
+    // хосте при 16,9 из 24 в slice)
+    public const long ShardMemBytes = 7 * GiB / 2;
 
     // Чистая функция от снимка (null — снимка нет): число шардов и причина для сводки
     public static (int Shards, string Reason) Choose(MachineSnapshot? snapshot, int max)
@@ -140,14 +146,18 @@ public static class AdaptiveShards
         max = Math.Max(1, max);
         if (snapshot is not { } s) return (Math.Min(Fallback, max), "нет /proc — фиксированное значение");
         var n = s.Load1 < IdleLoad * s.Cpus ? max : s.Load1 < BusyLoad * s.Cpus ? Mid : Min;
-        if (s.MemAvailableBytes < MemLow) n = Math.Min(n, Min);
-        else if (s.MemAvailableBytes < MemMid) n = Math.Min(n, Mid);
+        var headroom = s.CgroupFreeBytes is { } cg ? Math.Min(s.MemAvailableBytes, cg) : s.MemAvailableBytes;
+        n = Math.Min(n, (int)Math.Max(1, headroom / ShardMemBytes));
         var load = s.Load1.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture).Replace('.', ',');
-        return (Math.Min(n, max), $"load1 {load} из {s.Cpus}, свободно {s.MemAvailableBytes / GiB} ГиБ");
+        var where = s.CgroupFreeBytes is { } free ? $", в cgroup {free / GiB} ГиБ" : "";
+        return (Math.Min(n, max), $"load1 {load} из {s.Cpus}, свободно {s.MemAvailableBytes / GiB} ГиБ{where}");
     }
 
-    // Снимок из /proc; нет его (Windows, macOS) или не прочитался — null, без исключения
-    public static MachineSnapshot? Read(string procRoot = "/proc")
+    // Снимок из /proc и cgroupfs; нет /proc (Windows, macOS) или не прочитался — null, без исключения.
+    // slice — имя slice systemd, в котором пойдут шарды (Execution:Isolation:Slice при включённой
+    // изоляции); null — шарды живут в cgroup самого сервера
+    public static MachineSnapshot? Read(string procRoot = "/proc", string cgroupRoot = "/sys/fs/cgroup",
+        string? slice = null)
     {
         try
         {
@@ -159,7 +169,8 @@ public static class AdaptiveShards
                 if (!line.StartsWith("MemAvailable:", StringComparison.Ordinal)) continue;
                 var kb = long.Parse(line.Split(' ', StringSplitOptions.RemoveEmptyEntries)[1],
                     System.Globalization.CultureInfo.InvariantCulture);
-                return new MachineSnapshot(Environment.ProcessorCount, load1, kb * 1024);
+                return new MachineSnapshot(Environment.ProcessorCount, load1, kb * 1024,
+                    CgroupFree(Path.Combine(procRoot, "self", "cgroup"), cgroupRoot, slice));
             }
             return null;
         }
@@ -167,6 +178,72 @@ public static class AdaptiveShards
             or OverflowException or IndexOutOfRangeException)
         {
             return null;
+        }
+    }
+
+    // Запас памяти cgroup v2, в котором пойдут шарды: минимум memory.max − memory.current по цепочке от
+    // стартового каталога до корня. Старт — каталог slice (ищется у предков своего cgroup: у user-юнитов
+    // сервер в app.slice, а ccs-agents.slice — в ccs.slice под тем же user@<uid>.service; uid в код не
+    // зашит), без slice — свой cgroup. null — cgroup нет, slice не найден, везде max или значение
+    // неразборчиво: правило тогда смотрит только MemAvailable
+    public static long? CgroupFree(string cgroupFile, string cgroupRoot, string? slice)
+    {
+        try
+        {
+            if (!File.Exists(cgroupFile)) return null;
+            var own = File.ReadLines(cgroupFile).FirstOrDefault(l => l.StartsWith("0::", StringComparison.Ordinal))?[3..].Trim();
+            if (own is not { Length: > 0 } || own[0] != '/') return null;
+            var root = Path.GetFullPath(cgroupRoot).TrimEnd('/');
+            var start = Path.GetFullPath(root + own).TrimEnd('/');
+            if (slice is { Length: > 0 })
+            {
+                if (SlicePath(slice) is not { } rel) return null;
+                var found = Ancestors(start, root).Select(a => Path.Combine(a, rel)).FirstOrDefault(Directory.Exists);
+                if (found is null) return null;
+                start = found;
+            }
+            long? best = null;
+            foreach (var node in Ancestors(start, root))
+            {
+                var maxFile = Path.Combine(node, "memory.max");
+                if (!File.Exists(maxFile)) continue;
+                var limit = File.ReadAllText(maxFile).Trim();
+                if (limit == "max") continue;
+                var free = Math.Max(0, long.Parse(limit, System.Globalization.CultureInfo.InvariantCulture)
+                    - long.Parse(File.ReadAllText(Path.Combine(node, "memory.current")).Trim(),
+                        System.Globalization.CultureInfo.InvariantCulture));
+                best = best is { } b ? Math.Min(b, free) : free;
+            }
+            return best;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or FormatException
+            or OverflowException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    // Путь slice в cgroupfs по правилу systemd: дефис — уровень иерархии,
+    // «ccs-agents.slice» → «ccs.slice/ccs-agents.slice». Не похоже на имя slice — null
+    internal static string? SlicePath(string slice)
+    {
+        if (!slice.EndsWith(".slice", StringComparison.Ordinal)) return null;
+        var name = slice[..^".slice".Length];
+        if (name.Length == 0 || name.Contains('/') || name.Contains("..") || name.StartsWith('-') || name.EndsWith('-'))
+            return null;
+        var parts = name.Split('-');
+        if (parts.Any(p => p.Length == 0)) return null;
+        return string.Join('/', parts.Select((_, i) => string.Join('-', parts[..(i + 1)]) + ".slice"));
+    }
+
+    // Каталог и его предки до корня cgroupfs включительно
+    private static IEnumerable<string> Ancestors(string node, string root)
+    {
+        for (var cur = node; cur.Length >= root.Length && cur.StartsWith(root, StringComparison.Ordinal);
+             cur = Path.GetDirectoryName(cur) ?? "")
+        {
+            yield return cur;
+            if (cur.Length == root.Length) yield break;
         }
     }
 }

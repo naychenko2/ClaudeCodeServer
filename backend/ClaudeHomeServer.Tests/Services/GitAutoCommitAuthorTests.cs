@@ -15,11 +15,14 @@ using Xunit;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// S3-1b: автокоммит хода в общем проекте несёт автора — актора идущего хода.
-// Актор читается СИНХРОННО в OnSessionMessageAsync до Task.Run: к моменту фоновой задачи
-// реестр хода уже пуст (ядро снимает актора при выходе статуса из Working — тот же класс,
-// что исправлял dffec3dc7 для журнала событий). «Очищающий» реестр-подмена отдаёт актора
-// только пока TurnLive=true; тест снимает флаг сразу после события — автор обязан остаться.
+// S3-1b: автокоммит хода в общем проекте несёт автора — актора завершённого хода.
+// Актор запоминается ВНУТРИ хода (на сообщениях до ResultMessage) и берётся запомненным
+// на ResultMessage: к этому моменту ядро уже сняло актора (SessionManager.cs:3785-3786;
+// свидетель — SessionManagerTests.TurnActor.cs:34). Реестр-подмена моделирует живое
+// состояние ядра: конец хода (снятие актора) тест обозначает ЯВНО и ДО ResultMessage —
+// как в системе. Момент снятия держит TaskCompletionSource, а не флаг, который тест
+// переворачивал после события: любой поздний запрос к реестру — и синхронный на
+// ResultMessage, и из фоновой Task.Run — гарантированно видит пустой реестр, гонки нет.
 // Настоящий git во временной папке (по образцу GitCommitAuthorTests).
 public class GitAutoCommitAuthorTests : IDisposable
 {
@@ -30,13 +33,16 @@ public class GitAutoCommitAuthorTests : IDisposable
         public IProcessLauncher ForProject(Project project) => Local;
     }
 
-    // Реестр-подмена: актор живёт только пока TurnLive (флаг тест снимает сразу после
-    // события — к фоновой задаче реестр «уже пуст»). null ActorId — фон без актора.
-    private sealed class ClearingTurnActorRegistry : ITurnActorRegistry
+    // Реестр-подмена живого ядра: актор живёт, пока ход не закончен. EndTurn() — тот же
+    // момент, когда ядро обнуляет RunActor/SubmitActor (SessionManager.cs:3785-3786);
+    // тест вызывает его строго до ResultMessage, поэтому детерминированно и для чтения
+    // внутри фоновой задачи. null ActorId — фон без актора.
+    private sealed class LiveTurnActorRegistry : ITurnActorRegistry
     {
+        private readonly TaskCompletionSource _turnEnded = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public string? ActorId { get; init; }
-        public bool TurnLive { get; set; } = true;
-        public string? Actor(string sessionId, string ownerId) => TurnLive ? ActorId : null;
+        public void EndTurn() => _turnEnded.TrySetResult();
+        public string? Actor(string sessionId, string ownerId) => _turnEnded.Task.IsCompleted ? null : ActorId;
     }
 
     private sealed class NoOpBroadcaster : ISessionBroadcaster
@@ -146,23 +152,27 @@ public class GitAutoCommitAuthorTests : IDisposable
     }
 
     [Fact]
-    public async Task АвтокоммитОбщегоПроекта_АвторАкторХода_РеестрОчищенМеждуЧтениемИКоммитом()
+    public async Task АвтокоммитОбщегоПроекта_АвторАкторХода_РеестрСнятДоResultMessage()
     {
         var project = await SetupProjectAsync(shared: true);
         var member = project.Members![0];
         var baseSha = (await _git.RunAsync(null, _repo, ["rev-parse", "HEAD"])).Stdout.Trim();
 
         var sessions = (SessionManager)RuntimeHelpers.GetUninitializedObject(typeof(SessionManager));
-        var registry = new ClearingTurnActorRegistry { ActorId = member.UserId };
+        var registry = new LiveTurnActorRegistry { ActorId = member.UserId };
         var sut = new GitAutoCommitService(
             sessions, _projects, _users, _git, new NoOpBroadcaster(), registry,
             NullLogger<GitAutoCommitService>.Instance);
         await sut.StartAsync(CancellationToken.None);
 
-        FireOnSessionMessage(sessions, MakeSession(project.Id), new ResultMessage("success", 0, 1, null, null));
-        // «реестр очищается между чтением и коммитом»: актор читался синхронно во время
-        // Fire…, здесь ядро уже бы его сняло — фоновая задача обязана нести взятого автора
-        registry.TurnLive = false;
+        var session = MakeSession(project.Id);
+        // Ход в полёте: актор жив — сервис обязан запомнить его на сообщении ВНУТРИ хода
+        FireOnSessionMessage(sessions, session, new TextDeltaMessage("правка файла"));
+        // Конец хода: ядро снимает актора ДО ResultMessage (SessionManager.cs:3785-3786).
+        // После этой точки ни один запрос к реестру — синхронный или из фоновой задачи —
+        // не отдаёт актора: автор обязан остаться только запомненным.
+        registry.EndTurn();
+        FireOnSessionMessage(sessions, session, new ResultMessage("success", 0, 1, null, null));
 
         var (an, ae, cn, body) = await WaitForAutoCommitAsync(baseSha);
         var memberUser = _users.GetById(member.UserId)!;
@@ -180,7 +190,7 @@ public class GitAutoCommitAuthorTests : IDisposable
         var baseSha = (await _git.RunAsync(null, _repo, ["rev-parse", "HEAD"])).Stdout.Trim();
 
         var sessions = (SessionManager)RuntimeHelpers.GetUninitializedObject(typeof(SessionManager));
-        var registry = new ClearingTurnActorRegistry { ActorId = null }; // фон, исполнитель без инициатора
+        var registry = new LiveTurnActorRegistry { ActorId = null }; // фон, исполнитель без инициатора
         var sut = new GitAutoCommitService(
             sessions, _projects, _users, _git, new NoOpBroadcaster(), registry,
             NullLogger<GitAutoCommitService>.Instance);
@@ -200,7 +210,7 @@ public class GitAutoCommitAuthorTests : IDisposable
         var baseSha = (await _git.RunAsync(null, _repo, ["rev-parse", "HEAD"])).Stdout.Trim();
 
         var sessions = (SessionManager)RuntimeHelpers.GetUninitializedObject(typeof(SessionManager));
-        var registry = new ClearingTurnActorRegistry { ActorId = _users.GetFirst()!.Id };
+        var registry = new LiveTurnActorRegistry { ActorId = _users.GetFirst()!.Id };
         var sut = new GitAutoCommitService(
             sessions, _projects, _users, _git, new NoOpBroadcaster(), registry,
             NullLogger<GitAutoCommitService>.Instance);

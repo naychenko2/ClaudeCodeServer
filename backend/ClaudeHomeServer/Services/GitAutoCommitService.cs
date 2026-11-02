@@ -33,10 +33,32 @@ public sealed class GitAutoCommitService(
         return Task.CompletedTask;
     }
 
+    // Актор идущего хода по чату. К ResultMessage ядро уже сняло статус хода и обнулило
+    // актора (SessionManager.cs:3785-3786; свидетель — SessionManagerTests.TurnActor.cs:34),
+    // поэтому запоминаем его на сообщениях ВНУТРИ хода — тот же образец, что
+    // ChatTurnLoggerService.cs:41-53. Ключ — session.Id; запись снимается на ResultMessage.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _rememberedActors = new();
+
     private Task OnSessionMessageAsync(Session session, ServerMessage msg)
     {
-        if (msg is not ResultMessage || session.ProjectId is null) return Task.CompletedTask;
+        if (session.ProjectId is null) return Task.CompletedTask;
         var project = projects.GetById(session.ProjectId);
+        if (msg is not ResultMessage)
+        {
+            // Внутри хода актор ещё жив: обновляем запомненного на каждом сообщении.
+            // Ранний выход для проекта, где автора не бывает по построению: личный
+            // (участников нет — тот же признак, что в AuthorOfTurn) и без владельца.
+            if (project is null || project.OwnerId is null || project.Members is not { Count: > 0 })
+                return Task.CompletedTask;
+            if (turnActors.Actor(session.Id, project.OwnerId) is { } live)
+                _rememberedActors[session.Id] = live;
+            return Task.CompletedTask;
+        }
+
+        // Ход закончен: запомненного снимаем словарь в любом случае — дальше он нужен
+        // только как автор коммита, а коммита может и не быть (гейты ниже).
+        _rememberedActors.TryRemove(session.Id, out var rememberedActor);
+
         // Локальный проект коммитит у себя на устройстве — серверный git туда не ходит (ADR-016 §4)
         if (project is not null && !ProjectCapabilities.FilesOnServer(project)) return Task.CompletedTask;
         // Чат в отдельном worktree меняет файлы ТАМ — коммитим его дерево, не корень проекта
@@ -44,25 +66,26 @@ public sealed class GitAutoCommitService(
         if (project is null || root is null || !project.GitAutoCommit || !git.IsGitRepo(root))
             return Task.CompletedTask;
 
-        // Автор автокоммита (S3-1b) — актор идущего хода. Читается СИНХРОННО, до Task.Run:
-        // к моменту фоновой задачи реестр хода уже пуст (ядро снимает актора при выходе
-        // статуса из Working — тот же класс, что исправлял dffec3dc7 для журнала событий).
-        var author = AuthorOfTurn(project, session);
+        // Автор автокоммита (S3-1b) — актор завершённого хода: берётся запомненным внутри
+        // хода, СИНХРОННО, до Task.Run: к моменту фоновой задачи реестр хода пуст (ядро
+        // снимает актора при выходе статуса из Working — SessionManager.cs:3785-3786).
+        var author = AuthorOfTurn(project, session, rememberedActor);
         _ = Task.Run(() => AutoCommitSafeAsync(project, session, root, author));
         return Task.CompletedTask;
     }
 
-    // Автор коммита общего проекта: актор хода из серверного реестра (тот же шов, что у
-    // тулсетов). Актор неизвестен (фон, исполнитель без инициатора) или его нет в сторе —
-    // автора нет (fail-closed); личный проект — автора нет: git-конфиг репозитория и есть
-    // владелец, поведение прежнее.
-    private GitCommitAuthor? AuthorOfTurn(Project project, Session session)
+    // Автор коммита общего проекта: актор хода — тот, кого запомнили внутри хода (тот же
+    // шов реестра, что у тулсетов). Живой запрос к реестру здесь даёт актора только пока
+    // у прогона живы фоновые агенты («липкий» прогон) — он и есть fallback. Актор неизвестен
+    // (фон, исполнитель без инициатора) или его нет в сторе — автора нет (fail-closed);
+    // личный проект — автора нет: git-конфиг репозитория и есть владелец, поведение прежнее.
+    private GitCommitAuthor? AuthorOfTurn(Project project, Session session, string? rememberedActor)
     {
         if (project.Members is not { Count: > 0 }) return null;
         var ownerId = project.OwnerId;
         if (ownerId is null) return null;
-        var actorId = turnActors.Actor(session.Id, ownerId);
-        if (actorId is null) return null;
+        var actorId = string.IsNullOrEmpty(rememberedActor) ? turnActors.Actor(session.Id, ownerId) : rememberedActor;
+        if (string.IsNullOrEmpty(actorId)) return null;
         var user = users.GetById(actorId);
         if (user is null) return null;
         return new GitCommitAuthor(actorId, user.DisplayName ?? user.Username, user.Username);

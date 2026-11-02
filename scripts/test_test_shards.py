@@ -261,7 +261,10 @@ class CostLayoutTests(unittest.TestCase):
                 lst = os.path.join(tmp, "list.txt")
                 with open(lst, "w", encoding="utf-8") as f:
                     f.write(LIST)
-                for mode, argv in (("run_fast", ["--run-fast", "x.slnx"]), ("run", ["--run", "x.csproj"])):
+                slnx = os.path.join(tmp, "x.slnx")
+                with open(slnx, "w", encoding="utf-8") as f:
+                    f.write("<Solution />")
+                for mode, argv in (("run_fast", ["--run-fast", slnx]), ("run", ["--run", "x.csproj"])):
                     ts.PARALLEL = 5.0
                     self._main_cli(*argv)
                     self.assertEqual(ts.LOCAL_PARALLEL, seen[mode], mode)
@@ -671,6 +674,21 @@ class RunFastTests(unittest.TestCase):
         self.assertNotIn("App.Tests", rest["text"])
         self.assertNotIn("Llm.Tests", rest["text"])
         self.assertIn("App/App.csproj", rest["text"])
+
+    def test_run_fast_каталог_вместо_slnx_отказ_exit_2_без_traceback(self):
+        orig = ts.run_fast
+        ts.run_fast = lambda *a, **k: self.fail("run_fast не должен запускаться")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                for bad in (tmp, os.path.join(tmp, "нет.slnx")):
+                    out, err = io.StringIO(), io.StringIO()
+                    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                        code = ts.main(["--run-fast", bad, "--split", "a/B.Tests=2"])
+                    self.assertEqual(2, code)
+                    self.assertIn("файл решения", err.getvalue())
+                    self.assertIn(bad, err.getvalue())
+        finally:
+            ts.run_fast = orig
 
     def test_шард_потерял_класс_самопроверка_краснеет_до_запуска(self):
         code, launched, _ = self._run(tamper=True)

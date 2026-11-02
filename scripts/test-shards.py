@@ -692,6 +692,11 @@ def main(argv=None):
             split = parse_split(args.split)
         except ValueError as e:
             ap.error(str(e))
+        if not os.path.isfile(args.run_fast):
+            # каталог или опечатка раньше читались как файл решения: IsADirectoryError / FileNotFoundError traceback-ом
+            print(f"--run-fast ждёт файл решения (.slnx), а не каталог и не несуществующий путь: {args.run_fast}",
+                  file=sys.stderr)
+            return 2
         return run_fast(args.run_fast, split, args.results, timings, args.extra_filter, fast)
     if args.run:
         return run_shards(args.run, args.n, args.results, timings, args.extra_filter, fast)

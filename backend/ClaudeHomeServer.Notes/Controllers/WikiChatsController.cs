@@ -72,16 +72,23 @@ public class WikiChatsController : ControllerBase
     }
 
     // Показанная зона записи и её причина: поле zone принадлежит разбору (его исход
-    // nothing_new), зона ступени 1 — пересчёту (stage1Zone). Показываем исход разбора, пока
-    // он поставлен; иначе — зону ступени 1. Для записей до разведения владения (пересчёт
-    // писал общий zone, stage1Zone нет) — прежний zone: старый файл показывается без пересчёта.
-    private static string ShownZone(WikiChatTriageEntry e) =>
+    // nothing_new), зона ступени 1 — пересчёту (stage1Zone), вердикт ступени 2 — модели
+    // (stage2Zone). Приоритет: nothing_new > ступень 2 > ступень 1. Вердикт ступени 2 живёт
+    // только пока ступень 1 держит чат серым: пересчёт увёл его в skipped/excluded (человек
+    // поставил skip) — skip побеждает, устаревший вердикт не показывается. Для записей до
+    // разведения владения (пересчёт писал общий zone, stage1Zone нет) — прежний zone.
+    private static bool Stage2Applies(WikiChatTriageEntry e) =>
+        e.Stage2Zone is not null && e.Stage1Zone == WikiChatScorer.ZoneGray;
+
+    internal static string ShownZone(WikiChatTriageEntry e) =>
         e.Zone == WikiChatIngestService.ZoneNothingNew
             ? e.Zone
-            : e.Stage1Zone ?? e.Zone ?? "";
+            : Stage2Applies(e) ? e.Stage2Zone! : e.Stage1Zone ?? e.Zone ?? "";
 
-    private static string? ShownReason(WikiChatTriageEntry e) =>
-        e.Zone == WikiChatIngestService.ZoneNothingNew ? e.Reason : e.Stage1Reason ?? e.Reason;
+    internal static string? ShownReason(WikiChatTriageEntry e) =>
+        e.Zone == WikiChatIngestService.ZoneNothingNew ? e.Reason
+            : Stage2Applies(e) ? e.Stage2Reason ?? e.Stage1Reason
+            : e.Stage1Reason ?? e.Reason;
 
     // Путь хроники отдаётся только когда файл хроники есть на диске (N1, дефект 58ad40a5):
     // откат по источнику снимает хронику целиком (WikiRetractService, мера 5), и со старым

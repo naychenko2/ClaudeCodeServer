@@ -93,7 +93,7 @@ public static class WikiChatScorer
 
     // ─── Словари сигналов ───
 
-    private static readonly string[] DecisionWords = ["решили", "договорились", "выбираем", "не делаем", "итог"];
+    internal static readonly string[] DecisionWords = ["решили", "договорились", "выбираем", "не делаем", "итог"];
     private static readonly string[] CorrectionStarts = ["нет", "не так", "стоп", "лучше", "наоборот"];
     private static readonly string[] NoteTaskToolSuffixes = ["notes_create", "notes_update", "tasks_create", "memory_remember"];
     private static readonly string[] NoteTaskRequestPhrases = ["запиши", "поставь задачу"];

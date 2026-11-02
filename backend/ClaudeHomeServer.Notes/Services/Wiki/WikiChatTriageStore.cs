@@ -55,13 +55,20 @@ public static class WikiChatTriageStore
     // поле (будущие шаги): оно сохраняется при правке записи как есть.
     private static readonly string[] KnownFieldNames =
         ["sessionId", "cursor", "cursorHash", "zone", "reason", "nothingNewStreak", "triagedAt",
-         "score", "signals", "stage1Zone", "stage1Reason"];
+         "score", "signals", "stage1Zone", "stage1Reason",
+         "stage2Zone", "stage2Reason", "stage2HistoryCount"];
 
     // Поля, которыми владеет пересчёт (скорер), а не разбор: при Upsert разбора переносятся
     // из прежней записи как есть — ночной разбор не имеет права стирать посчитанный балл
     // и зону ступени 1 (ревью S6f, M2).
     private static readonly string[] ScorerFieldNames =
         ["score", "signals", "stage1Zone", "stage1Reason"];
+
+    // Поля ступени 2 (N1a): вердикт модели по серому чату. Третий писатель стора — владеет
+    // только ими; Upsert разбора переносит их из прежней записи так же, как поля скорера, а
+    // UpdateScoring правит узел точечно и их не касается.
+    private static readonly string[] Stage2FieldNames =
+        ["stage2Zone", "stage2Reason", "stage2HistoryCount"];
 
     // Блокировка на корень вики владельца (ключ — как в контракте задачи), стиль WikiKeeper._locks
     // и WikiPackageStore._createLocks: весь цикл чтения-правки-записи внутри.
@@ -130,7 +137,8 @@ public static class WikiChatTriageStore
                 // всегда в порядке записи (diff стора читаем).
                 var old = (JsonObject)nodes[idx]!;
                 foreach (var (key, value) in old)
-                    if (!KnownFieldNames.Contains(key) || ScorerFieldNames.Contains(key))
+                    if (!KnownFieldNames.Contains(key) || ScorerFieldNames.Contains(key)
+                        || Stage2FieldNames.Contains(key))
                         fresh[key] = value?.DeepClone();
                 nodes[idx] = fresh;
             }
@@ -204,6 +212,55 @@ public static class WikiChatTriageStore
         });
     }
 
+    /// <summary>Записать вердикт ступени 2 (N1a): stage2Zone/stage2Reason/stage2HistoryCount.
+    /// stage2HistoryCount — число реплик человека на момент вердикта: по нему ночь переспросит
+    /// модель, когда реплик стало на 3 больше. Поля разбора, скорера и чужие не трогаются.
+    /// Записи нет — новая с курсором 0. Тот же цикл под блоком корня и тот же fail-closed, что
+    /// у Upsert: нечитаемый стор — CodeInvalid, вердикт не пишется.</summary>
+    public static WikiTriageOpResult UpdateStage2(
+        string root, string sessionId, string stage2Zone, string? stage2Reason, int historyCount,
+        ILogger? log = null)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+            return Fail(CodeShape, "у записи нет sessionId — ключа чата");
+        if (string.IsNullOrWhiteSpace(stage2Zone))
+            return Fail(CodeShape, "у вердикта ступени 2 нет зоны");
+        if (historyCount < 0)
+            return Fail(CodeShape, $"stage2HistoryCount не может быть отрицательным: {historyCount}");
+
+        return WithRootLock<WikiTriageOpResult>(root, () =>
+        {
+            var (state, nodes, _) = ReadAll(root);
+            if (state == WikiTriageFileState.Invalid)
+            {
+                log?.LogWarning("Стор разбора чатов нечитаем, вердикт ступени 2 не записан: {Path}", TriageRelPath);
+                return Fail(CodeInvalid, "файл разбора чатов не читается — запись в него невозможна");
+            }
+
+            var idx = nodes.FindIndex(n => KeyOf(n) == sessionId);
+            if (idx >= 0)
+            {
+                var obj = (JsonObject)nodes[idx]!;
+                obj["stage2Zone"] = stage2Zone;
+                obj["stage2Reason"] = stage2Reason;
+                obj["stage2HistoryCount"] = historyCount;
+                obj["triagedAt"] = DateTimeOffset.UtcNow;
+            }
+            else
+            {
+                var fresh = new WikiChatTriageEntry(sessionId, 0, null, null, null, 0, default,
+                    Stage2Zone: stage2Zone, Stage2Reason: stage2Reason, Stage2HistoryCount: historyCount);
+                nodes.Add((JsonNode)JsonSerializer.SerializeToNode(fresh, JsonOpts)!);
+            }
+            nodes.Sort((a, b) => string.CompareOrdinal(KeyOf(a), KeyOf(b)));
+            WikiFileWriter.Write(root, TriageRelPath, JsonSerializer.Serialize(nodes, JsonOpts));
+            var entries = ParseEntries(nodes);
+            if (entries is null)
+                return Fail(CodeShape, "запись ступени 2 не читается после сборки");
+            return Ok(entries.Single(e => e.SessionId == sessionId));
+        });
+    }
+
     // Чтение и проверка файла: состояния три, но «файла нет» здесь — то же поведение для
     // вызывающего, что пустой список (до первого разбора), поэтому Valid без отдельного
     // Missing: у стора нет операции, зависящей от различия «пустого» и «ещё не созданного».
@@ -266,6 +323,10 @@ public static class WikiChatTriageStore
                 var score = ReadInt(obj, "score");
                 if (score is < 0)
                     return null;
+                // Вердикт ступени 2: необязателен; счётчик истории — неотрицательный.
+                var stage2Count = ReadInt(obj, "stage2HistoryCount");
+                if (stage2Count is < 0)
+                    return null;
                 var signalsNode = obj["signals"];
                 List<WikiTriageSignal>? signals = null;
                 if (signalsNode is not null && signalsNode.GetValueKind() != JsonValueKind.Null)
@@ -283,7 +344,10 @@ public static class WikiChatTriageStore
                     ReadString(obj, "reason"),
                     streak, triagedAt.Value, score, signals,
                     ReadString(obj, "stage1Zone"),
-                    ReadString(obj, "stage1Reason")));
+                    ReadString(obj, "stage1Reason"),
+                    ReadString(obj, "stage2Zone"),
+                    ReadString(obj, "stage2Reason"),
+                    stage2Count));
             }
         }
         catch (JsonException) { return null; }
@@ -366,7 +430,8 @@ public static class WikiChatTriageStore
 /// причиной ступени 1 (stage1Zone/stage1Reason) — ОТДЕЛЬНО от зоны разбора: у стора два
 /// писателя, и общая на них zone означала бы, что пересчёт затирает исход nothing_new, а
 /// ночной разбор — посчитанный балл (ревью S6f, M1/M2). Форма полей строгая: значение чужого
-/// типа — невалидный файл.</summary>
+/// типа — невалидный файл. С N1a — вердикт ступени 2 (stage2Zone/stage2Reason и число реплик
+/// человека на момент вердикта stage2HistoryCount): третий писатель, свои поля.</summary>
 public sealed record WikiChatTriageEntry(
     string SessionId,
     int Cursor,
@@ -378,7 +443,10 @@ public sealed record WikiChatTriageEntry(
     int? Score = null,
     IReadOnlyList<WikiTriageSignal>? Signals = null,
     string? Stage1Zone = null,
-    string? Stage1Reason = null);
+    string? Stage1Reason = null,
+    string? Stage2Zone = null,
+    string? Stage2Reason = null,
+    int? Stage2HistoryCount = null);
 
 /// <summary>Один сигнал ступени 1 в записи стора: имя — стабильный идентификатор из
 /// WikiChatScorer (метку для человека рисует вызывающий), вес — вклад в балл (штраф —

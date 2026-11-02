@@ -728,6 +728,33 @@ class RunFastTests(unittest.TestCase):
             ts.list_tests, ts.launch, ts.wait_all, ts.layout = orig
         return code, launched, rest
 
+    def test_пик_делится_на_шарды_адаптивного_проекта_а_не_на_все_процессы(self):
+        orig = (ts.list_tests, ts.launch, ts.wait_all, ts.machine_snapshot)
+        listing = {"b/App.Tests": [f"App.Tests.C{i}.T{j}" for i in range(6) for j in range(2)],
+                   "b/Llm.Tests": [f"Llm.Tests.L{i}.T" for i in range(4)]}
+        ts.list_tests = lambda path, flt: (listing[path], None)
+        ts.launch = lambda args, log: (object(), None)
+        ts.machine_snapshot = lambda: (24, 2.0, 31 * ts.GIB, None)  # 24 потока в тишине — N = потолок 3
+
+        def fake_wait(procs, start, proofs=None, reports=None):
+            ts.LAST_PEAK_BYTES = 12 * ts.GIB  # дерево целиком: 3 шарда App, 2 шарда Llm, rest — 6 процессов
+            return 0
+
+        ts.wait_all = fake_wait
+        os.environ[ts.ADAPTIVE_ENV] = "b/App.Tests=3"
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                slnx = os.path.join(tmp, "x.slnx")
+                with open(slnx, "w", encoding="utf-8") as f:
+                    f.write(self.SLNX)
+                results = os.path.join(tmp, "r")
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(0, ts.run_fast(slnx, [("b/App.Tests", 3), ("b/Llm.Tests", 2)], results, {}, "F"))
+                self.assertEqual(4 * ts.GIB, ts.load_shard_peak(results), "12 ГиБ / 3 шарда App, а не / 6 процессов")
+        finally:
+            ts.list_tests, ts.launch, ts.wait_all, ts.machine_snapshot = orig
+            del os.environ[ts.ADAPTIVE_ENV]
+
     def test_parse_split(self):
         self.assertEqual([("a/B.Tests", 3), ("c/D.Tests", 2)], ts.parse_split("a/B.Tests=3,c/D.Tests=2"))
         with self.assertRaises(ValueError):
@@ -846,43 +873,53 @@ class RunFastTests(unittest.TestCase):
 
 
 # Те же строки — в backend/ClaudeHomeServer.TestRuns.Tests/Services/TestShardsTests.cs (AdaptiveRows):
-# (nproc, load1, MemAvailable ГиБ или None — снимка нет, запас cgroup ГиБ или None — cgroup нет, потолок, ожидаемое N)
+# (nproc, load1, MemAvailable ГиБ или None — снимка нет, запас cgroup ГиБ или None — cgroup нет,
+#  пик на шард прошлого прогона ГиБ или None — записи нет, потолок, ожидаемое N)
 ADAPTIVE_ROWS = [
-    (24, 7.2, 31, None, 6, 6),      # тихо — потолок
-    (24, 11.99, 31, None, 6, 6),    # под границей 0,5·nproc
-    (24, 12.0, 31, None, 6, 3),     # ровно 0,5·nproc — уже не потолок (мутация порога 0,5→0,6 краснит здесь)
-    (24, 14.0, 31, None, 6, 3),
-    (24, 35.99, 31, None, 6, 3),    # под границей 1,5·nproc
-    (24, 36.0, 31, None, 6, 2),     # ровно 1,5·nproc
-    (24, 50.0, 31, None, 6, 2),
-    (24, 2.0, 14.0, None, 6, 4),    # 14 / 3,5 = 4 ровно (мутация 3,5→3 краснит строку ниже)
-    (24, 2.0, 13.99, None, 6, 3),
-    (24, 2.0, 7.0, None, 6, 2),
-    (24, 2.0, 6.99, None, 6, 1),
-    (24, 2.0, 0.5, None, 6, 1),     # не меньше 1
-    (24, 2.0, 28, 7.0, 6, 2),       # хост свободен, slice почти полон (02.11: 16,9 из 24) — N мал
-    (24, 2.0, 28, 1.5, 6, 1),
-    (24, 2.0, 28, 0, 6, 1),         # slice полон — всё равно 1, а не 0
-    (24, 2.0, 7.0, 20, 6, 2),       # cgroup свободен, хост нет — минимум двух
-    (24, 2.0, 31, 24, 6, 6),        # 24 / 3,5 = 6,86
-    (24, 50.0, 31, 24, 6, 2),       # нагрузка сильнее памяти
-    (24, 2.0, 31, None, 4, 4),      # потолок из настроек
-    (24, 2.0, 31, None, 1, 1),
-    (24, 50.0, 31, None, 1, 1),     # потолок ниже правила
-    (8, 3.9, 31, None, 6, 6),
-    (8, 4.0, 31, None, 6, 3),
-    (None, None, None, None, 6, 3),  # нет /proc — прежнее фиксированное
-    (None, None, None, None, 2, 2),
+    (24, 7.2, 31, None, None, 6, 6),      # тихо — потолок
+    (24, 11.99, 31, None, None, 6, 6),    # под границей 0,5·nproc
+    (24, 12.0, 31, None, None, 6, 3),     # ровно 0,5·nproc — уже не потолок (мутация порога 0,5→0,6 краснит здесь)
+    (24, 14.0, 31, None, None, 6, 3),
+    (24, 35.99, 31, None, None, 6, 3),    # под границей 1,5·nproc
+    (24, 36.0, 31, None, None, 6, 2),     # ровно 1,5·nproc
+    (24, 50.0, 31, None, None, 6, 2),
+    (24, 2.0, 14.0, None, None, 6, 4),    # 14 / 3,5 = 4 ровно (мутация 3,5→3 краснит строку ниже)
+    (24, 2.0, 13.99, None, None, 6, 3),
+    (24, 2.0, 7.0, None, None, 6, 2),
+    (24, 2.0, 6.99, None, None, 6, 1),
+    (24, 2.0, 0.5, None, None, 6, 1),     # не меньше 1
+    (24, 2.0, 28, 7.0, None, 6, 2),       # хост свободен, slice почти полон (02.11: 16,9 из 24) — N мал
+    (24, 2.0, 28, 1.5, None, 6, 1),
+    (24, 2.0, 28, 0, None, 6, 1),         # slice полон — всё равно 1, а не 0
+    (24, 2.0, 7.0, 20, None, 6, 2),       # cgroup свободен, хост нет — минимум двух
+    (24, 2.0, 31, 24, None, 6, 6),        # 24 / 3,5 = 6,86
+    (24, 50.0, 31, 24, None, 6, 2),       # нагрузка сильнее памяти
+    (24, 2.0, 31, 10, 2, 6, 4),           # прошлый пик 2 ГиБ на шард × 1,2 = 2,4; 10 / 2,4 = 4,2 (без 1,2 — 5)
+    (24, 2.0, 31, 10, 5, 6, 1),           # тяжёлый прошлый прогон: 5 × 1,2 = 6 на шард
+    (24, 2.0, 31, 3, 0.1, 6, 2),          # пик подозрительно мал — не ниже 1 ГиБ: 3 / 1,2 = 2,5
+    (24, 2.0, 31, None, None, 4, 4),      # потолок из настроек
+    (24, 2.0, 31, None, None, 1, 1),
+    (24, 50.0, 31, None, None, 1, 1),     # потолок ниже правила
+    (4, 0.5, 31, None, None, 6, 1),       # 4 потока в тишине — один процесс
+    (8, 1.0, 31, None, None, 6, 2),       # 8 потоков в тишине — 2
+    (12, 1.0, 31, None, None, 6, 3),      # 12 / 4 = 3 (мутация делителя ядер 4→3 краснит здесь: 4)
+    (8, 3.9, 31, None, None, 6, 2),       # тихо по load, но ядер на два шарда
+    (8, 4.0, 31, None, None, 6, 2),
+    (64, 2.0, 31, None, None, 6, 6),      # 64 потока в тишине — потолок из настроек, не больше
+    (64, 2.0, 31, None, None, 4, 4),
+    (None, None, None, None, None, 6, 3),  # нет /proc — прежнее фиксированное
+    (None, None, None, None, None, 2, 2),
 ]
 
 
 class AdaptiveShardsTests(unittest.TestCase):
     def test_таблица_правила_общая_с_csharp(self):
-        for cpus, load1, mem, cg, maximum, expected in ADAPTIVE_ROWS:
+        for cpus, load1, mem, cg, peak, maximum, expected in ADAPTIVE_ROWS:
             snapshot = None if cpus is None else (
                 cpus, load1, int(mem * ts.GIB), None if cg is None else int(cg * ts.GIB))
-            with self.subTest(cpus=cpus, load1=load1, mem=mem, cg=cg, maximum=maximum):
-                self.assertEqual(expected, ts.choose_shards(snapshot, maximum)[0])
+            per_shard = None if peak is None else int(peak * ts.GIB)
+            with self.subTest(cpus=cpus, load1=load1, mem=mem, cg=cg, peak=peak, maximum=maximum):
+                self.assertEqual(expected, ts.choose_shards(snapshot, maximum, per_shard)[0])
 
     def test_причина_для_сводки(self):
         self.assertEqual((6, "load1 7,2 из 24, свободно 31 ГиБ"), ts.choose_shards((24, 7.2, 31 * ts.GIB + 5, None), 6))
@@ -1035,6 +1072,68 @@ class AdaptiveSplitTests(unittest.TestCase):
         finally:
             ts.machine_snapshot, ts.calibrate = orig
             del os.environ[ts.ADAPTIVE_ENV]
+
+
+class ShardPeakTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="ccs-peak-")
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def put(self, text):
+        with open(os.path.join(self.dir, ts.SHARD_PEAK_FILE), "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def test_записи_нет_или_мусор_это_none(self):
+        self.assertIsNone(ts.load_shard_peak(self.dir))
+        for text in ("мусор", "[]", '{"per_shard_bytes": "1"}', '{"per_shard_bytes": true}',
+                     '{"per_shard_bytes": 0}', '{"per_shard_bytes": 300000000000000}'):
+            self.put(text)
+            with self.subTest(text=text):
+                self.assertIsNone(ts.load_shard_peak(self.dir))
+
+    def test_запись_пика_на_шард_и_чтение(self):
+        ts.save_shard_peak(self.dir, 12 * ts.GIB, 4)
+        self.assertEqual(3 * ts.GIB, ts.load_shard_peak(self.dir))
+
+    def test_один_процесс_не_пишется(self):
+        ts.save_shard_peak(self.dir, 6 * ts.GIB, 1)
+        ts.save_shard_peak(self.dir, 0, 3)
+        self.assertFalse(os.path.exists(os.path.join(self.dir, ts.SHARD_PEAK_FILE)))
+
+    def test_память_на_шард_запасное_множитель_и_пол(self):
+        self.assertEqual(ts.ADAPTIVE_SHARD_MEM, ts.shard_mem(None))
+        self.assertEqual(int(2 * ts.GIB * 1.2), ts.shard_mem(2 * ts.GIB))
+        self.assertEqual(int(1 * ts.GIB * 1.2), ts.shard_mem(1))
+
+    def test_auto_берёт_прошлый_пик_из_results(self):
+        ts.save_shard_peak(self.dir, 10 * ts.GIB, 2)  # 5 ГиБ на шард × 1,2 = 6
+        orig = ts.machine_snapshot
+        ts.machine_snapshot = lambda: (24, 2.0, 31 * ts.GIB, 13 * ts.GIB)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(2, ts.resolve_n("auto", results=self.dir))
+                self.assertEqual(3, ts.resolve_n("auto"), "без записи — запасные 3,5 ГиБ: 13 / 3,5")
+        finally:
+            ts.machine_snapshot = orig
+
+    def test_run_shards_пишет_пик_после_прогона(self):
+        orig = ts.list_tests, ts.launch_shards, ts.wait_all
+        ts.list_tests = lambda project, extra: (["A.X.t1", "B.Y.t2", "C.Z.t3"], None)
+        ts.launch_shards = lambda project, shards, results, prefix, extra, tests: ([object()] * len(shards), [], [])
+
+        def fake_wait(procs, start, proofs=None, reports=None):
+            ts.LAST_PEAK_BYTES = 9 * ts.GIB
+            return 0
+
+        ts.wait_all = fake_wait
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(0, ts.run_shards("x", 3, self.dir, None, None))
+            self.assertEqual(3 * ts.GIB, ts.load_shard_peak(self.dir))
+        finally:
+            ts.list_tests, ts.launch_shards, ts.wait_all = orig
 
 
 class PregateConfigCompatTests(unittest.TestCase):

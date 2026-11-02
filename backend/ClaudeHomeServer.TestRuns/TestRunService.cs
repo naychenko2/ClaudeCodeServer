@@ -111,7 +111,8 @@ public sealed partial class TestRunService
     internal (int Shards, string? Reason) ShardCount()
     {
         if (!_options.AdaptiveShards) return (_options.MonolithShards, null);
-        var (n, reason) = AdaptiveShards.Choose(_machine(), _options.MonolithShards);
+        var (n, reason) = AdaptiveShards.Choose(_machine(), _options.MonolithShards,
+            ShardPeakMemory.Load(_options.MemoryDirectory));
         return (n, reason);
     }
 
@@ -715,10 +716,18 @@ public sealed partial class TestRunService
             {
                 // Шарды — параллельно под уже взятым слотом; у каждого свой TurnId и свой TRX
                 timings.Shards = shardFilters.Count;
+                // Пик RSS дерева шардов — для оценки памяти на шард следующего выбора N (AdaptiveShards).
+                // В песочнице PID — docker-клиента, дерево в контейнере отсюда не видно: не меряем
+                var pids = new System.Collections.Concurrent.ConcurrentBag<int>();
+                using var sampling = new CancellationTokenSource();
+                var sampler = launcher.IsSandboxed ? Task.FromResult(0L) : SamplePeakAsync(pids, sampling.Token);
                 var outcomes = await Task.WhenAll(shardFilters.Select((filter, i) =>
                     RunPhaseAsync(launcher, TestRunPhase.Test, request with { Filter = filter }, run, limit.Token,
-                        trxPrefix: $"results-shard{i + 1}")));
+                        trxPrefix: $"results-shard{i + 1}", started: p => pids.Add(p.Id))));
+                await sampling.CancelAsync();
+                var peak = await sampler;
                 outcome = CombineShards(outcomes);
+                if (!outcome.Aborted) ShardPeakMemory.Save(_options.MemoryDirectory, peak, shardFilters.Count);
             }
             timings.Test += testWatch.Elapsed;
             return outcome;
@@ -789,12 +798,31 @@ public sealed partial class TestRunService
     // вычитка и гашение — в конвейере. Сбой Start уходит наверх: слот освободит using,
     // блокировку дерева — using в RunAsync
     private Task<PhaseOutcome> RunPhaseAsync(IProcessLauncher launcher, TestRunPhase phase,
-        TestRunRequest request, RunState run, CancellationToken limit, bool heavy = true, string trxPrefix = "results")
+        TestRunRequest request, RunState run, CancellationToken limit, bool heavy = true, string trxPrefix = "results",
+        Action<Process>? started = null)
     {
         var turnId = ProcessTurnIds.New();
         var spec = BuildSpec(phase, request, turnId, run.Results, heavy, trxPrefix);
         run.BeginPhase(phase, spec, turnId);
-        return _pipeline.RunProcessAsync(launcher, spec, run.OnLine, limit);
+        return _pipeline.RunProcessAsync(launcher, spec, run.OnLine, limit, started);
+    }
+
+    // Пик суммы RSS деревьев шардов раз в полсекунды до отмены; тесты подменяют чтение /proc
+    internal Func<IReadOnlyCollection<int>, long> TreeRss { get; init; } = roots => ProcessTreeRss.SumBytes(roots);
+
+    private async Task<long> SamplePeakAsync(System.Collections.Concurrent.ConcurrentBag<int> pids, CancellationToken ct)
+    {
+        long peak = 0;
+        while (true)
+        {
+            if (!pids.IsEmpty) peak = Math.Max(peak, TreeRss([.. pids]));
+            try { await Task.Delay(TimeSpan.FromMilliseconds(500), ct); }
+            catch (OperationCanceledException) { break; }
+        }
+        // Замыкающий замер: у настоящих шардов дерево уже пусто и пика он не поднимет, а подменённое
+        // чтение в тестах иначе не застало бы ни одного PID
+        if (!pids.IsEmpty) peak = Math.Max(peak, TreeRss([.. pids]));
+        return peak;
     }
 
     // Сводки всех TRX прогона; битый файл пропускается — остальные сборки важнее, огромный —

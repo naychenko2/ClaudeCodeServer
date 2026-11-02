@@ -134,20 +134,34 @@ public static class AdaptiveShards
     public const int Mid = 3;
     public const int Min = 2;
     public const long GiB = 1024L * 1024 * 1024;
-    // Память на шард монолита: замер 2026-10-29 — N=3 дал пик 9,5 ГиБ (≈3,2 на шард), с запасом 3,5.
-    // N ≤ floor(запас / 3,5 ГиБ), не меньше 1; запас — минимум MemAvailable и запаса cgroup, в котором
-    // пойдут шарды (ccs-agents.slice): хост бывает свободен при почти полном slice (02.11: 28 ГиБ на
-    // хосте при 16,9 из 24 в slice)
+    // Память на шард: пик RSS на шард прошлого прогона (ShardPeakMemory) × 1,2, но не ниже 1 ГиБ
+    // (оборванный на старте прогон не должен сойти за лёгкий); нет записи — запасное 3,5 ГиБ (замер
+    // 2026-10-29: N=3 дал пик 9,5 ГиБ, ≈3,2 на шард, запас уже внутри — множитель к нему не
+    // применяется). N ≤ floor(запас / память на шард), не меньше 1; запас — минимум MemAvailable и
+    // запаса cgroup, в котором пойдут шарды (ccs-agents.slice): хост бывает свободен при почти полном
+    // slice (02.11: 28 ГиБ на хосте при 16,9 из 24 в slice)
     public const long ShardMemBytes = 7 * GiB / 2;
+    public const double PeakMargin = 1.2;
+    public const long PeakFloorBytes = GiB;
+    // Ядер на шард: N ≤ max(1, floor(nproc / 4)). У каждого шарда свой testhost с xunit
+    // maxParallelThreads=6; меньше ~4 ядер на шард — процессы делят одни ядра и только мешают друг
+    // другу (24 потока — 6, 8 — 2, 4 — 1)
+    public const int CoresPerShard = 4;
 
-    // Чистая функция от снимка (null — снимка нет): число шардов и причина для сводки
-    public static (int Shards, string Reason) Choose(MachineSnapshot? snapshot, int max)
+    // Память на шард для правила: прошлый пик × 1,2 (не ниже 1 ГиБ) или запасные 3,5 ГиБ
+    public static long ShardMem(long? peakPerShard) =>
+        peakPerShard is { } p ? (long)(Math.Max(p, PeakFloorBytes) * PeakMargin) : ShardMemBytes;
+
+    // Чистая функция от снимка (null — снимка нет) и прошлого пика на шард (null — записи нет):
+    // число шардов и причина для сводки
+    public static (int Shards, string Reason) Choose(MachineSnapshot? snapshot, int max, long? peakPerShard = null)
     {
         max = Math.Max(1, max);
         if (snapshot is not { } s) return (Math.Min(Fallback, max), "нет /proc — фиксированное значение");
         var n = s.Load1 < IdleLoad * s.Cpus ? max : s.Load1 < BusyLoad * s.Cpus ? Mid : Min;
+        n = Math.Min(n, Math.Max(1, s.Cpus / CoresPerShard));
         var headroom = s.CgroupFreeBytes is { } cg ? Math.Min(s.MemAvailableBytes, cg) : s.MemAvailableBytes;
-        n = Math.Min(n, (int)Math.Max(1, headroom / ShardMemBytes));
+        n = Math.Min(n, (int)Math.Max(1, headroom / ShardMem(peakPerShard)));
         var load = s.Load1.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture).Replace('.', ',');
         var where = s.CgroupFreeBytes is { } free ? $", в cgroup {free / GiB} ГиБ" : "";
         return (Math.Min(n, max), $"load1 {load} из {s.Cpus}, свободно {s.MemAvailableBytes / GiB} ГиБ{where}");
@@ -245,5 +259,108 @@ public static class AdaptiveShards
             yield return cur;
             if (cur.Length == root.Length) yield break;
         }
+    }
+}
+
+// Пик RSS на шард прошлого серверного прогона монолита: data/build-memory/shard-peak.json (рядом с
+// BuildRunMemory, вне деревьев агентов — туда агент не пишет). Пишется, только когда шардов было ≥ 2
+// (один процесс несёт весь монолит, и его пик как «на шард» навсегда прижал бы N к 1). Ключ один на
+// машину: монолит в деревьях почти одинаков, а свежему дереву без своей записи пришлось бы ждать 3,5 ГиБ
+public static class ShardPeakMemory
+{
+    public const string FileName = "shard-peak.json";
+    // Правдоподобный предел значения: больше — мусор, правило возьмёт запасное
+    public const long MaxBytes = 256 * AdaptiveShards.GiB;
+
+    private sealed record Entry(long PerShardBytes, int Shards, long PeakBytes);
+
+    private static readonly System.Text.Json.JsonSerializerOptions Json = new(System.Text.Json.JsonSerializerDefaults.Web);
+
+    // Нет, битый, вне (0, 256 ГиБ] — null
+    public static long? Load(string? directory)
+    {
+        if (directory is null) return null;
+        try
+        {
+            var path = Path.Combine(directory, FileName);
+            if (!File.Exists(path) || new FileInfo(path).Length > 4096) return null;
+            var entry = System.Text.Json.JsonSerializer.Deserialize<Entry>(File.ReadAllText(path), Json);
+            return entry is { PerShardBytes: > 0 and <= MaxBytes } ? entry.PerShardBytes : null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Text.Json.JsonException
+            or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    // Пик дерева на число шардов; меньше двух шардов или пик не мерялся — не пишется. Сбой записи
+    // прогон не роняет: память — лишь подсказка следующему выбору N
+    public static void Save(string? directory, long peakBytes, int shards)
+    {
+        if (directory is null || shards < 2 || peakBytes <= 0) return;
+        try
+        {
+            Directory.CreateDirectory(directory);
+            var tmp = Path.Combine(directory, FileName + ".tmp");
+            File.WriteAllText(tmp, System.Text.Json.JsonSerializer.Serialize(new Entry(peakBytes / shards, shards, peakBytes), Json));
+            File.Move(tmp, Path.Combine(directory, FileName), overwrite: true);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+}
+
+// Сумма VmRSS процессов и всех их потомков по /proc (как descendants_rss_kb в test-shards.py); вне
+// Linux или при сбое чтения — 0: пик тогда не пишется, правило берёт запасное значение
+public static class ProcessTreeRss
+{
+    public static long SumBytes(IReadOnlyCollection<int> roots, string procRoot = "/proc")
+    {
+        if (roots.Count == 0 || !Directory.Exists(procRoot)) return 0;
+        var children = new Dictionary<int, List<int>>();
+        var rss = new Dictionary<int, long>();
+        try
+        {
+            foreach (var dir in Directory.EnumerateDirectories(procRoot))
+            {
+                if (!int.TryParse(Path.GetFileName(dir), out var pid)) continue;
+                int ppid = 0;
+                long kb = 0;
+                try
+                {
+                    foreach (var line in File.ReadLines(Path.Combine(dir, "status")))
+                    {
+                        if (line.StartsWith("PPid:", StringComparison.Ordinal))
+                            int.TryParse(line.AsSpan(5).Trim(), out ppid);
+                        else if (line.StartsWith("VmRSS:", StringComparison.Ordinal))
+                            long.TryParse(line.AsSpan(6).Trim().TrimEnd("kB").Trim(), out kb);
+                    }
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                    continue; // процесс вышел между перечислением и чтением
+                }
+                (children.TryGetValue(ppid, out var list) ? list : children[ppid] = []).Add(pid);
+                rss[pid] = kb;
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return 0;
+        }
+        long total = 0;
+        var seen = new HashSet<int>();
+        var stack = new Stack<int>(roots);
+        while (stack.Count > 0)
+        {
+            var pid = stack.Pop();
+            if (!seen.Add(pid)) continue;
+            total += rss.GetValueOrDefault(pid);
+            if (children.TryGetValue(pid, out var kids))
+                foreach (var kid in kids) stack.Push(kid);
+        }
+        return total * 1024;
     }
 }

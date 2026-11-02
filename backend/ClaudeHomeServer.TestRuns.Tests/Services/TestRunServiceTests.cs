@@ -1131,6 +1131,25 @@ public class TestRunServiceTests : IDisposable
         text.Should().Contain("шардов параллельно: 2)").And.NotContain("load1");
     }
 
+    // Пик RSS дерева шардов пишется в память прогонов и задаёт память на шард следующему выбору N
+    [Fact]
+    public async Task Монолит_ПикШардовВПамять_СледующийВыборПоНему()
+    {
+        var memory = Path.Combine(_root, "build-memory");
+        var gate = new BuildConcurrencyGate(2);
+        var launcher = ShardRun(gate, new ConcurrentQueue<int>());
+        var tight = new MachineSnapshot(24, 2.0, 31 * AdaptiveShards.GiB, 10 * AdaptiveShards.GiB);
+        var service = new TestRunService(launcher, new TestRunsOptions { MemoryDirectory = memory }, gate,
+            TimeSpan.FromSeconds(5), TimeSpan.Zero, machine: () => tight) { TreeRss = _ => 10 * AdaptiveShards.GiB };
+
+        service.ShardCount().Item1.Should().Be(2, "записи нет — 3,5 ГиБ на шард: 10 / 3,5");
+        var result = await service.RunDotnetAsync(MonolithRequest(), null, CancellationToken.None).WaitAsync(Wait);
+
+        result.Timings!.Shards.Should().Be(2);
+        ShardPeakMemory.Load(memory).Should().Be(5 * AdaptiveShards.GiB, "пик дерева 10 ГиБ на 2 шарда");
+        service.ShardCount().Item1.Should().Be(1, "5 × 1,2 = 6 ГиБ на шард: 10 / 6");
+    }
+
     [Fact]
     public void Опции_AdaptiveShards_ИзКонфигаИПоУмолчанию()
     {

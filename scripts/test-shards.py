@@ -64,10 +64,20 @@ ADAPTIVE_BUSY_LOAD = 1.5    # load1 < 1,5·nproc — 3, иначе 2: больш
 ADAPTIVE_MID = 3
 ADAPTIVE_MIN = 2
 GIB = 1024 ** 3
-# Память на шард монолита: замер 2026-10-29 — N=3 дал пик 9,5 ГиБ (≈3,2 на шард), с запасом 3,5.
-# N ≤ floor(запас / 3,5 ГиБ), не меньше 1; запас — минимум MemAvailable и memory.max − memory.current
+# Память на шард: пик RSS на шард прошлого прогона (SHARD_PEAK_FILE в --results) × 1,2, но не ниже 1 ГиБ
+# (оборванный на старте прогон не должен сойти за лёгкий); нет записи — запасное 3,5 ГиБ (замер 2026-10-29:
+# N=3 дал пик 9,5 ГиБ, ≈3,2 на шард, запас уже внутри — множитель к нему не применяется).
+# N ≤ floor(запас / память на шард), не меньше 1; запас — минимум MemAvailable и memory.max − memory.current
 # по цепочке своего cgroup (scope и ccs-agents.slice): хост бывает свободен при почти полном slice
 ADAPTIVE_SHARD_MEM = int(3.5 * GIB)
+ADAPTIVE_PEAK_MARGIN = 1.2
+ADAPTIVE_PEAK_FLOOR = 1 * GIB
+# Пик на шард прошлого прогона: пишется, только когда процессов было ≥ 2 (один процесс несёт весь монолит,
+# и его пик как «на шард» навсегда прижал бы N к 1)
+SHARD_PEAK_FILE = "shard-peak.json"
+# Ядер на шард: N ≤ max(1, floor(nproc / 4)). У каждого шарда свой testhost с xunit maxParallelThreads=6;
+# меньше ~4 ядер на шард — процессы делят одни ядра и только мешают друг другу (24 потока — 6, 8 — 2, 4 — 1)
+ADAPTIVE_CORES_PER_SHARD = 4
 # Переменная окружения проверки предгейта: «проект=потолок,…» — проекты --split, которым N выбирать по
 # нагрузке. Сам --split держит число (3): его понимает и скрипт старых деревьев, который переменную не видит
 ADAPTIVE_ENV = "CCS_TEST_SHARDS_ADAPTIVE"
@@ -504,6 +514,10 @@ def print_report(wall, codes, reports):
                 print(f"  … и ещё {len(names) - MAX_FAILED_SHOWN}")
 
 
+# Пик RSS дерева последнего wait_all, байты (0 — не мерялся): его пишет save_shard_peak
+LAST_PEAK_BYTES = 0
+
+
 def wait_all(procs, start, proofs=None, reports=None):
     """Ждёт все процессы, меряя стену и пик RSS дерева; печатает итог, возвращает 0, только если все шарды вышли с 0.
 
@@ -532,6 +546,8 @@ def wait_all(procs, start, proofs=None, reports=None):
     done.set()
     sampler.join()
     print(f"Стена шардов: {wall:.1f} с; коды выхода: {codes}; пик RSS дерева: {peak[0] / 1024 / 1024:.2f} ГиБ")
+    global LAST_PEAK_BYTES
+    LAST_PEAK_BYTES = peak[0] * 1024
     print_report(wall, codes, reports)
     failed = []
     for i, c in enumerate(codes):
@@ -598,8 +614,39 @@ def machine_snapshot():
         return None
 
 
-def choose_shards(snapshot, maximum=ADAPTIVE_MAX):
-    """Число шардов и причина по снимку машины. Чистая функция: снимок — аргументом (табличный тест)."""
+def shard_mem(peak_per_shard):
+    """Память на шард для правила: прошлый пик × 1,2 (не ниже 1 ГиБ) или запасные 3,5 ГиБ."""
+    if peak_per_shard is None:
+        return ADAPTIVE_SHARD_MEM
+    return int(max(peak_per_shard, ADAPTIVE_PEAK_FLOOR) * ADAPTIVE_PEAK_MARGIN)
+
+
+def load_shard_peak(results):
+    """Пик RSS на шард прошлого прогона из results/SHARD_PEAK_FILE; нет, битый, вне 1 байта..256 ГиБ — None."""
+    try:
+        with open(os.path.join(results, SHARD_PEAK_FILE), encoding="utf-8") as f:
+            value = json.load(f).get("per_shard_bytes")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 < value <= 256 * GIB:
+        return None
+    return value
+
+
+def save_shard_peak(results, peak_bytes, processes):
+    """Записать пик на шард (пик дерева / число процессов), если процессов было ≥ 2. Сбой записи не роняет прогон."""
+    if processes < 2 or peak_bytes <= 0:
+        return
+    try:
+        os.makedirs(results, exist_ok=True)
+        with open(os.path.join(results, SHARD_PEAK_FILE), "w", encoding="utf-8") as f:
+            json.dump({"per_shard_bytes": peak_bytes // processes, "processes": processes, "peak_bytes": peak_bytes}, f)
+    except OSError as e:
+        print(f"Пик на шард не записан: {e}", file=sys.stderr)
+
+
+def choose_shards(snapshot, maximum=ADAPTIVE_MAX, peak_per_shard=None):
+    """Число шардов и причина по снимку машины. Чистая функция: снимок и прошлый пик — аргументами (табличный тест)."""
     maximum = max(1, maximum)
     if snapshot is None:
         return min(ADAPTIVE_FALLBACK, maximum), "нет /proc — фиксированное значение"
@@ -610,8 +657,9 @@ def choose_shards(snapshot, maximum=ADAPTIVE_MAX):
         n = ADAPTIVE_MID
     else:
         n = ADAPTIVE_MIN
+    n = min(n, max(1, cpus // ADAPTIVE_CORES_PER_SHARD))
     headroom = mem if cg is None else min(mem, cg)
-    n = min(n, max(1, headroom // ADAPTIVE_SHARD_MEM))
+    n = min(n, max(1, headroom // shard_mem(peak_per_shard)))
     load = f"{load1:.1f}".replace(".", ",")
     where = "" if cg is None else f", в cgroup {cg // GIB} ГиБ"
     return min(n, maximum), f"load1 {load} из {cpus}, свободно {mem // GIB} ГиБ{where}"
@@ -626,11 +674,11 @@ def parse_n(value):
     return int(value)
 
 
-def resolve_n(n, label="Шардов", maximum=ADAPTIVE_MAX):
-    """auto — по нагрузке машины с печатью выбора; явное число — как есть."""
+def resolve_n(n, label="Шардов", maximum=ADAPTIVE_MAX, results=None):
+    """auto — по нагрузке машины с печатью выбора; явное число — как есть. results — где лежит прошлый пик."""
     if n != "auto":
         return n
-    n, reason = choose_shards(machine_snapshot(), maximum)
+    n, reason = choose_shards(machine_snapshot(), maximum, load_shard_peak(results) if results else None)
     print(f"{label}: {n} ({reason})", flush=True)
     return n
 
@@ -653,7 +701,7 @@ def adaptive_split(split, env_value):
 
 
 def run_shards(project, n, results, timings, extra_filter, fast=None):
-    n = resolve_n(n)
+    n = resolve_n(n, results=results)
     tests, err = list_tests(project, extra_filter)
     if tests is None:
         print(err, file=sys.stderr)
@@ -666,7 +714,11 @@ def run_shards(project, n, results, timings, extra_filter, fast=None):
     os.makedirs(results, exist_ok=True)
     start = time.monotonic()
     procs, proofs, reports = launch_shards(project, shards, results, "shard", extra_filter, tests)
-    return wait_all(procs, start, proofs, reports)
+    global LAST_PEAK_BYTES
+    LAST_PEAK_BYTES = 0
+    code = wait_all(procs, start, proofs, reports)
+    save_shard_peak(results, LAST_PEAK_BYTES, len(procs))
+    return code
 
 
 def parse_split(text):
@@ -729,8 +781,10 @@ def run_fast(slnx, split, results, timings, extra_filter, fast=None):
     """Fast предгейта: проекты --split — шардами по классам, остальные тестовые проекты — одним процессом
     на rest-slnx. Каждый тест списка попадает ровно в один шард (иначе exit 1) — самопроверка до запуска."""
     start = time.monotonic()
-    split = [(p, resolve_n(n, f"Шардов {os.path.basename(p.rstrip('/'))}", top))
-             for p, n, top in adaptive_split(split, os.environ.get(ADAPTIVE_ENV))]
+    planned = adaptive_split(split, os.environ.get(ADAPTIVE_ENV))
+    split = [(p, resolve_n(n, f"Шардов {os.path.basename(p.rstrip('/'))}", top, results)) for p, n, top in planned]
+    # шарды проектов, у которых N выбирается по нагрузке: на них и делится пик дерева
+    adaptive_shards = sum(n for (_, n), (_, raw, _) in zip(split, planned) if raw == "auto")
     if timings is None:
         timings, _, fast = calibrate(results)
         print("Раскладка по профилю прошлого прогона" if timings else "Профиля нет — раскладка по хешу класса")
@@ -760,6 +814,7 @@ def run_fast(slnx, split, results, timings, extra_filter, fast=None):
         print(summary(listings[path], shards, timings, fast))
         layouts.append((path, shards))
     os.makedirs(results, exist_ok=True)
+    peak_dir = results  # пик на шард — в корне --results: его читает выбор N следующего прогона
     results = new_run_dir(results)  # дальше всё (TRX, логи, доказательства) — в подпапке этого прогона
     procs, proofs, reports = [], [], []
     rest_path = os.path.join(os.path.dirname(slnx), "ClaudeHomeServer.FastRest.slnx")
@@ -783,7 +838,13 @@ def run_fast(slnx, split, results, timings, extra_filter, fast=None):
             reports += pr
         print(f"Подготовка до запуска: {time.monotonic() - start:.1f} с; процессов {len(procs)}")
         run_start = time.monotonic()
-        return wait_all(procs, run_start, proofs, reports)
+        global LAST_PEAK_BYTES
+        LAST_PEAK_BYTES = 0
+        code = wait_all(procs, run_start, proofs, reports)
+        # пик ВСЕГО дерева (с rest и прочими шардами) на число адаптивных шардов: оценка сверху — безопасная
+        # сторона; деление на все процессы занизило бы тяжёлый шард монолита лёгкими соседями
+        save_shard_peak(peak_dir, LAST_PEAK_BYTES, adaptive_shards)
+        return code
     finally:
         if os.path.exists(rest_path):
             os.remove(rest_path)

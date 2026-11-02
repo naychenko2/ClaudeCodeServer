@@ -938,18 +938,23 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     // `git interpret-trailers --parse` на git 2.53: «Key:value» — трейлер, «Key:» — трейлер).
     private static readonly Regex TrailerLineRx = new(@"^[A-Za-z0-9-]+:.*$", RegexOptions.Compiled);
 
-    // Трейлер автора — в конец тела. Если тело уже заканчивается блоком трейлеров, дописываем
-    // в него одной строкой: отдельный абзац вывел бы существующие трейлеры (Co-Authored-By,
-    // CCS-Session, CCS-Task) из блока — git читает трейлеры только в последнем абзаце.
-    // Блока нет — новый абзац через пустую строку. Если в сообщении уже есть строка
-    // `CCS-User:`, не добавляем: источник правды о человеке — существующий трейлер, ровно один.
-    private static string WithUserTrailer(string message, string userId)
+    // Трейлер автора — в конец тела. Если в сообщении уже есть строка `CCS-User:`,
+    // не добавляем: источник правды о человеке — существующий трейлер, ровно один.
+    private static string WithUserTrailer(string message, string userId) =>
+        UserTrailerLineRx.IsMatch(message) ? message : AppendTrailerBlock(message, $"CCS-User: {userId}");
+
+    // Дописать серверные трейлерные строки в конец тела ОДНИМ блоком (S3-1b, ревью R-S3-1):
+    // если тело уже заканчивается блоком трейлеров — дописываем в него одной строкой, иначе
+    // отдельным абзацем через пустую строку. Отдельный абзац вывел бы существующие трейлеры
+    // (Co-Authored-By, CCS-Session, CCS-Task) из блока — git читает трейлеры только в
+    // последнем абзаце. Общая точка для всех, кто дописывает трейлеры к чужому сообщению
+    // (здесь и AppendDossierTrailer у вызывающих из Main), — чтобы блок не рвался нигде.
+    public static string AppendTrailerBlock(string message, string trailerLines)
     {
-        if (UserTrailerLineRx.IsMatch(message)) return message;
         var trimmed = message.TrimEnd();
         return EndsInTrailerBlock(trimmed)
-            ? trimmed + $"\nCCS-User: {userId}"
-            : trimmed + $"\n\nCCS-User: {userId}";
+            ? trimmed + "\n" + trailerLines
+            : trimmed + "\n\n" + trailerLines;
     }
 
     // Блок трейлеров — непустой абзац после последней пустой строки, целиком из строк-

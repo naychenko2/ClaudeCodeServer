@@ -1294,7 +1294,8 @@ public sealed partial class WorkspaceToolset(
                     // трейлер CCS-Session/CCS-Task дописывает сервер по сессии-вызывателю
                     // (как AppendDossierTrailer в GitController у stdio-ветки)
                     message = AppendDossierTrailer(message, session);
-                    var sha = await git.CommitAsync(p.OwnerId, root, message, amend: false, ct);
+                    var sha = await git.CommitAsync(p.OwnerId, root, message, amend: false, ct,
+                        author: AuthorOfTurn(p, session, context.OwnerId));
                     await BroadcastGitChanged(context.OwnerId, p.Id);
                     return Json(new { sha });
                 }
@@ -1318,12 +1319,28 @@ public sealed partial class WorkspaceToolset(
 
     // Трейлер «Истории решений» для MCP-коммита: сессия-вызыватель + её задача.
     // Без сессии сообщение не трогаем — как у REST (там это коммит человека из UI).
+    // Один блок с существующими трейлерами сообщения (ревью R-S3-1) — та же точка, что у
+    // WithUserTrailer в GitService: отдельный абзац вывел бы их из блока.
     private static string AppendDossierTrailer(string message, Session? caller)
     {
         if (caller is null) return message;
         var trailer = $"CCS-Session: {caller.Id}"
             + (caller.TaskId is null ? "" : $"\nCCS-Task: {caller.TaskId}");
-        return message.TrimEnd() + $"\n\n" + trailer;
+        return Git.GitService.AppendTrailerBlock(message, trailer);
+    }
+
+    // Автор коммита общего проекта (S3-1b): актор идущего хода из серверного реестра
+    // (тот же шов, что у chats_* выше по файлу). Актор неизвестен (фон, исполнитель без
+    // инициатора) или его нет в сторе — автора нет (fail-closed); личный проект — автора
+    // нет: git-конфиг репозитория и есть владелец, поведение прежнее.
+    private Git.GitCommitAuthor? AuthorOfTurn(Project p, Session session, string ownerId)
+    {
+        if (p.Members is not { Count: > 0 }) return null;
+        var actorId = turnActors.Actor(session.Id, ownerId);
+        if (actorId is null) return null;
+        var user = users.GetById(actorId);
+        if (user is null) return null;
+        return new Git.GitCommitAuthor(actorId, user.DisplayName ?? user.Username, user.Username);
     }
 
     // Событие git_status_changed в хаб — тот же канал, что у GitController.NotifyChanged

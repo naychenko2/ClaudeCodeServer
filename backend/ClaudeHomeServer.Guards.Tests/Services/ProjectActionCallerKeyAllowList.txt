@@ -80,7 +80,11 @@ backend/ClaudeHomeServer/Controllers/DossiersController.cs|4
 # права Write (папка остаётся на Write, файл переведён на WriteContent); ключом хранилищ ничто
 # не стало: файл и папка адресуются корнем проекта арендатора (GetRoot), как во всех соседних ветках.
 backend/ClaudeHomeServer/Controllers/FilesController.cs|6
-backend/ClaudeHomeServer/Controllers/GitController.cs|1
+# S3-1b: GitController 1→3 — AuthorOfRequestUser: id вызывающего берётся из sub JWT и входит только
+# в чтение своей записи пользователя (UserStore.GetById) и в конструирование автора коммита
+# (GitCommitAuthor: имя/логин для git-автора). Ключом хранилищ ничто не стало: git-операции идут
+# по Owner(p) (арендатору), а автор — это сам человек, ради которого фича и затевалась.
+backend/ClaudeHomeServer/Controllers/GitController.cs|3
 backend/ClaudeHomeServer/Controllers/OnboardingController.cs|18
 backend/ClaudeHomeServer/Controllers/PersonasController.cs|110
 backend/ClaudeHomeServer/Controllers/PreviewController.cs|12

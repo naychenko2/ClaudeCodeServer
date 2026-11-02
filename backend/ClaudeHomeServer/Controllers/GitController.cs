@@ -336,7 +336,8 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
                 await git.StageAsync(Owner(p), RootFor(p), body.Path, ct);
                 var fileName = body.Path.Replace('\\', '/').Split('/')[^1];
                 var shortSha = sha.Length > 7 ? sha[..7] : sha;
-                await git.CommitAsync(Owner(p), RootFor(p), $"Возврат: {fileName} к версии {shortSha}", ct: ct);
+                await git.CommitAsync(Owner(p), RootFor(p), $"Возврат: {fileName} к версии {shortSha}",
+                    ct: ct, author: AuthorOfRequestUser(p));
             }
             await NotifyChanged(projectId);
             return Ok(await git.StatusAsync(Owner(p), RootFor(p), ct));
@@ -369,7 +370,8 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
                     : (string.IsNullOrWhiteSpace(s.Description) ? s.Summary : $"{s.Summary}\n\n{s.Description}");
             }
             catch { message = $"Сохранение: {DateTime.Now:dd.MM.yyyy HH:mm}"; }
-            var sha = await git.CommitAsync(Owner(p), RootFor(p), message, ct: ct);
+            var sha = await git.CommitAsync(Owner(p), RootFor(p), message, ct: ct,
+                author: AuthorOfRequestUser(p));
 
             if (p.GitAutoPush && p.GitRemoteUrl is not null)
             {
@@ -499,7 +501,8 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         {
             var p = GetProject(projectId);
             var message = AppendDossierTrailer(body.Message);
-            var sha = await git.CommitAsync(Owner(p), RootFor(p), message, body.Amend, ct);
+            var sha = await git.CommitAsync(Owner(p), RootFor(p), message, body.Amend, ct,
+                author: AuthorOfRequestUser(p));
             await NotifyChanged(projectId);
             return Ok(new CommitResponse(sha));
         }
@@ -519,7 +522,23 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         var session = sessions.GetById(callerSessionId);
         if (session is null) return message;
         var trailer = $"CCS-Session: {session.Id}" + (session.TaskId is null ? "" : $"\nCCS-Task: {session.TaskId}");
-        return message.TrimEnd() + "\n\n" + trailer;
+        // Один блок с существующими трейлерами сообщения (ревью R-S3-1): отдельный абзац
+        // вывел бы Co-Authored-By/CCS-Session из блока — git читает трейлеры только в последнем
+        return GitService.AppendTrailerBlock(message, trailer);
+    }
+
+    // Автор коммита общего проекта (S3-1b): текущий пользователь запроса (sub JWT), имя и
+    // логин — из UserStore. Личный проект — автора нет: git-конфиг репозитория и есть сам
+    // владелец, поведение прежнее. Нет пользователя или записи в сторе — тоже автора нет
+    // (fail-closed, как остальной авторство-путь).
+    private GitCommitAuthor? AuthorOfRequestUser(Models.Project p)
+    {
+        if (p.Members is not { Count: > 0 }) return null;
+        var userId = UserId;
+        if (userId is null) return null;
+        var user = users.GetById(userId);
+        if (user is null) return null;
+        return new GitCommitAuthor(userId, user.DisplayName ?? user.Username, user.Username);
     }
 
     [HttpPost("fetch")]

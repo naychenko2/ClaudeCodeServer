@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
@@ -17,6 +18,7 @@ public sealed class GitAutoCommitService(
     UserStore users,
     GitService git,
     ISessionBroadcaster broadcaster,
+    ITurnActorRegistry turnActors,
     ILogger<GitAutoCommitService> logger) : IHostedService
 {
     public Task StartAsync(CancellationToken ct)
@@ -42,11 +44,31 @@ public sealed class GitAutoCommitService(
         if (project is null || root is null || !project.GitAutoCommit || !git.IsGitRepo(root))
             return Task.CompletedTask;
 
-        _ = Task.Run(() => AutoCommitSafeAsync(project, session, root));
+        // Автор автокоммита (S3-1b) — актор идущего хода. Читается СИНХРОННО, до Task.Run:
+        // к моменту фоновой задачи реестр хода уже пуст (ядро снимает актора при выходе
+        // статуса из Working — тот же класс, что исправлял dffec3dc7 для журнала событий).
+        var author = AuthorOfTurn(project, session);
+        _ = Task.Run(() => AutoCommitSafeAsync(project, session, root, author));
         return Task.CompletedTask;
     }
 
-    private async Task AutoCommitSafeAsync(Project project, Session session, string root)
+    // Автор коммита общего проекта: актор хода из серверного реестра (тот же шов, что у
+    // тулсетов). Актор неизвестен (фон, исполнитель без инициатора) или его нет в сторе —
+    // автора нет (fail-closed); личный проект — автора нет: git-конфиг репозитория и есть
+    // владелец, поведение прежнее.
+    private GitCommitAuthor? AuthorOfTurn(Project project, Session session)
+    {
+        if (project.Members is not { Count: > 0 }) return null;
+        var ownerId = project.OwnerId;
+        if (ownerId is null) return null;
+        var actorId = turnActors.Actor(session.Id, ownerId);
+        if (actorId is null) return null;
+        var user = users.GetById(actorId);
+        if (user is null) return null;
+        return new GitCommitAuthor(actorId, user.DisplayName ?? user.Username, user.Username);
+    }
+
+    private async Task AutoCommitSafeAsync(Project project, Session session, string root, GitCommitAuthor? author)
     {
         try
         {
@@ -58,7 +80,7 @@ public sealed class GitAutoCommitService(
             await git.StageAllAsync(ownerId, root);
             var subject = $"Авто-сохранение: ход Claude в чате «{session.Name}»";
             var message = $"{subject}\n\n{DateTime.Now:dd.MM.yyyy HH:mm}";
-            var sha = await git.CommitAsync(ownerId, root, message);
+            var sha = await git.CommitAsync(ownerId, root, message, author: author);
 
             // Плашка «Изменения сохранены» в ленту чата — со ссылкой на просмотр коммита
             await broadcaster.ToSession(session.Id,

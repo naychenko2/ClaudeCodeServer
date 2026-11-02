@@ -24,11 +24,13 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     // Рабочее дерево запроса: ?sessionId= чата в отдельном worktree переводит операцию в его
     // дерево (бар чата обязан слать его во ВСЕ вызовы — иначе коммит/дискард уйдёт в корень
     // проекта). Чужая/несуществующая сессия → 404; сессия без worktree — корень проекта.
+    // S2d-3c: чужой приватный чат не виден даже владельцу (GetOwnedVisible) — та же 404,
+    // неотличимая от «нет такого чата».
     private string RootFor(Models.Project p)
     {
         var sessionId = Request.Query["sessionId"].ToString();
         if (string.IsNullOrEmpty(sessionId)) return p.RootPath;
-        var s = UserId is null ? null : sessions.GetOwned(sessionId, UserId);
+        var s = UserId is null ? null : sessions.GetOwnedVisible(sessionId, UserId);
         if (s is null || s.ProjectId != p.Id)
             throw new KeyNotFoundException($"Сессия не найдена: {sessionId}");
         return s.WorktreePath ?? p.RootPath;

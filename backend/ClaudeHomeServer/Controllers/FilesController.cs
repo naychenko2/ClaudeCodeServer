@@ -168,11 +168,12 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     // Шаг B2a: ЕДИНАЯ проверка владения сессией для обеих веток (?sessionId=) — content и
     // stream. Нет владельца (нет JWT) — чат не находится: тот же приём, что в
     // GitController.RootFor (?sessionId=), а не NRE в GetOwned. Несуществующий/чужой/чужого
-    // проекта — null → 404.
+    // проекта — null → 404. S2d-3c: владение плюс видимость (GetOwnedVisible): чужой
+    // приватный чат не виден даже владельцу проекта — отказ неотличим от «нет такого чата».
     private ClaudeHomeServer.Models.Session? GetOwnedSession(string projectId, string sessionId)
     {
         if (UserId is null) return null;
-        var s = sessions.GetOwned(sessionId, UserId);
+        var s = sessions.GetOwnedVisible(sessionId, UserId);
         return s is null || s.ProjectId != projectId ? null : s;
     }
 

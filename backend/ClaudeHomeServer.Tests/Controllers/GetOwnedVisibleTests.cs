@@ -2,8 +2,10 @@ using System.Security.Claims;
 using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
@@ -28,6 +30,9 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// приватным чатом через арендатора. Общий чат и чат вне проекта — прежнее поведение.
 /// S2d-3b: тот же сдвиг в Board, ChatContext, McpSessionContext — ручки этих контроллеров
 /// ниже тем же сидированным набором чатов.
+/// S2d-3c: тот же сдвиг в Files (общий гейт GetOwnedSession content/stream/locate), Git
+/// (RootFor по ?sessionId=) и MyWall (состав стены): чужой приватный неотличим от
+/// несуществующего чата — 404 / мёртвый id; автор и общий чат — как раньше.
 /// Полный хост не нужен: контроллеры создаются напрямую с ClaimsPrincipal вызывающего
 /// (образец — SharedProjectEditorScopeGatesTests), стор сессий сидируется sessions.json
 /// (образец — SessionStatusTests).
@@ -37,10 +42,14 @@ public sealed class GetOwnedVisibleTests : IDisposable
     private readonly string _tempDir;
     private readonly IConfiguration _config;
     private readonly ProjectManager _projects;
+    private readonly UserStore _users;
     private readonly string _ownerId;
     private readonly string _editorId;
     private readonly string _projectId;
     private readonly SessionManager _sessions;
+    // Локатор без git: деградирует до корня проекта (fail-closed, ProjectTreeLocator:43-52) —
+    // для доказательства пройденного гейта Files больше ничего не нужно
+    private readonly ProjectTreeLocator _locator = new(TestLauncherFactory.Instance, NullLogger<ProjectTreeLocator>.Instance);
 
     // Сидированные чаты: чужой приватный (автор — редактор), свой приватный (автор — владелец),
     // общий проектный, чат вне проекта владельца.
@@ -62,12 +71,15 @@ public sealed class GetOwnedVisibleTests : IDisposable
             })
             .Build();
 
-        var userStore = new UserStore(_config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        var userStore = _users = new UserStore(_config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         _ownerId = userStore.GetFirst()!.Id;
         _editorId = userStore.Add("kuzma-editor", "pwd", "user").Id;
 
         var appSettings = new AppSettingsService(_config);
         var projectRoot = Directory.CreateDirectory(Path.Combine(_tempDir, "project")).FullName;
+        // Реальный файл корня: за гейтом Files локатор обязан его найти (200) — это и есть
+        // доказательство пройденного гейта (образец — FilesControllerTests W4-LINK-B)
+        File.WriteAllText(Path.Combine(projectRoot, "a.txt"), "один\n");
         _projects = new ProjectManager(_config, userStore, appSettings);
         _projectId = _projects.Create("Общий проект", projectRoot, _ownerId, userStore.GetFirst()!.Username).Id;
 
@@ -241,5 +253,110 @@ public sealed class GetOwnedVisibleTests : IDisposable
         Call(ForeignPrivateId).Should().BeOfType<ObjectResult>().Subject.StatusCode.Should().Be(403);
         Call(OwnPrivateId).Should().BeOfType<OkObjectResult>();
         Call(OpenChatId).Should().BeOfType<OkObjectResult>();
+    }
+
+    // --- ручки трёх контроллеров шага S2d-3c ---
+
+    // Один параметр query для RootFor (DefaultHttpRequest.Query принимает IQueryCollection;
+    // QueryString — struct, он сюда не присваивается)
+    private sealed class SingleQuery(string key, string value) : IQueryCollection
+    {
+        private readonly Dictionary<string, Microsoft.Extensions.Primitives.StringValues> _items =
+            new(StringComparer.OrdinalIgnoreCase) { [key] = value };
+        public int Count => _items.Count;
+        public ICollection<string> Keys => _items.Keys;
+        public bool ContainsKey(string key) => _items.ContainsKey(key);
+        public bool TryGetValue(string key, out Microsoft.Extensions.Primitives.StringValues value) =>
+            _items.TryGetValue(key, out value);
+        public Microsoft.Extensions.Primitives.StringValues this[string name] =>
+            _items.TryGetValue(name, out var v) ? v : Microsoft.Extensions.Primitives.StringValues.Empty;
+        public IEnumerator<KeyValuePair<string, Microsoft.Extensions.Primitives.StringValues>> GetEnumerator() => _items.GetEnumerator();
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => _items.GetEnumerator();
+    }
+
+    // Область запроса для TenantId в FilesController (фильтр [ProjectScope] при прямом вызове
+    // не работает — область ставится явно, как это делает сам фильтр)
+    private static ControllerContext AsUserScoped(string userId)
+    {
+        var http = new DefaultHttpContext { User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", userId)])) };
+        http.SetRequestScope(new RequestScope(userId, userId, ProjectRole.Owner));
+        return new ControllerContext { HttpContext = http };
+    }
+
+    [Fact]
+    public async Task FilesController_ЧужойПриватный404_КакНаНесуществующем_СвойПриватныйИОбщийПроходятГейт()
+    {
+        // Гейт GetOwnedSession один для content/stream/locate; здесь — locate: за гейтом
+        // локатор резолвит реальный файл корня (200), он и есть доказательство пройденного гейта
+        var c = new FilesController(null!, _projects, null!, null!, _config, null!,
+            NullLogger<FilesController>.Instance, null!, null!, _locator, sessions: _sessions)
+        { ControllerContext = AsUserScoped(_ownerId) };
+
+        var denied = (await c.Locate(_projectId, new LocateRequest(["a.txt"], ForeignPrivateId), default))
+            .Should().BeOfType<NotFoundObjectResult>().Subject;
+        // сериализатор экранирует кириллицу \uXXXX — тело сравниваем по распарсенному JSON
+        System.Text.Json.JsonDocument.Parse(System.Text.Json.JsonSerializer.Serialize(denied.Value))
+            .RootElement.GetProperty("error").GetString().Should().Be("Чат не найден");
+
+        // Тот же ответ, что на несуществующем: чужой приватный неотличим от «нет такого чата»
+        var missing = (await c.Locate(_projectId, new LocateRequest(["a.txt"], "no-such-chat"), default))
+            .Should().BeOfType<NotFoundObjectResult>().Subject;
+        System.Text.Json.JsonSerializer.Serialize(missing.Value).Should().Be(
+            System.Text.Json.JsonSerializer.Serialize(denied.Value));
+
+        var own = (await c.Locate(_projectId, new LocateRequest(["a.txt"], OwnPrivateId), default))
+            .Should().BeOfType<OkObjectResult>().Subject;
+        ((IReadOnlyList<LocatedPath>)own.Value!).Should().ContainSingle(p => p.Path == "a.txt");
+        var open = (await c.Locate(_projectId, new LocateRequest(["a.txt"], OpenChatId), default))
+            .Should().BeOfType<OkObjectResult>().Subject;
+        ((IReadOnlyList<LocatedPath>)open.Value!).Should().ContainSingle(p => p.Path == "a.txt");
+    }
+
+    [Fact]
+    public async Task GitController_ЧужойПриватный404_КакНаНесуществующем_СвойПриватныйИОбщийПроходятГейт()
+    {
+        // RootFor бросает KeyNotFoundException → 404 (как на чужом/несуществующем чате).
+        // За гейтом статус работает на не-git корне: IsRepo=false, 200 — это и есть
+        // пройденный гейт (StatusAsync не кидает на не-репозитории, GitService:206-207)
+        var git = new GitService(TestLauncherFactory.Instance);
+        var attribution = new CommitAttributionService(git, _sessions, _projects,
+            new ProjectFileSessionsIndex(_sessions, new ChatHistoryService(_config), _projects));
+        var c = new GitController(git, null!, null!, _projects, null!, null!, _sessions, null!, attribution);
+
+        async Task<IActionResult> StatusWith(string sessionId)
+        {
+            var http = new DefaultHttpContext { User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", _ownerId)])) };
+            http.Request.Query = new SingleQuery("sessionId", sessionId);
+            c.ControllerContext = new ControllerContext { HttpContext = http };
+            return await c.Status(_projectId, default);
+        }
+
+        (await StatusWith(ForeignPrivateId)).Should().BeOfType<NotFoundResult>();
+        (await StatusWith("no-such-chat")).Should().BeOfType<NotFoundResult>();
+        (await StatusWith(OwnPrivateId)).Should().BeOfType<OkObjectResult>();
+        (await StatusWith(OpenChatId)).Should().BeOfType<OkObjectResult>();
+    }
+
+    [Fact]
+    public void MyWallController_ЧужойПриватныйВыпадаетИзСтены_КакМёртвыйId_АвторИОбщийНаСтене()
+    {
+        var c = new MyWallController(_users, _sessions) { ControllerContext = AsUser(_ownerId) };
+
+        // Чужой приватный (автор — редактор) выпадает из состава молча, как удалённый id:
+        // валидация стены молчаливая по построению (Put не различает мёртвые id)
+        var put = c.Put(new PutWallRequest([ForeignPrivateId, OwnPrivateId, OpenChatId]))
+            .Should().BeOfType<OkObjectResult>().Subject;
+        ((WallDto)put.Value!).Chats.Select(s => s.Id).Should().Equal(OwnPrivateId, OpenChatId);
+
+        // Тот же состав после чтения из users.json (GET) — чистка закреплена, а не разовая
+        var get = c.Get().Should().BeOfType<OkObjectResult>().Subject;
+        ((WallDto)get.Value!).Chats.Select(s => s.Id).Should().Equal(OwnPrivateId, OpenChatId);
+
+        // Автор своего приватного (он и арендатор) — на стене проходит. Стена проектных
+        // чатов — путь арендатора и была (GetOwned по арендатору, «не-арендатор не проходит
+        // никак» выше): приватный чат редактора на стене редактора не стоял и до шага —
+        // владение этим шагом не меняется.
+        var own = c.Put(new PutWallRequest([OwnPrivateId])).Should().BeOfType<OkObjectResult>().Subject;
+        ((WallDto)own.Value!).Chats.Select(s => s.Id).Should().Equal(OwnPrivateId);
     }
 }

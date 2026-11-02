@@ -41,7 +41,7 @@ public class MyWallController(UserStore users, SessionManager sessions) : Contro
         if (UserId is null) return Unauthorized();
         if (req?.ChatIds is null) return BadRequest(new { error = "chatIds обязателен" });
 
-        // Take ДО резолва — гигантский массив id не должен гонять GetOwned сотни тысяч
+        // Take ДО резолва — гигантский массив id не должен гонять GetOwnedVisible сотни тысяч
         // раз; запас над потолком, чтобы мёртвые/чужие id в голове списка не съели живых
         var live = ResolveChats(req.ChatIds.Take(500), UserId).Take(MaxChats).ToList();
         if (!users.SetWallChatIds(UserId, live.Select(s => s.Id).ToList()))
@@ -68,6 +68,8 @@ public class MyWallController(UserStore users, SessionManager sessions) : Contro
     // счётчиков и молчит, колонка стала бы призраком. Фильтр стоит ЗДЕСЬ, а не только во
     // фронтовом сторе, потому что архивировать чат могли откуда угодно (список чатов,
     // другое устройство, MCP) — инвариант «на стене нет архивных» держит сервер.
+    // S2d-3c: чужой приватный чат для стены — такой же мёртвый id (GetOwnedVisible):
+    // он не виден даже владельцу проекта и молча выпадает из состава, как удалённый.
     // Побочно состав чистится при первом же PUT: ResolveChats общий для GET и PUT.
     private List<Session> ResolveChats(IEnumerable<string> chatIds, string ownerId)
     {
@@ -76,7 +78,7 @@ public class MyWallController(UserStore users, SessionManager sessions) : Contro
         foreach (var id in chatIds)
         {
             if (string.IsNullOrWhiteSpace(id) || !seen.Add(id)) continue;
-            var s = sessions.GetOwned(id, ownerId);
+            var s = sessions.GetOwnedVisible(id, ownerId);
             if (s is not null && !s.IsArchived) result.Add(s);
         }
         return result;

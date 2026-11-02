@@ -99,6 +99,8 @@ public sealed class WikiChatStage2
             return NotApplicable("пометка человека «не разбирать»");
         if (session.TaskExecution)
             return NotApplicable("чат исполнения задачи");
+        if (session.WikiMark == WikiMarks.Important)
+            return NotApplicable("пометка человека «важный»");
 
         var root = WikiPaths.Root(_dataDir, ownerId);
         var read = WikiChatTriageStore.Get(root, _log);

@@ -17,7 +17,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // c2 — вход модели ≤ 6 000 токенов (символы/4) И помещается в NumCtx профиля Small
 //      (сравнение с ProfileDefaults[Small], а не с константой);
 // c3 — гонка UpdateStage2 / UpdateScoring / Upsert сохраняет три набора полей;
-// c4 — skip с баллом 40 и исполнение задач: 0 вызовов модели.
+// c4 — skip с баллом 40, исполнение задач и «важный» с отстающей stage1Zone: 0 вызовов модели.
 public class WikiChatStage2Tests : IDisposable
 {
     private const string User = "u1";
@@ -137,7 +137,7 @@ public class WikiChatStage2Tests : IDisposable
         WikiChatsController.ShownZone(e).Should().Be(WikiChatScorer.ZoneGray);
     }
 
-    // ─── 3. c4: skip побеждает балл — модель не зовётся ────────────────────
+    // ─── 3. c4: живая пометка сильнее отстающей stage1Zone — модель не зовётся ─────────
 
     [Fact]
     public async Task Skip_СБаллом40_ИИсполнениеЗадач_МодельНеЗовётся()
@@ -154,6 +154,22 @@ public class WikiChatStage2Tests : IDisposable
         _llm.Calls.Should().BeEmpty("skip и исполнение задач не доходят до модели");
         // Мутация «убрать проверку WikiMark/TaskExecution в JudgeCoreAsync»: чат со stage1Zone=gray
         // доходит до модели, Calls не пуст — тест красный.
+    }
+
+    [Fact]
+    public async Task ВажныйПослеОтставшегоПересчёта_МодельНеЗовётся()
+    {
+        // Человек поставил «важный» после последнего пересчёта: в сторе ещё stage1Zone=gray, и без
+        // живой проверки ступень 2 позвала бы модель — её «skipped» перекрыл бы показ.
+        SeedGrayChat("s-important", score: 9, wikiMark: WikiMarks.Important);
+
+        var res = await Judge(sessionId: "s-important");
+
+        res.Outcome.Should().Be(WikiChatStage2.Outcome.NotApplicable, res.Detail);
+        _llm.Calls.Should().BeEmpty("живая пометка «важный»: ступень 2 не зовёт модель");
+        StoredEntry("s-important").Stage2Zone.Should().BeNull("вердикт не пишется, чат остаётся серым");
+        // Мутация «убрать проверку WikiMarks.Important в JudgeCoreAsync»: чат со stage1Zone=gray
+        // доходит до модели (пустой ответ → Refused), Calls не пуст — тест красный.
     }
 
     [Theory]

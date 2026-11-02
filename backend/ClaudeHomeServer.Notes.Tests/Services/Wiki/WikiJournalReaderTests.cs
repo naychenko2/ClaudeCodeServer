@@ -622,6 +622,9 @@ public class WikiJournalReaderTests : IDisposable
         foots[0].GetProperty("origin").ValueKind.Should().Be(JsonValueKind.Null, "карточки нет — origin null");
         foots[1].GetProperty("origin").GetString().Should().Be("human");
         foots[1].GetProperty("captured").GetString().Should().Be("2026-11-02");
+        foots[0].GetProperty("cardPage").ValueKind.Should().Be(JsonValueKind.Null, "карточку не нашли — cardPage null");
+        foots[1].GetProperty("cardPage").GetString().Should().Be("Общее/Источники/Моя заметка.md", "pageKey карточки для GET /api/wiki/page; card остаётся заголовком");
+        foots[1].GetProperty("card").GetString().Should().Be("Моя заметка");
 
         var catalog = (WikiCatalogDto)((OkObjectResult)Controller().Section("common")).Value!;
         catalog.Pages.Single(p => p.PageKey == OverridePage).Authorship.Should().Be("ai");

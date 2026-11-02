@@ -245,4 +245,16 @@ public class WikiProjectionsTests : IDisposable
         res["Общее/Ии2.md"].Should().Be(WikiProjections.AuthorshipAi);
         res["Общее/Чел2.md"].Should().Be(WikiProjections.AuthorshipHuman, "ИИ-сноска в «Истории» не делает страницу «вместе»");
     }
+
+    [Fact]
+    public void Footnotes_CardPage_ЭтоPageKeyКарточки_ДляНеНайденной_Null()
+    {
+        const string card = "---\ntype: source\nsummary: к\norigin: session\nref: x:1\nhash: h\ncaptured: 2026-11-02\nstatus: active\n---\n\n# Моя заметка\n";
+        const string body = "---\ntype: entity\nsummary: с\nstatus: active\n---\n\n# А\n\n## Сводка\n- Факт.[^s1] Ещё.[^s2]\n\n## Хронология\n\n## Противоречия\n\n## История\n\n[^s1]: [[Моя заметка]] — «цитата номер один»\n[^s2]: [[Нет карточки]] — «цитата номер два»\n";
+        var cards = WikiProjections.Cards([new WikiGate.Draft("Общее/Источники/Моя заметка.md", card)]);
+        var foots = WikiProjections.Footnotes(WikiPage.Parse(body).Model!, cards);
+        foots[0].Card.Should().Be("Моя заметка", "card остаётся заголовком");
+        foots[0].CardPage.Should().Be("Общее/Источники/Моя заметка.md");
+        foots[1].CardPage.Should().BeNull("карточки нет");
+    }
 }

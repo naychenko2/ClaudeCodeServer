@@ -39,11 +39,12 @@ public static class WikiProjections
     private const string HistorySectionName = "История";
 
     /// <summary>Что известно о карточке источника по её шапке: origin и дата захвата.</summary>
-    public readonly record struct CardInfo(string? Origin, string? Captured);
+    public readonly record struct CardInfo(string? Origin, string? Captured, string? Path = null);
 
     /// <summary>Сноска страницы для чтения: label — s1…sN, card — заголовок карточки из цели,
-    /// origin/captured — из шапки карточки (null, когда карточки нет).</summary>
-    public sealed record FootnoteInfo(string Label, string Card, string? Origin, string? Captured);
+    /// origin/captured — из шапки карточки (null, когда карточки нет), cardPage — pageKey карточки
+    /// для GET /api/wiki/page (null, когда карточку не нашли).</summary>
+    public sealed record FootnoteInfo(string Label, string Card, string? Origin, string? Captured, string? CardPage = null);
 
     /// <summary>Карточки источников состояния: нормализованный заголовок → origin и captured.
     /// Неразобранные страницы пропускаются; повтор заголовка — первая карточка.</summary>
@@ -52,7 +53,7 @@ public static class WikiProjections
         var cards = new Dictionary<string, CardInfo>(StringComparer.Ordinal);
         foreach (var d in state)
             if (WikiPage.Parse(d.Content).Model is { } page && page.Frontmatter.Type == WikiFrontmatter.TypeSource)
-                cards.TryAdd(NormTitle(page.Title), new CardInfo(page.Frontmatter.Origin, page.Frontmatter.Captured));
+                cards.TryAdd(NormTitle(page.Title), new CardInfo(page.Frontmatter.Origin, page.Frontmatter.Captured, d.Path));
         return cards;
     }
 
@@ -62,7 +63,7 @@ public static class WikiProjections
             .Select((f, i) =>
             {
                 cards.TryGetValue(NormTitle(f.Target.Text), out var card);
-                return new FootnoteInfo($"s{i + 1}", f.Target.Text, card.Origin, card.Captured);
+                return new FootnoteInfo($"s{i + 1}", f.Target.Text, card.Origin, card.Captured, card.Path);
             })
             .ToList();
 

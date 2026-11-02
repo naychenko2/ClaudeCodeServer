@@ -272,7 +272,7 @@ public class WikiController : ControllerBase
                 {
                     var rel = Path.GetRelativePath(dir, f).Replace('\\', '/');
                     if (!rel.Split('/').SkipLast(1).Contains(WikiSourceCapture.SourceDirName)) continue;
-                    try { cards.Add(new WikiGate.Draft(rel, System.IO.File.ReadAllText(f))); }
+                    try { cards.Add(new WikiGate.Draft(WikiSections.Folder(sectionKey) + rel, System.IO.File.ReadAllText(f))); }
                     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
                 }
             }
@@ -283,7 +283,7 @@ public class WikiController : ControllerBase
             ? null
             : WikiProjections.PageAuthorship(model, t => index.TryGetValue(WikiGate.Norm(t), out var c) ? c.Origin : null);
         var footnotes = WikiProjections.Footnotes(model, index)
-            .Select(f => new WikiFootnoteDto(f.Label, f.Card, f.Origin, f.Captured))
+            .Select(f => new WikiFootnoteDto(f.Label, f.Card, f.Origin, f.Captured, f.CardPage))
             .ToList();
         return (authorship, footnotes);
     }
@@ -720,7 +720,7 @@ public sealed record WikiPageInfoDto(
 
 /// <summary>Сноска страницы в GET page: label — s1…sN, card — заголовок карточки, origin и
 /// captured — из шапки карточки (null, когда карточки нет).</summary>
-public sealed record WikiFootnoteDto(string Label, string Card, string? Origin, string? Captured);
+public sealed record WikiFootnoteDto(string Label, string Card, string? Origin, string? Captured, string? CardPage);
 
 /// <summary>Что ИИ сам сделал с утверждением человека на странице за последние 14 дней
 /// (GET page, overrides): op — supersede | conflict, statement — текст ИИ без сносок, previous —

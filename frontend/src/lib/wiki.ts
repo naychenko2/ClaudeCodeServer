@@ -598,18 +598,28 @@ export interface WikiJournalEntryDto {
   classes: string[];
 }
 
-export interface WikiJournalDto { entries: WikiJournalEntryDto[]; take: number; linesRead: number; invalidLines: number }
+// Записи несут признак «ИИ поменял моё» (F3b, ADR-038 предохранитель 4): overrodeHuman и
+// вид действия overrodeKind — строка журнала их читает, бэк отдаёт как есть, фронт не
+// выводит. Пары statement/previous здесь нет: она только в overrides[] страницы.
+export interface WikiJournalDto { entries: WikiJournalEntryOverrideDto[]; take: number; linesRead: number; invalidLines: number }
 
 // Фильтры окна: section — ключ из дерева своей вики, origin — значение из закрытого перечня
 // (тот же, что фильтр источников экрана), class — пара «origin × op». Пустое — без фильтра.
-// take не передаём: экран живёт в окне по умолчанию (200), потолок (1000) — дело бэка.
-export interface WikiJournalQuery { section?: string | null; origin?: string | null; class?: string | null }
+// overrodeHuman — «ИИ поменял моё» (F6b): бэк сужает окно до ответа (WikiJournalReader.cs),
+// фронт по списку не фильтрует. take не передаём: экран живёт в окне по умолчанию (200),
+// потолок (1000) — дело бэка.
+export interface WikiJournalQuery {
+  section?: string | null; origin?: string | null; class?: string | null;
+  overrodeHuman?: boolean;
+}
 
 export async function loadWikiJournal(q: WikiJournalQuery = {}): Promise<WikiJournalDto> {
   const params = new URLSearchParams();
   if (q.section) params.set('section', q.section);
   if (q.origin) params.set('origin', q.origin);
   if (q.class) params.set('class', q.class);
+  // 'true' — единственное значение фильтра: false не шлём вовсе (бэк читает отсутствие как «нет»)
+  if (q.overrodeHuman) params.set('overrodeHuman', 'true');
   const qs = params.toString();
   return wikiHttp<WikiJournalDto>(`/wiki/journal${qs ? `?${qs}` : ''}`);
 }

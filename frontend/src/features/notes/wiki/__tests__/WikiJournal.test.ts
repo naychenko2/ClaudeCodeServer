@@ -26,7 +26,13 @@
 // (9) тост отката — прежний текст («N стр. очищено», «остались (другой источник)») → «тост отката:
 //     согласование и контракт unlinked/remaining» краснеет (W4-4);
 // (10) opText — вернуть сырой e.op для неизвестного кода → «неизвестный op» краснеет (W4-4);
-// (11) убрать строку окна (take/linesRead) → «окно журнала» краснеет (W4-4).
+// (11) убрать строку окна (take/linesRead) → «окно журнала» краснеет (W4-4);
+// (12) снять проверку ключа в .then (loadSeq) → «гонка поколений фильтра «ИИ поменял моё»»
+//     краснеет (F6b);
+// (13) не слать overrodeHuman в loadWikiJournal (lib/wiki.ts) → «чип шлёт overrodeHuman=true»
+//     краснеет (F6b);
+// (14) не вести «Вернуть мою» на страницу (убрать requestOpenWikiPage) → ««Вернуть мою» ведёт
+//     на страницу» краснеет (F6b).
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -66,7 +72,7 @@ vi.mock('../../../../components/ui/Select', () => ({
 
 import { request } from '../../../../lib/offline';
 import {
-  __test as wikiStore, getWikiPageSnapshot, loadWikiPage, useWikiPage,
+  __test as wikiStore, consumeOpenWikiPage, getWikiPageSnapshot, loadWikiPage, useWikiPage,
 } from '../../../../lib/wiki';
 
 type MockFn = ReturnType<typeof vi.fn>;
@@ -644,5 +650,161 @@ describe('«Журнал»: открытая страница после отк�
     await settle();
     expect(postCalls().filter(p => String(p[0]).includes('/retract'))).toHaveLength(2);
     expect(getCalls('/wiki/page').length).toBe(readsWhileOpen);
+  });
+});
+
+// ─── «ИИ поменял моё» (F6b): серверный фильтр, вид действия в строке, «Вернуть мою» ───
+// Мок — серверный фильтр: с overrodeHuman=true ответ несёт только помеченные записи (бэк
+// сужает окно сам, фронт по списку не фильтрует). Фикстура: 5 записей, из них 2 overrode —
+// «заменил» и «оспорил». Пара statement/previous в строке журнала не несётся: «Вернуть мою»
+// ведёт на страницу каналом requestOpenWikiPage (стор держит один запрос).
+
+const ENTRY_REPLACED = { ...ENTRY_AUTO, ts: '2026-10-30T05:48:00Z', overrodeHuman: true, overrodeKind: 'replaced' };
+const ENTRY_DISPUTED = { ...ENTRY_INBOX, ts: '2026-10-30T05:31:00Z', overrodeHuman: true, overrodeKind: 'disputed' };
+const RESP_MIX = {
+  entries: [ENTRY_REPLACED, ENTRY_DISPUTED, ENTRY_AUTO, ENTRY_CHECKS, ENTRY_RELINK],
+  take: 200, linesRead: 5, invalidLines: 0,
+};
+const RESP_OVR = { entries: [ENTRY_REPLACED, ENTRY_DISPUTED], take: 200, linesRead: 5, invalidLines: 0 };
+
+function seedMixed() {
+  req.mockImplementation((url: string) => {
+    if (url.startsWith('/wiki/journal')) {
+      return Promise.resolve(String(url).includes('overrodeHuman=true') ? RESP_OVR : RESP_MIX);
+    }
+    return Promise.resolve(null);
+  });
+}
+
+function chipNode(container: AnyNode): AnyNode | null {
+  return allNodes(container).find(n => n.nodeName === 'BUTTON' && textNodes(n).join('').includes('ИИ поменял моё')) ?? null;
+}
+
+describe('«Журнал»: «ИИ поменял моё» (F6b)', () => {
+  it('чип шлёт overrodeHuman=true; из 5 записей серверного фильтра остаёт 2 с метками вида и кнопками', async () => {
+    seedMixed();
+    const c = render();
+    await settle();
+    expect(rows(c)).toHaveLength(5);
+    // число на чипе — overrode-записи текущего окна (тот же хвост, что с фильтром и без)
+    const chip = chipNode(c);
+    expect(chip).not.toBeNull();
+    expect(textNodes(chip!).join('')).toContain('2');
+    click(chip, 'чип «ИИ поменял моё»');
+    await settle();
+    const calls = getCalls('/wiki/journal');
+    expect(calls).toHaveLength(2);
+    // мутация (13): не слать overrodeHuman в loadWikiJournal — этот адрес краснеет
+    expect(String(calls[1][0])).toBe('/wiki/journal?overrodeHuman=true');
+    // фронт показывает ответ, а не фильтрует список сам
+    expect(rows(c)).toHaveLength(2);
+    expect(has(c, 'заменил')).toBe(true);
+    expect(has(c, 'оспорил')).toBe(true);
+    expect(buttonByTestId(c, 'wiki-journal-restore')).not.toBeNull();
+    expect(buttonByTestId(c, 'wiki-journal-open-page')).not.toBeNull();
+    // снятие чипа — запрос без параметра, список целый
+    click(chipNode(c), 'чип «ИИ поменял моё», снятие');
+    await settle();
+    expect(String(getCalls('/wiki/journal')[2][0])).toBe('/wiki/journal');
+    expect(rows(c)).toHaveLength(5);
+  });
+
+  it('фильтр накапливается с фильтром раздела: section и overrodeHuman в одном запросе', async () => {
+    seedMixed();
+    const c = render();
+    await settle();
+    click(chipNode(c), 'чип «ИИ поменял моё»');
+    await settle();
+    sel.value = 'projects/p1';
+    click(buttonByTestId(c, 'mock-select-Все разделы'), 'фильтр раздела');
+    await settle();
+    const calls = getCalls('/wiki/journal');
+    expect(calls).toHaveLength(3);
+    // порядок параметров — детерминированный порядок loadWikiJournal (section, …, overrodeHuman)
+    expect(String(calls[2][0])).toBe('/wiki/journal?section=projects%2Fp1&overrodeHuman=true');
+  });
+
+  it('«Вернуть мою» ведёт на страницу; двойной клик — одно открытие', async () => {
+    seedMixed();
+    const c = render();
+    await settle();
+    click(chipNode(c), 'чип «ИИ поменял моё»');
+    await settle();
+    // мутация (14): убрать requestOpenWikiPage из rowOpenPage — consume ниже даёт null
+    click(buttonByTestId(c, 'wiki-journal-restore'), 'Вернуть мою');
+    expect(consumeOpenWikiPage()).toMatchObject({ section: 'projects/p1', path: 'projects/p1/page-a' });
+    // двойной клик: стор замещает запрос, а не копит дубли — второе consume пусто
+    click(buttonByTestId(c, 'wiki-journal-restore'), 'Вернуть мою, второй клик');
+    click(buttonByTestId(c, 'wiki-journal-restore'), 'Вернуть мою, третий клик');
+    expect(consumeOpenWikiPage()).toMatchObject({ section: 'projects/p1', path: 'projects/p1/page-a' });
+    expect(consumeOpenWikiPage()).toBeNull();
+  });
+
+  it('«Открыть страницу» спора ведёт на ту же страницу: возвращать нечего, текст человека на месте', async () => {
+    seedMixed();
+    const c = render();
+    await settle();
+    click(chipNode(c), 'чип «ИИ поменял моё»');
+    await settle();
+    click(buttonByTestId(c, 'wiki-journal-open-page'), 'Открыть страницу');
+    expect(consumeOpenWikiPage()).toMatchObject({ section: 'projects/p1', path: 'projects/p1/page-a' });
+  });
+
+  it('запись вида показывает метку и в раскрытой записи', async () => {
+    seedMixed();
+    const c = render();
+    await settle();
+    click(chipNode(c), 'чип «ИИ поменял моё»');
+    await settle();
+    openEntry(c, 0);
+    await settle();
+    expect(has(c, 'заменил')).toBe(true);
+  });
+
+  it('нераспознанный вид overrodeHuman остаётся без метки и кнопки: словарь не выдумывает смысл', async () => {
+    const UNKNOWN = { ...ENTRY_AUTO, ts: '2026-10-30T05:00:00Z', overrodeHuman: true, overrodeKind: 'future_kind' };
+    req.mockImplementation((url: string) => {
+      if (url.startsWith('/wiki/journal')) {
+        return Promise.resolve(String(url).includes('overrodeHuman=true')
+          ? { entries: [UNKNOWN], take: 200, linesRead: 5, invalidLines: 0 }
+          : RESP_MIX);
+      }
+      return Promise.resolve(null);
+    });
+    const c = render();
+    await settle();
+    click(chipNode(c), 'чип «ИИ поменял моё»');
+    await settle();
+    expect(rows(c)).toHaveLength(1);
+    expect(has(c, 'заменил')).toBe(false);
+    expect(has(c, 'оспорил')).toBe(false);
+    expect(buttonByTestId(c, 'wiki-journal-restore')).toBeNull();
+    expect(buttonByTestId(c, 'wiki-journal-open-page')).toBeNull();
+  });
+
+  it('гонка поколений фильтра «ИИ поменял моё»: задержанный ответ без фильтра не затеряет отфильтрованный', async () => {
+    const LATE = { ...ENTRY_AUTO, ts: '2026-10-30T06:00:00Z', sourceName: 'ЗАПАЗДАЛЫЙ-A' };
+    let resolveLate: (v: unknown) => void = () => {};
+    let n = 0;
+    req.mockImplementation((url: string) => {
+      if (url.startsWith('/wiki/journal')) {
+        n++;
+        // первый (без фильтра) — задержан; второй (после чипа) — отвечает сразу
+        if (n === 1) return new Promise(res => { resolveLate = res; });
+        return Promise.resolve(RESP_OVR);
+      }
+      return Promise.resolve(null);
+    });
+    const c = render();
+    await settle();
+    expect(rows(c)).toHaveLength(0);
+    click(chipNode(c), 'чип «ИИ поменял моё»');
+    await settle();
+    expect(rows(c)).toHaveLength(2);
+    // мутация (12): снять проверку loadSeq в .then — поздний ответ перезатрёт список
+    resolveLate({ ...RESP_MIX, entries: [LATE, ...RESP_MIX.entries] });
+    await settle();
+    expect(rows(c)).toHaveLength(2);
+    expect(has(c, 'ЗАПАЗДАЛЫЙ-A')).toBe(false);
   });
 });

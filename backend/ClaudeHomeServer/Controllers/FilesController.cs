@@ -27,7 +27,11 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     ClaudeHomeServer.Services.Tasks.TaskManager? tasks = null,
     GitService? git = null,
     // W4-LINK-B (п.14): резолв дерева задачи, к которой привязан чат (?sessionId=).
-    SessionManager sessions = null!) : ControllerBase
+    SessionManager sessions = null!,
+    // S3-3b (разрез 4bc3d04f §3): журнал правок человека (S3-3) — зовётся после УСПЕШНОЙ записи/
+    // удаления/переноса файла. В DI он всегда (Program.cs:621-622); опциональным оставлен как
+    // остальные необязательные зависимости контроллера: бесхостовые тесты собирают его напрямую.
+    IHumanEditJournal? humanEdits = null) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
@@ -363,6 +367,8 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
                 WriteAtomic(root, targetRel, absTarget, md);
             }
             finally { sem.Release(); }
+            // S3-3b: записано — в журнал по ЦЕЛЕВОМУ .md (источник не менялся, его не сдаём)
+            RecordHumanEdit(projectId, root, targetRel);
             return Ok(new { savedPath = targetRel, markdown = md });
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -417,6 +423,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
                 {
                     files.WriteFile(root, path, req.Content);
                     SetContentETagAfterWrite(root, path, abs, req.Content);
+                    RecordHumanEdit(projectId, root, path);   // S3-3b: запись состоялась
                     return Ok();
                 }
 
@@ -428,6 +435,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
                     return Conflict(FileConflictBodyFor(root, path, abs, current));
                 WriteAtomic(root, path, abs, req.Content);
                 SetContentETagAfterWrite(root, path, abs, req.Content);
+                RecordHumanEdit(projectId, root, path);   // S3-3b: запись по названной версии состоялась
                 return Ok();
             }
             finally { sem.Release(); }
@@ -654,6 +662,60 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         return Conflict(FileConflictBodyFor(root, rel, abs, current, "file_uncommitted"));
     }
 
+    // S3-3b (разрез 4bc3d04f §3): УСПЕШНАЯ правка файла человеком — в журнал правок (S3-3):
+    // путь относительный, корень — корень проекта, автор — sub из JWT вызывающего. Вызов строго
+    // после успеха ручки: при 4xx/5xx правки не было, и журнал её видеть не должен. Отбирать
+    // путь (файл, а не каталог; свой корень; автор — из участников) и молчать на личном проекте
+    // и не-репозитории — правило самого журнала (HumanEditCommitter), здесь не повторяем его.
+    private void RecordHumanEdit(string projectId, string root, string relPath)
+    {
+        var userId = UserId;
+        if (humanEdits is null || string.IsNullOrEmpty(userId)) return;
+        humanEdits.Record(projectId, root, relPath, userId);
+    }
+
+    // Файлы под каталогом (абсолютные пути). Папку журналу не сдают: pathspec каталога
+    // индексирует всё поддерево, включая незакоммиченную работу агента (оговорка в
+    // HumanEditCommitter), поэтому за удаление и перенос папки в журнал идут ЕЁ ФАЙЛЫ.
+    // Снимается ДО операции: после удаления/переноса старых путей уже нет. Обход — по тому же
+    // списку исключений, что у дерева (TreeExcludes), и без чужих вложенных репозиториев
+    // (HasOwnGit): под них журнал не ходит, их правки — не правка этого проекта.
+    private static List<string> FilesUnderDir(string absDir)
+    {
+        var result = new List<string>();
+        void Walk(string dir)
+        {
+            foreach (var d in Directory.GetDirectories(dir))
+            {
+                if (TreeExcludes.Contains(Path.GetFileName(d)) || TreeExcludes.HasOwnGit(d)) continue;
+                Walk(d);
+            }
+            foreach (var f in Directory.GetFiles(dir)) result.Add(f);
+        }
+        Walk(absDir);
+        return result;
+    }
+
+    private static string RelOf(string root, string abs) => Path.GetRelativePath(root, abs).Replace('\\', '/');
+
+    // Удаление папки для журнала — списком её файлов (снятых до удаления). Ветка доходит только
+    // до владельца (гейт в Delete), но правило одно: путь папки вместо файлов не сдаётся.
+    private void RecordDeletedDir(string projectId, string root, List<string> underDir)
+    {
+        foreach (var f in underDir) RecordHumanEdit(projectId, root, RelOf(root, f));
+    }
+
+    // Перенос папки — старым и новым путём каждого её файла: новый путь строится из относительного
+    // пути внутри папки, поэтому вложенность сохраняется, а путь папки в журнал не входит.
+    private void RecordRenamedDir(string projectId, string root, string absOld, string absNew, List<string> underDir)
+    {
+        foreach (var f in underDir)
+        {
+            RecordHumanEdit(projectId, root, RelOf(root, f));
+            RecordHumanEdit(projectId, root, RelOf(root, Path.Combine(absNew, Path.GetRelativePath(absOld, f))));
+        }
+    }
+
     [HttpGet("diff")]
     [ProjectScope]
     public async Task<IActionResult> GetDiff(string projectId, [FromQuery] string path)
@@ -715,7 +777,13 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     [ProjectScope(Right = ProjectRight.WriteContent)]
     public IActionResult CreateFile(string projectId, [FromBody] CreateFileRequest req)
     {
-        try { files.CreateFile(GetRoot(projectId), req.Path, req.Content ?? ""); return Ok(); }
+        try
+        {
+            var root = GetRoot(projectId);
+            files.CreateFile(root, req.Path, req.Content ?? "");
+            RecordHumanEdit(projectId, root, req.Path);   // S3-3b: коллизия имени — выше, до этой строки
+            return Ok();
+        }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return StatusCode(403); }
         // Коллизия имён: существующий файл не перезаписываем молча
@@ -783,7 +851,17 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
                     var current = IsEtaggableText(root, req.OldPath, absOld) ? CanonicalSha256OfTextFile(absOld) : null;
                     if (current != ifMatch) return Conflict(FileConflictBodyFor(root, req.OldPath, absOld, current));
                 }
+                // S3-3b: журнал берёт только файлы. Файлы папки снимаются ДО переноса (после
+                // него старых путей уже нет): в журнал идут старый и новый путь каждого файла,
+                // а не путь папки. Файл — свои старый и новый путь.
+                var inner = Directory.Exists(absOld) ? FilesUnderDir(absOld) : null;
                 files.Rename(root, req.OldPath, req.NewPath);
+                if (inner is null)
+                {
+                    RecordHumanEdit(projectId, root, req.OldPath);
+                    RecordHumanEdit(projectId, root, req.NewPath);
+                }
+                else RecordRenamedDir(projectId, root, absOld, absNew, inner);
                 // Комментарии к переименованному/перенесённому документу (или документам
                 // внутри папки) следуют за новым путём — привязка не сиротеет
                 if (notes is not null)
@@ -849,7 +927,12 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
                 var current = IsEtaggableText(root, path, abs) ? CanonicalSha256OfTextFile(abs) : null;
                 if (current != ifMatch) return Conflict(FileConflictBodyFor(root, path, abs, current));
             }
+            // S3-3b: файл — своим путём; папка (до неё доходит только владелец) — списком её
+            // файлов, снятых до удаления: путь папки в pathspec затянул бы и чужую работу.
+            var inner = Directory.Exists(abs) ? FilesUnderDir(abs) : null;
             files.Delete(root, path);
+            if (inner is null) RecordHumanEdit(projectId, root, path);
+            else RecordDeletedDir(projectId, root, inner);
             return NoContent();
         }
         finally { sem.Release(); }
@@ -896,6 +979,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
                 await WriteAtomicFromFileAsync(root, relativePath, safePath, file);
             }
             finally { sem.Release(); }
+            RecordHumanEdit(projectId, root, relativePath);   // S3-3b: загрузка записана
             return Ok();
         }
         catch (KeyNotFoundException) { return NotFound(); }

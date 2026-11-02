@@ -90,7 +90,13 @@ backend/ClaudeHomeServer/Controllers/DossiersController.cs|4
 # только в видимость чата (SessionManager.IsVisibleTo → SessionAccess.CanSee), как в S2d-1d и S2d-4a.
 # Ключом хранилищ он не служит: индекс и его выдача адресуются projectId, записей по вызывающему нет,
 # машинная сторона индекса (GetSessionPathsAsync → CommitAttributionService) id вызывающего не видит.
-backend/ClaudeHomeServer/Controllers/FilesController.cs|7
+# S3-3b (разрез 4bc3d04f §3): FilesController 7→9 — RecordHumanEdit: id вызывающего из sub JWT
+# становится АВТОРОМ правки в журнале правок (IHumanEditJournal.Record) — это и есть смысл S3-3
+# (атрибуция человеческой правки), а не ключ хранилищ: буфер журнала адресован парой
+# (корень репозитория, относительный путь), вызывающий в него не входит. Вторая строка — та же
+# проверка emptiness перед вызовом. Ключи файловых хранилищ не изменились: все файловые вызовы
+# идут от GetRoot(projectId), как в S2c-8.
+backend/ClaudeHomeServer/Controllers/FilesController.cs|9
 # S3-1b: GitController 1→3 — AuthorOfRequestUser: id вызывающего берётся из sub JWT и входит только
 # в чтение своей записи пользователя (UserStore.GetById) и в конструирование автора коммита
 # (GitCommitAuthor: имя/логин для git-автора). Ключом хранилищ ничто не стало: git-операции идут

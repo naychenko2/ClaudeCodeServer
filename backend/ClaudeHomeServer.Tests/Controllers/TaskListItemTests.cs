@@ -157,7 +157,7 @@ public class TaskListItemTests : IClassFixture<TestWebApplicationFactory>
     [Fact]
     public async Task РазмерОтвета_ПадаетМинимумВДесятьРаз()
     {
-        const int count = 200;
+        const int count = 30; // отношение размеров от числа задач не зависит
         const int textLength = 20_000;
         var prefix = $"перф{Guid.NewGuid():N}";
         for (var i = 0; i < count; i++)

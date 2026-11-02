@@ -45,6 +45,10 @@ public partial class SessionManagerTests
         toShared.Outcome.Should().Be(ChatVisibilityOutcome.Ok);
         session.PrivateToUserId.Should().BeNull();
         session.ExcludeFromDossiers.Should().BeTrue("прошлое приватного периода не раскрываем");
+
+        _sut.SetChatVisibility(session.Id, TestUserId, makePrivate: true).Outcome
+            .Should().Be(ChatVisibilityOutcome.HasMessages, "после false вернуть приватность нельзя");
+        session.PrivateToUserId.Should().BeNull();
     }
 
     [Fact]
@@ -124,6 +128,27 @@ public partial class SessionManagerTests
         ProjectEventsOf(session.Id).Should().Be(0, "приватный чат: группе проекта события не адресуются");
         _broadcaster.Inner.Owner.Should().Contain(o => o.OwnerId == TestUserId && o.Message.SessionId == session.Id,
             "автор получает события своего приватного чата");
+    }
+
+    // Парная сторона: тумблер, в свою очередь, обязан ждать замок видимости — проверка «сообщений
+    // нет» и установка приватности вне замка пропустили бы отправку, занявшую чат между ними.
+    [Fact]
+    public async Task ТумблерЖдётЗамокВидимости_ПроверкаСообщенийИУстановкаПодОдним()
+    {
+        var session = await SharedChatAsync("toggle-waits");
+        var lk = VisibilityLockOf(session.Id);
+        Task<ChatVisibilityOutcome> toggle;
+
+        lock (lk)
+        {
+            toggle = Task.Run(() => _sut.SetChatVisibility(session.Id, TestUserId, makePrivate: true).Outcome);
+            Thread.Sleep(400);
+            toggle.IsCompleted.Should().BeFalse("тумблер обязан ждать замок, под которым первое сообщение занимает чат");
+            session.PrivateToUserId.Should().BeNull();
+        }
+
+        (await toggle.WaitAsync(TimeSpan.FromSeconds(10))).Should().Be(ChatVisibilityOutcome.Ok);
+        session.PrivateToUserId.Should().Be(TestUserId);
     }
 
     // Гонка, порядок «отправка первой»: сообщение уже принято (замок видимости отпущен после

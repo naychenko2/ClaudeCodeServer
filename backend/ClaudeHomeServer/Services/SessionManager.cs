@@ -2524,7 +2524,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // CanSee (404) и отказ читателю (403) в контроллере; здесь — автор, общий проект и «сообщений
     // нет» атомарно под VisibilityLock. true: только автор, только общий проект (есть участники),
     // только пока в чате нет сообщений; ExcludeFromDossiers = true. false: только автор, в любой
-    // момент; ExcludeFromDossiers остаётся true — прошлое приватного периода не раскрываем.
+    // момент и после этого вернуть приватность нельзя (chat_has_messages); ExcludeFromDossiers
+    // остаётся true — прошлое приватного периода не раскрываем.
     public ChatVisibilityResult SetChatVisibility(string sessionId, string userId, bool makePrivate)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))
@@ -2552,6 +2553,10 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             }
             else
             {
+                // Чат побывал общим (или остаётся им): вернуть приватность уже нельзя — его могли
+                // видеть другие участники. Метка та же, что у первого сообщения: единый отказ
+                // chat_has_messages на повторном true.
+                if (info.PrivateToUserId is not null) entry.MessageClaimed = true;
                 info.PrivateToUserId = null;
             }
         }

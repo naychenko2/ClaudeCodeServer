@@ -51,6 +51,7 @@ public sealed class ChatVisibilityEndpointTests : IDisposable
     private const string EditorChat2Id = "editor-chat-2";
     private const string OwnerChatId = "owner-chat";
     private const string OwnerPrivateId = "owner-private";
+    private const string EditorPrivateId = "editor-private";
     private const string WithMessagesId = "with-messages";
     private const string PersonalChatId = "personal-chat";
     private const string OutsideChatId = "outside-chat";
@@ -102,6 +103,7 @@ public sealed class ChatVisibilityEndpointTests : IDisposable
             new Session { Id = EditorChat2Id, ProjectId = _projectId, CreatedByUserId = _editorId, Status = SessionStatus.Finished },
             new Session { Id = OwnerChatId, ProjectId = _projectId, CreatedByUserId = _ownerId, Status = SessionStatus.Finished },
             new Session { Id = OwnerPrivateId, ProjectId = _projectId, CreatedByUserId = _ownerId, PrivateToUserId = _ownerId, Status = SessionStatus.Finished },
+            new Session { Id = EditorPrivateId, ProjectId = _projectId, CreatedByUserId = _editorId, PrivateToUserId = _editorId, Status = SessionStatus.Finished },
             new Session { Id = WithMessagesId, ProjectId = _projectId, CreatedByUserId = _editorId, MessageCount = 2, Status = SessionStatus.Finished },
             new Session { Id = PersonalChatId, ProjectId = _personalProjectId, CreatedByUserId = _ownerId, Status = SessionStatus.Finished },
             new Session { Id = OutsideChatId, OwnerId = _ownerId, CreatedByUserId = _ownerId, Status = SessionStatus.Finished },
@@ -191,6 +193,8 @@ public sealed class ChatVisibilityEndpointTests : IDisposable
         Read(c.SetVisibility(EditorChatId, new SetVisibilityRequest(false))).Status.Should().Be(200);
         s.PrivateToUserId.Should().BeNull();
         s.ExcludeFromDossiers.Should().BeTrue("после «сделать общим» прошлое не раскрываем");
+
+        Read(c.SetVisibility(EditorChatId, new SetVisibilityRequest(true))).Should().Be((409, "chat_has_messages"));
     }
 
     [Fact]
@@ -219,6 +223,16 @@ public sealed class ChatVisibilityEndpointTests : IDisposable
         Read(c.SetVisibility(OwnerPrivateId, new SetVisibilityRequest(false))).Status.Should().Be(404);
         Read(c.SetVisibility("no-such-chat", new SetVisibilityRequest(false))).Status.Should().Be(404);
         _sessions.GetById(OwnerPrivateId)!.PrivateToUserId.Should().Be(_ownerId, "чужую приватность не снять");
+    }
+
+    [Fact]
+    public void ВладелецПроектаНаПриватномЧатеРедактора_404_ПриватностьНеМеняется()
+    {
+        var c = ChatsAs(_ownerId);
+
+        Read(c.SetVisibility(EditorPrivateId, new SetVisibilityRequest(false))).Status.Should().Be(404);
+        Read(c.SetVisibility(EditorPrivateId, new SetVisibilityRequest(true))).Status.Should().Be(404);
+        _sessions.GetById(EditorPrivateId)!.PrivateToUserId.Should().Be(_editorId);
     }
 
     [Fact]

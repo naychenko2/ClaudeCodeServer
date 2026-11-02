@@ -361,6 +361,14 @@ public class WikiChatsControllerTests : IDisposable
         _sessions.All.Single(s => s.Id == ChatId).WikiMark.Should().Be(WikiMarks.Important,
             "пометка живёт на чате (SetWikiMark), а не в сторе отбора");
 
+        // «Поле одно»: следующая пометка замещает прежнюю, а не дополняет её — после skip
+        // важный не остаётся (цепочка important → skip → null).
+        var skip = Controller().Mark(ChatId, new WikiChatMarkRequest { Mark = WikiMarks.Skip });
+        ((IStatusCodeActionResult)skip).StatusCode.Should().Be(200);
+        Body(skip).GetProperty("mark").GetString().Should().Be(WikiMarks.Skip);
+        _sessions.All.Single(s => s.Id == ChatId).WikiMark.Should().Be(WikiMarks.Skip,
+            "skip замещает important: пометка на чате одна");
+
         var off = Controller().Mark(ChatId, new WikiChatMarkRequest { Mark = null });
         ((IStatusCodeActionResult)off).StatusCode.Should().Be(200);
         Body(off).GetProperty("mark").ValueKind.Should().Be(JsonValueKind.Null);
@@ -403,6 +411,25 @@ public class WikiChatsControllerTests : IDisposable
             409, "wiki_llm_wiki_off");
         _sessions.All.Single(s => s.Id == ChatId).WikiMark.Should().BeNull(
             "при выключенной функции пометка не ставится: отказ раньше записи");
+    }
+
+    [Fact]
+    public void Пометка_ФлагВыключенИЧужойИлиНесуществующийЧат_409ПоФлагу_АНе404()
+    {
+        // Порядок проверок ручки (флаг раньше чата, как в analyze): при выключенном флаге
+        // отказ идёт по флагу, даже если чата нет или он чужой — по ответу нельзя узнать,
+        // существует ли чат (тот же per-owner контракт, что у analyze).
+        AddSession("s-foreign");
+        _sessions.All.Single(s => s.Id == "s-foreign").OwnerId = Foreign;
+
+        AssertBody(Controller(flagsOn: false).Mark("s-foreign", new WikiChatMarkRequest { Mark = WikiMarks.Important }),
+            409, "wiki_llm_wiki_off");
+        AssertBody(Controller(flagsOn: false).Mark("no-such-chat", new WikiChatMarkRequest { Mark = WikiMarks.Important }),
+            409, "wiki_llm_wiki_off");
+        _sessions.All.Single(s => s.Id == "s-foreign").WikiMark.Should().BeNull(
+            "отказ по флагу раньше записи: чужому чату пометка не поставлена");
+        // Мутация «переставить проверки в Mark» (чат раньше флага): чужой чат дал бы 404 —
+        // тест красный; порядок «флаг → чат» закреплён этим тестом.
     }
 
     [Fact]

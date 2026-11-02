@@ -236,7 +236,7 @@ public class WikiChatsController : ControllerBase
         // Разбор тратит модель: при выключенном llm-wiki не стартует. Флаг может смениться
         // между этой проверкой и ходом модели — допустимо; уже идущий разбор не прерывается.
         if (_flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) != true)
-            return StatusCode(409, new { code = "wiki_llm_wiki_off", message = "разбор не запущен: функция выключена" });
+            return StatusCode(409, new { code = CodeLlmWikiOff, message = "разбор не запущен: функция выключена" });
 
         var task = _chat.AnalyzeAsync(userId, sessionId); // ct заявителя в прогон не идёт
         try

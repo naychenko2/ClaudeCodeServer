@@ -24,13 +24,17 @@
 // (хвост S2f) — плашка общая, как в каталоге (WikiTab.OrphanNotice).
 
 import { useMemo, useState } from 'react';
+import type { MouseEvent, KeyboardEvent } from 'react';
 import type { ReactNode } from 'react';
 import { AlertTriangle, ChevronLeft, Lock, Quote, ScrollText } from 'lucide-react';
-import { C, FONT, FS, R, SP, useIsMobile, WikiError, adoptWikiPage, useWikiPage, type WikiSectionDto } from 'aihome_shell/kit';
+import { C, FONT, FS, R, SP, useIsMobile, useFeature, FLAGS, WikiError, adoptWikiPage, useWikiPage, type WikiSectionDto } from 'aihome_shell/kit';
 import { Badge } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
 import { Notice } from '../../../components/ui/Notice';
+import { PressableArea } from '../../../components/ui/PressableArea';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
+import { wikiAuthorshipOf, wikiFootnoteLabel, type WikiAuthorship, type WikiPageAuthoredDto } from '../../../lib/wiki';
+import { fmtDayMonth, WikiFootnotePopover, type FootnoteView } from './WikiFootnotePopover';
 import { PAGE_STATUS, PAGE_TYPE, sectionPrefix, wikiErrorText } from './wikiLabels';
 
 // ─── Разбор страницы (зеркало бэкового WikiPage.Parse, терпимый) ───
@@ -130,7 +134,30 @@ function fmtDate(s: string): string {
 
 // Строка содержания: [^sN] → надстрочник-маркер с цитатой в title; [[X]] → текст без
 // скобок (открытие по ссылке — не этот шаг). Полный markdown-рендер — S5e
-function renderLine(line: string, quotes: Map<string, string>, keyBase: string): ReactNode[] {
+// Со включённым авторством (F3a) сноска — нажимаемая плашка: у ИИ прежний номер, у человека
+// «✎ имя, дата»; клик открывает поповер. Без fnx — прежний надстрочник.
+interface FootnoteUi { views: Map<string, FootnoteView>; onOpen: (v: FootnoteView, el: HTMLElement) => void }
+
+function FootnotePlate({ v, ui }: { v: FootnoteView; ui: FootnoteUi }) {
+  const open = (e: MouseEvent | KeyboardEvent) => ui.onOpen(v, e.currentTarget as HTMLElement);
+  return (
+    <PressableArea
+      onPress={open}
+      aria-haspopup="dialog"
+      aria-label={v.human ? `Сноска: правка человека, ${fmtDayMonth(v.captured)}` : `Сноска ${v.label}`}
+      data-testid="wiki-footnote"
+      style={{
+        display: 'inline-flex', alignItems: 'center', verticalAlign: 'baseline', minHeight: 22, padding: '0 6px',
+        margin: '0 2px', borderRadius: R.sm, fontSize: FS.xxs, fontWeight: 700, whiteSpace: 'nowrap',
+        color: v.human ? C.textSecondary : C.info, background: v.human ? C.bgSelected : C.infoBg,
+      }}
+    >
+      {v.human ? `✎ ${v.author ?? 'вы'}${v.captured ? `, ${fmtDayMonth(v.captured)}` : ''}` : v.label}
+    </PressableArea>
+  );
+}
+
+function renderLine(line: string, quotes: Map<string, string>, keyBase: string, ui?: FootnoteUi): ReactNode[] {
   const parts: ReactNode[] = [];
   let last = 0;
   let k = 0;
@@ -138,7 +165,10 @@ function renderLine(line: string, quotes: Map<string, string>, keyBase: string):
   let m: RegExpExecArray | null;
   while ((m = INLINE_RX.exec(line))) {
     if (m.index > last) parts.push(line.slice(last, m.index));
-    if (m[1] !== undefined) {
+    const view = m[1] !== undefined ? ui?.views.get(m[1]) : undefined;
+    if (view && ui) {
+      parts.push(<FootnotePlate key={`${keyBase}-fn${k++}`} v={view} ui={ui} />);
+    } else if (m[1] !== undefined) {
       parts.push(
         <sup key={`${keyBase}-fn${k++}`} title={quotes.get(m[1]) ?? m[1]} style={{ color: C.accent, fontSize: FS.xs, fontWeight: 600, whiteSpace: 'nowrap' }}>
           {m[1]}
@@ -163,10 +193,11 @@ const EMPTY_HINT: Record<string, string> = {
   История: 'Ничего не замещено.',
 };
 
-function SectionBlock({ name, lines, quotes }: {
+function SectionBlock({ name, lines, quotes, ui }: {
   name: string;
   lines: string[];
   quotes: Map<string, string>;
+  ui?: FootnoteUi;
 }) {
   return (
     <section data-testid="wiki-section" data-section-name={name} style={{ marginTop: SP.lg }}>
@@ -178,7 +209,7 @@ function SectionBlock({ name, lines, quotes }: {
         <ul style={{ margin: `${SP.sm}px 0 0`, paddingLeft: SP.lg, display: 'flex', flexDirection: 'column', gap: SP.sm }}>
           {lines.map((ln, i) => (
             <li key={i} style={{ fontSize: FS.md, color: C.textPrimary, lineHeight: 1.5, overflowWrap: 'anywhere' }}>
-              {renderLine(ln.replace(BULLET_RX, ''), quotes, `s${i}`)}
+              {renderLine(ln.replace(BULLET_RX, ''), quotes, `s${i}`, ui)}
             </li>
           ))}
         </ul>
@@ -217,6 +248,13 @@ function SourcesBlock({ footnotes }: { footnotes: ParsedWikiPage['footnotes'] })
   );
 }
 
+// Сводный бейдж авторства страницы (записка макета, §3)
+const AUTHORSHIP_BADGE: Record<WikiAuthorship, string> = {
+  ai: 'Ведёт ИИ',
+  together: 'Ведёте вместе',
+  human: 'Написали вы',
+};
+
 // ─── Страница ───
 
 interface Props {
@@ -234,6 +272,11 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
   const page = useMemo(() => parseWikiPage(content), [content]);
   const [adoptBusy, setAdoptBusy] = useState(false);
   const [adoptError, setAdoptError] = useState<unknown>(null);
+  // Авторство и поповер сносок — только с флагом единых «Заметок и Вики» и включённой вики
+  const unifiedFlag = useFeature(FLAGS.notesWikiUnified);
+  const wikiFlag = useFeature(FLAGS.llmWiki);
+  const unified = unifiedFlag && wikiFlag;
+  const [openFn, setOpenFn] = useState<{ view: FootnoteView; anchor: DOMRect | null; pageId: string } | null>(null);
 
   // Дрейф — поле ответа (его считает бэк сверкой файла с манифестом). Шапка status: drift
   // — текст модели, не сигнал: плашка и кнопка по ней не поднимаются (ревью S5b M1)
@@ -241,6 +284,25 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
   const st = page.status ? PAGE_STATUS[page.status] : undefined;
   const drift = dto?.drift === true;
   const quotes = new Map(page.footnotes.map(f => [f.id, f.quote]));
+
+  // Сноски с происхождением (footnotes[] страницы, B7); нет поля — прежний вид
+  const authored = dto as WikiPageAuthoredDto | null;
+  const pageId = `${section.key}\n${pageKey}`;
+  const footnoteUi = useMemo<FootnoteUi | undefined>(() => {
+    if (!unified || !authored?.footnotes?.length) return undefined;
+    const views = new Map<string, FootnoteView>();
+    for (const f of authored.footnotes) {
+      const label = wikiFootnoteLabel(f.label);
+      views.set(label, {
+        label, card: f.card, human: f.origin === 'human', author: f.author ?? null,
+        captured: f.captured ?? null, quote: page.footnotes.find(p => p.id === label)?.quote ?? '',
+      });
+    }
+    return { views, onOpen: (view, el) => setOpenFn({ view, anchor: el.getBoundingClientRect(), pageId }) };
+  }, [unified, authored?.footnotes, page.footnotes, pageId]);
+  // Поповер принадлежит странице, на которой открыт: со сменой страницы он не показывается
+  const popFn = openFn && openFn.pageId === pageId ? openFn : null;
+  const authorship: WikiAuthorship = wikiAuthorshipOf(authored ?? {});
 
   // «О чём» — не секция-заголовок, а строка-описание под заголовком (макет «Хроника»)
   const aboutSection = isChronicle ? page.sections.find(s => s.name === 'О чём') : undefined;
@@ -362,6 +424,14 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
         </p>
       ) : null}
 
+      {unified && (
+        <div data-testid="wiki-authorship" data-authorship={authorship} style={{ marginTop: SP.xs }}>
+          <Badge tone={authorship === 'human' ? 'neutral' : 'info'} size="xs">
+            {AUTHORSHIP_BADGE[authorship]}
+          </Badge>
+        </div>
+      )}
+
       <div style={{ display: 'flex', gap: SP.md, flexWrap: 'wrap', marginTop: SP.sm, fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
           <Quote size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
@@ -397,10 +467,20 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
       )}
 
       {bodySections.map(s => (
-        <SectionBlock key={s.name} name={s.name} lines={s.lines} quotes={quotes} />
+        <SectionBlock key={s.name} name={s.name} lines={s.lines} quotes={quotes} ui={footnoteUi} />
       ))}
 
       {page.footnotes.length > 0 && <SourcesBlock footnotes={page.footnotes} />}
+
+      {popFn && (
+        <WikiFootnotePopover
+          sectionKey={section.key}
+          pageKey={pageKey}
+          fn={popFn.view}
+          anchor={popFn.anchor}
+          onClose={() => setOpenFn(null)}
+        />
+      )}
     </div>
   );
 }

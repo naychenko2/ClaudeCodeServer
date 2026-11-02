@@ -1312,3 +1312,47 @@ export function wikiAuthorshipOf(page: { authorship?: unknown }): WikiAuthorship
   const a = page.authorship;
   return a === 'together' || a === 'human' ? a : 'ai';
 }
+
+// ─── Сноски страницы с авторством (ADR-038 «Контракт для фронта», SV1-В; F3a) ───
+// Бэк (B7) добавит в GET /api/wiki/page поля authorship и footnotes[]; до слияния их нет —
+// страница читается по-прежнему (нет footnotes = старый вид, нет authorship = 'ai').
+
+export interface WikiFootnoteDto {
+  // Метка сноски в тексте: 's3' (допускается и форма '[^s3]' — снимаем обёртку)
+  label: string;
+  // Путь карточки источника в вики
+  card: string;
+  // Происхождение источника: 'human' — правка человека, прочее (session, note…) — ИИ
+  origin: string;
+  // Время записи, ISO 8601
+  captured?: string | null;
+  // Имя автора правки человека; бэк пока не отдаёт — тогда подпись «вы»
+  author?: string | null;
+}
+
+export interface WikiPageAuthoredDto extends WikiPageDto {
+  authorship?: WikiAuthorship;
+  footnotes?: WikiFootnoteDto[];
+}
+
+export function wikiFootnoteLabel(label: string): string {
+  const m = /^\[\^(.+)\]$/.exec(label.trim());
+  return m ? m[1] : label.trim();
+}
+
+// Карточка источника, прочитанная мимо слота страницы стора: loadWikiPage перезаписал бы
+// открытую страницу карточкой, а поповеру нужны лишь имя и ref шапки.
+export interface WikiSourceCardInfo { name: string | null; ref: string | null }
+
+export async function loadWikiSourceCard(sectionKey: string, cardKey: string): Promise<WikiSourceCardInfo> {
+  const page = await wikiHttp<WikiPageDto>(
+    `/wiki/page?${sectionQuery(sectionKey)}&page=${encodeURIComponent(cardKey)}`,
+  );
+  let ref: string | null = null;
+  let name: string | null = null;
+  for (const line of page.content.replace(/\r\n/g, '\n').split('\n')) {
+    if (ref === null && line.startsWith('ref: ')) ref = line.slice(5).trim() || null;
+    else if (name === null && line.startsWith('# ')) name = line.slice(2).trim() || null;
+  }
+  return { name, ref };
+}

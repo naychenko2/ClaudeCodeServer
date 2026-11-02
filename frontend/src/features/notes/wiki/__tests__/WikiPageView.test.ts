@@ -21,6 +21,9 @@
 //  (4) считать разобранной любую закрытую ограду (не проверять тип) → «тип вне семи» краснеет.
 // Прежние мутации шага S5b (дрейф из поля ответа, перечитывание после adopt) проверялись там.
 
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { act } from 'react';
 import { createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -29,7 +32,8 @@ import {
   mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps,
 } from '../../../../components/chat/__tests__/fakeDom';
 import { WikiPageView } from '../WikiPageView';
-import { __test as wikiStore, loadWikiPage, type WikiPageDto } from '../../../../lib/wiki';
+import { __test as wikiStore, loadWikiPage, type WikiPageDto, type WikiPageAuthoredDto } from '../../../../lib/wiki';
+import { FOOTNOTE_TEXT, fmtDayMonth } from '../WikiFootnotePopover';
 
 // Мок с сохранением остальных экспортов: компонент берёт эти модули через кит хоста,
 // а цепочка кита шире собственных импортов теста — full-replacement мок рвётся на
@@ -44,6 +48,19 @@ vi.mock('../../../../lib/offline', async (orig) => ({
   ...await orig<typeof import('../../../../lib/offline')>(),
   request: vi.fn(),
   readStoredUserId: vi.fn(() => 'u1'),
+}));
+
+// Флаги управляются тестом: по умолчанию выключены — прежние тесты видят прежний вид;
+// блок F3a включает notes-wiki-unified и llm-wiki
+const flags = vi.hoisted(() => ({ on: new Set<string>() }));
+vi.mock('../../../../lib/featureFlags', async (orig) => ({
+  ...await orig<typeof import('../../../../lib/featureFlags')>(),
+  useFeature: (k: string) => flags.on.has(k),
+}));
+const openChat = vi.hoisted(() => vi.fn());
+vi.mock('../../../../lib/openChat', async (orig) => ({
+  ...await orig<typeof import('../../../../lib/openChat')>(),
+  openChatById: openChat,
 }));
 
 import { request } from '../../../../lib/offline';
@@ -192,7 +209,7 @@ const roots: Root[] = [];
 // путём, что в приложении. extra — чем отвечать на прочие вызовы (POST adopt, перечитанный
 // ответ), если это нужно тесту; без него страница всегда та же, что в dto
 async function seedPage(
-  dto: WikiPageDto,
+  dto: WikiPageDto | WikiPageAuthoredDto,
   sectionKey = SECTION.key,
   pageKey = PAGE_KEY,
   extra?: (url: string, init?: { method?: string }) => unknown,
@@ -260,6 +277,8 @@ function sectionNames(container: Cont): string[] {
 }
 
 beforeEach(() => {
+  flags.on.clear();
+  openChat.mockReset();
   wikiStore.reset();
   req.mockReset();
   req.mockImplementation(() => Promise.resolve(null));
@@ -456,5 +475,164 @@ describe('Страница вики (S5b)', () => {
     const editors = allNodes(c).filter(n =>
       n.nodeName === 'TEXTAREA' || n.nodeName === 'INPUT' || n.getAttribute('contenteditable') !== null);
     expect(editors).toEqual([]);
+  });
+});
+
+
+// ─── F3a: авторство страницы, сноска ✎ и поповер источника ───
+// Мутации этого шага (вывод прогонов — в отчёте задачи):
+//  (1) снять проверку ключа в WikiFootnotePopover (ответ применяется без сверки) → «гонка» краснеет;
+//  (2) отдавать авторство без флага → «без флага» краснеет;
+//  (3) править дословный текст humanBody → «тексты совпадают с ADR» краснеет.
+
+const ADR_PATH = resolve(dirname(fileURLToPath(import.meta.url)),
+  '../../../../../../docs/adr/ADR-038-notes-wiki-human-ai-coauthoring.md');
+
+const PAGE_AUTHORED = PAGE_PLAIN;
+const FOOTNOTES = [
+  { label: 's1', card: 'projects/p1/Источники/Чат Ревью фронта', origin: 'session', captured: '2026-10-28T09:00:00Z' },
+  { label: 's2', card: 'projects/p1/Источники/Правка человека ab12cd34', origin: 'human', captured: '2026-11-02T10:15:00Z', author: 'Андрей' },
+  { label: 's3', card: 'projects/p1/Источники/Задача Ревью UI', origin: 'note', captured: '2026-10-30T09:00:00Z' },
+];
+const authored = (over: Partial<WikiPageAuthoredDto> = {}): WikiPageAuthoredDto =>
+  ({ pageKey: PAGE_KEY, content: PAGE_AUTHORED, authorship: 'together', footnotes: FOOTNOTES, ...over });
+
+const cardText = (name: string, ref: string) => `---\ntype: source\nref: ${ref}\n---\n\n# ${name}\n`;
+
+function unifiedOn() { flags.on.add('notes-wiki-unified'); flags.on.add('llm-wiki'); }
+const plates = (c: Cont) => allNodes(c).filter(n => n.getAttribute('data-testid') === 'wiki-footnote');
+const popover = (c: Cont) => findNodeByAttr(c, 'data-testid', 'wiki-footnote-popover');
+function press(node: AnyNode | null, what: string) {
+  if (!node) throw new Error(`нет узла: ${what}`);
+  const p = reactProps(node) as { onClick?: (e: unknown) => void } | null;
+  if (!p?.onClick) throw new Error(`у «${what}» нет onClick`);
+  act(() => { p.onClick!({ currentTarget: node }); });
+}
+
+describe('Страница с авторством (F3a)', () => {
+  it('без флага вид прежний: ни плашек, ни бейджа авторства', async () => {
+    await seedPage(authored());
+    const c = renderPage();
+    await settle();
+    expect(plates(c)).toHaveLength(0);
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-authorship')).toBeNull();
+  });
+
+  it('с флагами, но без footnotes в ответе: старые надстрочники, бейдж по умолчанию «Ведёт ИИ»', async () => {
+    unifiedOn();
+    await seedPage({ pageKey: PAGE_KEY, content: PAGE_AUTHORED });
+    const c = renderPage();
+    await settle();
+    expect(plates(c)).toHaveLength(0);
+    expect(has(c, 'Ведёт ИИ')).toBe(true);
+  });
+
+  it.each([
+    ['ai', 'Ведёт ИИ'], ['together', 'Ведёте вместе'], ['human', 'Написали вы'],
+  ] as const)('бейдж авторства %s → «%s»', async (authorship, text) => {
+    unifiedOn();
+    await seedPage(authored({ authorship }));
+    const c = renderPage();
+    await settle();
+    const b = findNodeByAttr(c, 'data-testid', 'wiki-authorship');
+    expect(b).not.toBeNull();
+    expect(texts(b!).join(' ')).toBe(text);
+  });
+
+  it('сноска ИИ — прежний номер, сноска человека — «✎ имя, дд.мм»', async () => {
+    unifiedOn();
+    await seedPage(authored());
+    const c = renderPage();
+    await settle();
+    const label = (n: AnyNode) => textNodes(n).join('');
+    const all = plates(c).map(label);
+    expect(all).toContain('s1');
+    expect(all).toContain('✎ Андрей, 02.11');
+    expect(fmtDayMonth('2026-11-02T10:15:00Z')).toBe('02.11');
+  });
+
+  it('клик по сноске ИИ: цитата, источник из карточки и «Открыть в чате»', async () => {
+    unifiedOn();
+    await seedPage(authored(), SECTION.key, PAGE_KEY, (url) => {
+      if (url.includes('%D0%A7%D0%B0%D1%82') || url.includes(encodeURIComponent(FOOTNOTES[0].card))) {
+        return Promise.resolve({ pageKey: FOOTNOTES[0].card, content: cardText('Ревью фронта', 'session:abc123#m1-9') });
+      }
+      return undefined;
+    });
+    const c = renderPage();
+    await settle();
+    press(plates(c).find(n => textNodes(n).join('') === 's1') ?? null, 'сноска s1');
+    await settle();
+    const pop = popover(c)!;
+    expect(pop).not.toBeNull();
+    expect(texts(pop).join(' ')).toContain('Сноска 1 · записал ИИ, 28.10');
+    expect(texts(pop).join(' ')).toContain('Глеб ведёт код-ревью фронта с августа');
+    expect(texts(pop).join(' ')).toContain(FOOTNOTE_TEXT.sourceChat('Ревью фронта'));
+    click(findNodeByAttr(c, 'data-testid', 'wiki-footnote-open-chat'), 'Открыть в чате');
+    expect(openChat).toHaveBeenCalledWith('abc123');
+    expect(popover(c)).toBeNull();
+  });
+
+  it('клик по сноске человека: пояснение про замену, без чтения источника', async () => {
+    unifiedOn();
+    await seedPage(authored());
+    const c = renderPage();
+    await settle();
+    const before = pageGets().length;
+    press(plates(c).find(n => textNodes(n).join('').startsWith('✎')) ?? null, 'сноска человека');
+    await settle();
+    const t = texts(popover(c)!).join(' ');
+    expect(t).toContain('Написал Андрей, 02.11');
+    expect(t).toContain(FOOTNOTE_TEXT.humanBody);
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-footnote-open-chat')).toBeNull();
+    expect(pageGets().length).toBe(before);
+  });
+
+  it('Esc закрывает поповер, фокус возвращается на сноску', async () => {
+    unifiedOn();
+    await seedPage(authored());
+    const c = renderPage();
+    await settle();
+    const plate = plates(c).find(n => textNodes(n).join('').startsWith('✎'))!;
+    plate.focus();
+    press(plate, 'сноска человека');
+    await settle();
+    const doc = (globalThis as unknown as { document: { activeElement: unknown; listeners: Record<string, Set<(e: unknown) => void>> } }).document;
+    expect(doc.activeElement).toBe(popover(c));
+    act(() => { doc.listeners.keydown.forEach(f => f({ key: 'Escape', defaultPrevented: false, preventDefault() {} })); });
+    expect(popover(c)).toBeNull();
+    expect(doc.activeElement).toBe(plate);
+  });
+
+  it('гонка: поздний ответ по прежней сноске не подменяет источник новой', async () => {
+    unifiedOn();
+    let resolveA!: (v: unknown) => void;
+    const slowA = new Promise(r => { resolveA = r; });
+    await seedPage(authored(), SECTION.key, PAGE_KEY, (url) => {
+      if (url.includes(encodeURIComponent(FOOTNOTES[0].card))) return slowA;
+      if (url.includes(encodeURIComponent(FOOTNOTES[2].card))) {
+        return Promise.resolve({ pageKey: FOOTNOTES[2].card, content: cardText('Задача Ревью UI', 'note:n1') });
+      }
+      return undefined;
+    });
+    const c = renderPage();
+    await settle();
+    press(plates(c).find(n => textNodes(n).join('') === 's1') ?? null, 'сноска s1');
+    await settle();
+    // не закрывая, открываем другую сноску: подложка перехватила бы клик, но поповер
+    // держит открытым кнопка плашки — меняем сноску тем же путём, что и пользователь с клавиатуры
+    press(plates(c).find(n => textNodes(n).join('') === 's3') ?? null, 'сноска s3');
+    await settle();
+    resolveA({ pageKey: FOOTNOTES[0].card, content: cardText('Ревью фронта', 'session:abc123') });
+    await settle();
+    const src = texts(findNodeByAttr(c, 'data-testid', 'wiki-footnote-source')!).join(' ');
+    expect(src).toBe(FOOTNOTE_TEXT.source('Задача Ревью UI'));
+    expect(src).not.toContain('Ревью фронта');
+  });
+
+  it('тексты поповера совпадают с ADR-038', () => {
+    const adr = readFileSync(ADR_PATH, 'utf8');
+    expect(adr).toContain(FOOTNOTE_TEXT.humanBody.replace('Ваша правка. ', ''));
+    expect(adr).toContain(FOOTNOTE_TEXT.openChat);
   });
 });

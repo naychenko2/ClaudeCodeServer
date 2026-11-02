@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Заметки + Вики: один раздел, навигация только в боковых панелях · v1</title>
+<title>Заметки + Вики: один раздел, навигация только в боковых панелях · v1 · прототип</title>
 <!--
   Макет к записке notes-wiki-unified-v1.md. Код продукта не правится.
   Привязка: featureId 05c5938f-98ae-4726-884f-d7140c91b937 (эпик «Заметки+Вики: один раздел, который ведут человек и ИИ вместе»),
@@ -320,6 +320,37 @@ svg { flex-shrink:0; }
 .sheet { position:absolute; left:0; right:0; bottom:0; z-index:31; background:var(--c-bg-white); border-radius:22px 22px 0 0; box-shadow:var(--shadow-sheet); padding:8px 16px 20px; }
 .sheet .grab { width:40px; height:4px; border-radius:999px; background:var(--c-dashed); margin:0 auto 10px; }
 .mbody { flex:1; min-height:0; display:flex; flex-direction:column; background:var(--c-bg-white); }
+
+/* ===== Прототип: всплывающее (ui/Toast, ui/Menu, ui/ConfirmDialog) ===== */
+.toast { position:absolute; left:50%; bottom:18px; transform:translateX(-50%); z-index:70; max-width:calc(100% - 32px); width:max-content;
+  padding:9px 14px; border-radius:10px; background:var(--c-text-heading); color:var(--c-bg-main); font-size:12.5px; box-shadow:var(--shadow-dropdown); pointer-events:none; text-align:center; }
+.mwrap { position:relative; display:inline-flex; }
+.menu { position:absolute; right:0; top:calc(100% + 4px); z-index:25; min-width:240px; padding:4px; background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px; box-shadow:var(--shadow-dropdown); }
+.menu button, .msheet button { display:flex; align-items:center; gap:8px; width:100%; padding:7px 10px; border-radius:8px; text-align:left; font-size:13px; color:var(--c-text-primary); }
+.menu button:hover, .msheet button:hover { background:var(--c-bg-selected); }
+.menu .dng, .msheet .dng { color:var(--c-danger-text); }
+.msheet button { min-height:44px; }
+.modal { position:absolute; inset:0; z-index:50; display:flex; align-items:center; justify-content:center; padding:16px; }
+.modal .ov { z-index:0; }
+.dlg { position:relative; z-index:1; width:400px; max-width:100%; background:var(--c-bg-white); border-radius:16px; box-shadow:var(--shadow-dropdown); padding:18px; }
+.dlg .t { font-family:"PT Serif",Georgia,serif; font-size:17px; font-weight:700; color:var(--c-text-heading); }
+.dlg .d { margin-top:6px; font-size:13px; color:var(--c-text-secondary); }
+.dlg .a { display:flex; justify-content:flex-end; gap:8px; margin-top:16px; flex-wrap:wrap; }
+.chip:hover { background:var(--c-bg-card); }
+.chip.on:hover { background:var(--c-bg-selected); }
+button.oklink { color:var(--c-accent); font-weight:600; text-decoration:underline; text-underline-offset:2px; border-radius:4px; }
+button.oklink:hover { background:var(--c-accent-light); }
+[data-ph]:empty::before { content:attr(data-ph); color:var(--c-text-muted); }
+.ihead { display:block; width:100%; text-align:left; border-radius:8px; }
+.est .box { outline:none; min-height:34px; }
+.est .box:focus { border-color:var(--c-accent); box-shadow:var(--shadow-focus); background:var(--c-bg-card); }
+.nedit { border:1px solid var(--c-border); border-radius:10px; padding:8px 10px; outline:none; }
+.nedit:focus { border-color:var(--c-accent); box-shadow:var(--shadow-focus); }
+.tgl[aria-disabled="true"] { opacity:.55; cursor:default; }
+.hbtn { width:100%; text-align:left; border-radius:8px; }
+.hbtn:hover { background:var(--c-bg-card); }
+.nofn .fn.ai { display:none; }
+.item.flash { border-color:var(--c-accent); box-shadow:0 0 0 3px var(--c-accent-muted); }
 </style>
 </head>
 <body>
@@ -369,125 +400,284 @@ const dep = (n, inner, block) => block
   ? `<div class="dep">${inner}<div style="position:absolute;top:-9px;right:8px"><span class="deptag">зависит от решения ${n}</span></div></div>`
   : `<span class="dep">${inner}</span> <span class="deptag">зависит от решения ${n}</span>`;
 
-/* ===== Состояние макета ===== */
-const SCREENS = [
-  ['page','Страница вместе'], ['edit','Правка'], ['prop','Предложение ИИ'], ['conflict','Конфликт 409'],
-  ['drift','Изменили снаружи'], ['note','Заметка'], ['loading','Загрузка'], ['empty','Пусто'], ['nofind','Ничего не нашлось'],
-];
-const PANELS = [['inbox','Входящие','inbox'], ['journal','Журнал','history'], ['health','Здоровье','activity'], ['settings','Настройки','settings']];
-const S = { s:'page', p:'inbox', t:'light', w:'d', d:'', n:0, fn:'3', cf:0, jc:0, marks:1 };
+/* ===== Прототип: служебное ===== */
+const ME = 'Андрей', TODAY = '02.11';
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const clone = o => JSON.parse(JSON.stringify(o));
+const now = () => { const d = new Date(); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+let UID = 0; const uid = p => p + '-' + (++UID);
+const plural = (n, a, b, c) => { const m = n % 10, h = n % 100; return m === 1 && h !== 11 ? a : m >= 2 && m <= 4 && (h < 12 || h > 14) ? b : c; };
+
+/* Внешняя обвязка: тема, ширина, метки решений, секция «Заметки» — в адресе (диплинки) */
+const S = { t:'light', w:'d', marks:1, n:0, s:'page' };
 function readHash() {
   const h = new URLSearchParams(location.hash.slice(1));
   for (const k of Object.keys(S)) if (h.has(k)) S[k] = typeof S[k] === 'number' ? +h.get(k) : h.get(k);
 }
 function writeHash() { history.replaceState(null, '', '#' + new URLSearchParams(Object.entries(S).map(([k, v]) => [k, String(v)])).toString()); }
-function set(patch) { Object.assign(S, patch); writeHash(); render(); }
 
-/* ===== Данные страницы ===== */
-const PAGE = [
-  { h:'Суть', items:[
-    { o:'ai', n:1, t:'Картинки, видео и звук идут через одну общую очередь видеокарты — задачи ждут друг друга.',
-      src:'чат «Локальные модели: запуск»', d:'27.10', q:'очередь общая с картинками и видео — задачи ждут друг друга' },
-    { o:'ai', n:2, t:'Тяжёлые задачи — увеличение видео и обучение LoRA — идут строго по одной.',
-      src:'заметка «Обучение LoRA персонажа»', srcNote:1, d:'29.10', q:'одно на инстанс, в общей очереди GPU' },
-  ]},
-  { h:'Факты', items:[
-    { id:'f1', o:'ai', n:3, t:'Ролик на 5 секунд в 1344×768 снимается около пяти с половиной минут, в быстром режиме — около четырёх.',
-      src:'чат «Замеры MiniMax H3»', d:'28.10', q:'1344×768: 5 с ≈ 5,5 мин (fast ≈ 4 мин)' },
-    { id:'f2', o:'me', who:'Андрей', d:'02.11', t:'Ночью очередь свободна, поэтому длинные задачи лучше ставить вечером.' },
-    { o:'ai', n:4, t:'История запусков хранится на диске 7 дней.', src:'чат «Статистика локальных моделей»', d:'30.10', q:'история медиа — 7 дней на диске' },
-  ]},
-  { h:'Решения', items:[
-    { o:'ai', n:5, t:'Если локальная модель отказала, облако подключается только с согласия человека.',
-      src:'чат «Картинки: провайдеры»', d:'25.10', q:'облако при отказе — с согласия' },
-    { id:'r2', o:'me', who:'Андрей', d:'01.11', t:'Для черновиков снимаем половинный размер 864×480 — это в четыре раза быстрее.' },
-  ]},
-  { h:'Открытые вопросы', items:[
-    { o:'me', who:'Андрей', d:'30.10', t:'Показывать ли место в очереди прямо на карточке задачи?' },
-  ]},
-];
+/* ===== Данные раздела ===== */
+const FOLDERS = { aihome:'AI Home', dacha:'Дача', common:'Общее', personal:'Личное' };
+function seedDocs() {
+  const ai = (id, n, t, src, d, q, x = {}) => ({ id, o:'ai', n, t, src, d, q, ...x });
+  const me = (id, t, d) => ({ id, o:'me', who:ME, d, t });
+  const docs = {
+    gpu:{ title:'Очередь локальной GPU', folder:'aihome', kind:'wiki', updated:'сегодня в 09:14', nextN:6, sections:[
+      { h:'Суть', items:[
+        ai('s1', 1, 'Картинки, видео и звук идут через одну общую очередь видеокарты — задачи ждут друг друга.', 'чат «Локальные модели: запуск»', '27.10', 'очередь общая с картинками и видео — задачи ждут друг друга'),
+        ai('s2', 2, 'Тяжёлые задачи — увеличение видео (апскейл) и обучение LoRA — идут строго по одной.', 'заметка «Обучение LoRA персонажа»', '29.10', 'одно на инстанс, в общей очереди GPU', { srcNote:1 }) ]},
+      { h:'Факты', items:[
+        ai('f1', 3, 'Ролик на 5 секунд в 1344×768 снимается около пяти с половиной минут, в быстром режиме — около четырёх.', 'чат «Замеры MiniMax H3»', '28.10', '1344×768: 5 с ≈ 5,5 мин (fast ≈ 4 мин)'),
+        me('f2', 'Ночью очередь свободна, поэтому длинные задачи лучше ставить вечером.', '02.11'),
+        ai('f3', 4, 'История запусков хранится на диске 7 дней.', 'чат «Статистика локальных моделей»', '30.10', 'история медиа — 7 дней на диске') ]},
+      { h:'Решения', items:[
+        ai('r1', 5, 'Если локальная модель отказала, облако подключается только с согласия человека.', 'чат «Картинки: провайдеры»', '25.10', 'облако при отказе — с согласия'),
+        me('r2', 'Для черновиков снимаем половинный размер 864×480 — это в четыре раза быстрее.', '01.11') ]},
+      { h:'Открытые вопросы', items:[ me('q1', 'Показывать ли место в очереди прямо на карточке задачи?', '30.10') ]} ],
+      history:[
+        { id:'h1', o:'ai', sec:'Факты', t:'Ролик на 5 секунд снимается около шести минут.', why:'ИИ уточнил 28.10' },
+        { id:'h2', o:'ai', sec:'Суть', t:'Картинки и видео идут через общую очередь.', why:'ИИ дополнил 27.10' },
+        { id:'h3', o:'me', who:ME, d:'01.11', sec:'Решения', t:'Черновики снимаем в 720p.', why:'вы переформулировали 01.11' },
+        { id:'h4', o:'ai', sec:'Факты', t:'История запусков хранится в памяти около часа.', why:'ИИ исправил 30.10' } ] },
+    keeper:{ title:'Хранитель базы', folder:'aihome', kind:'wiki', updated:'вчера в 22:40', nextN:4, sections:[
+      { h:'Суть', items:[
+        ai('k1', 1, 'Файлы вики пишет только Хранитель — правка человека идёт через него под именем автора.', 'чат «Разбор вики»', '31.10', 'файлы пишет только Хранитель'),
+        ai('k2', 2, 'Ночной разбор чатов начинается в 03:00.', 'чат «Разбор вики»', '01.11', 'разбор — в 03:00') ]},
+      { h:'Решения', items:[ ai('k3', 3, 'У каждого утверждения есть происхождение: сноска ИИ или «✎ имя, дата».', 'чат «Разрез: вики вместе»', '30.10', 'у каждого утверждения есть происхождение') ]} ],
+      history:[ { id:'k4', o:'me', who:ME, d:'01.11', sec:'Суть', t:'Хранитель проверяет ссылки раз в час.', why:'убрано вами вчера в 22:40' } ] },
+    rel:{ title:'Правила релизов', folder:'aihome', kind:'wiki', updated:'29.10', nextN:1, sections:[ { h:'Правила', items:[
+      me('l1', 'Выкатываем только из master после зелёного CI.', '29.10'), me('l2', 'Перед выкаткой — бэкап каталога data.', '29.10') ]} ], history:[] },
+    ideas:{ title:'Идеи для раздела «Видео»', folder:'aihome', kind:'note', updated:'вчера в 22:10', body:[
+      'Плавающее окно эфира должно помнить свой угол между сессиями.',
+      'Лента подписок — показывать сначала непросмотренное, а просмотренное сворачивать.',
+      'Спросить у [[Очередь локальной GPU]], можно ли превью роликов делать в фоне ночью.' ] },
+    call:{ title:'Созвон 31.10', folder:'aihome', kind:'note', updated:'31.10', body:['Макет единого раздела — к понедельнику.', 'Решения по [[Хранитель базы]] — до среды.'] },
+    mf:{ title:'Модули и MF-remote', folder:'aihome', kind:'wiki', updated:'28.10', nextN:3, sections:[ { h:'Суть', items:[
+      ai('m1', 1, 'Раздел «Архитектура» — отдельный модуль: MF-remote в sandbox-iframe.', 'чат «Архитектура: Viaduct»', '28.10', 'динамический модуль + MF-remote'),
+      ai('m2', 2, 'Прежний список модулей описан в [[Старый реестр модулей]].', 'чат «Модули: история»', '20.10', 'старый реестр модулей') ]} ], history:[] },
+    dmeas:{ title:'Замеры видео на даче', folder:'dacha', kind:'wiki', updated:'26.10', nextN:2, sections:[ { h:'Факты', items:[
+      ai('d1', 1, 'Роутер на даче даёт около 40 Мбит/с — эфир в 1080p идёт без рывков.', 'чат «Дача: интернет»', '26.10', '40 Мбит/с, 1080p без рывков'),
+      me('d2', 'Камеру у ворот смотрим в 720p.', '26.10') ]} ], history:[] },
+    seeds:{ title:'Посадки 2026', folder:'dacha', kind:'note', updated:'20.10', body:['Томаты — в теплицу в начале мая.', 'Чеснок — под зиму, до середины октября.'] },
+    recipes:{ title:'Рецепты на неделю', folder:'common', kind:'note', updated:'01.11', body:['Пн — борщ, ср — плов, пт — рыба в духовке.'] },
+    cars:{ title:'Машина: обслуживание', folder:'common', kind:'wiki', updated:'вчера в 18:05', nextN:2, sections:[ { h:'Суть', items:[
+      ai('c1', 1, 'ТО — каждые 15 000 км или раз в год.', 'чат «Машина»', '12.10', 'ТО — 15 000 км или год'),
+      me('c2', 'Резину меняем в конце октября.', '01.11') ]} ], history:[] },
+    books:{ title:'Книги на зиму', folder:'personal', kind:'note', updated:'15.10', body:['«Мастер и Маргарита» — перечитать.'] },
+    trip:{ title:'Поездка в Казань', folder:'personal', kind:'note', updated:'10.10', body:['Билеты — за месяц, гостиница у Кремля.'] },
+  };
+  for (const id in docs) docs[id].id = id;
+  return docs;
+}
+function seedInbox() {
+  return [
+    { id:'i1', doc:'gpu', o:'mix', from:'из чата «Замеры MiniMax H3» · сегодня 09:20', badge:['Меняет ваше утверждение', 'warning'], open:true, ops:[
+      { id:'o1', label:'Заменить ваше утверждение · Решения', target:'r2', sec:'Решения',
+        add:'Для черновиков снимаем 864×480 — примерно в 3,7 раза быстрее: 1,5 минуты против 5,5.', src:'чат «Замеры MiniMax H3»', d:'01.11', q:'864×480, 5 с ≈ 1,5 мин',
+        choices:[ { l:'Заменить', c:'pri', do:'replace' }, { l:'Оставить моё', c:'sec', do:'keep' } ] },
+      { id:'o2', label:'Добавить · Факты', sec:'Факты',
+        add:'Увеличение до 1440p занимает ещё около 15 минут.', src:'чат «Замеры MiniMax H3»', d:'02.11', q:'max — плюс увеличение до 1440p, ещё ≈ 15 мин',
+        choices:[ { l:'Добавить', c:'sec', do:'add' }, { l:'Не добавлять', c:'gh', do:'keep' } ] } ] },
+    { id:'i2', doc:'keeper', o:'ai', from:'из чата «Разбор вики» · вчера', badge:['Источники противоречат друг другу', 'warning'], ops:[
+      { id:'o3', label:'Когда идёт ночной разбор · Суть', target:'k2', sec:'Суть',
+        alt:[ ['Ночной разбор чатов начинается в 03:00.', 'чат «Разбор вики»'], ['Ночной разбор чатов начинается в 04:00, после бэкапа.', 'чат «Хранитель: расписание»'] ],
+        choices:[ { l:'Оставить «03:00»', c:'sec', do:'keep' }, { l:'Взять «04:00»', c:'sec', do:'set', t:'Ночной разбор чатов начинается в 04:00, после бэкапа.', src:'чат «Хранитель: расписание»', q:'разбор — после бэкапа, в 04:00' } ] } ] },
+    { id:'i3', doc:null, title:'Правила ухода за газоном', o:'ai', from:'из чата «Дача: весна» · вчера', badge:['Новая страница в «Общее»', 'neutral'], ops:[
+      { id:'o4', label:'Создать страницу · Общее', add:'Газон косим не ниже 5 см; подкормка — в мае и в августе.', src:'чат «Дача: весна»', d:'01.11', q:'не ниже 5 см, подкормка май и август',
+        choices:[ { l:'Создать', c:'sec', do:'create' }, { l:'Не создавать', c:'gh', do:'keep' } ] } ] },
+  ];
+}
+function seedJournal() {
+  return [
+    { id:'j1', day:'Сегодня', tm:'09:20', o:'ai', t:'ИИ дописал «Очередь локальной GPU»', s:'1 утверждение в «Фактах» · из чата «Статистика локальных моделей»', chat:'«Статистика локальных моделей»',
+      act:'Откатить', confirm:'Убрать запись ИИ от 09:20? Утверждение уйдёт в «Историю» страницы, удалено не будет.',
+      undo:{ kind:'ops', why:'откачено вами', ops:[ { doc:'gpu', id:'f3', prev:null } ] } },
+    { id:'j2', day:'Сегодня', tm:'09:14', o:'me', t:'Вы поправили «Очередь локальной GPU»', s:'2 утверждения: 1 новое, 1 переформулировано',
+      act:'Откатить мою правку', confirm:'Вернуть страницу как было до 09:14? Ваши 2 правки уйдут в «Историю». Записи ИИ, сделанные после, останутся.',
+      undo:{ kind:'ops', why:'ваша правка от 09:14, откачена', ops:[ { doc:'gpu', id:'f2', prev:null },
+        { doc:'gpu', id:'r2', prev:{ id:'r2', o:'ai', n:'new', t:'Для черновиков подходит половинный размер 864×480.', src:'чат «Замеры MiniMax H3»', d:'01.11', q:'864×480 — для черновиков' } } ] } },
+    { id:'j3', day:'Сегодня', tm:'03:00', o:'ai', t:'Ночной разбор: 5 страниц', s:'14 утверждений из 6 чатов',
+      more:[ ['gpu', 'Очередь локальной GPU — 3'], ['keeper', 'Хранитель базы — 4'], ['mf', 'Модули и MF-remote — 2'], ['cars', 'Машина: обслуживание — 2'], ['dmeas', 'Замеры видео на даче — 3'] ] },
+    { id:'j4', day:'Вчера', tm:'22:40', o:'me', t:'Вы убрали утверждение в «Хранитель базы»', s:'ушло в «Историю», не удалено',
+      act:'Вернуть', undo:{ kind:'restoreHist', doc:'keeper', hid:'k4' } },
+    { id:'j5', day:'Вчера', tm:'18:05', o:'ext', t:'Страницу «Машина: обслуживание» изменили снаружи', s:'вы приняли как свою правку' },
+  ];
+}
+const DRIFT_TEXT = 'Ночью очередь свободна — длинные задачи ставим после 22:00.';
+const THEIRS_F1 = 'Ролик на 5 секунд в 1344×768 снимается около пяти с половиной минут, с увеличением до 1440p — ещё около 15.';
+
+let A;
+function fresh() {
+  return { docs:seedDocs(), open:'gpu', prevOpen:'gpu', mode:'view', edit:null, cf:null,
+    q:'', who:'all', fold:{ dacha:1, personal:1 }, p:'inbox', d:'', fn:'', menu:false, modal:null, histOpen:false,
+    busy:false, data:'ok', drift:false, cfSim:true, set:{ night:1, auto:1, fns:1 }, hcheck:'сегодня в 06:00', hbusy:false,
+    jf:'all', inbox:seedInbox(), journal:seedJournal(), preset:'', focus:null, toastMsg:'', toastUntil:0, flash:'' };
+}
+
+/* ===== Модель: поиск по данным ===== */
+const cur = () => A.docs[A.open];
+function find(doc, id) {
+  if (!doc || !doc.sections) return null;
+  for (const sec of doc.sections) { const i = sec.items.findIndex(x => x.id === id); if (i >= 0) return [sec, i]; }
+  return null;
+}
+function secByName(doc, h) {
+  let sec = doc.sections.find(s => s.h === h);
+  if (!sec) { sec = { h, items:[] }; doc.sections.push(sec); }
+  return sec;
+}
+function docOrigin(doc) {
+  if (doc.kind === 'note') return 'note';
+  const os = new Set(doc.sections.flatMap(s => s.items.map(x => x.o === 'ext' ? 'me' : x.o)));
+  return os.has('ai') && os.has('me') ? 'mix' : os.has('ai') ? 'ai' : 'me';
+}
+const docText = doc => doc.title + ' ' + (doc.kind === 'note' ? doc.body.join(' ') : doc.sections.flatMap(s => s.items.map(x => x.t)).join(' '));
+const byTitle = name => Object.entries(A.docs).find(([, d]) => !d.removed && d.title === name);
+const allowed = (from, to) => to.folder === from.folder || to.folder === 'common';
+function linkIssues(text, doc) {
+  const out = [];
+  for (const m of String(text).matchAll(/\[\[([^\]]+)\]\]/g)) {
+    const hit = byTitle(m[1]);
+    if (!hit) out.push({ name:m[1], kind:'missing' });
+    else if (!allowed(doc, hit[1])) out.push({ name:m[1], kind:'foreign', folder:FOLDERS[hit[1].folder] });
+  }
+  return out;
+}
+function linkify(t, doc) {
+  return String(t).split(/(\[\[[^\]]+\]\])/).map(part => {
+    const m = part.match(/^\[\[([^\]]+)\]\]$/);
+    if (!m) return esc(part);
+    const hit = byTitle(m[1]);
+    if (hit && allowed(doc, hit[1])) return `<button class="oklink" data-a="open" data-id="${hit[0]}">${esc(m[1])}</button>`;
+    return `<span class="badlink" title="Ссылка ведёт в никуда">${esc(m[1])}</span>`;
+  }).join('');
+}
+const pendingItems = () => A.inbox.filter(it => it.ops.some(o => !o.state));
+const pendingOps = docId => A.inbox.filter(it => it.doc === docId).flatMap(it => it.ops.filter(o => !o.state).map(o => ({ it, o })));
+
+/* ===== Тост ===== */
+function toast(msg) {
+  A.toastMsg = msg; A.toastUntil = Date.now() + 2600; placeToast();
+  setTimeout(() => { if (Date.now() >= A.toastUntil) { A.toastMsg = ''; placeToast(); } }, 2700);
+}
+function placeToast() {
+  document.querySelectorAll('.toast').forEach(el => el.remove());
+  const app = document.querySelector('.app');
+  if (A.toastMsg && app) { const el = document.createElement('div'); el.className = 'toast'; el.setAttribute('role', 'status'); el.textContent = A.toastMsg; app.appendChild(el); }
+}
+const DEAD = what => `В прототипе не работает: ${what}`;
 
 /* ===== Левая панель: единое дерево ===== */
-function treeRows(opts = {}) {
-  const sel = opts.sel ?? (S.s === 'note' ? 'ideas' : 'gpu');
-  const r = (id, o, nm, mt = '', ind = 1) => `<button class="trow ind${ind} ${sel === id ? 'on' : ''}" data-open="${id}">${og(o)}<span class="nm">${nm}</span>${mt}</button>`;
-  const dotP = '<span class="cnt" title="Есть предложение ИИ">1</span>';
-  return `
-    <div class="sec-h">Разделы <span style="margin-left:auto;text-transform:none;letter-spacing:0;font-weight:500">видны только вам</span></div>
-    <button class="trow grp">${I('cd',14)}<span class="nm">Проекты</span></button>
-    <button class="trow grp ind1">${I('cd',14)}${I('folder',14)}<span class="nm">AI Home</span><span class="mt">14</span></button>
-    ${r('gpu','mix','Очередь локальной GPU', S.s === 'prop' || S.s === 'page' ? dotP : '', 2)}
-    ${r('keeper','ai','Хранитель базы', '', 2)}
-    ${r('rel','me','Правила релизов', '', 2)}
-    ${r('ideas','note','Идеи для раздела «Видео»', '', 2)}
-    ${r('call','note','Созвон 31.10', '', 2)}
-    ${r('mf','ai','Модули и MF-remote', '', 2)}
-    <button class="trow grp ind1">${I('cr',14)}${I('folder',14)}<span class="nm">Дача</span><span class="mt">6</span></button>
-    <button class="trow grp">${I('cd',14)}<span class="nm">Общее</span></button>
-    ${r('recipes','note','Рецепты на неделю')}
-    ${r('cars','mix','Машина: обслуживание')}
-    <button class="trow grp">${I('cr',14)}<span class="nm">Личное</span><span class="mt">9</span></button>`;
+const WHO = [['all', 'Все'], ['note', 'Заметки'], ['ai', 'ИИ'], ['mix', 'Вместе'], ['me', 'Мои']];
+const live = () => Object.keys(A.docs).filter(id => !A.docs[id].removed);
+const filtering = () => !!A.q.trim() || A.who !== 'all';
+function matches(id, who = A.who) {
+  const doc = A.docs[id];
+  if (who !== 'all' && docOrigin(doc) !== who) return false;
+  const q = A.q.trim().toLowerCase();
+  return !q || docText(doc).toLowerCase().includes(q);
+}
+function chipsHtml() {
+  if (A.data === 'loading' || !live().length) return '';
+  return `<div class="chips" role="group" aria-label="Кто написал">${WHO.map(([v, l], i) =>
+    `<button class="chip ${A.who === v ? 'on' : ''}" data-a="who" data-v="${v}" aria-pressed="${A.who === v}">${i ? og(v, 11) : ''}${l} <span class="n">${live().filter(id => matches(id, v)).length}</span></button>`).join('')}</div>`;
+}
+function treeHtml() {
+  if (A.data === 'loading') return [70, 0, 55, 80, 62, 74, 0, 50, 66].map(w => w ? `<div style="display:flex;gap:8px;align-items:center;height:30px;padding:0 8px 0 ${w > 60 ? 38 : 22}px"><span class="sk" style="width:16px;height:16px"></span><span class="sk" style="height:10px;width:${w}%"></span></div>` : '<div style="height:10px"></div>').join('');
+  const ids = live();
+  if (!ids.length) return `<div class="empty" style="padding:24px 16px"><div class="d" style="font-size:12px">Здесь будут ваши заметки и страницы, которые ведёт ИИ.</div></div>`;
+  const F = filtering(), vis = ids.filter(id => matches(id));
+  if (F && !vis.length) {
+    const whoL = WHO.find(w => w[0] === A.who)[1].toLowerCase();
+    return `<div class="empty" style="padding:24px 16px"><div class="ic" style="width:44px;height:44px">${I('search', 20)}</div>
+      <div style="font-weight:600;color:var(--c-text-heading)">Ничего не нашлось</div>
+      <div class="d" style="font-size:12px">${A.who === 'all' ? `Ни в заметках, ни в вики нет «${esc(A.q.trim())}».` : `Среди «${whoL}» нет ${A.q.trim() ? `«${esc(A.q.trim())}»` : 'записей'}. Поищите во всех — ИИ мог записать это у себя.`}</div>
+      <div class="a">${A.who === 'all' ? `<button class="btn xs sec" data-a="q-clear">Сбросить поиск</button>` : `<button class="btn xs sec" data-a="who" data-v="all">Искать во всех</button>`}</div></div>`;
+  }
+  const row = (id, ind) => {
+    const doc = A.docs[id], n = A.inbox.filter(it => it.doc === id && it.ops.some(o => !o.state)).length;
+    return `<button class="trow ind${ind} ${A.open === id ? 'on' : ''}" data-a="open" data-id="${id}">${og(docOrigin(doc))}<span class="nm">${esc(doc.title || 'Новая заметка')}</span>${n ? `<span class="cnt" title="Есть предложение ИИ">${n}</span>` : ''}</button>`;
+  };
+  const inF = f => vis.filter(id => A.docs[id].folder === f);
+  const grp = (key, label, ind, kids, body) => {
+    if (F && !kids) return '';
+    const open = F || !A.fold[key];
+    const head = F ? `<div class="trow grp ${ind ? 'ind1' : ''}">${I('cd', 14)}${ind ? I('folder', 14) : ''}<span class="nm">${label}</span></div>`
+      : `<button class="trow grp ${ind ? 'ind1' : ''}" data-a="fold" data-f="${key}" aria-expanded="${open}">${I(open ? 'cd' : 'cr', 14)}${ind ? I('folder', 14) : ''}<span class="nm">${label}</span>${open ? '' : `<span class="mt">${kids}</span>`}</button>`;
+    return head + (open ? body() : '');
+  };
+  const projKids = inF('aihome').length + inF('dacha').length;
+  return `<div class="sec-h">Разделы <span style="margin-left:auto;text-transform:none;letter-spacing:0;font-weight:500">видны только вам</span></div>` +
+    grp('proj', 'Проекты', 0, projKids, () =>
+      grp('aihome', 'AI Home', 1, inF('aihome').length, () => inF('aihome').map(id => row(id, 2)).join('')) +
+      grp('dacha', 'Дача', 1, inF('dacha').length, () => inF('dacha').map(id => row(id, 2)).join(''))) +
+    grp('common', 'Общее', 0, inF('common').length, () => inF('common').map(id => row(id, 1)).join('')) +
+    grp('personal', 'Личное', 0, inF('personal').length, () => inF('personal').map(id => row(id, 1)).join(''));
+}
+function renderTree() {
+  document.querySelectorAll('.js-chips').forEach(el => el.innerHTML = chipsHtml());
+  document.querySelectorAll('.js-tree').forEach(el => el.innerHTML = treeHtml());
 }
 function leftPanel(mobile) {
-  const loading = S.s === 'loading', empty = S.s === 'empty', nofind = S.s === 'nofind';
-  const chipsData = [['Все',24,1],['Заметки',9],['ИИ',8],['Вместе',5],['Мои',2]];
-  const chips = chipsData.map(([l, n, on], i) => `<button class="chip ${(nofind ? i === 4 : on) ? 'on' : ''}">${i ? og(['','note','ai','mix','me'][i], 11) : ''}${l} <span class="n">${n}</span></button>`).join('');
   const head = mobile
     ? `<div class="dh"><span class="serif" style="font-size:16px;font-weight:700;color:var(--c-text-heading);flex:1">Заметки</span>
-        <button class="ib" title="Граф связей">${I('graph',18)}</button>
-        <button class="ib" title="Закрыть" data-d="">${I('x',18)}</button></div>`
+        <button class="ib" title="Граф связей" data-a="dead" data-what="граф связей">${I('graph', 18)}</button>
+        <button class="ib" title="Закрыть" data-a="drawer" data-d="">${I('x', 18)}</button></div>`
     : `<div class="ph"><span class="ttl">Заметки</span>
-        <button class="ib" title="Граф связей">${I('graph')}</button>
-        <button class="btn xs pri">${I('plus',14)}Заметка</button></div>`;
-  let body;
-  if (loading) body = `<div class="tree">${[70,0,55,80,62,74,0,50,66].map(w => w ? `<div style="display:flex;gap:8px;align-items:center;height:30px;padding:0 8px 0 ${w>60?38:22}px"><span class="sk" style="width:16px;height:16px"></span><span class="sk" style="height:10px;width:${w}%"></span></div>` : '<div style="height:10px"></div>').join('')}</div>`;
-  else if (empty) body = `<div class="empty" style="padding:24px 16px"><div class="d" style="font-size:12px">Здесь будут ваши заметки и страницы, которые ведёт ИИ.</div></div>`;
-  else if (nofind) body = `<div class="empty" style="padding:24px 16px"><div class="ic" style="width:44px;height:44px">${I('search',20)}</div>
-      <div style="font-weight:600;color:var(--c-text-heading)">Ничего не нашлось</div>
-      <div class="d" style="font-size:12px">Среди ваших записей нет «апскейл». Поищите во всех — ИИ мог записать это у себя.</div>
-      <div class="a"><button class="btn xs sec">Искать во всех</button></div></div>`;
-  else body = `<div class="tree">${treeRows()}</div>`;
+        <button class="ib" title="Граф связей" data-a="dead" data-what="граф связей">${I('graph')}</button>
+        <button class="btn xs pri" data-a="new-note">${I('plus', 14)}Заметка</button></div>`;
+  const busy = A.data === 'loading';
   return `${head}
     <div style="padding:${mobile ? '10px 12px 8px' : '0 12px 8px'};display:flex;flex-direction:column;gap:8px;border-bottom:1px solid var(--c-border)">
-      <label class="field">${I('search',14)}<input placeholder="Поиск по заметкам и вики" value="${nofind ? 'апскейл' : ''}"></label>
-      ${empty || loading ? '' : `<div class="chips" role="group" aria-label="Кто написал">${chips}</div>`}
+      <label class="field">${I('search', 14)}<input class="js-q" placeholder="Поиск по заметкам и вики" aria-label="Поиск по заметкам и вики" value="${esc(A.q)}" ${busy ? 'disabled' : ''}></label>
+      <div class="js-chips">${chipsHtml()}</div>
     </div>
-    ${body}
-    ${empty || loading ? '' : `<div class="tfoot"><span>${og('note',10)}заметка</span><span>${og('ai',10)}ИИ</span><span>${og('mix',10)}вместе</span><span>${og('me',10)}вы</span></div>`}
-    ${mobile && !empty ? `<div style="padding:10px 12px;border-top:1px solid var(--c-border)"><button class="btn sm pri" style="width:100%">${I('plus',14)}Новая заметка</button></div>` : ''}`;
+    <div class="tree js-tree">${treeHtml()}</div>
+    ${busy || !live().length ? '' : `<div class="tfoot"><span>${og('note', 10)}заметка</span><span>${og('ai', 10)}ИИ</span><span>${og('mix', 10)}вместе</span><span>${og('me', 10)}вы</span></div>`}
+    ${mobile ? `<div style="padding:10px 12px;border-top:1px solid var(--c-border)"><button class="btn sm pri" style="width:100%" data-a="new-note">${I('plus', 14)}Новая заметка</button></div>` : ''}`;
 }
 
 /* ===== Центр: документ ===== */
 function footPop(it) {
-  if (it.o === 'ai') return `<div class="pop" role="dialog">
-      <div class="hd">${og('ai',11)}Сноска ${it.n} · записал ИИ, ${it.d}</div>
-      <div class="q">«${it.q}»</div>
-      <div class="src">Источник: ${it.src}</div>
-      <div class="acts"><button class="btn xs sec">${I(it.srcNote ? 'file' : 'chat',13)}${it.srcNote ? 'Открыть заметку' : 'Открыть в чате'}</button><button class="btn xs gh">Показать в журнале</button></div></div>`;
-  return `<div class="pop" role="dialog">
-      <div class="hd">${og('me',11)}Написал ${it.who}, ${it.d} в 09:12</div>
+  if (it.o === 'ai') return `<div class="pop" role="dialog" aria-label="Источник сноски ${it.n}">
+      <div class="hd">${og('ai', 11)}Сноска ${it.n} · записал ИИ, ${it.d}</div>
+      <div class="q">«${esc(it.q)}»</div>
+      <div class="src">Источник: ${esc(it.src)}</div>
+      <div class="acts"><button class="btn xs sec" data-a="dead" data-what="${it.srcNote ? 'открыть ' : 'переход в '}${esc(it.src)}">${I(it.srcNote ? 'file' : 'chat', 13)}${it.srcNote ? 'Открыть заметку' : 'Открыть в чате'}</button><button class="btn xs gh" data-a="panel" data-p="journal">Показать в журнале</button></div></div>`;
+  return `<div class="pop" role="dialog" aria-label="Ваша правка">
+      <div class="hd">${og('me', 11)}Написал ${esc(it.who)}, ${it.d}</div>
       <div class="src" style="margin-top:6px">Ваша правка. ИИ её не меняет — если он с ней не согласен, предложение придёт во «Входящие».</div>
-      <div class="acts"><button class="btn xs gh" data-p="journal">Показать в журнале</button></div></div>`;
+      <div class="acts"><button class="btn xs gh" data-a="panel" data-p="journal">Показать в журнале</button></div></div>`;
 }
-function fnMark(it, key) {
-  const on = !S.d && S.w === 'd' && S.fn === key;
-  if (it.o === 'ai') return `<button class="fn ai ${on ? 'on' : ''}" data-fn="${key}" title="${it.src}">${it.n}</button>`;
-  return `<button class="fn me ${on ? 'on' : ''}" data-fn="${key}">✎ ${it.who}, ${it.d}</button>`;
+function stView(it, doc, extra = '') {
+  const on = A.fn === it.id;
+  let mark;
+  if (it.o === 'ai') mark = `<button class="fn ai ${on ? 'on' : ''}" data-a="fn" data-id="${it.id}" title="${esc(it.src)}" aria-label="Сноска ${it.n}">${it.n}</button>`;
+  else if (it.o === 'me') mark = `<button class="fn me ${on ? 'on' : ''}" data-a="fn" data-id="${it.id}">✎ ${esc(it.who)}, ${it.d}</button>`;
+  else mark = `<span class="tag" style="color:var(--c-warning-text)">изменено снаружи</span>`;
+  return `<div class="st ${extra}">${og(it.o, 10)}${linkify(it.t, doc)}${mark}${on && S.w === 'd' ? footPop(it) : ''}</div>`;
 }
-function statement(it, key, extra = '') {
-  const showPop = S.w === 'd' && S.s === 'page' && S.fn === key;
-  return `<div class="st ${extra}">${og(it.o,10)}${it.t}${fnMark(it, key)}${showPop ? footPop(it) : ''}</div>`;
+function menuItems(doc) {
+  const B = (a, ic, l, x = '') => `<button data-a="${a}" ${x}>${I(ic, 15)}${l}</button>`;
+  return doc.kind === 'note'
+    ? B('to-wiki', 'book', 'Перенести в вики') + B('copy-link', 'link', 'Скопировать ссылку') + B('remove-doc', 'archive', 'Убрать заметку', 'class="dng"')
+    : B('hist', 'history', 'История страницы') + B('panel', 'history', 'Показать в журнале', 'data-p="journal"') + B('copy-link', 'link', 'Скопировать ссылку') + B('remove-doc', 'archive', 'Убрать страницу', 'class="dng"');
 }
-function docHead(opts = {}) {
-  const mobile = S.w === 'm';
-  const badge = opts.badge ?? `<span class="bdg t-info">${I('users',12)}Ведёте вместе</span>`;
+function moreBtn(doc) {
+  return `<span class="mwrap"><button class="ib" title="Ещё" aria-haspopup="menu" aria-expanded="${A.menu}" data-a="menu">${I('more')}</button>${A.menu && S.w === 'd' ? `<div class="menu" role="menu">${menuItems(doc)}</div>` : ''}</span>`;
+}
+function docHead(doc) {
+  const mobile = S.w === 'm', o = docOrigin(doc);
+  const all = doc.sections.flatMap(s => s.items), nAi = all.filter(x => x.o === 'ai').length;
+  const badge = doc.id === 'gpu' && A.drift ? `<span class="bdg t-warning">${I('alert', 12)}Изменена снаружи</span>`
+    : o === 'mix' ? `<span class="bdg t-info">${I('users', 12)}Ведёте вместе</span>` : o === 'ai' ? `<span class="bdg t-info">${I('sparkles', 12)}Ведёт ИИ</span>` : `<span class="bdg t-neutral">${I('pen', 12)}Ваша страница</span>`;
   return `<div class="dtop"><div class="grow">
-      <h1 class="dtitle">Очередь локальной GPU</h1>
-      <div class="dmeta">${badge}<span>8 утверждений: 5 записал ИИ, 3 — вы</span><span>· обновлено сегодня в 09:14</span></div>
+      <h1 class="dtitle">${esc(doc.title)}</h1>
+      <div class="dmeta">${badge}<span>${all.length} ${plural(all.length, 'утверждение', 'утверждения', 'утверждений')}: ${nAi} записал ИИ, ${all.length - nAi} — вы</span><span>· обновлено ${doc.updated}</span></div>
     </div>
-    ${mobile || opts.noActs ? '' : `<div class="dbar" style="padding-top:4px"><button class="btn sm sec">${I('pen',14)}Править</button><button class="ib" title="Ещё: история страницы, перенести, скопировать ссылку">${I('more')}</button></div>`}
+    ${mobile ? '' : `<div class="dbar" style="padding-top:4px"><button class="btn sm sec" data-a="edit">${I('pen', 14)}Править</button>${moreBtn(doc)}</div>`}
     </div>
-    ${mobile && !opts.noActs ? `<div class="dbar" style="margin-top:10px"><button class="btn sm sec" style="flex:1">${I('pen',14)}Править</button></div>` : ''}`;
+    ${mobile ? `<div class="dbar" style="margin-top:10px"><button class="btn sm sec" style="flex:1" data-a="edit">${I('pen', 14)}Править</button></div>` : ''}`;
 }
 function notesSection() {
   if (!S.n) return '';
@@ -496,102 +686,172 @@ function notesSection() {
       <div class="free">Черновик: перед большим апскейлом проверить, не стоит ли в очереди обучение LoRA.
         <table><tr><th>Размер</th><th>5 с</th><th>10 с</th></tr><tr><td>864×480</td><td>1,5 мин</td><td>—</td></tr><tr><td>1344×768</td><td>5,5 мин</td><td>15,5 мин</td></tr></table></div></div>`, true);
 }
-function pageBody(mode) {
-  return PAGE.map((sec, si) => {
-    let rows = sec.items.map((it, ii) => {
-      const key = String(it.n ?? `m${si}${ii}`);
-      if (mode === 'prop' && it.id === 'r2') return statement(it, key, 'prop') +
-        `<div class="hint warn" style="margin-left:22px">${I('sparkles',13)}<span>ИИ предлагает заменить эту формулировку. <button class="lnk" data-p="inbox" style="padding:0 2px">Посмотреть во «Входящих»</button></span></div>`;
-      if (mode === 'drift' && it.id === 'f2') return `<div class="st">${og('ext',10)}<span class="add">Ночью очередь свободна — длинные задачи ставим после 22:00.</span><span class="tag" style="color:var(--c-warning-text)">изменено снаружи</span></div>`;
-      return statement(it, key);
-    }).join('');
-    if (mode === 'prop' && sec.h === 'Факты') rows += `<div class="st ghost">${og('ai',10)}Увеличение до 1440p занимает ещё около 15 минут.<span class="tag">предлагает ИИ</span></div>`;
-    return `<div class="h2">${sec.h}</div>${rows}`;
-  }).join('') + notesSection() +
-  `<div class="hist">${I('history',13)}В «Истории» страницы — 4 прежние формулировки <button class="lnk">Открыть историю</button></div>`;
+function histBlock(doc) {
+  const h = doc.history;
+  const head = `<div class="hist">${I('history', 13)}${h.length ? `В «Истории» страницы — ${h.length} ${plural(h.length, 'прежняя формулировка', 'прежние формулировки', 'прежних формулировок')}
+    <button class="lnk" data-a="hist">${A.histOpen ? 'Скрыть историю' : 'Открыть историю'}</button>` : 'В «Истории» страницы пока пусто'}</div>`;
+  if (!A.histOpen || !h.length) return head;
+  return head + h.map((x, i) => `<div class="hrow">${og(x.o, 10)}<div class="b"><div style="color:var(--c-text-primary)">${esc(x.t)}</div>
+    <div style="font-size:12px;color:var(--c-text-muted)">${esc(x.sec)} · ${esc(x.why)}</div></div><button class="btn xs gh" data-a="hist-restore" data-i="${i}">${I('undo', 13)}Вернуть</button></div>`).join('');
 }
-function docPage() {
-  const s = S.s;
+function docPage(doc) {
+  const pend = pendingOps(doc.id), isGpu = doc.id === 'gpu';
   let top = '';
-  if (s === 'prop') top = dep(2, `<div class="ntc n-info" style="margin-bottom:6px">${I('sparkles',18)}<div class="b">
-      <div class="tt">ИИ предлагает заменить ваше утверждение</div>
-      <div>В разделе «Решения». Без вашего согласия ваш текст не изменится. Там же — ещё одно новое утверждение.</div>
-      <div class="acts"><button class="btn xs sec" data-p="inbox">${I('inbox',13)}Открыть во «Входящих»</button></div></div></div>`, true);
-  if (s === 'drift') top = `<div class="ntc n-warn" style="margin-bottom:6px">${I('alert',18)}<div class="b">
+  if (pend.length) {
+    const rep = pend.some(p => p.o.target && find(doc, p.o.target)?.[0].items[find(doc, p.o.target)[1]].o === 'me');
+    top += dep(2, `<div class="ntc n-info" style="margin-bottom:6px">${I('sparkles', 18)}<div class="b">
+      <div class="tt">${rep ? 'ИИ предлагает заменить ваше утверждение' : 'ИИ предлагает поправить страницу'}</div>
+      <div>${pend.length} ${plural(pend.length, 'правка ждёт', 'правки ждут', 'правок ждут')} вашего решения. Без вашего согласия текст страницы не изменится.</div>
+      <div class="acts"><button class="btn xs sec" data-a="inbox-show" data-item="${pend[0].it.id}">${I('inbox', 13)}Открыть во «Входящих»</button></div></div></div>`, true);
+  }
+  if (isGpu && A.drift) top += `<div class="ntc n-warn" style="margin-bottom:6px">${I('alert', 18)}<div class="b">
       <div class="tt">Страницу изменили снаружи</div>
       <div>Сегодня в 08:47 её поправили не в AI Home — например, в Obsidian. Пока вы не решите, что с этим делать, ИИ страницу не трогает.</div>
-      <div class="acts">${dep(4, '<button class="btn xs pri">Принять как мою правку</button>')}<button class="btn xs sec">Принять как есть</button><button class="lnk" data-p="health">Что изменилось</button></div>
-      <div style="font-size:12px;color:var(--c-warning-text);margin-top:6px">«Как мою правку» — изменённые места станут вашими (✎ Андрей). «Как есть» — текст останется, а у этих мест будет пометка «изменено снаружи».</div></div></div>`;
-  const body = pageBody(s);
-  return `<div class="doc"><div class="docin">${docHead(s === 'drift' ? { badge:`<span class="bdg t-warning">${I('alert',12)}Изменена снаружи</span>` } : {})}${top}${body}</div></div>`;
+      <div class="acts">${dep(4, '<button class="btn xs pri" data-a="drift-mine">Принять как мою правку</button>')}<button class="btn xs sec" data-a="drift-asis">Принять как есть</button><button class="lnk" data-a="drift-show">Что изменилось</button></div>
+      <div style="font-size:12px;color:var(--c-warning-text);margin-top:6px">«Как мою правку» — изменённые места станут вашими (✎ ${ME}). «Как есть» — текст останется, а у этих мест будет пометка «изменено снаружи».</div></div></div>`;
+  const body = doc.sections.map(sec => {
+    let rows = sec.items.map(it => {
+      if (isGpu && A.drift && it.id === 'f2') return `<div class="st">${og('ext', 10)}<span class="add">${esc(DRIFT_TEXT)}</span><span class="tag" style="color:var(--c-warning-text)">изменено снаружи</span></div>`;
+      const p = pend.find(x => x.o.target === it.id);
+      if (p) return stView(it, doc, 'prop') + `<div class="hint warn" style="margin-left:22px">${I('sparkles', 13)}<span>ИИ предлагает ${p.o.alt ? 'другую формулировку' : 'заменить эту формулировку'}. <button class="lnk" data-a="inbox-show" data-item="${p.it.id}" style="padding:0 2px">Посмотреть во «Входящих»</button></span></div>`;
+      return stView(it, doc);
+    }).join('');
+    rows += pend.filter(x => !x.o.target && x.o.sec === sec.h).map(x => `<div class="st ghost">${og('ai', 10)}${esc(x.o.add)}<span class="tag">предлагает ИИ</span></div>`).join('');
+    return `<div class="h2">${esc(sec.h)}</div>${rows || '<div class="hint mut" style="margin-left:0">Пока пусто</div>'}`;
+  }).join('');
+  return `<div class="doc"><div class="docin ${A.set.fns ? '' : 'nofn'}">${docHead(doc)}${top}${body}${isGpu ? notesSection() : ''}${histBlock(doc)}</div></div>`;
 }
-function docEdit() {
-  const E = (o, html, cls = '', hint = '') => `<div class="est ${cls}">${og(o,10)}<div style="flex:1;min-width:0"><div class="box" contenteditable="true">${html}</div>${hint}</div>
-     <div class="ra"><button class="ib xs" title="Убрать в «Историю»">${I('archive',14)}</button></div></div>`;
-  const mobile = S.w === 'm';
+
+/* --- Правка страницы --- */
+function editTexts(doc) {
+  const E = A.edit, out = [];
+  doc.sections.forEach(sec => sec.items.forEach(it => out.push({ it, sec:sec.h, gone:!!E.gone[it.id], t:E.draft[it.id] ?? it.t })));
+  E.added.forEach(a => out.push({ it:{ id:a.id, o:'me', t:'' }, sec:a.sec, gone:false, t:E.draft[a.id] ?? '', added:true }));
+  return out;
+}
+function editStats(doc) {
+  let n = 0, blocked = false;
+  for (const r of editTexts(doc)) {
+    if (r.gone) { n++; continue; }
+    if (r.added ? r.t.trim() : r.t.trim() !== r.it.t) n++;
+    if (linkIssues(r.t, doc).some(x => x.kind === 'foreign')) blocked = true;
+  }
+  return { n, blocked };
+}
+function editHints(doc, id) {
+  const E = A.edit, r = editTexts(doc).find(x => x.it.id === id);
+  if (!r) return '';
+  if (r.gone) return `<div class="hint mut">${I('archive', 13)}<span>Уйдёт в «Историю» с пометкой «убрано вами» — не удаляется. <button class="lnk" data-a="gone-undo" data-id="${id}" style="padding:0 2px">Вернуть</button></span></div>`;
+  let h = '';
+  if (E.ask === id) h += `<div class="confirm" role="alertdialog"><b>Убрать утверждение?</b> Оно уйдёт в «Историю» страницы, удалено не будет.
+    <div style="display:flex;gap:6px;margin-top:8px"><button class="btn xs dng" data-a="gone-ok" data-id="${id}">${I('archive', 13)}Убрать</button><button class="btn xs gh" data-a="gone-no">Отмена</button></div></div>`;
+  if (r.it.o === 'ai' && r.t.trim() !== r.it.t) h += `<div class="hint warn" style="margin-left:0">${I('info', 13)}<span>Это формулировка ИИ. После сохранения прежняя уйдёт в «Историю» страницы, а утверждение станет вашим — сноска ${r.it.n} сменится на «✎ ${ME}».</span></div>`;
+  for (const x of linkIssues(r.t, doc)) {
+    if (x.kind === 'foreign') h += `<div class="hint dng" style="margin-left:0">${I('link', 13)}<span><b>Эту ссылку не сохранить.</b> Страница «${esc(x.name)}» лежит в разделе «${x.folder}», а эта — в «${FOLDERS[doc.folder]}». Чаты раздела «${FOLDERS[doc.folder]}» её не увидят. Ссылаться можно на страницы этого раздела и «Общее».</span></div>`;
+    else h += `<div class="hint warn" style="margin-left:0">${I('link', 13)}<span>Страницы «${esc(x.name)}» нет. Сохранить можно, но ссылка попадёт в «Здоровье» как ведущая в никуда.</span></div>`;
+  }
+  return h;
+}
+function editSummary(doc) {
+  const { n, blocked } = editStats(doc);
+  return blocked ? 'Есть ссылка, которую не сохранить' : n ? `Изменено ${n} ${plural(n, 'место', 'места', 'мест')}` : 'Пока без изменений';
+}
+function updateEditMeta(id) {
+  const doc = cur(), { blocked } = editStats(doc);
+  const h = document.querySelector(`[data-hid="${CSS.escape(id)}"]`);
+  if (h) h.innerHTML = editHints(doc, id);
+  document.querySelectorAll('.js-esum').forEach(el => el.textContent = editSummary(doc));
+  document.querySelectorAll('.js-esave').forEach(el => el.disabled = blocked);
+}
+function docEdit(doc) {
+  const E = A.edit, rows = editTexts(doc), mobile = S.w === 'm', { blocked } = editStats(doc);
+  const row = r => {
+    const id = r.it.id, mark = r.it.o === 'ai' ? `<span class="fn ai">${r.it.n}</span>` : r.added ? '' : `<span class="fn me">✎ ${esc(r.it.who)}</span>`;
+    return `<div class="est ${r.gone ? 'gone' : ''}">${og(r.it.o, 10)}<div style="flex:1;min-width:0">
+        <div class="box" ${r.gone ? '' : 'contenteditable="true" role="textbox" aria-multiline="true"'} data-sid="${id}" data-ph="Новое утверждение">${esc(r.t)}</div>
+        <div data-hid="${id}">${editHints(doc, id)}</div></div>
+      <div class="ra" style="flex-direction:column;align-items:flex-end;gap:4px">${mark}${r.gone || E.ask === id ? '' : `<button class="ib xs" title="Убрать в «Историю»" aria-label="Убрать утверждение" data-a="gone-ask" data-id="${id}">${I('archive', 14)}</button>`}</div></div>`;
+  };
   return `<div class="doc">
-    <div class="ebar">${mobile ? '' : `<span class="bdg t-neutral">${I('pen',12)}Правка</span>`}<span class="s">Изменено 3 места</span>
-      <button class="btn xs gh">Отмена</button><button class="btn xs pri">${I('check',13)}Сохранить</button></div>
+    <div class="ebar">${mobile ? '' : `<span class="bdg t-neutral">${I('pen', 12)}Правка</span>`}<span class="s js-esum">${editSummary(doc)}</span>
+      <button class="btn xs gh" data-a="edit-cancel">Отмена</button><button class="btn xs pri js-esave" data-a="edit-save" ${blocked ? 'disabled' : ''}>${I('check', 13)}Сохранить</button></div>
     <div class="docin">
-      <h1 class="dtitle">Очередь локальной GPU</h1>
-      <div class="dmeta"><span>Утверждения ИИ можно переформулировать — тогда они станут вашими. Убранное не удаляется, а уходит в «Историю».</span></div>
-      <div class="h2">Суть</div>
-      ${E('ai', PAGE[0].items[0].t + '<span class="fn ai">1</span>')}
-      ${E('ai', PAGE[0].items[1].t + '<span class="fn ai">2</span>')}
-      <div class="h2">Факты</div>
-      ${E('ai', 'Ролик на 5 секунд в 1344×768 снимается около пяти с половиной минут; для черновиков хватает 864×480.', 'focus',
-          `<div class="hint warn" style="margin-left:0">${I('info',13)}<span>Это формулировка ИИ. После сохранения прежняя уйдёт в «Историю» страницы, а утверждение станет вашим — сноска 3 сменится на «✎ Андрей».</span></div>`)}
-      ${E('me', PAGE[1].items[1].t + '<span class="fn me">✎ Андрей, 02.11</span>')}
-      ${E('ai', PAGE[1].items[2].t + '<span class="fn ai">4</span>', 'gone',
-          `<div class="hint mut">${I('archive',13)}<span>Уйдёт в «Историю» с пометкой «убрано вами» — не удаляется. <button class="lnk" style="padding:0 2px">Вернуть</button></span></div>`)}
-      <div class="h2">Решения</div>
-      ${E('ai', PAGE[2].items[0].t + '<span class="fn ai">5</span>')}
-      ${E('me', 'Для черновиков снимаем половинный размер 864×480, подробности — <span class="badlink">[[Замеры видео на даче]]</span>', '',
-          `<div class="hint dng" style="margin-left:0">${I('link',13)}<span><b>Эту ссылку не сохранить.</b> Страница «Замеры видео на даче» лежит в проекте «Дача», а эта — в «AI Home». Чаты проекта «AI Home» её не увидят. Ссылаться можно на страницы этого раздела и разделов выше: «Проекты», «Общее».</span></div>`)}
-      ${E('me', 'Для превью берём 5 секунд, а не 10: разница в три раза. <span class="oklink">[[Хранитель базы]]</span>')}
-      <div style="margin:8px 0 0 24px"><button class="btn xs dashed">${I('plus',13)}Добавить утверждение</button></div>
-      <div class="h2">Открытые вопросы</div>
-      ${E('me', PAGE[3].items[0].t + '<span class="fn me">✎ Андрей, 30.10</span>')}
-      ${S.n ? dep(1, `<div style="padding:2px 8px 6px"><div class="h2">Заметки <span style="font-size:12px;font-weight:500;color:var(--c-text-muted)">свободный текст, без сносок</span></div>
-        <div class="free" contenteditable="true">Черновик: перед большим апскейлом проверить, не стоит ли в очереди обучение LoRA.</div></div>`, true) : ''}
+      <h1 class="dtitle">${esc(doc.title)}</h1>
+      <div class="dmeta"><span>Утверждения ИИ можно переформулировать — тогда они станут вашими. Убранное не удаляется, а уходит в «Историю». Ссылка — <span class="mono">[[Название]]</span>.</span></div>
+      ${doc.sections.map((sec, si) => `<div class="h2">${esc(sec.h)}</div>${rows.filter(r => r.sec === sec.h).map(row).join('')}
+        <div style="margin:8px 0 0 24px"><button class="btn xs dashed" data-a="add-st" data-sec="${si}">${I('plus', 13)}Добавить утверждение</button></div>`).join('')}
+      ${S.n && doc.id === 'gpu' ? dep(1, `<div style="padding:2px 8px 6px"><div class="h2">Заметки <span style="font-size:12px;font-weight:500;color:var(--c-text-muted)">свободный текст, без сносок</span></div>
+        <div class="free nedit" contenteditable="true">Черновик: перед большим апскейлом проверить, не стоит ли в очереди обучение LoRA.</div></div>`, true) : ''}
     </div></div>`;
+}
+
+/* --- Конфликт 409 --- */
+function diffMark(a, b) {
+  let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  let j = 0; while (j < a.length - i && j < b.length - i && a[a.length - 1 - j] === b[b.length - 1 - j]) j++;
+  const mid = b.slice(i, b.length - j);
+  return esc(b.slice(0, i)) + (mid ? `<span class="add">${esc(mid)}</span>` : '') + esc(b.slice(b.length - j));
+}
+function buildConflict(doc) {
+  const E = A.edit, loc = find(doc, 'f1'), f1 = loc[0].items[loc[1]];
+  const touched = [...new Set(editTexts(doc).filter(r => r.gone || (r.added ? r.t.trim() : r.t.trim() !== r.it.t)).map(r => r.sec))];
+  const mineT = E.gone.f1 ? null : (E.draft.f1 !== undefined && E.draft.f1.trim() !== f1.t ? E.draft.f1.trim() : undefined);
+  const rows = [], auto = [];
+  if (mineT !== undefined) rows.push({ title:'Факты · сноска 3', mine:mineT, theirs:THEIRS_F1, was:f1.t, state:'', val:'', merging:false });
+  else auto.push(['Факты', touched.includes('Факты') ? 'правили разные утверждения — сольётся само' : 'правил только ИИ — его правка применится']);
+  touched.filter(s => s !== 'Факты').forEach(s => auto.push([s, 'правили только вы — ваши правки применятся']));
+  A.cf = { rows, auto };
 }
 function docConflict() {
-  const sec = (title, mine, theirs, was, done, idx) => `<div class="cf ${done ? 'done' : ''}">
-      <div class="cfh">${title}<span class="s" style="color:${done ? 'var(--c-success-text)' : 'var(--c-warning-text)'}">${done ? I('check',13) + ' решено: ' + done : 'изменили и вы, и ИИ'}</span></div>
-      ${done ? '' : `<div class="cols">
-        <div class="col mine"><div class="cl">${og('me',10)}Моё</div>${mine}</div>
-        <div class="col"><div class="cl">${og('ai',10)}ИИ · сегодня 09:20</div>${theirs}</div>
-        <div class="col"><div class="cl">${I('history',11)}Было, когда вы начали</div>${was}</div></div>
-      <div class="cfa"><button class="btn xs sec" data-cf="${idx}">Оставить моё</button><button class="btn xs sec" data-cf="${idx}">Взять их</button><button class="btn xs gh">${I('merge',13)}Слить вручную</button></div>`}</div>`;
-  const solved = S.cf;
+  const cf = A.cf, total = cf.rows.length + cf.auto.length, done = cf.auto.length + cf.rows.filter(r => r.state).length, ready = done === total;
+  const LBL = { mine:'взято моё', theirs:'взята правка ИИ', merge:'слито вручную' };
+  const row = (r, i) => {
+    const head = `<div class="cfh">${r.title}<span class="s" style="color:${r.state ? 'var(--c-success-text)' : 'var(--c-warning-text)'}">${r.state ? I('check', 13) + ' решено: ' + LBL[r.state] : 'изменили и вы, и ИИ'}</span></div>`;
+    if (r.state) return `<div class="cf done">${head}<div class="col" style="border:0">${esc(r.val ?? '(убрано)')}<div style="margin-top:6px"><button class="lnk" data-a="cf-reopen" data-i="${i}">Изменить выбор</button></div></div></div>`;
+    if (r.merging) return `<div class="cf">${head}<div class="col" style="border:0"><div class="cl">${I('merge', 11)}Слейте вручную — начали с вашего варианта</div>
+        <div class="nedit" contenteditable="true" role="textbox" data-cfm="${i}">${esc(r.mine ?? r.theirs)}</div>
+        <div class="hint mut" style="margin:6px 0 0;padding:0">ИИ дописал: «с увеличением до 1440p — ещё около 15».</div></div>
+      <div class="cfa"><button class="btn xs pri" data-a="cf-merge-done" data-i="${i}">${I('check', 13)}Готово</button><button class="btn xs gh" data-a="cf-merge-cancel" data-i="${i}">Отмена</button></div></div>`;
+    return `<div class="cf">${head}<div class="cols">
+        <div class="col mine"><div class="cl">${og('me', 10)}Моё</div>${r.mine === null ? '<i>вы убрали это утверждение</i>' : diffMark(r.was, r.mine)}</div>
+        <div class="col"><div class="cl">${og('ai', 10)}ИИ · сегодня 09:20</div>${diffMark(r.was, r.theirs)}</div>
+        <div class="col"><div class="cl">${I('history', 11)}Было, когда вы начали</div>${esc(r.was)}</div></div>
+      <div class="cfa"><button class="btn xs sec" data-a="cf-pick" data-v="mine" data-i="${i}">Оставить моё</button><button class="btn xs sec" data-a="cf-pick" data-v="theirs" data-i="${i}">Взять их</button><button class="btn xs gh" data-a="cf-merge" data-i="${i}">${I('merge', 13)}Слить вручную</button></div></div>`;
+  };
   return `<div class="doc">
-    <div class="ebar"><span class="bdg t-warning">${I('alert',12)}Нужно решить</span><span class="s">${solved ? 'Все разделы решены' : 'Решено 1 из 2 разделов'}</span>
-      <button class="btn xs gh">Отменить мою правку</button><button class="btn xs pri" ${solved ? '' : 'disabled'}>${I('check',13)}Сохранить</button></div>
+    <div class="ebar"><span class="bdg t-warning">${I('alert', 12)}Нужно решить</span><span class="s">${ready ? 'Все разделы решены' : `Решено ${done} из ${total} ${plural(total, 'раздела', 'разделов', 'разделов')}`}</span>
+      <button class="btn xs gh" data-a="cf-drop">Отменить мою правку</button><button class="btn xs pri" data-a="cf-save" ${ready ? '' : 'disabled'}>${I('check', 13)}Сохранить</button></div>
     <div class="docin">
-      <div class="ntc n-warn">${I('alert',18)}<div class="b"><div class="tt">Страница изменилась, пока вы правили</div>
-        <div>Сегодня в 09:20 ИИ дописал её после ночного разбора. Ваш текст не потерян: выберите, что оставить там, где вы с ИИ правили одно и то же. Остальное сольётся само.</div></div></div>
-      ${sec('Факты · сноска 3',
-          'Ролик на 5 секунд в 1344×768 снимается около пяти с половиной минут<span class="add">; для черновиков хватает 864×480</span>.',
-          'Ролик на 5 секунд в 1344×768 снимается около пяти с половиной минут<span class="add">, с увеличением до 1440p — ещё около 15</span>.',
-          'Ролик на 5 секунд в 1344×768 снимается около пяти с половиной минут, в быстром режиме — около четырёх.', solved ? 'взято моё' : '', 1)}
-      ${sec('Решения', '', '', '', 'правили только вы — ваши правки применятся', 2)}
-      <div class="hint mut" style="margin:12px 0 0">${I('info',13)}<span>«Слить вручную» откроет раздел для правки с обоими вариантами рядом.</span></div>
+      <div class="ntc n-warn">${I('alert', 18)}<div class="b"><div class="tt">Страница изменилась, пока вы правили</div>
+        <div>Сегодня в 09:20 ИИ дописал её после разбора чата. Ваш текст не потерян: выберите, что оставить там, где вы с ИИ правили одно и то же. Остальное сольётся само.</div></div></div>
+      ${cf.rows.map(row).join('')}
+      ${cf.auto.map(([t, s]) => `<div class="cf done"><div class="cfh">${esc(t)}<span class="s" style="color:var(--c-success-text)">${I('check', 13)} ${s}</span></div></div>`).join('')}
+      ${cf.rows.length ? `<div class="hint mut" style="margin:12px 0 0">${I('info', 13)}<span>«Слить вручную» откроет раздел для правки с вашим вариантом и тем, что дописал ИИ.</span></div>` : ''}
     </div></div>`;
 }
-function docNote() {
+
+/* --- Заметка --- */
+function docNote(doc) {
+  const m = S.w === 'm';
+  const toWiki = dep(3, `<button class="btn sm sec" data-a="to-wiki">${I('book', 14)}Перенести в вики</button>`);
+  const refs = live().filter(id => id !== doc.id && A.docs[id].kind === 'wiki' && docText(A.docs[id]).includes('[[' + doc.title + ']]')).length;
   return `<div class="doc"><div class="docin">
-    <div class="dtop"><div class="grow"><h1 class="dtitle">Идеи для раздела «Видео»</h1>
-      <div class="dmeta"><span class="bdg t-neutral">${I('file',12)}Заметка</span><span>изменена вчера в 22:10</span></div></div>
-      ${S.w === 'm' ? '' : `<div class="dbar" style="padding-top:4px">${dep(3, `<button class="btn sm sec">${I('book',14)}Перенести в вики</button>`)}<button class="ib">${I('more')}</button></div>`}</div>
-    ${S.w === 'm' ? `<div class="dbar" style="margin-top:10px">${dep(3, `<button class="btn sm sec">${I('book',14)}Перенести в вики</button>`)}</div>` : ''}
-    <div style="margin-top:16px;font-size:14px;line-height:1.7">
-      <p>Плавающее окно эфира должно помнить свой угол между сессиями.</p>
-      <p>Лента подписок — показывать сначала непросмотренное, а просмотренное сворачивать.</p>
-      <p>Спросить у <span class="oklink">[[Очередь локальной GPU]]</span>, можно ли превью роликов делать в фоне ночью.</p>
-    </div>
-    <div class="hint mut" style="margin:18px 0 0">${I('info',13)}<span>Заметку пишете только вы. ИИ читает её как источник: на неё уже ссылаются 2 страницы вики.</span></div>
+    <div class="dtop"><div class="grow"><h1 class="dtitle">${esc(doc.title)}</h1>
+      <div class="dmeta"><span class="bdg t-neutral">${I('file', 12)}Заметка</span><span>изменена ${doc.updated}</span></div></div>
+      ${m ? '' : `<div class="dbar" style="padding-top:4px"><button class="btn sm sec" data-a="edit">${I('pen', 14)}Править</button>${toWiki}${moreBtn(doc)}</div>`}</div>
+    ${m ? `<div class="dbar" style="margin-top:10px;flex-wrap:wrap"><button class="btn sm sec" style="flex:1" data-a="edit">${I('pen', 14)}Править</button>${toWiki}</div>` : ''}
+    <div style="margin-top:16px;font-size:14px;line-height:1.7">${doc.body.length ? doc.body.map(p => `<p>${linkify(p, doc)}</p>`).join('') : '<p style="color:var(--c-text-muted)">Пустая заметка</p>'}</div>
+    <div class="hint mut" style="margin:18px 0 0">${I('info', 13)}<span>Заметку пишете только вы. ИИ читает её как источник${refs ? `: на неё ссылается ${refs} ${plural(refs, 'страница', 'страницы', 'страниц')} вики` : ''}.</span></div>
   </div></div>`;
+}
+function docNoteEdit(doc) {
+  return `<div class="doc">
+    <div class="ebar">${S.w === 'm' ? '' : `<span class="bdg t-neutral">${I('pen', 12)}Правка заметки</span>`}<span class="s">Ссылка на страницу — <span class="mono">[[Название]]</span></span>
+      <button class="btn xs gh" data-a="nedit-cancel">Отмена</button><button class="btn xs pri" data-a="nedit-save">${I('check', 13)}Готово</button></div>
+    <div class="docin">
+      <h1 class="dtitle nedit" contenteditable="true" role="textbox" data-ntitle data-ph="Название заметки">${esc(doc.title)}</h1>
+      <div class="nedit" contenteditable="true" role="textbox" aria-multiline="true" data-nbody data-ph="Текст заметки" style="margin-top:12px;font-size:14px;line-height:1.7;min-height:160px;white-space:pre-wrap">${esc(doc.body.join('\n'))}</div>
+    </div></div>`;
 }
 function docLoading() {
   const L = (w, h = 12, mt = 10) => `<div class="sk" style="width:${w};height:${h}px;margin-top:${mt}px"></div>`;
@@ -603,186 +863,477 @@ function docLoading() {
   </div></div>`;
 }
 function docEmpty() {
-  return `<div class="empty"><div class="ic">${I('book',26)}</div>
+  return `<div class="empty"><div class="ic">${I('book', 26)}</div>
     <div class="t">Здесь будут ваши записи и вики</div>
     <div class="d">Пишите заметки сами — а ИИ после разговоров соберёт из них и из чатов страницы со ссылками на источники. Вести страницу можно вместе.</div>
-    <div class="a"><button class="btn sm pri">${I('plus',14)}Новая заметка</button><button class="btn sm sec">Завести вики</button></div></div>`;
+    <div class="a"><button class="btn sm pri" data-a="new-note">${I('plus', 14)}Новая заметка</button><button class="btn sm sec" data-a="toast" data-msg="ИИ заведёт вики после ближайшего разговора — вручную ничего настраивать не нужно">Завести вики</button></div></div>`;
 }
-function docNothing() {
-  return `<div class="empty"><div class="ic">${I('search',24)}</div>
-    <div class="t">Выберите запись слева</div>
-    <div class="d">Поиск ничего не нашёл среди ваших — попробуйте искать во всех или сбросьте фильтр.</div></div>`;
+function docRemoved(doc) {
+  return `<div class="empty"><div class="ic">${I('archive', 24)}</div>
+    <div class="t">«${esc(doc.title)}» ${doc.kind === 'note' ? 'убрана' : 'убрана'}</div>
+    <div class="d">Она лежит в «Истории» раздела и не удалена. Вернуть можно здесь или из «Журнала».</div>
+    <div class="a"><button class="btn sm sec" data-a="doc-restore">${I('undo', 14)}Вернуть</button></div></div>`;
 }
 function center() {
-  switch (S.s) {
-    case 'edit': return docEdit();
-    case 'conflict': return docConflict();
-    case 'note': return docNote();
-    case 'loading': return docLoading();
-    case 'empty': return docEmpty();
-    case 'nofind': return docNothing();
-    default: return docPage();
-  }
+  if (A.data === 'loading' || A.busy) return docLoading();
+  const doc = cur();
+  if (!doc) return docEmpty();
+  if (doc.removed) return docRemoved(doc);
+  if (doc.kind === 'note') return A.mode === 'nedit' ? docNoteEdit(doc) : docNote(doc);
+  if (A.mode === 'edit') return docEdit(doc);
+  if (A.mode === 'conflict') return docConflict(doc);
+  return docPage(doc);
 }
 
 /* ===== Правая панель: Входящие / Журнал / Здоровье / Настройки ===== */
 function panelInbox() {
-  const ex = S.s === 'empty';
-  if (ex) return `<div class="empty"><div class="ic">${I('inbox',24)}</div><div class="t" style="font-size:16px">Спорного нет</div><div class="d">Сюда приходят только предложения ИИ, которые без вас применять нельзя.</div></div>`;
+  const items = pendingItems();
+  if (!items.length) return `<div class="empty"><div class="ic">${I('inbox', 24)}</div><div class="t" style="font-size:16px">Спорного нет</div><div class="d">Сюда приходят только предложения ИИ, которые без вас применять нельзя.</div></div>`;
   return `<div class="pbody">
-    <div style="font-size:12px;color:var(--c-text-secondary);padding:6px 2px 0">3 предложения ИИ ждут вас. Остальное он применил сам — это видно в «Журнале».</div>
-    <div class="item on">
-      <div class="t">${og('mix',11)}Очередь локальной GPU</div>
-      <div class="s">из чата «Замеры MiniMax H3» · сегодня 09:20</div>
-      <div class="why"><span class="bdg t-warning">Меняет ваше утверждение</span><span>2 правки</span></div>
-      <div class="op"><div class="ot">Заменить ваше утверждение · Решения</div>
-        <div class="df"><div class="r">Для черновиков снимаем половинный размер 864×480 — это в четыре раза быстрее.</div>
-        <div class="a">Для черновиков снимаем 864×480 — примерно в 3,7 раза быстрее: 1,5 минуты против 5,5.</div></div>
-        <div class="q">Источник: «864×480, 5 с ≈ 1,5 мин» — чат «Замеры MiniMax H3», 01.11</div>
-        <div class="acts"><button class="btn xs pri">Заменить</button><button class="btn xs sec">Оставить моё</button><button class="btn xs gh">${I('chat',13)}Открыть в чате</button></div></div>
-      <div class="op"><div class="ot">Добавить · Факты</div>
-        <div class="df"><div class="a">Увеличение до 1440p занимает ещё около 15 минут.</div></div>
-        <div class="q">Источник: «max — плюс увеличение до 1440p, ещё ≈ 15 мин» — чат «Замеры MiniMax H3»</div>
-        <div class="acts"><button class="btn xs sec">Добавить</button><button class="btn xs gh">Не добавлять</button></div></div>
-    </div>
-    <div class="item"><div class="t">${og('ai',11)}Хранитель базы</div><div class="s">из чата «Разбор вики» · вчера</div>
-      <div class="why"><span class="bdg t-warning">Источники противоречат друг другу</span><span>1 правка</span></div></div>
-    <div class="item"><div class="t">${og('ai',11)}Правила ухода за газоном</div><div class="s">из чата «Дача: весна» · вчера</div>
-      <div class="why"><span class="bdg t-neutral">Новая страница в «Общее»</span></div></div>
+    <div style="font-size:12px;color:var(--c-text-secondary);padding:6px 2px 0">${items.length} ${plural(items.length, 'предложение', 'предложения', 'предложений')} ИИ ${items.length === 1 ? 'ждёт' : 'ждут'} вас. Остальное он применил сам — это видно в «Журнале».</div>
+    ${items.map(it => {
+      const ops = it.ops.filter(o => !o.state), title = it.doc ? A.docs[it.doc].title : it.title;
+      return `<div class="item ${it.open ? 'on' : ''} ${A.flash === it.id ? 'flash' : ''}">
+        <button class="ihead" data-a="inbox-toggle" data-item="${it.id}" aria-expanded="${!!it.open}">
+          <div class="t">${og(it.doc ? docOrigin(A.docs[it.doc]) : it.o, 11)}<span style="flex:1">${esc(title)}</span><span style="color:var(--c-text-muted)">${I(it.open ? 'cd' : 'cr', 14)}</span></div>
+          <div class="s">${it.from}</div>
+          <div class="why"><span class="bdg t-${it.badge[1]}">${it.badge[0]}</span><span>${ops.length} ${plural(ops.length, 'правка', 'правки', 'правок')}</span></div></button>
+        ${it.open ? ops.map(o => {
+          const loc = o.target && find(A.docs[it.doc], o.target), was = loc ? loc[0].items[loc[1]].t : '';
+          const df = o.alt ? o.alt.map(([t, s]) => `<div class="a" style="background:var(--c-bg-card);color:var(--c-text-primary)">${esc(t)}<div style="font-size:11px;color:var(--c-text-muted)">${esc(s)}</div></div>`).join('')
+            : (was ? `<div class="r">${esc(was)}</div>` : '') + `<div class="a">${esc(o.add)}</div>`;
+          return `<div class="op"><div class="ot">${o.label}</div><div class="df">${df}</div>
+            ${o.alt ? '' : `<div class="q">Источник: «${esc(o.q)}» — ${esc(o.src)}, ${o.d}</div>`}
+            <div class="acts">${o.choices.map((c, ci) => `<button class="btn xs ${c.c}" data-a="op" data-item="${it.id}" data-op="${o.id}" data-c="${ci}">${c.l}</button>`).join('')}
+              ${o.alt ? '' : `<button class="btn xs gh" data-a="dead" data-what="переход в ${esc(o.src)}">${I('chat', 13)}Открыть в чате</button>`}</div></div>`;
+        }).join('') + (it.doc ? `<div style="margin-top:8px"><button class="lnk" data-a="open" data-id="${it.doc}">${I('file', 13)}Открыть страницу</button></div>` : '') : ''}
+      </div>`;
+    }).join('')}
   </div>`;
 }
 function panelJournal() {
-  const conf = S.jc ? `<div class="confirm"><b>Вернуть страницу как было до 09:14?</b><br>Ваши 2 правки уйдут в «Историю». Записи ИИ, сделанные после, останутся.
-      <div class="acts" style="display:flex;gap:6px;margin-top:8px"><button class="btn xs dng" data-jc="0">${I('undo',13)}Откатить</button><button class="btn xs gh" data-jc="0">Отмена</button></div></div>` : '';
-  return `<div class="pbody">
-    <div class="chips" style="padding:8px 2px 0"><button class="chip on">Все</button><button class="chip">${og('ai',11)}ИИ</button><button class="chip">${og('me',11)}Мои</button></div>
-    <div class="jday">Сегодня</div>
-    <div class="jrow"><div class="tm">09:20</div><div class="b"><div class="t">${og('ai',10)} ИИ дописал «Очередь локальной GPU»</div>
-      <div class="s">1 утверждение · из чата «Замеры MiniMax H3»</div>
-      <div class="acts"><button class="btn xs gh">${I('chat',13)}Открыть в чате</button><button class="btn xs gh">${I('undo',13)}Откатить</button></div></div></div>
-    <div class="jrow"><div class="tm">09:14</div><div class="b"><div class="t">${og('me',10)} Вы поправили «Очередь локальной GPU»</div>
-      <div class="s">2 утверждения: 1 новое, 1 переформулировано</div>
-      <div class="acts">${S.jc ? '' : `<button class="btn xs sec" data-jc="1">${I('undo',13)}Откатить мою правку</button>`}</div>${conf}</div></div>
-    <div class="jrow"><div class="tm">03:00</div><div class="b"><div class="t">${og('ai',10)} Ночной разбор: 5 страниц</div>
-      <div class="s">14 утверждений из 6 чатов</div><div class="acts"><button class="btn xs gh">Подробнее</button></div></div></div>
-    <div class="jday">Вчера</div>
-    <div class="jrow"><div class="tm">22:40</div><div class="b"><div class="t">${og('me',10)} Вы убрали утверждение в «Хранитель базы»</div>
-      <div class="s">ушло в «Историю», не удалено</div><div class="acts"><button class="btn xs gh">${I('undo',13)}Вернуть</button></div></div></div>
-    <div class="jrow"><div class="tm">18:05</div><div class="b"><div class="t">${og('ext',10)} Страницу «Машина: обслуживание» изменили снаружи</div>
-      <div class="s">вы приняли как свою правку</div></div></div>
-  </div>`;
+  const rows = A.journal.filter(j => A.jf === 'all' || j.o === A.jf);
+  const chips = `<div class="chips" style="padding:8px 2px 0">${[['all', 'Все'], ['ai', 'ИИ'], ['me', 'Мои']].map(([v, l]) =>
+    `<button class="chip ${A.jf === v ? 'on' : ''}" data-a="jf" data-v="${v}" aria-pressed="${A.jf === v}">${v === 'all' ? '' : og(v, 11)}${l}</button>`).join('')}</div>`;
+  if (!A.journal.length) return `<div class="empty"><div class="ic">${I('history', 24)}</div><div class="t" style="font-size:16px">Журнал пуст</div><div class="d">Здесь появится всё, что вы и ИИ меняли в разделе, — с откатом.</div></div>`;
+  let day = '', out = '';
+  for (const j of rows) {
+    if (j.day !== day) { day = j.day; out += `<div class="jday">${day}</div>`; }
+    const acts = [];
+    if (j.chat) acts.push(`<button class="btn xs gh" data-a="dead" data-what="переход в чат ${esc(j.chat)}">${I('chat', 13)}Открыть в чате</button>`);
+    if (j.act && !j.done && !j.asking) acts.push(`<button class="btn xs ${j.o === 'me' ? 'sec' : 'gh'}" data-a="j-act" data-j="${j.id}">${I('undo', 13)}${j.act}</button>`);
+    if (j.more) acts.push(`<button class="btn xs gh" data-a="j-more" data-j="${j.id}" aria-expanded="${!!j.moreOpen}">${j.moreOpen ? 'Свернуть' : 'Подробнее'}</button>`);
+    out += `<div class="jrow"><div class="tm">${j.tm}</div><div class="b"><div class="t">${og(j.o, 10)} ${esc(j.t)}${j.done ? ` <span class="bdg t-neutral">${j.done}</span>` : ''}</div>
+      <div class="s">${esc(j.s)}</div>
+      ${acts.length ? `<div class="acts">${acts.join('')}</div>` : ''}
+      ${j.moreOpen ? `<div style="margin-top:6px;display:flex;flex-direction:column;align-items:flex-start">${j.more.map(([id, l]) => A.docs[id] && !A.docs[id].removed ? `<button class="lnk" data-a="open" data-id="${id}">${esc(l)}</button>` : `<span class="s">${esc(l)}</span>`).join('')}</div>` : ''}
+      ${j.asking ? `<div class="confirm" role="alertdialog"><b>${esc(j.confirm.split('?')[0])}?</b><br>${esc(j.confirm.split('?').slice(1).join('?').trim())}
+        <div style="display:flex;gap:6px;margin-top:8px"><button class="btn xs dng" data-a="j-ok" data-j="${j.id}">${I('undo', 13)}Откатить</button><button class="btn xs gh" data-a="j-no" data-j="${j.id}">Отмена</button></div></div>` : ''}
+    </div></div>`;
+  }
+  return `<div class="pbody">${chips}${out || '<div class="hint mut" style="margin:12px 0 0">Здесь пока нет записей этого вида.</div>'}</div>`;
 }
 function panelHealth() {
-  const drift = S.s === 'drift';
+  const broken = [], ids = live();
+  ids.forEach(id => { const d = A.docs[id]; if (d.kind === 'wiki') linkIssues(docText(d), d).filter(x => x.kind === 'missing').forEach(x => broken.push([id, x.name])); });
+  const lonely = ids.filter(id => A.docs[id].kind === 'wiki' && !ids.some(o => o !== id && docText(A.docs[o]).includes('[[' + A.docs[id].title + ']]')));
+  const R = (tone, n, t, s, id) => `<button class="hrow hbtn" data-a="open" data-id="${id}"><span class="bdg t-${tone}">${n}</span><div class="b"><div style="font-weight:600;color:var(--c-text-heading)">${t}</div><div style="font-size:12px;color:var(--c-text-secondary)">${s}</div></div>${I('cr', 14)}</button>`;
+  const f2 = find(A.docs.gpu, 'f2');
   return `<div class="pbody">
-    <div style="display:flex;align-items:center;gap:8px;padding:8px 2px 4px;font-size:12px;color:var(--c-text-secondary)"><span style="flex:1">Проверено сегодня в 06:00</span><button class="btn xs sec">Проверить сейчас</button></div>
-    ${drift ? `<div class="item on"><div class="t">${og('ext',11)}Изменили снаружи: «Очередь локальной GPU»</div><div class="s">сегодня 08:47 · 1 место</div>
-      <div class="op"><div class="ot">Факты</div><div class="df"><div class="r">Ночью очередь свободна, поэтому длинные задачи лучше ставить вечером.</div><div class="a">Ночью очередь свободна — длинные задачи ставим после 22:00.</div></div>
-      <div class="acts"><button class="btn xs pri">Принять как мою правку</button><button class="btn xs sec">Принять как есть</button></div></div></div>` : ''}
-    <div class="hrow"><span class="bdg t-danger">2</span><div class="b"><div style="font-weight:600;color:var(--c-text-heading)">Ссылки ведут в никуда</div><div style="font-size:12px;color:var(--c-text-secondary)">«Модули и MF-remote» → «Старый реестр модулей»</div></div></div>
-    <div class="hrow"><span class="bdg t-warning">3</span><div class="b"><div style="font-weight:600;color:var(--c-text-heading)">Источник пропал</div><div style="font-size:12px;color:var(--c-text-secondary)">Чат удалён — утверждения ИИ остались без подтверждения</div></div></div>
-    <div class="hrow"><span class="bdg t-neutral">1</span><div class="b"><div style="font-weight:600;color:var(--c-text-heading)">Страница без ссылок на неё</div><div style="font-size:12px;color:var(--c-text-secondary)">«Правила релизов»</div></div></div>
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 2px 4px;font-size:12px;color:var(--c-text-secondary)"><span style="flex:1">Проверено ${A.hcheck}</span><button class="btn xs sec" data-a="hcheck" ${A.hbusy ? 'disabled' : ''}>${A.hbusy ? 'Проверяю…' : 'Проверить сейчас'}</button></div>
+    ${A.drift && f2 ? `<div class="item on ${A.flash === 'drift' ? 'flash' : ''}"><div class="t">${og('ext', 11)}Изменили снаружи: «Очередь локальной GPU»</div><div class="s">сегодня 08:47 · 1 место</div>
+      <div class="op"><div class="ot">Факты</div><div class="df"><div class="r">${esc(f2[0].items[f2[1]].t)}</div><div class="a">${esc(DRIFT_TEXT)}</div></div>
+      <div class="acts"><button class="btn xs pri" data-a="drift-mine">Принять как мою правку</button><button class="btn xs sec" data-a="drift-asis">Принять как есть</button></div></div></div>` : ''}
+    ${broken.length ? R('danger', broken.length, 'Ссылки ведут в никуда', broken.map(([id, n]) => `«${esc(A.docs[id].title)}» → «${esc(n)}»`).join(', '), broken[0][0]) : ''}
+    ${ids.length ? `<div class="hrow"><span class="bdg t-warning">3</span><div class="b"><div style="font-weight:600;color:var(--c-text-heading)">Источник пропал</div><div style="font-size:12px;color:var(--c-text-secondary)">Чат удалён — утверждения ИИ остались без подтверждения</div></div></div>` : ''}
+    ${lonely.length ? R('neutral', lonely.length, 'Страница без ссылок на неё', lonely.map(id => `«${esc(A.docs[id].title)}»`).join(', '), lonely[0]) : ''}
+    ${!ids.length ? '<div class="hint mut" style="margin:12px 0 0">Проверять пока нечего.</div>' : ''}
   </div>`;
 }
 function panelSettings() {
-  const R = (t, s, on, extra = '') => `<div class="srow"><div class="b"><div class="t">${t}</div><div class="s">${s}</div>${extra}</div><span class="tgl ${on ? 'on' : ''}"></span></div>`;
+  const R = (k, t, s) => `<div class="srow"><div class="b"><div class="t">${t}</div><div class="s">${s}</div></div><button class="tgl ${A.set[k] ? 'on' : ''}" role="switch" aria-checked="${!!A.set[k]}" aria-label="${t}" data-a="tgl" data-k="${k}"></button></div>`;
   return `<div class="pbody">
-    ${R('Ночной разбор', 'В 03:00 ИИ разбирает вчерашние чаты и дописывает страницы', 1)}
-    ${R('Бесспорное — применять сразу', 'Иначе каждая правка ИИ будет ждать вас во «Входящих»', 1)}
-    ${dep(2, R('Ваши утверждения — только через вас', 'ИИ не заменяет и не помечает ваш текст сам: всегда спрашивает во «Входящих»', 1, '<div class="s" style="color:var(--c-text-muted)">Выключить нельзя</div>'), true)}
-    ${R('Показывать сноски ИИ', 'Номера сносок у утверждений ИИ; ваши — «✎ имя, дата»', 1)}
+    ${R('night', 'Ночной разбор', 'В 03:00 ИИ разбирает вчерашние чаты и дописывает страницы')}
+    ${R('auto', 'Бесспорное — применять сразу', 'Иначе каждая правка ИИ будет ждать вас во «Входящих»')}
+    ${dep(2, `<div class="srow"><div class="b"><div class="t">Ваши утверждения — только через вас</div><div class="s">ИИ не заменяет и не помечает ваш текст сам: всегда спрашивает во «Входящих»</div><div class="s" style="color:var(--c-text-muted)">Выключить нельзя</div></div><span class="tgl on" role="switch" aria-checked="true" aria-disabled="true" title="Выключить нельзя"></span></div>`, true)}
+    ${R('fns', 'Показывать сноски ИИ', 'Номера сносок у утверждений ИИ; ваши — «✎ имя, дата»')}
   </div>`;
 }
-function panelBody() {
-  return { inbox:panelInbox, journal:panelJournal, health:panelHealth, settings:panelSettings }[S.p]();
-}
+const PANELS = [['inbox', 'Входящие', 'inbox'], ['journal', 'Журнал', 'history'], ['health', 'Здоровье', 'activity'], ['settings', 'Настройки', 'settings']];
+const panelBody = () => A.data === 'loading'
+  ? `<div class="pbody" aria-busy="true">${[0, 1, 2].map(() => `<div class="item"><div class="sk" style="height:12px;width:60%"></div><div class="sk" style="height:10px;width:85%;margin-top:8px"></div><div class="sk" style="height:10px;width:40%;margin-top:8px"></div></div>`).join('')}</div>`
+  : ({ inbox:panelInbox, journal:panelJournal, health:panelHealth, settings:panelSettings })[A.p]();
+const PTITLE = () => PANELS.find(p => p[0] === A.p)[1];
 function panelSeg() {
+  const n = pendingItems().length;
   return `<div class="iseg" role="tablist" aria-label="Разделы панели">${PANELS.map(([k, l, ic]) =>
-    `<button class="${S.p === k ? 'on' : ''}" data-p="${k}" title="${l}" role="tab">${I(ic, S.w === 'm' ? 18 : 15)}${k === 'inbox' && S.s !== 'empty' ? '<span class="cnt">3</span>' : ''}</button>`).join('')}</div>`;
+    `<button class="${A.p === k ? 'on' : ''}" data-a="panel" data-p="${k}" title="${l}" role="tab" aria-selected="${A.p === k}">${I(ic, 18)}${k === 'inbox' && n ? `<span class="cnt">${n}</span>` : ''}</button>`).join('')}</div>`;
 }
-const PTITLE = () => PANELS.find(p => p[0] === S.p)[1];
+
+/* ===== Слои поверх окна ===== */
+function modalHtml() {
+  const m = A.modal;
+  if (!m) return '';
+  return `<div class="modal"><div class="ov" data-a="modal-close"></div><div class="dlg" role="alertdialog" aria-modal="true" aria-label="${esc(m.title)}">
+    <div class="t">${esc(m.title)}</div><div class="d">${esc(m.text)}</div>
+    <div class="a"><button class="btn sm gh" data-a="modal-close">${m.cancel || 'Отмена'}</button><button class="btn sm ${m.danger ? 'dng' : 'pri'}" data-a="modal-ok">${m.ok}</button></div></div></div>`;
+}
 
 /* ===== Сборка десктопа и мобилы ===== */
 function desktop() {
-  const open = !!S.p;
+  const n = pendingItems().length;
   return `<div class="app">
-    <div class="rail">${['home','chat','tasks','book','wave'].map((n, i) => `<button class="rb ${n === 'book' ? 'on' : ''}" title="${['Главная','Чаты','Задачи','Заметки','Видео'][i]}">${I(n,18)}</button>`).join('')}</div>
+    <div class="rail">${['home', 'chat', 'tasks', 'book', 'wave'].map((ic, i) => {
+      const l = ['Главная', 'Чаты', 'Задачи', 'Заметки', 'Видео'][i];
+      return ic === 'book' ? `<button class="rb on" title="${l}" data-a="toast" data-msg="Вы уже в разделе «Заметки»">${I(ic, 18)}</button>`
+        : `<button class="rb" title="${l} — в прототипе не работает" data-a="dead" data-what="раздел «${l}»">${I(ic, 18)}</button>`;
+    }).join('')}</div>
     <div class="isl left">${leftPanel(false)}</div>
     <div class="isl center">${center()}</div>
-    ${open ? `<div class="isl right"><div class="ph"><span class="ttl ui">${PTITLE()}</span>${S.p === 'inbox' && S.s !== 'empty' ? '<span class="cnt muted">3</span>' : ''}
-      <button class="ib" title="Свернуть панель" data-p="">${I('x')}</button></div>${panelBody()}</div>` : ''}
+    ${A.p ? `<div class="isl right"><div class="ph"><span class="ttl ui">${PTITLE()}</span>${A.p === 'inbox' && n ? `<span class="cnt muted">${n}</span>` : ''}
+      <button class="ib" title="Свернуть панель" data-a="panel" data-p="">${I('x')}</button></div>${panelBody()}</div>` : ''}
     <div class="rail" aria-label="Панель вики">${PANELS.map(([k, l, ic]) =>
-      `<button class="rb ${S.p === k ? 'on' : ''}" data-p="${S.p === k ? '' : k}" title="${l}">${I(ic,18)}${k === 'inbox' && S.s !== 'empty' ? '<span class="cnt">3</span>' : ''}${k === 'health' && S.s === 'drift' ? '<span class="dot" style="top:4px;right:4px"></span>' : ''}</button>`).join('')}</div>
+      `<button class="rb ${A.p === k ? 'on' : ''}" data-a="panel" data-p="${A.p === k ? '' : k}" title="${l}" aria-pressed="${A.p === k}">${I(ic, 18)}${k === 'inbox' && n ? `<span class="cnt">${n}</span>` : ''}${k === 'health' && A.drift ? '<span class="dot" style="top:4px;right:4px"></span>' : ''}</button>`).join('')}</div>
+    ${modalHtml()}
   </div>`;
 }
 function mobile() {
-  const isDoc = !['empty','nofind'].includes(S.s);
-  const title = S.s === 'note' ? 'Идеи для раздела «Видео»' : S.s === 'empty' ? 'Заметки' : S.s === 'nofind' ? 'Заметки' : S.s === 'edit' ? 'Правка' : 'Очередь локальной GPU';
+  const doc = cur(), n = pendingItems().length;
+  const title = A.data === 'loading' ? 'Заметки' : !doc ? 'Заметки' : A.mode === 'edit' || A.mode === 'nedit' ? 'Правка' : A.mode === 'conflict' ? 'Нужно решить' : (doc.title || 'Новая заметка');
+  const canMore = doc && !doc.removed && A.mode === 'view' && A.data !== 'loading' && !A.busy;
   let layer = '';
-  if (S.d === 'tree') layer = `<div class="ov" data-d=""></div><div class="drawer l">${leftPanel(true)}</div>`;
-  if (S.d === 'panel') layer = `<div class="ov" data-d=""></div><div class="drawer r"><div class="dh">${panelSeg()}<span style="flex:1"></span><button class="ib" data-d="" title="Закрыть">${I('x',18)}</button></div>
+  if (A.d === 'tree') layer = `<div class="ov" data-a="drawer" data-d=""></div><div class="drawer l" role="dialog" aria-label="Дерево заметок и вики">${leftPanel(true)}</div>`;
+  if (A.d === 'panel') layer = `<div class="ov" data-a="drawer" data-d=""></div><div class="drawer r" role="dialog" aria-label="Панель вики"><div class="dh">${panelSeg()}<span style="flex:1"></span><button class="ib" data-a="drawer" data-d="" title="Закрыть">${I('x', 18)}</button></div>
      <div style="padding:10px 14px 0;font-weight:600;color:var(--c-text-heading)">${PTITLE()}</div>${panelBody()}</div>`;
-  if (S.d === 'sheet') {
-    const all = PAGE.flatMap((sec, si) => sec.items.map((x, ii) => [String(x.n ?? `m${si}${ii}`), x]));
-    const it = (all.find(([k]) => k === S.fn) ?? all[2])[1];
-    layer = `<div class="ov" data-d=""></div><div class="sheet"><div class="grab"></div>${footPop(it).replace('class="pop"', 'style="font-size:13px"')}</div>`;
+  if (A.d === 'sheet' && doc && find(doc, A.fn)) {
+    const [sec, i] = find(doc, A.fn);
+    layer = `<div class="ov" data-a="drawer" data-d=""></div><div class="sheet" role="dialog"><div class="grab"></div>${footPop(sec.items[i]).replace('class="pop"', 'style="font-size:13px"')}</div>`;
   }
+  if (A.menu && canMore) layer = `<div class="ov" data-a="menu-close"></div><div class="sheet msheet" role="menu"><div class="grab"></div>${menuItems(doc)}</div>`;
   return `<div class="app m">
     <div class="mhead">
-      <button class="ib" data-d="tree" title="Дерево заметок и вики">${I('pleft',20)}</button>
-      <span class="ttl">${title}</span>
-      <button class="ib" data-d="panel" title="Входящие, журнал, здоровье, настройки">${I('inbox',20)}${S.s !== 'empty' ? '<span class="cnt">3</span>' : ''}</button>
-      ${isDoc ? `<button class="ib" title="Ещё">${I('more',20)}</button>` : ''}
+      <button class="ib" data-a="drawer" data-d="tree" title="Дерево заметок и вики">${I('pleft', 20)}</button>
+      <span class="ttl js-mtitle">${esc(title)}</span>
+      <button class="ib" data-a="drawer" data-d="panel" title="Входящие, журнал, здоровье, настройки">${I('inbox', 20)}${n ? `<span class="cnt">${n}</span>` : ''}${A.drift ? '<span class="dot" style="top:4px;right:4px"></span>' : ''}</button>
+      ${canMore ? `<button class="ib" title="Ещё" data-a="menu">${I('more', 20)}</button>` : ''}
     </div>
     <div class="mbody">${center()}</div>
     ${layer}
+    ${modalHtml()}
   </div>`;
 }
 
+/* ===== Действия ===== */
+/* Подсветка карточки в панели, к которой ведёт кнопка со страницы */
+function flash(key) {
+  A.flash = key; const tok = ++UID;
+  A.flashTok = tok; setTimeout(() => { if (A.flashTok === tok) { A.flash = ''; render(); } }, 1400);
+}
+function addJournal(e) { A.journal.unshift({ id:uid('j'), day:'Сегодня', tm:now(), ...e }); }
+function toHistory(doc, it, sec, why) { doc.history.unshift({ ...clone(it), sec, why }); }
+function applyUndo(u) {
+  if (u.kind === 'ops') u.ops.forEach(op => {
+    const doc = A.docs[op.doc], loc = find(doc, op.id);
+    if (!loc) return;
+    const [sec, i] = loc;
+    toHistory(doc, sec.items[i], sec.h, u.why);
+    if (op.prev) { const p = clone(op.prev); if (p.n === 'new') p.n = doc.nextN++; sec.items[i] = p; } else sec.items.splice(i, 1);
+  });
+  if (u.kind === 'snap') {
+    const doc = A.docs[u.doc], before = new Map(u.sections.flatMap(s => s.items.map(x => [x.id, x.t])));
+    doc.sections.forEach(s => s.items.forEach(x => { if (before.get(x.id) !== x.t) toHistory(doc, x, s.h, u.why); }));
+    doc.sections = clone(u.sections);
+  }
+  if (u.kind === 'restoreHist') restoreHist(A.docs[u.doc], A.docs[u.doc].history.findIndex(h => h.id === u.hid));
+  if (u.kind === 'restoreDoc') A.docs[u.doc].removed = false;
+}
+function restoreHist(doc, i) {
+  if (i < 0) return;
+  const [h] = doc.history.splice(i, 1), { sec, why, ...it } = h;
+  if (!it.id) it.id = uid('x');
+  if (it.o === 'ai' && !it.n) { it.n = doc.nextN++; it.src = it.src || 'История страницы'; it.d = it.d || TODAY; it.q = it.q || it.t; }
+  if (it.o === 'me' && !it.who) { it.who = ME; it.d = TODAY; }
+  secByName(doc, sec).items.push(it);
+  toast(`Утверждение вернулось в «${sec}»`);
+}
+function commitEdit() {
+  const doc = cur(), E = A.edit, snap = clone(doc.sections), tm = now();
+  let changed = 0, removed = 0, added = 0;
+  doc.sections.forEach(sec => {
+    sec.items = sec.items.filter(it => {
+      const t = (E.draft[it.id] ?? it.t).trim();
+      if (E.gone[it.id] || !t) { toHistory(doc, it, sec.h, `убрано вами сегодня в ${tm}`); removed++; return false; }
+      if (t !== it.t) {
+        changed++;
+        if (it.o === 'ai') { toHistory(doc, it, sec.h, `переформулировано вами сегодня в ${tm}`); Object.assign(it, { o:'me', who:ME, d:TODAY, t }); delete it.n; }
+        else Object.assign(it, { o:'me', who:ME, d:TODAY, t });
+      }
+      return true;
+    });
+  });
+  E.added.forEach(a => { const t = (E.draft[a.id] || '').trim(); if (t) { doc.sections.find(s => s.h === a.sec).items.push({ id:a.id, o:'me', who:ME, d:TODAY, t }); added++; } });
+  const parts = [added && `${added} ${plural(added, 'новое', 'новых', 'новых')}`, changed && `${changed} переформулировано`, removed && `${removed} убрано`].filter(Boolean);
+  addJournal({ o:'me', t:`Вы поправили «${doc.title}»`, s:`${parts.join(', ')}`, act:'Откатить мою правку',
+    confirm:`Вернуть «${doc.title}» как было до ${tm}? Ваши правки уйдут в «Историю». Записи ИИ, сделанные после, останутся.`,
+    undo:{ kind:'snap', doc:A.open, sections:snap, why:`ваша правка от ${tm}, откачена` } });
+  doc.updated = `сегодня в ${tm}`;
+  A.mode = 'view'; A.edit = null; A.cf = null;
+}
+function openDoc(id) {
+  if (['edit', 'conflict', 'nedit'].includes(A.mode)) return toast('Сначала сохраните или отмените правку');
+  if (!A.docs[id]) return;
+  A.prevOpen = A.open; A.open = id; A.fn = ''; A.menu = false; A.histOpen = false; A.d = '';
+  A.busy = true; setTimeout(() => { A.busy = false; render(); }, 350);
+}
+function newNote() {
+  if (['edit', 'conflict', 'nedit'].includes(A.mode)) return toast('Сначала сохраните или отмените правку');
+  const id = uid('n'), folder = cur() && !cur().removed ? cur().folder : 'aihome';
+  A.docs[id] = { id, title:'', folder, kind:'note', updated:'только что', body:[], isNew:true };
+  A.prevOpen = A.open; A.open = id; A.mode = 'nedit'; A.data = 'ok'; A.d = ''; A.menu = false;
+  A.fold[folder] = 0; if (folder === 'aihome' || folder === 'dacha') A.fold.proj = 0;
+  A.focus = '[data-ntitle]';
+}
+const ACT = {
+  preset:d => applyPreset(d.v, true),
+  theme:d => { S.t = d.v; writeHash(); },
+  width:d => { S.w = d.v; A.d = ''; A.menu = false; A.fn = ''; writeHash(); },
+  dead:d => toast(DEAD(d.what)),
+  toast:d => toast(d.msg),
+  'ev-drift':() => {
+    if (['edit', 'conflict'].includes(A.mode)) return toast('Сначала сохраните или отмените правку');
+    A.drift = true; if (A.open !== 'gpu') openDoc('gpu');
+    toast('Событие: «Очередь локальной GPU» поправили в Obsidian');
+  },
+  /* дерево */
+  open:d => openDoc(d.id),
+  fold:d => { A.fold[d.f] = A.fold[d.f] ? 0 : 1; },
+  who:d => { A.who = d.v; },
+  'q-clear':() => { A.q = ''; A.who = 'all'; },
+  'new-note':() => newNote(),
+  /* панели и шторки */
+  panel:d => {
+    if (S.w === 'm') { if (d.p) { A.p = d.p; A.d = 'panel'; } else A.d = ''; }
+    else A.p = d.p;
+    A.fn = ''; A.menu = false;
+  },
+  drawer:d => { A.d = d.d; if (!d.d) A.fn = ''; },
+  'inbox-show':d => { A.inbox.forEach(it => it.open = it.id === d.item); A.p = 'inbox'; if (S.w === 'm') A.d = 'panel'; flash(d.item); },
+  'drift-show':() => { A.p = 'health'; if (S.w === 'm') A.d = 'panel'; flash('drift'); },
+  'inbox-toggle':d => { const it = A.inbox.find(x => x.id === d.item); it.open = !it.open; },
+  op:d => {
+    const it = A.inbox.find(x => x.id === d.item), o = it.ops.find(x => x.id === d.op), c = o.choices[+d.c], doc = it.doc && A.docs[it.doc];
+    o.state = c.l;
+    if (c.do === 'replace') { const loc = find(doc, o.target); if (loc) { const [sec, i] = loc; toHistory(doc, sec.items[i], sec.h, 'заменено ИИ с вашего согласия'); sec.items[i] = { id:uid('a'), o:'ai', n:doc.nextN++, t:o.add, src:o.src, d:o.d, q:o.q }; } }
+    if (c.do === 'add') secByName(doc, o.sec).items.push({ id:uid('a'), o:'ai', n:doc.nextN++, t:o.add, src:o.src, d:o.d, q:o.q });
+    if (c.do === 'set') { const loc = find(doc, o.target); if (loc) { const x = loc[0].items[loc[1]]; toHistory(doc, x, loc[0].h, 'заменено ИИ с вашего согласия'); Object.assign(x, { t:c.t, src:c.src, q:c.q, d:TODAY }); } }
+    if (c.do === 'create') { A.docs.lawn = { id:'lawn', title:it.title, folder:'common', kind:'wiki', updated:'только что', nextN:2, history:[], sections:[ { h:'Суть', items:[ { id:'g1', o:'ai', n:1, t:o.add, src:o.src, d:o.d, q:o.q } ] } ] }; A.fold.common = 0; }
+    if (c.do !== 'keep') { addJournal({ o:'ai', t:`ИИ ${c.do === 'create' ? 'завёл' : 'поправил'} «${doc ? doc.title : it.title}» — с вашего согласия`, s:o.label }); if (doc) doc.updated = `сегодня в ${now()}`; }
+    const left = it.ops.filter(x => !x.state).length;
+    toast(c.do === 'keep' ? `Оставлено как было${left ? '' : ' · предложение закрыто'}` : c.do === 'create' ? 'Страница создана в «Общее»' : `Готово: страница обновлена${left ? '' : ' · предложение закрыто'}`);
+  },
+  /* сноска, меню, история */
+  fn:d => { if (S.w === 'm') { A.fn = d.id; A.d = 'sheet'; } else A.fn = A.fn === d.id ? '' : d.id; },
+  menu:() => { A.menu = !A.menu; },
+  'menu-close':() => { A.menu = false; },
+  hist:() => { A.histOpen = !A.histOpen; A.menu = false; },
+  'hist-restore':d => restoreHist(cur(), +d.i),
+  'copy-link':() => { A.menu = false; toast('Ссылка на страницу скопирована'); },
+  'remove-doc':() => {
+    const doc = cur(); A.menu = false;
+    A.modal = { title:`Убрать «${doc.title}»?`, text:'Она уйдёт в «Историю» раздела, удалена не будет. Вернуть можно здесь или из «Журнала». Ссылки на неё попадут в «Здоровье».', ok:'Убрать', danger:1,
+      run:() => { doc.removed = true; addJournal({ o:'me', t:`Вы убрали «${doc.title}»`, s:'ушло в «Историю» раздела, не удалено', act:'Вернуть', undo:{ kind:'restoreDoc', doc:A.open } }); toast('Убрано в «Историю»'); } };
+  },
+  'doc-restore':() => { cur().removed = false; toast('Вернули на место'); },
+  'to-wiki':() => {
+    const doc = cur(); A.menu = false;
+    A.modal = { title:'Перенести заметку в вики?', text:'Заметка станет страницей вики: ваш текст — вашими утверждениями «✎ Андрей», а ИИ сможет дописывать страницу рядом с ними. Как именно — зависит от решения 3.', ok:'Перенести',
+      run:() => { Object.assign(doc, { kind:'wiki', nextN:1, history:[], sections:[ { h:'Суть', items:doc.body.map(t => ({ id:uid('w'), o:'me', who:ME, d:TODAY, t })) } ] }); delete doc.body; toast('Заметка перенесена в вики'); } };
+  },
+  'modal-close':() => { A.modal = null; },
+  'modal-ok':() => { const m = A.modal; A.modal = null; m.run(); },
+  /* правка страницы */
+  edit:() => {
+    A.menu = false; A.fn = '';
+    if (cur().kind === 'note') { A.mode = 'nedit'; A.focus = '[data-nbody]'; return; }
+    A.mode = 'edit'; A.edit = { draft:{}, gone:{}, added:[], ask:'' };
+  },
+  'gone-ask':d => { if (A.edit.added.some(a => a.id === d.id)) { A.edit.added = A.edit.added.filter(a => a.id !== d.id); delete A.edit.draft[d.id]; } else A.edit.ask = d.id; },
+  'gone-ok':d => { A.edit.gone[d.id] = 1; A.edit.ask = ''; },
+  'gone-no':() => { A.edit.ask = ''; },
+  'gone-undo':d => { delete A.edit.gone[d.id]; },
+  'add-st':d => { const id = uid('new'); A.edit.added.push({ id, sec:cur().sections[+d.sec].h }); A.focus = `[data-sid="${id}"]`; },
+  'edit-cancel':() => {
+    const { n } = editStats(cur());
+    if (!n) { A.mode = 'view'; A.edit = null; return; }
+    A.modal = { title:'Отменить правку?', text:`Изменения (${n}) пропадут — страница останется как была.`, ok:'Отменить правку', cancel:'Продолжить править', danger:1,
+      run:() => { A.mode = 'view'; A.edit = null; toast('Правка отменена'); } };
+  },
+  'edit-save':() => {
+    const doc = cur(), { n, blocked } = editStats(doc);
+    if (blocked) return;
+    if (!n) { A.mode = 'view'; A.edit = null; return toast('Без изменений'); }
+    if (A.cfSim && A.open === 'gpu' && find(doc, 'f1')) { buildConflict(doc); A.mode = 'conflict'; return; }
+    commitEdit(); toast('Сохранено');
+  },
+  /* конфликт */
+  'cf-pick':d => { const r = A.cf.rows[+d.i]; r.state = d.v; r.val = d.v === 'mine' ? r.mine : r.theirs; },
+  'cf-merge':d => { A.cf.rows[+d.i].merging = true; A.focus = `[data-cfm="${d.i}"]`; },
+  'cf-merge-done':d => { const r = A.cf.rows[+d.i], t = document.querySelector(`[data-cfm="${d.i}"]`).innerText.trim(); r.merging = false; r.state = 'merge'; r.val = t || r.theirs; },
+  'cf-merge-cancel':d => { A.cf.rows[+d.i].merging = false; },
+  'cf-reopen':d => { const r = A.cf.rows[+d.i]; r.state = ''; r.val = ''; },
+  'cf-save':() => {
+    const doc = cur(), loc = find(doc, 'f1'), f1 = loc[0].items[loc[1]], r = A.cf.rows[0], E = A.edit;
+    toHistory(doc, f1, 'Факты', 'прежняя формулировка ИИ');
+    Object.assign(f1, { t:THEIRS_F1, d:TODAY, q:'с увеличением до 1440p — ещё ≈ 15 мин' });
+    if (r && r.state === 'theirs') { delete E.draft.f1; delete E.gone.f1; }
+    if (r && r.state === 'merge') { delete E.gone.f1; E.draft.f1 = r.val; }
+    commitEdit(); A.cfSim = false;
+    toast('Сохранено: ваша правка слита с правкой ИИ');
+  },
+  'cf-drop':() => {
+    A.modal = { title:'Отменить вашу правку?', text:'Страница останется такой, какой её сделал ИИ в 09:20. Ваши изменения пропадут.', ok:'Отменить мою правку', cancel:'Вернуться к сравнению', danger:1,
+      run:() => { const doc = cur(), loc = find(doc, 'f1'); if (loc) Object.assign(loc[0].items[loc[1]], { t:THEIRS_F1, d:TODAY }); A.mode = 'view'; A.edit = null; A.cf = null; A.cfSim = false; toast('Ваша правка отменена — страница как у ИИ'); } };
+  },
+  /* заметка */
+  'nedit-save':() => {
+    const doc = cur(), t = document.querySelector('[data-ntitle]').innerText.trim(), b = document.querySelector('[data-nbody]').innerText.split('\n').map(s => s.trim()).filter(Boolean);
+    doc.title = t || 'Без названия'; doc.body = b; doc.updated = `сегодня в ${now()}`; delete doc.isNew; A.mode = 'view'; toast('Заметка сохранена');
+  },
+  'nedit-cancel':() => {
+    const doc = cur(); A.mode = 'view';
+    if (doc.isNew) { delete A.docs[A.open]; A.open = A.docs[A.prevOpen] ? A.prevOpen : (live()[0] || null); toast('Новая заметка не сохранена'); }
+  },
+  /* снаружи */
+  'drift-mine':() => {
+    const loc = find(A.docs.gpu, 'f2'); if (!loc) return;
+    Object.assign(loc[0].items[loc[1]], { o:'me', who:ME, d:TODAY, t:DRIFT_TEXT }); A.drift = false;
+    addJournal({ o:'me', t:'Вы приняли внешнюю правку «Очередь локальной GPU» как свою', s:'1 место в «Фактах» стало вашим' });
+    toast('Принято как ваша правка');
+  },
+  'drift-asis':() => {
+    const loc = find(A.docs.gpu, 'f2'); if (!loc) return;
+    const x = loc[0].items[loc[1]]; Object.assign(x, { o:'ext', t:DRIFT_TEXT }); delete x.who; A.drift = false;
+    addJournal({ o:'ext', t:'Внешняя правка «Очередь локальной GPU» принята как есть', s:'место помечено «изменено снаружи»' });
+    toast('Принято как есть: место помечено «изменено снаружи»');
+  },
+  /* журнал */
+  jf:d => { A.jf = d.v; },
+  'j-act':d => {
+    const j = A.journal.find(x => x.id === d.j);
+    if (j.confirm) { j.asking = true; return; }
+    applyUndo(j.undo); j.done = 'возвращено'; toast('Вернули');
+  },
+  'j-ok':d => {
+    const j = A.journal.find(x => x.id === d.j); j.asking = false; applyUndo(j.undo); j.done = 'откачено';
+    addJournal({ o:'me', t:`Вы откатили: ${j.t.charAt(0).toLowerCase() + j.t.slice(1)}`, s:'прежние формулировки — в «Истории» страницы' });
+    toast('Откачено — прежнее в «Истории»');
+  },
+  'j-no':d => { A.journal.find(x => x.id === d.j).asking = false; },
+  'j-more':d => { const j = A.journal.find(x => x.id === d.j); j.moreOpen = !j.moreOpen; },
+  /* здоровье и настройки */
+  hcheck:() => { A.hbusy = true; setTimeout(() => { A.hbusy = false; A.hcheck = `сегодня в ${now()}`; render(); toast('Проверено: новых проблем нет'); }, 700); },
+  tgl:d => {
+    A.set[d.k] = A.set[d.k] ? 0 : 1;
+    if (d.k === 'auto') toast(A.set.auto ? 'Бесспорные правки ИИ снова применяются сами' : 'Теперь каждая правка ИИ будет ждать вас во «Входящих»');
+    if (d.k === 'night') toast(A.set.night ? 'Ночной разбор включён' : 'Ночной разбор выключен — ИИ будет дописывать страницы только по вашей просьбе');
+  },
+};
+
+/* ===== Пресеты служебной шапки: «перейти к состоянию» ===== */
+const PRESETS = [
+  ['page', 'Страница вместе'], ['edit', 'Правка'], ['prop', 'Предложение ИИ'], ['conflict', 'Конфликт 409'],
+  ['drift', 'Изменили снаружи'], ['note', 'Заметка'], ['loading', 'Загрузка'], ['empty', 'Пусто'], ['nofind', 'Ничего не нашлось'],
+];
+function applyPreset(v, byClick) {
+  A = fresh(); A.preset = v; S.s = v; writeHash();
+  const seedEdit = () => {
+    A.mode = 'edit'; A.edit = { draft:{
+      f1:'Ролик на 5 секунд в 1344×768 снимается около пяти с половиной минут; для черновиков хватает 864×480.',
+      r2:'Для черновиков снимаем половинный размер 864×480, подробности — [[Замеры видео на даче]]',
+    }, gone:{ f3:1 }, added:[ { id:'new-demo', sec:'Решения' } ], ask:'' };
+    A.edit.draft['new-demo'] = 'Для превью берём 5 секунд, а не 10: разница в три раза. Как это устроено — [[Хранитель базы]].';
+  };
+  if (v === 'edit') seedEdit();
+  if (v === 'conflict') { seedEdit(); delete A.edit.draft.r2; delete A.edit.gone.f3; A.edit.added = []; buildConflict(cur()); A.mode = 'conflict'; }
+  if (v === 'prop') { A.p = 'inbox'; if (S.w === 'm') A.d = 'panel'; }
+  if (v === 'drift') { A.drift = true; A.p = 'health'; }
+  if (v === 'note') A.open = 'ideas';
+  if (v === 'loading') A.data = 'loading';
+  if (v === 'empty') { A.docs = {}; A.open = null; A.inbox = []; A.journal = []; }
+  if (v === 'nofind') { A.q = 'апскейл'; A.who = 'me'; }
+  if (byClick) toast(`Состояние: ${PRESETS.find(p => p[0] === v)[1]}`);
+}
+const NOTES = {
+  page:'Нажмите номер сноски — карточка источника, «✎ Андрей» — ваша правка. «Править» включает правку, «⋯» — меню страницы (история, журнал, «Убрать» с подтверждением). Строки дерева открывают страницы, поиск и фильтр «кто написал» фильтруют по-настоящему.',
+  edit:'Черновик правки: формулировка ИИ (сноска 3) переписана, одно утверждение убрано, в «Решениях» — ссылка в чужой проект, поэтому «Сохранить» выключено. Поправьте ссылку — кнопка включится; с галкой «409» сохранение откроет сравнение.',
+  prop:'«Входящие» раскрыты: «Заменить» / «Оставить моё», «Добавить» / «Не добавлять». Страница в центре меняется сразу, плашка уходит, в «Журнале» появляется запись.',
+  conflict:'Сохранение на изменившейся странице (409). «Оставить моё», «Взять их» или «Слить вручную» — раздел решён, «Сохранить» включается.',
+  drift:'Страницу поправили в Obsidian: «Принять как мою правку» или «Принять как есть». «Что изменилось» и жёлтая точка ведут в «Здоровье».',
+  note:'Заметка в том же дереве: «Править» → «Готово», ссылка [[…]] открывает страницу, «Перенести в вики» спрашивает подтверждение (зависит от решения 3).',
+  loading:'Скелетон дерева и документа. Выйти — любой другой пункт «Перейти к состоянию». При открытии строки дерева скелетон мелькает и сам.',
+  empty:'Ни заметок, ни вики: «Новая заметка» заводит первую запись, «Входящие» — «Спорного нет», «Журнал» пуст.',
+  nofind:'Поиск «апскейл» с фильтром «Мои» ничего не нашёл. «Искать во всех» снимает фильтр — найдётся страница, которую ведёте вместе с ИИ.',
+};
+const GUIDE = 'Всё нажимается прямо в макете. Сценарии: «Править» → поменяйте третье утверждение «Фактов» → «Сохранить» (конфликт 409); плашка «ИИ предлагает» → «Входящие»; кнопка шапки «Изменить страницу снаружи»; «Журнал» → «Откатить мою правку». Кнопки, которые уводят из раздела (рельса продукта слева, граф, «Открыть в чате»), отвечают подсказкой «в прототипе не работает».';
+
 /* ===== Обвязка ===== */
 function mk() {
-  const pills = (key, opts) => `<div class="pills">${opts.map(([v, l]) => `<button class="${String(S[key]) === String(v) ? 'on' : ''}" data-set="${key}" data-v="${v}">${l}</button>`).join('')}</div>`;
-  return `<h1>Заметки + Вики · v1</h1>
-    <div class="grp"><span class="lbl">Экран</span>${pills('s', SCREENS)}</div>
-    <div class="grp"><span class="lbl">Панель</span>${pills('p', [['','скрыта'], ...PANELS.map(p => [p[0], p[1]])])}</div>
-    <div class="grp"><span class="lbl">Ширина</span>${pills('w', [['d','1280'],['m','360']])}</div>
-    ${S.w === 'm' ? `<div class="grp"><span class="lbl">Шторка</span>${pills('d', [['','нет'],['tree','дерево'],['panel','панель'],['sheet','сноска']])}</div>` : ''}
-    <div class="grp"><span class="lbl">Тема</span>${pills('t', [['light','светлая'],['dark','тёмная']])}</div>
+  const pills = (a, cur, opts) => `<div class="pills">${opts.map(([v, l]) => `<button class="${cur === v ? 'on' : ''}" data-a="${a}" data-v="${v}">${l}</button>`).join('')}</div>`;
+  const f2 = A.docs.gpu && find(A.docs.gpu, 'f2');
+  return `<h1>Заметки + Вики · v1 · прототип</h1>
+    <div class="grp"><span class="lbl">Перейти к состоянию</span>${pills('preset', A.preset, PRESETS)}</div>
+    <div class="grp"><span class="lbl">События</span><button class="btn xs sec" data-a="ev-drift" ${A.drift || !f2 ? 'disabled' : ''}>${I('alert', 13)}Изменить страницу «снаружи»</button>
+      <label><input type="checkbox" data-chk="cf" ${A.cfSim ? 'checked' : ''}> пока правите «Очередь локальной GPU», ИИ меняет сноску 3 (→ 409)</label></div>
+    <div class="grp"><span class="lbl">Ширина</span>${pills('width', S.w, [['d', '1280'], ['m', '360']])}</div>
+    <div class="grp"><span class="lbl">Тема</span>${pills('theme', S.t, [['light', 'светлая'], ['dark', 'тёмная']])}</div>
     <div class="grp"><label><input type="checkbox" data-chk="n" ${S.n ? 'checked' : ''}> секция «Заметки» (решение 1)</label>
       <label><input type="checkbox" data-chk="marks" ${S.marks ? 'checked' : ''}> метки решений</label></div>`;
 }
-const NOTES = {
-  page:'Страница, которую ведут вместе. Сноска ИИ — номер (наведите или нажмите: цитата, источник, «Открыть в чате»), ваша — «✎ Андрей, 02.11». Сводный значок — «Ведёте вместе». В центре только документ и «Править».',
-  edit:'Правка той же страницы. Фокус на формулировке ИИ — предупреждение про «Историю». Убранное зачёркнуто с «Вернуть». Ссылка в чужой проект — понятный отказ прямо под строкой.',
-  prop:'ИИ хочет заменить ваше утверждение: плашка на странице, пунктир у строки, новое утверждение — бледно. Сравнение и решения — в правой панели «Входящие», не в центре.',
-  conflict:'Сохранение на изменившейся странице (409). Сравнение по разделам: моё / ИИ / было. Нажмите «Оставить моё» — раздел станет решённым, «Сохранить» включится.',
-  drift:'Страницу поправили в Obsidian. Плашка с двумя решениями, а сравнение — в «Здоровье» (кнопка «Что изменилось»). Значок в рельсе — жёлтая точка.',
-  note:'Заметка в том же дереве и в том же центре. «Перенести в вики» — зависит от решения 3.',
-  loading:'Скелетон дерева и документа: формы повторяют строки, ширины разные.',
-  empty:'Ни заметок, ни вики: одно пустое состояние в центре, «Входящие» — «Спорного нет».',
-  nofind:'Поиск с фильтром «Мои» ничего не нашёл: в дереве — объяснение и «Искать во всех», центр — подсказка.',
-};
-
 function render() {
   document.documentElement.dataset.theme = S.t;
   document.body.classList.toggle('nodep', !S.marks);
   document.getElementById('mk').innerHTML = mk();
-  document.getElementById('note').innerHTML = `<b>${SCREENS.find(x => x[0] === S.s)[1]}.</b> ${NOTES[S.s]} Пунктир <span class="deptag">зависит от решения N</span> — место ждёт ответа Андрея (номера — вопросы из разреза ef7a0732).`;
+  const p = A.preset && PRESETS.find(x => x[0] === A.preset);
+  document.getElementById('note').innerHTML = (p ? `<b>${p[1]}.</b> ${NOTES[p[0]]} ` : `<b>Как пройти руками.</b> ${GUIDE} `) +
+    `Пунктир <span class="deptag">зависит от решения N</span> — место ждёт ответа Андрея (номера — вопросы из разреза ef7a0732).`;
   document.getElementById('root').innerHTML = S.w === 'm' ? mobile() : desktop();
+  placeToast();
+  if (A.focus) { const el = document.querySelector(A.focus); A.focus = null; if (el) { el.focus(); const r = document.createRange(); r.selectNodeContents(el); r.collapse(false); const s = getSelection(); s.removeAllRanges(); s.addRange(r); } }
 }
 document.addEventListener('click', e => {
-  const t = e.target.closest('[data-set],[data-p],[data-d],[data-fn],[data-cf],[data-jc],[data-open]');
-  if (!t) return;
-  if (t.dataset.set) return set({ [t.dataset.set]: t.dataset.set === 'n' ? +t.dataset.v : t.dataset.v, ...(t.dataset.set === 'w' ? { d:'' } : {}) });
-  if (t.dataset.p !== undefined) return set(S.w === 'm' ? { p: t.dataset.p || S.p, d: t.dataset.p ? 'panel' : '' } : { p: t.dataset.p });
-  if (t.dataset.d !== undefined) return set({ d: t.dataset.d });
-  if (t.dataset.fn) return set(S.w === 'm' ? { fn: t.dataset.fn, d:'sheet' } : { fn: S.fn === t.dataset.fn ? '' : t.dataset.fn });
-  if (t.dataset.cf) return set({ cf: 1 });
-  if (t.dataset.jc !== undefined) return set({ jc: +t.dataset.jc });
-  if (t.dataset.open) return set({ s: ['ideas','call','recipes'].includes(t.dataset.open) ? 'note' : 'page', d:'' });
+  const t = e.target.closest('[data-a]');
+  let dirty = false;
+  if (A.fn && S.w === 'd' && !e.target.closest('.pop') && !(t && t.dataset.a === 'fn')) { A.fn = ''; dirty = true; }
+  if (A.menu && !e.target.closest('.menu') && !(t && t.dataset.a === 'menu')) { A.menu = false; dirty = true; }
+  if (!t || t.disabled) { if (dirty) render(); return; }
+  const a = t.dataset.a;
+  if (!['preset', 'theme', 'width'].includes(a)) A.preset = '';
+  const fn = ACT[a];
+  if (!fn) { console.error('Нет обработчика действия', a); return; }
+  fn(t.dataset, t);
+  render();
 });
-document.addEventListener('change', e => { const k = e.target.dataset.chk; if (k) set({ [k]: e.target.checked ? 1 : 0 }); });
-readHash(); render();
+document.addEventListener('input', e => {
+  const el = e.target;
+  if (el.classList.contains('js-q')) { A.q = el.value; A.preset = ''; renderTree(); return; }
+  if (el.dataset.sid !== undefined && A.edit) { A.edit.draft[el.dataset.sid] = el.innerText; updateEditMeta(el.dataset.sid); return; }
+  if (el.dataset.ntitle !== undefined) { document.querySelectorAll('.js-mtitle').forEach(x => x.textContent = 'Правка'); }
+});
+document.addEventListener('change', e => {
+  const k = e.target.dataset.chk;
+  if (!k) return;
+  if (k === 'cf') A.cfSim = e.target.checked;
+  else { S[k] = e.target.checked ? 1 : 0; writeHash(); }
+  render();
+});
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  if (A.modal) A.modal = null; else if (A.menu) A.menu = false; else if (A.fn) { A.fn = ''; if (A.d === 'sheet') A.d = ''; } else if (A.d) A.d = ''; else return;
+  render();
+});
+readHash();
+applyPreset(PRESETS.some(p => p[0] === S.s) ? S.s : 'page', false);
+render();
 </script>
 </body>
 </html>

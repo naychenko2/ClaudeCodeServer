@@ -166,6 +166,9 @@ WebDAV, Obsidian и Bash в вики по-прежнему не пишут, др
 | Ночной разбор, ingest, бэклог | пакеты `ai` | гейт: секция «Заметки» и создание карточки `human` запрещены |
 | Сторож старта, `relink`, проекции | системные операции | `relink` не меняет текст утверждений, автора не меняет |
 | Методы хаба `SessionHub` | записи вики нет | не задевает |
+| REST `POST /api/wiki/initialize`, `DELETE /api/wiki/section`, `POST /api/wiki/lint` (добавлено сверкой SV1) | заводят вики, удаляют раздел-сироту, пишут `_health.md` и `metrics.jsonl` | отказ `svc` уже стоит (`WikiControllerTests` «СервисныйТокен_…») |
+| REST `POST /api/wiki/chats/recalculate`, `POST /api/wiki/chats/{id}/analyze` (добавлено SV1) | пересчёт отбора чатов, разбор чата моделью → пакет `ai` | отказ `svc` уже стоит (`WikiChatsControllerTests`) |
+| Фон `WikiClassHealth` (оценка классов, добавлено SV1) | пишет выключения классов в `settings.json` и уведомление | **дыра:** в окно класса попадают пакеты `human` (`human×append`, `human×supersede`, `human×create`), свои откаты человека выключают «класс» — карточка SV1-Б ниже |
 
 ## Отклонено
 
@@ -311,3 +314,136 @@ WebDAV, Obsidian и Bash в вики по-прежнему не пишут, др
 10. **Таблица «Что зависит от решений Андрея»** — снять. Решения приняты, пункт 2 записать как «ИИ меняет ваше сам, с пометкой и «Вернуть мою»».
 
 Без изменений: экраны 409, «Изменили снаружи» (обе кнопки), «Заметка» с «Перенести в вики», секция «Заметки» с подписью «ИИ его не меняет, но читает», навигация.
+
+## Сверка швов бэка (SV1, 2026-11-02)
+
+Задача 37f3e137, Александр. Код — HEAD `feat/notes-wiki-unified` (`3e5697a51`, B1–B5; B4b принят с замечаниями, B5 на ревью RV-B5 `a11b3e44`). Только чтение кода, правок продукта нет.
+
+### Пути входа: путь за путём
+
+| Путь | Вход в коде | Что держит инвариант | Тест / сторож | Итог |
+|---|---|---|---|---|
+| `POST /api/wiki/pages/edit` | `WikiPagesController.Edit` → `WikiApplyService.EditPageAsync` | `[Authorize]`, владелец из `sub`, `svc` → 403 до тела, флаги `llm-wiki` + `notes-wiki-unified` → 409, раздел владельца, сверка `baseHash` под замком раздела | `WikiControllerPagesTests`: «СервисныйТокен_Edit_403», «Флаг_Выключен_Edit_409», «ДваСохраненияПоОдномуBaseHash…», «ПакетИИПрименилсяПослеОткрытияРедактора_409…» | закрыто |
+| `POST /api/wiki/pages/restore` | `WikiPagesController.Restore` → `RestorePageAsync` | то же; сноска на **исходную** карточку (`WikiHumanRender.ResolveRestoreCard`) | «СервисныйТокен_Restore_403», «Restore_ВозвращаетФормулировкуЧеловека…», «Restore_ФормулировкаНеЧеловека_400» | закрыто; на живых данных не сработает до 0647850e (ниже) |
+| `POST /api/wiki/adopt` `mode: mine` | `WikiController.Adopt` → `AdoptMineAsync` | `svc` → 403 в любом режиме; `mine` под обоими флагами; `baseHash` обязателен | `WikiAdoptTransferTests` «СервисныйТокен_Adopt_ВЛюбомРежиме_403» | закрыто (детали — RV-B5) |
+| `POST /api/wiki/ingest/note` `transfer: true` | `WikiController.TransferNote` → `WikiNoteTransfer.TransferAsync` → `EditPageAsync` | `svc` → 403 до ветки; флаги; страница — пакетом `human` тем же конвейером; заметка — через `NotesService` | `WikiAdoptTransferTests` «Перенос_…» (8 тестов) | закрыто (детали — RV-B5) |
+| `WikiPackagesController` decide / accept-all / revert / retract | контроллер | `svc` → 403 | `WikiPackagesControllerTests` «СервисныйТокен_…» (4) | закрыто (B2a) |
+| `PUT /api/wiki/settings`, `PUT /api/wiki/chats/{id}/mark`, `POST …/recalculate`, `POST …/{id}/analyze` | `WikiSettingsController`, `WikiChatsController` | `svc` → 403 раньше флага | `WikiSettingsControllerTests`, `WikiChatsControllerTests` «…СервисныйТокен…» | закрыто (B2b) |
+| `initialize`, `DELETE section`, `lint` | `WikiController` | `svc` → 403 | `WikiControllerTests` «СервисныйТокен_…» | закрыто |
+| Ночь `WikiNightlyService` | → `WikiChatIngestService` → `WikiIngestService` | своего вызова `WikiApplyService` у ночи нет (проверено поиском по сборке) | ревью B4a | закрыто |
+| MCP `wiki_ingest`, `wiki_add_fact` | `NotesToolset` → заявка → `WikiIngestService` | пакет строится кодом с `Author = ai` (`WikiIngestService.cs:381`); сноски рендер ставит только на карточку своего источника; гейт `CheckAuthorRules` | `WikiGateTests` «карточкаHumanОтПакетаAi_отбита», «пакетAiПодменилСуществующуюКарточкуHuman_отбит», «Заметки…автора human» | закрыто |
+| MCP правки от имени человека | — | нет ни одного вызова `EditPageAsync`/`RestorePageAsync`/`AdoptMineAsync`/`TransferAsync` вне контроллеров | `McpToolsetStabilityTests` | закрыто |
+| Единственный писатель | `WikiApplyService` (обе ветки автора) и `WikiKeeper` | пакет `human` — `WikiPackageStore.CreateHuman` (только `accepted`, только `human`); рендер `WikiHumanRender`, затем общий `PrepareUnderLock` → `WriteUnderLock` | `WikiApplyHumanTests` | закрыто |
+| ИИ меняет `human` только по правилу замены | `WikiApplyPolicy.Decide` → `ReplacementBlocker` | одно правило для обеих целей; класс `…@human` из сносок цели (`WikiPlanValidator.cs:283`) | `WikiApplyPolicyTests` (B4c) | закрыто |
+| `retract` не снимает сноски `human` | `WikiRetractService.TraceOf` → `Trace.Other` | — | «Retract_ИсточникЧеловека_СноскиHumanНеСнимаются» (мутация красная, RV-B4b) | закрыто |
+| Оценка классов `WikiClassHealth` | фон | — | — | **дыра SV1-Б** |
+
+### Находки
+
+**Блокирующие для F-шагов:**
+
+1. **critical — ИИ-замена не переносит прежнюю формулировку в «Историю»** (дефект `0647850e`, найден на B4b). `WikiPlanValidator.RenderApply` для `supersede` пишет на месте. Без этого не работают предохранители 1, 3 и 5: формулировка человека пропадает, «Вернуть мою» и возврат при `retract` её не находят. Кому: Тимур. Файл: `WikiPlanValidator.cs` (`RenderApply`), формат строки «Истории» — общий с `WikiHumanRender` (одна точка, а не вторая копия переноса). Критерий: автозамена `supersede@human` через `ApplyAsync` → строка человека дословно в «Истории» со своими сносками; затем `POST pages/restore` и `retract` источника возвращают её без ручной подготовки фикстуры; мутация «писать на месте» краснеет.
+2. **major — фронту нечем рисовать авторство, ✎ и метки замен** (SV1-В `1c7f1523`; журнальную часть закрывает `5d7f7087`). Признак авторства считается (`WikiProjections.Authorship`), но ни один эндпоинт его не отдаёт. Происхождение сноски видно только из шапки карточки. Пару для «Вернуть мою» и дату замены не достать: строка `apply` журнала не несёт id пакета, `overrodeHuman` не выходит в DTO. Кому: Тимур, до F-шагов страницы и журнала.
+3. **major — пакеты `human` попадают в оценку классов** (SV1-Б `470303a7`). Свои откаты человека выключают «класс» `human×append` или `human×supersede`, а «Настройки» и уведомление врут. Кому: Тимур, до F6.
+4. **major — отказы гейта без кода** (SV1-Г `a3eb777b`). Сейчас `violations` — строки с путём и guid раздела, редактору нечего подсветить. Кому: Тимур, до F4.
+
+**Неблокирующие:**
+
+5. major — карточка `human` не хранит ни снимка текста, ни `editor` (SV1-Д `c730c69a`). §2 расходится с кодом: «ИИ цитирует «Заметки»» неисполнимо. Решают Софья с Александром: снимок в тело карточки или правка §2.
+6. minor — `WikiPackageStore.Create` не отвергает `Author = human` (защита в глубину). Сейчас единственный вызывающий ставит `ai` константой. Поправить строкой попутно с SV1-Б.
+7. minor — у «Перенести в вики» для занятого имени тот же код `409 wiki_page_changed`, что у edit, но без `page`. Фронт различает по `page == null`. Лучше свой код `wiki_page_exists` попутно с SV1-Г.
+8. minor — отказ `svc` скопирован в пять контроллеров, и сторожа «у каждой мутирующей ручки `/api/wiki` есть отказ `svc`» нет: новая ручка без отказа пройдёт незамеченной. Предложение — рефлексивный сторож по `[HttpPost|Put|Delete]` под `api/wiki`, отдельным шагом Глеба/Тимура.
+9. minor — `ADR §4 «Конкуренция»`: «пакет ИИ на странице, которую поправил человек, получает `stale`» точнее звучит так: `stale`, только если его **цель** изменилась (`append` на ту же страницу проходит). Код прав, формулировка ADR — с этой оговоркой.
+10. Из RV-B4b, уже заведено: тест на `NightSummary` до мержа (В1); `a926de19` — «противоречие на N страницах» считает любые цели (В4); различение «заменил / оспорил» — поле `op` в `overrides` (SV1-В).
+
+## Контракт для фронта (SV1, 2026-11-02)
+
+Источник правды — контроллеры `WikiPagesController`, `WikiController`, `WikiPackagesController`, `WikiSettingsController`. Всё ниже — по HEAD `3e5697a51`. Помеченное **(SV1-В/Г)** — поля, которые появятся после бэк-доработок; до них фронт на них не опирается.
+
+### Общее
+
+- Отказы — `{code, message}`; `401` и `404` без тела. `403` сервисному токену — `{error}` (фронт его не получает). Обёртка `WikiError` сейчас отдаёт только `code`/`message`: для `409 wiki_page_changed` фронту нужно читать и поле `page` тела — расширить обёртку в F4.
+- Хэш страницы — sha256 байтов файла, hex в нижнем регистре. Его отдают `GET /api/wiki/page` (`hash`) и успешный ответ правки.
+- Нормализация: сервер сравнивает утверждения после снятия ссылок на сноски `[^…]`, схлопывания пробелов и NFC (`WikiHumanEditPlanner.Normalize`). Фронт текст **не** нормализует и шлёт как есть. Разница только в форме Unicode правкой не считается.
+
+### `POST /api/wiki/pages/edit`
+
+Запрос: `{section, page, baseHash, content}`.
+- `section` — ключ раздела (`common`, `personal`, `projects/{id}`); `page` — путь страницы от `pages/` (`Проекты/{id}/Тема.md`), должен принадлежать разделу.
+- `baseHash` — `hash` из `GET page`, с которым открыт редактор; `null` — создание новой страницы.
+- `content` — **полный** новый текст страницы в той же форме, что `content` из `GET page`. Шапку человек меняет только в полях `summary`, `aliases`, `owns`; заголовок `# …` не меняется. Ссылки на сноски `[^sN]` и блок их определений фронт оставляет как пришли. У новых и изменённых строк сноски ставит сервер. Убранная строка уходит в «Историю» с причиной «снято человеком», физически не удаляется. «Заметки» — последняя секция, без сносок.
+
+Ответы:
+| Код | Тело | Что делать UI |
+|---|---|---|
+| 200 | `{status:"applied", packageId, hash, content}` | заменить текст и `baseHash` на пришедшие |
+| 200 | `{status:"unchanged", hash}` | ничего не изменилось, пакета нет |
+| 409 `wiki_page_changed` | `{code, message, page:{pageKey, content, hash} \| null}` | сравнение «Моё / ИИ / Было»: «Моё» — текст редактора, «ИИ» — `page.content`, «Было» — текст при открытии. Повтор — с `page.hash`. `page:null` — страницы больше нет |
+| 409 `wiki_drift` | `{code, message}` | раздел разошёлся с журналом: экран «Изменили снаружи» (adopt) |
+| 409 `wiki_unified_off` | `{code, message}` | выключен `llm-wiki` или `notes-wiki-unified` |
+| 409 `wiki_section_off` / `wiki_sphere_reserved` | `{code, message}` | раздел локального проекта или сферы — править нельзя |
+| 400 `wiki_edit_invalid` | `{code, message, violations: string[]}` (+ `issues` **(SV1-Г)**) | `message` — первая причина по-русски, `violations` — все; строка начинается с `«путь»: `, префикс срезать |
+| 400 `wiki_section_key` / `wiki_page_key` | `{code, message}` | ошибка вызывающего |
+| 403 `wiki_foreign`, 404 `wiki_project_missing`, 409 `wiki_refused` | `{code, message}` | чужой раздел, раздел-сирота, вики не заведена или сбой |
+
+Тексты `wiki_edit_invalid`, которые человек увидит чаще всего: «поля шапки … человек не правит: доступны только summary, aliases, owns»; «заголовок страницы не правится: переименование — отдельное действие»; «карточка источника неизменяема: её не правят»; «утверждения «Истории» не убираются: физического удаления нет»; «у страницы нет секции «История»: убрать утверждение некуда»; ссылки: «ссылка '[[X]]' в раздел '…' — вбок или вниз, допустимы только …», «… на неизвестную страницу», «… не найдена в разделе и вверх по цепочке», «… резолвится только в чужом разделе '…' — вбок или вниз»; «в секции «Заметки» нет сносок». Кодов у них до SV1-Г нет. После SV1-Г: `issues[].code` ∈ `wiki_link_sideways`, `wiki_link_unknown`, `wiki_link_prefix`, `wiki_header_field`, `wiki_title_change`, `wiki_notes_footnote`, `wiki_parse`, `wiki_other`.
+
+### `POST /api/wiki/pages/restore` («Вернуть мою»)
+
+Запрос: `{section, page, baseHash, current, restore}`. `current` — текст действующего утверждения, которым ИИ заменил формулировку человека; `restore` — строка человека из «Истории». Обе можно слать с `[^sN]`, сервер их снимет. Пару берёт `overrides[]` из `GET page` **(SV1-В)**: `statement` → `current`, `previous` → `restore`. Ответы — как у edit. 400 `wiki_edit_invalid`: «страницы нет: возвращать нечего», «нужны действующее утверждение и формулировка из «Истории»», формулировка не человека. Новой карточки restore не создаёт; в журнале — строка `op:"restore"`, `actor:"user"`.
+
+### `POST /api/wiki/adopt`
+
+Запрос: `{section, page, mode?, baseHash?}`. `mode`: `"as-is"` (по умолчанию, без флага) или `"mine"` («Принять как мою правку», под обоими флагами, `baseHash` обязателен — `hash` файла из `GET page` при показе дрейфа). Другое значение → 400 `wiki_adopt_mode`.
+- `as-is`: 200 `{status:"applied"}`; 409 `wiki_drift` / `wiki_refused`.
+- `mine`: ответы как у edit (200 applied/unchanged, 409 `wiki_page_changed` — файл правили ещё раз, 409 `wiki_drift` — дрейф **других** страниц раздела, 400 `wiki_edit_invalid` — в том числе «версия страницы из манифеста не сохранена: сравнить нечем. Примите расхождение как есть…» → UI предлагает «Принять как есть»).
+
+### `POST /api/wiki/ingest/note` с `transfer: true` («Перенести в вики»)
+
+Запрос: `{noteId, transfer: true}`. `target` задавать нельзя (400 `wiki_transfer_target`). Дом страницы — дом заметки: личный vault → «Личное», `notes/` проекта → раздел проекта. Подтверждение «заменить заметку ссылкой» спрашивает UI **до** вызова: ручка делает обе записи сразу.
+| Код | Тело |
+|---|---|
+| 200 | `{outcome:"transferred", section, page, packageId}` |
+| 404 `not_found` | заметки нет или чужая |
+| 409 `wiki_note_transferred` | заметка уже перенесена (в ней ссылка) |
+| 409 `wiki_page_changed` **без `page`** | имя страницы занято: «переименуйте заметку и повторите перенос» (позже — `wiki_page_exists`, минор 7) |
+| 409 `wiki_unified_off` / `wiki_not_initialized` | флаги / вики не заведена |
+| 400 `wiki_edit_invalid` | `{violations}`, как у edit; «в заметке нет текста для утверждений» |
+| 400 `wiki_note_id` | нет id, временная заметка, комментарий к документу, страница вики |
+
+### Авторство, сноски, метки
+
+- **Признак страницы** `authorship: "ai" | "together" | "human"` — `WikiProjections.AuthorshipAi/Together/Human`, считается по сноскам: нет `human` → «ИИ»; только `human` → «человек»; иначе «вместе». Отдаётся **(SV1-В)** в `WikiPageInfoDto` (`GET /api/wiki/section`, строка дерева) и в `GET /api/wiki/page`. Значок «заметка» фронт ставит сам по источнику: это строки из API заметок, не из вики.
+- **Сноска человека** — сноска на карточку `type: source, origin: human`, путь `{раздел}/Источники/Правка человека {8 символов id пакета}.md`, шапка `ref: human:{packageId}`, `captured` (ISO 8601) — время правки, оно же `ts` строки журнала. Цитата сноски — сам текст утверждения. Рисуется значком «✎ вы, {captured}». До SV1-В происхождение видно только по шапке карточки (`GET page` карточки). После SV1-В — `footnotes[] {label, card, origin, captured}` в `GET page`.
+- **«ИИ заменил вашу формулировку · дата»** (14 дней) и **«ИИ оспаривает»** — `overrides[] {op: "supersede"|"conflict", statement, previous, at, packageId}` в `GET page` **(SV1-В)**. Сервер выводит их из журнала, фронт окно 14 дней не считает. Страница с автооспариванием получает `status: disputed` в шапке (`WikiPageInfoDto.status`).
+- **Журнал** `GET /api/wiki/journal?section&origin&class&take` → `{entries[], take, linesRead, invalidLines}`, запись `{ts, op, section, actor, source, origin, sourceName, pages, packages, status, policy, classes}`. Правки человека: `op ∈ {edit, restore, adopt}`, `actor:"user"`, `origin:"human"`. Откаты: `op ∈ {revert, retract}`, `actor:"user"`. Замены ИИ: `op:"apply"`, `actor:"keeper"`, `classes` с хвостом `@human`. Фильтр `class=` уже принимает ключи `…@human`. **(в работе по `5d7f7087`, на 02.11 не закоммичено):** `overrodeHuman: bool` и `overrodeKind: "replaced" | "disputed" | null` в записи, параметр `overrodeHuman=true` — фильтр «ИИ поменял моё». **(SV1-В):** `packages` у строк `apply`. До `overrodeKind` «заменил» и «оспорил» различаются по `classes` (`…×supersede@human` / `…×conflict@human`).
+- **Откатить свою правку** — `POST /api/wiki/packages/{packageId}/revert` с `packageId` из ответа edit или из журнала. Это откат: он включает карантин N7d на 7 дней. `retract` по карточке `human` ничего не снимает, так задумано (предохранитель 5).
+
+### «Входящие»: причины правила замены
+
+Причина операции приходит текстом в `WikiPackageOperationDto.reason` (`GET /api/wiki/packages`, `GET …/{id}`). Устойчивого кода нет: фронт показывает текст как есть. Начало строки ↔ строка макета:
+
+| Начало `reason` | Пункт ADR / макета |
+|---|---|
+| «Неизвестно, когда написан источник:» | «Неизвестно, когда написан источник» |
+| «Источник старше вашей правки (дата)» | «Источник старше вашей правки» |
+| «Неизвестно, когда написан источник утверждения» | «Неизвестно, когда написан источник утверждения» |
+| «Источник не новее заменяемого утверждения» | «Источник не новее заменяемого утверждения» |
+| «страницу откатили вручную {дата}» | «Вы недавно откатывали эту страницу» (N7d) |
+| «класс правки «…» выключен» | «Класс выключен» |
+| «целевая страница в статусе «disputed»/«drift»» | общий риск §12г |
+
+Цель — утверждение человека, если `class` операции оканчивается на `@human`. Тогда кнопки «Заменить» и «Оставить моё»: `POST /api/wiki/packages/{id}/decide {index, accept: true}` и `{index, accept: false, reason}`. Причина отказа обязательна, фронт подставляет «оставлено человеком».
+
+### Класс `@human` в «Настройках»
+
+`GET /api/wiki/settings` → `classes[] {class, disabled, reason, disabledAt, resumedAt, applied7, retracted7, share7, applied30, retracted30, share30}`. Строка «Замена ваших формулировок» — **агрегат** записей с `class`, оканчивающимся на `×supersede@human` и `×conflict@human` (по одной на `origin`). Состояние «выключено автоматикой: …» — любая из них `disabled`, текст — её `reason`. «Снова применять само» — `PUT /api/wiki/settings {class, enable: true}` по **каждой** выключенной записи агрегата. Записи `human×…` (без `@`) до SV1-Б — шум, фронт их не показывает.
+
+### Недостающие куски API (бэк, до F-шагов)
+
+1. `authorship` в `GET section` / `GET page` — SV1-В `1c7f1523`, Тимур, до F-шагов дерева и страницы.
+2. `footnotes[]` с `origin`/`captured` и `overrides[]` в `GET page` — SV1-В, до F-шага метки замены и «Вернуть мою».
+3. `overrodeHuman`, `overrodeKind` и фильтр `overrodeHuman=true` — `5d7f7087` (идёт параллельно); `packages` у строк `apply` — SV1-В. До F6b. Ссылка уведомления на журнал с фильтром — после F-шага, который заведёт diplink подвкладки.
+4. `issues[]` с кодами отказа гейта — SV1-Г `a3eb777b`, до F4.
+5. Пакеты `human` вне оценки классов — SV1-Б `470303a7`, до F6.
+6. Перенос в «Историю» у ИИ-замены — `0647850e`, до любого F-шага с «Вернуть мою» (critical).

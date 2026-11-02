@@ -4,7 +4,7 @@
 
 import type { CSSProperties } from 'react';
 import { FileText, PenLine, Sparkles, TriangleAlert, Users } from 'lucide-react';
-import { C, R } from '../../../lib/design';
+import { C, R } from 'aihome_shell/kit';
 import { ICON_STROKE } from '../../../components/ui/icons';
 
 export type OriginKind = 'note' | 'ai' | 'me' | 'mix' | 'ext';

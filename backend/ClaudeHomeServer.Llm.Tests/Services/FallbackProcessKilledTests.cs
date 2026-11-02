@@ -16,6 +16,8 @@ namespace ClaudeHomeServer.Tests.Services;
 public class FallbackProcessKilledTests
 {
     private readonly List<ServerMessage> _downstream = [];
+    // Взводится приёмником на первом ResultMessage: ждём событие, а не опрашиваем список по часам
+    private readonly TaskCompletionSource _finalResult = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private sealed class FakeInnerAdapter(Session info) : ILlmSessionAdapter
     {
@@ -89,7 +91,12 @@ public class FallbackProcessKilledTests
         var inner = new FakeInnerAdapter(session);
         var sut = new FallbackLlmSessionAdapter(inner,
             () => session.Model,
-            msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
+            msg =>
+            {
+                lock (_downstream) _downstream.Add(msg);
+                if (msg is ResultMessage) _finalResult.TrySetResult();
+                return Task.CompletedTask;
+            },
             pool, BuildProviders(), Path.GetTempPath(), launcher: null, initialProfileRoot: null,
             effectiveChain: chain is null ? null : () => chain,
             events: new TurnEventBus());
@@ -102,15 +109,17 @@ public class FallbackProcessKilledTests
         lock (_downstream) return [.. _downstream];
     }
 
-    private async Task WaitForAsync(Func<bool> condition, string what)
+    // Потолок 30 с — страховка от зависания, а не проверяемая скорость
+    private async Task WaitFinalResultAsync()
     {
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (DateTime.UtcNow < deadline)
+        try
         {
-            if (condition()) return;
-            await Task.Delay(10);
+            await _finalResult.Task.WaitAsync(TimeSpan.FromSeconds(30));
         }
-        throw new TimeoutException($"не дождались: {what}");
+        catch (TimeoutException)
+        {
+            throw new TimeoutException("не дождались: финальный result");
+        }
     }
 
     private static string KilledDetails =>
@@ -149,7 +158,7 @@ public class FallbackProcessKilledTests
         inner.Scripts.Enqueue(() => inner.Emit(new ResultMessage("success", 10, 1, null, null)));
 
         await sut.SendMessageAsync("сделай что-нибудь");
-        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+        await WaitFinalResultAsync();
 
         inner.Attempts.Should().HaveCount(1, "oom-kill на нашей машине смена пары не лечит");
         Downstream().OfType<ProviderSwitchedMessage>().Should().BeEmpty();
@@ -171,7 +180,7 @@ public class FallbackProcessKilledTests
         inner.Scripts.Enqueue(() => inner.Emit(new ResultMessage("success", 10, 1, null, null)));
 
         await sut.SendMessageAsync("сделай что-нибудь");
-        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+        await WaitFinalResultAsync();
 
         inner.Attempts.Should().HaveCount(2);
         inner.Attempts[1].Provider.Should().Be("p1", "p2 без ApiKey пропущен, а не опробован");
@@ -186,7 +195,7 @@ public class FallbackProcessKilledTests
         inner.Scripts.Enqueue(() => inner.Emit(new ExitedMessage()));
 
         await sut.SendMessageAsync("сделай что-нибудь");
-        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+        await WaitFinalResultAsync();
 
         inner.Attempts.Should().HaveCount(1, "единственный шаг дальше не настроен — попытки на нём нет");
         Downstream().OfType<ResultMessage>().Should().ContainSingle().Which.Subtype.Should().Be("error");

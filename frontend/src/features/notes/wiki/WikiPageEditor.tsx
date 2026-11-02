@@ -8,12 +8,13 @@
 // ответ, пришедший после смены страницы или ухода с неё, отбрасывается по ключу страницы
 // (раздел + путь) — ни состояния, ни onDone. Любой отказ ловится здесь: наружу rejection
 // не выходит. 409 wiki_page_changed ничего не перезаписывает: «моё» и свежая версия хранятся
-// в conflict — точка расширения для сравнения «Моё / ИИ / Было» (шаг F4b, WikiEditConflict).
+// в conflict — сравнение «Моё / ИИ / Было» (F4b, WikiEditConflict). «Взять мою» шлёт тот же submit
+// с baseHash свежей версии; если пришёл ещё пакет ИИ — снова 409 и новое сравнение, без перезаписи.
 
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { AlertTriangle, Archive, Check, Info, Undo2 } from 'lucide-react';
-import { C, FONT, FS, R, SP, useIsMobile, WikiError, editWikiPage, wikiFootnoteLabel, type WikiConflictPage, type WikiFootnoteDto, type WikiSectionDto } from 'aihome_shell/kit';
+import { C, FONT, FS, R, SP, useIsMobile, WikiError, editWikiPage, loadWikiPage, wikiFootnoteLabel, type WikiFootnoteDto, type WikiSectionDto } from 'aihome_shell/kit';
 import { Badge } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
 import { TextArea } from '../../../components/ui/Field';
@@ -21,6 +22,7 @@ import { IconButton } from '../../../components/ui/IconButton';
 import { Notice } from '../../../components/ui/Notice';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { EDIT_ISSUE_TITLE, EDIT_TEXT, stripViolationPrefix, wikiErrorText } from './wikiLabels';
+import { WikiEditConflict, type Conflict } from './WikiEditConflict';
 
 // ─── Разбор текста для правки (зеркало разбора страницы: шапка → «# заголовок» → «## секции») ───
 
@@ -111,24 +113,32 @@ interface Props {
   onDone: (r: EditDone) => void;
 }
 
-interface Conflict { mine: string; theirs: WikiConflictPage | null }
 interface Refusal { lines: { title: string | null; text: string }[]; invalid: boolean }
 
-// Плашка конфликта. Точка расширения F4b: сюда придёт сравнение «Моё / ИИ / Было»
-// (mine — текст редактора, theirs — свежая версия, Было — content при открытии)
-export function WikiEditConflict({ conflict, onClose }: { conflict: Conflict; onClose: () => void }) {
-  return (
-    <div data-testid="wiki-edit-conflict" style={{ marginTop: SP.md }}>
-      <Notice
-        tone="warning"
-        icon={AlertTriangle}
-        title={EDIT_TEXT.conflictTitle}
-        action={<Button variant="secondary" size="sm" dataTestId="wiki-edit-conflict-close" onClick={onClose}>Закрыть без сохранения</Button>}
-      >
-        {conflict.theirs ? EDIT_TEXT.conflictText : EDIT_TEXT.conflictGone}
-      </Notice>
-    </div>
-  );
+// Правки человека поверх новой базы (после «Продолжить правку»): строка находится по разделу и
+// исходному тексту, а если ИИ её переписал — по порядковому месту в разделе. Правка «убрать»
+// без точной пары не переносится: убирать нечего, решение человек примет на новой странице
+export function rebaseEdits(oldContent: string, newContent: string, edits: ReadonlyMap<number, EditEntry>): Map<number, EditEntry> {
+  const olds = scanEditable(oldContent).items;
+  const news = scanEditable(newContent).items;
+  const used = new Set<number>();
+  const out = new Map<number, EditEntry>();
+  const ordinal = (list: EditItem[], it: EditItem) => list.filter(x => x.section === it.section && x.id < it.id).length;
+  const pending: EditItem[] = [];
+  for (const o of olds) {
+    const e = edits.get(o.id);
+    if (!e || !o.editable) continue;
+    const hit = news.find(n => !used.has(n.id) && n.editable && n.section === o.section && n.text === o.text);
+    if (hit) { used.add(hit.id); out.set(hit.id, e); } else pending.push(o);
+  }
+  for (const o of pending) {
+    const e = edits.get(o.id)!;
+    if (e.gone || e.text === undefined) continue;
+    const k = ordinal(olds, o);
+    const hit = news.filter(n => n.section === o.section && n.editable)[k];
+    if (hit && !used.has(hit.id)) { used.add(hit.id); out.set(hit.id, e); }
+  }
+  return out;
 }
 
 export function WikiPageEditor({ section, pageKey, content, hash, footnotes, onDone }: Props) {
@@ -143,7 +153,7 @@ export function WikiPageEditor({ section, pageKey, content, hash, footnotes, onD
   const busyRef = useRef(false);
 
   // Базовая версия — снимок момента открытия: стор может обновиться, пока человек правит
-  const [base] = useState(() => ({ content, hash }));
+  const [base, setBase] = useState(() => ({ content, hash }));
   const { items } = scanEditable(base.content);
   const humanRefs = new Set((footnotes ?? []).filter(f => f.origin === 'human').map(f => wikiFootnoteLabel(f.label)));
 
@@ -161,21 +171,23 @@ export function WikiPageEditor({ section, pageKey, content, hash, footnotes, onD
   const blank = items.some(it => it.editable && !goneOf(it) && textOf(it).trim() === '');
   const dirty = items.some(it => it.editable && (goneOf(it) || changed(it)));
 
-  const save = async () => {
+  // Единственный путь отправки: замок и сверка ключа страницы общие для «Сохранить» и
+  // «Взять мою версию поверх». baseHash — хэш текста, на который опирается отправляемое
+  const submit = async (baseHash: string, mine: string) => {
     // Замок в ref: state обновится только к следующему рендеру, а второй клик приходит раньше
-    if (busyRef.current || conflict || blank) return;
+    if (busyRef.current) return;
     busyRef.current = true;
     setBusy(true);
     setRefusal(null);
     const startId = idRef.current;
-    const mine = buildContent(base.content, edits);
     try {
-      const r = await editWikiPage(section.key, pageKey, base.hash, mine);
+      const r = await editWikiPage(section.key, pageKey, baseHash, mine);
       if (idRef.current !== startId) return;
       onDoneRef.current({ kind: r.status === 'applied' ? 'saved' : 'unchanged' });
     } catch (e) {
       if (idRef.current !== startId) return;
       if (e instanceof WikiError && e.code === 'wiki_page_changed') {
+        // Пока шло сравнение, пришёл ещё пакет ИИ: ничего не записано, показываем новое сравнение
         setConflict({ mine, theirs: e.page });
       } else if (e instanceof WikiError && e.code === 'wiki_unified_off') {
         onDoneRef.current({ kind: 'off' });
@@ -191,6 +203,32 @@ export function WikiPageEditor({ section, pageKey, content, hash, footnotes, onD
       busyRef.current = false;
       if (idRef.current === startId) setBusy(false);
     }
+  };
+
+  const save = () => {
+    if (conflict || blank) return;
+    void submit(base.hash, buildContent(base.content, edits));
+  };
+
+  // Только по явному клику: текст человека поверх свежей версии (baseHash — её хэш, не старый)
+  const takeMine = () => {
+    if (!conflict?.theirs) return;
+    void submit(conflict.theirs.hash, conflict.mine);
+  };
+
+  const takeAi = () => {
+    if (busyRef.current) return;
+    loadWikiPage(section.key, pageKey).catch(() => undefined);
+    onDoneRef.current({ kind: 'cancel' });
+  };
+
+  const keepEditing = () => {
+    const t = conflict?.theirs;
+    if (busyRef.current || !t) return;
+    setEdits(prev => rebaseEdits(base.content, t.content, prev));
+    setBase({ content: t.content, hash: t.hash });
+    setAsk(null);
+    setConflict(null);
   };
 
   const bySection: { name: string; items: EditItem[] }[] = [];
@@ -218,13 +256,23 @@ export function WikiPageEditor({ section, pageKey, content, hash, footnotes, onD
           loading={busy}
           disabled={!dirty || blank || conflict !== null}
           leftIcon={<Check size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
-          onClick={() => { void save(); }}
+          onClick={save}
         >
           {EDIT_TEXT.save}
         </Button>
       </div>
 
-      {conflict && <WikiEditConflict conflict={conflict} onClose={() => onDone({ kind: 'cancel' })} />}
+      {conflict && (
+        <WikiEditConflict
+          conflict={conflict}
+          was={base.content}
+          busy={busy}
+          onTakeMine={takeMine}
+          onTakeAi={takeAi}
+          onKeepEditing={keepEditing}
+          onClose={() => onDone({ kind: 'cancel' })}
+        />
+      )}
 
       {refusal && (
         <div data-testid="wiki-edit-error" style={{ marginTop: SP.md }}>

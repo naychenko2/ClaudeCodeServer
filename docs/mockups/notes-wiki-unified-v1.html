@@ -1,0 +1,788 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Заметки + Вики: один раздел, навигация только в боковых панелях · v1</title>
+<!--
+  Макет к записке notes-wiki-unified-v1.md. Код продукта не правится.
+  Привязка: featureId 05c5938f-98ae-4726-884f-d7140c91b937 (эпик «Заметки+Вики: один раздел, который ведут человек и ИИ вместе»),
+  задача дизайна 5dc008cc. Шаги реализации ещё не нарезаны (stepRef появится у Егора) — первым пойдёт «навигация в боковые панели».
+  Модель — разрез Александра (задача ef7a0732), рекомендованный вариант Б: страница — один текст, файлы пишет только Хранитель,
+  правка человека идёт через него под именем автора, у каждого утверждения есть происхождение. Решения Андрея ещё не приняты:
+  места, которые от них зависят, обведены пунктиром C.planBorder с меткой «зависит от решения N» (номера — вопросы Андрею из разреза).
+  Главное правило макета: в контентной зоне нет навигации — ни вкладок, ни «Назад», ни крошек. Дерево — левая панель,
+  «Входящие / Журнал / Здоровье / Настройки» — правая панель и её рельса (на 360 — выезжающие шторки).
+-->
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css, семантика — C.* из design.ts.
+   Единственное место с сырыми значениями; ниже — только var(--c-*). ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-dashed:#D0C6B4; --c-overlay:rgba(23,19,15,.42);
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-plan:#6C5CB0; --c-plan-light:#EEEBF8; --c-plan-text:#4E4196; --c-plan-border:#D6CFEF;
+  --c-diff-add-bg:#E8F5E9; --c-diff-add-text:#1B5E20; --c-diff-rem-bg:#FFEBEE; --c-diff-rem-text:#B71C1C;
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 18px rgba(60,50,35,.06);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-sheet:0 -8px 28px rgba(60,50,35,.18);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-dashed:#4A443B; --c-overlay:rgba(0,0,0,.62);
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-plan:#9385D8; --c-plan-light:#2A2540; --c-plan-text:#B0A4E6; --c-plan-border:#45406A;
+  --c-diff-add-bg:#1E2E1E; --c-diff-add-text:#8FCB79; --c-diff-rem-bg:#33201E; --c-diff-rem-text:#EE8A72;
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-island:0 1px 2px rgba(0,0,0,.4),0 8px 22px rgba(0,0,0,.35);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  --shadow-sheet:0 -10px 32px rgba(0,0,0,.55);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45);
+}
+* { box-sizing:border-box; }
+html,body { margin:0; }
+body { background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.45; }
+button { font:inherit; color:inherit; border:0; background:none; margin:0; padding:0; -webkit-appearance:none; appearance:none; cursor:pointer; }
+button:focus-visible, [tabindex]:focus-visible, textarea:focus-visible, input:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+input, textarea { font:inherit; color:var(--c-text-primary); }
+svg { flex-shrink:0; }
+.serif { font-family:"PT Serif",Georgia,serif; }
+.mono { font-family:"JetBrains Mono","Courier New",monospace; }
+/* Метка «зависит от решения Андрея» — пунктир C.planBorder; не продукт */
+.dep { outline:1.5px dashed var(--c-plan-border); outline-offset:3px; border-radius:8px; position:relative; }
+.deptag { display:inline-flex; font-size:10px; font-weight:700; color:var(--c-plan-text); background:var(--c-plan-light);
+  border-radius:6px; padding:0 6px; line-height:16px; white-space:nowrap; }
+.nodep .dep { outline:none; } .nodep .deptag { display:none; }
+
+/* ===== Обвязка макета (не продукт) ===== */
+.mk { position:sticky; top:0; z-index:100; display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center;
+  padding:10px 16px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.mk h1 { margin:0; font-size:15px; font-weight:600; color:var(--c-text-heading); }
+.mk .grp { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.mk .lbl { font-size:10px; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.05em; }
+.mk label { font-size:12px; color:var(--c-text-secondary); display:flex; gap:4px; align-items:center; }
+.mknote { max-width:1280px; margin:10px auto 0; padding:0 16px; font-size:12.5px; color:var(--c-text-secondary); }
+.mknote b { color:var(--c-text-heading); }
+
+/* ui/PillSwitch / SegmentedControl — только в обвязке макета */
+.pills { display:inline-flex; flex-wrap:wrap; gap:2px; padding:2px; background:var(--c-bg-selected); border-radius:9px; }
+.pills button { color:var(--c-text-secondary); padding:4px 10px; border-radius:7px; font-size:12px; }
+.pills button.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-thumb); font-weight:600; }
+
+/* ===== Окно продукта ===== */
+.stage { padding:14px 16px 40px; display:flex; justify-content:center; }
+.app { position:relative; width:1280px; flex-shrink:0; height:800px; border:1px solid var(--c-border); border-radius:14px;
+  background:var(--c-bg-main); overflow:hidden; display:flex; gap:8px; padding:8px; transform:translateZ(0); }
+.app.m { width:360px; height:760px; border-radius:28px; padding:0; gap:0; flex-direction:column; }
+.rail { width:40px; flex-shrink:0; display:flex; flex-direction:column; align-items:center; gap:4px; padding-top:4px; }
+/* ui/RailIconButton */
+.rb { position:relative; width:34px; height:34px; border-radius:8px; color:var(--c-text-secondary); display:flex; align-items:center; justify-content:center; }
+.rb:hover { background:var(--c-bg-selected); }
+.rb.on { background:var(--c-bg-white); color:var(--c-accent); box-shadow:var(--shadow-thumb); }
+.rb .cnt { position:absolute; top:-3px; right:-4px; }
+.rsep { width:20px; height:1px; background:var(--c-border); margin:4px 0; }
+.isl { background:var(--c-bg-white); border-radius:14px; box-shadow:var(--shadow-island); overflow:hidden; display:flex; flex-direction:column; min-height:0; position:relative; }
+.left { width:280px; flex-shrink:0; }
+.right { width:330px; flex-shrink:0; }
+.center { flex:1; min-width:0; }
+
+/* Шапки островов (PanelShell / IslandHeader) */
+.ph { display:flex; align-items:center; gap:6px; height:44px; padding:0 8px 0 14px; flex-shrink:0; }
+.ph .ttl { font-family:"PT Serif",Georgia,serif; font-size:16px; font-weight:700; color:var(--c-text-heading); margin-right:auto; display:flex; align-items:center; gap:8px; }
+.ph .ttl.ui { font-family:inherit; font-size:13px; font-weight:600; }
+.mhead { display:flex; align-items:center; gap:4px; height:56px; padding:0 6px; border-bottom:1px solid var(--c-border); background:var(--c-bg-main); flex-shrink:0; }
+.mhead .ttl { font-size:15px; font-weight:600; color:var(--c-text-heading); flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:0 4px; }
+
+/* ui/IconButton */
+.ib { position:relative; width:28px; height:28px; border-radius:8px; color:var(--c-text-secondary); display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; }
+.ib:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+.ib.xs { width:24px; height:24px; }
+.app.m .ib { width:40px; height:40px; border-radius:10px; }
+.ib .cnt { position:absolute; top:2px; right:1px; }
+/* ui/CountBadge */
+.cnt { min-width:16px; height:16px; padding:0 4px; border-radius:999px; background:var(--c-accent); color:var(--c-on-accent); font-size:10px; font-weight:700; line-height:16px; text-align:center; }
+.cnt.muted { background:var(--c-bg-selected); color:var(--c-text-secondary); }
+.dot { position:absolute; top:6px; right:6px; width:7px; height:7px; border-radius:50%; background:var(--c-warning); }
+/* ui/Button */
+.btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; font-weight:600; white-space:nowrap; }
+.btn.xs { height:24px; padding:0 9px; font-size:12px; border-radius:8px; }
+.btn.sm { min-height:32px; padding:6px 12px; font-size:13px; border-radius:10px; }
+.btn.pri { background:var(--c-accent); color:var(--c-on-accent); }
+.btn.pri:hover { filter:brightness(.96); }
+.btn.sec { background:var(--c-bg-panel); color:var(--c-text-primary); }
+.btn.sec:hover { background:var(--c-bg-selected); }
+.btn.gh { color:var(--c-text-secondary); }
+.btn.gh:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+.btn.dng { background:var(--c-danger-bg); color:var(--c-danger-text); }
+.btn.dashed { border:1px dashed var(--c-dashed); color:var(--c-text-secondary); }
+.btn:disabled { opacity:.5; cursor:default; filter:none; }
+.app.m .btn.sm, .app.m .btn.xs { min-height:40px; height:auto; }
+.lnk { color:var(--c-accent); font-weight:600; font-size:12px; border-radius:6px; padding:2px 4px; display:inline-flex; align-items:center; gap:4px; }
+.lnk:hover { background:var(--c-accent-light); }
+.app.m .lnk { min-height:36px; }
+
+/* ui/Field (IconField) */
+.field { display:flex; align-items:center; gap:6px; height:32px; padding:0 10px; border:1px solid var(--c-border); border-radius:10px; background:var(--c-bg-card); color:var(--c-text-muted); }
+.field input { border:0; outline:0; background:transparent; flex:1; min-width:0; font-size:13px; }
+.app.m .field { height:40px; }
+/* ui/Chip (toggle) */
+.chips { display:flex; gap:4px; flex-wrap:wrap; }
+.app.m .chips { flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; }
+.chip { display:inline-flex; align-items:center; gap:4px; height:24px; padding:0 8px; border-radius:999px; font-size:12px; color:var(--c-text-secondary); border:1px solid var(--c-border); white-space:nowrap; }
+.chip.on { background:var(--c-bg-selected); border-color:transparent; color:var(--c-text-heading); font-weight:600; }
+.chip .n { color:var(--c-text-muted); font-weight:500; }
+.app.m .chip { height:32px; padding:0 10px; }
+/* ui/IconSegmented */
+.iseg { display:inline-flex; gap:2px; padding:2px; background:var(--c-bg-selected); border-radius:9px; }
+.iseg button { position:relative; width:30px; height:22px; border-radius:7px; color:var(--c-text-secondary); display:inline-flex; align-items:center; justify-content:center; }
+.iseg button.on { background:var(--c-bg-white); box-shadow:var(--shadow-thumb); color:var(--c-text-heading); }
+.iseg .cnt { position:absolute; top:-5px; right:-5px; }
+.app.m .iseg button { width:44px; height:36px; }
+/* ui/Badge */
+.bdg { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; border-radius:999px; padding:1px 8px; white-space:nowrap; line-height:16px; }
+.t-neutral { background:var(--c-bg-selected); color:var(--c-text-secondary); }
+.t-info { background:var(--c-info-bg); color:var(--c-info); }
+.t-success { background:var(--c-success-bg); color:var(--c-success-text); }
+.t-warning { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.t-danger { background:var(--c-danger-bg); color:var(--c-danger-text); }
+/* ui/Notice */
+.ntc { display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border-radius:12px; font-size:13px; line-height:1.45; }
+.ntc .b { flex:1; min-width:0; }
+.ntc .tt { font-weight:600; color:var(--c-text-heading); }
+.ntc .acts { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; align-items:center; }
+.n-info { background:var(--c-info-bg); } .n-info > svg { color:var(--c-info); }
+.n-warn { background:var(--c-warning-bg); } .n-warn > svg { color:var(--c-warning); }
+.n-dng { background:var(--c-danger-bg); border:1px solid var(--c-danger-border); } .n-dng > svg { color:var(--c-danger); }
+/* ui/Toggle */
+.tgl { width:34px; height:20px; border-radius:999px; background:var(--c-bg-selected); position:relative; flex-shrink:0; }
+.tgl::after { content:""; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:50%; background:var(--c-bg-card); box-shadow:var(--shadow-thumb); }
+.tgl.on { background:var(--c-accent); } .tgl.on::after { left:16px; }
+/* ui/SidebarSection */
+.sec-h { font-size:10px; font-weight:700; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.05em; padding:10px 14px 4px; display:flex; align-items:center; gap:6px; }
+
+/* ===== Значки происхождения (новый компонент OriginGlyph, ui/) ===== */
+.og { display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; border-radius:5px; flex-shrink:0; }
+.og.note { color:var(--c-text-muted); }
+.og.ai { color:var(--c-info); background:var(--c-info-bg); }
+.og.me { color:var(--c-text-secondary); background:var(--c-bg-selected); }
+.og.mix { color:var(--c-info); background:linear-gradient(135deg, var(--c-info-bg) 50%, var(--c-bg-selected) 50%); }
+.og.ext { color:var(--c-warning-text); background:var(--c-warning-bg); }
+
+/* ===== Дерево (левая панель) ===== */
+.tree { flex:1; overflow:auto; padding:2px 6px 10px; }
+.trow { display:flex; align-items:center; gap:7px; height:30px; padding:0 8px; border-radius:8px; color:var(--c-text-primary); font-size:13px; width:100%; text-align:left; }
+.trow:hover { background:var(--c-bg-card); }
+.trow.on { background:var(--c-bg-selected); color:var(--c-text-heading); font-weight:600; }
+.trow .nm { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.trow .mt { font-size:11px; color:var(--c-text-muted); }
+.trow.grp { font-weight:600; color:var(--c-text-secondary); font-size:12px; height:28px; }
+.trow.ind1 { padding-left:22px; } .trow.ind2 { padding-left:38px; }
+.app.m .trow { height:44px; }
+.tfoot { border-top:1px solid var(--c-border); padding:8px 14px; font-size:11px; color:var(--c-text-muted); display:flex; gap:10px; flex-wrap:wrap; }
+.tfoot span { display:inline-flex; gap:4px; align-items:center; }
+
+/* ===== Документ (центр) ===== */
+.doc { flex:1; overflow:auto; }
+.docin { max-width:680px; margin:0 auto; padding:22px 32px 48px; }
+.app.m .docin { padding:16px 16px 40px; }
+.dtitle { font-family:"PT Serif",Georgia,serif; font-size:28px; font-weight:700; color:var(--c-text-heading); line-height:1.2; margin:0; }
+.app.m .dtitle { font-size:22px; }
+.dmeta { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:8px; font-size:12px; color:var(--c-text-secondary); }
+.dbar { display:flex; align-items:center; gap:6px; }
+.dtop { display:flex; align-items:flex-start; gap:12px; }
+.dtop .grow { flex:1; min-width:0; }
+.h2 { font-size:16px; font-weight:700; color:var(--c-text-heading); margin:22px 0 6px; display:flex; align-items:center; gap:8px; }
+.st { position:relative; padding:5px 8px 5px 30px; margin:0 -8px; border-radius:8px; color:var(--c-text-primary); font-size:14px; line-height:1.6; }
+.st > .og { position:absolute; left:6px; top:8px; width:16px; height:16px; }
+.st:hover { background:var(--c-bg-card); }
+.fn { display:inline-flex; align-items:center; justify-content:center; min-width:16px; height:16px; padding:0 4px; margin-left:3px; border-radius:5px; font-size:10px; font-weight:700; vertical-align:2px; line-height:16px; }
+.fn.ai { background:var(--c-info-bg); color:var(--c-info); }
+.fn.me { background:var(--c-bg-selected); color:var(--c-text-secondary); font-weight:600; padding:0 6px; }
+.fn.on { box-shadow:0 0 0 2px var(--c-info); }
+.fn.me.on { box-shadow:0 0 0 2px var(--c-text-secondary); }
+.app.m .fn { min-width:22px; height:22px; line-height:22px; vertical-align:0; }
+/* Карточка сноски (на десктопе — поповер по наведению/клику, на 360 — шторка) */
+.pop { position:absolute; left:30px; top:calc(100% - 2px); z-index:20; width:340px; background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px; box-shadow:var(--shadow-dropdown); padding:12px; font-size:12.5px; }
+.pop .hd { display:flex; align-items:center; gap:6px; font-weight:600; color:var(--c-text-heading); font-size:12px; }
+.pop .q { margin:8px 0; padding:6px 10px; border-left:3px solid var(--c-info); background:var(--c-bg-card); border-radius:0 8px 8px 0; color:var(--c-text-primary); font-style:italic; }
+.pop .src { color:var(--c-text-secondary); }
+.pop .acts { display:flex; gap:4px; margin-top:8px; flex-wrap:wrap; }
+/* Правки на странице */
+.st.prop { outline:1.5px dashed var(--c-info); outline-offset:-1px; }
+.st.ghost { color:var(--c-text-secondary); background:var(--c-info-bg); }
+.st .tag { font-size:11px; font-weight:600; color:var(--c-info); margin-left:6px; white-space:nowrap; }
+.free { margin-top:6px; padding:10px 12px; background:var(--c-bg-card); border-radius:10px; font-size:14px; line-height:1.6; }
+.free table { border-collapse:collapse; font-size:13px; margin-top:6px; }
+.free td, .free th { border:1px solid var(--c-border); padding:3px 8px; text-align:left; }
+.hist { margin-top:26px; padding-top:10px; border-top:1px solid var(--c-border); font-size:12px; color:var(--c-text-muted); display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+
+/* Правка */
+.ebar { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:8px; padding:8px 16px; background:var(--c-bg-white); border-bottom:1px solid var(--c-border); }
+.app.m .ebar { flex-wrap:wrap; padding:8px 12px; }
+.app.m .ebar .bdg { display:none; }
+.app.m .ebar .btn:first-of-type { margin-left:auto; }
+.ebar .s { flex:1; min-width:0; font-size:12px; color:var(--c-text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.est { position:relative; display:flex; gap:8px; align-items:flex-start; margin:0 -8px; padding:4px 8px; border-radius:8px; }
+.est .og { margin-top:9px; width:16px; height:16px; }
+.est .box { flex:1; min-width:0; border:1px solid transparent; border-radius:8px; padding:5px 8px; font-size:14px; line-height:1.6; }
+.est:hover .box { border-color:var(--c-border); }
+.est.focus .box { border-color:var(--c-accent); box-shadow:var(--shadow-focus); background:var(--c-bg-card); }
+.est .ra { display:flex; gap:2px; margin-top:4px; opacity:0; }
+.est:hover .ra, .est.focus .ra, .app.m .est .ra { opacity:1; }
+.est.gone .box { color:var(--c-text-muted); text-decoration:line-through; background:var(--c-bg-card); }
+.hint { margin:4px 0 2px 32px; font-size:12px; line-height:1.45; display:flex; gap:6px; align-items:flex-start; padding:6px 10px; border-radius:8px; }
+.hint.warn { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.hint.dng { background:var(--c-danger-bg); color:var(--c-danger-text); }
+.hint.mut { color:var(--c-text-muted); padding:0 10px; }
+.badlink { text-decoration:underline wavy var(--c-danger); text-underline-offset:3px; }
+.oklink { color:var(--c-accent); }
+
+/* Конфликт: трёхстороннее сравнение по разделам */
+.cf { margin-top:14px; border:1px solid var(--c-border); border-radius:12px; overflow:hidden; }
+.cf .cfh { display:flex; align-items:center; gap:8px; padding:8px 12px; background:var(--c-bg-card); border-bottom:1px solid var(--c-border); font-weight:600; color:var(--c-text-heading); }
+.cf .cfh .s { margin-left:auto; font-weight:500; font-size:12px; }
+.cols { display:grid; grid-template-columns:1fr 1fr 1fr; }
+.app.m .cols { grid-template-columns:1fr; }
+.col { padding:10px 12px; font-size:13px; line-height:1.55; border-right:1px solid var(--c-border-light); }
+.col:last-child { border-right:0; }
+.app.m .col { border-right:0; border-bottom:1px solid var(--c-border-light); }
+.col .cl { font-size:11px; font-weight:700; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.04em; margin-bottom:6px; display:flex; gap:4px; align-items:center; }
+.col.mine { background:var(--c-accent-light); }
+.add { background:var(--c-diff-add-bg); color:var(--c-diff-add-text); border-radius:3px; padding:0 2px; }
+.rem { background:var(--c-diff-rem-bg); color:var(--c-diff-rem-text); border-radius:3px; padding:0 2px; text-decoration:line-through; }
+.cf .cfa { display:flex; gap:6px; flex-wrap:wrap; padding:8px 12px; border-top:1px solid var(--c-border); }
+.cf.done .cfh { background:var(--c-success-bg); }
+
+/* Скелетон */
+.sk { background:var(--c-bg-selected); border-radius:6px; animation:pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity:.55; } }
+
+/* Пусто (EmptyState) */
+.empty { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:32px; gap:8px; }
+.empty .ic { width:56px; height:56px; border-radius:16px; background:var(--c-bg-card); color:var(--c-text-muted); display:flex; align-items:center; justify-content:center; margin-bottom:6px; }
+.empty .t { font-family:"PT Serif",Georgia,serif; font-size:18px; font-weight:700; color:var(--c-text-heading); }
+.empty .d { font-size:13px; color:var(--c-text-secondary); max-width:340px; }
+.empty .a { display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; justify-content:center; }
+
+/* ===== Правая панель ===== */
+.pbody { flex:1; overflow:auto; padding:4px 10px 14px; }
+.item { border:1px solid var(--c-border); border-radius:12px; padding:10px 12px; margin-top:8px; background:var(--c-bg-white); }
+.item.on { border-color:var(--c-accent-muted); box-shadow:var(--shadow-focus); }
+.item .t { font-weight:600; color:var(--c-text-heading); display:flex; gap:6px; align-items:center; }
+.item .s { font-size:12px; color:var(--c-text-secondary); margin-top:2px; }
+.item .why { margin-top:6px; font-size:12px; color:var(--c-text-secondary); display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+.op { margin-top:10px; padding-top:10px; border-top:1px solid var(--c-border-light); }
+.op .ot { font-size:11px; font-weight:700; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.04em; }
+.op .df { margin-top:6px; font-size:13px; line-height:1.55; }
+.op .df div { padding:4px 8px; border-radius:6px; margin-top:4px; }
+.op .df .r { background:var(--c-diff-rem-bg); color:var(--c-diff-rem-text); }
+.op .df .a { background:var(--c-diff-add-bg); color:var(--c-diff-add-text); }
+.op .q { margin-top:6px; font-size:12px; color:var(--c-text-secondary); font-style:italic; }
+.op .acts { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
+.jday { font-size:10px; font-weight:700; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.05em; margin:14px 2px 2px; }
+.jrow { display:flex; gap:8px; padding:10px 4px; border-bottom:1px solid var(--c-border-light); }
+.jrow .tm { width:38px; flex-shrink:0; font-size:12px; color:var(--c-text-muted); padding-top:1px; }
+.jrow .b { flex:1; min-width:0; }
+.jrow .t { font-size:13px; color:var(--c-text-primary); }
+.jrow .s { font-size:12px; color:var(--c-text-secondary); margin-top:2px; }
+.jrow .acts { margin-top:6px; display:flex; gap:6px; flex-wrap:wrap; }
+.confirm { margin-top:8px; padding:10px; border-radius:10px; background:var(--c-bg-card); border:1px solid var(--c-border); font-size:12.5px; }
+.hrow { display:flex; gap:10px; align-items:flex-start; padding:10px 4px; border-bottom:1px solid var(--c-border-light); }
+.hrow .b { flex:1; min-width:0; }
+.srow { display:flex; gap:10px; align-items:flex-start; padding:12px 4px; border-bottom:1px solid var(--c-border-light); }
+.srow .b { flex:1; min-width:0; }
+.srow .t { font-weight:600; color:var(--c-text-heading); font-size:13px; }
+.srow .s { font-size:12px; color:var(--c-text-secondary); margin-top:2px; }
+
+/* ===== Мобила: шторки ===== */
+.ov { position:absolute; inset:0; background:var(--c-overlay); z-index:30; }
+.drawer { position:absolute; top:0; bottom:0; z-index:31; width:304px; background:var(--c-bg-white); display:flex; flex-direction:column; box-shadow:var(--shadow-dropdown); }
+.drawer.l { left:0; border-radius:0 20px 20px 0; }
+.drawer.r { right:0; width:330px; border-radius:20px 0 0 20px; }
+.drawer .dh { display:flex; align-items:center; gap:6px; height:56px; padding:0 6px 0 14px; border-bottom:1px solid var(--c-border); flex-shrink:0; }
+.sheet { position:absolute; left:0; right:0; bottom:0; z-index:31; background:var(--c-bg-white); border-radius:22px 22px 0 0; box-shadow:var(--shadow-sheet); padding:8px 16px 20px; }
+.sheet .grab { width:40px; height:4px; border-radius:999px; background:var(--c-dashed); margin:0 auto 10px; }
+.mbody { flex:1; min-height:0; display:flex; flex-direction:column; background:var(--c-bg-white); }
+</style>
+</head>
+<body>
+<div class="mk" id="mk"></div>
+<div class="mknote" id="note"></div>
+<div class="stage"><div id="root"></div></div>
+
+<script>
+/* ===== Иконки (пути lucide; в продукте — lucide-react с ICON_SIZE/ICON_STROKE) ===== */
+const P = {
+  sparkles:'<path d="M9.94 15.5A2 2 0 0 0 8.5 14.06l-6.14-1.58a.5.5 0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.14a.5.5 0 0 1 .96 0l1.58 6.14a2 2 0 0 0 1.44 1.44l6.14 1.58a.5.5 0 0 1 0 .96l-6.14 1.58a2 2 0 0 0-1.44 1.44l-1.58 6.14a.5.5 0 0 1-.96 0z"/>',
+  pen:'<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+  file:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/>',
+  users:'<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  search:'<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  inbox:'<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  history:'<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
+  activity:'<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  settings:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
+  cr:'<path d="m9 18 6-6-6-6"/>', cd:'<path d="m6 9 6 6 6-6"/>',
+  x:'<path d="M18 6 6 18M6 6l12 12"/>',
+  more:'<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
+  pleft:'<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>',
+  pright:'<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/>',
+  chat:'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  alert:'<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  info:'<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+  undo:'<path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/>',
+  check:'<path d="M20 6 9 17l-5-5"/>',
+  plus:'<path d="M5 12h14M12 5v14"/>',
+  link:'<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  graph:'<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.59 13.51 6.83 3.98M15.41 6.51l-6.82 3.98"/>',
+  archive:'<rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>',
+  merge:'<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/>',
+  ext:'<path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+  book:'<path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/>',
+  folder:'<path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/>',
+  home:'<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  tasks:'<path d="m9 11 3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
+  wave:'<path d="M2 12h3l3-9 4 18 3-9h7"/>',
+};
+const I = (n, s = 16) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">${P[n]}</svg>`;
+const OG_ICON = { note:'file', ai:'sparkles', me:'pen', mix:'users', ext:'alert' };
+const OG_TITLE = { note:'Заметка', ai:'Ведёт ИИ', me:'Написали вы', mix:'Ведёте вместе с ИИ', ext:'Изменена снаружи' };
+const og = (o, s = 12) => `<span class="og ${o}" title="${OG_TITLE[o]}">${I(OG_ICON[o], s)}</span>`;
+const dep = (n, inner, block) => block
+  ? `<div class="dep">${inner}<div style="position:absolute;top:-9px;right:8px"><span class="deptag">зависит от решения ${n}</span></div></div>`
+  : `<span class="dep">${inner}</span> <span class="deptag">зависит от решения ${n}</span>`;
+
+/* ===== Состояние макета ===== */
+const SCREENS = [
+  ['page','Страница вместе'], ['edit','Правка'], ['prop','Предложение ИИ'], ['conflict','Конфликт 409'],
+  ['drift','Изменили снаружи'], ['note','Заметка'], ['loading','Загрузка'], ['empty','Пусто'], ['nofind','Ничего не нашлось'],
+];
+const PANELS = [['inbox','Входящие','inbox'], ['journal','Журнал','history'], ['health','Здоровье','activity'], ['settings','Настройки','settings']];
+const S = { s:'page', p:'inbox', t:'light', w:'d', d:'', n:0, fn:'3', cf:0, jc:0, marks:1 };
+function readHash() {
+  const h = new URLSearchParams(location.hash.slice(1));
+  for (const k of Object.keys(S)) if (h.has(k)) S[k] = typeof S[k] === 'number' ? +h.get(k) : h.get(k);
+}
+function writeHash() { history.replaceState(null, '', '#' + new URLSearchParams(Object.entries(S).map(([k, v]) => [k, String(v)])).toString()); }
+function set(patch) { Object.assign(S, patch); writeHash(); render(); }
+
+/* ===== Данные страницы ===== */
+const PAGE = [
+  { h:'Суть', items:[
+    { o:'ai', n:1, t:'Картинки, видео и звук идут через одну общую очередь видеокарты — задачи ждут друг друга.',
+      src:'чат «Локальные модели: запуск»', d:'27.10', q:'очередь общая с картинками и видео — задачи ждут друг друга' },
+    { o:'ai', n:2, t:'Тяжёлые задачи — увеличение видео и обучение LoRA — идут строго по одной.',
+      src:'заметка «Обучение LoRA персонажа»', srcNote:1, d:'29.10', q:'одно на инстанс, в общей очереди GPU' },
+  ]},
+  { h:'Факты', items:[
+    { id:'f1', o:'ai', n:3, t:'Ролик на 5 секунд в 1344×768 снимается около пяти с половиной минут, в быстром режиме — около четырёх.',
+      src:'чат «Замеры MiniMax H3»', d:'28.10', q:'1344×768: 5 с ≈ 5,5 мин (fast ≈ 4 мин)' },
+    { id:'f2', o:'me', who:'Андрей', d:'02.11', t:'Ночью очередь свободна, поэтому длинные задачи лучше ставить вечером.' },
+    { o:'ai', n:4, t:'История запусков хранится на диске 7 дней.', src:'чат «Статистика локальных моделей»', d:'30.10', q:'история медиа — 7 дней на диске' },
+  ]},
+  { h:'Решения', items:[
+    { o:'ai', n:5, t:'Если локальная модель отказала, облако подключается только с согласия человека.',
+      src:'чат «Картинки: провайдеры»', d:'25.10', q:'облако при отказе — с согласия' },
+    { id:'r2', o:'me', who:'Андрей', d:'01.11', t:'Для черновиков снимаем половинный размер 864×480 — это в четыре раза быстрее.' },
+  ]},
+  { h:'Открытые вопросы', items:[
+    { o:'me', who:'Андрей', d:'30.10', t:'Показывать ли место в очереди прямо на карточке задачи?' },
+  ]},
+];
+
+/* ===== Левая панель: единое дерево ===== */
+function treeRows(opts = {}) {
+  const sel = opts.sel ?? (S.s === 'note' ? 'ideas' : 'gpu');
+  const r = (id, o, nm, mt = '', ind = 1) => `<button class="trow ind${ind} ${sel === id ? 'on' : ''}" data-open="${id}">${og(o)}<span class="nm">${nm}</span>${mt}</button>`;
+  const dotP = '<span class="cnt" title="Есть предложение ИИ">1</span>';
+  return `
+    <div class="sec-h">Разделы <span style="margin-left:auto;text-transform:none;letter-spacing:0;font-weight:500">видны только вам</span></div>
+    <button class="trow grp">${I('cd',14)}<span class="nm">Проекты</span></button>
+    <button class="trow grp ind1">${I('cd',14)}${I('folder',14)}<span class="nm">AI Home</span><span class="mt">14</span></button>
+    ${r('gpu','mix','Очередь локальной GPU', S.s === 'prop' || S.s === 'page' ? dotP : '', 2)}
+    ${r('keeper','ai','Хранитель базы', '', 2)}
+    ${r('rel','me','Правила релизов', '', 2)}
+    ${r('ideas','note','Идеи для раздела «Видео»', '', 2)}
+    ${r('call','note','Созвон 31.10', '', 2)}
+    ${r('mf','ai','Модули и MF-remote', '', 2)}
+    <button class="trow grp ind1">${I('cr',14)}${I('folder',14)}<span class="nm">Дача</span><span class="mt">6</span></button>
+    <button class="trow grp">${I('cd',14)}<span class="nm">Общее</span></button>
+    ${r('recipes','note','Рецепты на неделю')}
+    ${r('cars','mix','Машина: обслуживание')}
+    <button class="trow grp">${I('cr',14)}<span class="nm">Личное</span><span class="mt">9</span></button>`;
+}
+function leftPanel(mobile) {
+  const loading = S.s === 'loading', empty = S.s === 'empty', nofind = S.s === 'nofind';
+  const chipsData = [['Все',24,1],['Заметки',9],['ИИ',8],['Вместе',5],['Мои',2]];
+  const chips = chipsData.map(([l, n, on], i) => `<button class="chip ${(nofind ? i === 4 : on) ? 'on' : ''}">${i ? og(['','note','ai','mix','me'][i], 11) : ''}${l} <span class="n">${n}</span></button>`).join('');
+  const head = mobile
+    ? `<div class="dh"><span class="serif" style="font-size:16px;font-weight:700;color:var(--c-text-heading);flex:1">Заметки</span>
+        <button class="ib" title="Граф связей">${I('graph',18)}</button>
+        <button class="ib" title="Закрыть" data-d="">${I('x',18)}</button></div>`
+    : `<div class="ph"><span class="ttl">Заметки</span>
+        <button class="ib" title="Граф связей">${I('graph')}</button>
+        <button class="btn xs pri">${I('plus',14)}Заметка</button></div>`;
+  let body;
+  if (loading) body = `<div class="tree">${[70,0,55,80,62,74,0,50,66].map(w => w ? `<div style="display:flex;gap:8px;align-items:center;height:30px;padding:0 8px 0 ${w>60?38:22}px"><span class="sk" style="width:16px;height:16px"></span><span class="sk" style="height:10px;width:${w}%"></span></div>` : '<div style="height:10px"></div>').join('')}</div>`;
+  else if (empty) body = `<div class="empty" style="padding:24px 16px"><div class="d" style="font-size:12px">Здесь будут ваши заметки и страницы, которые ведёт ИИ.</div></div>`;
+  else if (nofind) body = `<div class="empty" style="padding:24px 16px"><div class="ic" style="width:44px;height:44px">${I('search',20)}</div>
+      <div style="font-weight:600;color:var(--c-text-heading)">Ничего не нашлось</div>
+      <div class="d" style="font-size:12px">Среди ваших записей нет «апскейл». Поищите во всех — ИИ мог записать это у себя.</div>
+      <div class="a"><button class="btn xs sec">Искать во всех</button></div></div>`;
+  else body = `<div class="tree">${treeRows()}</div>`;
+  return `${head}
+    <div style="padding:${mobile ? '10px 12px 8px' : '0 12px 8px'};display:flex;flex-direction:column;gap:8px;border-bottom:1px solid var(--c-border)">
+      <label class="field">${I('search',14)}<input placeholder="Поиск по заметкам и вики" value="${nofind ? 'апскейл' : ''}"></label>
+      ${empty || loading ? '' : `<div class="chips" role="group" aria-label="Кто написал">${chips}</div>`}
+    </div>
+    ${body}
+    ${empty || loading ? '' : `<div class="tfoot"><span>${og('note',10)}заметка</span><span>${og('ai',10)}ИИ</span><span>${og('mix',10)}вместе</span><span>${og('me',10)}вы</span></div>`}
+    ${mobile && !empty ? `<div style="padding:10px 12px;border-top:1px solid var(--c-border)"><button class="btn sm pri" style="width:100%">${I('plus',14)}Новая заметка</button></div>` : ''}`;
+}
+
+/* ===== Центр: документ ===== */
+function footPop(it) {
+  if (it.o === 'ai') return `<div class="pop" role="dialog">
+      <div class="hd">${og('ai',11)}Сноска ${it.n} · записал ИИ, ${it.d}</div>
+      <div class="q">«${it.q}»</div>
+      <div class="src">Источник: ${it.src}</div>
+      <div class="acts"><button class="btn xs sec">${I(it.srcNote ? 'file' : 'chat',13)}${it.srcNote ? 'Открыть заметку' : 'Открыть в чате'}</button><button class="btn xs gh">Показать в журнале</button></div></div>`;
+  return `<div class="pop" role="dialog">
+      <div class="hd">${og('me',11)}Написал ${it.who}, ${it.d} в 09:12</div>
+      <div class="src" style="margin-top:6px">Ваша правка. ИИ её не меняет — если он с ней не согласен, предложение придёт во «Входящие».</div>
+      <div class="acts"><button class="btn xs gh" data-p="journal">Показать в журнале</button></div></div>`;
+}
+function fnMark(it, key) {
+  const on = !S.d && S.w === 'd' && S.fn === key;
+  if (it.o === 'ai') return `<button class="fn ai ${on ? 'on' : ''}" data-fn="${key}" title="${it.src}">${it.n}</button>`;
+  return `<button class="fn me ${on ? 'on' : ''}" data-fn="${key}">✎ ${it.who}, ${it.d}</button>`;
+}
+function statement(it, key, extra = '') {
+  const showPop = S.w === 'd' && S.s === 'page' && S.fn === key;
+  return `<div class="st ${extra}">${og(it.o,10)}${it.t}${fnMark(it, key)}${showPop ? footPop(it) : ''}</div>`;
+}
+function docHead(opts = {}) {
+  const mobile = S.w === 'm';
+  const badge = opts.badge ?? `<span class="bdg t-info">${I('users',12)}Ведёте вместе</span>`;
+  return `<div class="dtop"><div class="grow">
+      <h1 class="dtitle">Очередь локальной GPU</h1>
+      <div class="dmeta">${badge}<span>8 утверждений: 5 записал ИИ, 3 — вы</span><span>· обновлено сегодня в 09:14</span></div>
+    </div>
+    ${mobile || opts.noActs ? '' : `<div class="dbar" style="padding-top:4px"><button class="btn sm sec">${I('pen',14)}Править</button><button class="ib" title="Ещё: история страницы, перенести, скопировать ссылку">${I('more')}</button></div>`}
+    </div>
+    ${mobile && !opts.noActs ? `<div class="dbar" style="margin-top:10px"><button class="btn sm sec" style="flex:1">${I('pen',14)}Править</button></div>` : ''}`;
+}
+function notesSection() {
+  if (!S.n) return '';
+  return dep(1, `<div style="padding:2px 8px 6px">
+      <div class="h2">Заметки <span style="font-size:12px;font-weight:500;color:var(--c-text-muted)">свободный текст · ИИ его не меняет, но читает</span></div>
+      <div class="free">Черновик: перед большим апскейлом проверить, не стоит ли в очереди обучение LoRA.
+        <table><tr><th>Размер</th><th>5 с</th><th>10 с</th></tr><tr><td>864×480</td><td>1,5 мин</td><td>—</td></tr><tr><td>1344×768</td><td>5,5 мин</td><td>15,5 мин</td></tr></table></div></div>`, true);
+}
+function pageBody(mode) {
+  return PAGE.map((sec, si) => {
+    let rows = sec.items.map((it, ii) => {
+      const key = String(it.n ?? `m${si}${ii}`);
+      if (mode === 'prop' && it.id === 'r2') return statement(it, key, 'prop') +
+        `<div class="hint warn" style="margin-left:22px">${I('sparkles',13)}<span>ИИ предлагает заменить эту формулировку. <button class="lnk" data-p="inbox" style="padding:0 2px">Посмотреть во «Входящих»</button></span></div>`;
+      if (mode === 'drift' && it.id === 'f2') return `<div class="st">${og('ext',10)}<span class="add">Ночью очередь свободна — длинные задачи ставим после 22:00.</span><span class="tag" style="color:var(--c-warning-text)">изменено снаружи</span></div>`;
+      return statement(it, key);
+    }).join('');
+    if (mode === 'prop' && sec.h === 'Факты') rows += `<div class="st ghost">${og('ai',10)}Увеличение до 1440p занимает ещё около 15 минут.<span class="tag">предлагает ИИ</span></div>`;
+    return `<div class="h2">${sec.h}</div>${rows}`;
+  }).join('') + notesSection() +
+  `<div class="hist">${I('history',13)}В «Истории» страницы — 4 прежние формулировки <button class="lnk">Открыть историю</button></div>`;
+}
+function docPage() {
+  const s = S.s;
+  let top = '';
+  if (s === 'prop') top = dep(2, `<div class="ntc n-info" style="margin-bottom:6px">${I('sparkles',18)}<div class="b">
+      <div class="tt">ИИ предлагает заменить ваше утверждение</div>
+      <div>В разделе «Решения». Без вашего согласия ваш текст не изменится. Там же — ещё одно новое утверждение.</div>
+      <div class="acts"><button class="btn xs sec" data-p="inbox">${I('inbox',13)}Открыть во «Входящих»</button></div></div></div>`, true);
+  if (s === 'drift') top = `<div class="ntc n-warn" style="margin-bottom:6px">${I('alert',18)}<div class="b">
+      <div class="tt">Страницу изменили снаружи</div>
+      <div>Сегодня в 08:47 её поправили не в AI Home — например, в Obsidian. Пока вы не решите, что с этим делать, ИИ страницу не трогает.</div>
+      <div class="acts">${dep(4, '<button class="btn xs pri">Принять как мою правку</button>')}<button class="btn xs sec">Принять как есть</button><button class="lnk" data-p="health">Что изменилось</button></div>
+      <div style="font-size:12px;color:var(--c-warning-text);margin-top:6px">«Как мою правку» — изменённые места станут вашими (✎ Андрей). «Как есть» — текст останется, а у этих мест будет пометка «изменено снаружи».</div></div></div>`;
+  const body = pageBody(s);
+  return `<div class="doc"><div class="docin">${docHead(s === 'drift' ? { badge:`<span class="bdg t-warning">${I('alert',12)}Изменена снаружи</span>` } : {})}${top}${body}</div></div>`;
+}
+function docEdit() {
+  const E = (o, html, cls = '', hint = '') => `<div class="est ${cls}">${og(o,10)}<div style="flex:1;min-width:0"><div class="box" contenteditable="true">${html}</div>${hint}</div>
+     <div class="ra"><button class="ib xs" title="Убрать в «Историю»">${I('archive',14)}</button></div></div>`;
+  const mobile = S.w === 'm';
+  return `<div class="doc">
+    <div class="ebar">${mobile ? '' : `<span class="bdg t-neutral">${I('pen',12)}Правка</span>`}<span class="s">Изменено 3 места</span>
+      <button class="btn xs gh">Отмена</button><button class="btn xs pri">${I('check',13)}Сохранить</button></div>
+    <div class="docin">
+      <h1 class="dtitle">Очередь локальной GPU</h1>
+      <div class="dmeta"><span>Утверждения ИИ можно переформулировать — тогда они станут вашими. Убранное не удаляется, а уходит в «Историю».</span></div>
+      <div class="h2">Суть</div>
+      ${E('ai', PAGE[0].items[0].t + '<span class="fn ai">1</span>')}
+      ${E('ai', PAGE[0].items[1].t + '<span class="fn ai">2</span>')}
+      <div class="h2">Факты</div>
+      ${E('ai', 'Ролик на 5 секунд в 1344×768 снимается около пяти с половиной минут; для черновиков хватает 864×480.', 'focus',
+          `<div class="hint warn" style="margin-left:0">${I('info',13)}<span>Это формулировка ИИ. После сохранения прежняя уйдёт в «Историю» страницы, а утверждение станет вашим — сноска 3 сменится на «✎ Андрей».</span></div>`)}
+      ${E('me', PAGE[1].items[1].t + '<span class="fn me">✎ Андрей, 02.11</span>')}
+      ${E('ai', PAGE[1].items[2].t + '<span class="fn ai">4</span>', 'gone',
+          `<div class="hint mut">${I('archive',13)}<span>Уйдёт в «Историю» с пометкой «убрано вами» — не удаляется. <button class="lnk" style="padding:0 2px">Вернуть</button></span></div>`)}
+      <div class="h2">Решения</div>
+      ${E('ai', PAGE[2].items[0].t + '<span class="fn ai">5</span>')}
+      ${E('me', 'Для черновиков снимаем половинный размер 864×480, подробности — <span class="badlink">[[Замеры видео на даче]]</span>', '',
+          `<div class="hint dng" style="margin-left:0">${I('link',13)}<span><b>Эту ссылку не сохранить.</b> Страница «Замеры видео на даче» лежит в проекте «Дача», а эта — в «AI Home». Чаты проекта «AI Home» её не увидят. Ссылаться можно на страницы этого раздела и разделов выше: «Проекты», «Общее».</span></div>`)}
+      ${E('me', 'Для превью берём 5 секунд, а не 10: разница в три раза. <span class="oklink">[[Хранитель базы]]</span>')}
+      <div style="margin:8px 0 0 24px"><button class="btn xs dashed">${I('plus',13)}Добавить утверждение</button></div>
+      <div class="h2">Открытые вопросы</div>
+      ${E('me', PAGE[3].items[0].t + '<span class="fn me">✎ Андрей, 30.10</span>')}
+      ${S.n ? dep(1, `<div style="padding:2px 8px 6px"><div class="h2">Заметки <span style="font-size:12px;font-weight:500;color:var(--c-text-muted)">свободный текст, без сносок</span></div>
+        <div class="free" contenteditable="true">Черновик: перед большим апскейлом проверить, не стоит ли в очереди обучение LoRA.</div></div>`, true) : ''}
+    </div></div>`;
+}
+function docConflict() {
+  const sec = (title, mine, theirs, was, done, idx) => `<div class="cf ${done ? 'done' : ''}">
+      <div class="cfh">${title}<span class="s" style="color:${done ? 'var(--c-success-text)' : 'var(--c-warning-text)'}">${done ? I('check',13) + ' решено: ' + done : 'изменили и вы, и ИИ'}</span></div>
+      ${done ? '' : `<div class="cols">
+        <div class="col mine"><div class="cl">${og('me',10)}Моё</div>${mine}</div>
+        <div class="col"><div class="cl">${og('ai',10)}ИИ · сегодня 09:20</div>${theirs}</div>
+        <div class="col"><div class="cl">${I('history',11)}Было, когда вы начали</div>${was}</div></div>
+      <div class="cfa"><button class="btn xs sec" data-cf="${idx}">Оставить моё</button><button class="btn xs sec" data-cf="${idx}">Взять их</button><button class="btn xs gh">${I('merge',13)}Слить вручную</button></div>`}</div>`;
+  const solved = S.cf;
+  return `<div class="doc">
+    <div class="ebar"><span class="bdg t-warning">${I('alert',12)}Нужно решить</span><span class="s">${solved ? 'Все разделы решены' : 'Решено 1 из 2 разделов'}</span>
+      <button class="btn xs gh">Отменить мою правку</button><button class="btn xs pri" ${solved ? '' : 'disabled'}>${I('check',13)}Сохранить</button></div>
+    <div class="docin">
+      <div class="ntc n-warn">${I('alert',18)}<div class="b"><div class="tt">Страница изменилась, пока вы правили</div>
+        <div>Сегодня в 09:20 ИИ дописал её после ночного разбора. Ваш текст не потерян: выберите, что оставить там, где вы с ИИ правили одно и то же. Остальное сольётся само.</div></div></div>
+      ${sec('Факты · сноска 3',
+          'Ролик на 5 секунд в 1344×768 снимается около пяти с половиной минут<span class="add">; для черновиков хватает 864×480</span>.',
+          'Ролик на 5 секунд в 1344×768 снимается около пяти с половиной минут<span class="add">, с увеличением до 1440p — ещё около 15</span>.',
+          'Ролик на 5 секунд в 1344×768 снимается около пяти с половиной минут, в быстром режиме — около четырёх.', solved ? 'взято моё' : '', 1)}
+      ${sec('Решения', '', '', '', 'правили только вы — ваши правки применятся', 2)}
+      <div class="hint mut" style="margin:12px 0 0">${I('info',13)}<span>«Слить вручную» откроет раздел для правки с обоими вариантами рядом.</span></div>
+    </div></div>`;
+}
+function docNote() {
+  return `<div class="doc"><div class="docin">
+    <div class="dtop"><div class="grow"><h1 class="dtitle">Идеи для раздела «Видео»</h1>
+      <div class="dmeta"><span class="bdg t-neutral">${I('file',12)}Заметка</span><span>изменена вчера в 22:10</span></div></div>
+      ${S.w === 'm' ? '' : `<div class="dbar" style="padding-top:4px">${dep(3, `<button class="btn sm sec">${I('book',14)}Перенести в вики</button>`)}<button class="ib">${I('more')}</button></div>`}</div>
+    ${S.w === 'm' ? `<div class="dbar" style="margin-top:10px">${dep(3, `<button class="btn sm sec">${I('book',14)}Перенести в вики</button>`)}</div>` : ''}
+    <div style="margin-top:16px;font-size:14px;line-height:1.7">
+      <p>Плавающее окно эфира должно помнить свой угол между сессиями.</p>
+      <p>Лента подписок — показывать сначала непросмотренное, а просмотренное сворачивать.</p>
+      <p>Спросить у <span class="oklink">[[Очередь локальной GPU]]</span>, можно ли превью роликов делать в фоне ночью.</p>
+    </div>
+    <div class="hint mut" style="margin:18px 0 0">${I('info',13)}<span>Заметку пишете только вы. ИИ читает её как источник: на неё уже ссылаются 2 страницы вики.</span></div>
+  </div></div>`;
+}
+function docLoading() {
+  const L = (w, h = 12, mt = 10) => `<div class="sk" style="width:${w};height:${h}px;margin-top:${mt}px"></div>`;
+  return `<div class="doc"><div class="docin" aria-busy="true">
+    ${L('62%', 26, 0)}${L('40%', 14, 12)}
+    ${L('30%', 16, 30)}${L('100%')}${L('88%')}
+    ${L('24%', 16, 30)}${L('96%')}${L('72%')}${L('84%')}
+    ${L('28%', 16, 30)}${L('92%')}${L('60%')}
+  </div></div>`;
+}
+function docEmpty() {
+  return `<div class="empty"><div class="ic">${I('book',26)}</div>
+    <div class="t">Здесь будут ваши записи и вики</div>
+    <div class="d">Пишите заметки сами — а ИИ после разговоров соберёт из них и из чатов страницы со ссылками на источники. Вести страницу можно вместе.</div>
+    <div class="a"><button class="btn sm pri">${I('plus',14)}Новая заметка</button><button class="btn sm sec">Завести вики</button></div></div>`;
+}
+function docNothing() {
+  return `<div class="empty"><div class="ic">${I('search',24)}</div>
+    <div class="t">Выберите запись слева</div>
+    <div class="d">Поиск ничего не нашёл среди ваших — попробуйте искать во всех или сбросьте фильтр.</div></div>`;
+}
+function center() {
+  switch (S.s) {
+    case 'edit': return docEdit();
+    case 'conflict': return docConflict();
+    case 'note': return docNote();
+    case 'loading': return docLoading();
+    case 'empty': return docEmpty();
+    case 'nofind': return docNothing();
+    default: return docPage();
+  }
+}
+
+/* ===== Правая панель: Входящие / Журнал / Здоровье / Настройки ===== */
+function panelInbox() {
+  const ex = S.s === 'empty';
+  if (ex) return `<div class="empty"><div class="ic">${I('inbox',24)}</div><div class="t" style="font-size:16px">Спорного нет</div><div class="d">Сюда приходят только предложения ИИ, которые без вас применять нельзя.</div></div>`;
+  return `<div class="pbody">
+    <div style="font-size:12px;color:var(--c-text-secondary);padding:6px 2px 0">3 предложения ИИ ждут вас. Остальное он применил сам — это видно в «Журнале».</div>
+    <div class="item on">
+      <div class="t">${og('mix',11)}Очередь локальной GPU</div>
+      <div class="s">из чата «Замеры MiniMax H3» · сегодня 09:20</div>
+      <div class="why"><span class="bdg t-warning">Меняет ваше утверждение</span><span>2 правки</span></div>
+      <div class="op"><div class="ot">Заменить ваше утверждение · Решения</div>
+        <div class="df"><div class="r">Для черновиков снимаем половинный размер 864×480 — это в четыре раза быстрее.</div>
+        <div class="a">Для черновиков снимаем 864×480 — примерно в 3,7 раза быстрее: 1,5 минуты против 5,5.</div></div>
+        <div class="q">Источник: «864×480, 5 с ≈ 1,5 мин» — чат «Замеры MiniMax H3», 01.11</div>
+        <div class="acts"><button class="btn xs pri">Заменить</button><button class="btn xs sec">Оставить моё</button><button class="btn xs gh">${I('chat',13)}Открыть в чате</button></div></div>
+      <div class="op"><div class="ot">Добавить · Факты</div>
+        <div class="df"><div class="a">Увеличение до 1440p занимает ещё около 15 минут.</div></div>
+        <div class="q">Источник: «max — плюс увеличение до 1440p, ещё ≈ 15 мин» — чат «Замеры MiniMax H3»</div>
+        <div class="acts"><button class="btn xs sec">Добавить</button><button class="btn xs gh">Не добавлять</button></div></div>
+    </div>
+    <div class="item"><div class="t">${og('ai',11)}Хранитель базы</div><div class="s">из чата «Разбор вики» · вчера</div>
+      <div class="why"><span class="bdg t-warning">Источники противоречат друг другу</span><span>1 правка</span></div></div>
+    <div class="item"><div class="t">${og('ai',11)}Правила ухода за газоном</div><div class="s">из чата «Дача: весна» · вчера</div>
+      <div class="why"><span class="bdg t-neutral">Новая страница в «Общее»</span></div></div>
+  </div>`;
+}
+function panelJournal() {
+  const conf = S.jc ? `<div class="confirm"><b>Вернуть страницу как было до 09:14?</b><br>Ваши 2 правки уйдут в «Историю». Записи ИИ, сделанные после, останутся.
+      <div class="acts" style="display:flex;gap:6px;margin-top:8px"><button class="btn xs dng" data-jc="0">${I('undo',13)}Откатить</button><button class="btn xs gh" data-jc="0">Отмена</button></div></div>` : '';
+  return `<div class="pbody">
+    <div class="chips" style="padding:8px 2px 0"><button class="chip on">Все</button><button class="chip">${og('ai',11)}ИИ</button><button class="chip">${og('me',11)}Мои</button></div>
+    <div class="jday">Сегодня</div>
+    <div class="jrow"><div class="tm">09:20</div><div class="b"><div class="t">${og('ai',10)} ИИ дописал «Очередь локальной GPU»</div>
+      <div class="s">1 утверждение · из чата «Замеры MiniMax H3»</div>
+      <div class="acts"><button class="btn xs gh">${I('chat',13)}Открыть в чате</button><button class="btn xs gh">${I('undo',13)}Откатить</button></div></div></div>
+    <div class="jrow"><div class="tm">09:14</div><div class="b"><div class="t">${og('me',10)} Вы поправили «Очередь локальной GPU»</div>
+      <div class="s">2 утверждения: 1 новое, 1 переформулировано</div>
+      <div class="acts">${S.jc ? '' : `<button class="btn xs sec" data-jc="1">${I('undo',13)}Откатить мою правку</button>`}</div>${conf}</div></div>
+    <div class="jrow"><div class="tm">03:00</div><div class="b"><div class="t">${og('ai',10)} Ночной разбор: 5 страниц</div>
+      <div class="s">14 утверждений из 6 чатов</div><div class="acts"><button class="btn xs gh">Подробнее</button></div></div></div>
+    <div class="jday">Вчера</div>
+    <div class="jrow"><div class="tm">22:40</div><div class="b"><div class="t">${og('me',10)} Вы убрали утверждение в «Хранитель базы»</div>
+      <div class="s">ушло в «Историю», не удалено</div><div class="acts"><button class="btn xs gh">${I('undo',13)}Вернуть</button></div></div></div>
+    <div class="jrow"><div class="tm">18:05</div><div class="b"><div class="t">${og('ext',10)} Страницу «Машина: обслуживание» изменили снаружи</div>
+      <div class="s">вы приняли как свою правку</div></div></div>
+  </div>`;
+}
+function panelHealth() {
+  const drift = S.s === 'drift';
+  return `<div class="pbody">
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 2px 4px;font-size:12px;color:var(--c-text-secondary)"><span style="flex:1">Проверено сегодня в 06:00</span><button class="btn xs sec">Проверить сейчас</button></div>
+    ${drift ? `<div class="item on"><div class="t">${og('ext',11)}Изменили снаружи: «Очередь локальной GPU»</div><div class="s">сегодня 08:47 · 1 место</div>
+      <div class="op"><div class="ot">Факты</div><div class="df"><div class="r">Ночью очередь свободна, поэтому длинные задачи лучше ставить вечером.</div><div class="a">Ночью очередь свободна — длинные задачи ставим после 22:00.</div></div>
+      <div class="acts"><button class="btn xs pri">Принять как мою правку</button><button class="btn xs sec">Принять как есть</button></div></div></div>` : ''}
+    <div class="hrow"><span class="bdg t-danger">2</span><div class="b"><div style="font-weight:600;color:var(--c-text-heading)">Ссылки ведут в никуда</div><div style="font-size:12px;color:var(--c-text-secondary)">«Модули и MF-remote» → «Старый реестр модулей»</div></div></div>
+    <div class="hrow"><span class="bdg t-warning">3</span><div class="b"><div style="font-weight:600;color:var(--c-text-heading)">Источник пропал</div><div style="font-size:12px;color:var(--c-text-secondary)">Чат удалён — утверждения ИИ остались без подтверждения</div></div></div>
+    <div class="hrow"><span class="bdg t-neutral">1</span><div class="b"><div style="font-weight:600;color:var(--c-text-heading)">Страница без ссылок на неё</div><div style="font-size:12px;color:var(--c-text-secondary)">«Правила релизов»</div></div></div>
+  </div>`;
+}
+function panelSettings() {
+  const R = (t, s, on, extra = '') => `<div class="srow"><div class="b"><div class="t">${t}</div><div class="s">${s}</div>${extra}</div><span class="tgl ${on ? 'on' : ''}"></span></div>`;
+  return `<div class="pbody">
+    ${R('Ночной разбор', 'В 03:00 ИИ разбирает вчерашние чаты и дописывает страницы', 1)}
+    ${R('Бесспорное — применять сразу', 'Иначе каждая правка ИИ будет ждать вас во «Входящих»', 1)}
+    ${dep(2, R('Ваши утверждения — только через вас', 'ИИ не заменяет и не помечает ваш текст сам: всегда спрашивает во «Входящих»', 1, '<div class="s" style="color:var(--c-text-muted)">Выключить нельзя</div>'), true)}
+    ${R('Показывать сноски ИИ', 'Номера сносок у утверждений ИИ; ваши — «✎ имя, дата»', 1)}
+  </div>`;
+}
+function panelBody() {
+  return { inbox:panelInbox, journal:panelJournal, health:panelHealth, settings:panelSettings }[S.p]();
+}
+function panelSeg() {
+  return `<div class="iseg" role="tablist" aria-label="Разделы панели">${PANELS.map(([k, l, ic]) =>
+    `<button class="${S.p === k ? 'on' : ''}" data-p="${k}" title="${l}" role="tab">${I(ic, S.w === 'm' ? 18 : 15)}${k === 'inbox' && S.s !== 'empty' ? '<span class="cnt">3</span>' : ''}</button>`).join('')}</div>`;
+}
+const PTITLE = () => PANELS.find(p => p[0] === S.p)[1];
+
+/* ===== Сборка десктопа и мобилы ===== */
+function desktop() {
+  const open = !!S.p;
+  return `<div class="app">
+    <div class="rail">${['home','chat','tasks','book','wave'].map((n, i) => `<button class="rb ${n === 'book' ? 'on' : ''}" title="${['Главная','Чаты','Задачи','Заметки','Видео'][i]}">${I(n,18)}</button>`).join('')}</div>
+    <div class="isl left">${leftPanel(false)}</div>
+    <div class="isl center">${center()}</div>
+    ${open ? `<div class="isl right"><div class="ph"><span class="ttl ui">${PTITLE()}</span>${S.p === 'inbox' && S.s !== 'empty' ? '<span class="cnt muted">3</span>' : ''}
+      <button class="ib" title="Свернуть панель" data-p="">${I('x')}</button></div>${panelBody()}</div>` : ''}
+    <div class="rail" aria-label="Панель вики">${PANELS.map(([k, l, ic]) =>
+      `<button class="rb ${S.p === k ? 'on' : ''}" data-p="${S.p === k ? '' : k}" title="${l}">${I(ic,18)}${k === 'inbox' && S.s !== 'empty' ? '<span class="cnt">3</span>' : ''}${k === 'health' && S.s === 'drift' ? '<span class="dot" style="top:4px;right:4px"></span>' : ''}</button>`).join('')}</div>
+  </div>`;
+}
+function mobile() {
+  const isDoc = !['empty','nofind'].includes(S.s);
+  const title = S.s === 'note' ? 'Идеи для раздела «Видео»' : S.s === 'empty' ? 'Заметки' : S.s === 'nofind' ? 'Заметки' : S.s === 'edit' ? 'Правка' : 'Очередь локальной GPU';
+  let layer = '';
+  if (S.d === 'tree') layer = `<div class="ov" data-d=""></div><div class="drawer l">${leftPanel(true)}</div>`;
+  if (S.d === 'panel') layer = `<div class="ov" data-d=""></div><div class="drawer r"><div class="dh">${panelSeg()}<span style="flex:1"></span><button class="ib" data-d="" title="Закрыть">${I('x',18)}</button></div>
+     <div style="padding:10px 14px 0;font-weight:600;color:var(--c-text-heading)">${PTITLE()}</div>${panelBody()}</div>`;
+  if (S.d === 'sheet') {
+    const all = PAGE.flatMap((sec, si) => sec.items.map((x, ii) => [String(x.n ?? `m${si}${ii}`), x]));
+    const it = (all.find(([k]) => k === S.fn) ?? all[2])[1];
+    layer = `<div class="ov" data-d=""></div><div class="sheet"><div class="grab"></div>${footPop(it).replace('class="pop"', 'style="font-size:13px"')}</div>`;
+  }
+  return `<div class="app m">
+    <div class="mhead">
+      <button class="ib" data-d="tree" title="Дерево заметок и вики">${I('pleft',20)}</button>
+      <span class="ttl">${title}</span>
+      <button class="ib" data-d="panel" title="Входящие, журнал, здоровье, настройки">${I('inbox',20)}${S.s !== 'empty' ? '<span class="cnt">3</span>' : ''}</button>
+      ${isDoc ? `<button class="ib" title="Ещё">${I('more',20)}</button>` : ''}
+    </div>
+    <div class="mbody">${center()}</div>
+    ${layer}
+  </div>`;
+}
+
+/* ===== Обвязка ===== */
+function mk() {
+  const pills = (key, opts) => `<div class="pills">${opts.map(([v, l]) => `<button class="${String(S[key]) === String(v) ? 'on' : ''}" data-set="${key}" data-v="${v}">${l}</button>`).join('')}</div>`;
+  return `<h1>Заметки + Вики · v1</h1>
+    <div class="grp"><span class="lbl">Экран</span>${pills('s', SCREENS)}</div>
+    <div class="grp"><span class="lbl">Панель</span>${pills('p', [['','скрыта'], ...PANELS.map(p => [p[0], p[1]])])}</div>
+    <div class="grp"><span class="lbl">Ширина</span>${pills('w', [['d','1280'],['m','360']])}</div>
+    ${S.w === 'm' ? `<div class="grp"><span class="lbl">Шторка</span>${pills('d', [['','нет'],['tree','дерево'],['panel','панель'],['sheet','сноска']])}</div>` : ''}
+    <div class="grp"><span class="lbl">Тема</span>${pills('t', [['light','светлая'],['dark','тёмная']])}</div>
+    <div class="grp"><label><input type="checkbox" data-chk="n" ${S.n ? 'checked' : ''}> секция «Заметки» (решение 1)</label>
+      <label><input type="checkbox" data-chk="marks" ${S.marks ? 'checked' : ''}> метки решений</label></div>`;
+}
+const NOTES = {
+  page:'Страница, которую ведут вместе. Сноска ИИ — номер (наведите или нажмите: цитата, источник, «Открыть в чате»), ваша — «✎ Андрей, 02.11». Сводный значок — «Ведёте вместе». В центре только документ и «Править».',
+  edit:'Правка той же страницы. Фокус на формулировке ИИ — предупреждение про «Историю». Убранное зачёркнуто с «Вернуть». Ссылка в чужой проект — понятный отказ прямо под строкой.',
+  prop:'ИИ хочет заменить ваше утверждение: плашка на странице, пунктир у строки, новое утверждение — бледно. Сравнение и решения — в правой панели «Входящие», не в центре.',
+  conflict:'Сохранение на изменившейся странице (409). Сравнение по разделам: моё / ИИ / было. Нажмите «Оставить моё» — раздел станет решённым, «Сохранить» включится.',
+  drift:'Страницу поправили в Obsidian. Плашка с двумя решениями, а сравнение — в «Здоровье» (кнопка «Что изменилось»). Значок в рельсе — жёлтая точка.',
+  note:'Заметка в том же дереве и в том же центре. «Перенести в вики» — зависит от решения 3.',
+  loading:'Скелетон дерева и документа: формы повторяют строки, ширины разные.',
+  empty:'Ни заметок, ни вики: одно пустое состояние в центре, «Входящие» — «Спорного нет».',
+  nofind:'Поиск с фильтром «Мои» ничего не нашёл: в дереве — объяснение и «Искать во всех», центр — подсказка.',
+};
+
+function render() {
+  document.documentElement.dataset.theme = S.t;
+  document.body.classList.toggle('nodep', !S.marks);
+  document.getElementById('mk').innerHTML = mk();
+  document.getElementById('note').innerHTML = `<b>${SCREENS.find(x => x[0] === S.s)[1]}.</b> ${NOTES[S.s]} Пунктир <span class="deptag">зависит от решения N</span> — место ждёт ответа Андрея (номера — вопросы из разреза ef7a0732).`;
+  document.getElementById('root').innerHTML = S.w === 'm' ? mobile() : desktop();
+}
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-set],[data-p],[data-d],[data-fn],[data-cf],[data-jc],[data-open]');
+  if (!t) return;
+  if (t.dataset.set) return set({ [t.dataset.set]: t.dataset.set === 'n' ? +t.dataset.v : t.dataset.v, ...(t.dataset.set === 'w' ? { d:'' } : {}) });
+  if (t.dataset.p !== undefined) return set(S.w === 'm' ? { p: t.dataset.p || S.p, d: t.dataset.p ? 'panel' : '' } : { p: t.dataset.p });
+  if (t.dataset.d !== undefined) return set({ d: t.dataset.d });
+  if (t.dataset.fn) return set(S.w === 'm' ? { fn: t.dataset.fn, d:'sheet' } : { fn: S.fn === t.dataset.fn ? '' : t.dataset.fn });
+  if (t.dataset.cf) return set({ cf: 1 });
+  if (t.dataset.jc !== undefined) return set({ jc: +t.dataset.jc });
+  if (t.dataset.open) return set({ s: ['ideas','call','recipes'].includes(t.dataset.open) ? 'note' : 'page', d:'' });
+});
+document.addEventListener('change', e => { const k = e.target.dataset.chk; if (k) set({ [k]: e.target.checked ? 1 : 0 }); });
+readHash(); render();
+</script>
+</body>
+</html>

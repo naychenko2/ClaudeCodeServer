@@ -16,7 +16,9 @@ namespace ClaudeHomeServer.Notes.Controllers;
 // по кнопке (S3-3); журнал своей вики (S7c-0, ADR-035 §12г меры 4–6); «Разобрать заметку
 // в базу» (S7b0b). Образец — NotesController.
 //
-// Владелец — только из токена (claim sub), как во всей вертикали. Раздел — ключ,
+// Владелец — только из токена (claim sub), как во всей вертикали. Сервисный токен хода
+// (typ=svc) — все мутирующие ручки этого контроллера отказаны 403 (B2a): вику решает и
+// заводит только человек; ручки чтения отвечают под svc как раньше. Раздел — ключ,
 // составленный из проекта/сферы пользователя (WikiSections), а не путь из тела запроса:
 // чужой ключ, называющий существующий чужой проект, — 403. Человек видит ВСЮ свою вики:
 // WikiVisibility — правило сборки контекста для моделей, а не право человека
@@ -63,6 +65,17 @@ public class WikiController : ControllerBase
     // внутри действий: без токена действие отвечает 401 (контракт), а не падает с NRE на claim.
     private string? OwnerOrNull() =>
         User.Identity?.IsAuthenticated == true ? User.FindFirstValue(JwtRegisteredClaimNames.Sub) : null;
+
+    // Сервисный JWT хода (claim typ=svc, тот же смысл, что JwtService): к вики он не адресат —
+    // «Завести», adopt, удаление раздела, разбор заметки и линт отказаны им 403 (B2a; разведка
+    // B0: легитимных svc-вызовов этих ручек нет). Локальные константы — как в PluginsController
+    // и TasksController: вертикаль не тянет ядро ради двух строк. Отказ — до разбора тела и до
+    // любых состояний: svc не доходит ни до одной записи.
+    private const string TokenKindClaim = "typ";
+    private const string ServiceTokenKind = "svc";
+    private bool IsServiceToken => User.FindFirstValue(TokenKindClaim) == ServiceTokenKind;
+    private IActionResult ServiceTokenRefusal() =>
+        StatusCode(403, new { error = "Сервисный токен: вики решает только пользовательский токен" });
 
     // Коды отказов — контракт для фронта (S5a), устойчивые строки, как wiki_readonly.
     private const string CodeSectionKey = "wiki_section_key";
@@ -218,6 +231,7 @@ public class WikiController : ControllerBase
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
+        if (IsServiceToken) return ServiceTokenRefusal();
         if (_flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) != true)
             return StatusCode(409, new { code = CodeLlmWikiOff, message = "вики не заведена: функция выключена" });
 
@@ -251,6 +265,7 @@ public class WikiController : ControllerBase
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
+        if (IsServiceToken) return ServiceTokenRefusal();
         if (req is null) return BadRequest(new { code = CodeSectionKey, message = "тело запроса не задано" });
 
         var (key, refusal) = ResolveSection(userId, req.Section);
@@ -270,6 +285,7 @@ public class WikiController : ControllerBase
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
+        if (IsServiceToken) return ServiceTokenRefusal();
         var (key, refusal) = ResolveSection(userId, section);
         if (refusal is not null) return refusal;
         if (!WikiSections.IsOrphan(key!, userId, _spheres, _projects))
@@ -296,6 +312,7 @@ public class WikiController : ControllerBase
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
+        if (IsServiceToken) return ServiceTokenRefusal();
         if (_flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) != true)
             return StatusCode(409, new { code = CodeLlmWikiOff, message = "заявка не принята: функция выключена" });
         if (req is null || string.IsNullOrWhiteSpace(req.NoteId))
@@ -360,6 +377,7 @@ public class WikiController : ControllerBase
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
+        if (IsServiceToken) return ServiceTokenRefusal();
         var res = await _lint.TryRunOwnerAsync(userId);
         if (res.Outcome == WikiLintRunOutcome.FeatureOff)
             return StatusCode(409, new { code = CodeLlmWikiOff, message = "проверка не выполнена: функция выключена" });

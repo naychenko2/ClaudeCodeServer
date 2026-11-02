@@ -291,6 +291,80 @@ public class WikiControllerTests : IDisposable
         JsonSerializer.Serialize(((ObjectResult)res).Value).Should().NotContain("pages");
     }
 
+    // ─── 7. Сервисный токен (typ=svc): мутирующие ручки — 403, чтение — как раньше (B2a) ──
+
+    // Сервисный JWT хода (MCP) к вики не адресат: «Завести», adopt, удаление раздела, разбор
+    // заметки и линт — только действия человека. Мутация (критерий c2): убрать проверку
+    // IsServiceToken в любой из этих ручек — её тест краснеет (ручка доходит до операции).
+
+    [Fact]
+    public async Task СервисныйТокен_Завести_403_ВикаНеЗаводится()
+    {
+        var res = await Controller(serviceToken: true).Initialize(null);
+        ((IStatusCodeActionResult)res).StatusCode.Should().Be(403);
+        // Отказ до операции: ничего не записано — схема вики не появилась.
+        File.Exists(Path.Combine(_pages, WikiPaths.SchemaFileName)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task СервисныйТокен_Adopt_403_ДрейфНаМесте()
+    {
+        var p = CreateServerProject("Проект");
+        var key = "projects/" + p.Id;
+        var pageKey = $"Проекты/{p.Id}/Знание.md";
+        await _keeper.EnsureInitializedAsync(User);
+        var content = "---\ntype: topic\nstatus: active\n---\n# Знание\n\nтекст.";
+        (await _keeper.WritePageAsync(User, key, pageKey, content)).Status.Should().Be(WikiOpStatus.Applied);
+        // Дрейф на странице: операция, которую хочет сделать svc-вызов, реальна (adopt принял бы её).
+        File.WriteAllText(Path.Combine(_pages, "Проекты", p.Id, "Знание.md"), content + "\nчужая правка.", new UTF8Encoding(false));
+
+        var res = await Controller(serviceToken: true).Adopt(new WikiAdoptRequest(key, pageKey));
+        ((IStatusCodeActionResult)res).StatusCode.Should().Be(403);
+        // Отказ до операции: дрейф цел — adopt его не снял.
+        CatalogOf(Controller(), key).Pages.Single(x => x.PageKey == pageKey).Drift.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task СервисныйТокен_УдалитьРаздел_403_СиротаОстаётся()
+    {
+        var p = CreateServerProject("Проект");
+        var key = "projects/" + p.Id;
+        await _keeper.EnsureInitializedAsync(User);
+        (await _keeper.WritePageAsync(User, key, $"Проекты/{p.Id}/X.md", "---\ntype: topic\nstatus: active\n---\n# X\n\nтекст."))
+            .Status.Should().Be(WikiOpStatus.Applied);
+        _projects.Delete(p.Id); // раздел стал сиротой — кнопка человека удалила бы его
+
+        var res = await Controller(serviceToken: true).DeleteSection(key);
+        ((IStatusCodeActionResult)res).StatusCode.Should().Be(403);
+        Directory.Exists(Path.Combine(_pages, "Проекты", p.Id)).Should().BeTrue("отказ до удаления: папка цела");
+    }
+
+    [Fact]
+    public async Task СервисныйТокен_РазобратьЗаметку_403_ЗаявкиНет()
+    {
+        var res = await Controller(serviceToken: true).IngestNote(new WikiIngestNoteRequest("note-1"));
+        ((IStatusCodeActionResult)res).StatusCode.Should().Be(403);
+        // Отказ до проверок состояния: заявка не ставилась — открытых пакетов нет.
+        WikiPackageStore.CountOpen(WikiPaths.Root(_dir, User)).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task СервисныйТокен_Линт_403_ПрогонНеНачат()
+    {
+        var res = await Controller(serviceToken: true).Lint();
+        ((IStatusCodeActionResult)res).StatusCode.Should().Be(403);
+        // Отказ до TryRunOwnerAsync: журнал прогона не начат.
+        File.Exists(Path.Combine(WikiPaths.Keeper(_dir, User), "metrics.jsonl")).Should().BeFalse();
+    }
+
+    // Ручки чтения под svc отвечают как раньше (200): отказ — только на мутирующих.
+    // Мутация «распространить гейт на Tree»: этот тест краснеет.
+    [Fact]
+    public void СервисныйТокен_ЧтениеДерева_200()
+    {
+        TreeOf(Controller(serviceToken: true)).Sections.Should().Contain(s => s.Key == "personal");
+    }
+
     // ─── Помощники ─────────────────────────────────────────────────────────
 
     private Project CreateServerProject(string name, string owner = User)
@@ -321,10 +395,14 @@ public class WikiControllerTests : IDisposable
             .GetProperty("code").GetString().Should().Be(code);
     }
 
-    private WikiController Controller(string user = User, bool flagsOn = true)
+    // serviceToken (B2a): claim typ=svc — сервисный токен хода (тот же признак, что в
+    // TasksControllerTests); для проверки отказа 403 на мутирующих ручках.
+    private WikiController Controller(string user = User, bool flagsOn = true, bool serviceToken = false)
     {
         var http = new DefaultHttpContext();
-        http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", user)], "test"));
+        var claims = new List<Claim> { new("sub", user) };
+        if (serviceToken) claims.Add(new("typ", "svc"));
+        http.User = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"));
         return new WikiController(_keeper, _projects, _spheres, _lint, _journal, flagsOn ? new WikiFlagOn() : new WikiFlagOff(), _config, _capture, _ingest)
         {
             ControllerContext = new ControllerContext { HttpContext = http },

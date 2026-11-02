@@ -863,6 +863,66 @@ public class WikiPackagesControllerTests : IDisposable
         LogLines("revert").Should().HaveCount(1, "один фактический откат — одна строка журнала");
     }
 
+    // ─── 13. Сервисный токен (typ=svc): мутирующие ручки — 403, чтение — как раньше (B2a) ──
+
+    // «Входящие» — дверь человека: решение по операции, «принять всё», откат пакета и откат по
+    // источнику — только действия человека (решение 5). Мутация (критерий c2): убрать проверку
+    // IsServiceToken в любой из этих ручек — её тест краснеет (ручка доходит до решения).
+
+    [Fact]
+    public async Task СервисныйТокен_РешитьОперацию_403_СтатусНеМеняется()
+    {
+        var id = NewPackage(WikiPackage.StatusProposed, "common",
+            Op(WikiPackage.OpSupersede, WikiPackage.DecisionInbox));
+
+        var res = await Controller(serviceToken: true).Decide(id, new WikiDecideRequest(0, true, "подтверждено"));
+        ((IStatusCodeActionResult)res).StatusCode.Should().Be(403);
+        // Отказ до записи решения: пакет в прежнем состоянии.
+        StatusOnDisk(id).Should().Be(WikiPackage.StatusProposed);
+    }
+
+    [Fact]
+    public async Task СервисныйТокен_ПринятьВсёСпорное_403_СтатусНеМеняется()
+    {
+        var id = NewPackage(WikiPackage.StatusProposed, "common",
+            Op(WikiPackage.OpConflict, WikiPackage.DecisionInbox));
+
+        var res = await Controller(serviceToken: true).AcceptAll(id);
+        ((IStatusCodeActionResult)res).StatusCode.Should().Be(403);
+        StatusOnDisk(id).Should().Be(WikiPackage.StatusProposed);
+    }
+
+    [Fact]
+    public async Task СервисныйТокен_ОткатитьПакет_403_СтатусНеМеняется()
+    {
+        var id = NewPackage(WikiPackage.StatusApplied, "common",
+            Op(WikiPackage.OpAppend, WikiPackage.DecisionAuto));
+
+        var res = await Controller(serviceToken: true).Revert(id);
+        ((IStatusCodeActionResult)res).StatusCode.Should().Be(403);
+        // Отказ до отката: применённый пакет не стал «reverted».
+        StatusOnDisk(id).Should().Be(WikiPackage.StatusApplied);
+    }
+
+    [Fact]
+    public async Task СервисныйТокен_ОткатитьИсточник_403()
+    {
+        // Форма sourceRef правильная: отказ даёт признак токена, а не разбор формы.
+        var res = await Controller(serviceToken: true).Retract(new WikiRetractRequest("session:chat-1"));
+        ((IStatusCodeActionResult)res).StatusCode.Should().Be(403);
+    }
+
+    // Ручки чтения под svc отвечают как раньше (200): отказ — только на мутирующих.
+    // Мутация «распространить гейт на List/Get»: этот тест краснеет.
+    [Fact]
+    public void СервисныйТокен_ЧтениеПакетов_200()
+    {
+        var id = NewPackage(WikiPackage.StatusProposed, "common",
+            Op(WikiPackage.OpSupersede, WikiPackage.DecisionInbox));
+        ListOf(Controller(serviceToken: true).List(null)).Select(p => p.Id).Should().Contain(id);
+        ((OkObjectResult)Controller(serviceToken: true).Get(id)).StatusCode.Should().Be(200);
+    }
+
     // Пакет боевой пробы: карточка и страница записаны Хранителем (манифест согласован —
     // применения без дрейфа нет), сам в proposed с одной спорной операцией. sourceRef —
     // карточка, которую называет пакет: с другой на диске это «нет карточки источника».
@@ -998,10 +1058,14 @@ public class WikiPackagesControllerTests : IDisposable
             .GetProperty("code").GetString().Should().Be(code);
     }
 
-    private WikiPackagesController Controller(string user = User)
+    // serviceToken (B2a): claim typ=svc — сервисный токен хода (тот же признак, что в
+    // TasksControllerTests); для проверки отказа 403 на мутирующих ручках.
+    private WikiPackagesController Controller(string user = User, bool serviceToken = false)
     {
         var http = new DefaultHttpContext();
-        http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, user)], "test"));
+        var claims = new List<Claim> { new(JwtRegisteredClaimNames.Sub, user) };
+        if (serviceToken) claims.Add(new("typ", "svc"));
+        http.User = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"));
         return new WikiPackagesController(_projects, _config, _apply, _revert, _retract, _sessions)
         {
             ControllerContext = new ControllerContext { HttpContext = http },

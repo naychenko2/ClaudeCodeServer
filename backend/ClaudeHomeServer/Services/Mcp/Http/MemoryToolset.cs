@@ -38,6 +38,7 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 public sealed class MemoryToolset(
     PersonaManager personas,
     ProjectManager projects,
+    ISessionDirectory sessions,
     PersonaMemoryService memory,
     TeamMemoryService teamMemory,
     SphereMemoryService sphereMemory,
@@ -111,6 +112,20 @@ public sealed class MemoryToolset(
             // Та же единая точка правды зоны, что в остальных местах (guard PersonaZoneGuardTests:
             // прямых сравнений зоны в бэкенде нет)
             if (persona is not null && PersonaZone.IsSpherePersona(persona)) return Deny(NarrowSpherePersonaMemoryText);
+        }
+
+        // Запись в общую память из приватного чата — отказ всем, включая автора-владельца
+        // (S2d-5a, разрез 4bc3d04f §1 «S2d-5a», путь 17): приватный чат виден только автору, а
+        // память команды, полка сферы и память проектной персоны читают все чаты проекта —
+        // факт разговора пересёк бы границу приватности. Гейт актора S2c-6 этого не даёт: автор
+        // своего приватного чата проходит его как актор. Чтение общих полок и личная память
+        // (глобальной/сферной персоны) — как раньше.
+        if (CallerChatIsPrivate(context))
+        {
+            if (TeamWriteTools.Contains(tool)) return Deny(PrivateChatTeamText);
+            if (SphereWriteTools.Contains(tool)) return Deny(PrivateChatSphereText);
+            if (persona is not null && PersonaZone.IsProjectPersona(persona) && PersonalWriteTools.Contains(tool))
+                return Deny(PrivateChatProjectPersonaText);
         }
 
         switch (tool)
@@ -560,6 +575,51 @@ public sealed class MemoryToolset(
         "Личная память сферной персоны закрыта в общем проекте: сфера — личная группировка "
         + "владельца, её полка и память её персон — его личное пространство. Память команды "
         + "этого проекта доступна как обычно (team_memory_*).";
+
+    // --- Приватный чат (S2d-5a) ---
+
+    // Приватный ли чат-вызыватель: признак — Session.PrivateToUserId (S2d-1, Core). Сессия
+    // берётся из заголовка X-Caller-Session-Id: в бою его ставит конфиг хода (ClaudeSession),
+    // модель его не видит и не меняет. Вызов без заголовка — не чат (прямой запрос, sidecar):
+    // не приватный. Чужой приватный чат в заголовке — тоже отказ (аномалия, fail-closed);
+    // неизвестный id — как раньше: проверка ничего не открывает, только добавляет отказ.
+    private bool CallerChatIsPrivate(McpToolCallContext context) =>
+        context.CallerSessionId is { } id && sessions.GetById(id)?.PrivateToUserId is not null;
+
+    // Операции записи в общие полки — только они и закрыты из приватного чата: чтение
+    // (search/list/get_focus) ничего не выносит наружу. Для проектной персоны закрыты и
+    // memory_from_note (закрепление заметки в её памяти — запись в общую полку), и
+    // memory_clear_focus (меняет состояние персоны, видимое другим чатам: фокус подмешивается
+    // в recall). memory_to_note НЕ закрыт: он копирует уже общую запись персоны в personal
+    // vault вызывающего (NotesService.Create без Source → PersonalKey) — ни записи в общую
+    // полку, ни выноса приватного содержания наружу в нём нет.
+    private static readonly HashSet<string> TeamWriteTools =
+        new(StringComparer.Ordinal) { "team_memory_remember", "team_memory_update", "team_memory_forget" };
+    private static readonly HashSet<string> SphereWriteTools =
+        new(StringComparer.Ordinal) { "sphere_memory_remember", "sphere_memory_forget", "sphere_memory_adopt" };
+    private static readonly HashSet<string> PersonalWriteTools =
+        new(StringComparer.Ordinal)
+        {
+            "memory_remember", "memory_rethink", "memory_forget",
+            "memory_from_note", "memory_clear_focus",
+        };
+
+    // Тексты отказа приватного чата — фиксированные, без id и названий (тот же приём, что у
+    // текстов узкой рамки)
+    private const string PrivateChatTeamText =
+        "Запись в память команды из приватного чата закрыта: приватный чат виден только "
+        + "автору, а память команды читают все участники проекта. Чтение (team_memory_list/"
+        + "team_memory_search) доступно. Запиши это из общего чата проекта.";
+
+    private const string PrivateChatSphereText =
+        "Запись в память сферы из приватного чата закрыта: память сферы читают все проекты "
+        + "сферы. Чтение (sphere_memory_list/sphere_memory_search) доступно. Запиши это из "
+        + "общего чата.";
+
+    private const string PrivateChatProjectPersonaText =
+        "Запись в память проектной персоны из приватного чата закрыта: проектная персона — "
+        + "общий собеседник команды, её память подмешивается ко всем чатам проекта. Чтение "
+        + "своей памяти и личная память глобальной персоны доступны как обычно.";
 
     private static McpToolCallResult Text(string text) => new(text);
 

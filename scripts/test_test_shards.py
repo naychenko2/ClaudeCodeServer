@@ -465,7 +465,7 @@ class AbortAfterGreenTests(unittest.TestCase):
         ts.launch = lambda args, log: (object(), None)
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                _, proofs = ts.launch_shards("p", [["App.Tests.A", "App.Tests.B"], ["App.Tests.C"]], tmp, "shard", None, tests)
+                _, proofs, _ = ts.launch_shards("p", [["App.Tests.A", "App.Tests.B"], ["App.Tests.C"]], tmp, "shard", None, tests)
                 write_trx(tmp, "shard1", self.FULL)
                 write_trx(tmp, "shard2", [("App.Tests.C.Four", "Passed")])
                 self.assertEqual([None, None], [p() for p in proofs])
@@ -473,6 +473,139 @@ class AbortAfterGreenTests(unittest.TestCase):
                 self.assertEqual("свежего TRX шарда нет", proofs[1]())
         finally:
             ts.launch = orig
+
+
+class ReportTests(unittest.TestCase):
+    """Г2: сводка wait_all — число тестов и стена всегда, имена упавших — по шардам с кодом выхода ≠ 0."""
+    GREEN = [("App.Tests.A.One", "Passed"), ("App.Tests.A.Two", "Passed"), ("App.Tests.B.Three", "NotExecuted")]
+
+    def _wait(self, tmp, scripts, shards):
+        """shards: [(имя TRX-префикса, результаты|None)]; возвращает stdout сводки и код."""
+        procs, reports = [], []
+        for i, (c, (name, results)) in enumerate(zip(scripts, shards)):
+            if results is not None:
+                write_trx(tmp, name, results)
+            procs.append((subprocess.Popen([sys.executable, "-c", c]), open(os.path.join(tmp, f"{i}.log"), "w")))
+            reports.append(lambda n=name: ts.trx_report(tmp, n, 0))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            code = ts.wait_all(procs, time.monotonic(), [None] * len(procs), reports)
+        return code, out.getvalue()
+
+    def test_зелёный_исход_печатает_число_тестов_и_стену(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, out = self._wait(tmp, ["pass", "pass"], [("shard1", self.GREEN), ("shard2", [("App.Tests.C.Four", "Passed")])])
+        self.assertEqual(0, code)
+        self.assertRegex(out, r"Тестов: 4 \(упало 0, пропущено 1\) за стену \d+\.\d с")
+        self.assertNotIn("Упавшие тесты", out)
+
+    def test_красный_шард_печатает_fqn_упавших_а_зелёный_сосед_молчит(self):
+        red = [("App.Tests.A.One", "Passed"), ("App.Tests.A.Two", "Failed"), ("App.Tests.B.Three", "Failed")]
+        with tempfile.TemporaryDirectory() as tmp:
+            code, out = self._wait(tmp, ["raise SystemExit(1)", "pass"], [("shard1", red), ("shard2", self.GREEN)])
+        self.assertEqual(1, code)
+        self.assertIn("Тестов: 6 (упало 2, пропущено 1)", out)
+        self.assertIn("Упавшие тесты shard1 (код 1): результатов 2, тестов 2", out)
+        self.assertIn("  App.Tests.A.Two\n", out)
+        self.assertIn("  App.Tests.B.Three\n", out)
+        self.assertNotIn("App.Tests.A.One", out)  # прошедший тест в сводку не попадает
+        self.assertNotIn("shard2 (код", out)
+
+    def test_строки_теории_схлопываются_в_один_fqn(self):
+        red = [('App.Tests.A.Two(x: 1, s: "a(b)")', "Failed"), ("App.Tests.A.Two(x: 2, s: \"c\")", "Failed")]
+        with tempfile.TemporaryDirectory() as tmp:
+            _, out = self._wait(tmp, ["raise SystemExit(1)"], [("shard1", red)])
+        self.assertIn("результатов 2, тестов 1", out)
+        self.assertEqual(1, out.count("  App.Tests.A.Two\n"))
+
+    def test_упавших_больше_двадцати_хвост_счётчиком(self):
+        red = [(f"App.Tests.A.T{i:02}", "Failed") for i in range(25)]
+        with tempfile.TemporaryDirectory() as tmp:
+            _, out = self._wait(tmp, ["raise SystemExit(1)"], [("shard1", red)])
+        self.assertEqual(20, sum(1 for l in out.splitlines() if l.startswith("  App.Tests.A.T")))
+        self.assertIn("  App.Tests.A.T19\n", out)
+        self.assertNotIn("App.Tests.A.T20", out)
+        self.assertIn("… и ещё 5", out)
+
+    def test_красный_шард_без_trx_называет_причину_а_не_молчит(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, out = self._wait(tmp, ["raise SystemExit(2)"], [("shard1", None)])
+        self.assertIn("Упавшие тесты shard1 (код 2): неизвестны — свежего TRX шарда нет", out)
+        self.assertIn("без TRX: shard1", out)
+
+    def test_красный_код_при_чистом_trx_не_выдаёт_пустой_список_за_зелёный(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, out = self._wait(tmp, ["raise SystemExit(1)"], [("shard1", self.GREEN)])
+        self.assertIn("в TRX провалов нет — прогон оборван", out)
+
+    def test_старый_trx_не_считается(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.utime(write_trx(tmp, "shard1", self.GREEN), (1, 1))
+            report = ts.trx_report(tmp, "shard1", time.time() - 60)
+        self.assertIsNone(report["total"])
+
+    def test_префикс_shard1_не_цепляет_shard10(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write_trx(tmp, "shard1", self.GREEN)
+            write_trx(tmp, "shard10", [("App.Tests.Z.Bad", "Failed")])
+            report = ts.trx_report(tmp, "shard1", 0)
+        self.assertEqual((3, []), (report["total"], report["failed"]))
+
+    def test_rest_с_несколькими_trx_складывает_результаты(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write_trx(tmp, "fast-rest", self.GREEN, stamp="20261030044024")
+            write_trx(tmp, "fast-rest", [("Other.Tests.X.Y", "Failed")], stamp="20261030044025")
+            report = ts.trx_report(tmp, "fast-rest", 0)
+        self.assertEqual((4, ["Other.Tests.X.Y"]), (report["total"], report["failed"]))
+
+    def test_run_fast_отдаёт_wait_all_отчёты_rest_и_шардов(self):
+        seen = {}
+        orig = (ts.list_tests, ts.launch, ts.wait_all)
+        ts.list_tests = lambda path, flt: ([f"App.Tests.C{i}.T" for i in range(4)], None)
+        ts.launch = lambda args, log: (object(), None)
+
+        def fake_wait(procs, start, proofs=None, reports=None):
+            seen["n"], seen["reports"] = len(procs), reports
+            return 0
+        ts.wait_all = fake_wait
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                slnx = os.path.join(tmp, "x.slnx")
+                with open(slnx, "w", encoding="utf-8") as f:
+                    f.write(RunFastTests.SLNX)
+                os.makedirs(os.path.join(tmp, "r"), exist_ok=True)
+                write_trx(os.path.join(tmp, "r"), "fast-rest", [("Other.Tests.X.Y", "Failed")])
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    ts.run_fast(slnx, [("b/App.Tests", 2)], os.path.join(tmp, "r"), {}, "F")
+                self.assertEqual(seen["n"], len(seen["reports"]))
+                self.assertEqual(["Other.Tests.X.Y"], seen["reports"][0]()["failed"])
+        finally:
+            ts.list_tests, ts.launch, ts.wait_all = orig
+
+    def test_run_shards_отдаёт_wait_all_отчёты_шардов(self):
+        seen = {}
+        orig = (ts.list_tests, ts.launch, ts.wait_all)
+        ts.list_tests = lambda path, flt: ([f"App.Tests.C{i}.T" for i in range(4)], None)
+        ts.launch = lambda args, log: (object(), None)
+
+        def fake_wait(procs, start, proofs=None, reports=None):
+            seen["n"], seen["reports"] = len(procs), reports
+            return 0
+        ts.wait_all = fake_wait
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                results = os.path.join(tmp, "r")
+                os.makedirs(results)
+                write_trx(results, "shard1", self.GREEN)
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    code = ts.run_shards("b/App.Tests", 2, results, {}, "F")
+                self.assertEqual(0, code)
+                self.assertEqual(2, seen["n"])
+                self.assertIsNotNone(seen["reports"])
+                self.assertEqual(seen["n"], len(seen["reports"]))
+                self.assertEqual(3, seen["reports"][0]()["total"])
+        finally:
+            ts.list_tests, ts.launch, ts.wait_all = orig
 
 
 class RunFastTests(unittest.TestCase):
@@ -499,7 +632,7 @@ class RunFastTests(unittest.TestCase):
                     rest["text"] = f.read()
             return object(), None
         ts.launch = fake_launch
-        ts.wait_all = lambda procs, start, proofs=None: 0
+        ts.wait_all = lambda procs, start, proofs=None, reports=None: 0
         if tamper:  # шард теряет класс: самопроверка обязана остановить прогон до запуска
             real = ts.layout
             ts.layout = lambda classes, n, t=None, f=None: [real(classes, n, t, f)[0][1:]] + real(classes, n, t, f)[1:]

@@ -22,6 +22,9 @@ public sealed class FilmAssemblerTests : IDisposable
     private readonly FilmWorld _w;
     private readonly Spend _spend = new();
 
+    // Потолок-страховка от потерянного события, а не способ ждать: та же стена, что была у прежнего Until (15 с)
+    private static readonly TimeSpan Wait = TimeSpan.FromSeconds(15);
+
     public FilmAssemblerTests() => _w = new FilmWorld(_dsp);
 
     public void Dispose() => _w.Dispose();
@@ -275,7 +278,7 @@ public sealed class FilmAssemblerTests : IDisposable
         _dsp.Hold = new TaskCompletionSource();
         var assembler = Assembler();
         assembler.Start(Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human);
-        await Until(() => _dsp.Started);
+        await _dsp.StartedSignal.Task.WaitAsync(Wait);
 
         assembler.Cancel(Owner, _w.Scope, "video/a/a.film").Should().BeTrue();
         await assembler.WhenIdleAsync();
@@ -326,7 +329,13 @@ public sealed class FilmAssemblerTests : IDisposable
         var assembler = Assembler();
         assembler.Start(Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human);
 
-        await Until(() => _w.Registry.Get(Owner, ProjectId, "video/a/a.film") is { State: FilmBuildStates.Running, Progress: >= 0.5 });
+        // Отчёт доходит до состояния синхронно на нити сборки: BuildProgress.Report → OnProgress → registry.Set
+        // (FilmAssembler.cs:247) выполняется внутри AssembleAsync раньше сигнала. После сигнала состояние
+        // в реестре уже Running/0.5 — проверка после метки детерминирована, опрос стеной не нужен.
+        await _dsp.ReportsDelivered.Task.WaitAsync(Wait);
+        var reached = _w.Registry.Get(Owner, ProjectId, "video/a/a.film")!;
+        reached.State.Should().Be(FilmBuildStates.Running, "отчёт дошёл до состояния");
+        reached.Progress.Should().BeGreaterOrEqualTo(0.5);
         _dsp.Hold.SetResult();
         await assembler.WhenIdleAsync();
 
@@ -334,19 +343,16 @@ public sealed class FilmAssemblerTests : IDisposable
         _w.Broadcaster.Sent.OfType<VideoFilmChangedMessage>().Select(m => m.State.Build?.State).Should().Contain(FilmBuildStates.Done);
     }
 
-    private static async Task Until(Func<bool> probe)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(15);
-        while (!probe())
-        {
-            if (DateTime.UtcNow > deadline) throw new TimeoutException("не дождались");
-            await Task.Delay(10);
-        }
-    }
-
     private sealed class FakeDsp : IVideoDsp
     {
         public static readonly byte[] Output = [0xF1, 0x1A, 0x00, 0x01];
+
+        // Сигнал «шов начал сборку» — событие для теста вместо опроса флага стеной
+        public readonly TaskCompletionSource StartedSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Сигнал «отчёты прогресса дошли до callback'а»: OnProgress выполняется синхронно на этой же нити
+        // (BuildProgress → OnProgress → registry.Set, FilmAssembler.cs:243-248), поэтому после сигнала
+        // состояние в реестре уже выставлено
+        public readonly TaskCompletionSource ReportsDelivered = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public bool IsAvailable { get; init; } = true;
         public VideoDspInfo? Info { get; set; } = new(10, 640, 360, 24, true);
@@ -355,7 +361,6 @@ public sealed class FilmAssemblerTests : IDisposable
         public TaskCompletionSource? Hold { get; set; }
         public string? Failure { get; set; }
         public IReadOnlyList<VideoAssembleProgress> Reports { get; set; } = [];
-        public volatile bool Started;
 
         public bool Available => IsAvailable;
 
@@ -374,8 +379,9 @@ public sealed class FilmAssemblerTests : IDisposable
         public async Task<VideoDspResult> AssembleAsync(FilmPlan plan, string outPath, IProgress<VideoAssembleProgress>? progress, CancellationToken ct)
         {
             lock (Plans) Plans.Add(plan);
-            Started = true;
+            StartedSignal.TrySetResult();
             foreach (var r in Reports) progress?.Report(r);
+            ReportsDelivered.TrySetResult();
             // Как настоящий шов: временный файл пишется, при отмене и отказе удаляется
             await File.WriteAllBytesAsync(outPath, Output, ct);
             try

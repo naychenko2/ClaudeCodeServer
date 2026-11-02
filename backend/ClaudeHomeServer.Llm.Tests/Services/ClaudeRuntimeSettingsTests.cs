@@ -13,12 +13,40 @@ namespace ClaudeHomeServer.Tests.Services;
 // Файл --settings хода: выключение хуков и гейт плагина браузера. Проверяем содержимое
 // файла, а не запуск CLI: неверный ключ настроек CLI молча проглотит, и плагин поедет
 // в контекст всем персонам подряд (ровно то, ради чего гейт и делался).
-// Коллекция Inotify: тест относительного DataPath поднимает полный хост (он открывает
-// inotify-экземпляры перечитывания конфигурации), а InotifyLeakRegressionTests меряет их
-// число в процессе — тот же оговор, что у LlmSubsystemDiCycleTests.
+// Коллекция Inotify: тест относительного DataPath поднимает хост (он открывает inotify-
+// экземпляры перечитывания конфигурации), а InotifyLeakRegressionTests меряет их число в
+// процессе — тот же оговор, что у LlmSubsystemDiCycleTests. Хост — на КЛАСС (храповик,
+// тест. «Г3»): поднимается один раз в фикстуре Hosts, живёт до конца класса — вся работа
+// с ним остаётся внутри сериализованной коллекции, как и раньше.
+[Trait("Category", "Host")]
 [Collection(TestCollections.Inotify)]
-public class ClaudeRuntimeSettingsTests
+public class ClaudeRuntimeSettingsTests : IClassFixture<ClaudeRuntimeSettingsTests.Hosts>
 {
+    // Хост класса нужен одному тесту (относительный DataPath) и требует реального DI-графа.
+    // Тестовый каталог создаётся ПОД cwd процесса, поэтому относительный путь резолвится
+    // именно в него и весь хост (users.json, projects.json) остаётся в нём, а не в чужой папке.
+    public sealed class Hosts : TestWebApplicationFactory
+    {
+        public string RelDir { get; } = "ccs-relative-data-" + Guid.NewGuid().ToString("N");
+
+        public Hosts()
+        {
+            Directory.CreateDirectory(RelDir);
+            // ExtraConfig применяется после встроенных ключей фабрики — перетирает DataPath
+            ExtraConfig["DataPath"] = Path.Combine(RelDir, "projects.json");
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            base.Dispose(disposing);
+            if (disposing) { try { Directory.Delete(RelDir, true); } catch { } }
+        }
+    }
+
+    private readonly Hosts _hosts;
+
+    public ClaudeRuntimeSettingsTests(Hosts hosts) => _hosts = hosts;
+
     private static (string Path, JsonElement Json) Settings(bool browserEnabled)
     {
         var args = ClaudeRuntimeSettings
@@ -337,32 +365,21 @@ public class ClaudeRuntimeSettingsTests
     // Н5: data-корень SessionManager берёт резолвным GetFullPath (тот же приём, что Program.cs
     // и NotesService) — иначе относительный DataPath отдал бы в правило относительный корень,
     // а «//…» в синтаксисе правил CLI значит абсолютный путь. Идём через реальный DI-граф
-    // (тот же приём, что LlmSubsystemDiCycleTests): тестовый каталог создаётся ПОД cwd
-    // процесса, поэтому относительный путь резолвится именно в него и весь хост (users.json,
-    // projects.json) остаётся в нём, а не в чужой папке.
+    // класса-фикстуры Hosts (тот же приём, что LlmSubsystemDiCycleTests): относительный
+    // DataPath задан в её конструкторе, каталог создан под cwd процесса — резолвится в него.
     [Fact]
     public void ОтносительныйDataPath_ДаётАбсолютныйКореньВDenyПравиле()
     {
-        var relDir = Path.Combine("ccs-relative-data-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(relDir);
-        try
-        {
-            using var factory = new TestWebApplicationFactory
-            {
-                ExtraConfig = { ["DataPath"] = Path.Combine(relDir, "projects.json") },
-            };
-            var sessions = factory.Services.GetRequiredService<SessionManager>();
+        var sessions = _hosts.Services.GetRequiredService<SessionManager>();
 
-            var dataDir = (string)typeof(SessionManager)
-                .GetField("_dataDir", BindingFlags.NonPublic | BindingFlags.Instance)!
-                .GetValue(sessions)!;
-            Path.IsPathRooted(dataDir).Should().BeTrue(
-                "корень deny-правила резолвится из относительного DataPath: GetFullPath");
+        var dataDir = (string)typeof(SessionManager)
+            .GetField("_dataDir", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(sessions)!;
+        Path.IsPathRooted(dataDir).Should().BeTrue(
+            "корень deny-правила резолвится из относительного DataPath: GetFullPath");
 
-            var abs = Path.GetFullPath(relDir).Replace('\\', '/');
-            ClaudeRuntimeSettings.WikiDenyRules(dataDir).Should().Equal($"Edit(//{abs.TrimStart('/')}/wiki/**)");
-        }
-        finally { try { Directory.Delete(relDir, true); } catch { } }
+        var abs = Path.GetFullPath(_hosts.RelDir).Replace('\\', '/');
+        ClaudeRuntimeSettings.WikiDenyRules(dataDir).Should().Equal($"Edit(//{abs.TrimStart('/')}/wiki/**)");
     }
 
     [Fact]

@@ -158,6 +158,64 @@ public class PregateServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessCheckScriptMissingInTree_NotRunWithoutLaunching_AndVerdictIsUnmeasured()
+    {
+        var launcher = Launcher(_ => ("can't open file", 2));
+        var service = Service(launcher, Check("быстрые тесты", "python3", ["-I", "scripts/test-shards.py", "--run-fast"]));
+
+        var verdict = await service.RunAsync(Request(), CancellationToken.None);
+
+        var check = verdict.Checks.Should().ContainSingle().Subject;
+        check.Status.Should().Be(PregateStatus.NotRun);
+        check.Detail.Should().Be("нет файла scripts/test-shards.py в этом дереве");
+        launcher.Specs.Should().BeEmpty("процесс не стартует, красного нет");
+        verdict.IsGreen.Should().BeTrue();
+        verdict.Unmeasured.Should().NotBeNull("вердикт не записывается ни зелёным, ни красным — серия не растёт");
+    }
+
+    [Fact]
+    public async Task ProcessCheckScriptPresentInTree_Runs()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "scripts"));
+        File.WriteAllText(Path.Combine(_root, "scripts", "test-shards.py"), "");
+        var launcher = Launcher(_ => ("", 0));
+        var service = Service(launcher, Check("быстрые тесты", "python3", ["-I", "scripts/test-shards.py"]));
+
+        var verdict = await service.RunAsync(Request(), CancellationToken.None);
+
+        verdict.Checks.Should().ContainSingle().Which.Status.Should().Be(PregateStatus.Green);
+        launcher.Specs.Should().ContainSingle();
+    }
+
+    [Theory]
+    [InlineData("https://example.com/lint")]
+    [InlineData("/opt/ci/lint.sh")]
+    [InlineData("echo a/b c")]
+    public async Task ProcessCheckArgIsNotRelativePath_Runs(string arg)
+    {
+        var launcher = Launcher(_ => ("", 0));
+        var service = Service(launcher, Check("проверка", "python3", [arg]));
+
+        var verdict = await service.RunAsync(Request(), CancellationToken.None);
+
+        verdict.Checks.Should().ContainSingle().Which.Status.Should().NotBe(PregateStatus.NotRun);
+        launcher.Specs.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ProcessCheckArgIsExistingDirectory_Runs()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "scripts", "sub"));
+        var launcher = Launcher(_ => ("", 0));
+        var service = Service(launcher, Check("проверка", "python3", ["scripts/sub"]));
+
+        var verdict = await service.RunAsync(Request(), CancellationToken.None);
+
+        verdict.Checks.Should().ContainSingle().Which.Status.Should().Be(PregateStatus.Green);
+        launcher.Specs.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task NoChecksConfigured_GreenWithoutLaunching()
     {
         var launcher = Launcher(_ => ("", 1));

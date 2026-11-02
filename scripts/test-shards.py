@@ -388,10 +388,42 @@ def trx_proof(results, name, expected, launched_at):
     return None
 
 
+def trx_report(results, name, launched_at):
+    """Сводка шарда из ВСЕХ свежих TRX с префиксом name: {name, total, skipped, failed, error}.
+
+    failed — результаты не Passed/NotExecuted (упавшие, ошибки, таймауты), по одному на запись TRX;
+    error — причина, по которой TRX не прочитан (total тогда None). Префикс rest-процесса может дать несколько файлов
+    (по файлу на тестовый проект решения): числа складываются."""
+    paths = [os.path.join(results, f) for f in sorted(os.listdir(results))
+             if f.startswith(name + "_") and f.endswith(".trx")
+             and os.path.getmtime(os.path.join(results, f)) >= launched_at - MTIME_SLACK]
+    report = {"name": name, "total": None, "skipped": 0, "failed": [], "error": None}
+    if not paths:
+        report["error"] = "свежего TRX шарда нет"
+        return report
+    total = 0
+    for path in paths:
+        try:
+            root = ET.parse(path).getroot()
+        except (ET.ParseError, OSError) as e:
+            report["error"] = f"TRX не читается: {e}"
+            return report
+        for r in root.findall(".//{*}UnitTestResult"):
+            total += 1
+            outcome = r.get("outcome")
+            if outcome == "NotExecuted":
+                report["skipped"] += 1
+            elif outcome != "Passed":
+                report["failed"].append(test_fqn(r.get("testName", "")))
+    report["total"] = total
+    return report
+
+
 def launch_shards(project, shards, results, prefix, extra_filter, tests):
-    """Запускает шарды; возвращает (процессы, доказательства): доказательство шарда — вызываемое без аргументов,
-    вердикт trx_proof, нужно wait_all только для сигнального кода выхода."""
-    procs, proofs = [], []
+    """Запускает шарды; возвращает (процессы, доказательства, отчёты): доказательство шарда — вызываемое без
+    аргументов, вердикт trx_proof, нужно wait_all только для сигнального кода выхода; отчёт — trx_report шарда
+    для сводки (число тестов и имена упавших)."""
+    procs, proofs, reports = [], [], []
     for i, s in enumerate(shards):
         expr = f"({shard_filter(s)})" + (f"&({extra_filter})" if extra_filter else "")
         name = f"{prefix}{i + 1}"
@@ -400,16 +432,54 @@ def launch_shards(project, shards, results, prefix, extra_filter, tests):
         procs.append(launch([project, "--no-build", "--filter", expr, "--logger", f"trx;LogFilePrefix={name}",
                              "--results-directory", results], os.path.join(results, f"{name}.log")))
         proofs.append(lambda n=name, e=expected, t=launched_at: trx_proof(results, n, e, t))
-    return procs, proofs
+        reports.append(lambda n=name, t=launched_at: trx_report(results, n, t))
+    return procs, proofs, reports
 
 
-def wait_all(procs, start, proofs=None):
+# Сколько имён упавших тестов печатать на шард: хвост — счётчиком, чтобы сводка не раздувала карточку
+MAX_FAILED_SHOWN = 20
+
+
+def print_report(wall, codes, reports):
+    """Сводка по TRX: число тестов и стена — всегда (и в зелёном), упавшие тесты — по шардам с кодом выхода ≠ 0."""
+    if not reports:
+        return
+    got = [r() if r else None for r in reports]
+    total = sum(r["total"] for r in got if r and r["total"] is not None)
+    failed = sum(len(r["failed"]) for r in got if r)
+    skipped = sum(r["skipped"] for r in got if r)
+    blind = [r["name"] for r in got if r and r["total"] is None]
+    line = f"Тестов: {total} (упало {failed}, пропущено {skipped}) за стену {wall:.1f} с"
+    if blind:
+        line += f"; без TRX: {', '.join(blind)}"
+    print(line)
+    for i, (code, r) in enumerate(zip(codes, got)):
+        if code == 0:
+            continue
+        label = r["name"] if r else f"шард {i + 1}"
+        if r is None or r["total"] is None:
+            print(f"Упавшие тесты {label} (код {code}): неизвестны — {r['error'] if r else 'отчёта нет'}")
+        elif not r["failed"]:
+            print(f"Упавшие тесты {label} (код {code}): в TRX провалов нет — прогон оборван, смотри лог шарда")
+        else:
+            names = list(dict.fromkeys(r["failed"]))
+            print(f"Упавшие тесты {label} (код {code}): результатов {len(r['failed'])}, тестов {len(names)}")
+            for n in names[:MAX_FAILED_SHOWN]:
+                print(f"  {n}")
+            if len(names) > MAX_FAILED_SHOWN:
+                print(f"  … и ещё {len(names) - MAX_FAILED_SHOWN}")
+
+
+def wait_all(procs, start, proofs=None, reports=None):
     """Ждёт все процессы, меряя стену и пик RSS дерева; печатает итог, возвращает 0, только если все шарды вышли с 0.
 
     Убитый сигналом шард (OOM-killer, -9) даёт отрицательный код: max() проглотил бы его нулём соседа.
     Единственное исключение — сигнальный код шарда, у которого есть доказательство из proofs (trx_proof):
     хост testhost падал SIGABRT уже после полного зелёного прогона. Положительный код не прощается никогда,
-    шард без доказательства (rest-процесс, нет TRX, неполный TRX) остаётся красным."""
+    шард без доказательства (rest-процесс, нет TRX, неполный TRX) остаётся красным.
+
+    reports — отчёты шардов (trx_report): по ним сводка печатает число тестов всегда, а по каждому шарду с
+    ненулевым кодом выхода — имена упавших тестов (до MAX_FAILED_SHOWN)."""
     peak = [0]
     done = threading.Event()
 
@@ -428,6 +498,7 @@ def wait_all(procs, start, proofs=None):
     done.set()
     sampler.join()
     print(f"Стена шардов: {wall:.1f} с; коды выхода: {codes}; пик RSS дерева: {peak[0] / 1024 / 1024:.2f} ГиБ")
+    print_report(wall, codes, reports)
     failed = []
     for i, c in enumerate(codes):
         if c == 0:
@@ -456,8 +527,8 @@ def run_shards(project, n, results, timings, extra_filter, fast=None):
     print(summary(tests, shards, timings, fast))
     os.makedirs(results, exist_ok=True)
     start = time.monotonic()
-    procs, proofs = launch_shards(project, shards, results, "shard", extra_filter, tests)
-    return wait_all(procs, start, proofs)
+    procs, proofs, reports = launch_shards(project, shards, results, "shard", extra_filter, tests)
+    return wait_all(procs, start, proofs, reports)
 
 
 def parse_split(text):
@@ -523,26 +594,29 @@ def run_fast(slnx, split, results, timings, extra_filter, fast=None):
         print(summary(listings[path], shards, timings, fast))
         layouts.append((path, shards))
     os.makedirs(results, exist_ok=True)
-    procs, proofs = [], []
+    procs, proofs, reports = [], [], []
     rest_path = os.path.join(os.path.dirname(slnx), "ClaudeHomeServer.FastRest.slnx")
     try:
         if rest_projects:
             with open(rest_path, "w", encoding="utf-8") as f:
                 f.write(shard_slnx(text, rest_projects, exclude))
+            rest_at = time.time()
             procs.append(launch([rest_path, "--no-build"] + (["--filter", extra_filter] if extra_filter else [])
                                 + ["--logger", "trx;LogFilePrefix=fast-rest", "--results-directory", results],
                                 os.path.join(results, "rest.log")))
             proofs.append(None)  # состав rest не листается — доказать полноту нечем, сигнальный код остаётся красным
+            reports.append(lambda t=rest_at: trx_report(results, "fast-rest", t))
         for path, shards in layouts:
             # Префикс fast: профиль этих TRX отдаёт секунды прохода Fast, и следующая раскладка
             # держит серийные классы семейства ClaudeSessionPromptSections* (каждый ≤ ~9,2 с, сумма 34,8 с) в шарде с тем, что укладывается в их поток
-            ps, pf = launch_shards(path, shards, results, "fast-" + os.path.basename(path.rstrip("/")) + "-",
+            ps, pf, pr = launch_shards(path, shards, results, "fast-" + os.path.basename(path.rstrip("/")) + "-",
                                    extra_filter, listings[path])
             procs += ps
             proofs += pf
+            reports += pr
         print(f"Подготовка до запуска: {time.monotonic() - start:.1f} с; процессов {len(procs)}")
         run_start = time.monotonic()
-        return wait_all(procs, run_start, proofs)
+        return wait_all(procs, run_start, proofs, reports)
     finally:
         if os.path.exists(rest_path):
             os.remove(rest_path)

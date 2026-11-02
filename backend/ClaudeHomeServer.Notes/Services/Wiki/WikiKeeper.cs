@@ -28,6 +28,11 @@ public sealed class WikiKeeper : IWikiRelink
     private readonly IProjectEventLogService? _events;
 
     private readonly ConcurrentDictionary<(string Owner, string Section), SemaphoreSlim> _locks = new();
+    /// <summary>Тестовый сигнал: операция подошла взять замок раздела — ДО ожидания. Нужен
+    /// там, где тест обязан знать, что встречная операция стоит на чужом замке, а не мерит
+    /// это по времени: без сигнала окно проверки строится паузой и флакает под параллелью
+    /// (Ф7). Вызов — вне блокировок, только когда тест навесил хук; в проде он null.</summary>
+    internal Action<string, string>? SectionLockRequestedHook;
     // Блокировка инициализации — на владельца, вне раздела: «Завести» трогает только
     // pages/_schema.md и служебные каталоги, ни один раздел не держит.
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _initLocks = new();
@@ -254,6 +259,9 @@ public sealed class WikiKeeper : IWikiRelink
             foreach (var key in ordered)
             {
                 var sem = _locks.GetOrAdd((ownerId, key), _ => new SemaphoreSlim(1));
+                // Сигнал — до ожидания: «подошла к замку», а не «получила его». Порядок сигнала
+                // и есть то, что встречный тест сверяет с каноническим порядком (решение 10).
+                SectionLockRequestedHook?.Invoke(ownerId, key);
                 await sem.WaitAsync().ConfigureAwait(false);
                 acquired.Add(sem);
             }

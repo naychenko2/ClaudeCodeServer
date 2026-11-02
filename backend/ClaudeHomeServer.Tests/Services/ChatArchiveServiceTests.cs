@@ -82,6 +82,31 @@ public class ChatArchiveServiceTests : IDisposable
         stalePersonal.IsArchived.Should().BeFalse("личный порог не задан — чаты вне проектов не трогаем");
     }
 
+    // S2d-4h: автоправило не архивирует приватные чаты — ни чужой, ни свой свой;
+    // общий чат проекта архивируется как раньше. Свой приватный автор убирает ручкой.
+    [Fact]
+    public async Task Тик_ПриватныеЧатыПравилоНеТрогает_ОбщийАрхивируется()
+    {
+        var owner = EnableRule(days: null, firstRun: true);
+        var project = NewProject(owner.Id, "proj-private-rule", days: 7);
+        var editor = CreateUser();
+        _projects.SetMembers(project.Id, [new ProjectMember { UserId = editor.Id, Role = ProjectRole.Editor, AddedBy = owner.Id }]);
+        var common = await _sessions.CreateAsync(project.Id, ClaudeMode.Auto);
+        CoolDown(common, ageDays: 10);
+        var foreignPrivate = await _sessions.CreateAsync(project.Id, ClaudeMode.Auto);
+        _sessions.GetById(foreignPrivate.Id)!.PrivateToUserId = editor.Id;
+        CoolDown(foreignPrivate, ageDays: 10);
+        var ownPrivate = await _sessions.CreateAsync(project.Id, ClaudeMode.Auto);
+        _sessions.GetById(ownPrivate.Id)!.PrivateToUserId = owner.Id;
+        CoolDown(ownPrivate, ageDays: 10);
+
+        await _sut.TickAsync(DateTime.UtcNow);
+
+        common.IsArchived.Should().BeTrue("общий чат — кандидат правила, как раньше");
+        foreignPrivate.IsArchived.Should().BeFalse("чужой приватный — правило не действует над чужими данными");
+        ownPrivate.IsArchived.Should().BeFalse("свой приватный — тоже: только ручная архивация автора");
+    }
+
     // --- Гейты тика ---
 
     // Главная защита от «включилось у всех»: без заданного порога правило не архивирует ничего

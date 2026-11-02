@@ -1987,6 +1987,11 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
                 if (info.ProjectId is not null || info.OwnerId != ownerId) continue;
             }
             else if (info.ProjectId != projectId) continue;
+            // S2d-4h: приватный чат (PrivateToUserId != null, включая пустой — тот же
+            // fail-closed, что у SessionAccess.CanSee) не входит в машинные обходы ни в какой
+            // форме: правило проекта не действует над приватным чатом — ни чужим, ни своим
+            // своим; свой архивирует автор ручкой (ручная архивация через эту выборку не идёт).
+            if (info.PrivateToUserId is not null) continue;
             if (!MatchesArchiveRule(info, _taskLookup, cutoff)) continue;
             // Живость в чистый предикат не входит: она — свойство entry/адаптера, не Session
             if (HasTurnInFlight(entry) || entry.Process is { HasTrackedBg: true }) continue;
@@ -2211,6 +2216,9 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         return _sessions.Values
             .Select(e => e.Info)
             .Where(s => s.ProjectId == projectId
+                // S2d-4h: приватный чат не кандидат разбора ни фоном, ни кнопкой — его название
+                // и реплики истории не уходят в модель (тот же признак, что у SessionAccess.CanSee)
+                && s.PrivateToUserId is null
                 && !s.IsArchived
                 && s.Status is not (SessionStatus.Working or SessionStatus.Waiting)
                 && SessionTaskLinks.ParentSessionId(s, _taskLookup) is null

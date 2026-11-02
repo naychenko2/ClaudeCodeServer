@@ -312,7 +312,7 @@ public class WikiIngestTests : IDisposable
         res.Outcome.Should().Be(WikiIngestService.OutcomeAwaitingHuman, res.Reason);
         Sha256Of(Path.Combine(Root, "pages/" + PagePath)).Should().Be(hashBefore);
         var reasons = PackagesOnDisk().Single().Operations.Select(o => o.Reason).ToList();
-        reasons.Should().ContainSingle().Which.Should().Contain("откатил человек");
+        reasons.Should().ContainSingle().Which.Should().Contain("откатили вручную");
     }
 
     [Fact]
@@ -322,6 +322,22 @@ public class WikiIngestTests : IDisposable
         LogLine(DaysAgo(1), "revert", "system", PagePath);
 
         var res = await Sut(new FakeLlm(claims: ClaimsJson, plan: PlanJson)).IngestAsync(User, Req());
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeApplied, res.Reason);
+    }
+
+    private sealed class ShiftedTime(TimeSpan shift) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => DateTimeOffset.UtcNow + shift;
+    }
+
+    [Fact]
+    public async Task N7d_ПодменённыеЧасы_ТотЖеОткат_ЧерезВосемьДнейАвтоПрименён()
+    {
+        LogLine(DaysAgo(1), "revert", "user", PagePath);
+
+        var res = await new WikiIngestService(new FakeLlm(claims: ClaimsJson, plan: PlanJson),
+            new NoSpheres(), _apply, _config, new ShiftedTime(TimeSpan.FromDays(7))).IngestAsync(User, Req());
 
         res.Outcome.Should().Be(WikiIngestService.OutcomeApplied, res.Reason);
     }

@@ -120,7 +120,7 @@ public static class WikiApplyPolicy
         // Анти-петля (N7d): откат человека сильнее любой автоматики — включая create по тому же
         // пути (revert пакета с create удаляет страницу, и тот же источник создал бы её снова).
         if (context.RecentlyRevertedPages.TryGetValue(op.Page, out var revertedAt))
-            return Inbox($"страницу откатил человек {revertedAt:yyyy-MM-dd}: автоприменение не меняет её {RevertQuarantineDays} дней");
+            return Inbox($"страницу откатили вручную {revertedAt:yyyy-MM-dd}: автоприменение не меняет её {RevertQuarantineDays} дней");
 
         // 3. Риски — по строкам таблицы §12г.
         if (op.Op == WikiPackage.OpSupersede)

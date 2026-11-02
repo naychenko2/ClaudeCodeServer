@@ -346,7 +346,7 @@ public class WikiApplyPolicyTests
         var v = WikiApplyPolicy.Decide(Op(WikiPackage.OpAppend), CtxReverted(ProjectPage));
 
         v.Decision.Should().Be(WikiPackage.DecisionInbox);
-        v.Reason.Should().Contain("откатил человек").And.Contain("2026-10-30");
+        v.Reason.Should().Contain("откатили вручную").And.Contain("2026-10-30");
     }
 
     [Fact]
@@ -365,7 +365,7 @@ public class WikiApplyPolicyTests
         var v = WikiApplyPolicy.Decide(Op(WikiPackage.OpCreate), CtxReverted(ProjectPage));
 
         v.Decision.Should().Be(WikiPackage.DecisionInbox);
-        v.Reason.Should().Contain("откатил человек");
+        v.Reason.Should().Contain("откатили вручную");
     }
 
     [Fact]

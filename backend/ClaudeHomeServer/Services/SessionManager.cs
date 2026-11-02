@@ -190,6 +190,14 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // (новое сообщение); заморозка тоже переживает рестарт.
         public readonly PendingQueue Pending = new();
         public readonly Lock PendingLock = new();
+        // Замок видимости чата (S2d-7a): под ним И первое сообщение чата «занимает» чат
+        // (ClaimFirstMessage), И тумблер видимости (SetChatVisibilityAsync) проверяет «сообщений
+        // нет» и ставит PrivateToUserId. Без общего замка отправка и тумблер из соседних вкладок
+        // дали бы приватный чат с сообщением, уже разосланным в группу проекта.
+        public readonly Lock VisibilityLock = new();
+        // Чат принял (или пытался принять) сообщение: после этого его нельзя сделать приватным.
+        // Читается и пишется ТОЛЬКО под VisibilityLock.
+        public bool MessageClaimed;
         // Меняется только через PersistPending-места (FreezePending, возобновление человеком)
         public volatile bool QueueFrozen;
         // Сообщения старше срока годности, не оживлённые при загрузке: карточку «не доставлено»
@@ -2501,6 +2509,56 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
 
     // Заглушить/включить уведомления по чату (браузерные «нужно решение» / «ход завершён»).
     // UpdatedAt не трогаем по той же причине, что в SetExpiry: это настройка, а не активность.
+    // Отметка «чат принял сообщение» (S2d-7a). Зовётся первой строкой всех входов, из которых
+    // сообщение попадает в ленту чата и рассылается по ToChatAudience (SendMessageAsync,
+    // SendMessageAndWaitAsync, EnqueuePendingAsync). Под тем же замком, что и проверка
+    // «сообщений нет» в SetChatVisibilityAsync: либо отметка встала раньше — и тумблер видит
+    // chat_has_messages, либо тумблер успел первым — и адресация сообщения (читается позже,
+    // в момент рассылки) уже приватная. Третьего исхода нет.
+    private static void ClaimFirstMessage(SessionEntry entry)
+    {
+        lock (entry.VisibilityLock) entry.MessageClaimed = true;
+    }
+
+    // Тумблер видимости чата (S2d-7a, PUT /api/chats/{id}/visibility). Вызывающий уже прошёл
+    // CanSee (404) и отказ читателю (403) в контроллере; здесь — автор, общий проект и «сообщений
+    // нет» атомарно под VisibilityLock. true: только автор, только общий проект (есть участники),
+    // только пока в чате нет сообщений; ExcludeFromDossiers = true. false: только автор, в любой
+    // момент; ExcludeFromDossiers остаётся true — прошлое приватного периода не раскрываем.
+    public ChatVisibilityResult SetChatVisibility(string sessionId, string userId, bool makePrivate)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry))
+            return new(ChatVisibilityOutcome.NotFound, null);
+        var info = entry.Info;
+        if (string.IsNullOrEmpty(userId) || info.CreatedByUserId != userId)
+            return new(ChatVisibilityOutcome.NotAuthor, null);
+
+        lock (entry.VisibilityLock)
+        {
+            if (makePrivate)
+            {
+                var project = info.ProjectId is not null ? _projects.GetById(info.ProjectId) : null;
+                if (project?.Members is not { Count: > 0 })
+                    return new(ChatVisibilityOutcome.NotSharedProject, null);
+                // Уже приватный — идемпотентно: повторный true не должен падать на «сообщениях»
+                if (info.PrivateToUserId != userId)
+                {
+                    if (entry.MessageClaimed || info.MessageCount > 0 || info.LastMessage is not null
+                        || info.LastUserMessageAt is not null)
+                        return new(ChatVisibilityOutcome.HasMessages, null);
+                    info.PrivateToUserId = userId;
+                }
+                info.ExcludeFromDossiers = true;
+            }
+            else
+            {
+                info.PrivateToUserId = null;
+            }
+        }
+        SaveSessions();
+        return new(ChatVisibilityOutcome.Ok, info);
+    }
+
     public Session? SetNotificationsMuted(string sessionId, bool muted)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
@@ -5216,6 +5274,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
 
+        ClaimFirstMessage(entry);
+
         if (!auto && !systemDirective)
         {
             // Идёт awaited-ход агента (REST SendMessageAndWaitAsync выставил TurnWaiter): не
@@ -5888,6 +5948,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
 
+        ClaimFirstMessage(entry);
+
         // Занята только при реально идущем ходе (Working) или ожидании человека (Waiting).
         // Starting у живой сессии означает лишь «создан, ход ещё не запускался»: после первого
         // хода статус идёт Working→Active/Finished и назад в Starting не возвращается (обратно
@@ -5989,6 +6051,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         PendingKind kind = PendingKind.Agent, IReadOnlyList<string>? attachedPaths = null,
         string? mode = null, string? staffNote = null, string? senderUserId = null)
     {
+        ClaimFirstMessage(entry);
         bool dispatchNow;
         int position;
         lock (entry.PendingLock)
@@ -11316,6 +11379,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         await Task.WhenAll(tasks);
     }
 }
+
+// Исход смены видимости чата (SetChatVisibility, S2d-7a). Отказы различимы для контроллера:
+// NotAuthor — 403, NotSharedProject / HasMessages — 409, NotFound — 404.
+public enum ChatVisibilityOutcome { Ok, NotFound, NotAuthor, NotSharedProject, HasMessages }
+
+public record ChatVisibilityResult(ChatVisibilityOutcome Outcome, Session? Session);
 
 // Итог завершённого хода для синхронного ожидания (SendMessageAndWaitAsync):
 // текст последней реплики ассистента, длительность и стоимость (если провайдер её отдал).

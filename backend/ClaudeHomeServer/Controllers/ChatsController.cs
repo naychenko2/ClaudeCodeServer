@@ -326,6 +326,30 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
         catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
     }
 
+    // Тумблер видимости чата (S2d-7a): { private: true } — сделать приватным (виден только автору),
+    // { private: false } — снова общим. Первый писатель Session.PrivateToUserId.
+    // Видимость — SessionManager.GetAccessible (CanSee): чужой приватный и несуществующий чат
+    // неотличимы, оба 404. Это писатель для АВТОРА чата (редактора общего проекта в том числе), а не
+    // арендатора, поэтому GetOwnedVisible (владелец проекта) не годится — он не пустил бы редактора.
+    // Читатель — 403 reader, не автор — 403 not_chat_author. Остальное (общий проект, «сообщений нет»,
+    // атомарность с отправкой) — в SessionManager.SetChatVisibility под замком видимости.
+    [HttpPut("{id}/visibility")]
+    public IActionResult SetVisibility(string id, [FromBody] SetVisibilityRequest req)
+    {
+        if (sessions.GetAccessible(id, UserId) is not { } found) return NotFound();
+        if (found.Scope.Role == ProjectRole.Reader)
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Читатель проекта не меняет видимость чата", code = "reader" });
+        var result = sessions.SetChatVisibility(id, UserId, req.Private);
+        return result.Outcome switch
+        {
+            ChatVisibilityOutcome.Ok => Ok(result.Session),
+            ChatVisibilityOutcome.NotAuthor => ChatAuthorGate.Denied(),
+            ChatVisibilityOutcome.NotSharedProject => Conflict(new { error = "Приватным можно сделать только чат общего проекта", code = "not_shared_project" }),
+            ChatVisibilityOutcome.HasMessages => Conflict(new { error = "В чате уже есть сообщения — приватным его не сделать", code = "chat_has_messages" }),
+            _ => NotFound(),
+        };
+    }
+
     // Сводка карточки архива (шаг 5 плана «Архив чатов»): кнопка «Собрать сводку» строит
     // 2–3 предложения о чём был разговор (место chat-digest) и кэширует их в чате — свежая
     // сводка отдаётся из кэша без обращения к модели. Как /archived, работает и для
@@ -814,6 +838,8 @@ public record SetWorkLoopRequest(bool Enabled);
 // кнопка возврата — тот же эндпоинт. Полей архива в UpdateChatRequest/UpdateSessionRequest
 // нет намеренно (план v4, шаг 2).
 public record SetArchivedRequest(bool Archived);
+
+public record SetVisibilityRequest(bool Private);
 
 // Личный порог автоправила архивации (дней без активности); null — сброс правила
 // для чатов вне проектов и наследуемого дефолта проектов

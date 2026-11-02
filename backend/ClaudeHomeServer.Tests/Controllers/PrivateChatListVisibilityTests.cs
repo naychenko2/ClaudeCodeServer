@@ -361,4 +361,84 @@ public sealed class PrivateChatListVisibilityTests : IDisposable
         visible.Should().NotContain(ForeignPrivateId);
         visible.Should().Contain(OwnerOpenId, "общий чат проекта остаётся в проекциях как прежде");
     }
+
+    // Настоящие GetFeatures/GetFeature (не копия композиции): сериализованная строка ответа.
+    // Эпик начат из приватного чата (SourceSessionId), шаг привязан к нему по TaskId, второй шаг —
+    // к общему чату. Без MaskRunChats (TasksController.GetFeatures) id приватного чата остаётся
+    // в самих задачах run; без SnapshotVisible — в ChatIds/исполнителях.
+    private static readonly JsonSerializerOptions WireOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
+    private TasksController FeaturesAs(string viewerId, ClaudeHomeServer.Services.Tasks.TaskManager tasks) =>
+        new(tasks, new TestSessionBroadcaster(), null!, _projects, _personas, null!, null!, _sessions, null!,
+            features: new ClaudeHomeServer.Services.Tasks.Projector.FeatureProjector(tasks))
+        {
+            ControllerContext = new ControllerContext
+            {
+                HttpContext = new DefaultHttpContext
+                {
+                    User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", viewerId)])),
+                },
+            },
+        };
+
+    // Фича зрителя: эпик + шаг на приватном чате + шаг на общем. Чаты — чужие/общие для зрителя.
+    private (string EpicId, ClaudeHomeServer.Services.Tasks.TaskManager Tasks) SeedFeature(
+        string tenantId, string privateChatId, string openChatId)
+    {
+        var tasks = new ClaudeHomeServer.Services.Tasks.TaskManager(_config);
+        var epic = tasks.Create(_projectId, tenantId, new CreateTaskRequest("Фича", Role: "feature",
+            SourceSessionId: privateChatId));
+        var privateStep = tasks.Create(_projectId, tenantId, new CreateTaskRequest("Шаг приватного", Role: "step",
+            FeatureId: epic.Id));
+        var openStep = tasks.Create(_projectId, tenantId, new CreateTaskRequest("Шаг общего", Role: "step",
+            FeatureId: epic.Id));
+        _sessions.GetById(privateChatId)!.TaskId = privateStep.Id;
+        _sessions.GetById(openChatId)!.TaskId = openStep.Id;
+        return (epic.Id, tasks);
+    }
+
+    private static string Wire(IActionResult result) =>
+        JsonSerializer.Serialize(result.Should().BeOfType<OkObjectResult>().Subject.Value, WireOptions);
+
+    [Fact]
+    public async Task НастоящиеРучкиФич_ВладелецПроекта_ЧужойПриватныйЧатНеВСтрокеОтвета_ОбщийЕсть()
+    {
+        var (epicId, tasks) = SeedFeature(_ownerId, ForeignPrivateId, OwnerOpenId);
+        using var _ = tasks;
+        var controller = FeaturesAs(_ownerId, tasks);
+
+        var list = Wire(controller.GetFeatures());
+        var page = Wire(await controller.GetFeature(epicId));
+
+        foreach (var wire in new[] { list, page })
+        {
+            wire.Should().Contain(epicId, "контроль: ответ не пустой");
+            wire.Should().NotContain(ForeignPrivateId, "id чужого приватного чата не уходит в ответ ручки");
+        }
+        page.Should().Contain(OwnerOpenId, "общий чат проекта остаётся в ответе страницы как прежде");
+    }
+
+    [Fact]
+    public async Task НастоящиеРучкиФич_УчастникПроекта_ПриватныйЧатВладельцаНеВСтрокеОтвета_ОбщийЕсть()
+    {
+        // Фича участника в общем проекте: эпик начат из приватного чата ВЛАДЕЛЬЦА — участнику он
+        // недоступен. Снимок чатов собирается по арендатору (владельцу проекта), поэтому общий чат
+        // в ответ участника не входит — проверяем отсутствие приватного, а не наличие общего.
+        var (epicId, tasks) = SeedFeature(_editorId, OwnPrivateId, MemberOpenId);
+        using var _ = tasks;
+        var controller = FeaturesAs(_editorId, tasks);
+
+        var list = Wire(controller.GetFeatures());
+        var page = Wire(await controller.GetFeature(epicId));
+
+        foreach (var wire in new[] { list, page })
+        {
+            wire.Should().Contain(epicId, "контроль: ответ не пустой, фича участника в нём есть");
+            wire.Should().NotContain(OwnPrivateId, "участник не видит приватный чат владельца");
+        }
+    }
 }

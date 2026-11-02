@@ -201,6 +201,65 @@ public class HumanEditCommitterTests : IDisposable
     }
 
     [Fact]
+    public async Task Путь_каталог_не_попадает_в_буфер_и_работа_агента_не_уезжает_в_коммит()
+    {
+        var (project, human) = await SetupAsync(shared: true);
+        Directory.CreateDirectory(Path.Combine(_repo, "docs"));
+        await File.WriteAllTextAsync(Path.Combine(_repo, "docs", "agent.md"), "агент\n");
+        var before = await CommitsCountAsync();
+
+        _sut.Record(project.Id, _repo, "docs", human.Id);
+        _sut.PendingAuthor(_repo, "docs").Should().BeNull();
+        await _sut.StopAsync(CancellationToken.None);
+
+        (await CommitsCountAsync()).Should().Be(before);
+    }
+
+    [Fact]
+    public async Task Удалённый_файл_принимается_как_правка()
+    {
+        var (project, human) = await SetupAsync(shared: true);
+        File.Delete(Path.Combine(_repo, "base.txt"));
+
+        _sut.Record(project.Id, _repo, "base.txt", human.Id);
+        _sut.PendingAuthor(_repo, "base.txt")!.UserId.Should().Be(human.Id);
+        await _sut.StopAsync(CancellationToken.None);
+
+        (await LogAsync()).Should().Contain(human.Id);
+    }
+
+    [Fact]
+    public async Task Чужой_корень_не_попадает_в_буфер_и_не_коммитится()
+    {
+        var (project, human) = await SetupAsync(shared: true);
+        var foreign = Path.Combine(_dir, "foreign");
+        Directory.CreateDirectory(foreign);
+        await _git.InitAsync(null, foreign);
+        await _git.RunAsync(null, foreign, ["config", "user.email", "test@test"]);
+        await _git.RunAsync(null, foreign, ["config", "user.name", "Тест"]);
+        await File.WriteAllTextAsync(Path.Combine(foreign, "x.md"), "чужое\n");
+
+        _sut.Record(project.Id, foreign, "x.md", human.Id);
+        _sut.PendingAuthor(foreign, "x.md").Should().BeNull();
+        await _sut.StopAsync(CancellationToken.None);
+
+        var count = await _git.RunAsync(null, foreign, ["rev-list", "--all", "--count"]);
+        count.Stdout.Trim().Should().Be("0");
+    }
+
+    [Fact]
+    public async Task Пользователь_не_из_проекта_не_попадает_в_буфер()
+    {
+        var (project, _) = await SetupAsync(shared: true);
+        var stranger = _users.Add("stranger-" + Guid.NewGuid().ToString("N")[..6], "password", "user");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "mine.md"), "x\n");
+
+        _sut.Record(project.Id, _repo, "mine.md", stranger.Id);
+
+        _sut.PendingAuthor(_repo, "mine.md").Should().BeNull();
+    }
+
+    [Fact]
     public async Task Нечего_коммитить_если_содержимое_совпало_с_HEAD()
     {
         var (project, human) = await SetupAsync(shared: true);

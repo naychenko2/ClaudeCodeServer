@@ -69,11 +69,29 @@ public sealed class HumanEditCommitter(
         if (project is null || project.Members is not { Count: > 0 }) return;
         if (!ProjectCapabilities.FilesOnServer(project)) return;
         if (!git.IsGitRepo(root)) return;
-        try { SafePath.JoinBelowRoot(root, relPath); }
+        // Корень обязан быть корнем самого проекта (или лежать под ним): иначе журнал закоммитил
+        // бы чужой репозиторий от имени владельца проекта.
+        if (!IsUnderProjectRoot(root, project.RootPath)) return;
+        // Автор — владелец или участник проекта; чужой userId — fail-closed.
+        if (userId != project.OwnerId && !project.Members.Any(m => m.UserId == userId)) return;
+        string full;
+        try { full = SafePath.JoinBelowRoot(root, relPath); }
         catch { return; }
+        // Каталог в pathspec индексирует всё поддерево, включая незакоммиченную работу агента.
+        // Удалённый файл (путь не существует) допустим — удаление тоже правка.
+        if (Directory.Exists(full)) return;
 
         var rel = relPath.Replace('\\', '/');
         _pending[(root, rel)] = new Pending(projectId, root, rel, userId, _clock.GetUtcNow());
+    }
+
+    private static bool IsUnderProjectRoot(string root, string projectRoot)
+    {
+        if (string.IsNullOrEmpty(projectRoot)) return false;
+        var r = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        var p = Path.TrimEndingDirectorySeparator(Path.GetFullPath(projectRoot));
+        return r.Equals(p, StringComparison.Ordinal)
+            || r.StartsWith(p + Path.DirectorySeparatorChar, StringComparison.Ordinal);
     }
 
     public HumanEditEntry? PendingAuthor(string root, string relPath)
@@ -105,7 +123,8 @@ public sealed class HumanEditCommitter(
                 catch (OperationCanceledException) { }
             }
         }
-        await FlushAsync(all: true, ct);
+        try { await FlushAsync(all: true, ct); }
+        catch (OperationCanceledException) { }
     }
 
     private async Task LoopAsync(CancellationToken token)

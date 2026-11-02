@@ -8,7 +8,8 @@ namespace ClaudeHomeServer.Services.Turn;
 // Гейт IsEnabled повторяет прежний BuildDossierTrailerHint: ownerId != null
 // && session.ProjectId != null. Без ownerId владельца у DossierCaptureService нет
 // ключа; без ProjectId захватывать нечего.
-public sealed class DossierTrailerContributor : IPromptSectionContributor
+public sealed partial class DossierTrailerContributor(
+    IProjectManager projects, ITurnActorRegistry? actors = null) : IPromptSectionContributor
 {
     public string Key => "dossier-trailer";
     public string Title => "Трейлер истории решений";
@@ -32,12 +33,30 @@ public sealed class DossierTrailerContributor : IPromptSectionContributor
     {
         var session = sessionContext.Session;
         var taskLine = session.TaskId is null ? "" : $"\nCCS-Task: {session.TaskId}";
+        var userLine = ActorLine(sessionContext);
         var text = "Если делаешь `git commit` в этом проекте — добавь в сообщение коммита трейлер " +
-            $"отдельной строкой (рядом с Co-Authored-By):\nCCS-Session: {session.Id}{taskLine}\n" +
+            $"отдельной строкой (рядом с Co-Authored-By):\nCCS-Session: {session.Id}{taskLine}{userLine}\n" +
             "Он привязывает коммит к этому чату/задаче для фичи «История решений» (паспорт изменения " +
             "с выжимкой «зачем/решения/отказы/грабли») — без него автоматическая выжимка не соберётся. " +
             "Не убирай и не меняй значение при amend/squash.";
         return Task.FromResult<PromptSectionContribution?>(
             new PromptSectionContribution([new PromptSection(Key, text, InTurnTail: true)]));
     }
+
+    // Автор коммита агента из Bash (best-effort, сервер трейлер не проверяет): коммит подписан
+    // git-конфигом владельца, а актор хода восстанавливается только по CCS-User. Актор — из серверного
+    // реестра хода (ITurnActorRegistry), не из ввода; строка только в общем проекте (Members не пуст).
+    // Секция едет хвостом хода: в системном блоке смена актора обнуляла бы prefix cache.
+    private string ActorLine(PromptSessionContext ctx)
+    {
+        var session = ctx.Session;
+        if (actors is null || ctx.OwnerId is null || session.ProjectId is null) return "";
+        if (projects.GetById(session.ProjectId) is not { Members.Count: > 0 }) return "";
+        var actor = actors.Actor(session.Id, ctx.OwnerId);
+        return actor is not null && SafeUserId().IsMatch(actor) ? $"\nCCS-User: {actor}" : "";
+    }
+
+    // Только символы id пользователя: любое иное (перевод строки, пробел, управляющие) — строки нет
+    [System.Text.RegularExpressions.GeneratedRegex(@"^[A-Za-z0-9_-]{1,128}$")]
+    private static partial System.Text.RegularExpressions.Regex SafeUserId();
 }

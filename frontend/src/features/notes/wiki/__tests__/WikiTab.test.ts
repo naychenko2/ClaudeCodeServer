@@ -29,7 +29,7 @@ import { WIKI_SUBTABS } from '../wikiTabs';
 import { useState } from 'react';
 // Стор — настоящий (тот же экземпляр, что у компонента через кит): запрос проверяется
 // в самом сторе; тестам прямой импорт разрешён (notesStoreImportGuard)
-import { __test as wikiStore, consumeOpenWikiPage, requestOpenWikiPage } from '../../../../lib/wiki';
+import { __test as wikiStore, consumeOpenWikiPage, requestOpenWikiPage, retractWikiSource } from '../../../../lib/wiki';
 
 // Мок с сохранением остальных экспортов: компонент берёт эти модули через кит хоста,
 // а цепочка кита шире собственных импортов теста (registryCore → subscribeFlags,
@@ -670,5 +670,133 @@ describe('Вкладка «Вики»: осознанное закрытие с�
     await settle();
     expect(findNodeByAttr(container, 'data-testid', 'wiki-error')).toBeNull();
     expect(has(container, 'Содержание страницы A')).toBe(false); // остались в каталоге
+  });
+});
+
+// ─── S5b-дельта (W4-5, дефект 3f3449e4): возврат к каталогу, когда стор снял открытую страницу ───
+// 404 перечитки после отката снимает страницу из стора (W4-1), а намерение «страница
+// открыта» живёт в компоненте: без возврата центр висел бы на скелетоне без выхода.
+// Различие «грузится / снята» — факт стора (useWikiPageGone), НЕ отсутствие снимка:
+// пока ответа нет, скелетон правильный. Отметка принадлежит ключу снятой страницы —
+// новая открытая страница ей не закрывается.
+// Мутации этого прогона (вывод — в отчёте задачи):
+// (1) убрать эффект возврата в WikiTab (не снимать openedPage) →
+//     «ОткатСнесОткрытуюСтраницу» краснеет (центра-каталога нет, строки нет);
+// (2) закрывать страницу по отсутствию снимка вместо факта (openedPage && !pageSnap) →
+//     «ПокаСтраницаГрузится» и «СнятиеПрежнейНеЗакрываетНовую» краснеют
+//     (новая страница закрыта, ещё не прочитанная).
+
+const RETRACT_W45_OK = {
+  revertedPackages: [], unlinkedPackages: [], remainingPackages: [],
+  removedChronicles: [], failed: [], markedSkip: false,
+};
+
+// Строка каталога по заголовку (без клика): её наличие — признак «центр — каталог»
+function pageRow(c: Cont, title: string): AnyNode | null {
+  return allNodes(c).find(n => n.getAttribute('data-testid') === 'wiki-page-row'
+    && textNodes(n).join('').includes(title)) ?? null;
+}
+
+describe('Вкладка «Вики»: возврат к каталогу, когда стор снял открытую страницу (W4-5, дефект 3f3449e4)', () => {
+  it('откат снес открытую страницу: вкладка возвращается к каталогу раздела, unhandled нет', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (e: unknown) => { unhandled.push(e); };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      let pageCalls = 0;
+      req.mockImplementation((url: string) => {
+        if (url.startsWith('/wiki/tree')) return Promise.resolve(TREE);
+        if (url.startsWith('/wiki/section')) return Promise.resolve(CATALOG_A);
+        if (url.startsWith('/wiki/page?')) {
+          pageCalls += 1;
+          // первый ответ — страница есть; перечитка после отката — 404: её снес откат
+          if (pageCalls === 1) return Promise.resolve({ pageKey: 'page-a', content: PAGE_A_TEXT, drift: false });
+          return Promise.reject({ status: 404 });
+        }
+        if (url.startsWith('/wiki/packages/retract')) return Promise.resolve(RETRACT_W45_OK);
+        return Promise.resolve(null);
+      });
+      installFakeDom();
+      const { root, container } = mount(createElement(WikiTab));
+      roots.push(root);
+      await settle();
+      clickPageRow(container, 'Страница A');
+      await settle();
+      expect(has(container, 'Содержание страницы A')).toBe(true); // страница открыта
+      // та же операция стора, что вызывает «Журнал»: откат перечитывает открытую и получает 404
+      await act(async () => { await retractWikiSource('note:n1'); });
+      await settle();
+      // центр снова каталог раздела: строка на месте, страницы и её «Назад» нет
+      expect(has(container, 'Содержание страницы A')).toBe(false);
+      expect(findNodeByAttr(container, 'data-testid', 'wiki-page-back')).toBeNull();
+      expect(pageRow(container, 'Страница A')).not.toBeNull();
+      // 404 перечитки — не необработанное исключение: откат отдал свой результат
+      await new Promise(r => setTimeout(r, 10));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
+  it('пока страница грузится — скелетон остаётся: её никто не снимал', async () => {
+    let resolvePage: (v: unknown) => void = () => {};
+    req.mockImplementation((url: string) => {
+      if (url.startsWith('/wiki/tree')) return Promise.resolve(TREE);
+      if (url.startsWith('/wiki/section')) return Promise.resolve(CATALOG_A);
+      if (url.startsWith('/wiki/page?')) return new Promise<unknown>((res) => { resolvePage = res; });
+      return Promise.resolve(null);
+    });
+    installFakeDom();
+    const { root, container } = mount(createElement(WikiTab));
+    roots.push(root);
+    await settle();
+    clickPageRow(container, 'Страница A');
+    await settle();
+    // ответа ещё нет: страницы нет — и каталога тоже (центр — скелетон), страница открыта
+    expect(has(container, 'Содержание страницы A')).toBe(false);
+    expect(pageRow(container, 'Страница A')).toBeNull();
+    // ответ пришёл — страница открыта: идущий запрос не был закрыт как «снятый»
+    resolvePage({ pageKey: 'page-a', content: PAGE_A_TEXT, drift: false });
+    await settle();
+    expect(has(container, 'Содержание страницы A')).toBe(true);
+  });
+
+  it('снятие прежней страницы не закрывает новую: откат и открытие другой — в одном ходе', async () => {
+    let pageA = 0;
+    req.mockImplementation((url: string) => {
+      if (url.startsWith('/wiki/tree')) return Promise.resolve(TREE2);
+      if (url.startsWith('/wiki/section')) {
+        if (url.includes(`section=projects/${SECOND_ID}`)) return Promise.resolve(CATALOG_SECOND);
+        if (url.includes('section=common')) return Promise.resolve(CATALOG_EMPTY);
+        return Promise.resolve(CATALOG_A);
+      }
+      if (url.startsWith('/wiki/page?')) {
+        if (url.includes('page=page-a')) {
+          pageA += 1;
+          if (pageA === 1) return Promise.resolve({ pageKey: 'page-a', content: PAGE_A_TEXT, drift: false });
+          return Promise.reject({ status: 404 }); // перечитка после отката: A снесена
+        }
+        if (url.includes(`page=${encodeURIComponent(CHRONICLE_PATH)}`)) return Promise.resolve(PAGE_CHRONICLE);
+        return Promise.reject({ status: 404 });
+      }
+      if (url.startsWith('/wiki/packages/retract')) return Promise.resolve(RETRACT_W45_OK);
+      return Promise.resolve(null);
+    });
+    installFakeDom();
+    const { root, container } = mount(createElement(WikiTab));
+    roots.push(root);
+    await settle();
+    clickPageRow(container, 'Страница A');
+    await settle();
+    expect(has(container, 'Содержание страницы A')).toBe(true); // A открыта и подписана
+    // в одном act: откат снес A (её перечитка 404-ит) и запрос из шапки чата открывает B
+    await act(async () => {
+      const p = retractWikiSource('note:n1');
+      requestOpenWikiPage({ section: `projects/${SECOND_ID}`, path: CHRONICLE_PATH });
+      await p;
+    });
+    await settle();
+    // новая страница жива: факт снятия принадлежит ключу A и до B не доходит
+    expect(has(container, 'Содержание хроники chat-x')).toBe(true);
   });
 });

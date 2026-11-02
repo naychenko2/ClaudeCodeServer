@@ -253,6 +253,12 @@ let _tree: WikiTreeDto | null = null;
 const _catalogs = new Map<string, WikiCatalogDto>();
 // Последняя прочитанная страница (экран показывает одну за раз; кэша всех страниц нет)
 let _page: { cacheKey: string; value: WikiPageDto } | null = null;
+// Факт «стор сам снял эту страницу 404 перечитки» (W4-5, дефект 3f3449e4): отсутствие
+// снимка — не различает «страница грузится» и «страницу снес откат», а экрану нужен именно
+// этот факт, чтобы вернуться к каталогу. Отметка живёт только пока страница не
+// перечитывается заново: начало чтения той же страницы снимает её (до ответа
+// состояние — «грузится»).
+let _pageGoneKey: string | null = null;
 // Открытые сейчас страницы: счётчик подписок useWikiPage по ключу. «Открытая» для
 // перечитки после отката — та, чей экран сейчас подписан: _page остаётся и после
 // закрытия страницы, перечитывать по нему — тот хвост «перечитка закрытой поднимает
@@ -303,8 +309,10 @@ function releaseOpenPage(key: string): void {
 // состояние до отката. Только пока страница остаётся открытой (счётчик подписок) —
 // сбой перечитки не роняет мутацию (тот же порядок, что в adopt).
 // 404 — страницу снес откат (retract снял хронику целиком): содержимое до отката
-// снимается по ключу (тот же порядок, что в deleteWikiSection); другие сбои snapshot
-// не трогают и наружу не выходят.
+// снимается по ключу (тот же порядок, что в deleteWikiSection) и остаётся фактом в сторе
+// (_pageGoneKey): экран по нему возвращается к каталогу раздела (W4-5, дефект 3f3449e4) —
+// без этого намерение «страница открыта» живёт в компоненте и центр висит на скелетоне.
+// Другие сбои snapshot не трогают и наружу не выходят.
 async function reReadOpenPage(): Promise<void> {
   const page = _page;
   if (!page || !(_openPages.get(page.cacheKey) ?? 0)) return;
@@ -315,6 +323,7 @@ async function reReadOpenPage(): Promise<void> {
   } catch (e) {
     if (e instanceof WikiError && e.status === 404 && _page && _page.cacheKey === page.cacheKey) {
       _page = null;
+      _pageGoneKey = page.cacheKey;
       emit();
     }
   }
@@ -351,6 +360,11 @@ export async function loadWikiCatalog(sectionKey: string): Promise<WikiCatalogDt
 
 export async function loadWikiPage(sectionKey: string, pageKey: string): Promise<WikiPageDto> {
   const gen = ++_pageGen;
+  // Начало чтения этой же страницы снимает отметку её отсутствия: до ответа состояние —
+  // «грузится», а не «снесена откатом», и экран не закрывает страницу, которую только
+  // что открыл (W4-5). Чужой ключ отметки не трогает.
+  const goneKey = pageCacheKey(sectionKey, pageKey);
+  if (_pageGoneKey === goneKey) _pageGoneKey = null;
   const owner = readStoredUserId();
   const page = await wikiHttp<WikiPageDto>(
     `/wiki/page?${sectionQuery(sectionKey)}&page=${encodeURIComponent(pageKey)}`,
@@ -857,6 +871,16 @@ export function useWikiPage(sectionKey: string, pageKey: string): WikiPageDto | 
   return useSyncExternalStore(subscribeOpen, snapshot, snapshot);
 }
 
+// Факт «стор снял именно эту страницу 404 перечитки после мутации» (W4-5, дефект 3f3449e4).
+// Отдельно от отсутствия снимка: отсутствие — и «страница грузится», и «страницу снес откат»;
+// экран возвращается к каталогу только по этому факту. Подписка — обычная (без счётчика
+// открытых страниц: открытой страницу делает useWikiPage, здесь только чтение факта).
+export function useWikiPageGone(sectionKey: string, pageKey: string): boolean {
+  const key = pageCacheKey(sectionKey, pageKey);
+  const snapshot = () => _pageGoneKey === key;
+  return useSyncExternalStore(subscribe, snapshot, snapshot);
+}
+
 // Дерево загружено (отличить «ещё не грузили» от «пустой каталог»)
 export function useWikiLoaded(): boolean {
   return useSyncExternalStore(subscribe, () => _loaded, () => _loaded);
@@ -904,6 +928,7 @@ export const __test = {
     _tree = null;
     _catalogs.clear();
     _page = null;
+    _pageGoneKey = null;
     _openPages.clear();
     _openReq = null;
     _loaded = false;
@@ -921,5 +946,11 @@ export const __test = {
     const key = pageCacheKey(sectionKey, pageKey);
     retainOpenPage(key);
     return () => { releaseOpenPage(key); };
+  },
+  // Тестовый шов факта снятия (тот же разбор ключа, что у useWikiPageGone): store-тестам
+  // он нужен без React-подписки — проверить, что 404 перечитки оставил факт и что
+  // перечитка той же страницы его снимает.
+  pageGone(sectionKey: string, pageKey: string): boolean {
+    return _pageGoneKey === pageCacheKey(sectionKey, pageKey);
   },
 };

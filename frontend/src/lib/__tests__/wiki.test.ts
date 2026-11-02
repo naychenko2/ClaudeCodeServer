@@ -481,6 +481,75 @@ describe('стор вики: перечитка открытой страниц�
   });
 });
 
+// ─── Факт снятой страницы (W4-5, дефект 3f3449e4) ───
+// 404 перечитки оставляет в сторе факт «эту страницу снес откат» (_pageGoneKey,
+// шов __test.pageGone): отсутствие снимка само по себе не различает «страница
+// грузится» и «страницу снес откат», а экрану возврата к каталогу нужен именно
+// этот факт. Свойства:
+// — 404 перечитки отмечает снятую страницу; отметка принадлежит только её ключу;
+// — перечитка той же страницы снимает отметку: до ответа состояние — «грузится»;
+// — поздний успешный ответ снятой страницы не возвращает её в стор (сверка поколения).
+// Мутации (вывод — в отчёте задачи):
+// (1) убрать _pageGoneKey = page.cacheKey в reReadOpenPage → «ОтмечаетСнятуюСтраницу»
+//     краснеет (факта нет — экран остался бы на скелетоне);
+// (2) убрать снятие отметки в начале loadWikiPage → «ПеречиткаТойЖеСнимаетОтметку»
+//     краснеет (открытая заново страница считалась бы снятой).
+
+describe('стор вики: факт снятой страницы (W4-5, дефект 3f3449e4)', () => {
+  it('W45_404Перечитки_ОтмечаетСнятуюСтраницу_ПеречиткаТойЖеСнимаетОтметку', async () => {
+    serve({ 'GET /wiki/tree': TREE, 'GET /wiki/page?section=common&page=A.md': PAGE_A });
+    await ensureWikiLoaded();
+    await loadWikiPage('common', 'A.md');
+    __test.openPage('common', 'A.md'); // экран подписан — страница открыта
+    serve({
+      'POST /wiki/packages/retract': RETRACT_W41_OK,
+      'GET /wiki/page?section=common&page=A.md': httpError(404),
+      'GET /wiki/tree': TREE,
+    });
+    await retractWikiSource('note:n1');
+    // страница снята — и в сторе остался факт: экран по нему вернётся к каталогу
+    expect(getWikiPageSnapshot('common', 'A.md')).toBeNull();
+    expect(__test.pageGone('common', 'A.md')).toBe(true);
+    // факт принадлежит только её ключу: другая страница не «снята», она «грузится»
+    expect(__test.pageGone('common', 'B.md')).toBe(false);
+    // повторное открытие той же страницы: начало чтения снимает отметку — до ответа
+    // состояние «грузится», и экран не закрывает то, что только что открыл
+    serve({ 'GET /wiki/page?section=common&page=A.md': PAGE_A });
+    await loadWikiPage('common', 'A.md');
+    expect(__test.pageGone('common', 'A.md')).toBe(false);
+    expect(getWikiPageSnapshot('common', 'A.md')).toEqual(PAGE_A);
+  });
+
+  it('W45_ПозднийУспешныйОтветСнятойСтраницы_ЕёНеВозвращает', async () => {
+    serve({ 'GET /wiki/tree': TREE, 'GET /wiki/page?section=common&page=A.md': PAGE_A });
+    await ensureWikiLoaded();
+    await loadWikiPage('common', 'A.md'); // gen1: страница в сторе, экран подписан
+    __test.openPage('common', 'A.md');
+    // пользователь перечитывает A (gen2 — её ответ придёт позже), и за это время
+    // откат перечитывает ту же страницу (gen3) и даёт 404: страница снята
+    const late = deferred();
+    let pageCalls = 0;
+    req.mockImplementation(async (url: string) => {
+      if (url === '/wiki/tree') return TREE;
+      if (url === '/wiki/packages/retract') return RETRACT_W41_OK;
+      if (url === '/wiki/page?section=common&page=A.md') {
+        pageCalls += 1;
+        if (pageCalls === 1) return late.promise;
+        if (pageCalls === 2) throw httpError(404);
+      }
+      throw new Error(`неожиданный запрос: ${url}`);
+    });
+    const pLate = loadWikiPage('common', 'A.md');
+    await retractWikiSource('note:n1');
+    expect(__test.pageGone('common', 'A.md')).toBe(true);
+    late.resolve(PAGE_A);
+    await pLate;
+    // устаревший ответ снятой страницы её не воскрешает: сверка поколения (M1)
+    expect(getWikiPageSnapshot('common', 'A.md')).toBeNull();
+    expect(__test.pageGone('common', 'A.md')).toBe(true);
+  });
+});
+
 // ─── Разбор по требованию: чат и заметка (S7b-0) и список отбора чатов (доработка H3) ───
 // Транспорт чистый: адрес/метод/тело запроса, разбор 200/202 в типизированный результат,
 // отказ по каждому коду контракта. Мутация «202 трактуется как 200» (убрать ветку running

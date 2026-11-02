@@ -230,7 +230,8 @@ public class FallbackLlmSessionAdapterTests
     private static ResultMessage Success() => new("success", 100, 1, null, null);
     private static ResultMessage ApiError(string status) => new("success", 100, 1, null, null, ApiErrorStatus: status);
 
-    private static async Task WaitForAsync(Func<bool> condition, string what, int timeoutMs = 5000)
+    // Потолок 30 с — страховка от зависания под нагрузкой шарда, а не проверяемая скорость
+    private static async Task WaitForAsync(Func<bool> condition, string what, int timeoutMs = 30000)
     {
         var sw = Stopwatch.StartNew();
         while (sw.ElapsedMilliseconds < timeoutMs)

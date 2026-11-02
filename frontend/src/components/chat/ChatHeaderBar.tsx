@@ -11,6 +11,7 @@ import { effortLabel } from '../../lib/effort';
 import { ExpiryButton } from './ExpiryButton';
 import { ExpiryPicker } from './ExpiryPicker';
 import { DossierOptOutButton } from './DossierOptOutButton';
+import { PrivateChatToggle } from './PrivateChatToggle';
 import { NotifyButton } from './NotifyButton';
 import { updateChatFields } from '../../lib/chatUpdate';
 import { isNotifySupported, useChatNotifyOn } from '../../lib/notify';
@@ -1747,6 +1748,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const dossierBtn = project && online ? (
     <DossierOptOutButton session={session} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
   ) : null;
+  // Тумблер «Приватный чат» (S2d-F2): компонент сам гасится вне своей границы —
+  // только автор чата в общем проекте, не читатель; в личном проекте — нет вовсе
+  const privateBtn = <PrivateChatToggle session={session} project={project} hasMessages={hasMessages}
+    online={online} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />;
   // На узких раскладках (мобил/планшет) прогресс workflow втянут в объединённый чип
   // (costBadges) — отдельный бейдж рисуем только на десктопе, где ряду хватает места.
   const workflowBadge = activeWorkflow && !isCompact ? (
@@ -2123,7 +2128,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // Ghost-заглушение ряда действий — только на десктопе (класс сам гасится вне
   // hover-media): компактные раскладки получают полную непрозрачность
   const actionBtns = isCompact
-    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{rowActions.map(k => <span key={k} style={{ display: 'flex', flexShrink: 0 }}>{rowNode(k)}</span>)}{headerOverflow}</div>
+    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{privateBtn}{rowActions.map(k => <span key={k} style={{ display: 'flex', flexShrink: 0 }}>{rowNode(k)}</span>)}{headerOverflow}</div>
     // На десктопе кнопки — неразрывная группа: при переносе кластера уходят вниз целиком,
     // оставаясь последними у правого края (мышечная память на позицию). Ghost-класс
     // приглушает ряд в покое; «⋯» стоит ВНЕ него — это единственный путь к скрытым
@@ -2131,7 +2136,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     : (
       <div style={{ display: 'flex', alignItems: 'center', gap: TB.gap, flexShrink: 0 }}>
         <div className="cc-ghost-actions" style={{ display: 'flex', alignItems: 'center', gap: TB.gap }}>
-          {retitleBtn}{extractBtn}{summaryBtn}
+          {retitleBtn}{extractBtn}{summaryBtn}{privateBtn}
           {rowActions.map(k => <span key={k} style={{ display: 'flex', flexShrink: 0 }}>{rowNode(k)}</span>)}
         </div>
         {headerOverflow}

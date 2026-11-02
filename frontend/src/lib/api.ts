@@ -1020,6 +1020,29 @@ export class NoteConflictError extends Error {
   }
 }
 
+// Отказ тумблера видимости чата (S2d-F2): 409/403 с полем body.code. Тексты равны
+// серверным (ChatsController.SetVisibility / ChatAuthorGate — русские), чтобы на клиенте
+// не было второй формулировки того же отказа; человеку показывается текст, а не код.
+// Незнакомый код — серверный error как есть, без кода — общий текст.
+export const CHAT_VISIBILITY_TEXTS = {
+  not_shared_project: 'Приватным можно сделать только чат общего проекта',
+  chat_has_messages: 'В чате уже есть сообщения — приватным его не сделать',
+  reader: 'Читатель проекта не меняет видимость чата',
+  not_chat_author: 'Только автор чата',
+} as const;
+
+export class ChatVisibilityError extends Error {
+  readonly status: 403 | 409;
+  readonly code: string | null;
+  constructor(status: number, body: { error?: string; code?: string } | undefined) {
+    const code = body?.code && body.code in CHAT_VISIBILITY_TEXTS ? body.code as keyof typeof CHAT_VISIBILITY_TEXTS : null;
+    super(code ? CHAT_VISIBILITY_TEXTS[code] : (body?.error ?? 'Не удалось изменить видимость чата'));
+    this.name = 'ChatVisibilityError';
+    this.status = status as 403 | 409;
+    this.code = body?.code ?? null;
+  }
+}
+
 // Заметка + тег прочитанной версии (S2c-F3): etag есть только у сетевых get/update;
 // офлайн-доставка из кэша и локальный черновик тега не имеют — версии, по которой можно
 // сохранить по If-Match, без сервера нет. Вызывающие без etag работают как раньше.
@@ -2746,6 +2769,21 @@ export const api = {
     // Обновить название чата по текущей переписке (AI-хаб, действие chat.retitle)
     retitle: (id: string) =>
       request<Session>(`/chats/${encodeURIComponent(id)}/retitle`, { method: 'POST' }),
+    // Видимость чата (S2d-F2): true — приватный (виден только автору; только чат общего
+    // проекта, только пока в нём нет сообщений), false — снова общий (в любой момент;
+    // после этого приватность уже не вернуть — бэк 409 chat_has_messages). Отказы 409/403
+    // с body.code оборачиваются в ChatVisibilityError — с человеческим текстом, не кодом.
+    setChatVisibility: async (id: string, isPrivate: boolean): Promise<Session> => {
+      try {
+        return await request<Session>(`/chats/${encodeURIComponent(id)}/visibility`, {
+          method: 'PUT', body: JSON.stringify({ private: isPrivate }),
+        });
+      } catch (e) {
+        const err = e as { status?: number; body?: { error?: string; code?: string } };
+        if (err.status === 409 || err.status === 403) throw new ChatVisibilityError(err.status, err.body);
+        throw e;
+      }
+    },
     // Групповой чат персон (флаг persona-group-chats): 2-4 участника, первый — ведущая.
     // Зона — по ведущей: проектная персона → сессия её проекта, глобальная → чат вне проекта.
     createGroup: (personaIds: string[], mode?: string, name?: string) =>

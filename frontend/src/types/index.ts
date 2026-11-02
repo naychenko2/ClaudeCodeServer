@@ -1149,6 +1149,12 @@ export interface Session {
   archiveSummary?: string | null;
   archiveSummaryAt?: string | null;
   summaryNoteId?: string | null;
+  // Видимость проектного чата (S2d). privateToUserId — id человека, которому чат приватен
+  // (null/отсутствует — общий); createdByUserId — автор чата (создавший): тумблер видимости
+  // разрешён только ему (бэк SessionManager.SetChatVisibility). Оба поля приходят с бэка
+  // как есть (SessionJsonConverter их не вырезает), старые записи читаются как null.
+  privateToUserId?: string | null;
+  createdByUserId?: string | null;
 }
 
 // Тип материала контекста чата — те же значения, что SessionContextTypes на бэке
@@ -1474,6 +1480,11 @@ export type ServerMessage = { sessionId: string } & (
   // Принимает строго по этому типу: подписки на chat_archived не должны случайно
   // отрабатывать событие удаления, и наоборот.
   | { type: 'chat_archived'; archived: boolean }
+  // Чат стал приватным (S2d-F2): сервер СНЯЛ чужие соединения с группы чата и лишь потом
+  // послал это в project-группу — после него клиент участника не получит ни одного события
+  // чата. Без содержимого: только id и новое состояние. private всегда true: возврат в
+  // общий события не шлёт — участники догонят его поллингом списка (чата у них не было).
+  | { type: 'chat_visibility_changed'; private: boolean }
   | { type: 'chat_renamed'; name: string; topic?: string | null }
   // «Продолжить в новом чате»: исходный чат (sessionId) продолжён в newSessionId.
   // Живое событие: если открыт именно исходный чат, фронт сам переходит в новый (тост).

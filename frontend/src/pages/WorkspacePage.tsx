@@ -18,6 +18,7 @@ import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { ProjectIntroCard } from '../features/projects/ProjectIntroCard';
 import { hasPendingOpen, subscribeModelProvidersNav } from '../lib/modelProvidersNav';
 import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/signalr';
+import { readStoredUserId } from '../lib/offline';
 import { loadWorkspaceState, saveWorkspaceState, loadFileFullscreenPref, saveFileFullscreenPref, isLeftTab, type LeftTab } from '../lib/workspaceState';
 import { api, type PluginInfo, type PluginPanelView } from '../lib/api';
 import { chatNeighborForArchive } from '../lib/chatUpdate';
@@ -1889,6 +1890,19 @@ const windowWidth = useWindowWidth();
         setActiveSession(prev =>
           prev?.id === msg.sessionId
             ? { ...prev, name: msg.name, topic: msg.topic ?? prev.topic }
+            : prev
+        );
+      }
+      // Чат стал приватным (S2d-F2): открыт MY чат — обновляем значок тумблера и здесь
+      // (в другой вкладке/устройке тумблер щёлкнули там, шапка этой не должна отставать
+      // от списка). Чужой чат сюда не трогается: его убирает из списка и закрывает
+      // SessionList (своего списка у воркспейса нет).
+      if (msg.type === 'chat_visibility_changed' && msg.private) {
+        const me = readStoredUserId();
+        if (!me) return;
+        setActiveSession(prev =>
+          prev?.id === msg.sessionId && prev.createdByUserId === me
+            ? { ...prev, privateToUserId: me }
             : prev
         );
       }

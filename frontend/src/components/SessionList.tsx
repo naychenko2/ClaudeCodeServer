@@ -40,6 +40,7 @@ import { buildChatTreeRows, splitChatTreeByRoots, rootChatForSection, rootResolv
 import { useBgWorkPresence } from '../lib/agentsPresence';
 import { startVisiblePoll, throttleRefetch } from '../lib/visiblePoll';
 import { listProjectSessions } from '../lib/sessionsList';
+import { forgetChatRevision } from '../lib/sync';
 import { ensureGit, useGitState } from '../lib/git';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
 import { ChatCard, ROW_GAP } from './ChatCard';
@@ -586,6 +587,39 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         api.chats.get(msg.sessionId)
           .then(updated => setSessions(prev => prev.map(s => s.id === updated.id ? { ...s, ...updated } : s)))
           .catch(() => { /* чат ушёл из набора или офлайн — ignore */ });
+        return;
+      }
+      // Чат стал приватным (S2d-F2): сервер снял чужие соединения с группы чата и лишь
+      // потом послал это в project-группу — после события чужой клиент не получит ни
+      // одного события чата. Различение — по ответу GET, он сильнее локальной копии:
+      // автору чат виден (200 с privateToUserId — значок тумблера обновляется), неавтору
+      // 404 — чат больше не виден ни id, ни названием: убираем из списка, открытый
+      // уводим на соседа (тот же механизм, что у chat_deleted) с нейтральным сообщением.
+      // Ревизия истории чата в офлайн-кеше снимается в обоих случаях: после смены
+      // видимости прежняя запись незначима (см. forgetChatRevision).
+      if (msg.type === 'chat_visibility_changed' && msg.sessionId) {
+        void forgetChatRevision(project.id, msg.sessionId);
+        api.chats.get(msg.sessionId)
+          .then(updated => setSessions(prev => prev.map(s => s.id === updated.id ? { ...s, ...updated } : s)))
+          .catch((e: unknown) => {
+            // 404 — «чата для тебя больше нет» (он приватный): убираем. Другой сбой
+            // (офлайн) — список не трогаем: на реконнекте он перечитается сам
+            if ((e as { status?: number })?.status !== 404) return;
+            let reacted = false;
+            setSessions(prev => {
+              const remaining = prev.filter(s => s.id !== msg.sessionId);
+              if (!reacted && activeRef.current?.id === msg.sessionId) {
+                reacted = true;
+                const handler = onActiveDeletedRef.current;
+                const neighbor = chatNeighborForArchive(remaining, msg.sessionId, matchChatFilter(loadChatFilters(project.id)));
+                if (handler) queueMicrotask(() => handler(neighbor));
+                else if (neighbor) queueMicrotask(() => onSelectRef.current(neighbor, undefined, true));
+                else queueMicrotask(() => onClearedRef.current?.());
+              }
+              return remaining;
+            });
+            showToast('Видимость чата', 'Чат стал приватным — вы его больше не видите', 'info');
+          });
         return;
       }
       if (msg.type !== 'status_changed') return;

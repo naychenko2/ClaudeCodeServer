@@ -45,14 +45,14 @@ export {
   useWikiTree, useWikiCatalog, useWikiPage, useWikiPageGone,
   requestOpenWikiPage, consumeOpenWikiPage, useWikiOpenRequest,
   loadWikiSettings, useWikiSettings, putWikiNightly, putWikiAutoApply, resumeWikiApplyClass,
-  wikiAuthorshipOf, editWikiPage,
+  wikiAuthorshipOf, editWikiPage, wikiFootnoteLabel, loadWikiSourceCard,
 } from '../wiki';
 export type {
   WikiSectionDto, WikiPageInfoDto, WikiPackageDto, WikiPackageOperationDto,
   WikiApplyOutcomeDto, WikiDecisionDto, WikiJournalDto, WikiJournalEntryDto,
   WikiRetractDto, WikiChatAnalyzeOk, WikiNoteIngestDto, WikiOpenRequest,
   WikiSettingsSnapshot, WikiApplyClassDto, WikiNightlySettings, WikiLastNight, WikiPutNightlyResult,
-  WikiAuthorship, WikiPageInfoAuthoredDto, WikiCatalogDto,
+  WikiAuthorship, WikiPageInfoAuthoredDto, WikiCatalogDto, WikiSourceCardInfo, WikiPageEditableDto,
 } from '../wiki';
 
 // ─── subsystems ──────────────────────────────────────────────────────────────

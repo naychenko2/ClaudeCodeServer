@@ -27,13 +27,12 @@ import { useMemo, useState } from 'react';
 import type { MouseEvent, KeyboardEvent } from 'react';
 import type { ReactNode } from 'react';
 import { AlertTriangle, CheckCircle2, ChevronLeft, Lock, Pencil, Quote, ScrollText } from 'lucide-react';
-import { C, FONT, FS, R, SP, useIsMobile, useFeature, FLAGS, WikiError, adoptWikiPage, useWikiPage, type WikiSectionDto } from 'aihome_shell/kit';
+import { C, FONT, FS, R, SP, useIsMobile, useFeature, FLAGS, WikiError, adoptWikiPage, useWikiPage, wikiAuthorshipOf, wikiFootnoteLabel, type WikiAuthorship, type WikiPageEditableDto, type WikiSectionDto } from 'aihome_shell/kit';
 import { Badge } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
 import { Notice } from '../../../components/ui/Notice';
 import { PressableArea } from '../../../components/ui/PressableArea';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
-import { wikiAuthorshipOf, wikiFootnoteLabel, type WikiAuthorship, type WikiPageEditableDto } from '../../../lib/wiki';
 import { fmtDayMonth, WikiFootnotePopover, type FootnoteView } from './WikiFootnotePopover';
 import { WikiPageEditor, type EditDone } from './WikiPageEditor';
 import { EDIT_TEXT, PAGE_STATUS, PAGE_TYPE, sectionPrefix, wikiErrorText } from './wikiLabels';
@@ -295,7 +294,7 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
     for (const f of authored.footnotes) {
       const label = wikiFootnoteLabel(f.label);
       views.set(label, {
-        label, card: f.card, human: f.origin === 'human', author: f.author ?? null,
+        label, card: f.card, cardPage: f.cardPage ?? null, human: f.origin === 'human', author: f.author ?? null,
         captured: f.captured ?? null, quote: page.footnotes.find(p => p.id === label)?.quote ?? '',
       });
     }

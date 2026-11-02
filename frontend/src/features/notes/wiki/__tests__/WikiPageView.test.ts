@@ -490,9 +490,9 @@ const ADR_PATH = resolve(dirname(fileURLToPath(import.meta.url)),
 
 const PAGE_AUTHORED = PAGE_PLAIN;
 const FOOTNOTES = [
-  { label: 's1', card: 'projects/p1/Источники/Чат Ревью фронта', origin: 'session', captured: '2026-10-28T09:00:00Z' },
-  { label: 's2', card: 'projects/p1/Источники/Правка человека ab12cd34', origin: 'human', captured: '2026-11-02T10:15:00Z', author: 'Андрей' },
-  { label: 's3', card: 'projects/p1/Источники/Задача Ревью UI', origin: 'note', captured: '2026-10-30T09:00:00Z' },
+  { label: 's1', card: 'Ревью фронта', cardPage: 'projects/p1/Источники/Чат Ревью фронта', origin: 'session', captured: '2026-10-28T09:00:00Z' },
+  { label: 's2', card: 'Правка человека', cardPage: 'projects/p1/Источники/Правка человека ab12cd34', origin: 'human', captured: '2026-11-02T10:15:00Z', author: 'Андрей' },
+  { label: 's3', card: 'Задача Ревью UI', cardPage: 'projects/p1/Источники/Задача Ревью UI', origin: 'note', captured: '2026-10-30T09:00:00Z' },
 ];
 const authored = (over: Partial<WikiPageAuthoredDto> = {}): WikiPageAuthoredDto =>
   ({ pageKey: PAGE_KEY, content: PAGE_AUTHORED, authorship: 'together', footnotes: FOOTNOTES, ...over });
@@ -554,8 +554,8 @@ describe('Страница с авторством (F3a)', () => {
   it('клик по сноске ИИ: цитата, источник из карточки и «Открыть в чате»', async () => {
     unifiedOn();
     await seedPage(authored(), SECTION.key, PAGE_KEY, (url) => {
-      if (url.includes('%D0%A7%D0%B0%D1%82') || url.includes(encodeURIComponent(FOOTNOTES[0].card))) {
-        return Promise.resolve({ pageKey: FOOTNOTES[0].card, content: cardText('Ревью фронта', 'session:abc123#m1-9') });
+      if (url.includes(encodeURIComponent(FOOTNOTES[0].cardPage))) {
+        return Promise.resolve({ pageKey: FOOTNOTES[0].cardPage, content: cardText('Ревью фронта', 'session:abc123#m1-9') });
       }
       return undefined;
     });
@@ -571,6 +571,18 @@ describe('Страница с авторством (F3a)', () => {
     click(findNodeByAttr(c, 'data-testid', 'wiki-footnote-open-chat'), 'Открыть в чате');
     expect(openChat).toHaveBeenCalledWith('abc123');
     expect(popover(c)).toBeNull();
+  });
+
+  it('сноска ИИ без cardPage: «Источник сейчас не прочитать.» без запроса', async () => {
+    unifiedOn();
+    await seedPage(authored({ footnotes: [{ ...FOOTNOTES[0], cardPage: null }] }));
+    const c = renderPage();
+    await settle();
+    const before = pageGets().length;
+    press(plates(c).find(n => textNodes(n).join('') === 's1') ?? null, 'сноска s1');
+    await settle();
+    expect(texts(findNodeByAttr(c, 'data-testid', 'wiki-footnote-source')!).join(' ')).toBe(FOOTNOTE_TEXT.sourceFailed);
+    expect(pageGets().length).toBe(before);
   });
 
   it('клик по сноске человека: пояснение про замену, без чтения источника', async () => {
@@ -609,9 +621,9 @@ describe('Страница с авторством (F3a)', () => {
     let resolveA!: (v: unknown) => void;
     const slowA = new Promise(r => { resolveA = r; });
     await seedPage(authored(), SECTION.key, PAGE_KEY, (url) => {
-      if (url.includes(encodeURIComponent(FOOTNOTES[0].card))) return slowA;
-      if (url.includes(encodeURIComponent(FOOTNOTES[2].card))) {
-        return Promise.resolve({ pageKey: FOOTNOTES[2].card, content: cardText('Задача Ревью UI', 'note:n1') });
+      if (url.includes(encodeURIComponent(FOOTNOTES[0].cardPage))) return slowA;
+      if (url.includes(encodeURIComponent(FOOTNOTES[2].cardPage))) {
+        return Promise.resolve({ pageKey: FOOTNOTES[2].cardPage, content: cardText('Задача Ревью UI', 'note:n1') });
       }
       return undefined;
     });
@@ -623,7 +635,7 @@ describe('Страница с авторством (F3a)', () => {
     // держит открытым кнопка плашки — меняем сноску тем же путём, что и пользователь с клавиатуры
     press(plates(c).find(n => textNodes(n).join('') === 's3') ?? null, 'сноска s3');
     await settle();
-    resolveA({ pageKey: FOOTNOTES[0].card, content: cardText('Ревью фронта', 'session:abc123') });
+    resolveA({ pageKey: FOOTNOTES[0].cardPage, content: cardText('Ревью фронта', 'session:abc123') });
     await settle();
     const src = texts(findNodeByAttr(c, 'data-testid', 'wiki-footnote-source')!).join(' ');
     expect(src).toBe(FOOTNOTE_TEXT.source('Задача Ревью UI'));

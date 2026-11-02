@@ -7,9 +7,8 @@
 // подложке закрывают, aria-label у диалога.
 
 import { useEffect, useRef, useState } from 'react';
-import { C, FONT, FS, R, SHADOW, SP, Z, openChatById, useIsMobile } from 'aihome_shell/kit';
+import { C, FONT, FS, R, SHADOW, SP, Z, openChatById, useIsMobile, loadWikiSourceCard, type WikiSourceCardInfo } from 'aihome_shell/kit';
 import { Button } from '../../../components/ui/Button';
-import { loadWikiSourceCard, type WikiSourceCardInfo } from '../../../lib/wiki';
 
 // Тексты — дословно из ADR-038 п.3 / записки макета; тест сверяет их с файлом ADR
 export const FOOTNOTE_TEXT = {
@@ -35,6 +34,7 @@ export function fmtDayMonth(iso: string | null | undefined): string {
 export interface FootnoteView {
   label: string;
   card: string;
+  cardPage: string | null;
   human: boolean;
   author: string | null;
   captured: string | null;
@@ -80,13 +80,15 @@ export function WikiFootnotePopover({ sectionKey, pageKey, fn, anchor, onClose }
   useEffect(() => {
     activeKey.current = key;
     if (fn.human) { setSrc(null); return () => { activeKey.current = null; }; }
+    // Нет ключа страницы карточки — читать нечего, запрос не уходит
+    if (!fn.cardPage) { setSrc({ key, status: 'failed' }); return () => { activeKey.current = null; }; }
     setSrc({ key, status: 'loading' });
-    loadWikiSourceCard(sectionKey, fn.card).then(
+    loadWikiSourceCard(sectionKey, fn.cardPage).then(
       info => { if (activeKey.current === key) setSrc({ key, status: 'ok', info }); },
       () => { if (activeKey.current === key) setSrc({ key, status: 'failed' }); },
     );
     return () => { activeKey.current = null; };
-  }, [key, sectionKey, fn.card, fn.human]);
+  }, [key, sectionKey, fn.cardPage, fn.human]);
 
   const num = /^s(\d+)$/.exec(fn.label)?.[1] ?? fn.label;
   const date = fmtDayMonth(fn.captured);

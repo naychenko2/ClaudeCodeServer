@@ -1333,8 +1333,10 @@ export function wikiAuthorshipOf(page: { authorship?: unknown }): WikiAuthorship
 export interface WikiFootnoteDto {
   // Метка сноски в тексте: 's3' (допускается и форма '[^s3]' — снимаем обёртку)
   label: string;
-  // Путь карточки источника в вики
+  // Заголовок карточки источника (для показа)
   card: string;
+  // Ключ страницы карточки для чтения; нет — источник не прочитать
+  cardPage?: string | null;
   // Происхождение источника: 'human' — правка человека, прочее (session, note…) — ИИ
   origin: string;
   // Время записи, ISO 8601

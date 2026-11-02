@@ -7,8 +7,10 @@ using ClaudeHomeServer.Services.Spheres;
 namespace ClaudeHomeServer.Services.Notes.Wiki;
 
 // Очередь заявок разбора (S6b-3, ADR-035 §12б этапы 5–8 и «Результат разбора»; ADR-036 §3).
-// Одна заявка = один прогон двух проходов по выдержке источника (промпты S6b-1, место
-// wiki-ingest) → проверки кодом (S6b-2) → пакет (S4a) → применение неспорных (S4b). Модель
+// Одна заявка = один прогон двух проходов по выдержке источника (промпты S6b-1; место
+// разбора задаёт заявка своим actionKey, по умолчанию wiki-ingest; ключ вне каталога
+// LocalActionCatalog — заявка отказана на входе) → проверки кодом (S6b-2) → пакет (S4a) →
+// применение неспорных (S4b). Модель
 // ничего не выбирает: раздел даёт дом источника (код), класс и решение — валидатор и
 // политика, цитаты и сноски — код.
 //
@@ -18,8 +20,8 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // 2. Карточка источника читается с диска: она уже захвачена (S6h) и лежит в разделе
 //    назначения; её заголовок — цель сносок. Карточки нет или она не страница type: source —
 //    отказ до обращения к модели (неожиданный вход — отказ с причиной, не исключение).
-// 3. Проход A — one-shot без инструментов (ICheapTextRunner, место wiki-ingest):
-//    утверждения с дословными цитатами.
+// 3. Проход A — one-shot без инструментов (ICheapTextRunner; место задаёт заявка,
+//    по умолчанию wiki-ingest): утверждения с дословными цитатами.
 // 4. Код уточняет кандидатов-страниц: страницы раздела назначения и цепочки вверх, чей
 //    заголовок или алиас встречается в тексте утверждений (тот же порядок нормализации,
 //    что у индекса ByName — WikiDedup.NormalizeName), не больше 5. Их текст — в промпт
@@ -53,6 +55,9 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 //   присоединяется к незавершённой задаче (in-flight) и получает её результат — двух
 //   пакетов на одну версию источника и двойной оплаты модели нет; разные версии одного
 //   окна — разные заявки: переписанный источник не должен получать чужой разбор (InFlightKey);
+// - in-flight-ключ места разбора (actionKey, N7a) не содержит: присоединившаяся заявка
+//   получает движок того, кто пришёл первым, — своей модели нет ни на уровне чата
+//   (single-flight WikiChatIngestService), ни здесь;
 // - заявки одного раздела стоят в очереди (semaphore по ключу раздела): вторая читает
 //   состояние раздела после того, как первая завершила свой цикл, а не посреди её записи;
 // - применение под теми же блокировками, что у остальной вики (внутри ApplyAsync);
@@ -95,14 +100,16 @@ public sealed class WikiIngestService
     private readonly ISphereDirectory _spheres;
     private readonly WikiApplyService _apply;
     private readonly string _dataDir;
+    private readonly TimeProvider _time;
 
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> _sectionGates = new();
     private readonly object _inFlightLock = new();
     private readonly Dictionary<string, Task<IngestResult>> _inFlight = new();
 
     public WikiIngestService(ICheapTextRunner llm, ISphereDirectory spheres, WikiApplyService apply,
-        IConfiguration config)
+        IConfiguration config, TimeProvider? time = null)
     {
+        _time = time ?? TimeProvider.System;
         _llm = llm;
         _spheres = spheres;
         _apply = apply;
@@ -113,8 +120,14 @@ public sealed class WikiIngestService
 
     /// <summary>Поставить заявку в очередь и дождаться её исхода. Две одновременные заявки
     /// одного источника — один прогон (вторая получает результат первой). Отказ любой
-    /// фазы — IngestResult с причиной; исключения наружу нет.</summary>
-    public Task<IngestResult> IngestAsync(string ownerId, Request? request, CancellationToken ct = default)
+    /// фазы — IngestResult с причиной; исключения наружу нет.
+    /// actionKey (N7a) — место разбора для вызова модели: null — прежний wiki-ingest,
+    /// вызывающий (разбор чата ночью) подаёт своё место из LocalActionCatalog. Не-null ключ
+    /// вне каталога — отказ на входе, до очереди и модели: опечатка в месте не должна
+    /// молча переносить разбор в облако (LocalActionRouter у неведомого ключа берёт
+    /// Tier/Medium).</summary>
+    public Task<IngestResult> IngestAsync(string ownerId, Request? request, CancellationToken ct = default,
+        string? actionKey = null)
     {
         // Fail-closed входа: кривая заявка не доходит ни до очереди, ни до модели.
         if (string.IsNullOrWhiteSpace(ownerId))
@@ -129,6 +142,9 @@ public sealed class WikiIngestService
             return Task.FromResult(Rejected("заявка без пути карточки — карточку обязан поставить захват (S6h)"));
         if (string.IsNullOrEmpty(request.SourceText))
             return Task.FromResult(Rejected("заявка без текста источника — цитату подтвердить не из чего"));
+        if (actionKey is not null && LocalActionCatalog.Find(actionKey) is null)
+            return Task.FromResult(Rejected(
+                $"место разбора «{actionKey}» вне каталога LocalActionCatalog — заявки нет"));
 
         var key = InFlightKey(ownerId, request);
         Task<IngestResult> task;
@@ -136,7 +152,7 @@ public sealed class WikiIngestService
         {
             if (_inFlight.TryGetValue(key, out var running))
                 return running;
-            task = RunProtectedAsync(ownerId, request, ct);
+            task = RunProtectedAsync(ownerId, request, ct, actionKey);
             _inFlight[key] = task;
         }
         // Снятие — после завершения: опоздавшая заявка, пришедшая в окно между концом
@@ -165,11 +181,12 @@ public sealed class WikiIngestService
     private static string InFlightKey(string ownerId, Request r) =>
         ownerId + "|" + r.Origin + "|" + r.Ref + "|" + r.CardRelPath + "|" + (r.Target ?? "");
 
-    private async Task<IngestResult> RunProtectedAsync(string ownerId, Request request, CancellationToken ct)
+    private async Task<IngestResult> RunProtectedAsync(string ownerId, Request request, CancellationToken ct,
+        string? actionKey)
     {
         try
         {
-            return await RunAsync(ownerId, request, ct);
+            return await RunAsync(ownerId, request, ct, actionKey);
         }
         catch (OperationCanceledException)
         {
@@ -183,7 +200,8 @@ public sealed class WikiIngestService
         }
     }
 
-    private async Task<IngestResult> RunAsync(string ownerId, Request request, CancellationToken ct)
+    private async Task<IngestResult> RunAsync(string ownerId, Request request, CancellationToken ct,
+        string? actionKey)
     {
         // 1. Раздел назначения — дом источника (код, не модель).
         var decision = WikiSourceHome.Decide(request.Home, request.Target);
@@ -245,7 +263,7 @@ public sealed class WikiIngestService
             var promptA = WikiKeeperPrompts.Claims(
                 request.SourceText, sectionIndex, WikiKeeperPrompts.NewNonce(),
                 WikiPage.MinQuoteLength, WikiPage.MaxQuoteLength);
-            var answerA = await CallModelAsync(promptA, ownerId, "проход A", usage, ct);
+            var answerA = await CallModelAsync(promptA, ownerId, "проход A", usage, ct, actionKey);
             if (answerA.Reason is not null)
                 return Rejected(answerA.Reason);
             if (TryNothingToAdd(answerA.Text!, out var modelReasonA))
@@ -269,7 +287,7 @@ public sealed class WikiIngestService
             var promptB = WikiKeeperPrompts.Plan(
                 request.SourceText, claimsJson, sectionIndex,
                 WikiKeeperPrompts.NewNonce(), existingPages);
-            var answerB = await CallModelAsync(promptB, ownerId, "проход B", usage, ct);
+            var answerB = await CallModelAsync(promptB, ownerId, "проход B", usage, ct, actionKey);
             if (answerB.Reason is not null)
                 return Rejected(answerB.Reason);
             var plan = ParsePlan(answerB.Text!, out var nothingB, out var modelReasonB, out var parseErrorB);
@@ -295,6 +313,9 @@ public sealed class WikiIngestService
                 DisabledClasses = settings.DisabledClasses,
                 // «личное в Общем» — решение о видимости принимает человек (ADR-036, решение 3).
                 SourceHomeIsPersonal = request.Home == WikiSections.Personal,
+                // Анти-петля (N7d): страницы, откатанные человеком за последние 7 дней.
+                RecentlyRevertedPages = WikiJournalReader.ReadRecentHumanReverts(
+                    root, _time.GetUtcNow().AddDays(-WikiApplyPolicy.RevertQuarantineDays)),
             };
             var verdict = WikiPlanValidator.Validate(
                 plan, claims, source, sectionKey, upChain, sectionPages, policy);
@@ -307,7 +328,7 @@ public sealed class WikiIngestService
                     + "nothing worth writing.\nISSUES:\n"
                     + string.Join("\n", issues.Select(r => "- " + r)) + "\n\n"
                     + promptB;
-                var answerR = await CallModelAsync(repairPrompt, ownerId, "ремонт плана", usage, ct);
+                var answerR = await CallModelAsync(repairPrompt, ownerId, "ремонт плана", usage, ct, actionKey);
                 if (answerR.Reason is not null)
                     return WithSectionIssues(Rejected(answerR.Reason), verdict);
                 if (TryNothingToAdd(answerR.Text!, out var modelReasonR))
@@ -514,32 +535,53 @@ public sealed class WikiIngestService
 
     private readonly record struct ModelAnswer(string? Text, string? Reason);
 
-    /// <summary>Один one-shot вызов места wiki-ingest (без инструментов; формат — «json»).
-    /// Сбой/пустой ответ — ModelAnswer с причиной: вызывающий отказывает заявку, а не
-    /// ловит исключение. Токены вызова — в аккумулятор разбора (usage=null — нераспознанный
+    /// <summary>Один one-shot вызов места разбора (без инструментов; формат — «json»):
+    /// actionKey — место заявки (N7a), null — прежний wiki-ingest; все вызовы передают его
+    /// явно (default снят, чтобы вызов не мог остаться без места). Ключ проверен каталогом
+    /// на входе IngestAsync. Сбой/пустой ответ — ModelAnswer с причиной: вызывающий
+    /// отказывает заявку, а не ловит исключение.
+    /// Токены вызова — в аккумулятор разбора (usage=null — нераспознанный
     /// формат метрик — переживаем: это разрешено контрактом шва).</summary>
     private async Task<ModelAnswer> CallModelAsync(string prompt, string ownerId, string passName,
-        UsageAccumulator usage, CancellationToken ct)
+        UsageAccumulator usage, CancellationToken ct, string? actionKey)
     {
-        OneShotResult result;
+        // Решение Андрея 02.11: ночной разбор не уходит в облако. Ночь идёт через
+        // RunLocalOrChosenAsync (цепочка без финального claude-шага при локальном маршруте):
+        // падение/недоступность локали посреди вызова — отказ вызова, а не уход в Tier/облако.
+        // Расход по этим вызовам не учитывается (usage шва нет) — решение допускает потерю.
+        // Кнопка «Разобрать» и агент wiki_ingest (actionKey не задан) — человеческие места,
+        // облако там допустимо: прежний путь с учётом расхода.
+        var noCloud = actionKey == LocalActionCatalog.WikiNightly;
+        string? text;
+        OneShotUsage? used = null;
         try
         {
-            result = await _llm.RunDetailedAsync(
-                LocalActionCatalog.WikiIngest, prompt,
-                fallbackModel: null, ownerId, jsonFormat: "json", ct: ct);
+            if (noCloud)
+            {
+                text = await _llm.RunLocalOrChosenAsync(
+                    LocalActionCatalog.WikiNightly, prompt, ownerId, jsonFormat: "json", ct: ct);
+            }
+            else
+            {
+                var result = await _llm.RunDetailedAsync(
+                    actionKey ?? LocalActionCatalog.WikiIngest, prompt,
+                    fallbackModel: null, ownerId, jsonFormat: "json", ct: ct);
+                text = result.Text;
+                used = result.Usage;
+            }
         }
         catch (Exception e)
         {
             return new ModelAnswer(null, $"{passName}: модель не ответила: {e.Message}");
         }
-        if (string.IsNullOrWhiteSpace(result.Text))
+        if (string.IsNullOrWhiteSpace(text))
             return new ModelAnswer(null, $"{passName}: модель дала пустой ответ");
-        if (result.Usage is { } u)
+        if (used is { } u)
         {
             usage.InputTokens += u.TotalInputTokens;
             usage.OutputTokens += u.OutputTokens;
         }
-        return new ModelAnswer(result.Text, null);
+        return new ModelAnswer(text, null);
     }
 
     private sealed class UsageAccumulator

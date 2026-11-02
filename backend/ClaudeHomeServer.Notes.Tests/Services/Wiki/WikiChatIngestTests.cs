@@ -42,6 +42,12 @@ namespace ClaudeHomeServer.Tests.Services;
 // не вечный 202 (F2); две заявки одного чата — один прогон (мера — чтения истории на
 // уровне чата: модель одна и без single-flight'а чата, её экономит in-flight очереди).
 //
+// Плюс N7a: место разбора (actionKey) доходит до модели: заявка ночи зовёт wiki-nightly,
+// без actionKey — прежнее место wiki-ingest (guard в FakeLlm.Answer на каждом тесте);
+// две заявки одного чата с разными местами — один прогон, движок того, кто первым.
+// Плюс доработка R-N7a M1: ключ вне каталога LocalActionCatalog — отказ с причиной на
+// входе очереди заявок, модель не зовётся (неведомое место не уходит в облако).
+//
 // Утверждение модели — дословная цитата реплики (text == quote): в финальном пакете
 // op.Text — подтверждённая цитата (WikiIngestService.cs:335 VerifiedQuote), дедup меры 2
 // (WikiDedup.IsDuplicateStatement → HasSameText) опознаёт повтор именно по тексту
@@ -777,6 +783,139 @@ public class WikiChatIngestTests : IDisposable
         r1.PackageIds.Should().Equal(r2.PackageIds);
     }
 
+    // ── N7a: место разбора (actionKey) доходит до модели; ключ single-flight его не содержит ──
+
+    [Fact]
+    public async Task Analyze_СActionKeyНочи_МодельЗванаНаМестеНочи()
+    {
+        // Заявка ночи: оба прохода — на названном месте wiki-nightly. Без actionKey
+        // место прежнее (wiki-ingest) — это guard в FakeLlm.Answer, живой на каждом
+        // тесте файла (прежний тест :1087).
+        AddSession("chat-night");
+        SetShortHistory("chat-night");
+
+        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1))
+        {
+            ExpectedActionKey = LocalActionCatalog.WikiNightly,
+        };
+        var sut = Sut(llm);
+
+        var res = await sut.AnalyzeAsync(User, "chat-night", actionKey: LocalActionCatalog.WikiNightly);
+        res.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, res.Reason);
+        llm.Calls.Should().HaveCount(2, "один разбор: проходы A+B ровно по одному разу");
+        llm.Calls.Should().OnlyContain(c => c.ActionKey == LocalActionCatalog.WikiNightly,
+            "разбор ночи — на названном месте");
+    }
+
+    // ── решение Андрея 02.11: ночь не уходит в облако, кнопка — прежняя цепочка ──
+
+    [Fact]
+    public async Task Analyze_КлючНочи_ВызовБезОблака()
+    {
+        // Ночь идёт через RunLocalOrChosenAsync (без финального claude-шага); кнопка «Разобрать»
+        // (actionKey не задан) — через RunDetailedAsync, как раньше (следующий тест).
+        // Мутации: ночь на RunDetailedAsync (убрать запрет) → этот тест красный;
+        // кнопка на RunLocalOrChosenAsync (выставить запрет) → следующий тест красный.
+        AddSession("chat-night");
+        SetShortHistory("chat-night");
+        var night = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1))
+        {
+            ExpectedActionKey = LocalActionCatalog.WikiNightly,
+        };
+        var nres = await Sut(night).AnalyzeAsync(User, "chat-night", actionKey: LocalActionCatalog.WikiNightly);
+        nres.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, nres.Reason);
+        night.NoCloudKeys.Should().HaveCount(2, "оба прохода ночи — запросом без облака");
+        night.CloudKeys.Should().BeEmpty("облачная цепочка ночью не зовётся");
+    }
+
+    [Fact]
+    public async Task Analyze_КнопкаБезКлюча_ПрежняяЦепочкаСОблаком()
+    {
+        AddSession();
+        SetShortHistory();
+        var button = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1));
+        var bres = await Sut(button).AnalyzeAsync(User, ChatId);
+        bres.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, bres.Reason);
+        button.CloudKeys.Should().HaveCount(2, "кнопка — прежняя цепочка с облаком");
+        button.NoCloudKeys.Should().BeEmpty("запрет облака кнопке не выставляется");
+    }
+
+    [Fact]
+    public async Task Analyze_НочьЛокальныйРаннерНедоступен_ОтказБезОблака_КурсорНеДвинут()
+    {
+        // Локаль упала посреди вызова: отказ разбора (Rejected), облако не позвано,
+        // исключения наружу нет, курсор чата не двинут.
+        AddSession("chat-night");
+        SetShortHistory("chat-night");
+        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1))
+        {
+            ExpectedActionKey = LocalActionCatalog.WikiNightly,
+            LocalThrow = new InvalidOperationException("локальная модель недоступна"),
+        };
+
+        var res = await Sut(llm).AnalyzeAsync(User, "chat-night", actionKey: LocalActionCatalog.WikiNightly);
+
+        res.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected);
+        res.Reason.Should().Contain("модель не ответила").And.Contain("недоступна");
+        llm.CloudKeys.Should().BeEmpty("облако при отказе локали не зовётся");
+        llm.NoCloudKeys.Should().ContainSingle("после отказа второй проход не идёт");
+        WikiChatTriageStore.Get(Root).Entries
+            .Where(e => e.SessionId == "chat-night")
+            .Should().NotContain(e => e.Cursor > 0, "курсор не двинут");
+    }
+
+    [Fact]
+    public async Task Гонка_ДвеЗаявкиРазнымиActionKey_ОдинПрогон()
+    {
+        // Кнопка начала разбор (wiki-ingest); в середине её прогона приходит ночь
+        // (wiki-nightly). In-flight-ключ owner|chat|home места не содержит (шапка
+        // сервиса): одна задача на двоих, движок — того, кто пришёл первым.
+        // Мутация «игнорировать actionKey» (не доносить его до CallModelAsync): первый
+        // тест красный — модель зовётся не на месте заявки.
+        AddSession();
+        SetShortHistory();
+
+        var gate = new TaskCompletionSource();
+        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1)) { GateA = gate };
+        var sut = Sut(llm);
+
+        var t1 = sut.AnalyzeAsync(User, ChatId);
+        SpinWait.SpinUntil(() => llm.Calls.Count > 0, 5000).Should().BeTrue("первая заявка в прогоне");
+        var t2 = sut.AnalyzeAsync(User, ChatId, actionKey: LocalActionCatalog.WikiNightly);
+        ReferenceEquals(t1, t2).Should().BeTrue("один чат — та же задача: место в ключ не входит");
+
+        gate.SetResult();
+        var r1 = await t1;
+        var r2 = await t2;
+        r1.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, r1.Reason);
+        r2.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, r2.Reason);
+        llm.Calls.Should().HaveCount(2, "один прогон: проходы A+B ровно по одному разу, своей модели у ночи нет");
+        llm.Calls.Should().OnlyContain(c => c.ActionKey == LocalActionCatalog.WikiIngest,
+            "присоединившаяся заявка получает движок того, кто пришёл первым");
+    }
+
+    // R-N7a M1: неведомое место разбора — отказ, а не молчаливый уход в облако. Ключ вне
+    // каталога (здесь — опечатка «wiki-nighly») у LocalActionRouter.Resolve берёт
+    // Tier/Medium, т.е. облако вместо локального места. Guard — на fail-closed входе
+    // IngestAsync (WikiIngestService.cs): опоздавшая заявка с таким ключом не присоединяется
+    // к чужому прогону и не доходит до модели. Мутация «убрать проверку каталога»: модель
+    // зовётся с неведомым ключом — вызов записан в llm.Calls (guard FakeLlm.Answer бьёт
+    // внутри вызова и гасится CallModelAsync в причину отказа) — тест красный на assert
+    // «модель не зовётся».
+    [Fact]
+    public async Task Analyze_НеизвестныйActionKey_ОтказБезВызоваМодели()
+    {
+        AddSession("chat-badkey");
+        SetShortHistory("chat-badkey");
+
+        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1));
+        var res = await Sut(llm).AnalyzeAsync(User, "chat-badkey", actionKey: "wiki-nighly");
+
+        res.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected);
+        res.Reason.Should().Contain("wiki-nighly", "отказ называет неведомое место");
+        llm.Calls.Should().BeEmpty("заявка с неведомым местом не доходит до модели");
+    }
+
     // ── W3-6 F1: чужой и несуществующий чат — один message на двоих ──
 
     [Fact]
@@ -1012,7 +1151,7 @@ public class WikiChatIngestTests : IDisposable
     {
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, User)], "test"));
-        return new WikiChatsController(_sessions, Sut(new FakeLlm()), _config, new WikiFlagOn())
+        return new WikiChatsController(_sessions, Sut(new FakeLlm()), new WikiChatRecalc(_sessions, _config), _config, new WikiFlagOn())
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
@@ -1021,6 +1160,9 @@ public class WikiChatIngestTests : IDisposable
     private sealed class FakeLlm : ICheapTextRunner
     {
         public List<(string ActionKey, string Prompt, string Pass)> Calls { get; } = [];
+        // Ожидаемое место разбора (N7a): по умолчанию прежнее — guard в Answer проверяет
+        // им каждый вызов каждого теста файла; тест ночи выставляет своё.
+        public string ExpectedActionKey = LocalActionCatalog.WikiIngest;
         public TaskCompletionSource? GateA; // первый проход A ждёт, пока gate не открыт (на потоке вызова)
         // Асинхронный вариант того же гейта: проход A отдаёт управление, прогон остаётся «в полёте».
         // Нужен там, где проверяется очередь заявок: её вызывающий регистрирует заявку только
@@ -1028,6 +1170,13 @@ public class WikiChatIngestTests : IDisposable
         // идёт на потоке вызова внутри lock очереди — записи там нет, и приход второй заявки
         // решался бы гонкой за этот lock.
         public TaskCompletionSource? GateAAsync;
+        // Решение 02.11: какими входами пришли вызовы. Без облака — RunLocalOrChosenAsync,
+        // с облачной цепочкой — RunDetailedAsync/RunAsync.
+        public List<string> NoCloudKeys { get; } = [];
+        public List<string> CloudKeys { get; } = [];
+        // Локальный раннер «недоступен»: RunLocalOrChosenAsync бросает; облачные входы при этом
+        // ответили бы (Answer) — так видно, что облако не позвано.
+        public Exception? LocalThrow;
 
         private readonly Dictionary<string, Queue<string>> _answers = new();
         private readonly List<Action> _beforeNextCall = [];
@@ -1051,17 +1200,25 @@ public class WikiChatIngestTests : IDisposable
         public string DescribeRoute(string actionKey, string? fallbackModel) => "fake";
 
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
-            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default) =>
-            Task.FromResult(Answer(actionKey, prompt, ct));
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+        {
+            CloudKeys.Add(actionKey);
+            return Task.FromResult(Answer(actionKey, prompt, ct));
+        }
 
         public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
-            object? jsonFormat = null, CancellationToken ct = default) =>
-            Task.FromResult<string?>(Answer(actionKey, prompt, ct));
+            object? jsonFormat = null, CancellationToken ct = default)
+        {
+            NoCloudKeys.Add(actionKey);
+            if (LocalThrow is not null) throw LocalThrow;
+            return Task.FromResult<string?>(Answer(actionKey, prompt, ct));
+        }
 
         public async Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
             string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
             int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)
         {
+            CloudKeys.Add(actionKey);
             var text = Answer(actionKey, prompt, ct);
             // Первый проход A стоит на асинхронном гейте: вызывающий (await CallModelAsync)
             // отдаёт управление, и к этому моменту заявка уже стоит в очереди.
@@ -1084,7 +1241,7 @@ public class WikiChatIngestTests : IDisposable
                 : prompt.Contains("turn the claims") ? "B"
                 : "?";
             Calls.Add((actionKey, prompt, pass));
-            actionKey.Should().Be(LocalActionCatalog.WikiIngest, "место разбора — wiki-ingest");
+            actionKey.Should().Be(ExpectedActionKey, "место разбора — " + ExpectedActionKey);
             if (pass == "A" && GateA is not null && CountOf("A") == 1)
                 GateA.Task.WaitAsync(ct).GetAwaiter().GetResult();
             var queue = _answers.TryGetValue(pass, out var q) ? q : null;

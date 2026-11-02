@@ -330,4 +330,47 @@ public class WikiApplyPolicyTests
         v.Within.Should().BeFalse();
         v.WaitingReason.Should().Contain("страниц").And.NotContain("утверждений");
     }
+
+    // ── N7d: анти-петля — страницу, откатанную человеком, автомат 7 дней не правит ──
+
+    private static readonly DateTimeOffset RevertedAt = new(2026, 10, 30, 12, 0, 0, TimeSpan.Zero);
+
+    private static WikiApplyPolicy.ApplyContext CtxReverted(string page) => new()
+    {
+        RecentlyRevertedPages = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal) { [page] = RevertedAt },
+    };
+
+    [Fact]
+    public void N7d_ОткатанныйЧеловекомСтраницы_AppendВоВходящие_ПричинаНазываетОткатИДату()
+    {
+        var v = WikiApplyPolicy.Decide(Op(WikiPackage.OpAppend), CtxReverted(ProjectPage));
+
+        v.Decision.Should().Be(WikiPackage.DecisionInbox);
+        v.Reason.Should().Contain("откатили вручную").And.Contain("2026-10-30");
+    }
+
+    [Fact]
+    public void N7d_ДругаяСтраница_НеЗатронута_Само()
+    {
+        var v = WikiApplyPolicy.Decide(Op(WikiPackage.OpAppend, page: "Проекты/p1/Другая.md"), CtxReverted(ProjectPage));
+
+        v.IsAuto.Should().BeTrue();
+    }
+
+    [Fact]
+    public void N7d_CreateПоТомуЖеПути_ПослеОткатаСУдалением_ВоВходящие()
+    {
+        // Revert пакета с create удаляет страницу, но путь остаётся в pages журнала:
+        // тот же источник создал бы её заново — правило обязано сработать и на create.
+        var v = WikiApplyPolicy.Decide(Op(WikiPackage.OpCreate), CtxReverted(ProjectPage));
+
+        v.Decision.Should().Be(WikiPackage.DecisionInbox);
+        v.Reason.Should().Contain("откатили вручную");
+    }
+
+    [Fact]
+    public void N7d_БезОткатов_ПоведениеПрежнее()
+    {
+        WikiApplyPolicy.Decide(Op(WikiPackage.OpAppend), Ctx()).IsAuto.Should().BeTrue();
+    }
 }

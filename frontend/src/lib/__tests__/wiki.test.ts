@@ -14,7 +14,11 @@
 // неформный 200 списка чатов — ошибка, а не тихая пустота, и код wiki_triage_invalid
 // узнаётся. OPEN-1: запрос открыть страницу — контракт очереди (живёт до взятия,
 // последний побеждает); реакция смонтированных экранов — в рендер-тестах
-// WikiTab.test и NotesPage.test.
+// WikiTab.test и NotesPage.test. Ф1 («Ночной разбор», контракты NA-2/N1b): PUT настроек
+// шлёт только изменённые поля; правка оптимистична, отказ откатывает её и приходит
+// результатом (WikiError с кодом), а не исключением; слот настроек — последний запрос
+// побеждает; lastNight: форма доходит, null и отсутствие поля — одно «итога не было»;
+// пометка чата — транспорт по адресу/методу/телу, 400 без кода различим только по статусу.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../signalr', () => ({
@@ -42,6 +46,7 @@ import {
   getWikiCatalogSnapshot,
   getWikiPageSnapshot,
   getWikiTreeSnapshot,
+  getWikiSettingsSnapshot,
   groupSectionsByKind,
   initializeWiki,
   ingestWikiNote,
@@ -49,10 +54,13 @@ import {
   loadWikiChatAnalyzeStatus,
   loadWikiChats,
   loadWikiPage,
+  loadWikiSettings,
   loadWikiTree,
   parseSectionKey,
+  putWikiNightly,
   requestOpenWikiPage,
   retractWikiSource,
+  setWikiChatMark,
 } from '../wiki';
 
 type MockFn = ReturnType<typeof vi.fn>;
@@ -735,6 +743,286 @@ describe('вики: список отбора чатов (доработка H3)
       expect(e.status).toBe(0);
       expect(e.message).toContain('неожиданный ответ');
     }
+  });
+});
+
+// ─── «Ночной разбор»: настройки и итог (Ф1; контракты NA-2 и N7c) ───
+// Настройки как их отдаёт GET /api/wiki/settings: ночной блок целый всегда, с умолчаниями
+// (WikiSettingsController.cs:212-223); lastNight появится с N7c — до него поля нет вовсе.
+// Свойства стора: правка оптимистична (до ответа), отказ откатывает её и приходит
+// результатом, слот настроек — последний запрос побеждает, ответ чужого владельца не пишется.
+// Мутации (вывод — в отчёте задачи):
+// (1) убрать сверку поколения в успехе putWikiNightly → «ДваБыстрыхPUT» краснеет
+//     (устаревший ответ затирает состояние);
+// (2) убрать оптимистичную запись в начале putWikiNightly → «ТумблерПрименяетсяОптимистично»
+//     краснеет (до ответа состояние прежнее);
+// (3) убрать откат в ветке отказа → «ОтказPUTОткатывает» краснеет (оптимистичное остаётся);
+// (4) убрать сверку владельца в успехе putWikiNightly → «ОтветПрежнегоВладельцаПоPUT»
+//     краснеет (ответ чужого человека пишет чужой снимок);
+// (5) убрать сверку владельца в ветке отказа → «ОтказПрежнегоВладельца» краснеет
+//     (откат возвращает снимок прежнего в чужой стор).
+
+const SETTINGS = {
+  autoApplyEnabled: false,
+  classes: [],
+  nightly: {
+    enabled: false, windowStartHour: 3, windowEndHour: 6,
+    maxPackagesPerNight: 20, maxPackagesPerSection: 6, maxChatsPerSection: 10,
+    inputTokenBudget: 700000,
+  },
+};
+const SETTINGS_ON = { ...SETTINGS, nightly: { ...SETTINGS.nightly, enabled: true } };
+const SETTINGS_WS2 = { ...SETTINGS, nightly: { ...SETTINGS.nightly, windowStartHour: 2 } };
+const SETTINGS_WS4 = { ...SETTINGS, nightly: { ...SETTINGS.nightly, windowStartHour: 4 } };
+const LAST_NIGHT = {
+  date: '2026-11-01', selected: 4, analyzed: 3, applied: 2, toInbox: 1,
+  estTokens: 180000, outcome: 'completed',
+};
+
+describe('вики: настройки «Ночного разбора» (F1)', () => {
+  it('putWikiNightly шлёт только изменённые поля ночного блока', async () => {
+    serve({ 'GET /wiki/settings': SETTINGS, 'PUT /wiki/settings': SETTINGS_ON });
+    await loadWikiSettings();
+    const r = await putWikiNightly({ enabled: true });
+    expect(r.ok).toBe(true);
+    expect(req.mock.calls[1][0]).toBe('/wiki/settings');
+    expect((req.mock.calls[1][1] as RequestInit).method).toBe('PUT');
+    // частичный блок: ни неизменённых полей, ни null-«не менять» — на бэке «не менять»
+    // это отсутствие поля (NightlyRequest, WikiSettingsController.cs:281-297)
+    expect(sentBody(1)).toEqual({ nightly: { enabled: true } });
+  });
+
+  it('putWikiNightly_ТумблерПрименяетсяОптимистично_ОтветПодтверждаетСервернымЦелым', async () => {
+    serve({ 'GET /wiki/settings': SETTINGS });
+    await loadWikiSettings();
+    const put = deferred();
+    serve({ 'PUT /wiki/settings': put.promise });
+    const p = putWikiNightly({ enabled: true });
+    // до ответа: новое значение уже в сторе — UI тумблера не ждёт сети
+    expect(getWikiSettingsSnapshot()!.nightly.enabled).toBe(true);
+    put.resolve(SETTINGS_ON);
+    const r = await p;
+    expect(r.ok).toBe(true);
+    // подтверждение — серверное целое, а не сохранённый патч
+    expect(getWikiSettingsSnapshot()!.nightly).toEqual(SETTINGS_ON.nightly);
+  });
+
+  it('putWikiNightly_ДваБыстрыхPUT_ВСтореСостояниеПоследнегоОтвет', async () => {
+    serve({ 'GET /wiki/settings': SETTINGS });
+    await loadWikiSettings();
+    // первый PUT резолвится намеренно позже второго: его ответ — устаревший
+    const slow = deferred();
+    serve({ 'PUT /wiki/settings': slow.promise });
+    const p1 = putWikiNightly({ windowStartHour: 2 });
+    serve({ 'PUT /wiki/settings': SETTINGS_WS4 });
+    const r2 = await putWikiNightly({ windowStartHour: 4 });
+    expect(r2.ok).toBe(true);
+    expect(getWikiSettingsSnapshot()!.nightly.windowStartHour).toBe(4);
+    slow.resolve(SETTINGS_WS2);
+    await p1;
+    // поздний ответ раннего запроса не затирает состояние: сверка поколения (M1)
+    expect(getWikiSettingsSnapshot()!.nightly).toEqual(SETTINGS_WS4.nightly);
+  });
+
+  it('putWikiNightly_ОтказPUTОткатываетОптимистичное_ОшибкаПриходитРезультатом', async () => {
+    serve({ 'GET /wiki/settings': SETTINGS });
+    await loadWikiSettings();
+    for (const [status, code] of [
+      [400, 'wiki_nightly'],
+      [500, 'wiki_settings_write_failed'],
+    ] as Array<[number, string]>) {
+      serve({ 'PUT /wiki/settings': httpError(status, { code, message: 'отказ по контракту' }) });
+      // исключение наружу не летит: отказ контракта — значение результата
+      const r = await putWikiNightly({ enabled: true });
+      if (r.ok) throw new Error('ожидался отказ по контракту, а PUT прошёл');
+      expect(r.error).toBeInstanceOf(WikiError);
+      expect(r.error.status).toBe(status);
+      expect(r.error.code).toBe(code);
+      expect(r.error.message).toBe('отказ по контракту');
+      // оптимистичное откатано: в сторе то, что было до запроса
+      expect(getWikiSettingsSnapshot()!.nightly).toEqual(SETTINGS.nightly);
+    }
+  });
+
+  it('lastNight: форма доходит до вызывающего; null и отсутствие поля — одно «итога не было»', async () => {
+    serve({ 'GET /wiki/settings': { ...SETTINGS, lastNight: LAST_NIGHT } });
+    expect((await loadWikiSettings()).lastNight).toEqual(LAST_NIGHT);
+    serve({ 'GET /wiki/settings': { ...SETTINGS, lastNight: null } });
+    expect((await loadWikiSettings()).lastNight).toBeNull();
+    // бэк до N7c: поля нет вовсе — то же «итога не было», а не ошибка
+    serve({ 'GET /wiki/settings': SETTINGS });
+    expect((await loadWikiSettings()).lastNight).toBeNull();
+  });
+
+  it('putWikiNightly_ОтветPUTМолчитОбИтогеНочи_ОнСохраняетсяОтПоследнегоЧтения', async () => {
+    // lastNight несёт только GET (N7c); ответ PUT — настройки без него. Молча обнулять
+    // прочитанный итог нечем: поле сохраняется от последнего чтения.
+    serve({ 'GET /wiki/settings': { ...SETTINGS, lastNight: LAST_NIGHT } });
+    await loadWikiSettings();
+    serve({ 'PUT /wiki/settings': SETTINGS_ON });
+    const r = await putWikiNightly({ enabled: true });
+    expect(r.ok).toBe(true);
+    expect(getWikiSettingsSnapshot()!.nightly).toEqual(SETTINGS_ON.nightly);
+    expect(getWikiSettingsSnapshot()!.lastNight).toEqual(LAST_NIGHT);
+  });
+
+  it('неформный 200 настроек — не тихие умолчания, а ошибка', async () => {
+    // пустой ночный блок для фронта — не «ночь выключена»: бэк обязан дать целое
+    // (WikiSettingsController.cs:212-223); тело вне формы — ответ вне контракта
+    for (const body of [{}, { nightly: null }, null]) {
+      serve({ 'GET /wiki/settings': body });
+      const e = await rejection(() => loadWikiSettings());
+      expect(e).toBeInstanceOf(WikiError);
+      expect(e.status).toBe(0);
+      expect(e.message).toContain('неожиданный ответ');
+    }
+  });
+
+  it('настройки: ответ прежнего владельца в чужой снимок не пишется', async () => {
+    const slow = deferred();
+    serve({ 'GET /wiki/settings': slow.promise });
+    const p = loadWikiSettings(); // запрос прежнего владельца — резолвится после смены
+    userId.mockReturnValue('u2');
+    slow.resolve(SETTINGS);
+    await p;
+    expect(getWikiSettingsSnapshot()).toBeNull();
+  });
+
+  it('loadWikiSettings_ДваВызоваПодряд_ОдинGET', async () => {
+    const slow = deferred();
+    serve({ 'GET /wiki/settings': slow.promise });
+    const p1 = loadWikiSettings();
+    const p2 = loadWikiSettings();
+    slow.resolve(SETTINGS);
+    const [a, b] = await Promise.all([p1, p2]);
+    expect(req.mock.calls.filter((c: unknown[]) => c[0] === '/wiki/settings')).toHaveLength(1);
+    expect(a).toBe(b);
+    // слот сбрасывается по завершении: следующий вызов — новый запрос
+    await loadWikiSettings();
+    expect(req.mock.calls.filter((c: unknown[]) => c[0] === '/wiki/settings')).toHaveLength(2);
+  });
+
+  it('loadWikiSettings_ОтказОбщегоGET_ВиденОбоимВызывающим_СлотСбрасывается', async () => {
+    serve({ 'GET /wiki/settings': httpError(500) });
+    const p1 = loadWikiSettings();
+    const p2 = loadWikiSettings();
+    const [e1, e2] = await Promise.all([rejection(() => p1), rejection(() => p2)]);
+    expect(e1).toBeInstanceOf(WikiError);
+    expect(e2).toBe(e1);
+    expect(req.mock.calls.filter((c: unknown[]) => c[0] === '/wiki/settings')).toHaveLength(1);
+    // после отказа повтор («Повторить») идёт новым запросом
+    serve({ 'GET /wiki/settings': SETTINGS });
+    await loadWikiSettings();
+    expect(getWikiSettingsSnapshot()).not.toBeNull();
+  });
+
+  it('loadWikiSettings_ПослеPUT_ВисящийGETНеПереиспользуетсяИНеЗатираетПравку', async () => {
+    serve({ 'GET /wiki/tree': TREE, 'GET /wiki/settings': SETTINGS });
+    await ensureWikiLoaded();
+    await loadWikiSettings();
+    const slow = deferred();
+    serve({ 'GET /wiki/settings': slow.promise, 'PUT /wiki/settings': SETTINGS_ON });
+    const p1 = loadWikiSettings();
+    await putWikiNightly({ enabled: true }); // поднимает поколение
+    serve({ 'GET /wiki/settings': SETTINGS_ON });
+    const p2 = loadWikiSettings(); // висящий GET до правки не делится
+    expect(p2).not.toBe(p1);
+    slow.resolve(SETTINGS); // старое чтение не затирает правку
+    await Promise.allSettled([p1, p2]);
+    expect(getWikiSettingsSnapshot()!.nightly.enabled).toBe(SETTINGS_ON.nightly.enabled);
+  });
+
+  it('putWikiNightly_ОтветПрежнегоВладельцаПоPUT_ВЧужойСнимокНеПишется', async () => {
+    const put = deferred();
+    serve({ 'PUT /wiki/settings': put.promise });
+    const p = putWikiNightly({ enabled: true }); // снимка нет — оптимистичной записи тоже нет
+    userId.mockReturnValue('u2'); // смена аккаунта: поколение не поднят, отличается только владелец
+    put.resolve(SETTINGS_ON);
+    const r = await p;
+    // вызывающий свой ответ получает как есть…
+    expect(r.ok).toBe(true);
+    // …но ответ прежнего владельца в чужой снимок не пишется (M2)
+    expect(getWikiSettingsSnapshot()).toBeNull();
+  });
+
+  it('putWikiNightly_ОтказПрежнегоВладельца_ЧужойСнимокНеВозвращает', async () => {
+    serve({ 'GET /wiki/tree': TREE, 'GET /wiki/settings': SETTINGS });
+    await ensureWikiLoaded();
+    await loadWikiSettings();
+    let rejectPut!: (e: unknown) => void;
+    serve({ 'PUT /wiki/settings': new Promise<unknown>((_, rej) => { rejectPut = rej; }) });
+    const p = putWikiNightly({ enabled: true }); // оптимистичная запись u1
+    userId.mockReturnValue('u2');
+    serve({ 'GET /wiki/tree': TREE_FRESH });
+    await ensureWikiLoaded(); // при смене аккаунта снимок u1 очищен (M2)
+    expect(getWikiSettingsSnapshot()).toBeNull();
+    rejectPut(httpError(409, { code: 'wiki_nightly', message: 'отказ по контракту' }));
+    const r = await p;
+    if (r.ok) throw new Error('ожидался отказ по контракту, а PUT прошёл');
+    // откат прежнего владельца не возвращает его снимок в стор нового
+    expect(getWikiSettingsSnapshot()).toBeNull();
+  });
+});
+
+// ─── Пометки чата (Ф1; контракт N1b) ───
+// Транспорт чистый: адрес/метод/тело, состояния стора не трогает, ничего не перечитывает.
+// 400 бывает и с кодом (значение вне WikiMarks — wiki_mark_invalid, WikiChatsController.cs:
+// 207-211), и без кода (неразбираемое тело — ValidationProblemDetails биндинга ASP.NET):
+// полагаться на code здесь нельзя, только на статус.
+
+const MARK_URL = '/wiki/chats/s1/mark';
+
+describe('вики: пометки чата (N1b)', () => {
+  it('setWikiChatMark идёт по адресу, методу и телу; снятие — {mark:null}', async () => {
+    serve({ [`PUT ${MARK_URL}`]: { mark: 'important' } });
+    expect(await setWikiChatMark('s1', 'important')).toBe('important');
+    expect(req.mock.calls[0][0]).toBe(MARK_URL);
+    expect((req.mock.calls[0][1] as RequestInit).method).toBe('PUT');
+    expect(sentBody(0)).toEqual({ mark: 'important' });
+
+    serve({ [`PUT ${MARK_URL}`]: { mark: null } });
+    expect(await setWikiChatMark('s1', null)).toBeNull();
+    expect(sentBody(1)).toEqual({ mark: null });
+
+    // транспорт: ни одного лишнего запроса (список перечитывает экран, не стор)
+    expect(urlsFrom(0)).toEqual([MARK_URL, MARK_URL]);
+  });
+
+  it('отказы пометки: 404 и 409 — WikiError с кодом; 400 без кода — различим только по статусу', async () => {
+    const cases: Array<[number, string | null, unknown]> = [
+      [404, 'not_found', { code: 'not_found', message: 'чат не существует' }],
+      [409, 'wiki_llm_wiki_off', { code: 'wiki_llm_wiki_off', message: 'пометка не сохранена: функция выключена' }],
+      [400, null, undefined], // 400 без поля code (сбой биндинга тела) — на код здесь не опираемся
+    ];
+    for (const [status, code, body] of cases) {
+      serve({ [`PUT ${MARK_URL}`]: httpError(status, body) });
+      const e = await rejection(() => setWikiChatMark('s1', 'skip'));
+      expect(e).toBeInstanceOf(WikiError);
+      expect(e.status).toBe(status);
+      expect(e.code).toBe(code);
+    }
+  });
+
+  it('список отбора несёт mark: important/skip доходят; отсутствие поля — пометки нет', async () => {
+    const base = {
+      name: null, zone: 'gray', score: null, signals: null, reason: null,
+      nothingNewStreak: 0, triagedAt: '2026-11-01T12:00:00+00:00',
+      running: false, cursor: 0, chroniclePath: null,
+    };
+    serve({
+      'GET /wiki/chats': {
+        items: [
+          { ...base, sessionId: 's1', mark: 'skip' },
+          { ...base, sessionId: 's2', mark: null },
+          { ...base, sessionId: 's3' }, // бэк без поля (до N1b) — то же «пометки нет»
+        ],
+        counts: {},
+      },
+    });
+    const items = await loadWikiChats();
+    expect(items[0].mark).toBe('skip');
+    expect(items[1].mark).toBeNull();
+    expect(items[2].mark).toBeUndefined();
   });
 });
 

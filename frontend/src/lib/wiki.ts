@@ -1,4 +1,6 @@
 // Вики владельца: стор дерева разделов, каталогов, страниц и операций над ними (S5a).
+// С Ф2 (шаг F1) здесь же: ночная часть настроек (блок «Ночной разбор», оптимистичная правка
+// с откатом) и пометки чата «важный»/«не разбирать».
 // Модель — вики ВЛАДЕЛЬЦА с разделами projects/{id} | spheres/{id} | common | personal
 // (ADR-036 §1), а не «вики проекта / личная вики». Человек в UI видит всю свою вики:
 // видимости для моделей (WikiVisibility) здесь нет — ADR-036 §2, последний пункт.
@@ -163,7 +165,11 @@ export type WikiErrorCode =
   | 'wiki_note_id'
   // Отбор чатов (S6e/S6f): файл разбора не читается (409 — WikiChatsController.cs:108,152,
   // код бэка WikiChatTriageStore.CodeInvalid) — читается экраном отбора (loadWikiChats)
-  | 'wiki_triage_invalid';
+  | 'wiki_triage_invalid'
+  // Настройки ночного блока (NA-2): merged-блок ночного раздела кривой — 400 с кодом, файл
+  // не тронут; отказ записи файла — 500 с кодом, а не 500 без тела (WikiSettingsController.cs:160-170)
+  | 'wiki_nightly'
+  | 'wiki_settings_write_failed';
 
 const WIKI_ERROR_CODES: ReadonlySet<string> = new Set<string>([
   'wiki_foreign', 'wiki_section_key', 'wiki_page_key', 'wiki_project_missing', 'wiki_section_off',
@@ -179,6 +185,7 @@ const WIKI_ERROR_CODES: ReadonlySet<string> = new Set<string>([
   'wiki_llm_wiki_off', 'wiki_lint_running',
   'not_found', 'task_execution', 'marked_skip', 'personal_section', 'wiki_not_initialized',
   'packages_limit', 'wiki_note_id', 'wiki_triage_invalid',
+  'wiki_nightly', 'wiki_settings_write_failed',
 ]);
 
 export class WikiError extends Error {
@@ -405,6 +412,8 @@ export async function ensureWikiLoaded(): Promise<void> {
     _tree = null;
     _catalogs.clear();
     _page = null;
+    // Настройки — тоже вики владельца: снимок прежнего не переживает смену (M2)
+    _settings = null;
     _loaded = false;
     _ownerId = null;
     // Идущую загрузку прежнего владельца не подхватываем: она отбрасывается своей
@@ -808,6 +817,11 @@ export async function ingestWikiNote(noteId: string, target?: string | null): Pr
 
 export interface WikiTriageSignalDto { name: string; weight: number }
 
+// Пометка человека с чата (N1b, ADR-035 §12а): 'important' — разбирается всегда, минуя ступени
+// отбора; 'skip' — никогда (ту же пометку ставит откат по источнику, §12г мера 5). Живёт на
+// чате (Session.WikiMark), не в сторе отбора: её ставит setWikiChatMark или откат.
+export type WikiChatMark = 'important' | 'skip';
+
 export interface WikiChatTriage {
   sessionId: string;
   name: string | null;
@@ -820,6 +834,9 @@ export interface WikiChatTriage {
   running: boolean;
   cursor: number;
   chroniclePath: string | null;
+  // Пометка по записи списка (поле Mark — N1b, WikiChatsController.cs:140-142): отсутствие
+  // и null — одно: пометки нет (ответ старого бэка без поля читается как «нет пометки»)
+  mark?: WikiChatMark | null;
 }
 
 interface WikiChatsListDto { items: WikiChatTriage[]; counts: Record<string, number> }
@@ -834,10 +851,349 @@ export async function loadWikiChats(): Promise<WikiChatTriage[]> {
   return res.items;
 }
 
+// ─── «Ночной разбор»: настройки, итог ночи и пометки чата (Ф2; контракты NA-2 и N1b) ───
+// GET/PUT /api/wiki/settings — та же ручка, что у блока «Применение» (S4c): здесь читается и
+// меняется только ночная её часть. Бэк отдаёт ночной блок целым всегда, с подставленными
+// умолчаниями: «блока нет» для фронта — то же, что «ночь выключена» (WikiSettingsController.cs:
+// 212-223). PUT принимает частичный nightly (мердж с состоянием на момент записи, :134-156) и
+// возвращает настройки целиком; lastNight появится в GET с N7c — до него поля нет вовсе, и это
+// то же «итога не было» (форма — по плану N7b: файл keeper/nightly-last.json; финальную сверку
+// с N7c сделаем после его сдачи).
+//
+// Конкурентность (план Ф1): слот настроек один, со своим счётчиком поколения — тот же инвариант
+// «последний запрос побеждает», что у дерева и каталогов (ревью S5a M1), и та же привязка к
+// владельцу (M2). Правка ставится в стор оптимистично (тумблер не ждёт ответа), ответ подтверждает
+// её серверным целым; отказ PUT откатывает оптимистичное. Отказ контракта — WikiError с кодом —
+// возвращается результатом, а не исключением: состояние стора к тому моменту уже согласован
+// (откатан), и вызывающему остаётся назвать причину. Сетевой сбой/таймаут — не отказ контракта
+// (та же позиция, что у toWikiError): откат тот же, исключение идёт наружу как есть.
+
+export interface WikiNightlySettings {
+  enabled: boolean;
+  windowStartHour: number;
+  windowEndHour: number;
+  maxPackagesPerNight: number;
+  maxPackagesPerSection: number;
+  maxChatsPerSection: number;
+  inputTokenBudget: number;
+}
+
+// Исходы прохода ночи (план N7b, поле outcome файла). Неизвестный исход — будущее значение
+// контракта: проходит как есть (тот же приём, что у WikiChatAnalyzeOutcome).
+export type WikiNightlyOutcome = 'completed' | 'budget' | 'open_limit' | 'window_closed' | 'disabled_midway' | 'error';
+
+export interface WikiLastNight {
+  date: string;
+  selected: number;
+  analyzed: number;
+  applied: number;
+  toInbox: number;
+  estTokens: number;
+  outcome: WikiNightlyOutcome;
+}
+
+// Класс правок «origin×op» (ключ — форма бэкового WikiPackage.ClassKey, без пробелов) с
+// состоянием политики и замером оценки: Applied{N}/Retracted{N} — числа, Share{N} — уже
+// процент (WikiClassHealth.ClassStat: «доля, процент»). Замер несёт только GET-оценка;
+// PUT возвращает классы без него (нулями). reason — текст выключения человеческим языком
+// (автовыключение пишет оценка, ручное — «класс выключен человеком», WikiSettingsController.cs:139-143).
+export interface WikiApplyClassDto {
+  class: string;
+  disabled: boolean;
+  reason: string | null;
+  disabledAt: string | null;
+  resumedAt: string | null;
+  applied7: number;
+  retracted7: number;
+  share7: number;
+  applied30: number;
+  retracted30: number;
+  share30: number;
+}
+
+// Снимок настроек целиком: блок «Применение» (S7d-1) и блок «Ночной разбор» (Ф2) одной ручки.
+export interface WikiSettingsSnapshot {
+  autoApplyEnabled: boolean;
+  classes: WikiApplyClassDto[];
+  nightly: WikiNightlySettings;
+  lastNight: WikiLastNight | null;
+}
+
+let _settings: WikiSettingsSnapshot | null = null;
+let _settingsGen = 0;
+
+// Ночной блок ответа — как есть (бэк сериализует его целым всегда): неформный 200 — не тихие
+// умолчания, а ответ вне контракта (тот же порядок, что у loadWikiChats). lastNight: null и
+// отсутствие поля — одно «итога не было»; на бэке битый файл уже null (N7c).
+function readNightly(body: unknown): WikiNightlySettings | null {
+  const b = body as { nightly?: unknown } | null;
+  return b && typeof b.nightly === 'object' && b.nightly !== null
+    ? b.nightly as WikiNightlySettings
+    : null;
+}
+
+function readLastNight(body: unknown): WikiLastNight | null {
+  const b = body as { lastNight?: unknown } | null;
+  return typeof b?.lastNight === 'object' && b.lastNight !== null
+    ? b.lastNight as WikiLastNight
+    : null;
+}
+
+const numOr0 = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+const strOrNull = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+
+function readApplyClass(raw: unknown): WikiApplyClassDto | null {
+  const c = raw as Record<string, unknown> | null;
+  if (typeof c?.class !== 'string' || !c.class) return null;
+  return {
+    class: c.class,
+    disabled: c.disabled === true,
+    reason: strOrNull(c.reason),
+    disabledAt: strOrNull(c.disabledAt),
+    resumedAt: strOrNull(c.resumedAt),
+    applied7: numOr0(c.applied7), retracted7: numOr0(c.retracted7), share7: numOr0(c.share7),
+    applied30: numOr0(c.applied30), retracted30: numOr0(c.retracted30), share30: numOr0(c.share30),
+  };
+}
+
+// Часть «Применение» ответа. Текущий бэк сериализует поля всегда (WikiSettingsDto), но
+// отсутствующее поле читается как «выключено»/«нет классов» — тот же приём, что отсутствующий
+// lastNight в Ф1 («итога не было»): старый бэк без полей не должен становиться ошибкой
+// всех настроек, а выключенное направление — безопасное (ничего само не применяется).
+function readApplyPart(body: unknown): Pick<WikiSettingsSnapshot, 'autoApplyEnabled' | 'classes'> {
+  const b = body as { autoApplyEnabled?: unknown; classes?: unknown } | null;
+  const classes = Array.isArray(b?.classes)
+    ? b.classes.map(readApplyClass).filter((c): c is WikiApplyClassDto => c !== null)
+    : [];
+  return { autoApplyEnabled: b?.autoApplyEnabled === true, classes };
+}
+
+// Ответ PUT несёт состояния классов БЕЗ замера («Замер не возвращается: он читается GET после
+// действия», WikiSettingsController.cs:94) и НЕ все классы: его класс-часть строится из
+// settings.Classes, где запись есть только у когда-либо выключавшегося класса
+// (BuildDto(next, [], null), :185, :206–214), тогда как GET отдаёт union записей и замера
+// оценки (:215–222). Поэтому множество классов снимка — union ответа и последнего чтения:
+// строки ответа приоритетны для классов, которых PUT касается (без class классы не трогает,
+// :130–145), строки прежнего чтения — активные без записи — сохраняются как есть. Иначе правка,
+// не касающаяся классов (смена окна ночи), оставила бы блок «Применение» без активных классов
+// до следующей перечитки. Экран не должен терять и измеренное: доли того же класса сохраняются
+// от последнего чтения — следующие их обновит перечитка GET. Порядок — по ключу класса, как его
+// отдаёт бэк (OrderBy Ordinal, :226): между ответом и перечиткой список не переставляется.
+function mergeClassStats(
+  next: WikiApplyClassDto[], prev: readonly WikiApplyClassDto[] | undefined,
+): WikiApplyClassDto[] {
+  if (!prev?.length) return next;
+  const byKey = new Map<string, WikiApplyClassDto>(prev.map(c => [c.class, c]));
+  for (const c of next) {
+    const p = byKey.get(c.class);
+    byKey.set(c.class, p
+      ? { ...c, applied7: p.applied7, retracted7: p.retracted7, share7: p.share7, applied30: p.applied30, retracted30: p.retracted30, share30: p.share30 }
+      : c);
+  }
+  return [...byKey.values()].sort((a, b) => (a.class < b.class ? -1 : a.class > b.class ? 1 : 0));
+}
+
+// Висящий GET настроек: два блока вкладки зовут загрузку при монтировании — второй вызов
+// делит запрос первого (иначе отказ более нового GET отбрасывал бы ответ первого как устаревший
+// и блок оставался на скелетоне без ошибки). PUT поднимает поколение — висящий слот после него
+// не переиспользуется: чтение, начатое до правки, не должно затереть её.
+let _settingsReq: { gen: number; owner: string | null; promise: Promise<WikiSettingsSnapshot> } | null = null;
+
+export function loadWikiSettings(): Promise<WikiSettingsSnapshot> {
+  const owner = readStoredUserId();
+  if (_settingsReq && _settingsReq.gen === _settingsGen && _settingsReq.owner === owner) {
+    return _settingsReq.promise;
+  }
+  const gen = ++_settingsGen;
+  const req = {
+    gen, owner,
+    promise: fetchWikiSettings(gen, owner).finally(() => {
+      if (_settingsReq === req) _settingsReq = null;
+    }),
+  };
+  _settingsReq = req;
+  return req.promise;
+}
+
+async function fetchWikiSettings(gen: number, owner: string | null): Promise<WikiSettingsSnapshot> {
+  const body = await wikiHttp<unknown>('/wiki/settings');
+  const nightly = readNightly(body);
+  if (!nightly) throw new WikiError(0, null, 'неожиданный ответ настроек вики');
+  const snap: WikiSettingsSnapshot = { ...readApplyPart(body), nightly, lastNight: readLastNight(body) };
+  // Устаревший ответ или ответ чужого владельца в снимок не пишется (M1/M2)
+  if (gen === _settingsGen && owner === readStoredUserId()) {
+    _settings = snap;
+    emit();
+  }
+  return snap;
+}
+
+export type WikiNightlyPatch = Partial<WikiNightlySettings>;
+
+export type WikiPutNightlyResult =
+  | { ok: true; snapshot: WikiSettingsSnapshot }
+  | { ok: false; error: WikiError };
+
+// «Изменить настройки ночи»: PUT с частичным блоком — только изменённые поля, без null-полей
+// («не менять» на бэке — отсутствие поля; null здесь значил бы «ставить null»).
+export async function putWikiNightly(patch: WikiNightlyPatch): Promise<WikiPutNightlyResult> {
+  const gen = ++_settingsGen;
+  const owner = readStoredUserId();
+  const prev = _settings;
+  // Оптимистично: новое значение видно сразу, ответ подтвердит или откатит. Снимка ещё нет
+  // (экран не прочитал настройки) — оптимистичного нет, ждём ответ.
+  if (prev) {
+    _settings = { ...prev, nightly: { ...prev.nightly, ...patch } };
+    emit();
+  }
+  let body: unknown;
+  try {
+    body = await wikiHttp<unknown>('/wiki/settings', {
+      method: 'PUT',
+      body: JSON.stringify({ nightly: patch }),
+    });
+  } catch (e) {
+    // Сервер не принял изменение — оптимистичное откатывается при любом отказе; чужая
+    // правка, начатая позже этой, не затирается (её поколение — последнее). Откат прежнего
+    // владельца в чужой стор не возвращается: при смене аккаунта снимок уже очищен (M2).
+    if (gen === _settingsGen && owner === readStoredUserId()) {
+      _settings = prev;
+      emit();
+    }
+    const we = toWikiError(e);
+    if (!we) throw e; // сетевой сбой/таймаут — не отказ контракта: наружу как есть
+    return { ok: false, error: we };
+  }
+  const nightly = readNightly(body);
+  if (!nightly) {
+    if (gen === _settingsGen && owner === readStoredUserId()) {
+      _settings = prev;
+      emit();
+    }
+    return { ok: false, error: new WikiError(0, null, 'неожиданный ответ настроек вики') };
+  }
+  const apply = readApplyPart(body);
+  const snap: WikiSettingsSnapshot = {
+    ...apply,
+    // PUT не несёт замера классов (шапка mergeClassStats): ночная правка не должна обнулять
+    // доли блока «Применение» — они доживают до следующей перечитки GET
+    classes: mergeClassStats(apply.classes, prev?.classes),
+    nightly,
+    // lastNight — только из GET (N7c): ответ PUT его не несёт, и молча обнулять прочитанное
+    // нечем — поле сохраняется от последнего чтения
+    lastNight: readLastNight(body) ?? prev?.lastNight ?? null,
+  };
+  // Устаревший ответ или ответ прежнего владельца в снимок не пишется (M1/M2);
+  // вызывающий свой ответ получает как есть.
+  if (gen === _settingsGen && owner === readStoredUserId()) {
+    _settings = snap;
+    emit();
+  }
+  return { ok: true, snapshot: snap };
+}
+
+// ─── «Применение»: общий выключатель и возврат класса (S7d-1) ───
+// Те же ручки и тот же слот, что у ночной правки: оптимистичное изменение, ответ подтверждает,
+// отказ откатывает; поколение и привязка к владельцу — как у putWikiNightly. Отличие одно:
+// PUT не несёт замера классов, а блок «Применение» обязан показывать текущую долю (шапка
+// контроллера) — поэтому после подтверждённой правки настройки перечитываются GET'ом
+// («он читается GET после действия», WikiSettingsController.cs:94). Сбой перечитки не отменяет
+// действие: в сторе остаётся состояние ответа с долями последнего чтения.
+
+export type WikiPutSettingsResult = WikiPutNightlyResult;
+
+async function putApplySettings(
+  body: Record<string, unknown>,
+  optimistic: (prev: WikiSettingsSnapshot) => WikiSettingsSnapshot,
+): Promise<WikiPutSettingsResult> {
+  const gen = ++_settingsGen;
+  const owner = readStoredUserId();
+  const prev = _settings;
+  // Оптимистично, как тумблер ночи: значение видно сразу, ответ подтвердит или откатит
+  if (prev) {
+    _settings = optimistic(prev);
+    emit();
+  }
+  let resp: unknown;
+  try {
+    resp = await wikiHttp<unknown>('/wiki/settings', { method: 'PUT', body: JSON.stringify(body) });
+  } catch (e) {
+    if (gen === _settingsGen && owner === readStoredUserId()) {
+      _settings = prev;
+      emit();
+    }
+    const we = toWikiError(e);
+    if (!we) throw e; // сетевой сбой/таймаут — не отказ контракта: наружу как есть
+    return { ok: false, error: we };
+  }
+  const nightly = readNightly(resp);
+  if (!nightly) {
+    if (gen === _settingsGen && owner === readStoredUserId()) {
+      _settings = prev;
+      emit();
+    }
+    return { ok: false, error: new WikiError(0, null, 'неожиданный ответ настроек вики') };
+  }
+  const apply = readApplyPart(resp);
+  const snap: WikiSettingsSnapshot = {
+    ...apply,
+    classes: mergeClassStats(apply.classes, prev?.classes),
+    nightly,
+    lastNight: prev?.lastNight ?? null, // PUT итога не несёт (N7c) — сохраняется от последнего GET
+  };
+  if (gen === _settingsGen && owner === readStoredUserId()) {
+    _settings = snap;
+    emit();
+  }
+  // Свежий замер — из GET-оценки; её боковой эффект (оценка может выключить перешагнувший
+  // класс) — часть оценки, не это действие. Сбой перечитки молчит: состояние ответа уже записано.
+  await loadWikiSettings().catch(() => undefined);
+  return { ok: true, snapshot: snap };
+}
+
+// Общий выключатель «Применять без ревью» (макет M2): выключенный — всё, включая неспорное,
+// идёт во «Входящие» на решение человека.
+export function putWikiAutoApply(value: boolean): Promise<WikiPutSettingsResult> {
+  return putApplySettings(
+    { autoApplyEnabled: value },
+    prev => ({ ...prev, autoApplyEnabled: value }),
+  );
+}
+
+// «Снова применять само» по ключу класса ('origin×op' — как его отдаёт бэк): PUT с
+// Enable=true — бэк ставит ResumedAt, окно отсчёта класса начинается заново (мера 7).
+// Оптимистичное — то же направление: класс включён, причина снята; ответ подтверждает целым.
+export function resumeWikiApplyClass(classKey: string): Promise<WikiPutSettingsResult> {
+  return putApplySettings(
+    { class: classKey, enable: true },
+    prev => ({
+      ...prev,
+      classes: prev.classes.map(c => (c.class === classKey ? { ...c, disabled: false, reason: null } : c)),
+    }),
+  );
+}
+
+// «Пометить чат» / «снять пометку» (N1b): пометка живёт на чате (Session.WikiMark), не в сторе
+// отбора — зон и порядка списка она сама не меняет, их даст следующая перечитка loadWikiChats.
+// Чистый транспорт (тот же порядок, что у analyzeWikiChat): состояния стора не трогает.
+// Отказы — WikiError с кодом (404 not_found, 409 wiki_llm_wiki_off). 400 бывает и с кодом
+// (значение вне important/skip/null — wiki_mark_invalid, WikiChatsController.cs:207-211),
+// и без кода (неразбираемое тело — автоматический ValidationProblemDetails ASP.NET):
+// на код 400 здесь опираться нельзя, этот отказ различается только по статусу.
+export async function setWikiChatMark(sessionId: string, mark: WikiChatMark | null): Promise<WikiChatMark | null> {
+  const res = await wikiHttp<{ mark?: unknown }>(
+    `/wiki/chats/${encodeURIComponent(sessionId)}/mark`,
+    { method: 'PUT', body: JSON.stringify({ mark }) },
+  );
+  const m = res?.mark;
+  return m === 'important' || m === 'skip' ? m : null;
+}
+
 // ─── Снимки и подписки ───
 
 export function getWikiTreeSnapshot(): WikiTreeDto | null { return _tree; }
 export function getWikiCatalogSnapshot(sectionKey: string): WikiCatalogDto | undefined { return _catalogs.get(sectionKey); }
+export function getWikiSettingsSnapshot(): WikiSettingsSnapshot | null { return _settings; }
 export function getWikiPageSnapshot(sectionKey: string, pageKey: string): WikiPageDto | null {
   const key = pageCacheKey(sectionKey, pageKey);
   return _page && _page.cacheKey === key ? _page.value : null;
@@ -886,6 +1242,12 @@ export function useWikiLoaded(): boolean {
   return useSyncExternalStore(subscribe, () => _loaded, () => _loaded);
 }
 
+// Снимок ночной части настроек для блока «Ночной разбор»: null — ещё не читали (загрузка —
+// за вызывающим экраном, как ensureWikiLoaded для дерева).
+export function useWikiSettings(): WikiSettingsSnapshot | null {
+  return useSyncExternalStore(subscribe, () => _settings, () => _settings);
+}
+
 // ─── Запрос открыть страницу извне (OPEN-1) ───
 // Одноразовое намерение: вызывающий (кнопка «Открыть хронику» в шапке чата) кладёт его
 // сюда, смонтированный экран вики забирает. Событие 'cc-open-wiki-page' слушателя не имело:
@@ -931,12 +1293,15 @@ export const __test = {
     _pageGoneKey = null;
     _openPages.clear();
     _openReq = null;
+    _settings = null;
     _loaded = false;
     _treeLoading = null;
     _realtimeWired = false;
     _ownerId = null;
     _treeGen = 0;
     _pageGen = 0;
+    _settingsGen = 0;
+    _settingsReq = null;
     _catalogGen.clear();
   },
   // Тестовый шов: подписка экрана на страницу. Открытой страницу делает счётчик, который

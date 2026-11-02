@@ -10,7 +10,7 @@
 import { type BadgeTone } from '../../../components/ui/Badge';
 import { Brain, FileText, GitCommit, Link2, ListChecks, MessageSquare, StickyNote } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { parseSectionKey, type WikiError, type WikiRetractDto, type WikiSectionDto } from 'aihome_shell/kit';
+import { parseSectionKey, type WikiError, type WikiLastNight, type WikiNightlyOutcome, type WikiRetractDto, type WikiSectionDto } from 'aihome_shell/kit';
 
 // Статусы страницы — их считает код, не модель (ADR-035 §3, WikiFrontmatter.StatusValues)
 export const PAGE_STATUS: Record<string, { tone: BadgeTone; text: string; title: string }> = {
@@ -134,6 +134,90 @@ export function wikiErrorText(e: WikiError, ctx?: NotFoundContext): string {
   if (e.status === 404) return 'Не найдено';
   if (e.status === 409) return 'Действие отказано';
   return 'Не удалось выполнить действие';
+}
+
+// ─── «Ночной разбор»: итог ночи и его тексты (F2) ───
+
+// Тексты — по записке llm-wiki-v2-proposal.md «Срез Ф2 02.11» (принята Андреем 02.11):
+// формулировки слово в слово, динамические — только числа из lastNight (контракт N7c).
+// Времён остановки в тексты нет: date — DateOnly 'yyyy-MM-dd' (WikiNightlyService.
+// FormatDate), поля времени остановки в контракте нет — «Закончилась в 05:12» из макета
+// придумывать нечем. Рендер и состояния — у WikiNightlyBlock.
+
+// Потолок открытых пакетов — зеркало бэкового WikiPackage.MaxOpenPackages: им же
+// IsValidNightly мерит оба лимита пакетов и потолок токенов (5 000 000). Нужен и для
+// локальной валидации полей (тот же потолок, что на бэке), и для текста open_limit:
+// ночь встаёт ровно на этот предел (CountOpen < 20, план N7b).
+export const NIGHTLY_MAX_PACKAGES = 20;
+export const NIGHTLY_MAX_TOKENS = 5_000_000;
+
+// Пустой итог (lastNight — null: файла нет или он не читается): заголовок карточки и
+// текст по состоянию тумблера. Для включённого — окно динамическое: то, что человек
+// видит в полях прямо сейчас (в макете — пример значения 03:00–06:00). «Сегодня» из
+// текста записки убрано (хвост R-F2 (1)): если разбор включили после конца окна, первая
+// ночь — завтра, а серверного часа у фронта нет (окно — время сервера); «ближайшая
+// ночь» верна в обоих случаях.
+export const NIGHTLY_NONE_TITLE = 'Ночного разбора ещё не было';
+
+export function nightlyNoneText(enabled: boolean, windowFrom: string, windowTo: string): string {
+  return enabled
+    ? `Первый пройдёт ближайшей ночью с ${windowFrom} до ${windowTo}. Утром придёт уведомление: что применилось само и что ждёт вас.`
+    : 'Включите разбор — первая ночь пройдёт в ближайшее окно, утром придёт уведомление с итогом.';
+}
+
+// Строка под карточкой completed (записка: «Закончилась в 05:12 — разобрано всё
+// отобранное» — без времени, его в контракте нет)
+export const NIGHTLY_COMPLETED_LINE = 'Разобрано всё отобранное.';
+
+// Предупреждение над карточкой для остальных исходов. title — только у warning-исходов
+// (у info по макету заголовка нет). completed и неизвестный исход — null: карточка без
+// предупреждения; неизвестный outcome — будущее значение контракта, проходит как есть
+// (тот же приём, что у WikiChatAnalyzeOutcome).
+//
+// Формулировки причины остановки — по хвостам R-F2 (2)–(3), язык пользы: исходов
+// «лимит пакетов» и «упор в бюджет» контракт не различает — outcome=budget ставят и
+// лимит пакетов за ночь, и остаток бюджета (WikiNightlyService.cs:332,373,402), поэтому
+// текст называет причину одним «лимитом ночи» и указывает оба поля, где лимиты заданы;
+// «поднимите бюджет» из записки убрано: при упоре в лимит пакетов оно не применимо
+// (потолок 20 общий с «Входящими»). Лимит раздела ночь не останавливает — такая ночь
+// остаётся completed (.:398–401), отдельного текста у него нет. disabled_midway при
+// analyzed=0 (CheckStop зовётся перед каждым чатом, .:330) больше не «на 0-м чате»:
+// analyzed — законченные разборки, недочитанного чата контрактом нет.
+export function nightOutcomeNotice(
+  outcome: WikiNightlyOutcome, last: WikiLastNight,
+): { tone: 'warning' | 'info'; title: string | null; text: string } | null {
+  switch (outcome) {
+    case 'budget': {
+      const rest = Math.max(0, last.selected - last.analyzed);
+      return {
+        tone: 'warning',
+        title: 'Ночь остановилась на своём лимите',
+        text: `Разобрали ${countWord(last.analyzed, 'чат', 'чата', 'чатов')} из ${last.selected} отобранных. Остальные ${rest} разберём следующей ночью — сначала они. Лимиты заданы в «Пакетах за ночь» и «Бюджете за ночь» — если так каждую ночь, проверьте их.`,
+      };
+    }
+    case 'open_limit':
+      return {
+        tone: 'warning',
+        title: `Остановились: во «Входящих» ${NIGHTLY_MAX_PACKAGES} пакетов ждут вашего решения`,
+        text: `Больше ${NIGHTLY_MAX_PACKAGES} спорных пакетов сразу Хранитель не копит — иначе их не разобрать. Решите часть, и следующая ночь продолжит с того же места.`,
+      };
+    case 'window_closed':
+      return { tone: 'info', title: null, text: 'Окно закончилось раньше, чем разбор: остальное следующей ночью.' };
+    case 'disabled_midway':
+      return {
+        tone: 'info',
+        title: null,
+        text: last.analyzed === 0
+          ? 'Вы выключили разбор до первого чата — ничего не разобрано.'
+          // причастие по тому же правилу файла, что и countWord: при «1» согласуется с
+          // существительным, при остальных — средний род
+          : `Вы выключили разбор посреди ночи: ${countWord(last.analyzed, 'чат', 'чата', 'чатов')} ${isOne(last.analyzed) ? 'разобран' : 'разобрано'}, чего не успели — следующей ночью.`,
+      };
+    case 'error':
+      return { tone: 'info', title: null, text: 'Ночь прервалась из-за сбоя. Повторим следующей ночью.' };
+    default:
+      return null;
+  }
 }
 
 // Префикс раздела — один форматтер на всю фичу (тот же вид, что у бэка в выдаче notes_*):

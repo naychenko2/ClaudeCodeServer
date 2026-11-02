@@ -55,6 +55,14 @@ public class WikiSettingsController : ControllerBase
     private string? OwnerOrNull() =>
         User.Identity?.IsAuthenticated == true ? User.FindFirstValue(JwtRegisteredClaimNames.Sub) : null;
 
+    // Признак сервисного токена (B2b, Ф2): тот же claim-литерал, что в PluginsController/
+    // TasksController (MapInboundClaims=false оставляет raw-имена — см. PluginsController:39-44).
+    // Настройки вики меняет только человек: сервисный токен (MCP-обвязка хода) на PUT
+    // отказывается 403 — до флага и до любой записи; GET остаётся читающим.
+    private const string TokenKindClaim = "typ";
+    private const string ServiceTokenKind = "svc";
+    private bool IsServiceToken => User.FindFirstValue(TokenKindClaim) == ServiceTokenKind;
+
     private const string CodeForeign = "wiki_foreign";
     private const string CodeLlmWikiOff = "wiki_llm_wiki_off";
     private const string CodeClassKey = "wiki_class_key";
@@ -99,6 +107,10 @@ public class WikiSettingsController : ControllerBase
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
+        // B2b: настройку ставит только человек — отказ по типу токена раньше состояния
+        // (флага и валидации тела): он не зависит от того, включена ли функция.
+        if (IsServiceToken)
+            return StatusCode(403, new { error = "Сервисный JWT: настройки вики меняет только пользовательский токен" });
         if (_flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) != true)
             return LlmWikiOff();
         if (req is null)

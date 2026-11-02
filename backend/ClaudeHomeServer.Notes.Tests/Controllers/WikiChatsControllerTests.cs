@@ -472,6 +472,71 @@ public class WikiChatsControllerTests : IDisposable
             "список показывает пометку для кнопок в строке (F3): её читает с чата, не со стора");
     }
 
+    // ─── 11. Сервисный токен (B2b): все мутирующие ручки 403, чтение остаётся 200 ──
+
+    // Мутация (критерий c2): убрать проверку IsServiceToken в Recalculate — этот тест
+    // падает (пересчёт дошёл бы до службы и записал стор).
+    [Fact]
+    public async Task Пересчёт_СервисныйТокен_403_СторНеСоздан()
+    {
+        AddSession();
+
+        var res = await Controller(svc: true).Recalculate();
+
+        ((IStatusCodeActionResult)res).StatusCode.Should().Be(403);
+        File.Exists(Path.Combine(WikiPaths.Root(_dir, User), "keeper", "chat-triage.json"))
+            .Should().BeFalse("отказ до обращения к службе: ни байта в стор");
+    }
+
+    // Мутация: убрать проверку IsServiceToken в Mark — пометка ставилась бы и 200, тест красный.
+    [Fact]
+    public void Пометка_СервисныйТокен_403_ПометкаНеСменилась()
+    {
+        AddSession();
+
+        var res = Controller(svc: true).Mark(ChatId, new WikiChatMarkRequest { Mark = WikiMarks.Important });
+
+        ((IStatusCodeActionResult)res).StatusCode.Should().Be(403);
+        _sessions.All.Single(s => s.Id == ChatId).WikiMark.Should().BeNull("отказ — до записи на чате");
+    }
+
+    // Мутация: убрать проверку IsServiceToken в AnalyzeCore — разбор дошёл бы до модели,
+    // тест красный (по _llm.Calls).
+    [Fact]
+    public async Task Анализ_СервисныйТокен_403_МодельНеЗовётся()
+    {
+        AddSession();
+        SetShortHistory();
+
+        var res = await Controller(svc: true).AnalyzeCore(ChatId, Wait);
+
+        ((IStatusCodeActionResult)res).StatusCode.Should().Be(403);
+        _llm.Calls.Should().BeEmpty("отказ по типу токена — до обращения к модели");
+    }
+
+    // Отказ по типу токена не зависит от состояния: при выключенном флаге и у несуществующего
+    // чата ответ тот же 403 — по нему нельзя узнать ни состояния функции, ни существования чата.
+    [Fact]
+    public void Пометка_СервисныйТокенПриВыключенномФлагеИЛИзНесуществующегоЧата_403ПоТокену()
+    {
+        AssertBodyStatus(Controller(flagsOn: false, svc: true).Mark(ChatId, new WikiChatMarkRequest { Mark = WikiMarks.Skip }), 403);
+        AssertBodyStatus(Controller(svc: true).Mark("no-such-chat", new WikiChatMarkRequest { Mark = WikiMarks.Skip }), 403);
+    }
+
+    // Чтение под svc остаётся 200: список и analyze-status — не мутирующие (контракт B2b).
+    [Fact]
+    public async Task СписокИСтатус_СервисныйТокен_200()
+    {
+        AddSession();
+        ((IStatusCodeActionResult)await Controller().Recalculate()).StatusCode.Should().Be(200);
+
+        var list = (WikiChatsListDto)((OkObjectResult)Controller(svc: true).List()).Value!;
+        list.Items.Single(i => i.SessionId == ChatId).Should().NotBeNull();
+
+        var status = (OkObjectResult)Controller(svc: true).AnalyzeStatus(ChatId);
+        status.StatusCode.Should().Be(200);
+    }
+
     // ─── обвязка ──────────────────────────────────────────────────────────────
 
     // WaitAsync возвращается сразу по завершению разбора, поэтому большой потолок не удлиняет
@@ -517,10 +582,14 @@ public class WikiChatsControllerTests : IDisposable
         ],
     }.Render();
 
-    private WikiChatsController Controller(string user = User, bool flagsOn = true)
+    private WikiChatsController Controller(string user = User, bool flagsOn = true, bool svc = false)
     {
         var http = new DefaultHttpContext();
-        http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, user)], "test"));
+        var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, user)], "test");
+        // Сервисный токен хода (typ=svc) — тот же claim-литерал, что выдаёт JwtService;
+        // MapInboundClaims=false оставляет raw-имена, как в бою.
+        if (svc) identity.AddClaim(new Claim("typ", "svc"));
+        http.User = new ClaimsPrincipal(identity);
         return new WikiChatsController(_sessions, _chat, new WikiChatRecalc(_sessions, _config), _config, flagsOn ? new WikiFlagOn() : new WikiFlagOff())
         {
             ControllerContext = new ControllerContext { HttpContext = http },
@@ -536,6 +605,11 @@ public class WikiChatsControllerTests : IDisposable
         obj.StatusCode.Should().Be(status);
         Body(obj).GetProperty("code").GetString().Should().Be(code);
     }
+
+    // Отказ без машинного кода (403 по типу токена — формат {error}, как в образце
+    // PluginsController/TasksController): проверяется только статус.
+    private static void AssertBodyStatus(IActionResult result, int status) =>
+        ((IStatusCodeActionResult)result).StatusCode.Should().Be(status);
 
     // Подменённая модель того же образца, что в WikiChatIngestTests: проходы по директивам
     // промпта, gate первого прохода A; скрипт и gate тест выставляет перед своим прогоном.

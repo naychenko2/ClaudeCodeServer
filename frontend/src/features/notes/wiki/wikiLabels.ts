@@ -129,6 +129,10 @@ export function wikiErrorText(e: WikiError, ctx?: NotFoundContext): string {
     case 'wiki_class_key': return 'Неизвестный класс';
     // Список чатов разбора (GET /wiki/chats): файл разбора чатов не читается (R-W4-1)
     case 'wiki_triage_invalid': return 'Файл разбора чатов не читается';
+    // Правка страницы человеком (F4a)
+    case 'wiki_page_changed': return 'Страница изменилась, пока вы правили';
+    case 'wiki_unified_off': return 'Правка страниц сейчас выключена';
+    case 'wiki_edit_invalid': return 'Страницу нельзя сохранить в таком виде';
   }
   if (e.status === 401 || e.status === 403) return 'Нет доступа';
   if (e.status === 404) return 'Не найдено';
@@ -146,3 +150,45 @@ export function sectionPrefix(s: WikiSectionDto): string {
   if (ref.kind === 'sphere') return `Сферы / ${s.name ?? ''}`;
   return `Проекты / ${s.name ?? '—'}`;
 }
+
+// ─── Правка страницы (F4a) ───
+
+// Заголовки причин отказа гейта по кодам issues[] (ADR-038, SV1-Г); неизвестный код — без
+// заголовка, остаётся текст бэка
+export const EDIT_ISSUE_TITLE: Record<string, string> = {
+  wiki_link_sideways: 'Ссылка ведёт в соседний раздел',
+  wiki_link_unknown: 'Ссылка на страницу, которой нет',
+  wiki_link_prefix: 'Ссылка с неверным префиксом раздела',
+  wiki_header_field: 'В шапке правятся только summary, aliases и owns',
+  wiki_title_change: 'Заголовок страницы не правится',
+  wiki_notes_footnote: 'В секции «Заметки» не бывает сносок',
+  wiki_parse: 'Текст не удалось разобрать как страницу',
+};
+
+// Строка violations начинается с «путь»: — префикс человеку не нужен
+export function stripViolationPrefix(v: string): string {
+  return v.replace(/^«[^»]*»:\s*/, '');
+}
+
+export const EDIT_TEXT = {
+  edit: 'Править',
+  save: 'Сохранить',
+  cancel: 'Отмена',
+  remove: 'Убрать',
+  restore: 'Вернуть',
+  saved: 'Сохранено',
+  unchanged: 'Ничего не изменилось',
+  removeAsk: 'Убрать утверждение?',
+  removeHistory: 'Оно уйдёт в «Историю» страницы, удалено не будет.',
+  aiWarn: 'Это формулировка ИИ. После сохранения прежняя уйдёт в «Историю» страницы, а утверждение станет вашим.',
+  blank: 'Пустое утверждение не сохранить — уберите его кнопкой «Убрать».',
+  offTitle: 'Правка страниц выключена',
+  offText: 'Ваши изменения не сохранены. Включите «Заметки и Вики» в настройках и повторите.',
+  conflictTitle: 'Страница изменилась, пока вы правили',
+  conflictText: 'Ваш текст не сохранён и ничего не перезаписано. Сравнение «Моё / ИИ / Было» появится в следующем шаге.',
+  conflictGone: 'Страницы больше нет — сохранить правку некуда.',
+  invalidTitle: 'Страницу нельзя сохранить',
+  invalidKeep: 'Ваша правка осталась в редакторе — поправьте и сохраните ещё раз.',
+  failTitle: 'Не удалось сохранить',
+  failText: 'Ваша правка осталась в редакторе. Проверьте соединение и повторите.',
+} as const;

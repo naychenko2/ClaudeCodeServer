@@ -45,7 +45,7 @@ export {
   useWikiTree, useWikiCatalog, useWikiPage, useWikiPageGone,
   requestOpenWikiPage, consumeOpenWikiPage, useWikiOpenRequest,
   loadWikiSettings, useWikiSettings, putWikiNightly, putWikiAutoApply, resumeWikiApplyClass,
-  wikiAuthorshipOf,
+  wikiAuthorshipOf, editWikiPage,
 } from '../wiki';
 export type {
   WikiSectionDto, WikiPageInfoDto, WikiPackageDto, WikiPackageOperationDto,

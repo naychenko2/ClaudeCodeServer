@@ -26,16 +26,17 @@
 import { useMemo, useState } from 'react';
 import type { MouseEvent, KeyboardEvent } from 'react';
 import type { ReactNode } from 'react';
-import { AlertTriangle, ChevronLeft, Lock, Quote, ScrollText } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronLeft, Lock, Pencil, Quote, ScrollText } from 'lucide-react';
 import { C, FONT, FS, R, SP, useIsMobile, useFeature, FLAGS, WikiError, adoptWikiPage, useWikiPage, type WikiSectionDto } from 'aihome_shell/kit';
 import { Badge } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
 import { Notice } from '../../../components/ui/Notice';
 import { PressableArea } from '../../../components/ui/PressableArea';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
-import { wikiAuthorshipOf, wikiFootnoteLabel, type WikiAuthorship, type WikiPageAuthoredDto } from '../../../lib/wiki';
+import { wikiAuthorshipOf, wikiFootnoteLabel, type WikiAuthorship, type WikiPageEditableDto } from '../../../lib/wiki';
 import { fmtDayMonth, WikiFootnotePopover, type FootnoteView } from './WikiFootnotePopover';
-import { PAGE_STATUS, PAGE_TYPE, sectionPrefix, wikiErrorText } from './wikiLabels';
+import { WikiPageEditor, type EditDone } from './WikiPageEditor';
+import { EDIT_TEXT, PAGE_STATUS, PAGE_TYPE, sectionPrefix, wikiErrorText } from './wikiLabels';
 
 // ─── Разбор страницы (зеркало бэкового WikiPage.Parse, терпимый) ───
 
@@ -286,7 +287,7 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
   const quotes = new Map(page.footnotes.map(f => [f.id, f.quote]));
 
   // Сноски с происхождением (footnotes[] страницы, B7); нет поля — прежний вид
-  const authored = dto as WikiPageAuthoredDto | null;
+  const authored = dto as WikiPageEditableDto | null;
   const pageId = `${section.key}\n${pageKey}`;
   const footnoteUi = useMemo<FootnoteUi | undefined>(() => {
     if (!unified || !authored?.footnotes?.length) return undefined;
@@ -308,6 +309,18 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
   const aboutSection = isChronicle ? page.sections.find(s => s.name === 'О чём') : undefined;
   const bodySections = isChronicle ? page.sections.filter(s => s.name !== 'О чём') : page.sections;
   const aboutText = aboutSection?.lines.map(l => l.replace(BULLET_RX, '')).join(' ') || page.summary;
+
+  // Правка (F4a): состояние привязано к странице — со сменой страницы оно сбрасывается само
+  const [editUi, setEditUi] = useState<{ id: string; editing: boolean; off: boolean; flash: 'saved' | 'unchanged' | null }>(
+    { id: pageId, editing: false, off: false, flash: null },
+  );
+  const ui = editUi.id === pageId ? editUi : { id: pageId, editing: false, off: false, flash: null };
+  const canEdit = unified && !ui.off && !!authored?.hash && !isChronicle && !drift && !section.orphan && !section.local && !section.sphereReserved;
+  const editing = canEdit && ui.editing;
+  const onEditDone = (r: EditDone) => setEditUi({
+    id: pageId, editing: false, off: r.kind === 'off',
+    flash: r.kind === 'saved' ? 'saved' : r.kind === 'unchanged' ? 'unchanged' : null,
+  });
 
   // Страницы в сторе нет — её ещё читают: родитель держит свой спиннер, здесь рендерить нечего
   if (!dto) return null;
@@ -342,6 +355,18 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
           Раздел скрыт от всех чатов, агентов и персон. Страницы остались: их можно читать.
           Удалить раздел — из каталога, кнопкой «Назад».
         </Notice>
+      )}
+
+      {ui.flash && (
+        <div data-testid="wiki-edit-flash" style={{ marginTop: SP.md }}>
+          <Notice tone="info" icon={CheckCircle2} title={ui.flash === 'saved' ? EDIT_TEXT.saved : EDIT_TEXT.unchanged} />
+        </div>
+      )}
+
+      {ui.off && (
+        <div data-testid="wiki-edit-off" style={{ marginTop: SP.md }}>
+          <Notice tone="danger" icon={AlertTriangle} title={EDIT_TEXT.offTitle}>{EDIT_TEXT.offText}</Notice>
+        </div>
       )}
 
       {drift && (
@@ -432,6 +457,20 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
         </div>
       )}
 
+      {canEdit && !editing && (
+        <div style={{ marginTop: SP.sm }}>
+          <Button
+            variant="secondary"
+            size={isMobile ? 'md' : 'sm'}
+            dataTestId="wiki-edit-open"
+            leftIcon={<Pencil size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+            onClick={() => setEditUi({ id: pageId, editing: true, off: false, flash: null })}
+          >
+            {EDIT_TEXT.edit}
+          </Button>
+        </div>
+      )}
+
       <div style={{ display: 'flex', gap: SP.md, flexWrap: 'wrap', marginTop: SP.sm, fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
           <Quote size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
@@ -441,6 +480,18 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
         {page.aliases.length > 0 && <span>aliases: {page.aliases.join(', ')}</span>}
       </div>
 
+      {editing && authored?.hash ? (
+        <WikiPageEditor
+          key={pageId}
+          section={section}
+          pageKey={pageKey}
+          content={content}
+          hash={authored.hash}
+          footnotes={authored.footnotes}
+          onDone={onEditDone}
+        />
+      ) : (
+        <>
       {/* Плашка «только чтение» — тихая строка, не Notice (макет): правки идут через Хранителя */}
       <div data-testid="wiki-readonly" style={{ display: 'flex', gap: SP.sm, alignItems: 'flex-start', marginTop: SP.md, padding: `${SP.sm}px ${SP.md}px`, background: C.bgInset, borderRadius: R.md, fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.45 }}>
         <Lock size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden style={{ flexShrink: 0, marginTop: 2, color: C.textMuted }} />
@@ -471,6 +522,8 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
       ))}
 
       {page.footnotes.length > 0 && <SourcesBlock footnotes={page.footnotes} />}
+        </>
+      )}
 
       {popFn && (
         <WikiFootnotePopover

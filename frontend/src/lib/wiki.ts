@@ -169,7 +169,12 @@ export type WikiErrorCode =
   // Настройки ночного блока (NA-2): merged-блок ночного раздела кривой — 400 с кодом, файл
   // не тронут; отказ записи файла — 500 с кодом, а не 500 без тела (WikiSettingsController.cs:160-170)
   | 'wiki_nightly'
-  | 'wiki_settings_write_failed';
+  | 'wiki_settings_write_failed'
+  // Правка страницы человеком (F4a, ADR-038): файл правили ещё раз / единые «Заметки и Вики»
+  // выключены / гейт записи отказал по существу (violations, issues)
+  | 'wiki_page_changed'
+  | 'wiki_unified_off'
+  | 'wiki_edit_invalid';
 
 const WIKI_ERROR_CODES: ReadonlySet<string> = new Set<string>([
   'wiki_foreign', 'wiki_section_key', 'wiki_page_key', 'wiki_project_missing', 'wiki_section_off',
@@ -186,11 +191,17 @@ const WIKI_ERROR_CODES: ReadonlySet<string> = new Set<string>([
   'not_found', 'task_execution', 'marked_skip', 'personal_section', 'wiki_not_initialized',
   'packages_limit', 'wiki_note_id', 'wiki_triage_invalid',
   'wiki_nightly', 'wiki_settings_write_failed',
+  'wiki_page_changed', 'wiki_unified_off', 'wiki_edit_invalid',
 ]);
 
 export class WikiError extends Error {
   readonly status: number;
   readonly code: WikiErrorCode | null;
+  // Поля тела отказа правки (F4a, аддитивно): свежая страница при 409 wiki_page_changed,
+  // причины гейта при 400 wiki_edit_invalid. У прочих отказов — пусто.
+  page: WikiConflictPage | null = null;
+  violations: string[] = [];
+  issues: WikiEditIssue[] = [];
 
   constructor(status: number, code: WikiErrorCode | null, message: string) {
     super(message);
@@ -216,7 +227,9 @@ function toWikiError(e: unknown): WikiError | null {
   const message = typeof body?.message === 'string' && body.message
     ? body.message
     : (e instanceof Error && e.message ? e.message : 'Не удалось прочитать вики');
-  return new WikiError(status, code, message);
+  const we = new WikiError(status, code, message);
+  readEditRefusalBody(we, body);
+  return we;
 }
 
 // Путь: передаём в request() БЕЗ /api — request() префиксует их сам (offline.ts:31,
@@ -1355,4 +1368,53 @@ export async function loadWikiSourceCard(sectionKey: string, cardKey: string): P
     else if (name === null && line.startsWith('# ')) name = line.slice(2).trim() || null;
   }
   return { name, ref };
+}
+
+// ─── Правка страницы человеком (ADR-038 «Контракт для фронта», POST /api/wiki/pages/edit; F4a) ───
+
+// Свежая версия страницы из 409 wiki_page_changed; null в теле — страницы больше нет
+export interface WikiConflictPage { pageKey: string; content: string; hash: string }
+
+// Причина отказа гейта (SV1-Г): пока бэк поля не отдаёт, массив пуст и экран идёт по violations
+export interface WikiEditIssue { code: string; page?: string | null; link?: string | null; message: string }
+
+// GET page с хэшем: baseHash правки — хэш того текста, с которым открыт редактор
+export interface WikiPageEditableDto extends WikiPageAuthoredDto { hash?: string }
+
+export type WikiEditResult =
+  | { status: 'applied'; hash: string; content: string }
+  | { status: 'unchanged'; hash: string };
+
+function readEditRefusalBody(we: WikiError, body: unknown): void {
+  const b = body as { page?: unknown; violations?: unknown; issues?: unknown } | null | undefined;
+  if (!b || typeof b !== 'object') return;
+  const pg = b.page as { pageKey?: unknown; content?: unknown; hash?: unknown } | null | undefined;
+  if (pg && typeof pg.pageKey === 'string' && typeof pg.content === 'string' && typeof pg.hash === 'string') {
+    we.page = { pageKey: pg.pageKey, content: pg.content, hash: pg.hash };
+  }
+  if (Array.isArray(b.violations)) we.violations = b.violations.filter((v): v is string => typeof v === 'string');
+  if (Array.isArray(b.issues)) {
+    we.issues = b.issues
+      .filter((i): i is { code: string; message: string; page?: string | null; link?: string | null } =>
+        !!i && typeof (i as { code?: unknown }).code === 'string' && typeof (i as { message?: unknown }).message === 'string')
+      .map(i => ({ code: i.code, message: i.message, page: i.page ?? null, link: i.link ?? null }));
+  }
+}
+
+// Сохранить правку страницы. content — полный новый текст в форме GET page. После applied
+// слот страницы перечитывается (хэш, сноски с авторством, секции); сбой перечитки правку
+// не отменяет. Отказы — WikiError: 409 wiki_page_changed (в .page свежая версия, ничего не
+// записано), 409 wiki_unified_off, 400 wiki_edit_invalid (.violations/.issues).
+export async function editWikiPage(
+  sectionKey: string, pageKey: string, baseHash: string | null, content: string,
+): Promise<WikiEditResult> {
+  const res = await wikiHttp<{ status?: unknown; hash?: unknown; content?: unknown }>('/wiki/pages/edit', {
+    method: 'POST',
+    body: JSON.stringify({ section: sectionKey, page: pageKey, baseHash, content }),
+  });
+  const hash = typeof res?.hash === 'string' ? res.hash : '';
+  if (res?.status === 'unchanged') return { status: 'unchanged', hash };
+  if (res?.status !== 'applied') throw new WikiError(0, null, 'неожиданный ответ правки страницы');
+  await loadWikiPage(sectionKey, pageKey).catch(() => undefined);
+  return { status: 'applied', hash, content: typeof res.content === 'string' ? res.content : content };
 }

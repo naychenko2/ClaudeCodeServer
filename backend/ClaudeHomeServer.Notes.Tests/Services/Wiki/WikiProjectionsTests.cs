@@ -226,4 +226,23 @@ public class WikiProjectionsTests : IDisposable
         res["Общее/Пусто.md"].Should().Be(WikiProjections.AuthorshipAi);
         res.Keys.Should().NotContain(k => k.Contains("Источники"));
     }
+
+    [Fact]
+    public void Авторство_СноскаТолькоВИстории_НеСчитается()
+    {
+        // Мутация «считать и «Историю»»: страница с human-сноской только в «Истории» станет
+        // together (Ии2) / human (Ист) — оба Be краснеют.
+        string History(string title, string actual, string past) =>
+            $"---\ntype: entity\nsummary: с\nstatus: active\n---\n\n# {title}\n\n## Сводка\n- Действующее.[^s1]\n\n## Хронология\n\n## Противоречия\n\n## История\n- Снято.[^s2]\n\n[^s1]: [[{actual}]] — «цитата номер один длинная»\n[^s2]: [[{past}]] — «цитата номер два длинная»\n";
+        var state = new List<WikiGate.Draft>
+        {
+            new("Общее/Источники/А.md", Card("А", "session")),
+            new("Общее/Источники/Я.md", Card("Я", "human")),
+            new("Общее/Ии2.md", History("Ии2", "А", "Я")),
+            new("Общее/Чел2.md", History("Чел2", "Я", "А")),
+        };
+        var res = WikiProjections.Authorship(state);
+        res["Общее/Ии2.md"].Should().Be(WikiProjections.AuthorshipAi);
+        res["Общее/Чел2.md"].Should().Be(WikiProjections.AuthorshipHuman, "ИИ-сноска в «Истории» не делает страницу «вместе»");
+    }
 }

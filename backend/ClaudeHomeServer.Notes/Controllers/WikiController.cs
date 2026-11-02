@@ -45,12 +45,18 @@ public class WikiController : ControllerBase
     private readonly WikiApplyService _apply;
     private readonly WikiNoteTransfer _transfer;
     private readonly IFeatureFlagGate? _flags;
+    private readonly TimeProvider _time;
     private readonly string _dataDir;
+
+    // Окно метки «ИИ заменил моё» на странице (ADR-038, контракт чтения для фронта).
+    private static readonly TimeSpan OverridesWindow = TimeSpan.FromDays(14);
 
     public WikiController(WikiKeeper keeper, IProjectManager projects, ISphereDirectory spheres,
         WikiLintService lint, WikiJournalReader journal, IFeatureFlagGate? flags, IConfiguration config,
-        WikiSourceCapture capture, WikiIngestService ingest, WikiApplyService apply, WikiNoteTransfer transfer)
+        WikiSourceCapture capture, WikiIngestService ingest, WikiApplyService apply, WikiNoteTransfer transfer,
+        TimeProvider? time = null)
     {
+        _time = time ?? TimeProvider.System;
         _apply = apply;
         _transfer = transfer;
         _keeper = keeper;
@@ -174,6 +180,7 @@ public class WikiController : ControllerBase
         {
             try
             {
+                var texts = new List<(string PageKey, string Name, string Text)>();
                 foreach (var full in Directory.EnumerateFiles(dir, "*.md", SearchOption.AllDirectories))
                 {
                     var name = Path.GetFileName(full);
@@ -181,13 +188,20 @@ public class WikiController : ControllerBase
                     string text;
                     try { text = System.IO.File.ReadAllText(full); }
                     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
+                    texts.Add((Path.GetRelativePath(pagesRoot, full).Replace('\\', '/'), name, text));
+                }
+                // Авторство считает одна точка — WikiProjections.Authorship; у карточек источников его нет.
+                var authorship = WikiProjections.Authorship(
+                    texts.Select(t => new WikiGate.Draft(t.PageKey, t.Text)).ToList());
+                foreach (var (pageKey, name, text) in texts)
+                {
                     var fm = WikiFrontmatter.Parse(text).Model;
-                    var pageKey = Path.GetRelativePath(pagesRoot, full).Replace('\\', '/');
                     pages.Add(new WikiPageInfoDto(
                         pageKey,
                         TitleOf(text, name), fm?.Summary, fm?.Type, fm?.Status,
                         fm?.Sources.Count ?? 0, fm?.Updated,
-                        IsDrifted(root, pageKey, manifest)));
+                        IsDrifted(root, pageKey, manifest),
+                        authorship.GetValueOrDefault(pageKey)));
                 }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -221,15 +235,57 @@ public class WikiController : ControllerBase
         // Дрейф этой страницы (файл против её записи в манифесте) и состояние манифеста —
         // то, чем UI рисует плашку и «Принять как есть»: до adopt человек видит их, а не 409.
         var manifest = ReadManifestQuietly(root, key!);
+        var content = System.IO.File.ReadAllText(full);
+        var (authorship, footnotes) = ReadAuthorship(root, key!, content);
+        var overrides = _journal.PageOverrides(userId, key!, page!, _time.GetUtcNow() - OverridesWindow)
+            .Select(o => new WikiOverrideDto(o.Op, o.Statement, o.Previous, o.At, o.PackageId))
+            .ToList();
         return Ok(new
         {
             pageKey = page,
-            content = System.IO.File.ReadAllText(full),
+            content,
+            authorship,
+            footnotes,
+            overrides,
             // sha256 байтов страницы — baseHash редактора (B3b): сохранение сверяет его под замком раздела.
             hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.IO.File.ReadAllBytes(full))).ToLowerInvariant(),
             drift = IsDrifted(root, page!, manifest),
             manifestState = ManifestStateOf(manifest.State),
         });
+    }
+
+    // Авторство и сноски страницы: карточки источников берутся из папки «Источники/» раздела
+    // (там их держит захват), счёт — WikiProjections. Неразобранная страница — без сносок и
+    // без признака: показать нечего, выдумывать нечем.
+    private static (string? Authorship, IReadOnlyList<WikiFootnoteDto> Footnotes) ReadAuthorship(
+        string root, string sectionKey, string content)
+    {
+        if (WikiPage.Parse(content).Model is not { } model)
+            return (null, []);
+        var cards = new List<WikiGate.Draft>();
+        var dir = SafePath.JoinBelowRoot(root, "pages/" + WikiSections.Folder(sectionKey)!);
+        if (Directory.Exists(dir))
+        {
+            try
+            {
+                foreach (var f in Directory.EnumerateFiles(dir, "*.md", SearchOption.AllDirectories))
+                {
+                    var rel = Path.GetRelativePath(dir, f).Replace('\\', '/');
+                    if (!rel.Split('/').SkipLast(1).Contains(WikiSourceCapture.SourceDirName)) continue;
+                    try { cards.Add(new WikiGate.Draft(rel, System.IO.File.ReadAllText(f))); }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+        var index = WikiProjections.Cards(cards);
+        var authorship = model.Frontmatter.Type == WikiFrontmatter.TypeSource
+            ? null
+            : WikiProjections.PageAuthorship(model, t => index.TryGetValue(WikiGate.Norm(t), out var c) ? c.Origin : null);
+        var footnotes = WikiProjections.Footnotes(model, index)
+            .Select(f => new WikiFootnoteDto(f.Label, f.Card, f.Origin, f.Captured))
+            .ToList();
+        return (authorship, footnotes);
     }
 
     // ─── «Завести вики» ─────────────────────────────────────────────────────
@@ -652,12 +708,22 @@ public sealed record WikiTreeDto(bool Initialized, IReadOnlyList<WikiSectionDto>
 
 /// <summary>Страница в каталоге раздела: summary/type/status — из шапки (null, если шапка
 /// не разобрана — страница остаётся видимой); sourcesCount — число источников из шапки;
-/// drift — файл страницы разошёлся с её записью в манифесте раздела (правка мимо Хранителя):
+/// authorship — "ai" | "together" | "human" по сноскам действующих утверждений (у карточек
+/// источников null); drift — файл страницы разошёлся с её записью в манифесте раздела (правка мимо Хранителя):
 /// UI рисует плашку и «Принять как есть». Ложного дрейфа нет: раздел без манифеста или с
 /// невалидным манифестом — drift=false, состояние видно в catalog.manifestState.</summary>
 public sealed record WikiPageInfoDto(
     string PageKey, string Title, string? Summary, string? Type, string? Status, int SourcesCount, string? Updated,
-    bool Drift);
+    bool Drift, string? Authorship = null);
+
+/// <summary>Сноска страницы в GET page: label — s1…sN, card — заголовок карточки, origin и
+/// captured — из шапки карточки (null, когда карточки нет).</summary>
+public sealed record WikiFootnoteDto(string Label, string Card, string? Origin, string? Captured);
+
+/// <summary>Что ИИ сам сделал с утверждением человека на странице за последние 14 дней
+/// (GET page, overrides): op — supersede | conflict, statement — текст ИИ без сносок, previous —
+/// что заменялось или оспаривалось. Выводится из журнала и пакета, своего состояния не имеет.</summary>
+public sealed record WikiOverrideDto(string Op, string? Statement, string? Previous, DateTimeOffset At, string PackageId);
 
 /// <summary>Каталог страниц раздела. manifestState — состояние манифеста раздела:
 /// «ok» | «missing» | «invalid» (закрытый перечень; «missing» — норма до первого

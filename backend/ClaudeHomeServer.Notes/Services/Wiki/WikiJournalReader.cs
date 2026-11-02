@@ -313,14 +313,9 @@ public sealed class WikiJournalReader
 
     // ─── Склейка с пакетами ─────────────────────────────────────────────────
 
-    // Строка журнала называет пакет по-разному: retract перечисляет его id прямо (мера 5),
-    // apply/revert не называет id, но несёт ровно тот источник, который пишет о пакете
-    // SourceOf, и его раздел. Этого достаточно, чтобы взять ОДИН пакет: тот, что создан не
-    // позже строки и самый свежий из таких — применить дважды один пакет нельзя (таблица
-    // переходов), а второй пакет того же источника имеет свою строку позже. Пакет, созданный
-    // позже строки, — не этот: он ещё не применялся.
-    private Entry JoinWithPackages(Entry e, Dictionary<string, WikiPackage> byId, string ownerId,
-        Dictionary<string, string?> names)
+    // Пакеты строки: названные ею (retract, а с SV1-В и apply — поле packages) или, для старых
+    // строк apply/revert без id, — склейкой по источнику и разделу (см. выше).
+    private static List<WikiPackage> PackagesOf(Entry e, Dictionary<string, WikiPackage> byId)
     {
         var joined = new List<WikiPackage>();
         if (e.Packages.Count > 0)
@@ -343,6 +338,56 @@ public sealed class WikiJournalReader
             if (best is not null)
                 joined.Add(best);
         }
+        return joined;
+    }
+
+    /// <summary>Что ИИ сам сделал с утверждением человека на странице: op — supersede | conflict,
+    /// statement — текст ИИ без ссылок на сноски, previous — что заменялось или оспаривалось.</summary>
+    public sealed record PageOverride(string Op, string? Statement, string? Previous, DateTimeOffset At, string PackageId);
+
+    /// <summary>Метка «ИИ заменил моё» страницы: строки `apply` с overrodeHuman за окно [since, ∞)
+    /// и автоприменённые операции их пакета с классом `…@human` на этой странице. Состояния у метки
+    /// нет — она целиком выводится из журнала и пакетов; новые сверху.</summary>
+    public IReadOnlyList<PageOverride> PageOverrides(string ownerId, string section, string page, DateTimeOffset since)
+    {
+        var root = WikiPaths.Root(_dataDir, ownerId);
+        var log = Read(ownerId, new Query(section, null, null, MaxTake, OverrodeHuman: true));
+        var result = new List<PageOverride>();
+        if (log.Entries.Count == 0)
+            return result;
+        var byId = new Dictionary<string, WikiPackage>(StringComparer.Ordinal);
+        foreach (var p in WikiPackageStore.List(root).Packages)
+            byId.TryAdd(p.Id, p);
+        foreach (var e in log.Entries)
+        {
+            if (e.Op != "apply" || e.Ts < since || !e.Pages.Contains(page, StringComparer.Ordinal))
+                continue;
+            foreach (var pkg in PackagesOf(e, byId))
+                foreach (var op in pkg.Operations)
+                {
+                    if (op.Page != page || !WikiPackage.IsAutoOverrideOfHuman(op))
+                        continue;
+                    result.Add(new PageOverride(op.Op, StripFootnoteRefs(op.Text), StripFootnoteRefs(op.Target), e.Ts, pkg.Id));
+                }
+        }
+        return result;
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex FootnoteRefRx =
+        new(@"\s*\[\^[^\]\r\n]+\]", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    private static string? StripFootnoteRefs(string? text) => text is null ? null : FootnoteRefRx.Replace(text, "").Trim();
+
+    // Строка журнала называет пакет по-разному: retract перечисляет его id прямо (мера 5),
+    // apply/revert не называет id, но несёт ровно тот источник, который пишет о пакете
+    // SourceOf, и его раздел. Этого достаточно, чтобы взять ОДИН пакет: тот, что создан не
+    // позже строки и самый свежий из таких — применить дважды один пакет нельзя (таблица
+    // переходов), а второй пакет того же источника имеет свою строку позже. Пакет, созданный
+    // позже строки, — не этот: он ещё не применялся.
+    private Entry JoinWithPackages(Entry e, Dictionary<string, WikiPackage> byId, string ownerId,
+        Dictionary<string, string?> names)
+    {
+        var joined = PackagesOf(e, byId);
 
         var classes = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var p in joined)

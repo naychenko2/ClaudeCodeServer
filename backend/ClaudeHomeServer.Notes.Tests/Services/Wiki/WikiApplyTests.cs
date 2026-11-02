@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Security.Cryptography;
 using System.Text;
 using ClaudeHomeServer.Models;
@@ -266,6 +267,9 @@ public class WikiApplyTests : IDisposable
         // Строка журнала (мера 6): op=apply, политика auto (спорных не было), источник пакета.
         var line = LogLines().Single(l => l.Contains("\"op\":\"apply\""));
         line.Should().Contain("\"policy\":\"auto\"");
+        // SV1-В, c3: строка apply называет применённый пакет — читатель находит его по id, а не склейкой.
+        JsonDocument.Parse(line).RootElement.GetProperty("packages").EnumerateArray().Select(x => x.GetString())
+            .Should().Equal(pkg.Id);
         line.Should().Contain("chat-1", "откат «всё из этого источника» ищет по карточке источника (мера 5)");
         line.Should().Contain(PagePath, "изменённые страницы — то, что человек видит в журнале");
 

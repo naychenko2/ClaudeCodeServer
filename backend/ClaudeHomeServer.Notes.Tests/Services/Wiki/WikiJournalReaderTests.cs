@@ -361,17 +361,22 @@ public class WikiJournalReaderTests : IDisposable
             .GetProperty("code").GetString().Should().Be(code);
     }
 
-    private WikiController Controller(IFeatureFlagGate? flags = null)
+    private WikiController Controller(IFeatureFlagGate? flags = null, TimeProvider? time = null)
     {
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, User)], "test"));
         var keeper = new WikiKeeper(_notes, _config);
         var lint = new WikiLintService(_notes, keeper, new NoSpheres(), _config, NullLogger<WikiLintService>.Instance);
         var (capture, ingest) = IngestGraph(keeper);
-        return new WikiController(keeper, _projects, new NoSpheres(), lint, _reader, flags ?? new FlagOn(), _config, capture, ingest, null!, null!)
+        return new WikiController(keeper, _projects, new NoSpheres(), lint, _reader, flags ?? new FlagOn(), _config, capture, ingest, null!, null!, time)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
+    }
+
+    private sealed class FixedTime(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
     }
 
     private WikiController AnonymousController()
@@ -527,5 +532,99 @@ public class WikiJournalReaderTests : IDisposable
 
         var dto = (WikiJournalDto)((OkObjectResult)Controller().Journal(null, null, null, null)).Value!;
         dto.Entries.Single().OverrodeKind.Should().BeNull();
+    }
+
+    // ─── SV1-В: метка «ИИ заменил моё» и контракт чтения страницы ───
+
+    private const string OverridePage = "Общее/А.md";
+
+    private void WritePage(string key, string text)
+    {
+        var full = Path.Combine(WikiPaths.Pages(_dir, User), key);
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        File.WriteAllText(full, text, new UTF8Encoding(false));
+    }
+
+    private static JsonElement Json(object? value) => JsonDocument.Parse(JsonSerializer.Serialize(value, new JsonSerializerOptions(JsonSerializerDefaults.Web))).RootElement;
+
+    private static WikiPackage.Operation OverrideOp(string op, string page, bool humanTarget, string text, string target) =>
+        Op(WikiGate.OriginSession, op, WikiPackage.DecisionAuto, page) with
+        {
+            Text = text,
+            Target = target,
+            Class = WikiPackage.ClassKey(WikiGate.OriginSession, op, humanTarget),
+        };
+
+    private JsonElement PageOf(TimeProvider time) =>
+        Json(((OkObjectResult)Controller(time: time).Page("common", OverridePage)).Value);
+
+    [Fact]
+    public void Страница_Overrides_ПараИПакет_ОкноЧетырнадцатиДней_ЗаменаИИНеВходит()
+    {
+        // Мутации: убрать фильтр @human (IsAutoOverrideOfHuman → true) — «замена ИИ» попадает в
+        // overrides, Count краснеет; окно >= since → > since — граница ровно 14 дней краснеет.
+        WritePage(OverridePage, "# А\n");
+        var human = NewPackage("common", WikiPackage.StatusApplied, WikiGate.OriginSession, "session:h",
+            OverrideOp(WikiPackage.OpSupersede, OverridePage, true, "Новая формулировка.[^s1]", "Старая формулировка человека"),
+            // Замена ИИ-утверждения в том же пакете и на той же странице: в overrides не входит.
+            OverrideOp(WikiPackage.OpSupersede, OverridePage, false, "Замена ИИ.", "Прежнее утверждение ИИ"));
+        var other = NewPackage("common", WikiPackage.StatusApplied, WikiGate.OriginSession, "session:other",
+            OverrideOp(WikiPackage.OpConflict, "Общее/Б.md", true, "Спор на другой странице.", "Чужое"));
+        var disputed = NewPackage("common", WikiPackage.StatusApplied, WikiGate.OriginSession, "session:d",
+            OverrideOp(WikiPackage.OpConflict, OverridePage, true, "Оспорено ИИ.", "Утверждение человека"));
+        WikiManifest.AppendLog(Root(), "apply", "common", [OverridePage], "session:h", "keeper", "auto", [human], overrodeHuman: true);
+        WikiManifest.AppendLog(Root(), "apply", "common", ["Общее/Б.md"], "session:other", "keeper", "auto", [other], overrodeHuman: true);
+        // Старая строка без packages: пакет находится склейкой по источнику.
+        WikiManifest.AppendLog(Root(), "apply", "common", [OverridePage], "session:d", "keeper", "auto", overrodeHuman: true);
+
+        var page = PageOf(new FixedTime(DateTimeOffset.UtcNow.AddMinutes(1)));
+        var items = page.GetProperty("overrides").EnumerateArray().ToList();
+        items.Should().HaveCount(2, "только @human на этой странице; замена ИИ и чужая страница не входят");
+        var byPkg = items.ToDictionary(i => i.GetProperty("packageId").GetString()!);
+        var rep = byPkg[human];
+        rep.GetProperty("op").GetString().Should().Be("supersede");
+        rep.GetProperty("statement").GetString().Should().Be("Новая формулировка.", "ссылки на сноски срезаны");
+        rep.GetProperty("previous").GetString().Should().Be("Старая формулировка человека");
+        byPkg[disputed].GetProperty("op").GetString().Should().Be("conflict");
+
+        // Через 15 дней — пусто: метка живёт 14 дней и состояния не имеет.
+        PageOf(new FixedTime(DateTimeOffset.UtcNow.AddDays(15))).GetProperty("overrides").GetArrayLength().Should().Be(0);
+    }
+
+    [Fact]
+    public void Страница_Overrides_ГраницаОкна_РовноЧетырнадцатьДнейВключительно()
+    {
+        WritePage(OverridePage, "# А\n");
+        var id = NewPackage("common", WikiPackage.StatusApplied, WikiGate.OriginSession, "session:h",
+            OverrideOp(WikiPackage.OpSupersede, OverridePage, true, "Новое.", "Старое"));
+        var ts = DateTimeOffset.Parse("2026-10-01T10:00:00+00:00");
+        WriteLog($$"""{"ts":"{{ts:O}}","op":"apply","section":"common","pages":["{{OverridePage}}"],"source":"session:h","actor":"keeper","policy":"auto","packages":["{{id}}"],"overrodeHuman":true}""" + "\n");
+
+        PageOf(new FixedTime(ts.AddDays(14))).GetProperty("overrides").GetArrayLength().Should().Be(1, "окно [now-14д, now] — граница внутри");
+        PageOf(new FixedTime(ts.AddDays(14).AddSeconds(1))).GetProperty("overrides").GetArrayLength().Should().Be(0);
+    }
+
+    [Fact]
+    public void Страница_Авторство_Сноски_ИКаталог()
+    {
+        const string card = "---\ntype: source\nsummary: к\norigin: human\nref: x:1\nhash: h\ncaptured: 2026-11-02\nstatus: active\n---\n\n# Моя заметка\n";
+        // Человеческая сноска живёт ТОЛЬКО в «Истории» (ссылка из неё): авторство — по действующим.
+        const string body = "---\ntype: entity\nsummary: с\nstatus: active\n---\n\n# А\n\n## Сводка\n- Факт.[^s1]\n\n## Хронология\n\n## Противоречия\n\n## История\n- Снято.[^s2]\n\n[^s1]: [[Нет карточки]] — «цитата номер один»\n[^s2]: [[Моя заметка]] — «цитата номер два»\n";
+        WritePage(OverridePage, body);
+        WritePage("Общее/Источники/Моя заметка.md", card);
+
+        var page = PageOf(new FixedTime(DateTimeOffset.UtcNow));
+        page.GetProperty("authorship").GetString().Should().Be("ai", "human-сноска только в «Истории» не считается");
+        var foots = page.GetProperty("footnotes").EnumerateArray().ToList();
+        foots.Should().HaveCount(2);
+        foots[0].GetProperty("label").GetString().Should().Be("s1");
+        foots[0].GetProperty("card").GetString().Should().Be("Нет карточки");
+        foots[0].GetProperty("origin").ValueKind.Should().Be(JsonValueKind.Null, "карточки нет — origin null");
+        foots[1].GetProperty("origin").GetString().Should().Be("human");
+        foots[1].GetProperty("captured").GetString().Should().Be("2026-11-02");
+
+        var catalog = (WikiCatalogDto)((OkObjectResult)Controller().Section("common")).Value!;
+        catalog.Pages.Single(p => p.PageKey == OverridePage).Authorship.Should().Be("ai");
+        catalog.Pages.Single(p => p.Type == "source").Authorship.Should().BeNull("у карточки источника авторства нет");
     }
 }

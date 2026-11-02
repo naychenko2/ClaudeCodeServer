@@ -132,7 +132,9 @@ public static class WikiManifest
     /// <summary>Дописать строку журнала. Строки не переписываются: append, не перезапись
     /// файла. ts — время сервера (ISO-8601, UTC). policy — «auto» | «inbox» для строки
     /// применения (мера 6); для системных операций — null. packages — id откатанных пакетов
-    /// строки op=retract (мера 5); для прочих операций — null.</summary>
+    /// строки op=retract (мера 5) и id применённого пакета строки op=apply (SV1-В: по нему
+    /// читатель находит пакет точно, склейка по источнику — лишь фолбэк старых строк); для
+    /// прочих операций — null.</summary>
     public static void AppendLog(
         string root, string op, string section, IReadOnlyList<string> pages, string? source, string actor,
         string? policy = null, IReadOnlyList<string>? packages = null, bool overrodeHuman = false)

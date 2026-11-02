@@ -355,7 +355,7 @@ public sealed class WikiApplyService
             WikiManifest.AppendLog(root, package.Action!, section, written, SourceOf(package), "user");
         else
             WikiManifest.AppendLog(root, LogOpApply, section, written, SourceOf(package), "keeper", policy,
-                overrodeHuman: package.Operations.Any(WikiPackage.IsAutoOverrideOfHuman));
+                packages: [packageId], overrodeHuman: package.Operations.Any(WikiPackage.IsAutoOverrideOfHuman));
 
         // Проекции — после журнала: _log.md — производная от log.jsonl и без этой строки
         // остался бы на полшага позади применения.

@@ -33,6 +33,7 @@ public class WikiControllerPagesTests : IDisposable
     private readonly IConfiguration _config;
     private readonly ProjectManager _projects;
     private readonly WikiKeeper _keeper;
+    private readonly WikiJournalReader _journalReader;
     private readonly WikiApplyService _apply;
     private readonly string _key;
     private readonly string _pageKey;
@@ -49,6 +50,8 @@ public class WikiControllerPagesTests : IDisposable
         _pages = WikiPaths.Pages(_dir, User);
         var notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, null, new Flags(true, true));
         _keeper = new WikiKeeper(notes, _config);
+        // GET page читает журнал (overrides): имена источников там не нужны — каталог сессий не зовётся.
+        _journalReader = new WikiJournalReader(notes, null!, _config);
         _apply = new WikiApplyService(notes, _keeper, new NoSpheres(), _config);
 
         var root = Path.Combine(_dir, "repo", User, "Проект");
@@ -407,7 +410,7 @@ public class WikiControllerPagesTests : IDisposable
 
     private JsonElement PageJson()
     {
-        var res = new WikiController(_keeper, _projects, new NoSpheres(), null!, null!, new Flags(true, true), _config, null!, null!, null!, null!)
+        var res = new WikiController(_keeper, _projects, new NoSpheres(), null!, _journalReader, new Flags(true, true), _config, null!, null!, null!, null!)
         {
             ControllerContext = Ctx(),
         }.Page(_key, _pageKey);

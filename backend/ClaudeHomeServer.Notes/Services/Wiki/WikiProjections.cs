@@ -32,16 +32,62 @@ public static class WikiProjections
     public const string AuthorshipHuman = "human";
 
     private static readonly Regex TitleRx = new(@"^# (.+)$", RegexOptions.CultureInvariant);
+    private static readonly Regex FootnoteRefRx = new(@"\[\^(s\d+)\]", RegexOptions.CultureInvariant);
 
-    /// <summary>Признак авторства страницы по её сноскам. originOfCard — origin карточки по
-    /// заголовку из цели сноски (null — карточка неизвестна, считается не-human).</summary>
+    // Секция, чьи сноски авторство не считает: в «Истории» лежат снятые и замещённые утверждения,
+    // а не то, что страница говорит сейчас (ADR-038, §2).
+    private const string HistorySectionName = "История";
+
+    /// <summary>Что известно о карточке источника по её шапке: origin и дата захвата.</summary>
+    public readonly record struct CardInfo(string? Origin, string? Captured);
+
+    /// <summary>Сноска страницы для чтения: label — s1…sN, card — заголовок карточки из цели,
+    /// origin/captured — из шапки карточки (null, когда карточки нет).</summary>
+    public sealed record FootnoteInfo(string Label, string Card, string? Origin, string? Captured);
+
+    /// <summary>Карточки источников состояния: нормализованный заголовок → origin и captured.
+    /// Неразобранные страницы пропускаются; повтор заголовка — первая карточка.</summary>
+    public static IReadOnlyDictionary<string, CardInfo> Cards(IEnumerable<WikiGate.Draft> state)
+    {
+        var cards = new Dictionary<string, CardInfo>(StringComparer.Ordinal);
+        foreach (var d in state)
+            if (WikiPage.Parse(d.Content).Model is { } page && page.Frontmatter.Type == WikiFrontmatter.TypeSource)
+                cards.TryAdd(NormTitle(page.Title), new CardInfo(page.Frontmatter.Origin, page.Frontmatter.Captured));
+        return cards;
+    }
+
+    /// <summary>Сноски страницы с происхождением карточек — как их видит страница в UI.</summary>
+    public static IReadOnlyList<FootnoteInfo> Footnotes(WikiPage page, IReadOnlyDictionary<string, CardInfo> cards) =>
+        page.Footnotes
+            .Select((f, i) =>
+            {
+                cards.TryGetValue(NormTitle(f.Target.Text), out var card);
+                return new FootnoteInfo($"s{i + 1}", f.Target.Text, card.Origin, card.Captured);
+            })
+            .ToList();
+
+    /// <summary>Признак авторства страницы по сноскам ДЕЙСТВУЮЩИХ утверждений: сноски, на которые
+    /// ссылаются только из «Истории» (и повисшие без ссылок), не считаются. originOfCard — origin
+    /// карточки по заголовку из цели сноски (null — карточка неизвестна, считается не-human).</summary>
     public static string PageAuthorship(WikiPage page, Func<string, string?> originOfCard)
     {
+        var active = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var section in page.Sections)
+        {
+            if (section.Name == HistorySectionName)
+                continue;
+            foreach (var line in section.Lines)
+                foreach (Match m in FootnoteRefRx.Matches(line))
+                    active.Add(m.Groups[1].Value);
+        }
         var human = 0;
         var other = 0;
-        foreach (var f in page.Footnotes)
+        for (var i = 0; i < page.Footnotes.Count; i++)
         {
-            if (f.Target.IsLink && originOfCard(f.Target.Text) == WikiGate.OriginHuman)
+            if (!active.Contains($"s{i + 1}"))
+                continue;
+            var target = page.Footnotes[i].Target;
+            if (target.IsLink && originOfCard(target.Text) == WikiGate.OriginHuman)
                 human++;
             else
                 other++;
@@ -58,14 +104,11 @@ public static class WikiProjections
         foreach (var d in state)
             if (WikiPage.Parse(d.Content).Model is { } model)
                 parsed.Add((d.Path, model));
-        var origins = new Dictionary<string, string?>(StringComparer.Ordinal);
-        foreach (var (_, page) in parsed)
-            if (page.Frontmatter.Type == WikiFrontmatter.TypeSource)
-                origins.TryAdd(NormTitle(page.Title), page.Frontmatter.Origin);
+        var cards = Cards(state);
         var result = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var (path, page) in parsed)
             if (page.Frontmatter.Type != WikiFrontmatter.TypeSource)
-                result[path] = PageAuthorship(page, t => origins.GetValueOrDefault(NormTitle(t)));
+                result[path] = PageAuthorship(page, t => cards.TryGetValue(NormTitle(t), out var c) ? c.Origin : null);
         return result;
     }
 

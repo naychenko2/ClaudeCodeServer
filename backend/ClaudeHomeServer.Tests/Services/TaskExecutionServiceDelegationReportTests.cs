@@ -414,6 +414,80 @@ public class TaskExecutionServiceDelegationReportTests : IDisposable
         (await CountAsync(team.Egor.Id)).Should().Be((1, 0));
     }
 
+    // --- Задача фичи: доклад всегда в ключевой чат фичи (оркестратору) ---
+
+    // Эпик фичи с ключевым чатом key (SourceSessionId — первое звено цепочки); лист — шаг этой фичи
+    private (TaskItem Epic, TaskItem Leaf) MakeFeatureLeaf(Team team, Session key, Session creatorChat,
+        string? reportTo, string? launchedById, string role = TaskRoles.Step)
+    {
+        var epic = _tasks.Create(null, team.OwnerId, new CreateTaskRequest("Фича", Role: TaskRoles.Feature));
+        epic.SourceSessionId = key.Id;
+        var leaf = MakeLeaf(team, creatorChat, reportTo, launchedById);
+        leaf.FeatureId = epic.Id;
+        leaf.Role = role;
+        return (epic, leaf);
+    }
+
+    [Fact]
+    public async Task Доклад_ШагФичи_ЗапущенЧеловекомИзUI_УходитВКлючевойЧатАНеПланировщику()
+    {
+        var team = await ArrangeTeamAsync();
+        var (_, leaf) = MakeFeatureLeaf(team, key: team.Sofya, creatorChat: team.Egor,
+            reportTo: team.Egor.Id, launchedById: null);
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        (await CountAsync(team.Sofya.Id)).Should().Be((1, 1), "ключевой чат фичи — адресат отчёта шага");
+        // Планировщик — создатель задачи: ему остаётся карточка без авто-хода (как раньше у создателя)
+        (await CountAsync(team.Egor.Id)).Should().Be((1, 0));
+    }
+
+    [Fact]
+    public async Task Доклад_ШагФичи_ЗапустившийКоординаторЖдёт_ДокладЕму_АнеВКлючевойЧат()
+    {
+        var team = await ArrangeTeamAsync();
+        MakeExecuting(team, team.Egor, team.Sofya.Id, team.Sofya.Id);
+        var (_, leaf) = MakeFeatureLeaf(team, key: team.Sofya, creatorChat: team.Egor,
+            reportTo: null, launchedById: team.Egor.Id);
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        (await CountAsync(team.Egor.Id)).Should().Be((1, 1), "подзадачи внутри шага докладывают координатору");
+        (await CountAsync(team.Sofya.Id)).Should().Be((0, 0));
+    }
+
+    [Fact]
+    public async Task Доклад_ШагФичи_КлючевойЧатПерешёлВПродолжение_ДокладВПоследнееЖивоеПродолжение()
+    {
+        var team = await ArrangeTeamAsync();
+        var continued = await _sessions.CreatePersonaChatAsync(team.OwnerId, team.Sofya.PersonaId!,
+            ClaudeMode.AcceptEdits, name: "Софья (продолжение)");
+        StubProcess(continued);
+        team.Sofya.ContinuedInSessionId = continued.Id;
+        var (_, leaf) = MakeFeatureLeaf(team, key: team.Sofya, creatorChat: team.Egor,
+            reportTo: team.Egor.Id, launchedById: null);
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        (await CountAsync(continued.Id)).Should().Be((1, 1));
+        (await CountAsync(team.Sofya.Id)).Should().Be((0, 0));
+    }
+
+    [Fact]
+    public async Task Доклад_ЭпикФичи_НеУходитВКлючевойЧат_ПрежняяЦепочка()
+    {
+        var team = await ArrangeTeamAsync();
+        var (epic, leaf) = MakeFeatureLeaf(team, key: team.Sofya, creatorChat: team.Egor,
+            reportTo: team.Egor.Id, launchedById: null, role: TaskRoles.Feature);
+        leaf.FeatureId = null; // у эпика FeatureId нет
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        (await CountAsync(team.Egor.Id)).Should().Be((1, 1), "эпик — не шаг: правило ключевого чата к нему не применяется");
+        (await CountAsync(team.Sofya.Id)).Should().Be((0, 0));
+        epic.Should().NotBeNull();
+    }
+
     [Fact]
     public async Task Доклад_СоздательНеИсполнитель_КакПослеЗапускаИзЧата()
     {

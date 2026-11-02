@@ -15,6 +15,8 @@ using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -512,6 +514,76 @@ public class WikiChatScorerTests : IDisposable
         File.ReadAllBytes(file).Should().Equal(before, "пересчёт не перезаписывает нечитаемый файл молча");
     }
 
+    [Fact]
+    public async Task ОтказПосредиЦикла_CountsСодержатУжеЗаписанныйЧат_OkFalse()
+    {
+        // Хвост ревью R-NA-3 (п.1): отказ UpdateScoring посреди цикла НЕ обнуляет Counts —
+        // в них счётчики чатов, уже записанных до отказа (каждый писался по одному чату под
+        // блоком корня). Фиксируем поведение как есть: Counted=0, Counts — частичные. Мутация
+        // «обнулить Counts на отказе» (new RecalcResult(…, 0, new Dictionary…)) краснит тест.
+        // Шов: стаб портит файл стора на втором history-вызове — модель внешнего писателя,
+        // сломавшего файл между двумя операциями пересчёта (блок стора держит операцию,
+        // а не весь цикл). Оба моих чата — серые: какой ни обойти первым, Counts ровно один.
+        _sessions.Known["chat-g1"] = new Session { Id = "chat-g1", OwnerId = "u1", Name = "Серый 1", CreatedAt = Base, UpdatedAt = Base };
+        _sessions.Known["chat-g2"] = new Session { Id = "chat-g2", OwnerId = "u1", Name = "Серый 2", CreatedAt = Base, UpdatedAt = Base };
+        var gray = new List<StoredMessage> { U("Разбери протокол встречи"), T(new string('с', 12_000)) };
+        _sessions.History["chat-g1"] = gray;
+        _sessions.History["chat-g2"] = gray;
+        var file = Path.Combine(_wikiRoot, "keeper", "chat-triage.json");
+        _sessions.BreakTriageFileOnSecondHistory = file;
+
+        var log = new RecordingLog();
+        var res = await new WikiChatRecalc(_sessions, _config, log).RecalculateAsync("u1");
+
+        res.Ok.Should().BeFalse("отказ записи посреди цикла — отказ, а не усечённый успех");
+        res.Code.Should().Be(WikiChatTriageStore.CodeInvalid);
+        res.Counted.Should().Be(0, "Counted на отказе остаётся нулевым — поведение, а не опечатка");
+        res.Counts.Should().ContainSingle().Which.Key.Should().Be(WikiChatScorer.ZoneGray);
+        res.Counts[WikiChatScorer.ZoneGray].Should().Be(1, "счётчик уже записанного чата остаётся в Counts");
+        File.ReadAllText(file).Should().Be("{ не json", "после отказа пересчёт не трогает сломанный файл");
+        log.Rows.Should().Contain(r => r.Level == LogLevel.Warning && r.Message.Contains("нечитаем"),
+            "отказ записи назван в журнале — молчания нет");
+    }
+
+    [Fact]
+    public async Task ОтказНаНечитаемомСторе_ПредупреждениеВЖурнале()
+    {
+        // Хвост ревью R-NA-3 (п.2): «стор нечитаем» не должен молчать — Get стора пишет
+        // warning переданным ему логгером; служба обязана донести свой до стора. Мутация
+        // «не передавать логгер» (Get(root)) краснит этот тест.
+        SeedChats();
+        var file = Path.Combine(_wikiRoot, "keeper", "chat-triage.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        File.WriteAllText(file, "{ не json");
+
+        var log = new RecordingLog();
+        var res = await new WikiChatRecalc(_sessions, _config, log).RecalculateAsync("u1");
+
+        res.Ok.Should().BeFalse();
+        log.Rows.Should().Contain(r => r.Level == LogLevel.Warning && r.Message.Contains("нечитаем"),
+            "нечитаемый стор назван в журнале — молчания нет");
+    }
+
+    [Fact]
+    public void РегистрацияВDI_Резолвится_ЛоггерПриходитИзDI()
+    {
+        // Та же регистрация, что в NotesSubsystem.cs (AddSingleton<WikiChatRecalc>()), плюс
+        // AddLogging — как в любом хосте: новый необязательный параметр не должен ломать
+        // резолв, и DI обязан подставить настоящий логгер, а не null-дефолт.
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<ISessionDirectory>(_sessions);
+        services.AddSingleton(_config);
+        services.AddSingleton<WikiChatRecalc>();
+        using var sp = services.BuildServiceProvider();
+
+        var recalc = sp.GetRequiredService<WikiChatRecalc>();
+        recalc.Should().NotBeNull();
+        typeof(WikiChatRecalc)
+            .GetField("_log", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(recalc).Should().NotBeNull("DI обязан подставить настоящий логгер, а не null-дефолт");
+    }
+
     // ─── Помощники ──────────────────────────────────────────────────────────
 
     private string _wikiRoot => WikiPaths.Root(_dir, "u1");
@@ -600,12 +672,32 @@ public class WikiChatScorerTests : IDisposable
     {
         public readonly Dictionary<string, Session> Known = new();
         public readonly Dictionary<string, IReadOnlyList<StoredMessage>> History = new();
+        // Тестовый шов (R-NA-3 п.1): на ВТОРОМ history-вызове портим файл стора — модель
+        // внешнего писателя, сломавшего файл между двумя операциями пересчёта.
+        public string? BreakTriageFileOnSecondHistory;
+        private int _historyCalls;
         public Session? GetById(string id) => Known.TryGetValue(id, out var s) ? s : null;
         public IReadOnlyCollection<Session> GetAll() => Known.Values;
         public string? ResolveOwnerId(Session s) => s.OwnerId;
-        public Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId) =>
-            Task.FromResult<IReadOnlyList<StoredMessage>>(History.TryGetValue(sessionId, out var h) ? h : []);
+        public Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId)
+        {
+            if (++_historyCalls == 2 && BreakTriageFileOnSecondHistory is not null)
+                File.WriteAllText(BreakTriageFileOnSecondHistory, "{ не json");
+            return Task.FromResult<IReadOnlyList<StoredMessage>>(History.TryGetValue(sessionId, out var h) ? h : []);
+        }
         public bool SetWikiMark(string sessionId, string? mark) => Known.ContainsKey(sessionId);
+    }
+
+    // Recording-логгер службы (по образцу RecordingLog в WikiNightlyNotifyTests): журнал
+    // теста, чтобы видеть предупреждение стора, донесённое через службу (R-NA-3 п.2).
+    private sealed class RecordingLog : ILogger<WikiChatRecalc>
+    {
+        public List<(LogLevel Level, string Message)> Rows { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) => Rows.Add((logLevel, formatter(state, exception)));
     }
 
     // Стабы для сборки настоящего сервиса разбора (он в теневых тестах не вызывается):

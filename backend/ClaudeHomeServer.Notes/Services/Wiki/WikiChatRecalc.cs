@@ -19,18 +19,25 @@ public sealed class WikiChatRecalc
 {
     private readonly ISessionDirectory _sessions;
     private readonly string _dataDir;
+    private readonly ILogger<WikiChatRecalc>? _log;
 
-    public WikiChatRecalc(ISessionDirectory sessions, IConfiguration config)
+    // Логгер необязательный: прямые вызовы new WikiChatRecalc(...) в тестах без журнала
+    // остаются компилируемыми; DI (AddSingleton в NotesSubsystem) подставляет настоящий
+    // ILogger<T> — через него отказ стора («нечитаемый файл») попадает в журнал, а не молчит.
+    public WikiChatRecalc(ISessionDirectory sessions, IConfiguration config, ILogger<WikiChatRecalc>? log = null)
     {
         _sessions = sessions;
+        _log = log;
         // Каталог данных — как у всех сервисов вертикали (тот же корень, что у Хранителя).
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
     }
 
-    /// <summary>Итог пересчёта. Отказ: Ok=false, Code — машинный код стора (wiki_*), Reason —
-    /// строка для человека; Counted=0, Counts пустые (на отказе их никто не показывает), файл
-    /// стора не изменён. Успех: число пересчитанных чатов и counts по зонам ступени 1 (их
+    /// <summary>Итог пересчёта. Отказ: Ok=false, Counted=0, Code — машинный код стора (wiki_*),
+    /// Reason — строка для человека. Counts — по месту отказа: до цикла (файл нечитаем) — пустые,
+    /// файл на диске не тронут; посреди цикла (отказ записи) — счётчики чатов, уже записанных
+    /// до отказа: каждый писался по одному чату под блоком корня и остался на диске, цикл на
+    /// отказе останавливается. Успех: число пересчитанных чатов и counts по зонам ступени 1 (их
     /// посчитал скорер; список показывает их с приоритетом исхода разбора — ShownZone).</summary>
     public sealed record RecalcResult(
         bool Ok, string? Code, string? Reason,
@@ -45,7 +52,7 @@ public sealed class WikiChatRecalc
     public async Task<RecalcResult> RecalculateAsync(string ownerId)
     {
         var root = WikiPaths.Root(_dataDir, ownerId);
-        var read = WikiChatTriageStore.Get(root);
+        var read = WikiChatTriageStore.Get(root, _log);
         if (read.State == WikiTriageFileState.Invalid)
             return new RecalcResult(false, WikiChatTriageStore.CodeInvalid, "файл разбора чатов не читается", 0, new Dictionary<string, int>());
 
@@ -68,7 +75,7 @@ public sealed class WikiChatRecalc
             var up = WikiChatTriageStore.UpdateScoring(
                 root, session.Id, res.Score,
                 [.. res.Signals.Select(s => new WikiTriageSignal(s.Name, s.Weight))],
-                res.Zone, res.Reason);
+                res.Zone, res.Reason, _log);
             if (!up.Ok)
                 return new RecalcResult(false, up.Code, up.Reason, 0, counts);
             counts[res.Zone] = counts.TryGetValue(res.Zone, out var c) ? c + 1 : 1;

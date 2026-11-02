@@ -298,6 +298,7 @@ public static class WikiPlanValidator
                     Counters = new(pagesCount, statementsCount, ctx.Counters.PackagesForPage),
                     PageDuplicate = duplicate,
                     TargetPageStatus = page.Model?.Frontmatter.Status,
+                    TargetSourceTime = isReplacement ? TargetSourceTimeOf(targetCards) : null,
                     TargetAuthor = !isReplacement
                         ? null
                         : humanTarget ? WikiPackage.AuthorHuman : WikiPackage.AuthorAi,
@@ -518,6 +519,26 @@ public static class WikiPlanValidator
                 cards.Add(cm.Frontmatter);
         }
         return cards;
+    }
+
+    // Время источника по карточке: written (когда написан источник); у карточки human — captured
+    // (правка и фиксация одно событие, WikiHumanRender). Не captured вообще: у бэклога старых чатов
+    // оно — сегодня. Самое новое среди карточек; хотя бы одна без времени (или карточек нет) — null.
+    private static DateTimeOffset? TargetSourceTimeOf(IReadOnlyList<WikiFrontmatter> cards)
+    {
+        if (cards.Count == 0)
+            return null;
+        DateTimeOffset? newest = null;
+        foreach (var card in cards)
+        {
+            var text = card.Origin == WikiGate.OriginHuman ? card.Captured : card.Written;
+            if (!DateTimeOffset.TryParse(text, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind, out var t))
+                return null;
+            if (newest is null || t > newest)
+                newest = t;
+        }
+        return newest;
     }
 
     private static readonly System.Text.RegularExpressions.Regex TargetFootnoteRx =

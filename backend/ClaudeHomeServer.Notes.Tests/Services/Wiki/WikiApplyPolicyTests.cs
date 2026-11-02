@@ -72,12 +72,155 @@ public class WikiApplyPolicyTests
     [Theory]
     [InlineData(WikiPackage.OpSupersede)]
     [InlineData(WikiPackage.OpConflict)]
-    public void Decide_ЗамещениеИПротиворечие_ВсегдаВоВходящих(string op)
+    public void Decide_ЗамещениеИПротиворечие_БезВремениЦели_ВоВходящих(string op)
     {
         var v = WikiApplyPolicy.Decide(Op(op), Ctx());
 
         v.Decision.Should().Be(WikiPackage.DecisionInbox);
         v.Reason.Should().NotBeNullOrWhiteSpace();
+    }
+
+    // ── B4c: правило замены (ADR-038, решение 4) — каждое условие со своей причиной ──
+
+    private static readonly DateTimeOffset T0 = new(2026, 10, 1, 12, 0, 0, TimeSpan.Zero);
+
+    private static WikiApplyPolicy.ApplyContext ReplCtx(
+        DateTimeOffset? source = null, DateTimeOffset? target = null, DateTimeOffset? humanEdit = null,
+        string author = WikiPackage.AuthorAi, params string[] disabledClasses) => new()
+        {
+            NewSourceTime = source ?? T0.AddDays(10),
+            TargetSourceTime = target ?? T0,
+            TargetAuthor = author,
+            LastHumanEditAt = humanEdit is { } e
+                ? new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal) { [ProjectPage] = e }
+                : new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal),
+            DisabledClasses = new HashSet<string>(disabledClasses, StringComparer.Ordinal),
+        };
+
+    private static WikiPackage.Operation ReplOp(string op, bool humanTarget = false) =>
+        Op(op) with { Class = WikiPackage.ClassKey(WikiGate.OriginSession, op, humanTarget) };
+
+    [Theory]
+    [InlineData(WikiPackage.OpSupersede, false)]
+    [InlineData(WikiPackage.OpConflict, false)]
+    [InlineData(WikiPackage.OpSupersede, true)]
+    [InlineData(WikiPackage.OpConflict, true)]
+    public void Замена_ВсеУсловияВыполнены_Само_ОдниПравилаДляЦелиИИиЧеловека(string op, bool human)
+    {
+        var v = WikiApplyPolicy.Decide(ReplOp(op, human),
+            ReplCtx(author: human ? WikiPackage.AuthorHuman : WikiPackage.AuthorAi));
+
+        v.IsAuto.Should().BeTrue(v.Reason);
+        v.Reason.Should().Contain("источник новее");
+    }
+
+    [Theory]
+    [InlineData(WikiPackage.OpSupersede)]
+    [InlineData(WikiPackage.OpConflict)]
+    public void Замена_ВремяНовогоИсточникаНеизвестно_ВоВходящих_СоСвоейПричиной(string op)
+    {
+        var ctx = ReplCtx() with { NewSourceTime = null };
+
+        var v = WikiApplyPolicy.Decide(ReplOp(op), ctx);
+
+        v.Decision.Should().Be(WikiPackage.DecisionInbox);
+        v.Reason.Should().Contain("Неизвестно, когда написан источник:");
+    }
+
+    [Fact]
+    public void Замена_ВремяЦелиНеизвестно_ВоВходящих_СоСвоейПричиной()
+    {
+        var v = WikiApplyPolicy.Decide(ReplOp(WikiPackage.OpSupersede), ReplCtx() with { TargetSourceTime = null });
+
+        v.Decision.Should().Be(WikiPackage.DecisionInbox);
+        v.Reason.Should().Contain("Неизвестно, когда написан источник утверждения");
+    }
+
+    [Fact]
+    public void Замена_ИсточникРовноТогоЖеМоментаЧтоЦель_НеНовее_ВоВходящих_ПоМиллисекундеНовее_Само()
+    {
+        WikiApplyPolicy.Decide(ReplOp(WikiPackage.OpSupersede), ReplCtx(source: T0, target: T0))
+            .Reason.Should().Contain("не новее заменяемого");
+        WikiApplyPolicy.Decide(ReplOp(WikiPackage.OpSupersede), ReplCtx(source: T0.AddDays(-1), target: T0))
+            .Decision.Should().Be(WikiPackage.DecisionInbox);
+
+        WikiApplyPolicy.Decide(ReplOp(WikiPackage.OpSupersede), ReplCtx(source: T0.AddMilliseconds(1), target: T0))
+            .IsAuto.Should().BeTrue("строго новее — на миллисекунду достаточно");
+    }
+
+    [Theory]
+    [InlineData(WikiPackage.AuthorAi)]
+    [InlineData(WikiPackage.AuthorHuman)]
+    public void Замена_ИсточникСтаршеПравкиЧеловека_ВоВходящих_ГраницаРавенствоНеНовее(string author)
+    {
+        var edit = T0.AddDays(20);
+        var op = ReplOp(WikiPackage.OpSupersede, author == WikiPackage.AuthorHuman);
+
+        var older = WikiApplyPolicy.Decide(op, ReplCtx(source: edit.AddDays(-1), humanEdit: edit, author: author));
+        var equal = WikiApplyPolicy.Decide(op, ReplCtx(source: edit, humanEdit: edit, author: author));
+        var newer = WikiApplyPolicy.Decide(op, ReplCtx(source: edit.AddMilliseconds(1), humanEdit: edit, author: author));
+
+        older.Reason.Should().Contain("Источник старше вашей правки");
+        equal.Decision.Should().Be(WikiPackage.DecisionInbox, "ровно в момент правки — не новее");
+        newer.IsAuto.Should().BeTrue(newer.Reason);
+    }
+
+    [Fact]
+    public void Замена_ПравкаЧеловекаНаДругойСтранице_НеМешает_ПустойЖурнал_УсловиеНеСрабатывает()
+    {
+        var other = ReplCtx() with
+        {
+            LastHumanEditAt = new Dictionary<string, DateTimeOffset> { ["Проекты/p1/Другая.md"] = T0.AddYears(5) },
+        };
+
+        WikiApplyPolicy.Decide(ReplOp(WikiPackage.OpSupersede), other).IsAuto.Should().BeTrue();
+        WikiApplyPolicy.Decide(ReplOp(WikiPackage.OpSupersede), ReplCtx()).IsAuto.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Замена_ПравкаЧеловека_ТолькоЗамены_AppendНаТойЖеСтраницеИдётПоОбщимПравилам()
+    {
+        var ctx = ReplCtx(humanEdit: T0.AddYears(5)) with { NewSourceTime = null };
+
+        WikiApplyPolicy.Decide(Op(WikiPackage.OpAppend), ctx).IsAuto.Should().BeTrue("правка защищает только от замен");
+    }
+
+    [Fact]
+    public void Замена_КарантинN7d_ИдётРаньшеПравилаЗамены_ПричинаN7d()
+    {
+        var ctx = ReplCtx() with
+        {
+            RecentlyRevertedPages = new Dictionary<string, DateTimeOffset> { [ProjectPage] = RevertedAt },
+        };
+
+        WikiApplyPolicy.Decide(ReplOp(WikiPackage.OpSupersede), ctx).Reason.Should().Contain("откатили вручную");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Замена_КлассВыключен_ВоВходящих_КлассАИиКлассHumanНезависимы(bool humanTarget)
+    {
+        var own = WikiPackage.ClassKey(WikiGate.OriginSession, WikiPackage.OpSupersede, humanTarget);
+        var other = WikiPackage.ClassKey(WikiGate.OriginSession, WikiPackage.OpSupersede, !humanTarget);
+        var author = humanTarget ? WikiPackage.AuthorHuman : WikiPackage.AuthorAi;
+        var op = ReplOp(WikiPackage.OpSupersede, humanTarget);
+
+        WikiApplyPolicy.Decide(op, ReplCtx(author: author, disabledClasses: own))
+            .Reason.Should().Contain("выключен").And.Contain(own);
+        WikiApplyPolicy.Decide(op, ReplCtx(author: author, disabledClasses: other))
+            .IsAuto.Should().BeTrue("выключенный класс соседней цели замену не трогает");
+    }
+
+    [Fact]
+    public void Замена_ОбщиеРискиПослеПравила_UrlИЛичноеВОбщем_ВоВходящих()
+    {
+        var url = Op(WikiPackage.OpSupersede, WikiGate.OriginUrl) with
+        { Class = WikiPackage.ClassKey(WikiGate.OriginUrl, WikiPackage.OpSupersede) };
+
+        WikiApplyPolicy.Decide(url, ReplCtx()).Reason.Should().Contain("origin url");
+        WikiApplyPolicy.Decide(ReplOp(WikiPackage.OpSupersede), ReplCtx() with { TargetPageStatus = WikiFrontmatter.StatusDisputed })
+            .Reason.Should().Contain("disputed");
     }
 
     [Fact]

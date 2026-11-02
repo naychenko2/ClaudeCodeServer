@@ -89,6 +89,12 @@ public static class WikiApplyPolicy
         public IReadOnlyDictionary<string, DateTimeOffset> LastHumanEditAt { get; init; }
             = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
 
+        /// <summary>Самое новое время среди источников утверждения-цели замены: written карточки,
+        /// у карточки human — captured. null — неизвестно у хотя бы одного источника или сносок
+        /// у цели нет (fail-closed: замена без времени цели не применяется сама). Определяет
+        /// код (валидатор) по сноскам страницы СЕЙЧАС, не модель.</summary>
+        public DateTimeOffset? TargetSourceTime { get; init; }
+
         /// <summary>Автор цели supersede/conflict по сноскам утверждения: WikiPackage.AuthorHuman |
         /// AuthorAi; null — операция не замена. Определяет код (валидатор), не модель.</summary>
         public string? TargetAuthor { get; init; }
@@ -139,10 +145,12 @@ public static class WikiApplyPolicy
             return Inbox($"страницу откатили вручную {revertedAt:yyyy-MM-dd}: автоприменение не меняет её {RevertQuarantineDays} дней");
 
         // 3. Риски — по строкам таблицы §12г.
-        if (op.Op == WikiPackage.OpSupersede)
-            return Inbox("замещение действующего утверждения: меняет то, что агенты уже считают правдой");
-        if (op.Op == WikiPackage.OpConflict)
-            return Inbox("пометка противоречия понижает доверие страницы: модель часто путает уточнение с противоречием");
+        // Замена и оспаривание (ADR-038, решение 4): само — только если новый источник новее и
+        // заменяемого утверждения, и последней правки человека на странице. Правило одно для
+        // целей ai и human: ветки по автору цели нет (автор влияет на класс, не на условия).
+        if (op.Op is WikiPackage.OpSupersede or WikiPackage.OpConflict
+            && ReplacementBlocker(op, context) is { } blocker)
+            return Inbox(blocker);
         if (op.Op == WikiPackage.OpCreate && !context.TargetIsChronicle)
         {
             if (context.PageDuplicate is { } dup)
@@ -179,6 +187,22 @@ public static class WikiApplyPolicy
         return new(true, null);
     }
 
+    // Правило замены, условия 1, 4, 2–3 (условия 5–7 — карантин N7d, класс и общие риски — стоят
+    // в Decide до и после). Первое невыполненное — причина. Строго «новее»: равные времена —
+    // не новее (half-open: источник того же момента не замещает).
+    private static string? ReplacementBlocker(WikiPackage.Operation op, ApplyContext context)
+    {
+        if (context.NewSourceTime is not { } source)
+            return "Неизвестно, когда написан источник: замена без времени источника не применяется сама";
+        if (context.LastHumanEditAt.TryGetValue(op.Page, out var editedAt) && source <= editedAt)
+            return $"Источник старше вашей правки ({editedAt:yyyy-MM-dd}): замена и оспаривание после неё идут через ревью";
+        if (context.TargetSourceTime is not { } target)
+            return "Неизвестно, когда написан источник утверждения: без этого не понять, какое из двух новее";
+        if (source <= target)
+            return "Источник не новее заменяемого утверждения: старый источник не стирает более свежее знание";
+        return null;
+    }
+
     // internal: ветка «вне известных» тестируется напрямую — Decide отсекает неизвестные
     // операции раньше, и она работает только для операции, добавленной в OpValues позже
     // (promote/graduate): молча «auto» ей быть нельзя (хвост ревью S4d).
@@ -192,6 +216,10 @@ public static class WikiApplyPolicy
             Auto("утверждение в «Сводку»/«Хронологию»: применяется само (§12г)"),
         WikiPackage.OpLink =>
             Auto("связь между страницами: применяется само (§12г)"),
+        WikiPackage.OpSupersede =>
+            Auto("замещение: источник новее заменяемого утверждения и вашей правки (ADR-038)"),
+        WikiPackage.OpConflict =>
+            Auto("оспаривание: источник новее оспариваемого утверждения и вашей правки (ADR-038)"),
         _ =>
             Inbox($"операция «{op.Op ?? "—"}» вне известных автоприменению: её риска политика не знает"),
     };

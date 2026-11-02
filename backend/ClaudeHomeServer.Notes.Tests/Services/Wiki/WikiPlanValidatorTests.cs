@@ -353,6 +353,58 @@ public class WikiPlanValidatorTests
         r.Accepted.Should().ContainSingle().Which.Class.Should().Be("session×supersede");
     }
 
+    // ─── B4c: время цели замены — из карточек сносок утверждения ──────────────
+
+    private static WikiPlanValidator.Result RunReplacement(
+        string targetCardFile, DateTimeOffset? newSource, string op = WikiPackage.OpSupersede)
+    {
+        var snapshot = new WikiGate.Draft[]
+            { new(CardPath, CardFile), new(ForeignCardPath, targetCardFile), new(PagePath, PageFile) };
+        return WikiPlanValidator.Validate(
+            Plan(Op(op, "Сущность", 0, "Прежний план был остаться на Windows")),
+            Claims(GoodClaim), Src, Section, [WikiSections.Common], snapshot,
+            new() { NewSourceTime = newSource });
+    }
+
+    private static string WithWritten(string cardFile, string written) =>
+        cardFile.Replace("captured: 2026-10-26", $"captured: 2026-10-26\nwritten: {written}");
+
+    [Fact]
+    public void Validate_Замена_ИсточникНовееЦели_Само_ИсточникСтарше_ВоВходящих()
+    {
+        var target = WithWritten(ForeignCardFile, "2026-10-01T00:00:00+00:00");
+
+        RunReplacement(target, DateTimeOffset.Parse("2026-10-02T00:00:00+00:00"))
+            .Accepted.Should().ContainSingle().Which.Decision.Should().Be(WikiPackage.DecisionAuto);
+        var older = RunReplacement(target, DateTimeOffset.Parse("2026-09-30T00:00:00+00:00")).Accepted.Single();
+        older.Decision.Should().Be(WikiPackage.DecisionInbox);
+        older.Reason.Should().Contain("не новее заменяемого");
+    }
+
+    [Fact]
+    public void Validate_Замена_КарточкаЦелиБезWritten_ВремяНеизвестно_ВоВходящих_NotCaptured()
+    {
+        // captured карточки цели (2026-10-26) старше источника, но он НЕ время написания: подставлять нельзя.
+        var op = RunReplacement(ForeignCardFile, DateTimeOffset.Parse("2026-12-01T00:00:00+00:00")).Accepted.Single();
+
+        op.Decision.Should().Be(WikiPackage.DecisionInbox);
+        op.Reason.Should().Contain("Неизвестно, когда написан источник утверждения");
+    }
+
+    [Fact]
+    public void Validate_Замена_ЦельЧеловека_ВремяЦели_ЭтоCaptured_ТеПравилаЧтоУИИ()
+    {
+        var human = ForeignCardFile.Replace("origin: session", "origin: human")
+            .Replace("ref: session:s0#m1-4", "ref: human:1");
+
+        var later = RunReplacement(human, DateTimeOffset.Parse("2026-10-27T00:00:00+00:00")).Accepted.Single();
+        var earlier = RunReplacement(human, DateTimeOffset.Parse("2026-10-25T00:00:00+00:00")).Accepted.Single();
+
+        later.Decision.Should().Be(WikiPackage.DecisionAuto);
+        later.Class.Should().EndWith(WikiPackage.HumanTargetSuffix);
+        earlier.Decision.Should().Be(WikiPackage.DecisionInbox);
+    }
+
     // ─── M2 (ревью S6b-2): дословность — только для сносок этого пакета ───────
 
     [Fact]

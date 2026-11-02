@@ -14,7 +14,9 @@
 // (1) в WikiSettings переставить блоки («Отбор чатов» раньше «Применения») → «в порядке макета»
 //     краснеет;
 // (2) убрать строку-точку расширения из контейнера → «место — точка расширения» краснеет;
-// (3) встроить в контейнер текстовую заглушку «Ночного разбора» → «не встроен» краснеет.
+// (3) встроить в контейнер текстовую заглушку «Ночного разбора» → «не встроен» краснеет;
+// (4) в WIKI_SUBTABS подставить записи «settings» заглушку (stubNote) или другой component →
+//     тест проводки краснеет (доработка по ревью R-S7d-3).
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -24,6 +26,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   mount, installFakeDom, uninstallFakeDom, textNodes,
 } from '../../../../components/chat/__tests__/fakeDom';
+import { WIKI_SUBTABS } from '../wikiTabs';
 import { WikiSettings } from '../WikiSettings';
 
 vi.mock('../../../../lib/signalr', async (orig) => ({
@@ -132,6 +135,14 @@ afterEach(() => {
 });
 
 describe('контейнер «Настройки» (S7d-3)', () => {
+  it('подвкладка «Настройки» в реестре ведёт на контейнер настроек', () => {
+    const settings = WIKI_SUBTABS.find(t => t.id === 'settings')!;
+    expect(settings.label).toBe('Настройки');
+    expect(settings.component).toBe(WikiSettings);
+    // заглушки нет: подкладка сделана (S7d-3) — WikiTab не должен рисовать на ней EmptyState
+    expect(settings.stubNote).toBeUndefined();
+  });
+
   it('блоки «Применение» и «Отбор чатов» на подвкладке в порядке макета', async () => {
     const c = render();
     await settle();
@@ -162,6 +173,8 @@ describe('контейнер «Настройки» (S7d-3)', () => {
     const marker = 'Точка расширения «Ночного разбора»';
     const markerLines = src.split('\n').filter(l => l.includes(marker));
     expect(markerLines.length).toBe(1);
-    expect(src.indexOf(marker)).toBeLessThan(src.indexOf('<WikiApplySettings />'));
+    // без закрытия тега: поиск краснеет только на уходе блока из файла, а не на форматной
+    // правке `<WikiApplySettings />` → `<WikiApplySettings/>` (доработка по ревью R-S7d-3)
+    expect(src.indexOf(marker)).toBeLessThan(src.indexOf('<WikiApplySettings'));
   });
 });

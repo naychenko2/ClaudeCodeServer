@@ -248,6 +248,45 @@ public class HumanEditCommitterTests : IDisposable
     }
 
     [Fact]
+    public async Task Корень_ниже_корня_проекта_принимается_и_коммитится_в_свой_репозиторий()
+    {
+        var (project, human) = await SetupAsync(shared: true);
+        var sub = Path.Combine(_repo, "sub");
+        Directory.CreateDirectory(sub);
+        await _git.InitAsync(null, sub);
+        await _git.RunAsync(null, sub, ["config", "user.email", "test@test"]);
+        await _git.RunAsync(null, sub, ["config", "user.name", "Тест"]);
+        await File.WriteAllTextAsync(Path.Combine(sub, "x.md"), "правка\n");
+
+        _sut.Record(project.Id, sub, "x.md", human.Id);
+        _sut.PendingAuthor(sub, "x.md").Should().NotBeNull();
+        await _sut.StopAsync(CancellationToken.None);
+
+        var log = await _git.RunAsync(null, sub, ["log", "--format=%an|%s|%(trailers:key=CCS-User,valueonly)"]);
+        log.Stdout.Should().Contain(human.Id);
+    }
+
+    [Fact]
+    public async Task Префикс_сосед_корня_проекта_не_попадает_в_буфер_и_не_коммитится()
+    {
+        var (project, human) = await SetupAsync(shared: true);
+        // «repo2» начинается с «repo», но не лежит под ним: сверка без разделителя его пропустила бы
+        var neighbour = Path.Combine(_dir, "repo2");
+        Directory.CreateDirectory(neighbour);
+        await _git.InitAsync(null, neighbour);
+        await _git.RunAsync(null, neighbour, ["config", "user.email", "test@test"]);
+        await _git.RunAsync(null, neighbour, ["config", "user.name", "Тест"]);
+        await File.WriteAllTextAsync(Path.Combine(neighbour, "x.md"), "чужое\n");
+
+        _sut.Record(project.Id, neighbour, "x.md", human.Id);
+        _sut.PendingAuthor(neighbour, "x.md").Should().BeNull();
+        await _sut.StopAsync(CancellationToken.None);
+
+        var count = await _git.RunAsync(null, neighbour, ["rev-list", "--all", "--count"]);
+        count.Stdout.Trim().Should().Be("0");
+    }
+
+    [Fact]
     public async Task Пользователь_не_из_проекта_не_попадает_в_буфер()
     {
         var (project, _) = await SetupAsync(shared: true);

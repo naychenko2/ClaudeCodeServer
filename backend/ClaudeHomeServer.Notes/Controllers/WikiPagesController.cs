@@ -5,6 +5,7 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Notes.Wiki;
+using ClaudeHomeServer.Services.Spheres;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -34,12 +35,15 @@ public class WikiPagesController : ControllerBase
     private readonly WikiApplyService _apply;
     private readonly IProjectManager _projects;
     private readonly IFeatureFlagGate? _flags;
+    private readonly ISphereDirectory? _spheres;
 
-    public WikiPagesController(WikiApplyService apply, IProjectManager projects, IFeatureFlagGate? flags)
+    public WikiPagesController(WikiApplyService apply, IProjectManager projects, IFeatureFlagGate? flags,
+        ISphereDirectory? spheres = null)
     {
         _apply = apply;
         _projects = projects;
         _flags = flags;
+        _spheres = spheres;
     }
 
     // Коды отказов — контракт для фронта, устойчивые строки (как в WikiController).
@@ -79,7 +83,7 @@ public class WikiPagesController : ControllerBase
 
         var (key, refusal) = ResolveWritableSection(userId, req.Section, req.Page);
         if (refusal is not null) return refusal;
-        return ToResult(await _apply.EditPageAsync(userId, key!, req.Page!, req.BaseHash, req.Content), req.Page!);
+        return ToResult(userId, await _apply.EditPageAsync(userId, key!, req.Page!, req.BaseHash, req.Content), req.Page!);
     }
 
     /// <summary>POST /api/wiki/pages/restore {section, page, baseHash, current, restore} —
@@ -97,7 +101,7 @@ public class WikiPagesController : ControllerBase
 
         var (key, refusal) = ResolveWritableSection(userId, req.Section, req.Page);
         if (refusal is not null) return refusal;
-        return ToResult(
+        return ToResult(userId,
             await _apply.RestorePageAsync(userId, key!, req.Page!, req.BaseHash, req.Current, req.Restore), req.Page!);
     }
 
@@ -136,11 +140,18 @@ public class WikiPagesController : ControllerBase
         return (section, null);
     }
 
+    // Живое имя раздела для текста отказа (как в WikiController): чужой проект и сирота — null.
+    private string? LiveNameOrNull(string userId, string key) =>
+        WikiSections.TryProjectId(key, out var projectId)
+            ? _projects.GetById(projectId) is { } p && p.OwnerId == userId ? p.Name : null
+            : WikiSections.TrySphereId(key, out var sphereId) ? _spheres?.SphereName(userId, sphereId)
+            : key switch { WikiSections.Common => "Общее", WikiSections.Personal => "Личное", _ => null };
+
     private static bool IsSectionKey(string key) =>
         key is WikiSections.Common or WikiSections.Personal
         || WikiSections.TryProjectId(key, out _) || WikiSections.TrySphereId(key, out _);
 
-    private IActionResult ToResult(WikiApplyService.HumanEditResult res, string page) => res.Outcome switch
+    private IActionResult ToResult(string userId, WikiApplyService.HumanEditResult res, string page) => res.Outcome switch
     {
         WikiApplyService.HumanEditOutcome.Applied =>
             Ok(new { status = "applied", packageId = res.PackageId, hash = res.Hash, content = res.Content }),
@@ -153,7 +164,8 @@ public class WikiPagesController : ControllerBase
         }),
         WikiApplyService.HumanEditOutcome.Drift => StatusCode(409, new { code = "wiki_drift", message = res.Reason }),
         WikiApplyService.HumanEditOutcome.Invalid =>
-            BadRequest(new { code = CodeInvalid, message = res.Reason, violations = res.Violations }),
+            BadRequest(new { code = CodeInvalid, message = res.Reason, violations = res.Violations,
+                issues = WikiGateIssues.Classify(res.Violations, page, k => LiveNameOrNull(userId, k)) }),
         _ => StatusCode(409, new { code = "wiki_refused", message = res.Reason }),
     };
 }

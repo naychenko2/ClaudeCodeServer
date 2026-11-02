@@ -258,6 +258,78 @@ public class WikiControllerPagesTests : IDisposable
         body.GetProperty("message").GetString().Should().Contain("status");
     }
 
+    // ─── 3a. SV1-Г: issues с кодами в том же 400 (violations прежние) ────────
+
+    private JsonElement FirstIssue(JsonElement body)
+    {
+        body.GetProperty("code").GetString().Should().Be("wiki_edit_invalid");
+        body.GetProperty("violations").GetArrayLength().Should().BeGreaterThan(0, "violations остаются как были");
+        body.GetProperty("issues").GetArrayLength().Should().Be(body.GetProperty("violations").GetArrayLength());
+        return body.GetProperty("issues")[0];
+    }
+
+    [Fact]
+    public async Task Edit_ССылкойВЧужойПроект_issues_wiki_link_sideways_ИмяПроектаБезGuid()
+    {
+        Directory.CreateDirectory(Path.Combine(_dir, "repo", User, "Соседний"));
+        var other = _projects.Create("Соседний", Path.Combine(_dir, "repo", User, "Соседний"), User, User);
+        var link = $"Проекты/{other.Id}/Чужая страница";
+        var res = await Controller().Edit(EditReq(Replace(PageText(), Statement, Statement + $" См. [[{link}]].")));
+        var issue = FirstIssue(Json(res, 400));
+        issue.GetProperty("code").GetString().Should().Be("wiki_link_sideways");
+        issue.GetProperty("link").GetString().Should().Be(link);
+        issue.GetProperty("page").GetString().Should().Be(_pageKey);
+        var message = issue.GetProperty("message").GetString()!;
+        message.Should().Contain("Соседний");
+        message.Should().NotContain(other.Id);
+    }
+
+    [Fact]
+    public async Task Edit_СсылкаБезНазначения_issues_wiki_link_unknown()
+    {
+        var res = await Controller().Edit(EditReq(Replace(PageText(), Statement, Statement + " См. [[Несуществующая страница]].")));
+        var issue = FirstIssue(Json(res, 400));
+        issue.GetProperty("code").GetString().Should().Be("wiki_link_unknown");
+        issue.GetProperty("link").GetString().Should().Be("Несуществующая страница");
+    }
+
+    [Fact]
+    public async Task Edit_СсылкаСНеразобраннымПрефиксом_issues_wiki_link_prefix()
+    {
+        var res = await Controller().Edit(EditReq(Replace(PageText(), Statement, Statement + " См. [[нет/раздела/Страница]].")));
+        var issue = FirstIssue(Json(res, 400));
+        issue.GetProperty("code").GetString().Should().Be("wiki_link_prefix");
+        issue.GetProperty("link").GetString().Should().Be("нет/раздела/Страница");
+    }
+
+    [Fact]
+    public async Task Edit_КодовоеПолеШапки_issues_wiki_header_field()
+    {
+        var res = await Controller().Edit(EditReq(Replace(PageText(), "status: active", "status: stale")));
+        FirstIssue(Json(res, 400)).GetProperty("code").GetString().Should().Be("wiki_header_field");
+    }
+
+    [Fact]
+    public async Task Edit_СменаЗаголовка_issues_wiki_title_change()
+    {
+        var res = await Controller().Edit(EditReq(Replace(PageText(), "# Знание", "# Иное")));
+        FirstIssue(Json(res, 400)).GetProperty("code").GetString().Should().Be("wiki_title_change");
+    }
+
+    [Fact]
+    public async Task Edit_СноскаВЗаметках_issues_wiki_notes_footnote()
+    {
+        var res = await Controller().Edit(EditReq(PageText().TrimEnd() + "\n\n## Заметки\nМой комментарий [^s1]\n"));
+        FirstIssue(Json(res, 400)).GetProperty("code").GetString().Should().Be("wiki_notes_footnote");
+    }
+
+    [Fact]
+    public async Task Edit_НеразобранныйТекст_issues_wiki_parse()
+    {
+        var res = await Controller().Edit(EditReq("просто текст без шапки и заголовка"));
+        FirstIssue(Json(res, 400)).GetProperty("code").GetString().Should().Be("wiki_parse");
+    }
+
     // ─── 4. Конкурентность: baseHash под замком раздела ────────────────────
 
     [Fact]
@@ -421,7 +493,7 @@ public class WikiControllerPagesTests : IDisposable
     {
         var obj = result.Should().BeAssignableTo<ObjectResult>().Which;
         obj.StatusCode.Should().Be(status, JsonSerializer.Serialize(obj.Value));
-        return JsonDocument.Parse(JsonSerializer.Serialize(obj.Value)).RootElement.Clone();
+        return JsonDocument.Parse(JsonSerializer.Serialize(obj.Value, new JsonSerializerOptions(JsonSerializerDefaults.Web))).RootElement.Clone();
     }
 
     private static void AssertCode(IActionResult result, int status, string code) =>

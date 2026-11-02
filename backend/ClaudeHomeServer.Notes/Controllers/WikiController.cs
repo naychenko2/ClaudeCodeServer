@@ -352,7 +352,7 @@ public class WikiController : ControllerBase
 
         if (!mine)
             return OpResult(await _keeper.AdoptAsync(userId, key!, req.Page));
-        return MineResult(await _apply.AdoptMineAsync(userId, key!, req.Page, req.BaseHash), req.Page);
+        return MineResult(userId, await _apply.AdoptMineAsync(userId, key!, req.Page, req.BaseHash), req.Page);
     }
 
     // Гейт совместной правки: выключен любой из двух флагов — 409 (как в WikiPagesController).
@@ -363,7 +363,7 @@ public class WikiController : ControllerBase
     private IActionResult UnifiedOffRefusal() =>
         StatusCode(409, new { code = CodeUnifiedOff, message = "правка страниц выключена: функция недоступна" });
 
-    private IActionResult MineResult(WikiApplyService.HumanEditResult res, string page) => res.Outcome switch
+    private IActionResult MineResult(string userId, WikiApplyService.HumanEditResult res, string page) => res.Outcome switch
     {
         WikiApplyService.HumanEditOutcome.Applied =>
             Ok(new { status = "applied", packageId = res.PackageId, hash = res.Hash, content = res.Content }),
@@ -376,7 +376,8 @@ public class WikiController : ControllerBase
         }),
         WikiApplyService.HumanEditOutcome.Drift => StatusCode(409, new { code = "wiki_drift", message = res.Reason }),
         WikiApplyService.HumanEditOutcome.Invalid =>
-            BadRequest(new { code = CodeEditInvalid, message = res.Reason, violations = res.Violations }),
+            BadRequest(new { code = CodeEditInvalid, message = res.Reason, violations = res.Violations,
+                issues = WikiGateIssues.Classify(res.Violations, page, k => LiveNameOrNull(userId, k)) }),
         _ => StatusCode(409, new { code = "wiki_refused", message = res.Reason }),
     };
 
@@ -464,7 +465,8 @@ public class WikiController : ControllerBase
             WikiNoteTransfer.TransferOutcome.Exists =>
                 StatusCode(409, new { code = CodePageChanged, message = res.Reason }),
             WikiNoteTransfer.TransferOutcome.Invalid =>
-                BadRequest(new { code = CodeEditInvalid, message = res.Reason, violations = res.Violations }),
+                BadRequest(new { code = CodeEditInvalid, message = res.Reason, violations = res.Violations,
+                    issues = WikiGateIssues.Classify(res.Violations ?? [], res.Page ?? "", k => LiveNameOrNull(userId, k)) }),
             WikiNoteTransfer.TransferOutcome.NotTransferable =>
                 BadRequest(new { code = CodeNoteId, message = res.Reason }),
             _ => StatusCode(409, new { code = "wiki_refused", message = res.Reason }),

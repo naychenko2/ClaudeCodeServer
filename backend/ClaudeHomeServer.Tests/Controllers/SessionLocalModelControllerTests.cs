@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -40,10 +41,11 @@ public class SessionLocalModelControllerTests : IClassFixture<SessionLocalModelC
 
     public sealed class MeterHost : TestWebApplicationFactory
     {
+        public FakeMeter Meter { get; } = new();
+
         public MeterHost()
         {
-            ExtraServices = services =>
-                services.AddSingleton<ILocalModelTurnMeter>(new FakeMeter(MeterSummary));
+            ExtraServices = services => services.AddSingleton<ILocalModelTurnMeter>(Meter);
         }
     }
 
@@ -116,6 +118,7 @@ public class SessionLocalModelControllerTests : IClassFixture<SessionLocalModelC
     {
         using var client = _hosts.Metered.CreateAuthenticatedClient();
         var sessionId = await CreateSessionAsync(client, _hosts.Metered);
+        _hosts.Metered.Meter.Set(sessionId, MeterSummary);
         var resp = await client.GetAsync($"/api/sessions/{sessionId}/local-model");
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
         var last = await resp.Content.ReadFromJsonAsync<JsonElement>();
@@ -128,10 +131,30 @@ public class SessionLocalModelControllerTests : IClassFixture<SessionLocalModelC
         turn.GetProperty("outTokens").GetInt32().Should().Be(128);
     }
 
-    // Фейковый счётчик хода: один и тот же итог на любой сессии.
-    private sealed class FakeMeter(LocalModelTurnSummary? summary) : ILocalModelTurnMeter
+    // Итог привязан к своей сессии: у соседней сессии того же владельца на том же хосте итога нет.
+    // Мутация: отдавать итог любой сессии (GetLastTurn игнорирует sessionId) — тест краснеет.
+    [Fact]
+    public async Task ИтогХода_ПривязанКСвоейСессии()
     {
+        using var client = _hosts.Metered.CreateAuthenticatedClient();
+        var withTurn = await CreateSessionAsync(client, _hosts.Metered);
+        var without = await CreateSessionAsync(client, _hosts.Metered);
+        _hosts.Metered.Meter.Set(withTurn, MeterSummary);
+
+        var resp = await client.GetAsync($"/api/sessions/{without}/local-model");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("lastTurn").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    // Фейковый счётчик хода: итог выдаётся только той сессии, для которой его задал тест.
+    public sealed class FakeMeter : ILocalModelTurnMeter
+    {
+        private readonly ConcurrentDictionary<string, LocalModelTurnSummary> _bySession = new();
+
+        public void Set(string sessionId, LocalModelTurnSummary summary) => _bySession[sessionId] = summary;
         public IReadOnlyList<TurnChatLive> ActiveChats() => [];
-        public LocalModelTurnSummary? GetLastTurn(string sessionId) => summary;
+        public LocalModelTurnSummary? GetLastTurn(string sessionId) =>
+            _bySession.TryGetValue(sessionId, out var summary) ? summary : null;
     }
 }

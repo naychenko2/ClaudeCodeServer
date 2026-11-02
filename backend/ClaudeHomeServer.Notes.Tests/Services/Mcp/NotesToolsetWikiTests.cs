@@ -105,14 +105,16 @@ public class NotesToolsetWikiTests : IDisposable
 
     // ── обвязка вызова ──
 
-    private (NotesToolset Toolset, McpToolCallContext Ctx) McpEnv(string? projectId, string sessionId = "s-call")
+    private (NotesToolset Toolset, McpToolCallContext Ctx) McpEnv(string? projectId, string sessionId = "s-call",
+        ClaudeHomeServer.Services.Composition.IFeatureFlagGate? flags = null)
     {
         var session = new Session { Id = sessionId, OwnerId = User, ProjectId = projectId, Name = "Чат вызова" };
         _sessions.All.Add(session);
         return (
             new NotesToolset(new AllowAllPersonas(), new AllowAllBindings(), new OwnSession(session),
                 new TestSessionBroadcaster(), _notes, _kb, _ai, _noteTasks,
-                _config, _ingest, _capture, _chatIngest, _sessions, _spheres, _projects),
+                _config, _ingest, _capture, _chatIngest, _sessions, _spheres, _projects,
+                flags ?? new WikiFlagOn()),
             new McpToolCallContext(User, sessionId, sessionId));
     }
 
@@ -442,6 +444,58 @@ public class NotesToolsetWikiTests : IDisposable
             AssertDenied(res, "sessionRange");
         }
         Directory.Exists(SafePath.Join(Root, "pages/Проекты/p1/Источники")).Should().BeFalse();
+    }
+
+    // ── гейт флага llm-wiki на входах с расходом модели (хвост финала W1-3) ──
+
+    private sealed class WikiFlagOff : ClaudeHomeServer.Services.Composition.IFeatureFlagGate
+    {
+        public bool IsEnabled(string userId, string key) => false;
+    }
+
+    private int PackageCount() =>
+        Directory.Exists(SafePath.Join(Root, "keeper/packages"))
+            ? Directory.GetFiles(SafePath.Join(Root, "keeper/packages"), "*", SearchOption.AllDirectories).Length
+            : 0;
+
+    [Fact]
+    public void FlagOff_WikiIngest_ОтказБезПакетаИЗаявки()
+    {
+        SeedWiki();
+        var note = _notes.Create(User, new CreateNoteRequest(Title: "Заметка", Content: "Содержимое заметки.", Source: "p1"));
+        var (toolset, ctx) = McpEnv("p1", flags: new WikiFlagOff());
+        var before = PackageCount();
+
+        var res = Call(toolset, ctx, "wiki_ingest", Args(("source", note.Id)));
+
+        AssertDenied(res, "выключена");
+        PackageCount().Should().Be(before, "при выключенном флаге пакет не создаётся");
+        File.Exists(SafePath.Join(Root, "pages/Проекты/p1/Источники")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void FlagOff_WikiAddFact_ОтказБезЗаписи()
+    {
+        SeedWiki();
+        var (toolset, ctx) = McpEnv("p1", flags: new WikiFlagOff());
+        var before = PackageCount();
+
+        var res = Call(toolset, ctx, "wiki_add_fact", Args(
+            ("fact", "Нарезку делает код"), ("quote", "Решили: нарезку делает код"), ("sessionRange", "m1-2")));
+
+        AssertDenied(res, "выключена");
+        PackageCount().Should().Be(before);
+    }
+
+    [Fact]
+    public void FlagOff_ЧитающиеИнструментыНеГейтятся()
+    {
+        SeedWiki();
+        var (toolset, ctx) = McpEnv("p1", flags: new WikiFlagOff());
+
+        Call(toolset, ctx, "wiki_status", Args()).IsError.Should().BeFalse();
+        toolset.ToolsFor(ctx).Select(t => t.Name).Should().Contain(["wiki_ingest", "wiki_add_fact", "wiki_query", "wiki_status"],
+            "состав tools/list от флага не зависит");
     }
 
     // ── обвязка швов ──

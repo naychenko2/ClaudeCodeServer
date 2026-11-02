@@ -57,7 +57,9 @@ public sealed class NotesToolset(
     WikiChatIngestService? wikiChat = null,
     ISessionDirectory? sessionsDir = null,
     ISphereDirectory? spheres = null,
-    IProjectManager? projects = null) : IMcpParameterizedToolset
+    IProjectManager? projects = null,
+    // Шов флага llm-wiki — та же опциональная зависимость, что у WikiLintService: нет шва — выключено.
+    IFeatureFlagGate? flags = null) : IMcpParameterizedToolset
 {
     // Корень data — для признака заведённой вики (WikiPaths) и корня чтения её разделов.
     // Та же формула, что у всех сервисов вертикали (DataPath указывает на projects.json).
@@ -771,11 +773,19 @@ public sealed class NotesToolset(
         && !value.Any(char.IsControl)
         && !value.Contains("..", StringComparison.Ordinal);
 
+    // Входы с расходом модели и записью заявки гейтятся флагом llm-wiki (читающие wiki_query/wiki_status — нет).
+    // Флаг читается в момент вызова; проверка идёт до любой записи. Состав tools/list не зависит от флага.
+    private bool IsLlmWikiOn(string ownerId) =>
+        flags?.IsEnabled(ownerId, FeatureFlagKeys.LlmWiki) == true;
+
+    private const string WikiFlagOffText = "Функция выключена: включите «LLM-вики» в экспериментальных функциях.";
+
     private async Task<McpToolCallResult> WikiIngestCallAsync(
         JsonObject arguments, string ownerId, Session chat, CancellationToken ct)
     {
         try
         {
+            if (!IsLlmWikiOn(ownerId)) return Deny(WikiFlagOffText);
             if (wikiIngest is null || wikiCapture is null || wikiChat is null)
                 return Deny("Горизонталь вики не собрана (подсистема Notes отключена).");
             if (WikiRootOrRefusal(ownerId, out var root) is { } notReady) return Deny(notReady);
@@ -903,6 +913,7 @@ public sealed class NotesToolset(
     {
         try
         {
+            if (!IsLlmWikiOn(ownerId)) return Deny(WikiFlagOffText);
             if (wikiIngest is null || wikiCapture is null)
                 return Deny("Горизонталь вики не собрана (подсистема Notes отключена).");
             if (WikiRootOrRefusal(ownerId, out var root) is { } notReady) return Deny(notReady);

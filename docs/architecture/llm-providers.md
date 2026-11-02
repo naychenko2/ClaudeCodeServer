@@ -508,7 +508,9 @@ SHA-256 и сравнивается с `ClaudeSession._lastTurnRecallHash`; со
 это цена за отсутствие ещё одного стора, а не дефект.
 
 **Сторож — `ClaudeSessionPromptSectionsOrderTests`**
-([тесты](../../backend/ClaudeHomeServer.Tests/Services/ClaudeSessionPromptSectionsOrderTests.cs)):
+([тесты](../../backend/ClaudeHomeServer.Llm.Tests/Services/ClaudeSessionPromptSectionsOrderTests.cs); исходный
+класс разрезан по темам на четыре с общей фикстурой — хвост хода и состояния редакторов в `…TailTests`,
+подсказки `run_tests`/`build` в `…HintsTests`, правило local-media в `…LocalMediaTests`):
 один тест держит порядок секций в системном блоке и пустой хвост после слоя персоны, второй —
 `[Theory]` по включённой и выключенной ручке: при включённой маркеры нестабильных секций
 обязаны отсутствовать в фактическом аргументе `--append-system-prompt`, при выключенной —

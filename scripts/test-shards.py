@@ -27,13 +27,15 @@
   python3 -I scripts/test-shards.py --run-fast backend/X.slnx --split backend/A.Tests=3,backend/B.Tests=2 \
       --filter "<фильтр Fast>" --results DIR
       Fast предгейта: проекты из --split идут шардами по классам, остальные тестовые проекты решения —
-      одним процессом на «rest»-slnx; всё параллельно, TRX в одной папке, стена и пик RSS общие.
+      одним процессом на «rest»-slnx; всё параллельно, TRX и логи — в подпапке прогона DIR/<метка>-<pid>
+      (профиль следующего прогона берётся из самой свежей), стена и пик RSS общие.
 """
 import argparse
 import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -235,9 +237,10 @@ def verify(tests, shards):
 
 
 def median(values):
+    """Нижняя медиана: при чётном числе значений — меньшее из двух средних. Среднее двух не отсекло бы
+    выброс при двух профилях (6 с и 78 с дали бы 42 с), нижняя берёт спокойный прогон."""
     v = sorted(values)
-    mid = len(v) // 2
-    return v[mid] if len(v) % 2 else (v[mid - 1] + v[mid]) / 2
+    return v[(len(v) - 1) // 2]
 
 
 def split_profiles(path):
@@ -249,8 +252,11 @@ def load_profile(path):
     (None, None, None). Профиль без разбивки на проходы даёт fast = None: раскладка тогда по сумме.
 
     path — один файл или несколько через запятую («run1.json,run2.json,run3.json»): секунды и Fast
-    класса — МЕДИАНА по профилям, где он есть. Один прогон под нагрузкой раздувает вес класса в разы
-    (R3: 78 с против 6 с в покое) и ломает раскладку, медиана трёх спокойных прогонов эту помеху отсекает."""
+    класса — МЕДИАНА (нижняя, см. median) по профилям, где он есть. Один прогон под нагрузкой раздувает вес класса
+    в разы (R3: 78 с против 6 с в покое) и ломает раскладку, медиана трёх спокойных прогонов эту помеху отсекает.
+    Секунды и Fast класса берутся по ОДНОМУ подмножеству профилей — тем, где есть разбивка Fast: на смешанном
+    наборе (часть профилей старого формата без «fast») иначе секунды шли бы по всем файлам, а Fast — по части,
+    и класс терял Fast-стоимость или получал Fast из чужого прогона."""
     requested = split_profiles(path)
     files = [p for p in requested if os.path.exists(p)]
     missing = [p for p in requested if p not in files]
@@ -260,18 +266,21 @@ def load_profile(path):
               f"использовано {len(files)} из {len(requested)}", file=sys.stderr)
     if not files:
         return None, None, None
-    seconds, fasts, projects = {}, {}, {}
+    rows, projects = {}, {}
     for p in files:
         with open(p, encoding="utf-8") as f:
             classes = json.load(f)["classes"]
         for c, v in classes.items():
-            seconds.setdefault(c, []).append(v["seconds"])
-            if "fast" in v:
-                fasts.setdefault(c, []).append(v["fast"])
+            rows.setdefault(c, []).append((v["seconds"], v.get("fast")))
             if v.get("project"):
                 projects.setdefault(c, v["project"])
-    fast = {c: median(v) for c, v in fasts.items()}
-    return {c: median(v) for c, v in seconds.items()}, projects, fast or None
+    seconds, fast = {}, {}
+    for c, r in rows.items():
+        with_fast = [x for x in r if x[1] is not None]
+        seconds[c] = median([x[0] for x in (with_fast or r)])
+        if with_fast:
+            fast[c] = median([x[1] for x in with_fast])
+    return seconds, projects, fast or None
 
 
 def load_timings(path):
@@ -543,14 +552,40 @@ def parse_split(text):
     return out
 
 
+# Подпапка прогона run_fast в --results: «метка времени-pid». Хранятся последние RUN_DIRS_KEEP, остальные чистятся
+RUN_DIR = re.compile(r"^\d{8}-\d{6}-\d+$")
+RUN_DIRS_KEEP = 5
+
+
+def run_dirs(results):
+    """Подпапки прогонов run_fast в results, от старой к новой (по mtime)."""
+    found = [os.path.join(results, d) for d in os.listdir(results)
+             if RUN_DIR.match(d) and os.path.isdir(os.path.join(results, d))]
+    return sorted(found, key=os.path.getmtime)
+
+
+def new_run_dir(results):
+    """Создаёт подпапку прогона и чистит старые: TRX разных прогонов не смешиваются ни в профиле, ни в
+    доказательстве шарда (чужой TRX того же префикса из параллельного прогона не покрывает убитый шард)."""
+    path = os.path.join(results, f"{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}")
+    os.makedirs(path, exist_ok=True)
+    for old in run_dirs(results)[:-RUN_DIRS_KEEP]:
+        shutil.rmtree(old, ignore_errors=True)
+    return path
+
+
 def calibrate(results):
-    """Профиль прошлого прогона из TRX той же папки (предгейт пишет в одну и ту же): раскладка без него
-    идёт по хешу класса и сваливает серийных гигантов в один шард. Нет TRX или профиль не прочитался —
+    """Профиль прошлого прогона: раскладка без него идёт по хешу класса и сваливает серийных гигантов в один
+    шард. Берётся САМАЯ СВЕЖАЯ подпапка прогона с TRX (прогон пишет в свою — два прогона подряд не смешиваются);
+    подпапок нет — плоский каталог как раньше, с окном --latest-run. Недописанная подпапка параллельного прогона
+    даёт неполный профиль: классы вне него уходят в шард по хешу. Нет TRX или профиль не прочитался —
     (None, None, None), раскладка по хешу."""
     if not os.path.isdir(results):
         return None, None, None
+    source = next((d for d in reversed(run_dirs(results))
+                   if any(f.lower().endswith(".trx") for f in os.listdir(d))), results)
     done = subprocess.run([sys.executable, "-I", os.path.join(os.path.dirname(os.path.abspath(__file__)), "test-profile.py"),
-                           results, "--json", "--latest-run"], capture_output=True, text=True)
+                           source, "--json", "--latest-run"], capture_output=True, text=True)
     if done.returncode != 0:
         return None, None, None
     import tempfile
@@ -595,6 +630,7 @@ def run_fast(slnx, split, results, timings, extra_filter, fast=None):
         print(summary(listings[path], shards, timings, fast))
         layouts.append((path, shards))
     os.makedirs(results, exist_ok=True)
+    results = new_run_dir(results)  # дальше всё (TRX, логи, доказательства) — в подпапке этого прогона
     procs, proofs, reports = [], [], []
     rest_path = os.path.join(os.path.dirname(slnx), "ClaudeHomeServer.FastRest.slnx")
     try:
@@ -659,6 +695,17 @@ def main_slnx(args, ap, timings, class_projects):
 
 
 def main(argv=None):
+    """Точка входа. PARALLEL — состояние модуля, которое main переопределяет под режим; после выхода оно
+    возвращается, иначе второй вызов main() в том же процессе (тесты, встраивание) унаследовал бы чужое."""
+    global PARALLEL
+    saved = PARALLEL
+    try:
+        return _main(argv)
+    finally:
+        PARALLEL = saved
+
+
+def _main(argv):
     global PARALLEL
     ap = argparse.ArgumentParser(description="Шарды тестов по классам с самопроверкой покрытия")
     ap.add_argument("--list", help="вывод `dotnet test --list-tests` (файл)")
@@ -677,6 +724,8 @@ def main(argv=None):
     ap.add_argument("--filter", dest="extra_filter", help="дополнительный фильтр к каждому шарду (--run)")
     args = ap.parse_args(argv)
     if args.parallel is not None:
+        if args.parallel <= 0:
+            ap.error("--parallel: ожидается число больше нуля")
         PARALLEL = args.parallel
     elif args.run or args.run_fast:
         PARALLEL = LOCAL_PARALLEL

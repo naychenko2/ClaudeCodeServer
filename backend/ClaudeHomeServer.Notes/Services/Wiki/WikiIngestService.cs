@@ -95,14 +95,16 @@ public sealed class WikiIngestService
     private readonly ISphereDirectory _spheres;
     private readonly WikiApplyService _apply;
     private readonly string _dataDir;
+    private readonly TimeProvider _time;
 
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> _sectionGates = new();
     private readonly object _inFlightLock = new();
     private readonly Dictionary<string, Task<IngestResult>> _inFlight = new();
 
     public WikiIngestService(ICheapTextRunner llm, ISphereDirectory spheres, WikiApplyService apply,
-        IConfiguration config)
+        IConfiguration config, TimeProvider? time = null)
     {
+        _time = time ?? TimeProvider.System;
         _llm = llm;
         _spheres = spheres;
         _apply = apply;
@@ -295,6 +297,9 @@ public sealed class WikiIngestService
                 DisabledClasses = settings.DisabledClasses,
                 // «личное в Общем» — решение о видимости принимает человек (ADR-036, решение 3).
                 SourceHomeIsPersonal = request.Home == WikiSections.Personal,
+                // Анти-петля (N7d): страницы, откатанные человеком за последние 7 дней.
+                RecentlyRevertedPages = WikiJournalReader.ReadRecentHumanReverts(
+                    root, _time.GetUtcNow().AddDays(-WikiApplyPolicy.RevertQuarantineDays)),
             };
             var verdict = WikiPlanValidator.Validate(
                 plan, claims, source, sectionKey, upChain, sectionPages, policy);

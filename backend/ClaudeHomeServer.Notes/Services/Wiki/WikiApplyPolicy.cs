@@ -21,6 +21,10 @@ public static class WikiApplyPolicy
     public const int MaxStatementsPerPackage = 30;
     public const int MaxPackagesPerPagePerNight = 1;
 
+    /// Анти-петля (N7d): страницу, откатанную человеком (revert пакета или retract источника)
+    /// менее стольких дней назад, автоприменение не меняет — пакет идёт во «Входящие».
+    public const int RevertQuarantineDays = 7;
+
     /// Вердикт политики: Decision — WikiPackage.DecisionAuto | DecisionInbox; Reason —
     /// текст для человека (для «inbox» обязателен: «Входящие» приходят с объяснением).
     public readonly record struct Verdict(string Decision, string Reason)
@@ -65,6 +69,13 @@ public static class WikiApplyPolicy
 
         /// Проход бэклога: лимит новых страниц на раздел — 15 вместо 5 (решение 12в).
         public bool IsBacklogPass { get; init; }
+
+        /// Страницы, которые человек откатил менее RevertQuarantineDays назад: путь →
+        /// дата отката. Собирает вызывающий из журнала (op revert|retract, actor user);
+        /// пусто — откатов нет. Гейтит только автопуть: применение человеком из «Входящих»
+        /// политику не спрашивает.
+        public IReadOnlyDictionary<string, DateTimeOffset> RecentlyRevertedPages { get; init; }
+            = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
     }
 
     /// Счётчики ночи для проверки лимитов (мера 3). Каждый считает текущий элемент вместе
@@ -105,6 +116,11 @@ public static class WikiApplyPolicy
             return Inbox("операция без страницы — политику не спросить: цель не названа");
         if (context.DisabledClasses.Contains(op.Class))
             return Inbox($"класс правки «{op.Class}» выключен — его правки идут через ревью человека");
+
+        // Анти-петля (N7d): откат человека сильнее любой автоматики — включая create по тому же
+        // пути (revert пакета с create удаляет страницу, и тот же источник создал бы её снова).
+        if (context.RecentlyRevertedPages.TryGetValue(op.Page, out var revertedAt))
+            return Inbox($"страницу откатил человек {revertedAt:yyyy-MM-dd}: автоприменение не меняет её {RevertQuarantineDays} дней");
 
         // 3. Риски — по строкам таблицы §12г.
         if (op.Op == WikiPackage.OpSupersede)

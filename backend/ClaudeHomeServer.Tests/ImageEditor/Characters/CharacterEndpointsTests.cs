@@ -21,8 +21,9 @@ public class CharacterEndpointsTests : IClassFixture<CharacterEndpointsTests.Hos
 
     public CharacterEndpointsTests(Hosts hosts) => _hosts = hosts;
 
-    // Хост на КОНФИГУРАЦИЮ, а не на тест: хосты поднимаются лениво и гасятся вместе с фикстурой.
-    // Состояние каждый тест заводит сам: фейки сбрасывает Use, проект и персонажей — CreateProject
+    // Хост на КОНФИГУРАЦИЮ, а не на тест: объекты фабрик создаются сразу, ASP.NET-хост внутри каждой
+    // стартует лениво; гасятся вместе с фикстурой. Состояние каждый тест заводит сам: фейки сбрасывает
+    // Use() хостов JobsHost и MediaHost (в самом Hosts метода нет), проект и персонажей — CreateProject
     // с уникальным именем и каталогом
     public sealed class Hosts : IDisposable
     {
@@ -173,7 +174,8 @@ public class CharacterEndpointsTests : IClassFixture<CharacterEndpointsTests.Hos
         body.GetProperty("available").GetBoolean().Should().BeTrue();
         body.GetProperty("items").EnumerateArray().Select(e => e.GetString()).Should().Equal(Own(withList, "a.safetensors"), Own(withList, "b.safetensors"));
 
-        foreach (var factory in new TestWebApplicationFactory[] { _hosts.Media.Use(null), _hosts.Plain })
+        var downHosts = new[] { (TestWebApplicationFactory)_hosts.Media.Use(null), _hosts.Plain };
+        foreach (var factory in downHosts)
         {
             var (pid, _) = CreateProject(factory, TestWebApplicationFactory.TestUsername);
             var resp = await factory.CreateAuthenticatedClient().GetAsync($"/api/projects/{pid}/image-editor/loras");

@@ -21,7 +21,6 @@ public class BuildConcurrencyGateTests
         await Task.WhenAny(task, Task.Delay(Beat)) == task;
 
     [Fact]
-    [Trait("Category", "Slow")]
     public async Task ПревышениеПотолка_СтавитВОчередь_ОсвобождениеПускаетСледующего()
     {
         var gate = new BuildConcurrencyGate(2);
@@ -31,7 +30,8 @@ public class BuildConcurrencyGateTests
         gate.Available.Should().Be(0);
 
         var third = gate.AcquireAsync(Heavy);
-        (await CompletedAsync(third)).Should().BeFalse("оба слота заняты — третий ждёт");
+        // Семафор без свободного слота не завершает WaitAsync синхронно — ждать пятисекундный срок незачем
+        third.IsCompleted.Should().BeFalse("оба слота заняты — третий ждёт");
 
         first.Dispose();
 

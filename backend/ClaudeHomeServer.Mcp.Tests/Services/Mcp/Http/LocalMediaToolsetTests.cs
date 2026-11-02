@@ -350,9 +350,12 @@ public class LocalMediaToolsetTests : IDisposable
     public async Task ПрогрессОжидания_ИдущаяЗадача_ШлётсяВЧатПоToolUseId()
     {
         var sent = new List<(string Session, Protocol.ServerMessage Message)>();
+        // Сигнал взводит заглушка отправки: ждём событие, а не паузу — под нагрузкой гейта первый опрос
+        // может прийтись уже за дедлайн ожидания
+        var firstSent = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var broadcaster = new Mock<ISessionBroadcaster>();
         broadcaster.Setup(b => b.ToSession(It.IsAny<string>(), It.IsAny<Protocol.ServerMessage>()))
-            .Callback<string, Protocol.ServerMessage>((s, m) => { lock (sent) sent.Add((s, m)); })
+            .Callback<string, Protocol.ServerMessage>((s, m) => { lock (sent) sent.Add((s, m)); firstSent.TrySetResult(); })
             .Returns(Task.CompletedTask);
         var env = Build(broadcaster: broadcaster.Object);
         var jobId = JsonNode.Parse((await env.Toolset.CallAsync("local_generate_image",
@@ -361,9 +364,14 @@ public class LocalMediaToolsetTests : IDisposable
         _comfy.Pending.Remove(promptId);
         _comfy.Running.Add(promptId);
 
-        await env.Toolset.CallAsync("local_jobs_wait",
-            new JsonObject { ["job_ids"] = new JsonArray(jobId), ["timeout_seconds"] = 1 },
-            env.Context with { ToolUseId = "toolu_wait1" }, default);
+        // Ожидание держим открытым (потолок 15 с), пока не придёт сигнал отправки; потом отменяем
+        using var cts = new CancellationTokenSource();
+        var wait = env.Toolset.CallAsync("local_jobs_wait",
+            new JsonObject { ["job_ids"] = new JsonArray(jobId), ["timeout_seconds"] = 15 },
+            env.Context with { ToolUseId = "toolu_wait1" }, cts.Token);
+        await firstSent.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        cts.Cancel();
+        try { await wait; } catch (OperationCanceledException) { }
 
         lock (sent)
         {

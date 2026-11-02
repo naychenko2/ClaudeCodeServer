@@ -239,24 +239,45 @@ public class AudioVoicesControllerTests : IClassFixture<AudioVoicesControllerTes
         Directory.CreateDirectory(localRoot);
         var localId = _factory.Services.GetRequiredService<ProjectManager>()
             .Create("loc-" + Guid.NewGuid().ToString("N")[..6], localRoot, _ownerId, TestWebApplicationFactory.TestUsername).Id;
-        var project = _factory.Services.GetRequiredService<ProjectManager>().GetById(localId)!;
+        var projects = _factory.Services.GetRequiredService<ProjectManager>();
+        var project = projects.GetById(localId)!;
         project.DeviceId = "dev";
         project.RootPath = trap;
 
-        var localVoices = $"/api/projects/{localId}/audio-editor/voices";
-        var responses = new[]
+        try
         {
-            await _client.GetAsync(localVoices),
-            await _client.PostAsync(localVoices, Form("Аня")),
-            await _client.DeleteAsync($"{localVoices}/anya"),
-        };
+            var localVoices = $"/api/projects/{localId}/audio-editor/voices";
+            var responses = new[]
+            {
+                await _client.GetAsync(localVoices),
+                await _client.PostAsync(localVoices, Form("Аня")),
+                await _client.DeleteAsync($"{localVoices}/anya"),
+            };
 
-        foreach (var r in responses)
-        {
-            r.StatusCode.Should().Be(HttpStatusCode.Conflict);
-            (await Json(r)).GetProperty("code").GetString().Should().Be(ProjectCapabilityGuard.Code);
+            foreach (var r in responses)
+            {
+                r.StatusCode.Should().Be(HttpStatusCode.Conflict);
+                (await Json(r)).GetProperty("code").GetString().Should().Be(ProjectCapabilityGuard.Code);
+            }
+            Directory.Exists(trap).Should().BeFalse();
         }
-        Directory.Exists(trap).Should().BeFalse();
+        finally
+        {
+            // «Битый» проект с несуществующим RootPath не должен жить в реестре общего хоста до конца класса
+            projects.Delete(localId);
+        }
+    }
+
+    [Fact]
+    public async Task Use_сбрасывает_счётчик_фейка()
+    {
+        var cloner = _hosts.MiniMax.Cloner;
+        await cloner.RunAsync(null!, null!, CancellationToken.None);
+        cloner.Runs.Should().Be(1);
+
+        _hosts.MiniMax.Use();
+
+        cloner.Runs.Should().Be(0);
     }
 
     [Fact]

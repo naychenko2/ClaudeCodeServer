@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -16,7 +17,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// офлайн. Офлайн — честный 409 с причиной, а не таймаут.
 /// </summary>
 [Trait("Category", "Host")]
-public sealed class ProjectRelayControllerTests : IClassFixture<ProjectRelayControllerTests.Host>
+public sealed class ProjectRelayControllerTests : IClassFixture<ProjectRelayControllerTests.Host>, IDisposable
 {
     private const string Device = "dev-relay";
 
@@ -29,10 +30,17 @@ public sealed class ProjectRelayControllerTests : IClassFixture<ProjectRelayCont
 
         public Task BeforeReturn = Task.CompletedTask;
 
+        // Задачи агентов открытых потоков: Reset дожидается их, чтобы агент прошлого теста не
+        // дописывал в общий хост, пока идёт следующий
+        private readonly ConcurrentQueue<Task> _agents = new();
+
         // Сброс перед каждым тестом: общий хост помнит счётчик и сценарий агента, а тесты
         // проверяют абсолютные числа (Opened == 0) и не должны видеть чужих остатков
         public void Reset()
         {
+            // Сценарий агента отработал или поток закрыт: ждём недолго, зависшего агента не ждём вечно
+            Task.WhenAll(_agents).Wait(TimeSpan.FromSeconds(2));
+            _agents.Clear();
             Opened = 0;
             Refuse = null;
             Agent = s => s.DisposeAsync().AsTask();
@@ -44,7 +52,10 @@ public sealed class ProjectRelayControllerTests : IClassFixture<ProjectRelayCont
             Interlocked.Increment(ref Opened);
             if (Refuse is not null) throw Refuse;
             var stream = new InProcessExecStream(Guid.NewGuid().ToString("N"));
-            stream.AgentTask = Task.Run(() => Agent(stream));
+            // Сценарий читаем сейчас, а не внутри Task.Run: Reset() следующего теста перезапишет поле
+            var agent = Agent;
+            stream.AgentTask = Task.Run(() => agent(stream));
+            _agents.Enqueue(stream.AgentTask);
             await BeforeReturn;
             return stream;
         }
@@ -85,6 +96,8 @@ public sealed class ProjectRelayControllerTests : IClassFixture<ProjectRelayCont
         _relay.Reset();
         _client = _factory.CreateAuthenticatedClient();
     }
+
+    public void Dispose() => _client.Dispose();
 
     private async Task<string> CreateAsync(string? deviceId)
     {

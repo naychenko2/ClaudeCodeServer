@@ -16,20 +16,29 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // валидация window (400), since (только хвост), выключенная вертикаль (configured:false),
 // unsupported из снимка.
 [Trait("Category", "Host")]
-public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsControllerTests.Hosts>
+public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsControllerTests.Hosts>, IDisposable
 {
     private readonly Hosts _hosts;
 
     public LocalModelStatsControllerTests(Hosts hosts) => _hosts = hosts;
 
-    // Клиенты базовых тестов берутся лениво: тесты второго стенда хост Plain не поднимают
-    private HttpClient _admin => _hosts.Plain.Use().CreateAuthenticatedClient();
-    private HttpClient _user => _hosts.Plain.Use().CreateAuthenticatedClient(
+    // Клиенты базовых тестов создаются при первом обращении (тесты второго стенда хост Plain не
+    // поднимают) — один раз на тест, гасятся в Dispose
+    private HttpClient? _adminClient, _userClient;
+    private HttpClient _admin => _adminClient ??= _hosts.Plain.Use().CreateAuthenticatedClient();
+    private HttpClient _user => _userClient ??= _hosts.Plain.Use().CreateAuthenticatedClient(
         TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+
+    public void Dispose()
+    {
+        _adminClient?.Dispose();
+        _userClient?.Dispose();
+    }
 
     // Хост на КОНФИГУРАЦИЮ, а не на тест: конфиг и состав DI меняются только хостом, всё остальное
     // (читатель, карты, счётчик хода, Comfy, дорожки, журнал вызовов, флаг) тест переключает сам
-    // через Use*. Хосты поднимаются лениво и гасятся вместе с фикстурой.
+    // через Use*. Объекты фабрик создаются сразу вместе с фикстурой, а ASP.NET-хост внутри каждой
+    // стартует лениво при первом обращении; гасятся вместе с фикстурой.
     public sealed class Hosts : IDisposable
     {
         // Без LocalEngines и без правок конфига

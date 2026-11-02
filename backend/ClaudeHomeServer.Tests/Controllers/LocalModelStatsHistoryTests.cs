@@ -25,8 +25,8 @@ public class LocalModelStatsHistoryTests : IClassFixture<LocalModelStatsHistoryT
     public LocalModelStatsHistoryTests(Hosts hosts) => _hosts = hosts;
 
     // Хост на КОНФИГУРАЦИЮ, а не на тест: конфиг, часы и старт процесса — свойства хоста, а
-    // журнал, источник результатов и флаг тест заводит сам (Harness → HistoryHost.Use). Хосты
-    // поднимаются лениво и гасятся вместе с фикстурой
+    // журнал, источник результатов и флаг тест заводит сам (Harness → HistoryHost.Use). Объекты
+    // фабрик создаются сразу, ASP.NET-хост внутри каждой стартует лениво; гасятся вместе с фикстурой
     public sealed class Hosts : IDisposable
     {
         public HistoryHost Main { get; } = new();
@@ -94,8 +94,9 @@ public class LocalModelStatsHistoryTests : IClassFixture<LocalModelStatsHistoryT
 
             var index = Services.GetRequiredService<MediaHistoryIndex>();
             index.Dispose(); // очищает записи, но не снимает признак «загружено»
-            typeof(MediaHistoryIndex).GetField("_loaded", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
-                .SetValue(index, false);
+            var loaded = typeof(MediaHistoryIndex).GetField("_loaded", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            loaded.Should().NotBeNull("в продукте переименовано приватное поле MediaHistoryIndex._loaded — обнови сброс индекса");
+            loaded!.SetValue(index, false);
             if (Directory.Exists(index.Dir))
             {
                 foreach (var file in Directory.GetFiles(index.Dir, "*.jsonl")) File.Delete(file);

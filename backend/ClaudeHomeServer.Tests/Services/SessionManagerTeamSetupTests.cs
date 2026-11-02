@@ -25,6 +25,9 @@ namespace ClaudeHomeServer.Tests.Services;
 
 public class SessionManagerTeamSetupTests : SessionManagerTestBase
 {
+    // Окно для негативных проверок «карточки не появилось»: см. комментарий в TurnWire_OutcomeInterrupted
+    private static readonly TimeSpan NegativeSettle = TimeSpan.FromMilliseconds(500);
+
     // --- Этап 4 / шаг 1а: слот текста хода на SessionEntry с ключом по TurnSeq ---
     // Этап 4 / шаг 1в: тесты LastTurnText_* сняты вместе с шагом 1а — LastTurnTexts ушёл в
     // LastTeamTurnEnds, отдельного хранилища больше нет. Покрытие правил переехало в тесты
@@ -215,7 +218,6 @@ public class SessionManagerTeamSetupTests : SessionManagerTestBase
     }
 
     [Fact]
-    [Trait("Category", "Slow")]
     public async Task TurnWire_OutcomeInterrupted_ШтабНеРазбираетКарточкиНет()
     {
         // interrupted — НЕ конец хода штаба. Обе точки прерывания (Стоп, прерывание ради
@@ -231,10 +233,10 @@ public class SessionManagerTeamSetupTests : SessionManagerTestBase
         await DriveOneTeamTurnAsync(_sut, session.Id, 7, "interrupted",
             "текст прерванного хода", failed: false);
 
-        // Дать подписчику время на обработку события. Шина — fire-and-forget, обработка
-        // асинхронная. Если подписчик ошибочно дёрнул HandleTeamTurnEndAsync, карточка
-        // появится в течение секунды; ждём две для запаса.
-        await Task.Delay(2000);
+        // Подписчик на этих исходах возвращается синхронно внутри PublishAsync, поэтому
+        // «ничего не произошло» уже решено. Короткое окно нужно только на случай ошибочного
+        // фонового запуска (Task.Run) разбора — он дал бы карточку за единицы миллисекунд.
+        await Task.Delay(NegativeSettle);
         var cards = Sent<TeamEscalationMessage>()
             .Where(m => m.SessionId == session.Id && !m.Resolved).ToList();
         cards.Should().BeEmpty(
@@ -250,7 +252,6 @@ public class SessionManagerTeamSetupTests : SessionManagerTestBase
     }
 
     [Fact]
-    [Trait("Category", "Slow")]
     public async Task TurnWire_OutcomeCancelled_ШтабНеРазбирает()
     {
         // MakeTeamStabAsync (не InterviewStab): не запускает реальный адаптер — тест
@@ -260,14 +261,13 @@ public class SessionManagerTeamSetupTests : SessionManagerTestBase
         await DriveOneTeamTurnAsync(_sut, session.Id, 7, "cancelled",
             "отменено человеком", failed: false);
 
-        await Task.Delay(2000);
+        await Task.Delay(NegativeSettle);
         Sent<TeamEscalationMessage>()
             .Where(m => m.SessionId == session.Id && !m.Resolved).ToList()
             .Should().BeEmpty("cancelled — НЕ конец хода штаба");
     }
 
     [Fact]
-    [Trait("Category", "Slow")]
     public async Task TurnWire_OutcomeCrashed_БезТерминалаDownstreamШтабНеРазбирает()
     {
         // crashed через SettleAsync: сбой оркестрации случился ДО первой попытки (lastEnd=null,
@@ -282,7 +282,7 @@ public class SessionManagerTeamSetupTests : SessionManagerTestBase
         // Терминал downstream НЕ идёт — сразу шина.
         await PublishTurnCompletedAsync(_sut, session.Id, 7, "crashed");
 
-        await Task.Delay(2000);
+        await Task.Delay(NegativeSettle);
         Sent<TeamEscalationMessage>()
             .Where(m => m.SessionId == session.Id && !m.Resolved).ToList()
             .Should().BeEmpty("плана в слоте нет — терминал хода downstream не дошёл, разбирать нечего");

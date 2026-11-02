@@ -36,12 +36,12 @@ public class LocalProcessRunnerIsolationTests
     // наши опции (фейковый systemd-run, который тест потом удаляет — «cannot open …/systemd-run»).
     // Раннер читает опции только внутри Start, поэтому ставим их ровно на этот вызов и всегда
     // возвращаем прежние.
-    private static Process StartPinned(IsolationOptions options, ProcessSpec spec)
+    // bus: user-шина «на бумаге» (XDG/DBUS) тоже ровно на время Start, а не на весь тест
+    private static Process StartPinned(IsolationOptions options, ProcessSpec spec, bool bus = false)
     {
-        var prev = IsolationOptions.Instance;
-        IsolationOptions.Instance = options;
-        try { return LocalProcessRunner.Instance.Start(spec); }
-        finally { IsolationOptions.Instance = prev; }
+        using var _ = bus ? Bus(present: true) : null;
+        using var scope = new IsolationOptionsScope(options);
+        return LocalProcessRunner.Instance.Start(spec);
     }
 
     private static IsolationOptions On(string? memHigh = null, string? memMax = null, bool reuse = true) => new()
@@ -656,8 +656,9 @@ public class LocalProcessRunnerIsolationTests
     // Matches теперь сверяет время старта (exec не меняет start_time), и запись переживает
     // смену имени на «sleep»: PruneDead её не вычёркивает, PID-файл полон, KillAll
     // graceful-shutdown доходит до процесса.
-    // Живой реестр правит IsolationOptions.Instance и XDG/DBUS-переменные — класс уже
-    // сериализован коллекцией ProcessGlobalState, здесь только свои переменные.
+    // Раннер здесь не вызывается (процесс поднимается напрямую через System.Diagnostics.Process),
+    // поэтому ни IsolationOptions.Instance, ни XDG/DBUS тест не публикует: окно гонки с чужими
+    // Start ни к чему.
     [Fact]
     public async Task Start_Linux_РеестрУдерживаетОбёрнутыйПроцесс()
     {
@@ -666,8 +667,6 @@ public class LocalProcessRunnerIsolationTests
             && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DBUS_SESSION_BUS_ADDRESS"))) return;
         if (LocalProcessRunner.FindSystemdRun(Environment.GetEnvironmentVariable("PATH")) is null) return;
 
-        var prev = IsolationOptions.Instance;
-        IsolationOptions.Instance = new IsolationOptions { Enabled = true, Slice = "ccs-isotest.slice", MemoryMax = "256M" };
         var process = new System.Diagnostics.Process { StartInfo = new()
         {
             FileName = "sh",
@@ -676,33 +675,26 @@ public class LocalProcessRunnerIsolationTests
             RedirectStandardError = true,
             CreateNoWindow = true,
         }};
+        process.Start();
+        var pid = process.Id;
+        // Запись с именем обёртки: в реальном Register это «systemd-run» (кэш .NET до exec)
+        ProcessRegistry.TrackForTests(new ProcessRegistry.TrackedProcess(pid, "systemd-run", process.StartTime));
         try
         {
-            process.Start();
-            var pid = process.Id;
-            // Запись с именем обёртки: в реальном Register это «systemd-run» (кэш .NET до exec)
-            ProcessRegistry.TrackForTests(new ProcessRegistry.TrackedProcess(pid, "systemd-run", process.StartTime));
-            try
-            {
-                // Ждём exec опросом, а не фиксированной паузой: под нагрузкой он запаздывает
-                var deadline = DateTime.UtcNow.AddSeconds(30);
-                while (LiveName(pid) != "sleep" && DateTime.UtcNow < deadline)
-                    await Task.Delay(100);
-                LiveName(pid).Should().Be("sleep", "к моменту PruneDead обёртка уже exec-нулась");
-                ProcessRegistry.PruneDead();
-                ProcessRegistry.IsTracked(pid).Should().BeTrue(
-                    "реестр не должен вычёркивать живой обёрнутый процесс (Matches — по времени старта, не имени)");
-            }
-            finally
-            {
-                if (!process.HasExited) process.Kill(entireProcessTree: true);
-                ProcessRegistry.Unregister(process);
-                process.Dispose();
-            }
+            // Ждём exec опросом, а не фиксированной паузой: под нагрузкой он запаздывает
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            while (LiveName(pid) != "sleep" && DateTime.UtcNow < deadline)
+                await Task.Delay(100);
+            LiveName(pid).Should().Be("sleep", "к моменту PruneDead обёртка уже exec-нулась");
+            ProcessRegistry.PruneDead();
+            ProcessRegistry.IsTracked(pid).Should().BeTrue(
+                "реестр не должен вычёркивать живой обёрнутый процесс (Matches — по времени старта, не имени)");
         }
         finally
         {
-            IsolationOptions.Instance = prev;
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            ProcessRegistry.Unregister(process);
+            process.Dispose();
         }
 
         static string? LiveName(int pid)
@@ -789,7 +781,6 @@ public class LocalProcessRunnerIsolationTests
 
         var (dir, fake) = FakeSystemdRun();
 
-        using var _ = Bus(present: true);
         var prevStop = LocalProcessRunner.StopScope;
         var calls = new List<(string Systemctl, string Unit)>();
         var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -810,7 +801,7 @@ public class LocalProcessRunnerIsolationTests
                 Args = ["-c", "echo готово"],
                 RedirectStdin = false,
                 Track = false,
-            });
+            }, bus: true);
             (await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)))
                 .Should().Be("готово");
             var unit = UnitOf(dir, process.Id);
@@ -875,7 +866,6 @@ public class LocalProcessRunnerIsolationTests
         if (OperatingSystem.IsWindows()) return;
 
         var (dir, fake) = FakeSystemdRun();
-        using var _ = Bus(present: true);
         var prevStop = LocalProcessRunner.StopScope;
         var atStart = new List<string>();
         var atExit = new List<string>();
@@ -897,7 +887,7 @@ public class LocalProcessRunnerIsolationTests
                 FileName = "sh",
                 Args = ["-c", "echo готово; read _"],
                 Track = false,
-            });
+            }, bus: true);
             (await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)))
                 .Should().Be("готово");
             var unit = UnitOf(dir, process.Id);

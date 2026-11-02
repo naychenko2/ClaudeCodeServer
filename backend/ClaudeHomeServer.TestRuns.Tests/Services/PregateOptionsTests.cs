@@ -135,7 +135,8 @@ public class PregateOptionsTests
     }
 
     // Быстрый гейт (фича «Ускорение тестов», Э3): набор Fast — исключением категорий, после сборки
-    // (Order 30) и с --no-build, только при правках backend/
+    // (Order 30) и с --no-build, только при правках backend/ и scripts/ (правка раскладчика шардов
+    // test-shards.py ломает именно эту проверку, а не сборку)
     [Fact]
     public void БыстрыеТесты_ПослеСборки_ИсключениемКатегорий()
     {
@@ -143,7 +144,7 @@ public class PregateOptionsTests
 
         var fast = options.Checks.Single(c => c.Name == "быстрые тесты");
         fast.Order.Should().Be(35);
-        fast.WhenChanged.Should().Equal("backend/");
+        fast.WhenChanged.Should().Equal("backend/", "scripts/");
         // Монолит и Llm.Tests идут шардами по классам (scripts/test-shards.py --run-fast), остальное — одним процессом
         fast.Command.Should().Be("python3");
         fast.Args.Should().ContainInOrder("-I", "scripts/test-shards.py", "--run-fast", "backend/ClaudeHomeServer.slnx",

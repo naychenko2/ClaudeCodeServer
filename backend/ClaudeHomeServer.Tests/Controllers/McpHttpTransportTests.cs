@@ -63,7 +63,15 @@ public class McpHttpTransportTests(McpHttpTransportTests.MainHost main,
 
     private readonly HttpClient _client = main.CreateAuthenticatedClient();
     private readonly MainHost _main = main;
-    private readonly SlowHost _slow = slowHost;
+    // Тулсет общий на класс: на входе каждого теста (xunit создаёт экземпляр класса на тест) его
+    // поля возвращаются к исходным, чтобы новое поле не унаследовало состояние соседа
+    private readonly SlowHost _slow = ResetSlow(slowHost);
+
+    private static SlowHost ResetSlow(SlowHost host)
+    {
+        host.Toolset.Reset();
+        return host;
+    }
 
     private async Task<JsonElement> RpcAsync(string method, object? @params = null, int id = 1)
     {
@@ -519,9 +527,10 @@ public class McpHttpTransportTests(McpHttpTransportTests.MainHost main,
     /// CRLF-вброс визуально неотличим от подлинных записей бэкенда (CWE-117). Имя печатает
     /// и контроллер (Warning об упавшем инструменте), и McpCallLogMiddleware (Debug/Warning
     /// по каждому запросу хода).
-    /// Коллектор — на основном хосте: записи остальных тестов класса тоже попадают в sink,
-    /// но имя в них проходит ту же форму (McpCallLog.Record) — короткие, без «X-Injected»,
-    /// утверждениям теста не противоречат ни в прямом, ни в обратном порядке.
+    /// Коллектор — на основном хосте: записи остальных тестов класса тоже попадают в sink.
+    /// Они проходят ту же форму (McpCallLog.Record) — короткие, без «X-Injected». Исключение —
+    /// запись внутреннего сбоя «boom» с полным стек-трейсом исключения: она не про имя вызова и
+    /// по длине зависит от глубины стека пайплайна, поэтому в утверждение о длине не входит.
     /// </summary>
     [Fact]
     public async Task ГигантскоеИмяСCRLF_НеПопадаетВЛогБэкенда()
@@ -544,7 +553,7 @@ public class McpHttpTransportTests(McpHttpTransportTests.MainHost main,
         entries.Should().NotBeEmpty("упавший инструмент обязан оставить след в логе");
         entries.Should().NotContain(e => e.Text.Contains("X-Injected"),
             "CRLF-вброс не должен попадать в записи лога");
-        entries.Should().OnlyContain(e => e.Text.Length <= 2_000,
+        entries.Where(e => !e.Text.Contains("boom")).Should().OnlyContain(e => e.Text.Length <= 2_000,
             "имя в сотни КБ не должно раздувать записи лога");
     }
 
@@ -656,6 +665,13 @@ public class McpHttpTransportTests(McpHttpTransportTests.MainHost main,
     internal sealed class SlowToolset : ClaudeHomeServer.Services.Mcp.Http.IMcpStaticToolset
     {
         public volatile int DelayMs = 600;
+
+        public void Reset()
+        {
+            DelayMs = 600;
+            Cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
         public string Name => "slow";
         public string Version => "0.0.1";
         public IReadOnlyList<ClaudeHomeServer.Services.Mcp.Http.McpToolSchema> Tools => [];

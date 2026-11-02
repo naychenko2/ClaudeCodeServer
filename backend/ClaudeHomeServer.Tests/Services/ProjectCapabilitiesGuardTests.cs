@@ -74,6 +74,12 @@ public class ProjectCapabilitiesGuardTests
         // Очередь GPU: «какие провайдеры уступают GPU» отбираются по IsLocal провайдера
         // (LlmProviderConfig.IsLocal), не по локальности проекта — чужой смысл того же слова.
         ["backend/ClaudeHomeServer.Llm/MediaGpuYieldGate.cs"] = (1, "IsLocal провайдера GPU-очереди, не проекта"),
+        // Швы оркестрации фичи: «локальный исполнитель» — персона, чья модель уходит в локального
+        // провайдера (IModelResolver.IsLocal в комментарии к LocalExecutor), не локальный проект.
+        ["backend/ClaudeHomeServer.Core/Services/FeatureOrchestrationSeams.cs"] = (1, "чужой смысл: локальный провайдер модели"),
+        // Реализация шва: resolver.IsLocal(key) провайдера модели персоны плюс приватный IsLocal(persona)
+        // и его вызов и упоминание в комментарии — все про провайдера, не про локальный проект.
+        ["backend/ClaudeHomeServer/Services/LocalExecutorRoster.cs"] = (4, "чужой смысл: локальный провайдер модели"),
         // Расход: локальные LLM-провайдеры считаются бесплатными (1444df06e) — IsLocal везде про провайдера, не проект.
         ["backend/ClaudeHomeServer.Llm/LlmModelResolverAdapter.cs"] = (2, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/OneShotClaudeRunner.cs"] = (3, "LLM-провайдер"),

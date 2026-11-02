@@ -46,7 +46,7 @@ export {
   requestOpenWikiPage, consumeOpenWikiPage, useWikiOpenRequest,
   loadWikiSettings, useWikiSettings, putWikiNightly, putWikiAutoApply, resumeWikiApplyClass,
   wikiAuthorshipOf, editWikiPage, wikiFootnoteLabel, loadWikiSourceCard,
-  restoreWikiPage, wikiOverridesOf, wikiHasReplacement, useWikiReplacementDot,
+  restoreWikiPage, wikiOverridesOf, wikiHasReplacement, normWikiStatement, wikiActiveLines, useWikiReplacementDot,
 } from '../wiki';
 export type {
   WikiSectionDto, WikiPageInfoDto, WikiPackageDto, WikiPackageOperationDto,

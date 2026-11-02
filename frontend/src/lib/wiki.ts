@@ -1450,21 +1450,38 @@ export interface WikiJournalEntryOverrideDto extends WikiJournalEntryDto {
 // Отказы «Вернуть мою» читаются по тем же кодам WikiError, что у правки: 409 wiki_page_changed
 // (свежая страница в .page), 409 wiki_unified_off, 400 wiki_edit_invalid (.message — причина).
 
-// Как normStatement витрины: без маркера списка и сносок, пробелы схлопнуты, NFC
-function normOverrideLine(s: string): string {
+// Сравнение утверждения из overrides[] со строкой страницы: сервер отдаёт его без сносок и
+// маркера, на странице — со сносками. Без маркера списка (он факультативен: RenderApply пишет
+// строки без него), без сносок, пробелы схлопнуты, NFC. Единственная копия — витрина берёт её же.
+export function normWikiStatement(s: string): string {
   return s.replace(/^[-*]\s+/, '').replace(/\s*\[\^[^\]\r\n]+\]/g, '').replace(/\s+/g, ' ').trim().normalize('NFC');
 }
 
-// Утверждения, действующие на странице: пункты вне секции «История» (прежние формулировки — там)
-function activeStatements(content: string): Set<string> {
-  const set = new Set<string>();
-  let inHistory = false;
-  for (const line of content.replace(/\r\n?/g, '\n').split('\n')) {
-    const h = /^## (.+)$/.exec(line);
-    if (h) { inHistory = h[1].trim() === 'История'; continue; }
-    if (!inHistory && /^[-*]\s+/.test(line)) set.add(normOverrideLine(line));
+const FN_DEF_LINE_RX = /^\[\^[^\]\r\n]+\]: .+ — «.*»$/;
+
+// Действующие строки страницы — те же, что витрина рисует в секциях (зеркало parseWikiPage):
+// содержательные строки секций кроме «Истории», с маркером или без. Пустые, шапка, заголовок,
+// определения сносок и строки вне секций не в счёте. Паритет с parseWikiPage держит тест.
+export function wikiActiveLines(content: string): string[] {
+  const lines = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  let i = 0;
+  if (lines[0] === '---') {
+    const close = lines.indexOf('---', 1);
+    if (close > 0) i = close + 1;
   }
-  return set;
+  const out: string[] = [];
+  let titled = false;
+  let section: string | null = null;
+  for (; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line || FN_DEF_LINE_RX.test(line)) continue;
+    const t = /^# (.+)$/.exec(line);
+    if (t && !titled) { titled = true; continue; }
+    const h = /^## (.+)$/.exec(line);
+    if (h) { section = h[1]; continue; }
+    if (section !== null && section !== 'История') out.push(line);
+  }
+  return out;
 }
 
 // Замены и споры страницы; чужие и неизвестные op фронт не рисует. Если в ответе есть текст
@@ -1477,11 +1494,13 @@ export function wikiOverridesOf(page: { overrides?: unknown; content?: unknown }
     !!o && ((o as WikiOverrideDto).op === 'supersede' || (o as WikiOverrideDto).op === 'conflict')
     && typeof (o as WikiOverrideDto).at === 'string' && typeof (o as WikiOverrideDto).packageId === 'string');
   if (typeof page?.content !== 'string') return all;
-  const active = activeStatements(page.content);
+  const active = new Set(wikiActiveLines(page.content).map(normWikiStatement));
   return all.filter(o => {
-    // Замена — по утверждению ИИ; спор — по строке человека, что осталась на месте
+    // Замена — по утверждению ИИ. Спор — по той же строке, что несёт метку на витрине: бэк
+    // previous спора находит только в «Истории», так что в живом ответе он null и проверка
+    // идёт по тексту ИИ (лежит в «Противоречиях»); previous, если пришёл, важнее
     const text = o.op === 'supersede' ? o.statement : (o.previous ?? o.statement);
-    return !!text && active.has(normOverrideLine(text));
+    return !!text && active.has(normWikiStatement(text));
   });
 }
 

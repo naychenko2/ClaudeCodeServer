@@ -27,7 +27,7 @@ import { useMemo, useState } from 'react';
 import type { MouseEvent, KeyboardEvent } from 'react';
 import type { ReactNode } from 'react';
 import { AlertTriangle, CheckCircle2, ChevronLeft, Lock, Pencil, Quote, ScrollText, Sparkles, Undo2 } from 'lucide-react';
-import { C, FONT, FS, R, SP, useIsMobile, useFeature, FLAGS, WikiError, adoptWikiPage, useWikiPage, wikiAuthorshipOf, wikiFootnoteLabel, wikiOverridesOf, type WikiAuthorship, type WikiOverrideDto, type WikiPageOverriddenDto, type WikiSectionDto } from 'aihome_shell/kit';
+import { C, FONT, FS, R, SP, useIsMobile, useFeature, FLAGS, WikiError, adoptWikiPage, useWikiPage, wikiAuthorshipOf, wikiFootnoteLabel, wikiOverridesOf, normWikiStatement, type WikiAuthorship, type WikiOverrideDto, type WikiPageOverriddenDto, type WikiSectionDto } from 'aihome_shell/kit';
 import { Badge } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
 import { Notice } from '../../../components/ui/Notice';
@@ -187,12 +187,8 @@ function renderLine(line: string, quotes: Map<string, string>, keyBase: string, 
 
 // ─── Метки замен (F3b) ───
 
-// Сравнение строки страницы с утверждением из overrides[]: сервер отдаёт его без сносок и
-// маркера, на странице — со сносками. Как у сервера: снимаем сноски, схлопываем пробелы, NFC
-const REF_STRIP_RX = /\s*\[\^[^\]\r\n]+\]/g;
-export function normStatement(s: string): string {
-  return s.replace(BULLET_RX, '').replace(REF_STRIP_RX, '').replace(/\s+/g, ' ').trim().normalize('NFC');
-}
+// Сравнение строки страницы с утверждением из overrides[] — общая нормализация из kit
+export const normStatement = normWikiStatement;
 
 // Что дорисовать у строки: метка у действующего утверждения / подпись у прежней строки «Истории»
 export interface LineMarks {

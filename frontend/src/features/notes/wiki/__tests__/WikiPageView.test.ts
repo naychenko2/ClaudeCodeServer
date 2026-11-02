@@ -31,9 +31,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps,
 } from '../../../../components/chat/__tests__/fakeDom';
-import { WikiPageView } from '../WikiPageView';
+import { WikiPageView, parseWikiPage } from '../WikiPageView';
 import { ReplacementDot } from '../WikiUnifiedChrome';
-import { __test as wikiStore, loadWikiPage, type WikiPageDto, type WikiPageAuthoredDto, type WikiOverrideDto, type WikiPageOverriddenDto } from '../../../../lib/wiki';
+import { __test as wikiStore, loadWikiPage, wikiActiveLines, type WikiPageDto, type WikiPageAuthoredDto, type WikiOverrideDto, type WikiPageOverriddenDto } from '../../../../lib/wiki';
 import { FOOTNOTE_TEXT, fmtDayMonth } from '../WikiFootnotePopover';
 
 // Мок с сохранением остальных экспортов: компонент берёт эти модули через кит хоста,
@@ -787,7 +787,6 @@ describe('Метки замен и «Вернуть мою» (F3b)', () => {
     });
     expect(findNodeByAttr(c, 'data-testid', 'wiki-override-replaced')).toBeNull();
     expect(tag(c)).toHaveLength(0);
-    expect(findNodeByAttr(c, 'data-testid', 'wiki-override-replaced')).toBeNull();
     expect(has(c, 'Вернули вашу формулировку. 7 дней ИИ не меняет ваше на этой странице сам.')).toBe(true);
   });
 
@@ -850,6 +849,91 @@ describe('Метки замен и «Вернуть мою» (F3b)', () => {
     expect(styleOf(dot!).background).toBe('var(--c-info)');
     req.mockImplementation(() => Promise.resolve(withOvr([{ ...OVR_REPLACED, previous: null }], { hash: 'h2', content: PAGE_RESTORED })));
     await act(async () => { await loadWikiPage(SECTION.key, PAGE_KEY); });
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-replacement-dot')).toBeNull();
+  });
+
+  // Как пишет RenderApply: строки утверждений без маркера списка
+  const plain = (t: string) => t.replace(/^- /gm, '');
+
+  it('строки без маркера (как пишет бэк): плашка и точка есть, после «Вернуть мою» гаснут', async () => {
+    unifiedOn();
+    await seedPage(withOvr([OVR_REPLACED], { content: plain(PAGE_OVR) }));
+    const c = renderPage();
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-override-replaced')).not.toBeNull();
+    expect(tag(c)).toHaveLength(1);
+    installFakeDom();
+    const { root, container } = mount(createElement(ReplacementDot));
+    roots.push(root);
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-replacement-dot')).not.toBeNull();
+    req.mockImplementation(() => Promise.resolve(withOvr([{ ...OVR_REPLACED, previous: null }], { hash: 'h2', content: plain(PAGE_RESTORED) })));
+    await act(async () => { await loadWikiPage(SECTION.key, PAGE_KEY); });
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-replacement-dot')).toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-override-replaced')).toBeNull();
+    expect(tag(c)).toHaveLength(0);
+  });
+
+  it('паритет: действующие строки фильтра = строки не-«История» секций, что рисует парсер витрины', () => {
+    for (const text of [PAGE_OVR, plain(PAGE_OVR), PAGE_RESTORED, plain(PAGE_RESTORED)]) {
+      const rendered = parseWikiPage(text).sections.filter(x => x.name !== 'История').flatMap(x => x.lines);
+      expect(wikiActiveLines(text)).toEqual(rendered);
+      expect(rendered.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('спор по ответу бэка (previous = null, текст ИИ в «Противоречиях»): метка рисуется, пока запись ИИ на странице', async () => {
+    unifiedOn();
+    const content = `---
+type: entity
+status: active
+updated: 2026-11-02
+---
+
+# Шины
+
+## Сводка
+Резину меняем в конце октября. [^s1]
+
+## Противоречия
+Резину меняем в начале ноября. [^s2]
+
+## История
+
+[^s1]: [[Источники/Правка]] — «конец октября»
+[^s2]: [[Источники/Чат]] — «начало ноября»
+`;
+    const dto = { ...OVR_DISPUTED, previous: null };
+    await seedPage(withOvr([dto], { content }));
+    const c = renderPage();
+    await settle();
+    const t = tag(c);
+    expect(t).toHaveLength(1);
+    expect(t[0].getAttribute('data-kind')).toBe('disputed');
+    // запись ИИ ушла со страницы — метки нет
+    for (const r of roots) act(() => r.unmount());
+    roots.length = 0;
+    uninstallFakeDom();
+    wikiStore.reset();
+    await seedPage(withOvr([dto], { content: content.replace('Резину меняем в начале ноября. [^s2]\n', '') }));
+    const gone = renderPage();
+    await settle();
+    expect(tag(gone)).toHaveLength(0);
+  });
+
+  it('ИИ заменил, потом человек переписал строку: плашки и точки нет', async () => {
+    unifiedOn();
+    const rewritten = PAGE_OVR.replace('Для черновиков снимаем размер 864×480.', 'Для черновиков снимаем 720p.');
+    await seedPage(withOvr([OVR_REPLACED], { content: rewritten }));
+    const c = renderPage();
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-override-replaced')).toBeNull();
+    expect(tag(c)).toHaveLength(0);
+    installFakeDom();
+    const { root, container } = mount(createElement(ReplacementDot));
+    roots.push(root);
     await settle();
     expect(findNodeByAttr(container, 'data-testid', 'wiki-replacement-dot')).toBeNull();
   });

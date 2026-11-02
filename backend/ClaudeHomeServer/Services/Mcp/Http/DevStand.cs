@@ -36,8 +36,9 @@ internal sealed partial class DevStand(
     // Ожидание порта после сборки: запуск собранного стенда — секунды (замер — 2,3 с), 120 с — запас
     internal static readonly TimeSpan ReadyTimeout = TimeSpan.FromSeconds(120);
     // Меньше этого на запуск не остаётся смысла: отказ «повтори», а не заведомый таймаут.
-    // Дефолт продукта — DefaultMinReadyBudget (его держит отдельный тест); на своём экземпляре
-    // порог опускается: тестовый стенд-заглушка слушает порт сразу, а без этой опции самая
+    // Дефолт продукта — DefaultMinReadyBudget (его и инициализатор порога экземпляра держит
+    // отдельный тест); на своём экземпляре порог опускается: тестовый стенд-заглушка слушает
+    // порт сразу, а без этой опции самая
     // короткая достижимая проба «потолка во время пробы» — 5 с, которые тест и платит.
     internal static readonly TimeSpan DefaultMinReadyBudget = TimeSpan.FromSeconds(5);
     internal TimeSpan MinReadyBudget { get; set; } = DefaultMinReadyBudget;

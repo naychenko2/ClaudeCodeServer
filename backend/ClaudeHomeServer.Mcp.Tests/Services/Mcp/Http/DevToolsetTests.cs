@@ -537,12 +537,17 @@ public class DevToolsetTests : IDisposable
     }
 
     // Дефолты ожиданий подъёма: тест выше опускает порог «остатка на запуск» на своём экземпляре,
-    // продуктовые значения держит здесь
+    // продуктовые значения держит здесь — статический дефолт и инициализатор порога экземпляра
     [Fact]
     public void ДефолтыОжиданийСтенда_Прежние()
     {
         DevStand.DefaultMinReadyBudget.Should().Be(TimeSpan.FromSeconds(5));
         DevStand.HealthTimeout.Should().Be(TimeSpan.FromSeconds(30));
+        // Инициализатор экземпляра отделён от статического дефолта: уедет от него — тест выше
+        // не заметит, он выставляет свой порог явно; проверяется на настоящом DevToolset
+        var env = Build();
+        env.Toolset.Stand.MinReadyBudget.Should().Be(DevStand.DefaultMinReadyBudget,
+            "порог экземпляра — дефолт продукта");
     }
 
     [Fact]

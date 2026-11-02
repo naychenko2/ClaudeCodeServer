@@ -428,7 +428,7 @@ public sealed class WikiClassHealth
     /// Настройки — уровень владельца, health — файл раздела; сигналом держится health «Общего»
     /// — постоянного раздела любой вики (ADR-036, решение 1). Его файла на диске нет (раздел
     /// ещё не заводился) — писать некуда: молчание здесь сознательное, падение — нет.</summary>
-    private static void SignalInvalidSettings(string root)
+    internal static void SignalInvalidSettings(string root)
     {
         var folder = WikiSections.Folder(WikiSections.Common);
         if (folder is null) return;

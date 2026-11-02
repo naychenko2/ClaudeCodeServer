@@ -129,6 +129,9 @@ public sealed class NotesSubsystem : IAppSubsystem
         services.AddSingleton<WikiChatRecalc>();
         // Ступень 2 отбора серых чатов моделью (N1a): вердикт — в стор, отказ — серая зона.
         services.AddSingleton<WikiChatStage2>();
+        // Ночной разбор чатов (N7b): окно владельца, лимиты, итог в keeper/nightly-last.json. Тумблер по умолчанию выкл.
+        services.AddSingleton<WikiNightlyService>();
+        services.AddGatedHostedFrom<WikiNightlyService>(config, sp => sp.GetRequiredService<WikiNightlyService>(), Key);
         // Сторож старта: пакеты, застрявшие в «applying» после падения процесса, откатывает по
         // прообразам (ADR-035, решение 4). Гейт по подсистеме и по Testing — общий хелпер.
         services.AddGatedHostedService<WikiApplyStartupGuard>(config, Key);

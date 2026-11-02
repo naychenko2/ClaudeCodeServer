@@ -7,8 +7,10 @@ using ClaudeHomeServer.Services.Spheres;
 namespace ClaudeHomeServer.Services.Notes.Wiki;
 
 // Очередь заявок разбора (S6b-3, ADR-035 §12б этапы 5–8 и «Результат разбора»; ADR-036 §3).
-// Одна заявка = один прогон двух проходов по выдержке источника (промпты S6b-1, место
-// wiki-ingest) → проверки кодом (S6b-2) → пакет (S4a) → применение неспорных (S4b). Модель
+// Одна заявка = один прогон двух проходов по выдержке источника (промпты S6b-1; место
+// разбора задаёт заявка своим actionKey, по умолчанию wiki-ingest; ключ вне каталога
+// LocalActionCatalog — заявка отказана на входе) → проверки кодом (S6b-2) → пакет (S4a) →
+// применение неспорных (S4b). Модель
 // ничего не выбирает: раздел даёт дом источника (код), класс и решение — валидатор и
 // политика, цитаты и сноски — код.
 //
@@ -18,8 +20,8 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // 2. Карточка источника читается с диска: она уже захвачена (S6h) и лежит в разделе
 //    назначения; её заголовок — цель сносок. Карточки нет или она не страница type: source —
 //    отказ до обращения к модели (неожиданный вход — отказ с причиной, не исключение).
-// 3. Проход A — one-shot без инструментов (ICheapTextRunner, место wiki-ingest):
-//    утверждения с дословными цитатами.
+// 3. Проход A — one-shot без инструментов (ICheapTextRunner; место задаёт заявка,
+//    по умолчанию wiki-ingest): утверждения с дословными цитатами.
 // 4. Код уточняет кандидатов-страниц: страницы раздела назначения и цепочки вверх, чей
 //    заголовок или алиас встречается в тексте утверждений (тот же порядок нормализации,
 //    что у индекса ByName — WikiDedup.NormalizeName), не больше 5. Их текст — в промпт
@@ -120,7 +122,10 @@ public sealed class WikiIngestService
     /// одного источника — один прогон (вторая получает результат первой). Отказ любой
     /// фазы — IngestResult с причиной; исключения наружу нет.
     /// actionKey (N7a) — место разбора для вызова модели: null — прежний wiki-ingest,
-    /// вызывающий (разбор чата ночью) подаёт своё место из LocalActionCatalog.</summary>
+    /// вызывающий (разбор чата ночью) подаёт своё место из LocalActionCatalog. Не-null ключ
+    /// вне каталога — отказ на входе, до очереди и модели: опечатка в месте не должна
+    /// молча переносить разбор в облако (LocalActionRouter у неведомого ключа берёт
+    /// Tier/Medium).</summary>
     public Task<IngestResult> IngestAsync(string ownerId, Request? request, CancellationToken ct = default,
         string? actionKey = null)
     {
@@ -137,6 +142,9 @@ public sealed class WikiIngestService
             return Task.FromResult(Rejected("заявка без пути карточки — карточку обязан поставить захват (S6h)"));
         if (string.IsNullOrEmpty(request.SourceText))
             return Task.FromResult(Rejected("заявка без текста источника — цитату подтвердить не из чего"));
+        if (actionKey is not null && LocalActionCatalog.Find(actionKey) is null)
+            return Task.FromResult(Rejected(
+                $"место разбора «{actionKey}» вне каталога LocalActionCatalog — заявки нет"));
 
         var key = InFlightKey(ownerId, request);
         Task<IngestResult> task;
@@ -528,12 +536,14 @@ public sealed class WikiIngestService
     private readonly record struct ModelAnswer(string? Text, string? Reason);
 
     /// <summary>Один one-shot вызов места разбора (без инструментов; формат — «json»):
-    /// actionKey — место заявки (N7a), null — прежний wiki-ingest. Сбой/пустой ответ —
-    /// ModelAnswer с причиной: вызывающий отказывает заявку, а не ловит исключение.
+    /// actionKey — место заявки (N7a), null — прежний wiki-ingest; все вызовы передают его
+    /// явно (default снят, чтобы вызов не мог остаться без места). Ключ проверен каталогом
+    /// на входе IngestAsync. Сбой/пустой ответ — ModelAnswer с причиной: вызывающий
+    /// отказывает заявку, а не ловит исключение.
     /// Токены вызова — в аккумулятор разбора (usage=null — нераспознанный
     /// формат метрик — переживаем: это разрешено контрактом шва).</summary>
     private async Task<ModelAnswer> CallModelAsync(string prompt, string ownerId, string passName,
-        UsageAccumulator usage, CancellationToken ct, string? actionKey = null)
+        UsageAccumulator usage, CancellationToken ct, string? actionKey)
     {
         OneShotResult result;
         try

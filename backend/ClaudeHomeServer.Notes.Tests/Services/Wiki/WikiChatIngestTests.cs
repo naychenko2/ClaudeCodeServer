@@ -45,6 +45,8 @@ namespace ClaudeHomeServer.Tests.Services;
 // Плюс N7a: место разбора (actionKey) доходит до модели: заявка ночи зовёт wiki-nightly,
 // без actionKey — прежнее место wiki-ingest (guard в FakeLlm.Answer на каждом тесте);
 // две заявки одного чата с разными местами — один прогон, движок того, кто первым.
+// Плюс доработка R-N7a M1: ключ вне каталога LocalActionCatalog — отказ с причиной на
+// входе очереди заявок, модель не зовётся (неведомое место не уходит в облако).
 //
 // Утверждение модели — дословная цитата реплики (text == quote): в финальном пакете
 // op.Text — подтверждённая цитата (WikiIngestService.cs:335 VerifiedQuote), дедup меры 2
@@ -833,6 +835,28 @@ public class WikiChatIngestTests : IDisposable
         llm.Calls.Should().HaveCount(2, "один прогон: проходы A+B ровно по одному разу, своей модели у ночи нет");
         llm.Calls.Should().OnlyContain(c => c.ActionKey == LocalActionCatalog.WikiIngest,
             "присоединившаяся заявка получает движок того, кто пришёл первым");
+    }
+
+    // R-N7a M1: неведомое место разбора — отказ, а не молчаливый уход в облако. Ключ вне
+    // каталога (здесь — опечатка «wiki-nighly») у LocalActionRouter.Resolve берёт
+    // Tier/Medium, т.е. облако вместо локального места. Guard — на fail-closed входе
+    // IngestAsync (WikiIngestService.cs): опоздавшая заявка с таким ключом не присоединяется
+    // к чужому прогону и не доходит до модели. Мутация «убрать проверку каталога»: модель
+    // зовётся с неведомым ключом — вызов записан в llm.Calls (guard FakeLlm.Answer бьёт
+    // внутри вызова и гасится CallModelAsync в причину отказа) — тест красный на assert
+    // «модель не зовётся».
+    [Fact]
+    public async Task Analyze_НеизвестныйActionKey_ОтказБезВызоваМодели()
+    {
+        AddSession("chat-badkey");
+        SetShortHistory("chat-badkey");
+
+        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1));
+        var res = await Sut(llm).AnalyzeAsync(User, "chat-badkey", actionKey: "wiki-nighly");
+
+        res.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected);
+        res.Reason.Should().Contain("wiki-nighly", "отказ называет неведомое место");
+        llm.Calls.Should().BeEmpty("заявка с неведомым местом не доходит до модели");
     }
 
     // ── W3-6 F1: чужой и несуществующий чат — один message на двоих ──

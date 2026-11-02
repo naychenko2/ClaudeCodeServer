@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { NotesList } from './NotesList';
 import { NewNoteDialog } from './NewNoteDialog';
+import { useAllProjects } from '../projects/useAllProjects';
+import { canWriteContent } from '../projects/members/contentRights';
 import {
   useNotes, ensureNotesLoaded, bumpNotes, C, SP,
   Button, PanelHeaderSlot, useHasPanelHeader, ICON_SIZE, ICON_STROKE,
@@ -24,6 +26,12 @@ export function ProjectNotesPanel({ projectId, activeFilePath, onOpenFile }: {
   const notes = useNotes();
   useEffect(() => { void ensureNotesLoaded(); }, []);
   const inHeader = useHasPanelHeader();
+  // Проект — по prop id панели (S2c-F4h): право записи решается по его роли. Точки записи
+  // панели: кнопка «Заметка», проп onCreateInFolder (плюс на папке) и диалог создания — все
+  // под дверью 'note.create'. Закрытая ПРЯЧЕТ (0 узлов, пустой строки шапки тоже нет),
+  // не отключена. Проекта нет в кэше (ещё не загружен) — как раньше: бэк ответит 403.
+  const project = useAllProjects().find(p => p.id === projectId);
+  const canCreate = canWriteContent(project, 'note.create');
   // Диалог создания: null — закрыт; folder — préfill из «+» на папке
   const [newDialog, setNewDialog] = useState<{ folder?: string } | null>(null);
   // Заметка, созданная из панели: открыть в центре, как только приедет в список
@@ -55,23 +63,25 @@ export function ProjectNotesPanel({ projectId, activeFilePath, onOpenFile }: {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 }}>
-      {inHeader
+      {canCreate && (inHeader
         ? <PanelHeaderSlot pinned>{createBtn}</PanelHeaderSlot>
         : <div style={{
             flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
             padding: `${SP.sm}px ${SP.md}px`, borderBottom: `1px solid ${C.borderLight}`,
-          }}>{createBtn}</div>}
+          }}>{createBtn}</div>)}
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
         <NotesList
           notes={notes}
           sourceFilter={projectId}
           selectedId={selectedId}
           onSelect={openNote}
-          onCreateInFolder={(_, folder) => setNewDialog({ folder })}
+          onCreateInFolder={canCreate ? (_, folder) => setNewDialog({ folder }) : undefined}
           onOpenFileRef={onOpenFile}
         />
       </div>
-      {newDialog && (
+      {/* Диалог достижим только из двух гейтнутых входов; гейт и у самого диалога —
+          это точка записи (api.notes.create внутри NewNoteDialog), закрыта для читателя */}
+      {newDialog && canCreate && (
         <NewNoteDialog
           defaults={{ source: projectId, folder: newDialog.folder }}
           onClose={() => setNewDialog(null)}

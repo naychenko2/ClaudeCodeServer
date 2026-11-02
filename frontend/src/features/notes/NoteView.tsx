@@ -19,6 +19,8 @@ import { NoteConflictError } from '../../lib/api';
 import { conflictCopyName } from '../../lib/conflictCopyName';
 import { lineDiff } from '../../lib/lineDiff';
 import { SaveConflictDialog } from '../../components/SaveConflictDialog';
+import { useAllProjects } from '../projects/useAllProjects';
+import { canWriteContent, type ContentDoor } from '../projects/members/contentRights';
 import { NoteConnections } from './NoteConnections';
 import { NoteTasksSection } from './NoteTasksSection';
 import { useSphereOf } from '../../lib/useSphereOf';
@@ -82,6 +84,11 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   // под контент, сайдбара нет → panelTarget не нужен.
   const [panelEl, setPanelEl] = useState<HTMLElement | null>(null);
   const [note, setNote] = useState<NoteDetail | null>(null);
+  // Право записи по роли в проекте источника (S2c-F4e): у 'personal' проекта нет — всё
+  // разрешено; пока кэш проектов не загружен — тоже как раньше. Закрытое прячем, не отключаем.
+  const allProjects = useAllProjects();
+  const can = (door: ContentDoor) =>
+    canWriteContent(!note || note.source === 'personal' ? undefined : allProjects.find(p => p.id === note.source), door);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState('');
@@ -150,7 +157,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
 
   // Черновик начинается с показанной версии — её тег и становится базой сохранения
   const startEdit = () => {
-    if (!note) return;
+    if (!note || !can('note.edit')) return;
     setDraftTitle(note.title); setDraftBody(note.content);
     draftEtag.current = noteEtag.current;
     setEditing(true);
@@ -200,7 +207,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [note?.id, version]);
   const sendAnnReply = async () => {
-    if (!note || !annReplyDraft.trim()) return;
+    if (!note || !annReplyDraft.trim() || !can('note.comment')) return;
     setAnnReplySending(true);
     try {
       await api.notes.reply(note.id, annReplyDraft.trim());
@@ -240,7 +247,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   const [assignAnchor, setAssignAnchor] = useState<HTMLElement | null>(null);
   useEffect(() => { if (ann && !ann.isReply) void ensurePersonasLoaded(); }, [ann]);
   const createTaskFromComment = async (persona?: Persona) => {
-    if (!note || !ann) return;
+    if (!note || !ann || !can('note.tasks')) return;
     setAssignAnchor(null);
     try {
       await api.tasks.create(ann.docScope === 'personal' ? null : ann.docScope, {
@@ -271,7 +278,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   };
   // Принять связь: секция «## Связанное» с [[…]] в конце заметки
   const acceptLink = async (title: string) => {
-    if (!note) return;
+    if (!note || !can('note.edit')) return;
     const hasSection = /(^|\n)## Связанное\s*\n/.test(note.content);
     const content = hasSection
       ? note.content.trimEnd() + `\n- [[${title}]]\n`
@@ -283,14 +290,14 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   };
   // Избранное — тот же тег в тексте: тело уже загружено, дочитывать не надо
   const toggleFav = async () => {
-    if (!note) return;
+    if (!note || !can('note.edit')) return;
     const content = isFavorite(note.tags) ? withoutFavoriteTag(note.content) : withFavoriteTag(note.content);
     setNote(await api.notes.update(note.id, { content }));
     bumpNotes();
   };
   // Принять тег (ИИ-предложение или ручной ввод): inline #тег в конец заметки
   const acceptTag = async (tagRaw: string) => {
-    if (!note) return;
+    if (!note || !can('note.edit')) return;
     const tag = tagRaw.trim().replace(/^#+/, '').replace(/\s+/g, '-');
     if (!tag || note.tags.some(t => t.toLowerCase() === tag.toLowerCase())) return;
     const updated = await api.notes.update(note.id, { content: note.content.trimEnd() + ` #${tag}\n` });
@@ -322,6 +329,8 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     const onRun = (e: Event) => {
       const action = (e as CustomEvent<{ action?: string }>).detail?.action;
       if (!action || !note) return;
+      // AI-действия пишут в заметку (теги/связи/заголовок/оглавление/перевод/конспект) — дверь note.edit
+      if (action !== 'note.ask' && !can('note.edit')) return;
       if (action === 'note.links') suggestLinks();
       else if (action === 'note.tags') suggestTags();
       else if (action === 'note.ask') onAskClaude?.(note);
@@ -492,9 +501,9 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
 
   // Удаление в два шага: запрос подтверждения (диалог) → само удаление
   const [deleteConfirm, setDeleteConfirm] = useState(false);
-  const del = () => { if (note) setDeleteConfirm(true); };
+  const del = () => { if (note && can('note.delete')) setDeleteConfirm(true); };
   const doDelete = async () => {
-    if (!note) return;
+    if (!note || !can('note.delete')) return;
     setDeleteConfirm(false);
     try {
       await api.notes.delete(note.id);
@@ -508,7 +517,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
 
   // «Связать» несвязанное упоминание (кнопка в блоке связей)
   const linkMention = (targetTitle: string) => {
-    if (!note) return;
+    if (!note || !can('note.edit')) return;
     void api.notes.linkMention(note.id, targetTitle).then(n => { if (n) setNote(n); bumpNotes(); });
   };
 
@@ -521,7 +530,10 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   const openMove = () => {
     setMoveError(null);
     setShowMove(true);
-    api.notes.sources().then(setMoveSources).catch(() => setMoveSources([]));
+    // Другие источники — дверь note.moveSource (редактору закрыта): выбор источника не рисуется
+    api.notes.sources()
+      .then(all => setMoveSources(can('note.moveSource') ? all : all.filter(s => s.key === note?.source)))
+      .catch(() => setMoveSources([]));
   };
   // Папки источника — из путей всех его заметок (включая промежуточные уровни)
   const foldersFor = (src: string) => [...new Set(
@@ -532,7 +544,8 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
       }),
   )].sort((a, b) => a.localeCompare(b, 'ru'));
   const moveTo = async (folder: string, targetSource?: string) => {
-    if (!note) return;
+    if (!note || !can('note.move')) return;
+    if (targetSource && targetSource !== note.source && !can('note.moveSource')) return;
     setMoveError(null);
     try {
       const updated = await api.notes.move(note.id, folder || null,
@@ -638,16 +651,20 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
           ) : (
             <>
               {/* AI-действия (связи, теги, конспект дня, «спросить Claude») — только через AI-палитру (⌘/Ctrl+K) */}
-              <IconButton title={isFavorite(note.tags) ? 'Убрать из избранного' : 'В избранное'}
-                tone={isFavorite(note.tags) ? 'accent' : undefined} onClick={() => { void toggleFav(); }}>
-                <IconStar size={ICON_SIZE.sm} filled={isFavorite(note.tags)} />
-              </IconButton>
+              {can('note.edit') && (
+                <IconButton title={isFavorite(note.tags) ? 'Убрать из избранного' : 'В избранное'}
+                  tone={isFavorite(note.tags) ? 'accent' : undefined} onClick={() => { void toggleFav(); }}>
+                  <IconStar size={ICON_SIZE.sm} filled={isFavorite(note.tags)} />
+                </IconButton>
+              )}
               <IconButton title={copied ? 'Скопировано' : 'Скопировать Markdown (Shift — с форматированием)'} onClick={copyNote}>
                 {copied ? <Check size={ICON_SIZE.sm} color={C.success} strokeWidth={2.5} /> : <Copy size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
               </IconButton>
-              <IconButton title={online ? 'Переместить…' : 'Перенос недоступен офлайн'} onClick={openMove} disabled={!online}><IconFolderMove /></IconButton>
-              <IconButton title="Удалить" tone="danger" onClick={del}><IconTrash /></IconButton>
-              <button onClick={startEdit} style={{ ...tbBtnPrimary, marginLeft: 6 }}>Править</button>
+              {can('note.move') && (
+                <IconButton title={online ? 'Переместить…' : 'Перенос недоступен офлайн'} onClick={openMove} disabled={!online}><IconFolderMove /></IconButton>
+              )}
+              {can('note.delete') && <IconButton title="Удалить" tone="danger" onClick={del}><IconTrash /></IconButton>}
+              {can('note.edit') && <button onClick={startEdit} style={{ ...tbBtnPrimary, marginLeft: 6 }}>Править</button>}
             </>
           )}
           {extraToolbar}
@@ -686,7 +703,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
               </button>
             ))}
             {/* Ручное добавление тега */}
-            {addingTag ? (
+            {!can('note.edit') ? null : addingTag ? (
                 <input
                   {...NO_AUTOFILL}
                   autoFocus
@@ -716,7 +733,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
               {tagsJob.status === 'done' && (tagsJob.result ?? []).length === 0 && (
                 <span style={{ fontSize: 11, color: C.textMuted }}>нечего предложить</span>
               )}
-              {tagsJob.status === 'done' && (tagsJob.result ?? []).map(t => (
+              {can('note.edit') && tagsJob.status === 'done' && (tagsJob.result ?? []).map(t => (
                 <button key={t} onClick={() => void acceptTag(t)} title="Добавить тег"
                   style={{ fontSize: 11.5, fontWeight: 500, color: C.textSecondary, background: C.bgSelected, border: `1px dashed ${C.dashed}`, borderRadius: R.sm, padding: '2px 8px', cursor: 'pointer', fontFamily: FONT.sans }}>
                   +#{t}
@@ -745,10 +762,10 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
                       <span style={{ fontWeight: 500, color: C.textPrimary }}>{l.title}</span>
                       <span style={{ color: C.textMuted }}> — {l.why}</span>
                     </span>
-                    <button onClick={() => void acceptLink(l.title)}
+                    {can('note.edit') && <button onClick={() => void acceptLink(l.title)}
                       style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 'none', fontSize: 11, fontWeight: 500, color: C.accent, background: C.bgWhite, border: `1px solid ${C.accentMuted}`, borderRadius: R.sm, padding: '3px 8px', cursor: 'pointer', fontFamily: FONT.sans }}>
                       <IconLink />Связать
-                    </button>
+                    </button>}
                   </div>
                 ))}
               </>
@@ -800,7 +817,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
               }}>«{ann.anchorQuote}»</div>
             )}
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              {!ann.isReply && (
+              {!ann.isReply && can('note.comment') && (
                 <button
                   onClick={() => {
                     const next = ann.status === 'open' ? 'resolved' : 'open';
@@ -826,7 +843,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
                 </button>
               )}
               {/* «Обработать» = задача из комментария: лично или персоне-исполнителю */}
-              {!ann.isReply && (
+              {!ann.isReply && can('note.tasks') && (
                 <span style={{ display: 'inline-flex', gap: 6 }}>
                   <button onClick={() => void createTaskFromComment()} style={annBtn}>
                     Создать задачу
@@ -858,7 +875,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
                     }}>{new Date(r.createdAt).toLocaleDateString('ru')}</button>
                   </div>
                 ))}
-                <div style={{ display: 'flex', gap: 6 }}>
+                {can('note.comment') && <div style={{ display: 'flex', gap: 6 }}>
                   <input
                     {...NO_AUTOFILL}
                     value={annReplyDraft}
@@ -875,7 +892,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
                     border: `1px solid ${C.border}`, borderRadius: R.sm, padding: '3px 10px',
                     cursor: 'pointer', fontFamily: FONT.sans, opacity: annReplySending ? 0.6 : 1,
                   }}>Отправить</button>
-                </div>
+                </div>}
               </div>
             )}
           </div>
@@ -898,7 +915,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
               <div ref={setPanelEl} />
               <NoteTasksSection noteId={note.id} version={version} />
               <NoteConnections note={note} onOpenNote={id => onSelectNote(id)}
-                onWikilink={onWikilink} onLinkMention={linkMention} />
+                onWikilink={onWikilink} onLinkMention={can('note.edit') ? linkMention : undefined} />
             </aside>
           )}
           {/* data-selection-scope — «Копировать как Markdown/HTML» из master работает
@@ -936,7 +953,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
           <div style={{ marginTop: 20, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
             <NoteTasksSection noteId={note.id} version={version} />
             <NoteConnections note={note} onOpenNote={id => onSelectNote(id)}
-              onWikilink={onWikilink} onLinkMention={linkMention} />
+              onWikilink={onWikilink} onLinkMention={can('note.edit') ? linkMention : undefined} />
           </div>
         )}
       </div>

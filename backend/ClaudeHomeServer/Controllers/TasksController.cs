@@ -49,8 +49,13 @@ public class ProjectTasksController(
         // RequestScope, который [ProjectScope] разрешил до действия: новой сверки id вызывающего
         // в контроллере нет.
         var asMember = HttpContext.GetRequestScope().Role != ProjectRole.Owner;
+        // Маска чужих приватных чатов (S2d-4b) — обе роли: задачи проекта вызываются и владельцем,
+        // и участником, а чужой приватный чат не видит никто из них, кроме его автора.
+        var audience = ChatAudience.Viewer(UserId);
         return Ok(tasks.GetByProject(projectId)
-            .Select(t => asMember ? TaskView.ForMemberListItem(t) : TaskListItem.From(t)).ToList());
+            .Select(t => TaskView.MaskForeignChats(
+                asMember ? TaskView.ForMemberListItem(t) : TaskListItem.From(t), sessions, projects, audience))
+            .ToList());
     }
 
     [HttpPost]
@@ -107,7 +112,7 @@ public class ProjectTasksController(
         {
             return BadRequest(new { error = ex.Message });
         }
-        await broadcaster.ToTaskBoard(UserId, task.ProjectId, new TaskChangedMessage("created", task));
+        await broadcaster.ToTaskBoard(UserId, task.ProjectId, new TaskChangedMessage("created", task), sessions, projects);
         return Ok(task);
     }
 }
@@ -341,7 +346,7 @@ public class TasksController(
         {
             return BadRequest(new { error = ex.Message });
         }
-        await broadcaster.ToTaskBoard(UserId, task.ProjectId, new TaskChangedMessage("created", task));
+        await broadcaster.ToTaskBoard(UserId, task.ProjectId, new TaskChangedMessage("created", task), sessions, projects);
         return Ok(task);
     }
 
@@ -392,7 +397,11 @@ public class TasksController(
         // участника TaskView (те же поля, что в его карточке, минус тяжёлый текст; id личной заметки
         // владельца закрыт). MyTasksQuery уже отобрал их по праву Read — сверка «своя ли задача»
         // выбирает форму ответа, ключом хранилищ не служит.
-        return Ok(result.Select(t => t.OwnerId == UserId ? TaskListItem.From(t) : TaskView.ForMemberListItem(t)).ToList());
+        // Маска чужих приватных чатов (S2d-4b) — и своих задач тоже: владелец не видит чат,
+        // приватный другому участнику его проекта.
+        var audience = ChatAudience.Viewer(UserId);
+        return Ok(result.Select(t => TaskView.MaskForeignChats(
+            t.OwnerId == UserId ? TaskListItem.From(t) : TaskView.ForMemberListItem(t), sessions, projects, audience)).ToList());
     }
 
     [HttpGet("{taskId}")]
@@ -400,14 +409,16 @@ public class TasksController(
     {
         var task = tasks.GetById(taskId);
         if (task is null) return NotFound();
-        // Владелец (арендатор) — полная карточка, как раньше.
-        if (task.OwnerId == UserId) return Ok(task);
+        // Владелец (арендатор) — полная карточка, как раньше (тот же состав полей), но копия с
+        // маской чужих приватных чатов (S2d-4b): их не видит и владелец проекта.
+        if (task.OwnerId == UserId)
+            return Ok(TaskView.MaskForeignChats(TaskView.CopyOf(task), sessions, projects, ChatAudience.Viewer(UserId)));
         // S2c-9 (решение Андрея 01.11): участник общего проекта с правом Read (редактор и читатель)
         // читает полную карточку через единую проекцию TaskView (тот же состав полей, что в списке,
         // плюс Description/ResultMarkdown). Членство и флаг «Общие проекты» решает только
         // IProjectAccess.Resolve; ключ хранилища не меняется — задача лежит у арендатора.
         if (task.ProjectId is { } pid && access?.Resolve(UserId, pid, ProjectRight.Read) is not null)
-            return Ok(TaskView.ForMember(task));
+            return Ok(TaskView.MaskForeignChats(TaskView.ForMember(task), sessions, projects, ChatAudience.Viewer(UserId)));
         // Посторонний, отозванный, выключенный флаг, личная задача владельца — всегда 404:
         // «нет» и «чужое» не различаем.
         return NotFound();
@@ -591,7 +602,7 @@ public class TasksController(
         {
             return BadRequest(new { error = ex.Message });
         }
-        await broadcaster.ToTaskBoard(UserId, updated.ProjectId, new TaskChangedMessage("updated", updated));
+        await broadcaster.ToTaskBoard(UserId, updated.ProjectId, new TaskChangedMessage("updated", updated), sessions, projects);
 
         // Завершение экземпляра регулярной задачи → следующий экземпляр серии.
         // Покрывает и UI, и MCP (tasks_complete/tasks_update идут через этот PUT)
@@ -599,7 +610,7 @@ public class TasksController(
         {
             var next = tasks.SpawnNextOccurrence(updated);
             if (next is not null)
-                await broadcaster.ToTaskBoard(UserId, next.ProjectId, new TaskChangedMessage("created", next));
+                await broadcaster.ToTaskBoard(UserId, next.ProjectId, new TaskChangedMessage("created", next), sessions, projects);
         }
 
         // Обратная запись в заметку-источник: смена done-состояния ставит/снимает галочку
@@ -1097,12 +1108,12 @@ public class TasksController(
         // в группу владельца для эпика (с Hold — проектор по нему считает state=paused)
         // и каждого шага, помеченного этой паузой. Без вещания стор обновляется только по
         // снятию — асимметрия, которую Вера и зафиксировала.
-        await broadcaster.ToTaskBoard(UserId, epic.ProjectId, new TaskChangedMessage("updated", epic));
+        await broadcaster.ToTaskBoard(UserId, epic.ProjectId, new TaskChangedMessage("updated", epic), sessions, projects);
         foreach (var t in tasks.GetByOwner(UserId))
         {
             if (t.FeatureId != featureId) continue;
             if (t.ExecutorStopReason != ExecutorStopClassifier.FeatureHeldReason) continue;
-            await broadcaster.ToTaskBoard(UserId, t.ProjectId, new TaskChangedMessage("updated", t));
+            await broadcaster.ToTaskBoard(UserId, t.ProjectId, new TaskChangedMessage("updated", t), sessions, projects);
         }
         // W4-HOLD-D2 (контракт :364): ответ — прерванные этой паузой задачи. Тот же набор,
         // что поле run.interrupted на странице («на паузе» читает его, а не пустой now), —
@@ -1146,7 +1157,7 @@ public class TasksController(
         var epic = tasks.SetFeatureNote(featureId, req?.Text, null, true,
             FeatureBrief.ActiveStageOf(run), FeatureBrief.KindAtWriteOf(run));
         if (epic is null) return NotFound(new { error = "Фича не найдена" });
-        await broadcaster.ToTaskBoard(UserId, epic.ProjectId, new TaskChangedMessage("updated", epic));
+        await broadcaster.ToTaskBoard(UserId, epic.ProjectId, new TaskChangedMessage("updated", epic), sessions, projects);
         return Ok(new { note = epic.Note is null ? null : new { text = epic.Note.Text, at = epic.Note.At } });
     }
 
@@ -1472,7 +1483,7 @@ public class TasksController(
                 return BadRequest(new { error = ex.Message });
             }
 
-            await broadcaster.ToTaskBoard(UserId, task.ProjectId, new TaskChangedMessage("created", task));
+            await broadcaster.ToTaskBoard(UserId, task.ProjectId, new TaskChangedMessage("created", task), sessions, projects);
 
             // Возвращаем задачу ПОСЛЕ запуска: ClaudeStartedAt/статус подтверждают, что исполнитель стартовал.
             TaskItem started;
@@ -1670,7 +1681,7 @@ public class TasksController(
         // после него задачи в реестре нет, и путь возврата срока для её чата больше не выполнится.
         executor.RestoreFrozenChatsBeforeDelete(task);
         tasks.Delete(taskId);
-        await broadcaster.ToTaskBoard(UserId, task.ProjectId, new TaskChangedMessage("deleted", task));
+        await broadcaster.ToTaskBoard(UserId, task.ProjectId, new TaskChangedMessage("deleted", task), sessions, projects);
         return NoContent();
     }
 }

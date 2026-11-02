@@ -101,22 +101,37 @@ public static class SessionBroadcasterExtensions
     // Событие доски: у задачи проекта — участникам группы проекта и дополнительно владельцу
     // карточки, потому что общий стор задач (календарь, список вне проекта) подписан только
     // на user_{id} и без второй адресации не увидел бы собственных проектных задач.
-    public static async Task ToTaskBoard(this ISessionBroadcaster broadcaster, string ownerId, string? projectId, ServerMessage message)
+    // sessions/projects — резолвер видимости чатов (S2d-4b): без них маска чужих приватных чатов
+    // не применяется (решения нет — поведение прежнее). Подключённые точки — контроллеры задач;
+    // остальные вызывающие (TaskExecutionService, TeamWaveService, TasksToolset, WorkspaceToolset,
+    // NotesHubNotifier, ArchitectureAgentLauncherAdapter, TaskSchedulerService) — следующий шаг.
+    public static async Task ToTaskBoard(this ISessionBroadcaster broadcaster, string ownerId, string? projectId,
+        ServerMessage message, ISessionDirectory? sessions = null, IProjectManager? projects = null)
     {
         if (string.IsNullOrEmpty(projectId))
         {
-            await broadcaster.ToOwner(ownerId, message);
+            await broadcaster.ToOwner(ownerId, ForOwner(message, ownerId, sessions, projects));
             return;
         }
         // Группе проекта — та же проекция, что список в REST (TaskView.ForMemberListItem): без
         // Description/ResultMarkdown и без id чужой заметки-источника (SourceNoteId личного vault
         // раскрывает участнику путь и название личной заметки владельца). Иначе участник получил бы
-        // по WS то, чего REST ему не отдаёт. Исходный TaskItem не правится (копия), владелец
-        // получает полную карточку.
+        // по WS то, чего REST ему не отдаёт. Исходный TaskItem не правится (копия).
+        // Плюс маска чужих приватных чатов (S2d-4b, К5) для всей группы одним payload'ом:
+        // отдать группе можно только то, что видно всем, — общий чат этого проекта; приватный чат
+        // участника закрыт и для его автора (свой чат он видит точковыми путями REST).
         var forProject = message is TaskChangedMessage { Task: { } task } tc
-            ? tc with { Task = TaskView.ForMemberListItem(task) }
+            ? tc with { Task = TaskView.MaskForeignChats(TaskView.ForMemberListItem(task), sessions, projects, ChatAudience.Group(projectId)) }
             : message;
         await broadcaster.ToProject(projectId, forProject);
-        await broadcaster.ToOwner(ownerId, message);
+        // Владелец — полная карточка (состав полей как раньше), но и он чужой приватный чат не
+        // видит: та же маска по его видимости.
+        await broadcaster.ToOwner(ownerId, ForOwner(message, ownerId, sessions, projects));
     }
+
+    private static ServerMessage ForOwner(ServerMessage message, string ownerId,
+        ISessionDirectory? sessions, IProjectManager? projects) =>
+        message is TaskChangedMessage { Task: { } task } tc
+            ? tc with { Task = TaskView.MaskForeignChats(TaskView.CopyOf(task), sessions, projects, ChatAudience.Viewer(ownerId)) }
+            : message;
 }

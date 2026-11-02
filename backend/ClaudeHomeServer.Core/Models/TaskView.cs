@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Text;
+using ClaudeHomeServer.Services;
 
 namespace ClaudeHomeServer.Models;
 
@@ -15,12 +16,16 @@ namespace ClaudeHomeServer.Models;
 ///
 /// Как есть (решение Андрея 01.11, Q2): ClaudeResult — участнику показывается как сейчас.
 ///
-/// ChatRef (К5) — якорь шага S2d-4: id чатов (LinkedSessionId, SourceSessionId,
-/// ExecutorLaunchedBySessionId, ReportToSessionId) здесь не меняются: заглушка для чужих приватных
-/// чатов — отдельный шаг, и точка у него одна — эта, а не вторая.
+/// ChatRef (К5, шаг S2d-4b) — здесь: по каждому id чата задачи (LinkedSessionId, SourceSessionId,
+/// ExecutorLaunchedBySessionId, ReportToSessionId) решение отдаёт <see cref="ChatRefs"/>, и оно
+/// одно на все роли — маска стоит и в пути участника, и в пути владельца (владелец проекта чужой
+/// приватный чат тоже не видит). Видимый чат — id в своём поле, как раньше; чужой приватный — id
+/// обнулён, рядом форма-заглушка. Второй точки правды нет; путь MCP (ForActor → TasksToolset) —
+/// следующий шаг S2d-4b2.
 ///
-/// Путь владельца через проекцию не идёт: свои задачи он получает как раньше (TaskListItem / полный
-/// TaskItem). Ключ хранилища проекция не трогает: задача лежит у арендатора.
+/// Путь владельца через проекцию состава полей не идёт: свои задачи он получает как раньше
+/// (TaskListItem / полный TaskItem), но с той же маской чатов (CopyOf + MaskForeignChats).
+/// Ключ хранилища проекция не трогает: задача лежит у арендатора.
 /// </summary>
 public static class TaskView
 {
@@ -35,11 +40,46 @@ public static class TaskView
     /// Хранимый объект не меняется — в ответ идёт копия (проекция правит только копию).</summary>
     public static TaskItem ForMember(TaskItem source)
     {
+        var copy = CopyOf(source);
+        if (IsForeignNoteSource(copy)) copy.SourceNoteId = null;
+        return copy;
+    }
+
+    /// <summary>Копия хранимого объекта со всеми полями — для путей, где состав ответа не меняется
+    /// (карточка и элемент списка владельца), но нужна маска полей: проекция правит копию, а не
+    /// запись стора.</summary>
+    public static TaskItem CopyOf(TaskItem source)
+    {
         var copy = new TaskItem();
         foreach (var p in CopyProps)
             p.SetValue(copy, p.GetValue(source));
-        if (IsForeignNoteSource(copy)) copy.SourceNoteId = null;
         return copy;
+    }
+
+    /// <summary>Маска чужих приватных чатов задачи (S2d-4b, К5) — одна для всех ролей, включая
+    /// владельца проекта. По каждому id чата решение отдаёт <see cref="ChatRefs.For"/> для этой
+    /// аудитории: видимый чат — id остаётся в своём поле, отдельного объекта нет; чужой приватный —
+    /// id обнуляется, рядом становится форма-заглушка. Несуществующий чат не маскируется (см.
+    /// ChatRefs.For), как и случай «каталог не передан»: решения нет — поведение прежнее.
+    ///
+    /// Правит переданный объект и возвращает его (для цепочки): передавай копию — CopyOf или
+    /// результат проекции, — а не запись стора.</summary>
+    public static T MaskForeignChats<T>(T task, ISessionDirectory? sessions, IProjectManager? projects,
+        ChatAudience audience) where T : TaskItem
+    {
+        void Apply(string? id, Action<string?> setId, Action<ChatRef?> setRef)
+        {
+            var hidden = ChatRefs.For(sessions, projects, id, audience);
+            if (hidden is not { Private: true }) return;
+            setId(null);
+            setRef(hidden);
+        }
+
+        Apply(task.LinkedSessionId, v => task.LinkedSessionId = v, r => task.LinkedChat = r);
+        Apply(task.SourceSessionId, v => task.SourceSessionId = v, r => task.SourceChat = r);
+        Apply(task.ExecutorLaunchedBySessionId, v => task.ExecutorLaunchedBySessionId = v, r => task.ExecutorLaunchedByChat = r);
+        Apply(task.ReportToSessionId, v => task.ReportToSessionId = v, r => task.ReportToChat = r);
+        return task;
     }
 
     /// <summary>Элемент списка для участника: тот же, что у владельца (TaskListItem.From), плюс та же

@@ -65,10 +65,14 @@ public class ProjectBroadcastRoutingTests
         forProject.Description.Should().BeEmpty();
         forProject.ResultMarkdown.Should().BeNull();
         forProject.Title.Should().Be("T");
+        // Владельцу — полная карточка (тот же состав полей), но копия: маска чужих приватных
+        // чатов (S2d-4b) правит только копию. Ссылок на чаты в этом сиде нет — копия идентична
+        // по полям, и это всё, что обязан гарантировать ответ.
         var forOwner = ((TaskChangedMessage)cap.ToOwnerMsg!).Task;
-        forOwner.Should().BeSameAs(task);
+        forOwner.Should().NotBeSameAs(task);
         forOwner.Description.Should().Be("секрет-описание");
         forOwner.ResultMarkdown.Should().Be("секрет-итог");
+        forOwner.Id.Should().Be("t1");
         task.Description.Should().Be("секрет-описание", "облегчается копия, а не исходная карточка");
     }
 
@@ -80,7 +84,8 @@ public class ProjectBroadcastRoutingTests
     /// <summary>S2c-9 доработка (п.1 вердикта): WS-копия для группы проекта идёт той же проекцией,
     /// что список REST (TaskView.ForMemberListItem): id заметки личного vault закрыт (он раскрывает
     /// участнику путь и название личной заметки владельца), заметка этого проекта остаётся, поля
-    /// облегчённого элемента сохранены. Владельцу — исходное сообщение, хранимая карточка не правится.</summary>
+    /// облегчённого элемента сохранены. Владельцу — копия полной карточки (с S2d-4b она необходима:
+    /// маска чужих приватных чатов правит только копию), хранимая карточка не правится.</summary>
     [Fact]
     public async Task ToTaskBoard_ГруппеПроектаЗакрытSourceNoteIdЧужогоVaultа_ЗаметкаПроектаОстаётся()
     {
@@ -106,7 +111,7 @@ public class ProjectBroadcastRoutingTests
             "id личного vault раскрывает участнику путь и название личной заметки владельца");
 
         var forOwner = ((TaskChangedMessage)cap.ToOwnerMsg!).Task;
-        forOwner.SourceNoteId.Should().Be(personalNote, "владельцу уходит исходное сообщение без изменений");
+        forOwner.SourceNoteId.Should().Be(personalNote, "маска чатов не трогает заметку: копия полной карточки владельца");
         task.SourceNoteId.Should().Be(personalNote, "маска правит копию, а не хранимую карточку");
 
         // своя заметка этого проекта: участник читает заметки проекта и так — маска бьёт только чужой источник

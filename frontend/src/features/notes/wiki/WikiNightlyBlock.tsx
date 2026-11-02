@@ -137,6 +137,9 @@ function LastNightBlock({ last, snapshot, isMobile, onOpenInbox, onOpenJournal }
   onOpenJournal?: () => void;
 }) {
   const notice = nightOutcomeNotice(last.outcome, last);
+  // «≈ N из M» и полоса — против ТЕКУЩЕГО «Бюджета за ночь» (решение F4, хвост R-F2 (4)):
+  // файла с бюджетом на момент той ночи нет (N7c — только estTokens), а текущий человек
+  // видит в поле рядом; сравнение честно ровно в эту сторону и сказано в title строки
   const budget = Math.max(1, snapshot.nightly.inputTokenBudget);
   const pct = Math.max(0, Math.min(100, Math.round((last.estTokens / budget) * 100)));
   return (
@@ -162,7 +165,10 @@ function LastNightBlock({ last, snapshot, isMobile, onOpenInbox, onOpenJournal }
           {kvCell(last.applied, 'пакетов применено само')}
           {kvCell(last.toInbox, 'ждут вас во «Входящих»')}
         </div>
-        <div style={{ display: 'flex', gap: SP.md, alignItems: 'center', marginTop: SP.md }}>
+        <div
+          title="Расход той ночи против текущего «Бюджета за ночь»"
+          style={{ display: 'flex', gap: SP.md, alignItems: 'center', marginTop: SP.md }}
+        >
           <span style={{ flex: 1, minWidth: 0 }}><ProgressBar value={pct} estimate /></span>
           <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary }}>
             ≈ {fmtNum(last.estTokens)} из {fmtNum(snapshot.nightly.inputTokenBudget)}

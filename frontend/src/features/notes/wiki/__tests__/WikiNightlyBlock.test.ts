@@ -1,8 +1,12 @@
-// Рендер-тест блока «Ночной разбор» (F2, срез «Ф2 02.11»):
-// — нет итога: карточка «ещё не было» и текст по состоянию тумблера (окно — из настроек);
+// Рендер-тест блока «Ночной разбор» (F2, срез «Ф2 02.11»; F4 — формулировки итога ночи,
+// хвосты R-F2 (1)–(4)):
+// — нет итога: карточка «ещё не было» и текст по состоянию тумблера (окно — из настроек;
+//   без обещания «сегодня» — серверного часа у фронта нет);
 // — четыре итога рендерят ожидаемые строки с числами lastNight (selected/analyzed/applied/
-//   toInbox) и оценочным расходом «≈ N из M»;
+//   toInbox) и оценочным расходом «≈ N из M» — против ТЕКУЩЕГО бюджета: после его смены
+//   строка и полоса считают новое значение, не то, что было при той ночи;
 // — window_closed / disabled_midway / error — info-тексты без кнопки «Входящие»;
+//   disabled_midway при analyzed=0 — «до первого чата», не «на 0-м чате»;
 // — «Чем разбирать» — только текст: ноль select/input/button внутри блока;
 // — клик по тумблеру: оптимистично до ответа и ровно один PUT {nightly:{enabled:true}};
 // — 400 сохранения: текст записки, и стор откатил оптимистичное (тумблер снова выключен);
@@ -17,7 +21,11 @@
 // (2) в LastNightBlock не показывать предупреждение open_limit → «Остановились:…» и
 //     «Больше 20 спорных…» краснеют;
 // (3) в completed не показывать строку «Разобрано всё отобранное.» → «completed» краснеет;
-// (4) в commitNum не вызывать putWikiNightly → тесты валидных чисел краснеют (0 PUT'ов).
+// (4) в commitNum не вызывать putWikiNightly → тесты валидных чисел краснеют (0 PUT'ов);
+// (5) вернуть старую строку причины disabled_midway («остановились на N-м чате») →
+//     тест window_closed/disabled_midway/error краснеет (проверено, вывод — в отчёте F4);
+// — отдельной мутации для «против текущего бюджета» нет: тест смены доказывает это сам —
+//   после PUT проверяется новое значение и отсутствие старого в строке расхода.
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -160,7 +168,8 @@ describe('блок «Ночной разбор» (F2)', () => {
     server = settings({ nightly: { enabled: true } });
     const c2 = render();
     await settle();
-    expect(has(c2, 'Первый пройдёт сегодня с 03:00 до 06:00. Утром придёт уведомление: что применилось само и что ждёт вас.')).toBe(true);
+    expect(has(c2, 'Первый пройдёт ближайшей ночью с 03:00 до 06:00. Утром придёт уведомление: что применилось само и что ждёт вас.')).toBe(true);
+    expect(has(c2, 'Первый пройдёт сегодня')).toBe(false);
     expect(has(c2, 'Ночью ничего не разбирается')).toBe(false);
     expect(has(c2, 'Включите разбор')).toBe(false);
   });
@@ -179,12 +188,36 @@ describe('блок «Ночной разбор» (F2)', () => {
     expect(has(c, 'Остановились')).toBe(false);
   });
 
+  it('смена бюджета: «≈ N из M» и полоса против нового значения, не прежнего', async () => {
+    server = settings({ lastNight: LAST({}) });
+    const c = render();
+    await settle();
+    expect(has(c, '≈ 512 000 из 700 000')).toBe(true);
+    const budgetInput = findNodeByAttr(c, 'data-testid', 'wiki-nightly-input-inputTokenBudget')!
+      .querySelectorAll('input')[0];
+    callProp(budgetInput, 'onFocus');
+    callProp(budgetInput, 'onChange', { target: { value: '1000000' } });
+    await settle();
+    callProp(budgetInput, 'onBlur');
+    await settle();
+    const puts = putCalls();
+    expect(puts.length).toBe(1);
+    expect(sentBody(puts[0])).toEqual({ nightly: { inputTokenBudget: 1000000 } });
+    expect(getWikiSettingsSnapshot()!.nightly.inputTokenBudget).toBe(1000000);
+    // карточка итога остаётся в снимке: PUT не несёт lastNight, он сохраняется от GET-чтения
+    // (wiki.ts:1084) — и расход после смены считается НОВЫМ значением (решение F4)
+    expect(has(c, '≈ 512 000 из 1 000 000')).toBe(true);
+    expect(has(c, '≈ 512 000 из 700 000')).toBe(false);
+  });
+
   it('budget: предупреждение с числами чатов и полным расходом', async () => {
     server = settings({ lastNight: LAST({ selected: 14, analyzed: 9, applied: 13, toInbox: 3, estTokens: 700000, outcome: 'budget' }) });
     const c = render();
     await settle();
-    expect(has(c, 'Не хватило бюджета на всё')).toBe(true);
-    expect(has(c, 'Разобрали 9 чатов из 14 отобранных. Остальные 5 разберём следующей ночью — сначала они. Если так каждую ночь, поднимите бюджет.')).toBe(true);
+    expect(has(c, 'Ночь остановилась на своём лимите')).toBe(true);
+    expect(has(c, 'Разобрали 9 чатов из 14 отобранных. Остальные 5 разберём следующей ночью — сначала они. Лимиты заданы в «Пакетах за ночь» и «Бюджете за ночь» — если так каждую ночь, проверьте их.')).toBe(true);
+    // старой формулировки-совета про бюджет в тексте нет: она не применима к упору в лимит пакетов
+    expect(has(c, 'поднимите бюджет')).toBe(false);
     expect(has(c, '≈ 700 000 из 700 000')).toBe(true);
     expect(has(c, '13 пакетов применено само')).toBe(true);
   });
@@ -212,7 +245,15 @@ describe('блок «Ночной разбор» (F2)', () => {
     server = settings({ lastNight: LAST({ analyzed: 3, outcome: 'disabled_midway' }) });
     const c2 = render();
     await settle();
-    expect(has(c2, 'Вы выключили разбор посреди ночи — остановились на 3-м чате.')).toBe(true);
+    expect(has(c2, 'Вы выключили разбор посреди ночи: 3 чата разобрано, чего не успели — следующей ночью.')).toBe(true);
+    expect(has(c2, 'остановились на 3-м чате')).toBe(false);
+
+    // отключение до первого чата (CheckStop перед каждым чатом): «на 0-м чате» не про что
+    server = settings({ lastNight: LAST({ selected: 0, analyzed: 0, applied: 0, toInbox: 0, outcome: 'disabled_midway' }) });
+    const c4 = render();
+    await settle();
+    expect(has(c4, 'Вы выключили разбор до первого чата — ничего не разобрано.')).toBe(true);
+    expect(has(c4, '0-м чате')).toBe(false);
 
     server = settings({ lastNight: LAST({ outcome: 'error' }) });
     const c3 = render();

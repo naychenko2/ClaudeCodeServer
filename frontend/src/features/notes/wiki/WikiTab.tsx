@@ -20,7 +20,7 @@ import { AlertTriangle, BookOpen, Check, ChevronLeft, ChevronRight, Folder, Lock
 import {
   C, FONT, FS, R, SP, useIsMobile, FLAGS, useFeature,
   WikiError, ensureWikiLoaded, deleteWikiSection, groupSectionsByKind, initializeWiki,
-  loadWikiCatalog, loadWikiPage, useWikiCatalog, useWikiPage, useWikiTree,
+  loadWikiCatalog, loadWikiPage, useWikiCatalog, useWikiPage, useWikiPageGone, useWikiTree,
   consumeOpenWikiPage, useWikiOpenRequest,
   type WikiPageInfoDto, type WikiSectionDto,
 } from 'aihome_shell/kit';
@@ -292,6 +292,23 @@ export function WikiTab() {
     });
   }, [selectedKey]);
 
+  // Стор снял открытую страницу 404 перечитки после мутации (откат снес страницу —
+  // W4-5, дефект 3f3449e4): намерение «страница открыта» живёт здесь, и снимает его
+  // только этот экран — без возврата центр висел бы на скелетоне без выхода.
+  // Факт снятия — в сторе (useWikiPageGone), НЕ в отсутствии снимка: пока страница
+  // грузится ответа ещё нет, но её никто не снимал — скелетон остаётся (c2).
+  // Закрытие — не closePage (осознанного действия нет, сиротить нечего): если запрос
+  // этой же страницы ещё идёт, его отказ доходит штатным путём openPage — «ошибку
+  // показывает штатный путь». Эффект объявлен до эффектов выбора/OPEN-1: при
+  // однокоммитном открытии другой страницы её открытие идёт последним и побеждает —
+  // снятие прежней не закрывает новую (конкурентность W4-5).
+  const pageGone = useWikiPageGone(selectedKey ?? '', openedPage ?? '');
+  useEffect(() => {
+    if (!openedPage || !pageGone) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- стор уже снял страницу: возврат к каталогу — единственный исход, держать открытой нечего
+    setOpenPage(null);
+  }, [openedPage, pageGone]);
+
   const load = useCallback(() => {
     setLoadError(null);
     // Смена владельца в этой же вкладке — известный минор S5a (N1): самолечится новым
@@ -402,7 +419,8 @@ export function WikiTab() {
     if (selected.local) return <LocalSection onOpenCommon={commonKey ? () => selectSection(commonKey, true) : undefined} />;
 
     // Открытая страница (S5b) — вместо каталога; текст и дрейф читает сам экран из стора
-    // (доработка S5b M2), здесь остаётся только порог: пока страницы нет — спиннер.
+    // (доработка S5b M2), здесь остаётся только порог: пока страница грузится — спиннер;
+    // если её снял откат — эффект выше (W4-5) уже закрыл страницу, до скелетона не доходит.
     // key — по паре (раздел, страница): локальное состояние действия (занятость и отказ
     // adopt) не переезжает на другую страницу
     if (openedPage) {

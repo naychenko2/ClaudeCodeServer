@@ -42,7 +42,7 @@ export {
   listWikiPackages, decideWikiPackage, acceptAllWikiPackage,
   loadWikiJournal, retractWikiSource, getWikiHealth, runWikiLint,
   analyzeWikiChat, loadWikiChatAnalyzeStatus, loadWikiChats, ingestWikiNote,
-  useWikiTree, useWikiCatalog, useWikiPage,
+  useWikiTree, useWikiCatalog, useWikiPage, useWikiPageGone,
   requestOpenWikiPage, consumeOpenWikiPage, useWikiOpenRequest,
 } from '../wiki';
 export type {

@@ -787,14 +787,25 @@ public class ImageThreadVersionsTests : IDisposable
         _spend.Records.Should().BeEmpty("отказ до запуска и траты");
     }
 
-    private static async Task<T> Until<T>(Func<T?> probe) where T : class
+    // Состояние нити меняется до рассылки ImageThreadChangedMessage — проверяем его на каждую рассылку,
+    // а не по часам; потолок 30 с — страховка от зависания, не проверяемая скорость
+    private async Task<T> Until<T>(Func<T?> probe) where T : class
     {
-        for (var i = 0; i < 500; i++)
+        var found = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Check()
         {
-            if (probe() is { } found) return found;
-            await Task.Delay(10);
+            if (probe() is { } value) found.TrySetResult(value);
         }
-        throw new TimeoutException("не дождались");
+        _broadcaster.OwnerMessageSent += Check;
+        try
+        {
+            Check();
+            return await found.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        }
+        finally
+        {
+            _broadcaster.OwnerMessageSent -= Check;
+        }
     }
 
     private sealed class RecordingFeed : IChatFeed

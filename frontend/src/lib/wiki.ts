@@ -993,9 +993,29 @@ function mergeClassStats(
   return [...byKey.values()].sort((a, b) => (a.class < b.class ? -1 : a.class > b.class ? 1 : 0));
 }
 
-export async function loadWikiSettings(): Promise<WikiSettingsSnapshot> {
-  const gen = ++_settingsGen;
+// Висящий GET настроек: два блока вкладки зовут загрузку при монтировании — второй вызов
+// делит запрос первого (иначе отказ более нового GET отбрасывал бы ответ первого как устаревший
+// и блок оставался на скелетоне без ошибки). PUT поднимает поколение — висящий слот после него
+// не переиспользуется: чтение, начатое до правки, не должно затереть её.
+let _settingsReq: { gen: number; owner: string | null; promise: Promise<WikiSettingsSnapshot> } | null = null;
+
+export function loadWikiSettings(): Promise<WikiSettingsSnapshot> {
   const owner = readStoredUserId();
+  if (_settingsReq && _settingsReq.gen === _settingsGen && _settingsReq.owner === owner) {
+    return _settingsReq.promise;
+  }
+  const gen = ++_settingsGen;
+  const req = {
+    gen, owner,
+    promise: fetchWikiSettings(gen, owner).finally(() => {
+      if (_settingsReq === req) _settingsReq = null;
+    }),
+  };
+  _settingsReq = req;
+  return req.promise;
+}
+
+async function fetchWikiSettings(gen: number, owner: string | null): Promise<WikiSettingsSnapshot> {
   const body = await wikiHttp<unknown>('/wiki/settings');
   const nightly = readNightly(body);
   if (!nightly) throw new WikiError(0, null, 'неожиданный ответ настроек вики');
@@ -1281,6 +1301,7 @@ export const __test = {
     _treeGen = 0;
     _pageGen = 0;
     _settingsGen = 0;
+    _settingsReq = null;
     _catalogGen.clear();
   },
   // Тестовый шов: подписка экрана на страницу. Открытой страницу делает счётчик, который

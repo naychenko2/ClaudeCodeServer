@@ -99,6 +99,38 @@ public class WikiClassHealthTests : IDisposable
         _notifier.Sent[0].Body.Should().Contain("3 откатов за 7 дней");
     }
 
+    // ─── B4a: класс замены человека «…@human» — отдельный класс автовыключения ──
+
+    private const string HumanClassKey = "session×supersede@human";
+
+    [Fact]
+    public async Task ТриОткатаЗаСемьДнейВыключаютКлассСХвостомHuman_ДругойКлассНеТронут()
+    {
+        var old = DateTimeOffset.UtcNow - TimeSpan.FromDays(10);
+        var recent = DateTimeOffset.UtcNow - TimeSpan.FromDays(1);
+        for (var i = 0; i < 47; i++) WritePackage(old, classKey: HumanClassKey);
+        for (var i = 0; i < 3; i++) WritePackage(old, retractedAt: recent, classKey: HumanClassKey);
+        // Класс замены ИИ в тех же условиях без откатов: окна у классов свои.
+        for (var i = 0; i < 50; i++) WritePackage(old, classKey: "session×supersede");
+
+        await _sut.EvaluateAsync(User);
+
+        var settings = ReadSettings();
+        settings.IsClassDisabled(HumanClassKey).Should().BeTrue("ключ с хвостом @human разбирается и оценивается как класс");
+        settings.IsClassDisabled("session×supersede").Should().BeFalse("откаты @human не размываются в классе замен ИИ");
+    }
+
+    [Theory]
+    [InlineData("session×supersede@human", true)]
+    [InlineData("note×conflict@human", true)]
+    [InlineData("session×append@human", false)]
+    [InlineData("session×supersede@ai", false)]
+    [InlineData("×supersede@human", false)]
+    [InlineData("session×@human", false)]
+    [InlineData("session×supersede@human@human", false)]
+    public void IsValidClassKey_ХвостHuman_ТолькоУSupersedeИConflict(string key, bool valid) =>
+        WikiSettingsStore.IsValidClassKey(key).Should().Be(valid);
+
     [Fact]
     public async Task ОткатРовноНаГраницеСемидневногоОкнаУчитывается()
     {
@@ -294,9 +326,10 @@ public class WikiClassHealthTests : IDisposable
             Sources = [new WikiPackage.SourceRef(parts[0], SourceRef)],
             Operations = [new WikiPackage.Operation
             {
-                Op = parts[1],
+                Op = parts[1].Replace(WikiPackage.HumanTargetSuffix, ""),
                 Page = PagePath(id),
                 Text = "утверждение из чата",
+                Target = parts[1].StartsWith("supersede") || parts[1].StartsWith("conflict") ? "заменяемое утверждение" : null,
                 Class = classKey,
                 Decision = WikiPackage.DecisionAuto,
             }],

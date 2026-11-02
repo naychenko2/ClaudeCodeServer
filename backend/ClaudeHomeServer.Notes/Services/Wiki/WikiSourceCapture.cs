@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Media;
 
 namespace ClaudeHomeServer.Services.Notes.Wiki;
@@ -140,7 +141,8 @@ public sealed class WikiSourceCapture
         }
 
         return await WriteCard(ownerId, decision.SectionKey, WikiGate.OriginNote, $"note:{note.Id}",
-            versionHash, note.Title, note.Id, note.Content);
+            versionHash, note.Title, note.Id, note.Content,
+            DateTimeOffset.TryParse(note.UpdatedAt, out var noteWritten) ? noteWritten : null);
     }
 
     /// <summary>Захват файла проекта (origin: file): только внутри корня своего проекта и не
@@ -225,7 +227,8 @@ public sealed class WikiSourceCapture
         // ref файла несёт проект: карточка может быть скопирована в раздел выше при повышении
         // (ADR-036, решение 5), и по одному только пути файла источник не опознать.
         return await WriteCard(ownerId, decision.SectionKey, WikiGate.OriginFile, $"file:{projectId}/{rel}",
-            versionHash, Path.GetFileNameWithoutExtension(rel), rel, sourceText);
+            versionHash, Path.GetFileNameWithoutExtension(rel), rel, sourceText,
+            FileWrittenAt(full));
     }
 
     /// <summary>Захват чата (origin: session, ADR-035, решение 3 и §12б): выдержка
@@ -288,7 +291,38 @@ public sealed class WikiSourceCapture
         // переписывание истории (сброс курсора, §12б этап 1) даёт другую выдержку → новую
         // карточку, не перезапись старой. Заголовок — имя чата, при пустом — id (CardName).
         return await WriteCard(ownerId, sectionKey, WikiGate.OriginSession, ref_,
-            Sha256OfBytes(Encoding.UTF8.GetBytes(excerpt)), session.Name ?? "", sessionId, excerpt);
+            Sha256OfBytes(Encoding.UTF8.GetBytes(excerpt)), session.Name ?? "", sessionId, excerpt,
+            LastMessageAt(history, from, to));
+    }
+
+    // Время написания источника (карточка, поле written; ADR-038, решение 4). Резолвер по origin
+    // живёт здесь, в захвате: у карточки уже есть всё нужное, а позже источника не прочитать
+    // (история чата, файл, заметка меняются). Не удалось узнать — null: карточка без written,
+    // и политика замены считает время неизвестным (fail-closed), а не подставляет captured.
+    private static DateTimeOffset? FileWrittenAt(string fullPath)
+    {
+        try { return new DateTimeOffset(File.GetLastWriteTimeUtc(fullPath), TimeSpan.Zero); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException)
+        { return null; }
+    }
+
+    // Самое позднее сообщение диапазона [from, to] (нумерация с 1, обе границы включены — как
+    // m{a}-{b} в ref). Сообщения без метки времени (история до поля) в счёт не идут.
+    internal static DateTimeOffset? LastMessageAt(IReadOnlyList<StoredMessage> history, int from, int to)
+    {
+        long? latest = null;
+        for (var i = Math.Max(from, 1); i <= Math.Min(to, history.Count); i++)
+        {
+            var ts = history[i - 1] switch
+            {
+                StoredUserMessage u => u.Timestamp,
+                StoredTextMessage t => t.Timestamp,
+                _ => null,
+            };
+            if (ts is { } v && (latest is null || v > latest))
+                latest = v;
+        }
+        return latest is { } ms ? DateTimeOffset.FromUnixTimeMilliseconds(ms) : null;
     }
 
     // Карточка = шапка (поля кода: type/origin/ref/hash/captured) + заголовок; текста нет
@@ -303,7 +337,7 @@ public sealed class WikiSourceCapture
     // CaptureSession до очереди заявок, хронику пишет через WritePageAsync после применения) —
     // вложенной второй блокировки того же ключа здесь нет.
     private async Task<Result> WriteCard(string ownerId, string sectionKey, string origin, string ref_,
-        string versionHash, string titleRaw, string idFallback, string sourceText)
+        string versionHash, string titleRaw, string idFallback, string sourceText, DateTimeOffset? written = null)
     {
         var root = WikiPaths.Root(_dataDir, ownerId);
         var name = CardName(titleRaw, idFallback, ref_, versionHash);
@@ -312,7 +346,7 @@ public sealed class WikiSourceCapture
         {
             return await _keeper.WithSectionsLockedAsync(ownerId, [sectionKey],
                 () => Task.FromResult(WriteCardUnderLock(ownerId, root, sectionKey, name, cardRel, origin, ref_,
-                    versionHash, sourceText)));
+                    versionHash, sourceText, written)));
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException
             or InvalidOperationException or NotSupportedException)
@@ -325,7 +359,7 @@ public sealed class WikiSourceCapture
     }
 
     private Result WriteCardUnderLock(string ownerId, string root, string sectionKey, string name, string cardRel,
-        string origin, string ref_, string versionHash, string sourceText)
+        string origin, string ref_, string versionHash, string sourceText, DateTimeOffset? written)
     {
         var manifest = WikiManifest.TryRead(root, sectionKey);
         if (manifest.State == WikiManifestState.Invalid)
@@ -357,6 +391,7 @@ public sealed class WikiSourceCapture
                 Ref = ref_,
                 Hash = versionHash,
                 Captured = DateTimeOffset.UtcNow.ToString("O"),
+                Written = written?.ToUniversalTime().ToString("O"),
             };
             WikiFileWriter.Write(root, "pages/" + cardRel, fm.Render() + "\n\n# " + name + "\n");
         }

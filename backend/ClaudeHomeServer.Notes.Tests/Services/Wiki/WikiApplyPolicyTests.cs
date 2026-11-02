@@ -340,6 +340,41 @@ public class WikiApplyPolicyTests
         RecentlyRevertedPages = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal) { [page] = RevertedAt },
     };
 
+    // ── B4a: ключ класса с хвостом «@human» разбирается в одной точке ──
+
+    [Theory]
+    [InlineData(WikiPackage.OpSupersede)]
+    [InlineData(WikiPackage.OpConflict)]
+    public void КлассСХвостомHuman_ВыключенныйКласс_НазванВПричине_НеКривойКласс(string op)
+    {
+        var classKey = WikiPackage.ClassKey(WikiGate.OriginSession, op, humanTarget: true);
+        var operation = Op(op) with { Class = classKey };
+
+        var v = WikiApplyPolicy.Decide(operation, new() { DisabledClasses = new HashSet<string> { classKey } });
+
+        v.Reason.Should().Contain("выключен", "класс опознан и выключен, а не отвергнут как «не пара источник × op»")
+            .And.Contain(classKey);
+    }
+
+    [Fact]
+    public void КлассСХвостомHuman_НеУAppend_КривойКласс()
+    {
+        var operation = Op(WikiPackage.OpAppend) with { Class = "session×append@human" };
+
+        var v = WikiApplyPolicy.Decide(operation, new());
+
+        v.Decision.Should().Be(WikiPackage.DecisionInbox);
+        v.Reason.Should().Contain("не опознан");
+    }
+
+    [Fact]
+    public void ClassKey_СХвостом_ПарсерВозвращаетЧастиИПризнак()
+    {
+        WikiPackage.ParseClassKey("note×conflict@human").Should().Be((WikiGate.OriginNote, WikiPackage.OpConflict, true));
+        WikiPackage.ParseClassKey("note×conflict").Should().Be((WikiGate.OriginNote, WikiPackage.OpConflict, false));
+        WikiPackage.ParseClassKey(null).Should().BeNull();
+    }
+
     [Fact]
     public void N7d_ОткатанныйЧеловекомСтраницы_AppendВоВходящие_ПричинаНазываетОткатИДату()
     {

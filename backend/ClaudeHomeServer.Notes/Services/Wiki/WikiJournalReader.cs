@@ -174,6 +174,48 @@ public sealed class WikiJournalReader
         return result;
     }
 
+    /// <summary>Операции журнала, считающиеся правкой человека (ADR-038, решение 4): `edit` пакета
+    /// human и `restore` («Вернуть мою»). Режима «adopt как мою правку» в журнале пока нет — `adopt`
+    /// («Принять как есть») правкой не считается; когда режим появится, его op добавляется сюда.
+    /// Откат (`revert`, `retract`) — другой механизм (N7d), его читает ReadRecentHumanReverts.</summary>
+    internal static readonly IReadOnlySet<string> HumanEditOps =
+        new HashSet<string>(StringComparer.Ordinal) { "edit", "restore" };
+
+    /// <summary>Правка человека: путь страницы → время ПОСЛЕДНЕЙ его правки (ADR-038, решение 4,
+    /// условие «источник новее правки»). Весь журнал, без окна: правка защищает формулировку,
+    /// пока её не заместит источник новее. Строки с actor=user и op из HumanEditOps; автоматика
+    /// (keeper и прочие) правкой человека не считается. Читает так же, как ReadRecentHumanReverts:
+    /// без блокировки, битая строка и нечитаемый файл — пропуск без исключения (пусто — условие
+    /// «источник новее правки» не срабатывает от журнала, а условие «новее цели» держится на
+    /// неизменяемых карточках: вторая независимая опора).</summary>
+    public static IReadOnlyDictionary<string, DateTimeOffset> ReadLastHumanEdits(string root)
+    {
+        var result = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        try
+        {
+            var path = SafePath.Join(root, LogRelPath);
+            if (!File.Exists(path))
+                return result;
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: false);
+            string? line;
+            while ((line = reader.ReadLine()) is not null)
+            {
+                var e = ParseLine(line);
+                if (e is null || e.Actor != "user" || !HumanEditOps.Contains(e.Op))
+                    continue;
+                foreach (var page in e.Pages)
+                    if (!result.TryGetValue(page, out var seen) || e.Ts > seen)
+                        result[page] = e.Ts;
+            }
+        }
+        catch (IOException)
+        {
+            // Нечитаемый журнал: пусто (см. шапку метода).
+        }
+        return result;
+    }
+
     /// <summary>take вне окна — обрезается, а не отказ: окно журнала — мера выдачи, а не право
     /// вызова спорить с клиентом. Отсутствующий — DefaultTake.</summary>
     public static int ClampTake(int? take) => take switch

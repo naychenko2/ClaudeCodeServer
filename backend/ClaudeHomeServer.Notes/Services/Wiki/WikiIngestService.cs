@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Services.Llm;
@@ -219,6 +220,7 @@ public sealed class WikiIngestService
         // Текст карточки здесь не нужен: она войдёт в снимок раздела (ReadSectionState)
         // и через него — в проверки валидатора; от карточки берётся только заголовок.
         string cardTitle;
+        DateTimeOffset? sourceWrittenAt = null;
         try
         {
             var cardFull = SafePath.JoinBelowRoot(root, "pages/" + request.CardRelPath);
@@ -231,6 +233,11 @@ public sealed class WikiIngestService
             if (parsed.Model is null || parsed.Model.Frontmatter.Type != WikiFrontmatter.TypeSource)
                 return Rejected("карточка не читается как страница type: source");
             cardTitle = parsed.Model.Title;
+            // Время написания источника — из его карточки (поле written, ставит захват): не captured,
+            // момент фиксации у бэклога старых чатов — сегодня. Нет поля или не дата — неизвестно.
+            if (DateTimeOffset.TryParse(parsed.Model.Frontmatter.Written, CultureInfo.InvariantCulture,
+                    DateTimeStyles.RoundtripKind, out var written))
+                sourceWrittenAt = written;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException
             or NotSupportedException)
@@ -316,6 +323,9 @@ public sealed class WikiIngestService
                 // Анти-петля (N7d): страницы, откатанные человеком за последние 7 дней.
                 RecentlyRevertedPages = WikiJournalReader.ReadRecentHumanReverts(
                     root, _time.GetUtcNow().AddDays(-WikiApplyPolicy.RevertQuarantineDays)),
+                // Правка человека (ADR-038) — отдельное от отката условие правила замены.
+                LastHumanEditAt = WikiJournalReader.ReadLastHumanEdits(root),
+                NewSourceTime = sourceWrittenAt,
             };
             var verdict = WikiPlanValidator.Validate(
                 plan, claims, source, sectionKey, upChain, sectionPages, policy);

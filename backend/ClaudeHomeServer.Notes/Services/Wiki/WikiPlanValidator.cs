@@ -277,7 +277,12 @@ public static class WikiPlanValidator
             }
 
             // Класс — по источнику этой операции (хвост S4d, г); решение — по политике S4d.
-            var opClass = WikiPackage.ClassKey(origin, op.Op);
+            // Для supersede/conflict класс и автор цели — по сноскам утверждения на странице
+            // СЕЙЧАС, а не по ответу модели (ADR-038, решение 4): цель human — свой класс «…@human».
+            var isReplacement = op.Op is WikiPackage.OpSupersede or WikiPackage.OpConflict;
+            var targetCards = isReplacement ? TargetCards(page, op.Target, pages) : [];
+            var humanTarget = targetCards.Any(c => c.Origin == WikiGate.OriginHuman);
+            var opClass = WikiPackage.ClassKey(origin, op.Op, humanTarget);
             var verdict = WikiApplyPolicy.Decide(
                 new()
                 {
@@ -293,6 +298,9 @@ public static class WikiPlanValidator
                     Counters = new(pagesCount, statementsCount, ctx.Counters.PackagesForPage),
                     PageDuplicate = duplicate,
                     TargetPageStatus = page.Model?.Frontmatter.Status,
+                    TargetAuthor = !isReplacement
+                        ? null
+                        : humanTarget ? WikiPackage.AuthorHuman : WikiPackage.AuthorAi,
                 });
 
             candidates.Add((i, new()
@@ -486,6 +494,34 @@ public static class WikiPlanValidator
     // Строка утверждения с данным текстом — сравнение той же нормализацией, чем дедуп и
     // дословность. Возвращает секцию и индекс строки (Section null — цели на странице нет).
     private readonly record struct Hit(string? Section, int Line);
+
+    // Карточки источников утверждения-цели: строка с целью → её сноски [^sN] → карточки по
+    // заголовку цели сноски. Нет страницы, цели или карточки в снимке — пусто (цель ИИ по
+    // умолчанию: «автор human» утверждает только найденная карточка origin: human).
+    private static IReadOnlyList<WikiFrontmatter> TargetCards(Snap page, string? target, List<Snap> pages)
+    {
+        if (page.Model is not { } model)
+            return [];
+        var hit = FindStatement(model, target);
+        if (hit.Section is null)
+            return [];
+        var line = model.Sections.First(sec => sec.Name == hit.Section).Lines[hit.Line];
+        var cards = new List<WikiFrontmatter>();
+        foreach (System.Text.RegularExpressions.Match m in TargetFootnoteRx.Matches(line))
+        {
+            if (!int.TryParse(m.Groups[1].Value, System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out var n)
+                || n < 1 || n > model.Footnotes.Count)
+                continue;
+            var card = FindByTitle(pages, model.Footnotes[n - 1].Target.Text);
+            if (card?.Model is { } cm && cm.Frontmatter.Type == WikiFrontmatter.TypeSource)
+                cards.Add(cm.Frontmatter);
+        }
+        return cards;
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex TargetFootnoteRx =
+        new(@"\[\^s([0-9]+)\]", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     private static Hit FindStatement(WikiPage page, string? target)
     {

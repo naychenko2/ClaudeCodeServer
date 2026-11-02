@@ -76,6 +76,22 @@ public static class WikiApplyPolicy
         /// политику не спрашивает.
         public IReadOnlyDictionary<string, DateTimeOffset> RecentlyRevertedPages { get; init; }
             = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+
+        /// <summary>Время написания источника НОВОГО утверждения (поле written его карточки,
+        /// ADR-038, решение 4). null — неизвестно: правило замены (B4c) уводит такую замену
+        /// во «Входящие». Заполняет вызывающий; в B4a поле только несётся.</summary>
+        public DateTimeOffset? NewSourceTime { get; init; }
+
+        /// <summary>Последняя правка человека по странице: путь → время (журнал: actor user,
+        /// op edit|restore; WikiJournalReader.ReadLastHumanEdits). Отдельный механизм от отката
+        /// (RecentlyRevertedPages, N7d): откат гейтит все операции на 7 дней, правка — только
+        /// замены и без срока. Пусто — правок человека нет или журнал нечитаем.</summary>
+        public IReadOnlyDictionary<string, DateTimeOffset> LastHumanEditAt { get; init; }
+            = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+
+        /// <summary>Автор цели supersede/conflict по сноскам утверждения: WikiPackage.AuthorHuman |
+        /// AuthorAi; null — операция не замена. Определяет код (валидатор), не модель.</summary>
+        public string? TargetAuthor { get; init; }
     }
 
     /// Счётчики ночи для проверки лимитов (мера 3). Каждый считает текущий элемент вместе
@@ -184,14 +200,10 @@ public static class WikiApplyPolicy
 
     // Класс правки — ключ «origin × op» (WikiPackage.ClassKey). Origin берётся из него же:
     // второй источник origin у операции нет. Кривой ключ (не две части, origin вне перечня,
-    // op не совпадает с операцией) — null: вызывающий решает это как fail-closed.
-    private static string? OriginOf(string classKey, string op)
-    {
-        var parts = classKey.Split('×');
-        if (parts.Length != 2 || parts[1] != op || !WikiGate.OriginValues.Contains(parts[0]))
-            return null;
-        return parts[0];
-    }
+    // op не совпадает с операцией) — null: вызывающий решает это как fail-closed. Разбор —
+    // WikiPackage.ParseClassKey, он же понимает хвост «@human» (цель — утверждение человека).
+    private static string? OriginOf(string classKey, string op) =>
+        WikiPackage.ParseClassKey(classKey) is { } parsed && parsed.Op == op ? parsed.Origin : null;
 
     private static Verdict Inbox(string reason) => new(WikiPackage.DecisionInbox, reason);
 }

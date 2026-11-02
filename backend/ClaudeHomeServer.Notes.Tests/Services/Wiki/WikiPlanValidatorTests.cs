@@ -326,6 +326,33 @@ public class WikiPlanValidatorTests
         r.Waiting.Should().BeEmpty();
     }
 
+    // ─── B4a: класс и автор цели замены — по сноскам утверждения, не по ответу модели ──
+
+    [Theory]
+    [InlineData(WikiPackage.OpSupersede)]
+    [InlineData(WikiPackage.OpConflict)]
+    public void Validate_ЦельСоСноскойHuman_КлассСХвостомHuman_АвторЦелиHuman(string op)
+    {
+        var humanCard = ForeignCardFile.Replace("origin: session", "origin: human")
+            .Replace("ref: session:s0#m1-4", "ref: human:1");
+        var snapshot = new WikiGate.Draft[]
+            { new(CardPath, CardFile), new(ForeignCardPath, humanCard), new(PagePath, PageFile) };
+
+        var r = WikiPlanValidator.Validate(
+            Plan(Op(op, "Сущность", 0, "Прежний план был остаться на Windows")),
+            Claims(GoodClaim), Src, Section, [WikiSections.Common], snapshot, new());
+
+        r.Accepted.Should().ContainSingle().Which.Class.Should().Be("session×" + op + WikiPackage.HumanTargetSuffix);
+    }
+
+    [Fact]
+    public void Validate_ЦельСоСноскойИИ_КлассБезХвоста()
+    {
+        var r = Run(Plan(Op(WikiPackage.OpSupersede, "Сущность", 0, "Прежний план был остаться на Windows")));
+
+        r.Accepted.Should().ContainSingle().Which.Class.Should().Be("session×supersede");
+    }
+
     // ─── M2 (ревью S6b-2): дословность — только для сносок этого пакета ───────
 
     [Fact]

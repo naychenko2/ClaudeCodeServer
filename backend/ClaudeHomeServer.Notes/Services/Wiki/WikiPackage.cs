@@ -114,7 +114,34 @@ public sealed record WikiPackage
 
     /// <summary>Класс правки — ключ `origin × op` (единица автовыключения класса, решение
     /// 12г, мера 7). Ставится кодом из источника операции и её op.</summary>
-    public static string ClassKey(string origin, string op) => origin + "×" + op;
+    public static string ClassKey(string origin, string op, bool humanTarget = false) =>
+        origin + "×" + op + (humanTarget ? HumanTargetSuffix : "");
+
+    /// <summary>Хвост ключа класса замены, чья цель — утверждение человека (ADR-038, решение 4):
+    /// `session×supersede@human`. Замены человека считаются отдельным классом, чтобы их откаты
+    /// не размывались в окне замен ИИ. Хвост бывает только у supersede/conflict.</summary>
+    public const string HumanTargetSuffix = "@human";
+
+    /// <summary>Разбор ключа класса — ЕДИНСТВЕННАЯ точка (её зовут и WikiSettingsStore.IsValidClassKey,
+    /// и политика): два независимых разбора разошлись бы, и автовыключение класса `…@human`
+    /// молча не сработало бы — ключ отвергался бы как кривой. null — ключ не класс.</summary>
+    public static (string Origin, string Op, bool HumanTarget)? ParseClassKey(string? classKey)
+    {
+        if (classKey is null)
+            return null;
+        var parts = classKey.Split('×');
+        if (parts.Length != 2)
+            return null;
+        var op = parts[1];
+        var humanTarget = op.EndsWith(HumanTargetSuffix, StringComparison.Ordinal);
+        if (humanTarget)
+            op = op[..^HumanTargetSuffix.Length];
+        if (!WikiGate.OriginValues.Contains(parts[0]) || !OpValues.Contains(op))
+            return null;
+        if (humanTarget && op is not (OpSupersede or OpConflict))
+            return null;
+        return (parts[0], op, humanTarget);
+    }
 
     // Автор пакета (ADR-038): `ai` — пакет модели (ingest, ночной разбор, MCP), `human` — правка
     // владельца через REST под пользовательским JWT. Карточку origin: human и секцию «Заметки»
@@ -266,7 +293,9 @@ public sealed record WikiPackage
                 // Для нераспознанной op про класс молчим — про неё уже сказано выше.
                 if (!knownOp)
                     continue;
-                if (p.Sources is not null && !p.Sources.Any(s => s is not null && op.Class == ClassKey(s.Origin, op.Op)))
+                if (p.Sources is not null && !p.Sources.Any(s => s is not null
+                    && (op.Class == ClassKey(s.Origin, op.Op)
+                        || (op.Class == ClassKey(s.Origin, op.Op, humanTarget: true) && ParseClassKey(op.Class) is not null))))
                     errors.Add($"класс «{op.Class}» не из источников пакета и не по op «{op.Op}»");
                 // supersede человека — «снято человеком»: утверждение убирают в «Историю», нового текста нет.
                 var textRequired = op.Op is OpCreate or OpAppend or OpEdit || (op.Op == OpSupersede && !isHuman);
